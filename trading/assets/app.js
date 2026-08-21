@@ -141,6 +141,8 @@ const state = {
   // The execution GitHub says is running right now, per workflow target, so the run log
   // can show it before the run has published anything of its own.
   runningExecutions: {},
+  // Runs this browser dispatched, so the log can name their source instead of guessing.
+  dispatchedExecutions: {},
   // What the log already carried when that run appeared, so a row published later is
   // recognisable as this run's own.
   runningExecutionWatermark: null,
@@ -1248,6 +1250,70 @@ function writeCachedPortfolioConfig(config) {
   } catch {
     // Ignore cache write failures; the in-memory config still stands.
   }
+}
+
+// Which runs this browser started, so the log can say so rather than guess.
+//
+// Reported both ways round: a run the user had just started showed AUTO, and a run they
+// had not started showed MANUAL. Both came from one guess -- the in-progress row read
+// "manual" off the GitHub event and the triggering account, and those cannot tell a
+// dashboard click from any other API dispatch. Every run on this repository is triggered
+// by the owner's own account, scheduled ones included, so a workflow_dispatch by a person
+// may be this button, another device, or a tool.
+//
+// The dashboard does know which run it dispatched, so it records it. A run it did not
+// dispatch is not labelled AUTO on a guess either: the row states no source until the run
+// publishes its own, which the bot stamps from the input it actually received.
+const DISPATCHED_EXECUTION_STORAGE_KEY = `${STATE_CACHE_PREFIX}dispatched-executions`;
+// Long enough to cover a run queued behind a busy shared runner, short enough that
+// yesterday's dispatch cannot claim today's scheduled run.
+const DISPATCHED_EXECUTION_TTL_MS = 30 * 60 * 1000;
+
+function readDispatchedExecutions() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(DISPATCHED_EXECUTION_STORAGE_KEY) || "{}");
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    const fresh = {};
+    for (const [target, entry] of Object.entries(parsed)) {
+      const at = Date.parse(entry?.dispatchedAt || "");
+      if (Number.isFinite(at) && Date.now() - at <= DISPATCHED_EXECUTION_TTL_MS) fresh[target] = entry;
+    }
+    return fresh;
+  } catch {
+    return {};
+  }
+}
+
+function recordDispatchedExecution(target, { dispatchedAt = null, runId = null } = {}) {
+  if (!target) return;
+  const entries = readDispatchedExecutions();
+  const previous = entries[target] || {};
+  entries[target] = {
+    dispatchedAt: dispatchedAt || previous.dispatchedAt || new Date().toISOString(),
+    runId: runId == null ? (previous.runId ?? null) : String(runId),
+  };
+  state.dispatchedExecutions = entries;
+  try {
+    localStorage.setItem(DISPATCHED_EXECUTION_STORAGE_KEY, JSON.stringify(entries));
+  } catch {
+    // A browser refusing storage still gets the in-memory answer for this page's life.
+  }
+}
+
+// Whether this browser is the reason the given run is going. Matched on the run's id once
+// the dispatch flow has identified it, and until then on the run having been created after
+// the click -- a run that existed before it cannot be the one it started.
+function executionRunWasDispatchedHere(target, run) {
+  if (!run) return false;
+  const entry = (state.dispatchedExecutions || {})[target] || readDispatchedExecutions()[target];
+  if (!entry) return false;
+  if (entry.runId) return String(run.id) === String(entry.runId);
+  if (run.event !== "workflow_dispatch") return false;
+  const dispatchedAt = Date.parse(entry.dispatchedAt || "");
+  const createdAt = Date.parse(run.createdAt || "");
+  if (!Number.isFinite(dispatchedAt) || !Number.isFinite(createdAt)) return false;
+  // A few seconds of slack for clock skew between this browser and GitHub.
+  return createdAt >= dispatchedAt - 15000;
 }
 
 function readCachedState(target, summary = "full") {
@@ -5309,6 +5375,8 @@ async function waitForWorkflowRun(target, startedAt, steps) {
     try {
       const status = await fetchApiJson(`api.php?action=workflow-status&target=${encodeURIComponent(target)}&since=${encodeURIComponent(startedAt)}`);
       latest = (status.runs || []).find((run) => runMatchesStart(run, startedAt)) || null;
+      // Now that the run is identified, the source label stops resting on timing.
+      if (latest?.id != null) recordDispatchedExecution(target, { dispatchedAt: startedAt, runId: latest.id });
       lastError = null;
     } catch (error) {
       // A transient status read must not abandon a run that is already executing.
@@ -6128,6 +6196,9 @@ async function triggerOneTimeExecution(target) {
   const live = target === "live" || target === "live-5050";
   const paperStrategyId = live ? "" : paperStrategyIdFromMode(target === "paper" ? state.mode : target);
   const startedAt = new Date().toISOString();
+  // Recorded before the dispatch, not after: the run can appear in the status poll before
+  // the POST's response comes back, and an unrecorded click is one the log cannot credit.
+  recordDispatchedExecution(target, { dispatchedAt: startedAt });
   openExecutionModal(target);
   let steps = [
     {
@@ -9941,12 +10012,16 @@ function runningExecutionRow() {
     id: `running-workflow-${run.id}`,
     action: run.status === "queued" ? "QUEUED" : "RUNNING",
     runAt: startedAt,
-    // A dispatch is a person only when the dashboard asked; everything else is the
-    // schedule. The run log's own rows are labelled the same way. dispatch-after-scan.mjs
-    // chains a run onto a finished scrape with this exact same GitHub event, so the event
-    // alone cannot tell the two apart -- only who triggered it can: that script always
-    // runs as github-actions[bot], never as a person's own login.
-    runSource: run.event === "workflow_dispatch" && run.triggeringActor !== "github-actions[bot]" ? "MANUAL" : "AUTO",
+    // MANUAL only for a run this dashboard started, which it records at the click. A
+    // scheduled or chained run is AUTO for certain, because its GitHub event says so. What
+    // is left -- a dispatch from somewhere else -- is genuinely unknown here, and claiming
+    // either answer is what produced the report of both labels being wrong: every run on
+    // this repository is triggered by the owner's own account, so the actor cannot tell a
+    // dashboard click from another device or a tool. The run's own row lands within the
+    // minute carrying the source the bot actually received.
+    runSource: executionRunWasDispatchedHere(currentExecutionTarget(), run)
+      ? "MANUAL"
+      : (run.event === "workflow_dispatch" ? "UNKNOWN" : "AUTO"),
     runningExecution: true,
     htmlUrl: run.htmlUrl || null,
     humanReason: `Execution in progress: ${where}${elapsed == null ? "" : ` · ${formatDuration(elapsed)} elapsed`}.`,
@@ -10128,6 +10203,11 @@ function portfolioRunSource(run = {}) {
   const source = String(run.runSource || run.triggerSource || run.executionSource || "").trim().toUpperCase();
   if (source === "MANUAL" || run.manualRunOnce === true || run.batchLog?.manualRunOnce === true) return "MANUAL";
   if (source === "RECOVERED" || run.historicalRecovery === true) return "RECOVERED";
+  // A run still going that this dashboard did not start. Only the run itself knows whether
+  // a person asked for it, and it says so in the row it publishes when it finishes; until
+  // then a dash is the honest answer. Every stored row carries a source, so this shows up
+  // on the in-progress row alone.
+  if (source === "UNKNOWN") return "\u2013";
   return "AUTO";
 }
 

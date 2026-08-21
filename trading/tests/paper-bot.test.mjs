@@ -1984,9 +1984,18 @@ test("state segments: every state-writing workflow publishes them", async () => 
   }
 
   // The publisher must send the core last, or the manifest points at files that
-  // are not there yet.
+  // are not there yet. Segments may go up together; the core may not join them, which is
+  // why it is a separate call rather than the tail of one list.
   const publisher = await readFile(new URL("../tools/publish-paper-state.py", import.meta.url), "utf8");
-  assert.match(publisher, /uploads = declared_segments\(state_file\) \+ \[state_file\]/);
+  assert.match(publisher, /segments = declared_segments\(state_file\)/);
+  const coreUpload = publisher.indexOf("publish_serially([state_file]");
+  assert.ok(coreUpload > 0, "the core must be published on its own");
+  for (const call of ["publish_in_parallel(segments", "publish_serially(segments"]) {
+    assert.ok(
+      publisher.indexOf(call) > 0 && publisher.indexOf(call) < coreUpload,
+      `${call} must run before the core is published`,
+    );
+  }
   // And a manifest naming a file that was never written has to fail the run.
   assert.match(publisher, /was not generated/);
 });
@@ -6944,5 +6953,161 @@ test("execution pass: skips catalogue maintenance and keeps every decision input
   assert.match(source, /action: "PASS_TIMING"/);
   for (const phase of ["readState", "refreshTrades", "candidateShortlist", "candidateRevalidation", "writeState", "execution"]) {
     assert.ok(source.includes(`"${phase}"`), `the ${phase} phase must be timed`);
+  }
+});
+
+// Once the bot itself stopped being the slow part, the upload was: a hundred megabytes of
+// segments pushed one file after another over a single FTP session, each transfer leaving
+// the connection idle for the round trips around it. The files are independent, so a few
+// connections at once is the same set of uploads with the waiting overlapped.
+//
+// The one ordering that must survive is segments-before-core: the core carries the
+// manifest that points at them, so publishing it first advertises data the hosting does
+// not have yet.
+test("publisher: segments upload together, the core strictly last", async () => {
+  const { mkdtemp, writeFile: write } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const dir = await mkdtemp(join(tmpdir(), "paper-publish-order-"));
+  const publisher = new URL("../tools/publish-paper-state.py", import.meta.url).pathname;
+
+  const manifest = {};
+  for (const name of ["observations", "evaluations", "archives", "reports"]) {
+    const file = `paper-state.${name}.json`;
+    manifest[name] = { file };
+    await write(join(dir, file), JSON.stringify({ [name]: [] }));
+  }
+  await write(join(dir, "paper-state.json"), JSON.stringify({ stateSegments: manifest }));
+
+  // A fake FTP that records what was stored, when, and how many sessions were open at
+  // once. Every transfer sleeps, so overlap is observable rather than inferred.
+  const probe = `
+import importlib.util, json, os, sys, threading, time
+
+spec = importlib.util.spec_from_file_location("publisher", ${JSON.stringify(publisher)})
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+
+lock = threading.Lock()
+order = []
+live = {"now": 0, "peak": 0}
+
+class FakeFTP:
+    def __init__(self, host, timeout=None):
+        with lock:
+            live["now"] += 1
+            live["peak"] = max(live["peak"], live["now"])
+        self.closed = False
+    def login(self, *a, **k): pass
+    def cwd(self, *a, **k): pass
+    def mkd(self, *a, **k): pass
+    def storbinary(self, command, handle):
+        name = command.split(" ", 1)[1]
+        with lock:
+            order.append(name)
+        time.sleep(0.25)
+    def size(self, name):
+        return None
+    def rename(self, *a, **k): pass
+    def delete(self, *a, **k): pass
+    def close(self):
+        if self.closed:
+            return
+        self.closed = True
+        with lock:
+            live["now"] -= 1
+    def __enter__(self): return self
+    def __exit__(self, *a): self.close()
+
+module.ftplib.FTP = FakeFTP
+os.environ.update({
+    "HOSTING_FTP_SERVER": "ftp.example",
+    "HOSTING_FTP_USERNAME": "u",
+    "HOSTING_FTP_PASSWORD": "p",
+    "TRADING_FTP_DIR": "/www/trading/data",
+    "PAPER_STATE_FILE": ${JSON.stringify(join(dir, "paper-state.json"))},
+})
+module.main()
+print(json.dumps({"order": order, "peak": live["peak"]}))
+`;
+  const { execFileSync: run } = await import("node:child_process");
+  const observed = JSON.parse(run("python3", ["-c", probe], { encoding: "utf8" }).trim().split("\n").pop());
+
+  assert.equal(observed.order.length, 5, "four segments and the core");
+  assert.ok(
+    observed.order[observed.order.length - 1].startsWith("paper-state.json."),
+    `the core must be stored last, got ${observed.order.join(", ")}`,
+  );
+  assert.ok(observed.peak > 1, "segments really do upload over more than one connection");
+  assert.ok(observed.peak <= 4, `and no more than the cap, saw ${observed.peak}`);
+});
+
+test("publisher: a host that refuses extra sessions still publishes", async () => {
+  const { mkdtemp, writeFile: write } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const dir = await mkdtemp(join(tmpdir(), "paper-publish-refuse-"));
+  const publisher = new URL("../tools/publish-paper-state.py", import.meta.url).pathname;
+
+  const manifest = {};
+  for (const name of ["observations", "evaluations"]) {
+    const file = `paper-state.${name}.json`;
+    manifest[name] = { file };
+    await write(join(dir, file), "{}");
+  }
+  await write(join(dir, "paper-state.json"), JSON.stringify({ stateSegments: manifest }));
+
+  // Shared hosting caps simultaneous FTP sessions. Being refused mid-publish must be
+  // slower, not fatal -- one connection is what this always did.
+  const probe = `
+import importlib.util, ftplib, json, os, threading
+
+spec = importlib.util.spec_from_file_location("publisher", ${JSON.stringify(publisher)})
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+
+lock = threading.Lock()
+stored = []
+state = {"open": 0, "refused": 0}
+
+class PickyFTP:
+    def __init__(self, host, timeout=None):
+        with lock:
+            if state["open"] >= 1:
+                state["refused"] += 1
+                raise ftplib.error_temp("421 too many connections")
+            state["open"] += 1
+    def login(self, *a, **k): pass
+    def cwd(self, *a, **k): pass
+    def mkd(self, *a, **k): pass
+    def storbinary(self, command, handle):
+        with lock:
+            stored.append(command.split(" ", 1)[1].rsplit(".", 1)[0])
+    def size(self, name): return None
+    def rename(self, *a, **k): pass
+    def delete(self, *a, **k): pass
+    def close(self):
+        with lock:
+            state["open"] = max(0, state["open"] - 1)
+    def __enter__(self): return self
+    def __exit__(self, *a): self.close()
+
+module.ftplib.FTP = PickyFTP
+os.environ.update({
+    "HOSTING_FTP_SERVER": "ftp.example",
+    "HOSTING_FTP_USERNAME": "u",
+    "HOSTING_FTP_PASSWORD": "p",
+    "TRADING_FTP_DIR": "/www/trading/data",
+    "PAPER_STATE_FILE": ${JSON.stringify(join(dir, "paper-state.json"))},
+})
+module.main()
+print(json.dumps({"stored": stored, "refused": state["refused"]}))
+`;
+  const { execFileSync: run } = await import("node:child_process");
+  const observed = JSON.parse(run("python3", ["-c", probe], { encoding: "utf8" }).trim().split("\n").pop());
+
+  assert.ok(observed.refused > 0, "the fixture really did refuse a second session");
+  for (const name of ["paper-state.observations.json", "paper-state.evaluations.json", "paper-state.json"]) {
+    assert.ok(observed.stored.includes(name), `${name} must still be published`);
   }
 });

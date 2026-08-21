@@ -2285,12 +2285,14 @@ function runningRowHarness({ target = "live-5050", run = null, now = Date.parse(
     "runningRowIsSuperseded", "withRunningExecutionRow"]
     .map((name) => functionSource(app, name)).join("\n\n");
   const state = { runningExecutions: { [target]: run }, runningExecutionWatermark: null };
-  const build = new Function("state", "currentExecutionTarget", "Date", `
+  const build = new Function("state", "currentExecutionTarget", "Date", "executionRunWasDispatchedHere", `
     ${body}
     return { withRunningExecutionRow, runningExecutionRow };
   `);
   const clock = { ...Date, now: () => now, parse: Date.parse };
-  const api = build(state, () => target, clock);
+  // These rows are about a run nobody here dispatched, which is the case the source label
+  // must not guess at. The dashboard-dispatched case is covered where the label is.
+  const api = build(state, () => target, clock, () => false);
   return { ...api, state };
 }
 
@@ -2328,7 +2330,11 @@ test("running execution: a run in flight is a row before it has published anythi
   });
   const [pending] = queued.withRunningExecutionRow([]);
   assert.equal(pending.action, "QUEUED");
-  assert.equal(pending.runSource, "MANUAL", "a dispatch is a person");
+  // Not "MANUAL" either: this harness stands for a run nobody here dispatched, and a
+  // dispatch by itself does not say who asked. Every run on this repository is triggered
+  // by the owner's own account, scheduled ones included, so claiming a person from the
+  // event is what made the label wrong in both directions.
+  assert.equal(pending.runSource, "UNKNOWN", "a dispatch this dashboard did not make is unknown, not asserted");
   assert.match(pending.humanReason, /^Execution in progress: waiting for a runner/);
 
   // Nothing running, nothing added.

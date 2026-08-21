@@ -151,27 +151,80 @@ def publish(ftp: ftplib.FTP, source: Path, suffix: str) -> None:
     print(f"published {source.name} ({source.stat().st_size} bytes)")
 
 
+def connect(remote_dir: str) -> ftplib.FTP:
+    ftp = ftplib.FTP(os.environ["HOSTING_FTP_SERVER"], timeout=60)
+    ftp.login(os.environ["HOSTING_FTP_USERNAME"], os.environ["HOSTING_FTP_PASSWORD"])
+    enter_dir(ftp, remote_dir.split("/"))
+    return ftp
+
+
+def publish_serially(sources: list[Path], remote_dir: str, suffix: str) -> None:
+    with connect(remote_dir) as ftp:
+        for source in sources:
+            publish(ftp, source, suffix)
+
+
+def publish_in_parallel(sources: list[Path], remote_dir: str, suffix: str, width: int) -> None:
+    """One connection per worker, because ftplib is not safe to share between threads.
+
+    The upload was the longest step of a run once the bot itself stopped being: a hundred
+    megabytes of segments pushed one file after another over a single FTP session, and
+    each file's transfer leaves the connection idle for the round trips around it. The
+    files are independent -- separate names, separate temporaries, separate renames -- so
+    a few connections working at once is the same set of uploads with the waiting
+    overlapped.
+
+    Deliberately modest and configurable: shared hosting caps simultaneous FTP sessions,
+    and being refused mid-publish is worse than being slower.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+
+    def upload(source: Path) -> None:
+        with connect(remote_dir) as ftp:
+            publish(ftp, source, suffix)
+
+    with ThreadPoolExecutor(max_workers=width) as pool:
+        # list() so every exception surfaces here rather than being swallowed by the
+        # iterator going out of scope, and so the core is never published after a
+        # segment failed.
+        list(pool.map(upload, sources))
+
+
 def main() -> int:
     state_file = Path(os.environ.get("PAPER_STATE_FILE", "trading/data/paper-state.json"))
     if not state_file.is_file():
         raise SystemExit(f"{state_file} was not generated")
 
-    # Segments go first: the core carries the manifest that points at them, so
-    # publishing it earlier would advertise data the hosting does not have yet.
-    uploads = declared_segments(state_file) + [state_file]
+    segments = declared_segments(state_file)
     remote_dir = os.environ.get("TRADING_FTP_DIR", "/www/trading/data").strip("/")
     # This script writes over FTP, so it stays inside the trading tree no matter
     # what a caller passes in.
     if not remote_dir.startswith("www/trading/") or ".." in remote_dir:
         raise SystemExit(f"Refusing to publish outside /www/trading/ (got '/{remote_dir}')")
     suffix = os.environ.get("PAPER_UPLOAD_SUFFIX", "uploading").strip() or "uploading"
+    try:
+        width = int(os.environ.get("PAPER_UPLOAD_CONCURRENCY", "4"))
+    except ValueError:
+        width = 4
+    width = max(1, min(width, 8))
 
-    with ftplib.FTP(os.environ["HOSTING_FTP_SERVER"], timeout=60) as ftp:
-        ftp.login(os.environ["HOSTING_FTP_USERNAME"], os.environ["HOSTING_FTP_PASSWORD"])
-        enter_dir(ftp, remote_dir.split("/"))
-        for source in uploads:
-            publish(ftp, source, suffix)
+    # Segments first, and the core strictly last and on its own: the core carries the
+    # manifest that points at them, so publishing it earlier would advertise data the
+    # hosting does not have yet. That ordering is the one thing parallelism must not
+    # break, so the two phases stay separate rather than being one pool of uploads.
+    if segments:
+        if width > 1 and len(segments) > 1:
+            try:
+                publish_in_parallel(segments, remote_dir, suffix, width)
+            except ftplib.all_errors as error:
+                # A host that refuses the extra sessions must not fail the publish. One
+                # connection is what this always did; it is slower, not broken.
+                print(f"parallel upload unavailable ({error}); falling back to one connection")
+                publish_serially(segments, remote_dir, suffix)
+        else:
+            publish_serially(segments, remote_dir, suffix)
 
+    publish_serially([state_file], remote_dir, suffix)
     return 0
 
 

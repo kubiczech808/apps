@@ -732,8 +732,14 @@ test("limit orders: an unfilled expiry is excluded from accuracy, a still-waitin
 // user never started, then vanished on its own once it finished. dispatch-after-scan.mjs
 // chains a run onto a finished scrape as a real workflow_dispatch event -- indistinguishable
 // from a person's own click by event type alone -- but always as github-actions[bot].
-test("live run in progress: an auto-chained dispatch is not mislabelled as a person's own click", () => {
-  const run = new Function("state", `
+// Reported both ways round: a run the user had just started showed AUTO, and a run they
+// had not started showed MANUAL. The row inferred "manual" from the GitHub event plus the
+// triggering account, and those cannot separate a dashboard click from any other API
+// dispatch -- every run on this repository is triggered by the owner's own account,
+// scheduled ones included. So the label now comes from what this browser recorded when it
+// dispatched, and where that says nothing, neither does the row.
+test("live run in progress: the source is what this browser started, never a guess", () => {
+  const build = (dispatchedHere) => new Function("state", "executionRunWasDispatchedHere", `
     ${/const BUILT_IN_PAPER_STRATEGY_IDS = \[[^\]]*\];/.exec(APP)[0]}
     ${/const CUSTOM_PAPER_STRATEGY_ID = [^\n]+/.exec(APP)[0]}
     ${/const LIVE_MODES = new Set\(\[[^\]]*\]\);/.exec(APP)[0]}
@@ -745,19 +751,50 @@ test("live run in progress: an auto-chained dispatch is not mislabelled as a per
     function formatDuration() { return ""; }
     ${extractFunction(APP, "runningExecutionRow")}
     return runningExecutionRow;
-  `);
-
-  const rowFor = (triggeringActor) => run({
+  `)({
     mode: "live-5050",
     runningExecutions: {
-      "live-5050": { id: 1, status: "in_progress", createdAt: new Date().toISOString(), event: "workflow_dispatch", triggeringActor },
+      "live-5050": {
+        id: 1,
+        status: "in_progress",
+        createdAt: new Date().toISOString(),
+        event: "workflow_dispatch",
+        triggeringActor: "kubiczech808",
+      },
     },
-  })();
+  }, () => dispatchedHere);
 
-  assert.equal(rowFor("github-actions[bot]").runSource, "AUTO",
-    "dispatch-after-scan.mjs's own chained run must not read as a person's manual click");
-  assert.equal(rowFor("kubiczech808").runSource, "MANUAL",
-    "a real person's dispatch must still read as manual");
+  assert.equal(build(true)().runSource, "MANUAL", "a run this dashboard started reads as manual");
+  assert.equal(build(false)().runSource, "UNKNOWN",
+    "a dispatch from somewhere else is unknown here, not asserted to be automatic");
+
+  // A scheduled or chained run is the one case the event settles on its own.
+  const scheduled = new Function("state", "executionRunWasDispatchedHere", `
+    ${/const BUILT_IN_PAPER_STRATEGY_IDS = \[[^\]]*\];/.exec(APP)[0]}
+    ${/const CUSTOM_PAPER_STRATEGY_ID = [^\n]+/.exec(APP)[0]}
+    ${/const LIVE_MODES = new Set\(\[[^\]]*\]\);/.exec(APP)[0]}
+    ${extractFunction(APP, "normalizeMode")}
+    ${extractFunction(APP, "isLiveMode")}
+    ${extractFunction(APP, "isFixedEntryMode")}
+    ${extractFunction(APP, "currentExecutionTarget")}
+    ${extractFunction(APP, "runningExecutionRun")}
+    function formatDuration() { return ""; }
+    ${extractFunction(APP, "runningExecutionRow")}
+    return runningExecutionRow;
+  `)({
+    mode: "live-5050",
+    runningExecutions: {
+      "live-5050": { id: 2, status: "in_progress", createdAt: new Date().toISOString(), event: "schedule", triggeringActor: "kubiczech808" },
+    },
+  }, () => false);
+  assert.equal(scheduled().runSource, "AUTO", "a scheduled run says so in its own event");
+
+  // And an unknown source renders as a dash, not as AUTO -- that is the whole point.
+  const label = new Function(`${extractFunction(APP, "portfolioRunSource")}\nreturn portfolioRunSource;`)();
+  assert.equal(label({ runSource: "UNKNOWN" }), "\u2013");
+  assert.equal(label({ runSource: "MANUAL" }), "MANUAL");
+  assert.equal(label({ runSource: "AUTO" }), "AUTO");
+  assert.equal(label({}), "AUTO", "a stored row with no source stays automatic");
 });
 
 // Reported: paper portfolios' parameter overview never showed "use limit orders" at all,
