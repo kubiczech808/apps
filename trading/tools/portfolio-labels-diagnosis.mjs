@@ -50,6 +50,30 @@ async function main() {
   console.log(`core portfolio ids : ${Object.keys(core.paperPortfolios || {}).join(", ") || "(none)"}`);
   console.log(`manifest segments  : ${Object.keys(manifest).join(", ") || "(none)"}`);
 
+  // Exactly what the overview table above the selector reads: one dashboard request for a
+  // selected portfolio, then every row's portfolio.equityUsdc out of that one response.
+  // A row that renders "-" means this number was missing, so printing all of them for a
+  // single response says whether the payload is short or the table is.
+  for (const summary of ["dashboard", "portfolio-overview"]) {
+    const selected = "conservative";
+    const url = summary === "dashboard"
+      ? `${HOST}/api.php?action=state&target=paper&summary=dashboard&strategy_id=${selected}`
+      : `${HOST}/api.php?action=state&target=paper&summary=portfolio-overview`;
+    const payload = await fetchJson(url);
+    if (!payload.ok) {
+      console.log(`\n-- ${summary} (selected=${selected}) -- HTTP ${payload.status} ${payload.error || ""}`);
+      continue;
+    }
+    const rows = payload.body?.paperPortfolios || {};
+    console.log(`\n-- ${summary} (selected=${selected}) -- what the overview table reads --`);
+    for (const [id, row] of Object.entries(rows)) {
+      console.log(`   ${id.padEnd(16)} equity=${row?.portfolio?.equityUsdc ?? "MISSING"}`
+        + ` risk=${row?.portfolio?.openRiskUsdc ?? "MISSING"}`
+        + ` free=${row?.portfolio?.freeCapitalUsdc ?? "MISSING"}`
+        + ` archived=${Boolean(row?.archived)}`);
+    }
+  }
+
   const configResult = await fetchJson(`${HOST}/api.php?action=portfolio-config`);
   const paperConfig = configResult.ok ? (configResult.body?.config?.paper || {}) : {};
 
