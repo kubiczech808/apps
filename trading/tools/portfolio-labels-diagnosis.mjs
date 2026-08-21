@@ -128,7 +128,14 @@ async function main() {
       console.log(`   latestCalculationReport MISSING from the dashboard payload -- every tab would be empty`);
     } else {
       const rows = (key) => (Array.isArray(report[key]) ? report[key].length : "MISSING");
-      console.log(`   generatedAt=${report.generatedAt} sampleSize=${report.sampleSize ?? "-"} openSampleSize=${report.openSampleSize ?? "-"}`);
+      // Whether the report was rebuilt by the pass that wrote this state or carried over
+      // from an earlier one: if its generatedAt matches the state's, the writing pass built
+      // it, and a sampleSize of 0 then means that pass was holding no resolved rows.
+      console.log(`   state generatedAt=${payload.body?.generatedAt ?? "-"} lastPass=${payload.body?.lastPassTiming?.at ?? "-"}`
+        + ` executionPass=${payload.body?.lastPassTiming?.executionPass ?? "-"}`);
+      console.log(`   report generatedAt=${report.generatedAt}`
+        + ` -> ${report.generatedAt === payload.body?.generatedAt ? "REBUILT by this pass" : "carried over"}`);
+      console.log(`   observedSampleSize=${report.observedSampleSize ?? "-"} sampleSize=${report.sampleSize ?? "-"} openSampleSize=${report.openSampleSize ?? "-"}`);
       console.log(`   parameterSummaries=${rows("parameterSummaries")}`
         + ` categorySummaries=${rows("categorySummaries")} tagSummaries=${rows("tagSummaries")}`);
     }
