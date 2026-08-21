@@ -7140,3 +7140,87 @@ print(json.dumps({"stored": stored, "refused": state["refused"]}))
     assert.ok(observed.stored.includes(name), `${name} must still be published`);
   }
 });
+
+// The run-log endpoint pages from 0, and asks the state for what the NDJSON archive does
+// not have. Both were confirmed by a diagnostic reading page 1 for every portfolio and
+// reporting "0 rows" for the three whose logs are shorter than one page -- which looked
+// exactly like lost history and was only the second page of a short list. The response
+// carried `total` all along.
+//
+// Driven through api.php itself against a fixture, because the paging arithmetic and the
+// fallback are both in the handler rather than in a function a source assertion could
+// reach.
+test("run log endpoint: page 0 is the first page, and the state fills in for a missing archive", async () => {
+  const { execFileSync: run } = await import("node:child_process");
+  const { mkdtemp, mkdir, writeFile: write, copyFile } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+
+  const dir = await mkdtemp(join(tmpdir(), "paper-run-log-"));
+  await copyFile(new URL("../api.php", import.meta.url).pathname, join(dir, "api.php"));
+  await mkdir(join(dir, "data"), { recursive: true });
+
+  // Thirty rows in the portfolio's own state segment and no archive directory at all --
+  // the shape of a portfolio whose NDJSON history was lost or never written.
+  const runLog = Array.from({ length: 30 }, (_, index) => ({
+    runAt: new Date(Date.UTC(2026, 7, 1, index)).toISOString(),
+    strategyId: "conservative",
+    action: index % 2 ? "OPENED" : "SKIP",
+    reason: `row ${index}`,
+  }));
+  await write(join(dir, "data", "paper-state.json"), JSON.stringify({
+    schemaVersion: 2,
+    generatedAt: "2026-08-21T10:00:00.000Z",
+    // Compacted exactly as the writer leaves it: the real log is in the segment.
+    paperPortfolios: { conservative: { id: "conservative", trades: [], runLog: [] } },
+    stateSegments: {
+      "portfolio:conservative": {
+        file: "paper-state.portfolio-conservative.json",
+        fields: ["paperPortfolio"],
+        strategyId: "conservative",
+        counts: { trades: 0 },
+      },
+    },
+  }));
+  await write(join(dir, "data", "paper-state.portfolio-conservative.json"), JSON.stringify({
+    strategyId: "conservative",
+    paperPortfolio: { id: "conservative", trades: [], runLog },
+  }));
+
+  const page = (index, size = 12) => JSON.parse(run("php", ["-r", `
+    $_SERVER["REQUEST_METHOD"] = "GET";
+    $_GET = ["action" => "portfolio-run-log", "strategy_id" => "conservative",
+             "page" => "${index}", "page_size" => "${size}"];
+    include ${JSON.stringify(join(dir, "api.php"))};
+  `], { encoding: "utf8" }));
+
+  const first = page(0);
+  assert.equal(first.total, 30, "the state's own log is the fallback when no archive exists");
+  assert.equal(first.records.length, 12, "page 0 is a full first page, not an offset one");
+  assert.equal(first.page, 0);
+  assert.equal(first.hasMore, true);
+  // Newest first, so page 0 starts at the newest row.
+  assert.equal(first.records[0].runAt, runLog[runLog.length - 1].runAt);
+
+  const second = page(1);
+  assert.equal(second.records.length, 12, "page 1 is the second page");
+  assert.notEqual(second.records[0].runAt, first.records[0].runAt);
+
+  const third = page(2);
+  assert.equal(third.records.length, 6);
+  assert.equal(third.hasMore, false);
+
+  // A log shorter than one page has nothing on page 1. That is correct, and it is what
+  // reads as lost history if `total` is ignored -- so the response states it.
+  const short = page(0, 40);
+  assert.equal(short.records.length, 30);
+  assert.equal(short.hasMore, false);
+  const beyond = page(1, 40);
+  assert.equal(beyond.records.length, 0, "past the end is empty");
+  assert.equal(beyond.total, 30, "and still reports how many rows exist");
+
+  // The dashboard must ask for page 0 first, or every short log renders empty.
+  const app = await (await import("node:fs/promises")).readFile(new URL("../assets/app.js", import.meta.url), "utf8");
+  assert.match(app, /const page = reset \? 0 : entry\.page \+ 1;/,
+    "the run-log loader starts at page 0 and only advances on load-more");
+});

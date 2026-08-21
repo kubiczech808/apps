@@ -220,8 +220,12 @@ async function main() {
     // The run log is archived to its own NDJSON files and served by its own endpoint,
     // independent of the state above -- which is how a portfolio can show OPENED rows
     // here and nothing in its positions list.
+    // page=0 is the first page. This asked for page 1 and reported "0 rows" for every
+    // portfolio whose log is shorter than one page -- which reads exactly like lost
+    // history and was only the second page of a short list. The total is printed beside
+    // the count now, so a partial page can never be mistaken for an empty log again.
     const runLog = await fetchJson(
-      `${HOST}/api.php?action=portfolio-run-log&strategy_id=${encodeURIComponent(id)}&page=1&page_size=24`,
+      `${HOST}/api.php?action=portfolio-run-log&strategy_id=${encodeURIComponent(id)}&page=0&page_size=24`,
     );
     if (!runLog.ok) {
       console.log(`  run log  : HTTP ${runLog.status} ${runLog.error || ""}`);
@@ -233,7 +237,8 @@ async function main() {
         actions[action] = (actions[action] || 0) + 1;
       }
       const summary = Object.entries(actions).map(([a, n]) => `${a}:${n}`).join(" ") || "(no rows)";
-      console.log(`  run log  : ${rows.length} row(s) on page 1 -- ${summary}`);
+      const total = runLog.body?.total;
+      console.log(`  run log  : ${rows.length} of ${total ?? "?"} row(s) -- ${summary}`);
     }
   }
 }
