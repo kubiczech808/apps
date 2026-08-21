@@ -9900,7 +9900,7 @@ async function executeManualPaperRunFromStoredCandidates(state, strategiesForRun
   const mergedEvaluations = await refreshStoredEvaluationResolutionStatuses(expirePastEvaluations(mergeEvaluationLists(evaluations, state.evaluations)));
   const retainedBefore = new Set([...(state.evaluations || []), ...evaluations].map(evaluationKey).filter(Boolean)).size;
   state.evaluations = mergedEvaluations.map(ensureEvaluationErrorMetadata);
-  updateCalculationReport(state);
+  timedSync("calculationReport", () => updateCalculationReport(state));
   updateEvaluationStats(state, { evaluations, retainedBefore, retainedAfter: state.evaluations.length });
   const newRunLogEntries = recordRun(state, { evaluations, eligible, decisions });
   await writeState(state);
@@ -10140,7 +10140,7 @@ async function run() {
   if (scanOnly) {
     state.generatedAt = nowIso();
     updatePortfolio(state);
-    updateCalculationReport(state);
+    timedSync("calculationReport", () => updateCalculationReport(state));
     markCadenceStage(state, "scan");
     await writeState(state);
     console.log(JSON.stringify({
@@ -10168,7 +10168,7 @@ async function run() {
   // changing any portfolio positions.
   if (reportOnly) {
     state.generatedAt = nowIso();
-    updateCalculationReport(state);
+    timedSync("calculationReport", () => updateCalculationReport(state));
     const decisions = Object.values(state.paperPortfolios).map((portfolioState) => ({
       strategyId: portfolioState.id,
       action: "REPORT",
@@ -10430,7 +10430,7 @@ async function run() {
   const mergedEvaluations = await refreshStoredEvaluationResolutionStatuses(expirePastEvaluations(mergeEvaluationLists(evaluations, state.evaluations)));
   const retainedBefore = new Set([...(state.evaluations || []), ...evaluations].map(evaluationKey).filter(Boolean)).size;
   state.evaluations = mergedEvaluations.map(ensureEvaluationErrorMetadata);
-  updateCalculationReport(state);
+  timedSync("calculationReport", () => updateCalculationReport(state));
   updateEvaluationStats(state, { evaluations, retainedBefore, retainedAfter: state.evaluations.length });
   const newRunLogEntries = recordRun(state, { evaluations, eligible, decisions });
   await writeState(state);
