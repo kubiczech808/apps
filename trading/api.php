@@ -3130,7 +3130,11 @@ try {
         // Unlike scraping runs (frequent, so a page is worth a floor of 25), a young
         // portfolio may only have a handful of runs ever -- no floor beyond "at least one".
         $pageSize = min(200, max(1, (int) ($_GET['page_size'] ?? 24)));
-        $state = state_payload('paper', []);
+        // The strategy id has to be passed: a portfolio's run log lives in its own state
+        // segment now, and the core file carries an empty one. Reading the core alone left
+        // this endpoint with no fallback at all, so a portfolio whose archive had been
+        // deleted answered "no runs recorded yet" even while the state held two dozen.
+        $state = state_payload('paper', [], $strategyId);
         $portfolios = is_array($state['paperPortfolios'] ?? null) ? $state['paperPortfolios'] : [];
         $portfolio = is_array($portfolios[$strategyId] ?? null) ? $portfolios[$strategyId] : [];
         $fallback = is_array($portfolio['runLog'] ?? null) ? $portfolio['runLog'] : [];

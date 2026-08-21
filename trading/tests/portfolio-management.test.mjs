@@ -1109,3 +1109,22 @@ test("dashboard: the richest portfolio opens on load, but never over a reader's 
   assert.ok(body.indexOf("state.portfolioPreselectDone = true;") < body.indexOf("if (state.mode === mode) return;"),
     "the flag must be set before the early return, or clicking the open tab would not settle it");
 });
+
+test("run log history: the deploy keeps the archive and the endpoint reads the portfolio's segment", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const deploy = await readFile(new URL("../../.github/workflows/trading-deploy.yml", import.meta.url), "utf8");
+  // The deploy wipes data/ of anything it does not recognise. portfolio-run-log was
+  // missing from the keep-set, so every deploy of the site deleted every portfolio's
+  // archived run history at once -- the same omission that previously cost the state
+  // segments and 5050's execution state. Only the newest runs live in the state file, so
+  // what a deploy destroyed was everything older than that cap.
+  assert.match(deploy, /"portfolio-run-log",/,
+    "the deploy must keep the archived run-log tree");
+
+  // And the endpoint has to name the portfolio it wants: a run log lives in that
+  // portfolio's own state segment now, and the core file carries an empty one. Reading
+  // the core alone left no fallback, so a portfolio whose archive was gone reported no
+  // runs at all even while the state held two dozen.
+  assert.match(API, /\$state = state_payload\('paper', \[\], \$strategyId\);/,
+    "the run-log endpoint must load the selected portfolio's segment");
+});

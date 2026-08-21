@@ -170,6 +170,13 @@ jobs:
                   "scrape-scan-preferences.json",
                   "redeem-alert-ledger.json",
                   "market-scan-history",
+                  # Every portfolio's archived run-log history, one directory per
+                  # portfolio. It was missing here, so each deploy of the site deleted
+                  # the whole tree -- the same mistake this list has now made three
+                  # times (the state segments, then 5050's execution state). Only the
+                  # newest entries live in the state file, so what a deploy destroyed
+                  # was every run older than that cap, for every portfolio at once.
+                  "portfolio-run-log",
               }
               if name in keep:
                   return True
