@@ -271,6 +271,7 @@ test("dashboard: the tab row is built from the saved portfolios, archived ones l
     ${extractFunction(APP, "paperStrategyIdFromMode")}
     ${extractFunction(APP, "defaultPortfolioConfig")}
     ${extractFunction(APP, "paperStrategyIds")}
+    ${extractFunction(APP, "overviewPortfolioNumbers")}
     ${extractFunction(APP, "portfolioEquityUsdc")}
     ${extractFunction(APP, "byEquityDescending")}
     ${extractFunction(APP, "dashboardModes")}
@@ -307,6 +308,7 @@ test("dashboard: an archived 5050 leaves the tab row too, the plain live portfol
     ${extractFunction(APP, "paperStrategyIdFromMode")}
     ${extractFunction(APP, "defaultPortfolioConfig")}
     ${extractFunction(APP, "paperStrategyIds")}
+    ${extractFunction(APP, "overviewPortfolioNumbers")}
     ${extractFunction(APP, "portfolioEquityUsdc")}
     ${extractFunction(APP, "byEquityDescending")}
     ${extractFunction(APP, "dashboardModes")}
@@ -911,8 +913,12 @@ test("dashboard: the overview and the archived list render on the first load", (
   const sync = extractFunction(APP, "syncModeUi");
   assert.match(sync, /renderPortfolioOverview\(\);/);
   assert.match(sync, /renderArchivedPortfolios\(\);/);
-  assert.match(sync, /if \(live\) loadPortfolioOverview\(\);/,
-    "the paper numbers are only fetched when the open tab does not already carry them");
+  // Fetched when the open tab does not already carry every portfolio's numbers. That is
+  // always so on a live tab, and it is also so on a paper tab whose payload came up short
+  // of a portfolio -- which used to leave that row reading "-" with nothing able to fill it
+  // in, because the summary was fetched on live tabs only.
+  assert.match(sync, /if \(live \|\| !overviewCoversEveryPortfolio\(\)\) loadPortfolioOverview\(\);/,
+    "the summary must also be fetched when a paper payload is short of a portfolio");
   for (const path of ["renderBotState", "renderLiveState"]) {
     assert.match(extractFunction(APP, path), /syncModeUi\(\);/, `${path} must reach it`);
   }
@@ -1040,6 +1046,7 @@ test("dashboard: the tab row is ordered by equity, richest first", () => {
     ${extractFunction(APP, "paperStrategyIdFromMode")}
     ${extractFunction(APP, "defaultPortfolioConfig")}
     ${extractFunction(APP, "paperStrategyIds")}
+    ${extractFunction(APP, "overviewPortfolioNumbers")}
     ${extractFunction(APP, "portfolioEquityUsdc")}
     ${extractFunction(APP, "byEquityDescending")}
     ${extractFunction(APP, "dashboardModes")}
@@ -1127,4 +1134,67 @@ test("run log history: the deploy keeps the archive and the endpoint reads the p
   // runs at all even while the state held two dozen.
   assert.match(API, /\$state = state_payload\('paper', \[\], \$strategyId\);/,
     "the run-log endpoint must load the selected portfolio's segment");
+});
+
+test("dashboard: a row takes its numbers from whichever payload has them", () => {
+  // Reported from a loading screenshot: the shipped portfolios showed equity while the
+  // created ones showed "-", and some never filled in. The server payload was complete --
+  // all seven portfolios carried portfolio.equityUsdc -- so the table was what came up
+  // short. It picked one source for the whole table (state.botState if present, otherwise
+  // state.portfolioOverview), so a dashboard payload missing a portfolio blanked that row
+  // even with a complete summary sitting unused beside it. Both payloads describe the same
+  // portfolios, so the choice belongs per row.
+  const run = new Function("state", `
+    ${extractFunction(APP, "overviewPortfolioNumbers")}
+    return overviewPortfolioNumbers;
+  `);
+
+  // The dashboard payload knows two portfolios, the summary knows the third.
+  const lookup = run({
+    botState: {
+      paperPortfolios: {
+        conservative: { portfolio: { equityUsdc: 84.22 } },
+        highReward: { portfolio: { equityUsdc: 110.05 } },
+      },
+    },
+    portfolioOverview: {
+      conservative: { portfolio: { equityUsdc: 1 } },
+      ewportfolio: { portfolio: { equityUsdc: 100 } },
+    },
+  });
+  assert.equal(lookup("conservative").equityUsdc, 84.22, "the open tab's own payload wins where it has the portfolio");
+  assert.equal(lookup("highReward").equityUsdc, 110.05);
+  assert.equal(lookup("ewportfolio").equityUsdc, 100, "a portfolio the dashboard payload lacks still resolves");
+  assert.equal(lookup("nothingKnowsThis"), null, "and an unknown portfolio is absent, not zero");
+
+  // Neither source loaded yet reads as absent rather than as zero, so the tab order puts
+  // it last instead of sorting it below a real loss.
+  assert.equal(run({}) ("conservative"), null);
+  assert.equal(run({ botState: null, portfolioOverview: null })("conservative"), null);
+});
+
+test("dashboard: archived portfolios are never listed, and never fetched for the overview", () => {
+  // Reported: archived portfolios flashed into the overview while it loaded. Two halves.
+  //
+  // The client guessed. paperStrategyIds fell back to defaultPortfolioConfig() when the
+  // saved config had not arrived, and that answers with the four shipped portfolios and
+  // nothing archived -- so for one frame an archived portfolio was listed and a created one
+  // was not. Nothing is listed until the real config is known, from its cache on any repeat
+  // visit, so the gap is a moment of no rows rather than a moment of wrong ones.
+  const ids = extractFunction(APP, "paperStrategyIds");
+  assert.match(ids, /const config = state\.portfolioConfig \|\| readCachedPortfolioConfig\(\);/,
+    "the cached config stands in before the fetch returns");
+  assert.match(ids, /if \(!config\) return \[\];/,
+    "an unknown config must list nothing rather than guess the shipped four");
+  assert.ok(!/defaultPortfolioConfig\(\)/.test(ids),
+    "the default config is a guess about which portfolios exist, so it may not be used here");
+  // The cache has to be written, or it can never stand in.
+  assert.match(extractFunction(APP, "loadPortfolioConfig"), /writeCachedPortfolioConfig\(state\.portfolioConfig\);/);
+
+  // And the server stops sending them: this summary exists only to fill the overview
+  // table, which never lists an archived portfolio, so it was payload fetched and dropped.
+  const overview = API.slice(API.indexOf("if ($summary === 'portfolio-overview') {"));
+  const branch = overview.slice(0, overview.indexOf("return $compact;"));
+  assert.match(branch, /\$row\['archived'\] \?\? false\) !== true/,
+    "the portfolio-overview summary must filter archived portfolios out");
 });

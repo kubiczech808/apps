@@ -546,7 +546,15 @@ function paperModeLabel(mode = state.mode) {
 // portfolios follow the shipped ones so the tabs the user knows do not move when one
 // is added.
 function paperStrategyIds({ includeArchived = false } = {}) {
-  const paper = (state.portfolioConfig || defaultPortfolioConfig()).paper || {};
+  // Reported: archived portfolios flashed into the overview while it loaded. Falling back
+  // to the shipped defaults here was the cause -- they name the four built-in portfolios
+  // with nothing archived, so for one frame an archived portfolio was listed and a created
+  // one was not. Which portfolios exist, and which are archived, cannot be guessed: nothing
+  // is listed until the saved config is known (from its cache on any repeat visit), so the
+  // gap is a moment of no rows instead of a moment of wrong ones.
+  const config = state.portfolioConfig || readCachedPortfolioConfig();
+  if (!config) return [];
+  const paper = config.paper || {};
   const custom = Object.keys(paper)
     .filter((id) => !BUILT_IN_PAPER_STRATEGY_IDS.includes(id) && CUSTOM_PAPER_STRATEGY_ID.test(id))
     .sort((left, right) => left.localeCompare(right));
@@ -577,8 +585,9 @@ function portfolioEquityUsdc(mode = state.mode) {
     const equity = Number(state.liveState?.portfolio?.equityUsdc);
     return Number.isFinite(equity) ? equity : null;
   }
-  const portfolios = state.botState?.paperPortfolios || state.portfolioOverview || null;
-  const equity = Number(portfolios?.[paperStrategyIdFromMode(normalized)]?.portfolio?.equityUsdc);
+  // Same per-portfolio merge the overview table uses, so the tab order and the table can
+  // never disagree about which portfolios have numbers.
+  const equity = Number(overviewPortfolioNumbers(paperStrategyIdFromMode(normalized))?.equityUsdc);
   return Number.isFinite(equity) ? equity : null;
 }
 
@@ -1208,6 +1217,31 @@ function updateSystemConfig(updates) {
 
 function stateCacheKey(target, summary = "full") {
   return `${STATE_CACHE_PREFIX}${target}:${summary || "full"}`;
+}
+
+// The saved portfolio config, cached like the state is. Which portfolios exist and which
+// are archived cannot be guessed: until it is known, defaultPortfolioConfig() answers with
+// the four shipped portfolios and nothing archived, so an archived portfolio rendered for
+// one frame and a created one was missing for the same frame. Caching it means the answer
+// is already there on the first paint of every visit after the first.
+function readCachedPortfolioConfig() {
+  try {
+    const raw = localStorage.getItem(`${STATE_CACHE_PREFIX}portfolio-config`);
+    const parsed = raw ? JSON.parse(raw) : null;
+    return parsed && typeof parsed === "object" && parsed.paper && typeof parsed.paper === "object" ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeCachedPortfolioConfig(config) {
+  try {
+    if (config && typeof config === "object" && config.paper && typeof config.paper === "object") {
+      localStorage.setItem(`${STATE_CACHE_PREFIX}portfolio-config`, JSON.stringify(config));
+    }
+  } catch {
+    // Ignore cache write failures; the in-memory config still stands.
+  }
 }
 
 function readCachedState(target, summary = "full") {
@@ -2182,8 +2216,10 @@ function syncModeUi() {
   // until something else changed.
   renderPortfolioOverview();
   renderArchivedPortfolios();
-  // Only fetched when the open tab is not the one that carries the paper numbers.
-  if (live) loadPortfolioOverview();
+  // Fetched when the open tab does not already carry every portfolio's numbers. That is
+  // always true on a live tab, and also true on a paper tab whose payload came up short of
+  // a portfolio -- which used to leave that row reading "-" with nothing to fill it in.
+  if (live || !overviewCoversEveryPortfolio()) loadPortfolioOverview();
   // 5050 is a live portfolio but not the Live one, and both tabs used to head their
   // tables "Opened live trades" -- so the two read identically while showing different
   // portfolios' rows. The same fix the run-log title already carries: name the portfolio.
@@ -4292,9 +4328,29 @@ function openCreatePortfolioModal(prefill = {}, trigger = null) {
 
 // Every portfolio's headline numbers in one place, above the selector: with many
 // portfolios, choosing which to open is a decision made from these and not from names.
+// One portfolio's headline numbers from whichever loaded payload actually carries them.
+//
+// Reported: the table showed numbers for the shipped portfolios and "-" for the created
+// ones, and some never filled in at all. It used to pick one source for the whole table --
+// state.botState if present, state.portfolioOverview otherwise -- so a dashboard payload
+// that was short of a portfolio (a stale cache served after a failed fetch, or a read that
+// raced replication) left that row blank with a complete summary sitting unused beside it.
+// Both payloads describe the same portfolios, so the choice belongs per row, not per table.
+function overviewPortfolioNumbers(strategyId) {
+  return state.botState?.paperPortfolios?.[strategyId]?.portfolio
+    || state.portfolioOverview?.[strategyId]?.portfolio
+    || null;
+}
+
+// Whether the loaded state covers every portfolio the table is going to list. When it does
+// not, the cheap all-portfolio summary is worth fetching even on a paper tab, which is what
+// stops a row staying blank until something else happens to refresh the page.
+function overviewCoversEveryPortfolio() {
+  return paperStrategyIds().every((id) => overviewPortfolioNumbers(id));
+}
+
 function renderPortfolioOverview() {
   if (!els.portfolioOverview) return;
-  const paperPortfolios = state.botState?.paperPortfolios || state.portfolioOverview || null;
   const live = state.liveState?.portfolio || null;
   // One row per portfolio, in the same order as the tabs. The live portfolios used to be
   // collapsed into a single combined account row on the grounds that they share one
@@ -4314,7 +4370,7 @@ function renderPortfolioOverview() {
         live: true,
       };
     }
-    const portfolio = paperPortfolios?.[paperStrategyIdFromMode(mode)]?.portfolio || null;
+    const portfolio = overviewPortfolioNumbers(paperStrategyIdFromMode(mode));
     return {
       mode,
       name: portfolioNameForMode(mode),
@@ -5705,6 +5761,7 @@ async function loadPortfolioConfig() {
   try {
     const payload = await fetchApiJson("api.php?action=portfolio-config");
     state.portfolioConfig = payload.config || defaultPortfolioConfig();
+    writeCachedPortfolioConfig(state.portfolioConfig);
   } catch {
     state.portfolioConfig = state.portfolioConfig || defaultPortfolioConfig();
   }

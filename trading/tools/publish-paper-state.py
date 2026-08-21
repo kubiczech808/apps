@@ -83,11 +83,16 @@ def publish(ftp: ftplib.FTP, source: Path, suffix: str) -> None:
     with source.open("rb") as handle:
         ftp.storbinary(f"STOR {temporary}", handle)
 
-    # A STOR that ran out of remote space does not always answer with an error: the
+    # A STOR the host could not complete does not reliably answer with an error: the
     # observed failure was a clean-looking upload followed by "550 <temp>: No such file
-    # or directory" from the rename, after ~112 MB had been sent in one session. Checking
-    # the size the host actually kept turns that into a legible message naming the file
-    # and the shortfall, instead of a traceback from the next command along.
+    # or directory" from the rename. Verifying the size the host actually kept turns that
+    # into a legible message instead of a traceback from the next command along.
+    #
+    # The cause is not necessarily disk space. The account this publishes to was at
+    # 3.8 of 10 GB but 96,471 of 100,000 allowed files, and publishing briefly needs one
+    # extra file per segment -- a dozen or so at once -- so it can hit a file-count
+    # ceiling with gigabytes still free. Both limits are named because the two look
+    # identical from here.
     try:
         stored = ftp.size(temporary)
     except ftplib.all_errors:
@@ -96,9 +101,10 @@ def publish(ftp: ftplib.FTP, source: Path, suffix: str) -> None:
         remove_temporary(ftp, temporary)
         raise SystemExit(
             f"{source.name}: uploaded {stored} of {expected} bytes. The hosting kept a "
-            "short file, which usually means the account is out of space -- publishing "
-            "writes a second copy of each file before swapping it in, so the state needs "
-            "roughly twice its own size free."
+            "short file. Publishing writes a second copy of each segment before swapping "
+            "it in, so it needs both roughly twice the state's size free AND one spare "
+            "file slot per segment -- check the account's file count as well as its disk "
+            "quota, since a file-count ceiling fails exactly like a full disk here."
         )
 
     try:

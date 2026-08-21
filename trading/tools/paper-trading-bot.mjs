@@ -1312,10 +1312,14 @@ function normalizePaperPortfolio(strategy, input = {}) {
     // which charged a position that was already under water at the reset a second time
     // once it resolved. Absent on a portfolio rebased before they were recorded, and
     // updatePaperPortfolio() falls back to the documented target for those.
-    capitalAdjustmentEquityUsdc: Number.isFinite(Number(input.capitalAdjustmentEquityUsdc))
+    // numericOrNaN, not Number(): this normalizer both reads and writes these fields, so a
+    // pass that stored null would have the next pass read Number(null) === 0 and store 0 --
+    // and a recorded reset equity of zero makes "since the reset" the whole account value.
+    // Reported as High reward showing Total P/L +$110.05 against equity $110.05 at +0.0%.
+    capitalAdjustmentEquityUsdc: Number.isFinite(numericOrNaN(input.capitalAdjustmentEquityUsdc))
       ? Number(input.capitalAdjustmentEquityUsdc)
       : null,
-    capitalAdjustmentOpenPnlUsdc: Number.isFinite(Number(input.capitalAdjustmentOpenPnlUsdc))
+    capitalAdjustmentOpenPnlUsdc: Number.isFinite(numericOrNaN(input.capitalAdjustmentOpenPnlUsdc))
       ? Number(input.capitalAdjustmentOpenPnlUsdc)
       : null,
     portfolio: {

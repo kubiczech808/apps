@@ -6413,3 +6413,33 @@ test("paper capital adjustment: a reset records the equity and open book it hand
   assert.equal(after.portfolio.openPnlSinceAdjustmentUsdc, 0);
   assert.equal(after.portfolio.realizedPnlSinceAdjustmentUsdc, 0);
 });
+
+test("paper capital adjustment: a reset baseline of null survives a second normalize pass", () => {
+  // Reported: High reward showed Total P/L +$110.05 against equity $110.05, at +0.0% --
+  // the whole account value read as profit since the reset, measured against zero.
+  //
+  // normalizePaperPortfolio both reads and writes these fields, and it guarded them with
+  // Number.isFinite(Number(x)). A portfolio rebased before they existed stored null on the
+  // first pass; the next pass read Number(null) === 0, which is finite, and stored 0. From
+  // then on the recorded "equity the reset handed over" was zero, so every dollar the
+  // account held counted as gain since the reset. Two passes are what it takes to see it.
+  const input = {
+    capitalAdjustmentUsdc: 24.4466,
+    capitalAdjustmentAt: "2026-08-17T04:00:00.000Z",
+    trades: [{ id: "t", status: "WON", stakeUsdc: 5, totalCostUsdc: 5, realizedPnlUsdc: 3, resolvedAt: "2026-08-18T00:00:00.000Z" }],
+  };
+  const once = bot.normalizeState({ paperPortfolios: { highReward: input } }).paperPortfolios.highReward;
+  assert.equal(once.capitalAdjustmentEquityUsdc, null, "nothing recorded yet stays unrecorded");
+
+  const twice = bot.normalizeState({ paperPortfolios: { highReward: once } }).paperPortfolios.highReward;
+  assert.equal(twice.capitalAdjustmentEquityUsdc, null, "and must not become 0 on the way back in");
+  // So the fallback still applies and the reset baseline is the documented target, not zero.
+  assert.equal(twice.portfolio.rebaseEquityUsdc, 100);
+  // equity = 100 + 24.4466 + 3 = 127.4466, so since the reset it is up 27.4466 -- not the
+  // entire account value.
+  assert.equal(twice.portfolio.equityUsdc, 127.4466);
+  assert.equal(twice.portfolio.totalPnlSinceAdjustmentUsdc, 27.4466);
+  assert.notEqual(twice.portfolio.totalPnlSinceAdjustmentUsdc, twice.portfolio.equityUsdc);
+  // And the percentage is measured, not zeroed by a divide-by-zero guard.
+  assert.ok(twice.portfolio.totalPnlSinceAdjustmentPct > 0.27);
+});

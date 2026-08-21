@@ -1022,6 +1022,16 @@ function compact_state_payload(string $target, array $data, string $summary, ?st
     }
 
     if ($summary === 'portfolio-overview') {
+        // Archived portfolios are left out entirely. This summary exists only to fill the
+        // overview table, which never lists them, so sending them was payload the browser
+        // fetched and then discarded -- and it gave the table a set of rows it had to
+        // filter, which is how an archived portfolio could appear for a frame.
+        if (isset($data['paperPortfolios']) && is_array($data['paperPortfolios'])) {
+            $data['paperPortfolios'] = array_filter(
+                $data['paperPortfolios'],
+                static fn ($row): bool => !is_array($row) || ($row['archived'] ?? false) !== true,
+            );
+        }
         $compact = compact_dashboard_paper_portfolios($data, null, true);
         unset($compact['evaluations'], $compact['evaluationRunLog'], $compact['calculationReports'], $compact['runLog'], $compact['marketObservations'], $compact['marketScan'], $compact['marketScanHistory'], $compact['trades']);
         $compact['evaluationDetailsMode'] = 'portfolio-overview';
