@@ -354,6 +354,7 @@ const els = {
   portfolioRisk: document.querySelector("[data-portfolio-risk]"),
   portfolioFree: document.querySelector("[data-portfolio-free]"),
   portfolioEquityChart: document.querySelector("[data-portfolio-equity-chart]"),
+  portfolioMetricsLayout: document.querySelector("[data-portfolio-metrics-layout]"),
 };
 
 function escapeHtml(value) {
@@ -3611,9 +3612,8 @@ function equityChartDate(timestamp, scale) {
 }
 
 // The state has transaction-level P/L rather than periodic account snapshots. Rebuild a
-// compact equity path from settled trades, then reconcile the final point to the live
-// Equity tile with current open P/L. This keeps the chart useful without publishing a
-// second, ever-growing history file.
+// compact realized-equity path from settled trades without publishing a second,
+// ever-growing history file.
 function portfolioEquityHistory(trades, equity, openPnl, generatedAt = "") {
   const timelineTrades = Array.isArray(trades) ? trades : [];
   const openedAt = timelineTrades
@@ -3625,6 +3625,8 @@ function portfolioEquityHistory(trades, equity, openPnl, generatedAt = "") {
   // A state file can be a few minutes old while the dashboard is open. The final point
   // is always "today", not the timestamp of that older snapshot.
   const now = Math.max(chartTimestamp(generatedAt) || 0, Date.now());
+  const durationDays = Math.max(0, (now - firstOpenedAt) / 86400000);
+  if (durationDays < 3) return null;
   const scale = equityChartScale(firstOpenedAt, now);
   const settledEvents = timelineTrades
     .filter(isClosedTrade)
@@ -3632,13 +3634,16 @@ function portfolioEquityHistory(trades, equity, openPnl, generatedAt = "") {
       timestamp: chartTimestamp(trade.resolvedAt || trade.closedTime || trade.lastCheckedAt),
       pnl: Number(trade.realizedPnlUsdc ?? trade.pnlUsdc),
     }))
-    .filter((event) => event.timestamp != null && Number.isFinite(event.pnl));
+    .filter((event) => event.timestamp != null && event.timestamp <= now && Number.isFinite(event.pnl));
   const settledPnl = settledEvents.reduce((sum, event) => sum + event.pnl, 0);
   const currentOpenPnl = Number.isFinite(openPnl) ? openPnl : 0;
-  const openingEquity = equity - settledPnl - currentOpenPnl;
+  // The chart deliberately excludes unrealized P/L. Its final point is therefore the
+  // current equity minus open-position P/L, not a mark that could vanish next minute.
+  const realizedEquity = equity - currentOpenPnl;
+  const openingEquity = realizedEquity - settledPnl;
   const changesByBucket = new Map();
   settledEvents.forEach((event) => {
-    const bucket = equityChartBucket(event.timestamp, scale);
+    const bucket = Math.max(firstOpenedAt, equityChartBucket(event.timestamp, scale));
     changesByBucket.set(bucket, (changesByBucket.get(bucket) || 0) + event.pnl);
   });
 
@@ -3650,26 +3655,26 @@ function portfolioEquityHistory(trades, equity, openPnl, generatedAt = "") {
       runningEquity += change;
       points.push({ timestamp, value: runningEquity });
     });
-  // The final value includes current marks on open positions and must exactly match the
-  // headline Equity number, even when no position settled in the current bucket.
-  if (now > points[points.length - 1].timestamp || Math.abs(points[points.length - 1].value - equity) > 0.0001) {
-    points.push({ timestamp: now, value: equity });
+  // The final point is realized equity only. It still updates to today even when no
+  // trade settled in the latest period.
+  if (now > points[points.length - 1].timestamp || Math.abs(points[points.length - 1].value - realizedEquity) > 0.0001) {
+    points.push({ timestamp: now, value: realizedEquity });
   }
-  return { points, scale, openingEquity };
+  return { points, scale, openingEquity, durationDays };
 }
 
 function renderPortfolioEquityChart({ trades = [], equity, openPnl = 0, generatedAt = "" } = {}) {
   if (!els.portfolioEquityChart) return;
   const history = portfolioEquityHistory(trades, equity, openPnl, generatedAt);
   if (!history || history.points.length < 2) {
-    els.portfolioEquityChart.innerHTML = `
-      <div class="portfolio-equity-chart-head">
-        <span class="label">Equity history</span>
-      </div>
-      <p class="portfolio-equity-chart-empty">The chart appears after the first portfolio trade.</p>
-    `;
+    els.portfolioEquityChart.hidden = true;
+    els.portfolioEquityChart.innerHTML = "";
+    els.portfolioMetricsLayout?.classList.remove("has-equity-chart");
     return;
   }
+
+  els.portfolioEquityChart.hidden = false;
+  els.portfolioMetricsLayout?.classList.add("has-equity-chart");
 
   const width = 520;
   const height = 196;
@@ -3685,7 +3690,7 @@ function renderPortfolioEquityChart({ trades = [], equity, openPnl = 0, generate
   const timeSpread = Math.max(1, end - start);
   const plotWidth = width - padding.left - padding.right;
   const plotHeight = height - padding.top - padding.bottom;
-  const x = (timestamp) => padding.left + (((timestamp - start) / timeSpread) * plotWidth);
+  const x = (timestamp) => padding.left + (Math.max(0, Math.min(1, (timestamp - start) / timeSpread)) * plotWidth);
   const y = (value) => padding.top + ((maxValue - value) / (maxValue - minValue)) * plotHeight;
   const line = history.points.map((point) => `${x(point.timestamp).toFixed(1)},${y(point.value).toFixed(1)}`).join(" ");
   const area = `${padding.left},${(padding.top + plotHeight).toFixed(1)} ${line} ${(padding.left + plotWidth).toFixed(1)},${(padding.top + plotHeight).toFixed(1)}`;
@@ -3705,16 +3710,37 @@ function renderPortfolioEquityChart({ trades = [], equity, openPnl = 0, generate
   els.portfolioEquityChart.innerHTML = `
     <div class="portfolio-equity-chart-head">
       <span class="label">Equity history</span>
-      <span>${escapeHtml(scaleLabel)}</span>
+      <span>${escapeHtml(`${scaleLabel} - realized`)}</span>
     </div>
-    <svg class="equity-history-svg ${direction}" viewBox="0 0 ${width} ${height}" role="img" aria-label="Portfolio equity from the first trade to today">
+    <div class="equity-history-stage">
+      <svg class="equity-history-svg ${direction}" viewBox="0 0 ${width} ${height}" role="img" aria-label="Realized portfolio equity from the first trade to today" tabindex="0">
       <g class="equity-history-grid">${grid}</g>
       <polygon class="equity-history-area" points="${area}"></polygon>
       <polyline class="equity-history-line" points="${line}"></polyline>
       <circle class="equity-history-point" cx="${x(last.timestamp).toFixed(1)}" cy="${y(last.value).toFixed(1)}" r="4"></circle>
       <g class="equity-history-labels">${labels}</g>
-    </svg>
+      </svg>
+      <div class="equity-history-tooltip" hidden></div>
+    </div>
   `;
+
+  const svg = els.portfolioEquityChart.querySelector(".equity-history-svg");
+  const tooltip = els.portfolioEquityChart.querySelector(".equity-history-tooltip");
+  const showTooltip = (clientX) => {
+    if (!svg || !tooltip) return;
+    const bounds = svg.getBoundingClientRect();
+    const viewX = ((clientX - bounds.left) / Math.max(1, bounds.width)) * width;
+    const nearest = history.points.reduce((best, point) => (
+      Math.abs(x(point.timestamp) - viewX) < Math.abs(x(best.timestamp) - viewX) ? point : best
+    ), history.points[0]);
+    const left = Math.max(4, Math.min(96, (x(nearest.timestamp) / width) * 100));
+    tooltip.textContent = `${formatDate(nearest.timestamp)} - ${money(nearest.value)}`;
+    tooltip.style.left = `${left}%`;
+    tooltip.hidden = false;
+  };
+  svg?.addEventListener("pointermove", (event) => showTooltip(event.clientX));
+  svg?.addEventListener("pointerdown", (event) => showTooltip(event.clientX));
+  svg?.addEventListener("pointerleave", () => { if (tooltip) tooltip.hidden = true; });
 }
 
 function compactToken(tokenId) {
