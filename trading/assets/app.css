@@ -289,6 +289,10 @@ button:disabled {
   grid-template-columns: minmax(0, 1.35fr) minmax(330px, 0.65fr);
 }
 
+.portfolio-metrics-layout.has-equity-chart .portfolio-cards {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
 .portfolio-equity-chart {
   min-width: 0;
   padding: 14px;
