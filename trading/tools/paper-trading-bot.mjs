@@ -9276,9 +9276,28 @@ function scrapedSimulationVolumeUsdc(item = {}) {
   return null;
 }
 
+// Won, lost, or neither. A contract settles to 1 or 0; anything else is not a settlement.
+//
+// Reported: rows in the Resolved view reading "Final 50.0%", which is what a voided market
+// looks like -- a sports prop on a game that was never played, refunded at 0.5 a side. Those
+// were every one of them counted as a full win, because `value >= 0.5 ? 1 : 0` puts the void
+// exactly on the winning edge. At a 5 USDC stake and a 0.55 entry that books roughly +80%
+// of pure fiction per row, and it books it as accuracy too.
+//
+// The band is not invented here. The dashboard has always decided this same question the
+// same way: closedTradeWon() and finalOutcomeCell() both read >= 0.995 as a win, <= 0.005 as
+// a loss, and everything between as no result. The bot was the one place using a different
+// rule, and it was the one place feeding the statistics tabs.
+//
+// Measured over the 3,000 most recent resolved rows: 2,929 settled at exactly 0 or 1, 71 at
+// exactly 0.5, and not one row anywhere in between. So this drops the voids and reclassifies
+// nothing else.
 function scrapedSimulationOutcome(item) {
   const value = finalOutcomePriceValue(item?.finalOutcomePrice);
-  return value == null ? null : (value >= 0.5 ? 1 : 0);
+  if (value == null) return null;
+  if (value >= 0.995) return 1;
+  if (value <= 0.005) return 0;
+  return null;
 }
 
 function scrapedSimulationTrade(item) {

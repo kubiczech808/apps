@@ -226,6 +226,38 @@ async function main() {
     }
   }
 
+  // What a parameter row's headline probability actually is.
+  //
+  // Reported as impossible: a row labelled 55.0% multi-outcome claiming 26,209 of 28,269
+  // correct. The 55.0% is a floor -- scrapedSimulationMatchesRule keeps every row with
+  // entry >= threshold -- so the sample's own average entry can be far above it, and the win
+  // rate is the win rate of that sample, not of trades bought at 55%. avgProbability says
+  // which it is, so this prints them side by side instead of leaving the column to be read
+  // as a claim about 55% trades.
+  {
+    const payload = await fetchJson(`${HOST}/api.php?action=state&target=paper&summary=dashboard&strategy_id=conservative`);
+    const rows = payload.ok && Array.isArray(payload.body?.latestCalculationReport?.parameterSummaries)
+      ? payload.body.latestCalculationReport.parameterSummaries
+      : [];
+    console.log(`\n-- parameter rows: threshold vs the sample's own average entry --`);
+    if (!rows.length) {
+      console.log(`   no parameterSummaries in the dashboard payload`);
+    } else {
+      const shown = rows
+        .filter((row) => row.marketType === "multi" && Number(row.threshold) === 0.55)
+        .concat(rows.filter((row) => row.marketType === "multi" && Number(row.threshold) === 0.95))
+        .slice(0, 12);
+      for (const row of shown) {
+        const winRate = row.winRate == null ? "-" : `${(row.winRate * 100).toFixed(1)}%`;
+        const avg = row.avgProbability == null ? "-" : `${(row.avgProbability * 100).toFixed(1)}%`;
+        console.log(`   threshold=${((Number(row.threshold) || 0) * 100).toFixed(0)}%`
+          + ` maxDays=${row.maxResolutionDays ?? "-"}`
+          + ` resolved=${row.resolved} wins=${row.wins} winRate=${winRate}`
+          + ` avgEntry=${avg} roi=${row.roi ?? "-"}`);
+      }
+    }
+  }
+
   const configResult = await fetchJson(`${HOST}/api.php?action=portfolio-config`);
   const paperConfig = configResult.ok ? (configResult.body?.config?.paper || {}) : {};
 

@@ -8845,6 +8845,14 @@ function finalOutcomeCell(item) {
   if (finalPrice <= 0.005) {
     return '<span class="negative"><strong>Lost</strong><br><span>0.0%</span></span>';
   }
+  // A closed market that settled to neither side did not resolve at all: Polymarket voids it
+  // and refunds both sides at 0.5, which is what a sports prop on a game that was never
+  // played comes to. "Final 50.0%" reads as a result and invited the fair question of how it
+  // could be one. Naming it says what it is, and that it counts for nothing -- a void is
+  // excluded from accuracy and from P/L, here and in the statistics report.
+  if (item?.marketClosed === true && item?.acceptingOrders === false) {
+    return `<span class="muted"><strong>Void</strong><br><span>refunded at ${probability(finalPrice)}</span></span>`;
+  }
   return `<span>Final ${probability(finalPrice)}</span>`;
 }
 

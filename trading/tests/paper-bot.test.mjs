@@ -7224,3 +7224,105 @@ test("run log endpoint: page 0 is the first page, and the state fills in for a m
   assert.match(app, /const page = reset \? 0 : entry\.page \+ 1;/,
     "the run-log loader starts at page 0 and only advances on load-more");
 });
+
+// Reported: resolved rows reading "Final 50.0%", with a 55% multi-outcome row claiming
+// 26,209 of 28,269 correct. The 50% rows are voided markets -- a sports prop on a game that
+// was never played, refunded at 0.5 a side -- and `value >= 0.5 ? 1 : 0` put the void
+// exactly on the winning edge, so every one counted as a full win in both accuracy and P/L.
+//
+// The band this now uses is the one the dashboard already used for the same decision, so the
+// two stop disagreeing about what a settlement is.
+test("scraped statistics: a voided market is not a win, and not a loss either", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const source = await readFile(new URL("../tools/paper-trading-bot.mjs", import.meta.url), "utf8");
+  const finalOutcomePriceValue = new Function(
+    `${functionSource(source, "finalOutcomePriceValue")}\nreturn finalOutcomePriceValue;`,
+  )();
+  const outcome = new Function(
+    "finalOutcomePriceValue",
+    `${functionSource(source, "scrapedSimulationOutcome")}\nreturn scrapedSimulationOutcome;`,
+  )(finalOutcomePriceValue);
+
+  // A settlement, either way.
+  assert.equal(outcome({ finalOutcomePrice: 1 }), 1);
+  assert.equal(outcome({ finalOutcomePrice: 0.9999 }), 1);
+  assert.equal(outcome({ finalOutcomePrice: 0 }), 0);
+  assert.equal(outcome({ finalOutcomePrice: 0.0001 }), 0);
+
+  // A void. This is the whole report: it used to answer 1.
+  assert.equal(outcome({ finalOutcomePrice: 0.5 }), null, "a void is not a win");
+  // And the rest of the ambiguous middle, which a settlement never lands in.
+  for (const price of [0.4, 0.5, 0.6, 0.75, 0.9]) {
+    assert.equal(outcome({ finalOutcomePrice: price }), null, `${price} is not a settlement`);
+  }
+  // Nothing to say yet.
+  assert.equal(outcome({}), null);
+  assert.equal(outcome({ finalOutcomePrice: null }), null);
+  assert.equal(outcome({ finalOutcomePrice: "" }), null);
+
+  // The same band the dashboard has always used for this -- closedTradePredictionResult
+  // grades the accuracy tile, finalOutcomeCell labels the row -- so the statistics report
+  // and the portfolio tiles cannot disagree about whether a row counts.
+  const app = await readFile(new URL("../assets/app.js", import.meta.url), "utf8");
+  const graded = functionSource(app, "closedTradePredictionResult");
+  assert.match(graded, /finalOutcomePrice >= 0\.995/);
+  assert.match(graded, /finalOutcomePrice <= 0\.005/);
+  assert.match(source, /if \(value >= 0\.995\) return 1;/);
+  assert.match(source, /if \(value <= 0\.005\) return 0;/);
+});
+
+test("scraped statistics: a void drops out of the sample rather than scoring", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const source = await readFile(new URL("../tools/paper-trading-bot.mjs", import.meta.url), "utf8");
+
+  // Driven through the real summariser: three settled rows and one void, and the void must
+  // not appear in resolved, wins, losses or P/L.
+  const summarize = new Function(
+    "average", "annualizeReturn", "annualizationDays", "MIN_ANNUALIZATION_DAYS",
+    `${functionSource(source, "summarizeScrapedSimulationRows")}\nreturn summarizeScrapedSimulationRows;`,
+  )(
+    (list) => (list.length ? list.reduce((sum, value) => sum + value, 0) / list.length : null),
+    (value) => value,
+    (days) => days,
+    1,
+  );
+
+  const row = (outcome, pnl) => ({
+    item: { firstObservedAt: "2026-08-01T00:00:00Z", resolvedAt: "2026-08-05T00:00:00Z" },
+    entry: 0.55, stake: 5, shares: 9.09, fee: 0, total: 5,
+    outcome, pnl, days: 3, volumeUsdc: 1000, firstObservedAt: "2026-08-01T00:00:00Z",
+  });
+
+  const settledOnly = summarize([row(1, 4.09), row(1, 4.09), row(0, -5)]);
+  const withVoid = summarize([row(1, 4.09), row(1, 4.09), row(0, -5), row(null, null)]);
+
+  assert.equal(settledOnly.resolved, 3);
+  assert.equal(withVoid.resolved, 3, "the void is not a resolved trade");
+  assert.equal(withVoid.wins, settledOnly.wins, "nor a win");
+  assert.equal(withVoid.losses, settledOnly.losses, "nor a loss");
+  assert.equal(withVoid.winRate, settledOnly.winRate, "so it cannot move the win rate");
+  assert.equal(withVoid.pnlUsdc, settledOnly.pnlUsdc, "nor the P/L");
+  // It is still a row that was observed, so the deployed-capital total does see it.
+  assert.equal(withVoid.trades, 4);
+  assert.equal(withVoid.pending, 1, "and it is reported as unresolved rather than hidden");
+});
+
+test("resolved view: a void is labelled a void, not a final price", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const app = await readFile(new URL("../assets/app.js", import.meta.url), "utf8");
+  const cell = new Function(
+    "probability",
+    `${functionSource(app, "finalOutcomeCell")}\nreturn finalOutcomeCell;`,
+  )((value) => `${(value * 100).toFixed(1)}%`);
+
+  assert.match(cell({ finalOutcomePrice: 1 }), /Won/);
+  assert.match(cell({ finalOutcomePrice: 0 }), /Lost/);
+  // The reported case: closed, no longer accepting orders, settled to neither side.
+  const voided = cell({ finalOutcomePrice: 0.5, marketClosed: true, acceptingOrders: false });
+  assert.match(voided, /Void/, "a refunded market says so");
+  assert.match(voided, /refunded at 50\.0%/);
+  assert.ok(!/^<span>Final/.test(voided), "and no longer reads as a result");
+  // A market still trading at a middling price is not a void -- it simply has no result yet.
+  assert.match(cell({ finalOutcomePrice: 0.5, marketClosed: false, acceptingOrders: true }), /Final 50\.0%/);
+  assert.equal(cell({}), "-");
+});
