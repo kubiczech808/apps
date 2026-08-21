@@ -9560,7 +9560,48 @@ function buildCalculationReport(state) {
   };
 }
 
+// Whether this process is holding the resolved archive the report is measured from.
+//
+// The manifest of the state that was read states how many resolved rows exist. If it says
+// tens of thousands and this process is holding none, the archive was carried over rather
+// than fetched, and a report built from what is in memory would describe the live half of
+// the catalogue only -- every settled market missing, so no sample, no accuracy, no P/L.
+//
+// A state that never declared an archive (a fresh one, a local fixture, a test) has nothing
+// to be missing and is holding everything there is.
+function stateHoldsResolvedArchive(state) {
+  const declared = Number(
+    previousStateSegmentManifest?.[RESOLVED_OBSERVATION_SEGMENT]?.counts?.[RESOLVED_OBSERVATION_TRANSPORT_FIELD],
+  );
+  if (!Number.isFinite(declared) || declared <= 0) return true;
+  const observations = Array.isArray(state.marketObservations) ? state.marketObservations : [];
+  return observations.some(observationIsResolved);
+}
+
+// The report is rebuilt only by a pass that has the data it measures.
+//
+// Reported: the statistics tables went blank -- every parameter row reading TRADES 0 and
+// ACCURACY "-" beside an OPEN NOW of 3,851. The cause is a pass rebuilding this report while
+// holding only the active catalogue, which produces a structurally complete report whose
+// resolved sample is empty, and publishing it over a good one.
+//
+// Guarding the pass mode was not enough. Of the five places that rebuild this, the mode
+// guard covered one, and inferring which of the others had done it from overlapping run
+// timestamps did not converge. The mode was only ever a proxy for the real precondition,
+// which is a question about the data: does this process actually have the resolved rows?
+// Asking that here covers every caller at once, including any added later.
+//
+// Keeping the previous report is exactly right when the answer is no. A pass that is not
+// holding the archive cannot have changed it either, so the report it would compute is not
+// a newer measurement -- it is the same measurement taken with most of the data missing.
 function updateCalculationReport(state) {
+  if (!stateHoldsResolvedArchive(state)) {
+    console.warn(
+      "Keeping the stored calculation report: this pass is not holding the resolved archive, "
+      + "so rebuilding it would publish an empty sample over a complete one.",
+    );
+    return state.latestCalculationReport || null;
+  }
   const report = buildCalculationReport(state);
   state.calculationReports = mergeUniqueById([report, ...(state.calculationReports || [])], (item) => item.id || item.generatedAt || "", CALCULATION_REPORT_HISTORY_LIMIT)
     .sort((a, b) => (Date.parse(b.generatedAt || "") || 0) - (Date.parse(a.generatedAt || "") || 0));
@@ -10524,6 +10565,8 @@ export {
   riskProfile,
   simulateMarketBuy,
   splitStateIntoSegments,
+  // The choke point that decides whether a pass may remeasure the statistics report.
+  updateCalculationReport,
   // The hook readStateWithSegments calls after fetching the core, so a test can put a
   // manifest in front of the writer the same way a real read does.
   rememberStateSegmentManifest,

@@ -7326,3 +7326,96 @@ test("resolved view: a void is labelled a void, not a final price", async () => 
   assert.match(cell({ finalOutcomePrice: 0.5, marketClosed: false, acceptingOrders: true }), /Final 50\.0%/);
   assert.equal(cell({}), "-");
 });
+
+// Reported: the statistics tables went blank -- every parameter row reading TRADES 0 and
+// ACCURACY "-" beside an OPEN NOW of 3,851. A pass rebuilt the report while holding only the
+// active catalogue, which produces a structurally complete report whose resolved sample is
+// empty, and published it over a good one.
+//
+// Guarding the pass mode covered one of the five rebuild sites. The mode was only ever a
+// proxy for the real precondition, which is about the data: does this process actually have
+// the resolved rows the report measures? Asked at the one choke point, it covers every
+// caller, including any added later -- which is what this pins.
+test("statistics report: a pass without the resolved archive keeps the stored report", () => {
+  const modulePath = new URL("../tools/paper-trading-bot.mjs", import.meta.url).href;
+  const script = `
+    import { splitStateIntoSegments, rememberStateSegmentManifest, updateCalculationReport } from ${JSON.stringify(modulePath)};
+    const input = JSON.parse(process.argv[1]);
+    rememberStateSegmentManifest(input.manifest);
+    const state = input.state;
+    const returned = updateCalculationReport(state);
+    process.stdout.write(JSON.stringify({
+      returnedSampleSize: returned?.sampleSize ?? null,
+      returnedGeneratedAt: returned?.generatedAt ?? null,
+      storedSampleSize: state.latestCalculationReport?.sampleSize ?? null,
+      storedGeneratedAt: state.latestCalculationReport?.generatedAt ?? null,
+      historyLength: Array.isArray(state.calculationReports) ? state.calculationReports.length : null,
+    }));
+  `;
+  const run = (payload) => JSON.parse(execFileSync(
+    process.execPath,
+    ["--input-type=module", "-e", script, JSON.stringify(payload)],
+    { encoding: "utf8", env: process.env },
+  ));
+
+  // A manifest that declares 53,408 settled markets, and a state holding none of them.
+  const manifest = {
+    resolvedObservations: {
+      file: "paper-state.resolvedObservations.json",
+      fields: ["resolvedMarketObservations"],
+      counts: { resolvedMarketObservations: 53408 },
+    },
+  };
+  const good = { id: "calculation-report-old", generatedAt: "2026-08-21T09:00:00.000Z", sampleSize: 53408 };
+  const activeOnly = [
+    { id: "a1", status: "SCRAPED", marketKey: "a1" },
+    { id: "a2", status: "SCRAPED", marketKey: "a2" },
+  ];
+
+  const carried = run({
+    manifest,
+    state: {
+      generatedAt: "2026-08-21T11:01:44.117Z",
+      marketObservations: activeOnly,
+      latestCalculationReport: good,
+      calculationReports: [good],
+    },
+  });
+  assert.equal(carried.storedSampleSize, 53408, "the complete report must survive");
+  assert.equal(carried.storedGeneratedAt, good.generatedAt, "and must not be restamped as if remeasured");
+  assert.equal(carried.historyLength, 1, "nor may an empty report enter the history");
+  assert.equal(carried.returnedSampleSize, 53408);
+
+  // The same state, once it is actually holding a settled market: the report is rebuilt.
+  const holding = run({
+    manifest,
+    state: {
+      generatedAt: "2026-08-21T11:01:44.117Z",
+      marketObservations: [
+        ...activeOnly,
+        {
+          id: "r1", status: "RESOLVED", marketKey: "r1", finalOutcomePrice: 1,
+          firstMarketProbability: 0.6, observedAt: "2026-08-20T00:00:00Z",
+          firstObservedAt: "2026-08-20T00:00:00Z", resolvedAt: "2026-08-21T00:00:00Z",
+        },
+      ],
+      latestCalculationReport: good,
+      calculationReports: [good],
+    },
+  });
+  assert.equal(holding.storedGeneratedAt, "2026-08-21T11:01:44.117Z", "a pass with the data remeasures");
+  assert.equal(holding.historyLength, 2, "and its report joins the history");
+
+  // And a state that never declared an archive has nothing missing, so it may rebuild.
+  const undeclared = run({
+    manifest: {},
+    state: {
+      generatedAt: "2026-08-21T11:01:44.117Z",
+      marketObservations: activeOnly,
+      latestCalculationReport: good,
+      calculationReports: [good],
+    },
+  });
+  assert.equal(undeclared.storedGeneratedAt, "2026-08-21T11:01:44.117Z",
+    "an unsegmented state is holding everything there is");
+});
