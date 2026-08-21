@@ -833,6 +833,8 @@ function compactPaperPortfolioForCore(portfolio) {
     "resetArchiveId",
     "capitalAdjustmentUsdc",
     "capitalAdjustmentAt",
+    "capitalAdjustmentEquityUsdc",
+    "capitalAdjustmentOpenPnlUsdc",
     "portfolio",
     "lastTradeDate",
     "lastTradeHour",
@@ -1302,10 +1304,20 @@ function normalizePaperPortfolio(strategy, input = {}) {
     // is fully recomputed by updatePaperPortfolio() every pass, so anything meant to
     // persist across passes has to live outside it.
     capitalAdjustmentUsdc: Number(input.capitalAdjustmentUsdc) || 0,
-    // When this was last rebased. Trades resolved before it are excluded from the
-    // performance stats below, but never from the trade itself or from closed-position
-    // history -- this only marks where "performance since" starts counting from.
+    // When this was last rebased. This only marks where "performance since" starts
+    // counting from; no trade and no closed-position history is ever dropped by it.
     capitalAdjustmentAt: input.capitalAdjustmentAt || null,
+    // The equity the reset handed the account, and the open P/L it inherited. "Since the
+    // reset" is measured against these two rather than by re-summing resolved trades,
+    // which charged a position that was already under water at the reset a second time
+    // once it resolved. Absent on a portfolio rebased before they were recorded, and
+    // updatePaperPortfolio() falls back to the documented target for those.
+    capitalAdjustmentEquityUsdc: Number.isFinite(Number(input.capitalAdjustmentEquityUsdc))
+      ? Number(input.capitalAdjustmentEquityUsdc)
+      : null,
+    capitalAdjustmentOpenPnlUsdc: Number.isFinite(Number(input.capitalAdjustmentOpenPnlUsdc))
+      ? Number(input.capitalAdjustmentOpenPnlUsdc)
+      : null,
     portfolio: {
       initialUsdc: Number(input.portfolio?.initialUsdc || PORTFOLIO_USDC),
       stakeUsdc: Number(strategy.stakeUsdc ?? input.portfolio?.stakeUsdc ?? input.stakeUsdc ?? STAKE_USDC),
@@ -1500,6 +1512,13 @@ function adjustPaperPortfolioCapital(state, strategyId, targetEquity = 100) {
     ...current,
     capitalAdjustmentUsdc: newAdjustment,
     capitalAdjustmentAt: adjustedAt,
+    // The two numbers "since the reset" has to be measured against. Recorded here rather
+    // than reconstructed later: the equity a reset hands the account is a stock, and the
+    // open book it inherits is what stops the same loss being charged twice once those
+    // positions resolve. Without them the stats had to re-sum resolved trades, which
+    // counted a position that was already under water at the reset all over again.
+    capitalAdjustmentEquityUsdc: Number(Number(targetEquity).toFixed(4)),
+    capitalAdjustmentOpenPnlUsdc: Number((Number(current.portfolio?.openPnlUsdc) || 0).toFixed(4)),
   });
   state.paperPortfolios[strategyId] = adjusted;
   syncLegacyPaperAliases(state);
@@ -9111,25 +9130,55 @@ function updatePaperPortfolio(portfolioState) {
     .filter((trade) => OPEN_STATUSES.has(String(trade.status || "").toUpperCase()))
     .reduce((sum, trade) => sum + Number(trade.unrealizedPnlUsdc || 0), 0);
   const openRiskValue = openRisk(portfolioState.trades);
-  // Reported: a capital rebase correctly moved equity, but Total P/L, Realized P/L and
-  // Resolved accuracy kept counting trades closed before it -- history the user asked to
-  // stop weighing performance by, not to lose. Only realized P/L is filtered: an open
-  // position is a live thing regardless of when it was opened, not a historical trade.
   const adjustedAtTime = Date.parse(portfolioState.capitalAdjustmentAt || "");
-  const realizedPnlSinceAdjustment = Number.isFinite(adjustedAtTime)
-    ? portfolioState.trades
-        .filter((trade) => {
-          const resolvedTime = Date.parse(trade.resolvedAt || "");
-          return Number.isFinite(resolvedTime) && resolvedTime >= adjustedAtTime;
-        })
-        .reduce((sum, trade) => sum + Number(trade.realizedPnlUsdc || 0), 0)
-    : realizedPnl;
   // A one-time manual correction to the account's capital baseline, applied by
   // adjustPaperPortfolioCapital() -- never by ordinary trading. Every other portfolio
   // carries 0 here, so PORTFOLIO_USDC + 0 reproduces the prior formula exactly.
   const capitalAdjustment = Number(portfolioState.capitalAdjustmentUsdc) || 0;
   const baseline = PORTFOLIO_USDC + capitalAdjustment;
   const equity = baseline + realizedPnl + openPnl;
+
+  // Reported: High reward showed equity 109.46 against a Total P/L of -37.92. Those two
+  // cannot both describe the same account, and the P/L was the wrong one.
+  //
+  // A rebase sets equity to a target outright (adjustPaperPortfolioCapital), so it is a
+  // reset of a *stock*. "Since the reset" was measured as a *flow* instead: the realized
+  // P/L of every trade that resolved after the moment, plus the current open P/L, over
+  // the all-time baseline. Both halves were wrong. A position already open and under
+  // water at the reset had that loss absorbed into the equity the reset handed it; when
+  // it later resolved, its full realized loss was charged a second time -- which is how
+  // -33.31 appeared while the true all-time realized P/L was only about -10. And the
+  // percentage divided a since-the-reset figure by the pre-reset baseline.
+  //
+  // Measuring the stock cannot double count: what the account has done since the reset
+  // is exactly how far its equity has moved from the equity the reset gave it. The
+  // decomposition then follows from that total, so the three tiles still add up.
+  // Recorded at the reset from that moment's own numbers. A portfolio rebased before they
+  // were stored falls back to the documented target (PORTFOLIO_USDC), which is what every
+  // rebase so far actually used, and to a zero open book -- an approximation only for
+  // positions open across that single moment, and bounded by their size. A portfolio never
+  // rebased measures "since" over its whole life, so its base is its own baseline, and the
+  // formulas below then reduce to the all-time figures exactly.
+  // numericOrNaN, not Number(): these are null until a reset records them, and Number(null)
+  // is 0 -- which would read as "the reset handed this account zero equity".
+  const equityAtAdjustment = numericOrNaN(portfolioState.capitalAdjustmentEquityUsdc);
+  const openPnlAtAdjustment = numericOrNaN(portfolioState.capitalAdjustmentOpenPnlUsdc);
+  const rebaseEquity = Number.isFinite(equityAtAdjustment)
+    ? equityAtAdjustment
+    : (Number.isFinite(adjustedAtTime) ? PORTFOLIO_USDC : baseline);
+  const rebaseOpenPnl = Number.isFinite(openPnlAtAdjustment) ? openPnlAtAdjustment : 0;
+  const totalPnlSinceAdjustment = equity - rebaseEquity;
+  const openPnlSinceAdjustment = openPnl - rebaseOpenPnl;
+  const realizedPnlSinceAdjustment = totalPnlSinceAdjustment - openPnlSinceAdjustment;
+  const sinceAdjustmentStats = {
+    rebaseEquityUsdc: Number(rebaseEquity.toFixed(4)),
+    realizedPnlSinceAdjustmentUsdc: Number(realizedPnlSinceAdjustment.toFixed(4)),
+    realizedPnlSinceAdjustmentPct: pnlPercent(realizedPnlSinceAdjustment, rebaseEquity),
+    openPnlSinceAdjustmentUsdc: Number(openPnlSinceAdjustment.toFixed(4)),
+    openPnlSinceAdjustmentPct: pnlPercent(openPnlSinceAdjustment, rebaseEquity),
+    totalPnlSinceAdjustmentUsdc: Number(totalPnlSinceAdjustment.toFixed(4)),
+    totalPnlSinceAdjustmentPct: pnlPercent(totalPnlSinceAdjustment, rebaseEquity),
+  };
   const portfolioMaxFraction = Number(
     portfolioState.maxFraction ?? portfolioState.portfolio?.maxFraction ?? MAX_FRACTION,
   );
@@ -9173,12 +9222,9 @@ function updatePaperPortfolio(portfolioState) {
     totalPnlUsdc: Number((realizedPnl + openPnl).toFixed(4)),
     totalPnlPct: pnlPercent(realizedPnl + openPnl, baseline),
     // Display-only: equity, free capital and sizing must keep using the true, unfiltered
-    // realizedPnl above -- only these two exist so a rebased portfolio's headline stats can
-    // read "since the reset" without that filtering ever touching what the bot trades on.
-    realizedPnlSinceAdjustmentUsdc: Number(realizedPnlSinceAdjustment.toFixed(4)),
-    realizedPnlSinceAdjustmentPct: pnlPercent(realizedPnlSinceAdjustment, baseline),
-    totalPnlSinceAdjustmentUsdc: Number((realizedPnlSinceAdjustment + openPnl).toFixed(4)),
-    totalPnlSinceAdjustmentPct: pnlPercent(realizedPnlSinceAdjustment + openPnl, baseline),
+    // realizedPnl above -- these exist so a rebased portfolio's headline stats can read
+    // "since the reset" without that filtering ever touching what the bot trades on.
+    ...sinceAdjustmentStats,
     openRiskUsdc: Number(openRiskValue.toFixed(2)),
     freeCapitalUsdc: Number(freeCapital.toFixed(2)),
   };

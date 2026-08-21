@@ -7473,18 +7473,28 @@ function renderBotState(botState) {
   const totalPnlPct = Number(portfolio.totalPnlPct || 0);
   const realizedPnl = Number(portfolio.realizedPnlUsdc || 0);
   const realizedPnlPct = Number(portfolio.realizedPnlPct || 0);
-  // Reported: after a capital rebase, Total P/L, Realized P/L and Resolved accuracy kept
-  // weighing performance by trades closed before it. Those trades stay in Closed positions
-  // history and equity keeps counting their real historical PnL, as designed -- only what
-  // these two tiles display stops counting them, from the moment the bot recorded the
-  // rebase onward. Equity, free capital and sizing above still use the true totals.
+  // After a capital rebase these tiles read "since the reset". Every trade stays in
+  // Closed positions and equity keeps counting its real historical P/L, as designed --
+  // only what these tiles measure starts at the reset. Equity, free capital and sizing
+  // above still use the true totals.
+  //
+  // Reported: equity read 109.46 while Total P/L read -37.92, which cannot both describe
+  // the same account. The bot now measures the reset as what it is -- equity set to a
+  // target outright -- so all three tiles are differences from that same moment and add
+  // up again. Open P/L therefore also switches to its since-the-reset figure here; using
+  // the raw current unrealized alongside two since-the-reset numbers is what let the
+  // three stop summing.
   const capitalAdjustmentAt = portfolio.capitalAdjustmentAt || portfolioState.capitalAdjustmentAt || null;
   const totalPnlDisplay = capitalAdjustmentAt ? Number(portfolio.totalPnlSinceAdjustmentUsdc || 0) : totalPnl;
   const totalPnlDisplayPct = capitalAdjustmentAt ? Number(portfolio.totalPnlSinceAdjustmentPct || 0) : totalPnlPct;
   const realizedPnlDisplay = capitalAdjustmentAt ? Number(portfolio.realizedPnlSinceAdjustmentUsdc || 0) : realizedPnl;
   const realizedPnlDisplayPct = capitalAdjustmentAt ? Number(portfolio.realizedPnlSinceAdjustmentPct || 0) : realizedPnlPct;
-  const openPnl = Number(portfolio.openPnlUsdc || 0);
-  const openPnlPct = Number(portfolio.openPnlPct || 0);
+  const openPnl = capitalAdjustmentAt && portfolio.openPnlSinceAdjustmentUsdc != null
+    ? Number(portfolio.openPnlSinceAdjustmentUsdc || 0)
+    : Number(portfolio.openPnlUsdc || 0);
+  const openPnlPct = capitalAdjustmentAt && portfolio.openPnlSinceAdjustmentPct != null
+    ? Number(portfolio.openPnlSinceAdjustmentPct || 0)
+    : Number(portfolio.openPnlPct || 0);
   const freeCapital = Number(portfolio.freeCapitalUsdc ?? portfolio.initialUsdc ?? 100);
   const paperCapitalBase = Number(portfolio.initialUsdc ?? 100) + realizedPnl;
   syncRiskAllocationControl(freeCapital, "paper portfolio equity", {

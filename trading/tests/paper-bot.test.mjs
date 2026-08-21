@@ -6332,3 +6332,84 @@ test("automation: an after-scrape pass runs a cron portfolio once its own interv
   // Switching automation off is still respected.
   assert.equal(bot.strategyMatchesExecutionTrigger({ ...created, automationEnabled: false }, { manual: false }), false);
 });
+
+test("paper capital adjustment: since-the-reset stats reconcile with equity and never double count", () => {
+  // Reported: High reward showed EQUITY $109.46 next to TOTAL P/L -$37.92. Those cannot
+  // both describe the same account. A reset sets equity to a target outright, so it
+  // resets a stock; "since the reset" was measured as a flow instead -- the realized P/L
+  // of every trade that resolved after the moment, plus the current open P/L, divided by
+  // the pre-reset baseline. A position already under water at the reset had that loss
+  // absorbed into the equity the reset handed it, then had its full realized loss charged
+  // again on resolution.
+  //
+  // Built to reproduce exactly that shape: the reset happens while a losing position is
+  // open, and the position resolves afterwards.
+  const adjustedAt = "2026-08-17T04:00:00.000Z";
+  const state = bot.normalizeState({
+    generatedAt: "2026-08-20T00:00:00.000Z",
+    paperPortfolios: {
+      conservative: {
+        // The reset put equity at 100 while the open book was 40 down.
+        capitalAdjustmentUsdc: 24.4466,
+        capitalAdjustmentAt: adjustedAt,
+        capitalAdjustmentEquityUsdc: 100,
+        capitalAdjustmentOpenPnlUsdc: -40,
+        trades: [
+          // Booked before the reset: part of equity's history, not of "since".
+          { id: "before", status: "WON", stakeUsdc: 5, totalCostUsdc: 5, realizedPnlUsdc: 22.93, resolvedAt: "2026-08-10T00:00:00.000Z" },
+          // Was open and 40 down at the reset, resolved after it at exactly that loss.
+          // Charging its whole -40 to "since the reset" is the double count.
+          { id: "across", status: "LOST", stakeUsdc: 40, totalCostUsdc: 40, realizedPnlUsdc: -40, resolvedAt: "2026-08-18T00:00:00.000Z" },
+        ],
+      },
+    },
+  });
+  const portfolio = state.paperPortfolios.conservative.portfolio;
+
+  // Equity is the unfiltered truth and must not move: 100 + 24.4466 + 22.93 - 40.
+  assert.equal(portfolio.equityUsdc, 107.3766);
+  // A position that only moved from unrealized to realized changed nothing, so the
+  // account has done nothing since the reset beyond shedding that open position.
+  assert.equal(portfolio.totalPnlSinceAdjustmentUsdc, 7.3766, "equity moved 100 -> 107.3766");
+  // The three tiles must add up, or the card cannot be reconciled by a reader.
+  assert.equal(
+    Number((portfolio.realizedPnlSinceAdjustmentUsdc + portfolio.openPnlSinceAdjustmentUsdc).toFixed(4)),
+    portfolio.totalPnlSinceAdjustmentUsdc,
+    "realized + open since the reset must equal total since the reset",
+  );
+  // The percentage is measured against the equity the reset handed the account, not the
+  // baseline that still carries pre-reset history.
+  assert.equal(portfolio.rebaseEquityUsdc, 100);
+  assert.equal(portfolio.totalPnlSinceAdjustmentPct, Number((7.3766 / 100).toFixed(4)));
+
+  // And the old flow-based figure is what this replaces: summing the realized P/L of
+  // trades resolved after the reset would have reported -40 here.
+  assert.notEqual(portfolio.realizedPnlSinceAdjustmentUsdc, -40);
+});
+
+test("paper capital adjustment: a reset records the equity and open book it hands over", () => {
+  // Without these two the stats have to reconstruct the moment by re-summing trades,
+  // which is what double counted a position that spanned it.
+  const state = bot.normalizeState({
+    paperPortfolios: {
+      conservative: {
+        trades: [
+          { id: "open", status: "OPEN", stakeUsdc: 10, totalCostUsdc: 10, unrealizedPnlUsdc: -6 },
+          { id: "done", status: "LOST", stakeUsdc: 5, totalCostUsdc: 5, realizedPnlUsdc: -5, resolvedAt: "2026-08-01T00:00:00.000Z" },
+        ],
+      },
+    },
+  });
+  const before = state.paperPortfolios.conservative.portfolio;
+  assert.equal(before.equityUsdc, 89, "100 - 5 realized - 6 unrealized");
+
+  const result = bot.adjustPaperPortfolioCapital(state, "conservative", 100);
+  const after = state.paperPortfolios.conservative;
+  assert.equal(result.newEquity, 100, "the reset puts equity on the target");
+  assert.equal(after.capitalAdjustmentEquityUsdc, 100);
+  assert.equal(after.capitalAdjustmentOpenPnlUsdc, -6, "the open book it inherits is recorded too");
+  // Immediately after a reset nothing has happened since it, on any of the three tiles.
+  assert.equal(after.portfolio.totalPnlSinceAdjustmentUsdc, 0);
+  assert.equal(after.portfolio.openPnlSinceAdjustmentUsdc, 0);
+  assert.equal(after.portfolio.realizedPnlSinceAdjustmentUsdc, 0);
+});
