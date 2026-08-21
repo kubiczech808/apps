@@ -226,35 +226,32 @@ async function main() {
     }
   }
 
-  // What a parameter row's headline probability actually is.
+  // Which row is which.
   //
   // Reported as impossible: a row labelled 55.0% multi-outcome claiming 26,209 of 28,269
-  // correct. The 55.0% is a floor -- scrapedSimulationMatchesRule keeps every row with
-  // entry >= threshold -- so the sample's own average entry can be far above it, and the win
-  // rate is the win rate of that sample, not of trades bought at 55%. avgProbability says
-  // which it is, so this prints them side by side instead of leaving the column to be read
-  // as a claim about 55% trades.
+  // correct. The threshold is a floor -- scrapedSimulationMatchesRule keeps every row with
+  // entry >= threshold -- so a row labelled 55% summarises everything from 0.55 upward and
+  // its win rate belongs to that sample, not to 55% trades. avgProbability is what says
+  // which, so every populated row prints both, biggest sample first, and the one the report
+  // is about can be picked out by its counts instead of guessed at.
   {
     const payload = await fetchJson(`${HOST}/api.php?action=state&target=paper&summary=dashboard&strategy_id=conservative`);
-    const rows = payload.ok && Array.isArray(payload.body?.latestCalculationReport?.parameterSummaries)
-      ? payload.body.latestCalculationReport.parameterSummaries
-      : [];
-    console.log(`\n-- parameter rows: threshold vs the sample's own average entry --`);
-    if (!rows.length) {
-      console.log(`   no parameterSummaries in the dashboard payload`);
-    } else {
-      const shown = rows
-        .filter((row) => row.marketType === "multi" && Number(row.threshold) === 0.55)
-        .concat(rows.filter((row) => row.marketType === "multi" && Number(row.threshold) === 0.95))
-        .slice(0, 12);
-      for (const row of shown) {
-        const winRate = row.winRate == null ? "-" : `${(row.winRate * 100).toFixed(1)}%`;
-        const avg = row.avgProbability == null ? "-" : `${(row.avgProbability * 100).toFixed(1)}%`;
-        console.log(`   threshold=${((Number(row.threshold) || 0) * 100).toFixed(0)}%`
-          + ` maxDays=${row.maxResolutionDays ?? "-"}`
-          + ` resolved=${row.resolved} wins=${row.wins} winRate=${winRate}`
-          + ` avgEntry=${avg} roi=${row.roi ?? "-"}`);
-      }
+    const report = payload.ok ? payload.body?.latestCalculationReport : null;
+    const rows = Array.isArray(report?.parameterSummaries) ? report.parameterSummaries : [];
+    console.log(`\n-- parameter rows: threshold is a floor, avgEntry is the sample --`);
+    console.log(`   report generatedAt=${report?.generatedAt ?? "-"} sampleSize=${report?.sampleSize ?? "-"}`);
+    const populated = rows.filter((row) => Number(row.resolved) > 0)
+      .sort((a, b) => Number(b.resolved) - Number(a.resolved));
+    if (!populated.length) {
+      console.log(`   every parameter row reports resolved=0 out of ${rows.length} rows`);
+    }
+    for (const row of populated.slice(0, 16)) {
+      const pct = (value) => (value == null ? "-" : `${(Number(value) * 100).toFixed(1)}%`);
+      console.log(`   ${String(row.marketType).padEnd(6)} floor=${pct(row.threshold).padStart(6)}`
+        + ` maxDays=${String(row.maxResolutionDays ?? "-").padStart(3)}`
+        + ` resolved=${String(row.resolved).padStart(6)} wins=${String(row.wins).padStart(6)}`
+        + ` winRate=${pct(row.winRate).padStart(6)} avgEntry=${pct(row.avgProbability).padStart(6)}`
+        + ` roi=${row.roi ?? "-"}`);
     }
   }
 
