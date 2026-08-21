@@ -3607,8 +3607,18 @@ function equityChartScale(start, end) {
 
 function equityChartDate(timestamp, scale) {
   const date = new Date(timestamp);
-  if (scale === "month") return date.toLocaleDateString("en-GB", { month: "short", year: "2-digit" });
-  return date.toLocaleDateString("en-GB", { day: "numeric", month: "short" });
+  if (scale === "month") {
+    return new Intl.DateTimeFormat("cs-CZ", {
+      timeZone: "Europe/Prague",
+      month: "2-digit",
+      year: "numeric",
+    }).format(date);
+  }
+  return new Intl.DateTimeFormat("cs-CZ", {
+    timeZone: "Europe/Prague",
+    day: "2-digit",
+    month: "2-digit",
+  }).format(date);
 }
 
 // The state has transaction-level P/L rather than periodic account snapshots. Rebuild a
