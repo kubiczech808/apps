@@ -10192,7 +10192,20 @@ async function run() {
   state.learningProfile = buildLearningProfile(allTrades, state.learningProfile);
   state.generatedAt = nowIso();
   timedSync("updatePortfolio", () => updatePortfolio(state));
-  timedSync("calculationReport", () => updateCalculationReport(state));
+  // Not on an execution pass, and not merely to save the work.
+  //
+  // buildCalculationReport measures the scraped catalogue, and its whole performance half
+  // comes from the resolved archive -- which an execution pass never reads, because it
+  // carries that segment over untouched. Rebuilding the report from the active half alone
+  // therefore does not produce the same report more cheaply; it produces a report whose
+  // resolved sample is zero. Measured on a real pass: sampleSize fell to 0 against 4,673
+  // open observations, and the category statistics collapsed to a single row. That is the
+  // empty-statistics symptom again, arrived at from the other direction.
+  //
+  // The pass that reads the whole catalogue is the pass that may recalculate it. Carrying
+  // the previous report forward is exact, not an approximation: an execution pass does not
+  // change a single observation the report is built from.
+  if (!EXECUTION_PASS) timedSync("calculationReport", () => updateCalculationReport(state));
   // Trades were refreshed and the report recalculated, so this tick has done the
   // full portfolio pass. Mark it before the narrower manual modes below, which
   // must not move the scheduled cadence clocks -- an execution pass deliberately skips

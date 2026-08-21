@@ -6948,6 +6948,31 @@ test("execution pass: skips catalogue maintenance and keeps every decision input
     "revalidation is never conditional on the pass mode",
   );
 
+  // Caught on a real pass: the statistics report must not be rebuilt by a pass that did
+  // not read the whole catalogue. Its performance half comes from the resolved archive,
+  // which an execution pass carries over untouched, so recalculating it from the active
+  // half alone drove sampleSize to 0 against 4,673 open observations and collapsed the
+  // category statistics to one row -- the empty-statistics symptom, reached from the other
+  // side. Carrying the previous report forward is exact: an execution pass changes none of
+  // the observations it is built from.
+  assert.match(source, /if \(!EXECUTION_PASS\) timedSync\("calculationReport", \(\) => updateCalculationReport\(state\)\);/,
+    "only a pass that read the whole catalogue may recalculate the report");
+  // And the report is what every statistics tab renders, so it has to stay in the core
+  // where the dashboard summary -- which loads no segments at all -- can see it. Checked
+  // by splitting a state rather than by reading the source: the comment explaining this
+  // mentions the field by name, and a regex cannot tell that apart from a declaration.
+  const split = bot.splitStateIntoSegments({
+    latestCalculationReport: { id: "report-1", categorySummaries: [{ value: "sports" }] },
+    calculationReports: [{ id: "report-1" }, { id: "report-0" }],
+  });
+  assert.equal(
+    split.core.latestCalculationReport?.id, "report-1",
+    "the report every statistics tab renders must stay in the core file",
+  );
+  assert.deepEqual(split.core.calculationReports, [], "the history beside it is what stays segmented");
+  assert.equal(split.segments.reports?.calculationReports?.length, 2);
+  assert.equal(split.segments.reports?.latestCalculationReport, undefined);
+
   // Every phase reports its own duration, so a run that misses the budget says which part
   // took it rather than leaving one number for the whole step.
   assert.match(source, /action: "PASS_TIMING"/);
