@@ -278,6 +278,96 @@ button:disabled {
   gap: 10px;
 }
 
+.portfolio-metrics-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(330px, 0.65fr);
+  align-items: stretch;
+  gap: 10px;
+}
+
+.portfolio-equity-chart {
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--soft);
+}
+
+.portfolio-equity-chart-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.portfolio-equity-chart-head span:last-child {
+  font-weight: 700;
+}
+
+.portfolio-equity-chart-empty {
+  margin: 18px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.equity-history-svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  min-height: 150px;
+  margin-top: 8px;
+  overflow: visible;
+}
+
+.equity-history-grid line {
+  stroke: var(--line);
+  stroke-width: 1;
+}
+
+.equity-history-grid text,
+.equity-history-labels text {
+  fill: var(--muted);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.equity-history-area {
+  fill: rgba(13, 148, 136, 0.12);
+}
+
+.equity-history-line {
+  fill: none;
+  stroke: #0f766e;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2.5;
+}
+
+.equity-history-point {
+  fill: #0f766e;
+  stroke: #fff;
+  stroke-width: 2;
+}
+
+.equity-history-svg.negative .equity-history-area {
+  fill: rgba(194, 65, 12, 0.12);
+}
+
+.equity-history-svg.negative .equity-history-line,
+.equity-history-svg.negative .equity-history-point {
+  stroke: #c2410c;
+}
+
+.equity-history-svg.negative .equity-history-point {
+  fill: #c2410c;
+  stroke: #fff;
+}
+
 .portfolio-rules-slot {
   margin-top: 12px;
 }
@@ -2491,6 +2581,14 @@ body.modal-open {
   .portfolio-cards {
     grid-template-columns: repeat(auto-fit, minmax(min(150px, 100%), 1fr));
     gap: 8px;
+  }
+
+  .portfolio-metrics-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .portfolio-equity-chart {
+    padding: 10px;
   }
 
   .control-panel {

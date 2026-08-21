@@ -353,6 +353,7 @@ const els = {
   portfolioOpenPlPct: document.querySelector("[data-portfolio-open-pl-pct]"),
   portfolioRisk: document.querySelector("[data-portfolio-risk]"),
   portfolioFree: document.querySelector("[data-portfolio-free]"),
+  portfolioEquityChart: document.querySelector("[data-portfolio-equity-chart]"),
 };
 
 function escapeHtml(value) {
@@ -3577,6 +3578,143 @@ function annualizedPortfolioReturn(portfolio, days) {
   const totalPct = Number(portfolio.totalPnlPct);
   if (!Number.isFinite(totalPct) || !Number.isFinite(days) || days <= 0) return null;
   return totalPct * (365 / days);
+}
+
+function chartTimestamp(value) {
+  const timestamp = Date.parse(value || "");
+  return Number.isFinite(timestamp) ? timestamp : null;
+}
+
+function equityChartBucket(timestamp, scale) {
+  const date = new Date(timestamp);
+  if (scale === "month") return new Date(date.getFullYear(), date.getMonth(), 1).getTime();
+  if (scale === "week") {
+    const weekStart = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+    const day = (weekStart.getDay() + 6) % 7;
+    weekStart.setDate(weekStart.getDate() - day);
+    return weekStart.getTime();
+  }
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
+}
+
+function equityChartScale(start, end) {
+  const days = Math.max(0, (end - start) / 86400000);
+  if (days > 350) return "month";
+  if (days > 90) return "week";
+  return "day";
+}
+
+function equityChartDate(timestamp, scale) {
+  const date = new Date(timestamp);
+  if (scale === "month") return date.toLocaleDateString("en-GB", { month: "short", year: "2-digit" });
+  return date.toLocaleDateString("en-GB", { day: "numeric", month: "short" });
+}
+
+// The state has transaction-level P/L rather than periodic account snapshots. Rebuild a
+// compact equity path from settled trades, then reconcile the final point to the live
+// Equity tile with current open P/L. This keeps the chart useful without publishing a
+// second, ever-growing history file.
+function portfolioEquityHistory(trades, equity, openPnl, generatedAt = "") {
+  const timelineTrades = Array.isArray(trades) ? trades : [];
+  const openedAt = timelineTrades
+    .map((trade) => chartTimestamp(trade.openedAt || trade.date))
+    .filter((timestamp) => timestamp != null);
+  if (!openedAt.length || !Number.isFinite(equity)) return null;
+
+  const firstOpenedAt = Math.min(...openedAt);
+  // A state file can be a few minutes old while the dashboard is open. The final point
+  // is always "today", not the timestamp of that older snapshot.
+  const now = Math.max(chartTimestamp(generatedAt) || 0, Date.now());
+  const scale = equityChartScale(firstOpenedAt, now);
+  const settledEvents = timelineTrades
+    .filter(isClosedTrade)
+    .map((trade) => ({
+      timestamp: chartTimestamp(trade.resolvedAt || trade.closedTime || trade.lastCheckedAt),
+      pnl: Number(trade.realizedPnlUsdc ?? trade.pnlUsdc),
+    }))
+    .filter((event) => event.timestamp != null && Number.isFinite(event.pnl));
+  const settledPnl = settledEvents.reduce((sum, event) => sum + event.pnl, 0);
+  const currentOpenPnl = Number.isFinite(openPnl) ? openPnl : 0;
+  const openingEquity = equity - settledPnl - currentOpenPnl;
+  const changesByBucket = new Map();
+  settledEvents.forEach((event) => {
+    const bucket = equityChartBucket(event.timestamp, scale);
+    changesByBucket.set(bucket, (changesByBucket.get(bucket) || 0) + event.pnl);
+  });
+
+  let runningEquity = openingEquity;
+  const points = [{ timestamp: firstOpenedAt, value: runningEquity }];
+  [...changesByBucket.entries()]
+    .sort(([left], [right]) => left - right)
+    .forEach(([timestamp, change]) => {
+      runningEquity += change;
+      points.push({ timestamp, value: runningEquity });
+    });
+  // The final value includes current marks on open positions and must exactly match the
+  // headline Equity number, even when no position settled in the current bucket.
+  if (now > points[points.length - 1].timestamp || Math.abs(points[points.length - 1].value - equity) > 0.0001) {
+    points.push({ timestamp: now, value: equity });
+  }
+  return { points, scale, openingEquity };
+}
+
+function renderPortfolioEquityChart({ trades = [], equity, openPnl = 0, generatedAt = "" } = {}) {
+  if (!els.portfolioEquityChart) return;
+  const history = portfolioEquityHistory(trades, equity, openPnl, generatedAt);
+  if (!history || history.points.length < 2) {
+    els.portfolioEquityChart.innerHTML = `
+      <div class="portfolio-equity-chart-head">
+        <span class="label">Equity history</span>
+      </div>
+      <p class="portfolio-equity-chart-empty">The chart appears after the first portfolio trade.</p>
+    `;
+    return;
+  }
+
+  const width = 520;
+  const height = 196;
+  const padding = { top: 18, right: 14, bottom: 32, left: 58 };
+  const values = history.points.map((point) => point.value);
+  const rawMin = Math.min(...values);
+  const rawMax = Math.max(...values);
+  const spread = Math.max(0.01, rawMax - rawMin);
+  const minValue = rawMin - (spread * 0.14);
+  const maxValue = rawMax + (spread * 0.14);
+  const start = history.points[0].timestamp;
+  const end = history.points[history.points.length - 1].timestamp;
+  const timeSpread = Math.max(1, end - start);
+  const plotWidth = width - padding.left - padding.right;
+  const plotHeight = height - padding.top - padding.bottom;
+  const x = (timestamp) => padding.left + (((timestamp - start) / timeSpread) * plotWidth);
+  const y = (value) => padding.top + ((maxValue - value) / (maxValue - minValue)) * plotHeight;
+  const line = history.points.map((point) => `${x(point.timestamp).toFixed(1)},${y(point.value).toFixed(1)}`).join(" ");
+  const area = `${padding.left},${(padding.top + plotHeight).toFixed(1)} ${line} ${(padding.left + plotWidth).toFixed(1)},${(padding.top + plotHeight).toFixed(1)}`;
+  const grid = [0, 0.5, 1].map((ratio) => {
+    const value = maxValue - ((maxValue - minValue) * ratio);
+    const position = y(value);
+    return `<g><line x1="${padding.left}" y1="${position.toFixed(1)}" x2="${(padding.left + plotWidth).toFixed(1)}" y2="${position.toFixed(1)}"></line><text x="${padding.left - 8}" y="${(position + 4).toFixed(1)}" text-anchor="end">${escapeHtml(money(value))}</text></g>`;
+  }).join("");
+  const labelIndexes = [...new Set([0, Math.floor((history.points.length - 1) / 2), history.points.length - 1])];
+  const labels = labelIndexes.map((index) => {
+    const point = history.points[index];
+    return `<text x="${x(point.timestamp).toFixed(1)}" y="${height - 9}" text-anchor="${index === 0 ? "start" : (index === history.points.length - 1 ? "end" : "middle")}">${escapeHtml(equityChartDate(point.timestamp, history.scale))}</text>`;
+  }).join("");
+  const last = history.points[history.points.length - 1];
+  const direction = last.value >= history.openingEquity ? "positive" : "negative";
+  const scaleLabel = history.scale === "day" ? "daily" : (history.scale === "week" ? "weekly" : "monthly");
+  els.portfolioEquityChart.innerHTML = `
+    <div class="portfolio-equity-chart-head">
+      <span class="label">Equity history</span>
+      <span>${escapeHtml(scaleLabel)}</span>
+    </div>
+    <svg class="equity-history-svg ${direction}" viewBox="0 0 ${width} ${height}" role="img" aria-label="Portfolio equity from the first trade to today">
+      <g class="equity-history-grid">${grid}</g>
+      <polygon class="equity-history-area" points="${area}"></polygon>
+      <polyline class="equity-history-line" points="${line}"></polyline>
+      <circle class="equity-history-point" cx="${x(last.timestamp).toFixed(1)}" cy="${y(last.value).toFixed(1)}" r="4"></circle>
+      <g class="equity-history-labels">${labels}</g>
+    </svg>
+  `;
 }
 
 function compactToken(tokenId) {
@@ -7591,6 +7729,12 @@ function renderBotState(botState) {
   els.portfolioOpenPlPct.textContent = signedPercent(openPnlPct);
   els.portfolioRisk.textContent = money(Number(portfolio.openRiskUsdc || 0));
   els.portfolioFree.textContent = `${money(freeCapital)} free`;
+  renderPortfolioEquityChart({
+    trades,
+    equity: Number(portfolio.equityUsdc ?? portfolio.initialUsdc ?? 100),
+    openPnl: Number(portfolio.openPnlUsdc || 0),
+    generatedAt: botState.generatedAt,
+  });
 
   if (els.portfolioRules) {
     els.portfolioRules.innerHTML = `
@@ -8223,6 +8367,12 @@ function renderLiveState(liveState) {
   els.portfolioFree.textContent = freeCash == null
     ? "cash not available"
     : `${money(freeCash)} free cash${otherPortfolioReservation > 0.01 ? ` (${money(otherPortfolioReservation)} locked by the other portfolio)` : ""}`;
+  renderPortfolioEquityChart({
+    trades: [...closedTrades, ...positions],
+    equity,
+    openPnl: openPnlValue,
+    generatedAt: liveState.generatedAt,
+  });
 
   if (els.accountSummary) {
     els.accountSummary.hidden = true;
