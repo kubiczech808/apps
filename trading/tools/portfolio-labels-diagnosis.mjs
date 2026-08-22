@@ -364,6 +364,18 @@ async function main() {
         + ` resting=${num(portfolio.restingLimitOrderUsdc).padStart(7)}`
         + ` deployable=${num(portfolio.deployableCapitalUsdc).padStart(7)}`
         + ` waitingRows=${String(waiting.length).padStart(2)} (${waitingRisk.toFixed(2)} USDC)`);
+      // The split the overview table now shows as two columns. Printed with the total so a
+      // mismatch is visible: the halves have to add up to it, or the table and the Risk
+      // tile are describing different accounts.
+      const positions = Number(portfolio.positionRiskUsdc);
+      const resting = Number(portfolio.restingLimitOrderUsdc);
+      const total = Number(portfolio.openRiskUsdc);
+      const reconciles = [positions, resting, total].every(Number.isFinite)
+        && Math.abs(positions + resting - total) < 0.02;
+      console.log(`      risk split  : inPositions=${num(portfolio.positionRiskUsdc).padStart(7)}`
+        + ` inOrders=${num(portfolio.restingLimitOrderUsdc).padStart(7)}`
+        + ` total=${num(portfolio.openRiskUsdc).padStart(7)}`
+        + ` -> ${Number.isFinite(positions) ? (reconciles ? "adds up" : "DOES NOT ADD UP") : "positionRiskUsdc MISSING"}`);
       // The skip this is meant to stop, and the clause that says the new rule ran.
       const log = await fetchJson(
         `${HOST}/api.php?action=portfolio-run-log&strategy_id=${encodeURIComponent(id)}&page=0&page_size=24`,
