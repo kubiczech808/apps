@@ -1,0 +1,32 @@
+name: Trading Limit Order Fill Audit
+
+# Read-only, manual only. For every resting paper limit order, compares the price it rests
+# at against the lowest price the market has actually traded at since it was placed, and
+# measures how long ago each order was last looked at. Places no orders and writes nothing.
+on:
+  workflow_dispatch:
+    inputs:
+      max_probes:
+        description: "How many resting orders to probe against traded history"
+        required: false
+        default: "40"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Audit resting orders against traded prices
+        working-directory: trading
+        env:
+          FILL_AUDIT_MAX_PROBES: ${{ inputs.max_probes }}
+        run: node tools/limit-order-fill-audit.mjs
