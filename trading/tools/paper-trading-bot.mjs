@@ -1008,6 +1008,7 @@ function compactPaperPortfolioForCore(portfolio) {
     "equalRiskMultiplier",
     "equalRiskProtection",
     "allowRotation",
+    "useLimitOrders",
     "resetAt",
     "resetArchiveId",
     "capitalAdjustmentUsdc",
@@ -1528,6 +1529,11 @@ function normalizePaperPortfolio(strategy, input = {}) {
     equalRiskMultiplier: normalizeStopLossRiskMultiplier(strategy.equalRiskMultiplier, strategy.equalRiskProtection ? 1 : 0),
     equalRiskProtection: Boolean(strategy.equalRiskProtection),
     allowRotation: strategy.allowRotation !== false,
+    // Carried like the other per-portfolio execution switches, because how the next order
+    // is sized depends on it: a resting limit order holds capital without being exposure,
+    // so it does not block the order after it. updatePaperPortfolio reads this to publish
+    // both the allocated and the deployable figure.
+    useLimitOrders: Boolean(strategy.useLimitOrders),
     description: strategy.description,
     resetAt: input.resetAt || null,
     resetArchiveId: input.resetArchiveId || null,
@@ -5514,6 +5520,37 @@ function openRisk(trades) {
     .reduce((sum, trade) => sum + Number(trade.maxLossUsdc || trade.stakeUsdc || 0), 0);
 }
 
+// Capital held by resting buys that have not filled.
+//
+// A limit order is not a position. It is an offer sitting on the book at a price the market
+// has not come down to, and it may never fill -- once the event ends it is discarded with
+// no stake spent at all. Counting it as committed capital is what stopped a portfolio
+// placing any further orders: a handful of resting bids reserved the whole account while
+// owning nothing.
+function waitingLimitOrderRisk(trades) {
+  return (Array.isArray(trades) ? trades : [])
+    .filter((trade) => String(trade?.status || "") === "LIMIT_ORDER_WAITING")
+    .reduce((sum, trade) => sum + Number(trade.maxLossUsdc || trade.stakeUsdc || 0), 0);
+}
+
+// What the next order may be sized against.
+//
+// For a portfolio buying at the market this is free capital as it always was: every open
+// position is real exposure. For one resting limit orders it is free capital plus whatever
+// those unfilled orders are holding, because they are not exposure yet and waiting on them
+// is waiting on something that may never happen.
+//
+// The consequence is deliberate and worth naming: a portfolio can have more capital
+// promised to resting orders than it owns, and if an unusual number of them fill at once it
+// is committed beyond its balance. That is the trade being made -- an order that never
+// fills costs nothing, so the alternative is an account that stops trading because of
+// offers nobody took. Both figures are published, so the position is never hidden.
+function deployableCapital(portfolioState, strategy, sizingCapital) {
+  const committed = openRisk(portfolioState.trades || []);
+  const resting = strategy?.useLimitOrders ? waitingLimitOrderRisk(portfolioState.trades || []) : 0;
+  return Math.max(0, sizingCapital - committed + resting);
+}
+
 function alreadyOpen(trades, tokenId) {
   return trades.some((trade) => OPEN_STATUSES.has(trade.status) && trade.tokenId === tokenId);
 }
@@ -6892,7 +6929,9 @@ function maybeOpenScheduledTrade(portfolioState, eligible, strategy = PAPER_STRA
   // constant alone.
   const capitalAdjustment = Number(portfolioState.capitalAdjustmentUsdc) || 0;
   const sizingCapital = Math.max(0, PORTFOLIO_USDC + capitalAdjustment + realizedPnl);
-  const available = Math.max(0, sizingCapital - openRisk(portfolioState.trades));
+  // Resting limit orders do not block the next one; see deployableCapital.
+  const restingCapital = strategy.useLimitOrders ? waitingLimitOrderRisk(portfolioState.trades) : 0;
+  const available = deployableCapital(portfolioState, strategy, sizingCapital);
   const maxFraction = Number(strategy.maxFraction ?? portfolioState.portfolio?.maxFraction ?? MAX_FRACTION);
   const configuredStake = Number(strategy.stakeUsdc ?? portfolioState.stakeUsdc ?? portfolioState.portfolio?.stakeUsdc);
   const stake = Number.isFinite(configuredStake) && configuredStake > 0
@@ -6943,7 +6982,12 @@ function maybeOpenScheduledTrade(portfolioState, eligible, strategy = PAPER_STRA
   }
 
   if (available < stake) {
-    const reason = `not enough free paper capital for next ${strategy.label} trade: ${available.toFixed(2)} USDC available, ${stake.toFixed(2)} USDC fixed stake required`;
+    // The resting total is named when there is one, or the available figure cannot be
+    // reconciled with the free capital the dashboard shows -- they differ by exactly this.
+    const restingNote = restingCapital > 0
+      ? `; ${restingCapital.toFixed(2)} USDC of unfilled limit orders is not counted against this`
+      : "";
+    const reason = `not enough free paper capital for next ${strategy.label} trade: ${available.toFixed(2)} USDC available, ${stake.toFixed(2)} USDC fixed stake required${restingNote}`;
     return {
       action: "SKIP",
       reason,
@@ -9677,6 +9721,16 @@ function updatePaperPortfolio(portfolioState) {
     ? configuredStakeUsdc
     : Math.max(0.01, baseline * portfolioMaxFraction);
   const freeCapital = Math.max(0, baseline + realizedPnl - openRiskValue);
+  // Free capital counts every open row, resting limit orders included, because that is what
+  // is currently allocated. The next order is sized against something different when the
+  // portfolio rests limit orders -- an unfilled offer is not exposure and does not block it
+  // -- so both figures are published. Showing only one of them is what would make the
+  // dashboard and the run log contradict each other: "1.32 USDC available" beside an order
+  // that was placed anyway.
+  const restingLimitOrderCapital = waitingLimitOrderRisk(portfolioState.trades);
+  const deployable = portfolioState.useLimitOrders
+    ? freeCapital + restingLimitOrderCapital
+    : freeCapital;
   portfolioState.portfolio = {
     ...(portfolioState.portfolio || {}),
     strategyId: portfolioState.id,
@@ -9717,6 +9771,10 @@ function updatePaperPortfolio(portfolioState) {
     ...sinceAdjustmentStats,
     openRiskUsdc: Number(openRiskValue.toFixed(2)),
     freeCapitalUsdc: Number(freeCapital.toFixed(2)),
+    // What resting, unfilled orders are holding, and what the next order is actually sized
+    // against. They differ by exactly that amount when this portfolio rests limit orders.
+    restingLimitOrderUsdc: Number(restingLimitOrderCapital.toFixed(2)),
+    deployableCapitalUsdc: Number(deployable.toFixed(2)),
   };
 }
 

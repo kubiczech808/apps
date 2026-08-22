@@ -6939,6 +6939,13 @@ function portfolioRuleRows(portfolio = {}) {
   // paper-only hide), but this card never showed it -- reading like the setting was
   // live-only, when it is only this row that was missing.
   rows.push(["Order mode", config.useLimitOrders ? "Limit orders" : "Market orders"]);
+  // A resting order holds capital without being a position, so it does not block the next
+  // one. Stating the amount is what makes the free-capital figure and the size of the next
+  // order add up for anyone reading both.
+  const resting = Number(selectedPaperPortfolio(state.botState || {})?.portfolio?.restingLimitOrderUsdc || 0);
+  if (config.useLimitOrders && resting > 0) {
+    rows.push(["Resting orders", `${money(resting)} held by unfilled orders, not counted against a new one`]);
+  }
   // Only when something is actually excluded: a row reading "none" on every portfolio
   // that never touched the setting is noise in a list meant to be read at a glance.
   const includeOnlyTags = normalizeMarketTagList(config.includeOnlyMarketTags);
@@ -7855,8 +7862,15 @@ function renderBotState(botState) {
     ? Number(portfolio.openPnlSinceAdjustmentPct || 0)
     : Number(portfolio.openPnlPct || 0);
   const freeCapital = Number(portfolio.freeCapitalUsdc ?? portfolio.initialUsdc ?? 100);
+  // What the next order is sized against, which is not free capital for a portfolio that
+  // rests limit orders: an unfilled offer holds capital without being exposure, so it does
+  // not block the order after it. Showing free capital here while the bot sized against
+  // something larger is what would put "1.32 USDC available" next to an order it placed.
+  const deployableCapital = Number(
+    portfolio.deployableCapitalUsdc ?? portfolio.freeCapitalUsdc ?? portfolio.initialUsdc ?? 100,
+  );
   const paperCapitalBase = Number(portfolio.initialUsdc ?? 100) + realizedPnl;
-  syncRiskAllocationControl(freeCapital, "paper portfolio equity", {
+  syncRiskAllocationControl(deployableCapital, "paper portfolio equity", {
     baseCapital: paperCapitalBase,
     cadenceLabel: "next paper execution",
   });

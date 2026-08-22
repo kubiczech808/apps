@@ -7419,3 +7419,96 @@ test("statistics report: a pass without the resolved archive keeps the stored re
   assert.equal(undeclared.storedGeneratedAt, "2026-08-21T11:01:44.117Z",
     "an unsegmented state is holding everything there is");
 });
+
+// Requested: a portfolio resting limit orders had its capital tied up by offers that were
+// waiting and might never fill, so it stopped placing new ones. A resting buy is not a
+// position -- the market has not come down to it, and once the event ends it is discarded
+// with no stake spent -- so it must not block the order after it.
+test("limit orders: capital held by unfilled orders does not block the next order", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const source = await readFile(new URL("../tools/paper-trading-bot.mjs", import.meta.url), "utf8");
+  const openRisk = new Function(
+    "OPEN_STATUSES",
+    `${functionSource(source, "openRisk")}\nreturn openRisk;`,
+  )(new Set(["OPEN", "PENDING_RESOLUTION", "MARKET_NOT_FOUND", "STOP_BREACH", "LIMIT_ORDER_WAITING"]));
+  const waitingLimitOrderRisk = new Function(
+    `${functionSource(source, "waitingLimitOrderRisk")}\nreturn waitingLimitOrderRisk;`,
+  )();
+  const deployableCapital = new Function(
+    "openRisk", "waitingLimitOrderRisk",
+    `${functionSource(source, "deployableCapital")}\nreturn deployableCapital;`,
+  )(openRisk, waitingLimitOrderRisk);
+
+  // 100 USDC, three filled positions and four offers still resting.
+  const trades = [
+    ...Array.from({ length: 3 }, (_, i) => ({ id: `open-${i}`, status: "OPEN", maxLossUsdc: 5 })),
+    ...Array.from({ length: 4 }, (_, i) => ({ id: `rest-${i}`, status: "LIMIT_ORDER_WAITING", maxLossUsdc: 5 })),
+  ];
+  const portfolioState = { trades };
+
+  assert.equal(openRisk(trades), 35, "allocated capital still counts every open row");
+  assert.equal(waitingLimitOrderRisk(trades), 20, "of which this much is only offers");
+
+  // A market-order portfolio is unchanged: every open row is real exposure.
+  assert.equal(deployableCapital(portfolioState, { useLimitOrders: false }, 100), 65);
+  // A limit-order portfolio may size against the resting capital too.
+  assert.equal(deployableCapital(portfolioState, { useLimitOrders: true }, 100), 85);
+
+  // The reported case: free capital below the stake, so it used to skip; the resting
+  // orders are what put it there, and now they do not.
+  const full = {
+    trades: [
+      ...Array.from({ length: 19 }, (_, i) => ({ id: `rest-${i}`, status: "LIMIT_ORDER_WAITING", maxLossUsdc: 5 })),
+      { id: "open-0", status: "OPEN", maxLossUsdc: 5 },
+    ],
+  };
+  assert.equal(deployableCapital(full, { useLimitOrders: false }, 100), 0, "market orders: nothing left");
+  assert.equal(deployableCapital(full, { useLimitOrders: true }, 100), 95,
+    "limit orders: only the one filled position is exposure");
+
+  // Never negative, whatever the book looks like.
+  assert.equal(deployableCapital({ trades: [{ status: "OPEN", maxLossUsdc: 500 }] }, { useLimitOrders: true }, 100), 0);
+  // A closed or expired order holds nothing at all.
+  for (const status of ["LIMIT_ORDER_EXPIRED", "WON", "LOST", "CANCELLED"]) {
+    assert.equal(waitingLimitOrderRisk([{ status, maxLossUsdc: 5 }]), 0, `${status} holds no capital`);
+  }
+  // Falls back to the stake when a row carries no explicit max loss.
+  assert.equal(waitingLimitOrderRisk([{ status: "LIMIT_ORDER_WAITING", stakeUsdc: 7 }]), 7);
+});
+
+test("limit orders: the dashboard is told both figures, so it cannot contradict the run log", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const source = await readFile(new URL("../tools/paper-trading-bot.mjs", import.meta.url), "utf8");
+
+  // updatePaperPortfolio publishes the allocated figure and the deployable one.
+  const portfolioState = {
+    id: "ewportfolio",
+    label: "75 + SL",
+    useLimitOrders: true,
+    stakeUsdc: 5,
+    trades: [
+      { id: "open-0", status: "OPEN", maxLossUsdc: 5, stakeUsdc: 5 },
+      { id: "rest-0", status: "LIMIT_ORDER_WAITING", maxLossUsdc: 5, stakeUsdc: 5 },
+      { id: "rest-1", status: "LIMIT_ORDER_WAITING", maxLossUsdc: 5, stakeUsdc: 5 },
+    ],
+  };
+  bot.updatePaperPortfolio(portfolioState);
+  const portfolio = portfolioState.portfolio;
+  assert.equal(portfolio.openRiskUsdc, 15, "all three rows are allocated");
+  assert.equal(portfolio.restingLimitOrderUsdc, 10, "two of them are only offers");
+  assert.equal(portfolio.freeCapitalUsdc, 85, "free capital counts them, because they are allocated");
+  assert.equal(portfolio.deployableCapitalUsdc, 95, "the next order is sized without them");
+
+  // And a market-order portfolio reports the two as the same number, so nothing reads as a
+  // special case where there is none.
+  const marketOrders = { ...portfolioState, useLimitOrders: false, portfolio: undefined };
+  bot.updatePaperPortfolio(marketOrders);
+  assert.equal(marketOrders.portfolio.deployableCapitalUsdc, marketOrders.portfolio.freeCapitalUsdc);
+  assert.equal(marketOrders.portfolio.restingLimitOrderUsdc, 10,
+    "the amount is still reported -- it is just not deployable here");
+
+  // The skip message has to name the resting total, or "2.00 USDC available" cannot be
+  // reconciled with the free capital the dashboard shows.
+  assert.match(source, /USDC of unfilled limit orders is not counted against this/);
+  assert.match(source, /const available = deployableCapital\(portfolioState, strategy, sizingCapital\);/);
+});
