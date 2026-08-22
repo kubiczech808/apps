@@ -265,31 +265,43 @@ async function main() {
   // Why a pass skipped, from the pass's own record.
   //
   // Reported: a portfolio on the hourly cron trigger logged "no eligible non-duplicate
-  // candidate" and "no eligible non-correlated candidate", and started opening positions
-  // once it was switched to after-scrape. Those two reasons are the two arms of
-  // findFirstOpenCandidate: the first means every eligible candidate was a market the
-  // portfolio already held, the second that some were blocked as correlated with a holding.
-  // Which arm fired, how many candidates reached it, and how many positions were open at
-  // the time are all in the batch log the pass wrote, so this reads them instead of
-  // reasoning about which code path was taken.
+  // candidate" and "no eligible non-correlated candidate", and began opening positions once
+  // switched to after-scrape. Those two reasons are the two arms of findFirstOpenCandidate:
+  // the first means every eligible candidate was a market the portfolio already held, the
+  // second that some were blocked as correlated with a holding. Both are transient states,
+  // so how often a portfolio gets to look matters as much as what it sees -- which is why
+  // the gap between consecutive runs is printed too.
   {
-    console.log(`\n-- recent SKIP decisions, as the passes recorded them --`);
-    for (const id of ["ewportfolio", "ewportfolio2", "ultioutcome1d"]) {
-      const list = await fetchJson(
-        `${HOST}/api.php?action=portfolio-run-log&strategy_id=${encodeURIComponent(id)}&page=0&page_size=24`,
-      );
-      if (!list.ok) {
-        console.log(`   ${id}: run log HTTP ${list.status} ${list.error || ""}`);
+    console.log(`\n-- SKIP decisions, and how often each portfolio got to look --`);
+    const configured = await fetchJson(`${HOST}/api.php?action=portfolio-config`);
+    const paper = configured.ok ? (configured.body?.config?.paper || {}) : {};
+    for (const id of Object.keys(paper)) {
+      const rows = [];
+      for (const page of [0, 1, 2]) {
+        const list = await fetchJson(
+          `${HOST}/api.php?action=portfolio-run-log&strategy_id=${encodeURIComponent(id)}&page=${page}&page_size=24`,
+        );
+        if (!list.ok) break;
+        rows.push(...(list.body?.records || []));
+        if (!list.body?.hasMore) break;
+      }
+      if (!rows.length) {
+        console.log(`   ${id}: no run-log rows`);
         continue;
       }
-      const skips = (list.body?.records || [])
-        .filter((row) => String(row?.action || "").toUpperCase() === "SKIP")
-        .slice(0, 3);
-      if (!skips.length) {
-        console.log(`   ${id}: no SKIP rows on the first page of ${list.body?.total ?? "?"}`);
-        continue;
-      }
-      for (const row of skips) {
+      // Median gap between consecutive runs: what the configured cadence actually delivers.
+      const times = rows.map((row) => Date.parse(row?.runAt || "")).filter(Number.isFinite).sort((a, b) => b - a);
+      const gaps = times.slice(0, -1).map((at, index) => (at - times[index + 1]) / 60000).filter((value) => value > 0);
+      const median = gaps.length ? gaps.slice().sort((a, b) => a - b)[Math.floor(gaps.length / 2)] : null;
+      const config = paper[id] || {};
+      console.log(`   ${id.padEnd(16)} trigger=${config.executionTrigger ?? "-"}`
+        + ` cronMinutes=${config.executionCronMinutes ?? "-"}`
+        + ` rotation=${config.autoRotatePositions === true ? "on" : "off"}`
+        + ` rows=${rows.length} medianGap=${median == null ? "-" : `${median.toFixed(1)}min`}`);
+
+      // The two reasons the report is about, wherever they appear in this window.
+      const wanted = rows.filter((row) => /non-duplicate|non-correlated/.test(String(row?.reason || ""))).slice(0, 2);
+      for (const row of wanted) {
         const detail = await fetchJson(
           `${HOST}/api.php?action=portfolio-run-log-detail&strategy_id=${encodeURIComponent(id)}`
           + `&run_at=${encodeURIComponent(row.runAt)}`,
@@ -297,27 +309,16 @@ async function main() {
         const record = detail.ok ? detail.body?.record : null;
         const batch = record?.batchLog || {};
         const counts = batch.counts || {};
-        const filter = batch.portfolioFilter || {};
-        console.log(`   ${id} @ ${row.runAt} ${record?.runSource ?? "-"} -- ${String(record?.reason || row.reason || "").slice(0, 70)}`);
-        console.log(`      trigger=${batch.settings?.executionTrigger ?? "-"}`
+        console.log(`      ${row.runAt} ${record?.runSource ?? "-"} -- ${String(row.reason || "").slice(0, 46)}`);
+        console.log(`         trigger=${batch.settings?.executionTrigger ?? "-"}`
           + ` rotation=${batch.rotationReview?.action ?? "-"}`
-          + ` openTrades=${counts.openTrades ?? "-"}`);
-        console.log(`      rankedEligible=${counts.rankedEligible ?? "-"}`
-          + ` skippedForRisk=${counts.skippedForRisk ?? "-"}`
-          + ` riskBlocked=${counts.riskBlocked ?? "-"}`
-          + ` evaluated=${filter.totalEvaluated ?? "-"}`
-          + ` baseEligible=${filter.baseEligible ?? "-"}`
-          + ` portfolioEligible=${filter.portfolioEligible ?? "-"}`);
-        // Whether the pass revalidated its shortlist at all: the stored-candidates path
-        // requotes every candidate before deciding, the full-evaluation path does not.
-        const prevalidated = batch.revalidatedCandidates;
-        console.log(`      revalidatedCandidates=${Array.isArray(prevalidated) ? prevalidated.length : "(absent)"}`);
-        for (const candidate of (batch.eligibleCandidates || []).slice(0, 3)) {
-          console.log(`      eligible : token=${String(candidate.tokenId || "(none)").slice(0, 12)}`
-            + ` status=${candidate.selectionStatus ?? "-"}`
-            + ` blockedBy=${candidate.riskBlockedByTradeId ?? "-"}`
-            + ` ${String(candidate.question || "").slice(0, 40)}`);
-        }
+          + ` openTrades=${counts.openTrades ?? "-"}`
+          + ` rankedEligible=${counts.rankedEligible ?? "-"}`
+          + ` skippedForRisk=${counts.skippedForRisk ?? "-"}`);
+        // Whether that pass requoted its shortlist. The stored-candidates path sets this on
+        // every candidate it considered; the full-evaluation path never revalidates at all.
+        const verified = (batch.eligibleCandidates || []).filter((c) => c && c.executionQuoteVerified === true).length;
+        console.log(`         eligibleLogged=${(batch.eligibleCandidates || []).length} quoteVerified=${verified}`);
       }
     }
   }
