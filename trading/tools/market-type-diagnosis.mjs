@@ -8,15 +8,17 @@
 // Each candidate there is quoted as its own Yes/No book, which is exactly why counting
 // outcomes on a single market cannot tell the two apart.
 //
-// This prints how the current rule classifies real resolved rows, grouped so the
-// misclassified families are visible as families rather than as anecdotes, and then asks
-// Gamma whether negRisk -- Polymarket's own "one of these wins" flag -- agrees with the
-// classification. negRisk is not stored on our rows, so whether it is worth capturing is
-// exactly what this has to answer before any rule is rewritten.
+// This prints how the rule classifies real resolved rows, grouped so a misclassified
+// family is visible as a family rather than as an anecdote, and then what each portfolio's
+// market-type filter matches before and after -- because a portfolio filtering on one kind
+// trades a different pool once the rule changes.
+//
+// Polymarket's own negRisk flag would be the authoritative signal here and was tried:
+// every one of 24 slug lookups against Gamma came back empty for these resolved markets,
+// so the probe was removed rather than left printing 24 failures a run.
 import { reportMarketType } from "./paper-trading-bot.mjs";
 
 const HOST = process.env.TRADING_HOST || "https://osobnizkusenosti.cz/trading";
-const GAMMA = process.env.GAMMA_HOST || "https://gamma-api.polymarket.com";
 
 async function fetchJson(url, attempts = 2) {
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
@@ -146,41 +148,30 @@ async function main() {
     }
   }
 
-  // Does Polymarket's own flag agree? negRisk marks an event whose markets are mutually
-  // exclusive and exactly one resolves YES -- the reported definition of multi-outcome,
-  // stated by the exchange rather than guessed from a question. We do not store it, so
-  // this asks Gamma for a spread of real slugs and prints the two side by side.
+  // What this costs each portfolio. A portfolio filtering on one kind sees a different pool
+  // once the rule changes, and for a portfolio configured "multi" the pool gets much
+  // smaller -- that is a change in what it will trade from now on, not only a change in how
+  // the statistics read, so it belongs in the same measurement.
   {
-    console.log(`\n-- negRisk versus our classification (Gamma lookup) --`);
-    const seen = new Set();
-    const probes = [];
+    console.log(`\n-- what each portfolio's market-type filter now matches --`);
+    const configured = await fetchJson(`${HOST}/api.php?action=portfolio-config`);
+    const paper = configured.ok ? (configured.body?.config?.paper || {}) : {};
+    const computed = { binary: 0, multi: 0 };
+    const stored = { binary: 0, multi: 0, all: 0 };
     for (const row of rows) {
-      if (!row.slug || seen.has(row.slug)) continue;
-      seen.add(row.slug);
-      probes.push(row);
-      if (probes.length >= 24) break;
+      computed[row.computedType] = (computed[row.computedType] || 0) + 1;
+      stored[row.storedType] = (stored[row.storedType] || 0) + 1;
     }
-    let agree = 0;
-    let disagree = 0;
-    let unknown = 0;
-    for (const row of probes) {
-      const result = await fetchJson(`${GAMMA}/markets?slug=${encodeURIComponent(row.slug)}`);
-      const market = Array.isArray(result.body) ? result.body[0] : null;
-      if (!result.ok || !market) {
-        unknown += 1;
-        console.log(`   ?        ${row.slug.slice(0, 58)} -- lookup failed`);
-        continue;
-      }
-      const negRisk = market.negRisk === true;
-      const impliedType = negRisk ? "multi" : "binary";
-      const matched = impliedType === row.computedType;
-      if (matched) agree += 1;
-      else disagree += 1;
-      console.log(`   ${matched ? "agree   " : "DISAGREE"} negRisk=${String(negRisk).padEnd(5)}`
-        + ` ours=${row.computedType.padEnd(6)} n=${String(row.outcomeCount).padEnd(3)}`
-        + ` ${row.question.slice(0, 56)}`);
+    console.log(`   sample of ${rows.length}: was binary=${stored.binary || 0} multi=${stored.multi || 0}`
+      + ` -> now binary=${computed.binary} multi=${computed.multi}`);
+    for (const [id, config] of Object.entries(paper)) {
+      const required = String(config.marketType || "all");
+      const matches = required === "all" ? rows.length : (computed[required] || 0);
+      const before = required === "all" ? rows.length : (stored[required] || 0);
+      console.log(`   ${id.padEnd(16)} filter=${required.padEnd(6)}`
+        + ` matching rows ${String(before).padStart(5)} -> ${String(matches).padStart(5)}`
+        + (required === "all" ? "  (unaffected)" : ""));
     }
-    console.log(`   agree=${agree} disagree=${disagree} unknown=${unknown} of ${probes.length} probed`);
   }
 }
 
