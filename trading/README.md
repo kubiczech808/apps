@@ -59,6 +59,24 @@ restates at the bottom of the job — so a run that misses the budget says which
 it. `PAPER_REQUEST_CONCURRENCY` (default 8) caps how many Polymarket requests are in flight
 at once; `PAPER_UPLOAD_CONCURRENCY` (default 4) how many FTP sessions the publisher opens.
 
+### Limit orders and capital
+
+A portfolio set to use limit orders places a resting buy instead of buying at the market,
+and capital held by an unfilled order is deliberately **not** counted against the next one.
+An offer nobody takes costs nothing, and the alternative is an account that stops trading
+because of orders it may never be filled on. Both figures are published: `openRiskUsdc` is
+the total, split into `positionRiskUsdc` (real exposure) and `restingLimitOrderUsdc`
+(reserved by offers), and the overview table shows those two as separate columns.
+
+The consequence is that a portfolio can promise more than it owns, so the check sits where
+the promise comes due. When a resting order reaches its fill price, the position is funded
+out of capital that is not already in a position — resting orders reserve nothing against
+it. If the fill does not fit, it is refused and **every** resting order for that portfolio
+is cancelled, not only that one: the over-promised queue is the thing that was wrong, and
+refusing it one order at a time on later passes would leave it standing. A cancelled order
+keeps the `LIMIT_ORDER_EXPIRED` terminal status — nothing was bought either way — with
+`cancelledForCapital` set, so the dashboard can say which of the two happened.
+
 ## Optimization loop
 
 The bot now writes a `learningProfile` into `paper-state.json`.

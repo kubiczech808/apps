@@ -3445,7 +3445,14 @@ function tradeTypeBadge(trade) {
   // position. "Expired" is its own case rather than falling through to the closed-
   // trade chips below -- nothing was ever bought, so it is not a settled position.
   if (String(trade.status || "").toUpperCase() === "LIMIT_ORDER_WAITING") return '<span class="order-chip">Limit order waiting</span>';
-  if (String(trade.status || "").toUpperCase() === "LIMIT_ORDER_EXPIRED") return '<span class="order-chip warning">Limit order expired &middot; unfilled</span>';
+  // Two ways an order ends with nothing bought, and they say different things. Outliving
+  // its event is the market's doing; being cancelled because a fill could not be funded is
+  // the account's, and reading that as "expired" would hide it.
+  if (String(trade.status || "").toUpperCase() === "LIMIT_ORDER_EXPIRED") {
+    return trade.cancelledForCapital
+      ? '<span class="order-chip warning">Limit order cancelled &middot; no capital</span>'
+      : '<span class="order-chip warning">Limit order expired &middot; unfilled</span>';
+  }
   if (String(trade.status || "").toUpperCase() === "REDEEM_REQUIRED") return '<span class="order-chip warning">Redeem needed</span>';
   if (String(trade.status || "").toUpperCase() === "PENDING_RESOLUTION") return '<span class="order-chip warning">Pending resolution</span>';
   if (String(trade.status || "").toUpperCase() === "STOP_LOSS") return '<span class="order-chip warning">Protective exit</span>';

@@ -4206,11 +4206,99 @@ async function markOpenTrade(trade) {
   return awaitingResolution ? pendingResolutionResult() : base;
 }
 
-async function refreshTrades(trades) {
+// A resting order that the account cannot honour is not an order.
+//
+// Placing them stays deliberately permissive: capital held by unfilled orders is not counted
+// against the next one, because an offer nobody takes costs nothing. Measured on production,
+// the consequence is a queue far larger than the balance behind it -- three portfolios
+// reached roughly twice their own equity within three hours, one of them opening on all 24
+// of its last runs, because nothing in the placing decision ever runs out.
+//
+// So the brake belongs where the promise comes due rather than where it is made. A fill is
+// funded out of capital that is not already in a position; resting orders reserve nothing
+// against it, since they are not exposure. When a fill cannot be funded the portfolio has
+// over-promised, and every remaining resting order is cancelled -- not just the one that
+// did not fit. Refusing them one at a time on later passes would leave the same
+// over-promised queue standing, and the queue is the thing that was wrong.
+function cancelLimitOrderForCapital(trade, note) {
+  const at = nowIso();
+  return {
+    ...trade,
+    status: "LIMIT_ORDER_EXPIRED",
+    // Distinguishes this from an order that simply outlived its event. Both are discarded
+    // with no stake spent, so they share the terminal status, but only one of them says
+    // something about the account.
+    cancelledForCapital: true,
+    closedAt: at,
+    resolvedAt: at,
+    currentPrice: null,
+    currentValueUsdc: 0,
+    unrealizedPnlUsdc: 0,
+    unrealizedPnlPct: 0,
+    realizedPnlUsdc: 0,
+    realizedPnlPct: 0,
+    statusNote: note,
+  };
+}
+
+function fundLimitOrderFills(previousTrades, refreshedTrades, portfolioState) {
+  const before = Array.isArray(previousTrades) ? previousTrades : [];
+  const filledNow = (trade, index) => String(before[index]?.status || "") === "LIMIT_ORDER_WAITING"
+    && String(trade?.status || "") === "OPEN";
+  if (!refreshedTrades.some(filledNow)) return { trades: refreshedTrades, funded: 0, cancelled: 0 };
+
+  const realizedPnl = refreshedTrades.reduce((sum, trade) => sum + Number(trade.realizedPnlUsdc || 0), 0);
+  const capitalAdjustment = Number(portfolioState?.capitalAdjustmentUsdc) || 0;
+  const balance = Math.max(0, PORTFOLIO_USDC + capitalAdjustment + realizedPnl);
+  // Capacity before this pass's fills: the balance less what is already held. Rows that
+  // filled on this pass are excluded because they are exactly what is being funded.
+  let capacity = balance - positionRisk(refreshedTrades.filter((trade, index) => !filledNow(trade, index)));
+
+  let overPromised = false;
+  let funded = 0;
+  const trades = refreshedTrades.map((trade, index) => {
+    if (!filledNow(trade, index)) return trade;
+    const cost = Number(trade.maxLossUsdc || trade.stakeUsdc || 0);
+    // Once one fill cannot be funded, the rest of this pass's fills go with it. They are
+    // resting orders too, and the account is already out of room.
+    if (!overPromised && cost <= capacity + 0.00001) {
+      capacity -= cost;
+      funded += 1;
+      return trade;
+    }
+    overPromised = true;
+    return cancelLimitOrderForCapital(trade, `Resting limit buy reached its fill price but the`
+      + ` portfolio had ${Math.max(0, capacity).toFixed(2)} USDC outside its positions and the`
+      + ` position needs ${cost.toFixed(2)} USDC. Every resting order was cancelled.`);
+  });
+  if (!overPromised) return { trades, funded, cancelled: 0 };
+
+  let cancelled = 0;
+  const settled = trades.map((trade) => {
+    if (String(trade?.status || "") !== "LIMIT_ORDER_WAITING") return trade;
+    cancelled += 1;
+    return cancelLimitOrderForCapital(trade, "Cancelled unfilled: another resting order reached"
+      + " its fill price with no capital left outside this portfolio's positions to fund it,"
+      + " so the whole resting queue was cancelled.");
+  });
+  return { trades: settled, funded, cancelled };
+}
+
+async function refreshTrades(trades, portfolioState = null) {
   // mapWithConcurrency returns input order, so this is the same array the sequential
   // loop built -- markOpenTrade reads the market and returns a new trade, and touches
   // nothing another trade can see.
-  return mapWithConcurrency(trades, (trade) => markOpenTrade(trade));
+  const refreshed = await mapWithConcurrency(trades, (trade) => markOpenTrade(trade));
+  // Funding is decided after the fan-out, not inside it: whether one fill fits depends on
+  // every other fill on the same pass, which a per-trade worker cannot see.
+  if (!portfolioState) return refreshed;
+  const funding = fundLimitOrderFills(trades, refreshed, portfolioState);
+  if (funding.cancelled) {
+    console.warn(`${portfolioState.id}: a resting order reached its fill price with no capital to`
+      + ` fund the position; cancelled ${funding.cancelled} resting order(s)`
+      + `${funding.funded ? ` after funding ${funding.funded}` : ""}.`);
+  }
+  return funding.trades;
 }
 
 function probabilityBucket(probability) {
@@ -5634,6 +5722,14 @@ function openRisk(trades) {
 function waitingLimitOrderRisk(trades) {
   return (Array.isArray(trades) ? trades : [])
     .filter((trade) => String(trade?.status || "") === "LIMIT_ORDER_WAITING")
+    .reduce((sum, trade) => sum + Number(trade.maxLossUsdc || trade.stakeUsdc || 0), 0);
+}
+
+// The other half of openRisk: capital that really is in a position. This is what a fill has
+// to be funded out of, because a fill is what turns a reservation into exposure.
+function positionRisk(trades) {
+  return (Array.isArray(trades) ? trades : [])
+    .filter((trade) => OPEN_STATUSES.has(trade?.status) && String(trade?.status || "") !== "LIMIT_ORDER_WAITING")
     .reduce((sum, trade) => sum + Number(trade.maxLossUsdc || trade.stakeUsdc || 0), 0);
 }
 
@@ -10466,7 +10562,7 @@ async function run() {
   await timed("refreshTrades", () => mapWithConcurrency(
     Object.values(state.paperPortfolios),
     async (portfolioState) => {
-      portfolioState.trades = await refreshTrades(portfolioState.trades);
+      portfolioState.trades = await refreshTrades(portfolioState.trades, portfolioState);
       if (!EXECUTION_PASS) {
         portfolioState.trades = await reviewClosedTradesWithAi(portfolioState.trades, state);
       }
@@ -10796,6 +10892,9 @@ export {
   // Whether a resting stop would have been filled by the crossing a losing settlement
   // proves, for the one case the live check never reached: the market closed.
   settlementStopFill,
+  // Capital that really is in a position, and the check that a fill can be funded out of it.
+  positionRisk,
+  fundLimitOrderFills,
   simulateMarketBuy,
   splitStateIntoSegments,
   // The choke point that decides whether a pass may remeasure the statistics report.
