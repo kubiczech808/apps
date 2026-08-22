@@ -8067,3 +8067,161 @@ test("limit orders: the first history read reaches back to when the order was pl
   // the catch-up window open instead of closing it silently.
   assert.match(marked, /historyCheckedAt: lowestTradedPrice != null \|\| !needsHistory \? checkedAt : trade\.historyCheckedAt/);
 });
+
+// -- Correlation blocking: a spread is not a concentration -------------------------------
+//
+// Reported: portfolios skipping with "no eligible non-correlated candidate" while free
+// capital and candidates both existed. Measured over those skips: 25 of 32 blocks came from
+// real positions, not resting orders, and the blocking keys were overwhelmingly one event's
+// mutually exclusive alternatives -- nine on a single tweet-count bracket set, where one
+// order on "400-419" blocked "280-299", "420-439" and "500+" at once. Two alternatives of
+// the same field cannot both win, so holding two is a hedge; refusing the second refuses it.
+
+const tweetBracket = (range) => ({
+  question: `Will Elon Musk post ${range} tweets from August 18 to August 25?`,
+  outcome: "Yes",
+  outcomeCount: 2,
+  tokenId: `token-${range}`,
+  // A bracket set is a field: exactly one range can happen.
+  riskGroupKeys: [`market:elon-tweets-${range}`, "event:elon-musk-of-tweets-august-18-august-25"],
+});
+
+const openTradeFrom = (candidate, id) => ({ ...candidate, id, status: "OPEN" });
+
+test("risk: another alternative of the same multi-outcome event is not blocked", () => {
+  const held = openTradeFrom(tweetBracket("400-419"), "t1");
+  // Precondition: both sides really are classified as a field, or this test proves nothing.
+  assert.equal(bot.reportMarketType(held), "multi");
+  assert.equal(bot.reportMarketType(tweetBracket("280-299")), "multi");
+
+  assert.equal(bot.riskBlock(tweetBracket("280-299"), [held]), null,
+    "a different bracket of the same event cannot lose alongside the one held");
+  assert.equal(bot.riskBlock(tweetBracket("500+"), [held]), null);
+});
+
+test("risk: the same event still stops being added to once it is at the cap", () => {
+  // Every bracket costs money and exactly one pays out, so buying the whole field is a
+  // guaranteed loss. Three is the default ceiling.
+  const held = ["400-419", "420-439", "440-459"].map((range, index) => openTradeFrom(tweetBracket(range), `t${index}`));
+  const block = bot.riskBlock(tweetBracket("280-299"), held);
+  assert.ok(block, "a fourth alternative of one event is refused");
+  assert.equal(block.sameEventCount, 3);
+  assert.match(bot.riskBlockReason(block), /the most one multi-outcome event may carry/);
+  // Two held is still under the ceiling.
+  assert.equal(bot.riskBlock(tweetBracket("280-299"), held.slice(0, 2)), null);
+});
+
+test("risk: a two-sided event keeps its strict one-position rule", () => {
+  // Buying both sides of an either-or pays two spreads to hold nothing, so the event key
+  // must still block outright when the event is not a field.
+  const fixture = (outcome, token) => ({
+    question: "Dota 2: Team Spirit vs Team Liquid - Game 2 Winner",
+    outcome,
+    outcomeCount: 2,
+    tokenId: token,
+    riskGroupKeys: ["market:dota2-ts-liquid-game2", "event:dota2-ts-liquid-2026-08-21"],
+  });
+  const held = openTradeFrom(fixture("Team Spirit", "a"), "t1");
+  assert.equal(bot.reportMarketType(held), "binary", "vs makes this two-sided");
+  const block = bot.riskBlock(fixture("Team Liquid", "b"), [held]);
+  assert.ok(block, "the other side of the same fixture is still correlated");
+  assert.ok(!block.atCap, "and it is refused outright, not on a count");
+});
+
+test("risk: a shared team or topic blocks whatever kind of market it is", () => {
+  // Anything beyond the event itself is real correlation: those do lose together.
+  const held = {
+    id: "t1",
+    status: "OPEN",
+    question: "Will Iran close the Strait of Hormuz?",
+    outcome: "Yes",
+    outcomeCount: 2,
+    riskGroupKeys: ["market:hormuz-close", "event:iran-escalation-2026", "topic:iran-war"],
+  };
+  const candidate = {
+    question: "Will Israel strike Tehran before September?",
+    outcome: "Yes",
+    outcomeCount: 2,
+    tokenId: "b",
+    riskGroupKeys: ["market:tehran-strike", "event:iran-escalation-2026", "topic:iran-war"],
+  };
+  const block = bot.riskBlock(candidate, [held]);
+  assert.ok(block, "a shared topic is correlated exposure, not a spread");
+  assert.ok(block.overlap.includes("topic:iran-war"));
+  assert.ok(!block.atCap);
+});
+
+test("risk: a closed trade never blocks, an unfilled order still does", () => {
+  const candidate = tweetBracket("280-299");
+  const otherEvent = {
+    id: "t9",
+    question: "Who wins the Oklahoma Republican primary runoff?",
+    outcome: "Yes",
+    outcomeCount: 2,
+    riskGroupKeys: ["market:ok-runoff", "event:oklahoma-republican-governor-primary-runoff"],
+  };
+  // A resolved row has released its risk and must not block anything.
+  assert.equal(bot.riskBlock(candidate, [{ ...openTradeFrom(tweetBracket("400-419"), "t1"), status: "WON" }]), null);
+  assert.equal(bot.riskBlock(candidate, [{ ...otherEvent, status: "LOST" }]), null);
+  // A resting order on a genuinely correlated market still blocks: it may yet fill, and the
+  // portfolio would then hold both. Only the same-field relaxation above applies.
+  const restingSameFixture = {
+    id: "t2",
+    status: "LIMIT_ORDER_WAITING",
+    question: "Dota 2: Team Spirit vs Team Liquid - Game 2 Winner",
+    outcome: "Team Spirit",
+    outcomeCount: 2,
+    riskGroupKeys: ["market:dota2-ts-liquid-game2", "event:dota2-ts-liquid-2026-08-21"],
+  };
+  const block = bot.riskBlock({
+    question: "Dota 2: Team Spirit vs Team Liquid - Game 2 Winner",
+    outcome: "Team Liquid",
+    outcomeCount: 2,
+    tokenId: "z",
+    riskGroupKeys: ["market:dota2-ts-liquid-game2", "event:dota2-ts-liquid-2026-08-21"],
+  }, [restingSameFixture]);
+  assert.ok(block, "an unfilled order on the other side of one fixture still blocks");
+});
+
+test("risk: the per-event ceiling is configurable", () => {
+  const source = readFileSync(new URL("../tools/paper-trading-bot.mjs", import.meta.url), "utf8");
+  assert.match(source, /MAX_PER_MULTI_OUTCOME_EVENT = Math\.max\(1, envNumber\("PAPER_MAX_PER_MULTI_EVENT", 3\)\)/);
+  // Only the event itself is relaxed; nothing else in the key set is.
+  assert.match(source, /const EVENT_SCOPED_RISK_KEY = \/\^\(event\|market\):\//);
+});
+
+test("market type: a bracket set is a field, a date in a question is not", () => {
+  // Mutually exclusive ranges of one quantity: exactly one happens.
+  for (const range of ["280-299", "400-419", "65-89"]) {
+    assert.equal(bot.reportMarketType({
+      question: `Will Elon Musk post ${range} tweets from August 18 to August 25?`,
+      outcome: "Yes",
+      outcomeCount: 2,
+    }), "multi", `${range} is one bracket of a field`);
+  }
+  assert.equal(bot.reportMarketType({
+    question: "Will Elon Musk post 500+ tweets from August 18 to August 25?",
+    outcome: "Yes",
+    outcomeCount: 2,
+  }), "multi", "the open-ended top bracket too");
+
+  // The trap: a date contains the same digit-dash-digit shape and is not a range. Both of
+  // these are real production rows and both must stay two-sided.
+  assert.equal(bot.reportMarketType({
+    question: "Will Arsenal FC win on 2026-08-21?", outcome: "Yes", outcomeCount: 2,
+  }), "binary", "a date in the question is not a bracket");
+  assert.equal(bot.reportMarketType({
+    slug: "wnba-por-tor-2026-08-21-spread-away-2pt5",
+    question: "Spread: Portland Fire (-2.5)",
+    outcome: "Toronto Tempo",
+    outcomeCount: 2,
+  }), "binary", "a dated slug is not a bracket, and the rule never reads the slug");
+  // A handicap carries a signed decimal, not a range.
+  assert.equal(bot.reportMarketType({
+    question: "Game Handicap: TS (-1.5) vs Team Liquid (+1.5)", outcome: "Team Spirit", outcomeCount: 2,
+  }), "binary");
+  // And a scoreline keeps its spaces, so it is caught by the exact-score rule, not this one.
+  assert.equal(bot.reportMarketType({
+    question: "Exact Score: Club The Strongest 3 - 3 FC Universitario?", outcome: "No", outcomeCount: 2,
+  }), "multi");
+});

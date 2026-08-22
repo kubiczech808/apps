@@ -59,6 +59,23 @@ restates at the bottom of the job — so a run that misses the budget says which
 it. `PAPER_REQUEST_CONCURRENCY` (default 8) caps how many Polymarket requests are in flight
 at once; `PAPER_UPLOAD_CONCURRENCY` (default 4) how many FTP sessions the publisher opens.
 
+### Correlation blocking
+
+A candidate is refused when it shares a risk group key with something the portfolio already
+holds — the same fixture, team, topic or event. That stops the portfolio losing twice on one
+thing, but it does not apply to two alternatives of the same **multi-outcome** event: those
+cannot both win, so holding two of them is a spread, not a concentration. Measured on real
+skips, that was the dominant cause of `no eligible non-correlated candidate` while free
+capital sat idle — one holding on "400-419 tweets" blocked "280-299", "420-439" and "500+"
+at once.
+
+So an event-scoped overlap alone no longer blocks another alternative of the same field, up
+to `PAPER_MAX_PER_MULTI_EVENT` (default 3) positions per event. The cap is what still
+matters: every alternative costs money and exactly one pays out, so buying the whole field is
+a guaranteed loss. Team, match and topic overlap block outright, and a two-sided event keeps
+its strict one-position rule — buying both sides of an either-or pays two spreads to hold
+nothing.
+
 ### Limit orders and capital
 
 A portfolio set to use limit orders places a resting buy instead of buying at the market,

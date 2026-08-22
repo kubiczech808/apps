@@ -7197,6 +7197,17 @@ const MULTI_OUTCOME_FIELD = new RegExp([
   "\\bnext\\s+(president|prime\\s+minister|pope|chancellor|leader|ceo)\\b",
 ].join("|"), "i");
 
+// A bracket set is a field too: "280-299 tweets", "400-419", "500+" are mutually exclusive
+// ranges of one quantity, and exactly one of them happens. These were the biggest source of
+// correlation blocking in production, and every one was being called two-sided because the
+// question opens with "Will".
+//
+// Tested against the question alone and never the slug, and the lookarounds matter: a slug
+// like nba-2026-08-21-spread and a question like "Will Arsenal FC win on 2026-08-21?" both
+// contain "08-21", which is a date and not a range. Requiring that neither side touches
+// another digit or dash rules those out while keeping "280-299".
+const BRACKET_RANGE_QUESTION = /(?<![\d-])\d{1,3}\s?-\s?\d{1,3}(?![\d-])|(?<![\d-])\d{1,4}\+/;
+
 const TWO_SIDED_EVENT = new RegExp([
   "\\bvs\\.?\\b", "\\bv\\.\\b", "\\s@\\s",
   "\\bhandicap\\b", "\\bspread\\b", "\\bmoneyline\\b", "\\bpuck\\s?line\\b", "\\brun\\s?line\\b",
@@ -7215,6 +7226,7 @@ function candidateMarketType(item = {}) {
   const outcomeCount = Number(item.outcomeCount);
 
   if (MULTI_OUTCOME_FIELD.test(haystack)) return "multi";
+  if (BRACKET_RANGE_QUESTION.test(question)) return "multi";
   if (TWO_SIDED_EVENT.test(haystack)) return "binary";
   if (TWO_SIDED_OUTCOMES.has(outcome)) return "binary";
   if (Number.isFinite(outcomeCount) && outcomeCount > 2) return "multi";

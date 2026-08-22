@@ -5861,28 +5861,57 @@ function alreadyOpen(trades, tokenId) {
   return trades.some((trade) => OPEN_STATUSES.has(trade.status) && trade.tokenId === tokenId);
 }
 
+// Correlation blocking exists to stop a portfolio losing twice on the same thing. Two
+// alternatives of the same multi-outcome event cannot both win, so holding two of them is a
+// spread and not a concentration -- refusing the second refuses a hedge.
+//
+// Reported: portfolios skipping with "no eligible non-correlated candidate" while free
+// capital and candidates both existed. Measured over those skips: 25 of 32 blocks came from
+// real positions rather than resting orders, and the keys were overwhelmingly one event's
+// mutually exclusive alternatives -- nine of them on a single tweet-count bracket set, where
+// one order on "400-419" blocked "280-299", "420-439" and "500+" at once.
+//
+// So an event-scoped overlap alone no longer blocks another alternative of the same
+// multi-outcome field, up to a cap. The cap is the part that still matters: every bracket
+// costs money and exactly one pays out, so buying the whole field is a guaranteed loss.
+// Team, match and topic overlap still block outright, because those genuinely do lose
+// together -- and a two-sided event keeps its strict one-position rule, since buying both
+// sides of an either-or is just paying two spreads to hold nothing.
+const EVENT_SCOPED_RISK_KEY = /^(event|market):/;
+const MAX_PER_MULTI_OUTCOME_EVENT = Math.max(1, envNumber("PAPER_MAX_PER_MULTI_EVENT", 3));
+
 function riskBlock(candidate, trades) {
   const candidateKeys = new Set(Array.isArray(candidate.riskGroupKeys) ? candidate.riskGroupKeys : []);
   if (!candidateKeys.size) return null;
+  const candidateIsField = reportMarketType(candidate) === "multi";
 
+  let firstSpread = null;
+  let spreadCount = 0;
   for (const trade of trades.filter((item) => OPEN_STATUSES.has(item.status))) {
     const tradeKeys = Array.isArray(trade.riskGroupKeys) ? trade.riskGroupKeys : [];
     const overlap = tradeKeys.filter((key) => candidateKeys.has(key));
-    if (overlap.length) {
-      return {
-        tradeId: trade.id,
-        question: trade.question,
-        outcome: trade.outcome,
-        overlap,
-      };
-    }
+    if (!overlap.length) continue;
+    const block = { tradeId: trade.id, question: trade.question, outcome: trade.outcome, overlap };
+    // Anything beyond the event itself -- a shared team, fixture or topic -- is real
+    // correlation whatever kind of market it is.
+    const eventOnly = overlap.every((key) => EVENT_SCOPED_RISK_KEY.test(key));
+    if (!eventOnly || !candidateIsField || reportMarketType(trade) !== "multi") return block;
+    spreadCount += 1;
+    if (!firstSpread) firstSpread = block;
   }
 
+  if (firstSpread && spreadCount >= MAX_PER_MULTI_OUTCOME_EVENT) {
+    return { ...firstSpread, sameEventCount: spreadCount, atCap: MAX_PER_MULTI_OUTCOME_EVENT };
+  }
   return null;
 }
 
 function riskBlockReason(block) {
   const overlap = block?.overlap?.slice(0, 3).join(", ") || "risk group";
+  if (block?.atCap) {
+    return `already holding ${block.sameEventCount} alternatives of ${overlap},`
+      + ` the most one multi-outcome event may carry`;
+  }
   return `open correlated paper trade ${block.tradeId} already covers ${overlap}`;
 }
 
@@ -9522,6 +9551,18 @@ function marketHasNewOutcome(market, knownEvaluationKeys, knownBinaryMarketKeys 
 // of 1682 team-versus-team rows multi-outcome, which is how a "Multi-outcome" statistics
 // row came to be mostly football totals.
 
+// A bracket set is a field too: "280-299 tweets", "400-419", "500+" are mutually exclusive
+// ranges of one quantity, and exactly one of them happens. Measured on the reported skips,
+// these were the single biggest source of correlation blocking -- one holding on "400-419"
+// blocked "280-299", "420-439" and "500+" at once -- and every one of them was being called
+// two-sided, because the question opens with "Will".
+//
+// Tested against the question alone and never the slug, and the lookarounds matter: a slug
+// like nba-2026-08-21-spread and a question like "Will Arsenal FC win on 2026-08-21?" both
+// contain "08-21", which is a date and not a range. Requiring that neither side touches
+// another digit or dash rules those out while keeping "280-299".
+const BRACKET_RANGE_QUESTION = /(?<![\d-])\d{1,3}\s?-\s?\d{1,3}(?![\d-])|(?<![\d-])\d{1,4}\+/;
+
 // A field of alternatives: exactly one member can win, each is quoted separately.
 const MULTI_OUTCOME_FIELD = new RegExp([
   "(exact|correct)[-\\s]?score",
@@ -9555,6 +9596,7 @@ function reportMarketType(item) {
   // A field of alternatives, whatever one member's book looks like. First, because an
   // election candidate and a correct-score line are both quoted Yes/No.
   if (MULTI_OUTCOME_FIELD.test(haystack)) return "multi";
+  if (BRACKET_RANGE_QUESTION.test(question)) return "multi";
   // Two named sides settle it before any question-word guess: in "Team Spirit vs Team
   // Liquid - Game 2 Winner", "winner" means one of these two and nothing else.
   if (TWO_SIDED_EVENT.test(haystack)) return "binary";
@@ -10992,6 +11034,10 @@ export {
   resolveScheduledCadence,
   portfoliosWithDeployableCapital,
   riskProfile,
+  // What stops a portfolio taking a candidate it already has correlated exposure to, and
+  // the sentence the run log shows for it.
+  riskBlock,
+  riskBlockReason,
   // Whether an event is two-sided or a field of mutually exclusive alternatives. Both the
   // portfolio filters and the statistics classify through this one function.
   reportMarketType,
