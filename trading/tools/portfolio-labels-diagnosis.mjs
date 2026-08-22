@@ -300,7 +300,12 @@ async function main() {
         + ` rows=${rows.length} medianGap=${median == null ? "-" : `${median.toFixed(1)}min`}`);
 
       // The two reasons the report is about, wherever they appear in this window.
-      const wanted = rows.filter((row) => /non-duplicate|non-correlated/.test(String(row?.reason || ""))).slice(0, 2);
+      // Anchored on "no eligible": the OPENED reason also contains "non-correlated"
+      // ("best Reward / risk non-correlated candidate"), so an unanchored match reports
+      // successful opens as if they were the skips being investigated.
+      const wanted = rows
+        .filter((row) => /^no eligible non-(duplicate|correlated) candidate/.test(String(row?.reason || "")))
+        .slice(0, 2);
       for (const row of wanted) {
         const detail = await fetchJson(
           `${HOST}/api.php?action=portfolio-run-log-detail&strategy_id=${encodeURIComponent(id)}`
