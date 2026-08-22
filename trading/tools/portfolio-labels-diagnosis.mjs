@@ -328,6 +328,57 @@ async function main() {
     }
   }
 
+  // What a limit-order portfolio has promised versus what it can still deploy.
+  //
+  // A resting buy is not exposure: it may never fill, and when the event ends unfilled it
+  // is discarded having cost nothing. Free capital still counts it, because it is what is
+  // currently allocated -- so a portfolio resting several orders could report almost no
+  // free capital and skip for "not enough free paper capital" while risking nothing. The
+  // next order is now sized against a different figure, and both are published, so this
+  // prints them side by side with the waiting rows they came from. deployable == free on a
+  // portfolio that does not rest orders; deployable > free is the whole point on one that
+  // does. A missing deployable field means the state predates the change.
+  {
+    console.log(`\n-- limit orders: what is promised is not what is at risk --`);
+    const configured = await fetchJson(`${HOST}/api.php?action=portfolio-config`);
+    const paper = configured.ok ? (configured.body?.config?.paper || {}) : {};
+    for (const [id, config] of Object.entries(paper)) {
+      const served = await fetchJson(
+        `${HOST}/api.php?action=state&target=paper&summary=dashboard&strategy_id=${encodeURIComponent(id)}`,
+      );
+      if (!served.ok) {
+        console.log(`   ${id.padEnd(16)} served HTTP ${served.status} ${served.error || ""}`);
+        continue;
+      }
+      const entry = (served.body?.paperPortfolios || {})[id] || {};
+      const portfolio = entry.portfolio || {};
+      const trades = Array.isArray(entry.trades) ? entry.trades : [];
+      const waiting = trades.filter((trade) => String(trade?.status || "") === "LIMIT_ORDER_WAITING");
+      const waitingRisk = waiting.reduce(
+        (sum, trade) => sum + (Number(trade?.maxLossUsdc) || Number(trade?.stakeUsdc) || 0),
+        0,
+      );
+      const num = (value) => (value == null ? "MISSING" : Number(value).toFixed(2));
+      console.log(`   ${id.padEnd(16)} limitOrders=${config.useLimitOrders === true ? "on " : "off"}`
+        + ` free=${num(portfolio.freeCapitalUsdc).padStart(7)}`
+        + ` resting=${num(portfolio.restingLimitOrderUsdc).padStart(7)}`
+        + ` deployable=${num(portfolio.deployableCapitalUsdc).padStart(7)}`
+        + ` waitingRows=${String(waiting.length).padStart(2)} (${waitingRisk.toFixed(2)} USDC)`);
+      // The skip this is meant to stop, and the clause that says the new rule ran.
+      const log = await fetchJson(
+        `${HOST}/api.php?action=portfolio-run-log&strategy_id=${encodeURIComponent(id)}&page=0&page_size=24`,
+      );
+      const capitalSkips = (log.ok ? (log.body?.records || []) : [])
+        .filter((row) => /not enough free paper capital/i.test(String(row?.reason || "")))
+        .slice(0, 2);
+      for (const row of capitalSkips) {
+        const counted = /unfilled limit orders is not counted against this/i.test(String(row.reason || ""));
+        console.log(`      ${row.runAt} capital skip -- ${counted ? "NEW rule applied" : "old rule"}`);
+        console.log(`         ${String(row.reason || "").slice(0, 150)}`);
+      }
+    }
+  }
+
   const configResult = await fetchJson(`${HOST}/api.php?action=portfolio-config`);
   const paperConfig = configResult.ok ? (configResult.body?.config?.paper || {}) : {};
 
