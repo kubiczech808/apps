@@ -1,0 +1,38 @@
+name: Trading Stop Loss Diagnosis
+
+# Read-only diagnostic, manual only. Prints a paper portfolio's closed rows with the fields
+# that decide whether its stop loss could have run: protection flag, derived floor, last
+# mark before the close, and the status the row ended in. Writes nothing.
+on:
+  workflow_dispatch:
+    inputs:
+      strategy_id:
+        description: "Paper portfolio to inspect"
+        required: false
+        default: "ewportfolio2"
+        type: string
+      limit:
+        description: "How many of the newest closed rows to print in full"
+        required: false
+        default: "14"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Inspect closed rows against their stop floors
+        working-directory: trading
+        env:
+          PAPER_DIAGNOSIS_STRATEGY_ID: ${{ inputs.strategy_id }}
+          PAPER_DIAGNOSIS_LIMIT: ${{ inputs.limit }}
+        run: node tools/stop-loss-diagnosis.mjs
