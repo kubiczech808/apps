@@ -262,6 +262,66 @@ async function main() {
     }
   }
 
+  // Why a pass skipped, from the pass's own record.
+  //
+  // Reported: a portfolio on the hourly cron trigger logged "no eligible non-duplicate
+  // candidate" and "no eligible non-correlated candidate", and started opening positions
+  // once it was switched to after-scrape. Those two reasons are the two arms of
+  // findFirstOpenCandidate: the first means every eligible candidate was a market the
+  // portfolio already held, the second that some were blocked as correlated with a holding.
+  // Which arm fired, how many candidates reached it, and how many positions were open at
+  // the time are all in the batch log the pass wrote, so this reads them instead of
+  // reasoning about which code path was taken.
+  {
+    console.log(`\n-- recent SKIP decisions, as the passes recorded them --`);
+    for (const id of ["ewportfolio", "ewportfolio2", "ultioutcome1d"]) {
+      const list = await fetchJson(
+        `${HOST}/api.php?action=portfolio-run-log&strategy_id=${encodeURIComponent(id)}&page=0&page_size=24`,
+      );
+      if (!list.ok) {
+        console.log(`   ${id}: run log HTTP ${list.status} ${list.error || ""}`);
+        continue;
+      }
+      const skips = (list.body?.records || [])
+        .filter((row) => String(row?.action || "").toUpperCase() === "SKIP")
+        .slice(0, 3);
+      if (!skips.length) {
+        console.log(`   ${id}: no SKIP rows on the first page of ${list.body?.total ?? "?"}`);
+        continue;
+      }
+      for (const row of skips) {
+        const detail = await fetchJson(
+          `${HOST}/api.php?action=portfolio-run-log-detail&strategy_id=${encodeURIComponent(id)}`
+          + `&run_at=${encodeURIComponent(row.runAt)}`,
+        );
+        const record = detail.ok ? detail.body?.record : null;
+        const batch = record?.batchLog || {};
+        const counts = batch.counts || {};
+        const filter = batch.portfolioFilter || {};
+        console.log(`   ${id} @ ${row.runAt} ${record?.runSource ?? "-"} -- ${String(record?.reason || row.reason || "").slice(0, 70)}`);
+        console.log(`      trigger=${batch.settings?.executionTrigger ?? "-"}`
+          + ` rotation=${batch.rotationReview?.action ?? "-"}`
+          + ` openTrades=${counts.openTrades ?? "-"}`);
+        console.log(`      rankedEligible=${counts.rankedEligible ?? "-"}`
+          + ` skippedForRisk=${counts.skippedForRisk ?? "-"}`
+          + ` riskBlocked=${counts.riskBlocked ?? "-"}`
+          + ` evaluated=${filter.totalEvaluated ?? "-"}`
+          + ` baseEligible=${filter.baseEligible ?? "-"}`
+          + ` portfolioEligible=${filter.portfolioEligible ?? "-"}`);
+        // Whether the pass revalidated its shortlist at all: the stored-candidates path
+        // requotes every candidate before deciding, the full-evaluation path does not.
+        const prevalidated = batch.revalidatedCandidates;
+        console.log(`      revalidatedCandidates=${Array.isArray(prevalidated) ? prevalidated.length : "(absent)"}`);
+        for (const candidate of (batch.eligibleCandidates || []).slice(0, 3)) {
+          console.log(`      eligible : token=${String(candidate.tokenId || "(none)").slice(0, 12)}`
+            + ` status=${candidate.selectionStatus ?? "-"}`
+            + ` blockedBy=${candidate.riskBlockedByTradeId ?? "-"}`
+            + ` ${String(candidate.question || "").slice(0, 40)}`);
+        }
+      }
+    }
+  }
+
   const configResult = await fetchJson(`${HOST}/api.php?action=portfolio-config`);
   const paperConfig = configResult.ok ? (configResult.body?.config?.paper || {}) : {};
 
