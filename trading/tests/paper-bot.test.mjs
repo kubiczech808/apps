@@ -8016,8 +8016,9 @@ test("limit orders: history is only fetched when the free signals leave it open"
   // costs nothing; the history is one request per still-waiting order per pass.
   assert.match(source, /const needsHistory = !\(Number\.isFinite\(bestAsk\) && bestAsk <= limitPrice\)/);
   assert.match(source, /const lowestTradedPrice = needsHistory/);
-  // Measured from the last look, not from the beginning of time.
-  assert.match(source, /lowestTradedPriceSince\(trade\.tokenId, trade\.lastCheckedAt \|\| trade\.openedAt \|\| trade\.date\)/);
+  // Measured from the last look once one has happened, so the window stays small; the
+  // catch-up for an order that has never had its history read is covered separately.
+  assert.match(source, /lowestTradedPriceSince\(trade\.tokenId, historyFrom\)/);
   // A failed history read must leave the decision to the other signals rather than
   // becoming a "no fill" answer of its own.
   assert.match(source, /\/\/ A missing history is not evidence of no fill/);
@@ -8039,4 +8040,30 @@ test("limit orders: every resting order is refreshed on every pass, execution pa
     ? bot.OPEN_STATUSES.has("LIMIT_ORDER_WAITING")
     : /OPEN_STATUSES = new Set\(\["OPEN", "PENDING_RESOLUTION", "MARKET_NOT_FOUND", "STOP_BREACH", "LIMIT_ORDER_WAITING"\]\)/.test(source),
     "a resting order has to be in the set the refresh walks");
+});
+
+test("limit orders: a book that cannot be read does not veto the other signals", () => {
+  const source = readFileSync(new URL("../tools/paper-trading-bot.mjs", import.meta.url), "utf8");
+  const marked = functionSource(source, "markWaitingLimitOrder");
+  // Measured: these tokens 404 once the market is delisted, and returning on that error
+  // meant the market price and the traded history -- neither of which needs a book -- were
+  // never consulted. Orders whose market had collapsed straight through them sat for hours.
+  assert.ok(!/catch \(error\) \{\s*return \{ \.\.\.base, statusNote: `Order book refresh failed/.test(marked),
+    "a failed book read must not return before the fill decision");
+  assert.match(marked, /bookNote = ` \(order book unavailable: \$\{error\.message\}\)`/);
+  assert.match(marked, /const decision = limitOrderFillDecision\(\{/,
+    "the decision has to be reached whether or not the book read worked");
+});
+
+test("limit orders: the first history read reaches back to when the order was placed", () => {
+  const source = readFileSync(new URL("../tools/paper-trading-bot.mjs", import.meta.url), "utf8");
+  const marked = functionSource(source, "markWaitingLimitOrder");
+  // A window starting at the last look assumes every earlier look already covered its own.
+  // Orders placed before this check existed had never had their history read at all, so the
+  // dip that filled them stayed permanently outside every window.
+  assert.match(marked, /const historyFrom = trade\.historyCheckedAt \|\| trade\.openedAt \|\| trade\.date \|\| trade\.lastCheckedAt;/);
+  assert.match(marked, /lowestTradedPriceSince\(trade\.tokenId, historyFrom\)/);
+  // And the marker only advances when the read actually happened, so a failed read leaves
+  // the catch-up window open instead of closing it silently.
+  assert.match(marked, /historyCheckedAt: lowestTradedPrice != null \|\| !needsHistory \? checkedAt : trade\.historyCheckedAt/);
 });

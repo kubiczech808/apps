@@ -3960,11 +3960,17 @@ async function markWaitingLimitOrder(trade) {
   };
 
   let bestAsk = null;
+  let bookNote = "";
   try {
     const book = await fetchJson(`https://clob.polymarket.com/book?token_id=${encodeURIComponent(trade.tokenId)}`);
     bestAsk = bestBook(book).bestAsk;
   } catch (error) {
-    return { ...base, statusNote: `Order book refresh failed: ${error.message}` };
+    // A book that cannot be read is not a book that nobody is selling into. These tokens
+    // 404 once the market is delisted, and returning here meant the two signals that need
+    // no book at all -- the market's own price and the traded history -- never ran.
+    // Measured on production: that is why orders whose market had already collapsed
+    // straight through them were still sitting in WAITING hours later.
+    bookNote = ` (order book unavailable: ${error.message})`;
   }
 
   const limitPrice = Number(trade.entryPrice);
@@ -3975,8 +3981,15 @@ async function markWaitingLimitOrder(trade) {
   // covered.
   const needsHistory = !(Number.isFinite(bestAsk) && bestAsk <= limitPrice)
     && !(Number.isFinite(marketPrice) && marketPrice > 0 && marketPrice <= limitPrice);
+  // Normally the last look is far enough back, because every earlier look covered its own
+  // window. An order placed before this check existed has never had its history read at
+  // all, though, so the first read goes back to when the order was placed -- otherwise the
+  // dip that filled it stays permanently outside every window. Measured: orders whose
+  // market passed through them hours ago were invisible to a window starting at the last
+  // look, which is exactly how they came to be sitting there.
+  const historyFrom = trade.historyCheckedAt || trade.openedAt || trade.date || trade.lastCheckedAt;
   const lowestTradedPrice = needsHistory
-    ? await lowestTradedPriceSince(trade.tokenId, trade.lastCheckedAt || trade.openedAt || trade.date)
+    ? await lowestTradedPriceSince(trade.tokenId, historyFrom)
     : null;
   const decision = limitOrderFillDecision({
     limitPrice,
@@ -4027,7 +4040,12 @@ async function markWaitingLimitOrder(trade) {
 
   return {
     ...base,
-    statusNote: `Waiting to fill a resting limit buy at ${limitPrice.toFixed(4)}; best ask is ${askNote}.`,
+    // Only recorded once the history has genuinely been read to this point, so a pass that
+    // could not read it leaves the catch-up window open rather than closing it silently.
+    historyCheckedAt: lowestTradedPrice != null || !needsHistory ? checkedAt : trade.historyCheckedAt ?? null,
+    statusNote: `Waiting to fill a resting limit buy at ${limitPrice.toFixed(4)}; best ask is ${askNote}`
+      + `${bookNote}${Number.isFinite(marketPrice) ? `, market at ${Number(marketPrice).toFixed(4)}` : ""}`
+      + `${Number.isFinite(lowestTradedPrice) ? `, lowest traded ${Number(lowestTradedPrice).toFixed(4)}` : ""}.`,
   };
 }
 
