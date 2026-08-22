@@ -376,6 +376,18 @@ async function main() {
         + ` inOrders=${num(portfolio.restingLimitOrderUsdc).padStart(7)}`
         + ` total=${num(portfolio.openRiskUsdc).padStart(7)}`
         + ` -> ${Number.isFinite(positions) ? (reconciles ? "adds up" : "DOES NOT ADD UP") : "positionRiskUsdc MISSING"}`);
+      // Direct evidence for the cancel-the-queue rule, rather than inferring it from a
+      // falling resting total -- orders also leave the queue by simply outliving their
+      // event, which looks identical in the totals and means nothing about capital.
+      const expired = trades.filter((trade) => String(trade?.status || "") === "LIMIT_ORDER_EXPIRED");
+      const forCapital = expired.filter((trade) => trade?.cancelledForCapital === true);
+      const lastCancel = forCapital
+        .map((trade) => String(trade.closedAt || trade.resolvedAt || ""))
+        .sort()
+        .pop();
+      console.log(`      ended unfilled: ${expired.length} total`
+        + ` -> ${forCapital.length} cancelled for capital, ${expired.length - forCapital.length} outlived the event`
+        + (lastCancel ? ` (last cancel ${lastCancel.slice(0, 19)})` : ""));
       // The skip this is meant to stop, and the clause that says the new rule ran.
       const log = await fetchJson(
         `${HOST}/api.php?action=portfolio-run-log&strategy_id=${encodeURIComponent(id)}&page=0&page_size=24`,
