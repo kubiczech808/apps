@@ -372,8 +372,18 @@ async function main() {
         .filter((row) => /not enough free paper capital/i.test(String(row?.reason || "")))
         .slice(0, 2);
       for (const row of capitalSkips) {
+        // The clause is only written when there was something resting to discount, because
+        // with nothing resting the two rules produce the same number and naming a rule
+        // would be inventing a difference. So a skip without it is only evidence of the old
+        // rule on a portfolio that had orders waiting -- read the other way it reports every
+        // genuinely broke portfolio as un-migrated.
         const counted = /unfilled limit orders is not counted against this/i.test(String(row.reason || ""));
-        console.log(`      ${row.runAt} capital skip -- ${counted ? "NEW rule applied" : "old rule"}`);
+        const verdict = counted
+          ? "NEW rule applied"
+          : config.useLimitOrders !== true
+            ? "no limit orders, rule does not apply"
+            : "nothing resting on this row, both rules agree";
+        console.log(`      ${row.runAt} capital skip -- ${verdict}`);
         console.log(`         ${String(row.reason || "").slice(0, 150)}`);
       }
     }
