@@ -168,6 +168,13 @@ async function main() {
       + ` since=${String(placedAt || "-").slice(0, 19)}`
       + (wouldHaveFilled ? `  <- MISSED FILL, low at ${String(history.lowAt || "?").slice(0, 19)}` : "")
       + `  ${String(trade.question || "").slice(0, 40)}`);
+    // Which branch the refresh actually took on this row. Inferring that from the numbers
+    // was where I went wrong once already: an empty ask side and a failed book read look
+    // identical from outside, and only one of them is about liquidity.
+    if (wouldHaveFilled) {
+      console.log(`        lastChecked=${String(trade.lastCheckedAt || "-").slice(0, 19)}`
+        + ` note="${String(trade.statusNote || "").slice(0, 130)}"`);
+    }
   }
   console.log(`\n   probed=${checked} missedFill=${missed} historyUnavailable=${unavailable}`);
   if (checked) {
