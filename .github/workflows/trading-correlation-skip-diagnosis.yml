@@ -1,0 +1,33 @@
+name: Trading Correlation Skip Diagnosis
+
+# Read-only, manual only. For recent "no eligible non-correlated candidate" skips, resolves
+# every blocking trade id back to the portfolio's own rows and reports whether the blocker
+# was a real position or an unfilled resting order, plus which risk key did the blocking.
+# Writes nothing.
+on:
+  workflow_dispatch:
+    inputs:
+      runs:
+        description: "How many recent correlated skips to open per portfolio"
+        required: false
+        default: "3"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Resolve what blocked each candidate
+        working-directory: trading
+        env:
+          SKIP_DIAGNOSIS_RUNS: ${{ inputs.runs }}
+        run: node tools/correlation-skip-diagnosis.mjs
