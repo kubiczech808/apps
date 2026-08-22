@@ -7144,19 +7144,52 @@ function mergeCurrentMarketEconomics(evaluations = [], observations = []) {
   });
 }
 
+// The browser's copy of reportMarketType() in tools/paper-trading-bot.mjs, and it has to
+// stay the same rule. The statistics recompute a row's market type, and the link out of a
+// statistics row filters this list -- so any divergence shows as a "Multi-outcome" row
+// whose own link opens a list of something else.
+//
+// Two-sided means either-or: one team or the other, over or under, yes or no. A
+// home/draw/away result is still one fixture between two sides, not a field. Multi-outcome
+// means a field of mutually exclusive alternatives where exactly one wins, and it has to be
+// recognised positively -- every candidate in an election, like every line of a
+// correct-score set, is quoted as its own two-outcome book.
+const MULTI_OUTCOME_FIELD = new RegExp([
+  "(exact|correct)[-\\s]?score",
+  "\\belections?\\b", "\\bprimary\\b", "\\bcaucus\\b", "\\bballot\\b", "\\breferend",
+  "\\bnominee\\b", "\\bnomination\\b", "\\baward\\b", "\\boscars?\\b", "\\bgrammys?\\b",
+  "\\bnobel\\b", "\\bballon\\b", "\\bmvp\\b",
+  "group[-\\s]winner", "\\btop[-\\s]scorer\\b", "\\boutright\\b", "winner[-\\s]of\\b",
+  "\\bnext\\s+(president|prime\\s+minister|pope|chancellor|leader|ceo)\\b",
+].join("|"), "i");
+
+const TWO_SIDED_EVENT = new RegExp([
+  "\\bvs\\.?\\b", "\\bv\\.\\b", "\\s@\\s",
+  "\\bhandicap\\b", "\\bspread\\b", "\\bmoneyline\\b", "\\bpuck\\s?line\\b", "\\brun\\s?line\\b",
+  "over\\s?/\\s?under", "\\bo\\s?/\\s?u\\b",
+].join("|"), "i");
+
+const TWO_SIDED_OUTCOMES = new Set([
+  "yes", "no", "over", "under", "up", "down", "even", "odd", "home", "away", "draw", "tie",
+]);
+
 function candidateMarketType(item = {}) {
-  const storedType = normalizeScrapedMarketType(item.marketType);
-  if (storedType !== "all") return storedType;
   const question = String(item.question || "");
   const slug = String(item.eventSlug || item.slug || "");
-  if (/(^|[-\s])(exact-score|correct-score|winner|group-winner|nominee|award|primary|election)([-\s]|$)/i.test(`${slug} ${question}`)) {
+  const haystack = `${slug} ${question}`;
+  const outcome = String(item.outcome || "").trim().toLowerCase();
+  const outcomeCount = Number(item.outcomeCount);
+
+  if (MULTI_OUTCOME_FIELD.test(haystack)) return "multi";
+  if (TWO_SIDED_EVENT.test(haystack)) return "binary";
+  if (TWO_SIDED_OUTCOMES.has(outcome)) return "binary";
+  if (Number.isFinite(outcomeCount) && outcomeCount > 2) return "multi";
+  if (/^(which|who|what|how many)\b/i.test(question)) return "multi";
+  if (/\bwins?\b[^?]*\b(cup|league|championship|title|tournament|final|open|series|medal|division|conference|playoffs?)\b/i.test(question)) {
     return "multi";
   }
-  if (/^(which|who|what|how many)\b/i.test(question)) return "multi";
-  if (/^(yes|no)$/i.test(String(item.outcome || "")) && /^(will|is|are|can|does|do|did|has|have|was|were)\b/i.test(question)) {
-    return "binary";
-  }
-  return "multi";
+  if (/^(will|is|are|can|does|do|did|has|have|was|were)\b/i.test(question)) return "binary";
+  return /^(yes|no)$/i.test(outcome) ? "binary" : "multi";
 }
 
 function scrapedMarketType(item = {}) {

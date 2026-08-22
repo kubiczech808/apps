@@ -7512,3 +7512,221 @@ test("limit orders: the dashboard is told both figures, so it cannot contradict 
   assert.match(source, /USDC of unfilled limit orders is not counted against this/);
   assert.match(source, /const available = deployableCapital\(portfolioState, strategy, sizingCapital\);/);
 });
+
+// -- Multi-outcome versus Yes/No -------------------------------------------------------
+//
+// Reported: the app had the two backwards. Yes/No is any two-sided either-or -- one team
+// beats the other, the total lands over or under -- and a football result that can be home,
+// draw or away is still one fixture between two sides, explicitly not a field.
+// Multi-outcome is a field of mutually exclusive alternatives where exactly one wins, like
+// an election, even though each candidate there is quoted as its own Yes/No book.
+//
+// Every question below is a real one, copied out of the resolved archive.
+const MARKET_TYPE_CASES = [
+  // Two-sided, and all of these were being called multi-outcome.
+  ["binary", { question: "Total Kills Over/Under 45.5 in Game 2?", outcome: "Over", outcomeCount: 2 }],
+  ["binary", { question: "FC Sochaux-Montbéliard vs. En Avant Guingamp: O/U 3.5", outcome: "Under", outcomeCount: 2 }],
+  ["binary", { question: "Dota 2: Team Spirit vs Team Liquid - Game 2 Winner", outcome: "Team Spirit", outcomeCount: 2 }],
+  ["binary", { question: "Overwatch: United States vs Sweden - Game 4 Winner", outcome: "United States", outcomeCount: 2 }],
+  ["binary", { question: "Game Handicap: TS (-1.5) vs Team Liquid (+1.5)", outcome: "Team Spirit", outcomeCount: 2 }],
+  ["binary", { question: "Spread: Portland Fire (-2.5)", outcome: "Toronto Tempo", outcomeCount: 2 }],
+  ["binary", { question: "Map 3 Rounds Handicap: Evil Geniuses (-2.5) vs FURIA Esports (+2.5)", outcome: "FURIA Esports", outcomeCount: 2 }],
+  // Two-sided propositions.
+  ["binary", { question: "SC Preußen Münster leading at halftime?", outcome: "No", outcomeCount: 2 }],
+  ["binary", { question: "Will Arsenal FC win on 2026-08-21?", outcome: "Yes", outcomeCount: 2 }],
+  ["binary", { question: "Game 1: Any Player Penta Kill?", outcome: "No", outcomeCount: 2 }],
+  ["binary", { question: "Bitcoin Up or Down on August 21?", outcome: "Up", outcomeCount: 2 }],
+  // The instruction that has to hold whatever the outcome count says: a result that can be
+  // home, draw or away is one fixture with two sides, not a field of three contenders.
+  ["binary", { question: "Real Madrid vs. FC Barcelona: full time result", outcome: "Draw", outcomeCount: 3 }],
+  ["binary", { question: "Slavia Praha - Sparta Praha: 1X2", outcome: "Home", outcomeCount: 3 }],
+  // A field: one of many, each quoted separately.
+  ["multi", { question: "Exact Score: Club The Strongest 3 - 3 FC Universitario?", outcome: "No", outcomeCount: 2 }],
+  ["multi", { question: "Exact Score: Any Other Score?", outcome: "Yes", outcomeCount: 2 }],
+  ["multi", { question: "Will Donald Trump win the 2028 presidential election?", outcome: "Yes", outcomeCount: 2 }],
+  ["multi", { question: "Who will be the Democratic nominee?", outcome: "Gavin Newsom", outcomeCount: 2 }],
+  ["multi", { question: "Which team wins the Champions League?", outcome: "Arsenal", outcomeCount: 2 }],
+  ["multi", { question: "Premier League top scorer 2026/27", outcome: "Erling Haaland", outcomeCount: 2 }],
+  ["multi", { question: "Best Picture winner of the 2027 Oscars", outcome: "Some Film", outcomeCount: 2 }],
+  // More than two outcomes with no pair vocabulary anywhere is a field.
+  ["multi", { question: "Fed decision in September", outcome: "50+ bps cut", outcomeCount: 5 }],
+];
+
+test("market type: a two-sided event is Yes/No, a field of alternatives is multi-outcome", () => {
+  for (const [expected, item] of MARKET_TYPE_CASES) {
+    assert.equal(bot.reportMarketType(item), expected,
+      `${JSON.stringify(item.question)} (outcome ${JSON.stringify(item.outcome)}) should be ${expected}`);
+  }
+});
+
+test("market type: the slug carries the same evidence as the question", () => {
+  // Real slugs. The question can be terse where the slug is explicit, so both are read.
+  assert.equal(bot.reportMarketType({ slug: "wnba-por-tor-2026-08-21-spread-away-2pt5", question: "", outcome: "Toronto Tempo" }), "binary");
+  assert.equal(bot.reportMarketType({ slug: "nfl-2026-exact-score-week-3", question: "", outcome: "No" }), "multi");
+  assert.equal(bot.reportMarketType({ eventSlug: "us-presidential-election-2028", question: "", outcome: "No" }), "multi");
+});
+
+test("market type: a stored label from the old rule no longer decides anything", () => {
+  // The archive is full of rows stamped "multi" by the rule this replaced. The statistics
+  // always recompute, so anything that preferred the stored label would disagree with them
+  // about the very same market -- which is what the report was about.
+  const overUnder = {
+    question: "Total Kills Over/Under 45.5 in Game 2?",
+    outcome: "Over",
+    outcomeCount: 2,
+    marketType: "multi",
+  };
+  assert.equal(bot.reportMarketType(overUnder), "binary", "the row is classified, not the label read");
+
+  const source = readFileSync(new URL("../tools/paper-trading-bot.mjs", import.meta.url), "utf8");
+  assert.doesNotMatch(source, /storedMarketType === "all" \? reportMarketType/,
+    "no filter may fall back to a stored market type");
+});
+
+test("market type: the browser classifies exactly as the bot does", () => {
+  // The link out of a statistics row filters the browser's own list. If the two rules
+  // differ, a "Multi-outcome" row opens a list of something else -- a failure this
+  // codebase has already had once, on tag counts.
+  const app = readFileSync(new URL("../assets/app.js", import.meta.url), "utf8");
+  const scope = {};
+  const build = new Function("scope", `${
+    app.slice(app.indexOf("const MULTI_OUTCOME_FIELD"), app.indexOf("function scrapedMarketType"))
+  }; scope.candidateMarketType = candidateMarketType;`);
+  build(scope);
+  for (const [expected, item] of MARKET_TYPE_CASES) {
+    assert.equal(scope.candidateMarketType(item), expected,
+      `browser disagrees on ${JSON.stringify(item.question)}`);
+    assert.equal(scope.candidateMarketType(item), bot.reportMarketType(item),
+      `browser and bot disagree on ${JSON.stringify(item.question)}`);
+  }
+});
+
+// -- A stop that a closing market walked past ------------------------------------------
+//
+// Reported: the two most recent losers in a protected portfolio sit in LOST at the full
+// stake with stopLossStatus still ARMED. Measured on production: both had a derived floor,
+// both booked -5.00 on a 5.00 stake against risk targets of 2.24 and 2.12, and neither
+// carried a trigger time. markOpenTrade returned the settlement before it ever consulted
+// the floor, so any position whose market closed between two polls skipped the stop.
+
+test("stop loss: a losing settlement fills the stop the crossing would have taken out", () => {
+  const plan = { protectable: true, requiresStop: true, stopPrice: 0.425, riskTargetUsdc: 2.24, stopLossRiskMultiplier: 1 };
+  const fill = bot.settlementStopFill({
+    plan,
+    lastLiveMark: 0.62,
+    shares: 6.4935,
+    feeRate: 0,
+    feesEnabled: false,
+    totalCostUsdc: 5,
+  });
+  assert.ok(fill, "a mark above the floor is a crossing on the way to zero");
+  assert.equal(fill.fillPrice, 0.425, "filled at the floor, never at the settlement print");
+  // 6.4935 shares sold at 0.425 returns 2.76, against a 5.00 cost.
+  assert.ok(Math.abs(fill.realizedPnlUsdc + 2.24) < 0.01,
+    `the loss must land on the planned target, got ${fill.realizedPnlUsdc}`);
+  // The floor above is hand-rounded to four places; production bisects until the exit value
+  // is at or above the boundary. A sub-cent overshoot here therefore belongs to the fixture,
+  // and what has to hold is that a fill at the floor does not breach the cap.
+  assert.ok(fill.capBreachUsdc < 0.01,
+    `a fill at the floor must not breach the cap, got ${fill.capBreachUsdc}`);
+});
+
+test("stop loss: a settlement print cannot pass for the last quote", () => {
+  const plan = { protectable: true, requiresStop: true, stopPrice: 0.425, riskTargetUsdc: 2.24 };
+  const args = { plan, shares: 6.4935, feeRate: 0, feesEnabled: false, totalCostUsdc: 5 };
+  // 0 is exactly what the closing write leaves on currentPrice, and it is not a quote.
+  assert.equal(bot.settlementStopFill({ ...args, lastLiveMark: 0 }), null);
+  assert.equal(bot.settlementStopFill({ ...args, lastLiveMark: 1 }), null);
+  assert.equal(bot.settlementStopFill({ ...args, lastLiveMark: null }), null);
+  // Already through the floor when last seen: a genuine gap, and the full loss stands.
+  assert.equal(bot.settlementStopFill({ ...args, lastLiveMark: 0.30 }), null);
+  // No protection, or a plan that never needed a stop.
+  assert.equal(bot.settlementStopFill({ ...args, plan: null, lastLiveMark: 0.62 }), null);
+  assert.equal(bot.settlementStopFill({
+    ...args,
+    plan: { protectable: true, requiresStop: false, stopPrice: null },
+    lastLiveMark: 0.62,
+  }), null);
+});
+
+test("stop loss: a market that closes between two polls no longer skips the floor", async () => {
+  const { bot: scoped, restore } = await scopedBot("settlement-stop", {});
+  const stub = stubFetch((url) => {
+    if (url.includes("gamma-api.polymarket.com/markets")) {
+      return [{
+        slug: "settlement-stop-fixture",
+        question: "SC Preußen Münster leading at halftime?",
+        conditionId: "0xabc",
+        closed: true,
+        active: false,
+        acceptingOrders: false,
+        closedTime: "2026-08-21T20:05:43Z",
+        endDate: "2026-08-21T20:00:00Z",
+        outcomes: JSON.stringify(["Yes", "No"]),
+        outcomePrices: JSON.stringify(["1", "0"]),
+        clobTokenIds: JSON.stringify(["11", "22"]),
+      }];
+    }
+    return null;
+  });
+  try {
+    const protectedTrade = {
+      id: "t1",
+      status: "OPEN",
+      slug: "settlement-stop-fixture",
+      tokenId: "22",
+      outcome: "No",
+      entryPrice: 0.77,
+      shares: 6.4935,
+      stakeUsdc: 5,
+      maxLossUsdc: 5,
+      totalCostUsdc: 5,
+      netGainIfWinUsdc: 1.4935,
+      feeRate: 0,
+      feesEnabled: false,
+      equalRiskProtection: true,
+      stopLossRiskMultiplier: 1,
+      // The mark from the poll before the close: above the floor, so the resting sell was
+      // there to be filled when the price crossed on its way to zero.
+      lastLiveBid: 0.62,
+      currentPrice: 0.62,
+      openedAt: "2026-08-21T18:00:00.000Z",
+    };
+    const marked = await scoped.markOpenTrade(protectedTrade);
+
+    assert.equal(marked.status, "STOP_LOSS",
+      `a protected loser must exit at its floor, got ${marked.status}: ${marked.statusNote}`);
+    assert.equal(marked.stopLossStatus, "FILLED_AT_FLOOR");
+    assert.ok(marked.stopLossTriggeredAt, "the stop has to record when it ran");
+    assert.ok(marked.realizedPnlUsdc > -5,
+      `the whole stake must no longer be lost, got ${marked.realizedPnlUsdc}`);
+    // The floor for a 0.77 entry with an equal-risk cap is well above zero, so the loss is
+    // a fraction of the stake rather than all of it.
+    assert.ok(marked.realizedPnlUsdc < 0, "it is still a loss");
+    assert.equal(marked.observedBidAtStop, 0.62, "the mark the decision was made on is kept");
+
+    // The same market, with no protection configured, still books the plain settlement.
+    const unprotected = await scoped.markOpenTrade({
+      ...protectedTrade,
+      id: "t2",
+      equalRiskProtection: false,
+    });
+    assert.equal(unprotected.status, "LOST", "an unprotected position has no floor to fill at");
+    assert.equal(unprotected.realizedPnlUsdc, -5);
+  } finally {
+    stub.restore();
+    restore();
+  }
+});
+
+test("stop loss: the last live bid is kept apart from the settlement print", () => {
+  const source = readFileSync(new URL("../tools/paper-trading-bot.mjs", import.meta.url), "utf8");
+  // currentPrice is overwritten with 0 or 1 by the closing write, so the stop decision has
+  // to read a field only a real orderbook ever sets.
+  assert.match(source, /lastLiveBid: trade\.lastLiveBid \?\? null/,
+    "every marked row must carry the last live bid forward");
+  assert.match(source, /lastLiveBid: Number\(bestBid\.toFixed\(4\)\)/,
+    "a bid taken off a book must be recorded as one");
+  assert.match(source, /lastLiveMark: trade\.lastLiveBid \?\? trade\.currentPrice/,
+    "the settlement path reads the live mark first, falling back for rows written earlier");
+});

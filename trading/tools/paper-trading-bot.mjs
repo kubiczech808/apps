@@ -3775,6 +3775,56 @@ function shouldCheckEqualStopBeforePending({ equalRiskProtection = false, awaiti
   return Boolean(equalRiskProtection && awaitingResolution && !marketClosed);
 }
 
+// The same crossing rule as equalRiskStopExitDecision, for the one case that rule never
+// reached: the market closed.
+//
+// Reported: the two most recent losers in a protected portfolio sit in LOST at the full
+// stake with stopLossStatus still ARMED. The stop was not merely unlucky, it was skipped --
+// a settled market returned a result before the floor was ever consulted, so any position
+// whose market closed between two polls paid the whole stake with an armed stop on it.
+//
+// A losing settlement is the strongest possible evidence of a crossing. The floor is
+// derived below the entry, and the price ended at zero, so it went through the floor on the
+// way down; a resting sell there is filled by that. The live path already books exactly
+// this when a position is above the floor at one look and below it at the next. Resolution
+// only makes the crossing certain instead of inferred.
+//
+// What the last live mark decides is whether a resting order can be claimed at all. Above
+// the floor means the position was watched above it, so the order was there to be taken.
+// At or below it means the floor had already been breached with no stop booked -- a real
+// gap, not a fill -- and the full loss stands. A settlement print of 0 or 1 is not a quote
+// and cannot stand in for that mark, which is why lastLiveBid is carried separately.
+function settlementStopFill({
+  plan,
+  lastLiveMark,
+  shares,
+  feeRate = 0,
+  feesEnabled = true,
+  totalCostUsdc,
+} = {}) {
+  if (!plan?.protectable || !plan.requiresStop) return null;
+  const floor = Number(plan.stopPrice);
+  const size = Number(shares);
+  const cost = Number(totalCostUsdc);
+  const mark = Number(lastLiveMark);
+  if (!Number.isFinite(floor) || !(floor > 0)) return null;
+  if (!Number.isFinite(size) || !(size > 0) || !Number.isFinite(cost) || !(cost > 0)) return null;
+  // A quote, not a settlement. 0 and 1 are what the closing write leaves behind.
+  if (!Number.isFinite(mark) || !(mark > 0) || !(mark < 1) || !(mark > floor)) return null;
+  const exitValueUsdc = netExitValueAtPrice({ shares: size, price: floor, feeRate, feesEnabled });
+  if (!Number.isFinite(exitValueUsdc)) return null;
+  const realizedPnlUsdc = Number((exitValueUsdc - cost).toFixed(4));
+  return {
+    fillPrice: floor,
+    lastLiveMark: Number(mark.toFixed(4)),
+    exitValueUsdc: Number(exitValueUsdc.toFixed(4)),
+    realizedPnlUsdc,
+    riskTargetUsdc: plan.riskTargetUsdc,
+    stopLossRiskMultiplier: plan.stopLossRiskMultiplier ?? null,
+    capBreachUsdc: Number(Math.max(0, -realizedPnlUsdc - Number(plan.riskTargetUsdc || 0)).toFixed(5)),
+  };
+}
+
 // Pure decision, kept apart from the fetching around it: the same "did it cross
 // since the last look" comparison the Equal stop already makes on the way out
 // (equalRiskStopExitDecision), just on the way in. A resting buy fills the moment
@@ -3945,12 +3995,71 @@ async function markOpenTrade(trade) {
     closedTime: market.closedTime || trade.closedTime || null,
     lastCheckedAt: checkedAt,
     marketUrlStatus: eventSlug && eventSlug !== trade.slug ? "use_event_slug" : "ok",
+    // The last mark taken from a live orderbook, kept apart from currentPrice because the
+    // closing write overwrites currentPrice with the settlement print. Reading a stop
+    // decision off currentPrice after that asks a 0 or a 1 what the market was quoting.
+    lastLiveBid: trade.lastLiveBid ?? null,
   };
+
+  // One derivation of the floor for this position, shared by the settlement path below and
+  // the live check further down. Two copies of these arguments is how the two paths would
+  // drift into protecting the same trade at different prices.
+  const stopPlanForTrade = () => (trade.equalRiskProtection
+    ? equalRiskStopPlan({
+      totalCostUsdc: cost,
+      netGainIfWinUsdc: trade.riskTargetUsdc ?? trade.netGainIfWinUsdc,
+      shares: trade.shares,
+      entryPrice: trade.entryPrice,
+      feeRate: trade.feeRate,
+      feesEnabled: trade.feesEnabled,
+      riskMultiplier: trade.riskTargetUsdc ? 1 : (trade.stopLossRiskMultiplier ?? 1),
+    })
+    : null);
 
   if (market.closed && Number.isFinite(resolvedPrice)) {
     const won = resolvedPrice >= 0.999;
     const lost = resolvedPrice <= 0.001;
     if (won || lost) {
+      // A protected position that settles at zero crossed its floor to get there: the floor
+      // sits below the entry by construction and the price ended below the floor, so it
+      // passed through, and a sell resting at the floor is taken out by that crossing. The
+      // settlement was being booked before the floor was ever consulted, so a market that
+      // closed between two polls took the whole stake and left the stop reading ARMED.
+      const settlementStop = lost
+        ? settlementStopFill({
+          plan: stopPlanForTrade(),
+          lastLiveMark: trade.lastLiveBid ?? trade.currentPrice,
+          shares: trade.shares,
+          feeRate: trade.feeRate,
+          feesEnabled: trade.feesEnabled,
+          totalCostUsdc: cost,
+        })
+        : null;
+      if (settlementStop) {
+        return {
+          ...base,
+          status: "STOP_LOSS",
+          closedAt: checkedAt,
+          resolvedAt: market.closedTime || checkedAt,
+          finalOutcomePrice: Number(resolvedPrice.toFixed(4)),
+          currentPrice: settlementStop.fillPrice,
+          observedBidAtStop: settlementStop.lastLiveMark,
+          currentValueUsdc: settlementStop.exitValueUsdc,
+          unrealizedPnlUsdc: 0,
+          unrealizedPnlPct: 0,
+          realizedPnlUsdc: settlementStop.realizedPnlUsdc,
+          realizedPnlPct: pnlPercent(settlementStop.realizedPnlUsdc, cost),
+          stopLossStatus: "FILLED_AT_FLOOR",
+          stopLossTriggeredAt: checkedAt,
+          stopLossPrice: settlementStop.fillPrice,
+          riskTargetUsdc: settlementStop.riskTargetUsdc,
+          stopLossRiskMultiplier: settlementStop.stopLossRiskMultiplier ?? trade.stopLossRiskMultiplier ?? null,
+          stopLossCapBreachUsdc: settlementStop.capBreachUsdc,
+          statusNote: `Equal stop filled at its ${settlementStop.fillPrice.toFixed(4)} floor: the market was`
+            + ` quoted at ${settlementStop.lastLiveMark.toFixed(4)} at the last look and settled at`
+            + ` ${resolvedPrice}, so it traded through the resting exit before resolving.`,
+        };
+      }
       const realizedPnl = won ? Number((Number(trade.shares || 0) - cost).toFixed(4)) : Number((-cost).toFixed(4));
       return {
         ...base,
@@ -3982,6 +4091,9 @@ async function markOpenTrade(trade) {
       status: "PENDING_RESOLUTION",
       finalOutcomePrice: Number.isFinite(resolvedPrice) ? Number(resolvedPrice.toFixed(4)) : null,
       currentPrice: current.currentPrice ?? (Number.isFinite(resolvedPrice) ? Number(resolvedPrice.toFixed(4)) : trade.currentPrice ?? null),
+      // Only a figure that came off a book updates this. currentPrice above may be the
+      // settlement print, and a stop must never be decided against one.
+      lastLiveBid: current.lastLiveBid ?? trade.lastLiveBid ?? null,
       currentValueUsdc: current.currentValueUsdc ?? trade.currentValueUsdc ?? null,
       unrealizedPnlUsdc: current.unrealizedPnlUsdc ?? trade.unrealizedPnlUsdc ?? 0,
       unrealizedPnlPct: current.unrealizedPnlPct ?? trade.unrealizedPnlPct ?? 0,
@@ -4003,17 +4115,7 @@ async function markOpenTrade(trade) {
     const book = await fetchJson(`https://clob.polymarket.com/book?token_id=${encodeURIComponent(trade.tokenId)}`);
     const { bestBid } = bestBook(book);
     if (Number.isFinite(bestBid)) {
-      const equalRiskPlan = trade.equalRiskProtection
-        ? equalRiskStopPlan({
-          totalCostUsdc: cost,
-          netGainIfWinUsdc: trade.riskTargetUsdc ?? trade.netGainIfWinUsdc,
-          shares: trade.shares,
-          entryPrice: trade.entryPrice,
-          feeRate: trade.feeRate,
-          feesEnabled: trade.feesEnabled,
-          riskMultiplier: trade.riskTargetUsdc ? 1 : (trade.stopLossRiskMultiplier ?? 1),
-        })
-        : null;
+      const equalRiskPlan = stopPlanForTrade();
       const grossCurrentValue = Number((Number(trade.shares || 0) * bestBid).toFixed(4));
       const currentValue = equalRiskPlan
         ? netExitValueAtPrice({ shares: trade.shares, price: bestBid, feeRate: trade.feeRate, feesEnabled: trade.feesEnabled })
@@ -4062,6 +4164,7 @@ async function markOpenTrade(trade) {
       if (awaitingResolution) {
         return pendingResolutionResult({
           currentPrice: Number(bestBid.toFixed(4)),
+          lastLiveBid: Number(bestBid.toFixed(4)),
           currentValueUsdc: currentValue,
           unrealizedPnlUsdc: unrealizedPnl,
           unrealizedPnlPct: pnlPercent(unrealizedPnl, cost),
@@ -4074,6 +4177,7 @@ async function markOpenTrade(trade) {
         ...base,
         status: "OPEN",
         currentPrice: Number(bestBid.toFixed(4)),
+        lastLiveBid: Number(bestBid.toFixed(4)),
         currentValueUsdc: currentValue,
         unrealizedPnlUsdc: unrealizedPnl,
         unrealizedPnlPct: pnlPercent(unrealizedPnl, cost),
@@ -4472,7 +4576,7 @@ function evaluateCandidate({ market, outcomeIndex, tokenId, book, learningProfil
     eventSlug,
     outcome,
     outcomeCount: outcomes.length,
-    marketType: outcomes.length > 2 ? "multi" : reportMarketType({ question, slug: market.slug, eventSlug, outcome }),
+    marketType: reportMarketType({ question, slug: market.slug, eventSlug, outcome, outcomeCount: outcomes.length }),
     tokenId,
     endDate,
     scheduledEventDate: dateContext.scheduledEventDate,
@@ -5821,8 +5925,11 @@ function strategyEligibleCandidates(eligible, strategy) {
     const minimumNetYield = Math.max(0, Number(strategy.minNetYield) || 0);
     const candidateNetYield = netYieldAfterFees(item, strategy);
     if (!Number.isFinite(candidateNetYield) || candidateNetYield < minimumNetYield) return false;
-    const storedMarketType = normalizePortfolioMarketType(item.marketType);
-    const marketType = storedMarketType === "all" ? reportMarketType(item) : storedMarketType;
+    // Classified from the row, never read off item.marketType. A stored label was written
+    // by whichever rule was live when the row was scraped, and the statistics always
+    // recompute -- preferring the stored one is how a portfolio filter and the statistics
+    // came to disagree about the same market.
+    const marketType = reportMarketType(item);
     if (requiredMarketType !== "all" && marketType !== requiredMarketType) return false;
     if (strategy.equalRiskProtection) {
       const entry = paperEntryEconomics(item, strategy);
@@ -6015,8 +6122,8 @@ function portfolioFilterResult(item, strategy) {
   const liquidity = Number(item.liquidity || 0);
   // The portfolio threshold is a traded-volume floor, which is what Polymarket shows.
   const candidateVolume = rowVolumeUsdc(item);
-  const storedMarketType = normalizePortfolioMarketType(item.marketType);
-  const marketType = storedMarketType === "all" ? reportMarketType(item) : storedMarketType;
+  // Classified from the row, not read off a label an older rule stored on it.
+  const marketType = reportMarketType(item);
   const requiredMarketType = normalizePortfolioMarketType(strategy.marketType, strategy.requireMostProbableOutcome);
   const economics = portfolioEconomics(item, strategy);
   const annualizedReturn = economics.annualizedReturn;
@@ -8258,7 +8365,7 @@ function preferredMarketObservation(market, observedAt = nowIso()) {
     tokenId,
     status: market.closed || market.acceptingOrders === false ? "RESOLVED" : "SCRAPED",
     selectionStatus: market.closed || market.acceptingOrders === false ? "RESOLVED" : "SCRAPED",
-    marketType: outcomes.length > 2 ? "multi" : reportMarketType({ question: market.question || "", slug: market.slug, eventSlug: marketEventSlug(market), outcome: outcomes[outcomeIndex] }),
+    marketType: reportMarketType({ question: market.question || "", slug: market.slug, eventSlug: marketEventSlug(market), outcome: outcomes[outcomeIndex], outcomeCount: outcomes.length }),
     tags,
     polymarketCategories,
     polymarketTags,
@@ -9196,17 +9303,73 @@ function marketHasNewOutcome(market, knownEvaluationKeys, knownBinaryMarketKeys 
   return parseJsonField(market.clobTokenIds).some((tokenId) => tokenId && !knownEvaluationKeys.has(`token:${tokenId}`));
 }
 
+// What separates the two kinds is the shape of the *event*, not the shape of one market.
+//
+// Reported: the app had this backwards. Yes/No is any two-sided either-or -- one team beats
+// the other, the total lands over or under, a plain proposition holds or does not -- and a
+// football result that can be home, draw or away does not stop being two-sided, because it
+// is still one fixture between two sides rather than a field of contenders. Multi-outcome
+// is a field of mutually exclusive alternatives of which exactly one can win: an election,
+// an award, a correct-score set. Every candidate in an election has its own Yes/No book,
+// which is precisely why counting outcomes on a single market cannot tell them apart --
+// measured on 3000 resolved rows, every single one had outcomeCount 2.
+//
+// So multi-outcome is the case that has to be positively recognised, and everything else is
+// two-sided. The old rule did the opposite: it fell through to "multi", and treated a bare
+// "winner" or a "who" as proof of a field. That made 1656 of 1688 over/under rows and 1396
+// of 1682 team-versus-team rows multi-outcome, which is how a "Multi-outcome" statistics
+// row came to be mostly football totals.
+
+// A field of alternatives: exactly one member can win, each is quoted separately.
+const MULTI_OUTCOME_FIELD = new RegExp([
+  "(exact|correct)[-\\s]?score",
+  "\\belections?\\b", "\\bprimary\\b", "\\bcaucus\\b", "\\bballot\\b", "\\breferend",
+  "\\bnominee\\b", "\\bnomination\\b", "\\baward\\b", "\\boscars?\\b", "\\bgrammys?\\b",
+  "\\bnobel\\b", "\\bballon\\b", "\\bmvp\\b",
+  "group[-\\s]winner", "\\btop[-\\s]scorer\\b", "\\boutright\\b", "winner[-\\s]of\\b",
+  "\\bnext\\s+(president|prime\\s+minister|pope|chancellor|leader|ceo)\\b",
+].join("|"), "i");
+
+// Two sides set against each other. A fixture, a handicap, a spread or a total is an
+// either-or however its outcome happens to be labelled.
+const TWO_SIDED_EVENT = new RegExp([
+  "\\bvs\\.?\\b", "\\bv\\.\\b", "\\s@\\s",
+  "\\bhandicap\\b", "\\bspread\\b", "\\bmoneyline\\b", "\\bpuck\\s?line\\b", "\\brun\\s?line\\b",
+  "over\\s?/\\s?under", "\\bo\\s?/\\s?u\\b",
+].join("|"), "i");
+
+// Labels that name one side of a pair, so the market is two-sided by construction.
+const TWO_SIDED_OUTCOMES = new Set([
+  "yes", "no", "over", "under", "up", "down", "even", "odd", "home", "away", "draw", "tie",
+]);
+
 function reportMarketType(item) {
   const question = String(item?.question || "");
   const slug = String(item?.eventSlug || item?.slug || "");
-  if (/(^|[-\s])(exact-score|correct-score|winner|group-winner|nominee|award|primary|election)([-\s]|$)/i.test(`${slug} ${question}`)) {
+  const haystack = `${slug} ${question}`;
+  const outcome = String(item?.outcome || "").trim().toLowerCase();
+  const outcomeCount = Number(item?.outcomeCount);
+
+  // A field of alternatives, whatever one member's book looks like. First, because an
+  // election candidate and a correct-score line are both quoted Yes/No.
+  if (MULTI_OUTCOME_FIELD.test(haystack)) return "multi";
+  // Two named sides settle it before any question-word guess: in "Team Spirit vs Team
+  // Liquid - Game 2 Winner", "winner" means one of these two and nothing else.
+  if (TWO_SIDED_EVENT.test(haystack)) return "binary";
+  if (TWO_SIDED_OUTCOMES.has(outcome)) return "binary";
+  // Only now can more than two outcomes mean a field. Deliberately after the two-sided
+  // tests: a home/draw/away result carries three outcomes and is still one fixture.
+  if (Number.isFinite(outcomeCount) && outcomeCount > 2) return "multi";
+  // One entity named against a competition instead of an opponent.
+  if (/^(which|who|what|how many)\b/i.test(question)) return "multi";
+  if (/\bwins?\b[^?]*\b(cup|league|championship|title|tournament|final|open|series|medal|division|conference|playoffs?)\b/i.test(question)) {
     return "multi";
   }
-  if (/^(which|who|what|how many)\b/i.test(question)) return "multi";
-  const kind = outcomeKind(item?.outcome);
-  if (kind !== "OUTCOME") return "binary";
+  // A plain proposition about one thing happening or not.
   if (/^(will|is|are|can|does|do|did|has|have|was|were)\b/i.test(question)) return "binary";
-  return "multi";
+  // Left over: a single named outcome with no opponent and none of the pair vocabulary is
+  // one member of a field. A Yes/No label with none of the above is still a proposition.
+  return outcomeKind(item?.outcome) === "OUTCOME" ? "multi" : "binary";
 }
 
 function reportPolymarketProbability(item) {
@@ -10624,6 +10787,9 @@ export {
   // Whether an event is two-sided or a field of mutually exclusive alternatives. Both the
   // portfolio filters and the statistics classify through this one function.
   reportMarketType,
+  // Whether a resting stop would have been filled by the crossing a losing settlement
+  // proves, for the one case the live check never reached: the market closed.
+  settlementStopFill,
   simulateMarketBuy,
   splitStateIntoSegments,
   // The choke point that decides whether a pass may remeasure the statistics report.
