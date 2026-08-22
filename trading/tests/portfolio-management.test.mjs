@@ -924,9 +924,13 @@ test("dashboard: the portfolio tabs stay on one row and scroll sideways on every
 test("dashboard: the overview above the selector states equity and risk against free", () => {
   assert.match(HTML, /data-portfolio-overview/);
   const overview = extractFunction(APP, "renderPortfolioOverview");
-  assert.match(overview, /<th>Portfolio<\/th><th>Equity<\/th><th>Risk \/ free<\/th>/);
+  // Requested: show separately how much is in orders and how much in open positions. One
+  // "risk" figure could not say whether a portfolio was invested or only queueing, so the
+  // total is split into the two commitments it was hiding.
+  assert.match(overview, /<th>Portfolio<\/th><th>Equity<\/th><th[^>]*>In positions<\/th><th[^>]*>In orders<\/th><th>Free<\/th>/);
   assert.match(overview, /equity: portfolio \? Number\(portfolio\.equityUsdc\) : null/);
-  assert.match(overview, /risk: portfolio \? Number\(portfolio\.openRiskUsdc\) : null/);
+  assert.match(overview, /portfolio\.positionRiskUsdc/);
+  assert.match(overview, /orders: portfolio \? Number\(portfolio\.restingLimitOrderUsdc \|\| 0\) : null/);
   assert.match(overview, /free: portfolio \? Number\(portfolio\.freeCapitalUsdc\) : null/);
   // Reported: the table merged several portfolios into one row. They are separate
   // portfolios with separate rules and separate decisions, and the merged row was not a

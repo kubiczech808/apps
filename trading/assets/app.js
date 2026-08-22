@@ -4595,6 +4595,22 @@ function overviewPortfolioNumbers(strategyId) {
     || null;
 }
 
+// A resting buy reserves collateral; a cancelled or filled row still sitting in the
+// snapshot reserves nothing, and a sell is not a reservation at all. Hoisted out of the
+// live dashboard so the overview table and the Risk tile cannot drift into two different
+// answers for the same wallet.
+const TERMINAL_ORDER_STATUSES = new Set(["CANCELED", "CANCELLED", "FILLED", "MATCHED", "EXPIRED"]);
+
+function reservedByOpenOrders(rows) {
+  return (Array.isArray(rows) ? rows : [])
+    .filter((order) => !String(order?.side || "").toUpperCase().includes("SELL"))
+    .filter((order) => !TERMINAL_ORDER_STATUSES.has(String(order?.rawStatus || order?.status || "").toUpperCase()))
+    .reduce((sum, order) => {
+      const reserved = Number(order?.notionalUsdc ?? order?.totalCostUsdc ?? order?.stakeUsdc);
+      return sum + (Number.isFinite(reserved) ? reserved : 0);
+    }, 0);
+}
+
 // Whether the loaded state covers every portfolio the table is going to list. When it does
 // not, the cheap all-portfolio summary is worth fetching even on a paper tab, which is what
 // stops a row staying blank until something else happens to refresh the page.
@@ -4618,7 +4634,10 @@ function renderPortfolioOverview() {
         mode,
         name: portfolioNameForMode(mode),
         equity: live ? Number(live.equityUsdc) : null,
-        risk: live ? Number(live.marketValueUsdc) : null,
+        // marketValueUsdc is what the held tokens are worth, so it is the position half on
+        // its own; the order half comes from the wallet's resting buys.
+        positions: live ? Number(live.marketValueUsdc) : null,
+        orders: live ? reservedByOpenOrders(state.liveState?.openOrders) : null,
         free: live ? Number(live.cashUsdc) : null,
         live: true,
       };
@@ -4628,7 +4647,13 @@ function renderPortfolioOverview() {
       mode,
       name: portfolioNameForMode(mode),
       equity: portfolio ? Number(portfolio.equityUsdc) : null,
-      risk: portfolio ? Number(portfolio.openRiskUsdc) : null,
+      // Published split. positionRiskUsdc falls back to the total minus the resting
+      // amount so a state written before the field existed still shows the right halves.
+      positions: portfolio
+        ? Number(portfolio.positionRiskUsdc
+          ?? (Number(portfolio.openRiskUsdc || 0) - Number(portfolio.restingLimitOrderUsdc || 0)))
+        : null,
+      orders: portfolio ? Number(portfolio.restingLimitOrderUsdc || 0) : null,
       free: portfolio ? Number(portfolio.freeCapitalUsdc) : null,
       live: false,
     };
@@ -4640,14 +4665,16 @@ function renderPortfolioOverview() {
   els.portfolioOverview.innerHTML = `
     <table class="portfolio-summary">
       <thead>
-        <tr><th>Portfolio</th><th>Equity</th><th>Risk / free</th></tr>
+        <tr><th>Portfolio</th><th>Equity</th><th title="Capital in filled positions: exposure that moves with the market.">In positions</th><th title="Capital reserved by resting orders that have not filled. Not exposure -- an unfilled order is discarded intact when the event ends.">In orders</th><th>Free</th></tr>
       </thead>
       <tbody>
         ${rows.map((row) => `
           <tr class="${row.mode === state.mode ? "portfolio-summary-current" : ""}${row.live ? " portfolio-summary-live" : ""}">
             <td data-label="Portfolio"><button class="portfolio-summary-link" type="button" data-mode-toggle="${escapeHtml(row.mode)}">${escapeHtml(row.name)}</button>${row.live && sharedWallet ? ' <span class="portfolio-summary-note" title="These live portfolios trade one Polymarket account, so they report the same account capital.">shared account</span>' : ""}</td>
             <td data-label="Equity">${cell(row.equity)}</td>
-            <td data-label="Risk / free">${cell(row.risk)} / ${cell(row.free)}</td>
+            <td data-label="In positions">${cell(row.positions)}</td>
+            <td data-label="In orders">${cell(row.orders)}</td>
+            <td data-label="Free">${cell(row.free)}</td>
           </tr>
         `).join("")}
       </tbody>
@@ -7938,8 +7965,16 @@ function renderBotState(botState) {
   els.portfolioOpenPl.textContent = signedMoney(openPnl);
   els.portfolioOpenPl.className = pnlClass(openPnl);
   els.portfolioOpenPlPct.textContent = signedPercent(openPnlPct);
+  // Split, because the two halves are different commitments: a filled position is
+  // exposure, a resting order is a reservation against an offer nobody took. The total
+  // stays the headline so the tile still reconciles with equity.
+  const restingRisk = Number(portfolio.restingLimitOrderUsdc || 0);
+  const positionRisk = Number(portfolio.positionRiskUsdc
+    ?? (Number(portfolio.openRiskUsdc || 0) - restingRisk));
   els.portfolioRisk.textContent = money(Number(portfolio.openRiskUsdc || 0));
-  els.portfolioFree.textContent = `${money(freeCapital)} free`;
+  els.portfolioFree.textContent = restingRisk > 0.005
+    ? `${money(positionRisk)} in positions, ${money(restingRisk)} in orders · ${money(freeCapital)} free`
+    : `${money(freeCapital)} free`;
   renderPortfolioEquityChart({
     trades,
     equity: Number(portfolio.equityUsdc ?? portfolio.initialUsdc ?? 100),
@@ -8461,17 +8496,8 @@ function renderLiveState(liveState) {
   // 5050 rests many at once, and counting those here reported the Live portfolio as
   // having nothing to trade with while the account was otherwise idle. Each portfolio is
   // now shown what its own commitments leave it, which is what its executor sizes from.
-  const TERMINAL_ORDER_STATUSES = new Set(["CANCELED", "CANCELLED", "FILLED", "MATCHED", "EXPIRED"]);
-  const reservedByOrders = (rows) => rows
-    .filter((order) => !String(order.side || "").toUpperCase().includes("SELL"))
-    // A cancelled or filled row still present in the snapshot reserves nothing.
-    .filter((order) => !TERMINAL_ORDER_STATUSES.has(String(order.rawStatus || order.status || "").toUpperCase()))
-    .reduce((sum, order) => {
-      const reserved = Number(order.notionalUsdc ?? order.totalCostUsdc ?? order.stakeUsdc);
-      return sum + (Number.isFinite(reserved) ? reserved : 0);
-    }, 0);
-  const walletOrderRisk = reservedByOrders(Array.isArray(liveState?.openOrders) ? liveState.openOrders : []);
-  const ownOrderReservation = reservedByOrders(openOrderRows);
+  const walletOrderRisk = reservedByOpenOrders(liveState?.openOrders);
+  const ownOrderReservation = reservedByOpenOrders(openOrderRows);
   const freeCash = Number.isFinite(cash) ? Math.max(0, cash - ownOrderReservation) : null;
   // What the rest of the wallet has locked, so the tile can say why the exchange may
   // still refuse an order this figure says is affordable.
@@ -8574,10 +8600,14 @@ function renderLiveState(liveState) {
   els.portfolioRisk.textContent = money(ownPositionRisk + openOrderRisk);
   // Naming the other portfolio's share keeps the figure honest: the exchange reserves
   // for the whole wallet, so this much of it is spoken for even though this portfolio
-  // does not count it against itself.
+  // does not count it against itself. The split in front of it says which part of this
+  // portfolio's own total is exposure and which is only a resting offer.
+  const liveSplit = openOrderRisk > 0.005
+    ? `${money(ownPositionRisk)} in positions, ${money(openOrderRisk)} in orders · `
+    : "";
   els.portfolioFree.textContent = freeCash == null
-    ? "cash not available"
-    : `${money(freeCash)} free cash${otherPortfolioReservation > 0.01 ? ` (${money(otherPortfolioReservation)} locked by the other portfolio)` : ""}`;
+    ? `${liveSplit}cash not available`
+    : `${liveSplit}${money(freeCash)} free cash${otherPortfolioReservation > 0.01 ? ` (${money(otherPortfolioReservation)} locked by the other portfolio)` : ""}`;
   renderPortfolioEquityChart({
     trades: [...closedTrades, ...positions],
     equity,

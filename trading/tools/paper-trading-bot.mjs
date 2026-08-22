@@ -9933,6 +9933,12 @@ function updatePaperPortfolio(portfolioState) {
     // "since the reset" without that filtering ever touching what the bot trades on.
     ...sinceAdjustmentStats,
     openRiskUsdc: Number(openRiskValue.toFixed(2)),
+    // The two halves of that total, because they are not the same kind of commitment.
+    // Capital in a filled position is exposure: it moves with the market and can be lost.
+    // Capital behind a resting order is a reservation against an offer nobody has taken,
+    // which is discarded intact if the event ends unfilled. One number for both hides
+    // whether a portfolio is actually invested or merely queueing.
+    positionRiskUsdc: Number(Math.max(0, openRiskValue - restingLimitOrderCapital).toFixed(2)),
     freeCapitalUsdc: Number(freeCapital.toFixed(2)),
     // What resting, unfilled orders are holding, and what the next order is actually sized
     // against. They differ by exactly that amount when this portfolio rests limit orders.

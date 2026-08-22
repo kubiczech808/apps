@@ -4169,11 +4169,13 @@ test("live portfolios: each sizes from its own commitments, not the shared walle
   // candidate while the account was otherwise idle. Each portfolio is now shown, and
   // sizes from, what its own commitments leave -- and the exchange, not the dashboard,
   // decides whether a submission fits. That refusal is already handled and counted.
-  assert.match(app, /const ownOrderReservation = reservedByOrders\(openOrderRows\);/);
+  assert.match(app, /const ownOrderReservation = reservedByOpenOrders\(openOrderRows\);/);
   assert.match(app, /const freeCash = Number\.isFinite\(cash\) \? Math\.max\(0, cash - ownOrderReservation\) : null;/);
   // The wallet total is still computed, so the tile can say how much of the balance the
   // other portfolio has spoken for rather than quietly overstating what is spendable.
-  assert.match(app, /const walletOrderRisk = reservedByOrders\(Array\.isArray\(liveState\?\.openOrders\)/);
+  // Hoisted to module scope so the overview table and this tile cannot answer the same
+  // question two different ways.
+  assert.match(app, /const walletOrderRisk = reservedByOpenOrders\(liveState\?\.openOrders\);/);
   assert.match(app, /const otherPortfolioReservation = Math\.max\(0, walletOrderRisk - ownOrderReservation\);/);
   assert.match(app, /locked by the other portfolio/);
 
@@ -4184,11 +4186,11 @@ test("live portfolios: each sizes from its own commitments, not the shared walle
   assert.ok(!/portfolio\.openRiskUsdc \|\| 0\) \+ openOrderRisk/.test(app),
     "the wallet-wide position total must not stand in for a portfolio's own");
   // A resting sell releases collateral rather than reserving it.
-  assert.match(app, /\.filter\(\(order\) => !String\(order\.side \|\| ""\)\.toUpperCase\(\)\.includes\("SELL"\)\)/);
+  assert.match(app, /\.filter\(\(order\) => !String\(order\?\.side \|\| ""\)\.toUpperCase\(\)\.includes\("SELL"\)\)/);
   // A cancelled or filled order still in the snapshot reserves no collateral.
-  assert.match(app, /TERMINAL_ORDER_STATUSES\.has\(String\(order\.rawStatus \|\| order\.status \|\| ""\)\.toUpperCase\(\)\)/);
+  assert.match(app, /TERMINAL_ORDER_STATUSES\.has\(String\(order\?\.rawStatus \|\| order\?\.status \|\| ""\)\.toUpperCase\(\)\)/);
   // Orders carry notionalUsdc from the sync; the others are fallbacks.
-  assert.match(app, /Number\(order\.notionalUsdc \?\? order\.totalCostUsdc \?\? order\.stakeUsdc\)/);
+  assert.match(app, /Number\(order\?\.notionalUsdc \?\? order\?\.totalCostUsdc \?\? order\?\.stakeUsdc\)/);
 
   // The arithmetic, on one wallet holding both portfolios' orders.
   const cash = 20;
@@ -7729,4 +7731,88 @@ test("stop loss: the last live bid is kept apart from the settlement print", () 
     "a bid taken off a book must be recorded as one");
   assert.match(source, /lastLiveMark: trade\.lastLiveBid \?\? trade\.currentPrice/,
     "the settlement path reads the live mark first, falling back for rows written earlier");
+});
+
+// -- Risk split: what is invested versus what is only queued ----------------------------
+//
+// Requested: show separately how much sits in orders and how much in open positions. They
+// are not the same commitment. Capital in a filled position is exposure -- it moves with
+// the market and can be lost. Capital behind a resting order is a reservation against an
+// offer nobody has taken, and if the event ends unfilled it comes back untouched. A single
+// "risk" figure cannot say whether a portfolio is invested or merely queueing.
+
+test("portfolio: risk is published split into positions and resting orders", () => {
+  const portfolioState = {
+    id: "ewportfolio",
+    useLimitOrders: true,
+    trades: [
+      { status: "OPEN", stakeUsdc: 5, maxLossUsdc: 5, unrealizedPnlUsdc: 0.2 },
+      { status: "PENDING_RESOLUTION", stakeUsdc: 5, maxLossUsdc: 5 },
+      { status: "LIMIT_ORDER_WAITING", stakeUsdc: 5, maxLossUsdc: 5 },
+      { status: "LIMIT_ORDER_WAITING", stakeUsdc: 5, maxLossUsdc: 5 },
+      { status: "LIMIT_ORDER_WAITING", stakeUsdc: 5, maxLossUsdc: 5 },
+      { status: "WON", stakeUsdc: 5, realizedPnlUsdc: 0.4 },
+    ],
+    portfolio: {},
+  };
+  bot.updatePaperPortfolio(portfolioState);
+  const result = portfolioState.portfolio;
+
+  assert.equal(result.openRiskUsdc, 25, "the total still counts every open row");
+  assert.equal(result.positionRiskUsdc, 10, "two filled positions are the exposure");
+  assert.equal(result.restingLimitOrderUsdc, 15, "three resting orders are not");
+  assert.equal(
+    Number((result.positionRiskUsdc + result.restingLimitOrderUsdc).toFixed(2)),
+    result.openRiskUsdc,
+    "the two halves must add up to the total the dashboard also shows",
+  );
+});
+
+test("portfolio: with nothing resting, the position half is the whole risk", () => {
+  const portfolioState = {
+    id: "conservative",
+    trades: [{ status: "OPEN", stakeUsdc: 5, maxLossUsdc: 5 }],
+    portfolio: {},
+  };
+  bot.updatePaperPortfolio(portfolioState);
+  assert.equal(portfolioState.portfolio.positionRiskUsdc, 5);
+  assert.equal(portfolioState.portfolio.restingLimitOrderUsdc, 0);
+  assert.equal(portfolioState.portfolio.openRiskUsdc, 5);
+});
+
+test("overview: a resting buy reserves capital, a sell or a dead order does not", () => {
+  const app = readFileSync(new URL("../assets/app.js", import.meta.url), "utf8");
+  const scope = {};
+  const build = new Function("scope", `${
+    app.slice(app.indexOf("const TERMINAL_ORDER_STATUSES"), app.indexOf("function renderPortfolioOverview"))
+  }; scope.reservedByOpenOrders = reservedByOpenOrders;`);
+  build(scope);
+  const reserved = scope.reservedByOpenOrders([
+    { side: "BUY", status: "LIVE", notionalUsdc: 10 },
+    // A sell is an exit, not a reservation.
+    { side: "SELL", status: "LIVE", notionalUsdc: 40 },
+    // Still in the snapshot, but reserving nothing any more.
+    { side: "BUY", status: "CANCELED", notionalUsdc: 70 },
+    { side: "BUY", rawStatus: "FILLED", notionalUsdc: 80 },
+    // Falls back through the other cost fields.
+    { side: "BUY", status: "LIVE", totalCostUsdc: 5 },
+    { side: "BUY", status: "LIVE", stakeUsdc: 2 },
+  ]);
+  assert.equal(reserved, 17, "only the live buys reserve, and each by its own cost");
+  assert.equal(scope.reservedByOpenOrders(null), 0, "a missing order list reserves nothing");
+});
+
+test("overview: the table shows the two halves of risk as their own columns", () => {
+  const app = readFileSync(new URL("../assets/app.js", import.meta.url), "utf8");
+  const overview = functionSource(app, "renderPortfolioOverview");
+  for (const label of ["In positions", "In orders"]) {
+    assert.ok(overview.includes(`data-label="${label}"`), `the table needs an ${label} cell`);
+    assert.ok(overview.includes(`>${label}<`), `the table needs an ${label} header`);
+  }
+  // A state written before positionRiskUsdc existed must still split correctly rather
+  // than reporting the whole total as positions.
+  assert.match(overview, /positionRiskUsdc\s*\n?\s*\?\?/,
+    "the paper row falls back for a state that predates the field");
+  assert.match(overview, /reservedByOpenOrders\(state\.liveState\?\.openOrders\)/,
+    "the live row takes its order half from the wallet's resting buys");
 });
