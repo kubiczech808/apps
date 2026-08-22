@@ -68,6 +68,19 @@ because of orders it may never be filled on. Both figures are published: `openRi
 the total, split into `positionRiskUsdc` (real exposure) and `restingLimitOrderUsdc`
 (reserved by offers), and the overview table shows those two as separate columns.
 
+A resting order fills when the market comes down to the price it rests at, and that is
+checked on **every** pass for every portfolio — the check cadence is the pass cadence, not
+the portfolio's own execution cadence, so a portfolio on the hourly cron still notices a fill
+within minutes. Three signals are used, cheapest first: the best ask, the market's current
+price (already fetched with the market), and the lowest price actually traded since the last
+look (`prices-history`, one request per still-resting order, switchable with
+`PAPER_LIMIT_ORDER_TRADE_HISTORY`). The ask alone was not enough — audited against traded
+prices, it missed the fill for 28 of 40 resting orders, because an empty ask side reads as
+"did not fill" when it means "cannot tell from the book", and a dip between two checks leaves
+nothing in the book at all. `filledBy` records which signal caught each fill. The remaining
+limit is real: `fidelity=1` is the finest series the CLOB serves, so a dip lasting under a
+minute can still hide.
+
 The consequence is that a portfolio can promise more than it owns, so the check sits where
 the promise comes due. When a resting order reaches its fill price, the position is funded
 out of capital that is not already in a position — resting orders reserve nothing against

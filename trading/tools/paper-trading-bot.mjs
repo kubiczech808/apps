@@ -3825,17 +3825,81 @@ function settlementStopFill({
   };
 }
 
-// Pure decision, kept apart from the fetching around it: the same "did it cross
-// since the last look" comparison the Equal stop already makes on the way out
-// (equalRiskStopExitDecision), just on the way in. A resting buy fills the moment
-// the market's best ask reaches down to (or through) the resting price; short of
-// that, it is discarded with no fill, no stake spent, once the event ends --
-// exactly what a real resting order nobody took would do.
-function limitOrderFillDecision({ limitPrice, bestAsk, eventEnded }) {
-  if (Number.isFinite(bestAsk) && Number.isFinite(limitPrice) && bestAsk <= limitPrice) {
-    return { outcome: "FILLED", fillPrice: limitPrice };
+// Pure decision, kept apart from the fetching around it. A resting buy fills when the
+// market comes down to the price it rests at; short of that it is discarded with no fill and
+// no stake spent once the event ends, exactly as a real resting order nobody took would be.
+//
+// This used to ask only where the best ask is *right now*, and audited against traded prices
+// that was wrong for 28 of 40 resting orders in production. Two ways it failed, both fixed
+// by looking at more than the current ask:
+//
+//  - No ask at all reads as "did not fill", when it is really "cannot tell from the book".
+//    On a decided market nobody offers the worthless side, so the ask side empties while the
+//    price has already collapsed through the resting order. Those orders sat in WAITING for
+//    hours -- and the simulation flattered itself, because an order that really did fill and
+//    lose was being discarded for free instead.
+//  - A dip between two checks leaves nothing behind in the book. The market touches the
+//    resting price, takes the order, and is back above it before the next look.
+//
+// So three signals, cheapest first: the ask, the market's current price (already fetched
+// with the market, so free), and the lowest price actually traded since the last look. The
+// fill price is the limit either way -- a resting order is filled at its own price, never at
+// a better one.
+function limitOrderFillDecision({
+  limitPrice,
+  bestAsk,
+  eventEnded,
+  marketPrice = null,
+  lowestTradedPrice = null,
+}) {
+  const limit = Number(limitPrice);
+  if (!Number.isFinite(limit)) return { outcome: eventEnded ? "EXPIRED" : "WAITING" };
+  const filled = (filledBy, observed) => ({ outcome: "FILLED", fillPrice: limit, filledBy, observed });
+
+  if (Number.isFinite(bestAsk) && bestAsk <= limit) return filled("ask", Number(bestAsk));
+  // Where the market is trading now. Below the resting price means the order was passed on
+  // the way down, whether or not anyone is offering at this instant.
+  if (Number.isFinite(marketPrice) && marketPrice > 0 && marketPrice <= limit) {
+    return filled("market-price", Number(marketPrice));
+  }
+  // And the gap between two looks, which neither of the above can see.
+  if (Number.isFinite(lowestTradedPrice) && lowestTradedPrice <= limit) {
+    return filled("traded-through", Number(lowestTradedPrice));
   }
   return { outcome: eventEnded ? "EXPIRED" : "WAITING" };
+}
+
+// Whether the market traded down to a resting order while nobody was looking.
+//
+// fidelity=1 is the finest series the CLOB serves, so a dip lasting under a minute can still
+// hide. That is a real remaining limit, not a solved problem -- but it replaces a window of
+// minutes to an hour between passes with one of a minute.
+const LIMIT_ORDER_TRADE_HISTORY = envBool("PAPER_LIMIT_ORDER_TRADE_HISTORY", true);
+
+async function lowestTradedPriceSince(tokenId, sinceIso) {
+  if (!LIMIT_ORDER_TRADE_HISTORY || !tokenId) return null;
+  const startTs = Math.floor(Date.parse(sinceIso || "") / 1000);
+  if (!Number.isFinite(startTs)) return null;
+  const url = new URL("https://clob.polymarket.com/prices-history");
+  url.searchParams.set("market", String(tokenId));
+  url.searchParams.set("startTs", String(startTs));
+  url.searchParams.set("endTs", String(Math.floor(Date.now() / 1000)));
+  url.searchParams.set("fidelity", "1");
+  let history;
+  try {
+    history = await fetchJson(url);
+  } catch {
+    // A missing history is not evidence of no fill, so it must not be turned into one:
+    // null leaves the decision to the other two signals.
+    return null;
+  }
+  const points = Array.isArray(history?.history) ? history.history : [];
+  let low = Infinity;
+  for (const point of points) {
+    const price = Number(point?.p);
+    if (Number.isFinite(price) && price > 0 && price < low) low = price;
+  }
+  return Number.isFinite(low) ? low : null;
 }
 
 function apiBoolean(value) {
@@ -3904,19 +3968,43 @@ async function markWaitingLimitOrder(trade) {
   }
 
   const limitPrice = Number(trade.entryPrice);
-  const decision = limitOrderFillDecision({ limitPrice, bestAsk, eventEnded });
+  const outcomeIndex = outcomeIndexForTrade(market, trade);
+  const marketPrice = outcomeIndex >= 0 ? parseOutcomePrices(market)[outcomeIndex] : null;
+  // Only asked for when the two free signals did not already settle it, and only over the
+  // window since the last look -- there is no point re-reading history this pass already
+  // covered.
+  const needsHistory = !(Number.isFinite(bestAsk) && bestAsk <= limitPrice)
+    && !(Number.isFinite(marketPrice) && marketPrice > 0 && marketPrice <= limitPrice);
+  const lowestTradedPrice = needsHistory
+    ? await lowestTradedPriceSince(trade.tokenId, trade.lastCheckedAt || trade.openedAt || trade.date)
+    : null;
+  const decision = limitOrderFillDecision({
+    limitPrice,
+    bestAsk,
+    eventEnded,
+    marketPrice,
+    lowestTradedPrice,
+  });
   const askNote = Number.isFinite(bestAsk) ? bestAsk.toFixed(4) : "n/a";
 
   if (decision.outcome === "FILLED") {
+    const how = {
+      ask: `the best ask reached ${askNote}`,
+      "market-price": `the market is trading at ${Number(decision.observed).toFixed(4)}, at or below the resting price`,
+      "traded-through": `the market traded down to ${Number(decision.observed).toFixed(4)} since the last check`,
+    }[decision.filledBy] || `the market reached ${askNote}`;
     return {
       ...base,
       status: "OPEN",
       filledAt: checkedAt,
       currentPrice: decision.fillPrice,
+      // Which signal caught it. A run of "traded-through" fills is the sampling gap being
+      // closed; a run of "market-price" fills is books that had emptied out.
+      filledBy: decision.filledBy,
       currentValueUsdc: trade.currentValueUsdc,
       unrealizedPnlUsdc: 0,
       unrealizedPnlPct: 0,
-      statusNote: `Resting limit buy at ${limitPrice.toFixed(4)} was filled: the best ask reached ${askNote}.`,
+      statusNote: `Resting limit buy at ${limitPrice.toFixed(4)} was filled: ${how}.`,
     };
   }
 

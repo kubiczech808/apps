@@ -7929,3 +7929,114 @@ test("limit orders: a cancelled order reads differently from an expired one", ()
   assert.match(app, /Limit order cancelled &middot; no capital/);
   assert.match(app, /Limit order expired &middot; unfilled/);
 });
+
+// -- Not missing the moment a resting order would have filled ----------------------------
+//
+// A resting buy fills when the market comes down to its price. Asking only where the best
+// ask is right now missed that for 28 of 40 resting orders in production, audited against
+// the CLOB's traded prices. Two distinct ways:
+//
+//   - No ask at all read as "did not fill" when it means "cannot tell from the book". On a
+//     decided market nobody offers the worthless side, so the ask side empties while the
+//     price has already collapsed through the order. Those sat in WAITING for hours, which
+//     also flattered the results: an order that really filled and lost was discarded free.
+//   - A dip between two checks leaves nothing in the book at all.
+
+test("limit orders: the best ask reaching the limit still fills, as before", () => {
+  const filled = bot.limitOrderFillDecision({ limitPrice: 0.75, bestAsk: 0.74, eventEnded: false });
+  assert.equal(filled.outcome, "FILLED");
+  assert.equal(filled.fillPrice, 0.75, "a resting order fills at its own price, never better");
+  assert.equal(filled.filledBy, "ask");
+  // Exactly at the limit counts: the market reached the order.
+  assert.equal(bot.limitOrderFillDecision({ limitPrice: 0.75, bestAsk: 0.75, eventEnded: false }).outcome, "FILLED");
+});
+
+test("limit orders: an empty ask side is not evidence that nothing filled", () => {
+  // The production case: limit 0.84, no ask on the book, market trading at 0.45.
+  const decision = bot.limitOrderFillDecision({
+    limitPrice: 0.84,
+    bestAsk: null,
+    marketPrice: 0.45,
+    eventEnded: false,
+  });
+  assert.equal(decision.outcome, "FILLED", "the market is far below the resting price");
+  assert.equal(decision.filledBy, "market-price");
+  assert.equal(decision.fillPrice, 0.84);
+
+  // With no ask and a market still above the limit, it genuinely has not filled.
+  assert.equal(bot.limitOrderFillDecision({
+    limitPrice: 0.84, bestAsk: null, marketPrice: 0.91, eventEnded: false,
+  }).outcome, "WAITING");
+  // A settled price of 0 is not a quote and must not fill anything.
+  assert.equal(bot.limitOrderFillDecision({
+    limitPrice: 0.84, bestAsk: null, marketPrice: 0, eventEnded: false,
+  }).outcome, "WAITING");
+});
+
+test("limit orders: a dip between two checks fills the order", () => {
+  // Both samples sit above the limit; the market went through it in between.
+  const decision = bot.limitOrderFillDecision({
+    limitPrice: 0.79,
+    bestAsk: 0.80,
+    marketPrice: 0.80,
+    lowestTradedPrice: 0.79,
+    eventEnded: false,
+  });
+  assert.equal(decision.outcome, "FILLED");
+  assert.equal(decision.filledBy, "traded-through");
+  assert.equal(decision.fillPrice, 0.79);
+
+  // A low that never reached the limit leaves it resting.
+  assert.equal(bot.limitOrderFillDecision({
+    limitPrice: 0.79, bestAsk: 0.85, marketPrice: 0.86, lowestTradedPrice: 0.82, eventEnded: false,
+  }).outcome, "WAITING");
+});
+
+test("limit orders: a fill beats expiry, and missing data never invents one", () => {
+  // The event ending does not undo a fill that already happened on the way down.
+  assert.equal(bot.limitOrderFillDecision({
+    limitPrice: 0.6, bestAsk: null, marketPrice: 0.2, eventEnded: true,
+  }).outcome, "FILLED");
+  // Nothing observed at all: expiry when the event is over, waiting while it is not.
+  assert.equal(bot.limitOrderFillDecision({
+    limitPrice: 0.6, bestAsk: null, marketPrice: null, lowestTradedPrice: null, eventEnded: true,
+  }).outcome, "EXPIRED");
+  assert.equal(bot.limitOrderFillDecision({
+    limitPrice: 0.6, bestAsk: null, marketPrice: null, lowestTradedPrice: null, eventEnded: false,
+  }).outcome, "WAITING");
+  // An unusable limit price cannot fill anything.
+  assert.equal(bot.limitOrderFillDecision({
+    limitPrice: null, bestAsk: 0.1, eventEnded: false,
+  }).outcome, "WAITING");
+});
+
+test("limit orders: history is only fetched when the free signals leave it open", () => {
+  const source = readFileSync(new URL("../tools/paper-trading-bot.mjs", import.meta.url), "utf8");
+  // The market comes with the Gamma read the refresh already does, so the current price
+  // costs nothing; the history is one request per still-waiting order per pass.
+  assert.match(source, /const needsHistory = !\(Number\.isFinite\(bestAsk\) && bestAsk <= limitPrice\)/);
+  assert.match(source, /const lowestTradedPrice = needsHistory/);
+  // Measured from the last look, not from the beginning of time.
+  assert.match(source, /lowestTradedPriceSince\(trade\.tokenId, trade\.lastCheckedAt \|\| trade\.openedAt \|\| trade\.date\)/);
+  // A failed history read must leave the decision to the other signals rather than
+  // becoming a "no fill" answer of its own.
+  assert.match(source, /\/\/ A missing history is not evidence of no fill/);
+  assert.match(source, /PAPER_LIMIT_ORDER_TRADE_HISTORY/,
+    "the extra request per resting order has to be switchable");
+});
+
+test("limit orders: every resting order is refreshed on every pass, execution passes too", () => {
+  const source = readFileSync(new URL("../tools/paper-trading-bot.mjs", import.meta.url), "utf8");
+  // How often a fill can be noticed is decided here: refreshTrades runs for every
+  // portfolio on every pass, so the check cadence is the pass cadence and not the
+  // portfolio's own execution cadence. An execution pass skipping it would mean a
+  // portfolio on the hourly cron only ever noticing fills once an hour.
+  const run = functionSource(source, "run");
+  assert.match(run, /portfolioState\.trades = await refreshTrades\(portfolioState\.trades, portfolioState\)/);
+  assert.ok(!/if \(!EXECUTION_PASS\)[\s\S]{0,120}refreshTrades/.test(run),
+    "marking trades must not be behind an execution-pass guard");
+  assert.ok(bot.OPEN_STATUSES
+    ? bot.OPEN_STATUSES.has("LIMIT_ORDER_WAITING")
+    : /OPEN_STATUSES = new Set\(\["OPEN", "PENDING_RESOLUTION", "MARKET_NOT_FOUND", "STOP_BREACH", "LIMIT_ORDER_WAITING"\]\)/.test(source),
+    "a resting order has to be in the set the refresh walks");
+});
