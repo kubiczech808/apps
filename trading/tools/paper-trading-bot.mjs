@@ -10621,6 +10621,9 @@ export {
   resolveScheduledCadence,
   portfoliosWithDeployableCapital,
   riskProfile,
+  // Whether an event is two-sided or a field of mutually exclusive alternatives. Both the
+  // portfolio filters and the statistics classify through this one function.
+  reportMarketType,
   simulateMarketBuy,
   splitStateIntoSegments,
   // The choke point that decides whether a pass may remeasure the statistics report.
