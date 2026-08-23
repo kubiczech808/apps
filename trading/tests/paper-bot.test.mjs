@@ -8281,3 +8281,72 @@ test("risk: a shared team with no shared event is a different match, and still b
   assert.ok(block, "no shared event key means this is a different match sharing only a team");
   assert.ok(!block.atCap);
 });
+
+// -- Team extraction: the esports/league label is not a team, and "Team X" org names ------
+// -- must survive their own name -----------------------------------------------------------
+//
+// Reported: "75 muj test" kept skipping with candidates on the book, same as Conservative
+// had. The cause was one level deeper than the event-key fix: extractTeams anchors its first
+// capture at the start of the question, so "Dota 2: Team Yandex vs Team Spirit - Game 2
+// Winner" captured "Dota 2: Team Yandex" whole, and cleanTeamName used to strip the literal
+// word "team" as filler -- deleting "Team Yandex" outright and leaving the game's own title
+// standing in as if it were a team. Every Dota 2 match then shared "team:dota 2", which
+// correlated matches that have nothing to do with each other. This lives in riskProfile,
+// which every portfolio's candidate evaluation shares, so the fix and its tests are portfolio-
+// agnostic by construction -- there is nothing to configure per portfolio, present or future.
+
+function teamKeys(question) {
+  return bot.riskProfile({ question, slug: "", eventSlug: "", outcome: "Yes", tags: [] }).keys
+    .filter((key) => key.startsWith("team:"));
+}
+
+test("risk: a league label before a fixture is not extracted as a team", () => {
+  assert.deepEqual(
+    teamKeys("Dota 2: Team Yandex vs Team Spirit - Game 2 Winner").sort(),
+    ["team:team spirit", "team:team yandex"],
+    "the real teams, not the game title",
+  );
+  assert.deepEqual(
+    teamKeys("LoL: Bilibili Gaming vs Anyone's Legend (BO3) - LPL").sort(),
+    ["team:anyone s legend bo3", "team:bilibili gaming"],
+  );
+  assert.deepEqual(
+    teamKeys("Overwatch: United States vs Sweden - Game 4 Winner").sort(),
+    ["team:sweden", "team:united states"],
+  );
+  // No label prefix at all still works exactly as before.
+  assert.deepEqual(
+    teamKeys("Real Madrid vs. FC Barcelona: full time result").sort(),
+    ["team:fc barcelona", "team:real madrid"],
+  );
+});
+
+test("risk: two unrelated matches of the same esport no longer share a false team key", () => {
+  // The actual defect: under the old rule, any match whose first team's name literally
+  // started with "Team " degenerated to the game's own title. Two different, unrelated
+  // matches both had that shape, so both produced "team:dota 2" -- a false correlation
+  // between fixtures that share nothing but the esport.
+  const first = teamKeys("Dota 2: Team Falcons vs Team Nigma - Game 1 Winner");
+  const second = teamKeys("Dota 2: Team Yandex vs Team Spirit - Game 2 Winner");
+  assert.ok(!first.includes("team:dota 2") && !second.includes("team:dota 2"),
+    "the game's own title must never stand in as a team");
+  assert.equal(first.filter((key) => second.includes(key)).length, 0,
+    "two different matches' real teams must not overlap with each other");
+});
+
+test("risk: an org literally named \"Team X\" keeps its own name", () => {
+  // The org names this domain is full of: Team Liquid, Team Spirit, Team Secret, Team
+  // Yandex. Stripping "team" as generic filler deleted every one of them outright whenever
+  // they were captured without a label prefix ahead of them (the second side of a "vs").
+  assert.deepEqual(teamKeys("Game Handicap: TS (-1.5) vs Team Liquid (+1.5)").sort(),
+    ["team:team liquid 1 5", "team:ts 1 5"]);
+  assert.ok(teamKeys("CS2: Nemiga vs FORZE Reload (BO3) - Moscow").includes("team:nemiga"));
+});
+
+test("risk: a trailing game/map descriptor after a dash is not part of the name", () => {
+  const source = readFileSync(new URL("../tools/paper-trading-bot.mjs", import.meta.url), "utf8");
+  assert.match(source, /\.replace\(\/\\s\+-\\s\+\.\*\$\/, " "\)/,
+    "a trailing \" - Game 2\", \" - LPL\" etc. must be stripped before the outcome-word rule runs");
+  assert.ok(!/\\b\(to advance\|advance\|win\|wins\|winner\|draw\|end\|team\)\\b/.test(source),
+    "\"team\" must not be in the destructive filler list any more");
+});

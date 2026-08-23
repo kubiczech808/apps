@@ -3377,7 +3377,11 @@ function cleanTeamName(value) {
   let text = String(value || "")
     .replace(/\b(the|a|an)\b/gi, " ")
     .replace(/\b(on|in|at|by|before|after)\b.*$/i, " ")
-    .replace(/\b(to advance|advance|win|wins|winner|draw|end|team)\b.*$/i, " ")
+    // A trailing " - <whatever>" is a descriptor -- a game number, a map, a round -- not
+    // part of the name. "Team Spirit - Game 2 Winner" is the team "Team Spirit"; without
+    // this, "Winner" alone got stripped below and left "Team Spirit - Game 2" behind.
+    .replace(/\s+-\s+.*$/, " ")
+    .replace(/\b(to advance|advance|win|wins|winner|draw|end)\b.*$/i, " ")
     .replace(/\s+/g, " ")
     .trim();
   text = text.replace(/^will\s+/i, "").replace(/[?:,]+$/g, "").trim();
@@ -3392,12 +3396,24 @@ function addTeam(teams, value) {
   teams.set(key, displayRiskName(cleaned));
 }
 
+// A short label before the fixture, consumed and discarded rather than captured: esports
+// and league questions are consistently written "<Game or League>: TeamA vs TeamB - ...".
+//
+// Reported: "team:dota 2" was showing up as a risk key, correlating every Dota 2 match with
+// every other one regardless of which teams were actually playing. "Dota 2: Team Yandex vs
+// Team Spirit - Game 2 Winner" anchors its first capture group at the start of the string,
+// so without this it captured "Dota 2: Team Yandex" whole -- and cleanTeamName used to strip
+// "team" as filler, which (with no other rule bounding it) deleted "Team Yandex" outright and
+// left the game's own title standing in as if it were a team. Consuming the label first means
+// the capture starts at the real name instead.
+const RISK_LEAGUE_LABEL_PREFIX = "(?:[^:?]{1,40}:\\s*)?";
+
 function extractTeams(question) {
   const text = String(question || "");
   const teams = new Map();
   const patterns = [
     /^Exact Score:\s*(.+?)\s+\d+\s*-\s*\d+\s*(.+?)\?/i,
-    /^(.+?)\s+vs\.?\s+(.+?)(?::|\s+end\b|\s+go\b|\s+O\/U\b|\?|$)/i,
+    new RegExp(`^${RISK_LEAGUE_LABEL_PREFIX}(.+?)\\s+vs\\.?\\s+(.+?)(?::|\\s+end\\b|\\s+go\\b|\\s+O\\/U\\b|\\?|$)`, "i"),
   ];
 
   for (const pattern of patterns) {

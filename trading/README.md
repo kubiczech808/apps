@@ -76,6 +76,14 @@ a guaranteed loss. Team, match and topic overlap block outright, and a two-sided
 its strict one-position rule — buying both sides of an either-or pays two spreads to hold
 nothing.
 
+Team correlation is extracted from the question text, shared by every portfolio's candidate
+evaluation. A short label before a fixture ("Dota 2: ", "LoL: ", "Overwatch: ") is consumed
+and discarded rather than captured as if it were a team, and an org literally named "Team X"
+("Team Liquid", "Team Spirit", "Team Yandex") keeps its own name — a fix that used to strip
+the word "team" as generic filler deleted those outright, or, when the label survived instead
+of the real name, correlated every match of one esport with every other regardless of which
+teams were actually playing.
+
 ### Limit orders and capital
 
 A portfolio set to use limit orders places a resting buy instead of buying at the market,
