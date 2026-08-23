@@ -10515,6 +10515,7 @@ function calculationSortValue(row, key) {
   if (key === "openCount") return numeric(row.openCount ?? 0);
   if (key === "trades") return numeric(row.trades ?? 0);
   if (key === "accuracy") return numeric(row.winRate);
+  if (key === "bandAccuracy") return numeric(row.bandWinRate);
   if (key === "stake") return numeric(row.resolvedStakeUsdc ?? row.stakeUsdc ?? 0);
   if (key === "pnl") return numeric(row.pnlUsdc ?? 0);
   if (key === "roi") return numeric(row.roi);
@@ -10582,6 +10583,9 @@ function taxonomySortValue(row, key) {
   if (key === "label") return String(row.label || "").toLowerCase();
   if (key === "minimumProbability") return numeric(row.minimumProbability);
   if (key === "accuracy") return numeric(row.winRate);
+  // The band's own rate, so ordering by it ranks what a floor-and-reward/risk portfolio
+  // would actually experience rather than the floor's inflated headline.
+  if (key === "bandAccuracy") return numeric(row.bandWinRate);
   if (key === "stake") return numeric(row.resolvedStakeUsdc ?? row.stakeUsdc ?? 0);
   if (key === "pnl") return numeric(row.pnlUsdc ?? 0);
   if (key === "lastResolvedAt") return Date.parse(row.lastResolvedAt || "") || null;
@@ -10653,6 +10657,32 @@ function taxonomyRows(report, kind) {
   });
 }
 
+// What entries inside this row's own band did, next to what the floor row claims.
+//
+// A threshold row keeps everything at or above its floor, so its headline accuracy belongs
+// to a population averaging far higher than the floor -- the reported case was a 60% row
+// reading 90.5% whose own 60-65% band wins 64.9%. Any portfolio ranking by reward/risk lives
+// entirely in the band, since reward per dollar risked is (1-p)/p and is greatest at the
+// floor, so the band is the number that predicts what it will experience.
+//
+// The top row's band is open-ended and identical to its floor, which is stated rather than
+// repeated as if it were a second measurement.
+function bandAccuracyCell(row) {
+  const resolved = Number(row?.bandResolved || 0);
+  const upper = Number(row?.bandUpperThreshold);
+  if (!Number.isFinite(upper)) return '<span class="metric-note">top band</span>';
+  if (!resolved) return "-";
+  const wins = Number(row?.bandWins || 0);
+  const rate = Number(row?.bandWinRate);
+  const floorRate = Number(row?.winRate);
+  // Only worth flagging when the two genuinely disagree; a few points apart is noise.
+  const inflated = Number.isFinite(rate) && Number.isFinite(floorRate) && floorRate - rate >= 0.05;
+  const detail = `${wins} / ${resolved} (${probability(rate)})`;
+  return inflated
+    ? `<span class="warning" title="The floor row reads ${probability(floorRate)} because it includes every higher entry; entries actually inside this band win ${probability(rate)}.">${detail}</span>`
+    : detail;
+}
+
 function renderTaxonomyPerformanceTable(report, kind, title, note) {
   const rows = taxonomyRows(report, kind);
   const label = kind === "category" ? "Category" : "Tag";
@@ -10677,6 +10707,7 @@ function renderTaxonomyPerformanceTable(report, kind, title, note) {
               ${taxonomyHeader(kind, "openCount", "Open now", `Current scraped opportunities with this Polymarket ${kind}.`)}
               ${taxonomyHeader(kind, "trades", "Trades")}
               ${taxonomyHeader(kind, "accuracy", "Accuracy")}
+              ${taxonomyHeader(kind, "bandAccuracy", "In band", "Accuracy of entries inside this row's own probability band, not everything above its floor. A floor row is dominated by far higher entries: a 60% floor averaged a 79% entry and read 94.1%, while the 60-65% band it opens onto wins 64.9%. A portfolio that ranks by reward/risk buys only in the band, because reward per dollar risked is (1-p)/p and so is greatest at the floor.")}
               ${taxonomyHeader(kind, "stake", "Invested")}
               ${taxonomyHeader(kind, "pnl", "P/L")}
               ${taxonomyHeader(kind, "roi", "ROI", "Net P/L divided by all simulated capital invested in this group, including stored fees.")}
@@ -10694,6 +10725,7 @@ function renderTaxonomyPerformanceTable(report, kind, title, note) {
                 <td data-label="Open now"><a class="taxonomy-opportunity-link" href="${escapeHtml(scrapedTaxonomyOpenOpportunityPath(kind, row.label, row))}" title="Show current open scraped opportunities in this ${kind}">${formatInteger(Number(row.openCount || 0))}</a></td>
                 <td data-label="Trades"><a class="taxonomy-opportunity-link" href="${escapeHtml(scrapedTaxonomyResolvedOpportunityPath(kind, row.label, row))}" title="Show resolved scraped opportunities in this ${kind}">${formatInteger(Number(row.trades || 0))}</a></td>
                 <td data-label="Accuracy">${Number(row.trades || 0) ? `${Number(row.wins || 0)} / ${Number(row.trades || 0)} (${probability(Number(row.winRate))})` : "-"}</td>
+                <td data-label="In band">${bandAccuracyCell(row)}</td>
                 <td data-label="Invested">${money(Number(row.resolvedStakeUsdc || row.stakeUsdc || 0))}</td>
                 <td data-label="P/L" class="${pnlClass(Number(row.pnlUsdc || 0))}">${signedMoney(Number(row.pnlUsdc || 0))}</td>
                 <td data-label="ROI" class="${pnlClass(Number(row.roi || 0))}">${row.roi == null ? "-" : signedPercent(Number(row.roi))}</td>
@@ -10706,7 +10738,7 @@ function renderTaxonomyPerformanceTable(report, kind, title, note) {
                   tag: kind === "tag" ? row.label : "",
                 })}>+ Portfolio</button></td>
               </tr>
-            `).join("") : `<tr><td colspan="${hasProbabilityBreakdown ? 12 : 11}">No ${kind} statistics are available yet.</td></tr>`}
+            `).join("") : `<tr><td colspan="${hasProbabilityBreakdown ? 13 : 12}">No ${kind} statistics are available yet.</td></tr>`}
           </tbody>
         </table>
       </div>
@@ -10763,6 +10795,7 @@ function renderCalculationReport() {
               ${calculationHeader("openCount", "Open now")}
               ${calculationHeader("trades", "Trades")}
               ${calculationHeader("accuracy", "Accuracy")}
+              ${calculationHeader("bandAccuracy", "In band", "Accuracy of entries inside this row's own threshold band rather than everything above its floor. Measured: the 50% floor row reads 76.3% while the 50-55% band it opens onto wins 40.6%.")}
               ${calculationHeader("stake", "Invested")}
               ${calculationHeader("pnl", "P/L")}
               ${calculationHeader("roi", "ROI")}
@@ -10780,6 +10813,7 @@ function renderCalculationReport() {
                 <td><a class="taxonomy-opportunity-link" href="${escapeHtml(scrapedRuleOpportunityPath(row))}" title="Show current open scraped opportunities matching this parameter combination">${formatInteger(Number(row.openCount || 0))}</a></td>
                 <td><a class="taxonomy-opportunity-link" href="${escapeHtml(scrapedResolvedRuleOpportunityPath(row))}" title="Show resolved scraped opportunities matching this parameter combination">${formatInteger(Number(row.trades || 0))}</a></td>
                 <td>${Number(row.trades || 0) ? `${Number(row.wins || 0)} / ${Number(row.trades || 0)} (${probability(Number(row.winRate))})` : "-"}</td>
+                <td>${bandAccuracyCell(row)}</td>
                 <td>${money(Number(row.resolvedStakeUsdc || row.stakeUsdc || 0))}</td>
                 <td class="${pnlClass(Number(row.pnlUsdc || 0))}">${signedMoney(Number(row.pnlUsdc || 0))}</td>
                 <td class="${pnlClass(Number(row.roi || 0))}">${row.roi == null ? "-" : signedPercent(Number(row.roi))}</td>
@@ -10792,7 +10826,7 @@ function renderCalculationReport() {
                   marketType: row.marketType || "all",
                 })}>+ Portfolio</button></td>
               </tr>
-            `).join("") : '<tr><td colspan="12">No resolved scraped opportunity simulation is available yet.</td></tr>'}
+            `).join("") : '<tr><td colspan="13">No resolved scraped opportunity simulation is available yet.</td></tr>'}
           </tbody>
         </table>
       </div>

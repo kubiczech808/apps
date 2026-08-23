@@ -9880,10 +9880,61 @@ function summarizeScrapedSimulationRows(rows) {
   };
 }
 
-function scrapedSimulationMatchesRule(trade, { marketType = "all", threshold = 0, maxResolutionDays = null } = {}) {
+// `threshold` is a floor: the row keeps every trade entered at or above it. `upperThreshold`
+// turns that into a band, which is a different and far more useful question.
+//
+// Reported: league-of-legends showed 90.5% accuracy and +13.9% ROI while the portfolio was
+// an extreme failure. Both numbers were true of their own population, and the populations
+// were opposite ends of the same one. A 60% floor row averages a 79% entry, because
+// everything from 60 to 100 is in it, and wins 94.1%. The band 60-65% wins 64.9%. That gap
+// is not noise -- it is 29 points -- and a portfolio holding minProbability 0.6 with
+// highest_reward_risk_first buys only in that band by construction, because reward per
+// dollar risked is (1-p)/p, which is strictly decreasing in p: ranking by it descending IS
+// ranking by probability ascending. Measured: 17 of 19 closed trades landed within 5 points
+// of the floor.
+//
+// So a floor row cannot tell anyone what the rule that uses it will experience, and the band
+// can. Both are reported; the floor stays because a portfolio threshold really is a floor.
+function scrapedSimulationMatchesRule(trade, {
+  marketType = "all",
+  threshold = 0,
+  maxResolutionDays = null,
+  upperThreshold = null,
+} = {}) {
   return (marketType === "all" || trade.marketType === marketType)
     && trade.entry >= threshold
+    && (upperThreshold == null || trade.entry < upperThreshold)
     && (maxResolutionDays == null || trade.days == null || trade.days <= maxResolutionDays);
+}
+
+// The next threshold up, which is where this row's band ends. Null for the top row, whose
+// band is open-ended and therefore identical to its floor.
+function nextReportThreshold(threshold, thresholds = REPORT_THRESHOLDS) {
+  const higher = thresholds
+    .map((value) => Number(value))
+    .filter((value) => Number.isFinite(value) && value > Number(threshold))
+    .sort((a, b) => a - b);
+  return higher.length ? higher[0] : null;
+}
+
+// The band summary carried alongside a floor row, under its own prefixed keys so nothing
+// reading the floor figures changes meaning.
+function scrapedSimulationBandSummary(trades, openTrades, criteria, upperThreshold) {
+  const banded = { ...criteria, upperThreshold };
+  const summary = summarizeScrapedSimulationRows(
+    trades.filter((trade) => scrapedSimulationMatchesRule(trade, banded)),
+  );
+  return {
+    bandUpperThreshold: upperThreshold,
+    bandOpenCount: (Array.isArray(openTrades) ? openTrades : [])
+      .filter((trade) => scrapedSimulationMatchesRule(trade, banded)).length,
+    bandResolved: summary.resolved,
+    bandWins: summary.wins,
+    bandWinRate: summary.winRate,
+    bandRoi: summary.roi,
+    bandAvgProbability: summary.avgProbability,
+    bandTrades: summary.trades,
+  };
 }
 
 function scrapedSimulationParameterRows(trades, openTrades = []) {
@@ -9900,6 +9951,7 @@ function scrapedSimulationParameterRows(trades, openTrades = []) {
           maxResolutionDays,
           openCount: openTrades.filter((trade) => scrapedSimulationMatchesRule(trade, criteria)).length,
           ...summarizeScrapedSimulationRows(selected),
+          ...scrapedSimulationBandSummary(trades, openTrades, criteria, nextReportThreshold(threshold)),
         });
       }
     }
@@ -9939,11 +9991,28 @@ function scrapedSimulationTaxonomyRows(trades, openTrades, field, kind) {
       // Keep the stored representation compact: the UI expands these summaries
       // into one row per tag/probability threshold only when Tag performance is open.
       if (kind === "tag") {
-        row.minimumProbabilitySummaries = TAG_PERFORMANCE_THRESHOLDS.map((minimumProbability) => ({
-          minimumProbability,
-          openCount: groupOpenTrades.filter((trade) => trade.entry >= minimumProbability).length,
-          ...summarizeScrapedSimulationRows(groupTrades.filter((trade) => trade.entry >= minimumProbability)),
-        }));
+        row.minimumProbabilitySummaries = TAG_PERFORMANCE_THRESHOLDS.map((minimumProbability) => {
+          // The band this floor opens onto, for the same reason the parameter rows carry
+          // one: this is the table that showed 90.5% for a 60% floor whose own band wins
+          // 64.9%, and a floor-and-reward/risk portfolio only ever trades the band.
+          const bandUpperThreshold = nextReportThreshold(minimumProbability, TAG_PERFORMANCE_THRESHOLDS);
+          const inBand = (trade) => trade.entry >= minimumProbability
+            && (bandUpperThreshold == null || trade.entry < bandUpperThreshold);
+          const bandSummary = summarizeScrapedSimulationRows(groupTrades.filter(inBand));
+          return {
+            minimumProbability,
+            openCount: groupOpenTrades.filter((trade) => trade.entry >= minimumProbability).length,
+            ...summarizeScrapedSimulationRows(groupTrades.filter((trade) => trade.entry >= minimumProbability)),
+            bandUpperThreshold,
+            bandOpenCount: groupOpenTrades.filter(inBand).length,
+            bandResolved: bandSummary.resolved,
+            bandWins: bandSummary.wins,
+            bandWinRate: bandSummary.winRate,
+            bandRoi: bandSummary.roi,
+            bandAvgProbability: bandSummary.avgProbability,
+            bandTrades: bandSummary.trades,
+          };
+        });
       }
       return row;
     })

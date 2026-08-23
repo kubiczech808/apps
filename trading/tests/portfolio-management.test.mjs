@@ -462,8 +462,8 @@ test("dashboard: both statistics tables offer to create the portfolio behind a r
     'data-prefill-name="75% Yes/No" data-prefill-market-type="binary" data-prefill-probability="0.75"',
   );
   // The extra column must be counted in both empty-row colspans, or the layout breaks.
-  assert.match(APP, /colspan="\$\{hasProbabilityBreakdown \? 12 : 11\}"/);
-  assert.match(APP, /colspan="12">No resolved scraped opportunity simulation/);
+  assert.match(APP, /colspan="\$\{hasProbabilityBreakdown \? 13 : 12\}"/);
+  assert.match(APP, /colspan="13">No resolved scraped opportunity simulation/);
 });
 
 test("portfolio creation: user chooses paper or the connected live account", () => {
