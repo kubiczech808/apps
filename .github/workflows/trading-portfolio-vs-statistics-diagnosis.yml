@@ -1,0 +1,34 @@
+name: Trading Portfolio vs Statistics Diagnosis
+
+# Read-only, manual only. For one paper portfolio, compares what its statistics assume it
+# paid (Gamma's mid, the only price a scraped observation carries) against what it actually
+# paid (the executable ask plus slippage), reprices its own realised trades at the mid to
+# isolate the execution gap, and splits results by how each position was entered. Writes
+# nothing and places no orders.
+on:
+  workflow_dispatch:
+    inputs:
+      strategy_id:
+        description: "Paper portfolio to inspect"
+        required: false
+        default: "leagueoflegends"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Compare the portfolio against its own statistics
+        working-directory: trading
+        env:
+          PAPER_DIAGNOSIS_STRATEGY_ID: ${{ inputs.strategy_id }}
+        run: node tools/portfolio-vs-statistics-diagnosis.mjs
