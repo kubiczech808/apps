@@ -1,0 +1,33 @@
+name: Trading Market Spread Quality Diagnosis
+
+# Read-only, manual only. Samples open Gamma markets and reports whether spread/bestAsk/
+# bestBid are populated, how spread is distributed, how much of the catalogue each candidate
+# gate keeps, and whether wide spreads coincide with no volume. Writes nothing, places no
+# orders.
+on:
+  workflow_dispatch:
+    inputs:
+      pages:
+        description: "How many 100-market pages to sample"
+        required: false
+        default: "6"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Measure spread distribution and its link to volume
+        working-directory: trading
+        env:
+          SPREAD_AUDIT_PAGES: ${{ inputs.pages }}
+        run: node tools/market-spread-quality-diagnosis.mjs
