@@ -1,0 +1,24 @@
+name: Trading Category vs Tags Diagnosis
+
+# Read-only, manual only. Fetches real markets/events/tags from the Gamma API and prints
+# every top-level key each object has, to settle whether Polymarket exposes a genuine
+# "category"/"categories" field distinct from "tags". Places no orders, writes nothing.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Fetch live Gamma API fields
+        working-directory: trading
+        run: node tools/category-vs-tags-diagnosis.mjs
