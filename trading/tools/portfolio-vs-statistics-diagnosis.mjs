@@ -152,6 +152,59 @@ async function main() {
   console.log(`   avg liquidity=${usd(avg(liq))} median=${usd(liq.sort((a, b) => a - b)[Math.floor(liq.length / 2)])}`);
   console.log(`   avg volume24hr=${usd(avg(vol))} median=${usd(vol.sort((a, b) => a - b)[Math.floor(vol.length / 2)])}`);
 
+  // Where the portfolio's entries actually sit relative to its own floor. A floor plus
+  // "highest reward/risk first" is not a neutral sample of everything above the floor:
+  // reward per dollar risked is greatest on the cheapest, least likely outcome, so the rule
+  // buys at the floor by construction.
+  {
+    const floor = num(row?.minProbability);
+    const entered = closed.map((trade) => num(trade.entryPrice)).filter((value) => value != null);
+    console.log(`\n-- where the entries sit above the ${pct(floor)} floor --`);
+    const bands = [[0.5, 0.6], [0.6, 0.65], [0.65, 0.7], [0.7, 0.8], [0.8, 0.9], [0.9, 1.01]];
+    for (const [low, high] of bands) {
+      const inBand = closed.filter((trade) => {
+        const value = num(trade.entryPrice);
+        return value != null && value >= low && value < high;
+      });
+      if (!inBand.length) continue;
+      const bandWins = inBand.filter((trade) => WON_STATUSES.has(String(trade.status || ""))).length;
+      const bandPnl = inBand.reduce((sum, trade) => sum + (num(trade.realizedPnlUsdc) || 0), 0);
+      console.log(`   ${pct(low)}-${pct(high)}: n=${String(inBand.length).padStart(3)}`
+        + ` won=${String(bandWins).padStart(3)} (${((bandWins / inBand.length) * 100).toFixed(1)}%)`
+        + ` pnl=${usd(bandPnl)}`);
+    }
+    if (entered.length && floor != null) {
+      const nearFloor = entered.filter((value) => value < floor + 0.05).length;
+      console.log(`   within 5 points of the floor: ${nearFloor} of ${entered.length}`
+        + ` (${((nearFloor / entered.length) * 100).toFixed(1)}%)`);
+    }
+  }
+
+  // The volume the gate actually saw. rowVolumeUsdc prefers lifetime volume over 24h
+  // volume, so a fixture that traded heavily weeks ago but is dead now clears a
+  // "minimum volume" gate on history alone.
+  {
+    console.log(`\n-- what the ${row?.minLiquidityUsdc ?? "-"} volume gate was satisfied by --`);
+    const rows = closed.map((trade) => ({
+      lifetime: num(trade.volumeUsdc),
+      day: num(trade.volume24hr),
+      liq: num(trade.liquidity),
+    }));
+    const med = (values) => {
+      const clean = values.filter((value) => value != null).sort((a, b) => a - b);
+      return clean.length ? clean[Math.floor(clean.length / 2)] : null;
+    };
+    console.log(`   median lifetime volumeUsdc: ${usd(med(rows.map((item) => item.lifetime)))}`);
+    console.log(`   median volume24hr         : ${usd(med(rows.map((item) => item.day)))}`);
+    console.log(`   median liquidity          : ${usd(med(rows.map((item) => item.liq)))}`);
+    const gate = num(row?.minLiquidityUsdc);
+    if (gate != null) {
+      const dayBelow = rows.filter((item) => item.day != null && item.day < gate).length;
+      console.log(`   traded under the gate in the last 24h: ${dayBelow} of ${rows.length}`
+        + ` -- these cleared it on lifetime volume, not on current activity`);
+    }
+  }
+
   // And the statistics row the report is about, for the same tag.
   const report = served.body?.latestCalculationReport;
   const tagRows = Array.isArray(report?.tagSummaries) ? report.tagSummaries : [];
@@ -165,6 +218,34 @@ async function main() {
       + ` resolved=${String(tagRow.resolved).padStart(5)} wins=${String(tagRow.wins).padStart(5)}`
       + ` winRate=${pct(tagRow.winRate)} avgEntry=${pct(tagRow.avgProbability)}`
       + ` roi=${tagRow.roi ?? "-"} avgVolume=${usd(num(tagRow.avgVolumeUsdc))}`);
+  }
+
+  // The comparison that settles it. A threshold row is a floor, so its win rate belongs to
+  // everything above that floor -- which averages far higher than the floor itself. The
+  // band the portfolio actually buys in can be recovered by differencing adjacent floors:
+  // rows at 60% and 65% differ by exactly the trades entered in [60%, 65%). No archive
+  // fetch needed, and it says what a 60-65% entry really wins at.
+  {
+    const params = (Array.isArray(report?.parameterSummaries) ? report.parameterSummaries : [])
+      .filter((paramRow) => paramRow.marketType === "all" && Number(paramRow.maxResolutionDays) === 7);
+    const byThreshold = new Map();
+    for (const paramRow of params) byThreshold.set(Number(paramRow.threshold), paramRow);
+    const floors = [...byThreshold.keys()].sort((a, b) => a - b);
+    console.log(`\n-- floors differenced into bands (marketType=all, maxDays=7) --`);
+    if (floors.length < 2) {
+      console.log(`   not enough threshold rows to difference (${floors.length})`);
+    }
+    for (let index = 0; index < floors.length - 1; index += 1) {
+      const low = byThreshold.get(floors[index]);
+      const high = byThreshold.get(floors[index + 1]);
+      const resolved = Number(low.resolved) - Number(high.resolved);
+      const wins = Number(low.wins) - Number(high.wins);
+      if (!(resolved > 0)) continue;
+      console.log(`   entry ${pct(floors[index])}-${pct(floors[index + 1])}:`
+        + ` resolved=${String(resolved).padStart(6)} wins=${String(wins).padStart(6)}`
+        + ` winRate=${pct(wins / resolved)}`
+        + `   (floor row at ${pct(floors[index])} claims ${pct(low.winRate)} over ${low.resolved})`);
+    }
   }
 }
 
