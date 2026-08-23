@@ -12,6 +12,12 @@ on:
         required: false
         default: "6"
         type: string
+      sample:
+        description: "How to draw the sample: newest (what a scan sees), quietest, or busiest"
+        required: false
+        default: "newest"
+        type: choice
+        options: ["newest", "quietest", "busiest"]
 
 permissions:
   contents: read
@@ -30,4 +36,5 @@ jobs:
         working-directory: trading
         env:
           SPREAD_AUDIT_PAGES: ${{ inputs.pages }}
+          SPREAD_AUDIT_SAMPLE: ${{ inputs.sample }}
         run: node tools/market-spread-quality-diagnosis.mjs

@@ -34,10 +34,24 @@ const pctOf = (part, whole) => (whole ? `${((part / whole) * 100).toFixed(1)}%` 
 async function main() {
   console.log(`Market spread quality diagnosis at ${new Date().toISOString()}\n`);
 
+  // How the sample is drawn decides the answer, so it is a parameter and it is stated.
+  //
+  // The first run of this sorted by volume24hr descending, which is a biased sample for this
+  // question: it takes the 600 busiest markets, so of course none of them lack volume, and
+  // the freshly created fixtures the report is actually about are exactly what it excludes.
+  // "newest" is the sample that reflects what a scan picks up.
+  const SAMPLES = {
+    newest: "order=startDate&ascending=false",
+    quietest: "order=volume24hr&ascending=true",
+    busiest: "order=volume24hr&ascending=false",
+  };
+  const sampleKey = String(process.env.SPREAD_AUDIT_SAMPLE || "newest").toLowerCase();
+  const sampleQuery = SAMPLES[sampleKey] || SAMPLES.newest;
+
   const markets = [];
   for (let page = 0; page < PAGES; page += 1) {
     const result = await fetchJson(
-      `${GAMMA}/markets?limit=${LIMIT}&offset=${page * LIMIT}&closed=false&order=volume24hr&ascending=false`,
+      `${GAMMA}/markets?limit=${LIMIT}&offset=${page * LIMIT}&closed=false&${sampleQuery}`,
     );
     if (!result.ok || !Array.isArray(result.body)) {
       console.log(`!! page ${page} failed: HTTP ${result.status} ${result.error || ""}`);
@@ -46,7 +60,9 @@ async function main() {
     markets.push(...result.body);
     if (result.body.length < LIMIT) break;
   }
-  console.log(`sampled ${markets.length} open markets\n`);
+  console.log(`sampled ${markets.length} open markets, drawn as "${sampleKey}" (${sampleQuery})`);
+  console.log(`   a volume-sorted sample cannot answer whether wide spreads lack volume;`
+    + ` that is what "newest" and "quietest" are for\n`);
   if (!markets.length) return;
 
   // Is the field even there, and does it look like a price difference rather than a percent
