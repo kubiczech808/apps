@@ -8186,8 +8186,8 @@ test("risk: a closed trade never blocks, an unfilled order still does", () => {
 test("risk: the per-event ceiling is configurable", () => {
   const source = readFileSync(new URL("../tools/paper-trading-bot.mjs", import.meta.url), "utf8");
   assert.match(source, /MAX_PER_MULTI_OUTCOME_EVENT = Math\.max\(1, envNumber\("PAPER_MAX_PER_MULTI_EVENT", 3\)\)/);
-  // Only the event itself is relaxed; nothing else in the key set is.
-  assert.match(source, /const EVENT_SCOPED_RISK_KEY = \/\^\(event\|market\):\//);
+  // Only a shared event key triggers the relaxation; team/topic overlap alone still blocks.
+  assert.match(source, /const EVENT_RISK_KEY_PREFIX = "event:";/);
 });
 
 test("market type: a bracket set is a field, a date in a question is not", () => {
@@ -8224,4 +8224,60 @@ test("market type: a bracket set is a field, a date in a question is not", () =>
   assert.equal(bot.reportMarketType({
     question: "Exact Score: Club The Strongest 3 - 3 FC Universitario?", outcome: "No", outcomeCount: 2,
   }), "multi");
+});
+
+// -- The team key entailed by being the same fixture must not veto the relaxation --------
+//
+// Reported in production: Conservative kept skipping with candidates on the book. Two
+// exact-score lines of one match were blocked as real correlation --
+// "Exact Score: Go Ahead Eagles 1-0" refused because "Exact Score: Go Ahead Eagles 0-0" was
+// already held, with overlap "event:..., event:..., team:go ahead eagles". The team key is
+// entailed by being the same fixture: two exact-score lines of one match always name the
+// same two teams. Requiring every overlapping key to be event-scoped rejected exactly this.
+
+const exactScoreLine = (score) => ({
+  question: `Exact Score: Go Ahead Eagles ${score} ADO Den Haag?`,
+  outcome: score === "0 - 0" ? "Yes" : "No",
+  outcomeCount: 2,
+  tokenId: `token-${score.replace(/\s/g, "")}`,
+  riskGroupKeys: [
+    `market:ere-goa-ado-2026-08-23-exact-score-${score.replace(/\s/g, "")}`,
+    "event:ere-goa-ado-2026-08-23-exact-score",
+    "event:ere-goa-ado-2026-08-23",
+    "team:go ahead eagles",
+  ],
+});
+
+test("risk: a shared team name entailed by the same fixture does not veto the field relaxation", () => {
+  const held = openTradeFrom(exactScoreLine("0 - 0"), "t1");
+  assert.equal(bot.reportMarketType(held), "multi", "exact score is a field");
+  assert.equal(bot.reportMarketType(exactScoreLine("1 - 0")), "multi");
+
+  assert.equal(bot.riskBlock(exactScoreLine("1 - 0"), [held]), null,
+    "another line of the same match's exact-score field is a spread, not a second risk");
+  assert.equal(bot.riskBlock(exactScoreLine("0 - 1"), [held]), null);
+});
+
+test("risk: the cap still applies to exact-score lines of one match", () => {
+  const held = ["1 - 0", "0 - 1", "2 - 0"].map((score, index) => openTradeFrom(exactScoreLine(score), `t${index}`));
+  const block = bot.riskBlock(exactScoreLine("0 - 0"), held);
+  assert.ok(block, "a fourth line of the same match is refused once three are held");
+  assert.equal(block.sameEventCount, 3);
+});
+
+test("risk: a shared team with no shared event is a different match, and still blocks", () => {
+  // The boundary the fix has to respect: the same team name appearing on two DIFFERENT
+  // fixtures (no event key in common) is genuine cross-match correlation, not one field's
+  // own alternatives, and must keep blocking outright regardless of market type.
+  const heldElsewhere = {
+    id: "t1",
+    status: "OPEN",
+    question: "Go Ahead Eagles to reach the KNVB Cup final?",
+    outcome: "Yes",
+    outcomeCount: 2,
+    riskGroupKeys: ["market:knvb-cup-goa-final", "event:knvb-cup-2026-27", "team:go ahead eagles"],
+  };
+  const block = bot.riskBlock(exactScoreLine("1 - 0"), [heldElsewhere]);
+  assert.ok(block, "no shared event key means this is a different match sharing only a team");
+  assert.ok(!block.atCap);
 });

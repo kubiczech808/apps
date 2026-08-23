@@ -5877,7 +5877,7 @@ function alreadyOpen(trades, tokenId) {
 // Team, match and topic overlap still block outright, because those genuinely do lose
 // together -- and a two-sided event keeps its strict one-position rule, since buying both
 // sides of an either-or is just paying two spreads to hold nothing.
-const EVENT_SCOPED_RISK_KEY = /^(event|market):/;
+const EVENT_RISK_KEY_PREFIX = "event:";
 const MAX_PER_MULTI_OUTCOME_EVENT = Math.max(1, envNumber("PAPER_MAX_PER_MULTI_EVENT", 3));
 
 function riskBlock(candidate, trades) {
@@ -5892,10 +5892,21 @@ function riskBlock(candidate, trades) {
     const overlap = tradeKeys.filter((key) => candidateKeys.has(key));
     if (!overlap.length) continue;
     const block = { tradeId: trade.id, question: trade.question, outcome: trade.outcome, overlap };
-    // Anything beyond the event itself -- a shared team, fixture or topic -- is real
-    // correlation whatever kind of market it is.
-    const eventOnly = overlap.every((key) => EVENT_SCOPED_RISK_KEY.test(key));
-    if (!eventOnly || !candidateIsField || reportMarketType(trade) !== "multi") return block;
+    // Sharing the event itself -- not merely a team, a topic or anything else -- is what
+    // makes this the same field rather than a coincidence.
+    //
+    // Reported: Conservative kept skipping with candidates on the book. Two exact-score
+    // lines of one match ("Go Ahead Eagles 0-0" held, "1-0" offered) were blocked as real
+    // correlation, because the overlap included team:go ahead eagles alongside the two
+    // event keys -- and the old test required every overlapping key to be event-scoped.
+    // But two alternatives of the same fixture will always also share the fixture's own
+    // team names; that overlap is entailed by being the same event; it is not a second,
+    // independent risk on top of it. Testing for "an event key is present" rather than
+    // "only event keys are present" is what actually distinguishes the two cases: a shared
+    // team or topic with NO shared event key is a different match or question entirely, and
+    // that is the real correlation this block still has to catch.
+    const sameEvent = overlap.some((key) => key.startsWith(EVENT_RISK_KEY_PREFIX));
+    if (!sameEvent || !candidateIsField || reportMarketType(trade) !== "multi") return block;
     spreadCount += 1;
     if (!firstSpread) firstSpread = block;
   }
