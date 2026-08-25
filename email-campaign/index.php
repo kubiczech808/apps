@@ -216,12 +216,19 @@ function aiResearchQuotaIsMinuteWindow(string $message): bool
 
 function aiResearchDailyGeminiRequestBudget(array $config): int
 {
+    if (aiResearchProviderName($config) === 'openai') {
+        return max(0, (int)($config['ai']['openai_research_daily_request_budget'] ?? 120));
+    }
     $configured = (int)($config['ai']['gemini_research_daily_request_budget'] ?? 0);
     return max(0, $configured);
 }
 
 function aiResearchGeminiRequestsPerMinuteBudget(array $config): int
 {
+    if (aiResearchProviderName($config) === 'openai') {
+        $configured = (int)($config['ai']['openai_research_rpm_budget'] ?? 0);
+        return max(1, min(30, $configured > 0 ? $configured : 10));
+    }
     $configured = (int)($config['ai']['gemini_research_rpm_budget'] ?? 0);
     // gemini-3-flash-preview ma 10 RPM, drzime se pod tim.
     return max(1, min(9, $configured > 0 ? $configured : 8));
@@ -234,12 +241,22 @@ function aiResearchGeminiRequestsPerMinuteBudget(array $config): int
  */
 function aiResearchEstimatedGeminiRequestsPerSeed(array $config): int
 {
+    if (aiResearchProviderName($config) === 'openai') {
+        $configured = (int)($config['ai']['openai_research_requests_per_seed'] ?? 0);
+        return max(1, $configured > 0 ? $configured : 3);
+    }
     $configured = (int)($config['ai']['gemini_research_requests_per_seed'] ?? 0);
     return max(1, $configured > 0 ? $configured : 3);
 }
 
 function aiResearchDailySeedBudget(array $config): int
 {
+    if (aiResearchProviderName($config) === 'openai') {
+        $explicit = (int)($config['ai']['openai_research_daily_seed_budget'] ?? 0);
+        if ($explicit > 0) {
+            return $explicit;
+        }
+    }
     $explicit = (int)($config['ai']['gemini_research_daily_seed_budget'] ?? 0);
     if ($explicit > 0) {
         return $explicit;
@@ -442,6 +459,92 @@ function aiResearchGeminiCall(array $config, string $step, array $payload, int $
         }
     }
     throw $lastError ?? new RuntimeException('AI ' . $step . ' request selhal.');
+}
+
+/**
+ * AI research pouziva prednostne OpenAI. Gemini zustava jen pro starsi instalace,
+ * ktere jeste nemaji vlastni OpenAI API klic; na neplatny OpenAI klic se potichu
+ * neprepina, aby se skutecna pricina vzdy propsala do provozniho logu.
+ */
+function aiResearchProviderName(array $config): string
+{
+    return trim((string)($config['ai']['openai_api_key'] ?? '')) !== '' ? 'openai' : 'gemini';
+}
+
+function aiResearchProviderLabel(array $config): string
+{
+    return aiResearchProviderName($config) === 'openai' ? 'OpenAI' : 'Gemini';
+}
+
+function aiResearchApiIsConfigured(array $config): bool
+{
+    return aiResearchProviderName($config) === 'openai'
+        ? trim((string)($config['ai']['openai_api_key'] ?? '')) !== ''
+        : trim((string)($config['ai']['gemini_api_key'] ?? '')) !== '';
+}
+
+function aiResearchOpenAiCall(array $config, string $step, array $payload, int $timeout): array
+{
+    $apiKey = trim((string)($config['ai']['openai_api_key'] ?? ''));
+    if ($apiKey === '') {
+        throw new AiResearchTemporaryException('AI ' . $step . ' nema nastaveny OpenAI API klic.');
+    }
+    if (aiResearchDeadlineReached(AI_RESEARCH_GEMINI_CALL_RESERVE_SECONDS)) {
+        throw new AiResearchTemporaryException('AI ' . $step . ' se nevesel do casoveho budgetu pozadavku, beh pokracuje pri dalsim cronu.');
+    }
+    $plannedTokens = aiResearchEstimatePayloadTokens($payload);
+    if (!aiResearchThrottleBeforeRequest($config, aiResearchDeadline(), $plannedTokens)) {
+        throw new AiResearchTemporaryException('AI ' . $step . ' se odklada, aby se nesla pres minutovy limit pozadavku; beh pokracuje pri dalsim cronu.');
+    }
+    aiResearchRequestTimestamps('add', $plannedTokens);
+    return jsonHttpPost('https://api.openai.com/v1/responses', [
+        'Authorization: Bearer ' . $apiKey,
+        'Content-Type: application/json',
+    ], [
+        'model' => aiResearchModelName($config),
+        'instructions' => (string)($payload['system_instruction'] ?? ''),
+        'input' => (string)($payload['input'] ?? ''),
+        'store' => false,
+    ], $timeout);
+}
+
+function aiResearchModelCall(array $config, string $step, array $payload, int $timeout): array
+{
+    if (aiResearchProviderName($config) === 'openai') {
+        return aiResearchOpenAiCall($config, $step, $payload, $timeout);
+    }
+    return aiResearchGeminiCall($config, $step, $payload, $timeout);
+}
+
+function aiResearchModelText(array $config, array $response): string
+{
+    return aiResearchProviderName($config) === 'openai'
+        ? openAiResponseText($response)
+        : geminiInteractionText($response);
+}
+
+function aiResearchApiHealthCheck(array $config): string
+{
+    if (aiResearchProviderName($config) !== 'openai') {
+        throw new RuntimeException('OpenAI API klic neni v nasazene konfiguraci k dispozici; AI research zustava na Gemini.');
+    }
+    $ownsBudget = aiResearchBeginRequestBudget(35);
+    try {
+        $response = aiResearchModelCall($config, 'health_check', [
+            'model' => aiResearchModelName($config),
+            'system_instruction' => 'Vrat pouze validni JSON.',
+            'input' => 'Vrat presne {"ok":true}.',
+        ], 25);
+        $json = parseJsonObjectFromText(aiResearchModelText($config, $response));
+        if (($json['ok'] ?? false) !== true) {
+            throw new RuntimeException('OpenAI vratilo neocekavanou odpoved.');
+        }
+        return 'OpenAI AI research je funkcni. Model: ' . aiResearchModelName($config) . ".\n";
+    } finally {
+        if ($ownsBudget) {
+            aiResearchRequestTimestamps('reset');
+        }
+    }
 }
 
 function aiResearchGeminiUsageTimestamps(PDO $pdo): array
@@ -731,6 +834,15 @@ if (isset($_GET['cron'])) {
     }
     if (isset($_GET['send_onboarding_demo'])) {
         echo sendOnboardingDemoInvite($pdo, $config);
+        exit;
+    }
+    if (isset($_GET['ai_health_check'])) {
+        try {
+            echo aiResearchApiHealthCheck($config);
+        } catch (Throwable $e) {
+            http_response_code(503);
+            echo 'AI research API check failed: ' . $e->getMessage() . "\n";
+        }
         exit;
     }
     if (isset($_GET['ai_research'])) {
@@ -2152,6 +2264,9 @@ function aiModelName(array $config, string $provider = 'gemini'): string
 
 function aiResearchModelName(array $config): string
 {
+    if (aiResearchProviderName($config) === 'openai') {
+        return aiModelName($config, 'openai');
+    }
     $runtime = geminiRuntimeModel();
     if ($runtime !== '') {
         return $runtime;
@@ -2160,12 +2275,22 @@ function aiResearchModelName(array $config): string
     return $configured !== '' ? normalizeGeminiModelName($configured) : aiModelName($config, 'gemini');
 }
 
+function aiResearchDisplayModel(string $model): string
+{
+    $model = trim($model);
+    if ($model === '') {
+        return '';
+    }
+    return str_starts_with(strtolower($model), 'gpt-') ? $model : normalizeGeminiModelName($model);
+}
+
 function aiModelAuditEntry(array $config, string $step, string $provider = 'gemini', string $status = 'used'): array
 {
-    $model = $provider === 'gemini_research' ? aiResearchModelName($config) : aiModelName($config, $provider);
+    $researchProvider = $provider === 'research' || $provider === 'gemini_research';
+    $model = $researchProvider ? aiResearchModelName($config) : aiModelName($config, $provider);
     return [
         'step' => $step,
-        'provider' => $provider === 'gemini_research' ? 'gemini' : $provider,
+        'provider' => $researchProvider ? aiResearchProviderName($config) : $provider,
         'model' => $model,
         'status' => $status,
         'at' => date('c'),
@@ -3058,12 +3183,22 @@ function aiResearchLogEntries(PDO $pdo, int $limit = 60): array
 {
     try {
         $stmt = $pdo->prepare('SELECT * FROM ai_research_logs ORDER BY (status="planned") DESC, id DESC LIMIT ?');
-        $stmt->bindValue(1, $limit, PDO::PARAM_INT);
+        $stmt->bindValue(1, max(1, $limit), PDO::PARAM_INT);
         $stmt->execute();
         return $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
     } catch (Throwable $e) {
         error_log('AI research log read failed: ' . $e->getMessage());
         return [];
+    }
+}
+
+function aiResearchLogCount(PDO $pdo): int
+{
+    try {
+        return (int)$pdo->query('SELECT COUNT(*) FROM ai_research_logs')->fetchColumn();
+    } catch (Throwable $e) {
+        error_log('AI research log count failed: ' . $e->getMessage());
+        return 0;
     }
 }
 
@@ -3358,8 +3493,7 @@ function aiResearchAlternativePlans(array $config, array $seed, array $basePlan,
 {
     $plans = [];
     $seen = array_fill_keys(array_filter($seenSignatures, static fn($value) => (string)$value !== ''), true);
-    $apiKey = trim((string)($config['ai']['gemini_api_key'] ?? ''));
-    if ($apiKey === '') {
+    if (!aiResearchApiIsConfigured($config)) {
         return [];
     }
     $seedCountry = aiResearchSeedCountry($seed);
@@ -3376,13 +3510,13 @@ function aiResearchAlternativePlans(array $config, array $seed, array $basePlan,
         . "Pokud jde o mobilni masaze na pracovisti, hledej realne kancelarske/provozni firmy v lokalite: IT Firma, Steuerberater, Rechtsanwalt, Callcenter, Hotel apod. "
         . "Vrat pouze JSON {\"plans\":[{\"audience_label\":\"...\",\"rationale\":\"...\",\"email_angle\":\"...\",\"market_language\":\"cs|sk|de|pl|en\",\"target_segments\":[...],\"candidate_terms\":[...],\"filters\":[...],\"scraping_queries\":[{\"source\":\"...\",\"keyword\":\"...\",\"why\":\"...\"}],\"primary_segment\":\"...\",\"main_use_case\":\"...\",\"decision_maker\":\"...\",\"rejected_alternatives\":[{\"segment\":\"...\",\"reason\":\"...\"}],\"confidence\":0}]}.";
     try {
-        $response = aiResearchGeminiCall($config, 'alternative_plan_generation', [
+        $response = aiResearchModelCall($config, 'alternative_plan_generation', [
             'model' => aiResearchModelName($config),
             'system_instruction' => 'Jsi B2B akvizicni strateg. Pri nulovem vysledku zmen segment nebo keyword, ale nikdy trh bez duvodu. Vystup je pouze validni JSON.',
             'input' => $prompt,
             'generation_config' => ['temperature' => 0.5],
         ], 40);
-        $json = parseJsonObjectFromText(geminiInteractionText($response));
+        $json = parseJsonObjectFromText(aiResearchModelText($config, $response));
         $fallback = $basePlan ?: onboardingFallbackLeadPlan((string)($seed['subject_name'] ?? ''));
         foreach ((array)($json['plans'] ?? []) as $candidate) {
             if (!is_array($candidate)) {
@@ -3390,7 +3524,7 @@ function aiResearchAlternativePlans(array $config, array $seed, array $basePlan,
             }
             $plan = onboardingNormalizeLeadPlan($candidate, $fallback);
             $plan = aiResearchApplyStrategicFields($plan, $candidate);
-            $plan = aiResearchAppendModelAudit($plan, aiModelAuditEntry($config, 'alternative_plan_generation', 'gemini_research'));
+            $plan = aiResearchAppendModelAudit($plan, aiModelAuditEntry($config, 'alternative_plan_generation', 'research'));
             $plan['filters'] = array_values(array_filter(array_map('strval', (array)($candidate['filters'] ?? ($plan['filters'] ?? [])))));
             $language = normalizeAiResearchMarketLanguage((string)($candidate['market_language'] ?? ''));
             if ($language !== '') {
@@ -4297,9 +4431,8 @@ function aiResearchPlan(array $config, array $seed, ?array &$fetchedContext = nu
         ];
     }
 
-    $apiKey = trim((string)($config['ai']['gemini_api_key'] ?? ''));
-    if ($apiKey === '') {
-        throw new AiResearchTemporaryException('AI research nema nastaveny Gemini API klic, beh se neulozil jako fallback.');
+    if (!aiResearchApiIsConfigured($config)) {
+        throw new AiResearchTemporaryException('AI research nema nastaveny API klic pro OpenAI ani Gemini.');
     }
     $prompt = "Seed je realna firma nahodne vybrana z katalogu Firmy.cz v kategorii Vse pro firmy / kraj Praha. Pro tuto firmu mame najit nove B2B zakazniky. "
         . "Tvym ukolem neni pouze najit segment, ktery by sluzbu mohl vyuzit. Musis vybrat segment, ktery ji pravdepodobne koupi, zaplati a muze nakupovat opakovane. "
@@ -4348,16 +4481,16 @@ function aiResearchPlan(array $config, array $seed, ?array &$fetchedContext = nu
         . "Keyword nesmi byt obecny nadrazeny pojem ani nahodny segment. Pokud existuje na webu explicitni segment zakazniku, preferuj ho pred odhadem. Restaurace pouzij jen pokud web nabizi produkt pro gastro provozy obecne nebo pokud umi aplikace jednoduse rozlisit relevantni subset; jinak preferuj presnejsi segmenty jako hotel, golfovy klub, ordinace, lazne nebo stavebni firma. "
         . "Pokud te napadne 'vyrobni firma', musis ho zkonkretizovat podle realne spoluprace, napr. 'pekárna', 'truhlářství', 'kovovýroba', 'potravinářství', 'autoservis', 'hotel' nebo jina presna kategorie podle kontextu.";
     try {
-        $response = aiResearchGeminiCall($config, 'plan_generation', [
+        $response = aiResearchModelCall($config, 'plan_generation', [
             'model' => aiResearchModelName($config),
             'system_instruction' => 'Jsi seniorni B2B akvizicni strateg a kriticky hodnotitel segmentu. Vybiras segment podle nakupni pravdepodobnosti, ekonomiky a dosazitelnosti. Vystup je pouze validni JSON bez markdownu.',
             'input' => $prompt,
             'generation_config' => ['temperature' => 0.25],
         ], 35);
-        $json = parseJsonObjectFromText(geminiInteractionText($response));
+        $json = parseJsonObjectFromText(aiResearchModelText($config, $response));
         $plan = onboardingNormalizeLeadPlan($json, $fallback);
         $plan = aiResearchApplyStrategicFields($plan, $json);
-        $plan = aiResearchAppendModelAudit($plan, aiModelAuditEntry($config, 'plan_generation', 'gemini_research'));
+        $plan = aiResearchAppendModelAudit($plan, aiModelAuditEntry($config, 'plan_generation', 'research'));
         $marketLanguage = normalizeAiResearchMarketLanguage((string)($json['market_language'] ?? ''));
         if ($marketLanguage !== '') {
             $plan['market_language'] = $marketLanguage;
@@ -6334,9 +6467,8 @@ function aiResearchEvaluateContacts(array $config, array $seed, array $plan, arr
     if (!$contacts) {
         return [];
     }
-    $apiKey = trim((string)($config['ai']['gemini_api_key'] ?? ''));
-    if ($apiKey === '') {
-        throw new AiResearchTemporaryException('AI contact_validation nema nastaveny Gemini API klic, beh se neulozil jako fallback.');
+    if (!aiResearchApiIsConfigured($config)) {
+        throw new AiResearchTemporaryException('AI contact_validation nema nastaveny API klic pro OpenAI ani Gemini.');
     }
     $prompt = "Vyhodnot nalezene kontakty pro B2B osloveni seed byznysu. "
         . "Seed: " . json_encode($seed, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . ". "
@@ -6353,13 +6485,13 @@ function aiResearchEvaluateContacts(array $config, array $seed, array $plan, arr
         . "Pokud plan rozlisuje rozhodovaci osobu, zohledni, zda je kontaktovany subjekt typ firmy, kde takova role realisticky existuje. "
         . "Negeneruj subject ani html pro jednotlive kontakty. Osloveni je jedno spolecne pro cely segment a je ulozene na urovni research behu.";
     try {
-        $response = aiResearchGeminiCall($config, 'contact_validation', [
+        $response = aiResearchModelCall($config, 'contact_validation', [
             'model' => aiResearchModelName($config),
             'system_instruction' => 'Jsi B2B obchodnik a hodnotitel relevance. Vystup je pouze validni JSON.',
             'input' => $prompt,
             'generation_config' => ['temperature' => 0.45],
         ], 45);
-        $json = parseJsonObjectFromText(geminiInteractionText($response));
+        $json = parseJsonObjectFromText(aiResearchModelText($config, $response));
         $byEmail = [];
         foreach ((array)($json['contacts'] ?? []) as $row) {
             if (is_array($row) && isset($row['email'])) {
@@ -6462,23 +6594,22 @@ function aiResearchRunDraft(array $config, array $seed, array $plan, array $cont
         return [
             'subject' => 'Subjekt zatim neni pripraveny k osloveni',
             'html' => '<p>Tento subjekt zatim nema dostatek citelneho weboveho kontextu, aby AI dokazala zodpovedne urcit predmet podnikani, vhodne B2B cileni a text oslovení.</p><p>Osloveni se proto nema rozesilat, dokud nebude k dispozici funkcni web nebo jiny popis produktu/sluzby.</p>',
-            'audit' => aiModelAuditEntry($config, 'outreach_draft', 'gemini_research', 'skipped_seed_unsuitable'),
+            'audit' => aiModelAuditEntry($config, 'outreach_draft', 'research', 'skipped_seed_unsuitable'),
         ];
     }
     $acceptedContacts = array_values(array_filter($contacts, static fn($contact) => (string)($contact['status'] ?? 'accepted') === 'accepted'));
     if (!$acceptedContacts) {
         return [
             'subject' => 'Subjekt zatim neni pripraveny k osloveni',
-            'html' => '<p>Pro tento seed subjekt zatim nejsou ulozene zadne vhodne kontakty pro osloveni, proto se finalni text pres Gemini negeneroval.</p>',
-            'audit' => aiModelAuditEntry($config, 'outreach_draft', 'gemini_research', 'skipped_no_accepted_contacts'),
+            'html' => '<p>Pro tento seed subjekt zatim nejsou ulozene zadne vhodne kontakty pro osloveni, proto se finalni text pres AI negeneroval.</p>',
+            'audit' => aiModelAuditEntry($config, 'outreach_draft', 'research', 'skipped_no_accepted_contacts'),
         ];
     }
     $fallbackTarget = trim((string)($contacts[0]['subject_name'] ?? $plan['audience_label'] ?? ''));
     $fallbackSubject = aiResearchFallbackSubject($language, $fallbackTarget);
     $fallbackHtml = aiResearchFallbackEmailHtml($language, $seedBusiness);
-    $apiKey = trim((string)($config['ai']['gemini_api_key'] ?? ''));
-    if ($apiKey === '') {
-        throw new AiResearchTemporaryException('AI outreach_draft nema nastaveny Gemini API klic, beh se neulozil jako fallback.');
+    if (!aiResearchApiIsConfigured($config)) {
+        throw new AiResearchTemporaryException('AI outreach_draft nema nastaveny API klic pro OpenAI ani Gemini.');
     }
     $sampleContacts = array_slice($acceptedContacts ?: $contacts, 0, 5);
     $promptContext = [
@@ -6533,13 +6664,13 @@ function aiResearchRunDraft(array $config, array $seed, array $plan, array $cont
         . "Napis konkretne, s cim seed firma kontakt oslovuje, proc to souvisi s jeho typem byznysu, a navrhni jednoduchy dalsi krok. "
         . "Pokud ve vzorku kontaktu neni zadny prijaty kontakt, stale vytvor text pro audience_label, ale jasne ho ukotvi v keywordu a lokaci.";
     try {
-        $response = aiResearchGeminiCall($config, 'outreach_draft', [
+        $response = aiResearchModelCall($config, 'outreach_draft', [
             'model' => aiResearchModelName($config),
             'system_instruction' => 'Jsi B2B obchodnik. Vystup je pouze validni JSON bez markdownu.',
             'input' => $prompt,
             'generation_config' => ['temperature' => 0.45],
         ], 35);
-        $json = parseJsonObjectFromText(geminiInteractionText($response));
+        $json = parseJsonObjectFromText(aiResearchModelText($config, $response));
         // Starsi jednovariantni odpoved zustava podporena, aby zmena kontraktu nerozbila beh.
         $rawVariants = is_array($json['variants'] ?? null) && $json['variants'] !== []
             ? (array)$json['variants']
@@ -6580,7 +6711,7 @@ function aiResearchRunDraft(array $config, array $seed, array $plan, array $cont
                 'subject' => (string)$usableVariants[0]['subject'],
                 'html' => (string)$usableVariants[0]['html'],
                 'variants' => $usableVariants,
-                'audit' => aiModelAuditEntry($config, 'outreach_draft', 'gemini_research'),
+                'audit' => aiModelAuditEntry($config, 'outreach_draft', 'research'),
             ];
         }
         if ($qualityError) {
@@ -18672,6 +18803,7 @@ function renderApp(PDO $pdo, ?array $flash): void
     <?php if ($view === 'research'): ?>
     <?php
         $researchSettings = loadSettings($pdo);
+        $researchProvider = aiResearchProviderLabel($config);
         $lastResearchRunAt = (int)($researchSettings['ai_research_last_run_at'] ?? 0);
         $researchLockUntil = (int)($researchSettings['ai_research_lock_until'] ?? 0);
         $researchAiNextAllowedAt = (int)($researchSettings['ai_research_next_allowed_at'] ?? 0);
@@ -18699,7 +18831,7 @@ function renderApp(PDO $pdo, ?array $flash): void
             ? 'Právě běží, zámek do ' . formatDateTime(date('c', $researchLockUntil))
             : 'Připraveno k dalšímu běhu.';
         if ($researchLockUntil <= time() && $researchAiNextAllowedAt > time()) {
-            $researchAutomationStatus = 'Gemini je po quota/rate-limit odpovědi odložený do ' . formatDateTime(date('c', $researchAiNextAllowedAt)) . '.';
+            $researchAutomationStatus = $researchProvider . ' je po quota/rate-limit odpovědi odložený do ' . formatDateTime(date('c', $researchAiNextAllowedAt)) . '.';
         }
         $researchNextRunLabel = $nextResearchRunAt > time()
             ? formatDateTime(date('c', $nextResearchRunAt))
@@ -18724,7 +18856,11 @@ function renderApp(PDO $pdo, ?array $flash): void
         if ($researchTab === 'logs') {
             refreshAiResearchPlannedLog($pdo, $config, $researchSettings);
         }
-        $researchLogs = $researchTab === 'logs' ? aiResearchLogEntries($pdo) : [];
+        $researchLogPage = max(1, (int)($_GET['log_page'] ?? 1));
+        $researchLogPageSize = 60;
+        $researchLogs = $researchTab === 'logs' ? aiResearchLogEntries($pdo, $researchLogPage * $researchLogPageSize) : [];
+        $researchLogsTotal = $researchTab === 'logs' ? aiResearchLogCount($pdo) : 0;
+        $researchLogsHasMore = count($researchLogs) < $researchLogsTotal;
         // Prave jeden beh muze mit "pripravuje se", a to jen ve sloupci, kde prace stoji.
         $researchActiveRunId = aiResearchActiveRunId($pdo);
     ?>
@@ -18740,10 +18876,10 @@ function renderApp(PDO $pdo, ?array $flash): void
                 <p>Každý tik cronu se zapíše, i když se nakonec nic nespustí. První řádek je vždy <strong>naplánovaný běh</strong> &ndash; kdy poběží a jestli se bude hledat nový seed, nebo dokončovat odložený. Podle něj se pozná rozdíl mezi „čeká se na interval“ a „automatika stojí“.</p>
                 <p class="muted">Plán cronu: AI research má garantovaný běh <strong>každou hodinu</strong> (Email Campaign Cron ho každých 5 minut může spustit dřív). Sloupec Naplánováno je proto poslední běh + hodina a k němu <strong><?= h((string)(int)(AI_RESEARCH_CRON_TOLERANCE_SECONDS / 60)) ?> minut</strong> na rozptyl GitHubu. Když ten čas propadne, řádek to označí a je to chyba k řešení.</p>
                 <p class="muted">Poslední tik cronu: <strong><?= $researchLastTickAt > 0 ? h(formatDateTime(date('c', $researchLastTickAt))) : 'zatím nezaznamenán' ?></strong><?php if ($researchLastTickAt > 0 && time() - $researchLastTickAt > 1800): ?> &ndash; <strong>to je víc než 30 minut, cron pravděpodobně neběží</strong><?php endif; ?>. Poslední dokončený běh: <?= $lastResearchRunAt > 0 ? h(formatDateTime(date('c', $lastResearchRunAt))) : 'zatím neproběhl' ?>. Stav: <?= h($researchAutomationStatus) ?></p>
-                <p class="muted">Jeden běh má časový limit <?= h((string)AI_RESEARCH_REQUEST_BUDGET_SECONDS) ?> s, protože hosting požadavek ukončí po cca 150 s; co se nestihne, dokončí další cron. Interval mezi běhy: <?= h(aiResearchIntervalLabel($researchIntervalSeconds)) ?>. Gemini rozpočet: <?= h((string)$researchGeminiRpmBudget) ?> requestů/min<?= h($researchDailyBudgetText) ?>, odhad <?= h((string)$researchGeminiRequestsPerSeed) ?> requesty/seed.</p>
-                <p class="muted">Skutečně odeslané Gemini requesty: <?= h((string)$researchRequestsLastMinute) ?> za poslední minutu, <?= h((string)$researchRequestsLastHour) ?> za hodinu, <?= h((string)$researchRequestsLast24h) ?>/<?= h((string)$researchEffectiveDailyBudget) ?> za posledních 24 h. Podle těchto čísel se pozná, zda Google limituje po minutách, nebo po dnech.</p>
+                <p class="muted">Jeden běh má časový limit <?= h((string)AI_RESEARCH_REQUEST_BUDGET_SECONDS) ?> s, protože hosting požadavek ukončí po cca 150 s; co se nestihne, dokončí další cron. Interval mezi běhy: <?= h(aiResearchIntervalLabel($researchIntervalSeconds)) ?>. Aktivní poskytovatel: <strong><?= h($researchProvider) ?></strong>, rozpočet: <?= h((string)$researchGeminiRpmBudget) ?> requestů/min<?= h($researchDailyBudgetText) ?>, odhad <?= h((string)$researchGeminiRequestsPerSeed) ?> requesty/seed.</p>
+                <p class="muted">Skutečně odeslané AI requesty: <?= h((string)$researchRequestsLastMinute) ?> za poslední minutu, <?= h((string)$researchRequestsLastHour) ?> za hodinu, <?= h((string)$researchRequestsLast24h) ?>/<?= h((string)$researchEffectiveDailyBudget) ?> za posledních 24 h.</p>
                 <p class="muted">Vždy běží <strong>jen jeden</strong> běh: dokud předchozí neskončí, další tik cronu se přeskočí (řádek <em>přeskočeno</em>). Běh nemůže žít déle než <?= h((string)(int)(aiResearchRunMaxLifetimeSeconds() / 60)) ?> min &ndash; hosting požadavek ukončí &ndash; a takový řádek se pak uzavře jako <em>přerušeno</em>; rozdělanou práci dokončí další cron. Barvy stavů: <?= statusBadge('naplanovano') ?> čeká na svůj čas, <?= statusBadge('bezi') ?> právě pracuje, <?= statusBadge('hotovo') ?> dokončeno, <?= statusBadge('odlozeno') ?> pokračuje příště, <?= statusBadge('chyba') ?> chyba.</p>
-                <p class="muted">Sloupce <strong>Req.</strong> a <strong>Tokeny</strong> ukazují u dokončeného běhu i <strong>nulu</strong> &ndash; ta znamená, že běh Gemini vůbec nepotřeboval (typicky se zastavil na nečitelném webu seedu nebo na limitu ještě před prvním dotazem). Proč se běh zastavil, říká sloupec Zpráva; ta uvádí jen co běh zpracoval a proč skončil, kompletní stav kroků je v přehledu.</p>
+                <p class="muted">Sloupce <strong>Req.</strong> a <strong>Tokeny</strong> ukazují u dokončeného běhu i <strong>nulu</strong> &ndash; ta znamená, že běh AI vůbec nepotřeboval (typicky se zastavil na nečitelném webu seedu nebo na limitu ještě před prvním dotazem). Proč se běh zastavil, říká sloupec Zpráva; ta uvádí jen co běh zpracoval a proč skončil, kompletní stav kroků je v přehledu.</p>
             </div>
             <div class="section-actions">
                 <form method="post" class="inline">
@@ -18774,7 +18910,7 @@ function renderApp(PDO $pdo, ?array $flash): void
                         </td>
                         <td><?= h(aiResearchLogKindLabel((string)$logRow['kind'])) ?></td>
                         <td><?= trim((string)$logRow['subject']) !== '' ? h((string)$logRow['subject']) : ((int)$logRow['run_id'] > 0 ? '#' . h((string)$logRow['run_id']) : '-') ?></td>
-                        <td><?= trim((string)$logRow['model']) !== '' ? h(normalizeGeminiModelName((string)$logRow['model'])) : '-' ?></td>
+                        <td><?= trim((string)$logRow['model']) !== '' ? h(aiResearchDisplayModel((string)$logRow['model'])) : '-' ?></td>
                         <?php // Dobehnuty beh ukazuje i nulu: "0" znamena, ze Gemini nebyl vubec potreba nebo se na nej nedostalo, ne ze cislo chybi. ?>
                         <td><?= $logPlanned ? '-' : h((string)(int)$logRow['requests']) ?></td>
                         <td><?= $logPlanned ? '-' : h(number_format((int)$logRow['tokens'], 0, ',', ' ')) ?></td>
@@ -18785,6 +18921,14 @@ function renderApp(PDO $pdo, ?array $flash): void
                 </tbody>
             </table>
         </div>
+        <?php if ($researchLogsHasMore): ?>
+        <form method="get" class="section-actions research-log-load-more">
+            <input type="hidden" name="route" value="research">
+            <input type="hidden" name="tab" value="logs">
+            <input type="hidden" name="log_page" value="<?= h((string)($researchLogPage + 1)) ?>">
+            <button type="submit" class="secondary">Načíst starší historii (<?= h((string)($researchLogsTotal - count($researchLogs))) ?>)</button>
+        </form>
+        <?php endif; ?>
     </section>
     <?php else: ?>
     <section class="panel">
@@ -18793,10 +18937,10 @@ function renderApp(PDO $pdo, ?array $flash): void
                 <h2>AI research administrace</h2>
                 <p>Agent průběžně vybírá nové firmy z Firmy.cz / Vše pro firmy / Praha, projde jejich web, navrhne nejvhodnější B2B cílení včetně klíčového slova a lokality, nascrapuje první dávku kontaktů a připraví dvě varianty oslovení. AI se používá jen na pochopení byznysu, výběr cílovky a texty; scraping kontaktů je čistá automatizace.</p>
                 <p class="muted">Dosažitelné kontakty se počítají <strong>jedním dotazem na katalog</strong>: z první stránky výsledků se přečte, kolik firem katalog na dané klíčové slovo a lokalitu nabízí, a u každé se počítá s dohledatelným e-mailem. Pokud katalog počet neuvádí ani nejde přečíst stránkování, <strong>dopočítá se prohledáním stránek</strong> (půlením intervalu, takže i desetitisíce firem stojí do dvaceti dotazů); dokud dopočet nedoběhne, je číslo označené jako spodní hranice a nikdy podle něj nevyřadíme seed. Sčítá se to napříč všemi katalogy, kde cílení dává smysl. Pokud web seed firmy není ani v angličtině, bere se cílení automaticky jako domácí a AI se na trhy vůbec neptáme; u anglického webu vyhodnotí AI, ve kterých zemích má hledání smysl, a jejich katalogy se do součtu přičtou. Reálně se scrapuje jen prvních <?= h((string)AI_RESEARCH_FIRST_BATCH_CONTACTS) ?> kontaktů pro první dávku.</p>
-                <p class="muted">Automatika se spouští cronem (GitHub plánované běhy se v praxi zpožďují, takže interval bývá delší než 5 minut). Jeden běh má časový limit <?= h((string)AI_RESEARCH_REQUEST_BUDGET_SECONDS) ?> s, protože hosting požadavek ukončí po cca 150 s; co se nestihne, dokončí další cron. Gemini rozpočet: <?= h((string)$researchGeminiRpmBudget) ?> requestů/min<?= h($researchDailyBudgetText) ?>, odhad <?= h((string)$researchGeminiRequestsPerSeed) ?> requesty/seed.</p>
+                <p class="muted">Automatika se spouští cronem (GitHub plánované běhy se v praxi zpožďují, takže interval bývá delší než 5 minut). Jeden běh má časový limit <?= h((string)AI_RESEARCH_REQUEST_BUDGET_SECONDS) ?> s, protože hosting požadavek ukončí po cca 150 s; co se nestihne, dokončí další cron. Aktivní poskytovatel: <strong><?= h($researchProvider) ?></strong>, rozpočet: <?= h((string)$researchGeminiRpmBudget) ?> requestů/min<?= h($researchDailyBudgetText) ?>, odhad <?= h((string)$researchGeminiRequestsPerSeed) ?> requesty/seed.</p>
                 <p class="muted">Poslední automatický běh: <?= $lastResearchRunAt > 0 ? h(formatDateTime(date('c', $lastResearchRunAt))) : 'zatím neproběhl' ?>. Další nejdříve: <?= h($researchNextRunLabel) ?>. Stav: <?= h($researchAutomationStatus) ?></p>
-                <p class="muted">Skutečně odeslané Gemini requesty: <?= h((string)$researchRequestsLastMinute) ?> za poslední minutu, <?= h((string)$researchRequestsLastHour) ?> za hodinu, <?= h((string)$researchRequestsLast24h) ?>/<?= h((string)$researchEffectiveDailyBudget) ?> za posledních 24 h. Podle těchto čísel se pozná, zda Google limituje po minutách, nebo po dnech.</p>
-                <p class="muted">Vhodnost jednotlivých kontaktů se <strong>neposuzuje</strong>: kontakt vrátil katalog přesně na klíčové slovo, lokalitu a trh z plánu, takže cílením už jednou prošel. Šetří to jeden Gemini požadavek na každý seed a do dávky se dostane i firma, kterou by hodnocení podle názvu zbytečně vyřadilo. Jednorázově lze AI validaci spustit u konkrétního běhu v jeho detailu.</p>
+                <p class="muted">Skutečně odeslané AI requesty: <?= h((string)$researchRequestsLastMinute) ?> za poslední minutu, <?= h((string)$researchRequestsLastHour) ?> za hodinu, <?= h((string)$researchRequestsLast24h) ?>/<?= h((string)$researchEffectiveDailyBudget) ?> za posledních 24 h.</p>
+                <p class="muted">Vhodnost jednotlivých kontaktů se <strong>neposuzuje</strong>: kontakt vrátil katalog přesně na klíčové slovo, lokalitu a trh z plánu, takže cílením už jednou prošel. Šetří to jeden AI požadavek na každý seed a do dávky se dostane i firma, kterou by hodnocení podle názvu zbytečně vyřadilo. Jednorázově lze AI validaci spustit u konkrétního běhu v jeho detailu.</p>
                 <p class="muted">Sloupce za návrhy odpovídají <strong>krokům workflow</strong> v tom pořadí, v jakém se odemykají. Zelená fajfka znamená hotový krok, prázdno znamená, že krok ještě nedoběhl; na jednom kroku právě pracuje automatika. Když jsou hotové všechny, je záznam připravený a nemá se už co připravovat.</p>
             </div>
             <div class="section-actions">
@@ -20304,13 +20448,13 @@ function aiResearchGenerateSeedOutreach(array $config, array $run, array $plan, 
         . '5) Zadne floskule typu "ve vasem oboru", "vase cinnost", "dovolujeme si vas oslovit". '
         . '6) 120 az 200 slov, kratke odstavce v <p>, bez podpisu a bez odhlasovaciho odkazu - ty doplnime sami. '
         . '7) Ton: vecny, kolegialni, bez superlativu.';
-    $response = aiResearchGeminiCall($config, 'seed_outreach', [
+    $response = aiResearchModelCall($config, 'seed_outreach', [
         'model' => aiResearchModelName($config),
         'system_instruction' => 'Jsi B2B copywriter. Pises konkretne, k veci a jen o tom, co je v podkladech. Vystup je pouze validni JSON.',
         'input' => $prompt,
         'generation_config' => ['temperature' => 0.5],
     ], 45);
-    $json = parseJsonObjectFromText(geminiInteractionText($response));
+    $json = parseJsonObjectFromText(aiResearchModelText($config, $response));
     $subject = truncatePlainText(trim((string)($json['subject'] ?? '')), 255);
     $html = cleanHtml((string)($json['html'] ?? ''));
     $problem = aiResearchSeedOutreachIsSpecific($subject, $html, $plan, $segment, $countLabel);

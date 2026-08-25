@@ -30,6 +30,12 @@ return [
     'ai' => [
         'openai_api_key' => '',
         'openai_model' => 'gpt-4.1',
+        // Bezpecny vychozi strop pro pravidelny AI research. Hodnoty lze navysit
+        // pres deployment secrets az po overeni nakladu a chovani modelu.
+        'openai_research_rpm_budget' => 10,
+        'openai_research_daily_request_budget' => 120,
+        'openai_research_daily_seed_budget' => 0,
+        'openai_research_requests_per_seed' => 3,
         'gemini_api_key' => '',
         'gemini_model' => 'gemini-3-flash-preview',
         'gemini_research_model' => 'gemini-3-flash-preview',
