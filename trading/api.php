@@ -290,7 +290,9 @@ function state_payload(string $target, array $segments = ['observations', 'evalu
  */
 function paper_state_with_consistent_portfolios(array $payload, string $summary, ?string $selectedStrategyId = null): array
 {
-    $configuredIds = array_keys(load_portfolio_config()['paper'] ?? []);
+    $config = load_portfolio_config();
+    $configuredPaper = is_array($config['paper'] ?? null) ? $config['paper'] : [];
+    $configuredIds = array_keys($configuredPaper);
     if ($configuredIds === []) {
         return $payload;
     }
@@ -303,7 +305,79 @@ function paper_state_with_consistent_portfolios(array $payload, string $summary,
         clearstatcache(true, state_file_paths()['paper']);
         $payload = state_payload('paper', state_segments_for_summary($summary), $selectedStrategyId);
     }
+
+    // Saving a new portfolio changes its rules immediately, while its first scheduled
+    // bot pass may still be minutes away. Return a stable empty account in that gap so
+    // the new row is visible with its own $100 paper capital, rather than disappearing
+    // from the overview or borrowing another portfolio's figures.
+    if (!isset($payload['paperPortfolios']) || !is_array($payload['paperPortfolios'])) {
+        $payload['paperPortfolios'] = [];
+    }
+    foreach ($configuredPaper as $id => $portfolioConfig) {
+        if (!is_array($portfolioConfig) || ($portfolioConfig['archived'] ?? false) === true || isset($payload['paperPortfolios'][$id])) {
+            continue;
+        }
+        $payload['paperPortfolios'][$id] = empty_configured_paper_portfolio((string) $id, $portfolioConfig);
+    }
     return $payload;
+}
+
+/**
+ * Dashboard shape for a saved paper portfolio before its first worker pass. The bot
+ * replaces this transient shape with its fully normalized state on the next run.
+ */
+function empty_configured_paper_portfolio(string $id, array $config): array
+{
+    $initialUsdc = 100.0;
+    $stakeUsdc = is_numeric($config['stakeUsdc'] ?? null) ? (float) $config['stakeUsdc'] : 5.0;
+    $minProbability = is_numeric($config['minProbability'] ?? null) ? (float) $config['minProbability'] : 0.5;
+    $maxResolutionDays = is_numeric($config['maxResolutionDays'] ?? null) ? (int) $config['maxResolutionDays'] : 7;
+    $minLiquidityUsdc = is_numeric($config['minLiquidityUsdc'] ?? null) ? (float) $config['minLiquidityUsdc'] : null;
+    $selectionOrder = (string) ($config['selectionOrder'] ?? 'highest_ev_pa_first');
+    $portfolio = [
+        'initialUsdc' => $initialUsdc,
+        'equityUsdc' => $initialUsdc,
+        'cashUsdc' => $initialUsdc,
+        'freeCapitalUsdc' => $initialUsdc,
+        'openRiskUsdc' => 0.0,
+        'marketValueUsdc' => 0.0,
+        'totalPnlUsdc' => 0.0,
+        'totalPnlPct' => 0.0,
+        'realizedPnlUsdc' => 0.0,
+        'realizedPnlPct' => 0.0,
+        'openPnlUsdc' => 0.0,
+        'openPnlPct' => 0.0,
+        'closedTrades' => 0,
+        'wins' => 0,
+        'stakeUsdc' => $stakeUsdc,
+        'minProbability' => $minProbability,
+        'maxResolutionDays' => $maxResolutionDays,
+        'minLiquidityUsdc' => $minLiquidityUsdc,
+        'minNetYield' => is_numeric($config['minNetYield'] ?? null) ? (float) $config['minNetYield'] : 0.0,
+        'executionTrigger' => (string) ($config['executionTrigger'] ?? 'cron'),
+        'marketType' => (string) ($config['marketType'] ?? 'all'),
+        'probabilitySource' => (string) ($config['probabilitySource'] ?? 'ai'),
+    ];
+
+    return [
+        'id' => $id,
+        'label' => normalize_portfolio_display_name($config['displayName'] ?? null, $id),
+        'displayName' => normalize_portfolio_display_name($config['displayName'] ?? null, $id),
+        'selectionMetric' => $selectionOrder === 'highest_reward_risk_first' ? 'Reward / risk' : 'EV p.a.',
+        'selectionOrder' => $selectionOrder,
+        'minProbability' => $minProbability,
+        'stakeUsdc' => $stakeUsdc,
+        'maxResolutionDays' => $maxResolutionDays,
+        'minLiquidityUsdc' => $minLiquidityUsdc,
+        'minNetYield' => $portfolio['minNetYield'],
+        'executionTrigger' => $portfolio['executionTrigger'],
+        'marketType' => $portfolio['marketType'],
+        'probabilitySource' => $portfolio['probabilitySource'],
+        'portfolio' => $portfolio,
+        'trades' => [],
+        'runLog' => [],
+        'lastDecision' => null,
+    ];
 }
 
 /**

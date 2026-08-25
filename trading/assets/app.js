@@ -6065,6 +6065,9 @@ async function savePortfolioConfigNow() {
     body: JSON.stringify({ config: state.portfolioConfig || defaultPortfolioConfig() }),
   });
   state.portfolioConfig = payload.config || state.portfolioConfig || defaultPortfolioConfig();
+  // A successful create/save must be the version a reload starts from. Keeping the
+  // older cached config here made a just-created portfolio vanish for one page load.
+  writeCachedPortfolioConfig(state.portfolioConfig);
   return state.portfolioConfig;
 }
 
