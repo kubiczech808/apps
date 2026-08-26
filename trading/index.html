@@ -216,6 +216,10 @@
                     <span>Probability &gt;=</span>
                     <input type="number" min="0" max="99" step="1" value="0" data-evaluation-probability-filter>
                   </label>
+                  <label class="threshold-control evaluation-probability-control" data-scraped-only data-opportunity-filter title="Optional upper probability bound for the scraped list. Leave empty to keep every probability above the lower bound.">
+                    <span>Probability &lt;=</span>
+                    <input type="number" min="1" max="100" step="1" placeholder="All" data-evaluation-probability-max-filter>
+                  </label>
                   <label class="threshold-control evaluation-days-control" data-opportunity-filter data-tradability-filter title="Maximum end-date horizon for the scraped view and future Events API scans. Portfolio rules are not changed. A resolved market no longer trades, so this filter is hidden and ignored on the Resolved tab.">
                     <span>Days left max &lt;=</span>
                     <input type="number" min="0" max="3650" step="0.5" placeholder="All" aria-label="Maximum days left" data-evaluation-days-filter>
@@ -348,6 +352,11 @@
           <span>Probability threshold</span>
           <input type="number" min="1" max="99" step="1" value="95" data-eligibility-threshold>
           <strong data-eligibility-threshold-label>95%</strong>
+        </label>
+        <label class="parameter-control">
+          <span>Probability maximum</span>
+          <input type="number" min="1" max="100" step="1" placeholder="No maximum" data-max-eligibility-threshold>
+          <strong data-max-eligibility-threshold-label>No maximum</strong>
         </label>
         <label class="parameter-control">
           <span>Stake per trade</span>

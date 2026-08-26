@@ -11,6 +11,14 @@ function envNumber(name, fallback = null) {
   return Number.isFinite(numeric) ? numeric : fallback;
 }
 
+function optionalProbability(value) {
+  if (value == null || value === "") return null;
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return null;
+  const normalized = numeric > 1 ? numeric / 100 : numeric;
+  return normalized >= 0.01 && normalized <= 1 ? normalized : null;
+}
+
 function envTokenIdSet(name) {
   return new Set(String(process.env[name] || "")
     .split(",")
@@ -32,6 +40,10 @@ const GAMMA_API = process.env.POLYMARKET_GAMMA_API || "https://gamma-api.polymar
 const CLOB_HOST = process.env.POLYMARKET_HOST || "https://clob.polymarket.com";
 const CHAIN_ID = Number(process.env.POLYMARKET_CHAIN_ID || 137);
 const MIN_PROBABILITY = envNumber("LIVE_MIN_PROBABILITY", envNumber("PAPER_MIN_PROBABILITY", 0.95));
+const configuredMaxProbability = optionalProbability(process.env.LIVE_MAX_PROBABILITY);
+const MAX_PROBABILITY = configuredMaxProbability != null && configuredMaxProbability >= MIN_PROBABILITY
+  ? configuredMaxProbability
+  : null;
 const PORTFOLIO_MARKET_TYPE = normalizePortfolioMarketType(
   process.env.LIVE_MARKET_TYPE,
   String(process.env.LIVE_REQUIRE_MOST_PROBABLE || "").toLowerCase() === "true",
@@ -787,6 +799,8 @@ function prefilterLiveCandidate(item) {
     reasons.push(`missing ${probabilitySourceLabel().toLowerCase()}`);
   } else if (qualificationProbability < MIN_PROBABILITY) {
     reasons.push(`${probabilitySourceLabel()} ${(qualificationProbability * 100).toFixed(1)}% below live threshold ${(MIN_PROBABILITY * 100).toFixed(1)}%`);
+  } else if (MAX_PROBABILITY != null && qualificationProbability > MAX_PROBABILITY) {
+    reasons.push(`${probabilitySourceLabel()} ${(qualificationProbability * 100).toFixed(1)}% above live maximum ${(MAX_PROBABILITY * 100).toFixed(1)}%`);
   }
   const annualizedReturn = selectedAnnualizedReturn(item);
   if (!Number.isFinite(annualizedReturn)) {
@@ -2312,7 +2326,8 @@ function rotationHumanComparison(review) {
 }
 
 function scoreEconomics({ probability, qualificationProbability, annualizedReturn, netYield, edge, spread, volume24hr, volumeUsdc, liquidity, endOk }) {
-  const probabilityOk = qualificationProbability >= MIN_PROBABILITY;
+  const probabilityOk = qualificationProbability >= MIN_PROBABILITY
+    && (MAX_PROBABILITY == null || qualificationProbability <= MAX_PROBABILITY);
   const opportunityOk = probability >= OPPORTUNITY_MIN_PROBABILITY
     && edge >= OPPORTUNITY_MIN_EDGE
     && annualizedReturn >= OPPORTUNITY_MIN_ANNUAL_RETURN;
@@ -2330,7 +2345,9 @@ function scoreEconomics({ probability, qualificationProbability, annualizedRetur
     thesisType: probabilityOk ? "HIGH_CONFIDENCE" : (opportunityOk ? "EDGE_OPPORTUNITY_BELOW_LIVE_THRESHOLD" : "REJECTED"),
     rejectReasons: [
       endOk ? null : "event end date is in the past",
-      probabilityOk ? null : `${probabilitySourceLabel()} ${(qualificationProbability * 100).toFixed(1)}% below live threshold ${(MIN_PROBABILITY * 100).toFixed(1)}%`,
+      probabilityOk ? null : (qualificationProbability < MIN_PROBABILITY
+        ? `${probabilitySourceLabel()} ${(qualificationProbability * 100).toFixed(1)}% below live threshold ${(MIN_PROBABILITY * 100).toFixed(1)}%`
+        : `${probabilitySourceLabel()} ${(qualificationProbability * 100).toFixed(1)}% above live maximum ${(MAX_PROBABILITY * 100).toFixed(1)}%`),
       annualizedReturn <= 0
         ? `${probabilitySourceLabel()} ${returnMetricLabel()} ${(annualizedReturn * 100).toFixed(1)}% is non-profitable after fees`
         : (returnOk ? null : `${probabilitySourceLabel()} ${returnMetricLabel()} ${(annualizedReturn * 100).toFixed(1)}% below ${(minimumAnnualizedReturn * 100).toFixed(1)}%`),
@@ -2908,8 +2925,9 @@ async function runFixedEntryBatch({ checked, liveState, tradingConfig, cash, ava
       note("this token is already held");
       continue;
     }
-    if (!Number.isFinite(facts.marketProbability) || facts.marketProbability < MIN_PROBABILITY) {
-      note(`probability ${Number.isFinite(facts.marketProbability) ? (facts.marketProbability * 100).toFixed(1) : "-"}% below ${(MIN_PROBABILITY * 100).toFixed(1)}%`);
+    if (!Number.isFinite(facts.marketProbability) || facts.marketProbability < MIN_PROBABILITY
+      || (MAX_PROBABILITY != null && facts.marketProbability > MAX_PROBABILITY)) {
+      note(`probability ${Number.isFinite(facts.marketProbability) ? (facts.marketProbability * 100).toFixed(1) : "-"}% is outside ${MAX_PROBABILITY == null ? `the ${(MIN_PROBABILITY * 100).toFixed(1)}% minimum` : `${(MIN_PROBABILITY * 100).toFixed(1)}-${(MAX_PROBABILITY * 100).toFixed(1)}% range`}`);
       continue;
     }
     // Resting below the market is the entire point, so a candidate already trading
@@ -4363,6 +4381,7 @@ async function main() {
       postOnly: POST_ONLY,
       orderSizeMode: ORDER_SIZE_MODE,
       minProbability: MIN_PROBABILITY,
+      maxProbability: MAX_PROBABILITY,
       marketType: PORTFOLIO_MARKET_TYPE,
       probabilitySource: PROBABILITY_SOURCE,
       minAnnualReturn: MIN_ANNUAL_RETURN,
@@ -4422,6 +4441,7 @@ async function main() {
       humanReason: rotationHumanReason || null,
       settings: {
         minProbability: MIN_PROBABILITY,
+        maxProbability: MAX_PROBABILITY,
         marketType: PORTFOLIO_MARKET_TYPE,
         probabilitySource: PROBABILITY_SOURCE,
         minAnnualReturn: MIN_ANNUAL_RETURN,

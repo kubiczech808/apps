@@ -331,6 +331,7 @@ function empty_configured_paper_portfolio(string $id, array $config): array
     $initialUsdc = 100.0;
     $stakeUsdc = is_numeric($config['stakeUsdc'] ?? null) ? (float) $config['stakeUsdc'] : 5.0;
     $minProbability = is_numeric($config['minProbability'] ?? null) ? (float) $config['minProbability'] : 0.5;
+    $maxProbability = normalize_optional_probability_value($config['maxProbability'] ?? null);
     $maxResolutionDays = is_numeric($config['maxResolutionDays'] ?? null) ? (int) $config['maxResolutionDays'] : 7;
     $minLiquidityUsdc = is_numeric($config['minLiquidityUsdc'] ?? null) ? (float) $config['minLiquidityUsdc'] : null;
     $selectionOrder = (string) ($config['selectionOrder'] ?? 'highest_ev_pa_first');
@@ -351,6 +352,7 @@ function empty_configured_paper_portfolio(string $id, array $config): array
         'wins' => 0,
         'stakeUsdc' => $stakeUsdc,
         'minProbability' => $minProbability,
+        'maxProbability' => $maxProbability,
         'maxResolutionDays' => $maxResolutionDays,
         'minLiquidityUsdc' => $minLiquidityUsdc,
         'minNetYield' => is_numeric($config['minNetYield'] ?? null) ? (float) $config['minNetYield'] : 0.0,
@@ -366,6 +368,7 @@ function empty_configured_paper_portfolio(string $id, array $config): array
         'selectionMetric' => $selectionOrder === 'highest_reward_risk_first' ? 'Reward / risk' : 'EV p.a.',
         'selectionOrder' => $selectionOrder,
         'minProbability' => $minProbability,
+        'maxProbability' => $maxProbability,
         'stakeUsdc' => $stakeUsdc,
         'maxResolutionDays' => $maxResolutionDays,
         'minLiquidityUsdc' => $minLiquidityUsdc,
@@ -1548,6 +1551,22 @@ function normalize_probability_value(mixed $value, float $fallback): float
     return max(0.01, min(0.99, $probability));
 }
 
+/**
+ * Optional upper probability bound. Unlike a minimum threshold it may be empty,
+ * and 100% is a valid human-facing end of a reporting band.
+ */
+function normalize_optional_probability_value(mixed $value): ?float
+{
+    if ($value === null || $value === '' || !is_numeric($value)) {
+        return null;
+    }
+    $probability = (float) $value;
+    if ($probability > 1) {
+        $probability /= 100;
+    }
+    return max(0.01, min(1.0, $probability));
+}
+
 function normalize_fraction_value(mixed $value, float $fallback): float
 {
     if (!is_numeric($value)) {
@@ -1771,12 +1790,18 @@ function normalize_strategy_config(array $input, array $defaults): array
     } else {
         $stopLossRiskMultiplier = $defaultStopLossRiskMultiplier;
     }
+    $minProbability = normalize_probability_value($input['minProbability'] ?? null, (float) $defaults['minProbability']);
+    $maxProbability = normalize_optional_probability_value($input['maxProbability'] ?? ($defaults['maxProbability'] ?? null));
+    if ($maxProbability !== null && $maxProbability < $minProbability) {
+        $maxProbability = $minProbability;
+    }
     return [
         'displayName' => normalize_portfolio_display_name(
             $input['displayName'] ?? $defaults['displayName'],
             (string) $defaults['displayName']
         ),
-        'minProbability' => normalize_probability_value($input['minProbability'] ?? null, (float) $defaults['minProbability']),
+        'minProbability' => $minProbability,
+        'maxProbability' => $maxProbability,
         'stakeUsdc' => normalize_stake_usdc_value($input['stakeUsdc'] ?? null, (float) ($defaults['stakeUsdc'] ?? 5.0)),
         // Kept for backward compatibility with older workflow inputs and archived
         // states. New sizing uses the fixed stakeUsdc field above.
@@ -3163,6 +3188,13 @@ try {
             // The links carry whole percent, matching the stored probability ladder.
             $minProbability = max(0.0, min(1.0, ((float) $_GET['probability']) / 100));
         }
+        $maxProbability = null;
+        if (isset($_GET['maxProbability']) && is_numeric($_GET['maxProbability'])) {
+            $maxProbability = max(0.0, min(1.0, ((float) $_GET['maxProbability']) / 100));
+            if ($maxProbability < $minProbability) {
+                $maxProbability = $minProbability;
+            }
+        }
         $rowLimit = 4000;
         if (isset($_GET['limit']) && is_numeric($_GET['limit'])) {
             $rowLimit = (int) max(1, min(8000, (int) $_GET['limit']));
@@ -3219,6 +3251,7 @@ try {
             $wantsResolved,
             $wantsOpen,
             $minProbability,
+            $maxProbability,
             $rowLimit,
             &$matched,
             &$matchedResolved,
@@ -3232,7 +3265,7 @@ try {
             $entry = simulation_entry_probability($item);
             // The simulation cannot price a row that never carried a live quote, so it
             // counts none of them; listing them would again outnumber the statistic.
-            if ($entry === null || $entry < $minProbability) {
+            if ($entry === null || $entry < $minProbability || ($maxProbability !== null && $entry > $maxProbability)) {
                 return true;
             }
             $labels = simulation_taxonomy_labels($item, $firstField, $currentField);
@@ -3274,6 +3307,7 @@ try {
             'value' => $value,
             'statuses' => $statuses,
             'minProbability' => $minProbability,
+            'maxProbability' => $maxProbability,
             'marketObservations' => $rows,
             'matched' => $matched,
             'matchedResolved' => $matchedResolved,

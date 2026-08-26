@@ -59,6 +59,7 @@ const state = {
   scrapedRefreshKeys: new Set(),
   scrapedRefreshErrors: new Map(),
   evaluationProbabilityFilter: 0,
+  evaluationProbabilityMaxFilter: null,
   evaluationDaysFilter: null,
   evaluationNetYieldFilter: 0,
   evaluationLiquidityFilter: 0,
@@ -174,6 +175,7 @@ const SCRAPED_TAXONOMY_KIND_QUERY_PARAM = "taxonomy";
 const SCRAPED_TAXONOMY_VALUE_QUERY_PARAM = "taxonomyValue";
 const SCRAPED_STATUS_QUERY_PARAM = "statuses";
 const SCRAPED_PROBABILITY_QUERY_PARAM = "probability";
+const SCRAPED_MAX_PROBABILITY_QUERY_PARAM = "maxProbability";
 const SCRAPED_MAX_DAYS_QUERY_PARAM = "maxDays";
 const SCRAPED_MARKET_TYPE_QUERY_PARAM = "marketType";
 const RISK_ALLOCATION_STORAGE_KEY = "tradingStakeUsdc";
@@ -264,6 +266,7 @@ const els = {
   calculationReport: document.querySelector("[data-calculation-report]"),
   systemStatus: document.querySelector("[data-system-status]"),
   evaluationProbabilityFilter: document.querySelector("[data-evaluation-probability-filter]"),
+  evaluationProbabilityMaxFilter: document.querySelector("[data-evaluation-probability-max-filter]"),
   evaluationDaysFilter: document.querySelector("[data-evaluation-days-filter]"),
   tradabilityFilterControls: document.querySelectorAll("[data-tradability-filter]"),
   evaluationNetYieldFilter: document.querySelector("[data-evaluation-net-yield-filter]"),
@@ -280,6 +283,8 @@ const els = {
   portfolioAccountTypeNote: document.querySelector("[data-portfolio-account-type-note]"),
   eligibilityThreshold: document.querySelector("[data-eligibility-threshold]"),
   eligibilityThresholdLabel: document.querySelector("[data-eligibility-threshold-label]"),
+  maxEligibilityThreshold: document.querySelector("[data-max-eligibility-threshold]"),
+  maxEligibilityThresholdLabel: document.querySelector("[data-max-eligibility-threshold-label]"),
   riskAllocation: document.querySelector("[data-risk-allocation]"),
   riskAllocationLabel: document.querySelector("[data-risk-allocation-label]"),
   riskAllocationValue: document.querySelector("[data-risk-allocation-value]"),
@@ -685,6 +690,7 @@ function defaultPortfolioConfig() {
       conservative: {
         displayName: "Conservative",
         minProbability: 0.95,
+        maxProbability: null,
         stakeUsdc: 5,
         maxOrderFraction: 0.05,
         maxResolutionDays: 7,
@@ -706,6 +712,7 @@ function defaultPortfolioConfig() {
       highReward: {
         displayName: "High reward",
         minProbability: 0.6,
+        maxProbability: null,
         stakeUsdc: 5,
         maxOrderFraction: 0.05,
         maxResolutionDays: DEFAULT_MAX_RESOLUTION_DAYS,
@@ -727,6 +734,7 @@ function defaultPortfolioConfig() {
       moreProbable: {
         displayName: "More probable",
         minProbability: 0.6,
+        maxProbability: null,
         stakeUsdc: 5,
         maxOrderFraction: 0.05,
         maxResolutionDays: 7,
@@ -748,6 +756,7 @@ function defaultPortfolioConfig() {
       equal: {
         displayName: "Equal",
         minProbability: 0.75,
+        maxProbability: null,
         stakeUsdc: 5,
         maxOrderFraction: 0.05,
         maxResolutionDays: 7,
@@ -772,6 +781,7 @@ function defaultPortfolioConfig() {
     live: {
       displayName: "Live",
       minProbability: 0.95,
+      maxProbability: null,
       stakeUsdc: 5,
       maxOrderFraction: 0.05,
       maxResolutionDays: DEFAULT_MAX_RESOLUTION_DAYS,
@@ -797,6 +807,7 @@ function defaultPortfolioConfig() {
     live5050: {
       displayName: "5050",
       minProbability: 0.9,
+      maxProbability: null,
       fixedEntryPrice: 0.5,
       stakePerOrderUsdc: null,
       stakeUsdc: 5,
@@ -1490,16 +1501,21 @@ function normalizeScrapedMarketType(value) {
 function scrapedRuleFiltersFromRoute(search = window.location.search) {
   const params = new URLSearchParams(search || "");
   const probabilityRaw = Number(params.get(SCRAPED_PROBABILITY_QUERY_PARAM));
+  const maxProbabilityRaw = Number(params.get(SCRAPED_MAX_PROBABILITY_QUERY_PARAM));
   const daysRaw = params.get(SCRAPED_MAX_DAYS_QUERY_PARAM);
   const marketTypeExplicit = params.has(SCRAPED_MARKET_TYPE_QUERY_PARAM);
   return {
     probabilityFilter: Number.isFinite(probabilityRaw)
       ? normalizeEvaluationProbabilityFilter(probabilityRaw / 100)
       : null,
+    maxProbabilityFilter: Number.isFinite(maxProbabilityRaw) && maxProbabilityRaw > 0
+      ? Math.min(Math.max(maxProbabilityRaw / 100, 0.01), 1)
+      : null,
     daysFilter: daysRaw == null ? null : normalizeEvaluationDaysFilter(daysRaw),
     marketType: normalizeScrapedMarketType(params.get(SCRAPED_MARKET_TYPE_QUERY_PARAM)),
     marketTypeExplicit,
     hasRuleFilters: params.has(SCRAPED_PROBABILITY_QUERY_PARAM)
+      || params.has(SCRAPED_MAX_PROBABILITY_QUERY_PARAM)
       || params.has(SCRAPED_MAX_DAYS_QUERY_PARAM)
       || marketTypeExplicit,
   };
@@ -1529,9 +1545,11 @@ function scrapedTaxonomyOpportunityPath(filter = state.scrapedTaxonomyFilter, op
   }
   if (rule) {
     const probabilityFilter = normalizeEvaluationProbabilityFilter(rule.probabilityFilter);
+    const maxProbabilityFilter = normalizeOptionalProbability(rule.maxProbabilityFilter);
     const daysFilter = normalizeEvaluationDaysFilter(rule.daysFilter);
     const marketType = normalizeScrapedMarketType(rule.marketType);
     if (probabilityFilter > 0) query.set(SCRAPED_PROBABILITY_QUERY_PARAM, String(Math.round(probabilityFilter * 100)));
+    if (maxProbabilityFilter != null) query.set(SCRAPED_MAX_PROBABILITY_QUERY_PARAM, String(Math.round(maxProbabilityFilter * 100)));
     if (daysFilter != null) query.set(SCRAPED_MAX_DAYS_QUERY_PARAM, String(daysFilter));
     if (marketType !== "all") query.set(SCRAPED_MARKET_TYPE_QUERY_PARAM, marketType);
   }
@@ -1544,6 +1562,7 @@ function scrapedRuleOpportunityPath(row, taxonomyFilter = null) {
     statuses: ["SCRAPED"],
     rule: {
       probabilityFilter: Number(row?.threshold || 0),
+      maxProbabilityFilter: row?.maxProbability,
       daysFilter: row?.maxResolutionDays,
       marketType: row?.marketType,
     },
@@ -1555,6 +1574,7 @@ function scrapedResolvedRuleOpportunityPath(row, taxonomyFilter = null) {
     statuses: ["RESOLVED"],
     rule: {
       probabilityFilter: Number(row?.threshold || 0),
+      maxProbabilityFilter: row?.maxProbability,
       daysFilter: row?.maxResolutionDays,
       marketType: row?.marketType,
     },
@@ -1564,7 +1584,7 @@ function scrapedResolvedRuleOpportunityPath(row, taxonomyFilter = null) {
 function scrapedTaxonomyProbabilityRule(row) {
   const minimumProbability = Number(row?.minimumProbability);
   return Number.isFinite(minimumProbability) && minimumProbability > 0
-    ? { probabilityFilter: minimumProbability }
+    ? { probabilityFilter: minimumProbability, maxProbabilityFilter: row?.maxProbability }
     : null;
 }
 
@@ -1810,11 +1830,13 @@ function scrapedTaxonomyDrilldownRequest() {
   if (!taxonomy) return null;
   const routeFilter = state.scrapedRouteFilter;
   const probabilityFilter = routeFilter ? routeFilter.probabilityFilter : currentEvaluationProbabilityFilter();
+  const maxProbability = routeFilter ? routeFilter.maxProbabilityFilter : state.evaluationProbabilityMaxFilter;
   return {
     kind: taxonomy.kind,
     value: taxonomy.label,
     statuses: normalizeScrapedStatuses(routeFilter ? routeFilter.statuses : state.scrapedStatuses),
     probability: Math.round(Math.max(0, Number(probabilityFilter) || 0) * 100),
+    maxProbability: maxProbability == null ? null : Math.round(Math.min(1, Number(maxProbability)) * 100),
   };
 }
 
@@ -1844,7 +1866,8 @@ async function loadScrapedTaxonomyRows() {
       + `&kind=${encodeURIComponent(request.kind)}`
       + `&value=${encodeURIComponent(request.value)}`
       + `&statuses=${encodeURIComponent(request.statuses.join(","))}`
-      + `&probability=${encodeURIComponent(String(request.probability))}`);
+      + `&probability=${encodeURIComponent(String(request.probability))}`
+      + (request.maxProbability == null ? "" : `&maxProbability=${encodeURIComponent(String(request.maxProbability))}`));
     if (state.scrapedTaxonomyRowsPending !== key) return;
     state.scrapedTaxonomyRows = {
       rows: Array.isArray(payload.marketObservations) ? payload.marketObservations : [],
@@ -1939,6 +1962,7 @@ function syncScrapedMarketTypeFilterControl() {
 
 function resetScrapedOpportunityFilters() {
   state.evaluationProbabilityFilter = 0;
+  state.evaluationProbabilityMaxFilter = null;
   state.evaluationDaysFilter = null;
   state.evaluationNetYieldFilter = 0;
   state.evaluationLiquidityFilter = 0;
@@ -1949,6 +1973,7 @@ function resetScrapedOpportunityFilters() {
   saveEvaluationLiquidityFilter(0);
   persistScrapedScanPreferences();
   syncEvaluationProbabilityFilterControl();
+  if (els.evaluationProbabilityMaxFilter) els.evaluationProbabilityMaxFilter.value = "";
   syncEvaluationDaysFilterControl();
   syncEvaluationNetYieldFilterControl();
   syncEvaluationLiquidityFilterControl();
@@ -1961,6 +1986,7 @@ function applyScrapedTaxonomyRouteFilter(filter, statuses = ["SCRAPED"], ruleFil
   state.scrapedRouteFilter = {
     statuses: normalizedStatuses,
     probabilityFilter: ruleFilters?.hasRuleFilters ? (ruleFilters.probabilityFilter ?? 0) : 0,
+    maxProbabilityFilter: ruleFilters?.hasRuleFilters ? (ruleFilters.maxProbabilityFilter ?? null) : null,
     daysFilter: ruleFilters?.hasRuleFilters ? ruleFilters.daysFilter : null,
     marketType: ruleFilters?.hasRuleFilters ? normalizeScrapedMarketType(ruleFilters.marketType) : "all",
     marketTypeExplicit: Boolean(ruleFilters?.marketTypeExplicit),
@@ -1968,11 +1994,13 @@ function applyScrapedTaxonomyRouteFilter(filter, statuses = ["SCRAPED"], ruleFil
   setScrapedStatuses(normalizedStatuses, { render: false });
   if (ruleFilters?.hasRuleFilters) {
     state.evaluationProbabilityFilter = ruleFilters.probabilityFilter ?? 0;
+    state.evaluationProbabilityMaxFilter = ruleFilters.maxProbabilityFilter ?? null;
     state.evaluationDaysFilter = ruleFilters.daysFilter;
     state.evaluationNetYieldFilter = 0;
     state.evaluationLiquidityFilter = 0;
     state.scrapedMarketTypeFilter = normalizeScrapedMarketType(ruleFilters.marketType);
     syncEvaluationProbabilityFilterControl();
+    if (els.evaluationProbabilityMaxFilter) els.evaluationProbabilityMaxFilter.value = state.evaluationProbabilityMaxFilter == null ? "" : String(Math.round(state.evaluationProbabilityMaxFilter * 100));
     syncEvaluationDaysFilterControl();
     syncEvaluationNetYieldFilterControl();
     syncEvaluationLiquidityFilterControl();
@@ -4314,6 +4342,7 @@ function syncPortfolioParameterControls(configOverride = null, options = {}) {
   const order = normalizeSelectionOrder(config.selectionOrder);
   const isLive = LIVE_MODES.has(normalizeMode(mode));
   const threshold = normalizeEligibilityThreshold(config.minProbability) ?? thresholdDefaultForMode(mode);
+  const maxThreshold = normalizeOptionalProbability(config.maxProbability);
   const allocation = normalizeRiskAllocation(config.stakeUsdc) ?? DEFAULT_RISK_ALLOCATION;
   const limitOrders = config.useLimitOrders ?? isLive;
   const capitalContext = options.capitalContext || parameterCapitalContextForMode(mode);
@@ -4336,6 +4365,8 @@ function syncPortfolioParameterControls(configOverride = null, options = {}) {
   }
   if (els.eligibilityThreshold) els.eligibilityThreshold.value = String(Math.round(threshold * 100));
   if (els.eligibilityThresholdLabel) els.eligibilityThresholdLabel.textContent = probability(threshold);
+  if (els.maxEligibilityThreshold) els.maxEligibilityThreshold.value = maxThreshold == null ? "" : String(Math.round(maxThreshold * 100));
+  if (els.maxEligibilityThresholdLabel) els.maxEligibilityThresholdLabel.textContent = maxThreshold == null ? "No maximum" : probability(maxThreshold);
   syncDraftRiskAllocationControl(allocation, capitalContext);
   if (els.limitOrders) els.limitOrders.checked = Boolean(limitOrders);
   if (els.maxResolutionDays) els.maxResolutionDays.value = String(maxDays);
@@ -4471,6 +4502,8 @@ function portfolioPrefillFromDataset(dataset = {}) {
   if (name) prefill.displayName = normalizePortfolioName(name, "");
   const probability = Number(read("probability"));
   if (Number.isFinite(probability) && probability > 0 && probability < 1) prefill.minProbability = probability;
+  const maxProbability = Number(read("maxProbability"));
+  if (Number.isFinite(maxProbability) && maxProbability > 0 && maxProbability <= 1) prefill.maxProbability = maxProbability;
   const days = Number(read("days"));
   if (Number.isFinite(days) && days > 0) prefill.maxResolutionDays = Math.round(days);
   const marketType = read("marketType");
@@ -4812,6 +4845,14 @@ function closeParameterModal() {
   openParameterModal.lastTrigger = null;
 }
 
+function normalizeOptionalProbability(value) {
+  if (value == null || value === "") return null;
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return null;
+  const normalized = numeric > 1 ? numeric / 100 : numeric;
+  return normalized >= 0.01 && normalized <= 1 ? normalized : null;
+}
+
 function parameterDraftFromControls(baseDraft = {}) {
   const draft = { ...baseDraft };
   const hasValue = (element) => element && !parameterDraftInputIsEmpty(element);
@@ -4823,6 +4864,12 @@ function parameterDraftFromControls(baseDraft = {}) {
   if (hasValue(els.eligibilityThreshold)) {
     const value = normalizeEligibilityThreshold(numberValue(els.eligibilityThreshold) / 100);
     if (value != null) draft.minProbability = value;
+  }
+  if (els.maxEligibilityThreshold) {
+    const maxProbability = normalizeOptionalProbability(els.maxEligibilityThreshold.value);
+    draft.maxProbability = maxProbability != null && maxProbability >= Number(draft.minProbability ?? 0)
+      ? maxProbability
+      : null;
   }
   if (hasValue(els.riskAllocation)) {
     const value = normalizeRiskAllocation(numberValue(els.riskAllocation));
@@ -7011,6 +7058,13 @@ function stakeSizingRuleValue(mode, portfolio = {}) {
   return `${money(stake)} fixed per trade`;
 }
 
+function probabilityRangeRuleValue(config = {}, fallback = null) {
+  const lower = normalizeEligibilityThreshold(config.minProbability) ?? fallback ?? 0;
+  const upper = normalizeOptionalProbability(config.maxProbability);
+  const source = probabilitySourceLabel(config.probabilitySource);
+  return upper == null ? `${source} >= ${percent(lower)}` : `${source} ${percent(lower)}-${percent(upper)}`;
+}
+
 function portfolioRuleRows(portfolio = {}) {
   const mode = portfolio.id ? paperModeFromStrategyId(portfolio.id) : state.mode;
   const config = portfolioConfigForMode(mode);
@@ -7024,7 +7078,7 @@ function portfolioRuleRows(portfolio = {}) {
     : `Highest ${returnMetric}, then shorter resolution and net gain`;
   const resolution = `Max ${maxResolutionDays.toLocaleString("en-US", { maximumFractionDigits: 0 })} days`;
   const rows = [
-    ["Probability threshold", `${probabilitySourceLabel(config.probabilitySource)} >= ${percent(threshold)}`],
+    ["Probability threshold", probabilityRangeRuleValue(config, threshold)],
     ["Stake sizing", stakeSizingRuleValue(mode, portfolio)],
     ["Resolution filter", resolution],
     ["Trade priority", priority],
@@ -7074,7 +7128,7 @@ function livePortfolioRuleRows() {
     ? `Highest reward/risk, then shorter resolution and ${returnMetric}`
     : `Highest ${returnMetric}, then shorter resolution and net gain`;
   return [
-    ["Probability threshold", `${probabilitySourceLabel(config.probabilitySource)} >= ${percent(currentEligibilityThreshold())}`],
+    ["Probability threshold", probabilityRangeRuleValue(config, currentEligibilityThreshold())],
     ["Stake sizing", stakeSizingRuleValue("live", state.liveState?.portfolio)],
     ["Resolution filter", `Max ${maxResolutionDays} days`],
     ["Trade priority", priority],
@@ -9057,6 +9111,7 @@ function renderScrapedOpportunities() {
   const observations = drilldown ? drilldown.rows : catalogue;
   const routeFilter = state.scrapedRouteFilter;
   const probabilityFilter = routeFilter ? routeFilter.probabilityFilter : currentEvaluationProbabilityFilter();
+  const maxProbabilityFilter = routeFilter ? routeFilter.maxProbabilityFilter : normalizeOptionalProbability(state.evaluationProbabilityMaxFilter);
   const daysFilter = routeFilter ? routeFilter.daysFilter : currentEvaluationDaysFilter();
   const minNetYield = currentEvaluationNetYieldFilter();
   const minLiquidity = currentEvaluationLiquidityFilter();
@@ -9089,6 +9144,7 @@ function renderScrapedOpportunities() {
     if (!drilldown) {
       const filterProbability = Number(isResolved ? scrapedEntryProbability(item) : scrapedDisplayProbability(item));
       if (probabilityFilter > 0 && (!Number.isFinite(filterProbability) || filterProbability < probabilityFilter)) return false;
+      if (maxProbabilityFilter != null && (!Number.isFinite(filterProbability) || filterProbability > maxProbabilityFilter)) return false;
       // The simulation cannot price a row with no live quote ever recorded, so it counts
       // none -- and a resolved list that shows them would again outnumber its own statistic.
       if (isResolved && scrapedEntryProbability(item) == null) return false;
@@ -9109,6 +9165,7 @@ function renderScrapedOpportunities() {
     statuses: selectedStatuses,
     taxonomy: taxonomyFilter,
     probabilityFilter,
+    maxProbabilityFilter,
     daysFilter,
     minNetYield,
     minLiquidity,
@@ -10580,11 +10637,11 @@ function calculationSortValue(row, key) {
   };
   if (key === "marketType") return calculationMarketLabel(row.marketType).toLowerCase();
   if (key === "threshold") return numeric(row.threshold);
+  if (key === "probabilityRange") return numeric(row.threshold) * 100 + (row.maxProbability == null ? 0.99 : Number(row.maxProbability));
   if (key === "maxResolutionDays") return numeric(row.maxResolutionDays);
   if (key === "openCount") return numeric(row.openCount ?? 0);
   if (key === "trades") return numeric(row.trades ?? 0);
   if (key === "accuracy") return numeric(row.winRate);
-  if (key === "bandAccuracy") return numeric(row.bandWinRate);
   if (key === "stake") return numeric(row.resolvedStakeUsdc ?? row.stakeUsdc ?? 0);
   if (key === "pnl") return numeric(row.pnlUsdc ?? 0);
   if (key === "roi") return numeric(row.roi);
@@ -10651,10 +10708,8 @@ function taxonomySortValue(row, key) {
   };
   if (key === "label") return String(row.label || "").toLowerCase();
   if (key === "minimumProbability") return numeric(row.minimumProbability);
+  if (key === "probabilityRange") return numeric(row.minimumProbability) * 100 + (row.maxProbability == null ? 0.99 : Number(row.maxProbability));
   if (key === "accuracy") return numeric(row.winRate);
-  // The band's own rate, so ordering by it ranks what a floor-and-reward/risk portfolio
-  // would actually experience rather than the floor's inflated headline.
-  if (key === "bandAccuracy") return numeric(row.bandWinRate);
   if (key === "stake") return numeric(row.resolvedStakeUsdc ?? row.stakeUsdc ?? 0);
   if (key === "pnl") return numeric(row.pnlUsdc ?? 0);
   if (key === "lastResolvedAt") return Date.parse(row.lastResolvedAt || "") || null;
@@ -10726,30 +10781,11 @@ function taxonomyRows(report, kind) {
   });
 }
 
-// What entries inside this row's own band did, next to what the floor row claims.
-//
-// A threshold row keeps everything at or above its floor, so its headline accuracy belongs
-// to a population averaging far higher than the floor -- the reported case was a 60% row
-// reading 90.5% whose own 60-65% band wins 64.9%. Any portfolio ranking by reward/risk lives
-// entirely in the band, since reward per dollar risked is (1-p)/p and is greatest at the
-// floor, so the band is the number that predicts what it will experience.
-//
-// The top row's band is open-ended and identical to its floor, which is stated rather than
-// repeated as if it were a second measurement.
-function bandAccuracyCell(row) {
-  const resolved = Number(row?.bandResolved || 0);
-  const upper = Number(row?.bandUpperThreshold);
-  if (!Number.isFinite(upper)) return '<span class="metric-note">top band</span>';
-  if (!resolved) return "-";
-  const wins = Number(row?.bandWins || 0);
-  const rate = Number(row?.bandWinRate);
-  const floorRate = Number(row?.winRate);
-  // Only worth flagging when the two genuinely disagree; a few points apart is noise.
-  const inflated = Number.isFinite(rate) && Number.isFinite(floorRate) && floorRate - rate >= 0.05;
-  const detail = `${wins} / ${resolved} (${probability(rate)})`;
-  return inflated
-    ? `<span class="warning" title="The floor row reads ${probability(floorRate)} because it includes every higher entry; entries actually inside this band win ${probability(rate)}.">${detail}</span>`
-    : detail;
+function probabilityRangeCell(lower, upper) {
+  const minimum = Number(lower);
+  if (!Number.isFinite(minimum)) return "-";
+  const maximum = normalizeOptionalProbability(upper);
+  return maximum == null ? `>= ${probability(minimum)}` : `${probability(minimum)}-${probability(maximum)}`;
 }
 
 function renderTaxonomyPerformanceTable(report, kind, title, note) {
@@ -10772,11 +10808,10 @@ function renderTaxonomyPerformanceTable(report, kind, title, note) {
           <thead>
             <tr>
               ${taxonomyHeader(kind, "label", label)}
-              ${hasProbabilityBreakdown ? taxonomyHeader(kind, "minimumProbability", "Min probability", "Minimum Polymarket probability captured when the opportunity was first scraped.") : ""}
+              ${hasProbabilityBreakdown ? taxonomyHeader(kind, "probabilityRange", "Probability", "The floor row includes every outcome above its lower bound; a bounded row contains only this 10-point probability range.") : ""}
               ${taxonomyHeader(kind, "openCount", "Open now", `Current scraped opportunities with this Polymarket ${kind}.`)}
               ${taxonomyHeader(kind, "trades", "Trades")}
               ${taxonomyHeader(kind, "accuracy", "Accuracy")}
-              ${taxonomyHeader(kind, "bandAccuracy", "In band", "Accuracy of entries inside this row's own probability band, not everything above its floor. A floor row is dominated by far higher entries: a 60% floor averaged a 79% entry and read 94.1%, while the 60-65% band it opens onto wins 64.9%. A portfolio that ranks by reward/risk buys only in the band, because reward per dollar risked is (1-p)/p and so is greatest at the floor.")}
               ${taxonomyHeader(kind, "stake", "Invested")}
               ${taxonomyHeader(kind, "pnl", "P/L")}
               ${taxonomyHeader(kind, "roi", "ROI", "Net P/L divided by all simulated capital invested in this group, including stored fees.")}
@@ -10790,11 +10825,10 @@ function renderTaxonomyPerformanceTable(report, kind, title, note) {
             ${rows.length ? rows.map((row) => `
               <tr>
                 <td data-label="${label}"><strong><a class="taxonomy-opportunity-link" href="${escapeHtml(scrapedTaxonomyOpportunityPath({ kind, label: row.label }, { statuses: ["SCRAPED", "RESOLVED"], rule: scrapedTaxonomyProbabilityRule(row) }))}" title="Show current and resolved scraped opportunities in this ${kind}">${escapeHtml(row.label || "-")}</a></strong></td>
-                ${hasProbabilityBreakdown ? `<td data-label="Min probability">${probability(Number(row.minimumProbability || 0))}</td>` : ""}
+                ${hasProbabilityBreakdown ? `<td data-label="Probability">${probabilityRangeCell(row.minimumProbability, row.maxProbability)}</td>` : ""}
                 <td data-label="Open now"><a class="taxonomy-opportunity-link" href="${escapeHtml(scrapedTaxonomyOpenOpportunityPath(kind, row.label, row))}" title="Show current open scraped opportunities in this ${kind}">${formatInteger(Number(row.openCount || 0))}</a></td>
                 <td data-label="Trades"><a class="taxonomy-opportunity-link" href="${escapeHtml(scrapedTaxonomyResolvedOpportunityPath(kind, row.label, row))}" title="Show resolved scraped opportunities in this ${kind}">${formatInteger(Number(row.trades || 0))}</a></td>
                 <td data-label="Accuracy">${Number(row.trades || 0) ? `${Number(row.wins || 0)} / ${Number(row.trades || 0)} (${probability(Number(row.winRate))})` : "-"}</td>
-                <td data-label="In band">${bandAccuracyCell(row)}</td>
                 <td data-label="Invested">${money(Number(row.resolvedStakeUsdc || row.stakeUsdc || 0))}</td>
                 <td data-label="P/L" class="${pnlClass(Number(row.pnlUsdc || 0))}">${signedMoney(Number(row.pnlUsdc || 0))}</td>
                 <td data-label="ROI" class="${pnlClass(Number(row.roi || 0))}">${row.roi == null ? "-" : signedPercent(Number(row.roi))}</td>
@@ -10804,10 +10838,11 @@ function renderTaxonomyPerformanceTable(report, kind, title, note) {
                 <td data-label="Portfolio"><button class="execution-button table-inline-button" type="button" title="Create a paper portfolio that trades exactly this row" data-create-portfolio ${portfolioPrefillAttributes({
                   name: row.label,
                   probability: Number(row.minimumProbability) > 0 ? Number(row.minimumProbability) : "",
+                  maxProbability: row.maxProbability ?? "",
                   tag: kind === "tag" ? row.label : "",
                 })}>+ Portfolio</button></td>
               </tr>
-            `).join("") : `<tr><td colspan="${hasProbabilityBreakdown ? 13 : 12}">No ${kind} statistics are available yet.</td></tr>`}
+            `).join("") : `<tr><td colspan="${hasProbabilityBreakdown ? 12 : 11}">No ${kind} statistics are available yet.</td></tr>`}
           </tbody>
         </table>
       </div>
@@ -10853,18 +10888,17 @@ function renderCalculationReport() {
     <div class="calculation-tab-panel" data-calculation-tab-panel="parameters"${state.calculationTab === "parameters" ? "" : " hidden"}>
       <div class="calculation-section">
         <h3>Best parameter combinations</h3>
-        <p class="calculation-note">This ranking is independent of Conservative, High reward and More probable portfolios. It tests probability threshold and resolution horizon only on opportunities with a known final Polymarket outcome. Every trade uses a fixed $5 stake plus stored fees. ROI is total net P/L divided by the total invested capital; the default order is highest ROI, then P/L.</p>
+        <p class="calculation-note">This ranking is independent of the portfolios. Every probability floor is shown beside its 10-point bounded range, for example >= 60% and 60%-70%. Each row calculates P/L, ROI and accuracy only from its own trades. Every trade uses a fixed $5 stake plus stored fees; the default order is highest ROI, then P/L.</p>
       <div class="calculation-table-wrap">
         <table class="calculation-table">
           <thead>
             <tr>
-              ${calculationHeader("threshold", "Threshold")}
+              ${calculationHeader("probabilityRange", "Probability")}
               ${calculationHeader("marketType", "Market type")}
               ${calculationHeader("maxResolutionDays", "Max days")}
               ${calculationHeader("openCount", "Open now")}
               ${calculationHeader("trades", "Trades")}
               ${calculationHeader("accuracy", "Accuracy")}
-              ${calculationHeader("bandAccuracy", "In band", "Accuracy of entries inside this row's own threshold band rather than everything above its floor. Measured: the 50% floor row reads 76.3% while the 50-55% band it opens onto wins 40.6%.")}
               ${calculationHeader("stake", "Invested")}
               ${calculationHeader("pnl", "P/L")}
               ${calculationHeader("roi", "ROI")}
@@ -10876,13 +10910,12 @@ function renderCalculationReport() {
           <tbody>
             ${rows.length ? rows.map((row) => `
               <tr>
-                <td>${probability(Number(row.threshold))}</td>
+                <td>${probabilityRangeCell(row.threshold, row.maxProbability)}</td>
                 <td>${escapeHtml(calculationMarketLabel(row.marketType))}</td>
                 <td>${Number(row.maxResolutionDays || 0)} d</td>
                 <td><a class="taxonomy-opportunity-link" href="${escapeHtml(scrapedRuleOpportunityPath(row))}" title="Show current open scraped opportunities matching this parameter combination">${formatInteger(Number(row.openCount || 0))}</a></td>
                 <td><a class="taxonomy-opportunity-link" href="${escapeHtml(scrapedResolvedRuleOpportunityPath(row))}" title="Show resolved scraped opportunities matching this parameter combination">${formatInteger(Number(row.trades || 0))}</a></td>
                 <td>${Number(row.trades || 0) ? `${Number(row.wins || 0)} / ${Number(row.trades || 0)} (${probability(Number(row.winRate))})` : "-"}</td>
-                <td>${bandAccuracyCell(row)}</td>
                 <td>${money(Number(row.resolvedStakeUsdc || row.stakeUsdc || 0))}</td>
                 <td class="${pnlClass(Number(row.pnlUsdc || 0))}">${signedMoney(Number(row.pnlUsdc || 0))}</td>
                 <td class="${pnlClass(Number(row.roi || 0))}">${row.roi == null ? "-" : signedPercent(Number(row.roi))}</td>
@@ -10891,11 +10924,12 @@ function renderCalculationReport() {
                 <td><button class="execution-button table-inline-button" type="button" title="Create a paper portfolio that trades exactly this combination" data-create-portfolio ${portfolioPrefillAttributes({
                   name: `${Math.round(Number(row.threshold || 0) * 100)}% ${calculationMarketLabel(row.marketType)} ${Number(row.maxResolutionDays || 0)}d`,
                   probability: Number(row.threshold) > 0 ? Number(row.threshold) : "",
+                  maxProbability: row.maxProbability ?? "",
                   days: Number(row.maxResolutionDays) > 0 ? Number(row.maxResolutionDays) : "",
                   marketType: row.marketType || "all",
                 })}>+ Portfolio</button></td>
               </tr>
-            `).join("") : '<tr><td colspan="13">No resolved scraped opportunity simulation is available yet.</td></tr>'}
+            `).join("") : '<tr><td colspan="12">No resolved scraped opportunity simulation is available yet.</td></tr>'}
           </tbody>
         </table>
       </div>
@@ -11172,6 +11206,12 @@ els.evaluationProbabilityFilter?.addEventListener("input", () => {
   renderBotEvaluations();
 });
 
+els.evaluationProbabilityMaxFilter?.addEventListener("input", () => {
+  state.scrapedRouteFilter = null;
+  state.evaluationProbabilityMaxFilter = normalizeOptionalProbability(els.evaluationProbabilityMaxFilter.value);
+  renderBotEvaluations();
+});
+
 els.evaluationDaysFilter?.addEventListener("input", () => {
   state.scrapedRouteFilter = null;
   const value = normalizeEvaluationDaysFilter(els.evaluationDaysFilter.value);
@@ -11286,6 +11326,12 @@ els.eligibilityThreshold?.addEventListener("input", () => {
   savePortfolioConfigSoon();
   syncEligibilityThresholdControl();
   rerenderCurrentDashboard();
+});
+
+els.maxEligibilityThreshold?.addEventListener("input", () => {
+  const value = normalizeOptionalProbability(els.maxEligibilityThreshold.value);
+  if (els.maxEligibilityThresholdLabel) els.maxEligibilityThresholdLabel.textContent = value == null ? "No maximum" : probability(value);
+  updateParameterDraft({ maxProbability: value });
 });
 
 els.riskAllocation?.addEventListener("input", () => {

@@ -279,6 +279,7 @@ jobs:
               # clearing the flag is what restores the portfolio.
               emit(f"{prefix}_ARCHIVED", str(bool(row.get("archived"))).lower())
               emit(f"{prefix}_MIN_PROBABILITY", row.get("minProbability"))
+              emit(f"{prefix}_MAX_PROBABILITY", row.get("maxProbability"))
               emit(f"{prefix}_STAKE_USDC", row.get("stakeUsdc"))
               emit(f"{prefix}_MAX_FRACTION", row.get("maxOrderFraction"))
               emit(f"{prefix}_MAX_RESOLUTION_DAYS", row.get("maxResolutionDays"))

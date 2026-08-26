@@ -140,6 +140,7 @@ jobs:
               "LIVE_FIXED_ENTRY_PRICE": cfg.get("fixedEntryPrice"),
               "LIVE_FIXED_ENTRY_STAKE_USDC": cfg.get("stakePerOrderUsdc"),
               "LIVE_MIN_PROBABILITY": cfg.get("minProbability"),
+              "LIVE_MAX_PROBABILITY": cfg.get("maxProbability"),
               "LIVE_MARKET_TYPE": cfg.get("marketType"),
               "LIVE_MAX_RESOLUTION_DAYS": cfg.get("maxResolutionDays"),
               "LIVE_CONFIG_MIN_LIQUIDITY_USDC": cfg.get("minLiquidityUsdc"),

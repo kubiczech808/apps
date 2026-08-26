@@ -183,6 +183,7 @@ jobs:
           system = (payload.get("config") or {}).get("system") or {}
           mapping = {
               "LIVE_MIN_PROBABILITY": live.get("minProbability"),
+              "LIVE_MAX_PROBABILITY": live.get("maxProbability"),
               "LIVE_STAKE_USDC": live.get("stakeUsdc"),
               "MAX_ORDER_FRACTION": live.get("maxOrderFraction"),
               "LIVE_MAX_RESOLUTION_DAYS": live.get("maxResolutionDays"),

@@ -11,6 +11,19 @@ function envNumber(name, fallback = null) {
   return Number.isFinite(numeric) ? numeric : fallback;
 }
 
+function normalizeOptionalProbability(value, fallback = null) {
+  const raw = value == null || value === "" ? fallback : value;
+  if (raw == null || raw === "") return null;
+  const numeric = Number(raw);
+  if (!Number.isFinite(numeric)) return null;
+  const normalized = numeric > 1 ? numeric / 100 : numeric;
+  return normalized >= 0.01 && normalized <= 1 ? normalized : null;
+}
+
+function envOptionalProbability(name, fallback = null) {
+  return normalizeOptionalProbability(process.env[name], fallback);
+}
+
 function envBool(name, fallback = false) {
   const value = process.env[name];
   if (value == null || value === "") return fallback;
@@ -118,8 +131,11 @@ const MAX_FRACTION = envNumber("PAPER_MAX_FRACTION", 0.05);
 const STAKE_USDC = Math.max(0.01, envNumber("PAPER_STAKE_USDC", PORTFOLIO_USDC * MAX_FRACTION));
 const MIN_PROBABILITY = envNumber("PAPER_MIN_PROBABILITY", 0.95);
 const CONSERVATIVE_MIN_PROBABILITY = envNumber("PAPER_CONSERVATIVE_MIN_PROBABILITY", MIN_PROBABILITY);
+const CONSERVATIVE_MAX_PROBABILITY = envOptionalProbability("PAPER_CONSERVATIVE_MAX_PROBABILITY");
 const HIGH_REWARD_MIN_PROBABILITY = envNumber("PAPER_HIGH_REWARD_MIN_PROBABILITY", 0.6);
+const HIGH_REWARD_MAX_PROBABILITY = envOptionalProbability("PAPER_HIGH_REWARD_MAX_PROBABILITY");
 const MORE_PROBABLE_STRATEGY_MIN_PROBABILITY = envNumber("PAPER_MORE_PROBABLE_MIN_PROBABILITY", 0.6);
+const MORE_PROBABLE_MAX_PROBABILITY = envOptionalProbability("PAPER_MORE_PROBABLE_MAX_PROBABILITY");
 const MIN_ANNUAL_RETURN = envNumber("PAPER_MIN_ANNUAL_RETURN", 0.05);
 const OPPORTUNITY_MIN_PROBABILITY = envNumber("PAPER_OPPORTUNITY_MIN_PROBABILITY", 0.6);
 const OPPORTUNITY_MIN_EDGE = envNumber("PAPER_OPPORTUNITY_MIN_EDGE", 0.04);
@@ -378,6 +394,7 @@ const PAPER_STRATEGIES = {
     label: envText("PAPER_CONSERVATIVE_DISPLAY_NAME", "Conservative"),
     selectionMetric: "EV p.a.",
     minProbability: CONSERVATIVE_MIN_PROBABILITY,
+    maxProbability: CONSERVATIVE_MAX_PROBABILITY,
     stakeUsdc: Math.max(0.01, envNumber("PAPER_CONSERVATIVE_STAKE_USDC", STAKE_USDC)),
     maxFraction: envNumber("PAPER_CONSERVATIVE_MAX_FRACTION", MAX_FRACTION),
     maxResolutionDays: envNumber("PAPER_CONSERVATIVE_MAX_RESOLUTION_DAYS", DEFAULT_MAX_RESOLUTION_DAYS),
@@ -409,6 +426,7 @@ const PAPER_STRATEGIES = {
     label: envText("PAPER_HIGH_REWARD_DISPLAY_NAME", "High reward"),
     selectionMetric: "Reward / risk",
     minProbability: HIGH_REWARD_MIN_PROBABILITY,
+    maxProbability: HIGH_REWARD_MAX_PROBABILITY,
     stakeUsdc: Math.max(0.01, envNumber("PAPER_HIGH_REWARD_STAKE_USDC", STAKE_USDC)),
     maxFraction: envNumber("PAPER_HIGH_REWARD_MAX_FRACTION", MAX_FRACTION),
     maxResolutionDays: envNumber("PAPER_HIGH_REWARD_MAX_RESOLUTION_DAYS", DEFAULT_MAX_RESOLUTION_DAYS),
@@ -438,6 +456,7 @@ const PAPER_STRATEGIES = {
     label: envText("PAPER_MORE_PROBABLE_DISPLAY_NAME", "More probable"),
     selectionMetric: "Reward / risk",
     minProbability: MORE_PROBABLE_STRATEGY_MIN_PROBABILITY,
+    maxProbability: MORE_PROBABLE_MAX_PROBABILITY,
     stakeUsdc: Math.max(0.01, envNumber("PAPER_MORE_PROBABLE_STAKE_USDC", STAKE_USDC)),
     maxFraction: envNumber("PAPER_MORE_PROBABLE_MAX_FRACTION", MAX_FRACTION),
     maxResolutionDays: envNumber("PAPER_MORE_PROBABLE_MAX_RESOLUTION_DAYS", DEFAULT_MAX_RESOLUTION_DAYS),
@@ -467,6 +486,7 @@ const PAPER_STRATEGIES = {
     label: envText("PAPER_EQUAL_DISPLAY_NAME", "Equal"),
     selectionMetric: "Potential p.a.",
     minProbability: envNumber("PAPER_EQUAL_MIN_PROBABILITY", 0.75),
+    maxProbability: envOptionalProbability("PAPER_EQUAL_MAX_PROBABILITY"),
     stakeUsdc: Math.max(0.01, envNumber("PAPER_EQUAL_STAKE_USDC", STAKE_USDC)),
     maxFraction: envNumber("PAPER_EQUAL_MAX_FRACTION", MAX_FRACTION),
     maxResolutionDays: envNumber("PAPER_EQUAL_MAX_RESOLUTION_DAYS", DEFAULT_MAX_RESOLUTION_DAYS),
@@ -526,6 +546,11 @@ function customPaperStrategies(raw = process.env.PAPER_CUSTOM_PORTFOLIOS) {
       label: String(row.displayName || id).slice(0, 80),
       selectionMetric: row.selectionOrder === "highest_reward_risk_first" ? "Reward / risk" : "EV p.a.",
       minProbability: Number.isFinite(Number(row.minProbability)) ? Number(row.minProbability) : 0.5,
+      maxProbability: (() => {
+        const maximum = normalizeOptionalProbability(row.maxProbability);
+        const minimum = Number.isFinite(Number(row.minProbability)) ? Number(row.minProbability) : 0.5;
+        return maximum != null && maximum >= minimum ? maximum : null;
+      })(),
       stakeUsdc: Number.isFinite(Number(row.stakeUsdc)) && Number(row.stakeUsdc) > 0
         ? Number(row.stakeUsdc)
         : (Number.isFinite(Number(row.maxOrderFraction)) && Number(row.maxOrderFraction) > 0
@@ -996,6 +1021,7 @@ function compactPaperPortfolioForCore(portfolio) {
     "selectionMetric",
     "selectionOrder",
     "minProbability",
+    "maxProbability",
     "stakeUsdc",
     "maxFraction",
     "maxResolutionDays",
@@ -1517,6 +1543,7 @@ function normalizePaperPortfolio(strategy, input = {}) {
     selectionMetric: strategy.selectionMetric,
     selectionOrder: strategy.selectionOrder,
     minProbability: strategy.minProbability,
+    maxProbability: strategy.maxProbability,
     stakeUsdc: Number(strategy.stakeUsdc ?? input.stakeUsdc ?? input.portfolio?.stakeUsdc ?? STAKE_USDC),
     maxFraction: strategy.maxFraction,
     maxResolutionDays: strategyMaxResolutionDays(strategy),
@@ -1564,6 +1591,7 @@ function normalizePaperPortfolio(strategy, input = {}) {
       stakeUsdc: Number(strategy.stakeUsdc ?? input.portfolio?.stakeUsdc ?? input.stakeUsdc ?? STAKE_USDC),
       maxFraction: Number(strategy.maxFraction ?? input.portfolio?.maxFraction ?? MAX_FRACTION),
       minProbability: Number(strategy.minProbability ?? input.portfolio?.minProbability ?? MIN_PROBABILITY),
+      maxProbability: strategy.maxProbability ?? input.portfolio?.maxProbability ?? null,
       minAnnualReturn: Number(input.portfolio?.minAnnualReturn || MIN_ANNUAL_RETURN),
       opportunityMinProbability: Number(input.portfolio?.opportunityMinProbability || OPPORTUNITY_MIN_PROBABILITY),
       opportunityMinEdge: Number(input.portfolio?.opportunityMinEdge || OPPORTUNITY_MIN_EDGE),
@@ -6175,8 +6203,10 @@ function strategyEligibleCandidates(eligible, strategy) {
     if (strategy.excludedCandidateTokenIds?.has(tokenId)) return false;
     if (!strategyAllowsTags(item, strategy)) return false;
     const minProbability = Number(strategy.minProbability);
+    const maxProbability = normalizeOptionalProbability(strategy.maxProbability);
     const selectedProbability = portfolioProbabilityForStrategy(item, strategy);
     if (Number.isFinite(minProbability) && (!Number.isFinite(selectedProbability) || selectedProbability < minProbability)) return false;
+    if (maxProbability != null && Number.isFinite(selectedProbability) && selectedProbability > maxProbability) return false;
     if (daysValue(item) > maxResolutionDays) return false;
     const minLiquidityUsdc = Number(strategy.minLiquidityUsdc);
     if (Number.isFinite(minLiquidityUsdc) && rowVolumeUsdc(item) < minLiquidityUsdc) return false;
@@ -6371,6 +6401,7 @@ function portfolioFilterResult(item, strategy) {
   const status = String(item.status || "").toUpperCase();
   const selectionStatus = String(item.selectionStatus || "").toUpperCase();
   const minProbability = Number(strategy.minProbability);
+  const maxProbability = normalizeOptionalProbability(strategy.maxProbability);
   const maxResolutionDays = strategyMaxResolutionDays(strategy);
   const minLiquidityUsdc = Number(strategy.minLiquidityUsdc);
   const minNetYield = Math.max(0, Number(strategy.minNetYield) || 0);
@@ -6412,6 +6443,10 @@ function portfolioFilterResult(item, strategy) {
   if (Number.isFinite(minProbability) && (!Number.isFinite(selectedProbability) || selectedProbability < minProbability)) {
     const label = probabilitySource === "polymarket" ? "Polymarket probability" : "AI probability";
     reasons.push(`${label} ${Number.isFinite(selectedProbability) ? (selectedProbability * 100).toFixed(1) : "-"}% below ${(minProbability * 100).toFixed(1)}%`);
+  }
+  if (maxProbability != null && Number.isFinite(selectedProbability) && selectedProbability > maxProbability) {
+    const label = probabilitySource === "polymarket" ? "Polymarket probability" : "AI probability";
+    reasons.push(`${label} ${(selectedProbability * 100).toFixed(1)}% above ${(maxProbability * 100).toFixed(1)}% portfolio maximum`);
   }
   if (!Number.isFinite(annualizedReturn)) {
     const label = probabilitySource === "polymarket" ? "Polymarket probability" : "AI probability";
@@ -7020,6 +7055,7 @@ function buildTradeBatchLog({ portfolioState, strategy, evaluations = [], eligib
       : `No ${strategy.label} trade was opened: ${reason}.`,
     settings: {
       minProbability: strategy.minProbability,
+      maxProbability: strategy.maxProbability ?? null,
       stakeUsdc: Number(stake.toFixed(2)),
       maxFraction: strategy.maxFraction ?? null,
       maxResolutionDays: strategyMaxResolutionDays(strategy),
@@ -9903,38 +9939,8 @@ function scrapedSimulationMatchesRule(trade, {
 } = {}) {
   return (marketType === "all" || trade.marketType === marketType)
     && trade.entry >= threshold
-    && (upperThreshold == null || trade.entry < upperThreshold)
+    && (upperThreshold == null || trade.entry <= upperThreshold)
     && (maxResolutionDays == null || trade.days == null || trade.days <= maxResolutionDays);
-}
-
-// The next threshold up, which is where this row's band ends. Null for the top row, whose
-// band is open-ended and therefore identical to its floor.
-function nextReportThreshold(threshold, thresholds = REPORT_THRESHOLDS) {
-  const higher = thresholds
-    .map((value) => Number(value))
-    .filter((value) => Number.isFinite(value) && value > Number(threshold))
-    .sort((a, b) => a - b);
-  return higher.length ? higher[0] : null;
-}
-
-// The band summary carried alongside a floor row, under its own prefixed keys so nothing
-// reading the floor figures changes meaning.
-function scrapedSimulationBandSummary(trades, openTrades, criteria, upperThreshold) {
-  const banded = { ...criteria, upperThreshold };
-  const summary = summarizeScrapedSimulationRows(
-    trades.filter((trade) => scrapedSimulationMatchesRule(trade, banded)),
-  );
-  return {
-    bandUpperThreshold: upperThreshold,
-    bandOpenCount: (Array.isArray(openTrades) ? openTrades : [])
-      .filter((trade) => scrapedSimulationMatchesRule(trade, banded)).length,
-    bandResolved: summary.resolved,
-    bandWins: summary.wins,
-    bandWinRate: summary.winRate,
-    bandRoi: summary.roi,
-    bandAvgProbability: summary.avgProbability,
-    bandTrades: summary.trades,
-  };
 }
 
 function scrapedSimulationParameterRows(trades, openTrades = []) {
@@ -9943,16 +9949,28 @@ function scrapedSimulationParameterRows(trades, openTrades = []) {
     for (const threshold of REPORT_THRESHOLDS) {
       for (const maxResolutionDays of SCRAPED_SIMULATION_MAX_DAYS) {
         const criteria = { marketType, threshold, maxResolutionDays };
-        const selected = trades.filter((trade) => scrapedSimulationMatchesRule(trade, criteria));
-        rows.push({
-          probabilitySource: "polymarket",
-          marketType,
-          threshold,
-          maxResolutionDays,
-          openCount: openTrades.filter((trade) => scrapedSimulationMatchesRule(trade, criteria)).length,
-          ...summarizeScrapedSimulationRows(selected),
-          ...scrapedSimulationBandSummary(trades, openTrades, criteria, nextReportThreshold(threshold)),
-        });
+        // Keep the familiar floor row and add a separate, genuinely bounded row.
+        // A 60% portfolio which ranks by reward/risk tends to buy near 60%, so its
+        // 60-70% evidence must not be hidden behind outcomes from 90%+ markets.
+        for (const maxProbability of [null, Math.min(1, threshold + 0.1)]) {
+          const selected = trades.filter((trade) => scrapedSimulationMatchesRule(trade, {
+            ...criteria,
+            upperThreshold: maxProbability,
+          }));
+          rows.push({
+            probabilitySource: "polymarket",
+            marketType,
+            threshold,
+            maxProbability,
+            probabilityRange: maxProbability == null ? "floor" : "band",
+            maxResolutionDays,
+            openCount: openTrades.filter((trade) => scrapedSimulationMatchesRule(trade, {
+              ...criteria,
+              upperThreshold: maxProbability,
+            })).length,
+            ...summarizeScrapedSimulationRows(selected),
+          });
+        }
       }
     }
   }
@@ -9991,28 +10009,19 @@ function scrapedSimulationTaxonomyRows(trades, openTrades, field, kind) {
       // Keep the stored representation compact: the UI expands these summaries
       // into one row per tag/probability threshold only when Tag performance is open.
       if (kind === "tag") {
-        row.minimumProbabilitySummaries = TAG_PERFORMANCE_THRESHOLDS.map((minimumProbability) => {
-          // The band this floor opens onto, for the same reason the parameter rows carry
-          // one: this is the table that showed 90.5% for a 60% floor whose own band wins
-          // 64.9%, and a floor-and-reward/risk portfolio only ever trades the band.
-          const bandUpperThreshold = nextReportThreshold(minimumProbability, TAG_PERFORMANCE_THRESHOLDS);
-          const inBand = (trade) => trade.entry >= minimumProbability
-            && (bandUpperThreshold == null || trade.entry < bandUpperThreshold);
-          const bandSummary = summarizeScrapedSimulationRows(groupTrades.filter(inBand));
-          return {
-            minimumProbability,
-            openCount: groupOpenTrades.filter((trade) => trade.entry >= minimumProbability).length,
-            ...summarizeScrapedSimulationRows(groupTrades.filter((trade) => trade.entry >= minimumProbability)),
-            bandUpperThreshold,
-            bandOpenCount: groupOpenTrades.filter(inBand).length,
-            bandResolved: bandSummary.resolved,
-            bandWins: bandSummary.wins,
-            bandWinRate: bandSummary.winRate,
-            bandRoi: bandSummary.roi,
-            bandAvgProbability: bandSummary.avgProbability,
-            bandTrades: bandSummary.trades,
-          };
-        });
+        row.minimumProbabilitySummaries = TAG_PERFORMANCE_THRESHOLDS.flatMap((minimumProbability) => (
+          [null, Math.min(1, minimumProbability + 0.1)].map((maxProbability) => {
+            const inRange = (trade) => trade.entry >= minimumProbability
+              && (maxProbability == null || trade.entry <= maxProbability);
+            return {
+              minimumProbability,
+              maxProbability,
+              probabilityRange: maxProbability == null ? "floor" : "band",
+              openCount: groupOpenTrades.filter(inRange).length,
+              ...summarizeScrapedSimulationRows(groupTrades.filter(inRange)),
+            };
+          })
+        ));
       }
       return row;
     })
