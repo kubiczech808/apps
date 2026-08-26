@@ -98,6 +98,9 @@ const state = {
   // connected live account. Live execution is backed by fixed workflows, so this is a
   // type choice for the create flow, not a hidden third live account.
   parameterDraftCreateType: "",
+  // Saving is asynchronous. Keep this separate from the button state so both direct
+  // and delegated modal handlers can never submit the same portfolio twice.
+  parameterSavePending: false,
   parameterDraftCreatePrefill: null,
   // The last paper portfolio snapshot seen, kept across tab switches so the overview
   // still has numbers while a live tab is open and only the live state is loaded.
@@ -4939,7 +4942,8 @@ function parameterDraftSystemFromControls(baseSystem = {}) {
 }
 
 async function confirmParameterModal() {
-  if (!els.parameterModal || els.parameterModal.hidden) return;
+  if (!els.parameterModal || els.parameterModal.hidden || state.parameterSavePending) return;
+  state.parameterSavePending = true;
   const draftMode = state.parameterDraftMode || state.mode;
   // The modal's controls are the source of truth when Save is pressed. Some mobile
   // browsers can commit a number field without delivering its final input event before
@@ -5014,6 +5018,7 @@ async function confirmParameterModal() {
   } catch (error) {
     setExecutionStatus(error.message || "portfolio parameter save failed", "error");
   } finally {
+    state.parameterSavePending = false;
     if (els.parameterModalConfirm) {
       els.parameterModalConfirm.disabled = false;
       els.parameterModalConfirm.textContent = "Save and close";
@@ -11621,6 +11626,17 @@ document.addEventListener("change", (event) => {
     exclusion.dataset.candidateTokenId || "",
     Boolean(exclusion.checked),
   );
+});
+
+// Do not rely only on the document-level click delegation for the one button that
+// creates persistent portfolios. On some mobile browsers the modal backdrop can
+// intercept the bubbled click even though the visible button was tapped. The direct
+// handler makes Save work in that case; stopPropagation prevents the delegated
+// handler below from sending a second request.
+els.parameterModalConfirm?.addEventListener("click", (event) => {
+  event.preventDefault();
+  event.stopPropagation();
+  confirmParameterModal();
 });
 
 document.addEventListener("click", (event) => {
