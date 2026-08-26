@@ -1958,31 +1958,51 @@ function load_portfolio_config(): array
 
 function save_portfolio_config(array $config): array
 {
-    // A save replaces the stored config with whatever the dashboard is holding, so the
-    // price history is carried across here rather than trusted to the client: a tab
-    // opened before the field existed would POST a config without it and drop the record
-    // of every price 5050 had traded at -- which is exactly the loss this guards against.
-    $stored = load_portfolio_config();
-    if (!is_array($config['live5050'] ?? null)) {
-        $config['live5050'] = [];
-    }
-    $config['live5050']['fixedEntryPriceHistory'] = array_merge(
-        is_array($config['live5050']['fixedEntryPriceHistory'] ?? null) ? $config['live5050']['fixedEntryPriceHistory'] : [],
-        [$stored['live5050']['fixedEntryPrice'] ?? null],
-        is_array($stored['live5050']['fixedEntryPriceHistory'] ?? null) ? $stored['live5050']['fixedEntryPriceHistory'] : [],
-    );
-
-    $normalized = normalize_portfolio_config($config);
     $path = portfolio_config_path();
     $dir = dirname($path);
     if (!is_dir($dir) && !mkdir($dir, 0775, true) && !is_dir($dir)) {
         respond(['ok' => false, 'error' => 'Unable to create data directory'], 500);
     }
-    $encoded = json_encode($normalized, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
-    if (!is_string($encoded) || file_put_contents($path, $encoded . "\n", LOCK_EX) === false) {
-        respond(['ok' => false, 'error' => 'Unable to persist portfolio config'], 500);
+
+    // Saving from a second tab used to replace the entire JSON from its older snapshot.
+    // That made a just-created portfolio disappear. Serialise the read/merge/write and
+    // retain portfolios absent from a stale client because portfolios are archived, not
+    // deleted, in this application.
+    $lock = fopen($path . '.lock', 'c');
+    if ($lock === false || !flock($lock, LOCK_EX)) {
+        if (is_resource($lock)) {
+            fclose($lock);
+        }
+        respond(['ok' => false, 'error' => 'Unable to lock portfolio config'], 503);
     }
-    return $normalized;
+    try {
+        $stored = load_portfolio_config();
+        $incomingPaper = is_array($config['paper'] ?? null) ? $config['paper'] : [];
+        foreach ((array) ($stored['paper'] ?? []) as $id => $row) {
+            if (!array_key_exists($id, $incomingPaper)) {
+                $incomingPaper[$id] = $row;
+            }
+        }
+        $config['paper'] = $incomingPaper;
+        if (!is_array($config['live5050'] ?? null)) {
+            $config['live5050'] = [];
+        }
+        $config['live5050']['fixedEntryPriceHistory'] = array_merge(
+            is_array($config['live5050']['fixedEntryPriceHistory'] ?? null) ? $config['live5050']['fixedEntryPriceHistory'] : [],
+            [$stored['live5050']['fixedEntryPrice'] ?? null],
+            is_array($stored['live5050']['fixedEntryPriceHistory'] ?? null) ? $stored['live5050']['fixedEntryPriceHistory'] : [],
+        );
+
+        $normalized = normalize_portfolio_config($config);
+        $encoded = json_encode($normalized, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+        if (!is_string($encoded) || file_put_contents($path, $encoded . "\n", LOCK_EX) === false) {
+            respond(['ok' => false, 'error' => 'Unable to persist portfolio config'], 500);
+        }
+        return $normalized;
+    } finally {
+        flock($lock, LOCK_UN);
+        fclose($lock);
+    }
 }
 
 function live_state_path(): string

@@ -4812,17 +4812,77 @@ function closeParameterModal() {
   openParameterModal.lastTrigger = null;
 }
 
+function parameterDraftFromControls(baseDraft = {}) {
+  const draft = { ...baseDraft };
+  const hasValue = (element) => element && !parameterDraftInputIsEmpty(element);
+  const numberValue = (element) => Number(element?.value);
+
+  if (els.portfolioName) {
+    draft.displayName = normalizePortfolioName(els.portfolioName.value, draft.displayName || "New portfolio");
+  }
+  if (hasValue(els.eligibilityThreshold)) {
+    const value = normalizeEligibilityThreshold(numberValue(els.eligibilityThreshold) / 100);
+    if (value != null) draft.minProbability = value;
+  }
+  if (hasValue(els.riskAllocation)) {
+    const value = normalizeRiskAllocation(numberValue(els.riskAllocation));
+    if (value != null) draft.stakeUsdc = value;
+  }
+  if (hasValue(els.maxResolutionDays)) {
+    const value = normalizeOptionalDays(els.maxResolutionDays.value);
+    if (value != null) draft.maxResolutionDays = value;
+  }
+  if (els.selectionOrder) draft.selectionOrder = normalizeSelectionOrder(els.selectionOrder.value);
+  if (els.minLiquidity) draft.minLiquidityUsdc = normalizeOptionalMoney(els.minLiquidity.value);
+  if (hasValue(els.minNetYield)) draft.minNetYield = normalizeMinimumNetYield(numberValue(els.minNetYield) / 100);
+  if (els.executionTrigger) draft.executionTrigger = normalizeExecutionTrigger(els.executionTrigger.value);
+  if (els.executionCronMinutes) draft.executionCronMinutes = normalizeExecutionCronMinutes(els.executionCronMinutes.value);
+  if (els.autoRotatePositions) draft.autoRotatePositions = Boolean(els.autoRotatePositions.checked);
+  if (hasValue(els.stopLossRiskMultiplier)) {
+    const multiplier = normalizeStopLossRiskMultiplier(numberValue(els.stopLossRiskMultiplier) / 100, 0);
+    draft.stopLossRiskMultiplier = multiplier;
+    draft.stopLossEnabled = multiplier > 0;
+  }
+  if (hasValue(els.fixedEntryPrice)) draft.fixedEntryPrice = normalizeFixedEntryPrice(numberValue(els.fixedEntryPrice) / 100);
+  if (els.fixedEntryTags) draft.allowedMarketTags = normalizeMarketTagList(els.fixedEntryTags.value);
+  if (els.includeOnlyTags) draft.includeOnlyMarketTags = normalizeMarketTagList(els.includeOnlyTags.value);
+  if (els.excludedTags) draft.excludedMarketTags = normalizeMarketTagList(els.excludedTags.value);
+  if (els.portfolioMarketType) {
+    const marketType = normalizePortfolioMarketType(els.portfolioMarketType.value);
+    draft.marketType = marketType;
+    draft.requireMostProbableOutcome = marketType === "multi";
+  }
+  if (els.limitOrders) draft.useLimitOrders = Boolean(els.limitOrders.checked);
+  return draft;
+}
+
+function parameterDraftSystemFromControls(baseSystem = {}) {
+  if (!els.crossLiveRisk) return { ...baseSystem };
+  return {
+    ...baseSystem,
+    crossLivePortfolioRiskDiversification: Boolean(els.crossLiveRisk.checked),
+  };
+}
+
 async function confirmParameterModal() {
   if (!els.parameterModal || els.parameterModal.hidden) return;
   const draftMode = state.parameterDraftMode || state.mode;
-  const draft = state.parameterDraft ? { ...state.parameterDraft } : { ...portfolioConfigForMode(draftMode) };
-  const draftSystem = state.parameterDraftSystem ? { ...state.parameterDraftSystem } : systemConfig();
+  // The modal's controls are the source of truth when Save is pressed. Some mobile
+  // browsers can commit a number field without delivering its final input event before
+  // the tap reaches this button; relying only on the in-memory draft then created a
+  // portfolio with defaults instead of the values the person had just entered.
+  const draft = parameterDraftFromControls(
+    state.parameterDraft ? { ...state.parameterDraft } : { ...portfolioConfigForMode(draftMode) },
+  );
+  const draftSystem = parameterDraftSystemFromControls(
+    state.parameterDraftSystem ? { ...state.parameterDraftSystem } : systemConfig(),
+  );
   if (els.parameterModalConfirm) {
     els.parameterModalConfirm.disabled = true;
     els.parameterModalConfirm.textContent = "Saving...";
   }
   const creating = state.parameterDraftCreate;
-  const creatingType = normalizePortfolioAccountType(state.parameterDraftCreateType);
+  const creatingType = normalizePortfolioAccountType(els.portfolioAccountType?.value || state.parameterDraftCreateType);
   try {
     if (creating) {
       // The portfolio comes into existence here, on Save -- not when the form was
@@ -4858,6 +4918,9 @@ async function confirmParameterModal() {
       saveLimitOrders(draft.useLimitOrders);
     }
     await savePortfolioConfigNow();
+    if (creating && creatingType !== "live" && !state.portfolioConfig?.paper?.[creating]) {
+      throw new Error("The portfolio was not persisted by the server");
+    }
     setExecutionStatus(creating ? (creatingType === "live" ? "live portfolio configured" : "portfolio created") : "portfolio parameters saved");
     const createdMode = creating ? (creatingType === "live" ? "live" : `paper-${creating}`) : "";
     closeParameterModal();
@@ -4866,8 +4929,11 @@ async function confirmParameterModal() {
       // you were already on reads as a save that did not work.
       state.mode = createdMode;
       saveMode(createdMode);
+      // The overview is cached for speed while navigating. A creation changes its
+      // membership, so this one read must bypass that short cache.
+      await loadPortfolioOverview({ force: true });
       syncModeUi();
-      loadDashboardState();
+      await loadDashboardState();
       return;
     }
     rerenderCurrentDashboard();
