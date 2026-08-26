@@ -8135,7 +8135,10 @@ function renderBotState(botState) {
   els.botStatus.innerHTML = paperWarning;
   els.botStatus.hidden = !paperWarning;
 
-  els.botTrades.innerHTML = renderTradeRows(openTrades.slice(0, 12), "Zatim zadne otevrene autonomni paper obchody.", {
+  // The headline Open P/L and "in positions" amounts aggregate every active trade.
+  // Do not truncate this table: showing only the first twelve rows made a manual sum of
+  // the visible P/L disagree with those portfolio totals.
+  els.botTrades.innerHTML = renderTradeRows(openTrades, "Zatim zadne otevrene autonomni paper obchody.", {
     tableKey: "open",
     showStatus: false,
   });
