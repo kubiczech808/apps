@@ -10745,7 +10745,7 @@ function taxonomyRows(report, kind) {
       : legacyRows;
   // Reports written before the taxonomy split stored both kinds in categorySummaries.
   // Rows written after it may omit kind because the parent collection is authoritative.
-  const expandedRows = kind === "tag"
+  const expandedRows = (kind === "category" || kind === "tag")
     ? directRows.flatMap((row) => {
       const summaries = Array.isArray(row?.minimumProbabilitySummaries)
         ? row.minimumProbabilitySummaries
@@ -10807,7 +10807,7 @@ function probabilityRangeCell(lower, upper) {
 function renderTaxonomyPerformanceTable(report, kind, title, note) {
   const rows = taxonomyRows(report, kind);
   const label = kind === "category" ? "Category" : "Tag";
-  const hasProbabilityBreakdown = kind === "tag";
+  const hasProbabilityBreakdown = kind === "category" || kind === "tag";
   const coverage = report?.taxonomyCoverage?.[kind] || {};
   const total = Number(coverage.totalTrades || report?.resolvedSampleSize || report?.sampleSize || 0);
   const classified = Number(coverage.classifiedTrades || 0);
@@ -10956,7 +10956,7 @@ function renderCalculationReport() {
         report,
         "category",
         "Category performance",
-        "Only explicit Polymarket Gamma categories are counted here. Inferred risk groups and tags are excluded.",
+        "Gamma's explicit category fields are used when present. Otherwise the broad official Gamma browse tag captured during scraping is used; inferred risk groups are excluded.",
       )}
     </div>
     <div class="calculation-tab-panel" data-calculation-tab-panel="tag"${state.calculationTab === "tag" ? "" : " hidden"}>
@@ -10964,7 +10964,7 @@ function renderCalculationReport() {
         report,
         "tag",
         "Tag performance",
-        "Each tag is broken down by the minimum Polymarket probability captured when the opportunity was first scraped (50%, 60%, ... 90%).",
+        "Each tag is broken down by the Polymarket probability captured when the opportunity was first scraped (50%, 60%, ... 90%).",
       )}
     </div>
   `;

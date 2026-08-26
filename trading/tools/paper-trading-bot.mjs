@@ -377,7 +377,10 @@ const OPEN_STATUSES = new Set(["OPEN", "PENDING_RESOLUTION", "MARKET_NOT_FOUND",
 const REPORT_THRESHOLDS = [0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95];
 // Every selected outcome is normalized to at least 50% before it reaches the
 // report, so 0-40% would only duplicate the corresponding inverted outcomes.
-const TAG_PERFORMANCE_THRESHOLDS = [0.5, 0.6, 0.7, 0.8, 0.9];
+// Taxonomy performance uses the same probability ladder for both broad Polymarket
+// categories and individual tags. Selected outcomes are normalized to >= 50%, so
+// lower bands would only duplicate the inverse Yes/No outcome.
+const TAXONOMY_PERFORMANCE_THRESHOLDS = [0.5, 0.6, 0.7, 0.8, 0.9];
 const SCRAPED_SIMULATION_MAX_DAYS = [1, 3, 7, 14, 30];
 // Each scraped market contributes to every real Polymarket category and tag it
 // carries. The two taxonomies stay separate; risk groups and inferred question tags
@@ -8258,7 +8261,7 @@ function normalizedPolymarketTaxonomy(...sources) {
 // Gamma exposes categories and tags as distinct relations. Keep only explicit API
 // category fields here; never substitute an inferred risk group or the first tag.
 function marketPolymarketCategories(market = {}) {
-  return normalizedPolymarketTaxonomy(
+  const explicit = normalizedPolymarketTaxonomy(
     market.category,
     market.categorySlug,
     market.categories,
@@ -8266,6 +8269,11 @@ function marketPolymarketCategories(market = {}) {
       ? market.events.flatMap((event) => [event?.category, event?.categorySlug, event?.categories])
       : []),
   );
+  // Gamma usually publishes its browse classification as tags rather than the
+  // sparsely populated category/categorySlug fields. The scanner's broad tag is
+  // an official Gamma relation, so retain it as a category fallback without ever
+  // guessing from the question text or internal risk grouping.
+  return explicit.length ? explicit : normalizedPolymarketTaxonomy(market.__scanCategoryTags);
 }
 
 function marketPolymarketTags(market = {}) {
@@ -9762,7 +9770,13 @@ function scrapedSimulationTaxonomy(item, firstField, currentField) {
 }
 
 function scrapedSimulationCategories(item) {
-  return scrapedSimulationTaxonomy(item, "firstPolymarketCategories", "polymarketCategories");
+  const explicit = scrapedSimulationTaxonomy(item, "firstPolymarketCategories", "polymarketCategories");
+  if (explicit.length) return explicit;
+  // Historical Gamma event responses commonly have null category/categorySlug but
+  // retain their official browse tags. Rebuild broad categories only from the tags
+  // the scanner itself uses as Polymarket category scopes, never from inferred tags.
+  const browseCategories = new Set(MARKET_SCAN_CATEGORY_TAGS.map((tag) => tag.slug));
+  return scrapedSimulationTags(item).filter((tag) => browseCategories.has(tag));
 }
 
 function scrapedSimulationTags(item) {
@@ -10007,9 +10021,10 @@ function scrapedSimulationTaxonomyRows(trades, openTrades, field, kind) {
         ...summarizeScrapedSimulationRows(groupTrades),
       };
       // Keep the stored representation compact: the UI expands these summaries
-      // into one row per tag/probability threshold only when Tag performance is open.
-      if (kind === "tag") {
-        row.minimumProbabilitySummaries = TAG_PERFORMANCE_THRESHOLDS.flatMap((minimumProbability) => (
+      // into one row per category-or-tag/probability threshold only when that
+      // taxonomy performance tab is open.
+      if (kind === "category" || kind === "tag") {
+        row.minimumProbabilitySummaries = TAXONOMY_PERFORMANCE_THRESHOLDS.flatMap((minimumProbability) => (
           [null, Math.min(1, minimumProbability + 0.1)].map((maxProbability) => {
             const inRange = (trade) => trade.entry >= minimumProbability
               && (maxProbability == null || trade.entry <= maxProbability);
@@ -10069,7 +10084,7 @@ function buildCalculationReport(state) {
   return {
     id: `calculation-report-${generatedAt}`,
     generatedAt,
-    taxonomyVersion: 5,
+    taxonomyVersion: 6,
     simulationType: "fresh_scraped_opportunities",
     observedSampleSize: observedTrades.length,
     sampleSize: trades.length,
