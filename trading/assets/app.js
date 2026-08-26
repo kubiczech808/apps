@@ -494,6 +494,9 @@ function saveRunLogFilter(value, mode = state.mode) {
 // portfolios that exist.
 const BUILT_IN_PAPER_STRATEGY_IDS = ["conservative", "highReward", "moreProbable", "equal"];
 const CUSTOM_PAPER_STRATEGY_ID = /^[a-z][a-zA-Z0-9]{1,30}$/;
+// Keep this in lockstep with CUSTOM_PAPER_PORTFOLIO_LIMIT in api.php. The API remains
+// authoritative, but catching the full set here avoids opening a form that cannot save.
+const CUSTOM_PAPER_PORTFOLIO_LIMIT = 24;
 
 function normalizeMode(mode) {
   if (mode === "live" || mode === "live-5050") return mode;
@@ -4539,6 +4542,13 @@ function newPaperPortfolioId(name) {
   return "";
 }
 
+function canCreatePaperPortfolio() {
+  const paper = state.portfolioConfig?.paper || defaultPortfolioConfig().paper || {};
+  return Object.keys(paper)
+    .filter((id) => !BUILT_IN_PAPER_STRATEGY_IDS.includes(id) && CUSTOM_PAPER_STRATEGY_ID.test(id))
+    .length < CUSTOM_PAPER_PORTFOLIO_LIMIT;
+}
+
 function createPortfolioDraftForType(type, strategyId, prefill = {}, displayName = "") {
   const accountType = normalizePortfolioAccountType(type);
   const { displayName: ignoredDisplayName, ...rest } = prefill || {};
@@ -4593,6 +4603,10 @@ function switchCreatePortfolioType(type) {
  */
 function openCreatePortfolioModal(prefill = {}, trigger = null) {
   if (!els.parameterModal) return;
+  if (!canCreatePaperPortfolio()) {
+    setExecutionStatus(`portfolio limit reached (${CUSTOM_PAPER_PORTFOLIO_LIMIT}); archive or remove an unused portfolio before creating another`, "error");
+    return;
+  }
   const label = normalizePortfolioName(prefill.displayName, "") || "New portfolio";
   const strategyId = newPaperPortfolioId(label);
   if (!strategyId) {

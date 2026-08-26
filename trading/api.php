@@ -5,7 +5,10 @@ declare(strict_types=1);
 // Every created portfolio becomes a strategy the bot runs each pass and a portfolio row
 // in the published state, so the number of them is bounded rather than left to whatever
 // a form can be submitted enough times to produce.
-const CUSTOM_PAPER_PORTFOLIO_LIMIT = 12;
+// Custom portfolios are dynamically configured strategies; keeping a practical bound
+// protects a scheduled pass from unbounded work while still leaving room for archived
+// experiments and the active portfolios a user actually wants to compare.
+const CUSTOM_PAPER_PORTFOLIO_LIMIT = 24;
 
 header('Content-Type: application/json; charset=utf-8');
 header('Cache-Control: no-store');

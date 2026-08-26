@@ -125,9 +125,9 @@ test("created portfolios: the stored count is bounded", () => {
   for (let index = 0; index < 40; index += 1) paper[`made${index}`] = { displayName: `Made ${index}` };
   const config = normalizeConfig({ paper });
   const created = Object.values(config.paper).filter((row) => row.custom === true);
-  assert.equal(created.length, 12, "every created portfolio becomes a strategy the bot runs each pass");
+  assert.equal(created.length, 24, "every created portfolio becomes a strategy the bot runs each pass");
   // And the shipped ones are never displaced by the cap.
-  assert.equal(Object.keys(config.paper).length, 16);
+  assert.equal(Object.keys(config.paper).length, 28);
 });
 
 // Asked for explicitly: archiving hides a portfolio and deactivates it, without losing
