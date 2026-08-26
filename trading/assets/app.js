@@ -4768,11 +4768,24 @@ function renderArchivedPortfolios() {
     <ul class="archived-portfolio-list">
       ${archived.map(([id, row]) => {
         const stored = id === "live-5050" ? null : state.botState?.paperPortfolios?.[id];
+        const archive = id === "live-5050"
+          ? null
+          : (Array.isArray(state.botState?.paperPortfolioArchives)
+            ? state.botState.paperPortfolioArchives.find((entry) => entry?.strategyId === id)
+            : null);
+        const archivedSummary = stored?.historySummary || archive?.summary || null;
+        const archivedEquity = stored?.portfolio?.equityUsdc ?? archive?.summary?.equityUsdc;
         const detail = id === "live-5050"
           ? "new bids paused; existing orders and positions are still watched"
-          : (stored?.portfolio
-            ? `${money(Number(stored.portfolio.equityUsdc))} equity / ${formatInteger((stored.trades || []).length) || 0} trades`
-            : "no stored account yet");
+          : (archivedSummary
+            ? [
+              Number.isFinite(Number(archivedEquity)) ? `${money(Number(archivedEquity))} equity` : null,
+              `${formatInteger(archivedSummary.tradeCount) || 0} trades`,
+              Number(archivedSummary.resolvedCount) > 0
+                ? `${formatInteger(archivedSummary.correctCount) || 0} / ${formatInteger(archivedSummary.resolvedCount) || 0} accuracy (${probability(Number(archivedSummary.accuracy))})`
+                : "no resolved trades yet",
+            ].filter(Boolean).join(" / ")
+            : "archive summary is not available yet");
         return `
           <li>
             <span><strong>${escapeHtml(normalizePortfolioName(row?.displayName, id === "live-5050" ? "5050" : id))}</strong> <span class="muted">${escapeHtml(detail)}</span></span>

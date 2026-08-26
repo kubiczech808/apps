@@ -106,6 +106,10 @@ function state_segment_fields(): array
     return [
         'observations' => ['marketObservations', 'marketScan'],
         'evaluations' => ['evaluations'],
+        // Portfolio archives hold the only historical copy after a paper portfolio is
+        // reset or archived. Dashboard consumers receive a compact summary below, not
+        // the snapshots themselves.
+        'archives' => ['paperPortfolioArchives'],
         // Scan history is small in row count but carries per-run audits, and the
         // audit endpoints read nothing else. Keeping it separate lets them skip
         // the market catalogue entirely.
@@ -131,7 +135,7 @@ function state_segments_for_summary(string $summary): array
 {
     switch ($summary) {
         case 'dashboard':
-            return [];
+            return ['archives'];
         case 'portfolio-overview':
             return [];
         case 'candidates':
@@ -1145,6 +1149,7 @@ function compact_dashboard_paper_portfolio(array $portfolio, bool $includeTrades
             $compact[$field] = $portfolio[$field];
         }
     }
+    $compact['historySummary'] = paper_portfolio_history_summary($portfolio);
     $compact['trades'] = [];
     $compact['runLog'] = [];
     return $compact;
@@ -1156,6 +1161,97 @@ function sorted_run_log_rows(array $rows): array
         $rightTime = strtotime((string) ($right['runAt'] ?? $right['generatedAt'] ?? $right['createdAt'] ?? '')) ?: 0;
         $leftTime = strtotime((string) ($left['runAt'] ?? $left['generatedAt'] ?? $left['createdAt'] ?? '')) ?: 0;
         return $rightTime <=> $leftTime;
+    });
+    return $rows;
+}
+
+function archived_trade_is_closed(array $trade): bool
+{
+    return in_array(strtoupper((string) ($trade['status'] ?? '')), [
+        'WON', 'LOST', 'CLOSED', 'REDEEMED', 'SOLD', 'REDEEM_REQUIRED',
+        'RESOLVED', 'STOP_LOSS', 'STOP_GAP', 'LIMIT_ORDER_EXPIRED',
+    ], true);
+}
+
+function archived_trade_prediction_result(array $trade): ?bool
+{
+    $status = strtoupper((string) ($trade['status'] ?? ''));
+    if (in_array($status, ['WON', 'REDEEMED', 'REDEEM_REQUIRED'], true)) {
+        return true;
+    }
+    if (in_array($status, ['LOST', 'STOP_LOSS', 'STOP_GAP'], true)) {
+        return false;
+    }
+    if ($status === 'LIMIT_ORDER_EXPIRED') {
+        return null;
+    }
+
+    $final = $trade['finalOutcomePrice'] ?? null;
+    if (is_numeric($final)) {
+        $price = (float) $final;
+        if ($price >= 0.995) {
+            return true;
+        }
+        if ($price <= 0.005) {
+            return false;
+        }
+    }
+    return null;
+}
+
+function paper_portfolio_history_summary(array $portfolio): array
+{
+    $trades = is_array($portfolio['trades'] ?? null) ? $portfolio['trades'] : [];
+    $closed = 0;
+    $correct = 0;
+    $resolved = 0;
+    foreach ($trades as $trade) {
+        if (!is_array($trade) || !archived_trade_is_closed($trade)) {
+            continue;
+        }
+        $closed++;
+        $result = archived_trade_prediction_result($trade);
+        if ($result === null) {
+            continue;
+        }
+        $resolved++;
+        if ($result) {
+            $correct++;
+        }
+    }
+    return [
+        'tradeCount' => count($trades),
+        'closedTradeCount' => $closed,
+        'correctCount' => $correct,
+        'resolvedCount' => $resolved,
+        'accuracy' => $resolved > 0 ? $correct / $resolved : null,
+    ];
+}
+
+function compact_paper_portfolio_archives(array $archives): array
+{
+    $rows = [];
+    foreach ($archives as $archive) {
+        if (!is_array($archive) || !isset($archive['id'], $archive['strategyId'])) {
+            continue;
+        }
+        $snapshot = is_array($archive['snapshot'] ?? null) ? $archive['snapshot'] : [];
+        $history = paper_portfolio_history_summary($snapshot);
+        $portfolio = is_array($snapshot['portfolio'] ?? null) ? $snapshot['portfolio'] : [];
+        $rows[] = [
+            'id' => (string) $archive['id'],
+            'strategyId' => (string) $archive['strategyId'],
+            'label' => (string) ($archive['label'] ?? $archive['strategyId']),
+            'archivedAt' => (string) ($archive['archivedAt'] ?? ''),
+            'reason' => (string) ($archive['reason'] ?? ''),
+            'summary' => array_merge([
+                'equityUsdc' => is_numeric($portfolio['equityUsdc'] ?? null) ? (float) $portfolio['equityUsdc'] : null,
+            ], $history),
+        ];
+    }
+    usort($rows, static function (array $left, array $right): int {
+        return (strtotime((string) ($right['archivedAt'] ?? '')) ?: 0)
+            <=> (strtotime((string) ($left['archivedAt'] ?? '')) ?: 0);
     });
     return $rows;
 }
@@ -1192,6 +1288,10 @@ function compact_state_payload(string $target, array $data, string $summary, ?st
 {
     if ($target !== 'paper') {
         return $data;
+    }
+
+    if (isset($data['paperPortfolioArchives']) && is_array($data['paperPortfolioArchives'])) {
+        $data['paperPortfolioArchives'] = compact_paper_portfolio_archives($data['paperPortfolioArchives']);
     }
 
     if ($summary === 'portfolio-overview') {
