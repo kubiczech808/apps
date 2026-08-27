@@ -873,6 +873,12 @@ function compact_market_observation(array $item): array
         'observedAt',
         'firstObservedAt',
         'firstMarketProbability',
+        // The width of the quote the row was discovered at. Without it an executor
+        // reading this compact response cannot tell a real price from the midpoint of a
+        // book with no counterparty in it, which is what the spread gate exists to reject.
+        'firstSpread',
+        'firstBestAsk',
+        'firstBestBid',
         'firstLiquidity',
         // Keep both volume snapshots: the discovery-time value explains the
         // opportunity as it was found, while the resolved-time value feeds the
@@ -893,6 +899,8 @@ function compact_market_observation(array $item): array
         'orderNotionalUsdc',
         'minOrderSize',
         'spread',
+        'bestAsk',
+        'bestBid',
         'source',
     ];
     $compact = [];
@@ -906,6 +914,42 @@ function compact_market_observation(array $item): array
     }
 
     return $compact;
+}
+
+/**
+ * How wide a bid/ask spread may be before a row stops counting as tradable, in
+ * probability units. Mirrors PAPER_MAX_TRADABLE_SPREAD in the bot; the two have to agree
+ * or the execution shortlist lists rows the run will refuse.
+ */
+const MAX_TRADABLE_SPREAD = 0.05;
+
+/**
+ * The width of a row's quote, or null when nothing on it says. Reads the live quote first,
+ * matching the bot's entry-side reader: an order is placed against the book as it is now,
+ * and the discovery-time figure is only the fallback for a row not yet re-scanned.
+ */
+function observation_spread(array $item): ?float
+{
+    foreach ([['spread', 'bestAsk', 'bestBid'], ['firstSpread', 'firstBestAsk', 'firstBestBid']] as [$stated, $askKey, $bidKey]) {
+        if (is_numeric($item[$stated] ?? null)) {
+            return abs((float) $item[$stated]);
+        }
+        if (is_numeric($item[$askKey] ?? null) && is_numeric($item[$bidKey] ?? null)) {
+            return abs((float) $item[$askKey] - (float) $item[$bidKey]);
+        }
+    }
+    return null;
+}
+
+/**
+ * A row with no recorded spread cannot say whether it had a counterparty, and is treated
+ * as if it did not. Measured on the 600 newest open markets: the median spread is 90
+ * points and 87% of them are wider than 10 points with no 24h volume at all.
+ */
+function observation_spread_is_tradable(array $item): bool
+{
+    $spread = observation_spread($item);
+    return $spread !== null && $spread <= MAX_TRADABLE_SPREAD;
 }
 
 function is_active_scraped_market_observation(array $item): bool
@@ -990,6 +1034,12 @@ function execution_scope_matches_observation(array $item, array $config): bool
         ? (float) $item['volumeUsdc']
         : (float) ($item['liquidity'] ?? 0);
     if ($minimumLiquidity !== null && $liquidity < $minimumLiquidity) {
+        return false;
+    }
+    // The same gate the bot applies at entry. This endpoint feeds the execution shortlist,
+    // so shipping rows the bot will then reject would make the screen disagree with the run
+    // -- and a market quoting a 90-point spread has no counterparty to fill an order at all.
+    if (!observation_spread_is_tradable($item)) {
         return false;
     }
     $minimumYield = normalize_net_yield_value($config['minNetYield'] ?? null, 0.0);
@@ -3712,6 +3762,13 @@ try {
             // counted -- an inclusive bound here would show one extra market for every
             // entry sitting on the round number the band ends at.
             if ($entry === null || $entry < $minProbability || ($maxProbability !== null && $entry >= $maxProbability)) {
+                return true;
+            }
+            // The statistics count only rows whose quote had a counterparty near it, so a
+            // list opened from one of those rows has to hold the same set. Without this
+            // the count and the list disagree, which is the complaint this endpoint was
+            // built to answer in the first place.
+            if (!observation_spread_is_tradable($item)) {
                 return true;
             }
             $labels = simulation_taxonomy_labels($item, $firstField, $currentField);

@@ -144,6 +144,10 @@ jobs:
       PAPER_MARKET_SCAN_MIN_PROBABILITY: "0.5"
       PAPER_MARKET_SCAN_MIN_RESOLUTION_MINUTES: "0"
       PAPER_MAX_SPREAD: "0.08"
+      # How wide a bid/ask spread may be before a scraped row stops counting as a real
+      # opportunity, in probability units: 0.05 is five points. Must match
+      # MAX_TRADABLE_SPREAD in trading/api.php, which filters the same rows on the way out.
+      PAPER_MAX_TRADABLE_SPREAD: "0.05"
       PAPER_MIN_VOLUME_24H: "100"
       PAPER_MAX_RESOLUTION_DAYS: "7"
       # Scraping runs every ten minutes. Grounded analysis, paper-trade

@@ -11175,13 +11175,21 @@ function renderCalculationReport() {
   const sample = Number(report.sampleSize || 0);
   const binary = Number(report.resolvedBinaryCount || 0);
   const multi = Number(report.resolvedMultiCount || 0);
+  // Said out loud, because a shrinking sample otherwise reads as data loss. Nothing is
+  // deleted: a row whose quote was too wide to trade against is held back from the
+  // statistics, and rows scraped before the spread was recorded cannot show they had a
+  // counterparty, so they are held back too until they are scanned again.
+  const spreadExcluded = Number(report.spreadExcludedCount || 0);
+  const spreadNote = spreadExcluded > 0
+    ? ` / ${formatInteger(spreadExcluded)} held back: bid/ask wider than ${probability(Number(report.maxTradableSpread || 0))} or not yet recorded`
+    : "";
 
   els.calculationReport.innerHTML = `
     <div class="calculation-summary">
       <div>
         <span class="label">Last calculation</span>
         <strong>${escapeHtml(report.generatedAt ? formatDate(report.generatedAt) : "-")}</strong>
-        <span>${sample} resolved scraped opportunities</span>
+        <span>${sample} resolved scraped opportunities${escapeHtml(spreadNote)}</span>
       </div>
       <div>
         <span class="label">Simulation scope</span>

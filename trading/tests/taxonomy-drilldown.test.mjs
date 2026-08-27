@@ -57,6 +57,11 @@ function observation(overrides = {}) {
     volumeUsdc: 120000,
     firstVolumeUsdc: 120000,
     firstDaysToResolution: 3,
+    // The width of the book at discovery. Both sides drop a row whose quote was too wide
+    // to trade against, so it has to be here or the two would agree only on emptiness --
+    // which would make every count in this file pass without proving anything.
+    firstSpread: 0.02,
+    spread: 0.02,
     ...overrides,
   };
 }
@@ -354,4 +359,48 @@ test("taxonomy drill-down: the browser groups a row exactly as the statistics do
       );
     }
   }
+});
+
+// The spread gate has to hold on both sides of the wire. PHP serves the execution
+// shortlist and the drill-down lists; the bot re-filters what it is served and computes the
+// statistics. If the two disagreed, the screen would offer rows the run then refuses --
+// which is the shape of the "candidates exist but the run skipped" reports.
+test("spread: PHP and the bot drop the same untradable rows", () => {
+  const row = (id, spread, tag) => observation({
+    id,
+    marketKey: `key-${id}`,
+    firstPolymarketTags: ["esports", tag],
+    polymarketTags: ["esports", tag],
+    firstSpread: spread,
+    spread,
+  });
+  // Three tradable, three not: one far too wide, one a hair over the limit, one that
+  // recorded nothing at all.
+  const rows = [
+    row("tight-1", 0.01, "league-of-legends"),
+    row("tight-2", 0.05, "league-of-legends"),
+    row("tight-3", 0.02, "league-of-legends"),
+    row("wide", 0.9, "league-of-legends"),
+    row("just-over", 0.0501, "league-of-legends"),
+    { ...observation({ id: "silent", marketKey: "key-silent" }), firstSpread: undefined, spread: undefined },
+  ];
+
+  const expected = tagRow(rows, "league-of-legends");
+  assert.equal(expected.trades, 3, "the statistic counts only the three that had a book");
+
+  withApi(rows, (directory) => {
+    const response = callApi(directory, {
+      action: "taxonomy-observations",
+      kind: "tag",
+      value: "league-of-legends",
+      statuses: "RESOLVED",
+      probability: "50",
+    });
+    assert.equal(response.matched, expected.trades,
+      "the list behind the statistic must hold exactly what the statistic counted");
+    const ids = (response.marketObservations || []).map((item) => item.id).sort();
+    assert.deepEqual(ids, ["tight-1", "tight-2", "tight-3"]);
+    // The row that was exactly at the limit is in, the one a hair over is not.
+    assert.ok(ids.includes("tight-2"));
+  });
 });

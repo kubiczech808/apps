@@ -65,6 +65,7 @@ test("custom tag portfolio: execution uses the active Polymarket shortlist the d
       stakeUsdc: 5,
       totalCostUsdc: 5,
       netGainIfWinUsdc: 0.7415,
+      spread: 0.02,
       liquidity: 50000,
       volume24hr: 50000,
       daysToResolution: 0.4,
@@ -2549,6 +2550,10 @@ test("parameter combinations: a resolved row keeps its scrape-time entry price",
     finalOutcomePrice: 1,
     firstLiquidity: 60000,
     firstDaysToResolution: 1,
+    // Two points wide, so the entry above had something to trade against. Without a
+    // recorded spread the row cannot show it had a counterparty and the statistics leave
+    // it out, which is a different exclusion from the one this test is about.
+    firstSpread: 0.02,
   };
   const state = bot.normalizeState({ marketObservations: [resolvedRow] });
   const report = bot.buildCalculationReport(state);
@@ -2574,6 +2579,9 @@ test("calculation report: a resolved loss is never counted as a win", () => {
     firstMarketProbability: 0.8,
     lastLiveMarketProbability: 0.8,
     marketProbability: 0.8,
+    // Tradable when it was scraped, so the statistics count it. A row with no recorded
+    // spread is held back for a different reason than anything this test is checking.
+    firstSpread: 0.02,
     firstFeeRate: 0,
     firstDaysToResolution: 1,
     daysToResolution: 1,
@@ -2727,6 +2735,7 @@ test("taxonomy performance: every resolved trade is represented by a real label 
     finalOutcomePrice: 1,
     firstLiquidity: 60000,
     firstDaysToResolution: 2,
+    firstSpread: 0.02,
   };
   const report = bot.buildCalculationReport(bot.normalizeState({ marketObservations: [resolvedRow] }));
   assert.deepEqual(report.taxonomyCoverage.category, {
@@ -2879,6 +2888,7 @@ test("calculation report: open counts mirror parameter rules and taxonomy", () =
     lastLiveMarketProbability: 0.8,
     finalOutcomePrice: 1,
     firstDaysToResolution: 3,
+    firstSpread: 0.02,
     firstPolymarketCategories: ["sports"],
     firstPolymarketTags: ["football"],
   };
@@ -3079,6 +3089,10 @@ test("portfolio market type: Yes/No and multichoice use the same three-value fil
     marketType: "binary",
     marketProbability: 0.95,
     marketPrice: 0.95,
+    // A quote something could be traded against. Without one the candidate is rejected
+    // for the spread rather than for its market type, and this test would pass for the
+    // wrong reason.
+    spread: 0.02,
     volumeUsdc: 100000,
     daysToResolution: 1,
     netGainIfWinUsdc: 0.25,
@@ -8482,6 +8496,7 @@ test("statistics: a band reports what the floor above it hides", () => {
     lastLiveMarketProbability: entry,
     finalOutcomePrice: won ? 1 : 0,
     firstDaysToResolution: 3,
+    firstSpread: 0.02,
     firstPolymarketCategories: ["esports"],
     firstPolymarketTags: ["league-of-legends"],
   });
@@ -8546,4 +8561,169 @@ test("statistics: the browser shows a row's probability range, floor or band", (
   // only way to act on the finding: a floor-and-reward/risk portfolio buys at the floor by
   // construction, so capping it is what makes it trade the range it was chosen for.
   assert.match(app, /maxProbability: row\.maxProbability \?\? "",/);
+});
+
+// -- A quote nobody was on the other side of ---------------------------------------------
+//
+// Reported: the scrape lands too early, while a fixture has no volume and the gap between
+// bid and ask is enormous. The row then reads as lucrative at a price no order could have
+// been filled at, because there was no counterparty. Asked for: count only trades whose
+// spread is under 5 points, in the statistics and at entry alike.
+//
+// Measured on the 600 newest open Polymarket markets before any of this was written. Gamma
+// populates spread on 600 of 600, and it equals bestAsk - bestBid on 516 of the 516 that
+// carry both -- so it is in probability units and "5 points" is 0.05. The distribution is
+// not a tail, it is the bulk: median 90 points, p75 97. A 5-point gate keeps 66 of 600, and
+// the markets above 10 points number 521, every single one of them with zero 24h volume.
+//
+// A volume floor does not catch these. rowVolumeUsdc prefers lifetime volume over the last
+// 24 hours, so a long-listed fixture that nobody is quoting today still clears it -- the
+// median 24h volume across leagueoflegends' own closed trades was $45 against a configured
+// $10,000 gate.
+
+test("spread: a row is only tradable if something was quoting near it", () => {
+  const tight = { firstSpread: 0.02 };
+  const wide = { firstSpread: 0.9 };
+  assert.equal(bot.observationSpread(tight), 0.02);
+  assert.equal(bot.observationSpreadIsTradable(tight), true);
+  assert.equal(bot.observationSpreadIsTradable(wide), false);
+  // Exactly at the limit is still tradable; a hair over is not.
+  assert.equal(bot.observationSpreadIsTradable({ firstSpread: 0.05 }), true);
+  assert.equal(bot.observationSpreadIsTradable({ firstSpread: 0.0501 }), false);
+
+  // Either representation answers the question, and they agree.
+  assert.equal(bot.observationSpread({ firstBestAsk: 0.99, firstBestBid: 0.09 }), 0.9);
+  assert.equal(bot.observationSpreadIsTradable({ firstBestAsk: 0.99, firstBestBid: 0.09 }), false);
+  assert.equal(bot.observationSpreadIsTradable({ bestAsk: 0.71, bestBid: 0.69 }), true);
+
+  // A row that recorded nothing cannot show it had a counterparty, so it does not count.
+  assert.equal(bot.observationSpread({}), null);
+  assert.equal(bot.observationSpreadIsTradable({}), false);
+
+  // The two readers disagree on purpose. The statistics judge the price the simulation
+  // entered at, which is the discovery-time quote; an entry judges the book as it is now.
+  // A market that has since tightened does not make the original entry real, and a market
+  // that has since widened is not one to send an order into.
+  const tightenedSinceDiscovery = { firstSpread: 0.9, spread: 0.01 };
+  assert.equal(bot.observationSpread(tightenedSinceDiscovery), 0.9);
+  assert.equal(bot.liveObservationSpread(tightenedSinceDiscovery), 0.01);
+  assert.equal(bot.observationSpreadIsTradable(tightenedSinceDiscovery), false);
+  assert.equal(bot.candidateSpreadIsTradable(tightenedSinceDiscovery), true);
+  // And each falls back to the other when its own side is missing.
+  assert.equal(bot.liveObservationSpread({ firstSpread: 0.02 }), 0.02);
+  assert.equal(bot.observationSpread({ spread: 0.02 }), 0.02);
+});
+
+test("spread: an untradable quote is kept out of the statistics and counted where it went", () => {
+  const row = (id, firstSpread) => ({
+    id,
+    tokenId: `${id}`.padEnd(20, "0"),
+    question: `Will ${id} be true?`,
+    outcome: "Yes",
+    status: "RESOLVED",
+    marketClosed: true,
+    firstMarketProbability: 0.8,
+    lastLiveMarketProbability: 0.8,
+    finalOutcomePrice: 1,
+    firstDaysToResolution: 2,
+    firstPolymarketTags: ["esports"],
+    ...(firstSpread == null ? {} : { firstSpread }),
+  });
+  const report = bot.buildCalculationReport(bot.normalizeState({
+    marketObservations: [row("tradable", 0.02), row("unquoted", 0.9), row("unrecorded", null)],
+  }));
+
+  assert.equal(report.sampleSize, 1, "only the row with a book behind it is a trade");
+  assert.equal(report.spreadScrapedCount, 3, "and the report says how many it started from");
+  assert.equal(report.spreadExcludedCount, 2);
+  assert.equal(report.maxTradableSpread, 0.05, "the limit in force is published with the count");
+  // Nothing was deleted to achieve this: the observations are all still in the state.
+  const rule = report.parameterSummaries.find((r) => r.marketType === "all"
+    && r.threshold === 0.5 && r.maxResolutionDays === 30 && r.maxProbability == null);
+  assert.equal(rule.trades, 1);
+  assert.equal(report.tagSummaries.find((r) => r.label === "esports")?.trades, 1);
+});
+
+test("spread: a portfolio will not open a position it could not have been filled on", () => {
+  const strategy = {
+    ...bot.PAPER_STRATEGIES.conservative,
+    probabilitySource: "polymarket",
+    minProbability: 0.8,
+    maxProbability: null,
+    minLiquidityUsdc: null,
+    minNetYield: 0,
+    marketType: "all",
+    requireMostProbableOutcome: false,
+    excludedCandidateTokenIds: new Set(),
+  };
+  const candidate = (spread) => ({
+    tokenId: "12345678901234567890",
+    status: "SCRAPED",
+    question: "Will the event happen?",
+    outcome: "Yes",
+    marketProbability: 0.95,
+    marketPrice: 0.95,
+    volumeUsdc: 100000,
+    daysToResolution: 1,
+    netGainIfWinUsdc: 0.25,
+    totalCostUsdc: 5,
+    ...(spread == null ? {} : { spread }),
+  });
+
+  assert.equal(bot.strategyEligibleCandidates([candidate(0.02)], strategy).length, 1);
+  assert.deepEqual(bot.strategyEligibleCandidates([candidate(0.9)], strategy), [],
+    "a 90-point book has no counterparty at the midpoint the row is quoting");
+  assert.deepEqual(bot.strategyEligibleCandidates([candidate(null)], strategy), []);
+
+  // And the run log says which of the two it was, because "no eligible candidate" with a
+  // full shortlist behind it is exactly the report that has come back three times now.
+  const wide = bot.portfolioFilterResult(candidate(0.9), strategy);
+  assert.equal(wide.eligible, false);
+  assert.ok(wide.reasons.some((reason) => /spread 90\.0 points exceeds 5\.0/.test(reason)), wide.reasons.join(" | "));
+  const silent = bot.portfolioFilterResult(candidate(null), strategy);
+  assert.ok(silent.reasons.some((reason) => /no bid\/ask spread has been recorded/.test(reason)), silent.reasons.join(" | "));
+});
+
+test("spread: the browser, the bot and api.php apply one rule", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const [api, app, botSource] = await Promise.all([
+    readFile(new URL("../api.php", import.meta.url), "utf8"),
+    readFile(new URL("../assets/app.js", import.meta.url), "utf8"),
+    readFile(new URL("../tools/paper-trading-bot.mjs", import.meta.url), "utf8"),
+  ]);
+
+  // The execution shortlist is served by PHP and then re-filtered by the bot. If the two
+  // limits drifted apart the screen would offer rows the run refuses, which is the shape of
+  // every "candidates exist but the run skipped" report so far.
+  const botLimit = /PAPER_MAX_TRADABLE_SPREAD", ([\d.]+)\)/.exec(botSource);
+  const phpLimit = /const MAX_TRADABLE_SPREAD = ([\d.]+);/.exec(api);
+  assert.ok(botLimit && phpLimit, "both sides must state their limit");
+  assert.equal(Number(botLimit[1]), Number(phpLimit[1]));
+  assert.equal(Number(botLimit[1]), 0.05, "five points, as asked");
+
+  // PHP reads the same fields, and rejects a row that recorded none.
+  const phpReader = /function observation_spread\(array \$item\): \?float[\s\S]*?\n\}/.exec(api);
+  assert.ok(phpReader);
+  for (const field of ["spread", "bestAsk", "bestBid", "firstSpread", "firstBestAsk", "firstBestBid"]) {
+    assert.match(phpReader[0], new RegExp(`'${field}'`), `${field} must be read`);
+  }
+  assert.match(api, /\$spread !== null && \$spread <= MAX_TRADABLE_SPREAD/);
+  assert.match(api, /if \(!observation_spread_is_tradable\(\$item\)\) \{\n\s+return false;/);
+
+  // The fields have to survive transport, or the executor sees a row with no spread on it
+  // and drops everything.
+  const compaction = /function compact_market_observation\(array \$item\): array[\s\S]*?\n\}/.exec(api);
+  assert.ok(compaction);
+  for (const field of ["firstSpread", "firstBestAsk", "firstBestBid", "spread", "bestAsk", "bestBid"]) {
+    assert.match(compaction[0], new RegExp(`'${field}',`), `${field} must be carried through the compaction`);
+  }
+
+  // The scan is what puts them there in the first place.
+  const scan = functionSource(botSource, "preferredMarketObservation");
+  assert.match(scan, /firstSpread: numericOrNull\(market\.spread\)/);
+  assert.match(scan, /spread: numericOrNull\(market\.spread\)/);
+
+  // A shrinking sample must read as deliberate rather than as data loss.
+  assert.match(app, /report\.spreadExcludedCount/);
+  assert.match(app, /held back: bid\/ask wider than/);
 });

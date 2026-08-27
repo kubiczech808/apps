@@ -158,6 +158,25 @@ const OPPORTUNITY_MIN_EDGE = envNumber("PAPER_OPPORTUNITY_MIN_EDGE", 0.04);
 const OPPORTUNITY_MIN_ANNUAL_RETURN = envNumber("PAPER_OPPORTUNITY_MIN_ANNUAL_RETURN", 0.3);
 const MAX_EVALUATIONS_PER_RUN = envNumber("PAPER_MAX_EVALUATIONS_PER_RUN", 80);
 const MAX_SPREAD = envNumber("PAPER_MAX_SPREAD", 0.08);
+// The width a quote has to be inside before a scraped row counts as a real opportunity,
+// in probability units: 0.05 is a five-point spread between the best bid and the best ask.
+//
+// Reported and then measured. The scrape lands on a fixture the moment Gamma lists it,
+// which is long before anyone has quoted it. On the 600 newest open markets the median
+// spread is 90 points and 521 of them -- 87% -- carry a spread wider than 10 points with
+// zero 24h volume. A 90-point spread is a bid near 0.01 against an ask near 0.99: no
+// counterparty exists at any price in between. Pricing a simulated entry at the midpoint
+// of that invents a trade nobody could have made, and because those midpoints are
+// arbitrary they landed wherever they liked in the probability ladder and made the rows
+// above them look lucrative. This is the gate that keeps them out, of the statistics and
+// of a live entry alike -- an order placed into a book that wide would simply rest unfilled.
+const MAX_TRADABLE_SPREAD = Math.max(0, envNumber("PAPER_MAX_TRADABLE_SPREAD", 0.05));
+// Whether a row that recorded no spread at all counts as tradable. Every observation
+// scraped from now on carries one; the ones already in the archive predate the field, and
+// admitting them would keep exactly the rows this gate exists to remove. Asked for
+// explicitly: start the statistics again from clean data. Setting this true re-admits the
+// whole archive without anything having been deleted.
+const COUNT_UNKNOWN_SPREAD_AS_TRADABLE = envBool("PAPER_COUNT_UNKNOWN_SPREAD", false);
 const MIN_VOLUME_24H = envNumber("PAPER_MIN_VOLUME_24H", 100);
 const MAX_HISTORY = envNumber("PAPER_MAX_HISTORY", 5000);
 const PAPER_CLOSED_TRADE_HISTORY_LIMIT = Math.max(50, envNumber("PAPER_CLOSED_TRADE_HISTORY_LIMIT", 300));
@@ -2126,6 +2145,11 @@ function firstObservationMetadata(item = {}) {
   return {
     firstObservedAt,
     firstMarketProbability: Number.isFinite(firstProbability) ? Number(firstProbability.toFixed(4)) : null,
+    // Carried forward, never recomputed from a later quote: the point of it is what the
+    // book looked like when the row was first seen and its entry price was set.
+    firstSpread: numericOrNull(item.firstSpread ?? item.spread),
+    firstBestAsk: numericOrNull(item.firstBestAsk ?? item.bestAsk),
+    firstBestBid: numericOrNull(item.firstBestBid ?? item.bestBid),
     firstLiquidity: Number.isFinite(firstLiquidity) ? Number(firstLiquidity.toFixed(2)) : null,
     firstVolumeUsdc: Number.isFinite(firstVolumeUsdc) ? Number(firstVolumeUsdc.toFixed(2)) : null,
     firstVolume24hr: Number.isFinite(firstVolume24hr) ? Number(firstVolume24hr.toFixed(2)) : null,
@@ -6246,6 +6270,11 @@ function strategyEligibleCandidates(eligible, strategy) {
     if (Number.isFinite(minProbability) && (!Number.isFinite(selectedProbability) || selectedProbability < minProbability)) return false;
     if (maxProbability != null && Number.isFinite(selectedProbability) && selectedProbability > maxProbability) return false;
     if (daysValue(item) > maxResolutionDays) return false;
+    // The same test the statistics apply, for the same reason: an order sent into a book
+    // this wide has no counterparty to fill against, so a row quoting an attractive
+    // midpoint is not an opportunity. A volume floor does not catch it -- rowVolumeUsdc
+    // prefers lifetime volume, which a long-listed but unquoted fixture can satisfy.
+    if (!candidateSpreadIsTradable(item)) return false;
     const minLiquidityUsdc = Number(strategy.minLiquidityUsdc);
     if (Number.isFinite(minLiquidityUsdc) && rowVolumeUsdc(item) < minLiquidityUsdc) return false;
     const minimumNetYield = Math.max(0, Number(strategy.minNetYield) || 0);
@@ -6357,6 +6386,13 @@ function strategyAllowsTags(item, strategy) {
 // use this instead.
 function numericOrNaN(value) {
   return value == null || value === "" ? NaN : Number(value);
+}
+
+// Null rather than NaN or 0 for a value that was simply not reported. A stored 0 spread
+// would read as a perfectly tight quote, which is the opposite of "we do not know".
+function numericOrNull(value) {
+  const numeric = numericOrNaN(value);
+  return Number.isFinite(numeric) ? Number(numeric.toFixed(4)) : null;
 }
 
 // Gamma's outcome price is a useful reference quote, but it can be stale by the
@@ -6508,6 +6544,12 @@ function portfolioFilterResult(item, strategy) {
   }
   if (Number.isFinite(minLiquidityUsdc) && candidateVolume < minLiquidityUsdc) {
     reasons.push(`volume ${candidateVolume.toFixed(2)} below ${minLiquidityUsdc.toFixed(2)} USDC`);
+  }
+  if (!candidateSpreadIsTradable(item)) {
+    const spread = liveObservationSpread(item);
+    reasons.push(spread == null
+      ? "no bid/ask spread has been recorded for this market yet"
+      : `bid/ask spread ${(spread * 100).toFixed(1)} points exceeds ${(MAX_TRADABLE_SPREAD * 100).toFixed(1)}`);
   }
   const candidateNetYield = netYieldAfterFees(item, strategy);
   if (!Number.isFinite(candidateNetYield) || candidateNetYield < minNetYield) {
@@ -8722,6 +8764,12 @@ function preferredMarketObservation(market, observedAt = nowIso()) {
     resolutionEndDate: dateContext.resolutionEndDate,
     endDateSource: dateContext.endDateSource,
     daysToResolution: days == null ? null : Number(days.toFixed(2)),
+    // The live quote's width, refreshed on every scan alongside liquidity and volume.
+    // firstSpread below records what it was when the row was discovered; this one is what
+    // an order placed now would have to cross.
+    spread: numericOrNull(market.spread),
+    bestAsk: numericOrNull(market.bestAsk),
+    bestBid: numericOrNull(market.bestBid),
     liquidity: Number(market.liquidity || 0),
     volume24hr: Number(market.volume24hr || 0),
     volumeUsdc: Number(marketVolumeUsdc(market).toFixed(2)),
@@ -8745,6 +8793,19 @@ function preferredMarketObservation(market, observedAt = nowIso()) {
     observedAt,
     firstObservedAt: observedAt,
     firstMarketProbability: Number(probability.toFixed(4)),
+    // The quote's own width, captured here because it is the only thing that says whether
+    // the price above was reachable. Gamma returns spread, bestAsk and bestBid on the market
+    // object the scan already holds, so this costs nothing.
+    //
+    // Reported and confirmed: the scrape lands while a fixture has no book at all. Measured
+    // on the 600 newest open markets, the median spread is 90 points and 521 of them -- 87%
+    // -- carry a spread over 10 points with zero 24h volume. A 90-point spread is a bid near
+    // 0.01 against an ask near 0.99: no counterparty at any price. Simulating an entry at the
+    // midpoint of that is simulating a trade nobody could have made, which is what made the
+    // statistics look lucrative.
+    firstSpread: numericOrNull(market.spread),
+    firstBestAsk: numericOrNull(market.bestAsk),
+    firstBestBid: numericOrNull(market.bestBid),
     firstLiquidity: Number(Number(market.liquidity || 0).toFixed(2)),
     firstVolumeUsdc: Number(marketVolumeUsdc(market).toFixed(2)),
     firstVolume24hr: Number(Number(market.volume24hr || 0).toFixed(2)),
@@ -9761,6 +9822,51 @@ function scrapedSimulationDays(item) {
   return Number.isFinite(value) && value >= 0 ? value : null;
 }
 
+// The width of a row's quote, in probability units. The stored spread is preferred over
+// reconstructing it from the two sides, because Gamma reports all three and they agreed on
+// every market that carried both when this was measured -- but either answers the question.
+function spreadFromFields(item, statedKey, askKey, bidKey) {
+  const stated = numericOrNull(item?.[statedKey]);
+  if (stated != null) return Math.abs(stated);
+  const ask = numericOrNull(item?.[askKey]);
+  const bid = numericOrNull(item?.[bidKey]);
+  return ask != null && bid != null ? Math.abs(ask - bid) : null;
+}
+
+// The two questions are genuinely different, so they read different fields.
+//
+// The statistics ask whether the price the simulation entered at was reachable, and that is
+// the price the row carried when it was discovered -- so firstSpread comes first there. A
+// book that tightened up a week later does not make the original entry real.
+//
+// An entry decision asks whether an order placed now would find a counterparty, so the
+// live quote comes first there, and the discovery-time one is only a fallback for a row
+// that has not been re-scanned since.
+function observationSpread(item = {}) {
+  return spreadFromFields(item, "firstSpread", "firstBestAsk", "firstBestBid")
+    ?? spreadFromFields(item, "spread", "bestAsk", "bestBid");
+}
+
+function liveObservationSpread(item = {}) {
+  return spreadFromFields(item, "spread", "bestAsk", "bestBid")
+    ?? spreadFromFields(item, "firstSpread", "firstBestAsk", "firstBestBid");
+}
+
+// Was there a counterparty close enough to trade against? A row with no recorded spread
+// cannot answer, and the default is to say no -- see COUNT_UNKNOWN_SPREAD_AS_TRADABLE.
+function spreadIsTradable(spread) {
+  if (spread == null) return COUNT_UNKNOWN_SPREAD_AS_TRADABLE;
+  return spread <= MAX_TRADABLE_SPREAD;
+}
+
+function observationSpreadIsTradable(item = {}) {
+  return spreadIsTradable(observationSpread(item));
+}
+
+function candidateSpreadIsTradable(item = {}) {
+  return spreadIsTradable(liveObservationSpread(item));
+}
+
 // Risk labels/keys are namespaced dedup identifiers for one specific market, event,
 // fixture or pairing -- "market: uwcl-faw-haj-2026-08-05-corners-team-home-4pt5" and
 // the like. They are what the overlap check needs, but as report rows they are noise:
@@ -10109,10 +10215,16 @@ function scrapedSimulationTaxonomyCoverage(trades, field) {
 
 function buildCalculationReport(state) {
   const generatedAt = state.generatedAt || nowIso();
-  const observedTrades = (Array.isArray(state.marketObservations) ? state.marketObservations : [])
+  const scrapedTrades = (Array.isArray(state.marketObservations) ? state.marketObservations : [])
     .map(withFirstObservationMetadata)
     .map(scrapedSimulationTrade)
     .filter(Boolean);
+  // Only rows whose entry price had a counterparty near it. A simulated trade priced at the
+  // midpoint of a 90-point spread was never available at that price, so counting it does not
+  // make the sample bigger -- it makes it wrong, and wrong in the direction that flatters
+  // whatever probability the midpoint happened to land on.
+  const observedTrades = scrapedTrades.filter((trade) => observationSpreadIsTradable(trade.item));
+  const excludedForSpread = scrapedTrades.length - observedTrades.length;
   // This is a performance report, not an inventory of live opportunities. Pending
   // markets have no outcome, so including them in trade counts or averages dilutes
   // every parameter combination with data that cannot validate the strategy yet.
@@ -10134,6 +10246,11 @@ function buildCalculationReport(state) {
     observedSampleSize: observedTrades.length,
     sampleSize: trades.length,
     resolvedSampleSize: trades.length,
+    // Stated rather than silently dropped: a reader has to be able to see how much of the
+    // catalogue this gate removed, and that the rows are excluded rather than deleted.
+    maxTradableSpread: Number(MAX_TRADABLE_SPREAD.toFixed(4)),
+    spreadExcludedCount: excludedForSpread,
+    spreadScrapedCount: scrapedTrades.length,
     stakeUsdc: Number(SCRAPED_SIMULATION_STAKE_USDC.toFixed(4)),
     resolvedBinaryCount: trades.filter((trade) => trade.marketType === "binary").length,
     resolvedMultiCount: trades.filter((trade) => trade.marketType === "multi").length,
@@ -11207,6 +11324,12 @@ export {
   // Whether an event is two-sided or a field of mutually exclusive alternatives. Both the
   // portfolio filters and the statistics classify through this one function.
   reportMarketType,
+  // How wide a row's quote was, and whether that leaves anything to trade against. The
+  // statistics judge the price the row was discovered at; an entry judges the book now.
+  observationSpread,
+  liveObservationSpread,
+  observationSpreadIsTradable,
+  candidateSpreadIsTradable,
   // Whether a resting stop would have been filled by the crossing a losing settlement
   // proves, for the one case the live check never reached: the market closed.
   settlementStopFill,

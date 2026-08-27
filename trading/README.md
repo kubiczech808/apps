@@ -115,6 +115,44 @@ refusing it one order at a time on later passes would leave it standing. A cance
 keeps the `LIMIT_ORDER_EXPIRED` terminal status — nothing was bought either way — with
 `cancelledForCapital` set, so the dashboard can say which of the two happened.
 
+### Tradable spread
+
+A scan lists a fixture the moment Gamma publishes it, which is long before anyone quotes
+it. Measured on the 600 newest open markets: the median bid/ask spread is **90 points**,
+p75 is 97, and the 521 markets wider than 10 points carry **zero** 24h volume between them.
+A 90-point spread is a bid near 0.01 against an ask near 0.99 — there is no counterparty at
+any price in between, and a simulated entry at the midpoint of it is a trade nobody could
+have made. Those midpoints land wherever they like on the probability ladder, so they
+flattered whatever row they fell into.
+
+Every observation therefore records the quote's width, from Gamma's own `spread`, `bestAsk`
+and `bestBid` — `firstSpread` at discovery, `spread` refreshed on each scan. Two questions
+read them in opposite order, deliberately:
+
+- **The statistics** ask whether the price the simulation entered at was reachable, which is
+  the discovery-time quote, so `firstSpread` wins. A book that tightened up a week later
+  does not make the original entry real.
+- **An entry** asks whether an order sent now would find a counterparty, so the live
+  `spread` wins and the discovery-time figure is only a fallback.
+
+`PAPER_MAX_TRADABLE_SPREAD` (default `0.05`, five points) is the limit, and
+`MAX_TRADABLE_SPREAD` in `api.php` must hold the same number: PHP serves the execution
+shortlist and the drill-down lists, the bot re-filters what it is served, and a divergence
+would put rows on screen that the run then refuses.
+
+A row that recorded **no** spread cannot show it had a counterparty, and does not count.
+Nothing is deleted to achieve that — the archive keeps every observation, the report states
+how many it held back (`spreadExcludedCount` of `spreadScrapedCount`), and
+`PAPER_COUNT_UNKNOWN_SPREAD=true` re-admits them all. Because rows scraped before the field
+existed carry no spread, the statistics restart from the catalogue as it is re-scanned; the
+scan pages 500 markets every five minutes, so an active catalogue of a few thousand carries
+spreads again within roughly half an hour.
+
+A volume floor does not substitute for this: `rowVolumeUsdc` prefers lifetime volume over
+the last 24 hours, so a long-listed fixture nobody is quoting today still clears it. The
+median 24h volume across league-of-legends' own closed trades was $45 against a configured
+$10,000 gate.
+
 ## Optimization loop
 
 The bot now writes a `learningProfile` into `paper-state.json`.

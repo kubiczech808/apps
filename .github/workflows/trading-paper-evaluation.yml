@@ -37,6 +37,8 @@ jobs:
       PAPER_MAX_EVALUATIONS_PER_RUN: "2"
       PAPER_MAX_HISTORY: "5000"
       PAPER_MAX_SPREAD: "0.08"
+      # See trading-paper-bot.yml: five points, and it has to match api.php.
+      PAPER_MAX_TRADABLE_SPREAD: "0.05"
       PAPER_MIN_VOLUME_24H: "100"
       PAPER_MAX_RESOLUTION_DAYS: "7"
       PAPER_AI_ANALYSIS_LIMIT: "1"
