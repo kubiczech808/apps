@@ -63,7 +63,12 @@ async function main() {
     console.log(`!! dashboard read failed: HTTP ${dashboard.status} ${dashboard.error || ""}`);
     return;
   }
-  const portfolios = Array.isArray(dashboard.body?.paperPortfolios) ? dashboard.body.paperPortfolios : [];
+  // paperPortfolios is a map keyed by strategy id, not an array, and the id is only on the
+  // key for some of them -- so it is put back onto the row here rather than assumed.
+  const rawPortfolios = dashboard.body?.paperPortfolios;
+  const portfolios = rawPortfolios && typeof rawPortfolios === "object"
+    ? Object.entries(rawPortfolios).map(([id, row]) => ({ id, ...(row && typeof row === "object" ? row : {}) }))
+    : [];
   console.log(`${portfolios.length} paper portfolios published`);
   for (const row of portfolios) {
     console.log(`   ${String(row.id || "").padEnd(24)} "${row.displayName || row.label || ""}"`
