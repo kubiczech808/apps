@@ -8122,7 +8122,12 @@ function renderPortfolioCandidates() {
     return;
   }
   const hasEvaluations = Array.isArray(state.botState?.evaluations) && state.botState.evaluations.length > 0;
-  if (!hasEvaluations && state.botState?.evaluationDetailsMode === "dashboard") {
+  // The current product deliberately scores every portfolio from the executable
+  // Polymarket quote. Its shortlist is therefore complete as soon as the compact
+  // `execution` payload arrives. Waiting here for the legacy AI-evaluation payload
+  // made every candidates tab appear empty when that much larger endpoint hit the
+  // shared host's memory limit, even though the usable scraped shortlist was ready.
+  if (!usesPolymarketProbability && !hasEvaluations && state.botState?.evaluationDetailsMode === "dashboard") {
     if (shouldLoadCandidateBotState()) ensureCandidateBotState();
     els.portfolioCandidates.innerHTML = '<div class="empty">Loading portfolio execution shortlist...</div>';
     if (els.portfolioCandidatesSummary) els.portfolioCandidatesSummary.textContent = "loading";
