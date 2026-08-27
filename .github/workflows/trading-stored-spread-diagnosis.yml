@@ -1,0 +1,33 @@
+name: Trading Stored Spread Diagnosis
+
+# Read-only, manual only. Reads the published paper state and reports whether the scan is
+# recording bid/ask spreads, how much of the stored catalogue the tradable-spread rule
+# keeps, how much is merely waiting to be re-scanned, and whether the published calculation
+# report's own excluded count agrees. Writes nothing, places no orders.
+on:
+  workflow_dispatch:
+    inputs:
+      max_spread:
+        description: "Spread limit to evaluate, in probability units (0.05 = 5 points)"
+        required: false
+        default: "0.05"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Measure recorded spreads in the stored catalogue
+        working-directory: trading
+        env:
+          PAPER_MAX_TRADABLE_SPREAD: ${{ inputs.max_spread }}
+        run: node tools/stored-spread-diagnosis.mjs
