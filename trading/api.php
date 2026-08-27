@@ -1371,6 +1371,29 @@ function archived_trade_prediction_result(array $trade): ?bool
     return null;
 }
 
+function portfolio_trade_timestamp(string $value): ?int
+{
+    $value = trim($value);
+    if ($value === '') {
+        return null;
+    }
+
+    $timestamp = strtotime($value);
+    if ($timestamp !== false) {
+        return $timestamp;
+    }
+
+    foreach (['d.m.Y H:i:s', 'd.m.Y H:i', 'd.m.Y'] as $format) {
+        $date = DateTimeImmutable::createFromFormat($format, $value);
+        $errors = DateTimeImmutable::getLastErrors();
+        if ($date instanceof DateTimeImmutable && ($errors === false || ((int) $errors['warning_count'] === 0 && (int) $errors['error_count'] === 0))) {
+            return $date->getTimestamp();
+        }
+    }
+
+    return null;
+}
+
 function paper_portfolio_history_summary(array $portfolio): array
 {
     $trades = is_array($portfolio['trades'] ?? null) ? $portfolio['trades'] : [];
@@ -1378,14 +1401,16 @@ function paper_portfolio_history_summary(array $portfolio): array
     $correct = 0;
     $resolved = 0;
     $firstOpenedAt = null;
+    $firstOpenedTimestamp = null;
     foreach ($trades as $trade) {
         if (!is_array($trade)) {
             continue;
         }
         $openedAt = (string) ($trade['openedAt'] ?? $trade['date'] ?? $trade['createdAt'] ?? '');
-        $openedTimestamp = $openedAt !== '' ? strtotime($openedAt) : false;
-        if ($openedTimestamp !== false && ($firstOpenedAt === null || $openedTimestamp < strtotime($firstOpenedAt))) {
+        $openedTimestamp = portfolio_trade_timestamp($openedAt);
+        if ($openedTimestamp !== null && ($firstOpenedTimestamp === null || $openedTimestamp < $firstOpenedTimestamp)) {
             $firstOpenedAt = $openedAt;
+            $firstOpenedTimestamp = $openedTimestamp;
         }
         if (!archived_trade_is_closed($trade)) {
             continue;
