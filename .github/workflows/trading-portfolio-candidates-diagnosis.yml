@@ -1,0 +1,36 @@
+name: Trading Portfolio Candidates Diagnosis
+
+# Read-only, manual only. For one paper portfolio, separates "not being executed" from
+# "served an empty catalogue" from "served rows and rejected them all", and for the last
+# case prints the rejection-reason histogram from the portfolio's real filter. Writes
+# nothing, places no orders.
+on:
+  workflow_dispatch:
+    inputs:
+      portfolio:
+        description: "Substring of the portfolio id or display name (e.g. 75)"
+        required: false
+        default: "75"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Find where this portfolio's candidates are going
+        working-directory: trading
+        env:
+          CANDIDATE_DIAGNOSIS_PORTFOLIO: ${{ inputs.portfolio }}
+          # The bot module reads these at import time; the diagnostic only calls its filter.
+          PAPER_PORTFOLIO_USDC: "100"
+          PAPER_MAX_FRACTION: "0.05"
+        run: node tools/portfolio-candidates-diagnosis.mjs
