@@ -5705,6 +5705,7 @@ function liveExecutionSummary(execution) {
 async function waitForExecutionResult(target, startedAt, steps, options = {}) {
   // Each live portfolio publishes its own execution state; watching the wrong one
   // would report another portfolio's run as this one's result.
+  const paperTarget = isPaperExecutionTarget(target);
   const stateTarget = target === "live-5050" ? "live-5050-execution" : (target === "live" ? "live-execution" : "paper");
   let lastError = null;
   for (let attempt = 0; attempt < 20; attempt += 1) {
@@ -5721,15 +5722,17 @@ async function waitForExecutionResult(target, startedAt, steps, options = {}) {
       continue;
     }
     lastError = null;
-    const paperDecision = target === "paper" ? paperExecutionDecision(payload, options.paperStrategyId) : null;
-    const generated = Date.parse(target === "paper"
+    const paperDecision = paperTarget ? paperExecutionDecision(payload, options.paperStrategyId) : null;
+    const generated = Date.parse(paperTarget
       ? (paperDecision?.runAt || payload.generatedAt || payload.lastDecision?.runAt || "")
       : (payload.generatedAt || payload.lastDecision?.runAt || ""));
     const start = Date.parse(startedAt || "");
     if (!Number.isFinite(start) || (Number.isFinite(generated) && generated >= start - 120000)) {
       const detail = target === "live"
         ? liveExecutionSummary(payload)
-        : `Paper ${portfolioNameForMode(paperModeFromStrategyId(options.paperStrategyId))} action: ${paperDecision?.action || "-"} / ${paperDecision?.reason || "-"}`;
+        : paperTarget
+          ? `Paper ${portfolioNameForMode(paperModeFromStrategyId(options.paperStrategyId))} action: ${paperDecision?.action || "-"} / ${paperDecision?.reason || "-"}`
+          : liveExecutionSummary(payload);
       steps = addExecutionStep(steps, "Execution result", detail, "done");
       return { payload, steps };
     }
@@ -5958,16 +5961,27 @@ async function refreshPortfolioCandidates(options = {}) {
   }
   if (!options.quiet) setExecutionStatus("refreshing execution shortlist");
   try {
-    // Always load the latest persisted scraped snapshot. It supplies current
-    // market probability and order-book economics for both AI and Polymarket
-    // probability portfolios; the selected source still controls eligibility.
+    const config = portfolioConfigForMode(state.mode);
+    const needsCandidateEvaluations = normalizeProbabilitySource(config.probabilitySource) !== "polymarket";
+    // A Polymarket-probability shortlist is fully self-contained in the compact
+    // execution response. Do not make the candidate tab depend on the much larger
+    // dashboard state merely because this is the first page the browser opened.
+    const needsBotState = needsCandidateEvaluations;
+    // Polymarket portfolios derive their whole shortlist from the compact execution
+    // catalogue. Fetching the large AI-candidates response here added a second slow
+    // request that could leave the tab loading even though the usable shortlist had
+    // already arrived.
     const [botState, liveState, scrapedState] = await Promise.all([
-      fetchJsonWithTimeout("data/paper-state.json", { summary: "candidates" }, 15000),
+      needsBotState
+        ? fetchJsonWithTimeout("data/paper-state.json", { summary: needsCandidateEvaluations ? "candidates" : "dashboard" }, 15000)
+        : Promise.resolve(null),
       isLiveMode() ? fetchJsonWithTimeout("data/live-state.json", {}, 15000) : Promise.resolve(null),
       fetchJsonWithTimeout("data/paper-state.json", { summary: "execution" }, 15000),
     ]);
-    state.botState = botStateWithPreservedEvaluations(botState);
-    state.botStateFull = state.botStateFull || botStateIsFull(botState);
+    if (botState) {
+      state.botState = botStateWithPreservedEvaluations(botState);
+      state.botStateFull = state.botStateFull || botStateIsFull(botState);
+    }
     storeScrapedMarketState(scrapedState, "execution");
     if (Array.isArray(state.botState?.evaluations) && Array.isArray(scrapedState?.marketObservations)) {
       state.botState = {
@@ -6421,6 +6435,13 @@ async function triggerOneTimeExecution(target) {
 
   try {
     await savePortfolioConfigNow();
+    if (!live) {
+      // Match the runner's compact execution catalogue to the shortlist the person can
+      // inspect. This is quick for Polymarket portfolios and avoids dispatching against
+      // an out-of-date candidate tab.
+      await refreshPortfolioCandidates({ quiet: true });
+      steps = addExecutionStep(steps, "Current shortlist refreshed", "The runner will revalidate only this portfolio's current shortlist; unrelated markets are not scanned.", "done");
+    }
     // 5050 takes no shortlist: its workflow has no such input and it scans for
     // candidates itself, so building and announcing one would be a fiction.
     const sendsShortlist = target === "live";
@@ -6479,7 +6500,7 @@ async function triggerOneTimeExecution(target) {
       ? (liveUsesPolymarketProbability
         ? "The runner refreshes the account and current Polymarket quotes, recalculates fees and profitability for the ordered shortlist, then submits only the first candidate that still passes. No AI analysis is requested."
         : "The runner refreshes account and market data, checks candidates against their stored AI assessment and risk diversification, then submits only if criteria still pass.")
-      : "The evaluation engine scans markets, prioritizes new opportunities, updates known evaluations, and may open one paper trade.", "active");
+      : "The runner revalidates this portfolio's current shortlist only, then opens the first candidate that still passes. It does not scan unrelated markets.", "active");
     const workflow = await waitForWorkflowRun(target, startedAt, steps);
     steps = workflow.steps;
     const result = await waitForExecutionResult(target, startedAt, steps, { paperStrategyId });
@@ -7944,13 +7965,14 @@ function renderPortfolioCandidates() {
   if (!els.portfolioCandidates) return;
   syncPortfolioCandidateRefreshControl();
   const mode = state.mode;
-  if (!state.botState) {
+  const config = portfolioConfigForMode(mode);
+  const usesPolymarketProbability = normalizeProbabilitySource(config.probabilitySource) === "polymarket";
+  if (!state.botState && !usesPolymarketProbability) {
     els.portfolioCandidates.innerHTML = '<div class="empty">Common evaluation log is not loaded yet.</div>';
     if (els.portfolioCandidatesSummary) els.portfolioCandidatesSummary.textContent = "0 candidates";
     return;
   }
-  const config = portfolioConfigForMode(mode);
-  if (normalizeProbabilitySource(config.probabilitySource) === "polymarket" && !scrapedMarketStateIsLoaded()) {
+  if (usesPolymarketProbability && !scrapedMarketStateIsLoaded()) {
     if (state.scrapedMarketStateError) {
       els.portfolioCandidates.innerHTML = `<div class="empty">Scraped Polymarket economics could not be loaded: ${escapeHtml(state.scrapedMarketStateError)}. Use “Refresh shortlist” to try again.</div>`;
       if (els.portfolioCandidatesSummary) els.portfolioCandidatesSummary.textContent = "scraped data unavailable";
@@ -7961,8 +7983,8 @@ function renderPortfolioCandidates() {
     if (els.portfolioCandidatesSummary) els.portfolioCandidatesSummary.textContent = "loading scraped";
     return;
   }
-  const hasEvaluations = Array.isArray(state.botState.evaluations) && state.botState.evaluations.length > 0;
-  if (!hasEvaluations && state.botState.evaluationDetailsMode === "dashboard") {
+  const hasEvaluations = Array.isArray(state.botState?.evaluations) && state.botState.evaluations.length > 0;
+  if (!hasEvaluations && state.botState?.evaluationDetailsMode === "dashboard") {
     if (shouldLoadCandidateBotState()) ensureCandidateBotState();
     els.portfolioCandidates.innerHTML = '<div class="empty">Loading portfolio execution shortlist...</div>';
     if (els.portfolioCandidatesSummary) els.portfolioCandidatesSummary.textContent = "loading";

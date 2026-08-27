@@ -50,6 +50,47 @@ test("equal paper portfolio: its independent $100 account is registered with a s
   assert.equal(equal.portfolio.freeCapitalUsdc, 100);
 });
 
+test("custom tag portfolio: execution uses the active Polymarket shortlist the dashboard shows", () => {
+  const state = bot.normalizeState({
+    marketObservations: [{
+      id: "counter-strike-active-row",
+      tokenId: "1234567890123456789012345678901234567890",
+      outcome: "Vitality",
+      question: "Counter-Strike: Vitality vs Inner Circle Esports (BO3)",
+      status: "SCRAPED",
+      selectionStatus: "SCRAPED",
+      marketPrice: 0.865,
+      marketProbability: 0.865,
+      netYield: 0.1483,
+      stakeUsdc: 5,
+      totalCostUsdc: 5,
+      netGainIfWinUsdc: 0.7415,
+      liquidity: 50000,
+      volume24hr: 50000,
+      daysToResolution: 0.4,
+      endDate: new Date(Date.now() + 8 * 60 * 60 * 1000).toISOString(),
+      polymarketTags: ["esports", "counter-strike-2"],
+    }],
+  });
+  const strategy = {
+    ...bot.PAPER_STRATEGIES.conservative,
+    id: "counterstrike2",
+    probabilitySource: "polymarket",
+    minProbability: 0.8,
+    maxProbability: null,
+    minLiquidityUsdc: null,
+    minNetYield: 0,
+    includeOnlyMarketTags: new Set(["counter-strike-2"]),
+    excludedMarketTags: new Set(),
+    excludedCandidateTokenIds: new Set(),
+  };
+
+  const shortlist = bot.storedExecutionShortlist(state, strategy);
+  assert.equal(shortlist.diagnostics.scannedMarketObservations, 1);
+  assert.equal(shortlist.rows.length, 1);
+  assert.equal(shortlist.rows[0].tokenId, "1234567890123456789012345678901234567890");
+});
+
 test("automatic rotation: each portfolio receives its saved On/Off setting", () => {
   assert.equal(bot.PAPER_STRATEGIES.conservative.allowRotation, true);
   assert.equal(bot.PAPER_STRATEGIES.equal.allowRotation, false, "Equal remains disabled until explicitly enabled");

@@ -117,6 +117,22 @@ const PORTFOLIO_RUN_LOG_ENTRY_PATH = process.env.PAPER_PORTFOLIO_RUN_LOG_ENTRY_P
 // itself turns red instead of reporting success over a scan that fetched nothing.
 const SCAN_ERROR_MARKER_PATH = process.env.PAPER_SCAN_ERROR_PATH || "data/market-scan-error.txt";
 const REMOTE_STATE_URL = process.env.PAPER_STATE_URL || "";
+// An execution pass must rank exactly the active catalogue shown by the dashboard.
+// The segmented refresh state is ideal for preserving history, but its observation
+// segment can be one publish behind a just-completed scrape. Read the compact active
+// catalogue directly before an order decision so a manual run cannot report zero
+// candidates while the execution-candidates screen still has matching rows.
+function derivedExecutionStateUrl(source = REMOTE_STATE_URL) {
+  if (!source) return "";
+  try {
+    const url = new URL(source);
+    url.searchParams.set("summary", "execution");
+    return url.toString();
+  } catch {
+    return source;
+  }
+}
+const EXECUTION_STATE_URL = process.env.PAPER_EXECUTION_STATE_URL || derivedExecutionStateUrl();
 // The PHP summary endpoint is preferred because it is small and validated by
 // the app. The static file is a recovery path for a state that is temporarily
 // too large for PHP to parse during a migration.
@@ -1345,6 +1361,23 @@ async function readStateWithSegments(payload) {
   return merged;
 }
 
+async function refreshActiveExecutionObservations(state) {
+  if (!EXECUTION_PASS || !EXECUTION_STATE_URL) return state;
+  const separator = EXECUTION_STATE_URL.includes("?") ? "&" : "?";
+  const payload = await fetchJson(`${EXECUTION_STATE_URL}${separator}t=${Date.now()}`);
+  if (!Array.isArray(payload?.marketObservations)) {
+    throw new Error("Execution state did not include the active Polymarket catalogue.");
+  }
+  const resolved = (Array.isArray(state.marketObservations) ? state.marketObservations : [])
+    .filter(observationIsResolved);
+  return normalizeState({
+    ...state,
+    // This is deliberately a replacement, not a merge: a stale active observation
+    // must not remain eligible after the compact execution endpoint no longer lists it.
+    marketObservations: [...payload.marketObservations, ...resolved],
+  });
+}
+
 async function readState() {
   if (String(process.env.PAPER_RESET_STATE || "").toLowerCase() === "true") {
     return normalizeState({});
@@ -1362,9 +1395,10 @@ async function readState() {
       if (remote && typeof remote === "object" && (Array.isArray(remote.trades) || remote.paperPortfolios)) {
         const remoteState = normalizeState(remote);
         try {
-          return mergeStates(remoteState, normalizeState(await readLocalStateFile(OUTPUT_PATH)));
+          const merged = mergeStates(remoteState, normalizeState(await readLocalStateFile(OUTPUT_PATH)));
+          return refreshActiveExecutionObservations(merged);
         } catch {
-          return remoteState;
+          return refreshActiveExecutionObservations(remoteState);
         }
       }
       remoteError = new Error("Remote state did not contain a trades array");
@@ -1386,7 +1420,7 @@ async function readState() {
       );
       if (remote && typeof remote === "object" && (Array.isArray(remote.trades) || remote.paperPortfolios)) {
         console.warn(`Primary paper state endpoint failed (${remoteError.message}); recovering from static state file.`);
-        return normalizeState(remote);
+        return refreshActiveExecutionObservations(normalizeState(remote));
       }
       remoteError = new Error("Static paper state did not contain a trades array");
     } catch (error) {
@@ -1871,6 +1905,7 @@ function compactPrevalidationFilter(input) {
     source: input.source || null,
     storedEvaluations: Number(input.storedEvaluations || 0),
     storedMarketObservations: Number(input.storedMarketObservations || 0),
+    scannedMarketObservations: Number(input.scannedMarketObservations || 0),
     uniqueEvaluations: Number(input.uniqueEvaluations || 0),
     prefilterPassed: Number(input.prefilterPassed || 0),
     prefilterRejected: Number(input.prefilterRejected || 0),
@@ -11106,6 +11141,7 @@ export {
   portfolioEconomics,
   portfolioFilterResult,
   portfolioProbabilityForStrategy,
+  storedExecutionShortlist,
   rounded,
   MARKET_OBSERVATION_RETAIN_LIMIT,
   marketDateContext,
