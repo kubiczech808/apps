@@ -202,22 +202,31 @@ test("taxonomy drill-down: every probability rung matches its own row", () => {
   withApi(rows, (directory) => {
     for (const summary of expected.minimumProbabilitySummaries) {
       const percent = String(Math.round(summary.minimumProbability * 100));
+      // Every rung is reported twice: open above its floor, and bounded ten points up.
+      // A band row's link has to carry that bound, or clicking it opens the floor's whole
+      // population -- the very inflation the band exists to separate out.
+      const bound = summary.maxProbability == null
+        ? {}
+        : { maxProbability: String(Math.round(summary.maxProbability * 100)) };
+      const range = summary.maxProbability == null ? `>= ${percent}%` : `${percent}-${bound.maxProbability}%`;
       const resolved = callApi(directory, {
         action: "taxonomy-observations",
         kind: "tag",
         value: "league-of-legends",
         statuses: "RESOLVED",
         probability: percent,
+        ...bound,
       });
-      assert.equal(resolved.matched, summary.trades, `resolved count at ${percent}%`);
+      assert.equal(resolved.matched, summary.trades, `resolved count at ${range}`);
       const open = callApi(directory, {
         action: "taxonomy-observations",
         kind: "tag",
         value: "league-of-legends",
         statuses: "SCRAPED",
         probability: percent,
+        ...bound,
       });
-      assert.equal(open.matched, summary.openCount, `open count at ${percent}%`);
+      assert.equal(open.matched, summary.openCount, `open count at ${range}`);
     }
   });
 });

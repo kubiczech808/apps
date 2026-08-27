@@ -11085,7 +11085,9 @@ function taxonomyRows(report, kind) {
 }
 
 function probabilityRangeCell(lower, upper) {
-  const minimum = Number(lower);
+  // Number(null) and Number("") are both 0, so coercing first would render a row carrying
+  // no floor at all as a confident ">= 0.0%" rather than admitting it has nothing to show.
+  const minimum = lower == null || lower === "" ? NaN : Number(lower);
   if (!Number.isFinite(minimum)) return "-";
   const maximum = normalizeOptionalProbability(upper);
   return maximum == null ? `>= ${probability(minimum)}` : `${probability(minimum)}-${probability(maximum)}`;

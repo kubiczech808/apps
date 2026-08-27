@@ -3706,7 +3706,12 @@ try {
             $entry = simulation_entry_probability($item);
             // The simulation cannot price a row that never carried a live quote, so it
             // counts none of them; listing them would again outnumber the statistic.
-            if ($entry === null || $entry < $minProbability || ($maxProbability !== null && $entry > $maxProbability)) {
+            //
+            // The upper bound is exclusive, matching scrapedSimulationMatchesRule. This
+            // list is opened from a statistics row and must hold exactly what that row
+            // counted -- an inclusive bound here would show one extra market for every
+            // entry sitting on the round number the band ends at.
+            if ($entry === null || $entry < $minProbability || ($maxProbability !== null && $entry >= $maxProbability)) {
                 return true;
             }
             $labels = simulation_taxonomy_labels($item, $firstField, $currentField);

@@ -9980,6 +9980,13 @@ function summarizeScrapedSimulationRows(rows) {
 //
 // So a floor row cannot tell anyone what the rule that uses it will experience, and the band
 // can. Both are reported; the floor stays because a portfolio threshold really is a floor.
+//
+// The band is half-open, [threshold, upperThreshold). The taxonomy ladder steps in tens
+// and its bands are ten points wide, so adjacent bands touch exactly: closed at both ends,
+// a trade entered at 0.70 would be counted in both 60-70% and 70-80%, and entries pile up
+// on the round numbers rather than scattering. Nothing is lost at the top either, because
+// firstLiveProbability only ever returns a price strictly between 0 and 1, so the open end
+// of the last band still covers every entry that can exist.
 function scrapedSimulationMatchesRule(trade, {
   marketType = "all",
   threshold = 0,
@@ -9988,7 +9995,7 @@ function scrapedSimulationMatchesRule(trade, {
 } = {}) {
   return (marketType === "all" || trade.marketType === marketType)
     && trade.entry >= threshold
-    && (upperThreshold == null || trade.entry <= upperThreshold)
+    && (upperThreshold == null || trade.entry < upperThreshold)
     && (maxResolutionDays == null || trade.days == null || trade.days <= maxResolutionDays);
 }
 
@@ -10061,8 +10068,11 @@ function scrapedSimulationTaxonomyRows(trades, openTrades, field, kind) {
       if (kind === "category" || kind === "tag") {
         row.minimumProbabilitySummaries = TAXONOMY_PERFORMANCE_THRESHOLDS.flatMap((minimumProbability) => (
           [null, Math.min(1, minimumProbability + 0.1)].map((maxProbability) => {
+            // Half-open, for the reason spelled out on scrapedSimulationMatchesRule: these
+            // rungs are ten points apart and these bands are ten points wide, so a closed
+            // upper end would file every round-numbered entry under two adjacent bands.
             const inRange = (trade) => trade.entry >= minimumProbability
-              && (maxProbability == null || trade.entry <= maxProbability);
+              && (maxProbability == null || trade.entry < maxProbability);
             return {
               minimumProbability,
               maxProbability,

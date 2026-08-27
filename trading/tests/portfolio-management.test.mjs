@@ -175,6 +175,9 @@ test("created portfolios: the bot builds strategies from the config the workflow
     "normalizeExecutionTrigger", "PORTFOLIO_USDC", "STAKE_USDC", "console", `
     ${extractFunction(BOT, "normalizeStopLossRiskMultiplier")}
     ${extractFunction(BOT, "rowStopLossRiskMultiplier")}
+    // A created portfolio can carry an upper probability bound as well as a floor, so the
+    // helper that reads it has to be in scope here too.
+    ${extractFunction(BOT, "normalizeOptionalProbability")}
     ${extractFunction(BOT, "customPaperStrategies")}
     return customPaperStrategies;
   `)(
@@ -462,8 +465,8 @@ test("dashboard: both statistics tables offer to create the portfolio behind a r
     'data-prefill-name="75% Yes/No" data-prefill-market-type="binary" data-prefill-probability="0.75"',
   );
   // The extra column must be counted in both empty-row colspans, or the layout breaks.
-  assert.match(APP, /colspan="\$\{hasProbabilityBreakdown \? 13 : 12\}"/);
-  assert.match(APP, /colspan="13">No resolved scraped opportunity simulation/);
+  assert.match(APP, /colspan="\$\{hasProbabilityBreakdown \? 12 : 11\}"/);
+  assert.match(APP, /colspan="12">No resolved scraped opportunity simulation/);
 });
 
 test("portfolio creation: user chooses paper or the connected live account", () => {
@@ -544,7 +547,9 @@ test("portfolio rename propagates to execution status text, not only the tab and
   assert.match(APP, /setExecutionStatus\(`\$\{executionTargetLabel\(target\)\} workflow started`\);/);
   assert.match(APP, /setExecutionStatus\(`\$\{executionTargetLabel\(target\)\} workflow \$\{workflow\.run\.conclusion\}`, "error"\);/);
   assert.match(APP, /setExecutionStatus\(`\$\{executionTargetLabel\(target\)\} workflow completed`\);/);
-  assert.match(APP, /: `Paper \$\{portfolioNameForMode\(paperModeFromStrategyId\(options\.paperStrategyId\)\)\} action:/,
+  // Which branch of the ternary it sits in is an implementation detail; what matters is
+  // that the detail line resolves the name through the configured portfolio.
+  assert.match(APP, /`Paper \$\{portfolioNameForMode\(paperModeFromStrategyId\(options\.paperStrategyId\)\)\} action:/,
     "the execution-result step must also name the current portfolio, not its shipped label");
 });
 
@@ -927,7 +932,9 @@ test("dashboard: the overview above the selector states equity and risk against 
   // Requested: show separately how much is in orders and how much in open positions. One
   // "risk" figure could not say whether a portfolio was invested or only queueing, so the
   // total is split into the two commitments it was hiding.
-  assert.match(overview, /<th>Portfolio<\/th><th>Equity<\/th><th[^>]*>In positions<\/th><th[^>]*>In orders<\/th><th>Free<\/th>/);
+  // The split is what this pins; the ROI p.a. column that later joined the row between
+  // Equity and the two commitments is free to sit there.
+  assert.match(overview, /<th>Portfolio<\/th><th>Equity<\/th>(?:<th[^>]*>[^<]*<\/th>)*?<th[^>]*>In positions<\/th><th[^>]*>In orders<\/th><th>Free<\/th>/);
   assert.match(overview, /equity: portfolio \? Number\(portfolio\.equityUsdc\) : null/);
   assert.match(overview, /portfolio\.positionRiskUsdc/);
   assert.match(overview, /orders: portfolio \? Number\(portfolio\.restingLimitOrderUsdc \|\| 0\) : null/);

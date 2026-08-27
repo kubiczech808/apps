@@ -1983,8 +1983,12 @@ test("state segments: api.php loads only the segments a summary reads", async ()
     assert.match(call, /,\s*(\[|state_segments_for_summary)/, `${call} must declare which segments it needs`);
   }
 
-  // The two reads that made PHP decode everything must now decode nothing heavy.
-  assert.match(api, /case 'dashboard':\s*\n\s*return \[\];/);
+  // The two reads that made PHP decode everything must now decode nothing heavy. The
+  // dashboard reads the archives segment, which is bounded by how many portfolios were
+  // archived or reset; what it must never pull in is a catalogue that grows per market.
+  const dashboardSegments = /case 'dashboard':\s*\n\s*return (\[[^\]]*\]);/.exec(api);
+  assert.ok(dashboardSegments, "the dashboard summary must still declare its segments");
+  assert.doesNotMatch(dashboardSegments[1], /'evaluations'|'observations'|'resolved/);
   assert.match(api, /case 'refresh':(?:\s*\n\s*\/\/[^\n]*)+\s*\n\s*return \[\];/);
   // The audit endpoints only ever needed the scan history.
   assert.equal((api.match(/state_payload\('paper', \['scanHistory'\]\)/g) || []).length, 2);
@@ -2438,7 +2442,7 @@ test("taxonomy performance: real Polymarket categories and tags stay separate", 
   }));
 
   const report = bot.buildCalculationReport(state);
-  assert.equal(report.taxonomyVersion, 5);
+  assert.equal(report.taxonomyVersion, 6);
   const categoryLabels = report.categorySummaries.map((row) => row.label);
   const tagLabels = report.tagSummaries.map((row) => row.label);
   assert.deepEqual(new Set(categoryLabels), new Set(["sports", "politics"]));
@@ -2630,14 +2634,25 @@ test("parameter combinations: every distinct rule uses the full resolved sample 
     ...state,
     marketObservations: state.marketObservations.filter((row) => row.id !== "pending-statistics-regression"),
   });
-  assert.equal(report.parameterSummaries.length, 150, "3 market types x 10 thresholds x 5 horizons");
+  assert.equal(report.parameterSummaries.length, 300,
+    "3 market types x 10 thresholds x 5 horizons, each as a floor row and a bounded row");
   for (const threshold of [0.55, 0.65, 0.75, 0.85, 0.95]) {
     assert.ok(report.parameterSummaries.some((row) => row.threshold === threshold), `${threshold * 100}% must be included`);
   }
   assert.ok(report.parameterSummaries.every((row) => !Object.hasOwn(row, "minLiquidityUsdc")));
+  // Every rule appears twice and the pair must differ in exactly one way: the floor row is
+  // open above, the band row stops ten points up. Anything else would be a duplicate.
+  for (const row of report.parameterSummaries) {
+    assert.equal(row.probabilityRange, row.maxProbability == null ? "floor" : "band");
+    if (row.maxProbability != null) {
+      assert.ok(Math.abs(row.maxProbability - Math.min(1, row.threshold + 0.1)) < 1e-9,
+        `a bounded ${row.threshold} row must end ten points up, not at ${row.maxProbability}`);
+    }
+  }
   const widest = report.parameterSummaries.find((row) => row.marketType === "all"
     && row.threshold === 0.5
-    && row.maxResolutionDays === 30);
+    && row.maxResolutionDays === 30
+    && row.maxProbability == null);
   assert.equal(report.sampleSize, report.resolvedSampleSize,
     "performance statistics must exclude unresolved opportunities from the sample");
   assert.equal(report.observedSampleSize, withoutPending.observedSampleSize + 1,
@@ -2745,18 +2760,20 @@ test("taxonomy performance: categories and tags render as separately sorted tabl
     "legacy inferred categories must stay hidden until a split report is generated");
   // Every column in both tables is sortable.
   const sorted = [...app.matchAll(/taxonomyHeader\(kind, "([a-zA-Z]+)"/g)].map((match) => match[1]);
-  for (const key of ["label", "minimumProbability", "openCount", "trades", "accuracy",
-    // The band's own accuracy, beside the floor's. A floor row is dominated by entries far
-    // above it -- 60% floor, 79% average entry, 90.5% headline against a 64.9% band -- so
-    // sorting by the band is how a floor-and-reward/risk portfolio finds what it will get.
-    "bandAccuracy", "pnl",
+  for (const key of ["label",
+    // A floor row is dominated by entries far above it -- 60% floor, 79% average entry, a
+    // 90.5% headline against a 64.9% band -- so a bounded row is emitted beside every
+    // floor and this column is what tells the two apart. Sorting by it is how a
+    // floor-and-reward/risk portfolio finds the range it will actually trade.
+    "probabilityRange",
+    "openCount", "trades", "accuracy", "pnl",
     "roi", "avgProbability", "avgVolumeUsdc", "lastResolvedAt"]) {
     assert.ok(sorted.includes(key), `${key} column must be sortable`);
   }
   assert.doesNotMatch(app, /taxonomyHeader\(kind, "annualizedPnlPerTradeUsdc", "P\/L p\.a\."/);
   // The header count must match the colspan on the empty row, or the layout breaks.
-  assert.match(app, /colspan="\$\{hasProbabilityBreakdown \? 13 : 12\}"/);
-  assert.equal(sorted.length, 12);
+  assert.match(app, /colspan="\$\{hasProbabilityBreakdown \? 12 : 11\}"/);
+  assert.equal(sorted.length, 11);
   assert.doesNotMatch(app, /data-category-kind/);
 
   // The report is stored in the core state file, so its row count must be bounded.
@@ -2888,12 +2905,18 @@ test("calculation report: open counts mirror parameter rules and taxonomy", () =
   assert.equal(report.categorySummaries.find((row) => row.label === "sports")?.openCount, 1);
   assert.equal(report.tagSummaries.find((row) => row.label === "football")?.openCount, 1);
   const football = report.tagSummaries.find((row) => row.label === "football");
+  // Each rung of the ladder is reported twice: once open above its floor, once bounded ten
+  // points up. The floor row answers "what did everything above 90% do", the bounded one
+  // answers "what did 90-100% do" -- and for a portfolio that ranks by reward/risk above a
+  // floor, only the second is the range it will really buy in.
   assert.deepEqual(
-    football?.minimumProbabilitySummaries?.map((row) => row.minimumProbability),
-    [0.5, 0.6, 0.7, 0.8, 0.9],
-    "every tag needs the normalized 50%-90% minimum probability ladder",
+    football?.minimumProbabilitySummaries?.map((row) => [row.minimumProbability, row.probabilityRange]),
+    [[0.5, "floor"], [0.5, "band"], [0.6, "floor"], [0.6, "band"], [0.7, "floor"], [0.7, "band"],
+      [0.8, "floor"], [0.8, "band"], [0.9, "floor"], [0.9, "band"]],
+    "every tag needs the normalized 50%-90% ladder, each rung as a floor and a bounded row",
   );
-  const footballAtNinety = football?.minimumProbabilitySummaries?.find((row) => row.minimumProbability === 0.9);
+  const footballAtNinety = football?.minimumProbabilitySummaries
+    ?.find((row) => row.minimumProbability === 0.9 && row.probabilityRange === "floor");
   assert.equal(footballAtNinety?.openCount, 1, "the matching open market belongs to its 90% tag band");
   assert.equal(footballAtNinety?.trades, 0, "the lower-probability resolved market must not leak into the 90% tag band");
 });
@@ -8427,61 +8450,100 @@ test("statistics: a floor keeps every higher entry, a band stops at the next flo
   assert.equal(matches(row(0.95), floor), true, "and so is everything above it");
   assert.equal(matches(row(0.59), floor), false);
 
-  // The band: the same floor, closed at the next one. Half-open so adjacent bands neither
+  // The band: the same floor, closed ten points up. Half-open so adjacent bands neither
   // overlap nor drop an entry, which is what lets them be compared against each other.
-  const band = { ...floor, upperThreshold: 0.65 };
+  // Entries cluster on the round numbers, so a closed upper end would file a 70% trade
+  // under both 60-70% and 70-80% and quietly double-count the most common price of all.
+  const band = { ...floor, upperThreshold: 0.7 };
   assert.equal(matches(row(0.60), band), true);
-  assert.equal(matches(row(0.649), band), true);
-  assert.equal(matches(row(0.65), band), false, "the next floor's own entries belong to it");
+  assert.equal(matches(row(0.699), band), true);
+  assert.equal(matches(row(0.70), band), false, "the next band's own entries belong to it");
   assert.equal(matches(row(0.95), band), false, "the band must exclude what inflates the floor");
 
   // The other criteria keep working inside a band.
   assert.equal(matches({ entry: 0.62, marketType: "multi", days: 1 },
-    { marketType: "binary", threshold: 0.6, upperThreshold: 0.65 }), false);
+    { marketType: "binary", threshold: 0.6, upperThreshold: 0.7 }), false);
   assert.equal(matches({ entry: 0.62, marketType: "binary", days: 30 },
-    { marketType: "all", threshold: 0.6, upperThreshold: 0.65, maxResolutionDays: 7 }), false);
+    { marketType: "all", threshold: 0.6, upperThreshold: 0.7, maxResolutionDays: 7 }), false);
 });
 
-test("statistics: the band excludes everything at or above the next floor", () => {
-  const source = readFileSync(new URL("../tools/paper-trading-bot.mjs", import.meta.url), "utf8");
-  // The rule gained an upper bound, and the band summary is carried under its own prefixed
-  // keys so nothing reading the floor figures changes meaning.
-  assert.match(source, /upperThreshold = null,/);
-  assert.match(source, /&& \(upperThreshold == null \|\| trade\.entry < upperThreshold\)/);
-  for (const key of ["bandUpperThreshold", "bandResolved", "bandWins", "bandWinRate",
-    "bandRoi", "bandAvgProbability", "bandOpenCount"]) {
-    assert.match(source, new RegExp(`${key}[,:]`), `${key} must be reported`);
-  }
-  // Both ladders get a band: the parameter rows and the tag table's own threshold rows,
-  // which is the table the report was about.
-  assert.match(source, /\.\.\.scrapedSimulationBandSummary\(trades, openTrades, criteria, nextReportThreshold\(threshold\)\)/);
-  assert.match(source, /nextReportThreshold\(minimumProbability, TAG_PERFORMANCE_THRESHOLDS\)/);
+test("statistics: a band reports what the floor above it hides", () => {
+  // The behaviour, not the shape: build a report whose 60% floor is dominated by a
+  // near-certain winner, and whose own 60-70% band is a loser. The floor must read well and
+  // the band must read badly, because that is exactly the disagreement that was reported.
+  const at = (id, entry, won) => ({
+    id,
+    tokenId: `${id}`.padEnd(20, "0"),
+    question: `Will ${id} be true?`,
+    outcome: "Yes",
+    status: "RESOLVED",
+    marketClosed: true,
+    firstMarketProbability: entry,
+    lastLiveMarketProbability: entry,
+    finalOutcomePrice: won ? 1 : 0,
+    firstDaysToResolution: 3,
+    firstPolymarketCategories: ["esports"],
+    firstPolymarketTags: ["league-of-legends"],
+  });
+  const report = bot.buildCalculationReport(bot.normalizeState({
+    marketObservations: [
+      // Four in the band, one win: 25%. Thirty far above it, all wins. The count matters:
+      // a winner bought at 90% returns $0.56 on a $5 stake while a loser costs the whole
+      // $5, so it takes nine of them to pay for one, and a smaller high group would leave
+      // the floor negative too and prove nothing.
+      at("band-1", 0.62, false), at("band-2", 0.63, false),
+      at("band-3", 0.64, false), at("band-4", 0.66, true),
+      ...Array.from({ length: 30 }, (unused, index) => at(`high-${index}`, 0.9, true)),
+    ],
+  }));
+  const rule = (maxProbability) => report.parameterSummaries.find((row) => row.marketType === "all"
+    && row.threshold === 0.6 && row.maxResolutionDays === 3
+    && (maxProbability == null ? row.maxProbability == null : row.maxProbability === maxProbability));
+
+  const floor = rule(null);
+  const band = rule(0.7);
+  assert.ok(floor && band, "a 60% rule must be reported both open above and bounded");
+  assert.equal(floor.trades, 34, "the floor keeps every entry above it");
+  assert.equal(floor.wins, 31);
+  assert.equal(band.trades, 4, "the band keeps only its own ten points");
+  assert.equal(band.wins, 1);
+  assert.ok(floor.winRate - band.winRate > 0.5,
+    `the floor must read far better than the band it opens on: ${floor.winRate} vs ${band.winRate}`);
+  assert.ok(floor.avgProbability > band.avgProbability + 0.2,
+    "and the floor's average entry must sit far above the band a reward/risk rule buys in");
+  // The gap is the whole point: the floor is profitable and the band is not.
+  assert.ok(floor.roi > 0 && band.roi < 0, `${floor.roi} vs ${band.roi}`);
+
+  // The tag ladder carries the same pair, which is the table the report was about.
+  const tag = report.tagSummaries.find((row) => row.label === "league-of-legends");
+  const rung = (probabilityRange) => tag?.minimumProbabilitySummaries
+    ?.find((row) => row.minimumProbability === 0.6 && row.probabilityRange === probabilityRange);
+  assert.equal(rung("floor")?.trades, 34);
+  assert.equal(rung("band")?.trades, 4);
 });
 
-test("statistics: the next floor up is where a band ends, and the top band is open", () => {
-  const source = readFileSync(new URL("../tools/paper-trading-bot.mjs", import.meta.url), "utf8");
-  const nextThreshold = new Function(`${functionSource(source, "nextReportThreshold")}; return nextReportThreshold;`)();
-  const ladder = [0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95];
-  assert.equal(nextThreshold(0.6, ladder), 0.65, "the band ends at the next floor up");
-  assert.equal(nextThreshold(0.5, ladder), 0.55);
-  assert.equal(nextThreshold(0.95, ladder), null, "the top band is open-ended");
-  // The tag ladder is coarser, so its bands are wider -- 60% opens onto 70%, not 65%.
-  assert.equal(nextThreshold(0.6, [0.5, 0.6, 0.7, 0.8, 0.9]), 0.7);
-  assert.equal(nextThreshold(0.9, [0.5, 0.6, 0.7, 0.8, 0.9]), null);
-});
-
-test("statistics: the browser shows the band beside the floor and flags a real gap", () => {
+test("statistics: the browser shows a row's probability range, floor or band", () => {
   const app = readFileSync(new URL("../assets/app.js", import.meta.url), "utf8");
-  const cell = functionSource(app, "bandAccuracyCell");
-  // An open-ended top band is stated, not repeated as if it were a second measurement.
-  assert.match(cell, /top band/);
-  // A gap only counts as inflation when the two genuinely disagree.
-  assert.match(cell, /floorRate - rate >= 0\.05/);
-  assert.match(cell, /bandWins/);
-  assert.match(cell, /bandResolved/);
+  const cell = new Function(
+    `${functionSource(app, "normalizeOptionalProbability")}
+     ${functionSource(app, "probabilityRangeCell")}
+     const probability = (value) => \`\${(value * 100).toFixed(1)}%\`;
+     return probabilityRangeCell;`,
+  )();
+  // A floor states that it is open above, so it can never be mistaken for a measurement of
+  // the range it names.
+  assert.equal(cell(0.6, null), ">= 60.0%");
+  assert.equal(cell(0.6, 0.7), "60.0%-70.0%");
+  assert.equal(cell(null, null), "-");
+
   // Both statistics tables carry the column, and both can sort by it.
-  assert.equal([...app.matchAll(/"bandAccuracy", "In band"/g)].length, 2,
-    "the parameter table and the taxonomy table both need it");
-  assert.equal([...app.matchAll(/if \(key === "bandAccuracy"\) return numeric\(row\.bandWinRate\);/g)].length, 2,
+  assert.match(app, /calculationHeader\("probabilityRange", "Probability"\)/);
+  assert.match(app, /taxonomyHeader\(kind, "probabilityRange", "Probability"/);
+  assert.equal([...app.matchAll(/if \(key === "probabilityRange"\) return numeric\(row\./g)].length, 2,
     "each table sorts with its own value getter");
+
+  // And a band row can be turned straight into a portfolio bounded to it, which is the
+  // only way to act on the finding: a floor-and-reward/risk portfolio buys at the floor by
+  // construction, so capping it is what makes it trade the range it was chosen for.
+  assert.match(app, /maxProbability: row\.maxProbability \?\? "",/);
 });

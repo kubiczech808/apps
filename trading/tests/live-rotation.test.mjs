@@ -2676,6 +2676,11 @@ test("portfolio parameters: both live portfolios state their order price", () =>
     // the harness agrees with itself.
     `${functionSource(app, "normalizePortfolioMarketType")}\n${functionSource(app, "portfolioMarketTypeLabel")}\n`
     + `${functionSource(app, "automaticRotationIsEnabled")}\n`
+    // The probability row states a range now that a portfolio can carry a maximum as well
+    // as a minimum, so its three pure helpers come across for the same reason as above.
+    + `${functionSource(app, "normalizeEligibilityThreshold")}\n`
+    + `${functionSource(app, "normalizeOptionalProbability")}\n`
+    + `${functionSource(app, "probabilityRangeRuleValue")}\n`
     + `${functionSource(app, "livePortfolioRuleRows")}\nreturn livePortfolioRuleRows;`,
   )(
     { liveState: { portfolio: {} } },
@@ -3246,7 +3251,19 @@ test("live executor: the trading runs read the summary that skips the resolved a
   const execution = /if \(\$summary === 'execution'\) \{[\s\S]*?\n    \}/.exec(api);
   assert.ok(execution);
   assert.match(execution[0], /'marketObservations' => array_map\(/);
-  assert.match(execution[0], /is_active_scraped_market_observation\(\$item\)/);
+  // The activeness filter moved into scoped_execution_observations when the summary
+  // gained a per-portfolio scope, so the guarantee is checked where it now lives. Both
+  // of that helper's branches have to uphold it: the unscoped one directly, and the
+  // scoped one through execution_scope_matches_observation.
+  assert.match(execution[0], /scoped_execution_observations\(\$observations, \$selectedStrategyId\)/);
+  const scoped = /function scoped_execution_observations\([\s\S]*?\n\}/.exec(api);
+  assert.ok(scoped);
+  assert.match(scoped[0], /is_active_scraped_market_observation\(\$item\)/);
+  assert.match(scoped[0], /execution_scope_matches_observation\(\$item, \$config\)/);
+  const scopeMatches = /function execution_scope_matches_observation\([\s\S]*?\n\}/.exec(api);
+  assert.ok(scopeMatches);
+  assert.match(scopeMatches[0], /^[\s\S]{0,200}if \(!is_active_scraped_market_observation\(\$item\)\) \{\n\s+return false;/,
+    "a scoped execution read must reject a resolved row before any other test");
   // The segment list is what actually keeps the archive off the heap.
   assert.match(api, /case 'execution':\n[\s\S]*?return \['observations'\];/);
   // And the heavy summary is no longer heavy either: the opportunities page reads the
@@ -3498,8 +3515,14 @@ test("live executor: the paper state is read for a count, not for a catalogue", 
     assert.doesNotMatch(source, /PAPER_STATE_URL[^\n]*target=paper(?!&summary)/);
   }
 
-  // That summary decodes no segments at all, which is what makes it cheap.
-  assert.match(api, /case 'dashboard':\n\s+return \[\];/);
+  // That summary decodes no catalogue, which is what makes it cheap. It reads the
+  // archives segment now that a reset portfolio's only historical copy lives there, and
+  // that one is bounded by the number of archived portfolios rather than by the mined
+  // catalogue -- the two segments this test exists to keep out are the ones that grow
+  // without limit.
+  const dashboardSegments = /case 'dashboard':\n\s+return (\[[^\]]*\]);/.exec(api);
+  assert.ok(dashboardSegments, "the dashboard summary must still declare its segments");
+  assert.doesNotMatch(dashboardSegments[1], /'evaluations'|'observations'|'resolved/);
   // And the core still carries the manifest the count comes from.
   assert.match(executorSource, /paperState\?\.stateSegments\?\.evaluations\?\.counts\?\.evaluations/);
 
