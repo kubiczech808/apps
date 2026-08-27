@@ -903,6 +903,17 @@ if (($_GET['worker'] ?? '') === 'ai_research') {
     exit;
 }
 
+if (($_GET['worker'] ?? '') === 'ai_research_audit') {
+    header('Content-Type: text/plain; charset=utf-8');
+    $workerToken = scrapingWorkerToken($pdo, false);
+    if ($workerToken === '' || !hash_equals($workerToken, (string)($_GET['token'] ?? ''))) {
+        http_response_code(403);
+        exit("Forbidden\n");
+    }
+    echo runAiResearchAuditWorker($pdo, $config, (int)($_GET['run_id'] ?? 0), (int)($_GET['log_id'] ?? 0));
+    exit;
+}
+
 if (($_GET['worker'] ?? '') === 'campaigns') {
     header('Content-Type: text/plain; charset=utf-8');
     $workerToken = scrapingWorkerToken($pdo, false);
@@ -1000,6 +1011,22 @@ if (empty($_SESSION['auth'])) {
     exit;
 }
 
+if (($_GET['api'] ?? '') === 'ai_research_category_progress') {
+    header('Content-Type: application/json; charset=utf-8');
+    if (!canAccessAiResearch()) {
+        http_response_code(403);
+        echo json_encode(['error' => 'Forbidden']);
+        exit;
+    }
+    try {
+        echo json_encode(aiResearchSeedCategoryProgress($pdo, true), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    } catch (Throwable $e) {
+        http_response_code(503);
+        echo json_encode(['error' => 'Progress nelze nacist.']);
+    }
+    exit;
+}
+
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') !== 'login') {
     try {
         $message = handlePost($pdo, $config);
@@ -1083,7 +1110,7 @@ function handlePost(PDO $pdo, array $config): ?string
         if (!canAccessAiResearch()) {
             throw new RuntimeException('Kontrola AI research behu je dostupna pouze adminovi.');
         }
-        return auditAiResearchRunNow($pdo, $config, (int)($_POST['run_id'] ?? 0));
+        return startAiResearchRunAudit($pdo, $config, (int)($_POST['run_id'] ?? 0));
     }
 
     if ($action === 'finish_ai_research_run') {
@@ -3138,6 +3165,7 @@ function aiResearchLogKindLabel(string $kind): string
         'finish_deferred' => 'dokonceni odlozeneho behu',
         'finish_incomplete' => 'dotazeni behu do stavu ready',
         'finish_running' => 'obnoveni preruseneho behu',
+        'audit' => 'rucni kontrola a doplneni',
         'manual' => 'rucni spusteni',
     ][$kind] ?? $kind;
 }
@@ -3210,6 +3238,100 @@ function triggerAiResearchWorker(PDO $pdo, int $runId = 0): void
     $token = scrapingWorkerToken($pdo, true);
     fireAndForgetGet(appBaseUrl() . '?worker=ai_research&token=' . rawurlencode($token)
         . ($runId > 0 ? '&run_id=' . $runId : ''));
+}
+
+function aiResearchAuditRunningLog(PDO $pdo, int $runId): ?array
+{
+    $stmt = $pdo->prepare('SELECT * FROM ai_research_logs WHERE kind="audit" AND run_id=? AND status="running" ORDER BY id DESC LIMIT 1');
+    $stmt->execute([$runId]);
+    $row = $stmt->fetch(PDO::FETCH_ASSOC);
+    return $row ?: null;
+}
+
+/**
+ * Rucni kontrola nesmi bezet v prohlizeci. Hned zalozi viditelny zaznam v provoznim
+ * logu a samostatny worker pak doplni vsechny chybne kroky stejnego behu.
+ */
+function startAiResearchRunAudit(PDO $pdo, array $config, int $runId): string
+{
+    $context = aiResearchRunActionContext($pdo, $runId);
+    $existing = aiResearchAuditRunningLog($pdo, $runId);
+    if ($existing) {
+        return 'Kontrola behu #' . $runId . ' uz probiha v logu jako krok #' . (int)$existing['id'] . '.';
+    }
+    $running = aiResearchRunningLogRow($pdo);
+    if ($running && (string)($running['kind'] ?? '') !== 'audit') {
+        return 'Kontrola behu #' . $runId . ' nemuze bezet soubezne s jinym AI research krokem. Dokonci se po nem; aktualni prace je videt v logu.';
+    }
+    $logId = insertAiResearchLog($pdo, [
+        'status' => 'running',
+        'kind' => 'audit',
+        'run_id' => $runId,
+        'subject' => (string)($context['run']['seed_business'] ?? ''),
+        'started_at' => date('c'),
+        'planned_at' => date('c'),
+        'message' => 'Rucni kontrola probiha: overuji a doplnuji chybejici kroky workflow.',
+    ]);
+    $token = scrapingWorkerToken($pdo, true);
+    fireAndForgetGet(appBaseUrl() . '?worker=ai_research_audit&token=' . rawurlencode($token)
+        . '&run_id=' . $runId . '&log_id=' . $logId);
+    return 'Kontrola behu #' . $runId . ' byla okamzite spustena na pozadi. Prubeh a vysledek jsou v Logy a provoz automatiky.';
+}
+
+function runAiResearchAuditWorker(PDO $pdo, array $config, int $runId, int $logId): string
+{
+    ignore_user_abort(true);
+    if (function_exists('set_time_limit')) {
+        @set_time_limit(0);
+    }
+    if ($runId <= 0 || $logId <= 0) {
+        return 'Kontrola AI research: chybi identifikace behu.';
+    }
+    $log = aiResearchAuditRunningLog($pdo, $runId);
+    if (!$log || (int)$log['id'] !== $logId) {
+        return 'Kontrola AI research: tento pozadavek uz neni aktualni.';
+    }
+    $settings = loadSettings($pdo);
+    $otherRunning = aiResearchRunningLogRow($pdo);
+    if (($otherRunning && (int)$otherRunning['id'] !== $logId)
+        || (int)($settings['ai_research_lock_until'] ?? 0) > time()) {
+        updateAiResearchLog($pdo, $logId, [
+            'status' => 'deferred',
+            'finished_at' => date('c'),
+            'message' => 'Kontrola se odlozila, protoze prave bezi jiny AI research krok. Spust ji znovu po jeho dokonceni.',
+        ]);
+        return 'Kontrola behu #' . $runId . ' odlozena kvuli soubeznemu AI research kroku.';
+    }
+    $startedAt = time();
+    $lockHeld = true;
+    setSetting($pdo, 'ai_research_lock_until', (string)(time() + aiResearchRunMaxLifetimeSeconds()));
+    register_shutdown_function(static function () use ($pdo, &$lockHeld): void {
+        if (!$lockHeld) {
+            return;
+        }
+        try {
+            setSetting($pdo, 'ai_research_lock_until', '');
+        } catch (Throwable $e) {
+            error_log('AI research audit worker cleanup failed: ' . $e->getMessage());
+        }
+    });
+    try {
+        updateAiResearchLog($pdo, $logId, ['message' => 'Rucni kontrola probiha: prevyhodnocuji plan, kontakty, vzory, workspace, scraping a odhad dosahu.']);
+        $message = auditAiResearchRunNow($pdo, $config, $runId);
+        closeAiResearchLog($pdo, $logId, 'done', $message, $startedAt, $config);
+        return $message;
+    } catch (AiResearchTemporaryException $e) {
+        $message = 'Kontrola odlozena: ' . aiResearchFailureMessage($e);
+        closeAiResearchLog($pdo, $logId, 'deferred', $message, $startedAt, $config);
+        return $message;
+    } catch (Throwable $e) {
+        $message = 'Kontrola selhala: ' . $e->getMessage();
+        closeAiResearchLog($pdo, $logId, 'failed', $message, $startedAt, $config);
+        return $message;
+    } finally {
+        $lockHeld = false;
+        setSetting($pdo, 'ai_research_lock_until', '');
+    }
 }
 
 /**
@@ -3802,6 +3924,7 @@ function aiResearchSeedDiscoveryState(PDO $pdo): array
         'cycle' => max(1, (int)($state['cycle'] ?? 1)),
         'known_total' => max(0, (int)($state['known_total'] ?? 0)),
         'known_page_size' => max(0, (int)($state['known_page_size'] ?? 0)),
+        'catalog_checked_at' => trim((string)($state['catalog_checked_at'] ?? '')),
         'note' => truncatePlainText((string)($state['note'] ?? ''), 500),
     ];
 }
@@ -3831,6 +3954,7 @@ function saveAiResearchSeedDiscoveryState(PDO $pdo, array $state): void
         'cycle' => max(1, (int)($state['cycle'] ?? 1)),
         'known_total' => max(0, (int)($state['known_total'] ?? 0)),
         'known_page_size' => max(0, (int)($state['known_page_size'] ?? 0)),
+        'catalog_checked_at' => trim((string)($state['catalog_checked_at'] ?? '')),
         'note' => truncatePlainText((string)($state['note'] ?? ''), 500),
         'updated_at' => date('c'),
     ];
@@ -3888,6 +4012,60 @@ function aiResearchSeedCatalogIsPastEnd(array $state): bool
 }
 
 /**
+ * Pocet firem v katalogu se nekontroluje pri kazdem otevreni administrace. Vystaci
+ * obnovit ho jednou za 15 minut; samotne prochazeni seedu jej navic obnovuje take.
+ */
+function aiResearchRefreshFirmySeedCatalogTotal(PDO $pdo, array $state): array
+{
+    $checkedAt = (int)strtotime((string)($state['catalog_checked_at'] ?? ''));
+    if ((int)($state['known_total'] ?? 0) > 0 && $checkedAt > time() - 15 * 60) {
+        return $state;
+    }
+    aiResearchFastFetchMode(true);
+    try {
+        $html = httpGet(aiResearchFirmySeedCatalogUrl(1));
+        $info = aiResearchFirmyCatalogPageInfo($html);
+        if ($info['total'] > 0) {
+            $state['known_total'] = $info['total'];
+        }
+        if ($info['page_size'] > 0) {
+            $state['known_page_size'] = $info['page_size'];
+        }
+        $state['catalog_checked_at'] = date('c');
+        persistAiResearchSeedDiscoveryState($pdo, $state);
+    } catch (Throwable $e) {
+        error_log('AI research seed catalog total refresh failed: ' . $e->getMessage());
+    } finally {
+        aiResearchFastFetchMode(false);
+    }
+    return $state;
+}
+
+function aiResearchSeedCategoryProgress(PDO $pdo, bool $refreshCatalogTotal = false): array
+{
+    $state = aiResearchSeedDiscoveryState($pdo);
+    if ($refreshCatalogTotal) {
+        $state = aiResearchRefreshFirmySeedCatalogTotal($pdo, $state);
+    }
+    $stmt = $pdo->prepare('
+        SELECT COUNT(DISTINCT COALESCE(NULLIF(seed_source_url, ""), NULLIF(seed_website, "")))
+        FROM ai_research_runs
+        WHERE seed_source_label LIKE ?
+          AND status IN ("done", "no_match", "no_contacts", "unsuitable")
+    ');
+    $stmt->execute(['Firmy.cz / Vse pro firmy / Praha%']);
+    $completed = (int)$stmt->fetchColumn();
+    $total = max(0, (int)($state['known_total'] ?? 0));
+    return [
+        'completed' => $completed,
+        'total' => $total,
+        'total_known' => $total > 0,
+        'updated_at' => date('c'),
+        'catalog_checked_at' => (string)($state['catalog_checked_at'] ?? ''),
+    ];
+}
+
+/**
  * Vyber noveho seed subjektu z katalogu. Stav obsahuje frontu detailu z nactene
  * stranky a dalsi stranku katalogu. Zadny kandidat se po limitu requestu neztrati:
  * dalsi cron navaze presne tam, kde predchozi beh skoncil.
@@ -3929,6 +4107,7 @@ function selectAiResearchFirmySeedCompany(PDO $pdo): ?array
                 $info = aiResearchFirmyCatalogPageInfo($html);
                 if ($info['total'] > 0) {
                     $state['known_total'] = $info['total'];
+                    $state['catalog_checked_at'] = date('c');
                 }
                 if ($info['page_size'] > 0) {
                     $state['known_page_size'] = $info['page_size'];
@@ -18069,6 +18248,11 @@ function routeUrl(string $view): string
 function postReturnUrl(PDO $pdo, string $view): string
 {
     $url = routeUrl($view);
+    if ($view === 'research' && ($_POST['action'] ?? '') === 'audit_ai_research_run') {
+        // Rucni kontrola bezi na pozadi. Po kliknuti se ma hned ukazat radek s jejim
+        // skutecnym stavem, ne jen flash zprava na prehledu vysledku.
+        return $url . '&tab=logs';
+    }
     if ($view === 'contacts' && ($_POST['return_to'] ?? '') === 'overview') {
         return $url;
     }
@@ -19054,6 +19238,7 @@ function renderApp(PDO $pdo, ?array $flash): void
         $researchLogs = $researchTab === 'logs' ? aiResearchLogEntries($pdo, $researchLogPage * $researchLogPageSize) : [];
         $researchLogsTotal = $researchTab === 'logs' ? aiResearchLogCount($pdo) : 0;
         $researchLogsHasMore = count($researchLogs) < $researchLogsTotal;
+        $researchCategoryProgress = $researchTab === 'results' ? aiResearchSeedCategoryProgress($pdo) : [];
         // Prave jeden beh muze mit "pripravuje se", a to jen ve sloupci, kde prace stoji.
         $researchActiveRunId = aiResearchActiveRunId($pdo);
     ?>
@@ -19148,6 +19333,11 @@ function renderApp(PDO $pdo, ?array $flash): void
             $researchStepColumns = aiResearchOrderedChecklist(aiResearchWorkflowChecklist($pdo, [], []));
             $researchColumnCount = 10 + count($researchStepColumns);
         ?>
+        <div class="research-category-progress" data-research-category-progress aria-live="polite">
+            <strong>Výběr seedů z Firmy.cz / Vše pro firmy / Praha</strong>
+            <span><b data-research-category-completed><?= h((string)(int)($researchCategoryProgress['completed'] ?? 0)) ?></b> z <b data-research-category-total><?= !empty($researchCategoryProgress['total_known']) ? h((string)(int)$researchCategoryProgress['total']) : '...' ?></b> subjektů plně zpracováno</span>
+            <small class="muted" data-research-category-updated>Průběžně se aktualizuje</small>
+        </div>
         <table class="research-table"><thead><tr><th>Návrhy</th><th>Oslovení</th><?php foreach ($researchStepColumns as $stepColumn): ?><th class="research-step-col" title="<?= h((string)$stepColumn['label']) ?>"><?= h((string)$stepColumn['short']) ?></th><?php endforeach; ?><th>Kdy</th><th>Seed byznys</th><th>Email</th><th>Databáze</th><th>Klíčové slovo</th><th>Lokalita</th><th>Kontakty</th><th>K oslovení</th></tr></thead><tbody>
         <?php if ($researchStarting): ?>
             <tr class="research-starting-row">
@@ -19539,6 +19729,29 @@ function renderApp(PDO $pdo, ?array $flash): void
             </tr>
         <?php endforeach; ?>
         </tbody></table>
+        <script>
+            (function () {
+                var root = document.querySelector('[data-research-category-progress]');
+                if (!root || !window.fetch) return;
+                var completed = root.querySelector('[data-research-category-completed]');
+                var total = root.querySelector('[data-research-category-total]');
+                var updated = root.querySelector('[data-research-category-updated]');
+                var url = <?= json_encode(routeUrl('research') . '&api=ai_research_category_progress', JSON_UNESCAPED_SLASHES | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT) ?>;
+                function refresh() {
+                    window.fetch(url, { credentials: 'same-origin', cache: 'no-store' })
+                        .then(function (response) { return response.ok ? response.json() : null; })
+                        .then(function (data) {
+                            if (!data) return;
+                            if (completed) completed.textContent = String(data.completed || 0);
+                            if (total) total.textContent = data.total_known ? String(data.total || 0) : '...';
+                            if (updated) updated.textContent = 'Aktualizováno ' + new Date().toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+                        })
+                        .catch(function () {})
+                        .finally(function () { window.setTimeout(refresh, 30000); });
+                }
+                refresh();
+            })();
+        </script>
         <?php if ($researchAutoRefresh): ?>
         <p class="note research-refresh-note">
             Běh probíhá na pozadí.

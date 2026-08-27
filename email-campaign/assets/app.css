@@ -2177,6 +2177,35 @@ td a {
      kazde hlavicky vesel cely nazev - orezany nazev sloupce je horsi nez skrolovani. */
   min-width: 1564px;
 }
+.research-category-progress {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  margin: 18px 0 10px;
+  padding: 12px 14px;
+  border: 1px solid #b9ddd4;
+  border-radius: 6px;
+  background: #eef9f6;
+  color: #164a40;
+}
+.research-category-progress strong,
+.research-category-progress b {
+  white-space: nowrap;
+}
+.research-category-progress small {
+  margin-left: auto;
+}
+@media (max-width: 680px) {
+  .research-category-progress {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 5px;
+  }
+  .research-category-progress small {
+    margin-left: 0;
+  }
+}
 .view-research .research-table > tbody > tr.expandable-row > td {
   white-space: nowrap;
   overflow: hidden;
