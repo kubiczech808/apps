@@ -46,6 +46,9 @@ const AI_RESEARCH_GEMINI_CALL_RESERVE_SECONDS = 12;
 const AI_RESEARCH_WEBSITE_SUBPAGES_MAX = 3;
 const AI_RESEARCH_WEBSITE_SUBPAGE_SLICE_SECONDS = 8;
 // Vyber seedu z katalogu: stropy a casovy platek. Bez nich slo o desitky requestu.
+// Stranky se uz neberou nahodne z prvnich dvanacti. Pozice i neproverene detaily
+// se ukladaji do DB, aby se postupne prosla cela kategorie a neskoncilo se omylem
+// na male casti uz jednou zkontrolovanych vysledku.
 const AI_RESEARCH_SEED_PICK_PAGES_MAX = 3;
 const AI_RESEARCH_SEED_PICK_DETAILS_MAX = 8;
 const AI_RESEARCH_SEED_PICK_SLICE_SECONDS = 10;
@@ -3313,9 +3316,10 @@ function runAiResearchOnce(PDO $pdo, array $config, bool $force = false, int $re
         }
         $seed = $resumeSeed ?: selectAiResearchFirmySeedCompany($pdo);
         if (!$seed) {
+            $discoveryNote = aiResearchSeedDiscoveryNote($pdo);
             return $skippedSeeds > 0
-                ? 'AI research: ulozeno ' . $skippedSeeds . ' seed subjektu bez pouzitelneho webu, dalsi unikatni firma z Firmy.cz ted nebyla nalezena.'
-                : 'AI research: nepodarilo se najit novou unikatni seed firmu z Firmy.cz / Vse pro firmy / Praha.';
+                ? 'AI research: ulozeno ' . $skippedSeeds . ' seed subjektu bez pouzitelneho webu. ' . $discoveryNote
+                : 'AI research: novy seed subjekt se v tomto dilcim pruchodu nenasel. ' . $discoveryNote;
         }
         // Radek se zaklada hned po vyberu seedu. Vyber je levny, kdezto nacteni webu
         // a plan trvaji desitky sekund, takze uzivatel jinak dlouho nevidi, co se zpracovava.
@@ -3756,64 +3760,244 @@ function releaseAiResearchRunsWithFixedWebsiteContext(PDO $pdo): void
 }
 
 /**
- * Vyber noveho seed subjektu z katalogu. Drive to bylo az dvanact strankovych requestu
- * a neomezeny pocet detailu s beznym timeoutem - jedina nejdrazsi operace celeho behu
- * a nejcastejsi duvod, proc hosting request ukoncil. Ted plati rychly rezim, strop
- * stranek i detailu a casovy platek; kdyz se seed nenajde, zkusi ho dalsi tik.
+ * Globalni stav pruzkumu katalogu. AI research bezi jak z cronu, tak z rucni akce
+ * administrace; proto nesmi byt ulozen pod uzivatelskym prefixem v settings.
+ */
+function aiResearchGlobalSetting(PDO $pdo, string $key): string
+{
+    try {
+        $column = settingKeyColumn($pdo);
+        $stmt = $pdo->prepare('SELECT value FROM settings WHERE ' . $column . '=? LIMIT 1');
+        $stmt->execute([$key]);
+        return (string)($stmt->fetchColumn() ?: '');
+    } catch (Throwable $e) {
+        error_log('AI research global setting read failed: ' . $e->getMessage());
+        return '';
+    }
+}
+
+function aiResearchSeedDiscoveryState(PDO $pdo): array
+{
+    $decoded = json_decode(aiResearchGlobalSetting($pdo, 'ai_research_seed_discovery_state'), true);
+    $state = is_array($decoded) ? $decoded : [];
+    $queue = [];
+    foreach ((array)($state['queue'] ?? []) as $item) {
+        if (!is_array($item)) {
+            continue;
+        }
+        $url = normalizeFirmyDetailUrl((string)($item['url'] ?? ''));
+        if ($url === '') {
+            continue;
+        }
+        $queue[$url] = [
+            'url' => $url,
+            'catalog_url' => (string)($item['catalog_url'] ?? ''),
+            'page' => max(1, (int)($item['page'] ?? 1)),
+        ];
+    }
+    return [
+        'next_page' => max(1, (int)($state['next_page'] ?? 1)),
+        'queue' => array_values($queue),
+        'empty_pages' => max(0, (int)($state['empty_pages'] ?? 0)),
+        'cycle' => max(1, (int)($state['cycle'] ?? 1)),
+        'known_total' => max(0, (int)($state['known_total'] ?? 0)),
+        'known_page_size' => max(0, (int)($state['known_page_size'] ?? 0)),
+        'note' => truncatePlainText((string)($state['note'] ?? ''), 500),
+    ];
+}
+
+function saveAiResearchSeedDiscoveryState(PDO $pdo, array $state): void
+{
+    $queue = array_slice(array_values((array)($state['queue'] ?? [])), 0, 80);
+    $safeQueue = [];
+    foreach ($queue as $item) {
+        if (!is_array($item)) {
+            continue;
+        }
+        $url = normalizeFirmyDetailUrl((string)($item['url'] ?? ''));
+        if ($url === '') {
+            continue;
+        }
+        $safeQueue[] = [
+            'url' => $url,
+            'catalog_url' => truncatePlainText((string)($item['catalog_url'] ?? ''), 500),
+            'page' => max(1, (int)($item['page'] ?? 1)),
+        ];
+    }
+    $value = [
+        'next_page' => max(1, (int)($state['next_page'] ?? 1)),
+        'queue' => $safeQueue,
+        'empty_pages' => max(0, (int)($state['empty_pages'] ?? 0)),
+        'cycle' => max(1, (int)($state['cycle'] ?? 1)),
+        'known_total' => max(0, (int)($state['known_total'] ?? 0)),
+        'known_page_size' => max(0, (int)($state['known_page_size'] ?? 0)),
+        'note' => truncatePlainText((string)($state['note'] ?? ''), 500),
+        'updated_at' => date('c'),
+    ];
+    setSettingRaw($pdo, 'ai_research_seed_discovery_state', json_encode($value, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?: '{}');
+}
+
+function persistAiResearchSeedDiscoveryState(PDO $pdo, array $state): void
+{
+    try {
+        saveAiResearchSeedDiscoveryState($pdo, $state);
+    } catch (Throwable $e) {
+        // Vyber seedu ma zustat funkcni i pri kratkem vypadku DB; dalsi beh muze
+        // jednu stranku zopakovat, ale aktualni pouzitelny seed se nezahodi.
+        error_log('AI research seed discovery state save failed: ' . $e->getMessage());
+    }
+}
+
+function aiResearchSeedDiscoveryNote(PDO $pdo): string
+{
+    $note = trim((string)(aiResearchSeedDiscoveryState($pdo)['note'] ?? ''));
+    return $note !== ''
+        ? $note
+        : 'Vyber bude pokracovat dalsi strankou katalogu pri pristim behu.';
+}
+
+/**
+ * Vrati rozsah a celkovy pocet z aktualni stranky Firmy.cz. Slouzi jen jako pomucka
+ * pro bezpecny navrat na zacatek po skutecnem konci vysledku; vyber na teto hodnote
+ * nezavisi, protoze katalog muze velikost stranky zmenit.
+ */
+function aiResearchFirmyCatalogPageInfo(string $html): array
+{
+    if (preg_match('/Zobrazujeme\s+vysledky\s+(\d+)\s*[\x{2013}\x{2014}-]\s*(\d+)\s+z\s+celkem\s+([\d\s\x{00A0}]+)/iu', $html, $match)) {
+        $first = (int)$match[1];
+        $last = (int)$match[2];
+        $total = (int)preg_replace('/\D+/', '', (string)$match[3]);
+        return [
+            'total' => $total,
+            'page_size' => max(1, $last - $first + 1),
+        ];
+    }
+    return ['total' => 0, 'page_size' => 0];
+}
+
+function aiResearchSeedCatalogIsPastEnd(array $state): bool
+{
+    $total = (int)($state['known_total'] ?? 0);
+    $pageSize = (int)($state['known_page_size'] ?? 0);
+    if ($total < 1 || $pageSize < 1) {
+        return false;
+    }
+    // Posledni stranka muze obsahovat prekryv s predchozi; jedna rezerva proto
+    // chrani pred predcasnym resetem pri zmene strankovani katalogu.
+    return (int)($state['next_page'] ?? 1) > (int)ceil($total / $pageSize) + 1;
+}
+
+/**
+ * Vyber noveho seed subjektu z katalogu. Stav obsahuje frontu detailu z nactene
+ * stranky a dalsi stranku katalogu. Zadny kandidat se po limitu requestu neztrati:
+ * dalsi cron navaze presne tam, kde predchozi beh skoncil.
  */
 function selectAiResearchFirmySeedCompany(PDO $pdo): ?array
 {
-    $pages = range(1, 12);
-    shuffle($pages);
-    $pages = array_slice($pages, 0, AI_RESEARCH_SEED_PICK_PAGES_MAX);
+    $state = aiResearchSeedDiscoveryState($pdo);
     $detailsLeft = AI_RESEARCH_SEED_PICK_DETAILS_MAX;
+    $pagesLeft = AI_RESEARCH_SEED_PICK_PAGES_MAX;
     $sliceEndsAt = min(time() + AI_RESEARCH_SEED_PICK_SLICE_SECONDS, aiResearchDeadline() - AI_RESEARCH_GEMINI_CALL_RESERVE_SECONDS);
+    $checkedDetails = 0;
+    $seenDetails = 0;
+    $unusableDetails = 0;
+    $pagesLoaded = 0;
     aiResearchFastFetchMode(true);
     try {
-    foreach ($pages as $page) {
-        if (time() >= $sliceEndsAt || $detailsLeft <= 0) {
-            break;
-        }
-        $searchUrl = aiResearchFirmySeedCatalogUrl($page);
-        try {
-            $html = httpGet($searchUrl);
-        } catch (Throwable $e) {
-            error_log('AI research Firmy seed page skipped [' . $searchUrl . ']: ' . $e->getMessage());
-            continue;
-        }
-        $urls = extractCandidateUrls($html, $searchUrl, 'firmy_cz');
-        shuffle($urls);
-        foreach ($urls as $detailUrl) {
-            if (time() >= $sliceEndsAt || $detailsLeft <= 0) {
-                break;
+        while (time() < $sliceEndsAt && $detailsLeft > 0) {
+            if (!$state['queue']) {
+                if ($pagesLeft <= 0) {
+                    break;
+                }
+                if (aiResearchSeedCatalogIsPastEnd($state)) {
+                    $state['next_page'] = 1;
+                    $state['empty_pages'] = 0;
+                    $state['cycle']++;
+                }
+                $page = max(1, (int)$state['next_page']);
+                $searchUrl = aiResearchFirmySeedCatalogUrl($page);
+                $pagesLeft--;
+                try {
+                    $html = httpGet($searchUrl);
+                } catch (Throwable $e) {
+                    $state['next_page'] = $page + 1;
+                    $state['note'] = 'Stranku ' . $page . ' katalogu se nepodarilo nacist; dalsi beh navaze strankou ' . ($page + 1) . '.';
+                    error_log('AI research Firmy seed page skipped [' . $searchUrl . ']: ' . $e->getMessage());
+                    continue;
+                }
+                $pagesLoaded++;
+                $info = aiResearchFirmyCatalogPageInfo($html);
+                if ($info['total'] > 0) {
+                    $state['known_total'] = $info['total'];
+                }
+                if ($info['page_size'] > 0) {
+                    $state['known_page_size'] = $info['page_size'];
+                }
+                $urls = extractCandidateUrls($html, $searchUrl, 'firmy_cz');
+                $state['next_page'] = $page + 1;
+                if (!$urls) {
+                    $state['empty_pages']++;
+                    if ($state['empty_pages'] >= 2) {
+                        $state['next_page'] = 1;
+                        $state['empty_pages'] = 0;
+                        $state['cycle']++;
+                        $state['note'] = 'Katalog Firmy.cz byl projit az na konec (cyklus ' . ($state['cycle'] - 1) . '), ale bez dalsiho pouzitelneho seedu. Novy cyklus zacne od prvni stranky.';
+                    } else {
+                        $state['note'] = 'Stranka ' . $page . ' katalogu nevratila zadny detail; dalsi beh overi dalsi stranku.';
+                    }
+                    continue;
+                }
+                $state['empty_pages'] = 0;
+                shuffle($urls);
+                foreach ($urls as $url) {
+                    $state['queue'][] = ['url' => $url, 'catalog_url' => $searchUrl, 'page' => $page];
+                }
+                $state['note'] = 'Nactena stranka ' . $page . ' katalogu (' . count($urls) . ' detailu); vyber pokracuje z teto fronty.';
+            }
+
+            $candidate = array_shift($state['queue']);
+            if (!is_array($candidate)) {
+                continue;
+            }
+            $detailUrl = normalizeFirmyDetailUrl((string)($candidate['url'] ?? ''));
+            if ($detailUrl === '') {
+                continue;
             }
             if (aiResearchSeedAlreadySeen($pdo, '', $detailUrl)) {
+                $seenDetails++;
                 continue;
             }
             $detailsLeft--;
+            $checkedDetails++;
             try {
                 $detailHtml = httpGet($detailUrl);
             } catch (Throwable $e) {
+                $unusableDetails++;
                 error_log('AI research Firmy seed detail skipped [' . $detailUrl . ']: ' . $e->getMessage());
                 continue;
             }
             $contact = extractContactFromHtml($detailHtml, $detailUrl);
             $email = strtolower(trim((string)($contact['email'] ?? '')));
             if ($email !== '' && (appUserByEmail($pdo, $email, false) || isSuppressed($pdo, $email))) {
+                $unusableDetails++;
                 continue;
             }
             $website = normalizeWebsite(trim((string)($contact['website'] ?? '')));
             if ($website === '' || isBlockedDirectoryWebsite($website)) {
+                $unusableDetails++;
                 continue;
             }
-            if ($website !== '' && aiResearchSeedAlreadySeen($pdo, $website, $detailUrl)) {
+            if (aiResearchSeedAlreadySeen($pdo, $website, $detailUrl)) {
+                $seenDetails++;
                 continue;
             }
             $description = aiResearchExtractPageDescription($detailHtml);
             $subjectName = trim((string)($contact['subject_name'] ?? ''));
             if ($subjectName === '') {
+                $unusableDetails++;
                 continue;
             }
+            $state['note'] = 'Vybran novy seed ze stranky ' . (int)($candidate['page'] ?? 0) . '; ve fronte zustava ' . count($state['queue']) . ' dalsich detailu.';
             return [
                 'id' => 0,
                 'email' => $email,
@@ -3824,14 +4008,23 @@ function selectAiResearchFirmySeedCompany(PDO $pdo): ?array
                 'source_label' => 'Firmy.cz / Vse pro firmy / Praha',
                 'source_url' => $detailUrl,
                 'seed_description' => $description,
-                'seed_catalog_url' => $searchUrl,
+                'seed_catalog_url' => (string)($candidate['catalog_url'] ?? ''),
                 'seed_owner_user_id' => aiResearchOwnerUserId($pdo),
                 'seed_database_name' => 'AI research seedy',
             ];
         }
-    }
     } finally {
         aiResearchFastFetchMode(false);
+        $remaining = count((array)$state['queue']);
+        $totalHint = (int)($state['known_total'] ?? 0);
+        $state['note'] = $state['note'] !== '' && $checkedDetails === 0 && $seenDetails === 0
+            ? $state['note']
+            : 'V tomto kroku: nacteno stranek ' . $pagesLoaded . ', provereno detailu ' . $checkedDetails
+                . ', uz znamych ' . $seenDetails . ', nepouzitelnych ' . $unusableDetails
+                . ', ve fronte zbyva ' . $remaining . '. Dalsi pozice katalogu: stranka '
+                . max(1, (int)($state['next_page'] ?? 1))
+                . ($totalHint > 0 ? ' z odhadem ' . $totalHint . ' firem.' : '.');
+        persistAiResearchSeedDiscoveryState($pdo, $state);
     }
     return null;
 }
