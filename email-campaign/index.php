@@ -6557,31 +6557,55 @@ function auditAiResearchRunNow(PDO $pdo, array $config, int $runId): string
     $fixed = [];
     $blocked = [];
     $permanentlyBlocked = false;
+    $planRechecked = false;
+    $planChanged = false;
 
     $ownsBudget = aiResearchBeginRequestBudget();
     $requestsBefore = aiResearchRequestsMadeThisProcess();
     try {
-        // 1. Plan: keyword a pochopeni byznysu. Chybejici plan se dogeneruje, ne nahlasi.
+        // 1. Plan se pri rucni kontrole vyhodnoti vzdy znovu. Nestaci jen doplnit
+        // prazdne pole: po uprave promptu nebo webu seedu se muze zmenit cilovka,
+        // keyword i lokalita, i kdyz starsi plan vypada formalne kompletni.
         $keyword = aiResearchPrimaryKeyword($plan);
-        if ($keyword === '' || trim((string)($plan['business_understanding'] ?? '')) === '') {
-            $fetchedContext = null;
-            try {
-                $plan = aiResearchEnrichPlan(aiResearchPlan($config, $seed, $fetchedContext), $seed);
-                if (!empty($plan['seed_unsuitable'])) {
+        $previousPlanSignature = aiResearchPlanSignature($plan);
+        $fetchedContext = null;
+        try {
+            $freshPlan = aiResearchEnrichPlan(aiResearchPlan($config, $seed, $fetchedContext), $seed);
+            if (!empty($freshPlan['seed_unsuitable'])) {
+                if (trim((string)($plan['business_understanding'] ?? '')) === '') {
                     // Trvaly stav: bez citelneho webu se plan nesestavi ani po stou.
                     $permanentlyBlocked = true;
                     $blocked[] = 'seed subjekt nema pouzitelny webovy kontext, plan nelze sestavit';
                 } else {
-                    $plan = array_merge($plan, aiResearchWebsiteContextCache($fetchedContext));
-                    updateAiResearchRunProgress($pdo, $runId, $plan, 'Plan pregenerovan rucni kontrolou behu.');
-                    $keyword = aiResearchPrimaryKeyword($plan);
-                    $fixed[] = 'plan pregenerovan';
+                    // Starsi funkcni plan se nemaze jen proto, ze jeden novy request na
+                    // web narazil na kratkodoby problem nebo anti-bot odpoved.
+                    $blocked[] = 'nove overeni webu nedalo pouzitelny kontext; ponechan predchozi plan';
                 }
-            } catch (Throwable $e) {
-                // Nacteny web se ulozi i pri chybe, takze dalsi kliknuti uz jen doplni plan.
-                storeAiResearchWebsiteContextCache($pdo, $runId, aiResearchWebsiteContextCache($fetchedContext));
-                $blocked[] = 'plan: ' . aiResearchFailureMessage($e);
+            } else {
+                $plan = aiResearchEnrichPlan(array_merge(
+                    $plan,
+                    $freshPlan,
+                    aiResearchWebsiteContextCache($fetchedContext)
+                ), $seed);
+                $keyword = aiResearchPrimaryKeyword($plan);
+                $planRechecked = true;
+                $planChanged = aiResearchPlanSignature($plan) !== $previousPlanSignature;
+                updateAiResearchRunProgress(
+                    $pdo,
+                    $runId,
+                    $plan,
+                    $planChanged ? 'Plan byl rucni kontrolou prevyhodnocen a upraven.' : 'Plan byl rucni kontrolou znovu overen.'
+                );
+                $fixed[] = $planChanged ? 'plan prevyhodnocen a upraven' : 'plan znovu overen';
             }
+        } catch (AiResearchTemporaryException $e) {
+            // Worker z toho udela stav "odlozeno" a sam ponecha beh pro dalsi pokus.
+            storeAiResearchWebsiteContextCache($pdo, $runId, aiResearchWebsiteContextCache($fetchedContext));
+            throw $e;
+        } catch (Throwable $e) {
+            // Nacteny web se ulozi i pri chybe, takze dalsi kliknuti uz jen doplni plan.
+            storeAiResearchWebsiteContextCache($pdo, $runId, aiResearchWebsiteContextCache($fetchedContext));
+            $blocked[] = 'plan: ' . aiResearchFailureMessage($e);
         }
 
         // Pochopeni byznysu je prvni krok a vse dalsi z nej vychazi. Kdyz chybi, nema
@@ -6608,13 +6632,15 @@ function auditAiResearchRunNow(PDO $pdo, array $config, int $runId): string
         // 2. Nalezene kontakty. Kdyz chybi, rovnou se dohledaji - v cilove velikosti
         // prvni davky, ne v symbolickem vzorku. Vhodnost se neposuzuje: kontakt prisel
         // z katalogu presne na keyword a lokalitu z planu, takze do davky patri.
-        if (!$contacts && $keyword !== '' && !aiResearchDeadlineReached(AI_RESEARCH_CONTACT_SCRAPE_SLICE_SECONDS)) {
+        if ((!$contacts || $planChanged) && $keyword !== '' && !aiResearchDeadlineReached(AI_RESEARCH_CONTACT_SCRAPE_SLICE_SECONDS)) {
             try {
                 $found = aiResearchFindContacts($pdo, $seed, $plan, AI_RESEARCH_FIRST_BATCH_CONTACTS, $runId);
                 if ($found) {
                     upsertAiResearchRunContacts($pdo, $runId, aiResearchAcceptScrapedContacts($seed, $plan, $found), 'pending');
                     $contacts = aiResearchRunActionContext($pdo, $runId)['contacts'];
-                    $fixed[] = 'kontakty dohledany (' . count($contacts) . ')';
+                    $fixed[] = $planChanged
+                        ? 'kontakty znovu vyhledany (' . count($contacts) . ')'
+                        : 'kontakty dohledany (' . count($contacts) . ')';
                 } else {
                     $blocked[] = 'scraping nenasel kontakt s emailem: ' . aiResearchScrapeDiagnosticsText();
                 }
@@ -6638,10 +6664,10 @@ function auditAiResearchRunNow(PDO $pdo, array $config, int $runId): string
             || trim(strip_tags((string)($run['email_body_html'] ?? ''))) === ''
             || aiResearchTextHasPlaceholder((string)$run['email_subject'])
             || aiResearchTextHasPlaceholder(strip_tags((string)$run['email_body_html']));
-        if ($contacts && ($draftUnusable || count($variants) < 2)) {
+        if ($contacts && ($draftUnusable || count($variants) < 2 || $planRechecked)) {
             try {
                 finalizeAiResearchRun($pdo, $config, $runId, $seed, $plan, $contacts, $contacts);
-                $fixed[] = 'vzory osloveni pregenerovany';
+                $fixed[] = $planRechecked ? 'vzory osloveni znovu vyhodnoceny' : 'vzory osloveni pregenerovany';
                 $context = aiResearchRunActionContext($pdo, $runId);
                 $run = $context['run'];
                 $plan = $context['plan'];
@@ -6690,7 +6716,7 @@ function auditAiResearchRunNow(PDO $pdo, array $config, int $runId): string
         // 6. Odhad dosazitelnych kontaktu. Spocita se hned, pokud na to zbyva cas.
         // Odhad nizsi nez pocet uz nascrapovanych kontaktu je nesmysl - zahodi se,
         // aby se spocital znovu, misto aby podle nej beh tvrdil maly trh.
-        if (!aiResearchEstimateIsCredible($plan, aiResearchScrapedContactCount($pdo, $plan))) {
+        if ($planChanged || !aiResearchEstimateIsCredible($plan, aiResearchScrapedContactCount($pdo, $plan))) {
             unset($plan['contact_estimate']);
             $store = $pdo->prepare('UPDATE ai_research_runs SET plan_json=?, updated_at=? WHERE id=?');
             $store->execute([json_encode($plan, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?: '{}', date('c'), $runId]);
