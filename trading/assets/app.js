@@ -34,6 +34,7 @@ const state = {
   scrapedMarketStateBusy: false,
   scrapedMarketStateLoaded: false,
   scrapedMarketStateSummary: "",
+  scrapedMarketStateStrategyId: "",
   scrapedMarketStateError: "",
   scrapedMarketObservations: [],
   scrapedMarketScan: {},
@@ -163,6 +164,8 @@ const state = {
   scrapedFilteredCount: 0,
   userNavRefreshTimer: null,
   openedOpportunityKey: "",
+  portfolioConfigHistory: {},
+  portfolioConfigHistoryBusy: {},
 };
 
 const ELIGIBILITY_THRESHOLD_STORAGE_KEY = "tradingEligibilityProbabilityThreshold";
@@ -253,6 +256,8 @@ const els = {
   portfolioCandidatesRefresh: document.querySelector("[data-portfolio-candidates-refresh]"),
   portfolioCandidatesSummary: document.querySelector("[data-portfolio-candidates-summary]"),
   portfolioCandidatesTitle: document.querySelector("[data-portfolio-candidates-title]"),
+  portfolioConfigHistory: document.querySelector("[data-portfolio-config-history]"),
+  portfolioConfigHistoryTitle: document.querySelector("[data-portfolio-config-history-title]"),
   settingsPageEyebrow: document.querySelector("[data-settings-page-eyebrow]"),
   settingsPageTitle: document.querySelector("[data-settings-page-title]"),
   opportunityPanelTitle: document.querySelector("[data-opportunity-panel-title]"),
@@ -344,6 +349,7 @@ const els = {
   createPortfolio: document.querySelector("[data-create-portfolio]"),
   archivedPortfolios: document.querySelector("[data-archived-portfolios]"),
   portfolioOverview: document.querySelector("[data-portfolio-overview]"),
+  portfolioCapacity: document.querySelector("[data-portfolio-capacity]"),
   modeSwitch: document.querySelector("[data-mode-switch]"),
   modeButtons: document.querySelectorAll("[data-mode-toggle]"),
   liveActivation: document.querySelector("[data-live-activation]"),
@@ -500,6 +506,7 @@ const CUSTOM_PAPER_STRATEGY_ID = /^[a-z][a-zA-Z0-9]{1,30}$/;
 // Keep this in lockstep with CUSTOM_PAPER_PORTFOLIO_LIMIT in api.php. The API remains
 // authoritative, but catching the full set here avoids opening a form that cannot save.
 const CUSTOM_PAPER_PORTFOLIO_LIMIT = 24;
+const RECOMMENDED_ACTIVE_PORTFOLIO_LIMIT = 12;
 
 function normalizeMode(mode) {
   if (mode === "live" || mode === "live-5050") return mode;
@@ -1436,6 +1443,7 @@ const PORTFOLIO_TAB_ROUTE_SEGMENTS = {
   "closed-trades": "closed",
   "portfolio-candidates": "candidates",
   "run-log": "run-log",
+  "portfolio-history": "settings-history",
 };
 
 function portfolioTabFromRouteSegment(segment) {
@@ -1704,6 +1712,9 @@ function activateTab(target, { syncRoute = false, replace = false } = {}) {
   if (target === "portfolio-candidates") {
     renderPortfolioCandidates();
     refreshPortfolioCandidates({ quiet: true });
+  }
+  if (target === "portfolio-history") {
+    ensurePortfolioConfigHistory();
   }
   if (syncRoute && state.page === "portfolios") {
     const targetPath = portfolioTabRoutePath(target);
@@ -2291,10 +2302,31 @@ function syncModeButtons() {
   els.modeButtons = els.modeSwitch.querySelectorAll("[data-mode-toggle]");
 }
 
+function activeAutomatedPortfolioCount() {
+  const config = state.portfolioConfig || defaultPortfolioConfig();
+  const paper = Object.values(config.paper || {}).filter((row) => row && row.archived !== true && row.automationEnabled !== false);
+  const live = [config.live, config.live5050].filter((row) => row && row.archived !== true && row.automationEnabled === true);
+  return paper.length + live.length;
+}
+
+function renderPortfolioCapacity() {
+  if (!els.portfolioCapacity) return;
+  const active = activeAutomatedPortfolioCount();
+  const over = active > RECOMMENDED_ACTIVE_PORTFOLIO_LIMIT;
+  els.portfolioCapacity.classList.toggle("is-over-limit", over);
+  const tooltip = els.portfolioCapacity.querySelector(".analysis-tooltip");
+  if (tooltip) {
+    tooltip.textContent = `${active} active automated portfolios / recommended ${RECOMMENDED_ACTIVE_PORTFOLIO_LIMIT}. This conservative hourly-cron ceiling leaves room for scraping, publishing state and one-time runs.`;
+  }
+  const button = els.portfolioCapacity.querySelector(".info-button");
+  if (button) button.textContent = `${active}/${RECOMMENDED_ACTIVE_PORTFOLIO_LIMIT}`;
+}
+
 function syncModeUi() {
   preselectRichestPortfolio();
   const live = isLiveMode();
   syncModeButtons();
+  renderPortfolioCapacity();
   els.modeButtons.forEach((button) => {
     const buttonMode = normalizeMode(button.dataset.modeToggle);
     const isCurrent = button.dataset.modeToggle === state.mode;
@@ -2339,6 +2371,7 @@ function syncModeUi() {
   if (els.botStatus) els.botStatus.hidden = live;
   syncLiveActivationUi();
   syncExecutionButtons();
+  if (activeTabTarget() === "portfolio-history") ensurePortfolioConfigHistory();
 }
 
 function formatDate(value) {
@@ -4545,6 +4578,11 @@ function newPaperPortfolioId(name) {
   return "";
 }
 
+function executionScopeStrategyIdForMode(mode = state.mode) {
+  const normalized = normalizeMode(mode);
+  return LIVE_MODES.has(normalized) ? liveConfigKeyForMode(normalized) : paperStrategyIdFromMode(normalized);
+}
+
 function canCreatePaperPortfolio() {
   const paper = state.portfolioConfig?.paper || defaultPortfolioConfig().paper || {};
   return Object.keys(paper)
@@ -4675,6 +4713,20 @@ function overviewCoversEveryPortfolio() {
   return paperStrategyIds().every((id) => overviewPortfolioNumbers(id));
 }
 
+function overviewAnnualizedRoi({ portfolio = null, firstOpenedAt = "" } = {}) {
+  const initial = Number(portfolio?.initialUsdc);
+  const equity = Number(portfolio?.equityUsdc);
+  const openPnl = Number(portfolio?.openPnlUsdc || 0);
+  const opened = chartTimestamp(firstOpenedAt);
+  if (!Number.isFinite(initial) || initial <= 0 || !Number.isFinite(equity) || !opened) return null;
+  const days = Math.max((Date.now() - opened) / 86400000, 1 / 24);
+  // The overview deliberately measures only settled money: marks on open positions
+  // belong in Open P/L and would make a historical ROI jump around on every refresh.
+  const realizedEquity = equity - (Number.isFinite(openPnl) ? openPnl : 0);
+  const annualized = ((realizedEquity - initial) / initial) * (365 / days);
+  return { annualized, days };
+}
+
 function renderPortfolioOverview() {
   if (!els.portfolioOverview) return;
   const live = state.liveState?.portfolio || null;
@@ -4696,6 +4748,10 @@ function renderPortfolioOverview() {
         positions: live ? Number(live.marketValueUsdc) : null,
         orders: live ? reservedByOpenOrders(state.liveState?.openOrders) : null,
         free: live ? Number(live.cashUsdc) : null,
+        roi: overviewAnnualizedRoi({
+          portfolio: live,
+          firstOpenedAt: state.liveState?.firstOpenedAt || state.liveState?.portfolio?.firstOpenedAt || "",
+        }),
         live: true,
       };
     }
@@ -4712,6 +4768,12 @@ function renderPortfolioOverview() {
         : null,
       orders: portfolio ? Number(portfolio.restingLimitOrderUsdc || 0) : null,
       free: portfolio ? Number(portfolio.freeCapitalUsdc) : null,
+      roi: overviewAnnualizedRoi({
+        portfolio,
+        firstOpenedAt: state.botState?.paperPortfolios?.[paperStrategyIdFromMode(mode)]?.historySummary?.firstOpenedAt
+          || state.portfolioOverview?.[paperStrategyIdFromMode(mode)]?.historySummary?.firstOpenedAt
+          || "",
+      }),
       live: false,
     };
   });
@@ -4722,13 +4784,14 @@ function renderPortfolioOverview() {
   els.portfolioOverview.innerHTML = `
     <table class="portfolio-summary">
       <thead>
-        <tr><th>Portfolio</th><th>Equity</th><th title="Capital in filled positions: exposure that moves with the market.">In positions</th><th title="Capital reserved by resting orders that have not filled. Not exposure -- an unfilled order is discarded intact when the event ends.">In orders</th><th>Free</th></tr>
+        <tr><th>Portfolio</th><th>Equity</th><th title="Annualized return from the first opened trade to today. It uses only realized equity and excludes unrealized P/L.">ROI p.a.</th><th title="Capital in filled positions: exposure that moves with the market.">In positions</th><th title="Capital reserved by resting orders that have not filled. Not exposure -- an unfilled order is discarded intact when the event ends.">In orders</th><th>Free</th></tr>
       </thead>
       <tbody>
         ${rows.map((row) => `
           <tr class="${row.mode === state.mode ? "portfolio-summary-current" : ""}${row.live ? " portfolio-summary-live" : ""}">
             <td data-label="Portfolio"><button class="portfolio-summary-link" type="button" data-mode-toggle="${escapeHtml(row.mode)}">${escapeHtml(row.name)}</button>${row.live && sharedWallet ? ' <span class="portfolio-summary-note" title="These live portfolios trade one Polymarket account, so they report the same account capital.">shared account</span>' : ""}</td>
             <td data-label="Equity">${cell(row.equity)}</td>
+            <td data-label="ROI p.a." title="${row.roi ? `${row.roi.days.toFixed(1)} days since first opened trade; unrealized P/L excluded.` : "No first opened trade is available yet."}">${row.roi ? signedPercent(row.roi.annualized) : "-"}</td>
             <td data-label="In positions">${cell(row.positions)}</td>
             <td data-label="In orders">${cell(row.orders)}</td>
             <td data-label="Free">${cell(row.free)}</td>
@@ -4782,7 +4845,7 @@ function renderArchivedPortfolios() {
       </div>
     </div>
     <p class="calculation-note">These portfolios are not shown on the dashboard and are not executed. Every trade, run log and statistic they hold is kept, and restoring one brings it back exactly as it was.</p>
-    <ul class="archived-portfolio-list">
+    <div class="archived-portfolio-list">
       ${archived.map(([id, row]) => {
         const stored = id === "live-5050" ? null : state.botState?.paperPortfolios?.[id];
         const archive = id === "live-5050"
@@ -4803,15 +4866,47 @@ function renderArchivedPortfolios() {
                 : "no resolved trades yet",
             ].filter(Boolean).join(" / ")
             : "archive summary is not available yet");
+        const rules = archivedPortfolioRuleRows(row, archivedSummary);
         return `
-          <li>
-            <span><strong>${escapeHtml(normalizePortfolioName(row?.displayName, id === "live-5050" ? "5050" : id))}</strong> <span class="muted">${escapeHtml(detail)}</span></span>
-            <button class="execution-button" type="button" data-restore-portfolio="${escapeHtml(id)}">Restore</button>
-          </li>
+          <article class="archived-portfolio-card">
+            <div class="archived-portfolio-head">
+              <span><strong>${escapeHtml(normalizePortfolioName(row?.displayName, id === "live-5050" ? "5050" : id))}</strong> <span class="muted">${escapeHtml(detail)}</span></span>
+              <button class="execution-button" type="button" data-restore-portfolio="${escapeHtml(id)}">Restore</button>
+            </div>
+            <div class="portfolio-summary-table archived-portfolio-rules">
+              <table class="portfolio-summary">
+                <tbody>
+                  ${rules.map(([label, value]) => `<tr><th scope="row">${escapeHtml(label)}</th><td>${escapeHtml(value)}</td></tr>`).join("")}
+                </tbody>
+              </table>
+            </div>
+          </article>
         `;
       }).join("")}
-    </ul>
+    </div>
   `;
+}
+
+// An archive retains the configuration that selected its trades. Keep its rules separate
+// from the active portfolio card so an archived portfolio never picks up current defaults.
+function archivedPortfolioRuleRows(config = {}, summary = null) {
+  const minProbability = normalizeOptionalProbability(config.minProbability);
+  const maxProbability = normalizeOptionalProbability(config.maxProbability);
+  const minVolume = normalizeOptionalMoney(config.minLiquidityUsdc);
+  const includedTags = normalizeMarketTagList(config.includeOnlyMarketTags);
+  const excludedTags = normalizeMarketTagList(config.excludedMarketTags);
+  const resolvedTrades = Number(summary?.resolvedCount || 0);
+  const totalTrades = Number(summary?.tradeCount || 0);
+  return [
+    ["Resolved trades", `${formatInteger(resolvedTrades)} of ${formatInteger(totalTrades)}`],
+    ["Min probability", minProbability == null ? "not recorded" : percent(minProbability)],
+    ["Max probability", maxProbability == null ? "no upper limit" : percent(maxProbability)],
+    ["Included tags", includedTags.length ? includedTags.join(", ") : "all tags"],
+    ["Excluded tags", excludedTags.length ? excludedTags.join(", ") : "none"],
+    ["Minimum volume", minVolume == null ? "none" : `>= ${money(minVolume)}`],
+    ["Rotation", automaticRotationIsEnabled(config) ? "On" : "Off"],
+    ["Stop loss", stopLossRiskLabel(config)],
+  ];
 }
 
 // Archiving is deliberately not a delete: the portfolio stops being executed and leaves
@@ -5962,6 +6057,7 @@ async function refreshPortfolioCandidates(options = {}) {
   if (!options.quiet) setExecutionStatus("refreshing execution shortlist");
   try {
     const config = portfolioConfigForMode(state.mode);
+    const executionStrategyId = executionScopeStrategyIdForMode(state.mode);
     const needsCandidateEvaluations = normalizeProbabilitySource(config.probabilitySource) !== "polymarket";
     // A Polymarket-probability shortlist is fully self-contained in the compact
     // execution response. Do not make the candidate tab depend on the much larger
@@ -5976,7 +6072,7 @@ async function refreshPortfolioCandidates(options = {}) {
         ? fetchJsonWithTimeout("data/paper-state.json", { summary: needsCandidateEvaluations ? "candidates" : "dashboard" }, 15000)
         : Promise.resolve(null),
       isLiveMode() ? fetchJsonWithTimeout("data/live-state.json", {}, 15000) : Promise.resolve(null),
-      fetchJsonWithTimeout("data/paper-state.json", { summary: "execution" }, 15000),
+      fetchJsonWithTimeout("data/paper-state.json", { summary: "execution", strategyId: executionStrategyId }, 15000),
     ]);
     if (botState) {
       state.botState = botStateWithPreservedEvaluations(botState);
@@ -6073,6 +6169,9 @@ function storeScrapedMarketState(scrapedState = {}, summary = "scraped") {
       : [];
   }
   state.scrapedMarketStateSummary = summary;
+  state.scrapedMarketStateStrategyId = summary === "execution"
+    ? String(scrapedState.executionScopeStrategyId || "")
+    : "";
   state.scrapedMarketStateError = "";
   state.scrapedMarketStateLoaded = true;
   return true;
@@ -6080,14 +6179,20 @@ function storeScrapedMarketState(scrapedState = {}, summary = "scraped") {
 
 async function ensureScrapedMarketState(options = {}) {
   const summary = options.summary || (shouldRenderCandidateBotState() ? "execution" : "scraped");
-  if ((!options.force && scrapedMarketStateIsLoaded() && state.scrapedMarketStateSummary === summary) || state.scrapedMarketStateBusy) return;
+  const executionStrategyId = summary === "execution" ? executionScopeStrategyIdForMode(state.mode) : "";
+  const matchingExecutionScope = summary !== "execution" || state.scrapedMarketStateStrategyId === executionStrategyId;
+  if ((!options.force && scrapedMarketStateIsLoaded() && state.scrapedMarketStateSummary === summary && matchingExecutionScope) || state.scrapedMarketStateBusy) return;
   state.scrapedMarketStateBusy = true;
   state.scrapedMarketStateError = "";
   if ((state.opportunityView === "scraped" || state.opportunityView === "scan-log") && els.botEvaluations) {
     els.botEvaluations.innerHTML = '<div class="empty">Loading scraped Polymarket opportunities...</div>';
   }
   try {
-    const scrapedState = await fetchJsonWithTimeout("data/paper-state.json", { summary }, 10000);
+    const scrapedState = await fetchJsonWithTimeout(
+      "data/paper-state.json",
+      summary === "execution" ? { summary, strategyId: executionStrategyId } : { summary },
+      10000,
+    );
     if (dashboardLoadIsStale(options)) return;
     storeScrapedMarketState(scrapedState, summary);
     if (state.opportunityView === "scraped" || state.opportunityView === "scan-log") renderBotEvaluations();
@@ -8008,6 +8113,104 @@ function renderPortfolioCandidates() {
   els.portfolioCandidates.innerHTML = renderPortfolioCandidateRows(rows, mode, diagnostics);
 }
 
+const PORTFOLIO_CONFIG_HISTORY_LABELS = {
+  displayName: "Name",
+  minProbability: "Minimum probability",
+  maxProbability: "Maximum probability",
+  stakeUsdc: "Fixed stake",
+  maxResolutionDays: "Max resolution days",
+  selectionOrder: "Trade priority",
+  marketType: "Market type",
+  probabilitySource: "Probability source",
+  minLiquidityUsdc: "Minimum volume",
+  minNetYield: "Minimum net profit",
+  executionTrigger: "Execution trigger",
+  executionCronMinutes: "Cron interval",
+  useLimitOrders: "Order mode",
+  autoRotatePositions: "Automatic rotation",
+  stopLossRiskMultiplier: "Stop loss",
+  includeOnlyMarketTags: "Include only tags",
+  excludedMarketTags: "Excluded tags",
+  automationEnabled: "Automation",
+  archived: "Archived",
+};
+
+function currentPortfolioConfigHistoryStrategyId(mode = state.mode) {
+  return LIVE_MODES.has(normalizeMode(mode)) ? liveConfigKeyForMode(mode) : paperStrategyIdFromMode(mode);
+}
+
+function portfolioConfigHistoryValue(value) {
+  if (Array.isArray(value)) return value.length ? value.join(", ") : "All";
+  if (typeof value === "boolean") return value ? "On" : "Off";
+  if (value === null || value === "") return "-";
+  if (typeof value === "number" && Number.isFinite(value)) {
+    if (/Probability|Yield/.test(String(value))) return String(value);
+    return String(value);
+  }
+  return String(value);
+}
+
+function renderPortfolioConfigHistory() {
+  if (!els.portfolioConfigHistory) return;
+  const strategyId = currentPortfolioConfigHistoryStrategyId();
+  const records = state.portfolioConfigHistory[strategyId];
+  if (els.portfolioConfigHistoryTitle) {
+    els.portfolioConfigHistoryTitle.textContent = `${portfolioNavigationLabelForMode(state.mode)} settings history`;
+  }
+  if (!Array.isArray(records)) {
+    els.portfolioConfigHistory.innerHTML = '<div class="empty">Loading portfolio settings history...</div>';
+    return;
+  }
+  const rows = records.flatMap((record) => (Array.isArray(record.changes) ? record.changes.map((change) => ({
+    changedAt: record.changedAt,
+    field: change.field,
+    before: change.before,
+    after: change.after,
+  })) : []));
+  if (!rows.length) {
+    els.portfolioConfigHistory.innerHTML = '<div class="empty">No saved parameter changes for this portfolio yet.</div>';
+    return;
+  }
+  els.portfolioConfigHistory.innerHTML = `
+    <div class="table-scroll">
+      <table class="trade-table portfolio-config-history-table">
+        <thead><tr><th>Changed</th><th>Parameter</th><th>Previous value</th><th>New value</th></tr></thead>
+        <tbody>${rows.map((row) => `
+          <tr>
+            <td data-label="Changed">${escapeHtml(formatDate(row.changedAt))}</td>
+            <td data-label="Parameter">${escapeHtml(PORTFOLIO_CONFIG_HISTORY_LABELS[row.field] || row.field || "Setting")}</td>
+            <td data-label="Previous value">${escapeHtml(portfolioConfigHistoryValue(row.before))}</td>
+            <td data-label="New value">${escapeHtml(portfolioConfigHistoryValue(row.after))}</td>
+          </tr>
+        `).join("")}</tbody>
+      </table>
+    </div>`;
+}
+
+async function ensurePortfolioConfigHistory({ force = false } = {}) {
+  const strategyId = currentPortfolioConfigHistoryStrategyId();
+  if (!force && Array.isArray(state.portfolioConfigHistory[strategyId])) {
+    renderPortfolioConfigHistory();
+    return;
+  }
+  if (state.portfolioConfigHistoryBusy[strategyId]) return;
+  state.portfolioConfigHistoryBusy[strategyId] = true;
+  renderPortfolioConfigHistory();
+  try {
+    const payload = await fetchApiJson(`api.php?action=portfolio-config-history&strategy_id=${encodeURIComponent(strategyId)}`);
+    state.portfolioConfigHistory[strategyId] = Array.isArray(payload.records) ? payload.records : [];
+  } catch (error) {
+    state.portfolioConfigHistory[strategyId] = [];
+    if (els.portfolioConfigHistory) {
+      els.portfolioConfigHistory.innerHTML = `<div class="empty">${escapeHtml(error?.message || "Settings history could not be loaded.")}</div>`;
+    }
+    return;
+  } finally {
+    state.portfolioConfigHistoryBusy[strategyId] = false;
+  }
+  renderPortfolioConfigHistory();
+}
+
 // Rendered into each portfolio's own rules card, so the state shown is always the
 // state of the portfolio whose settings are on screen. The card is rebuilt on every
 // render, so the click is handled by delegation rather than a bound listener that
@@ -8937,8 +9140,10 @@ function evaluationEndDateCell(item) {
 // notion of the same thing so a candidate that has been reassessed shows the reassessment,
 // not just when it first entered the shortlist.
 function candidateAddedOrUpdatedCell(item) {
-  const added = firstAnalysisDate(item);
-  const updated = reassessmentDate(item, added);
+  // Scraped rows do not have an AI assessment timestamp. Their observed timestamps
+  // are the actual time the candidate became available to this portfolio.
+  const added = item?.firstObservedAt || firstAnalysisDate(item);
+  const updated = item?.updatedAt || item?.observedAt || reassessmentDate(item, added);
   const label = updated ? `Updated ${formatDate(updated)}` : (added ? `Added ${formatDate(added)}` : "-");
   return `<span>${escapeHtml(label)}</span>`;
 }

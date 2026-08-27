@@ -967,6 +967,25 @@ test("dashboard: the overview and the archived list render on the first load", (
   }
 });
 
+test("settings: archived portfolios retain their complete saved trading rules", () => {
+  const archivedRules = extractFunction(APP, "archivedPortfolioRuleRows");
+  for (const expected of [
+    "Resolved trades",
+    "Min probability",
+    "Max probability",
+    "Included tags",
+    "Excluded tags",
+    "Minimum volume",
+    "Rotation",
+    "Stop loss",
+  ]) {
+    assert.match(archivedRules, new RegExp(`\\[\\"${expected}\\"`));
+  }
+  const archivedRender = extractFunction(APP, "renderArchivedPortfolios");
+  assert.match(archivedRender, /archivedPortfolioRuleRows\(row, archivedSummary\)/);
+  assert.match(archivedRender, /class="portfolio-summary-table archived-portfolio-rules"/);
+});
+
 test("dashboard: a live portfolio's tab is marked, not merely named", () => {
   assert.match(APP, /button\.classList\.toggle\("mode-button-live", LIVE_MODES\.has\(buttonMode\)\);/);
   const rule = /\.mode-button\.mode-button-live \{[^}]*\}/.exec(CSS);

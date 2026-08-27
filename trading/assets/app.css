@@ -231,25 +231,43 @@ button:disabled {
 .archived-portfolio-list {
   margin: 8px 0 0;
   padding: 0;
-  list-style: none;
   display: grid;
   gap: 8px;
 }
 
-.archived-portfolio-list li {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 8px 10px;
+.archived-portfolio-card {
+  overflow: hidden;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: #ffffff;
 }
 
+.archived-portfolio-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 10px;
+}
+
 .archived-portfolio-list .muted {
   color: var(--muted);
   font-size: 12px;
+}
+
+.archived-portfolio-rules {
+  margin: 0;
+  border-top: 1px solid var(--line);
+}
+
+.archived-portfolio-rules .portfolio-summary th,
+.archived-portfolio-rules .portfolio-summary td {
+  padding: 6px 10px;
+}
+
+.archived-portfolio-rules .portfolio-summary td {
+  text-align: left;
+  white-space: normal;
 }
 
 /* Archiving looks destructive but is reversible, so it reads as a warning rather than
@@ -1287,6 +1305,18 @@ button:disabled {
   color: var(--accent-dark);
   font-size: 12px;
   font-weight: 900;
+}
+
+.portfolio-capacity .info-button {
+  width: auto;
+  min-width: 32px;
+  padding: 0 7px;
+  border-radius: 6px;
+}
+
+.portfolio-capacity.is-over-limit .info-button {
+  border-color: var(--danger);
+  color: var(--danger);
 }
 
 .manual-evaluation-button {

@@ -63,10 +63,14 @@
             <!-- Rebuilt by the script: portfolios can be created, archived and
                  restored, so the tabs are whatever the saved config holds. The
                  shipped row below is only what shows before the config loads. -->
-            <div class="mode-switch" role="group" aria-label="Portfolio mode" data-mode-switch>
+            <div class="mode-switch" role="group" aria-label="Portfolio mode" data-mode-switch hidden>
               <button class="mode-button active" type="button" data-mode-toggle="paper-conservative">Paper - Conservative</button>
             </div>
             <button class="execution-button" type="button" data-create-portfolio title="Create a paper or live portfolio configuration">+ Portfolio</button>
+            <span class="analysis-popover portfolio-capacity" data-portfolio-capacity>
+              <button class="info-button" type="button" aria-label="Show portfolio capacity">i</button>
+              <span class="analysis-tooltip" role="tooltip"></span>
+            </span>
           </div>
         </div>
         <div class="portfolio-metrics-layout" data-portfolio-metrics-layout>
@@ -114,6 +118,7 @@
           <button class="tab-button" type="button" data-tab-target="closed-trades" data-paper-label="Closed trades" data-live-label="Closed trades">Closed trades</button>
           <button class="tab-button" type="button" data-tab-target="portfolio-candidates" data-paper-label="Execution candidates" data-live-label="Execution candidates">Execution candidates</button>
           <button class="tab-button" type="button" data-tab-target="run-log" data-paper-label="Run log" data-live-label="Run log">Run log</button>
+          <button class="tab-button" type="button" data-tab-target="portfolio-history" data-paper-label="Settings history" data-live-label="Settings history">Settings history</button>
         </div>
 
         <section class="tab-panel active" data-tab-panel="daily-picks" data-page-section="portfolios">
@@ -184,6 +189,18 @@
               </div>
             </div>
             <div class="ledger" data-portfolio-candidates></div>
+          </article>
+        </section>
+
+        <section class="tab-panel" data-tab-panel="portfolio-history" data-page-section="portfolios">
+          <article class="panel">
+            <div class="panel-head">
+              <div>
+                <p class="eyebrow">Portfolio</p>
+                <h2 data-portfolio-config-history-title>Settings history</h2>
+              </div>
+            </div>
+            <div class="ledger" data-portfolio-config-history></div>
           </article>
         </section>
 

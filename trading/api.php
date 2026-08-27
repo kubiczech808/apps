@@ -930,6 +930,135 @@ function is_active_scraped_market_observation(array $item): bool
     return $endDate === false || $endDate > time();
 }
 
+/**
+ * The candidates tab used to receive the whole active market catalogue and only
+ * then apply a portfolio's static rules in the browser. That response grows with
+ * every scrape and was large enough to make the PHP endpoint intermittently run
+ * out of memory. These are deliberately only the stable, saved rules; the
+ * browser and executor still perform their own final quote/risk checks.
+ */
+function execution_scope_strategy_config(?string $strategyId): ?array
+{
+    if ($strategyId === null || !preg_match('/^[A-Za-z0-9_-]{1,64}$/', $strategyId)) {
+        return null;
+    }
+    $config = load_portfolio_config();
+    if ($strategyId === 'live' || $strategyId === 'live5050') {
+        return is_array($config[$strategyId] ?? null) ? $config[$strategyId] : null;
+    }
+    return is_array($config['paper'][$strategyId] ?? null) ? $config['paper'][$strategyId] : null;
+}
+
+function execution_scope_observation_tags(array $item): array
+{
+    $values = [];
+    foreach (['polymarketTags', 'tags', 'firstPolymarketTags', 'firstTags', 'polymarketCategories', 'firstPolymarketCategories', 'riskCategory'] as $key) {
+        $raw = $item[$key] ?? null;
+        if (is_array($raw)) {
+            foreach ($raw as $entry) {
+                if (is_array($entry)) {
+                    $values[] = $entry['slug'] ?? $entry['name'] ?? $entry['label'] ?? '';
+                } else {
+                    $values[] = $entry;
+                }
+            }
+        } elseif ($raw !== null) {
+            $values[] = $raw;
+        }
+    }
+    return normalize_market_tag_list($values);
+}
+
+function execution_scope_matches_observation(array $item, array $config): bool
+{
+    if (!is_active_scraped_market_observation($item)) {
+        return false;
+    }
+    $probability = is_numeric($item['marketProbability'] ?? null) ? (float) $item['marketProbability'] : null;
+    $minimum = normalize_probability_value($config['minProbability'] ?? null, 0.01);
+    $maximum = normalize_optional_probability_value($config['maxProbability'] ?? null);
+    if ($probability === null || $probability < $minimum || ($maximum !== null && $probability > $maximum)) {
+        return false;
+    }
+    $days = is_numeric($item['daysToResolution'] ?? null) ? (float) $item['daysToResolution'] : null;
+    $maxDays = normalize_optional_days_value($config['maxResolutionDays'] ?? null);
+    if ($days !== null && $maxDays !== null && $days > $maxDays) {
+        return false;
+    }
+    $minimumLiquidity = normalize_optional_money_value($config['minLiquidityUsdc'] ?? null);
+    $liquidity = is_numeric($item['volumeUsdc'] ?? null)
+        ? (float) $item['volumeUsdc']
+        : (float) ($item['liquidity'] ?? 0);
+    if ($minimumLiquidity !== null && $liquidity < $minimumLiquidity) {
+        return false;
+    }
+    $minimumYield = normalize_net_yield_value($config['minNetYield'] ?? null, 0.0);
+    if (is_numeric($item['netYield'] ?? null) && (float) $item['netYield'] < $minimumYield) {
+        return false;
+    }
+    $marketType = normalize_portfolio_market_type_value($config['marketType'] ?? null, false);
+    $outcomeCount = is_numeric($item['outcomeCount'] ?? null) ? (int) $item['outcomeCount'] : 2;
+    $actualType = $outcomeCount > 2 ? 'multi' : 'binary';
+    if ($marketType !== 'all' && $actualType !== $marketType) {
+        return false;
+    }
+    $tags = execution_scope_observation_tags($item);
+    $include = normalize_market_tag_list($config['includeOnlyMarketTags'] ?? []);
+    if ($include !== [] && array_intersect($include, $tags) === []) {
+        return false;
+    }
+    if ($include === []) {
+        $exclude = normalize_market_tag_list($config['excludedMarketTags'] ?? []);
+        if ($exclude !== [] && array_intersect($exclude, $tags) !== []) {
+            return false;
+        }
+    }
+    return true;
+}
+
+function execution_scope_sort_value(array $item, array $config): float
+{
+    if (($config['selectionOrder'] ?? '') === 'highest_reward_risk_first') {
+        return is_numeric($item['riskReward'] ?? null) ? (float) $item['riskReward'] : -INF;
+    }
+    foreach (['marketAnnualizedReturn', 'potentialAnnualizedReturn', 'annualizedReturn'] as $key) {
+        if (is_numeric($item[$key] ?? null)) {
+            return (float) $item[$key];
+        }
+    }
+    return -INF;
+}
+
+function scoped_execution_observations(array $observations, ?string $strategyId): array
+{
+    $config = execution_scope_strategy_config($strategyId);
+    $active = array_values(array_filter($observations, static function ($item) use ($config): bool {
+        if (!is_array($item)) {
+            return false;
+        }
+        return $config === null
+            ? is_active_scraped_market_observation($item)
+            : execution_scope_matches_observation($item, $config);
+    }));
+    if ($config !== null) {
+        usort($active, static function (array $left, array $right) use ($config): int {
+            $return = execution_scope_sort_value($right, $config) <=> execution_scope_sort_value($left, $config);
+            if ($return !== 0) {
+                return $return;
+            }
+            $leftDays = is_numeric($left['daysToResolution'] ?? null) ? (float) $left['daysToResolution'] : INF;
+            $rightDays = is_numeric($right['daysToResolution'] ?? null) ? (float) $right['daysToResolution'] : INF;
+            return $leftDays <=> $rightDays;
+        });
+    }
+    $total = count($active);
+    // A broad custom portfolio can still match thousands of rows. The executor only
+    // needs the ranked frontier and the UI pages candidates, so cap the transport
+    // without discarding anything from the persisted catalogue.
+    $limit = 1200;
+    return [array_slice($active, 0, $limit), $total, $total > $limit];
+}
+
 // The scraped view also lists markets whose result is already in or is being
 // settled, so the Resolved tab can show them and report a count. This is the
 // deliberate complement of is_active_scraped_market_observation: a row that is
@@ -1208,8 +1337,17 @@ function paper_portfolio_history_summary(array $portfolio): array
     $closed = 0;
     $correct = 0;
     $resolved = 0;
+    $firstOpenedAt = null;
     foreach ($trades as $trade) {
-        if (!is_array($trade) || !archived_trade_is_closed($trade)) {
+        if (!is_array($trade)) {
+            continue;
+        }
+        $openedAt = (string) ($trade['openedAt'] ?? $trade['date'] ?? $trade['createdAt'] ?? '');
+        $openedTimestamp = $openedAt !== '' ? strtotime($openedAt) : false;
+        if ($openedTimestamp !== false && ($firstOpenedAt === null || $openedTimestamp < strtotime($firstOpenedAt))) {
+            $firstOpenedAt = $openedAt;
+        }
+        if (!archived_trade_is_closed($trade)) {
             continue;
         }
         $closed++;
@@ -1228,6 +1366,7 @@ function paper_portfolio_history_summary(array $portfolio): array
         'correctCount' => $correct,
         'resolvedCount' => $resolved,
         'accuracy' => $resolved > 0 ? $correct / $resolved : null,
+        'firstOpenedAt' => $firstOpenedAt,
     ];
 }
 
@@ -1345,7 +1484,7 @@ function compact_state_payload(string $target, array $data, string $summary, ?st
 
     if ($summary === 'execution') {
         $observations = is_array($data['marketObservations'] ?? null) ? $data['marketObservations'] : [];
-        $active = array_values(array_filter($observations, static fn($item): bool => is_array($item) && is_active_scraped_market_observation($item)));
+        [$active, $total, $truncated] = scoped_execution_observations($observations, $selectedStrategyId);
         return [
             'schemaVersion' => $data['schemaVersion'] ?? null,
             'generatedAt' => $data['generatedAt'] ?? null,
@@ -1353,6 +1492,9 @@ function compact_state_payload(string $target, array $data, string $summary, ?st
                 static fn($item): array => is_array($item) ? compact_market_observation($item) : [],
                 $active
             ),
+            'executionScopeStrategyId' => $selectedStrategyId,
+            'executionScopeTotal' => $total,
+            'executionScopeTruncated' => $truncated,
             'marketDetailsMode' => 'compact',
         ];
     }
@@ -1584,6 +1726,124 @@ function default_portfolio_config(): array
 function portfolio_config_path(): string
 {
     return __DIR__ . '/data/portfolio-config.json';
+}
+
+function portfolio_config_history_path(): string
+{
+    return __DIR__ . '/data/portfolio-config-history.ndjson';
+}
+
+function portfolio_config_history_fields(): array
+{
+    return [
+        'displayName', 'minProbability', 'maxProbability', 'stakeUsdc',
+        'maxResolutionDays', 'selectionOrder', 'marketType', 'probabilitySource',
+        'minLiquidityUsdc', 'minNetYield', 'executionTrigger', 'executionCronMinutes',
+        'useLimitOrders', 'autoRotatePositions', 'stopLossRiskMultiplier',
+        'includeOnlyMarketTags', 'excludedMarketTags', 'automationEnabled', 'archived',
+    ];
+}
+
+function portfolio_config_history_value(mixed $value): mixed
+{
+    if (is_array($value)) {
+        return array_values($value);
+    }
+    if (is_bool($value) || is_string($value) || is_numeric($value) || $value === null) {
+        return $value;
+    }
+    return null;
+}
+
+function portfolio_config_history_changes(array $before, array $after): array
+{
+    $changes = [];
+    $scopes = [
+        'live' => ['live' => $before['live'] ?? [], 'next' => $after['live'] ?? []],
+        'live5050' => ['live' => $before['live5050'] ?? [], 'next' => $after['live5050'] ?? []],
+    ];
+    foreach (['paper' => 'paper'] as $scope => $source) {
+        $beforePaper = is_array($before[$source] ?? null) ? $before[$source] : [];
+        $afterPaper = is_array($after[$source] ?? null) ? $after[$source] : [];
+        foreach (array_unique(array_merge(array_keys($beforePaper), array_keys($afterPaper))) as $id) {
+            $scopes[(string) $id] = [
+                'live' => is_array($beforePaper[$id] ?? null) ? $beforePaper[$id] : [],
+                'next' => is_array($afterPaper[$id] ?? null) ? $afterPaper[$id] : [],
+            ];
+        }
+    }
+    foreach ($scopes as $strategyId => $rows) {
+        $old = $rows['live'];
+        $new = $rows['next'];
+        foreach (portfolio_config_history_fields() as $field) {
+            $beforeValue = portfolio_config_history_value($old[$field] ?? null);
+            $afterValue = portfolio_config_history_value($new[$field] ?? null);
+            if (json_encode($beforeValue) === json_encode($afterValue)) {
+                continue;
+            }
+            $changes[] = [
+                'strategyId' => $strategyId,
+                'field' => $field,
+                'before' => $beforeValue,
+                'after' => $afterValue,
+            ];
+        }
+    }
+    return $changes;
+}
+
+function append_portfolio_config_history(array $before, array $after): void
+{
+    $changes = portfolio_config_history_changes($before, $after);
+    if ($changes === []) {
+        return;
+    }
+    $path = portfolio_config_history_path();
+    $dir = dirname($path);
+    if (!is_dir($dir) && !mkdir($dir, 0775, true) && !is_dir($dir)) {
+        return;
+    }
+    $record = json_encode([
+        'id' => 'cfg-' . bin2hex(random_bytes(8)),
+        'changedAt' => gmdate('c'),
+        'changes' => $changes,
+    ], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+    if (is_string($record)) {
+        @file_put_contents($path, $record . "\n", FILE_APPEND | LOCK_EX);
+    }
+}
+
+function portfolio_config_history_records(?string $strategyId = null): array
+{
+    $path = portfolio_config_history_path();
+    if (!is_file($path)) {
+        return [];
+    }
+    $rows = [];
+    $handle = @fopen($path, 'rb');
+    if ($handle === false) {
+        return [];
+    }
+    while (($line = fgets($handle)) !== false) {
+        $record = json_decode(trim($line), true);
+        if (!is_array($record) || !is_array($record['changes'] ?? null)) {
+            continue;
+        }
+        $changes = array_values(array_filter($record['changes'], static function ($change) use ($strategyId): bool {
+            return is_array($change) && ($strategyId === null || (string) ($change['strategyId'] ?? '') === $strategyId);
+        }));
+        if ($changes === []) {
+            continue;
+        }
+        $rows[] = [
+            'id' => (string) ($record['id'] ?? ''),
+            'changedAt' => (string) ($record['changedAt'] ?? ''),
+            'changes' => $changes,
+        ];
+    }
+    fclose($handle);
+    usort($rows, static fn (array $left, array $right): int => (strtotime($right['changedAt']) ?: 0) <=> (strtotime($left['changedAt']) ?: 0));
+    return array_slice($rows, 0, 500);
 }
 
 function scan_preferences_path(): string
@@ -2126,6 +2386,7 @@ function save_portfolio_config(array $config): array
         if (!is_string($encoded) || file_put_contents($path, $encoded . "\n", LOCK_EX) === false) {
             respond(['ok' => false, 'error' => 'Unable to persist portfolio config'], 500);
         }
+        append_portfolio_config_history($stored, $normalized);
         return $normalized;
     } finally {
         flock($lock, LOCK_UN);
@@ -3222,6 +3483,18 @@ try {
         respond([
             'ok' => true,
             'config' => load_portfolio_config(),
+            'generatedAt' => gmdate('c'),
+        ]);
+    }
+
+    if ($action === 'portfolio-config-history') {
+        $strategyId = trim((string) ($_GET['strategy_id'] ?? ''));
+        if ($strategyId !== '' && !preg_match('/^[A-Za-z0-9_-]{1,64}$/', $strategyId)) {
+            respond(['ok' => false, 'error' => 'Invalid portfolio strategy id'], 400);
+        }
+        respond([
+            'ok' => true,
+            'records' => portfolio_config_history_records($strategyId !== '' ? $strategyId : null),
             'generatedAt' => gmdate('c'),
         ]);
     }
