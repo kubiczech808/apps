@@ -3920,6 +3920,7 @@ function aiResearchSeedDiscoveryState(PDO $pdo): array
         ];
     }
     return [
+        'catalog_key' => trim((string)($state['catalog_key'] ?? '')),
         'next_page' => max(1, (int)($state['next_page'] ?? 1)),
         'queue' => array_values($queue),
         'empty_pages' => max(0, (int)($state['empty_pages'] ?? 0)),
@@ -3950,6 +3951,7 @@ function saveAiResearchSeedDiscoveryState(PDO $pdo, array $state): void
         ];
     }
     $value = [
+        'catalog_key' => truncatePlainText((string)($state['catalog_key'] ?? ''), 100),
         'next_page' => max(1, (int)($state['next_page'] ?? 1)),
         'queue' => $safeQueue,
         'empty_pages' => max(0, (int)($state['empty_pages'] ?? 0)),
@@ -3972,6 +3974,35 @@ function persistAiResearchSeedDiscoveryState(PDO $pdo, array $state): void
         // jednu stranku zopakovat, ale aktualni pouzitelny seed se nezahodi.
         error_log('AI research seed discovery state save failed: ' . $e->getMessage());
     }
+}
+
+function aiResearchFirmySeedCatalogKey(): string
+{
+    return 'vse-pro-firmy-cz';
+}
+
+/**
+ * Zmena zdrojoveho katalogu nesmi znovu pouzit rozpracovanou frontu z jineho
+ * filtru. Dokoncene seedy se ale zachovaji: jsou soucasti celostatni kategorie.
+ */
+function aiResearchEnsureFirmySeedCatalogState(PDO $pdo, array $state): array
+{
+    if (($state['catalog_key'] ?? '') === aiResearchFirmySeedCatalogKey()) {
+        return $state;
+    }
+    $state = [
+        'catalog_key' => aiResearchFirmySeedCatalogKey(),
+        'next_page' => 1,
+        'queue' => [],
+        'empty_pages' => 0,
+        'cycle' => max(1, (int)($state['cycle'] ?? 1)),
+        'known_total' => 0,
+        'known_page_size' => 0,
+        'catalog_checked_at' => '',
+        'note' => 'Zdroj seedu byl sjednocen na celou kategorii Firmy.cz / Vse pro firmy.',
+    ];
+    persistAiResearchSeedDiscoveryState($pdo, $state);
+    return $state;
 }
 
 function aiResearchSeedDiscoveryNote(PDO $pdo): string
@@ -4031,6 +4062,7 @@ function aiResearchSeedCatalogIsPastEnd(array $state): bool
  */
 function aiResearchRefreshFirmySeedCatalogTotal(PDO $pdo, array $state): array
 {
+    $state = aiResearchEnsureFirmySeedCatalogState($pdo, $state);
     $checkedAt = (int)strtotime((string)($state['catalog_checked_at'] ?? ''));
     if ((int)($state['known_total'] ?? 0) > 0 && $checkedAt > time() - 15 * 60) {
         return $state;
@@ -4057,7 +4089,7 @@ function aiResearchRefreshFirmySeedCatalogTotal(PDO $pdo, array $state): array
 
 function aiResearchSeedCategoryProgress(PDO $pdo, bool $refreshCatalogTotal = false): array
 {
-    $state = aiResearchSeedDiscoveryState($pdo);
+    $state = aiResearchEnsureFirmySeedCatalogState($pdo, aiResearchSeedDiscoveryState($pdo));
     if ($refreshCatalogTotal) {
         $state = aiResearchRefreshFirmySeedCatalogTotal($pdo, $state);
     }
@@ -4067,7 +4099,7 @@ function aiResearchSeedCategoryProgress(PDO $pdo, bool $refreshCatalogTotal = fa
         WHERE seed_source_label LIKE ?
           AND status IN ("done", "no_match", "no_contacts", "unsuitable")
     ');
-    $stmt->execute(['Firmy.cz / Vse pro firmy / Praha%']);
+    $stmt->execute(['Firmy.cz / Vse pro firmy%']);
     $completed = (int)$stmt->fetchColumn();
     $total = max(0, (int)($state['known_total'] ?? 0));
     return [
@@ -4086,7 +4118,7 @@ function aiResearchSeedCategoryProgress(PDO $pdo, bool $refreshCatalogTotal = fa
  */
 function selectAiResearchFirmySeedCompany(PDO $pdo): ?array
 {
-    $state = aiResearchSeedDiscoveryState($pdo);
+    $state = aiResearchEnsureFirmySeedCatalogState($pdo, aiResearchSeedDiscoveryState($pdo));
     $detailsLeft = AI_RESEARCH_SEED_PICK_DETAILS_MAX;
     $pagesLeft = AI_RESEARCH_SEED_PICK_PAGES_MAX;
     $sliceEndsAt = min(time() + AI_RESEARCH_SEED_PICK_SLICE_SECONDS, aiResearchDeadline() - AI_RESEARCH_GEMINI_CALL_RESERVE_SECONDS);
@@ -4198,7 +4230,7 @@ function selectAiResearchFirmySeedCompany(PDO $pdo): ?array
                 'website' => $website,
                 'address' => trim((string)($contact['address'] ?? '')),
                 'name' => '',
-                'source_label' => 'Firmy.cz / Vse pro firmy / Praha',
+                'source_label' => 'Firmy.cz / Vse pro firmy',
                 'source_url' => $detailUrl,
                 'seed_description' => $description,
                 'seed_catalog_url' => (string)($candidate['catalog_url'] ?? ''),
@@ -4224,7 +4256,7 @@ function selectAiResearchFirmySeedCompany(PDO $pdo): ?array
 
 function aiResearchFirmySeedCatalogUrl(int $page): string
 {
-    $url = 'https://www.firmy.cz/Vse-pro-firmy/kraj-praha';
+    $url = 'https://www.firmy.cz/Vse-pro-firmy';
     if ($page > 1) {
         $url .= '?' . http_build_query(['page' => $page]);
     }
@@ -19353,7 +19385,7 @@ function renderApp(PDO $pdo, ?array $flash): void
         <div class="section-header">
             <div>
                 <h2>AI research administrace</h2>
-                <p>Agent průběžně vybírá nové firmy z Firmy.cz / Vše pro firmy / Praha, projde jejich web, navrhne nejvhodnější B2B cílení včetně klíčového slova a lokality, nascrapuje první dávku kontaktů a připraví dvě varianty oslovení. AI se používá jen na pochopení byznysu, výběr cílovky a texty; scraping kontaktů je čistá automatizace.</p>
+                <p>Agent průběžně vybírá nové firmy z Firmy.cz / Vše pro firmy v celé ČR, projde jejich web, navrhne nejvhodnější B2B cílení včetně klíčového slova a lokality, nascrapuje první dávku kontaktů a připraví dvě varianty oslovení. AI se používá jen na pochopení byznysu, výběr cílovky a texty; scraping kontaktů je čistá automatizace.</p>
                 <p class="muted">Dosažitelné kontakty se počítají <strong>jedním dotazem na katalog</strong>: z první stránky výsledků se přečte, kolik firem katalog na dané klíčové slovo a lokalitu nabízí, a u každé se počítá s dohledatelným e-mailem. Pokud katalog počet neuvádí ani nejde přečíst stránkování, <strong>dopočítá se prohledáním stránek</strong> (půlením intervalu, takže i desetitisíce firem stojí do dvaceti dotazů); dokud dopočet nedoběhne, je číslo označené jako spodní hranice a nikdy podle něj nevyřadíme seed. Sčítá se to napříč všemi katalogy, kde cílení dává smysl. Pokud web seed firmy není ani v angličtině, bere se cílení automaticky jako domácí a AI se na trhy vůbec neptáme; u anglického webu vyhodnotí AI, ve kterých zemích má hledání smysl, a jejich katalogy se do součtu přičtou. Reálně se scrapuje jen prvních <?= h((string)AI_RESEARCH_FIRST_BATCH_CONTACTS) ?> kontaktů pro první dávku.</p>
                 <p class="muted">Automatika se spouští cronem (GitHub plánované běhy se v praxi zpožďují, takže interval bývá delší než 5 minut). Jeden běh má časový limit <?= h((string)AI_RESEARCH_REQUEST_BUDGET_SECONDS) ?> s, protože hosting požadavek ukončí po cca 150 s; co se nestihne, dokončí další cron. Aktivní poskytovatel: <strong><?= h($researchProvider) ?></strong>, rozpočet: <?= h((string)$researchGeminiRpmBudget) ?> requestů/min<?= h($researchDailyBudgetText) ?>, odhad <?= h((string)$researchGeminiRequestsPerSeed) ?> requesty/seed.</p>
                 <p class="muted">Poslední automatický běh: <?= $lastResearchRunAt > 0 ? h(formatDateTime(date('c', $lastResearchRunAt))) : 'zatím neproběhl' ?>. Další nejdříve: <?= h($researchNextRunLabel) ?>. Stav: <?= h($researchAutomationStatus) ?></p>
@@ -19374,7 +19406,7 @@ function renderApp(PDO $pdo, ?array $flash): void
             $researchColumnCount = 10 + count($researchStepColumns);
         ?>
         <div class="research-category-progress" data-research-category-progress aria-live="polite">
-            <strong>Výběr seedů z Firmy.cz / Vše pro firmy / Praha</strong>
+            <strong>Výběr seedů z Firmy.cz / Vše pro firmy</strong>
             <span><b data-research-category-completed><?= h((string)(int)($researchCategoryProgress['completed'] ?? 0)) ?></b> z <b data-research-category-total><?= !empty($researchCategoryProgress['total_known']) ? h((string)(int)$researchCategoryProgress['total']) : '...' ?></b> subjektů plně zpracováno</span>
             <small class="muted" data-research-category-updated>Průběžně se aktualizuje</small>
         </div>
