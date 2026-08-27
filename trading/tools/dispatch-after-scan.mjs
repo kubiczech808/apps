@@ -34,7 +34,20 @@ export function plannedDispatches(config = {}) {
   const fixedEntry = config.live5050 || {};
 
   const planned = [];
-  if (Object.values(paper).some((portfolio) => portfolio?.executionTrigger === "after_scrape")) {
+  // The after-scan worker applies each cron portfolio's own cadence before it
+  // executes. Waking it here is therefore a reliable delivery mechanism for a
+  // due hourly portfolio, not an instruction to trade on every scrape.
+  //
+  // GitHub's schedule delivery is opportunistic: a portfolio set to `cron`
+  // could otherwise wait several hours despite the market scanner completing
+  // every few minutes. Archived and disabled portfolios are deliberately not
+  // a reason to dispatch work.
+  const hasPaperExecution = Object.values(paper).some((portfolio) =>
+    portfolio?.archived !== true
+    && portfolio?.automationEnabled !== false
+    && ["after_scrape", "cron"].includes(String(portfolio?.executionTrigger || "cron").trim().toLowerCase()),
+  );
+  if (hasPaperExecution) {
     planned.push({ workflow: "trading-paper-bot.yml", inputs: { mode: "after_scan" } });
   }
   if (live.executionTrigger === "after_scrape") {

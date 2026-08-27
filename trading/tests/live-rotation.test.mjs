@@ -2147,7 +2147,7 @@ test("after a scrape: the dispatcher wakes the portfolio whose trigger says so",
   // "ignore the automation switch" in the executor. Neither is true of a scan.
   assert.equal(planned[0].inputs.live_run_source, "AUTO");
 
-  // The other portfolios are unchanged, and each is woken only on its own setting.
+  // An after-scrape portfolio still wakes the same shared paper worker.
   assert.deepEqual(
     plannedDispatches({
       paper: { balanced: { executionTrigger: "after_scrape" } },
@@ -2156,11 +2156,17 @@ test("after a scrape: the dispatcher wakes the portfolio whose trigger says so",
     }).map((entry) => entry.workflow),
     ["trading-paper-bot.yml", "polymarket-live-limit-order-test.yml", "trading-live-5050.yml"],
   );
+  // A cron paper portfolio is also woken by a completed scrape. The worker
+  // applies its own saved interval before it can execute, which makes this a
+  // reliable delivery wake-up rather than an extra trade trigger.
   assert.deepEqual(plannedDispatches({
-    paper: { balanced: { executionTrigger: "cron" } },
+    paper: { balanced: { executionTrigger: "cron", executionCronMinutes: 60 } },
     live: { executionTrigger: "cron" },
     live5050: { executionTrigger: "cron" },
-  }), [], "a portfolio on cron keeps its own cadence and is not woken by a scrape");
+  }).map((entry) => entry.workflow), ["trading-paper-bot.yml"]);
+  assert.deepEqual(plannedDispatches({
+    paper: { paused: { executionTrigger: "cron", automationEnabled: false } },
+  }), [], "a disabled cron portfolio does not wake the paper worker");
   assert.deepEqual(plannedDispatches({}), [], "an unreadable or empty config dispatches nothing");
 });
 

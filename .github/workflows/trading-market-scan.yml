@@ -184,8 +184,9 @@ jobs:
       # bounded by how long a run takes (about a minute each), not by how often we ask.
       # This scan itself runs on a GitHub runner and never touches the Pi.
       #
-      # A portfolio not set to after_scrape is not dispatched at all -- the dispatcher
-      # reads the saved config and only wakes the ones that asked for it.
+      # The dispatcher wakes active paper portfolios with either trigger. The paper
+      # worker still enforces each cron portfolio's saved cadence, while
+      # after_scrape portfolios run straight away on the new catalogue.
       - name: Dispatch post-scrape execution
         if: success()
         env:
