@@ -167,6 +167,10 @@ jobs:
               keep = {
                   "live-state.json",
                   "portfolio-config.json",
+                  # Human-readable history of saved portfolio rule changes. It is
+                  # runtime data, not a build artifact, so deployment cleanup must
+                  # leave it beside the portfolio configuration.
+                  "portfolio-config-history.ndjson",
                   "scrape-scan-preferences.json",
                   "redeem-alert-ledger.json",
                   "market-scan-history",
