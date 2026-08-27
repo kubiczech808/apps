@@ -11179,9 +11179,12 @@ function renderCalculationReport() {
   // deleted: a row whose quote was too wide to trade against is held back from the
   // statistics, and rows scraped before the spread was recorded cannot show they had a
   // counterparty, so they are held back too until they are scanned again.
+  // The limit reads in points, not as a percentage: a spread is the distance between two
+  // prices, and "5.0%" beside a table full of probabilities reads like one of them.
   const spreadExcluded = Number(report.spreadExcludedCount || 0);
   const spreadNote = spreadExcluded > 0
-    ? ` / ${formatInteger(spreadExcluded)} held back: bid/ask wider than ${probability(Number(report.maxTradableSpread || 0))} or not yet recorded`
+    ? ` / ${formatInteger(spreadExcluded)} held back: bid/ask wider than `
+      + `${(Number(report.maxTradableSpread || 0) * 100).toFixed(0)} points, or not recorded yet`
     : "";
 
   els.calculationReport.innerHTML = `
