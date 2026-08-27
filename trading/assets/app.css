@@ -201,6 +201,22 @@ button:disabled {
   text-align: left;
 }
 
+.portfolio-status-dot {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  margin-right: 7px;
+  border-radius: 50%;
+  background: var(--success);
+  vertical-align: middle;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--success) 18%, transparent);
+}
+
+.portfolio-status-dot.is-off {
+  background: var(--danger);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--danger) 18%, transparent);
+}
+
 .portfolio-summary-link:hover {
   text-decoration: underline;
 }

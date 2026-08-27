@@ -4764,10 +4764,12 @@ function renderPortfolioOverview() {
   // is the account capital, so each keeps its own row under its own name and the sharing
   // is stated on the row instead of being hidden by merging them.
   const rows = dashboardModes().map((mode) => {
+    const automationEnabled = automationIsEnabled(portfolioConfigForMode(mode));
     if (LIVE_MODES.has(normalizeMode(mode))) {
       return {
         mode,
         name: portfolioNameForMode(mode),
+        automationEnabled,
         equity: live ? Number(live.equityUsdc) : null,
         // marketValueUsdc is what the held tokens are worth, so it is the position half on
         // its own; the order half comes from the wallet's resting buys.
@@ -4792,6 +4794,7 @@ function renderPortfolioOverview() {
     return {
       mode,
       name: portfolioNameForMode(mode),
+      automationEnabled,
       equity: portfolio ? Number(portfolio.equityUsdc) : null,
       // Published split. positionRiskUsdc falls back to the total minus the resting
       // amount so a state written before the field existed still shows the right halves.
@@ -4822,7 +4825,7 @@ function renderPortfolioOverview() {
       <tbody>
         ${rows.map((row) => `
           <tr class="${row.mode === state.mode ? "portfolio-summary-current" : ""}${row.live ? " portfolio-summary-live" : ""}">
-            <td data-label="Portfolio"><button class="portfolio-summary-link" type="button" data-mode-toggle="${escapeHtml(row.mode)}">${escapeHtml(row.name)}</button>${row.live && sharedWallet ? ' <span class="portfolio-summary-note" title="These live portfolios trade one Polymarket account, so they report the same account capital.">shared account</span>' : ""}</td>
+            <td data-label="Portfolio"><span class="portfolio-status-dot${row.automationEnabled ? "" : " is-off"}" title="Automation ${row.automationEnabled ? "on" : "off"}" aria-label="Automation ${row.automationEnabled ? "on" : "off"}"></span><button class="portfolio-summary-link" type="button" data-mode-toggle="${escapeHtml(row.mode)}">${escapeHtml(row.name)}</button>${row.live && sharedWallet ? ' <span class="portfolio-summary-note" title="These live portfolios trade one Polymarket account, so they report the same account capital.">shared account</span>' : ""}</td>
             <td data-label="Equity">${cell(row.equity)}</td>
             <td data-label="ROI p.a." title="${row.roi ? `${row.roi.days.toFixed(1)} days since first opened trade; unrealized P/L excluded.` : "No first opened trade is available yet."}">${row.roi ? signedPercent(row.roi.annualized) : "-"}</td>
             <td data-label="In positions">${cell(row.positions)}</td>
