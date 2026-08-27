@@ -75,24 +75,42 @@ async function main() {
       + ` archived=${row.archived === true} equity=${row.equityUsdc} free=${row.freeCapitalUsdc}`);
   }
 
-  const portfolio = portfolios.find((row) => String(row.id || "").toLowerCase().includes(PORTFOLIO_QUERY)
+  const found = portfolios.find((row) => String(row.id || "").toLowerCase().includes(PORTFOLIO_QUERY)
     || String(row.displayName || row.label || "").toLowerCase().includes(PORTFOLIO_QUERY));
-  if (!portfolio) {
+  if (!found) {
     console.log(`\n!! no portfolio matched "${PORTFOLIO_QUERY}"`);
     return;
   }
-  console.log(`\n== ${portfolio.id} "${portfolio.displayName || portfolio.label}" ==`);
+  console.log(`\n== ${found.id} "${found.displayName || found.label}" ==`);
+
+  // The dashboard summary empties runLog and trades, and returns only the compact field
+  // list, unless the request names the strategy -- and the parameter is strategy_id, not
+  // strategy. Re-read it scoped, or every setting below reads as absent.
+  const scopedDashboard = await fetchJson(
+    `${HOST}/api.php?action=state&target=paper&summary=dashboard&strategy_id=${encodeURIComponent(found.id)}&t=${Date.now()}`,
+  );
+  const scopedMap = scopedDashboard.ok ? scopedDashboard.body?.paperPortfolios : null;
+  const portfolio = scopedMap && typeof scopedMap === "object" && scopedMap[found.id]
+    ? { id: found.id, ...scopedMap[found.id] }
+    : found;
+  // Its settings live in a nested `portfolio` object, not on the row.
+  const config = portfolio.portfolio && typeof portfolio.portfolio === "object" ? portfolio.portfolio : {};
 
   // 1. Is it even being executed?
   {
     console.log(`\n-- is it eligible to run at all --`);
+    let printed = 0;
     for (const key of ["archived", "automationEnabled", "executionTrigger", "executionCronMinutes",
       "minProbability", "maxProbability", "maxResolutionDays", "minLiquidityUsdc", "minNetYield",
       "marketType", "selectionOrder", "useLimitOrders", "stakeUsdc", "maxFraction",
       "includeOnlyMarketTags", "excludedMarketTags", "freeCapitalUsdc", "positionRiskUsdc",
-      "restingLimitOrderUsdc", "equityUsdc"]) {
-      if (portfolio[key] !== undefined) console.log(`   ${key.padEnd(24)} ${JSON.stringify(portfolio[key])}`);
+      "restingLimitOrderUsdc", "equityUsdc", "balanceUsdc", "openRiskUsdc"]) {
+      const value = portfolio[key] !== undefined ? portfolio[key] : config[key];
+      if (value === undefined) continue;
+      console.log(`   ${key.padEnd(24)} ${JSON.stringify(value)}`);
+      printed += 1;
     }
+    if (!printed) console.log(`   !! none of its settings came back -- the scoped read did not work`);
   }
 
   // 2. What the last runs actually said. The bot already publishes the rejection histogram
@@ -120,7 +138,7 @@ async function main() {
   {
     console.log(`\n-- rerunning its filter over the catalogue served right now --`);
     const scoped = await fetchJson(
-      `${HOST}/api.php?action=state&target=paper&summary=execution&strategy=${encodeURIComponent(portfolio.id)}&t=${Date.now()}`,
+      `${HOST}/api.php?action=state&target=paper&summary=execution&strategy_id=${encodeURIComponent(portfolio.id)}&t=${Date.now()}`,
     );
     if (!scoped.ok) {
       console.log(`   !! execution read failed: HTTP ${scoped.status} ${scoped.error || ""}`);
@@ -146,27 +164,35 @@ async function main() {
 
     // The strategy the bot would build. PAPER_STRATEGIES holds the shipped ones; a created
     // portfolio is rebuilt from what the dashboard publishes, which is what it runs on.
+    const setting = (key, fallback) => {
+      const value = config[key] !== undefined ? config[key] : portfolio[key];
+      return value === undefined || value === null || value === "" ? fallback : value;
+    };
     const strategy = {
       ...(PAPER_STRATEGIES[portfolio.id] || PAPER_STRATEGIES.conservative),
       id: portfolio.id,
-      probabilitySource: portfolio.probabilitySource || "polymarket",
-      minProbability: Number(portfolio.minProbability),
-      maxProbability: portfolio.maxProbability ?? null,
-      maxResolutionDays: Number(portfolio.maxResolutionDays),
-      minLiquidityUsdc: portfolio.minLiquidityUsdc ?? null,
-      minNetYield: Number(portfolio.minNetYield || 0),
-      marketType: portfolio.marketType || "all",
-      requireMostProbableOutcome: portfolio.requireMostProbableOutcome === true,
-      selectionOrder: portfolio.selectionOrder,
-      includeOnlyMarketTags: new Set(portfolio.includeOnlyMarketTags || []),
-      excludedMarketTags: new Set(portfolio.excludedMarketTags || []),
+      probabilitySource: setting("probabilitySource", "polymarket"),
+      minProbability: Number(setting("minProbability", NaN)),
+      maxProbability: setting("maxProbability", null),
+      maxResolutionDays: Number(setting("maxResolutionDays", NaN)),
+      minLiquidityUsdc: setting("minLiquidityUsdc", null),
+      minNetYield: Number(setting("minNetYield", 0)),
+      marketType: setting("marketType", "all"),
+      requireMostProbableOutcome: setting("requireMostProbableOutcome", false) === true,
+      selectionOrder: setting("selectionOrder", undefined),
+      includeOnlyMarketTags: new Set(setting("includeOnlyMarketTags", [])),
+      excludedMarketTags: new Set(setting("excludedMarketTags", [])),
       excludedCandidateTokenIds: new Set(),
-      equalRiskProtection: portfolio.equalRiskProtection === true,
-      equalRiskMultiplier: portfolio.equalRiskMultiplier ?? 1,
+      equalRiskProtection: setting("equalRiskProtection", false) === true,
+      equalRiskMultiplier: setting("equalRiskMultiplier", 1),
     };
     console.log(`   filtering with minProbability=${strategy.minProbability}`
       + ` maxDays=${strategy.maxResolutionDays} minVolume=${strategy.minLiquidityUsdc}`
       + ` minNetYield=${strategy.minNetYield} marketType=${strategy.marketType}`);
+    if (!Number.isFinite(strategy.minProbability)) {
+      console.log(`   !! its probability floor did not come back, so what follows is not this`);
+      console.log(`      portfolio's real filter. Fix the read before trusting the histogram.`);
+    }
 
     const counts = {};
     const passed = [];
@@ -196,7 +222,9 @@ async function main() {
         + ` spread=${spreadOf(item)} vol=${item.volumeUsdc} -> ${reason}`);
     }
 
-    // 4. What the spread gate specifically is costing this portfolio.
+    // 4. The counterfactual, which is the only thing that answers "did the new gate do
+    //    this". Same rows, same portfolio, spread rule lifted: if the pool is still empty
+    //    the gate is innocent, and if it fills up the gate is the whole story.
     const spreadReasons = Object.entries(counts)
       .filter(([reason]) => /spread/.test(reason))
       .reduce((sum, [, count]) => sum + count, 0);
@@ -206,9 +234,35 @@ async function main() {
     console.log(`   rows carrying a spread at all: ${withSpread} of ${rows.length}`);
     console.log(`   rows inside 5 points         : ${tight}`);
     console.log(`   rejections mentioning spread : ${spreadReasons}`);
-    console.log(spreadReasons > 0
-      ? `   -> the gate is removing rows here; compare it against the other reasons above`
-      : `   -> the gate is not what is emptying this portfolio`);
+
+    // The gate is a single reason string, so a row rejected only for it is a row this
+    // portfolio would otherwise be trading.
+    const onlySpread = rows.filter((item) => {
+      const result = portfolioFilterResult(item, strategy);
+      return !result.eligible && result.reasons.length > 0 && result.reasons.every((r) => /spread/.test(r));
+    }).length;
+    console.log(`\n   rows rejected for the spread and nothing else: ${onlySpread}`);
+    console.log(`   -> without the gate this portfolio would have ${passed.length + onlySpread} candidates,`
+      + ` with it ${passed.length}`);
+    if (passed.length === 0 && onlySpread === 0) {
+      console.log(`   -> the gate is NOT what emptied it; read the histogram above instead`);
+    } else if (passed.length === 0) {
+      console.log(`   -> the gate IS what emptied it`);
+    }
+
+    // And what each candidate limit would leave, so a decision about the number is made
+    // against this portfolio's own pool rather than against the catalogue average.
+    console.log(`\n   candidates this portfolio would have at each limit:`);
+    for (const gate of [0.02, 0.03, 0.05, 0.08, 0.1, 0.15, 0.2]) {
+      const kept = rows.filter((item) => {
+        const spread = spreadOf(item);
+        if (spread != null && spread > gate) return false;
+        const result = portfolioFilterResult(item, { ...strategy });
+        return result.eligible || result.reasons.every((r) => /spread/.test(r));
+      }).length;
+      console.log(`     <= ${String((gate * 100).toFixed(0)).padStart(2)} pts: ${String(kept).padStart(5)}`
+        + (Math.abs(gate - 0.05) < 1e-9 ? "   <- in force" : ""));
+    }
   }
 }
 
