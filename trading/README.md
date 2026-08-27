@@ -140,13 +140,25 @@ read them in opposite order, deliberately:
 shortlist and the drill-down lists, the bot re-filters what it is served, and a divergence
 would put rows on screen that the run then refuses.
 
-A row that recorded **no** spread cannot show it had a counterparty, and does not count.
-Nothing is deleted to achieve that — the archive keeps every observation, the report states
-how many it held back (`spreadExcludedCount` of `spreadScrapedCount`), and
-`PAPER_COUNT_UNKNOWN_SPREAD=true` re-admits them all. Because rows scraped before the field
-existed carry no spread, the statistics restart from the catalogue as it is re-scanned; the
-scan pages 500 markets every five minutes, so an active catalogue of a few thousand carries
-spreads again within roughly half an hour.
+A row that recorded **no** spread is treated differently by the two, and the asymmetry is
+deliberate:
+
+- **The statistics exclude it.** A row there has to be able to show its entry was reachable,
+  and silence cannot. That is what restarts the statistics from clean data, as asked,
+  without deleting anything — the archive keeps every observation, the report states how
+  many it held back (`spreadExcludedCount` of `spreadScrapedCount`), the dashboard says so
+  rather than letting a shrinking sample read as data loss, and
+  `PAPER_COUNT_UNKNOWN_SPREAD=true` re-admits them all.
+- **An entry allows it** (`PAPER_OPEN_ON_UNKNOWN_SPREAD`, default true). The market scan
+  runs roughly every one to three hours over a bounded page, so on an active catalogue of
+  ~3,900 rows it takes most of a day before every row carries a spread. Refusing them all
+  meanwhile would freeze every portfolio over missing data rather than over a wide book.
+  This gate is for rejecting books there is evidence against, and silence is not evidence.
+  Once the catalogue is covered there are no unknowns left and the two rules coincide.
+
+`api.php` makes the same split, and for the same reason: `observation_spread_is_tradable`
+takes the permissive flag for the execution shortlist and the strict default for the
+drill-down list behind a statistics row.
 
 A volume floor does not substitute for this: `rowVolumeUsdc` prefers lifetime volume over
 the last 24 hours, so a long-listed fixture nobody is quoting today still clears it. The

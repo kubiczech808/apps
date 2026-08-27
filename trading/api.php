@@ -942,14 +942,24 @@ function observation_spread(array $item): ?float
 }
 
 /**
- * A row with no recorded spread cannot say whether it had a counterparty, and is treated
- * as if it did not. Measured on the 600 newest open markets: the median spread is 90
- * points and 87% of them are wider than 10 points with no 24h volume at all.
+ * Was there a counterparty close enough to trade against? Measured on the 600 newest open
+ * markets: the median spread is 90 points and 87% of them are wider than 10 points with no
+ * 24h volume at all.
+ *
+ * A row that recorded no spread cannot answer, and the two callers want different answers
+ * -- mirroring the bot, which has one constant for each. A statistics row must be able to
+ * show its entry was reachable, so silence excludes it. A shortlist must not empty itself
+ * out because the scan has not revisited a row yet, so silence admits it: the scan runs
+ * every one to three hours over a bounded page, and on a catalogue of a few thousand rows
+ * it takes most of a day to cover. This gate rejects books there is evidence against.
  */
-function observation_spread_is_tradable(array $item): bool
+function observation_spread_is_tradable(array $item, bool $unknownIsTradable = false): bool
 {
     $spread = observation_spread($item);
-    return $spread !== null && $spread <= MAX_TRADABLE_SPREAD;
+    if ($spread === null) {
+        return $unknownIsTradable;
+    }
+    return $spread <= MAX_TRADABLE_SPREAD;
 }
 
 function is_active_scraped_market_observation(array $item): bool
@@ -1036,10 +1046,11 @@ function execution_scope_matches_observation(array $item, array $config): bool
     if ($minimumLiquidity !== null && $liquidity < $minimumLiquidity) {
         return false;
     }
-    // The same gate the bot applies at entry. This endpoint feeds the execution shortlist,
-    // so shipping rows the bot will then reject would make the screen disagree with the run
-    // -- and a market quoting a 90-point spread has no counterparty to fill an order at all.
-    if (!observation_spread_is_tradable($item)) {
+    // The same gate the bot applies at entry, including its treatment of a row that has not
+    // recorded a spread yet. This endpoint feeds the execution shortlist, so shipping rows
+    // the bot will then reject would make the screen disagree with the run -- and a market
+    // quoting a 90-point spread has no counterparty to fill an order at all.
+    if (!observation_spread_is_tradable($item, true)) {
         return false;
     }
     $minimumYield = normalize_net_yield_value($config['minNetYield'] ?? null, 0.0);

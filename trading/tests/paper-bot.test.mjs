@@ -8596,9 +8596,18 @@ test("spread: a row is only tradable if something was quoting near it", () => {
   assert.equal(bot.observationSpreadIsTradable({ firstBestAsk: 0.99, firstBestBid: 0.09 }), false);
   assert.equal(bot.observationSpreadIsTradable({ bestAsk: 0.71, bestBid: 0.69 }), true);
 
-  // A row that recorded nothing cannot show it had a counterparty, so it does not count.
+  // A row that recorded nothing cannot show it had a counterparty, so the statistics do not
+  // count it -- but an entry still allows it, and the asymmetry is the point. The scan runs
+  // every one to three hours over a bounded page, so on a catalogue of a few thousand rows
+  // it takes most of a day before every row carries a spread. Refusing them all meanwhile
+  // would freeze every portfolio over missing data rather than over a wide book, and this
+  // gate exists to reject books there is evidence against.
   assert.equal(bot.observationSpread({}), null);
   assert.equal(bot.observationSpreadIsTradable({}), false);
+  assert.equal(bot.candidateSpreadIsTradable({}), true);
+  // A recorded wide book is evidence, and it is refused on both sides.
+  assert.equal(bot.candidateSpreadIsTradable({ spread: 0.9 }), false);
+  assert.equal(bot.observationSpreadIsTradable({ firstSpread: 0.9 }), false);
 
   // The two readers disagree on purpose. The statistics judge the price the simulation
   // entered at, which is the discovery-time quote; an entry judges the book as it is now.
@@ -8673,15 +8682,16 @@ test("spread: a portfolio will not open a position it could not have been filled
   assert.equal(bot.strategyEligibleCandidates([candidate(0.02)], strategy).length, 1);
   assert.deepEqual(bot.strategyEligibleCandidates([candidate(0.9)], strategy), [],
     "a 90-point book has no counterparty at the midpoint the row is quoting");
-  assert.deepEqual(bot.strategyEligibleCandidates([candidate(null)], strategy), []);
+  // A row nothing has looked at yet is still openable. The statistics exclude it, because
+  // there it would have to prove its entry was reachable; an entry decision must not stall
+  // a whole portfolio on the scan's coverage, which takes most of a day to come round.
+  assert.equal(bot.strategyEligibleCandidates([candidate(null)], strategy).length, 1);
 
-  // And the run log says which of the two it was, because "no eligible candidate" with a
+  // And the run log says exactly what was wrong, because "no eligible candidate" with a
   // full shortlist behind it is exactly the report that has come back three times now.
   const wide = bot.portfolioFilterResult(candidate(0.9), strategy);
   assert.equal(wide.eligible, false);
   assert.ok(wide.reasons.some((reason) => /spread 90\.0 points exceeds 5\.0/.test(reason)), wide.reasons.join(" | "));
-  const silent = bot.portfolioFilterResult(candidate(null), strategy);
-  assert.ok(silent.reasons.some((reason) => /no bid\/ask spread has been recorded/.test(reason)), silent.reasons.join(" | "));
 });
 
 test("spread: the browser, the bot and api.php apply one rule", async () => {
@@ -8701,14 +8711,20 @@ test("spread: the browser, the bot and api.php apply one rule", async () => {
   assert.equal(Number(botLimit[1]), Number(phpLimit[1]));
   assert.equal(Number(botLimit[1]), 0.05, "five points, as asked");
 
-  // PHP reads the same fields, and rejects a row that recorded none.
+  // PHP reads the same fields.
   const phpReader = /function observation_spread\(array \$item\): \?float[\s\S]*?\n\}/.exec(api);
   assert.ok(phpReader);
   for (const field of ["spread", "bestAsk", "bestBid", "firstSpread", "firstBestAsk", "firstBestBid"]) {
     assert.match(phpReader[0], new RegExp(`'${field}'`), `${field} must be read`);
   }
-  assert.match(api, /\$spread !== null && \$spread <= MAX_TRADABLE_SPREAD/);
-  assert.match(api, /if \(!observation_spread_is_tradable\(\$item\)\) \{\n\s+return false;/);
+  assert.match(api, /return \$spread <= MAX_TRADABLE_SPREAD;/);
+  // And it makes the same split on a row that recorded none: the shortlist keeps it so a
+  // portfolio is not stalled by the scan's coverage, the drill-down behind a statistics row
+  // does not, because that row did not count it either.
+  assert.match(api, /if \(!observation_spread_is_tradable\(\$item, true\)\) \{\n\s+return false;/,
+    "the execution shortlist must not empty itself over rows nothing has looked at yet");
+  assert.match(api, /if \(!observation_spread_is_tradable\(\$item\)\) \{\n\s+return true;/,
+    "the drill-down list must hold exactly what its statistics row counted");
 
   // The fields have to survive transport, or the executor sees a row with no spread on it
   // and drops everything.

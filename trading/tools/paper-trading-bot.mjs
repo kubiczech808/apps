@@ -171,12 +171,22 @@ const MAX_SPREAD = envNumber("PAPER_MAX_SPREAD", 0.08);
 // above them look lucrative. This is the gate that keeps them out, of the statistics and
 // of a live entry alike -- an order placed into a book that wide would simply rest unfilled.
 const MAX_TRADABLE_SPREAD = Math.max(0, envNumber("PAPER_MAX_TRADABLE_SPREAD", 0.05));
-// Whether a row that recorded no spread at all counts as tradable. Every observation
-// scraped from now on carries one; the ones already in the archive predate the field, and
-// admitting them would keep exactly the rows this gate exists to remove. Asked for
-// explicitly: start the statistics again from clean data. Setting this true re-admits the
-// whole archive without anything having been deleted.
+// What to do with a row that recorded no spread at all. The two sides answer differently,
+// on purpose, because being wrong costs different things.
+//
+// In the statistics an unrecorded spread cannot show the row had a counterparty, so it does
+// not count. That restarts the statistics from clean data, as asked, without deleting
+// anything: the archive keeps every observation and the report says how many it held back.
+// PAPER_COUNT_UNKNOWN_SPREAD=true re-admits the lot.
 const COUNT_UNKNOWN_SPREAD_AS_TRADABLE = envBool("PAPER_COUNT_UNKNOWN_SPREAD", false);
+// At entry it is allowed, which is deliberate rather than lax. Measured on the live repo:
+// the market scan runs roughly every one to three hours and refreshes a bounded page, so on
+// an active catalogue of ~3,900 rows it takes most of a day before every row carries a
+// spread again. Refusing them all meanwhile would freeze every portfolio -- not because
+// those markets are untradable, but because nothing has looked at them yet. This gate
+// exists to reject books there is evidence against, and silence is not evidence. Once the
+// catalogue is covered there are no unknowns left and the two rules coincide.
+const OPEN_ON_UNKNOWN_SPREAD = envBool("PAPER_OPEN_ON_UNKNOWN_SPREAD", true);
 const MIN_VOLUME_24H = envNumber("PAPER_MIN_VOLUME_24H", 100);
 const MAX_HISTORY = envNumber("PAPER_MAX_HISTORY", 5000);
 const PAPER_CLOSED_TRADE_HISTORY_LIMIT = Math.max(50, envNumber("PAPER_CLOSED_TRADE_HISTORY_LIMIT", 300));
@@ -9853,18 +9863,19 @@ function liveObservationSpread(item = {}) {
 }
 
 // Was there a counterparty close enough to trade against? A row with no recorded spread
-// cannot answer, and the default is to say no -- see COUNT_UNKNOWN_SPREAD_AS_TRADABLE.
-function spreadIsTradable(spread) {
-  if (spread == null) return COUNT_UNKNOWN_SPREAD_AS_TRADABLE;
+// cannot answer, and what to do about that differs between the two callers -- see
+// COUNT_UNKNOWN_SPREAD_AS_TRADABLE and OPEN_ON_UNKNOWN_SPREAD.
+function spreadIsTradable(spread, unknownIsTradable) {
+  if (spread == null) return unknownIsTradable;
   return spread <= MAX_TRADABLE_SPREAD;
 }
 
 function observationSpreadIsTradable(item = {}) {
-  return spreadIsTradable(observationSpread(item));
+  return spreadIsTradable(observationSpread(item), COUNT_UNKNOWN_SPREAD_AS_TRADABLE);
 }
 
 function candidateSpreadIsTradable(item = {}) {
-  return spreadIsTradable(liveObservationSpread(item));
+  return spreadIsTradable(liveObservationSpread(item), OPEN_ON_UNKNOWN_SPREAD);
 }
 
 // Risk labels/keys are namespaced dedup identifiers for one specific market, event,
