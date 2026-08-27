@@ -1302,13 +1302,12 @@ function compact_dashboard_paper_portfolio(array $portfolio, bool $includeTrades
  */
 function attach_paper_portfolio_history_summaries(array &$data): void
 {
-    $portfolios = is_array($data['paperPortfolios'] ?? null) ? $data['paperPortfolios'] : [];
-    if ($portfolios === []) {
+    if (!isset($data['paperPortfolios']) || !is_array($data['paperPortfolios']) || $data['paperPortfolios'] === []) {
         return;
     }
 
     $corePath = state_file_paths()['paper'];
-    foreach ($portfolios as $id => &$portfolio) {
+    foreach ($data['paperPortfolios'] as $id => &$portfolio) {
         if (!is_array($portfolio)) {
             continue;
         }
