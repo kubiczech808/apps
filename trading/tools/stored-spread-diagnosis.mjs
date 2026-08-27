@@ -17,6 +17,11 @@
 // working filter, and that is a distinction worth being able to see.
 const STATE_URL = process.env.PAPER_STATE_URL
   || "https://osobnizkusenosti.cz/trading/api.php?action=state&target=paper&summary=scraped";
+// The scraped summary carries the catalogue but not the calculation report, and the
+// dashboard summary carries the report but not the catalogue. Both are wanted here, so
+// both are read.
+const REPORT_URL = process.env.PAPER_REPORT_URL
+  || "https://osobnizkusenosti.cz/trading/api.php?action=state&target=paper&summary=dashboard";
 const MAX_TRADABLE_SPREAD = Number(process.env.PAPER_MAX_TRADABLE_SPREAD || 0.05);
 
 const num = (value) => (value == null || value === "" || !Number.isFinite(Number(value)) ? null : Number(value));
@@ -95,6 +100,25 @@ async function main() {
     console.log(`   ${unrecorded} rows recorded none and are held back until the scan revisits them (${pctOf(unrecorded, rows.length)})`);
     console.log(`   -> the statistics currently see ${tradable} of ${rows.length} (${pctOf(tradable, rows.length)})`);
 
+    // Whether 5 points is the right number for our own catalogue rather than for Gamma's
+    // newest listings. If almost nothing passes at any sane limit, the limit is not the
+    // thing to argue about -- the catalogue is simply unquoted.
+    console.log(`\n   what other limits would keep, of the ${recorded.length} that recorded a spread:`);
+    for (const gate of [0.01, 0.02, 0.03, 0.05, 0.08, 0.1, 0.2, 0.5]) {
+      const kept = recorded.filter((item) => firstSpread(item) <= gate).length;
+      console.log(`     <= ${String((gate * 100).toFixed(0)).padStart(2)} pts: ${String(kept).padStart(5)} (${pctOf(kept, recorded.length)})`
+        + (Math.abs(gate - MAX_TRADABLE_SPREAD) < 1e-9 ? "   <- in force" : ""));
+    }
+
+    // A rejected row can fail for two quite different reasons, and only one of them is
+    // "the market is wide". A market with no bid at all is not a wide market, it is an
+    // empty one, and that is the case the report was about.
+    const rejected = recorded.filter((item) => firstSpread(item) > MAX_TRADABLE_SPREAD);
+    const noBid = rejected.filter((item) => num(item.bestBid) == null && num(item.firstBestBid) == null).length;
+    const zeroVolume = rejected.filter((item) => !(num(item.volume24hr) > 0)).length;
+    console.log(`\n   of the ${rejected.length} rejected: ${noBid} have no bid recorded at all (${pctOf(noBid, rejected.length)})`
+      + `, ${zeroVolume} traded nothing in 24h (${pctOf(zeroVolume, rejected.length)})`);
+
     // The two readers must not diverge wildly, or the entry gate and the statistics will
     // be filtering different catalogues.
     const both = rows.filter((item) => firstSpread(item) != null && liveSpread(item) != null);
@@ -106,11 +130,17 @@ async function main() {
 
   // 3. Does the published report agree with recomputing it here.
   {
-    const report = state.latestCalculationReport
-      || (Array.isArray(state.calculationReports) ? state.calculationReports[0] : null);
     console.log(`\n-- what the published report says --`);
+    const reportResponse = await fetch(`${REPORT_URL}&t=${Date.now()}`);
+    if (!reportResponse.ok) {
+      console.log(`   report read failed: HTTP ${reportResponse.status}`);
+      return;
+    }
+    const dashboard = await reportResponse.json();
+    const report = dashboard.latestCalculationReport
+      || (Array.isArray(dashboard.calculationReports) ? dashboard.calculationReports[0] : null);
     if (!report) {
-      console.log(`   no calculation report in this summary`);
+      console.log(`   no calculation report published yet`);
       return;
     }
     console.log(`   generatedAt        : ${report.generatedAt}`);
