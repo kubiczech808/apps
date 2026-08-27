@@ -1,17 +1,16 @@
 name: Trading Market Scan
 
 on:
-  # Sports and esports carry the short-dated fixtures both live portfolios trade, so they
-  # are scanned on their own schedule rather than waiting for the 24-scope rotation to
-  # come round. Five minutes apart is the floor: GitHub does not run a scheduled workflow
-  # more often than every five minutes, and measured over seven hours it does not reliably
-  # manage even that -- a */10 schedule delivered with a median gap of 10 minutes, a mean
-  # of 14 and a worst case of 47. Two entries offset by five give each tag a pass roughly
-  # every ten minutes and, more to the point, more chances that an overdue one is picked
-  # up. The tag is chosen from which entry fired.
+  # The complete scrape/execution cycle writes the shared portfolio state twice: once for
+  # the scan and once for its downstream execution pass. Five-minute ticks therefore
+  # accumulated behind the shared lock and GitHub retained only a fraction of them. These
+  # ten-minute slots leave time for one whole cycle to publish before the next starts.
+  # Broad scans advance the persisted category cursor; sports and esports keep their
+  # short-dated, liquid markets fresh between those broader passes.
   schedule:
-    - cron: '2,12,22,32,42,52 * * * *'
-    - cron: '7,17,27,37,47,57 * * * *'
+    - cron: '0,30 * * * *'
+    - cron: '10,40 * * * *'
+    - cron: '20,50 * * * *'
   workflow_dispatch:
     inputs:
       market_scan_tag:
@@ -69,14 +68,12 @@ jobs:
       PAPER_MARKET_SCAN_HISTORY_LIMIT: "20"
       PAPER_MARKET_SCAN_AUDIT_HISTORY_LIMIT: "3"
       PAPER_MARKET_SCAN_DIVERSITY_LIQUIDITY_USDC: "40000"
-      # A dispatch says which tag it wants; a scheduled run alternates the two by which
-      # cron entry fired.
-      PAPER_MARKET_SCAN_TAG: ${{ inputs.market_scan_tag || (github.event.schedule == '7,17,27,37,47,57 * * * *' && 'esports' || (github.event.schedule && 'sports' || '')) }}
-      # The filters the opportunities page was already being scanned with. They keep a
-      # scheduled pass small enough to finish inside its own cadence: short-dated fixtures
-      # with real liquidity are what these two tags are scanned for.
-      PAPER_MARKET_SCAN_LIQUIDITY_MIN: ${{ inputs.market_scan_liquidity_min || (github.event.schedule && '40000' || '0') }}
-      PAPER_MARKET_SCAN_MAX_DAYS: ${{ inputs.market_scan_max_days || (github.event.schedule && '2' || '-1') }}
+      # A dispatch says which tag it wants. Scheduled broad scans deliberately retain the
+      # normal seven-day, unfiltered catalogue semantics; only the sports/esports slots
+      # use the existing short-horizon, liquid-market focus.
+      PAPER_MARKET_SCAN_TAG: ${{ inputs.market_scan_tag || (github.event.schedule == '10,40 * * * *' && 'sports' || (github.event.schedule == '20,50 * * * *' && 'esports' || '')) }}
+      PAPER_MARKET_SCAN_LIQUIDITY_MIN: ${{ inputs.market_scan_liquidity_min || ((github.event.schedule == '10,40 * * * *' || github.event.schedule == '20,50 * * * *') && '40000' || '0') }}
+      PAPER_MARKET_SCAN_MAX_DAYS: ${{ inputs.market_scan_max_days || ((github.event.schedule == '10,40 * * * *' || github.event.schedule == '20,50 * * * *') && '2' || '7') }}
       # Only a dispatch is manual. The scraping log flags them, so a scheduled pass must
       # not claim to be one.
       PAPER_MARKET_SCAN_TRIGGER: ${{ github.event_name == 'workflow_dispatch' && 'MANUAL' || 'AUTO' }}

@@ -53,17 +53,6 @@ on:
         required: false
         default: "5"
         type: string
-  schedule:
-    # These three entries are only delivery attempts, not modes. GitHub delays and
-    # drops scheduled ticks heavily, so the bot resolves what to do from the
-    # cadence it stored in paper-state.json: portfolio execution when the last full
-    # pass is older than PAPER_FULL_CADENCE_MINUTES, otherwise the report when that
-    # is due, otherwise a catalogue-only scan. More entries simply mean more
-    # chances that an overdue pass gets picked up.
-    - cron: '*/10 * * * *'
-    - cron: '7 * * * *'
-    - cron: '17 * * * *'
-
 concurrency:
   group: trading-paper-bot
   cancel-in-progress: false
@@ -189,15 +178,11 @@ jobs:
       PAPER_REPORT_ONLY: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'report' }}
       PAPER_REFRESH_ONLY: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'refresh' }}
       PAPER_SCAN_ONLY: "false"
-      # Scheduled ticks pick their own mode from the cadence stored in state.
-      # Binding portfolio execution to a single cron expression starved it: GitHub
-      # drops most scheduled ticks, and `7 * * * *` is one tick out of eight per
-      # hour, so the portfolios stood still while the `*/10` scans kept running.
-      PAPER_SCHEDULED_CADENCE: ${{ github.event_name == 'schedule' && 'true' || 'false' }}
-      # Sports and esports have their own five-minute schedule in trading-market-scan.yml
-      # now, so the guaranteed slot they used to take here is off. It would scan them a
-      # second time and, worse, spend this rotation's slot doing it -- the other 22 scopes
-      # only advance when a tick is not borrowed.
+      # Market discovery has one owner: trading-market-scan.yml. It publishes a complete
+      # state before dispatching this workflow in execution-only mode. A second scheduled
+      # full paper pass used to repeat the scan plus the expensive resolution sync in the
+      # same concurrency group, which delayed new scans by hours.
+      PAPER_SCHEDULED_CADENCE: "false"
       PAPER_MARKET_SCAN_HOURLY_INTERVAL_MINUTES: "0"
       PAPER_FULL_CADENCE_MINUTES: "55"
       PAPER_REPORT_CADENCE_MINUTES: "55"
@@ -562,13 +547,3 @@ jobs:
                         f"{'; '.join(str(r) for r in reasons)[:150]}")
           print("=== END RUN DIGEST ===")
           PY
-
-      - name: Dispatch post-scrape execution
-        # Every scheduled tick refreshes the scraped catalogue now, so the trigger
-        # is "a scheduled scrape finished" rather than one specific cron entry.
-        if: github.event_name == 'schedule' && success()
-        env:
-          GITHUB_TOKEN: ${{ secrets.POLY_TRADING_GITHUB_TOKEN || github.token }}
-          GITHUB_REPOSITORY: ${{ github.repository }}
-          GITHUB_REF_NAME: ${{ github.ref_name }}
-        run: node trading/tools/dispatch-after-scan.mjs
