@@ -1013,6 +1013,8 @@ if (empty($_SESSION['auth'])) {
 
 if (($_GET['api'] ?? '') === 'ai_research_category_progress') {
     header('Content-Type: application/json; charset=utf-8');
+    header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
+    header('Pragma: no-cache');
     if (!canAccessAiResearch()) {
         http_response_code(403);
         echo json_encode(['error' => 'Forbidden']);
@@ -3987,13 +3989,25 @@ function aiResearchSeedDiscoveryNote(PDO $pdo): string
  */
 function aiResearchFirmyCatalogPageInfo(string $html): array
 {
-    if (preg_match('/Zobrazujeme\s+vysledky\s+(\d+)\s*[\x{2013}\x{2014}-]\s*(\d+)\s+z\s+celkem\s+([\d\s\x{00A0}]+)/iu', $html, $match)) {
+    // Firmy.cz v odpovedi kombinuje HTML entity, pevne mezery a obcas i znacky
+    // mezi cisly. Nejdrive proto pracujeme s normalizovanym viditelnym textem.
+    $text = html_entity_decode(strip_tags($html), ENT_QUOTES | ENT_HTML5, 'UTF-8');
+    $text = trim((string)preg_replace('/\s+/u', ' ', str_replace("\xC2\xA0", ' ', $text)));
+    if (preg_match('/Zobrazujeme\s+v[ýy]sledky\s+(\d+)\s*(?:[\x{2013}\x{2014}-]|až|az)\s*(\d+)\s+z\s+celkem\s+([\d\s]+)/iu', $text, $match)) {
         $first = (int)$match[1];
         $last = (int)$match[2];
         $total = (int)preg_replace('/\D+/', '', (string)$match[3]);
         return [
             'total' => $total,
             'page_size' => max(1, $last - $first + 1),
+        ];
+    }
+    // Nahradni vzor ponechava celkovy pocet viditelny, i kdyby katalog zmenil
+    // formulaci rozsahu na strance. Velikost stranky pak zjisti dalsi prochod.
+    if (preg_match('/z\s+celkem\s+([\d\s]+)\s+nalezen[ýy]/iu', $text, $match)) {
+        return [
+            'total' => (int)preg_replace('/\D+/', '', (string)$match[1]),
+            'page_size' => 0,
         ];
     }
     return ['total' => 0, 'page_size' => 0];
