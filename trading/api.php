@@ -1254,7 +1254,7 @@ function compact_portfolio_run_log_list_record(array $run): array
     ];
 }
 
-function compact_dashboard_paper_portfolio(array $portfolio, bool $includeTrades): array
+function compact_dashboard_paper_portfolio(array $portfolio, bool $includeTrades, bool $overviewOnly = false): array
 {
     if ($includeTrades) {
         if (isset($portfolio['runLog']) && is_array($portfolio['runLog'])) {
@@ -1287,10 +1287,44 @@ function compact_dashboard_paper_portfolio(array $portfolio, bool $includeTrades
             $compact[$field] = $portfolio[$field];
         }
     }
-    $compact['historySummary'] = paper_portfolio_history_summary($portfolio);
+    $compact['historySummary'] = is_array($portfolio['historySummary'] ?? null)
+        ? $portfolio['historySummary']
+        : paper_portfolio_history_summary($portfolio);
     $compact['trades'] = [];
     $compact['runLog'] = [];
     return $compact;
+}
+
+/**
+ * The overview omits every portfolio's trade segment from its response. It still
+ * needs the first trade timestamp for ROI, so each segment is read separately and
+ * reduced to its small history summary before the next segment is opened.
+ */
+function attach_paper_portfolio_history_summaries(array &$data): void
+{
+    $portfolios = is_array($data['paperPortfolios'] ?? null) ? $data['paperPortfolios'] : [];
+    if ($portfolios === []) {
+        return;
+    }
+
+    $corePath = state_file_paths()['paper'];
+    foreach ($portfolios as $id => &$portfolio) {
+        if (!is_array($portfolio)) {
+            continue;
+        }
+
+        $source = $portfolio;
+        $segmentPath = state_segment_path($data, $corePath, 'portfolio:' . (string) $id);
+        if ($segmentPath !== null) {
+            $segment = decode_state_file($segmentPath, false);
+            if (is_array($segment['paperPortfolio'] ?? null)) {
+                $source = $segment['paperPortfolio'];
+            }
+            unset($segment);
+        }
+        $portfolio['historySummary'] = paper_portfolio_history_summary($source);
+    }
+    unset($portfolio);
 }
 
 function sorted_run_log_rows(array $rows): array
@@ -1426,7 +1460,7 @@ function compact_dashboard_paper_portfolios(array $data, ?string $selectedStrate
             continue;
         }
         $includeTrades = !$overviewOnly && $selectedStrategyId !== null && (string) $id === $selectedStrategyId;
-        $data['paperPortfolios'][$id] = compact_dashboard_paper_portfolio($portfolio, $includeTrades);
+        $data['paperPortfolios'][$id] = compact_dashboard_paper_portfolio($portfolio, $includeTrades, $overviewOnly);
     }
 
     return $data;
@@ -1453,6 +1487,7 @@ function compact_state_payload(string $target, array $data, string $summary, ?st
                 static fn ($row): bool => !is_array($row) || ($row['archived'] ?? false) !== true,
             );
         }
+        attach_paper_portfolio_history_summaries($data);
         $compact = compact_dashboard_paper_portfolios($data, null, true);
         unset($compact['evaluations'], $compact['evaluationRunLog'], $compact['calculationReports'], $compact['latestCalculationReport'], $compact['runLog'], $compact['lastDecision'], $compact['marketObservations'], $compact['marketScan'], $compact['marketScanHistory'], $compact['trades']);
         $compact['evaluationDetailsMode'] = 'portfolio-overview';

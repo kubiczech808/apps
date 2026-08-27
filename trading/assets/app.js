@@ -3726,7 +3726,21 @@ function annualizedPortfolioReturn(portfolio, days) {
 }
 
 function chartTimestamp(value) {
-  const timestamp = Date.parse(value || "");
+  const text = String(value || "").trim();
+  const european = text.match(/^(\d{1,2})\.(\d{1,2})\.(\d{4})(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?)?$/);
+  if (european) {
+    const [, day, month, year, hour = "0", minute = "0", second = "0"] = european;
+    const timestamp = new Date(
+      Number(year),
+      Number(month) - 1,
+      Number(day),
+      Number(hour),
+      Number(minute),
+      Number(second),
+    ).getTime();
+    return Number.isFinite(timestamp) ? timestamp : null;
+  }
+  const timestamp = Date.parse(text);
   return Number.isFinite(timestamp) ? timestamp : null;
 }
 
@@ -4713,8 +4727,20 @@ function overviewCoversEveryPortfolio() {
   return paperStrategyIds().every((id) => overviewPortfolioNumbers(id));
 }
 
+function firstOpenedAtFromTrades(...groups) {
+  const timestamps = groups
+    .flatMap((group) => Array.isArray(group) ? group : [])
+    .map((trade) => chartTimestamp(trade?.openedAt || trade?.createdAt || trade?.date || ""))
+    .filter((timestamp) => timestamp != null);
+  return timestamps.length ? new Date(Math.min(...timestamps)).toISOString() : "";
+}
+
 function overviewAnnualizedRoi({ portfolio = null, firstOpenedAt = "" } = {}) {
-  const initial = Number(portfolio?.initialUsdc);
+  const initial = Number(
+    portfolio?.initialUsdc
+      ?? portfolio?.originalValueUsdc
+      ?? portfolio?.depositedUsdc,
+  );
   const equity = Number(portfolio?.equityUsdc);
   const openPnl = Number(portfolio?.openPnlUsdc || 0);
   const opened = chartTimestamp(firstOpenedAt);
@@ -4750,7 +4776,14 @@ function renderPortfolioOverview() {
         free: live ? Number(live.cashUsdc) : null,
         roi: overviewAnnualizedRoi({
           portfolio: live,
-          firstOpenedAt: state.liveState?.firstOpenedAt || state.liveState?.portfolio?.firstOpenedAt || "",
+          firstOpenedAt: state.liveState?.firstOpenedAt
+            || state.liveState?.portfolio?.firstOpenedAt
+            || firstOpenedAtFromTrades(
+              state.liveState?.positions,
+              state.liveState?.openPositions,
+              state.liveState?.closedTrades,
+              state.liveState?.openOrders,
+            ),
         }),
         live: true,
       };
