@@ -115,6 +115,25 @@ refusing it one order at a time on later passes would leave it standing. A cance
 keeps the `LIMIT_ORDER_EXPIRED` terminal status — nothing was bought either way — with
 `cancelledForCapital` set, so the dashboard can say which of the two happened.
 
+### Yes/No versus multi-outcome
+
+Yes/No is any two-sided either-or: one team beats the other, a total lands over or under.
+A football result that can be home, draw or away is still one fixture between two sides.
+Multi-outcome is a field of mutually exclusive alternatives where exactly one wins — an
+election, a correct-score line, a bracketed range — even though Polymarket quotes each
+member as its own Yes/No book.
+
+That last point is why the number of outcomes cannot decide it. Every member of a field
+carries exactly two outcomes, so `outcomeCount > 2 ? multi : binary` labels an entire
+election "binary" and a home/draw/away result "multi" — both backwards. `reportMarketType`
+in `paper-trading-bot.mjs` classifies from the question and slug instead, and
+`observation_market_type` in `api.php` is a **port of it, not an approximation**. The two
+must agree on every case: PHP builds the execution shortlist the screen shows and the bot
+re-filters it with the JS original, so any drift shows one set of candidates and trades
+another. Measured when they last drifted: a `multi` portfolio matched 0 rows out of 1,060.
+A test runs both languages over the same twenty-one real questions and requires identical
+verdicts.
+
 ### Tradable spread
 
 A scan lists a fixture the moment Gamma publishes it, which is long before anyone quotes
