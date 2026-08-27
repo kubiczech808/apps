@@ -4889,8 +4889,12 @@ function renderArchivedPortfolios() {
           : (Array.isArray(state.botState?.paperPortfolioArchives)
             ? state.botState.paperPortfolioArchives.find((entry) => entry?.strategyId === id)
             : null);
-        const archivedSummary = stored?.historySummary || archive?.summary || null;
-        const archivedEquity = stored?.portfolio?.equityUsdc ?? archive?.summary?.equityUsdc;
+        // An archived config can still have a blank seeded portfolio object in the
+        // current paper state. Its empty history summary is only a placeholder, while
+        // the archive snapshot is the immutable record of the actual trades. Prefer it
+        // so an archived portfolio never renders as "0 of 0" after a state refresh.
+        const archivedSummary = archive?.summary || stored?.historySummary || null;
+        const archivedEquity = archive?.summary?.equityUsdc ?? stored?.portfolio?.equityUsdc;
         const detail = id === "live-5050"
           ? "new bids paused; existing orders and positions are still watched"
           : (archivedSummary
