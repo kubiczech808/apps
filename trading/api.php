@@ -962,6 +962,76 @@ function observation_spread_is_tradable(array $item, bool $unknownIsTradable = f
     return $spread <= MAX_TRADABLE_SPREAD;
 }
 
+/**
+ * Whether an event is two-sided or a field of mutually exclusive alternatives. A port of
+ * reportMarketType() in paper-trading-bot.mjs, and it has to stay a port: this endpoint
+ * builds the execution shortlist that the bot then re-filters with the JS original, so a
+ * disagreement shows the screen one set of candidates and trades another.
+ *
+ * The count of outcomes cannot answer this on its own, which is what the old
+ * `outcomeCount > 2 ? multi : binary` line here got wrong. Polymarket quotes a field as one
+ * Yes/No market per member -- an election candidate, a correct-score line -- so every one
+ * of them carries exactly two outcomes and read as "binary". A portfolio set to `multi`
+ * therefore matched nothing at all: measured on production, 0 rows of 1,060. And the
+ * converse is just as wrong: a home/draw/away result has three outcomes and is still one
+ * fixture with two sides to bet.
+ */
+function observation_market_type(array $item): string
+{
+    $question = (string) ($item['question'] ?? '');
+    $slug = (string) ($item['eventSlug'] ?? $item['slug'] ?? '');
+    $haystack = $slug . ' ' . $question;
+    $outcome = strtolower(trim((string) ($item['outcome'] ?? '')));
+    $outcomeCount = is_numeric($item['outcomeCount'] ?? null) ? (int) $item['outcomeCount'] : null;
+
+    // A field of alternatives, whatever one member's book looks like. First, because an
+    // election candidate and a correct-score line are both quoted Yes/No.
+    $multiField = '/(exact|correct)[-\s]?score'
+        . '|\belections?\b|\bprimary\b|\bcaucus\b|\bballot\b|\breferend'
+        . '|\bnominee\b|\bnomination\b|\baward\b|\boscars?\b|\bgrammys?\b'
+        . '|\bnobel\b|\bballon\b|\bmvp\b'
+        . '|group[-\s]winner|\btop[-\s]scorer\b|\boutright\b|winner[-\s]of\b'
+        . '|\bnext\s+(president|prime\s+minister|pope|chancellor|leader|ceo)\b/i';
+    if (preg_match($multiField, $haystack) === 1) {
+        return 'multi';
+    }
+    // A bracket ("400-419 tweets", "150+ seats") is one band of a range that is carved into
+    // several. The lookarounds keep calendar dates and dated slugs out.
+    if (preg_match('/(?<![\d-])\d{1,3}\s?-\s?\d{1,3}(?![\d-])|(?<![\d-])\d{1,4}\+/', $question) === 1) {
+        return 'multi';
+    }
+    // Two named sides settle it before any question-word guess: in "Team Spirit vs Team
+    // Liquid - Game 2 Winner", "winner" means one of these two and nothing else.
+    $twoSided = '/\bvs\.?\b|\bv\.\b|\s@\s'
+        . '|\bhandicap\b|\bspread\b|\bmoneyline\b|\bpuck\s?line\b|\brun\s?line\b'
+        . '|over\s?\/\s?under|\bo\s?\/\s?u\b/i';
+    if (preg_match($twoSided, $haystack) === 1) {
+        return 'binary';
+    }
+    if (in_array($outcome, ['yes', 'no', 'over', 'under', 'up', 'down', 'even', 'odd', 'home', 'away', 'draw', 'tie'], true)) {
+        return 'binary';
+    }
+    // Only now can more than two outcomes mean a field. Deliberately after the two-sided
+    // tests: a home/draw/away result carries three outcomes and is still one fixture.
+    if ($outcomeCount !== null && $outcomeCount > 2) {
+        return 'multi';
+    }
+    // One entity named against a competition instead of an opponent.
+    if (preg_match('/^(which|who|what|how many)\b/i', $question) === 1) {
+        return 'multi';
+    }
+    if (preg_match('/\bwins?\b[^?]*\b(cup|league|championship|title|tournament|final|open|series|medal|division|conference|playoffs?)\b/i', $question) === 1) {
+        return 'multi';
+    }
+    // A plain proposition about one thing happening or not.
+    if (preg_match('/^(will|is|are|can|does|do|did|has|have|was|were)\b/i', $question) === 1) {
+        return 'binary';
+    }
+    // Left over: a single named outcome with no opponent and none of the pair vocabulary is
+    // one member of a field. A Yes/No label with none of the above is still a proposition.
+    return ($outcome === 'yes' || $outcome === 'no') ? 'binary' : 'multi';
+}
+
 function is_active_scraped_market_observation(array $item): bool
 {
     $status = strtoupper((string) ($item['status'] ?? $item['selectionStatus'] ?? ''));
@@ -1058,9 +1128,7 @@ function execution_scope_matches_observation(array $item, array $config): bool
         return false;
     }
     $marketType = normalize_portfolio_market_type_value($config['marketType'] ?? null, false);
-    $outcomeCount = is_numeric($item['outcomeCount'] ?? null) ? (int) $item['outcomeCount'] : 2;
-    $actualType = $outcomeCount > 2 ? 'multi' : 'binary';
-    if ($marketType !== 'all' && $actualType !== $marketType) {
+    if ($marketType !== 'all' && observation_market_type($item) !== $marketType) {
         return false;
     }
     $tags = execution_scope_observation_tags($item);

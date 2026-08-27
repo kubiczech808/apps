@@ -5278,25 +5278,37 @@ test("scheduled scan: sports and esports alternate on the tightest cadence avail
   const scan = await readFile(new URL("../../.github/workflows/trading-market-scan.yml", import.meta.url), "utf8");
 
   const crons = [...scan.matchAll(/^ {4}- cron: '([^']+)'$/gm)].map((match) => match[1]);
-  assert.equal(crons.length, 2, `expected two schedule entries, got ${JSON.stringify(crons)}`);
+  assert.ok(crons.length >= 2, `expected at least two schedule entries, got ${JSON.stringify(crons)}`);
   const minutesOf = (cron) => cron.split(" ")[0].split(",").map(Number);
-  const [first, second] = crons.map(minutesOf);
-  assert.equal(first.length, 6, "one entry every ten minutes");
-  assert.equal(second.length, 6);
-  // Together they fire every five minutes, and never at the same minute.
-  const all = [...first, ...second].sort((a, b) => a - b);
-  assert.deepEqual(all, [2, 7, 12, 17, 22, 27, 32, 37, 42, 47, 52, 57]);
-  assert.equal(new Set(all).size, all.length, "the two entries must not collide");
-  for (let i = 1; i < all.length; i += 1) {
-    assert.equal(all[i] - all[i - 1], 5, "five minutes apart is the floor GitHub allows");
-  }
 
-  // The tag is chosen from which entry fired, so the expression has to name the very
-  // string one of the cron entries carries -- edit one without the other and every
-  // scheduled run would silently scan the same tag.
-  const chooser = /PAPER_MARKET_SCAN_TAG: \$\{\{ inputs\.market_scan_tag \|\| \(github\.event\.schedule == '([^']+)' && 'esports' \|\| \(github\.event\.schedule && 'sports' \|\| ''\)\) \}\}/.exec(scan);
+  // Two entries firing in the same minute would collide on the shared lock and one of them
+  // would be the run GitHub drops, so which scope gets scanned would be down to timing.
+  const all = crons.flatMap(minutesOf).sort((a, b) => a - b);
+  assert.equal(new Set(all).size, all.length,
+    `the schedule entries must not collide: ${JSON.stringify(crons)}`);
+  // And they must be spread, not bunched: the gap between consecutive firings is what
+  // gives a whole scrape-and-execute cycle time to publish before the next one starts.
+  const gaps = all.slice(1).map((minute, index) => minute - all[index]);
+  assert.ok(Math.min(...gaps) >= 5, `five minutes apart is the floor GitHub allows: ${JSON.stringify(all)}`);
+
+  // The tag is chosen from which entry fired, so every cron string the chooser names has
+  // to be one the schedule really carries -- edit one without the other and a scheduled run
+  // silently falls through to scanning the wrong scope, or none.
+  const chooser = /PAPER_MARKET_SCAN_TAG: ([^\n]+)/.exec(scan);
   assert.ok(chooser, "the scheduled tag chooser must be present");
-  assert.ok(crons.includes(chooser[1]), `the chooser names ${chooser[1]}, which is not one of ${JSON.stringify(crons)}`);
+  const named = [...chooser[1].matchAll(/github\.event\.schedule == '([^']+)'/g)].map((match) => match[1]);
+  assert.ok(named.length >= 1, `the chooser must name the entries it selects on: ${chooser[1]}`);
+  for (const cron of named) {
+    assert.ok(crons.includes(cron), `the chooser names ${cron}, which is not one of ${JSON.stringify(crons)}`);
+  }
+  // Sports and esports each get their own slot, and they are not the same slot.
+  for (const tag of ["sports", "esports"]) {
+    assert.match(chooser[1], new RegExp(`'${tag}'`), `${tag} must have a scheduled slot`);
+  }
+  assert.equal(new Set(named).size, named.length, "two tags may not be selected on the same entry");
+  // At least one entry stays untagged, or the broad catalogue cursor never advances.
+  assert.ok(named.length < crons.length,
+    `one entry must stay untagged for the broad scan: ${JSON.stringify(crons)} vs ${JSON.stringify(named)}`);
 });
 
 test("scheduled scan: a scheduled pass stays small and does not fan out", async () => {
@@ -5306,10 +5318,30 @@ test("scheduled scan: a scheduled pass stays small and does not fan out", async 
     readFile(new URL("../../.github/workflows/trading-paper-bot.yml", import.meta.url), "utf8"),
   ]);
 
-  // The filters the opportunities page was already scanning with, applied only to
-  // scheduled runs so a dispatch still scans exactly what the page asked for.
-  assert.match(scan, /PAPER_MARKET_SCAN_LIQUIDITY_MIN: \$\{\{ inputs\.market_scan_liquidity_min \|\| \(github\.event\.schedule && '40000' \|\| '0'\) \}\}/);
-  assert.match(scan, /PAPER_MARKET_SCAN_MAX_DAYS: \$\{\{ inputs\.market_scan_max_days \|\| \(github\.event\.schedule && '2' \|\| '-1'\) \}\}/);
+  // The filters the opportunities page was already scanning with. They belong to the
+  // short-dated tag slots -- the ones that exist to keep liquid sports and esports fresh --
+  // and must not be imposed on the broad slot, whose job is to advance the category cursor
+  // across the whole catalogue. A dispatch always overrides both.
+  for (const [name, tight] of [["PAPER_MARKET_SCAN_LIQUIDITY_MIN", "40000"], ["PAPER_MARKET_SCAN_MAX_DAYS", "2"]]) {
+    const line = new RegExp(`${name}: ([^\\n]+)`).exec(scan);
+    assert.ok(line, `${name} must be set`);
+    assert.match(line[1], /^\$\{\{ inputs\.market_scan_\w+ \|\|/, `${name} must let a dispatch override it`);
+    assert.match(line[1], new RegExp(`'${tight}'`), `${name} must apply ${tight} to the tag slots`);
+    // It is selected on the same entries the tag chooser selects on, never on all of them:
+    // `github.event.schedule && ...` would catch the broad slot too.
+    assert.doesNotMatch(line[1], /github\.event\.schedule &&/,
+      `${name} must name the tag slots rather than every scheduled run`);
+  }
+  // The slots those filters name are the slots the tag chooser names, or one of them scans
+  // a tag with the wrong filters.
+  const tagSlots = new Set([...(/PAPER_MARKET_SCAN_TAG: [^\n]+/.exec(scan) || [""])[0]
+    .matchAll(/github\.event\.schedule == '([^']+)'/g)].map((match) => match[1]));
+  for (const name of ["PAPER_MARKET_SCAN_LIQUIDITY_MIN", "PAPER_MARKET_SCAN_MAX_DAYS"]) {
+    const line = new RegExp(`${name}: ([^\\n]+)`).exec(scan)[1];
+    const slots = new Set([...line.matchAll(/github\.event\.schedule == '([^']+)'/g)].map((match) => match[1]));
+    assert.deepEqual([...slots].sort(), [...tagSlots].sort(),
+      `${name} must apply to exactly the slots that carry a tag`);
+  }
 
   // Only a dispatch is manual; the scraping log flags them and a scheduled pass must not
   // claim to be one.
@@ -8742,4 +8774,45 @@ test("spread: the browser, the bot and api.php apply one rule", async () => {
   // A shrinking sample must read as deliberate rather than as data loss.
   assert.match(app, /report\.spreadExcludedCount/);
   assert.match(app, /held back: bid\/ask wider than/);
+});
+
+test("market type: api.php classifies exactly as the bot does", async () => {
+  // Reported: the "Paper 75" portfolio shows no candidates and does not execute. It is set
+  // to multi-outcome, and the execution endpoint served it 0 rows out of 1,060 -- because
+  // api.php still classified with `outcomeCount > 2 ? multi : binary`, the very shortcut the
+  // bot stopped using. Polymarket quotes a field as one Yes/No market per member, so every
+  // election candidate and every correct-score line carries exactly two outcomes and read as
+  // binary. A multi portfolio therefore matched nothing that exists.
+  //
+  // PHP builds the shortlist and the bot re-filters it, so the two rules must agree on every
+  // case or the screen shows one set of candidates and the run trades another. This runs
+  // both over the same list rather than comparing their source.
+  const { execFileSync } = await import("node:child_process");
+  const api = readFileSync(new URL("../api.php", import.meta.url), "utf8");
+  // Including api.php would answer a request, so the classifier is lifted out and evaluated
+  // on its own -- the same trick functionSource() plays on the JS side.
+  const start = api.indexOf("function observation_market_type(array $item): string");
+  assert.ok(start >= 0, "api.php must define observation_market_type");
+  const end = api.indexOf("\n}", start);
+  assert.ok(end > start);
+  const classifier = api.slice(start, end + 2);
+
+  const cases = MARKET_TYPE_CASES.map(([expected, item]) => ({ expected, item }));
+  const encodedCases = Buffer.from(JSON.stringify(cases.map((row) => row.item))).toString("base64");
+  const encodedFunction = Buffer.from(classifier).toString("base64");
+  const output = execFileSync("php", ["-r",
+    `eval(base64_decode('${encodedFunction}'));`
+    + ` $rows = json_decode(base64_decode('${encodedCases}'), true);`
+    + ` $out = []; foreach ($rows as $row) { $out[] = observation_market_type($row); }`
+    + ` echo json_encode($out);`,
+  ], { encoding: "utf8" });
+  const verdicts = JSON.parse(output);
+  assert.equal(verdicts.length, cases.length);
+  for (let index = 0; index < cases.length; index += 1) {
+    const { expected, item } = cases[index];
+    assert.equal(verdicts[index], expected,
+      `PHP: ${JSON.stringify(item.question || item.slug)} should be ${expected}`);
+    assert.equal(verdicts[index], bot.reportMarketType(item),
+      `PHP and the bot disagree about ${JSON.stringify(item.question || item.slug)}`);
+  }
 });
