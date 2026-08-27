@@ -1265,18 +1265,24 @@ function compact_dashboard_paper_portfolio(array $portfolio, bool $includeTrades
     }
 
     $compact = [];
-    foreach ([
+    $fields = [
         'id',
         'label',
         'displayName',
         'description',
         'selectionMetric',
         'portfolio',
-        'lastDecision',
         'lastTradeDate',
         'capitalAdjustmentAt',
         'archived',
-    ] as $field) {
+    ];
+    // The overview needs the balances of every portfolio, not each portfolio's
+    // potentially very large decision audit. Keeping the audits out is what makes
+    // switching portfolios cheap even after many execution runs.
+    if (!$overviewOnly) {
+        $fields[] = 'lastDecision';
+    }
+    foreach ($fields as $field) {
         if (array_key_exists($field, $portfolio)) {
             $compact[$field] = $portfolio[$field];
         }
@@ -1448,7 +1454,7 @@ function compact_state_payload(string $target, array $data, string $summary, ?st
             );
         }
         $compact = compact_dashboard_paper_portfolios($data, null, true);
-        unset($compact['evaluations'], $compact['evaluationRunLog'], $compact['calculationReports'], $compact['runLog'], $compact['marketObservations'], $compact['marketScan'], $compact['marketScanHistory'], $compact['trades']);
+        unset($compact['evaluations'], $compact['evaluationRunLog'], $compact['calculationReports'], $compact['latestCalculationReport'], $compact['runLog'], $compact['lastDecision'], $compact['marketObservations'], $compact['marketScan'], $compact['marketScanHistory'], $compact['trades']);
         $compact['evaluationDetailsMode'] = 'portfolio-overview';
         return $compact;
     }
