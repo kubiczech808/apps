@@ -707,7 +707,10 @@ test("live revalidation: a market Gamma no longer lists is closed out, not re-fe
   // And both live portfolios must run it, or one of them keeps re-fetching dead markets.
   for (const file of ["polymarket-live-limit-order-test", "trading-live-5050"]) {
     const workflow = await readFile(new URL(`../../.github/workflows/${file}.yml`, import.meta.url), "utf8");
-    assert.match(workflow, /run: python3 trading\/tools\/persist-live-revalidation\.py/, `${file} must persist its verdicts`);
+    // The state file it writes is per-portfolio now, so it is named on the command line
+    // ahead of the interpreter rather than in a fixed env block.
+    assert.match(workflow, /run: (?:\w+="[^"]*" )*python3 trading\/tools\/persist-live-revalidation\.py/,
+      `${file} must persist its verdicts`);
   }
 });
 
@@ -2106,17 +2109,29 @@ test("5050: what a pass learns about a candidate is published, not discarded", a
   assert.match(persist, /updates = \[item for item in execution\.get\("revalidationUpdates", \[\]\) if item\.get\("tokenId"\)\]/);
   assert.match(persist, /if update\.get\("marketGone"\):/);
 
-  // Each portfolio persists its own state file, not the other's.
+  // Each portfolio persists its own state file, not the other's. The path is a variable
+  // now, because a created live portfolio supplies its own; what must not drift is the
+  // default each workflow falls back to, and that the persist step reads that variable
+  // rather than a path of its own.
   const pairs = [
-    ["polymarket-live-limit-order-test", "trading/data/live-execution-state.json"],
-    ["trading-live-5050", "trading/data/live-5050-execution-state.json"],
+    ["polymarket-live-limit-order-test", "data/live-execution-state.json"],
+    ["trading-live-5050", "data/live-5050-execution-state.json"],
   ];
   for (const [file, statePath] of pairs) {
     const workflow = await readFile(new URL(`../../.github/workflows/${file}.yml`, import.meta.url), "utf8");
+    assert.match(workflow, new RegExp(`LIVE_EXECUTION_STATE_PATH: ${statePath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`),
+      `${file} must default to its own execution state`);
     const step = workflow.slice(workflow.indexOf("market verification into evaluation state"));
     const body = step.slice(0, step.indexOf("persist-live-revalidation.py") + 40);
-    assert.match(body, new RegExp(`LIVE_EXECUTION_STATE_FILE: ${statePath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`),
-      `${file} must persist its own execution state`);
+    // Either form is fine, and which one a workflow uses follows from whether it serves one
+    // portfolio or several: 5050 is always 5050 and names its file outright, while the live
+    // workflow now runs whichever live portfolio was dispatched and has to follow the path
+    // that run is using. What must not happen is either of them writing the other's file.
+    assert.match(
+      body,
+      new RegExp(`LIVE_EXECUTION_STATE_FILE(?::\\s+|=)"?trading/(?:\\$\\{LIVE_EXECUTION_STATE_PATH\\}|${statePath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")})`),
+      `${file} must persist into the state path this run is using`,
+    );
   }
 
   // And it has to run before the upload, or it reads a state the run has not written.
@@ -2285,9 +2300,19 @@ test("after a scrape: the cron interval does not also throttle an after-scrape r
 
 // Builds the in-flight row machinery against a stubbed dashboard state, so the real
 // functions decide rather than a restatement of them.
-function runningRowHarness({ target = "live-5050", run = null, now = Date.parse("2026-08-09T12:00:30Z") } = {}) {
+function runningRowHarness({
+  target = "live-5050",
+  run = null,
+  now = Date.parse("2026-08-09T12:00:30Z"),
+  // The synthetic row exists only for a run this browser dispatched, so that is the default
+  // here. Pass false for the other case, which must produce no row at all.
+  dispatchedHere = true,
+} = {}) {
   const app = readFileSync(new URL("../assets/app.js", import.meta.url), "utf8");
   const body = ["runningExecutionRun", "runningExecutionRow", "formatDuration", "newestRunAt",
+    // A paper target never gets a synthetic row -- every paper portfolio shares one
+    // workflow, so its status cannot say which portfolio a run belongs to.
+    "isPaperExecutionTarget",
     "runningRowIsSuperseded", "withRunningExecutionRow"]
     .map((name) => functionSource(app, name)).join("\n\n");
   const state = { runningExecutions: { [target]: run }, runningExecutionWatermark: null };
@@ -2296,9 +2321,7 @@ function runningRowHarness({ target = "live-5050", run = null, now = Date.parse(
     return { withRunningExecutionRow, runningExecutionRow };
   `);
   const clock = { ...Date, now: () => now, parse: Date.parse };
-  // These rows are about a run nobody here dispatched, which is the case the source label
-  // must not guess at. The dashboard-dispatched case is covered where the label is.
-  const api = build(state, () => target, clock, () => false);
+  const api = build(state, () => target, clock, () => dispatchedHere);
   return { ...api, state };
 }
 
@@ -2321,8 +2344,9 @@ test("running execution: a run in flight is a row before it has published anythi
   assert.equal(live.runAt, "2026-08-09T12:00:00Z", "dated from when GitHub created the run");
   assert.equal(live.runningExecution, true, "flagged, so the renderer does not offer a decision detail");
   assert.equal(live.htmlUrl, IN_PROGRESS_RUN.htmlUrl);
-  // Not "MANUAL": that means a person asked, and the run log's own rows use it that way.
-  assert.equal(live.runSource, "AUTO");
+  // "MANUAL" is the only source this row can carry, and that is now true by construction:
+  // it is produced only for a run this browser dispatched, so a person did ask.
+  assert.equal(live.runSource, "MANUAL");
 
   // The point of the row is that it says something a spinner would not: where the run has
   // got to, and for how long it has been there.
@@ -2336,16 +2360,27 @@ test("running execution: a run in flight is a row before it has published anythi
   });
   const [pending] = queued.withRunningExecutionRow([]);
   assert.equal(pending.action, "QUEUED");
-  // Not "MANUAL" either: this harness stands for a run nobody here dispatched, and a
-  // dispatch by itself does not say who asked. Every run on this repository is triggered
-  // by the owner's own account, scheduled ones included, so claiming a person from the
-  // event is what made the label wrong in both directions.
-  assert.equal(pending.runSource, "UNKNOWN", "a dispatch this dashboard did not make is unknown, not asserted");
+  assert.equal(pending.runSource, "MANUAL");
   assert.match(pending.humanReason, /^Execution in progress: waiting for a runner/);
 
   // Nothing running, nothing added.
   const idle = runningRowHarness({ run: null });
   assert.deepEqual(idle.withRunningExecutionRow([{ id: "older" }]), [{ id: "older" }]);
+
+  // And a run this dashboard did not start adds nothing either. The label used to be
+  // "UNKNOWN" for this case; not inventing the row at all is the stronger version of the
+  // same rule, because such a run publishes its own entry with its real source and this one
+  // could only ever guess -- including guessing the wrong portfolio, since a shared workflow
+  // status cannot say which portfolio it belongs to.
+  const elsewhere = runningRowHarness({ run: IN_PROGRESS_RUN, dispatchedHere: false });
+  assert.deepEqual(elsewhere.withRunningExecutionRow([{ id: "older" }]), [{ id: "older" }],
+    "a run started somewhere else is logged by its own worker, never guessed at here");
+  assert.equal(elsewhere.runningExecutionRow(), null);
+
+  // A paper target never gets one whatever else is true: all paper portfolios share one
+  // workflow, so its status cannot say which of them is running.
+  const paper = runningRowHarness({ target: "paper-conservative", run: IN_PROGRESS_RUN });
+  assert.equal(paper.runningExecutionRow(), null);
 });
 
 test("running execution: the row gives way to the run's own entry, and not before", () => {
@@ -2431,15 +2466,18 @@ test("running execution: the live row is not a decision to open", async () => {
 
 function verdictHarness() {
   const app = readFileSync(new URL("../assets/app.js", import.meta.url), "utf8");
-  const body = ["executionVerdictIsOwn", "latestLiveExecutionVerdict"]
+  // A verdict is owned by the portfolio that made it, and a created live portfolio owns its
+  // own -- so the ownership test has to be able to name one from a mode.
+  const body = ["customLivePortfolioIdFromMode", "executionVerdictIsOwn", "latestLiveExecutionVerdict"]
     .map((name) => functionSource(app, name)).join("\n\n");
-  return (mode, item, ownUpdates = []) => new Function("state", "isFixedEntryMode", "liveExecutionVerdictByToken", `
+  return (mode, item, ownUpdates = []) => new Function("state", "isFixedEntryMode", "liveExecutionVerdictByToken", "CUSTOM_PAPER_STRATEGY_ID", `
     ${body}
     return latestLiveExecutionVerdict;
   `)(
     { mode },
     (value) => value === "live-5050",
     () => new Map(ownUpdates.map((update) => [String(update.tokenId), update])),
+    /^[a-z][a-zA-Z0-9]{1,30}$/,
   )(item, mode);
 }
 
@@ -2489,7 +2527,11 @@ test("live candidates: the verdict says which portfolio made it", async () => {
 
   // Stamped where the verdict is built, so both live workflows carry it without either
   // needing to know it is sharing rows with the other.
-  assert.match(executor, /portfolio: FIXED_ENTRY_STRATEGY \? "live-5050" : "live",/);
+  // The owner is the portfolio the run belongs to, and a created live portfolio is passed
+  // its own id -- the two shipped ones remain the fallback. Stamping it from the strategy
+  // flag alone would file every created portfolio's verdicts under "live".
+  assert.match(executor, /const LIVE_PORTFOLIO_ID = process\.env\.LIVE_PORTFOLIO_ID \|\| \(FIXED_ENTRY_STRATEGY \? "live-5050" : "live"\);/);
+  assert.match(executor, /portfolio: LIVE_PORTFOLIO_ID,/);
   // The persist step copies the verdict wholesale, so the stamp reaches the stored row.
   assert.match(persist, /item\["executionRevalidation"\] = update/);
 
@@ -2678,6 +2720,14 @@ test("portfolio parameters: both live portfolios state their order price", () =>
     + `${functionSource(app, "automaticRotationIsEnabled")}\n`
     // The probability row states a range now that a portfolio can carry a maximum as well
     // as a minimum, so its three pure helpers come across for the same reason as above.
+    // The rule rows now ask whether the open mode is a live portfolio, which a created one
+    // also is, so the classification cluster comes across too.
+    + `${/const LIVE_MODES = new Set\(\[[^\]]*\]\);/.exec(app)[0]}\n`
+    + `${/const CUSTOM_PAPER_STRATEGY_ID = [^\n]+/.exec(app)[0]}\n`
+    + `${functionSource(app, "normalizeMode")}\n`
+    + `${functionSource(app, "customLivePortfolioIdFromMode")}\n`
+    + `${functionSource(app, "isLivePortfolioMode")}\n`
+    + `${functionSource(app, "isLiveMode")}\n`
     + `${functionSource(app, "normalizeEligibilityThreshold")}\n`
     + `${functionSource(app, "normalizeOptionalProbability")}\n`
     + `${functionSource(app, "probabilityRangeRuleValue")}\n`
@@ -2770,14 +2820,18 @@ test("run log history: both live portfolios publish through the same hardened up
 
   // One implementation, used by both, so neither can drift into the weaker shape again.
   for (const [name, workflow] of [["5050", fixedWorkflow], ["live", liveWorkflow]]) {
-    assert.match(workflow, /run: python3 trading\/tools\/publish-execution-state\.py/,
+    assert.match(workflow, /run: (?:\w+="[^"]*" )*python3 trading\/tools\/publish-execution-state\.py/,
       `${name} must publish through the shared tool`);
     // And no inline copy left behind to be edited instead.
     assert.ok(!/ftp\.storbinary/.test(workflow), `${name} must have no inline FTP upload`);
   }
   assert.match(fixedWorkflow, /PUBLISH_FILES: trading\/data\/live-5050-execution-state\.json>live-5050-execution-state\.json/);
-  assert.match(liveWorkflow, /PUBLISH_FILES: [^\n]*live-execution-state\.json>live-execution-state\.json,[^\n]*live-state\.json>live-state\.json/,
+  // The live workflow composes its list from the per-portfolio execution file, so the
+  // ordering is checked on the composition and on the default that fills it.
+  assert.match(liveWorkflow, /PUBLISH_FILES="\$\{LIVE_EXECUTION_PUBLISH_FILE\},trading\/data\/live-state\.json>live-state\.json"/,
     "the execution state goes first, so the run log survives a failed account upload");
+  assert.match(liveWorkflow, /LIVE_EXECUTION_PUBLISH_FILE: trading\/data\/live-execution-state\.json>live-execution-state\.json/,
+    "and its default is this portfolio's own execution state");
   assert.match(liveWorkflow, /PUBLISH_REQUIRED: live-state\.json/);
 
   // What makes it hardened, asserted rather than assumed.
@@ -2791,7 +2845,9 @@ test("run log history: both live portfolios publish through the same hardened up
   // The merge is what makes the upload safe to do at all: it replaces the hosted file
   // outright, so the local copy has to be a superset of it first.
   for (const [name, workflow] of [["5050", fixedWorkflow], ["live", liveWorkflow]]) {
-    assert.match(workflow, /run: node tools\/merge-live-execution-history\.mjs/,
+    // The URL it reads is named on the command line in the live workflow, because it now
+    // follows whichever portfolio is running.
+    assert.match(workflow, /run: (?:\w+="[^"]*" )*node tools\/merge-live-execution-history\.mjs/,
       `${name} must merge the published history before replacing it`);
   }
 });
