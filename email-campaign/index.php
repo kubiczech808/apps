@@ -55,6 +55,10 @@ const AI_RESEARCH_SEED_PICK_SLICE_SECONDS = 10;
 // Kolik polozek behu se v detailu vypise na jednu stranku. Kontejner muze mit
 // desetitisice URL; vypsat je vsechny znamenalo chybu 500 na cele strance.
 const SCRAPING_ITEMS_PER_PAGE = 25;
+// Kolik tiku za sebou smi jeden cron navazat. Kazdy hop je samostatny request s
+// vlastnim casovym budgetem; strop brani nekonecnemu retezu, kdyby fronta nikdy
+// nedosla na konec.
+const AI_RESEARCH_MAX_CHAIN_HOPS = 10;
 // Kolik firem ma katalog na plne strance vysledku. Kdyz jich prvni stranka vrati
 // aspon tolik a katalog neuvadi celkovy pocet ani strankovani, je jasne, ze vysledku
 // je vic - jen jsme je neprecetli.
@@ -468,13 +472,99 @@ function aiResearchGeminiCall(array $config, string $step, array $payload, int $
 }
 
 /**
- * AI research pouziva prednostne OpenAI. Gemini zustava jen pro starsi instalace,
- * ktere jeste nemaji vlastni OpenAI API klic; na neplatny OpenAI klic se potichu
- * neprepina, aby se skutecna pricina vzdy propsala do provozniho logu.
+ * Klic providera. Bere se z konfigurace i z nastaveni aplikace (to uz je slouceno
+ * v applySettingsToConfig), takze se da vymenit bez zasahu do deploymentu.
+ */
+function aiResearchProviderKey(array $config, string $provider): string
+{
+    return trim((string)($config['ai'][($provider === 'openai' ? 'openai' : 'gemini') . '_api_key'] ?? ''));
+}
+
+/**
+ * Providere, ktere lze pouzit, v poradi preference. Rucni volba (nastaveni
+ * ai_research_provider) urcuje, kdo je prvni; druhy zustava jako zaloha, aby se pri
+ * vycerpane kvote pokracovalo dal misto zastaveni celeho researche.
+ */
+function aiResearchProviderPreference(array $config): array
+{
+    $configured = strtolower(trim((string)($config['ai']['research_provider'] ?? 'auto')));
+    $order = match ($configured) {
+        'openai', 'gpt', 'chatgpt' => ['openai', 'gemini'],
+        'gemini' => ['gemini', 'openai'],
+        // Auto: prednost ma OpenAI, kdyz je klic k dispozici.
+        default => ['openai', 'gemini'],
+    };
+    return array_values(array_filter($order, static fn(string $p): bool => aiResearchProviderKey($config, $p) !== ''));
+}
+
+/**
+ * Provider, ktery se ma pouzit pro dalsi pozadavek. Vycerpana kvota se pozna z chyby
+ * a poznamena se do runtime stavu; dalsi pozadavek pak jde na zalozniho providera,
+ * dokud se okno neuvolni.
  */
 function aiResearchProviderName(array $config): string
 {
-    return trim((string)($config['ai']['openai_api_key'] ?? '')) !== '' ? 'openai' : 'gemini';
+    $available = aiResearchProviderPreference($config);
+    if (!$available) {
+        // Zadny klic: vratime "gemini", aby chybova zprava mluvila o konkretnim klici.
+        return 'gemini';
+    }
+    foreach ($available as $provider) {
+        if (!aiResearchProviderExhausted($provider)) {
+            return $provider;
+        }
+    }
+    // Vsichni maji vycerpanou kvotu - zkusi se ten preferovany, at chyba vznikne tam.
+    return $available[0];
+}
+
+/**
+ * Vycerpana kvota providera v ramci tohoto procesu i mezi behy (v nastaveni).
+ * Bez parametru jen cte, s $exhaustedUntil zapisuje.
+ */
+function aiResearchProviderExhausted(string $provider, ?int $exhaustedUntil = null): bool
+{
+    static $until = [];
+    if ($exhaustedUntil !== null) {
+        $until[$provider] = $exhaustedUntil;
+    }
+    return (int)($until[$provider] ?? 0) > time();
+}
+
+/**
+ * Zaznamena vycerpanou kvotu providera a rekne, jestli je k dispozici zaloha.
+ * Fallback je tim padem otazka jednoho dalsiho pokusu, ne cekani na dalsi cron.
+ */
+function aiResearchMarkProviderExhausted(array $config, string $provider, int $seconds, ?PDO $pdo = null): string
+{
+    aiResearchProviderExhausted($provider, time() + max(60, $seconds));
+    if ($pdo instanceof PDO) {
+        try {
+            setSetting($pdo, 'ai_research_' . $provider . '_exhausted_until', (string)(time() + max(60, $seconds)));
+        } catch (Throwable $e) {
+            error_log('AI research provider state not stored: ' . $e->getMessage());
+        }
+    }
+    foreach (aiResearchProviderPreference($config) as $candidate) {
+        if ($candidate !== $provider && !aiResearchProviderExhausted($candidate)) {
+            return $candidate;
+        }
+    }
+    return '';
+}
+
+/**
+ * Obnovi stav vycerpanych kvot z nastaveni, aby fallback platil i mezi requesty.
+ */
+function aiResearchLoadProviderState(PDO $pdo): void
+{
+    $settings = loadSettings($pdo);
+    foreach (['openai', 'gemini'] as $provider) {
+        $until = (int)($settings['ai_research_' . $provider . '_exhausted_until'] ?? 0);
+        if ($until > time()) {
+            aiResearchProviderExhausted($provider, $until);
+        }
+    }
 }
 
 function aiResearchProviderLabel(array $config): string
@@ -514,16 +604,67 @@ function aiResearchOpenAiCall(array $config, string $step, array $payload, int $
     ], $timeout);
 }
 
-function aiResearchModelCall(array $config, string $step, array $payload, int $timeout): array
+/**
+ * Jeden AI pozadavek. Kdyz provider odmitne kvuli vycerpane kvote, prepne se na
+ * zalozniho a pozadavek se rovnou zkusi znovu - vycerpany GPT tak neblokuje praci,
+ * pokud je k dispozici Gemini klic (a naopak).
+ */
+function aiResearchModelCall(array $config, string $step, array $payload, int $timeout, ?PDO $pdo = null): array
 {
-    if (aiResearchProviderName($config) === 'openai') {
-        return aiResearchOpenAiCall($config, $step, $payload, $timeout);
+    $provider = aiResearchProviderName($config);
+    try {
+        return aiResearchCallProvider($config, $provider, $step, $payload, $timeout);
+    } catch (Throwable $e) {
+        if (!aiResearchErrorIsQuota($e->getMessage())) {
+            throw $e;
+        }
+        $retryAfter = aiResearchRetryDelaySeconds($e->getMessage());
+        $fallback = aiResearchMarkProviderExhausted($config, $provider, $retryAfter > 0 ? $retryAfter : 900, $pdo);
+        if ($fallback === '') {
+            throw $e;
+        }
+        error_log('AI ' . $step . ': ' . $provider . ' hlasi vycerpanou kvotu, prepinam na ' . $fallback);
+        return aiResearchCallProvider($config, $fallback, $step, $payload, $timeout);
     }
-    return aiResearchGeminiCall($config, $step, $payload, $timeout);
 }
 
+function aiResearchCallProvider(array $config, string $provider, string $step, array $payload, int $timeout): array
+{
+    // Model musi odpovidat providerovi, na kterem pozadavek konci.
+    $payload['model'] = aiModelName($config, $provider);
+    return $provider === 'openai'
+        ? aiResearchOpenAiCall($config, $step, $payload, $timeout)
+        : aiResearchGeminiCall($config, $step, $payload, $timeout);
+}
+
+/**
+ * Chyba, ktera znamena "kvota je pro tuhle chvili pryc" - u OpenAI i u Gemini.
+ * Rate limit na minutu i denni limit resime stejne: prepnout na zalozni klic.
+ */
+function aiResearchErrorIsQuota(string $message): bool
+{
+    return (bool)preg_match(
+        '/quota|rate.?limit|too many requests|resource exhausted|insufficient_quota|billing|exceeded your current|\b429\b/i',
+        $message
+    );
+}
+
+/**
+ * Text z odpovedi. Format se pozna z odpovedi samotne, ne z aktualne vybraneho
+ * providera - po fallbacku uz totiz odpovidal nekdo jiny, nez kdo byl na zacatku.
+ */
 function aiResearchModelText(array $config, array $response): string
 {
+    if (isset($response['steps'])) {
+        return geminiInteractionText($response);
+    }
+    if (isset($response['output'])) {
+        return openAiResponseText($response);
+    }
+    if (isset($response['output_text'])) {
+        // Oba providere pouzivaji stejny klic a oba handlery ho ctou stejne.
+        return (string)$response['output_text'];
+    }
     return aiResearchProviderName($config) === 'openai'
         ? openAiResponseText($response)
         : geminiInteractionText($response);
@@ -852,7 +993,19 @@ if (isset($_GET['cron'])) {
         exit;
     }
     if (isset($_GET['ai_research'])) {
-        echo runCronAiResearch($pdo, $config);
+        aiResearchLoadProviderState($pdo);
+        $hop = max(1, (int)($_GET['hop'] ?? 1));
+        // Navazany hop necheka na interval - retez sam je tim rozestupem. Zamek,
+        // denni rozpocet i pravidlo jednoho behu naraz plati porad.
+        $message = runCronAiResearch($pdo, $config, $hop > 1);
+        echo $message;
+        // Jeden cron za pet minut znamenal par kroku za hodinu. Kdyz je jeste prace a
+        // rozpocty to dovoli, tik za sebe posle dalsi request - kazdy ma vlastni cisty
+        // casovy budget, takze hosting nema co ukoncovat a propustnost roste nasobne.
+        $chained = aiResearchChainNextTick($pdo, $config, $hop, $message);
+        if ($chained !== '') {
+            echo "\n" . $chained;
+        }
         exit;
     }
     // Uklid souborovych sessionu bezi pri kazdem cronu v male davce. Startovni udrzba
@@ -1064,6 +1217,13 @@ function handlePost(PDO $pdo, array $config): ?string
     if ($action === 'save_smtp_settings') {
         saveSmtpSettings($pdo);
         return 'SMTP nastaveni ulozeno.';
+    }
+
+    if ($action === 'save_ai_research_settings') {
+        if (!canAccessAiResearch()) {
+            throw new RuntimeException('Nastaveni AI researche je dostupne pouze adminovi.');
+        }
+        return saveAiResearchSettings($pdo);
     }
 
     if ($action === 'save_imap_settings') {
@@ -2830,8 +2990,42 @@ function onboardingDemoSeedContacts(string $businessType, array $plan): array
  * cekani na interval a na backoff, ale ne pojistky, ktere chrani spravnost -
  * jeden beh naraz a denni rozpocet Gemini pozadavku plati porad.
  */
+/**
+ * Navaze dalsi tik AI researche na tento, dokud je co delat. Kazdy hop je samostatny
+ * HTTP request s vlastnim casovym budgetem - proto se dlouha prace nekumuluje do
+ * jednoho requestu, ktery by hosting zabil, a presto se za jeden cron zvladne
+ * radove desetinasobek prace.
+ */
+function aiResearchChainNextTick(PDO $pdo, array $config, int $hop, string $lastMessage): string
+{
+    if ($hop >= AI_RESEARCH_MAX_CHAIN_HOPS) {
+        return 'Retez tiku ukoncen na ' . $hop . '. hopu, dalsi prace pokracuje pri dalsim cronu.';
+    }
+    $settings = loadSettings($pdo);
+    // Backoff a denni rozpocet maji prednost: kdyz plati, nema smysl posilat dalsi hop.
+    if ((int)($settings['ai_research_next_allowed_at'] ?? 0) > time()) {
+        return 'Retez tiku zastaven: provider drzi limit.';
+    }
+    $dailyBudget = aiResearchDailyRequestBudgetOrDefault($config);
+    if (aiResearchGeminiRequestsUsedLast24h($pdo) + aiResearchEstimatedGeminiRequestsPerSeed($config) > $dailyBudget) {
+        return 'Retez tiku zastaven: denni rozpocet pozadavku je vycerpany.';
+    }
+    if (str_contains($lastMessage, 'nebylo co zpracovat')) {
+        return 'Retez tiku ukoncen: fronta je prazdna.';
+    }
+    $token = trim((string)($config['cron_token'] ?? ''));
+    if ($token === '') {
+        return '';
+    }
+    fireAndForgetGet(appBaseUrl() . '?cron=' . rawurlencode($token) . '&ai_research=1&hop=' . ($hop + 1));
+    return 'Navazuje ' . ($hop + 1) . '. hop retezu.';
+}
+
 function runCronAiResearch(PDO $pdo, array $config, bool $force = false): string
 {
+    // Poznamka o vycerpane kvote plati i mezi requesty, jinak by kazdy tik zacinal
+    // znovu u providera, ktery uz rekl "kvota pryc".
+    aiResearchLoadProviderState($pdo);
     $settings = loadSettings($pdo);
     $intervalSeconds = aiResearchRunIntervalSeconds($config);
     // Kazdy tik cronu se zapise, i kdyz se nakonec nic nespusti. Bez toho neni z UI
@@ -9335,6 +9529,35 @@ function applySettingsToConfig(array $config, array $settings): array
     if (empty($config['admin_email'])) {
         $config['admin_email'] = $settings['from_email'] ?? ($config['from_email'] ?? '');
     }
+    // AI research se da prepnout a prekonfigurovat z aplikace, aby se kvuli vycerpane
+    // kvote nemuselo zasahovat do deployment configu. Prazdna hodnota = plati config.
+    $config['ai'] = is_array($config['ai'] ?? null) ? $config['ai'] : [];
+    foreach ([
+        'ai_research_provider' => 'research_provider',
+        'ai_openai_api_key' => 'openai_api_key',
+        'ai_openai_model' => 'openai_model',
+        'ai_gemini_api_key' => 'gemini_api_key',
+        'ai_gemini_research_model' => 'gemini_research_model',
+    ] as $settingKey => $configKey) {
+        if (trim((string)($settings[$settingKey] ?? '')) !== '') {
+            $config['ai'][$configKey] = trim((string)$settings[$settingKey]);
+        }
+    }
+    foreach ([
+        'ai_openai_daily_request_budget' => 'openai_research_daily_request_budget',
+        'ai_openai_rpm_budget' => 'openai_research_rpm_budget',
+        'ai_gemini_daily_request_budget' => 'gemini_research_daily_request_budget',
+        'ai_gemini_rpm_budget' => 'gemini_research_rpm_budget',
+    ] as $settingKey => $configKey) {
+        if (trim((string)($settings[$settingKey] ?? '')) !== '') {
+            $config['ai'][$configKey] = (int)$settings[$settingKey];
+        }
+    }
+    if (trim((string)($settings['ai_gemini_research_model'] ?? '')) !== '') {
+        // Research i ostatni volani maji jet na stejnem modelu, jinak by se nastaveni
+        // tvarilo, ze se zmenilo, a pritom by cast aplikace pouzivala stary.
+        $config['ai']['gemini_model'] = trim((string)$settings['ai_gemini_research_model']);
+    }
     foreach (['host', 'port', 'username', 'password', 'encryption', 'dkim_selector'] as $key) {
         $settingKey = 'smtp_' . $key;
         if (array_key_exists($settingKey, $settings) && $settings[$settingKey] !== '') {
@@ -9625,6 +9848,54 @@ function saveSetup(PDO $pdo): void
     setSetting($pdo, 'app_password_hash', $hash);
     setSetting($pdo, 'cron_token', $token);
     upsertAppUser($pdo, $email, $hash, isAiResearchAdminEmail($email));
+}
+
+/**
+ * Nastaveni AI researche z aplikace: kterym providerem se ma pracovat a jake klice
+ * pouzit. Klice se ukladaji jen kdyz uzivatel opravdu neco vyplnil, aby se prazdnym
+ * polem nesmazal fungujici klic; "smazat" je vlastni volba.
+ */
+function saveAiResearchSettings(PDO $pdo): string
+{
+    $provider = strtolower(trim((string)($_POST['ai_research_provider'] ?? 'auto')));
+    if (!in_array($provider, ['auto', 'openai', 'gemini'], true)) {
+        $provider = 'auto';
+    }
+    setSetting($pdo, 'ai_research_provider', $provider);
+    $changed = [];
+    foreach (['openai' => 'ai_openai_api_key', 'gemini' => 'ai_gemini_api_key'] as $name => $settingKey) {
+        if ((string)($_POST['clear_' . $name . '_key'] ?? '') === '1') {
+            setSetting($pdo, $settingKey, '');
+            $changed[] = $name . ': klic smazan (plati klic z deploymentu)';
+            continue;
+        }
+        $key = trim((string)($_POST[$settingKey] ?? ''));
+        if ($key !== '') {
+            setSetting($pdo, $settingKey, $key);
+            $changed[] = $name . ': novy klic ulozen';
+        }
+    }
+    foreach (['ai_openai_model', 'ai_gemini_research_model'] as $modelKey) {
+        if (array_key_exists($modelKey, $_POST)) {
+            setSetting($pdo, $modelKey, trim((string)$_POST[$modelKey]));
+        }
+    }
+    // Rozpocty urcuji dennni propustnost, proto patri sem a ne jen do deployment configu.
+    foreach (['ai_openai_daily_request_budget', 'ai_openai_rpm_budget',
+              'ai_gemini_daily_request_budget', 'ai_gemini_rpm_budget'] as $budgetKey) {
+        if (!array_key_exists($budgetKey, $_POST)) {
+            continue;
+        }
+        $value = trim((string)$_POST[$budgetKey]);
+        setSetting($pdo, $budgetKey, $value === '' ? '' : (string)max(0, (int)$value));
+    }
+    // Rucni zmena znamena "zkus to znovu", takze se zapomene i poznamka o vycerpanych kvotach.
+    foreach (['openai', 'gemini'] as $name) {
+        setSetting($pdo, 'ai_research_' . $name . '_exhausted_until', '');
+        aiResearchProviderExhausted($name, 0);
+    }
+    $label = ['auto' => 'automaticky (OpenAI, pri vycerpani Gemini)', 'openai' => 'OpenAI / ChatGPT', 'gemini' => 'Gemini'][$provider];
+    return 'AI research: provider ' . $label . ($changed ? '. ' . implode(', ', $changed) : '') . '.';
 }
 
 function saveSmtpSettings(PDO $pdo): void
@@ -19373,6 +19644,76 @@ function renderApp(PDO $pdo, ?array $flash): void
                 </form>
             </div>
         </div>
+        <?php
+            $researchProviderChoice = strtolower(trim((string)($researchSettings['ai_research_provider'] ?? 'auto')));
+            if (!in_array($researchProviderChoice, ['auto', 'openai', 'gemini'], true)) {
+                $researchProviderChoice = 'auto';
+            }
+            $researchProviderOrder = aiResearchProviderPreference($config);
+            $researchKeySources = [];
+            foreach (['openai' => 'ai_openai_api_key', 'gemini' => 'ai_gemini_api_key'] as $providerName => $settingKey) {
+                $fromApp = trim((string)($researchSettings[$settingKey] ?? '')) !== '';
+                $available = aiResearchProviderKey($config, $providerName) !== '';
+                $exhaustedUntil = (int)($researchSettings['ai_research_' . $providerName . '_exhausted_until'] ?? 0);
+                $researchKeySources[$providerName] = [
+                    'available' => $available,
+                    'from_app' => $fromApp,
+                    'exhausted_until' => $exhaustedUntil > time() ? $exhaustedUntil : 0,
+                ];
+            }
+        ?>
+        <details class="subpanel research-provider-config"<?= $researchProviderOrder ? '' : ' open' ?>>
+            <summary><strong>Nastavení AI</strong> &ndash; poskytovatel a klíče</summary>
+            <p class="muted">Pořadí použití: <strong><?= h($researchProviderOrder ? implode(' → ', array_map(static fn(string $p): string => $p === 'openai' ? 'OpenAI' : 'Gemini', $researchProviderOrder)) : 'žádný klíč není k dispozici') ?></strong>. Když první poskytovatel odpoví vyčerpanou kvótou, běh se <strong>ve stejném požadavku</strong> přepne na druhého a pokračuje; vyčerpaný se na chvíli přeskakuje.</p>
+            <ul class="muted">
+                <?php foreach ($researchKeySources as $providerName => $info): ?>
+                <li><strong><?= h($providerName === 'openai' ? 'OpenAI / ChatGPT' : 'Gemini') ?>:</strong>
+                    <?= $info['available'] ? 'klíč k dispozici' : 'klíč chybí' ?>
+                    (<?= $info['from_app'] ? 'z aplikace' : 'z deploymentu / GitHub secrets' ?>)<?php if ($info['exhausted_until']): ?>, <strong>kvóta vyčerpaná do <?= h(formatDateTime(date('c', $info['exhausted_until']))) ?></strong><?php endif; ?>
+                </li>
+                <?php endforeach; ?>
+            </ul>
+            <form method="post" class="stack">
+                <label>Poskytovatel
+                    <select name="ai_research_provider">
+                        <option value="auto"<?= $researchProviderChoice === 'auto' ? ' selected' : '' ?>>automaticky &ndash; OpenAI, při vyčerpání Gemini</option>
+                        <option value="openai"<?= $researchProviderChoice === 'openai' ? ' selected' : '' ?>>OpenAI / ChatGPT (Gemini jako záloha)</option>
+                        <option value="gemini"<?= $researchProviderChoice === 'gemini' ? ' selected' : '' ?>>Gemini (OpenAI jako záloha)</option>
+                    </select>
+                </label>
+                <label>OpenAI API klíč
+                    <input type="password" name="ai_openai_api_key" autocomplete="new-password" placeholder="<?= $researchKeySources['openai']['available'] ? 'uložený klíč zůstává, vyplň jen pro změnu' : 'sk-...' ?>">
+                </label>
+                <label>Model OpenAI
+                    <input type="text" name="ai_openai_model" value="<?= h((string)($researchSettings['ai_openai_model'] ?? '')) ?>" placeholder="<?= h(aiModelName($config, 'openai')) ?>">
+                </label>
+                <label>Gemini API klíč
+                    <input type="password" name="ai_gemini_api_key" autocomplete="new-password" placeholder="<?= $researchKeySources['gemini']['available'] ? 'uložený klíč zůstává, vyplň jen pro změnu' : 'AIza...' ?>">
+                </label>
+                <label>Model Gemini
+                    <input type="text" name="ai_gemini_research_model" value="<?= h((string)($researchSettings['ai_gemini_research_model'] ?? '')) ?>" placeholder="<?= h(trim((string)($config['ai']['gemini_research_model'] ?? '')) ?: aiModelName($config, 'gemini')) ?>">
+                </label>
+                <label>Denní rozpočet requestů &ndash; OpenAI
+                    <input type="number" min="0" name="ai_openai_daily_request_budget" value="<?= h((string)($researchSettings['ai_openai_daily_request_budget'] ?? '')) ?>" placeholder="<?= h((string)(int)($config['ai']['openai_research_daily_request_budget'] ?? 0)) ?>">
+                </label>
+                <label>Requestů za minutu &ndash; OpenAI
+                    <input type="number" min="1" name="ai_openai_rpm_budget" value="<?= h((string)($researchSettings['ai_openai_rpm_budget'] ?? '')) ?>" placeholder="<?= h((string)(int)($config['ai']['openai_research_rpm_budget'] ?? 0)) ?>">
+                </label>
+                <label>Denní rozpočet requestů &ndash; Gemini
+                    <input type="number" min="0" name="ai_gemini_daily_request_budget" value="<?= h((string)($researchSettings['ai_gemini_daily_request_budget'] ?? '')) ?>" placeholder="<?= h((string)(int)($config['ai']['gemini_research_daily_request_budget'] ?? 0)) ?>">
+                </label>
+                <label>Requestů za minutu &ndash; Gemini
+                    <input type="number" min="1" name="ai_gemini_rpm_budget" value="<?= h((string)($researchSettings['ai_gemini_rpm_budget'] ?? '')) ?>" placeholder="<?= h((string)(int)($config['ai']['gemini_research_rpm_budget'] ?? 0)) ?>">
+                </label>
+                <p class="muted">Denní rozpočet je hlavní strop propustnosti: jeden seed spotřebuje cca <?= h((string)$researchGeminiRequestsPerSeed) ?> requesty, takže rozpočet <?= h((string)$researchEffectiveDailyBudget) ?> vystačí na cca <?= h((string)(int)floor($researchEffectiveDailyBudget / max(1, $researchGeminiRequestsPerSeed))) ?> subjektů denně. Prázdné pole = platí hodnota z deploymentu.</p>
+                <label class="checkbox"><input type="checkbox" name="clear_openai_key" value="1"> Smazat klíč OpenAI z aplikace (použije se klíč z deploymentu)</label>
+                <label class="checkbox"><input type="checkbox" name="clear_gemini_key" value="1"> Smazat klíč Gemini z aplikace (použije se klíč z deploymentu)</label>
+                <div class="actions-row">
+                    <button type="submit" name="action" value="save_ai_research_settings">Uložit nastavení AI</button>
+                </div>
+                <p class="muted">Klíče se ukládají do databáze aplikace a mají přednost před hodnotou z deployment configu (GitHub secrets). Uložení zároveň zapomene poznámku o vyčerpané kvótě, takže se hned zkusí znovu.</p>
+            </form>
+        </details>
         <div class="table-shell">
             <table class="research-log-table">
                 <thead><tr><th>Stav</th><th>Naplánováno</th><th>Práce</th><th>Předmět</th><th>Model</th><th>Req.</th><th>Tokeny</th><th>Trvání</th><th>Zpráva</th></tr></thead>
