@@ -1588,6 +1588,12 @@ function normalizeState(input) {
     aiEvaluation: input.aiEvaluation && typeof input.aiEvaluation === "object" ? input.aiEvaluation : null,
     calculationReports: Array.isArray(input.calculationReports) ? input.calculationReports.slice(0, CALCULATION_REPORT_HISTORY_LIMIT) : [],
     latestCalculationReport: input.latestCalculationReport || (Array.isArray(input.calculationReports) ? input.calculationReports[0] || null : null),
+    // Compact, current-only optimization advice for active paper portfolios. Keeping
+    // one snapshot in core makes the Settings tab cheap and avoids another growing
+    // state segment on the shared host.
+    latestPortfolioOptimizationReport: input.latestPortfolioOptimizationReport && typeof input.latestPortfolioOptimizationReport === "object"
+      ? input.latestPortfolioOptimizationReport
+      : null,
     learningProfile: normalizeLearningProfile(input.learningProfile),
     aiUsageLog: Array.isArray(input.aiUsageLog) ? input.aiUsageLog.slice(-Math.max(20, AI_USAGE_HISTORY_LIMIT)) : [],
     aiUsage: input.aiUsage && typeof input.aiUsage === "object" ? input.aiUsage : null,
@@ -3102,6 +3108,10 @@ function mergeStates(primary, secondary) {
       .slice(0, CALCULATION_REPORT_HISTORY_LIMIT),
   };
   merged.latestCalculationReport = merged.calculationReports?.[0] || base.latestCalculationReport || other.latestCalculationReport || null;
+  merged.latestPortfolioOptimizationReport = (Date.parse(base.latestPortfolioOptimizationReport?.generatedAt || "") || 0)
+    >= (Date.parse(other.latestPortfolioOptimizationReport?.generatedAt || "") || 0)
+    ? (base.latestPortfolioOptimizationReport || other.latestPortfolioOptimizationReport || null)
+    : (other.latestPortfolioOptimizationReport || base.latestPortfolioOptimizationReport || null);
   merged.paperPortfolioArchives = normalizePaperPortfolioArchives([
     ...(base.paperPortfolioArchives || []),
     ...(other.paperPortfolioArchives || []),
@@ -10353,6 +10363,110 @@ function updateCalculationReport(state) {
   return report;
 }
 
+// Portfolio advice uses only trades whose realised P/L is already known. It deliberately
+// tests one setting at a time against the portfolio's own closed-trade baseline: this is
+// a transparent optimisation aid, not a claim that an unobserved counterfactual trade
+// would have won.
+function portfolioOptimisationTrades(portfolio) {
+  return (Array.isArray(portfolio?.trades) ? portfolio.trades : []).filter((trade) => {
+    const pnl = Number(trade?.realizedPnlUsdc);
+    return Number.isFinite(pnl) && !OPEN_STATUSES.has(String(trade?.status || "").toUpperCase());
+  });
+}
+
+function tradeEntryProbability(trade) {
+  const value = Number(trade?.marketProbability ?? trade?.entryProbability ?? trade?.entryPrice);
+  return Number.isFinite(value) ? value : null;
+}
+
+function tradeEntryVolume(trade) {
+  const value = Number(trade?.firstVolumeUsdc ?? trade?.volumeUsdc ?? trade?.liquidityUsdc ?? trade?.volume24hr);
+  return Number.isFinite(value) ? value : null;
+}
+
+function tradeMarketTypeForOptimisation(trade) {
+  const explicit = String(trade?.marketType || "").toLowerCase();
+  if (explicit === "binary" || explicit === "multi") return explicit;
+  return /^(yes|no)$/i.test(String(trade?.outcome || "")) ? "binary" : "multi";
+}
+
+function portfolioOptimisationCandidate(trades, filter, value, label) {
+  const subset = trades.filter(filter);
+  if (subset.length < 12) return null;
+  const pnlUsdc = subset.reduce((total, trade) => total + Number(trade.realizedPnlUsdc || 0), 0);
+  return {
+    parameter: label,
+    value,
+    trades: subset.length,
+    pnlUsdc: Number(pnlUsdc.toFixed(4)),
+    pnlPerTradeUsdc: Number((pnlUsdc / subset.length).toFixed(4)),
+  };
+}
+
+function buildPortfolioOptimisationReport(state) {
+  const generatedAt = nowIso();
+  const portfolios = Object.values(state.paperPortfolios || {})
+    .filter((portfolio) => portfolio && typeof portfolio === "object" && portfolio.archived !== true)
+    .map((portfolio) => {
+      const trades = portfolioOptimisationTrades(portfolio);
+      const baselinePnl = trades.reduce((total, trade) => total + Number(trade.realizedPnlUsdc || 0), 0);
+      const baseline = {
+        trades: trades.length,
+        pnlUsdc: Number(baselinePnl.toFixed(4)),
+        pnlPerTradeUsdc: trades.length ? Number((baselinePnl / trades.length).toFixed(4)) : null,
+      };
+      const candidates = [];
+      for (const threshold of [0.5, 0.6, 0.7, 0.8, 0.9, 0.95]) {
+        const row = portfolioOptimisationCandidate(trades, (trade) => (tradeEntryProbability(trade) ?? -1) >= threshold, threshold, "Probability threshold");
+        if (row) candidates.push(row);
+      }
+      for (const maxDays of [1, 3, 7, 14, 30]) {
+        const row = portfolioOptimisationCandidate(trades, (trade) => {
+          const days = Number(trade?.daysToResolution);
+          return Number.isFinite(days) && days >= 0 && days <= maxDays;
+        }, maxDays, "Max resolution days");
+        if (row) candidates.push(row);
+      }
+      for (const minVolume of [0, 1000, 5000, 10000, 20000, 50000]) {
+        const row = portfolioOptimisationCandidate(trades, (trade) => (tradeEntryVolume(trade) ?? -1) >= minVolume, minVolume, "Minimum volume");
+        if (row) candidates.push(row);
+      }
+      for (const marketType of ["binary", "multi"]) {
+        const row = portfolioOptimisationCandidate(trades, (trade) => tradeMarketTypeForOptimisation(trade) === marketType, marketType, "Market type");
+        if (row) candidates.push(row);
+      }
+      const recommendations = candidates
+        .filter((row) => baseline.pnlPerTradeUsdc != null && row.pnlPerTradeUsdc > baseline.pnlPerTradeUsdc + 0.005)
+        .sort((left, right) => right.pnlPerTradeUsdc - left.pnlPerTradeUsdc || right.trades - left.trades)
+        .reduce((rows, row) => {
+          if (!rows.some((entry) => entry.parameter === row.parameter)) rows.push(row);
+          return rows;
+        }, [])
+        .slice(0, 4)
+        .map((row) => ({
+          ...row,
+          improvementPerTradeUsdc: Number((row.pnlPerTradeUsdc - baseline.pnlPerTradeUsdc).toFixed(4)),
+          rationale: `${row.trades} resolved trades average ${row.pnlPerTradeUsdc >= 0 ? "+" : ""}${row.pnlPerTradeUsdc.toFixed(4)} USDC versus ${baseline.pnlPerTradeUsdc >= 0 ? "+" : ""}${baseline.pnlPerTradeUsdc.toFixed(4)} USDC for the current portfolio history.`,
+        }));
+      return {
+        strategyId: String(portfolio.id || ""),
+        label: String(portfolio.label || portfolio.id || "Portfolio"),
+        baseline,
+        recommendations,
+        note: trades.length < 12
+          ? "Waiting for at least 12 resolved trades before proposing a parameter change."
+          : (recommendations.length ? "Recommendations are based on realised P/L after recorded fees." : "No single setting has enough evidence to improve realised P/L yet."),
+      };
+    });
+  return { id: `portfolio-optimisation-${generatedAt}`, generatedAt, portfolios };
+}
+
+function updatePortfolioOptimisationReport(state) {
+  const report = buildPortfolioOptimisationReport(state);
+  state.latestPortfolioOptimizationReport = report;
+  return report;
+}
+
 function updatePaperPortfolio(portfolioState) {
   const realizedPnl = portfolioState.trades.reduce((sum, trade) => sum + Number(trade.realizedPnlUsdc || 0), 0);
   const openPnl = portfolioState.trades
@@ -10945,6 +11059,7 @@ async function run() {
   if (scanOnly) {
     state.generatedAt = nowIso();
     updatePortfolio(state);
+    timedSync("portfolioOptimisation", () => updatePortfolioOptimisationReport(state));
     timedSync("calculationReport", () => updateCalculationReport(state));
     markCadenceStage(state, "scan");
     await writeState(state);
@@ -10973,6 +11088,7 @@ async function run() {
   // changing any portfolio positions.
   if (reportOnly) {
     state.generatedAt = nowIso();
+    timedSync("portfolioOptimisation", () => updatePortfolioOptimisationReport(state));
     timedSync("calculationReport", () => updateCalculationReport(state));
     const decisions = Object.values(state.paperPortfolios).map((portfolioState) => ({
       strategyId: portfolioState.id,
@@ -11016,6 +11132,7 @@ async function run() {
   state.learningProfile = buildLearningProfile(allTrades, state.learningProfile);
   state.generatedAt = nowIso();
   timedSync("updatePortfolio", () => updatePortfolio(state));
+  timedSync("portfolioOptimisation", () => updatePortfolioOptimisationReport(state));
   // Not on an execution pass, and not merely to save the work.
   //
   // buildCalculationReport measures the scraped catalogue, and its whole performance half

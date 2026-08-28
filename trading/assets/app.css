@@ -2101,6 +2101,18 @@ body.modal-open {
   gap: 16px;
 }
 
+.portfolio-optimization-report {
+  display: grid;
+  gap: 16px;
+}
+
+.portfolio-optimization-card {
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #ffffff;
+}
+
 .calculation-summary {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

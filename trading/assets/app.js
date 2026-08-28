@@ -123,7 +123,7 @@ const state = {
   candidateBotStateBusy: false,
   candidateRefreshBusy: false,
   botStateFull: false,
-  settingsSection: "evaluation-log",
+  settingsSection: "calculations",
   calculationSource: "all",
   calculationMarket: "all",
   calculationOpenFilter: "all",
@@ -272,6 +272,7 @@ const els = {
   calculationTabButtons: document.querySelectorAll("[data-calculation-tab]"),
   calculationMinFilters: document.querySelectorAll("[data-calculation-min-filter]"),
   calculationReport: document.querySelector("[data-calculation-report]"),
+  portfolioOptimizationReport: document.querySelector("[data-portfolio-optimization-report]"),
   systemStatus: document.querySelector("[data-system-status]"),
   evaluationProbabilityFilter: document.querySelector("[data-evaluation-probability-filter]"),
   evaluationProbabilityMaxFilter: document.querySelector("[data-evaluation-probability-max-filter]"),
@@ -1736,13 +1737,15 @@ function refreshDashboardAfterUserNavigation() {
 }
 
 function setSettingsSection(section) {
-  state.settingsSection = section || "evaluation-log";
+  state.settingsSection = section || "calculations";
   els.settingsSectionButtons.forEach((item) => {
     item.classList.toggle("active", item.dataset.settingsSection === state.settingsSection);
+    item.setAttribute("aria-selected", item.dataset.settingsSection === state.settingsSection ? "true" : "false");
   });
   els.settingsPanels.forEach((panel) => {
     panel.hidden = panel.dataset.settingsPanel !== state.settingsSection;
   });
+  if (state.settingsSection === "portfolio-optimization") renderPortfolioOptimizationReport();
 }
 
 function setEvaluationStatus(status) {
@@ -4887,24 +4890,22 @@ function renderArchivedPortfolios() {
         const archive = id === "live-5050"
           ? null
           : (Array.isArray(state.botState?.paperPortfolioArchives)
-            ? state.botState.paperPortfolioArchives.find((entry) => entry?.strategyId === id)
+            ? state.botState.paperPortfolioArchives
+              .filter((entry) => entry?.strategyId === id)
+              .sort((left, right) => (
+                Number(right?.summary?.resolvedCount || 0) - Number(left?.summary?.resolvedCount || 0)
+                || (Date.parse(right?.archivedAt || "") || 0) - (Date.parse(left?.archivedAt || "") || 0)
+              ))[0]
             : null);
         // An archived config can still have a blank seeded portfolio object in the
         // current paper state. Its empty history summary is only a placeholder, while
         // the archive snapshot is the immutable record of the actual trades. Prefer it
         // so an archived portfolio never renders as "0 of 0" after a state refresh.
         const archivedSummary = archive?.summary || stored?.historySummary || null;
-        const archivedEquity = archive?.summary?.equityUsdc ?? stored?.portfolio?.equityUsdc;
         const detail = id === "live-5050"
           ? "new bids paused; existing orders and positions are still watched"
           : (archivedSummary
-            ? [
-              Number.isFinite(Number(archivedEquity)) ? `${money(Number(archivedEquity))} equity` : null,
-              `${formatInteger(archivedSummary.tradeCount) || 0} trades`,
-              Number(archivedSummary.resolvedCount) > 0
-                ? `${formatInteger(archivedSummary.correctCount) || 0} / ${formatInteger(archivedSummary.resolvedCount) || 0} accuracy (${probability(Number(archivedSummary.accuracy))})`
-                : "no resolved trades yet",
-            ].filter(Boolean).join(" / ")
+            ? `${formatInteger(archivedSummary.resolvedCount) || 0} resolved trades`
             : "archive summary is not available yet");
         const rules = archivedPortfolioRuleRows(row, archivedSummary);
         return `
@@ -4936,9 +4937,8 @@ function archivedPortfolioRuleRows(config = {}, summary = null) {
   const includedTags = normalizeMarketTagList(config.includeOnlyMarketTags);
   const excludedTags = normalizeMarketTagList(config.excludedMarketTags);
   const resolvedTrades = Number(summary?.resolvedCount || 0);
-  const totalTrades = Number(summary?.tradeCount || 0);
   return [
-    ["Resolved trades", `${formatInteger(resolvedTrades)} of ${formatInteger(totalTrades)}`],
+    ["Resolved trades", formatInteger(resolvedTrades)],
     ["Min probability", minProbability == null ? "not recorded" : percent(minProbability)],
     ["Max probability", maxProbability == null ? "no upper limit" : percent(maxProbability)],
     ["Included tags", includedTags.length ? includedTags.join(", ") : "all tags"],
@@ -6022,7 +6022,10 @@ function activeTabTarget() {
 }
 
 function shouldLoadCandidateBotState() {
-  return state.page === "portfolios";
+  // Portfolios now rank directly from the compact Polymarket execution shortlist.
+  // Loading the legacy AI-evaluation catalogue here can decode thousands of rows on
+  // the shared host, then prevent the useful shortlist request from starting.
+  return false;
 }
 
 function shouldRenderCandidateBotState() {
@@ -8459,6 +8462,7 @@ function renderBotState(botState) {
   renderPortfolioCandidates();
   renderRunLog();
   renderCalculationReport();
+  renderPortfolioOptimizationReport();
   openOpportunityFromCurrentUrl();
 }
 
@@ -9100,6 +9104,7 @@ function renderLiveState(liveState) {
   renderPortfolioCandidates();
   renderRunLog();
   renderCalculationReport();
+  renderPortfolioOptimizationReport();
   openOpportunityFromCurrentUrl();
 }
 
@@ -11271,6 +11276,64 @@ function renderCalculationReport() {
         "Each tag is broken down by the Polymarket probability captured when the opportunity was first scraped (50%, 60%, ... 90%).",
       )}
     </div>
+  `;
+}
+
+function portfolioOptimisationValue(row) {
+  if (row?.parameter === "Probability threshold") return probability(Number(row.value));
+  if (row?.parameter === "Max resolution days") return `${Number(row.value)} d`;
+  if (row?.parameter === "Minimum volume") return `>= ${money(Number(row.value))}`;
+  if (row?.parameter === "Market type") return calculationMarketLabel(row.value);
+  return String(row?.value ?? "-");
+}
+
+function renderPortfolioOptimizationReport() {
+  if (!els.portfolioOptimizationReport) return;
+  const report = state.botState?.latestPortfolioOptimizationReport;
+  if (!report || !Array.isArray(report.portfolios)) {
+    els.portfolioOptimizationReport.innerHTML = '<div class="empty">No portfolio optimisation report yet. The next hourly portfolio pass will build it from closed trades.</div>';
+    return;
+  }
+  els.portfolioOptimizationReport.innerHTML = `
+    <div class="calculation-summary">
+      <div>
+        <span class="label">Last analysis</span>
+        <strong>${escapeHtml(report.generatedAt ? formatDate(report.generatedAt) : "-")}</strong>
+        <span>Only realised P/L and recorded trading fees are used.</span>
+      </div>
+      <div>
+        <span class="label">Method</span>
+        <strong>One parameter at a time</strong>
+        <span>A recommendation needs at least 12 resolved trades and a better realised P/L per trade.</span>
+      </div>
+    </div>
+    ${report.portfolios.map((portfolio) => {
+      const recommendations = Array.isArray(portfolio.recommendations) ? portfolio.recommendations : [];
+      return `
+        <section class="calculation-section portfolio-optimization-card">
+          <h3>${escapeHtml(portfolio.label || portfolio.strategyId || "Portfolio")}</h3>
+          <p class="calculation-note">${formatInteger(Number(portfolio.baseline?.trades || 0))} resolved trades / realised P/L ${signedMoney(Number(portfolio.baseline?.pnlUsdc || 0))} / ${portfolio.baseline?.pnlPerTradeUsdc == null ? "-" : `${signedMoney(Number(portfolio.baseline.pnlPerTradeUsdc))} per trade`}</p>
+          ${recommendations.length ? `
+            <div class="calculation-table-wrap">
+              <table class="calculation-table">
+                <thead><tr><th>Parameter</th><th>Suggested value</th><th>Trades</th><th>P/L</th><th>P/L per trade</th><th>Improvement</th><th>Why</th></tr></thead>
+                <tbody>${recommendations.map((row) => `
+                  <tr>
+                    <td>${escapeHtml(row.parameter || "-")}</td>
+                    <td>${escapeHtml(portfolioOptimisationValue(row))}</td>
+                    <td>${formatInteger(Number(row.trades || 0))}</td>
+                    <td class="${pnlClass(Number(row.pnlUsdc || 0))}">${signedMoney(Number(row.pnlUsdc || 0))}</td>
+                    <td class="${pnlClass(Number(row.pnlPerTradeUsdc || 0))}">${signedMoney(Number(row.pnlPerTradeUsdc || 0))}</td>
+                    <td class="positive">${signedMoney(Number(row.improvementPerTradeUsdc || 0))} per trade</td>
+                    <td>${escapeHtml(row.rationale || "-")}</td>
+                  </tr>
+                `).join("")}</tbody>
+              </table>
+            </div>
+          ` : `<p class="calculation-note">${escapeHtml(portfolio.note || "No reliable recommendation yet.")}</p>`}
+        </section>
+      `;
+    }).join("")}
   `;
 }
 

@@ -142,7 +142,11 @@ function state_segments_for_summary(string $summary): array
         case 'portfolio-overview':
             return [];
         case 'candidates':
-            return ['evaluations'];
+            // The browser now builds portfolio shortlists from the compact
+            // `execution` response.  Do not decode the legacy AI catalogue here:
+            // it can hold thousands of rows and exceeded the shared host's memory
+            // before the browser could even request the useful shortlist.
+            return [];
         case 'execution':
             // Only tradable markets can be executed, so the resolved archive is
             // never decoded for this view no matter how large it grows.
@@ -325,6 +329,29 @@ function paper_state_with_consistent_portfolios(array $payload, string $summary,
             continue;
         }
         $payload['paperPortfolios'][$id] = empty_configured_paper_portfolio((string) $id, $portfolioConfig);
+    }
+
+    // An archive snapshot is the preferred historical record, but older portfolios
+    // were archived before snapshotting existed. Their trades still live in their
+    // small per-portfolio segments. Load those segments only for the dashboard
+    // archive summary so "0 resolved" never replaces a real historical count.
+    if ($summary === 'dashboard') {
+        $manifest = is_array($payload['stateSegments'] ?? null) ? $payload['stateSegments'] : [];
+        foreach ($configuredPaper as $id => $portfolioConfig) {
+            if (!is_array($portfolioConfig) || ($portfolioConfig['archived'] ?? false) !== true) {
+                continue;
+            }
+            $segmentName = 'portfolio:' . $id;
+            $segmentMeta = is_array($manifest[$segmentName] ?? null) ? $manifest[$segmentName] : [];
+            $file = (string) ($segmentMeta['file'] ?? '');
+            if (!preg_match('/^[A-Za-z0-9._-]+\.json$/', $file)) {
+                continue;
+            }
+            $segment = decode_state_file(dirname(state_file_paths()['paper']) . '/' . $file, false);
+            if (is_array($segment['paperPortfolio'] ?? null)) {
+                $payload['paperPortfolios'][$id] = $segment['paperPortfolio'];
+            }
+        }
     }
     return $payload;
 }
@@ -1563,9 +1590,9 @@ function paper_portfolio_history_summary(array $portfolio): array
     ];
 }
 
-function compact_paper_portfolio_archives(array $archives): array
+function compact_paper_portfolio_archives(array $archives, array $currentPortfolios = []): array
 {
-    $rows = [];
+    $rowsByStrategy = [];
     foreach ($archives as $archive) {
         if (!is_array($archive) || !isset($archive['id'], $archive['strategyId'])) {
             continue;
@@ -1573,17 +1600,36 @@ function compact_paper_portfolio_archives(array $archives): array
         $snapshot = is_array($archive['snapshot'] ?? null) ? $archive['snapshot'] : [];
         $history = paper_portfolio_history_summary($snapshot);
         $portfolio = is_array($snapshot['portfolio'] ?? null) ? $snapshot['portfolio'] : [];
-        $rows[] = [
+        $strategyId = (string) $archive['strategyId'];
+        $current = is_array($currentPortfolios[$strategyId] ?? null) ? $currentPortfolios[$strategyId] : [];
+        $currentHistory = paper_portfolio_history_summary($current);
+        // An archived strategy can still have a small placeholder state beside its
+        // immutable snapshot. Keep whichever one actually carries more resolved
+        // decisions; choosing merely the newest record was the source of 0-of-0
+        // archive cards after a reset.
+        if ((int) ($currentHistory['resolvedCount'] ?? 0) > (int) ($history['resolvedCount'] ?? 0)) {
+            $history = $currentHistory;
+            $portfolio = is_array($current['portfolio'] ?? null) ? $current['portfolio'] : $portfolio;
+        }
+        $row = [
             'id' => (string) $archive['id'],
-            'strategyId' => (string) $archive['strategyId'],
-            'label' => (string) ($archive['label'] ?? $archive['strategyId']),
+            'strategyId' => $strategyId,
+            'label' => (string) ($archive['label'] ?? $strategyId),
             'archivedAt' => (string) ($archive['archivedAt'] ?? ''),
             'reason' => (string) ($archive['reason'] ?? ''),
             'summary' => array_merge([
                 'equityUsdc' => is_numeric($portfolio['equityUsdc'] ?? null) ? (float) $portfolio['equityUsdc'] : null,
             ], $history),
         ];
+        $existing = $rowsByStrategy[$strategyId] ?? null;
+        if ($existing === null
+            || (int) ($row['summary']['resolvedCount'] ?? 0) > (int) ($existing['summary']['resolvedCount'] ?? 0)
+            || ((int) ($row['summary']['resolvedCount'] ?? 0) === (int) ($existing['summary']['resolvedCount'] ?? 0)
+                && (strtotime((string) ($row['archivedAt'] ?? '')) ?: 0) > (strtotime((string) ($existing['archivedAt'] ?? '')) ?: 0))) {
+            $rowsByStrategy[$strategyId] = $row;
+        }
     }
+    $rows = array_values($rowsByStrategy);
     usort($rows, static function (array $left, array $right): int {
         return (strtotime((string) ($right['archivedAt'] ?? '')) ?: 0)
             <=> (strtotime((string) ($left['archivedAt'] ?? '')) ?: 0);
@@ -1626,7 +1672,10 @@ function compact_state_payload(string $target, array $data, string $summary, ?st
     }
 
     if (isset($data['paperPortfolioArchives']) && is_array($data['paperPortfolioArchives'])) {
-        $data['paperPortfolioArchives'] = compact_paper_portfolio_archives($data['paperPortfolioArchives']);
+        $data['paperPortfolioArchives'] = compact_paper_portfolio_archives(
+            $data['paperPortfolioArchives'],
+            is_array($data['paperPortfolios'] ?? null) ? $data['paperPortfolios'] : []
+        );
     }
 
     if ($summary === 'portfolio-overview') {
@@ -1661,19 +1710,18 @@ function compact_state_payload(string $target, array $data, string $summary, ?st
     }
 
     if ($summary === 'candidates') {
-        $evaluations = is_array($data['evaluations'] ?? null) ? $data['evaluations'] : [];
-        $compact = [
+        // The client now derives every portfolio shortlist from the compact
+        // Polymarket `execution` response.  Keeping this legacy route small is
+        // important: decoding and compacting the full AI archive (5,000+ rows)
+        // exceeds the hosting memory limit and used to answer HTTP 500 before the
+        // browser could request the actual shortlist.
+        return [
             'schemaVersion' => $data['schemaVersion'] ?? null,
             'generatedAt' => $data['generatedAt'] ?? null,
+            'evaluations' => [],
+            'evaluationDetailsMode' => 'compact',
+            'legacyCandidatesDisabled' => true,
         ];
-        $compact['evaluations'] = array_map(
-            static fn($item): array => is_array($item) ? compact_evaluation($item) : [],
-            array_values(array_filter($evaluations, 'is_array'))
-        );
-        // Keep this response focused on stored AI evaluations. Polymarket
-        // portfolios use the lighter `execution` summary below for quotes.
-        $compact['evaluationDetailsMode'] = 'compact';
-        return $compact;
     }
 
     if ($summary === 'execution') {

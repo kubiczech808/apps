@@ -283,7 +283,11 @@
                 <h2>Automation settings</h2>
               </div>
             </div>
-            <div class="settings-panel-body">
+            <div class="settings-subtabs" role="tablist" aria-label="Settings sections">
+              <button class="segment-button active" type="button" role="tab" aria-selected="true" data-settings-section="calculations">Market statistics</button>
+              <button class="segment-button" type="button" role="tab" aria-selected="false" data-settings-section="portfolio-optimization">Portfolio optimization</button>
+            </div>
+            <div class="settings-panel-body" data-settings-panel="calculations">
               <div class="system-status-card" data-system-status hidden></div>
               <!-- Archived portfolios keep every trade they made. This is where they are
                    found again, because they are deliberately not on the dashboard. -->
@@ -334,6 +338,9 @@
                 </div>
               </div>
               <div class="calculation-report" data-calculation-report></div>
+            </div>
+            <div class="settings-panel-body" data-settings-panel="portfolio-optimization" hidden>
+              <div class="portfolio-optimization-report" data-portfolio-optimization-report></div>
             </div>
           </article>
         </section>
