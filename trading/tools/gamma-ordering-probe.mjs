@@ -98,42 +98,88 @@ async function main() {
 
   // The one the catalogue scan actually pages through. If ordering is ignored here, the
   // "preferred near-resolution" scope is a label rather than a behaviour.
+  //
+  // The scan's real query is not a bare one: scanEventRequestParams always adds
+  // `end_date_min` and `end_date_max`, and the rotating scopes add `tag_id`. Ordering
+  // that works bare and breaks under a filter would still leave the scan unordered, so
+  // this asks the question with the parameters the scan actually sends.
+  const scanBounds = `&end_date_min=${encodeURIComponent(new Date(Date.now() - 6 * 3600000).toISOString())}`
+    + `&end_date_max=${encodeURIComponent(new Date(Date.now() + 7 * 86400000).toISOString())}`;
   console.log(`\n=== events/keyset (the endpoint the catalogue scan pages) ===`);
-  for (const [field, ascending, reader] of [
-    ["endDate", "true", (row) => time(row.endDate)],
-    ["volume24hr", "false", (row) => num(row.volume24hr)],
-    ["volume", "false", (row) => num(row.volume ?? row.volumeNum)],
+  for (const [label, field, ascending, reader, extra] of [
+    ["bare", "endDate", "true", (row) => time(row.endDate), ""],
+    ["with the scan's date bounds", "endDate", "true", (row) => time(row.endDate), scanBounds],
+    ["bare", "volume24hr", "false", (row) => num(row.volume24hr), ""],
+    ["bare", "volume", "false", (row) => num(row.volume ?? row.volumeNum), ""],
+    ["with the scan's date bounds", "volume24hr", "false", (row) => num(row.volume24hr), scanBounds],
   ]) {
-    const result = await fetchJson(
-      `${GAMMA}/events/keyset?limit=${LIMIT}&active=true&closed=false&order=${field}&ascending=${ascending}`,
-    );
+    const url = `${GAMMA}/events/keyset?limit=${LIMIT}&active=true&closed=false`
+      + `&order=${field}&ascending=${ascending}${extra}`;
+    const result = await fetchJson(url);
     if (!result.ok) {
-      console.log(`   order=${field}: HTTP ${result.status} ${result.error || ""}`);
+      console.log(`   order=${field} (${label}): HTTP ${result.status} ${result.error || ""}`);
       continue;
     }
     const events = Array.isArray(result.body?.events) ? result.body.events : [];
-    console.log(`   order=${field}&ascending=${ascending}: ${events.length} events`
-      + `, cursor=${result.body?.pagination?.nextCursor ? "yes" : "no"}`);
-    describe(`   sorted by ${field}`, events.map(reader), ascending === "true");
+    // loadEventMarketScanBatch reads `next_cursor`, so that is the field that decides
+    // whether the scan can page at all -- not a camelCase guess.
+    const cursor = typeof result.body?.next_cursor === "string" ? result.body.next_cursor.trim() : "";
+    console.log(`   order=${field}&ascending=${ascending} (${label}): ${events.length} events`
+      + `, next_cursor=${cursor ? "yes" : "NO"}`);
+    describe(`   page 1 sorted by ${field}`, events.map(reader), ascending === "true");
     for (const event of events.slice(0, 3)) {
       console.log(`      ${String(event.endDate || "-").slice(0, 16)}  vol24h=${event.volume24hr}`
         + `  vol=${event.volume}  ${String(event.title || event.slug || "").slice(0, 40)}`);
     }
+
+    // The decisive one for this codebase. The scan persists a cursor and continues from
+    // it on the next run, so ordering only means anything if the continuation keeps it:
+    // page 2 must be sorted too, and must start after page 1 rather than back at the top.
+    if (!cursor) continue;
+    const next = await fetchJson(`${url}&after_cursor=${encodeURIComponent(cursor)}`);
+    if (!next.ok) {
+      console.log(`      page 2: HTTP ${next.status}`);
+      continue;
+    }
+    const nextEvents = Array.isArray(next.body?.events) ? next.body.events : [];
+    describe(`   page 2 sorted by ${field}`, nextEvents.map(reader), ascending === "true");
+    const lastOfFirst = reader(events[events.length - 1] ?? {});
+    const firstOfNext = reader(nextEvents[0] ?? {});
+    const continues = lastOfFirst == null || firstOfNext == null
+      ? "cannot tell"
+      : (ascending === "true" ? firstOfNext >= lastOfFirst : firstOfNext <= lastOfFirst)
+        ? "yes"
+        : "NO -- page 2 restarts, the cursor drops the ordering";
+    console.log(`      page 2 continues page 1: ${continues}`);
   }
 
-  // Whether a volume floor can be pushed to the server instead of filtered locally.
+  // Whether a volume or liquidity floor can be pushed to the server instead of filtered
+  // locally. Each parameter is checked against the field it names -- a volume floor read
+  // off the liquidity column, or the reverse, measures nothing.
   console.log(`\n=== server-side volume/liquidity floors ===`);
-  for (const param of ["volume_min", "volume_num_min", "volume24hr_min", "liquidity_min", "liquidity_num_min"]) {
-    const result = await fetchJson(`${GAMMA}/events?limit=${LIMIT}&active=true&closed=false&${param}=50000`);
+  const FLOOR = 50000;
+  for (const [param, reader] of [
+    ["volume_min", (row) => num(row.volume ?? row.volumeNum)],
+    ["volume_num_min", (row) => num(row.volumeNum ?? row.volume)],
+    ["volume24hr_min", (row) => num(row.volume24hr)],
+    ["liquidity_min", (row) => num(row.liquidity ?? row.liquidityNum)],
+    ["liquidity_num_min", (row) => num(row.liquidityNum ?? row.liquidity)],
+  ]) {
+    const result = await fetchJson(`${GAMMA}/events?limit=${LIMIT}&active=true&closed=false&${param}=${FLOOR}`);
     if (!result.ok) {
       console.log(`   ${param.padEnd(20)} HTTP ${result.status}`);
       continue;
     }
     const events = Array.isArray(result.body) ? result.body : [];
-    const vols = events.map((event) => num(event.volume ?? event.volumeNum) ?? 0);
-    const below = vols.filter((value) => value < 50000).length;
+    const values = events.map(reader);
+    const missing = values.filter((value) => value == null).length;
+    const below = values.filter((value) => value != null && value < FLOOR).length;
+    const verdict = !events.length ? "no rows"
+      : below ? "IGNORED"
+        : missing === values.length ? "field not returned -- cannot tell"
+          : "HONOURED";
     console.log(`   ${param.padEnd(20)} ${events.length} events, ${below} below the floor`
-      + ` -> ${events.length && below === 0 ? "HONOURED" : (below ? "IGNORED" : "no rows")}`);
+      + `${missing ? `, ${missing} without the field` : ""} -> ${verdict}`);
   }
 }
 
