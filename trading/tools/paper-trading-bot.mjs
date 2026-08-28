@@ -6421,8 +6421,18 @@ function numericOrNull(value) {
 // time an order is placed. A Polymarket-threshold portfolio must be judged by
 // the executable CLOB price that is also used as the order entry, otherwise a
 // 59% order can incorrectly pass a 75% threshold from an older 81% quote.
+//
+// A maker order is different again: its actual entry is the best bid. Comparing
+// the threshold to the offer/market quote while creating the order at a much
+// lower bid made a 29% limit order pass a 70% portfolio. Missing bid data is not
+// an acceptable substitute for the older market quote in this mode: it means we
+// cannot prove the probability of the order we are about to place.
 function portfolioProbabilityForStrategy(item = {}, strategy = {}) {
   if (strategy.probabilitySource === "polymarket") {
+    if (strategy.useLimitOrders) {
+      const limitEntry = numericOrNaN(item.bestBid);
+      return Number.isFinite(limitEntry) && limitEntry > 0 && limitEntry < 1 ? limitEntry : NaN;
+    }
     return numericOrNaN(item.marketPrice);
   }
   return numericOrNaN(item.aiProbability);
@@ -7424,6 +7434,10 @@ function closeTradeForRotation(trade, review, strategy) {
 function maybeOpenScheduledTrade(portfolioState, eligible, strategy = PAPER_STRATEGIES.conservative, evaluations = [], options = {}) {
   const today = pragueDateKey();
   const currentHour = pragueHourKey();
+  // Do not trust a shortlist merely because it was filtered earlier in the pass.
+  // A quote can change between shortlist construction and order creation; this is
+  // the final gate used for both ordinary entries and rotations.
+  const executableEligible = sortEligibleForStrategy(eligible, strategy);
   const realizedPnl = portfolioState.trades.reduce((sum, trade) => sum + Number(trade.realizedPnlUsdc || 0), 0);
   // Mirrors updatePaperPortfolio()'s baseline: a portfolio carrying a manual capital
   // adjustment must size its next trade off the same equity the dashboard shows, or it
@@ -7445,7 +7459,7 @@ function maybeOpenScheduledTrade(portfolioState, eligible, strategy = PAPER_STRA
   // declined" look identical in a log that records neither.
   const rotationOutcome = strategy.allowRotation === false
     ? { best: null, action: "ROTATION_DISABLED", reason: "position rotation is switched off for this portfolio", reviews: [] }
-    : rotationReview(portfolioState, eligible, strategy, available, stake);
+    : rotationReview(portfolioState, executableEligible, strategy, available, stake);
   const rotation = rotationOutcome.best;
   if (rotation) {
     const closedTrade = closeTradeForRotation(rotation.trade, rotation, strategy);
@@ -7470,8 +7484,8 @@ function maybeOpenScheduledTrade(portfolioState, eligible, strategy = PAPER_STRA
         portfolioState,
         strategy,
         evaluations,
-        eligible,
-        rankedEligible: eligible,
+        eligible: executableEligible,
+        rankedEligible: executableEligible,
         action: "ROTATED_OPENED",
         reason: `closed weaker open paper trade and opened better ${strategy.selectionMetric} candidate`,
         available: rotation.capitalAfterExit,
@@ -7516,7 +7530,7 @@ function maybeOpenScheduledTrade(portfolioState, eligible, strategy = PAPER_STRA
     };
   }
 
-  if (!eligible.length) {
+  if (!executableEligible.length) {
     const reason = `no candidates passed ${strategy.label} portfolio filters`;
     return {
       action: "SKIP",
@@ -7529,8 +7543,8 @@ function maybeOpenScheduledTrade(portfolioState, eligible, strategy = PAPER_STRA
         portfolioState,
         strategy,
         evaluations,
-        eligible,
-        rankedEligible: eligible,
+        eligible: executableEligible,
+        rankedEligible: executableEligible,
         action: "SKIP",
         reason,
         available,
@@ -7542,7 +7556,7 @@ function maybeOpenScheduledTrade(portfolioState, eligible, strategy = PAPER_STRA
     };
   }
 
-  const { best, skippedForRisk } = findFirstOpenCandidate(portfolioState, eligible);
+  const { best, skippedForRisk } = findFirstOpenCandidate(portfolioState, executableEligible);
   if (!best) {
     const reason = skippedForRisk > 0
       ? "no eligible non-correlated candidate"
@@ -7558,8 +7572,8 @@ function maybeOpenScheduledTrade(portfolioState, eligible, strategy = PAPER_STRA
         portfolioState,
         strategy,
         evaluations,
-        eligible,
-        rankedEligible: eligible,
+        eligible: executableEligible,
+        rankedEligible: executableEligible,
         action: "SKIP",
         reason,
         available,
@@ -7590,8 +7604,8 @@ function maybeOpenScheduledTrade(portfolioState, eligible, strategy = PAPER_STRA
       portfolioState,
       strategy,
       evaluations,
-      eligible,
-      rankedEligible: eligible,
+      eligible: executableEligible,
+      rankedEligible: executableEligible,
       action: "OPENED",
       reason,
       available,

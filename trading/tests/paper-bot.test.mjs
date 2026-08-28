@@ -571,6 +571,53 @@ test("paper stake sizing: a rebased portfolio keeps the fixed configured trade a
   assert.equal(rebased.requiredStake, 5);
 });
 
+test("paper limit entry: the Polymarket threshold applies to the actual maker price", () => {
+  const strategy = {
+    ...bot.PAPER_STRATEGIES.conservative,
+    id: "limit-threshold",
+    label: "Limit threshold",
+    probabilitySource: "polymarket",
+    minProbability: 0.7,
+    maxProbability: null,
+    minLiquidityUsdc: 0,
+    minNetYield: 0,
+    marketType: "all",
+    requireMostProbableOutcome: false,
+    useLimitOrders: true,
+    allowRotation: false,
+    excludedCandidateTokenIds: new Set(),
+  };
+  const candidate = {
+    id: "limit-entry-29",
+    tokenId: "12345678901234567890",
+    status: "SCRAPED",
+    question: "Exact Score: Any Other Score?",
+    outcome: "No",
+    marketPrice: 0.7,
+    marketProbability: 0.7,
+    bestBid: 0.29,
+    bestAsk: 0.31,
+    spread: 0.02,
+    volumeUsdc: 100000,
+    daysToResolution: 1,
+    stakeUsdc: 5,
+    executableShares: 5 / 0.7,
+    totalCostUsdc: 5,
+    netGainIfWinUsdc: 2.14,
+    netYield: 0.428,
+  };
+
+  assert.equal(bot.portfolioProbabilityForStrategy(candidate, strategy), 0.29);
+  assert.equal(bot.strategyEligibleCandidates([candidate], strategy).length, 0,
+    "a 29% maker bid must not pass a 70% Polymarket threshold");
+
+  // The final opening function is deliberately defended as well. It may be passed a
+  // shortlist that was computed before an updated quote arrived.
+  const decision = bot.maybeOpenScheduledTrade({ trades: [], capitalAdjustmentUsdc: 0 }, [candidate], strategy);
+  assert.equal(decision.action, "SKIP");
+  assert.match(decision.reason, /no candidates passed Limit threshold portfolio filters/);
+});
+
 test("run log: a paper OPENED row keeps the selected order summary in the compact list", async () => {
   const { readFile } = await import("node:fs/promises");
   const app = await readFile(new URL("../assets/app.js", import.meta.url), "utf8");
