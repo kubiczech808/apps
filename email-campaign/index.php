@@ -254,14 +254,18 @@ function aiResearchGeminiRequestsPerMinuteBudget(array $config): int
  * nalezene kontakty a personalizovane osloveni samotneho seedu. Vhodnost kontaktu uz
  * neposuzujeme, ten pozadavek zmizel.
  */
+/**
+ * Kolik pozadavku na model stoji jeden seed: pochopeni byznysu z webu (1) a jedna
+ * odpoved, ze ktere vznikaji varianty kampane i osloveni seedu (1). Alternativni
+ * keywordy ani posuzovani vhodnosti kontaktu uz zadny pozadavek nestoji.
+ */
 function aiResearchEstimatedGeminiRequestsPerSeed(array $config): int
 {
-    if (aiResearchProviderName($config) === 'openai') {
-        $configured = (int)($config['ai']['openai_research_requests_per_seed'] ?? 0);
-        return max(1, $configured > 0 ? $configured : 3);
-    }
-    $configured = (int)($config['ai']['gemini_research_requests_per_seed'] ?? 0);
-    return max(1, $configured > 0 ? $configured : 3);
+    $key = aiResearchProviderName($config) === 'openai'
+        ? 'openai_research_requests_per_seed'
+        : 'gemini_research_requests_per_seed';
+    $configured = (int)($config['ai'][$key] ?? 0);
+    return max(1, $configured > 0 ? $configured : 2);
 }
 
 function aiResearchDailySeedBudget(array $config): int
@@ -763,10 +767,14 @@ function aiResearchRecordGeminiUsage(PDO $pdo, int $requests): void
 
 function aiResearchDailyRequestBudgetOrDefault(array $config): int
 {
-    // gemini-3-flash-preview ma 1500 RPD. Rezerva zbyva na onboarding a kampanova volani,
-    // ktera sdileji stejny klic a do tohoto pocitadla se nezapisuji.
     $configured = aiResearchDailyGeminiRequestBudget($config);
-    return $configured > 0 ? $configured : 1000;
+    if ($configured > 0) {
+        return $configured;
+    }
+    // Vychozi strop musi byt pod skutecnym limitem poskytovatele, jinak si ho vycerpame,
+    // dostaneme 429 a hodiny se jen opakuje marny pokus. Free tier Gemini dava radove
+    // stovky pozadavku na den; kdo ma placeny tarif, zvedne cislo v nastaveni AI.
+    return aiResearchProviderName($config) === 'openai' ? 120 : 200;
 }
 
 function aiResearchTokensPerMinuteBudget(array $config): int
@@ -3185,12 +3193,14 @@ function runCronAiResearch(PDO $pdo, array $config, bool $force = false): string
     $dailyBudget = aiResearchDailyRequestBudgetOrDefault($config);
     $usedToday = aiResearchGeminiRequestsUsedLast24h($pdo);
     $neededPerSeed = aiResearchEstimatedGeminiRequestsPerSeed($config);
-    if ($usedToday + $neededPerSeed > $dailyBudget) {
-        $message = 'AI research: denni rozpocet Gemini pozadavku je vycerpany (' . $usedToday . '/' . $dailyBudget
-            . ' za poslednich 24 h, jeden seed potrebuje ' . $neededPerSeed . '). Dalsi seed se spusti, az se klouzave okno uvolni.';
-        updateAiResearchLog($pdo, $planned, ['status' => 'skipped', 'message' => $message, 'finished_at' => date('c')]);
-        planNextAiResearchLog($pdo, $config);
-        return $message;
+    // Vycerpany denni rozpocet znamena "zadny novy pozadavek na model", ne "zadna
+    // prace". Ucet, prvni davka a odhad dosahu jsou scraping a databaze, takze tik
+    // pokracuje s nimi - jinak by se cely den nedelo nic.
+    $dailyBudgetSpent = $usedToday + $neededPerSeed > $dailyBudget;
+    $dailyBudgetMessage = '';
+    if ($dailyBudgetSpent) {
+        $dailyBudgetMessage = 'denni rozpocet pozadavku je vycerpany (' . $usedToday . '/' . $dailyBudget
+            . ', jeden seed potrebuje ' . $neededPerSeed . '), bezi jen prace bez modelu';
     }
     $startedAt = time();
     updateAiResearchLog($pdo, $planned, ['status' => 'running', 'started_at' => date('c'), 'message' => 'Beh probiha.']);
@@ -3224,16 +3234,21 @@ function runCronAiResearch(PDO $pdo, array $config, bool $force = false): string
         // kvota zastavila i praci, ktera s AI nema nic spolecneho.
         // Kdyz uz vime, ze vsichni poskytovatele maji vycerpanou kvotu, nema smysl na ne
         // v tomto tiku vubec sahat - jinak by kazdy tik zacal marnym pozadavkem.
-        $modelAvailable = false;
-        foreach (aiResearchProviderPreference($config) as $providerName) {
-            if (!aiResearchProviderExhausted($providerName)) {
-                $modelAvailable = true;
-                break;
+        $modelAvailable = !$dailyBudgetSpent;
+        if ($modelAvailable) {
+            $modelAvailable = false;
+            foreach (aiResearchProviderPreference($config) as $providerName) {
+                if (!aiResearchProviderExhausted($providerName)) {
+                    $modelAvailable = true;
+                    break;
+                }
             }
         }
         $quotaMessage = $modelAvailable
             ? ''
-            : 'vsichni poskytovatele maji vycerpanou kvotu, bezi jen prace bez modelu';
+            : ($dailyBudgetMessage !== ''
+                ? $dailyBudgetMessage
+                : 'vsichni poskytovatele maji vycerpanou kvotu, bezi jen prace bez modelu');
         if (!$modelAvailable) {
             $messages[] = $quotaMessage;
         }
@@ -3773,6 +3788,7 @@ function runAiResearchWorker(PDO $pdo, array $config, int $resumeRunId = 0): str
     }
 }
 
+
 /**
  * Minimalni plan pro radek, ktery se zaklada jeste pred analyzou webu. Slouzi jen k tomu,
  * aby bylo v prehledu hned videt, jaky seed subjekt se prave zpracovava.
@@ -3900,31 +3916,10 @@ function runAiResearchOnce(PDO $pdo, array $config, bool $force = false, int $re
                     break;
                 }
             }
-            if (!$bestContacts && $attempts < $maxKeywordAttempts && !aiResearchDeadlineReached(AI_RESEARCH_CONTACT_SCRAPE_RESERVE_SECONDS)) {
-                $remainingAttempts = max(0, $maxKeywordAttempts - $attempts);
-                foreach (aiResearchAlternativePlans($config, $seed, $bestPlan, array_keys($seenPlans), $remainingAttempts) as $plan) {
-                    if ($attempts >= $maxKeywordAttempts) {
-                        break;
-                    }
-                    $attempts++;
-                    $plan = aiResearchEnrichPlan($plan, $seed);
-                    updateAiResearchRunProgress($pdo, $runId, $plan, 'AI research bezi: zkousim alternativni keyword "' . aiResearchPrimaryKeyword($plan) . '".');
-                    $contacts = aiResearchAcceptScrapedContacts(
-                        $seed,
-                        $plan,
-                        aiResearchFindContacts($pdo, $seed, $plan, AI_RESEARCH_FIRST_BATCH_CONTACTS, $runId)
-                    );
-                    upsertAiResearchRunContacts($pdo, $runId, $contacts, 'pending');
-                    if (count($contacts) > count($bestContacts)) {
-                        $bestPlan = $plan;
-                        $bestContacts = $contacts;
-                        updateAiResearchRunProgress($pdo, $runId, $bestPlan, 'AI research bezi: nascrapovano ' . count($bestContacts) . ' kontaktu.');
-                    }
-                    if ($bestContacts || aiResearchDeadlineReached(AI_RESEARCH_CONTACT_SCRAPE_RESERVE_SECONDS)) {
-                        break;
-                    }
-                }
-            }
+            // Alternativni keywordy uz nedotahujeme dalsim volanim modelu. Kdyz prvni
+            // plan ani jeho lokalni fallbacky nic nenajdou, zustane vzorek prazdny a
+            // zbytek workflow (prvni davka, dosah) se dopocita bez dalsiho requestu.
+            // Diky tomu vystaci jeden seed se dvema requesty i na Gemini free tieru.
             $bestPlan['research_attempts'] = $attempts;
             finalizeAiResearchRun($pdo, $config, $runId, $seed, $bestPlan, $bestContacts, $bestContacts);
             aiResearchAddRunRequests($pdo, $runId, aiResearchRequestsMadeThisProcess());
@@ -3988,64 +3983,6 @@ function aiResearchFallbackMarketPlans(array $seed, array $basePlan): array
         $plan['scraping_queries'] = $queries;
         $plan['rationale'] = trim((string)($plan['rationale'] ?? '')) . ' Fallback dotazy zustavaji ve stejnem trhu a lokalite seed subjektu.';
         $plans[] = $plan;
-    }
-    return $plans;
-}
-
-function aiResearchAlternativePlans(array $config, array $seed, array $basePlan, array $seenSignatures, int $limit): array
-{
-    $plans = [];
-    $seen = array_fill_keys(array_filter($seenSignatures, static fn($value) => (string)$value !== ''), true);
-    if (!aiResearchApiIsConfigured($config)) {
-        return [];
-    }
-    $seedCountry = aiResearchSeedCountry($seed);
-    $source = aiResearchDefaultSourceForSeed($seed);
-    $prompt = "Predchozi AI research plan nenasel zadne nebo dost vhodnych kontaktu. "
-        . "Navrhni alternativni B2B cileni a katalogove dotazy, ktere skutecne najdou konkretni firmy k osloveni. "
-        . "Seed kontakt: " . json_encode($seed, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . ". "
-        . "Predchozi plan: " . json_encode($basePlan, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . ". "
-        . "Seed country: " . $seedCountry . ", preferovany source: " . $source . ". "
-        . "Zustav ve stejne zemi a u lokalni sluzby ve stejnem meste nebo okoli. Nevracej Prahu pro rakousky/nemecky/slovensky/polsky seed. "
-        . "Nezmen segment nahodne. Znovu posud 4-6 kandidatskych segmentu podle shody s nabidkou, nalehavosti, rozpoctu, opakovatelnosti, presnosti databaze, delky prodeje, moznosti prenest naklad a rizika. "
-        . "Keyword je konkretni katalogovy dotaz typu profese/kategorie + lokalita, ne popis potreby. Nesmí byt tak siroky, ze vetsina vysledku nebude odpovidat cilove firme. "
-        . "Pokud je puvodni keyword prilis siroky nebo vraci spatne firmy, zvol presnejsi kategorii a pridej filters, ktere maji nevhodne kontakty odmitnout. "
-        . "Pokud jde o mobilni masaze na pracovisti, hledej realne kancelarske/provozni firmy v lokalite: IT Firma, Steuerberater, Rechtsanwalt, Callcenter, Hotel apod. "
-        . "Vrat pouze JSON {\"plans\":[{\"audience_label\":\"...\",\"rationale\":\"...\",\"email_angle\":\"...\",\"market_language\":\"cs|sk|de|pl|en\",\"target_segments\":[...],\"candidate_terms\":[...],\"filters\":[...],\"scraping_queries\":[{\"source\":\"...\",\"keyword\":\"...\",\"why\":\"...\"}],\"primary_segment\":\"...\",\"main_use_case\":\"...\",\"decision_maker\":\"...\",\"rejected_alternatives\":[{\"segment\":\"...\",\"reason\":\"...\"}],\"confidence\":0}]}.";
-    try {
-        $response = aiResearchModelCall($config, 'alternative_plan_generation', [
-            'model' => aiResearchModelName($config),
-            'system_instruction' => 'Jsi B2B akvizicni strateg. Pri nulovem vysledku zmen segment nebo keyword, ale nikdy trh bez duvodu. Vystup je pouze validni JSON.',
-            'input' => $prompt,
-            'generation_config' => ['temperature' => 0.5],
-        ], 40);
-        $json = parseJsonObjectFromText(aiResearchModelText($config, $response));
-        $fallback = $basePlan ?: onboardingFallbackLeadPlan((string)($seed['subject_name'] ?? ''));
-        foreach ((array)($json['plans'] ?? []) as $candidate) {
-            if (!is_array($candidate)) {
-                continue;
-            }
-            $plan = onboardingNormalizeLeadPlan($candidate, $fallback);
-            $plan = aiResearchApplyStrategicFields($plan, $candidate);
-            $plan = aiResearchAppendModelAudit($plan, aiModelAuditEntry($config, 'alternative_plan_generation', 'research'));
-            $plan['filters'] = array_values(array_filter(array_map('strval', (array)($candidate['filters'] ?? ($plan['filters'] ?? [])))));
-            $language = normalizeAiResearchMarketLanguage((string)($candidate['market_language'] ?? ''));
-            if ($language !== '') {
-                $plan['market_language'] = $language;
-            }
-            $plan = aiResearchEnrichPlan($plan, $seed);
-            $signature = aiResearchPlanSignature($plan);
-            if ($signature === '' || isset($seen[$signature])) {
-                continue;
-            }
-            $seen[$signature] = true;
-            $plans[] = $plan;
-            if (count($plans) >= $limit) {
-                break;
-            }
-        }
-    } catch (Throwable $e) {
-        error_log('AI research alternative plan fallback: ' . $e->getMessage());
     }
     return $plans;
 }
@@ -7458,6 +7395,9 @@ function aiResearchRunDraft(array $config, array $seed, array $plan, array $cont
         'decision_maker' => (string)($plan['decision_maker'] ?? ''),
         'payer' => (string)($plan['payer'] ?? ''),
         'user_role' => (string)($plan['user_role'] ?? ''),
+        // Pocet pro text nabizeny seed firme; stejne cislo pak ukazuje i prehled.
+        'reachable_contacts' => (int)($plan['contact_estimate']['reachable_contacts'] ?? 0)
+            ?: count($acceptedContacts),
         'mandatory_filters' => (array)($plan['filters'] ?? []),
         'rejected_alternatives' => (array)($plan['rejected_alternatives'] ?? []),
         'search_url' => (string)($plan['search_url'] ?? ''),
@@ -7475,7 +7415,7 @@ function aiResearchRunDraft(array $config, array $seed, array $plan, array $cont
     $prompt = "Priprav finalni navrh obchodniho osloveni pro AI research beh. "
         . "Tento text vznikne pres API a ma byt vyslednym doporucenim, jak oslovit nalezene kontakty a s cim konkretne. "
         . "Vstupni kontext: " . json_encode($promptContext, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . ". "
-        . "Vrat pouze JSON {\"variants\":[{\"subject\":\"...\",\"html\":\"...\",\"angle\":\"...\"},{\"subject\":\"...\",\"html\":\"...\",\"angle\":\"...\"}]}. "
+        . "Vrat pouze JSON {\"variants\":[{\"subject\":\"...\",\"html\":\"...\",\"angle\":\"...\"},{\"subject\":\"...\",\"html\":\"...\",\"angle\":\"...\"}],\"seed_outreach\":{\"subject\":\"...\",\"html\":\"...\"}}. "
         . "Vytvor presne dve varianty osloveni, aby si admin mohl vybrat nebo je otestovat proti sobe. "
         . "Obe musi byt pouzitelne samostatne a lisit se uhlem, ne jen preformulovanim: napr. prvni vede konkretnim provoznim problemem ciloveho segmentu, druha konkretnim vysledkem nebo referenci. Do angle napis jednou kratkou vetou, cim se varianta odlisuje. "
         . "POVINNE u kazde varianty: v predmetu nebo v textu musi doslova padnout scraping_keyword (" . aiResearchPrimaryKeyword($plan) . ") jako pojmenovani typu firmy, kterou oslovujeme. Bez toho je varianta nepouzitelna. "
@@ -7489,7 +7429,14 @@ function aiResearchRunDraft(array $config, array $seed, array $plan, array $cont
         . "Nekopiruj marketingove formulace ze seed webu. Preved je do konkretniho obchodniho prinosu pro vybrany segment. "
         . "Nepis interní uvahu ani instrukce. Nepis obecne vety typu 'mohla by byt relevantni nabidka' nebo 'vidime moznost spoluprace'. "
         . "Napis konkretne, s cim seed firma kontakt oslovuje, proc to souvisi s jeho typem byznysu, a navrhni jednoduchy dalsi krok. "
-        . "Pokud ve vzorku kontaktu neni zadny prijaty kontakt, stale vytvor text pro audience_label, ale jasne ho ukotvi v keywordu a lokaci.";
+        . "Pokud ve vzorku kontaktu neni zadny prijaty kontakt, stale vytvor text pro audience_label, ale jasne ho ukotvi v keywordu a lokaci. "
+        // seed_outreach je druhy text ze stejne odpovedi: na free tieru je kazdy pozadavek
+        // drahy, takze osloveni samotne seed firmy vznika soucasne s variantami kampane.
+        . "seed_outreach je ODLISNY email - pisany NASI firmou pro seed firmu " . $seedBusiness . ", ktere nabizime, ze za ni oslovime "
+        . (string)($promptContext['reachable_contacts'] ?? 'nalezene') . " kontaktu ze segmentu " . (string)($plan['audience_label'] ?? '') . ". "
+        . "V seed_outreach: v prvni vete pojmenuj konkretni produkt nebo sluzbu, kterou seed firma prodava (podle business_understanding); "
+        . "vysvetli, proc prave tento segment tu vec kupuje; uved presny pocet kontaktu a lokalitu; 120 az 200 slov v <p>; "
+        . "bez podpisu a bez odhlasovaciho odkazu, ty doplnime sami; zadna zastupna misto a zadne floskule typu \"konkretni produkt nebo sluzbu z vasi nabidky\" nebo \"ve vasem oboru\".";
     try {
         $response = aiResearchModelCall($config, 'outreach_draft', [
             'model' => aiResearchModelName($config),
@@ -7534,12 +7481,26 @@ function aiResearchRunDraft(array $config, array $seed, array $plan, array $cont
             }
         }
         if ($usableVariants) {
-            return [
+            $result = [
                 'subject' => (string)$usableVariants[0]['subject'],
                 'html' => (string)$usableVariants[0]['html'],
                 'variants' => $usableVariants,
                 'audit' => aiModelAuditEntry($config, 'outreach_draft', 'research'),
             ];
+            // Osloveni seedu ze stejne odpovedi. Kdyz nedorazi nebo neni dost konkretni,
+            // vola se pro nej samostatny pozadavek - jen uz to neni pravidlo, ale vyjimka.
+            $seedDraft = is_array($json['seed_outreach'] ?? null) ? (array)$json['seed_outreach'] : [];
+            $seedSubject = truncatePlainText(trim((string)($seedDraft['subject'] ?? '')), 255);
+            $seedHtml = cleanHtml((string)($seedDraft['html'] ?? ''));
+            if ($seedSubject !== '' && trim(strip_tags($seedHtml)) !== '') {
+                $result['seed_outreach'] = [
+                    'subject' => $seedSubject,
+                    'html' => $seedHtml,
+                    'language' => $language,
+                    'generated_at' => date('c'),
+                ];
+            }
+            return $result;
         }
         if ($qualityError) {
             throw $qualityError;
@@ -7735,18 +7696,37 @@ function finalizeAiResearchRun(PDO $pdo, array $config, int $runId, array $seed,
     if (is_array($draft['audit'] ?? null)) {
         $plan = aiResearchAppendModelAudit($plan, (array)$draft['audit']);
     }
-    // Osloveni seed subjektu pise AI konkretne k jeho byznysu. Sablona je jen zachrana,
-    // takze kdyz AI selze nebo dodá obecny text, beh se kvuli tomu nezastavi.
-    if ($accepted && !is_array($plan['seed_outreach_draft'] ?? null)) {
+    // Osloveni seed subjektu pise AI konkretne k jeho byznysu. Prvni volba je text ze
+    // stejne odpovedi jako varianty kampane - na free tieru je kazdy pozadavek drahy,
+    // takze dva texty z jednoho volani znamenaji o polovinu vic zpracovanych seedu.
+    $reachable = (int)($plan['contact_estimate']['reachable_contacts'] ?? 0);
+    $countLabel = (string)($reachable > count($accepted) ? $reachable : count($accepted));
+    $bundledSeedDraft = is_array($draft['seed_outreach'] ?? null) ? (array)$draft['seed_outreach'] : [];
+    if ($bundledSeedDraft !== [] && !is_array($plan['seed_outreach_draft'] ?? null)) {
+        $problem = aiResearchSeedOutreachIsSpecific(
+            (string)($bundledSeedDraft['subject'] ?? ''),
+            (string)($bundledSeedDraft['html'] ?? ''),
+            $plan,
+            (string)($plan['audience_label'] ?? $plan['primary_segment'] ?? ''),
+            $countLabel
+        );
+        if ($problem === '') {
+            $plan['seed_outreach_draft'] = $bundledSeedDraft;
+        } else {
+            error_log('AI research seed outreach z hromadne odpovedi zahozen: ' . $problem);
+        }
+    }
+    // Samostatny pozadavek uz je jen zaloha, kdyz text v hromadne odpovedi chybel
+    // nebo nebyl dost konkretni.
+    if (!is_array($plan['seed_outreach_draft'] ?? null) && ($accepted || aiResearchPrimaryKeyword($plan) !== '')) {
         try {
-            $reachable = (int)($plan['contact_estimate']['reachable_contacts'] ?? 0);
             $plan['seed_outreach_draft'] = aiResearchGenerateSeedOutreach(
                 $config,
                 ['id' => $runId, 'seed_business' => (string)($seed['subject_name'] ?? ''), 'seed_email' => (string)($seed['email'] ?? ''),
                  'seed_website' => (string)($seed['website'] ?? ''), 'audience_label' => (string)($plan['audience_label'] ?? '')],
                 $plan,
                 normalizeAiResearchMarketLanguage((string)($plan['market_language'] ?? '')) ?: 'cs',
-                (string)($reachable > count($accepted) ? $reachable : count($accepted))
+                $countLabel
             );
         } catch (Throwable $e) {
             error_log('AI research seed outreach for #' . $runId . ' failed: ' . $e->getMessage());

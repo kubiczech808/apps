@@ -35,14 +35,14 @@ return [
         'openai_research_rpm_budget' => 10,
         'openai_research_daily_request_budget' => 120,
         'openai_research_daily_seed_budget' => 0,
-        'openai_research_requests_per_seed' => 3,
+        'openai_research_requests_per_seed' => 2,
         'gemini_api_key' => '',
         'gemini_model' => 'gemini-3-flash-preview',
         'gemini_research_model' => 'gemini-3-flash-preview',
         'gemini_research_rpm_budget' => 18,
-        'gemini_research_daily_request_budget' => 0,
+        'gemini_research_daily_request_budget' => 0, // 0 = vychozi strop podle free tieru (200)
         'gemini_research_daily_seed_budget' => 0,
-        'gemini_research_requests_per_seed' => 3,
+        'gemini_research_requests_per_seed' => 2,
         'gemini_research_validation_attempts' => 1,
     ],
     'database' => [
