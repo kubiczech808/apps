@@ -386,7 +386,14 @@ test("spread: PHP and the bot drop the same untradable rows", () => {
   ];
 
   const expected = tagRow(rows, "league-of-legends");
-  assert.equal(expected.trades, 3, "the statistic counts only the three that had a book");
+  // The three tight rows always count and the two wide ones never do. Whether the row that
+  // recorded no spread at all counts is a policy (PAPER_COUNT_UNKNOWN_SPREAD), and this
+  // test deliberately does not pin which way it is set -- what it pins is that both sides
+  // answer the same, because a list holding a different set from the number it was opened
+  // from is the whole complaint this endpoint exists to answer.
+  assert.ok([3, 4].includes(expected.trades),
+    `the three tight rows count, the two wide ones never do: got ${expected.trades}`);
+  const admitsUnknown = expected.trades === 4;
 
   withApi(rows, (directory) => {
     const response = callApi(directory, {
@@ -399,7 +406,12 @@ test("spread: PHP and the bot drop the same untradable rows", () => {
     assert.equal(response.matched, expected.trades,
       "the list behind the statistic must hold exactly what the statistic counted");
     const ids = (response.marketObservations || []).map((item) => item.id).sort();
-    assert.deepEqual(ids, ["tight-1", "tight-2", "tight-3"]);
+    assert.deepEqual(ids, admitsUnknown
+      ? ["silent", "tight-1", "tight-2", "tight-3"]
+      : ["tight-1", "tight-2", "tight-3"]);
+    // A recorded wide book is evidence, and it is excluded whatever the unknown policy is.
+    assert.ok(!ids.includes("wide") && !ids.includes("just-over"),
+      "a measured wide spread is never admitted");
     // The row that was exactly at the limit is in, the one a hair over is not.
     assert.ok(ids.includes("tight-2"));
   });

@@ -312,14 +312,16 @@ jobs:
         # market 5050 found gone was never closed out of its candidate list.
         run: LIVE_EXECUTION_STATE_FILE="trading/${LIVE_EXECUTION_STATE_PATH}" python3 trading/tools/persist-live-revalidation.py
 
+      # Reads the hosted state, not the local copy the executor just wrote. The upload
+      # replaces the hosted file outright, so a run that started from an empty local log
+      # would publish that empty log over the real history. This makes the file about to be
+      # uploaded a superset of the one it replaces.
+      #
+      # The URL is set on the command line rather than in an `env:` block because it is now
+      # per-portfolio: it follows whichever portfolio this run is executing.
       - name: Merge published run-log history before upload
         if: always()
         working-directory: trading
-        env:
-          # Read the hosted state, not the local copy the executor just wrote.
-        # The upload replaces the hosted file outright, so a run that started from an
-        # empty local log would publish that empty log over the real history. This makes
-        # the file about to be uploaded a superset of the one it replaces.
         run: LIVE_EXECUTION_PUBLISHED_STATE_URL="$LIVE_EXECUTION_STATE_URL" node tools/merge-live-execution-history.mjs
 
       - name: Upload live state
@@ -346,7 +348,6 @@ jobs:
       - name: Run digest
         if: always()
         continue-on-error: true
-        env:
         run: |
           python3 - <<'PY'
           import json

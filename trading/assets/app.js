@@ -567,6 +567,17 @@ function liveExecutionStateTarget(mode = state.mode) {
   return isFixedEntryMode(mode) ? "live-5050-execution" : "live-execution";
 }
 
+// The name a refused dispatch is filed under, matching execution_dispatch_failure_key() in
+// api.php. A run GitHub would not start writes no state at all, so its record lives only
+// there, and the two sides have to agree on where to look for it.
+function dispatchFailureKey(mode = state.mode) {
+  const normalized = normalizeMode(mode);
+  // A live dispatch names its portfolio in the target itself, and the target is the mode.
+  // A paper dispatch sends target "paper" with the portfolio alongside, so it keys on that.
+  if (LIVE_MODES.has(normalized) || customLivePortfolioIdFromMode(mode)) return normalized;
+  return `paper-${paperStrategyIdFromMode(mode)}`;
+}
+
 function paperStrategyIdFromMode(mode = state.mode) {
   const strategyId = /^paper-(.+)$/.exec(String(mode || ""))?.[1];
   if (!strategyId) return "conservative";
@@ -6952,6 +6963,31 @@ function portfolioRunLogHistoryState(strategyId) {
   return state.portfolioRunLogHistory[strategyId];
 }
 
+// A dispatch GitHub refused produced no run, so no runner wrote it anywhere: not into
+// live-state.json, not into the execution state, not into the per-portfolio archive. The
+// only record is the one api.php kept at the moment it was refused, and this is what puts
+// it back into the portfolio's run log -- otherwise the log jumps straight past an
+// execution the user watched fail, and closing the popup loses it for good.
+//
+// It never throws: a portfolio that has never had one 404s, and a run log that refused to
+// render because nothing had ever failed would be a poor trade.
+async function loadDispatchFailures(mode = state.mode) {
+  const normalized = normalizeMode(mode);
+  state.dispatchFailuresByMode = state.dispatchFailuresByMode || {};
+  try {
+    const payload = await fetchApiJson(
+      `api.php?action=dispatch-failures&key=${encodeURIComponent(dispatchFailureKey(normalized))}`,
+    );
+    const records = Array.isArray(payload?.records) ? payload.records : [];
+    const previous = state.dispatchFailuresByMode[normalized] || [];
+    state.dispatchFailuresByMode[normalized] = records;
+    if (records.length !== previous.length) rerenderRunLogInPlace();
+  } catch {
+    // Leave whatever was already known rather than blanking the log over one failed read.
+    if (!(normalized in state.dispatchFailuresByMode)) state.dispatchFailuresByMode[normalized] = [];
+  }
+}
+
 // Every portfolio's runLog is capped in the live state (see PORTFOLIO_RUN_LOG_LIMIT in the
 // bot), so "load more" pages back through the per-portfolio archive the paper-bot workflow
 // appends to after every run -- the same shape as loadScrapeRunHistory, kept per strategy id
@@ -7239,6 +7275,9 @@ async function loadLiveState(options = {}) {
     // Absent is not empty: a failed fetch must not silently reassign every 5050
     // position to the Live tab, so the last known log is kept.
     if (fixedEntryResult.status === "fulfilled") state.live5050ExecutionState = fixedEntryResult.value;
+    // Runs GitHub refused. They are small, they belong to this portfolio's log, and no
+    // published state carries them, so they are loaded beside it rather than with it.
+    loadDispatchFailures(executionMode);
     const liveState = liveResult.value;
     renderLiveState(liveState);
     // CLOB open orders expose only token/condition IDs. Load the shared scraped
@@ -10507,6 +10546,11 @@ function liveRunLogRows() {
   const fromExecutionState = Array.isArray(state.liveExecutionState?.runLog) ? state.liveExecutionState.runLog : [];
   rows.push(...fromLiveState);
   rows.push(...fromExecutionState);
+  // Runs that never started. Both lists above are written by the runner at the end of a
+  // run, so a dispatch GitHub refuses leaves nothing in either -- the log then jumps
+  // straight past an execution the user watched fail.
+  const dispatchFailures = state.dispatchFailuresByMode?.[normalizeMode(state.mode)];
+  if (Array.isArray(dispatchFailures)) rows.push(...dispatchFailures);
   const executionRun = normalizeLiveExecutionRun(state.liveExecutionState);
   // The top-level state is the same decision as the newest run-log entry, so it is only
   // added when the log does not already carry it. Matching on id alone was not enough:
@@ -10822,6 +10866,11 @@ function humanRunReason(run = {}) {
   }
   if (action === "SKIP" && /no candidates passed/i.test(reason)) {
     return "No order placed: no candidate passed this portfolio's current rules.";
+  }
+  if (action === "DISPATCH_FAILED") {
+    // Not a trading decision at all: GitHub refused to start the run, so nothing was
+    // evaluated. The message it gave is the whole diagnosis and is quoted intact.
+    return `The run never started. GitHub refused to start it: ${String(run.dispatchError || reason || "-").replace(/^The run never started: /, "")}`;
   }
   return reason || "-";
 }

@@ -1266,3 +1266,93 @@ test("dashboard: archived portfolios are never listed, and never fetched for the
   assert.match(branch, /\$row\['archived'\] \?\? false\) !== true/,
     "the portfolio-overview summary must filter archived portfolios out");
 });
+
+// -- A workflow GitHub will not parse ----------------------------------------------------
+//
+// Reported: manual execution of the "live 70" portfolio failed with
+//   GitHub HTTP 422: Invalid Argument - failed to parse workflow:
+//   (Line: 318, Col: 13): Unexpected value '', (Line: 349, Col: 13): Unexpected value ''
+// and it kept failing on every retry. Both lines were an `env:` key with nothing under it,
+// left behind when the value it held moved onto the `run:` line. That is valid YAML -- the
+// key simply parses as null -- so nothing local caught it, and GitHub rejects the file
+// wholesale: every dispatch 422s and the schedule stops firing too.
+//
+// This is the second time a workflow has been shipped that GitHub refuses to parse (the
+// first was the 25-input ceiling), and both times the symptom was every run silently
+// failing to start. So it is checked here rather than discovered in production.
+test("workflows: no mapping key is left with nothing under it", async () => {
+  const { readFile, readdir } = await import("node:fs/promises");
+  const directory = new URL("../../.github/workflows/", import.meta.url);
+  const files = (await readdir(directory)).filter((name) => name.endsWith(".yml") || name.endsWith(".yaml"));
+  assert.ok(files.length > 5, `expected the workflow directory, found ${files.length} files`);
+
+  const offenders = [];
+  for (const name of files) {
+    const lines = (await readFile(new URL(name, directory), "utf8")).split("\n");
+    lines.forEach((line, index) => {
+      const key = line.trim();
+      // The block-valued keys GitHub rejects when empty. `run:` and `if:` take scalars and
+      // are caught by YAML itself, so they are not the risk here.
+      if (!["env:", "with:", "inputs:", "outputs:", "secrets:", "jobs:", "steps:"].includes(key)) return;
+      const indent = line.length - line.trimStart().length;
+      // The first line after it that is neither blank nor a comment decides: if it is not
+      // indented deeper, the key has no entries.
+      const next = lines.slice(index + 1).find((candidate) => candidate.trim() && !candidate.trim().startsWith("#"));
+      if (next === undefined) return;
+      const nextIndent = next.length - next.trimStart().length;
+      if (nextIndent <= indent) offenders.push(`${name}:${index + 1} "${key}" is empty`);
+    });
+  }
+  assert.deepEqual(offenders, [], `GitHub answers 422 for these and refuses the whole file:\n${offenders.join("\n")}`);
+});
+
+// -- A run that never started still happened ---------------------------------------------
+//
+// The same report, second half: the failed attempt was nowhere in the run log. Every entry
+// a portfolio has is written by its runner at the end of a run, so a dispatch GitHub refuses
+// produces no entry at all -- the popup shows an error, the log shows the previous run, and
+// closing the popup loses the only trace.
+test("run log: a refused dispatch is recorded where the portfolio's runs are read", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const api = await readFile(new URL("../api.php", import.meta.url), "utf8");
+
+  // Recorded at the one point that knows about it, and the error still reaches the browser.
+  const dispatch = /\$result = dispatch_workflow\([\s\S]*?catch \(Throwable[\s\S]*?\n        \}/.exec(api);
+  assert.ok(dispatch, "the dispatch must be able to fail without losing the attempt");
+  assert.match(dispatch[0], /record_execution_dispatch_failure\(/);
+  assert.match(dispatch[0], /'error' => \$error->getMessage\(\)/,
+    "the failure is recorded as well as reported, never instead of");
+
+  // Merged back in on both read paths. A paper portfolio's log is assembled by PHP; a live
+  // portfolio reads a static file its runner owns, so its browser fetches them separately.
+  assert.match(api, /foreach \(execution_dispatch_failure_records\('paper-' \. \$strategyId\) as \$item\)/);
+  assert.match(api, /if \(\$action === 'dispatch-failures'\)/);
+
+  // Both sides must file under the same name, or a failure is written where nothing reads.
+  const phpKey = /function execution_dispatch_failure_key\([\s\S]*?\n\}/.exec(api);
+  assert.ok(phpKey);
+  assert.match(phpKey[0], /return 'paper-' \. \$paperStrategyId;/);
+  assert.match(phpKey[0], /return \$target;/);
+
+  const app = await readFile(new URL("../assets/app.js", import.meta.url), "utf8");
+  const jsKey = new Function(
+    "LIVE_MODES", "normalizeMode", "customLivePortfolioIdFromMode", "paperStrategyIdFromMode",
+    `${extractFunction(app, "dispatchFailureKey")}\nreturn dispatchFailureKey;`,
+  )(
+    new Set(["live", "live-5050"]),
+    (value) => String(value || ""),
+    (mode) => (/^live-custom-(.+)$/.exec(String(mode || ""))?.[1] || null),
+    (mode) => (/^paper-(.+)$/.exec(String(mode || ""))?.[1] || "conservative"),
+  );
+  // The live target IS the mode, so its key is the string PHP receives verbatim.
+  assert.equal(jsKey("live"), "live");
+  assert.equal(jsKey("live-5050"), "live-5050");
+  assert.equal(jsKey("live-custom-live70"), "live-custom-live70");
+  // Paper dispatches send target "paper" with the portfolio alongside, so they key on it.
+  assert.equal(jsKey("paper-moreProbable"), "paper-moreProbable");
+
+  // And the row reaches the rendered log rather than being fetched and dropped.
+  assert.match(app, /const dispatchFailures = state\.dispatchFailuresByMode\?\.\[normalizeMode\(state\.mode\)\];/);
+  assert.match(app, /if \(Array\.isArray\(dispatchFailures\)\) rows\.push\(\.\.\.dispatchFailures\);/);
+  assert.match(app, /action === "DISPATCH_FAILED"/, "and it reads as a run that never started");
+});

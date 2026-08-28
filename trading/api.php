@@ -217,6 +217,91 @@ function state_file_paths(): array
     ];
 }
 
+/**
+ * A run that never started still happened.
+ *
+ * Every run-log entry a portfolio has is written by the runner at the end of its run, so a
+ * dispatch GitHub refuses produces no entry at all: the popup shows an error, the run log
+ * shows the previous run, and once the popup is closed there is no record that anything was
+ * attempted. Reported after exactly that -- a manual execution answered
+ * "HTTP 422: failed to parse workflow" and left nothing behind.
+ *
+ * This is the one point where the failure is known, so it is recorded here and merged into
+ * whichever run log the portfolio renders. It is deliberately a small append-only file per
+ * target rather than a write into the published state: the state is owned by the runner and
+ * replaced wholesale on every upload, so anything written here would be lost on the next
+ * successful run -- which is the run that matters least to keep the failure beside.
+ */
+/**
+ * The one name a failure is filed under, derived the same way when it is written and when
+ * it is read. Deriving it twice from the raw dispatch target would drift: the browser sends
+ * "paper" plus a strategy id for some portfolios and "paper-<id>" for others, and the two
+ * would file into different buckets while looking identical in the code.
+ */
+function execution_dispatch_failure_key(?string $paperStrategyId, string $target): string
+{
+    // Paper dispatches arrive as target "paper" with the portfolio named separately, so the
+    // target alone would file every paper portfolio's failures into one bucket. Live
+    // dispatches carry the portfolio in the target itself ("live", "live-5050",
+    // "live-custom-<id>"), so there the target is already the name.
+    if ($paperStrategyId !== null && $paperStrategyId !== '') {
+        return 'paper-' . $paperStrategyId;
+    }
+    return $target;
+}
+
+function execution_dispatch_failure_path(string $key): string
+{
+    $safe = preg_replace('/[^a-zA-Z0-9_-]/', '-', $key);
+    return __DIR__ . '/data/dispatch-failures/' . ($safe === '' ? 'unknown' : $safe) . '.ndjson';
+}
+
+function record_execution_dispatch_failure(string $key, string $target, ?string $strategyId, string $message): array
+{
+    $record = [
+        'runAt' => gmdate('c'),
+        'date' => gmdate('c'),
+        'strategyId' => $strategyId,
+        'target' => $target,
+        'action' => 'DISPATCH_FAILED',
+        'status' => 'FAILED',
+        // Said in full. The GitHub message names the file and the line, which is the whole
+        // diagnosis for a workflow that will not parse.
+        'reason' => 'The run never started: ' . $message,
+        'source' => 'MANUAL',
+        'trigger' => 'MANUAL',
+        'dispatchError' => $message,
+    ];
+    $path = execution_dispatch_failure_path($key);
+    $directory = dirname($path);
+    if (!is_dir($directory) && !@mkdir($directory, 0775, true) && !is_dir($directory)) {
+        return $record;
+    }
+    // Bounded: a workflow that cannot parse fails on every attempt, and a user retrying is
+    // exactly when this file would otherwise grow without limit.
+    $existing = is_file($path) ? (@file($path, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: []) : [];
+    $existing[] = json_encode($record, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+    $existing = array_slice($existing, -50);
+    @file_put_contents($path, implode("\n", $existing) . "\n", LOCK_EX);
+    return $record;
+}
+
+function execution_dispatch_failure_records(string $key): array
+{
+    $path = execution_dispatch_failure_path($key);
+    if (!is_file($path)) {
+        return [];
+    }
+    $records = [];
+    foreach (@file($path, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: [] as $line) {
+        $item = json_decode($line, true);
+        if (is_array($item) && isset($item['runAt'])) {
+            $records[] = $item;
+        }
+    }
+    return $records;
+}
+
 function state_payload(string $target, array $segments = ['observations', 'evaluations'], ?string $selectedStrategyId = null): array
 {
     $files = state_file_paths();
@@ -1315,6 +1400,12 @@ function portfolio_run_log_records(string $strategyId, array $fallback = []): ar
         if (!is_array($item) || !isset($item['runAt']) || (string) ($item['strategyId'] ?? '') !== $strategyId) {
             continue;
         }
+        $byRunAt[(string) $item['runAt']] = $item;
+    }
+    // Dispatches this portfolio refused. These never reached a runner, so no archive file
+    // and no published state carries them -- and without them the log silently skips an
+    // execution the user watched fail.
+    foreach (execution_dispatch_failure_records('paper-' . $strategyId) as $item) {
         $byRunAt[(string) $item['runAt']] = $item;
     }
     $records = array_values($byRunAt);
@@ -3915,7 +4006,25 @@ try {
             respond(['ok' => false, 'error' => 'Unknown workflow target'], 400);
         }
 
-        $result = dispatch_workflow($workflows[$targetKey]['workflow'], $workflows[$targetKey]['inputs'], false);
+        // A refused dispatch is recorded before the error is reported, so the attempt shows
+        // up in the portfolio's run log rather than only in a popup the user then closes.
+        try {
+            $result = dispatch_workflow($workflows[$targetKey]['workflow'], $workflows[$targetKey]['inputs'], false);
+        } catch (Throwable $error) {
+            record_execution_dispatch_failure(
+                execution_dispatch_failure_key($paperStrategyId, $target),
+                $target,
+                $paperStrategyId ?? $customLivePortfolioId,
+                $error->getMessage(),
+            );
+            respond([
+                'ok' => false,
+                'target' => $target,
+                'workflowTarget' => $targetKey,
+                'error' => $error->getMessage(),
+                'recordedInRunLog' => true,
+            ], 502);
+        }
         respond([
             'ok' => true,
             'target' => $target,
@@ -4212,6 +4321,27 @@ try {
             'pageSize' => $pageSize,
             'total' => count($records),
             'hasMore' => $offset + $pageSize < count($records),
+        ]);
+    }
+
+    // Dispatches a portfolio's own runner never saw. A paper portfolio gets these merged
+    // into portfolio-run-log below, but a live portfolio reads its run log straight from a
+    // published static file that only its runner writes -- so this is where its browser
+    // picks them up.
+    if ($action === 'dispatch-failures') {
+        $key = trim((string) ($_GET['key'] ?? ''));
+        if ($key === '' || !preg_match('/^[a-zA-Z0-9_-]{1,64}$/', $key)) {
+            respond(['ok' => false, 'error' => 'A valid key is required'], 400);
+        }
+        $records = execution_dispatch_failure_records($key);
+        usort($records, static function (array $left, array $right): int {
+            return strtotime((string) ($right['runAt'] ?? '')) <=> strtotime((string) ($left['runAt'] ?? ''));
+        });
+        respond([
+            'ok' => true,
+            'key' => $key,
+            'records' => array_slice($records, 0, 20),
+            'generatedAt' => gmdate('c'),
         ]);
     }
 

@@ -8820,13 +8820,25 @@ test("spread: the browser, the bot and api.php apply one rule", async () => {
     assert.match(phpReader[0], new RegExp(`'${field}'`), `${field} must be read`);
   }
   assert.match(api, /return \$spread <= MAX_TRADABLE_SPREAD;/);
-  // And it makes the same split on a row that recorded none: the shortlist keeps it so a
-  // portfolio is not stalled by the scan's coverage, the drill-down behind a statistics row
-  // does not, because that row did not count it either.
+
+  // A row that recorded no spread is a policy question, not a fact, and the policy is set
+  // in one place: PAPER_COUNT_UNKNOWN_SPREAD for the statistics. What must never drift is
+  // that the drill-down list behind a statistics row applies whatever that policy says --
+  // a list holding a different set from the number it was opened from is the complaint this
+  // endpoint exists to answer. So the default is read rather than assumed, and PHP is
+  // required to match it.
+  const statisticsAdmitsUnknown = /PAPER_COUNT_UNKNOWN_SPREAD", (true|false)\)/.exec(botSource);
+  assert.ok(statisticsAdmitsUnknown, "the statistics must state their unknown-spread policy");
+  const drilldown = /\/\/ [^\n]*\n(?:\s+\/\/[^\n]*\n)*\s+if \(!observation_spread_is_tradable\(\$item(, true)?\)\) \{\n\s+return true;/.exec(api);
+  assert.ok(drilldown, "the drill-down list must apply the gate");
+  assert.equal(Boolean(drilldown[1]), statisticsAdmitsUnknown[1] === "true",
+    `the drill-down admits unknown spreads ${Boolean(drilldown[1])} while the statistics say ${statisticsAdmitsUnknown[1]}`);
+
+  // The execution shortlist is the one place that is permissive regardless: refusing every
+  // row the scan has not revisited would idle a portfolio over missing data rather than
+  // over a wide book, and the scan takes most of a day to come round.
   assert.match(api, /if \(!observation_spread_is_tradable\(\$item, true\)\) \{\n\s+return false;/,
     "the execution shortlist must not empty itself over rows nothing has looked at yet");
-  assert.match(api, /if \(!observation_spread_is_tradable\(\$item\)\) \{\n\s+return true;/,
-    "the drill-down list must hold exactly what its statistics row counted");
 
   // The fields have to survive transport, or the executor sees a row with no spread on it
   // and drops everything.
