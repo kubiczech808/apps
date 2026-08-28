@@ -15,6 +15,8 @@ const CLOB_HOST = process.env.POLYMARKET_HOST || "https://clob.polymarket.com";
 const CHAIN_ID = Number(process.env.POLYMARKET_CHAIN_ID || 137);
 const LIVE_STATE_URL = process.env.LIVE_EXIT_LIVE_STATE_URL
   || "https://osobnizkusenosti.cz/trading/api.php?action=state&target=live";
+const LIVE_EXIT_POLICY_URL = process.env.LIVE_EXIT_POLICY_URL
+  || "https://osobnizkusenosti.cz/trading/api.php?action=live-exit-policy";
 const MODE = String(process.env.LIVE_EXIT_MODE || "shadow").trim().toLowerCase();
 const POLL_INTERVAL_MS = clampInteger(process.env.LIVE_EXIT_POLL_INTERVAL_MS, 5000, 1500, 60000);
 const RETRY_INTERVAL_MS = clampInteger(process.env.LIVE_EXIT_RETRY_INTERVAL_MS, 20000, 5000, 300000);
@@ -169,6 +171,22 @@ function watchlistEntryMap(watchlist = {}) {
     .map((entry) => [String(entry.tokenId), entry]));
 }
 
+function remotePolicyMap(payload = {}) {
+  const rows = Array.isArray(payload?.policies) ? payload.policies : [];
+  return new Map(rows
+    .filter((entry) => entry && entry.enabled !== false && String(entry.tokenId || "").trim())
+    .map((entry) => [String(entry.tokenId), {
+      ...entry,
+      source: `portfolio:${String(entry.portfolioId || "live")}`,
+    }]));
+}
+
+function defaultRemotePolicy(payload = {}) {
+  const policy = payload?.defaultPolicy;
+  if (!policy || policy.enabled === false || !(number(policy.stopLossRiskMultiplier, 0) > 0)) return null;
+  return { ...policy, source: `portfolio:${String(policy.portfolioId || "live")}:default` };
+}
+
 function watchPlan(position, entry = null) {
   if (entry && entry.enabled === false) return null;
   const derived = equalRiskExitPlan(position);
@@ -182,7 +200,7 @@ function watchPlan(position, entry = null) {
     outcome: entry?.outcome || position.outcome || "",
     stopPrice,
     triggerPrice: round(Math.min(0.999999, stopPrice + STOP_PRETRIGGER_BUFFER), 6),
-    source: configuredStop != null ? "watchlist" : "equal-risk-derived",
+    source: entry?.source || (configuredStop != null ? "watchlist" : "equal-risk-derived"),
   };
 }
 
@@ -247,15 +265,43 @@ async function checkOnce(context) {
     context.liveState = await fetchJson(`${LIVE_STATE_URL}${LIVE_STATE_URL.includes("?") ? "&" : "?"}exitWorkerAt=${Date.now()}`, "live state");
     context.liveStateFetchedAt = Date.now();
   }
+  if (!context.policyState || Date.now() - context.policyStateFetchedAt >= STATE_REFRESH_MS) {
+    try {
+      context.policyState = await fetchJson(`${LIVE_EXIT_POLICY_URL}${LIVE_EXIT_POLICY_URL.includes("?") ? "&" : "?"}exitWorkerAt=${Date.now()}`, "live exit policy");
+      context.policyStateFetchedAt = Date.now();
+      context.policyError = null;
+    } catch (error) {
+      // A policy read must never stop the worker from honoring a local emergency
+      // watchlist. Keep the last valid policy briefly and expose the error in its
+      // local state for diagnosis.
+      context.policyError = error?.message || String(error);
+      context.policyStateFetchedAt = Date.now();
+    }
+  }
   const watchlist = await readJson(WATCHLIST_PATH, { positions: [] });
   const explicitlyWatched = watchlistEntryMap(watchlist);
+  const remotePolicies = remotePolicyMap(context.policyState);
+  const fallbackPolicy = defaultRemotePolicy(context.policyState);
   const plans = livePositions(context.liveState)
-    .filter((position) => PROTECT_ALL || explicitlyWatched.has(String(position.tokenId || position.assetId)))
-    .map((position) => watchPlan(position, explicitlyWatched.get(String(position.tokenId || position.assetId))))
+    .map((position) => {
+      const tokenId = String(position.tokenId || position.assetId || "");
+      const remotePolicy = remotePolicies.get(tokenId) || fallbackPolicy;
+      const localWatch = explicitlyWatched.get(tokenId);
+      if (!PROTECT_ALL && !localWatch && !remotePolicy) return null;
+      // A local watchlist may set a one-off price floor, but the portfolio's risk
+      // multiplier remains the source of truth unless a person explicitly adds one.
+      const entry = localWatch ? { ...remotePolicy, ...localWatch } : remotePolicy;
+      const policyPosition = remotePolicy
+        ? { ...position, stopLossRiskMultiplier: remotePolicy.stopLossRiskMultiplier }
+        : position;
+      return watchPlan(policyPosition, entry);
+    })
     .filter(Boolean);
   context.state.generatedAt = now;
   context.state.mode = MODE;
   context.state.protectAll = PROTECT_ALL;
+  context.state.policyUrl = LIVE_EXIT_POLICY_URL;
+  context.state.policyError = context.policyError || null;
   context.state.watchedPositions = plans.map((plan) => ({ tokenId: plan.tokenId, question: plan.question, outcome: plan.outcome, stopPrice: plan.stopPrice, triggerPrice: plan.triggerPrice, riskTargetUsdc: plan.riskTargetUsdc, source: plan.source }));
 
   for (const plan of plans) {
@@ -297,7 +343,14 @@ async function checkOnce(context) {
 }
 
 async function main() {
-  const context = { state: await readJson(STATE_PATH, { version: 1, history: [], exits: {} }), liveState: null, liveStateFetchedAt: 0 };
+  const context = {
+    state: await readJson(STATE_PATH, { version: 1, history: [], exits: {} }),
+    liveState: null,
+    liveStateFetchedAt: 0,
+    policyState: null,
+    policyStateFetchedAt: 0,
+    policyError: null,
+  };
   console.log(`Live exit worker started: mode=${MODE}, protectAll=${PROTECT_ALL}, poll=${POLL_INTERVAL_MS}ms`);
   for (;;) {
     try {

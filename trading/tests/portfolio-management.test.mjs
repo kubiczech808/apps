@@ -1083,15 +1083,14 @@ test("stop loss: the workflow passes it through with Equal's established default
   assert.match(WORKFLOW, /emit\(f"\{prefix\}_STOP_LOSS_ENABLED", str\(multiplier > 0\)\.lower\(\)\)/);
 });
 
-test("stop loss: the parameter modal offers it for every paper portfolio and hides it for live", () => {
+test("stop loss: the parameter modal offers it for paper and live portfolios", () => {
   assert.match(HTML, /data-stop-loss-risk-multiplier/);
-  assert.match(HTML, /data-paper-only-row/);
+  assert.doesNotMatch(HTML, /data-paper-only-row/);
   const sync = extractFunction(APP, "syncPortfolioParameterControls");
   assert.match(sync, /const stopLossMultiplier = stopLossRiskMultiplier\(config\);/);
   assert.match(sync, /els\.stopLossRiskMultiplier\.value = String\(Math\.round\(stopLossMultiplier \* 100\)\);/);
-  assert.match(sync,
-    /els\.paperOnlyRows\?\.forEach\(\(row\) => row\.toggleAttribute\("hidden", LIVE_MODES\.has\(normalizeMode\(mode\)\)\)\);/,
-    "hidden specifically for live modes, not merely for one hardcoded mode");
+  assert.doesNotMatch(sync, /paperOnlyRows/,
+    "the live setting must remain visible instead of being hidden by its mode");
   assert.match(APP, /els\.stopLossRiskMultiplier\?\.addEventListener\("input"/);
   // Off by default: unlike rotation (on unless explicitly false), most portfolios have
   // never had this behavior, so an absent value must not read as enabled.

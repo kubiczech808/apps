@@ -33,4 +33,7 @@ test("worker source keeps live exits opt-in and price-protected", async () => {
   assert.match(source, /client\.postOrder\(signed, OrderType\.FOK, false\)/);
   assert.match(source, /String\(response\?\.status \|\| ""\)\.toLowerCase\(\) === "matched"/);
   assert.match(source, /if \(!exitFilled\(response\) && ALLOW_PARTIAL\)/);
+  assert.match(source, /LIVE_EXIT_POLICY_URL/);
+  assert.match(source, /remotePolicyMap\(context\.policyState\)/);
+  assert.match(source, /defaultRemotePolicy\(context\.policyState\)/);
 });

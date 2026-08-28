@@ -37,9 +37,9 @@ jobs:
       POLYMARKET_PRIVATE_KEY: ${{ secrets.POLYMARKET_PRIVATE_KEY }}
       POLYMARKET_FUNDER_ADDRESS: ${{ secrets.POLYMARKET_FUNDER_ADDRESS || secrets.POLYMARKET_ADDRESS || '0x3252de913d9323667f21f4d88fa1f996fc282293' }}
       POLYMARKET_SIGNATURE_TYPE: ${{ secrets.POLYMARKET_SIGNATURE_TYPE || '3' }}
-      LIVE_EXIT_MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.live_exit_mode || 'shadow' }}
-      LIVE_EXIT_PROTECT_ALL: ${{ github.event_name == 'workflow_dispatch' && inputs.protect_all || 'false' }}
-      LIVE_EXIT_CONFIRM_LIVE: ${{ github.event_name == 'workflow_dispatch' && inputs.confirm_live || 'false' }}
+      LIVE_EXIT_MODE: ${{ inputs.live_exit_mode }}
+      LIVE_EXIT_PROTECT_ALL: ${{ inputs.protect_all }}
+      LIVE_EXIT_CONFIRM_LIVE: ${{ inputs.confirm_live }}
       LIVE_EXIT_REF: ${{ github.ref_name }}
     steps:
       - uses: actions/checkout@v4
@@ -74,16 +74,39 @@ jobs:
           set -euo pipefail
           umask 077
           mkdir -p "$HOME/.config" "$HOME/.local/state/trading"
+          existing_env="$HOME/.config/trading-live-exit-worker.env"
+          read_existing() {
+            if [ -f "$existing_env" ]; then
+              sed -n "s/^$1=//p" "$existing_env" | tail -n 1
+            fi
+          }
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+            exit_mode="${LIVE_EXIT_MODE:-shadow}"
+            protect_all="${LIVE_EXIT_PROTECT_ALL:-false}"
+            confirm_live="${LIVE_EXIT_CONFIRM_LIVE:-false}"
+          else
+            # A code update must not silently disarm a worker that the account owner
+            # already armed. Preserve the explicit mode and safeguards from its prior
+            # local EnvironmentFile; a first install remains shadow-only.
+            exit_mode="$(read_existing LIVE_EXIT_MODE)"
+            protect_all="$(read_existing LIVE_EXIT_PROTECT_ALL)"
+            confirm_live="$(read_existing LIVE_EXIT_CONFIRM_LIVE)"
+            exit_mode="${exit_mode:-shadow}"
+            protect_all="${protect_all:-false}"
+            confirm_live="${confirm_live:-false}"
+          fi
+          case "$exit_mode" in shadow|live) ;; *) exit_mode=shadow ;; esac
           cat > "$HOME/.config/trading-live-exit-worker.env" <<EOF
           POLYMARKET_PRIVATE_KEY=${POLYMARKET_PRIVATE_KEY}
           POLYMARKET_FUNDER_ADDRESS=${POLYMARKET_FUNDER_ADDRESS}
           POLYMARKET_SIGNATURE_TYPE=${POLYMARKET_SIGNATURE_TYPE}
-          LIVE_EXIT_MODE=${LIVE_EXIT_MODE}
-          LIVE_EXIT_CONFIRM_LIVE=${LIVE_EXIT_CONFIRM_LIVE}
-          LIVE_EXIT_PROTECT_ALL=${LIVE_EXIT_PROTECT_ALL}
+          LIVE_EXIT_MODE=${exit_mode}
+          LIVE_EXIT_CONFIRM_LIVE=${confirm_live}
+          LIVE_EXIT_PROTECT_ALL=${protect_all}
           LIVE_EXIT_POLL_INTERVAL_MS=5000
           LIVE_EXIT_RETRY_INTERVAL_MS=20000
           LIVE_EXIT_STATE_REFRESH_MS=30000
+          LIVE_EXIT_POLICY_URL=https://osobnizkusenosti.cz/trading/api.php?action=live-exit-policy
           LIVE_EXIT_STATE_PATH=$HOME/.local/state/trading/live-exit-worker-state.json
           LIVE_EXIT_WATCHLIST_PATH=$HOME/.config/trading-live-exit-watchlist.json
           LIVE_EXIT_POST_FILL_SYNC_COMMAND=gh workflow run trading-live-account.yml --repo kubiczech808/apps --ref ${LIVE_EXIT_REF}

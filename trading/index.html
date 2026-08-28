@@ -425,9 +425,7 @@
           <input type="checkbox" data-auto-rotate-positions>
           <strong data-auto-rotate-positions-label>On</strong>
         </label>
-        <!-- Paper-only: Polymarket offers no conditional stop order, so live portfolios
-             have no equivalent mechanism to turn on here. -->
-        <label class="parameter-control" data-paper-only-row title="0 disables the synthetic paper stop. 100 means the planned maximum loss equals the net potential win; 150 means one and a half times the net potential win.">
+        <label class="parameter-control" title="0 disables the protective exit. 100 means the planned maximum loss equals the net potential win; 150 means one and a half times the net potential win. Live exits are checked by the RPi worker and submitted only when its live mode is armed.">
           <span>Stop loss risk</span>
           <input type="number" min="0" max="300" step="10" value="0" data-stop-loss-risk-multiplier>
           <strong data-stop-loss-risk-multiplier-label>Off</strong>

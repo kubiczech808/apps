@@ -2469,11 +2469,10 @@ function normalize_strategy_config(array $input, array $defaults): array
         // were traded under. They leave the dashboard and stop being executed, and
         // restoring one is only clearing this flag.
         'archived' => (bool) ($input['archived'] ?? $defaults['archived'] ?? false),
-        // The paper synthetic stop Equal was built around, now a parameter any paper
-        // portfolio can turn on. Absent means the portfolio keeps its established
-        // behavior, matching every other On/Off switch here. Live portfolios have no
-        // equivalent -- Polymarket offers no conditional stop order -- so this field is
-        // stored on their config too but nothing ever reads it there.
+        // A zero multiplier disables the protective exit. Paper portfolios simulate it;
+        // live portfolios publish the setting to the RPi protective-exit worker, which
+        // submits a strict fee-aware FOK sell only when its separately armed live mode
+        // observes the configured floor.
         'stopLossEnabled' => $stopLossRiskMultiplier > 0,
         'stopLossRiskMultiplier' => $stopLossRiskMultiplier,
     ];
@@ -3597,6 +3596,127 @@ function custom_live_portfolio_is_known(?string $portfolioId, ?array $config = n
     return isset($live[$portfolioId]) && is_array($live[$portfolioId]) && ($live[$portfolioId]['archived'] ?? false) !== true;
 }
 
+/**
+ * The RPi worker needs only an explicitly enabled stop policy and the token to
+ * watch. It never receives a private key or a portfolio's broader UI settings
+ * through this endpoint. A successful entry is recorded in that portfolio's
+ * execution state, so it is enough to associate the token with its owning live
+ * strategy after the order has actually been accepted by Polymarket.
+ */
+function live_stop_loss_policy_config(array $config, string $portfolioId): ?array
+{
+    $row = null;
+    if ($portfolioId === 'live') {
+        $row = $config['live'] ?? null;
+    } elseif ($portfolioId === 'live5050') {
+        $row = $config['live5050'] ?? null;
+    } elseif (substr($portfolioId, 0, strlen('live-custom-')) === 'live-custom-') {
+        $id = substr($portfolioId, strlen('live-custom-'));
+        $row = $config['livePortfolios'][$id] ?? null;
+    }
+    if (!is_array($row) || ($row['archived'] ?? false) === true) {
+        return null;
+    }
+    $multiplier = normalize_stop_loss_risk_multiplier_value(
+        $row['stopLossRiskMultiplier'] ?? (($row['stopLossEnabled'] ?? false) ? 1.0 : 0.0),
+        0.0
+    );
+    if ($multiplier <= 0) {
+        return null;
+    }
+    return [
+        'portfolioId' => $portfolioId,
+        'stopLossRiskMultiplier' => $multiplier,
+        'enabled' => true,
+    ];
+}
+
+function live_execution_state_path_for_policy(string $portfolioId): string
+{
+    if ($portfolioId === 'live') {
+        return __DIR__ . '/data/live-execution-state.json';
+    }
+    if ($portfolioId === 'live5050') {
+        return __DIR__ . '/data/live-5050-execution-state.json';
+    }
+    $id = substr($portfolioId, strlen('live-custom-'));
+    return __DIR__ . '/data/live-' . $id . '-execution-state.json';
+}
+
+function live_execution_record_was_submitted(array $record): bool
+{
+    $action = strtoupper(trim((string) ($record['action'] ?? ($record['batchLog']['action'] ?? ''))));
+    return in_array($action, ['SUBMITTED', 'CANCELED_AND_SUBMITTED', 'ROTATED_OPENED'], true);
+}
+
+function live_execution_record_token_ids(array $record): array
+{
+    $ids = [];
+    $candidates = [
+        $record['selected'] ?? null,
+        $record['batchLog']['selected'] ?? null,
+    ];
+    foreach ($candidates as $candidate) {
+        if (!is_array($candidate)) {
+            continue;
+        }
+        $tokenId = trim((string) ($candidate['tokenId'] ?? $candidate['assetId'] ?? ''));
+        if ($tokenId !== '') {
+            $ids[$tokenId] = true;
+        }
+    }
+    return array_keys($ids);
+}
+
+function live_stop_loss_policy_payload(): array
+{
+    $config = load_portfolio_config();
+    $portfolioIds = ['live', 'live5050'];
+    foreach ((array) ($config['livePortfolios'] ?? []) as $id => $row) {
+        if (is_array($row)) {
+            $portfolioIds[] = 'live-custom-' . (string) $id;
+        }
+    }
+
+    $policies = [];
+    foreach ($portfolioIds as $portfolioId) {
+        $policy = live_stop_loss_policy_config($config, $portfolioId);
+        if ($policy === null) {
+            continue;
+        }
+        $state = decode_state_file(live_execution_state_path_for_policy($portfolioId), false);
+        if (!is_array($state)) {
+            continue;
+        }
+        $records = array_merge([$state], is_array($state['runLog'] ?? null) ? $state['runLog'] : []);
+        foreach ($records as $record) {
+            if (!is_array($record) || !live_execution_record_was_submitted($record)) {
+                continue;
+            }
+            $updatedAt = (string) ($record['generatedAt'] ?? $record['runAt'] ?? $record['batchLog']['runAt'] ?? '');
+            foreach (live_execution_record_token_ids($record) as $tokenId) {
+                $current = $policies[$tokenId] ?? null;
+                // A token can be seen in an older strategy state after it has been
+                // traded again. The newest accepted order owns its current policy.
+                if (is_array($current) && strcmp((string) ($current['updatedAt'] ?? ''), $updatedAt) > 0) {
+                    continue;
+                }
+                $policies[$tokenId] = array_merge($policy, ['tokenId' => $tokenId, 'updatedAt' => $updatedAt]);
+            }
+        }
+    }
+
+    // The original Live strategy predates per-order execution state. When enabled,
+    // it deliberately protects otherwise unlabelled positions on the same connected
+    // account as well. Custom live portfolios are never used as this fallback.
+    return [
+        'ok' => true,
+        'generatedAt' => gmdate('c'),
+        'policies' => array_values($policies),
+        'defaultPolicy' => live_stop_loss_policy_config($config, 'live'),
+    ];
+}
+
 function workflow_target_key(string $target): string
 {
     if (paper_strategy_from_target($target) !== null) {
@@ -3862,6 +3982,10 @@ try {
 
     if ($action === 'send-redeem-alerts') {
         respond(send_redeem_alerts());
+    }
+
+    if ($action === 'live-exit-policy') {
+        respond(live_stop_loss_policy_payload());
     }
 
     if ($action === 'state') {

@@ -316,9 +316,6 @@ const els = {
   executionCronMinutes: document.querySelector("[data-execution-cron-minutes]"),
   executionCronMinutesLabel: document.querySelector("[data-execution-cron-minutes-label]"),
   fixedEntryRows: document.querySelectorAll("[data-fixed-entry-row]"),
-  // Paper-only: Polymarket has no conditional stop order, so live portfolios have no
-  // equivalent setting to show this row for.
-  paperOnlyRows: document.querySelectorAll("[data-paper-only-row]"),
   fixedEntryPrice: document.querySelector("[data-fixed-entry-price]"),
   fixedEntryPriceLabel: document.querySelector("[data-fixed-entry-price-label]"),
   fixedEntryTags: document.querySelector("[data-fixed-entry-tags]"),
@@ -4509,9 +4506,6 @@ function syncPortfolioParameterControls(configOverride = null, options = {}) {
   const stopLossMultiplier = stopLossRiskMultiplier(config);
   if (els.stopLossRiskMultiplier) els.stopLossRiskMultiplier.value = String(Math.round(stopLossMultiplier * 100));
   if (els.stopLossRiskMultiplierLabel) els.stopLossRiskMultiplierLabel.textContent = stopLossRiskLabel(config);
-  // Paper-only: live portfolios have no equivalent to this mechanism, keyed on the
-  // portfolio being edited rather than the open tab, like the 5050 rows below.
-  els.paperOnlyRows?.forEach((row) => row.toggleAttribute("hidden", isLivePortfolioMode(mode)));
   if (els.parameterModalArchive) {
     // Only an existing paper portfolio can be archived. A live one holds real positions
     // and open orders, and hiding those would hide real exposure; one being created does
