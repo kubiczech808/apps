@@ -103,6 +103,33 @@ async function main() {
       + `  ${dropped ? `${dropped[0]} x${dropped[1]}` : "-"}`);
   }
 
+  // The decisive test for "do rows accumulate at all".
+  //
+  // Each scan merges what it just pulled into the catalogue it loaded, so if the merge
+  // works the stored active rows carry observedAt stamps from MANY past runs: a market
+  // seen an hour ago and not seen since keeps its old stamp. If instead every stored row
+  // was stamped by the newest one or two runs, the catalogue is being replaced rather
+  // than added to, and a large "new" count every run is the symptom, not the cause.
+  const stamps = new Map();
+  for (const row of rows) {
+    if (inactiveReason(row)) continue;
+    const stamp = String(row?.observedAt || row?.marketDataUpdatedAt || "").slice(0, 19);
+    stamps.set(stamp, (stamps.get(stamp) || 0) + 1);
+  }
+  const ranked = [...stamps.entries()].sort((a, b) => b[1] - a[1]);
+  const listedRows = [...stamps.values()].reduce((total, count) => total + count, 0);
+  const newestShare = listedRows ? (ranked[0]?.[1] || 0) / listedRows : 0;
+  console.log(`\nobservedAt spread across the ${listedRows} listed rows: ${ranked.length} distinct stamps`);
+  for (const [stamp, count] of ranked.slice(0, 6)) {
+    console.log(`  ${pad(count, 6)}  ${stamp || "(none)"}`);
+  }
+  if (newestShare >= 0.9) {
+    console.log(`  -> ${(newestShare * 100).toFixed(1)}% of the catalogue carries a single scan's stamp:`);
+    console.log(`     the catalogue is being REPLACED each run, not accumulated.`);
+  } else {
+    console.log(`  -> the catalogue carries stamps from many runs, so rows do survive between scans.`);
+  }
+
   const claimedNew = history.slice(0, 12).reduce((total, run) => total + int(run?.newObservationCount), 0);
   console.log(`\nThe log claims ${claimedNew} rows new to the catalogue across those runs,`
     + ` while it stores ${active} active in total.`);
