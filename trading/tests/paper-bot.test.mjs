@@ -8655,14 +8655,10 @@ test("spread: a row is only tradable if something was quoting near it", () => {
   assert.equal(bot.observationSpreadIsTradable({ firstBestAsk: 0.99, firstBestBid: 0.09 }), false);
   assert.equal(bot.observationSpreadIsTradable({ bestAsk: 0.71, bestBid: 0.69 }), true);
 
-  // A row that recorded nothing cannot show it had a counterparty, so the statistics do not
-  // count it -- but an entry still allows it, and the asymmetry is the point. The scan runs
-  // every one to three hours over a bounded page, so on a catalogue of a few thousand rows
-  // it takes most of a day before every row carries a spread. Refusing them all meanwhile
-  // would freeze every portfolio over missing data rather than over a wide book, and this
-  // gate exists to reject books there is evidence against.
+  // The resolved archive predates spread storage. Missing historical evidence therefore
+  // stays in the performance report, while a known wide book is still rejected.
   assert.equal(bot.observationSpread({}), null);
-  assert.equal(bot.observationSpreadIsTradable({}), false);
+  assert.equal(bot.observationSpreadIsTradable({}), true);
   assert.equal(bot.candidateSpreadIsTradable({}), true);
   // A recorded wide book is evidence, and it is refused on both sides.
   assert.equal(bot.candidateSpreadIsTradable({ spread: 0.9 }), false);
@@ -8701,15 +8697,15 @@ test("spread: an untradable quote is kept out of the statistics and counted wher
     marketObservations: [row("tradable", 0.02), row("unquoted", 0.9), row("unrecorded", null)],
   }));
 
-  assert.equal(report.sampleSize, 1, "only the row with a book behind it is a trade");
+  assert.equal(report.sampleSize, 2, "a legacy row without a recorded spread remains measurable");
   assert.equal(report.spreadScrapedCount, 3, "and the report says how many it started from");
-  assert.equal(report.spreadExcludedCount, 2);
+  assert.equal(report.spreadExcludedCount, 1);
   assert.equal(report.maxTradableSpread, 0.05, "the limit in force is published with the count");
   // Nothing was deleted to achieve this: the observations are all still in the state.
   const rule = report.parameterSummaries.find((r) => r.marketType === "all"
     && r.threshold === 0.5 && r.maxResolutionDays === 30 && r.maxProbability == null);
-  assert.equal(rule.trades, 1);
-  assert.equal(report.tagSummaries.find((r) => r.label === "esports")?.trades, 1);
+  assert.equal(rule.trades, 2);
+  assert.equal(report.tagSummaries.find((r) => r.label === "esports")?.trades, 2);
 });
 
 test("spread: a portfolio will not open a position it could not have been filled on", () => {

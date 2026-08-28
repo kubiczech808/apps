@@ -11193,15 +11193,14 @@ function renderCalculationReport() {
   const binary = Number(report.resolvedBinaryCount || 0);
   const multi = Number(report.resolvedMultiCount || 0);
   // Said out loud, because a shrinking sample otherwise reads as data loss. Nothing is
-  // deleted: a row whose quote was too wide to trade against is held back from the
-  // statistics, and rows scraped before the spread was recorded cannot show they had a
-  // counterparty, so they are held back too until they are scanned again.
+  // deleted: only rows with a recorded quote too wide to trade against are held back.
+  // Older rows without a saved spread remain in the historical sample.
   // The limit reads in points, not as a percentage: a spread is the distance between two
   // prices, and "5.0%" beside a table full of probabilities reads like one of them.
   const spreadExcluded = Number(report.spreadExcludedCount || 0);
   const spreadNote = spreadExcluded > 0
     ? ` / ${formatInteger(spreadExcluded)} held back: bid/ask wider than `
-      + `${(Number(report.maxTradableSpread || 0) * 100).toFixed(0)} points, or not recorded yet`
+      + `${(Number(report.maxTradableSpread || 0) * 100).toFixed(0)} points`
     : "";
 
   els.calculationReport.innerHTML = `

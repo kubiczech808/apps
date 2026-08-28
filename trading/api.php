@@ -973,12 +973,10 @@ function observation_spread(array $item): ?float
  * markets: the median spread is 90 points and 87% of them are wider than 10 points with no
  * 24h volume at all.
  *
- * A row that recorded no spread cannot answer, and the two callers want different answers
- * -- mirroring the bot, which has one constant for each. A statistics row must be able to
- * show its entry was reachable, so silence excludes it. A shortlist must not empty itself
- * out because the scan has not revisited a row yet, so silence admits it: the scan runs
- * every one to three hours over a bounded page, and on a catalogue of a few thousand rows
- * it takes most of a day to cover. This gate rejects books there is evidence against.
+ * A row that recorded no spread cannot answer. The newer execution shortlist admits it so
+ * an unfinished scan does not stall a portfolio; the historical statistics do too, because
+ * most archived rows predate spread collection. A known wide book is still rejected in
+ * both places, which is the actionable evidence against a fill.
  */
 function observation_spread_is_tradable(array $item, bool $unknownIsTradable = false): bool
 {
@@ -3891,11 +3889,10 @@ try {
             if ($entry === null || $entry < $minProbability || ($maxProbability !== null && $entry >= $maxProbability)) {
                 return true;
             }
-            // The statistics count only rows whose quote had a counterparty near it, so a
-            // list opened from one of those rows has to hold the same set. Without this
-            // the count and the list disagree, which is the complaint this endpoint was
-            // built to answer in the first place.
-            if (!observation_spread_is_tradable($item)) {
+            // Historical report rows without a saved spread remain in the sample: the
+            // archive predates spread collection. Known wide books are still excluded,
+            // and the list has to mirror that same calculation population.
+            if (!observation_spread_is_tradable($item, true)) {
                 return true;
             }
             $labels = simulation_taxonomy_labels($item, $firstField, $currentField);

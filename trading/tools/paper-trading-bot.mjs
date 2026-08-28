@@ -174,11 +174,13 @@ const MAX_TRADABLE_SPREAD = Math.max(0, envNumber("PAPER_MAX_TRADABLE_SPREAD", 0
 // What to do with a row that recorded no spread at all. The two sides answer differently,
 // on purpose, because being wrong costs different things.
 //
-// In the statistics an unrecorded spread cannot show the row had a counterparty, so it does
-// not count. That restarts the statistics from clean data, as asked, without deleting
-// anything: the archive keeps every observation and the report says how many it held back.
-// PAPER_COUNT_UNKNOWN_SPREAD=true re-admits the lot.
-const COUNT_UNKNOWN_SPREAD_AS_TRADABLE = envBool("PAPER_COUNT_UNKNOWN_SPREAD", false);
+// The resolved archive predates spread collection for most of its history. Excluding an
+// unknown historical spread therefore leaves the performance report with only a handful
+// of rows, even though it has tens of thousands of settled observations. Keep rows with
+// no spread record in the historical report, while still excluding every row that has a
+// recorded wide spread. PAPER_COUNT_UNKNOWN_SPREAD=false remains available for a strict
+// audit of only the newer, quoted subset.
+const COUNT_UNKNOWN_SPREAD_AS_TRADABLE = envBool("PAPER_COUNT_UNKNOWN_SPREAD", true);
 // At entry it is allowed, which is deliberate rather than lax. Measured on the live repo:
 // the market scan runs roughly every one to three hours and refreshes a bounded page, so on
 // an active catalogue of ~3,900 rows it takes most of a day before every row carries a
