@@ -1,0 +1,22 @@
+name: Trading Gamma Ordering Probe
+
+# Read-only measurement, dispatch only. Asks whether Gamma actually honours `order=` /
+# `ascending=` -- the scan already sends them, but this codebase has already found one
+# parameter Gamma accepts and silently ignores (`start_date_max`), so sending is not proof.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Probe Gamma ordering parameters
+        working-directory: trading
+        run: node tools/gamma-ordering-probe.mjs
