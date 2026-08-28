@@ -1,0 +1,28 @@
+name: Trading Scraped Volume Filter Diagnosis
+
+# Read-only measurement, dispatch only. Asks why rows showing Volume 0 pass the
+# "Volume min >=" filter on the scraped opportunities list.
+on:
+  workflow_dispatch:
+    inputs:
+      min_volume:
+        description: "Volume floor to test the filter with"
+        required: false
+        default: "1000"
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Diagnose the scraped volume filter
+        working-directory: trading
+        env:
+          DIAGNOSIS_MIN_VOLUME: ${{ inputs.min_volume }}
+        run: node tools/scraped-volume-filter-diagnosis.mjs

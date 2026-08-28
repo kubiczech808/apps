@@ -249,6 +249,40 @@ const MARKET_SCAN_LIQUIDITY_MIN = Math.max(0, envNumber("PAPER_MARKET_SCAN_LIQUI
 //   * `start_date_max` is silently ignored, so "has it started" is still derived from
 //     gameStartTime/eventStartTime as sportsScheduledEventDate already does.
 const MARKET_SCAN_LIVE_ENABLED = envBool("PAPER_MARKET_SCAN_LIVE", true);
+// Two more uncursored passes, for the same reason and on the same terms as the live one.
+//
+// Every scope of the catalogue rotation pages forward: its cursor is saved and the next
+// run continues from it. So "nearest resolution first" is true for the first run of a
+// cycle and progressively less true for every run after it, until the cursor exhausts and
+// restarts at the head. These passes carry no cursor, so on every run they fetch the
+// actual head of their ordering, whatever the rotation is doing.
+//
+// Measured against Gamma (tools/gamma-ordering-probe.mjs), not assumed, because this
+// codebase has already found a parameter the server accepts and silently ignores
+// (`start_date_max`) and an ignored ordering would be worse than none -- the scan would
+// believe it was reading the near-resolution frontier while Gamma returned anything:
+//
+//   * `order` and `ascending` are honoured on events/keyset, the endpoint this scan
+//     pages: 49 of 49 rows came back in order, and flipping `ascending` changed the
+//     first row, which an ignored parameter cannot do.
+//   * The ordering survives the `end_date_min`/`end_date_max` bounds scanEventRequestParams
+//     always adds, so it holds for the query this scan actually sends, not just a bare one.
+//   * It also survives `after_cursor`: page two came back sorted and starting after page
+//     one, so keyset pagination does not quietly fall back to a default order.
+//   * `endDate`, `startDate`, `volume`, `volume24hr` and `liquidity` all work as order
+//     fields on /events, /markets and events/keyset alike.
+//
+// The frontier pass starts MARKET_SCAN_END_DATE_GRACE_HOURS in the past, so its first
+// rows are events that have just ended. That is deliberate -- see the grace constant --
+// and retention drops the ones that really are closed.
+const MARKET_SCAN_FRONTIER_ENABLED = envBool("PAPER_MARKET_SCAN_FRONTIER", true);
+const MARKET_SCAN_HIGH_VOLUME_ENABLED = envBool("PAPER_MARKET_SCAN_HIGH_VOLUME", true);
+// Deliberately smaller than the rotating scope's page. These run on every scan, so their
+// cost is paid every time; the rotating scope is what covers the catalogue in depth.
+const MARKET_SCAN_PRIORITY_BATCH_LIMIT = Math.max(
+  1,
+  Math.min(500, envNumber("PAPER_MARKET_SCAN_PRIORITY_BATCH_LIMIT", 150)),
+);
 const MARKET_SCAN_LIVE_TAG_SLUGS = ["sports", "esports"];
 const MARKET_SCAN_LIVE_WINDOW_HOURS = Math.max(1, envNumber("PAPER_MARKET_SCAN_LIVE_WINDOW_HOURS", 12));
 // A market whose end date has just passed can still be trading and is exactly the kind
@@ -8151,6 +8185,37 @@ async function loadLiveMarketScanBatch({ auditCalls = null } = {}) {
   return { markets, perTag };
 }
 
+// The head of the endDate ordering: whatever resolves next, across every tag, on every
+// run. This is the pass that makes "nearest resolution first" a property of every scan
+// rather than of the first scan after a cursor reset.
+async function loadFrontierMarketScanBatch({ auditCalls = null } = {}) {
+  return loadEventMarketScanBatch({
+    limit: MARKET_SCAN_PRIORITY_BATCH_LIMIT,
+    order: "endDate",
+    ascending: "true",
+  }, {
+    calls: auditCalls,
+    scope: "frontier",
+    label: "Nearest resolution",
+  });
+}
+
+// The head of the volume24hr ordering, inside the same resolution window. Ordering by
+// total `volume` instead would rank on lifetime turnover and hand back the 2028 election
+// markets every time, which the end-date bound then discards; volume24hr ranks on money
+// moving now, which is what makes a market tradable.
+async function loadHighVolumeMarketScanBatch({ auditCalls = null } = {}) {
+  return loadEventMarketScanBatch({
+    limit: MARKET_SCAN_PRIORITY_BATCH_LIMIT,
+    order: "volume24hr",
+    ascending: "false",
+  }, {
+    calls: auditCalls,
+    scope: "high_volume",
+    label: "Highest 24h volume",
+  });
+}
+
 function flattenEventMarkets(events = [], auditCalls = null) {
   const sourceEvents = Array.isArray(events) ? events : [];
   const markets = [];
@@ -9060,9 +9125,45 @@ async function refreshMarketObservations(state) {
       }
     }
 
-    // Live rows go first so that if anything downstream is bounded, the events that are
-    // happening right now are the ones that survive.
-    const fetchedMarkets = [...liveMarkets, ...diversifyMarketScanOrder(batch)];
+    // Same policy as the live pass for the same reason: a failure here is logged and
+    // dropped, because the catalogue scan is the job that must keep working and losing
+    // one priority page costs nothing the next run cannot redo.
+    let frontierMarkets = [];
+    let frontierScanError = null;
+    if (MARKET_SCAN_FRONTIER_ENABLED) {
+      try {
+        frontierMarkets = await loadFrontierMarketScanBatch({ auditCalls: apiCallAudit });
+      } catch (error) {
+        frontierScanError = error?.message || String(error);
+        console.warn(`Nearest-resolution scan failed (${frontierScanError}); continuing without it.`);
+      }
+    }
+
+    let highVolumeMarkets = [];
+    let highVolumeScanError = null;
+    if (MARKET_SCAN_HIGH_VOLUME_ENABLED) {
+      try {
+        highVolumeMarkets = await loadHighVolumeMarketScanBatch({ auditCalls: apiCallAudit });
+      } catch (error) {
+        highVolumeScanError = error?.message || String(error);
+        console.warn(`Highest-volume scan failed (${highVolumeScanError}); continuing without it.`);
+      }
+    }
+
+    // Priority rows go first so that if anything downstream is bounded, the events that
+    // are happening right now, resolving next, or carrying the most money today are the
+    // ones that survive. The passes overlap by design -- a match kicking off in an hour
+    // is on all three -- so this merges instead of concatenating: mergeMarketLists keeps
+    // the first copy of a market, which means an overlapping market keeps its highest
+    // priority position and is still only counted, audited and retained once.
+    const priorityMarkets = mergeMarketLists(liveMarkets, frontierMarkets, highVolumeMarkets);
+    const rotatingMarkets = diversifyMarketScanOrder(batch);
+    const fetchedMarkets = mergeMarketLists(priorityMarkets, rotatingMarkets);
+    const duplicateMarketsSkipped = Math.max(
+      0,
+      liveMarkets.length + frontierMarkets.length + highVolumeMarkets.length
+        + rotatingMarkets.length - fetchedMarkets.length,
+    );
     const knownEventKeys = activeScanEventKeys(state.marketObservations || []);
     const unseenEventCount = unseenScanEventCount(fetchedMarkets, knownEventKeys);
     const scanReasonCounts = {};
@@ -9118,7 +9219,9 @@ async function refreshMarketObservations(state) {
       lastBatchEndDate: batch?.__scanLastEndDate || null,
       lastScanAt: scanRunAt,
       lastBatchCount: fetchedMarkets.length,
-      lastPreferredCount: scope.tag ? 0 : fetchedMarkets.length,
+      // The rotating scope's own rows. Reading this off fetchedMarkets would fold the
+      // live and priority passes into the scope's count and overstate it several times.
+      lastPreferredCount: scope.tag ? 0 : rotatingMarkets.length,
       lastShortHorizonCount: shortHorizonCount,
       preferredMaxResolutionDays: MARKET_SCAN_PREFERRED_MAX_RESOLUTION_DAYS,
       minResolutionMinutes: MARKET_SCAN_MIN_RESOLUTION_MINUTES,
@@ -9127,7 +9230,7 @@ async function refreshMarketObservations(state) {
       lastCategoryCounts: categoryCounts,
       lastRequestedCategories: [scope.tag?.slug || "all"],
       lastUnseenEventCount: unseenEventCount,
-      lastEventDuplicatesSkippedCount: 0,
+      lastEventDuplicatesSkippedCount: duplicateMarketsSkipped,
       priorityLiquidityUsdc: MARKET_SCAN_DIVERSITY_LIQUIDITY_USDC,
       liquidityMin: MARKET_SCAN_LIQUIDITY_MIN,
       maxDays: MARKET_SCAN_MAX_DAYS,
@@ -9137,6 +9240,13 @@ async function refreshMarketObservations(state) {
       liveScanCount: liveMarkets.length,
       liveScanCounts: liveScanPerTag,
       liveScanError,
+      frontierScanEnabled: MARKET_SCAN_FRONTIER_ENABLED,
+      frontierScanCount: frontierMarkets.length,
+      frontierScanError,
+      highVolumeScanEnabled: MARKET_SCAN_HIGH_VOLUME_ENABLED,
+      highVolumeScanCount: highVolumeMarkets.length,
+      highVolumeScanError,
+      priorityScanBatchLimit: MARKET_SCAN_PRIORITY_BATCH_LIMIT,
       endDateGraceHours: MARKET_SCAN_END_DATE_GRACE_HOURS,
       lastScanError: null,
     };
@@ -9148,8 +9258,8 @@ async function refreshMarketObservations(state) {
         status: "SUCCESS",
         apiCalls: apiCallAudit.length || 1,
         requestedBatches: 1,
-        preferredMarketCount: scope.tag ? 0 : fetchedMarkets.length,
-        categoryMarketCount: scope.tag ? fetchedMarkets.length : 0,
+        preferredMarketCount: scope.tag ? 0 : rotatingMarkets.length,
+        categoryMarketCount: scope.tag ? rotatingMarkets.length : 0,
         categoryApiCalls: scope.tag ? 1 : 0,
         categoryErrors: [],
         requestedCategories: [scope.tag?.slug || "all"],
