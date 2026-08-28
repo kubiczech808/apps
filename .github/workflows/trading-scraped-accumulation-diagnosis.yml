@@ -1,0 +1,22 @@
+name: Trading Scraped Accumulation Diagnosis
+
+# Read-only measurement, dispatch only. Asks whether scraped rows really accumulate, or
+# whether the catalogue is churning against its retention cap while the log reports
+# thousands of new rows per run.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Diagnose scraped accumulation
+        working-directory: trading
+        run: node tools/scraped-accumulation-diagnosis.mjs
