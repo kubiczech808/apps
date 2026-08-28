@@ -121,6 +121,7 @@ jobs:
       PAPER_SCRAPED_STATE_URL: https://osobnizkusenosti.cz/trading/api.php?action=state&target=paper&summary=execution
       LIVE_STATE_PATH: data/live-state.json
       LIVE_STATE_URL: https://osobnizkusenosti.cz/trading/api.php?action=state&target=live
+      LIVE_PORTFOLIO_CONFIG_URL: https://osobnizkusenosti.cz/trading/api.php?action=portfolio-config
       LIVE_EXECUTION_STATE_PATH: data/live-execution-state.json
       LIVE_EXECUTION_STATE_URL: https://osobnizkusenosti.cz/trading/api.php?action=state&target=live-execution
       LIVE_EXECUTION_PUBLISH_FILE: trading/data/live-execution-state.json>live-execution-state.json
@@ -154,9 +155,8 @@ jobs:
       LIVE_AUTO_ROTATE: "true"
       LIVE_EXECUTION_SOURCE: rpi-self-hosted
       # The deposited baseline is an external fact, not something to infer from P/L.
-      # Set LIVE_ORIGINAL_VALUE_USDC to the amount actually paid into the Polymarket
-      # account. To record a later top-up, set LIVE_ADDITIONAL_DEPOSIT_USDC together
-      # with a unique LIVE_ADDITIONAL_DEPOSIT_ID; it is added once and remembered.
+      # The saved Live portfolio config is primary. GitHub variables remain a fallback
+      # for headless recovery or a temporary top-up before the UI value is updated.
       LIVE_ORIGINAL_VALUE_USDC: ${{ vars.LIVE_ORIGINAL_VALUE_USDC }}
       LIVE_ADDITIONAL_DEPOSIT_USDC: ${{ vars.LIVE_ADDITIONAL_DEPOSIT_USDC }}
       LIVE_ADDITIONAL_DEPOSIT_ID: ${{ vars.LIVE_ADDITIONAL_DEPOSIT_ID }}

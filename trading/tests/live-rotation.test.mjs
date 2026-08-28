@@ -1646,10 +1646,11 @@ function functionSource(source, name) {
   if (start < 0) throw new Error(`missing ${name}`);
   // Keep the `async` keyword, or an awaiting body is extracted as a sync function.
   if (source.slice(start - 6, start) === "async ") start -= 6;
-  // Count from the body brace, not a `row = {}` default parameter.
-  const bodyStart = source.indexOf(") {\n", start);
+  // Count from the body brace after the parameter list, not a `row = {}` default
+  // parameter. Line endings vary across local checkouts, so this cannot depend on LF.
+  const bodyStart = source.indexOf("{", source.indexOf(")", start));
   let depth = 0;
-  for (let i = bodyStart + 2; i < source.length; i += 1) {
+  for (let i = bodyStart; i < source.length; i += 1) {
     if (source[i] === "{") depth += 1;
     else if (source[i] === "}") {
       depth -= 1;
@@ -2387,6 +2388,13 @@ test("running execution: a run in flight is a row before it has published anythi
   assert.equal(pending.runSource, "MANUAL");
   assert.match(pending.humanReason, /^Execution in progress: waiting for a runner/);
 
+  const foreign = runningRowHarness({ run: IN_PROGRESS_RUN, dispatchedHere: false });
+  assert.deepEqual(
+    foreign.withRunningExecutionRow([{ id: "older" }]),
+    [{ id: "older" }],
+    "a run this browser did not dispatch is not a speculative row",
+  );
+
   // Nothing running, nothing added.
   const idle = runningRowHarness({ run: null });
   assert.deepEqual(idle.withRunningExecutionRow([{ id: "older" }]), [{ id: "older" }]);
@@ -2440,10 +2448,19 @@ test("running execution: status is read from GitHub, and only for a run still go
   // Read rather than published by the run at its start: a run that dies, is cancelled or
   // never gets a runner would leave a RUNNING row on the hosting with nothing to clear it.
   const poll = functionSource(app, "pollRunningExecution");
+  const shouldPoll = functionSource(app, "shouldPollRunningExecution");
+  assert.match(poll, /if \(!shouldPollRunningExecution\(target\)\) return;/,
+    "an idle dashboard must not hit the GitHub workflow-status endpoint");
   assert.match(poll, /run\.status === "queued" \|\| run\.status === "in_progress"/);
-  assert.match(poll, /event=all/, "a cron or post-scrape run is exactly the one not to miss");
+  assert.ok(!/event=all/.test(poll),
+    "the live watcher follows manual dispatches only; scheduled runs publish their own logs");
+  assert.match(poll, /&& executionRunWasDispatchedHere\(target, run\)/,
+    "a scheduled or tool-dispatched run must not be adopted by the browser's synthetic row");
+  assert.match(shouldPoll, /if \(!target \|\| isPaperExecutionTarget\(target\)\) return false;/,
+    "paper workflows share one GitHub file, so they are never watched speculatively");
+  assert.match(shouldPoll, /Date\.now\(\) - dispatchedAt <= DISPATCHED_EXECUTION_TTL_MS/);
   // A failed status read must not flicker the row away.
-  assert.match(poll, /\} catch \{\n(?:\s*\/\/[^\n]*\n)*\s+return;\n\s+\}/);
+  assert.match(poll, /\} catch \{\r?\n(?:\s*\/\/[^\n]*\r?\n)*\s+return;\r?\n\s+\}/);
   // And when the run ends, the state is re-read once so the real row can take over.
   assert.match(poll, /if \(finished\) await loadDashboardState\(\{ skipAutoLiveSync: true \}\);/);
 
@@ -2452,11 +2469,13 @@ test("running execution: status is read from GitHub, and only for a run still go
   // The default stays dispatch-only: the watcher that waits on a button press must not
   // adopt a cron run that started meanwhile.
   assert.match(api, /\$eventFilter = strtolower\(trim\(\(string\) \(\$_GET\['event'\] \?\? 'workflow_dispatch'\)\)\);/);
-  assert.match(api, /if \(\$eventFilter !== '' && \$eventFilter !== 'all'\) \{\n\s+\$query\['event'\] = \$eventFilter;/);
+  assert.match(api, /if \(\$eventFilter !== '' && \$eventFilter !== 'all'\) \{\r?\n\s+\$query\['event'\] = \$eventFilter;/);
+  assert.match(api, /'statusError' => \$e->getMessage\(\),/,
+    "a temporary GitHub failure must not surface as a browser resource 500");
 
   // The progress read is what lets the row say more than "in progress", and it is skipped
   // for a completed run -- so an idle dashboard pays for no extra GitHub request.
-  assert.match(api, /if \(\$runId <= 0 \|\| \$status === 'completed'\) \{\n\s+return null;/);
+  assert.match(api, /if \(\$runId <= 0 \|\| \$status === 'completed'\) \{\r?\n\s+return null;/);
   assert.match(api, /\$runs\[0\]\['progress'\] = workflow_progress_detail\(\$raw, \$config\);/);
 });
 

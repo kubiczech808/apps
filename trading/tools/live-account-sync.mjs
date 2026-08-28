@@ -17,6 +17,7 @@ const CONFIGURED_ACCOUNT_ADDRESS = (process.env.POLYMARKET_ADDRESS || DEFAULT_AD
 const CONFIGURED_FUNDER_ADDRESS = (process.env.POLYMARKET_FUNDER_ADDRESS || process.env.POLYMARKET_ADDRESS || DEFAULT_ADDRESS).toLowerCase();
 const STATE_PATH = process.env.LIVE_STATE_PATH || "data/live-state.json";
 const LIVE_STATE_URL = process.env.LIVE_STATE_URL || "";
+const LIVE_PORTFOLIO_CONFIG_URL = process.env.LIVE_PORTFOLIO_CONFIG_URL || "";
 const ACTIVITY_LIMIT = Number(process.env.LIVE_ACTIVITY_LIMIT || 50);
 const TRADE_LIMIT = Number(process.env.LIVE_TRADE_LIMIT || 500);
 const SIGNATURE_TYPE = Number(process.env.POLYMARKET_SIGNATURE_TYPE || 1);
@@ -167,6 +168,26 @@ async function loadPreviousLiveState(sync) {
     return payload && typeof payload === "object" ? payload : null;
   } catch (error) {
     sync.warnings.push(`previous-live-state: ${error?.message || String(error)}`);
+    return null;
+  }
+}
+
+async function loadLivePortfolioConfig(sync) {
+  if (!LIVE_PORTFOLIO_CONFIG_URL) return null;
+  try {
+    const url = new URL(LIVE_PORTFOLIO_CONFIG_URL);
+    url.searchParams.set("_sync", String(Date.now()));
+    const response = await fetch(url, {
+      headers: { "User-Agent": "osobnizkusenosti-trading-live-sync" },
+    });
+    if (!response.ok) {
+      const body = await response.text().catch(() => "");
+      throw new Error(`HTTP ${response.status}${body ? `: ${body.slice(0, 120)}` : ""}`);
+    }
+    const payload = await response.json();
+    return payload?.config && typeof payload.config === "object" ? payload.config : null;
+  } catch (error) {
+    sync.warnings.push(`portfolio-config: ${error?.message || String(error)}`);
     return null;
   }
 }
@@ -1676,7 +1697,10 @@ async function main() {
     warnings: [],
   };
   await discoverTradingAccount(sync);
-  const previousLiveState = await loadPreviousLiveState(sync);
+  const [previousLiveState, portfolioConfig] = await Promise.all([
+    loadPreviousLiveState(sync),
+    loadLivePortfolioConfig(sync),
+  ]);
 
   let rawPositions = [];
   let rawActivity = [];
@@ -1786,10 +1810,9 @@ async function main() {
   // P/L that was not itself a real result. Every percentage on the card then derives
   // from that wrong baseline, so the error sustains itself.
   //
-  // It is now configured, never derived. LIVE_ORIGINAL_VALUE_USDC is authoritative when
-  // set; otherwise the stored baseline is kept. If neither exists it stays null and the
-  // dashboard reports it as unavailable, because inventing a baseline that then sticks
-  // forever is worse than saying it is unknown.
+  // It is now configured, never derived. The UI's portfolio config is authoritative when
+  // set; LIVE_ORIGINAL_VALUE_USDC is a legacy fallback for headless recovery. If neither
+  // exists, the stored baseline is kept before the old default is used.
   const storedOriginalValueUsdc = number(
     previousLiveState?.portfolio?.originalValueUsdc ?? previousLiveState?.portfolio?.depositedUsdc,
   );
@@ -1798,13 +1821,15 @@ async function main() {
   // is the corrupted 33.36 that came from the old inference, and a fix that only applied
   // to fresh state would never have reached it.
   //
-  // Change it here (or via LIVE_ORIGINAL_VALUE_USDC) when the deposit really changes.
-  // A later top-up is better recorded with LIVE_ADDITIONAL_DEPOSIT_USDC, which adds to
-  // this baseline once and remembers that it did.
+  // Change it in the Live portfolio parameters when the deposit really changes. The
+  // legacy LIVE_ADDITIONAL_DEPOSIT_USDC path is still accepted only while no UI baseline
+  // is set, so old recovery runs keep working without double-counting a saved top-up.
   const DEFAULT_ORIGINAL_VALUE_USDC = 27;
-  const configuredOriginalValueUsdc = number(process.env.LIVE_ORIGINAL_VALUE_USDC) > 0
-    ? number(process.env.LIVE_ORIGINAL_VALUE_USDC)
-    : DEFAULT_ORIGINAL_VALUE_USDC;
+  const configOriginalValueUsdc = number(portfolioConfig?.live?.initialUsdc);
+  const envOriginalValueUsdc = number(process.env.LIVE_ORIGINAL_VALUE_USDC);
+  const configuredOriginalValueUsdc = configOriginalValueUsdc > 0
+    ? configOriginalValueUsdc
+    : (envOriginalValueUsdc > 0 ? envOriginalValueUsdc : null);
   // A later top-up is added once and recorded, so repeated runs cannot count it twice.
   const appliedDeposits = (Array.isArray(previousLiveState?.portfolio?.appliedDeposits)
     ? previousLiveState.portfolio.appliedDeposits
@@ -1812,13 +1837,15 @@ async function main() {
   const additionalDepositUsdc = number(process.env.LIVE_ADDITIONAL_DEPOSIT_USDC);
   const additionalDepositId = String(process.env.LIVE_ADDITIONAL_DEPOSIT_ID || "").trim()
     || (additionalDepositUsdc > 0 ? `deposit-${additionalDepositUsdc}` : "");
-  const depositIsNew = additionalDepositUsdc > 0
+  const useConfiguredUiBaseline = configOriginalValueUsdc > 0;
+  const depositIsNew = !useConfiguredUiBaseline
+    && additionalDepositUsdc > 0
     && additionalDepositId !== ""
     && !appliedDeposits.some((entry) => String(entry.id || "") === additionalDepositId);
 
   let baselineUsdc = configuredOriginalValueUsdc > 0
     ? configuredOriginalValueUsdc
-    : (storedOriginalValueUsdc > 0 ? storedOriginalValueUsdc : null);
+    : (storedOriginalValueUsdc > 0 ? storedOriginalValueUsdc : DEFAULT_ORIGINAL_VALUE_USDC);
   if (depositIsNew) {
     baselineUsdc = number((number(baselineUsdc, 0) + additionalDepositUsdc).toFixed(6));
     appliedDeposits.unshift({
@@ -1830,6 +1857,11 @@ async function main() {
     console.warn(`Applied deposit ${additionalDepositUsdc} USDC (${additionalDepositId}); baseline is now ${baselineUsdc}.`);
   }
   const originalValueUsdc = baselineUsdc;
+  const originalValueSource = configOriginalValueUsdc > 0
+    ? "portfolio-config"
+    : (envOriginalValueUsdc > 0
+      ? "configured-env"
+      : (storedOriginalValueUsdc > 0 ? "persisted-original-value" : "configured-default"));
   // Public activity/history endpoints can briefly omit older closes. Equity
   // comes from the live collateral plus marked positions, so it is the stable
   // source of truth for total account P/L against the fixed original value.
@@ -1878,9 +1910,7 @@ async function main() {
       originalValueUsdc,
       // Where the baseline came from, so a wrong one is traceable instead of
       // anonymous, and the applied top-ups so none is ever counted twice.
-      originalValueSource: number(process.env.LIVE_ORIGINAL_VALUE_USDC) > 0
-        ? "configured-env"
-        : "configured-default",
+      originalValueSource,
       appliedDeposits,
       pnlPercentageBasis: hasBaseline ? "original-value" : "ledger",
       openPnlPct: pnlPctOfOriginalValue(portfolioBase.openPnlUsdc),
@@ -1894,8 +1924,8 @@ async function main() {
       ledgerDerivedRealizedPnlUsdc: portfolioBase.realizedPnlUsdc,
       ledgerDerivedTotalPnlUsdc: portfolioBase.totalPnlUsdc,
       pnlSource: "equity-minus-original-value",
-      depositedSource: storedOriginalValueUsdc > 0 ? "persisted-original-value" : "initial-sync-estimate",
-      depositedNote: "Original account value is fixed from the first usable live snapshot. It changes only through an explicit future deposit/withdrawal reconciliation, never through position, redeem, or P/L sync changes.",
+      depositedSource: originalValueSource,
+      depositedNote: "Original account value is the configured live capital/deposit baseline. Update it in portfolio parameters after a real top-up or withdrawal; it is never inferred from position, redeem, or P/L sync changes.",
       equitySource: cashUsdc == null ? "polymarket-value-api-or-open-market-value" : "cash + open market value + pending redeem value",
       pendingRedeemNote: "Winning resolved positions that Polymarket exposes as redeemable are counted in equity until cash balance shows the manual redeem.",
       cashSource: balanceAllowance?.status === "OK" ? "clob-balance-allowance" : null,

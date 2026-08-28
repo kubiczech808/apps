@@ -2009,6 +2009,7 @@ function default_portfolio_config(): array
         ],
         'live' => [
             'displayName' => 'Live',
+            'initialUsdc' => null,
             'minProbability' => 0.95,
             'stakeUsdc' => 5.0,
             'maxOrderFraction' => 0.05,
@@ -2083,7 +2084,7 @@ function portfolio_config_history_path(): string
 function portfolio_config_history_fields(): array
 {
     return [
-        'displayName', 'minProbability', 'maxProbability', 'stakeUsdc',
+        'displayName', 'initialUsdc', 'minProbability', 'maxProbability', 'stakeUsdc',
         'maxResolutionDays', 'selectionOrder', 'marketType', 'probabilitySource',
         'minLiquidityUsdc', 'minNetYield', 'executionTrigger', 'executionCronMinutes',
         'useLimitOrders', 'autoRotatePositions', 'stopLossRiskMultiplier',
@@ -2305,6 +2306,16 @@ function normalize_stake_usdc_value(mixed $value, float $fallback): float
     return max(0.01, min(1000.0, round((float) $value, 2)));
 }
 
+function normalize_initial_usdc_value(mixed $value, mixed $fallback = null): ?float
+{
+    if (!is_numeric($value)) {
+        return is_numeric($fallback)
+            ? max(0.01, min(10000000.0, round((float) $fallback, 2)))
+            : null;
+    }
+    return max(0.01, min(10000000.0, round((float) $value, 2)));
+}
+
 function normalize_optional_days_value(mixed $value): ?int
 {
     if ($value === null || $value === '') {
@@ -2517,6 +2528,10 @@ function normalize_strategy_config(array $input, array $defaults): array
         'displayName' => normalize_portfolio_display_name(
             $input['displayName'] ?? $defaults['displayName'],
             (string) $defaults['displayName']
+        ),
+        'initialUsdc' => normalize_initial_usdc_value(
+            $input['initialUsdc'] ?? null,
+            $defaults['initialUsdc'] ?? null
         ),
         'minProbability' => $minProbability,
         'maxProbability' => $maxProbability,
@@ -3367,10 +3382,9 @@ function workflow_status_payload(string $target): array
         respond(['ok' => false, 'error' => 'Unknown workflow target'], 400);
     }
 
-    // Which runs count. The default stays dispatches only, because the caller that waits
-    // on a button press must not mistake a cron run that started meanwhile for its own.
-    // `event=all` is for the opposite question -- is anything running right now -- where
-    // a scheduled or post-scrape run is exactly what must not be missed.
+    // Which runs count. The default stays dispatches only, because the browser only
+    // watches runs it dispatched itself; scheduled work publishes its real decision into
+    // the persisted run log when it finishes.
     $eventFilter = strtolower(trim((string) ($_GET['event'] ?? 'workflow_dispatch')));
     $query = [
         'branch' => $config['ref'],
@@ -4099,7 +4113,18 @@ try {
 
     if ($action === 'workflow-status') {
         $target = (string) ($_GET['target'] ?? '');
-        respond(workflow_status_payload($target));
+        try {
+            respond(workflow_status_payload($target));
+        } catch (Throwable $e) {
+            respond([
+                'ok' => true,
+                'target' => $target,
+                'generatedAt' => gmdate('c'),
+                'runs' => [],
+                'latest' => null,
+                'statusError' => $e->getMessage(),
+            ]);
+        }
     }
 
     if ($action === 'send-redeem-alerts') {

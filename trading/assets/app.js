@@ -290,6 +290,10 @@ const els = {
   portfolioAccountType: document.querySelector("[data-portfolio-account-type]"),
   portfolioAccountTypeLabel: document.querySelector("[data-portfolio-account-type-label]"),
   portfolioAccountTypeNote: document.querySelector("[data-portfolio-account-type-note]"),
+  liveInitialCapitalRow: document.querySelector("[data-live-initial-capital-row]"),
+  liveInitialCapital: document.querySelector("[data-live-initial-capital]"),
+  liveInitialCapitalLabel: document.querySelector("[data-live-initial-capital-label]"),
+  liveInitialCapitalNote: document.querySelector("[data-live-initial-capital-note]"),
   eligibilityThreshold: document.querySelector("[data-eligibility-threshold]"),
   eligibilityThresholdLabel: document.querySelector("[data-eligibility-threshold-label]"),
   maxEligibilityThreshold: document.querySelector("[data-max-eligibility-threshold]"),
@@ -835,6 +839,7 @@ function defaultPortfolioConfig() {
     },
     live: {
       displayName: "Live",
+      initialUsdc: null,
       minProbability: 0.95,
       maxProbability: null,
       stakeUsdc: 5,
@@ -1096,6 +1101,23 @@ function normalizeOptionalMoney(value) {
   const numeric = Number(value);
   if (!Number.isFinite(numeric) || numeric < 0) return null;
   return Math.round(numeric * 100) / 100;
+}
+
+function normalizeInitialCapital(value) {
+  if (value === "" || value == null) return null;
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric <= 0) return null;
+  return Math.min(10000000, Math.round(numeric * 100) / 100);
+}
+
+function liveInitialCapitalForMode(mode = state.mode, configOverride = null) {
+  if (!isLivePortfolioMode(mode)) return null;
+  const configured = normalizeInitialCapital((configOverride || portfolioConfigForMode(mode)).initialUsdc);
+  if (configured != null) return configured;
+  if (normalizeMode(mode) !== "live") return null;
+  return normalizeInitialCapital(
+    state.liveState?.portfolio?.originalValueUsdc ?? state.liveState?.portfolio?.depositedUsdc,
+  );
 }
 
 function portfolioConfigForMode(mode = state.mode) {
@@ -1406,6 +1428,16 @@ function executionRunWasDispatchedHere(target, run) {
   if (!Number.isFinite(dispatchedAt) || !Number.isFinite(createdAt)) return false;
   // A few seconds of slack for clock skew between this browser and GitHub.
   return createdAt >= dispatchedAt - 15000;
+}
+
+function shouldPollRunningExecution(target) {
+  if (!target || isPaperExecutionTarget(target)) return false;
+  const running = state.runningExecutions?.[target] || null;
+  if (running?.status === "queued" || running?.status === "in_progress") return true;
+  const entry = (state.dispatchedExecutions || {})[target] || readDispatchedExecutions()[target];
+  if (!entry) return false;
+  const dispatchedAt = Date.parse(entry.dispatchedAt || "");
+  return Number.isFinite(dispatchedAt) && Date.now() - dispatchedAt <= DISPATCHED_EXECUTION_TTL_MS;
 }
 
 function readCachedState(target, summary = "full") {
@@ -4487,6 +4519,21 @@ function syncPortfolioParameterControls(configOverride = null, options = {}) {
   if (els.portfolioAccountTypeNote) {
     els.portfolioAccountTypeNote.textContent = portfolioAccountTypeNote(createType);
   }
+  const liveInitialCapital = liveInitialCapitalForMode(mode, config);
+  if (els.liveInitialCapitalRow) {
+    els.liveInitialCapitalRow.hidden = !isLive;
+  }
+  if (els.liveInitialCapital && document.activeElement !== els.liveInitialCapital) {
+    els.liveInitialCapital.value = liveInitialCapital == null ? "" : String(liveInitialCapital);
+  }
+  if (els.liveInitialCapitalLabel) {
+    els.liveInitialCapitalLabel.textContent = liveInitialCapital == null ? "not set" : money(liveInitialCapital);
+  }
+  if (els.liveInitialCapitalNote) {
+    els.liveInitialCapitalNote.textContent = normalizeMode(mode) === "live"
+      ? "Set to total deposited/allocated live capital; top-ups belong here, not in P/L."
+      : "Required baseline for this live strategy's P/L.";
+  }
   if (els.eligibilityThreshold) els.eligibilityThreshold.value = String(Math.round(threshold * 100));
   if (els.eligibilityThresholdLabel) els.eligibilityThresholdLabel.textContent = probability(threshold);
   if (els.maxEligibilityThreshold) els.maxEligibilityThreshold.value = maxThreshold == null ? "" : String(Math.round(maxThreshold * 100));
@@ -4856,6 +4903,10 @@ function renderPortfolioOverview() {
   const rows = dashboardModes().map((mode) => {
     const automationEnabled = automationIsEnabled(portfolioConfigForMode(mode));
     if (isLivePortfolioMode(mode)) {
+      const configuredInitial = normalizeMode(mode) === "live" ? liveInitialCapitalForMode(mode, portfolioConfigForMode(mode)) : null;
+      const liveForRoi = configuredInitial == null
+        ? live
+        : { ...live, initialUsdc: configuredInitial, originalValueUsdc: configuredInitial, depositedUsdc: configuredInitial };
       return {
         mode,
         name: portfolioNameForMode(mode),
@@ -4867,7 +4918,7 @@ function renderPortfolioOverview() {
         orders: live ? reservedByOpenOrders(state.liveState?.openOrders) : null,
         free: live ? Number(live.cashUsdc) : null,
         roi: overviewAnnualizedRoi({
-          portfolio: live,
+          portfolio: liveForRoi,
           firstOpenedAt: state.liveState?.firstOpenedAt
             || state.liveState?.portfolio?.firstOpenedAt
             || firstOpenedAtFromTrades(
@@ -5129,6 +5180,9 @@ function parameterDraftFromControls(baseDraft = {}) {
   if (els.portfolioName) {
     draft.displayName = normalizePortfolioName(els.portfolioName.value, draft.displayName || "New portfolio");
   }
+  if (isLivePortfolioMode(state.parameterDraftMode || state.mode) && els.liveInitialCapital) {
+    draft.initialUsdc = normalizeInitialCapital(els.liveInitialCapital.value);
+  }
   if (hasValue(els.eligibilityThreshold)) {
     const value = normalizeEligibilityThreshold(numberValue(els.eligibilityThreshold) / 100);
     if (value != null) draft.minProbability = value;
@@ -5200,6 +5254,9 @@ async function confirmParameterModal() {
   const creating = state.parameterDraftCreate;
   const creatingType = normalizePortfolioAccountType(els.portfolioAccountType?.value || state.parameterDraftCreateType);
   try {
+    if (creating && creatingType === "live" && normalizeInitialCapital(draft.initialUsdc) == null) {
+      throw new Error("Set the initial capital for the live portfolio first");
+    }
     if (creating) {
       // The portfolio comes into existence here, on Save -- not when the form was
       // opened. Closing the form without saving leaves the config exactly as it was.
@@ -5801,6 +5858,7 @@ async function waitForWorkflowRun(target, startedAt, steps) {
   for (let attempt = 0; attempt < 32; attempt += 1) {
     try {
       const status = await fetchApiJson(`api.php?action=workflow-status&target=${encodeURIComponent(target)}&since=${encodeURIComponent(startedAt)}`);
+      if (status.statusError) throw new Error(status.statusError);
       latest = (status.runs || []).find((run) => runMatchesStart(run, startedAt)) || null;
       // Now that the run is identified, the source label stops resting on timing.
       if (latest?.id != null) recordDispatchedExecution(target, { dispatchedAt: startedAt, runId: latest.id });
@@ -7498,6 +7556,7 @@ function livePortfolioRuleRows() {
     ? `Highest reward/risk, then shorter resolution and ${returnMetric}`
     : `Highest ${returnMetric}, then shorter resolution and net gain`;
   return [
+    ...(isLivePortfolioMode(mode) ? [["Initial capital", liveInitialCapitalForMode(mode, config) == null ? "not set" : money(liveInitialCapitalForMode(mode, config))]] : []),
     ["Probability threshold", probabilityRangeRuleValue(config, currentEligibilityThreshold())],
     ["Stake sizing", stakeSizingRuleValue(mode, state.liveState?.portfolio)],
     ["Resolution filter", `Max ${maxResolutionDays} days`],
@@ -9180,7 +9239,8 @@ function renderLiveState(liveState) {
   const equity = Number.isFinite(Number(portfolio.equityUsdc))
     ? Number(portfolio.equityUsdc)
     : (Number.isFinite(marketValue) ? marketValue : 0);
-  const deposited = Number(portfolio.depositedUsdc);
+  const configuredLiveInitial = normalizeMode(state.mode) === "live" ? liveInitialCapitalForMode(state.mode) : null;
+  const deposited = configuredLiveInitial ?? Number(portfolio.depositedUsdc);
   const rawTotalPnl = Number(portfolio.totalPnlUsdc);
   const rawTotalPnlPct = Number(portfolio.totalPnlPct);
   const rawRealizedPnl = Number(portfolio.realizedPnlUsdc);
@@ -10723,12 +10783,18 @@ function currentPortfolioRunLog() {
 // their real decision.
 async function pollRunningExecution(target) {
   if (!target) return;
+  if (!shouldPollRunningExecution(target)) return;
   let running = null;
   try {
     const status = await fetchApiJson(
-      `api.php?action=workflow-status&target=${encodeURIComponent(target)}&event=all`,
+      `api.php?action=workflow-status&target=${encodeURIComponent(target)}`,
     );
-    running = (status.runs || []).find((run) => run.status === "queued" || run.status === "in_progress") || null;
+    if (status.statusError) return;
+    running = (status.runs || [])
+      .find((run) => (
+        (run.status === "queued" || run.status === "in_progress")
+        && executionRunWasDispatchedHere(target, run)
+      )) || null;
   } catch {
     // A failed status read says nothing about whether a run is going. Keeping the last
     // answer is better than flickering the row away on one bad response.
@@ -11946,6 +12012,16 @@ els.portfolioName?.addEventListener("input", () => {
 
 els.portfolioAccountType?.addEventListener("change", () => {
   switchCreatePortfolioType(els.portfolioAccountType.value);
+});
+
+els.liveInitialCapital?.addEventListener("input", () => {
+  const value = normalizeInitialCapital(els.liveInitialCapital.value);
+  if (els.liveInitialCapitalLabel) els.liveInitialCapitalLabel.textContent = value == null ? "not set" : money(value);
+  if (updateParameterDraft({ initialUsdc: value })) return;
+  if (!isLivePortfolioMode(state.mode)) return;
+  updatePortfolioConfigForMode(state.mode, { initialUsdc: value });
+  savePortfolioConfigSoon();
+  rerenderCurrentDashboard();
 });
 
 els.eligibilityThreshold?.addEventListener("input", () => {

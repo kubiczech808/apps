@@ -372,6 +372,12 @@
           <strong data-portfolio-account-type-label>Paper</strong>
           <em data-portfolio-account-type-note>Paper keeps its own simulated account.</em>
         </label>
+        <label class="parameter-control" data-live-initial-capital-row hidden title="For the connected live wallet this is the total capital you deliberately allocated or deposited. Increasing it after a top-up prevents that cash from being reported as trading profit.">
+          <span>Initial capital</span>
+          <input type="number" min="0.01" max="10000000" step="0.01" placeholder="Set live baseline" data-live-initial-capital>
+          <strong data-live-initial-capital-label>not set</strong>
+          <em data-live-initial-capital-note>Used as the live P/L baseline.</em>
+        </label>
         <label class="parameter-control">
           <span>Probability threshold</span>
           <input type="number" min="1" max="99" step="1" value="95" data-eligibility-threshold>

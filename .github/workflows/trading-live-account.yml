@@ -31,15 +31,15 @@ jobs:
     env:
       LIVE_STATE_PATH: data/live-state.json
       LIVE_STATE_URL: https://osobnizkusenosti.cz/trading/api.php?action=state&target=live
+      LIVE_PORTFOLIO_CONFIG_URL: https://osobnizkusenosti.cz/trading/api.php?action=portfolio-config
       LIVE_ACTIVITY_LIMIT: "80"
       POLYMARKET_ADDRESS: ${{ secrets.POLYMARKET_ADDRESS || secrets.POLYMARKET_FUNDER_ADDRESS || '0x3252de913d9323667f21f4d88fa1f996fc282293' }}
       POLYMARKET_FUNDER_ADDRESS: ${{ secrets.POLYMARKET_FUNDER_ADDRESS || secrets.POLYMARKET_ADDRESS || '0x3252de913d9323667f21f4d88fa1f996fc282293' }}
       POLYMARKET_PRIVATE_KEY: ${{ secrets.POLYMARKET_PRIVATE_KEY }}
       POLYMARKET_SIGNATURE_TYPE: ${{ secrets.POLYMARKET_SIGNATURE_TYPE || '1' }}
       # The deposited baseline is an external fact, not something to infer from P/L.
-      # Set LIVE_ORIGINAL_VALUE_USDC to the amount actually paid into the Polymarket
-      # account. To record a later top-up, set LIVE_ADDITIONAL_DEPOSIT_USDC together
-      # with a unique LIVE_ADDITIONAL_DEPOSIT_ID; it is added once and remembered.
+      # The saved Live portfolio config is primary. GitHub variables remain a fallback
+      # for headless recovery or a temporary top-up before the UI value is updated.
       LIVE_ORIGINAL_VALUE_USDC: ${{ vars.LIVE_ORIGINAL_VALUE_USDC }}
       LIVE_ADDITIONAL_DEPOSIT_USDC: ${{ vars.LIVE_ADDITIONAL_DEPOSIT_USDC }}
       LIVE_ADDITIONAL_DEPOSIT_ID: ${{ vars.LIVE_ADDITIONAL_DEPOSIT_ID }}
