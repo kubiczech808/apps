@@ -76,9 +76,12 @@ $loop = substr($tickFn, strpos($tickFn, 'while ($processed < AI_RESEARCH_MAX_STE
 // Vyriznuty usek konci az koncem funkce, takze obsahuje i vnejsi zachyt tiku.
 assert(substr_count($loop, 'catch (AiResearchTemporaryException $e)') >= 2,
     'oba druhy prace maji vlastni zachyt docasne chyby');
-assert(substr_count($loop, 'aiResearchErrorIsQuota($e->getMessage()) || aiResearchTemporaryBackoffUntil($e) > 0') === 2,
-    'kvota a backoff se propisou dal a tik se odlozi');
-assert(substr_count($loop, 'throw $e;') === 2, 'nedostupny provider zastavi cely tik');
+// Rozhodnuti o kvote ma jedno misto (aiResearchHandleQuotaFailure) a smycka podle nej
+// bud tik zastavi, nebo pokracuje bez modelu.
+assert(substr_count($loop, 'aiResearchHandleQuotaFailure($pdo, $config, $e)') === 2,
+    'oba druhy prace posilaji kvotu do jednoho vyhodnoceni');
+assert(substr_count($loop, "if (\$quota['stop']) {") === 2, 'zastaveni tiku rozhoduje vyhodnoceni kvoty');
+assert(substr_count($loop, 'throw $e;') === 2, 'a jen tehdy se chyba propisuje dal');
 assert(strpos($loop, 'preskocen: ') !== false, 'jinak se preskoci jen ten jeden seed');
 assert(strpos($loop, '$skipRunIds[] = (int)$work[\'run_id\'];') !== false, 'a uz se v tomto tiku nezkousi');
 echo "  ok\n";

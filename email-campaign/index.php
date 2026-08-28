@@ -59,6 +59,11 @@ const SCRAPING_ITEMS_PER_PAGE = 25;
 // vlastnim casovym budgetem; strop brani nekonecnemu retezu, kdyby fronta nikdy
 // nedosla na konec.
 const AI_RESEARCH_MAX_CHAIN_HOPS = 10;
+// Po kolika marnych pokusech na kvote se poskytovatel prestane zkouset dokola a jak
+// dlouho pak stoji. Kratky retry hint od Google u vycerpaneho free tieru jinak vede
+// k nekonecnemu opakovani stejneho pokusu.
+const AI_RESEARCH_QUOTA_STREAK_LIMIT = 3;
+const AI_RESEARCH_HARD_QUOTA_PAUSE_SECONDS = 3600;
 // Kolik firem ma katalog na plne strance vysledku. Kdyz jich prvni stranka vrati
 // aspon tolik a katalog neuvadi celkovy pocet ani strankovani, je jasne, ze vysledku
 // je vic - jen jsme je neprecetli.
@@ -809,6 +814,35 @@ function scheduleAiResearchTemporaryBackoff(PDO $pdo, Throwable $e, int $interva
     $delay = max(0, $until - time());
     setSetting($pdo, 'ai_research_last_run_at', (string)(time() - max(300, $intervalSeconds) + $delay));
     return $until;
+}
+
+/**
+ * Kolikrat po sobe skoncil pokus na kvote poskytovatele, aniz by neco proslo. Dokud
+ * se to nepocitalo, opakoval se stejny pokus kazdych 75 s klidne cely den: Google
+ * u free tieru vraci u vycerpaneho DENNIHO limitu taky jen kratky retry hint, takze
+ * "minutove okno" bylo casto spatne prectene denni vycerpani.
+ */
+function aiResearchQuotaStreak(PDO $pdo, ?int $set = null): int
+{
+    if ($set !== null) {
+        setSetting($pdo, 'ai_research_quota_streak', (string)max(0, $set));
+        return max(0, $set);
+    }
+    return (int)(loadSettings($pdo)['ai_research_quota_streak'] ?? 0);
+}
+
+/**
+ * Pauza, kterou dostane poskytovatel, kdyz kratky retry hint zjevne nestaci: po
+ * nekolika marnych pokusech se s nim uz nepocita do konce hodiny, a kdyz chyba mluvi
+ * o dennim limitu, az do pristi pulnoci.
+ */
+function aiResearchHardQuotaPauseSeconds(string $message): int
+{
+    if (preg_match('/per\s*day|daily|requests_per_day|\bRPD\b/i', $message)) {
+        $midnight = strtotime('tomorrow 00:10');
+        return max(3600, ($midnight ?: time() + 86400) - time());
+    }
+    return AI_RESEARCH_HARD_QUOTA_PAUSE_SECONDS;
 }
 
 function aiResearchBackoffLabel(int $timestamp): string
@@ -3021,6 +3055,51 @@ function onboardingDemoSeedContacts(string $businessType, array $plan): array
  * jednoho requestu, ktery by hosting zabil, a presto se za jeden cron zvladne
  * radove desetinasobek prace.
  */
+/**
+ * Reakce na kvotovou chybu poskytovatele. Vraci, jestli se ma tik zastavit, jestli se
+ * da pokracovat bez modelu a co o tom rict.
+ *
+ * Logika, ktera tu drive chybela: kratky retry hint od Google ("retry in 41s") vraci
+ * free tier i u vycerpaneho DENNIHO limitu. Bez pocitani po sobe jdoucich neuspechu se
+ * tak stejny pokus opakoval kazdych 75 s a v logu bylo porad "odlozeno" - pritom se
+ * kvota do konce dne neuvolnila. Po AI_RESEARCH_QUOTA_STREAK_LIMIT marnych pokusech se
+ * proto poskytovatel odstavi na delsi dobu (u denniho limitu az do pristi pulnoci),
+ * prepne se na zalozni klic, a kdyz zadny neni, tik dodela aspon praci bez modelu.
+ */
+function aiResearchHandleQuotaFailure(PDO $pdo, array $config, Throwable $e): array
+{
+    $message = $e->getMessage();
+    $isQuota = aiResearchErrorIsQuota($message) || aiResearchTemporaryBackoffUntil($e) > 0;
+    if (!$isQuota) {
+        return ['quota' => false, 'stop' => false, 'model_available' => true, 'message' => ''];
+    }
+    $provider = aiResearchProviderName($config);
+    $streak = aiResearchQuotaStreak($pdo, aiResearchQuotaStreak($pdo) + 1);
+    if ($streak < AI_RESEARCH_QUOTA_STREAK_LIMIT) {
+        // Prvni pokusy resi kratky backoff: minutove okno se opravdu casto uvolni samo.
+        return ['quota' => true, 'stop' => true, 'model_available' => false, 'message' => aiResearchFailureMessage($e)];
+    }
+    $pause = aiResearchHardQuotaPauseSeconds($message);
+    $fallback = aiResearchMarkProviderExhausted($config, $provider, $pause, $pdo);
+    if ($fallback !== '') {
+        aiResearchQuotaStreak($pdo, 0);
+        return [
+            'quota' => true,
+            'stop' => false,
+            'model_available' => true,
+            'message' => $provider . ' hlasi vycerpanou kvotu po ' . $streak . '. pokusu, prepinam na ' . $fallback . '.',
+        ];
+    }
+    return [
+        'quota' => true,
+        'stop' => false,
+        'model_available' => false,
+        'message' => $provider . ' ma vycerpanou kvotu (' . $streak . '. marny pokus), pauza do '
+            . formatDateTime(date('c', time() + $pause))
+            . '. Pokracuje jen prace bez modelu; doplnte druhy API klic v nastaveni AI.',
+    ];
+}
+
 function aiResearchChainNextTick(PDO $pdo, array $config, int $hop, string $lastMessage): string
 {
     if ($hop >= AI_RESEARCH_MAX_CHAIN_HOPS) {
@@ -3035,7 +3114,7 @@ function aiResearchChainNextTick(PDO $pdo, array $config, int $hop, string $last
     if (aiResearchGeminiRequestsUsedLast24h($pdo) + aiResearchEstimatedGeminiRequestsPerSeed($config) > $dailyBudget) {
         return 'Retez tiku zastaven: denni rozpocet pozadavku je vycerpany.';
     }
-    if (str_contains($lastMessage, 'nebylo co zpracovat')) {
+    if (str_contains($lastMessage, 'nebylo co zpracovat') || str_contains($lastMessage, 'bez modelu uz neni co delat')) {
         return 'Retez tiku ukoncen: fronta je prazdna.';
     }
     // Minutovy limit drzi retez sam. Bez toho by hopy poslaly desitky pozadavku za
@@ -3140,10 +3219,32 @@ function runCronAiResearch(PDO $pdo, array $config, bool $force = false): string
         $processed = 0;
         $lastSignature = '';
         $skipRunIds = [];
+        // Dokud model odpovida, dela se vsechno. Kdyz narazi na kvotu, tik pokracuje
+        // jen tim, co model nepotrebuje (ucet, davka, dosah) - jinak by vycerpana
+        // kvota zastavila i praci, ktera s AI nema nic spolecneho.
+        // Kdyz uz vime, ze vsichni poskytovatele maji vycerpanou kvotu, nema smysl na ne
+        // v tomto tiku vubec sahat - jinak by kazdy tik zacal marnym pozadavkem.
+        $modelAvailable = false;
+        foreach (aiResearchProviderPreference($config) as $providerName) {
+            if (!aiResearchProviderExhausted($providerName)) {
+                $modelAvailable = true;
+                break;
+            }
+        }
+        $quotaMessage = $modelAvailable
+            ? ''
+            : 'vsichni poskytovatele maji vycerpanou kvotu, bezi jen prace bez modelu';
+        if (!$modelAvailable) {
+            $messages[] = $quotaMessage;
+        }
         // Strop je pojistka proti zacykleni: kdyby nejaky krok skoncil hned a nic
         // nezmenil, nesmi se opakovat porad dokola az do konce casoveho budgetu.
         while ($processed < AI_RESEARCH_MAX_STEPS_PER_TICK) {
-            $work = aiResearchNextWork($pdo, $skipRunIds);
+            $work = aiResearchNextWork($pdo, $skipRunIds, $modelAvailable);
+            if ((string)$work['kind'] === 'none') {
+                $messages[] = 'bez modelu uz neni co delat: ' . $quotaMessage;
+                break;
+            }
             $finishing = aiResearchWorkIsFinishing($work);
             $signature = (string)$work['kind'] . '#' . (int)$work['run_id'];
             if ($processed > 0 && $signature === $lastSignature) {
@@ -3169,10 +3270,17 @@ function runCronAiResearch(PDO $pdo, array $config, bool $force = false): string
                 try {
                     $step = runCronAiResearchUnfinished($pdo, $config, $work);
                 } catch (AiResearchTemporaryException $e) {
-                    if (aiResearchErrorIsQuota($e->getMessage()) || aiResearchTemporaryBackoffUntil($e) > 0) {
+                    $quota = aiResearchHandleQuotaFailure($pdo, $config, $e);
+                    if ($quota['stop']) {
                         throw $e;
                     }
-                    $step = 'beh #' . (int)$work['run_id'] . ' preskocen: ' . aiResearchFailureMessage($e);
+                    if ($quota['quota']) {
+                        $modelAvailable = $quota['model_available'];
+                        $quotaMessage = $quota['message'];
+                        $step = 'beh #' . (int)$work['run_id'] . ': ' . $quota['message'];
+                    } else {
+                        $step = 'beh #' . (int)$work['run_id'] . ' preskocen: ' . aiResearchFailureMessage($e);
+                    }
                     if ((int)$work['run_id'] > 0) {
                         $skipRunIds[] = (int)$work['run_id'];
                         $lastSignature = '';
@@ -3189,12 +3297,19 @@ function runCronAiResearch(PDO $pdo, array $config, bool $force = false): string
                 try {
                     $step = runAiResearchOnce($pdo, $config);
                 } catch (AiResearchTemporaryException $e) {
-                    if (aiResearchErrorIsQuota($e->getMessage()) || aiResearchTemporaryBackoffUntil($e) > 0) {
+                    $quota = aiResearchHandleQuotaFailure($pdo, $config, $e);
+                    if ($quota['stop']) {
                         throw $e;
                     }
-                    // Novy seed se nepovedl z jineho duvodu (nectitelny web, katalog
-                    // neodpovedel). Tik pokracuje dal, misto aby cely propadl.
-                    $step = 'novy seed preskocen: ' . aiResearchFailureMessage($e);
+                    if ($quota['quota']) {
+                        $modelAvailable = $quota['model_available'];
+                        $quotaMessage = $quota['message'];
+                        $step = 'novy seed: ' . $quota['message'];
+                    } else {
+                        // Novy seed se nepovedl z jineho duvodu (nectitelny web, katalog
+                        // neodpovedel). Tik pokracuje dal, misto aby cely propadl.
+                        $step = 'novy seed preskocen: ' . aiResearchFailureMessage($e);
+                    }
                 }
             }
             $messages[] = $step;
@@ -3208,7 +3323,11 @@ function runCronAiResearch(PDO $pdo, array $config, bool $force = false): string
             : 'AI research: nebylo co zpracovat.';
         setSetting($pdo, 'ai_research_last_run_at', (string)time());
         setSetting($pdo, 'ai_research_lock_until', '');
-        setSetting($pdo, 'ai_research_next_allowed_at', '');
+        if ($quotaMessage === '') {
+            // Tik prosel bez kvotove chyby, takze serie marnych pokusu skoncila.
+            setSetting($pdo, 'ai_research_next_allowed_at', '');
+            aiResearchQuotaStreak($pdo, 0);
+        }
         closeAiResearchLog($pdo, $planned, 'done', $message, $startedAt, $config);
         return $message . ' Gemini pozadavku v behu: ' . aiResearchRequestsMadeThisProcess()
             . ', za 24 h ' . ($usedToday + aiResearchRequestsMadeThisProcess()) . '/' . $dailyBudget . '.';
@@ -8355,9 +8474,12 @@ function aiResearchWorkflowMissingSteps(array $checklist): array
  * skutecne stane. Novy seed prijde na radu teprve tehdy, kdyz je kazdy predchozi
  * seed dotazeny do konce nebo trvale uzavreny.
  */
-function aiResearchNextWork(PDO $pdo, array $skipRunIds = []): array
+function aiResearchNextWork(PDO $pdo, array $skipRunIds = [], bool $modelAvailable = true): array
 {
-    $newSeed = ['kind' => 'new_seed', 'run_id' => 0, 'subject' => '', 'label' => ''];
+    $newSeed = $modelAvailable
+        ? ['kind' => 'new_seed', 'run_id' => 0, 'subject' => '', 'label' => '']
+        // Bez modelu nema smysl zakladat novy seed - ten zacina pochopenim byznysu.
+        : ['kind' => 'none', 'run_id' => 0, 'subject' => '', 'label' => ''];
     $skip = array_flip(array_map('intval', $skipRunIds));
     try {
         $rows = $pdo->query('
@@ -8399,9 +8521,17 @@ function aiResearchNextWork(PDO $pdo, array $skipRunIds = []): array
             if ((int)($plan['finish_attempts'] ?? 0) >= 3) {
                 continue;
             }
+            if (!$modelAvailable
+                && !aiResearchRunProgressesWithoutModel(aiResearchWorkflowChecklist($pdo, $row, $plan))) {
+                continue;
+            }
             return $work + ['kind' => 'finish_deferred'];
         }
         if ($status === 'running') {
+            if (!$modelAvailable
+                && !aiResearchRunProgressesWithoutModel(aiResearchWorkflowChecklist($pdo, $row, $plan))) {
+                continue;
+            }
             return $work + ['kind' => 'finish_running'];
         }
         // Hotovy beh jeste nemusi mit splnene vsechny povinne kroky workflow. Rozhoduje
@@ -8422,11 +8552,43 @@ function aiResearchNextWork(PDO $pdo, array $skipRunIds = []): array
                 if (aiResearchRunWaitsOnlyForScraping($pdo, $plan, $checklist)) {
                     continue;
                 }
+                if (!$modelAvailable && !aiResearchRunProgressesWithoutModel($checklist)) {
+                    continue;
+                }
                 return $work + ['kind' => 'finish_incomplete'];
             }
         }
     }
     return $newSeed;
+}
+
+/**
+ * Kroky, ktere se bez modelu neobejdou. Plan, cileni i trhy vznikaji z jednoho volani
+ * modelu, vzory osloveni z druheho; zbytek workflow (ucet, davka, dosah) je cisty
+ * scraping a databaze, takze jde delat i s vycerpanou kvotou.
+ */
+function aiResearchStepsNeedingModel(): array
+{
+    return ['plan', 'targeting', 'markets', 'drafts'];
+}
+
+/**
+ * Da se beh posunout bez modelu? Kdyz mu chybi jen ucet, davka nebo dosah, ano - a
+ * vycerpana kvota poskytovatele nema takovou praci blokovat.
+ */
+function aiResearchRunProgressesWithoutModel(array $checklist): bool
+{
+    $needsModel = aiResearchStepsNeedingModel();
+    $missing = [];
+    foreach ($checklist as $step) {
+        if (!empty($step['required']) && empty($step['done'])) {
+            $missing[] = (string)$step['key'];
+        }
+    }
+    if (!$missing) {
+        return false;
+    }
+    return array_intersect($missing, $needsModel) === [];
 }
 
 /**
