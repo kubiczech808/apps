@@ -16,7 +16,7 @@ function extractFn(string $src, string $name): string
     $end = strrpos($body, '}');
     return $end === false ? $body : substr($body, 0, $end + 1);
 }
-foreach (['AI_RESEARCH_FIRST_BATCH_CONTACTS'] as $const) {
+foreach (['AI_RESEARCH_FIRST_BATCH_CONTACTS', 'AI_RESEARCH_FINISH_ATTEMPTS_MAX'] as $const) {
     preg_match('/const ' . $const . ' = (\d+);/', $src, $m);
     eval('const ' . $const . ' = ' . $m[1] . ';');
 }
@@ -54,12 +54,14 @@ printf("  dalsi prace: %s (#%d)\n", $work['kind'], (int)$work['run_id']);
 assert($work['kind'] === 'finish_incomplete', 'beh bez kontaktu musi jit dotahnout, mam ' . $work['kind']);
 assert((int)$work['run_id'] === 1, 'a ma to byt prave on');
 
-echo "\n== 2. seed bez pouzitelneho planu frontu neblokuje ==\n";
+echo "\n== 2. seed, ktery se zastavil uz na planu, se dotahuje ==\n";
+// Drive se takovy zaznam preskocil a cas dostal novy seed - v prehledu pak zustal
+// navzdy prazdny radek. Plan se dopocita pri kontrole behu, takze patri do fronty.
 $db->exec('DELETE FROM ai_research_runs');
 $ins->execute(['Bez planu', 'done', json_encode(['business_understanding' => '', 'scraping_queries' => []]), 0, 0, '']);
 $work = aiResearchNextWork($db);
 printf("  dalsi prace: %s\n", $work['kind']);
-assert($work['kind'] === 'new_seed', 'beh bez planu se dotahovat nema, mam ' . $work['kind']);
+assert($work['kind'] === 'finish_incomplete', 'beh bez planu se ma dotahnout, mam ' . $work['kind']);
 
 echo "\n== 3. vzor osloveni se generuje z planu, i kdyz nejsou kontakty ==\n";
 $draftFn = extractFn($src, 'aiResearchRunDraft');
@@ -93,7 +95,7 @@ $checklist = aiResearchWorkflowChecklist($db, $run, $full);
 $missing = aiResearchWorkflowMissingSteps($checklist);
 printf("  chybi: %s\n", implode('; ', $missing) ?: '(nic)');
 assert($missing === ['Nascrapovaná první dávka kontaktů'], 'ma chybet jen davka, chybi: ' . implode('; ', $missing));
-assert(aiResearchRunWaitsOnlyForScraping($db, $full, $checklist), 'na davku se jen ceka, cron ji netahá');
+assert(aiResearchRunWaitsOnlyForScraping($db, $full, $checklist), 'zbyva jen davka, tik ji posune sam');
 // A po dobehnuti davky je zaznam hotovy.
 $SCRAPING = ['container_id' => 4, 'list_id' => 8, 'job' => ['status' => 'finished'], 'contacts_total' => AI_RESEARCH_FIRST_BATCH_CONTACTS];
 $checklist = aiResearchWorkflowChecklist($db, $run, $full);

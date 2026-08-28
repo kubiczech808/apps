@@ -17,7 +17,8 @@ function extractFn(string $src, string $name): string
     return $end === false ? $body : substr($body, 0, $end + 1);
 }
 foreach (['AI_RESEARCH_QUOTA_STREAK_LIMIT', 'AI_RESEARCH_HARD_QUOTA_PAUSE_SECONDS',
-          'AI_RESEARCH_MAX_BACKOFF_SECONDS', 'AI_RESEARCH_FIRST_BATCH_CONTACTS'] as $c) {
+          'AI_RESEARCH_MAX_BACKOFF_SECONDS', 'AI_RESEARCH_FIRST_BATCH_CONTACTS',
+          'AI_RESEARCH_FINISH_ATTEMPTS_MAX'] as $c) {
     preg_match('/const ' . $c . ' = ([^;]+);/', $src, $m);
     eval('const ' . $c . ' = ' . $m[1] . ';');
 }

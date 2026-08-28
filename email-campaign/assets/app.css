@@ -3132,3 +3132,111 @@ td a {
     flex: 1 1 auto;
   }
 }
+
+/* Telefon: prehled AI research a log automatiky se rozpadnou na karty. Sirky sloupcu
+   a jednoradkove bunky plati jen pro sirokou tabulku na desktopu - na telefonu by
+   znamenaly 1608 px sirokou tabulku, ve ktere neni videt nic. Tyto pravidla musi byt
+   az za desktopovymi (a stejne specificka), jinak je desktopova sada prebije. */
+@media (max-width: 760px) {
+  .view-research .research-table,
+  .research-log-table {
+    min-width: 0;
+    width: 100%;
+    table-layout: auto;
+    border-collapse: separate;
+    border-spacing: 0 12px;
+    font-size: 13px;
+  }
+  .view-research .research-table > thead,
+  .research-log-table thead {
+    display: none;
+  }
+  .view-research .research-table > thead > tr > th {
+    width: auto;
+  }
+  .view-research .research-table > tbody,
+  .view-research .research-table > tbody > tr,
+  .research-log-table tbody,
+  .research-log-table tbody tr {
+    display: block;
+    width: 100%;
+  }
+  .view-research .research-table > tbody > tr:not(.detail-row),
+  .research-log-table tbody tr {
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: #fff;
+  }
+  .view-research .research-table > tbody > tr:not(.detail-row) > td,
+  .research-log-table tbody td {
+    display: grid;
+    grid-template-columns: minmax(92px, 34%) minmax(0, 1fr);
+    gap: 10px;
+    width: auto;
+    padding: 9px 12px;
+    border-bottom: 1px solid var(--line);
+    white-space: normal;
+    overflow: visible;
+    text-overflow: clip;
+    vertical-align: baseline;
+    text-align: left;
+  }
+  .view-research .research-table > tbody > tr:not(.detail-row) > td:last-child,
+  .research-log-table tbody td:last-child {
+    border-bottom: 0;
+  }
+  .view-research .research-table > tbody > tr:not(.detail-row) > td::before,
+  .research-log-table tbody td::before {
+    content: attr(data-label);
+    color: var(--muted);
+    font-size: 12px;
+    font-weight: 800;
+    text-transform: uppercase;
+  }
+  /* Bunka bez obsahu je na karte jen prazdny radek s popiskem. */
+  .view-research .research-table > tbody > tr:not(.detail-row) > td:empty {
+    display: none;
+  }
+  /* Na karte je misto, takze druhy radek ani drobny text uz nema proc byt skryty. */
+  .view-research .research-table > tbody > tr.expandable-row > td br,
+  .view-research .research-table > tbody > tr.expandable-row > td small {
+    display: revert;
+  }
+  /* Sedm kroku workflow jako prouzek stitku - jinak by karta mela sedm skoro
+     prazdnych radku. Nesplneny krok zustava videt jako svetly stitek. */
+  .view-research .research-table > tbody > tr:not(.detail-row) > td.research-step-col {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    /* Prebiji sirku 100 % z obecneho pravidla pro bunky na telefonu. */
+    width: auto !important;
+    margin: 6px 6px 0 12px;
+    padding: 3px 4px 3px 10px;
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    background: #f6f8f7;
+  }
+  .view-research .research-table > tbody > tr:not(.detail-row) > td.research-step-col::before {
+    font-size: 11px;
+    text-transform: none;
+  }
+  .view-research .research-table > tbody > tr:not(.detail-row) > td.research-step-col:last-child {
+    border-bottom: 1px solid var(--line);
+  }
+  /* Tlacitka v karte maji celou sirku - na telefonu se do radku nevejdou. */
+  .view-research .research-table .research-draft-actions,
+  .view-research .research-table .research-outreach-col form {
+    display: grid;
+    gap: 6px;
+  }
+  .view-research .research-table .research-draft-actions button,
+  .view-research .research-table .research-draft-actions form,
+  .view-research .research-table .research-outreach-col button {
+    width: 100%;
+  }
+  /* Zprava v logu je nejdulezitejsi sloupec, na telefonu dostane cely radek. */
+  .research-log-table .research-log-message {
+    grid-template-columns: minmax(0, 1fr);
+    min-width: 0;
+  }
+}
