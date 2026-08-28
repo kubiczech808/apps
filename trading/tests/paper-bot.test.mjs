@@ -3751,7 +3751,10 @@ test("5050: it is its own live portfolio, not a copy of a paper one", async () =
   // Overview finances come from the shared Polymarket account, as they must --
   // there is one wallet -- but orders, positions and the run log are attributed.
   assert.match(app, /function submittedTokenIds\(executionState\)/);
-  assert.match(app, /return isFixedEntryMode\(\) \? owned : !owned;/,
+  // The mode is a parameter now, so the optimisation report can ask about a live
+  // portfolio other than the selected one, but the either/or is unchanged.
+  assert.match(app, /const wantsFixedEntry = isFixedEntryMode\(mode\);/);
+  assert.match(app, /return wantsFixedEntry \? owned : !owned;/,
     "each token shows under exactly one of the two live portfolios");
   assert.match(app, /\.filter\(belongsToActiveLivePortfolio\)/);
   assert.match(app, /!isFixedEntryMode\(\) && Array\.isArray\(state\.liveState\?\.runLog\)/,
@@ -3759,7 +3762,7 @@ test("5050: it is its own live portfolio, not a copy of a paper one", async () =
 
   // A token nobody claims belongs to Live: attribution must never hide a row from
   // both tabs, and a failed fetch must not reassign 5050's positions wholesale.
-  assert.match(app, /if \(!tokenId\) return !isFixedEntryMode\(\);/);
+  assert.match(app, /if \(!tokenId\) return !wantsFixedEntry;/);
   assert.match(app, /if \(fixedEntryResult\.status === "fulfilled"\) state\.live5050ExecutionState/);
 
   // Its own identity, and automation off by default: this is the portfolio that
@@ -3913,7 +3916,7 @@ test("5050: only equity is shared with Live, never its history", async () => {
 
   // Closed trades and the activity feed are attributed too, so the accuracy card
   // and the closed-trades tab cannot show Live's history either.
-  assert.match(app, /function liveClosedTrades\(liveState\) \{[\s\S]*?\.filter\(belongsToActiveLivePortfolio\);/);
+  assert.match(app, /function liveClosedTrades\(liveState, mode = state\.mode\) \{[\s\S]*?belongsToLivePortfolio\(row, mode\)\);/);
   assert.match(app, /function liveActivity\(liveState\) \{[\s\S]*?\.filter\(belongsToActiveLivePortfolio\)/);
 });
 
@@ -4263,6 +4266,7 @@ test("5050: its own resting orders appear on its tab straight away", async () =>
     pick(/function isFilledPortfolioRow\([\s\S]*?\n\}/),
     pick(/function boughtAtFixedEntryPrice\([\s\S]*?\n\}/),
     pick(/function isClosedTrade\([\s\S]*?\n\}/),
+    pick(/function belongsToLivePortfolio\([\s\S]*?\n\}/),
     pick(/function belongsToActiveLivePortfolio\([\s\S]*?\n\}/),
   ].join("\n");
   const belongs = (fixed, owned) => new Function("row", `
@@ -4961,7 +4965,7 @@ function liveTradeAttribution(app, { mode, fixedEntryPrice = 0.51, execution5050
   };
   const body = ["submittedTokenIds", "fixedEntryTokenIds", "fixedEntryPriceSignatures", "matchesFixedEntryPrice",
     "restsAtFixedEntryPrice", "isFilledPortfolioRow", "fixedEntryOrderPricesByToken", "boughtAtFixedEntryPrice",
-    "belongsToActiveLivePortfolio", "isClosedTrade", "liveClosedTrades", "liveOpenOrders"]
+    "belongsToLivePortfolio", "belongsToActiveLivePortfolio", "isClosedTrade", "liveClosedTrades", "liveOpenOrders"]
     .map(pick).join("\n\n");
   const tolerance = /const FIXED_ENTRY_PRICE_TOLERANCE = [\d.]+;/.exec(app)[0];
   return new Function("state", "isFixedEntryMode", "normalizeFixedEntryPrice", "portfolioConfigForMode",
@@ -5225,7 +5229,7 @@ test("5050 fills: a changed entry price does not hand old fills to Live", async 
   };
   const body = ["submittedTokenIds", "fixedEntryTokenIds", "fixedEntryPriceSignatures",
     "matchesFixedEntryPrice", "restsAtFixedEntryPrice", "fixedEntryOrderPricesByToken",
-    "isFilledPortfolioRow", "boughtAtFixedEntryPrice", "belongsToActiveLivePortfolio",
+    "isFilledPortfolioRow", "boughtAtFixedEntryPrice", "belongsToLivePortfolio", "belongsToActiveLivePortfolio",
     "isClosedTrade"].map(pick).join("\n\n");
   const tolerance = /const FIXED_ENTRY_PRICE_TOLERANCE = [\d.]+;/.exec(app)[0];
   const belongs = (mode, execution5050, configuredPrice) => new Function(
@@ -5317,7 +5321,7 @@ test("live fills: a price that merely matches 5050's setting does not hand the t
   };
   const body = ["submittedTokenIds", "fixedEntryTokenIds", "fixedEntryPriceSignatures",
     "matchesFixedEntryPrice", "restsAtFixedEntryPrice", "fixedEntryOrderPricesByToken",
-    "isFilledPortfolioRow", "boughtAtFixedEntryPrice", "belongsToActiveLivePortfolio",
+    "isFilledPortfolioRow", "boughtAtFixedEntryPrice", "belongsToLivePortfolio", "belongsToActiveLivePortfolio",
     "isClosedTrade"].map(pick).join("\n\n");
   const tolerance = /const FIXED_ENTRY_PRICE_TOLERANCE = [\d.]+;/.exec(app)[0];
   const belongs = (mode, execution5050, configuredPrice) => new Function(
@@ -5544,7 +5548,7 @@ test("5050 orders: a bid is recognised at every price the portfolio bids at", as
   };
   const body = ["submittedTokenIds", "fixedEntryTokenIds", "fixedEntryPriceSignatures",
     "matchesFixedEntryPrice", "restsAtFixedEntryPrice", "fixedEntryOrderPricesByToken",
-    "isFilledPortfolioRow", "boughtAtFixedEntryPrice", "belongsToActiveLivePortfolio",
+    "isFilledPortfolioRow", "boughtAtFixedEntryPrice", "belongsToLivePortfolio", "belongsToActiveLivePortfolio",
     "isClosedTrade", "liveOpenOrders"].map(pick).join("\n\n");
   const tolerance = /const FIXED_ENTRY_PRICE_TOLERANCE = [\d.]+;/.exec(app)[0];
   const openOrdersFor = (mode, execution5050, configuredPrice) => new Function(

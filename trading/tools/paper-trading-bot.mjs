@@ -11533,6 +11533,7 @@ if (invokedDirectly) {
 // dashboard shows, plus the guards that keep a stale snapshot out of production.
 export {
   EFFECTIVELY_CERTAIN_MARKET_PROBABILITY,
+  buildPortfolioOptimisationReport,
   refreshEvaluationAfterProbability,
   PAPER_STRATEGIES,
   portfolioEconomics,

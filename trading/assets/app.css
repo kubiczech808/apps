@@ -2113,6 +2113,19 @@ body.modal-open {
   background: #ffffff;
 }
 
+/* A recommendation about real money should not look like one about a simulation. Same
+   accent the live execution controls already use. */
+.portfolio-optimization-card.live {
+  border-color: #bae6fd;
+}
+
+.portfolio-optimization-card.live h3 .pill {
+  background: #e0f2fe;
+  color: #0369a1;
+  margin-left: 6px;
+  vertical-align: middle;
+}
+
 .calculation-summary {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

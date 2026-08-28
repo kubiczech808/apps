@@ -108,6 +108,11 @@ const state = {
   portfolioOverview: null,
   portfolioOverviewAt: 0,
   portfolioOverviewPending: false,
+  // The optimisation report needs the wallet history to analyse the live portfolios, and
+  // it is reachable from Settings without ever opening a live tab -- which is the only
+  // other thing that loads it.
+  optimisationLiveStatePending: false,
+  optimisationLiveStateTried: false,
   // Whether this page load has already settled which portfolio to open. Set once the
   // richest one has been picked, and also the moment the reader picks a tab themselves,
   // so the automatic choice can never fight a deliberate click.
@@ -8885,13 +8890,21 @@ function boughtAtFixedEntryPrice(row) {
   return Boolean(ordered && [...ordered].some(matches));
 }
 
-function belongsToActiveLivePortfolio(row) {
+// Attribution for any live portfolio, not only the selected one. The optimisation report
+// has to ask about every live portfolio in one pass, which the state.mode-bound version
+// below cannot answer.
+function belongsToLivePortfolio(row, mode = state.mode) {
+  const wantsFixedEntry = isFixedEntryMode(mode);
   const tokenId = String(row?.tokenId || row?.assetId || "");
-  if (!tokenId) return !isFixedEntryMode();
+  if (!tokenId) return !wantsFixedEntry;
   const owned = isFilledPortfolioRow(row)
     ? boughtAtFixedEntryPrice(row)
     : (fixedEntryTokenIds().has(tokenId) || restsAtFixedEntryPrice(row));
-  return isFixedEntryMode() ? owned : !owned;
+  return wantsFixedEntry ? owned : !owned;
+}
+
+function belongsToActiveLivePortfolio(row) {
+  return belongsToLivePortfolio(row, state.mode);
 }
 
 function livePositions(liveState) {
@@ -8911,11 +8924,11 @@ function liveActivity(liveState) {
   return (Array.isArray(liveState?.activity) ? liveState.activity : []).filter(belongsToActiveLivePortfolio);
 }
 
-function liveClosedTrades(liveState) {
+function liveClosedTrades(liveState, mode = state.mode) {
   const rows = Array.isArray(liveState?.closedTrades)
     ? liveState.closedTrades
     : (Array.isArray(liveState?.trades?.closed) ? liveState.trades.closed : []);
-  return rows.filter(belongsToActiveLivePortfolio);
+  return rows.filter((row) => belongsToLivePortfolio(row, mode));
 }
 
 function evaluationByTokenId(tokenId) {
@@ -11608,19 +11621,166 @@ function portfolioOptimisationValue(row) {
   return String(row?.value ?? "-");
 }
 
+// The optimisation analysis, mirrored from buildPortfolioOptimisationReport() in
+// tools/paper-trading-bot.mjs.
+//
+// The paper half of this report is built by the bot, which has the paper state. The live
+// half cannot be: live closed trades are reconstructed from the wallet's on-chain history
+// by live-account-sync.mjs and carry no portfolio id, because the live portfolios share
+// one wallet. Which portfolio placed a trade is inferred from the price it was bought at
+// -- 5050 rests every bid at exactly its configured entry price -- and that inference
+// lives here, in the browser, where every other live number on the dashboard already uses
+// it. So the live half is computed here from the same ladders, and a test pins the two
+// implementations to identical output on identical trades, which is the only way they can
+// drift without anyone noticing.
+const OPTIMISATION_PROBABILITY_LADDER = [0.5, 0.6, 0.7, 0.8, 0.9, 0.95];
+const OPTIMISATION_MAX_DAYS_LADDER = [1, 3, 7, 14, 30];
+const OPTIMISATION_MIN_VOLUME_LADDER = [0, 1000, 5000, 10000, 20000, 50000];
+const OPTIMISATION_MIN_TRADES = 12;
+const OPTIMISATION_MIN_IMPROVEMENT_USDC = 0.005;
+
+function optimisationTradeEntryProbability(trade) {
+  const value = Number(trade?.marketProbability ?? trade?.entryProbability ?? trade?.entryPrice);
+  return Number.isFinite(value) ? value : null;
+}
+
+function optimisationTradeEntryVolume(trade) {
+  const value = Number(trade?.firstVolumeUsdc ?? trade?.volumeUsdc ?? trade?.liquidityUsdc ?? trade?.volume24hr);
+  return Number.isFinite(value) ? value : null;
+}
+
+function optimisationTradeMarketType(trade) {
+  const explicit = String(trade?.marketType || "").toLowerCase();
+  if (explicit === "binary" || explicit === "multi") return explicit;
+  return /^(yes|no)$/i.test(String(trade?.outcome || "")) ? "binary" : "multi";
+}
+
+function optimisationCandidate(trades, filter, value, label) {
+  const subset = trades.filter(filter);
+  if (subset.length < OPTIMISATION_MIN_TRADES) return null;
+  const pnlUsdc = subset.reduce((total, trade) => total + Number(trade.realizedPnlUsdc || 0), 0);
+  return {
+    parameter: label,
+    value,
+    trades: subset.length,
+    pnlUsdc: Number(pnlUsdc.toFixed(4)),
+    pnlPerTradeUsdc: Number((pnlUsdc / subset.length).toFixed(4)),
+  };
+}
+
+// Given a portfolio's resolved trades, the same report row the bot publishes.
+function optimisationPortfolioRow(strategyId, label, trades) {
+  const baselinePnl = trades.reduce((total, trade) => total + Number(trade.realizedPnlUsdc || 0), 0);
+  const baseline = {
+    trades: trades.length,
+    pnlUsdc: Number(baselinePnl.toFixed(4)),
+    pnlPerTradeUsdc: trades.length ? Number((baselinePnl / trades.length).toFixed(4)) : null,
+  };
+  const candidates = [];
+  for (const threshold of OPTIMISATION_PROBABILITY_LADDER) {
+    const row = optimisationCandidate(trades, (trade) => (optimisationTradeEntryProbability(trade) ?? -1) >= threshold, threshold, "Probability threshold");
+    if (row) candidates.push(row);
+  }
+  for (const maxDays of OPTIMISATION_MAX_DAYS_LADDER) {
+    const row = optimisationCandidate(trades, (trade) => {
+      const days = Number(trade?.daysToResolution);
+      return Number.isFinite(days) && days >= 0 && days <= maxDays;
+    }, maxDays, "Max resolution days");
+    if (row) candidates.push(row);
+  }
+  for (const minVolume of OPTIMISATION_MIN_VOLUME_LADDER) {
+    const row = optimisationCandidate(trades, (trade) => (optimisationTradeEntryVolume(trade) ?? -1) >= minVolume, minVolume, "Minimum volume");
+    if (row) candidates.push(row);
+  }
+  for (const marketType of ["binary", "multi"]) {
+    const row = optimisationCandidate(trades, (trade) => optimisationTradeMarketType(trade) === marketType, marketType, "Market type");
+    if (row) candidates.push(row);
+  }
+  const recommendations = candidates
+    .filter((row) => baseline.pnlPerTradeUsdc != null && row.pnlPerTradeUsdc > baseline.pnlPerTradeUsdc + OPTIMISATION_MIN_IMPROVEMENT_USDC)
+    .sort((left, right) => right.pnlPerTradeUsdc - left.pnlPerTradeUsdc || right.trades - left.trades)
+    .reduce((rows, row) => {
+      if (!rows.some((entry) => entry.parameter === row.parameter)) rows.push(row);
+      return rows;
+    }, [])
+    .slice(0, 4)
+    .map((row) => ({
+      ...row,
+      improvementPerTradeUsdc: Number((row.pnlPerTradeUsdc - baseline.pnlPerTradeUsdc).toFixed(4)),
+      rationale: `${row.trades} resolved trades average ${row.pnlPerTradeUsdc >= 0 ? "+" : ""}${row.pnlPerTradeUsdc.toFixed(4)} USDC versus ${baseline.pnlPerTradeUsdc >= 0 ? "+" : ""}${baseline.pnlPerTradeUsdc.toFixed(4)} USDC for the current portfolio history.`,
+    }));
+  return {
+    strategyId,
+    label,
+    baseline,
+    recommendations,
+    note: trades.length < OPTIMISATION_MIN_TRADES
+      ? "Waiting for at least 12 resolved trades before proposing a parameter change."
+      : (recommendations.length ? "Recommendations are based on realised P/L after recorded fees." : "No single setting has enough evidence to improve realised P/L yet."),
+  };
+}
+
+// One row per live portfolio on the account, built from that portfolio's own closed
+// trades. The rows are decorated first: days-to-resolution, volume and market type come
+// from the scraped observation the trade was opened against, not from the wallet history,
+// which records only what was bought and for how much.
+function liveOptimisationPortfolios() {
+  if (!state.liveState) return [];
+  return dashboardModes()
+    .filter((mode) => isLivePortfolioMode(mode))
+    .map((mode) => {
+      const trades = liveClosedTrades(state.liveState, mode)
+        .map(decorateLiveTradeForTable)
+        .filter((trade) => Number.isFinite(Number(trade?.realizedPnlUsdc)));
+      return {
+        ...optimisationPortfolioRow(liveConfigKeyForMode(mode), portfolioNameForMode(mode), trades),
+        live: true,
+      };
+    });
+}
+
+// The wallet history, fetched once per page load for the optimisation report. Opening a
+// live tab loads it as a side effect; reaching Settings directly does not, and without it
+// the live portfolios would silently analyse zero trades. A failure is swallowed: the
+// paper half of the report is still worth showing.
+async function loadLiveStateForOptimisation() {
+  if (state.liveState || state.optimisationLiveStatePending || state.optimisationLiveStateTried) return;
+  state.optimisationLiveStatePending = true;
+  try {
+    const liveState = await fetchFreshState("live");
+    if (liveState && typeof liveState === "object") {
+      state.liveState = liveState;
+      renderPortfolioOptimizationReport();
+    }
+  } catch {
+    // Keep the paper half rather than blanking the panel.
+  } finally {
+    state.optimisationLiveStateTried = true;
+    state.optimisationLiveStatePending = false;
+  }
+}
+
 function renderPortfolioOptimizationReport() {
   if (!els.portfolioOptimizationReport) return;
+  loadLiveStateForOptimisation();
   const report = state.botState?.latestPortfolioOptimizationReport;
-  if (!report || !Array.isArray(report.portfolios)) {
+  // Live portfolios are analysed here whether or not the bot has published its half, so a
+  // state with no paper report yet does not hide them.
+  const livePortfolios = liveOptimisationPortfolios();
+  if ((!report || !Array.isArray(report.portfolios)) && !livePortfolios.length) {
     els.portfolioOptimizationReport.innerHTML = '<div class="empty">No portfolio optimisation report yet. The next hourly portfolio pass will build it from closed trades.</div>';
     return;
   }
+  // Paper rows come from the bot's last pass; live rows are computed from the wallet
+  // history on this page load, so they are current whatever the bot last did.
+  const paperPortfolios = Array.isArray(report?.portfolios) ? report.portfolios : [];
+  const portfolios = [...paperPortfolios, ...livePortfolios];
   els.portfolioOptimizationReport.innerHTML = `
     <div class="calculation-summary">
       <div>
         <span class="label">Last analysis</span>
-        <strong>${escapeHtml(report.generatedAt ? formatDate(report.generatedAt) : "-")}</strong>
-        <span>Only realised P/L and recorded trading fees are used.</span>
+        <strong>${escapeHtml(report?.generatedAt ? formatDate(report.generatedAt) : "-")}</strong>
+        <span>Paper portfolios as at the last portfolio pass; live portfolios recomputed now. Only realised P/L and recorded trading fees are used.</span>
       </div>
       <div>
         <span class="label">Method</span>
@@ -11628,11 +11788,11 @@ function renderPortfolioOptimizationReport() {
         <span>A recommendation needs at least 12 resolved trades and a better realised P/L per trade.</span>
       </div>
     </div>
-    ${report.portfolios.map((portfolio) => {
+    ${portfolios.map((portfolio) => {
       const recommendations = Array.isArray(portfolio.recommendations) ? portfolio.recommendations : [];
       return `
-        <section class="calculation-section portfolio-optimization-card">
-          <h3>${escapeHtml(portfolio.label || portfolio.strategyId || "Portfolio")}</h3>
+        <section class="calculation-section portfolio-optimization-card${portfolio.live ? " live" : ""}">
+          <h3>${escapeHtml(portfolio.label || portfolio.strategyId || "Portfolio")}${portfolio.live ? ' <span class="pill">Live</span>' : ""}</h3>
           <p class="calculation-note">${formatInteger(Number(portfolio.baseline?.trades || 0))} resolved trades / realised P/L ${signedMoney(Number(portfolio.baseline?.pnlUsdc || 0))} / ${portfolio.baseline?.pnlPerTradeUsdc == null ? "-" : `${signedMoney(Number(portfolio.baseline.pnlPerTradeUsdc))} per trade`}</p>
           ${recommendations.length ? `
             <div class="calculation-table-wrap">

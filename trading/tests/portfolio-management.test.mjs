@@ -1420,3 +1420,117 @@ test("run log: a refused dispatch is recorded where the portfolio's runs are rea
   assert.match(app, /if \(Array\.isArray\(dispatchFailures\)\) rows\.push\(\.\.\.dispatchFailures\);/);
   assert.match(app, /action === "DISPATCH_FAILED"/, "and it reads as a run that never started");
 });
+
+// The optimisation report is built in two places and must stay one analysis.
+//
+// The paper half comes from the bot, which holds the paper state. The live half cannot:
+// live closed trades are rebuilt from the wallet's on-chain history and carry no portfolio
+// id, because the live portfolios share one wallet -- which portfolio placed a trade is
+// inferred from the price it was bought at, and that inference only exists in the browser.
+// So the analysis is implemented twice, and this pins the two to identical output on
+// identical trades. Without it the two halves of one report could drift apart silently.
+test("portfolio optimisation: the browser and the bot run the same analysis", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const app = await readFile(new URL("../assets/app.js", import.meta.url), "utf8");
+
+  function extract(source, name) {
+    const start = source.indexOf(`function ${name}(`);
+    assert.ok(start >= 0, `function ${name} was not found in app.js`);
+    let depth = 0;
+    for (let index = source.indexOf("{", source.indexOf(")", start)); index < source.length; index += 1) {
+      if (source[index] === "{") depth += 1;
+      else if (source[index] === "}") {
+        depth -= 1;
+        if (depth === 0) return source.slice(start, index + 1);
+      }
+    }
+    throw new Error(`function ${name} is unbalanced in app.js`);
+  }
+  const constant = (name) => {
+    const match = new RegExp(`const ${name} = ([^;]+);`).exec(app);
+    assert.ok(match, `${name} was not found in app.js`);
+    return `const ${name} = ${match[1]};`;
+  };
+
+  const browser = new Function(`
+    ${constant("OPTIMISATION_PROBABILITY_LADDER")}
+    ${constant("OPTIMISATION_MAX_DAYS_LADDER")}
+    ${constant("OPTIMISATION_MIN_VOLUME_LADDER")}
+    ${constant("OPTIMISATION_MIN_TRADES")}
+    ${constant("OPTIMISATION_MIN_IMPROVEMENT_USDC")}
+    ${extract(app, "optimisationTradeEntryProbability")}
+    ${extract(app, "optimisationTradeEntryVolume")}
+    ${extract(app, "optimisationTradeMarketType")}
+    ${extract(app, "optimisationCandidate")}
+    ${extract(app, "optimisationPortfolioRow")}
+    return optimisationPortfolioRow;
+  `)();
+
+  // Enough resolved trades to clear the 12-trade floor on several cuts at once, with a
+  // deliberate edge: the high-probability, short-dated, high-volume binaries are the
+  // profitable ones, so the ladders actually produce recommendations to compare.
+  const trades = [];
+  for (let index = 0; index < 40; index += 1) {
+    const strong = index % 2 === 0;
+    trades.push({
+      id: `trade-${index}`,
+      status: "RESOLVED",
+      realizedPnlUsdc: strong ? 0.9 : -0.7,
+      marketProbability: strong ? 0.96 : 0.62,
+      daysToResolution: strong ? 2 : 21,
+      firstVolumeUsdc: strong ? 60000 : 400,
+      outcome: strong ? "Yes" : "Team A",
+    });
+  }
+  // A row with nothing recorded must be handled identically by both, not skipped by one.
+  trades.push({ id: "sparse", status: "RESOLVED", realizedPnlUsdc: 0.1 });
+
+  const bot = await import("../tools/paper-trading-bot.mjs");
+  const fromBrowser = browser("equal", "Equal", trades);
+  const report = bot.buildPortfolioOptimisationReport({
+    paperPortfolios: { equal: { id: "equal", label: "Equal", trades } },
+  });
+  const fromBot = report.portfolios.find((row) => row.strategyId === "equal");
+  assert.ok(fromBot, "the bot must analyse the portfolio it was given");
+
+  assert.deepEqual(fromBrowser.baseline, fromBot.baseline,
+    "the two implementations disagree about the baseline");
+  assert.deepEqual(fromBrowser.recommendations, fromBot.recommendations,
+    "the two implementations disagree about the recommendations");
+  assert.equal(fromBrowser.note, fromBot.note);
+  // The fixture is meant to produce something to compare; an empty match would pass
+  // vacuously and hide a divergence.
+  assert.ok(fromBrowser.recommendations.length > 0, "the fixture must produce recommendations");
+
+  // Too little history is the common case for a young live portfolio, and both must say so
+  // rather than recommending from four trades.
+  const thin = trades.slice(0, 4);
+  const thinBrowser = browser("equal", "Equal", thin);
+  const thinBot = bot.buildPortfolioOptimisationReport({
+    paperPortfolios: { equal: { id: "equal", label: "Equal", trades: thin } },
+  }).portfolios.find((row) => row.strategyId === "equal");
+  assert.deepEqual(thinBrowser.recommendations, []);
+  assert.equal(thinBrowser.note, thinBot.note);
+});
+
+test("portfolio optimisation: live portfolios are analysed per portfolio, not per account", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const app = await readFile(new URL("../assets/app.js", import.meta.url), "utf8");
+
+  // The live half is only worth anything if each live portfolio gets its own trades. The
+  // wallet is shared, so the split is by mode, and liveClosedTrades must take one.
+  assert.match(app, /function liveClosedTrades\(liveState, mode = state\.mode\)/,
+    "liveClosedTrades must be able to answer for a portfolio other than the selected one");
+  assert.match(app, /function belongsToLivePortfolio\(row, mode = state\.mode\)/,
+    "attribution must be askable per portfolio");
+  assert.match(app, /liveClosedTrades\(state\.liveState, mode\)/,
+    "the report must pass the mode through rather than reusing the active portfolio");
+  // The old state.mode-bound wrapper has to stay, since the rest of the live UI uses it.
+  assert.match(app, /function belongsToActiveLivePortfolio\(row\) \{\n\s+return belongsToLivePortfolio\(row, state\.mode\);/);
+
+  // Live rows are appended to the bot's paper rows, and a missing bot report must not
+  // hide them: reaching Settings without a published pass is the ordinary case.
+  assert.match(app, /const portfolios = \[\.\.\.paperPortfolios, \.\.\.livePortfolios\];/);
+  assert.match(app, /if \(\(!report \|\| !Array\.isArray\(report\.portfolios\)\) && !livePortfolios\.length\)/,
+    "the empty state must consider the live half too");
+});
