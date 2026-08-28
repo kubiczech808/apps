@@ -6907,7 +6907,11 @@ function auditAiResearchRunNow(PDO $pdo, array $config, int $runId): string
             || trim(strip_tags((string)($run['email_body_html'] ?? ''))) === ''
             || aiResearchTextHasPlaceholder((string)$run['email_subject'])
             || aiResearchTextHasPlaceholder(strip_tags((string)$run['email_body_html']));
-        if ($contacts && ($draftUnusable || count($variants) < 2 || $planRechecked)) {
+        // Vzor osloveni popisuje segment z planu, takze na nej vzorky kontaktu nejsou
+        // potreba - bez teto zmeny zustal seed bez e-mailu v prvnich detailech navzdy
+        // bez osloveni, uctu i davky.
+        $planUsableForDrafts = $keyword !== '' && trim((string)($plan['business_understanding'] ?? '')) !== '';
+        if (($contacts || $planUsableForDrafts) && ($draftUnusable || count($variants) < 2 || $planRechecked)) {
             try {
                 finalizeAiResearchRun($pdo, $config, $runId, $seed, $plan, $contacts, $contacts);
                 $fixed[] = $planRechecked ? 'vzory osloveni znovu vyhodnoceny' : 'vzory osloveni pregenerovany';
@@ -6919,8 +6923,9 @@ function auditAiResearchRunNow(PDO $pdo, array $config, int $runId): string
             }
         }
 
-        // 4. Ucet, databaze, kampan a scraping kontejner.
-        if ($contacts && in_array((string)$run['status'], ['done', 'no_match'], true)) {
+        // 4. Ucet, databaze, kampan a scraping kontejner. Zaklada se podle planu: do
+        // zalozene databaze pak scrapovaci worker natahne prvni davku kontaktu.
+        if (($contacts || $planUsableForDrafts) && in_array((string)$run['status'], ['done', 'no_match'], true)) {
             if (!aiResearchProvisionedUser($pdo, $run)) {
                 try {
                     provisionAiResearchCustomerWorkspace(
@@ -7239,11 +7244,14 @@ function aiResearchRunDraft(array $config, array $seed, array $plan, array $cont
         ];
     }
     $acceptedContacts = array_values(array_filter($contacts, static fn($contact) => (string)($contact['status'] ?? 'accepted') === 'accepted'));
-    if (!$acceptedContacts) {
+    // Vzor osloveni popisuje segment, ne konkretni firmy - staci na nej plan. Drive se
+    // bez ulozenych kontaktu negeneroval vubec, takze seed, u ktereho prvnich par
+    // detailu z katalogu nemelo e-mail, zustal navzdy na tretim kroku ze sedmi.
+    if (!$acceptedContacts && aiResearchPrimaryKeyword($plan) === '') {
         return [
             'subject' => 'Subjekt zatim neni pripraveny k osloveni',
-            'html' => '<p>Pro tento seed subjekt zatim nejsou ulozene zadne vhodne kontakty pro osloveni, proto se finalni text pres AI negeneroval.</p>',
-            'audit' => aiModelAuditEntry($config, 'outreach_draft', 'research', 'skipped_no_accepted_contacts'),
+            'html' => '<p>Plan zatim nema klicove slovo ani segment, proto se text osloveni negeneroval.</p>',
+            'audit' => aiModelAuditEntry($config, 'outreach_draft', 'research', 'skipped_no_plan'),
         ];
     }
     $fallbackTarget = trim((string)($contacts[0]['subject_name'] ?? $plan['audience_label'] ?? ''));
@@ -7566,8 +7574,18 @@ function finalizeAiResearchRun(PDO $pdo, array $config, int $runId, array $seed,
             error_log('AI research seed outreach for #' . $runId . ' failed: ' . $e->getMessage());
         }
     }
-    $status = $accepted ? 'done' : ($evaluated ? 'no_match' : 'no_contacts');
-    $message = $accepted ? 'AI nasla vhodne kontakty a pripravila osloveni.' : ($evaluated ? 'AI nenasla dostatecne vhodny kontakt.' : 'Scraping nenasel zadny kontakt.');
+    // Beh je hotovy, kdyz ma pouzitelny plan. Kontakty do databaze doplni scrapovaci
+    // worker do prvni davky - cekat na nekolik vzorku z behu znamenalo, ze se seed uz
+    // nikdy nedostal k uctu, workspace ani k davce.
+    $planUsable = aiResearchPrimaryKeyword($plan) !== ''
+        && trim((string)($plan['business_understanding'] ?? '')) !== ''
+        && empty($plan['seed_unsuitable']);
+    $status = ($accepted || $planUsable) ? 'done' : ($evaluated ? 'no_match' : 'no_contacts');
+    $message = $accepted
+        ? 'AI nasla vhodne kontakty a pripravila osloveni.'
+        : ($planUsable
+            ? 'AI pripravila plan i osloveni; kontakty doplni prvni davka scrapingu.'
+            : ($evaluated ? 'AI nenasla dostatecne vhodny kontakt.' : 'Scraping nenasel zadny kontakt.'));
     if ((int)($plan['research_attempts'] ?? 0) > 1) {
         $message .= ' Probehlo ' . (int)$plan['research_attempts'] . ' pokusu s alternativnimi keywordy.';
     }
@@ -7603,10 +7621,10 @@ function finalizeAiResearchRun(PDO $pdo, array $config, int $runId, array $seed,
         $runId,
         $message,
         $now,
-        $accepted ? 'preparing' : 'not_ready',
+        ($accepted || $planUsable) ? 'preparing' : 'not_ready',
         $runId,
     ]);
-    if ($accepted) {
+    if ($accepted || $planUsable) {
         try {
             provisionAiResearchCustomerWorkspace($pdo, $runId, $seed, $plan, $accepted, $draftSubject, $draftHtml);
         } catch (Throwable $e) {
@@ -8327,8 +8345,13 @@ function aiResearchNextWork(PDO $pdo, array $skipRunIds = []): array
         if ($status === 'running') {
             return $work + ['kind' => 'finish_running'];
         }
-        // Hotovy beh jeste nemusi mit splnene vsechny povinne kroky workflow.
-        if ((int)$row['accepted_count'] > 0) {
+        // Hotovy beh jeste nemusi mit splnene vsechny povinne kroky workflow. Rozhoduje
+        // pouzitelny plan: beh bez ulozenych vzorku kontaktu se drive do fronty vubec
+        // nedostal a zustal navzdy rozdelany.
+        $planUsable = aiResearchPrimaryKeyword($plan) !== ''
+            && trim((string)($plan['business_understanding'] ?? '')) !== ''
+            && empty($plan['seed_unsuitable']);
+        if ((int)$row['accepted_count'] > 0 || $planUsable) {
             $checklist = aiResearchWorkflowChecklist($pdo, $row, $plan);
             if (!aiResearchWorkflowRequiredDone($checklist)) {
                 if ((int)($plan['finish_attempts'] ?? 0) >= 3) {
