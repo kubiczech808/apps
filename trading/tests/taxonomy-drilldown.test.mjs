@@ -416,3 +416,73 @@ test("spread: PHP and the bot drop the same untradable rows", () => {
     assert.ok(ids.includes("tight-2"));
   });
 });
+
+// The reported bug: on the scraped opportunities list, rows whose Volume column read $0
+// were passing a "Volume min >= 1000" filter. Measured on the production catalogue
+// (tools/scraped-volume-filter-diagnosis.mjs): of 212 rows the filter returned, 121 had
+// every volume field at zero and cleared the floor on `liquidity` alone -- order-book
+// depth, which a market can carry before a single share has traded. The column and the
+// filter were reading different numbers, so the list contradicted itself on screen.
+test("scraped volume filter: the column, the filter and the sort read one number", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const app = await readFile(new URL("../assets/app.js", import.meta.url), "utf8");
+  const harness = `
+    ${extractFunction(app, "scrapedTradedVolumeUsdc", "app.js")}
+    ${extractFunction(app, "firstScrapedVolumeUsdc", "app.js")}
+    ${extractFunction(app, "resolvedScrapedVolumeUsdc", "app.js")}
+    ${extractFunction(app, "scrapedVolumeCell", "app.js")}
+    function scrapedObservationStatus(item) {
+      return String(item?.status || item?.selectionStatus || "").toUpperCase() === "RESOLVED"
+        ? "RESOLVED" : "SCRAPED";
+    }
+    function money(value) { return "$" + Math.round(Number(value)); }
+    function rowVolumeUsdc(item) {
+      for (const candidate of [item?.volumeUsdc, item?.volume24hr, item?.firstVolume24hr, item?.liquidity]) {
+        const numeric = Number(candidate);
+        if (Number.isFinite(numeric) && numeric > 0) return numeric;
+      }
+      return 0;
+    }
+    // The list's own rule, lifted from the filter in renderScrapedObservations.
+    function passesVolumeFloor(item, floor) {
+      const volume = scrapedTradedVolumeUsdc(item);
+      return floor <= 0 || (Number.isFinite(volume) && volume >= floor);
+    }
+    return { scrapedTradedVolumeUsdc, scrapedVolumeCell, passesVolumeFloor, rowVolumeUsdc };
+  `;
+  const app_ = new Function(harness)();
+
+  // Exactly the shape every one of the 121 production rows had: no volume anywhere, and
+  // a deep book. It must display 0 and it must not pass a 1000 floor.
+  const depthOnly = { volumeUsdc: 0, volume24hr: 0, firstVolumeUsdc: 0, firstVolume24hr: 0, liquidity: 15866.5461 };
+  assert.equal(app_.scrapedTradedVolumeUsdc(depthOnly), 0);
+  assert.equal(app_.scrapedVolumeCell(depthOnly), "$0");
+  assert.equal(app_.passesVolumeFloor(depthOnly, 1000), false,
+    "a market that has never traded must not clear a volume floor on order-book depth");
+  // The old reader is what let it through, so the regression is worth stating outright.
+  assert.ok(app_.rowVolumeUsdc(depthOnly) >= 1000);
+
+  // A market that really has traded is unaffected, and the number shown is the number tested.
+  const traded = { volumeUsdc: 0, volume24hr: 4200, firstVolumeUsdc: 0, firstVolume24hr: 0, liquidity: 10 };
+  assert.equal(app_.scrapedTradedVolumeUsdc(traded), 4200);
+  assert.equal(app_.scrapedVolumeCell(traded), "$4200");
+  assert.equal(app_.passesVolumeFloor(traded, 1000), true);
+  assert.equal(app_.passesVolumeFloor(traded, 5000), false);
+
+  // No volume field recorded at all is unknown, not zero: the cell says so instead of
+  // printing a liquidity figure under a Volume heading, and it cannot clear a floor.
+  const unknown = { liquidity: 99999 };
+  assert.equal(app_.scrapedTradedVolumeUsdc(unknown), null);
+  assert.equal(app_.scrapedVolumeCell(unknown), "-");
+  assert.equal(app_.passesVolumeFloor(unknown, 1000), false);
+  // With no floor set, an unknown row is still listed -- the filter is off, not inverted.
+  assert.equal(app_.passesVolumeFloor(unknown, 0), true);
+
+  // Whatever the row, the cell and the filter never disagree about whether it has volume.
+  for (const row of [depthOnly, traded, unknown, { volumeUsdc: 1000 }, { firstVolume24hr: 0 }]) {
+    const shown = app_.scrapedVolumeCell(row);
+    const passes = app_.passesVolumeFloor(row, 1000);
+    assert.equal(passes, shown !== "-" && Number(shown.replace("$", "")) >= 1000,
+      `the Volume column and the Volume filter disagreed about ${JSON.stringify(row)}`);
+  }
+});

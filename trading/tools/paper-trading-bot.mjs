@@ -2348,6 +2348,13 @@ function normalizeMarketScan(input = {}) {
     liveScanCount: Math.max(0, Math.floor(Number(input?.liveScanCount) || 0)),
     liveScanCounts: input?.liveScanCounts && typeof input.liveScanCounts === "object" ? input.liveScanCounts : {},
     liveScanError: input?.liveScanError || null,
+    frontierScanEnabled: input?.frontierScanEnabled !== false,
+    frontierScanCount: Math.max(0, Math.floor(Number(input?.frontierScanCount) || 0)),
+    frontierScanError: input?.frontierScanError || null,
+    highVolumeScanEnabled: input?.highVolumeScanEnabled !== false,
+    highVolumeScanCount: Math.max(0, Math.floor(Number(input?.highVolumeScanCount) || 0)),
+    highVolumeScanError: input?.highVolumeScanError || null,
+    priorityScanBatchLimit: Math.max(0, Math.floor(Number(input?.priorityScanBatchLimit) || 0)),
     endDateGraceHours: Math.max(0, Number(input?.endDateGraceHours) || 0),
     lastScanError: input?.lastScanError || null,
   };

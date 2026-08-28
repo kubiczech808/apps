@@ -245,7 +245,7 @@
                     <span>Net yield min &gt;=</span>
                     <input type="number" min="0" max="1000" step="0.1" value="0.0" aria-label="Minimum net yield percent" data-evaluation-net-yield-filter>
                   </label>
-                  <label class="threshold-control evaluation-liquidity-control" data-scraped-only data-opportunity-filter data-tradability-filter title="Minimum liquidity for the scraped view and future Events API scans. Portfolio rules are not changed. A resolved market no longer trades, so this filter is hidden and ignored on the Resolved tab.">
+                  <label class="threshold-control evaluation-liquidity-control" data-scraped-only data-opportunity-filter data-tradability-filter title="Minimum traded volume for the scraped view. It tests the same number the Volume column shows, so a market that has never traded is held back however deep its order book is. The same value is also sent as the liquidity floor of a future Events API scan, which is order-book depth rather than volume. Portfolio rules are not changed. A resolved market no longer trades, so this filter is hidden and ignored on the Resolved tab.">
                     <span>Volume min &gt;=</span>
                     <input type="number" min="0" max="1000000000" step="1000" placeholder="All" aria-label="Minimum traded volume" data-evaluation-liquidity-filter>
                   </label>

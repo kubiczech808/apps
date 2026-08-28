@@ -7748,8 +7748,11 @@ function rowVolumeUsdc(item = {}) {
   return 0;
 }
 
+// Volume as at the first scrape. Used only by the Volume column, so it ends where the
+// volume fields end: the old `firstLiquidity, liquidity` tail let a market that had never
+// traded print its order-book depth under a heading that says Volume.
 function firstScrapedVolumeUsdc(item = {}) {
-  for (const candidate of [item?.firstVolumeUsdc, item?.firstVolume24hr, item?.volumeUsdc, item?.volume24hr, item?.firstLiquidity, item?.liquidity]) {
+  for (const candidate of [item?.firstVolumeUsdc, item?.firstVolume24hr, item?.volumeUsdc, item?.volume24hr]) {
     const numeric = Number(candidate);
     if (Number.isFinite(numeric) && numeric >= 0) return numeric;
   }
@@ -7764,14 +7767,49 @@ function resolvedScrapedVolumeUsdc(item = {}) {
   return null;
 }
 
+// Traded volume, and only traded volume.
+//
+// rowVolumeUsdc() falls through to `liquidity` when every volume field is zero, which is
+// right where the number stands in for "is there enough size here to trade", but wrong
+// wherever it is presented or filtered as volume: liquidity is resting order-book depth,
+// which a market can have in quantity before a single share has changed hands. Measured on
+// the production catalogue (tools/scraped-volume-filter-diagnosis.mjs): of 212 scraped rows
+// passing a "Volume min >= 1000" filter, 121 had volumeUsdc, volume24hr and firstVolume24hr
+// all zero and cleared the floor on liquidity alone -- so the list answered a volume
+// question with a liquidity answer, and those rows displayed $0 in the Volume column while
+// sitting in the filtered results.
+//
+// Returns null when no volume field was recorded at all, which is different from a market
+// that really has traded nothing; the callers distinguish the two.
+function scrapedTradedVolumeUsdc(item = {}) {
+  for (const candidate of [item?.volumeUsdc, item?.volume24hr, item?.firstVolumeUsdc, item?.firstVolume24hr]) {
+    const numeric = Number(candidate);
+    if (Number.isFinite(numeric) && numeric > 0) return numeric;
+  }
+  // Every field was absent or unparseable -> unknown. Any recorded zero -> a real zero.
+  const recorded = [item?.volumeUsdc, item?.volume24hr, item?.firstVolumeUsdc, item?.firstVolume24hr]
+    .map(Number).some(Number.isFinite);
+  return recorded ? 0 : null;
+}
+
 function scrapedVolumeCell(item = {}) {
-  const first = firstScrapedVolumeUsdc(item);
-  if (scrapedObservationStatus(item) !== "RESOLVED") return money(first ?? rowVolumeUsdc(item));
+  // The live figure is the one the "Volume min >=" filter tests, so it is the one an open
+  // row shows -- reading firstScrapedVolumeUsdc() here let a zero recorded at the first
+  // scrape shadow a real volume traded since, printing $0 beside a row the filter had
+  // correctly admitted. No liquidity fallback anywhere in this cell either: a dash is
+  // honest, a depth figure under a Volume heading is not.
+  const current = scrapedTradedVolumeUsdc(item);
+  const currentText = current == null ? "-" : money(current);
+  if (scrapedObservationStatus(item) !== "RESOLVED") return currentText;
+  // A settled row is a historical record, so it keeps both prints: what it had traded when
+  // it was first seen, and what it had traded when it resolved.
+  const first = firstScrapedVolumeUsdc(item) ?? current;
+  const firstText = first == null ? "-" : money(first);
   const resolved = resolvedScrapedVolumeUsdc(item);
   if (!Number.isFinite(resolved)) {
-    return `<strong>${money(first ?? rowVolumeUsdc(item))}</strong><span>scraped; resolution snapshot unavailable</span>`;
+    return `<strong>${firstText}</strong><span>scraped; resolution snapshot unavailable</span>`;
   }
-  return `<strong>${money(resolved)}</strong><span>resolved; scraped ${money(first ?? 0)}</span>`;
+  return `<strong>${money(resolved)}</strong><span>resolved; scraped ${firstText}</span>`;
 }
 
 function portfolioCandidateFilterReasons(item, mode = state.mode) {
@@ -9468,7 +9506,11 @@ function scrapedSortValue(item, key) {
   if (key === "potentialAnnualizedReturn") return potentialAnnualizedReturn(item);
   if (key === "marketAnnualizedReturn") return marketAnnualizedExpectedReturn(item);
   if (key === "marketExpectedValueUsdc") return marketExpectedValueFromQuote(item);
-  if (key === "liquidity") return rowVolumeUsdc(item);
+  // The column is headed Volume and is filtered on traded volume, so it sorts on the same
+  // number. An unknown sorts as -1, below a genuine zero, so it cannot lead a descending
+  // sort on a value nobody recorded. (The key is still named "liquidity" because it is
+  // persisted in the user's stored sort preference.)
+  if (key === "liquidity") return scrapedTradedVolumeUsdc(item) ?? -1;
   return "";
 }
 
@@ -9640,8 +9682,13 @@ function renderScrapedOpportunities() {
     if (daysFilter != null && days > daysFilter) return false;
     const yieldValue = netYield(item);
     if (minNetYield > 0 && (!Number.isFinite(yieldValue) || yieldValue < minNetYield)) return false;
-    const liquidity = rowVolumeUsdc(item);
-    return minLiquidity <= 0 || (Number.isFinite(liquidity) && liquidity >= minLiquidity);
+    // "Volume min >=" has to test the traded volume the Volume column shows, not the
+    // order-book depth rowVolumeUsdc() falls back on. A row displaying $0 was passing a
+    // >= 1000 filter on liquidity alone, which is the whole reported bug. A row with no
+    // volume recorded at all cannot be shown to clear the floor either, so it is held
+    // back exactly like one that has genuinely traded nothing.
+    const volume = scrapedTradedVolumeUsdc(item);
+    return minLiquidity <= 0 || (Number.isFinite(volume) && volume >= minLiquidity);
   });
   const scope = JSON.stringify({
     statuses: selectedStatuses,

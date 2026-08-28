@@ -3014,19 +3014,85 @@ test("live events: the scan asks Gamma only for what was measured to work", asyn
   // A live-scan failure must never take the catalogue scan down with it: the rotating
   // scope is the job that has to keep working.
   assert.match(source, /Live event scan failed \(\$\{liveScanError\}\); continuing with the rotating scope only\./);
-  assert.match(source, /const fetchedMarkets = \[\.\.\.liveMarkets, \.\.\.diversifyMarketScanOrder\(batch\)\];/,
+  // Live rows still go first so bounded downstream steps keep them. They now share that
+  // head with the two other uncursored passes, and liveMarkets stays the first argument,
+  // so a market that is live and also resolving next keeps the live position.
+  assert.match(source, /const priorityMarkets = mergeMarketLists\(liveMarkets, frontierMarkets, highVolumeMarkets\);/,
     "live rows go first so bounded downstream steps keep them");
+  assert.match(source, /const fetchedMarkets = mergeMarketLists\(priorityMarkets, rotatingMarkets\);/,
+    "the priority passes precede the rotating scope");
+  // The passes overlap by design, so this has to merge rather than concatenate: a market
+  // found by more than one pass must be counted, audited and retained exactly once.
+  assert.ok(
+    !/const fetchedMarkets = \[\.\.\./.test(source),
+    "concatenating the passes would count an overlapping market once per pass",
+  );
 
   // normalizeMarketScan is a whitelist; unlisted fields never reach the published state.
-  for (const field of ["liveScanEnabled", "liveScanWindowHours", "liveScanCount", "liveScanCounts", "liveScanError", "endDateGraceHours"]) {
+  for (const field of [
+    "liveScanEnabled", "liveScanWindowHours", "liveScanCount", "liveScanCounts", "liveScanError",
+    "frontierScanEnabled", "frontierScanCount", "frontierScanError",
+    "highVolumeScanEnabled", "highVolumeScanCount", "highVolumeScanError",
+    "priorityScanBatchLimit", "endDateGraceHours",
+  ]) {
     assert.ok(
       new RegExp(`${field}: `).test(source.slice(source.indexOf("function normalizeMarketScan"), source.indexOf("function normalizeMarketScanHistory"))),
       `${field} must be whitelisted in normalizeMarketScan or it is silently dropped`,
     );
   }
-  const scan = bot.normalizeState({ marketScan: { liveScanCount: 7, liveScanCounts: { sports: 5, esports: 2 } } }).marketScan;
+  const scan = bot.normalizeState({
+    marketScan: {
+      liveScanCount: 7,
+      liveScanCounts: { sports: 5, esports: 2 },
+      frontierScanCount: 11,
+      highVolumeScanCount: 13,
+    },
+  }).marketScan;
   assert.equal(scan.liveScanCount, 7);
   assert.deepEqual(scan.liveScanCounts, { sports: 5, esports: 2 });
+  assert.equal(scan.frontierScanCount, 11);
+  assert.equal(scan.highVolumeScanCount, 13);
+});
+
+test("scan ordering: the two priority passes ask for the orderings the probe verified", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const source = await readFile(new URL("../tools/paper-trading-bot.mjs", import.meta.url), "utf8");
+
+  // Measured by tools/gamma-ordering-probe.mjs against the live API, not assumed: `order`
+  // and `ascending` are honoured on events/keyset, survive the scan's end-date bounds and
+  // survive after_cursor pagination. The rotating scope pages away from the head, so these
+  // uncursored passes are what keep "nearest resolution first" true on every run.
+  assert.match(source, /order: "endDate",\n\s+ascending: "true",/);
+  assert.match(source, /order: "volume24hr",\n\s+ascending: "false",/,
+    "the volume pass must rank on money moving now, not on lifetime turnover");
+
+  // Both passes go through scanEventRequestParams, so they inherit the end-date bounds
+  // and the liquidity floor. Ordering by endDate with no lower bound is what put
+  // months-old closed events at the head of every page.
+  const frontier = bot.scanEventRequestParams({ order: "endDate", ascending: "true" });
+  assert.ok(frontier.end_date_min, "the frontier pass needs the lower end-date bound");
+  assert.equal(frontier.order, "endDate");
+  assert.equal(frontier.ascending, "true");
+  const volume = bot.scanEventRequestParams({ order: "volume24hr", ascending: "false" });
+  assert.ok(volume.end_date_min, "the volume pass must stay inside the resolution window");
+  assert.equal(volume.ascending, "false");
+
+  // A failure in either pass is logged and dropped, exactly as for the live pass: the
+  // catalogue scan is the job that must keep working.
+  assert.match(source, /Nearest-resolution scan failed \(\$\{frontierScanError\}\); continuing without it\./);
+  assert.match(source, /Highest-volume scan failed \(\$\{highVolumeScanError\}\); continuing without it\./);
+});
+
+test("scan ordering: the probe that justified this stays read-only", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const workflow = await readFile(new URL("../../.github/workflows/trading-gamma-ordering-probe.yml", import.meta.url), "utf8");
+  const body = workflow.split("\n").filter((line) => !line.trim().startsWith("#")).join("\n");
+  // It reaches a third-party API from a runner, so it must stay unable to touch anything.
+  for (const forbidden of ["secrets.", "ftplib", "storbinary", "HOSTING_", "upload-artifact"]) {
+    assert.ok(!body.includes(forbidden), `the probe must not use ${forbidden}`);
+  }
+  assert.match(body, /permissions:\n\s+contents: read/);
+  assert.match(body, /on:\n\s+workflow_dispatch:/);
 });
 
 test("live events: the probe that justified this stays read-only", async () => {
