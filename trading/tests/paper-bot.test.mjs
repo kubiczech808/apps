@@ -9019,3 +9019,50 @@ test("market type: api.php classifies exactly as the bot does", async () => {
       `PHP and the bot disagree about ${JSON.stringify(item.question || item.slug)}`);
   }
 });
+
+// Reported: the scraping log said several runs each added thousands of new events while
+// the scraped list stayed at about 1200, so either the rows were not accumulating or the
+// log was wrong. Measured on production: the catalogue does accumulate -- 68581 rows
+// stored, and the active set grew 1200 -> 2859 over three hours -- but the log's "new"
+// count really is misleading. A scan deliberately never loads the resolved archive, so it
+// compares against the active working set alone, and a short-dated market that resolved
+// since it was last seen counts as new again on every re-read. That is how twelve runs
+// reported 17507 new rows while the active set grew by under 1700.
+test("scan log: a run reports what the catalogue did, not only what was new to the working set", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const source = await readFile(new URL("../tools/paper-trading-bot.mjs", import.meta.url), "utf8");
+  const app = await readFile(new URL("../assets/app.js", import.meta.url), "utf8");
+
+  // The before count is the working set, and the after count is measured once the merge
+  // and the retention pass have run -- taking it any earlier would report the intent
+  // rather than the result.
+  assert.match(source, /const activeObservationCountBefore = previousKeys\.size;/);
+  assert.match(source, /const activeObservationCountAfter = \(state\.marketObservations \|\| \[\]\)/);
+  const afterMerge = source.indexOf("const activeObservationCountAfter");
+  const merge = source.indexOf("state.marketObservations = retainMarketObservations(");
+  assert.ok(merge >= 0 && afterMerge > merge,
+    "the after count must be taken once the catalogue has actually been updated");
+  // Resolved rows are not part of the working set the list shows, so they cannot be
+  // counted into it or the net figure would grow for ever and mean nothing.
+  assert.match(source, /!== "RESOLVED"\)\.length;/);
+  assert.match(source, /netObservationCount: activeObservationCountAfter - activeObservationCountBefore,/);
+
+  // And the browser has to show it, or the number is published and never read.
+  assert.match(app, /catalogue \$\{Number\(run\.netObservationCount\) >= 0 \? "\+" : ""\}/);
+  assert.match(app, /const net = Number\(run\.netObservationCount\);/);
+
+  // The arithmetic itself, on the shape a real run publishes.
+  const netOf = new Function("run", `
+    const formatInteger = (value) => String(value);
+    ${/const net = Number\(run\.netObservationCount\);[\s\S]*?: "";/.exec(app)[0]}
+    return netText;
+  `);
+  assert.equal(netOf({ netObservationCount: 0 }), ", catalogue +0",
+    "a run that added nothing must say so rather than staying silent");
+  assert.equal(netOf({ netObservationCount: 1659 }), ", catalogue +1659");
+  // Markets resolve out of the working set faster than they arrive, so a shrinking
+  // catalogue is ordinary and must read as a fall, not as an unsigned number.
+  assert.equal(netOf({ netObservationCount: -240 }), ", catalogue -240");
+  // A run recorded before the field existed must not print "catalogue NaN".
+  assert.equal(netOf({}), "");
+});

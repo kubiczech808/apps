@@ -7168,7 +7168,15 @@ function publishedScanSummary(scrapedState, startedAt, selectedTag = "", previou
   const added = Number(run.newObservationCount || 0);
   const updated = Number(run.updatedObservationCount || 0);
   const retained = Number(run.retainedObservationCount || 0);
-  return `${label}: ${formatInteger(added)} new / ${formatInteger(updated)} updated (${formatInteger(retained)} saved from this scan)`;
+  // "New" is counted against the active working set, which is all a scan loads, so a
+  // market that has resolved since it was last seen counts as new again on re-read. Say
+  // what the catalogue actually did as well, or a run that added nothing still reports
+  // thousands of new rows.
+  const net = Number(run.netObservationCount);
+  const netText = Number.isFinite(net)
+    ? `, catalogue ${net >= 0 ? "+" : ""}${formatInteger(net)}`
+    : "";
+  return `${label}: ${formatInteger(added)} new / ${formatInteger(updated)} updated (${formatInteger(retained)} saved from this scan${netText})`;
 }
 
 async function waitForScrapedScanPublication(baseline = {}) {
@@ -10118,7 +10126,7 @@ function renderScrapeRunLog() {
               <tr class="${auditAvailable ? "scrape-run-row" : ""}" ${auditAvailable ? `data-scrape-run-audit="${escapeHtml(run.id || "")}" tabindex="0" role="button" aria-label="Open scraping audit for ${escapeHtml(formatDate(run.runAt || ""))}"` : ""}>
                 <td data-label="Run time"><strong>${escapeHtml(formatDate(run.runAt || ""))}</strong><small class="table-secondary">${auditAvailable ? "Open audit" : "Summary retained"}</small></td>
                 <td data-label="Trigger"><strong>${escapeHtml(run.trigger || "AUTO")}</strong></td>
-                <td data-label="New / updated">${formatInteger(run.newObservationCount) || "0"} / ${formatInteger(run.updatedObservationCount) || "0"}</td>
+                <td data-label="New / updated" title="New and updated are counted against the active working set, which is the only part of the catalogue a scan loads: a market that resolved since it was last seen has moved to the archive, so re-reading it counts as new again. The line below is the net change in the catalogue, which is what says whether the run added anything.">${formatInteger(run.newObservationCount) || "0"} / ${formatInteger(run.updatedObservationCount) || "0"}${run.netObservationCount == null ? "" : `<small class="table-secondary">catalogue ${Number(run.netObservationCount) >= 0 ? "+" : ""}${formatInteger(Number(run.netObservationCount))} to ${formatInteger(Number(run.activeObservationCountAfter || 0))}</small>`}</td>
                 <td data-label="Categories"><strong>${escapeHtml(scanLogCounts(run.categoryCounts))}</strong>${Array.isArray(run.requestedCategories) && run.requestedCategories.length ? `<small class="table-secondary">API sweep: ${escapeHtml(run.requestedCategories.join(", "))}</small>` : ""}</td>
                 <td data-label="Status" class="${statusClass}"><strong>${escapeHtml(status)}</strong></td>
                 <td data-label="API calls">${formatInteger(run.apiCalls) || "0"}</td>

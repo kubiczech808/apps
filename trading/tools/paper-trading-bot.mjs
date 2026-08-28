@@ -9188,10 +9188,24 @@ async function refreshMarketObservations(state) {
         return item && Number.isFinite(probability) && probability > 0 && probability < 1 && status !== "RESOLVED";
       })
       .sort(compareObservationsForMarketScan);
+    // `previousKeys` is the ACTIVE working set, not the whole catalogue. A scan
+    // deliberately never loads the resolved archive -- that is what the segmentation is
+    // for, and it holds tens of thousands of rows -- so a market that has settled since it
+    // was last seen is no longer in this set, and re-reading it counts as new again. That
+    // is why the run log could report seventeen thousand rows "new" across twelve runs
+    // while the active catalogue grew by under two thousand: for the short-dated sports
+    // and esports markets that dominate the scan, most of what it re-reads has resolved in
+    // between.
+    //
+    // The count stays as it is -- the audit rows are built from the same comparison, and
+    // it does truthfully answer "was this row already in the working set". What it cannot
+    // answer is "did the catalogue grow", so that is measured directly and published
+    // beside it rather than left to be inferred from a number that is not it.
     const previousKeys = new Set((state.marketObservations || []).map(marketObservationKey).filter(Boolean));
     const observationKeys = observations.map(marketObservationKey).filter(Boolean);
     const newObservationCount = observationKeys.filter((key) => !previousKeys.has(key)).length;
     const updatedObservationCount = observationKeys.filter((key) => previousKeys.has(key)).length;
+    const activeObservationCountBefore = previousKeys.size;
     const categoryCounts = marketCategoryCounts(markets);
     const tagCounts = marketTagCounts(markets);
     const shortHorizonCount = observations.filter((item) => {
@@ -9207,6 +9221,10 @@ async function refreshMarketObservations(state) {
     state.marketObservations = retainMarketObservations(
       mergeMarketObservationLists(observations, state.marketObservations || []).map(normalizeMarketObservationEconomics),
     );
+    // Measured after the merge and the retention pass, so this is what the catalogue
+    // really holds -- the one number that answers whether a run added anything.
+    const activeObservationCountAfter = (state.marketObservations || [])
+      .filter((item) => String(item?.status || item?.selectionStatus || "").toUpperCase() !== "RESOLVED").length;
     state.marketScan = {
       ...previousScan,
       scanCursors: savedCursors,
@@ -9284,6 +9302,11 @@ async function refreshMarketObservations(state) {
         retainedObservationCount: observations.length,
         newObservationCount,
         updatedObservationCount,
+        // What the working set held before and after this run. Their difference is the
+        // honest answer to "did this run add anything", which newObservationCount is not.
+        activeObservationCountBefore,
+        activeObservationCountAfter,
+        netObservationCount: activeObservationCountAfter - activeObservationCountBefore,
         resolvedObservationCount,
         resolvedSkippedCount: resolvedObservationCount,
         notRetainedCount: Object.values(sortedNotRetainedReasonCounts).reduce((total, count) => total + Number(count || 0), 0),
