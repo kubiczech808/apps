@@ -391,7 +391,9 @@ function aiResearchThrottleBeforeRequest(array $config, int $deadline, int $plan
     };
 
     $recent = $window();
-    if (count($recent) >= $requestBudget) {
+    // K pozadavkum tohoto procesu se pricita to, co poslaly predchozi hopy retezu.
+    $usedInWindow = count($recent) + aiResearchMinuteUsageBaseline();
+    if ($usedInWindow >= $requestBudget) {
         // Minutove okno je plne. Necekame - tik konci a dalsi cron je za par minut,
         // to je stejne dlouho jako cekani, ale bez drzeni requestu.
         return false;
@@ -716,6 +718,29 @@ function aiResearchGeminiUsageTimestamps(PDO $pdo): array
 function aiResearchGeminiRequestsUsedLast24h(PDO $pdo): int
 {
     return count(aiResearchGeminiUsageTimestamps($pdo));
+}
+
+function aiResearchRequestsUsedLastMinute(PDO $pdo): int
+{
+    $threshold = time() - 60;
+    return count(array_filter(
+        aiResearchGeminiUsageTimestamps($pdo),
+        static fn(int $at): bool => $at > $threshold
+    ));
+}
+
+/**
+ * Kolik pozadavku uz padlo v minutovem okne pred zacatkem tohoto tiku. Pocitadlo
+ * v procesu vidi jen svoje pozadavky, takze bez tohoto by retez tiku (kazdy hop je
+ * novy proces) minutovy limit vubec nedrzel a provider by odpovidal 429.
+ */
+function aiResearchMinuteUsageBaseline(?int $set = null): int
+{
+    static $baseline = 0;
+    if ($set !== null) {
+        $baseline = max(0, $set);
+    }
+    return $baseline;
 }
 
 function aiResearchRecordGeminiUsage(PDO $pdo, int $requests): void
@@ -3013,6 +3038,16 @@ function aiResearchChainNextTick(PDO $pdo, array $config, int $hop, string $last
     if (str_contains($lastMessage, 'nebylo co zpracovat')) {
         return 'Retez tiku ukoncen: fronta je prazdna.';
     }
+    // Minutovy limit drzi retez sam. Bez toho by hopy poslaly desitky pozadavku za
+    // minutu, provider by odpovedel 429 a beh by skoncil odlozenim s backoffem -
+    // presne to, co se v logu projevi jako "hotovo" a pak dlouhe "odlozeno".
+    $rpmBudget = aiResearchGeminiRequestsPerMinuteBudget($config);
+    $usedLastMinute = aiResearchRequestsUsedLastMinute($pdo);
+    $needed = aiResearchEstimatedGeminiRequestsPerSeed($config);
+    if ($usedLastMinute + $needed > $rpmBudget) {
+        return 'Retez tiku zastaven: minutovy limit (' . $usedLastMinute . '/' . $rpmBudget
+            . ' pozadavku), pokracuje dalsi cron.';
+    }
     $token = trim((string)($config['cron_token'] ?? ''));
     if ($token === '') {
         return '';
@@ -3026,6 +3061,7 @@ function runCronAiResearch(PDO $pdo, array $config, bool $force = false): string
     // Poznamka o vycerpane kvote plati i mezi requesty, jinak by kazdy tik zacinal
     // znovu u providera, ktery uz rekl "kvota pryc".
     aiResearchLoadProviderState($pdo);
+    aiResearchMinuteUsageBaseline(aiResearchRequestsUsedLastMinute($pdo));
     $settings = loadSettings($pdo);
     $intervalSeconds = aiResearchRunIntervalSeconds($config);
     // Kazdy tik cronu se zapise, i kdyz se nakonec nic nespusti. Bez toho neni z UI
@@ -3127,7 +3163,21 @@ function runCronAiResearch(PDO $pdo, array $config, bool $force = false): string
                 break;
             }
             if ($finishing) {
-                $step = runCronAiResearchUnfinished($pdo, $config, $work);
+                // Docasna chyba jednoho seedu nesmi zahodit cely tik. Kdyz je ale
+                // nedostupny provider (kvota, rate limit), nema smysl pokracovat
+                // s nikym - to se propise dal a tik se odlozi.
+                try {
+                    $step = runCronAiResearchUnfinished($pdo, $config, $work);
+                } catch (AiResearchTemporaryException $e) {
+                    if (aiResearchErrorIsQuota($e->getMessage()) || aiResearchTemporaryBackoffUntil($e) > 0) {
+                        throw $e;
+                    }
+                    $step = 'beh #' . (int)$work['run_id'] . ' preskocen: ' . aiResearchFailureMessage($e);
+                    if ((int)$work['run_id'] > 0) {
+                        $skipRunIds[] = (int)$work['run_id'];
+                        $lastSignature = '';
+                    }
+                }
                 if ($step === '') {
                     $step = 'AI research: rozdelany beh se nepodarilo posunout, zkusi to dalsi cron.';
                 }
@@ -3136,7 +3186,16 @@ function runCronAiResearch(PDO $pdo, array $config, bool $force = false): string
                 $messages[] = $step;
                 break;
             } else {
-                $step = runAiResearchOnce($pdo, $config);
+                try {
+                    $step = runAiResearchOnce($pdo, $config);
+                } catch (AiResearchTemporaryException $e) {
+                    if (aiResearchErrorIsQuota($e->getMessage()) || aiResearchTemporaryBackoffUntil($e) > 0) {
+                        throw $e;
+                    }
+                    // Novy seed se nepovedl z jineho duvodu (nectitelny web, katalog
+                    // neodpovedel). Tik pokracuje dal, misto aby cely propadl.
+                    $step = 'novy seed preskocen: ' . aiResearchFailureMessage($e);
+                }
             }
             $messages[] = $step;
             $processed++;
