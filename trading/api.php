@@ -9,6 +9,10 @@ declare(strict_types=1);
 // protects a scheduled pass from unbounded work while still leaving room for archived
 // experiments and the active portfolios a user actually wants to compare.
 const CUSTOM_PAPER_PORTFOLIO_LIMIT = 24;
+// A real wallet may be shared, but its strategies must not share a configuration
+// record. Keep the live collection smaller because every active one dispatches a
+// signed execution workflow against that account.
+const CUSTOM_LIVE_PORTFOLIO_LIMIT = 12;
 
 header('Content-Type: application/json; charset=utf-8');
 header('Cache-Control: no-store');
@@ -216,11 +220,19 @@ function state_file_paths(): array
 function state_payload(string $target, array $segments = ['observations', 'evaluations'], ?string $selectedStrategyId = null): array
 {
     $files = state_file_paths();
-    if (!isset($files[$target])) {
-        respond(['ok' => false, 'error' => 'Unknown state target'], 400);
+    $customLive = custom_live_portfolio_id_from_execution_target($target);
+    if ($customLive !== null) {
+        $config = load_portfolio_config();
+        if (!isset($config['livePortfolios'][$customLive])) {
+            respond(['ok' => false, 'error' => 'Unknown live portfolio'], 400);
+        }
+        $path = __DIR__ . '/data/live-' . $customLive . '-execution-state.json';
+    } else {
+        if (!isset($files[$target])) {
+            respond(['ok' => false, 'error' => 'Unknown state target'], 400);
+        }
+        $path = $files[$target];
     }
-
-    $path = $files[$target];
     $data = decode_state_file($path);
     if ($data === null) {
         if (!is_file($path)) {
@@ -1925,6 +1937,10 @@ function default_portfolio_config(): array
             'includeOnlyMarketTags' => [],
             'excludedMarketTags' => [],
         ],
+        // Independently managed strategies using the same connected Polymarket
+        // account. Their execution state and run log are separate from the legacy
+        // Live portfolio, so creating one can never alter its rules.
+        'livePortfolios' => [],
         // 5050 rests a bid at a fixed point on the 0..1 scale across every candidate
         // that clears its probability bar, rather than buying the best one at the
         // market. Automation ships off: it deliberately commits past its capital.
@@ -2011,6 +2027,14 @@ function portfolio_config_history_changes(array $before, array $after): array
                 'next' => is_array($afterPaper[$id] ?? null) ? $afterPaper[$id] : [],
             ];
         }
+    }
+    $beforeLive = is_array($before['livePortfolios'] ?? null) ? $before['livePortfolios'] : [];
+    $afterLive = is_array($after['livePortfolios'] ?? null) ? $after['livePortfolios'] : [];
+    foreach (array_unique(array_merge(array_keys($beforeLive), array_keys($afterLive))) as $id) {
+        $scopes['live-custom-' . (string) $id] = [
+            'live' => is_array($beforeLive[$id] ?? null) ? $beforeLive[$id] : [],
+            'next' => is_array($afterLive[$id] ?? null) ? $afterLive[$id] : [],
+        ];
     }
     foreach ($scopes as $strategyId => $rows) {
         $old = $rows['live'];
@@ -2465,6 +2489,25 @@ function normalize_custom_paper_portfolio_id(mixed $value): ?string
     return preg_match('/^[a-z][a-zA-Z0-9]{1,30}$/', $id) ? $id : null;
 }
 
+function normalize_custom_live_portfolio_id(mixed $value): ?string
+{
+    return normalize_custom_paper_portfolio_id($value);
+}
+
+function custom_live_portfolio_defaults(string $id): array
+{
+    $defaults = default_portfolio_config()['live'];
+    $defaults['displayName'] = $id;
+    $defaults['minProbability'] = 0.5;
+    $defaults['minLiquidityUsdc'] = null;
+    $defaults['autoRotatePositions'] = false;
+    $defaults['automationEnabled'] = true;
+    $defaults['archived'] = false;
+    $defaults['custom'] = true;
+
+    return $defaults;
+}
+
 /**
  * The starting point for a portfolio the user creates. Deliberately the most permissive
  * of the shipped profiles, so a created portfolio trades what its own form says and not
@@ -2491,6 +2534,7 @@ function normalize_portfolio_config(array $input): array
     $defaults = default_portfolio_config();
     $paperInput = is_array($input['paper'] ?? null) ? $input['paper'] : [];
     $liveInput = is_array($input['live'] ?? null) ? $input['live'] : [];
+    $customLiveInput = is_array($input['livePortfolios'] ?? null) ? $input['livePortfolios'] : [];
     $systemInput = is_array($input['system'] ?? null) ? $input['system'] : [];
     $config = $defaults;
     foreach ($defaults['paper'] as $id => $strategyDefaults) {
@@ -2516,9 +2560,23 @@ function normalize_portfolio_config(array $input): array
         $config['paper'][$id]['custom'] = true;
     }
     $config['live'] = normalize_strategy_config($liveInput, $defaults['live']);
-    // Only paper portfolios can be archived. A live portfolio holds real positions and
-    // open orders, and hiding those from the dashboard would hide real exposure.
+    // The legacy live portfolio stays permanently visible because it represents the
+    // connected wallet. User-created live strategies can be archived independently;
+    // their state files remain available for history and any existing exposure.
     $config['live']['archived'] = false;
+    $customLiveCount = 0;
+    foreach ($customLiveInput as $rawId => $strategyInput) {
+        if (!is_array($strategyInput)) {
+            continue;
+        }
+        $id = normalize_custom_live_portfolio_id($rawId);
+        if ($id === null || $customLiveCount >= CUSTOM_LIVE_PORTFOLIO_LIMIT) {
+            continue;
+        }
+        $customLiveCount += 1;
+        $config['livePortfolios'][$id] = normalize_strategy_config($strategyInput, custom_live_portfolio_defaults($id));
+        $config['livePortfolios'][$id]['custom'] = true;
+    }
     // 5050 carries three settings no other portfolio has. They are normalized here
     // rather than passed through, so a bad value cannot reach the executor and be
     // rejected by the exchange one bid at a time.
@@ -2612,6 +2670,13 @@ function save_portfolio_config(array $config): array
             }
         }
         $config['paper'] = $incomingPaper;
+        $incomingLive = is_array($config['livePortfolios'] ?? null) ? $config['livePortfolios'] : [];
+        foreach ((array) ($stored['livePortfolios'] ?? []) as $id => $row) {
+            if (!array_key_exists($id, $incomingLive)) {
+                $incomingLive[$id] = $row;
+            }
+        }
+        $config['livePortfolios'] = $incomingLive;
         if (!is_array($config['live5050'] ?? null)) {
             $config['live5050'] = [];
         }
@@ -3506,9 +3571,38 @@ function paper_strategy_is_known(?string $strategyId, ?array $config = null): bo
     return isset($paper[$strategyId]) && is_array($paper[$strategyId]) && ($paper[$strategyId]['archived'] ?? false) !== true;
 }
 
+function custom_live_portfolio_id_from_target(string $target): ?string
+{
+    if (!preg_match('/^live-custom-([a-z][a-zA-Z0-9]{1,30})$/', $target, $matches)) {
+        return null;
+    }
+    return normalize_custom_live_portfolio_id($matches[1]);
+}
+
+function custom_live_portfolio_id_from_execution_target(string $target): ?string
+{
+    if (!preg_match('/^live-custom-([a-z][a-zA-Z0-9]{1,30})-execution$/', $target, $matches)) {
+        return null;
+    }
+    return normalize_custom_live_portfolio_id($matches[1]);
+}
+
+function custom_live_portfolio_is_known(?string $portfolioId, ?array $config = null): bool
+{
+    if ($portfolioId === null || $portfolioId === '') {
+        return false;
+    }
+    $config = $config ?? load_portfolio_config();
+    $live = is_array($config['livePortfolios'] ?? null) ? $config['livePortfolios'] : [];
+    return isset($live[$portfolioId]) && is_array($live[$portfolioId]) && ($live[$portfolioId]['archived'] ?? false) !== true;
+}
+
 function workflow_target_key(string $target): string
 {
-    return paper_strategy_from_target($target) !== null ? 'paper' : $target;
+    if (paper_strategy_from_target($target) !== null) {
+        return 'paper';
+    }
+    return custom_live_portfolio_id_from_target($target) !== null ? 'live' : $target;
 }
 
 try {
@@ -3576,6 +3670,10 @@ try {
         $payload = request_payload();
         $target = (string) ($payload['target'] ?? '');
         $targetKey = workflow_target_key($target);
+        $customLivePortfolioId = custom_live_portfolio_id_from_target($target);
+        if ($targetKey === 'live' && $customLivePortfolioId !== null && !custom_live_portfolio_is_known($customLivePortfolioId)) {
+            respond(['ok' => false, 'error' => 'Unknown or archived live portfolio'], 400);
+        }
         $liveMinProbability = normalized_probability_input($payload['min_probability'] ?? $payload['live_min_probability'] ?? null);
         $scanTag = normalized_scan_tag_input($payload['market_scan_tag'] ?? null);
         $scanLiquidityMin = normalized_money_input($payload['market_scan_liquidity_min'] ?? $payload['marketScanLiquidityMin'] ?? null);
@@ -3643,6 +3741,7 @@ try {
                     'cross_live_portfolio_risk_diversification' => $crossLiveRiskDiversification,
                     'live_run_source' => $manualRunOnce === true ? 'MANUAL' : 'AUTO',
                     'live_execution_candidate_token_ids' => $liveShortlistTokenIds,
+                    'live_portfolio_id' => $customLivePortfolioId,
                 ], static fn ($value): bool => $value !== null),
                 'message' => 'Live one-time execution workflow dispatched.',
             ],
@@ -3702,6 +3801,7 @@ try {
             'target' => $target,
             'workflowTarget' => $targetKey,
             'paperStrategyId' => $paperStrategyId,
+            'livePortfolioId' => $customLivePortfolioId,
             'message' => $workflows[$targetKey]['message'],
             'workflow' => $result['workflow'],
             'ref' => $result['ref'],

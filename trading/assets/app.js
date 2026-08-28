@@ -507,10 +507,17 @@ const CUSTOM_PAPER_STRATEGY_ID = /^[a-z][a-zA-Z0-9]{1,30}$/;
 // Keep this in lockstep with CUSTOM_PAPER_PORTFOLIO_LIMIT in api.php. The API remains
 // authoritative, but catching the full set here avoids opening a form that cannot save.
 const CUSTOM_PAPER_PORTFOLIO_LIMIT = 24;
+const CUSTOM_LIVE_PORTFOLIO_LIMIT = 12;
 const RECOMMENDED_ACTIVE_PORTFOLIO_LIMIT = 12;
 
 function normalizeMode(mode) {
   if (mode === "live" || mode === "live-5050") return mode;
+  const customLive = /^live-custom-(.+)$/.exec(String(mode || ""));
+  const customLiveId = customLive?.[1];
+  if (customLiveId && CUSTOM_PAPER_STRATEGY_ID.test(customLiveId)
+    && Boolean((state.portfolioConfig?.livePortfolios || {})[customLiveId])) {
+    return `live-custom-${customLiveId}`;
+  }
   const paperMode = /^paper-(.+)$/.exec(String(mode || ""));
   const strategyId = paperMode?.[1];
   // A created portfolio's mode is only real while the portfolio is: a bookmark or a
@@ -528,8 +535,18 @@ function normalizeMode(mode) {
 // the two portfolios decide separately.
 const LIVE_MODES = new Set(["live", "live-5050"]);
 
+function customLivePortfolioIdFromMode(mode = state.mode) {
+  const id = /^live-custom-(.+)$/.exec(String(mode || ""))?.[1] || "";
+  return CUSTOM_PAPER_STRATEGY_ID.test(id) && Boolean((state.portfolioConfig?.livePortfolios || {})[id]) ? id : null;
+}
+
+function isLivePortfolioMode(mode = state.mode) {
+  const normalized = normalizeMode(mode);
+  return LIVE_MODES.has(normalized) || customLivePortfolioIdFromMode(normalized) !== null;
+}
+
 function isLiveMode() {
-  return LIVE_MODES.has(state.mode);
+  return isLivePortfolioMode(state.mode);
 }
 
 function isFixedEntryMode(mode = state.mode) {
@@ -537,11 +554,20 @@ function isFixedEntryMode(mode = state.mode) {
 }
 
 function liveConfigKeyForMode(mode = state.mode) {
-  return isFixedEntryMode(mode) ? "live5050" : "live";
+  const customId = customLivePortfolioIdFromMode(mode);
+  return customId || (isFixedEntryMode(mode) ? "live5050" : "live");
 }
 
 function liveExecutionStateFile(mode = state.mode) {
+  const customId = customLivePortfolioIdFromMode(mode);
+  if (customId) return `data/live-${customId}-execution-state.json`;
   return isFixedEntryMode(mode) ? "data/live-5050-execution-state.json" : "data/live-execution-state.json";
+}
+
+function liveExecutionStateTarget(mode = state.mode) {
+  const customId = customLivePortfolioIdFromMode(mode);
+  if (customId) return `live-custom-${customId}-execution`;
+  return isFixedEntryMode(mode) ? "live-5050-execution" : "live-execution";
 }
 
 function paperStrategyIdFromMode(mode = state.mode) {
@@ -591,6 +617,8 @@ function portfolioIsArchived(mode = state.mode) {
   // resting order and refreshing the account snapshot are unconditional in the
   // executor, so archiving it only stops new bids, nothing already held goes dark.
   if (normalized === "live-5050") return (state.portfolioConfig || {}).live5050?.archived === true;
+  const customLiveId = customLivePortfolioIdFromMode(normalized);
+  if (customLiveId) return (state.portfolioConfig || {}).livePortfolios?.[customLiveId]?.archived === true;
   if (LIVE_MODES.has(normalized)) return false;
   const paper = (state.portfolioConfig || {}).paper || {};
 
@@ -604,7 +632,7 @@ function portfolioIsArchived(mode = state.mode) {
 // treating "not loaded" as zero.
 function portfolioEquityUsdc(mode = state.mode) {
   const normalized = normalizeMode(mode);
-  if (LIVE_MODES.has(normalized)) {
+  if (isLivePortfolioMode(normalized)) {
     const equity = Number(state.liveState?.portfolio?.equityUsdc);
     return Number.isFinite(equity) ? equity : null;
   }
@@ -651,12 +679,17 @@ function preselectRichestPortfolio() {
 
 // Every mode the dashboard can show, in tab order: richest portfolio first.
 function dashboardModes() {
-  const liveModes = ["live", "live-5050"].filter((mode) => !portfolioIsArchived(mode));
+  const customLiveModes = Object.keys((state.portfolioConfig || {}).livePortfolios || {})
+    .filter((id) => CUSTOM_PAPER_STRATEGY_ID.test(id))
+    .map((id) => `live-custom-${id}`);
+  const liveModes = ["live", "live-5050", ...customLiveModes].filter((mode) => !portfolioIsArchived(mode));
   return byEquityDescending([...paperStrategyIds().map((id) => `paper-${id}`), ...liveModes]);
 }
 
 function defaultPortfolioNameForMode(mode = state.mode) {
   const normalizedMode = normalizeMode(mode);
+  const customLiveId = customLivePortfolioIdFromMode(normalizedMode);
+  if (customLiveId) return customLiveId;
   if (LIVE_MODES.has(normalizedMode)) return isFixedEntryMode(normalizedMode) ? "5050" : "Live";
   return paperModeLabel(normalizedMode);
 }
@@ -684,7 +717,7 @@ function portfolioUsesCustomName(mode = state.mode, configOverride = null) {
 function portfolioNavigationLabelForMode(mode = state.mode, configOverride = null) {
   const name = portfolioNameForMode(mode, configOverride);
   if (portfolioUsesCustomName(mode, configOverride)) return name;
-  return LIVE_MODES.has(normalizeMode(mode)) ? name : `Paper - ${name}`;
+  return isLivePortfolioMode(mode) ? name : `Paper - ${name}`;
 }
 
 function portfolioTitleForMode(mode = state.mode, configOverride = null) {
@@ -692,7 +725,7 @@ function portfolioTitleForMode(mode = state.mode, configOverride = null) {
   if (portfolioUsesCustomName(normalizedMode, configOverride)) {
     return portfolioNameForMode(normalizedMode, configOverride);
   }
-  if (LIVE_MODES.has(normalizedMode)) {
+  if (isLivePortfolioMode(normalizedMode)) {
     return isFixedEntryMode(normalizedMode) ? "5050 - fixed-entry bids" : "Live Polymarket account";
   }
   return `Paper - ${portfolioNameForMode(normalizedMode, configOverride)}`;
@@ -814,6 +847,7 @@ function defaultPortfolioConfig() {
       probabilitySource: "polymarket",
       excludedCandidateTokenIds: [],
     },
+    livePortfolios: {},
     // 5050 rests a bid at a fixed point on the 0..1 scale across everything that
     // clears its probability bar, instead of buying the best candidate at the
     // market. Most bids never fill; the ones that do were bought far below what
@@ -1059,7 +1093,17 @@ function normalizeOptionalMoney(value) {
 function portfolioConfigForMode(mode = state.mode) {
   const defaults = defaultPortfolioConfig();
   const config = state.portfolioConfig || {};
-  if (LIVE_MODES.has(normalizeMode(mode))) {
+  if (isLivePortfolioMode(mode)) {
+    const customLiveId = customLivePortfolioIdFromMode(mode);
+    if (customLiveId) {
+      const saved = (config.livePortfolios || {})[customLiveId] || {};
+      const merged = { ...customLivePortfolioDefaults(customLiveId), ...saved };
+      const marketType = normalizePortfolioMarketType(
+        saved.marketType,
+        saved.requireMostProbableOutcome ?? merged.requireMostProbableOutcome,
+      );
+      return { ...merged, marketType, requireMostProbableOutcome: marketType === "multi" };
+    }
     const key = liveConfigKeyForMode(mode);
     const saved = config[key] || {};
     const merged = {
@@ -1114,7 +1158,7 @@ function portfolioAccountTypeLabel(value) {
 
 function portfolioAccountTypeNote(value) {
   return normalizePortfolioAccountType(value) === "live"
-    ? "Live uses the connected Polymarket account and updates the existing Live portfolio."
+    ? "Live uses the connected Polymarket account. Each portfolio keeps independent rules, history and run log."
     : "Paper keeps its own simulated account and does not touch the live wallet.";
 }
 
@@ -1124,7 +1168,22 @@ function updatePortfolioConfigForMode(mode, updates) {
   // Each live portfolio writes to its own slot. Matching only "live" here sent every
   // 5050 setting -- the automation switch and the order price alike -- into the
   // conservative paper portfolio, so changing one portfolio changed another.
-  if (LIVE_MODES.has(normalizedMode)) {
+  if (isLivePortfolioMode(normalizedMode)) {
+    const customLiveId = customLivePortfolioIdFromMode(normalizedMode);
+    if (customLiveId) {
+      state.portfolioConfig = {
+        ...base,
+        livePortfolios: {
+          ...(base.livePortfolios || {}),
+          [customLiveId]: {
+            ...portfolioConfigForMode(normalizedMode),
+            ...updates,
+            custom: true,
+          },
+        },
+      };
+      return;
+    }
     const key = liveConfigKeyForMode(normalizedMode);
     state.portfolioConfig = {
       ...base,
@@ -1399,8 +1458,7 @@ function stateWarningHtml(target, label) {
 // so answering "live" for it started the main live portfolio's workflow instead --
 // a different algorithm, against real money.
 function currentExecutionTarget() {
-  if (isFixedEntryMode()) return "live-5050";
-  return isLiveMode() ? "live" : state.mode;
+  return state.mode;
 }
 
 function oneTimeExecutionTarget(button) {
@@ -1416,6 +1474,7 @@ function isPaperExecutionTarget(target) {
 function executionTargetLabel(target) {
   if (target === "live-5050") return "5050";
   if (target === "live") return "live";
+  if (isLivePortfolioMode(target)) return portfolioNameForMode(target);
   // portfolioNameForMode, not paperModeLabel: the latter only ever reads the shipped
   // built-in name, so a renamed portfolio (Equal -> Stop loss) still read as its old name
   // in the run-once button, the execution-progress modal, and the workflow-started toast.
@@ -2308,7 +2367,8 @@ function syncModeButtons() {
 function activeAutomatedPortfolioCount() {
   const config = state.portfolioConfig || defaultPortfolioConfig();
   const paper = Object.values(config.paper || {}).filter((row) => row && row.archived !== true && row.automationEnabled !== false);
-  const live = [config.live, config.live5050].filter((row) => row && row.archived !== true && row.automationEnabled === true);
+  const live = [config.live, config.live5050, ...Object.values(config.livePortfolios || {})]
+    .filter((row) => row && row.archived !== true && row.automationEnabled === true);
   return paper.length + live.length;
 }
 
@@ -2336,7 +2396,7 @@ function syncModeUi() {
     button.classList.toggle("active", isCurrent);
     // A live portfolio trades the real wallet. Portfolios are renameable, so the name
     // alone cannot be what tells them apart.
-    button.classList.toggle("mode-button-live", LIVE_MODES.has(buttonMode));
+    button.classList.toggle("mode-button-live", isLivePortfolioMode(buttonMode));
     button.textContent = portfolioNavigationLabelForMode(buttonMode);
     // Not only a class: which portfolio is open decides whether what the tables show is
     // correct or a bug, so it is stated to assistive tech rather than left to colour.
@@ -4074,7 +4134,7 @@ function syncEvaluationProbabilityFilterControl() {
 function eligibilityThresholdStorageKey(mode = state.mode) {
   const normalizedMode = normalizeMode(mode);
   const parts = [ELIGIBILITY_THRESHOLD_STORAGE_KEY, normalizedMode];
-  if (LIVE_MODES.has(normalizedMode)) {
+  if (isLivePortfolioMode(normalizedMode)) {
     const address = state.liveState?.account?.address || state.liveState?.account?.proxyWallet || "";
     if (address) parts.push(String(address).toLowerCase());
   }
@@ -4293,7 +4353,7 @@ function syncRiskAllocationControl(availableCapital = null, sourceLabel = "avail
 }
 
 function defaultLimitOrdersForMode(mode = state.mode) {
-  return LIVE_MODES.has(normalizeMode(mode));
+  return isLivePortfolioMode(mode);
 }
 
 function storedLimitOrders() {
@@ -4343,7 +4403,7 @@ function syncLimitOrdersControl() {
 }
 
 function parameterCapitalContextForMode(mode = state.mode) {
-  if (LIVE_MODES.has(normalizeMode(mode))) {
+  if (isLivePortfolioMode(mode)) {
     const portfolio = state.liveState?.portfolio || {};
     const openOrderRisk = Array.isArray(state.liveState?.openOrders)
       ? state.liveState.openOrders.reduce((sum, order) => sum + Number(order.notionalUsdc || 0), 0)
@@ -4396,7 +4456,7 @@ function syncPortfolioParameterControls(configOverride = null, options = {}) {
   const liquidity = normalizeOptionalMoney(config.minLiquidityUsdc);
   const minNetYield = normalizeMinimumNetYield(config.minNetYield);
   const order = normalizeSelectionOrder(config.selectionOrder);
-  const isLive = LIVE_MODES.has(normalizeMode(mode));
+  const isLive = isLivePortfolioMode(mode);
   const threshold = normalizeEligibilityThreshold(config.minProbability) ?? thresholdDefaultForMode(mode);
   const maxThreshold = normalizeOptionalProbability(config.maxProbability);
   const allocation = normalizeRiskAllocation(config.stakeUsdc) ?? DEFAULT_RISK_ALLOCATION;
@@ -4451,14 +4511,16 @@ function syncPortfolioParameterControls(configOverride = null, options = {}) {
   if (els.stopLossRiskMultiplierLabel) els.stopLossRiskMultiplierLabel.textContent = stopLossRiskLabel(config);
   // Paper-only: live portfolios have no equivalent to this mechanism, keyed on the
   // portfolio being edited rather than the open tab, like the 5050 rows below.
-  els.paperOnlyRows?.forEach((row) => row.toggleAttribute("hidden", LIVE_MODES.has(normalizeMode(mode))));
+  els.paperOnlyRows?.forEach((row) => row.toggleAttribute("hidden", isLivePortfolioMode(mode)));
   if (els.parameterModalArchive) {
     // Only an existing paper portfolio can be archived. A live one holds real positions
     // and open orders, and hiding those would hide real exposure; one being created does
     // not exist yet.
-    const archivable = !LIVE_MODES.has(normalizeMode(mode)) && !state.parameterDraftCreate;
+    const archivable = (customLivePortfolioIdFromMode(mode) !== null || !isLivePortfolioMode(mode)) && !state.parameterDraftCreate;
     els.parameterModalArchive.hidden = !archivable;
-    els.parameterModalArchive.dataset.portfolioId = archivable ? paperStrategyIdFromMode(mode) : "";
+    els.parameterModalArchive.dataset.portfolioId = archivable
+      ? (customLivePortfolioIdFromMode(mode) ? `live-custom-${customLivePortfolioIdFromMode(mode)}` : paperStrategyIdFromMode(mode))
+      : "";
   }
   const cronMinutes = normalizeExecutionCronMinutes(config.executionCronMinutes);
   if (els.executionCronMinutes) els.executionCronMinutes.value = String(cronMinutes);
@@ -4577,8 +4639,7 @@ function portfolioPrefillFromDataset(dataset = {}) {
 // A created portfolio needs an id that survives being a state key, a dashboard mode and
 // a workflow input. The name the user types is only its label; this is derived from it
 // so the stored key stays readable, and falls back to a counter when it cannot be.
-function newPaperPortfolioId(name) {
-  const existing = new Set(Object.keys((state.portfolioConfig || defaultPortfolioConfig()).paper || {}));
+function newPortfolioId(name, existing) {
   const base = String(name || "")
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
@@ -4595,9 +4656,20 @@ function newPaperPortfolioId(name) {
   return "";
 }
 
+function newPaperPortfolioId(name) {
+  return newPortfolioId(name, new Set(Object.keys((state.portfolioConfig || defaultPortfolioConfig()).paper || {})));
+}
+
+function newLivePortfolioId(name) {
+  return newPortfolioId(name, new Set(Object.keys((state.portfolioConfig || defaultPortfolioConfig()).livePortfolios || {})));
+}
+
 function executionScopeStrategyIdForMode(mode = state.mode) {
   const normalized = normalizeMode(mode);
-  return LIVE_MODES.has(normalized) ? liveConfigKeyForMode(normalized) : paperStrategyIdFromMode(normalized);
+  const customLiveId = customLivePortfolioIdFromMode(normalized);
+  return isLivePortfolioMode(normalized)
+    ? (customLiveId ? `live-custom-${customLiveId}` : liveConfigKeyForMode(normalized))
+    : paperStrategyIdFromMode(normalized);
 }
 
 function canCreatePaperPortfolio() {
@@ -4613,9 +4685,9 @@ function createPortfolioDraftForType(type, strategyId, prefill = {}, displayName
   const label = normalizePortfolioName(displayName || prefill?.displayName, accountType === "live" ? "Live" : "New portfolio");
   if (accountType === "live") {
     return {
-      mode: "live",
+      mode: `live-custom-${strategyId}`,
       draft: {
-        ...portfolioConfigForMode("live"),
+        ...customLivePortfolioDefaults(strategyId),
         ...rest,
         displayName: label,
       },
@@ -4636,11 +4708,21 @@ function createPortfolioDraftForType(type, strategyId, prefill = {}, displayName
 function switchCreatePortfolioType(type) {
   if (!state.parameterDraftCreate) return;
   const accountType = normalizePortfolioAccountType(type);
+  if (accountType === "live" && !canCreateLivePortfolio()) {
+    setExecutionStatus(`live portfolio limit reached (${CUSTOM_LIVE_PORTFOLIO_LIMIT}); archive an unused live portfolio before creating another`, "error");
+    return;
+  }
   state.parameterDraftCreateType = accountType;
   const label = normalizePortfolioName(els.portfolioName?.value || state.parameterDraft?.displayName, accountType === "live" ? "Live" : "New portfolio");
+  const strategyId = accountType === "live" ? newLivePortfolioId(label) : newPaperPortfolioId(label);
+  if (!strategyId) {
+    setExecutionStatus("no room for another portfolio", "error");
+    return;
+  }
+  state.parameterDraftCreate = strategyId;
   const next = createPortfolioDraftForType(
     accountType,
-    state.parameterDraftCreate,
+    strategyId,
     state.parameterDraftCreatePrefill || {},
     label,
   );
@@ -4768,7 +4850,7 @@ function renderPortfolioOverview() {
   // is stated on the row instead of being hidden by merging them.
   const rows = dashboardModes().map((mode) => {
     const automationEnabled = automationIsEnabled(portfolioConfigForMode(mode));
-    if (LIVE_MODES.has(normalizeMode(mode))) {
+    if (isLivePortfolioMode(mode)) {
       return {
         mode,
         name: portfolioNameForMode(mode),
@@ -4871,6 +4953,9 @@ function renderArchivedPortfolios() {
   // stored account, so it carries no equity/trades detail of its own here -- only
   // whether new bids are currently paused, which is the one thing archiving it changes.
   if (config.live5050?.archived === true) archived.push(["live-5050", config.live5050]);
+  Object.entries(config.livePortfolios || {})
+    .filter(([, row]) => row?.archived === true)
+    .forEach(([id, row]) => archived.push([`live-custom-${id}`, row]));
   els.archivedPortfolios.hidden = archived.length === 0;
   if (!archived.length) {
     els.archivedPortfolios.innerHTML = "";
@@ -4886,8 +4971,9 @@ function renderArchivedPortfolios() {
     <p class="calculation-note">These portfolios are not shown on the dashboard and are not executed. Every trade, run log and statistic they hold is kept, and restoring one brings it back exactly as it was.</p>
     <div class="archived-portfolio-list">
       ${archived.map(([id, row]) => {
-        const stored = id === "live-5050" ? null : state.botState?.paperPortfolios?.[id];
-        const archive = id === "live-5050"
+        const isCustomLive = id.startsWith("live-custom-");
+        const stored = (id === "live-5050" || isCustomLive) ? null : state.botState?.paperPortfolios?.[id];
+        const archive = (id === "live-5050" || isCustomLive)
           ? null
           : (Array.isArray(state.botState?.paperPortfolioArchives)
             ? state.botState.paperPortfolioArchives
@@ -4902,7 +4988,7 @@ function renderArchivedPortfolios() {
         // the archive snapshot is the immutable record of the actual trades. Prefer it
         // so an archived portfolio never renders as "0 of 0" after a state refresh.
         const archivedSummary = archive?.summary || stored?.historySummary || null;
-        const detail = id === "live-5050"
+        const detail = (id === "live-5050" || isCustomLive)
           ? "new bids paused; existing orders and positions are still watched"
           : (archivedSummary
             ? `${formatInteger(archivedSummary.resolvedCount) || 0} resolved trades`
@@ -4911,7 +4997,7 @@ function renderArchivedPortfolios() {
         return `
           <article class="archived-portfolio-card">
             <div class="archived-portfolio-head">
-              <span><strong>${escapeHtml(normalizePortfolioName(row?.displayName, id === "live-5050" ? "5050" : id))}</strong> <span class="muted">${escapeHtml(detail)}</span></span>
+              <span><strong>${escapeHtml(normalizePortfolioName(row?.displayName, id === "live-5050" ? "5050" : id.replace(/^live-custom-/, "")))}</strong> <span class="muted">${escapeHtml(detail)}</span></span>
               <button class="execution-button" type="button" data-restore-portfolio="${escapeHtml(id)}">Restore</button>
             </div>
             <div class="portfolio-summary-table archived-portfolio-rules">
@@ -4960,6 +5046,18 @@ async function setPortfolioArchived(strategyId, archived) {
     if (!saved) return;
     state.portfolioConfig = { ...config, live5050: { ...saved, archived } };
     if (archived && state.mode === "live-5050") {
+      state.mode = "live";
+      saveMode(state.mode);
+    }
+  } else if (strategyId.startsWith("live-custom-")) {
+    const id = strategyId.slice("live-custom-".length);
+    const saved = (config.livePortfolios || {})[id];
+    if (!saved) return;
+    state.portfolioConfig = {
+      ...config,
+      livePortfolios: { ...(config.livePortfolios || {}), [id]: { ...saved, archived } },
+    };
+    if (archived && state.mode === strategyId) {
       state.mode = "live";
       saveMode(state.mode);
     }
@@ -5101,7 +5199,14 @@ async function confirmParameterModal() {
       // The portfolio comes into existence here, on Save -- not when the form was
       // opened. Closing the form without saving leaves the config exactly as it was.
       if (creatingType === "live") {
-        updatePortfolioConfigForMode("live", { ...draft, archived: false });
+        const base = state.portfolioConfig || defaultPortfolioConfig();
+        state.portfolioConfig = {
+          ...base,
+          livePortfolios: {
+            ...(base.livePortfolios || {}),
+            [creating]: { ...customLivePortfolioDefaults(creating), ...draft, archived: false, custom: true },
+          },
+        };
       } else {
         const base = state.portfolioConfig || defaultPortfolioConfig();
         state.portfolioConfig = {
@@ -5131,11 +5236,14 @@ async function confirmParameterModal() {
       saveLimitOrders(draft.useLimitOrders);
     }
     await savePortfolioConfigNow();
+    if (creating && creatingType === "live" && !state.portfolioConfig?.livePortfolios?.[creating]) {
+      throw new Error("The live portfolio was not persisted by the server");
+    }
     if (creating && creatingType !== "live" && !state.portfolioConfig?.paper?.[creating]) {
       throw new Error("The portfolio was not persisted by the server");
     }
-    setExecutionStatus(creating ? (creatingType === "live" ? "live portfolio configured" : "portfolio created") : "portfolio parameters saved");
-    const createdMode = creating ? (creatingType === "live" ? "live" : `paper-${creating}`) : "";
+    setExecutionStatus(creating ? "portfolio created" : "portfolio parameters saved");
+    const createdMode = creating ? (creatingType === "live" ? `live-custom-${creating}` : `paper-${creating}`) : "";
     closeParameterModal();
     if (createdMode) {
       // Open what was just created: a new portfolio that stays hidden behind the tab
@@ -5727,7 +5835,9 @@ function paperExecutionDecision(payload, strategyId = "") {
 // The ranked shortlist as this browser sees it at dispatch, so the popup can say
 // which candidates are in play and on what numbers before the runner reports back.
 function executionShortlistPreview(target, limit = 5) {
-  const mode = target === "live-5050" ? "live-5050" : (target === "live" ? "live" : (isPaperExecutionTarget(target) ? target : state.mode));
+  const mode = isLivePortfolioMode(target)
+    ? target
+    : (isPaperExecutionTarget(target) ? target : state.mode);
   let rows = [];
   try {
     rows = portfolioCandidateRows(mode) || [];
@@ -5841,7 +5951,7 @@ async function waitForExecutionResult(target, startedAt, steps, options = {}) {
   // Each live portfolio publishes its own execution state; watching the wrong one
   // would report another portfolio's run as this one's result.
   const paperTarget = isPaperExecutionTarget(target);
-  const stateTarget = target === "live-5050" ? "live-5050-execution" : (target === "live" ? "live-execution" : "paper");
+  const stateTarget = isLivePortfolioMode(target) ? liveExecutionStateTarget(target) : "paper";
   let lastError = null;
   for (let attempt = 0; attempt < 20; attempt += 1) {
     let payload = null;
@@ -5909,7 +6019,7 @@ function paperModeFromStrategyId(strategyId) {
 }
 
 function portfolioForMode(mode = state.mode) {
-  if (LIVE_MODES.has(normalizeMode(mode))) return state.liveState?.portfolio || {};
+  if (isLivePortfolioMode(mode)) return state.liveState?.portfolio || {};
   const portfolios = paperPortfolioList(state.botState || {});
   const strategyId = paperStrategyIdFromMode(mode);
   const selected = portfolios.find((item) => item.id === strategyId) || selectedPaperPortfolio(state.botState || {});
@@ -5996,7 +6106,7 @@ function dashboardLoadIsStale(options = {}) {
 }
 
 function renderKnownStateForMode(mode = state.mode) {
-  if (LIVE_MODES.has(normalizeMode(mode))) {
+  if (isLivePortfolioMode(mode)) {
     // This paints before the fresh fetch resolves, so point the run log at the
     // portfolio being opened first. Otherwise it renders the previous portfolio's
     // execution history for as long as the load takes.
@@ -6150,7 +6260,7 @@ async function ensureFullBotState(options = {}) {
     const botState = await fetchJson("data/paper-state.json");
     if (dashboardLoadIsStale(options)) return;
     state.botStateFull = botStateIsFull(botState);
-    if (LIVE_MODES.has(normalizeMode(state.mode))) {
+  if (isLivePortfolioMode(state.mode)) {
       state.botState = botStateWithPreservedEvaluations(botState);
       if (state.liveState) renderLiveState(state.liveState);
       return;
@@ -6482,9 +6592,9 @@ function paperThresholdPayload() {
   return {};
 }
 
-function liveWorkflowPayload() {
-  const config = portfolioConfigForMode("live");
-  const shortlistTokenIds = portfolioCandidateRows("live")
+function liveWorkflowPayload(mode = state.mode) {
+  const config = portfolioConfigForMode(mode);
+  const shortlistTokenIds = portfolioCandidateRows(mode)
     .map((item) => String(item?.tokenId || item?.clobTokenId || item?.assetId || ""))
     .filter((tokenId) => /^\d{8,100}$/.test(tokenId))
     .slice(0, 120);
@@ -6496,6 +6606,7 @@ function liveWorkflowPayload() {
     manual_run_once: true,
     live_run_source: "MANUAL",
     live_execution_candidate_token_ids: shortlistTokenIds.join(","),
+    live_portfolio_id: customLivePortfolioIdFromMode(mode) || undefined,
     cross_live_portfolio_risk_diversification: systemConfig().crossLivePortfolioRiskDiversification !== false,
   };
 }
@@ -6509,7 +6620,7 @@ async function fetchFreshState(target, summary = "") {
   return response.json();
 }
 
-async function freshLiveWorkflowPayload() {
+async function freshLiveWorkflowPayload(mode = state.mode) {
   // A live click must submit precisely the same scraped shortlist the user sees,
   // never a stale dashboard cache or the AI-evaluation dataset.
   const [scrapedState, liveState] = await Promise.all([
@@ -6530,14 +6641,14 @@ async function freshLiveWorkflowPayload() {
   // satisfy first: the refetch and re-render above already did it. If it comes back
   // empty there is still nothing to refuse -- with no shortlist supplied the executor
   // scans for candidates itself, exactly as a scheduled run does.
-  return liveWorkflowPayload();
+  return liveWorkflowPayload(mode);
 }
 
 async function triggerOneTimeExecution(target) {
-  target = (target === "live" || target === "live-5050")
+  target = isLivePortfolioMode(target)
     ? target
     : (isPaperExecutionTarget(target) ? target : "paper");
-  const live = target === "live" || target === "live-5050";
+  const live = isLivePortfolioMode(target);
   const paperStrategyId = live ? "" : paperStrategyIdFromMode(target === "paper" ? state.mode : target);
   const startedAt = new Date().toISOString();
   // Recorded before the dispatch, not after: the run can appear in the status poll before
@@ -6592,8 +6703,8 @@ async function triggerOneTimeExecution(target) {
     }
     // 5050 takes no shortlist: its workflow has no such input and it scans for
     // candidates itself, so building and announcing one would be a fiction.
-    const sendsShortlist = target === "live";
-    const workflowPayload = sendsShortlist ? await freshLiveWorkflowPayload() : null;
+    const sendsShortlist = live && target !== "live-5050";
+    const workflowPayload = sendsShortlist ? await freshLiveWorkflowPayload(target) : null;
     if (target === "live-5050") {
       steps = addExecutionStep(
         steps,
@@ -6643,7 +6754,7 @@ async function triggerOneTimeExecution(target) {
     if (submittedShortlist) {
       steps = addExecutionStep(steps, "Candidates submitted for revalidation", submittedShortlist, "done");
     }
-    const liveUsesPolymarketProbability = normalizeProbabilitySource(portfolioConfigForMode("live").probabilitySource) === "polymarket";
+    const liveUsesPolymarketProbability = normalizeProbabilitySource(portfolioConfigForMode(target).probabilitySource) === "polymarket";
     steps = addExecutionStep(steps, "Execution check running", live
       ? (liveUsesPolymarketProbability
         ? "The runner refreshes the account and current Polymarket quotes, recalculates fees and profitability for the ordered shortlist, then submits only the first candidate that still passes. No AI analysis is requested."
@@ -7198,7 +7309,7 @@ async function loadDashboardState(options = {}) {
     await loadPortfolioConfig();
     if (dashboardLoadIsStale({ requestId, requestedMode })) return;
   }
-  return LIVE_MODES.has(requestedMode)
+  return isLivePortfolioMode(requestedMode)
     ? loadLiveState({ ...options, requestId, requestedMode })
     : loadBotState({ ...options, requestId, requestedMode });
 }
@@ -7316,7 +7427,7 @@ function portfolioRuleRows(portfolio = {}) {
 function livePortfolioRuleRows() {
   // Both live portfolios render through here, so the rules shown must be the ones
   // the open tab is actually steered by.
-  const mode = isFixedEntryMode() ? "live-5050" : "live";
+  const mode = isLiveMode() ? state.mode : "live";
   const config = portfolioConfigForMode(mode);
   const useLimitOrders = config.useLimitOrders === true;
   const maxResolutionDays = resolutionDaysForMode(mode);
@@ -7330,7 +7441,7 @@ function livePortfolioRuleRows() {
     : `Highest ${returnMetric}, then shorter resolution and net gain`;
   return [
     ["Probability threshold", probabilityRangeRuleValue(config, currentEligibilityThreshold())],
-    ["Stake sizing", stakeSizingRuleValue("live", state.liveState?.portfolio)],
+    ["Stake sizing", stakeSizingRuleValue(mode, state.liveState?.portfolio)],
     ["Resolution filter", `Max ${maxResolutionDays} days`],
     ["Trade priority", priority],
     ["Market type", portfolioMarketTypeLabel(config.marketType)],
@@ -7403,7 +7514,8 @@ function liveExecutionVerdictByToken() {
 function executionVerdictIsOwn(verdict, mode) {
   if (!verdict) return false;
   const owner = String(verdict.portfolio || "");
-  return owner === (isFixedEntryMode(mode) ? "live-5050" : "live");
+  const customLiveId = customLivePortfolioIdFromMode(mode);
+  return owner === (customLiveId ? `live-custom-${customLiveId}` : (isFixedEntryMode(mode) ? "live-5050" : "live"));
 }
 
 function latestLiveExecutionVerdict(item, mode = state.mode) {
@@ -7733,7 +7845,7 @@ function portfolioCandidateFilterReasons(item, mode = state.mode) {
 }
 
 function activeExposureRowsForMode(mode = state.mode) {
-  if (LIVE_MODES.has(normalizeMode(mode))) {
+  if (isLivePortfolioMode(mode)) {
     return [
       ...livePositions(state.liveState),
       ...liveOpenOrders(state.liveState),
@@ -7973,7 +8085,7 @@ function renderPortfolioCandidateRows(rows = [], mode = state.mode, diagnostics 
   }
   const shown = Math.min(visibleRows.length, candidateVisibleCount(mode));
   const remaining = visibleRows.length - shown;
-  const live = LIVE_MODES.has(normalizeMode(mode));
+  const live = isLivePortfolioMode(mode);
   const config = portfolioConfigForMode(mode);
   const usesPolymarketPotential = normalizeProbabilitySource(config.probabilitySource) === "polymarket";
   const useLiveMarketColumnOrder = live && usesPolymarketPotential;
@@ -8184,7 +8296,7 @@ const PORTFOLIO_CONFIG_HISTORY_LABELS = {
 };
 
 function currentPortfolioConfigHistoryStrategyId(mode = state.mode) {
-  return LIVE_MODES.has(normalizeMode(mode)) ? liveConfigKeyForMode(mode) : paperStrategyIdFromMode(mode);
+  return executionScopeStrategyIdForMode(mode);
 }
 
 function portfolioConfigHistoryValue(value) {
@@ -9074,7 +9186,7 @@ function renderLiveState(liveState) {
   if (els.portfolioRules) {
     els.portfolioRules.innerHTML = `
     <div class="bot-summary">
-      ${renderPortfolioRulesCard(isFixedEntryMode() ? "5050 portfolio" : "Live portfolio", livePortfolioRuleRows(), isFixedEntryMode() ? "live-5050" : null)}
+      ${renderPortfolioRulesCard(`${portfolioNameForMode()} portfolio`, livePortfolioRuleRows(), (isFixedEntryMode() || customLivePortfolioIdFromMode()) ? state.mode : null)}
     </div>
   `;
   }
@@ -10339,8 +10451,8 @@ function normalizeLiveExecutionRun(execution) {
     generatedAt: runAt,
     // Whichever live portfolio is on screen owns this row. Hard-coding Live labelled
     // 5050's own runs as the other portfolio's.
-    strategyId: isFixedEntryMode() ? "live-5050" : "live",
-    strategyLabel: isFixedEntryMode() ? "5050" : "Live",
+    strategyId: state.mode,
+    strategyLabel: portfolioNameForMode(),
     selectionMetric: portfolioReturnMetricLabel(settings),
     action: execution.action || "-",
     reason: execution.reason || "-",
@@ -10554,6 +10666,23 @@ function runningExecutionRun() {
   // Live targets have a dedicated workflow, so a browser-originated dispatch is safe to
   // show while it is running.
   return executionRunWasDispatchedHere(target, run) ? run : null;
+}
+
+function canCreateLivePortfolio() {
+  return Object.keys(state.portfolioConfig?.livePortfolios || {}).length < CUSTOM_LIVE_PORTFOLIO_LIMIT;
+}
+
+function customLivePortfolioDefaults(strategyId) {
+  return {
+    ...defaultPortfolioConfig().live,
+    displayName: strategyId,
+    minProbability: 0.5,
+    minLiquidityUsdc: null,
+    autoRotatePositions: false,
+    automationEnabled: true,
+    archived: false,
+    custom: true,
+  };
 }
 
 // The synthetic row. Shaped like a real run-log entry so the list, the filter and the
@@ -12097,16 +12226,16 @@ document.addEventListener("click", (event) => {
     event.preventDefault();
     const strategyId = directArchiveButton.dataset.portfolioArchiveDirect || "";
     if (!strategyId) return;
-    const isLive5050 = strategyId === "live-5050";
+    const isLiveStrategy = strategyId === "live-5050" || strategyId.startsWith("live-custom-");
     const label = normalizePortfolioName(
-      portfolioConfigForMode(isLive5050 ? strategyId : `paper-${strategyId}`).displayName,
-      isLive5050 ? "5050" : strategyId,
+      portfolioConfigForMode(isLiveStrategy ? strategyId : `paper-${strategyId}`).displayName,
+      strategyId === "live-5050" ? "5050" : strategyId.replace(/^live-custom-/, ""),
     );
     // 5050 holds real positions and open orders, unlike a paper portfolio, so its
     // confirmation says plainly what keeps running: withdrawing an expired resting
     // order and refreshing the account snapshot are unconditional in the executor,
     // and only opening new bids actually stops.
-    const confirmMessage = isLive5050
+    const confirmMessage = isLiveStrategy
       ? `Archive "${label}"?\n\nIt disappears from the dashboard and stops resting new bids. Existing positions and open orders keep being watched and their expired orders withdrawn as normal. Every trade, run log and statistic it holds is kept, and you can restore it from Settings.`
       : `Archive "${label}"?\n\nIt disappears from the dashboard and stops trading. Every trade, run log and statistic it holds is kept, and you can restore it from Settings.`;
     if (!window.confirm(confirmMessage)) {
@@ -12130,7 +12259,11 @@ document.addEventListener("click", (event) => {
     event.preventDefault();
     const strategyId = archiveButton.dataset.portfolioId || "";
     if (!strategyId) return;
-    const label = normalizePortfolioName(portfolioConfigForMode(`paper-${strategyId}`).displayName, strategyId);
+    const isLiveStrategy = strategyId.startsWith("live-custom-");
+    const label = normalizePortfolioName(
+      portfolioConfigForMode(isLiveStrategy ? strategyId : `paper-${strategyId}`).displayName,
+      strategyId.replace(/^live-custom-/, ""),
+    );
     // Asked for explicitly: archiving is a deliberate act, so it is confirmed before it
     // happens rather than offered as an undo afterwards.
     if (!window.confirm(`Archive "${label}"?\n\nIt disappears from the dashboard and stops trading. Every trade, run log and statistic it holds is kept, and you can restore it from Settings.`)) {

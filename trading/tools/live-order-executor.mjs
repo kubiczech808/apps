@@ -121,6 +121,9 @@ const IS_MANUAL_RUN = String(process.env.LIVE_RUN_SOURCE || "").toUpperCase() ==
 // worth. It deliberately does not rotate and deliberately does not stop at the
 // capital it has: the exchange's collateral is what actually bounds it.
 const FIXED_ENTRY_STRATEGY = String(process.env.LIVE_STRATEGY || "").trim().toLowerCase() === "fixed_entry";
+// The legacy Live strategy and each user-created live strategy share a wallet but
+// never a decision log. The workflow supplies this stable owner id for custom runs.
+const LIVE_PORTFOLIO_ID = process.env.LIVE_PORTFOLIO_ID || (FIXED_ENTRY_STRATEGY ? "live-5050" : "live");
 const FIXED_ENTRY_PRICE = envNumber("LIVE_FIXED_ENTRY_PRICE", 0.5);
 const FIXED_ENTRY_STAKE_USDC = Math.max(0, envNumber("LIVE_FIXED_ENTRY_STAKE_USDC", 0) || 0);
 // Resting a bid is one sequential round trip to the exchange, measured at roughly four
@@ -3730,7 +3733,7 @@ function liveRevalidationUpdate(item, checkedAt) {
     // rows, so without this the two live portfolios read each other's: whatever 5050
     // rejected disappeared from the main live portfolio's candidates too, and since
     // 5050 sweeps the whole pool after every scrape it emptied that list completely.
-    portfolio: FIXED_ENTRY_STRATEGY ? "live-5050" : "live",
+    portfolio: LIVE_PORTFOLIO_ID,
     status: status === "ELIGIBLE"
       ? "READY"
       : (status === "ERROR"

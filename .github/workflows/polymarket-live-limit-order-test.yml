@@ -79,6 +79,11 @@ on:
         required: false
         default: ""
         type: string
+      live_portfolio_id:
+        description: Optional custom live portfolio id; blank runs the legacy Live portfolio
+        required: false
+        default: ""
+        type: string
   schedule:
     # GitHub Actions schedules can be delayed or dropped. Poll every ten minutes
     # away from the top of the hour; every run may place a new eligible order.
@@ -111,6 +116,9 @@ jobs:
       LIVE_STATE_URL: https://osobnizkusenosti.cz/trading/api.php?action=state&target=live
       LIVE_EXECUTION_STATE_PATH: data/live-execution-state.json
       LIVE_EXECUTION_STATE_URL: https://osobnizkusenosti.cz/trading/api.php?action=state&target=live-execution
+      LIVE_EXECUTION_PUBLISH_FILE: trading/data/live-execution-state.json>live-execution-state.json
+      LIVE_PORTFOLIO_CONFIG_ID: ${{ github.event.inputs.live_portfolio_id || '' }}
+      LIVE_PORTFOLIO_ID: live
       MAX_ORDER_FRACTION: ${{ github.event.inputs.live_max_order_fraction || '0.05' }}
       LIVE_STAKE_USDC: ${{ github.event.inputs.live_stake_usdc || '5' }}
       MAX_ORDER_NOTIONAL_USDC: "50"
@@ -179,8 +187,25 @@ jobs:
           except Exception as exc:
               print(f"portfolio config unavailable: {exc}")
               raise SystemExit(1)
-          live = (payload.get("config") or {}).get("live") or {}
-          system = (payload.get("config") or {}).get("system") or {}
+          config = payload.get("config") or {}
+          requested_id = os.environ.get("LIVE_PORTFOLIO_CONFIG_ID", "").strip()
+          if requested_id:
+              if not __import__("re").fullmatch(r"[a-z][a-zA-Z0-9]{1,30}", requested_id):
+                  raise SystemExit("Invalid custom live portfolio id")
+              live = (config.get("livePortfolios") or {}).get(requested_id) or {}
+              if not live or live.get("archived") is True:
+                  raise SystemExit("Custom live portfolio is unavailable")
+              execution_path = f"data/live-{requested_id}-execution-state.json"
+              execution_url = f"https://osobnizkusenosti.cz/trading/api.php?action=state&target=live-custom-{requested_id}-execution"
+              execution_publish_file = f"trading/{execution_path}>live-{requested_id}-execution-state.json"
+              portfolio_id = f"live-custom-{requested_id}"
+          else:
+              live = config.get("live") or {}
+              execution_path = "data/live-execution-state.json"
+              execution_url = "https://osobnizkusenosti.cz/trading/api.php?action=state&target=live-execution"
+              execution_publish_file = "trading/data/live-execution-state.json>live-execution-state.json"
+              portfolio_id = "live"
+          system = config.get("system") or {}
           mapping = {
               "LIVE_MIN_PROBABILITY": live.get("minProbability"),
               "LIVE_MAX_PROBABILITY": live.get("maxProbability"),
@@ -205,6 +230,10 @@ jobs:
               "LIVE_INCLUDE_ONLY_MARKET_TAGS": ",".join(str(tag).strip() for tag in (live.get("includeOnlyMarketTags") or []) if str(tag).strip()),
               "USE_LIMIT_ORDERS": str(bool(live.get("useLimitOrders", True))).lower(),
               "LIVE_CROSS_PORTFOLIO_RISK_DIVERSIFICATION": str(bool(system.get("crossLivePortfolioRiskDiversification", True))).lower(),
+              "LIVE_PORTFOLIO_ID": portfolio_id,
+              "LIVE_EXECUTION_STATE_PATH": execution_path,
+              "LIVE_EXECUTION_STATE_URL": execution_url,
+              "LIVE_EXECUTION_PUBLISH_FILE": execution_publish_file,
           }
           if live.get("executionTrigger") == "after_scrape":
               if os.environ.get("GITHUB_EVENT_NAME") == "schedule":
@@ -232,8 +261,6 @@ jobs:
           # The runner starts from a clean checkout. Restore the hosted log
           # before the executor appends this decision, otherwise each run
           # would replace the full history with a single row.
-          LIVE_EXECUTION_STATE_URL: https://osobnizkusenosti.cz/trading/api.php?action=state&target=live-execution
-          LIVE_EXECUTION_STATE_PATH: data/live-execution-state.json
           LIVE_RUN_LOG_RECOVER: "false"
           LIVE_CONFIRMED_MANUAL_RUN_IDS: "30846520601,30885038395"
         run: node tools/restore-live-execution-history.mjs
@@ -245,10 +272,8 @@ jobs:
           # The preceding sync has just fetched the CLOB balance and open
           # orders. Execute against that local snapshot, not a potentially
           # older copy that is still being served from the hosting.
-          LIVE_STATE_URL: data/live-state.json
-          LIVE_EXECUTION_STATE_URL: data/live-execution-state.json
         run: |
-          npm run live:execute -- --confirm-live
+          LIVE_STATE_URL=data/live-state.json LIVE_EXECUTION_STATE_URL="$LIVE_EXECUTION_STATE_PATH" npm run live:execute -- --confirm-live
 
       - name: Refresh live account snapshot after execution
         if: always()
@@ -260,15 +285,13 @@ jobs:
         working-directory: trading
         env:
           POLYMARKET_DRY_RUN: ${{ ((github.event_name == 'workflow_dispatch' && inputs.live_confirm) || github.event_name == 'schedule' || (github.event_name == 'push' && contains(github.event.head_commit.message, '[live-limit-order-test]'))) && 'false' || 'true' }}
-          LIVE_STATE_URL: data/live-state.json
-          LIVE_EXECUTION_STATE_URL: data/live-execution-state.json
           # Tells the executor this pass is the second half of a rotation, so the sell
           # and the replacement buy are recorded as one run instead of two rows.
           LIVE_ROTATION_COMPLETION: "true"
         run: |
-          if node -e 'const fs = require("fs"); const path = "data/live-execution-state.json"; const state = fs.existsSync(path) ? JSON.parse(fs.readFileSync(path, "utf8")) : {}; process.exit(state.action === "ROTATION_EXIT_SUBMITTED" ? 0 : 1)'; then
+          if node -e 'const fs = require("fs"); const path = process.env.LIVE_EXECUTION_STATE_PATH; const state = fs.existsSync(path) ? JSON.parse(fs.readFileSync(path, "utf8")) : {}; process.exit(state.action === "ROTATION_EXIT_SUBMITTED" ? 0 : 1)'; then
             echo "Rotation exit accepted. Revalidating the synced account for an immediate replacement order."
-            npm run live:execute -- --confirm-live
+            LIVE_STATE_URL=data/live-state.json LIVE_EXECUTION_STATE_URL="$LIVE_EXECUTION_STATE_PATH" npm run live:execute -- --confirm-live
           else
             echo "No accepted live rotation exit in this run; immediate replacement is not needed."
           fi
@@ -285,22 +308,19 @@ jobs:
           HOSTING_FTP_USERNAME: ${{ secrets.HOSTING_FTP_USERNAME }}
           HOSTING_FTP_PASSWORD: ${{ secrets.HOSTING_FTP_PASSWORD }}
           TRADING_FTP_DIR: /www/trading/data
-          LIVE_EXECUTION_STATE_FILE: trading/data/live-execution-state.json
         # Shared with the 5050 portfolio. It was a heredoc here and absent there, so a
         # market 5050 found gone was never closed out of its candidate list.
-        run: python3 trading/tools/persist-live-revalidation.py
+        run: LIVE_EXECUTION_STATE_FILE="trading/${LIVE_EXECUTION_STATE_PATH}" python3 trading/tools/persist-live-revalidation.py
 
       - name: Merge published run-log history before upload
         if: always()
         working-directory: trading
         env:
           # Read the hosted state, not the local copy the executor just wrote.
-          LIVE_EXECUTION_PUBLISHED_STATE_URL: https://osobnizkusenosti.cz/trading/api.php?action=state&target=live-execution
-          LIVE_EXECUTION_STATE_PATH: data/live-execution-state.json
         # The upload replaces the hosted file outright, so a run that started from an
         # empty local log would publish that empty log over the real history. This makes
         # the file about to be uploaded a superset of the one it replaces.
-        run: node tools/merge-live-execution-history.mjs
+        run: LIVE_EXECUTION_PUBLISHED_STATE_URL="$LIVE_EXECUTION_STATE_URL" node tools/merge-live-execution-history.mjs
 
       - name: Upload live state
         if: always()
@@ -316,9 +336,8 @@ jobs:
           # live-state.json is what the run exists to publish, so a run that did not
           # generate it fails; the execution state is published first so the run log
           # survives even if the larger account snapshot cannot be uploaded.
-          PUBLISH_FILES: trading/data/live-execution-state.json>live-execution-state.json,trading/data/live-state.json>live-state.json
           PUBLISH_REQUIRED: live-state.json
-        run: python3 trading/tools/publish-execution-state.py
+        run: PUBLISH_FILES="${LIVE_EXECUTION_PUBLISH_FILE},trading/data/live-state.json>live-state.json" python3 trading/tools/publish-execution-state.py
 
       # The decision is printed at the START of the execution step, so on a long run it
       # falls outside the window a log reader can fetch and the run becomes unexplainable
@@ -328,7 +347,6 @@ jobs:
         if: always()
         continue-on-error: true
         env:
-          LIVE_EXECUTION_STATE_FILE: trading/data/live-execution-state.json
         run: |
           python3 - <<'PY'
           import json
@@ -337,7 +355,7 @@ jobs:
           from pathlib import Path
           from zoneinfo import ZoneInfo
 
-          path = Path(os.environ["LIVE_EXECUTION_STATE_FILE"])
+          path = Path("trading") / os.environ["LIVE_EXECUTION_STATE_PATH"]
           if not path.exists():
               print("RUN DIGEST: no live execution state was produced by this run.")
               raise SystemExit(0)
