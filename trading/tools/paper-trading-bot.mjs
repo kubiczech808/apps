@@ -11189,7 +11189,7 @@ async function run() {
       return;
     }
     await timed("execution", () => executeManualPaperRunFromStoredCandidates(state, strategiesForRun, {
-      source: "after_scrape",
+      source: EXECUTION_TRIGGER === "after_scrape" ? "after_scrape" : "cron",
     }));
     return;
   }

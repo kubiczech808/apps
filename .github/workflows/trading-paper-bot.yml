@@ -1,6 +1,12 @@
 name: Trading Paper Bot
 
 on:
+  # Portfolio cron cadence is evaluated independently of market scans. A scan can be
+  # delayed by GitHub or fail without preventing enabled cron portfolios from checking
+  # their already-published shortlist. The bot itself enforces each portfolio's saved
+  # executionCronMinutes, so this lightweight poll does not open trades every 10 minutes.
+  schedule:
+    - cron: '7,17,27,37,47,57 * * * *'
   push:
     paths:
       - 'trading/tools/paper-trading-bot.mjs'
@@ -159,7 +165,7 @@ jobs:
       PAPER_SCRAPED_SIMULATION_RESOLUTION_SYNC_LIMIT: "300"
       # Nothing may wait on a model memo that is never produced.
       PAPER_REQUIRE_GEMINI: "false"
-      PAPER_EXECUTION_ONLY: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'after_scan' && 'true' || 'false' }}
+      PAPER_EXECUTION_ONLY: ${{ (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.mode == 'after_scan')) && 'true' || 'false' }}
       PAPER_COMPACT_ONLY: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'repair' && 'true' || 'false' }}
       PAPER_RESET_PORTFOLIO: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'reset' && 'true' || 'false' }}
       # One-off undo for a reset dispatched by mistake. No UI surfaces this.
