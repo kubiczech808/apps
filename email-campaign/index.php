@@ -52,6 +52,9 @@ const AI_RESEARCH_WEBSITE_SUBPAGE_SLICE_SECONDS = 8;
 const AI_RESEARCH_SEED_PICK_PAGES_MAX = 3;
 const AI_RESEARCH_SEED_PICK_DETAILS_MAX = 8;
 const AI_RESEARCH_SEED_PICK_SLICE_SECONDS = 10;
+// Kolik polozek behu se v detailu vypise na jednu stranku. Kontejner muze mit
+// desetitisice URL; vypsat je vsechny znamenalo chybu 500 na cele strance.
+const SCRAPING_ITEMS_PER_PAGE = 25;
 // Kolik firem ma katalog na plne strance vysledku. Kdyz jich prvni stranka vrati
 // aspon tolik a katalog neuvadi celkovy pocet ani strankovani, je jasne, ze vysledku
 // je vic - jen jsme je neprecetli.
@@ -18367,6 +18370,9 @@ function renderApp(PDO $pdo, ?array $flash): void
     $scrapingJobs = [];
     $activeScrapingJobs = [];
     $scrapingItemsByJob = [];
+    $scrapingItemCounts = [];
+    $scrapingItemsPageJob = 0;
+    $scrapingItemsPage = 1;
     $aiResearchRuns = [];
     $aiResearchContactsByRun = [];
     $adminDatabaseCatalogRows = [];
@@ -18437,7 +18443,18 @@ function renderApp(PDO $pdo, ?array $flash): void
         }
         $scrapingJobs = scrapingJobs($pdo, $selectedListId, $selectedScrapingContainerId);
         $activeScrapingJobs = activeScrapingJobs($pdo);
-        $scrapingItemsByJob = scrapingItemsByJob($pdo, array_map(fn($job) => (int)$job['id'], $scrapingJobs));
+        $scrapingJobIds = array_map(fn($job) => (int)$job['id'], $scrapingJobs);
+        // Cisla se ctou z databaze, do pameti jde jen stranka polozek.
+        $scrapingItemCounts = scrapingItemCountsByJob($pdo, $scrapingJobIds);
+        $scrapingItemsPageJob = max(0, (int)($_GET['items_job'] ?? 0));
+        $scrapingItemsPage = max(1, (int)($_GET['items_page'] ?? 1));
+        $scrapingItemsByJob = scrapingItemsByJob(
+            $pdo,
+            $scrapingJobIds,
+            SCRAPING_ITEMS_PER_PAGE,
+            $scrapingItemsPageJob,
+            $scrapingItemsPage
+        );
     } elseif ($view === 'research') {
         if (!canAccessAiResearch()) {
             $view = 'overview';
@@ -19183,7 +19200,11 @@ function renderApp(PDO $pdo, ?array $flash): void
         <?php foreach ($scrapingJobs as $job): ?>
             <?php $jobItems = $scrapingItemsByJob[(int)$job['id']] ?? []; ?>
             <?php $jobGroups = scrapingItemGroups($jobItems); ?>
-            <?php $jobDisplayCounts = scrapingGroupCounts($jobGroups); ?>
+            <?php // Pocty jsou z databaze, ne z vypsaneho vzorku - vzorek je jen jedna stranka. ?>
+            <?php $jobDisplayCounts = $scrapingItemCounts[(int)$job['id']] ?? scrapingGroupCounts($jobGroups); ?>
+            <?php $jobItemsTotal = (int)($jobDisplayCounts['items'] ?? count($jobItems)); ?>
+            <?php $jobItemsPage = (int)$job['id'] === $scrapingItemsPageJob ? $scrapingItemsPage : 1; ?>
+            <?php $jobItemsPages = max(1, (int)ceil($jobItemsTotal / SCRAPING_ITEMS_PER_PAGE)); ?>
             <tr class="<?= $jobItems ? 'expandable-row' : '' ?>" <?php if ($jobItems): ?>data-detail-target="scraping-detail-<?= h((string)$job['id']) ?>" tabindex="0" aria-expanded="false"<?php endif; ?>>
                 <td><?= h((string)$job['id']) ?></td>
                 <td><?= statusBadge(scrapingRunTypeLabel($job)) ?></td>
@@ -19214,7 +19235,22 @@ function renderApp(PDO $pdo, ?array $flash): void
                         <div class="scraping-detail-head">
                             <strong>Detail behu #<?= h((string)$job['id']) ?></strong>
                             <span><?= h((string)$jobDisplayCounts['processed']) ?> zpracovano, <?= h((string)$jobDisplayCounts['inserted']) ?> vlozeno, <?= h((string)$jobDisplayCounts['updated']) ?> aktualizovano</span>
+                            <?php if ($jobItemsPages > 1): ?>
+                            <span class="scraping-items-pager">
+                                <?php $pageBase = '?route=scraping&container_id=' . (int)$selectedScrapingContainerId . '&items_job=' . (int)$job['id']; ?>
+                                stránka <?= h((string)$jobItemsPage) ?> z <?= h((string)$jobItemsPages) ?>
+                                <?php if ($jobItemsPage > 1): ?>
+                                    <a href="<?= h($pageBase . '&items_page=' . ($jobItemsPage - 1)) ?>#scraping-detail-<?= h((string)$job['id']) ?>">novější</a>
+                                <?php endif; ?>
+                                <?php if ($jobItemsPage < $jobItemsPages): ?>
+                                    <a href="<?= h($pageBase . '&items_page=' . ($jobItemsPage + 1)) ?>#scraping-detail-<?= h((string)$job['id']) ?>">starší</a>
+                                <?php endif; ?>
+                            </span>
+                            <?php endif; ?>
                         </div>
+                        <?php if ($jobItemsTotal > count($jobItems)): ?>
+                            <p class="muted">Zobrazeno <?= h((string)count($jobItems)) ?> z <?= h((string)$jobItemsTotal) ?> položek, od nejnovější.</p>
+                        <?php endif; ?>
                         <div class="scraping-result-grid">
                             <?php foreach ($jobGroups as $group): ?>
                                 <?php if (!$group['items']) continue; ?>
@@ -19403,17 +19439,19 @@ function renderApp(PDO $pdo, ?array $flash): void
             // Hlavicka sloupcu kroku vznika ze stejneho checklistu jako bunky, aby se
             // poradi a nazvy nikdy nerozesly. Prazdny beh dava jen popisky.
             $researchStepColumns = aiResearchOrderedChecklist(aiResearchWorkflowChecklist($pdo, [], []));
-            $researchColumnCount = 10 + count($researchStepColumns);
+            $researchColumnCount = 11 + count($researchStepColumns);
+            // Cisluje se v poradi vypisu: #1 je nejnovejsi zpracovany subjekt.
+            $researchRowNumber = 0;
         ?>
         <div class="research-category-progress" data-research-category-progress aria-live="polite">
             <strong>Výběr seedů z Firmy.cz / Vše pro firmy</strong>
             <span><b data-research-category-completed><?= h((string)(int)($researchCategoryProgress['completed'] ?? 0)) ?></b> z <b data-research-category-total><?= !empty($researchCategoryProgress['total_known']) ? h((string)(int)$researchCategoryProgress['total']) : '...' ?></b> subjektů plně zpracováno</span>
             <small class="muted" data-research-category-updated>Průběžně se aktualizuje</small>
         </div>
-        <table class="research-table"><thead><tr><th>Návrhy</th><th>Oslovení</th><?php foreach ($researchStepColumns as $stepColumn): ?><th class="research-step-col" title="<?= h((string)$stepColumn['label']) ?>"><?= h((string)$stepColumn['short']) ?></th><?php endforeach; ?><th>Kdy</th><th>Seed byznys</th><th>Email</th><th>Databáze</th><th>Klíčové slovo</th><th>Lokalita</th><th>Kontakty</th><th>K oslovení</th></tr></thead><tbody>
+        <table class="research-table"><thead><tr><th title="Poradove cislo zpracovaneho subjektu">#</th><th>Návrhy</th><th>Oslovení</th><?php foreach ($researchStepColumns as $stepColumn): ?><th class="research-step-col" title="<?= h((string)$stepColumn['label']) ?>"><?= h((string)$stepColumn['short']) ?></th><?php endforeach; ?><th>Kdy</th><th>Seed byznys</th><th>Email</th><th>Databáze</th><th>Klíčové slovo</th><th>Lokalita</th><th>Kontakty</th><th>K oslovení</th></tr></thead><tbody>
         <?php if ($researchStarting): ?>
             <tr class="research-starting-row">
-                <td></td><td></td>
+                <td></td><td></td><td></td>
                 <?php foreach ($researchStepColumns as $stepColumn): ?><td class="research-step-col"></td><?php endforeach; ?>
                 <td><?= h(formatDateTime(date('c'))) ?></td>
                 <td><strong>hledá se seed…</strong></td>
@@ -19433,7 +19471,9 @@ function renderApp(PDO $pdo, ?array $flash): void
             <?php $seedOutreachDraft = aiResearchSeedOutreachDraft($run, $runContacts, $runPlan, $runLanguage); ?>
             <?php $rowChecklist = aiResearchWorkflowChecklist($pdo, $run, $runPlan); ?>
             <?php $rowSteps = aiResearchStepCellStates($rowChecklist, (int)$run['id'] === $researchActiveRunId); ?>
+            <?php $researchRowNumber++; ?>
             <tr class="expandable-row" data-detail-target="ai-research-detail-<?= h((string)$run['id']) ?>" tabindex="0" aria-expanded="false">
+                <td class="research-number-col"><?= h((string)$researchRowNumber) ?></td>
                 <td>
                     <div class="research-draft-actions">
                     <form method="post" class="inline">
@@ -20590,27 +20630,88 @@ function activeScrapingJobs(PDO $pdo): array
     ')->fetchAll(PDO::FETCH_ASSOC);
 }
 
-function scrapingItemsByJob(PDO $pdo, array $jobIds): array
+/**
+ * Vzorek polozek behu pro detail v UI. Drive se tahaly VSECHNY polozky vsech padesati
+ * behu jednim SELECT * - u kontejneru s desetitisici URL to znamenalo stovky MB v pameti
+ * a stejne velke HTML, takze stranka skoncila chybou 500. Ted se bere jen stranka
+ * nejnovejsich polozek a jen sloupce, ktere detail opravdu vypisuje.
+ *
+ * $pageJobId + $page slouzi strankovani jednoho konkretniho behu; ostatni behy dostanou
+ * prvni stranku.
+ */
+function scrapingItemsByJob(PDO $pdo, array $jobIds, int $perJob = SCRAPING_ITEMS_PER_PAGE, int $pageJobId = 0, int $page = 1): array
+{
+    $jobIds = array_values(array_unique(array_filter(array_map('intval', $jobIds))));
+    if (!$jobIds) {
+        return [];
+    }
+    $perJob = max(1, min(200, $perJob));
+    $grouped = [];
+    $stmt = $pdo->prepare('
+        SELECT id, job_id, status, url, email, subject_name, address, message
+        FROM scraping_job_items
+        WHERE job_id=?
+        ORDER BY id DESC
+        LIMIT ' . $perJob . ' OFFSET ' . 0 . '
+    ');
+    $paged = $pdo->prepare('
+        SELECT id, job_id, status, url, email, subject_name, address, message
+        FROM scraping_job_items
+        WHERE job_id=?
+        ORDER BY id DESC
+        LIMIT ' . $perJob . ' OFFSET ?
+    ');
+    foreach ($jobIds as $jobId) {
+        if ($jobId === $pageJobId && $page > 1) {
+            $paged->execute([$jobId, ($page - 1) * $perJob]);
+            $rows = $paged->fetchAll(PDO::FETCH_ASSOC);
+        } else {
+            $stmt->execute([$jobId]);
+            $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        }
+        if ($rows) {
+            $grouped[$jobId] = $rows;
+        }
+    }
+    return $grouped;
+}
+
+/**
+ * Pocty polozek podle stavu spocitane v databazi. Prehled tak nemusi kvuli cislum
+ * nacitat radky - u velkych kontejneru je to rozdil mezi jednim indexovanym COUNT
+ * a desetitisici radku v pameti.
+ */
+function scrapingItemCountsByJob(PDO $pdo, array $jobIds): array
 {
     $jobIds = array_values(array_unique(array_filter(array_map('intval', $jobIds))));
     if (!$jobIds) {
         return [];
     }
     $rows = $pdo->query('
-        SELECT *
+        SELECT job_id, status, COUNT(*) total
         FROM scraping_job_items
         WHERE job_id IN (' . implode(',', $jobIds) . ')
-        ORDER BY id ASC
+        GROUP BY job_id, status
     ')->fetchAll(PDO::FETCH_ASSOC);
-    $grouped = [];
+    $counts = [];
+    foreach ($jobIds as $jobId) {
+        $counts[$jobId] = ['inserted' => 0, 'updated' => 0, 'skipped' => 0, 'processed' => 0, 'items' => 0];
+    }
     foreach ($rows as $row) {
         $jobId = (int)$row['job_id'];
-        if (!isset($grouped[$jobId])) {
-            $grouped[$jobId] = [];
+        $status = (string)$row['status'];
+        $total = (int)$row['total'];
+        $counts[$jobId]['items'] += $total;
+        if ($status === 'queued' || $status === 'cancelled') {
+            // Nalezene, ale jeste nezpracovane URL se do zpracovanych nepocitaji -
+            // stejne pravidlo jako v scrapingItemGroups().
+            continue;
         }
-        $grouped[$jobId][] = $row;
+        $bucket = in_array($status, ['inserted', 'updated'], true) ? $status : 'skipped';
+        $counts[$jobId][$bucket] += $total;
+        $counts[$jobId]['processed'] += $total;
     }
-    return $grouped;
+    return $counts;
 }
 
 function aiResearchRuns(PDO $pdo): array

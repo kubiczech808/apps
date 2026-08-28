@@ -2175,7 +2175,7 @@ td a {
   width: 100%;
   /* Tabulka smi rolovat do strany. Sirky sloupcu jsou proto nastavene tak, aby se do
      kazde hlavicky vesel cely nazev - orezany nazev sloupce je horsi nez skrolovani. */
-  min-width: 1564px;
+  min-width: 1608px;
 }
 .research-category-progress {
   display: flex;
@@ -2231,22 +2231,25 @@ td a {
 }
 /* Sirky patri na hlavicku: table-layout:fixed cte sloupce z prvniho radku (thead),
    takze widthy jen na tbody td se ignorovaly a vsechny sloupce byly stejne siroke. */
-.view-research .research-table > thead > tr > th:nth-child(1) { width: 126px; }
-.view-research .research-table > thead > tr > th:nth-child(2) { width: 118px; }
+/* Prvni sloupec je poradove cislo zpracovaneho subjektu. */
+.view-research .research-table > thead > tr > th:nth-child(1) { width: 44px; }
+.view-research .research-table .research-number-col { text-align: right; color: var(--muted); }
+.view-research .research-table > thead > tr > th:nth-child(2) { width: 126px; }
+.view-research .research-table > thead > tr > th:nth-child(3) { width: 118px; }
 .view-research .research-table .research-step-col { width: 72px; text-align: center; padding-left: 6px; padding-right: 6px; }
-.view-research .research-table > thead > tr > th:nth-child(10) { width: 96px; }
-.view-research .research-table > thead > tr > th:nth-child(11) { width: 120px; }
-.view-research .research-table > thead > tr > th:nth-child(12) { width: 130px; }
-.view-research .research-table > thead > tr > th:nth-child(13) { width: 88px; }
-.view-research .research-table > thead > tr > th:nth-child(14) { width: 120px; }
-.view-research .research-table > thead > tr > th:nth-child(15) { width: 86px; }
-.view-research .research-table > thead > tr > th:nth-child(16) { width: 80px; }
-.view-research .research-table > thead > tr > th:nth-child(17) { width: 96px; }
-.view-research .research-table > tbody > tr.expandable-row > td:nth-child(1) { overflow: visible; }
-.view-research .research-table > thead > tr > th:nth-child(16),
+.view-research .research-table > thead > tr > th:nth-child(11) { width: 96px; }
+.view-research .research-table > thead > tr > th:nth-child(12) { width: 120px; }
+.view-research .research-table > thead > tr > th:nth-child(13) { width: 130px; }
+.view-research .research-table > thead > tr > th:nth-child(14) { width: 88px; }
+.view-research .research-table > thead > tr > th:nth-child(15) { width: 120px; }
+.view-research .research-table > thead > tr > th:nth-child(16) { width: 86px; }
+.view-research .research-table > thead > tr > th:nth-child(17) { width: 80px; }
+.view-research .research-table > thead > tr > th:nth-child(18) { width: 96px; }
+.view-research .research-table > tbody > tr.expandable-row > td:nth-child(2) { overflow: visible; }
 .view-research .research-table > thead > tr > th:nth-child(17),
-.view-research .research-table > tbody > tr.expandable-row > td:nth-child(16),
-.view-research .research-table > tbody > tr.expandable-row > td:nth-child(17) {
+.view-research .research-table > thead > tr > th:nth-child(18),
+.view-research .research-table > tbody > tr.expandable-row > td:nth-child(17),
+.view-research .research-table > tbody > tr.expandable-row > td:nth-child(18) {
   text-align: right;
 }
 /* Splneny krok je zelena fajfka ve stejnem stylu jako drivejsi badge "hotovo". */
@@ -2279,6 +2282,17 @@ td a {
   white-space: normal;
   overflow: visible;
   text-overflow: clip;
+}
+/* Strankovani polozek v detailu behu scrapingu. */
+.scraping-items-pager {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.scraping-items-pager a {
+  font-weight: 700;
 }
 .ai-outreach-modal {
   max-width: min(820px, calc(100vw - 28px));
