@@ -466,7 +466,13 @@ test("live portfolio: the deposited baseline is configured, never inferred from 
   // hosting is the corrupted 33.36 from the old inference, and a fix that only applied
   // to fresh state would never have reached it.
   assert.match(sync, /const DEFAULT_ORIGINAL_VALUE_USDC = \d+(\.\d+)?;/);
-  assert.match(sync, /originalValueSource: number\(process\.env\.LIVE_ORIGINAL_VALUE_USDC\) > 0/);
+  // A saved portfolio setting now outranks the environment variable, which in turn
+  // outranks a stored value. The label has to report which of them the baseline on the
+  // card actually came from, or "configured" is unfalsifiable.
+  assert.match(sync, /const originalValueSource = configOriginalValueUsdc > 0/);
+  assert.match(sync, /\? "portfolio-config"/);
+  assert.match(sync, /envOriginalValueUsdc > 0\s*\n?\s*\? "configured-env"/);
+  assert.match(sync, /storedOriginalValueUsdc > 0 \? "persisted-original-value" : "configured-default"/);
 
   // Both workflows that sync the account must pass the baseline through.
   for (const name of ["polymarket-live-limit-order-test", "trading-live-account"]) {
@@ -2774,6 +2780,10 @@ test("portfolio parameters: both live portfolios state their order price", () =>
     + `${functionSource(app, "normalizeEligibilityThreshold")}\n`
     + `${functionSource(app, "normalizeOptionalProbability")}\n`
     + `${functionSource(app, "probabilityRangeRuleValue")}\n`
+    // The rows now state the portfolio's initial capital, so its two pure helpers come
+    // across as the real thing for the same reason as the ones above.
+    + `${functionSource(app, "normalizeInitialCapital")}\n`
+    + `${functionSource(app, "liveInitialCapitalForMode")}\n`
     + `${functionSource(app, "livePortfolioRuleRows")}\nreturn livePortfolioRuleRows;`,
   )(
     { liveState: { portfolio: {} } },
