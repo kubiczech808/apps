@@ -3882,8 +3882,21 @@ try {
         $target = (string) ($payload['target'] ?? '');
         $targetKey = workflow_target_key($target);
         $customLivePortfolioId = custom_live_portfolio_id_from_target($target);
+        // Every way this request can be refused ends up in the portfolio's run log, not only
+        // the ones GitHub refuses. A run that never started is still a run the user asked
+        // for, and the difference between "the server would not send it" and "GitHub would
+        // not accept it" is exactly what a reader needs and could not previously see.
+        $refuse = static function (string $message, int $status) use ($target, &$paperStrategyId): void {
+            record_execution_dispatch_failure(
+                execution_dispatch_failure_key($paperStrategyId ?? null, $target),
+                $target,
+                $paperStrategyId ?? null,
+                $message,
+            );
+            respond(['ok' => false, 'target' => $target, 'error' => $message, 'recordedInRunLog' => true], $status);
+        };
         if ($targetKey === 'live' && $customLivePortfolioId !== null && !custom_live_portfolio_is_known($customLivePortfolioId)) {
-            respond(['ok' => false, 'error' => 'Unknown or archived live portfolio'], 400);
+            $refuse('Unknown or archived live portfolio', 400);
         }
         $liveMinProbability = normalized_probability_input($payload['min_probability'] ?? $payload['live_min_probability'] ?? null);
         $scanTag = normalized_scan_tag_input($payload['market_scan_tag'] ?? null);
@@ -3913,7 +3926,7 @@ try {
         }
         $paperStrategyId = paper_strategy_from_target($target) ?? normalized_paper_strategy_input($payload['paper_strategy_id'] ?? $payload['paperStrategyId'] ?? null);
         if ($targetKey === 'paper' && $paperStrategyId !== null && !paper_strategy_is_known($paperStrategyId)) {
-            respond(['ok' => false, 'error' => 'Unknown or archived paper portfolio'], 400);
+            $refuse('Unknown or archived paper portfolio', 400);
         }
         // Every portfolio, shipped or created, reads its complete configuration from
         // portfolio-config.json in the paper bot: the workflow's "Load portfolio config"
@@ -4003,7 +4016,7 @@ try {
         }
 
         if (!isset($workflows[$targetKey])) {
-            respond(['ok' => false, 'error' => 'Unknown workflow target'], 400);
+            $refuse('Unknown workflow target: ' . ($target === '' ? '(empty)' : $target), 400);
         }
 
         // A refused dispatch is recorded before the error is reported, so the attempt shows

@@ -6709,7 +6709,22 @@ async function triggerOneTimeExecution(target) {
     // 5050 takes no shortlist: its workflow has no such input and it scans for
     // candidates itself, so building and announcing one would be a fiction.
     const sendsShortlist = live && target !== "live-5050";
-    const workflowPayload = sendsShortlist ? await freshLiveWorkflowPayload(target) : null;
+    // The shortlist is an optimisation, not a precondition. It refetches the whole
+    // execution catalogue to rank candidates before the runner does, and the runner
+    // rebuilds its own from the same published state either way -- so a failure here used
+    // to kill the entire click, showing an error and dispatching nothing, over a list that
+    // was never required. Reported as the live button "still" failing while the runs it
+    // did start were completing successfully.
+    let shortlistError = null;
+    let workflowPayload = null;
+    if (sendsShortlist) {
+      try {
+        workflowPayload = await freshLiveWorkflowPayload(target);
+      } catch (error) {
+        shortlistError = error;
+        workflowPayload = null;
+      }
+    }
     if (target === "live-5050") {
       steps = addExecutionStep(
         steps,
@@ -6718,7 +6733,7 @@ async function triggerOneTimeExecution(target) {
         "done",
       );
     }
-    if (sendsShortlist) {
+    if (sendsShortlist && workflowPayload) {
       // Name the shortlist that was actually submitted, so the run log can be checked
       // against it instead of taken on trust.
       const submitted = String(workflowPayload.live_execution_candidate_token_ids || "")
@@ -6728,6 +6743,16 @@ async function triggerOneTimeExecution(target) {
         "Shortlist submitted",
         `${submitted} candidate${submitted === 1 ? "" : "s"} from the refreshed list on screen were sent for live verification.`,
         "done",
+      );
+    } else if (sendsShortlist) {
+      // Said plainly rather than hidden: the run goes ahead, and it will pick its own
+      // candidates from the same published catalogue this list would have come from.
+      steps = addExecutionStep(
+        steps,
+        "Shortlist not sent",
+        `The list on screen could not be refreshed (${shortlistError?.message || "unknown error"}), so the run was started without it. `
+        + "The runner selects its own candidates from the published catalogue; only the ordering this screen would have supplied is missing.",
+        "error",
       );
     }
     const response = await fetch(appPath("api.php?action=workflow"), {

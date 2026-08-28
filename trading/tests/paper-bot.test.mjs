@@ -1373,7 +1373,11 @@ test("queue janitor: a stuck run cannot head-block a concurrency group forever",
   // later dispatch then sits pending with no job created -- nothing executes and nothing
   // reaches the run log. Clearing it meant cancelling runs by hand in the GitHub UI.
   assert.match(janitor, /actions: write/, "cancelling runs needs this permission");
-  assert.match(janitor, /schedule:\s*\n\s*- cron: '\*\/15 \* \* \* \*'/, "it has to run unattended");
+  // Unattended, but not greedily: this repository asks for far more scheduled runs an hour
+  // than GitHub delivers, and housekeeping is the first thing that should give up its slot
+  // to the trading schedules. The frequency is free to change; that it is scheduled at all
+  // is the point.
+  assert.match(janitor, /schedule:\s*\n(?:\s*#[^\n]*\n)*\s*- cron: '[^']+'/, "it has to run unattended");
 
   // Both states block a group, and a pending run is the one with no job at all, so
   // checking only "queued" would miss exactly the case this was built for.
@@ -4123,8 +4127,12 @@ test("5050: the progress log describes the run that actually happens", async () 
 
   // The shortlist is built and announced only for the portfolio that sends one.
   assert.match(app, /const sendsShortlist = live && target !== "live-5050";/);
-  assert.match(app, /const workflowPayload = sendsShortlist \? await freshLiveWorkflowPayload\(target\) : null;/);
-  assert.match(app, /if \(sendsShortlist\) \{\n\s*\/\/ Name the shortlist that was actually submitted/);
+  // Wrapped, because it is an optimisation: the runner rebuilds its own shortlist from the
+  // same published catalogue, so a refresh that fails must degrade the run rather than
+  // cancel it. It used to throw straight out of the click, showing an error and
+  // dispatching nothing.
+  assert.match(app, /try \{\n\s+workflowPayload = await freshLiveWorkflowPayload\(target\);\n\s+\} catch \(error\) \{/);
+  assert.match(app, /if \(sendsShortlist && workflowPayload\) \{\n\s*\/\/ Name the shortlist that was actually submitted/);
 
   // And 5050 says what it will really do, naming its own entry price.
   assert.match(app, /"Running the 5050 algorithm"/);

@@ -12,7 +12,9 @@ name: Trading Queue Janitor
 
 on:
   schedule:
-    - cron: '*/15 * * * *'
+    # Housekeeping, and the first thing that should give up its slot to the trading
+    # schedules when the account is backlogged.
+    - cron: '*/30 * * * *'
   workflow_dispatch:
     inputs:
       stale_minutes:

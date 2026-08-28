@@ -87,7 +87,14 @@ on:
   schedule:
     # GitHub Actions schedules can be delayed or dropped. Poll every ten minutes
     # away from the top of the hour; every run may place a new eligible order.
-    - cron: '3,13,23,33,43,53 * * * *'
+    # A heartbeat, not the pace. GitHub drops a scheduled run that is still delayed
+    # when the same entry comes due again, and this repository asks for ~53 scheduled
+    # runs an hour across its workflows -- measured, this one was configured for six an
+    # hour and delivered three in a day, while every dispatch in the same window
+    # succeeded. The cadence now comes from the post-scrape dispatch, which wakes this
+    # portfolio after each scan and lets its own saved cadence decide whether to act.
+    # What is left here restarts that chain if it ever breaks.
+    - cron: '13,43 * * * *'
 
 concurrency:
   group: trading-live-execution-${{ github.ref }}

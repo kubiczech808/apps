@@ -50,17 +50,38 @@ export function plannedDispatches(config = {}) {
   if (hasPaperExecution) {
     planned.push({ workflow: "trading-paper-bot.yml", inputs: { mode: "after_scan" } });
   }
-  if (live.executionTrigger === "after_scrape") {
+  // The live portfolios are woken on either trigger, for the same reason the paper ones
+  // above are, and this is why they were not running at all.
+  //
+  // Both were dispatched only on `after_scrape`, so a live portfolio set to `cron` had
+  // nothing but its own schedule -- and GitHub is dropping this repository's schedules
+  // almost entirely. Measured: the live executor is configured for six runs an hour and
+  // delivered three in a day, while every dispatch in the same window succeeded. A
+  // portfolio set to "run on a schedule" was therefore running roughly never.
+  //
+  // Waking it is not the same as trading. The executor applies its own saved cadence and
+  // logs CADENCE_WAIT when a review is not due, exactly as the paper worker does, so this
+  // is a delivery mechanism for a due portfolio rather than an instruction to trade on
+  // every scrape. It also honours the automation switch, because the dispatch says AUTO.
+  // A portfolio the config says nothing about is not a portfolio: an empty entry must not
+  // default into "cron" and have a live run dispatched for it.
+  const wakeable = (portfolio) => Boolean(portfolio)
+    && Object.keys(portfolio).length > 0
+    && portfolio.archived !== true
+    && portfolio.automationEnabled !== false
+    && ["after_scrape", "cron"].includes(String(portfolio.executionTrigger || "cron").trim().toLowerCase());
+  const liveTrigger = String(live.executionTrigger || "cron").trim().toLowerCase();
+  if (wakeable(live)) {
     planned.push({
       workflow: "polymarket-live-limit-order-test.yml",
       inputs: {
         live_confirm: "true",
-        live_execution_trigger: "after_scrape",
+        live_execution_trigger: liveTrigger,
         live_run_source: "AUTO",
       },
     });
   }
-  if (fixedEntry.executionTrigger === "after_scrape") {
+  if (wakeable(fixedEntry)) {
     planned.push({
       workflow: "trading-live-5050.yml",
       inputs: {
@@ -70,6 +91,21 @@ export function plannedDispatches(config = {}) {
         // "a person asked" in the run log and "ignore the automation switch". This run
         // is the portfolio's schedule doing its job, so it must obey that switch.
         live_run_source: "AUTO",
+      },
+    });
+  }
+  // Created live portfolios are dispatched the same way, through the same workflow, each
+  // naming itself so the run writes its own state rather than the shared account's.
+  for (const [id, portfolio] of Object.entries(config.livePortfolios || {})) {
+    const trigger = String(portfolio?.executionTrigger || "cron").trim().toLowerCase();
+    if (!wakeable(portfolio)) continue;
+    planned.push({
+      workflow: "polymarket-live-limit-order-test.yml",
+      inputs: {
+        live_confirm: "true",
+        live_execution_trigger: trigger,
+        live_run_source: "AUTO",
+        live_portfolio_id: id,
       },
     });
   }

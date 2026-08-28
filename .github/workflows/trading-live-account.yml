@@ -9,7 +9,10 @@ on:
       - '.github/workflows/trading-live-account.yml'
   workflow_dispatch:
   schedule:
-    - cron: '5,20,35,50 * * * *'
+    # Widened for delivery: an entry is dropped if it is still delayed when the same
+    # entry comes due again, so a fifteen-minute spacing tolerates only fifteen minutes
+    # of backlog. The dashboard also requests a sync on demand.
+    - cron: '5,35 * * * *'
 
 concurrency:
   group: trading-live-account-${{ github.ref }}

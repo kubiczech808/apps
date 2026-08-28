@@ -2152,6 +2152,9 @@ test("after a scrape: the dispatcher wakes the portfolio whose trigger says so",
   // The bug. 5050's trigger was saved, shown in the dashboard, and read by nothing:
   // the dispatcher looked at `paper` and `live` only, so the portfolio's sole trigger
   // was its own half-hourly cron however the setting was left.
+  // Only 5050 is configured here, so only 5050 is woken: an absent live portfolio is not a
+  // portfolio, and defaulting one into existence would dispatch a live run for an account
+  // this config says nothing about.
   const planned = plannedDispatches({ live5050: { executionTrigger: "after_scrape" } });
   assert.deepEqual(planned.map((entry) => entry.workflow), ["trading-live-5050.yml"]);
 
@@ -2171,14 +2174,35 @@ test("after a scrape: the dispatcher wakes the portfolio whose trigger says so",
     }).map((entry) => entry.workflow),
     ["trading-paper-bot.yml", "polymarket-live-limit-order-test.yml", "trading-live-5050.yml"],
   );
-  // A cron paper portfolio is also woken by a completed scrape. The worker
-  // applies its own saved interval before it can execute, which makes this a
+  // A cron portfolio is woken by a completed scrape too -- paper and live alike. The
+  // worker applies its own saved interval before it can execute, which makes this a
   // reliable delivery wake-up rather than an extra trade trigger.
+  //
+  // The live ones used to be excluded here, and that was the whole reason automatic live
+  // execution stopped happening: a live portfolio set to "cron" had nothing but its own
+  // schedule, and GitHub delivers almost none of this repository's schedules. Measured:
+  // the live executor is configured for six runs an hour and delivered three in a day,
+  // while every dispatch in the same window succeeded. The executor logs CADENCE_WAIT when
+  // a review is not due, exactly as the paper worker does, so waking it is not trading.
   assert.deepEqual(plannedDispatches({
     paper: { balanced: { executionTrigger: "cron", executionCronMinutes: 60 } },
     live: { executionTrigger: "cron" },
     live5050: { executionTrigger: "cron" },
-  }).map((entry) => entry.workflow), ["trading-paper-bot.yml"]);
+  }).map((entry) => entry.workflow),
+  ["trading-paper-bot.yml", "polymarket-live-limit-order-test.yml", "trading-live-5050.yml"]);
+
+  // And the same switches apply to a live portfolio as to a paper one.
+  assert.deepEqual(plannedDispatches({ live: { executionTrigger: "cron", automationEnabled: false } }), [],
+    "a live portfolio with automation off is not woken");
+  assert.deepEqual(plannedDispatches({ live5050: { executionTrigger: "cron", archived: true } }), [],
+    "an archived live portfolio is not woken");
+
+  // A created live portfolio is woken through the same workflow, naming itself so the run
+  // writes its own state rather than the shared account's.
+  const created = plannedDispatches({ livePortfolios: { live70: { executionTrigger: "cron" } } });
+  assert.deepEqual(created.map((entry) => entry.workflow), ["polymarket-live-limit-order-test.yml"]);
+  assert.equal(created[0].inputs.live_portfolio_id, "live70");
+  assert.equal(created[0].inputs.live_run_source, "AUTO");
   assert.deepEqual(plannedDispatches({
     paper: { paused: { executionTrigger: "cron", automationEnabled: false } },
   }), [], "a disabled cron portfolio does not wake the paper worker");
