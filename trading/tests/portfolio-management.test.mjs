@@ -278,6 +278,13 @@ test("dashboard: the tab row is built from the saved portfolios, archived ones l
     ${extractFunction(APP, "portfolioEquityUsdc")}
     ${extractFunction(APP, "byEquityDescending")}
     ${extractFunction(APP, "dashboardModes")}
+    // A live portfolio can be created now, so "is this mode live" and "is it archived" both
+    // have to ask whether a mode names one. The cluster comes across as the real thing --
+    // they are pure over state, and stubbing them would only prove the harness agrees with
+    // itself about the very classification under test.
+    ${extractFunction(APP, "customLivePortfolioIdFromMode")}
+    ${extractFunction(APP, "isLivePortfolioMode")}
+    ${extractFunction(APP, "isFixedEntryMode")}
     ${extractFunction(APP, "portfolioIsArchived")}
     const DEFAULT_MAX_RESOLUTION_DAYS = 7;
     return { dashboardModes, paperStrategyIds, normalizeMode, portfolioIsArchived };
@@ -315,6 +322,13 @@ test("dashboard: an archived 5050 leaves the tab row too, the plain live portfol
     ${extractFunction(APP, "portfolioEquityUsdc")}
     ${extractFunction(APP, "byEquityDescending")}
     ${extractFunction(APP, "dashboardModes")}
+    // A live portfolio can be created now, so "is this mode live" and "is it archived" both
+    // have to ask whether a mode names one. The cluster comes across as the real thing --
+    // they are pure over state, and stubbing them would only prove the harness agrees with
+    // itself about the very classification under test.
+    ${extractFunction(APP, "customLivePortfolioIdFromMode")}
+    ${extractFunction(APP, "isLivePortfolioMode")}
+    ${extractFunction(APP, "isFixedEntryMode")}
     ${extractFunction(APP, "portfolioIsArchived")}
     const DEFAULT_MAX_RESOLUTION_DAYS = 7;
     return { dashboardModes, portfolioIsArchived };
@@ -359,6 +373,10 @@ test("dashboard: a created portfolio's settings are its own", () => {
     ${/const LIVE_MODES = new Set\(\[[^\]]*\]\);/.exec(APP)[0]}
     ${extractFunction(APP, "normalizeMode")}
     ${extractFunction(APP, "isFixedEntryMode")}
+    // A live portfolio can be created now, so reading a mode's config first asks whether
+    // the mode names one.
+    ${extractFunction(APP, "customLivePortfolioIdFromMode")}
+    ${extractFunction(APP, "isLivePortfolioMode")}
     ${extractFunction(APP, "liveConfigKeyForMode")}
     ${extractFunction(APP, "paperStrategyIdFromMode")}
     ${extractFunction(APP, "normalizePortfolioMarketType")}
@@ -477,9 +495,15 @@ test("portfolio creation: user chooses paper or the connected live account", () 
     "the create dialog can rebuild its draft when the account type changes");
   assert.match(APP, /els\.portfolioAccountType\?\.addEventListener\("change", \(\) => \{\s+switchCreatePortfolioType\(els\.portfolioAccountType\.value\);/,
     "the selector is wired");
-  assert.match(APP, /creatingType === "live"[\s\S]*?updatePortfolioConfigForMode\("live", \{ \.\.\.draft, archived: false \}\);/,
-    "saving a live creation must configure the existing connected live portfolio");
-  assert.match(APP, /creatingType === "live" \? "live" : `paper-\$\{creating\}`/,
+  // A live creation used to reconfigure the one connected live portfolio, because there was
+  // only ever one. Live portfolios are independent now, so it creates its own entry instead
+  // -- and it must land under its own id rather than overwriting a sibling.
+  assert.match(APP, /creatingType === "live"[\s\S]*?livePortfolios: \{\s*\n\s*\.\.\.\(base\.livePortfolios \|\| \{\}\),\s*\n\s*\[creating\]: \{[^}]*archived: false, custom: true \},/,
+    "saving a live creation must add its own portfolio, not overwrite the shared account");
+  // And it must be confirmed by the server before the dashboard claims it exists.
+  assert.match(APP, /if \(creating && creatingType === "live" && !state\.portfolioConfig\?\.livePortfolios\?\.\[creating\]\) \{\n\s+throw new Error/,
+    "a live creation the server did not persist must not read as created");
+  assert.match(APP, /creatingType === "live" \? `live-custom-\$\{creating\}` : `paper-\$\{creating\}`/,
     "after saving, the dashboard opens the portfolio type the user selected");
 });
 
@@ -508,8 +532,11 @@ test("archiving: a direct control sits next to the edit icon, for paper and 5050
 
   assert.match(APP, /renderPortfolioRulesCard\(portfolioState\.label \|\| "Paper portfolio", portfolioRuleRows\(\{ \.\.\.portfolioState, \.\.\.portfolio \}\), portfolioState\.id\)/,
     "the paper card passes its own strategy id");
-  assert.match(APP, /renderPortfolioRulesCard\(isFixedEntryMode\(\) \? "5050 portfolio" : "Live portfolio", livePortfolioRuleRows\(\), isFixedEntryMode\(\) \? "live-5050" : null\)/,
-    "the live card passes an archive id only in 5050 mode -- the plain live portfolio still gets no archive control");
+  // A created live portfolio can be archived like 5050 can. The one that still cannot is
+  // the plain connected live account: archiving it would leave the wallet with no portfolio
+  // watching it at all, so it passes null and gets no control.
+  assert.match(APP, /renderPortfolioRulesCard\(`\$\{portfolioNameForMode\(\)\} portfolio`, livePortfolioRuleRows\(\), \(isFixedEntryMode\(\) \|\| customLivePortfolioIdFromMode\(\)\) \? state\.mode : null\)/,
+    "the live card offers archiving for 5050 and created live portfolios, never for the plain live account");
 
   const handler = /const directArchiveButton = event\.target\.closest\("\[data-portfolio-archive-direct\]"\);[\s\S]*?\n  \}/.exec(APP);
   assert.ok(handler, "the direct archive control is wired");
@@ -520,7 +547,10 @@ test("archiving: a direct control sits next to the edit icon, for paper and 5050
   // the two are keyed differently, and this exact mismatch was live in one draft of
   // this fix (portfolioConfigForMode(`paper-${strategyId}`) for a strategyId that was
   // never a paper id at all).
-  assert.match(handler[0], /portfolioConfigForMode\(isLive5050 \? strategyId : `paper-\$\{strategyId\}`\)/);
+  // Generalised from 5050 to any live portfolio when live portfolios became independent.
+  // The mismatch this guards against is unchanged: a live id must resolve its own saved
+  // config, never be prefixed into a paper one that does not exist.
+  assert.match(handler[0], /portfolioConfigForMode\(isLiveStrategy \? strategyId : `paper-\$\{strategyId\}`\)/);
 });
 
 test("dashboard: the tab row survives being rebuilt", () => {
@@ -643,6 +673,11 @@ test("run log history: the dashboard merges loaded history with the live cap, ne
     ${/const BUILT_IN_PAPER_STRATEGY_IDS = \[[^\]]*\];/.exec(APP)[0]}
     ${/const CUSTOM_PAPER_STRATEGY_ID = [^\n]+/.exec(APP)[0]}
     ${/const LIVE_MODES = new Set\(\[[^\]]*\]\);/.exec(APP)[0]}
+    // isLiveMode delegates to the classification now that a live portfolio can be created,
+    // so its helpers come across with it.
+    ${extractFunction(APP, "normalizeMode")}
+    ${extractFunction(APP, "customLivePortfolioIdFromMode")}
+    ${extractFunction(APP, "isLivePortfolioMode")}
     ${extractFunction(APP, "isLiveMode")}
     ${extractFunction(APP, "paperStrategyIdFromMode")}
     ${extractFunction(APP, "selectedPaperPortfolio")}
@@ -749,6 +784,11 @@ test("live run in progress: the source is what this browser started, never a gue
     ${/const CUSTOM_PAPER_STRATEGY_ID = [^\n]+/.exec(APP)[0]}
     ${/const LIVE_MODES = new Set\(\[[^\]]*\]\);/.exec(APP)[0]}
     ${extractFunction(APP, "normalizeMode")}
+    // The classification cluster: a live portfolio can be created, so "which target is this
+    // mode" and "is that a paper target" are no longer answerable from two fixed ids.
+    ${extractFunction(APP, "customLivePortfolioIdFromMode")}
+    ${extractFunction(APP, "isLivePortfolioMode")}
+    ${extractFunction(APP, "isPaperExecutionTarget")}
     ${extractFunction(APP, "isLiveMode")}
     ${extractFunction(APP, "isFixedEntryMode")}
     ${extractFunction(APP, "currentExecutionTarget")}
@@ -770,15 +810,27 @@ test("live run in progress: the source is what this browser started, never a gue
   }, () => dispatchedHere);
 
   assert.equal(build(true)().runSource, "MANUAL", "a run this dashboard started reads as manual");
-  assert.equal(build(false)().runSource, "UNKNOWN",
-    "a dispatch from somewhere else is unknown here, not asserted to be automatic");
+  // A dispatch from somewhere else used to be shown as a row with source UNKNOWN. It is now
+  // not shown at all, which is the stronger form of the same rule: the synthetic row exists
+  // only to cover the gap before this browser's own run publishes its record, and a run
+  // this browser did not start will publish its own with its real source. Guessing at a
+  // row for it could only ever mislabel it.
+  assert.equal(build(false)(), null,
+    "a dispatch from somewhere else gets no invented row, not one labelled unknown");
 
-  // A scheduled or chained run is the one case the event settles on its own.
+  // A scheduled run gets no synthetic row either, and that is the same rule rather than an
+  // exception to it. This row exists only to cover the gap before a run this browser
+  // started publishes its own record; a scheduled run is written into the log by the worker
+  // with its real portfolio and its real source, and inferring one from a shared GitHub
+  // workflow status could only attach it to the wrong portfolio.
   const scheduled = new Function("state", "executionRunWasDispatchedHere", `
     ${/const BUILT_IN_PAPER_STRATEGY_IDS = \[[^\]]*\];/.exec(APP)[0]}
     ${/const CUSTOM_PAPER_STRATEGY_ID = [^\n]+/.exec(APP)[0]}
     ${/const LIVE_MODES = new Set\(\[[^\]]*\]\);/.exec(APP)[0]}
     ${extractFunction(APP, "normalizeMode")}
+    ${extractFunction(APP, "customLivePortfolioIdFromMode")}
+    ${extractFunction(APP, "isLivePortfolioMode")}
+    ${extractFunction(APP, "isPaperExecutionTarget")}
     ${extractFunction(APP, "isLiveMode")}
     ${extractFunction(APP, "isFixedEntryMode")}
     ${extractFunction(APP, "currentExecutionTarget")}
@@ -792,7 +844,10 @@ test("live run in progress: the source is what this browser started, never a gue
       "live-5050": { id: 2, status: "in_progress", createdAt: new Date().toISOString(), event: "schedule", triggeringActor: "kubiczech808" },
     },
   }, () => false);
-  assert.equal(scheduled().runSource, "AUTO", "a scheduled run says so in its own event");
+  assert.equal(scheduled(), null, "a scheduled run is logged by its worker, never guessed at here");
+
+  // The one synthetic row there is says MANUAL, because that is the only thing it is for.
+  assert.match(extractFunction(APP, "runningExecutionRow"), /runSource: "MANUAL",/);
 
   // And an unknown source renders as a dash, not as AUTO -- that is the whole point.
   const label = new Function(`${extractFunction(APP, "portfolioRunSource")}\nreturn portfolioRunSource;`)();
@@ -994,7 +1049,9 @@ test("settings: archived portfolios retain their complete saved trading rules", 
 });
 
 test("dashboard: a live portfolio's tab is marked, not merely named", () => {
-  assert.match(APP, /button\.classList\.toggle\("mode-button-live", LIVE_MODES\.has\(buttonMode\)\);/);
+  // A created live portfolio is a live portfolio: the marker follows the classification,
+  // not the two shipped ids, or every portfolio created since reads as paper.
+  assert.match(APP, /button\.classList\.toggle\("mode-button-live", isLivePortfolioMode\(buttonMode\)\);/);
   const rule = /\.mode-button\.mode-button-live \{[^}]*\}/.exec(CSS);
   assert.ok(rule, "the marked tab has a style");
   assert.match(rule[0], /border: 2px solid var\(--danger\);/);
@@ -1118,6 +1175,13 @@ test("dashboard: the tab row is ordered by equity, richest first", () => {
     ${extractFunction(APP, "portfolioEquityUsdc")}
     ${extractFunction(APP, "byEquityDescending")}
     ${extractFunction(APP, "dashboardModes")}
+    // A live portfolio can be created now, so "is this mode live" and "is it archived" both
+    // have to ask whether a mode names one. The cluster comes across as the real thing --
+    // they are pure over state, and stubbing them would only prove the harness agrees with
+    // itself about the very classification under test.
+    ${extractFunction(APP, "customLivePortfolioIdFromMode")}
+    ${extractFunction(APP, "isLivePortfolioMode")}
+    ${extractFunction(APP, "isFixedEntryMode")}
     ${extractFunction(APP, "portfolioIsArchived")}
     const DEFAULT_MAX_RESOLUTION_DAYS = 7;
     return { dashboardModes, portfolioEquityUsdc };
