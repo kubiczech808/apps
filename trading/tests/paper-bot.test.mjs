@@ -1341,7 +1341,9 @@ test("live execution: the run evaluates the shortlist that is on screen", async 
 
   const storeAt = body.indexOf("storeScrapedMarketState(scrapedState);");
   const renderAt = body.search(/if \(state\.page === "opportunities"\) renderBotEvaluations\(\);/);
-  const payloadAt = body.indexOf("liveWorkflowPayload();");
+  // It takes the portfolio it is building for now that live portfolios are independent, so
+  // the call is matched rather than the old no-argument form.
+  const payloadAt = body.search(/return liveWorkflowPayload\(\w*\);/);
   assert.ok(storeAt >= 0 && renderAt >= 0 && payloadAt >= 0, "all three steps must be present");
   assert.ok(renderAt > storeAt, "the re-render must follow the refetch that replaced the rows");
   assert.ok(renderAt < payloadAt, "and precede building the shortlist, so screen and payload agree");
@@ -1355,7 +1357,7 @@ test("live execution: the run evaluates the shortlist that is on screen", async 
     "a manual run must not be blocked on a shortlist it refreshes itself");
 
   // The shortlist is still taken from the same rows the table renders.
-  assert.match(app, /const shortlistTokenIds = portfolioCandidateRows\("live"\)/);
+  assert.match(app, /const shortlistTokenIds = portfolioCandidateRows\(mode\)/);
 
   // And the count actually submitted is reported, so the run log can be checked against
   // it rather than taken on trust.
@@ -3614,11 +3616,14 @@ test("5050 tab: the portfolio is a live mode with its own config and run log", a
   // steered by and the run log it writes, because the two decide separately.
   // The tab row is rebuilt from the saved portfolios, so 5050's tab is asserted where
   // it is now produced rather than in the shipped markup.
-  assert.match(app, /const liveModes = \["live", "live-5050"\]\.filter\(\(mode\) => !portfolioIsArchived\(mode\)\);/,
+  // The two shipped live portfolios plus any created ones, archived entries dropped.
+  assert.match(app, /const liveModes = \["live", "live-5050", \.\.\.customLiveModes\]\.filter\(\(mode\) => !portfolioIsArchived\(mode\)\);/,
     "it needs its own tab");
   assert.match(html, /data-mode-switch/, "and a container the script can rebuild");
   assert.match(app, /const LIVE_MODES = new Set\(\["live", "live-5050"\]\);/);
-  assert.match(app, /function isLiveMode\(\) \{\n  return LIVE_MODES\.has\(state\.mode\);\n\}/,
+  // Delegated, so a created live portfolio counts as live everywhere at once rather than
+  // at each of the places that used to test the two shipped ids by hand.
+  assert.match(app, /function isLiveMode\(\) \{\n  return isLivePortfolioMode\(state\.mode\);\n\}/,
     "every live view must recognise it, or the tab renders as a paper portfolio");
   assert.match(app, /isFixedEntryMode\(mode\) \? "live5050" : "live"/, "separate config");
   assert.match(app, /isFixedEntryMode\(mode\) \? "data\/live-5050-execution-state\.json"/, "separate run log");
@@ -3667,7 +3672,9 @@ test("5050: it is its own live portfolio, not a copy of a paper one", async () =
   // Reported: the 5050 tab showed the conservative paper portfolio. The mode was
   // recognised as live everywhere except the one place that decides which loader
   // runs, so it fell through to the paper bot's state.
-  assert.match(app, /return LIVE_MODES\.has\(requestedMode\)\n\s*\? loadLiveState\(/,
+  // Which loader runs follows the classification, not the two shipped ids -- a created
+  // live portfolio would otherwise be sent to the paper loader and show paper data.
+  assert.match(app, /return isLivePortfolioMode\(requestedMode\)\n\s*\? loadLiveState\(/,
     "a live portfolio must load live data");
   assert.ok(!/return requestedMode === "live"\n\s*\? loadLiveState/.test(app));
 
@@ -3776,6 +3783,11 @@ test("portfolio settings: each portfolio owns its own, and cannot change another
     pick(/function normalizeMode\(mode\)[\s\S]*?\n\}/),
     pick(/const LIVE_MODES = new Set\(\[[^\]]*\]\);/),
     pick(/function isFixedEntryMode\(mode = state\.mode\)[\s\S]*?\n\}/),
+    // A created live portfolio owns its own settings too, so reading a mode's config now
+    // asks whether the mode names one before it falls through to the paper branch. That
+    // fall-through is exactly the bug this test was written for.
+    pick(/function customLivePortfolioIdFromMode\(mode = state\.mode\)[\s\S]*?\n\}/),
+    pick(/function isLivePortfolioMode\(mode = state\.mode\)[\s\S]*?\n\}/),
     pick(/function liveConfigKeyForMode\(mode = state\.mode\)[\s\S]*?\n\}/),
     pick(/function paperStrategyIdFromMode\(mode = state\.mode\)[\s\S]*?\n\}/),
     // defaultPortfolioConfig gained a market-type default, so its normalizer comes too.
@@ -3920,7 +3932,7 @@ test("automation: every portfolio carries its own ON/OFF badge in its settings",
 
   // One card is rendered per portfolio, so both paths get it.
   assert.match(app, /renderPortfolioRulesCard\(portfolioState\.label \|\| "Paper portfolio"/);
-  assert.match(app, /renderPortfolioRulesCard\(isFixedEntryMode\(\) \? "5050 portfolio" : "Live portfolio"/);
+  assert.match(app, /renderPortfolioRulesCard\(`\$\{portfolioNameForMode\(\)\} portfolio`/);
 
   // The state shown is the open portfolio's own.
   assert.match(app, /const on = automationIsEnabled\(portfolioConfigForMode\(state\.mode\)\);/);
@@ -3968,9 +3980,9 @@ test("live modes: nothing may treat 5050 as a paper portfolio", async () => {
     `these compare against "live" alone and so exclude 5050:\n${offenders.join("\n")}`);
 
   // The two that matter most, pinned by name.
-  assert.match(app, /function renderKnownStateForMode\(mode = state\.mode\) \{\n\s*if \(LIVE_MODES\.has\(normalizeMode\(mode\)\)\) \{/,
+  assert.match(app, /function renderKnownStateForMode\(mode = state\.mode\) \{\n\s*if \(isLivePortfolioMode\(mode\)\) \{/,
     "the pre-load render must not fall through to the paper renderer");
-  assert.match(app, /function portfolioForMode\(mode = state\.mode\) \{\n\s*if \(LIVE_MODES\.has\(normalizeMode\(mode\)\)\)/);
+  assert.match(app, /function portfolioForMode\(mode = state\.mode\) \{\n\s*if \(isLivePortfolioMode\(mode\)\)/);
 
   // Reloading on the 5050 tab must not drop back to a paper portfolio.
   assert.match(app, /if \(normalizeMode\(value\) === value\) return value;/);
@@ -4010,13 +4022,13 @@ test("5050: its own button and its own schedule run its own algorithm", async ()
   // Reported: pressing Run once on the 5050 dashboard started the main live
   // portfolio. 5050 is a live mode, so the target resolved to "live" -- a different
   // algorithm, against real money.
-  assert.match(app, /function currentExecutionTarget\(\) \{\n\s*if \(isFixedEntryMode\(\)\) return "live-5050";/);
+  assert.match(app, /function currentExecutionTarget\(\) \{\n\s*return state\.mode;\n\}/);
   assert.match(app, /if \(button\.dataset\.oneTimeExecution === "current"\) return currentExecutionTarget\(\);/);
   assert.match(api, /'live-5050' => \[\n\s*'workflow' => 'trading-live-5050\.yml',/);
 
   // The result watcher must read the portfolio's own execution state, or it would
   // report another portfolio's run as this one's outcome.
-  assert.match(app, /target === "live-5050" \? "live-5050-execution"/);
+  assert.match(app, /return isFixedEntryMode\(mode\) \? "live-5050-execution" : "live-execution";/);
 
   // The auto trigger: a schedule exists, and the run is gated by the portfolio's own
   // switch and cadence rather than firing regardless.
@@ -4110,8 +4122,8 @@ test("5050: the progress log describes the run that actually happens", async () 
   assert.match(app, /target === "live-5050" \? "starting 5050 workflow"/);
 
   // The shortlist is built and announced only for the portfolio that sends one.
-  assert.match(app, /const sendsShortlist = target === "live";/);
-  assert.match(app, /const workflowPayload = sendsShortlist \? await freshLiveWorkflowPayload\(\) : null;/);
+  assert.match(app, /const sendsShortlist = live && target !== "live-5050";/);
+  assert.match(app, /const workflowPayload = sendsShortlist \? await freshLiveWorkflowPayload\(target\) : null;/);
   assert.match(app, /if \(sendsShortlist\) \{\n\s*\/\/ Name the shortlist that was actually submitted/);
 
   // And 5050 says what it will really do, naming its own entry price.
@@ -4707,12 +4719,25 @@ function runLogRenderer(app, executionState, { fixedEntry = true } = {}) {
   };
   const body = ["normalizeLiveExecutionRun", "isSameLiveRun", "runLogTimestamp", "sortRunLogRows", "mergeUniqueByRun",
     "isCadenceWaitRun", "isHistoryRecoveryRun", "liveRunLogRows"].map(pick).join("\n\n");
-  return new Function("state", "isFixedEntryMode", "liveBatchCandidateSummaryFromExecution", "portfolioReturnMetricLabel",
+  // portfolioNameForMode and normalizeMode are supplied the same way isFixedEntryMode
+  // already is: this harness is about the shape of the rows, and the naming chain reaches
+  // the whole saved config. The label still has to be the portfolio's own -- the assertion
+  // below is that a 5050 run is not labelled "Live" -- so the stub answers per mode rather
+  // than returning a constant.
+  return new Function("state", "isFixedEntryMode", "liveBatchCandidateSummaryFromExecution",
+    "portfolioReturnMetricLabel", "portfolioNameForMode", "normalizeMode",
     `${body}\nreturn liveRunLogRows;`)(
-    { liveState: null, liveExecutionState: executionState },
+    {
+      liveState: null,
+      liveExecutionState: executionState,
+      mode: fixedEntry ? "live-5050" : "live",
+      dispatchFailuresByMode: {},
+    },
     () => fixedEntry,
     (item) => item,
     () => "",
+    (mode = fixedEntry ? "live-5050" : "live") => (String(mode) === "live-5050" ? "5050" : "Live"),
+    (mode) => String(mode || ""),
   )();
 }
 
@@ -4993,7 +5018,10 @@ test("live revalidation: the verdicts are written where the rows actually live",
   // Both live portfolios must run it; one of them not doing so is the reported bug.
   for (const file of ["polymarket-live-limit-order-test", "trading-live-5050"]) {
     const workflow = await readFile(new URL(`../../.github/workflows/${file}.yml`, import.meta.url), "utf8");
-    assert.match(workflow, /run: python3 trading\/tools\/persist-live-revalidation\.py/, `${file} must persist its verdicts`);
+    // The state file is named on the command line in the live workflow now, because it
+    // follows whichever live portfolio the run is executing.
+    assert.match(workflow, /run: (?:\w+="[^"]*" )*python3 trading\/tools\/persist-live-revalidation\.py/,
+      `${file} must persist its verdicts`);
   }
 
   const api = await readFile(new URL("../api.php", import.meta.url), "utf8");
