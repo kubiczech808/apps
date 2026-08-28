@@ -10494,11 +10494,11 @@ function currentPortfolioRunLog() {
   return withRunningExecutionRow(rows);
 }
 
-// A run that has started but not yet published anything of its own. Read from GitHub
-// rather than published by the run at its start: a run that dies, is cancelled, or never
-// gets a runner would leave a "RUNNING" row on the hosting forever, and this way the row
-// disappears exactly when GitHub says the run is over. It also covers runs nobody
-// dispatched from here -- cron and post-scrape -- which are now most of them.
+// A run that has started but not yet published anything of its own. The GitHub workflow
+// status API groups every paper portfolio under the same workflow, so it cannot identify
+// which strategy an automatic run belongs to. We therefore use it only for the browser's
+// own manual dispatch; automatic runs enter a portfolio log only after the bot persists
+// their real decision.
 async function pollRunningExecution(target) {
   if (!target) return;
   let running = null;
@@ -10518,7 +10518,17 @@ async function pollRunningExecution(target) {
   // Only when the log's contents actually change. Re-rendering on every poll would throw
   // a reader who has scrolled back through the log to the top every fifteen seconds, and
   // an idle desk -- the usual case -- has nothing to redraw at all.
-  if (running || finished) rerenderRunLogInPlace();
+  const wasVisible = Boolean(
+    previous
+    && !isPaperExecutionTarget(target)
+    && executionRunWasDispatchedHere(target, previous),
+  );
+  const isVisible = Boolean(
+    running
+    && !isPaperExecutionTarget(target)
+    && executionRunWasDispatchedHere(target, running),
+  );
+  if (isVisible || wasVisible) rerenderRunLogInPlace();
   // The run has ended, so its own row exists now -- but only in state we have not
   // re-read. One reload replaces the synthetic row with what the run actually decided.
   if (finished) await loadDashboardState({ skipAutoLiveSync: true });
@@ -10535,7 +10545,15 @@ function rerenderRunLogInPlace() {
 }
 
 function runningExecutionRun() {
-  return state.runningExecutions[currentExecutionTarget()] || null;
+  const target = currentExecutionTarget();
+  // All paper strategies share one GitHub workflow. Its status endpoint cannot say which
+  // portfolio a queued/in-progress paper run belongs to, so never inject a speculative
+  // row into a paper log. The run's persisted record is the source of truth.
+  if (isPaperExecutionTarget(target)) return null;
+  const run = state.runningExecutions[target] || null;
+  // Live targets have a dedicated workflow, so a browser-originated dispatch is safe to
+  // show while it is running.
+  return executionRunWasDispatchedHere(target, run) ? run : null;
 }
 
 // The synthetic row. Shaped like a real run-log entry so the list, the filter and the
@@ -10554,16 +10572,10 @@ function runningExecutionRow() {
     id: `running-workflow-${run.id}`,
     action: run.status === "queued" ? "QUEUED" : "RUNNING",
     runAt: startedAt,
-    // MANUAL only for a run this dashboard started, which it records at the click. A
-    // scheduled or chained run is AUTO for certain, because its GitHub event says so. What
-    // is left -- a dispatch from somewhere else -- is genuinely unknown here, and claiming
-    // either answer is what produced the report of both labels being wrong: every run on
-    // this repository is triggered by the owner's own account, so the actor cannot tell a
-    // dashboard click from another device or a tool. The run's own row lands within the
-    // minute carrying the source the bot actually received.
-    runSource: executionRunWasDispatchedHere(currentExecutionTarget(), run)
-      ? "MANUAL"
-      : (run.event === "workflow_dispatch" ? "UNKNOWN" : "AUTO"),
+    // This synthetic row is deliberately limited to the manual browser dispatch above.
+    // Scheduled work is written into the log by the worker with its actual portfolio and
+    // source, rather than being guessed from a shared GitHub workflow status.
+    runSource: "MANUAL",
     runningExecution: true,
     htmlUrl: run.htmlUrl || null,
     humanReason: `Execution in progress: ${where}${elapsed == null ? "" : ` · ${formatDuration(elapsed)} elapsed`}.`,
