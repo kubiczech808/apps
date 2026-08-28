@@ -10329,7 +10329,16 @@ function stateHoldsResolvedArchive(state) {
   );
   if (!Number.isFinite(declared) || declared <= 0) return true;
   const observations = Array.isArray(state.marketObservations) ? state.marketObservations : [];
-  return observations.some(observationIsResolved);
+  // A segment manifest is a completeness contract, not a hint.  Seeing one settled
+  // row only proves that a partial payload happened to contain one; treating that as
+  // the whole archive was enough to overwrite every statistics table with a zero (or
+  // tiny) sample.  The archive is append-only, so a pass may remeasure it only after
+  // it has reassembled at least the declared number of settled observations.
+  const held = observations.reduce(
+    (count, item) => count + (observationIsResolved(item) ? 1 : 0),
+    0,
+  );
+  return held >= declared;
 }
 
 // The report is rebuilt only by a pass that has the data it measures.

@@ -7502,8 +7502,9 @@ test("statistics report: a pass without the resolved archive keeps the stored re
   assert.equal(carried.historyLength, 1, "nor may an empty report enter the history");
   assert.equal(carried.returnedSampleSize, 53408);
 
-  // The same state, once it is actually holding a settled market: the report is rebuilt.
-  const holding = run({
+  // One settled record is still a partial archive when the manifest declares 53,408.
+  // It must preserve the measurement instead of publishing statistics for one row.
+  const partial = run({
     manifest,
     state: {
       generatedAt: "2026-08-21T11:01:44.117Z",
@@ -7519,8 +7520,34 @@ test("statistics report: a pass without the resolved archive keeps the stored re
       calculationReports: [good],
     },
   });
-  assert.equal(holding.storedGeneratedAt, "2026-08-21T11:01:44.117Z", "a pass with the data remeasures");
-  assert.equal(holding.historyLength, 2, "and its report joins the history");
+  assert.equal(partial.storedGeneratedAt, good.generatedAt, "a partial archive must not remeasure");
+  assert.equal(partial.historyLength, 1, "nor may a partial report enter the history");
+
+  // The same record is complete when the manifest declares exactly one resolved row.
+  const complete = run({
+    manifest: {
+      resolvedObservations: {
+        file: "paper-state.resolvedObservations.json",
+        fields: ["resolvedMarketObservations"],
+        counts: { resolvedMarketObservations: 1 },
+      },
+    },
+    state: {
+      generatedAt: "2026-08-21T11:01:44.117Z",
+      marketObservations: [
+        ...activeOnly,
+        {
+          id: "r1", status: "RESOLVED", marketKey: "r1", finalOutcomePrice: 1,
+          firstMarketProbability: 0.6, observedAt: "2026-08-20T00:00:00Z",
+          firstObservedAt: "2026-08-20T00:00:00Z", resolvedAt: "2026-08-21T00:00:00Z",
+        },
+      ],
+      latestCalculationReport: good,
+      calculationReports: [good],
+    },
+  });
+  assert.equal(complete.storedGeneratedAt, "2026-08-21T11:01:44.117Z", "a complete archive remeasures");
+  assert.equal(complete.historyLength, 2, "and its report joins the history");
 
   // And a state that never declared an archive has nothing missing, so it may rebuild.
   const undeclared = run({
