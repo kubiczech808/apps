@@ -4691,9 +4691,10 @@ function candidateRenderer(state) {
   const pick = (name) => {
     let start = app.indexOf(`function ${name}(`);
     if (start < 0) throw new Error(`missing ${name}`);
-    const bodyStart = app.indexOf(") {\n", start);
+    const paramsEnd = app.indexOf(")", start);
+    const bodyStart = app.indexOf("{", paramsEnd);
     let depth = 0;
-    for (let i = bodyStart + 2; i < app.length; i += 1) {
+    for (let i = bodyStart; i < app.length; i += 1) {
       if (app[i] === "{") depth += 1;
       else if (app[i] === "}") {
         depth -= 1;
@@ -4783,7 +4784,7 @@ test("execution candidates: the list extends itself on scroll and by button", as
 
   // Endless scrolling, as asked for -- plus the button, because a scroll listener is
   // no use to anyone driving the table from the keyboard.
-  assert.match(app, /els\.portfolioCandidates\?\.addEventListener\("click", \(event\) => \{\n  if \(!event\.target\.closest\("\[data-candidates-load-more\]"\)\) return;/);
+  assert.match(app, /els\.portfolioCandidates\?\.addEventListener\("click", \(event\) => \{\r?\n  if \(!event\.target\.closest\("\[data-candidates-load-more\]"\)\) return;/);
   // `scroll` does not bubble, so a panel-level listener has to capture.
   assert.match(app, /els\.portfolioCandidates\?\.addEventListener\("scroll", \(event\) => \{[\s\S]*?\}, true\);/);
   assert.match(app, /showMoreCandidates\(\);/);
@@ -4793,6 +4794,25 @@ test("execution candidates: the list extends itself on scroll and by button", as
   assert.match(app, /if \(nextScroller\) nextScroller\.scrollTop = offset;/);
   // The summary must not imply the totals are all on screen.
   assert.match(app, /const paged = shown < total \? ` - showing \$\{formatInteger\(shown\)\} of \$\{formatInteger\(total\)\}` : "";/);
+});
+
+test("execution candidates: mobile cards replace horizontal scrolling", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const app = await readFile(new URL("../assets/app.js", import.meta.url), "utf8");
+  const css = await readFile(new URL("../assets/app.css", import.meta.url), "utf8");
+
+  assert.match(app, /class="ledger-scroll candidate-ledger-scroll"/,
+    "the execution candidate table needs its own mobile wrapper");
+  assert.match(app, /class="ledger-wide-table execution-candidates-table"/,
+    "the candidate table needs a stable hook distinct from other wide ledgers");
+  assert.match(css, /\.candidate-ledger-scroll\s*\{\s*overflow-x: visible;/,
+    "execution candidates should not horizontally scroll on mobile");
+  assert.match(css, /\.candidate-ledger-scroll \.execution-candidates-table tr \{[\s\S]*?display: grid;/,
+    "each candidate should render as a boxed card on phones");
+  assert.match(css, /\.candidate-ledger-scroll \.execution-candidates-table td::before \{[\s\S]*?content: attr\(data-label\);/,
+    "the card must keep the column labels beside values");
+  assert.match(css, /\.candidate-ledger-scroll \.execution-candidates-table td\[data-label="Market"\] \{[\s\S]*?grid-column: 1 \/ -1;/,
+    "long market names need the full card width");
 });
 
 // Reported with a screenshot: the newest 5050 run was still listed twice, the first of
@@ -6084,6 +6104,10 @@ test("execution candidates: Win and Days left lead, precheck follows the market"
     assert.deepEqual(cells, headers, `${mode}: each cell must sit under its own header`);
     assert.ok(!headers.includes("#"), `${mode}: the row-number column is gone`);
     assert.ok(!/data-label="#"/.test(html), `${mode}: and its cell with it`);
+    assert.ok(!headers.includes("Net yield %"), `${mode}: net yield is gone from the candidate list`);
+    assert.ok(!headers.includes("R/R"), `${mode}: R/R is gone from the candidate list`);
+    assert.ok(!/data-label="Net yield %"/.test(html), `${mode}: no net yield cell remains`);
+    assert.ok(!/data-label="R\/R"/.test(html), `${mode}: no R/R cell remains`);
   }
 
   // READY on a live portfolio said "will verify live quote, fees and ranking" -- what

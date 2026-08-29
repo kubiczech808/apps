@@ -8307,8 +8307,8 @@ function renderPortfolioCandidateRows(rows = [], mode = state.mode, diagnostics 
   const probabilityLabel = "Mkt prob.";
   const returnMetric = portfolioReturnMetricLabel(config);
   return `
-    <div class="ledger-scroll" tabindex="0" aria-label="Scrollable execution candidates table">
-    <table class="ledger-wide-table">
+    <div class="ledger-scroll candidate-ledger-scroll" tabindex="0" aria-label="Execution candidates table">
+    <table class="ledger-wide-table execution-candidates-table">
       <thead>
         <tr>
           <th>Win</th>
@@ -8317,9 +8317,7 @@ function renderPortfolioCandidateRows(rows = [], mode = state.mode, diagnostics 
           <th>Precheck</th>
           ${useLiveMarketColumnOrder ? `
             <th>${returnMetric}</th>
-            <th>Net yield %</th>
             <th>Volume</th>
-            <th>R/R</th>
             <th>${probabilityLabel}</th>
             <th>End date</th>
           ` : `
@@ -8328,8 +8326,6 @@ function renderPortfolioCandidateRows(rows = [], mode = state.mode, diagnostics 
             ${usesPolymarketPotential ? "" : "<th>Mkt entry</th>"}
             <th>${returnMetric}</th>
             ${usesPolymarketPotential ? "" : "<th>EV</th>"}
-            <th>Net yield %</th>
-            <th>R/R</th>
             <th>Volume</th>
           `}
           <th>Analysis</th>
@@ -8375,9 +8371,7 @@ function renderPortfolioCandidateRows(rows = [], mode = state.mode, diagnostics 
               </td>
               ${useLiveMarketColumnOrder ? `
                 <td data-label="${returnMetric}" title="${escapeHtml(annualizationHorizonNote(item))}"><span class="${pnlClass(selectedAnnualizedReturn)}">${signedPercent(selectedAnnualizedReturn)}</span></td>
-                <td data-label="Net yield %">${netYieldCell(item)}</td>
                 <td data-label="Volume">${money(rowVolumeUsdc(item))}</td>
-                <td data-label="R/R">${evaluationRiskRewardCell(item)}</td>
                 <td data-label="${probabilityLabel}">${probability(selectedProbability)}</td>
                 <td data-label="End date">${evaluationEndDateCell(item)}</td>
               ` : `
@@ -8386,8 +8380,6 @@ function renderPortfolioCandidateRows(rows = [], mode = state.mode, diagnostics 
                 ${usesPolymarketPotential ? "" : `<td data-label="Mkt entry">${probability(evaluationEntryPrice(item))}</td>`}
                 <td data-label="${returnMetric}" title="${escapeHtml(annualizationHorizonNote(item))}"><span class="${pnlClass(selectedAnnualizedReturn)}">${signedPercent(selectedAnnualizedReturn)}</span></td>
                 ${usesPolymarketPotential ? "" : `<td data-label="EV">${signedMoney(selectedExpectedValue, 4)}</td>`}
-                <td data-label="Net yield %">${netYieldCell(item)}</td>
-                <td data-label="R/R">${evaluationRiskRewardCell(item)}</td>
                 <td data-label="Volume">${money(rowVolumeUsdc(item))}</td>
               `}
               <td data-label="Analysis">${analysisBadge(item)}</td>
