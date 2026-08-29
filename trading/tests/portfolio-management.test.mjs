@@ -1534,3 +1534,79 @@ test("portfolio optimisation: live portfolios are analysed per portfolio, not pe
   assert.match(app, /if \(\(!report \|\| !Array\.isArray\(report\.portfolios\)\) && !livePortfolios\.length\)/,
     "the empty state must consider the live half too");
 });
+
+// Requested: drop R/R from the opened positions list and put Volume there instead, with a
+// value that updates when the list is refreshed.
+//
+// The second half is the part that can silently not work. A trade's stored volume was
+// written once at entry and never touched again, so a column reading it would have looked
+// correct and shown a number frozen on the day the position was opened -- for a market
+// that has since dried up, the opposite of the truth.
+test("opened positions: Volume replaces R/R and is re-read on every mark", async () => {
+  const app = APP;
+  const bot = BOT;
+
+  // The two tables share one renderer, so the swap has to be gated rather than global:
+  // a closed trade keeps R/R, which records what the trade was taken at.
+  assert.match(app, /\$\{showStatus\n\s+\? tradeHeader\(tableKey, "riskReward", "R\/R"\)\n\s+: tradeHeader\(tableKey, "volume", "Volume"\)\}/,
+    "R/R stays on closed trades; Volume replaces it only on the opened list");
+  assert.match(app, /\? `<td data-label="R\/R">[\s\S]*?: `<td data-label="Volume">\$\{tradeVolumeCell\(trade\)\}<\/td>`/,
+    "the body cell must follow the header");
+  // The column is sortable like every other one, or it is the only dead header in the table.
+  assert.match(app, /if \(key === "volume"\) return tradeVolumeUsdc\(trade\) \?\? -1;/);
+
+  // What makes it refresh: the bot re-reads volume when it re-prices an open position, so
+  // the dashboard summary the Refresh values button re-fetches already carries a current
+  // figure. Without this the column would be permanently stuck at the entry value.
+  const markStart = bot.indexOf("async function markOpenTrade(");
+  assert.ok(markStart >= 0, "markOpenTrade must exist");
+  const mark = bot.slice(markStart, bot.indexOf("const stopPlanForTrade", markStart));
+  assert.ok(mark.length > 200, "the slice must actually cover markOpenTrade");
+  assert.match(mark, /volumeUsdc: marketVolumeSnapshotUsdc\(market\) \?\? trade\.volumeUsdc \?\? null,/,
+    "an open position's volume must be re-read from the market on every mark");
+  assert.match(mark, /volume24hr: Number\.isFinite\(Number\(market\.volume24hr\)\)/);
+  // marketVolumeSnapshotUsdc is the reader that excludes liquidity on purpose, which is why
+  // it is the one used here.
+  assert.match(bot, /function marketVolumeSnapshotUsdc\(market = \{\}\) \{\n\s+for \(const candidate of \[market\.volumeNum, market\.volume, market\.volume24hr\]\)/,
+    "the mark must use traded volume, never order-book depth");
+
+  // And the field has to survive transport, or the refresh fetches a summary that drops
+  // it and the column freezes without anything looking broken. The selected portfolio's
+  // trades are served whole rather than field-filtered, which is what carries the newly
+  // marked volume through; the other portfolios are trimmed to balances on purpose.
+  const compact = API.slice(API.indexOf("function compact_dashboard_paper_portfolio("));
+  assert.match(compact.slice(0, compact.indexOf("$compact = [];")), /if \(\$includeTrades\) \{[\s\S]*?return \$portfolio;/,
+    "the open portfolio's trades must reach the browser unfiltered");
+  // If that ever becomes a whitelist, these two fields have to be on it.
+  const fieldList = /\$fields = \[([\s\S]*?)\];/.exec(compact);
+  assert.ok(fieldList, "the trimmed shape must still be a named list");
+  assert.ok(!fieldList[1].includes("'trades'"),
+    "trades are not part of the trimmed shape, so no field list governs them");
+
+  // The reader itself, exercised rather than pattern-matched.
+  const read = new Function(`
+    ${(/function tradeVolumeUsdc\([\s\S]*?\n\}/.exec(app) || [])[0]}
+    return tradeVolumeUsdc;
+  `)();
+  // A freshly marked position: the current figure wins over the entry one.
+  assert.equal(read({ volumeUsdc: 51000, firstVolumeUsdc: 900 }), 51000);
+  assert.equal(read({ volume24hr: 4200 }), 4200);
+  // A live row carries no volume of its own -- the wallet history records what was bought,
+  // not what the market traded -- so it reads the observation it was decorated from.
+  assert.equal(read({ sourceEvaluation: { volumeUsdc: 7300 } }), 7300);
+  // Order-book depth is never volume, however deep it is. This is the same mistake the
+  // scraped list had, and it must not come back through this column.
+  assert.equal(read({ liquidity: 99999 }), null);
+  assert.equal(read({ volumeUsdc: 0, volume24hr: 0, liquidity: 15866 }), 0,
+    "a market that has never traded reads zero, not its book depth");
+  // Nothing recorded is unknown, and the cell says so rather than printing $0.
+  assert.equal(read({}), null);
+  const cell = new Function(`
+    ${(/function tradeVolumeUsdc\([\s\S]*?\n\}/.exec(app) || [])[0]}
+    ${(/function tradeVolumeCell\([\s\S]*?\n\}/.exec(app) || [])[0]}
+    function money(value) { return "$" + Math.round(Number(value)); }
+    return tradeVolumeCell;
+  `)();
+  assert.match(cell({}), /-<\/span>/);
+  assert.equal(cell({ volumeUsdc: 1234 }), "$1234");
+});

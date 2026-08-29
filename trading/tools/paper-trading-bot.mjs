@@ -4275,6 +4275,18 @@ async function markOpenTrade(trade) {
     closedTime: market.closedTime || trade.closedTime || null,
     lastCheckedAt: checkedAt,
     marketUrlStatus: eventSlug && eventSlug !== trade.slug ? "use_event_slug" : "ok",
+    // Volume as at this mark, so the opened-positions table can show what the market has
+    // traded now rather than what it had traded on the day the position was opened. Every
+    // other number on that row is re-read here; volume was the one left at its entry value,
+    // which for a market that has since dried up is the opposite of the truth. The entry
+    // figures stay untouched under their own names -- this is the current one.
+    volumeUsdc: marketVolumeSnapshotUsdc(market) ?? trade.volumeUsdc ?? null,
+    volume24hr: Number.isFinite(Number(market.volume24hr))
+      ? Number(Number(market.volume24hr).toFixed(2))
+      : trade.volume24hr ?? null,
+    liquidity: Number.isFinite(Number(market.liquidity ?? market.liquidityNum))
+      ? Number(Number(market.liquidity ?? market.liquidityNum).toFixed(2))
+      : trade.liquidity ?? null,
     // The last mark taken from a live orderbook, kept apart from currentPrice because the
     // closing write overwrites currentPrice with the settlement print. Reading a stop
     // decision off currentPrice after that asks a 0 or a 1 what the market was quoting.

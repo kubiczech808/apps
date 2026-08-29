@@ -3530,6 +3530,9 @@ function tradeSortValue(trade, key) {
   if (key === "potentialGain") return tradePotentialGain(trade);
   if (key === "potentialPct") return tradePotentialGainPct(trade);
   if (key === "riskReward") return tradeRiskReward(trade);
+  // An unknown volume sorts below a real zero, so it cannot lead a descending sort on a
+  // number nobody recorded.
+  if (key === "volume") return tradeVolumeUsdc(trade) ?? -1;
   if (key === "potentialAnnualized") return tradePotentialAnnualized(trade);
   if (key === "pnl") return tradePnlValue(trade);
   if (key === "pnlPct") return tradePnlPct(trade);
@@ -3568,6 +3571,7 @@ const TRADE_HEADER_INFO = {
   resolution: "Expected or observed resolution/end date for the market.",
   potentialGain: "Nominal profit if the selected outcome resolves in our favor; percent return is shown below it.",
   riskReward: "Reward divided by risk. Higher means more upside per dollar at risk.",
+  volume: "Traded volume in the market as at the last mark, not order-book depth. It is re-read every time the position is re-priced, so Refresh values updates it. A dash means no volume was recorded for this market.",
   potentialAnnualized: "Potential return annualized by days to resolution.",
   pnl: "Current or realized profit/loss for the row.",
   stake: "USDC committed to the position or order.",
@@ -3664,6 +3668,38 @@ function tradeWinCell(trade) {
   `;
 }
 
+// Traded volume for an open position, as at its last mark.
+//
+// Only volume fields, never `liquidity`: liquidity is resting order-book depth, which a
+// market can carry in quantity before a single share has changed hands, and reading one
+// under a heading that says Volume is the same mistake the scraped list had. A live row
+// carries no volume of its own -- the wallet history records what was bought, not what the
+// market has traded -- so it falls back to the scraped observation the row was decorated
+// from, which is refreshed by the same scan that refreshes everything else.
+//
+// Returns null when nothing was recorded, which is different from a market that has
+// genuinely traded nothing.
+function tradeVolumeUsdc(trade = {}) {
+  const source = trade.sourceEvaluation || {};
+  for (const candidate of [
+    trade.volumeUsdc, trade.volume24hr,
+    source.volumeUsdc, source.volume24hr,
+    trade.firstVolumeUsdc, trade.firstVolume24hr,
+  ]) {
+    const numeric = Number(candidate);
+    if (Number.isFinite(numeric) && numeric > 0) return numeric;
+  }
+  const recorded = [trade.volumeUsdc, trade.volume24hr, source.volumeUsdc, source.volume24hr]
+    .map(Number).some(Number.isFinite);
+  return recorded ? 0 : null;
+}
+
+function tradeVolumeCell(trade) {
+  const volume = tradeVolumeUsdc(trade);
+  if (volume == null) return '<span class="muted">-</span>';
+  return money(volume);
+}
+
 function renderTradeRows(trades, emptyText, options = {}) {
   const tableKey = options.tableKey || "open";
   const showStatus = options.showStatus !== false;
@@ -3684,7 +3720,9 @@ function renderTradeRows(trades, emptyText, options = {}) {
           ${tradeHeader(tableKey, showStatus ? "resolvedAt" : "openedAt", showStatus ? "Closed" : "Opened")}
           ${tradeHeader(tableKey, "currentPrice", showStatus ? "Entry / final" : "Entry / mark")}
           ${tradeHeader(tableKey, "stake", "Stake")}
-          ${tradeHeader(tableKey, "riskReward", "R/R")}
+          ${showStatus
+            ? tradeHeader(tableKey, "riskReward", "R/R")
+            : tradeHeader(tableKey, "volume", "Volume")}
         </tr>
       </thead>
       <tbody>
@@ -3706,7 +3744,9 @@ function renderTradeRows(trades, emptyText, options = {}) {
             <td data-label="${showStatus ? "Closed" : "Opened"}">${escapeHtml(formatDate(showStatus ? (trade.resolvedAt || trade.closedTime || trade.lastCheckedAt || "") : (trade.openedAt || trade.date || "")))}</td>
             <td data-label="${showStatus ? "Entry / final" : "Entry / mark"}">${tradePriceCell(trade, showStatus)}</td>
             <td data-label="Stake">${money(Number(trade.stakeUsdc || 0))}</td>
-            <td data-label="R/R"><span class="${riskRewardClass(tradeRiskReward(trade))}">${riskReward(tradeRiskReward(trade))}</span></td>
+            ${showStatus
+              ? `<td data-label="R/R"><span class="${riskRewardClass(tradeRiskReward(trade))}">${riskReward(tradeRiskReward(trade))}</span></td>`
+              : `<td data-label="Volume">${tradeVolumeCell(trade)}</td>`}
           </tr>
         `).join("")}
       </tbody>
