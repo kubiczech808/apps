@@ -94,7 +94,10 @@ on:
     # succeeded. The cadence now comes from the post-scrape dispatch, which wakes this
     # portfolio after each scan and lets its own saved cadence decide whether to act.
     # What is left here restarts that chain if it ever breaks.
-    - cron: '13,43 * * * *'
+    # A heartbeat, once an hour. Live execution is woken by the scan's post-scrape
+    # dispatch, which honours each portfolio's saved cadence and automation switch;
+    # this entry only covers the chain having stopped altogether.
+    - cron: '13 * * * *'
 
 concurrency:
   group: trading-live-execution-${{ github.ref }}

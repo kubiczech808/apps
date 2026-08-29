@@ -4120,7 +4120,10 @@ test("5050: its own button and its own schedule run its own algorithm", async ()
 
   // The auto trigger: a schedule exists, and the run is gated by the portfolio's own
   // switch and cadence rather than firing regardless.
-  assert.match(workflow, /schedule:\s*\n(?:\s*#[^\n]*\n)*\s*- cron: '7,37 \* \* \* \*'/);
+  // A heartbeat entry, whatever minute it sits on. The value is not the invariant --
+  // the chain dispatches this portfolio now, and the schedule only covers the chain
+  // having stopped -- but there must still be one.
+  assert.match(workflow, /schedule:\s*\n(?:\s*#[^\n]*\n)*\s*- cron: '[^']+'/);
   // This asserted a hard-coded MANUAL for every dispatch, which was right while the cron
   // was the only automatic trigger. The scan now dispatches this workflow as well, for a
   // portfolio set to execute after each scrape, and that run is not a person's -- so the
@@ -5441,44 +5444,51 @@ test("5050 run log: the merge publishes a superset, never less", async () => {
 // manage even the ten minutes it was asked for: median gap 10 min, mean 14, worst 47.
 // So two entries offset by five, each naming one tag, and no assumption that every tick
 // arrives.
-test("scheduled scan: sports and esports alternate on the tightest cadence available", async () => {
+test("scan scope: sports and esports alternate on the pacer's tick, not on which cron survived", async () => {
   const { readFile } = await import("node:fs/promises");
   const scan = await readFile(new URL("../../.github/workflows/trading-market-scan.yml", import.meta.url), "utf8");
+  const pacer = await readFile(new URL("../../.github/workflows/trading-pacer.yml", import.meta.url), "utf8");
 
-  const crons = [...scan.matchAll(/^ {4}- cron: '([^']+)'$/gm)].map((match) => match[1]);
-  assert.ok(crons.length >= 2, `expected at least two schedule entries, got ${JSON.stringify(crons)}`);
-  const minutesOf = (cron) => cron.split(" ")[0].split(",").map(Number);
-
-  // Two entries firing in the same minute would collide on the shared lock and one of them
-  // would be the run GitHub drops, so which scope gets scanned would be down to timing.
-  const all = crons.flatMap(minutesOf).sort((a, b) => a - b);
-  assert.equal(new Set(all).size, all.length,
-    `the schedule entries must not collide: ${JSON.stringify(crons)}`);
-  // And they must be spread, not bunched: the gap between consecutive firings is what
-  // gives a whole scrape-and-execute cycle time to publish before the next one starts.
-  const gaps = all.slice(1).map((minute, index) => minute - all[index]);
-  assert.ok(Math.min(...gaps) >= 5, `five minutes apart is the floor GitHub allows: ${JSON.stringify(all)}`);
-
-  // The tag is chosen from which entry fired, so every cron string the chooser names has
-  // to be one the schedule really carries -- edit one without the other and a scheduled run
-  // silently falls through to scanning the wrong scope, or none.
-  const chooser = /PAPER_MARKET_SCAN_TAG: ([^\n]+)/.exec(scan);
-  assert.ok(chooser, "the scheduled tag chooser must be present");
-  const named = [...chooser[1].matchAll(/github\.event\.schedule == '([^']+)'/g)].map((match) => match[1]);
-  assert.ok(named.length >= 1, `the chooser must name the entries it selects on: ${chooser[1]}`);
-  for (const cron of named) {
-    assert.ok(crons.includes(cron), `the chooser names ${cron}, which is not one of ${JSON.stringify(crons)}`);
-  }
-  // Sports and esports each get their own slot, and they are not the same slot.
+  // The scan used to pick its scope from which schedule entry fired, one entry per scope.
+  // That only works while the schedule is delivered, and measured over 24 hours it is not:
+  // this workflow asked for 144 runs and got 6, in bursts. Whichever entry GitHub happened
+  // to keep decided what got scanned, so a scope could go a day without a pass. The pacer
+  // rotates them on its tick counter instead, which is exact.
+  const rotation = /case \$\(\( tick % 3 \)\) in([\s\S]*?)esac/.exec(pacer);
+  assert.ok(rotation, "the pacer must choose the scan scope");
   for (const tag of ["sports", "esports"]) {
-    assert.match(chooser[1], new RegExp(`'${tag}'`), `${tag} must have a scheduled slot`);
+    assert.match(rotation[1], new RegExp(`tag=${tag}\\b`), `${tag} must get its own slot`);
   }
-  assert.equal(new Set(named).size, named.length, "two tags may not be selected on the same entry");
-  // At least one entry stays untagged, or the broad catalogue cursor never advances.
-  assert.ok(named.length < crons.length,
-    `one entry must stay untagged for the broad scan: ${JSON.stringify(crons)} vs ${JSON.stringify(named)}`);
-});
+  assert.match(rotation[1], /\*\) *tag="";/, "one slot stays untagged or the broad cursor never advances");
 
+  // The two tag slots keep the short-horizon, liquid-market focus they were given, and the
+  // broad slot keeps the seven-day unfiltered catalogue. Sending the tag without them
+  // would scan sports over the broad window and quietly change what the slot means.
+  assert.match(rotation[1], /tag=sports; +liquidity=40000; days=2/);
+  assert.match(rotation[1], /tag=esports; liquidity=40000; days=2/);
+  assert.match(rotation[1], /tag=""; +liquidity=0; +days=7/);
+
+  // And the scan has to accept them as dispatch inputs, or the rotation is decoration.
+  for (const input of ["market_scan_tag", "market_scan_liquidity_min", "market_scan_max_days"]) {
+    assert.match(scan, new RegExp(`${input}:`), `the scan must accept ${input}`);
+    assert.match(pacer, new RegExp(`\\\\"${input}\\\\"`), `the pacer must send ${input}`);
+  }
+
+  // The scan's own remaining entry is the untagged broad watchdog: it names no scope, so a
+  // delivered heartbeat advances the catalogue cursor rather than doing nothing.
+  const crons = [...scan.matchAll(/^ {4}- cron: '([^']+)'$/gm)].map((match) => match[1]);
+  assert.equal(crons.length, 1, `one heartbeat entry, got ${JSON.stringify(crons)}`);
+  // No branch may still select on a cron literal. Such a branch matches nothing once the
+  // entry is gone, so it fails silently -- the scan would run with an empty tag and nobody
+  // would see why. Writing this test is what caught three of them left behind.
+  const env = /PAPER_MARKET_SCAN_(TAG|LIQUIDITY_MIN|MAX_DAYS): ([^\n]+)/g;
+  for (const [, name, expression] of scan.matchAll(env)) {
+    assert.ok(!/github\.event\.schedule ==/.test(expression),
+      `PAPER_MARKET_SCAN_${name} still selects on a cron literal: ${expression}`);
+  }
+  // A heartbeat therefore takes the broad defaults rather than nothing at all.
+  assert.match(scan, /PAPER_MARKET_SCAN_MAX_DAYS: \$\{\{ inputs\.market_scan_max_days \|\| '7' \}\}/);
+});
 test("scheduled scan: a scheduled pass stays small and does not fan out", async () => {
   const { readFile } = await import("node:fs/promises");
   const [scan, bot] = await Promise.all([
@@ -5486,34 +5496,32 @@ test("scheduled scan: a scheduled pass stays small and does not fan out", async 
     readFile(new URL("../../.github/workflows/trading-paper-bot.yml", import.meta.url), "utf8"),
   ]);
 
-  // The filters the opportunities page was already scanning with. They belong to the
-  // short-dated tag slots -- the ones that exist to keep liquid sports and esports fresh --
-  // and must not be imposed on the broad slot, whose job is to advance the category cursor
-  // across the whole catalogue. A dispatch always overrides both.
-  for (const [name, tight] of [["PAPER_MARKET_SCAN_LIQUIDITY_MIN", "40000"], ["PAPER_MARKET_SCAN_MAX_DAYS", "2"]]) {
+  // The tight filters -- a 40000 liquidity floor and a two-day horizon -- belong to the
+  // sports and esports slots, whose job is keeping liquid short-dated markets fresh, and
+  // must never reach the broad slot, whose job is advancing the category cursor across the
+  // whole catalogue. That pairing now lives in the pacer's rotation, where the tag and its
+  // filters are chosen together on one line and cannot drift apart; the assertion for it is
+  // in the scan-scope test above. What the scan itself must guarantee is that a run nobody
+  // parameterised gets the broad defaults rather than a tag's filters.
+  for (const [name, broad] of [["PAPER_MARKET_SCAN_LIQUIDITY_MIN", "0"], ["PAPER_MARKET_SCAN_MAX_DAYS", "7"]]) {
     const line = new RegExp(`${name}: ([^\\n]+)`).exec(scan);
     assert.ok(line, `${name} must be set`);
     assert.match(line[1], /^\$\{\{ inputs\.market_scan_\w+ \|\|/, `${name} must let a dispatch override it`);
-    assert.match(line[1], new RegExp(`'${tight}'`), `${name} must apply ${tight} to the tag slots`);
-    // It is selected on the same entries the tag chooser selects on, never on all of them:
-    // `github.event.schedule && ...` would catch the broad slot too.
-    assert.doesNotMatch(line[1], /github\.event\.schedule &&/,
-      `${name} must name the tag slots rather than every scheduled run`);
-  }
-  // The slots those filters name are the slots the tag chooser names, or one of them scans
-  // a tag with the wrong filters.
-  const tagSlots = new Set([...(/PAPER_MARKET_SCAN_TAG: [^\n]+/.exec(scan) || [""])[0]
-    .matchAll(/github\.event\.schedule == '([^']+)'/g)].map((match) => match[1]));
-  for (const name of ["PAPER_MARKET_SCAN_LIQUIDITY_MIN", "PAPER_MARKET_SCAN_MAX_DAYS"]) {
-    const line = new RegExp(`${name}: ([^\\n]+)`).exec(scan)[1];
-    const slots = new Set([...line.matchAll(/github\.event\.schedule == '([^']+)'/g)].map((match) => match[1]));
-    assert.deepEqual([...slots].sort(), [...tagSlots].sort(),
-      `${name} must apply to exactly the slots that carry a tag`);
+    assert.match(line[1], new RegExp(`\\|\\| '${broad}' \\}\\}$`),
+      `${name} must fall back to the broad value, not a tag slot's`);
   }
 
   // Only a dispatch is manual; the scraping log flags them and a scheduled pass must not
   // claim to be one.
-  assert.match(scan, /PAPER_MARKET_SCAN_TRIGGER: \$\{\{ github\.event_name == 'workflow_dispatch' && 'MANUAL' \|\| 'AUTO' \}\}/);
+  // Every paced scan now arrives as a dispatch, so "was this a dispatch" stopped being the
+  // same question as "did a person ask for this". Left alone, the whole scraping log would
+  // have read MANUAL and the flag would have meant nothing. The pacer says AUTO; a person
+  // dispatching by hand takes the default and is still recorded as manual.
+  assert.match(scan, /PAPER_MARKET_SCAN_TRIGGER: \$\{\{ github\.event_name == 'workflow_dispatch' && \(inputs\.run_source == 'AUTO' && 'AUTO' \|\| 'MANUAL'\) \|\| 'AUTO' \}\}/);
+  assert.match(scan, /run_source:\n(?:\s*#[^\n]*\n)*\s+description:[^\n]*\n\s+required: false\n\s+default: "MANUAL"/,
+    "a hand dispatch must default to manual");
+  const pacerSource = await readFile(new URL("../../.github/workflows/trading-pacer.yml", import.meta.url), "utf8");
+  assert.match(pacerSource, /run_source\\":\\"AUTO/, "the pacer must not label its scans manual");
 
   // This restricted the post-scrape dispatch to manual scans, on the worry that firing
   // it every five minutes would back up the one self-hosted runner the live executors

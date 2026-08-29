@@ -40,7 +40,9 @@ on:
     # The portfolio decides whether a scheduled run does anything: the executor
     # skips it when automation is off, and honours its own cadence when set. Away
     # from the top of the hour so it does not queue behind every other job.
-    - cron: '7,37 * * * *'
+    # A heartbeat, once an hour: the scan's post-scrape dispatch wakes this portfolio
+    # on its own saved cadence, and a second scheduled entry delivered nothing extra.
+    - cron: '37 * * * *'
 
 # Serialized against itself only. It shares the wallet with the main live portfolio
 # but not the state file, and the exchange is the authority on collateral.

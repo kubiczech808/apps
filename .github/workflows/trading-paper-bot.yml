@@ -6,10 +6,11 @@ on:
   # their already-published shortlist. The bot itself enforces each portfolio's saved
   # executionCronMinutes, so this lightweight poll does not open trades every 10 minutes.
   schedule:
-    # A heartbeat. The post-scrape dispatch already wakes every due paper portfolio
-    # after each scan, and a scheduled run asked for every ten minutes is dropped
-    # rather than delivered -- this one's last scheduled run was over a day old.
-    - cron: '7,37 * * * *'
+    # A heartbeat, once an hour. The post-scrape dispatch wakes every due paper
+    # portfolio after each scan, and the scan is now paced by trading-pacer.yml, so
+    # this only has to catch the case where that whole chain has stopped. Measured:
+    # asking twice an hour delivered one run a day, so a second entry bought nothing.
+    - cron: '7 * * * *'
   push:
     paths:
       - 'trading/tools/paper-trading-bot.mjs'

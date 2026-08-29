@@ -3664,3 +3664,79 @@ test("live executor: the stored-evaluation count survives both state shapes", ()
   // Zero declared is a real answer, not a missing one.
   assert.equal(count({ evaluations: [{}], stateSegments: { evaluations: { counts: { evaluations: 0 } } } }), 0);
 });
+
+// The pipeline stopped depending on GitHub's scheduler because the scheduler does not
+// deliver. Measured over 24 hours on this repository: 1128 scheduled runs configured
+// across every workflow, 25 delivered -- 2.2% -- arriving in bursts hours apart, with each
+// workflow starved to two to six runs a day whether it asked for 24 or 312. Over the same
+// window workflow_dispatch started 167 runs, none queued longer than two minutes.
+//
+// A self-dispatching loop is a sharp tool, so the properties that keep it safe are pinned
+// here rather than left to review.
+test("pacer: the clock cannot multiply, cannot stall the pipeline, and can be stopped", () => {
+  const pacer = readFileSync(new URL("../../.github/workflows/trading-pacer.yml", import.meta.url), "utf8");
+
+  // The one failure mode a self-dispatching loop must not have. Cancelling in progress
+  // means a duplicate -- the resurrection cron firing while the chain is healthy, or a
+  // person starting it by hand -- collapses back to one chain. Queuing would let
+  // duplicates stack up and double the rate every time it happened.
+  assert.match(pacer, /concurrency:\n\s+group: trading-pacer\n\s+cancel-in-progress: true/,
+    "a second pacer must replace the first, never run beside it");
+
+  // The chain is handed on even when a step above failed, or one bad minute stops the
+  // pipeline until the hourly resurrection cron happens to be delivered.
+  const handOn = /- name: Hand the chain on\n([\s\S]*?)(?=\n      - name: |\n*$)/.exec(pacer);
+  assert.ok(handOn, "the pacer must hand the chain on");
+  assert.match(handOn[1], /if: always\(\)/, "a failed tick must not end the chain");
+  assert.match(handOn[1], /trading-pacer\.yml\/dispatches/);
+  // And it is last, so the work is dispatched before the successor is.
+  assert.ok(pacer.indexOf("- name: Hand the chain on") > pacer.indexOf("- name: Wake the market scan"));
+
+  // An off switch that needs no code change, and that a running pacer honours.
+  assert.match(handOn[1], /vars\.TRADING_PACER_ENABLED.*=.*"false"/,
+    "there must be a way to stop the chain without editing the workflow");
+  // Absent variable means empty string, which must not read as "stop".
+  assert.ok(!/vars\.TRADING_PACER_ENABLED.*!=/.test(handOn[1]),
+    "an unset variable must leave the chain running");
+
+  // The sleep is bounded on both sides: a bad input can neither spin the loop hot nor
+  // park a job past its own timeout.
+  assert.match(pacer, /if \[ "\$minutes" -lt 1 \]/);
+  assert.match(pacer, /if \[ "\$minutes" -gt 50 \]/);
+  const timeout = /timeout-minutes: (\d+)/.exec(pacer);
+  assert.ok(timeout && Number(timeout[1]) > 50,
+    "the job timeout must exceed the longest permitted sleep");
+
+  // A schedule is still declared, but only as the way a dead chain comes back. One entry
+  // is the point: more would not be delivered any more often, and this one only has to
+  // land eventually.
+  const crons = pacer.match(/- cron: '[^']+'/g) || [];
+  assert.equal(crons.length, 1, "the resurrection path is one entry, not a schedule");
+
+  // The scan dispatch must not be able to end the chain, because it is the step most
+  // likely to fail transiently.
+  const scanStep = /- name: Wake the market scan\n([\s\S]*?)(?=\n      - name: )/.exec(pacer);
+  assert.ok(scanStep);
+  assert.match(scanStep[1], /::warning::/,
+    "a failed scan dispatch is a warning, not a job failure");
+});
+
+test("pacer: the workflows it drives keep a heartbeat but no longer pretend to be scheduled", () => {
+  const read = (name) => readFileSync(new URL(`../../.github/workflows/${name}`, import.meta.url), "utf8");
+  // Each of these is dispatched by the chain now, so its own schedule is a fallback for
+  // the chain having stopped. Asking more often bought no extra runs -- measured -- so
+  // one entry each is all that is left.
+  for (const name of [
+    "trading-market-scan.yml",
+    "trading-paper-bot.yml",
+    "trading-live-5050.yml",
+    "polymarket-live-limit-order-test.yml",
+  ]) {
+    const body = read(name);
+    const crons = body.match(/- cron: '[^']+'/g) || [];
+    assert.equal(crons.length, 1, `${name} should keep exactly one heartbeat entry`);
+    // A heartbeat, not a clock: no minute list and no step interval.
+    assert.ok(!/- cron: '[^']*[,/]/.test(body),
+      `${name} still asks for several runs an hour, which are not delivered`);
+  }
+});

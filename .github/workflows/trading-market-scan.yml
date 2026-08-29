@@ -8,9 +8,12 @@ on:
   # Broad scans advance the persisted category cursor; sports and esports keep their
   # short-dated, liquid markets fresh between those broader passes.
   schedule:
-    - cron: '0,30 * * * *'
-    - cron: '10,40 * * * *'
-    - cron: '20,50 * * * *'
+    # One entry, and it is a watchdog rather than the clock. Measured over 24 hours:
+    # this workflow asked for 144 scheduled runs and was delivered 6, in bursts hours
+    # apart -- three inside fourteen minutes, then nothing for eight. Asking six times
+    # an hour bought no more runs than asking once, so the extra entries were noise.
+    # trading-pacer.yml is what actually paces the scan now, by dispatch.
+    - cron: '11 * * * *'
   workflow_dispatch:
     inputs:
       market_scan_tag:
@@ -27,6 +30,15 @@ on:
         description: "Maximum days until event end; -1 means no end-date filter"
         required: false
         default: "-1"
+        type: string
+      run_source:
+        # Every paced scan arrives as a dispatch, so "was this a dispatch" stopped being
+        # the same question as "did a person ask for this". Without saying so, the whole
+        # scraping log would read MANUAL and the flag would mean nothing. A person
+        # dispatching by hand gets the default and is still recorded as manual.
+        description: "MANUAL for a person, AUTO for the pacer"
+        required: false
+        default: "MANUAL"
         type: string
 
 permissions:
@@ -68,15 +80,21 @@ jobs:
       PAPER_MARKET_SCAN_HISTORY_LIMIT: "20"
       PAPER_MARKET_SCAN_AUDIT_HISTORY_LIMIT: "3"
       PAPER_MARKET_SCAN_DIVERSITY_LIQUIDITY_USDC: "40000"
-      # A dispatch says which tag it wants. Scheduled broad scans deliberately retain the
-      # normal seven-day, unfiltered catalogue semantics; only the sports/esports slots
-      # use the existing short-horizon, liquid-market focus.
-      PAPER_MARKET_SCAN_TAG: ${{ inputs.market_scan_tag || (github.event.schedule == '10,40 * * * *' && 'sports' || (github.event.schedule == '20,50 * * * *' && 'esports' || '')) }}
-      PAPER_MARKET_SCAN_LIQUIDITY_MIN: ${{ inputs.market_scan_liquidity_min || ((github.event.schedule == '10,40 * * * *' || github.event.schedule == '20,50 * * * *') && '40000' || '0') }}
-      PAPER_MARKET_SCAN_MAX_DAYS: ${{ inputs.market_scan_max_days || ((github.event.schedule == '10,40 * * * *' || github.event.schedule == '20,50 * * * *') && '2' || '7') }}
+      # The scope comes from the dispatch. It used to be selected by matching
+      # github.event.schedule against a cron literal, one entry per scope, which decided
+      # what got scanned by which entry GitHub happened to deliver -- and it delivers about
+      # one in twenty. trading-pacer.yml rotates the three scopes on its tick counter and
+      # sends the tag with the liquidity floor and horizon that belong to it, so a slot can
+      # no longer scan sports over the broad window.
+      #
+      # These defaults are what a heartbeat run gets: the seven-day unfiltered catalogue,
+      # which is the pass that advances the persisted category cursor.
+      PAPER_MARKET_SCAN_TAG: ${{ inputs.market_scan_tag || '' }}
+      PAPER_MARKET_SCAN_LIQUIDITY_MIN: ${{ inputs.market_scan_liquidity_min || '0' }}
+      PAPER_MARKET_SCAN_MAX_DAYS: ${{ inputs.market_scan_max_days || '7' }}
       # Only a dispatch is manual. The scraping log flags them, so a scheduled pass must
       # not claim to be one.
-      PAPER_MARKET_SCAN_TRIGGER: ${{ github.event_name == 'workflow_dispatch' && 'MANUAL' || 'AUTO' }}
+      PAPER_MARKET_SCAN_TRIGGER: ${{ github.event_name == 'workflow_dispatch' && (inputs.run_source == 'AUTO' && 'AUTO' || 'MANUAL') || 'AUTO' }}
       PAPER_MAX_RESOLUTION_DAYS: "7"
       PAPER_SCAN_ONLY: "true"
       PAPER_REQUIRE_GEMINI: "false"

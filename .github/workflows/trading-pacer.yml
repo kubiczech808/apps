@@ -1,0 +1,162 @@
+name: Trading Pacer
+
+# The clock the trading pipeline actually runs on.
+#
+# Measured on this repository over 24 hours: 1128 scheduled runs configured across every
+# workflow, 25 delivered -- 2.2% -- and they arrive in bursts hours apart rather than on
+# the schedule (three market scans within fourteen minutes, then nothing for eight hours).
+# Every workflow is starved to roughly the same two to six runs a day whether it asks for
+# 24 or for 312, so this is not one workflow crowding out another and no amount of cron
+# tuning fixes it. Over the same window workflow_dispatch started 167 runs, none of them
+# queued longer than two minutes.
+#
+# So the pipeline is driven by dispatch, and this is what dispatches it: wait, wake the
+# market scan -- which wakes the paper and live executors in turn through
+# tools/dispatch-after-scan.mjs -- then re-dispatch itself. This repository is public, so
+# runner minutes are free and the waiting costs nothing.
+on:
+  workflow_dispatch:
+    inputs:
+      interval_minutes:
+        description: "Minutes to wait before each scan (1-50)"
+        required: false
+        default: "10"
+      tick:
+        description: "Cycle counter, carried between links of the chain"
+        required: false
+        default: "0"
+  schedule:
+    # Not the clock. This is the resurrection path: if the chain ever dies -- a cancelled
+    # run, a failed dispatch, an expired token, a runner outage -- a schedule delivered at
+    # 2% still restarts it within a few hours without anyone noticing it stopped. Reviving
+    # a dead loop is the one job an unreliable trigger is genuinely good at, and it is the
+    # reason to keep a cron here rather than several.
+    - cron: '23 * * * *'
+
+permissions:
+  actions: write
+  contents: read
+
+# At most one pacer alive. A newer run cancels an older one, so a duplicate dispatch --
+# the schedule firing while the chain is already running, or a person starting it by hand
+# -- collapses back to a single chain instead of doubling the rate. Queuing instead would
+# let duplicates accumulate, which is the one failure mode a self-dispatching loop must
+# not have.
+concurrency:
+  group: trading-pacer
+  cancel-in-progress: true
+
+jobs:
+  pace:
+    runs-on: ubuntu-latest
+    # The sleep plus a wide margin. A job that somehow hangs is killed rather than
+    # occupying the concurrency group until GitHub's six-hour ceiling.
+    timeout-minutes: 60
+    steps:
+      - name: Wait for the next tick
+        env:
+          INTERVAL: ${{ inputs.interval_minutes || '10' }}
+        run: |
+          # Clamped so a bad input cannot spin the loop hot or park it past the timeout.
+          minutes=$(printf '%.0f' "${INTERVAL:-10}" 2>/dev/null || echo 10)
+          if [ "$minutes" -lt 1 ] 2>/dev/null; then minutes=1; fi
+          if [ "$minutes" -gt 50 ] 2>/dev/null; then minutes=50; fi
+          echo "minutes=$minutes" >> "$GITHUB_ENV"
+          echo "Waiting ${minutes} minute(s) before waking the market scan."
+          sleep $((minutes * 60))
+
+      - name: Wake the market scan
+        id: scan
+        env:
+          GH_TOKEN: ${{ secrets.POLY_TRADING_GITHUB_TOKEN || github.token }}
+          REPOSITORY: ${{ github.repository }}
+          REF: ${{ github.ref_name }}
+          TICK: ${{ inputs.tick || '0' }}
+        run: |
+          # Which scope this tick scans. The scan used to read this off which cron entry
+          # fired -- three entries, one per scope -- which only works while the schedule is
+          # delivered, and it is not: the scope that got scanned was whichever entry GitHub
+          # happened to keep. Rotating on the tick counter instead makes the alternation
+          # exact, and each scope comes round every third tick rather than sometimes never.
+          #
+          # The broad slot keeps the seven-day unfiltered catalogue semantics; the two tag
+          # slots keep the short-horizon, liquid-market focus they were given, which is why
+          # the liquidity floor and the horizon travel with the tag rather than separately.
+          tick=$(printf '%.0f' "${TICK:-0}" 2>/dev/null || echo 0)
+          case $(( tick % 3 )) in
+            1) tag=sports;  liquidity=40000; days=2 ;;
+            2) tag=esports; liquidity=40000; days=2 ;;
+            *) tag="";      liquidity=0;     days=7 ;;
+          esac
+          echo "Tick ${tick}: scanning ${tag:-the broad catalogue}."
+          # A transient failure here must not stop the clock: the chain is handed on either
+          # way, and this is recorded as a warning rather than failing the job.
+          if curl --fail-with-body --silent --show-error --request POST \
+            --header "Accept: application/vnd.github+json" \
+            --header "Authorization: Bearer ${GH_TOKEN}" \
+            --header "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/${REPOSITORY}/actions/workflows/trading-market-scan.yml/dispatches" \
+            --data "{\"ref\":\"${REF}\",\"inputs\":{\"market_scan_tag\":\"${tag}\",\"market_scan_liquidity_min\":\"${liquidity}\",\"market_scan_max_days\":\"${days}\",\"run_source\":\"AUTO\"}}"; then
+            echo "Dispatched trading-market-scan.yml"
+          else
+            echo "::warning::market scan dispatch failed; the chain continues"
+          fi
+
+      # The evaluation report reads the whole resolved archive and opens nothing, so it
+      # does not belong on every tick. It had its own hourly cron and was delivered twice a
+      # day; riding the chain on a sub-cadence gives it the hour it was always meant to
+      # have. The counter is carried through the dispatch below because a workflow keeps
+      # no state between runs.
+      - name: Wake the evaluation report once an hour
+        env:
+          GH_TOKEN: ${{ secrets.POLY_TRADING_GITHUB_TOKEN || github.token }}
+          REPOSITORY: ${{ github.repository }}
+          REF: ${{ github.ref_name }}
+          TICK: ${{ inputs.tick || '0' }}
+        run: |
+          tick=$(printf '%.0f' "${TICK:-0}" 2>/dev/null || echo 0)
+          per_hour=$(( 60 / minutes ))
+          if [ "$per_hour" -lt 1 ]; then per_hour=1; fi
+          if [ $(( tick % per_hour )) -ne 0 ]; then
+            echo "Tick ${tick}: the report runs every ${per_hour} ticks; not due."
+            exit 0
+          fi
+          if curl --fail-with-body --silent --show-error --request POST \
+            --header "Accept: application/vnd.github+json" \
+            --header "Authorization: Bearer ${GH_TOKEN}" \
+            --header "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/${REPOSITORY}/actions/workflows/trading-paper-bot.yml/dispatches" \
+            --data "{\"ref\":\"${REF}\",\"inputs\":{\"mode\":\"report\"}}"; then
+            echo "Tick ${tick}: dispatched the evaluation report."
+          else
+            echo "::warning::report dispatch failed; the chain continues"
+          fi
+
+      # Last, and always: the chain must be handed on even when a step above failed, or a
+      # single bad minute stops the pipeline until the resurrection cron notices.
+      - name: Hand the chain on
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.POLY_TRADING_GITHUB_TOKEN || github.token }}
+          REPOSITORY: ${{ github.repository }}
+          REF: ${{ github.ref_name }}
+          TICK: ${{ inputs.tick || '0' }}
+          INTERVAL: ${{ inputs.interval_minutes || '10' }}
+        run: |
+          # The off switch. Set the repository variable TRADING_PACER_ENABLED to "false"
+          # and the chain stops at the next tick, without editing or reverting anything.
+          # It is read here rather than at the top so a pacer already waiting still hands
+          # over the state it has; stopping takes one cycle.
+          if [ "${{ vars.TRADING_PACER_ENABLED }}" = "false" ]; then
+            echo "TRADING_PACER_ENABLED=false; stopping the chain. Dispatch this workflow to restart it."
+            exit 0
+          fi
+          tick=$(printf '%.0f' "${TICK:-0}" 2>/dev/null || echo 0)
+          next=$(( tick + 1 ))
+          curl --fail-with-body --silent --show-error --request POST \
+            --header "Accept: application/vnd.github+json" \
+            --header "Authorization: Bearer ${GH_TOKEN}" \
+            --header "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/${REPOSITORY}/actions/workflows/trading-pacer.yml/dispatches" \
+            --data "{\"ref\":\"${REF}\",\"inputs\":{\"interval_minutes\":\"${INTERVAL}\",\"tick\":\"${next}\"}}"
+          echo "Handed on to tick ${next}."
