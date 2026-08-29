@@ -167,6 +167,7 @@ const state = {
   scrapedVisibleCount: 0,
   scrapedVisibleScope: "",
   scrapedFilteredCount: 0,
+  scrapedObservationTotals: null,
   userNavRefreshTimer: null,
   openedOpportunityKey: "",
   portfolioConfigHistory: {},
@@ -9952,17 +9953,25 @@ function scrapedOpportunityStatusCounts() {
   const counts = { all: 0, scraped: 0, resolved: 0 };
   for (const item of scrapedMarketObservations()) {
     counts.all += 1;
-    const status = scrapedObservationStatus(item);
+    const status = scrapedObservationFilterStatus(item);
     if (status === "SCRAPED") counts.scraped += 1;
     else if (status === "RESOLVED") counts.resolved += 1;
   }
   // The backend reports what it actually retains. Counting only the rows that
   // survived response truncation made the tab labels drift downwards as the
-  // archive grew, which read as records disappearing.
+  // archive grew, which read as records disappearing. Prefer the server's
+  // database/manifest totals for both tabs; `active` is the legacy name for the
+  // SCRAPED population, and `scraped` is the explicit alias newer payloads send.
   const totals = state.scrapedObservationTotals;
-  if (totals && Number.isFinite(Number(totals.resolved)) && Number(totals.resolved) > counts.resolved) {
-    counts.all += Number(totals.resolved) - counts.resolved;
-    counts.resolved = Number(totals.resolved);
+  if (totals && typeof totals === "object") {
+    const scrapedTotal = Number(totals.scraped ?? totals.active);
+    const resolvedTotal = Number(totals.resolved);
+    if (Number.isFinite(scrapedTotal) && scrapedTotal >= 0) counts.scraped = scrapedTotal;
+    if (Number.isFinite(resolvedTotal) && resolvedTotal >= 0) counts.resolved = resolvedTotal;
+    const allTotal = Number(totals.all);
+    counts.all = Number.isFinite(allTotal) && allTotal >= counts.scraped + counts.resolved
+      ? allTotal
+      : counts.scraped + counts.resolved;
   }
   return counts;
 }

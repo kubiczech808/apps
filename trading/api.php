@@ -548,7 +548,7 @@ function state_observation_totals(array $data): array
     }
     $active = max(0, (int) $active);
     $resolved = max(0, (int) $resolved);
-    return ['active' => $active, 'resolved' => $resolved, 'all' => $active + $resolved];
+    return ['active' => $active, 'scraped' => $active, 'resolved' => $resolved, 'all' => $active + $resolved];
 }
 
 /**

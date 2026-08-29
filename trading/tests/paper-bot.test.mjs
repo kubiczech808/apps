@@ -4517,11 +4517,14 @@ test("scraped counts: the UI reports the archive, not the page it was served", a
   assert.match(api, /'observationTotals' => state_observation_totals\(\$data\)/,
     "the true totals must be served alongside the page");
   assert.match(api, /'resolvedTruncated' => \$resolvedTruncated/);
+  assert.match(api, /'scraped' => \$active/,
+    "the active scraped count must be an explicit server total, not a browser page count");
 
-  // And the browser must prefer the reported total over what it received.
+  // And the browser must prefer the reported totals over what it received.
   assert.match(app, /const totals = state\.scrapedObservationTotals;/);
-  assert.match(app, /if \(totals && Number\.isFinite\(Number\(totals\.resolved\)\) && Number\(totals\.resolved\) > counts\.resolved\)/);
-  assert.match(app, /counts\.resolved = Number\(totals\.resolved\);/);
+  assert.match(app, /const scrapedTotal = Number\(totals\.scraped \?\? totals\.active\);/);
+  assert.match(app, /counts\.scraped = scrapedTotal;/);
+  assert.match(app, /counts\.resolved = resolvedTotal;/);
 });
 
 // A manual scan of the `clf` tag on 2026-08-08 exited 0, published nothing and left no log.
