@@ -1,0 +1,29 @@
+name: Trading Live Capital Diagnosis
+
+# Read-only measurement, dispatch only. Places nothing and submits nothing: it asks whether
+# the live account's published cash figure is already net of resting orders, which decides
+# whether the executor's "available USDC" is the account or an artefact of double counting.
+on:
+  workflow_dispatch:
+    inputs:
+      min_order_cost:
+        description: "Exchange minimum order cost to compare against"
+        required: false
+        default: "3.5"
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Diagnose live capital
+        working-directory: trading
+        env:
+          DIAGNOSIS_MIN_ORDER_COST: ${{ inputs.min_order_cost }}
+        run: node tools/live-capital-diagnosis.mjs
