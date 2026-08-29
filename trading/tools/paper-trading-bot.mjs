@@ -174,13 +174,18 @@ const MAX_TRADABLE_SPREAD = Math.max(0, envNumber("PAPER_MAX_TRADABLE_SPREAD", 0
 // What to do with a row that recorded no spread at all. The two sides answer differently,
 // on purpose, because being wrong costs different things.
 //
-// The resolved archive predates spread collection for most of its history. Excluding an
-// unknown historical spread therefore leaves the performance report with only a handful
-// of rows, even though it has tens of thousands of settled observations. Keep rows with
-// no spread record in the historical report, while still excluding every row that has a
-// recorded wide spread. PAPER_COUNT_UNKNOWN_SPREAD=false remains available for a strict
-// audit of only the newer, quoted subset.
-const COUNT_UNKNOWN_SPREAD_AS_TRADABLE = envBool("PAPER_COUNT_UNKNOWN_SPREAD", true);
+// In the statistics an unknown spread is NOT counted, by the owner's decision. The
+// resolved archive predates spread collection for most of its history, so this does leave
+// the performance report measuring far fewer rows than the tens of thousands it holds --
+// that is the intended trade. The report is what parameter choices are made from, and a
+// row priced at the midpoint of a book that may have been arbitrarily wide is not evidence
+// about a trade anyone could have made; including it to raise the row count would inflate
+// exactly the probability bands this gate was added to clean up. Fewer rows that are all
+// real beats many rows of mixed provenance.
+//
+// PAPER_COUNT_UNKNOWN_SPREAD=true is still available for a wider, less strict read of the
+// historical archive.
+const COUNT_UNKNOWN_SPREAD_AS_TRADABLE = envBool("PAPER_COUNT_UNKNOWN_SPREAD", false);
 // At entry it is allowed, which is deliberate rather than lax. Measured on the live repo:
 // the market scan runs roughly every one to three hours and refreshes a bounded page, so on
 // an active catalogue of ~3,900 rows it takes most of a day before every row carries a
@@ -11556,6 +11561,10 @@ if (invokedDirectly) {
 // dashboard shows, plus the guards that keep a stale snapshot out of production.
 export {
   EFFECTIVELY_CERTAIN_MARKET_PROBABILITY,
+  // The two unknown-spread policies, exported so a test can assert against the policy in
+  // force rather than hardcoding one of its two settings and going red when it is changed.
+  COUNT_UNKNOWN_SPREAD_AS_TRADABLE,
+  OPEN_ON_UNKNOWN_SPREAD,
   buildPortfolioOptimisationReport,
   refreshEvaluationAfterProbability,
   PAPER_STRATEGIES,

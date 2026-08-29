@@ -4260,10 +4260,12 @@ try {
             if ($entry === null || $entry < $minProbability || ($maxProbability !== null && $entry >= $maxProbability)) {
                 return true;
             }
-            // Historical report rows without a saved spread remain in the sample: the
-            // archive predates spread collection. Known wide books are still excluded,
-            // and the list has to mirror that same calculation population.
-            if (!observation_spread_is_tradable($item, true)) {
+            // A row with no saved spread is out of the sample, matching the statistics'
+            // PAPER_COUNT_UNKNOWN_SPREAD policy. The two must agree whichever way that
+            // policy is set: this list is opened from a statistics row and has to hold
+            // exactly what the row counted, and a list disagreeing with the number it was
+            // opened from is the complaint this endpoint exists to answer.
+            if (!observation_spread_is_tradable($item)) {
                 return true;
             }
             $labels = simulation_taxonomy_labels($item, $firstField, $currentField);

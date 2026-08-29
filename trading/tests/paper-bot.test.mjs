@@ -8823,11 +8823,20 @@ test("spread: a row is only tradable if something was quoting near it", () => {
   assert.equal(bot.observationSpreadIsTradable({ firstBestAsk: 0.99, firstBestBid: 0.09 }), false);
   assert.equal(bot.observationSpreadIsTradable({ bestAsk: 0.71, bestBid: 0.69 }), true);
 
-  // The resolved archive predates spread storage. Missing historical evidence therefore
-  // stays in the performance report, while a known wide book is still rejected.
+  // What to do with a row that recorded no spread at all is a policy, not a fact, and the
+  // two sides answer it differently on purpose -- so each is asserted against the policy in
+  // force rather than against one of its settings. Hardcoding either turns a deliberate
+  // change of the owner's mind into a red test.
   assert.equal(bot.observationSpread({}), null);
-  assert.equal(bot.observationSpreadIsTradable({}), true);
-  assert.equal(bot.candidateSpreadIsTradable({}), true);
+  assert.equal(bot.observationSpreadIsTradable({}), bot.COUNT_UNKNOWN_SPREAD_AS_TRADABLE,
+    "the statistics must follow PAPER_COUNT_UNKNOWN_SPREAD");
+  assert.equal(bot.candidateSpreadIsTradable({}), bot.OPEN_ON_UNKNOWN_SPREAD,
+    "an entry must follow PAPER_OPEN_ON_UNKNOWN_SPREAD");
+  // They are allowed to differ, and the reason they may is worth stating: refusing every
+  // row the scan has not revisited would idle a portfolio over missing data rather than
+  // over a wide book, while the statistics can afford to wait for evidence.
+  assert.equal(typeof bot.COUNT_UNKNOWN_SPREAD_AS_TRADABLE, "boolean");
+  assert.equal(typeof bot.OPEN_ON_UNKNOWN_SPREAD, "boolean");
   // A recorded wide book is evidence, and it is refused on both sides.
   assert.equal(bot.candidateSpreadIsTradable({ spread: 0.9 }), false);
   assert.equal(bot.observationSpreadIsTradable({ firstSpread: 0.9 }), false);
@@ -8865,15 +8874,24 @@ test("spread: an untradable quote is kept out of the statistics and counted wher
     marketObservations: [row("tradable", 0.02), row("unquoted", 0.9), row("unrecorded", null)],
   }));
 
-  assert.equal(report.sampleSize, 2, "a legacy row without a recorded spread remains measurable");
+  // The row with a recorded 90-point book is out whatever the policy says -- that is the
+  // whole point of the gate, and it is the assertion that must never soften. Whether the
+  // row that recorded no spread at all joins it follows PAPER_COUNT_UNKNOWN_SPREAD, so the
+  // expected sample is derived from the policy rather than fixed at one of its settings.
+  const measurable = bot.COUNT_UNKNOWN_SPREAD_AS_TRADABLE ? 2 : 1;
+  assert.equal(report.sampleSize, measurable,
+    "a recorded wide book is always out; an unrecorded one follows the policy");
   assert.equal(report.spreadScrapedCount, 3, "and the report says how many it started from");
-  assert.equal(report.spreadExcludedCount, 1);
+  assert.equal(report.spreadExcludedCount, 3 - measurable);
   assert.equal(report.maxTradableSpread, 0.05, "the limit in force is published with the count");
   // Nothing was deleted to achieve this: the observations are all still in the state.
   const rule = report.parameterSummaries.find((r) => r.marketType === "all"
     && r.threshold === 0.5 && r.maxResolutionDays === 30 && r.maxProbability == null);
-  assert.equal(rule.trades, 2);
-  assert.equal(report.tagSummaries.find((r) => r.label === "esports")?.trades, 2);
+  assert.equal(rule.trades, measurable);
+  assert.equal(report.tagSummaries.find((r) => r.label === "esports")?.trades, measurable);
+  // Whatever the policy, the tradable row survives and the wide one does not, so the
+  // sample can never be empty here and can never contain the 90-point book.
+  assert.ok(report.sampleSize >= 1 && report.sampleSize <= 2);
 });
 
 test("spread: a portfolio will not open a position it could not have been filled on", () => {
