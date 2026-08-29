@@ -2784,6 +2784,11 @@ test("portfolio parameters: both live portfolios state their order price", () =>
     // across as the real thing for the same reason as the ones above.
     + `${functionSource(app, "normalizeInitialCapital")}\n`
     + `${functionSource(app, "liveInitialCapitalForMode")}\n`
+    // And the stop-loss row, whose label reads the risk multiplier. Pure again, so the
+    // real pair comes across rather than a stub agreeing with the harness.
+    + `${functionSource(app, "normalizeStopLossRiskMultiplier")}\n`
+    + `${functionSource(app, "stopLossRiskMultiplier")}\n`
+    + `${functionSource(app, "stopLossRiskLabel")}\n`
     + `${functionSource(app, "livePortfolioRuleRows")}\nreturn livePortfolioRuleRows;`,
   )(
     { liveState: { portfolio: {} } },
