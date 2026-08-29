@@ -3793,3 +3793,65 @@ test("pacer: the hand-on is retried, because one refused request would stop the 
   // And the success path must stop, or the loop would dispatch a successor five times.
   assert.match(handOn, /Handed on to tick \$\{next\}\."\n\s*exit 0/);
 });
+
+// Reported: a live order opened at 67 in a portfolio whose rule says min probability 70.
+//
+// Reproduced from the live configuration in that run's log -- LIVE_MIN_PROBABILITY 0.7,
+// LIVE_MAX_PROBABILITY 0.85, LIVE_MAX_SPREAD 0.08, post-only limit orders. Qualification
+// tests the market probability, which is Gamma's outcome price or the midpoint of the book;
+// a post-only limit rests at the best bid. Those separate by the spread, so with an
+// eight-point spread allowed, a market qualifying at exactly 70 rests its bid at 67 and
+// opens three points under the floor the portfolio advertises. It is arithmetic, not luck.
+test("live entry: the price actually submitted has to sit inside the portfolio band", () => {
+  const { orderPriceBandRejection } = executor;
+  const band = { min: 0.7, max: 0.85 };
+
+  // The reported case, with the numbers from that run.
+  const reported = orderPriceBandRejection(0.67, { ...band, spread: 0.08 });
+  assert.ok(reported, "a bid three points under the floor must be refused");
+  assert.match(reported, /67\.0%/);
+  assert.match(reported, /8\.0-point spread/, "the reason must name the spread that caused it");
+  assert.match(reported, /70\.0-85\.0%/, "and the band it broke");
+
+  // The ceiling has the same fault mirrored: a taker entry pays the ask, which a wide book
+  // can put above the top of the band.
+  assert.ok(orderPriceBandRejection(0.88, band), "an ask above the ceiling must be refused too");
+  // Inside the band, including exactly on either edge -- the bounds are inclusive, matching
+  // the qualification test they now mirror.
+  assert.equal(orderPriceBandRejection(0.7, band), null);
+  assert.equal(orderPriceBandRejection(0.85, band), null);
+  assert.equal(orderPriceBandRejection(0.78, band), null);
+
+  // A portfolio with no ceiling is only bounded below, and says so.
+  assert.equal(orderPriceBandRejection(0.99, { min: 0.7 }), null);
+  assert.match(orderPriceBandRejection(0.5, { min: 0.7 }), /at least 70\.0%/);
+
+  // An unusable price is refused rather than waved through as "not a number, not outside".
+  for (const bad of [null, undefined, NaN, 0, 1, -0.5, "abc"]) {
+    assert.ok(orderPriceBandRejection(bad, band), `${String(bad)} must not pass the band check`);
+  }
+  // With no floor configured there is no rule to break, and the check must not invent one.
+  assert.equal(orderPriceBandRejection(0.67, { min: null }), null);
+  assert.equal(orderPriceBandRejection(0.67, {}), null);
+});
+
+test("live entry: the band is checked against the submitted price, not the midpoint", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const source = await readFile(new URL("../tools/live-order-executor.mjs", import.meta.url), "utf8");
+  const bot = await readFile(new URL("../tools/paper-trading-bot.mjs", import.meta.url), "utf8");
+
+  // The check has to sit on `price` -- what orderPriceForBook returned, which is what the
+  // order will carry -- and it has to run before the order is sized and submitted.
+  const guard = source.indexOf("const outOfBand = orderPriceBandRejection(price, {");
+  assert.ok(guard > 0, "the submitted price must be band-checked");
+  assert.ok(guard > source.indexOf("const price = orderPriceForBook(book, tick"),
+    "the check must come after the price is known");
+  assert.ok(guard < source.indexOf("const orderSizing = sharesForOrder({"),
+    "and before the order is sized, so a refused price never reaches the exchange");
+
+  // Parity with the paper bot, which has always checked its band against the real entry:
+  // a limit-order portfolio qualifies on the best bid it will rest at, not on the midpoint.
+  // The two behaving differently on identical settings is the bug this closes.
+  assert.match(bot, /if \(strategy\.useLimitOrders\) \{\n\s+const limitEntry = numericOrNaN\(item\.bestBid\);/,
+    "the paper bot must still qualify a limit-order portfolio on its resting price");
+});

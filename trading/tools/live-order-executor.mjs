@@ -2361,6 +2361,46 @@ function scoreEconomics({ probability, qualificationProbability, annualizedRetur
   };
 }
 
+// Whether the price that will actually be submitted sits inside the portfolio's
+// probability band, and if not, why. Returns null when the price is fine.
+//
+// The band is a rule about what this portfolio enters at, but qualification checks it
+// against the market probability -- Gamma's outcome price, or the midpoint of the book --
+// while a post-only limit rests at the best bid. Those two numbers separate by the spread,
+// so the rule was being applied to a different number from the one the order carried.
+//
+// Reported, and reproduced from the live configuration: with the band at 70-85 and
+// LIVE_MAX_SPREAD at 8 points, a market qualifying at exactly 70 rests its bid at 67 and
+// opens a position three points under the floor the portfolio advertises. A taker entry
+// has the same fault mirrored, paying an ask that can sit above the ceiling. Nothing
+// downstream catches it: the performance report buckets a trade by its entry price, so the
+// portfolio's own report would file trades in bands it says it does not trade.
+//
+// The paper bot has always had this right -- portfolioProbabilityForStrategy() returns the
+// best bid for a limit-order portfolio, so its band is checked against the real entry --
+// which is why the two behaved differently on identical settings. This restores the parity.
+//
+// The price is deliberately not clamped up to the floor instead: raising a bid to satisfy a
+// label spends more real money for the same position, and a rejection is reversible where a
+// filled order is not.
+function orderPriceBandRejection(price, { min, max = null, spread = null } = {}) {
+  const entry = validProbability(price);
+  const floor = Number(min);
+  if (!Number.isFinite(floor)) return null;
+  const ceiling = max == null ? null : Number(max);
+  const withinFloor = entry != null && entry >= floor;
+  const withinCeiling = entry != null && (ceiling == null || !Number.isFinite(ceiling) || entry <= ceiling);
+  if (withinFloor && withinCeiling) return null;
+  const band = ceiling == null || !Number.isFinite(ceiling)
+    ? `at least ${(floor * 100).toFixed(1)}%`
+    : `${(floor * 100).toFixed(1)}-${(ceiling * 100).toFixed(1)}%`;
+  const shown = entry == null ? "-" : `${(entry * 100).toFixed(1)}%`;
+  const spreadNote = Number.isFinite(Number(spread))
+    ? ` on a ${(Number(spread) * 100).toFixed(1)}-point spread`
+    : "";
+  return `order price ${shown}${spreadNote} is outside the portfolio band ${band}`;
+}
+
 function orderPriceForBook(book, tick, { forceTakerEntry = false } = {}) {
   // Completing a rotation buys what the sell leg already paid for, so it takes the ask
   // instead of resting under it. Resting here is what left the swap half-done.
@@ -2518,6 +2558,42 @@ async function revalidateEvaluation(
   }
   if (USE_LIMIT_ORDERS && POST_ONLY && !takerEntry && book.bestAsk != null && price >= book.bestAsk) {
     return { candidate: evaluation, eligible: false, rejectReasons: ["post-only limit would cross current ask"] };
+  }
+  // The probability band is a rule about what this portfolio enters at, and `price` is
+  // what it would actually enter at -- which is not the number the band was checked
+  // against. Qualification below uses the market probability: Gamma's outcome price, or
+  // the midpoint of the book. A post-only limit rests at the best bid instead, and those
+  // two numbers separate by the spread.
+  //
+  // Reported, and reproduced from the live configuration: with the band at 70-85 and
+  // LIVE_MAX_SPREAD at 8 points, a market qualifying at exactly 70 can rest its bid at 67
+  // and open a position three points under the floor the portfolio advertises. A taker
+  // entry has the same fault mirrored -- it pays the ask, which can sit above the ceiling.
+  // Nothing downstream catches it either: the performance report buckets a trade by its
+  // entry price, so the portfolio's own report would file trades in bands it says it does
+  // not trade.
+  //
+  // So the price that will really be submitted is checked against the same band. It is
+  // deliberately not clamped up to the floor instead: raising a bid to satisfy a label
+  // spends more real money for the same position, and a rejection is reversible where a
+  // filled order is not.
+  const outOfBand = orderPriceBandRejection(price, {
+    min: MIN_PROBABILITY,
+    max: MAX_PROBABILITY,
+    spread: book.spread,
+  });
+  if (outOfBand) {
+    return {
+      candidate: evaluation,
+      eligible: false,
+      status: "REJECTED",
+      rejectReasons: [outOfBand],
+      currentPrice: price,
+      currentBestBid: book.bestBid,
+      currentBestAsk: book.bestAsk,
+      currentSpread: book.spread,
+      minOrderSize,
+    };
   }
 
   const estimatedFeeRate = feeRateForEvaluation(evaluation);
@@ -4931,6 +5007,7 @@ export {
   positionRotationEconomics,
   rotationNetProfitGuard,
   orderPriceForBook,
+  orderPriceBandRejection,
   sharesForOrder,
   prepareLiveCandidatePool,
   liveRevalidationUpdate,
