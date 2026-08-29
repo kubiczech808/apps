@@ -3711,7 +3711,7 @@ function renderTradeRows(trades, emptyText, options = {}) {
   const rows = sortedTrades(trades, tableKey);
   const tableClass = showStatus ? "closed-trades-table" : "opened-trades-table";
   return `
-    <div class="ledger-scroll" tabindex="0" aria-label="Scrollable trade table">
+    <div class="ledger-scroll trade-ledger-scroll" tabindex="0" aria-label="Trade table">
     <table class="ledger-wide-table ${tableClass}">
       <thead>
         <tr>

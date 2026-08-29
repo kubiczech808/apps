@@ -1615,3 +1615,16 @@ test("opened positions: Volume replaces R/R and is re-read on every mark", async
   assert.match(cell({}), /-<\/span>/);
   assert.equal(cell({ volumeUsdc: 1234 }), "$1234");
 });
+
+test("trade ledgers: opened and closed trades become mobile cards without horizontal scrolling", () => {
+  assert.match(APP, /class="ledger-scroll trade-ledger-scroll"/,
+    "trade tables need their own wrapper so other wide ledgers can keep horizontal scrolling");
+  assert.match(CSS, /\.trade-ledger-scroll\s*\{\s*overflow-x: visible;/,
+    "the mobile trade wrapper must not horizontally scroll");
+  assert.match(CSS, /\.trade-ledger-scroll \.opened-trades-table tr,[\s\S]*?\.trade-ledger-scroll \.closed-trades-table tr \{[\s\S]*?display: grid;/,
+    "each trade row should render as a boxed card on phones");
+  assert.match(CSS, /\.trade-ledger-scroll \.opened-trades-table td::before,[\s\S]*?content: attr\(data-label\);/,
+    "every cell keeps its column label inside the card");
+  assert.match(CSS, /\.trade-ledger-scroll \.opened-trades-table \.trade-market-cell,[\s\S]*?grid-column: 1 \/ -1;/,
+    "the market cell gets the full card width so long event names wrap cleanly");
+});

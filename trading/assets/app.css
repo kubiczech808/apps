@@ -2834,6 +2834,100 @@ body.modal-open {
     max-width: 100%;
   }
 
+  .trade-ledger-scroll {
+    overflow-x: visible;
+    overflow-y: visible;
+    padding-bottom: 0;
+    touch-action: pan-y;
+  }
+
+  .ledger .trade-ledger-scroll .opened-trades-table,
+  .ledger .trade-ledger-scroll .closed-trades-table {
+    display: block;
+    width: 100%;
+    min-width: 0;
+  }
+
+  .trade-ledger-scroll .opened-trades-table thead,
+  .trade-ledger-scroll .closed-trades-table thead {
+    display: none;
+  }
+
+  .trade-ledger-scroll .opened-trades-table tbody,
+  .trade-ledger-scroll .closed-trades-table tbody {
+    display: grid;
+    gap: 10px;
+  }
+
+  .trade-ledger-scroll .opened-trades-table tr,
+  .trade-ledger-scroll .closed-trades-table tr {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px 12px;
+    width: 100%;
+    margin-bottom: 0;
+    padding: 10px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: #ffffff;
+  }
+
+  .trade-ledger-scroll .opened-trades-table td,
+  .trade-ledger-scroll .closed-trades-table td {
+    display: grid;
+    grid-template-columns: minmax(72px, 0.8fr) minmax(0, 1fr);
+    gap: 6px;
+    align-items: start;
+    min-width: 0;
+    padding: 0;
+    border-bottom: 0;
+  }
+
+  .trade-ledger-scroll .opened-trades-table td::before,
+  .trade-ledger-scroll .closed-trades-table td::before {
+    content: attr(data-label);
+    color: var(--muted);
+    font-size: 11px;
+    font-weight: 850;
+    line-height: 1.25;
+    text-transform: uppercase;
+  }
+
+  .trade-ledger-scroll .opened-trades-table .trade-market-cell,
+  .trade-ledger-scroll .closed-trades-table .trade-market-cell {
+    order: -1;
+    grid-column: 1 / -1;
+    grid-template-columns: 1fr;
+    gap: 7px;
+    width: auto;
+    min-width: 0;
+    max-width: none;
+    padding-bottom: 10px;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .trade-ledger-scroll .opened-trades-table .trade-market-cell::before,
+  .trade-ledger-scroll .closed-trades-table .trade-market-cell::before {
+    content: none;
+  }
+
+  .trade-ledger-scroll .trade-market-cell .market-link strong,
+  .trade-ledger-scroll .trade-market-cell .market-link span {
+    max-width: 100%;
+    overflow-wrap: anywhere;
+    white-space: normal;
+  }
+
+  .trade-ledger-scroll .trade-price-summary {
+    white-space: normal;
+  }
+
+  .trade-ledger-scroll .trade-analysis-text {
+    display: block !important;
+    max-width: 100% !important;
+    -webkit-line-clamp: initial;
+  }
+
   .trade-analysis-text {
     max-width: 100% !important;
   }
