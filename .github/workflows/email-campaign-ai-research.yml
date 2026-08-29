@@ -1,12 +1,8 @@
 name: Email Campaign AI Research
 
 on:
-  # AI research ma vlastni endpoint a bezi co peti minut. Hodinovy interval byl duvod,
-  # proc se za den zpracovaly jednotky zaznamu: jeden tik zvladne nekolik kroku, ale
-  # kdyz prijde jednou za hodinu, je celkovy vykon dany prave tim. Soubeh nehrozi -
-  # aplikace drzi zamek a preskoci tik, dokud predchozi beh nedobehne.
-  schedule:
-    - cron: '*/5 * * * *'
+  # Automatika je zastavena na zadost - zadny scheduled trigger. Endpoint jde spustit
+  # jen rucne (workflow_dispatch), kdyby bylo potreba jednorazove overeni.
   workflow_dispatch:
 
 concurrency:
