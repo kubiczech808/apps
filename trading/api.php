@@ -1168,12 +1168,25 @@ function is_active_scraped_market_observation(array $item): bool
     if ($probability < 0.5 || $probability >= 1) {
         return false;
     }
-    $scheduledEvent = strtotime((string) ($item['scheduledEventDate'] ?? ''));
-    if ($scheduledEvent !== false && $scheduledEvent <= time()) {
-        return false;
-    }
-    $endDate = strtotime((string) ($item['endDate'] ?? $item['resolutionEndDate'] ?? ''));
-    return $endDate === false || $endDate > time();
+    // A passed date is not a resolution. Gamma's end date and scheduled start are
+    // frequently wrong -- a fixture is rescheduled, a market is listed with a placeholder
+    // date, an event runs long -- and Polymarket goes on accepting orders throughout.
+    // Dropping those rows here meant a market that was still tradable never reached the
+    // execution shortlist at all, so the opportunity was refused on the strength of a date
+    // rather than on anything the exchange said.
+    //
+    // The checks above are what actually decide it, and they read the exchange rather than
+    // the calendar: a resolved, closed, expired or settled status, or a resolution status
+    // of pending/final-price/not-accepting-orders. Those are set by the scan from the
+    // market's own state, so "really resolved" has evidence behind it. Until that evidence
+    // arrives the row stays a candidate.
+    //
+    // Keeping them is safe because nothing trades on this list alone: the live executor
+    // revalidates every candidate against the CLOB before it orders, and refuses one whose
+    // market is not accepting orders. A stale row therefore costs a revalidation call, not
+    // a bad order -- which is the right way round, because the reverse cost a real
+    // opportunity every time a date was wrong.
+    return true;
 }
 
 /**

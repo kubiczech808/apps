@@ -1628,3 +1628,73 @@ test("trade ledgers: opened and closed trades become mobile cards without horizo
   assert.match(CSS, /\.trade-ledger-scroll \.opened-trades-table \.trade-market-cell,[\s\S]*?grid-column: 1 \/ -1;/,
     "the market cell gets the full card width so long event names wrap cleanly");
 });
+
+// Requested: the candidates list must keep considering a market whose resolution datetime
+// has passed, until an update confirms the event is really resolved. Gamma's end dates and
+// scheduled starts are frequently wrong -- a fixture is rescheduled, a market carries a
+// placeholder date, an event runs long -- and Polymarket goes on accepting orders
+// throughout. Dropping those rows meant a still-tradable opportunity never reached the
+// execution shortlist, refused on the strength of a date rather than on anything the
+// exchange had said.
+test("candidates: a passed date is not a resolution, but exchange state is", () => {
+  const directory = mkdtempSync(join(tmpdir(), "active-observation-"));
+  try {
+    const cut = API.indexOf("\ntry {");
+    const definitions = join(directory, "definitions.php");
+    mkdirSync(join(directory, "data"), { recursive: true });
+    writeFileSync(definitions, API.slice(0, cut) + "\n");
+    const ask = (rows) => {
+      const encoded = Buffer.from(JSON.stringify(rows)).toString("base64");
+      return JSON.parse(execFileSync("php", ["-r",
+        `require '${definitions}';`
+        + ` $rows = json_decode(base64_decode('${encoded}'), true);`
+        + ` echo json_encode(array_map(fn($r) => [`
+        + `   is_active_scraped_market_observation($r),`
+        + `   is_resolved_scraped_market_observation($r),`
+        + ` ], $rows));`,
+      ], { encoding: "utf8" }));
+    };
+
+    const past = "2020-01-01T00:00:00Z";
+    const future = "2099-01-01T00:00:00Z";
+    const [
+      endedButTrading, startedButTrading, bothPast, stillAhead,
+      closedStatus, settling, tooCheap, certain,
+    ] = ask([
+      // The reported case: the end date has passed and the market is still quoting.
+      { marketProbability: 0.75, endDate: past },
+      // A fixture whose scheduled start has passed but which is still accepting orders.
+      { marketProbability: 0.75, scheduledEventDate: past, endDate: future },
+      { marketProbability: 0.75, scheduledEventDate: past, endDate: past },
+      { marketProbability: 0.75, endDate: future },
+      // Evidence from the exchange, which is what actually decides it.
+      { marketProbability: 0.75, endDate: future, status: "RESOLVED" },
+      { marketProbability: 0.75, endDate: future, resolutionStatus: "NOT_ACCEPTING_ORDERS" },
+      // The probability band is untouched by any of this.
+      { marketProbability: 0.42, endDate: future },
+      { marketProbability: 1, endDate: future },
+    ]);
+
+    assert.deepEqual(endedButTrading, [true, false],
+      "a market past its end date is still a candidate until something says it resolved");
+    assert.deepEqual(startedButTrading, [true, false],
+      "so is one whose scheduled start has passed");
+    assert.deepEqual(bothPast, [true, false]);
+    assert.deepEqual(stillAhead, [true, false]);
+
+    // Only the exchange's own word removes it, and then it belongs to the resolved list.
+    assert.deepEqual(closedStatus, [false, true], "a resolved status is what ends candidacy");
+    assert.deepEqual(settling, [false, true], "as is a market that stopped accepting orders");
+
+    // Unchanged rules, so widening the date test cannot have quietly widened these.
+    assert.deepEqual(tooCheap, [false, false], "below the band is neither active nor resolved");
+    assert.deepEqual(certain, [false, false]);
+
+    // The two lists must stay disjoint, or a row would be counted twice in the tab totals.
+    for (const [active, resolved] of [endedButTrading, closedStatus, settling, stillAhead]) {
+      assert.ok(!(active && resolved), "a row cannot be both an active candidate and resolved");
+    }
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
