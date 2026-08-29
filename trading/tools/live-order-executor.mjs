@@ -1244,19 +1244,29 @@ function orderWasSubmittedByThisPortfolio(order, identity) {
   return false;
 }
 
-function availableLiveCashUsdc(liveState, grossCash = liveCashUsdc(liveState), executionState = null) {
-  // CLOB collateral is the account balance before the notional locked in pending BUY
-  // orders -- but the two live portfolios share one wallet, and 5050 rests many bids at
-  // once. Counting those against this portfolio left it reading zero free cash and
-  // skipping every candidate while the account was otherwise idle. It now reserves
-  // against its own submissions only.
-  //
-  // The exchange still reserves for all of them: if the other portfolio really has the
-  // balance committed, a submission here comes back refused for collateral. That is an
-  // outcome this run already handles and counts, and it is the exchange's call to make
-  // rather than a reason to decline to ask.
-  const identity = executionState ? ownSubmittedOrderIdentity(executionState) : null;
-  return Math.max(0, number(grossCash, 0) - activeBuyOrderReservationUsdc(liveState, identity));
+// Capital available for a new order: the account total minus what is held in open
+// POSITIONS. That is the owner's rule, and the account confirms it is the right one.
+//
+// This used to subtract the portfolio's own resting BUY notional as well, on the belief --
+// stated in a comment, never measured -- that CLOB collateral is the balance "before" the
+// notional locked by pending buys. Measured on the live account
+// (tools/live-capital-diagnosis.mjs): collateral 32.3788, positions 60.4041, equity
+// 92.7829, and equity minus (collateral + positions) is exactly 0.0000. So the collateral
+// figure is already the whole uncommitted balance, and resting bids are not escrowed
+// against it -- Polymarket checks collateral when an order matches, not when it rests.
+// Subtracting 39.9657 of resting notional from 32.3788 of real cash clamped the result to
+// zero and skipped every candidate with "available USDC cannot cover Polymarket's current
+// minimum order size", while the wallet held 32 USDC that nothing had spent.
+//
+// Since collateral already excludes nothing but what is genuinely gone, cash is exactly
+// "total minus open positions" and needs no further deduction. The consequence is worth
+// stating rather than discovering: this portfolio may now rest orders totalling more than
+// its cash -- it already does, 39.97 resting against 32.38 -- so if several fill at once
+// the later fills come back refused for collateral. That refusal costs a run rather than
+// money, it is an outcome this executor already handles and counts, and it is the
+// exchange's call to make rather than a reason to decline to ask.
+function availableLiveCashUsdc(liveState, grossCash = liveCashUsdc(liveState)) {
+  return Math.max(0, number(grossCash, 0));
 }
 
 function daysValue(item) {
@@ -4211,7 +4221,10 @@ async function main() {
     liveState,
     ownSubmittedOrderIdentity(previousExecution),
   );
-  const availableCash = availableLiveCashUsdc(liveState, cash, previousExecution);
+  // The reservations above stay reported so the run shows what the account has resting,
+  // but they no longer reduce what this portfolio may spend: a resting bid is a claim on
+  // collateral at match time, not money already gone.
+  const availableCash = availableLiveCashUsdc(liveState, cash);
   const portfolioValue = livePortfolioValue(liveState, cash);
   const legacyFractionNotional = portfolioValue * MAX_ORDER_FRACTION;
   const configuredStakeUsdc = Number.isFinite(LIVE_STAKE_USDC) && LIVE_STAKE_USDC > 0

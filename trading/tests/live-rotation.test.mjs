@@ -1949,24 +1949,56 @@ const restingBid = (id, tokenId, notional) => ({
   id, tokenId, side: "BUY", status: "LIVE", price: 0.5, remainingSize: notional / 0.5, notionalUsdc: notional,
 });
 
-test("live cash: the other portfolio's resting bids no longer spend this one's balance", () => {
+// Capital available for a new order is the account total minus what is held in open
+// POSITIONS. Resting bids are not deducted, because they are not spent.
+//
+// This used to subtract the portfolio's own resting BUY notional, on the belief -- stated
+// in a comment and never measured -- that CLOB collateral is the balance before the
+// notional locked by pending buys. Measured on the live account
+// (tools/live-capital-diagnosis.mjs): collateral 32.3788, positions 60.4041, equity
+// 92.7829, and equity minus (collateral + positions) is exactly 0.0000. The collateral
+// figure is therefore already the whole uncommitted balance and resting bids are not
+// escrowed against it -- Polymarket checks collateral when an order matches, not when it
+// rests. Subtracting 39.9657 of resting notional from 32.3788 of real cash clamped the
+// result to zero and skipped every candidate for want of money the wallet was holding.
+test("live cash: a resting bid is a claim at match time, not cash already spent", () => {
   const api = liveCashApi();
   const liveState = {
     account: { cashUsdc: 42.5 },
     openOrders: Array.from({ length: 8 }, (_, index) => restingBid(`o-5050-${index}`, `10${index}`, 5)),
   };
 
-  // The whole-wallet total is unchanged and still reported.
+  // The whole-wallet total is still computed and still reported in the run digest: what
+  // the account has resting is worth seeing, it just no longer reduces what may be spent.
   assert.equal(api.activeBuyOrderReservationUsdc(liveState), 40);
-  // Which is what used to leave Live with nothing to trade.
-  assert.equal(api.availableLiveCashUsdc(liveState, 42.5), 2.5);
 
-  // Nothing placed by Live: the whole account cash is available to it.
-  const noHistory = { runLog: [{ attempts: [] }] };
-  assert.equal(api.availableLiveCashUsdc(liveState, 42.5, noHistory), 42.5);
+  // The balance is available in full, whoever placed those bids.
+  assert.equal(api.availableLiveCashUsdc(liveState, 42.5), 42.5);
+  // Including when this portfolio placed them itself. 40 resting against 42.5 of cash is
+  // the ordinary state of a deployed account, not a reason to stop trading.
+  const own = {
+    account: { cashUsdc: 42.5 },
+    openOrders: [restingBid("o-live-1", "999", 12)],
+  };
+  assert.equal(api.availableLiveCashUsdc(own, 42.5), 42.5);
+
+  // The reported figure is the cash, never negative, and never invented from nothing.
+  assert.equal(api.availableLiveCashUsdc(liveState, -5), 0, "a negative balance reads as nothing to spend");
+  assert.equal(api.availableLiveCashUsdc(liveState, 0), 0);
+  assert.equal(api.availableLiveCashUsdc(liveState, "abc"), 0, "an unreadable balance is not spendable");
+
+  // The exact case from the reported SKIP: 32.3788 of cash with 39.9657 resting. The old
+  // rule made this 0.00 and refused a 3.50 exchange minimum; the account had the money.
+  const reported = {
+    account: { cashUsdc: 32.3788 },
+    openOrders: [restingBid("o-1", "1", 39.9657)],
+  };
+  assert.equal(api.availableLiveCashUsdc(reported, 32.3788), 32.3788);
+  assert.ok(api.availableLiveCashUsdc(reported, 32.3788) > 3.5,
+    "the run that skipped for want of 3.50 USDC was holding 32.38");
 });
 
-test("live cash: this portfolio's own resting bid is still reserved", () => {
+test("live cash: order attribution still works, because the run still reports it", () => {
   const api = liveCashApi();
   const liveState = {
     account: { cashUsdc: 42.5 },
@@ -1985,14 +2017,18 @@ test("live cash: this portfolio's own resting bid is still reserved", () => {
       ],
     }],
   };
-  assert.equal(api.availableLiveCashUsdc(liveState, 42.5, history), 30.5);
-
+  // Which orders are this portfolio's is still needed -- the digest separates the wallet's
+  // resting total from this portfolio's own -- so the identity rules stay pinned even
+  // though they no longer gate spending.
   const identity = api.ownSubmittedOrderIdentity(history);
   assert.deepEqual([...identity.orderIds], ["o-live-1"]);
   assert.deepEqual([...identity.tokenIds], [], "a refused attempt contributes no token to fall back on");
+  assert.equal(api.activeBuyOrderReservationUsdc(liveState, identity), 12,
+    "only this portfolio's own resting bid counts as its own");
+  assert.equal(api.activeBuyOrderReservationUsdc(liveState), 52, "the wallet total counts them all");
 });
 
-test("live cash: an accepted order with no id falls back to its token", () => {
+test("live cash: an accepted order with no id is still attributed by its token", () => {
   const api = liveCashApi();
   const liveState = {
     account: { cashUsdc: 20 },
@@ -2001,7 +2037,10 @@ test("live cash: an accepted order with no id falls back to its token", () => {
   // Some accepted responses carry no order id. The token is the only key left, and here
   // it is safe: the attempt succeeded, so the resting order on it is this portfolio's.
   const history = { runLog: [{ attempts: [{ tokenId: "999", response: { success: true } }] }] };
-  assert.equal(api.availableLiveCashUsdc(liveState, 20, history), 8);
+  const identity = api.ownSubmittedOrderIdentity(history);
+  assert.equal(api.activeBuyOrderReservationUsdc(liveState, identity), 12);
+  // And the balance is untouched by it either way.
+  assert.equal(api.availableLiveCashUsdc(liveState, 20), 20);
 });
 
 // Asked for: a resolution date in the past must report the real negative horizon, not the
