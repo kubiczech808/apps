@@ -4043,6 +4043,18 @@ async function reviewOpenOrders({ liveState, evaluationByToken, eligible, rotati
 
         if (revalidated.status !== "ELIGIBLE") {
           review.reason = `current revalidation no longer satisfies live rules: ${(revalidated.rejectReasons || []).join("; ") || "not eligible"}; existing order kept because no replacement can be submitted atomically in this review${breachNote}`;
+        } else if (betterCandidate && betterCandidateNeedsReleasedCapital && !LIVE_AUTO_ROTATE) {
+          // Automatic rotation is off, and cancelling a resting order to fund a different
+          // one is a replacement whichever way it is labelled: the portfolio ends up
+          // holding something it did not hold before, chosen by the machine. Reported
+          // against a run whose settings said LIVE_AUTO_ROTATE=false while the digest
+          // recorded CANCELED_FOR_BETTER_CANDIDATE -- the switch gated position rotation
+          // only, and this path had never been gated at all.
+          //
+          // Everything else the review does still runs: expiry sweeps, keep-waiting, and
+          // withdrawing an order whose market no longer qualifies. Only the machine's own
+          // decision to swap one order for another is what the switch turns off.
+          review.reason = `${comparison.metricLabel} priority would support replacing this order, but automatic rotation is off for this portfolio, so it is kept${breachNote}`;
         } else if (betterCandidate && betterCandidateNeedsReleasedCapital) {
           review.action = "CANCEL_FOR_BETTER_CANDIDATE";
           // Keep the freshly validated order payload. After the cancellation
@@ -4290,8 +4302,15 @@ async function main() {
   const hasUsableFreeCash = availableCash > 0.01;
   const needsCapitalRotation = !eligible.length && cashSizingBlocked.length > 0;
   const needsRiskReplacement = !eligible.length && !needsCapitalRotation && riskBlockedCandidates.length > 0;
+  // With automatic rotation off there is nothing this review can act on, so running it
+  // spends exchange calls to fill the run log with replacements that will never happen --
+  // which is what made a run with LIVE_AUTO_ROTATE=false read as though the executor were
+  // trying to replace positions anyway. A risk replacement is the one exception: that is
+  // a diversification breach being corrected rather than an optimisation, and it must
+  // still be surfaced whatever the rotation switch says.
   const rotationReview = !ROTATION_COMPLETION_RUN
     && !eligible.length
+    && (LIVE_AUTO_ROTATE || needsRiskReplacement)
     && (needsCapitalRotation || needsRiskReplacement)
     ? await reviewPositionRotation({
         liveState,

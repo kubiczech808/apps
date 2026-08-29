@@ -3855,3 +3855,51 @@ test("live entry: the band is checked against the submitted price, not the midpo
   assert.match(bot, /if \(strategy\.useLimitOrders\) \{\n\s+const limitEntry = numericOrNaN\(item\.bestBid\);/,
     "the paper bot must still qualify a limit-order portfolio on its resting price");
 });
+
+// Reported: the run log showed the executor replacing a position while the portfolio had
+// automatic rotation switched off.
+//
+// Confirmed from that run's own digest: LIVE_AUTO_ROTATE was false, and it still recorded
+// `positionsReviewedForRotation=12, rotationAvailable=True` and an open-order decision of
+// CANCELED_FOR_BETTER_CANDIDATE. The switch gated the position-rotation *action* and the
+// wording around it, but not the review that produces those lines -- and it never gated
+// the open-order path at all, which is the one that actually cancelled something.
+test("auto-rotate off: nothing is swapped for something better on the machine's own initiative", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const source = await readFile(new URL("../tools/live-order-executor.mjs", import.meta.url), "utf8");
+
+  // Cancelling a resting order to fund a different one is a replacement whichever way it
+  // is labelled: the portfolio ends up holding something it did not hold before, chosen
+  // without being asked. With rotation off it must be declined, and say so.
+  assert.match(source, /\} else if \(betterCandidate && betterCandidateNeedsReleasedCapital && !LIVE_AUTO_ROTATE\) \{/,
+    "the open-order replacement path must respect the rotation switch");
+  const declined = source.slice(source.indexOf("betterCandidateNeedsReleasedCapital && !LIVE_AUTO_ROTATE"));
+  assert.match(declined.slice(0, 1200), /automatic rotation is off for this portfolio, so it is kept/,
+    "and the run log must say why the order was kept");
+  // The declining branch must come first, or the original one still fires.
+  assert.ok(
+    source.indexOf("betterCandidateNeedsReleasedCapital && !LIVE_AUTO_ROTATE")
+      < source.indexOf('review.action = "CANCEL_FOR_BETTER_CANDIDATE";'),
+    "the guard has to be evaluated before the cancellation it guards",
+  );
+
+  // The position review is skipped entirely rather than run and reported: with rotation
+  // off it can act on nothing, so running it only spends exchange calls to fill the log
+  // with replacements that will never happen.
+  assert.match(source, /&& \(LIVE_AUTO_ROTATE \|\| needsRiskReplacement\)\n\s+&& \(needsCapitalRotation \|\| needsRiskReplacement\)/,
+    "position rotation review must not run when rotation is off");
+
+  // A risk replacement is the deliberate exception. It corrects a diversification breach
+  // rather than chasing a better number, so it must survive the switch -- a portfolio
+  // holding a conflicting position needs to be told regardless.
+  assert.match(source, /needsRiskReplacement/);
+  const gate = /const rotationReview = !ROTATION_COMPLETION_RUN[\s\S]*?: null;/.exec(source);
+  assert.ok(gate, "the rotation review gate must be findable");
+  assert.ok(gate[0].includes("LIVE_AUTO_ROTATE || needsRiskReplacement"),
+    "a risk replacement must still be reviewed with rotation off");
+
+  // Everything else the order review does is untouched: an expired or no-longer-qualifying
+  // order still has to be dealt with, or turning rotation off would strand stale orders.
+  assert.match(source, /expiredOrderWithdrawalReason/);
+  assert.match(source, /KEEP_WAITING/);
+});
