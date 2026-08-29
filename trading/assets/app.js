@@ -674,19 +674,20 @@ function byEquityDescending(modes) {
   });
 }
 
-// Asked for: the portfolio holding the most equity is the one that opens. It runs once
-// per page load, as soon as any equity is actually known, and never after the reader has
-// picked a tab -- so it decides the first view without overriding a deliberate choice.
-// Equity arrives with the state, not with the markup, so this cannot be decided at
-// startup: the stored mode opens first and this corrects it on the first payload.
+// Asked for: live portfolios are the default landing group. It runs once per page load
+// and never after the reader has picked a tab -- so it decides the first view without
+// overriding a deliberate choice. Paper-only ordering still waits for equity, because
+// otherwise the first empty payload would permanently pick the fallback order.
 function preselectRichestPortfolio() {
   if (state.portfolioPreselectDone) return;
-  const [richest] = dashboardModes();
-  // Nothing loaded yet: leave the flag clear so the next payload gets a turn.
-  if (!richest || portfolioEquityUsdc(richest) == null) return;
+  const [preferred] = dashboardModes();
+  // Nothing loaded yet for a paper-only dashboard: leave the flag clear so the next
+  // payload gets a turn. Live portfolios are intentionally selected first even before
+  // their wallet numbers arrive.
+  if (!preferred || (!isLivePortfolioMode(preferred) && portfolioEquityUsdc(preferred) == null)) return;
   state.portfolioPreselectDone = true;
-  if (normalizeMode(richest) === normalizeMode(state.mode)) return;
-  state.mode = normalizeMode(richest);
+  if (normalizeMode(preferred) === normalizeMode(state.mode)) return;
+  state.mode = normalizeMode(preferred);
   saveMode(state.mode);
   state.runLogFilters = storedRunLogFilter(state.mode);
   // The dashboard payload carries the trades of the selected portfolio only, so the
@@ -694,13 +695,15 @@ function preselectRichestPortfolio() {
   loadDashboardState();
 }
 
-// Every mode the dashboard can show, in tab order: richest portfolio first.
+// Every mode the dashboard can show, in tab order: live portfolios first, then paper.
+// Each group keeps the existing equity ordering internally.
 function dashboardModes() {
   const customLiveModes = Object.keys((state.portfolioConfig || {}).livePortfolios || {})
     .filter((id) => CUSTOM_PAPER_STRATEGY_ID.test(id))
     .map((id) => `live-custom-${id}`);
   const liveModes = ["live", "live-5050", ...customLiveModes].filter((mode) => !portfolioIsArchived(mode));
-  return byEquityDescending([...paperStrategyIds().map((id) => `paper-${id}`), ...liveModes]);
+  const paperModes = paperStrategyIds().map((id) => `paper-${id}`);
+  return [...byEquityDescending(liveModes), ...byEquityDescending(paperModes)];
 }
 
 function defaultPortfolioNameForMode(mode = state.mode) {

@@ -297,8 +297,8 @@ test("dashboard: the tab row is built from the saved portfolios, archived ones l
   };
   const api = run({ mode: "paper-conservative", portfolioConfig: config });
   assert.deepEqual(api.dashboardModes(),
-    ["paper-conservative", "paper-highReward", "paper-moreProbable", "paper-esports", "live", "live-5050"],
-    "archived portfolios leave the dashboard and created ones join it");
+    ["live", "live-5050", "paper-conservative", "paper-highReward", "paper-moreProbable", "paper-esports"],
+    "live portfolios lead the dashboard, archived portfolios leave it and created ones join it");
   assert.deepEqual(api.paperStrategyIds({ includeArchived: true }),
     ["conservative", "highReward", "moreProbable", "equal", "esports"]);
   assert.equal(api.portfolioIsArchived("paper-equal"), true);
@@ -339,13 +339,13 @@ test("dashboard: an archived 5050 leaves the tab row too, the plain live portfol
   assert.equal(archived5050.portfolioIsArchived("live"), false,
     "archiving 5050 must not also archive the plain live portfolio -- they are different config keys");
   assert.deepEqual(archived5050.dashboardModes(),
-    ["paper-conservative", "paper-highReward", "paper-moreProbable", "paper-equal", "live"],
+    ["live", "paper-conservative", "paper-highReward", "paper-moreProbable", "paper-equal"],
     "an archived 5050 leaves the tab row, the same as an archived paper portfolio would");
 
   const neither = run({ mode: "live", portfolioConfig: {} });
   assert.equal(neither.portfolioIsArchived("live-5050"), false);
   assert.deepEqual(neither.dashboardModes(),
-    ["paper-conservative", "paper-highReward", "paper-moreProbable", "paper-equal", "live", "live-5050"],
+    ["live", "live-5050", "paper-conservative", "paper-highReward", "paper-moreProbable", "paper-equal"],
     "unarchived, both live tabs still show exactly as before this feature existed");
 });
 
@@ -1166,8 +1166,9 @@ test("stop loss: the live rules card shows the configured stop loss risk", () =>
   assert.match(rows, /\["Stop loss", stopLossRiskLabel\(config\)\]/);
 });
 
-// Asked for: order the portfolios by equity, largest first, and open the largest.
-test("dashboard: the tab row is ordered by equity, richest first", () => {
+// Asked for: live portfolios lead the dashboard, with the same equity ordering inside
+// the live and paper groups.
+test("dashboard: live tabs lead, then each portfolio group is ordered by equity", () => {
   const run = new Function("state", `
     ${/const BUILT_IN_PAPER_STRATEGY_IDS = \[[^\]]*\];/.exec(APP)[0]}
     ${/const CUSTOM_PAPER_STRATEGY_ID = [^\n]+/.exec(APP)[0]}
@@ -1205,8 +1206,8 @@ test("dashboard: the tab row is ordered by equity, richest first", () => {
     liveState: { portfolio: { equityUsdc: 120 } },
   });
   assert.deepEqual(app.dashboardModes(), [
-    "paper-moreProbable", // 141
     "live", // 120
+    "paper-moreProbable", // 141
     "paper-conservative", // 84
     "paper-highReward", // 68
     "paper-equal", // 55
@@ -1221,25 +1222,24 @@ test("dashboard: the tab row is ordered by equity, richest first", () => {
     liveState: null,
   });
   assert.deepEqual(partial.dashboardModes(), [
+    "live",
     "paper-moreProbable",
     "paper-conservative",
     "paper-highReward",
     "paper-equal",
-    "live",
   ]);
 });
 
-test("dashboard: the richest portfolio opens on load, but never over a reader's own click", () => {
+test("dashboard: the first live portfolio opens on load, but never over a reader's own click", () => {
   const preselect = extractFunction(APP, "preselectRichestPortfolio");
-  // Equity arrives with the state, not the markup, so the choice cannot be made at
-  // startup: it has to wait for a payload and then correct the stored mode.
+  // The tab order decides the landing portfolio. Live portfolios should not wait for
+  // wallet numbers before becoming the default tab.
   assert.match(preselect, /if \(state\.portfolioPreselectDone\) return;/);
-  assert.match(preselect, /const \[richest\] = dashboardModes\(\);/);
-  // Nothing loaded yet must leave the flag clear, or the first empty payload would
-  // consume the one chance to pick and the reader would be left on the stored tab.
-  assert.match(preselect, /if \(!richest \|\| portfolioEquityUsdc\(richest\) == null\) return;/);
-  assert.ok(preselect.indexOf("portfolioPreselectDone = true") > preselect.indexOf("== null) return;"),
-    "the flag may only be set once an equity is actually known");
+  assert.match(preselect, /const \[preferred\] = dashboardModes\(\);/);
+  assert.match(preselect, /!isLivePortfolioMode\(preferred\)/);
+  assert.match(preselect, /portfolioEquityUsdc\(preferred\) == null/);
+  assert.ok(preselect.indexOf("portfolioPreselectDone = true") > preselect.indexOf("portfolioEquityUsdc(preferred) == null"),
+    "paper-only fallback still waits for an actual equity value");
   // Switching portfolios has to refetch: the dashboard payload carries the trades of the
   // selected portfolio alone.
   assert.match(preselect, /loadDashboardState\(\);/);
