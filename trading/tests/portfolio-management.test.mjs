@@ -1151,7 +1151,7 @@ test("stop loss: the parameter modal offers it for paper and live portfolios", (
   assert.match(APP, /els\.stopLossRiskMultiplier\?\.addEventListener\("input"/);
   // Off by default: unlike rotation (on unless explicitly false), most portfolios have
   // never had this behavior, so an absent value must not read as enabled.
-  assert.match(APP, /function stopLossIsEnabled\(config = \{\}\) \{\n  return stopLossRiskMultiplier\(config\) > 0;\n\}/);
+  assert.match(APP, /function stopLossIsEnabled\(config = \{\}\) \{\r?\n  return stopLossRiskMultiplier\(config\) > 0;\r?\n\}/);
 });
 
 test("stop loss: the rules card shows it for every paper portfolio, not only Equal", () => {
@@ -1159,6 +1159,11 @@ test("stop loss: the rules card shows it for every paper portfolio, not only Equ
   assert.ok(!/if \(portfolio\.id === "equal"\)/.test(rows),
     "the row must not be conditional on which portfolio this is");
   assert.match(rows, /rows\.push\(\["Stop loss", stopLossRiskLabel\(config\)\]\);/);
+});
+
+test("stop loss: the live rules card shows the configured stop loss risk", () => {
+  const rows = extractFunction(APP, "livePortfolioRuleRows");
+  assert.match(rows, /\["Stop loss", stopLossRiskLabel\(config\)\]/);
 });
 
 // Asked for: order the portfolios by equity, largest first, and open the largest.

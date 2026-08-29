@@ -7634,6 +7634,7 @@ function livePortfolioRuleRows() {
     ["Volume filter", minLiquidityUsdc == null ? "none" : `>= ${money(minLiquidityUsdc)}`],
     ["Minimum net profit", `>= ${percent(minNetYield)} after fees`],
     ["Rotation", automaticRotationIsEnabled(config) ? "On" : "Off"],
+    ["Stop loss", stopLossRiskLabel(config)],
     ["Order mode", useLimitOrders ? "Limit orders" : "Market orders"],
     ["Cross-live risk", systemConfig().crossLivePortfolioRiskDiversification !== false ? "Block correlated exposure" : "Allow correlated exposure"],
   ];
