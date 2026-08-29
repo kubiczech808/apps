@@ -92,6 +92,40 @@ test("custom tag portfolio: execution uses the active Polymarket shortlist the d
   assert.equal(shortlist.rows[0].tokenId, "1234567890123456789012345678901234567890");
 });
 
+test("execution snapshot: compact 1,200-row shortlist never truncates the stored catalogue", () => {
+  const future = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+  const original = Array.from({ length: 1300 }, (_, index) => ({
+    id: `catalogue-${index}`,
+    status: "SCRAPED",
+    selectionStatus: "SCRAPED",
+    marketProbability: 0.7,
+    marketPrice: 0.7,
+    endDate: future,
+    observedAt: "2026-08-29T00:00:00.000Z",
+  }));
+  const compactExecutionSnapshot = original.slice(0, 1200).map((item) => ({
+    ...item,
+    marketProbability: 0.71,
+    marketPrice: 0.71,
+    marketDataUpdatedAt: "2026-08-29T01:00:00.000Z",
+  }));
+
+  const refreshed = bot.mergeExecutionObservationSnapshot(
+    bot.normalizeState({ marketObservations: original }),
+    compactExecutionSnapshot,
+  );
+
+  assert.equal(refreshed.marketObservations.length, 1300,
+    "a compact execution response must refresh its rows without dropping the rest of the catalogue");
+  assert.equal(
+    refreshed.marketObservations.find((item) => item.id === "catalogue-0")?.marketProbability,
+    0.71,
+    "the fresher execution quote should still win for a row included in the compact frontier",
+  );
+  assert.ok(refreshed.marketObservations.some((item) => item.id === "catalogue-1299"),
+    "a newly scraped row outside the 1,200-row frontier must survive the execution pass");
+});
+
 test("automatic rotation: each portfolio receives its saved On/Off setting", () => {
   assert.equal(bot.PAPER_STRATEGIES.conservative.allowRotation, true);
   assert.equal(bot.PAPER_STRATEGIES.equal.allowRotation, false, "Equal remains disabled until explicitly enabled");

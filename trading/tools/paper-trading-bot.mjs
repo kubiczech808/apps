@@ -1438,13 +1438,24 @@ async function refreshActiveExecutionObservations(state) {
   if (!Array.isArray(payload?.marketObservations)) {
     throw new Error("Execution state did not include the active Polymarket catalogue.");
   }
-  const resolved = (Array.isArray(state.marketObservations) ? state.marketObservations : [])
-    .filter(observationIsResolved);
+  return mergeExecutionObservationSnapshot(state, payload.marketObservations);
+}
+
+// `summary=execution` is deliberately a compact ranked frontier. It is allowed to
+// contain at most 1,200 rows so that the candidate screen and the executor remain
+// responsive on the shared host. It is therefore a quote refresh, never an
+// authoritative replacement for the persisted active catalogue. Replacing the
+// catalogue here made every execution pass silently discard every row outside that
+// frontier, which is why the stored scraped count repeatedly snapped back to 1,200.
+//
+// The market scan owns removal: it refreshes lifecycle state from Gamma and a later
+// retention pass removes only rows that genuinely leave the working set. Keeping the
+// unseen rows here preserves newly scraped opportunities until that happens.
+function mergeExecutionObservationSnapshot(state, snapshot = []) {
+  const existing = Array.isArray(state?.marketObservations) ? state.marketObservations : [];
   return normalizeState({
     ...state,
-    // This is deliberately a replacement, not a merge: a stale active observation
-    // must not remain eligible after the compact execution endpoint no longer lists it.
-    marketObservations: [...payload.marketObservations, ...resolved],
+    marketObservations: mergeMarketObservationLists(snapshot, existing),
   });
 }
 
@@ -11626,6 +11637,7 @@ export {
   openPaperTradeForStrategy,
   paperTradeFromCandidate,
   mergeStates,
+  mergeExecutionObservationSnapshot,
   openRisk,
   pnlPercent,
   readState,
