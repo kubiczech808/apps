@@ -150,6 +150,50 @@ async function main() {
   if (failures.length) {
     console.warn(`Post-scrape dispatch finished with ${failures.length} warning(s); market scan data remains published.`);
   }
+
+  await ensurePacerIsRunning({ repository, token, ref });
+}
+
+// Whether the clock still has a link in flight. A pacer spends nearly its whole life
+// asleep inside a run, so "is one in progress or queued" is the whole question.
+export function pacerIsAlive(runs = []) {
+  return (Array.isArray(runs) ? runs : [])
+    .some((run) => ["queued", "in_progress", "waiting", "requested", "pending"].includes(String(run?.status || "")));
+}
+
+// The clock is a chain of runs, each dispatching the next, so it is exactly one cancelled
+// run or one failed dispatch away from stopping -- and a stopped clock is silent. The
+// pacer declares a schedule for that case, but this repository delivers roughly one
+// scheduled run in fifty, so recovery could take until morning. That is the reported
+// symptom: a three-hour gap overnight with nothing scraped.
+//
+// So every scan checks the clock and restarts it if it has stopped. A scan gets here
+// however it was started -- by the chain, by the hourly heartbeat, or by a person -- which
+// makes any run at all a recovery point, instead of recovery depending on the one trigger
+// known not to arrive. Restarting a chain that is in fact alive is harmless: the pacer's
+// concurrency group cancels in progress, so a duplicate collapses back to a single chain.
+async function ensurePacerIsRunning({ repository, token, ref }) {
+  const workflow = "trading-pacer.yml";
+  try {
+    const payload = await readJson(
+      `https://api.github.com/repos/${repository}/actions/workflows/${workflow}/runs?per_page=20`,
+      { headers: apiHeaders(token) },
+    );
+    if (pacerIsAlive(payload.workflow_runs)) {
+      console.log("The pacer is running; the scan cadence is being kept.");
+      return;
+    }
+    await readJson(`https://api.github.com/repos/${repository}/actions/workflows/${workflow}/dispatches`, {
+      method: "POST",
+      headers: { ...apiHeaders(token), "Content-Type": "application/json" },
+      body: JSON.stringify({ ref, inputs: { interval_minutes: "10", tick: "0" } }),
+    });
+    console.log("The pacer had stopped; restarted it. The scan cadence resumes from here.");
+  } catch (error) {
+    // Never fatal. The scan has already published by this point, and losing the watchdog
+    // costs the next scan's chance to notice rather than costing this scan.
+    console.warn(`Could not check or restart the pacer: ${error?.message || error}`);
+  }
 }
 
 // Importing this module must plan nothing and dispatch nothing; only the

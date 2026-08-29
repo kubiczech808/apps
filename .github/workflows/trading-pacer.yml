@@ -153,10 +153,24 @@ jobs:
           fi
           tick=$(printf '%.0f' "${TICK:-0}" 2>/dev/null || echo 0)
           next=$(( tick + 1 ))
-          curl --fail-with-body --silent --show-error --request POST \
-            --header "Accept: application/vnd.github+json" \
-            --header "Authorization: Bearer ${GH_TOKEN}" \
-            --header "X-GitHub-Api-Version: 2022-11-28" \
-            "https://api.github.com/repos/${REPOSITORY}/actions/workflows/trading-pacer.yml/dispatches" \
-            --data "{\"ref\":\"${REF}\",\"inputs\":{\"interval_minutes\":\"${INTERVAL}\",\"tick\":\"${next}\"}}"
-          echo "Handed on to tick ${next}."
+          # This one request is the whole chain. A single refused connection here stops the
+          # clock, and a stopped clock is silent -- the symptom is a gap of hours overnight
+          # with nothing scraped, which is exactly what this design was built to end. So it
+          # is retried rather than attempted once.
+          for attempt in 1 2 3 4 5; do
+            if curl --fail-with-body --silent --show-error --max-time 30 --request POST \
+              --header "Accept: application/vnd.github+json" \
+              --header "Authorization: Bearer ${GH_TOKEN}" \
+              --header "X-GitHub-Api-Version: 2022-11-28" \
+              "https://api.github.com/repos/${REPOSITORY}/actions/workflows/trading-pacer.yml/dispatches" \
+              --data "{\"ref\":\"${REF}\",\"inputs\":{\"interval_minutes\":\"${INTERVAL}\",\"tick\":\"${next}\"}}"; then
+              echo "Handed on to tick ${next}."
+              exit 0
+            fi
+            echo "Hand-on attempt ${attempt} failed; retrying."
+            sleep $(( attempt * 5 ))
+          done
+          # Out of retries. Say so loudly: the next market scan's watchdog restarts the
+          # chain, and failing here is what makes that visible rather than silent.
+          echo "::error::could not hand the chain on after 5 attempts; the next scan will restart the pacer"
+          exit 1

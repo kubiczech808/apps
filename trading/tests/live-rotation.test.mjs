@@ -3740,3 +3740,56 @@ test("pacer: the workflows it drives keep a heartbeat but no longer pretend to b
       `${name} still asks for several runs an hour, which are not delivered`);
   }
 });
+
+// Reported: the scraping log showed runs clustered around midnight and then gaps of hours
+// overnight -- 00:41 to 03:54 UTC with nothing scraped. That is GitHub's scheduler, which
+// this repository gets at about 2%, and the pacer chain replaces it. But a chain of runs
+// each dispatching the next is one failed request away from stopping, and a stopped clock
+// is silent: recovery would fall back to the same 2% schedule and could wait until
+// morning, reproducing the very gap it was built to end.
+//
+// So the chain is made hard to kill and easy to revive, and both halves are pinned here.
+test("pacer: a stopped clock is restarted by the next scan, not left for the schedule", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const source = await readFile(new URL("../tools/dispatch-after-scan.mjs", import.meta.url), "utf8");
+  const { pacerIsAlive } = await import("../tools/dispatch-after-scan.mjs");
+
+  // A pacer spends nearly its whole life asleep inside a run, so a run in flight -- in any
+  // of the states GitHub calls "not finished" -- means the clock is still ticking.
+  assert.equal(pacerIsAlive([{ status: "in_progress" }]), true);
+  assert.equal(pacerIsAlive([{ status: "queued" }]), true);
+  assert.equal(pacerIsAlive([{ status: "waiting" }]), true);
+  // Only finished runs means the chain has stopped, and a chain that stopped is the case
+  // this exists for. Completed runs are the ordinary history of a healthy chain's past.
+  assert.equal(pacerIsAlive([{ status: "completed" }, { status: "completed" }]), false);
+  assert.equal(pacerIsAlive([]), false, "no runs at all is a stopped clock, not a healthy one");
+  assert.equal(pacerIsAlive(null), false, "a malformed response must not read as alive");
+  // A mixed page is alive: one link in flight is all it takes.
+  assert.equal(pacerIsAlive([{ status: "completed" }, { status: "in_progress" }]), true);
+
+  // The check runs after the executors are dispatched, so a watchdog failure can never
+  // cost the run its actual work.
+  assert.ok(source.indexOf("ensurePacerIsRunning") > source.indexOf("const failures = []"));
+  // And it can never fail the scan: the data is already published by then.
+  assert.match(source, /catch \(error\) \{\n\s*\/\/[^\n]*\n(?:\s*\/\/[^\n]*\n)*\s*console\.warn\(`Could not check or restart the pacer/);
+
+  // The scan needs the permission to do it, or the watchdog is silently a no-op.
+  const scan = await readFile(new URL("../../.github/workflows/trading-market-scan.yml", import.meta.url), "utf8");
+  assert.match(scan, /permissions:\n(?:\s+\w+: \w+\n)*\s+actions: write/);
+});
+
+test("pacer: the hand-on is retried, because one refused request would stop the clock", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const pacer = await readFile(new URL("../../.github/workflows/trading-pacer.yml", import.meta.url), "utf8");
+  const handOn = pacer.slice(pacer.indexOf("- name: Hand the chain on"));
+
+  assert.match(handOn, /for attempt in 1 2 3 4 5; do/, "the one request that carries the chain must be retried");
+  assert.match(handOn, /sleep \$\(\( attempt \* 5 \)\)/, "retries must back off rather than hammer");
+  assert.match(handOn, /--max-time 30/, "a hung request must not hold the job until its timeout");
+  // Exhausting the retries must fail the run loudly. A silent give-up is what turns a
+  // stopped clock into an unexplained overnight gap.
+  assert.match(handOn, /::error::could not hand the chain on/);
+  assert.match(handOn, /exit 1/);
+  // And the success path must stop, or the loop would dispatch a successor five times.
+  assert.match(handOn, /Handed on to tick \$\{next\}\."\n\s*exit 0/);
+});
