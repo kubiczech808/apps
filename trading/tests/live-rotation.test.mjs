@@ -3970,8 +3970,14 @@ test("run digest: a candidate dropped before revalidation can be explained from 
     new URL("../../.github/workflows/polymarket-live-limit-order-test.yml", import.meta.url), "utf8");
 
   // The grouped counts have to reach the payload the digest reads.
-  assert.match(source, /prefilterRejectionReasons: candidatePool\.diagnostics\.reasonCounts,/,
-    "the grouped prefilter reasons must be published, not left in diagnostics");
+  // It has to sit inside the `counts` object, because that is the one the digest prints.
+  // Publishing it into a neighbouring diagnostics object compiles, ships, and produces
+  // exactly nothing in the log -- which is what happened on the first attempt, and a
+  // pattern match on the field name alone was happy to confirm it.
+  const countsBlock = /\n      counts: \{\n        storedEvaluations,[\s\S]*?\n      \},/.exec(source);
+  assert.ok(countsBlock, "the run digest's counts object must be findable");
+  assert.match(countsBlock[0], /prefilterRejectionReasons: candidatePool\.diagnostics\.reasonCounts,/,
+    "the grouped prefilter reasons must be in the counts the digest reads");
   // And they are grouped, or a per-candidate number in the text makes one bucket each --
   // which is what once made this the dominant contributor to run-log size.
   assert.match(source, /function prefilterReasonCountKey\(reason\)/);

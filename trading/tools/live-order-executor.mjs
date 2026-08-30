@@ -4525,11 +4525,6 @@ async function main() {
       uniqueEvaluations: latestEvaluations.length,
       prefilterPassedCandidates: candidatePool.diagnostics.prefilterPassed,
       prefilterRejectedCandidates: candidatePool.diagnostics.prefilterRejected,
-      // Why those were rejected, grouped. The count alone said a thousand candidates were
-      // dropped before revalidation and nothing about which rule dropped them, so a
-      // candidate visible on the dashboard but absent from the run could not be explained
-      // from the log at all -- which is the question a skipped run actually raises.
-      prefilterRejectionReasons: candidatePool.diagnostics.reasonCounts,
       skippedByScanLimit: candidatePool.diagnostics.skippedByScanLimit,
       scannedCandidates: baseCandidates.length,
       revalidatedCandidates: checked.length,
@@ -4615,6 +4610,12 @@ async function main() {
         uniqueEvaluations: latestEvaluations.length,
         prefilterPassedCandidates: candidatePool.diagnostics.prefilterPassed,
         prefilterRejectedCandidates: candidatePool.diagnostics.prefilterRejected,
+        // Why those were rejected, grouped. The count alone said a thousand candidates
+        // were dropped before revalidation and nothing about which rule dropped them, so
+        // a candidate visible on the dashboard but absent from the run could not be
+        // explained from the log at all -- which is the question a skipped run raises.
+        // This belongs in `counts` specifically: that is the object the run digest reads.
+        prefilterRejectionReasons: candidatePool.diagnostics.reasonCounts,
         skippedByScanLimit: candidatePool.diagnostics.skippedByScanLimit,
         scannedCandidates: baseCandidates.length,
         revalidatedCandidates: checked.length,
