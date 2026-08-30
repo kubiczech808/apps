@@ -1,0 +1,39 @@
+name: Trading Live Equity Reconciliation
+
+# Read-only measurement, dispatch only. Places nothing and submits nothing: it asks why
+# the dashboard's equity and free-cash figures differ from what Polymarket's own app shows
+# for the same wallet, and separates staleness from coverage from arithmetic.
+#
+# It runs the account sync first, which only reads Polymarket and writes a local file --
+# nothing is published to the hosting from this workflow.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  reconcile:
+    runs-on: [self-hosted, Linux, ARM64]
+    env:
+      POLYMARKET_HOST: https://clob.polymarket.com
+      POLYMARKET_CHAIN_ID: "137"
+      POLYMARKET_PRIVATE_KEY: ${{ secrets.POLYMARKET_PRIVATE_KEY }}
+      POLYMARKET_FUNDER_ADDRESS: ${{ secrets.POLYMARKET_FUNDER_ADDRESS || secrets.POLYMARKET_ADDRESS || '0x3252de913d9323667f21f4d88fa1f996fc282293' }}
+      POLYMARKET_SIGNATURE_TYPE: ${{ secrets.POLYMARKET_SIGNATURE_TYPE || '3' }}
+      LIVE_STATE_PATH: data/live-state.json
+      LIVE_STATE_URL: https://osobnizkusenosti.cz/trading/api.php?action=state&target=live
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Install trading dependencies
+        working-directory: trading
+        run: npm ci
+      - name: Generate a fresh live account snapshot locally
+        working-directory: trading
+        run: npm run live:account
+      - name: Reconcile published equity against Polymarket
+        working-directory: trading
+        run: node tools/live-equity-reconciliation.mjs
