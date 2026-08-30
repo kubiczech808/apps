@@ -2166,6 +2166,68 @@ body.modal-open {
   vertical-align: middle;
 }
 
+.counterfactual-audit-action {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.counterfactual-audit-action span {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.counterfactual-audit {
+  display: grid;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid #bae6fd;
+  border-radius: 8px;
+  background: #f8fcff;
+}
+
+.counterfactual-audit-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.counterfactual-audit-head h4,
+.counterfactual-audit-head p {
+  margin: 0;
+}
+
+.counterfactual-audit-head span:not(.pill) {
+  display: block;
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.counterfactual-audit-parameter {
+  display: grid;
+  gap: 7px;
+}
+
+.counterfactual-audit-parameter > div:first-child strong,
+.counterfactual-audit-parameter > div:first-child span {
+  display: block;
+}
+
+.counterfactual-audit-parameter > div:first-child span {
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.counterfactual-audit-table {
+  min-width: 900px;
+}
+
 .calculation-summary {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

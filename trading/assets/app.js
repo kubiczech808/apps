@@ -113,6 +113,12 @@ const state = {
   // other thing that loads it.
   optimisationLiveStatePending: false,
   optimisationLiveStateTried: false,
+  // A live counterfactual audit is intentionally manual and ephemeral: it answers a
+  // question about the currently fetched wallet history without changing portfolio
+  // settings or turning a historical what-if into an automated recommendation.
+  liveCounterfactualAudits: {},
+  liveCounterfactualAuditPending: {},
+  liveCounterfactualAuditErrors: {},
   // Whether this page load has already settled which portfolio to open. Set once the
   // richest one has been picked, and also the moment the reader picks a tab themselves,
   // so the automatic choice can never fight a deliberate click.
@@ -11801,6 +11807,214 @@ function optimisationPortfolioRow(strategyId, label, trades) {
   };
 }
 
+function counterfactualPnlSummary(trades) {
+  const rows = Array.isArray(trades) ? trades : [];
+  const pnlUsdc = rows.reduce((total, trade) => total + Number(trade?.realizedPnlUsdc || 0), 0);
+  const wins = rows.filter((trade) => Number(trade?.realizedPnlUsdc) > 0).length;
+  return {
+    trades: rows.length,
+    wins,
+    losses: rows.length - wins,
+    pnlUsdc: Number(pnlUsdc.toFixed(4)),
+  };
+}
+
+function counterfactualTradeLabel(trade) {
+  const outcome = String(trade?.outcome || "").trim();
+  const question = String(trade?.question || trade?.title || trade?.market || "").trim();
+  return [outcome, question].filter(Boolean).join(" - ") || String(trade?.id || "Recorded loss");
+}
+
+// Every scenario is derived from an actual losing trade. The strict comparison is
+// deliberate: a 71.0% loss asks "what if the portfolio had required more than
+// 71.0%?", so that loss itself is absent from the counterfactual total.
+function counterfactualParameterDefinition(parameter) {
+  if (parameter === "probability") {
+    return {
+      label: "Probability threshold",
+      value: optimisationTradeEntryProbability,
+      excludes: (value, threshold) => value <= threshold,
+    };
+  }
+  if (parameter === "days") {
+    return {
+      label: "Max resolution days",
+      value: (trade) => {
+        const days = Number(trade?.daysToResolution);
+        return Number.isFinite(days) ? days : null;
+      },
+      excludes: (value, threshold) => value >= threshold,
+    };
+  }
+  if (parameter === "volume") {
+    return {
+      label: "Minimum volume",
+      value: optimisationTradeEntryVolume,
+      excludes: (value, threshold) => value <= threshold,
+    };
+  }
+  if (parameter === "marketType") {
+    return {
+      label: "Market type",
+      value: optimisationTradeMarketType,
+      excludes: (value, threshold) => value === threshold,
+    };
+  }
+  return null;
+}
+
+function counterfactualValueKey(value) {
+  return typeof value === "number" ? value.toPrecision(12) : String(value || "");
+}
+
+function counterfactualScenariosForParameter(trades, parameter) {
+  const definition = counterfactualParameterDefinition(parameter);
+  if (!definition) return null;
+  const all = Array.isArray(trades) ? trades : [];
+  const known = all.filter((trade) => definition.value(trade) !== null);
+  const lossGroups = new Map();
+  for (const trade of known) {
+    if (!(Number(trade?.realizedPnlUsdc) < 0)) continue;
+    const value = definition.value(trade);
+    const key = counterfactualValueKey(value);
+    const group = lossGroups.get(key) || { value, trades: [] };
+    group.trades.push(trade);
+    lossGroups.set(key, group);
+  }
+  const scenarios = [...lossGroups.values()].map((group) => {
+    const excluded = known.filter((trade) => definition.excludes(definition.value(trade), group.value));
+    const excludedSet = new Set(excluded);
+    const kept = all.filter((trade) => !excludedSet.has(trade));
+    const excludedSummary = counterfactualPnlSummary(excluded);
+    const keptSummary = counterfactualPnlSummary(kept);
+    return {
+      parameter,
+      threshold: group.value,
+      sourceLosses: group.trades.map(counterfactualTradeLabel),
+      sourceLossCount: group.trades.length,
+      excluded: excludedSummary,
+      kept: keptSummary,
+      pnlDeltaUsdc: Number((-excludedSummary.pnlUsdc).toFixed(4)),
+    };
+  }).sort((left, right) => right.kept.pnlUsdc - left.kept.pnlUsdc
+    || right.pnlDeltaUsdc - left.pnlDeltaUsdc
+    || right.excluded.losses - left.excluded.losses);
+  return {
+    parameter,
+    label: definition.label,
+    knownTrades: known.length,
+    unknownTrades: all.length - known.length,
+    sourceLosses: [...lossGroups.values()].reduce((total, group) => total + group.trades.length, 0),
+    scenarios,
+  };
+}
+
+// Uses the whole realised ledger as the baseline. A row missing the field being tested
+// is kept in every scenario, rather than being silently dropped from both the historical
+// result and the what-if result.
+function buildLiveCounterfactualAuditReport(strategyId, label, trades) {
+  const closed = (Array.isArray(trades) ? trades : [])
+    .filter((trade) => Number.isFinite(Number(trade?.realizedPnlUsdc)));
+  return {
+    id: `live-counterfactual-${strategyId}-${Date.now()}`,
+    generatedAt: new Date().toISOString(),
+    strategyId,
+    label,
+    baseline: counterfactualPnlSummary(closed),
+    parameters: ["probability", "days", "volume", "marketType"]
+      .map((parameter) => counterfactualScenariosForParameter(closed, parameter))
+      .filter((item) => item && item.scenarios.length),
+  };
+}
+
+function counterfactualRuleLabel(row) {
+  if (row?.parameter === "probability") return `Keep probability > ${probability(Number(row.threshold))}`;
+  if (row?.parameter === "days") return `Keep resolution < ${Number(row.threshold).toFixed(2)} d`;
+  if (row?.parameter === "volume") return `Keep volume > ${money(Number(row.threshold))}`;
+  if (row?.parameter === "marketType") {
+    const allowed = String(row.threshold) === "binary" ? "Multi-outcome" : "Yes/No";
+    return `Allow only ${allowed}`;
+  }
+  return "-";
+}
+
+function renderLiveCounterfactualAudit(audit) {
+  if (!audit) return "";
+  const baseline = audit.baseline || {};
+  const parameterTables = (audit.parameters || []).map((parameter) => `
+    <section class="counterfactual-audit-parameter">
+      <div>
+        <strong>${escapeHtml(parameter.label || "Parameter")}</strong>
+        <span>${formatInteger(Number(parameter.sourceLosses || 0))} loss triggers / ${formatInteger(Number(parameter.knownTrades || 0))} trades with recorded value${parameter.unknownTrades ? ` / ${formatInteger(Number(parameter.unknownTrades))} kept because the value is missing` : ""}</span>
+      </div>
+      <div class="calculation-table-wrap">
+        <table class="calculation-table counterfactual-audit-table">
+          <thead><tr><th>Counterfactual rule</th><th>Triggering loss</th><th>Kept W / L</th><th>Excluded W / L</th><th>Excluded P/L</th><th>Total P/L</th><th>Change</th></tr></thead>
+          <tbody>${parameter.scenarios.map((row) => {
+            const source = row.sourceLosses.slice(0, 2).join("; ");
+            const more = row.sourceLosses.length > 2 ? ` +${row.sourceLosses.length - 2} more` : "";
+            return `
+              <tr>
+                <td>${escapeHtml(counterfactualRuleLabel(row))}</td>
+                <td title="${escapeHtml(row.sourceLosses.join(" | "))}">${escapeHtml(source + more)}</td>
+                <td>${formatInteger(Number(row.kept?.wins || 0))} / ${formatInteger(Number(row.kept?.losses || 0))}</td>
+                <td>${formatInteger(Number(row.excluded?.wins || 0))} / ${formatInteger(Number(row.excluded?.losses || 0))}</td>
+                <td class="${pnlClass(Number(row.excluded?.pnlUsdc || 0))}">${signedMoney(Number(row.excluded?.pnlUsdc || 0))}</td>
+                <td class="${pnlClass(Number(row.kept?.pnlUsdc || 0))}">${signedMoney(Number(row.kept?.pnlUsdc || 0))}</td>
+                <td class="${pnlClass(Number(row.pnlDeltaUsdc || 0))}">${signedMoney(Number(row.pnlDeltaUsdc || 0))}</td>
+              </tr>`;
+          }).join("")}</tbody>
+        </table>
+      </div>
+    </section>
+  `).join("");
+  return `
+    <section class="counterfactual-audit">
+      <div class="counterfactual-audit-head">
+        <div>
+          <p class="eyebrow">One-time counterfactual audit</p>
+          <h4>${formatInteger(Number(baseline.trades || 0))} realised trades: ${signedMoney(Number(baseline.pnlUsdc || 0))}</h4>
+          <span>Baseline ${formatInteger(Number(baseline.wins || 0))} wins / ${formatInteger(Number(baseline.losses || 0))} losses. Each row removes the marked set from this full baseline; it does not assume replacement trades.</span>
+        </div>
+        <span class="pill muted">${escapeHtml(formatDate(audit.generatedAt))}</span>
+      </div>
+      ${parameterTables || '<p class="calculation-note">No realised loss has enough recorded entry data for a parameter-level counterfactual.</p>'}
+    </section>
+  `;
+}
+
+function liveModeForOptimisationStrategy(strategyId) {
+  if (strategyId === "live") return "live";
+  if (strategyId === "live5050") return "live-5050";
+  return (state.portfolioConfig?.livePortfolios || {})[strategyId] ? `live-custom-${strategyId}` : null;
+}
+
+async function runLiveCounterfactualAudit(strategyId) {
+  const mode = liveModeForOptimisationStrategy(strategyId);
+  if (!mode || state.liveCounterfactualAuditPending[strategyId]) return;
+  state.liveCounterfactualAuditPending[strategyId] = true;
+  delete state.liveCounterfactualAuditErrors[strategyId];
+  renderPortfolioOptimizationReport();
+  try {
+    // Fetch a fresh account ledger only on this explicit click. The normal settings view
+    // remains lightweight and no audit result is persisted or used by the executor.
+    state.liveState = await fetchFreshState("live");
+    const trades = liveClosedTrades(state.liveState, mode)
+      .map(decorateLiveTradeForTable)
+      .filter((trade) => Number.isFinite(Number(trade?.realizedPnlUsdc)));
+    state.liveCounterfactualAudits[strategyId] = buildLiveCounterfactualAuditReport(
+      strategyId,
+      portfolioNameForMode(mode),
+      trades,
+    );
+  } catch (error) {
+    state.liveCounterfactualAuditErrors[strategyId] = error?.message || "Could not load the live trade ledger.";
+  } finally {
+    state.liveCounterfactualAuditPending[strategyId] = false;
+    renderPortfolioOptimizationReport();
+  }
+}
+
 // One row per live portfolio on the account, built from that portfolio's own closed
 // trades. The rows are decorated first: days-to-resolution, volume and market type come
 // from the scraped observation the trade was opened against, not from the wallet history,
@@ -11816,6 +12030,7 @@ function liveOptimisationPortfolios() {
       return {
         ...optimisationPortfolioRow(liveConfigKeyForMode(mode), portfolioNameForMode(mode), trades),
         live: true,
+        mode,
       };
     });
 }
@@ -11871,10 +12086,22 @@ function renderPortfolioOptimizationReport() {
     </div>
     ${portfolios.map((portfolio) => {
       const recommendations = Array.isArray(portfolio.recommendations) ? portfolio.recommendations : [];
+      const auditKey = String(portfolio.strategyId || "");
+      const audit = portfolio.live ? state.liveCounterfactualAudits[auditKey] : null;
+      const auditPending = portfolio.live && Boolean(state.liveCounterfactualAuditPending[auditKey]);
+      const auditError = portfolio.live ? state.liveCounterfactualAuditErrors[auditKey] : "";
       return `
         <section class="calculation-section portfolio-optimization-card${portfolio.live ? " live" : ""}">
           <h3>${escapeHtml(portfolio.label || portfolio.strategyId || "Portfolio")}${portfolio.live ? ' <span class="pill">Live</span>' : ""}</h3>
           <p class="calculation-note">${formatInteger(Number(portfolio.baseline?.trades || 0))} resolved trades / realised P/L ${signedMoney(Number(portfolio.baseline?.pnlUsdc || 0))} / ${portfolio.baseline?.pnlPerTradeUsdc == null ? "-" : `${signedMoney(Number(portfolio.baseline.pnlPerTradeUsdc))} per trade`}</p>
+          ${portfolio.live ? `
+            <div class="counterfactual-audit-action">
+              <button class="execution-button" type="button" data-live-counterfactual-audit="${escapeHtml(auditKey)}" ${auditPending ? "disabled" : ""}>${auditPending ? "Loading live ledger..." : (audit ? "Run audit again" : "Run detailed audit")}</button>
+              <span>Tests each recorded loss against probability, resolution, volume and type filters. No portfolio setting is changed.</span>
+            </div>
+            ${auditError ? `<p class="calculation-note negative">${escapeHtml(auditError)}</p>` : ""}
+            ${renderLiveCounterfactualAudit(audit)}
+          ` : ""}
           ${recommendations.length ? `
             <div class="calculation-table-wrap">
               <table class="calculation-table">
@@ -11933,6 +12160,13 @@ els.settingsSectionButtons.forEach((button) => {
   button.addEventListener("click", () => {
     setSettingsSection(button.dataset.settingsSection || "evaluation-log");
   });
+});
+
+els.portfolioOptimizationReport?.addEventListener("click", (event) => {
+  const button = event.target.closest("[data-live-counterfactual-audit]");
+  if (!button) return;
+  event.preventDefault();
+  runLiveCounterfactualAudit(button.dataset.liveCounterfactualAudit || "");
 });
 
 els.calculationSourceButtons.forEach((button) => {

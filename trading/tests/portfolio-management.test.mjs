@@ -1518,6 +1518,49 @@ test("portfolio optimisation: the browser and the bot run the same analysis", as
   assert.equal(thinBrowser.note, thinBot.note);
 });
 
+// The detailed live audit is intentionally different from the automatic suggestions:
+// it starts from each *actual* loss and shows the full historical P/L if that entry
+// value had been forbidden. In particular it must subtract excluded wins too -- merely
+// summing avoided losses would make every stricter rule look deceptively profitable.
+test("live counterfactual audit: a losing probability value recalculates the whole realised ledger", () => {
+  const auditBuilder = new Function(`
+    ${extractFunction(APP, "optimisationTradeEntryProbability")}
+    ${extractFunction(APP, "optimisationTradeEntryVolume")}
+    ${extractFunction(APP, "optimisationTradeMarketType")}
+    ${extractFunction(APP, "counterfactualPnlSummary")}
+    ${extractFunction(APP, "counterfactualTradeLabel")}
+    ${extractFunction(APP, "counterfactualParameterDefinition")}
+    ${extractFunction(APP, "counterfactualValueKey")}
+    ${extractFunction(APP, "counterfactualScenariosForParameter")}
+    ${extractFunction(APP, "buildLiveCounterfactualAuditReport")}
+    return buildLiveCounterfactualAuditReport;
+  `)();
+
+  const audit = auditBuilder("live", "Live", [
+    { id: "win-high", status: "WON", realizedPnlUsdc: 2, marketProbability: 0.9, daysToResolution: 1, firstVolumeUsdc: 50000, outcome: "Yes", question: "High win" },
+    { id: "loss-71", status: "LOST", realizedPnlUsdc: -5, marketProbability: 0.71, daysToResolution: 4, firstVolumeUsdc: 9000, outcome: "No", question: "71 loss" },
+    { id: "win-low", status: "WON", realizedPnlUsdc: 1, marketProbability: 0.6, daysToResolution: 3, firstVolumeUsdc: 3000, outcome: "No", question: "Low win" },
+    { id: "loss-90", status: "LOST", realizedPnlUsdc: -1, marketProbability: 0.9, daysToResolution: 1, firstVolumeUsdc: 50000, outcome: "Yes", question: "90 loss" },
+    { id: "unclassified", status: "LOST", realizedPnlUsdc: -2, outcome: "Team", question: "Missing entry data" },
+  ]);
+
+  assert.deepEqual(audit.baseline, { trades: 5, wins: 2, losses: 3, pnlUsdc: -5 });
+  const probability = audit.parameters.find((entry) => entry.parameter === "probability");
+  assert.ok(probability, "probability scenarios must be present");
+  assert.equal(probability.unknownTrades, 1, "missing entry values stay in every scenario");
+  const threshold71 = probability.scenarios.find((row) => Math.abs(Number(row.threshold) - 0.71) < 0.000001);
+  assert.ok(threshold71, "the actual 71% loss must become a scenario");
+  assert.deepEqual(threshold71.excluded, { trades: 2, wins: 1, losses: 1, pnlUsdc: -4 },
+    "the scenario excludes the 71% loss and the lower-probability win");
+  assert.deepEqual(threshold71.kept, { trades: 3, wins: 1, losses: 2, pnlUsdc: -1 },
+    "the reported total is the P/L of all trades left after the filter, including sparse history");
+  assert.equal(threshold71.pnlDeltaUsdc, 4, "change is measured against the full -5 USDC baseline");
+
+  assert.match(APP, /data-live-counterfactual-audit/, "the report provides an explicit manual trigger");
+  assert.match(APP, /state\.liveState = await fetchFreshState\("live"\)/,
+    "the manual audit fetches a current live ledger rather than relying on dashboard cache");
+});
+
 test("portfolio optimisation: live portfolios are analysed per portfolio, not per account", async () => {
   const { readFile } = await import("node:fs/promises");
   const app = await readFile(new URL("../assets/app.js", import.meta.url), "utf8");
