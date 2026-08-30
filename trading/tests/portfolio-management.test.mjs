@@ -1011,6 +1011,16 @@ test("dashboard: the overview above the selector states equity and risk against 
   assert.match(overview, /Number\.isFinite\(value\) \? money\(value\) : "-"/);
 });
 
+test("closed accuracy: a redeemed position counts even when its original cost is unavailable", () => {
+  const stats = new Function(`
+    ${extractFunction(APP, "isClosedTrade")}
+    ${extractFunction(APP, "closedTradePredictionResult")}
+    ${extractFunction(APP, "closedAccuracyStats")}
+    return closedAccuracyStats;
+  `)()([{ status: "REDEEMED", stakeUsdc: null, realizedPnlUsdc: null }]);
+  assert.deepEqual(stats, { correct: 1, total: 1, excluded: 0, rate: 1 });
+});
+
 test("portfolio metrics: orders, positions and free cash are separate tiles", () => {
   for (const expected of ["Orders", "Positions", "Free"]) {
     assert.match(HTML, new RegExp(`<span class="label">${expected}<\\/span>`));

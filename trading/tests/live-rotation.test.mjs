@@ -6,6 +6,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 const executor = await import("../tools/live-order-executor.mjs");
+const sync = await import("../tools/live-account-sync.mjs");
 
 const THRESHOLD = executor.ROTATION_PROTECT_REMAINING_GAIN_USDC;
 
@@ -45,6 +46,26 @@ const exhaustedFor = (options) => economicsFor(options).upsideExhausted;
 
 test("rotation: the threshold is two cents", () => {
   assert.equal(THRESHOLD, 0.02);
+});
+
+test("live history: an unmatched redeem remains a closed, correct position", () => {
+  const rows = sync.closedTradesFromHistory([], [{
+    type: "REDEEM",
+    timestamp: "2026-08-30T18:05:31Z",
+    question: "A winning market whose buy aged out of the public trade feed",
+    outcome: "Yes",
+    conditionId: "condition-1",
+    size: 6.41,
+    usdcValue: 6.41,
+    transactionHash: "redeem-1",
+  }], "2026-08-30T18:10:00Z");
+
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].status, "REDEEMED");
+  assert.equal(rows[0].finalOutcomePrice, 1, "a Polymarket redemption is a resolved winner");
+  assert.equal(rows[0].reconciliationOnly, true);
+  assert.equal(rows[0].stakeUsdc, null, "the missing buy is not guessed as a zero-dollar stake");
+  assert.equal(rows[0].realizedPnlUsdc, null, "the missing buy is not guessed as zero P/L");
 });
 
 test("rotation: the fixture drives the economics the executor actually reads", () => {

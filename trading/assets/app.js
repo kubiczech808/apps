@@ -2859,13 +2859,15 @@ function marketAnchor(item) {
 }
 
 function tradePnlValue(trade) {
-  if (isClosedTrade(trade)) return Number(trade.realizedPnlUsdc);
-  return Number(trade.unrealizedPnlUsdc);
+  const value = isClosedTrade(trade) ? trade.realizedPnlUsdc : trade.unrealizedPnlUsdc;
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : null;
 }
 
 function tradePnlPct(trade) {
-  if (isClosedTrade(trade)) return Number(trade.realizedPnlPct);
-  return Number(trade.unrealizedPnlPct);
+  const value = isClosedTrade(trade) ? trade.realizedPnlPct : trade.unrealizedPnlPct;
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : null;
 }
 
 function isClosedTrade(trade) {
@@ -3786,7 +3788,7 @@ function renderTradeRows(trades, emptyText, options = {}) {
         ${rows.map((trade) => `
           <tr>
             <td data-label="Win">${tradeWinCell(trade)}</td>
-            <td data-label="P/L" class="${pnlClass(tradePnlValue(trade))}">
+            <td data-label="P/L" class="${tradePnlValue(trade) == null ? "" : pnlClass(tradePnlValue(trade))}">
               ${signedMoney(tradePnlValue(trade))}
             </td>
             <td class="trade-market-cell" data-label="Market">
@@ -3797,7 +3799,7 @@ function renderTradeRows(trades, emptyText, options = {}) {
             <td data-label="Resolution">${resolutionCell(trade)}</td>
             <td data-label="${showStatus ? "Closed" : "Opened"}">${escapeHtml(formatDate(showStatus ? (trade.resolvedAt || trade.closedTime || trade.lastCheckedAt || "") : (trade.openedAt || trade.date || "")))}</td>
             <td data-label="${showStatus ? "Entry / final" : "Entry / mark"}">${tradePriceCell(trade, showStatus)}</td>
-            <td data-label="Stake">${money(Number(trade.stakeUsdc || 0))}</td>
+            <td data-label="Stake">${trade.stakeUsdc == null ? "-" : money(Number(trade.stakeUsdc))}</td>
             ${showStatus ? "" : `<td data-label="Volume">${tradeVolumeCell(trade)}</td>`}
           </tr>
         `).join("")}

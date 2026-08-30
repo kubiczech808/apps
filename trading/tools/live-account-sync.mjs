@@ -518,6 +518,7 @@ function closedTradesFromHistory(trades, activity, generatedAt) {
   const groups = new Map();
   const groupsByQuestion = new Map();
   const seenTradeKeys = new Set();
+  const unmatchedRedeems = new Map();
 
   function questionKey(item) {
     return String(item.question || "")
@@ -539,6 +540,59 @@ function closedTradesFromHistory(trades, activity, generatedAt) {
       String(item.side || "").toUpperCase(),
       item.timestamp || "",
     ].join(":");
+  }
+
+  function unmatchedRedeemIdentity(item) {
+    return [
+      item.transactionHash || "",
+      item.conditionId || "",
+      questionKey(item),
+      String(item.outcome || "").toLowerCase(),
+      item.timestamp || "",
+    ].join(":");
+  }
+
+  function retainUnmatchedRedeem(item) {
+    const identity = unmatchedRedeemIdentity(item);
+    if (unmatchedRedeems.has(identity)) return;
+    const redeemedValue = number(item.usdcValue, 0);
+    const redeemedShares = number(item.size, 0);
+    unmatchedRedeems.set(identity, {
+      id: `redeem-activity:${identity}`,
+      mode: "LIVE",
+      status: "REDEEMED",
+      question: item.question || "-",
+      outcome: item.outcome || "-",
+      slug: item.slug || "",
+      eventSlug: item.slug || "",
+      url: item.url,
+      tokenId: item.tokenId || null,
+      conditionId: item.conditionId || null,
+      date: item.timestamp || generatedAt,
+      openedAt: item.timestamp || generatedAt,
+      openedAtSource: "redeem-activity-unmatched",
+      resolvedAt: item.timestamp || generatedAt,
+      closedAt: item.timestamp || generatedAt,
+      closedAtSource: "redeem-activity-unmatched",
+      endDate: item.timestamp || generatedAt,
+      entryPrice: null,
+      exitPrice: redeemedShares > 0 ? redeemedValue / redeemedShares : 1,
+      currentPrice: 1,
+      finalOutcomePrice: 1,
+      shares: redeemedShares || null,
+      redeemedShares: redeemedShares || null,
+      stakeUsdc: null,
+      totalCostUsdc: null,
+      exitValueUsdc: redeemedValue || null,
+      netGainIfWinUsdc: null,
+      realizedPnlUsdc: null,
+      realizedPnlPct: null,
+      realizedPct: null,
+      unrealizedPnlUsdc: 0,
+      unrealizedPnlPct: 0,
+      reconciliationOnly: true,
+      analysisSummary: "Redeem recorded by Polymarket activity, but the matching original buy is outside the retained trade history. Included as a resolved winning position; stake and realized P/L are intentionally unknown.",
+    });
   }
 
   function indexGroup(group) {
@@ -626,7 +680,14 @@ function closedTradesFromHistory(trades, activity, generatedAt) {
     const type = String(item.type || "").toUpperCase();
     if (!type.includes("REDEEM")) continue;
     const group = bestRedeemGroup(item);
-    if (!group) continue;
+    if (!group || !(group.buyCost > 0)) {
+      // The public feeds have independent, capped windows. A redemption can therefore
+      // still be present after its original buy has aged out of /trades. It remains a
+      // real resolved win and must stay in Closed trades and accuracy, just without a
+      // fabricated stake or P/L.
+      retainUnmatchedRedeem(item);
+      continue;
+    }
     group.sellProceeds += number(item.usdcValue, 0);
     group.redeemedShares = number(group.redeemedShares, 0) + number(item.size, 0);
     if (!group.resolvedAt || Date.parse(item.timestamp || "") > Date.parse(group.resolvedAt || "")) group.resolvedAt = item.timestamp;
@@ -634,7 +695,7 @@ function closedTradesFromHistory(trades, activity, generatedAt) {
     group.closedAtSource = "redeem-activity";
   }
 
-  return [...groups.values()]
+  const matchedRows = [...groups.values()]
     .filter((group) => group.buyCost > 0 && (Math.abs(group.sharesBought - group.sharesSold) < 0.000001 || group.status === "REDEEMED"))
     .map((group) => {
       const realizedPnl = group.sellProceeds - group.buyCost;
@@ -679,6 +740,8 @@ function closedTradesFromHistory(trades, activity, generatedAt) {
         analysisSummary: "Derived from public Polymarket trade history; realized P/L is estimated from buys, sells and redemption-like activity where available.",
       };
     });
+  return [...matchedRows, ...unmatchedRedeems.values()]
+    .sort((left, right) => (Date.parse(right.resolvedAt || "") || 0) - (Date.parse(left.resolvedAt || "") || 0));
 }
 
 function compactText(value, fallback = "-") {
@@ -2005,6 +2068,7 @@ if (invokedDirectly) {
 }
 
 export {
+  closedTradesFromHistory,
   openOrderIdentityKeys,
   vanishedOpenOrders,
   positionHasRedeemableValue,
