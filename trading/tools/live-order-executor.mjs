@@ -3729,6 +3729,10 @@ function orderAttemptSummary(candidate, response = null, extra = {}) {
     orderSize: candidate.orderSize,
     orderNotionalUsdc: candidate.orderNotionalUsdc,
     totalCostUsdc: candidate.totalCostUsdc,
+    // The current Gamma volume was read as part of revalidation immediately before
+    // this order was signed. Preserve that entry snapshot; account history itself
+    // cannot reconstruct the market volume that existed at this moment later on.
+    entryVolumeUsdc: candidate.volumeUsdc == null || candidate.volumeUsdc === "" ? null : number(candidate.volumeUsdc),
     minSizeOverride: candidate.minSizeOverride,
     sizingNote: candidate.sizingNote,
     response,

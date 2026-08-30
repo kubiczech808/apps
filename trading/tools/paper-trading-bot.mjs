@@ -6774,6 +6774,11 @@ function scaledPaperEconomics(best, stake) {
 
 function paperTradeFromCandidate(best, strategy, today, stake) {
   const economics = scaledPaperEconomics(best, stake);
+  // This is the traded volume visible at order creation, not a later mark. Closed
+  // trades keep it as an entry fact so their results can be compared against the
+  // liquidity available when the decision was actually made.
+  const entryVolumeRaw = best.volumeUsdc ?? best.volume24hr;
+  const entryVolumeUsdc = entryVolumeRaw == null || entryVolumeRaw === "" ? null : Number(entryVolumeRaw);
   const equalRiskPlan = strategy.equalRiskProtection
     ? equalRiskStopPlan({
       ...economics,
@@ -6805,6 +6810,7 @@ function paperTradeFromCandidate(best, strategy, today, stake) {
       rawProbability: best.rawProbability,
       marketPrice: best.marketPrice,
       marketProbability: best.marketProbability,
+      entryVolumeUsdc: Number.isFinite(entryVolumeUsdc) ? Number(entryVolumeUsdc.toFixed(2)) : null,
       edge: best.edge,
       expectedValueUsdc: selectedExpectedValue,
       annualizedReturn: selectionEconomics.annualizedReturn,
@@ -6837,6 +6843,7 @@ function paperTradeFromCandidate(best, strategy, today, stake) {
     slippage: best.slippage,
     liquidity: best.liquidity,
     volume24hr: best.volume24hr,
+    entryVolumeUsdc: Number.isFinite(entryVolumeUsdc) ? Number(entryVolumeUsdc.toFixed(2)) : null,
     daysToResolution: best.daysToResolution,
     aiProbability: best.aiProbability,
     rawProbability: best.rawProbability,

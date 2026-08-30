@@ -3601,6 +3601,7 @@ function tradeSortValue(trade, key) {
   if (key === "potentialGain") return tradePotentialGain(trade);
   if (key === "potentialPct") return tradePotentialGainPct(trade);
   if (key === "riskReward") return tradeRiskReward(trade);
+  if (key === "entryVolume") return tradeEntryVolumeUsdc(trade) ?? -1;
   // An unknown volume sorts below a real zero, so it cannot lead a descending sort on a
   // number nobody recorded.
   if (key === "volume") return tradeVolumeUsdc(trade) ?? -1;
@@ -3647,6 +3648,7 @@ const TRADE_HEADER_INFO = {
   potentialGain: "Nominal profit if the selected outcome resolves in our favor; the percent return is shown beside it in brackets.",
   volume: "Traded volume in the market as at the last mark, not order-book depth. It is re-read every time the position is re-priced, so Refresh values updates it. A dash means no volume was recorded for this market.",
   potentialAnnualized: "Potential return annualized by days to resolution.",
+  entryVolume: "Traded market volume captured when the order was created. Unlike the Volume value on open trades, it is never refreshed after entry.",
   pnl: "Current or realized profit/loss for the row.",
   stake: "USDC committed to the position or order.",
 };
@@ -3808,6 +3810,55 @@ function tradeVolumeCell(trade) {
   return money(volume);
 }
 
+function liveExecutionEntryVolumeUsdc(trade = {}) {
+  const tokenId = String(trade.tokenId || trade.assetId || "").trim();
+  if (!tokenId) return null;
+  const openedAt = Date.parse(trade.openedAt || trade.date || "");
+  const records = [
+    state.liveExecutionState || {},
+    ...(Array.isArray(state.liveExecutionState?.runLog) ? state.liveExecutionState.runLog : []),
+  ];
+  const matches = [];
+  for (const record of records) {
+    const runAt = Date.parse(record.runAt || record.generatedAt || record.batchLog?.runAt || "") || 0;
+    for (const attempt of (Array.isArray(record.attempts) ? record.attempts : [])) {
+      if (String(attempt.tokenId || "") !== tokenId) continue;
+      if (String(attempt.side || "BUY").toUpperCase() === "SELL") continue;
+      const action = String(attempt.action || "").toUpperCase();
+      if (action.includes("REJECT") || action.includes("EXIT") || action.startsWith("DRY_RUN")) continue;
+      const accepted = attempt.response?.success === true
+        || Boolean(attempt.response?.orderID || attempt.response?.orderId)
+        || ["live", "matched", "delayed", "unmatched"].includes(String(attempt.responseStatus || attempt.response?.status || "").toLowerCase());
+      const volume = numericOrNull(attempt.entryVolumeUsdc ?? attempt.volumeUsdc);
+      if (!accepted || volume == null) continue;
+      matches.push({ volume, runAt });
+    }
+  }
+  if (!matches.length) return null;
+  // A market can be traded more than once. Prefer the accepted order nearest to the
+  // recorded opening time, then fall back to the newest known one when the public
+  // history does not expose an opening timestamp.
+  matches.sort((a, b) => {
+    if (Number.isFinite(openedAt)) return Math.abs(a.runAt - openedAt) - Math.abs(b.runAt - openedAt);
+    return b.runAt - a.runAt;
+  });
+  return matches[0].volume;
+}
+
+function tradeEntryVolumeUsdc(trade = {}) {
+  const source = trade.sourceEvaluation || {};
+  for (const value of [trade.entryVolumeUsdc, source.entryVolumeUsdc]) {
+    const numeric = numericOrNull(value);
+    if (numeric != null) return numeric;
+  }
+  return isLiveMode() ? liveExecutionEntryVolumeUsdc(trade) : null;
+}
+
+function tradeEntryVolumeCell(trade) {
+  const volume = tradeEntryVolumeUsdc(trade);
+  return volume == null ? '<span class="muted">-</span>' : money(volume);
+}
+
 function renderTradeRows(trades, emptyText, options = {}) {
   const tableKey = options.tableKey || "open";
   const showStatus = options.showStatus !== false;
@@ -3826,6 +3877,7 @@ function renderTradeRows(trades, emptyText, options = {}) {
           ${tradeHeader(tableKey, "resolution", "Resolution")}
           ${tradeHeader(tableKey, showStatus ? "resolvedAt" : "openedAt", showStatus ? "Closed" : "Opened")}
           ${tradeHeader(tableKey, "currentPrice", showStatus ? "Entry / final" : "Entry / mark")}
+          ${showStatus ? tradeHeader(tableKey, "entryVolume", "Entry volume") : ""}
           ${tradeHeader(tableKey, "stake", "Stake")}
           ${showStatus ? "" : tradeHeader(tableKey, "volume", "Volume")}
         </tr>
@@ -3845,6 +3897,7 @@ function renderTradeRows(trades, emptyText, options = {}) {
             <td data-label="Resolution">${resolutionCell(trade)}</td>
             <td data-label="${showStatus ? "Closed" : "Opened"}">${escapeHtml(formatDate(showStatus ? (trade.resolvedAt || trade.closedTime || trade.lastCheckedAt || "") : (trade.openedAt || trade.date || "")))}</td>
             <td data-label="${showStatus ? "Entry / final" : "Entry / mark"}">${tradePriceCell(trade, showStatus)}</td>
+            ${showStatus ? `<td data-label="Entry volume">${tradeEntryVolumeCell(trade)}</td>` : ""}
             <td data-label="Stake">${trade.stakeUsdc == null ? "-" : money(Number(trade.stakeUsdc))}</td>
             ${showStatus ? "" : `<td data-label="Volume">${tradeVolumeCell(trade)}</td>`}
           </tr>
@@ -3951,6 +4004,7 @@ function closedTradeCsvRow(trade) {
     resolution_at: formatDate(resolutionAt),
     resolution_at_iso: resolutionAt,
     entry_price_pct: csvNumber(trade.entryPrice, 100, 4),
+    entry_volume_usdc: csvNumber(tradeEntryVolumeUsdc(trade), 1, 2),
     final_or_mark_price_pct: csvNumber(trade.currentPrice, 100, 4),
     price_change_pct: (() => {
       const entry = Number(trade.entryPrice);

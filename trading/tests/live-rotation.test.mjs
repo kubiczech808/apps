@@ -126,6 +126,16 @@ test("portfolio UI: unfilled limit orders have a dedicated route and do not rema
   assert.match(app, /filter\(\(trade\) => isClosedTrade\(trade\) && !isUnfilledLimitOrder\(trade\)\)/);
 });
 
+test("closed trades: entry volume is recorded at live submission and rendered separately from the live mark", () => {
+  const executorSource = readFileSync(new URL("../tools/live-order-executor.mjs", import.meta.url), "utf8");
+  const app = readFileSync(new URL("../assets/app.js", import.meta.url), "utf8");
+
+  assert.match(executorSource, /entryVolumeUsdc: candidate\.volumeUsdc == null \|\| candidate\.volumeUsdc === "" \? null : number\(candidate\.volumeUsdc\)/);
+  assert.match(app, /function tradeEntryVolumeUsdc\(trade = \{\}\)/);
+  assert.match(app, /tradeHeader\(tableKey, "entryVolume", "Entry volume"\)/);
+  assert.match(app, /entry_volume_usdc: csvNumber\(tradeEntryVolumeUsdc\(trade\), 1, 2\)/);
+});
+
 test("rotation: the fixture drives the economics the executor actually reads", () => {
   // Guards the test itself: if the derived price stopped producing the intended
   // remaining gain, every assertion below would silently test nothing.

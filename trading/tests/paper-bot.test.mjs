@@ -6646,7 +6646,7 @@ function candidateFixture(overrides = {}) {
 
 test("limit orders: a portfolio without the setting still fills at the market ask", () => {
   const strategy = { ...bot.PAPER_STRATEGIES.conservative, useLimitOrders: false };
-  const best = candidateFixture();
+  const best = candidateFixture({ volumeUsdc: 12345.67 });
   const marketTrade = bot.paperTradeFromCandidate(best, strategy, "2026-08-18", 5);
   const trade = bot.openPaperTradeForStrategy(best, strategy, "2026-08-18", 5);
   // openedAt is a fresh timestamp on each call, so it is excluded rather than compared.
@@ -6654,11 +6654,13 @@ test("limit orders: a portfolio without the setting still fills at the market as
     "unset, this must be exactly the existing market-buy path");
   assert.equal(trade.status, "OPEN");
   assert.equal(trade.entryPrice, 0.7);
+  assert.equal(trade.entryVolumeUsdc, 12345.67, "the order keeps the volume observed at entry");
+  assert.equal(trade.sourceEvaluation.entryVolumeUsdc, 12345.67, "the immutable entry volume also survives source evaluation decoration");
 });
 
 test("limit orders: a portfolio with the setting rests at the best bid instead of paying the ask", () => {
   const strategy = { ...bot.PAPER_STRATEGIES.conservative, useLimitOrders: true };
-  const best = candidateFixture();
+  const best = candidateFixture({ volumeUsdc: 9876.54 });
   const trade = bot.openPaperTradeForStrategy(best, strategy, "2026-08-18", 5);
   assert.equal(trade.status, "LIMIT_ORDER_WAITING", "must not be booked as an already-filled position");
   assert.equal(trade.entryPrice, 0.65, "rests at the bid, not the ask it would have paid crossing the spread");
@@ -6666,6 +6668,7 @@ test("limit orders: a portfolio with the setting rests at the best bid instead o
   assert.equal(trade.shares, Number((5 / 0.65).toFixed(4)));
   assert.equal(trade.maxLossUsdc, trade.totalCostUsdc, "the whole reserved stake is still what is at risk");
   assert.equal(trade.currentValueUsdc, 5, "capital is reserved for a resting order the same as a filled one");
+  assert.equal(trade.entryVolumeUsdc, 9876.54, "a later limit fill keeps volume from order creation, not from its fill check");
 });
 
 test("limit orders: a resting maker buy reserves no taker fee", () => {
