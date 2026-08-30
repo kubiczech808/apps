@@ -2028,3 +2028,101 @@ test("live sync: the closed-trade history cannot delete a position the exchange 
   assert.match(sync, /function positionLooksResolved\(position\) \{\s*return positionOfficiallyResolved\(position\);/);
   assert.match(sync, /return Boolean\(position\.redeemable \|\| position\.claimable \|\| position\.resolved\);/);
 });
+
+// Reported: the dashboard listed candidates as READY -- 78.0% and 81.5%, $303k and $275k of
+// volume, resolving the next day -- while every run logged "No order placed: none of the
+// candidates passed the fresh Polymarket verification". They never reached verification.
+// The measured run revalidated exactly 1 of 1200 rows and dropped 213 for "market type
+// multi does not match live portfolio market type binary".
+//
+// Three implementations classify a market and they must agree, because one decides what the
+// screen lists (api.php), one decides what the browser shows (app.js) and one decides what
+// the executor will trade (live-order-executor.mjs). Two agreed; the executor's was an
+// earlier, cruder rule with no "vs" test at all, so every two-sided fixture on the board was
+// visible on screen and invisible to the run.
+//
+// A table of shapes, checked against all three at once. This is the only thing that keeps
+// them together: they are three languages' worth of the same rule and nothing else links
+// them.
+test("market type: api.php, the browser and the executor classify identically", async () => {
+  const executor = await import("../tools/live-order-executor.mjs");
+
+  const cases = [
+    // The reported shape. Two named sides -- "vs" settles it before any question-word guess.
+    [{ question: "US Open ATP: Yibing Wu vs Adam Walton", outcome: "Yibing Wu" }, "binary"],
+    [{ question: "US Open WTA: Renata Zarazua vs Polina Iatcenko", outcome: "Renata Zarazua" }, "binary"],
+    [{ question: "LoL: Gen.G vs KT Rolster (BO5) - LCK Playoffs", outcome: "Gen.G" }, "binary"],
+    [{ question: "Team Spirit vs Team Liquid - Game 2 Winner", outcome: "Team Spirit" }, "binary"],
+    // Two-sided vocabulary without "vs".
+    [{ question: "Spread: Arsenal FC (-2.5)", outcome: "Aston Villa FC" }, "binary"],
+    [{ question: "Alex Michelsen vs. Federico Cina: Total Sets O/U 4.5", outcome: "Under 4.5" }, "binary"],
+    // A field of alternatives, whatever one member's book looks like.
+    [{ question: "Exact Score: Any Other Score?", outcome: "No" }, "multi"],
+    [{ question: "Who will win the 2028 Democratic nomination?", outcome: "Gavin Newsom" }, "multi"],
+    [{ question: "Will Georgia Tree win the 2026 Secret Harbour state by-election?", outcome: "Yes" }, "multi"],
+    // A bracket is one band of a range carved into several, even though it opens with "Will".
+    [{ question: "Will \"Grand Theft Auto VI Extended Look\" get 10-15 million views?", outcome: "Yes" }, "multi"],
+    [{ question: "Will the highest temperature in London be 20-24°C on August 29?", outcome: "Yes" }, "multi"],
+    // A range spelled out in words is NOT caught -- the rule looks for a hyphenated bracket,
+    // so this reads as a plain Yes/No proposition. Pinned as it is rather than as it might
+    // ideally be: all three agree, which is what this test is for, and a change here has to
+    // be made in three places at once.
+    [{ question: "Will \"Grand Theft Auto VI Extended Look\" get between 10 and 15 million views?", outcome: "Yes" }, "binary"],
+    // A plain proposition about one thing happening or not.
+    [{ question: "Will 1. FC Köln win on 2026-08-30?", outcome: "No" }, "binary"],
+    [{ question: "Will WTI Crude Oil (WTI) hit (LOW) $80 in August?", outcome: "No" }, "binary"],
+    // One entity named against a competition rather than an opponent.
+    [{ question: "Real Madrid wins the Champions League", outcome: "Real Madrid" }, "multi"],
+    // More than two outcomes is a field -- but only after the two-sided tests, because a
+    // home/draw/away result carries three and is still one fixture.
+    [{ question: "Serie A: Napoli vs Cagliari", outcome: "Draw", outcomeCount: 3 }, "binary"],
+    [{ question: "Season standing", outcome: "Third", outcomeCount: 6 }, "multi"],
+  ];
+
+  // The executor, which is the implementation that was wrong.
+  for (const [item, expected] of cases) {
+    assert.equal(executor.candidateMarketType(item), expected,
+      `executor: ${JSON.stringify(item.question)} [${item.outcome}]`);
+  }
+
+  // The browser's copy, extracted and run.
+  const browser = new Function(
+    `${extractFunction(APP, "candidateMarketType")}
+     ${/const MULTI_OUTCOME_FIELD = new RegExp\(\[[\s\S]*?\]\.join\("\|"\), "i"\);/.exec(APP)[0]}
+     ${/const BRACKET_RANGE_QUESTION = [^\n]+/.exec(APP)[0]}
+     ${/const TWO_SIDED_EVENT = new RegExp\(\[[\s\S]*?\]\.join\("\|"\), "i"\);/.exec(APP)[0]}
+     ${/const TWO_SIDED_OUTCOMES = new Set\(\[[\s\S]*?\]\);/.exec(APP)[0]}
+     return candidateMarketType;`)();
+  for (const [item, expected] of cases) {
+    assert.equal(browser(item), expected, `browser: ${JSON.stringify(item.question)} [${item.outcome}]`);
+  }
+
+  // And api.php, driven for real rather than restated.
+  const directory = mkdtempSync(join(tmpdir(), "market-type-"));
+  try {
+    const cut = API.indexOf("\ntry {");
+    assert.ok(cut > 0, "api.php still ends with its request dispatch");
+    const definitions = join(directory, "definitions.php");
+    mkdirSync(join(directory, "data"), { recursive: true });
+    writeFileSync(definitions, API.slice(0, cut) + "\n");
+    const encoded = Buffer.from(JSON.stringify(cases.map(([item]) => item))).toString("base64");
+    const output = execFileSync("php", ["-r",
+      `require '${definitions}';`
+      + ` $rows = json_decode(base64_decode('${encoded}'), true);`
+      + ` echo json_encode(array_map(fn($r) => observation_market_type($r), $rows));`,
+    ], { encoding: "utf8" });
+    const php = JSON.parse(output);
+    cases.forEach(([item, expected], index) => {
+      assert.equal(php[index], expected, `api.php: ${JSON.stringify(item.question)} [${item.outcome}]`);
+    });
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+
+  // The executor must not short-circuit on a stored marketType either: neither of the other
+  // two reads one, so a row carrying a value from the old rule would keep its wrong answer
+  // for as long as it was retained.
+  assert.equal(executor.candidateMarketType({
+    question: "US Open ATP: Yibing Wu vs Adam Walton", outcome: "Yibing Wu", marketType: "multi",
+  }), "binary", "a stored classification must not override the shared rule");
+});

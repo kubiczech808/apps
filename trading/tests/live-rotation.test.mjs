@@ -1927,7 +1927,12 @@ test("5050 placement: the batch stops at its time budget and defers the rest", a
   const result = await runPlacementLoop({ budgetMs: 400, targetCount: 50, perOrderMs: 40 });
   assert.ok(result.placed > 1 && result.placed < 50, `expected a partial batch, placed ${result.placed}`);
   assert.equal(result.placed + result.deferredForBudget, 50, "every candidate is either placed or deferred");
-  assert.ok(result.elapsed <= 400, `the budget is a ceiling, not a target: took ${result.elapsed}ms`);
+  // One order's worth of tolerance, because this is a real wall clock. The loop can only
+  // overshoot by the order it had already committed to when the budget ran out, so 400 + 40
+  // is the true ceiling; asserting a bare 400 failed on 401ms roughly one run in four and
+  // made a green suite a coin toss. The check still means what it says -- a loop that ran
+  // the whole batch would land near 2000ms and fail by a mile.
+  assert.ok(result.elapsed <= 440, `the budget is a ceiling, not a target: took ${result.elapsed}ms`);
 });
 
 test("5050 placement: a budget never produces a pass that places nothing", async () => {

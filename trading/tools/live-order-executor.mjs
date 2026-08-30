@@ -783,22 +783,65 @@ function candidateVolumeUsdc(item = {}) {
   return 0;
 }
 
+// Kept identical, rule for rule and in this order, to observation_market_type() in api.php
+// and candidateMarketType() in assets/app.js. Those two agree; this one did not, and the
+// disagreement was the whole of a reported fault.
+//
+// Reported: the dashboard listed two candidates as READY -- 78.0% and 81.5%, $303k and
+// $275k of volume, resolving the next day -- while every run logged "none of the candidates
+// passed the fresh Polymarket verification". They never reached verification. The run that
+// was measured revalidated exactly ONE of 1200 rows, and dropped 213 of them for
+// "market type multi does not match live portfolio market type binary".
+//
+// "US Open ATP: Yibing Wu vs Adam Walton", outcome "Yibing Wu", is the shape. The other two
+// implementations match "vs" and call it binary -- two named sides settle it. This one had
+// no "vs" rule at all: the outcome is not yes/no/over/under and the question does not open
+// with "Will", so it fell through to multi. With the portfolio set to binary, every
+// two-sided fixture on the board was invisible to the executor and visible on the screen.
+//
+// A stored `marketType` is deliberately no longer trusted either. Neither of the other two
+// reads one, and a row carrying a value computed by the rule above would have kept its
+// wrong answer for as long as it was retained.
+const MULTI_OUTCOME_FIELD = new RegExp([
+  "(exact|correct)[-\\s]?score",
+  "\\belections?\\b", "\\bprimary\\b", "\\bcaucus\\b", "\\bballot\\b", "\\breferend",
+  "\\bnominee\\b", "\\bnomination\\b", "\\baward\\b", "\\boscars?\\b", "\\bgrammys?\\b",
+  "\\bnobel\\b", "\\bballon\\b", "\\bmvp\\b",
+  "group[-\\s]winner", "\\btop[-\\s]scorer\\b", "\\boutright\\b", "winner[-\\s]of\\b",
+  "\\bnext\\s+(president|prime\\s+minister|pope|chancellor|leader|ceo)\\b",
+].join("|"), "i");
+
+const BRACKET_RANGE_QUESTION = /(?<![\d-])\d{1,3}\s?-\s?\d{1,3}(?![\d-])|(?<![\d-])\d{1,4}\+/;
+
+const TWO_SIDED_EVENT = new RegExp([
+  "\\bvs\\.?\\b", "\\bv\\.\\b", "\\s@\\s",
+  "\\bhandicap\\b", "\\bspread\\b", "\\bmoneyline\\b", "\\bpuck\\s?line\\b", "\\brun\\s?line\\b",
+  "over\\s?/\\s?under", "\\bo\\s?/\\s?u\\b",
+].join("|"), "i");
+
+const TWO_SIDED_OUTCOMES = new Set([
+  "yes", "no", "over", "under", "up", "down", "even", "odd", "home", "away", "draw", "tie",
+]);
+
 function candidateMarketType(item = {}) {
   const source = item?.candidate || {};
-  for (const value of [item?.marketType, source?.marketType]) {
-    const normalized = String(value || "").trim().toLowerCase();
-    if (["binary", "multi"].includes(normalized)) return normalized;
-  }
   const question = String(item?.question || source?.question || "");
   const slug = String(item?.eventSlug || source?.eventSlug || item?.slug || source?.slug || "");
-  if (/(^|[-\s])(exact-score|correct-score|winner|group-winner|nominee|award|primary|election)([-\s]|$)/i.test(`${slug} ${question}`)) {
+  const haystack = `${slug} ${question}`;
+  const outcome = String(item?.outcome || source?.outcome || "").trim().toLowerCase();
+  const outcomeCount = Number(item?.outcomeCount ?? source?.outcomeCount);
+
+  if (MULTI_OUTCOME_FIELD.test(haystack)) return "multi";
+  if (BRACKET_RANGE_QUESTION.test(question)) return "multi";
+  if (TWO_SIDED_EVENT.test(haystack)) return "binary";
+  if (TWO_SIDED_OUTCOMES.has(outcome)) return "binary";
+  if (Number.isFinite(outcomeCount) && outcomeCount > 2) return "multi";
+  if (/^(which|who|what|how many)\b/i.test(question)) return "multi";
+  if (/\bwins?\b[^?]*\b(cup|league|championship|title|tournament|final|open|series|medal|division|conference|playoffs?)\b/i.test(question)) {
     return "multi";
   }
-  if (/^(which|who|what|how many)\b/i.test(question)) return "multi";
-  const outcome = String(item?.outcome || source?.outcome || "").trim().toLowerCase();
-  if (["yes", "no", "up", "down", "over", "under"].includes(outcome)) return "binary";
   if (/^(will|is|are|can|does|do|did|has|have|was|were)\b/i.test(question)) return "binary";
-  return "multi";
+  return /^(yes|no)$/i.test(outcome) ? "binary" : "multi";
 }
 
 function isOverUnderMarket(item = {}) {
@@ -5292,6 +5335,7 @@ export {
   rotationNetProfitGuard,
   orderPriceForBook,
   orderPriceBandRejection,
+  candidateMarketType,
   endDateHasPassed,
   finishedAwaitingResolutionRejection,
   repriceReason,

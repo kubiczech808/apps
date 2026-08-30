@@ -1585,7 +1585,7 @@ test("trade table: every header lines up with the cell beneath it", async () => 
   // stated here, which is what makes the alignment check below meaningful.
   assert.deepEqual(headers, [
     "Win", "P/L", "Market", "Win p.a.", "Resolution",
-    "Closed|Opened", "Entry / final|Entry / mark", "Stake", "Volume",
+    "Closed|Opened", "Entry / final|Entry / mark", "Entry volume", "Stake", "Volume",
   ]);
   assert.deepEqual(cells, headers, "each column's cell must sit under its own header");
 
