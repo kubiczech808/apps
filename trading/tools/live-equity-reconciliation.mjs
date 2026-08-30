@@ -145,6 +145,47 @@ async function main() {
     console.log(`   -> ${money(missingValue)} of position value is missing from the snapshot entirely.`);
   }
 
+  // 3b. WHY each dropped position was dropped. The sync takes /positions and splits it:
+  // anything Polymarket flags redeemable/claimable/resolved becomes a closed trade, the
+  // rest stays an open position -- and both halves additionally drop anything whose key
+  // already appears in the trade/activity history. A settled winner is still HELD until
+  // it is redeemed, and Polymarket keeps counting it, so whichever branch takes it must
+  // put its value back into equity or the account is understated by exactly that much.
+  // These are the sync's own predicates, copied so the split can be attributed.
+  const officiallyResolved = (row) => Boolean(row.redeemable || row.claimable || row.resolved);
+  const hasRedeemableValue = (row) => {
+    const value = num(row.currentValue ?? row.currentValueUsdc, 0) ?? 0;
+    const price = num(row.curPrice ?? row.currentPrice);
+    return value > 0.000001 || (price != null && price >= 0.995);
+  };
+  const buckets = {
+    resolvedWithValue: [],
+    resolvedWorthless: [],
+    unresolvedButDropped: [],
+  };
+  for (const [, row] of missingFromSnapshot) {
+    if (!officiallyResolved(row)) buckets.unresolvedButDropped.push(row);
+    else if (hasRedeemableValue(row)) buckets.resolvedWithValue.push(row);
+    else buckets.resolvedWorthless.push(row);
+  }
+  const bucketValue = (list) => list.reduce((sum, row) => sum + (num(row.currentValue ?? row.value, 0) ?? 0), 0);
+  console.log(`\n3b. WHY THE SNAPSHOT DROPPED THEM`);
+  for (const [name, list, note] of [
+    ["resolved, still held, still worth money", buckets.resolvedWithValue,
+      "these are redeemable winnings -- held in the wallet, counted by Polymarket"],
+    ["resolved and worth nothing", buckets.resolvedWorthless, "correctly worth 0"],
+    ["NOT resolved, yet dropped anyway", buckets.unresolvedButDropped,
+      "an open position the snapshot lost -- its key matched the closed-trade history"],
+  ]) {
+    console.log(`   ${list.length.toString().padStart(3)} ${name}: ${money(bucketValue(list))}  (${note})`);
+    for (const row of [...list].sort((a, b) => (num(b.currentValue ?? b.value, 0) ?? 0) - (num(a.currentValue ?? a.value, 0) ?? 0)).slice(0, 6)) {
+      console.log(`        ${money(num(row.currentValue ?? row.value))}  size ${num(row.size, 0)?.toFixed(2)} @ ${num(row.curPrice)?.toFixed(4) ?? "-"}  ${String(row.title || "").slice(0, 58)}`);
+    }
+  }
+  console.log(`   published pendingRedeemUsdc ${money(num(publishedView.portfolio.pendingRedeemUsdc))}`);
+  console.log(`   -> if the first bucket is non-zero while pendingRedeemUsdc is 0, that value`);
+  console.log(`      is counted nowhere: not in marketValueUsdc, not in pending redeem.`);
+
   // 4. VALUATION -- same position, different number.
   console.log(`\n4. VALUATION ON THE POSITIONS BOTH SIDES HOLD`);
   let valuationGap = 0;
