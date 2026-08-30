@@ -3290,13 +3290,60 @@ test("portfolio market type: Yes/No and multichoice use the same three-value fil
     import("node:fs/promises").then(({ readFile }) => readFile(new URL("../tools/live-order-executor.mjs", import.meta.url), "utf8")),
   ]);
   assert.match(html, /data-portfolio-market-type/);
+  assert.match(html, /data-exclude-over-under-markets/);
   assert.match(html, /<option value="binary">Yes\/No<\/option>/);
   assert.ok(!html.includes("Only multichoice events"));
   assert.match(app, /market type .* does not match/i);
   assert.match(paperWorkflow, /_MARKET_TYPE/);
+  assert.match(paperWorkflow, /_EXCLUDE_OVER_UNDER_MARKETS/);
   assert.match(liveWorkflow, /"LIVE_MARKET_TYPE": live\.get\("marketType"\)/);
+  assert.match(liveWorkflow, /LIVE_EXCLUDE_OVER_UNDER_MARKETS/);
   assert.match(fixedWorkflow, /"LIVE_MARKET_TYPE": cfg\.get\("marketType"\)/);
+  assert.match(fixedWorkflow, /LIVE_EXCLUDE_OVER_UNDER_MARKETS/);
   assert.match(functionSource(executor, "prefilterLiveCandidate"), /PORTFOLIO_MARKET_TYPE !== "all"/);
+  assert.match(functionSource(executor, "prefilterLiveCandidate"), /EXCLUDE_OVER_UNDER_MARKETS/);
+});
+
+test("portfolio O/U exclusion removes totals from the paper shortlist and final selection", () => {
+  const strategy = {
+    ...bot.PAPER_STRATEGIES.conservative,
+    probabilitySource: "polymarket",
+    minProbability: 0.9,
+    minLiquidityUsdc: 0,
+    marketType: "binary",
+    excludeOverUnderMarkets: true,
+  };
+  const base = {
+    tokenId: "12345678901234567890",
+    status: "SCRAPED",
+    marketProbability: 0.95,
+    marketPrice: 0.95,
+    spread: 0.02,
+    volumeUsdc: 100000,
+    daysToResolution: 1,
+    netGainIfWinUsdc: 0.25,
+    totalCostUsdc: 5,
+  };
+  const total = {
+    ...base,
+    question: "Lions vs Tigers: O/U 2.5",
+    eventSlug: "lions-tigers-total-2pt5",
+    outcome: "Over",
+  };
+  const ordinary = {
+    ...base,
+    tokenId: "22345678901234567890",
+    question: "Will Lions win the match?",
+    eventSlug: "lions-win-match",
+    outcome: "Yes",
+  };
+
+  assert.equal(bot.isOverUnderMarket(total), true);
+  assert.equal(bot.isOverUnderMarket(ordinary), false);
+  const filtered = bot.portfolioFilterResult(total, strategy);
+  assert.equal(filtered.eligible, false);
+  assert.ok(filtered.reasons.some((reason) => /Over\/Under market is excluded/.test(reason)));
+  assert.deepEqual(bot.strategyEligibleCandidates([total, ordinary], strategy), [ordinary]);
 });
 
 test("execution revalidation: an unavailable CLOB quote cannot remain an Equal candidate", () => {

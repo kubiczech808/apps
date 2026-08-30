@@ -48,6 +48,7 @@ const PORTFOLIO_MARKET_TYPE = normalizePortfolioMarketType(
   process.env.LIVE_MARKET_TYPE,
   String(process.env.LIVE_REQUIRE_MOST_PROBABLE || "").toLowerCase() === "true",
 );
+const EXCLUDE_OVER_UNDER_MARKETS = String(process.env.LIVE_EXCLUDE_OVER_UNDER_MARKETS || "").toLowerCase() === "true";
 // The AI probability pipeline was retired, so scoring always uses the
 // Polymarket outcome probability. LIVE_PROBABILITY_SOURCE is deliberately
 // ignored: an older stored portfolio config must not resurrect "ai".
@@ -800,6 +801,18 @@ function candidateMarketType(item = {}) {
   return "multi";
 }
 
+function isOverUnderMarket(item = {}) {
+  const source = item?.candidate || {};
+  const question = String(item?.question || source?.question || "");
+  const slug = String(item?.eventSlug || source?.eventSlug || item?.slug || source?.slug || "");
+  const outcome = String(item?.outcome || source?.outcome || "").trim().toLowerCase();
+  const text = `${slug} ${question}`;
+  if (/(?:\bo\s*\/\s*u\b|over\s*\/\s*under|over\s+under|\btotal(?:\s+(?:goals?|points?|runs?|maps?|rounds?|kills?|games?|sets?))?\s*(?:o\s*\/\s*u\s*)?\d+(?:[.,]\d+)?\b)/i.test(text)) return true;
+  if (/(?:^|[-_])(?:o[-_]?u|over[-_]?under|total[-_]\d)/i.test(slug)) return true;
+  return (outcome === "over" || outcome === "under")
+    && /(?:\bo\s*\/\s*u\b|\bover\b|\bunder\b|\btotal\b|\b\d+(?:[.,]\d+)?\b)/i.test(question);
+}
+
 function prefilterLiveCandidate(item) {
   const reasons = [];
   const tokenId = String(item?.tokenId || "");
@@ -813,6 +826,9 @@ function prefilterLiveCandidate(item) {
   const marketType = candidateMarketType(item);
   if (PORTFOLIO_MARKET_TYPE !== "all" && marketType !== PORTFOLIO_MARKET_TYPE) {
     reasons.push(`market type ${marketType} does not match live portfolio market type ${PORTFOLIO_MARKET_TYPE}`);
+  }
+  if (EXCLUDE_OVER_UNDER_MARKETS && isOverUnderMarket(item)) {
+    reasons.push("Over/Under market is excluded by this live portfolio");
   }
   if (EXCLUDED_CANDIDATE_TOKEN_IDS.has(tokenId)) reasons.push("manually excluded from this live portfolio");
   // Applied in the shared prefilter so both live strategies share the same shortlist.
@@ -2786,6 +2802,22 @@ async function revalidateEvaluation(
       minOrderSize,
     };
   }
+  if (EXCLUDE_OVER_UNDER_MARKETS && isOverUnderMarket({
+    ...evaluation,
+    question: market.question || evaluation.question,
+    eventSlug: marketEventSlug(market) || evaluation.eventSlug,
+    outcome: outcomes[tokenIndex] || evaluation.outcome,
+  })) {
+    return {
+      candidate: evaluation,
+      eligible: false,
+      status: "REJECTED",
+      rejectReasons: ["current market is Over/Under and is excluded by this live portfolio"],
+      currentPrice: price,
+      marketProbability,
+      minOrderSize,
+    };
+  }
   const endDate = dateContext.endDate;
   const days = daysToEnd(endDate);
   const resolvedDays = daysValue({ daysToResolution: days });
@@ -4694,6 +4726,7 @@ async function main() {
       minProbability: MIN_PROBABILITY,
       maxProbability: MAX_PROBABILITY,
       marketType: PORTFOLIO_MARKET_TYPE,
+      excludeOverUnderMarkets: EXCLUDE_OVER_UNDER_MARKETS,
       probabilitySource: PROBABILITY_SOURCE,
       minAnnualReturn: MIN_ANNUAL_RETURN,
       maxSpread: MAX_SPREAD,
@@ -4754,6 +4787,7 @@ async function main() {
         minProbability: MIN_PROBABILITY,
         maxProbability: MAX_PROBABILITY,
         marketType: PORTFOLIO_MARKET_TYPE,
+        excludeOverUnderMarkets: EXCLUDE_OVER_UNDER_MARKETS,
         probabilitySource: PROBABILITY_SOURCE,
         minAnnualReturn: MIN_ANNUAL_RETURN,
         maxSpread: MAX_SPREAD,

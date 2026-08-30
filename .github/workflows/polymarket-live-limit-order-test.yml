@@ -226,6 +226,7 @@ jobs:
               "LIVE_CONFIG_MIN_LIQUIDITY_USDC": live.get("minLiquidityUsdc"),
               "LIVE_MIN_NET_YIELD": live.get("minNetYield"),
               "LIVE_MARKET_TYPE": live.get("marketType"),
+              "LIVE_EXCLUDE_OVER_UNDER_MARKETS": str(bool(live.get("excludeOverUnderMarkets", False))).lower(),
               "LIVE_EXECUTION_TRIGGER": live.get("executionTrigger"),
               "LIVE_EXECUTION_CRON_MINUTES": live.get("executionCronMinutes"),
               # Default on: a portfolio that never stored the field must keep trading.

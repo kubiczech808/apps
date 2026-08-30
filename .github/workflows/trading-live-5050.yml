@@ -145,6 +145,7 @@ jobs:
               "LIVE_MIN_PROBABILITY": cfg.get("minProbability"),
               "LIVE_MAX_PROBABILITY": cfg.get("maxProbability"),
               "LIVE_MARKET_TYPE": cfg.get("marketType"),
+              "LIVE_EXCLUDE_OVER_UNDER_MARKETS": str(bool(cfg.get("excludeOverUnderMarkets", False))).lower(),
               "LIVE_MAX_RESOLUTION_DAYS": cfg.get("maxResolutionDays"),
               "LIVE_CONFIG_MIN_LIQUIDITY_USDC": cfg.get("minLiquidityUsdc"),
               # Which Polymarket tags this portfolio may bid on. A saved empty list means

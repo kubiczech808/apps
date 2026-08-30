@@ -502,6 +502,7 @@ const PAPER_STRATEGIES = {
     // ask. Default off, unchanged behavior absent a saved value.
     useLimitOrders: envBool("PAPER_CONSERVATIVE_USE_LIMIT_ORDERS", false),
     marketType: envPortfolioMarketType("PAPER_CONSERVATIVE_MARKET_TYPE", "PAPER_CONSERVATIVE_REQUIRE_MOST_PROBABLE", "all"),
+    excludeOverUnderMarkets: envBool("PAPER_CONSERVATIVE_EXCLUDE_OVER_UNDER_MARKETS", false),
     requireMostProbableOutcome: envPortfolioMarketType("PAPER_CONSERVATIVE_MARKET_TYPE", "PAPER_CONSERVATIVE_REQUIRE_MOST_PROBABLE", "all") === "multi",
     probabilitySource: envProbabilitySource("PAPER_CONSERVATIVE_PROBABILITY_SOURCE"),
     excludedCandidateTokenIds: envTokenIdSet("PAPER_CONSERVATIVE_EXCLUDED_CANDIDATE_TOKEN_IDS"),
@@ -532,6 +533,7 @@ const PAPER_STRATEGIES = {
     equalRiskProtection: envStopLossRiskMultiplier("PAPER_HIGH_REWARD", 0) > 0,
     useLimitOrders: envBool("PAPER_HIGH_REWARD_USE_LIMIT_ORDERS", false),
     marketType: envPortfolioMarketType("PAPER_HIGH_REWARD_MARKET_TYPE", "PAPER_HIGH_REWARD_REQUIRE_MOST_PROBABLE", "all"),
+    excludeOverUnderMarkets: envBool("PAPER_HIGH_REWARD_EXCLUDE_OVER_UNDER_MARKETS", false),
     requireMostProbableOutcome: envPortfolioMarketType("PAPER_HIGH_REWARD_MARKET_TYPE", "PAPER_HIGH_REWARD_REQUIRE_MOST_PROBABLE", "all") === "multi",
     probabilitySource: envProbabilitySource("PAPER_HIGH_REWARD_PROBABILITY_SOURCE"),
     excludedCandidateTokenIds: envTokenIdSet("PAPER_HIGH_REWARD_EXCLUDED_CANDIDATE_TOKEN_IDS"),
@@ -562,6 +564,7 @@ const PAPER_STRATEGIES = {
     equalRiskProtection: envStopLossRiskMultiplier("PAPER_MORE_PROBABLE", 0) > 0,
     useLimitOrders: envBool("PAPER_MORE_PROBABLE_USE_LIMIT_ORDERS", false),
     marketType: envPortfolioMarketType("PAPER_MORE_PROBABLE_MARKET_TYPE", "PAPER_MORE_PROBABLE_REQUIRE_MOST_PROBABLE", "multi"),
+    excludeOverUnderMarkets: envBool("PAPER_MORE_PROBABLE_EXCLUDE_OVER_UNDER_MARKETS", false),
     requireMostProbableOutcome: envPortfolioMarketType("PAPER_MORE_PROBABLE_MARKET_TYPE", "PAPER_MORE_PROBABLE_REQUIRE_MOST_PROBABLE", "multi") === "multi",
     probabilitySource: envProbabilitySource("PAPER_MORE_PROBABLE_PROBABILITY_SOURCE"),
     excludedCandidateTokenIds: envTokenIdSet("PAPER_MORE_PROBABLE_EXCLUDED_CANDIDATE_TOKEN_IDS"),
@@ -596,6 +599,7 @@ const PAPER_STRATEGIES = {
     equalRiskProtection: envStopLossRiskMultiplier("PAPER_EQUAL", 1.5) > 0,
     useLimitOrders: envBool("PAPER_EQUAL_USE_LIMIT_ORDERS", false),
     marketType: envPortfolioMarketType("PAPER_EQUAL_MARKET_TYPE", "PAPER_EQUAL_REQUIRE_MOST_PROBABLE", "all"),
+    excludeOverUnderMarkets: envBool("PAPER_EQUAL_EXCLUDE_OVER_UNDER_MARKETS", false),
     requireMostProbableOutcome: envPortfolioMarketType("PAPER_EQUAL_MARKET_TYPE", "PAPER_EQUAL_REQUIRE_MOST_PROBABLE", "all") === "multi",
     probabilitySource: envProbabilitySource("PAPER_EQUAL_PROBABILITY_SOURCE"),
     excludedCandidateTokenIds: envTokenIdSet("PAPER_EQUAL_EXCLUDED_CANDIDATE_TOKEN_IDS"),
@@ -663,6 +667,7 @@ function customPaperStrategies(raw = process.env.PAPER_CUSTOM_PORTFOLIOS) {
       useLimitOrders: row.useLimitOrders === true,
       archived: row.archived === true,
       marketType,
+      excludeOverUnderMarkets: row.excludeOverUnderMarkets === true,
       requireMostProbableOutcome: marketType === "multi",
       probabilitySource: row.probabilitySource === "ai" ? "ai" : "polymarket",
       excludedCandidateTokenIds: new Set((Array.isArray(row.excludedCandidateTokenIds) ? row.excludedCandidateTokenIds : [])
@@ -1675,6 +1680,7 @@ function normalizePaperPortfolio(strategy, input = {}) {
     minNetYield: Math.max(0, Number(strategy.minNetYield) || 0),
     executionTrigger: normalizeExecutionTrigger(strategy.executionTrigger),
     marketType: normalizePortfolioMarketType(strategy.marketType, strategy.requireMostProbableOutcome),
+    excludeOverUnderMarkets: Boolean(strategy.excludeOverUnderMarkets),
     requireMostProbableOutcome: Boolean(strategy.requireMostProbableOutcome),
     probabilitySource: strategy.probabilitySource,
     equalRiskMultiplier: normalizeStopLossRiskMultiplier(strategy.equalRiskMultiplier, strategy.equalRiskProtection ? 1 : 0),
@@ -1725,6 +1731,7 @@ function normalizePaperPortfolio(strategy, input = {}) {
       minNetYield: Math.max(0, Number(strategy.minNetYield) || 0),
       executionTrigger: normalizeExecutionTrigger(strategy.executionTrigger),
       marketType: normalizePortfolioMarketType(strategy.marketType, strategy.requireMostProbableOutcome),
+      excludeOverUnderMarkets: Boolean(strategy.excludeOverUnderMarkets),
       requireMostProbableOutcome: Boolean(strategy.requireMostProbableOutcome),
       probabilitySource: strategy.probabilitySource,
       equalRiskMultiplier: normalizeStopLossRiskMultiplier(strategy.equalRiskMultiplier, strategy.equalRiskProtection ? 1 : 0),
@@ -6377,6 +6384,7 @@ function strategyEligibleCandidates(eligible, strategy) {
     // came to disagree about the same market.
     const marketType = reportMarketType(item);
     if (requiredMarketType !== "all" && marketType !== requiredMarketType) return false;
+    if (strategy.excludeOverUnderMarkets && isOverUnderMarket(item)) return false;
     if (strategy.equalRiskProtection) {
       const entry = paperEntryEconomics(item, strategy);
       const plan = equalRiskStopPlan({
@@ -6658,6 +6666,9 @@ function portfolioFilterResult(item, strategy) {
   }
   if (requiredMarketType !== "all" && marketType !== requiredMarketType) {
     reasons.push(`market type ${marketType || "-"} does not match portfolio market type ${requiredMarketType}`);
+  }
+  if (strategy.excludeOverUnderMarkets && isOverUnderMarket(item)) {
+    reasons.push("Over/Under market is excluded by this paper portfolio");
   }
   if (strategy.equalRiskProtection) {
     const entry = paperEntryEconomics(item, strategy);
@@ -9987,6 +9998,17 @@ function reportMarketType(item) {
   return outcomeKind(item?.outcome) === "OUTCOME" ? "multi" : "binary";
 }
 
+function isOverUnderMarket(item = {}) {
+  const question = String(item?.question || "");
+  const slug = String(item?.eventSlug || item?.slug || "");
+  const outcome = String(item?.outcome || "").trim().toLowerCase();
+  const text = `${slug} ${question}`;
+  if (/(?:\bo\s*\/\s*u\b|over\s*\/\s*under|over\s+under|\btotal(?:\s+(?:goals?|points?|runs?|maps?|rounds?|kills?|games?|sets?))?\s*(?:o\s*\/\s*u\s*)?\d+(?:[.,]\d+)?\b)/i.test(text)) return true;
+  if (/(?:^|[-_])(?:o[-_]?u|over[-_]?under|total[-_]\d)/i.test(slug)) return true;
+  return (outcome === "over" || outcome === "under")
+    && /(?:\bo\s*\/\s*u\b|\bover\b|\bunder\b|\btotal\b|\b\d+(?:[.,]\d+)?\b)/i.test(question);
+}
+
 function reportPolymarketProbability(item) {
   const value = Number(item?.marketProbability ?? item?.entryPrice ?? item?.marketPrice ?? item?.currentPrice);
   return Number.isFinite(value) && value > 0 && value < 1 ? value : null;
@@ -11651,6 +11673,7 @@ export {
   // Whether an event is two-sided or a field of mutually exclusive alternatives. Both the
   // portfolio filters and the statistics classify through this one function.
   reportMarketType,
+  isOverUnderMarket,
   // How wide a row's quote was, and whether that leaves anything to trade against. The
   // statistics judge the price the row was discovered at; an entry judges the book now.
   observationSpread,

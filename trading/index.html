@@ -478,6 +478,10 @@
           </select>
           <strong data-portfolio-market-type-label>All markets</strong>
         </label>
+        <label class="parameter-control order-mode-toggle" title="When enabled, Over/Under (O/U) totals are excluded before a market can become a candidate or be executed.">
+          <input type="checkbox" data-exclude-over-under-markets>
+          <span>Exclude Over/Under (O/U)</span>
+        </label>
         <label class="parameter-control order-mode-toggle">
           <input type="checkbox" data-limit-orders>
           <span>Use limit orders</span>
@@ -495,6 +499,6 @@
 
   <!-- Bump on every assets/app.js change. The browser caches this exact URL, so a deploy
        that leaves it alone publishes the new file and keeps serving the old one. -->
-  <script src="assets/app.js?v=20260828-scoped-running-log"></script>
+  <script src="assets/app.js?v=20260830-exclude-over-under"></script>
 </body>
 </html>

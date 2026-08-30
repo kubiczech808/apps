@@ -304,6 +304,7 @@ jobs:
               # behavior for every portfolio that has not turned it on.
               emit(f"{prefix}_USE_LIMIT_ORDERS", str(bool(row.get("useLimitOrders"))).lower())
               emit(f"{prefix}_MARKET_TYPE", row.get("marketType"))
+              emit(f"{prefix}_EXCLUDE_OVER_UNDER_MARKETS", str(bool(row.get("excludeOverUnderMarkets", False))).lower())
               emit(f"{prefix}_REQUIRE_MOST_PROBABLE", str(bool(row.get("requireMostProbableOutcome"))).lower())
               emit(f"{prefix}_PROBABILITY_SOURCE", row.get("probabilitySource"))
               excluded_tokens = [str(token) for token in (row.get("excludedCandidateTokenIds") or []) if str(token).isdigit()]

@@ -1154,6 +1154,27 @@ function observation_market_type(array $item): string
     return ($outcome === 'yes' || $outcome === 'no') ? 'binary' : 'multi';
 }
 
+/**
+ * O/U totals are a separate portfolio policy from the broad Yes/No market type.
+ * The outcome alone is intentionally insufficient: it must be accompanied by a total
+ * line in the question or a recognised Gamma/Polymarket slug.
+ */
+function observation_is_over_under_market(array $item): bool
+{
+    $question = (string) ($item['question'] ?? '');
+    $slug = (string) ($item['eventSlug'] ?? $item['slug'] ?? '');
+    $outcome = strtolower(trim((string) ($item['outcome'] ?? '')));
+    $text = $slug . ' ' . $question;
+    if (preg_match('/(?:\bo\s*\/\s*u\b|over\s*\/\s*under|over\s+under|\btotal(?:\s+(?:goals?|points?|runs?|maps?|rounds?|kills?|games?|sets?))?\s*(?:o\s*\/\s*u\s*)?\d+(?:[.,]\d+)?\b)/i', $text) === 1) {
+        return true;
+    }
+    if (preg_match('/(?:^|[-_])(?:o[-_]?u|over[-_]?under|total[-_]\d)/i', $slug) === 1) {
+        return true;
+    }
+    return in_array($outcome, ['over', 'under'], true)
+        && preg_match('/(?:\bo\s*\/\s*u\b|\bover\b|\bunder\b|\btotal\b|\b\d+(?:[.,]\d+)?\b)/i', $question) === 1;
+}
+
 function is_active_scraped_market_observation(array $item): bool
 {
     $status = strtoupper((string) ($item['status'] ?? $item['selectionStatus'] ?? ''));
@@ -1264,6 +1285,9 @@ function execution_scope_matches_observation(array $item, array $config): bool
     }
     $marketType = normalize_portfolio_market_type_value($config['marketType'] ?? null, false);
     if ($marketType !== 'all' && observation_market_type($item) !== $marketType) {
+        return false;
+    }
+    if (($config['excludeOverUnderMarkets'] ?? false) === true && observation_is_over_under_market($item)) {
         return false;
     }
     $tags = execution_scope_observation_tags($item);
@@ -1936,6 +1960,7 @@ function default_portfolio_config(): array
                 // their order mode is configurable and must be retained on save.
                 'useLimitOrders' => false,
                 'marketType' => 'all',
+                'excludeOverUnderMarkets' => false,
                 'requireMostProbableOutcome' => false,
                 'probabilitySource' => 'ai',
                 'autoRotatePositions' => true,
@@ -1959,6 +1984,7 @@ function default_portfolio_config(): array
                 'executionTrigger' => 'cron',
                 'useLimitOrders' => false,
                 'marketType' => 'all',
+                'excludeOverUnderMarkets' => false,
                 'requireMostProbableOutcome' => false,
                 'probabilitySource' => 'ai',
                 'autoRotatePositions' => true,
@@ -1980,6 +2006,7 @@ function default_portfolio_config(): array
                 'executionTrigger' => 'cron',
                 'useLimitOrders' => false,
                 'marketType' => 'multi',
+                'excludeOverUnderMarkets' => false,
                 'requireMostProbableOutcome' => true,
                 'probabilitySource' => 'ai',
                 'autoRotatePositions' => true,
@@ -2006,6 +2033,7 @@ function default_portfolio_config(): array
                 'executionTrigger' => 'after_scrape',
                 'useLimitOrders' => false,
                 'marketType' => 'all',
+                'excludeOverUnderMarkets' => false,
                 'requireMostProbableOutcome' => false,
                 'probabilitySource' => 'polymarket',
                 // Equal remains conservative by default, but the same On/Off control
@@ -2033,6 +2061,7 @@ function default_portfolio_config(): array
             'executionTrigger' => 'cron',
             'useLimitOrders' => true,
             'marketType' => 'all',
+            'excludeOverUnderMarkets' => false,
             'requireMostProbableOutcome' => false,
             'probabilitySource' => 'ai',
             'autoRotatePositions' => true,
@@ -2063,6 +2092,7 @@ function default_portfolio_config(): array
             'executionTrigger' => 'cron',
             'useLimitOrders' => true,
             'marketType' => 'all',
+            'excludeOverUnderMarkets' => false,
             'requireMostProbableOutcome' => false,
             'probabilitySource' => 'polymarket',
             'automationEnabled' => false,
@@ -2098,7 +2128,7 @@ function portfolio_config_history_fields(): array
 {
     return [
         'displayName', 'initialUsdc', 'minProbability', 'maxProbability', 'stakeUsdc',
-        'maxResolutionDays', 'selectionOrder', 'marketType', 'probabilitySource',
+        'maxResolutionDays', 'selectionOrder', 'marketType', 'excludeOverUnderMarkets', 'probabilitySource',
         'minLiquidityUsdc', 'minNetYield', 'executionTrigger', 'executionCronMinutes',
         'useLimitOrders', 'autoRotatePositions', 'stopLossRiskMultiplier',
         'includeOnlyMarketTags', 'excludedMarketTags', 'automationEnabled', 'archived',
@@ -2571,6 +2601,7 @@ function normalize_strategy_config(array $input, array $defaults): array
         // saving and the bot fell back to market orders.
         'useLimitOrders' => (bool) ($input['useLimitOrders'] ?? $defaults['useLimitOrders'] ?? false),
         'marketType' => $marketType,
+        'excludeOverUnderMarkets' => (bool) ($input['excludeOverUnderMarkets'] ?? $defaults['excludeOverUnderMarkets'] ?? false),
         // Kept while older workflows are still in circulation. The three-value
         // marketType field above is the source of truth.
         'requireMostProbableOutcome' => $marketType === 'multi',

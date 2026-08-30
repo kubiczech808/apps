@@ -343,6 +343,7 @@ const els = {
   excludedTagsRow: document.querySelector("[data-excluded-tags-row]"),
   portfolioMarketType: document.querySelector("[data-portfolio-market-type]"),
   portfolioMarketTypeLabel: document.querySelector("[data-portfolio-market-type-label]"),
+  excludeOverUnderMarkets: document.querySelector("[data-exclude-over-under-markets]"),
   crossLiveRisk: document.querySelector("[data-cross-live-risk]"),
   capitalStatus: document.querySelector("[data-capital-status]"),
   limitOrders: document.querySelector("[data-limit-orders]"),
@@ -779,6 +780,7 @@ function defaultPortfolioConfig() {
         stopLossEnabled: false,
         stopLossRiskMultiplier: 0,
         marketType: "all",
+        excludeOverUnderMarkets: false,
         requireMostProbableOutcome: false,
         probabilitySource: "polymarket",
         excludedCandidateTokenIds: [],
@@ -801,6 +803,7 @@ function defaultPortfolioConfig() {
         stopLossEnabled: false,
         stopLossRiskMultiplier: 0,
         marketType: "all",
+        excludeOverUnderMarkets: false,
         requireMostProbableOutcome: false,
         probabilitySource: "polymarket",
         excludedCandidateTokenIds: [],
@@ -823,6 +826,7 @@ function defaultPortfolioConfig() {
         stopLossEnabled: false,
         stopLossRiskMultiplier: 0,
         marketType: "multi",
+        excludeOverUnderMarkets: false,
         requireMostProbableOutcome: true,
         probabilitySource: "polymarket",
         excludedCandidateTokenIds: [],
@@ -847,6 +851,7 @@ function defaultPortfolioConfig() {
         stopLossEnabled: true,
         stopLossRiskMultiplier: 1.5,
         marketType: "all",
+        excludeOverUnderMarkets: false,
         requireMostProbableOutcome: false,
         probabilitySource: "polymarket",
         excludedCandidateTokenIds: [],
@@ -871,6 +876,7 @@ function defaultPortfolioConfig() {
       stopLossRiskMultiplier: 0,
       useLimitOrders: true,
       marketType: "all",
+      excludeOverUnderMarkets: false,
       requireMostProbableOutcome: false,
       probabilitySource: "polymarket",
       excludedCandidateTokenIds: [],
@@ -900,6 +906,7 @@ function defaultPortfolioConfig() {
       stopLossRiskMultiplier: 0,
       useLimitOrders: true,
       marketType: "all",
+      excludeOverUnderMarkets: false,
       requireMostProbableOutcome: false,
       probabilitySource: "polymarket",
       excludedCandidateTokenIds: [],
@@ -4724,6 +4731,7 @@ function syncPortfolioParameterControls(configOverride = null, options = {}) {
   const marketType = normalizePortfolioMarketType(config.marketType, config.requireMostProbableOutcome);
   if (els.portfolioMarketType) els.portfolioMarketType.value = marketType;
   if (els.portfolioMarketTypeLabel) els.portfolioMarketTypeLabel.textContent = portfolioMarketTypeLabel(marketType);
+  if (els.excludeOverUnderMarkets) els.excludeOverUnderMarkets.checked = config.excludeOverUnderMarkets === true;
   if (els.crossLiveRisk) {
     els.crossLiveRisk.checked = (options.systemConfig || systemConfig()).crossLivePortfolioRiskDiversification !== false;
   }
@@ -5335,6 +5343,7 @@ function parameterDraftFromControls(baseDraft = {}) {
     draft.marketType = marketType;
     draft.requireMostProbableOutcome = marketType === "multi";
   }
+  if (els.excludeOverUnderMarkets) draft.excludeOverUnderMarkets = Boolean(els.excludeOverUnderMarkets.checked);
   if (els.limitOrders) draft.useLimitOrders = Boolean(els.limitOrders.checked);
   return draft;
 }
@@ -7633,6 +7642,7 @@ function portfolioRuleRows(portfolio = {}) {
     ["Resolution filter", resolution],
     ["Trade priority", priority],
     ["Market type", portfolioMarketTypeLabel(config.marketType)],
+    ...(config.excludeOverUnderMarkets === true ? [["Over/Under markets", "Excluded"]] : []),
     ["Execution trigger", normalizeExecutionTrigger(config.executionTrigger) === "cron"
       ? `${executionTriggerLabel(config.executionTrigger)} · ${executionCronMinutesLabel(config.executionCronMinutes)}`
       : executionTriggerLabel(config.executionTrigger)],
@@ -7684,6 +7694,7 @@ function livePortfolioRuleRows() {
     ["Resolution filter", `Max ${maxResolutionDays} days`],
     ["Trade priority", priority],
     ["Market type", portfolioMarketTypeLabel(config.marketType)],
+    ...(config.excludeOverUnderMarkets === true ? [["Over/Under markets", "Excluded"]] : []),
     ["Execution trigger", normalizeExecutionTrigger(config.executionTrigger) === "cron"
       ? `${executionTriggerLabel(config.executionTrigger)} · ${executionCronMinutesLabel(config.executionCronMinutes)}`
       : executionTriggerLabel(config.executionTrigger)],
@@ -7914,6 +7925,17 @@ function candidateMarketType(item = {}) {
   return /^(yes|no)$/i.test(outcome) ? "binary" : "multi";
 }
 
+function candidateIsOverUnderMarket(item = {}) {
+  const question = String(item.question || "");
+  const slug = String(item.eventSlug || item.slug || "");
+  const outcome = String(item.outcome || "").trim().toLowerCase();
+  const text = `${slug} ${question}`;
+  if (/(?:\bo\s*\/\s*u\b|over\s*\/\s*under|over\s+under|\btotal(?:\s+(?:goals?|points?|runs?|maps?|rounds?|kills?|games?|sets?))?\s*(?:o\s*\/\s*u\s*)?\d+(?:[.,]\d+)?\b)/i.test(text)) return true;
+  if (/(?:^|[-_])(?:o[-_]?u|over[-_]?under|total[-_]\d)/i.test(slug)) return true;
+  return (outcome === "over" || outcome === "under")
+    && /(?:\bo\s*\/\s*u\b|\bover\b|\bunder\b|\btotal\b|\b\d+(?:[.,]\d+)?\b)/i.test(question);
+}
+
 function scrapedMarketType(item = {}) {
   return candidateMarketType(item);
 }
@@ -8118,6 +8140,9 @@ function portfolioCandidateFilterReasons(item, mode = state.mode) {
   const requiredMarketType = normalizePortfolioMarketType(config.marketType, config.requireMostProbableOutcome);
   if (requiredMarketType !== "all" && candidateMarketType(item) !== requiredMarketType) {
     reasons.push(`market type ${portfolioMarketTypeLabel(candidateMarketType(item))} does not match ${portfolioMarketTypeLabel(requiredMarketType)}`);
+  }
+  if (config.excludeOverUnderMarkets === true && candidateIsOverUnderMarket(item)) {
+    reasons.push("Over/Under market is excluded by this portfolio");
   }
   return reasons;
 }
@@ -8551,6 +8576,7 @@ const PORTFOLIO_CONFIG_HISTORY_LABELS = {
   maxResolutionDays: "Max resolution days",
   selectionOrder: "Trade priority",
   marketType: "Market type",
+  excludeOverUnderMarkets: "Exclude Over/Under (O/U)",
   probabilitySource: "Probability source",
   minLiquidityUsdc: "Minimum volume",
   minNetYield: "Minimum net profit",
@@ -12730,6 +12756,15 @@ els.portfolioMarketType?.addEventListener("change", () => {
   const updates = { marketType, requireMostProbableOutcome: marketType === "multi" };
   if (updateParameterDraft(updates)) return;
   updatePortfolioConfigForMode(state.mode, updates);
+  savePortfolioConfigSoon();
+  syncPortfolioParameterControls();
+  rerenderCurrentDashboard();
+});
+
+els.excludeOverUnderMarkets?.addEventListener("change", () => {
+  const value = Boolean(els.excludeOverUnderMarkets.checked);
+  if (updateParameterDraft({ excludeOverUnderMarkets: value })) return;
+  updatePortfolioConfigForMode(state.mode, { excludeOverUnderMarkets: value });
   savePortfolioConfigSoon();
   syncPortfolioParameterControls();
   rerenderCurrentDashboard();
