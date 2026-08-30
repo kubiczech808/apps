@@ -605,6 +605,48 @@ function endDateIsFuture(endDate) {
   return Number.isFinite(end) && end > Date.now();
 }
 
+// Deliberately not `!endDateIsFuture(...)`. That answers false for a missing or
+// unparseable date as well, which is the right reading of "not still scheduled" but the
+// wrong reading of "has already finished": an unknown date is evidence of nothing, and
+// retiring rows on it would close out markets at random. This wants the date known and
+// past, because it is used to decide that a market is over for good.
+function endDateHasPassed(endDate) {
+  const end = Date.parse(endDate || "");
+  return Number.isFinite(end) && end <= Date.now();
+}
+
+// A market whose scheduled end has passed AND which no longer offers anything to trade
+// is a finished event waiting on Polymarket to publish its resolution. Reported: such a
+// row sat in the candidate list run after run, was re-fetched and re-rejected every
+// time, and the run log said only that "all revalidated candidates failed current
+// execution criteria" -- which does not distinguish "the rules declined" from "the event
+// is over". Naming the state answers that, and marking it terminal takes the row out of
+// the candidate list instead of paying for the same live fetch on every future run.
+//
+// Both halves are required, and each on its own is deliberately NOT terminal:
+//   * a past scheduled date alone is not the end of a market. Gamma's date is often a
+//     match start or a stale estimate, and a market that is still quoting is still
+//     tradable -- retiring those is exactly the bug that keeping past-date rows fixed.
+//   * an empty book or a price at certainty on a future-dated market is transient. A
+//     book refills; a probability that spiked to 100% can come back down.
+// It is the pair that is decisive: the event's own clock has run out and the exchange
+// has nothing left to quote on it.
+function finishedAwaitingResolutionRejection({ endDate, price, marketProbability } = {}) {
+  if (!endDateHasPassed(endDate)) return null;
+  const numericPrice = Number(price);
+  if (!Number.isFinite(numericPrice) || numericPrice <= 0 || numericPrice >= 1) {
+    return "event has already finished and is only waiting for Polymarket to publish its resolution;"
+      + " its order book no longer quotes an executable price, so no order could be placed";
+  }
+  const numericProbability = Number(marketProbability);
+  if (Number.isFinite(numericProbability) && numericProbability >= EFFECTIVELY_CERTAIN_MARKET_PROBABILITY) {
+    return "event has already finished and is only waiting for Polymarket to publish its resolution;"
+      + ` its price has settled at ${(numericProbability * 100).toFixed(1)}% with no executable upside left,`
+      + " so no order could be placed";
+  }
+  return null;
+}
+
 function bestBook(book) {
   const bids = Array.isArray(book.bids) ? book.bids : [];
   const asks = Array.isArray(book.asks) ? book.asks : [];
@@ -2564,6 +2606,22 @@ async function revalidateEvaluation(
   const takerEntry = ROTATION_ENTRY_CROSSES_SPREAD || forceTakerEntry;
   const price = orderPriceForBook(book, tick, { forceTakerEntry });
   if (!Number.isFinite(price) || price <= 0 || price >= 1) {
+    // Past its scheduled end with an empty book: the event is over and only its
+    // resolution is outstanding. Terminal, so the stored row is closed out rather than
+    // re-fetched and re-rejected on every run from here on.
+    const finished = finishedAwaitingResolutionRejection({ endDate: dateContext.endDate, price });
+    if (finished) {
+      return {
+        candidate: evaluation,
+        eligible: false,
+        marketGone: true,
+        awaitingResolution: true,
+        rejectReasons: [finished],
+        currentBestBid: book.bestBid,
+        currentBestAsk: book.bestAsk,
+        currentSpread: book.spread,
+      };
+    }
     return { candidate: evaluation, eligible: false, rejectReasons: ["no valid current entry price"] };
   }
   if (USE_LIMIT_ORDERS && POST_ONLY && !takerEntry && book.bestAsk != null && price >= book.bestAsk) {
@@ -2679,11 +2737,22 @@ async function revalidateEvaluation(
   const aiProbability = number(evaluation.aiProbability);
   const marketProbability = marketProbabilityForToken(market, tokenIndex, book, evaluation.marketProbability ?? evaluation.marketPrice ?? price);
   if (marketProbability != null && marketProbability >= EFFECTIVELY_CERTAIN_MARKET_PROBABILITY) {
+    // The other shape a finished match takes: the book does not empty, it converges --
+    // the winning side prices at 1.00 and the losing side at 0.00 while Polymarket has
+    // yet to settle. On a market whose scheduled end has passed that is the outcome
+    // being known, not a transient spike, so the row is retired here too.
+    const finished = finishedAwaitingResolutionRejection({
+      endDate: dateContext.endDate,
+      price,
+      marketProbability,
+    });
     return {
       candidate: evaluation,
       eligible: false,
       status: "REJECTED",
-      rejectReasons: ["current market probability rounds to 100.0%; no executable upside remains"],
+      marketGone: Boolean(finished),
+      awaitingResolution: Boolean(finished),
+      rejectReasons: [finished || "current market probability rounds to 100.0%; no executable upside remains"],
       currentPrice: price,
       marketProbability,
       minOrderSize,
@@ -3838,6 +3907,10 @@ function liveRevalidationUpdate(item, checkedAt) {
     retryable: Boolean(retryClass) && !marketGone,
     retryClass: marketGone ? null : retryClass,
     marketGone,
+    // Distinguishes "this market is gone" from "this event is over but Polymarket has
+    // not settled it yet". Both retire the row; only the second is still expecting a
+    // result, and the stored row says which so the reason is legible later.
+    awaitingResolution: Boolean(item?.awaitingResolution),
     rejectReasons,
     question: item?.question || source.question || "",
     outcome: item?.outcome || source.outcome || "",
@@ -4437,6 +4510,22 @@ async function main() {
   // or in resting orders, which the open-order review decides on. Saying which, and what
   // that review concluded, is the difference between "the rules declined" and "something
   // is broken" -- the two this log could not tell apart.
+  // Reported: a candidate stayed visible on the dashboard across several runs while every
+  // one of those runs logged only "all revalidated candidates failed current execution
+  // criteria". It had in fact been evaluated each time and found finished -- the match was
+  // over and Polymarket had simply not settled it yet. That is worth saying in the run's
+  // own note rather than leaving it to be dug out of a capped rejection list, and it also
+  // records that the row has now been taken out of the candidate pool.
+  const finishedAwaitingResolution = checked.filter((item) => item?.awaitingResolution);
+  const finishedAwaitingResolutionNote = finishedAwaitingResolution.length
+    ? ` ${finishedAwaitingResolution.length} candidate(s) were evaluated and found already finished,`
+      + ` waiting only for Polymarket to publish a resolution: ${finishedAwaitingResolution
+        .slice(0, 3)
+        .map((item) => `${item.candidate?.question || item.question || item.candidate?.tokenId || "?"}`)
+        .join("; ")}${finishedAwaitingResolution.length > 3 ? ", …" : ""}.`
+      + " No order could be placed on them and they are now marked closed, so they drop out"
+      + " of the candidate list for the next run."
+    : "";
   const restingBuyOrderCount = (Array.isArray(liveState.openOrders) ? liveState.openOrders : [])
     .filter((order) => !String(order.side || "").toUpperCase().includes("SELL")).length;
   const heldPositionCount = openPositionsForRotation(liveState).length;
@@ -4468,7 +4557,7 @@ async function main() {
                 ? `No live order was submitted because available USDC cannot cover the exchange minimum size for the revalidated candidate(s).${cheapestBlockedMinimumCost != null ? ` The cheapest of them needs ${cheapestBlockedMinimumCost.toFixed(4)} USDC including fees against ${number(availableCashAfterOrderManagement, 0).toFixed(4)} USDC available.` : ""}${capitalLocationNote}`
                 : (stakeCapBlockedCandidates.length
                   ? "No live order was submitted because the configured fixed stake is below Polymarket's exchange minimum. Free cash was sufficient, so no order or position was rotated."
-                  : "No live order was submitted because all revalidated candidates failed current execution criteria.")))));
+                  : `No live order was submitted because all revalidated candidates failed current execution criteria.${finishedAwaitingResolutionNote}`)))));
   const decision = {
     mode: DRY_RUN || !hasFlag("confirm-live") ? "validated-dry-run" : "live-submit",
     action: best ? (DRY_RUN || !hasFlag("confirm-live") ? "DRY_RUN_READY" : "SUBMIT") : "SKIP",
@@ -4624,6 +4713,11 @@ async function main() {
         stakeCapBlockedCandidates: stakeCapBlockedCandidates.length,
         makerPrecisionBlockedCandidates: makerPrecisionBlockedCandidates.length,
         rankedEligibleCandidates: eligible.length,
+        // Candidates this run tried to execute and found already over: past their
+        // scheduled end with nothing left to quote. They are counted separately from the
+        // ordinary rejections because they are not a rule declining a trade -- the event
+        // finished -- and because each one has just been retired from the candidate list.
+        finishedAwaitingResolutionCandidates: finishedAwaitingResolution.length,
         openOrdersReviewed: orderManagement.reviews.length,
         positionsReviewedForRotation: rotationReview?.reviews?.length || 0,
         rotationAvailable,
@@ -5056,6 +5150,8 @@ export {
   rotationNetProfitGuard,
   orderPriceForBook,
   orderPriceBandRejection,
+  endDateHasPassed,
+  finishedAwaitingResolutionRejection,
   sharesForOrder,
   prepareLiveCandidatePool,
   liveRevalidationUpdate,

@@ -111,6 +111,15 @@ with ftplib.FTP(os.environ["HOSTING_FTP_SERVER"], timeout=30) as ftp:
                 item["selectionStatus"] = "CLOSED"
                 item["marketClosed"] = True
                 item["acceptingOrders"] = False
+                # Two different ends look identical once the row reads CLOSED: a
+                # market Gamma dropped, and an event that has finished but has not
+                # been settled yet. The second is still expecting a result, so it
+                # says so -- otherwise a row that left the candidate list on the day
+                # of its own match cannot be told apart from one that was delisted,
+                # and the reason is lost along with it.
+                if update.get("awaitingResolution"):
+                    item["awaitingResolution"] = True
+                    item["closedReason"] = "finished, awaiting Polymarket resolution"
                 closed_out.append(str(update["tokenId"]))
             item["updatedAt"] = update["checkedAt"]
             merged += 1
