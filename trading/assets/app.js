@@ -255,6 +255,9 @@ const els = {
   closedTrades: document.querySelector("[data-closed-trades]"),
   closedTradesExport: document.querySelector("[data-closed-trades-export]"),
   closedSummary: document.querySelector("[data-closed-summary]"),
+  unfilledLimitOrders: document.querySelector("[data-unfilled-limit-orders]"),
+  unfilledLimitOrdersTitle: document.querySelector("[data-unfilled-limit-orders-title]"),
+  unfilledLimitOrdersSummary: document.querySelector("[data-unfilled-limit-orders-summary]"),
   botEvaluations: document.querySelector("[data-bot-evaluations]"),
   evaluationSummary: document.querySelector("[data-evaluation-summary]"),
   evaluationFilterCount: document.querySelector("[data-evaluation-filter-count]"),
@@ -1564,6 +1567,7 @@ function syncExecutionButtons() {
 const PORTFOLIO_TAB_ROUTE_SEGMENTS = {
   "daily-picks": "opened",
   "closed-trades": "closed",
+  "unfilled-limit-orders": "unfilled-limit-orders",
   "portfolio-candidates": "candidates",
   "run-log": "run-log",
   "portfolio-history": "settings-history",
@@ -1838,6 +1842,9 @@ function activateTab(target, { syncRoute = false, replace = false } = {}) {
   }
   if (target === "portfolio-history") {
     ensurePortfolioConfigHistory();
+  }
+  if (target === "unfilled-limit-orders") {
+    renderUnfilledLimitOrders();
   }
   if (syncRoute && state.page === "portfolios") {
     const targetPath = portfolioTabRoutePath(target);
@@ -2492,6 +2499,7 @@ function syncModeUi() {
     : (isFixedEntryMode() ? "5050" : (live ? "live" : paperModeLabel()));
   if (els.primaryPanelTitle) els.primaryPanelTitle.textContent = `Opened ${portfolioLabel} trades`;
   if (els.secondaryPanelTitle) els.secondaryPanelTitle.textContent = `Closed ${portfolioLabel} trades`;
+  if (els.unfilledLimitOrdersTitle) els.unfilledLimitOrdersTitle.textContent = `Unfilled ${portfolioLabel} limit orders`;
   if (els.evaluationControls) els.evaluationControls.style.display = "";
   if (els.accountSummary) els.accountSummary.hidden = !live;
   if (els.botStatus) els.botStatus.hidden = live;
@@ -2872,6 +2880,44 @@ function tradePnlPct(trade) {
 
 function isClosedTrade(trade) {
   return ["WON", "LOST", "CLOSED", "REDEEMED", "SOLD", "REDEEM_REQUIRED", "RESOLVED", "STOP_LOSS", "STOP_GAP", "LIMIT_ORDER_EXPIRED"].includes(String(trade.status || "").toUpperCase());
+}
+
+// An expired resting bid is an audit record, not a closed position: no shares were
+// bought and no P/L was realized. Keep it separate from the settled-trade history so
+// accuracy and realized P/L never accidentally count a limit order that never filled.
+function isUnfilledLimitOrder(order = {}) {
+  const status = String(order.status || "").toUpperCase();
+  if (status !== "LIMIT_ORDER_EXPIRED" && status !== "LIVE_LIMIT_ORDER_UNFILLED") return false;
+  return !(Number(order.filledSize) > 0.000001 || order.partiallyFilled === true || order.everFilled === true);
+}
+
+function unfilledLimitOrderFinalPrice(order = {}) {
+  const source = order.sourceEvaluation || evaluationByTrade(order) || {};
+  for (const value of [order.finalOutcomePrice, source.finalOutcomePrice, source.resolvedPrice]) {
+    const numeric = numericOrNull(value);
+    if (numeric != null) return numeric;
+  }
+  return null;
+}
+
+function unfilledLimitOrderResult(order = {}) {
+  const finalPrice = unfilledLimitOrderFinalPrice(order);
+  if (finalPrice == null) return null;
+  if (finalPrice >= 0.995) return true;
+  if (finalPrice <= 0.005) return false;
+  return null;
+}
+
+function unfilledLimitOrderStats(orders = []) {
+  const results = orders.map(unfilledLimitOrderResult);
+  const wouldWin = results.filter((result) => result === true).length;
+  const wouldLose = results.filter((result) => result === false).length;
+  return {
+    total: orders.length,
+    wouldWin,
+    wouldLose,
+    awaiting: orders.length - wouldWin - wouldLose,
+  };
 }
 
 function closedTradePredictionResult(trade) {
@@ -3814,7 +3860,62 @@ function closedTradesForCurrentPortfolio() {
     return liveClosedTrades(state.liveState).map(decorateLiveTradeForTable);
   }
   const portfolioState = selectedPaperPortfolio(state.botState);
-  return paperPortfolioTrades(portfolioState).filter(isClosedTrade);
+  return paperPortfolioTrades(portfolioState).filter((trade) => isClosedTrade(trade) && !isUnfilledLimitOrder(trade));
+}
+
+function unfilledLimitOrdersForCurrentPortfolio() {
+  if (isLiveMode()) return liveUnfilledLimitOrders(state.liveState).map(decorateLiveTradeForTable);
+  const portfolioState = selectedPaperPortfolio(state.botState);
+  return paperPortfolioTrades(portfolioState).filter(isUnfilledLimitOrder);
+}
+
+function renderUnfilledLimitOrderRows(orders = []) {
+  if (!orders.length) {
+    return '<div class="empty">No limit order has expired or been cancelled without filling into a position yet.</div>';
+  }
+  const rows = [...orders].sort((a, b) => {
+    const aTime = Date.parse(a.closedAt || a.resolvedAt || a.detectedAt || a.openedAt || "") || 0;
+    const bTime = Date.parse(b.closedAt || b.resolvedAt || b.detectedAt || b.openedAt || "") || 0;
+    return bTime - aTime;
+  });
+  return `
+    <div class="ledger-scroll trade-ledger-scroll" tabindex="0" aria-label="Unfilled limit order table">
+      <table class="ledger-wide-table closed-trades-table">
+        <thead><tr><th>Would be</th><th>Market</th><th>Limit price</th><th>Final outcome</th><th>Opened</th><th>Ended unfilled</th><th>Order value</th></tr></thead>
+        <tbody>${rows.map((order) => {
+          const result = unfilledLimitOrderResult(order);
+          const finalPrice = unfilledLimitOrderFinalPrice(order);
+          const limitPrice = Number(order.price ?? order.limitPrice ?? order.entryPrice);
+          const orderValue = Number(order.releasedCapitalUsdc ?? order.stakeUsdc ?? order.notionalUsdc);
+          const endedAt = order.closedAt || order.resolvedAt || order.detectedAt || "";
+          return `
+            <tr>
+              <td data-label="Would be">${result === true
+                ? '<span class="order-chip won">Would win</span>'
+                : result === false
+                  ? '<span class="order-chip lost">Would lose</span>'
+                  : '<span class="order-chip warning">Awaiting settlement</span>'}</td>
+              <td class="trade-market-cell" data-label="Market"><span class="order-chip warning">Unfilled limit order</span>${marketAnchor(order)}</td>
+              <td data-label="Limit price">${Number.isFinite(limitPrice) ? probability(limitPrice) : "-"}</td>
+              <td data-label="Final outcome">${finalPrice == null ? "-" : probability(finalPrice)}</td>
+              <td data-label="Opened">${escapeHtml(formatDate(order.openedAt || order.createdAt || order.date || ""))}</td>
+              <td data-label="Ended unfilled">${escapeHtml(formatDate(endedAt))}</td>
+              <td data-label="Order value">${Number.isFinite(orderValue) ? money(orderValue) : "-"}</td>
+            </tr>`;
+        }).join("")}</tbody>
+      </table>
+    </div>`;
+}
+
+function renderUnfilledLimitOrders() {
+  if (!els.unfilledLimitOrders) return;
+  const orders = unfilledLimitOrdersForCurrentPortfolio();
+  const stats = unfilledLimitOrderStats(orders);
+  if (els.unfilledLimitOrdersSummary) {
+    const awaiting = stats.awaiting ? ` / ${stats.awaiting} awaiting` : "";
+    els.unfilledLimitOrdersSummary.textContent = `${stats.total} unfilled / ${stats.wouldWin} would win / ${stats.wouldLose} would lose${awaiting}`;
+  }
+  els.unfilledLimitOrders.innerHTML = renderUnfilledLimitOrderRows(orders);
 }
 
 function csvSafeCell(value) {
@@ -8762,7 +8863,8 @@ function renderBotState(botState) {
   const portfolio = portfolioState.portfolio || botState.portfolio || {};
   const learning = botState.learningProfile || {};
   const trades = paperPortfolioTrades(portfolioState);
-  const closedTrades = trades.filter(isClosedTrade);
+  const unfilledLimitOrders = trades.filter(isUnfilledLimitOrder);
+  const closedTrades = trades.filter((trade) => isClosedTrade(trade) && !isUnfilledLimitOrder(trade));
   const openTrades = trades.filter((trade) => !isClosedTrade(trade));
   const periodDays = portfolioPeriodDays(botState, trades);
   const annualized = annualizedPortfolioReturn(portfolio, periodDays);
@@ -8878,6 +8980,16 @@ function renderBotState(botState) {
       tableKey: "closed",
       showStatus: true,
     });
+  }
+  // Do not let unfilled resting bids disappear inside Closed trades. They have their
+  // own audit tab because they never became a portfolio position.
+  if (els.unfilledLimitOrders) {
+    const stats = unfilledLimitOrderStats(unfilledLimitOrders);
+    const awaiting = stats.awaiting ? ` / ${stats.awaiting} awaiting` : "";
+    if (els.unfilledLimitOrdersSummary) {
+      els.unfilledLimitOrdersSummary.textContent = `${stats.total} unfilled / ${stats.wouldWin} would win / ${stats.wouldLose} would lose${awaiting}`;
+    }
+    els.unfilledLimitOrders.innerHTML = renderUnfilledLimitOrderRows(unfilledLimitOrders);
   }
 
   renderBotEvaluations();
@@ -9081,6 +9193,11 @@ function liveClosedTrades(liveState, mode = state.mode) {
   return rows.filter((row) => belongsToLivePortfolio(row, mode));
 }
 
+function liveUnfilledLimitOrders(liveState, mode = state.mode) {
+  const rows = Array.isArray(liveState?.unfilledLimitOrders) ? liveState.unfilledLimitOrders : [];
+  return rows.filter(isUnfilledLimitOrder).filter((row) => belongsToLivePortfolio(row, mode));
+}
+
 function evaluationByTokenId(tokenId) {
   const token = String(tokenId || "");
   if (!token) return null;
@@ -9177,6 +9294,7 @@ function decorateLiveTradeForTable(trade) {
     endDate: trade.endDate || source.endDate || source.resolutionDate || null,
     daysToResolution: trade.daysToResolution ?? source.daysToResolution ?? null,
     currentPrice: Number.isFinite(Number(trade.currentPrice)) ? trade.currentPrice : (source.marketPrice ?? null),
+    finalOutcomePrice: numericOrNull(trade.finalOutcomePrice) ?? numericOrNull(source.finalOutcomePrice),
     aiProbability: numericOrNull(trade.aiProbability) ?? numericOrNull(source.aiProbability),
     rawProbability: numericOrNull(trade.rawProbability) ?? numericOrNull(source.rawProbability),
     thesisType: source.thesisType,
@@ -9365,6 +9483,7 @@ function renderLiveState(liveState) {
   ]);
   const activity = liveActivity(liveState);
   const closedTrades = liveClosedTrades(liveState).map(decorateLiveTradeForTable);
+  const unfilledLimitOrders = liveUnfilledLimitOrders(liveState).map(decorateLiveTradeForTable);
   const sync = liveState.sync || {};
   const reconciliation = liveState.reconciliation || {};
   const reconciliationGaps = Number(reconciliation.orphanedCount || 0);
@@ -9531,6 +9650,14 @@ function renderLiveState(liveState) {
       tableKey: "liveClosed",
       showStatus: true,
     });
+  }
+  if (els.unfilledLimitOrders) {
+    const stats = unfilledLimitOrderStats(unfilledLimitOrders);
+    const awaiting = stats.awaiting ? ` / ${stats.awaiting} awaiting` : "";
+    if (els.unfilledLimitOrdersSummary) {
+      els.unfilledLimitOrdersSummary.textContent = `${stats.total} unfilled / ${stats.wouldWin} would win / ${stats.wouldLose} would lose${awaiting}`;
+    }
+    els.unfilledLimitOrders.innerHTML = renderUnfilledLimitOrderRows(unfilledLimitOrders);
   }
   renderBotEvaluations();
   renderPortfolioCandidates();

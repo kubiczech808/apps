@@ -4214,6 +4214,7 @@ async function markWaitingLimitOrder(trade) {
   }
 
   if (decision.outcome === "EXPIRED") {
+    const finalOutcomePrice = outcomeIndex >= 0 ? Number(parseOutcomePrices(market)[outcomeIndex]) : null;
     return {
       ...base,
       status: "LIMIT_ORDER_EXPIRED",
@@ -4225,6 +4226,9 @@ async function markWaitingLimitOrder(trade) {
       unrealizedPnlPct: 0,
       realizedPnlUsdc: 0,
       realizedPnlPct: 0,
+      // Nothing was bought, but retain the eventual selected-outcome price so the
+      // dedicated unfilled-order history can say whether the missed bid would have won.
+      finalOutcomePrice: Number.isFinite(finalOutcomePrice) ? Number(finalOutcomePrice.toFixed(4)) : null,
       statusNote: `Resting limit buy at ${limitPrice.toFixed(4)} never filled before the event ended`
         + ` (best ask stayed at ${askNote}); discarded with no fill.`,
     };

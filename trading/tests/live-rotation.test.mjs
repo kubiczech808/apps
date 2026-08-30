@@ -68,6 +68,64 @@ test("live history: an unmatched redeem remains a closed, correct position", () 
   assert.equal(rows[0].realizedPnlUsdc, null, "the missing buy is not guessed as zero P/L");
 });
 
+test("live history: only fully unfilled limit orders are retained as their own audit ledger", () => {
+  const generatedAt = "2026-08-30T18:10:00Z";
+  const history = sync.unfilledLimitOrderHistory({
+    unfilledLimitOrders: [{
+      id: "older-order",
+      tokenId: "older-token",
+      status: "LIVE_LIMIT_ORDER_UNFILLED",
+      price: 0.74,
+      openedAt: "2026-08-29T18:10:00Z",
+      closedAt: "2026-08-29T19:10:00Z",
+    }],
+  }, {
+    vanished: [{
+      id: "unfilled-order",
+      tokenId: "unfilled-token",
+      question: "A market that never filled",
+      outcome: "Yes",
+      price: 0.8,
+      remainingSize: 6.25,
+      releasedCapitalUsdc: 5,
+      filledSize: 0,
+      partiallyFilled: false,
+      createdAt: "2026-08-30T17:10:00Z",
+      detectedAt: generatedAt,
+    }, {
+      id: "partial-order",
+      tokenId: "partial-token",
+      price: 0.8,
+      releasedCapitalUsdc: 2,
+      filledSize: 2.5,
+      partiallyFilled: true,
+      createdAt: "2026-08-30T17:10:00Z",
+      detectedAt: generatedAt,
+    }],
+  });
+
+  assert.equal(history.length, 2, "the partially filled order became a position and must not enter this ledger");
+  const row = history.find((item) => item.id === "unfilled-order");
+  assert.equal(row.status, "LIVE_LIMIT_ORDER_UNFILLED");
+  assert.equal(row.entryPrice, undefined, "a resting price must not make the UI treat this as a filled position");
+  assert.equal(row.price, 0.8);
+  assert.equal(row.stakeUsdc, 5);
+
+  const repeated = sync.unfilledLimitOrderHistory({ unfilledLimitOrders: history }, { vanished: [row] });
+  assert.equal(repeated.length, 2, "a repeated sync must not duplicate the same vanished order");
+});
+
+test("portfolio UI: unfilled limit orders have a dedicated route and do not remain in closed trades", () => {
+  const html = readFileSync(new URL("../index.html", import.meta.url), "utf8");
+  const app = readFileSync(new URL("../assets/app.js", import.meta.url), "utf8");
+
+  assert.match(html, /data-tab-target="unfilled-limit-orders"/);
+  assert.match(html, /data-unfilled-limit-orders-summary/);
+  assert.match(app, /"unfilled-limit-orders": "unfilled-limit-orders"/);
+  assert.match(app, /function isUnfilledLimitOrder\(order = \{\}\)/);
+  assert.match(app, /filter\(\(trade\) => isClosedTrade\(trade\) && !isUnfilledLimitOrder\(trade\)\)/);
+});
+
 test("rotation: the fixture drives the economics the executor actually reads", () => {
   // Guards the test itself: if the derived price stopped producing the intended
   // remaining gain, every assertion below would silently test nothing.

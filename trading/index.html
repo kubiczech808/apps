@@ -126,6 +126,7 @@
         <div class="tab-list" role="tablist" aria-label="Trading dashboard" data-page-section="portfolios">
           <button class="tab-button active" type="button" data-tab-target="daily-picks" data-paper-label="Opened trades" data-live-label="Opened trades">Opened trades</button>
           <button class="tab-button" type="button" data-tab-target="closed-trades" data-paper-label="Closed trades" data-live-label="Closed trades">Closed trades</button>
+          <button class="tab-button" type="button" data-tab-target="unfilled-limit-orders" data-paper-label="Unfilled limit orders" data-live-label="Unfilled limit orders">Unfilled limit orders</button>
           <button class="tab-button" type="button" data-tab-target="portfolio-candidates" data-paper-label="Execution candidates" data-live-label="Execution candidates">Execution candidates</button>
           <button class="tab-button" type="button" data-tab-target="run-log" data-paper-label="Run log" data-live-label="Run log">Run log</button>
           <button class="tab-button" type="button" data-tab-target="portfolio-history" data-paper-label="Settings history" data-live-label="Settings history">Settings history</button>
@@ -161,6 +162,21 @@
               </div>
             </div>
             <div class="ledger" data-closed-trades></div>
+          </article>
+        </section>
+
+        <section class="tab-panel" data-tab-panel="unfilled-limit-orders" data-page-section="portfolios">
+          <article class="panel">
+            <div class="panel-head">
+              <div>
+                <p class="eyebrow">Automated trading</p>
+                <h2 data-unfilled-limit-orders-title>Unfilled paper limit orders</h2>
+              </div>
+              <div class="panel-head-actions">
+                <span class="pill" data-unfilled-limit-orders-summary>0 unfilled</span>
+              </div>
+            </div>
+            <div class="ledger" data-unfilled-limit-orders></div>
           </article>
         </section>
 

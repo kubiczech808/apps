@@ -22,6 +22,7 @@ const ACTIVITY_LIMIT = Number(process.env.LIVE_ACTIVITY_LIMIT || 50);
 const TRADE_LIMIT = Number(process.env.LIVE_TRADE_LIMIT || 500);
 const SIGNATURE_TYPE = Number(process.env.POLYMARKET_SIGNATURE_TYPE || 1);
 const OPEN_ORDER_FALLBACK_HORIZON_MS = 24 * 60 * 60 * 1000;
+const UNFILLED_LIMIT_OUTCOME_REFRESH_LIMIT = 16;
 let ACCOUNT_ADDRESS = CONFIGURED_ACCOUNT_ADDRESS;
 let ACTIVE_FUNDER_ADDRESS = CONFIGURED_FUNDER_ADDRESS;
 let ACTIVE_SIGNATURE_TYPE = SIGNATURE_TYPE;
@@ -31,6 +32,10 @@ let ACCOUNT_DISCOVERY = null;
 function number(value, fallback = null) {
   const numeric = Number(value);
   return Number.isFinite(numeric) ? numeric : fallback;
+}
+
+function optionalNumber(value) {
+  return value == null || value === "" ? null : number(value);
 }
 
 function ratio(value) {
@@ -1065,6 +1070,13 @@ function vanishedOpenOrders(previousState, openOrders = [], positions = [], sync
       question: order.question || "",
       outcome: order.outcome || "",
       price,
+      limitPrice: price,
+      slug: order.slug || "",
+      eventSlug: order.eventSlug || order.slug || "",
+      url: order.url || "",
+      conditionId: order.conditionId || order.market || null,
+      endDate: order.endDate || order.resolutionEndDate || null,
+      finalOutcomePrice: optionalNumber(order.finalOutcomePrice),
       remainingSize: lockedSize,
       filledSize: Number(filledSize.toFixed(6)),
       releasedSize: Number(releasedSize.toFixed(6)),
@@ -1085,6 +1097,55 @@ function vanishedOpenOrders(previousState, openOrders = [], positions = [], sync
     ordersUnavailable,
     checked: previousOrders.length,
   };
+}
+
+// A CLOB order can disappear because it was cancelled, expired with the event, or was
+// withdrawn by our executor. When it did not produce even a partial position it is useful
+// audit history in its own right, but it must never be made into a closed trade or P/L.
+// Persist it outside `releasedOrderCapital`: that field is a one-sync trigger, whereas
+// this ledger is the durable list rendered in the portfolio tab.
+function unfilledLimitOrderHistory(previousState, releasedOrderCapital = {}) {
+  const previous = Array.isArray(previousState?.unfilledLimitOrders)
+    ? previousState.unfilledLimitOrders.filter((item) => item && typeof item === "object")
+    : [];
+  const records = new Map();
+  const keyFor = (order = {}) => String(order.id || order.orderId || order.orderID || "").trim()
+    || `${String(order.tokenId || order.assetId || "").trim()}:${String(order.createdAt || order.openedAt || "").trim()}`;
+  for (const order of previous) {
+    const key = keyFor(order);
+    if (key) records.set(key, order);
+  }
+  for (const vanished of (Array.isArray(releasedOrderCapital?.vanished) ? releasedOrderCapital.vanished : [])) {
+    if (vanished.partiallyFilled || number(vanished.filledSize, 0) > 0.000001) continue;
+    const key = keyFor(vanished);
+    if (!key) continue;
+    const prior = records.get(key) || {};
+    records.set(key, {
+      ...prior,
+      ...vanished,
+      id: vanished.id || prior.id || null,
+      orderId: vanished.id || prior.orderId || null,
+      mode: "LIVE_LIMIT_ORDER",
+      status: "LIVE_LIMIT_ORDER_UNFILLED",
+      // Keep it an order for portfolio attribution. `entryPrice` would cause the UI to
+      // treat it as a filled position, while `price` is correctly a resting bid price.
+      price: number(vanished.price, number(prior.price)),
+      limitPrice: number(vanished.limitPrice ?? vanished.price, number(prior.limitPrice ?? prior.price)),
+      shares: null,
+      stakeUsdc: number(vanished.releasedCapitalUsdc, number(prior.stakeUsdc)),
+      releasedCapitalUsdc: number(vanished.releasedCapitalUsdc, number(prior.releasedCapitalUsdc)),
+      openedAt: vanished.createdAt || prior.openedAt || prior.createdAt || null,
+      createdAt: vanished.createdAt || prior.createdAt || null,
+      closedAt: vanished.detectedAt || prior.closedAt || null,
+      detectedAt: vanished.detectedAt || prior.detectedAt || null,
+      finalOutcomePrice: optionalNumber(vanished.finalOutcomePrice) ?? optionalNumber(prior.finalOutcomePrice),
+    });
+  }
+  return [...records.values()].sort((a, b) => {
+    const aTime = Date.parse(a.closedAt || a.detectedAt || a.openedAt || "") || 0;
+    const bTime = Date.parse(b.closedAt || b.detectedAt || b.openedAt || "") || 0;
+    return bTime - aTime;
+  });
 }
 
 function redeemNotifications(positions, previousState, generatedAt) {
@@ -1450,6 +1511,7 @@ async function enrichOpenOrdersWithMarketMetadata(openOrders = [], sync, previou
       const market = await gammaMarketForOpenOrder(tokenId);
       const tokenIds = parseArrayField(market.clobTokenIds).map(String);
       const outcomes = parseArrayField(market.outcomes).map(String);
+      const outcomePrices = parseArrayField(market.outcomePrices).map((value) => optionalNumber(value));
       const outcomeIndex = tokenIds.indexOf(tokenId);
       const event = Array.isArray(market.events) ? market.events.find((item) => item?.slug) : null;
       const slug = market.slug || order.slug || "";
@@ -1473,6 +1535,10 @@ async function enrichOpenOrdersWithMarketMetadata(openOrders = [], sync, previou
         marketClosed: market.closed === true,
         marketArchived: market.archived === true,
         marketAcceptingOrders: market.acceptingOrders !== false,
+        // This value travels with a subsequently vanished order. It is intentionally
+        // present only after Gamma marks the market closed: an in-play mark is not the
+        // eventual answer to "would this unfilled bid have won?".
+        finalOutcomePrice: market.closed === true ? (outcomePrices[outcomeIndex] ?? null) : null,
         marketMetadataSource: "gamma-clob-token",
       };
     } catch (error) {
@@ -1497,6 +1563,45 @@ async function enrichOpenOrdersWithMarketMetadata(openOrders = [], sync, previou
       return order;
     }
   }));
+}
+
+// The order can be removed shortly after an event finishes, before Gamma publishes its
+// final 0/1 outcome. Revisit the oldest unchecked terminal orders in small batches so the
+// audit tab eventually grades every missed bid without turning each account sync into a
+// large historical Gamma sweep.
+async function refreshUnfilledLimitOrderOutcomes(orders = [], generatedAt = new Date().toISOString()) {
+  const result = [...orders];
+  const now = Date.parse(generatedAt) || Date.now();
+  const pending = result
+    .map((order, index) => ({ order, index }))
+    .filter(({ order }) => {
+      if (optionalNumber(order?.finalOutcomePrice) != null) return false;
+      const end = Date.parse(order?.endDate || order?.resolutionEndDate || "");
+      return Number.isFinite(end) && end <= now;
+    })
+    .sort((a, b) => (Date.parse(a.order.outcomeLastCheckedAt || "") || 0) - (Date.parse(b.order.outcomeLastCheckedAt || "") || 0))
+    .slice(0, UNFILLED_LIMIT_OUTCOME_REFRESH_LIMIT);
+
+  await Promise.all(pending.map(async ({ order, index }) => {
+    const tokenId = String(order?.tokenId || order?.assetId || "").trim();
+    if (!tokenId) return;
+    try {
+      const market = await gammaMarketForOpenOrder(tokenId);
+      const tokenIds = parseArrayField(market.clobTokenIds).map(String);
+      const outcomeIndex = tokenIds.indexOf(tokenId);
+      const outcomePrices = parseArrayField(market.outcomePrices).map((value) => optionalNumber(value));
+      const finalOutcomePrice = market.closed === true ? (outcomePrices[outcomeIndex] ?? null) : null;
+      result[index] = {
+        ...order,
+        finalOutcomePrice: optionalNumber(finalOutcomePrice) ?? optionalNumber(order.finalOutcomePrice),
+        outcomeLastCheckedAt: generatedAt,
+      };
+    } catch {
+      // The next bounded pass retries this one. A temporary Gamma gap must not erase the
+      // order or turn an unknown result into a loss.
+    }
+  }));
+  return result;
 }
 
 function portfolioSummary(positions, valueRows, closedTrades = []) {
@@ -1887,6 +1992,10 @@ async function main() {
     sync,
     generatedAt,
   );
+  const unfilledLimitOrders = await refreshUnfilledLimitOrderOutcomes(
+    unfilledLimitOrderHistory(previousLiveState, releasedOrderCapital),
+    generatedAt,
+  );
   const cashUsdc = number(balanceAllowance?.collateral?.balanceUsdc);
   const pendingRedeemUsdc = number(portfolioBase.pendingRedeemUsdc, 0);
   const equityUsdc = cashUsdc == null
@@ -2022,6 +2131,7 @@ async function main() {
     balanceAllowance,
     openOrders,
     releasedOrderCapital,
+    unfilledLimitOrders,
     positions: reconciledPositions,
     apiPositions: openApiPositions,
     resolvedApiPositions: resolvedPositionRows,
@@ -2043,6 +2153,7 @@ async function main() {
     reconciliationGaps: reconciliation.orphanedCount,
     openOrders: payload.openOrders.length,
     vanishedOpenOrders: releasedOrderCapital.vanished.length,
+    unfilledLimitOrders: unfilledLimitOrders.length,
     freedOrderCapitalUsdc: releasedOrderCapital.freedCapitalUsdc,
     cashUsdc: payload.portfolio.cashUsdc,
     closedTrades: closedTrades.length,
@@ -2071,6 +2182,8 @@ export {
   closedTradesFromHistory,
   openOrderIdentityKeys,
   vanishedOpenOrders,
+  unfilledLimitOrderHistory,
+  refreshUnfilledLimitOrderOutcomes,
   positionHasRedeemableValue,
   redeemNotifications,
 };
