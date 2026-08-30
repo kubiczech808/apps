@@ -1581,13 +1581,26 @@ test("trade table: every header lines up with the cell beneath it", async () => 
   const cells = [...tbody.matchAll(/<td\b[^>]*?\bdata-label="(\$\{showStatus \? "[^"]+" : "[^"]+"\}|[^"]+)"/g)]
     .map((match) => conditional(match[1]));
 
-  assert.ok(headers.length >= 10, `expected the full column set, found ${headers.length}`);
+  // The exact shape, rather than a count: a column added or dropped should have to be
+  // stated here, which is what makes the alignment check below meaningful.
+  assert.deepEqual(headers, [
+    "Win", "P/L", "Market", "Win p.a.", "Resolution",
+    "Closed|Opened", "Entry / final|Entry / mark", "Stake", "Volume",
+  ]);
   assert.deepEqual(cells, headers, "each column's cell must sit under its own header");
 
-  // The Result column only exists in one of the two views and must stay conditional, or
-  // the open table gains an empty column and the closed one loses a value.
-  assert.ok(thead.includes('showStatus ? tradeHeader(tableKey, "status", "Result")'));
-  assert.ok(tbody.includes('showStatus ? `<td data-label="Result"'));
+  // Volume is now the only conditional column -- it belongs to the opened list, and the
+  // closed list has nothing in that slot. It must stay conditional in BOTH the header and
+  // the body, or one table gains a column the other does not and every cell after it sits
+  // under the wrong heading.
+  assert.ok(thead.includes('${showStatus ? "" : tradeHeader(tableKey, "volume", "Volume")}'));
+  assert.ok(tbody.includes('${showStatus ? "" : `<td data-label="Volume">'));
+
+  // Result is gone: a settled row's chip carries WON/LOST, so a column repeating it was
+  // the same fact twice. R/R went with it.
+  assert.ok(!/data-label="Result"/.test(body), "no Result column in the trade tables");
+  assert.ok(!/"status", "Result"/.test(body), "and no header for it");
+  assert.ok(!/data-label="R\/R"/.test(body), "no R/R column either");
 
   // The AI probability column used to be the other conditional one, suppressed on the
   // open tables and left on the closed ones. The scoring pipeline it came from is

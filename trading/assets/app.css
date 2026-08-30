@@ -11,6 +11,23 @@
   --warning: #b45309;
   --danger: #c2410c;
   --good: #15803d;
+  /* Four names were referenced by rules and defined by nothing, so every declaration using
+     them was dead: an undefined custom property makes the declaration invalid at
+     computed-value time and the value falls back to inherited or initial. Measured in
+     Chromium rather than inferred -- the "Redeem needed" chip, meant to be red, computed
+     to rgb(17, 24, 39), near-black on pink; the `.filled` chip's background computed to
+     rgba(0, 0, 0, 0), no tint at all. They are defined here as aliases of the palette
+     entries they were plainly meant to name, rather than rewriting each call site: one
+     line to change if any of them should ever diverge.
+       --bad          5 rules, all error/negative states  -> --danger
+       --success      the portfolio status dot            -> --good
+       --text         the candidate exclusion control     -> --ink
+       --accent-soft  the neutral chip's fill; no existing equivalent, so a teal tint in
+                      the same family as the green and red chip fills below. */
+  --bad: #c2410c;
+  --success: #15803d;
+  --text: #111827;
+  --accent-soft: #f0fdfa;
   --shadow: 0 18px 50px rgba(17, 24, 39, 0.08);
 }
 
@@ -2483,6 +2500,22 @@ body.modal-open {
   color: var(--muted) !important;
 }
 
+/* A settled row's chip carries its result, so the two verdicts worth reading at a glance
+   get a colour of their own. Anything else keeps the neutral `.filled` treatment: a
+   redeemed or sold row is neither good nor bad news, and colouring it would claim a
+   verdict the status does not carry. */
+.order-chip.won {
+  border-color: var(--good);
+  background: #f0fdf4;
+  color: var(--good) !important;
+}
+
+.order-chip.lost {
+  border-color: var(--danger);
+  background: #fef2f2;
+  color: var(--danger) !important;
+}
+
 .trade-analysis-text {
   display: -webkit-box !important;
   max-width: 280px !important;
@@ -3016,18 +3049,17 @@ body.modal-open {
     text-transform: uppercase;
   }
 
-  /* The state chip ("Open position", "Limit order waiting", …) shares the outcome's line
-     and sits at its right-hand end, instead of taking a line of its own above it. Two
-     columns with both put in row 1: the chip is sized to its text, the market link takes
-     what is left, and a long question wraps underneath the outcome without moving the
-     chip -- align-items: start is what keeps it on the first line. */
+  /* The state chip sits at the right-hand end of the outcome's line, and the market name
+     runs the full width of the card underneath it.
+     A float, not a grid column. A second grid column reserves its width for the whole
+     cell, so every line of a long question stopped short of the chip and left a ragged
+     empty strip down the right of the card. Floating the chip shortens only the line it
+     actually sits on; the outcome and the question below it then use the full width. */
   .trade-ledger-scroll .opened-trades-table .trade-market-cell,
   .trade-ledger-scroll .closed-trades-table .trade-market-cell {
+    display: block;
     order: -1;
     grid-column: 1 / -1;
-    grid-template-columns: minmax(0, 1fr) auto;
-    align-items: start;
-    gap: 4px 8px;
     width: auto;
     min-width: 0;
     max-width: none;
@@ -3035,15 +3067,11 @@ body.modal-open {
     border-bottom: 1px solid var(--line);
   }
 
-  .trade-ledger-scroll .trade-market-cell > .market-link {
-    grid-column: 1;
-    grid-row: 1;
-  }
-
   .trade-ledger-scroll .trade-market-cell > .order-chip {
-    grid-column: 2;
-    grid-row: 1;
-    justify-self: end;
+    float: right;
+    /* The base rule sets `margin: 0 0 6px !important`, so the gap to the text it is
+       floated against has to be !important too or it is dropped. */
+    margin: 0 0 4px 10px !important;
   }
 
   .trade-ledger-scroll .opened-trades-table .trade-market-cell::before,

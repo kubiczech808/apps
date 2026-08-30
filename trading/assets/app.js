@@ -3131,13 +3131,18 @@ function resolutionCell(trade) {
     : (Number.isFinite(storedDays) ? storedDays : (awaitingSettlement ? MIN_ANNUALIZATION_DAYS : null));
   const inferred = inferredDateFromQuestion(trade);
   const inferredNote = inferred && trade.endDate && Date.parse(inferred) > Date.parse(trade.endDate) ? "from question" : "";
+  // A closed row's note used to read "Polymarket resolution", which restates the column it
+  // sits under and nothing else -- on a card, under a heading that already says RESOLUTION,
+  // it was a whole line spent twice. The note survives only where it explains something the
+  // date cannot: a missing date, where the value is a bare dash.
+  const note = isClosedTrade(trade)
+    ? (resolutionDate ? "" : "no Polymarket date")
+    : (awaitingSettlement
+      ? `awaiting settlement, ${compactDays(days)}`
+      : `${compactDays(days)} left${inferredNote ? `, ${inferredNote}` : ""}`);
   return `
     ${escapeHtml(resolutionDate ? formatDate(resolutionDate) : "-")}
-    <span>${isClosedTrade(trade)
-      ? (resolutionDate ? "Polymarket resolution" : "no Polymarket date")
-      : (awaitingSettlement
-        ? `awaiting settlement, ${compactDays(days)}`
-        : `${compactDays(days)} left${inferredNote ? `, ${inferredNote}` : ""}`)}</span>
+    ${note ? `<span>${escapeHtml(note)}</span>` : ""}
   `;
 }
 
@@ -3588,7 +3593,6 @@ const TRADE_HEADER_INFO = {
   potentialAnnualized: "Potential return annualized by days to resolution.",
   pnl: "Current or realized profit/loss for the row.",
   stake: "USDC committed to the position or order.",
-  status: "Closed trade result/status.",
 };
 
 const EVALUATION_HEADER_INFO = {
@@ -3623,6 +3627,24 @@ function tradeHeader(tableKey, key, label) {
   return `<th><div class="th-content"><button class="sort-button${active}" type="button" data-trade-sort="${key}" data-trade-table="${tableKey}">${label}${tradeSortArrow(tableKey, key)}</button>${headerInfoButton(TRADE_HEADER_INFO[key])}</div></th>`;
 }
 
+// The chip is uppercased by CSS, so the label only has to be readable: underscores become
+// spaces and anything unrecognised passes through rather than being dropped. A status this
+// has never seen still says something true.
+function tradeResultLabel(trade) {
+  const status = String(trade?.status || "").trim();
+  return status ? status.replace(/_/g, " ").toLowerCase() : "settled";
+}
+
+// Only the two outcomes that are actually good or bad news get a colour. A redeemed or
+// sold row is neither, and painting it green would claim a verdict the status does not
+// carry.
+function tradeResultTone(trade) {
+  const status = String(trade?.status || "").toUpperCase();
+  if (status === "WON") return "won";
+  if (status === "LOST") return "lost";
+  return "filled";
+}
+
 function tradeTypeBadge(trade) {
   // "Waiting" is only true while the market can still fill it. Once the event is over the
   // bid is holding collateral for nothing, and the next execution pass withdraws it --
@@ -3650,7 +3672,15 @@ function tradeTypeBadge(trade) {
   if (String(trade.status || "").toUpperCase() === "STOP_LOSS") return '<span class="order-chip warning">Protective exit</span>';
   if (String(trade.status || "").toUpperCase() === "STOP_BREACH") return '<span class="order-chip warning">Stop breached · no floor exit</span>';
   if (String(trade.status || "").toUpperCase() === "STOP_GAP") return '<span class="order-chip warning">Stop gap · cap missed</span>';
-  if (isClosedTrade(trade) && trade.mode === "LIVE") return '<span class="order-chip filled">Settled position</span>';
+  // A settled row's kind IS its result, so the chip carries it. "Settled position" only
+  // repeated what the closed list says about every row in it, and it sat next to a separate
+  // Result column saying WON or LOST -- two chances to state the same fact and neither of
+  // them the one worth reading at a glance. The specific statuses handled above keep their
+  // own wording: "Redeem needed" or "Protective exit" describe something a bare result does
+  // not, so they are not folded into this.
+  if (isClosedTrade(trade)) {
+    return `<span class="order-chip ${tradeResultTone(trade)}">${escapeHtml(tradeResultLabel(trade))}</span>`;
+  }
   if (trade.mode === "LIVE") return '<span class="order-chip filled">Open position</span>';
   if (trade.strategyLabel) return `<span class="order-chip paper">${escapeHtml(trade.strategyLabel)}</span>`;
   return "";
@@ -3734,7 +3764,6 @@ function renderTradeRows(trades, emptyText, options = {}) {
       <thead>
         <tr>
           ${tradeHeader(tableKey, "potentialGain", "Win")}
-          ${showStatus ? tradeHeader(tableKey, "status", "Result") : ""}
           ${tradeHeader(tableKey, "pnl", "P/L")}
           ${tradeHeader(tableKey, "market", "Market")}
           ${tradeHeader(tableKey, "potentialAnnualized", "Win p.a.")}
@@ -3749,9 +3778,6 @@ function renderTradeRows(trades, emptyText, options = {}) {
         ${rows.map((trade) => `
           <tr>
             <td data-label="Win">${tradeWinCell(trade)}</td>
-            ${showStatus ? `<td data-label="Result">
-              ${escapeHtml(trade.status || "OPEN")}
-            </td>` : ""}
             <td data-label="P/L" class="${pnlClass(tradePnlValue(trade))}">
               ${signedMoney(tradePnlValue(trade))}
             </td>

@@ -1873,17 +1873,93 @@ test("opened trades card: value above its label, state chip on the outcome's lin
   assert.match(labelRule[1], /order:\s*2/,
     "the label must come after the value; order:2 does it whatever the cell's content is");
 
-  // The state chip shares row 1 with the market link and sits at the right-hand end.
+  // The state chip sits at the right-hand end of the outcome's line, and the market name
+  // runs the full width of the card underneath it.
+  //
+  // A float, not a grid column. This started as two columns, and a second column reserves
+  // its width for the WHOLE cell -- so every line of a long question stopped short of the
+  // chip and left a ragged empty strip down the right of the card. A float shortens only
+  // the line the chip actually sits on.
   const marketCell = /\.trade-ledger-scroll \.opened-trades-table \.trade-market-cell,\s*\.trade-ledger-scroll \.closed-trades-table \.trade-market-cell\s*\{([^}]*)\}/s.exec(mobile);
   assert.ok(marketCell, "the market cell rule must be findable");
-  assert.match(marketCell[1], /grid-template-columns:\s*minmax\(0, 1fr\) auto/,
-    "two columns: the outcome takes what is left, the chip is sized to its text");
-  assert.match(marketCell[1], /align-items:\s*start/,
-    "a wrapping question must not drag the chip down off the outcome's line");
+  assert.match(marketCell[1], /display:\s*block/,
+    "the cell must not be a grid, or a column reserves width the question cannot use");
+  assert.doesNotMatch(marketCell[1], /grid-template-columns/,
+    "a second column is what kept the name out of the right-hand strip");
   const chipRule = /\.trade-ledger-scroll \.trade-market-cell > \.order-chip\s*\{([^}]*)\}/s.exec(mobile);
   assert.ok(chipRule, "the chip placement rule must be findable");
-  assert.match(chipRule[1], /grid-row:\s*1/, "the chip belongs on the outcome's row");
-  assert.match(chipRule[1], /justify-self:\s*end/, "right-aligned, as asked");
-  assert.match(mobile, /\.trade-ledger-scroll \.trade-market-cell > \.market-link\s*\{[^}]*grid-row:\s*1/s,
-    "and the outcome shares that row rather than being pushed below the chip");
+  assert.match(chipRule[1], /float:\s*right/, "right-aligned, with the text flowing under it");
+  // The base `.order-chip` rule sets `margin: ... !important`, so the gap to the text it is
+  // floated against has to be !important too or it is silently dropped.
+  assert.match(chipRule[1], /margin:[^;]*!important/,
+    "the float's margin must outrank the base rule's !important margin");
+});
+
+// Agreed after the card rework: a closed row showed a generic "Settled position" chip AND
+// a separate Result column saying WON -- the same fact twice, and the chip's half of it
+// told you only what the closed list already says about every row in it. The chip now
+// carries the result and the column is gone.
+test("closed positions: the chip carries the result, and nothing repeats it", () => {
+  const badge = APP.slice(APP.indexOf("function tradeTypeBadge"), APP.indexOf("function tradePriceCell"));
+  assert.doesNotMatch(badge, /order-chip filled">Settled position/,
+    "the chip that said nothing must be gone");
+  assert.match(badge, /if \(isClosedTrade\(trade\)\) \{[\s\S]*?tradeResultTone\(trade\)[\s\S]*?tradeResultLabel\(trade\)/,
+    "a settled row's chip must be its result");
+
+  // Order matters: the specific statuses describe something a bare result does not, so
+  // they must be answered before the generic result branch swallows them.
+  for (const specific of ["Redeem needed", "Protective exit", "Limit order waiting"]) {
+    assert.ok(badge.indexOf(specific) < badge.indexOf("if (isClosedTrade(trade)) {"),
+      `"${specific}" must be decided before the generic result chip`);
+  }
+
+  // Only a verdict gets a colour. Redeemed or sold is neither good nor bad news, and
+  // colouring it would claim something the status does not say.
+  const tone = APP.slice(APP.indexOf("function tradeResultTone"), APP.indexOf("function tradeTypeBadge"));
+  assert.match(tone, /=== "WON"\) return "won"/);
+  assert.match(tone, /=== "LOST"\) return "lost"/);
+  assert.match(tone, /return "filled"/);
+  assert.match(CSS, /\.order-chip\.won\s*\{[^}]*color:\s*var\(--good\)/s);
+  assert.match(CSS, /\.order-chip\.lost\s*\{[^}]*color:\s*var\(--danger\)/s);
+
+  // An unknown status still says something true rather than being dropped.
+  const label = APP.slice(APP.indexOf("function tradeResultLabel"), APP.indexOf("function tradeResultTone"));
+  assert.match(label, /replace\(\/_\/g, " "\)/, "underscores must not reach the chip");
+  assert.match(label, /: "settled"/, "a missing status still needs a word");
+});
+
+// Found while adding those chip colours: five rules referenced `--bad` and nothing defined
+// it. An undefined custom property makes the declaration invalid at computed-value time,
+// so all five were dead -- measured in Chromium, the "Redeem needed" chip that is meant to
+// be red computed to rgb(17, 24, 39), near-black on pink.
+test("palette: every custom property a rule uses is actually defined", () => {
+  const defined = new Set([...CSS.matchAll(/^\s*(--[a-z0-9-]+)\s*:/gm)].map((m) => m[1]));
+  const used = new Set([...CSS.matchAll(/var\((--[a-z0-9-]+)(?:\s*,[^)]*)?\)/g)].map((m) => m[1]));
+  const missing = [...used].filter((name) => !defined.has(name));
+  assert.deepEqual(missing, [], `these custom properties are used but never defined: ${missing.join(", ")}`);
+  // The one this test was written for, by name, so a rename cannot quietly reintroduce it.
+  assert.ok(defined.has("--bad"), "--bad must stay defined; five error-state rules depend on it");
+});
+
+// Asked for: drop the note above the Resolution label on closed rows. It read "Polymarket
+// resolution", which restates the column it sits under and nothing else -- on a card,
+// under a heading that already says RESOLUTION, a whole line spent saying it twice.
+test("closed positions: the resolution note only survives where it explains something", () => {
+  const cell = APP.slice(APP.indexOf("function resolutionCell"), APP.indexOf("function holdingCell"));
+  // Matched as the ternary it was, not as the bare phrase: the phrase also appears in the
+  // comment recording why it went, and an assertion its own explanation can satisfy proves
+  // nothing.
+  assert.doesNotMatch(cell, /\? "Polymarket resolution"/,
+    "the note that restated its own heading is gone");
+  // A missing date still needs saying: the value is a bare dash, and without the note
+  // there is nothing to tell a missing date from a market that resolves today.
+  assert.match(cell, /resolutionDate \? "" : "no Polymarket date"/,
+    "a dash still has to be explained");
+  // An open row keeps its countdown -- that is the note actually worth reading.
+  assert.match(cell, /\$\{compactDays\(days\)\} left/);
+  assert.match(cell, /awaiting settlement, \$\{compactDays\(days\)\}/);
+  // And an empty note must render nothing at all rather than an empty span, which would
+  // still take a line in the card's grid.
+  assert.match(cell, /\$\{note \? `<span>\$\{escapeHtml\(note\)\}<\/span>` : ""\}/,
+    "an empty note must not leave an empty element behind");
 });
