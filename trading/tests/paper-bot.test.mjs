@@ -9191,7 +9191,12 @@ test("scan log: a run reports what the catalogue did, not only what was new to t
   // The before count is the working set, and the after count is measured once the merge
   // and the retention pass have run -- taking it any earlier would report the intent
   // rather than the result.
-  assert.match(source, /const activeObservationCountBefore = previousKeys\.size;/);
+  //
+  // `previousKeys.size` was wrong here and this test used to pin it: that set holds every
+  // stored row including the resolved archive, so before and after counted different
+  // populations. In production it published 74114 against 5000 for a net of -69114 every
+  // run. Both sides must exclude resolved rows; the dedicated test below covers it.
+  assert.match(source, /const activeObservationCountBefore = \(state\.marketObservations \|\| \[\]\)/);
   assert.match(source, /const activeObservationCountAfter = \(state\.marketObservations \|\| \[\]\)/);
   const afterMerge = source.indexOf("const activeObservationCountAfter");
   const merge = source.indexOf("state.marketObservations = retainMarketObservations(");
@@ -9220,4 +9225,44 @@ test("scan log: a run reports what the catalogue did, not only what was new to t
   assert.equal(netOf({ netObservationCount: -240 }), ", catalogue -240");
   // A run recorded before the field existed must not print "catalogue NaN".
   assert.equal(netOf({}), "");
+});
+
+// Measured in production: the scan published activeObservationCountBefore 74114,
+// activeObservationCountAfter 5000, netObservationCount -69114 -- on every single run. The
+// two counters were taken over different populations. "Before" was previousKeys.size, every
+// stored row including the resolved archive; "after" counted only the non-resolved rows. So
+// the pair was never comparable, and their difference read as the catalogue destroying
+// sixty-nine thousand rows a scan. Nothing of the sort happens: observationTotals for the
+// same state showed 5000 active and 69114 resolved, all of them retained.
+//
+// A figure that invents a catastrophe is worse than no figure, so both sides now count the
+// same thing and the difference means what its name says.
+test("scan log: the before/after catalogue counters measure the same population", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const bot = await readFile(new URL("../tools/paper-trading-bot.mjs", import.meta.url), "utf8");
+
+  const resolvedTest = /String\(item\?\.status \|\| item\?\.selectionStatus \|\| ""\)\.toUpperCase\(\) !== "RESOLVED"/;
+
+  const before = /const activeObservationCountBefore = [\s\S]{0,240}?;\n/.exec(bot);
+  assert.ok(before, "the before counter must be findable");
+  assert.match(before[0], resolvedTest, "before must exclude the resolved archive");
+  assert.doesNotMatch(before[0], /previousKeys\.size/,
+    "previousKeys.size counts the archive too, which is what made the pair incomparable");
+
+  const after = /const activeObservationCountAfter = [\s\S]{0,240}?;\n/.exec(bot);
+  assert.ok(after, "the after counter must be findable");
+  assert.match(after[0], resolvedTest, "after already excluded it, and must keep doing so");
+
+  // The published difference is only worth publishing while both sides agree.
+  assert.match(bot, /netObservationCount: activeObservationCountAfter - activeObservationCountBefore,/);
+
+  // The arithmetic the production reading would now produce: an active catalogue sitting on
+  // its cap reports no change, rather than the size of the archive as a loss.
+  const rows = [
+    ...Array.from({ length: 5000 }, () => ({ status: "SCRAPED" })),
+    ...Array.from({ length: 69114 }, () => ({ status: "RESOLVED" })),
+  ];
+  const active = (list) => list.filter((item) => String(item?.status || "").toUpperCase() !== "RESOLVED").length;
+  assert.equal(active(rows), 5000);
+  assert.equal(active(rows) - active(rows), 0, "a steady catalogue must report a net of zero");
 });

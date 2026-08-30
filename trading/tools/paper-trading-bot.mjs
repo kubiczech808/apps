@@ -9255,7 +9255,16 @@ async function refreshMarketObservations(state) {
     const observationKeys = observations.map(marketObservationKey).filter(Boolean);
     const newObservationCount = observationKeys.filter((key) => !previousKeys.has(key)).length;
     const updatedObservationCount = observationKeys.filter((key) => previousKeys.has(key)).length;
-    const activeObservationCountBefore = previousKeys.size;
+    // Counted over the same population as activeObservationCountAfter -- non-resolved rows
+    // only. This was previousKeys.size, which is every stored row INCLUDING the resolved
+    // archive, so the pair was never comparable and their difference was nonsense.
+    // Measured in production: it published before 74114, after 5000, net -69114 on every
+    // run, because 74114 was active plus archive while 5000 was active alone. A net of
+    // -69114 reads as the catalogue destroying sixty-nine thousand rows a scan. Nothing of
+    // the sort happens -- the resolved archive is retained in full -- but the number said
+    // otherwise, and a figure that invents a catastrophe is worse than no figure.
+    const activeObservationCountBefore = (state.marketObservations || [])
+      .filter((item) => String(item?.status || item?.selectionStatus || "").toUpperCase() !== "RESOLVED").length;
     const categoryCounts = marketCategoryCounts(markets);
     const tagCounts = marketTagCounts(markets);
     const shortHorizonCount = observations.filter((item) => {

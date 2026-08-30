@@ -93,7 +93,12 @@ async function main() {
   const history = Array.isArray(scraped.json?.marketScan?.history)
     ? scraped.json.marketScan.history
     : (Array.isArray(scraped.json?.marketScanHistory) ? scraped.json.marketScanHistory : []);
-  console.log(`\n3. INTAKE VERSUS EVICTION, PER SCAN`);
+  // These two counters were published over different populations until this was measured:
+  // "before" counted every stored row including the resolved archive, "after" counted the
+  // active rows alone, so their difference read as a mass deletion that never happened.
+  // Labelled as what they are, and their difference is only meaningful once both sides
+  // count the same thing.
+  console.log(`\n3. ACTIVE CATALOGUE BEFORE AND AFTER EACH SCAN`);
   if (!history.length) {
     console.log(`   no scan history in this response`);
   } else {
@@ -109,8 +114,9 @@ async function main() {
         + ` ${String(after ?? "-").padStart(7)}`
         + ` ${String(net ?? "-").padStart(6)}`);
     }
-    console.log(`   -> a run that stores rows while net stays ~0 is intake working and eviction`);
-    console.log(`      cancelling it exactly. That is the number refusing to move.`);
+    console.log(`   -> net ~0 with the active total sitting on the cap is eviction cancelling`);
+    console.log(`      intake exactly. A large negative net means the two columns are still`);
+    console.log(`      counting different populations, not that rows were destroyed.`);
   }
 
   // 4. What the eviction order would drop first, measured on the rows that are here.
