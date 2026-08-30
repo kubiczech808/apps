@@ -18,7 +18,15 @@
 // rows with future end dates first, nearest first, and everything past-dated or undated
 // last -- so the first rows evicted are exactly the past-dated-but-still-tradable ones the
 // candidate list was recently changed to keep.
+// summary=scraped is the endpoint the scraped list and its status filter actually read.
+// The first version of this pointed at summary=execution, which is the executor's own
+// shortlist: it carries no observationTotals at all, so the totals read as null and the
+// verdict below was an artefact of asking the wrong endpoint rather than a finding.
 const SCRAPED_STATE_URL = process.env.PAPER_SCRAPED_STATE_URL
+  || "https://osobnizkusenosti.cz/trading/api.php?action=state&target=paper&summary=scraped";
+// The executor's view of the same catalogue, reported alongside it: it is scoped and
+// capped separately, and the two numbers being different is worth seeing side by side.
+const EXECUTION_STATE_URL = process.env.PAPER_EXECUTION_STATE_URL
   || "https://osobnizkusenosti.cz/trading/api.php?action=state&target=paper&summary=execution";
 const DASHBOARD_STATE_URL = process.env.PAPER_STATE_URL
   || "https://osobnizkusenosti.cz/trading/api.php?action=state&target=paper&summary=dashboard";
@@ -61,6 +69,17 @@ async function main() {
   console.log(`   -> ${activeTotal === RETAIN_LIMIT
     ? `PINNED: the active total is exactly the retain limit, so every scan is evicting to hold it there.`
     : `not at the limit (${activeTotal} of ${RETAIN_LIMIT}); the cap is not what is holding the number.`}`);
+
+  const execution = await measure(EXECUTION_STATE_URL, "execution state").catch((error) => ({ error }));
+  if (!execution.error) {
+    const execRows = Array.isArray(execution.json?.marketObservations) ? execution.json.marketObservations : [];
+    console.log(`\n1b. WHAT THE EXECUTOR SEES OF THE SAME CATALOGUE`);
+    console.log(`   rows served to the executor   ${execRows.length}`);
+    console.log(`   executionScopeTotal           ${num(execution.json?.executionScopeTotal)}`);
+    console.log(`   executionScopeTruncated       ${execution.json?.executionScopeTruncated}`);
+    console.log(`   -> this is scoped by the portfolio's own rules and capped separately. If it`);
+    console.log(`      is far below the active total, the executor is choosing from a subset.`);
+  }
 
   console.log(`\n2. WHAT THE ENDPOINTS COST AT THIS VOLUME`);
   console.log(`   scraped summary   ${mb(scraped.bytes)} in ${scraped.ms} ms`);
