@@ -460,30 +460,3 @@ jobs:
                   print(f"      via {path.get('path')}: {path.get('error') or path.get('status') or 'accepted'}")
           print("=== END RUN DIGEST ===")
           PY
-
-      - name: Send redeem alert emails
-        id: redeem_alerts
-        if: always()
-        continue-on-error: true
-        run: |
-          python3 - <<'PY'
-          import json
-          import sys
-          import urllib.request
-
-          request = urllib.request.Request(
-              "https://osobnizkusenosti.cz/trading/api.php?action=send-redeem-alerts",
-              data=b"",
-              method="POST",
-          )
-          with urllib.request.urlopen(request, timeout=60) as response:
-              payload = json.loads(response.read().decode("utf-8"))
-          print(json.dumps(payload, ensure_ascii=False))
-          if not payload.get("ok") or int(payload.get("failedCount") or 0) > 0:
-              sys.exit("Redeem alert email sending failed")
-          PY
-
-      - name: Report redeem alert warning
-        if: always() && steps.redeem_alerts.outcome == 'failure'
-        run: |
-          echo "::warning::Redeem alert delivery failed after the trading decision. The order result and account synchronization were not affected."

@@ -2941,6 +2941,16 @@ function send_redeem_alerts(): array
         respond(['ok' => false, 'error' => 'POST is required'], 405);
     }
 
+    // Redeem availability is still tracked in the live account state and displayed in
+    // the desk. Delivery was intentionally retired, however, so a legacy caller of
+    // this endpoint can never send an email.
+    return [
+        'ok' => true,
+        'notificationsEnabled' => false,
+        'skipped' => 'Redeem email notifications are disabled.',
+        'generatedAt' => gmdate('c'),
+    ];
+
     $path = live_state_path();
     if (!is_file($path)) {
         respond(['ok' => false, 'error' => 'Live state file is not available yet'], 404);

@@ -134,7 +134,6 @@ jobs:
               upload_atomic(ftp, execution_file, "live-execution-state.json")
               upload_atomic(ftp, state_file, "live-state.json")
           PY
-
       # Runs after the upload on purpose: by now the published state no longer lists the
       # vanished order, so the next sync cannot detect it a second time and dispatch a
       # duplicate run. live_confirm is true because this stands in for the scheduled run
@@ -199,23 +198,4 @@ jobs:
               # A failed dispatch must not fail the sync: the snapshot is already
               # published and the next scheduled execution run still picks the capital up.
               print(f"::warning::Could not dispatch {workflow}: HTTP {exc.code} {body}")
-          PY
-
-      - name: Send redeem alert emails
-        run: |
-          python3 - <<'PY'
-          import json
-          import sys
-          import urllib.request
-
-          request = urllib.request.Request(
-              "https://osobnizkusenosti.cz/trading/api.php?action=send-redeem-alerts",
-              data=b"",
-              method="POST",
-          )
-          with urllib.request.urlopen(request, timeout=60) as response:
-              payload = json.loads(response.read().decode("utf-8"))
-          print(json.dumps(payload, ensure_ascii=False))
-          if not payload.get("ok") or int(payload.get("failedCount") or 0) > 0:
-              sys.exit("Redeem alert email sending failed")
           PY
