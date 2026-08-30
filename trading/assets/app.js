@@ -3957,12 +3957,14 @@ function equityChartTooltipDate(timestamp) {
 // The state has transaction-level P/L rather than periodic account snapshots. Rebuild a
 // compact realized-equity path from settled trades without publishing a second,
 // ever-growing history file.
-function portfolioEquityHistory(trades, equity, openPnl, generatedAt = "") {
+function portfolioEquityHistory(trades, equity, openPnl, generatedAt = "", originalValue = null) {
   const timelineTrades = Array.isArray(trades) ? trades : [];
   const openedAt = timelineTrades
     .map((trade) => chartTimestamp(trade.openedAt || trade.date))
     .filter((timestamp) => timestamp != null);
-  if (!openedAt.length || !Number.isFinite(equity)) return null;
+  const configuredOriginalValue = Number(originalValue);
+  const hasConfiguredOriginalValue = Number.isFinite(configuredOriginalValue) && configuredOriginalValue > 0;
+  if (!openedAt.length || (!Number.isFinite(equity) && !hasConfiguredOriginalValue)) return null;
 
   const firstOpenedAt = Math.min(...openedAt);
   // A state file can be a few minutes old while the dashboard is open. The final point
@@ -3983,7 +3985,17 @@ function portfolioEquityHistory(trades, equity, openPnl, generatedAt = "") {
   // The chart deliberately excludes unrealized P/L. Its final point is therefore the
   // current equity minus open-position P/L, not a mark that could vanish next minute.
   const realizedEquity = equity - currentOpenPnl;
-  const openingEquity = realizedEquity - settledPnl;
+  // A live account's snapshot is wallet-wide, while a custom live portfolio has only
+  // its own closed trades. Back-calculating a starting point from those two different
+  // scopes made the chart invent capital (for example 190 USD on a 148 USD portfolio).
+  // A configured original value is the sole baseline in that case; its final point is
+  // the same baseline plus this portfolio's realised ledger only.
+  const openingEquity = hasConfiguredOriginalValue
+    ? configuredOriginalValue
+    : realizedEquity - settledPnl;
+  const finalRealizedEquity = hasConfiguredOriginalValue
+    ? openingEquity + settledPnl
+    : realizedEquity;
   const changesByBucket = new Map();
   settledEvents.forEach((event) => {
     const bucket = Math.max(firstOpenedAt, equityChartBucket(event.timestamp, scale));
@@ -4000,15 +4012,21 @@ function portfolioEquityHistory(trades, equity, openPnl, generatedAt = "") {
     });
   // The final point is realized equity only. It still updates to today even when no
   // trade settled in the latest period.
-  if (now > points[points.length - 1].timestamp || Math.abs(points[points.length - 1].value - realizedEquity) > 0.0001) {
-    points.push({ timestamp: now, value: realizedEquity });
+  if (now > points[points.length - 1].timestamp || Math.abs(points[points.length - 1].value - finalRealizedEquity) > 0.0001) {
+    points.push({ timestamp: now, value: finalRealizedEquity });
   }
-  return { points, scale, openingEquity, durationDays };
+  return {
+    points,
+    scale,
+    openingEquity,
+    originalValue: hasConfiguredOriginalValue ? configuredOriginalValue : null,
+    durationDays,
+  };
 }
 
-function renderPortfolioEquityChart({ trades = [], equity, openPnl = 0, generatedAt = "" } = {}) {
+function renderPortfolioEquityChart({ trades = [], equity, openPnl = 0, generatedAt = "", originalValue = null } = {}) {
   if (!els.portfolioEquityChart) return;
-  const history = portfolioEquityHistory(trades, equity, openPnl, generatedAt);
+  const history = portfolioEquityHistory(trades, equity, openPnl, generatedAt, originalValue);
   if (!history || history.points.length < 2) {
     els.portfolioEquityChart.hidden = true;
     els.portfolioEquityChart.innerHTML = "";
@@ -4022,7 +4040,10 @@ function renderPortfolioEquityChart({ trades = [], equity, openPnl = 0, generate
   const width = 520;
   const height = 196;
   const padding = { top: 18, right: 14, bottom: 32, left: 58 };
-  const values = history.points.map((point) => point.value);
+  const values = [
+    ...history.points.map((point) => point.value),
+    ...(Number.isFinite(history.originalValue) ? [history.originalValue] : []),
+  ];
   const rawMin = Math.min(...values);
   const rawMax = Math.max(...values);
   const spread = Math.max(0.01, rawMax - rawMin);
@@ -4042,6 +4063,9 @@ function renderPortfolioEquityChart({ trades = [], equity, openPnl = 0, generate
     const position = y(value);
     return `<g><line x1="${padding.left}" y1="${position.toFixed(1)}" x2="${(padding.left + plotWidth).toFixed(1)}" y2="${position.toFixed(1)}"></line><text x="${padding.left - 8}" y="${(position + 4).toFixed(1)}" text-anchor="end">${escapeHtml(money(value))}</text></g>`;
   }).join("");
+  const originalValueLine = Number.isFinite(history.originalValue)
+    ? `<g class="equity-history-original-value"><line x1="${padding.left}" y1="${y(history.originalValue).toFixed(1)}" x2="${(padding.left + plotWidth).toFixed(1)}" y2="${y(history.originalValue).toFixed(1)}"></line><text x="${(padding.left + plotWidth - 2).toFixed(1)}" y="${Math.max(padding.top + 10, y(history.originalValue) - 5).toFixed(1)}" text-anchor="end">Original value ${escapeHtml(money(history.originalValue))}</text></g>`
+    : "";
   const labelIndexes = [...new Set([0, Math.floor((history.points.length - 1) / 2), history.points.length - 1])];
   const labels = labelIndexes.map((index) => {
     const point = history.points[index];
@@ -4058,6 +4082,7 @@ function renderPortfolioEquityChart({ trades = [], equity, openPnl = 0, generate
     <div class="equity-history-stage">
       <svg class="equity-history-svg ${direction}" viewBox="0 0 ${width} ${height}" role="img" aria-label="Realized portfolio equity from the first trade to today" tabindex="0">
       <g class="equity-history-grid">${grid}</g>
+      ${originalValueLine}
       <polygon class="equity-history-area" points="${area}"></polygon>
       <polyline class="equity-history-line" points="${line}"></polyline>
       <circle class="equity-history-point" cx="${x(last.timestamp).toFixed(1)}" cy="${y(last.value).toFixed(1)}" r="4"></circle>
@@ -4966,7 +4991,7 @@ function renderPortfolioOverview() {
   const rows = dashboardModes().map((mode) => {
     const automationEnabled = automationIsEnabled(portfolioConfigForMode(mode));
     if (isLivePortfolioMode(mode)) {
-      const configuredInitial = normalizeMode(mode) === "live" ? liveInitialCapitalForMode(mode, portfolioConfigForMode(mode)) : null;
+      const configuredInitial = liveInitialCapitalForMode(mode, portfolioConfigForMode(mode));
       const liveForRoi = configuredInitial == null
         ? live
         : { ...live, initialUsdc: configuredInitial, originalValueUsdc: configuredInitial, depositedUsdc: configuredInitial };
@@ -9311,7 +9336,7 @@ function renderLiveState(liveState) {
   const equity = Number.isFinite(Number(portfolio.equityUsdc))
     ? Number(portfolio.equityUsdc)
     : (Number.isFinite(marketValue) ? marketValue : 0);
-  const configuredLiveInitial = normalizeMode(state.mode) === "live" ? liveInitialCapitalForMode(state.mode) : null;
+  const configuredLiveInitial = liveInitialCapitalForMode(state.mode);
   const deposited = configuredLiveInitial ?? Number(portfolio.depositedUsdc);
   const rawTotalPnl = Number(portfolio.totalPnlUsdc);
   const rawTotalPnlPct = Number(portfolio.totalPnlPct);
@@ -9404,6 +9429,7 @@ function renderLiveState(liveState) {
     equity,
     openPnl: openPnlValue,
     generatedAt: liveState.generatedAt,
+    originalValue: deposited,
   });
 
   if (els.accountSummary) {
