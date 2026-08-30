@@ -182,6 +182,41 @@ async function main() {
       console.log(`        ${money(num(row.currentValue ?? row.value))}  size ${num(row.size, 0)?.toFixed(2)} @ ${num(row.curPrice)?.toFixed(4) ?? "-"}  ${String(row.title || "").slice(0, 58)}`);
     }
   }
+  // 3c. For an unresolved position the snapshot dropped, the suppressing rule is a key
+  // match against the closed-trade history. That rule is right for a position that was
+  // sold and is only lagging in /positions, and wrong for a later re-entry on the same
+  // token -- and the two are told apart by WHEN. So print both clocks: if the position
+  // opened after the close that suppresses it, the close cannot describe it.
+  if (buckets.unresolvedButDropped.length) {
+    const keysOf = (item) => {
+      const keys = new Set();
+      const tokenId = String(item.tokenId || item.assetId || item.asset || "").trim();
+      const conditionId = String(item.conditionId || item.market || "").trim();
+      const norm = (value) => String(value || "").trim().toLowerCase().replace(/\s+/g, " ");
+      const outcome = norm(item.outcome || item.side);
+      const question = norm(item.question || item.title || item.market);
+      if (tokenId) keys.add(`token:${tokenId}`);
+      if (conditionId && outcome) keys.add(`condition:${conditionId}:${outcome}`);
+      if (question && outcome) keys.add(`question:${question}:${outcome}`);
+      return keys;
+    };
+    const closed = Array.isArray(fresh?.closedTrades) ? fresh.closedTrades : [];
+    console.log(`\n3c. THE SUPPRESSING HISTORY ROWS, WITH TIMES`);
+    for (const row of buckets.unresolvedButDropped) {
+      const positionKeys = keysOf(row);
+      const opened = row.createdAt || row.timestamp || null;
+      console.log(`   position  ${String(row.title || "").slice(0, 60)}`);
+      console.log(`     size ${num(row.size, 0)?.toFixed(4)} @ ${num(row.curPrice)?.toFixed(4)}  value ${money(num(row.currentValue ?? row.value))}`);
+      console.log(`     opened at ${opened || "(no timestamp on the /positions row)"}`);
+      const matches = closed.filter((trade) => [...keysOf(trade)].some((key) => positionKeys.has(key)));
+      if (!matches.length) console.log(`     no closed-trade row shares a key -- something else dropped it`);
+      for (const trade of matches.slice(0, 6)) {
+        console.log(`     closed-trade  ${trade.status || "-"}  closedAt ${trade.closedAt || trade.resolvedAt || "-"}`
+          + `  openedAt ${trade.openedAt || "-"}  shares ${num(trade.shares ?? trade.size, 0)?.toFixed(4)}`);
+      }
+    }
+  }
+
   console.log(`   published pendingRedeemUsdc ${money(num(publishedView.portfolio.pendingRedeemUsdc))}`);
   console.log(`   -> if the first bucket is non-zero while pendingRedeemUsdc is 0, that value`);
   console.log(`      is counted nowhere: not in marketValueUsdc, not in pending redeem.`);
