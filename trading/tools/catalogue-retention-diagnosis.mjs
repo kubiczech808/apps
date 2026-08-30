@@ -119,24 +119,63 @@ async function main() {
     console.log(`      counting different populations, not that rows were destroyed.`);
   }
 
-  // 4. What the eviction order would drop first, measured on the rows that are here.
-  // retainMarketObservations puts future-dated rows first (nearest first) and everything
-  // past-dated or undated last, so the tail of that order is what falls off the end.
-  console.log(`\n4. WHAT THE EVICTION ORDER SACRIFICES FIRST`);
+  // 4. THE ONLY QUESTION THAT DECIDES WHETHER THE CAP COSTS ANYTHING.
+  //
+  // Asked: does the 5000-row cap push aside opportunities that could have been executed?
+  // The retention sorts active rows by nearest end date first, so the 5000 kept are the
+  // 5000 soonest to resolve and what falls off the end is the far future. A portfolio only
+  // trades markets resolving within its own max-resolution-days, so the cap costs an
+  // opportunity ONLY if the retained set stops short of that horizon.
+  //
+  // So: how far out does the retained set actually reach, and how much of it is inside the
+  // horizons the portfolios trade? If the furthest retained row is far beyond them, the cap
+  // is cutting markets no portfolio would have taken anyway.
+  const HORIZONS = [1, 2, 3, 7, 30];
   const now = Date.now();
-  let future = 0;
-  let past = 0;
-  let undated = 0;
-  for (const row of rows) {
-    const end = Date.parse(row?.endDate || "");
-    if (!Number.isFinite(end)) undated += 1;
-    else if (end >= now) future += 1;
-    else past += 1;
+  const activeRows = rows.filter((row) => String(row?.status || row?.selectionStatus || "").toUpperCase() !== "RESOLVED");
+  const days = activeRows
+    .map((row) => (Date.parse(row?.endDate || "") - now) / 86400000)
+    .filter(Number.isFinite)
+    .sort((a, b) => a - b);
+  const undated = activeRows.length - days.length;
+
+  console.log(`\n4. DOES THE CAP CUT ANYTHING A PORTFOLIO COULD TRADE?`);
+  console.log(`   active rows in this response  ${activeRows.length} (${undated} with no usable end date)`);
+  if (days.length) {
+    console.log(`   soonest to resolve            ${days[0].toFixed(2)} d`);
+    console.log(`   furthest retained             ${days[days.length - 1].toFixed(2)} d   <- the horizon the cap buys`);
+    for (const horizon of HORIZONS) {
+      const inside = days.filter((value) => value <= horizon).length;
+      console.log(`   resolving within ${String(horizon).padStart(2)} day(s)      ${String(inside).padStart(5)}`
+        + `${inside < activeRows.length ? "" : "   (every retained row is inside this)"}`);
+    }
+    const furthest = days[days.length - 1];
+    console.log(`   -> the live portfolio trades markets resolving within LIVE_MAX_RESOLUTION_DAYS.`);
+    console.log(`      The retained set reaches ${furthest.toFixed(2)} d, so the cap only discards markets`);
+    console.log(`      beyond that. It costs an executable opportunity only if a portfolio's`);
+    console.log(`      horizon is LONGER than ${furthest.toFixed(2)} d.`);
   }
-  console.log(`   of the ${rows.length} rows in this response: ${future} future-dated, ${past} past-dated, ${undated} undated`);
-  console.log(`   -> past-dated and undated rows sort LAST and are evicted first. Those are the`);
-  console.log(`      same rows the candidate list was changed to keep until the exchange`);
-  console.log(`      confirms resolution, so the cap and that rule pull against each other.`);
+
+  // And the second ceiling, which is a different one: what reaches the executor at all.
+  if (!execution.error) {
+    const execRows = Array.isArray(execution.json?.marketObservations) ? execution.json.marketObservations : [];
+    const execDays = execRows
+      .map((row) => (Date.parse(row?.endDate || "") - now) / 86400000)
+      .filter(Number.isFinite)
+      .sort((a, b) => a - b);
+    console.log(`\n5. THE SECOND CEILING: WHAT REACHES THE EXECUTOR`);
+    console.log(`   scoped rows available         ${num(execution.json?.executionScopeTotal)}`);
+    console.log(`   rows actually served          ${execRows.length}   truncated=${execution.json?.executionScopeTruncated}`);
+    if (execDays.length) {
+      console.log(`   served horizon                ${execDays[0].toFixed(2)} d .. ${execDays[execDays.length - 1].toFixed(2)} d`);
+      for (const horizon of HORIZONS.slice(0, 3)) {
+        console.log(`   served, resolving within ${String(horizon).padStart(2)} d   ${String(execDays.filter((v) => v <= horizon).length).padStart(5)}`);
+      }
+    }
+    console.log(`   -> this cut is separate from retention and happens per request. If the served`);
+    console.log(`      horizon stops short of a portfolio's max resolution days, candidates inside`);
+    console.log(`      that horizon exist in the catalogue and never reach the run.`);
+  }
 }
 
 main().catch((error) => {
