@@ -1698,3 +1698,47 @@ test("candidates: a passed date is not a resolution, but exchange state is", () 
     rmSync(directory, { recursive: true, force: true });
   }
 });
+
+// Reported: on the Settings history tab on a phone, nothing scrolled sideways -- not the
+// table, and not the tab row above it. One cause explains both. The history table was the
+// only one in the app wrapped in `class="table-scroll"`, a class no stylesheet defines, so
+// it had no overflow container at all. Under `.ledger table { min-width: 1280px }` it then
+// stretched every ancestor past the viewport, and `.workspace { overflow-x: hidden }`
+// clipped the result -- which is why the tab row could not be swiped either: it was being
+// widened along with the page instead of scrolling inside itself.
+test("mobile: every table rendered into the ledger sits in a scroll container the CSS defines", () => {
+  // The scroll containers this stylesheet actually implements. A wrapper not in this set
+  // is a class name with nothing behind it, which is the bug being pinned.
+  const scrollWrappers = ["ledger-scroll", "analysis-candidate-table-wrap", "calculation-table-wrap",
+    "portfolio-summary-table"];
+  for (const wrapper of scrollWrappers) {
+    const rule = new RegExp(`\\.${wrapper}\\s*\\{[^}]*overflow-x:\\s*(auto|scroll)`, "s");
+    assert.match(CSS, rule, `.${wrapper} must actually scroll horizontally`);
+  }
+
+  // Wherever the dashboard writes its own wrapper div around a table, that wrapper has to
+  // be a class the stylesheet actually implements. This is the defect exactly: `table-scroll`
+  // read like a scroll container and did nothing, because no rule ever matched it. A table
+  // rendered into a container declared in index.html instead (the portfolio overview writes
+  // into `<div class="portfolio-summary-table">`) has no wrapper here and is not the subject.
+  const wrapped = [...APP.matchAll(/<div class="([^"]*)">\s*<table[^>]*class="([^"]*)"/g)];
+  assert.ok(wrapped.length >= 5, "the wrapper audit must actually find the dashboard's wrapped tables");
+  for (const match of wrapped) {
+    const classes = match[1].split(/\s+/).filter(Boolean);
+    const scrolls = classes.some((name) => new RegExp(`\\.${name}\\s*\\{[^}]*overflow-x:\\s*(auto|scroll)`, "s").test(CSS));
+    assert.ok(scrolls,
+      `table "${match[2]}" is wrapped in "${match[1]}", which no stylesheet rule gives an `
+      + "overflow-x to; on a phone it stretches the page instead of scrolling inside it");
+  }
+
+  // And the specific table that was broken, by name, with a width that suits four short
+  // columns rather than the 1280px the wide trade tables need.
+  assert.match(APP, /<div class="ledger-scroll">\s*<table class="trade-table portfolio-config-history-table">/,
+    "the settings history table must use the scroll container the rest of the app uses");
+  assert.doesNotMatch(APP, /class="table-scroll"/,
+    "table-scroll is defined nowhere in the stylesheet; it must not come back");
+  const historyWidth = /\.ledger \.portfolio-config-history-table\s*\{[^}]*min-width:\s*(\d+)px/s.exec(CSS);
+  assert.ok(historyWidth, "the settings history table needs its own min-width");
+  assert.ok(Number(historyWidth[1]) < 1280,
+    "four short columns must not demand the wide trade tables' 1280px of sideways scrolling");
+});

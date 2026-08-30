@@ -1040,6 +1040,16 @@ button:disabled {
   min-width: 1310px;
 }
 
+/* Settings history is four short columns -- a timestamp, a parameter name and two values.
+   The blanket `.ledger table { min-width: 1280px }` below is sized for the wide trade
+   tables, and applying it here made a phone scroll a full screen sideways to read four
+   values that fit in half of one. This is narrow enough to sit still on a tablet and
+   wide enough that the values do not wrap to three lines each on a phone.
+   Specificity (0,2,0) beats that rule's (0,1,1), so it wins wherever both apply. */
+.ledger .portfolio-config-history-table {
+  min-width: 620px;
+}
+
 .scraping-run-log-table .table-secondary {
   display: block;
   margin-top: 3px;

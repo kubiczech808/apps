@@ -8537,7 +8537,7 @@ function renderPortfolioConfigHistory() {
     return;
   }
   els.portfolioConfigHistory.innerHTML = `
-    <div class="table-scroll">
+    <div class="ledger-scroll">
       <table class="trade-table portfolio-config-history-table">
         <thead><tr><th>Changed</th><th>Parameter</th><th>Previous value</th><th>New value</th></tr></thead>
         <tbody>${rows.map((row) => `
