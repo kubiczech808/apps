@@ -429,13 +429,18 @@ jobs:
                   if candidate:
                       print(f"      tried: {str(candidate.get('question'))[:58]!r} [{candidate.get('outcome')}]")
 
-          # Resting orders are reviewed for rotation too -- cancelling one frees its
-          # whole notional with no exit fee. Only a count of them was reported, so a
-          # run looked like it had considered a single holding when it had considered
+          # Every resting order is reviewed for repricing or replacement -- cancelling one
+          # frees its whole notional with no exit fee. Only a count of them was reported,
+          # so a run looked like it had considered a single holding when it had considered
           # several, and there was no way to see why each order was kept.
+          #
+          # This line used to read "reviewed for rotation", which is the same conflation
+          # the dashboard made: position rotation is a different review, gated on the
+          # portfolio's rotation switch, and reporting order reviews under its name made a
+          # portfolio with rotation switched off look like it was rotating positions anyway.
           order_reviews = state.get("openOrderReviews") or batch.get("openOrderReviews") or []
           if order_reviews:
-              print(f"open orders : {len(order_reviews)} reviewed for rotation")
+              print(f"open orders : {len(order_reviews)} reviewed for repricing or replacement")
               for entry in order_reviews[:12]:
                   order = entry.get("order") or entry
                   candidate = entry.get("betterCandidate") or entry.get("candidate") or {}
