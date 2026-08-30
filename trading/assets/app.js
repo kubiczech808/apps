@@ -10555,8 +10555,8 @@ function tradeBatchDetail(batch) {
         ].join("\n") : "",
       ].filter(Boolean).join("\n")
     : "-";
-  const rotationComparisonLines = rotationComparison.length
-    ? rotationComparison.slice(0, 12).map((item, index) => {
+  const rotationComparisonLines = (rows) => (Array.isArray(rows) && rows.length
+    ? rows.slice(0, 12).map((item, index) => {
         const metric = String(item.current?.metricLabel || item.candidate?.metricLabel || returnMetricLabel);
         const formatMetric = (value) => metric === "R/R"
           ? riskReward(Number(value))
@@ -10574,7 +10574,7 @@ function tradeBatchDetail(batch) {
           : "";
         return `${index + 1}. ${item.kind === "order" ? "Order" : "Position"}: ${currentText} -> ${candidateText}${improvement}${result}${pendingReference}; ${item.action || "reviewed"}`;
       }).join("\n")
-    : "-";
+    : "");
 
   const normalizeDetailText = (value) => String(value || "").replace(/\s+/g, " ").trim().toLowerCase();
   const action = String(batch.action || "-").toUpperCase();
@@ -10597,9 +10597,28 @@ function tradeBatchDetail(batch) {
   // / Reason: Y" with no way to see which positions were even considered or why
   // each one's replacement attempt failed, which is exactly what made a working
   // rotation review indistinguishable from a skipped one.
+  // Reported: a run on a portfolio with rotation switched OFF still showed a "Position
+  // rotation" section full of KEEP_WAITING lines. Position rotation had not run at all --
+  // the executor gates it on the switch. What was being printed there were the OPEN-ORDER
+  // reviews, which rotationComparison carries alongside the position rows under kind:
+  // "order", and which this fell back to whenever no rotation review existed. Filing them
+  // under that heading says the portfolio was weighing position swaps when it was not.
+  //
+  // The position section now shows only position rows, and says plainly when nothing was
+  // reviewed and why. The order rows keep their comparison, under the heading that owns
+  // them.
+  const rotationPositionComparison = rotationComparison.filter((item) => item.kind !== "order");
+  const rotationOrderComparison = rotationComparison.filter((item) => item.kind === "order");
   const rotationSummary = rotationReview
     ? rotationReviewLines
-    : (rotationComparison.length ? rotationComparisonLines : "");
+    : (rotationPositionComparison.length
+      ? rotationComparisonLines(rotationPositionComparison)
+      : (settings.liveAutoRotate === false
+        ? "Not reviewed: automatic rotation is off for this portfolio, so no position was considered for replacement."
+        : ""));
+  const orderComparisonSummary = rotationOrderComparison.length
+    ? rotationComparisonLines(rotationOrderComparison)
+    : "";
   const capitalText = [
     Number.isFinite(Number(capital.availableUsdc)) ? `${money(Number(capital.availableUsdc))} available` : "",
     Number.isFinite(Number(capital.requiredStakeUsdc)) ? `${money(Number(capital.requiredStakeUsdc))} required` : "",
@@ -10649,6 +10668,7 @@ function tradeBatchDetail(batch) {
   if (batchProgressText) lines.push("", "Batch progress", batchProgressText);
   if (reviewedCandidateLines) lines.push("", "Candidates not used", reviewedCandidateLines);
   if (orderReviewSummary) lines.push("", "Open orders", orderReviewSummary);
+  if (orderComparisonSummary) lines.push("", "Open-order comparison", orderComparisonSummary);
   if (rotationSummary) lines.push("", "Position rotation", rotationSummary);
   if (riskText) lines.push("", "Risk diversification", riskText);
   if (capitalRelevant) lines.push("", "Capital", capitalText);

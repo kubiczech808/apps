@@ -3962,6 +3962,103 @@ function openOrderSummary(order, extra = {}) {
   };
 }
 
+// The "before" for a reprice has to belong to this order, and the only honest one on hand
+// is what an earlier run recorded while reviewing the same order id. The stored evaluation
+// is no use for it: the persist step overwrites its probability on every pass, so it always
+// reads as "now". Returns null when this order has not been reviewed before, and the reason
+// then reports only the current reading rather than inventing a comparison.
+function previousOpenOrderReview(orderId) {
+  const wanted = String(orderId || "");
+  if (!wanted) return null;
+  // Run-log entries spread the batchLog at their top level, and the newest is first.
+  const batches = [
+    previousExecutionState,
+    ...(Array.isArray(previousExecutionState?.runLog) ? previousExecutionState.runLog : []),
+  ];
+  for (const batch of batches) {
+    const reviews = Array.isArray(batch?.openOrderReviews) ? batch.openOrderReviews : [];
+    const match = reviews.find((review) => String(review?.orderId || "") === wanted);
+    if (match) return match;
+  }
+  return null;
+}
+
+// Reported of a run whose entire log read "Action: REPLACED / Reason: market moved away;
+// raise limit price closer to current post-only level by 2.0 pts". Which event? Which
+// order for which? What was the probability before, and what is it now? None of that was
+// in the line -- and worse, "REPLACED" reads as though the portfolio had swapped one event
+// for another. It had not. A reprice cancels and reposts OUR OWN bid on the SAME market and
+// the SAME outcome at a different price; no event is exchanged for any other. The reason
+// says which market, what moved, and by how much, so the claim can be checked rather than
+// taken on trust.
+function repriceReason({ order = {}, revalidated = {}, priceDelta = 0, ageHours = null, previous = null } = {}) {
+  const label = [revalidated.outcome || order.outcome, revalidated.question || order.question || order.market]
+    .filter(Boolean).join(" - ") || String(order.tokenId || order.assetId || "this market");
+  const oldPrice = number(order.price);
+  const newPrice = number(revalidated.orderPrice);
+  const points = Math.abs(priceDelta * 100).toFixed(1);
+  const direction = priceDelta > 0
+    ? `the market moved away from our bid, so the limit rises by ${points} pts`
+    : `the post-only level is ${points} pts lower, so the bid is reposted there`;
+  const priceMove = oldPrice != null && newPrice != null
+    ? `limit ${oldPrice.toFixed(4)} -> ${newPrice.toFixed(4)} USDC`
+    : `limit repriced by ${points} pts`;
+  // Probability then versus now. "Then" is the previous run's reading of this same order;
+  // without one, only the current figure is claimed.
+  const nowProbability = number(revalidated.marketProbability);
+  const thenProbability = number(previous?.currentEvaluation?.marketProbability);
+  const probabilityMove = nowProbability == null
+    ? ""
+    : (thenProbability == null
+      ? `; market probability now ${(nowProbability * 100).toFixed(1)}%`
+      : `; market probability ${(thenProbability * 100).toFixed(1)}% -> ${(nowProbability * 100).toFixed(1)}%`);
+  const book = [
+    number(revalidated.currentBestBid) == null ? "" : `bid ${number(revalidated.currentBestBid).toFixed(4)}`,
+    number(revalidated.currentBestAsk) == null ? "" : `ask ${number(revalidated.currentBestAsk).toFixed(4)}`,
+  ].filter(Boolean).join(" / ");
+  const waited = Number.isFinite(Number(ageHours)) ? `, unfilled for ${Number(ageHours).toFixed(1)}h` : "";
+  return `reprice of our own resting bid on the same market and outcome (no event was swapped): ${label}`
+    + `; ${direction}: ${priceMove}${waited}${probabilityMove}${book ? `; current book ${book}` : ""}`;
+}
+
+// What the open-order review actually did, for the run's Note. The old text -- "Live batch
+// reviewed existing open limit orders before opening a new position" -- was true of every
+// outcome alike, so a REPLACED run said nothing about what had been replaced.
+function openOrderActionExplanation(orderManagement = {}) {
+  const selected = orderManagement.selected || null;
+  const action = String(orderManagement.action || "").toUpperCase();
+  const label = selected
+    ? ([selected.outcome, selected.question].filter(Boolean).join(" - ") || String(selected.tokenId || "an open order"))
+    : "an open order";
+  const reviewed = Array.isArray(orderManagement.reviews) ? orderManagement.reviews.length : 0;
+  const scope = reviewed
+    ? `${reviewed} open limit order${reviewed === 1 ? " was" : "s were"} reviewed. `
+    : "";
+  if (action === "REPLACED") {
+    return `${scope}The bid on ${label} was cancelled and immediately reposted at a new limit price.`
+      + " This is the same market and the same outcome as before -- the portfolio's exposure did not"
+      + " move to a different event.";
+  }
+  if (action === "CANCELED_FOR_BETTER_CANDIDATE") {
+    const replacement = selected?.replacementCandidate || null;
+    const replacementLabel = replacement
+      ? ([replacement.outcome, replacement.question].filter(Boolean).join(" - ") || "a better-ranked candidate")
+      : "a better-ranked candidate";
+    return `${scope}The bid on ${label} was cancelled to release its capital for ${replacementLabel}.`
+      + " This one does change which event the portfolio is bidding on.";
+  }
+  if (action === "CANCELED") {
+    return `${scope}The bid on ${label} was cancelled and not replaced.`;
+  }
+  if (action.startsWith("REPLACE_REJECTED")) {
+    return `${scope}The replacement bid on ${label} was refused by the exchange.`
+      + (action.endsWith("RESTORE_FAILED")
+        ? " Restoring the original order also failed, so that capital is currently unbid."
+        : " The original order was restored, so nothing changed.");
+  }
+  return `${scope}Live batch reviewed existing open limit orders before opening a new position.`;
+}
+
 function selectionComparison(current, replacement) {
   const metricLabel = SELECTION_ORDER === "highest_reward_risk_first" ? "R/R" : returnMetricLabel();
   const currentMetric = SELECTION_ORDER === "highest_reward_risk_first"
@@ -4163,9 +4260,13 @@ async function reviewOpenOrders({ liveState, evaluationByToken, eligible, rotati
           review.reason = `a candidate has higher absolute expected value (${Number(comparison.currentExpectedValue).toFixed(4)} -> ${Number(comparison.replacementExpectedValue).toFixed(4)} USDC) but ranks lower by ${comparison.metricLabel} (${selectionMetricDisplay(comparison, comparison.currentMetric)} vs ${selectionMetricDisplay(comparison, comparison.replacementMetric)}); keep the current order${breachNote}`;
         } else if (ageHours >= OPEN_ORDER_REVIEW_AFTER_HOURS && Math.abs(priceDelta) >= OPEN_ORDER_REPRICE_THRESHOLD) {
           review.action = "REPLACE";
-          review.reason = priceDelta > 0
-            ? `market moved away; raise limit price closer to current post-only level by ${(priceDelta * 100).toFixed(1)} pts`
-            : `current post-only level is lower by ${(Math.abs(priceDelta) * 100).toFixed(1)} pts; repost at updated economics`;
+          review.reason = repriceReason({
+            order,
+            revalidated,
+            priceDelta,
+            ageHours,
+            previous: previousOpenOrderReview(orderId),
+          });
           review.replacementCandidate = revalidated;
         } else if (ageHours >= OPEN_ORDER_CANCEL_AFTER_HOURS) {
           review.reason = `order has waited ${ageHours.toFixed(1)}h without fill; kept because cancelling without an immediate replacement is not allowed${breachNote}`;
@@ -4756,7 +4857,10 @@ async function main() {
         ...decision.batchLog,
         action: orderManagement.action,
         reason: orderManagement.selected?.reason || "open order management action completed",
-        explanation: "Live batch reviewed existing open limit orders before opening a new position.",
+        // The old note said only that open orders had been reviewed, which left the reader
+        // of a REPLACED run with no way to tell a reprice of our own bid from a swap of one
+        // event for another -- the two read identically. It now names the action's subject.
+        explanation: openOrderActionExplanation(orderManagement),
       },
       attempts: [orderManagement.selected],
     });
@@ -5152,6 +5256,9 @@ export {
   orderPriceBandRejection,
   endDateHasPassed,
   finishedAwaitingResolutionRejection,
+  repriceReason,
+  openOrderActionExplanation,
+  rotationComparisonRows,
   sharesForOrder,
   prepareLiveCandidatePool,
   liveRevalidationUpdate,

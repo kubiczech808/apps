@@ -3267,7 +3267,7 @@ test("open order review: an order above the current max stake is still evaluated
   assert.equal(withoutNote.length, 2,
     `only the two reasons that replace the order may omit the breach, found ${withoutNote.length}`);
   for (const statement of withoutNote) {
-    assert.match(statement, /priority supports replacement \(|market moved away|current post-only level is lower/,
+    assert.match(statement, /priority supports replacement \(|repriceReason\(/,
       "a reason that keeps the order must say the order is oversized");
   }
 });
@@ -4091,4 +4091,137 @@ test("finished events: the verdict is terminal, logged, and closes the stored ro
   // Finally the persist step, which is what actually removes it from the candidate list.
   assert.match(persist, /if update\.get\("awaitingResolution"\):/);
   assert.match(persist, /item\["closedReason"\] = "finished, awaiting Polymarket resolution"/);
+});
+
+// Reported of a run whose whole log read:
+//   Action: REPLACED
+//   Reason: market moved away; raise limit price closer to current post-only level by 2.0 pts
+//   Note:   Live batch reviewed existing open limit orders before opening a new position.
+// Which event? Which order for which? What was the probability before, and what now? None
+// of it was there -- and "REPLACED" reads as a swap of one event for another, which a
+// reprice is not: it cancels and reposts our own bid on the same market at a new price.
+test("reprice log: the REPLACED reason names the market, the price move, and the probability", () => {
+  const { repriceReason } = executor;
+  const order = {
+    price: 0.74,
+    question: "Valorant: MIBR vs Evil Geniuses (BO3)",
+    outcome: "Evil Geniuses",
+    tokenId: "1234",
+  };
+  const revalidated = {
+    orderPrice: 0.76,
+    question: "Valorant: MIBR vs Evil Geniuses (BO3)",
+    outcome: "Evil Geniuses",
+    marketProbability: 0.775,
+    currentBestBid: 0.76,
+    currentBestAsk: 0.78,
+  };
+
+  const withHistory = repriceReason({
+    order,
+    revalidated,
+    priceDelta: 0.02,
+    ageHours: 3.2,
+    previous: { currentEvaluation: { marketProbability: 0.74 } },
+  });
+  // The subject, which was missing entirely.
+  assert.match(withHistory, /Evil Geniuses - Valorant: MIBR vs Evil Geniuses \(BO3\)/);
+  // That it is a reprice and not a swap -- the reading the old wording invited.
+  assert.match(withHistory, /same market and outcome/);
+  assert.match(withHistory, /no event was swapped/i);
+  // The price actually moved, both ends of it.
+  assert.match(withHistory, /limit 0\.7400 -> 0\.7600 USDC/);
+  assert.match(withHistory, /2\.0 pts/);
+  // Probability before and now, which is what was asked for.
+  assert.match(withHistory, /market probability 74\.0% -> 77\.5%/);
+  assert.match(withHistory, /bid 0\.7600 \/ ask 0\.7800/);
+  assert.match(withHistory, /unfilled for 3\.2h/);
+
+  // With no earlier review of this order there is no honest "before", so only the current
+  // reading is claimed rather than a comparison being invented from the stored evaluation
+  // (which the persist step rewrites every run, and which therefore always reads as "now").
+  const firstReview = repriceReason({ order, revalidated, priceDelta: 0.02, ageHours: 3.2, previous: null });
+  assert.match(firstReview, /market probability now 77\.5%/);
+  assert.doesNotMatch(firstReview, /->\s*77\.5%/);
+
+  // The mirrored direction reads as a reprice down, not as "the market moved away".
+  const down = repriceReason({
+    order: { ...order, price: 0.78 },
+    revalidated: { ...revalidated, orderPrice: 0.76 },
+    priceDelta: -0.02,
+    previous: null,
+  });
+  assert.match(down, /post-only level is 2\.0 pts lower/);
+  assert.match(down, /limit 0\.7800 -> 0\.7600 USDC/);
+});
+
+test("reprice log: the run note says whether the portfolio's event actually changed", () => {
+  const { openOrderActionExplanation } = executor;
+  const selected = { question: "MIBR vs Evil Geniuses", outcome: "Evil Geniuses", tokenId: "1234" };
+
+  const replaced = openOrderActionExplanation({ action: "REPLACED", selected, reviews: [selected] });
+  assert.match(replaced, /Evil Geniuses - MIBR vs Evil Geniuses/);
+  assert.match(replaced, /same market and the same outcome/);
+  assert.match(replaced, /did not move to a different event/);
+  assert.match(replaced, /1 open limit order was reviewed/);
+
+  // The one action that DOES change which event is bid on has to read differently, or the
+  // note is no better than the text it replaced.
+  const swapped = openOrderActionExplanation({
+    action: "CANCELED_FOR_BETTER_CANDIDATE",
+    selected: { ...selected, replacementCandidate: { question: "T1 vs GenG", outcome: "T1" } },
+    reviews: [selected, selected],
+  });
+  assert.match(swapped, /T1 - T1 vs GenG/);
+  assert.match(swapped, /does change which event/);
+  assert.match(swapped, /2 open limit orders were reviewed/);
+
+  // A rejected replacement must not read as a completed one.
+  assert.match(openOrderActionExplanation({ action: "REPLACE_REJECTED_ORDER_RESTORED", selected, reviews: [] }),
+    /refused by the exchange.*original order was restored/s);
+  assert.match(openOrderActionExplanation({ action: "REPLACE_REJECTED_ORDER_RESTORE_FAILED", selected, reviews: [] }),
+    /currently unbid/);
+});
+
+// Reported alongside it: the same run showed a "Position rotation" section full of
+// KEEP_WAITING lines on a portfolio whose rotation switch is OFF. Position rotation never
+// ran -- the executor gates it on that switch. rotationComparison carries the OPEN-ORDER
+// reviews too, under kind "order", and the detail view fell back to the whole list
+// whenever there was no rotation review. So order rows were printed under a heading that
+// claimed the portfolio had been weighing position swaps.
+test("run detail: open-order reviews are not reported as position rotation", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const app = await readFile(new URL("../assets/app.js", import.meta.url), "utf8");
+  const { rotationComparisonRows } = executor;
+
+  // The two kinds really do share one array, which is what made the confusion possible.
+  const rows = rotationComparisonRows(null, [{
+    action: "KEEP_WAITING",
+    reason: "still eligible and price gap 0.5 pts is below reprice threshold",
+    currentEvaluation: { question: "MIBR vs Evil Geniuses", outcome: "Evil Geniuses", netGainIfWinUsdc: 1 },
+    betterCandidate: null,
+  }]);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].kind, "order", "an open-order review is carried in the rotation comparison array");
+
+  // The position section must select on kind, and it must be the assignment that does it --
+  // a filter defined elsewhere in the file would satisfy a bare name match while the
+  // section still printed order rows.
+  const assignment = /const rotationSummary = rotationReview[\s\S]*?;\n/.exec(app);
+  assert.ok(assignment, "the rotation summary assignment must be findable");
+  assert.match(assignment[0], /rotationPositionComparison/,
+    "the position section must read position rows only");
+  assert.match(app, /const rotationPositionComparison = rotationComparison\.filter\(\(item\) => item\.kind !== "order"\);/);
+  assert.match(app, /const rotationOrderComparison = rotationComparison\.filter\(\(item\) => item\.kind === "order"\);/);
+
+  // Rotation off with nothing reviewed must say so, rather than borrowing another section's
+  // rows to look busy.
+  assert.match(assignment[0], /settings\.liveAutoRotate === false/);
+  assert.match(assignment[0], /automatic rotation is off for this portfolio/);
+
+  // And the order rows keep their comparison, under a heading that owns them.
+  assert.match(app, /lines\.push\("", "Open-order comparison", orderComparisonSummary\);/);
+  const pushes = app.slice(app.indexOf('lines.push("", "Open orders"'), app.indexOf('lines.push("", "Risk diversification"'));
+  assert.ok(pushes.indexOf("Open-order comparison") < pushes.indexOf("Position rotation"),
+    "the order comparison belongs with the open orders, before the position section");
 });
