@@ -3886,8 +3886,17 @@ test("live entry: the band is checked against the submitted price, not the midpo
 
   // The check has to sit on `price` -- what orderPriceForBook returned, which is what the
   // order will carry -- and it has to run before the order is sized and submitted.
-  const guard = source.indexOf("const outOfBand = orderPriceBandRejection(price, {");
+  const guard = source.indexOf("const outOfBand = spreadWithinLimit");
   assert.ok(guard > 0, "the submitted price must be band-checked");
+  // A book too wide to trade is rejected for its spread, by the rule that owns that
+  // limit. Measured on a live run: the two candidates that reached this point had spreads
+  // of 25 and 14 points against an 8-point limit and were both reported as "outside the
+  // portfolio band" -- true, but the band is a symptom of the spread, and naming it sent
+  // the reader after the wrong setting. The band rejection is for a book the portfolio
+  // would otherwise trade, where the price really is the disqualifier.
+  assert.match(source, /const spreadWithinLimit = Number\.isFinite\(Number\(book\.spread\)\) && Number\(book\.spread\) <= MAX_SPREAD;/);
+  assert.match(source, /const outOfBand = spreadWithinLimit\n\s+\? orderPriceBandRejection\(price, \{/,
+    "a book wider than the limit must fall through to the spread rule, not answer as a band breach");
   assert.ok(guard > source.indexOf("const price = orderPriceForBook(book, tick"),
     "the check must come after the price is known");
   assert.ok(guard < source.indexOf("const orderSizing = sharesForOrder({"),
@@ -3946,4 +3955,36 @@ test("auto-rotate off: nothing is swapped for something better on the machine's 
   // order still has to be dealt with, or turning rotation off would strand stale orders.
   assert.match(source, /expiredOrderWithdrawalReason/);
   assert.match(source, /KEEP_WAITING/);
+});
+
+// Asked, of a run that skipped while a candidate sat visibly on the dashboard: was it even
+// evaluated? The digest could not say. It reported prefilterRejectedCandidates=1198 and
+// nothing about which rule dropped them, so a candidate present on screen and absent from
+// the run was unexplainable from the log -- which is the one question a SKIP actually
+// raises. The grouping already existed and was computed on every run; it simply never
+// left the diagnostics.
+test("run digest: a candidate dropped before revalidation can be explained from the log", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const source = await readFile(new URL("../tools/live-order-executor.mjs", import.meta.url), "utf8");
+  const workflow = await readFile(
+    new URL("../../.github/workflows/polymarket-live-limit-order-test.yml", import.meta.url), "utf8");
+
+  // The grouped counts have to reach the payload the digest reads.
+  assert.match(source, /prefilterRejectionReasons: candidatePool\.diagnostics\.reasonCounts,/,
+    "the grouped prefilter reasons must be published, not left in diagnostics");
+  // And they are grouped, or a per-candidate number in the text makes one bucket each --
+  // which is what once made this the dominant contributor to run-log size.
+  assert.match(source, /function prefilterReasonCountKey\(reason\)/);
+
+  // The digest must print them, on their own line: they are a dict, and folding a dict
+  // into the comma-joined counts line makes it unreadable exactly when it matters.
+  assert.match(workflow, /prefilter_reasons = counts\.pop\("prefilterRejectionReasons", None\)/,
+    "the dict must be taken out of the inline counts line");
+  assert.match(workflow, /print\("prefilter   : "/);
+  // Sorted by size, so the rule that dropped the most candidates is read first.
+  assert.match(workflow, /sorted\(prefilter_reasons\.items\(\), key=lambda kv: -int\(kv\[1\] or 0\)\)/);
+
+  // The line only appears when there is something to say, so a clean run stays quiet.
+  const block = workflow.slice(workflow.indexOf("prefilter_reasons ="));
+  assert.match(block.slice(0, 700), /if prefilter_reasons:/);
 });

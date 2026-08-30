@@ -404,7 +404,17 @@ jobs:
 
           counts = batch.get("counts") or {}
           if counts:
+              # The grouped prefilter reasons are printed on their own line rather than
+              # inline: they are a dict, and folding a dict into the comma-joined counts
+              # line made it unreadable exactly when it mattered.
+              prefilter_reasons = counts.pop("prefilterRejectionReasons", None) or {}
               print("counts      : " + ", ".join(f"{k}={v}" for k, v in counts.items()))
+              # Without this a run said a thousand candidates were dropped before
+              # revalidation and nothing about which rule dropped them, so a candidate
+              # sitting on the dashboard but missing from the run could not be explained.
+              if prefilter_reasons:
+                  ordered = sorted(prefilter_reasons.items(), key=lambda kv: -int(kv[1] or 0))
+                  print("prefilter   : " + ", ".join(f"{k} x{v}" for k, v in ordered[:12]))
 
           # The per-position rotation reasons are the part that is otherwise invisible:
           # the outer verdict alone never says why each position was kept.

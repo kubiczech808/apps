@@ -2587,11 +2587,21 @@ async function revalidateEvaluation(
   // deliberately not clamped up to the floor instead: raising a bid to satisfy a label
   // spends more real money for the same position, and a rejection is reversible where a
   // filled order is not.
-  const outOfBand = orderPriceBandRejection(price, {
-    min: MIN_PROBABILITY,
-    max: MAX_PROBABILITY,
-    spread: book.spread,
-  });
+  // A book too wide to trade is rejected for its spread, further down, by the one rule
+  // that owns that limit. This check stands aside for it rather than answering first:
+  // measured on a live run, the two candidates that reached here had spreads of 25 and 14
+  // points against an 8-point limit, and both were reported as "outside the portfolio
+  // band" -- true, but the band is a symptom of the spread and naming it sent the reader
+  // after the wrong setting. The band rejection is for a book this portfolio would
+  // otherwise trade, where the price really is the disqualifier.
+  const spreadWithinLimit = Number.isFinite(Number(book.spread)) && Number(book.spread) <= MAX_SPREAD;
+  const outOfBand = spreadWithinLimit
+    ? orderPriceBandRejection(price, {
+      min: MIN_PROBABILITY,
+      max: MAX_PROBABILITY,
+      spread: book.spread,
+    })
+    : null;
   if (outOfBand) {
     return {
       candidate: evaluation,
@@ -4515,6 +4525,11 @@ async function main() {
       uniqueEvaluations: latestEvaluations.length,
       prefilterPassedCandidates: candidatePool.diagnostics.prefilterPassed,
       prefilterRejectedCandidates: candidatePool.diagnostics.prefilterRejected,
+      // Why those were rejected, grouped. The count alone said a thousand candidates were
+      // dropped before revalidation and nothing about which rule dropped them, so a
+      // candidate visible on the dashboard but absent from the run could not be explained
+      // from the log at all -- which is the question a skipped run actually raises.
+      prefilterRejectionReasons: candidatePool.diagnostics.reasonCounts,
       skippedByScanLimit: candidatePool.diagnostics.skippedByScanLimit,
       scannedCandidates: baseCandidates.length,
       revalidatedCandidates: checked.length,
