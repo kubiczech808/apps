@@ -1595,8 +1595,10 @@ test("5050: the strategy is opt-in and does not disturb the main live portfolio"
   assert.match(workflow, /POLYMARKET_POST_ONLY: "true"/);
   assert.match(workflow, /LIVE_AUTO_ROTATE: "false"/);
   // A scheduled run trades; a dispatch only when explicitly confirmed, so an
-  // unconfirmed manual run stays a dry run.
-  assert.match(workflow, /github\.event_name == 'schedule' \|\| \(github\.event_name == 'workflow_dispatch' && inputs\.live_confirm\)/);
+  // unconfirmed manual run stays a dry run. The confirmation test is spelled out rather
+  // than relying on the input's truthiness -- that form accepted the string "false" and
+  // placed a real order, which the workflow test below covers in full.
+  assert.match(workflow, /github\.event_name == 'schedule' \|\| \(github\.event_name == 'workflow_dispatch' && \(inputs\.live_confirm == true \|\| inputs\.live_confirm == 'true'\)\)/);
 
   // Running past the capital on hand is intended, so a collateral refusal is counted
   // rather than treated as a fault.
@@ -4318,4 +4320,49 @@ test("run detail: open-order reviews are not reported as position rotation", asy
   const pushes = app.slice(app.indexOf('lines.push("", "Open orders"'), app.indexOf('lines.push("", "Risk diversification"'));
   assert.ok(pushes.indexOf("Open-order comparison") < pushes.indexOf("Position rotation"),
     "the order comparison belongs with the open orders, before the position section");
+});
+
+// A dispatch asking for a dry run placed a real order. Measured from the run's own env
+// dump: live_confirm was sent as the string "false" and the step still resolved
+// POLYMARKET_DRY_RUN to false, so the executor ran with --confirm-live and Polymarket
+// accepted a $5 bid. The REST API sends every workflow input as a string, and a non-empty
+// string is truthy in a GitHub expression -- so the safety switch failed open for every
+// dispatch made through the API rather than the UI checkbox.
+//
+// It sat latent because every earlier API dispatch skipped for want of an eligible
+// candidate. The first run that found one traded.
+test("live workflows: the dry-run switch cannot be defeated by a string input", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const files = [
+    "../../.github/workflows/polymarket-live-limit-order-test.yml",
+    "../../.github/workflows/trading-live-5050.yml",
+  ];
+
+  for (const file of files) {
+    const workflow = await readFile(new URL(file, import.meta.url), "utf8");
+    const guards = [...workflow.matchAll(/POLYMARKET_DRY_RUN: \$\{\{([^\n]*)\}\}/g)].map((m) => m[1]);
+    assert.ok(guards.length > 0, `${file}: the dry-run switch must be findable`);
+
+    for (const guard of guards) {
+      // The bare truthiness test is the fault. It must not appear in any form that could
+      // let a string through.
+      assert.doesNotMatch(guard, /&&\s*inputs\.live_confirm\s*\)/,
+        `${file}: a bare inputs.live_confirm is truthy for the string "false"`);
+      // Both halves are required: `== true` alone misses the string "true" that the API
+      // sends, and the bare value alone accepts "false".
+      assert.match(guard, /inputs\.live_confirm == true/, `${file}: must accept the UI's boolean`);
+      assert.match(guard, /inputs\.live_confirm == 'true'/, `${file}: must accept the API's string`);
+    }
+  }
+
+  // The truth table the expression has to satisfy, evaluated the way GitHub evaluates it:
+  // `==` casts a string to a number when the other side is a boolean, so 'true' and 'false'
+  // are both NaN against a boolean and only the string comparison can match them.
+  const asksForLive = (value) => (value === true) || (value === "true");
+  assert.equal(asksForLive(true), true, "UI checkbox ticked");
+  assert.equal(asksForLive("true"), true, "API dispatch asking for a live order");
+  assert.equal(asksForLive(false), false, "UI checkbox unticked");
+  assert.equal(asksForLive("false"), false, "the dispatch that placed a real order");
+  assert.equal(asksForLive(""), false, "an absent input must never mean live");
+  assert.equal(asksForLive(undefined), false);
 });

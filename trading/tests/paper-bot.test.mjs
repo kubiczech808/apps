@@ -4235,7 +4235,7 @@ test("5050: its own button and its own schedule run its own algorithm", async ()
   assert.match(workflow, /"LIVE_AUTOMATION_ENABLED": str\(bool\(cfg\.get\("automationEnabled", True\)\)\)\.lower\(\)/);
 
   // A scheduled run must place orders; only an unconfirmed dispatch is a dry run.
-  assert.match(workflow, /POLYMARKET_DRY_RUN: \$\{\{ \(github\.event_name == 'schedule' \|\| \(github\.event_name == 'workflow_dispatch' && inputs\.live_confirm\)\) && 'false' \|\| 'true' \}\}/);
+  assert.match(workflow, /POLYMARKET_DRY_RUN: \$\{\{ \(github\.event_name == 'schedule' \|\| \(github\.event_name == 'workflow_dispatch' && \(inputs\.live_confirm == true \|\| inputs\.live_confirm == 'true'\)\)\) && 'false' \|\| 'true' \}\}/);
 
   // The algorithm runs over the whole candidate set, not a browser shortlist.
   assert.match(workflow, /LIVE_CANDIDATE_SCAN_LIMIT: "300"/);
