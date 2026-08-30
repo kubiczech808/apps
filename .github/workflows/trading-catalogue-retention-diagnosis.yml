@@ -1,0 +1,30 @@
+name: Trading Catalogue Retention Diagnosis
+
+# Read-only measurement, dispatch only. Fetches the published scraped state and reports
+# whether the active catalogue is pinned at its retention cap, what the endpoints cost at
+# that volume, and what the eviction order sacrifices first. Writes nothing and publishes
+# nothing.
+on:
+  workflow_dispatch:
+    inputs:
+      retain_limit:
+        description: "The active retention limit to compare the total against"
+        required: false
+        default: "5000"
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Diagnose catalogue retention
+        working-directory: trading
+        env:
+          PAPER_MARKET_OBSERVATION_RETAIN_LIMIT: ${{ inputs.retain_limit }}
+        run: node tools/catalogue-retention-diagnosis.mjs
