@@ -295,6 +295,51 @@ async function loadJsonResource(location, label = location) {
   return JSON.parse(raw);
 }
 
+// The execution endpoint serves the catalogue one page at a time: decoding the whole
+// thing into a single response is what used to exhaust the hosting memory limit. One page
+// is not the catalogue, though. Measured on production: 4998 rows in scope, 1200 served,
+// truncated -- and 4749 of the active markets resolve inside the two days this portfolio
+// trades, of which only 1170 arrived. The rest were not rejected by any rule, they simply
+// never reached the run. Walking the pages keeps each response the same size the host can
+// afford while the shortlist is chosen from the entire scope.
+const EXECUTION_SCOPE_MAX_PAGES = Math.max(1, envNumber("LIVE_EXECUTION_SCOPE_MAX_PAGES", 6));
+
+async function loadScopedExecutionCatalogue(location, label = location, fetchPage = loadJsonResource) {
+  const first = await fetchPage(location, label);
+  const source = String(location || "");
+  if (!/^https?:\/\//i.test(source)) return first;
+  const limit = Number(first?.executionScopeLimit);
+  // An endpoint with no page width is one that has not been redeployed yet, and it would
+  // ignore an offset and hand back this same page again. Take what it gave rather than
+  // concatenating the first page to itself.
+  if (!Number.isFinite(limit) || limit <= 0) return first;
+  const rows = Array.isArray(first?.marketObservations) ? [...first.marketObservations] : [];
+  let truncated = first?.executionScopeTruncated === true;
+  let offset = Number(first?.executionScopeOffset) || 0;
+  let pages = 1;
+  while (truncated && pages < EXECUTION_SCOPE_MAX_PAGES) {
+    const wanted = offset + limit;
+    const page = await fetchPage(
+      `${source}${source.includes("?") ? "&" : "?"}offset=${wanted}`,
+      `${label} page ${pages + 1}`,
+    );
+    const pageRows = Array.isArray(page?.marketObservations) ? page.marketObservations : [];
+    // A page that came back empty, or from an offset other than the one asked for, means
+    // the walk is not advancing. Stop instead of looping on the same rows.
+    if (!pageRows.length || Number(page?.executionScopeOffset) !== wanted) break;
+    rows.push(...pageRows);
+    truncated = page?.executionScopeTruncated === true;
+    offset = wanted;
+    pages += 1;
+  }
+  return {
+    ...first,
+    marketObservations: rows,
+    executionScopePagesLoaded: pages,
+    executionScopeTruncated: truncated,
+  };
+}
+
 async function loadOptionalJsonResource(location, label = location) {
   try {
     return await loadJsonResource(location, label);
@@ -4465,7 +4510,7 @@ async function main() {
   const [paperState, scrapedState] = await Promise.all([
     loadJsonResource(PAPER_STATE_URL, "paper state"),
     PROBABILITY_SOURCE === "polymarket"
-      ? loadJsonResource(PAPER_SCRAPED_STATE_URL, "scraped Polymarket state")
+      ? loadScopedExecutionCatalogue(PAPER_SCRAPED_STATE_URL, "scraped Polymarket state")
       : Promise.resolve(null),
   ]);
   // Before anything is measured against the book: a bid on a market that is over can
@@ -5355,4 +5400,6 @@ export {
   fixedEntryRowFacts,
   expiredOrderWithdrawalReason,
   EXPIRED_ORDER_GRACE_HOURS,
+  loadScopedExecutionCatalogue,
+  EXECUTION_SCOPE_MAX_PAGES,
 };

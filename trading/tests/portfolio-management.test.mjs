@@ -2127,3 +2127,64 @@ test("market type: api.php, the browser and the executor classify identically", 
     question: "US Open ATP: Yibing Wu vs Adam Walton", outcome: "Yibing Wu", marketType: "multi",
   }), "binary", "a stored classification must not override the shared rule");
 });
+
+// The reported worry: the catalogue reports 5000 scraped markets and the executor might be
+// sidelining opportunities. Measured, the retention cap was not the ceiling -- the serving
+// cut was. scoped_execution_observations() ranked its rows only when a strategy id was
+// supplied, and the live executor supplies none, so it received the first 1200 rows of the
+// stored catalogue in storage order. Storage order is "most recently updated first", which
+// is unrelated to whether a market is worth an order: on production 4998 rows were in
+// scope, 1200 were served, and 3579 markets inside the portfolio's own two-day horizon
+// never reached the run at all.
+test("execution scope: rows are ranked before the page is cut, with or without a strategy", () => {
+  const directory = mkdtempSync(join(tmpdir(), "execution-scope-"));
+  try {
+    const cut = API.indexOf("\ntry {");
+    assert.ok(cut > 0, "api.php still ends with its request dispatch");
+    const definitions = join(directory, "definitions.php");
+    mkdirSync(join(directory, "data"), { recursive: true });
+    writeFileSync(definitions, API.slice(0, cut) + "\n");
+    const scope = (rows, offset = 0) => {
+      const encoded = Buffer.from(JSON.stringify(rows)).toString("base64");
+      const [served, total, truncated, servedOffset] = JSON.parse(execFileSync("php", ["-r",
+        `require '${definitions}';`
+        + ` $rows = json_decode(base64_decode('${encoded}'), true);`
+        + ` [$a, $t, $x, $o] = scoped_execution_observations($rows, null, ${offset});`
+        + ` echo json_encode([array_column($a, 'id'), $t, $x, $o]);`,
+      ], { encoding: "utf8" }));
+      return { served, total, truncated, offset: servedOffset };
+    };
+
+    const future = "2099-01-01T00:00:00Z";
+    // Deliberately listed worst-first, so storage order and ranked order disagree.
+    const rows = [
+      { id: "weak", marketProbability: 0.9, endDate: future, marketAnnualizedReturn: 0.05, daysToResolution: 1 },
+      { id: "strong", marketProbability: 0.9, endDate: future, marketAnnualizedReturn: 4.2, daysToResolution: 3 },
+      { id: "middling", marketProbability: 0.9, endDate: future, marketAnnualizedReturn: 1.1, daysToResolution: 2 },
+    ];
+    const ranked = scope(rows);
+    assert.deepEqual(ranked.served, ["strong", "middling", "weak"],
+      "an unscoped execution request must still rank by annualized return, not by storage order");
+    assert.equal(ranked.total, 3);
+    assert.equal(ranked.truncated, false, "a scope that fits in one page is not truncated");
+    assert.equal(ranked.offset, 0);
+
+    // And the rest of the scope has to be reachable rather than merely absent: an offset
+    // is what turns "capped transport" into "paged transport".
+    const page = scope(rows, 2);
+    assert.deepEqual(page.served, ["weak"], "an offset serves the next slice of the same ranking");
+    assert.equal(page.total, 3, "the total reports the whole scope, not the page");
+    assert.equal(page.offset, 2);
+
+    // The page width is published so a caller can compute the next offset instead of
+    // guessing it, and so a caller talking to an endpoint that predates paging can tell.
+    const branch = API.slice(API.indexOf("if ($summary === 'execution') {"));
+    const body = branch.slice(0, branch.indexOf("\n    }"));
+    assert.match(body, /'executionScopeOffset' => \$offset/, "the execution payload reports its offset");
+    assert.match(body, /'executionScopeLimit' => EXECUTION_SCOPE_PAGE_LIMIT/, "the execution payload reports its page width");
+    assert.match(API, /\$executionOffset = max\(0, \(int\) \(\$_GET\['offset'\] \?\? 0\)\)/,
+      "the request handler reads the offset");
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});

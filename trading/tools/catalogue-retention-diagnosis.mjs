@@ -156,25 +156,85 @@ async function main() {
     console.log(`      horizon is LONGER than ${furthest.toFixed(2)} d.`);
   }
 
-  // And the second ceiling, which is a different one: what reaches the executor at all.
+  // 5. THE SECOND CEILING, WHICH IS THE ONE THAT ACTUALLY COST SOMETHING.
+  //
+  // The retained set reaches far past any portfolio's horizon, so retention was never the
+  // constraint. The serving cut was: scoped_execution_observations() only ranked its rows
+  // when a strategy id was supplied, and the live executor supplies none, so it received
+  // the first 1200 rows of the stored catalogue in storage order -- "most recently updated
+  // first", which says nothing about how tradable a market is.
+  //
+  // Two things changed: the rows are ranked before the cut, and the cut became a page with
+  // an offset rather than a wall. This measures both -- whether the page is now the ranked
+  // frontier, and whether walking the offsets reaches the whole scope.
   if (!execution.error) {
     const execRows = Array.isArray(execution.json?.marketObservations) ? execution.json.marketObservations : [];
-    const execDays = execRows
+    const horizonOf = (list) => list
       .map((row) => (Date.parse(row?.endDate || "") - now) / 86400000)
       .filter(Number.isFinite)
       .sort((a, b) => a - b);
+    const execDays = horizonOf(execRows);
     console.log(`\n5. THE SECOND CEILING: WHAT REACHES THE EXECUTOR`);
     console.log(`   scoped rows available         ${num(execution.json?.executionScopeTotal)}`);
-    console.log(`   rows actually served          ${execRows.length}   truncated=${execution.json?.executionScopeTruncated}`);
+    console.log(`   rows in the first page        ${execRows.length}   truncated=${execution.json?.executionScopeTruncated}`);
+    const pageLimit = num(execution.json?.executionScopeLimit);
+    console.log(`   published page width          ${pageLimit ?? "(absent -- the host is still running the pre-paging api.php)"}`);
     if (execDays.length) {
-      console.log(`   served horizon                ${execDays[0].toFixed(2)} d .. ${execDays[execDays.length - 1].toFixed(2)} d`);
+      console.log(`   first-page horizon            ${execDays[0].toFixed(2)} d .. ${execDays[execDays.length - 1].toFixed(2)} d`);
       for (const horizon of HORIZONS.slice(0, 3)) {
-        console.log(`   served, resolving within ${String(horizon).padStart(2)} d   ${String(execDays.filter((v) => v <= horizon).length).padStart(5)}`);
+        console.log(`   first page, within ${String(horizon).padStart(2)} day(s)   ${String(execDays.filter((v) => v <= horizon).length).padStart(5)}`);
       }
     }
-    console.log(`   -> this cut is separate from retention and happens per request. If the served`);
-    console.log(`      horizon stops short of a portfolio's max resolution days, candidates inside`);
-    console.log(`      that horizon exist in the catalogue and never reach the run.`);
+
+    // Ranked or not: the first page should now open on the highest annualized returns in
+    // the scope, which is the executor's own first preference.
+    const returns = execRows
+      .map((row) => Number(row?.marketAnnualizedReturn ?? row?.potentialAnnualizedReturn ?? row?.annualizedReturn))
+      .filter(Number.isFinite);
+    if (returns.length > 1) {
+      const descending = returns.every((value, index) => index === 0 || value <= returns[index - 1] + 1e-9);
+      console.log(`   annualized return ordering    ${descending ? "descending (ranked frontier)" : "NOT descending (still storage order)"}`);
+      console.log(`   first / last on the page      ${returns[0].toFixed(3)} / ${returns[returns.length - 1].toFixed(3)}`);
+    }
+
+    // And the walk: can the rest of the scope actually be reached?
+    if (pageLimit) {
+      const seen = new Set(execRows.map((row) => String(row?.tokenId || row?.id || row?.question || "")));
+      let offset = num(execution.json?.executionScopeOffset, 0) || 0;
+      let truncated = execution.json?.executionScopeTruncated === true;
+      let reached = execRows.length;
+      let pages = 1;
+      let allRows = [...execRows];
+      while (truncated && pages < 8) {
+        const wanted = offset + pageLimit;
+        const page = await measure(`${EXECUTION_STATE_URL}&offset=${wanted}`, `execution page ${pages + 1}`)
+          .catch((error) => ({ error }));
+        if (page.error) { console.log(`   page at offset ${wanted} failed: ${page.error.message}`); break; }
+        const pageRows = Array.isArray(page.json?.marketObservations) ? page.json.marketObservations : [];
+        if (!pageRows.length || num(page.json?.executionScopeOffset) !== wanted) {
+          console.log(`   page at offset ${wanted} did not advance (${pageRows.length} rows, reported offset ${num(page.json?.executionScopeOffset)})`);
+          break;
+        }
+        for (const row of pageRows) seen.add(String(row?.tokenId || row?.id || row?.question || ""));
+        allRows = allRows.concat(pageRows);
+        reached += pageRows.length;
+        truncated = page.json?.executionScopeTruncated === true;
+        offset = wanted;
+        pages += 1;
+        console.log(`   page ${pages}: +${pageRows.length} rows (${mb(page.bytes)} in ${page.ms} ms), truncated=${truncated}`);
+      }
+      const walkedDays = horizonOf(allRows);
+      console.log(`   rows reached by walking       ${reached} of ${num(execution.json?.executionScopeTotal)} in ${pages} page(s)`);
+      console.log(`   distinct rows                 ${seen.size}   (equal to the rows reached means no page repeated)`);
+      if (walkedDays.length) {
+        console.log(`   walked horizon                ${walkedDays[0].toFixed(2)} d .. ${walkedDays[walkedDays.length - 1].toFixed(2)} d`);
+        for (const horizon of HORIZONS.slice(0, 3)) {
+          console.log(`   walked, within ${String(horizon).padStart(2)} day(s)       ${String(walkedDays.filter((v) => v <= horizon).length).padStart(5)}`);
+        }
+      }
+      console.log(`   -> compare "walked, within 2 days" against section 4's "resolving within 2".`);
+      console.log(`      Equal means every market the portfolio could trade now reaches the run.`);
+    }
   }
 }
 

@@ -3504,7 +3504,9 @@ test("live executor: the trading runs read the summary that skips the resolved a
   // gained a per-portfolio scope, so the guarantee is checked where it now lives. Both
   // of that helper's branches have to uphold it: the unscoped one directly, and the
   // scoped one through execution_scope_matches_observation.
-  assert.match(execution[0], /scoped_execution_observations\(\$observations, \$selectedStrategyId\)/);
+  // The offset argument the summary later gained is not part of this guarantee, so this
+  // matches the call rather than its full argument list.
+  assert.match(execution[0], /scoped_execution_observations\(\$observations, \$selectedStrategyId[,)]/);
   const scoped = /function scoped_execution_observations\([\s\S]*?\n\}/.exec(api);
   assert.ok(scoped);
   assert.match(scoped[0], /is_active_scraped_market_observation\(\$item\)/);
@@ -4451,4 +4453,63 @@ test("closed date: the browser never reads a Closed date from when it last looke
   // Holding days returns null rather than borrowing the clock, so an undated close reads
   // as "-" instead of as a duration that grows on its own.
   assert.match(app, /const end = isClosedTrade\(trade\) \? tradeClosedAt\(trade\) : new Date\(\)\.toISOString\(\);\s*\n\s*if \(!end\) return null;/);
+});
+
+// The executor asks the endpoint for the active catalogue and used to take whatever one
+// response carried. One response is a page, not the catalogue: production served 1200 of
+// 4998 scoped rows with executionScopeTruncated true, and the markets past that page were
+// not rejected by any rule -- they simply never arrived. The page cap has to stay (one
+// response holding the whole catalogue is what exhausted the hosting memory limit), so the
+// executor walks the pages instead.
+test("execution catalogue: the executor walks the pages instead of taking the first one", async () => {
+  const URL_BASE = "https://example.test/api.php?action=state&summary=execution";
+  const page = (rows, offset, truncated) => ({
+    marketObservations: rows,
+    executionScopeTotal: 5,
+    executionScopeLimit: 2,
+    executionScopeOffset: offset,
+    executionScopeTruncated: truncated,
+  });
+
+  const asked = [];
+  const pages = {
+    0: page([{ id: "a" }, { id: "b" }], 0, true),
+    2: page([{ id: "c" }, { id: "d" }], 2, true),
+    4: page([{ id: "e" }], 4, false),
+  };
+  const fetchPage = async (location) => {
+    const offset = Number(new URLSearchParams(String(location).split("?")[1]).get("offset") || 0);
+    asked.push(offset);
+    return pages[offset];
+  };
+
+  const walked = await executor.loadScopedExecutionCatalogue(URL_BASE, "test", fetchPage);
+  assert.deepEqual(walked.marketObservations.map((row) => row.id), ["a", "b", "c", "d", "e"],
+    "every page of the scope reaches the run, not just the first");
+  assert.deepEqual(asked, [0, 2, 4], "each page is asked for once, at the offset the previous one ended at");
+  assert.equal(walked.executionScopeTruncated, false, "the walk reports the truncation of the last page it read");
+  assert.equal(walked.executionScopePagesLoaded, 3);
+
+  // A page that does not advance -- empty, or answered from an offset other than the one
+  // asked for -- would otherwise loop on the same rows for the whole page budget.
+  const stuck = await executor.loadScopedExecutionCatalogue(URL_BASE, "test", async () => page([{ id: "a" }], 0, true));
+  assert.deepEqual(stuck.marketObservations.map((row) => row.id), ["a"],
+    "an endpoint that ignores the offset must not have its first page concatenated to itself");
+
+  // And an endpoint that predates paging publishes no page width. It would ignore an
+  // offset, so the walk must not start.
+  let calls = 0;
+  const legacy = await executor.loadScopedExecutionCatalogue(URL_BASE, "test", async () => {
+    calls += 1;
+    return { marketObservations: [{ id: "a" }], executionScopeTotal: 9, executionScopeTruncated: true };
+  });
+  assert.equal(calls, 1, "an endpoint with no published page width is asked exactly once");
+  assert.deepEqual(legacy.marketObservations.map((row) => row.id), ["a"]);
+
+  // The budget is what bounds the walk; six pages of 1200 covers the measured scope with
+  // room to grow, and a stray total cannot turn one run into hundreds of requests.
+  assert.ok(executor.EXECUTION_SCOPE_MAX_PAGES >= 5, "the page budget must cover the measured scope");
+  const source = readFileSync(new URL("../tools/live-order-executor.mjs", import.meta.url), "utf8");
+  assert.match(source, /loadScopedExecutionCatalogue\(PAPER_SCRAPED_STATE_URL/,
+    "the run loads the catalogue through the paging walk");
 });

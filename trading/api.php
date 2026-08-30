@@ -1317,7 +1317,9 @@ function execution_scope_sort_value(array $item, array $config): float
     return -INF;
 }
 
-function scoped_execution_observations(array $observations, ?string $strategyId): array
+const EXECUTION_SCOPE_PAGE_LIMIT = 1200;
+
+function scoped_execution_observations(array $observations, ?string $strategyId, int $offset = 0): array
 {
     $config = execution_scope_strategy_config($strategyId);
     $active = array_values(array_filter($observations, static function ($item) use ($config): bool {
@@ -1328,23 +1330,36 @@ function scoped_execution_observations(array $observations, ?string $strategyId)
             ? is_active_scraped_market_observation($item)
             : execution_scope_matches_observation($item, $config);
     }));
-    if ($config !== null) {
-        usort($active, static function (array $left, array $right) use ($config): int {
-            $return = execution_scope_sort_value($right, $config) <=> execution_scope_sort_value($left, $config);
-            if ($return !== 0) {
-                return $return;
-            }
-            $leftDays = is_numeric($left['daysToResolution'] ?? null) ? (float) $left['daysToResolution'] : INF;
-            $rightDays = is_numeric($right['daysToResolution'] ?? null) ? (float) $right['daysToResolution'] : INF;
-            return $leftDays <=> $rightDays;
-        });
-    }
+    // The ranking used to be skipped whenever no strategy id was supplied -- and the live
+    // executor supplies none, so what it actually received was array_slice(storage order,
+    // 0, 1200). Storage order is "most recently updated first": retainMarketObservations()
+    // ranks the catalogue by nearest resolution to decide what to KEEP, then re-sorts the
+    // merged result by update time before writing it. Update time says nothing about how
+    // tradable a market is, so the cut was arbitrary with respect to the only thing that
+    // matters here. Measured on production: 4998 rows in scope, 1200 served, and the live
+    // portfolio's own 2-day horizon holds 4749 markets of which only 1170 reached the run.
+    // Ranking before the cut costs nothing and makes the served page the frontier the
+    // executor would have chosen anyway -- compareLiveCandidatePriority's primary key,
+    // highest annualized return first, then the nearer resolution.
+    $ordering = $config ?? [];
+    usort($active, static function (array $left, array $right) use ($ordering): int {
+        $return = execution_scope_sort_value($right, $ordering) <=> execution_scope_sort_value($left, $ordering);
+        if ($return !== 0) {
+            return $return;
+        }
+        $leftDays = is_numeric($left['daysToResolution'] ?? null) ? (float) $left['daysToResolution'] : INF;
+        $rightDays = is_numeric($right['daysToResolution'] ?? null) ? (float) $right['daysToResolution'] : INF;
+        return $leftDays <=> $rightDays;
+    });
     $total = count($active);
-    // A broad custom portfolio can still match thousands of rows. The executor only
-    // needs the ranked frontier and the UI pages candidates, so cap the transport
-    // without discarding anything from the persisted catalogue.
-    $limit = 1200;
-    return [array_slice($active, 0, $limit), $total, $total > $limit];
+    // A broad custom portfolio can still match thousands of rows, and decoding the whole
+    // catalogue into one response is what used to exhaust the hosting memory limit. So the
+    // transport stays capped -- but capped is not the same as truncated: an offset makes
+    // the rest reachable in further pages instead of unreachable. Nothing is discarded
+    // from the persisted catalogue either way.
+    $limit = EXECUTION_SCOPE_PAGE_LIMIT;
+    $offset = max(0, $offset);
+    return [array_slice($active, $offset, $limit), $total, $total > $offset + $limit, $offset];
 }
 
 // The scraped view also lists markets whose result is already in or is being
@@ -1803,7 +1818,7 @@ function compact_dashboard_paper_portfolios(array $data, ?string $selectedStrate
     return $data;
 }
 
-function compact_state_payload(string $target, array $data, string $summary, ?string $selectedStrategyId = null): array
+function compact_state_payload(string $target, array $data, string $summary, ?string $selectedStrategyId = null, int $executionOffset = 0): array
 {
     if ($target !== 'paper') {
         return $data;
@@ -1864,7 +1879,7 @@ function compact_state_payload(string $target, array $data, string $summary, ?st
 
     if ($summary === 'execution') {
         $observations = is_array($data['marketObservations'] ?? null) ? $data['marketObservations'] : [];
-        [$active, $total, $truncated] = scoped_execution_observations($observations, $selectedStrategyId);
+        [$active, $total, $truncated, $offset] = scoped_execution_observations($observations, $selectedStrategyId, $executionOffset);
         return [
             'schemaVersion' => $data['schemaVersion'] ?? null,
             'generatedAt' => $data['generatedAt'] ?? null,
@@ -1875,6 +1890,11 @@ function compact_state_payload(string $target, array $data, string $summary, ?st
             'executionScopeStrategyId' => $selectedStrategyId,
             'executionScopeTotal' => $total,
             'executionScopeTruncated' => $truncated,
+            // Where this page sits and how wide a page is, so a caller that needs more of
+            // the scope than one page carries can ask for the next one rather than
+            // assuming the catalogue ends here.
+            'executionScopeOffset' => $offset,
+            'executionScopeLimit' => EXECUTION_SCOPE_PAGE_LIMIT,
             'marketDetailsMode' => 'compact',
         ];
     }
@@ -4193,12 +4213,15 @@ try {
         $target = (string) ($_GET['target'] ?? '');
         $summary = (string) ($_GET['summary'] ?? '');
         $strategyId = isset($_GET['strategy_id']) ? (string) $_GET['strategy_id'] : null;
+        // Which page of the execution scope to serve. Only the execution summary reads it;
+        // every other view ignores it.
+        $executionOffset = max(0, (int) ($_GET['offset'] ?? 0));
         // Load the segments this summary reads before decoding anything else. The
         // dashboard is by far the most requested view and needs none of them.
         $payload = state_payload($target, state_segments_for_summary($summary), $strategyId);
         if ($target === 'paper') {
             $payload = paper_state_with_consistent_portfolios($payload, $summary, $strategyId);
-            $payload = compact_state_payload($target, $payload, $summary, $strategyId);
+            $payload = compact_state_payload($target, $payload, $summary, $strategyId, $executionOffset);
         }
         respond($payload);
     }
