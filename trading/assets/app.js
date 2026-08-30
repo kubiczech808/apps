@@ -3658,17 +3658,26 @@ function tradePriceCell(trade, showStatus = false) {
     ? `${currentLabel}: ${probability(current)}; entry: ${probability(entry)}`
     : "Current price is unavailable.";
   return `
-    <span class="trade-price-summary" title="${escapeHtml(comparison)}">
+    <span class="trade-price-summary trade-value-pair" title="${escapeHtml(comparison)}">
       ${probability(entry)}
       ${Number.isFinite(change) ? `<span class="${pnlClass(change)}">(${signedPercent(change)})</span>` : ""}
     </span>
   `;
 }
 
+// The amount first, the percentage after it in brackets, on one line. Asked for on the
+// opened-trades cards: stacked as two separate lines, a bare percentage under a bare
+// amount read as two unrelated figures rather than one measured against the other.
+// Entry / mark already had this shape, so Win now matches it -- and it is done in the
+// shared renderer, so the wide table and the phone card say the same thing.
 function tradeWinCell(trade) {
+  const gainPct = tradePotentialGainPct(trade);
+  const percentText = signedPercent(gainPct);
   return `
-    ${potentialGainCell(trade)}
-    <span>${potentialPctCell(trade)}</span>
+    <span class="trade-value-pair">
+      ${potentialGainCell(trade)}
+      ${percentText === "-" ? "" : `<span class="${pnlClass(gainPct)}">(${percentText})</span>`}
+    </span>
   `;
 }
 

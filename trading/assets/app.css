@@ -1304,6 +1304,36 @@ button:disabled {
   text-decoration: none;
 }
 
+/* An amount and the percentage it works out to are one figure, not two. Keeping them on
+   a single baseline says so; wrapping is still allowed, because a long amount on a narrow
+   phone should break rather than overflow the card.
+
+   The selector carries `.ledger td` because `.ledger td span` (below) turns any span in a
+   cell into a muted secondary line -- the convention for a note under a value, and the
+   reason both halves of this pair used to stack. Both halves ARE the value, so they opt
+   out of it together. Outranking that rule by specificity rather than by position means
+   it holds wherever the rule ends up in the file. Colour is left alone: `.positive` and
+   `.negative` are !important, so each half keeps its own. */
+.ledger td .trade-value-pair {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 5px;
+  max-width: 100%;
+  margin-top: 0;
+  color: inherit;
+  font-size: inherit;
+  line-height: inherit;
+}
+
+.ledger td .trade-value-pair > span {
+  display: inline;
+  max-width: none;
+  margin-top: 0;
+  font-size: inherit;
+  line-height: inherit;
+}
+
 .market-link:hover strong {
   color: var(--accent-dark);
 }
@@ -2882,20 +2912,29 @@ body.modal-open {
     background: #ffffff;
   }
 
+  /* Value first, its label on the line underneath. The label used to sit in a fixed
+     left column beside the value, which spent most of a narrow card's width on words
+     that repeat in every cell and squeezed the figures -- the thing actually being
+     read -- into what was left. One column, value on top, keeps the numbers full
+     width and lets the label be small. */
   .trade-ledger-scroll .opened-trades-table td,
   .trade-ledger-scroll .closed-trades-table td {
     display: grid;
-    grid-template-columns: minmax(72px, 0.8fr) minmax(0, 1fr);
-    gap: 6px;
-    align-items: start;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 1px;
+    align-content: start;
     min-width: 0;
     padding: 0;
     border-bottom: 0;
   }
 
+  /* order:2 puts the label after the cell's content whatever that content is -- a bare
+     number, a wrapped pair, or a date with a note under it -- because the anonymous
+     items holding it all default to order 0. */
   .trade-ledger-scroll .opened-trades-table td::before,
   .trade-ledger-scroll .closed-trades-table td::before {
     content: attr(data-label);
+    order: 2;
     color: var(--muted);
     font-size: 11px;
     font-weight: 850;
@@ -2903,17 +2942,34 @@ body.modal-open {
     text-transform: uppercase;
   }
 
+  /* The state chip ("Open position", "Limit order waiting", …) shares the outcome's line
+     and sits at its right-hand end, instead of taking a line of its own above it. Two
+     columns with both put in row 1: the chip is sized to its text, the market link takes
+     what is left, and a long question wraps underneath the outcome without moving the
+     chip -- align-items: start is what keeps it on the first line. */
   .trade-ledger-scroll .opened-trades-table .trade-market-cell,
   .trade-ledger-scroll .closed-trades-table .trade-market-cell {
     order: -1;
     grid-column: 1 / -1;
-    grid-template-columns: 1fr;
-    gap: 7px;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: start;
+    gap: 4px 8px;
     width: auto;
     min-width: 0;
     max-width: none;
     padding-bottom: 10px;
     border-bottom: 1px solid var(--line);
+  }
+
+  .trade-ledger-scroll .trade-market-cell > .market-link {
+    grid-column: 1;
+    grid-row: 1;
+  }
+
+  .trade-ledger-scroll .trade-market-cell > .order-chip {
+    grid-column: 2;
+    grid-row: 1;
+    justify-self: end;
   }
 
   .trade-ledger-scroll .opened-trades-table .trade-market-cell::before,

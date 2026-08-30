@@ -1742,3 +1742,58 @@ test("mobile: every table rendered into the ledger sits in a scroll container th
   assert.ok(Number(historyWidth[1]) < 1280,
     "four short columns must not demand the wide trade tables' 1280px of sideways scrolling");
 });
+
+// Asked for on the opened-trades cards: the state chip on the outcome's line at its right
+// end, each label on its own line UNDER the value rather than beside it, and Win and
+// Entry / mark showing the amount and the percentage together with the percentage in
+// brackets. Verified in Chromium at 390px before these were written -- the chip and the
+// outcome share a top of 19px with the chip flush to the card's right edge, and both
+// halves of the Win pair share a top of 93px.
+test("opened trades card: value above its label, state chip on the outcome's line", () => {
+  // Win now reads as one figure. The percentage is bracketed and inside the same wrapper
+  // as the amount, not a second line under it.
+  const winCell = APP.slice(APP.indexOf("function tradeWinCell"), APP.indexOf("function tradeVolumeUsdc"));
+  assert.match(winCell, /<span class="trade-value-pair">/, "Win must wrap both halves in the shared pair");
+  assert.match(winCell, /\(\$\{percentText\}\)/, "the percentage must be bracketed");
+  assert.match(winCell, /percentText === "-" \? "" :/,
+    "an unavailable percentage must be omitted rather than printed as '(-)'");
+  // Entry / mark already had this shape; it must use the same wrapper so both behave alike.
+  const priceCell = APP.slice(APP.indexOf("function tradePriceCell"), APP.indexOf("function tradeWinCell"));
+  assert.match(priceCell, /class="trade-price-summary trade-value-pair"/);
+  assert.match(priceCell, /\(\$\{signedPercent\(change\)\}\)/);
+
+  // `.ledger td span` makes any span in a cell a muted block -- that rule is why the two
+  // halves stacked. The pair has to outrank it by specificity, or the fix depends on file
+  // order and the next edit silently undoes it.
+  assert.match(CSS, /\.ledger td \.trade-value-pair\s*\{[^}]*display:\s*inline-flex/s,
+    "the pair must beat `.ledger td span { display: block }` on specificity");
+  assert.match(CSS, /\.ledger td \.trade-value-pair > span\s*\{[^}]*display:\s*inline/s,
+    "and so must its halves");
+  assert.match(CSS, /\.ledger td span\s*\{\s*display:\s*block/s,
+    "the rule being overridden must still exist -- if it goes, revisit the override");
+
+  // The card layout, inside the phone breakpoint.
+  const mobile = CSS.slice(CSS.indexOf("@media (max-width: 680px)"));
+  const cell = /\.trade-ledger-scroll \.opened-trades-table td,\s*\.trade-ledger-scroll \.closed-trades-table td\s*\{([^}]*)\}/s.exec(mobile);
+  assert.ok(cell, "the card's cell rule must be findable");
+  assert.match(cell[1], /grid-template-columns:\s*minmax\(0, 1fr\)/,
+    "one column, so the value gets the card's full width instead of sharing it with the label");
+  const labelRule = /\.trade-ledger-scroll \.opened-trades-table td::before,\s*\.trade-ledger-scroll \.closed-trades-table td::before\s*\{([^}]*)\}/s.exec(mobile);
+  assert.ok(labelRule, "the card's label rule must be findable");
+  assert.match(labelRule[1], /order:\s*2/,
+    "the label must come after the value; order:2 does it whatever the cell's content is");
+
+  // The state chip shares row 1 with the market link and sits at the right-hand end.
+  const marketCell = /\.trade-ledger-scroll \.opened-trades-table \.trade-market-cell,\s*\.trade-ledger-scroll \.closed-trades-table \.trade-market-cell\s*\{([^}]*)\}/s.exec(mobile);
+  assert.ok(marketCell, "the market cell rule must be findable");
+  assert.match(marketCell[1], /grid-template-columns:\s*minmax\(0, 1fr\) auto/,
+    "two columns: the outcome takes what is left, the chip is sized to its text");
+  assert.match(marketCell[1], /align-items:\s*start/,
+    "a wrapping question must not drag the chip down off the outcome's line");
+  const chipRule = /\.trade-ledger-scroll \.trade-market-cell > \.order-chip\s*\{([^}]*)\}/s.exec(mobile);
+  assert.ok(chipRule, "the chip placement rule must be findable");
+  assert.match(chipRule[1], /grid-row:\s*1/, "the chip belongs on the outcome's row");
+  assert.match(chipRule[1], /justify-self:\s*end/, "right-aligned, as asked");
+  assert.match(mobile, /\.trade-ledger-scroll \.trade-market-cell > \.market-link\s*\{[^}]*grid-row:\s*1/s,
+    "and the outcome shares that row rather than being pushed below the chip");
+});
