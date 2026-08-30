@@ -1011,6 +1011,20 @@ test("dashboard: the overview above the selector states equity and risk against 
   assert.match(overview, /Number\.isFinite\(value\) \? money\(value\) : "-"/);
 });
 
+test("portfolio metrics: orders, positions and free cash are separate tiles", () => {
+  for (const expected of ["Orders", "Positions", "Free"]) {
+    assert.match(HTML, new RegExp(`<span class="label">${expected}<\\/span>`));
+  }
+  assert.match(HTML, /data-portfolio-orders/);
+  assert.match(HTML, /data-portfolio-positions/);
+  assert.match(HTML, /data-portfolio-free/);
+  assert.doesNotMatch(HTML, /Risk \/ free/);
+  assert.match(APP, /els\.portfolioFree\.textContent = money\(Math\.max\(0, freeCapital \+ restingRisk\)\);/,
+    "paper free cash excludes resting orders");
+  assert.match(APP, /els\.portfolioFree\.textContent = freeCash == null \? "-" : money\(freeCash\);/,
+    "live free cash is the available collateral, with orders kept separate");
+});
+
 test("dashboard: the overview and the archived list render on the first load", () => {
   // Both the paper and the live render paths call syncModeUi, including on the first
   // load. Hanging these off the dashboard rerender instead left both panels empty until

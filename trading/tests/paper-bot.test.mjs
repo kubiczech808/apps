@@ -4512,22 +4512,11 @@ test("live portfolios: each sizes from its own commitments, not the shared walle
   assert.doesNotMatch(app, /Math\.max\(0, cash - ownOrderReservation\)/,
     "the deduction is a double count; it must not come back");
 
-  // Both reservation totals are still computed: what this portfolio has resting is shown
-  // in the tile's split, and the wallet total gives the difference the other portfolio has
-  // bid. Hoisted to module scope so the overview table and this tile cannot answer the
-  // same question two different ways.
-  assert.match(app, /const ownOrderReservation = reservedByOpenOrders\(openOrderRows\);/);
-  assert.match(app, /const walletOrderRisk = reservedByOpenOrders\(liveState\?\.openOrders\);/);
-  assert.match(app, /const otherPortfolioReservation = Math\.max\(0, walletOrderRisk - ownOrderReservation\);/);
-  // "Locked" was wrong for the same reason the subtraction was: a resting bid holds no
-  // collateral. It competes for the same wallet at match time, which is the real caveat.
-  assert.doesNotMatch(app, /locked by the other portfolio/);
-  assert.match(app, /also bid by the other portfolio against this wallet/);
-
-  // Unchanged: risk is what THIS portfolio has committed, and the wallet-wide position
-  // total must not stand in for it.
+  // The cards must use this portfolio's commitments, not the wallet-wide position total.
   assert.match(app, /const ownPositionRisk = positions\.reduce\(/);
-  assert.match(app, /els\.portfolioRisk\.textContent = money\(ownPositionRisk \+ openOrderRisk\);/);
+  assert.match(app, /els\.portfolioOrders\.textContent = money\(openOrderRisk\);/);
+  assert.match(app, /els\.portfolioPositions\.textContent = money\(ownPositionRisk\);/);
+  assert.match(app, /els\.portfolioFree\.textContent = freeCash == null \? "-" : money\(freeCash\);/);
   assert.ok(!/portfolio\.openRiskUsdc \|\| 0\) \+ openOrderRisk/.test(app),
     "the wallet-wide position total must not stand in for a portfolio's own");
   // A resting sell releases collateral rather than reserving it.

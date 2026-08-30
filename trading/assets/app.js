@@ -382,7 +382,8 @@ const els = {
   portfolioAccuracyNote: document.querySelector("[data-portfolio-accuracy-note]"),
   portfolioOpenPl: document.querySelector("[data-portfolio-open-pl]"),
   portfolioOpenPlPct: document.querySelector("[data-portfolio-open-pl-pct]"),
-  portfolioRisk: document.querySelector("[data-portfolio-risk]"),
+  portfolioOrders: document.querySelector("[data-portfolio-orders]"),
+  portfolioPositions: document.querySelector("[data-portfolio-positions]"),
   portfolioFree: document.querySelector("[data-portfolio-free]"),
   portfolioEquityChart: document.querySelector("[data-portfolio-equity-chart]"),
   portfolioMetricsLayout: document.querySelector("[data-portfolio-metrics-layout]"),
@@ -7540,7 +7541,8 @@ async function loadLiveState(options = {}) {
     renderClosedAccuracy([]);
     els.portfolioOpenPl.textContent = "-";
     els.portfolioOpenPlPct.textContent = "-";
-    els.portfolioRisk.textContent = "-";
+    els.portfolioOrders.textContent = "-";
+    els.portfolioPositions.textContent = "-";
     els.portfolioFree.textContent = "-";
     if (els.accountSummary) {
       els.accountSummary.hidden = false;
@@ -8832,16 +8834,14 @@ function renderBotState(botState) {
   els.portfolioOpenPl.textContent = signedMoney(openPnl);
   els.portfolioOpenPl.className = pnlClass(openPnl);
   els.portfolioOpenPlPct.textContent = signedPercent(openPnlPct);
-  // Split, because the two halves are different commitments: a filled position is
-  // exposure, a resting order is a reservation against an offer nobody took. The total
-  // stays the headline so the tile still reconciles with equity.
+  // A filled position is exposure and a resting order is only a pending offer. Keep the
+  // two separate, and let free cash ignore resting orders as requested.
   const restingRisk = Number(portfolio.restingLimitOrderUsdc || 0);
   const positionRisk = Number(portfolio.positionRiskUsdc
     ?? (Number(portfolio.openRiskUsdc || 0) - restingRisk));
-  els.portfolioRisk.textContent = money(Number(portfolio.openRiskUsdc || 0));
-  els.portfolioFree.textContent = restingRisk > 0.005
-    ? `${money(positionRisk)} in positions, ${money(restingRisk)} in orders · ${money(freeCapital)} free`
-    : `${money(freeCapital)} free`;
+  els.portfolioOrders.textContent = money(restingRisk);
+  els.portfolioPositions.textContent = money(Math.max(0, positionRisk));
+  els.portfolioFree.textContent = money(Math.max(0, freeCapital + restingRisk));
   renderPortfolioEquityChart({
     trades,
     equity: Number(portfolio.equityUsdc ?? portfolio.initialUsdc ?? 100),
@@ -9375,8 +9375,6 @@ function renderLiveState(liveState) {
   // 5050 rests many at once, and counting those here reported the Live portfolio as
   // having nothing to trade with while the account was otherwise idle. Each portfolio is
   // now shown what its own commitments leave it, which is what its executor sizes from.
-  const walletOrderRisk = reservedByOpenOrders(liveState?.openOrders);
-  const ownOrderReservation = reservedByOpenOrders(openOrderRows);
   // Free cash is the collateral balance, full stop -- the same figure Polymarket's own app
   // shows as "Available to trade".
   //
@@ -9392,9 +9390,6 @@ function renderLiveState(liveState) {
   // be cancelled and the capital is back untouched. What the orders have committed is still
   // reported, beside this figure and in the tile's own split.
   const freeCash = Number.isFinite(cash) ? Math.max(0, cash) : null;
-  // What the rest of the wallet has locked, so the tile can say why the exchange may
-  // still refuse an order this figure says is affordable.
-  const otherPortfolioReservation = Math.max(0, walletOrderRisk - ownOrderReservation);
   // Positions carry wallet-wide risk in the account snapshot, so a per-portfolio view
   // has to add up its own rather than borrow that total.
   const ownPositionRisk = positions.reduce((sum, row) => {
@@ -9487,24 +9482,11 @@ function renderLiveState(liveState) {
   els.portfolioOpenPl.textContent = signedMoney(openPnlValue);
   els.portfolioOpenPl.className = pnlClass(openPnlValue);
   els.portfolioOpenPlPct.textContent = signedPercent(fixedEntry ? ownBasePct(ownOpen) : openPnlPct);
-  // Risk is what the open portfolio has committed, so both halves must come from
-  // its own rows. openRiskUsdc totals every position in the wallet, so pairing it
-  // with this portfolio's orders reported the other portfolio's positions as this
-  // one's -- wrong on the Live tab and the 5050 tab alike, in opposite directions.
-  els.portfolioRisk.textContent = money(ownPositionRisk + openOrderRisk);
-  // Naming the other portfolio's share keeps the figure honest: the exchange reserves
-  // for the whole wallet, so this much of it is spoken for even though this portfolio
-  // does not count it against itself. The split in front of it says which part of this
-  // portfolio's own total is exposure and which is only a resting offer.
-  const liveSplit = openOrderRisk > 0.005
-    ? `${money(ownPositionRisk)} in positions, ${money(openOrderRisk)} in orders · `
-    : "";
-  els.portfolioFree.textContent = freeCash == null
-    ? `${liveSplit}cash not available`
-    // "Locked" was the wrong word for the same reason the subtraction above was wrong: a
-    // resting bid holds no collateral. What it does do is compete for the same wallet at
-    // match time, which is a real caveat on this figure and is what the note now says.
-    : `${liveSplit}${money(freeCash)} free cash${otherPortfolioReservation > 0.01 ? ` (${money(otherPortfolioReservation)} also bid by the other portfolio against this wallet)` : ""}`;
+  // Both exposure and resting bids belong to this portfolio only. The shared wallet's
+  // position total must never stand in for this portfolio's own stake.
+  els.portfolioOrders.textContent = money(openOrderRisk);
+  els.portfolioPositions.textContent = money(ownPositionRisk);
+  els.portfolioFree.textContent = freeCash == null ? "-" : money(freeCash);
   renderPortfolioEquityChart({
     trades: [...closedTrades, ...positions],
     equity,
