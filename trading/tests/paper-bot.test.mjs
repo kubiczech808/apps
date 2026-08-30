@@ -4446,22 +4446,36 @@ test("live portfolios: each sizes from its own commitments, not the shared walle
   const { readFile } = await import("node:fs/promises");
   const app = await readFile(new URL("../assets/app.js", import.meta.url), "utf8");
 
-  // Superseded by a later report and an explicit decision. Free cash was the shared
-  // balance minus EVERY resting buy, because one wallet backs both portfolios and the
-  // exchange really does reserve for all of them. In practice 5050 rests many bids at
-  // once, which left the Live portfolio reading zero free cash and skipping every
-  // candidate while the account was otherwise idle. Each portfolio is now shown, and
-  // sizes from, what its own commitments leave -- and the exchange, not the dashboard,
-  // decides whether a submission fits. That refusal is already handled and counted.
+  // This deduction went through two revisions and is now gone entirely, which the history
+  // is worth keeping because each step was driven by a different piece of evidence.
+  //
+  // It began as the shared balance minus EVERY resting buy: one wallet backs both
+  // portfolios. In practice 5050 rests many bids at once, so the Live portfolio read zero
+  // free cash and skipped every candidate while the account was idle -- narrowed to each
+  // portfolio's own orders. Then measured against the live account: collateral 26.8449 +
+  // positions 71.8244 = 98.6693, and equity is 98.6693 exactly. The collateral figure is
+  // ALREADY the whole uncommitted balance, so the resting orders were never in it to take
+  // out; subtracting them counted the same money twice and clamped the tile to zero while
+  // Polymarket showed $26.84 available on the same wallet.
+  //
+  // Free cash is now the collateral balance, full stop -- the same figure Polymarket's own
+  // app calls "Available to trade". A resting bid is a claim on collateral at match time,
+  // not money already spent.
+  assert.match(app, /const freeCash = Number\.isFinite\(cash\) \? Math\.max\(0, cash\) : null;/);
+  assert.doesNotMatch(app, /Math\.max\(0, cash - ownOrderReservation\)/,
+    "the deduction is a double count; it must not come back");
+
+  // Both reservation totals are still computed: what this portfolio has resting is shown
+  // in the tile's split, and the wallet total gives the difference the other portfolio has
+  // bid. Hoisted to module scope so the overview table and this tile cannot answer the
+  // same question two different ways.
   assert.match(app, /const ownOrderReservation = reservedByOpenOrders\(openOrderRows\);/);
-  assert.match(app, /const freeCash = Number\.isFinite\(cash\) \? Math\.max\(0, cash - ownOrderReservation\) : null;/);
-  // The wallet total is still computed, so the tile can say how much of the balance the
-  // other portfolio has spoken for rather than quietly overstating what is spendable.
-  // Hoisted to module scope so the overview table and this tile cannot answer the same
-  // question two different ways.
   assert.match(app, /const walletOrderRisk = reservedByOpenOrders\(liveState\?\.openOrders\);/);
   assert.match(app, /const otherPortfolioReservation = Math\.max\(0, walletOrderRisk - ownOrderReservation\);/);
-  assert.match(app, /locked by the other portfolio/);
+  // "Locked" was wrong for the same reason the subtraction was: a resting bid holds no
+  // collateral. It competes for the same wallet at match time, which is the real caveat.
+  assert.doesNotMatch(app, /locked by the other portfolio/);
+  assert.match(app, /also bid by the other portfolio against this wallet/);
 
   // Unchanged: risk is what THIS portfolio has committed, and the wallet-wide position
   // total must not stand in for it.
@@ -4488,9 +4502,11 @@ test("live portfolios: each sizes from its own commitments, not the shared walle
   const wallet = reserved([...live, ...other, ...sell]);
   assert.equal(own, 3);
   assert.equal(wallet, 8.1);
-  // What the Live tab shows now, and what it has to disclose alongside it.
-  assert.equal(Math.max(0, cash - own).toFixed(2), "17.00");
-  assert.equal(Math.max(0, wallet - own).toFixed(2), "5.10");
+  // What the Live tab shows now: the whole collateral balance, with the two commitment
+  // totals reported beside it rather than taken out of it.
+  assert.equal(Math.max(0, cash).toFixed(2), "20.00");
+  assert.equal(own.toFixed(2), "3.00", "this portfolio's own resting bids, shown in the split");
+  assert.equal(Math.max(0, wallet - own).toFixed(2), "5.10", "and what the other one has bid");
 });
 
 test("run log: history survives a reload and a failed fetch", async () => {

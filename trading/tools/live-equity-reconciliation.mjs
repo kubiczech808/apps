@@ -208,11 +208,21 @@ async function main() {
       console.log(`   position  ${String(row.title || "").slice(0, 60)}`);
       console.log(`     size ${num(row.size, 0)?.toFixed(4)} @ ${num(row.curPrice)?.toFixed(4)}  value ${money(num(row.currentValue ?? row.value))}`);
       console.log(`     opened at ${opened || "(no timestamp on the /positions row)"}`);
-      const matches = closed.filter((trade) => [...keysOf(trade)].some((key) => positionKeys.has(key)));
+      console.log(`     position keys: ${[...positionKeys].map((k) => k.slice(0, 46)).join(" | ")}`);
+      const matches = closed
+        .map((trade) => ({ trade, shared: [...keysOf(trade)].filter((key) => positionKeys.has(key)) }))
+        .filter((entry) => entry.shared.length);
       if (!matches.length) console.log(`     no closed-trade row shares a key -- something else dropped it`);
-      for (const trade of matches.slice(0, 6)) {
+      for (const { trade, shared } of matches.slice(0, 6)) {
         console.log(`     closed-trade  ${trade.status || "-"}  closedAt ${trade.closedAt || trade.resolvedAt || "-"}`
           + `  openedAt ${trade.openedAt || "-"}  shares ${num(trade.shares ?? trade.size, 0)?.toFixed(4)}`);
+        // WHICH key matched is the whole question. `token:` and `condition:` identify one
+        // market outcome and nothing else. `question:` is a fallback for rows with no ids,
+        // and question text like "Games Total: O/U 2.5" or "O/U 2.5 Rounds" recurs across
+        // completely unrelated fixtures -- so a match on that alone is a collision, not a
+        // history of this position.
+        console.log(`       matched on: ${shared.map((k) => k.split(":")[0]).join(", ")}`);
+        console.log(`       its token ${String(trade.tokenId || "-").slice(0, 20)}… vs position ${String(row.asset || row.tokenId || "-").slice(0, 20)}…`);
       }
     }
   }

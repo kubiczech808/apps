@@ -9339,7 +9339,21 @@ function renderLiveState(liveState) {
   // now shown what its own commitments leave it, which is what its executor sizes from.
   const walletOrderRisk = reservedByOpenOrders(liveState?.openOrders);
   const ownOrderReservation = reservedByOpenOrders(openOrderRows);
-  const freeCash = Number.isFinite(cash) ? Math.max(0, cash - ownOrderReservation) : null;
+  // Free cash is the collateral balance, full stop -- the same figure Polymarket's own app
+  // shows as "Available to trade".
+  //
+  // This used to subtract the portfolio's resting BUY notional from it, and that is the
+  // same double count already removed from the executor. Measured against the live account:
+  // collateral 26.8449 + positions 71.8244 = 98.6693, and equity is 98.6693 exactly -- gap
+  // 0.0000. The collateral figure is therefore already the whole uncommitted balance, so
+  // the resting orders were never in it to be taken out. With 100.19 USDC of bids resting
+  // against 26.84 of collateral the subtraction clamped to zero, and the dashboard reported
+  // "$0.00 free cash" while Polymarket showed $26.84 available on the same wallet.
+  //
+  // A resting bid is a claim on collateral at match time, not money already spent: it can
+  // be cancelled and the capital is back untouched. What the orders have committed is still
+  // reported, beside this figure and in the tile's own split.
+  const freeCash = Number.isFinite(cash) ? Math.max(0, cash) : null;
   // What the rest of the wallet has locked, so the tile can say why the exchange may
   // still refuse an order this figure says is affordable.
   const otherPortfolioReservation = Math.max(0, walletOrderRisk - ownOrderReservation);
@@ -9449,7 +9463,10 @@ function renderLiveState(liveState) {
     : "";
   els.portfolioFree.textContent = freeCash == null
     ? `${liveSplit}cash not available`
-    : `${liveSplit}${money(freeCash)} free cash${otherPortfolioReservation > 0.01 ? ` (${money(otherPortfolioReservation)} locked by the other portfolio)` : ""}`;
+    // "Locked" was the wrong word for the same reason the subtraction above was wrong: a
+    // resting bid holds no collateral. What it does do is compete for the same wallet at
+    // match time, which is a real caveat on this figure and is what the note now says.
+    : `${liveSplit}${money(freeCash)} free cash${otherPortfolioReservation > 0.01 ? ` (${money(otherPortfolioReservation)} also bid by the other portfolio against this wallet)` : ""}`;
   renderPortfolioEquityChart({
     trades: [...closedTrades, ...positions],
     equity,
