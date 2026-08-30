@@ -1551,12 +1551,24 @@ test("opened positions: Volume replaces R/R and is re-read on every mark", async
   const app = APP;
   const bot = BOT;
 
-  // The two tables share one renderer, so the swap has to be gated rather than global:
-  // a closed trade keeps R/R, which records what the trade was taken at.
-  assert.match(app, /\$\{showStatus\n\s+\? tradeHeader\(tableKey, "riskReward", "R\/R"\)\n\s+: tradeHeader\(tableKey, "volume", "Volume"\)\}/,
-    "R/R stays on closed trades; Volume replaces it only on the opened list");
-  assert.match(app, /\? `<td data-label="R\/R">[\s\S]*?: `<td data-label="Volume">\$\{tradeVolumeCell\(trade\)\}<\/td>`/,
-    "the body cell must follow the header");
+  // The two tables share one renderer, so the column stays gated: Volume is the opened
+  // list's, and the closed list has no column in that slot at all. R/R was dropped from
+  // the opened list when Volume took its place and from the closed list on request, so
+  // it must not survive in either -- header or body.
+  assert.match(app, /\$\{showStatus \? "" : tradeHeader\(tableKey, "volume", "Volume"\)\}/,
+    "Volume belongs to the opened list only");
+  assert.match(app, /\$\{showStatus \? "" : `<td data-label="Volume">\$\{tradeVolumeCell\(trade\)\}<\/td>`\}/,
+    "the body cell must follow the header, or the two tables disagree on column count");
+  // Scoped to the trade renderer: a separate R/R column on the scraped-opportunities table
+  // is a different list and was not part of this request.
+  const renderer = app.slice(app.indexOf("function renderTradeRows"), app.indexOf("function closedTradesForCurrentPortfolio"));
+  assert.ok(renderer.length > 500, "the slice must actually cover renderTradeRows");
+  assert.doesNotMatch(renderer, /data-label="R\/R"/, "no R/R cell may remain in either trade table");
+  assert.doesNotMatch(renderer, /riskReward/, "and no R/R header either");
+  // The number itself is still computed: the CSV export carries risk_reward, and dropping a
+  // column from an export is a different decision from dropping it from a screen.
+  assert.match(app, /risk_reward: csvNumber\(tradeRiskReward\(trade\)/,
+    "the export keeps the figure even though no table shows it");
   // The column is sortable like every other one, or it is the only dead header in the table.
   assert.match(app, /if \(key === "volume"\) return tradeVolumeUsdc\(trade\) \?\? -1;/);
 
