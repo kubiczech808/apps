@@ -4366,3 +4366,89 @@ test("live workflows: the dry-run switch cannot be defeated by a string input", 
   assert.equal(asksForLive(""), false, "an absent input must never mean live");
   assert.equal(asksForLive(undefined), false);
 });
+
+// Reported: the Closed date on a closed position kept changing. It is a fact about when
+// something ended -- written once, never rewritten.
+//
+// The loop, driven here rather than described: resolvedPositionCloseTime ends in a last
+// resort that stamps the current sync time when nothing else can date the close.
+// buildPreviousCloseTimeIndex then refused to carry that value forward, because it looked
+// like the timestamp of the run that wrote it -- so the next sync fell to the same last
+// resort and stamped ITS time. On the live account that is every ten minutes.
+test("closed date: once recorded it survives every later sync unchanged", async () => {
+  const sync = await import("../tools/live-account-sync.mjs");
+
+  const position = {
+    tokenId: "42",
+    conditionId: "0xabc",
+    outcome: "Yes",
+    question: "Will it settle?",
+    redeemable: true,
+    // Nothing that can date the close: no resolvedAt, no closedTime, no usable end date.
+    endDate: null,
+  };
+
+  // Sync 1. No prior state, no evidence -- the last resort stamps this run's time.
+  const firstRun = "2026-08-30T06:00:00.000Z";
+  const first = sync.resolvedPositionCloseTime(position, new Map(), new Map(), firstRun);
+  assert.equal(first?.timestamp, firstRun, "the first sync dates the close from its own clock");
+  assert.equal(first?.source, "redeem-required-detected");
+
+  // That verdict is stored on the row exactly as the sync writes it.
+  const stored = { ...position, closedAt: first.timestamp, resolvedAt: first.timestamp };
+
+  // Syncs 2..5, each an hour later. The date must not move once.
+  let state = { generatedAt: firstRun, closedTrades: [stored] };
+  for (let hour = 1; hour <= 4; hour += 1) {
+    const runAt = new Date(Date.parse(firstRun) + hour * 3600000).toISOString();
+    const index = sync.buildPreviousCloseTimeIndex(state);
+    const again = sync.resolvedPositionCloseTime(position, new Map(), index, runAt);
+    assert.equal(again?.timestamp, firstRun,
+      `sync ${hour + 1} rewrote the close date to ${again?.timestamp}`);
+    state = { generatedAt: runAt, closedTrades: [{ ...stored, closedAt: again.timestamp }] };
+  }
+
+  // The index is what carries it, and it must not discard a value for resembling the run
+  // that wrote it -- that skip was the fault.
+  const carried = sync.buildPreviousCloseTimeIndex({ generatedAt: firstRun, closedTrades: [stored] });
+  assert.ok(carried.size > 0, "a close date equal to its own run's timestamp must still be carried");
+
+  // A stored date wins over a fresher reading too: honouring a later one would still be a
+  // Closed date that changed after the fact.
+  const withLaterApiValue = { ...position, resolvedAt: "2026-08-30T09:30:00.000Z" };
+  const kept = sync.resolvedPositionCloseTime(withLaterApiValue, new Map(), carried, "2026-08-30T10:00:00.000Z");
+  assert.equal(kept?.timestamp, firstRun, "a recorded date is not replaced by a later reading");
+
+  // But a corrupt stored value in the future is not honoured -- it falls through and is
+  // recomputed rather than being frozen wrong forever.
+  const future = sync.buildPreviousCloseTimeIndex({
+    generatedAt: firstRun,
+    closedTrades: [{ ...position, closedAt: "2099-01-01T00:00:00.000Z" }],
+  });
+  const recomputed = sync.resolvedPositionCloseTime(position, new Map(), future, "2026-08-30T10:00:00.000Z");
+  assert.equal(recomputed?.timestamp, "2026-08-30T10:00:00.000Z",
+    "a future close date is corrupt and must not be kept");
+});
+
+// The other half of the same fault, in the browser. Five call sites read the Closed date as
+// `resolvedAt || closedTime || lastCheckedAt`. lastCheckedAt is when the row was last
+// looked at -- it moves every sync -- and `closedAt`, which the live sync actually writes,
+// was not in the chain at all, so rows carrying it fell straight through to the clock.
+test("closed date: the browser never reads a Closed date from when it last looked", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const app = await readFile(new URL("../assets/app.js", import.meta.url), "utf8");
+
+  assert.match(app, /function tradeClosedAt\(trade = \{\}\) \{\s*return trade\.resolvedAt \|\| trade\.closedAt \|\| trade\.closedTime \|\| null;/,
+    "one reader, and it reads only fields that record a close");
+
+  // No call site may reach for lastCheckedAt again.
+  const uses = [...app.matchAll(/lastCheckedAt/g)].length;
+  const inComment = [...app.matchAll(/^\/\/.*lastCheckedAt/gm)].length;
+  assert.equal(uses - inComment, 0, "lastCheckedAt must not be read as a close date anywhere");
+
+  // And the Closed column goes through the reader.
+  assert.match(app, /data-label="\$\{showStatus \? "Closed" : "Opened"\}">\$\{escapeHtml\(formatDate\(showStatus \? \(tradeClosedAt\(trade\) \|\| ""\)/);
+  // Holding days returns null rather than borrowing the clock, so an undated close reads
+  // as "-" instead of as a duration that grows on its own.
+  assert.match(app, /const end = isClosedTrade\(trade\) \? tradeClosedAt\(trade\) : new Date\(\)\.toISOString\(\);\s*\n\s*if \(!end\) return null;/);
+});

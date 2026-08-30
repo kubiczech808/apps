@@ -3038,8 +3038,23 @@ function daysUntil(value) {
   return (end - Date.now()) / 86400000;
 }
 
+// When a trade closed, from the fields that record that and only those.
+//
+// `lastCheckedAt` used to be the final fallback here, in five places. It is when the row was
+// last looked at, not when it ended: every sync moves it, so any closed trade missing both
+// resolvedAt and closedTime displayed a Closed date that advanced all day. `closedAt` was
+// missing from the chain entirely even though the live sync writes it, which is what pushed
+// those rows onto the moving fallback in the first place.
+//
+// Returns null when nothing recorded a close, so each caller states its own fallback rather
+// than inheriting a clock by accident.
+function tradeClosedAt(trade = {}) {
+  return trade.resolvedAt || trade.closedAt || trade.closedTime || null;
+}
+
 function tradeHoldingDays(trade) {
-  const end = isClosedTrade(trade) ? (trade.resolvedAt || trade.closedTime || trade.lastCheckedAt || new Date().toISOString()) : new Date().toISOString();
+  const end = isClosedTrade(trade) ? tradeClosedAt(trade) : new Date().toISOString();
+  if (!end) return null;
   return daysBetween(trade.openedAt || trade.date, end);
 }
 
@@ -3610,7 +3625,7 @@ function tradeSortValue(trade, key) {
   if (key === "pnlPct") return tradePnlPct(trade);
   if (key === "stake") return Number(trade.stakeUsdc || 0);
   if (key === "status") return String(trade.status || "");
-  if (key === "resolvedAt") return Date.parse(trade.resolvedAt || trade.closedTime || trade.lastCheckedAt || "") || 0;
+  if (key === "resolvedAt") return Date.parse(tradeClosedAt(trade) || "") || 0;
   return "";
 }
 
@@ -3895,7 +3910,7 @@ function renderTradeRows(trades, emptyText, options = {}) {
             </td>
             <td data-label="Win p.a.">${potentialAnnualizedCell(trade)}</td>
             <td data-label="Resolution">${resolutionCell(trade)}</td>
-            <td data-label="${showStatus ? "Closed" : "Opened"}">${escapeHtml(formatDate(showStatus ? (trade.resolvedAt || trade.closedTime || trade.lastCheckedAt || "") : (trade.openedAt || trade.date || "")))}</td>
+            <td data-label="${showStatus ? "Closed" : "Opened"}">${escapeHtml(formatDate(showStatus ? (tradeClosedAt(trade) || "") : (trade.openedAt || trade.date || "")))}</td>
             <td data-label="${showStatus ? "Entry / final" : "Entry / mark"}">${tradePriceCell(trade, showStatus)}</td>
             ${showStatus ? `<td data-label="Entry volume">${tradeEntryVolumeCell(trade)}</td>` : ""}
             <td data-label="Stake">${trade.stakeUsdc == null ? "-" : money(Number(trade.stakeUsdc))}</td>
@@ -3988,7 +4003,7 @@ function csvNumber(value, multiplier = 1, digits = 6) {
 
 function closedTradeCsvRow(trade) {
   const result = closedTradePredictionResult(trade);
-  const closedAt = trade.resolvedAt || trade.closedTime || trade.lastCheckedAt || "";
+  const closedAt = tradeClosedAt(trade) || "";
   const resolutionAt = tradeResolutionDate(trade) || tradeEndDate(trade) || "";
   return {
     portfolio: portfolioNavigationLabelForMode(state.mode),
@@ -4167,7 +4182,7 @@ function portfolioEquityHistory(trades, equity, openPnl, generatedAt = "", origi
   const settledEvents = timelineTrades
     .filter(isClosedTrade)
     .map((trade) => ({
-      timestamp: chartTimestamp(trade.resolvedAt || trade.closedTime || trade.lastCheckedAt),
+      timestamp: chartTimestamp(tradeClosedAt(trade)),
       pnl: Number(trade.realizedPnlUsdc ?? trade.pnlUsdc),
     }))
     .filter((event) => event.timestamp != null && event.timestamp <= now && Number.isFinite(event.pnl));

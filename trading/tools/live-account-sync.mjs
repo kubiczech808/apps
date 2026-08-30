@@ -877,7 +877,16 @@ function buildPreviousCloseTimeIndex(previousState) {
   ];
   for (const item of previousRows) {
     const value = item.closedAt || item.resolvedAt || item.closedTime || item.endDate;
-    if (!value || isSameTimestamp(value, previousGeneratedAt)) continue;
+    // A stored close date is carried forward WHATEVER it looks like, including one that
+    // happens to equal the run that wrote it. Discarding those was the whole fault:
+    // resolvedPositionCloseTime's last resort stamps `generatedAt` when nothing else can
+    // date the close, so the row it writes always equals that run's own timestamp -- and
+    // this skip then refused to carry it, so the next sync fell to the same last resort
+    // and stamped ITS generatedAt. Every sync rewrote the date, roughly every ten minutes.
+    //
+    // An approximate date that never moves is worth far more than an approximate date that
+    // moves: the first is "when we noticed", the second is not a date at all.
+    if (!value) continue;
     addTimestampToKeyIndex(index, item, value, "latest", "previous-live-state-close");
   }
   return index;
@@ -906,6 +915,22 @@ function stableCloseTimestamp(value, generatedAt) {
 }
 
 function resolvedPositionCloseTime(position, closeTimeIndex, previousCloseTimeIndex, generatedAt) {
+  // A close date is a fact about when something ended. It is written once, from the best
+  // evidence available at that moment, and never rewritten -- so a date already recorded
+  // for this row wins over every source below, including a fresher one.
+  //
+  // This is first, not last, because that is the difference between a date and a clock.
+  // Reported: the Closed column kept moving. The chain below ends in a last resort that
+  // stamps the current sync time when nothing can date the close, and the row it wrote was
+  // then rejected on the next pass for looking like that run's own timestamp, so the last
+  // resort ran again and stamped the new time. The date advanced with every sync.
+  //
+  // Deliberately ahead of the positions API too: if a later reading disagreed with what was
+  // stored, honouring it would still be a Closed date that changed after the fact, which is
+  // the thing being fixed. The sanity check remains -- a stored value in the future is
+  // corrupt and falls through to be recomputed.
+  const alreadyRecorded = bestIndexedTimestamp(previousCloseTimeIndex, position, "latest");
+  if (stableCloseTimestamp(alreadyRecorded?.timestamp, generatedAt)) return alreadyRecorded;
   const explicit = isoTime(position.resolvedAt || position.closedAt || position.closedTime || position.redeemedAt);
   const stableExplicit = stableCloseTimestamp(explicit, generatedAt);
   if (stableExplicit) return { timestamp: stableExplicit, source: "positions-api-resolved" };
@@ -2179,6 +2204,8 @@ if (invokedDirectly) {
 }
 
 export {
+  resolvedPositionCloseTime,
+  buildPreviousCloseTimeIndex,
   closedTradesFromHistory,
   openOrderIdentityKeys,
   vanishedOpenOrders,

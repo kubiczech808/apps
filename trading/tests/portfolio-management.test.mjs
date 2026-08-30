@@ -1592,6 +1592,7 @@ test("live counterfactual audit: a losing probability value recalculates the who
 test("live equity history: configured original value anchors the realised chart", () => {
   const historyBuilder = new Function(`
     ${extractFunction(APP, "isClosedTrade")}
+    ${extractFunction(APP, "tradeClosedAt")}
     ${extractFunction(APP, "chartTimestamp")}
     ${extractFunction(APP, "equityChartBucket")}
     ${extractFunction(APP, "equityChartScale")}
