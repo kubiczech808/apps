@@ -3990,7 +3990,7 @@ function equityChartTooltipDate(timestamp) {
 // The state has transaction-level P/L rather than periodic account snapshots. Rebuild a
 // compact realized-equity path from settled trades without publishing a second,
 // ever-growing history file.
-function portfolioEquityHistory(trades, equity, openPnl, generatedAt = "", originalValue = null) {
+function portfolioEquityHistory(trades, equity, openPnl, generatedAt = "", originalValue = null, realizedPnl = null) {
   const timelineTrades = Array.isArray(trades) ? trades : [];
   const openedAt = timelineTrades
     .map((trade) => chartTimestamp(trade.openedAt || trade.date))
@@ -4026,11 +4026,23 @@ function portfolioEquityHistory(trades, equity, openPnl, generatedAt = "", origi
   const openingEquity = hasConfiguredOriginalValue
     ? configuredOriginalValue
     : realizedEquity - settledPnl;
-  const finalRealizedEquity = hasConfiguredOriginalValue
-    ? openingEquity + settledPnl
+  const authoritativeRealizedPnl = Number(realizedPnl);
+  const hasAuthoritativeRealizedPnl = hasConfiguredOriginalValue
+    && Number.isFinite(authoritativeRealizedPnl);
+  // The live state may retain closed rows from an earlier account history. Those rows
+  // are useful for trade lists, but must not pull the equity curve away from the
+  // account's current realised balance. Only draw their individual steps when they
+  // reconcile with that balance; otherwise keep the accurate baseline-to-current path.
+  const settledLedgerMatchesBalance = !hasAuthoritativeRealizedPnl
+    || Math.abs(settledPnl - authoritativeRealizedPnl) < 0.01;
+  const chartEvents = settledLedgerMatchesBalance ? settledEvents : [];
+  const finalRealizedEquity = hasAuthoritativeRealizedPnl
+    ? openingEquity + authoritativeRealizedPnl
+    : hasConfiguredOriginalValue
+      ? openingEquity + settledPnl
     : realizedEquity;
   const changesByBucket = new Map();
-  settledEvents.forEach((event) => {
+  chartEvents.forEach((event) => {
     const bucket = Math.max(firstOpenedAt, equityChartBucket(event.timestamp, scale));
     changesByBucket.set(bucket, (changesByBucket.get(bucket) || 0) + event.pnl);
   });
@@ -4057,9 +4069,9 @@ function portfolioEquityHistory(trades, equity, openPnl, generatedAt = "", origi
   };
 }
 
-function renderPortfolioEquityChart({ trades = [], equity, openPnl = 0, generatedAt = "", originalValue = null } = {}) {
+function renderPortfolioEquityChart({ trades = [], equity, openPnl = 0, generatedAt = "", originalValue = null, realizedPnl = null } = {}) {
   if (!els.portfolioEquityChart) return;
-  const history = portfolioEquityHistory(trades, equity, openPnl, generatedAt, originalValue);
+  const history = portfolioEquityHistory(trades, equity, openPnl, generatedAt, originalValue, realizedPnl);
   if (!history || history.points.length < 2) {
     els.portfolioEquityChart.hidden = true;
     els.portfolioEquityChart.innerHTML = "";
@@ -9499,6 +9511,7 @@ function renderLiveState(liveState) {
     openPnl: openPnlValue,
     generatedAt: liveState.generatedAt,
     originalValue: deposited,
+    realizedPnl,
   });
 
   if (els.accountSummary) {

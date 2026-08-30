@@ -1578,7 +1578,7 @@ test("live equity history: configured original value anchors the realised chart"
   const history = historyBuilder([
     { status: "WON", openedAt: "2026-08-11T08:00:00Z", resolvedAt: "2026-08-12T08:00:00Z", realizedPnlUsdc: 3 },
     { status: "LOST", openedAt: "2026-08-12T09:00:00Z", resolvedAt: "2026-08-14T08:00:00Z", realizedPnlUsdc: -11 },
-  ], 98.5, -3, "2026-08-16T10:00:00Z", 148);
+  ], 98.5, -3, "2026-08-16T10:00:00Z", 148, -8);
 
   assert.ok(history, "a history longer than three days must render");
   assert.equal(history.openingEquity, 148);
@@ -1590,9 +1590,20 @@ test("live equity history: configured original value anchors the realised chart"
   assert.ok(!history.points.some((point) => Math.abs(point.value - 190) < 0.0001),
     "the old back-calculated wallet-wide starting point must not leak into the series");
 
+  const staleLedger = historyBuilder([
+    { status: "LOST", openedAt: "2026-08-11T08:00:00Z", resolvedAt: "2026-08-12T08:00:00Z", realizedPnlUsdc: -45 },
+    { status: "REDEEMED", openedAt: "2026-08-12T09:00:00Z", resolvedAt: "2026-08-14T08:00:00Z", realizedPnlUsdc: 3 },
+  ], 98.25249, -4.1618, "2026-08-30T10:00:00Z", 101.3, 1.11429);
+  assert.equal(staleLedger.points[0].value, 101.3);
+  assert.ok(Math.abs(staleLedger.points.at(-1).value - 102.41429) < 0.0001,
+    "the final live point uses authoritative realised equity, not stale retained rows");
+  assert.equal(staleLedger.points.length, 2,
+    "unreconciled historical rows are not rendered as fictitious equity movements");
+
   assert.match(APP, /const configuredLiveInitial = liveInitialCapitalForMode\(state\.mode\);/,
     "custom live portfolios use their own configured original value too");
   assert.match(APP, /originalValue: deposited,/, "the live chart receives that value explicitly");
+  assert.match(APP, /realizedPnl,/, "the live chart receives the authoritative realised P\/L from its account snapshot");
   assert.match(APP, /equity-history-original-value/, "the renderer includes the visible reference line");
 });
 
