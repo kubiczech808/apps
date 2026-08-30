@@ -254,11 +254,15 @@ async function main() {
   // 5. FREE CASH -- the dashboard's own formula against the account.
   const openOrders = Array.isArray(fresh?.openOrders) ? fresh.openOrders : [];
   const reservation = reservedByOpenOrders(openOrders);
-  const dashboardFreeCash = collateral == null ? null : Math.max(0, collateral - reservation);
+  // What the deduction used to produce, kept so a regression is visible rather than
+  // silent: if the dashboard ever disagrees with the collateral figure again, this is the
+  // number it will have drifted to.
+  const withdrawnDeduction = collateral == null ? null : Math.max(0, collateral - reservation);
   console.log(`\n5. FREE CASH`);
   console.log(`   collateral                 ${money(collateral)}`);
   console.log(`   resting BUY notional       ${money(reservation)}   (${openOrders.length} open orders)`);
-  console.log(`   dashboard shows            ${money(dashboardFreeCash)}   (collateral - resting notional, floored at 0)`);
+  console.log(`   dashboard shows            ${money(collateral)}   (the collateral balance, as of the fix)`);
+  console.log(`   the removed deduction gave ${money(withdrawnDeduction)}   (collateral - resting notional, floored at 0)`);
   console.log(`   -> Polymarket's "available to trade" is the collateral figure. If the two`);
   console.log(`      disagree, the deduction is the difference: a resting bid is a claim on`);
   console.log(`      collateral at match time, not money already spent.`);

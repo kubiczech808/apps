@@ -1963,3 +1963,33 @@ test("closed positions: the resolution note only survives where it explains some
   assert.match(cell, /\$\{note \? `<span>\$\{escapeHtml\(note\)\}<\/span>` : ""\}/,
     "an empty note must not leave an empty element behind");
 });
+
+// Measured on 2026-08-30: the dashboard showed equity $98.87 while Polymarket showed
+// $103.68 on the same wallet. Neither staleness (7.9 min, $0.23) nor valuation (identical
+// on every shared position) explained it. The snapshot held 15 of Polymarket's 43
+// positions, and one of the 28 it dropped was unresolved, actively priced -- 6.0057 shares
+// at 0.8050, $4.83 -- excluded because a REDEEMED history row shared one of its keys.
+// $4.83 is the whole gap, and it was counted nowhere: not in equity, not in the positions
+// table, not in the executor's risk checks.
+test("live sync: the closed-trade history cannot delete a position the exchange still holds", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const sync = await readFile(new URL("../tools/live-account-sync.mjs", import.meta.url), "utf8");
+
+  // /positions is the record of what is held now; the history records what ended. The
+  // filter must therefore turn only on whether the position is resolved.
+  assert.match(sync, /const openApiPositions = positions\.filter\(\(position\) => !positionLooksResolved\(position\)\);/,
+    "an unresolved position the exchange reports must survive whatever the history says");
+  assert.doesNotMatch(sync, /!positionLooksResolved\(position\) && !anySharedKey\(position, knownClosedKeys\)/,
+    "the key match must not be able to drop a held position again");
+
+  // The suppression it used to apply silently becomes a warning, so a genuinely stale row
+  // is something to look at rather than capital quietly going missing.
+  assert.match(sync, /position-history-overlap-/,
+    "an overlap must still be reported, just not acted on");
+  assert.match(sync, /kept an unresolved position of \$\{shares\.toFixed\(4\)\} shares/);
+
+  // Resolved positions still leave the open list -- that half was correct and is what makes
+  // the 29 worthless settled rows in the same measurement correctly excluded.
+  assert.match(sync, /function positionLooksResolved\(position\) \{\s*return positionOfficiallyResolved\(position\);/);
+  assert.match(sync, /return Boolean\(position\.redeemable \|\| position\.claimable \|\| position\.resolved\);/);
+});

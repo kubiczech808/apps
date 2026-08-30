@@ -1764,7 +1764,33 @@ async function main() {
     [...tradeHistory, ...activity],
     previousLiveState,
   );
-  const openApiPositions = positions.filter((position) => !positionLooksResolved(position) && !anySharedKey(position, knownClosedKeys));
+  // Polymarket's /positions is the record of what this wallet holds NOW. The closed-trade
+  // history is a record of things that ended, and it must not outvote the present.
+  //
+  // Measured on 2026-08-30: an unresolved position of 6.0057 shares priced at 0.8050 --
+  // $4.83 -- was excluded right here because a REDEEMED history row shared one of its
+  // keys. That $4.83 was then counted nowhere. It was missing from equityUsdc, from the
+  // positions table, and from the risk checks the executor runs before it orders, and the
+  // dashboard's equity was short by exactly that much against Polymarket's own figure.
+  //
+  // Which key matched was never established -- by the time a probe for it shipped, the
+  // position had settled and the case no longer reproduced -- so this deliberately does
+  // not depend on knowing. An unresolved position the exchange still reports as held is
+  // kept whatever the history says, which is sound under any of the possible causes.
+  //
+  // The suppression it used to apply silently is recorded as a warning instead. If such a
+  // row ever IS a sold-out position lagging in /positions, that now surfaces as something
+  // to look at rather than as capital quietly going missing -- which is the right way
+  // round, because a stale row costs a line in the table and the old behaviour cost real
+  // equity off the screen.
+  const openApiPositions = positions.filter((position) => !positionLooksResolved(position));
+  for (const position of openApiPositions) {
+    if (!anySharedKey(position, knownClosedKeys)) continue;
+    const shares = number(position.shares ?? position.size, 0);
+    if (!(shares > 0.000001)) continue;
+    sync.warnings.push(`position-history-overlap-${String(position.tokenId || position.conditionId || position.question || "").slice(0, 24)}:`
+      + ` kept an unresolved position of ${shares.toFixed(4)} shares that the closed-trade history also claims`);
+  }
   const closedTrades = [...historyClosedTrades, ...resolvedPositionRows];
   const openOrders = await enrichOpenOrdersWithMarketMetadata(
     Array.isArray(balanceAllowance?.openOrders) ? balanceAllowance.openOrders : [],
