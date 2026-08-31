@@ -218,11 +218,20 @@ button:disabled {
   text-align: left;
 }
 
+.portfolio-summary-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  max-width: 100%;
+  vertical-align: middle;
+}
+
 .portfolio-status-dot {
   display: inline-block;
+  flex: 0 0 auto;
   width: 9px;
   height: 9px;
-  margin-right: 7px;
+  margin: 0;
   border-radius: 50%;
   background: var(--success);
   vertical-align: middle;
@@ -2612,6 +2621,16 @@ body.modal-open {
 
   .panel h2 {
     font-size: 19px;
+  }
+
+  .portfolio-summary-name {
+    display: flex;
+    width: 100%;
+    align-items: flex-start;
+  }
+
+  .portfolio-summary-name .portfolio-status-dot {
+    margin-top: 0.45em;
   }
 
   .topbar,
