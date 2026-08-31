@@ -279,7 +279,7 @@ jobs:
               raise SystemExit(0)
           storage = payload.get("storage") or {}
           print("Trading storage diagnostics (credentials withheld):")
-          for key in ("pdoAvailable", "pdoMysqlAvailable", "configured", "connected", "serverVersion", "databaseSizeBytes", "maxConnections"):
+          for key in ("pdoAvailable", "pdoMysqlAvailable", "configured", "connected", "schemaReady", "serverVersion", "databaseSizeBytes", "maxConnections"):
               print(f"  {key}: {storage.get(key)}")
           if not storage.get("pdoMysqlAvailable"):
               raise SystemExit("pdo_mysql is unavailable on the hosting; MySQL migration cannot run there.")
@@ -290,6 +290,10 @@ jobs:
           PY
 
       - name: Bootstrap and backfill Trading MySQL storage
+        # The database is not the active reader until the following dual-write phase
+        # has been verified. A transient backfill failure must not mark an otherwise
+        # healthy site deployment as failed or interrupt JSON-backed trading.
+        continue-on-error: true
         env:
           TRADING_TRIGGER_KEY: ${{ secrets.TRADING_TRIGGER_KEY }}
         run: |

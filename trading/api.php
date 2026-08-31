@@ -80,6 +80,7 @@ function trading_storage_diagnostics(): array
         'pdoMysqlAvailable' => extension_loaded('pdo_mysql'),
         'configured' => $configured,
         'connected' => false,
+        'schemaReady' => false,
         'serverVersion' => null,
         'databaseSizeBytes' => null,
         'maxConnections' => null,
@@ -112,6 +113,15 @@ function trading_storage_diagnostics(): array
         // The caller needs to know that the connection is unavailable; implementation
         // details such as host names and authentication failures are not public data.
         $result['connected'] = false;
+        return $result;
+    }
+    try {
+        trading_storage_bootstrap($pdo);
+        $result['schemaReady'] = true;
+    } catch (Throwable) {
+        // Connection is still useful information. Schema permissions and an
+        // unsupported table option are reported independently by the safe status.
+        $result['schemaReady'] = false;
     }
     return $result;
 }
@@ -4381,6 +4391,30 @@ try {
             'storage' => trading_storage_diagnostics(),
             'generatedAt' => gmdate('c'),
         ]);
+    }
+
+    if ($action === 'storage-status') {
+        $storage = trading_storage_diagnostics();
+        $status = [
+            'ok' => true,
+            'storage' => $storage,
+            'active' => false,
+            'jsonImportedAt' => null,
+            'lastIngestAt' => null,
+            'counts' => ['SCRAPED' => 0, 'RESOLVED' => 0],
+            'generatedAt' => gmdate('c'),
+        ];
+        if ($storage['schemaReady'] === true) {
+            try {
+                $status['active'] = trading_storage_is_active();
+                $status['jsonImportedAt'] = trading_storage_meta_get('json-imported-at');
+                $status['lastIngestAt'] = trading_storage_meta_get('last-ingest-at');
+                $status['counts'] = trading_storage_observation_counts();
+            } catch (Throwable) {
+                $status['storage']['schemaReady'] = false;
+            }
+        }
+        respond($status);
     }
 
     if ($action === 'storage-admin') {
