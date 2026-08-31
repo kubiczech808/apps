@@ -744,6 +744,15 @@ function trading_storage_ingest(array $payload): array
     ];
 }
 
+function trading_storage_safe_migration_error(Throwable $error): string
+{
+    // The migration runs only on the host's own files and localhost database. Keep the
+    // public health endpoint useful without exposing a DSN or an accidental credential
+    // fragment if a provider includes one in an exception message.
+    $message = preg_replace('/(?:password|pwd)\s*=\s*[^\s;]+/i', '$1=[redacted]', $error->getMessage()) ?? 'Migration failed.';
+    return substr(trim($message), 0, 300);
+}
+
 /**
  * paper-state.json runs tens of megabytes once a few paper portfolios accumulate
  * real trade history, and this hosting's file replication for something that size
@@ -4400,6 +4409,7 @@ try {
             'storage' => $storage,
             'active' => false,
             'jsonImportedAt' => null,
+            'lastMigrationError' => null,
             'lastIngestAt' => null,
             'counts' => ['SCRAPED' => 0, 'RESOLVED' => 0],
             'generatedAt' => gmdate('c'),
@@ -4408,6 +4418,7 @@ try {
             try {
                 $status['active'] = trading_storage_is_active();
                 $status['jsonImportedAt'] = trading_storage_meta_get('json-imported-at');
+                $status['lastMigrationError'] = trading_storage_meta_get('last-migration-error');
                 $status['lastIngestAt'] = trading_storage_meta_get('last-ingest-at');
                 $status['counts'] = trading_storage_observation_counts();
             } catch (Throwable) {
@@ -4432,8 +4443,14 @@ try {
             respond(['ok' => true, 'operation' => 'bootstrap', 'storage' => trading_storage_diagnostics()]);
         }
         if ($operation === 'migrate-json') {
-            $counts = trading_storage_import_json_state();
-            respond(['ok' => true, 'operation' => 'migrate-json', 'counts' => $counts, 'active' => trading_storage_is_active()]);
+            try {
+                $counts = trading_storage_import_json_state();
+                trading_storage_meta_put('last-migration-error', '');
+                respond(['ok' => true, 'operation' => 'migrate-json', 'counts' => $counts, 'active' => trading_storage_is_active()]);
+            } catch (Throwable $error) {
+                trading_storage_meta_put('last-migration-error', trading_storage_safe_migration_error($error));
+                throw $error;
+            }
         }
         if ($operation === 'activate') {
             if (trading_storage_meta_get('json-imported-at') === null || trading_storage_document_get('state:paper') === null) {
