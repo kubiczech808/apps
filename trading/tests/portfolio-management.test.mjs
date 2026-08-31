@@ -81,13 +81,18 @@ function extractFunction(source, name) {
   throw new Error(`function ${name} is unbalanced`);
 }
 
-test("portfolio trade analysis: uses real closed P/L, excludes unfilled bids, and applies the live baseline", () => {
-  const analysis = new Function(`
+test("portfolio trade analysis: grades the selection at settlement, excludes unfilled bids, and applies the live baseline", () => {
+  const analysis = new Function("state", `
     const LIVE_PORTFOLIO_ANALYSIS_START_AT = Date.parse("2026-08-28T00:00:00+02:00");
     ${extractFunction(APP, "isClosedTrade")}
     ${extractFunction(APP, "isUnfilledLimitOrder")}
     ${extractFunction(APP, "tradeClosedAt")}
-    ${extractFunction(APP, "closedTradePredictionResult")}
+    ${extractFunction(APP, "numericOrNull")}
+    ${extractFunction(APP, "tradePotentialGain")}
+    ${extractFunction(APP, "tradeCostBasis")}
+    ${extractFunction(APP, "portfolioAnalysisTokenId")}
+    ${extractFunction(APP, "portfolioAnalysisOutcomeFromPrice")}
+    ${extractFunction(APP, "portfolioAnalysisGainIfWon")}
     ${extractFunction(APP, "portfolioAnalysisPnl")}
     ${extractFunction(APP, "portfolioAnalysisOutcome")}
     ${extractFunction(APP, "portfolioAnalysisClosedTrades")}
@@ -96,26 +101,30 @@ test("portfolio trade analysis: uses real closed P/L, excludes unfilled bids, an
     ${extractFunction(APP, "portfolioAnalysisTag")}
     ${extractFunction(APP, "portfolioAnalysisTags")}
     return { portfolioAnalysisClosedTrades, portfolioAnalysisRows, portfolioAnalysisSummary, portfolioAnalysisTags };
-  `)();
+  `)({ portfolioAnalysisOutcomeMap: { soldWin: 1, stoppedWin: 1, stoppedLoss: 0 } });
   const ledger = [
-    { id: "before", status: "WON", closedAt: "2026-08-27T23:00:00+02:00", realizedPnlUsdc: 9, marketType: "binary" },
-    { id: "win", status: "WON", closedAt: "2026-08-28T10:00:00+02:00", realizedPnlUsdc: 2, marketType: "binary", polymarketTags: ["sports", { slug: "soccer" }] },
-    { id: "loss", status: "LOST", closedAt: "2026-08-29T10:00:00+02:00", realizedPnlUsdc: -5, marketType: "multi", tags: ["esports"] },
+    { id: "before", status: "WON", closedAt: "2026-08-27T23:00:00+02:00", totalCostUsdc: 5, netGainIfWinUsdc: 1, marketType: "binary" },
+    { id: "win", status: "WON", closedAt: "2026-08-28T10:00:00+02:00", totalCostUsdc: 5, netGainIfWinUsdc: 1, marketType: "binary", polymarketTags: ["sports", { slug: "soccer" }] },
+    { id: "loss", status: "LOST", closedAt: "2026-08-29T10:00:00+02:00", totalCostUsdc: 5, netGainIfWinUsdc: 2, marketType: "multi", tags: ["esports"] },
+    // Their realised P/L must not affect this report. The archive grades the original
+    // selected outcome as a full win or loss after the sale/stop took place.
+    { id: "sold-win", tokenId: "soldWin", status: "SOLD", closedAt: "2026-08-29T11:00:00+02:00", totalCostUsdc: 5, netGainIfWinUsdc: 0.5, realizedPnlUsdc: -0.2, marketType: "binary" },
+    { id: "stopped-win", tokenId: "stoppedWin", status: "STOP_LOSS", closedAt: "2026-08-29T12:00:00+02:00", totalCostUsdc: 5, netGainIfWinUsdc: 0.4, realizedPnlUsdc: -5, marketType: "binary" },
+    { id: "stopped-loss", tokenId: "stoppedLoss", status: "STOP_LOSS", closedAt: "2026-08-29T13:00:00+02:00", totalCostUsdc: 5, netGainIfWinUsdc: 0.7, realizedPnlUsdc: -1, marketType: "multi" },
     { id: "unfilled", status: "LIMIT_ORDER_EXPIRED", realizedPnlUsdc: 4, filledSize: 0 },
   ];
   const live = analysis.portfolioAnalysisClosedTrades(ledger, { live: true });
-  assert.deepEqual(live.map((trade) => trade.id), ["win", "loss"]);
-  assert.deepEqual(analysis.portfolioAnalysisSummary(live), { trades: 2, wins: 1, losses: 1, earlyExits: 0, pnlUsdc: -3 });
+  assert.deepEqual(live.map((trade) => trade.id), ["win", "loss", "sold-win", "stopped-win", "stopped-loss"]);
+  assert.deepEqual(analysis.portfolioAnalysisSummary(live), { trades: 5, wins: 3, losses: 2, pnlUsdc: -8.1 });
   const types = analysis.portfolioAnalysisRows(live, (trade) => trade.marketType);
   assert.deepEqual(types, [
-    { value: "binary", trades: 1, wins: 1, losses: 0, earlyExits: 0, pnlUsdc: 2 },
-    { value: "multi", trades: 1, wins: 0, losses: 1, earlyExits: 0, pnlUsdc: -5 },
+    { value: "binary", trades: 3, wins: 3, losses: 0, pnlUsdc: 1.9 },
+    { value: "multi", trades: 2, wins: 0, losses: 2, pnlUsdc: -10 },
   ]);
-  const exited = analysis.portfolioAnalysisSummary([{ status: "SOLD", realizedPnlUsdc: 0 }]);
-  assert.deepEqual(exited, { trades: 1, wins: 0, losses: 0, earlyExits: 1, pnlUsdc: 0 },
-    "a zero-P/L early sale is not a third Polymarket outcome");
   assert.deepEqual(analysis.portfolioAnalysisTags(live[0]), ["sports", "soccer"]);
   assert.match(APP, /candidateIsOverUnderMarket\(trade\)/, "the report must include the requested O\/U split");
+  assert.doesNotMatch(APP.slice(APP.indexOf("function portfolioAnalysisRows"), APP.indexOf("function renderPortfolioOptimizationReport")), /earlyExits/,
+    "selection analysis must not present a sale as a third outcome");
 });
 
 test("created portfolios: a config carrying one is stored beside the shipped four", () => {

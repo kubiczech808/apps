@@ -117,6 +117,14 @@ const state = {
   // other thing that loads it.
   optimisationLiveStatePending: false,
   optimisationLiveStateTried: false,
+  // Selection analysis grades the market's eventual settlement, rather than the
+  // portfolio's exit timing. This archive lookup is loaded only when its Settings
+  // tab is opened and then retained for the current page session.
+  portfolioAnalysisOutcomeMap: {},
+  portfolioAnalysisOutcomesLoaded: false,
+  portfolioAnalysisOutcomesPending: false,
+  portfolioAnalysisOutcomesTried: false,
+  portfolioAnalysisOutcomesError: "",
   // A live counterfactual audit is intentionally manual and ephemeral: it answers a
   // question about the currently fetched wallet history without changing portfolio
   // settings or turning a historical what-if into an automated recommendation.
@@ -12375,21 +12383,64 @@ async function loadLiveStateForOptimisation() {
 // 28 August 2026 cannot distort the current live portfolio's results.
 const LIVE_PORTFOLIO_ANALYSIS_START_AT = Date.parse("2026-08-28T00:00:00+02:00");
 
-function portfolioAnalysisPnl(trade) {
-  const value = Number(trade?.realizedPnlUsdc);
-  return Number.isFinite(value) ? value : null;
+function portfolioAnalysisTokenId(trade = {}) {
+  for (const value of [trade.tokenId, trade.clobTokenId, trade.assetId, trade.asset]) {
+    const token = String(value || "").trim();
+    if (token) return token;
+  }
+  return "";
 }
 
-// A Polymarket outcome is binary: the selected side either won or lost. A rotation or
-// discretionary sale can close a position before settlement, however, so that row must
-// stay in the realised P/L total without being invented as a third "even" market result.
+function portfolioAnalysisOutcomeFromPrice(trade = {}) {
+  for (const value of [trade.finalOutcomePrice, trade.sourceEvaluation?.finalOutcomePrice, trade.sourceEvaluation?.resolvedPrice]) {
+    const price = numericOrNull(value);
+    if (price == null) continue;
+    if (price >= 0.995) return true;
+    if (price <= 0.005) return false;
+  }
+  return null;
+}
+
+function portfolioAnalysisGainIfWon(trade = {}) {
+  const recorded = tradePotentialGain(trade);
+  if (Number.isFinite(recorded)) return recorded;
+  const cost = tradeCostBasis(trade);
+  const entry = numericOrNull(trade.entryPrice ?? trade.marketProbability ?? trade.sourceEvaluation?.marketProbability);
+  if (!Number.isFinite(cost) || cost <= 0 || entry == null || entry <= 0 || entry >= 1) return null;
+  return cost * ((1 / entry) - 1);
+}
+
+function portfolioAnalysisPnl(trade) {
+  const outcome = portfolioAnalysisOutcome(trade);
+  if (outcome == null) return null;
+  if (outcome) return portfolioAnalysisGainIfWon(trade);
+  const cost = tradeCostBasis(trade);
+  return Number.isFinite(cost) && cost > 0 ? -cost : null;
+}
+
+// Selection analysis intentionally ignores the price and time at which a position was
+// sold. When our resolved-market archive knows the selected token's final result, it
+// wins or loses in full even if the portfolio rotated, stopped out, or redeemed earlier.
 function portfolioAnalysisOutcome(trade) {
-  return closedTradePredictionResult(trade);
+  const token = portfolioAnalysisTokenId(trade);
+  if (token && Object.prototype.hasOwnProperty.call(state.portfolioAnalysisOutcomeMap, token)) {
+    const outcome = Number(state.portfolioAnalysisOutcomeMap[token]);
+    if (outcome === 1) return true;
+    if (outcome === 0) return false;
+  }
+
+  const settledPrice = portfolioAnalysisOutcomeFromPrice(trade);
+  if (settledPrice != null) return settledPrice;
+
+  const status = String(trade?.status || "").toUpperCase();
+  if (["WON", "REDEEMED", "REDEEM_REQUIRED"].includes(status)) return true;
+  if (status === "LOST") return false;
+  return null;
 }
 
 function portfolioAnalysisClosedTrades(trades, { live = false } = {}) {
   return (Array.isArray(trades) ? trades : []).filter((trade) => {
-    if (!isClosedTrade(trade) || isUnfilledLimitOrder(trade) || portfolioAnalysisPnl(trade) == null) return false;
+    if (!isClosedTrade(trade) || isUnfilledLimitOrder(trade) || portfolioAnalysisOutcome(trade) == null || portfolioAnalysisPnl(trade) == null) return false;
     if (!live) return true;
     const closedAt = Date.parse(tradeClosedAt(trade) || trade.openedAt || trade.date || "");
     return Number.isFinite(closedAt) && closedAt >= LIVE_PORTFOLIO_ANALYSIS_START_AT;
@@ -12442,13 +12493,12 @@ function portfolioAnalysisRows(trades, valueForTrade) {
     const values = [...new Set((Array.isArray(rawValues) ? rawValues : [rawValues])
       .map((value) => String(value || "").trim()).filter(Boolean))];
     for (const value of values) {
-      const row = groups.get(value) || { value, trades: 0, wins: 0, losses: 0, earlyExits: 0, pnlUsdc: 0 };
+      const row = groups.get(value) || { value, trades: 0, wins: 0, losses: 0, pnlUsdc: 0 };
       const pnl = portfolioAnalysisPnl(trade) || 0;
       const outcome = portfolioAnalysisOutcome(trade);
       row.trades += 1;
       if (outcome === true) row.wins += 1;
       else if (outcome === false) row.losses += 1;
-      else row.earlyExits += 1;
       row.pnlUsdc += pnl;
       groups.set(value, row);
     }
@@ -12494,7 +12544,6 @@ function portfolioAnalysisSummary(trades) {
     trades: rows.length,
     wins,
     losses,
-    earlyExits: rows.length - wins - losses,
     pnlUsdc: Number(pnlUsdc.toFixed(4)),
   };
 }
@@ -12539,12 +12588,12 @@ function renderPortfolioTradeAnalysisTable(title, rows, totalTrades, note = "") 
       </div>
       <div class="calculation-table-wrap">
         <table class="calculation-table">
-          <thead><tr><th>Value</th><th>Trades</th><th>W / L / Early exit</th><th>Losses</th><th>P/L</th></tr></thead>
+          <thead><tr><th>Value</th><th>Trades</th><th>W / L</th><th>Losses</th><th>Selection P/L</th></tr></thead>
           <tbody>${rows.length ? rows.map((row) => `
             <tr>
               <td>${escapeHtml(row.value)}</td>
               <td>${formatInteger(row.trades)} / ${formatInteger(totalTrades)} (${totalTrades ? percent(row.trades / totalTrades) : "-"})</td>
-              <td>${formatInteger(row.wins)} / ${formatInteger(row.losses)} / ${formatInteger(row.earlyExits)}</td>
+              <td>${formatInteger(row.wins)} / ${formatInteger(row.losses)}</td>
               <td>${formatInteger(row.losses)} / ${formatInteger(row.trades)} (${row.trades ? percent(row.losses / row.trades) : "-"})</td>
               <td class="${pnlClass(row.pnlUsdc)}">${signedMoney(row.pnlUsdc)}</td>
             </tr>
@@ -12555,9 +12604,40 @@ function renderPortfolioTradeAnalysisTable(title, rows, totalTrades, note = "") 
   `;
 }
 
+function portfolioAnalysisReportVisible() {
+  return state.page === "settings" && state.settingsSection === "portfolio-optimization";
+}
+
+async function loadPortfolioAnalysisOutcomes() {
+  if (state.portfolioAnalysisOutcomesLoaded || state.portfolioAnalysisOutcomesPending || state.portfolioAnalysisOutcomesTried) return;
+  state.portfolioAnalysisOutcomesPending = true;
+  state.portfolioAnalysisOutcomesError = "";
+  try {
+    const payload = await fetchApiJson("api.php?action=portfolio-analysis-outcomes");
+    state.portfolioAnalysisOutcomeMap = payload.outcomes && typeof payload.outcomes === "object" ? payload.outcomes : {};
+    state.portfolioAnalysisOutcomesLoaded = true;
+  } catch (error) {
+    state.portfolioAnalysisOutcomesError = error?.message || "Unable to load final market outcomes.";
+  } finally {
+    state.portfolioAnalysisOutcomesPending = false;
+    state.portfolioAnalysisOutcomesTried = true;
+    renderPortfolioOptimizationReport();
+  }
+}
+
 function renderPortfolioOptimizationReport() {
   if (!els.portfolioOptimizationReport) return;
-  loadLiveStateForOptimisation();
+  if (portfolioAnalysisReportVisible()) {
+    loadLiveStateForOptimisation();
+    loadPortfolioAnalysisOutcomes();
+  }
+  if (!state.portfolioAnalysisOutcomesLoaded) {
+    const detail = state.portfolioAnalysisOutcomesError
+      ? `Final market outcomes could not be loaded: ${escapeHtml(state.portfolioAnalysisOutcomesError)}`
+      : "Loading final Polymarket outcomes for the selection analysis...";
+    els.portfolioOptimizationReport.innerHTML = `<div class="empty">${detail}</div>`;
+    return;
+  }
   const portfolios = portfolioTradeAnalysisPortfolios();
   if (!portfolios.length) {
     els.portfolioOptimizationReport.innerHTML = '<div class="empty">No portfolio trade history is available yet.</div>';
@@ -12567,8 +12647,8 @@ function renderPortfolioOptimizationReport() {
     <div class="calculation-summary">
       <div>
         <span class="label">Scope</span>
-        <strong>Closed positions only</strong>
-        <span>Every row uses actual realised P/L, including the trade's recorded fees. Expired limit orders are excluded because they never became positions.</span>
+        <strong>Selection quality at full settlement</strong>
+        <span>Every selected outcome is valued as if it was held until Polymarket settlement: a win uses its stored net gain after entry fees and a loss uses the full recorded stake. Sell, rotation and stop-loss timing are ignored. Expired limit orders are excluded because they never became positions.</span>
       </div>
       <div>
         <span class="label">Live cutoff</span>
@@ -12581,7 +12661,7 @@ function renderPortfolioOptimizationReport() {
       return `
         <section class="calculation-section portfolio-optimization-card${portfolio.live ? " live" : ""}">
           <h3>${escapeHtml(portfolio.label || "Portfolio")}${portfolio.live ? ' <span class="pill">Live</span>' : ""}${portfolio.archived ? ' <span class="pill muted">Archived</span>' : ""}</h3>
-          <p class="calculation-note">${formatInteger(summary.trades)} closed positions / ${formatInteger(summary.wins)} wins / ${formatInteger(summary.losses)} losses / ${formatInteger(summary.earlyExits)} early exits / realised P/L <span class="${pnlClass(summary.pnlUsdc)}">${signedMoney(summary.pnlUsdc)}</span></p>
+          <p class="calculation-note">${formatInteger(summary.trades)} settled selections / ${formatInteger(summary.wins)} wins / ${formatInteger(summary.losses)} losses / full-settlement selection P/L <span class="${pnlClass(summary.pnlUsdc)}">${signedMoney(summary.pnlUsdc)}</span></p>
           ${renderPortfolioTradeAnalysisTable("Market type", portfolioAnalysisRows(portfolio.trades, (trade) => portfolioAnalysisMarketType(trade) === "multi" ? "Multi-outcome" : "Yes/No"), summary.trades)}
           ${renderPortfolioTradeAnalysisTable("O/U market", portfolioAnalysisRows(portfolio.trades, (trade) => candidateIsOverUnderMarket(trade) ? "Over / Under" : "Other market"), summary.trades)}
           ${renderPortfolioTradeAnalysisTable("Entry probability", portfolioAnalysisRows(portfolio.trades, portfolioAnalysisProbabilityBand), summary.trades)}

@@ -4236,6 +4236,64 @@ try {
         respond($payload);
     }
 
+    // Portfolio trade analysis deliberately grades the original selection at market
+    // settlement, not at the time a rotation or stop loss sold it. Return a compact
+    // token -> final outcome index built from the full archive. The archive is streamed
+    // one member at a time because decoding it whole exceeds the host memory limit.
+    if ($action === 'portfolio-analysis-outcomes') {
+        $files = state_file_paths();
+        $corePath = $files['paper'];
+        $core = decode_state_file($corePath);
+        if ($core === null) {
+            respond(['ok' => false, 'error' => 'State file is not available yet'], 404);
+        }
+        $manifest = is_array($core['stateSegments'] ?? null) ? $core['stateSegments'] : [];
+        $sources = [];
+        $activePath = state_segment_path(['stateSegments' => $manifest], $corePath, 'observations');
+        if ($activePath !== null) {
+            $sources[] = [$activePath, 'marketObservations'];
+        }
+        $resolvedPath = state_segment_path(['stateSegments' => $manifest], $corePath, 'resolvedObservations');
+        if ($resolvedPath !== null) {
+            $sources[] = [$resolvedPath, 'resolvedMarketObservations'];
+        }
+        if ($sources === []) {
+            // States written before segmentation can contain either collection inline.
+            $sources = [[$corePath, 'marketObservations'], [$corePath, 'resolvedMarketObservations']];
+        }
+
+        $outcomes = [];
+        $onRow = static function (array $item) use (&$outcomes): bool {
+            $price = $item['finalOutcomePrice'] ?? null;
+            if (!is_numeric($price)) {
+                return true;
+            }
+            $price = (float) $price;
+            // A non-binary final price is not a settlement of this selected outcome and
+            // must not be invented as either a win or a loss.
+            if ($price > 0.005 && $price < 0.995) {
+                return true;
+            }
+            $outcome = $price >= 0.995 ? 1 : 0;
+            foreach (['tokenId', 'clobTokenId', 'assetId'] as $field) {
+                $token = trim((string) ($item[$field] ?? ''));
+                if ($token !== '' && strlen($token) <= 256) {
+                    $outcomes[$token] = $outcome;
+                }
+            }
+            return true;
+        };
+        foreach ($sources as [$path, $field]) {
+            stream_json_array_members($path, $field, $onRow);
+        }
+        respond([
+            'ok' => true,
+            'outcomes' => $outcomes,
+            'count' => count($outcomes),
+            'generatedAt' => $core['generatedAt'] ?? gmdate('c'),
+        ]);
+    }
+
     // The rows behind one row of the performance tables. Those tables are computed over
     // the whole stored archive, while the scraped list is served a capped page of it --
     // which is how a tag could report 937 resolved trades and its own link list 12. This
