@@ -2359,6 +2359,14 @@ body.modal-open {
   border-bottom: 0;
 }
 
+.selection-pnl-breakdown {
+  display: block;
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+}
+
 .run-card {
   min-width: 0;
   border: 1px solid var(--line);

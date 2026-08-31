@@ -118,8 +118,8 @@ test("portfolio trade analysis: grades the selection at settlement, excludes unf
   assert.deepEqual(analysis.portfolioAnalysisSummary(live), { trades: 5, wins: 3, losses: 2, pnlUsdc: -8.1 });
   const types = analysis.portfolioAnalysisRows(live, (trade) => trade.marketType);
   assert.deepEqual(types, [
-    { value: "binary", trades: 3, wins: 3, losses: 0, pnlUsdc: 1.9 },
-    { value: "multi", trades: 2, wins: 0, losses: 2, pnlUsdc: -10 },
+    { value: "binary", trades: 3, wins: 3, losses: 0, winPnlUsdc: 1.9, lossPnlUsdc: 0, pnlUsdc: 1.9 },
+    { value: "multi", trades: 2, wins: 0, losses: 2, winPnlUsdc: 0, lossPnlUsdc: -10, pnlUsdc: -10 },
   ]);
   assert.deepEqual(analysis.portfolioAnalysisTags(live[0]), ["sports", "soccer"]);
   // Legacy winners can lack netGainIfWinUsdc. An absent value must be derived from

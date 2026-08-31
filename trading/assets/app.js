@@ -12537,18 +12537,36 @@ function portfolioAnalysisRows(trades, valueForTrade) {
     const values = [...new Set((Array.isArray(rawValues) ? rawValues : [rawValues])
       .map((value) => String(value || "").trim()).filter(Boolean))];
     for (const value of values) {
-      const row = groups.get(value) || { value, trades: 0, wins: 0, losses: 0, pnlUsdc: 0 };
+      const row = groups.get(value) || {
+        value,
+        trades: 0,
+        wins: 0,
+        losses: 0,
+        winPnlUsdc: 0,
+        lossPnlUsdc: 0,
+        pnlUsdc: 0,
+      };
       const pnl = portfolioAnalysisPnl(trade) || 0;
       const outcome = portfolioAnalysisOutcome(trade);
       row.trades += 1;
-      if (outcome === true) row.wins += 1;
-      else if (outcome === false) row.losses += 1;
+      if (outcome === true) {
+        row.wins += 1;
+        row.winPnlUsdc += pnl;
+      } else if (outcome === false) {
+        row.losses += 1;
+        row.lossPnlUsdc += pnl;
+      }
       row.pnlUsdc += pnl;
       groups.set(value, row);
     }
   }
   return [...groups.values()]
-    .map((row) => ({ ...row, pnlUsdc: Number(row.pnlUsdc.toFixed(4)) }))
+    .map((row) => ({
+      ...row,
+      winPnlUsdc: Number(row.winPnlUsdc.toFixed(4)),
+      lossPnlUsdc: Number(row.lossPnlUsdc.toFixed(4)),
+      pnlUsdc: Number(row.pnlUsdc.toFixed(4)),
+    }))
     .sort((left, right) => right.trades - left.trades || right.pnlUsdc - left.pnlUsdc || left.value.localeCompare(right.value));
 }
 
@@ -12639,7 +12657,10 @@ function renderPortfolioTradeAnalysisTable(title, rows, totalTrades, note = "") 
               <td>${formatInteger(row.trades)} / ${formatInteger(totalTrades)} (${totalTrades ? percent(row.trades / totalTrades) : "-"})</td>
               <td>${formatInteger(row.wins)} / ${formatInteger(row.losses)}</td>
               <td>${formatInteger(row.losses)} / ${formatInteger(row.trades)} (${row.trades ? percent(row.losses / row.trades) : "-"})</td>
-              <td class="${pnlClass(row.pnlUsdc)}">${signedMoney(row.pnlUsdc)}</td>
+              <td class="${pnlClass(row.pnlUsdc)}">
+                ${signedMoney(row.pnlUsdc)}
+                <span class="selection-pnl-breakdown">wins ${signedMoney(row.winPnlUsdc)} / losses ${signedMoney(row.lossPnlUsdc)}</span>
+              </td>
             </tr>
           `).join("") : '<tr><td colspan="5">No closed positions with a recorded value.</td></tr>'}</tbody>
         </table>
