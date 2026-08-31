@@ -81,6 +81,38 @@ function extractFunction(source, name) {
   throw new Error(`function ${name} is unbalanced`);
 }
 
+test("portfolio trade analysis: uses real closed P/L, excludes unfilled bids, and applies the live baseline", () => {
+  const analysis = new Function(`
+    const LIVE_PORTFOLIO_ANALYSIS_START_AT = Date.parse("2026-08-28T00:00:00+02:00");
+    ${extractFunction(APP, "isClosedTrade")}
+    ${extractFunction(APP, "isUnfilledLimitOrder")}
+    ${extractFunction(APP, "tradeClosedAt")}
+    ${extractFunction(APP, "portfolioAnalysisPnl")}
+    ${extractFunction(APP, "portfolioAnalysisClosedTrades")}
+    ${extractFunction(APP, "portfolioAnalysisRows")}
+    ${extractFunction(APP, "portfolioAnalysisSummary")}
+    ${extractFunction(APP, "portfolioAnalysisTag")}
+    ${extractFunction(APP, "portfolioAnalysisTags")}
+    return { portfolioAnalysisClosedTrades, portfolioAnalysisRows, portfolioAnalysisSummary, portfolioAnalysisTags };
+  `)();
+  const ledger = [
+    { id: "before", status: "WON", closedAt: "2026-08-27T23:00:00+02:00", realizedPnlUsdc: 9, marketType: "binary" },
+    { id: "win", status: "WON", closedAt: "2026-08-28T10:00:00+02:00", realizedPnlUsdc: 2, marketType: "binary", polymarketTags: ["sports", { slug: "soccer" }] },
+    { id: "loss", status: "LOST", closedAt: "2026-08-29T10:00:00+02:00", realizedPnlUsdc: -5, marketType: "multi", tags: ["esports"] },
+    { id: "unfilled", status: "LIMIT_ORDER_EXPIRED", realizedPnlUsdc: 4, filledSize: 0 },
+  ];
+  const live = analysis.portfolioAnalysisClosedTrades(ledger, { live: true });
+  assert.deepEqual(live.map((trade) => trade.id), ["win", "loss"]);
+  assert.deepEqual(analysis.portfolioAnalysisSummary(live), { trades: 2, wins: 1, losses: 1, even: 0, pnlUsdc: -3 });
+  const types = analysis.portfolioAnalysisRows(live, (trade) => trade.marketType);
+  assert.deepEqual(types, [
+    { value: "binary", trades: 1, wins: 1, losses: 0, even: 0, pnlUsdc: 2 },
+    { value: "multi", trades: 1, wins: 0, losses: 1, even: 0, pnlUsdc: -5 },
+  ]);
+  assert.deepEqual(analysis.portfolioAnalysisTags(live[0]), ["sports", "soccer"]);
+  assert.match(APP, /candidateIsOverUnderMarket\(trade\)/, "the report must include the requested O\/U split");
+});
+
 test("created portfolios: a config carrying one is stored beside the shipped four", () => {
   const config = normalizeConfig({
     paper: {

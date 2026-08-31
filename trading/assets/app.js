@@ -9398,6 +9398,14 @@ function decorateLiveTradeForTable(trade) {
     expectedValueUsdc: trade.expectedValueUsdc ?? source.expectedValueUsdc,
     edge: trade.edge ?? source.edge,
     sourceEvaluation: source,
+    tags: Array.isArray(trade.tags) && trade.tags.length
+      ? trade.tags
+      : (source.polymarketTags || source.tags || source.firstPolymarketTags || []),
+    polymarketTags: Array.isArray(trade.polymarketTags) && trade.polymarketTags.length
+      ? trade.polymarketTags
+      : (source.polymarketTags || []),
+    marketType: trade.marketType || source.marketType || "",
+    firstVolumeUsdc: trade.firstVolumeUsdc ?? source.firstVolumeUsdc ?? source.volumeUsdc ?? source.volume24hr ?? null,
     aiAnalysis: trade.aiAnalysis || source.aiAnalysis || null,
     probabilityThesis: trade.probabilityThesis || source.probabilityThesis || source.aiAnalysis?.thesis || "",
     analysisModel: trade.analysisModel || source.analysisModel || source.aiAnalysis?.model || "",
@@ -12371,70 +12379,209 @@ async function loadLiveStateForOptimisation() {
   }
 }
 
+// This is a retrospective of positions that actually closed, not a recommendation engine.
+// Live history starts at the requested portfolio baseline, so wallet activity from before
+// 28 August 2026 cannot distort the current live portfolio's results.
+const LIVE_PORTFOLIO_ANALYSIS_START_AT = Date.parse("2026-08-28T00:00:00+02:00");
+
+function portfolioAnalysisPnl(trade) {
+  const value = Number(trade?.realizedPnlUsdc);
+  return Number.isFinite(value) ? value : null;
+}
+
+function portfolioAnalysisClosedTrades(trades, { live = false } = {}) {
+  return (Array.isArray(trades) ? trades : []).filter((trade) => {
+    if (!isClosedTrade(trade) || isUnfilledLimitOrder(trade) || portfolioAnalysisPnl(trade) == null) return false;
+    if (!live) return true;
+    const closedAt = Date.parse(tradeClosedAt(trade) || trade.openedAt || trade.date || "");
+    return Number.isFinite(closedAt) && closedAt >= LIVE_PORTFOLIO_ANALYSIS_START_AT;
+  });
+}
+
+function portfolioAnalysisProbability(trade) {
+  const value = Number(trade?.marketProbability ?? trade?.entryProbability ?? trade?.entryPrice);
+  return Number.isFinite(value) ? value : null;
+}
+
+function portfolioAnalysisVolume(trade) {
+  const value = Number(trade?.firstVolumeUsdc ?? trade?.volumeUsdc ?? trade?.volume24hr ?? trade?.liquidityUsdc ?? trade?.liquidity);
+  return Number.isFinite(value) ? value : null;
+}
+
+function portfolioAnalysisMarketType(trade) {
+  const explicit = String(trade?.marketType || "").toLowerCase();
+  return explicit === "binary" || explicit === "multi" ? explicit : candidateMarketType(trade);
+}
+
+function portfolioAnalysisTag(value) {
+  return String(value && typeof value === "object" ? (value.slug || value.label || value.name || "") : value || "")
+    .trim().toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "");
+}
+
+function portfolioAnalysisTags(trade) {
+  const tags = new Set();
+  const source = trade?.sourceEvaluation || {};
+  for (const values of [
+    trade?.polymarketTags, trade?.tags, trade?.firstPolymarketTags,
+    source?.polymarketTags, source?.tags, source?.firstPolymarketTags,
+  ]) {
+    for (const value of (Array.isArray(values) ? values : [])) {
+      const tag = portfolioAnalysisTag(value);
+      if (tag) tags.add(tag);
+    }
+  }
+  for (const value of [trade?.category, trade?.riskCategory, source?.category, source?.riskCategory]) {
+    const tag = portfolioAnalysisTag(value);
+    if (tag) tags.add(tag);
+  }
+  return [...tags];
+}
+
+function portfolioAnalysisRows(trades, valueForTrade) {
+  const groups = new Map();
+  for (const trade of trades) {
+    const rawValues = valueForTrade(trade);
+    const values = [...new Set((Array.isArray(rawValues) ? rawValues : [rawValues])
+      .map((value) => String(value || "").trim()).filter(Boolean))];
+    for (const value of values) {
+      const row = groups.get(value) || { value, trades: 0, wins: 0, losses: 0, even: 0, pnlUsdc: 0 };
+      const pnl = portfolioAnalysisPnl(trade) || 0;
+      row.trades += 1;
+      if (pnl > 0.000001) row.wins += 1;
+      else if (pnl < -0.000001) row.losses += 1;
+      else row.even += 1;
+      row.pnlUsdc += pnl;
+      groups.set(value, row);
+    }
+  }
+  return [...groups.values()]
+    .map((row) => ({ ...row, pnlUsdc: Number(row.pnlUsdc.toFixed(4)) }))
+    .sort((left, right) => right.trades - left.trades || right.pnlUsdc - left.pnlUsdc || left.value.localeCompare(right.value));
+}
+
+function portfolioAnalysisProbabilityBand(trade) {
+  const value = portfolioAnalysisProbability(trade);
+  if (value == null) return "Not recorded";
+  const lower = Math.max(0, Math.min(90, Math.floor(value * 10) * 10));
+  return `${lower}-${lower + 10}%`;
+}
+
+function portfolioAnalysisResolutionBand(trade) {
+  const days = Number(trade?.daysToResolution);
+  if (!Number.isFinite(days)) return "Not recorded";
+  if (days <= 1) return "<= 1 day";
+  if (days <= 3) return "1-3 days";
+  if (days <= 7) return "3-7 days";
+  if (days <= 14) return "7-14 days";
+  return "> 14 days";
+}
+
+function portfolioAnalysisVolumeBand(trade) {
+  const volume = portfolioAnalysisVolume(trade);
+  if (volume == null) return "Not recorded";
+  if (volume < 1000) return "< $1,000";
+  if (volume < 5000) return "$1,000-$4,999";
+  if (volume < 20000) return "$5,000-$19,999";
+  return ">= $20,000";
+}
+
+function portfolioAnalysisSummary(trades) {
+  const rows = Array.isArray(trades) ? trades : [];
+  const pnlUsdc = rows.reduce((total, trade) => total + (portfolioAnalysisPnl(trade) || 0), 0);
+  const wins = rows.filter((trade) => (portfolioAnalysisPnl(trade) || 0) > 0.000001).length;
+  const losses = rows.filter((trade) => (portfolioAnalysisPnl(trade) || 0) < -0.000001).length;
+  return { trades: rows.length, wins, losses, even: rows.length - wins - losses, pnlUsdc: Number(pnlUsdc.toFixed(4)) };
+}
+
+function portfolioTradeAnalysisPortfolios() {
+  const paper = paperPortfolioList(state.botState)
+    .filter((portfolio) => portfolio?.archived !== true)
+    .map((portfolio) => ({
+      id: `paper-${portfolio.id}`,
+      label: portfolio.label || portfolio.id || "Paper portfolio",
+      live: false,
+      trades: portfolioAnalysisClosedTrades(paperPortfolioTrades(portfolio)),
+    }));
+  const archives = (Array.isArray(state.botState?.paperPortfolioArchives) ? state.botState.paperPortfolioArchives : [])
+    .map((archive) => ({
+      id: archive.id,
+      label: `${archive.label || archive.strategyId || "Paper portfolio"} (archived)`,
+      live: false,
+      archived: true,
+      trades: portfolioAnalysisClosedTrades(archive?.snapshot?.trades),
+    }));
+  const live = !state.liveState ? [] : dashboardModes()
+    .filter((mode) => isLivePortfolioMode(mode))
+    .map((mode) => ({
+      id: `live-${liveConfigKeyForMode(mode)}`,
+      label: portfolioNameForMode(mode),
+      live: true,
+      trades: portfolioAnalysisClosedTrades(
+        liveClosedTrades(state.liveState, mode).map(decorateLiveTradeForTable),
+        { live: true },
+      ),
+    }));
+  return [...live, ...paper, ...archives];
+}
+
+function renderPortfolioTradeAnalysisTable(title, rows, totalTrades, note = "") {
+  return `
+    <section class="counterfactual-audit-parameter">
+      <div>
+        <strong>${escapeHtml(title)}</strong>
+        ${note ? `<span>${escapeHtml(note)}</span>` : ""}
+      </div>
+      <div class="calculation-table-wrap">
+        <table class="calculation-table">
+          <thead><tr><th>Value</th><th>Trades</th><th>W / L / Even</th><th>Losses</th><th>P/L</th></tr></thead>
+          <tbody>${rows.length ? rows.map((row) => `
+            <tr>
+              <td>${escapeHtml(row.value)}</td>
+              <td>${formatInteger(row.trades)} / ${formatInteger(totalTrades)} (${totalTrades ? percent(row.trades / totalTrades) : "-"})</td>
+              <td>${formatInteger(row.wins)} / ${formatInteger(row.losses)} / ${formatInteger(row.even)}</td>
+              <td>${formatInteger(row.losses)} / ${formatInteger(row.trades)} (${row.trades ? percent(row.losses / row.trades) : "-"})</td>
+              <td class="${pnlClass(row.pnlUsdc)}">${signedMoney(row.pnlUsdc)}</td>
+            </tr>
+          `).join("") : '<tr><td colspan="5">No closed positions with a recorded value.</td></tr>'}</tbody>
+        </table>
+      </div>
+    </section>
+  `;
+}
+
 function renderPortfolioOptimizationReport() {
   if (!els.portfolioOptimizationReport) return;
   loadLiveStateForOptimisation();
-  const report = state.botState?.latestPortfolioOptimizationReport;
-  // Live portfolios are analysed here whether or not the bot has published its half, so a
-  // state with no paper report yet does not hide them.
-  const livePortfolios = liveOptimisationPortfolios();
-  if ((!report || !Array.isArray(report.portfolios)) && !livePortfolios.length) {
-    els.portfolioOptimizationReport.innerHTML = '<div class="empty">No portfolio optimisation report yet. The next hourly portfolio pass will build it from closed trades.</div>';
+  const portfolios = portfolioTradeAnalysisPortfolios();
+  if (!portfolios.length) {
+    els.portfolioOptimizationReport.innerHTML = '<div class="empty">No portfolio trade history is available yet.</div>';
     return;
   }
-  // Paper rows come from the bot's last pass; live rows are computed from the wallet
-  // history on this page load, so they are current whatever the bot last did.
-  const paperPortfolios = Array.isArray(report?.portfolios) ? report.portfolios : [];
-  const portfolios = [...paperPortfolios, ...livePortfolios];
   els.portfolioOptimizationReport.innerHTML = `
     <div class="calculation-summary">
       <div>
-        <span class="label">Last analysis</span>
-        <strong>${escapeHtml(report?.generatedAt ? formatDate(report.generatedAt) : "-")}</strong>
-        <span>Paper portfolios as at the last portfolio pass; live portfolios recomputed now. Only realised P/L and recorded trading fees are used.</span>
+        <span class="label">Scope</span>
+        <strong>Closed positions only</strong>
+        <span>Every row uses actual realised P/L, including the trade's recorded fees. Expired limit orders are excluded because they never became positions.</span>
       </div>
       <div>
-        <span class="label">Method</span>
-        <strong>One parameter at a time</strong>
-        <span>A recommendation needs at least 12 resolved trades and a better realised P/L per trade.</span>
+        <span class="label">Live cutoff</span>
+        <strong>28. 08. 2026</strong>
+        <span>Older live trades are deliberately excluded. Tag rows can overlap because one market may carry more than one Polymarket tag.</span>
       </div>
     </div>
     ${portfolios.map((portfolio) => {
-      const recommendations = Array.isArray(portfolio.recommendations) ? portfolio.recommendations : [];
-      const auditKey = String(portfolio.strategyId || "");
-      const audit = portfolio.live ? state.liveCounterfactualAudits[auditKey] : null;
-      const auditPending = portfolio.live && Boolean(state.liveCounterfactualAuditPending[auditKey]);
-      const auditError = portfolio.live ? state.liveCounterfactualAuditErrors[auditKey] : "";
+      const summary = portfolioAnalysisSummary(portfolio.trades);
       return `
         <section class="calculation-section portfolio-optimization-card${portfolio.live ? " live" : ""}">
-          <h3>${escapeHtml(portfolio.label || portfolio.strategyId || "Portfolio")}${portfolio.live ? ' <span class="pill">Live</span>' : ""}</h3>
-          <p class="calculation-note">${formatInteger(Number(portfolio.baseline?.trades || 0))} resolved trades / realised P/L ${signedMoney(Number(portfolio.baseline?.pnlUsdc || 0))} / ${portfolio.baseline?.pnlPerTradeUsdc == null ? "-" : `${signedMoney(Number(portfolio.baseline.pnlPerTradeUsdc))} per trade`}</p>
-          ${portfolio.live ? `
-            <div class="counterfactual-audit-action">
-              <button class="execution-button" type="button" data-live-counterfactual-audit="${escapeHtml(auditKey)}" ${auditPending ? "disabled" : ""}>${auditPending ? "Loading live ledger..." : (audit ? "Run audit again" : "Run detailed audit")}</button>
-              <span>Tests each recorded loss against probability, resolution, volume and type filters. No portfolio setting is changed.</span>
-            </div>
-            ${auditError ? `<p class="calculation-note negative">${escapeHtml(auditError)}</p>` : ""}
-            ${renderLiveCounterfactualAudit(audit)}
-          ` : ""}
-          ${recommendations.length ? `
-            <div class="calculation-table-wrap">
-              <table class="calculation-table">
-                <thead><tr><th>Parameter</th><th>Suggested value</th><th>Trades</th><th>P/L</th><th>P/L per trade</th><th>Improvement</th><th>Why</th></tr></thead>
-                <tbody>${recommendations.map((row) => `
-                  <tr>
-                    <td>${escapeHtml(row.parameter || "-")}</td>
-                    <td>${escapeHtml(portfolioOptimisationValue(row))}</td>
-                    <td>${formatInteger(Number(row.trades || 0))}</td>
-                    <td class="${pnlClass(Number(row.pnlUsdc || 0))}">${signedMoney(Number(row.pnlUsdc || 0))}</td>
-                    <td class="${pnlClass(Number(row.pnlPerTradeUsdc || 0))}">${signedMoney(Number(row.pnlPerTradeUsdc || 0))}</td>
-                    <td class="positive">${signedMoney(Number(row.improvementPerTradeUsdc || 0))} per trade</td>
-                    <td>${escapeHtml(row.rationale || "-")}</td>
-                  </tr>
-                `).join("")}</tbody>
-              </table>
-            </div>
-          ` : `<p class="calculation-note">${escapeHtml(portfolio.note || "No reliable recommendation yet.")}</p>`}
+          <h3>${escapeHtml(portfolio.label || "Portfolio")}${portfolio.live ? ' <span class="pill">Live</span>' : ""}${portfolio.archived ? ' <span class="pill muted">Archived</span>' : ""}</h3>
+          <p class="calculation-note">${formatInteger(summary.trades)} closed positions / ${formatInteger(summary.wins)} wins / ${formatInteger(summary.losses)} losses / ${formatInteger(summary.even)} even / realised P/L <span class="${pnlClass(summary.pnlUsdc)}">${signedMoney(summary.pnlUsdc)}</span></p>
+          ${renderPortfolioTradeAnalysisTable("Market type", portfolioAnalysisRows(portfolio.trades, (trade) => portfolioAnalysisMarketType(trade) === "multi" ? "Multi-outcome" : "Yes/No"), summary.trades)}
+          ${renderPortfolioTradeAnalysisTable("O/U market", portfolioAnalysisRows(portfolio.trades, (trade) => candidateIsOverUnderMarket(trade) ? "Over / Under" : "Other market"), summary.trades)}
+          ${renderPortfolioTradeAnalysisTable("Entry probability", portfolioAnalysisRows(portfolio.trades, portfolioAnalysisProbabilityBand), summary.trades)}
+          ${renderPortfolioTradeAnalysisTable("Resolution at entry", portfolioAnalysisRows(portfolio.trades, portfolioAnalysisResolutionBand), summary.trades)}
+          ${renderPortfolioTradeAnalysisTable("Volume at entry", portfolioAnalysisRows(portfolio.trades, portfolioAnalysisVolumeBand), summary.trades)}
+          ${renderPortfolioTradeAnalysisTable("Tags", portfolioAnalysisRows(portfolio.trades, (trade) => portfolioAnalysisTags(trade).length ? portfolioAnalysisTags(trade) : "Not recorded"), summary.trades, "A position appears once under every tag recorded for its market.")}
         </section>
       `;
     }).join("")}
@@ -12475,13 +12622,6 @@ els.settingsSectionButtons.forEach((button) => {
   button.addEventListener("click", () => {
     setSettingsSection(button.dataset.settingsSection || "evaluation-log");
   });
-});
-
-els.portfolioOptimizationReport?.addEventListener("click", (event) => {
-  const button = event.target.closest("[data-live-counterfactual-audit]");
-  if (!button) return;
-  event.preventDefault();
-  runLiveCounterfactualAudit(button.dataset.liveCounterfactualAudit || "");
 });
 
 els.calculationSourceButtons.forEach((button) => {

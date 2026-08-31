@@ -10822,9 +10822,11 @@ function buildPortfolioOptimisationReport(state) {
 }
 
 function updatePortfolioOptimisationReport(state) {
-  const report = buildPortfolioOptimisationReport(state);
-  state.latestPortfolioOptimizationReport = report;
-  return report;
+  // Portfolio analysis is now rendered directly from each portfolio's closed ledger in
+  // Settings. The former suggestion engine is intentionally retired: rebuilding its
+  // counterfactual rows on every scan spent time without representing actual trades.
+  delete state.latestPortfolioOptimizationReport;
+  return null;
 }
 
 function updatePaperPortfolio(portfolioState) {
