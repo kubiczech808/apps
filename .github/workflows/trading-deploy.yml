@@ -282,9 +282,9 @@ jobs:
           for key in ("pdoAvailable", "pdoMysqlAvailable", "configured", "connected", "serverVersion", "databaseSizeBytes", "maxConnections"):
               print(f"  {key}: {storage.get(key)}")
           if not storage.get("pdoMysqlAvailable"):
-              print("::warning::pdo_mysql is unavailable on the hosting; MySQL migration cannot run there.")
-          elif not storage.get("configured"):
-              print("::warning::Trading DB secrets are missing; add POLYTRADING_DB_NAME, POLYTRADING_DB_USER and POLYTRADING_DB_PASSWORD.")
-          elif not storage.get("connected"):
-              print("::warning::Trading DB credentials are configured but the hosting could not connect.")
+              raise SystemExit("pdo_mysql is unavailable on the hosting; MySQL migration cannot run there.")
+          if not storage.get("configured"):
+              raise SystemExit("Trading DB credentials are incomplete. Set POLYTRADING_DB_NAME, POLYTRADING_DB_USER and POLYTRADING_DB_PASSWORD.")
+          if not storage.get("connected"):
+              raise SystemExit("Trading DB credentials are present but localhost:3306 could not connect. Check the database/user grants on the hosting.")
           PY
