@@ -4407,6 +4407,7 @@ try {
         $status = [
             'ok' => true,
             'storage' => $storage,
+            'triggerConfigured' => app_config()['trigger_key'] !== '',
             'active' => false,
             'jsonImportedAt' => null,
             'lastMigrationError' => null,
