@@ -498,6 +498,7 @@ const PAPER_STRATEGIES = {
     // turn on. Default preserves each portfolio's established behavior.
     equalRiskMultiplier: envStopLossRiskMultiplier("PAPER_CONSERVATIVE", 0),
     equalRiskProtection: envStopLossRiskMultiplier("PAPER_CONSERVATIVE", 0) > 0,
+    reverseOnStopLoss: envBool("PAPER_CONSERVATIVE_REVERSE_ON_STOP_LOSS", false),
     // A resting limit buy at the current best bid instead of a market buy at the
     // ask. Default off, unchanged behavior absent a saved value.
     useLimitOrders: envBool("PAPER_CONSERVATIVE_USE_LIMIT_ORDERS", false),
@@ -531,6 +532,7 @@ const PAPER_STRATEGIES = {
     // turn on. Default preserves each portfolio's established behavior.
     equalRiskMultiplier: envStopLossRiskMultiplier("PAPER_HIGH_REWARD", 0),
     equalRiskProtection: envStopLossRiskMultiplier("PAPER_HIGH_REWARD", 0) > 0,
+    reverseOnStopLoss: envBool("PAPER_HIGH_REWARD_REVERSE_ON_STOP_LOSS", false),
     useLimitOrders: envBool("PAPER_HIGH_REWARD_USE_LIMIT_ORDERS", false),
     marketType: envPortfolioMarketType("PAPER_HIGH_REWARD_MARKET_TYPE", "PAPER_HIGH_REWARD_REQUIRE_MOST_PROBABLE", "all"),
     excludeOverUnderMarkets: envBool("PAPER_HIGH_REWARD_EXCLUDE_OVER_UNDER_MARKETS", false),
@@ -562,6 +564,7 @@ const PAPER_STRATEGIES = {
     // turn on. Default preserves each portfolio's established behavior.
     equalRiskMultiplier: envStopLossRiskMultiplier("PAPER_MORE_PROBABLE", 0),
     equalRiskProtection: envStopLossRiskMultiplier("PAPER_MORE_PROBABLE", 0) > 0,
+    reverseOnStopLoss: envBool("PAPER_MORE_PROBABLE_REVERSE_ON_STOP_LOSS", false),
     useLimitOrders: envBool("PAPER_MORE_PROBABLE_USE_LIMIT_ORDERS", false),
     marketType: envPortfolioMarketType("PAPER_MORE_PROBABLE_MARKET_TYPE", "PAPER_MORE_PROBABLE_REQUIRE_MOST_PROBABLE", "multi"),
     excludeOverUnderMarkets: envBool("PAPER_MORE_PROBABLE_EXCLUDE_OVER_UNDER_MARKETS", false),
@@ -597,6 +600,7 @@ const PAPER_STRATEGIES = {
     // turn on. Default preserves each portfolio's established behavior.
     equalRiskMultiplier: envStopLossRiskMultiplier("PAPER_EQUAL", 1.5),
     equalRiskProtection: envStopLossRiskMultiplier("PAPER_EQUAL", 1.5) > 0,
+    reverseOnStopLoss: envBool("PAPER_EQUAL_REVERSE_ON_STOP_LOSS", false),
     useLimitOrders: envBool("PAPER_EQUAL_USE_LIMIT_ORDERS", false),
     marketType: envPortfolioMarketType("PAPER_EQUAL_MARKET_TYPE", "PAPER_EQUAL_REQUIRE_MOST_PROBABLE", "all"),
     excludeOverUnderMarkets: envBool("PAPER_EQUAL_EXCLUDE_OVER_UNDER_MARKETS", false),
@@ -664,6 +668,7 @@ function customPaperStrategies(raw = process.env.PAPER_CUSTOM_PORTFOLIOS) {
       allowRotation: row.autoRotatePositions === true,
       equalRiskMultiplier: rowStopLossRiskMultiplier(row, 0),
       equalRiskProtection: rowStopLossRiskMultiplier(row, 0) > 0,
+      reverseOnStopLoss: row.reverseOnStopLoss === true,
       useLimitOrders: row.useLimitOrders === true,
       archived: row.archived === true,
       marketType,
@@ -1127,6 +1132,7 @@ function compactPaperPortfolioForCore(portfolio) {
     "probabilitySource",
     "equalRiskMultiplier",
     "equalRiskProtection",
+    "reverseOnStopLoss",
     "allowRotation",
     "useLimitOrders",
     "resetAt",
@@ -1685,6 +1691,7 @@ function normalizePaperPortfolio(strategy, input = {}) {
     probabilitySource: strategy.probabilitySource,
     equalRiskMultiplier: normalizeStopLossRiskMultiplier(strategy.equalRiskMultiplier, strategy.equalRiskProtection ? 1 : 0),
     equalRiskProtection: Boolean(strategy.equalRiskProtection),
+    reverseOnStopLoss: Boolean(strategy.reverseOnStopLoss),
     allowRotation: strategy.allowRotation !== false,
     // Carried like the other per-portfolio execution switches, because how the next order
     // is sized depends on it: a resting limit order holds capital without being exposure,
@@ -1736,6 +1743,7 @@ function normalizePaperPortfolio(strategy, input = {}) {
       probabilitySource: strategy.probabilitySource,
       equalRiskMultiplier: normalizeStopLossRiskMultiplier(strategy.equalRiskMultiplier, strategy.equalRiskProtection ? 1 : 0),
       equalRiskProtection: Boolean(strategy.equalRiskProtection),
+      reverseOnStopLoss: Boolean(strategy.reverseOnStopLoss),
       allowRotation: strategy.allowRotation !== false,
     },
     trades: retainPaperTrades(Array.isArray(input.trades)
@@ -4598,7 +4606,100 @@ function fundLimitOrderFills(previousTrades, refreshedTrades, portfolioState) {
   return { trades: settled, funded, cancelled };
 }
 
-async function refreshTrades(trades, portfolioState = null) {
+// A reversal is deliberately not another candidate-selection pass. It is a separate
+// protective action: after a filled stop, take the currently quoted opposite side of
+// the same two-outcome market with exactly this fixed stake. Limiting it to one depth
+// avoids a loss-induced Yes -> No -> Yes loop if the new position also reaches its stop.
+const STOP_LOSS_REVERSAL_STAKE_USDC = 5;
+
+function oppositeBinaryOutcome(market = {}, trade = {}) {
+  const outcomes = parseJsonField(market.outcomes).map((value) => String(value));
+  const tokenIds = parseJsonField(market.clobTokenIds).map((value) => String(value));
+  const currentIndex = outcomeIndexForTrade(market, trade);
+  if (outcomes.length !== 2 || tokenIds.length !== 2 || currentIndex < 0) {
+    return { eligible: false, reason: "the stopped position is not a resolvable binary market" };
+  }
+  const oppositeIndex = currentIndex === 0 ? 1 : 0;
+  const tokenId = tokenIds[oppositeIndex];
+  if (!tokenId || tokenId === String(trade.tokenId || "")) {
+    return { eligible: false, reason: "the binary market has no distinct opposite token" };
+  }
+  return { eligible: true, outcome: outcomes[oppositeIndex], tokenId, outcomeIndex: oppositeIndex };
+}
+
+function stopLossReversalCapacity(trades, portfolioState) {
+  const realizedPnl = (Array.isArray(trades) ? trades : [])
+    .reduce((sum, trade) => sum + Number(trade?.realizedPnlUsdc || 0), 0);
+  const capitalAdjustment = Number(portfolioState?.capitalAdjustmentUsdc) || 0;
+  const balance = Math.max(0, PORTFOLIO_USDC + capitalAdjustment + realizedPnl);
+  return Math.max(0, balance - positionRisk(trades));
+}
+
+async function buildStopLossReversalTrade(sourceTrade, strategy) {
+  if (!strategy?.reverseOnStopLoss || sourceTrade?.isStopLossReversal === true) {
+    return { trade: null, reason: "reverse after stop loss is disabled or already used for this position" };
+  }
+  let market;
+  try {
+    market = await fetchMarketBySlug(sourceTrade.slug);
+  } catch (error) {
+    return { trade: null, reason: `could not refresh the stopped market: ${error.message}` };
+  }
+  if (!market || market.closed || market.acceptingOrders === false) {
+    return { trade: null, reason: "the stopped market is no longer accepting orders" };
+  }
+  const opposite = oppositeBinaryOutcome(market, sourceTrade);
+  if (!opposite.eligible) return { trade: null, reason: opposite.reason };
+
+  try {
+    const book = await fetchJson(`https://clob.polymarket.com/book?token_id=${encodeURIComponent(opposite.tokenId)}`);
+    const candidate = evaluateCandidate({
+      market,
+      outcomeIndex: opposite.outcomeIndex,
+      tokenId: opposite.tokenId,
+      book,
+      learningProfile: {},
+    });
+    if (!candidate) return { trade: null, reason: "the opposite outcome has no executable ask" };
+    const reverseStrategy = { ...strategy, useLimitOrders: false };
+    const opened = paperTradeFromCandidate(candidate, reverseStrategy, nowIso().slice(0, 10), STOP_LOSS_REVERSAL_STAKE_USDC);
+    return {
+      trade: {
+        ...opened,
+        id: `${sourceTrade.id}-stop-reversal-${opposite.tokenId}`,
+        isStopLossReversal: true,
+        reverseStopLossFromTradeId: sourceTrade.id,
+        reverseStopLossDepth: 1,
+        statusNote: `Opened opposite outcome ${opposite.outcome} with a fixed ${STOP_LOSS_REVERSAL_STAKE_USDC.toFixed(2)} USDC stake after stop loss on ${sourceTrade.outcome}.`,
+      },
+      reason: null,
+    };
+  } catch (error) {
+    return { trade: null, reason: `could not quote the opposite outcome: ${error.message}` };
+  }
+}
+
+function recordStopLossReversalResult(trade, result) {
+  const at = nowIso();
+  if (result.trade) {
+    return {
+      ...trade,
+      stopLossReversalAttemptedAt: at,
+      stopLossReversalStatus: "OPENED",
+      stopLossReversalTradeId: result.trade.id,
+      statusNote: `${trade.statusNote || "Stop loss filled."} Opposite outcome opened with a fixed ${STOP_LOSS_REVERSAL_STAKE_USDC.toFixed(2)} USDC stake.`,
+    };
+  }
+  return {
+    ...trade,
+    stopLossReversalAttemptedAt: at,
+    stopLossReversalStatus: "SKIPPED",
+    stopLossReversalReason: result.reason || "opposite outcome could not be opened",
+    statusNote: `${trade.statusNote || "Stop loss filled."} Opposite outcome was not opened: ${result.reason || "not executable"}.`,
+  };
+}
+
+async function refreshTrades(trades, portfolioState = null, strategy = null) {
   // mapWithConcurrency returns input order, so this is the same array the sequential
   // loop built -- markOpenTrade reads the market and returns a new trade, and touches
   // nothing another trade can see.
@@ -4612,7 +4713,30 @@ async function refreshTrades(trades, portfolioState = null) {
       + ` fund the position; cancelled ${funding.cancelled} resting order(s)`
       + `${funding.funded ? ` after funding ${funding.funded}` : ""}.`);
   }
-  return funding.trades;
+  if (!strategy?.reverseOnStopLoss) return funding.trades;
+
+  const originalById = new Map((Array.isArray(trades) ? trades : []).map((trade) => [trade.id, trade]));
+  let nextTrades = [...funding.trades];
+  for (let index = 0; index < nextTrades.length; index += 1) {
+    const marked = nextTrades[index];
+    const original = originalById.get(marked.id);
+    const justStopped = OPEN_STATUSES.has(String(original?.status || ""))
+      && String(original?.status || "") !== "LIMIT_ORDER_WAITING"
+      && String(marked?.status || "") === "STOP_LOSS";
+    if (!justStopped || marked.stopLossReversalAttemptedAt || marked.isStopLossReversal === true) continue;
+    const capacity = stopLossReversalCapacity(nextTrades, portfolioState);
+    if (capacity + 0.00001 < STOP_LOSS_REVERSAL_STAKE_USDC) {
+      nextTrades[index] = recordStopLossReversalResult(marked, {
+        trade: null,
+        reason: `only ${capacity.toFixed(2)} USDC is free after the stop`,
+      });
+      continue;
+    }
+    const result = await buildStopLossReversalTrade(marked, strategy);
+    nextTrades[index] = recordStopLossReversalResult(marked, result);
+    if (result.trade) nextTrades.push(result.trade);
+  }
+  return nextTrades;
 }
 
 function probabilityBucket(probability) {
@@ -6871,6 +6995,7 @@ function paperTradeFromCandidate(best, strategy, today, stake) {
     unrealizedPnlUsdc: 0,
     unrealizedPnlPct: 0,
     equalRiskProtection: Boolean(strategy.equalRiskProtection),
+    reverseOnStopLoss: Boolean(strategy.reverseOnStopLoss),
     stopLossRiskMultiplier: equalRiskPlan?.stopLossRiskMultiplier ?? (strategy.equalRiskProtection ? normalizeStopLossRiskMultiplier(strategy.equalRiskMultiplier, 1) : null),
     riskTargetUsdc: equalRiskPlan?.riskTargetUsdc ?? null,
     stopLossPrice: equalRiskPlan?.stopPrice ?? null,
@@ -11354,7 +11479,11 @@ async function run() {
   await timed("refreshTrades", () => mapWithConcurrency(
     Object.values(state.paperPortfolios),
     async (portfolioState) => {
-      portfolioState.trades = await refreshTrades(portfolioState.trades, portfolioState);
+      portfolioState.trades = await refreshTrades(
+        portfolioState.trades,
+        portfolioState,
+        PAPER_STRATEGIES[portfolioState.id] || null,
+      );
       if (!EXECUTION_PASS) {
         portfolioState.trades = await reviewClosedTradesWithAi(portfolioState.trades, state);
       }
@@ -11678,6 +11807,8 @@ export {
   limitOrderFillDecision,
   openPaperTradeForStrategy,
   paperTradeFromCandidate,
+  oppositeBinaryOutcome,
+  buildStopLossReversalTrade,
   mergeStates,
   mergeExecutionObservationSnapshot,
   openRisk,

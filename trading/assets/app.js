@@ -331,6 +331,8 @@ const els = {
   autoRotatePositionsLabel: document.querySelector("[data-auto-rotate-positions-label]"),
   stopLossRiskMultiplier: document.querySelector("[data-stop-loss-risk-multiplier]"),
   stopLossRiskMultiplierLabel: document.querySelector("[data-stop-loss-risk-multiplier-label]"),
+  stopLossReverseOnTrigger: document.querySelector("[data-stop-loss-reverse-on-trigger]"),
+  stopLossReverseOnTriggerLabel: document.querySelector("[data-stop-loss-reverse-on-trigger-label]"),
   executionCronRow: document.querySelector("[data-execution-cron-row]"),
   executionCronMinutes: document.querySelector("[data-execution-cron-minutes]"),
   executionCronMinutesLabel: document.querySelector("[data-execution-cron-minutes-label]"),
@@ -783,6 +785,7 @@ function defaultPortfolioConfig() {
         useLimitOrders: false,
         stopLossEnabled: false,
         stopLossRiskMultiplier: 0,
+        reverseOnStopLoss: false,
         marketType: "all",
         excludeOverUnderMarkets: false,
         requireMostProbableOutcome: false,
@@ -806,6 +809,7 @@ function defaultPortfolioConfig() {
         useLimitOrders: false,
         stopLossEnabled: false,
         stopLossRiskMultiplier: 0,
+        reverseOnStopLoss: false,
         marketType: "all",
         excludeOverUnderMarkets: false,
         requireMostProbableOutcome: false,
@@ -829,6 +833,7 @@ function defaultPortfolioConfig() {
         useLimitOrders: false,
         stopLossEnabled: false,
         stopLossRiskMultiplier: 0,
+        reverseOnStopLoss: false,
         marketType: "multi",
         excludeOverUnderMarkets: false,
         requireMostProbableOutcome: true,
@@ -854,6 +859,7 @@ function defaultPortfolioConfig() {
         // portfolio may turn on, but Equal is where it ships enabled.
         stopLossEnabled: true,
         stopLossRiskMultiplier: 1.5,
+        reverseOnStopLoss: false,
         marketType: "all",
         excludeOverUnderMarkets: false,
         requireMostProbableOutcome: false,
@@ -878,6 +884,7 @@ function defaultPortfolioConfig() {
       autoRotatePositions: true,
       stopLossEnabled: false,
       stopLossRiskMultiplier: 0,
+      reverseOnStopLoss: false,
       useLimitOrders: true,
       marketType: "all",
       excludeOverUnderMarkets: false,
@@ -908,6 +915,7 @@ function defaultPortfolioConfig() {
       autoRotatePositions: false,
       stopLossEnabled: false,
       stopLossRiskMultiplier: 0,
+      reverseOnStopLoss: false,
       useLimitOrders: true,
       marketType: "all",
       excludeOverUnderMarkets: false,
@@ -1061,6 +1069,10 @@ function stopLossRiskMultiplier(config = {}) {
 // portfolios have never had this behavior, so absent must not read as on.
 function stopLossIsEnabled(config = {}) {
   return stopLossRiskMultiplier(config) > 0;
+}
+
+function stopLossReverseIsEnabled(config = {}) {
+  return stopLossIsEnabled(config) && config.reverseOnStopLoss === true;
 }
 
 function stopLossRiskLabel(config = {}) {
@@ -4870,6 +4882,16 @@ function syncPortfolioParameterControls(configOverride = null, options = {}) {
   const stopLossMultiplier = stopLossRiskMultiplier(config);
   if (els.stopLossRiskMultiplier) els.stopLossRiskMultiplier.value = String(Math.round(stopLossMultiplier * 100));
   if (els.stopLossRiskMultiplierLabel) els.stopLossRiskMultiplierLabel.textContent = stopLossRiskLabel(config);
+  const reverseOnStopLoss = stopLossReverseIsEnabled(config);
+  if (els.stopLossReverseOnTrigger) {
+    els.stopLossReverseOnTrigger.checked = reverseOnStopLoss;
+    els.stopLossReverseOnTrigger.disabled = stopLossMultiplier <= 0;
+  }
+  if (els.stopLossReverseOnTriggerLabel) {
+    els.stopLossReverseOnTriggerLabel.textContent = stopLossMultiplier > 0
+      ? (reverseOnStopLoss ? "On: $5 opposite outcome" : "Off")
+      : "Off: stop loss disabled";
+  }
   if (els.parameterModalArchive) {
     // Only an existing paper portfolio can be archived. A live one holds real positions
     // and open orders, and hiding those would hide real exposure; one being created does
@@ -5395,6 +5417,7 @@ function archivedPortfolioRuleRows(config = {}, summary = null) {
     ["Minimum volume", minVolume == null ? "none" : `>= ${money(minVolume)}`],
     ["Rotation", automaticRotationIsEnabled(config) ? "On" : "Off"],
     ["Stop loss", stopLossRiskLabel(config)],
+    ["Reverse after stop loss", stopLossReverseIsEnabled(config) ? "On: $5 opposite outcome" : "Off"],
   ];
 }
 
@@ -5519,6 +5542,7 @@ function parameterDraftFromControls(baseDraft = {}) {
     draft.stopLossRiskMultiplier = multiplier;
     draft.stopLossEnabled = multiplier > 0;
   }
+  if (els.stopLossReverseOnTrigger) draft.reverseOnStopLoss = Boolean(els.stopLossReverseOnTrigger.checked);
   if (hasValue(els.fixedEntryPrice)) draft.fixedEntryPrice = normalizeFixedEntryPrice(numberValue(els.fixedEntryPrice) / 100);
   if (els.fixedEntryTags) draft.allowedMarketTags = normalizeMarketTagList(els.fixedEntryTags.value);
   if (els.includeOnlyTags) draft.includeOnlyMarketTags = normalizeMarketTagList(els.includeOnlyTags.value);
@@ -7838,6 +7862,7 @@ function portfolioRuleRows(portfolio = {}) {
   rows.push(["Rotation", automaticRotationIsEnabled(config) ? "On" : "Off"]);
   // Any paper portfolio can turn this on now; Equal is only where it ships enabled.
   rows.push(["Stop loss", stopLossRiskLabel(config)]);
+  rows.push(["Reverse after stop loss", stopLossReverseIsEnabled(config) ? "On: $5 opposite outcome" : "Off"]);
   // The parameter modal already saves this for paper portfolios (the checkbox has no
   // paper-only hide), but this card never showed it -- reading like the setting was
   // live-only, when it is only this row that was missing.
@@ -7901,6 +7926,7 @@ function livePortfolioRuleRows() {
     ["Minimum net profit", `>= ${percent(minNetYield)} after fees`],
     ["Rotation", automaticRotationIsEnabled(config) ? "On" : "Off"],
     ["Stop loss", stopLossRiskLabel(config)],
+    ["Reverse after stop loss", stopLossReverseIsEnabled(config) ? "On: $5 opposite outcome" : "Off"],
     ["Order mode", useLimitOrders ? "Limit orders" : "Market orders"],
     ["Cross-live risk", systemConfig().crossLivePortfolioRiskDiversification !== false ? "Block correlated exposure" : "Allow correlated exposure"],
   ];
@@ -8771,6 +8797,7 @@ const PORTFOLIO_CONFIG_HISTORY_LABELS = {
   useLimitOrders: "Order mode",
   autoRotatePositions: "Automatic rotation",
   stopLossRiskMultiplier: "Stop loss",
+  reverseOnStopLoss: "Reverse after stop loss",
   includeOnlyMarketTags: "Include only tags",
   excludedMarketTags: "Excluded tags",
   automationEnabled: "Automation",
@@ -12987,6 +13014,15 @@ els.stopLossRiskMultiplier?.addEventListener("input", () => {
   }
   if (updateParameterDraft(updates)) return;
   updatePortfolioConfigForMode(state.mode, updates);
+  savePortfolioConfigSoon();
+  syncPortfolioParameterControls();
+  rerenderCurrentDashboard();
+});
+
+els.stopLossReverseOnTrigger?.addEventListener("change", () => {
+  const value = Boolean(els.stopLossReverseOnTrigger.checked);
+  if (updateParameterDraft({ reverseOnStopLoss: value })) return;
+  updatePortfolioConfigForMode(state.mode, { reverseOnStopLoss: value });
   savePortfolioConfigSoon();
   syncPortfolioParameterControls();
   rerenderCurrentDashboard();

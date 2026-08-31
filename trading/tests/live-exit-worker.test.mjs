@@ -25,6 +25,20 @@ test("stop trigger uses the best executable bid and does not trigger above the f
   assert.equal(worker.exitTrigger({ bestBidPrice: 0.712, stopPrice: 0.71, triggerPrice: 0.712 }), true);
 });
 
+test("a stop reversal resolves only the other side of a binary market", () => {
+  const market = {
+    outcomes: JSON.stringify(["Yes", "No"]),
+    clobTokenIds: JSON.stringify(["yes-token", "no-token"]),
+  };
+  assert.deepEqual(worker.oppositeBinaryToken(market, "yes-token"), {
+    eligible: true,
+    tokenId: "no-token",
+    outcome: "No",
+  });
+  assert.equal(worker.oppositeBinaryToken({ outcomes: "[\"A\",\"B\",\"C\"]", clobTokenIds: "[\"a\",\"b\",\"c\"]" }, "a").eligible, false);
+  assert.equal(worker.bestAsk({ asks: [{ price: "0.54" }, { price: "0.57" }] }), 0.54);
+});
+
 test("worker source keeps live exits opt-in and price-protected", async () => {
   const { readFile } = await import("node:fs/promises");
   const source = await readFile(new URL("../tools/rpi-live-exit-worker.mjs", import.meta.url), "utf8");
@@ -36,4 +50,7 @@ test("worker source keeps live exits opt-in and price-protected", async () => {
   assert.match(source, /LIVE_EXIT_POLICY_URL/);
   assert.match(source, /remotePolicyMap\(context\.policyState\)/);
   assert.match(source, /defaultRemotePolicy\(context\.policyState\)/);
+  assert.match(source, /if \(plan\.reverseOnStopLoss\)/);
+  assert.match(source, /submitStopLossReversal\(plan\)/);
+  assert.match(source, /STOP_LOSS_REVERSAL_STAKE_USDC = 5/);
 });

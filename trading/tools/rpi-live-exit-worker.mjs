@@ -12,6 +12,7 @@ import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
 const CLOB_HOST = process.env.POLYMARKET_HOST || "https://clob.polymarket.com";
+const GAMMA_API = process.env.POLYMARKET_GAMMA_API || "https://gamma-api.polymarket.com";
 const CHAIN_ID = Number(process.env.POLYMARKET_CHAIN_ID || 137);
 const LIVE_STATE_URL = process.env.LIVE_EXIT_LIVE_STATE_URL
   || "https://osobnizkusenosti.cz/trading/api.php?action=state&target=live";
@@ -29,6 +30,7 @@ const ALLOW_PARTIAL = enabled(process.env.LIVE_EXIT_ALLOW_PARTIAL);
 const FUNDER_ADDRESS = process.env.POLYMARKET_FUNDER_ADDRESS || process.env.POLYMARKET_ADDRESS || "";
 const SIGNATURE_TYPE = Number(process.env.POLYMARKET_SIGNATURE_TYPE || 3);
 const SYNC_COMMAND = String(process.env.LIVE_EXIT_POST_FILL_SYNC_COMMAND || "").trim();
+const STOP_LOSS_REVERSAL_STAKE_USDC = 5;
 
 function enabled(value) {
   return ["1", "true", "yes", "on"].includes(String(value || "").trim().toLowerCase());
@@ -171,6 +173,37 @@ function watchlistEntryMap(watchlist = {}) {
     .map((entry) => [String(entry.tokenId), entry]));
 }
 
+export function bestAsk(book = {}) {
+  const asks = Array.isArray(book?.asks) ? book.asks : [];
+  const prices = asks.map((row) => number(row?.price ?? row?.p)).filter((price) => price != null && price > 0);
+  return prices.length ? Math.min(...prices) : null;
+}
+
+function parseJsonArray(value) {
+  if (Array.isArray(value)) return value;
+  if (typeof value !== "string" || !value.trim()) return [];
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+export function oppositeBinaryToken(market = {}, tokenId = "") {
+  const tokens = parseJsonArray(market.clobTokenIds).map((value) => String(value));
+  const outcomes = parseJsonArray(market.outcomes).map((value) => String(value));
+  const index = tokens.indexOf(String(tokenId));
+  if (tokens.length !== 2 || outcomes.length !== 2 || index < 0) {
+    return { eligible: false, reason: "position is not in a two-outcome market" };
+  }
+  const oppositeIndex = index === 0 ? 1 : 0;
+  if (!tokens[oppositeIndex] || tokens[oppositeIndex] === String(tokenId)) {
+    return { eligible: false, reason: "market has no distinct opposite token" };
+  }
+  return { eligible: true, tokenId: tokens[oppositeIndex], outcome: outcomes[oppositeIndex] || "Opposite outcome" };
+}
+
 function remotePolicyMap(payload = {}) {
   const rows = Array.isArray(payload?.policies) ? payload.policies : [];
   return new Map(rows
@@ -200,6 +233,8 @@ function watchPlan(position, entry = null) {
     outcome: entry?.outcome || position.outcome || "",
     stopPrice,
     triggerPrice: round(Math.min(0.999999, stopPrice + STOP_PRETRIGGER_BUFFER), 6),
+    reverseOnStopLoss: entry?.reverseOnStopLoss === true,
+    reverseStakeUsdc: STOP_LOSS_REVERSAL_STAKE_USDC,
     source: entry?.source || (configuredStop != null ? "watchlist" : "equal-risk-derived"),
   };
 }
@@ -239,6 +274,39 @@ async function submitProtectedExit(plan) {
   let response = await client.postOrder(signed, OrderType.FOK, false);
   if (!exitFilled(response) && ALLOW_PARTIAL) response = await client.postOrder(signed, OrderType.FAK, false);
   return response;
+}
+
+async function marketForToken(tokenId) {
+  const url = new URL(`${GAMMA_API}/markets`);
+  url.searchParams.append("clob_token_ids", String(tokenId));
+  url.searchParams.set("closed", "false");
+  const markets = await fetchJson(url, `Gamma market for token ${tokenId}`);
+  return Array.isArray(markets) ? markets[0] || null : null;
+}
+
+async function submitStopLossReversal(plan) {
+  const market = await marketForToken(plan.tokenId);
+  if (!market || market.closed || market.acceptingOrders === false) {
+    return { success: false, reversal: null, error: "opposite market is no longer accepting orders" };
+  }
+  const opposite = oppositeBinaryToken(market, plan.tokenId);
+  if (!opposite.eligible) return { success: false, reversal: null, error: opposite.reason };
+  const book = await fetchJson(`${CLOB_HOST}/book?token_id=${encodeURIComponent(opposite.tokenId)}`, `CLOB opposite book ${opposite.tokenId}`);
+  const price = bestAsk(book);
+  if (!(price > 0) || price >= 1) {
+    return { success: false, reversal: { ...opposite }, error: "opposite outcome has no executable ask" };
+  }
+  // The quoted stake is principal. Fees remain exchange fees on top, exactly like the
+  // normal taker entry path; rounding down avoids sending a quote value above $5.
+  const shares = Math.floor((STOP_LOSS_REVERSAL_STAKE_USDC / price) * 10000) / 10000;
+  if (!(shares > 0)) return { success: false, reversal: { ...opposite, price }, error: "opposite order size is below the exchange minimum" };
+  const { client, Side, OrderType } = await authenticatedClient();
+  const signed = await client.createOrder({ tokenID: opposite.tokenId, price, size: shares, side: Side.BUY }, {});
+  const response = await client.postOrder(signed, OrderType.FOK, false);
+  return {
+    ...response,
+    reversal: { ...opposite, price: round(price, 6), shares: round(shares, 4), stakeUsdc: STOP_LOSS_REVERSAL_STAKE_USDC },
+  };
 }
 
 async function notifyAccountSync() {
@@ -302,7 +370,7 @@ async function checkOnce(context) {
   context.state.protectAll = PROTECT_ALL;
   context.state.policyUrl = LIVE_EXIT_POLICY_URL;
   context.state.policyError = context.policyError || null;
-  context.state.watchedPositions = plans.map((plan) => ({ tokenId: plan.tokenId, question: plan.question, outcome: plan.outcome, stopPrice: plan.stopPrice, triggerPrice: plan.triggerPrice, riskTargetUsdc: plan.riskTargetUsdc, source: plan.source }));
+  context.state.watchedPositions = plans.map((plan) => ({ tokenId: plan.tokenId, question: plan.question, outcome: plan.outcome, stopPrice: plan.stopPrice, triggerPrice: plan.triggerPrice, riskTargetUsdc: plan.riskTargetUsdc, reverseOnStopLoss: plan.reverseOnStopLoss, source: plan.source }));
 
   for (const plan of plans) {
     const pending = context.state.exits?.[plan.tokenId];
@@ -334,6 +402,30 @@ async function checkOnce(context) {
     const type = accepted ? "EXIT_SUBMITTED" : "EXIT_REJECTED";
     recordEvent(context.state, { ...event, type, response: { success: Boolean(response?.success), status: response?.status || null, error: response?.errorMsg || response?.error || null, orderId: response?.orderID || null } });
     if (accepted) {
+      // A reverse is a second, independent FOK order. It is intentionally attempted
+      // only after the CLOB said the complete protective SELL matched; a rejected
+      // reverse never changes the fact that the original position was already exited.
+      if (plan.reverseOnStopLoss) {
+        let reversal;
+        try {
+          reversal = await submitStopLossReversal(plan);
+        } catch (error) {
+          reversal = { success: false, error: error?.message || String(error) };
+        }
+        const reversalAccepted = exitFilled(reversal);
+        recordEvent(context.state, {
+          ...event,
+          type: reversalAccepted ? "STOP_REVERSAL_SUBMITTED" : "STOP_REVERSAL_REJECTED",
+          reverseStakeUsdc: STOP_LOSS_REVERSAL_STAKE_USDC,
+          reversal: reversal?.reversal || null,
+          response: {
+            success: Boolean(reversal?.success),
+            status: reversal?.status || null,
+            error: reversal?.errorMsg || reversal?.error || null,
+            orderId: reversal?.orderID || null,
+          },
+        });
+      }
       context.liveStateFetchedAt = 0;
       const sync = await notifyAccountSync();
       if (sync.attempted && !sync.ok) recordEvent(context.state, { at: new Date().toISOString(), type: "POST_EXIT_SYNC_ERROR", tokenId: plan.tokenId, error: sync.error });

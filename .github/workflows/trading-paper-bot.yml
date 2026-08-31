@@ -298,6 +298,7 @@ jobs:
               multiplier = stop_loss_multiplier(row, strategy)
               emit(f"{prefix}_STOP_LOSS_RISK_MULTIPLIER", multiplier)
               emit(f"{prefix}_STOP_LOSS_ENABLED", str(multiplier > 0).lower())
+              emit(f"{prefix}_REVERSE_ON_STOP_LOSS", str(bool(row.get("reverseOnStopLoss", False))).lower())
               # A resting limit buy at the current best bid instead of a market buy at
               # the ask: cheaper on fill, but only fills if the market comes to meet it,
               # and is discarded unfilled once the event ends. Default off, unchanged

@@ -462,6 +462,11 @@
           <input type="number" min="0" max="300" step="10" value="0" data-stop-loss-risk-multiplier>
           <strong data-stop-loss-risk-multiplier-label>Off</strong>
         </label>
+        <label class="parameter-control order-mode-toggle" title="When a stop loss is filled, sell the protected binary position and immediately buy its opposite outcome with a fixed 5 USDC market order. The opposite order is never sent until the exit is confirmed filled.">
+          <span>Reverse after stop loss</span>
+          <input type="checkbox" data-stop-loss-reverse-on-trigger>
+          <strong data-stop-loss-reverse-on-trigger-label>Off</strong>
+        </label>
         <label class="parameter-control" data-fixed-entry-row>
           <span>Order price (5050)</span>
           <input type="number" min="1" max="99" step="1" value="50" data-fixed-entry-price>

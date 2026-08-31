@@ -1988,6 +1988,7 @@ function default_portfolio_config(): array
                 // this on is what makes Equal's mechanism apply here too.
                 'stopLossEnabled' => false,
                 'stopLossRiskMultiplier' => 0.0,
+                'reverseOnStopLoss' => false,
                 'excludedCandidateTokenIds' => [],
                 'includeOnlyMarketTags' => [],
                 'excludedMarketTags' => [],
@@ -2010,6 +2011,7 @@ function default_portfolio_config(): array
                 'autoRotatePositions' => true,
                 'stopLossEnabled' => false,
                 'stopLossRiskMultiplier' => 0.0,
+                'reverseOnStopLoss' => false,
                 'excludedCandidateTokenIds' => [],
                 'includeOnlyMarketTags' => [],
                 'excludedMarketTags' => [],
@@ -2032,6 +2034,7 @@ function default_portfolio_config(): array
                 'autoRotatePositions' => true,
                 'stopLossEnabled' => false,
                 'stopLossRiskMultiplier' => 0.0,
+                'reverseOnStopLoss' => false,
                 'excludedCandidateTokenIds' => [],
                 'includeOnlyMarketTags' => [],
                 'excludedMarketTags' => [],
@@ -2063,6 +2066,7 @@ function default_portfolio_config(): array
                 // paper portfolio may turn on, but Equal is where it ships enabled.
                 'stopLossEnabled' => true,
                 'stopLossRiskMultiplier' => 1.5,
+                'reverseOnStopLoss' => false,
                 'excludedCandidateTokenIds' => [],
                 'includeOnlyMarketTags' => [],
                 'excludedMarketTags' => [],
@@ -2087,6 +2091,7 @@ function default_portfolio_config(): array
             'autoRotatePositions' => true,
             'stopLossEnabled' => false,
             'stopLossRiskMultiplier' => 0.0,
+            'reverseOnStopLoss' => false,
             'excludedCandidateTokenIds' => [],
             'includeOnlyMarketTags' => [],
             'excludedMarketTags' => [],
@@ -2119,6 +2124,7 @@ function default_portfolio_config(): array
             'autoRotatePositions' => false,
             'stopLossEnabled' => false,
             'stopLossRiskMultiplier' => 0.0,
+            'reverseOnStopLoss' => false,
             // Sports and esports are where the short-dated, high-probability fixtures
             // this strategy rests bids against actually live. Empty means every tag.
             'allowedMarketTags' => ['sports', 'esports'],
@@ -2150,7 +2156,7 @@ function portfolio_config_history_fields(): array
         'displayName', 'initialUsdc', 'minProbability', 'maxProbability', 'stakeUsdc',
         'maxResolutionDays', 'selectionOrder', 'marketType', 'excludeOverUnderMarkets', 'probabilitySource',
         'minLiquidityUsdc', 'minNetYield', 'executionTrigger', 'executionCronMinutes',
-        'useLimitOrders', 'autoRotatePositions', 'stopLossRiskMultiplier',
+        'useLimitOrders', 'autoRotatePositions', 'stopLossRiskMultiplier', 'reverseOnStopLoss',
         'includeOnlyMarketTags', 'excludedMarketTags', 'automationEnabled', 'archived',
     ];
 }
@@ -2645,6 +2651,9 @@ function normalize_strategy_config(array $input, array $defaults): array
         // observes the configured floor.
         'stopLossEnabled' => $stopLossRiskMultiplier > 0,
         'stopLossRiskMultiplier' => $stopLossRiskMultiplier,
+        // This is kept separately from the stop multiplier. It remains a dormant
+        // preference while the stop is off, so enabling the stop later is explicit.
+        'reverseOnStopLoss' => (bool) ($input['reverseOnStopLoss'] ?? $defaults['reverseOnStopLoss'] ?? false),
     ];
 }
 
@@ -3806,6 +3815,7 @@ function live_stop_loss_policy_config(array $config, string $portfolioId): ?arra
     return [
         'portfolioId' => $portfolioId,
         'stopLossRiskMultiplier' => $multiplier,
+        'reverseOnStopLoss' => (bool) ($row['reverseOnStopLoss'] ?? false),
         'enabled' => true,
     ];
 }
