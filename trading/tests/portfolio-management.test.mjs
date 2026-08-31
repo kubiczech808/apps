@@ -466,9 +466,11 @@ test("storage migration: database diagnostics stay private and require the trigg
   assert.match(API, /if \(\$action === 'storage-diagnostics'\)[\s\S]*?require_trading_trigger_key\(\)/,
     "the diagnostics endpoint is trigger-key protected");
   const deploy = readFileSync(new URL("../../.github/workflows/trading-deploy.yml", import.meta.url), "utf8");
-  for (const secret of ["TRADING_DB_HOST", "TRADING_DB_NAME", "TRADING_DB_USER", "TRADING_DB_PASSWORD"]) {
+  for (const secret of ["POLYTRADING_DB_NAME", "POLYTRADING_DB_USER", "POLYTRADING_DB_PASSWORD"]) {
     assert.match(deploy, new RegExp(`secrets\\.${secret}`), `${secret} reaches only the generated server config`);
   }
+  assert.match(deploy, /TRADING_DB_HOST: localhost/,
+    "the application and MariaDB share the hosting, so the host is not a secret");
 });
 
 test("dashboard: a created portfolio's settings are its own", () => {
