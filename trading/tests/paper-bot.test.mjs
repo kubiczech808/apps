@@ -3596,27 +3596,47 @@ test("candidates: a finished event stops being listed, an in-play one does not",
   const app = await readFile(new URL("../assets/app.js", import.meta.url), "utf8");
   const bot2 = await readFile(new URL("../tools/paper-trading-bot.mjs", import.meta.url), "utf8");
 
-  // Reported: a Conservative run could only SKIP while several candidates were listed,
-  // and their evaluation already said "event end date is in the past". Evaluation knew;
-  // the list filter did not, so finished events kept occupying the shortlist.
+  // Originally reported: a Conservative run could only SKIP while several candidates were
+  // listed, and their evaluation already said "event end date is in the past". The fix was
+  // later replaced end to end ("Use market status instead of resolution dates"): Gamma's end
+  // date is a scheduling estimate, not a settlement signal, so nothing here may reject a
+  // candidate on a date field any more -- only on what Polymarket itself reports about the
+  // market's live status. A neither-date-based check needs no exemption for a sports fixture
+  // dated by kickoff: past kickoff is in play, not finished, and an active/accepting-orders
+  // market is never excluded regardless of what its date fields say.
   for (const [label, source] of [["app", app], ["bot", bot2]]) {
-    assert.match(source, /reasons\.push\("event end date is in the past"\);/,
-      `${label} must drop a candidate whose resolution window has passed`);
-    // Not for a sports row dated by kickoff: past kickoff means in play, not finished,
-    // and those are still tradable. Hiding them would be worse than listing a stale one.
-    assert.match(source, /String\(item\.endDateSource \|\| ""\) !== "sports-event-start"/,
-      `${label} must not hide an in-play fixture`);
+    assert.doesNotMatch(source, /reasons\.push\("event end date is in the past"\)/,
+      `${label} must not reject a candidate on a date field`);
+    assert.doesNotMatch(source, /rejectReasons\.unshift\("event end date is in the past/,
+      `${label} must not retire a candidate on a date field`);
   }
 
-  // The evaluator already retires such rows in the stored state, which is what makes the
-  // list agree with it rather than merely hiding the row on screen.
-  assert.match(bot2, /rejectReasons\.unshift\("event end date is in the past; awaiting resolution sync"\)/);
-  assert.match(bot2, /status: "RESOLVED",\s*\n\s*thesisType: "RESOLVED",/);
+  // bot.mjs: the shortlist filter and its human-readable reason both key off the market's
+  // reported status, not a computed day count.
+  assert.match(bot2, /item\?\.marketClosed === true\s*\n\s*\|\| item\?\.marketActive === false\s*\n\s*\|\| item\?\.acceptingOrders === false\) return false;/,
+    "strategyEligibleCandidates must drop a candidate whose market has actually stopped trading");
+  assert.match(bot2, /if \(item\?\.marketClosed === true \|\| item\?\.marketActive === false \|\| item\?\.acceptingOrders === false\) \{\s*\n\s*reasons\.push\("market is closed or no longer accepting orders"\);/,
+    "portfolioFilterResult must report the same live-status reason");
+  // The evaluator that actually retires a row in the stored state agrees: closed/inactive/
+  // not-accepting-orders is what "RESOLVED" now means, sourced from Gamma's own fields.
+  assert.match(bot2, /const marketNoLongerTrades = market\.closed \|\| market\.active === false \|\| market\.acceptingOrders === false;/);
 
-  // Ordering: the past-date check must precede the max-horizon check, or a finished event
-  // would be reported as merely exceeding the horizon.
-  const filter = bot2.slice(bot2.indexOf('reasons.push("event end date is in the past");'));
-  assert.match(filter.slice(0, 400), /else if \(days > maxResolutionDays\)/);
+  // app.js: the list-hiding check reads the same kind of live status, not endDate.
+  assert.match(app, /if \(item\?\.marketClosed === true \|\| item\?\.closed === true \|\| item\?\.resolved === true \|\| item\?\.isResolved === true\) return true;/);
+  assert.match(app, /if \(item\?\.acceptingOrders === false\) return true;/);
+  assert.match(app, /reasons\.push\("market is closed, resolved, or no longer accepting orders; excluded from new trade selection"\);/);
+
+  // Behaviourally: a fixture whose scheduled date has passed but whose market is still open
+  // and accepting orders must not read as ended -- in-play, not finished.
+  const evaluationEnded = new Function(`
+    ${functionSource(app, "evaluationResolvedByMarket")}
+    ${functionSource(app, "binaryOutcomeQuotesAreBothZero")}
+    return evaluationResolvedByMarket(arguments[0]);
+  `);
+  assert.equal(evaluationEnded({ status: "ELIGIBLE", marketClosed: false, acceptingOrders: true, resolvedAt: null }), false,
+    "a past scheduled date alone, with no closed/resolved/not-accepting-orders signal, must not end a candidate");
+  assert.equal(evaluationEnded({ status: "ELIGIBLE", marketClosed: true, acceptingOrders: true }), true);
+  assert.equal(evaluationEnded({ status: "ELIGIBLE", marketClosed: false, acceptingOrders: false }), true);
 });
 
 test("no model: the bot consults no AI provider and never waits on a memo", async () => {
@@ -4317,10 +4337,16 @@ test("5050: the candidate list is judged by its own rule, not market-price econo
   assert.match(reasons({ bestAsk: 0.5, volumeUsdc: 60000, daysToResolution: 0.4 })[0], /at or below the 50\.0% entry price/);
   assert.match(reasons({ bestAsk: 0.3, volumeUsdc: 60000, daysToResolution: 0.4 })[0], /at or below/);
 
-  // The portfolio's own volume floor and horizon still apply.
+  // The portfolio's own volume floor still applies.
   assert.match(reasons({ bestAsk: 0.95, volumeUsdc: 50, daysToResolution: 0.4 })[0], /volume/);
-  assert.match(reasons({ bestAsk: 0.95, volumeUsdc: 60000, daysToResolution: -1 })[0], /end date is in the past/);
-  assert.match(reasons({ bestAsk: 0.95, volumeUsdc: 60000, daysToResolution: 45 })[0], /beyond 30 days/);
+  // A later change replaced every date-derived rejection with the market's own live status
+  // ("Use market status instead of resolution dates"), so a stale or far-out daysToResolution
+  // no longer rejects anything here on its own -- there is no maxResolutionDays concept left
+  // to check, in this branch or in strategyEligibleCandidates. A closed or no-longer-trading
+  // market is still excluded, just by marketClosed/marketActive/acceptingOrders elsewhere in
+  // the pipeline (portfolioEvaluationStatus, resolvedEvaluationFromMarket), not by this branch.
+  assert.deepEqual(reasons({ bestAsk: 0.95, volumeUsdc: 60000, daysToResolution: -1 }), []);
+  assert.deepEqual(reasons({ bestAsk: 0.95, volumeUsdc: 60000, daysToResolution: 45 }), []);
 
   // It must return before the market-price economics, or those would re-reject it.
   const after = app.slice(app.indexOf(branch) + branch.length);
@@ -8398,7 +8424,9 @@ test("limit orders: resting capital is not counted against a fill, only position
 
 test("limit orders: the refresh hands the portfolio to the funding check", () => {
   const source = readFileSync(new URL("../tools/paper-trading-bot.mjs", import.meta.url), "utf8");
-  assert.match(source, /refreshTrades\(portfolioState\.trades, portfolioState\)/,
+  // Reversal support later added a third strategy argument, so this matches the shared
+  // prefix rather than the exact call, which stop-loss reversal is free to extend further.
+  assert.match(source, /refreshTrades\(\s*portfolioState\.trades,\s*portfolioState,/,
     "the funding check needs the portfolio the trades belong to");
   assert.match(source, /const funding = fundLimitOrderFills\(trades, refreshed, portfolioState\);/,
     "and it runs after the fan-out, where every fill on the pass is visible at once");
@@ -8515,7 +8543,9 @@ test("limit orders: every resting order is refreshed on every pass, execution pa
   // portfolio's own execution cadence. An execution pass skipping it would mean a
   // portfolio on the hourly cron only ever noticing fills once an hour.
   const run = functionSource(source, "run");
-  assert.match(run, /portfolioState\.trades = await refreshTrades\(portfolioState\.trades, portfolioState\)/);
+  // Reversal support later added a third strategy argument, so this matches the shared
+  // prefix rather than the exact call, which stop-loss reversal is free to extend further.
+  assert.match(run, /portfolioState\.trades = await refreshTrades\(\s*portfolioState\.trades,\s*portfolioState,/);
   assert.ok(!/if \(!EXECUTION_PASS\)[\s\S]{0,120}refreshTrades/.test(run),
     "marking trades must not be behind an execution-pass guard");
   assert.ok(bot.OPEN_STATUSES
@@ -8548,6 +8578,127 @@ test("limit orders: the first history read reaches back to when the order was pl
   // And the marker only advances when the read actually happened, so a failed read leaves
   // the catch-up window open instead of closing it silently.
   assert.match(marked, /historyCheckedAt: lowestTradedPrice != null \|\| !needsHistory \? checkedAt : trade\.historyCheckedAt/);
+});
+
+// -- Unfilled limit orders: grading a missed bid must not freeze early, and must not stall
+// forever once it does not resolve on the first look --------------------------------------
+//
+// Reported: rows in the "Unfilled limit orders" tab sit in "awaiting" and never move.
+// Measured on production: hundreds of expired resting orders across the paper portfolios
+// carried no finalOutcomePrice at all, some more than a week old. limitOrderEventEnded()
+// fires on "no longer accepting orders", which is not the same moment Gamma publishes the
+// settlement price -- and once a trade becomes LIMIT_ORDER_EXPIRED it leaves OPEN_STATUSES
+// for good, so nothing revisited it again.
+test("unfilled limit orders: only a market.closed price counts as final at the moment of expiry", () => {
+  const source = readFileSync(new URL("../tools/paper-trading-bot.mjs", import.meta.url), "utf8");
+  const marked = functionSource(source, "markWaitingLimitOrder");
+  assert.match(marked, /const finalOutcomePrice = apiBoolean\(market\.closed\) && Number\.isFinite\(resolvedPrice\) \? resolvedPrice : null;/,
+    "a pre-settlement quote must not be captured as the permanent grade");
+  assert.match(marked, /outcomeLastCheckedAt: checkedAt,/,
+    "expiry has to stamp when it was last looked at, so the backfill pass can prioritise older ones first");
+});
+
+test("unfilled limit orders: unfilledLimitOrderNeedsOutcome selects exactly the stuck rows", () => {
+  const terminal = { status: "LIMIT_ORDER_EXPIRED", slug: "s", finalOutcomePrice: 0.999 };
+  const terminalLow = { status: "LIMIT_ORDER_EXPIRED", slug: "s", finalOutcomePrice: 0.001 };
+  const stuckNull = { status: "LIMIT_ORDER_EXPIRED", slug: "s", finalOutcomePrice: null };
+  const stuckMid = { status: "LIMIT_ORDER_EXPIRED", slug: "s", finalOutcomePrice: 0.5 };
+  const cancelledForCapital = { status: "LIMIT_ORDER_EXPIRED", slug: "s", cancelledForCapital: true };
+  const stillOpen = { status: "OPEN", slug: "s", finalOutcomePrice: null };
+  const noSlug = { status: "LIMIT_ORDER_EXPIRED", finalOutcomePrice: null };
+
+  assert.equal(bot.unfilledLimitOrderNeedsOutcome(terminal), false);
+  assert.equal(bot.unfilledLimitOrderNeedsOutcome(terminalLow), false);
+  assert.equal(bot.unfilledLimitOrderNeedsOutcome(stuckNull), true);
+  assert.equal(bot.unfilledLimitOrderNeedsOutcome(stuckMid), true);
+  assert.equal(bot.unfilledLimitOrderNeedsOutcome(cancelledForCapital), true,
+    "a capital-cancelled order has never had a price captured and deserves the same backfill");
+  assert.equal(bot.unfilledLimitOrderNeedsOutcome(stillOpen), false,
+    "the backfill is maintenance on closed rows, not a second refresh path for open ones");
+  assert.equal(bot.unfilledLimitOrderNeedsOutcome(noSlug), false,
+    "there is no market to look up without a slug");
+});
+
+test("unfilled limit orders: refreshUnfilledLimitOrderOutcomes grades a settled market and leaves an unsettled one to retry", async () => {
+  const { bot: scoped, restore } = await scopedBot("unfilled-outcome-refresh");
+  try {
+    const closedMarket = {
+      closed: true,
+      outcomes: '["Yes","No"]',
+      outcomePrices: '["1","0"]',
+      clobTokenIds: '["tok-yes","tok-no"]',
+    };
+    const stillOpenMarket = { closed: false, outcomes: '["Yes","No"]', outcomePrices: '["0.62","0.38"]', clobTokenIds: '["tok-a","tok-b"]' };
+    const stub = stubFetch((url) => {
+      if (url.includes("slug=settled-market")) return [closedMarket];
+      if (url.includes("slug=pending-market")) return [stillOpenMarket];
+      return null;
+    });
+    try {
+      const trades = [
+        { id: "t1", status: "LIMIT_ORDER_EXPIRED", slug: "settled-market", tokenId: "tok-yes", outcome: "Yes", finalOutcomePrice: null, closedAt: "2026-08-01T00:00:00Z" },
+        { id: "t2", status: "LIMIT_ORDER_EXPIRED", slug: "pending-market", tokenId: "tok-a", outcome: "Yes", finalOutcomePrice: null, closedAt: "2026-08-02T00:00:00Z" },
+        { id: "t3", status: "OPEN", slug: "settled-market", tokenId: "tok-yes", outcome: "Yes", finalOutcomePrice: null },
+      ];
+      const refreshed = await scoped.refreshUnfilledLimitOrderOutcomes(trades);
+      const [settled, pending, untouched] = refreshed;
+
+      assert.equal(settled.finalOutcomePrice, 1, "a closed market's selected-outcome price is captured");
+      assert.ok(settled.outcomeLastCheckedAt, "checking is recorded even when it resolves");
+
+      assert.equal(pending.finalOutcomePrice, null, "a market that has not closed yet must stay unfinished");
+      assert.ok(pending.outcomeLastCheckedAt, "still stamped, so the next pass picks the next-oldest instead of this one again");
+
+      assert.equal(untouched.status, "OPEN");
+      assert.equal(untouched.outcomeLastCheckedAt, undefined, "an open trade is not this pass's concern at all");
+    } finally {
+      stub.restore();
+    }
+  } finally {
+    restore();
+  }
+});
+
+test("unfilled limit orders: a Gamma failure retries later instead of erasing the order", async () => {
+  const { bot: scoped, restore } = await scopedBot("unfilled-outcome-refresh-failure");
+  try {
+    const original = globalThis.fetch;
+    globalThis.fetch = async () => { throw new Error("network unreachable"); };
+    try {
+      const trades = [{ id: "t1", status: "LIMIT_ORDER_EXPIRED", slug: "flaky-market", tokenId: "tok-yes", outcome: "Yes", finalOutcomePrice: null }];
+      const refreshed = await scoped.refreshUnfilledLimitOrderOutcomes(trades);
+      assert.deepEqual(refreshed[0], trades[0], "a failed lookup must leave the order exactly as it was for the next pass to retry");
+    } finally {
+      globalThis.fetch = original;
+    }
+  } finally {
+    restore();
+  }
+});
+
+test("unfilled limit orders: the backfill is bounded and works oldest-checked first", async () => {
+  const { bot: scoped, restore } = await scopedBot("unfilled-outcome-refresh-bound", {
+    PAPER_UNFILLED_LIMIT_OUTCOME_REFRESH_LIMIT: 1,
+  });
+  try {
+    const closedMarket = { closed: true, outcomes: '["Yes","No"]', outcomePrices: '["1","0"]', clobTokenIds: '["tok-yes","tok-no"]' };
+    const stub = stubFetch(() => [closedMarket]);
+    try {
+      const trades = [
+        { id: "newer", status: "LIMIT_ORDER_EXPIRED", slug: "m", tokenId: "tok-yes", outcome: "Yes", finalOutcomePrice: null, outcomeLastCheckedAt: "2026-08-05T00:00:00Z" },
+        { id: "older", status: "LIMIT_ORDER_EXPIRED", slug: "m", tokenId: "tok-yes", outcome: "Yes", finalOutcomePrice: null, outcomeLastCheckedAt: "2026-08-01T00:00:00Z" },
+      ];
+      const refreshed = await scoped.refreshUnfilledLimitOrderOutcomes(trades);
+      const [newer, older] = refreshed;
+      assert.equal(older.finalOutcomePrice, 1, "the least-recently-checked row is the one a bounded pass picks");
+      assert.equal(newer.finalOutcomePrice, null, "a batch of one must not also touch the more recently checked row");
+      assert.equal(newer.outcomeLastCheckedAt, "2026-08-05T00:00:00Z", "left untouched, not merely unresolved");
+    } finally {
+      stub.restore();
+    }
+  } finally {
+    restore();
+  }
 });
 
 // -- Correlation blocking: a spread is not a concentration -------------------------------

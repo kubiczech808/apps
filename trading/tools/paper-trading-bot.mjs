@@ -432,6 +432,10 @@ const EVALUATION_MARKET_SLUG = String(process.env.PAPER_EVALUATION_MARKET_SLUG |
 const EXECUTION_TRIGGER = String(process.env.PAPER_EXECUTION_TRIGGER || "manual").trim().toLowerCase();
 const CONTINUOUS_EVALUATION = envBool("PAPER_CONTINUOUS_EVALUATION", false);
 const EVALUATION_RESOLUTION_SYNC_LIMIT = envNumber("PAPER_EVALUATION_RESOLUTION_SYNC_LIMIT", 120);
+// Bounded the same way as the live side's equivalent (refreshUnfilledLimitOrderOutcomes in
+// live-account-sync.mjs): a handful of Gamma lookups per run, oldest-unchecked first,
+// rather than a sweep across every portfolio's whole unfilled-order history every pass.
+const UNFILLED_LIMIT_OUTCOME_REFRESH_LIMIT = envNumber("PAPER_UNFILLED_LIMIT_OUTCOME_REFRESH_LIMIT", 40);
 const SCRAPED_SIMULATION_RESOLUTION_SYNC_LIMIT = envNumber("PAPER_SCRAPED_SIMULATION_RESOLUTION_SYNC_LIMIT", 300);
 const SCRAPED_SIMULATION_STAKE_USDC = envNumber("PAPER_SCRAPED_SIMULATION_STAKE_USDC", 5);
 // Validated by shape rather than against a fixed list: the user can create portfolios,
@@ -4211,7 +4215,14 @@ async function markWaitingLimitOrder(trade) {
   }
 
   if (decision.outcome === "EXPIRED") {
-    const finalOutcomePrice = outcomeIndex >= 0 ? Number(parseOutcomePrices(market)[outcomeIndex]) : null;
+    // eventEnded fires on "no longer accepting orders", which is not the same moment as
+    // Gamma publishing the settlement price -- market.closed is the only field that means
+    // that. Capturing whatever parseOutcomePrices() returns before then would freeze a
+    // pre-settlement quote as the permanent grade: this trade is about to leave
+    // OPEN_STATUSES for good, and refreshUnfilledLimitOrderOutcomes() below is what tries
+    // again later, but only if this stays null until it is genuinely known.
+    const resolvedPrice = outcomeIndex >= 0 ? Number(parseOutcomePrices(market)[outcomeIndex]) : null;
+    const finalOutcomePrice = apiBoolean(market.closed) && Number.isFinite(resolvedPrice) ? resolvedPrice : null;
     return {
       ...base,
       status: "LIMIT_ORDER_EXPIRED",
@@ -4226,6 +4237,7 @@ async function markWaitingLimitOrder(trade) {
       // Nothing was bought, but retain the eventual selected-outcome price so the
       // dedicated unfilled-order history can say whether the missed bid would have won.
       finalOutcomePrice: Number.isFinite(finalOutcomePrice) ? Number(finalOutcomePrice.toFixed(4)) : null,
+      outcomeLastCheckedAt: checkedAt,
       statusNote: `Resting limit buy at ${limitPrice.toFixed(4)} never filled before the event ended`
         + ` (best ask stayed at ${askNote}); discarded with no fill.`,
     };
@@ -4726,6 +4738,60 @@ async function refreshTrades(trades, portfolioState = null, strategy = null) {
     if (result.trade) nextTrades.push(result.trade);
   }
   return nextTrades;
+}
+
+// A resting order's event can end well before Gamma publishes the market's final 0/1
+// settlement, and once markWaitingLimitOrder() marks it LIMIT_ORDER_EXPIRED the trade
+// leaves OPEN_STATUSES for good -- markOpenTrade() returns any other trade unchanged, so
+// nothing revisits it again on its own. Measured on production: hundreds of expired
+// resting orders across the paper portfolios sat with no finalOutcomePrice at all, some
+// more than a week old, permanently reading as neither a win nor a loss in the "Unfilled
+// limit orders" tab. Mirrors refreshUnfilledLimitOrderOutcomes() in live-account-sync.mjs,
+// which solved the identical gap for live orders: revisit the oldest-unchecked ones in a
+// small bounded batch, and only record a price once the market is genuinely market.closed.
+function unfilledLimitOrderNeedsOutcome(trade = {}) {
+  if (String(trade?.status || "") !== "LIMIT_ORDER_EXPIRED" || !trade?.slug) return false;
+  // Number(null) is 0, not NaN -- a missing price must not be read as a terminal "would
+  // lose" before it ever reaches Number().
+  const raw = trade?.finalOutcomePrice;
+  if (raw == null || raw === "") return true;
+  const price = Number(raw);
+  return !(Number.isFinite(price) && (price >= 0.995 || price <= 0.005));
+}
+
+async function refreshUnfilledLimitOrderOutcomes(trades = []) {
+  const pending = trades
+    .map((trade, index) => ({ trade, index }))
+    .filter(({ trade }) => unfilledLimitOrderNeedsOutcome(trade))
+    .sort((a, b) => (Date.parse(a.trade.outcomeLastCheckedAt || a.trade.closedAt || a.trade.resolvedAt || "") || 0)
+      - (Date.parse(b.trade.outcomeLastCheckedAt || b.trade.closedAt || b.trade.resolvedAt || "") || 0))
+    .slice(0, UNFILLED_LIMIT_OUTCOME_REFRESH_LIMIT);
+  if (!pending.length) return trades;
+
+  const result = [...trades];
+  await Promise.all(pending.map(async ({ trade, index }) => {
+    const checkedAt = nowIso();
+    let market = null;
+    try {
+      market = await fetchMarketBySlug(trade.slug);
+    } catch {
+      // The next bounded pass retries this one. A temporary Gamma gap must not erase the
+      // order or turn an unknown result into a loss.
+      return;
+    }
+    if (!market || !apiBoolean(market.closed)) {
+      result[index] = { ...trade, outcomeLastCheckedAt: checkedAt };
+      return;
+    }
+    const outcomeIndex = outcomeIndexForTrade(market, trade);
+    const resolvedPrice = outcomeIndex >= 0 ? Number(parseOutcomePrices(market)[outcomeIndex]) : null;
+    result[index] = {
+      ...trade,
+      finalOutcomePrice: Number.isFinite(resolvedPrice) ? Number(resolvedPrice.toFixed(4)) : (trade.finalOutcomePrice ?? null),
+      outcomeLastCheckedAt: checkedAt,
+    };
+  }));
+  return result;
 }
 
 function probabilityBucket(probability) {
@@ -11461,6 +11527,9 @@ async function run() {
         portfolioState,
         PAPER_STRATEGIES[portfolioState.id] || null,
       );
+      // A closed trade, so it runs after refreshTrades rather than inside it -- this is
+      // maintenance on rows refreshTrades no longer touches, not a revaluation of open ones.
+      portfolioState.trades = await refreshUnfilledLimitOrderOutcomes(portfolioState.trades);
       if (!EXECUTION_PASS) {
         portfolioState.trades = await reviewClosedTradesWithAi(portfolioState.trades, state);
       }
@@ -11781,6 +11850,8 @@ export {
   markOpenTrade,
   markWaitingLimitOrder,
   limitOrderEventEnded,
+  refreshUnfilledLimitOrderOutcomes,
+  unfilledLimitOrderNeedsOutcome,
   limitOrderFillDecision,
   openPaperTradeForStrategy,
   paperTradeFromCandidate,
