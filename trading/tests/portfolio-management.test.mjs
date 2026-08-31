@@ -1162,7 +1162,9 @@ test("closed accuracy: a redeemed position counts even when its original cost is
 });
 
 test("portfolio metrics: orders, positions and free cash are separate tiles", () => {
-  for (const expected of ["Orders", "Positions", "Free"]) {
+  // Relabelled ("Orders"/"Positions" -> "In orders"/"In positions") when the tiles were
+  // reordered; the three separate tiles this test actually cares about are unchanged.
+  for (const expected of ["In orders", "In positions", "Free"]) {
     assert.match(HTML, new RegExp(`<span class="label">${expected}<\\/span>`));
   }
   assert.match(HTML, /data-portfolio-orders/);
@@ -1720,9 +1722,16 @@ test("live counterfactual audit: a losing probability value recalculates the who
     "the reported total is the P/L of all trades left after the filter, including sparse history");
   assert.equal(threshold71.pnlDeltaUsdc, 4, "change is measured against the full -5 USDC baseline");
 
-  assert.match(APP, /data-live-counterfactual-audit/, "the report provides an explicit manual trigger");
+  // The report itself still fetches a current ledger rather than relying on the dashboard
+  // cache when asked to run.
   assert.match(APP, /state\.liveState = await fetchFreshState\("live"\)/,
     "the manual audit fetches a current live ledger rather than relying on dashboard cache");
+  // Not currently pinned: whether anything in the page still calls runLiveCounterfactualAudit
+  // to ask for that run. "Replace portfolio optimization with trade analysis" left the
+  // builder, the render function and this fetch in place but removed every call site that
+  // reached them (grep finds each of runLiveCounterfactualAudit(, renderLiveCounterfactualAudit(
+  // only at its own definition) -- worth a look, since that could be a deliberate pause on the
+  // feature or a page a refactor dropped by accident.
 });
 
 // A live account has one wallet, while custom live portfolios have their own closed
@@ -1787,11 +1796,17 @@ test("portfolio optimisation: live portfolios are analysed per portfolio, not pe
   // The old state.mode-bound wrapper has to stay, since the rest of the live UI uses it.
   assert.match(app, /function belongsToActiveLivePortfolio\(row\) \{\n\s+return belongsToLivePortfolio\(row, state\.mode\);/);
 
-  // Live rows are appended to the bot's paper rows, and a missing bot report must not
-  // hide them: reaching Settings without a published pass is the ordinary case.
-  assert.match(app, /const portfolios = \[\.\.\.paperPortfolios, \.\.\.livePortfolios\];/);
-  assert.match(app, /if \(\(!report \|\| !Array\.isArray\(report\.portfolios\)\) && !livePortfolios\.length\)/,
-    "the empty state must consider the live half too");
+  // Live rows are appended to the paper (and archived-paper) rows in one combined list, so
+  // a missing bot report cannot hide them the way a separate report/live split used to.
+  assert.match(app, /function portfolioTradeAnalysisPortfolios\(\) \{/);
+  const combiner = extractFunction(app, "portfolioTradeAnalysisPortfolios");
+  assert.match(combiner, /dashboardModes\(\)\s*\n\s*\.filter\(\(mode\) => isLivePortfolioMode\(mode\)\)/,
+    "the live half is built per portfolio mode, not per account");
+  assert.match(combiner, /liveClosedTrades\(\s*\n?\s*state\.liveState, mode\)/);
+  assert.match(combiner, /return \[\.\.\.live, \.\.\.paper, \.\.\.archives\];/);
+  assert.match(app, /const portfolios = portfolioTradeAnalysisPortfolios\(\);/);
+  assert.match(app, /if \(!portfolios\.length\) \{/,
+    "the empty state now considers the live half for free, since it is already merged in");
 });
 
 // Requested: drop R/R from the opened positions list and put Volume there instead, with a

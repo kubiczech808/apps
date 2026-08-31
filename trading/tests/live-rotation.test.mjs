@@ -2924,6 +2924,10 @@ test("portfolio parameters: both live portfolios state their order price", () =>
     + `${functionSource(app, "normalizeStopLossRiskMultiplier")}\n`
     + `${functionSource(app, "stopLossRiskMultiplier")}\n`
     + `${functionSource(app, "stopLossRiskLabel")}\n`
+    // Stop-loss reversal support later added its own row, gated by these two pure
+    // predicates -- come across for the same reason as the pair above.
+    + `${functionSource(app, "stopLossIsEnabled")}\n`
+    + `${functionSource(app, "stopLossReverseIsEnabled")}\n`
     + `${functionSource(app, "livePortfolioRuleRows")}\nreturn livePortfolioRuleRows;`,
   )(
     { liveState: { portfolio: {} } },
