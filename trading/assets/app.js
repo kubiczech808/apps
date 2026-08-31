@@ -3124,12 +3124,15 @@ function annualizedForPeriod(returnPct, days) {
 }
 
 function tradePotentialGain(trade) {
-  const netGain = Number(trade.netGainIfWinUsdc);
-  if (Number.isFinite(netGain)) return netGain;
+  // Number(null) is 0. Older closed trades often simply do not have this field,
+  // so treating an absent value as a zero-profit win erased all of their wins from
+  // the full-settlement portfolio analysis. Preserve an explicit zero, but derive a
+  // missing value from the recorded shares and real entry cost (including fees).
+  const netGain = numericOrNull(trade.netGainIfWinUsdc);
+  if (netGain != null) return netGain;
   const shares = Number(trade.shares);
-  const stake = Number(trade.stakeUsdc || 0);
-  const fee = Number(trade.takerFeeUsdc || 0);
-  if (Number.isFinite(shares) && shares > 0) return shares - stake - fee;
+  const cost = tradeCostBasis(trade);
+  if (Number.isFinite(shares) && shares > 0 && Number.isFinite(cost) && cost > 0) return shares - cost;
   return null;
 }
 
@@ -12629,7 +12632,7 @@ function renderPortfolioTradeAnalysisTable(title, rows, totalTrades, note = "") 
       </div>
       <div class="calculation-table-wrap">
         <table class="calculation-table">
-          <thead><tr><th>Value</th><th>Trades</th><th>W / L</th><th>Losses</th><th>Selection P/L</th></tr></thead>
+          <thead><tr><th>Value</th><th>In group</th><th>W / L</th><th>Losses</th><th>Selection P/L</th></tr></thead>
           <tbody>${rows.length ? rows.map((row) => `
             <tr>
               <td>${escapeHtml(row.value)}</td>

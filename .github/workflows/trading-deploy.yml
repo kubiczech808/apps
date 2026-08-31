@@ -25,11 +25,14 @@ jobs:
           POLY_TRADING_GITHUB_TOKEN: ${{ secrets.POLY_TRADING_GITHUB_TOKEN }}
           TRADING_GITHUB_TOKEN: ${{ secrets.TRADING_GITHUB_TOKEN }}
           TRADING_TRIGGER_KEY: ${{ secrets.TRADING_TRIGGER_KEY }}
-          TRADING_DB_HOST: ${{ secrets.TRADING_DB_HOST }}
-          TRADING_DB_PORT: ${{ secrets.TRADING_DB_PORT }}
-          TRADING_DB_NAME: ${{ secrets.TRADING_DB_NAME }}
-          TRADING_DB_USER: ${{ secrets.TRADING_DB_USER }}
-          TRADING_DB_PASSWORD: ${{ secrets.TRADING_DB_PASSWORD }}
+          # The database runs next to the PHP application on the hosting. Keep the
+          # address and default port in the workflow; GitHub secrets hold credentials
+          # only and are never printed or copied into the repository.
+          TRADING_DB_HOST: localhost
+          TRADING_DB_PORT: "3306"
+          TRADING_DB_NAME: ${{ secrets.POLYTRADING_DB_NAME }}
+          TRADING_DB_USER: ${{ secrets.POLYTRADING_DB_USER }}
+          TRADING_DB_PASSWORD: ${{ secrets.POLYTRADING_DB_PASSWORD }}
           TRADING_GITHUB_REPO: kubiczech808/apps
           TRADING_GITHUB_REF: claude/energy-consumption-app-Nf7bh
         run: |
@@ -213,7 +216,7 @@ jobs:
               ftp.cwd(current)
 
           def is_deploy_file(relative):
-              return relative in {"index.html", "api.php", "config.php", ".htaccess"} or relative.startswith("assets/")
+              return relative in {"index.html", "api.php", "storage.php", "config.php", ".htaccess"} or relative.startswith("assets/")
 
           deploy_files = [
               path
@@ -281,7 +284,7 @@ jobs:
           if not storage.get("pdoMysqlAvailable"):
               print("::warning::pdo_mysql is unavailable on the hosting; MySQL migration cannot run there.")
           elif not storage.get("configured"):
-              print("::warning::Trading DB secrets are missing; add TRADING_DB_HOST, TRADING_DB_NAME, TRADING_DB_USER and TRADING_DB_PASSWORD.")
+              print("::warning::Trading DB secrets are missing; add POLYTRADING_DB_NAME, POLYTRADING_DB_USER and POLYTRADING_DB_PASSWORD.")
           elif not storage.get("connected"):
               print("::warning::Trading DB credentials are configured but the hosting could not connect.")
           PY

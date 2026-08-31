@@ -50,6 +50,19 @@ function app_config(): array
     ];
 }
 
+$tradingStoragePath = __DIR__ . '/storage.php';
+if (is_file($tradingStoragePath)) {
+    require_once $tradingStoragePath;
+} else {
+    // Offline API tests deliberately copy just api.php into a temporary document root.
+    // The real deployment always ships storage.php with it; this narrow no-storage
+    // fallback keeps those JSON-only fixtures exercising their intended code path.
+    function trading_storage_is_active(): bool
+    {
+        return false;
+    }
+}
+
 /**
  * A deploy-time health check for the dedicated Trading database. It deliberately
  * exposes only capability flags and server limits: credentials, DSN and connection
@@ -332,6 +345,13 @@ function record_execution_dispatch_failure(string $key, string $target, ?string 
         'trigger' => 'MANUAL',
         'dispatchError' => $message,
     ];
+    if (trading_storage_is_active()) {
+        try {
+            trading_storage_event_append('dispatch-failure', $key, $record);
+        } catch (Throwable) {
+            // Preserve the local fallback below if the database is briefly unavailable.
+        }
+    }
     $path = execution_dispatch_failure_path($key);
     $directory = dirname($path);
     if (!is_dir($directory) && !@mkdir($directory, 0775, true) && !is_dir($directory)) {
@@ -348,6 +368,9 @@ function record_execution_dispatch_failure(string $key, string $target, ?string 
 
 function execution_dispatch_failure_records(string $key): array
 {
+    if (trading_storage_is_active()) {
+        return trading_storage_event_records('dispatch-failure', $key, 50);
+    }
     $path = execution_dispatch_failure_path($key);
     if (!is_file($path)) {
         return [];
@@ -364,6 +387,36 @@ function execution_dispatch_failure_records(string $key): array
 
 function state_payload(string $target, array $segments = ['observations', 'evaluations'], ?string $selectedStrategyId = null): array
 {
+    if (trading_storage_is_active()) {
+        $document = trading_storage_document_get('state:' . $target);
+        if ($document === null) {
+            respond(['ok' => false, 'error' => 'Trading database state is not available yet'], 503);
+        }
+        if (in_array('observations', $segments, true)) {
+            $document['marketObservations'] = trading_storage_observations_fetch('SCRAPED');
+        }
+        if (in_array('resolvedObservations', $segments, true)) {
+            $document['marketObservations'] = array_merge(
+                is_array($document['marketObservations'] ?? null) ? $document['marketObservations'] : [],
+                trading_storage_observations_fetch('RESOLVED'),
+            );
+        } elseif (in_array('resolvedRecent', $segments, true)) {
+            $document['marketObservations'] = array_merge(
+                is_array($document['marketObservations'] ?? null) ? $document['marketObservations'] : [],
+                trading_storage_observations_fetch('RESOLVED', 5000),
+            );
+        }
+        if ($target === 'paper' && $selectedStrategyId !== null && preg_match('/^[A-Za-z0-9_-]{1,64}$/', $selectedStrategyId)) {
+            $portfolio = trading_storage_document_get('paper-portfolio:' . $selectedStrategyId);
+            if (is_array($portfolio)) {
+                if (!isset($document['paperPortfolios']) || !is_array($document['paperPortfolios'])) {
+                    $document['paperPortfolios'] = [];
+                }
+                $document['paperPortfolios'][$selectedStrategyId] = $portfolio;
+            }
+        }
+        return $document;
+    }
     $files = state_file_paths();
     $customLive = custom_live_portfolio_id_from_execution_target($target);
     if ($customLive !== null) {
@@ -443,6 +496,241 @@ function state_payload(string $target, array $segments = ['observations', 'evalu
     return $data;
 }
 
+function trading_storage_state_document(array $state): array
+{
+    // Observations live in their own indexed table. Segment descriptors only point to
+    // JSON files, so retaining them after the move would make an active DB response
+    // accidentally reach back into the old storage.
+    unset(
+        $state['marketObservations'],
+        $state['resolvedMarketObservations'],
+        $state['marketScan'],
+        $state['stateSegments'],
+    );
+    return $state;
+}
+
+function trading_storage_import_observation_source(string $path, string $field): int
+{
+    $batch = [];
+    $imported = 0;
+    $flush = static function () use (&$batch, &$imported): void {
+        if ($batch === []) {
+            return;
+        }
+        $imported += trading_storage_observations_upsert($batch);
+        $batch = [];
+    };
+    $read = stream_json_array_members($path, $field, static function (array $item) use (&$batch, $flush): bool {
+        $batch[] = $item;
+        if (count($batch) >= 300) {
+            $flush();
+        }
+        return true;
+    });
+    $flush();
+    if (!$read) {
+        throw new RuntimeException('Could not stream ' . basename($path) . ' (' . $field . ').');
+    }
+    return $imported;
+}
+
+function trading_storage_import_event_rows(string $stream, ?string $portfolioId, array $rows): int
+{
+    $imported = 0;
+    foreach ($rows as $row) {
+        if (!is_array($row)) {
+            continue;
+        }
+        trading_storage_event_append($stream, $portfolioId, $row);
+        $imported++;
+    }
+    return $imported;
+}
+
+function trading_storage_import_ndjson_events(string $stream, ?string $portfolioId, array $paths): int
+{
+    $imported = 0;
+    foreach ($paths as $path) {
+        $handle = @fopen($path, 'rb');
+        if ($handle === false) {
+            continue;
+        }
+        while (($line = fgets($handle)) !== false) {
+            $row = json_decode(trim($line), true);
+            if (is_array($row)) {
+                trading_storage_event_append($stream, $portfolioId, $row);
+                $imported++;
+            }
+        }
+        fclose($handle);
+    }
+    return $imported;
+}
+
+function trading_storage_import_json_state(): array
+{
+    $pdo = trading_storage_pdo();
+    if (!$pdo instanceof PDO) {
+        throw new RuntimeException('Trading MySQL storage is not configured or reachable.');
+    }
+    trading_storage_bootstrap($pdo);
+
+    $config = load_portfolio_config();
+    $preferences = load_scan_preferences();
+    trading_storage_document_put('portfolio-config', 'portfolio-config', $config);
+    trading_storage_document_put('scan-preferences', 'preferences', $preferences);
+
+    $targets = ['paper', 'live', 'live-execution', 'live-5050-execution'];
+    foreach (array_keys(is_array($config['livePortfolios'] ?? null) ? $config['livePortfolios'] : []) as $id) {
+        if (is_string($id) && preg_match('/^[a-z][a-zA-Z0-9]{1,30}$/', $id)) {
+            $targets[] = 'live-custom-' . $id . '-execution';
+        }
+    }
+    $targets = array_values(array_unique($targets));
+    $files = state_file_paths();
+    $counts = ['stateDocuments' => 0, 'paperPortfolioDocuments' => 0, 'observations' => 0, 'events' => 0, 'missingStateFiles' => 0];
+
+    foreach ($targets as $target) {
+        $customLive = custom_live_portfolio_id_from_execution_target($target);
+        $path = $customLive !== null
+            ? __DIR__ . '/data/live-' . $customLive . '-execution-state.json'
+            : ($files[$target] ?? null);
+        if (!is_string($path) || !is_file($path)) {
+            $counts['missingStateFiles']++;
+            continue;
+        }
+        $core = decode_state_file($path, false);
+        if (!is_array($core)) {
+            throw new RuntimeException('Could not read state file ' . basename($path) . '.');
+        }
+        trading_storage_document_put('state:' . $target, 'state', trading_storage_state_document($core));
+        $counts['stateDocuments']++;
+        $counts['events'] += trading_storage_import_event_rows('state-run-log', $target, is_array($core['runLog'] ?? null) ? $core['runLog'] : []);
+
+        if ($target !== 'paper') {
+            continue;
+        }
+        $manifest = is_array($core['stateSegments'] ?? null) ? $core['stateSegments'] : [];
+        foreach (['observations' => 'marketObservations', 'resolvedObservations' => 'resolvedMarketObservations'] as $segment => $field) {
+            $source = state_segment_path($core, $path, $segment);
+            if ($source === null && !array_key_exists($field, $core)) {
+                continue;
+            }
+            $source ??= $path;
+            $counts['observations'] += trading_storage_import_observation_source($source, $field);
+        }
+        foreach ($manifest as $name => $meta) {
+            if (!is_string($name) || !str_starts_with($name, 'portfolio:')) {
+                continue;
+            }
+            $id = substr($name, strlen('portfolio:'));
+            if (!preg_match('/^[A-Za-z0-9_-]{1,64}$/', $id)) {
+                continue;
+            }
+            $segmentPath = state_segment_path($core, $path, $name);
+            $segment = $segmentPath === null ? null : decode_state_file($segmentPath, false);
+            $portfolio = is_array($segment['paperPortfolio'] ?? null) ? $segment['paperPortfolio'] : null;
+            if (!is_array($portfolio)) {
+                continue;
+            }
+            trading_storage_document_put('paper-portfolio:' . $id, 'paper-portfolio', $portfolio);
+            $counts['paperPortfolioDocuments']++;
+            $counts['events'] += trading_storage_import_event_rows('portfolio-run-log', $id, is_array($portfolio['runLog'] ?? null) ? $portfolio['runLog'] : []);
+        }
+        $counts['events'] += trading_storage_import_event_rows('market-scan-history', null, is_array($core['marketScanHistory'] ?? null) ? $core['marketScanHistory'] : []);
+    }
+
+    $counts['events'] += trading_storage_import_ndjson_events(
+        'portfolio-config-history',
+        null,
+        [portfolio_config_history_path()],
+    );
+    $counts['events'] += trading_storage_import_ndjson_events(
+        'market-scan-history',
+        null,
+        glob(__DIR__ . '/data/market-scan-history/*.ndjson') ?: [],
+    );
+    foreach (glob(__DIR__ . '/data/portfolio-run-log/*/*.ndjson') ?: [] as $path) {
+        $portfolioId = basename(dirname($path));
+        $counts['events'] += trading_storage_import_ndjson_events('portfolio-run-log', $portfolioId, [$path]);
+    }
+    trading_storage_meta_put('json-imported-at', gmdate('c'));
+    trading_storage_meta_put('json-import-counts', json_encode($counts, JSON_UNESCAPED_SLASHES) ?: '{}');
+    return $counts;
+}
+
+function trading_storage_allowed_ingest_target(string $target): bool
+{
+    if (in_array($target, ['paper', 'live', 'live-execution', 'live-5050-execution'], true)) {
+        return true;
+    }
+    return preg_match('/^live-custom-[a-z][a-zA-Z0-9]{1,30}-execution$/', $target) === 1;
+}
+
+function trading_storage_ingest(array $payload): array
+{
+    $target = trim((string) ($payload['target'] ?? ''));
+    $state = $payload['state'] ?? null;
+    if (!trading_storage_allowed_ingest_target($target) || !is_array($state)) {
+        throw new InvalidArgumentException('A valid state target and object payload are required.');
+    }
+    $pdo = trading_storage_pdo();
+    if (!$pdo instanceof PDO) {
+        throw new RuntimeException('Trading MySQL storage is not configured or reachable.');
+    }
+    trading_storage_bootstrap($pdo);
+    trading_storage_document_put('state:' . $target, 'state', trading_storage_state_document($state));
+
+    $observationCount = 0;
+    $observations = $payload['observations'] ?? [];
+    if (is_array($observations)) {
+        if (count($observations) > 1000) {
+            throw new InvalidArgumentException('An ingest batch may contain at most 1000 observations.');
+        }
+        $observationCount = trading_storage_observations_upsert($observations);
+    }
+
+    $portfolioDocuments = 0;
+    if ($target === 'paper' && is_array($payload['paperPortfolios'] ?? null)) {
+        foreach ($payload['paperPortfolios'] as $id => $portfolio) {
+            if (!is_string($id) || !preg_match('/^[A-Za-z0-9_-]{1,64}$/', $id) || !is_array($portfolio)) {
+                continue;
+            }
+            trading_storage_document_put('paper-portfolio:' . $id, 'paper-portfolio', $portfolio);
+            $portfolioDocuments++;
+        }
+    }
+
+    $eventCount = 0;
+    $events = $payload['events'] ?? [];
+    if (is_array($events)) {
+        if (count($events) > 1000) {
+            throw new InvalidArgumentException('An ingest batch may contain at most 1000 events.');
+        }
+        foreach ($events as $event) {
+            if (!is_array($event) || !is_array($event['payload'] ?? null)) {
+                continue;
+            }
+            $stream = trim((string) ($event['stream'] ?? ''));
+            $portfolioId = isset($event['portfolioId']) ? trim((string) $event['portfolioId']) : null;
+            if (!preg_match('/^[a-z0-9_-]{1,64}$/', $stream) || ($portfolioId !== null && !preg_match('/^[A-Za-z0-9_-]{1,80}$/', $portfolioId))) {
+                continue;
+            }
+            trading_storage_event_append($stream, $portfolioId, $event['payload'], isset($event['occurredAt']) ? (string) $event['occurredAt'] : null);
+            $eventCount++;
+        }
+    }
+
+    trading_storage_meta_put('last-ingest-at', gmdate('c'));
+    return [
+        'target' => $target,
+        'observations' => $observationCount,
+        'paperPortfolioDocuments' => $portfolioDocuments,
+        'events' => $eventCount,
+    ];
+}
+
 /**
  * paper-state.json runs tens of megabytes once a few paper portfolios accumulate
  * real trade history, and this hosting's file replication for something that size
@@ -464,7 +752,7 @@ function paper_state_with_consistent_portfolios(array $payload, string $summary,
     if ($configuredIds === []) {
         return $payload;
     }
-    for ($attempt = 0; $attempt < 4; $attempt++) {
+    for ($attempt = 0; !trading_storage_is_active() && $attempt < 4; $attempt++) {
         $portfolios = is_array($payload['paperPortfolios'] ?? null) ? $payload['paperPortfolios'] : [];
         if (array_diff($configuredIds, array_keys($portfolios)) === []) {
             break;
@@ -493,6 +781,18 @@ function paper_state_with_consistent_portfolios(array $payload, string $summary,
     // small per-portfolio segments. Load those segments only for the dashboard
     // archive summary so "0 resolved" never replaces a real historical count.
     if ($summary === 'dashboard') {
+        if (trading_storage_is_active()) {
+            foreach ($configuredPaper as $id => $portfolioConfig) {
+                if (!is_array($portfolioConfig) || ($portfolioConfig['archived'] ?? false) !== true) {
+                    continue;
+                }
+                $portfolio = trading_storage_document_get('paper-portfolio:' . $id);
+                if (is_array($portfolio)) {
+                    $payload['paperPortfolios'][$id] = $portfolio;
+                }
+            }
+            return $payload;
+        }
         $manifest = is_array($payload['stateSegments'] ?? null) ? $payload['stateSegments'] : [];
         foreach ($configuredPaper as $id => $portfolioConfig) {
             if (!is_array($portfolioConfig) || ($portfolioConfig['archived'] ?? false) !== true) {
@@ -581,6 +881,12 @@ function empty_configured_paper_portfolio(string $id, array $config): array
  */
 function state_observation_totals(array $data): array
 {
+    if (trading_storage_is_active()) {
+        $counts = trading_storage_observation_counts();
+        $active = max(0, (int) ($counts['SCRAPED'] ?? 0));
+        $resolved = max(0, (int) ($counts['RESOLVED'] ?? 0));
+        return ['active' => $active, 'scraped' => $active, 'resolved' => $resolved, 'all' => $active + $resolved];
+    }
     $manifest = is_array($data['stateSegments'] ?? null) ? $data['stateSegments'] : [];
     $active = null;
     $resolved = null;
@@ -1454,22 +1760,33 @@ function compact_market_scan_history_entry(array $item): array
 function market_scan_history_records(array $fallback = []): array
 {
     $byId = [];
-    $archiveFiles = glob(__DIR__ . '/data/market-scan-history/*.ndjson') ?: [];
-    sort($archiveFiles, SORT_STRING);
-    foreach ($archiveFiles as $archiveFile) {
-        $handle = @fopen($archiveFile, 'rb');
-        if ($handle === false) {
-            continue;
-        }
-        while (($line = fgets($handle)) !== false) {
-            $item = json_decode(trim($line), true);
-            if (!is_array($item) || (!isset($item['id']) && !isset($item['runAt']))) {
+    if (trading_storage_is_active()) {
+        foreach (trading_storage_event_records('market-scan-history', null, 5000) as $item) {
+            if (!isset($item['id']) && !isset($item['runAt'])) {
                 continue;
             }
             $key = (string) ($item['id'] ?? $item['runAt']);
             $byId[$key] = compact_market_scan_history_entry($item);
         }
-        fclose($handle);
+    }
+    if (!trading_storage_is_active()) {
+        $archiveFiles = glob(__DIR__ . '/data/market-scan-history/*.ndjson') ?: [];
+        sort($archiveFiles, SORT_STRING);
+        foreach ($archiveFiles as $archiveFile) {
+            $handle = @fopen($archiveFile, 'rb');
+            if ($handle === false) {
+                continue;
+            }
+            while (($line = fgets($handle)) !== false) {
+                $item = json_decode(trim($line), true);
+                if (!is_array($item) || (!isset($item['id']) && !isset($item['runAt']))) {
+                    continue;
+                }
+                $key = (string) ($item['id'] ?? $item['runAt']);
+                $byId[$key] = compact_market_scan_history_entry($item);
+            }
+            fclose($handle);
+        }
     }
     foreach ($fallback as $item) {
         if (!is_array($item) || (!isset($item['id']) && !isset($item['runAt']))) {
@@ -1491,22 +1808,31 @@ function market_scan_history_records(array $fallback = []): array
 function portfolio_run_log_records(string $strategyId, array $fallback = []): array
 {
     $byRunAt = [];
-    $safeId = preg_replace('/[^a-zA-Z0-9_-]/', '', $strategyId);
-    $archiveFiles = $safeId === '' ? [] : (glob(__DIR__ . "/data/portfolio-run-log/{$safeId}/*.ndjson") ?: []);
-    sort($archiveFiles, SORT_STRING);
-    foreach ($archiveFiles as $archiveFile) {
-        $handle = @fopen($archiveFile, 'rb');
-        if ($handle === false) {
-            continue;
+    if (trading_storage_is_active()) {
+        foreach (trading_storage_event_records('portfolio-run-log', $strategyId, 5000) as $item) {
+            if (isset($item['runAt']) && (string) ($item['strategyId'] ?? $strategyId) === $strategyId) {
+                $byRunAt[(string) $item['runAt']] = $item;
+            }
         }
-        while (($line = fgets($handle)) !== false) {
-            $item = json_decode(trim($line), true);
-            if (!is_array($item) || !isset($item['runAt']) || (string) ($item['strategyId'] ?? '') !== $strategyId) {
+    }
+    $safeId = preg_replace('/[^a-zA-Z0-9_-]/', '', $strategyId);
+    if (!trading_storage_is_active()) {
+        $archiveFiles = $safeId === '' ? [] : (glob(__DIR__ . "/data/portfolio-run-log/{$safeId}/*.ndjson") ?: []);
+        sort($archiveFiles, SORT_STRING);
+        foreach ($archiveFiles as $archiveFile) {
+            $handle = @fopen($archiveFile, 'rb');
+            if ($handle === false) {
                 continue;
             }
-            $byRunAt[(string) $item['runAt']] = $item;
+            while (($line = fgets($handle)) !== false) {
+                $item = json_decode(trim($line), true);
+                if (!is_array($item) || !isset($item['runAt']) || (string) ($item['strategyId'] ?? '') !== $strategyId) {
+                    continue;
+                }
+                $byRunAt[(string) $item['runAt']] = $item;
+            }
+            fclose($handle);
         }
-        fclose($handle);
     }
     foreach ($fallback as $item) {
         if (!is_array($item) || !isset($item['runAt']) || (string) ($item['strategyId'] ?? '') !== $strategyId) {
@@ -2283,16 +2609,26 @@ function append_portfolio_config_history(array $before, array $after): void
     if ($changes === []) {
         return;
     }
+    $entry = [
+        'id' => 'cfg-' . bin2hex(random_bytes(8)),
+        'changedAt' => gmdate('c'),
+        'changes' => $changes,
+    ];
+    if (trading_storage_is_active()) {
+        try {
+            trading_storage_event_append('portfolio-config-history', null, $entry);
+        } catch (Throwable) {
+            // The configuration write must remain authoritative. A later ingest can
+            // recover this audit row rather than rejecting a valid portfolio edit.
+        }
+        return;
+    }
     $path = portfolio_config_history_path();
     $dir = dirname($path);
     if (!is_dir($dir) && !mkdir($dir, 0775, true) && !is_dir($dir)) {
         return;
     }
-    $record = json_encode([
-        'id' => 'cfg-' . bin2hex(random_bytes(8)),
-        'changedAt' => gmdate('c'),
-        'changes' => $changes,
-    ], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+    $record = json_encode($entry, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
     if (is_string($record)) {
         @file_put_contents($path, $record . "\n", FILE_APPEND | LOCK_EX);
     }
@@ -2300,6 +2636,22 @@ function append_portfolio_config_history(array $before, array $after): void
 
 function portfolio_config_history_records(?string $strategyId = null): array
 {
+    if (trading_storage_is_active()) {
+        $rows = [];
+        foreach (trading_storage_event_records('portfolio-config-history', null, 500) as $record) {
+            $changes = array_values(array_filter($record['changes'] ?? [], static function ($change) use ($strategyId): bool {
+                return is_array($change) && ($strategyId === null || (string) ($change['strategyId'] ?? '') === $strategyId);
+            }));
+            if ($changes !== []) {
+                $rows[] = [
+                    'id' => (string) ($record['id'] ?? ''),
+                    'changedAt' => (string) ($record['changedAt'] ?? ''),
+                    'changes' => $changes,
+                ];
+            }
+        }
+        return $rows;
+    }
     $path = portfolio_config_history_path();
     if (!is_file($path)) {
         return [];
@@ -2354,6 +2706,16 @@ function normalize_scan_days_preference(mixed $value): ?float
 
 function load_scan_preferences(): array
 {
+    if (trading_storage_is_active()) {
+        $stored = trading_storage_document_get('scan-preferences');
+        if (is_array($stored)) {
+            return [
+                'liquidityMin' => normalize_scan_liquidity_preference($stored['liquidityMin'] ?? 0),
+                'maxDays' => normalize_scan_days_preference($stored['maxDays'] ?? 7),
+                'updatedAt' => (string) ($stored['updatedAt'] ?? ''),
+            ];
+        }
+    }
     $path = scan_preferences_path();
     if (!is_file($path)) {
         return ['liquidityMin' => 0.0, 'maxDays' => 7.0];
@@ -2375,6 +2737,10 @@ function save_scan_preferences(array $input): array
         'maxDays' => normalize_scan_days_preference($input['maxDays'] ?? $input['market_scan_max_days'] ?? null),
         'updatedAt' => gmdate('c'),
     ];
+    if (trading_storage_is_active()) {
+        trading_storage_document_put('scan-preferences', 'preferences', $preferences);
+        return $preferences;
+    }
     $path = scan_preferences_path();
     $dir = dirname($path);
     if (!is_dir($dir) && !mkdir($dir, 0775, true) && !is_dir($dir)) {
@@ -2871,6 +3237,12 @@ function normalize_portfolio_config(array $input): array
 
 function load_portfolio_config(): array
 {
+    if (trading_storage_is_active()) {
+        $stored = trading_storage_document_get('portfolio-config');
+        if (is_array($stored)) {
+            return normalize_portfolio_config($stored);
+        }
+    }
     $path = portfolio_config_path();
     if (!is_file($path)) {
         return default_portfolio_config();
@@ -2882,6 +3254,13 @@ function load_portfolio_config(): array
 
 function save_portfolio_config(array $config): array
 {
+    if (trading_storage_is_active()) {
+        $before = load_portfolio_config();
+        $normalized = normalize_portfolio_config($config);
+        trading_storage_document_put('portfolio-config', 'portfolio-config', $normalized);
+        append_portfolio_config_history($before, $normalized);
+        return $normalized;
+    }
     $path = portfolio_config_path();
     $dir = dirname($path);
     if (!is_dir($dir) && !mkdir($dir, 0775, true) && !is_dir($dir)) {
@@ -3999,6 +4378,66 @@ try {
             'storage' => trading_storage_diagnostics(),
             'generatedAt' => gmdate('c'),
         ]);
+    }
+
+    if ($action === 'storage-admin') {
+        if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+            respond(['ok' => false, 'error' => 'POST is required'], 405);
+        }
+        require_trading_trigger_key();
+        $operation = strtolower(trim((string) (request_payload()['operation'] ?? 'status')));
+        $pdo = trading_storage_pdo();
+        if (!$pdo instanceof PDO) {
+            respond(['ok' => false, 'error' => 'Trading MySQL storage is not configured or reachable.'], 503);
+        }
+        trading_storage_bootstrap($pdo);
+        if ($operation === 'bootstrap') {
+            respond(['ok' => true, 'operation' => 'bootstrap', 'storage' => trading_storage_diagnostics()]);
+        }
+        if ($operation === 'migrate-json') {
+            $counts = trading_storage_import_json_state();
+            respond(['ok' => true, 'operation' => 'migrate-json', 'counts' => $counts, 'active' => trading_storage_is_active()]);
+        }
+        if ($operation === 'activate') {
+            if (trading_storage_meta_get('json-imported-at') === null || trading_storage_document_get('state:paper') === null) {
+                respond(['ok' => false, 'error' => 'Run the JSON migration successfully before activating database reads.'], 409);
+            }
+            // Activation deliberately remains an explicit second operation. The runner
+            // ingest must be enabled first, otherwise a later JSON-only bot pass would
+            // make the database state stale while the dashboard still appeared healthy.
+            trading_storage_meta_put('storage-active', '1');
+            respond(['ok' => true, 'operation' => 'activate', 'active' => true, 'counts' => trading_storage_observation_counts()]);
+        }
+        if ($operation === 'deactivate') {
+            trading_storage_meta_put('storage-active', '0');
+            respond(['ok' => true, 'operation' => 'deactivate', 'active' => false]);
+        }
+        if ($operation === 'status') {
+            respond([
+                'ok' => true,
+                'operation' => 'status',
+                'active' => trading_storage_is_active(),
+                'jsonImportedAt' => trading_storage_meta_get('json-imported-at'),
+                'lastIngestAt' => trading_storage_meta_get('last-ingest-at'),
+                'counts' => trading_storage_observation_counts(),
+                'storage' => trading_storage_diagnostics(),
+            ]);
+        }
+        respond(['ok' => false, 'error' => 'Unknown storage administration operation.'], 400);
+    }
+
+    if ($action === 'storage-ingest') {
+        if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+            respond(['ok' => false, 'error' => 'POST is required'], 405);
+        }
+        require_trading_trigger_key();
+        try {
+            respond(['ok' => true, 'ingest' => trading_storage_ingest(request_payload()), 'generatedAt' => gmdate('c')]);
+        } catch (InvalidArgumentException $error) {
+            respond(['ok' => false, 'error' => $error->getMessage()], 400);
+        } catch (Throwable) {
+            respond(['ok' => false, 'error' => 'Trading MySQL ingest failed.'], 503);
+        }
     }
 
     if ($action === 'live-sync') {

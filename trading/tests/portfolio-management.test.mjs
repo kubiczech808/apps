@@ -100,7 +100,7 @@ test("portfolio trade analysis: grades the selection at settlement, excludes unf
     ${extractFunction(APP, "portfolioAnalysisSummary")}
     ${extractFunction(APP, "portfolioAnalysisTag")}
     ${extractFunction(APP, "portfolioAnalysisTags")}
-    return { portfolioAnalysisClosedTrades, portfolioAnalysisRows, portfolioAnalysisSummary, portfolioAnalysisTags };
+    return { portfolioAnalysisClosedTrades, portfolioAnalysisPnl, portfolioAnalysisRows, portfolioAnalysisSummary, portfolioAnalysisTags };
   `)({ portfolioAnalysisOutcomeMap: { soldWin: 1, stoppedWin: 1, stoppedLoss: 0 } });
   const ledger = [
     { id: "before", status: "WON", closedAt: "2026-08-27T23:00:00+02:00", totalCostUsdc: 5, netGainIfWinUsdc: 1, marketType: "binary" },
@@ -122,6 +122,9 @@ test("portfolio trade analysis: grades the selection at settlement, excludes unf
     { value: "multi", trades: 2, wins: 0, losses: 2, pnlUsdc: -10 },
   ]);
   assert.deepEqual(analysis.portfolioAnalysisTags(live[0]), ["sports", "soccer"]);
+  // Legacy winners can lack netGainIfWinUsdc. An absent value must be derived from
+  // shares minus the whole recorded entry cost, not coerced by Number(null) to zero.
+  assert.equal(analysis.portfolioAnalysisPnl({ status: "WON", totalCostUsdc: 5, netGainIfWinUsdc: null, shares: 6 }), 1);
   assert.match(APP, /candidateIsOverUnderMarket\(trade\)/, "the report must include the requested O\/U split");
   assert.doesNotMatch(APP.slice(APP.indexOf("function portfolioAnalysisRows"), APP.indexOf("function renderPortfolioOptimizationReport")), /earlyExits/,
     "selection analysis must not present a sale as a third outcome");
