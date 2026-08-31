@@ -471,6 +471,11 @@ test("storage migration: database diagnostics stay private and require the trigg
   }
   assert.match(deploy, /TRADING_DB_HOST: localhost/,
     "the application and MariaDB share the hosting, so the host is not a secret");
+  const storage = readFileSync(new URL("../storage.php", import.meta.url), "utf8");
+  assert.match(storage, /VALUES \(:key, :type, :payload, :checksum, 1, :createdAt, :updatedAt\)/,
+    "native MySQL PDO statements must bind distinct timestamps for document inserts");
+  assert.match(storage, /:tags, :payload, :checksum, :createdAt, :updatedAt/,
+    "native MySQL PDO statements must bind distinct timestamps for observation inserts");
 });
 
 test("dashboard: a created portfolio's settings are its own", () => {

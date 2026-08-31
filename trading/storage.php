@@ -155,7 +155,7 @@ function trading_storage_document_put(string $key, string $type, array $payload)
     $now = trading_storage_now();
     $statement = $pdo->prepare(
         'INSERT INTO trading_documents (document_key, document_type, payload, checksum, version, created_at, updated_at)
-         VALUES (:key, :type, :payload, :checksum, 1, :now, :now)
+         VALUES (:key, :type, :payload, :checksum, 1, :createdAt, :updatedAt)
          ON DUPLICATE KEY UPDATE document_type = VALUES(document_type), payload = VALUES(payload),
            checksum = VALUES(checksum), version = version + 1, updated_at = VALUES(updated_at)'
     );
@@ -164,7 +164,8 @@ function trading_storage_document_put(string $key, string $type, array $payload)
         'type' => $type,
         'payload' => $encoded,
         'checksum' => hash('sha256', $encoded),
-        'now' => $now,
+        'createdAt' => $now,
+        'updatedAt' => $now,
     ]);
 }
 
@@ -316,7 +317,7 @@ function trading_storage_observations_upsert(array $items): int
          ) VALUES (
            :key, :lifecycle, :sourceId, :tokenId, :eventSlug, :marketSlug, :outcome, :marketType,
            :endAt, :observedAt, :resolvedAt, :probability, :netYield, :annualizedReturn, :volume,
-           :tags, :payload, :checksum, :now, :now
+           :tags, :payload, :checksum, :createdAt, :updatedAt
          ) ON DUPLICATE KEY UPDATE
            lifecycle = VALUES(lifecycle), source_id = VALUES(source_id), token_id = VALUES(token_id),
            event_slug = VALUES(event_slug), market_slug = VALUES(market_slug), outcome_label = VALUES(outcome_label),
@@ -354,7 +355,8 @@ function trading_storage_observations_upsert(array $items): int
                 'tags' => trading_storage_encode(is_array($tags) ? $tags : [$tags]),
                 'payload' => $payload,
                 'checksum' => hash('sha256', $payload),
-                'now' => trading_storage_now(),
+                'createdAt' => trading_storage_now(),
+                'updatedAt' => trading_storage_now(),
             ]);
             $count += 1;
         }
