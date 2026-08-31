@@ -302,7 +302,9 @@ jobs:
           python3 - <<'PY'
           import json
           import os
+          import re
           import urllib.request
+          import urllib.error
 
           key = os.environ["TRADING_TRIGGER_KEY"]
           url = "https://www.osobnizkusenosti.cz/trading/api.php?action=storage-admin"
@@ -320,19 +322,34 @@ jobs:
                   raise SystemExit(f"Trading storage {operation} failed")
               return payload
 
-          status = call("status")
-          if status.get("jsonImportedAt"):
-              print(f"Trading JSON backfill already completed at {status['jsonImportedAt']}")
-          else:
-              migrated = call("migrate-json")
-              counts = migrated.get("counts") or {}
-              print("Trading JSON backfill completed:")
-              for name, value in sorted(counts.items()):
-                  print(f"  {name}: {value}")
-          # A backfill must never change the read mode implicitly. Database reads are
-          # enabled only after worker mirrors have proved they stay current.
-          if status.get("active"):
-              print("Trading storage reads are active")
-          else:
-              print("Trading storage remains in JSON read mode during mirror verification")
+          def safe_error(error):
+              body = ""
+              if isinstance(error, urllib.error.HTTPError):
+                  try:
+                      body = error.read().decode("utf-8", "replace")
+                  except Exception:
+                      body = ""
+              message = body or str(error)
+              message = re.sub(r"(?i)(password|pwd|key|token)\s*[=:]\s*[^\s,;}]+", r"\1=[redacted]", message)
+              return " ".join(message.split())[:500] or type(error).__name__
+
+          try:
+              status = call("status")
+              if status.get("jsonImportedAt"):
+                  print(f"Trading JSON backfill already completed at {status['jsonImportedAt']}")
+              else:
+                  migrated = call("migrate-json")
+                  counts = migrated.get("counts") or {}
+                  print("Trading JSON backfill completed:")
+                  for name, value in sorted(counts.items()):
+                      print(f"  {name}: {value}")
+              # A backfill must never change the read mode implicitly. Database reads are
+              # enabled only after worker mirrors have proved they stay current.
+              if status.get("active"):
+                  print("Trading storage reads are active")
+              else:
+                  print("Trading storage remains in JSON read mode during mirror verification")
+          except Exception as error:
+              print(f"::error title=Trading MySQL backfill::{safe_error(error)}")
+              raise
           PY
