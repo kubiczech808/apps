@@ -3109,7 +3109,7 @@ function daysUntil(value) {
 // Returns null when nothing recorded a close, so each caller states its own fallback rather
 // than inheriting a clock by accident.
 function tradeClosedAt(trade = {}) {
-  return trade.resolvedAt || trade.closedAt || trade.closedTime || null;
+  return trade.closedAt || trade.closedTime || trade.resolvedAt || null;
 }
 
 function tradeHoldingDays(trade) {

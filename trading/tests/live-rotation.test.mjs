@@ -4377,6 +4377,49 @@ test("closed date: once recorded it survives every later sync unchanged", async 
     "a future close date is corrupt and must not be kept");
 });
 
+test("closed history: a later account sync enriches a row without moving its original close", () => {
+  const initialClose = "2026-08-30T14:12:00.000Z";
+  const current = {
+    id: "token-42",
+    tokenId: "42",
+    conditionId: "0xabc",
+    outcome: "Yes",
+    status: "REDEEMED",
+    closedAt: "2026-08-31T18:51:00.000Z",
+    resolvedAt: "2026-08-31T18:51:00.000Z",
+    realizedPnlUsdc: 1.25,
+  };
+  const rows = sync.mergeClosedTradeHistory([current], {
+    closedTrades: [{
+      ...current,
+      status: "REDEEM_REQUIRED",
+      closedAt: initialClose,
+      resolvedAt: initialClose,
+      realizedPnlUsdc: 0,
+    }],
+  }, "2026-08-31T18:52:00.000Z");
+
+  assert.equal(rows.length, 1, "the same market outcome is one durable ledger row");
+  assert.equal(rows[0].status, "REDEEMED", "fresh account facts still update the row");
+  assert.equal(rows[0].realizedPnlUsdc, 1.25);
+  assert.equal(rows[0].closedAt, initialClose, "a later sync may never rewrite the close timestamp");
+  assert.equal(rows[0].resolvedAt, initialClose, "all UI close-date fields stay in agreement");
+});
+
+test("closed history: a capped public history response cannot erase an older closed trade", () => {
+  const retained = {
+    id: "token-old",
+    tokenId: "old",
+    outcome: "No",
+    status: "LOST",
+    closedAt: "2026-08-28T09:00:00.000Z",
+    resolvedAt: "2026-08-28T09:00:00.000Z",
+  };
+  const rows = sync.mergeClosedTradeHistory([], { closedTrades: [retained] }, "2026-08-31T18:52:00.000Z");
+
+  assert.deepEqual(rows, [retained]);
+});
+
 // The other half of the same fault, in the browser. Five call sites read the Closed date as
 // `resolvedAt || closedTime || lastCheckedAt`. lastCheckedAt is when the row was last
 // looked at -- it moves every sync -- and `closedAt`, which the live sync actually writes,
@@ -4385,7 +4428,7 @@ test("closed date: the browser never reads a Closed date from when it last looke
   const { readFile } = await import("node:fs/promises");
   const app = await readFile(new URL("../assets/app.js", import.meta.url), "utf8");
 
-  assert.match(app, /function tradeClosedAt\(trade = \{\}\) \{\s*return trade\.resolvedAt \|\| trade\.closedAt \|\| trade\.closedTime \|\| null;/,
+  assert.match(app, /function tradeClosedAt\(trade = \{\}\) \{\s*return trade\.closedAt \|\| trade\.closedTime \|\| trade\.resolvedAt \|\| null;/,
     "one reader, and it reads only fields that record a close");
 
   // No call site may reach for lastCheckedAt again.

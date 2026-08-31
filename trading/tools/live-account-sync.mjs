@@ -814,6 +814,95 @@ function bestIndexedTimestamp(index, item, mode = "earliest") {
   return candidates[0] || null;
 }
 
+// The public history endpoints are deliberately bounded. They are useful for enriching
+// the live ledger, but they are not a durable ledger themselves: a later page can omit an
+// old close or add a newer redeem activity. Match the same market outcome across snapshots
+// so that subsequent syncs can refresh P/L/status without turning the close time into the
+// time at which the account happened to be polled.
+function closedTradeIdentityKeys(item = {}) {
+  const tokenId = String(item.tokenId || item.assetId || item.asset || "").trim();
+  const conditionId = String(item.conditionId || item.market || "").trim();
+  const outcome = normalizedKeyText(item.outcome || item.side);
+  const question = normalizedKeyText(item.question || item.title || item.market);
+  const id = String(item.id || "").trim();
+  const keys = [];
+  if (tokenId) keys.push(`token:${tokenId}`);
+  if (conditionId && outcome) keys.push(`condition:${conditionId}:${outcome}`);
+  if (!tokenId && !conditionId && question && outcome) keys.push(`question:${question}:${outcome}`);
+  if (!keys.length && id) keys.push(`id:${id}`);
+  return keys;
+}
+
+function preservedClosedTimestamp(previous, generatedAt) {
+  if (!previous) return null;
+  return stableCloseTimestamp(
+    previous.closedAt || previous.resolvedAt || previous.closedTime,
+    generatedAt,
+  );
+}
+
+function mergeClosedTradeHistory(currentRows = [], previousState = null, generatedAt = new Date().toISOString()) {
+  const records = new Map();
+  const keyToRecord = new Map();
+  let anonymous = 0;
+
+  function recordKey(row) {
+    return closedTradeIdentityKeys(row)[0] || `anonymous:${anonymous += 1}`;
+  }
+
+  function findExisting(row) {
+    for (const key of closedTradeIdentityKeys(row)) {
+      const record = keyToRecord.get(key);
+      if (record) return record;
+    }
+    return null;
+  }
+
+  function index(record) {
+    records.set(record.key, record);
+    for (const key of closedTradeIdentityKeys(record.row)) keyToRecord.set(key, record);
+  }
+
+  // Begin with our previous durable snapshot. This means an older close remains visible
+  // when the public API's capped history no longer happens to return it.
+  const previousRows = [
+    ...(Array.isArray(previousState?.closedTrades) ? previousState.closedTrades : []),
+    ...(Array.isArray(previousState?.resolvedApiPositions) ? previousState.resolvedApiPositions : []),
+  ].filter((row) => row && typeof row === "object");
+  for (const row of previousRows) {
+    const existing = findExisting(row);
+    if (existing) continue;
+    index({ key: recordKey(row), row: { ...row } });
+  }
+
+  // Fresh rows carry better trade facts (for example a redeem replacing a previously
+  // detected REDEEM_REQUIRED row), but never a newer close date for a known row.
+  for (const row of (Array.isArray(currentRows) ? currentRows : []).filter((item) => item && typeof item === "object")) {
+    const existing = findExisting(row);
+    if (!existing) {
+      index({ key: recordKey(row), row: { ...row } });
+      continue;
+    }
+    const immutableClosedAt = preservedClosedTimestamp(existing.row, generatedAt);
+    const merged = {
+      ...existing.row,
+      ...row,
+    };
+    if (immutableClosedAt) {
+      merged.closedAt = immutableClosedAt;
+      merged.resolvedAt = immutableClosedAt;
+      merged.closedAtSource = existing.row.closedAtSource || "previous-live-state-close";
+    }
+    existing.row = merged;
+    index(existing);
+  }
+
+  return [...records.values()]
+    .map((record) => record.row)
+    .sort((left, right) => (Date.parse(right.closedAt || right.resolvedAt || "") || 0)
+      - (Date.parse(left.closedAt || left.resolvedAt || "") || 0));
+}
+
 function enrichOpenTimesFromHistory(positions, historyItems, previousState = null) {
   const historyByKey = new Map();
   const previousByKey = new Map();
@@ -1984,7 +2073,11 @@ async function main() {
     sync.warnings.push(`position-history-overlap-${String(position.tokenId || position.conditionId || position.question || "").slice(0, 24)}:`
       + ` kept an unresolved position of ${shares.toFixed(4)} shares that the closed-trade history also claims`);
   }
-  const closedTrades = [...historyClosedTrades, ...resolvedPositionRows];
+  const closedTrades = mergeClosedTradeHistory(
+    [...historyClosedTrades, ...resolvedPositionRows],
+    previousLiveState,
+    generatedAt,
+  );
   const openOrders = await enrichOpenOrdersWithMarketMetadata(
     Array.isArray(balanceAllowance?.openOrders) ? balanceAllowance.openOrders : [],
     sync,
@@ -2207,6 +2300,7 @@ export {
   resolvedPositionCloseTime,
   buildPreviousCloseTimeIndex,
   closedTradesFromHistory,
+  mergeClosedTradeHistory,
   openOrderIdentityKeys,
   vanishedOpenOrders,
   unfilledLimitOrderHistory,
