@@ -87,7 +87,9 @@ test("portfolio trade analysis: uses real closed P/L, excludes unfilled bids, an
     ${extractFunction(APP, "isClosedTrade")}
     ${extractFunction(APP, "isUnfilledLimitOrder")}
     ${extractFunction(APP, "tradeClosedAt")}
+    ${extractFunction(APP, "closedTradePredictionResult")}
     ${extractFunction(APP, "portfolioAnalysisPnl")}
+    ${extractFunction(APP, "portfolioAnalysisOutcome")}
     ${extractFunction(APP, "portfolioAnalysisClosedTrades")}
     ${extractFunction(APP, "portfolioAnalysisRows")}
     ${extractFunction(APP, "portfolioAnalysisSummary")}
@@ -103,12 +105,15 @@ test("portfolio trade analysis: uses real closed P/L, excludes unfilled bids, an
   ];
   const live = analysis.portfolioAnalysisClosedTrades(ledger, { live: true });
   assert.deepEqual(live.map((trade) => trade.id), ["win", "loss"]);
-  assert.deepEqual(analysis.portfolioAnalysisSummary(live), { trades: 2, wins: 1, losses: 1, even: 0, pnlUsdc: -3 });
+  assert.deepEqual(analysis.portfolioAnalysisSummary(live), { trades: 2, wins: 1, losses: 1, earlyExits: 0, pnlUsdc: -3 });
   const types = analysis.portfolioAnalysisRows(live, (trade) => trade.marketType);
   assert.deepEqual(types, [
-    { value: "binary", trades: 1, wins: 1, losses: 0, even: 0, pnlUsdc: 2 },
-    { value: "multi", trades: 1, wins: 0, losses: 1, even: 0, pnlUsdc: -5 },
+    { value: "binary", trades: 1, wins: 1, losses: 0, earlyExits: 0, pnlUsdc: 2 },
+    { value: "multi", trades: 1, wins: 0, losses: 1, earlyExits: 0, pnlUsdc: -5 },
   ]);
+  const exited = analysis.portfolioAnalysisSummary([{ status: "SOLD", realizedPnlUsdc: 0 }]);
+  assert.deepEqual(exited, { trades: 1, wins: 0, losses: 0, earlyExits: 1, pnlUsdc: 0 },
+    "a zero-P/L early sale is not a third Polymarket outcome");
   assert.deepEqual(analysis.portfolioAnalysisTags(live[0]), ["sports", "soccer"]);
   assert.match(APP, /candidateIsOverUnderMarket\(trade\)/, "the report must include the requested O\/U split");
 });

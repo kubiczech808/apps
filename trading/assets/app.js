@@ -12380,6 +12380,13 @@ function portfolioAnalysisPnl(trade) {
   return Number.isFinite(value) ? value : null;
 }
 
+// A Polymarket outcome is binary: the selected side either won or lost. A rotation or
+// discretionary sale can close a position before settlement, however, so that row must
+// stay in the realised P/L total without being invented as a third "even" market result.
+function portfolioAnalysisOutcome(trade) {
+  return closedTradePredictionResult(trade);
+}
+
 function portfolioAnalysisClosedTrades(trades, { live = false } = {}) {
   return (Array.isArray(trades) ? trades : []).filter((trade) => {
     if (!isClosedTrade(trade) || isUnfilledLimitOrder(trade) || portfolioAnalysisPnl(trade) == null) return false;
@@ -12435,12 +12442,13 @@ function portfolioAnalysisRows(trades, valueForTrade) {
     const values = [...new Set((Array.isArray(rawValues) ? rawValues : [rawValues])
       .map((value) => String(value || "").trim()).filter(Boolean))];
     for (const value of values) {
-      const row = groups.get(value) || { value, trades: 0, wins: 0, losses: 0, even: 0, pnlUsdc: 0 };
+      const row = groups.get(value) || { value, trades: 0, wins: 0, losses: 0, earlyExits: 0, pnlUsdc: 0 };
       const pnl = portfolioAnalysisPnl(trade) || 0;
+      const outcome = portfolioAnalysisOutcome(trade);
       row.trades += 1;
-      if (pnl > 0.000001) row.wins += 1;
-      else if (pnl < -0.000001) row.losses += 1;
-      else row.even += 1;
+      if (outcome === true) row.wins += 1;
+      else if (outcome === false) row.losses += 1;
+      else row.earlyExits += 1;
       row.pnlUsdc += pnl;
       groups.set(value, row);
     }
@@ -12479,9 +12487,16 @@ function portfolioAnalysisVolumeBand(trade) {
 function portfolioAnalysisSummary(trades) {
   const rows = Array.isArray(trades) ? trades : [];
   const pnlUsdc = rows.reduce((total, trade) => total + (portfolioAnalysisPnl(trade) || 0), 0);
-  const wins = rows.filter((trade) => (portfolioAnalysisPnl(trade) || 0) > 0.000001).length;
-  const losses = rows.filter((trade) => (portfolioAnalysisPnl(trade) || 0) < -0.000001).length;
-  return { trades: rows.length, wins, losses, even: rows.length - wins - losses, pnlUsdc: Number(pnlUsdc.toFixed(4)) };
+  const outcomes = rows.map(portfolioAnalysisOutcome);
+  const wins = outcomes.filter((outcome) => outcome === true).length;
+  const losses = outcomes.filter((outcome) => outcome === false).length;
+  return {
+    trades: rows.length,
+    wins,
+    losses,
+    earlyExits: rows.length - wins - losses,
+    pnlUsdc: Number(pnlUsdc.toFixed(4)),
+  };
 }
 
 function portfolioTradeAnalysisPortfolios() {
@@ -12524,12 +12539,12 @@ function renderPortfolioTradeAnalysisTable(title, rows, totalTrades, note = "") 
       </div>
       <div class="calculation-table-wrap">
         <table class="calculation-table">
-          <thead><tr><th>Value</th><th>Trades</th><th>W / L / Even</th><th>Losses</th><th>P/L</th></tr></thead>
+          <thead><tr><th>Value</th><th>Trades</th><th>W / L / Early exit</th><th>Losses</th><th>P/L</th></tr></thead>
           <tbody>${rows.length ? rows.map((row) => `
             <tr>
               <td>${escapeHtml(row.value)}</td>
               <td>${formatInteger(row.trades)} / ${formatInteger(totalTrades)} (${totalTrades ? percent(row.trades / totalTrades) : "-"})</td>
-              <td>${formatInteger(row.wins)} / ${formatInteger(row.losses)} / ${formatInteger(row.even)}</td>
+              <td>${formatInteger(row.wins)} / ${formatInteger(row.losses)} / ${formatInteger(row.earlyExits)}</td>
               <td>${formatInteger(row.losses)} / ${formatInteger(row.trades)} (${row.trades ? percent(row.losses / row.trades) : "-"})</td>
               <td class="${pnlClass(row.pnlUsdc)}">${signedMoney(row.pnlUsdc)}</td>
             </tr>
@@ -12566,7 +12581,7 @@ function renderPortfolioOptimizationReport() {
       return `
         <section class="calculation-section portfolio-optimization-card${portfolio.live ? " live" : ""}">
           <h3>${escapeHtml(portfolio.label || "Portfolio")}${portfolio.live ? ' <span class="pill">Live</span>' : ""}${portfolio.archived ? ' <span class="pill muted">Archived</span>' : ""}</h3>
-          <p class="calculation-note">${formatInteger(summary.trades)} closed positions / ${formatInteger(summary.wins)} wins / ${formatInteger(summary.losses)} losses / ${formatInteger(summary.even)} even / realised P/L <span class="${pnlClass(summary.pnlUsdc)}">${signedMoney(summary.pnlUsdc)}</span></p>
+          <p class="calculation-note">${formatInteger(summary.trades)} closed positions / ${formatInteger(summary.wins)} wins / ${formatInteger(summary.losses)} losses / ${formatInteger(summary.earlyExits)} early exits / realised P/L <span class="${pnlClass(summary.pnlUsdc)}">${signedMoney(summary.pnlUsdc)}</span></p>
           ${renderPortfolioTradeAnalysisTable("Market type", portfolioAnalysisRows(portfolio.trades, (trade) => portfolioAnalysisMarketType(trade) === "multi" ? "Multi-outcome" : "Yes/No"), summary.trades)}
           ${renderPortfolioTradeAnalysisTable("O/U market", portfolioAnalysisRows(portfolio.trades, (trade) => candidateIsOverUnderMarket(trade) ? "Over / Under" : "Other market"), summary.trades)}
           ${renderPortfolioTradeAnalysisTable("Entry probability", portfolioAnalysisRows(portfolio.trades, portfolioAnalysisProbabilityBand), summary.trades)}
