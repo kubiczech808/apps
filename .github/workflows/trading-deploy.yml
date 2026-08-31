@@ -24,7 +24,9 @@ jobs:
         env:
           POLY_TRADING_GITHUB_TOKEN: ${{ secrets.POLY_TRADING_GITHUB_TOKEN }}
           TRADING_GITHUB_TOKEN: ${{ secrets.TRADING_GITHUB_TOKEN }}
-          TRADING_TRIGGER_KEY: ${{ secrets.TRADING_TRIGGER_KEY }}
+          # A separate trigger secret is optional. The database password is the
+          # private service-to-service key during the MySQL migration.
+          TRADING_TRIGGER_KEY: ${{ secrets.TRADING_TRIGGER_KEY || secrets.POLYTRADING_DB_PASSWORD }}
           # The database runs next to the PHP application on the hosting. Keep the
           # address and default port in the workflow; GitHub secrets hold credentials
           # only and are never printed or copied into the repository.
@@ -253,7 +255,7 @@ jobs:
 
       - name: Check dedicated Trading MySQL storage
         env:
-          TRADING_TRIGGER_KEY: ${{ secrets.TRADING_TRIGGER_KEY }}
+          TRADING_TRIGGER_KEY: ${{ secrets.TRADING_TRIGGER_KEY || secrets.POLYTRADING_DB_PASSWORD }}
         run: |
           python3 - <<'PY'
           import json
@@ -295,7 +297,7 @@ jobs:
         # healthy site deployment as failed or interrupt JSON-backed trading.
         continue-on-error: true
         env:
-          TRADING_TRIGGER_KEY: ${{ secrets.TRADING_TRIGGER_KEY }}
+          TRADING_TRIGGER_KEY: ${{ secrets.TRADING_TRIGGER_KEY || secrets.POLYTRADING_DB_PASSWORD }}
         run: |
           python3 - <<'PY'
           import json

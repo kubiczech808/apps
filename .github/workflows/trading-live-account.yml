@@ -139,7 +139,7 @@ jobs:
         if: success()
         env:
           TRADING_STORAGE_INGEST_URL: https://www.osobnizkusenosti.cz/trading/api.php?action=storage-ingest
-          TRADING_TRIGGER_KEY: ${{ secrets.TRADING_TRIGGER_KEY }}
+          TRADING_TRIGGER_KEY: ${{ secrets.TRADING_TRIGGER_KEY || secrets.POLYTRADING_DB_PASSWORD }}
           TRADING_STORAGE_INGEST_REQUIRED: "false"
         run: |
           TRADING_STORAGE_INGEST_TARGET=live TRADING_STORAGE_STATE_FILE=trading/data/live-state.json python3 trading/tools/ingest-trading-state.py

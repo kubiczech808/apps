@@ -35,9 +35,15 @@ function app_config(): array
         }
     }
 
+    // A dedicated trigger key wins when it exists. The database password is the
+    // configured private fallback during the migration, so existing deployment
+    // credentials are sufficient for ingestion without a fourth secret.
+    $databasePassword = (string) ($config['db_password'] ?? getenv('TRADING_DB_PASSWORD') ?: '');
+    $triggerKey = (string) ($config['trigger_key'] ?? getenv('TRADING_TRIGGER_KEY') ?: $databasePassword);
+
     return [
         'github_token' => (string) ($config['github_token'] ?? getenv('POLY_TRADING_GITHUB_TOKEN') ?: getenv('TRADING_GITHUB_TOKEN') ?: ''),
-        'trigger_key' => (string) ($config['trigger_key'] ?? getenv('TRADING_TRIGGER_KEY') ?: ''),
+        'trigger_key' => $triggerKey,
         'repo' => (string) ($config['repo'] ?? getenv('TRADING_GITHUB_REPO') ?: 'kubiczech808/apps'),
         'ref' => (string) ($config['ref'] ?? getenv('TRADING_GITHUB_REF') ?: 'claude/energy-consumption-app-Nf7bh'),
         // The database belongs to Trading alone. It is generated during deploy from
@@ -46,7 +52,7 @@ function app_config(): array
         'db_port' => (string) ($config['db_port'] ?? getenv('TRADING_DB_PORT') ?: '3306'),
         'db_name' => (string) ($config['db_name'] ?? getenv('TRADING_DB_NAME') ?: ''),
         'db_user' => (string) ($config['db_user'] ?? getenv('TRADING_DB_USER') ?: ''),
-        'db_password' => (string) ($config['db_password'] ?? getenv('TRADING_DB_PASSWORD') ?: ''),
+        'db_password' => $databasePassword,
     ];
 }
 
