@@ -1,0 +1,33 @@
+name: Trading Unfilled Limit Order Evaluation Diagnosis
+
+# Read-only diagnostic, manual only. Reads the published paper state and reports, per
+# portfolio, how many unfilled limit orders never got a usable finalOutcomePrice --
+# the shape behind rows that sit in the "Unfilled limit orders" tab forever showing
+# neither "would win" nor "would lose". Writes nothing, publishes nothing, no secrets.
+on:
+  workflow_dispatch:
+    inputs:
+      paper_strategy_id:
+        description: "Limit to one paper portfolio id (leave blank for all)"
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Diagnose unfilled limit order evaluation
+        working-directory: trading
+        env:
+          PAPER_DIAGNOSIS_STRATEGY_ID: ${{ inputs.paper_strategy_id || '' }}
+        run: node tools/paper-unfilled-limit-order-evaluation-diagnosis.mjs
