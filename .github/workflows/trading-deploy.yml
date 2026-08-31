@@ -25,6 +25,11 @@ jobs:
           POLY_TRADING_GITHUB_TOKEN: ${{ secrets.POLY_TRADING_GITHUB_TOKEN }}
           TRADING_GITHUB_TOKEN: ${{ secrets.TRADING_GITHUB_TOKEN }}
           TRADING_TRIGGER_KEY: ${{ secrets.TRADING_TRIGGER_KEY }}
+          TRADING_DB_HOST: ${{ secrets.TRADING_DB_HOST }}
+          TRADING_DB_PORT: ${{ secrets.TRADING_DB_PORT }}
+          TRADING_DB_NAME: ${{ secrets.TRADING_DB_NAME }}
+          TRADING_DB_USER: ${{ secrets.TRADING_DB_USER }}
+          TRADING_DB_PASSWORD: ${{ secrets.TRADING_DB_PASSWORD }}
           TRADING_GITHUB_REPO: kubiczech808/apps
           TRADING_GITHUB_REF: claude/energy-consumption-app-Nf7bh
         run: |
@@ -38,6 +43,11 @@ jobs:
           config = {
               "github_token": os.environ.get("POLY_TRADING_GITHUB_TOKEN") or os.environ.get("TRADING_GITHUB_TOKEN", ""),
               "trigger_key": os.environ.get("TRADING_TRIGGER_KEY", ""),
+              "db_host": os.environ.get("TRADING_DB_HOST", ""),
+              "db_port": os.environ.get("TRADING_DB_PORT", "3306"),
+              "db_name": os.environ.get("TRADING_DB_NAME", ""),
+              "db_user": os.environ.get("TRADING_DB_USER", ""),
+              "db_password": os.environ.get("TRADING_DB_PASSWORD", ""),
               "repo": os.environ.get("TRADING_GITHUB_REPO", "kubiczech808/apps"),
               "ref": os.environ.get("TRADING_GITHUB_REF", "claude/energy-consumption-app-Nf7bh"),
           }
@@ -234,6 +244,44 @@ jobs:
                   if name == "data":
                       clean_data_dir(ftp)
                       continue
-                  if name not in deploy_roots:
-                      remove_tree(ftp, name)
+              if name not in deploy_roots:
+                  remove_tree(ftp, name)
+          PY
+
+      - name: Check dedicated Trading MySQL storage
+        env:
+          TRADING_TRIGGER_KEY: ${{ secrets.TRADING_TRIGGER_KEY }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import sys
+          import urllib.request
+
+          key = os.environ.get("TRADING_TRIGGER_KEY", "")
+          if not key:
+              print("::warning::TRADING_TRIGGER_KEY is not configured; database diagnostics skipped.")
+              raise SystemExit(0)
+          request = urllib.request.Request(
+              "https://www.osobnizkusenosti.cz/trading/api.php?action=storage-diagnostics",
+              data=b"{}",
+              method="POST",
+              headers={"Content-Type": "application/json", "X-Trading-Trigger-Key": key},
+          )
+          try:
+              with urllib.request.urlopen(request, timeout=30) as response:
+                  payload = json.loads(response.read().decode("utf-8"))
+          except Exception as exc:
+              print(f"::warning::Trading database diagnostics could not run: {exc}")
+              raise SystemExit(0)
+          storage = payload.get("storage") or {}
+          print("Trading storage diagnostics (credentials withheld):")
+          for key in ("pdoAvailable", "pdoMysqlAvailable", "configured", "connected", "serverVersion", "databaseSizeBytes", "maxConnections"):
+              print(f"  {key}: {storage.get(key)}")
+          if not storage.get("pdoMysqlAvailable"):
+              print("::warning::pdo_mysql is unavailable on the hosting; MySQL migration cannot run there.")
+          elif not storage.get("configured"):
+              print("::warning::Trading DB secrets are missing; add TRADING_DB_HOST, TRADING_DB_NAME, TRADING_DB_USER and TRADING_DB_PASSWORD.")
+          elif not storage.get("connected"):
+              print("::warning::Trading DB credentials are configured but the hosting could not connect.")
           PY

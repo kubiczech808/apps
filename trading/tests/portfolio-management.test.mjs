@@ -454,6 +454,20 @@ test("portfolio creation: the live form keeps validation errors inside the modal
     "missing live capital focuses the required field");
 });
 
+test("storage migration: database diagnostics stay private and require the trigger key", () => {
+  assert.match(API, /function trading_storage_diagnostics\(\): array/);
+  assert.match(API, /extension_loaded\('pdo_mysql'\)/,
+    "the host must explicitly report whether MySQL PDO support exists");
+  assert.match(API, /function require_trading_trigger_key\(\): void/,
+    "database administration cannot be called from the public UI");
+  assert.match(API, /if \(\$action === 'storage-diagnostics'\)[\s\S]*?require_trading_trigger_key\(\)/,
+    "the diagnostics endpoint is trigger-key protected");
+  const deploy = readFileSync(new URL("../../.github/workflows/trading-deploy.yml", import.meta.url), "utf8");
+  for (const secret of ["TRADING_DB_HOST", "TRADING_DB_NAME", "TRADING_DB_USER", "TRADING_DB_PASSWORD"]) {
+    assert.match(deploy, new RegExp(`secrets\\.${secret}`), `${secret} reaches only the generated server config`);
+  }
+});
+
 test("dashboard: a created portfolio's settings are its own", () => {
   const run = new Function("state", `
     ${/const BUILT_IN_PAPER_STRATEGY_IDS = \[[^\]]*\];/.exec(APP)[0]}

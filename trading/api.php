@@ -40,7 +40,67 @@ function app_config(): array
         'trigger_key' => (string) ($config['trigger_key'] ?? getenv('TRADING_TRIGGER_KEY') ?: ''),
         'repo' => (string) ($config['repo'] ?? getenv('TRADING_GITHUB_REPO') ?: 'kubiczech808/apps'),
         'ref' => (string) ($config['ref'] ?? getenv('TRADING_GITHUB_REF') ?: 'claude/energy-consumption-app-Nf7bh'),
+        // The database belongs to Trading alone. It is generated during deploy from
+        // repository secrets and is never returned by an API response.
+        'db_host' => (string) ($config['db_host'] ?? getenv('TRADING_DB_HOST') ?: ''),
+        'db_port' => (string) ($config['db_port'] ?? getenv('TRADING_DB_PORT') ?: '3306'),
+        'db_name' => (string) ($config['db_name'] ?? getenv('TRADING_DB_NAME') ?: ''),
+        'db_user' => (string) ($config['db_user'] ?? getenv('TRADING_DB_USER') ?: ''),
+        'db_password' => (string) ($config['db_password'] ?? getenv('TRADING_DB_PASSWORD') ?: ''),
     ];
+}
+
+/**
+ * A deploy-time health check for the dedicated Trading database. It deliberately
+ * exposes only capability flags and server limits: credentials, DSN and connection
+ * errors stay on the host. The endpoint is for the deployment workflow, never the UI.
+ */
+function trading_storage_diagnostics(): array
+{
+    $config = app_config();
+    $configured = $config['db_host'] !== ''
+        && $config['db_name'] !== ''
+        && $config['db_user'] !== ''
+        && $config['db_password'] !== '';
+    $result = [
+        'pdoAvailable' => class_exists('PDO'),
+        'pdoMysqlAvailable' => extension_loaded('pdo_mysql'),
+        'configured' => $configured,
+        'connected' => false,
+        'serverVersion' => null,
+        'databaseSizeBytes' => null,
+        'maxConnections' => null,
+    ];
+    if (!$result['pdoMysqlAvailable'] || !$configured) {
+        return $result;
+    }
+
+    try {
+        $port = ctype_digit($config['db_port']) ? (int) $config['db_port'] : 3306;
+        $pdo = new PDO(
+            sprintf('mysql:host=%s;port=%d;dbname=%s;charset=utf8mb4', $config['db_host'], $port, $config['db_name']),
+            $config['db_user'],
+            $config['db_password'],
+            [
+                PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+                PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
+                PDO::ATTR_EMULATE_PREPARES => false,
+            ],
+        );
+        $result['connected'] = true;
+        $result['serverVersion'] = (string) $pdo->query('SELECT VERSION()')->fetchColumn();
+        $result['maxConnections'] = (int) $pdo->query("SHOW VARIABLES LIKE 'max_connections'")->fetchColumn(1);
+        $statement = $pdo->prepare(
+            'SELECT COALESCE(SUM(data_length + index_length), 0) FROM information_schema.tables WHERE table_schema = :database'
+        );
+        $statement->execute(['database' => $config['db_name']]);
+        $result['databaseSizeBytes'] = (int) $statement->fetchColumn();
+    } catch (Throwable) {
+        // The caller needs to know that the connection is unavailable; implementation
+        // details such as host names and authentication failures are not public data.
+        $result['connected'] = false;
+    }
+    return $result;
 }
 
 function fetch_json(string $url): array
@@ -3173,6 +3233,18 @@ function request_header(string $name): string
     return '';
 }
 
+function require_trading_trigger_key(): void
+{
+    $config = app_config();
+    if ($config['trigger_key'] === '') {
+        respond(['ok' => false, 'error' => 'Storage administration is not configured.'], 503);
+    }
+    $providedKey = request_header('X-Trading-Trigger-Key');
+    if ($providedKey === '' || !hash_equals($config['trigger_key'], $providedKey)) {
+        respond(['ok' => false, 'error' => 'Invalid storage administration key.'], 403);
+    }
+}
+
 function dispatch_workflow(string $workflow, array $inputs, bool $requireTriggerKey = true): array
 {
     $config = app_config();
@@ -3916,6 +3988,18 @@ function workflow_target_key(string $target): string
 
 try {
     $action = $_GET['action'] ?? 'markets';
+
+    if ($action === 'storage-diagnostics') {
+        if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+            respond(['ok' => false, 'error' => 'POST is required'], 405);
+        }
+        require_trading_trigger_key();
+        respond([
+            'ok' => true,
+            'storage' => trading_storage_diagnostics(),
+            'generatedAt' => gmdate('c'),
+        ]);
+    }
 
     if ($action === 'live-sync') {
         if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
