@@ -671,16 +671,19 @@ function trading_storage_allowed_ingest_target(string $target): bool
 function trading_storage_ingest(array $payload): array
 {
     $target = trim((string) ($payload['target'] ?? ''));
+    $hasState = array_key_exists('state', $payload);
     $state = $payload['state'] ?? null;
-    if (!trading_storage_allowed_ingest_target($target) || !is_array($state)) {
-        throw new InvalidArgumentException('A valid state target and object payload are required.');
+    if (!trading_storage_allowed_ingest_target($target) || ($hasState && !is_array($state))) {
+        throw new InvalidArgumentException('A valid state target and an optional object state payload are required.');
     }
     $pdo = trading_storage_pdo();
     if (!$pdo instanceof PDO) {
         throw new RuntimeException('Trading MySQL storage is not configured or reachable.');
     }
     trading_storage_bootstrap($pdo);
-    trading_storage_document_put('state:' . $target, 'state', trading_storage_state_document($state));
+    if ($hasState) {
+        trading_storage_document_put('state:' . $target, 'state', trading_storage_state_document($state));
+    }
 
     $observationCount = 0;
     $observations = $payload['observations'] ?? [];

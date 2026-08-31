@@ -130,6 +130,16 @@ jobs:
         # catalogue. See trading/tools/publish-paper-state.py.
         run: python3 trading/tools/publish-paper-state.py
 
+      - name: Mirror paper state to Trading MySQL
+        if: success()
+        env:
+          TRADING_STORAGE_INGEST_URL: https://www.osobnizkusenosti.cz/trading/api.php?action=storage-ingest
+          TRADING_TRIGGER_KEY: ${{ secrets.TRADING_TRIGGER_KEY }}
+          TRADING_STORAGE_INGEST_TARGET: paper
+          TRADING_STORAGE_STATE_FILE: trading/data/paper-state.json
+          TRADING_STORAGE_INGEST_REQUIRED: "false"
+        run: python3 trading/tools/ingest-trading-state.py
+
       - name: Append compact scraping history entry
         if: success()
         env:

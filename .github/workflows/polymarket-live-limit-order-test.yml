@@ -367,6 +367,20 @@ jobs:
           PUBLISH_REQUIRED: live-state.json
         run: PUBLISH_FILES="${LIVE_EXECUTION_PUBLISH_FILE},trading/data/live-state.json>live-state.json" python3 trading/tools/publish-execution-state.py
 
+      - name: Mirror live execution to Trading MySQL
+        if: always()
+        env:
+          TRADING_STORAGE_INGEST_URL: https://www.osobnizkusenosti.cz/trading/api.php?action=storage-ingest
+          TRADING_TRIGGER_KEY: ${{ secrets.TRADING_TRIGGER_KEY }}
+          TRADING_STORAGE_INGEST_REQUIRED: "false"
+        run: |
+          execution_target=live-execution
+          if [[ "$LIVE_EXECUTION_STATE_PATH" =~ ^data/live-([a-z][a-zA-Z0-9]{1,30})-execution-state\.json$ ]]; then
+            execution_target="live-custom-${BASH_REMATCH[1]}-execution"
+          fi
+          TRADING_STORAGE_INGEST_TARGET="$execution_target" TRADING_STORAGE_STATE_FILE="trading/$LIVE_EXECUTION_STATE_PATH" python3 trading/tools/ingest-trading-state.py
+          TRADING_STORAGE_INGEST_TARGET=live TRADING_STORAGE_STATE_FILE=trading/data/live-state.json python3 trading/tools/ingest-trading-state.py
+
       # The decision is printed at the START of the execution step, so on a long run it
       # falls outside the window a log reader can fetch and the run becomes unexplainable
       # from the outside. Reprinting a compact digest as the LAST thing the job does means

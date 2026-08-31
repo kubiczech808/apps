@@ -301,6 +301,16 @@ jobs:
           PUBLISH_REQUIRED: live-5050-execution-state.json
         run: python3 trading/tools/publish-execution-state.py
 
+      - name: Mirror 5050 execution to Trading MySQL
+        if: always()
+        env:
+          TRADING_STORAGE_INGEST_URL: https://www.osobnizkusenosti.cz/trading/api.php?action=storage-ingest
+          TRADING_TRIGGER_KEY: ${{ secrets.TRADING_TRIGGER_KEY }}
+          TRADING_STORAGE_INGEST_TARGET: live-5050-execution
+          TRADING_STORAGE_STATE_FILE: trading/data/live-5050-execution-state.json
+          TRADING_STORAGE_INGEST_REQUIRED: "false"
+        run: python3 trading/tools/ingest-trading-state.py
+
       - name: Run digest
         if: always()
         continue-on-error: true

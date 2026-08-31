@@ -134,6 +134,16 @@ jobs:
               upload_atomic(ftp, execution_file, "live-execution-state.json")
               upload_atomic(ftp, state_file, "live-state.json")
           PY
+
+      - name: Mirror live account state to Trading MySQL
+        if: success()
+        env:
+          TRADING_STORAGE_INGEST_URL: https://www.osobnizkusenosti.cz/trading/api.php?action=storage-ingest
+          TRADING_TRIGGER_KEY: ${{ secrets.TRADING_TRIGGER_KEY }}
+          TRADING_STORAGE_INGEST_REQUIRED: "false"
+        run: |
+          TRADING_STORAGE_INGEST_TARGET=live TRADING_STORAGE_STATE_FILE=trading/data/live-state.json python3 trading/tools/ingest-trading-state.py
+          TRADING_STORAGE_INGEST_TARGET=live-execution TRADING_STORAGE_STATE_FILE=trading/data/live-execution-state.json python3 trading/tools/ingest-trading-state.py
       # Runs after the upload on purpose: by now the published state no longer lists the
       # vanished order, so the next sync cannot detect it a second time and dispatch a
       # duplicate run. live_confirm is true because this stands in for the scheduled run
