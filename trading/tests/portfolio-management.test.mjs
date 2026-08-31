@@ -800,6 +800,29 @@ test("limit orders: an unfilled expiry is excluded from accuracy, a still-waitin
     "the expired order is excluded, and the still-waiting one is not in this count at all");
 });
 
+test("opened trades: positions are the default, with resting orders opt-in", () => {
+  const rowsForDisplay = new Function("state", `
+    ${extractFunction(APP, "isOpenOrderTrade")}
+    ${extractFunction(APP, "openedTradesForDisplay")}
+    return openedTradesForDisplay;
+  `)({ showOpenOrders: false });
+  const withOpenOrders = new Function("state", `
+    ${extractFunction(APP, "isOpenOrderTrade")}
+    ${extractFunction(APP, "openedTradesForDisplay")}
+    return openedTradesForDisplay;
+  `)({ showOpenOrders: true });
+  const rows = [
+    { id: "position", status: "OPEN" },
+    { id: "paper-order", status: "LIMIT_ORDER_WAITING" },
+    { id: "live-order", mode: "LIVE_ORDER", status: "LIMIT ORDER" },
+  ];
+  assert.deepEqual(rowsForDisplay(rows).map((row) => row.id), ["position"]);
+  assert.deepEqual(withOpenOrders(rows).map((row) => row.id), ["position", "paper-order", "live-order"]);
+  assert.match(HTML, /data-show-open-orders/, "the opened-trades header needs the opt-in checkbox");
+  assert.match(APP, /openedTradesForDisplay\(openTrades\)/, "paper opened rows must use the filter");
+  assert.match(APP, /openedTradesForDisplay\(openedRows\)/, "live opened rows must use the filter");
+});
+
 // Reported: a "queued"/"running" (manual) row appeared in 90->50%'s run log for a run the
 // user never started, then vanished on its own once it finished. dispatch-after-scan.mjs
 // chains a run onto a finished scrape as a real workflow_dispatch event -- indistinguishable

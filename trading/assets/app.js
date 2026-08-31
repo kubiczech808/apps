@@ -25,6 +25,10 @@ const state = {
       direction: "desc",
     },
   },
+  // An unfilled limit bid is capital reserved for a possible future position, not an
+  // opened position. Keep it hidden from the default Opened trades view, while still
+  // making it available there on demand as well as in its dedicated audit tab.
+  showOpenOrders: false,
   evaluationStatus: "EVALUATED",
   opportunityView: "scraped",
   scrapedSort: {
@@ -252,6 +256,7 @@ const els = {
   accountSummary: document.querySelector("[data-account-summary]"),
   portfolioRules: document.querySelector("[data-portfolio-rules]"),
   botTrades: document.querySelector("[data-bot-trades]"),
+  showOpenOrders: document.querySelector("[data-show-open-orders]"),
   closedTrades: document.querySelector("[data-closed-trades]"),
   closedTradesExport: document.querySelector("[data-closed-trades-export]"),
   closedSummary: document.querySelector("[data-closed-summary]"),
@@ -2902,6 +2907,16 @@ function isUnfilledLimitOrder(order = {}) {
   const status = String(order.status || "").toUpperCase();
   if (status !== "LIMIT_ORDER_EXPIRED" && status !== "LIVE_LIMIT_ORDER_UNFILLED") return false;
   return !(Number(order.filledSize) > 0.000001 || order.partiallyFilled === true || order.everFilled === true);
+}
+
+function isOpenOrderTrade(trade = {}) {
+  return trade.mode === "LIVE_ORDER"
+    || String(trade.status || "").toUpperCase() === "LIMIT_ORDER_WAITING";
+}
+
+function openedTradesForDisplay(trades = []) {
+  const rows = Array.isArray(trades) ? trades : [];
+  return state.showOpenOrders ? rows : rows.filter((trade) => !isOpenOrderTrade(trade));
 }
 
 function unfilledLimitOrderFinalPrice(order = {}) {
@@ -8919,6 +8934,7 @@ function renderBotState(botState) {
           : {}),
       };
   syncModeUi();
+  if (els.showOpenOrders) els.showOpenOrders.checked = state.showOpenOrders;
   renderSystemStatus(state.liveState);
   if (els.accountSummary) {
     els.accountSummary.hidden = true;
@@ -9037,7 +9053,7 @@ function renderBotState(botState) {
   // The headline Open P/L and "in positions" amounts aggregate every active trade.
   // Do not truncate this table: showing only the first twelve rows made a manual sum of
   // the visible P/L disagree with those portfolio totals.
-  els.botTrades.innerHTML = renderTradeRows(openTrades, "Zatim zadne otevrene autonomni paper obchody.", {
+  els.botTrades.innerHTML = renderTradeRows(openedTradesForDisplay(openTrades), "Zatim zadne otevrene autonomni paper pozice.", {
     tableKey: "open",
     showStatus: false,
   });
@@ -9544,6 +9560,7 @@ function renderSystemStatus(liveState = state.liveState) {
 function renderLiveState(liveState) {
   state.liveState = liveState;
   syncModeUi();
+  if (els.showOpenOrders) els.showOpenOrders.checked = state.showOpenOrders;
   refreshEligibilityThreshold();
   refreshRiskAllocation();
   refreshLimitOrders();
@@ -9715,7 +9732,7 @@ function renderLiveState(liveState) {
   els.botStatus.innerHTML = liveWarning;
   els.botStatus.hidden = !liveWarning;
 
-  els.botTrades.innerHTML = renderTradeRows(openedRows, "Zatim zadne otevrene live pozice ani limit objednavky na napojenem Polymarket uctu.", {
+  els.botTrades.innerHTML = renderTradeRows(openedTradesForDisplay(openedRows), "Zatim zadne otevrene live pozice na napojenem Polymarket uctu.", {
     tableKey: "live",
     showStatus: false,
   });
@@ -13450,6 +13467,14 @@ function handleTradeSort(event) {
 
 els.botTrades?.addEventListener("click", handleTradeSort);
 els.closedTrades?.addEventListener("click", handleTradeSort);
+els.showOpenOrders?.addEventListener("change", () => {
+  state.showOpenOrders = els.showOpenOrders.checked;
+  if (isLiveMode()) {
+    if (state.liveState) renderLiveState(state.liveState);
+  } else if (state.botState) {
+    renderBotState(state.botState);
+  }
+});
 els.openedTradesRefresh?.addEventListener("click", refreshOpenedTradesValues);
 els.closedTradesExport?.addEventListener("click", exportClosedTradesCsv);
 
