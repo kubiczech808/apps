@@ -334,8 +334,21 @@ button:disabled {
 
 .portfolio-cards {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(145px, 1fr));
   gap: 10px;
+}
+
+.portfolio-card-row {
+  display: grid;
+  gap: 10px;
+}
+
+.portfolio-card-row-primary {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.portfolio-card-row-profit,
+.portfolio-card-row-capital {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
 .portfolio-metrics-layout {
@@ -347,10 +360,6 @@ button:disabled {
 
 .portfolio-metrics-layout.has-equity-chart {
   grid-template-columns: minmax(0, 1.35fr) minmax(330px, 0.65fr);
-}
-
-.portfolio-metrics-layout.has-equity-chart .portfolio-cards {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
 .portfolio-equity-chart {
@@ -2583,7 +2592,7 @@ body.modal-open {
 
 @media (max-width: 1180px) {
   .control-grid,
-  .portfolio-cards,
+  .portfolio-card-row,
   .bot-summary,
   .system-status-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -2847,8 +2856,11 @@ body.modal-open {
   }
 
   .portfolio-cards {
-    grid-template-columns: repeat(auto-fit, minmax(min(150px, 100%), 1fr));
     gap: 8px;
+  }
+
+  .portfolio-card-row {
+    grid-template-columns: repeat(auto-fit, minmax(min(150px, 100%), 1fr));
   }
 
   .portfolio-metrics-layout {
@@ -3267,7 +3279,7 @@ body.modal-open {
     justify-self: start;
   }
 
-  .portfolio-cards,
+  .portfolio-card-row,
   .mode-switch,
   .evaluation-head .segmented {
     grid-template-columns: 1fr;

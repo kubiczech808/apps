@@ -1080,6 +1080,21 @@ test("dashboard: the overview above the selector states equity and risk against 
   assert.match(overview, /Number\.isFinite\(value\) \? money\(value\) : "-"/);
 });
 
+test("dashboard metrics: cards stay grouped by account value, P/L, then capital allocation", () => {
+  const labels = ["Equity", "Resolved accuracy", "Total P/L", "Realized P/L", "Open P/L", "In positions", "Free", "In orders"];
+  let previous = -1;
+  for (const label of labels) {
+    const index = HTML.indexOf(`<span class="label">${label}</span>`);
+    assert.ok(index > previous, `${label} follows the requested dashboard order`);
+    previous = index;
+  }
+  assert.match(HTML, /portfolio-card-row portfolio-card-row-primary[\s\S]*?Equity[\s\S]*?Resolved accuracy/);
+  assert.match(HTML, /portfolio-card-row portfolio-card-row-profit[\s\S]*?Total P\/L[\s\S]*?Realized P\/L[\s\S]*?Open P\/L/);
+  assert.match(HTML, /portfolio-card-row portfolio-card-row-capital[\s\S]*?In positions[\s\S]*?Free[\s\S]*?In orders/);
+  assert.match(CSS, /\.portfolio-card-row-primary\s*\{\s*grid-template-columns: repeat\(2, minmax\(0, 1fr\)\);/);
+  assert.match(CSS, /\.portfolio-card-row-profit,[\s\S]*?\.portfolio-card-row-capital\s*\{\s*grid-template-columns: repeat\(3, minmax\(0, 1fr\)\);/);
+});
+
 test("closed accuracy: a redeemed position counts even when its original cost is unavailable", () => {
   const stats = new Function(`
     ${extractFunction(APP, "isClosedTrade")}

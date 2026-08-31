@@ -75,45 +75,51 @@
         </div>
         <div class="portfolio-metrics-layout" data-portfolio-metrics-layout>
           <div class="portfolio-cards">
-            <div class="metric-card">
-              <span class="label">Equity</span>
-              <strong data-portfolio-equity>$100.00</strong>
-              <span data-portfolio-last-run>Last run -</span>
+            <div class="portfolio-card-row portfolio-card-row-primary">
+              <div class="metric-card">
+                <span class="label">Equity</span>
+                <strong data-portfolio-equity>$100.00</strong>
+                <span data-portfolio-last-run>Last run -</span>
+              </div>
+              <div class="metric-card">
+                <span class="label">Resolved accuracy</span>
+                <strong data-portfolio-accuracy>-</strong>
+                <span data-portfolio-accuracy-note>0 / 0 resolved</span>
+              </div>
             </div>
-            <div class="metric-card">
-              <span class="label">Total P/L</span>
-              <strong data-portfolio-total-pl>$0.00</strong>
-              <span data-portfolio-total-pl-pct>0.0%</span>
+            <div class="portfolio-card-row portfolio-card-row-profit">
+              <div class="metric-card">
+                <span class="label">Total P/L</span>
+                <strong data-portfolio-total-pl>$0.00</strong>
+                <span data-portfolio-total-pl-pct>0.0%</span>
+              </div>
+              <div class="metric-card">
+                <span class="label">Realized P/L</span>
+                <strong data-portfolio-realized>$0.00</strong>
+                <span data-portfolio-realized-pct>0.0%</span>
+              </div>
+              <div class="metric-card">
+                <span class="label">Open P/L</span>
+                <strong data-portfolio-open-pl>$0.00</strong>
+                <span data-portfolio-open-pl-pct>0.0%</span>
+              </div>
             </div>
-            <div class="metric-card">
-              <span class="label">Realized P/L</span>
-              <strong data-portfolio-realized>$0.00</strong>
-              <span data-portfolio-realized-pct>0.0%</span>
-            </div>
-            <div class="metric-card">
-              <span class="label">Resolved accuracy</span>
-              <strong data-portfolio-accuracy>-</strong>
-              <span data-portfolio-accuracy-note>0 / 0 resolved</span>
-            </div>
-            <div class="metric-card">
-              <span class="label">Open P/L</span>
-              <strong data-portfolio-open-pl>$0.00</strong>
-              <span data-portfolio-open-pl-pct>0.0%</span>
-            </div>
-            <div class="metric-card">
-              <span class="label">Orders</span>
-              <strong data-portfolio-orders>$0.00</strong>
-              <span>Resting orders</span>
-            </div>
-            <div class="metric-card">
-              <span class="label">Positions</span>
-              <strong data-portfolio-positions>$0.00</strong>
-              <span>Stake overall</span>
-            </div>
-            <div class="metric-card">
-              <span class="label">Free</span>
-              <strong data-portfolio-free>$100.00</strong>
-              <span>Available cash</span>
+            <div class="portfolio-card-row portfolio-card-row-capital">
+              <div class="metric-card">
+                <span class="label">In positions</span>
+                <strong data-portfolio-positions>$0.00</strong>
+                <span>Stake overall</span>
+              </div>
+              <div class="metric-card">
+                <span class="label">Free</span>
+                <strong data-portfolio-free>$100.00</strong>
+                <span>Available cash</span>
+              </div>
+              <div class="metric-card">
+                <span class="label">In orders</span>
+                <strong data-portfolio-orders>$0.00</strong>
+                <span>Resting orders</span>
+              </div>
             </div>
           </div>
           <section class="portfolio-equity-chart" aria-label="Portfolio equity history" data-portfolio-equity-chart></section>
