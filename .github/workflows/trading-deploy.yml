@@ -288,3 +288,45 @@ jobs:
           if not storage.get("connected"):
               raise SystemExit("Trading DB credentials are present but localhost:3306 could not connect. Check the database/user grants on the hosting.")
           PY
+
+      - name: Bootstrap and backfill Trading MySQL storage
+        env:
+          TRADING_TRIGGER_KEY: ${{ secrets.TRADING_TRIGGER_KEY }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import urllib.request
+
+          key = os.environ["TRADING_TRIGGER_KEY"]
+          url = "https://www.osobnizkusenosti.cz/trading/api.php?action=storage-admin"
+
+          def call(operation):
+              request = urllib.request.Request(
+                  url,
+                  data=json.dumps({"operation": operation}).encode("utf-8"),
+                  method="POST",
+                  headers={"Content-Type": "application/json", "X-Trading-Trigger-Key": key},
+              )
+              with urllib.request.urlopen(request, timeout=180) as response:
+                  payload = json.loads(response.read().decode("utf-8"))
+              if not payload.get("ok"):
+                  raise SystemExit(f"Trading storage {operation} failed")
+              return payload
+
+          status = call("status")
+          if status.get("jsonImportedAt"):
+              print(f"Trading JSON backfill already completed at {status['jsonImportedAt']}")
+          else:
+              migrated = call("migrate-json")
+              counts = migrated.get("counts") or {}
+              print("Trading JSON backfill completed:")
+              for name, value in sorted(counts.items()):
+                  print(f"  {name}: {value}")
+          # A backfill must never change the read mode implicitly. Database reads are
+          # enabled only after worker mirrors have proved they stay current.
+          if status.get("active"):
+              print("Trading storage reads are active")
+          else:
+              print("Trading storage remains in JSON read mode during mirror verification")
+          PY
