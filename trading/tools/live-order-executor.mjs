@@ -376,6 +376,16 @@ function selectedAnnualizedReturn(item) {
   return annualizeReturn(netYield, days);
 }
 
+// The scheduled/end date from Gamma is not a tradeability signal. Use a return
+// measured directly from the current entry economics for filtering and ranking;
+// the annualized figure remains display-only context.
+function selectedReturnYield(item) {
+  if (PROBABILITY_SOURCE === "polymarket") return netYieldAfterFees(item);
+  const expectedValue = number(item?.expectedValueUsdc);
+  const cost = number(item?.totalCostUsdc ?? item?.stakeUsdc);
+  return expectedValue != null && cost != null && cost > 0 ? expectedValue / cost : null;
+}
+
 function returnMetricLabel() {
   return PROBABILITY_SOURCE === "polymarket" ? "Potential p.a." : "EV p.a.";
 }
@@ -646,47 +656,19 @@ function daysToEnd(endDate) {
   return (end - Date.now()) / 86400000;
 }
 
-function endDateIsFuture(endDate) {
-  const end = Date.parse(endDate || "");
-  return Number.isFinite(end) && end > Date.now();
-}
-
-// Deliberately not `!endDateIsFuture(...)`. That answers false for a missing or
-// unparseable date as well, which is the right reading of "not still scheduled" but the
-// wrong reading of "has already finished": an unknown date is evidence of nothing, and
-// retiring rows on it would close out markets at random. This wants the date known and
-// past, because it is used to decide that a market is over for good.
-function endDateHasPassed(endDate) {
-  const end = Date.parse(endDate || "");
-  return Number.isFinite(end) && end <= Date.now();
-}
-
-// A market whose scheduled end has passed AND which no longer offers anything to trade
-// is a finished event waiting on Polymarket to publish its resolution. Reported: such a
-// row sat in the candidate list run after run, was re-fetched and re-rejected every
-// time, and the run log said only that "all revalidated candidates failed current
-// execution criteria" -- which does not distinguish "the rules declined" from "the event
-// is over". Naming the state answers that, and marking it terminal takes the row out of
-// the candidate list instead of paying for the same live fetch on every future run.
-//
-// Both halves are required, and each on its own is deliberately NOT terminal:
-//   * a past scheduled date alone is not the end of a market. Gamma's date is often a
-//     match start or a stale estimate, and a market that is still quoting is still
-//     tradable -- retiring those is exactly the bug that keeping past-date rows fixed.
-//   * an empty book or a price at certainty on a future-dated market is transient. A
-//     book refills; a probability that spiked to 100% can come back down.
-// It is the pair that is decisive: the event's own clock has run out and the exchange
-// has nothing left to quote on it.
-function finishedAwaitingResolutionRejection({ endDate, price, marketProbability } = {}) {
-  if (!endDateHasPassed(endDate)) return null;
+// A terminal market state comes from Polymarket, never from Gamma's scheduled date.
+// A missing book or a price at certainty without that state can be transient, so it is
+// rejected for this pass but remains eligible for a later fresh revalidation.
+function finishedAwaitingResolutionRejection({ marketClosed, acceptingOrders, price, marketProbability } = {}) {
+  if (marketClosed !== true && acceptingOrders !== false) return null;
   const numericPrice = Number(price);
   if (!Number.isFinite(numericPrice) || numericPrice <= 0 || numericPrice >= 1) {
-    return "event has already finished and is only waiting for Polymarket to publish its resolution;"
+    return "Polymarket reports this market is closed or no longer accepting orders;"
       + " its order book no longer quotes an executable price, so no order could be placed";
   }
   const numericProbability = Number(marketProbability);
   if (Number.isFinite(numericProbability) && numericProbability >= EFFECTIVELY_CERTAIN_MARKET_PROBABILITY) {
-    return "event has already finished and is only waiting for Polymarket to publish its resolution;"
+    return "Polymarket reports this market is closed or no longer accepting orders;"
       + ` its price has settled at ${(numericProbability * 100).toFixed(1)}% with no executable upside left,`
       + " so no order could be placed";
   }
@@ -906,7 +888,6 @@ function prefilterLiveCandidate(item) {
   const tokenId = String(item?.tokenId || "");
   const status = String(item?.status || "").toUpperCase();
   const qualificationProbability = selectedProbability(item);
-  const endTime = Date.parse(item?.endDate || "");
   const days = localDaysToResolution(item);
   const liquidity = number(item?.liquidity, 0);
 
@@ -951,11 +932,11 @@ function prefilterLiveCandidate(item) {
   } else if (MAX_PROBABILITY != null && qualificationProbability > MAX_PROBABILITY) {
     reasons.push(`${probabilitySourceLabel()} ${(qualificationProbability * 100).toFixed(1)}% above live maximum ${(MAX_PROBABILITY * 100).toFixed(1)}%`);
   }
-  const annualizedReturn = selectedAnnualizedReturn(item);
-  if (!Number.isFinite(annualizedReturn)) {
-    reasons.push(`missing ${probabilitySourceLabel()} ${returnMetricLabel()}`);
-  } else if (annualizedReturn <= 0) {
-    reasons.push(`${probabilitySourceLabel()} ${returnMetricLabel()} ${(annualizedReturn * 100).toFixed(1)}% is non-profitable after fees`);
+  const returnYield = selectedReturnYield(item);
+  if (!Number.isFinite(returnYield)) {
+    reasons.push(`missing ${probabilitySourceLabel()} net return`);
+  } else if (returnYield <= 0) {
+    reasons.push(`${probabilitySourceLabel()} net return ${(returnYield * 100).toFixed(1)}% is non-profitable after fees`);
   }
   const candidateNetYield = netYieldAfterFees(item);
   if (candidateNetYield == null || candidateNetYield < MIN_NET_YIELD) {
@@ -965,13 +946,6 @@ function prefilterLiveCandidate(item) {
   if (candidateVolume < MIN_VOLUME_24H) {
     reasons.push(`volume ${candidateVolume.toFixed(2)} USDC below live minimum ${MIN_VOLUME_24H.toFixed(2)} USDC`);
   }
-  // Gamma's end date can be a scheduled start or an outdated estimate. The
-  // live market check is authoritative: retain this row until Gamma/CLOB says
-  // the market is closed or no longer accepting orders.
-  if (Number.isFinite(MAX_RESOLUTION_DAYS) && Number.isFinite(days) && days > MAX_RESOLUTION_DAYS) {
-    reasons.push(`stored resolution ${days.toFixed(2)} days exceeds live max ${MAX_RESOLUTION_DAYS} days`);
-  }
-
   return {
     passed: reasons.length === 0,
     reasons,
@@ -986,11 +960,9 @@ function sortLivePrefilterCandidates(rows = []) {
       const bRatio = number(b.riskReward, number(b.netGainIfWinUsdc) && number(b.totalCostUsdc) ? number(b.netGainIfWinUsdc) / number(b.totalCostUsdc) : -Infinity);
       if (bRatio !== aRatio) return bRatio - aRatio;
     }
-    const aAnnualized = selectedAnnualizedReturn(a) ?? -Infinity;
-    const bAnnualized = selectedAnnualizedReturn(b) ?? -Infinity;
-    if (bAnnualized !== aAnnualized) return bAnnualized - aAnnualized;
-    const horizon = compareShorterHorizon(a, b);
-    if (horizon !== 0) return horizon;
+    const aYield = selectedReturnYield(a) ?? -Infinity;
+    const bYield = selectedReturnYield(b) ?? -Infinity;
+    if (bYield !== aYield) return bYield - aYield;
     const aEv = selectedExpectedValue(a) ?? -Infinity;
     const bEv = selectedExpectedValue(b) ?? -Infinity;
     if (bEv !== aEv) return bEv - aEv;
@@ -1012,7 +984,6 @@ function prefilterReasonCountKey(reason) {
   if (/^net profit .* below .* after fees/i.test(text)) return "net profit below live minimum after fees";
   if (/^liquidity .* below live minimum .* USDC/i.test(text)) return "volume below live minimum";
   if (/^volume .* below live minimum .* USDC/i.test(text)) return "volume below live minimum";
-  if (/stored resolution .* exceeds live max/i.test(text)) return "stored resolution exceeds live max days";
   if (/outside live revalidation scan limit/i.test(text)) return "outside live revalidation scan limit after short-expiry ranking";
   // Each of these carries its own overlap keys, so grouping strips them back down to one
   // count per reason instead of one bucket per distinct event/match combination.
@@ -1430,26 +1401,23 @@ function compareShorterHorizon(a, b) {
 }
 
 // The portfolio's selection rule is the source of truth for every replacement
-// decision as well as for the initial shortlist.  Do not compare an open order
-// by absolute dollar EV when the portfolio is ranked by annualized return (or
-// R/R): that can replace a better-ranked order with a lower-ranked one.
+// decision as well as for the initial shortlist. The ranking uses the return at
+// the executable price, not a date-derived annualization horizon.
 function compareLiveCandidatePriority(a, b) {
   if (SELECTION_ORDER === "highest_reward_risk_first") {
     const aRatio = Number(a?.riskReward || 0);
     const bRatio = Number(b?.riskReward || 0);
     if (bRatio !== aRatio) return bRatio - aRatio;
   }
-  const aAnnualized = selectedAnnualizedReturn(a) ?? -Infinity;
-  const bAnnualized = selectedAnnualizedReturn(b) ?? -Infinity;
-  if (bAnnualized !== aAnnualized) return bAnnualized - aAnnualized;
-  const horizon = compareShorterHorizon(a, b);
-  if (horizon !== 0) return horizon;
+  const aYield = selectedReturnYield(a) ?? -Infinity;
+  const bYield = selectedReturnYield(b) ?? -Infinity;
+  if (bYield !== aYield) return bYield - aYield;
   return (selectedExpectedValue(b) ?? -Infinity) - (selectedExpectedValue(a) ?? -Infinity);
 }
 
 function sortLiveEligibleCandidates(rows = []) {
   return [...rows]
-    .filter((item) => Number.isFinite(selectedAnnualizedReturn(item)) && selectedAnnualizedReturn(item) > 0)
+    .filter((item) => Number.isFinite(selectedReturnYield(item)) && selectedReturnYield(item) > 0)
     .filter((item) => Number.isFinite(selectedExpectedValue(item)) && selectedExpectedValue(item) > 0)
     .sort(compareLiveCandidatePriority);
 }
@@ -2484,14 +2452,13 @@ function rotationHumanComparison(review) {
   return `Replace ${rotationOpportunityLabel(position)} (${formatMetric(comparison.currentMetric)}, ${days(comparison.currentDaysToResolution)}, potential win ${Number(position.potentialWinIfHeldUsdc || 0).toFixed(4)} USDC) with ${rotationOpportunityLabel(candidate)} (${formatMetric(comparison.replacementMetric)}, ${days(comparison.replacementDaysToResolution)}, potential win ${Number(candidate.netGainIfWinUsdc || 0).toFixed(4)} USDC); after fees the ${metric} improvement is ${formatDelta(comparison.metricDelta)} and expected P/L changes by ${Number(review.evDeltaUsdc || 0).toFixed(4)} USDC.`;
 }
 
-function scoreEconomics({ probability, qualificationProbability, annualizedReturn, netYield, edge, spread, volume24hr, volumeUsdc, liquidity, endOk }) {
+function scoreEconomics({ probability, qualificationProbability, returnYield, netYield, edge, spread, volume24hr, volumeUsdc, liquidity }) {
   const probabilityOk = qualificationProbability >= MIN_PROBABILITY
     && (MAX_PROBABILITY == null || qualificationProbability <= MAX_PROBABILITY);
   const opportunityOk = probability >= OPPORTUNITY_MIN_PROBABILITY
     && edge >= OPPORTUNITY_MIN_EDGE
-    && annualizedReturn >= OPPORTUNITY_MIN_ANNUAL_RETURN;
-  const minimumAnnualizedReturn = PROBABILITY_SOURCE === "polymarket" ? 0 : MIN_ANNUAL_RETURN;
-  const returnOk = annualizedReturn > minimumAnnualizedReturn;
+    && returnYield > 0;
+  const returnOk = Number.isFinite(returnYield) && returnYield > 0;
   const netYieldOk = Number.isFinite(netYield) && netYield >= MIN_NET_YIELD;
   const spreadOk = spread != null && spread <= MAX_SPREAD;
   // `minLiquidityUsdc` is a portfolio liquidity floor.  24h volume is useful
@@ -2500,16 +2467,13 @@ function scoreEconomics({ probability, qualificationProbability, annualizedRetur
   const candidateVolume = candidateVolumeUsdc({ volumeUsdc, volume24hr, liquidity });
   const liquidityOk = candidateVolume >= MIN_VOLUME_24H;
   return {
-    eligible: endOk && probabilityOk && returnOk && netYieldOk && spreadOk && liquidityOk,
+    eligible: probabilityOk && returnOk && netYieldOk && spreadOk && liquidityOk,
     thesisType: probabilityOk ? "HIGH_CONFIDENCE" : (opportunityOk ? "EDGE_OPPORTUNITY_BELOW_LIVE_THRESHOLD" : "REJECTED"),
     rejectReasons: [
-      endOk ? null : "event end date is in the past",
       probabilityOk ? null : (qualificationProbability < MIN_PROBABILITY
         ? `${probabilitySourceLabel()} ${(qualificationProbability * 100).toFixed(1)}% below live threshold ${(MIN_PROBABILITY * 100).toFixed(1)}%`
         : `${probabilitySourceLabel()} ${(qualificationProbability * 100).toFixed(1)}% above live maximum ${(MAX_PROBABILITY * 100).toFixed(1)}%`),
-      annualizedReturn <= 0
-        ? `${probabilitySourceLabel()} ${returnMetricLabel()} ${(annualizedReturn * 100).toFixed(1)}% is non-profitable after fees`
-        : (returnOk ? null : `${probabilitySourceLabel()} ${returnMetricLabel()} ${(annualizedReturn * 100).toFixed(1)}% below ${(minimumAnnualizedReturn * 100).toFixed(1)}%`),
+      returnOk ? null : `${probabilitySourceLabel()} net return is non-profitable after fees`,
       netYieldOk ? null : `net profit ${Number.isFinite(netYield) ? `${(netYield * 100).toFixed(1)}%` : "-"} below ${(MIN_NET_YIELD * 100).toFixed(1)}% after fees`,
       spreadOk ? null : `spread ${spread == null ? "n/a" : (spread * 100).toFixed(1) + " pts"} too wide`,
       liquidityOk ? null : `volume ${candidateVolume.toFixed(2)} USDC below live minimum ${MIN_VOLUME_24H.toFixed(2)} USDC`,
@@ -2697,11 +2661,10 @@ async function revalidateEvaluation(
     ...market,
     resolutionEndDate: market.endDate || evaluation.resolutionEndDate || evaluation.endDate || null,
   });
-  // Gamma's scheduled date often marks a match start, not the point at which
-  // Polymarket stops accepting trades. As long as the market is active and
-  // accepting orders, verify its live CLOB quote instead of rejecting it just
-  // because that scheduled date has elapsed.
-  const awaitingResolutionWhileTradable = !endDateIsFuture(dateContext.endDate);
+  // A scheduled date is display metadata only. The terminal checks above are
+  // authoritative: a market may be traded while it is active and accepting
+  // orders, even when Gamma's date is already in the past or missing.
+  const awaitingResolutionWhileTradable = false;
 
   const clobMarket = await fetchClobMarket(market.conditionId).catch(() => null);
   const book = bestBook(await fetchJson(new URL(`/book?token_id=${evaluation.tokenId}`, CLOB_HOST), `CLOB book ${evaluation.tokenId}`));
@@ -2710,22 +2673,6 @@ async function revalidateEvaluation(
   const takerEntry = ROTATION_ENTRY_CROSSES_SPREAD || forceTakerEntry;
   const price = orderPriceForBook(book, tick, { forceTakerEntry });
   if (!Number.isFinite(price) || price <= 0 || price >= 1) {
-    // Past its scheduled end with an empty book: the event is over and only its
-    // resolution is outstanding. Terminal, so the stored row is closed out rather than
-    // re-fetched and re-rejected on every run from here on.
-    const finished = finishedAwaitingResolutionRejection({ endDate: dateContext.endDate, price });
-    if (finished) {
-      return {
-        candidate: evaluation,
-        eligible: false,
-        marketGone: true,
-        awaitingResolution: true,
-        rejectReasons: [finished],
-        currentBestBid: book.bestBid,
-        currentBestAsk: book.bestAsk,
-        currentSpread: book.spread,
-      };
-    }
     return { candidate: evaluation, eligible: false, rejectReasons: ["no valid current entry price"] };
   }
   if (USE_LIMIT_ORDERS && POST_ONLY && !takerEntry && book.bestAsk != null && price >= book.bestAsk) {
@@ -2841,22 +2788,11 @@ async function revalidateEvaluation(
   const aiProbability = number(evaluation.aiProbability);
   const marketProbability = marketProbabilityForToken(market, tokenIndex, book, evaluation.marketProbability ?? evaluation.marketPrice ?? price);
   if (marketProbability != null && marketProbability >= EFFECTIVELY_CERTAIN_MARKET_PROBABILITY) {
-    // The other shape a finished match takes: the book does not empty, it converges --
-    // the winning side prices at 1.00 and the losing side at 0.00 while Polymarket has
-    // yet to settle. On a market whose scheduled end has passed that is the outcome
-    // being known, not a transient spike, so the row is retired here too.
-    const finished = finishedAwaitingResolutionRejection({
-      endDate: dateContext.endDate,
-      price,
-      marketProbability,
-    });
     return {
       candidate: evaluation,
       eligible: false,
       status: "REJECTED",
-      marketGone: Boolean(finished),
-      awaitingResolution: Boolean(finished),
-      rejectReasons: [finished || "current market probability rounds to 100.0%; no executable upside remains"],
+      rejectReasons: ["current market probability rounds to 100.0%; no executable upside remains"],
       currentPrice: price,
       marketProbability,
       minOrderSize,
@@ -2908,19 +2844,6 @@ async function revalidateEvaluation(
   }
   const endDate = dateContext.endDate;
   const days = daysToEnd(endDate);
-  const resolvedDays = daysValue({ daysToResolution: days });
-  if (Number.isFinite(MAX_RESOLUTION_DAYS) && resolvedDays > MAX_RESOLUTION_DAYS) {
-    return {
-      candidate: evaluation,
-      eligible: false,
-      rejectReasons: [`resolution ${Number.isFinite(resolvedDays) ? resolvedDays.toFixed(2) : "-"} days exceeds live max ${MAX_RESOLUTION_DAYS} days`],
-      currentPrice: price,
-      minOrderSize,
-    };
-  }
-  // The exchange state above is authoritative. A past scheduled date is not
-  // a disqualifier while Polymarket still accepts the trade.
-  const endOk = true;
   const volume24hr = number(market.volume24hr, number(evaluation.volume24hr, 0));
   const liquidity = number(market.liquidity, number(evaluation.liquidity, 0));
   // Traded volume as Polymarket reports it, refreshed from the live market so the stored
@@ -2942,20 +2865,20 @@ async function revalidateEvaluation(
     : null;
   const selectedExpectedValueUsdc = PROBABILITY_SOURCE === "polymarket" ? netGainIfWin : expectedValue;
   const selectedAnnualizedReturn = PROBABILITY_SOURCE === "polymarket" ? potentialAnnualizedReturn : annualizedReturn;
+  const selectedReturnYield = PROBABILITY_SOURCE === "polymarket" ? potentialRoi : expectedRoi;
   const edge = Number.isFinite(aiProbability) ? aiProbability - price : marketProbability - price;
   const scored = scoreEconomics({
     probability: qualificationProbability,
     qualificationProbability,
-    annualizedReturn: selectedAnnualizedReturn,
+    returnYield: selectedReturnYield,
     netYield: potentialRoi,
     edge: qualificationProbability - price,
     spread: book.spread,
     volume24hr,
     volumeUsdc,
     liquidity,
-    endOk,
   });
-  if (!Number.isFinite(selectedExpectedValueUsdc) || selectedExpectedValueUsdc <= 0 || !Number.isFinite(selectedAnnualizedReturn) || selectedAnnualizedReturn <= 0) {
+  if (!Number.isFinite(selectedExpectedValueUsdc) || selectedExpectedValueUsdc <= 0 || !Number.isFinite(selectedReturnYield) || selectedReturnYield <= 0) {
     return {
       candidate: evaluation,
       eligible: false,
@@ -3004,7 +2927,7 @@ async function revalidateEvaluation(
     daysToResolution: days == null ? null : Number(days.toFixed(2)),
     awaitingResolutionWhileTradable,
     expectedValueUsdc: Number(selectedExpectedValueUsdc.toFixed(4)),
-    annualizedReturn: Number(selectedAnnualizedReturn.toFixed(4)),
+    annualizedReturn: Number.isFinite(selectedAnnualizedReturn) ? Number(selectedAnnualizedReturn.toFixed(4)) : null,
     aiExpectedValueUsdc: Number.isFinite(expectedValue) ? Number(expectedValue.toFixed(4)) : null,
     aiAnnualizedReturn: Number.isFinite(annualizedReturn) ? Number(annualizedReturn.toFixed(4)) : null,
     marketExpectedValueUsdc: Number(marketExpectedValue.toFixed(4)),
@@ -3019,7 +2942,7 @@ async function revalidateEvaluation(
     orderType: USE_LIMIT_ORDERS && !takerEntry ? "GTC" : "FAK",
     riskGroupKeys: risk.keys,
     riskGroupLabels: risk.labels,
-    score: Number((selectedAnnualizedReturn + (PROBABILITY_SOURCE === "polymarket" ? qualificationProbability - price : edge)).toFixed(6)),
+    score: Number((selectedReturnYield + (PROBABILITY_SOURCE === "polymarket" ? qualificationProbability - price : edge)).toFixed(6)),
   };
 }
 
@@ -5381,7 +5304,6 @@ export {
   orderPriceForBook,
   orderPriceBandRejection,
   candidateMarketType,
-  endDateHasPassed,
   finishedAwaitingResolutionRejection,
   repriceReason,
   openOrderActionExplanation,

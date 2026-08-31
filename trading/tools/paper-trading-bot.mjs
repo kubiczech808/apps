@@ -481,7 +481,7 @@ const PAPER_STRATEGIES = {
   conservative: {
     id: "conservative",
     label: envText("PAPER_CONSERVATIVE_DISPLAY_NAME", "Conservative"),
-    selectionMetric: "EV p.a.",
+    selectionMetric: "Net yield",
     minProbability: CONSERVATIVE_MIN_PROBABILITY,
     maxProbability: CONSERVATIVE_MAX_PROBABILITY,
     stakeUsdc: Math.max(0.01, envNumber("PAPER_CONSERVATIVE_STAKE_USDC", STAKE_USDC)),
@@ -510,7 +510,7 @@ const PAPER_STRATEGIES = {
     includeOnlyMarketTags: envTagSet("PAPER_CONSERVATIVE_INCLUDE_ONLY_MARKET_TAGS"),
     excludedMarketTags: envTagSet("PAPER_CONSERVATIVE_EXCLUDED_MARKET_TAGS"),
     selectionOrder: envSelectionOrder("PAPER_CONSERVATIVE_SELECTION_ORDER", "highest_ev_pa_first"),
-    description: `Requires the configured probability source to meet ${(CONSERVATIVE_MIN_PROBABILITY * 100).toFixed(0)}% and resolution within ${DEFAULT_MAX_RESOLUTION_DAYS} days, then selects the highest EV p.a.`,
+    description: `Requires the configured probability source to meet ${(CONSERVATIVE_MIN_PROBABILITY * 100).toFixed(0)}%, then selects the highest net yield from currently tradable Polymarket markets.`,
   },
   highReward: {
     id: "highReward",
@@ -542,7 +542,7 @@ const PAPER_STRATEGIES = {
     includeOnlyMarketTags: envTagSet("PAPER_HIGH_REWARD_INCLUDE_ONLY_MARKET_TAGS"),
     excludedMarketTags: envTagSet("PAPER_HIGH_REWARD_EXCLUDED_MARKET_TAGS"),
     selectionOrder: envSelectionOrder("PAPER_HIGH_REWARD_SELECTION_ORDER", "highest_reward_risk_first"),
-    description: `Requires the configured probability source to meet ${(HIGH_REWARD_MIN_PROBABILITY * 100).toFixed(0)}% and resolution within ${DEFAULT_MAX_RESOLUTION_DAYS} days, then prioritizes eligible opportunities by highest reward against risk.`,
+    description: `Requires the configured probability source to meet ${(HIGH_REWARD_MIN_PROBABILITY * 100).toFixed(0)}%, then prioritizes currently tradable opportunities by highest reward against risk.`,
   },
   moreProbable: {
     id: "moreProbable",
@@ -574,12 +574,12 @@ const PAPER_STRATEGIES = {
     includeOnlyMarketTags: envTagSet("PAPER_MORE_PROBABLE_INCLUDE_ONLY_MARKET_TAGS"),
     excludedMarketTags: envTagSet("PAPER_MORE_PROBABLE_EXCLUDED_MARKET_TAGS"),
     selectionOrder: envSelectionOrder("PAPER_MORE_PROBABLE_SELECTION_ORDER", "highest_reward_risk_first"),
-    description: `Requires the configured probability source to meet ${(MORE_PROBABLE_STRATEGY_MIN_PROBABILITY * 100).toFixed(0)}%, resolution within ${DEFAULT_MAX_RESOLUTION_DAYS} days, and deep liquidity.`,
+    description: `Requires the configured probability source to meet ${(MORE_PROBABLE_STRATEGY_MIN_PROBABILITY * 100).toFixed(0)}% and deep liquidity on a currently tradable market.`,
   },
   equal: {
     id: "equal",
     label: envText("PAPER_EQUAL_DISPLAY_NAME", "Equal"),
-    selectionMetric: "Potential p.a.",
+    selectionMetric: "Net yield",
     minProbability: envNumber("PAPER_EQUAL_MIN_PROBABILITY", 0.75),
     maxProbability: envOptionalProbability("PAPER_EQUAL_MAX_PROBABILITY"),
     stakeUsdc: Math.max(0.01, envNumber("PAPER_EQUAL_STAKE_USDC", STAKE_USDC)),
@@ -641,7 +641,7 @@ function customPaperStrategies(raw = process.env.PAPER_CUSTOM_PORTFOLIOS) {
       id,
       custom: true,
       label: String(row.displayName || id).slice(0, 80),
-      selectionMetric: row.selectionOrder === "highest_reward_risk_first" ? "Reward / risk" : "EV p.a.",
+      selectionMetric: row.selectionOrder === "highest_reward_risk_first" ? "Reward / risk" : "Net yield",
       minProbability: Number.isFinite(Number(row.minProbability)) ? Number(row.minProbability) : 0.5,
       maxProbability: (() => {
         const maximum = normalizeOptionalProbability(row.maxProbability);
@@ -2756,33 +2756,25 @@ function ensureEvaluationErrorMetadata(item = {}) {
 }
 
 function expirePastEvaluations(evaluations = []) {
+  // Gamma's end date is frequently a fixture start or an estimate that is never
+  // corrected. It is useful context, but it is not a settlement signal. In
+  // particular, do not turn an otherwise live candidate into RESOLVED here: the
+  // resolution sync below has the authoritative closed/acceptingOrders fields.
   return evaluations.map((item) => {
-    const status = String(item.status || "").toUpperCase();
-    const end = Date.parse(item.endDate || "");
-    if (status === "ERROR" || status === "RESOLVED" || !Number.isFinite(end) || end > Date.now()) return item;
-
-    const rejectReasons = Array.isArray(item.rejectReasons) ? [...item.rejectReasons] : [];
-    if (!rejectReasons.some((reason) => /end date|past|closed|accepting orders/i.test(String(reason || "")))) {
-      rejectReasons.unshift("event end date is in the past; awaiting resolution sync");
-    }
-    const changedAt = nowIso();
-    const changes = changedEvaluationFields(item, { ...item, status: "RESOLVED", rejectReasons });
+    const dateRetired = String(item?.status || "").toUpperCase() === "RESOLVED"
+      && String(item?.resolutionStatus || "").toUpperCase() === "PENDING_RESULT"
+      && item?.marketClosed !== true
+      && item?.marketActive !== false
+      && item?.acceptingOrders !== false;
+    if (!dateRetired) return item;
     return {
       ...item,
-      status: "RESOLVED",
-      thesisType: "RESOLVED",
-      resolutionStatus: item.resolutionStatus || "PENDING_RESULT",
-      rejectReasons,
-      lastSeenAt: item.lastSeenAt || changedAt,
-      lastChanges: changes,
-      updateHistory: [
-        {
-          changedAt,
-          previousEvaluatedAt: item.evaluatedAt || item.lastSeenAt || null,
-          changes: changes.length ? changes : [{ field: "status", from: status || "ELIGIBLE", to: "RESOLVED" }],
-        },
-        ...(Array.isArray(item.updateHistory) ? item.updateHistory : []),
-      ].slice(0, 30),
+      status: "ELIGIBLE",
+      selectionStatus: "ELIGIBLE",
+      thesisType: item.thesisType === "RESOLVED" ? "HIGH_CONFIDENCE" : item.thesisType,
+      resolutionStatus: null,
+      rejectReasons: (Array.isArray(item.rejectReasons) ? item.rejectReasons : [])
+        .filter((reason) => !/event end date is in the past|scheduled sports event has started/i.test(String(reason || ""))),
     };
   });
 }
@@ -2852,49 +2844,46 @@ function resolvedEvaluationFromMarket(item, market, checkedAt = nowIso()) {
     finalOutcomePrice: market.closed && Number.isFinite(resolvedPrice) ? Number(resolvedPrice.toFixed(4)) : null,
   };
 
-  if (market.closed) {
+  const marketNoLongerTrades = market.closed || market.active === false || market.acceptingOrders === false;
+  if (marketNoLongerTrades) {
     return withEvaluationResolutionUpdate(item, {
       ...patch,
       status: "RESOLVED",
       thesisType: "RESOLVED",
-      resolutionStatus: Number.isFinite(resolvedPrice) ? "FINAL_PRICE_AVAILABLE" : "PENDING_RESULT",
-    }, "Polymarket market is closed; no longer selectable for new trades", checkedAt);
+      resolutionStatus: market.closed && Number.isFinite(resolvedPrice) ? "FINAL_PRICE_AVAILABLE" : "NOT_ACCEPTING_ORDERS",
+    }, "Polymarket market is closed or no longer accepting orders; excluded from new trades", checkedAt);
   }
 
-  if (market.acceptingOrders === false) {
-    return withEvaluationResolutionUpdate(item, {
-      ...patch,
-      status: "RESOLVED",
-      thesisType: "RESOLVED",
-      resolutionStatus: "NOT_ACCEPTING_ORDERS",
-    }, "Polymarket market is no longer accepting orders; excluded from active evaluated opportunities", checkedAt);
-  }
-
-  if (dateContext.sportsEventStarted) {
-    return withEvaluationResolutionUpdate(item, {
-      ...patch,
-      status: "RESOLVED",
-      thesisType: "RESOLVED",
-      resolutionStatus: "PENDING_RESULT",
-    }, "scheduled sports event has started; awaiting official Polymarket resolution", checkedAt);
-  }
-
-  if (remainingDays != null && remainingDays <= 0) {
-    return withEvaluationResolutionUpdate(item, {
-      ...patch,
-      status: "RESOLVED",
-      thesisType: "RESOLVED",
-      resolutionStatus: "PENDING_RESULT",
-    }, "event end date is in the past; awaiting resolution sync", checkedAt);
-  }
-
-  return withEvaluationResolutionUpdate(item, patch, "", checkedAt);
+  // Repair rows which older versions retired solely because their scheduled date
+  // elapsed. A current Gamma response saying active + accepting orders wins over
+  // that old date-derived lifecycle state.
+  const wasDateRetired = String(item.status || "").toUpperCase() === "RESOLVED"
+    && String(item.resolutionStatus || "").toUpperCase() === "PENDING_RESULT"
+    && item.marketClosed !== true
+    && item.acceptingOrders !== false;
+  const activePatch = wasDateRetired
+    ? {
+        ...patch,
+        status: "ELIGIBLE",
+        selectionStatus: "ELIGIBLE",
+        thesisType: item.thesisType === "RESOLVED" ? "HIGH_CONFIDENCE" : item.thesisType,
+        resolutionStatus: null,
+        rejectReasons: (Array.isArray(item.rejectReasons) ? item.rejectReasons : [])
+          .filter((reason) => !/event end date is in the past|scheduled sports event has started/i.test(String(reason || ""))),
+      }
+    : patch;
+  return withEvaluationResolutionUpdate(item, activePatch, "", checkedAt);
 }
 
 async function refreshStoredEvaluationResolutionStatuses(evaluations = []) {
   const refreshable = evaluations
     .map((item, index) => ({ item, index, status: String(item.status || "").toUpperCase(), slug: evaluationResolutionSlug(item) }))
-    .filter(({ status, slug }) => slug && status !== "ERROR" && status !== "RESOLVED")
+    .filter(({ item, status, slug }) => slug && status !== "ERROR" && (
+      status !== "RESOLVED"
+      || (String(item.resolutionStatus || "").toUpperCase() === "PENDING_RESULT"
+        && item.marketClosed !== true
+        && item.acceptingOrders !== false)
+    ))
     .sort((a, b) => resolutionSyncPriority(a.item) - resolutionSyncPriority(b.item))
     .slice(0, Math.max(0, EVALUATION_RESOLUTION_SYNC_LIMIT));
   if (!refreshable.length) return evaluations;
@@ -4899,18 +4888,17 @@ function buildHeuristicAnalysis({
   };
 }
 
-function scoreStatus({ probability, annualizedReturn, edge, spreadOk, volumeOk, depthOk, endOk }) {
+function scoreStatus({ probability, annualizedReturn, edge, spreadOk, volumeOk, depthOk }) {
   const highConfidenceOk = probability >= MIN_PROBABILITY;
   const opportunityOk = probability >= OPPORTUNITY_MIN_PROBABILITY
     && edge >= OPPORTUNITY_MIN_EDGE
     && annualizedReturn >= OPPORTUNITY_MIN_ANNUAL_RETURN;
   const returnOk = annualizedReturn >= MIN_ANNUAL_RETURN;
-  const eligible = endOk && (highConfidenceOk || opportunityOk) && returnOk && spreadOk && volumeOk && depthOk;
+  const eligible = (highConfidenceOk || opportunityOk) && returnOk && spreadOk && volumeOk && depthOk;
   return {
     status: eligible ? "ELIGIBLE" : "REJECTED",
     thesisType: highConfidenceOk ? "HIGH_CONFIDENCE" : (opportunityOk ? "EDGE_OPPORTUNITY" : "REJECTED"),
     rejectReasons: [
-      endOk ? null : "event end date is in the past",
       highConfidenceOk || opportunityOk ? null : `probability ${(probability * 100).toFixed(1)}% below high-confidence threshold and edge-opportunity threshold`,
       annualizedReturn <= 0
         ? `annualized EV ${(annualizedReturn * 100).toFixed(1)}% is non-profitable after fees`
@@ -4933,13 +4921,13 @@ function rounded(value, digits) {
   return Number.isFinite(numeric) ? Number(numeric.toFixed(digits)) : null;
 }
 
-function economicsForProbability({ probability, execution, stake, takerFee, totalCost, days, spreadOk, volumeOk, depthOk, endOk }) {
+function economicsForProbability({ probability, execution, stake, takerFee, totalCost, days, spreadOk, volumeOk, depthOk }) {
   const executionPrice = execution.avgPrice;
   const expectedValue = probability * execution.shares - stake - takerFee;
   const expectedRoi = totalCost > 0 ? expectedValue / totalCost : 0;
   const annualizedReturn = annualizeReturn(expectedRoi, days);
   const edge = probability - executionPrice;
-  const scored = scoreStatus({ probability, annualizedReturn, edge, spreadOk, volumeOk, depthOk, endOk });
+  const scored = scoreStatus({ probability, annualizedReturn, edge, spreadOk, volumeOk, depthOk });
   return {
     expectedValue,
     expectedRoi,
@@ -5021,7 +5009,6 @@ function evaluateCandidate({ market, outcomeIndex, tokenId, book, learningProfil
   const dateContext = marketDateContext(market, market.createdAt || market.updatedAt);
   const endDate = dateContext.endDate;
   const days = daysToEnd(endDate);
-  const endOk = endDateIsFuture(endDate);
   const stake = PORTFOLIO_USDC * MAX_FRACTION;
   const execution = simulateMarketBuy(asks, stake);
   const fees = feeConfig(market);
@@ -5051,7 +5038,7 @@ function evaluateCandidate({ market, outcomeIndex, tokenId, book, learningProfil
   const spreadOk = spread != null && spread <= MAX_SPREAD;
   const volumeOk = volume24hr >= MIN_VOLUME_24H || liquidity >= MIN_VOLUME_24H;
   const depthOk = execution.fillable;
-  const economics = economicsForProbability({ probability, execution, stake, takerFee, totalCost, days, spreadOk, volumeOk, depthOk, endOk });
+  const economics = economicsForProbability({ probability, execution, stake, takerFee, totalCost, days, spreadOk, volumeOk, depthOk });
   const marketProbability = validMarketProbability(outcomePrices[outcomeIndex]) ?? executionPrice;
   const marketEconomics = economicsForProbability({
     probability: marketProbability,
@@ -5063,7 +5050,6 @@ function evaluateCandidate({ market, outcomeIndex, tokenId, book, learningProfil
     spreadOk,
     volumeOk,
     depthOk,
-    endOk,
   });
   // Which verdict the row carries. With no model consulted there is no AI probability, so
   // the AI-scored economics are a row of zeros -- and those zeros were what the run log
@@ -5475,7 +5461,6 @@ function refreshEvaluationAfterProbability(evaluation, probability, modelName, m
   const volumeOk = volume24hr >= MIN_VOLUME_24H || liquidity >= MIN_VOLUME_24H;
   const depthOk = Number(evaluation.filledStakeUsdc || 0) >= stake * 0.999;
   const days = Number(evaluation.daysToResolution);
-  const endOk = endDateIsFuture(evaluation.endDate);
   const economics = economicsForProbability({
     probability,
     execution,
@@ -5486,7 +5471,6 @@ function refreshEvaluationAfterProbability(evaluation, probability, modelName, m
     spreadOk,
     volumeOk,
     depthOk,
-    endOk,
   });
   const marketProbability = validMarketProbability(evaluation.marketProbability) ?? Number(evaluation.marketPrice);
   const marketEconomics = Number.isFinite(marketProbability)
@@ -5500,7 +5484,6 @@ function refreshEvaluationAfterProbability(evaluation, probability, modelName, m
         spreadOk,
         volumeOk,
         depthOk,
-        endOk,
       })
     : null;
 
@@ -6484,7 +6467,6 @@ function dueExecutionStrategies(state) {
 }
 
 function strategyEligibleCandidates(eligible, strategy) {
-  const maxResolutionDays = strategyMaxResolutionDays(strategy);
   const requiredMarketType = normalizePortfolioMarketType(strategy.marketType, strategy.requireMostProbableOutcome);
   let rows = [...eligible].filter((item) => {
     const tokenId = String(item?.tokenId || item?.clobTokenId || item?.assetId || "");
@@ -6495,7 +6477,11 @@ function strategyEligibleCandidates(eligible, strategy) {
     const selectedProbability = portfolioProbabilityForStrategy(item, strategy);
     if (Number.isFinite(minProbability) && (!Number.isFinite(selectedProbability) || selectedProbability < minProbability)) return false;
     if (maxProbability != null && Number.isFinite(selectedProbability) && selectedProbability > maxProbability) return false;
-    if (daysValue(item) > maxResolutionDays) return false;
+    const status = String(item?.status || item?.selectionStatus || "").toUpperCase();
+    if (["RESOLVED", "CLOSED", "FINALIZED", "SETTLED"].includes(status)
+      || item?.marketClosed === true
+      || item?.marketActive === false
+      || item?.acceptingOrders === false) return false;
     // The same test the statistics apply, for the same reason: an order sent into a book
     // this wide has no counterparty to fill against, so a row quoting an attractive
     // midpoint is not an opportunity. A volume floor does not catch it -- rowVolumeUsdc
@@ -6713,12 +6699,10 @@ function portfolioFilterResult(item, strategy) {
   const selectionStatus = String(item.selectionStatus || "").toUpperCase();
   const minProbability = Number(strategy.minProbability);
   const maxProbability = normalizeOptionalProbability(strategy.maxProbability);
-  const maxResolutionDays = strategyMaxResolutionDays(strategy);
   const minLiquidityUsdc = Number(strategy.minLiquidityUsdc);
   const minNetYield = Math.max(0, Number(strategy.minNetYield) || 0);
   const probabilitySource = strategy.probabilitySource === "polymarket" ? "polymarket" : "ai";
   const selectedProbability = portfolioProbabilityForStrategy(item, strategy);
-  const days = daysValue(item);
   const liquidity = Number(item.liquidity || 0);
   // The portfolio threshold is a traded-volume floor, which is what Polymarket shows.
   const candidateVolume = rowVolumeUsdc(item);
@@ -6769,15 +6753,8 @@ function portfolioFilterResult(item, strategy) {
     const label = probabilitySource === "polymarket" ? "Polymarket probability" : "AI probability";
     reasons.push(`${label} ${returnMetric} ${(annualizedReturn * 100).toFixed(1)}% below ${(MIN_ANNUAL_RETURN * 100).toFixed(1)}%`);
   }
-  if (Number.isFinite(days) && days <= 0 && String(item.endDateSource || "") !== "sports-event-start") {
-    // Already past its own resolution window, so it cannot be opened. scoreEconomics
-    // rejects it with the same finding; keeping it listed only produced shortlists of
-    // finished fixtures and runs that could do nothing but skip.
-    //
-    // A sports row dated by kickoff is excluded: past kickoff means in play, not over.
-    reasons.push("event end date is in the past");
-  } else if (days > maxResolutionDays) {
-    reasons.push(`resolution ${Number.isFinite(days) ? days.toFixed(2) : "-"} days exceeds max ${maxResolutionDays}`);
+  if (item?.marketClosed === true || item?.marketActive === false || item?.acceptingOrders === false) {
+    reasons.push("market is closed or no longer accepting orders");
   }
   if (Number.isFinite(minLiquidityUsdc) && candidateVolume < minLiquidityUsdc) {
     reasons.push(`volume ${candidateVolume.toFixed(2)} below ${minLiquidityUsdc.toFixed(2)} USDC`);
@@ -6844,24 +6821,24 @@ function sortEligibleForStrategy(eligible, strategy = PAPER_STRATEGIES.conservat
         if (noPreference) return noPreference;
         return bRatio - aRatio;
       }
-      const horizon = compareShorterHorizon(a, b);
-      if (horizon !== 0) return horizon;
       const aEconomics = portfolioEconomics(a, strategy);
       const bEconomics = portfolioEconomics(b, strategy);
-      if (bEconomics.annualizedReturn !== aEconomics.annualizedReturn) return bEconomics.annualizedReturn - aEconomics.annualizedReturn;
+      const aYield = netYieldAfterFees(a, strategy) ?? -Infinity;
+      const bYield = netYieldAfterFees(b, strategy) ?? -Infinity;
+      if (bYield !== aYield) return bYield - aYield;
       return bEconomics.expectedValueUsdc - aEconomics.expectedValueUsdc;
     });
   }
   return rows.sort((a, b) => {
     const aEconomics = portfolioEconomics(a, strategy);
     const bEconomics = portfolioEconomics(b, strategy);
-    if (bEconomics.annualizedReturn !== aEconomics.annualizedReturn) {
-      const noPreference = preferNoWhenComparable(a, b, bEconomics.annualizedReturn - aEconomics.annualizedReturn);
+    const aYield = netYieldAfterFees(a, strategy) ?? -Infinity;
+    const bYield = netYieldAfterFees(b, strategy) ?? -Infinity;
+    if (bYield !== aYield) {
+      const noPreference = preferNoWhenComparable(a, b, bYield - aYield);
       if (noPreference) return noPreference;
-      return bEconomics.annualizedReturn - aEconomics.annualizedReturn;
+      return bYield - aYield;
     }
-    const horizon = compareShorterHorizon(a, b);
-    if (horizon !== 0) return horizon;
     return bEconomics.expectedValueUsdc - aEconomics.expectedValueUsdc;
   });
 }
@@ -7165,10 +7142,8 @@ function latestUniqueExecutionEvaluations(evaluations = []) {
 // Rows a resolved market left behind cannot be opened, and holding one in the candidate
 // pool actively costs a candidate.
 //
-// portfolioFilterResult rejects every one of them twice over -- a polymarket-probability
-// portfolio on "base status RESOLVED is not executable", an AI-probability one on "base
-// status RESOLVED is not ELIGIBLE", and both again on "event end date is in the past" --
-// so no resolved row has ever been eligible for any portfolio. What they did do is
+// portfolioFilterResult rejects every one of them through the actual terminal market
+// status. What they did do is
 // outnumber the live catalogue several times over, and share a dedupe key with it: a
 // market that is scanned again while its resolved twin is still in the archive collapses
 // to whichever row carries the later timestamp, and if that is the resolved one, a
@@ -7807,7 +7782,7 @@ function maybeOpenScheduledTrade(portfolioState, eligible, strategy = PAPER_STRA
   portfolioState.trades.unshift(trade);
   portfolioState.lastTradeDate = today;
   portfolioState.lastTradeHour = currentHour;
-  const reason = `best ${strategy.selectionMetric} non-correlated candidate within max ${strategyMaxResolutionDays(strategy)} day resolution`;
+  const reason = `best ${strategy.selectionMetric} non-correlated candidate with a live Polymarket order book`;
   return {
     action: "OPENED",
     reason,

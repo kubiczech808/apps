@@ -1120,7 +1120,7 @@ function portfolioReturnMetricLabel(config = {}) {
 }
 
 function selectionOrderLabel(value, config = {}) {
-  return normalizeSelectionOrder(value) === "highest_reward_risk_first" ? "Reward/risk" : portfolioReturnMetricLabel(config);
+  return normalizeSelectionOrder(value) === "highest_reward_risk_first" ? "Reward/risk" : "Net yield";
 }
 
 function normalizeOptionalDays(value) {
@@ -2813,9 +2813,10 @@ function binaryOutcomeQuotesAreBothZero(item) {
 }
 
 function evaluationEnded(item) {
-  if (evaluationResolvedByMarket(item)) return true;
-  const end = Date.parse(evaluationEndDate(item) || "");
-  return Number.isFinite(end) && end <= Date.now();
+  // Gamma's end date is scheduling metadata, not a reliable settlement signal.
+  // A candidate leaves the active list only after Polymarket reports a terminal
+  // market state (or the persisted record contains an actual final result).
+  return evaluationResolvedByMarket(item);
 }
 
 function polymarketUrl(item) {
@@ -6481,7 +6482,7 @@ function evaluationReasons(item, riskReason = "") {
   const reasons = [];
   if (riskReason) reasons.push(riskReason);
   if (portfolioEvaluationStatus(item) === "RESOLVED") {
-    reasons.push("market is closed, no longer accepting orders, or past its end date; excluded from new trade selection and waiting for/following resolution sync");
+    reasons.push("market is closed, resolved, or no longer accepting orders; excluded from new trade selection");
   }
   if (Number.isFinite(aiProbability) && aiProbability < threshold) {
     reasons.push(`portfolio filter: AI probability ${probability(aiProbability)} below selected ${probability(threshold)}`);
@@ -7779,8 +7780,8 @@ function paperPortfolioList(botState) {
   return [{
     id: "conservative",
     label: "Conservative",
-    selectionMetric: "EV p.a.",
-    description: "Prioritizes eligible opportunities by EV p.a. and expected value.",
+    selectionMetric: "Net yield",
+    description: "Prioritizes currently tradable opportunities by net yield and expected value.",
     portfolio: botState?.portfolio || {},
     trades: Array.isArray(botState?.trades) ? botState.trades : [],
     lastDecision: botState?.lastDecision || null,
@@ -7838,18 +7839,14 @@ function portfolioRuleRows(portfolio = {}) {
   const mode = portfolio.id ? paperModeFromStrategyId(portfolio.id) : state.mode;
   const config = portfolioConfigForMode(mode);
   const threshold = thresholdForMode(mode);
-  const maxResolutionDays = resolutionDaysForMode(mode);
   const minLiquidityUsdc = Number(config.minLiquidityUsdc);
   const minNetYield = normalizeMinimumNetYield(config.minNetYield);
-  const returnMetric = portfolioReturnMetricLabel(config);
   const priority = config.selectionOrder === "highest_reward_risk_first"
-    ? `Highest reward/risk, then shorter resolution and ${returnMetric}`
-    : `Highest ${returnMetric}, then shorter resolution and net gain`;
-  const resolution = `Max ${maxResolutionDays.toLocaleString("en-US", { maximumFractionDigits: 0 })} days`;
+    ? "Highest reward/risk, then net yield"
+    : "Highest net yield, then net gain";
   const rows = [
     ["Probability threshold", probabilityRangeRuleValue(config, threshold)],
     ["Stake sizing", stakeSizingRuleValue(mode, portfolio)],
-    ["Resolution filter", resolution],
     ["Trade priority", priority],
     ["Market type", portfolioMarketTypeLabel(config.marketType)],
     ...(config.excludeOverUnderMarkets === true ? [["Over/Under markets", "Excluded"]] : []),
@@ -7889,20 +7886,17 @@ function livePortfolioRuleRows() {
   const mode = isLiveMode() ? state.mode : "live";
   const config = portfolioConfigForMode(mode);
   const useLimitOrders = config.useLimitOrders === true;
-  const maxResolutionDays = resolutionDaysForMode(mode);
   const minLiquidityUsdc = normalizeOptionalMoney(config.minLiquidityUsdc);
   const minNetYield = normalizeMinimumNetYield(config.minNetYield);
   const includeOnlyTags = normalizeMarketTagList(config.includeOnlyMarketTags);
   const excludedTags = normalizeMarketTagList(config.excludedMarketTags);
-  const returnMetric = portfolioReturnMetricLabel(config);
   const priority = config.selectionOrder === "highest_reward_risk_first"
-    ? `Highest reward/risk, then shorter resolution and ${returnMetric}`
-    : `Highest ${returnMetric}, then shorter resolution and net gain`;
+    ? "Highest reward/risk, then net yield"
+    : "Highest net yield, then net gain";
   return [
     ...(isLivePortfolioMode(mode) ? [["Initial capital", liveInitialCapitalForMode(mode, config) == null ? "not set" : money(liveInitialCapitalForMode(mode, config))]] : []),
     ["Probability threshold", probabilityRangeRuleValue(config, currentEligibilityThreshold())],
     ["Stake sizing", stakeSizingRuleValue(mode, state.liveState?.portfolio)],
-    ["Resolution filter", `Max ${maxResolutionDays} days`],
     ["Trade priority", priority],
     ["Market type", portfolioMarketTypeLabel(config.marketType)],
     ...(config.excludeOverUnderMarkets === true ? [["Over/Under markets", "Excluded"]] : []),
@@ -8236,8 +8230,6 @@ function portfolioCandidateFilterReasons(item, mode = state.mode) {
   const displayStatus = portfolioEvaluationStatus(item);
   const probabilitySource = normalizeProbabilitySource(config.probabilitySource);
   const selectedProbability = portfolioProbability(item, config);
-  const maxDays = resolutionDaysForMode(normalizedMode);
-  const days = evaluationDaysLeft(item);
   const liquidity = rowVolumeUsdc(item);
   const minLiquidity = normalizeOptionalMoney(config.minLiquidityUsdc);
   const minNetYield = normalizeMinimumNetYield(config.minNetYield);
@@ -8303,10 +8295,6 @@ function portfolioCandidateFilterReasons(item, mode = state.mode) {
     if (Number.isFinite(minLiquidity) && liquidity < minLiquidity) {
       reasons.push(`volume ${money(liquidity)} below ${money(minLiquidity)}`);
     }
-    if (Number.isFinite(days) && Number.isFinite(maxDays) && days > maxDays) {
-      reasons.push(`resolves in ${compactDays(days)}, beyond ${maxDays} days`);
-    }
-    if (Number.isFinite(days) && days <= 0) reasons.push("event end date is in the past");
     return reasons;
   }
   if (!Number.isFinite(annualizedReturn)) {
@@ -8331,20 +8319,6 @@ function portfolioCandidateFilterReasons(item, mode = state.mode) {
       ? `: ${executionCheck.rejectReasons[0]}`
       : "";
     reasons.push(`latest live revalidation ${String(executionCheck.status || "REJECTED").toLowerCase()}${detail}`);
-  }
-  if (!Number.isFinite(days)) {
-    reasons.push("missing resolution date");
-  } else if (days <= 0 && String(item.endDateSource || "") !== "sports-event-start") {
-    // Its own resolution window has passed, so it cannot be opened: evaluation already
-    // reports "event end date is in the past" and rejects it. Listing it anyway meant a
-    // shortlist of finished fixtures and a run that could only skip.
-    //
-    // A sports row whose date is the kickoff is deliberately excluded from this: past
-    // kickoff means the match is in play, not over, and those stay tradable. The live
-    // market check is what retires them.
-    reasons.push("event end date is in the past");
-  } else if (days > maxDays) {
-    reasons.push(`resolution ${days.toFixed(2)} days exceeds max ${maxDays}`);
   }
   if (minLiquidity != null && liquidity < minLiquidity) {
     reasons.push(`volume ${money(liquidity)} below ${money(minLiquidity)}`);

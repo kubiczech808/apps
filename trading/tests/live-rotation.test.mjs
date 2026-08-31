@@ -4093,102 +4093,43 @@ test("run digest: a candidate dropped before revalidation can be explained from 
   assert.match(block.slice(0, 700), /if prefilter_reasons:/);
 });
 
-// Reported, of a candidate that stayed on the dashboard across several runs while every
-// one of those runs skipped with "all revalidated candidates failed current execution
-// criteria": the match had already been played. The owner's reading was right -- the event
-// had finished, Polymarket had simply not settled it yet -- and the two things missing were
-// that the run log never said so, and that the row was never taken out of the candidate
-// list, so the next run paid for the same live fetch to reach the same dead end.
-test("finished events: a past-dated market with nothing left to quote is named and retired", () => {
-  const { finishedAwaitingResolutionRejection, endDateHasPassed } = executor;
-  const PAST = new Date(Date.now() - 3600000).toISOString();
-  const FUTURE = new Date(Date.now() + 3600000).toISOString();
+test("finished events: terminal lifecycle comes from Polymarket status, never the scheduled date", () => {
+  const { finishedAwaitingResolutionRejection } = executor;
 
-  // The two shapes a finished match takes on the exchange. An emptied book:
-  const emptied = finishedAwaitingResolutionRejection({ endDate: PAST, price: null });
-  assert.ok(emptied, "a past-dated market with no executable price is a finished event");
-  assert.match(emptied, /already finished/, "the reason must say the event is over");
-  assert.match(emptied, /waiting for Polymarket to publish its resolution/,
-    "and that it is the resolution, not the market, that is outstanding");
+  const emptied = finishedAwaitingResolutionRejection({ marketClosed: true, price: null });
+  assert.ok(emptied, "a closed market with no executable price is terminal");
+  assert.match(emptied, /Polymarket reports this market is closed/);
 
-  // ...and a book that converged instead of emptying: the winning side prices at ~1.00.
   const settled = finishedAwaitingResolutionRejection({
-    endDate: PAST,
+    acceptingOrders: false,
     price: 0.999,
     marketProbability: 0.9999,
   });
-  assert.ok(settled, "a past-dated market priced at certainty is a finished event too");
-  assert.match(settled, /already finished/);
-  assert.match(settled, /100\.0%/, "the reason must name the price it settled at");
+  assert.ok(settled, "a non-trading market priced at certainty is terminal");
+  assert.match(settled, /100\.0%/);
 
-  // Neither half is terminal on its own, and that is the point of the pair.
-  //
-  // A past date alone must not retire anything: Gamma's end date is routinely a match
-  // start or a stale estimate, and a market still quoting a tradable price is still
-  // tradable. Retiring those is exactly the behaviour that keeping past-date candidates
-  // was asked for.
-  assert.equal(finishedAwaitingResolutionRejection({ endDate: PAST, price: 0.775, marketProbability: 0.775 }), null,
-    "a past-dated market that still quotes a tradable price stays a candidate");
-
-  // And a dead book on a market that has not reached its end date is transient -- books
-  // refill, and a probability that spikes to 100% can come back down.
-  assert.equal(finishedAwaitingResolutionRejection({ endDate: FUTURE, price: null }), null);
-  assert.equal(finishedAwaitingResolutionRejection({ endDate: FUTURE, price: 0.999, marketProbability: 0.9999 }), null);
-
-  // An unknown end date is evidence of nothing. `!endDateIsFuture()` answers true for it,
-  // which would retire rows at random, so this deliberately does not reuse that helper.
-  for (const unknown of [null, undefined, "", "not a date"]) {
-    assert.equal(endDateHasPassed(unknown), false, `${String(unknown)} is not a passed end date`);
-    assert.equal(finishedAwaitingResolutionRejection({ endDate: unknown, price: null }), null,
-      `${String(unknown)} must not retire a candidate`);
-  }
-  assert.equal(endDateHasPassed(PAST), true);
-  assert.equal(endDateHasPassed(FUTURE), false);
+  // Date, an empty book, and a certain quote do not by themselves prove settlement.
+  // A later revalidation may see a live order book again.
+  assert.equal(finishedAwaitingResolutionRejection({ price: null }), null);
+  assert.equal(finishedAwaitingResolutionRejection({ price: 0.999, marketProbability: 0.9999 }), null);
 });
 
-test("finished events: the verdict is terminal, logged, and closes the stored row out", async () => {
+test("finished events: only the current Polymarket status can close a candidate out", async () => {
   const { readFile } = await import("node:fs/promises");
   const source = await readFile(new URL("../tools/live-order-executor.mjs", import.meta.url), "utf8");
-  const persist = await readFile(new URL("../tools/persist-live-revalidation.py", import.meta.url), "utf8");
-
-  // Both leaking branches must consult the rule. Before this, "no valid current entry
-  // price" returned without marketGone, so the row was re-fetched and re-rejected on every
-  // run for as long as it was retained -- forever, since nothing else would ever close it.
-  const noPrice = source.slice(source.indexOf('rejectReasons: ["no valid current entry price"]') - 900,
-    source.indexOf('rejectReasons: ["no valid current entry price"]'));
-  assert.match(noPrice, /finishedAwaitingResolutionRejection\(\{ endDate: dateContext\.endDate, price \}\)/,
-    "the empty-book branch must ask whether the event has finished");
-  assert.match(noPrice, /marketGone: true/, "and mark that verdict terminal");
-
-  const certainAt = source.indexOf(
-    "if (marketProbability != null && marketProbability >= EFFECTIVELY_CERTAIN_MARKET_PROBABILITY) {");
-  assert.ok(certainAt > 0, "the settled-price rejection must be findable");
-  const certain = source.slice(certainAt, source.indexOf("const probability = PROBABILITY_SOURCE", certainAt));
-  assert.match(certain, /finishedAwaitingResolutionRejection\(/,
-    "the settled-price branch must ask the same question");
-  assert.match(certain, /marketGone: Boolean\(finished\)/,
-    "and stay non-terminal when the market has not reached its end date");
-
-  // marketGone is what the persist step acts on, and it must survive into the update.
-  const update = source.slice(source.indexOf("function liveRevalidationUpdate"),
-    source.indexOf("function successfulCancelResponse"));
-  assert.match(update, /awaitingResolution: Boolean\(item\?\.awaitingResolution\)/,
-    "the stored row must record that it is awaiting a resolution, not delisted");
-  assert.match(update, /marketGone \? "CLOSED"/, "a terminal verdict is stored as CLOSED");
-
-  // The run has to say it tried. A capped rejection list is not enough on its own: the
-  // count and the note are what a reader of a SKIP sees without opening the detail.
-  assert.match(source, /finishedAwaitingResolutionCandidates: finishedAwaitingResolution\.length,/,
-    "the run digest must count the finished events it evaluated");
-  assert.match(source, /const finishedAwaitingResolution = checked\.filter\(\(item\) => item\?\.awaitingResolution\);/);
-  assert.match(source, /No order could be placed on them and they are now marked closed/,
-    "the note must say both that no order was possible and that the rows are now retired");
-  // And the note must be attached to the skip explanation, not computed and dropped.
-  assert.match(source, /all revalidated candidates failed current execution criteria\.\$\{finishedAwaitingResolutionNote\}/);
-
-  // Finally the persist step, which is what actually removes it from the candidate list.
-  assert.match(persist, /if update\.get\("awaitingResolution"\):/);
-  assert.match(persist, /item\["closedReason"\] = "finished, awaiting Polymarket resolution"/);
+  const revalidation = source.slice(source.indexOf("async function revalidateEvaluation"), source.indexOf("function compactLiveRunRecord"));
+  assert.match(revalidation, /market\.closed \|\| market\.active === false \|\| market\.acceptingOrders === false/,
+    "the live market response is the terminal source of truth");
+  assert.doesNotMatch(revalidation, /resolution .* exceeds live max|end date is in the past/,
+    "revalidation must not reject a candidate based on Gamma's date");
+  assert.match(revalidation, /rejectReasons: \["no valid current entry price"\]/,
+    "a temporary empty book is rejected for this run without being declared closed");
+  const prefilter = source.slice(source.indexOf("function prefilterLiveCandidate"), source.indexOf("function sortLivePrefilterCandidates"));
+  assert.doesNotMatch(prefilter, /stored resolution .* exceeds live max|MAX_RESOLUTION_DAYS/,
+    "the candidate pool must not discard a row by its scheduled resolution date");
+  const ranking = source.slice(source.indexOf("function sortLivePrefilterCandidates"), source.indexOf("function prefilterReasonCountKey"));
+  assert.doesNotMatch(ranking, /compareShorterHorizon|selectedAnnualizedReturn/,
+    "the candidate ranking must not derive a preference from the scheduled horizon");
 });
 
 // Reported of a run whose whole log read:

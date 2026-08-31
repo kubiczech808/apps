@@ -770,6 +770,42 @@ test("equal risk: a past estimated end date does not bypass a still-live synthet
   assert.equal(bot.shouldCheckEqualStopBeforePending({ equalRiskProtection: true, awaitingResolution: true, marketClosed: true }), false);
 });
 
+test("candidate lifecycle: a scheduled date never retires a market that Polymarket still trades", () => {
+  const strategy = {
+    ...bot.PAPER_STRATEGIES.conservative,
+    minProbability: 0.7,
+    minLiquidityUsdc: 0,
+    minNetYield: 0,
+    excludedCandidateTokenIds: new Set(),
+  };
+  const candidate = {
+    tokenId: "active-after-date",
+    status: "ELIGIBLE",
+    marketProbability: 0.8,
+    marketPrice: 0.8,
+    bestBid: 0.8,
+    bestAsk: 0.81,
+    spread: 0.01,
+    volumeUsdc: 50000,
+    totalCostUsdc: 5,
+    netGainIfWinUsdc: 1,
+    netYield: 0.2,
+    // Deliberately old: Gamma frequently returns a fixture start here.
+    daysToResolution: -4,
+    endDate: new Date(Date.now() - 4 * 86400000).toISOString(),
+    marketClosed: false,
+    marketActive: true,
+    acceptingOrders: true,
+  };
+
+  assert.equal(bot.strategyEligibleCandidates([candidate], strategy).length, 1);
+  assert.equal(bot.portfolioFilterResult(candidate, strategy).eligible, true);
+
+  const closed = { ...candidate, marketClosed: true, acceptingOrders: false };
+  assert.deepEqual(bot.strategyEligibleCandidates([closed], strategy), []);
+  assert.match(bot.portfolioFilterResult(closed, strategy).reasons.join(" "), /closed or no longer accepting orders/);
+});
+
 test("economics: net yield is measured against the real stake, not the target win", () => {
   // $0.30 net gain on a $5 stake is a 6% yield, not a 300% one.
   assert.equal(bot.netYieldAfterFees({ netGainIfWinUsdc: 0.3, stakeUsdc: 5 }), 0.06);
