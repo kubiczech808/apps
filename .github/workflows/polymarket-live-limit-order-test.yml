@@ -371,7 +371,7 @@ jobs:
         if: always()
         env:
           TRADING_STORAGE_INGEST_URL: https://www.osobnizkusenosti.cz/trading/api.php?action=storage-ingest
-          TRADING_TRIGGER_KEY: ${{ secrets.TRADING_TRIGGER_KEY || secrets.POLYTRADING_DB_PASSWORD }}
+          TRADING_TRIGGER_KEY: ${{ secrets.POLYTRADING_DB_PASSWORD }}
           TRADING_STORAGE_INGEST_REQUIRED: "false"
         run: |
           execution_target=live-execution
