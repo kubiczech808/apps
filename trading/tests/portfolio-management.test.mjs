@@ -437,6 +437,23 @@ test("portfolio creation: a live draft is live before it has been saved", () => 
     "the create form must reveal live-only controls before the config is saved");
 });
 
+test("portfolio creation: the live form keeps validation errors inside the modal", () => {
+  assert.match(HTML, /data-parameter-modal-status/,
+    "the parameter modal has a visible place for create/save validation feedback");
+  assert.match(APP, /function setParameterModalStatus\(text = "", tone = ""\)/,
+    "modal feedback is updated independently from the obscured dashboard status");
+  const switcher = extractFunction(APP, "switchCreatePortfolioType");
+  assert.match(switcher, /els\.portfolioAccountType\.value = normalizePortfolioAccountType\(state\.parameterDraftCreateType\)/,
+    "a rejected type change restores the selector instead of leaving it out of sync with the draft");
+  const confirm = extractFunction(APP, "confirmParameterModal");
+  assert.match(confirm, /requestedCreateType !== normalizePortfolioAccountType\(state\.parameterDraftCreateType\)/,
+    "confirmation repairs a stale type selection before collecting form values");
+  assert.match(confirm, /setParameterModalStatus\(message, "error"\)/,
+    "save errors remain visible in the modal");
+  assert.match(confirm, /els\.liveInitialCapital\?\.focus\(\)/,
+    "missing live capital focuses the required field");
+});
+
 test("dashboard: a created portfolio's settings are its own", () => {
   const run = new Function("state", `
     ${/const BUILT_IN_PAPER_STRATEGY_IDS = \[[^\]]*\];/.exec(APP)[0]}

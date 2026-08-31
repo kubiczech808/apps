@@ -379,6 +379,7 @@ const els = {
   parameterModalClose: document.querySelector("[data-parameter-modal-close]"),
   parameterModalConfirm: document.querySelector("[data-parameter-modal-confirm]"),
   parameterModalArchive: document.querySelector("[data-parameter-modal-archive]"),
+  parameterModalStatus: document.querySelector("[data-parameter-modal-status]"),
   createPortfolio: document.querySelector("[data-create-portfolio]"),
   archivedPortfolios: document.querySelector("[data-archived-portfolios]"),
   portfolioOverview: document.querySelector("[data-portfolio-overview]"),
@@ -1382,6 +1383,14 @@ function setExecutionStatus(text, tone = "") {
   els.executionStatus.textContent = text;
   els.executionStatus.classList.toggle("error", tone === "error");
   els.executionStatus.classList.toggle("muted", tone !== "error");
+}
+
+function setParameterModalStatus(text = "", tone = "") {
+  if (!els.parameterModalStatus) return;
+  const message = String(text || "").trim();
+  els.parameterModalStatus.hidden = !message;
+  els.parameterModalStatus.textContent = message;
+  els.parameterModalStatus.classList.toggle("error", tone === "error");
 }
 
 function systemConfig() {
@@ -5126,11 +5135,14 @@ function createPortfolioDraftForType(type, strategyId, prefill = {}, displayName
 }
 
 function switchCreatePortfolioType(type) {
-  if (!state.parameterDraftCreate) return;
+  if (!state.parameterDraftCreate) return false;
   const accountType = normalizePortfolioAccountType(type);
   if (accountType === "live" && !canCreateLivePortfolio()) {
-    setExecutionStatus(`live portfolio limit reached (${CUSTOM_LIVE_PORTFOLIO_LIMIT}); archive an unused live portfolio before creating another`, "error");
-    return;
+    const message = `live portfolio limit reached (${CUSTOM_LIVE_PORTFOLIO_LIMIT}); archive an unused live portfolio before creating another`;
+    if (els.portfolioAccountType) els.portfolioAccountType.value = normalizePortfolioAccountType(state.parameterDraftCreateType);
+    setExecutionStatus(message, "error");
+    setParameterModalStatus(message, "error");
+    return false;
   }
   state.parameterDraftCreateType = accountType;
   const label = normalizePortfolioName(els.portfolioName?.value || state.parameterDraft?.displayName, accountType === "live" ? "Live" : "New portfolio");
@@ -5154,6 +5166,8 @@ function switchCreatePortfolioType(type) {
     systemConfig: state.parameterDraftSystem || systemConfig(),
     capitalContext: next.capitalContext,
   });
+  setParameterModalStatus();
+  return true;
 }
 
 /**
@@ -5186,6 +5200,7 @@ function openCreatePortfolioModal(prefill = {}, trigger = null) {
     systemConfig: state.parameterDraftSystem,
     capitalContext: state.parameterCapitalContext,
   });
+  setParameterModalStatus();
   els.parameterModal.hidden = false;
   document.body.classList.add("modal-open");
   els.portfolioName?.focus();
@@ -5523,6 +5538,7 @@ function closeParameterModal() {
   state.parameterDraftCreatePrefill = null;
   state.parameterDraftSystem = null;
   state.parameterCapitalContext = null;
+  setParameterModalStatus();
   refreshEligibilityThreshold();
   refreshRiskAllocation();
   refreshLimitOrders();
@@ -5606,6 +5622,11 @@ function parameterDraftSystemFromControls(baseSystem = {}) {
 
 async function confirmParameterModal() {
   if (!els.parameterModal || els.parameterModal.hidden || state.parameterSavePending) return;
+  const creating = state.parameterDraftCreate;
+  const requestedCreateType = normalizePortfolioAccountType(els.portfolioAccountType?.value || state.parameterDraftCreateType);
+  if (creating && requestedCreateType !== normalizePortfolioAccountType(state.parameterDraftCreateType)) {
+    if (!switchCreatePortfolioType(requestedCreateType)) return;
+  }
   state.parameterSavePending = true;
   const draftMode = state.parameterDraftMode || state.mode;
   // The modal's controls are the source of truth when Save is pressed. Some mobile
@@ -5622,8 +5643,8 @@ async function confirmParameterModal() {
     els.parameterModalConfirm.disabled = true;
     els.parameterModalConfirm.textContent = "Saving...";
   }
-  const creating = state.parameterDraftCreate;
-  const creatingType = normalizePortfolioAccountType(els.portfolioAccountType?.value || state.parameterDraftCreateType);
+  const creatingType = normalizePortfolioAccountType(state.parameterDraftCreateType);
+  setParameterModalStatus();
   try {
     if (creating && creatingType === "live" && normalizeInitialCapital(draft.initialUsdc) == null) {
       throw new Error("Set the initial capital for the live portfolio first");
@@ -5692,7 +5713,12 @@ async function confirmParameterModal() {
     }
     rerenderCurrentDashboard();
   } catch (error) {
-    setExecutionStatus(error.message || "portfolio parameter save failed", "error");
+    const message = error.message || "portfolio parameter save failed";
+    setExecutionStatus(message, "error");
+    setParameterModalStatus(message, "error");
+    if (creating && creatingType === "live" && normalizeInitialCapital(draft.initialUsdc) == null) {
+      els.liveInitialCapital?.focus();
+    }
   } finally {
     state.parameterSavePending = false;
     if (els.parameterModalConfirm) {
