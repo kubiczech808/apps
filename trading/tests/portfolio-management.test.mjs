@@ -412,6 +412,31 @@ test("dashboard: a created portfolio is not mistaken for the conservative one", 
   assert.equal(run("../escape"), "paper-conservative");
 });
 
+test("portfolio creation: a live draft is live before it has been saved", () => {
+  const run = new Function("state", `
+    ${/const BUILT_IN_PAPER_STRATEGY_IDS = \[[^\]]*\];/.exec(APP)[0]}
+    ${/const CUSTOM_PAPER_STRATEGY_ID = [^\n]+/.exec(APP)[0]}
+    ${/const LIVE_MODES = new Set\(\[[^\]]*\]\);/.exec(APP)[0]}
+    ${extractFunction(APP, "normalizePortfolioAccountType")}
+    ${extractFunction(APP, "draftedCustomLivePortfolioId")}
+    ${extractFunction(APP, "normalizeMode")}
+    ${extractFunction(APP, "customLivePortfolioIdFromMode")}
+    ${extractFunction(APP, "isLivePortfolioMode")}
+    return { normalizeMode, customLivePortfolioIdFromMode, isLivePortfolioMode };
+  `);
+  const api = run({
+    mode: "paper-conservative",
+    portfolioConfig: { livePortfolios: {} },
+    parameterDraftCreate: "newlive",
+    parameterDraftCreateType: "live",
+    parameterDraftMode: "live-custom-newlive",
+  });
+  assert.equal(api.normalizeMode("live-custom-newlive"), "live-custom-newlive");
+  assert.equal(api.customLivePortfolioIdFromMode("live-custom-newlive"), "newlive");
+  assert.equal(api.isLivePortfolioMode("live-custom-newlive"), true,
+    "the create form must reveal live-only controls before the config is saved");
+});
+
 test("dashboard: a created portfolio's settings are its own", () => {
   const run = new Function("state", `
     ${/const BUILT_IN_PAPER_STRATEGY_IDS = \[[^\]]*\];/.exec(APP)[0]}

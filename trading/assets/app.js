@@ -548,7 +548,8 @@ function normalizeMode(mode) {
   const customLive = /^live-custom-(.+)$/.exec(String(mode || ""));
   const customLiveId = customLive?.[1];
   if (customLiveId && CUSTOM_PAPER_STRATEGY_ID.test(customLiveId)
-    && Boolean((state.portfolioConfig?.livePortfolios || {})[customLiveId])) {
+    && (Boolean((state.portfolioConfig?.livePortfolios || {})[customLiveId])
+      || draftedCustomLivePortfolioId(mode) === customLiveId)) {
     return `live-custom-${customLiveId}`;
   }
   const paperMode = /^paper-(.+)$/.exec(String(mode || ""));
@@ -568,9 +569,23 @@ function normalizeMode(mode) {
 // the two portfolios decide separately.
 const LIVE_MODES = new Set(["live", "live-5050"]);
 
+// A newly created live portfolio has no saved config until the person confirms the
+// modal. It still needs to behave as live while the form is open, otherwise its initial
+// capital control stays hidden and the submit validation can only fail invisibly.
+function draftedCustomLivePortfolioId(mode = state.parameterDraftMode) {
+  const id = /^live-custom-(.+)$/.exec(String(mode || ""))?.[1] || "";
+  if (!CUSTOM_PAPER_STRATEGY_ID.test(id)) return null;
+  if (normalizePortfolioAccountType(state.parameterDraftCreateType) !== "live") return null;
+  if (state.parameterDraftCreate !== id) return null;
+  return String(state.parameterDraftMode || "") === `live-custom-${id}` ? id : null;
+}
+
 function customLivePortfolioIdFromMode(mode = state.mode) {
   const id = /^live-custom-(.+)$/.exec(String(mode || ""))?.[1] || "";
-  return CUSTOM_PAPER_STRATEGY_ID.test(id) && Boolean((state.portfolioConfig?.livePortfolios || {})[id]) ? id : null;
+  return CUSTOM_PAPER_STRATEGY_ID.test(id)
+    && (Boolean((state.portfolioConfig?.livePortfolios || {})[id]) || draftedCustomLivePortfolioId(mode) === id)
+    ? id
+    : null;
 }
 
 function isLivePortfolioMode(mode = state.mode) {
