@@ -8,15 +8,10 @@ on:
         required: true
         type: boolean
         default: false
-  push:
-    branches:
-      - claude/energy-consumption-app-Nf7bh
-    paths:
-      - 'trading/.storage-compact-request'
 
 jobs:
   compact:
-    if: inputs.confirm_compaction == true || contains(github.event.head_commit.message, '[compact-trading-storage]')
+    if: inputs.confirm_compaction == true
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
