@@ -35,7 +35,7 @@ jobs:
           key = os.environ["TRADING_TRIGGER_KEY"]
           url = "https://www.osobnizkusenosti.cz/trading/api.php?action=storage-admin"
 
-          def call(operation, **params):
+          def _call(operation, **params):
               request = urllib.request.Request(
                   url,
                   data=json.dumps({"operation": operation, **params}).encode("utf-8"),
@@ -54,6 +54,13 @@ jobs:
               if not payload.get("ok"):
                   raise RuntimeError(str(payload.get("error") or f"{operation} failed"))
               return payload
+
+          def call(operation, **params):
+              try:
+                  return _call(operation, **params)
+              except Exception as error:
+                  print(f"::error title=Trading MySQL compaction::{str(error)[:300]}")
+                  raise
 
           call("bootstrap")
           for table in ("trading_documents", "trading_observations", "trading_event_log"):
