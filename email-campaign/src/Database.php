@@ -314,6 +314,7 @@ final class Database
                 id INT AUTO_INCREMENT PRIMARY KEY,
                 job_id INT NOT NULL,
                 url VARCHAR(1000) NOT NULL,
+                url_hash BINARY(32) NULL,
                 status VARCHAR(40) NOT NULL DEFAULT 'queued',
                 email VARCHAR(320) NOT NULL DEFAULT '',
                 subject_name VARCHAR(255) NOT NULL DEFAULT '',
@@ -601,6 +602,9 @@ final class Database
                 INDEX ai_research_contacts_email_idx (email)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
         $this->ensureColumn('ai_research_runs', 'scraping_keyword', "VARCHAR(255) NOT NULL DEFAULT ''");
+        // URL zustava ulozena cela pro audit a zobrazeni. Hash se doplnuje workerem
+        // a nahradi historicky velmi siroke prefixove indexy URL.
+        $this->ensureColumn('scraping_job_items', 'url_hash', 'BINARY(32) NULL');
 
         // Provozni log automatiky. Vzdy obsahuje i jeden naplanovany zaznam dopredu,
         // aby bylo videt, kdy a na cem se bude pracovat, i kdyz se dlouho nic nedeje.
@@ -655,7 +659,6 @@ final class Database
     private function ensureOperationalIndexes(): void
     {
         $this->ensureMysqlIndex('recipients', 'recipients_list_source_url_idx', 'CREATE INDEX recipients_list_source_url_idx ON recipients (list_id, source_url(191))');
-        $this->ensureMysqlIndex('scraping_job_items', 'scraping_items_url_status_idx', 'CREATE INDEX scraping_items_url_status_idx ON scraping_job_items (url(191), status, processed_at)');
         $this->ensureMysqlIndex('scraping_jobs', 'scraping_jobs_list_source_idx', 'CREATE INDEX scraping_jobs_list_source_idx ON scraping_jobs (list_id, source, id)');
     }
 

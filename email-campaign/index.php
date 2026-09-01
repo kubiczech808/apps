@@ -1105,6 +1105,7 @@ if (isset($_GET['cron'])) {
     // Odhad dosahu ale zadny Gemini pozadavek nestoji, takze se pocita tady.
     echo "\n" . runCronAiResearchContactEstimates($pdo, $config, 45);
     echo "\n" . runCronAiResearchSeedReadiness($pdo);
+    echo "\n" . runDatabaseStorageMaintenance($pdo);
     exit;
 }
 
@@ -7330,8 +7331,6 @@ function aiResearchDecorateContact(array $seed, array $plan, array $contact, boo
     return array_merge($contact, [
         'status' => $accepted ? 'accepted' : 'rejected',
         'fit_reason' => $reason !== '' ? $reason : (string)($plan['rationale'] ?? ''),
-        'email_subject' => truncatePlainText($subject, 255),
-        'email_body_html' => cleanHtml($html),
     ]);
 }
 
@@ -7668,12 +7667,12 @@ function upsertAiResearchRunContacts(PDO $pdo, int $runId, array $contacts, stri
     $now = date('c');
     $find = $pdo->prepare('SELECT id FROM ai_research_contacts WHERE run_id=? AND email=? LIMIT 1');
     $insert = $pdo->prepare('
-        INSERT INTO ai_research_contacts (run_id, email, subject_name, website, address, phone, source_label, source_url, status, fit_reason, email_subject, email_body_html, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO ai_research_contacts (run_id, email, subject_name, website, address, phone, source_label, source_url, status, fit_reason, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ');
     $update = $pdo->prepare('
         UPDATE ai_research_contacts
-        SET subject_name=?, website=?, address=?, phone=?, source_label=?, source_url=?, status=?, fit_reason=?, email_subject=?, email_body_html=?
+        SET subject_name=?, website=?, address=?, phone=?, source_label=?, source_url=?, status=?, fit_reason=?
         WHERE id=?
     ');
     foreach ($contacts as $contact) {
@@ -7691,8 +7690,6 @@ function upsertAiResearchRunContacts(PDO $pdo, int $runId, array $contacts, stri
             truncatePlainText((string)($contact['source_url'] ?? ''), 500),
             truncatePlainText($status, 40),
             truncatePlainText((string)($contact['fit_reason'] ?? ''), 500),
-            truncatePlainText((string)($contact['email_subject'] ?? ''), 255),
-            cleanHtml((string)($contact['email_body_html'] ?? '')),
         ];
         $find->execute([$runId, $email]);
         $existingId = (int)$find->fetchColumn();
@@ -8065,8 +8062,8 @@ function saveAiResearchRun(PDO $pdo, array $config, array $seed, array $plan, ar
         $runId = (int)$pdo->lastInsertId();
     }
     $item = $pdo->prepare('
-        INSERT INTO ai_research_contacts (run_id, email, subject_name, website, address, phone, source_label, source_url, status, fit_reason, email_subject, email_body_html, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO ai_research_contacts (run_id, email, subject_name, website, address, phone, source_label, source_url, status, fit_reason, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ');
     foreach ($evaluated as $contact) {
         $item->execute([
@@ -8080,8 +8077,6 @@ function saveAiResearchRun(PDO $pdo, array $config, array $seed, array $plan, ar
             truncatePlainText((string)($contact['source_url'] ?? ''), 500),
             (string)($contact['status'] ?? 'accepted'),
             truncatePlainText((string)($contact['fit_reason'] ?? ''), 500),
-            truncatePlainText((string)($contact['email_subject'] ?? ''), 255),
-            cleanHtml((string)($contact['email_body_html'] ?? '')),
             $now,
         ]);
     }
@@ -9139,10 +9134,11 @@ function aiResearchEnsureScrapingContainerAndLog(PDO $pdo, int $ownerId, int $li
     $message = 'Predvyplneno z AI research #' . $runId . '.';
     $stmt->execute([$ownerId, $containerId, $listId, $source, $keyword, $locationScope, $targetLocation, $processed, $processed, $inserted, $updated, $skipped, $message, $now, $now, $now, $now]);
     $jobId = (int)$pdo->lastInsertId();
-    $item = $pdo->prepare('INSERT IGNORE INTO scraping_job_items (job_id, url, status, email, subject_name, website, address, message, created_at, processed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
+    $item = $pdo->prepare('INSERT IGNORE INTO scraping_job_items (job_id, url, url_hash, status, email, subject_name, website, address, message, created_at, processed_at) VALUES (?, ?, UNHEX(SHA2(?, 256)), ?, ?, ?, ?, ?, ?, ?, ?)');
     foreach ($contacts as $contact) {
         $item->execute([
             $jobId,
+            truncatePlainText((string)($contact['source_url'] ?: $contact['website'] ?: $contact['email']), 1000),
             truncatePlainText((string)($contact['source_url'] ?: $contact['website'] ?: $contact['email']), 1000),
             (string)($contact['provision_result'] ?? 'inserted'),
             (string)$contact['email'],
@@ -12715,6 +12711,7 @@ function recentNoEmailScrapingItem(PDO $pdo, array $job, string $url): ?array
         JOIN scraping_jobs j ON j.id=i.job_id
         WHERE j.list_id=?
           AND j.source=?
+          AND (i.url_hash=UNHEX(SHA2(?, 256)) OR (i.url_hash IS NULL AND i.url=?))
           AND i.url=?
           AND i.job_id<>?
           AND i.status="skipped"
@@ -12726,6 +12723,8 @@ function recentNoEmailScrapingItem(PDO $pdo, array $job, string $url): ?array
     $stmt->execute([
         (int)$job['list_id'],
         (string)$job['source'],
+        $url,
+        $url,
         $url,
         (int)$job['id'],
         date('c', time() - ($days * 86400)),
@@ -12852,12 +12851,15 @@ function discoverScrapingPage(PDO $pdo, array $job): string
         return 'Stranka ' . $page . ': zdroj nevratil dalsi vysledky.';
     }
     $added = 0;
-    $sql = isMysql($pdo)
-        ? 'INSERT IGNORE INTO scraping_job_items (job_id, url, status, created_at) VALUES (?, ?, "queued", ?)'
+    $mysql = isMysql($pdo);
+    $sql = $mysql
+        ? 'INSERT IGNORE INTO scraping_job_items (job_id, url, url_hash, status, created_at) VALUES (?, ?, UNHEX(SHA2(?, 256)), "queued", ?)'
         : 'INSERT OR IGNORE INTO scraping_job_items (job_id, url, status, created_at) VALUES (?, ?, "queued", ?)';
     $stmt = $pdo->prepare($sql);
     foreach ($urls as $candidate) {
-        $stmt->execute([(int)$job['id'], $candidate, date('c')]);
+        $stmt->execute($mysql
+            ? [(int)$job['id'], $candidate, $candidate, date('c')]
+            : [(int)$job['id'], $candidate, date('c')]);
         $added += $stmt->rowCount() > 0 ? 1 : 0;
     }
     if ($added === 0 && $directProcessed === 0) {
@@ -13010,16 +13012,17 @@ function recordScrapingContactItem(PDO $pdo, array $job, array $contact, string 
 
 function insertScrapingJobItem(PDO $pdo, int $jobId, string $url): int
 {
-    $sql = isMysql($pdo)
-        ? 'INSERT IGNORE INTO scraping_job_items (job_id, url, status, created_at) VALUES (?, ?, "queued", ?)'
+    $mysql = isMysql($pdo);
+    $sql = $mysql
+        ? 'INSERT IGNORE INTO scraping_job_items (job_id, url, url_hash, status, created_at) VALUES (?, ?, UNHEX(SHA2(?, 256)), "queued", ?)'
         : 'INSERT OR IGNORE INTO scraping_job_items (job_id, url, status, created_at) VALUES (?, ?, "queued", ?)';
     $stmt = $pdo->prepare($sql);
-    $stmt->execute([$jobId, $url, date('c')]);
+    $stmt->execute($mysql ? [$jobId, $url, $url, date('c')] : [$jobId, $url, date('c')]);
     if ($stmt->rowCount() > 0) {
         return (int)$pdo->lastInsertId();
     }
-    $find = $pdo->prepare('SELECT id, status FROM scraping_job_items WHERE job_id=? AND url=? LIMIT 1');
-    $find->execute([$jobId, $url]);
+    $find = $pdo->prepare('SELECT id, status FROM scraping_job_items WHERE job_id=? AND (url_hash=UNHEX(SHA2(?, 256)) OR (url_hash IS NULL AND url=?)) AND url=? LIMIT 1');
+    $find->execute([$jobId, $url, $url, $url]);
     $existing = $find->fetch(PDO::FETCH_ASSOC);
     return $existing && (string)$existing['status'] === 'queued' ? (int)$existing['id'] : 0;
 }
@@ -15057,6 +15060,158 @@ function databaseStorageReport(PDO $pdo): array
         'free_bytes' => $freeBytes,
         'tables' => $tables,
     ];
+}
+
+function mysqlIndexExists(PDO $pdo, string $table, string $index): bool
+{
+    $stmt = $pdo->prepare('
+        SELECT COUNT(*)
+        FROM INFORMATION_SCHEMA.STATISTICS
+        WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=? AND INDEX_NAME=?
+    ');
+    $stmt->execute([$table, $index]);
+    return (int)$stmt->fetchColumn() > 0;
+}
+
+/**
+ * Zmensuje indexy scrapingu bez mazani auditnich URL nebo vysledku. Kazdy cron
+ * provede jen jeden maly krok, aby se databazova udrzba nikdy neprojevila jako
+ * dlouhe nacitani formulare nebo blokace bezicich workeru.
+ */
+function runDatabaseStorageMaintenance(PDO $pdo): string
+{
+    if (!isMysql($pdo) || !tableExists($pdo, 'scraping_job_items')) {
+        return 'Udrzba uloziste: neni potreba.';
+    }
+
+    try {
+        $locked = (int)$pdo->query("SELECT GET_LOCK('email_campaign_storage_maintenance', 0)")->fetchColumn();
+    } catch (Throwable $e) {
+        return 'Udrzba uloziste: zamek neni dostupny.';
+    }
+    if ($locked !== 1) {
+        return 'Udrzba uloziste: probiha jiny krok.';
+    }
+
+    try {
+        $settings = loadSettings($pdo);
+        $state = trim((string)($settings['database_storage_maintenance_state'] ?? 'url_hash_backfill'));
+        if ($state === '') {
+            $state = 'url_hash_backfill';
+        }
+
+        if ($state === 'url_hash_backfill') {
+            $cursor = max(0, (int)($settings['database_storage_url_hash_cursor'] ?? 0));
+            $select = $pdo->prepare('SELECT id FROM scraping_job_items WHERE id>? AND url_hash IS NULL ORDER BY id ASC LIMIT 1000');
+            $select->execute([$cursor]);
+            $ids = array_map(static fn(array $row): int => (int)$row['id'], $select->fetchAll(PDO::FETCH_ASSOC));
+            if ($ids) {
+                $lastId = max($ids);
+                $update = $pdo->prepare('UPDATE scraping_job_items SET url_hash=UNHEX(SHA2(url, 256)) WHERE id>? AND id<=? AND url_hash IS NULL');
+                $update->execute([$cursor, $lastId]);
+                setSettingRaw($pdo, 'database_storage_url_hash_cursor', (string)$lastId);
+                setSettingRaw($pdo, 'database_storage_maintenance_status', 'Hash URL: zpracovano do polozky #' . $lastId . '.');
+                return 'Udrzba uloziste: hash URL doplnen u ' . $update->rowCount() . ' polozek.';
+            }
+            $remaining = (int)$pdo->query('SELECT COUNT(*) FROM scraping_job_items WHERE url_hash IS NULL')->fetchColumn();
+            if ($remaining > 0) {
+                setSettingRaw($pdo, 'database_storage_url_hash_cursor', '0');
+                return 'Udrzba uloziste: hash URL ceka na dalsi davku.';
+            }
+            setSettingRaw($pdo, 'database_storage_maintenance_state', 'create_job_queue_index');
+            return 'Udrzba uloziste: hash URL je kompletni, pripravuji index fronty.';
+        }
+
+        if ($state === 'create_job_queue_index') {
+            if (!mysqlIndexExists($pdo, 'scraping_job_items', 'scraping_items_job_status_idx')) {
+                $pdo->exec('CREATE INDEX scraping_items_job_status_idx ON scraping_job_items (job_id, status, id)');
+            }
+            setSettingRaw($pdo, 'database_storage_maintenance_state', 'create_hash_lookup_index');
+            return 'Udrzba uloziste: vytvoren kompaktni index fronty scrapingu.';
+        }
+
+        if ($state === 'create_hash_lookup_index') {
+            if (!mysqlIndexExists($pdo, 'scraping_job_items', 'scraping_items_hash_status_idx')) {
+                $pdo->exec('CREATE INDEX scraping_items_hash_status_idx ON scraping_job_items (url_hash, status, processed_at, job_id)');
+            }
+            setSettingRaw($pdo, 'database_storage_maintenance_state', 'create_job_hash_unique');
+            return 'Udrzba uloziste: vytvoren kompaktni index historie URL.';
+        }
+
+        if ($state === 'create_job_hash_unique') {
+            $missing = (int)$pdo->query('SELECT COUNT(*) FROM scraping_job_items WHERE url_hash IS NULL')->fetchColumn();
+            if ($missing > 0) {
+                setSettingRaw($pdo, 'database_storage_maintenance_state', 'url_hash_backfill');
+                return 'Udrzba uloziste: dokoncuji chybejici hashe URL.';
+            }
+            if (!mysqlIndexExists($pdo, 'scraping_job_items', 'job_url_hash')) {
+                $pdo->exec('CREATE UNIQUE INDEX job_url_hash ON scraping_job_items (job_id, url_hash)');
+            }
+            setSettingRaw($pdo, 'database_storage_maintenance_state', 'drop_wide_url_history_index');
+            return 'Udrzba uloziste: nova deduplikace URL je overena.';
+        }
+
+        if ($state === 'drop_wide_url_history_index') {
+            if (mysqlIndexExists($pdo, 'scraping_job_items', 'scraping_items_url_status_idx')) {
+                $pdo->exec('DROP INDEX scraping_items_url_status_idx ON scraping_job_items');
+                return 'Udrzba uloziste: odstranen siroky index historie URL.';
+            }
+            setSettingRaw($pdo, 'database_storage_maintenance_state', 'drop_wide_job_url_index');
+            return 'Udrzba uloziste: pokracuji odstranovanim puvodniho indexu URL.';
+        }
+
+        if ($state === 'drop_wide_job_url_index') {
+            if (mysqlIndexExists($pdo, 'scraping_job_items', 'job_url')) {
+                $pdo->exec('DROP INDEX job_url ON scraping_job_items');
+            }
+            setSettingRaw($pdo, 'database_storage_maintenance_state', 'deduplicate_ai_contact_drafts');
+            return 'Udrzba uloziste: puvodni siroky index URL byl odstranen.';
+        }
+
+        if ($state === 'deduplicate_ai_contact_drafts') {
+            if (!tableExists($pdo, 'ai_research_contacts') || !tableExists($pdo, 'ai_research_runs')) {
+                setSettingRaw($pdo, 'database_storage_maintenance_state', 'completed');
+                return 'Udrzba uloziste: AI research tabulky nejsou k dispozici.';
+            }
+            // Mazi se vyhradne kopie stejne sablony, ktera zustava bezpecne ulozena u
+            // nadrazeneho behu. Jakakoli odlisna historicka verze kontaktu se nemeni.
+            $cleanup = $pdo->exec('
+                UPDATE ai_research_contacts c
+                JOIN (
+                    SELECT id FROM (
+                        SELECT c2.id
+                        FROM ai_research_contacts c2
+                        JOIN ai_research_runs r2 ON r2.id=c2.run_id
+                        WHERE c2.email_body_html IS NOT NULL
+                          AND c2.email_body_html<>""
+                          AND c2.email_subject=r2.email_subject
+                          AND c2.email_body_html=r2.email_body_html
+                        ORDER BY c2.id ASC
+                        LIMIT 1000
+                    ) AS duplicate_candidates
+                ) AS candidates ON candidates.id=c.id
+                SET c.email_subject="", c.email_body_html=NULL
+            ');
+            if ((int)$cleanup > 0) {
+                setSettingRaw($pdo, 'database_storage_maintenance_status', 'AI research: odstraneno ' . (int)$cleanup . ' duplicitnich kopii spolecneho vzoru.');
+                return 'Udrzba uloziste: odstranenych duplicitnich AI vzoru: ' . (int)$cleanup . '.';
+            }
+            setSettingRaw($pdo, 'database_storage_maintenance_state', 'completed');
+            setSettingRaw($pdo, 'database_storage_maintenance_status', 'Kompaktni indexy URL scrapingu jsou aktivni; auditni data a zdrojove URL zustaly zachovany.');
+            return 'Udrzba uloziste: optimalizace indexu a duplicitnich AI vzoru je hotova.';
+        }
+
+        return 'Udrzba uloziste: optimalizace indexu je hotova.';
+    } catch (Throwable $e) {
+        setSettingRaw($pdo, 'database_storage_maintenance_error', truncatePlainText($e->getMessage(), 500));
+        return 'Udrzba uloziste: krok se odlozil (' . truncatePlainText($e->getMessage(), 180) . ').';
+    } finally {
+        try {
+            $pdo->query("SELECT RELEASE_LOCK('email_campaign_storage_maintenance')");
+        } catch (Throwable $e) {
+            // Connection lock zmizi take automaticky pri ukonceni requestu.
+        }
+    }
 }
 
 function headerIndex(array $headers, array $names)
