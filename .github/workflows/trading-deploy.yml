@@ -339,6 +339,6 @@ jobs:
               if not storage.get("schemaReady"):
                   raise SystemExit("Trading storage schema did not become ready")
           except Exception as error:
-              print(f"::error title=Trading MySQL bootstrap::{type(error).__name__}")
+              print(f"::error title=Trading MySQL bootstrap::{str(error)[:300]}")
               raise
           PY
