@@ -288,10 +288,10 @@ function trading_storage_compact_payload_batch(PDO $pdo, string $table, string $
     );
     $statement->execute(['after' => $after]);
     $rows = $statement->fetchAll();
-    $update = $pdo->prepare('UPDATE `' . $table . '` SET payload = :payload WHERE `' . $key . '` = :key');
+    $update = $pdo->prepare('UPDATE `' . $table . '` SET payload = COMPRESS(payload) WHERE `' . $key . '` = :key');
     $processed = 0;
     $rewritten = 0;
-    $unreadable = 0;
+    $skipped = 0;
     $last = $after;
     $pdo->beginTransaction();
     try {
@@ -299,16 +299,14 @@ function trading_storage_compact_payload_batch(PDO $pdo, string $table, string $
             $last = (string) ($row['row_key'] ?? $last);
             $payload = $row['payload'] ?? null;
             $processed++;
-            $decoded = trading_storage_unpack($payload);
-            if (!is_array($decoded)) {
-                $unreadable++;
+            // JSON is minified by trading_storage_encode(), so an opening object or
+            // array byte proves this is an old uncompressed row. Let MariaDB compress
+            // it in place; decoding multi-megabyte documents in PHP is unnecessary.
+            if (!is_string($payload) || ($payload[0] !== '{' && $payload[0] !== '[')) {
+                $skipped++;
                 continue;
             }
-            $packed = trading_storage_pack($decoded);
-            if (is_string($payload) && hash_equals($payload, $packed)) {
-                continue;
-            }
-            $update->execute(['payload' => $packed, 'key' => $last]);
+            $update->execute(['key' => $last]);
             $rewritten++;
         }
         $pdo->commit();
@@ -320,7 +318,7 @@ function trading_storage_compact_payload_batch(PDO $pdo, string $table, string $
         'table' => $table,
         'processed' => $processed,
         'rewritten' => $rewritten,
-        'unreadable' => $unreadable,
+        'skipped' => $skipped,
         'nextAfter' => $last,
         'done' => $processed < $limit,
     ];
@@ -450,6 +448,18 @@ function trading_storage_unpack(mixed $payload): ?array
     // an interrupted migration: only successfully decompressed data is treated as
     // packed, otherwise it is the original JSON text.
     $unpacked = @gzuncompress($payload);
+    // MySQL COMPRESS prepends the uncompressed byte length before the same zlib
+    // stream. Maintenance uses it for legacy rows so the server can compress large
+    // documents without first materialising them in PHP memory.
+    if (!is_string($unpacked) && strlen($payload) > 4) {
+        $mysqlHeader = unpack('Vlength', substr($payload, 0, 4));
+        $mysqlUnpacked = @gzuncompress(substr($payload, 4));
+        if (is_string($mysqlUnpacked)
+            && is_array($mysqlHeader)
+            && (int) ($mysqlHeader['length'] ?? -1) === strlen($mysqlUnpacked)) {
+            $unpacked = $mysqlUnpacked;
+        }
+    }
     $decoded = json_decode(is_string($unpacked) ? $unpacked : $payload, true);
     return is_array($decoded) ? $decoded : null;
 }

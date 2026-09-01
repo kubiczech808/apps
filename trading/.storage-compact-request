@@ -1,1 +1,1 @@
-One-time request: retry compacting retained Trading MySQL payloads after the read-only storage preview.
+One-time request: use database-side compression for retained Trading MySQL payloads after the read-only storage preview.

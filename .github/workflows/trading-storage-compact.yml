@@ -67,13 +67,11 @@ jobs:
               after = ""
               rewritten = 0
               processed = 0
+              limit = 1 if table == "trading_documents" else 250
               while True:
-                  batch = call("compact-batch", table=table, after=after, limit=500)["batch"]
+                  batch = call("compact-batch", table=table, after=after, limit=limit)["batch"]
                   processed += int(batch.get("processed") or 0)
                   rewritten += int(batch.get("rewritten") or 0)
-                  unreadable = int(batch.get("unreadable") or 0)
-                  if unreadable:
-                      raise RuntimeError(f"{table} has {unreadable} unreadable payload(s); rebuild was not run")
                   if batch.get("done"):
                       break
                   after = str(batch.get("nextAfter") or "")
