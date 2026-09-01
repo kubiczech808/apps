@@ -302,6 +302,7 @@ jobs:
           python3 - <<'PY'
           import json
           import os
+          import urllib.error
           import urllib.request
 
           key = os.environ["TRADING_TRIGGER_KEY"]
@@ -314,8 +315,16 @@ jobs:
                   method="POST",
                   headers={"Content-Type": "application/json", "X-Trading-Trigger-Key": key},
               )
-              with urllib.request.urlopen(request, timeout=30) as response:
-                  payload = json.loads(response.read().decode("utf-8"))
+              try:
+                  with urllib.request.urlopen(request, timeout=30) as response:
+                      payload = json.loads(response.read().decode("utf-8"))
+              except urllib.error.HTTPError as error:
+                  try:
+                      payload = json.loads(error.read().decode("utf-8"))
+                  except Exception:
+                      payload = {}
+                  message = str(payload.get("error") or f"HTTP {error.code}")
+                  raise RuntimeError(message) from error
               if not payload.get("ok"):
                   raise SystemExit(f"Trading storage {operation} failed")
               return payload

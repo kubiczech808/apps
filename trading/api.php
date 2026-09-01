@@ -4455,13 +4455,30 @@ try {
             respond(['ok' => true, 'operation' => 'bootstrap', 'storage' => trading_storage_diagnostics()]);
         }
         if ($operation === 'compact-empty') {
-            $tables = trading_storage_compact_empty_tables($pdo);
-            respond([
-                'ok' => true,
-                'operation' => 'compact-empty',
-                'tables' => $tables,
-                'storage' => trading_storage_diagnostics(),
-            ]);
+            $before = trading_storage_table_stats($pdo);
+            $nonEmpty = array_filter($before, static fn (array $table): bool => (int) ($table['rows'] ?? 0) > 0);
+            if ($nonEmpty !== []) {
+                respond([
+                    'ok' => false,
+                    'error' => 'Trading tables are not empty; compaction was not run.',
+                    'tables' => $before,
+                ], 409);
+            }
+            try {
+                $tables = trading_storage_compact_empty_tables($pdo);
+                respond([
+                    'ok' => true,
+                    'operation' => 'compact-empty',
+                    'tables' => $tables,
+                    'storage' => trading_storage_diagnostics(),
+                ]);
+            } catch (Throwable) {
+                respond([
+                    'ok' => false,
+                    'error' => 'Hosting could not rebuild the empty Trading tables.',
+                    'tables' => trading_storage_table_stats($pdo),
+                ], 503);
+            }
         }
         if ($operation === 'migrate-json') {
             try {
