@@ -324,6 +324,15 @@ jobs:
                   except Exception:
                       payload = {}
                   message = str(payload.get("error") or f"HTTP {error.code}")
+                  tables = payload.get("tables") or {}
+                  if isinstance(tables, dict):
+                      summary = ", ".join(
+                          f"{name}: rows={int((stats or {}).get('rows') or 0)}, bytes={int((stats or {}).get('dataBytes') or 0) + int((stats or {}).get('indexBytes') or 0)}"
+                          for name, stats in sorted(tables.items())
+                          if isinstance(stats, dict)
+                      )
+                      if summary:
+                          message = f"{message} [{summary}]"
                   raise RuntimeError(message) from error
               if not payload.get("ok"):
                   raise SystemExit(f"Trading storage {operation} failed")
