@@ -1056,6 +1056,21 @@ test("portfolio rules: the resolution-day ceiling is shown on both the paper and
   assert.match(live, /\["Resolution filter", `Max \$\{maxResolutionDays\} days`\],/);
 });
 
+// The read-only summary row above states the current value; this is the form that
+// actually changes it. Reported still missing after the row came back: the same commit
+// deleted the <input> from index.html itself, so app.js kept querying
+// [data-max-resolution-days] and silently found nothing -- neither an error nor a
+// visible gap, just a setting nobody could edit any more.
+test("portfolio parameters form: the resolution-day ceiling has an editable input, not just a summary row", () => {
+  assert.match(HTML, /<span>Max resolution days<\/span>\s*\n\s*<input type="number" min="1" max="365" step="1" placeholder="auto" data-max-resolution-days>\s*\n\s*<strong data-max-resolution-days-label>auto<\/strong>/,
+    "the parameter form must have an input for this setting, not only the summary card's display");
+  assert.match(APP, /maxResolutionDays: document\.querySelector\("\[data-max-resolution-days\]"\)/);
+  assert.match(APP, /maxResolutionDaysLabel: document\.querySelector\("\[data-max-resolution-days-label\]"\)/);
+  assert.match(APP, /els\.maxResolutionDays\?\.addEventListener\("input", \(\) => \{/,
+    "changing the input has to save it, the same as every other parameter control");
+  assert.match(APP, /updatePortfolioConfigForMode\(state\.mode, \{ maxResolutionDays: value \}\);/);
+});
+
 test("run log history: the workflow archives every portfolio's new runs, and the bot writes them", () => {
   assert.match(BOT, /const PORTFOLIO_RUN_LOG_ENTRY_PATH = process\.env\.PAPER_PORTFOLIO_RUN_LOG_ENTRY_PATH/);
   assert.match(BOT, /async function writePortfolioRunLogEntries\(entries\)/);
