@@ -29,8 +29,12 @@ VA_DIR = OPENCLAW_DIR / "virtual-assistant"
 STATE_FILE = VA_DIR / "TELEGRAM_HEALTHWATCH.json"
 LAST_GOOD_FILE = VA_DIR / "telegram-last-good.env"
 LOG_FILE = OPENCLAW_DIR / "logs" / "virtual-assistant-healthwatch.log"
+APP_LOG_FILE = OPENCLAW_DIR / "logs" / "virtual-assistant.log"
 VA_SCRIPT = Path("/home/openclaw2/scripts/agent_virtual_assistant.py")
 SERVICE_NAME = "virtual-assistant.service"
+SILENCE_RESTART_SECONDS = int(os.environ.get("VIRTUAL_ASSISTANT_SILENCE_RESTART_SECONDS", "1800"))
+LIVENESS_RESTART_MIN_INTERVAL_SECONDS = int(os.environ.get("VIRTUAL_ASSISTANT_LIVENESS_RESTART_MIN_INTERVAL_SECONDS", "900"))
+SILENCE_ALERT_SECONDS = int(os.environ.get("VIRTUAL_ASSISTANT_SILENCE_ALERT_SECONDS", "7200"))
 
 VA_TOKEN_KEYS = {
     "TELEGRAM_VIRTUAL_ASSISTANT_BOT_TOKEN",
@@ -187,6 +191,37 @@ def systemctl(*args: str, check: bool = False) -> subprocess.CompletedProcess[st
     return subprocess.run(["systemctl", *args], text=True, capture_output=True, check=check)
 
 
+def file_age_seconds(path: Path) -> int | None:
+    try:
+        return max(0, int(time.time() - path.stat().st_mtime))
+    except FileNotFoundError:
+        return None
+    except Exception as exc:
+        log(f"file age check failed for {path}: {type(exc).__name__}")
+        return None
+
+
+def recent_lines(path: Path, limit: int = 120) -> list[str]:
+    try:
+        return path.read_text(encoding="utf-8", errors="replace").splitlines()[-limit:]
+    except Exception:
+        return []
+
+
+def service_properties() -> dict[str, str]:
+    result = systemctl(
+        "show",
+        SERVICE_NAME,
+        "--property=ActiveState,SubState,MainPID,ExecMainStatus,NRestarts,ExecMainStartTimestamp",
+    )
+    props: dict[str, str] = {}
+    for line in (result.stdout or "").splitlines():
+        if "=" in line:
+            key, value = line.split("=", 1)
+            props[key] = value
+    return props
+
+
 def restart_va_service() -> str:
     result = systemctl("restart", SERVICE_NAME)
     if result.returncode == 0:
@@ -203,6 +238,62 @@ def stop_va_service() -> str:
 
 def service_active() -> bool:
     return systemctl("is-active", "--quiet", SERVICE_NAME).returncode == 0
+
+
+def repair_runtime_liveness(env: dict[str, str], state: dict[str, Any]) -> None:
+    props = service_properties()
+    active = service_active()
+    log_age = file_age_seconds(APP_LOG_FILE)
+    tail = "\n".join(recent_lines(APP_LOG_FILE, 120))
+    state["service_active"] = active
+    state["service_substate"] = props.get("SubState", "")
+    state["service_main_pid"] = props.get("MainPID", "")
+    state["service_n_restarts"] = props.get("NRestarts", "")
+    state["app_log_age_seconds"] = log_age
+
+    reason = ""
+    if not active:
+        reason = "service-inactive"
+    elif log_age is None:
+        reason = "missing-app-log"
+    elif log_age > SILENCE_RESTART_SECONDS:
+        reason = f"silent-app-log:{log_age}s"
+    elif "Conflict: terminated by other getUpdates request" in tail:
+        reason = "telegram-getupdates-conflict"
+    elif "HTTP Error 401: Unauthorized" in tail and "Telegram bot commands refresh: sent" not in tail[-1200:]:
+        reason = "recent-telegram-401-without-command-refresh"
+
+    state["liveness_status"] = "ok" if not reason else reason
+    if not reason:
+        return
+
+    now_ts = time.time()
+    last_restart = float(state.get("last_liveness_restart_ts") or 0)
+    if now_ts - last_restart < LIVENESS_RESTART_MIN_INTERVAL_SECONDS:
+        state["liveness_repair"] = "restart-rate-limited"
+        return
+
+    state["last_liveness_restart_ts"] = now_ts
+    state["last_liveness_restart_at"] = utc_now()
+    state["last_liveness_restart_reason"] = reason
+    state["liveness_repair"] = restart_va_service()
+    time.sleep(3)
+    state["post_restart_service_active"] = service_active()
+    state["post_restart_app_log_age_seconds"] = file_age_seconds(APP_LOG_FILE)
+    try:
+        state["post_restart_menu_refresh"] = refresh_menu()
+    except Exception as exc:
+        state["post_restart_menu_refresh"] = f"failed:{type(exc).__name__}"
+    log(f"liveness repair reason={reason} result={state.get('liveness_repair')}")
+
+    final_age = file_age_seconds(APP_LOG_FILE)
+    if final_age is not None and final_age > SILENCE_ALERT_SECONDS:
+        alert = (
+            "Blocker: Virtualni asistentka ma validni Telegram token, ale runtime log "
+            f"mlci uz {final_age // 60} minut. Healthwatch provedl restart; prover prosim "
+            "virtual-assistant.service a journal."
+        )
+        state["agent_g_silence_alert"] = send_agent_g_alert(env, state, alert, "silent_va_runtime")
 
 
 def refresh_menu() -> str:
@@ -251,8 +342,7 @@ def main() -> int:
         state["last_valid_at"] = utc_now()
         state["last_valid_sha12"] = current.get("sha12")
         state["last_valid_username"] = current.get("username")
-        if not service_active():
-            state["service_repair"] = restart_va_service()
+        repair_runtime_liveness(env, state)
         last_menu = float(state.get("last_menu_refresh_ts") or 0)
         if time.time() - last_menu > 3600:
             menu_status = refresh_menu()
