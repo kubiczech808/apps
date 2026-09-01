@@ -321,10 +321,12 @@ jobs:
               return payload
 
           try:
-              bootstrap = call("bootstrap")
-              storage = bootstrap.get("storage") or {}
-              size = int(storage.get("databaseSizeBytes") or 0)
-              print(f"::notice title=Trading MySQL compact schema::Database footprint after bootstrap: {size} bytes. Historical import and worker mirroring remain disabled.")
+              call("bootstrap")
+              compacted = call("compact-empty")
+              storage = compacted.get("storage") or {}
+              database_size = int(storage.get("databaseSizeBytes") or 0)
+              trading_size = int(storage.get("tradingSizeBytes") or 0)
+              print(f"::notice title=Trading MySQL compact schema::Database footprint after empty-table compaction: {database_size} bytes total, {trading_size} bytes in Trading tables. Historical import and worker mirroring remain disabled.")
               if not storage.get("schemaReady"):
                   raise SystemExit("Trading storage schema did not become ready")
           except Exception as error:

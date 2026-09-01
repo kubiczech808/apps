@@ -167,6 +167,62 @@ function trading_storage_optimize_schema(PDO $pdo): void
     }
 }
 
+function trading_storage_table_stats(PDO $pdo): array
+{
+    $tables = [
+        'trading_storage_meta',
+        'trading_documents',
+        'trading_observations',
+        'trading_event_log',
+    ];
+    $statement = $pdo->prepare(
+        'SELECT table_name, table_rows, data_length, index_length, data_free
+         FROM information_schema.TABLES
+         WHERE table_schema = DATABASE() AND table_name IN ('
+            . implode(', ', array_fill(0, count($tables), '?')) . ')'
+    );
+    $statement->execute($tables);
+    $stats = [];
+    foreach ($statement->fetchAll() as $row) {
+        $name = (string) ($row['table_name'] ?? '');
+        if ($name === '') {
+            continue;
+        }
+        $stats[$name] = [
+            'rows' => (int) ($row['table_rows'] ?? 0),
+            'dataBytes' => (int) ($row['data_length'] ?? 0),
+            'indexBytes' => (int) ($row['index_length'] ?? 0),
+            'freeBytes' => (int) ($row['data_free'] ?? 0),
+        ];
+    }
+    return $stats;
+}
+
+/**
+ * Rebuild only the Trading tables when they are provably empty. This releases
+ * InnoDB pages reserved by the first oversized import without ever discarding
+ * retained records from a non-empty table.
+ */
+function trading_storage_compact_empty_tables(PDO $pdo): array
+{
+    trading_storage_bootstrap($pdo);
+    $tables = [
+        'trading_documents',
+        'trading_observations',
+        'trading_event_log',
+    ];
+    foreach ($tables as $table) {
+        $count = (int) $pdo->query('SELECT COUNT(*) FROM `' . $table . '`')->fetchColumn();
+        if ($count !== 0) {
+            throw new RuntimeException('Trading storage compaction requires empty tables.');
+        }
+    }
+    foreach ($tables as $table) {
+        $pdo->query('OPTIMIZE TABLE `' . $table . '`')->fetchAll();
+    }
+    return trading_storage_table_stats($pdo);
+}
+
 function trading_storage_now(): string
 {
     return gmdate('Y-m-d H:i:s.u');

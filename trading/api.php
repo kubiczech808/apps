@@ -89,6 +89,8 @@ function trading_storage_diagnostics(): array
         'schemaReady' => false,
         'serverVersion' => null,
         'databaseSizeBytes' => null,
+        'tradingSizeBytes' => null,
+        'tradingTables' => [],
         'maxConnections' => null,
     ];
     if (!$result['pdoMysqlAvailable'] || !$configured) {
@@ -110,24 +112,23 @@ function trading_storage_diagnostics(): array
         $result['connected'] = true;
         $result['serverVersion'] = (string) $pdo->query('SELECT VERSION()')->fetchColumn();
         $result['maxConnections'] = (int) $pdo->query("SHOW VARIABLES LIKE 'max_connections'")->fetchColumn(1);
+        trading_storage_bootstrap($pdo);
         $statement = $pdo->prepare(
             'SELECT COALESCE(SUM(data_length + index_length), 0) FROM information_schema.tables WHERE table_schema = :database'
         );
         $statement->execute(['database' => $config['db_name']]);
         $result['databaseSizeBytes'] = (int) $statement->fetchColumn();
+        $result['tradingTables'] = trading_storage_table_stats($pdo);
+        $result['tradingSizeBytes'] = array_sum(array_map(
+            static fn (array $table): int => (int) ($table['dataBytes'] ?? 0) + (int) ($table['indexBytes'] ?? 0),
+            $result['tradingTables'],
+        ));
+        $result['schemaReady'] = true;
     } catch (Throwable) {
         // The caller needs to know that the connection is unavailable; implementation
         // details such as host names and authentication failures are not public data.
         $result['connected'] = false;
         return $result;
-    }
-    try {
-        trading_storage_bootstrap($pdo);
-        $result['schemaReady'] = true;
-    } catch (Throwable) {
-        // Connection is still useful information. Schema permissions and an
-        // unsupported table option are reported independently by the safe status.
-        $result['schemaReady'] = false;
     }
     return $result;
 }
@@ -4452,6 +4453,15 @@ try {
         trading_storage_bootstrap($pdo);
         if ($operation === 'bootstrap') {
             respond(['ok' => true, 'operation' => 'bootstrap', 'storage' => trading_storage_diagnostics()]);
+        }
+        if ($operation === 'compact-empty') {
+            $tables = trading_storage_compact_empty_tables($pdo);
+            respond([
+                'ok' => true,
+                'operation' => 'compact-empty',
+                'tables' => $tables,
+                'storage' => trading_storage_diagnostics(),
+            ]);
         }
         if ($operation === 'migrate-json') {
             try {
