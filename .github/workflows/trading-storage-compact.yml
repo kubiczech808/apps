@@ -8,13 +8,20 @@ on:
         required: true
         type: boolean
         default: false
+  push:
+    branches:
+      - claude/energy-consumption-app-Nf7bh
+    paths:
+      - 'trading/.storage-compact-request'
 
 jobs:
   compact:
-    if: inputs.confirm_compaction == true
+    if: inputs.confirm_compaction == true || contains(github.event.head_commit.message, '[compact-trading-storage]')
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
+      - uses: actions/checkout@v4
+
       - name: Compact existing Trading payloads
         env:
           TRADING_TRIGGER_KEY: ${{ secrets.POLYTRADING_DB_PASSWORD }}
