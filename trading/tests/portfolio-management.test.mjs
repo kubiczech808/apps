@@ -11,6 +11,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const API = readFileSync(new URL("../api.php", import.meta.url), "utf8");
+const STORAGE = readFileSync(new URL("../storage.php", import.meta.url), "utf8");
 const APP = readFileSync(new URL("../assets/app.js", import.meta.url), "utf8");
 const CSS = readFileSync(new URL("../assets/app.css", import.meta.url), "utf8");
 const HTML = readFileSync(new URL("../index.html", import.meta.url), "utf8");
@@ -471,11 +472,27 @@ test("storage migration: database diagnostics stay private and require the trigg
   }
   assert.match(deploy, /TRADING_DB_HOST: localhost/,
     "the application and MariaDB share the hosting, so the host is not a secret");
-  const storage = readFileSync(new URL("../storage.php", import.meta.url), "utf8");
-  assert.match(storage, /VALUES \(:key, :type, :payload, :checksum, 1, :createdAt, :updatedAt\)/,
+  assert.match(STORAGE, /VALUES \(:key, :type, :payload, :checksum, 1, :createdAt, :updatedAt\)/,
     "native MySQL PDO statements must bind distinct timestamps for document inserts");
-  assert.match(storage, /:tags, :payload, :checksum, :createdAt, :updatedAt/,
+  assert.match(STORAGE, /:tags, :payload, :checksum, :createdAt, :updatedAt/,
     "native MySQL PDO statements must bind distinct timestamps for observation inserts");
+});
+
+test("storage migration: compact schema does not auto-import historical data", () => {
+  assert.match(STORAGE, /payload MEDIUMBLOB NOT NULL/,
+    "large retained JSON must be compressed before it reaches MySQL");
+  assert.match(STORAGE, /function trading_storage_event_compact_payload\(array \$payload\): array/,
+    "run-log payloads must be bounded independently from market data");
+  assert.match(STORAGE, /trading_storage_pack_encoded\(\$payload\)/,
+    "observations must use the compressed payload path");
+  const deploy = readFileSync(new URL("../../.github/workflows/trading-deploy.yml", import.meta.url), "utf8");
+  const compactStep = /- name: Bootstrap compact Trading MySQL storage[\s\S]*?(?=\n      - name:|$)/.exec(deploy);
+  assert.ok(compactStep, "deployment must contain the schema-only storage step");
+  assert.doesNotMatch(compactStep[0], /migrate-json/,
+    "deploying a compact schema must never import the full JSON history");
+  const ingester = readFileSync(new URL("../tools/ingest-trading-state.py", import.meta.url), "utf8");
+  assert.match(ingester, /if not env_bool\("TRADING_STORAGE_MIRROR_ENABLED"\)/,
+    "workers require an explicit mirror opt-in while capacity is being verified");
 });
 
 test("dashboard: a created portfolio's settings are its own", () => {
@@ -2352,4 +2369,17 @@ test("execution scope: rows are ranked before the page is cut, with or without a
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
+});
+
+test("execution scope: custom live portfolios resolve their own saved filter", () => {
+  const scopeConfig = /function execution_scope_strategy_config\([\s\S]*?\n\}/.exec(API);
+  assert.ok(scopeConfig);
+  assert.match(scopeConfig[0], /\^live-custom-\(\[a-z\]\[a-zA-Z0-9\]\{1,30\}\)\$/,
+    "a custom live mode must be recognised as a portfolio scope");
+  assert.match(scopeConfig[0], /\$config\['livePortfolios'\]\[\$id\]/,
+    "the candidates endpoint must use the custom live portfolio's saved rules, not the unfiltered catalogue");
+  const candidateReasons = /function portfolioCandidateFilterReasons\([\s\S]*?\n\}/.exec(APP);
+  assert.ok(candidateReasons);
+  assert.match(candidateReasons[0], /maximumProbability != null && selectedProbability > maximumProbability/,
+    "the browser must also explain and reject candidates above a portfolio's maximum probability");
 });

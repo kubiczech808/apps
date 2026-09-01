@@ -8301,6 +8301,7 @@ function portfolioCandidateFilterReasons(item, mode = state.mode) {
   const minLiquidity = normalizeOptionalMoney(config.minLiquidityUsdc);
   const minNetYield = normalizeMinimumNetYield(config.minNetYield);
   const threshold = normalizeEligibilityThreshold(config.minProbability) ?? thresholdDefaultForMode(normalizedMode);
+  const maximumProbability = normalizeOptionalProbability(config.maxProbability);
   const annualizedReturn = portfolioAnnualizedReturn(item, config);
   const returnMetric = portfolioReturnMetricLabel(config);
   const aiPending = item.selectionStatus === "AI_PENDING" || item.aiAnalysis?.aiModelStatus === "QUOTA_LIMITED";
@@ -8343,6 +8344,8 @@ function portfolioCandidateFilterReasons(item, mode = state.mode) {
     reasons.push(`missing ${probabilitySourceLabel(probabilitySource).toLowerCase()}`);
   } else if (selectedProbability < threshold) {
     reasons.push(`${probabilitySourceLabel(probabilitySource)} ${probability(selectedProbability)} below ${probability(threshold)}`);
+  } else if (maximumProbability != null && selectedProbability > maximumProbability) {
+    reasons.push(`${probabilitySourceLabel(probabilitySource)} ${probability(selectedProbability)} above ${probability(maximumProbability)}`);
   }
   // 5050 does not buy at the market, it rests a bid at a fixed price, so the
   // market-price economics below are the wrong test: a candidate trading at 95c has

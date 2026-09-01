@@ -291,10 +291,10 @@ jobs:
               raise SystemExit("Trading DB credentials are present but localhost:3306 could not connect. Check the database/user grants on the hosting.")
           PY
 
-      - name: Bootstrap and backfill Trading MySQL storage
-        # The database is not the active reader until the following dual-write phase
-        # has been verified. A transient backfill failure must not mark an otherwise
-        # healthy site deployment as failed or interrupt JSON-backed trading.
+      - name: Bootstrap compact Trading MySQL storage
+        # This intentionally creates or compacts only the empty schema. JSON remains
+        # the active reader and neither deploys nor workers may import historical data
+        # until the resulting database footprint has been checked.
         continue-on-error: true
         env:
           TRADING_TRIGGER_KEY: ${{ secrets.POLYTRADING_DB_PASSWORD }}
@@ -302,9 +302,7 @@ jobs:
           python3 - <<'PY'
           import json
           import os
-          import re
           import urllib.request
-          import urllib.error
 
           key = os.environ["TRADING_TRIGGER_KEY"]
           url = "https://www.osobnizkusenosti.cz/trading/api.php?action=storage-admin"
@@ -316,40 +314,20 @@ jobs:
                   method="POST",
                   headers={"Content-Type": "application/json", "X-Trading-Trigger-Key": key},
               )
-              with urllib.request.urlopen(request, timeout=180) as response:
+              with urllib.request.urlopen(request, timeout=30) as response:
                   payload = json.loads(response.read().decode("utf-8"))
               if not payload.get("ok"):
                   raise SystemExit(f"Trading storage {operation} failed")
               return payload
 
-          def safe_error(error):
-              body = ""
-              if isinstance(error, urllib.error.HTTPError):
-                  try:
-                      body = error.read().decode("utf-8", "replace")
-                  except Exception:
-                      body = ""
-              message = body or str(error)
-              message = re.sub(r"(?i)(password|pwd|key|token)\s*[=:]\s*[^\s,;}]+", r"\1=[redacted]", message)
-              return " ".join(message.split())[:500] or type(error).__name__
-
           try:
-              status = call("status")
-              if status.get("jsonImportedAt"):
-                  print(f"Trading JSON backfill already completed at {status['jsonImportedAt']}")
-              else:
-                  migrated = call("migrate-json")
-                  counts = migrated.get("counts") or {}
-                  print("Trading JSON backfill completed:")
-                  for name, value in sorted(counts.items()):
-                      print(f"  {name}: {value}")
-              # A backfill must never change the read mode implicitly. Database reads are
-              # enabled only after worker mirrors have proved they stay current.
-              if status.get("active"):
-                  print("Trading storage reads are active")
-              else:
-                  print("Trading storage remains in JSON read mode during mirror verification")
+              bootstrap = call("bootstrap")
+              storage = bootstrap.get("storage") or {}
+              size = int(storage.get("databaseSizeBytes") or 0)
+              print(f"::notice title=Trading MySQL compact schema::Database footprint after bootstrap: {size} bytes. Historical import and worker mirroring remain disabled.")
+              if not storage.get("schemaReady"):
+                  raise SystemExit("Trading storage schema did not become ready")
           except Exception as error:
-              print(f"::error title=Trading MySQL backfill::{safe_error(error)}")
+              print(f"::error title=Trading MySQL bootstrap::{type(error).__name__}")
               raise
           PY

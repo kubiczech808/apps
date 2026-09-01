@@ -60,13 +60,12 @@ function trading_storage_bootstrap(PDO $pdo): void
         'CREATE TABLE IF NOT EXISTS trading_documents (
             document_key VARCHAR(191) NOT NULL PRIMARY KEY,
             document_type VARCHAR(64) NOT NULL,
-            payload LONGTEXT NOT NULL,
+            payload MEDIUMBLOB NOT NULL,
             checksum CHAR(64) NOT NULL,
             version BIGINT UNSIGNED NOT NULL DEFAULT 1,
             created_at DATETIME(6) NOT NULL,
-            updated_at DATETIME(6) NOT NULL,
-            KEY trading_documents_type_updated (document_type, updated_at)
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci'
+            updated_at DATETIME(6) NOT NULL
+        ) ENGINE=InnoDB ROW_FORMAT=DYNAMIC DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci'
     );
     $pdo->exec(
         'CREATE TABLE IF NOT EXISTS trading_observations (
@@ -86,17 +85,13 @@ function trading_storage_bootstrap(PDO $pdo): void
             annualized_return DECIMAL(24,9) NULL,
             volume_usdc DECIMAL(24,6) NULL,
             tags_json LONGTEXT NULL,
-            payload LONGTEXT NOT NULL,
+            payload MEDIUMBLOB NOT NULL,
             payload_checksum CHAR(64) NOT NULL,
             created_at DATETIME(6) NOT NULL,
             updated_at DATETIME(6) NOT NULL,
             KEY trading_observations_lifecycle_end (lifecycle, end_at),
-            KEY trading_observations_lifecycle_probability (lifecycle, market_probability),
-            KEY trading_observations_lifecycle_return (lifecycle, annualized_return),
-            KEY trading_observations_token (token_id),
-            KEY trading_observations_event (event_slug),
-            KEY trading_observations_updated (updated_at)
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci'
+            KEY trading_observations_lifecycle_updated (lifecycle, updated_at)
+        ) ENGINE=InnoDB ROW_FORMAT=DYNAMIC DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci'
     );
     $pdo->exec(
         'CREATE TABLE IF NOT EXISTS trading_event_log (
@@ -104,12 +99,72 @@ function trading_storage_bootstrap(PDO $pdo): void
             stream VARCHAR(64) NOT NULL,
             portfolio_id VARCHAR(80) NULL,
             occurred_at DATETIME NULL,
-            payload LONGTEXT NOT NULL,
+            payload MEDIUMBLOB NOT NULL,
             created_at DATETIME(6) NOT NULL,
             KEY trading_event_log_stream_time (stream, occurred_at),
             KEY trading_event_log_portfolio_time (portfolio_id, occurred_at)
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci'
+        ) ENGINE=InnoDB ROW_FORMAT=DYNAMIC DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci'
     );
+    trading_storage_optimize_schema($pdo);
+}
+
+/**
+ * The first migration stored uncompressed JSON in every row and indexed several
+ * fields that no SQL read currently queries. The retained JSON files remain the
+ * recoverable source, while MySQL stores the compact working mirror.
+ */
+function trading_storage_optimize_schema(PDO $pdo): void
+{
+    static $complete = false;
+    if ($complete) {
+        return;
+    }
+    $complete = true;
+    foreach ([
+        ['trading_documents', 'payload'],
+        ['trading_observations', 'payload'],
+        ['trading_event_log', 'payload'],
+    ] as [$table, $column]) {
+        $statement = $pdo->prepare(
+            'SELECT DATA_TYPE FROM information_schema.COLUMNS
+             WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = :table AND COLUMN_NAME = :column'
+        );
+        $statement->execute(['table' => $table, 'column' => $column]);
+        $type = strtolower((string) $statement->fetchColumn());
+        if ($type !== 'mediumblob') {
+            $pdo->exec('ALTER TABLE `' . $table . '` MODIFY `' . $column . '` MEDIUMBLOB NOT NULL, ROW_FORMAT=DYNAMIC');
+        }
+    }
+    foreach ([
+        'trading_documents' => ['trading_documents_type_updated'],
+        'trading_observations' => [
+            'trading_observations_lifecycle_probability',
+            'trading_observations_lifecycle_return',
+            'trading_observations_token',
+            'trading_observations_event',
+            'trading_observations_updated',
+        ],
+    ] as $table => $indexes) {
+        foreach ($indexes as $index) {
+            $statement = $pdo->prepare(
+                'SELECT 1 FROM information_schema.STATISTICS
+                 WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = :table AND INDEX_NAME = :index LIMIT 1'
+            );
+            $statement->execute(['table' => $table, 'index' => $index]);
+            if ($statement->fetchColumn() !== false) {
+                $pdo->exec('ALTER TABLE `' . $table . '` DROP INDEX `' . $index . '`');
+            }
+        }
+    }
+    $statement = $pdo->prepare(
+        'SELECT 1 FROM information_schema.STATISTICS
+         WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = "trading_observations"
+           AND INDEX_NAME = "trading_observations_lifecycle_updated" LIMIT 1'
+    );
+    $statement->execute();
+    if ($statement->fetchColumn() === false) {
+        $pdo->exec('ALTER TABLE `trading_observations` ADD INDEX `trading_observations_lifecycle_updated` (`lifecycle`, `updated_at`)');
+    }
 }
 
 function trading_storage_now(): string
@@ -126,6 +181,112 @@ function trading_storage_encode(array $payload): string
     return $encoded;
 }
 
+function trading_storage_pack(array $payload): string
+{
+    return trading_storage_pack_encoded(trading_storage_encode($payload));
+}
+
+function trading_storage_pack_encoded(string $encoded): string
+{
+    $packed = gzcompress($encoded, 6);
+    if (!is_string($packed)) {
+        throw new RuntimeException('Trading storage payload could not be compressed.');
+    }
+    return $packed;
+}
+
+function trading_storage_event_compact_value(mixed $value, int $depth = 0): mixed
+{
+    if (is_string($value)) {
+        return strlen($value) > 4096 ? substr($value, 0, 4096) . ' [truncated]' : $value;
+    }
+    if (!is_array($value)) {
+        return $value;
+    }
+    if ($depth >= 5) {
+        return '[truncated nested payload]';
+    }
+    $ignoredKeys = [
+        'audit', 'auditTrail', 'marketObservations', 'resolvedMarketObservations',
+        'rawMarkets', 'rawMarket', 'rawResponse', 'responseBody', 'response',
+        'orderBook', 'orderbook', 'marketData', 'history', 'historicalData',
+    ];
+    $isList = array_is_list($value);
+    $result = [];
+    $limit = $isList ? 60 : 100;
+    $seen = 0;
+    foreach ($value as $key => $child) {
+        if (!$isList && in_array((string) $key, $ignoredKeys, true)) {
+            continue;
+        }
+        if ($seen >= $limit) {
+            $result['_storageTruncated'] = count($value) - $seen;
+            break;
+        }
+        $result[$key] = trading_storage_event_compact_value($child, $depth + 1);
+        $seen++;
+    }
+    return $result;
+}
+
+function trading_storage_event_compact_payload(array $payload): array
+{
+    $compact = trading_storage_event_compact_value($payload);
+    if (!is_array($compact)) {
+        return $payload;
+    }
+    $encoded = trading_storage_encode($compact);
+    if (strlen($encoded) <= 98304) {
+        return $compact;
+    }
+    return array_filter([
+        'id' => $payload['id'] ?? null,
+        'runAt' => $payload['runAt'] ?? $payload['changedAt'] ?? $payload['date'] ?? null,
+        'action' => $payload['action'] ?? $payload['status'] ?? null,
+        'status' => $payload['status'] ?? null,
+        'reason' => $payload['reason'] ?? null,
+        'note' => $payload['note'] ?? null,
+        'market' => $payload['market'] ?? $payload['marketTitle'] ?? null,
+        'outcome' => $payload['outcome'] ?? null,
+        'storagePayloadTruncated' => true,
+    ], static fn (mixed $value): bool => $value !== null && $value !== '');
+}
+
+function trading_storage_event_identity(array $payload, string $encoded): string
+{
+    foreach (['id', 'runId', 'workflowRunId', 'eventId'] as $key) {
+        if (is_scalar($payload[$key] ?? null) && (string) $payload[$key] !== '') {
+            return $key . ':' . (string) $payload[$key];
+        }
+    }
+    $stable = [
+        $payload['runAt'] ?? $payload['changedAt'] ?? $payload['date'] ?? null,
+        $payload['action'] ?? $payload['status'] ?? null,
+        $payload['portfolioId'] ?? $payload['strategyId'] ?? null,
+        $payload['marketId'] ?? $payload['eventSlug'] ?? $payload['slug'] ?? null,
+        $payload['outcome'] ?? null,
+    ];
+    foreach ($stable as $value) {
+        if ($value !== null && $value !== '') {
+            return hash('sha256', trading_storage_encode(['stable' => $stable]));
+        }
+    }
+    return hash('sha256', $encoded);
+}
+
+function trading_storage_unpack(mixed $payload): ?array
+{
+    if (!is_string($payload)) {
+        return null;
+    }
+    // Existing rows from before the compact schema remain readable if any survived
+    // an interrupted migration: only successfully decompressed data is treated as
+    // packed, otherwise it is the original JSON text.
+    $unpacked = @gzuncompress($payload);
+    $decoded = json_decode(is_string($unpacked) ? $unpacked : $payload, true);
+    return is_array($decoded) ? $decoded : null;
+}
+
 function trading_storage_document_get(string $key): ?array
 {
     $pdo = trading_storage_pdo();
@@ -137,8 +298,7 @@ function trading_storage_document_get(string $key): ?array
         $statement = $pdo->prepare('SELECT payload FROM trading_documents WHERE document_key = :key');
         $statement->execute(['key' => $key]);
         $payload = $statement->fetchColumn();
-        $decoded = is_string($payload) ? json_decode($payload, true) : null;
-        return is_array($decoded) ? $decoded : null;
+        return trading_storage_unpack($payload);
     } catch (Throwable) {
         return null;
     }
@@ -162,7 +322,7 @@ function trading_storage_document_put(string $key, string $type, array $payload)
     $statement->execute([
         'key' => $key,
         'type' => $type,
-        'payload' => $encoded,
+        'payload' => trading_storage_pack_encoded($encoded),
         'checksum' => hash('sha256', $encoded),
         'createdAt' => $now,
         'updatedAt' => $now,
@@ -212,13 +372,12 @@ function trading_storage_event_append(string $stream, ?string $portfolioId, arra
         throw new RuntimeException('Trading MySQL storage is unavailable.');
     }
     trading_storage_bootstrap($pdo);
-    $encoded = trading_storage_encode($payload);
+    $compactPayload = trading_storage_event_compact_payload($payload);
+    $encoded = trading_storage_encode($compactPayload);
     $occurredAt = trading_storage_datetime($occurredAt ?? $payload['changedAt'] ?? $payload['runAt'] ?? $payload['date'] ?? null);
     // Most imported records already have a stable id. The deterministic fallback makes
     // retrying an ingest idempotent instead of duplicating a portfolio's audit trail.
-    $identity = is_scalar($payload['id'] ?? null) && (string) $payload['id'] !== ''
-        ? (string) $payload['id']
-        : hash('sha256', $encoded);
+    $identity = trading_storage_event_identity($payload, $encoded);
     $eventKey = hash('sha256', implode("\x1F", [$stream, (string) $portfolioId, (string) $occurredAt, $identity]));
     $statement = $pdo->prepare(
         'INSERT INTO trading_event_log (event_key, stream, portfolio_id, occurred_at, payload, created_at)
@@ -230,7 +389,7 @@ function trading_storage_event_append(string $stream, ?string $portfolioId, arra
         'stream' => $stream,
         'portfolioId' => $portfolioId,
         'occurredAt' => $occurredAt,
-        'payload' => $encoded,
+        'payload' => trading_storage_pack_encoded($encoded),
         'createdAt' => trading_storage_now(),
     ]);
 }
@@ -254,7 +413,7 @@ function trading_storage_event_records(string $stream, ?string $portfolioId = nu
     $statement->execute($params);
     $records = [];
     while (($payload = $statement->fetchColumn()) !== false) {
-        $decoded = is_string($payload) ? json_decode($payload, true) : null;
+        $decoded = trading_storage_unpack($payload);
         if (is_array($decoded)) {
             $records[] = $decoded;
         }
@@ -353,7 +512,7 @@ function trading_storage_observations_upsert(array $items): int
                 'annualizedReturn' => trading_storage_number($item, ['marketAnnualizedReturn', 'potentialAnnualizedReturn', 'annualizedReturn']),
                 'volume' => trading_storage_number($item, ['resolvedVolumeUsdc', 'volumeUsdc', 'volume', 'liquidity']),
                 'tags' => trading_storage_encode(is_array($tags) ? $tags : [$tags]),
-                'payload' => $payload,
+                'payload' => trading_storage_pack_encoded($payload),
                 'checksum' => hash('sha256', $payload),
                 'createdAt' => trading_storage_now(),
                 'updatedAt' => trading_storage_now(),
@@ -383,7 +542,7 @@ function trading_storage_observations_fetch(string $lifecycle, int $limit = 0): 
     $statement->execute(['lifecycle' => $lifecycle]);
     $rows = [];
     while (($payload = $statement->fetchColumn()) !== false) {
-        $decoded = is_string($payload) ? json_decode($payload, true) : null;
+        $decoded = trading_storage_unpack($payload);
         if (is_array($decoded)) {
             $rows[] = $decoded;
         }

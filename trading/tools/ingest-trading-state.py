@@ -139,6 +139,12 @@ def ingest_paper(url: str, key: str, state_file: Path, state: dict[str, Any], ta
 
 
 def main() -> int:
+    # Storage has an explicit activation gate. Keeping the mirror disabled by
+    # default prevents a deploy or a normal worker pass from starting an
+    # unbounded import before the database footprint has been verified.
+    if not env_bool("TRADING_STORAGE_MIRROR_ENABLED"):
+        print("Trading SQL mirror is disabled pending storage verification")
+        return 0
     url = os.environ.get("TRADING_STORAGE_INGEST_URL", "").strip()
     key = os.environ.get("TRADING_TRIGGER_KEY", "").strip()
     required = env_bool("TRADING_STORAGE_INGEST_REQUIRED")

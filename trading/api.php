@@ -1620,6 +1620,10 @@ function execution_scope_strategy_config(?string $strategyId): ?array
     if ($strategyId === 'live' || $strategyId === 'live5050') {
         return is_array($config[$strategyId] ?? null) ? $config[$strategyId] : null;
     }
+    if (preg_match('/^live-custom-([a-z][a-zA-Z0-9]{1,30})$/', $strategyId, $matches) === 1) {
+        $id = $matches[1];
+        return is_array($config['livePortfolios'][$id] ?? null) ? $config['livePortfolios'][$id] : null;
+    }
     return is_array($config['paper'][$strategyId] ?? null) ? $config['paper'][$strategyId] : null;
 }
 
