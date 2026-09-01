@@ -946,6 +946,16 @@ function prefilterLiveCandidate(item) {
   if (candidateVolume < MIN_VOLUME_24H) {
     reasons.push(`volume ${candidateVolume.toFixed(2)} USDC below live minimum ${MIN_VOLUME_24H.toFixed(2)} USDC`);
   }
+  // A portfolio's resolution horizon is a capital-turnover preference, not a
+  // tradeability signal -- unlike the terminal-state checks above, which correctly
+  // moved off Gamma's scheduled date onto Polymarket's own reported status, this ceiling
+  // is deliberately date-derived: it caps how long this portfolio is willing to hold
+  // capital in a still-perfectly-tradable market. The two are independent, so this stays
+  // even though a stale/estimated date is no longer used to decide whether a market has
+  // ended.
+  if (Number.isFinite(MAX_RESOLUTION_DAYS) && Number.isFinite(days) && days > MAX_RESOLUTION_DAYS) {
+    reasons.push(`stored resolution ${days.toFixed(2)} days exceeds live max ${MAX_RESOLUTION_DAYS} days`);
+  }
   return {
     passed: reasons.length === 0,
     reasons,
@@ -984,6 +994,7 @@ function prefilterReasonCountKey(reason) {
   if (/^net profit .* below .* after fees/i.test(text)) return "net profit below live minimum after fees";
   if (/^liquidity .* below live minimum .* USDC/i.test(text)) return "volume below live minimum";
   if (/^volume .* below live minimum .* USDC/i.test(text)) return "volume below live minimum";
+  if (/stored resolution .* exceeds live max/i.test(text)) return "stored resolution exceeds live max days";
   if (/outside live revalidation scan limit/i.test(text)) return "outside live revalidation scan limit after short-expiry ranking";
   // Each of these carries its own overlap keys, so grouping strips them back down to one
   // count per reason instead of one bucket per distinct event/match combination.

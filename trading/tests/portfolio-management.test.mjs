@@ -1040,6 +1040,22 @@ test("paper portfolio rules: 'Order mode' is shown, mirroring the live card", ()
   assert.match(live, /\["Order mode", useLimitOrders \? "Limit orders" : "Market orders"\],/);
 });
 
+// Reported missing later, alongside the day-cap logic it describes
+// (strategyEligibleCandidates/portfolioFilterResult/prefilterLiveCandidate): both cards
+// dropped their "Resolution filter" row when resolution dates stopped deciding whether a
+// market had ended. The two questions are independent -- this row states a portfolio's
+// configured ceiling, not the market's live status -- so the row belongs on both cards
+// regardless of that change.
+test("portfolio rules: the resolution-day ceiling is shown on both the paper and live cards", () => {
+  const paper = extractFunction(APP, "portfolioRuleRows");
+  assert.match(paper, /const maxResolutionDays = resolutionDaysForMode\(mode\);/);
+  assert.match(paper, /\["Resolution filter", resolution\],/);
+
+  const live = extractFunction(APP, "livePortfolioRuleRows");
+  assert.match(live, /const maxResolutionDays = resolutionDaysForMode\(mode\);/);
+  assert.match(live, /\["Resolution filter", `Max \$\{maxResolutionDays\} days`\],/);
+});
+
 test("run log history: the workflow archives every portfolio's new runs, and the bot writes them", () => {
   assert.match(BOT, /const PORTFOLIO_RUN_LOG_ENTRY_PATH = process\.env\.PAPER_PORTFOLIO_RUN_LOG_ENTRY_PATH/);
   assert.match(BOT, /async function writePortfolioRunLogEntries\(entries\)/);
@@ -2399,4 +2415,20 @@ test("execution scope: custom live portfolios resolve their own saved filter", (
   assert.ok(candidateReasons);
   assert.match(candidateReasons[0], /maximumProbability != null && selectedProbability > maximumProbability/,
     "the browser must also explain and reject candidates above a portfolio's maximum probability");
+});
+
+// Reported missing later, alongside its paper-bot and live-executor twins: the general
+// (non-fixed-entry) branch of this preview lost both its resolution-day ceiling and its
+// "missing resolution date" reason. Neither is the "has this market ended" question --
+// that is answered by portfolioEvaluationStatus/evaluationResolvedByMarket, already
+// checked earlier in this same function via displayStatus -- so both stay independent of
+// the market-status fix.
+test("candidate reasons: the general branch still caps a portfolio's resolution-day ceiling", () => {
+  const reasons = extractFunction(APP, "portfolioCandidateFilterReasons");
+  assert.match(reasons, /const maxDays = resolutionDaysForMode\(normalizedMode\);/);
+  assert.match(reasons, /const days = evaluationDaysLeft\(item\);/);
+  assert.match(reasons, /if \(!Number\.isFinite\(days\)\) \{\s*\n\s*reasons\.push\("missing resolution date"\);\s*\n\s*\} else if \(days > maxDays\) \{\s*\n\s*reasons\.push\(`resolution \$\{days\.toFixed\(2\)\} days exceeds max \$\{maxDays\}`\);/);
+  // And the fixed-entry (5050) branch keeps its own, symmetric check.
+  const branch = /if \(isFixedEntryMode\(mode\)\) \{[\s\S]*?return reasons;\n  \}/.exec(reasons)[0];
+  assert.match(branch, /if \(Number\.isFinite\(days\) && Number\.isFinite\(maxDays\) && days > maxDays\) \{/);
 });

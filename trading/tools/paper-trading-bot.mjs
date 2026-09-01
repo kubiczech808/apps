@@ -6534,6 +6534,7 @@ function dueExecutionStrategies(state) {
 
 function strategyEligibleCandidates(eligible, strategy) {
   const requiredMarketType = normalizePortfolioMarketType(strategy.marketType, strategy.requireMostProbableOutcome);
+  const maxResolutionDays = strategyMaxResolutionDays(strategy);
   let rows = [...eligible].filter((item) => {
     const tokenId = String(item?.tokenId || item?.clobTokenId || item?.assetId || "");
     if (strategy.excludedCandidateTokenIds?.has(tokenId)) return false;
@@ -6548,6 +6549,11 @@ function strategyEligibleCandidates(eligible, strategy) {
       || item?.marketClosed === true
       || item?.marketActive === false
       || item?.acceptingOrders === false) return false;
+    // A portfolio's resolution horizon is a capital-turnover preference, independent of
+    // whether the market is currently tradable (the check just above, which correctly
+    // reads Polymarket's own status rather than a scheduled/estimated date). This ceiling
+    // is deliberately date-derived: it caps how long capital sits in one position.
+    if (daysValue(item) > maxResolutionDays) return false;
     // The same test the statistics apply, for the same reason: an order sent into a book
     // this wide has no counterparty to fill against, so a row quoting an attractive
     // midpoint is not an opportunity. A volume floor does not catch it -- rowVolumeUsdc
@@ -6778,6 +6784,8 @@ function portfolioFilterResult(item, strategy) {
   const economics = portfolioEconomics(item, strategy);
   const annualizedReturn = economics.annualizedReturn;
   const returnMetric = probabilitySource === "polymarket" ? "Potential p.a." : "EV p.a.";
+  const days = daysValue(item);
+  const maxResolutionDays = strategyMaxResolutionDays(strategy);
 
   if (binaryOutcomeQuotesAreBothZero(item)) reasons.push("binary YES/NO quotes are both 0%; market appears resolved");
   if (strategy.excludedCandidateTokenIds?.has(tokenId)) reasons.push("manually excluded from this paper portfolio");
@@ -6821,6 +6829,9 @@ function portfolioFilterResult(item, strategy) {
   }
   if (item?.marketClosed === true || item?.marketActive === false || item?.acceptingOrders === false) {
     reasons.push("market is closed or no longer accepting orders");
+  }
+  if (days > maxResolutionDays) {
+    reasons.push(`resolution ${Number.isFinite(days) ? days.toFixed(2) : "-"} days exceeds max ${maxResolutionDays}`);
   }
   if (Number.isFinite(minLiquidityUsdc) && candidateVolume < minLiquidityUsdc) {
     reasons.push(`volume ${candidateVolume.toFixed(2)} below ${minLiquidityUsdc.toFixed(2)} USDC`);

@@ -7906,14 +7906,17 @@ function portfolioRuleRows(portfolio = {}) {
   const mode = portfolio.id ? paperModeFromStrategyId(portfolio.id) : state.mode;
   const config = portfolioConfigForMode(mode);
   const threshold = thresholdForMode(mode);
+  const maxResolutionDays = resolutionDaysForMode(mode);
   const minLiquidityUsdc = Number(config.minLiquidityUsdc);
   const minNetYield = normalizeMinimumNetYield(config.minNetYield);
   const priority = config.selectionOrder === "highest_reward_risk_first"
     ? "Highest reward/risk, then net yield"
     : "Highest net yield, then net gain";
+  const resolution = `Max ${maxResolutionDays.toLocaleString("en-US", { maximumFractionDigits: 0 })} days`;
   const rows = [
     ["Probability threshold", probabilityRangeRuleValue(config, threshold)],
     ["Stake sizing", stakeSizingRuleValue(mode, portfolio)],
+    ["Resolution filter", resolution],
     ["Trade priority", priority],
     ["Market type", portfolioMarketTypeLabel(config.marketType)],
     ...(config.excludeOverUnderMarkets === true ? [["Over/Under markets", "Excluded"]] : []),
@@ -7953,6 +7956,7 @@ function livePortfolioRuleRows() {
   const mode = isLiveMode() ? state.mode : "live";
   const config = portfolioConfigForMode(mode);
   const useLimitOrders = config.useLimitOrders === true;
+  const maxResolutionDays = resolutionDaysForMode(mode);
   const minLiquidityUsdc = normalizeOptionalMoney(config.minLiquidityUsdc);
   const minNetYield = normalizeMinimumNetYield(config.minNetYield);
   const includeOnlyTags = normalizeMarketTagList(config.includeOnlyMarketTags);
@@ -7964,6 +7968,7 @@ function livePortfolioRuleRows() {
     ...(isLivePortfolioMode(mode) ? [["Initial capital", liveInitialCapitalForMode(mode, config) == null ? "not set" : money(liveInitialCapitalForMode(mode, config))]] : []),
     ["Probability threshold", probabilityRangeRuleValue(config, currentEligibilityThreshold())],
     ["Stake sizing", stakeSizingRuleValue(mode, state.liveState?.portfolio)],
+    ["Resolution filter", `Max ${maxResolutionDays} days`],
     ["Trade priority", priority],
     ["Market type", portfolioMarketTypeLabel(config.marketType)],
     ...(config.excludeOverUnderMarkets === true ? [["Over/Under markets", "Excluded"]] : []),
@@ -8297,6 +8302,8 @@ function portfolioCandidateFilterReasons(item, mode = state.mode) {
   const displayStatus = portfolioEvaluationStatus(item);
   const probabilitySource = normalizeProbabilitySource(config.probabilitySource);
   const selectedProbability = portfolioProbability(item, config);
+  const maxDays = resolutionDaysForMode(normalizedMode);
+  const days = evaluationDaysLeft(item);
   const liquidity = rowVolumeUsdc(item);
   const minLiquidity = normalizeOptionalMoney(config.minLiquidityUsdc);
   const minNetYield = normalizeMinimumNetYield(config.minNetYield);
@@ -8365,6 +8372,9 @@ function portfolioCandidateFilterReasons(item, mode = state.mode) {
     if (Number.isFinite(minLiquidity) && liquidity < minLiquidity) {
       reasons.push(`volume ${money(liquidity)} below ${money(minLiquidity)}`);
     }
+    if (Number.isFinite(days) && Number.isFinite(maxDays) && days > maxDays) {
+      reasons.push(`resolves in ${compactDays(days)}, beyond ${maxDays} days`);
+    }
     return reasons;
   }
   if (!Number.isFinite(annualizedReturn)) {
@@ -8389,6 +8399,11 @@ function portfolioCandidateFilterReasons(item, mode = state.mode) {
       ? `: ${executionCheck.rejectReasons[0]}`
       : "";
     reasons.push(`latest live revalidation ${String(executionCheck.status || "REJECTED").toLowerCase()}${detail}`);
+  }
+  if (!Number.isFinite(days)) {
+    reasons.push("missing resolution date");
+  } else if (days > maxDays) {
+    reasons.push(`resolution ${days.toFixed(2)} days exceeds max ${maxDays}`);
   }
   if (minLiquidity != null && liquidity < minLiquidity) {
     reasons.push(`volume ${money(liquidity)} below ${money(minLiquidity)}`);

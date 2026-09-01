@@ -806,6 +806,48 @@ test("candidate lifecycle: a scheduled date never retires a market that Polymark
   assert.match(bot.portfolioFilterResult(closed, strategy).reasons.join(" "), /closed or no longer accepting orders/);
 });
 
+// Reported missing later, alongside the settings-card row that displayed it: a portfolio's
+// configured resolution-day ceiling is a capital-turnover preference, independent of the
+// market-status check above. A market can be perfectly tradable right now and still be
+// too far out for a portfolio unwilling to hold capital that long.
+test("candidate lifecycle: a portfolio's resolution-day ceiling still applies to an otherwise-tradable market", () => {
+  const strategy = {
+    ...bot.PAPER_STRATEGIES.conservative,
+    minProbability: 0.7,
+    minLiquidityUsdc: 0,
+    minNetYield: 0,
+    maxResolutionDays: 7,
+    excludedCandidateTokenIds: new Set(),
+  };
+  const nearby = {
+    tokenId: "within-horizon",
+    status: "ELIGIBLE",
+    marketProbability: 0.8,
+    marketPrice: 0.8,
+    bestBid: 0.8,
+    bestAsk: 0.81,
+    spread: 0.01,
+    volumeUsdc: 50000,
+    totalCostUsdc: 5,
+    netGainIfWinUsdc: 1,
+    netYield: 0.2,
+    daysToResolution: 3,
+    marketClosed: false,
+    marketActive: true,
+    acceptingOrders: true,
+  };
+  const farOut = { ...nearby, tokenId: "beyond-horizon", daysToResolution: 60 };
+
+  assert.equal(bot.strategyEligibleCandidates([nearby], strategy).length, 1);
+  assert.equal(bot.portfolioFilterResult(nearby, strategy).eligible, true);
+
+  assert.deepEqual(bot.strategyEligibleCandidates([farOut], strategy), [],
+    "still tradable, but 60 days exceeds this portfolio's 7-day ceiling");
+  const filtered = bot.portfolioFilterResult(farOut, strategy);
+  assert.equal(filtered.eligible, false);
+  assert.match(filtered.reasons.join(" "), /resolution 60\.00 days exceeds max 7/);
+});
+
 test("economics: net yield is measured against the real stake, not the target win", () => {
   // $0.30 net gain on a $5 stake is a 6% yield, not a 300% one.
   assert.equal(bot.netYieldAfterFees({ netGainIfWinUsdc: 0.3, stakeUsdc: 5 }), 0.06);
@@ -4339,14 +4381,17 @@ test("5050: the candidate list is judged by its own rule, not market-price econo
 
   // The portfolio's own volume floor still applies.
   assert.match(reasons({ bestAsk: 0.95, volumeUsdc: 50, daysToResolution: 0.4 })[0], /volume/);
-  // A later change replaced every date-derived rejection with the market's own live status
-  // ("Use market status instead of resolution dates"), so a stale or far-out daysToResolution
-  // no longer rejects anything here on its own -- there is no maxResolutionDays concept left
-  // to check, in this branch or in strategyEligibleCandidates. A closed or no-longer-trading
-  // market is still excluded, just by marketClosed/marketActive/acceptingOrders elsewhere in
-  // the pipeline (portfolioEvaluationStatus, resolvedEvaluationFromMarket), not by this branch.
+  // "Use market status instead of resolution dates" replaced date-derived TERMINATION with
+  // the market's own live status: a past-dated candidate with no closed/resolved signal is
+  // not rejected here, because Gamma's date is frequently a stale estimate and evaluation's
+  // own status check (portfolioEvaluationStatus/evaluationResolvedByMarket, above this
+  // branch) is what actually retires a market that has genuinely ended.
   assert.deepEqual(reasons({ bestAsk: 0.95, volumeUsdc: 60000, daysToResolution: -1 }), []);
-  assert.deepEqual(reasons({ bestAsk: 0.95, volumeUsdc: 60000, daysToResolution: 45 }), []);
+  // But reported missing later: the portfolio's configured resolution-day CEILING, a
+  // capital-turnover preference independent of whether the market is tradable. Restored
+  // alongside its paper-side (strategyEligibleCandidates/portfolioFilterResult) and
+  // live-executor (prefilterLiveCandidate) twins, and the settings-card row that showed it.
+  assert.match(reasons({ bestAsk: 0.95, volumeUsdc: 60000, daysToResolution: 45 })[0], /beyond 30 days/);
 
   // It must return before the market-price economics, or those would re-reject it.
   const after = app.slice(app.indexOf(branch) + branch.length);

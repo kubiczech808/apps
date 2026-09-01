@@ -4128,9 +4128,15 @@ test("finished events: only the current Polymarket status can close a candidate 
     "revalidation must not reject a candidate based on Gamma's date");
   assert.match(revalidation, /rejectReasons: \["no valid current entry price"\]/,
     "a temporary empty book is rejected for this run without being declared closed");
+  // A max-resolution-days ceiling was restored after this same commit dropped it: reported
+  // missing, along with its paper-side twin (strategyEligibleCandidates/portfolioFilterResult)
+  // and the settings-card row that displayed it. It answers a different question from the
+  // one this test is titled after -- not "has this event finished" (status-only, unchanged
+  // above), but "does this portfolio want to hold capital this long" -- so a still-tradable,
+  // far-dated market gets skipped by it without ever being declared closed.
   const prefilter = source.slice(source.indexOf("function prefilterLiveCandidate"), source.indexOf("function sortLivePrefilterCandidates"));
-  assert.doesNotMatch(prefilter, /stored resolution .* exceeds live max|MAX_RESOLUTION_DAYS/,
-    "the candidate pool must not discard a row by its scheduled resolution date");
+  assert.match(prefilter, /if \(Number\.isFinite\(MAX_RESOLUTION_DAYS\) && Number\.isFinite\(days\) && days > MAX_RESOLUTION_DAYS\)/,
+    "the candidate pool still caps how far out a portfolio will hold a position, independent of whether the market is tradable");
   const ranking = source.slice(source.indexOf("function sortLivePrefilterCandidates"), source.indexOf("function prefilterReasonCountKey"));
   assert.doesNotMatch(ranking, /compareShorterHorizon|selectedAnnualizedReturn/,
     "the candidate ranking must not derive a preference from the scheduled horizon");
