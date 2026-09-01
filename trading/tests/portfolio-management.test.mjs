@@ -501,6 +501,15 @@ test("storage migration: compact schema does not auto-import historical data", (
   const ingester = readFileSync(new URL("../tools/ingest-trading-state.py", import.meta.url), "utf8");
   assert.match(ingester, /if not env_bool\("TRADING_STORAGE_MIRROR_ENABLED"\)/,
     "workers require an explicit mirror opt-in while capacity is being verified");
+  assert.match(API, /\$storageRequest = request_payload\(\);/,
+    "each protected storage request must parse its input once before a batch uses its cursor");
+  assert.match(API, /trading_storage_compact_payload_batch\(/,
+    "existing rows must be compacted in bounded resumable batches rather than reimported");
+  const maintenance = readFileSync(new URL("../../.github/workflows/trading-storage-compact.yml", import.meta.url), "utf8");
+  assert.match(maintenance, /workflow_dispatch:/,
+    "existing storage maintenance must require an explicit manual dispatch");
+  assert.match(maintenance, /confirm_compaction/,
+    "the maintenance workflow must require a confirmation before it writes payloads");
 });
 
 test("dashboard: a created portfolio's settings are its own", () => {

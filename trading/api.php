@@ -4445,7 +4445,8 @@ try {
             respond(['ok' => false, 'error' => 'POST is required'], 405);
         }
         require_trading_trigger_key();
-        $operation = strtolower(trim((string) (request_payload()['operation'] ?? 'status')));
+        $storageRequest = request_payload();
+        $operation = strtolower(trim((string) ($storageRequest['operation'] ?? 'status')));
         $pdo = trading_storage_pdo();
         if (!$pdo instanceof PDO) {
             respond(['ok' => false, 'error' => 'Trading MySQL storage is not configured or reachable.'], 503);
@@ -4461,6 +4462,19 @@ try {
                 'preview' => trading_storage_compression_preview($pdo),
                 'storage' => trading_storage_diagnostics(),
             ]);
+        }
+        if ($operation === 'compact-batch') {
+            $result = trading_storage_compact_payload_batch(
+                $pdo,
+                (string) ($storageRequest['table'] ?? ''),
+                (string) ($storageRequest['after'] ?? ''),
+                (int) ($storageRequest['limit'] ?? 400),
+            );
+            respond(['ok' => true, 'operation' => 'compact-batch', 'batch' => $result]);
+        }
+        if ($operation === 'rebuild-table') {
+            $tables = trading_storage_rebuild_compacted_table($pdo, (string) ($storageRequest['table'] ?? ''));
+            respond(['ok' => true, 'operation' => 'rebuild-table', 'tables' => $tables, 'storage' => trading_storage_diagnostics()]);
         }
         if ($operation === 'compact-empty') {
             $before = trading_storage_table_stats($pdo);

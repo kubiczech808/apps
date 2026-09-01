@@ -1,0 +1,78 @@
+name: Compact Trading MySQL Storage
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm_compaction:
+        description: Rewrite existing Trading payloads into compressed blobs without importing or deleting records.
+        required: true
+        type: boolean
+        default: false
+
+jobs:
+  compact:
+    if: inputs.confirm_compaction == true
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Compact existing Trading payloads
+        env:
+          TRADING_TRIGGER_KEY: ${{ secrets.POLYTRADING_DB_PASSWORD }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import urllib.error
+          import urllib.request
+
+          key = os.environ["TRADING_TRIGGER_KEY"]
+          url = "https://www.osobnizkusenosti.cz/trading/api.php?action=storage-admin"
+
+          def call(operation, **params):
+              request = urllib.request.Request(
+                  url,
+                  data=json.dumps({"operation": operation, **params}).encode("utf-8"),
+                  method="POST",
+                  headers={"Content-Type": "application/json", "X-Trading-Trigger-Key": key},
+              )
+              try:
+                  with urllib.request.urlopen(request, timeout=90) as response:
+                      payload = json.loads(response.read().decode("utf-8"))
+              except urllib.error.HTTPError as error:
+                  try:
+                      payload = json.loads(error.read().decode("utf-8"))
+                  except Exception:
+                      payload = {}
+                  raise RuntimeError(str(payload.get("error") or f"HTTP {error.code}")) from error
+              if not payload.get("ok"):
+                  raise RuntimeError(str(payload.get("error") or f"{operation} failed"))
+              return payload
+
+          call("bootstrap")
+          for table in ("trading_documents", "trading_observations", "trading_event_log"):
+              after = ""
+              rewritten = 0
+              processed = 0
+              while True:
+                  batch = call("compact-batch", table=table, after=after, limit=500)["batch"]
+                  processed += int(batch.get("processed") or 0)
+                  rewritten += int(batch.get("rewritten") or 0)
+                  unreadable = int(batch.get("unreadable") or 0)
+                  if unreadable:
+                      raise RuntimeError(f"{table} has {unreadable} unreadable payload(s); rebuild was not run")
+                  if batch.get("done"):
+                      break
+                  after = str(batch.get("nextAfter") or "")
+                  if not after:
+                      raise RuntimeError(f"{table} compaction cursor did not advance")
+              call("rebuild-table", table=table)
+              print(f"Compacted {table}: {rewritten}/{processed} rows rewritten")
+
+          status = call("status")
+          storage = status.get("storage") or {}
+          print(
+              "::notice title=Trading MySQL compacted::"
+              f"Trading tables now use {int(storage.get('tradingSizeBytes') or 0)} bytes; "
+              "no historical JSON import was performed and database reads remain inactive."
+          )
+          PY

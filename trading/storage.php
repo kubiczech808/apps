@@ -259,6 +259,81 @@ function trading_storage_compression_preview(PDO $pdo, int $sampleLimit = 160): 
     return $preview;
 }
 
+function trading_storage_compaction_table(string $table): array
+{
+    $tables = [
+        'trading_documents' => 'document_key',
+        'trading_observations' => 'observation_key',
+        'trading_event_log' => 'event_key',
+    ];
+    if (!array_key_exists($table, $tables)) {
+        throw new InvalidArgumentException('Unknown Trading storage table.');
+    }
+    return [$table, $tables[$table]];
+}
+
+/**
+ * Rewrites a bounded primary-key range into the current compressed payload
+ * format. The decoded JSON is identical and every batch is transactional, so a
+ * timeout merely resumes from the returned cursor instead of losing a record.
+ */
+function trading_storage_compact_payload_batch(PDO $pdo, string $table, string $after = '', int $limit = 400): array
+{
+    trading_storage_bootstrap($pdo);
+    [$table, $key] = trading_storage_compaction_table($table);
+    $limit = max(1, min(1000, $limit));
+    $statement = $pdo->prepare(
+        'SELECT `' . $key . '` AS row_key, payload FROM `' . $table . '`
+         WHERE `' . $key . '` > :after ORDER BY `' . $key . '` ASC LIMIT ' . $limit
+    );
+    $statement->execute(['after' => $after]);
+    $rows = $statement->fetchAll();
+    $update = $pdo->prepare('UPDATE `' . $table . '` SET payload = :payload WHERE `' . $key . '` = :key');
+    $processed = 0;
+    $rewritten = 0;
+    $unreadable = 0;
+    $last = $after;
+    $pdo->beginTransaction();
+    try {
+        foreach ($rows as $row) {
+            $last = (string) ($row['row_key'] ?? $last);
+            $payload = $row['payload'] ?? null;
+            $processed++;
+            $decoded = trading_storage_unpack($payload);
+            if (!is_array($decoded)) {
+                $unreadable++;
+                continue;
+            }
+            $packed = trading_storage_pack($decoded);
+            if (is_string($payload) && hash_equals($payload, $packed)) {
+                continue;
+            }
+            $update->execute(['payload' => $packed, 'key' => $last]);
+            $rewritten++;
+        }
+        $pdo->commit();
+    } catch (Throwable $error) {
+        $pdo->rollBack();
+        throw $error;
+    }
+    return [
+        'table' => $table,
+        'processed' => $processed,
+        'rewritten' => $rewritten,
+        'unreadable' => $unreadable,
+        'nextAfter' => $last,
+        'done' => $processed < $limit,
+    ];
+}
+
+function trading_storage_rebuild_compacted_table(PDO $pdo, string $table): array
+{
+    trading_storage_bootstrap($pdo);
+    [$table] = trading_storage_compaction_table($table);
+    $pdo->query('OPTIMIZE TABLE `' . $table . '`')->fetchAll();
+    return trading_storage_table_stats($pdo);
+}
+
 function trading_storage_now(): string
 {
     return gmdate('Y-m-d H:i:s.u');
