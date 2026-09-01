@@ -4454,6 +4454,14 @@ try {
         if ($operation === 'bootstrap') {
             respond(['ok' => true, 'operation' => 'bootstrap', 'storage' => trading_storage_diagnostics()]);
         }
+        if ($operation === 'compact-preview') {
+            respond([
+                'ok' => true,
+                'operation' => 'compact-preview',
+                'preview' => trading_storage_compression_preview($pdo),
+                'storage' => trading_storage_diagnostics(),
+            ]);
+        }
         if ($operation === 'compact-empty') {
             $before = trading_storage_table_stats($pdo);
             $nonEmpty = array_filter($before, static fn (array $table): bool => (int) ($table['rows'] ?? 0) > 0);

@@ -485,6 +485,8 @@ test("storage migration: compact schema does not auto-import historical data", (
     "run-log payloads must be bounded independently from market data");
   assert.match(STORAGE, /function trading_storage_compact_empty_tables\(PDO \$pdo\): array/,
     "oversized empty InnoDB tables must be rebuilt before the first retained import");
+  assert.match(STORAGE, /function trading_storage_compression_preview\(PDO \$pdo, int \$sampleLimit = 160\): array/,
+    "existing rows need a read-only compression estimate before any rewrite runs");
   assert.match(STORAGE, /trading_storage_pack_encoded\(\$payload\)/,
     "observations must use the compressed payload path");
   const deploy = readFileSync(new URL("../../.github/workflows/trading-deploy.yml", import.meta.url), "utf8");
@@ -494,6 +496,8 @@ test("storage migration: compact schema does not auto-import historical data", (
     "deploying a compact schema must never import the full JSON history");
   assert.match(compactStep[0], /compact-empty/,
     "the deploy must reclaim empty table allocations before the footprint is checked");
+  assert.match(compactStep[0], /compact-preview/,
+    "a non-empty database must be measured rather than altered during schema deployment");
   const ingester = readFileSync(new URL("../tools/ingest-trading-state.py", import.meta.url), "utf8");
   assert.match(ingester, /if not env_bool\("TRADING_STORAGE_MIRROR_ENABLED"\)/,
     "workers require an explicit mirror opt-in while capacity is being verified");

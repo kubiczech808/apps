@@ -223,6 +223,42 @@ function trading_storage_compact_empty_tables(PDO $pdo): array
     return trading_storage_table_stats($pdo);
 }
 
+function trading_storage_compression_preview(PDO $pdo, int $sampleLimit = 160): array
+{
+    trading_storage_bootstrap($pdo);
+    $sampleLimit = max(1, min(500, $sampleLimit));
+    $tables = [
+        'trading_documents' => 'document_key',
+        'trading_observations' => 'observation_key',
+        'trading_event_log' => 'event_key',
+    ];
+    $preview = [];
+    foreach ($tables as $table => $key) {
+        $statement = $pdo->query('SELECT `payload` FROM `' . $table . '` ORDER BY `' . $key . '` LIMIT ' . $sampleLimit);
+        $currentBytes = 0;
+        $compressedBytes = 0;
+        $readable = 0;
+        while (($payload = $statement->fetchColumn()) !== false) {
+            if (!is_string($payload)) {
+                continue;
+            }
+            $currentBytes += strlen($payload);
+            $decoded = trading_storage_unpack($payload);
+            if (!is_array($decoded)) {
+                continue;
+            }
+            $compressedBytes += strlen(trading_storage_pack($decoded));
+            $readable++;
+        }
+        $preview[$table] = [
+            'sampleRows' => $readable,
+            'currentBytes' => $currentBytes,
+            'compressedBytes' => $compressedBytes,
+        ];
+    }
+    return $preview;
+}
+
 function trading_storage_now(): string
 {
     return gmdate('Y-m-d H:i:s.u');

@@ -340,11 +340,25 @@ jobs:
 
           try:
               call("bootstrap")
-              compacted = call("compact-empty")
-              storage = compacted.get("storage") or {}
+              previewed = call("compact-preview")
+              storage = previewed.get("storage") or {}
               database_size = int(storage.get("databaseSizeBytes") or 0)
               trading_size = int(storage.get("tradingSizeBytes") or 0)
-              print(f"::notice title=Trading MySQL compact schema::Database footprint after empty-table compaction: {database_size} bytes total, {trading_size} bytes in Trading tables. Historical import and worker mirroring remain disabled.")
+              preview = previewed.get("preview") or {}
+              estimate = "; ".join(
+                  f"{name}: {int((stats or {}).get('currentBytes') or 0)} -> {int((stats or {}).get('compressedBytes') or 0)} bytes across {int((stats or {}).get('sampleRows') or 0)} sampled rows"
+                  for name, stats in sorted(preview.items())
+                  if isinstance(stats, dict)
+              )
+              has_rows = any(int((stats or {}).get("rows") or 0) > 0 for stats in (storage.get("tradingTables") or {}).values())
+              if has_rows:
+                  print(f"::notice title=Trading MySQL storage preview::Current footprint: {database_size} bytes total, {trading_size} bytes in Trading tables. Existing rows were preserved; no compaction or import ran. Compression preview: {estimate}")
+              else:
+                  compacted = call("compact-empty")
+                  storage = compacted.get("storage") or {}
+                  database_size = int(storage.get("databaseSizeBytes") or 0)
+                  trading_size = int(storage.get("tradingSizeBytes") or 0)
+                  print(f"::notice title=Trading MySQL compact schema::Database footprint after empty-table compaction: {database_size} bytes total, {trading_size} bytes in Trading tables. Historical import and worker mirroring remain disabled.")
               if not storage.get("schemaReady"):
                   raise SystemExit("Trading storage schema did not become ready")
           except Exception as error:
