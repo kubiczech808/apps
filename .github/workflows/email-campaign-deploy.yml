@@ -166,6 +166,21 @@ jobs:
           cat /tmp/email-campaign-openai-health.txt
           test "$http_code" -ge 200 -a "$http_code" -lt 300
 
+      - name: Report database storage before maintenance
+        env:
+          APP_DATABASE_NAME: ${{ secrets.APP_DATABASE_NAME }}
+          APP_DATABASE_USERNAME: ${{ secrets.MYSQL_EMAILING_DB_USERNAME }}
+          APP_DATABASE_PASSWORD: ${{ secrets.MYSQL_EMAILING_DB_PASSWORD }}
+        run: |
+          TOKEN=$(python3 - <<'PY'
+          import hashlib
+          import os
+          material = "email-campaign-cron:" + os.environ["APP_DATABASE_NAME"] + ":" + os.environ["APP_DATABASE_USERNAME"] + ":" + os.environ["APP_DATABASE_PASSWORD"]
+          print(hashlib.sha256(material.encode("utf-8")).hexdigest())
+          PY
+          )
+          curl --show-error --silent --max-time 45 "https://www.osobnizkusenosti.cz/email-campaign/?cron=${TOKEN}&storage_report=1"
+
       - name: Send onboarding demo invite
         env:
           APP_DATABASE_NAME: ${{ secrets.APP_DATABASE_NAME }}

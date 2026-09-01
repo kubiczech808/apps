@@ -1065,6 +1065,15 @@ if (isset($_GET['cron'])) {
         }
         exit;
     }
+    if (isset($_GET['storage_report'])) {
+        try {
+            echo json_encode(databaseStorageReport($pdo), JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . "\n";
+        } catch (Throwable $e) {
+            http_response_code(503);
+            echo 'Storage report failed: ' . $e->getMessage() . "\n";
+        }
+        exit;
+    }
     if (isset($_GET['ai_research'])) {
         aiResearchLoadProviderState($pdo);
         $hop = max(1, (int)($_GET['hop'] ?? 1));
@@ -15000,6 +15009,54 @@ function refreshScrapingJobCounters(PDO $pdo, int $jobId): void
 function isMysql(PDO $pdo): bool
 {
     return $pdo->getAttribute(PDO::ATTR_DRIVER_NAME) === 'mysql';
+}
+
+/**
+ * Chraneny provozni prehled skutecne alokovane velikosti tabulek. Nepouziva COUNT(*),
+ * aby diagnostika sama nezatezovala produkci; InnoDB TABLE_ROWS je orientacni, velikost
+ * dat a indexu je ale presne to, co rozhoduje o obsazenem prostoru databaze.
+ */
+function databaseStorageReport(PDO $pdo): array
+{
+    $stmt = $pdo->query('
+        SELECT TABLE_NAME, ENGINE, TABLE_ROWS, DATA_LENGTH, INDEX_LENGTH, DATA_FREE
+        FROM INFORMATION_SCHEMA.TABLES
+        WHERE TABLE_SCHEMA=DATABASE()
+          AND TABLE_TYPE="BASE TABLE"
+        ORDER BY (DATA_LENGTH + INDEX_LENGTH) DESC, TABLE_NAME ASC
+    ');
+    $tables = [];
+    $totalBytes = 0;
+    $dataBytes = 0;
+    $indexBytes = 0;
+    $freeBytes = 0;
+    foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+        $data = max(0, (int)($row['DATA_LENGTH'] ?? 0));
+        $index = max(0, (int)($row['INDEX_LENGTH'] ?? 0));
+        $free = max(0, (int)($row['DATA_FREE'] ?? 0));
+        $total = $data + $index;
+        $dataBytes += $data;
+        $indexBytes += $index;
+        $freeBytes += $free;
+        $totalBytes += $total;
+        $tables[] = [
+            'table' => (string)$row['TABLE_NAME'],
+            'engine' => (string)($row['ENGINE'] ?? ''),
+            'estimated_rows' => max(0, (int)($row['TABLE_ROWS'] ?? 0)),
+            'data_bytes' => $data,
+            'index_bytes' => $index,
+            'allocated_bytes' => $total,
+            'free_bytes' => $free,
+        ];
+    }
+    return [
+        'generated_at' => date('c'),
+        'allocated_bytes' => $totalBytes,
+        'data_bytes' => $dataBytes,
+        'index_bytes' => $indexBytes,
+        'free_bytes' => $freeBytes,
+        'tables' => $tables,
+    ];
 }
 
 function headerIndex(array $headers, array $names)
