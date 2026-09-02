@@ -1,0 +1,72 @@
+name: Backfill Trading MySQL Storage
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm_backfill:
+        description: Import the retained JSON state into the already verified compact MySQL schema. Does not activate database reads.
+        required: true
+        type: boolean
+        default: false
+
+jobs:
+  backfill:
+    if: inputs.confirm_backfill == true
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Backfill compact Trading MySQL storage
+        env:
+          TRADING_TRIGGER_KEY: ${{ secrets.POLYTRADING_DB_PASSWORD }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import urllib.error
+          import urllib.request
+
+          key = os.environ["TRADING_TRIGGER_KEY"]
+          url = "https://www.osobnizkusenosti.cz/trading/api.php?action=storage-admin"
+
+          def call(phase, **params):
+              request = urllib.request.Request(
+                  url,
+                  data=json.dumps({"operation": "migrate-json-batch", "phase": phase, **params}).encode("utf-8"),
+                  method="POST",
+                  headers={"Content-Type": "application/json", "X-Trading-Trigger-Key": key},
+              )
+              try:
+                  with urllib.request.urlopen(request, timeout=90) as response:
+                      payload = json.loads(response.read().decode("utf-8"))
+              except urllib.error.HTTPError as error:
+                  try:
+                      payload = json.loads(error.read().decode("utf-8"))
+                  except Exception:
+                      payload = {}
+                  raise RuntimeError(str(payload.get("error") or f"HTTP {error.code}")) from error
+              if not payload.get("ok"):
+                  raise RuntimeError(str(payload.get("error") or f"{phase} backfill failed"))
+              return payload.get("result") or {}
+
+          call("documents")
+          for phase in ("scraped", "resolved"):
+              offset = 0
+              imported = 0
+              while True:
+                  batch = call(phase, offset=offset, limit=1000)
+                  imported += int(batch.get("imported") or 0)
+                  if batch.get("done"):
+                      break
+                  offset = int(batch.get("nextOffset") or 0)
+                  if offset <= 0:
+                      raise RuntimeError(f"{phase} backfill cursor did not advance")
+              print(f"Backfilled {phase}: {imported} observations")
+          call("events")
+          result = call("finalize")
+          print(
+              "::notice title=Trading MySQL backfill complete::"
+              f"Imported scraped={int((result.get('counts') or {}).get('SCRAPED') or 0)}, "
+              f"resolved={int((result.get('counts') or {}).get('RESOLVED') or 0)}. "
+              "Database reads remain inactive until a separate mirror verification and activation."
+          )
+          PY

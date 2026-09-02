@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import { randomUUID } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -36,6 +37,8 @@ const PAPER_STATE_URL = process.env.PAPER_STATE_URL || "https://osobnizkusenosti
 const PAPER_SCRAPED_STATE_URL = process.env.PAPER_SCRAPED_STATE_URL || "https://osobnizkusenosti.cz/trading/api.php?action=state&target=paper&summary=execution";
 const LIVE_STATE_URL = process.env.LIVE_STATE_URL || "https://osobnizkusenosti.cz/trading/api.php?action=state&target=live";
 const LIVE_EXECUTION_STATE_URL = process.env.LIVE_EXECUTION_STATE_URL || "https://osobnizkusenosti.cz/trading/api.php?action=state&target=live-execution";
+const LIVE_ENTRY_CLAIM_URL = process.env.LIVE_ENTRY_CLAIM_URL || "https://osobnizkusenosti.cz/trading/api.php?action=live-entry-claim";
+const TRADING_TRIGGER_KEY = process.env.TRADING_TRIGGER_KEY || "";
 const GAMMA_API = process.env.POLYMARKET_GAMMA_API || "https://gamma-api.polymarket.com";
 const CLOB_HOST = process.env.POLYMARKET_HOST || "https://clob.polymarket.com";
 const CHAIN_ID = Number(process.env.POLYMARKET_CHAIN_ID || 137);
@@ -283,6 +286,82 @@ async function fetchJson(url, label = url) {
     throw new Error(`${label} HTTP ${response.status}${body ? `: ${body.slice(0, 180)}` : ""}`);
   }
   return response.json();
+}
+
+// The order book and the public account snapshot are both eventually consistent. A
+// successful CLOB BUY can be invisible to a second runner long enough for it to sign
+// the very same order. The host keeps the atomic, wallet-wide claim; failing to reach
+// it must block a live BUY rather than turn a transient hosting error into exposure.
+async function liveEntryClaimRequest(operation, order, claimId) {
+  if (!TRADING_TRIGGER_KEY) throw new Error("live entry guard is not configured");
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 12000);
+  try {
+    const response = await fetch(LIVE_ENTRY_CLAIM_URL, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-trading-trigger-key": TRADING_TRIGGER_KEY,
+        "user-agent": "osobnizkusenosti-live-order-executor",
+      },
+      body: JSON.stringify({
+        operation,
+        tokenId: String(order.tokenId || ""),
+        side: "BUY",
+        portfolioId: LIVE_PORTFOLIO_ID,
+        claimId,
+      }),
+      signal: controller.signal,
+    });
+    const payload = await response.json().catch(() => null);
+    if (!response.ok || !payload?.ok) {
+      throw new Error(payload?.error || `live entry guard HTTP ${response.status}`);
+    }
+    return payload;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function definitelyRejectedOrderResponse(response) {
+  if (!response || successfulOrderResponse(response)) return false;
+  const status = String(response.status || "").toLowerCase();
+  if (status === "exception" || /timeout|network|fetch|socket|econn|abort/i.test(orderResponseError(response))) return false;
+  return true;
+}
+
+async function submitLiveEntryWithMakerPrecisionRecovery(order) {
+  if (String(order.side || "BUY").toUpperCase() === "SELL") {
+    return submitOrderWithMakerPrecisionRecovery(order);
+  }
+  const claimId = randomUUID();
+  const claim = await liveEntryClaimRequest("claim", order, claimId);
+  if (claim.claimed !== true) {
+    const response = {
+      status: "duplicate_guard",
+      success: false,
+      error: claim.reason || "A live BUY for this outcome was already submitted or is awaiting confirmation.",
+    };
+    return { order, response, attempts: [{ order, response, precisionRecovery: false }], entryClaim: claim };
+  }
+  const submission = await submitOrderWithMakerPrecisionRecovery(order);
+  if (successfulOrderResponse(submission.response)) {
+    try {
+      await liveEntryClaimRequest("confirm", submission.order, claimId);
+    } catch (error) {
+      // The claim remains held after a successful CLOB order. That is intentional:
+      // confirmation is bookkeeping, whereas releasing it after an uncertain result
+      // would re-open the exact duplication window this guard closes.
+      console.warn(`live entry guard confirmation deferred: ${error?.message || String(error)}`);
+    }
+  } else if (definitelyRejectedOrderResponse(submission.response)) {
+    try {
+      await liveEntryClaimRequest("release", submission.order, claimId);
+    } catch (error) {
+      console.warn(`live entry guard release deferred: ${error?.message || String(error)}`);
+    }
+  }
+  return { ...submission, entryClaim: claim };
 }
 
 async function loadJsonResource(location, label = location) {
@@ -1173,6 +1252,7 @@ async function hydrateLiveOpenOrderMetadata(liveState) {
         marketListed: true,
         marketClosed: market.closed === true,
         marketArchived: market.archived === true,
+        marketResolved: market.resolved === true || market.isResolved === true,
         marketAcceptingOrders: market.acceptingOrders !== false,
         marketMetadataSource: "gamma-clob-token",
       };
@@ -1185,50 +1265,19 @@ async function hydrateLiveOpenOrderMetadata(liveState) {
   return { ...liveState, openOrders: enrichedOrders };
 }
 
-// How long after a market's own resolution window closes a bid may still rest on it. The
-// window is when Polymarket expects the outcome to be known, not when it finishes
-// settling, so a little slack keeps a bid alive across an ordinary settlement delay while
-// still withdrawing one that is plainly stranded.
-const EXPIRED_ORDER_GRACE_HOURS = Math.max(0, number(process.env.LIVE_EXPIRED_ORDER_GRACE_HOURS, 2));
-
 // Why a resting bid should be withdrawn, or "" to leave it alone.
 //
-// Reported: a bid sat as LIMIT ORDER WAITING on a LoL match that had already been played.
-// Nothing withdraws such an order today -- 5050 only cancels siblings of events it has
-// already opened, and the main portfolio only reviews open orders when it wants their
-// capital -- so it holds its collateral until the exchange gets round to settling, which
-// for esports can be days. Worse than the locked cash: a bid left in the book after the
-// result is known is the one bid a counterparty is certain to want to hit.
-//
-// Every branch below needs positive evidence that the market is over. An unknown is not
-// evidence: a Gamma lookup that failed, an order the account snapshot could not hydrate
-// and a date that will not parse all leave the order exactly where it is.
+// A resting limit BUY is a standing bid. It must never be used as a source of capital
+// for another order, repriced, or cancelled because a scheduled date has passed. Only
+// Polymarket's own resolved state is terminal; unknown metadata leaves it untouched.
+// Exported for backwards-compatible diagnostics; resolution no longer uses a clock.
+const EXPIRED_ORDER_GRACE_HOURS = 0;
 function expiredOrderWithdrawalReason(order, now = Date.now()) {
   if (String(order?.side || "BUY").toUpperCase().includes("SELL")) return "";
-  // Flags Polymarket sets itself. Each one means the book this order sits in is shut,
-  // and none of them is ever set back, so acting on them cannot be premature.
-  if (order?.marketClosed === true) return "the market is closed on Polymarket";
-  if (order?.marketArchived === true) return "the market is archived on Polymarket";
-  if (order?.marketAcceptingOrders === false) return "the market has stopped accepting orders";
-
-  // The scheduled kickoff is deliberately not used here. It is what `endDate` holds for
-  // sports, and a match being under way is not a reason to withdraw -- the live portfolio
-  // buys long-odds outcomes that only get safer once play starts. The resolution window
-  // is the date that means the event itself is over.
-  const resolutionEnd = Date.parse(order?.resolutionEndDate || "");
-  if (!Number.isFinite(resolutionEnd)) return "";
-  const hoursPast = (now - resolutionEnd) / 3600000;
-
-  // Gamma listing nothing for the token is good evidence the market is gone, but it
-  // comes from a single unretried request, and an empty response during a Gamma blip
-  // would read the same. It only counts alongside a window that has already closed --
-  // which a market still trading cannot have, so a blip on a live market withdraws
-  // nothing. Together they are conclusive enough to skip the settlement grace.
-  if (order?.marketListed === false && hoursPast > 0) {
-    return `Polymarket no longer lists this market and its resolution window closed ${hoursPast.toFixed(1)}h ago`;
+  if (order?.marketResolved === true || order?.resolved === true || order?.isResolved === true) {
+    return "the market is resolved on Polymarket";
   }
-  if (hoursPast <= EXPIRED_ORDER_GRACE_HOURS) return "";
-  return `its market's resolution window closed ${hoursPast.toFixed(1)}h ago`;
+  return "";
 }
 
 // Cancels those orders and hands back a state without them, so the capital they were
@@ -3226,7 +3275,7 @@ async function runFixedEntryBatch({ checked, liveState, tradingConfig, cash, ava
       break;
     }
     const orderStartedAt = Date.now();
-    const submission = await submitOrderWithMakerPrecisionRecovery({ ...order, funderAddress: tradingConfig.funderAddress, signatureType: tradingConfig.signatureType });
+    const submission = await submitLiveEntryWithMakerPrecisionRecovery({ ...order, funderAddress: tradingConfig.funderAddress, signatureType: tradingConfig.signatureType });
     placementMs += Date.now() - orderStartedAt;
     placed += 1;
     const ok = successfulOrderResponse(submission.response);
@@ -3247,25 +3296,10 @@ async function runFixedEntryBatch({ checked, liveState, tradingConfig, cash, ava
     }
   }
 
-  // Cleanup, layered on top of the guarantee above. A position may already exist on
-  // an event -- from an earlier batch, or from a fill this run has not polled yet --
-  // while sibling bids are still resting on the book. Those can no longer be
-  // prevented, only withdrawn, so withdraw them.
+  // Resting bids remain on the book until Polymarket fills them or resolves their
+  // market. Do not reclaim their collateral here merely because another position is
+  // now open: that turns a temporary cash shortfall into unexpected cancellation.
   const cancelledSiblings = [];
-  if (!DRY_RUN && hasFlag("confirm-live")) {
-    const heldAfter = heldRiskItems(liveState, evaluationByToken)
-      .filter((item) => positionTokenIds.has(item.tokenId));
-    for (const order of (Array.isArray(liveState?.openOrders) ? liveState.openOrders : [])) {
-      if (String(order.side || "").toUpperCase().includes("SELL")) continue;
-      const tokenId = String(order.tokenId || order.assetId || "");
-      if (!tokenId || positionTokenIds.has(tokenId)) continue;
-      const source = evaluationByToken.get(tokenId) || {};
-      const collision = earlyRiskBlockReason({ ...source, tokenId }, heldAfter);
-      if (!collision) continue;
-      const response = await cancelOrder(order, tradingConfig).catch((error) => ({ error: error?.message || String(error) }));
-      cancelledSiblings.push({ tokenId, question: source.question || order.question || "", reason: collision, response });
-    }
-  }
 
   // A dry run touches every target without placing anything, so it has worked through
   // the whole batch; a live run has worked through as many as it placed.
@@ -4367,7 +4401,7 @@ async function reviewOpenOrders({ liveState, evaluationByToken, eligible, rotati
             response: { status: "dry_run_replace", success: true },
             attempts: [{ order: replacementOrder, response: { status: "dry_run_replace", success: true }, precisionRecovery: false }],
           }
-        : await submitOrderWithMakerPrecisionRecovery(replacementOrder);
+        : await submitLiveEntryWithMakerPrecisionRecovery(replacementOrder);
       selectedAction.replacementCandidate = replacementSubmission.order;
       selectedAction.replaceResponse = replacementSubmission.response;
       selectedAction.replacementAttempts = replacementSubmission.attempts.map((attempt) => orderAttemptSummary(
@@ -4591,20 +4625,11 @@ async function main() {
   // Use free cash for a direct candidate before touching existing orders or
   // positions. An unrelated buy is allowed while a sell order is pending.
   const directCapitalPriority = directCandidateCanUseFreeCapital;
-  // A directly fundable candidate must also protect unrelated open orders from
-  // cancellation. A funded buy must never trigger a needless cancellation just
-  // to make room for a trade that is already funded.
-  const orderManagement = ROTATION_COMPLETION_RUN || activeSellOrders.length || directCandidateCanUseFreeCapital
-    ? { action: "NONE", reviews: [] }
-    : await reviewOpenOrders({
-      liveState,
-      evaluationByToken,
-      eligible,
-      rotationCandidates: rotationCandidatePool,
-      cash: availableCash,
-        maxNotional,
-        tradingConfig,
-      });
+  // A pending BUY is not a fungible cash reserve. The executor used to cancel or
+  // reprice it when a later candidate could use its collateral. That contradicts the
+  // portfolio contract: an order stays until it fills or Polymarket resolves its
+  // market. Expired/resolved withdrawals are handled above, independently.
+  const orderManagement = { action: "NONE", reviews: [] };
 
   // A cancelled buy order releases capital immediately. Continue with the same
   // revalidated shortlist instead of leaving the portfolio idle until the next run.
@@ -5154,7 +5179,7 @@ async function main() {
     return restoreResponse;
   };
   for (const candidate of submissionCandidates) {
-    const submission = await submitOrderWithMakerPrecisionRecovery(candidate);
+    const submission = await submitLiveEntryWithMakerPrecisionRecovery(candidate);
     const response = submission.response;
     const submittedCandidate = submission.order;
     const submissionAttempts = submission.attempts.map((attempt) => orderAttemptSummary(

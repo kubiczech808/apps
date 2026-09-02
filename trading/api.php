@@ -552,6 +552,46 @@ function trading_storage_import_observation_source(string $path, string $field):
     return $imported;
 }
 
+function trading_storage_import_observation_source_batch(string $path, string $field, int $offset, int $limit): array
+{
+    $offset = max(0, $offset);
+    $limit = max(1, min(1000, $limit));
+    $skipped = 0;
+    $selected = 0;
+    $imported = 0;
+    $batch = [];
+    $flush = static function () use (&$batch, &$imported): void {
+        if ($batch === []) {
+            return;
+        }
+        $imported += trading_storage_observations_upsert($batch);
+        $batch = [];
+    };
+    $read = stream_json_array_members($path, $field, static function (array $item) use (&$skipped, &$selected, $offset, $limit, &$batch, $flush): bool {
+        if ($skipped < $offset) {
+            $skipped++;
+            return true;
+        }
+        $batch[] = $item;
+        $selected++;
+        if (count($batch) >= 250) {
+            $flush();
+        }
+        return $selected < $limit;
+    });
+    $flush();
+    if (!$read) {
+        throw new RuntimeException('Could not stream ' . basename($path) . ' (' . $field . ').');
+    }
+    return [
+        'offset' => $offset,
+        'processed' => $selected,
+        'imported' => $imported,
+        'nextOffset' => $offset + $selected,
+        'done' => $selected < $limit,
+    ];
+}
+
 function trading_storage_import_event_rows(string $stream, ?string $portfolioId, array $rows): int
 {
     $imported = 0;
@@ -675,6 +715,121 @@ function trading_storage_import_json_state(): array
     trading_storage_meta_put('json-imported-at', gmdate('c'));
     trading_storage_meta_put('json-import-counts', json_encode($counts, JSON_UNESCAPED_SLASHES) ?: '{}');
     return $counts;
+}
+
+function trading_storage_json_import_targets(array $config): array
+{
+    $targets = ['paper', 'live', 'live-execution', 'live-5050-execution'];
+    foreach (array_keys(is_array($config['livePortfolios'] ?? null) ? $config['livePortfolios'] : []) as $id) {
+        if (is_string($id) && preg_match('/^[a-z][a-zA-Z0-9]{1,30}$/', $id)) {
+            $targets[] = 'live-custom-' . $id . '-execution';
+        }
+    }
+    return array_values(array_unique($targets));
+}
+
+function trading_storage_import_json_documents_phase(): array
+{
+    $config = load_portfolio_config();
+    $preferences = load_scan_preferences();
+    trading_storage_document_put('portfolio-config', 'portfolio-config', $config);
+    trading_storage_document_put('scan-preferences', 'preferences', $preferences);
+    $files = state_file_paths();
+    $counts = ['stateDocuments' => 0, 'paperPortfolioDocuments' => 0, 'events' => 0, 'missingStateFiles' => 0];
+    foreach (trading_storage_json_import_targets($config) as $target) {
+        $customLive = custom_live_portfolio_id_from_execution_target($target);
+        $path = $customLive !== null
+            ? __DIR__ . '/data/live-' . $customLive . '-execution-state.json'
+            : ($files[$target] ?? null);
+        if (!is_string($path) || !is_file($path)) {
+            $counts['missingStateFiles']++;
+            continue;
+        }
+        $core = decode_state_file($path, false);
+        if (!is_array($core)) {
+            throw new RuntimeException('Could not read state file ' . basename($path) . '.');
+        }
+        trading_storage_document_put('state:' . $target, 'state', trading_storage_state_document($core));
+        $counts['stateDocuments']++;
+        $counts['events'] += trading_storage_import_event_rows('state-run-log', $target, is_array($core['runLog'] ?? null) ? $core['runLog'] : []);
+        if ($target !== 'paper') {
+            continue;
+        }
+        $manifest = is_array($core['stateSegments'] ?? null) ? $core['stateSegments'] : [];
+        foreach ($manifest as $name => $meta) {
+            if (!is_string($name) || !str_starts_with($name, 'portfolio:')) {
+                continue;
+            }
+            $id = substr($name, strlen('portfolio:'));
+            if (!preg_match('/^[A-Za-z0-9_-]{1,64}$/', $id)) {
+                continue;
+            }
+            $segmentPath = state_segment_path($core, $path, $name);
+            $segment = $segmentPath === null ? null : decode_state_file($segmentPath, false);
+            $portfolio = is_array($segment['paperPortfolio'] ?? null) ? $segment['paperPortfolio'] : null;
+            if (!is_array($portfolio)) {
+                continue;
+            }
+            trading_storage_document_put('paper-portfolio:' . $id, 'paper-portfolio', $portfolio);
+            $counts['paperPortfolioDocuments']++;
+            $counts['events'] += trading_storage_import_event_rows('portfolio-run-log', $id, is_array($portfolio['runLog'] ?? null) ? $portfolio['runLog'] : []);
+        }
+        $counts['events'] += trading_storage_import_event_rows('market-scan-history', null, is_array($core['marketScanHistory'] ?? null) ? $core['marketScanHistory'] : []);
+    }
+    return $counts;
+}
+
+function trading_storage_import_json_observations_phase(string $segment, int $offset, int $limit): array
+{
+    $files = state_file_paths();
+    $path = $files['paper'] ?? null;
+    if (!is_string($path) || !is_file($path)) {
+        throw new RuntimeException('Paper state file is unavailable.');
+    }
+    $core = decode_state_file($path, false);
+    if (!is_array($core)) {
+        throw new RuntimeException('Could not read paper state file.');
+    }
+    $field = $segment === 'resolved' ? 'resolvedMarketObservations' : 'marketObservations';
+    $sourceName = $segment === 'resolved' ? 'resolvedObservations' : 'observations';
+    $source = state_segment_path($core, $path, $sourceName);
+    if ($source === null && !array_key_exists($field, $core)) {
+        throw new RuntimeException('Observation source is unavailable.');
+    }
+    return trading_storage_import_observation_source_batch($source ?? $path, $field, $offset, $limit);
+}
+
+function trading_storage_import_json_events_phase(): array
+{
+    $events = 0;
+    $events += trading_storage_import_ndjson_events('portfolio-config-history', null, [portfolio_config_history_path()]);
+    $events += trading_storage_import_ndjson_events('market-scan-history', null, glob(__DIR__ . '/data/market-scan-history/*.ndjson') ?: []);
+    foreach (glob(__DIR__ . '/data/portfolio-run-log/*/*.ndjson') ?: [] as $path) {
+        $events += trading_storage_import_ndjson_events('portfolio-run-log', basename(dirname($path)), [$path]);
+    }
+    return ['events' => $events];
+}
+
+function trading_storage_import_json_phase(string $phase, int $offset = 0, int $limit = 750): array
+{
+    $pdo = trading_storage_pdo();
+    if (!$pdo instanceof PDO) {
+        throw new RuntimeException('Trading MySQL storage is not configured or reachable.');
+    }
+    trading_storage_bootstrap($pdo);
+    return match ($phase) {
+        'documents' => trading_storage_import_json_documents_phase(),
+        'scraped' => trading_storage_import_json_observations_phase('scraped', $offset, $limit),
+        'resolved' => trading_storage_import_json_observations_phase('resolved', $offset, $limit),
+        'events' => trading_storage_import_json_events_phase(),
+        'finalize' => (static function (): array {
+            trading_storage_meta_put('json-imported-at', gmdate('c'));
+            $counts = trading_storage_observation_counts();
+            trading_storage_meta_put('json-import-counts', json_encode($counts, JSON_UNESCAPED_SLASHES) ?: '{}');
+            return ['counts' => $counts, 'active' => trading_storage_is_active()];
+        })(),
+        default => throw new InvalidArgumentException('Unknown JSON migration phase.'),
+    };
 }
 
 function trading_storage_allowed_ingest_target(string $target): bool
@@ -4398,8 +4553,136 @@ function workflow_target_key(string $target): string
     return custom_live_portfolio_id_from_target($target) !== null ? 'live' : $target;
 }
 
+/**
+ * A CLOB order has no client supplied idempotency key. Keep a tiny, independent
+ * ledger on the host so every live entry route reserves a token before it sends a
+ * signed BUY. The account snapshot is intentionally not that lock: two runners can
+ * both have read the same snapshot before either newly submitted order is visible.
+ */
+function live_entry_claim_path(): string
+{
+    return __DIR__ . '/data/live-entry-claims.json';
+}
+
+function live_entry_claim_key(string $tokenId, string $side): string
+{
+    return strtoupper($side) . ':' . $tokenId;
+}
+
+function live_entry_claims_mutate(callable $mutator): array
+{
+    $path = live_entry_claim_path();
+    $directory = dirname($path);
+    if (!is_dir($directory) && !@mkdir($directory, 0775, true) && !is_dir($directory)) {
+        throw new RuntimeException('Live entry guard storage is unavailable.');
+    }
+    $handle = @fopen($path, 'c+');
+    if ($handle === false) {
+        throw new RuntimeException('Live entry guard storage is unavailable.');
+    }
+    try {
+        if (!flock($handle, LOCK_EX)) {
+            throw new RuntimeException('Live entry guard could not acquire its lock.');
+        }
+        rewind($handle);
+        $raw = stream_get_contents($handle);
+        $stored = json_decode(is_string($raw) ? $raw : '', true);
+        $claims = is_array($stored['claims'] ?? null) ? $stored['claims'] : [];
+        $cutoff = time() - (90 * 86400);
+        foreach ($claims as $key => $claim) {
+            $claimedAt = is_array($claim) ? strtotime((string) ($claim['claimedAt'] ?? '')) : false;
+            if ($claimedAt !== false && $claimedAt < $cutoff) {
+                unset($claims[$key]);
+            }
+        }
+        $result = $mutator($claims);
+        if (!is_array($result)) {
+            throw new RuntimeException('Live entry guard returned an invalid result.');
+        }
+        $payload = json_encode([
+            'updatedAt' => gmdate('c'),
+            'claims' => $claims,
+        ], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+        if (!is_string($payload)) {
+            throw new RuntimeException('Live entry guard could not encode its state.');
+        }
+        ftruncate($handle, 0);
+        rewind($handle);
+        if (fwrite($handle, $payload) === false || !fflush($handle)) {
+            throw new RuntimeException('Live entry guard could not persist its state.');
+        }
+        flock($handle, LOCK_UN);
+        return $result;
+    } finally {
+        fclose($handle);
+    }
+}
+
+function live_entry_claim_request(array $payload): array
+{
+    $operation = strtolower(trim((string) ($payload['operation'] ?? 'claim')));
+    $tokenId = trim((string) ($payload['tokenId'] ?? ''));
+    $side = strtoupper(trim((string) ($payload['side'] ?? 'BUY')));
+    $portfolioId = trim((string) ($payload['portfolioId'] ?? ''));
+    $claimId = trim((string) ($payload['claimId'] ?? ''));
+    if (!preg_match('/^\d{8,100}$/', $tokenId) || $side !== 'BUY' || !preg_match('/^[a-zA-Z0-9_-]{1,64}$/', $portfolioId)) {
+        respond(['ok' => false, 'error' => 'Invalid live entry guard request.'], 400);
+    }
+    if (!preg_match('/^[a-zA-Z0-9_-]{16,96}$/', $claimId)) {
+        respond(['ok' => false, 'error' => 'Invalid live entry guard claim id.'], 400);
+    }
+    $key = live_entry_claim_key($tokenId, $side);
+    return live_entry_claims_mutate(static function (array &$claims) use ($operation, $key, $tokenId, $side, $portfolioId, $claimId): array {
+        $existing = is_array($claims[$key] ?? null) ? $claims[$key] : null;
+        if ($operation === 'claim') {
+            if ($existing !== null) {
+                return [
+                    'ok' => true,
+                    'claimed' => false,
+                    'reason' => 'A live BUY for this outcome was already submitted or is awaiting confirmation.',
+                    'claim' => [
+                        'status' => (string) ($existing['status'] ?? 'claimed'),
+                        'claimedAt' => (string) ($existing['claimedAt'] ?? ''),
+                        'portfolioId' => (string) ($existing['portfolioId'] ?? ''),
+                    ],
+                ];
+            }
+            $claims[$key] = [
+                'tokenId' => $tokenId,
+                'side' => $side,
+                'portfolioId' => $portfolioId,
+                'claimId' => $claimId,
+                'status' => 'claimed',
+                'claimedAt' => gmdate('c'),
+            ];
+            return ['ok' => true, 'claimed' => true, 'claim' => ['status' => 'claimed']];
+        }
+        if ($existing === null || !hash_equals((string) ($existing['claimId'] ?? ''), $claimId)) {
+            return ['ok' => true, 'updated' => false];
+        }
+        if ($operation === 'confirm') {
+            $claims[$key]['status'] = 'accepted';
+            $claims[$key]['acceptedAt'] = gmdate('c');
+            return ['ok' => true, 'updated' => true];
+        }
+        if ($operation === 'release') {
+            unset($claims[$key]);
+            return ['ok' => true, 'updated' => true];
+        }
+        respond(['ok' => false, 'error' => 'Unknown live entry guard operation.'], 400);
+    });
+}
+
 try {
     $action = $_GET['action'] ?? 'markets';
+
+    if ($action === 'live-entry-claim') {
+        if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+            respond(['ok' => false, 'error' => 'POST is required'], 405);
+        }
+        require_trading_trigger_key();
+        respond(live_entry_claim_request(request_payload()));
+    }
 
     if ($action === 'storage-diagnostics') {
         if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
@@ -4507,6 +4790,19 @@ try {
                 $counts = trading_storage_import_json_state();
                 trading_storage_meta_put('last-migration-error', '');
                 respond(['ok' => true, 'operation' => 'migrate-json', 'counts' => $counts, 'active' => trading_storage_is_active()]);
+            } catch (Throwable $error) {
+                trading_storage_meta_put('last-migration-error', trading_storage_safe_migration_error($error));
+                throw $error;
+            }
+        }
+        if ($operation === 'migrate-json-batch') {
+            try {
+                $result = trading_storage_import_json_phase(
+                    (string) ($storageRequest['phase'] ?? ''),
+                    (int) ($storageRequest['offset'] ?? 0),
+                    (int) ($storageRequest['limit'] ?? 750),
+                );
+                respond(['ok' => true, 'operation' => 'migrate-json-batch', 'result' => $result]);
             } catch (Throwable $error) {
                 trading_storage_meta_put('last-migration-error', trading_storage_safe_migration_error($error));
                 throw $error;

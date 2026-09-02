@@ -505,11 +505,20 @@ test("storage migration: compact schema does not auto-import historical data", (
     "each protected storage request must parse its input once before a batch uses its cursor");
   assert.match(API, /trading_storage_compact_payload_batch\(/,
     "existing rows must be compacted in bounded resumable batches rather than reimported");
+  assert.match(API, /function trading_storage_import_observation_source_batch\(/,
+    "historical observations must be imported in bounded source-file batches");
+  assert.match(API, /if \(\$operation === 'migrate-json-batch'\)/,
+    "the protected API must expose a resumable backfill operation");
   const maintenance = readFileSync(new URL("../../.github/workflows/trading-storage-compact.yml", import.meta.url), "utf8");
   assert.match(maintenance, /workflow_dispatch:/,
     "existing storage maintenance must require an explicit manual dispatch");
   assert.match(maintenance, /confirm_compaction/,
     "the maintenance workflow must require a confirmation before it writes payloads");
+  const backfill = readFileSync(new URL("../../.github/workflows/trading-storage-backfill.yml", import.meta.url), "utf8");
+  assert.match(backfill, /confirm_backfill/,
+    "historical import must remain an explicit manual action after storage verification");
+  assert.match(backfill, /Database reads remain inactive/,
+    "a successful import must not silently switch application reads to MySQL");
 });
 
 test("dashboard: a created portfolio's settings are its own", () => {

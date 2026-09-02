@@ -519,10 +519,50 @@ function isActiveOpenOrder(order) {
   return remaining > 0.000001;
 }
 
+// `/trades` and `/activity` overlap, but they are not a one-to-one ledger. In
+// particular, Polymarket can settle two independent CLOB fills in one Polygon
+// transaction. A transaction hash alone is therefore not an identity for a
+// fill: collapsing it made a double buy look like one buy followed by a double
+// redeem. Keep the highest observed multiplicity for each detailed fill across
+// the two feeds, rather than adding both feeds or throwing away same-tx fills.
+function publicHistoryFillIdentity(item) {
+  return [
+    item.transactionHash || item.txHash || item.id || "",
+    item.tokenId || item.conditionId || item.slug || "",
+    String(item.side || item.type || "").toUpperCase(),
+    item.timestamp || "",
+    number(item.price, ""),
+    number(item.size, ""),
+    number(item.usdcValue, ""),
+    String(item.outcome || "").trim().toLowerCase(),
+  ].join(":");
+}
+
+function mergedPublicHistoryRows(trades, activity, predicate) {
+  const grouped = new Map();
+  const append = (source, rows) => {
+    for (const item of rows) {
+      if (!predicate(item, source)) continue;
+      const key = publicHistoryFillIdentity(item);
+      if (!grouped.has(key)) grouped.set(key, { trades: [], activity: [] });
+      grouped.get(key)[source].push(item);
+    }
+  };
+  append("trades", Array.isArray(trades) ? trades : []);
+  append("activity", Array.isArray(activity) ? activity : []);
+
+  const rows = [];
+  for (const group of grouped.values()) {
+    // The dedicated trade endpoint wins a tie; it has the richer fill payload.
+    const selected = group.trades.length >= group.activity.length ? group.trades : group.activity;
+    rows.push(...selected);
+  }
+  return rows;
+}
+
 function closedTradesFromHistory(trades, activity, generatedAt) {
   const groups = new Map();
   const groupsByQuestion = new Map();
-  const seenTradeKeys = new Set();
   const unmatchedRedeems = new Map();
 
   function questionKey(item) {
@@ -536,15 +576,6 @@ function closedTradesFromHistory(trades, activity, generatedAt) {
 
   function groupKey(item) {
     return String(item.tokenId || `${item.conditionId || item.slug || item.question}:${item.outcome || ""}`);
-  }
-
-  function tradeIdentity(item) {
-    return [
-      item.transactionHash || "",
-      item.tokenId || item.conditionId || "",
-      String(item.side || "").toUpperCase(),
-      item.timestamp || "",
-    ].join(":");
   }
 
   function unmatchedRedeemIdentity(item) {
@@ -625,9 +656,6 @@ function closedTradesFromHistory(trades, activity, generatedAt) {
   }
 
   function ingestTrade(trade) {
-    const identity = tradeIdentity(trade);
-    if (seenTradeKeys.has(identity)) return;
-    seenTradeKeys.add(identity);
     const key = groupKey(trade);
     if (!key || key === "null") return;
     if (!groups.has(key)) {
@@ -671,19 +699,15 @@ function closedTradesFromHistory(trades, activity, generatedAt) {
     }
   }
 
-  for (const trade of trades) {
+  for (const trade of mergedPublicHistoryRows(trades, activity, (item, source) => (
+    source === "trades" || String(item.type || "").toUpperCase().includes("TRADE")
+  ))) {
     ingestTrade(trade);
   }
 
-  for (const item of activity) {
-    const type = String(item.type || "").toUpperCase();
-    if (!type.includes("TRADE")) continue;
-    ingestTrade(item);
-  }
-
-  for (const item of activity) {
-    const type = String(item.type || "").toUpperCase();
-    if (!type.includes("REDEEM")) continue;
+  for (const item of mergedPublicHistoryRows([], activity, (entry) => (
+    String(entry.type || "").toUpperCase().includes("REDEEM")
+  ))) {
     const group = bestRedeemGroup(item);
     if (!group || !(group.buyCost > 0)) {
       // The public feeds have independent, capped windows. A redemption can therefore
@@ -1333,7 +1357,6 @@ function redeemNotifications(positions, previousState, generatedAt) {
 function ledgerReconciliationFallbacks(trades, activity, positions, closedTrades, openOrders, generatedAt) {
   const groups = new Map();
   const groupsByQuestion = new Map();
-  const seenTradeKeys = new Set();
 
   function questionKey(item) {
     return String(item.question || "")
@@ -1346,15 +1369,6 @@ function ledgerReconciliationFallbacks(trades, activity, positions, closedTrades
 
   function groupKey(item) {
     return String(item.tokenId || `${item.conditionId || item.slug || item.question}:${item.outcome || ""}`);
-  }
-
-  function tradeIdentity(item) {
-    return [
-      item.transactionHash || item.id || "",
-      item.tokenId || item.conditionId || item.slug || "",
-      String(item.side || "").toUpperCase(),
-      item.timestamp || "",
-    ].join(":");
   }
 
   function addKnownKeys(set, item) {
@@ -1415,9 +1429,6 @@ function ledgerReconciliationFallbacks(trades, activity, positions, closedTrades
   }
 
   function ingestTrade(item) {
-    const identity = tradeIdentity(item);
-    if (seenTradeKeys.has(identity)) return;
-    seenTradeKeys.add(identity);
     const group = ensureGroup(item);
     if (!group) return;
     const timestamp = Date.parse(item.timestamp || "") || 0;
@@ -1452,12 +1463,14 @@ function ledgerReconciliationFallbacks(trades, activity, positions, closedTrades
       })[0] || null;
   }
 
-  for (const trade of trades) ingestTrade(trade);
-  for (const item of activity) {
-    if (String(item.type || "").toUpperCase().includes("TRADE")) ingestTrade(item);
+  for (const trade of mergedPublicHistoryRows(trades, activity, (item, source) => (
+    source === "trades" || String(item.type || "").toUpperCase().includes("TRADE")
+  ))) {
+    ingestTrade(trade);
   }
-  for (const item of activity) {
-    if (!String(item.type || "").toUpperCase().includes("REDEEM")) continue;
+  for (const item of mergedPublicHistoryRows([], activity, (entry) => (
+    String(entry.type || "").toUpperCase().includes("REDEEM")
+  ))) {
     const group = bestRedeemGroup(item);
     if (!group) continue;
     group.redeemedShares += number(item.size, 0);
@@ -1663,6 +1676,7 @@ async function enrichOpenOrdersWithMarketMetadata(openOrders = [], sync, previou
         marketListed: true,
         marketClosed: market.closed === true,
         marketArchived: market.archived === true,
+        marketResolved: market.resolved === true || market.isResolved === true,
         marketAcceptingOrders: market.acceptingOrders !== false,
         // This value travels with a subsequently vanished order. It is intentionally
         // present only after Gamma marks the market closed: an in-play mark is not the
