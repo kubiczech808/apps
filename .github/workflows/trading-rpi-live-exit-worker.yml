@@ -137,28 +137,32 @@ jobs:
           # mode=shadow while cycling normally -- the file on disk said live and the process
           # kept the environment it had started with hours earlier. The same silence hid two
           # code fixes. A worker whose configuration cannot reach it is not configurable.
+          # Noted before restarting, so the check below can tell a state file the restarted
+          # worker wrote from the one its predecessor left behind. Reading the old file was
+          # the first version of this check, and it reported the previous mode with complete
+          # confidence -- the same mistake it exists to catch, one level up.
+          restarted_at="$(date +%s)"
           systemctl --user restart trading-live-exit-worker.service
           systemctl --user --no-pager --full status trading-live-exit-worker.service
 
-      - name: Confirm the running worker took the configured mode
-        run: |
-          set -uo pipefail
           # The state file is written by the worker itself, so it is the one place the ARMED
-          # mode can be read rather than the intended one. Trusting that a restart implies
-          # it is what went unnoticed for a whole day.
+          # mode can be read rather than the intended one.
           state="$HOME/.local/state/trading/live-exit-worker-state.json"
           expected="$(sed -n 's/^LIVE_EXIT_MODE=//p' "$HOME/.config/trading-live-exit-worker.env" | tail -n 1)"
           expected="${expected:-shadow}"
           running=""
-          for _attempt in 1 2 3 4 5 6 7 8 9 10; do
-            running="$(sed -n 's/.*"mode": *"\([a-z]*\)".*/\1/p' "$state" 2>/dev/null | head -n 1)"
-            if [ -n "$running" ]; then break; fi
+          for _attempt in $(seq 1 20); do
+            if [ -f "$state" ] && [ "$(stat -c %Y "$state")" -ge "$restarted_at" ]; then
+              running="$(sed -n 's/.*"mode": *"\([a-z]*\)".*/\1/p' "$state" | head -n 1)"
+              [ -n "$running" ] && break
+            fi
             sleep 3
           done
+          echo ""
           echo "configured mode: ${expected}"
-          echo "worker reports:  ${running:-(no state file yet)}"
+          echo "worker reports:  ${running:-(no cycle written since the restart)}"
           if [ -z "$running" ]; then
-            echo "   The worker has not written a cycle yet; mode unverified."
+            echo "   The worker has not completed a cycle yet, so its mode is unverified."
             exit 0
           fi
           if [ "$running" != "$expected" ]; then

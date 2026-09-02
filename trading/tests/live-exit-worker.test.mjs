@@ -133,7 +133,14 @@ test("configuring the worker actually reaches the running process", async () => 
 
   // And the claim is verified against the worker's own report rather than assumed from the
   // restart, because assuming it is exactly what went unnoticed.
-  assert.match(workflow, /Confirm the running worker took the configured mode/);
+  //
+  // The state file has to be one the RESTARTED worker wrote. The first version of this
+  // check read whatever file was there and reported the previous mode with full confidence
+  // -- the same mistake it exists to catch, one level up -- so the timestamp comparison is
+  // the part worth pinning.
+  assert.match(workflow, /restarted_at="\$\(date \+%s\)"/);
+  assert.match(workflow, /\[ "\$\(stat -c %Y "\$state"\)" -ge "\$restarted_at" \]/,
+    "a state file older than the restart is the predecessor's, and answers the wrong question");
   assert.match(workflow, /if \[ "\$running" != "\$expected" \]; then[\s\S]*?exit 1/,
     "a worker still in the previous mode has to fail the run, not pass quietly");
 });
