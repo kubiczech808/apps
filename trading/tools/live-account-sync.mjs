@@ -1546,16 +1546,31 @@ function openOrderMetadataIndex(previousState = null) {
   return index;
 }
 
+// Measured against Gamma: /markets?clob_token_ids=<token> answers with nothing once the
+// market settles, and with the market while it is still trading. Passing closed=true is
+// what reaches a settled one -- the same lesson fetchMarketBySlugUncached in
+// paper-trading-bot.mjs already carries, where it loops closed true-then-false.
+//
+// That mattered most exactly where it hurt: this lookup is what grades an unfilled limit
+// order, and a market only has an outcome to report after it closes. So every grading
+// attempt asked the one question that could not answer it, threw, and left the row
+// ungraded -- 48 of 48 on the live account. The unfiltered query stays first because open
+// orders are decorated through here too and theirs are still trading, so their metadata
+// costs no extra request.
+const GAMMA_MARKET_QUERIES = [{}, { closed: "true" }];
+
 async function gammaMarketForOpenOrder(tokenId) {
   let lastError = null;
   for (let attempt = 1; attempt <= 3; attempt += 1) {
-    try {
-      const markets = await fetchGammaJson("/markets", { clob_token_ids: tokenId });
-      const market = Array.isArray(markets) ? markets[0] : null;
-      if (market) return market;
-      lastError = new Error("Gamma returned no market for CLOB token");
-    } catch (error) {
-      lastError = error;
+    for (const extraParams of GAMMA_MARKET_QUERIES) {
+      try {
+        const markets = await fetchGammaJson("/markets", { clob_token_ids: tokenId, ...extraParams });
+        const market = Array.isArray(markets) ? markets[0] : null;
+        if (market) return market;
+        lastError = new Error("Gamma returned no market for CLOB token");
+      } catch (error) {
+        lastError = error;
+      }
     }
     if (attempt < 3) await new Promise((resolve) => setTimeout(resolve, attempt * 250));
   }
@@ -1698,7 +1713,13 @@ async function refreshUnfilledLimitOrderOutcomes(orders = [], generatedAt = new 
 
   await Promise.all(pending.map(async ({ order, index }) => {
     const tokenId = String(order?.tokenId || order?.assetId || "").trim();
-    if (!tokenId) return;
+    // A row with no token id can never be looked up, but it still sorts to the very front
+    // of the queue forever (no stamp reads as epoch 0). Stamping it costs nothing and stops
+    // it from consuming one of the batch's slots on every single pass.
+    if (!tokenId) {
+      result[index] = { ...order, outcomeLastCheckedAt: generatedAt };
+      return;
+    }
     try {
       const market = await gammaMarketForOpenOrder(tokenId);
       const tokenIds = parseArrayField(market.clobTokenIds).map(String);
@@ -1711,8 +1732,13 @@ async function refreshUnfilledLimitOrderOutcomes(orders = [], generatedAt = new 
         outcomeLastCheckedAt: generatedAt,
       };
     } catch {
-      // The next bounded pass retries this one. A temporary Gamma gap must not erase the
-      // order or turn an unknown result into a loss.
+      // A temporary Gamma gap must not erase the order or turn an unknown result into a
+      // loss, so no price is written. The stamp is still recorded, and that part matters:
+      // the queue is ordered by outcomeLastCheckedAt ascending and is far longer than one
+      // batch, so a row that never gets stamped stays permanently at the head and is
+      // retried on every pass while the rows behind it are never reached at all. One
+      // unreachable market used to be enough to freeze the whole backfill.
+      result[index] = { ...order, outcomeLastCheckedAt: generatedAt };
     }
   }));
   return result;

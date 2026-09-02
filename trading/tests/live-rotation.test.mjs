@@ -115,6 +115,74 @@ test("live history: only fully unfilled limit orders are retained as their own a
   assert.equal(repeated.length, 2, "a repeated sync must not duplicate the same vanished order");
 });
 
+// Swaps globalThis.fetch for the duration of one call and always puts the real one back.
+async function withStubbedFetch(handler, run) {
+  const original = globalThis.fetch;
+  globalThis.fetch = async (input) => {
+    const url = input instanceof URL ? input : new URL(typeof input === "string" ? input : input.url);
+    const body = handler(url);
+    return { ok: true, status: 200, json: async () => body, text: async () => JSON.stringify(body) };
+  };
+  try {
+    return await run();
+  } finally {
+    globalThis.fetch = original;
+  }
+}
+
+const settledOrder = (id, tokenId) => ({
+  id,
+  tokenId,
+  status: "LIVE_LIMIT_ORDER_UNFILLED",
+  question: `Market ${id}`,
+  price: 0.8,
+  endDate: "2026-08-29T18:00:00Z",
+  finalOutcomePrice: null,
+});
+
+test("live grading: a settled market is only reachable with closed=true, and the lookup asks for it", async () => {
+  const tokenId = "9000000000000000001";
+  const asked = [];
+  const refreshed = await withStubbedFetch((url) => {
+    asked.push(url.searchParams.get("closed"));
+    // Measured against production: Gamma answers /markets?clob_token_ids=<token> with an
+    // empty list once the market settles. Only closed=true reaches it.
+    if (url.searchParams.get("closed") !== "true") return [];
+    return [{ closed: true, clobTokenIds: JSON.stringify(["9000000000000000000", tokenId]), outcomePrices: JSON.stringify(["0", "1"]) }];
+  }, () => sync.refreshUnfilledLimitOrderOutcomes([settledOrder("graded", tokenId)], "2026-08-30T18:10:00Z"));
+
+  assert.ok(asked.includes("true"), "the lookup must try closed=true, or a settled market is never found");
+  assert.equal(refreshed[0].finalOutcomePrice, 1, "the token is the winning outcome, so the unfilled bid would have won");
+  assert.equal(refreshed[0].outcomeLastCheckedAt, "2026-08-30T18:10:00Z");
+});
+
+test("live grading: an unreachable market is stamped so the queue rotates past it", async () => {
+  // The queue is ordered by outcomeLastCheckedAt ascending and is longer than one batch,
+  // so a row that is never stamped sits at the head forever and the rows behind it are
+  // never reached. That is what left 48 of 48 live orders ungraded.
+  const orders = Array.from({ length: 20 }, (_, index) => settledOrder(`order-${index}`, `900000000000000${String(index).padStart(4, "0")}`));
+
+  const first = await withStubbedFetch(() => [], () => sync.refreshUnfilledLimitOrderOutcomes(orders, "2026-08-30T18:10:00Z"));
+  const checkedFirst = first.filter((order) => order.outcomeLastCheckedAt === "2026-08-30T18:10:00Z");
+  assert.equal(checkedFirst.length, 16, "the pass is bounded to one batch");
+  assert.ok(first.every((order) => order.finalOutcomePrice == null),
+    "a failed lookup must never invent a price -- an unknown result is not a loss");
+
+  const second = await withStubbedFetch(() => [], () => sync.refreshUnfilledLimitOrderOutcomes(first, "2026-08-30T19:10:00Z"));
+  const reachedBehind = second
+    .filter((order) => !checkedFirst.some((row) => row.id === order.id))
+    .filter((order) => order.outcomeLastCheckedAt === "2026-08-30T19:10:00Z");
+  assert.equal(reachedBehind.length, 4,
+    "the four rows behind the first batch must be reached on the next pass, not blocked by it");
+});
+
+test("live grading: a row with no token id is stamped instead of holding a batch slot forever", async () => {
+  const orders = [{ ...settledOrder("no-token", ""), tokenId: "", assetId: "" }];
+  const refreshed = await withStubbedFetch(() => [], () => sync.refreshUnfilledLimitOrderOutcomes(orders, "2026-08-30T18:10:00Z"));
+  assert.equal(refreshed[0].outcomeLastCheckedAt, "2026-08-30T18:10:00Z");
+  assert.equal(refreshed[0].finalOutcomePrice, null);
+});
+
 test("portfolio UI: unfilled limit orders have a dedicated route and do not remain in closed trades", () => {
   const html = readFileSync(new URL("../index.html", import.meta.url), "utf8");
   const app = readFileSync(new URL("../assets/app.js", import.meta.url), "utf8");
