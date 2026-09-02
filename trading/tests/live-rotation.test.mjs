@@ -194,6 +194,93 @@ test("portfolio UI: unfilled limit orders have a dedicated route and do not rema
   assert.match(app, /filter\(\(trade\) => isClosedTrade\(trade\) && !isUnfilledLimitOrder\(trade\)\)/);
 });
 
+// Runs the dashboard's own helpers rather than reading them as text, so the arithmetic
+// of the would-be P/L is actually checked.
+function unfilledOrderMath() {
+  const app = readFileSync(new URL("../assets/app.js", import.meta.url), "utf8");
+  const body = ["numericOrNull", "unfilledLimitOrderFinalPrice", "unfilledLimitOrderResult",
+    "unfilledLimitOrderValue", "unfilledLimitOrderCounterfactualPnl", "unfilledLimitOrderStats"]
+    .map((name) => functionSource(app, name))
+    .join("\n");
+  return new Function("evaluationByTrade", `${body}
+    return { unfilledLimitOrderCounterfactualPnl, unfilledLimitOrderStats, unfilledLimitOrderResult };`)(() => ({}));
+}
+
+test("unfilled limit orders: the would-be P/L is the missed bid's own economics, not a guess", () => {
+  const math = unfilledOrderMath();
+
+  // A live row: 5 USDC of collateral resting at 0.80 buys 6.25 shares, each settling at 1.
+  const liveWin = { finalOutcomePrice: 1, price: 0.8, releasedCapitalUsdc: 5, remainingSize: 6.25 };
+  assert.ok(Math.abs(math.unfilledLimitOrderCounterfactualPnl(liveWin) - 1.25) < 1e-9,
+    "a winning missed bid gains its shares less what they would have cost");
+
+  const liveLose = { finalOutcomePrice: 0, price: 0.8, releasedCapitalUsdc: 5, remainingSize: 6.25 };
+  assert.equal(math.unfilledLimitOrderCounterfactualPnl(liveLose), -5,
+    "a losing missed bid would have lost the whole order value, not just the spread");
+
+  // With no recorded share count the count is derived from value/price, same arithmetic.
+  const derived = { finalOutcomePrice: 1, price: 0.5, releasedCapitalUsdc: 4 };
+  assert.ok(Math.abs(math.unfilledLimitOrderCounterfactualPnl(derived) - 4) < 1e-9);
+
+  // The paper side records the net gain outright, fees included, so that wins over any
+  // derivation -- otherwise the tab would quietly disagree with the trade's own figure.
+  const paperWin = { finalOutcomePrice: 1, price: 0.8, stakeUsdc: 5, shares: 6.25, netGainIfWinUsdc: 1.1 };
+  assert.equal(math.unfilledLimitOrderCounterfactualPnl(paperWin), 1.1);
+  // But not for a loss: the recorded gain describes the win case only.
+  assert.equal(math.unfilledLimitOrderCounterfactualPnl({ ...paperWin, finalOutcomePrice: 0 }), -5);
+
+  // Ungradable rows contribute nothing rather than reading as a break-even result.
+  assert.equal(math.unfilledLimitOrderCounterfactualPnl({ price: 0.8, releasedCapitalUsdc: 5 }), null,
+    "no settlement price means no verdict");
+  assert.equal(math.unfilledLimitOrderCounterfactualPnl({ finalOutcomePrice: 0.42, price: 0.8, releasedCapitalUsdc: 5 }), null,
+    "a mid-range final price is not a settlement");
+  assert.equal(math.unfilledLimitOrderCounterfactualPnl({ finalOutcomePrice: 1, price: 0.8 }), null,
+    "a graded row with no recorded order value cannot be priced");
+});
+
+test("unfilled limit orders: the header total adds up the graded rows and ignores the rest", () => {
+  const math = unfilledOrderMath();
+  const stats = math.unfilledLimitOrderStats([
+    { finalOutcomePrice: 1, price: 0.8, releasedCapitalUsdc: 5, remainingSize: 6.25 },
+    { finalOutcomePrice: 1, price: 0.5, releasedCapitalUsdc: 4 },
+    { finalOutcomePrice: 0, price: 0.8, releasedCapitalUsdc: 5 },
+    { price: 0.8, releasedCapitalUsdc: 5 },
+    { finalOutcomePrice: 1, price: 0.8 },
+  ]);
+
+  assert.equal(stats.total, 5);
+  assert.equal(stats.wouldWin, 3);
+  assert.equal(stats.wouldLose, 1);
+  assert.equal(stats.awaiting, 1);
+  // Four rows are graded, but the last has no order value, so only three carry a P/L.
+  assert.equal(stats.gradedWithPnl, 3);
+  assert.ok(Math.abs(stats.wouldWinPnl - 5.25) < 1e-9);
+  assert.equal(stats.wouldLosePnl, -5);
+  assert.ok(Math.abs(stats.netPnl - 0.25) < 1e-9);
+});
+
+test("unfilled limit orders: the header offers a CSV export and the pending chips read amber", () => {
+  const html = readFileSync(new URL("../index.html", import.meta.url), "utf8");
+  const app = readFileSync(new URL("../assets/app.js", import.meta.url), "utf8");
+  const css = readFileSync(new URL("../assets/app.css", import.meta.url), "utf8");
+
+  assert.match(html, /data-unfilled-limit-orders-export/);
+  assert.match(html, /data-unfilled-limit-orders-pnl/);
+  assert.match(app, /els\.unfilledLimitOrdersExport\?\.addEventListener\("click", exportUnfilledLimitOrdersCsv\)/);
+  assert.match(app, /would_be_pl_usdc: csvNumber\(unfilledLimitOrderCounterfactualPnl\(order\), 1, 6\)/);
+
+  // "Awaiting settlement" and "Unfilled limit order" state a pending fact, not a fault,
+  // so neither may carry `.warning`, whose palette is the red one.
+  assert.match(app, /<span class="order-chip pending">Awaiting settlement<\/span>/);
+  assert.match(app, /<span class="order-chip pending">Unfilled limit order<\/span>/);
+  assert.doesNotMatch(app, /order-chip warning">(Awaiting settlement|Unfilled limit order)/);
+  assert.match(css, /\.order-chip\.pending \{[^}]*#f59e0b/, "the pending chip needs its own amber rule");
+
+  // One writer for both header pills; three copies of the count line had already drifted.
+  assert.equal((app.match(/applyUnfilledLimitOrderSummary\(/g) || []).length, 4,
+    "one definition and three call sites, so no path renders a stale total");
+});
+
 test("closed trades: entry volume is recorded at live submission and rendered separately from the live mark", () => {
   const executorSource = readFileSync(new URL("../tools/live-order-executor.mjs", import.meta.url), "utf8");
   const app = readFileSync(new URL("../assets/app.js", import.meta.url), "utf8");

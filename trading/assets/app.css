@@ -2540,6 +2540,16 @@ body.modal-open {
   color: var(--muted) !important;
 }
 
+/* An unfilled limit order, and a missed bid still awaiting its settlement price, are
+   pending facts rather than bad news -- so they read amber instead of borrowing
+   `.warning`'s red. Stated in full rather than left to fall through to the base chip's
+   colours, so a later change to that base cannot quietly turn these two red again. */
+.order-chip.pending {
+  border-color: #f59e0b;
+  background: #fffbeb;
+  color: #92400e !important;
+}
+
 /* A settled row's chip carries its result, so the two verdicts worth reading at a glance
    get a colour of their own. Anything else keeps the neutral `.filled` treatment: a
    redeemed or sold row is neither good nor bad news, and colouring it would claim a

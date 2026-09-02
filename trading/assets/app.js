@@ -271,6 +271,8 @@ const els = {
   unfilledLimitOrders: document.querySelector("[data-unfilled-limit-orders]"),
   unfilledLimitOrdersTitle: document.querySelector("[data-unfilled-limit-orders-title]"),
   unfilledLimitOrdersSummary: document.querySelector("[data-unfilled-limit-orders-summary]"),
+  unfilledLimitOrdersPnl: document.querySelector("[data-unfilled-limit-orders-pnl]"),
+  unfilledLimitOrdersExport: document.querySelector("[data-unfilled-limit-orders-export]"),
   botEvaluations: document.querySelector("[data-bot-evaluations]"),
   evaluationSummary: document.querySelector("[data-evaluation-summary]"),
   evaluationFilterCount: document.querySelector("[data-evaluation-filter-count]"),
@@ -2968,15 +2970,64 @@ function unfilledLimitOrderResult(order = {}) {
   return null;
 }
 
+// What the order would have cost had it filled: the collateral the resting bid held.
+function unfilledLimitOrderValue(order = {}) {
+  return numericOrNull(order.releasedCapitalUsdc)
+    ?? numericOrNull(order.stakeUsdc)
+    ?? numericOrNull(order.notionalUsdc)
+    ?? numericOrNull(order.totalCostUsdc);
+}
+
+// The counterfactual the tab exists to answer: what this missed bid would have returned.
+// A winning share settles at 1 USDC, so the gain is the share count less what the shares
+// cost; a losing one returns nothing, so the whole order value is the loss.
+//
+// The share count is read rather than derived wherever it was recorded -- the paper side
+// keeps the original order's `shares` and even its `netGainIfWinUsdc`, the live side keeps
+// `remainingSize` -- and only derived from value/price when neither exists. Deriving it
+// first would quietly disagree with the trade's own recorded economics, fees included.
+function unfilledLimitOrderCounterfactualPnl(order = {}) {
+  const result = unfilledLimitOrderResult(order);
+  if (result == null) return null;
+  const orderValue = unfilledLimitOrderValue(order);
+  if (orderValue == null || !(orderValue > 0)) return null;
+  if (result === false) return -orderValue;
+
+  const recordedGain = numericOrNull(order.netGainIfWinUsdc);
+  if (recordedGain != null) return recordedGain;
+  const limitPrice = numericOrNull(order.price ?? order.limitPrice ?? order.entryPrice);
+  const shares = numericOrNull(order.shares)
+    ?? numericOrNull(order.remainingSize)
+    ?? (limitPrice != null && limitPrice > 0 ? orderValue / limitPrice : null);
+  if (shares == null || !(shares > 0)) return null;
+  return shares - orderValue;
+}
+
 function unfilledLimitOrderStats(orders = []) {
   const results = orders.map(unfilledLimitOrderResult);
   const wouldWin = results.filter((result) => result === true).length;
   const wouldLose = results.filter((result) => result === false).length;
+  // Only graded rows carry a counterfactual, so the total is what the settled misses add
+  // up to and says nothing about the ones still awaiting a settlement price.
+  let wouldWinPnl = 0;
+  let wouldLosePnl = 0;
+  let gradedWithPnl = 0;
+  orders.forEach((order, index) => {
+    const pnl = unfilledLimitOrderCounterfactualPnl(order);
+    if (pnl == null) return;
+    gradedWithPnl += 1;
+    if (results[index] === true) wouldWinPnl += pnl;
+    else wouldLosePnl += pnl;
+  });
   return {
     total: orders.length,
     wouldWin,
     wouldLose,
     awaiting: orders.length - wouldWin - wouldLose,
+    wouldWinPnl,
+    wouldLosePnl,
+    netPnl: wouldWinPnl + wouldLosePnl,
+    gradedWithPnl,
   };
 }
 
@@ -4012,21 +4063,24 @@ function renderUnfilledLimitOrderRows(orders = []) {
   return `
     <div class="ledger-scroll trade-ledger-scroll" tabindex="0" aria-label="Unfilled limit order table">
       <table class="ledger-wide-table closed-trades-table">
-        <thead><tr><th>Would be</th><th>Market</th><th>Limit price</th><th>Final outcome</th><th>Opened</th><th>Ended unfilled</th><th>Order value</th></tr></thead>
+        <thead><tr><th>Would be</th><th>Would-be P/L</th><th>Market</th><th>Limit price</th><th>Final outcome</th><th>Opened</th><th>Ended unfilled</th><th>Order value</th></tr></thead>
         <tbody>${rows.map((order) => {
           const result = unfilledLimitOrderResult(order);
           const finalPrice = unfilledLimitOrderFinalPrice(order);
           const limitPrice = Number(order.price ?? order.limitPrice ?? order.entryPrice);
           const orderValue = Number(order.releasedCapitalUsdc ?? order.stakeUsdc ?? order.notionalUsdc);
           const endedAt = order.closedAt || order.resolvedAt || order.detectedAt || "";
+          const counterfactualPnl = unfilledLimitOrderCounterfactualPnl(order);
           return `
             <tr>
               <td data-label="Would be">${result === true
                 ? '<span class="order-chip won">Would win</span>'
                 : result === false
                   ? '<span class="order-chip lost">Would lose</span>'
-                  : '<span class="order-chip warning">Awaiting settlement</span>'}</td>
-              <td class="trade-market-cell" data-label="Market"><span class="order-chip warning">Unfilled limit order</span>${marketAnchor(order)}</td>
+                  : '<span class="order-chip pending">Awaiting settlement</span>'}</td>
+              <td data-label="Would-be P/L" class="${counterfactualPnl == null ? "" : pnlClass(counterfactualPnl)}">${
+                counterfactualPnl == null ? "-" : signedMoney(counterfactualPnl)}</td>
+              <td class="trade-market-cell" data-label="Market"><span class="order-chip pending">Unfilled limit order</span>${marketAnchor(order)}</td>
               <td data-label="Limit price">${Number.isFinite(limitPrice) ? probability(limitPrice) : "-"}</td>
               <td data-label="Final outcome">${finalPrice == null ? "-" : probability(finalPrice)}</td>
               <td data-label="Opened">${escapeHtml(formatDate(order.openedAt || order.createdAt || order.date || ""))}</td>
@@ -4038,14 +4092,37 @@ function renderUnfilledLimitOrderRows(orders = []) {
     </div>`;
 }
 
-function renderUnfilledLimitOrders() {
-  if (!els.unfilledLimitOrders) return;
-  const orders = unfilledLimitOrdersForCurrentPortfolio();
+// One writer for the header pills, called from the paper path, the live path and the
+// route-level render. The count line was duplicated three times and had already drifted
+// once; the P/L pill would have made that three places to keep in step.
+function applyUnfilledLimitOrderSummary(orders = []) {
   const stats = unfilledLimitOrderStats(orders);
   if (els.unfilledLimitOrdersSummary) {
     const awaiting = stats.awaiting ? ` / ${stats.awaiting} awaiting` : "";
     els.unfilledLimitOrdersSummary.textContent = `${stats.total} unfilled / ${stats.wouldWin} would win / ${stats.wouldLose} would lose${awaiting}`;
   }
+  if (els.unfilledLimitOrdersPnl) {
+    // Said as a counterfactual, because that is what it is: no capital ever moved on
+    // these orders. Only the graded rows contribute, so the label names how many.
+    if (!stats.gradedWithPnl) {
+      els.unfilledLimitOrdersPnl.textContent = "Would-be P/L not gradable yet";
+      els.unfilledLimitOrdersPnl.className = "pill";
+      els.unfilledLimitOrdersPnl.title = "No missed bid has both a settlement price and a recorded order value yet.";
+    } else {
+      els.unfilledLimitOrdersPnl.textContent = `Would-be P/L ${signedMoney(stats.netPnl)}`;
+      els.unfilledLimitOrdersPnl.className = `pill ${pnlClass(stats.netPnl)}`;
+      els.unfilledLimitOrdersPnl.title = `From ${stats.gradedWithPnl} settled missed bid(s):`
+        + ` wins would have gained ${signedMoney(stats.wouldWinPnl)},`
+        + ` losses would have cost ${signedMoney(stats.wouldLosePnl)}.`;
+    }
+  }
+  return stats;
+}
+
+function renderUnfilledLimitOrders() {
+  if (!els.unfilledLimitOrders) return;
+  const orders = unfilledLimitOrdersForCurrentPortfolio();
+  applyUnfilledLimitOrderSummary(orders);
   els.unfilledLimitOrders.innerHTML = renderUnfilledLimitOrderRows(orders);
 }
 
@@ -4142,6 +4219,65 @@ function exportClosedTradesCsv() {
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-|-$/g, "") || "portfolio";
   downloadCsv(`trading-${portfolioSlug}-closed-trades-${stamp}.csv`, csvRows);
+}
+
+function unfilledLimitOrderCsvRow(order) {
+  const result = unfilledLimitOrderResult(order);
+  const endedAt = order.closedAt || order.resolvedAt || order.detectedAt || "";
+  const openedAt = order.openedAt || order.createdAt || order.date || "";
+  return {
+    portfolio: portfolioNavigationLabelForMode(state.mode),
+    status: order.status || "",
+    would_be: result == null ? "awaiting settlement" : (result ? "would win" : "would lose"),
+    would_be_pl_usdc: csvNumber(unfilledLimitOrderCounterfactualPnl(order), 1, 6),
+    outcome: order.outcome || "",
+    market: order.question || "",
+    polymarket_url: polymarketUrl(order),
+    limit_price_pct: csvNumber(order.price ?? order.limitPrice ?? order.entryPrice, 100, 4),
+    final_probability_pct: csvNumber(unfilledLimitOrderFinalPrice(order), 100, 4),
+    order_value_usdc: csvNumber(unfilledLimitOrderValue(order), 1, 6),
+    shares: csvNumber(order.shares ?? order.remainingSize, 1, 6),
+    opened_at: formatDate(openedAt),
+    opened_at_iso: openedAt,
+    ended_unfilled_at: formatDate(endedAt),
+    ended_unfilled_at_iso: endedAt,
+    // Says whether the row is still in the grading queue or has been read already, which
+    // is the difference between "not settled yet" and "settled but not gradable".
+    outcome_last_checked_at: order.outcomeLastCheckedAt || "",
+    resolution_end_date: order.endDate || order.resolutionEndDate || "",
+    cancelled_for_capital: order.cancelledForCapital === true,
+    token_id: order.tokenId || order.clobTokenId || order.assetId || "",
+    order_id: order.orderId || order.id || "",
+    event_slug: order.eventSlug || order.slug || "",
+    strategy_id: order.strategyId || "",
+    strategy_label: order.strategyLabel || "",
+    mode: order.mode || "",
+    notes: order.statusNote || "",
+  };
+}
+
+function exportUnfilledLimitOrdersCsv() {
+  const orders = unfilledLimitOrdersForCurrentPortfolio();
+  if (!orders.length) {
+    if (els.unfilledLimitOrdersSummary) els.unfilledLimitOrdersSummary.textContent = "0 unfilled / nothing to export";
+    return;
+  }
+  // Newest first, the order the table itself shows, so the file and the screen agree.
+  const rows = [...orders]
+    .sort((a, b) => (Date.parse(b.closedAt || b.resolvedAt || b.detectedAt || b.openedAt || "") || 0)
+      - (Date.parse(a.closedAt || a.resolvedAt || a.detectedAt || a.openedAt || "") || 0))
+    .map(unfilledLimitOrderCsvRow);
+  const headers = Object.keys(rows[0]);
+  const csvRows = [
+    headers.map(csvSafeCell).join(","),
+    ...rows.map((row) => headers.map((header) => csvSafeCell(row[header])).join(",")),
+  ];
+  const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
+  const portfolioSlug = portfolioNavigationLabelForMode(state.mode)
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-|-$/g, "") || "portfolio";
+  downloadCsv(`trading-${portfolioSlug}-unfilled-limit-orders-${stamp}.csv`, csvRows);
 }
 
 function portfolioPeriodDays(botState, trades) {
@@ -9140,11 +9276,7 @@ function renderBotState(botState) {
   // Do not let unfilled resting bids disappear inside Closed trades. They have their
   // own audit tab because they never became a portfolio position.
   if (els.unfilledLimitOrders) {
-    const stats = unfilledLimitOrderStats(unfilledLimitOrders);
-    const awaiting = stats.awaiting ? ` / ${stats.awaiting} awaiting` : "";
-    if (els.unfilledLimitOrdersSummary) {
-      els.unfilledLimitOrdersSummary.textContent = `${stats.total} unfilled / ${stats.wouldWin} would win / ${stats.wouldLose} would lose${awaiting}`;
-    }
+    applyUnfilledLimitOrderSummary(unfilledLimitOrders);
     els.unfilledLimitOrders.innerHTML = renderUnfilledLimitOrderRows(unfilledLimitOrders);
   }
 
@@ -9803,11 +9935,7 @@ function renderLiveState(liveState) {
     });
   }
   if (els.unfilledLimitOrders) {
-    const stats = unfilledLimitOrderStats(unfilledLimitOrders);
-    const awaiting = stats.awaiting ? ` / ${stats.awaiting} awaiting` : "";
-    if (els.unfilledLimitOrdersSummary) {
-      els.unfilledLimitOrdersSummary.textContent = `${stats.total} unfilled / ${stats.wouldWin} would win / ${stats.wouldLose} would lose${awaiting}`;
-    }
+    applyUnfilledLimitOrderSummary(unfilledLimitOrders);
     els.unfilledLimitOrders.innerHTML = renderUnfilledLimitOrderRows(unfilledLimitOrders);
   }
   renderBotEvaluations();
@@ -13641,6 +13769,7 @@ els.showOpenOrders?.addEventListener("change", () => {
 });
 els.openedTradesRefresh?.addEventListener("click", refreshOpenedTradesValues);
 els.closedTradesExport?.addEventListener("click", exportClosedTradesCsv);
+els.unfilledLimitOrdersExport?.addEventListener("click", exportUnfilledLimitOrdersCsv);
 
 state.mode = storedMode();
 state.runLogFilters = storedRunLogFilter(state.mode);
