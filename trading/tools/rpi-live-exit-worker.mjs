@@ -40,7 +40,14 @@ function enabled(value) {
   return ["1", "true", "yes", "on"].includes(String(value || "").trim().toLowerCase());
 }
 
+// `Number(null)` is 0, and 0 is finite, so an absent value used to read as a real zero.
+// That is not a harmless default in a worker whose job is selling: bestBid() returns null
+// for a book with no bids at all, and a stop asks "is the bid at or below the floor" -- so
+// a market nobody was bidding on read as a market that had crashed through its floor. The
+// Pi recorded a triggered stop for exactly that on every poll, and the only reason nothing
+// was sold into an empty book is that it is in shadow mode. An absent price is unknown.
 function number(value, fallback = null) {
+  if (value == null || value === "") return fallback;
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : fallback;
 }
@@ -55,6 +62,28 @@ function clampInteger(value, fallback, minimum, maximum) {
 // The sell order itself still uses stopPrice, so this never authorizes a loss
 // larger than the Equal target.
 const STOP_PRETRIGGER_BUFFER = Math.min(0.02, Math.max(0, number(process.env.LIVE_EXIT_PRETRIGGER_BUFFER, 0.002)));
+
+// How far under its floor a bid has to be before the crossing counts as gapped rather than
+// happening now. A stop caps a loss by selling AT the floor; a book already trading at a
+// fraction of it has jumped the floor, and the sell recovers a residue rather than
+// capping anything. Both still sell -- a residue beats nothing, and refusing to sell is
+// how a position goes to zero -- but they are recorded apart, because "the stop is firing"
+// and "the stop was jumped hours ago" call for different reactions from the operator, and
+// a shadow log that renders them identically is what made the difference invisible.
+const STOP_GAP_FRACTION = Math.min(1, Math.max(0, number(process.env.LIVE_EXIT_GAP_FRACTION, 0.75)));
+
+export function stopCrossing({ bestBidPrice, stopPrice } = {}) {
+  const bid = number(bestBidPrice);
+  const floor = number(stopPrice);
+  if (bid == null || !(bid > 0) || floor == null || !(floor > 0)) return null;
+  const recoveredFraction = bid / floor;
+  return {
+    bestBid: bid,
+    stopPrice: floor,
+    recoveredFraction: round(recoveredFraction, 6),
+    gapped: recoveredFraction < STOP_GAP_FRACTION,
+  };
+}
 
 function round(value, digits = 6) {
   const parsed = number(value);
@@ -208,11 +237,22 @@ export function bestBid(book = {}) {
   return prices.length ? Math.max(...prices) : null;
 }
 
+// A stop fires on a bid that has fallen to the floor. Two things are deliberately not that,
+// even though both compare as "at or below" any floor:
+//
+//   * no bid at all -- nobody is buying, so there is nothing to sell into. Selling here
+//     cannot cap a loss; it can only put a market order into a vacuum.
+//   * a bid of zero -- the same thing quoted rather than absent.
+//
+// Both are stated as their own condition rather than left to the null check, because the
+// null check alone has already failed once: number() coerced a missing bid to 0 and every
+// bidless market read as a triggered stop.
 export function exitTrigger({ bestBidPrice, stopPrice, triggerPrice = stopPrice } = {}) {
   const bid = number(bestBidPrice);
   const floor = number(stopPrice);
   const trigger = number(triggerPrice);
-  return bid != null && floor != null && trigger != null && bid <= trigger;
+  if (bid == null || !(bid > 0)) return false;
+  return floor != null && trigger != null && bid <= trigger;
 }
 
 function livePositions(state = {}) {
@@ -277,6 +317,21 @@ function defaultRemotePolicy(payload = {}) {
   const policy = payload?.defaultPolicy;
   if (!policy || policy.enabled === false || !(number(policy.stopLossRiskMultiplier, 0) > 0)) return null;
   return { ...policy, source: `portfolio:${String(policy.portfolioId || "live")}:default` };
+}
+
+// Positions the server says to leave alone, because the portfolio that opened them is
+// switched off, archived, or has no stop loss configured. This has to be an explicit list:
+// defaultPolicy covers every position NOT named in `policies`, so omitting a token is not a
+// way to leave it unprotected -- it is a way to give it the main portfolio's stop instead.
+// Turning a portfolio off has to stop its exits too, or the switch does not mean what it says.
+export function excludedRemoteTokens(payload = {}) {
+  const rows = Array.isArray(payload?.excluded) ? payload.excluded : [];
+  return new Map(rows
+    .filter((entry) => entry && String(entry.tokenId || "").trim())
+    .map((entry) => [String(entry.tokenId), {
+      portfolioId: String(entry.portfolioId || ""),
+      reason: String(entry.reason || "its portfolio has no active stop loss"),
+    }]));
 }
 
 function watchPlan(position, entry = null) {
@@ -420,9 +475,14 @@ async function checkOnce(context) {
   const explicitlyWatched = watchlistEntryMap(watchlist);
   const remotePolicies = remotePolicyMap(context.policyState);
   const fallbackPolicy = defaultRemotePolicy(context.policyState);
+  const excludedTokens = excludedRemoteTokens(context.policyState);
   const plans = livePositions(context.liveState)
     .map((position) => {
       const tokenId = String(position.tokenId || position.assetId || "");
+      // An exclusion outranks PROTECT_ALL and the local watchlist alike. Those say "watch
+      // everything I can see"; this says the owner of this particular position has its
+      // automation off, and a switched-off portfolio must not have an exit fired for it.
+      if (excludedTokens.has(tokenId)) return null;
       const remotePolicy = remotePolicies.get(tokenId) || fallbackPolicy;
       const localWatch = explicitlyWatched.get(tokenId);
       if (!PROTECT_ALL && !localWatch && !remotePolicy) return null;
@@ -441,6 +501,16 @@ async function checkOnce(context) {
   context.state.policyUrl = LIVE_EXIT_POLICY_URL;
   context.state.policyError = context.policyError || null;
   context.state.watchedPositions = plans.map((plan) => ({ tokenId: plan.tokenId, question: plan.question, outcome: plan.outcome, stopPrice: plan.stopPrice, triggerPrice: plan.triggerPrice, riskTargetUsdc: plan.riskTargetUsdc, reverseOnStopLoss: plan.reverseOnStopLoss, source: plan.source }));
+  // What is deliberately NOT watched, and why. A position missing from the watch list is
+  // otherwise indistinguishable from one the worker failed to notice, which is the whole
+  // difficulty this file has been debugged for twice.
+  context.state.excludedPositions = livePositions(context.liveState)
+    .map((position) => {
+      const tokenId = String(position.tokenId || position.assetId || "");
+      const exclusion = excludedTokens.get(tokenId);
+      return exclusion ? { tokenId, question: position.question || position.market || "", outcome: position.outcome || "", ...exclusion } : null;
+    })
+    .filter(Boolean);
 
   for (const plan of plans) {
     const pending = context.state.exits?.[plan.tokenId];
@@ -454,10 +524,30 @@ async function checkOnce(context) {
       continue;
     }
     const currentBestBid = bestBid(book);
-    const event = { at: now, tokenId: plan.tokenId, question: plan.question, outcome: plan.outcome, stopPrice: plan.stopPrice, triggerPrice: plan.triggerPrice, bestBid: currentBestBid, riskTargetUsdc: plan.riskTargetUsdc };
+    const crossing = stopCrossing({ bestBidPrice: currentBestBid, stopPrice: plan.stopPrice });
+    const event = {
+      at: now,
+      tokenId: plan.tokenId,
+      question: plan.question,
+      outcome: plan.outcome,
+      stopPrice: plan.stopPrice,
+      triggerPrice: plan.triggerPrice,
+      bestBid: currentBestBid,
+      riskTargetUsdc: plan.riskTargetUsdc,
+      // Whether the stop is firing now or the book jumped it long ago. Recorded on every
+      // event, so a shadow log answers "what would arming this actually sell, and at what
+      // price" without anyone having to re-derive it from the bid.
+      crossing: crossing ? { recoveredFraction: crossing.recoveredFraction, gapped: crossing.gapped } : null,
+    };
     if (!exitTrigger({ bestBidPrice: currentBestBid, stopPrice: plan.stopPrice, triggerPrice: plan.triggerPrice })) continue;
     if (MODE !== "live" || !CONFIRM_LIVE) {
-      recordEvent(context.state, { ...event, type: "SHADOW_STOP_TRIGGERED", reason: "price reached the stop; no SELL is allowed in shadow mode" });
+      recordEvent(context.state, {
+        ...event,
+        type: "SHADOW_STOP_TRIGGERED",
+        reason: crossing?.gapped
+          ? `the book is already at ${(crossing.recoveredFraction * 100).toFixed(0)}% of the stop, so this sells a residue rather than capping the loss; no SELL is allowed in shadow mode`
+          : "price reached the stop; no SELL is allowed in shadow mode",
+      });
       continue;
     }
     let response;

@@ -2768,3 +2768,68 @@ test("live stop loss: with no default policy an unattributed position is reporte
     rmSync(directory, { recursive: true, force: true });
   }
 });
+
+// Reported: a live portfolio that HAS a stop loss configured is switched off, and its open
+// positions must not be closed by that stop until it is switched back on. Two separate
+// things had to be true for the switch to mean that, and neither was:
+//
+//   * the policy ignored automationEnabled entirely, so a switched-off portfolio kept a
+//     live stop;
+//   * omitting the token would not have been enough anyway, because the worker applies
+//     defaultPolicy to every position NOT named in `policies` -- so the position would have
+//     been sold under the main Live portfolio's cap instead of its own portfolio's.
+test("live stop loss: a switched-off portfolio's positions are excluded by name", () => {
+  const directory = mkdtempSync(join(tmpdir(), "stop-loss-automation-off-"));
+  try {
+    const cut = API.indexOf("\ntry {");
+    const definitions = join(directory, "definitions.php");
+    mkdirSync(join(directory, "data"), { recursive: true });
+    writeFileSync(definitions, API.slice(0, cut) + "\n");
+
+    // Live is on and protected. The custom portfolio has a stop loss configured too, but
+    // its automation is off -- and it is the one holding `sleeping-token`.
+    writeFileSync(join(directory, "data", "portfolio-config.json"), JSON.stringify({
+      live: { displayName: "Live", stopLossRiskMultiplier: 1.75, automationEnabled: true },
+      livePortfolios: {
+        live2: { displayName: "Live 2", stopLossRiskMultiplier: 1.75, automationEnabled: false },
+      },
+    }));
+    writeFileSync(join(directory, "data", "live-execution-state.json"), JSON.stringify({
+      generatedAt: "2026-09-02T10:00:00Z", action: "SUBMITTED",
+      selected: { tokenId: "live-token" }, runLog: [],
+    }));
+    writeFileSync(join(directory, "data", "live-live2-execution-state.json"), JSON.stringify({
+      generatedAt: "2026-09-02T11:00:00Z", action: "SUBMITTED",
+      selected: { tokenId: "sleeping-token" }, runLog: [],
+    }));
+    writeFileSync(join(directory, "data", "live-state.json"), JSON.stringify({
+      positions: [
+        { tokenId: "live-token", question: "Held by the portfolio that is running" },
+        { tokenId: "sleeping-token", question: "Held by the portfolio that is switched off" },
+      ],
+    }));
+
+    const payload = JSON.parse(execFileSync("php", ["-r",
+      `chdir('${directory}'); require '${definitions}';`
+      + ` echo json_encode(live_stop_loss_policy_payload());`,
+    ], { encoding: "utf8", cwd: directory }));
+
+    const covered = new Map((payload.policies || []).map((policy) => [policy.tokenId, policy]));
+    assert.ok(covered.has("live-token"), "the running portfolio keeps its stop");
+    assert.ok(!covered.has("sleeping-token"), "a switched-off portfolio has no live stop");
+
+    const excluded = new Map((payload.excluded || []).map((row) => [row.tokenId, row]));
+    assert.ok(excluded.has("sleeping-token"),
+      "the exclusion must be explicit: an omitted token is covered by defaultPolicy instead");
+    assert.equal(excluded.get("sleeping-token").portfolioId, "live-custom-live2");
+    assert.equal(excluded.get("sleeping-token").enabled, false);
+    assert.match(excluded.get("sleeping-token").reason, /automation is switched off/);
+    assert.equal(payload.positionsExcludedByOwner, 1);
+    // It must not be re-counted as unattributed and adopted by the fallback, which is the
+    // path that would have applied Live's cap to another portfolio's position.
+    assert.equal(payload.positionsWithoutRunLogAttribution, 0);
+    assert.equal(payload.positionsAdoptedFromAccount, 0);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});

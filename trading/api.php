@@ -4441,7 +4441,18 @@ function live_stop_loss_policy_config(array $config, string $portfolioId): ?arra
         $id = substr($portfolioId, strlen('live-custom-'));
         $row = $config['livePortfolios'][$id] ?? null;
     }
-    if (!is_array($row) || ($row['archived'] ?? false) === true) {
+    if (!is_array($row)) {
+        return null;
+    }
+    if (($row['archived'] ?? false) === true) {
+        return null;
+    }
+    // A portfolio whose automation is switched off does not trade, and selling one of its
+    // positions is trading. Leaving the stop armed for it meant the switch stopped entries
+    // while an exit could still fire -- so turning a portfolio off did not mean what it
+    // says. Absent means on, matching normalize_portfolio_config, so a portfolio saved
+    // before this switch existed keeps its protection.
+    if (($row['automationEnabled'] ?? true) === false) {
         return null;
     }
     $multiplier = normalize_stop_loss_risk_multiplier_value(
@@ -4457,6 +4468,37 @@ function live_stop_loss_policy_config(array $config, string $portfolioId): ?arra
         'reverseOnStopLoss' => (bool) ($row['reverseOnStopLoss'] ?? false),
         'enabled' => true,
     ];
+}
+
+/**
+ * Why a portfolio has no active stop-loss policy, in the words the dashboard shows.
+ * Returns null when it does have one.
+ */
+function live_stop_loss_policy_absence_reason(array $config, string $portfolioId): ?string
+{
+    $row = null;
+    if ($portfolioId === 'live') {
+        $row = $config['live'] ?? null;
+    } elseif ($portfolioId === 'live5050') {
+        $row = $config['live5050'] ?? null;
+    } elseif (substr($portfolioId, 0, strlen('live-custom-')) === 'live-custom-') {
+        $id = substr($portfolioId, strlen('live-custom-'));
+        $row = $config['livePortfolios'][$id] ?? null;
+    }
+    if (!is_array($row)) {
+        return 'portfolio is not configured';
+    }
+    if (($row['archived'] ?? false) === true) {
+        return 'portfolio is archived';
+    }
+    if (($row['automationEnabled'] ?? true) === false) {
+        return 'portfolio automation is switched off';
+    }
+    $multiplier = normalize_stop_loss_risk_multiplier_value(
+        $row['stopLossRiskMultiplier'] ?? (($row['stopLossEnabled'] ?? false) ? 1.0 : 0.0),
+        0.0
+    );
+    return $multiplier > 0 ? null : 'no stop loss is configured';
 }
 
 function live_execution_state_path_for_policy(string $portfolioId): string
@@ -4506,12 +4548,16 @@ function live_stop_loss_policy_payload(): array
         }
     }
 
-    $policies = [];
+    // Ownership is established before any policy is applied, and for EVERY live portfolio
+    // including those with no active stop loss. Skipping the unprotected ones here, as this
+    // used to, made their positions look unowned two passes further down -- where the
+    // fallback would hand them the main Live portfolio's cap. A switched-off portfolio's
+    // position would then have been sold under a policy its own portfolio never set.
+    $ownerOf = [];
+    $ownedAt = [];
+    $policyByPortfolio = [];
     foreach ($portfolioIds as $portfolioId) {
-        $policy = live_stop_loss_policy_config($config, $portfolioId);
-        if ($policy === null) {
-            continue;
-        }
+        $policyByPortfolio[$portfolioId] = live_stop_loss_policy_config($config, $portfolioId);
         $state = decode_state_file(live_execution_state_path_for_policy($portfolioId), false);
         if (!is_array($state)) {
             continue;
@@ -4523,15 +4569,39 @@ function live_stop_loss_policy_payload(): array
             }
             $updatedAt = (string) ($record['generatedAt'] ?? $record['runAt'] ?? $record['batchLog']['runAt'] ?? '');
             foreach (live_execution_record_token_ids($record) as $tokenId) {
-                $current = $policies[$tokenId] ?? null;
                 // A token can be seen in an older strategy state after it has been
-                // traded again. The newest accepted order owns its current policy.
-                if (is_array($current) && strcmp((string) ($current['updatedAt'] ?? ''), $updatedAt) > 0) {
+                // traded again. The newest accepted order owns it.
+                if (isset($ownerOf[$tokenId]) && strcmp((string) ($ownedAt[$tokenId] ?? ''), $updatedAt) > 0) {
                     continue;
                 }
-                $policies[$tokenId] = array_merge($policy, ['tokenId' => $tokenId, 'updatedAt' => $updatedAt]);
+                $ownerOf[$tokenId] = $portfolioId;
+                $ownedAt[$tokenId] = $updatedAt;
             }
         }
+    }
+
+    $policies = [];
+    $excluded = [];
+    foreach ($ownerOf as $tokenId => $portfolioId) {
+        $policy = $policyByPortfolio[$portfolioId] ?? null;
+        if ($policy !== null) {
+            $policies[$tokenId] = array_merge($policy, [
+                'tokenId' => $tokenId,
+                'updatedAt' => (string) ($ownedAt[$tokenId] ?? ''),
+            ]);
+            continue;
+        }
+        // Named rather than merely omitted. The worker treats any position it does not
+        // find in this list as covered by defaultPolicy, so leaving a token out is not a
+        // way to leave it alone -- it is a way to give it somebody else's stop. An
+        // explicit exclusion is the only instruction that means "hands off this one".
+        $excluded[$tokenId] = [
+            'tokenId' => $tokenId,
+            'portfolioId' => $portfolioId,
+            'enabled' => false,
+            'reason' => live_stop_loss_policy_absence_reason($config, $portfolioId) ?? 'no stop loss is configured',
+            'updatedAt' => (string) ($ownedAt[$tokenId] ?? ''),
+        ];
     }
 
     // Everything above derives the watchlist from the RUN LOGS: a token is watched only
@@ -4556,6 +4626,12 @@ function live_stop_loss_policy_payload(): array
         }
         $tokenId = trim((string) ($position['tokenId'] ?? $position['assetId'] ?? ''));
         if ($tokenId === '' || isset($policies[$tokenId])) {
+            continue;
+        }
+        // A position whose own portfolio has no active stop loss is not unattributed --
+        // it is deliberately unprotected, and the exclusion above says so by name. The
+        // fallback must not quietly adopt it.
+        if (isset($excluded[$tokenId])) {
             continue;
         }
         $unattributed++;
@@ -4583,12 +4659,16 @@ function live_stop_loss_policy_payload(): array
         'ok' => true,
         'generatedAt' => gmdate('c'),
         'policies' => array_values($policies),
+        // Positions the worker must leave alone even though defaultPolicy would otherwise
+        // reach them: their own portfolio is switched off, archived, or has no stop loss.
+        'excluded' => array_values($excluded),
         // Stated so a gap is visible rather than silent: how many open positions no run
         // log accounted for, and how many of those the default could actually cover.
         'openPositions' => count($positions),
         'positionsWithoutRunLogAttribution' => $unattributed,
         'positionsAdoptedFromAccount' => $adoptedFromPositions,
         'positionsLeftUnwatched' => $unattributed - $adoptedFromPositions,
+        'positionsExcludedByOwner' => count($excluded),
         'defaultPolicy' => $fallback,
     ];
 }
