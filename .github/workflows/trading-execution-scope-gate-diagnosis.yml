@@ -1,0 +1,42 @@
+name: Trading Execution Scope Gate Diagnosis
+
+# Read-only diagnostic, manual only. Runs api.php's own execution_scope_matches_observation
+# gates over every active scraped row and attributes each rejection to a named gate, then
+# reports the named markets with the value each gate compared. Writes nothing, publishes
+# nothing, no secrets.
+on:
+  workflow_dispatch:
+    inputs:
+      strategy_id:
+        description: "Scope to explain: live, live5050, or live-custom-<id>"
+        required: false
+        default: "live"
+        type: string
+      focus_markets:
+        description: "Semicolon-separated substrings of the markets to report in full"
+        required: false
+        default: "koln;stuttgart;bayern;ipswich;liverpool;barcelona"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: "8.2"
+
+      - name: Diagnose the execution scope gates
+        working-directory: trading
+        env:
+          SCOPE_STRATEGY_ID: ${{ inputs.strategy_id || 'live' }}
+          FOCUS_MARKETS: ${{ inputs.focus_markets || 'koln;stuttgart;bayern;ipswich;liverpool;barcelona' }}
+        run: node tools/execution-scope-gate-diagnosis.mjs
