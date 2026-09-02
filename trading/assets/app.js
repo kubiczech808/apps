@@ -8296,9 +8296,29 @@ function executionVerdictIsOwn(verdict, mode) {
   return owner === (customLiveId ? `live-custom-${customLiveId}` : (isFixedEntryMode(mode) ? "live-5050" : "live"));
 }
 
+function executionVerdictIsTemporaryQuoteState(verdict) {
+  if (!verdict) return false;
+  if (String(verdict.retryClass || "").toUpperCase() === "QUOTE") return true;
+  // State files written before QUOTE existed keep their original status. Interpret
+  // this narrow legacy reason the same way, rather than letting an old empty book
+  // permanently split otherwise identical live shortlists.
+  return (Array.isArray(verdict.rejectReasons) ? verdict.rejectReasons : [])
+    .some((reason) => /no valid current entry price|post-only limit would cross current ask/i.test(String(reason || "")));
+}
+
+function executionVerdictIsRetryable(verdict) {
+  return Boolean(verdict?.retryable) || executionVerdictIsTemporaryQuoteState(verdict);
+}
+
+function executionVerdictAppliesToMode(verdict, mode) {
+  // Capital and diversification are portfolio-specific. A missing executable quote is
+  // a property of the shared Polymarket book, so every live portfolio must use it.
+  return executionVerdictIsOwn(verdict, mode) || executionVerdictIsTemporaryQuoteState(verdict);
+}
+
 function latestLiveExecutionVerdict(item, mode = state.mode) {
   const merged = item?.executionRevalidation && typeof item.executionRevalidation === "object"
-    && executionVerdictIsOwn(item.executionRevalidation, mode)
+    && executionVerdictAppliesToMode(item.executionRevalidation, mode)
     ? item.executionRevalidation
     : null;
   const token = String(item?.tokenId || item?.clobTokenId || item?.assetId || "").trim();
@@ -8643,7 +8663,7 @@ function portfolioCandidateFilterReasons(item, mode = state.mode) {
   // Keep those rows in the shortlist so the next run can retry them after the
   // blocking condition changes. Permanent market/quote failures still filter
   // the row out here.
-  if (executionCheckIsCurrent && String(executionCheck.status || "").toUpperCase() !== "READY" && !executionCheck.retryable) {
+  if (executionCheckIsCurrent && String(executionCheck.status || "").toUpperCase() !== "READY" && !executionVerdictIsRetryable(executionCheck)) {
     const detail = Array.isArray(executionCheck.rejectReasons) && executionCheck.rejectReasons[0]
       ? `: ${executionCheck.rejectReasons[0]}`
       : "";

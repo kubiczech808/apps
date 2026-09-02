@@ -1217,9 +1217,11 @@ test("live candidates: an execution rejection survives the next scrape", async (
   assert.match(app, /function latestLiveExecutionVerdict\(item, mode = state\.mode\)/);
   assert.match(app, /const executionCheck = latestLiveExecutionVerdict\(item, mode\);/);
 
-  // Retryable verdicts (capital, diversification) must still return to the shortlist:
-  // those block one run, not the market itself.
-  assert.match(app, /!executionCheck\.retryable/);
+  // Retryable verdicts (capital, diversification and a temporarily unpriceable book)
+  // must still return to the shortlist: those block one run, not the market itself.
+  assert.match(app, /function executionVerdictIsTemporaryQuoteState\(verdict\)/);
+  assert.match(app, /function executionVerdictIsRetryable\(verdict\)/);
+  assert.match(app, /!executionVerdictIsRetryable\(executionCheck\)/);
 
   // And the executor must still classify only those two as retryable.
   const executor = await readFile(new URL("../tools/live-order-executor.mjs", import.meta.url), "utf8");

@@ -4003,7 +4003,12 @@ function liveRevalidationUpdate(item, checkedAt) {
     ? "DIVERSIFICATION"
     : (rejectReasons.some((reason) => /no available cash|sub-cent maker amount|above cash|insufficient.*(?:cash|USDC|capital)|minimum order .*costs|below the displayed .*share.*minimum/i.test(String(reason || "")))
       ? "CAPITAL"
-      : null);
+      // An empty or momentarily unpriceable book is not a terminal market result. It
+      // must be checked again on the next live pass, and every live portfolio should
+      // see that same temporary quote state rather than one silently dropping it.
+      : (rejectReasons.some((reason) => /no valid current entry price|post-only limit would cross current ask/i.test(String(reason || "")))
+        ? "QUOTE"
+        : null));
   const numericFields = [
     "marketPrice",
     "marketProbability",

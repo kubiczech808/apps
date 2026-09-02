@@ -4538,6 +4538,20 @@ test("execution candidates: an already held market is absent instead of risk-blo
     "held markets must not be rendered in the candidate table");
 });
 
+test("live candidates: a temporary quote failure is shared and stays retryable", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const app = await readFile(new URL("../assets/app.js", import.meta.url), "utf8");
+  const executor = await readFile(new URL("../tools/live-order-executor.mjs", import.meta.url), "utf8");
+
+  // A quote can vanish briefly from the CLOB. It is not a portfolio-specific or terminal
+  // decision, so it cannot make one otherwise equal live shortlist shorter than another.
+  assert.match(executor, /\? "QUOTE"/);
+  assert.match(app, /function executionVerdictIsTemporaryQuoteState\(verdict\)/);
+  assert.match(app, /no valid current entry price\|post-only limit would cross current ask/);
+  assert.match(app, /function executionVerdictAppliesToMode\(verdict, mode\)/);
+  assert.match(app, /executionVerdictIsOwn\(verdict, mode\) \|\| executionVerdictIsTemporaryQuoteState\(verdict\)/);
+});
+
 test("5050: its own resting orders appear on its tab straight away", async () => {
   const { readFile } = await import("node:fs/promises");
   const app = await readFile(new URL("../assets/app.js", import.meta.url), "utf8");
