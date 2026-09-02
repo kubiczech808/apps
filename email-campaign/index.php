@@ -1083,10 +1083,55 @@ if (isset($_GET['cron'])) {
     }
     if (isset($_GET['storage_report'])) {
         try {
-            echo json_encode(databaseStorageReport($pdo), JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . "\n";
+            $report = databaseStorageReport($pdo);
+            // Bez tohoto se u tabulky, ktera se neuklidi, nepozna, jestli uz nic ke
+            // smazani neni, nebo to jen drzi vodoznak backfillu a retencni okno.
+            $report['cleanup'] = databaseCleanupDiagnostics($pdo);
+            echo json_encode($report, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . "\n";
         } catch (Throwable $e) {
             http_response_code(503);
             echo 'Storage report failed: ' . $e->getMessage() . "\n";
+        }
+        exit;
+    }
+    // Uklid a uvolneni mista jde spustit i z CI, aby to nemusel nikdo odklikavat v UI
+    // a aby byl kazdy krok videt v logu workflow vcetne velikosti pred a po.
+    if (isset($_GET['db_cleanup'])) {
+        $rounds = max(1, min(40, (int)($_GET['rounds'] ?? 1)));
+        $batchRows = (int)($_GET['batch'] ?? DB_CLEANUP_BATCH_ROWS);
+        // Hosting ukonci request kolem 150 s, takze cely endpoint ma vlastni strop.
+        // Co se nestihne, dobehne dalsi volani - kazda davka je samostatna transakce.
+        $endpointDeadline = time() + 100;
+        $stop = '';
+        for ($round = 1; $round <= $rounds; $round++) {
+            if (time() >= $endpointDeadline) {
+                $stop = 'Casovy strop requestu, zbytek dobehne dalsim volanim (davek hotovo: ' . ($round - 1) . ').';
+                break;
+            }
+            $result = runGuardedDatabaseCleanup($pdo, 12, $batchRows);
+            echo 'davka ' . $round . '/' . $rounds . ': ' . $result['message'] . "\n";
+            if (!$result['ok']) {
+                $stop = 'Uklid zastaven po davce ' . $round . '.';
+                http_response_code(500);
+                break;
+            }
+            if (str_contains($result['message'], 'nic ke smazani')) {
+                $stop = 'Uz neni co uklizet, konec po davce ' . $round . '.';
+                break;
+            }
+        }
+        if ($stop !== '') {
+            echo $stop . "\n";
+        }
+        exit;
+    }
+    if (isset($_GET['db_optimize'])) {
+        try {
+            $onlyTable = preg_replace('/[^a-z0-9_]/i', '', (string)($_GET['table'] ?? ''));
+            echo optimizeDatabaseTables($pdo, 100, (string)$onlyTable) . "\n";
+        } catch (Throwable $e) {
+            http_response_code(503);
+            echo 'Uvolneni mista selhalo: ' . $e->getMessage() . "\n";
         }
         exit;
     }
@@ -1126,7 +1171,7 @@ if (isset($_GET['cron'])) {
     // A retence radku. Kompaktace zmensuje indexy nad stejnym poctem radku; tohle resi
     // ten pocet - crawl log ani provozni log se nikdy nemazaly, takze kvota se vycerpa
     // i pri par tisicich kontaktech. Uvolneni mista (OPTIMIZE) je rucni krok.
-    echo "\n" . runDatabaseCleanupBatch($pdo, 15);
+    echo "\n" . runGuardedDatabaseCleanup($pdo, 15)['message'];
     exit;
 }
 
@@ -1525,7 +1570,7 @@ function handlePost(PDO $pdo, array $config): ?string
 
     if ($action === 'run_database_cleanup') {
         requireDatabaseMaintenanceAccess();
-        return runDatabaseCleanupBatch($pdo, 25);
+        return runGuardedDatabaseCleanup($pdo, 25)['message'];
     }
 
     if ($action === 'optimize_database_tables') {
@@ -11811,11 +11856,13 @@ function importItemRawRetentionCutoff(): string
  */
 function importRunsWithPrunableRaw(PDO $pdo, int $runLimit, int $watermark): array
 {
+    // Vek se bere z finished_at, a kdyz chybi, z created_at: zaznam importu zalozeny
+    // scrapingem (logScrapingImportRun) finished_at nenastavuje vubec, takze podminka
+    // jen na finished_at nechytila skoro zadny z tech ctyr set tisic radku.
     $stmt = $pdo->prepare('
         SELECT ir.id
         FROM import_runs ir
-        WHERE ir.finished_at<>""
-          AND ir.finished_at<?
+        WHERE CASE WHEN ir.finished_at<>"" THEN ir.finished_at ELSE ir.created_at END<?
           AND EXISTS (
               SELECT 1 FROM import_run_items iri
               WHERE iri.import_run_id=ir.id
@@ -12064,28 +12111,32 @@ function databaseCleanupEstimate(PDO $pdo): array
  * Jedna davka uklidu. Bezi z cronu i z tlacitka, vzdy s casovym stropem, takze ji
  * hosting nema co ukoncit. Vraci popis toho, co se smazalo.
  */
-function runDatabaseCleanupBatch(PDO $pdo, int $budgetSeconds = 20): string
+function runDatabaseCleanupBatch(PDO $pdo, int $budgetSeconds = 20, int $batchRows = DB_CLEANUP_BATCH_ROWS): string
 {
     $deadline = time() + max(3, $budgetSeconds);
+    // Prubezny cron jede po malych davkach. Dohnani nahromadene historie ale takhle
+    // trva dny, takze rucni spusteni smi davku zvetsit - se stropem, aby jedna
+    // transakce nikdy nebyla tak velka, ze ji hosting nedokonci.
+    $batchRows = max(100, min(20000, $batchRows));
     $done = [];
-    $items = pruneScrapingJobItems($pdo, DB_CLEANUP_BATCH_ROWS);
+    $items = pruneScrapingJobItems($pdo, $batchRows);
     if ($items > 0) {
         $done[] = 'crawl log: ' . $items . ' radku';
     }
     if (time() < $deadline) {
-        $raw = pruneImportItemRawData($pdo, DB_CLEANUP_BATCH_ROWS);
+        $raw = pruneImportItemRawData($pdo, $batchRows);
         if ($raw > 0) {
             $done[] = 'surova data importu: ' . $raw . ' radku';
         }
     }
     if (time() < $deadline) {
-        $logs = pruneAiResearchLogs($pdo, DB_CLEANUP_BATCH_ROWS);
+        $logs = pruneAiResearchLogs($pdo, $batchRows);
         if ($logs > 0) {
             $done[] = 'provozni log: ' . $logs . ' radku';
         }
     }
     if (time() < $deadline) {
-        $sessions = pruneExpiredAppSessions($pdo, DB_CLEANUP_BATCH_ROWS);
+        $sessions = pruneExpiredAppSessions($pdo, $batchRows);
         if ($sessions > 0) {
             $done[] = 'sessiony: ' . $sessions;
         }
@@ -12108,7 +12159,7 @@ function runDatabaseCleanupBatch(PDO $pdo, int $budgetSeconds = 20): string
  * do kvoty. Teprve prestavba tabulky (OPTIMIZE TABLE, u InnoDB rebuild) ho vrati, a
  * proto je to samostatny krok: je drahy a nesmi bezet pri kazdem cronu.
  */
-function optimizeDatabaseTables(PDO $pdo, int $budgetSeconds = 25): string
+function optimizeDatabaseTables(PDO $pdo, int $budgetSeconds = 25, string $onlyTable = ''): string
 {
     if (!isMysql($pdo)) {
         return 'Uvolneni mista: jen pro MySQL.';
@@ -12116,9 +12167,19 @@ function optimizeDatabaseTables(PDO $pdo, int $budgetSeconds = 25): string
     $before = databaseSizeSummary($pdo);
     $deadline = time() + max(5, $budgetSeconds);
     $optimized = [];
+    $failed = [];
     $skipped = 0;
-    foreach ($before['tables'] as $table) {
+    // Od nejmensich tabulek. Prestavba potrebuje docasne misto velke jako tabulka
+    // sama, takze zacit tou nejvetsi znamena riskovat, ze narazi na kvotu hostingu a
+    // nezustane po ni ani ten maly zisk. Velka tabulka se pak da poslat samostatne
+    // (db_optimize=1&table=nazev), aby mela cely request jen pro sebe.
+    $queue = $before['tables'];
+    usort($queue, static fn(array $a, array $b): int => $a['total_bytes'] <=> $b['total_bytes']);
+    foreach ($queue as $table) {
         if ($table['free_bytes'] <= 0) {
+            continue;
+        }
+        if ($onlyTable !== '' && (string)$table['name'] !== $onlyTable) {
             continue;
         }
         if (time() >= $deadline) {
@@ -12126,19 +12187,150 @@ function optimizeDatabaseTables(PDO $pdo, int $budgetSeconds = 25): string
             continue;
         }
         try {
-            $pdo->exec('OPTIMIZE TABLE ' . quoteDatabaseIdentifier((string)$table['name']));
+            // OPTIMIZE TABLE vraci vysledkovou tabulku. Musi se vyzvednout a zavrit,
+            // jinak zustane na spojeni viset a kazdy dalsi dotaz v tomto requestu
+            // skonci chybou - prestavi se jen prvni tabulka a i snimek "po" je prazdny.
+            $statement = $pdo->query('OPTIMIZE TABLE ' . quoteDatabaseIdentifier((string)$table['name']));
+            if ($statement !== false) {
+                $statement->fetchAll(PDO::FETCH_ASSOC);
+                $statement->closeCursor();
+            }
             $optimized[] = (string)$table['name'] . ' (' . formatBytesHuman((int)$table['free_bytes']) . ')';
         } catch (Throwable $e) {
             error_log('Optimize table ' . $table['name'] . ' failed: ' . $e->getMessage());
+            $failed[] = (string)$table['name'] . ': ' . $e->getMessage();
         }
     }
     if (!$optimized) {
-        return 'Uvolneni mista: zadna tabulka nedrzi volne misto.';
+        $reason = $onlyTable !== ''
+            ? 'Uvolneni mista: tabulka ' . $onlyTable . ' nedrzi volne misto.'
+            : 'Uvolneni mista: zadna tabulka nedrzi volne misto.';
+        return $failed ? $reason . ' Neuspesne: ' . implode('; ', $failed) : $reason;
     }
     $after = databaseSizeSummary($pdo);
-    $freed = max(0, ($before['total_bytes'] + $before['free_bytes']) - ($after['total_bytes'] + $after['free_bytes']));
-    return 'Uvolneno ' . formatBytesHuman($freed) . ' prestavbou tabulek: ' . implode(', ', $optimized)
-        . ($skipped > 0 ? '. Dalsich ' . $skipped . ' tabulek na dalsi klik (casovy strop requestu).' : '.');
+    // Kdyz se snimek "po" nepodari precist, radeji se necha usporu neuvedenou nez
+    // aby se vypsalo cislo velke jako cela databaze.
+    $freed = $after['tables']
+        ? max(0, ($before['total_bytes'] + $before['free_bytes']) - ($after['total_bytes'] + $after['free_bytes']))
+        : -1;
+    return ($freed >= 0 ? 'Uvolneno ' . formatBytesHuman($freed) : 'Prestaveno')
+        . ' prestavbou tabulek: ' . implode(', ', $optimized)
+        . ($skipped > 0 ? '. Dalsich ' . $skipped . ' tabulek na dalsi volani (casovy strop requestu).' : '.')
+        . ($failed ? ' Neuspesne: ' . implode('; ', $failed) . '.' : '');
+}
+
+/**
+ * Kolik radku drzi tabulky, ktere uklid nesmi zmensit. Snimek se bere pred davkou a
+ * po ni - kdyz se cokoli z toho zmeni, davka se cela vrati zpet.
+ *
+ * Tohle je to, co dela uklid vratnym: jinak by "obnovit, kdyz se neco nepovede"
+ * znamenalo obnovit ze zalohy, kterou na 800 MB databazi na sdilenem hostingu nemame.
+ */
+/**
+ * Proc uklid u jednotlivych tabulek nemaze. Bez tohoto se z velikosti nepozna, jestli
+ * uz nic ke smazani neni, nebo to jen drzi vodoznak backfillu a retencni okno - a to
+ * je presne rozdil mezi "hotovo" a "ceka".
+ */
+function databaseCleanupDiagnostics(PDO $pdo): array
+{
+    $diagnostics = [
+        'scraping_items_prunable' => countPrunableScrapingItems($pdo),
+        'scraping_items_watermark' => scrapingItemPruneWatermark($pdo),
+        'scraping_items_cutoff' => scrapingItemRetentionCutoff(),
+        'import_raw_prunable' => countPrunableImportItemRaw($pdo),
+        'import_raw_watermark' => importItemRawWatermark($pdo),
+        'import_raw_cutoff' => importItemRawRetentionCutoff(),
+        'ai_research_logs_prunable' => countPrunableAiResearchLogs($pdo),
+        'expired_sessions' => countExpiredAppSessions($pdo),
+    ];
+    try {
+        $diagnostics['scraping_items_max_id'] = (int)$pdo->query('SELECT COALESCE(MAX(id), 0) FROM scraping_job_items')->fetchColumn();
+        $diagnostics['import_items_max_id'] = (int)$pdo->query('SELECT COALESCE(MAX(id), 0) FROM import_run_items')->fetchColumn();
+        $diagnostics['import_items_with_raw'] = (int)$pdo->query('SELECT COUNT(*) FROM import_run_items WHERE raw_data<>""')->fetchColumn();
+        $diagnostics['import_runs_old_enough'] = (int)$pdo->query('
+            SELECT COUNT(*) FROM import_runs
+            WHERE CASE WHEN finished_at<>"" THEN finished_at ELSE created_at END<"'
+            . importItemRawRetentionCutoff() . '"')->fetchColumn();
+        $diagnostics['import_runs_without_finished_at'] = (int)$pdo->query('SELECT COUNT(*) FROM import_runs WHERE finished_at=""')->fetchColumn();
+    } catch (Throwable $e) {
+        $diagnostics['error'] = $e->getMessage();
+    }
+    return $diagnostics;
+}
+
+function databaseCleanupInvariant(PDO $pdo): array
+{
+    $snapshot = [];
+    foreach (['recipients', 'contact_databases', 'app_users', 'campaigns', 'send_logs', 'scraping_jobs', 'import_runs', 'scraping_containers'] as $table) {
+        if (!tableExists($pdo, $table)) {
+            continue;
+        }
+        try {
+            $snapshot[$table] = (int)$pdo->query('SELECT COUNT(*) FROM ' . quoteDatabaseIdentifier($table))->fetchColumn();
+        } catch (Throwable $e) {
+            error_log('Cleanup invariant snapshot for ' . $table . ' failed: ' . $e->getMessage());
+        }
+    }
+    return $snapshot;
+}
+
+function databaseCleanupInvariantDiff(array $before, array $after): array
+{
+    $diff = [];
+    foreach ($before as $table => $count) {
+        $now = (int)($after[$table] ?? -1);
+        if ($now !== (int)$count) {
+            $diff[] = $table . ': ' . $count . ' -> ' . $now;
+        }
+    }
+    return $diff;
+}
+
+/**
+ * Uklid v transakci s kontrolou po sobe. Kdyz po davce chybi jediny kontakt, databaze
+ * kontaktu, ucet, kampan, odeslany email, scrapovaci beh nebo import, davka se vrati
+ * zpet a uklid se dal nespousti.
+ *
+ * Vraci pole ['ok' => bool, 'message' => string, 'rolled_back' => bool].
+ */
+function runGuardedDatabaseCleanup(PDO $pdo, int $budgetSeconds = 20, int $batchRows = DB_CLEANUP_BATCH_ROWS): array
+{
+    $before = databaseCleanupInvariant($pdo);
+    $inTransaction = false;
+    try {
+        $pdo->beginTransaction();
+        $inTransaction = true;
+    } catch (Throwable $e) {
+        // Bez transakce se uklid nespousti - nebylo by co vratit.
+        return [
+            'ok' => false,
+            'rolled_back' => false,
+            'message' => 'Uklid nespusten: databaze nepodporuje transakci (' . $e->getMessage() . ').',
+        ];
+    }
+    try {
+        $message = runDatabaseCleanupBatch($pdo, $budgetSeconds, $batchRows);
+        $diff = databaseCleanupInvariantDiff($before, databaseCleanupInvariant($pdo));
+        if ($diff !== []) {
+            $pdo->rollBack();
+            return [
+                'ok' => false,
+                'rolled_back' => true,
+                'message' => 'Uklid VRACEN ZPET - davka by ubrala data: ' . implode(', ', $diff),
+            ];
+        }
+        $pdo->commit();
+        return ['ok' => true, 'rolled_back' => false, 'message' => $message];
+    } catch (Throwable $e) {
+        if ($inTransaction && $pdo->inTransaction()) {
+            $pdo->rollBack();
+        }
+        return [
+            'ok' => false,
+            'rolled_back' => true,
+            'message' => 'Uklid VRACEN ZPET kvuli chybe: ' . $e->getMessage(),
+        ];
+    }
 }
 
 function quoteDatabaseIdentifier(string $identifier): string

@@ -1005,6 +1005,38 @@ test("live revalidation: the market is found by token id, not only by slug", asy
   assert.match(source, /apiUrl\(GAMMA_API, "\/markets", \{ clob_token_ids: tokenId \}\)/);
 });
 
+test("live reads: a transient fetch failure retries and names the failed resource", async () => {
+  const executor = await import("../tools/live-order-executor.mjs");
+  const originalFetch = globalThis.fetch;
+  let calls = 0;
+  try {
+    globalThis.fetch = async () => {
+      calls += 1;
+      if (calls < 3) throw new TypeError("fetch failed");
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    };
+    const payload = await executor.fetchJson("https://example.test/state", "live state", {
+      attempts: 3,
+      timeoutMs: 1000,
+      retryDelayMs: 0,
+    });
+    assert.deepEqual(payload, { ok: true });
+    assert.equal(calls, 3, "a temporary network failure must not end the live run on first contact");
+
+    globalThis.fetch = async () => { throw new TypeError("fetch failed"); };
+    await assert.rejects(
+      () => executor.fetchJson("https://example.test/state", "scraped Polymarket state", {
+        attempts: 2,
+        timeoutMs: 1000,
+        retryDelayMs: 0,
+      }),
+      /scraped Polymarket state failed after 2 attempts: fetch failed/,
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("live revalidation: a market Gamma no longer lists is closed out, not re-fetched forever", async () => {
   const executor = await import("../tools/live-order-executor.mjs");
 
@@ -1217,9 +1249,11 @@ test("live candidates: an execution rejection survives the next scrape", async (
   assert.match(app, /function latestLiveExecutionVerdict\(item, mode = state\.mode\)/);
   assert.match(app, /const executionCheck = latestLiveExecutionVerdict\(item, mode\);/);
 
-  // Retryable verdicts (capital, diversification) must still return to the shortlist:
-  // those block one run, not the market itself.
-  assert.match(app, /!executionCheck\.retryable/);
+  // Retryable verdicts (capital, diversification and a temporarily unpriceable book)
+  // must still return to the shortlist: those block one run, not the market itself.
+  assert.match(app, /function executionVerdictIsTemporaryQuoteState\(verdict\)/);
+  assert.match(app, /function executionVerdictIsRetryable\(verdict\)/);
+  assert.match(app, /!executionVerdictIsRetryable\(executionCheck\)/);
 
   // And the executor must still classify only those two as retryable.
   const executor = await readFile(new URL("../tools/live-order-executor.mjs", import.meta.url), "utf8");

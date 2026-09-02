@@ -8296,9 +8296,29 @@ function executionVerdictIsOwn(verdict, mode) {
   return owner === (customLiveId ? `live-custom-${customLiveId}` : (isFixedEntryMode(mode) ? "live-5050" : "live"));
 }
 
+function executionVerdictIsTemporaryQuoteState(verdict) {
+  if (!verdict) return false;
+  if (String(verdict.retryClass || "").toUpperCase() === "QUOTE") return true;
+  // State files written before QUOTE existed keep their original status. Interpret
+  // this narrow legacy reason the same way, rather than letting an old empty book
+  // permanently split otherwise identical live shortlists.
+  return (Array.isArray(verdict.rejectReasons) ? verdict.rejectReasons : [])
+    .some((reason) => /no valid current entry price|post-only limit would cross current ask/i.test(String(reason || "")));
+}
+
+function executionVerdictIsRetryable(verdict) {
+  return Boolean(verdict?.retryable) || executionVerdictIsTemporaryQuoteState(verdict);
+}
+
+function executionVerdictAppliesToMode(verdict, mode) {
+  // Capital and diversification are portfolio-specific. A missing executable quote is
+  // a property of the shared Polymarket book, so every live portfolio must use it.
+  return executionVerdictIsOwn(verdict, mode) || executionVerdictIsTemporaryQuoteState(verdict);
+}
+
 function latestLiveExecutionVerdict(item, mode = state.mode) {
   const merged = item?.executionRevalidation && typeof item.executionRevalidation === "object"
-    && executionVerdictIsOwn(item.executionRevalidation, mode)
+    && executionVerdictAppliesToMode(item.executionRevalidation, mode)
     ? item.executionRevalidation
     : null;
   const token = String(item?.tokenId || item?.clobTokenId || item?.assetId || "").trim();
@@ -8643,7 +8663,7 @@ function portfolioCandidateFilterReasons(item, mode = state.mode) {
   // Keep those rows in the shortlist so the next run can retry them after the
   // blocking condition changes. Permanent market/quote failures still filter
   // the row out here.
-  if (executionCheckIsCurrent && String(executionCheck.status || "").toUpperCase() !== "READY" && !executionCheck.retryable) {
+  if (executionCheckIsCurrent && String(executionCheck.status || "").toUpperCase() !== "READY" && !executionVerdictIsRetryable(executionCheck)) {
     const detail = Array.isArray(executionCheck.rejectReasons) && executionCheck.rejectReasons[0]
       ? `: ${executionCheck.rejectReasons[0]}`
       : "";
@@ -8775,6 +8795,13 @@ function candidateRiskBlockReason(item, activeRows = [], evaluationByToken = new
   return "";
 }
 
+// A candidate for an already held market is not a diversification decision at all.
+// It cannot be opened again on the shared live wallet, so it must stay out of the
+// shortlist instead of appearing as a risk-blocked row beside genuinely available bets.
+function candidateAlreadyHeldMarketReason(reason) {
+  return reason === "duplicate token already open" || reason === "same live market already open";
+}
+
 function portfolioCandidateSortValue(item, key, mode = state.mode) {
   const config = portfolioConfigForMode(mode);
   if (key === "riskReward") return evaluationRiskReward(item) ?? -Infinity;
@@ -8837,6 +8864,7 @@ function portfolioCandidateDiagnostics(mode = state.mode) {
   const manuallyExcludedTokenIds = new Set(excludedCandidateTokenIdsForMode(mode));
   const ready = [];
   const riskBlocked = [];
+  const alreadyHeld = [];
   const manuallyExcluded = [];
   const filteredReasonCounts = new Map();
 
@@ -8859,13 +8887,15 @@ function portfolioCandidateDiagnostics(mode = state.mode) {
       expectedValueUsdc: portfolioExpectedValue(item, config),
       portfolioRiskBlockReason: candidateRiskBlockReason(item, activeRows, evaluationByToken),
     };
-    if (row.portfolioRiskBlockReason) riskBlocked.push(row);
+    if (candidateAlreadyHeldMarketReason(row.portfolioRiskBlockReason)) alreadyHeld.push(row);
+    else if (row.portfolioRiskBlockReason) riskBlocked.push(row);
     else ready.push(row);
   }
 
   return {
     ready: sortPortfolioCandidates(ready, mode),
     riskBlocked: sortPortfolioCandidates(riskBlocked, mode),
+    alreadyHeld: sortPortfolioCandidates(alreadyHeld, mode),
     manuallyExcluded: sortPortfolioCandidates(manuallyExcluded, mode),
     filteredReasonCounts,
   };
@@ -8906,6 +8936,9 @@ function showMoreCandidates() {
 function renderPortfolioCandidateRows(rows = [], mode = state.mode, diagnostics = null) {
   const manuallyExcluded = diagnostics?.manuallyExcluded || [];
   const riskBlocked = diagnostics?.riskBlocked || [];
+  // `alreadyHeld` is deliberately absent: this tab is a shortlist of markets that
+  // can still be entered. A same-market wallet position is neither a candidate nor
+  // a diversification warning, and is shown in Opened trades instead.
   const visibleRows = [...rows, ...riskBlocked, ...manuallyExcluded];
   if (!visibleRows.length) {
     const config = portfolioConfigForMode(mode);
@@ -9092,6 +9125,8 @@ function renderPortfolioCandidates() {
   if (els.portfolioCandidatesTitle) els.portfolioCandidatesTitle.textContent = `${label} execution candidates`;
   const blocked = diagnostics.riskBlocked.length;
   const excluded = diagnostics.manuallyExcluded.length;
+  // A directly held market is intentionally not part of the shortlist total. It is
+  // represented by the portfolio's open position/order, not by a candidate row.
   state.candidateTotalCount = rows.length + blocked + excluded;
   if (els.portfolioCandidatesSummary) {
     // The counts are the whole set. The table pages through it, so say how much of it

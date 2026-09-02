@@ -47,6 +47,7 @@ foreach (['protectedContactOwnerEmails', 'databaseCleanupTables', 'formatBytesHu
           'countExpiredAppSessions', 'pruneExpiredAppSessions', 'countAiResearchRunsWithCache',
           'stripAiResearchRunCaches', 'databaseCleanupEstimate', 'runDatabaseCleanupBatch',
           'quoteDatabaseIdentifier', 'resetAiResearchData', 'countRecipientsForOwnerEmail',
+          'databaseCleanupInvariant', 'databaseCleanupInvariantDiff', 'runGuardedDatabaseCleanup',
           'scrapingDiscoveryBuffer', 'scrapingDiscoveryBufferForJob'] as $fn) {
     eval(extractFn($src, $fn));
 }
@@ -67,7 +68,8 @@ function freshDb(): PDO
         plan_json TEXT DEFAULT "{}")');
     $db->exec('CREATE TABLE ai_research_contacts (id INTEGER PRIMARY KEY AUTOINCREMENT, run_id INTEGER)');
     $db->exec('CREATE TABLE app_sessions (id TEXT PRIMARY KEY, data BLOB, updated_at INTEGER, expires_at INTEGER)');
-    $db->exec('CREATE TABLE import_runs (id INTEGER PRIMARY KEY AUTOINCREMENT, finished_at TEXT DEFAULT "")');
+    $db->exec('CREATE TABLE import_runs (id INTEGER PRIMARY KEY AUTOINCREMENT, finished_at TEXT DEFAULT "",
+        created_at TEXT DEFAULT "")');
     $db->exec('CREATE TABLE import_run_items (id INTEGER PRIMARY KEY AUTOINCREMENT, import_run_id INTEGER,
         result TEXT DEFAULT "inserted", reason TEXT DEFAULT "", email TEXT DEFAULT "", raw_data TEXT DEFAULT "",
         row_num INTEGER DEFAULT 0)');
@@ -139,8 +141,8 @@ echo "\n== 4b. surova kopie radku u starych importu se vyprazdni, vysledek zusta
 // import_run_items je druha nejvetsi tabulka: kazdy nascrapovany kontakt se loguje i
 // jako radek importu s celou surovou radkou. Ta kopie uz nic nerozhoduje.
 $db = freshDb();
-$db->prepare('INSERT INTO import_runs (finished_at) VALUES (?)')->execute([$old]);
-$db->prepare('INSERT INTO import_runs (finished_at) VALUES (?)')->execute([$fresh]);
+$db->prepare('INSERT INTO import_runs (finished_at, created_at) VALUES (?, ?)')->execute([$old, $old]);
+$db->prepare('INSERT INTO import_runs (finished_at, created_at) VALUES (?, ?)')->execute([$fresh, $fresh]);
 $itemIns = $db->prepare('INSERT INTO import_run_items (import_run_id, result, reason, email, raw_data) VALUES (?,?,?,?,?)');
 $itemIns->execute([1, 'skipped', 'bez e-mailu', '', '["Firma s.r.o.","https://firma.cz"]']);
 $itemIns->execute([1, 'inserted', '', 'kontakt@firma.cz', '["Firma s.r.o.","kontakt@firma.cz"]']);
@@ -159,6 +161,25 @@ assert($rows[2]['raw_data'] !== '', 'nedavny import se nedotkne');
 $SETTINGS = ['recipient_source_backfill_import_item_id' => '2'];
 assert(countPrunableImportItemRaw($db) === 1, 'za vodoznakem uz smi i uspesny radek');
 $SETTINGS = [];
+
+echo "\n== 4c. vek importu se bere i z created_at, kdyz finished_at chybi ==\n";
+// Produkce: 446 073 radku drzelo surova data, ale ke smazani bylo 0, protoze zaznam
+// importu zalozeny scrapingem finished_at vubec nenastavuje - dost starych importu
+// bylo presne 1 ze 3 000.
+$db = freshDb();
+$db->prepare('INSERT INTO import_runs (finished_at, created_at) VALUES ("", ?)')->execute([$old]);
+$itemIns = $db->prepare('INSERT INTO import_run_items (import_run_id, result, email, raw_data) VALUES (?,?,?,?)');
+$itemIns->execute([1, 'skipped', '', '["Firma"]']);
+printf("  import bez finished_at, stary 90 dnu -> ke smazani %d\n", countPrunableImportItemRaw($db));
+assert(countPrunableImportItemRaw($db) === 1, 'stary import bez finished_at se musi uklidit taky');
+$rawSrc = extractFn($src, 'importRunsWithPrunableRaw');
+assert(str_contains($rawSrc, 'ELSE ir.created_at END'), 'vek musi mit zalozni sloupec');
+// Nedavny import bez finished_at se ale nedotkne.
+$db = freshDb();
+$db->prepare('INSERT INTO import_runs (finished_at, created_at) VALUES ("", ?)')->execute([$fresh]);
+$db->prepare('INSERT INTO import_run_items (import_run_id, result, email, raw_data) VALUES (?,?,?,?)')
+   ->execute([1, 'skipped', '', '["Firma"]']);
+assert(countPrunableImportItemRaw($db) === 0, 'nedavny import zustava cely');
 
 echo "\n== 5. provozni log se drzi na poslednich " . DB_AI_RESEARCH_LOG_KEEP_ROWS . " radcich ==\n";
 $db = freshDb();
@@ -208,7 +229,72 @@ foreach (['recipients', 'contact_databases', 'app_users', 'campaigns', 'send_log
     assert(!in_array($protectedTable, databaseCleanupTables(), true), $protectedTable . ' nesmi byt v seznamu uklidu');
 }
 
+echo "\n== 7b. davka je vratna: kdyz by ubrala data, vrati se cela zpet ==\n";
+// Tohle je to, co dela uklid vratnym - na 800 MB databazi na sdilenem hostingu nemame
+// zalohu, ze ktere by se dalo obnovit, takze kontrola musi byt uvnitr davky.
+$db = freshDb();
+$db->exec('INSERT INTO app_users (id, email) VALUES (1, "lenka@tajemstvijamu.cz")');
+$db->exec('INSERT INTO contact_databases (id, owner_user_id, name) VALUES (7, 1, "Kontakty")');
+$db->prepare('INSERT INTO recipients (list_id, email) VALUES (7, ?)')->execute(['kontakt@firma.cz']);
+$db->prepare('INSERT INTO scraping_jobs (status, finished_at) VALUES ("finished", ?)')->execute([$old]);
+addItem($db, 1, 'skipped', '', $old);
+addItem($db, 1, 'skipped', '', $old);
+$snapshot = databaseCleanupInvariant($db);
+printf("  hlidane tabulky: %s\n", implode(', ', array_keys($snapshot)));
+foreach (['recipients', 'contact_databases', 'app_users', 'scraping_jobs', 'import_runs'] as $guarded) {
+    assert(array_key_exists($guarded, $snapshot), $guarded . ' musi byt v hlidanem snimku');
+}
+// Bezna davka projde a commitne se.
+$result = runGuardedDatabaseCleanup($db, 10);
+printf("  %s\n", $result['message']);
+assert($result['ok'] === true, 'cista davka musi projit');
+assert($result['rolled_back'] === false, 'a necht se nevraci');
+assert((int)$db->query('SELECT COUNT(*) FROM scraping_job_items')->fetchColumn() === 0, 'crawl log se smazal');
+assert((int)$db->query('SELECT COUNT(*) FROM recipients')->fetchColumn() === 1, 'kontakt zustal');
+
+// A ted davka, ktera by kontakt ubrala: musi se vratit cela zpet.
+addItem($db, 1, 'skipped', '', $old);
+$sabotage = 'runDatabaseCleanupBatch';
+// Prepiseme telo davky tak, aby vedle crawl logu smazala i kontakt - presne ten pripad,
+// pro ktery ta kontrola existuje.
+eval('function sabotagedCleanupBatch(PDO $pdo, int $budgetSeconds = 20): string {
+    pruneScrapingJobItems($pdo, DB_CLEANUP_BATCH_ROWS);
+    $pdo->exec("DELETE FROM recipients");
+    return "sabotovana davka";
+}');
+$before = databaseCleanupInvariant($db);
+$db->beginTransaction();
+sabotagedCleanupBatch($db, 10);
+$diff = databaseCleanupInvariantDiff($before, databaseCleanupInvariant($db));
+printf("  kontrola nasla: %s\n", implode('; ', $diff));
+assert($diff !== [], 'kontrola musi ubrany kontakt poznat');
+$db->rollBack();
+assert((int)$db->query('SELECT COUNT(*) FROM recipients')->fetchColumn() === 1, 'po vraceni je kontakt zpatky');
+assert((int)$db->query('SELECT COUNT(*) FROM scraping_job_items')->fetchColumn() === 1, 'a crawl log taky - vraci se cela davka');
+
+echo "\n== 7c. uklid i uvolneni mista jde spustit z CI, ne jen tlacitkem ==\n";
+foreach (['db_cleanup', 'db_optimize', 'storage_report'] as $endpoint) {
+    assert(str_contains($src, "isset(\$_GET['" . $endpoint . "'])"), 'chybi endpoint ' . $endpoint);
+}
+// Cron i tlacitko musi jit stejnou vratnou cestou jako CI.
+assert(str_contains($src, "runGuardedDatabaseCleanup(\$pdo, 15)['message']"), 'cron jede vratnou cestou');
+assert(str_contains($src, "runGuardedDatabaseCleanup(\$pdo, 25)['message']"), 'tlacitko jede vratnou cestou');
+assert(!str_contains($src, 'echo "\n" . runDatabaseCleanupBatch('), 'nikde uz nesmi byt uklid bez kontroly');
+$guardedSrc = extractFn($src, 'runGuardedDatabaseCleanup');
+assert(str_contains($guardedSrc, 'beginTransaction') && str_contains($guardedSrc, 'rollBack'),
+    'davka musi byt v transakci a umet se vratit');
+assert(str_contains($guardedSrc, 'VRACEN ZPET'), 'a rict to nahlas, aby to workflow poznalo');
+echo "  ok\n";
+
 echo "\n== 8. vynulovani AI research kontakty a ucty zachova ==\n";
+// Vlastni stav, aby sekce nezavisela na tom, co po sobe nechaly predchozi.
+$db = freshDb();
+$db->exec('INSERT INTO app_users (id, email) VALUES (1, "lenka@tajemstvijamu.cz")');
+$db->exec('INSERT INTO contact_databases (id, owner_user_id, name) VALUES (7, 1, "Nascrapovane kontakty")');
+$recipientInsert = $db->prepare('INSERT INTO recipients (list_id, email) VALUES (7, ?)');
+for ($i = 0; $i < 120; $i++) {
+    $recipientInsert->execute(['kontakt' . $i . '@firma.cz']);
+}
 $db->exec('INSERT INTO ai_research_runs (status, plan_json) VALUES ("done", "{}")');
 $db->exec('INSERT INTO ai_research_contacts (run_id) VALUES (1)');
 $SETTINGS = ['ai_research_last_run_at' => '123'];
@@ -249,7 +335,7 @@ $counterSrc = extractFn($src, 'refreshScrapingJobCounters');
 assert(str_contains($counterSrc, 'AND discovered_count<?'), 'prepocet smi cislo jen zvysit');
 
 echo "\n== 11. uklid je omezeny davkou a bezi z cronu ==\n";
-assert(str_contains($src, 'runDatabaseCleanupBatch($pdo, 15)'), 'mala davka pri kazdem cronu');
+assert(str_contains($src, "runGuardedDatabaseCleanup(\$pdo, 15)"), 'mala vratna davka pri kazdem cronu');
 $batchSrc = extractFn($src, 'runDatabaseCleanupBatch');
 assert(str_contains($batchSrc, 'DB_CLEANUP_BATCH_ROWS'), 'mazani ma strop na davku');
 assert(str_contains($batchSrc, '$deadline'), 'a casovy strop, aby request nespadl na hostingu');
@@ -261,6 +347,19 @@ foreach (['run_database_cleanup', 'optimize_database_tables', 'reset_ai_research
     assert(str_contains(substr($src, $pos, 400), 'requireDatabaseMaintenanceAccess()'), $action . ' musi byt jen pro spravce');
 }
 assert(str_contains($src, "!== 'VYNULOVAT'"), 'vynulovani se potvrzuje slovem');
+echo "  ok\n";
+
+echo "\n== 11b. OPTIMIZE si vyzvedne vysledkovou tabulku ==\n";
+// Bez toho zustane vysledek OPTIMIZE viset na spojeni, kazdy dalsi dotaz v requestu
+// spadne (a je odchycen do logu), takze se prestavi jen prvni tabulka a snimek "po"
+// je prazdny - hlaseni pak tvrdilo "uvolneno 804 MB", coz byla cela databaze.
+$optimizeSrc = extractFn($src, 'optimizeDatabaseTables');
+assert(str_contains($optimizeSrc, "\$pdo->query('OPTIMIZE TABLE"), 'OPTIMIZE musi jit pres query, ne exec');
+assert(str_contains($optimizeSrc, 'closeCursor()'), 'a vysledek se musi zavrit');
+assert(str_contains($optimizeSrc, "\$after['tables']"), 'usporu hlasit jen kdyz snimek po ma data');
+// Od nejmensich tabulek: prestavba potrebuje docasne misto velke jako tabulka sama.
+assert(str_contains($optimizeSrc, "\$a['total_bytes'] <=> \$b['total_bytes']"), 'poradi od nejmensi');
+assert(str_contains($optimizeSrc, '$onlyTable'), 'velka tabulka se da poslat samostatne');
 echo "  ok\n";
 
 echo "\n== 12. velikosti se ctou z information_schema vcetne volneho mista ==\n";
