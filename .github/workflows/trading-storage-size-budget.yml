@@ -1,0 +1,50 @@
+name: Trading Storage Size Budget
+
+# Read-only measurement, manual only. Reports the Trading tables' size and, against a
+# recorded baseline, how much the database has grown -- checked against the 300 MB budget
+# the migration must stay inside. Reads api.php?action=storage-status, which needs no
+# credentials. Nothing is written to production.
+#
+# With save_baseline, the run records today's sizes and uploads the file as an artifact to
+# be committed; without it, the run compares against the committed baseline and fails when
+# the growth exceeds the budget.
+on:
+  workflow_dispatch:
+    inputs:
+      save_baseline:
+        description: "Record today's sizes as the baseline instead of comparing"
+        required: false
+        default: false
+        type: boolean
+      budget_mb:
+        description: "Growth budget in MB"
+        required: false
+        default: "300"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  measure:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Measure the storage size budget
+        working-directory: trading
+        env:
+          STORAGE_BUDGET_MB: ${{ inputs.budget_mb || '300' }}
+        run: node tools/storage-size-budget.mjs ${{ inputs.save_baseline && '--save-baseline' || '' }}
+
+      - name: Upload the recorded baseline
+        if: ${{ inputs.save_baseline }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: storage-size-baseline
+          path: trading/data/storage-size-baseline.json
+          if-no-files-found: error
