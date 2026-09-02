@@ -344,6 +344,53 @@ async function main() {
   }
   console.log(`   /positions ${fieldNames(positions).join(", ") || "(none)"}`);
 
+  // 3c. Is the POSITION itself arriving twice? Nothing in the closed-row builders
+  //     multiplies anything -- normalizePosition copies size and initialValue straight from
+  //     the API, and closedRowsFromResolvedPositions spreads the position through unchanged
+  //     -- so a served row carrying exactly double both must have been handed double.
+  //     /positions returned far more rows than the account holds markets, which makes
+  //     "the same market listed more than once" the thing to measure rather than assume.
+  const positionKey = (row) => [
+    String(row.conditionId || row.slug || row.title || "").toLowerCase(),
+    String(row.outcome || "").trim().toLowerCase(),
+  ].join("|");
+  const apiByKey = new Map();
+  for (const row of positions) {
+    const key = positionKey(row);
+    if (!apiByKey.has(key)) apiByKey.set(key, []);
+    apiByKey.get(key).push(row);
+  }
+  const repeated = [...apiByKey.entries()].filter(([, rows]) => rows.length > 1);
+  console.log(`\n== does /positions list the same market and outcome more than once?`);
+  console.log(`   rows ${positions.length}   distinct market+outcome ${apiByKey.size}   repeated ${repeated.length}`);
+  for (const [key, rows] of repeated.slice(0, 10)) {
+    console.log(`   ${key.slice(0, 70)}`);
+    for (const row of rows) {
+      console.log(`      size ${number(row.size, 0).toFixed(4)}   initialValue ${money(number(row.initialValue))}`
+        + `   avgPrice ${pct(number(row.avgPrice))}   curPrice ${pct(number(row.curPrice))}`
+        + `   redeemable ${row.redeemable}   negRisk ${row.negativeRisk}   mergeable ${row.mergeable}`);
+    }
+  }
+
+  // 3d. The open positions, served against the API, so the comparison covers rows that
+  //     have not closed yet. If a held row is already doubled, the fault is upstream of
+  //     anything the closing logic does.
+  const servedPositions = Array.isArray(liveState?.positions) ? liveState.positions : [];
+  console.log(`\n== served open positions against /positions (${servedPositions.length} served)`);
+  let doubledOpen = 0;
+  for (const served of servedPositions) {
+    const apiRows = apiByKey.get(positionKey(served)) || [];
+    const apiSize = apiRows.reduce((sum, row) => sum + number(row.size, 0), 0);
+    const apiStake = apiRows.reduce((sum, row) => sum + number(row.initialValue, 0), 0);
+    const servedSize = number(served.shares, 0);
+    const ratio = apiSize > 0 ? servedSize / apiSize : null;
+    if (ratio != null && Math.abs(ratio - 2) < 0.02) doubledOpen += 1;
+    console.log(`   ${String(served.question || "?").slice(0, 52).padEnd(52)} served ${servedSize.toFixed(4)} sh / ${money(number(served.stakeUsdc))}`
+      + `   api(${apiRows.length}) ${apiSize.toFixed(4)} sh / ${money(apiStake)}`
+      + `   ratio ${ratio == null ? "-" : ratio.toFixed(4)}`);
+  }
+  console.log(`   -> served open rows carrying exactly double the API size: ${doubledOpen}`);
+
   // 4. The rows for the screenshotted markets, from the raw feeds.
   console.log(`\n== raw rows for /${FILTER.source}/i`);
   for (const row of positions.filter(matchesFilter).slice(0, 6)) {
