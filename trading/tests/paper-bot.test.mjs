@@ -8530,11 +8530,18 @@ test("overview: the table shows the two halves of risk as their own columns", ()
 
 // -- A resting order the account cannot honour ------------------------------------------
 //
-// Requested: keep adding orders while capital is available, and if an order should become a
-// position with no capital to fund it, cancel every order. Placing stays permissive -- an
-// offer nobody takes costs nothing -- so the brake goes where the promise comes due. On
-// production the placing side never ran out: three portfolios queued roughly twice their
+// Originally requested: keep adding orders while capital is available, and if one should
+// become a position with no capital to fund it, cancel every order. Placing stays permissive
+// -- an offer nobody takes costs nothing -- so the brake goes where the promise comes due.
+// On production the placing side never ran out: three portfolios queued roughly twice their
 // balance in three hours, one opening on all 24 of its last runs.
+//
+// Requested since, and what these tests now pin: an unfilled order is discarded only when
+// its event is resolved. Cancelling gave up a chance that cost nothing to hold, on the
+// strength of a balance that changes every pass, and it took orders down with it that had
+// not reached their price at all. The brake stays exactly where it was -- the FILL is still
+// refused, so no position opens on money the portfolio does not have -- but the order
+// returns to resting and is reconsidered next pass.
 
 const restingOrder = (id, cost = 5) => ({
   id, status: "LIMIT_ORDER_WAITING", stakeUsdc: cost, maxLossUsdc: cost, entryPrice: 0.5,
@@ -8547,12 +8554,12 @@ test("limit orders: a fill the balance can fund is left alone", () => {
   const result = bot.fundLimitOrderFills(before, after, { id: "ewportfolio" });
 
   assert.equal(result.funded, 1);
-  assert.equal(result.cancelled, 0, "nothing is cancelled while the account has room");
+  assert.equal(result.deferred, 0, "nothing is deferred while the account has room");
   assert.equal(result.trades[0].status, "OPEN", "the fill stands");
   assert.equal(result.trades[1].status, "LIMIT_ORDER_WAITING", "and the other order keeps resting");
 });
 
-test("limit orders: an unfundable fill cancels the whole resting queue", () => {
+test("limit orders: an unfundable fill stays on the book instead of being cancelled", () => {
   // 100 balance with 98 already in positions leaves 2. A 5 USDC position does not fit.
   const held = { id: "held", status: "OPEN", stakeUsdc: 98, maxLossUsdc: 98 };
   const before = [held, restingOrder("a"), restingOrder("b"), restingOrder("c")];
@@ -8560,19 +8567,24 @@ test("limit orders: an unfundable fill cancels the whole resting queue", () => {
   const result = bot.fundLimitOrderFills(before, after, { id: "ewportfolio" });
 
   assert.equal(result.funded, 0, "the fill could not be funded");
-  assert.equal(result.trades[1].status, "LIMIT_ORDER_EXPIRED", "so it does not become a position");
-  assert.equal(result.trades[1].cancelledForCapital, true);
-  assert.equal(result.trades[1].realizedPnlUsdc, 0, "an order that never filled costs nothing");
-  // And every other resting order goes with it, which is the point of the rule.
-  assert.equal(result.cancelled, 2);
+  assert.equal(result.deferred, 1);
+  assert.equal(result.trades[1].status, "LIMIT_ORDER_WAITING",
+    "no position opens on money the portfolio does not have, and no chance is thrown away");
+  assert.equal(result.trades[1].fillDeferredForCapital, true, "and it says why this pass passed");
+  assert.notEqual(result.trades[1].cancelledForCapital, true,
+    "an order is discarded only once its event resolves");
+  assert.match(result.trades[1].statusNote, /discarded only when its event ends/);
+
+  // The orders that never reached their price are untouched -- taking them down was the
+  // part of the old rule that gave away the most for the least reason.
   for (const index of [2, 3]) {
-    assert.equal(result.trades[index].status, "LIMIT_ORDER_EXPIRED", `order ${index} must be cancelled`);
-    assert.equal(result.trades[index].cancelledForCapital, true);
+    assert.equal(result.trades[index].status, "LIMIT_ORDER_WAITING", `order ${index} keeps resting`);
+    assert.equal(result.trades[index].fillDeferredForCapital, undefined);
   }
   assert.equal(result.trades[0].status, "OPEN", "positions already held are untouched");
 });
 
-test("limit orders: fills are funded until the balance runs out, then everything goes", () => {
+test("limit orders: fills are funded until the balance runs out, and the rest keep resting", () => {
   // 100 balance, 85 held, so 15 free: three of the four fills fit and the fourth does not.
   const held = { id: "held", status: "OPEN", stakeUsdc: 85, maxLossUsdc: 85 };
   const orders = ["a", "b", "c", "d"].map((id) => restingOrder(id));
@@ -8581,10 +8593,29 @@ test("limit orders: fills are funded until the balance runs out, then everything
   const result = bot.fundLimitOrderFills(before, after, { id: "ewportfolio" });
 
   assert.equal(result.funded, 3, "three 5 USDC positions fit inside 15 USDC");
+  assert.equal(result.deferred, 1);
   assert.equal(result.trades[1].status, "OPEN");
   assert.equal(result.trades[3].status, "OPEN");
-  assert.equal(result.trades[4].status, "LIMIT_ORDER_EXPIRED", "the fourth had nothing left to fund it");
-  assert.equal(result.trades[4].cancelledForCapital, true);
+  assert.equal(result.trades[4].status, "LIMIT_ORDER_WAITING",
+    "the fourth had nothing left to fund it, so it waits rather than dying");
+});
+
+// Each fill is now judged on the capacity actually left, so one large order that does not
+// fit no longer condemns the smaller ones behind it -- under the old rule the first miss
+// set a flag that failed every remaining fill regardless of size.
+test("limit orders: a fill too large to fund does not block a smaller one behind it", () => {
+  // 100 balance less 95 held leaves 5: the 8 USDC fill cannot be funded, the 4 can.
+  const held = { id: "held", status: "OPEN", stakeUsdc: 95, maxLossUsdc: 95 };
+  const big = restingOrder("big", 8);
+  const small = restingOrder("small", 4);
+  const before = [held, big, small];
+  const after = [held, filledFrom(big), filledFrom(small)];
+  const result = bot.fundLimitOrderFills(before, after, { id: "ewportfolio" });
+
+  assert.equal(result.trades[1].status, "LIMIT_ORDER_WAITING", "8 does not fit in 5");
+  assert.equal(result.trades[2].status, "OPEN", "but 4 does, and it is funded");
+  assert.equal(result.funded, 1);
+  assert.equal(result.deferred, 1);
 });
 
 test("limit orders: realized profit and a capital adjustment both raise the balance", () => {
@@ -8597,7 +8628,8 @@ test("limit orders: realized profit and a capital adjustment both raise the bala
   // The same portfolio rebased down to 40 cannot afford it: 40 + 20 - 98 is nothing.
   const rebased = bot.fundLimitOrderFills(before, after, { id: "x", capitalAdjustmentUsdc: -60 });
   assert.equal(rebased.funded, 0);
-  assert.equal(rebased.trades[2].cancelledForCapital, true);
+  assert.equal(rebased.trades[2].status, "LIMIT_ORDER_WAITING");
+  assert.equal(rebased.trades[2].fillDeferredForCapital, true);
 });
 
 test("limit orders: a pass with no fills is left exactly as it was", () => {
@@ -8605,10 +8637,10 @@ test("limit orders: a pass with no fills is left exactly as it was", () => {
   const after = [before[0], before[1]];
   const result = bot.fundLimitOrderFills(before, after, { id: "ewportfolio" });
   assert.equal(result.trades, after, "the same array comes back when there is nothing to fund");
-  assert.equal(result.cancelled, 0);
-  // A portfolio that never rests orders can never reach the cancel path.
+  assert.equal(result.deferred, 0);
+  // A portfolio that never rests orders can never reach the deferral path.
   const marketOnly = [{ id: "p", status: "OPEN", stakeUsdc: 5, maxLossUsdc: 5 }];
-  assert.equal(bot.fundLimitOrderFills(marketOnly, marketOnly, { id: "conservative" }).cancelled, 0);
+  assert.equal(bot.fundLimitOrderFills(marketOnly, marketOnly, { id: "conservative" }).deferred, 0);
 });
 
 test("limit orders: resting capital is not counted against a fill, only positions are", () => {
@@ -8620,7 +8652,7 @@ test("limit orders: resting capital is not counted against a fill, only position
   const after = [held, filledFrom(resting[0]), ...resting.slice(1)];
   const result = bot.fundLimitOrderFills(before, after, { id: "ewportfolio" });
   assert.equal(result.funded, 1, "90 USDC of resting offers reserve nothing against a fill");
-  assert.equal(result.cancelled, 0);
+  assert.equal(result.deferred, 0);
   assert.equal(bot.positionRisk(before), 10, "positionRisk counts held positions only");
   assert.equal(bot.openRisk(before), 100, "openRisk still counts everything open");
 });
@@ -8635,12 +8667,19 @@ test("limit orders: the refresh hands the portfolio to the funding check", () =>
     "and it runs after the fan-out, where every fill on the pass is visible at once");
 });
 
-test("limit orders: a cancelled order reads differently from an expired one", () => {
+// Nothing produces cancelledForCapital any more -- a fill short of capital defers instead
+// -- but rows written before that change still carry it, and a ledger that stops explaining
+// its own history is worse than one carrying a retired label.
+test("limit orders: a previously cancelled order still reads differently from an expired one", () => {
   const app = readFileSync(new URL("../assets/app.js", import.meta.url), "utf8");
   assert.match(app, /trade\.cancelledForCapital/,
     "the browser must tell an account problem apart from an event that simply ended");
   assert.match(app, /Limit order cancelled &middot; no capital/);
   assert.match(app, /Limit order expired &middot; unfilled/);
+
+  const source = readFileSync(new URL("../tools/paper-trading-bot.mjs", import.meta.url), "utf8");
+  assert.ok(!/cancelledForCapital: true/.test(source),
+    "and nothing writes the flag any more: an unfilled order now waits for its event");
 });
 
 // -- Not missing the moment a resting order would have filled ----------------------------

@@ -4667,37 +4667,38 @@ async function markOpenTrade(trade) {
   return awaitingResolution ? pendingResolutionResult() : base;
 }
 
-// A resting order that the account cannot honour is not an order.
+// A fill the account cannot fund does not open, and the order that would have opened it
+// stays where it was: resting, until its own event ends.
 //
-// Placing them stays deliberately permissive: capital held by unfilled orders is not counted
+// Placing orders is deliberately permissive: capital held by unfilled orders is not counted
 // against the next one, because an offer nobody takes costs nothing. Measured on production,
-// the consequence is a queue far larger than the balance behind it -- three portfolios
-// reached roughly twice their own equity within three hours, one of them opening on all 24
-// of its last runs, because nothing in the placing decision ever runs out.
+// the consequence is a queue larger than the balance behind it -- three portfolios reached
+// roughly twice their own equity within three hours, one of them opening on all 24 of its
+// last runs, because nothing in the placing decision ever runs out.
 //
-// So the brake belongs where the promise comes due rather than where it is made. A fill is
-// funded out of capital that is not already in a position; resting orders reserve nothing
-// against it, since they are not exposure. When a fill cannot be funded the portfolio has
-// over-promised, and every remaining resting order is cancelled -- not just the one that
-// did not fit. Refusing them one at a time on later passes would leave the same
-// over-promised queue standing, and the queue is the thing that was wrong.
-function cancelLimitOrderForCapital(trade, note) {
-  const at = nowIso();
+// The brake therefore belongs where the promise comes due, and it is applied by declining
+// the FILL. It used to be applied by cancelling the order too -- and then every other
+// resting order with it, on the reasoning that the over-promised queue was the thing that
+// was wrong. Asked for: an unfilled order is discarded only once its event is resolved. A
+// cancelled order gives up a chance that cost nothing to hold, and gives it up on the
+// strength of a balance that changes every pass -- capital freed by the next settlement
+// would have funded the very fill that was thrown away, and the orders cancelled beside it
+// had not reached their price at all.
+//
+// So an unfundable fill is DEFERRED: the row returns to the resting state it was in before
+// this pass simulated the fill, and gets another chance next pass with whatever capital
+// exists then. Nothing else in the queue is touched. The queue can still out-promise the
+// balance -- that is the accepted cost of not discarding chances -- but it can no longer
+// spend money the portfolio does not have, because the fill itself is what is refused.
+function deferLimitOrderFillForCapital(previous, note) {
   return {
-    ...trade,
-    status: "LIMIT_ORDER_EXPIRED",
-    // Distinguishes this from an order that simply outlived its event. Both are discarded
-    // with no stake spent, so they share the terminal status, but only one of them says
-    // something about the account.
-    cancelledForCapital: true,
-    closedAt: at,
-    resolvedAt: at,
-    currentPrice: null,
-    currentValueUsdc: 0,
-    unrealizedPnlUsdc: 0,
-    unrealizedPnlPct: 0,
-    realizedPnlUsdc: 0,
-    realizedPnlPct: 0,
+    ...previous,
+    // The pre-fill row is already waiting. Stated anyway, so a caller passing something
+    // else cannot quietly leave a half-opened position in the ledger.
+    status: "LIMIT_ORDER_WAITING",
+    // Not a terminal flag: it says why this pass did not open, and the next pass overwrites
+    // it. cancelledForCapital, which it replaces, marked a row as finished for good.
+    fillDeferredForCapital: true,
     statusNote: note,
   };
 }
@@ -4706,7 +4707,7 @@ function fundLimitOrderFills(previousTrades, refreshedTrades, portfolioState) {
   const before = Array.isArray(previousTrades) ? previousTrades : [];
   const filledNow = (trade, index) => String(before[index]?.status || "") === "LIMIT_ORDER_WAITING"
     && String(trade?.status || "") === "OPEN";
-  if (!refreshedTrades.some(filledNow)) return { trades: refreshedTrades, funded: 0, cancelled: 0 };
+  if (!refreshedTrades.some(filledNow)) return { trades: refreshedTrades, funded: 0, deferred: 0 };
 
   const realizedPnl = refreshedTrades.reduce((sum, trade) => sum + Number(trade.realizedPnlUsdc || 0), 0);
   const capitalAdjustment = Number(portfolioState?.capitalAdjustmentUsdc) || 0;
@@ -4715,34 +4716,27 @@ function fundLimitOrderFills(previousTrades, refreshedTrades, portfolioState) {
   // filled on this pass are excluded because they are exactly what is being funded.
   let capacity = balance - positionRisk(refreshedTrades.filter((trade, index) => !filledNow(trade, index)));
 
-  let overPromised = false;
   let funded = 0;
+  let deferred = 0;
   const trades = refreshedTrades.map((trade, index) => {
     if (!filledNow(trade, index)) return trade;
     const cost = Number(trade.maxLossUsdc || trade.stakeUsdc || 0);
-    // Once one fill cannot be funded, the rest of this pass's fills go with it. They are
-    // resting orders too, and the account is already out of room.
-    if (!overPromised && cost <= capacity + 0.00001) {
+    if (cost <= capacity + 0.00001) {
       capacity -= cost;
       funded += 1;
       return trade;
     }
-    overPromised = true;
-    return cancelLimitOrderForCapital(trade, `Resting limit buy reached its fill price but the`
-      + ` portfolio had ${Math.max(0, capacity).toFixed(2)} USDC outside its positions and the`
-      + ` position needs ${cost.toFixed(2)} USDC. Every resting order was cancelled.`);
+    // Each fill is judged on the capacity that is actually left, so a large one that does
+    // not fit no longer condemns the smaller fills behind it. Nothing is cancelled: the
+    // order goes back to resting and is reconsidered next pass.
+    deferred += 1;
+    return deferLimitOrderFillForCapital(before[index], `Resting limit buy reached its fill`
+      + ` price, but the portfolio had ${Math.max(0, capacity).toFixed(2)} USDC outside its`
+      + ` positions and this position needs ${cost.toFixed(2)} USDC. The order stays on the`
+      + ` book and is reconsidered on the next pass; it is discarded only when its event`
+      + ` ends.`);
   });
-  if (!overPromised) return { trades, funded, cancelled: 0 };
-
-  let cancelled = 0;
-  const settled = trades.map((trade) => {
-    if (String(trade?.status || "") !== "LIMIT_ORDER_WAITING") return trade;
-    cancelled += 1;
-    return cancelLimitOrderForCapital(trade, "Cancelled unfilled: another resting order reached"
-      + " its fill price with no capital left outside this portfolio's positions to fund it,"
-      + " so the whole resting queue was cancelled.");
-  });
-  return { trades: settled, funded, cancelled };
+  return { trades, funded, deferred };
 }
 
 // A reversal is deliberately not another candidate-selection pass. It is a separate
@@ -4847,9 +4841,9 @@ async function refreshTrades(trades, portfolioState = null, strategy = null) {
   // every other fill on the same pass, which a per-trade worker cannot see.
   if (!portfolioState) return refreshed;
   const funding = fundLimitOrderFills(trades, refreshed, portfolioState);
-  if (funding.cancelled) {
+  if (funding.deferred) {
     console.warn(`${portfolioState.id}: a resting order reached its fill price with no capital to`
-      + ` fund the position; cancelled ${funding.cancelled} resting order(s)`
+      + ` fund the position; left ${funding.deferred} order(s) resting for a later pass`
       + `${funding.funded ? ` after funding ${funding.funded}` : ""}.`);
   }
   if (!strategy?.reverseOnStopLoss) return funding.trades;
