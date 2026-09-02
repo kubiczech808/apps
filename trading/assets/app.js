@@ -121,6 +121,12 @@ const state = {
   // portfolio's exit timing. This archive lookup is loaded only when its Settings
   // tab is opened and then retained for the current page session.
   portfolioAnalysisOutcomeMap: {},
+  // Trade analysis fetches one portfolio's ledger at a time, because the served paper
+  // state only carries trades for the portfolio the dashboard has selected.
+  tradeAnalysisTrades: {},
+  tradeAnalysisPending: {},
+  tradeAnalysisErrors: {},
+  tradeAnalysisLoadedAt: {},
   portfolioAnalysisOutcomesLoaded: false,
   portfolioAnalysisOutcomesPending: false,
   portfolioAnalysisOutcomesTried: false,
@@ -3832,6 +3838,27 @@ function tradeResultTone(trade) {
   return "filled";
 }
 
+// The market's Polymarket tags, revealed next to the row's own label. There is no room
+// for a tags column in these tables -- they already scroll sideways on a desktop -- and
+// most rows are read without caring about tags, so this stays folded until asked for.
+//
+// Deliberately inline rather than a floating popover: every one of these tables sits
+// inside its own overflow-x:auto scroll container, which clips an absolutely positioned
+// element instead of letting it escape.
+function marketTagsInfo(row = {}) {
+  const tags = portfolioAnalysisTags(row);
+  const label = tags.length
+    ? `Tags: ${tags.join(", ")}`
+    : "No Polymarket tag was recorded for this market";
+  return `<span class="market-tags">
+    <button class="market-tags-button" type="button" data-market-tags-toggle aria-expanded="false"
+      title="${escapeHtml(label)}" aria-label="${escapeHtml(label)}">i</button>
+    <span class="market-tags-list" hidden>${tags.length
+      ? tags.map((tag) => `<span class="market-tag">${escapeHtml(tag)}</span>`).join("")
+      : '<span class="market-tag muted">no tags recorded</span>'}</span>
+  </span>`;
+}
+
 function tradeTypeBadge(trade) {
   // "Waiting" is only true while the market can still fill it. Once the event is over the
   // bid is holding collateral for nothing, and the next execution pass withdraws it --
@@ -4019,7 +4046,7 @@ function renderTradeRows(trades, emptyText, options = {}) {
               ${signedMoney(tradePnlValue(trade))}
             </td>
             <td class="trade-market-cell" data-label="Market">
-              ${tradeTypeBadge(trade)}
+              ${tradeTypeBadge(trade)}${marketTagsInfo(trade)}
               ${marketAnchor(trade)}
             </td>
             <td data-label="Win p.a.">${potentialAnnualizedCell(trade)}</td>
@@ -4080,7 +4107,7 @@ function renderUnfilledLimitOrderRows(orders = []) {
                   : '<span class="order-chip pending">Awaiting settlement</span>'}</td>
               <td data-label="Would-be P/L" class="${counterfactualPnl == null ? "" : pnlClass(counterfactualPnl)}">${
                 counterfactualPnl == null ? "-" : signedMoney(counterfactualPnl)}</td>
-              <td class="trade-market-cell" data-label="Market"><span class="order-chip pending">Unfilled limit order</span>${marketAnchor(order)}</td>
+              <td class="trade-market-cell" data-label="Market"><span class="order-chip pending">Unfilled limit order</span>${marketTagsInfo(order)}${marketAnchor(order)}</td>
               <td data-label="Limit price">${Number.isFinite(limitPrice) ? probability(limitPrice) : "-"}</td>
               <td data-label="Final outcome">${finalPrice == null ? "-" : probability(finalPrice)}</td>
               <td data-label="Opened">${escapeHtml(formatDate(order.openedAt || order.createdAt || order.date || ""))}</td>
@@ -8945,7 +8972,7 @@ function renderPortfolioCandidateRows(rows = [], mode = state.mode, diagnostics 
               <td data-label="Days left">${evaluationDaysLeftCell(item)}</td>
               <td data-label="Market">${marketAnchor(item)}</td>
               <td data-label="Precheck" class="${excluded ? "negative" : (riskBlockedRow ? "warning" : "positive")}">
-                <strong>${precheck}</strong>
+                <strong>${precheck}</strong>${marketTagsInfo(item)}
                 ${status ? `<span>${escapeHtml(status)}</span>` : ""}
                 <label class="candidate-exclusion-control" title="Exclude this candidate from this portfolio's future executions">
                   <input type="checkbox" data-portfolio-candidate-exclude data-portfolio-mode="${escapeHtml(mode)}" data-candidate-token-id="${escapeHtml(String(item.tokenId || item.clobTokenId || item.assetId || ""))}" ${excluded ? "checked" : ""}>
@@ -12751,7 +12778,18 @@ function portfolioAnalysisTags(trade) {
   return [...tags];
 }
 
-function portfolioAnalysisRows(trades, valueForTrade) {
+// A table whose rows are an ordered scale reads by that scale, not by which row happens
+// to hold the most trades. "<= 50%" and ">= 100%" are the ends, so they sort to the ends
+// rather than by the number inside them.
+function portfolioAnalysisValueOrder(value) {
+  const text = String(value || "");
+  if (text.startsWith("<=")) return -Infinity;
+  if (text.startsWith(">=")) return Infinity;
+  const numeric = Number.parseFloat(text);
+  return Number.isFinite(numeric) ? numeric : Number.NaN;
+}
+
+function portfolioAnalysisRows(trades, valueForTrade, { order = "count" } = {}) {
   const groups = new Map();
   for (const trade of trades) {
     const rawValues = valueForTrade(trade);
@@ -12794,7 +12832,17 @@ function portfolioAnalysisRows(trades, valueForTrade) {
       pnlUsdc: Number(row.pnlUsdc.toFixed(4)),
       safeEntryProbability: safeEntryProbability(row.winProbabilities, row.lossProbabilities),
     }))
-    .sort((left, right) => right.trades - left.trades || right.pnlUsdc - left.pnlUsdc || left.value.localeCompare(right.value));
+    .sort((left, right) => {
+      if (order === "value") {
+        const leftOrder = portfolioAnalysisValueOrder(left.value);
+        const rightOrder = portfolioAnalysisValueOrder(right.value);
+        // A row whose value carries no number ("Not recorded") has no place on the scale,
+        // so it goes last instead of being compared against one.
+        if (Number.isNaN(leftOrder) !== Number.isNaN(rightOrder)) return Number.isNaN(leftOrder) ? 1 : -1;
+        if (!Number.isNaN(leftOrder) && leftOrder !== rightOrder) return leftOrder - rightOrder;
+      }
+      return right.trades - left.trades || right.pnlUsdc - left.pnlUsdc || left.value.localeCompare(right.value);
+    });
 }
 
 // The lowest winning entry probability that sits above every losing one: the entry floor
@@ -12819,8 +12867,16 @@ function safeEntryProbability(winProbabilities = [], lossProbabilities = []) {
 function portfolioAnalysisProbabilityBand(trade) {
   const value = portfolioAnalysisProbability(trade);
   if (value == null) return "Not recorded";
-  const lower = Math.max(0, Math.min(90, Math.floor(value * 10) * 10));
-  return `${lower}-${lower + 10}%`;
+  // One row per whole percentage point from 51 to 99, as requested: a ten-point band puts
+  // an entry at 91% and one at 99% in the same row, and those are not the same bet.
+  //
+  // Only entries above an even chance are bet on here, so anything at or below 50% and
+  // anything at a certainty are collected rather than given a point of their own -- a row
+  // per point down to 1% would be a hundred rows to say nothing.
+  const point = Math.round(value * 100);
+  if (point <= 50) return "<= 50%";
+  if (point >= 100) return ">= 100%";
+  return `${point}%`;
 }
 
 function portfolioAnalysisResolutionBand(trade) {
@@ -12856,35 +12912,114 @@ function portfolioAnalysisSummary(trades) {
   };
 }
 
+// Measured in api.php's compact_dashboard_paper_portfolios():
+//
+//   $includeTrades = !$overviewOnly && $selectedStrategyId !== null && (string) $id === $selectedStrategyId;
+//
+// The served paper state carries trades for the ONE portfolio the dashboard has selected.
+// Every other portfolio arrives with an empty `trades` array, so this report was reading
+// nothing for 22 of 23 paper portfolios and calling the result an analysis. Loading all of
+// them on open is not the fix either -- that is 23 full trade ledgers fetched before the
+// page can draw anything -- so each portfolio is fetched on demand instead, and a card
+// that has not been fetched says so rather than reporting an empty history as a finding.
+function tradeAnalysisFetchedTrades(portfolioId) {
+  const rows = state.tradeAnalysisTrades?.[portfolioId];
+  return Array.isArray(rows) ? rows : null;
+}
+
 function portfolioTradeAnalysisPortfolios() {
   const paper = paperPortfolioList(state.botState)
     .filter((portfolio) => portfolio?.archived !== true)
-    .map((portfolio) => ({
-      id: `paper-${portfolio.id}`,
-      label: portfolio.label || portfolio.id || "Paper portfolio",
-      live: false,
-      trades: portfolioAnalysisClosedTrades(paperPortfolioTrades(portfolio)),
-    }));
+    .map((portfolio) => {
+      const id = `paper-${portfolio.id}`;
+      const fetched = tradeAnalysisFetchedTrades(id);
+      // Whatever the dashboard payload happens to hold is still used when nothing has
+      // been fetched: for the selected portfolio that is its real ledger, which would be
+      // silly to hide behind a button.
+      const source = fetched ?? paperPortfolioTrades(portfolio);
+      return {
+        id,
+        strategyId: portfolio.id,
+        label: portfolio.label || portfolio.id || "Paper portfolio",
+        live: false,
+        refreshable: true,
+        loaded: fetched != null || source.length > 0,
+        trades: portfolioAnalysisClosedTrades(source),
+      };
+    });
   const archives = (Array.isArray(state.botState?.paperPortfolioArchives) ? state.botState.paperPortfolioArchives : [])
     .map((archive) => ({
       id: archive.id,
       label: `${archive.label || archive.strategyId || "Paper portfolio"} (archived)`,
       live: false,
       archived: true,
+      // An archive is a frozen snapshot. There is no fresher version of it to fetch, so it
+      // gets no button rather than one that would do nothing.
+      refreshable: false,
+      loaded: true,
       trades: portfolioAnalysisClosedTrades(archive?.snapshot?.trades),
     }));
-  const live = !state.liveState ? [] : dashboardModes()
+  const live = dashboardModes()
     .filter((mode) => isLivePortfolioMode(mode))
     .map((mode) => ({
       id: `live-${liveConfigKeyForMode(mode)}`,
+      mode,
       label: portfolioNameForMode(mode),
       live: true,
-      trades: portfolioAnalysisClosedTrades(
+      refreshable: true,
+      loaded: !!state.liveState,
+      trades: !state.liveState ? [] : portfolioAnalysisClosedTrades(
         liveClosedTrades(state.liveState, mode).map(decorateLiveTradeForTable),
         { live: true },
       ),
     }));
   return [...live, ...paper, ...archives];
+}
+
+// One portfolio's ledger, plus the resolved-outcome archive that grades it. Both are
+// re-read, because a selection only becomes gradable once Polymarket publishes its final
+// price -- a fresh ledger against a stale outcome map would still miss the newest results.
+async function refreshTradeAnalysisPortfolio(portfolioId) {
+  if (!portfolioId || state.tradeAnalysisPending?.[portfolioId]) return;
+  state.tradeAnalysisPending = { ...state.tradeAnalysisPending, [portfolioId]: true };
+  state.tradeAnalysisErrors = { ...state.tradeAnalysisErrors, [portfolioId]: "" };
+  renderPortfolioOptimizationReport();
+  try {
+    const [outcomes] = await Promise.all([
+      fetchApiJson("api.php?action=portfolio-analysis-outcomes").catch(() => null),
+      (async () => {
+        if (portfolioId.startsWith("live-")) {
+          const liveState = await fetchFreshState("live");
+          if (liveState && typeof liveState === "object") state.liveState = liveState;
+          return;
+        }
+        const strategyId = portfolioId.replace(/^paper-/, "");
+        const payload = await fetchJson("data/paper-state.json", { summary: "dashboard", strategyId });
+        const rows = payload?.paperPortfolios?.[strategyId]?.trades;
+        state.tradeAnalysisTrades = {
+          ...state.tradeAnalysisTrades,
+          // An empty array is a real answer -- "this portfolio has closed nothing" -- and
+          // has to be stored as one, or the card would keep offering to load it forever.
+          [portfolioId]: Array.isArray(rows) ? rows : [],
+        };
+      })(),
+    ]);
+    if (outcomes?.outcomes && typeof outcomes.outcomes === "object") {
+      state.portfolioAnalysisOutcomeMap = outcomes.outcomes;
+      state.portfolioAnalysisOutcomesLoaded = true;
+    }
+    state.tradeAnalysisLoadedAt = { ...state.tradeAnalysisLoadedAt, [portfolioId]: new Date().toISOString() };
+  } catch (error) {
+    state.tradeAnalysisErrors = {
+      ...state.tradeAnalysisErrors,
+      [portfolioId]: error?.message || "Could not load this portfolio's trades.",
+    };
+  } finally {
+    const pending = { ...state.tradeAnalysisPending };
+    delete pending[portfolioId];
+    state.tradeAnalysisPending = pending;
+    renderPortfolioOptimizationReport();
+  }
 }
 
 function renderPortfolioTradeAnalysisTable(title, rows, totalTrades, note = "", { safeEntry = false } = {}) {
@@ -12988,13 +13123,31 @@ function renderPortfolioOptimizationReport() {
     </div>
     ${portfolios.map((portfolio) => {
       const summary = portfolioAnalysisSummary(portfolio.trades);
+      const pending = state.tradeAnalysisPending?.[portfolio.id] === true;
+      const loadedAt = state.tradeAnalysisLoadedAt?.[portfolio.id];
+      const error = state.tradeAnalysisErrors?.[portfolio.id];
+      const refreshButton = portfolio.refreshable
+        ? `<button class="execution-button shortlist-refresh-button" type="button" data-trade-analysis-refresh="${escapeHtml(portfolio.id)}"${pending ? " disabled" : ""} title="Re-read this portfolio's closed trades and the resolved-market outcomes that grade them">${pending ? "Refreshing..." : (loadedAt ? "Refresh" : "Load latest")}</button>`
+        : "";
+      // Says plainly which of the three it is, because an unloaded portfolio and one with
+      // no settled selections look identical otherwise -- and reading the first as the
+      // second is exactly the wrong conclusion to draw from this report.
+      const freshness = error
+        ? `<span class="pill error">${escapeHtml(error)}</span>`
+        : (loadedAt
+          ? `<span class="pill">Loaded ${escapeHtml(formatDate(loadedAt))}</span>`
+          : (portfolio.loaded ? "" : '<span class="pill muted">Not loaded yet</span>'));
       return `
         <section class="calculation-section portfolio-optimization-card${portfolio.live ? " live" : ""}">
-          <h3>${escapeHtml(portfolio.label || "Portfolio")}${portfolio.live ? ' <span class="pill">Live</span>' : ""}${portfolio.archived ? ' <span class="pill muted">Archived</span>' : ""}</h3>
+          <div class="portfolio-optimization-card-head">
+            <h3>${escapeHtml(portfolio.label || "Portfolio")}${portfolio.live ? ' <span class="pill">Live</span>' : ""}${portfolio.archived ? ' <span class="pill muted">Archived</span>' : ""}</h3>
+            <div class="portfolio-optimization-card-actions">${freshness}${refreshButton}</div>
+          </div>
           <p class="calculation-note">${formatInteger(summary.trades)} settled selections / ${formatInteger(summary.wins)} wins / ${formatInteger(summary.losses)} losses / full-settlement selection P/L <span class="${pnlClass(summary.pnlUsdc)}">${signedMoney(summary.pnlUsdc)}</span></p>
+          ${portfolio.loaded ? "" : '<p class="calculation-note">This portfolio\'s trades are not in the dashboard payload -- only the selected portfolio\'s are. Use "Load latest" to read its closed trades and grade them against the current resolved-market outcomes.</p>'}
           ${renderPortfolioTradeAnalysisTable("Market type", portfolioAnalysisRows(portfolio.trades, (trade) => portfolioAnalysisMarketType(trade) === "multi" ? "Multi-outcome" : "Yes/No"), summary.trades)}
           ${renderPortfolioTradeAnalysisTable("O/U market", portfolioAnalysisRows(portfolio.trades, (trade) => candidateIsOverUnderMarket(trade) ? "Over / Under" : "Other market"), summary.trades)}
-          ${renderPortfolioTradeAnalysisTable("Entry probability", portfolioAnalysisRows(portfolio.trades, portfolioAnalysisProbabilityBand), summary.trades)}
+          ${renderPortfolioTradeAnalysisTable("Entry probability", portfolioAnalysisRows(portfolio.trades, portfolioAnalysisProbabilityBand, { order: "value" }), summary.trades, "One row per whole percentage point. Points with no settled selection are simply absent.")}
           ${renderPortfolioTradeAnalysisTable("Resolution at entry", portfolioAnalysisRows(portfolio.trades, portfolioAnalysisResolutionBand), summary.trades)}
           ${renderPortfolioTradeAnalysisTable("Volume at entry", portfolioAnalysisRows(portfolio.trades, portfolioAnalysisVolumeBand), summary.trades)}
           ${renderPortfolioTradeAnalysisTable("Tags", portfolioAnalysisRows(portfolio.trades, (trade) => portfolioAnalysisTags(trade).length ? portfolioAnalysisTags(trade) : "Not recorded"), summary.trades, "A position appears once under every tag recorded for its market. \"Clean entry from\" is the lowest winning entry probability that was above every losing one in that tag.", { safeEntry: true })}
@@ -13903,6 +14056,36 @@ els.showOpenOrders?.addEventListener("change", () => {
 els.openedTradesRefresh?.addEventListener("click", refreshOpenedTradesValues);
 els.closedTradesExport?.addEventListener("click", exportClosedTradesCsv);
 els.unfilledLimitOrdersExport?.addEventListener("click", exportUnfilledLimitOrdersCsv);
+
+// One listener on the document, because these buttons live inside four different tables
+// that are each rebuilt from scratch on every render.
+document.addEventListener("click", (event) => {
+  const button = event.target?.closest?.("[data-market-tags-toggle]");
+  // A click anywhere else closes whatever is open, so a stray expanded list does not
+  // follow the reader down the table.
+  document.querySelectorAll("[data-market-tags-toggle][aria-expanded='true']").forEach((open) => {
+    if (open === button) return;
+    open.setAttribute("aria-expanded", "false");
+    const list = open.parentElement?.querySelector(".market-tags-list");
+    if (list) list.hidden = true;
+  });
+  if (!button) return;
+  event.preventDefault();
+  const list = button.parentElement?.querySelector(".market-tags-list");
+  if (!list) return;
+  const open = button.getAttribute("aria-expanded") === "true";
+  button.setAttribute("aria-expanded", open ? "false" : "true");
+  list.hidden = open;
+});
+
+// Delegated, because the report's HTML is rebuilt on every render, which would drop a
+// listener bound to a button inside it.
+els.portfolioOptimizationReport?.addEventListener("click", (event) => {
+  const button = event.target?.closest?.("[data-trade-analysis-refresh]");
+  if (!button) return;
+  event.preventDefault();
+  refreshTradeAnalysisPortfolio(button.dataset.tradeAnalysisRefresh);
+});
 
 state.mode = storedMode();
 state.runLogFilters = storedRunLogFilter(state.mode);

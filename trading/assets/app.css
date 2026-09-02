@@ -2250,6 +2250,27 @@ body.modal-open {
   vertical-align: middle;
 }
 
+/* The per-portfolio load button sits with the title, and wraps under it on a narrow
+   screen rather than squeezing the label. */
+.portfolio-optimization-card-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.portfolio-optimization-card-head h3 {
+  margin: 0;
+}
+
+.portfolio-optimization-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
 .counterfactual-audit-action {
   display: flex;
   align-items: center;
@@ -2571,6 +2592,64 @@ body.modal-open {
   border-color: #f59e0b;
   background: #fffbeb;
   color: #92400e !important;
+}
+
+/* The market's tags, folded behind an info button next to the row's label. Inline flow
+   rather than an absolutely positioned popover: these tables each sit in their own
+   overflow-x:auto container, which would clip one. */
+.market-tags {
+  display: inline-block;
+  margin-left: 4px;
+  vertical-align: middle;
+}
+
+.market-tags-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--soft);
+  color: var(--muted);
+  font-family: inherit;
+  font-size: 10px;
+  font-weight: 800;
+  font-style: italic;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.market-tags-button:hover,
+.market-tags-button[aria-expanded="true"] {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent-dark);
+}
+
+.market-tags-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+  max-width: 260px;
+  margin-top: 4px;
+}
+
+.market-tag {
+  padding: 1px 6px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: #ffffff;
+  color: var(--muted);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.market-tag.muted {
+  background: var(--soft);
+  font-style: italic;
 }
 
 /* A settled row's chip carries its result, so the two verdicts worth reading at a glance

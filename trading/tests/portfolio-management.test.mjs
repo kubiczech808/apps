@@ -143,6 +143,131 @@ test("portfolio trade analysis: grades the selection at settlement, excludes unf
     "wins at 70/75/80 against a loss at 75 leave 80 as the lowest entry that beat every loss");
 });
 
+test("trade analysis: entry probability is broken down by whole percentage point", () => {
+  const band = new Function(`${extractFunction(APP, "portfolioAnalysisProbability")}
+    ${extractFunction(APP, "portfolioAnalysisProbabilityBand")}
+    return portfolioAnalysisProbabilityBand;`)();
+
+  // One row per point, so 91% and 99% stop sharing a row.
+  assert.equal(band({ marketProbability: 0.91 }), "91%");
+  assert.equal(band({ marketProbability: 0.99 }), "99%");
+  assert.equal(band({ marketProbability: 0.51 }), "51%");
+  assert.equal(band({ marketProbability: 0.755 }), "76%", "rounded to the nearest point, not floored to a band");
+  assert.equal(band({ marketProbability: 0.7549 }), "75%");
+  // The ends are collected: a row per point below an even chance would be a hundred rows
+  // describing bets this system does not place.
+  assert.equal(band({ marketProbability: 0.5 }), "<= 50%");
+  assert.equal(band({ marketProbability: 0.2 }), "<= 50%");
+  assert.equal(band({ marketProbability: 1 }), ">= 100%");
+  assert.equal(band({}), "Not recorded");
+
+  const order = new Function(`${extractFunction(APP, "portfolioAnalysisValueOrder")}
+    return portfolioAnalysisValueOrder;`)();
+  assert.equal(order("<= 50%"), -Infinity);
+  assert.equal(order(">= 100%"), Infinity);
+  assert.equal(order("76%"), 76);
+  assert.ok(Number.isNaN(order("Not recorded")), "a row with no number has no place on the scale");
+});
+
+test("trade analysis: a per-point table reads by the scale, with unscaled rows last", () => {
+  const analysis = new Function("state", `
+    ${extractFunction(APP, "isClosedTrade")}
+    ${extractFunction(APP, "isUnfilledLimitOrder")}
+    ${extractFunction(APP, "tradeClosedAt")}
+    ${extractFunction(APP, "numericOrNull")}
+    ${extractFunction(APP, "tradePotentialGain")}
+    ${extractFunction(APP, "tradeCostBasis")}
+    ${extractFunction(APP, "portfolioAnalysisTokenId")}
+    ${extractFunction(APP, "portfolioAnalysisOutcomeFromPrice")}
+    ${extractFunction(APP, "portfolioAnalysisGainIfWon")}
+    ${extractFunction(APP, "portfolioAnalysisPnl")}
+    ${extractFunction(APP, "portfolioAnalysisOutcome")}
+    ${extractFunction(APP, "portfolioAnalysisProbability")}
+    ${extractFunction(APP, "portfolioAnalysisProbabilityBand")}
+    ${extractFunction(APP, "safeEntryProbability")}
+    ${extractFunction(APP, "portfolioAnalysisValueOrder")}
+    ${extractFunction(APP, "portfolioAnalysisRows")}
+    return { portfolioAnalysisRows, portfolioAnalysisProbabilityBand };
+  `)({ portfolioAnalysisOutcomeMap: {} });
+
+  const trade = (probability, status) => ({
+    status,
+    marketProbability: probability,
+    totalCostUsdc: 5,
+    netGainIfWinUsdc: 1,
+  });
+  // Deliberately out of order, and with the busiest point in the middle, so a count sort
+  // and a scale sort cannot agree by accident.
+  const rows = analysis.portfolioAnalysisRows([
+    trade(0.9, "WON"),
+    trade(0.75, "WON"),
+    trade(0.75, "LOST"),
+    trade(0.75, "WON"),
+    trade(0.6, "WON"),
+    { status: "WON", totalCostUsdc: 5, netGainIfWinUsdc: 1 },
+    trade(0.4, "LOST"),
+  ], analysis.portfolioAnalysisProbabilityBand, { order: "value" });
+  assert.deepEqual(rows.map((row) => row.value), ["<= 50%", "60%", "75%", "90%", "Not recorded"]);
+
+  // The default is unchanged, so every other table keeps ordering by weight.
+  const byCount = analysis.portfolioAnalysisRows([
+    trade(0.9, "WON"),
+    trade(0.75, "WON"),
+    trade(0.75, "LOST"),
+  ], analysis.portfolioAnalysisProbabilityBand);
+  assert.deepEqual(byCount.map((row) => row.value), ["75%", "90%"]);
+});
+
+test("trade analysis: each portfolio is loaded on demand, because the payload carries only the selected one", () => {
+  const api = readFileSync(new URL("../api.php", import.meta.url), "utf8");
+  // The measured cause, pinned so a change to it cannot silently un-fix this: the served
+  // paper state includes trades for the selected portfolio only.
+  assert.match(api, /\$includeTrades = !\$overviewOnly && \$selectedStrategyId !== null && \(string\) \$id === \$selectedStrategyId;/,
+    "if this stops being true, the per-portfolio load button is no longer necessary");
+
+  assert.match(APP, /async function refreshTradeAnalysisPortfolio\(portfolioId\)/);
+  assert.match(APP, /data-trade-analysis-refresh="\$\{escapeHtml\(portfolio\.id\)\}"/);
+  assert.match(APP, /\[data-trade-analysis-refresh\]/, "the click handler must be delegated onto the rebuilt report");
+  // Both halves are re-read: a fresh ledger graded against a stale outcome map would
+  // still miss the newest resolutions.
+  const refresh = APP.slice(APP.indexOf("async function refreshTradeAnalysisPortfolio"), APP.indexOf("function renderPortfolioTradeAnalysisTable"));
+  assert.match(refresh, /portfolio-analysis-outcomes/);
+  assert.match(refresh, /summary: "dashboard", strategyId/);
+  assert.match(refresh, /Array\.isArray\(rows\) \? rows : \[\]/,
+    "an empty ledger is a real answer and must be cached as one, or the card offers to load it forever");
+  // Nothing fans out over every portfolio on open.
+  // The leading newline matters: `els.tabButtons.forEach` also appears indented inside
+  // two earlier functions, and matching one of those inverts the slice into nothing.
+  const report = APP.slice(APP.indexOf("function renderPortfolioOptimizationReport"), APP.indexOf("\nels.tabButtons.forEach"));
+  assert.ok(report.length > 500, "the slice must actually contain the report renderer");
+  assert.doesNotMatch(report, /portfolios\.(forEach|map)\([^)]*=>\s*refreshTradeAnalysisPortfolio/,
+    "the report must not refresh every portfolio when it renders");
+  assert.match(report, /Not loaded yet/, "an unloaded portfolio must not read as one with no settled selections");
+});
+
+test("opportunities: an info button reveals the market's tags next to the row's own label", () => {
+  const css = readFileSync(new URL("../assets/app.css", import.meta.url), "utf8");
+
+  assert.match(APP, /function marketTagsInfo\(row = \{\}\)/);
+  assert.match(APP, /portfolioAnalysisTags\(row\)/, "the tags come from the same reader the analysis uses");
+  // All four lists the tags were asked for: opened and closed positions share one table.
+  assert.match(APP, /\$\{tradeTypeBadge\(trade\)\}\$\{marketTagsInfo\(trade\)\}/,
+    "opened and closed positions");
+  assert.match(APP, /Unfilled limit order<\/span>\$\{marketTagsInfo\(order\)\}/,
+    "unfilled limit orders");
+  assert.match(APP, /<strong>\$\{precheck\}<\/strong>\$\{marketTagsInfo\(item\)\}/,
+    "execution candidates");
+
+  assert.match(APP, /\[data-market-tags-toggle\]/, "the toggle is delegated onto the document");
+  assert.match(APP, /aria-expanded/, "the button states whether it is open");
+  assert.match(css, /\.market-tags-list \{/);
+  // An absolutely positioned popover would be clipped by each table's own scroll
+  // container, so the list has to sit in normal flow.
+  const tagCss = css.slice(css.indexOf(".market-tags {"), css.indexOf(".market-tag.muted"));
+  assert.doesNotMatch(tagCss, /position:\s*absolute/,
+    "these tables each scroll sideways, which would clip an absolutely positioned list");
+});
+
 test("trade analysis: the clean-entry threshold describes the history rather than guessing at it", () => {
   const safeEntry = new Function(`${extractFunction(APP, "safeEntryProbability")}\nreturn safeEntryProbability;`)();
 
