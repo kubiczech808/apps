@@ -97,11 +97,13 @@ test("portfolio trade analysis: grades the selection at settlement, excludes unf
     ${extractFunction(APP, "portfolioAnalysisPnl")}
     ${extractFunction(APP, "portfolioAnalysisOutcome")}
     ${extractFunction(APP, "portfolioAnalysisClosedTrades")}
+    ${extractFunction(APP, "portfolioAnalysisProbability")}
+    ${extractFunction(APP, "safeEntryProbability")}
     ${extractFunction(APP, "portfolioAnalysisRows")}
     ${extractFunction(APP, "portfolioAnalysisSummary")}
     ${extractFunction(APP, "portfolioAnalysisTag")}
     ${extractFunction(APP, "portfolioAnalysisTags")}
-    return { portfolioAnalysisClosedTrades, portfolioAnalysisPnl, portfolioAnalysisRows, portfolioAnalysisSummary, portfolioAnalysisTags };
+    return { portfolioAnalysisClosedTrades, portfolioAnalysisPnl, portfolioAnalysisRows, portfolioAnalysisSummary, portfolioAnalysisTags, safeEntryProbability };
   `)({ portfolioAnalysisOutcomeMap: { soldWin: 1, stoppedWin: 1, stoppedLoss: 0 } });
   const ledger = [
     { id: "before", status: "WON", closedAt: "2026-08-27T23:00:00+02:00", totalCostUsdc: 5, netGainIfWinUsdc: 1, marketType: "binary" },
@@ -118,7 +120,7 @@ test("portfolio trade analysis: grades the selection at settlement, excludes unf
   assert.deepEqual(live.map((trade) => trade.id), ["win", "loss", "sold-win", "stopped-win", "stopped-loss"]);
   assert.deepEqual(analysis.portfolioAnalysisSummary(live), { trades: 5, wins: 3, losses: 2, pnlUsdc: -8.1 });
   const types = analysis.portfolioAnalysisRows(live, (trade) => trade.marketType);
-  assert.deepEqual(types, [
+  assert.deepEqual(types.map(({ winProbabilities, lossProbabilities, safeEntryProbability, ...row }) => row), [
     { value: "binary", trades: 3, wins: 3, losses: 0, winPnlUsdc: 1.9, lossPnlUsdc: 0, pnlUsdc: 1.9 },
     { value: "multi", trades: 2, wins: 0, losses: 2, winPnlUsdc: 0, lossPnlUsdc: -10, pnlUsdc: -10 },
   ]);
@@ -129,6 +131,37 @@ test("portfolio trade analysis: grades the selection at settlement, excludes unf
   assert.match(APP, /candidateIsOverUnderMarket\(trade\)/, "the report must include the requested O\/U split");
   assert.doesNotMatch(APP.slice(APP.indexOf("function portfolioAnalysisRows"), APP.indexOf("function renderPortfolioOptimizationReport")), /earlyExits/,
     "selection analysis must not present a sale as a third outcome");
+
+  // The requested tag column: the lowest winning entry that cleared every losing one.
+  const banded = analysis.portfolioAnalysisRows([
+    { status: "WON", marketProbability: 0.7, totalCostUsdc: 5, netGainIfWinUsdc: 1, tags: ["tennis"] },
+    { status: "WON", marketProbability: 0.75, totalCostUsdc: 5, netGainIfWinUsdc: 1, tags: ["tennis"] },
+    { status: "WON", marketProbability: 0.8, totalCostUsdc: 5, netGainIfWinUsdc: 1, tags: ["tennis"] },
+    { status: "LOST", marketProbability: 0.75, totalCostUsdc: 5, netGainIfWinUsdc: 1, tags: ["tennis"] },
+  ], (trade) => analysis.portfolioAnalysisTags(trade));
+  assert.equal(banded[0].safeEntryProbability, 0.8,
+    "wins at 70/75/80 against a loss at 75 leave 80 as the lowest entry that beat every loss");
+});
+
+test("trade analysis: the clean-entry threshold describes the history rather than guessing at it", () => {
+  const safeEntry = new Function(`${extractFunction(APP, "safeEntryProbability")}\nreturn safeEntryProbability;`)();
+
+  // The example as given: wins 70, 75, 80 and a loss at 75 -> 80.
+  assert.equal(safeEntry([0.7, 0.75, 0.8], [0.75]), 0.8);
+  // It clears every loss, not just the nearest one.
+  assert.equal(safeEntry([0.7, 0.8, 0.9], [0.6, 0.85]), 0.9);
+  // Ties do not clear: an entry equal to a losing one did lose at that probability.
+  assert.equal(safeEntry([0.75], [0.75]), null);
+  // No winner above the worst loss means no such floor exists, so nothing is invented.
+  assert.equal(safeEntry([0.6, 0.7], [0.9]), null);
+  assert.equal(safeEntry([], [0.5]), null);
+  // A group that never lost: every entry already beat every loss, so the answer is its
+  // lowest winner rather than an absence.
+  assert.equal(safeEntry([0.82, 0.6, 0.91], []), 0.6);
+  // Unrecorded probabilities are skipped, never read as zero -- a zero would look like
+  // the safest possible entry and pull the whole column down.
+  assert.equal(safeEntry([null, 0.8, undefined, NaN], [0.75]), 0.8);
+  assert.equal(safeEntry([0.8], [null, 0.95]), null);
 });
 
 test("created portfolios: a config carrying one is stored beside the shipped four", () => {

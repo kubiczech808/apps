@@ -12766,16 +12766,21 @@ function portfolioAnalysisRows(trades, valueForTrade) {
         winPnlUsdc: 0,
         lossPnlUsdc: 0,
         pnlUsdc: 0,
+        winProbabilities: [],
+        lossProbabilities: [],
       };
       const pnl = portfolioAnalysisPnl(trade) || 0;
       const outcome = portfolioAnalysisOutcome(trade);
+      const probability = portfolioAnalysisProbability(trade);
       row.trades += 1;
       if (outcome === true) {
         row.wins += 1;
         row.winPnlUsdc += pnl;
+        if (probability != null) row.winProbabilities.push(probability);
       } else if (outcome === false) {
         row.losses += 1;
         row.lossPnlUsdc += pnl;
+        if (probability != null) row.lossProbabilities.push(probability);
       }
       row.pnlUsdc += pnl;
       groups.set(value, row);
@@ -12787,8 +12792,28 @@ function portfolioAnalysisRows(trades, valueForTrade) {
       winPnlUsdc: Number(row.winPnlUsdc.toFixed(4)),
       lossPnlUsdc: Number(row.lossPnlUsdc.toFixed(4)),
       pnlUsdc: Number(row.pnlUsdc.toFixed(4)),
+      safeEntryProbability: safeEntryProbability(row.winProbabilities, row.lossProbabilities),
     }))
     .sort((left, right) => right.trades - left.trades || right.pnlUsdc - left.pnlUsdc || left.value.localeCompare(right.value));
+}
+
+// The lowest winning entry probability that sits above every losing one: the entry floor
+// that, applied to this group's history, would have taken winners and no losers. With
+// wins at 70, 75 and 80 against a loss at 75 the answer is 80 -- 70 and 75 do not clear
+// the losing 75, and 80 does.
+//
+// It is a description of what happened, not a prediction, so the two ways it can fail to
+// exist are kept apart rather than both reading as a number. No winner clears the worst
+// loss -> null, because there is no such floor. No loss at all -> the lowest winner,
+// because every entry in the group already was above every loss.
+function safeEntryProbability(winProbabilities = [], lossProbabilities = []) {
+  const wins = winProbabilities.filter((value) => Number.isFinite(value));
+  if (!wins.length) return null;
+  const losses = lossProbabilities.filter((value) => Number.isFinite(value));
+  if (!losses.length) return Math.min(...wins);
+  const worstLoss = Math.max(...losses);
+  const clearing = wins.filter((value) => value > worstLoss);
+  return clearing.length ? Math.min(...clearing) : null;
 }
 
 function portfolioAnalysisProbabilityBand(trade) {
@@ -12862,7 +12887,23 @@ function portfolioTradeAnalysisPortfolios() {
   return [...live, ...paper, ...archives];
 }
 
-function renderPortfolioTradeAnalysisTable(title, rows, totalTrades, note = "") {
+function renderPortfolioTradeAnalysisTable(title, rows, totalTrades, note = "", { safeEntry = false } = {}) {
+  const columns = safeEntry ? 6 : 5;
+  const safeEntryCell = (row) => {
+    if (!safeEntry) return "";
+    if (row.safeEntryProbability == null) {
+      // Two different absences, and the reason matters: with no winner above the worst
+      // loss there is no such floor, and with no winner at all there is nothing to read.
+      const reason = row.wins
+        ? "No winning entry in this group was above its worst losing entry, so no entry floor would have avoided every loss."
+        : "No winning selection in this group yet.";
+      return `<td title="${escapeHtml(reason)}">-</td>`;
+    }
+    const clean = !row.losses;
+    return `<td title="${escapeHtml(clean
+      ? "No losing selection in this group, so this is simply its lowest winning entry."
+      : "The lowest winning entry above every losing entry in this group.")}">${probability(row.safeEntryProbability)}${clean ? " *" : ""}</td>`;
+  };
   return `
     <section class="counterfactual-audit-parameter">
       <div>
@@ -12871,19 +12912,22 @@ function renderPortfolioTradeAnalysisTable(title, rows, totalTrades, note = "") 
       </div>
       <div class="calculation-table-wrap">
         <table class="calculation-table">
-          <thead><tr><th>Value</th><th>In group</th><th>W / L</th><th>Losses</th><th>Selection P/L</th></tr></thead>
+          <thead><tr><th>Value</th><th>In group</th><th>W / L</th><th>Losses</th>${
+            safeEntry ? '<th title="The lowest winning entry probability that was above every losing one in this group. With wins at 70, 75 and 80 against a loss at 75 it reads 80: the entry floor that would have taken winners and no losers. A * marks a group that never lost, where it is simply the lowest winning entry.">Clean entry from</th>' : ""
+          }<th>Selection P/L</th></tr></thead>
           <tbody>${rows.length ? rows.map((row) => `
             <tr>
               <td>${escapeHtml(row.value)}</td>
               <td>${formatInteger(row.trades)} / ${formatInteger(totalTrades)} (${totalTrades ? percent(row.trades / totalTrades) : "-"})</td>
               <td>${formatInteger(row.wins)} / ${formatInteger(row.losses)}</td>
               <td>${formatInteger(row.losses)} / ${formatInteger(row.trades)} (${row.trades ? percent(row.losses / row.trades) : "-"})</td>
+              ${safeEntryCell(row)}
               <td class="${pnlClass(row.pnlUsdc)}">
                 ${signedMoney(row.pnlUsdc)}
                 <span class="selection-pnl-breakdown">wins ${signedMoney(row.winPnlUsdc)} / losses ${signedMoney(row.lossPnlUsdc)}</span>
               </td>
             </tr>
-          `).join("") : '<tr><td colspan="5">No closed positions with a recorded value.</td></tr>'}</tbody>
+          `).join("") : `<tr><td colspan="${columns}">No closed positions with a recorded value.</td></tr>`}</tbody>
         </table>
       </div>
     </section>
@@ -12953,7 +12997,7 @@ function renderPortfolioOptimizationReport() {
           ${renderPortfolioTradeAnalysisTable("Entry probability", portfolioAnalysisRows(portfolio.trades, portfolioAnalysisProbabilityBand), summary.trades)}
           ${renderPortfolioTradeAnalysisTable("Resolution at entry", portfolioAnalysisRows(portfolio.trades, portfolioAnalysisResolutionBand), summary.trades)}
           ${renderPortfolioTradeAnalysisTable("Volume at entry", portfolioAnalysisRows(portfolio.trades, portfolioAnalysisVolumeBand), summary.trades)}
-          ${renderPortfolioTradeAnalysisTable("Tags", portfolioAnalysisRows(portfolio.trades, (trade) => portfolioAnalysisTags(trade).length ? portfolioAnalysisTags(trade) : "Not recorded"), summary.trades, "A position appears once under every tag recorded for its market.")}
+          ${renderPortfolioTradeAnalysisTable("Tags", portfolioAnalysisRows(portfolio.trades, (trade) => portfolioAnalysisTags(trade).length ? portfolioAnalysisTags(trade) : "Not recorded"), summary.trades, "A position appears once under every tag recorded for its market. \"Clean entry from\" is the lowest winning entry probability that was above every losing one in that tag.", { safeEntry: true })}
         </section>
       `;
     }).join("")}
