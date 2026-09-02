@@ -1,0 +1,21 @@
+{
+  "recordedAt": "2026-09-02T15:31:07.000Z",
+  "provenance": "Measured on production by tools/storage-size-budget.mjs --save-baseline, run 33649034230. The per-table figures below are that run's own output. databaseSizeBytes is null because that line of the run's output was not retained; every comparison therefore uses the Trading tables, which are what this migration adds to.",
+  "budgetBytes": 314572800,
+  "databaseSizeBytes": null,
+  "tradingSizeBytes": 186010419,
+  "tables": {
+    "trading_documents": { "rows": 27, "dataBytes": 5767168, "indexBytes": 0, "freeBytes": 0 },
+    "trading_event_log": { "rows": 713, "dataBytes": 6868074, "indexBytes": 230686, "freeBytes": 0 },
+    "trading_observations": { "rows": 72824, "dataBytes": 155166965, "indexBytes": 17961287, "freeBytes": 0 },
+    "trading_storage_meta": { "rows": 0, "dataBytes": 20971, "indexBytes": 0, "freeBytes": 0 }
+  },
+  "totals": {
+    "data": 167823178,
+    "index": 18191973,
+    "free": 0,
+    "rows": 73564,
+    "occupied": 186015151,
+    "onDisk": 186015151
+  }
+}

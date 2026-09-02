@@ -122,15 +122,22 @@ async function main() {
 
   const grownOccupied = now.occupied - Number(before.occupied || 0);
   const grownOnDisk = now.onDisk - Number(before.onDisk || 0);
-  const grownDatabase = Number(storage.databaseSizeBytes || 0) - Number(baseline.databaseSizeBytes || 0);
+  // A baseline that never captured the whole-database figure must not be read as zero:
+  // that would report the entire database as growth and fail every run.
+  const hadDatabaseSize = Number.isFinite(Number(baseline.databaseSizeBytes));
+  const grownDatabase = hadDatabaseSize
+    ? Number(storage.databaseSizeBytes || 0) - Number(baseline.databaseSizeBytes)
+    : null;
   console.log(`\n   trading tables, occupied   ${grownOccupied >= 0 ? "+" : ""}${mb(grownOccupied)}`);
   console.log(`   trading tables, on disk    ${grownOnDisk >= 0 ? "+" : ""}${mb(grownOnDisk)}`);
-  console.log(`   whole database             ${grownDatabase >= 0 ? "+" : ""}${mb(grownDatabase)}`);
+  console.log(`   whole database             ${grownDatabase == null
+    ? "(the baseline did not record it, so only the Trading tables are compared)"
+    : `${grownDatabase >= 0 ? "+" : ""}${mb(grownDatabase)}`}`);
   console.log(`   budget                     ${mb(BUDGET_BYTES)}`);
 
   // The whole database is what the hosting quota actually measures, so it decides the
   // verdict even though the Trading tables are what this migration adds to.
-  const worst = Math.max(grownOccupied, grownOnDisk, grownDatabase);
+  const worst = Math.max(grownOccupied, grownOnDisk, ...(grownDatabase == null ? [] : [grownDatabase]));
   const within = worst <= BUDGET_BYTES;
   console.log(`\n   -> ${within ? "WITHIN BUDGET" : "OVER BUDGET"}`
     + ` by ${mb(Math.abs(BUDGET_BYTES - worst))} ${within ? "remaining" : "excess"}`);
