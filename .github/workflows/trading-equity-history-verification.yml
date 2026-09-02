@@ -1,0 +1,24 @@
+name: Trading Equity History Verification
+
+# Read-only verification, manual only. Confirms the account sync is recording its own
+# realised equity per day and reports what the equity chart will draw from it. Writes
+# nothing, publishes nothing, no secrets.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Verify the recorded daily equity series
+        working-directory: trading
+        run: node tools/equity-history-verification.mjs
