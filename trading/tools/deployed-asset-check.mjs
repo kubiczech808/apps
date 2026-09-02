@@ -31,6 +31,17 @@ async function main() {
     console.log(`   HTTP ${response.status}   ${body.length} bytes`
       + `   last-modified ${response.headers.get("last-modified") || "(not sent)"}`
       + `   etag ${response.headers.get("etag") || "(none)"}`);
+    // The headers decide whether a browser ever asks again. A correctly stamped page is
+    // still invisible if the PAGE itself is the cached copy: it keeps requesting the old
+    // asset URL, which it also has. So the page's own caching is part of the answer.
+    console.log(`   cache-control ${response.headers.get("cache-control") || "(not sent)"}`
+      + `   expires ${response.headers.get("expires") || "(not sent)"}`
+      + `   pragma ${response.headers.get("pragma") || "(not sent)"}`);
+    if (file.endsWith(".html")) {
+      for (const match of body.matchAll(/(?:href|src)="(assets\/[^"]+)"/g)) {
+        console.log(`   references ${match[1]}`);
+      }
+    }
     if (!response.ok) {
       console.log(`   body starts: ${body.slice(0, 160)}\n`);
       continue;
