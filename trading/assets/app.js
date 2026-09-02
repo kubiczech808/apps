@@ -751,17 +751,32 @@ function byEquityDescending(modes) {
   });
 }
 
-// Asked for: live portfolios are the default landing group. It runs once per page load
-// and never after the reader has picked a tab -- so it decides the first view without
-// overriding a deliberate choice. Paper-only ordering still waits for equity, because
-// otherwise the first empty payload would permanently pick the fallback order.
-function preselectRichestPortfolio() {
+// Asked for: the portfolio that opens by default is the one at the TOP of the overview.
+// Both read dashboardModes(), so they cannot disagree about which that is -- but only once
+// the data that ORDERS them has arrived.
+//
+// That is the whole change here. The live group is ordered by whether a portfolio is
+// switched on and then by ROI, and an empty payload knows neither: every ROI is null, the
+// group ties, and the order falls back to the sequence the portfolios happen to be declared
+// in. Committing at that moment -- which this deliberately did, so a live dashboard would
+// not sit on a paper tab while the wallet loaded -- picked a portfolio that stopped being
+// the top row a second later, and the flag meant it never looked again.
+//
+// It still runs once per page load and never after the reader has picked a tab, so it
+// decides the first view without overriding a deliberate choice.
+function preselectTopPortfolio() {
   if (state.portfolioPreselectDone) return;
   const [preferred] = dashboardModes();
-  // Nothing loaded yet for a paper-only dashboard: leave the flag clear so the next
-  // payload gets a turn. Live portfolios are intentionally selected first even before
-  // their wallet numbers arrive.
-  if (!preferred || (!isLivePortfolioMode(preferred) && portfolioEquityUsdc(preferred) == null)) return;
+  if (!preferred) return;
+  // The INPUTS the ordering reads, not the values it produces. A live portfolio that has
+  // closed nothing yet has no ROI at all, and waiting for a value it will never have would
+  // hold the preselection open for the whole session.
+  const orderingReady = Boolean(state.portfolioConfig)
+    && (isLivePortfolioMode(preferred)
+      ? Boolean(state.liveState)
+      : portfolioEquityUsdc(preferred) != null);
+  // Leave the flag clear so the next payload gets a turn.
+  if (!orderingReady) return;
   state.portfolioPreselectDone = true;
   if (normalizeMode(preferred) === normalizeMode(state.mode)) return;
   state.mode = normalizeMode(preferred);
@@ -2638,7 +2653,7 @@ function renderPortfolioCapacity() {
 }
 
 function syncModeUi() {
-  preselectRichestPortfolio();
+  preselectTopPortfolio();
   const live = isLiveMode();
   syncModeButtons();
   renderPortfolioCapacity();
@@ -13657,7 +13672,7 @@ document.addEventListener("click", (event) => {
   if (!button) return;
   const mode = normalizeMode(button.dataset.modeToggle);
   // Even when it lands on the tab already open: the reader has now chosen, so the
-  // richest-portfolio preselection must not move them somewhere else later.
+  // top-of-the-overview preselection must not move them somewhere else later.
   state.portfolioPreselectDone = true;
   if (state.mode === mode) return;
   state.mode = mode;

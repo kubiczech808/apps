@@ -1710,22 +1710,41 @@ test("dashboard: live tabs lead, then each portfolio group is ordered by equity"
   ]);
 });
 
-test("dashboard: the first live portfolio opens on load, but never over a reader's own click", () => {
-  const preselect = extractFunction(APP, "preselectRichestPortfolio");
-  // The tab order decides the landing portfolio. Live portfolios should not wait for
-  // wallet numbers before becoming the default tab.
+// Asked for: the portfolio that opens by default is the one at the top of the overview.
+// Both read dashboardModes(), so the rule needs no separate ordering -- what it needs is to
+// wait. The live group is ordered by the automation switch and then by ROI, and an empty
+// payload knows neither: every ROI is null, the group ties, and the order falls back to the
+// declaration order. This used to commit at that moment on purpose, so a live dashboard
+// would not sit on a paper tab while the wallet loaded, and the portfolio it picked stopped
+// being the top row a second later -- with the flag already set, it never looked again.
+test("dashboard: the top portfolio of the overview opens on load, but never over a click", () => {
+  const preselect = extractFunction(APP, "preselectTopPortfolio");
   assert.match(preselect, /if \(state\.portfolioPreselectDone\) return;/);
-  assert.match(preselect, /const \[preferred\] = dashboardModes\(\);/);
-  assert.match(preselect, /!isLivePortfolioMode\(preferred\)/);
-  assert.match(preselect, /portfolioEquityUsdc\(preferred\) == null/);
-  assert.ok(preselect.indexOf("portfolioPreselectDone = true") > preselect.indexOf("portfolioEquityUsdc(preferred) == null"),
-    "paper-only fallback still waits for an actual equity value");
+  assert.match(preselect, /const \[preferred\] = dashboardModes\(\);/,
+    "the default and the overview must read the same order, or they can disagree");
+
+  // The inputs the ordering reads, so the choice is made against the order the reader will
+  // actually see.
+  assert.match(preselect, /Boolean\(state\.portfolioConfig\)/,
+    "the automation switch comes from the config");
+  assert.match(preselect, /\? Boolean\(state\.liveState\)/,
+    "and a live portfolio's ROI needs the account snapshot");
+  assert.match(preselect, /portfolioEquityUsdc\(preferred\) != null/,
+    "a paper top row still waits for a real equity value");
+  assert.ok(preselect.indexOf("portfolioPreselectDone = true") > preselect.indexOf("if (!orderingReady) return;"),
+    "the flag must not be set before the data that decides the order has arrived");
+
+  // Values, not inputs, would hold it open forever: a portfolio that has closed nothing has
+  // no ROI, and there is no later payload that gives it one.
+  assert.ok(!/roi == null/.test(preselect) && !/annualized == null/.test(preselect),
+    "waiting on an ROI value would never resolve for a portfolio with no closed trades");
+
   // Switching portfolios has to refetch: the dashboard payload carries the trades of the
   // selected portfolio alone.
   assert.match(preselect, /loadDashboardState\(\);/);
 
   // It runs from the one place both the paper and the live render paths reach.
-  assert.match(extractFunction(APP, "syncModeUi"), /preselectRichestPortfolio\(\);/);
+  assert.match(extractFunction(APP, "syncModeUi"), /preselectTopPortfolio\(\);/);
   // And a deliberate click settles it for the rest of the page load, including a click
   // on the tab that is already open.
   const handler = APP.slice(APP.indexOf('const button = event.target.closest("[data-mode-toggle]");'));
