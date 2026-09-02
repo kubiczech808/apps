@@ -4534,6 +4534,48 @@ function live_stop_loss_policy_payload(): array
         }
     }
 
+    // Everything above derives the watchlist from the RUN LOGS: a token is watched only
+    // while the run that ordered it is still retained. That log is bounded and compacted,
+    // so a position stops being watched once its run scrolls out -- while the position is
+    // still open and still holding real money. Measured on production: 2 of 12 open
+    // positions were absent from this payload, including a 4.99 USDC stake.
+    //
+    // The account's own open positions are the authoritative list of what needs
+    // protecting, so they are added here. The run-log pass above is kept, and kept first,
+    // because it is what ATTRIBUTES a token to the portfolio that ordered it -- a position
+    // already attributed keeps its owner's policy, including its multiplier. Only
+    // positions no attribution reached fall through to the default.
+    $liveState = decode_state_file(state_file_paths()['live'] ?? '', false);
+    $positions = is_array($liveState['positions'] ?? null) ? $liveState['positions'] : [];
+    $fallback = live_stop_loss_policy_config($config, 'live');
+    $adoptedFromPositions = 0;
+    $unattributed = 0;
+    foreach ($positions as $position) {
+        if (!is_array($position)) {
+            continue;
+        }
+        $tokenId = trim((string) ($position['tokenId'] ?? $position['assetId'] ?? ''));
+        if ($tokenId === '' || isset($policies[$tokenId])) {
+            continue;
+        }
+        $unattributed++;
+        if ($fallback === null) {
+            // No default policy means the main live portfolio has no stop loss configured.
+            // Inventing one for a position it does not own would apply a cap the operator
+            // never set, so the position stays unwatched and the count below says so.
+            continue;
+        }
+        $policies[$tokenId] = array_merge($fallback, [
+            'tokenId' => $tokenId,
+            // No run claimed it, so there is no order time to carry. The empty stamp keeps
+            // the "newest accepted order wins" comparison above working: any later
+            // attributed order sorts above this.
+            'updatedAt' => '',
+            'source' => 'open-position',
+        ]);
+        $adoptedFromPositions++;
+    }
+
     // The original Live strategy predates per-order execution state. When enabled,
     // it deliberately protects otherwise unlabelled positions on the same connected
     // account as well. Custom live portfolios are never used as this fallback.
@@ -4541,7 +4583,13 @@ function live_stop_loss_policy_payload(): array
         'ok' => true,
         'generatedAt' => gmdate('c'),
         'policies' => array_values($policies),
-        'defaultPolicy' => live_stop_loss_policy_config($config, 'live'),
+        // Stated so a gap is visible rather than silent: how many open positions no run
+        // log accounted for, and how many of those the default could actually cover.
+        'openPositions' => count($positions),
+        'positionsWithoutRunLogAttribution' => $unattributed,
+        'positionsAdoptedFromAccount' => $adoptedFromPositions,
+        'positionsLeftUnwatched' => $unattributed - $adoptedFromPositions,
+        'defaultPolicy' => $fallback,
     ];
 }
 

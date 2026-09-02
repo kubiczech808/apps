@@ -2673,3 +2673,98 @@ test("scraped opportunities: the spread that keeps a market out of scope is on s
   assert.match(APP, /if \(key === "spread"\) return scrapedObservationSpread\(item\) \?\? Infinity;/);
   assert.match(css, /\.negative\b/, "the untradable marker needs its colour to exist");
 });
+
+// Reported: a live position lost its whole stake with no stop loss. Measured on
+// production, 2 of 12 open positions were absent from the RPi exit worker's policy
+// payload -- because that payload was built by walking each portfolio's execution RUN LOG
+// and collecting the tokens of runs that submitted an order. The run log is bounded and
+// compacted, so a position stops being watched once its run scrolls out, while it is still
+// open and still holding money.
+test("live stop loss: an open position is watched even when its run has left the log", () => {
+  const directory = mkdtempSync(join(tmpdir(), "stop-loss-policy-"));
+  try {
+    const cut = API.indexOf("\ntry {");
+    const definitions = join(directory, "definitions.php");
+    mkdirSync(join(directory, "data"), { recursive: true });
+    writeFileSync(definitions, API.slice(0, cut) + "\n");
+
+    // A live portfolio with a 1.75 cap, an execution run log that remembers ONE of two
+    // open positions, and an account holding both.
+    writeFileSync(join(directory, "data", "portfolio-config.json"), JSON.stringify({
+      live: { displayName: "Live", stopLossRiskMultiplier: 1.75, minProbability: 0.5 },
+    }));
+    writeFileSync(join(directory, "data", "live-execution-state.json"), JSON.stringify({
+      generatedAt: "2026-09-02T10:00:00Z",
+      action: "SUBMITTED",
+      // The shape live_execution_record_token_ids actually reads: one `selected`
+      // candidate per record, not a list of attempts.
+      selected: { tokenId: "remembered-token" },
+      runLog: [],
+    }));
+    writeFileSync(join(directory, "data", "live-state.json"), JSON.stringify({
+      positions: [
+        { tokenId: "remembered-token", question: "Still in the run log" },
+        { tokenId: "forgotten-token", question: "Its run scrolled out of the log" },
+      ],
+    }));
+
+    const payload = JSON.parse(execFileSync("php", ["-r",
+      `chdir('${directory}'); require '${definitions}';`
+      + ` echo json_encode(live_stop_loss_policy_payload());`,
+    ], { encoding: "utf8", cwd: directory }));
+
+    const covered = new Map((payload.policies || []).map((policy) => [policy.tokenId, policy]));
+    assert.ok(covered.has("remembered-token"), "a token its run still names stays watched");
+    assert.ok(covered.has("forgotten-token"),
+      "an open position must be watched even when no retained run names it");
+    // The multiplier has to be the configured one, or the worker would exit at a floor
+    // the operator never set.
+    assert.equal(covered.get("forgotten-token").stopLossRiskMultiplier, 1.75);
+    assert.equal(covered.get("forgotten-token").source, "open-position",
+      "and it must say where the coverage came from");
+    // Attribution still wins: a token its own run claimed keeps that run's stamp.
+    assert.equal(covered.get("remembered-token").source ?? "", "",
+      "a run-attributed token is not relabelled as an account fallback");
+
+    assert.equal(payload.openPositions, 2);
+    assert.equal(payload.positionsWithoutRunLogAttribution, 1);
+    assert.equal(payload.positionsAdoptedFromAccount, 1);
+    assert.equal(payload.positionsLeftUnwatched, 0);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("live stop loss: with no default policy an unattributed position is reported, not invented", () => {
+  const directory = mkdtempSync(join(tmpdir(), "stop-loss-nodefault-"));
+  try {
+    const cut = API.indexOf("\ntry {");
+    const definitions = join(directory, "definitions.php");
+    mkdirSync(join(directory, "data"), { recursive: true });
+    writeFileSync(definitions, API.slice(0, cut) + "\n");
+
+    // The main live portfolio has no stop loss. Applying one anyway would exit a position
+    // at a cap the operator never set, so the position stays unwatched -- and the payload
+    // says so rather than leaving the gap silent.
+    writeFileSync(join(directory, "data", "portfolio-config.json"), JSON.stringify({
+      live: { displayName: "Live", stopLossRiskMultiplier: 0 },
+    }));
+    writeFileSync(join(directory, "data", "live-state.json"), JSON.stringify({
+      positions: [{ tokenId: "unwatched-token", question: "No policy covers this" }],
+    }));
+
+    const payload = JSON.parse(execFileSync("php", ["-r",
+      `chdir('${directory}'); require '${definitions}';`
+      + ` echo json_encode(live_stop_loss_policy_payload());`,
+    ], { encoding: "utf8", cwd: directory }));
+
+    assert.deepEqual(payload.policies, []);
+    assert.equal(payload.defaultPolicy, null);
+    assert.equal(payload.positionsWithoutRunLogAttribution, 1);
+    assert.equal(payload.positionsAdoptedFromAccount, 0);
+    assert.equal(payload.positionsLeftUnwatched, 1,
+      "an uncovered position must be counted, so the gap is visible");
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
