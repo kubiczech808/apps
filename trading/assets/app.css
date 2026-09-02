@@ -2594,21 +2594,19 @@ body.modal-open {
   color: #92400e !important;
 }
 
-/* The market's tags, folded behind an info button next to the row's label. Inline flow
-   rather than an absolutely positioned popover: these tables each sit in their own
-   overflow-x:auto container, which would clip one. */
-.market-tags {
-  display: inline-block;
-  margin-left: 4px;
-  vertical-align: middle;
-}
-
+/* The market's tags, folded behind an info button beside the row's label. The button has
+   to stay on the label's own line: `.ledger td span` turns any span in a table cell into
+   a block with a top margin, which is what gave every row a second line. A button is not
+   a span, and the inline-flex plus !important margin keeps it there even inside the cells
+   whose children are laid out as a grid on narrow screens. */
 .market-tags-button {
-  display: inline-flex;
+  display: inline-flex !important;
   align-items: center;
   justify-content: center;
+  flex: 0 0 auto;
   width: 16px;
   height: 16px;
+  margin: 0 0 0 5px !important;
   padding: 0;
   border: 1px solid var(--line);
   border-radius: 999px;
@@ -2619,6 +2617,7 @@ body.modal-open {
   font-weight: 800;
   font-style: italic;
   line-height: 1;
+  vertical-align: middle;
   cursor: pointer;
 }
 
@@ -2629,12 +2628,21 @@ body.modal-open {
   color: var(--accent-dark);
 }
 
-.market-tags-list {
+/* One shared panel, fixed to the viewport and positioned from JS. Fixed rather than
+   absolute so no scroll container can clip it, and outside the row so an open panel
+   never changes the table's height. */
+.market-tags-panel {
+  position: fixed;
+  z-index: 60;
   display: flex;
   flex-wrap: wrap;
   gap: 3px;
-  max-width: 260px;
-  margin-top: 4px;
+  max-width: 280px;
+  padding: 6px 7px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: 0 6px 18px rgba(15, 23, 42, 0.14);
 }
 
 .market-tag {

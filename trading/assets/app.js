@@ -3850,13 +3850,12 @@ function marketTagsInfo(row = {}) {
   const label = tags.length
     ? `Tags: ${tags.join(", ")}`
     : "No Polymarket tag was recorded for this market";
-  return `<span class="market-tags">
-    <button class="market-tags-button" type="button" data-market-tags-toggle aria-expanded="false"
-      title="${escapeHtml(label)}" aria-label="${escapeHtml(label)}">i</button>
-    <span class="market-tags-list" hidden>${tags.length
-      ? tags.map((tag) => `<span class="market-tag">${escapeHtml(tag)}</span>`).join("")
-      : '<span class="market-tag muted">no tags recorded</span>'}</span>
-  </span>`;
+  // Just the button. The tags themselves go into one shared panel positioned over the
+  // page on click -- see openMarketTagsPanel. Rendering a list per row alongside the
+  // button is what added a second line to every row: `.ledger td span` makes any span in
+  // a table cell a block with a top margin.
+  return `<button class="market-tags-button" type="button" data-market-tags="${escapeHtml(tags.join(","))}"
+    aria-expanded="false" title="${escapeHtml(label)}" aria-label="${escapeHtml(label)}">i</button>`;
 }
 
 function tradeTypeBadge(trade) {
@@ -3882,7 +3881,10 @@ function tradeTypeBadge(trade) {
       : '<span class="order-chip warning">Limit order expired &middot; unfilled</span>';
   }
   if (String(trade.status || "").toUpperCase() === "REDEEM_REQUIRED") return '<span class="order-chip warning">Redeem needed</span>';
-  if (String(trade.status || "").toUpperCase() === "PENDING_RESOLUTION") return '<span class="order-chip warning">Pending resolution</span>';
+  // PENDING_RESOLUTION deliberately has no chip of its own. The market has stopped
+  // trading but its settlement price is not published yet, which changes nothing about
+  // what the row is: still an open position, or still a resting order. It fell through
+  // to those labels below, and a red "Pending resolution" chip on top read as a fault.
   if (String(trade.status || "").toUpperCase() === "STOP_LOSS") return '<span class="order-chip warning">Protective exit</span>';
   if (String(trade.status || "").toUpperCase() === "STOP_BREACH") return '<span class="order-chip warning">Stop breached · no floor exit</span>';
   if (String(trade.status || "").toUpperCase() === "STOP_GAP") return '<span class="order-chip warning">Stop gap · cap missed</span>';
@@ -8313,6 +8315,13 @@ function executionVerdictIsRetryable(verdict) {
 function executionVerdictAppliesToMode(verdict, mode) {
   // Capital and diversification are portfolio-specific. A missing executable quote is
   // a property of the shared Polymarket book, so every live portfolio must use it.
+  //
+  // Both of the quote reasons really are book-level, which is worth stating because one of
+  // them reads as though it were not: "post-only limit would cross current ask" is emitted
+  // at one place only, and the price it compares comes from orderPriceForBook(book, tick)
+  // -- the rounded best bid. It fires when that sits at or above the best ask, which is a
+  // locked book, not a portfolio's configured price. 5050's fixed entry price never
+  // reaches that comparison; it rests through a separate path.
   return executionVerdictIsOwn(verdict, mode) || executionVerdictIsTemporaryQuoteState(verdict);
 }
 
@@ -14108,25 +14117,67 @@ els.openedTradesRefresh?.addEventListener("click", refreshOpenedTradesValues);
 els.closedTradesExport?.addEventListener("click", exportClosedTradesCsv);
 els.unfilledLimitOrdersExport?.addEventListener("click", exportUnfilledLimitOrdersCsv);
 
-// One listener on the document, because these buttons live inside four different tables
-// that are each rebuilt from scratch on every render.
+// One panel for the whole page, positioned over it rather than laid out inside the row.
+// The tables it opens from each scroll sideways in their own container, which clips an
+// absolutely positioned child, and anything in normal flow inside a cell costs every row
+// a second line whether or not it is open. A fixed-position panel has neither problem.
+let marketTagsPanel = null;
+let marketTagsOwner = null;
+
+function closeMarketTagsPanel() {
+  if (marketTagsOwner) marketTagsOwner.setAttribute("aria-expanded", "false");
+  marketTagsOwner = null;
+  if (marketTagsPanel) marketTagsPanel.hidden = true;
+}
+
+function openMarketTagsPanel(button) {
+  if (!marketTagsPanel) {
+    marketTagsPanel = document.createElement("div");
+    marketTagsPanel.className = "market-tags-panel";
+    marketTagsPanel.hidden = true;
+    document.body.appendChild(marketTagsPanel);
+  }
+  const tags = String(button.dataset.marketTags || "").split(",").map((tag) => tag.trim()).filter(Boolean);
+  marketTagsPanel.innerHTML = tags.length
+    ? tags.map((tag) => `<span class="market-tag">${escapeHtml(tag)}</span>`).join("")
+    : '<span class="market-tag muted">no tags recorded</span>';
+  marketTagsPanel.hidden = false;
+  button.setAttribute("aria-expanded", "true");
+  marketTagsOwner = button;
+
+  // Measured after it is visible, because a hidden element has no size to place against.
+  const anchor = button.getBoundingClientRect();
+  const panel = marketTagsPanel.getBoundingClientRect();
+  const margin = 8;
+  const left = Math.max(margin, Math.min(anchor.left, window.innerWidth - panel.width - margin));
+  // Below the icon when there is room, above it when there is not, so the panel is never
+  // pushed off the bottom of a long table.
+  const below = anchor.bottom + 6;
+  const top = below + panel.height + margin <= window.innerHeight
+    ? below
+    : Math.max(margin, anchor.top - panel.height - 6);
+  marketTagsPanel.style.left = `${left}px`;
+  marketTagsPanel.style.top = `${top}px`;
+}
+
 document.addEventListener("click", (event) => {
-  const button = event.target?.closest?.("[data-market-tags-toggle]");
-  // A click anywhere else closes whatever is open, so a stray expanded list does not
-  // follow the reader down the table.
-  document.querySelectorAll("[data-market-tags-toggle][aria-expanded='true']").forEach((open) => {
-    if (open === button) return;
-    open.setAttribute("aria-expanded", "false");
-    const list = open.parentElement?.querySelector(".market-tags-list");
-    if (list) list.hidden = true;
-  });
-  if (!button) return;
+  const button = event.target?.closest?.("[data-market-tags]");
+  if (!button) {
+    closeMarketTagsPanel();
+    return;
+  }
   event.preventDefault();
-  const list = button.parentElement?.querySelector(".market-tags-list");
-  if (!list) return;
-  const open = button.getAttribute("aria-expanded") === "true";
-  button.setAttribute("aria-expanded", open ? "false" : "true");
-  list.hidden = open;
+  const wasOpen = marketTagsOwner === button;
+  closeMarketTagsPanel();
+  if (!wasOpen) openMarketTagsPanel(button);
+});
+
+// The panel is fixed to the viewport while its anchor scrolls with the page, so it has to
+// go rather than drift away from the row it describes.
+window.addEventListener("scroll", closeMarketTagsPanel, true);
+window.addEventListener("resize", closeMarketTagsPanel);
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") closeMarketTagsPanel();
 });
 
 // Delegated, because the report's HTML is rebuilt on every render, which would drop a

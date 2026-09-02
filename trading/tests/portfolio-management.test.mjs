@@ -258,14 +258,38 @@ test("opportunities: an info button reveals the market's tags next to the row's 
   assert.match(APP, /<strong>\$\{precheck\}<\/strong>\$\{marketTagsInfo\(item\)\}/,
     "execution candidates");
 
-  assert.match(APP, /\[data-market-tags-toggle\]/, "the toggle is delegated onto the document");
+  assert.match(APP, /\[data-market-tags\]/, "the toggle is delegated onto the document");
   assert.match(APP, /aria-expanded/, "the button states whether it is open");
-  assert.match(css, /\.market-tags-list \{/);
-  // An absolutely positioned popover would be clipped by each table's own scroll
-  // container, so the list has to sit in normal flow.
-  const tagCss = css.slice(css.indexOf(".market-tags {"), css.indexOf(".market-tag.muted"));
-  assert.doesNotMatch(tagCss, /position:\s*absolute/,
-    "these tables each scroll sideways, which would clip an absolutely positioned list");
+
+  // The tags open in one shared panel fixed to the viewport, not as a list inside the
+  // row. Two reasons, and both are load-bearing: `.ledger td span` makes any span in a
+  // table cell a block with a top margin, so a per-row list cost every row a second
+  // line; and each of these tables scrolls sideways in its own container, which clips an
+  // absolutely positioned child.
+  assert.match(APP, /function openMarketTagsPanel\(button\)/);
+  assert.match(APP, /className = "market-tags-panel"/);
+  assert.match(css, /\.market-tags-panel \{[^}]*position:\s*fixed/);
+  assert.doesNotMatch(css, /\.market-tags-panel \{[^}]*position:\s*absolute/);
+  const buttonCss = css.slice(css.indexOf(".market-tags-button {"), css.indexOf(".market-tags-button:hover"));
+  assert.match(buttonCss, /display:\s*inline-flex\s*!important/,
+    "the icon must stay on the label's line rather than becoming a second row");
+  assert.match(buttonCss, /margin:\s*0 0 0 [\d.]+px\s*!important/,
+    "and must not inherit the block margin that pushed it onto its own line");
+  // A panel fixed to the viewport drifts away from its row unless it is dismissed.
+  assert.match(APP, /window\.addEventListener\("scroll", closeMarketTagsPanel, true\)/);
+});
+
+test("opportunities: an unsettled market keeps its own label instead of a red pending chip", () => {
+  // Requested: no "Pending resolution" label -- leave "Open position", or the resting
+  // order's own label. The market has stopped trading but its settlement price is not
+  // published, which changes nothing about what the row is.
+  assert.doesNotMatch(APP, /order-chip[^"]*">Pending resolution/,
+    "PENDING_RESOLUTION must fall through to the position or order label");
+  // It must not have become a closed row either, or it would pick up a result chip.
+  const closed = APP.slice(APP.indexOf("function isClosedTrade"), APP.indexOf("function isClosedTrade") + 600);
+  assert.doesNotMatch(closed, /PENDING_RESOLUTION/,
+    "an unsettled position is not a closed trade");
+  assert.match(APP, /if \(trade\.mode === "LIVE"\) return '<span class="order-chip filled">Open position<\/span>'/);
 });
 
 test("trade analysis: the clean-entry threshold describes the history rather than guessing at it", () => {

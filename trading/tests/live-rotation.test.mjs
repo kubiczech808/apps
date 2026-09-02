@@ -2972,7 +2972,11 @@ function verdictHarness() {
   const app = readFileSync(new URL("../assets/app.js", import.meta.url), "utf8");
   // A verdict is owned by the portfolio that made it, and a created live portfolio owns its
   // own -- so the ownership test has to be able to name one from a mode.
-  const body = ["customLivePortfolioIdFromMode", "executionVerdictIsOwn", "latestLiveExecutionVerdict"]
+  const body = ["customLivePortfolioIdFromMode", "executionVerdictIsOwn",
+    // A missing executable quote is a property of the shared Polymarket book rather than
+    // of one portfolio, so ownership alone no longer decides whether a verdict applies.
+    "executionVerdictIsTemporaryQuoteState", "executionVerdictAppliesToMode",
+    "latestLiveExecutionVerdict"]
     .map((name) => functionSource(app, name)).join("\n\n");
   return (mode, item, ownUpdates = []) => new Function("state", "isFixedEntryMode", "liveExecutionVerdictByToken", "CUSTOM_PAPER_STRATEGY_ID", `
     ${body}
@@ -2989,13 +2993,18 @@ test("live candidates: one portfolio's rejection is not the other's", () => {
   const verdictFor = verdictHarness();
   const token = "1000000000000000001";
   // A real 5050 verdict, as persisted onto the shared evaluation row.
+  // The reason has to be a portfolio-specific one to make this point. It used to be
+  // "post-only limit would cross current ask", which reads that way but is not: it is
+  // emitted at one place only, and the price it compares comes from
+  // orderPriceForBook(book, tick) -- the rounded best bid -- so it fires on a locked book,
+  // for every portfolio at once. Capital is genuinely one portfolio's own business.
   const fromFixedEntry = {
     tokenId: token,
     portfolio: "live-5050",
     status: "REJECTED",
     retryable: false,
     checkedAt: "2026-08-09T12:00:00Z",
-    rejectReasons: ["post-only limit would cross current ask"],
+    rejectReasons: ["available collateral does not cover the minimum order"],
   };
   const row = { tokenId: token, executionRevalidation: fromFixedEntry };
 
@@ -3006,9 +3015,18 @@ test("live candidates: one portfolio's rejection is not the other's", () => {
   assert.deepEqual(verdictFor("live-5050", row), fromFixedEntry);
 
   // And the mirror case, so the fix is not one-directional.
-  const fromLive = { ...fromFixedEntry, portfolio: "live", rejectReasons: ["no valid current entry price"] };
+  const fromLive = { ...fromFixedEntry, portfolio: "live" };
   assert.deepEqual(verdictFor("live", { tokenId: token, executionRevalidation: fromLive }), fromLive);
   assert.equal(verdictFor("live-5050", { tokenId: token, executionRevalidation: fromLive }), null);
+
+  // The book's own state is the exception, and it crosses portfolios on purpose: an empty
+  // or locked book is not one portfolio's problem, so neither shortlist may be longer
+  // than the other because of it.
+  for (const reason of ["no valid current entry price", "post-only limit would cross current ask"]) {
+    const bookLevel = { ...fromFixedEntry, portfolio: "live-5050", rejectReasons: [reason] };
+    assert.deepEqual(verdictFor("live", { tokenId: token, executionRevalidation: bookLevel }), bookLevel,
+      `"${reason}" describes the shared book, so every live portfolio reads it`);
+  }
 
   // A verdict stored before the field existed is ignored rather than guessed at: keeping
   // it costs a possibly foreign rejection forever, dropping it costs one run.

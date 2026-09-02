@@ -1721,12 +1721,16 @@ test("candidates: the precheck column has no WAITING state", async () => {
   assert.match(precheckLine, /"READY"/);
   assert.doesNotMatch(precheckLine, /WAITING/, "a retryable verdict must not render as its own precheck state");
 
-  // The retention rule must survive: a temporary block keeps the row in the
-  // shortlist so the next run can retry it, while a permanent failure drops it.
-  assert.ok(
-    app.includes("!executionCheck.retryable"),
-    "retryable revalidation verdicts must still keep the candidate in the shortlist",
-  );
+  // The retention rule must survive: a temporary block keeps the row in the shortlist so
+  // the next run can retry it, while a permanent failure drops it. Read through the
+  // predicate rather than pinning the `!executionCheck.retryable` field test this used to
+  // be -- that was replaced by a helper which ALSO treats a temporary quote failure as
+  // retryable, so the literal disappearing is the rule widening, not going away.
+  assert.match(app, /!executionVerdictIsRetryable\(executionCheck\)/,
+    "retryable revalidation verdicts must still keep the candidate in the shortlist");
+  assert.match(app, /function executionVerdictIsRetryable\(verdict\)/);
+  assert.match(app.slice(app.indexOf("function executionVerdictIsRetryable"), app.indexOf("function executionVerdictIsRetryable") + 400),
+    /verdict\?\.retryable/, "an explicitly retryable verdict still counts as one");
 
   // The dispatched shortlist must not be filtered by the precheck column.
   const payload = app.slice(app.indexOf("function liveWorkflowPayload"), app.indexOf("async function fetchFreshState"));
