@@ -1,0 +1,25 @@
+name: Trading Live Realized Ledger Gap Diagnosis
+
+# Read-only diagnostic, manual only. Reads the published live state and reports why the
+# closed-trade ledger's own sum disagrees with the account's realised P/L -- the
+# disagreement that makes the equity chart discard every intermediate day and draw one
+# straight line. Writes nothing, publishes nothing, no secrets.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Diagnose the realised ledger gap
+        working-directory: trading
+        run: node tools/live-realized-ledger-gap-diagnosis.mjs
