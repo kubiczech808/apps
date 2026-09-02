@@ -1,0 +1,33 @@
+name: Trading Market Tags Coverage Diagnosis
+
+# Read-only diagnostic, manual only. Measures how many stored rows carry a Polymarket tag
+# today, then asks Gamma which query actually returns tags for markets this account has
+# traded -- the answer a fix and a backfill both have to be built on. Writes nothing,
+# publishes nothing, no secrets.
+on:
+  workflow_dispatch:
+    inputs:
+      sample:
+        description: "How many untagged markets to probe against Gamma"
+        required: false
+        default: "4"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Diagnose market tag coverage
+        working-directory: trading
+        env:
+          PROBE_SAMPLE: ${{ inputs.sample || '4' }}
+        run: node tools/market-tags-coverage-diagnosis.mjs
