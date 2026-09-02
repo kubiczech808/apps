@@ -4826,6 +4826,26 @@ test("execution catalogue: the executor walks the pages instead of taking the fi
   // room to grow, and a stray total cannot turn one run into hundreds of requests.
   assert.ok(executor.EXECUTION_SCOPE_MAX_PAGES >= 5, "the page budget must cover the measured scope");
   const source = readFileSync(new URL("../tools/live-order-executor.mjs", import.meta.url), "utf8");
-  assert.match(source, /loadScopedExecutionCatalogue\(PAPER_SCRAPED_STATE_URL/,
-    "the run loads the catalogue through the paging walk");
+  assert.match(source, /loadScopedExecutionCatalogue\(\s*executionCatalogueUrlForPortfolio\(PAPER_SCRAPED_STATE_URL\)/,
+    "the run loads the portfolio-scoped catalogue through the paging walk");
+});
+
+test("execution catalogue: every live portfolio requests its own filtered scope", () => {
+  const base = "https://example.test/api.php?action=state&target=paper&summary=execution";
+  const scopeFor = (portfolioId, fixedEntry = false) => new URL(
+    executor.executionCatalogueUrlForPortfolio(base, portfolioId, fixedEntry),
+  ).searchParams.get("strategy_id");
+
+  assert.equal(scopeFor("live"), "live");
+  assert.equal(scopeFor("live-custom-live2"), "live-custom-live2");
+  assert.equal(scopeFor("live-5050", true), "live5050");
+  assert.equal(
+    executor.executionCatalogueUrlForPortfolio("data/paper-state.json", "live-custom-live2"),
+    "data/paper-state.json",
+    "local test fixtures are not rewritten as remote API URLs",
+  );
+
+  const source = readFileSync(new URL("../tools/live-order-executor.mjs", import.meta.url), "utf8");
+  assert.match(source, /executionCatalogueUrlForPortfolio\(PAPER_SCRAPED_STATE_URL\)/,
+    "the live run must use the portfolio-scoped URL rather than the generic first page");
 });

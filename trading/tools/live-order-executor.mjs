@@ -128,6 +128,30 @@ const FIXED_ENTRY_STRATEGY = String(process.env.LIVE_STRATEGY || "").trim().toLo
 // The legacy Live strategy and each user-created live strategy share a wallet but
 // never a decision log. The workflow supplies this stable owner id for custom runs.
 const LIVE_PORTFOLIO_ID = process.env.LIVE_PORTFOLIO_ID || (FIXED_ENTRY_STRATEGY ? "live-5050" : "live");
+
+// The API deliberately serves one compact, portfolio-filtered execution catalogue.
+// Without this scope, the generic catalogue is sorted before its first page is sent;
+// a 70-82% live portfolio can therefore receive only 82.5%+ rows and conclude that it
+// has no candidates although its own shortlist is non-empty in the dashboard.
+function executionScopeStrategyId(portfolioId = LIVE_PORTFOLIO_ID, fixedEntry = FIXED_ENTRY_STRATEGY) {
+  const id = String(portfolioId || "").trim();
+  if (fixedEntry || id === "live-5050") return "live5050";
+  if (/^live-custom-[a-z][a-zA-Z0-9]{1,30}$/.test(id)) return id;
+  return "live";
+}
+
+function executionCatalogueUrlForPortfolio(location, portfolioId = LIVE_PORTFOLIO_ID, fixedEntry = FIXED_ENTRY_STRATEGY) {
+  const source = String(location || "");
+  if (!/^https?:\/\//i.test(source)) return source;
+  const url = new URL(source);
+  // Keep an explicitly scoped diagnostic URL intact, but never let an ordinary
+  // production execution read the unscoped first page.
+  if (!url.searchParams.has("strategy_id")) {
+    url.searchParams.set("strategy_id", executionScopeStrategyId(portfolioId, fixedEntry));
+  }
+  return url.toString();
+}
+
 const FIXED_ENTRY_PRICE = envNumber("LIVE_FIXED_ENTRY_PRICE", 0.5);
 const FIXED_ENTRY_STAKE_USDC = Math.max(0, envNumber("LIVE_FIXED_ENTRY_STAKE_USDC", 0) || 0);
 // Resting a bid is one sequential round trip to the exchange, measured at roughly four
@@ -4478,7 +4502,10 @@ async function main() {
   const [paperState, scrapedState] = await Promise.all([
     loadJsonResource(PAPER_STATE_URL, "paper state"),
     PROBABILITY_SOURCE === "polymarket"
-      ? loadScopedExecutionCatalogue(PAPER_SCRAPED_STATE_URL, "scraped Polymarket state")
+      ? loadScopedExecutionCatalogue(
+        executionCatalogueUrlForPortfolio(PAPER_SCRAPED_STATE_URL),
+        "scraped Polymarket state",
+      )
       : Promise.resolve(null),
   ]);
   // Before anything is measured against the book: a bid on a market that is over can
@@ -5358,6 +5385,8 @@ export {
   fixedEntryRowFacts,
   expiredOrderWithdrawalReason,
   EXPIRED_ORDER_GRACE_HOURS,
+  executionScopeStrategyId,
+  executionCatalogueUrlForPortfolio,
   loadScopedExecutionCatalogue,
   EXECUTION_SCOPE_MAX_PAGES,
 };
