@@ -1,0 +1,33 @@
+name: Trading Equity History Shape Diagnosis
+
+# Read-only diagnostic, manual only. Explains why the equity history chart draws a
+# straight two-point line by reporting the closed-trade ledger the chart derives from,
+# its reconciliation against the account's realised P/L, and how many distinct days the
+# settlements fall on. Writes nothing, publishes nothing, no secrets.
+on:
+  workflow_dispatch:
+    inputs:
+      paper_strategy_id:
+        description: "Also inspect one paper portfolio id (leave blank for live only)"
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Diagnose equity history shape
+        working-directory: trading
+        env:
+          PAPER_DIAGNOSIS_STRATEGY_ID: ${{ inputs.paper_strategy_id || '' }}
+        run: node tools/equity-history-shape-diagnosis.mjs
