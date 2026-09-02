@@ -3133,6 +3133,64 @@ td a {
   }
 }
 
+/* Databaze a uklid v Konfiguraci. */
+.db-size-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 20px;
+  margin: 0 0 12px;
+  padding: 12px 14px;
+  border: 1px solid #b9ddd4;
+  border-radius: 6px;
+  background: #eef9f6;
+  color: #164a40;
+  font-size: 13px;
+}
+.db-size-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.db-size-table th,
+.db-size-table td {
+  padding: 7px 10px;
+  border-bottom: 1px solid #e4ece9;
+  text-align: right;
+  white-space: nowrap;
+}
+.db-size-table th:first-child,
+.db-size-table td:first-child {
+  text-align: left;
+}
+.db-size-table th {
+  text-align: right;
+  white-space: nowrap;
+}
+.db-cleanup-list {
+  list-style: none;
+  margin: 0 0 14px;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+  font-size: 13px;
+}
+.db-cleanup-list li {
+  display: grid;
+  grid-template-columns: 84px minmax(0, 1fr);
+  gap: 4px 12px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: #f4f8f6;
+}
+.db-cleanup-list li strong {
+  grid-row: span 2;
+  text-align: right;
+  font-size: 15px;
+}
+.db-cleanup-list li small {
+  grid-column: 2;
+}
+
 /* Telefon: prehled AI research a log automatiky se rozpadnou na karty. Sirky sloupcu
    a jednoradkove bunky plati jen pro sirokou tabulku na desktopu - na telefonu by
    znamenaly 1608 px sirokou tabulku, ve ktere neni videt nic. Tyto pravidla musi byt
@@ -3238,5 +3296,58 @@ td a {
   .research-log-table .research-log-message {
     grid-template-columns: minmax(0, 1fr);
     min-width: 0;
+  }
+
+  /* Tabulka velikosti tabulek je na telefonu take karta. */
+  .db-size-table {
+    border-collapse: separate;
+    border-spacing: 0 10px;
+  }
+  .db-size-table thead {
+    display: none;
+  }
+  .db-size-table tbody,
+  .db-size-table tbody tr,
+  .db-size-table tbody td {
+    display: block;
+    width: 100%;
+  }
+  .db-size-table tbody tr {
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: #fff;
+  }
+  .db-size-table tbody td {
+    display: grid;
+    grid-template-columns: minmax(92px, 40%) minmax(0, 1fr);
+    gap: 10px;
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--line);
+    text-align: left;
+    white-space: normal;
+  }
+  .db-size-table tbody td:last-child {
+    border-bottom: 0;
+  }
+  .db-size-table tbody td::before {
+    content: attr(data-label);
+    color: var(--muted);
+    font-size: 12px;
+    font-weight: 800;
+    text-transform: uppercase;
+  }
+  .db-size-summary {
+    flex-direction: column;
+    gap: 4px;
+  }
+  .db-cleanup-list li {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .db-cleanup-list li strong {
+    grid-row: auto;
+    text-align: left;
+  }
+  .db-cleanup-list li small {
+    grid-column: auto;
   }
 }

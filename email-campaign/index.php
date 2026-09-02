@@ -21,6 +21,17 @@ const AI_RESEARCH_FINALIZE_RESERVE_SECONDS = 12;
 // Nejvic kroku, ktere jeden tik cronu zpracuje. Casovy budget skonci vetsinou driv,
 // tohle je jen pojistka proti kroku, ktery se vraci hned a nic nemeni.
 const AI_RESEARCH_MAX_STEPS_PER_TICK = 12;
+// Uklid databaze. Crawl log (scraping_job_items) roste nejrychleji z cele databaze:
+// discovery na jeden beh zaradi az tisice URL a kazdy dalsi beh stejneho kontejneru
+// si je zaradi znovu pod svym job_id. Radek crawl logu ale nese jen "tato URL byla
+// otevrena s timto vysledkem" - kontakty z nej uz jsou v recipients.
+// Okno musi zustat nad nejdelsi cache "URL bez e-mailu" (recentNoEmailScrapingCacheDays
+// je nejvys 30 dnu), jinak by uklid platil usetrene misto novymi requesty do katalogu.
+const DB_SCRAPING_ITEM_RETENTION_DAYS = 45;
+// Kolik radku provozniho logu automatiky se drzi.
+const DB_AI_RESEARCH_LOG_KEEP_ROWS = 500;
+// Strop jedne davky mazani, aby request nikdy nespadl na case hostingu.
+const DB_CLEANUP_BATCH_ROWS = 2000;
 // Kolik pokusu o dokonceni dostane jeden beh, nez ho automatika trvale uzavre. Dokud
 // beh neni dotazeny, nezaklada se novy seed - proto musi mit konec, jinak by jeden
 // nedotazitelny subjekt zastavil celou frontu.
@@ -1105,7 +1116,12 @@ if (isset($_GET['cron'])) {
     // Odhad dosahu ale zadny Gemini pozadavek nestoji, takze se pocita tady.
     echo "\n" . runCronAiResearchContactEstimates($pdo, $config, 45);
     echo "\n" . runCronAiResearchSeedReadiness($pdo);
+    // Kompaktace indexu scrapingu (hash URL misto sirokych prefixovych indexu).
     echo "\n" . runDatabaseStorageMaintenance($pdo);
+    // A retence radku. Kompaktace zmensuje indexy nad stejnym poctem radku; tohle resi
+    // ten pocet - crawl log ani provozni log se nikdy nemazaly, takze kvota se vycerpa
+    // i pri par tisicich kontaktech. Uvolneni mista (OPTIMIZE) je rucni krok.
+    echo "\n" . runDatabaseCleanupBatch($pdo, 15);
     exit;
 }
 
@@ -1500,6 +1516,24 @@ function handlePost(PDO $pdo, array $config): ?string
     if ($action === 'delete_scraping_container') {
         deleteScrapingContainer($pdo, (int)($_POST['container_id'] ?? 0));
         return 'Scraping kontejner odstranen.';
+    }
+
+    if ($action === 'run_database_cleanup') {
+        requireDatabaseMaintenanceAccess();
+        return runDatabaseCleanupBatch($pdo, 25);
+    }
+
+    if ($action === 'optimize_database_tables') {
+        requireDatabaseMaintenanceAccess();
+        return optimizeDatabaseTables($pdo, 25);
+    }
+
+    if ($action === 'reset_ai_research_data') {
+        requireDatabaseMaintenanceAccess();
+        if ((string)($_POST['confirm'] ?? '') !== 'VYNULOVAT') {
+            throw new RuntimeException('Vynulovani AI research dat je potreba potvrdit slovem VYNULOVAT.');
+        }
+        return resetAiResearchData($pdo);
     }
 
     if ($action === 'run_scraping_job') {
@@ -11524,6 +11558,543 @@ function cleanupLegacySessionFiles(int $limit = 1000): int
     return $removed;
 }
 
+/**
+ * Uklid a vynulovani jsou destruktivni kroky, takze je smi spustit jen prihlaseny
+ * spravce s pristupem k AI research - stejna hranice jako u zbytku automatiky.
+ */
+function requireDatabaseMaintenanceAccess(): void
+{
+    if (!canAccessAiResearch()) {
+        throw new RuntimeException('Uklid databaze smi spustit jen spravce s pristupem k AI research.');
+    }
+}
+
+/**
+ * Ucty, jejichz kontakty a nascrapovana data nesmi uklid nikdy smazat - ani pri
+ * uplnem vynulovani AI research dat. Uklid se dotyka jen provoznich logu a crawl
+ * logu; tento seznam je pojistka a soucasne to, co se overuje testem.
+ */
+function protectedContactOwnerEmails(): array
+{
+    return array_values(array_unique(array_filter([
+        'lenka@tajemstvijamu.cz',
+        strtolower(trim(AI_RESEARCH_ALLOWED_EMAIL)),
+    ])));
+}
+
+/**
+ * Tabulky, ktere uklid smi mazat. Vse ostatni (kontakty, databaze, kampane, ucty,
+ * scraping_jobs) je pro uklid jen ke cteni - drzi to hranici mezi "log" a "data".
+ */
+function databaseCleanupTables(): array
+{
+    return ['scraping_job_items', 'ai_research_logs', 'ai_research_runs', 'ai_research_contacts', 'app_sessions'];
+}
+
+function formatBytesHuman(int $bytes): string
+{
+    if ($bytes <= 0) {
+        return '0 B';
+    }
+    $units = ['B', 'kB', 'MB', 'GB'];
+    $index = (int)min(count($units) - 1, floor(log($bytes, 1024)));
+    $value = $bytes / (1024 ** $index);
+    return number_format($value, $index >= 2 ? 1 : 0, ',', ' ') . ' ' . $units[$index];
+}
+
+/**
+ * Velikost jednotlivych tabulek z information_schema. Bez toho se o zmenseni databaze
+ * jen hada: rozhoduje soucet dat a indexu, a u InnoDB navic "data_free" - misto, ktere
+ * uz je po mazani volne uvnitr souboru, ale hosting ho porad pocita do kvoty.
+ *
+ * table_rows je u InnoDB odhad z optimalizatoru, proto se u malych tabulek dopocita
+ * presnym COUNT(*) - u velkych by to byl zbytecne drahy dotaz.
+ */
+function databaseTableSizes(PDO $pdo): array
+{
+    if (!isMysql($pdo)) {
+        return [];
+    }
+    try {
+        $rows = $pdo->query('
+            SELECT TABLE_NAME AS name,
+                   COALESCE(TABLE_ROWS, 0) AS row_estimate,
+                   COALESCE(DATA_LENGTH, 0) AS data_bytes,
+                   COALESCE(INDEX_LENGTH, 0) AS index_bytes,
+                   COALESCE(DATA_FREE, 0) AS free_bytes
+            FROM INFORMATION_SCHEMA.TABLES
+            WHERE TABLE_SCHEMA=DATABASE() AND TABLE_TYPE="BASE TABLE"
+        ')->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Throwable $e) {
+        error_log('Database size report failed: ' . $e->getMessage());
+        return [];
+    }
+    $tables = [];
+    foreach ($rows as $row) {
+        $data = (int)$row['data_bytes'];
+        $index = (int)$row['index_bytes'];
+        $tables[] = [
+            'name' => (string)$row['name'],
+            'rows' => (int)$row['row_estimate'],
+            'data_bytes' => $data,
+            'index_bytes' => $index,
+            'free_bytes' => (int)$row['free_bytes'],
+            'total_bytes' => $data + $index,
+            'cleanable' => in_array((string)$row['name'], databaseCleanupTables(), true),
+        ];
+    }
+    usort($tables, static fn(array $a, array $b): int => $b['total_bytes'] <=> $a['total_bytes']);
+    return $tables;
+}
+
+function databaseSizeSummary(PDO $pdo): array
+{
+    $tables = databaseTableSizes($pdo);
+    $summary = ['tables' => $tables, 'data_bytes' => 0, 'index_bytes' => 0, 'free_bytes' => 0, 'total_bytes' => 0];
+    foreach ($tables as $table) {
+        $summary['data_bytes'] += $table['data_bytes'];
+        $summary['index_bytes'] += $table['index_bytes'];
+        $summary['free_bytes'] += $table['free_bytes'];
+        $summary['total_bytes'] += $table['total_bytes'];
+    }
+    return $summary;
+}
+
+/**
+ * Hranice, za kterou se radek crawl logu uz nedrzi. Musi zustat nad nejdelsi cache
+ * "tuhle URL jsme nedavno otevreli a e-mail tam nebyl" (recentNoEmailScrapingCacheDays),
+ * jinak by uklid poslal scraper na stejne URL znovu a usetrene misto by zaplatil
+ * requesty do katalogu.
+ */
+function scrapingItemRetentionCutoff(): string
+{
+    return date('c', time() - (DB_SCRAPING_ITEM_RETENTION_DAYS * 86400));
+}
+
+/**
+ * Radky crawl logu, ktere uz nic nedrzi. Nascrapovane kontakty tady nejsou - ty jsou
+ * v recipients; tady je jen zaznam "tato URL byla otevrena s timto vysledkem".
+ *
+ * Uklid jde po dokoncenych bezich, ne pres celou tabulku: kdyz beh skoncil pred vic
+ * nez retencnim oknem, jeho crawl log uz nikdo nepotrebuje. Pres index na job_id je
+ * to par dotazu misto pruchodu milionem radku, takze to snese i cron na hostingu.
+ *
+ * Trojita pojistka:
+ *  - jen behy, ktere uz skoncily (aktivni frontu prace se uklid nesmi dotknout),
+ *  - jen behy dokoncene pred vic nez retencnim oknem, ktere je nad cache URL bez
+ *    e-mailu, takze uklid nenuti scraper chodit na stejne URL znovu,
+ *  - uspesne radky (email + inserted/updated) jen do vodoznaku backfillu zdroju,
+ *    protoze ten jimi jeste dopisuje zdroj ke kontaktum v recipients.
+ */
+function scrapingItemPruneWatermark(PDO $pdo): int
+{
+    $settings = loadSettings($pdo);
+    return max(0, (int)($settings['recipient_source_backfill_scraping_item_id'] ?? 0));
+}
+
+/**
+ * Podminka pro radky jednoho dokonceneho behu, ktere smi uklid smazat.
+ */
+function scrapingItemPruneItemCondition(int $jobId, int $watermark): array
+{
+    return [
+        'sql' => ' FROM scraping_job_items WHERE job_id=?'
+            . ' AND (email="" OR status NOT IN ("inserted", "updated") OR id<=?)',
+        'params' => [$jobId, $watermark],
+    ];
+}
+
+/**
+ * Behy, jejichz crawl log je na smazani. Bez EXISTS by se uklid porad vracel ke
+ * stejnym uz uklizenym behum a nikdy by se nedostal dal.
+ */
+function scrapingJobsWithPrunableItems(PDO $pdo, int $jobLimit, int $watermark): array
+{
+    $stmt = $pdo->prepare('
+        SELECT j.id
+        FROM scraping_jobs j
+        WHERE j.status IN ("finished", "failed", "cancelled")
+          AND j.finished_at<>""
+          AND j.finished_at<?
+          AND EXISTS (
+              SELECT 1 FROM scraping_job_items i
+              WHERE i.job_id=j.id
+                AND (i.email="" OR i.status NOT IN ("inserted", "updated") OR i.id<=?)
+          )
+        ORDER BY j.id ASC
+        LIMIT ' . max(1, $jobLimit));
+    $stmt->execute([scrapingItemRetentionCutoff(), $watermark]);
+    return array_map('intval', $stmt->fetchAll(PDO::FETCH_COLUMN));
+}
+
+/**
+ * Kolik radku by uklid smazal v nejblizsich davkach. Zamerne se necte cela tabulka -
+ * pocet pres miliony radku by z Konfigurace udelal nejpomalejsi stranku aplikace.
+ */
+function countPrunableScrapingItems(PDO $pdo, int $jobLimit = 25): int
+{
+    if (!tableExists($pdo, 'scraping_job_items') || !tableExists($pdo, 'scraping_jobs')) {
+        return 0;
+    }
+    try {
+        $watermark = scrapingItemPruneWatermark($pdo);
+        $total = 0;
+        foreach (scrapingJobsWithPrunableItems($pdo, $jobLimit, $watermark) as $jobId) {
+            $condition = scrapingItemPruneItemCondition($jobId, $watermark);
+            $stmt = $pdo->prepare('SELECT COUNT(*)' . $condition['sql']);
+            $stmt->execute($condition['params']);
+            $total += (int)$stmt->fetchColumn();
+        }
+        return $total;
+    } catch (Throwable $e) {
+        error_log('Prunable scraping item count failed: ' . $e->getMessage());
+        return 0;
+    }
+}
+
+/**
+ * Smaze davku radku crawl logu. Mazani je vzdy po davkach a pres seznam id - u MySQL
+ * nejde LIMIT u DELETE pres dve tabulky a bez stropu by request spadl na case hostingu.
+ */
+function pruneScrapingJobItems(PDO $pdo, int $limit = DB_CLEANUP_BATCH_ROWS): int
+{
+    if ($limit < 1 || !tableExists($pdo, 'scraping_job_items') || !tableExists($pdo, 'scraping_jobs')) {
+        return 0;
+    }
+    try {
+        $watermark = scrapingItemPruneWatermark($pdo);
+        $deleted = 0;
+        foreach (scrapingJobsWithPrunableItems($pdo, 10, $watermark) as $jobId) {
+            if ($deleted >= $limit) {
+                break;
+            }
+            $condition = scrapingItemPruneItemCondition($jobId, $watermark);
+            $stmt = $pdo->prepare('SELECT id' . $condition['sql'] . ' ORDER BY id ASC LIMIT ' . (int)($limit - $deleted));
+            $stmt->execute($condition['params']);
+            $ids = array_map('intval', $stmt->fetchAll(PDO::FETCH_COLUMN));
+            if (!$ids) {
+                continue;
+            }
+            $pdo->exec('DELETE FROM scraping_job_items WHERE id IN (' . implode(',', $ids) . ')');
+            $deleted += count($ids);
+        }
+        return $deleted;
+    } catch (Throwable $e) {
+        error_log('Scraping item prune failed: ' . $e->getMessage());
+        return 0;
+    }
+}
+
+function countPrunableAiResearchLogs(PDO $pdo): int
+{
+    if (!tableExists($pdo, 'ai_research_logs')) {
+        return 0;
+    }
+    try {
+        $total = (int)$pdo->query('SELECT COUNT(*) FROM ai_research_logs WHERE status<>"planned"')->fetchColumn();
+        return max(0, $total - DB_AI_RESEARCH_LOG_KEEP_ROWS);
+    } catch (Throwable $e) {
+        error_log('Prunable log count failed: ' . $e->getMessage());
+        return 0;
+    }
+}
+
+/**
+ * Provozni log automatiky se drzi na poslednich DB_AI_RESEARCH_LOG_KEEP_ROWS radcich.
+ * Naplanovany radek zustava vzdy - je to jediny zaznam o tom, co se bude delat.
+ */
+function pruneAiResearchLogs(PDO $pdo, int $limit = DB_CLEANUP_BATCH_ROWS): int
+{
+    if ($limit < 1 || !tableExists($pdo, 'ai_research_logs')) {
+        return 0;
+    }
+    try {
+        $keepFrom = $pdo->query('
+            SELECT id FROM ai_research_logs WHERE status<>"planned" ORDER BY id DESC LIMIT 1 OFFSET '
+            . (DB_AI_RESEARCH_LOG_KEEP_ROWS - 1))->fetchColumn();
+        if ($keepFrom === false) {
+            return 0;
+        }
+        $stmt = $pdo->prepare('SELECT id FROM ai_research_logs WHERE status<>"planned" AND id<? ORDER BY id ASC LIMIT ' . (int)$limit);
+        $stmt->execute([(int)$keepFrom]);
+        $ids = array_map('intval', $stmt->fetchAll(PDO::FETCH_COLUMN));
+        if (!$ids) {
+            return 0;
+        }
+        $pdo->exec('DELETE FROM ai_research_logs WHERE id IN (' . implode(',', $ids) . ')');
+        return count($ids);
+    } catch (Throwable $e) {
+        error_log('AI research log prune failed: ' . $e->getMessage());
+        return 0;
+    }
+}
+
+function countExpiredAppSessions(PDO $pdo): int
+{
+    if (!tableExists($pdo, 'app_sessions')) {
+        return 0;
+    }
+    try {
+        $stmt = $pdo->prepare('SELECT COUNT(*) FROM app_sessions WHERE expires_at<?');
+        $stmt->execute([time()]);
+        return (int)$stmt->fetchColumn();
+    } catch (Throwable $e) {
+        return 0;
+    }
+}
+
+function pruneExpiredAppSessions(PDO $pdo, int $limit = DB_CLEANUP_BATCH_ROWS): int
+{
+    if ($limit < 1 || !tableExists($pdo, 'app_sessions')) {
+        return 0;
+    }
+    try {
+        $stmt = $pdo->prepare('SELECT id FROM app_sessions WHERE expires_at<? ORDER BY expires_at ASC LIMIT ' . (int)$limit);
+        $stmt->execute([time()]);
+        $ids = $stmt->fetchAll(PDO::FETCH_COLUMN);
+        if (!$ids) {
+            return 0;
+        }
+        $delete = $pdo->prepare('DELETE FROM app_sessions WHERE id=?');
+        foreach ($ids as $id) {
+            $delete->execute([(string)$id]);
+        }
+        return count($ids);
+    } catch (Throwable $e) {
+        error_log('Session prune failed: ' . $e->getMessage());
+        return 0;
+    }
+}
+
+function countAiResearchRunsWithCache(PDO $pdo): int
+{
+    if (!tableExists($pdo, 'ai_research_runs')) {
+        return 0;
+    }
+    try {
+        return (int)$pdo->query('
+            SELECT COUNT(*) FROM ai_research_runs
+            WHERE plan_json LIKE "%website_context_cache%" AND status NOT IN ("running")
+        ')->fetchColumn();
+    } catch (Throwable $e) {
+        return 0;
+    }
+}
+
+/**
+ * Plan behu si drzi az 6 000 znaku textu z webu seedu - to je pracovni cache pro beh,
+ * ktery jeste neskoncil. U dokonceneho behu uz nic nerozhoduje, takze se z planu
+ * zahodi. Rozhodovaci pole planu (keyword, cileni, trhy, dosah) zustavaji.
+ */
+function stripAiResearchRunCaches(PDO $pdo, int $limit = 50): int
+{
+    if ($limit < 1 || !tableExists($pdo, 'ai_research_runs')) {
+        return 0;
+    }
+    try {
+        $rows = $pdo->query('
+            SELECT id, plan_json FROM ai_research_runs
+            WHERE plan_json LIKE "%website_context_cache%" AND status NOT IN ("running")
+            ORDER BY id ASC LIMIT ' . (int)$limit)->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Throwable $e) {
+        error_log('AI research cache strip failed: ' . $e->getMessage());
+        return 0;
+    }
+    $update = $pdo->prepare('UPDATE ai_research_runs SET plan_json=? WHERE id=?');
+    $stripped = 0;
+    foreach ($rows as $row) {
+        $plan = json_decode((string)$row['plan_json'], true);
+        if (!is_array($plan)) {
+            continue;
+        }
+        unset($plan['website_context_cache']);
+        $update->execute([
+            json_encode($plan, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?: '{}',
+            (int)$row['id'],
+        ]);
+        $stripped++;
+    }
+    return $stripped;
+}
+
+/**
+ * Prehled toho, co by uklid ted smazal. Cisla jsou z databaze, ne odhad - pod
+ * tlacitkem "Uklidit" tak stoji to, co se skutecne stane.
+ */
+function databaseCleanupEstimate(PDO $pdo): array
+{
+    return [
+        [
+            'key' => 'scraping_items',
+            'label' => 'Crawl log dokoncenych behu starsi ' . DB_SCRAPING_ITEM_RETENTION_DAYS . ' dnu',
+            'detail' => 'Zaznam "tato URL byla otevrena s timto vysledkem". Nascrapovane kontakty jsou v databazich kontaktu a zustavaji.',
+            'rows' => countPrunableScrapingItems($pdo),
+        ],
+        [
+            'key' => 'ai_research_logs',
+            'label' => 'Provozni log automatiky nad ' . DB_AI_RESEARCH_LOG_KEEP_ROWS . ' radku',
+            'detail' => 'Historie tiku cronu. Naplanovany radek zustava vzdy.',
+            'rows' => countPrunableAiResearchLogs($pdo),
+        ],
+        [
+            'key' => 'plan_cache',
+            'label' => 'Text z webu seedu v planech dokoncenych behu',
+            'detail' => 'Pracovni cache pro beh, ktery jeste nedobehl. Rozhodovaci pole planu zustavaji.',
+            'rows' => countAiResearchRunsWithCache($pdo),
+        ],
+        [
+            'key' => 'sessions',
+            'label' => 'Propadle prihlasovaci sessiony',
+            'detail' => 'Sessiony po expiraci.',
+            'rows' => countExpiredAppSessions($pdo),
+        ],
+    ];
+}
+
+/**
+ * Jedna davka uklidu. Bezi z cronu i z tlacitka, vzdy s casovym stropem, takze ji
+ * hosting nema co ukoncit. Vraci popis toho, co se smazalo.
+ */
+function runDatabaseCleanupBatch(PDO $pdo, int $budgetSeconds = 20): string
+{
+    $deadline = time() + max(3, $budgetSeconds);
+    $done = [];
+    $items = pruneScrapingJobItems($pdo, DB_CLEANUP_BATCH_ROWS);
+    if ($items > 0) {
+        $done[] = 'crawl log: ' . $items . ' radku';
+    }
+    if (time() < $deadline) {
+        $logs = pruneAiResearchLogs($pdo, DB_CLEANUP_BATCH_ROWS);
+        if ($logs > 0) {
+            $done[] = 'provozni log: ' . $logs . ' radku';
+        }
+    }
+    if (time() < $deadline) {
+        $sessions = pruneExpiredAppSessions($pdo, DB_CLEANUP_BATCH_ROWS);
+        if ($sessions > 0) {
+            $done[] = 'sessiony: ' . $sessions;
+        }
+    }
+    if (time() < $deadline) {
+        $plans = stripAiResearchRunCaches($pdo, 50);
+        if ($plans > 0) {
+            $done[] = 'cache webu v planech: ' . $plans . ' behu';
+        }
+    }
+    if (!$done) {
+        return 'Uklid databaze: nic ke smazani.';
+    }
+    return 'Uklid databaze: ' . implode(', ', $done)
+        . '. Misto se hostingu vrati az po uvolneni (OPTIMIZE) v Konfiguraci.';
+}
+
+/**
+ * Po mazani zustava misto volne jen uvnitr souboru tabulky - hosting ho porad pocita
+ * do kvoty. Teprve prestavba tabulky (OPTIMIZE TABLE, u InnoDB rebuild) ho vrati, a
+ * proto je to samostatny krok: je drahy a nesmi bezet pri kazdem cronu.
+ */
+function optimizeDatabaseTables(PDO $pdo, int $budgetSeconds = 25): string
+{
+    if (!isMysql($pdo)) {
+        return 'Uvolneni mista: jen pro MySQL.';
+    }
+    $before = databaseSizeSummary($pdo);
+    $deadline = time() + max(5, $budgetSeconds);
+    $optimized = [];
+    $skipped = 0;
+    foreach ($before['tables'] as $table) {
+        if ($table['free_bytes'] <= 0) {
+            continue;
+        }
+        if (time() >= $deadline) {
+            $skipped++;
+            continue;
+        }
+        try {
+            $pdo->exec('OPTIMIZE TABLE ' . quoteDatabaseIdentifier((string)$table['name']));
+            $optimized[] = (string)$table['name'] . ' (' . formatBytesHuman((int)$table['free_bytes']) . ')';
+        } catch (Throwable $e) {
+            error_log('Optimize table ' . $table['name'] . ' failed: ' . $e->getMessage());
+        }
+    }
+    if (!$optimized) {
+        return 'Uvolneni mista: zadna tabulka nedrzi volne misto.';
+    }
+    $after = databaseSizeSummary($pdo);
+    $freed = max(0, ($before['total_bytes'] + $before['free_bytes']) - ($after['total_bytes'] + $after['free_bytes']));
+    return 'Uvolneno ' . formatBytesHuman($freed) . ' prestavbou tabulek: ' . implode(', ', $optimized)
+        . ($skipped > 0 ? '. Dalsich ' . $skipped . ' tabulek na dalsi klik (casovy strop requestu).' : '.');
+}
+
+function quoteDatabaseIdentifier(string $identifier): string
+{
+    return '`' . str_replace('`', '``', $identifier) . '`';
+}
+
+/**
+ * Uplne vynulovani AI research dat. Maze jen tri tabulky automatiky - behy, jejich
+ * vzorky kontaktu a provozni log - a stav planovace v settings.
+ *
+ * Nedotyka se niceho, co drzi data uzivatelu: app_users, contact_databases,
+ * recipients, campaigns, send_logs ani scraping_* zustavaji. Kontakty nascrapovane
+ * pro uz zalozene ucty tedy zustavaji i po vynulovani; vraci se jejich pocet, aby
+ * bylo videt, co zustalo.
+ */
+function resetAiResearchData(PDO $pdo): string
+{
+    $preserved = [];
+    foreach (protectedContactOwnerEmails() as $email) {
+        $preserved[] = $email . ': ' . countRecipientsForOwnerEmail($pdo, $email) . ' kontaktu';
+    }
+    $deleted = [];
+    foreach (['ai_research_contacts', 'ai_research_logs', 'ai_research_runs'] as $table) {
+        if (!tableExists($pdo, $table)) {
+            continue;
+        }
+        $rows = (int)$pdo->query('SELECT COUNT(*) FROM ' . quoteDatabaseIdentifier($table))->fetchColumn();
+        $pdo->exec('DELETE FROM ' . quoteDatabaseIdentifier($table));
+        $deleted[] = $table . ': ' . $rows;
+    }
+    foreach ([
+        'ai_research_lock_until',
+        'ai_research_next_allowed_at',
+        'ai_research_last_run_at',
+        'ai_research_last_seed_source_url',
+        'ai_research_manual_pending',
+        'ai_research_quota_streak',
+    ] as $setting) {
+        setSetting($pdo, $setting, '');
+    }
+    return 'AI research data vynulovana (' . implode(', ', $deleted) . '). Zustavaji ucty, databaze kontaktu'
+        . ' i nascrapovane kontakty - ' . implode(', ', $preserved)
+        . '. Misto se hostingu vrati az po uvolneni (OPTIMIZE).';
+}
+
+/**
+ * Kolik kontaktu drzi databaze konkretniho uctu. Slouzi jako doklad, ze uklid ani
+ * vynulovani AI research o kontakty chraneneho uctu nepripravi.
+ */
+function countRecipientsForOwnerEmail(PDO $pdo, string $email): int
+{
+    if (!tableExists($pdo, 'app_users') || !tableExists($pdo, 'contact_databases') || !tableExists($pdo, 'recipients')) {
+        return 0;
+    }
+    try {
+        $stmt = $pdo->prepare('
+            SELECT COUNT(*)
+            FROM recipients r
+            JOIN contact_databases d ON d.id=r.list_id
+            JOIN app_users u ON u.id=d.owner_user_id
+            WHERE LOWER(u.email)=?
+        ');
+        $stmt->execute([strtolower(trim($email))]);
+        return (int)$stmt->fetchColumn();
+    } catch (Throwable $e) {
+        error_log('Protected recipient count failed: ' . $e->getMessage());
+        return 0;
+    }
+}
+
 function updateImportRun(PDO $pdo, int $id, array $fields): void
 {
     $fields['updated_at'] = date('c');
@@ -12551,7 +13122,7 @@ function runScrapingJob(PDO $pdo, int $jobId, int $steps = 8): string
             }
             $item = nextScrapingItem($pdo, $jobId);
             $discoveryDone = (int)($job['discovery_done'] ?? 0) === 1;
-            if (!$discoveryDone && queuedScrapingItemCount($pdo, $jobId) < scrapingDiscoveryBuffer((string)$job['source'])) {
+            if (!$discoveryDone && queuedScrapingItemCount($pdo, $jobId) < scrapingDiscoveryBufferForJob($job)) {
                 $messages[] = discoverScrapingPage($pdo, $job);
                 $job = findScrapingJob($pdo, $jobId);
                 if (in_array($job['status'], ['finished', 'failed', 'paused', 'cancelled'], true)) {
@@ -12646,6 +13217,25 @@ function queuedScrapingItemCount(PDO $pdo, int $jobId): int
     $stmt = $pdo->prepare('SELECT COUNT(*) FROM scraping_job_items WHERE job_id=? AND status="queued"');
     $stmt->execute([$jobId]);
     return (int)$stmt->fetchColumn();
+}
+
+/**
+ * Kolik nezpracovanych URL si beh drzi v predstihu. Neomezuje to, kolik kontaktu beh
+ * nasbira - jen jak dlouhou frontu si dopredu nachysta.
+ *
+ * Beh s cilovym poctem kontaktu (prvni davka z AI research) skonci ve chvili, kdy cil
+ * nasbira, a cela zbyla fronta je od te chvile mrtva. Se stropem 10 000 to znamenalo
+ * tisice radku crawl logu na jeden beh, ktere nikdy nikdo neotevre. Runway se proto
+ * odviji od cile: na sto kontaktu staci nekolik stovek URL v zasobe.
+ */
+function scrapingDiscoveryBufferForJob(array $job): int
+{
+    $buffer = scrapingDiscoveryBuffer((string)($job['source'] ?? ''));
+    $target = (int)($job['max_sites'] ?? 0);
+    if ($target <= 0) {
+        return $buffer;
+    }
+    return max(200, min($buffer, $target * 6));
 }
 
 function scrapingDiscoveryBuffer(string $source = ''): int
@@ -14880,6 +15470,28 @@ function finishScrapingJob(PDO $pdo, int $jobId, string $message): void
         logScrapingImportRun($pdo, $job);
     }
     updateScrapingJob($pdo, $jobId, ['status' => 'finished', 'last_message' => scrapingJobOutcomeText($job), 'finished_at' => date('c')]);
+    discardQueuedScrapingItems($pdo, $jobId);
+}
+
+/**
+ * Beh, ktery skoncil (typicky protoze nasbiral cilovy pocet kontaktu), za sebou
+ * nechaval celou nezpracovanou frontu URL - u firmy.cz to byly az tisice radku na
+ * jeden beh, ktere uz nikdo nikdy neotevre a nenesou zadny vysledek. Ty se zahazuji
+ * hned; zpracovane radky zustavaji jako crawl log a mizi az po retencnim okne.
+ */
+function discardQueuedScrapingItems(PDO $pdo, int $jobId): int
+{
+    if ($jobId <= 0) {
+        return 0;
+    }
+    try {
+        $stmt = $pdo->prepare('DELETE FROM scraping_job_items WHERE job_id=? AND status="queued"');
+        $stmt->execute([$jobId]);
+        return $stmt->rowCount();
+    } catch (Throwable $e) {
+        error_log('Queued scraping item discard for job #' . $jobId . ' failed: ' . $e->getMessage());
+        return 0;
+    }
 }
 
 function failScrapingJob(PDO $pdo, int $jobId, string $message): void
@@ -15005,8 +15617,11 @@ function refreshScrapingJobCounters(PDO $pdo, int $jobId): void
     $stmt = $pdo->prepare('SELECT COUNT(*) FROM scraping_job_items WHERE job_id=?');
     $stmt->execute([$jobId]);
     $discovered = (int)$stmt->fetchColumn();
-    $stmt = $pdo->prepare('UPDATE scraping_jobs SET discovered_count=?, updated_at=? WHERE id=?');
-    $stmt->execute([$discovered, date('c'), $jobId]);
+    // Pocet nalezenych URL smi jen rust. Radky crawl logu se po dokonceni behu
+    // promazavaji (nezpracovana fronta hned, stare radky po retencnim okne), takze
+    // prepocet ze zbylych radku by historii behu zpetne snizil na nepravdu.
+    $stmt = $pdo->prepare('UPDATE scraping_jobs SET discovered_count=?, updated_at=? WHERE id=? AND discovered_count<?');
+    $stmt->execute([$discovered, date('c'), $jobId, $discovered]);
 }
 
 function isMysql(PDO $pdo): bool
@@ -21005,6 +21620,93 @@ function renderApp(PDO $pdo, ?array $flash): void
             </div>
         </form>
     </dialog>
+    <?php if (canAccessAiResearch()): ?>
+    <?php
+        $dbSummary = databaseSizeSummary($pdo);
+        $dbCleanup = databaseCleanupEstimate($pdo);
+        $dbCleanableRows = 0;
+        foreach ($dbCleanup as $dbTask) {
+            $dbCleanableRows += (int)$dbTask['rows'];
+        }
+    ?>
+    <section class="panel">
+        <div class="section-header">
+            <div>
+                <h2>Databáze a úklid</h2>
+                <p>Velikost jednotlivých tabulek přímo z databáze. Kvótu hostingu vyčerpává součet dat a indexů <strong>plus volné místo</strong> – to je místo, které už je po mazání uvnitř souboru tabulky prázdné, ale hosting ho pořád počítá. Proto samotné mazání velikost databáze nesníží; vrátí ji až přestavba tabulky (OPTIMIZE) druhým tlačítkem.</p>
+                <p class="muted">Úklid maže jen provozní a crawl log: záznamy „tato URL byla otevřena s tímto výsledkem“ a historii tiků cronu. <strong>Kontakty, databáze kontaktů, kampaně ani účty se nemažou</strong> – nascrapované kontakty žijí v databázích kontaktů, ne v crawl logu. Malá dávka úklidu běží sama při každém cronu, takže databáze dál neroste bez omezení.</p>
+            </div>
+        </div>
+        <div class="db-size-summary">
+            <span>Data: <strong><?= h(formatBytesHuman((int)$dbSummary['data_bytes'])) ?></strong></span>
+            <span>Indexy: <strong><?= h(formatBytesHuman((int)$dbSummary['index_bytes'])) ?></strong></span>
+            <span>Volné místo v souborech: <strong><?= h(formatBytesHuman((int)$dbSummary['free_bytes'])) ?></strong></span>
+            <span>Celkem proti kvótě: <strong><?= h(formatBytesHuman((int)$dbSummary['total_bytes'] + (int)$dbSummary['free_bytes'])) ?></strong></span>
+        </div>
+        <?php if (!$dbSummary['tables']): ?>
+            <p class="note">Velikosti tabulek umí přečíst jen MySQL (information_schema).</p>
+        <?php else: ?>
+        <div class="table-shell">
+            <table class="db-size-table">
+                <thead><tr><th>Tabulka</th><th>Řádků</th><th>Data</th><th>Indexy</th><th>Volné</th><th>Celkem</th></tr></thead>
+                <tbody>
+                <?php foreach ($dbSummary['tables'] as $dbTable): ?>
+                    <?php if ((int)$dbTable['total_bytes'] < 1024 * 64 && (int)$dbTable['free_bytes'] <= 0) { continue; } ?>
+                    <tr>
+                        <td data-label="Tabulka"><code><?= h((string)$dbTable['name']) ?></code><?= !empty($dbTable['cleanable']) ? ' <span class="badge info" title="Tuto tabulku úklid promazává">úklid</span>' : '' ?></td>
+                        <td data-label="Řádků"><?= h(number_format((int)$dbTable['rows'], 0, ',', ' ')) ?></td>
+                        <td data-label="Data"><?= h(formatBytesHuman((int)$dbTable['data_bytes'])) ?></td>
+                        <td data-label="Indexy"><?= h(formatBytesHuman((int)$dbTable['index_bytes'])) ?></td>
+                        <td data-label="Volné"><?= h(formatBytesHuman((int)$dbTable['free_bytes'])) ?></td>
+                        <td data-label="Celkem"><strong><?= h(formatBytesHuman((int)$dbTable['total_bytes'])) ?></strong></td>
+                    </tr>
+                <?php endforeach; ?>
+                </tbody>
+            </table>
+        </div>
+        <?php endif; ?>
+        <h3>Co je teď ke smazání</h3>
+        <ul class="db-cleanup-list">
+            <?php foreach ($dbCleanup as $dbTask): ?>
+            <li>
+                <strong><?= h(number_format((int)$dbTask['rows'], 0, ',', ' ')) ?></strong>
+                <span><?= h((string)$dbTask['label']) ?></span>
+                <small class="muted"><?= h((string)$dbTask['detail']) ?></small>
+            </li>
+            <?php endforeach; ?>
+        </ul>
+        <div class="actions-row">
+            <form method="post" class="inline">
+                <button type="submit" name="action" value="run_database_cleanup" class="secondary" title="Smaže jednu dávku provozního a crawl logu. Kontakty zůstávají.">Uklidit dávku (<?= h(number_format(min($dbCleanableRows, DB_CLEANUP_BATCH_ROWS), 0, ',', ' ')) ?> řádků)</button>
+            </form>
+            <form method="post" class="inline">
+                <button type="submit" name="action" value="optimize_database_tables" class="secondary" title="Přestaví tabulky, aby se volné místo vrátilo hostingu. Trvá déle.">Uvolnit místo hostingu (OPTIMIZE)</button>
+            </form>
+            <button type="button" class="secondary" data-dialog-open="reset-ai-research-dialog">Vynulovat AI research data</button>
+        </div>
+    </section>
+    <dialog class="modal" id="reset-ai-research-dialog">
+        <form method="post">
+            <input type="hidden" name="action" value="reset_ai_research_data">
+            <div class="modal-header">
+                <h2>Vynulovat AI research data</h2>
+                <button type="button" class="secondary icon" data-dialog-close>Zavřít</button>
+            </div>
+            <p>Smaže <strong>všechny běhy AI research</strong>, jejich vzorky kontaktů a celý provozní log automatiky. Automatika pak začne od prvního seedu.</p>
+            <p>Nemaže nic z toho, co drží data účtů: <strong>účty, databáze kontaktů, nascrapované kontakty, kampaně ani scraping kontejnery zůstávají.</strong> Zachované účty se po vynulování vypíší i s počtem kontaktů:</p>
+            <ul>
+                <?php foreach (protectedContactOwnerEmails() as $protectedEmail): ?>
+                <li><code><?= h($protectedEmail) ?></code>: <?= h(number_format(countRecipientsForOwnerEmail($pdo, $protectedEmail), 0, ',', ' ')) ?> kontaktů</li>
+                <?php endforeach; ?>
+            </ul>
+            <label>Pro potvrzení napiš <code>VYNULOVAT</code><input type="text" name="confirm" autocomplete="off" placeholder="VYNULOVAT" required></label>
+            <div class="modal-actions">
+                <button>Vynulovat AI research data</button>
+                <button type="button" class="secondary" data-dialog-close>Zrušit</button>
+            </div>
+        </form>
+    </dialog>
+    <?php endif; ?>
     <dialog class="modal" id="account-settings-dialog">
         <form method="post" autocomplete="off">
             <input type="hidden" name="action" value="save_account_settings">
