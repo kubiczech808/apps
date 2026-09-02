@@ -1336,6 +1336,28 @@ test("live candidates: an obvious risk collision is filtered before revalidation
   const clearReason = executor.earlyRiskBlockReason(unrelatedCandidate, held);
   assert.equal(clearReason, null, "an unrelated match must not be blocked");
 
+  // A condition id is stronger evidence than inferred event/match keys. Different
+  // outcomes of the exact same Polymarket market often have different token ids, and
+  // older state rows may not carry risk keys at all.
+  const sameMarketDifferentOutcome = {
+    ...eligibleFields,
+    tokenId: "candidate-other-outcome",
+    conditionId: "0xsame-market",
+    question: "A sparse historical candidate with no risk keys",
+  };
+  const heldSameMarket = [{
+    tokenId: "held-other-outcome",
+    conditionId: "0xsame-market",
+    status: "OPEN",
+    shares: 10,
+    question: "Same market, opposite outcome",
+  }];
+  assert.equal(
+    executor.earlyRiskBlockReason(sameMarketDifferentOutcome, executor.heldRiskItems({ positions: heldSameMarket })),
+    "same live market already open",
+    "a different outcome of an occupied condition must not be re-offered as READY",
+  );
+
   // And the whole pool-building step must exclude it before anything expensive runs.
   const pool = executor.prepareLiveCandidatePool([sameMatchCandidate, unrelatedCandidate], liveState);
   const poolTokenIds = pool.candidates.map((item) => item.tokenId);
