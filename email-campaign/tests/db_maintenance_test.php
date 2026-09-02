@@ -47,6 +47,7 @@ foreach (['protectedContactOwnerEmails', 'databaseCleanupTables', 'formatBytesHu
           'countExpiredAppSessions', 'pruneExpiredAppSessions', 'countAiResearchRunsWithCache',
           'stripAiResearchRunCaches', 'databaseCleanupEstimate', 'runDatabaseCleanupBatch',
           'quoteDatabaseIdentifier', 'resetAiResearchData', 'countRecipientsForOwnerEmail',
+          'databaseCleanupInvariant', 'databaseCleanupInvariantDiff', 'runGuardedDatabaseCleanup',
           'scrapingDiscoveryBuffer', 'scrapingDiscoveryBufferForJob'] as $fn) {
     eval(extractFn($src, $fn));
 }
@@ -208,7 +209,72 @@ foreach (['recipients', 'contact_databases', 'app_users', 'campaigns', 'send_log
     assert(!in_array($protectedTable, databaseCleanupTables(), true), $protectedTable . ' nesmi byt v seznamu uklidu');
 }
 
+echo "\n== 7b. davka je vratna: kdyz by ubrala data, vrati se cela zpet ==\n";
+// Tohle je to, co dela uklid vratnym - na 800 MB databazi na sdilenem hostingu nemame
+// zalohu, ze ktere by se dalo obnovit, takze kontrola musi byt uvnitr davky.
+$db = freshDb();
+$db->exec('INSERT INTO app_users (id, email) VALUES (1, "lenka@tajemstvijamu.cz")');
+$db->exec('INSERT INTO contact_databases (id, owner_user_id, name) VALUES (7, 1, "Kontakty")');
+$db->prepare('INSERT INTO recipients (list_id, email) VALUES (7, ?)')->execute(['kontakt@firma.cz']);
+$db->prepare('INSERT INTO scraping_jobs (status, finished_at) VALUES ("finished", ?)')->execute([$old]);
+addItem($db, 1, 'skipped', '', $old);
+addItem($db, 1, 'skipped', '', $old);
+$snapshot = databaseCleanupInvariant($db);
+printf("  hlidane tabulky: %s\n", implode(', ', array_keys($snapshot)));
+foreach (['recipients', 'contact_databases', 'app_users', 'scraping_jobs', 'import_runs'] as $guarded) {
+    assert(array_key_exists($guarded, $snapshot), $guarded . ' musi byt v hlidanem snimku');
+}
+// Bezna davka projde a commitne se.
+$result = runGuardedDatabaseCleanup($db, 10);
+printf("  %s\n", $result['message']);
+assert($result['ok'] === true, 'cista davka musi projit');
+assert($result['rolled_back'] === false, 'a necht se nevraci');
+assert((int)$db->query('SELECT COUNT(*) FROM scraping_job_items')->fetchColumn() === 0, 'crawl log se smazal');
+assert((int)$db->query('SELECT COUNT(*) FROM recipients')->fetchColumn() === 1, 'kontakt zustal');
+
+// A ted davka, ktera by kontakt ubrala: musi se vratit cela zpet.
+addItem($db, 1, 'skipped', '', $old);
+$sabotage = 'runDatabaseCleanupBatch';
+// Prepiseme telo davky tak, aby vedle crawl logu smazala i kontakt - presne ten pripad,
+// pro ktery ta kontrola existuje.
+eval('function sabotagedCleanupBatch(PDO $pdo, int $budgetSeconds = 20): string {
+    pruneScrapingJobItems($pdo, DB_CLEANUP_BATCH_ROWS);
+    $pdo->exec("DELETE FROM recipients");
+    return "sabotovana davka";
+}');
+$before = databaseCleanupInvariant($db);
+$db->beginTransaction();
+sabotagedCleanupBatch($db, 10);
+$diff = databaseCleanupInvariantDiff($before, databaseCleanupInvariant($db));
+printf("  kontrola nasla: %s\n", implode('; ', $diff));
+assert($diff !== [], 'kontrola musi ubrany kontakt poznat');
+$db->rollBack();
+assert((int)$db->query('SELECT COUNT(*) FROM recipients')->fetchColumn() === 1, 'po vraceni je kontakt zpatky');
+assert((int)$db->query('SELECT COUNT(*) FROM scraping_job_items')->fetchColumn() === 1, 'a crawl log taky - vraci se cela davka');
+
+echo "\n== 7c. uklid i uvolneni mista jde spustit z CI, ne jen tlacitkem ==\n";
+foreach (['db_cleanup', 'db_optimize', 'storage_report'] as $endpoint) {
+    assert(str_contains($src, "isset(\$_GET['" . $endpoint . "'])"), 'chybi endpoint ' . $endpoint);
+}
+// Cron i tlacitko musi jit stejnou vratnou cestou jako CI.
+assert(str_contains($src, "runGuardedDatabaseCleanup(\$pdo, 15)['message']"), 'cron jede vratnou cestou');
+assert(str_contains($src, "runGuardedDatabaseCleanup(\$pdo, 25)['message']"), 'tlacitko jede vratnou cestou');
+assert(!str_contains($src, 'echo "\n" . runDatabaseCleanupBatch('), 'nikde uz nesmi byt uklid bez kontroly');
+$guardedSrc = extractFn($src, 'runGuardedDatabaseCleanup');
+assert(str_contains($guardedSrc, 'beginTransaction') && str_contains($guardedSrc, 'rollBack'),
+    'davka musi byt v transakci a umet se vratit');
+assert(str_contains($guardedSrc, 'VRACEN ZPET'), 'a rict to nahlas, aby to workflow poznalo');
+echo "  ok\n";
+
 echo "\n== 8. vynulovani AI research kontakty a ucty zachova ==\n";
+// Vlastni stav, aby sekce nezavisela na tom, co po sobe nechaly predchozi.
+$db = freshDb();
+$db->exec('INSERT INTO app_users (id, email) VALUES (1, "lenka@tajemstvijamu.cz")');
+$db->exec('INSERT INTO contact_databases (id, owner_user_id, name) VALUES (7, 1, "Nascrapovane kontakty")');
+$recipientInsert = $db->prepare('INSERT INTO recipients (list_id, email) VALUES (7, ?)');
+for ($i = 0; $i < 120; $i++) {
+    $recipientInsert->execute(['kontakt' . $i . '@firma.cz']);
+}
 $db->exec('INSERT INTO ai_research_runs (status, plan_json) VALUES ("done", "{}")');
 $db->exec('INSERT INTO ai_research_contacts (run_id) VALUES (1)');
 $SETTINGS = ['ai_research_last_run_at' => '123'];
@@ -249,7 +315,7 @@ $counterSrc = extractFn($src, 'refreshScrapingJobCounters');
 assert(str_contains($counterSrc, 'AND discovered_count<?'), 'prepocet smi cislo jen zvysit');
 
 echo "\n== 11. uklid je omezeny davkou a bezi z cronu ==\n";
-assert(str_contains($src, 'runDatabaseCleanupBatch($pdo, 15)'), 'mala davka pri kazdem cronu');
+assert(str_contains($src, "runGuardedDatabaseCleanup(\$pdo, 15)"), 'mala vratna davka pri kazdem cronu');
 $batchSrc = extractFn($src, 'runDatabaseCleanupBatch');
 assert(str_contains($batchSrc, 'DB_CLEANUP_BATCH_ROWS'), 'mazani ma strop na davku');
 assert(str_contains($batchSrc, '$deadline'), 'a casovy strop, aby request nespadl na hostingu');

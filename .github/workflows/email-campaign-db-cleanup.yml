@@ -1,0 +1,172 @@
+name: Email Campaign DB Cleanup
+
+# Rucne spousteny uklid databaze. Kazda davka uklidu je samostatna transakce s
+# kontrolou po sobe: kdyz by ubral jediny kontakt, databazi kontaktu, ucet, kampan,
+# odeslany email, scrapovaci beh nebo import, vrati se cela davka zpet a job spadne.
+on:
+  workflow_dispatch:
+    inputs:
+      cleanup_rounds:
+        description: 'Kolik davek uklidu poslat (kazde volani jich zvladne nekolik, zbytek dobehne dalsim)'
+        required: false
+        default: '8'
+      cleanup_calls:
+        description: 'Kolik volani uklidu za sebou'
+        required: false
+        default: '6'
+      run_optimize:
+        description: 'Po uklidu uvolnit misto hostingu (OPTIMIZE TABLE)'
+        required: false
+        default: 'true'
+
+concurrency:
+  group: email-campaign-db-cleanup
+  cancel-in-progress: false
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Run database cleanup and report sizes
+        env:
+          APP_DATABASE_NAME: ${{ secrets.APP_DATABASE_NAME }}
+          APP_DATABASE_USERNAME: ${{ secrets.MYSQL_EMAILING_DB_USERNAME }}
+          APP_DATABASE_PASSWORD: ${{ secrets.MYSQL_EMAILING_DB_PASSWORD }}
+          CLEANUP_ROUNDS: ${{ github.event.inputs.cleanup_rounds }}
+          CLEANUP_CALLS: ${{ github.event.inputs.cleanup_calls }}
+          RUN_OPTIMIZE: ${{ github.event.inputs.run_optimize }}
+        run: |
+          if [ -z "$APP_DATABASE_NAME" ] || [ -z "$APP_DATABASE_USERNAME" ] || [ -z "$APP_DATABASE_PASSWORD" ]; then
+            echo "Missing database secrets; cannot derive cron token."
+            exit 1
+          fi
+          TOKEN=$(python3 - <<'PY'
+          import hashlib
+          import os
+
+          material = "email-campaign-cron:" + os.environ["APP_DATABASE_NAME"] + ":" + os.environ["APP_DATABASE_USERNAME"] + ":" + os.environ["APP_DATABASE_PASSWORD"]
+          print(hashlib.sha256(material.encode("utf-8")).hexdigest())
+          PY
+          )
+          base="https://www.osobnizkusenosti.cz/email-campaign/?cron=${TOKEN}"
+          rounds="${CLEANUP_ROUNDS:-8}"
+          calls="${CLEANUP_CALLS:-6}"
+
+          summary() {
+            python3 - "$1" <<'PY'
+          import json
+          import sys
+
+          try:
+              with open(sys.argv[1], encoding="utf-8") as handle:
+                  report = json.load(handle)
+          except Exception as exc:                      # noqa: BLE001
+              print("Report se nepodarilo precist: %s" % exc)
+              sys.exit(0)
+
+          total = report.get("allocated_bytes", 0) + report.get("free_bytes", 0)
+          mb = lambda value: "%.1f MB" % (value / 1048576.0)
+          print("celkem proti kvote: %s (data %s, indexy %s, volne %s)" % (
+              mb(total),
+              mb(report.get("data_bytes", 0)),
+              mb(report.get("index_bytes", 0)),
+              mb(report.get("free_bytes", 0)),
+          ))
+          for table in report.get("tables", [])[:6]:
+              print("  %-22s %9s radku  %10s  (data %s, indexy %s, volne %s)" % (
+                  table.get("table", "?"),
+                  table.get("estimated_rows", 0),
+                  mb(table.get("allocated_bytes", 0)),
+                  mb(table.get("data_bytes", 0)),
+                  mb(table.get("index_bytes", 0)),
+                  mb(table.get("free_bytes", 0)),
+              ))
+          PY
+          }
+
+          echo "=== PRED UKLIDEM ==="
+          curl --show-error --silent --max-time 60 --output /tmp/db-before.json "${base}&storage_report=1"
+          summary /tmp/db-before.json
+
+          echo
+          echo "=== UKLID (${calls} volani po ${rounds} davkach) ==="
+          failed=0
+          for call in $(seq 1 "$calls"); do
+            echo "--- volani ${call}/${calls}"
+            http_code=$(curl --show-error --silent --max-time 170 --output /tmp/db-cleanup.txt --write-out "%{http_code}" "${base}&db_cleanup=1&rounds=${rounds}" || echo "000")
+            cat /tmp/db-cleanup.txt || true
+            if grep -q "VRACEN ZPET" /tmp/db-cleanup.txt; then
+              echo "::error::Uklid se vratil zpet, protoze by ubral data. Databaze zustala nezmenena."
+              failed=1
+              break
+            fi
+            if [ "$http_code" != "200" ]; then
+              echo "::warning::Uklid vratil HTTP ${http_code} (hosting mohl request ukoncit); pokracuji dalsim volanim."
+            fi
+            if grep -q "Uz neni co uklizet" /tmp/db-cleanup.txt; then
+              echo "Fronta uklidu je prazdna, dalsi volani uz nema co delat."
+              break
+            fi
+          done
+
+          if [ "$RUN_OPTIMIZE" = "true" ] && [ "$failed" = "0" ]; then
+            echo
+            echo "=== UVOLNENI MISTA (OPTIMIZE TABLE) ==="
+            # Prestavba tabulky je to jedine, co vrati volne misto hostingu. Bezi
+            # server-side, takze i kdyz hosting ukonci request, MySQL ji dokonci.
+            for attempt in 1 2 3; do
+              echo "--- pokus ${attempt}/3"
+              http_code=$(curl --show-error --silent --max-time 170 --output /tmp/db-optimize.txt --write-out "%{http_code}" "${base}&db_optimize=1" || echo "000")
+              cat /tmp/db-optimize.txt || true
+              if grep -q "zadna tabulka nedrzi volne misto" /tmp/db-optimize.txt; then
+                break
+              fi
+              if [ "$http_code" != "200" ]; then
+                echo "::warning::OPTIMIZE vratil HTTP ${http_code}; MySQL prestavbu dokonci i tak, zkusim znovu."
+                sleep 20
+              fi
+            done
+          fi
+
+          echo
+          echo "=== PO UKLIDU ==="
+          curl --show-error --silent --max-time 60 --output /tmp/db-after.json "${base}&storage_report=1"
+          summary /tmp/db-after.json
+
+          echo
+          echo "=== ROZDIL ==="
+          python3 - <<'PY'
+          import json
+
+          def load(path):
+              with open(path, encoding="utf-8") as handle:
+                  return json.load(handle)
+
+          try:
+              before, after = load("/tmp/db-before.json"), load("/tmp/db-after.json")
+          except Exception as exc:                      # noqa: BLE001
+              print("Rozdil nelze spocitat: %s" % exc)
+              raise SystemExit(0)
+
+          mb = lambda value: "%.1f MB" % (value / 1048576.0)
+          total_before = before.get("allocated_bytes", 0) + before.get("free_bytes", 0)
+          total_after = after.get("allocated_bytes", 0) + after.get("free_bytes", 0)
+          print("celkem proti kvote: %s -> %s (usetreno %s)" % (
+              mb(total_before), mb(total_after), mb(total_before - total_after)))
+
+          rows = {table["table"]: table for table in after.get("tables", [])}
+          for table in before.get("tables", [])[:8]:
+              name = table["table"]
+              now = rows.get(name, {})
+              print("  %-22s %9s -> %-9s radku   %10s -> %s" % (
+                  name,
+                  table.get("estimated_rows", 0),
+                  now.get("estimated_rows", 0),
+                  mb(table.get("allocated_bytes", 0)),
+                  mb(now.get("allocated_bytes", 0)),
+              ))
+          PY
+
+          if [ "$failed" = "1" ]; then
+            exit 1
+          fi

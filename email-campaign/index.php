@@ -1090,6 +1090,45 @@ if (isset($_GET['cron'])) {
         }
         exit;
     }
+    // Uklid a uvolneni mista jde spustit i z CI, aby to nemusel nikdo odklikavat v UI
+    // a aby byl kazdy krok videt v logu workflow vcetne velikosti pred a po.
+    if (isset($_GET['db_cleanup'])) {
+        $rounds = max(1, min(40, (int)($_GET['rounds'] ?? 1)));
+        // Hosting ukonci request kolem 150 s, takze cely endpoint ma vlastni strop.
+        // Co se nestihne, dobehne dalsi volani - kazda davka je samostatna transakce.
+        $endpointDeadline = time() + 100;
+        $stop = '';
+        for ($round = 1; $round <= $rounds; $round++) {
+            if (time() >= $endpointDeadline) {
+                $stop = 'Casovy strop requestu, zbytek dobehne dalsim volanim (davek hotovo: ' . ($round - 1) . ').';
+                break;
+            }
+            $result = runGuardedDatabaseCleanup($pdo, 12);
+            echo 'davka ' . $round . '/' . $rounds . ': ' . $result['message'] . "\n";
+            if (!$result['ok']) {
+                $stop = 'Uklid zastaven po davce ' . $round . '.';
+                http_response_code(500);
+                break;
+            }
+            if (str_contains($result['message'], 'nic ke smazani')) {
+                $stop = 'Uz neni co uklizet, konec po davce ' . $round . '.';
+                break;
+            }
+        }
+        if ($stop !== '') {
+            echo $stop . "\n";
+        }
+        exit;
+    }
+    if (isset($_GET['db_optimize'])) {
+        try {
+            echo optimizeDatabaseTables($pdo, 100) . "\n";
+        } catch (Throwable $e) {
+            http_response_code(503);
+            echo 'Uvolneni mista selhalo: ' . $e->getMessage() . "\n";
+        }
+        exit;
+    }
     if (isset($_GET['ai_research'])) {
         aiResearchLoadProviderState($pdo);
         $hop = max(1, (int)($_GET['hop'] ?? 1));
@@ -1126,7 +1165,7 @@ if (isset($_GET['cron'])) {
     // A retence radku. Kompaktace zmensuje indexy nad stejnym poctem radku; tohle resi
     // ten pocet - crawl log ani provozni log se nikdy nemazaly, takze kvota se vycerpa
     // i pri par tisicich kontaktech. Uvolneni mista (OPTIMIZE) je rucni krok.
-    echo "\n" . runDatabaseCleanupBatch($pdo, 15);
+    echo "\n" . runGuardedDatabaseCleanup($pdo, 15)['message'];
     exit;
 }
 
@@ -1525,7 +1564,7 @@ function handlePost(PDO $pdo, array $config): ?string
 
     if ($action === 'run_database_cleanup') {
         requireDatabaseMaintenanceAccess();
-        return runDatabaseCleanupBatch($pdo, 25);
+        return runGuardedDatabaseCleanup($pdo, 25)['message'];
     }
 
     if ($action === 'optimize_database_tables') {
@@ -12139,6 +12178,88 @@ function optimizeDatabaseTables(PDO $pdo, int $budgetSeconds = 25): string
     $freed = max(0, ($before['total_bytes'] + $before['free_bytes']) - ($after['total_bytes'] + $after['free_bytes']));
     return 'Uvolneno ' . formatBytesHuman($freed) . ' prestavbou tabulek: ' . implode(', ', $optimized)
         . ($skipped > 0 ? '. Dalsich ' . $skipped . ' tabulek na dalsi klik (casovy strop requestu).' : '.');
+}
+
+/**
+ * Kolik radku drzi tabulky, ktere uklid nesmi zmensit. Snimek se bere pred davkou a
+ * po ni - kdyz se cokoli z toho zmeni, davka se cela vrati zpet.
+ *
+ * Tohle je to, co dela uklid vratnym: jinak by "obnovit, kdyz se neco nepovede"
+ * znamenalo obnovit ze zalohy, kterou na 800 MB databazi na sdilenem hostingu nemame.
+ */
+function databaseCleanupInvariant(PDO $pdo): array
+{
+    $snapshot = [];
+    foreach (['recipients', 'contact_databases', 'app_users', 'campaigns', 'send_logs', 'scraping_jobs', 'import_runs', 'scraping_containers'] as $table) {
+        if (!tableExists($pdo, $table)) {
+            continue;
+        }
+        try {
+            $snapshot[$table] = (int)$pdo->query('SELECT COUNT(*) FROM ' . quoteDatabaseIdentifier($table))->fetchColumn();
+        } catch (Throwable $e) {
+            error_log('Cleanup invariant snapshot for ' . $table . ' failed: ' . $e->getMessage());
+        }
+    }
+    return $snapshot;
+}
+
+function databaseCleanupInvariantDiff(array $before, array $after): array
+{
+    $diff = [];
+    foreach ($before as $table => $count) {
+        $now = (int)($after[$table] ?? -1);
+        if ($now !== (int)$count) {
+            $diff[] = $table . ': ' . $count . ' -> ' . $now;
+        }
+    }
+    return $diff;
+}
+
+/**
+ * Uklid v transakci s kontrolou po sobe. Kdyz po davce chybi jediny kontakt, databaze
+ * kontaktu, ucet, kampan, odeslany email, scrapovaci beh nebo import, davka se vrati
+ * zpet a uklid se dal nespousti.
+ *
+ * Vraci pole ['ok' => bool, 'message' => string, 'rolled_back' => bool].
+ */
+function runGuardedDatabaseCleanup(PDO $pdo, int $budgetSeconds = 20): array
+{
+    $before = databaseCleanupInvariant($pdo);
+    $inTransaction = false;
+    try {
+        $pdo->beginTransaction();
+        $inTransaction = true;
+    } catch (Throwable $e) {
+        // Bez transakce se uklid nespousti - nebylo by co vratit.
+        return [
+            'ok' => false,
+            'rolled_back' => false,
+            'message' => 'Uklid nespusten: databaze nepodporuje transakci (' . $e->getMessage() . ').',
+        ];
+    }
+    try {
+        $message = runDatabaseCleanupBatch($pdo, $budgetSeconds);
+        $diff = databaseCleanupInvariantDiff($before, databaseCleanupInvariant($pdo));
+        if ($diff !== []) {
+            $pdo->rollBack();
+            return [
+                'ok' => false,
+                'rolled_back' => true,
+                'message' => 'Uklid VRACEN ZPET - davka by ubrala data: ' . implode(', ', $diff),
+            ];
+        }
+        $pdo->commit();
+        return ['ok' => true, 'rolled_back' => false, 'message' => $message];
+    } catch (Throwable $e) {
+        if ($inTransaction && $pdo->inTransaction()) {
+            $pdo->rollBack();
+        }
+        return [
+            'ok' => false,
+            'rolled_back' => true,
+            'message' => 'Uklid VRACEN ZPET kvuli chybe: ' . $e->getMessage(),
+        ];
+    }
 }
 
 function quoteDatabaseIdentifier(string $identifier): string
