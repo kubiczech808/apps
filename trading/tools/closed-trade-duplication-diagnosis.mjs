@@ -211,6 +211,12 @@ async function main() {
   console.log(`   positions        ${Array.isArray(liveState?.positions) ? liveState.positions.length : "?"}`);
 
   const servedHits = servedClosed.filter(matchesFilter);
+  // The full row, not a chosen subset. The doubled figures have to come from some field of
+  // some source, and a report that only prints the fields I expected cannot show which.
+  if (servedHits.length) {
+    console.log(`\n== the served rows in full (the first ${Math.min(3, servedHits.length)})`);
+    for (const row of servedHits.slice(0, 3)) console.log(`   ${JSON.stringify(row)}`);
+  }
   console.log(`\n== what the dashboard is rendering for /${FILTER.source}/i (${servedHits.length} rows)`);
   for (const row of servedHits) {
     const shares = number(row.shares, 0);
@@ -319,14 +325,37 @@ async function main() {
     console.log(`      differs on: ${differing.join(", ") || "(nothing in the compared fields)"}`);
   }
 
+  // 3b. Every field name the feeds actually use, and the full rows for the markets in
+  //     question. usdcValue read as undefined on the last run, which either means the money
+  //     field is named something else or that these fills genuinely carry no value -- and
+  //     that distinction decides where the doubled stake comes from.
+  const fieldNames = (rows) => [...new Set(rows.flatMap((row) => Object.keys(row || {})))].sort();
+  console.log(`\n== every field the feeds carry`);
+  console.log(`   /trades   ${fieldNames(trades).join(", ") || "(none)"}`);
+  console.log(`   /activity ${fieldNames(activity).join(", ") || "(none)"}`);
+
+  // The open positions carry a cost basis of their own, and a closed row can be built from
+  // a settled position rather than from trade history, so this is the other candidate source.
+  let positions = [];
+  try {
+    positions = await fetchFeed("/positions", { user: address, limit: 200 });
+  } catch (error) {
+    console.log(`   /positions unavailable: ${error?.message || error}`);
+  }
+  console.log(`   /positions ${fieldNames(positions).join(", ") || "(none)"}`);
+
   // 4. The rows for the screenshotted markets, from the raw feeds.
   console.log(`\n== raw rows for /${FILTER.source}/i`);
+  for (const row of positions.filter(matchesFilter).slice(0, 6)) {
+    console.log(`\n   /positions ${JSON.stringify(row)}`);
+  }
   for (const [label, rows] of [["/trades", trades], ["/activity", activity]]) {
     const hits = rows.filter(matchesFilter);
     console.log(`\n   ${label}: ${hits.length} rows`);
     for (const item of hits.slice(0, 40)) {
       console.log(`      ${String(item.question || item.title || "?").slice(0, 60).padEnd(60)} ${describe(item)}`);
     }
+    for (const item of hits.slice(0, 3)) console.log(`      full: ${JSON.stringify(item)}`);
   }
 
   // 5. The real production function, on the real feeds.
