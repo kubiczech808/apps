@@ -2060,9 +2060,14 @@ test("state segments: resolved history retains every measurable trade and purges
   assert.match(source, /\.\.\.resolved\.sort\(\(a, b\) => marketObservationUpdateTime\(b\) - marketObservationUpdateTime\(a\)\),/,
     "resolved rows are sorted and kept, not sliced");
 
-  // Active rows stay bounded: they are a working set, and one that falls out is
-  // simply re-scraped.
-  assert.match(source, /\.\.\.active\.sort\(compareActive\)\.slice\(0, MARKET_OBSERVATION_RETAIN_LIMIT\),/);
+  // The ordinary active working set stays bounded, while a row tied to an enabled live
+  // portfolio or a still-live order survives the cap. Without that exception the scan
+  // could remove a market that the account was already waiting to buy.
+  assert.match(source, /const retainedActive = active\.sort\(compareActive\)\.slice\(0, MARKET_OBSERVATION_RETAIN_LIMIT\);/);
+  assert.match(source, /item\?\.executionRetentionProtected === true/);
+  assert.match(source, /\.\.\.protectedActive,/);
+  assert.match(source, /loadLiveCatalogueProtection\(\)/);
+  assert.match(source, /Live order catalogue refresh failed/);
 
   const rows = Array.from({ length: 12 }, (_, index) => ({
     id: `resolved-${index}`,
@@ -2085,6 +2090,53 @@ test("state segments: resolved history retains every measurable trade and purges
     "only settlement-only resolved rows may be removed from the archive");
   assert.ok(!state.marketObservations.some((row) => row.id === "settlement-only"),
     "a final 0/1 print is not an original market probability");
+});
+
+test("active catalogue: a current live candidate or open order is never evicted by the working-set cap", () => {
+  const now = Date.now();
+  const ordinary = Array.from({ length: 5000 }, (_, index) => ({
+    id: `ordinary-${index}`,
+    tokenId: `ordinary-token-${index}`,
+    status: "SCRAPED",
+    marketProbability: 0.9,
+    endDate: new Date(now + (index + 1) * 60000).toISOString(),
+    updatedAt: new Date(now + index).toISOString(),
+  }));
+  const protectedRow = {
+    id: "live-open-order",
+    tokenId: "live-open-order-token",
+    status: "SCRAPED",
+    marketProbability: 0.745,
+    volumeUsdc: 44000,
+    daysToResolution: 1,
+    endDate: new Date(now + 20 * 86400000).toISOString(),
+    updatedAt: new Date(now - 1000).toISOString(),
+    question: "LoL: BNK FEARX vs Dplus KIA (BO5) - LCK Playoffs",
+    polymarketTags: ["esports", "league-of-legends"],
+  };
+  const liveConfig = {
+    automationEnabled: true,
+    minProbability: 0.72,
+    maxProbability: 0.82,
+    minLiquidityUsdc: 20000,
+    maxResolutionDays: 7,
+    marketType: "all",
+  };
+  assert.equal(bot.observationMatchesActiveLiveConfig(protectedRow, liveConfig), true);
+  const marked = bot.markLiveCatalogueProtection([...ordinary, protectedRow], {
+    configs: [liveConfig],
+    orderTokenIds: new Set([protectedRow.tokenId]),
+  });
+  const retained = bot.retainMarketObservations(marked);
+  assert.equal(retained.length, 5001,
+    "the ordinary 5,000-row cache remains bounded, with the protected live row retained alongside it");
+  assert.ok(retained.some((row) => row.tokenId === protectedRow.tokenId),
+    "a live order's Gamma market must not vanish before it is filled, cancelled, or resolved");
+
+  const orders = bot.liveOrderRecords({
+    openOrders: [{ tokenId: protectedRow.tokenId, slug: "lol-fox1-dk-2026-09-03", marketAcceptingOrders: true }],
+  });
+  assert.deepEqual(orders, [{ tokenId: protectedRow.tokenId, slug: "lol-fox1-dk-2026-09-03" }]);
 });
 
 test("state segments: writeState publishes siblings that readState reassembles", async () => {

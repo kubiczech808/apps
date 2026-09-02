@@ -133,6 +133,30 @@ function derivedExecutionStateUrl(source = REMOTE_STATE_URL) {
   }
 }
 const EXECUTION_STATE_URL = process.env.PAPER_EXECUTION_STATE_URL || derivedExecutionStateUrl();
+function derivedTradingApiUrl(source, action, parameters = {}) {
+  if (!source) return "";
+  try {
+    const url = new URL(source);
+    url.searchParams.set("action", action);
+    for (const key of ["target", "summary", "strategy_id", "offset"]) url.searchParams.delete(key);
+    for (const [key, value] of Object.entries(parameters)) {
+      if (value == null || value === "") url.searchParams.delete(key);
+      else url.searchParams.set(key, String(value));
+    }
+    return url.toString();
+  } catch {
+    return "";
+  }
+}
+// The scan is the only writer of the active opportunity catalogue. It must know which
+// live portfolios and live orders are still actionable, otherwise its generic working-set
+// cap can evict a market which the live account is already waiting to buy.
+const PORTFOLIO_CONFIG_URL = process.env.PAPER_PORTFOLIO_CONFIG_URL
+  || derivedTradingApiUrl(REMOTE_STATE_URL, "portfolio-config");
+const LIVE_STATE_URL = process.env.PAPER_LIVE_STATE_URL
+  || derivedTradingApiUrl(REMOTE_STATE_URL, "state", { target: "live" });
+const LIVE_CATALOGUE_REHYDRATE_LIMIT = Math.max(1, Math.min(40,
+  envNumber("PAPER_LIVE_CATALOGUE_REHYDRATE_LIMIT", 20)));
 // The PHP summary endpoint is preferred because it is small and validated by
 // the app. The static file is a recovery path for a state that is temporarily
 // too large for PHP to parse during a migration.
@@ -2510,8 +2534,19 @@ function retainMarketObservations(items = []) {
   // it filled, and the counts stopped matching what had really been mined. Active
   // rows are a working set and are still bounded -- an unresolved market that falls
   // out is re-scraped -- but a resolved one, once dropped, is gone for good.
+  //
+  // `executionRetentionProtected` is deliberately a property of the row rather than
+  // a transient input to this function. State normalization also passes through this
+  // function before a scan starts; losing the protection there would recreate the same
+  // eviction on every read. The scan recomputes the marker from current live settings
+  // and CLOB open orders, so it cannot become a permanent archive flag.
+  const retainedActive = active.sort(compareActive).slice(0, MARKET_OBSERVATION_RETAIN_LIMIT);
+  const retainedKeys = new Set(retainedActive.map(marketObservationKey).filter(Boolean));
+  const protectedActive = active.filter((item) => item?.executionRetentionProtected === true
+    && !retainedKeys.has(marketObservationKey(item)));
   return [
-    ...active.sort(compareActive).slice(0, MARKET_OBSERVATION_RETAIN_LIMIT),
+    ...retainedActive,
+    ...protectedActive,
     ...resolved.sort((a, b) => marketObservationUpdateTime(b) - marketObservationUpdateTime(a)),
   ].sort((a, b) => marketObservationUpdateTime(b) - marketObservationUpdateTime(a));
 }
@@ -3962,6 +3997,109 @@ async function fetchMarketBySlug(slug) {
     marketBySlugCache.delete(key);
     throw error;
   }
+}
+
+function activeLivePortfolioConfigs(payload = {}) {
+  const config = payload?.config && typeof payload.config === "object" ? payload.config : payload;
+  const rows = [config?.live, config?.live5050, ...Object.values(config?.livePortfolios || {})];
+  return rows.filter((row) => row && typeof row === "object"
+    && row.archived !== true && row.automationEnabled !== false);
+}
+
+function configTagSet(value) {
+  return new Set((Array.isArray(value) ? value : [])
+    .map((tag) => String(tag ?? "").trim().toLowerCase()
+      .replace(/[^a-z0-9_-]+/g, "-").replace(/^-+|-+$/g, ""))
+    .filter(Boolean));
+}
+
+// This is intentionally a conservative superset of the endpoint/executor filter. It
+// decides only whether a row earns protection from the catalogue cap; final CLOB quote,
+// spread, fee and capital checks remain where they belong in the execution path.
+function observationMatchesActiveLiveConfig(item, config) {
+  const status = String(item?.status || item?.selectionStatus || "").toUpperCase();
+  if (["RESOLVED", "CLOSED", "EXPIRED", "FINALIZED", "SETTLED"].includes(status)
+    || item?.marketClosed === true || item?.acceptingOrders === false) return false;
+  const probability = Number(item?.marketProbability);
+  const minimum = normalizeOptionalProbability(config?.minProbability);
+  const maximum = normalizeOptionalProbability(config?.maxProbability);
+  if (!Number.isFinite(probability) || (minimum != null && probability < minimum)
+    || (maximum != null && probability > maximum)) return false;
+  const days = Number(item?.daysToResolution);
+  const maxDays = Number(config?.maxResolutionDays);
+  if (Number.isFinite(days) && Number.isFinite(maxDays) && maxDays > 0 && days > maxDays) return false;
+  const minimumVolume = Number(config?.minLiquidityUsdc);
+  if (Number.isFinite(minimumVolume) && minimumVolume > 0 && rowVolumeUsdc(item) < minimumVolume) return false;
+  const marketType = normalizePortfolioMarketType(config?.marketType, config?.requireMostProbableOutcome === true);
+  if (marketType !== "all" && reportMarketType(item) !== marketType) return false;
+  if (config?.excludeOverUnderMarkets === true && isOverUnderMarket(item)) return false;
+  const tags = rowTagSlugs(item);
+  const include = configTagSet(config?.includeOnlyMarketTags || config?.allowedMarketTags);
+  if (include.size && ![...include].some((tag) => tags.has(tag))) return false;
+  if (!include.size) {
+    const excluded = configTagSet(config?.excludedMarketTags);
+    if ([...excluded].some((tag) => tags.has(tag))) return false;
+  }
+  return true;
+}
+
+function liveOrderRecords(liveState = {}) {
+  const rows = [
+    ...(Array.isArray(liveState?.openOrders) ? liveState.openOrders : []),
+    ...(Array.isArray(liveState?.positions) ? liveState.positions : []),
+    ...(Array.isArray(liveState?.openPositions) ? liveState.openPositions : []),
+  ];
+  const byToken = new Map();
+  for (const row of rows) {
+    const tokenId = String(row?.tokenId || row?.assetId || "").trim();
+    const slug = String(row?.slug || row?.eventSlug || "").trim();
+    if (!tokenId || !slug) continue;
+    if (row?.marketResolved === true || row?.marketClosed === true || row?.marketAcceptingOrders === false) continue;
+    byToken.set(tokenId, { tokenId, slug });
+  }
+  return [...byToken.values()].slice(0, LIVE_CATALOGUE_REHYDRATE_LIMIT);
+}
+
+async function loadLiveCatalogueProtection() {
+  const [configResult, liveStateResult] = await Promise.allSettled([
+    PORTFOLIO_CONFIG_URL ? fetchJson(`${PORTFOLIO_CONFIG_URL}${PORTFOLIO_CONFIG_URL.includes("?") ? "&" : "?"}t=${Date.now()}`) : Promise.resolve({}),
+    LIVE_STATE_URL ? fetchJson(`${LIVE_STATE_URL}${LIVE_STATE_URL.includes("?") ? "&" : "?"}t=${Date.now()}`) : Promise.resolve({}),
+  ]);
+  if (configResult.status === "rejected") {
+    console.warn(`Live portfolio retention config unavailable (${configResult.reason?.message || configResult.reason}); retaining open orders only.`);
+  }
+  if (liveStateResult.status === "rejected") {
+    console.warn(`Live order retention state unavailable (${liveStateResult.reason?.message || liveStateResult.reason}); retaining matching live portfolio rows only.`);
+  }
+  const configs = configResult.status === "fulfilled" ? activeLivePortfolioConfigs(configResult.value) : [];
+  const orders = liveStateResult.status === "fulfilled" ? liveOrderRecords(liveStateResult.value) : [];
+  const orderMarkets = await mapWithConcurrency(orders, async ({ slug }) => {
+    try {
+      return await fetchMarketBySlug(slug);
+    } catch (error) {
+      console.warn(`Live order catalogue refresh failed for ${slug} (${error?.message || error}).`);
+      return null;
+    }
+  });
+  return {
+    configs,
+    orderTokenIds: new Set(orders.map(({ tokenId }) => tokenId)),
+    markets: orderMarkets.filter(Boolean),
+  };
+}
+
+function markLiveCatalogueProtection(items = [], { configs = [], orderTokenIds = new Set() } = {}) {
+  return (Array.isArray(items) ? items : []).map((item) => {
+    const tokenId = String(item?.tokenId || item?.clobTokenId || item?.assetId || "").trim();
+    const protectedForLiveExecution = orderTokenIds.has(tokenId)
+      || configs.some((config) => observationMatchesActiveLiveConfig(item, config));
+    if (protectedForLiveExecution) {
+      return { ...item, executionRetentionProtected: true };
+    }
+    if (item?.executionRetentionProtected !== true) return item;
+    const { executionRetentionProtected, ...withoutProtection } = item;
+    return withoutProtection;
+  });
 }
 
 function shouldCheckEqualStopBeforePending({ equalRiskProtection = false, awaitingResolution = false, marketClosed = false } = {}) {
@@ -9398,18 +9536,25 @@ async function refreshMarketObservations(state) {
       }
     }
 
+    // A scan's rotating Gamma page is not guaranteed to include an event which already
+    // has a live limit order. Rehydrate those exact markets from the live account before
+    // applying the active-catalogue cap, and retain every row matching an enabled live
+    // portfolio. This is read-only; it neither places nor changes an exchange order.
+    const liveCatalogueProtection = await loadLiveCatalogueProtection();
+    const liveOrderMarkets = liveCatalogueProtection.markets;
+
     // Priority rows go first so that if anything downstream is bounded, the events that
     // are happening right now, resolving next, or carrying the most money today are the
     // ones that survive. The passes overlap by design -- a match kicking off in an hour
     // is on all three -- so this merges instead of concatenating: mergeMarketLists keeps
     // the first copy of a market, which means an overlapping market keeps its highest
     // priority position and is still only counted, audited and retained once.
-    const priorityMarkets = mergeMarketLists(liveMarkets, frontierMarkets, highVolumeMarkets);
+    const priorityMarkets = mergeMarketLists(liveOrderMarkets, liveMarkets, frontierMarkets, highVolumeMarkets);
     const rotatingMarkets = diversifyMarketScanOrder(batch);
     const fetchedMarkets = mergeMarketLists(priorityMarkets, rotatingMarkets);
     const duplicateMarketsSkipped = Math.max(
       0,
-      liveMarkets.length + frontierMarkets.length + highVolumeMarkets.length
+      liveOrderMarkets.length + liveMarkets.length + frontierMarkets.length + highVolumeMarkets.length
         + rotatingMarkets.length - fetchedMarkets.length,
     );
     const knownEventKeys = activeScanEventKeys(state.marketObservations || []);
@@ -9468,9 +9613,12 @@ async function refreshMarketObservations(state) {
     const sortedNotRetainedReasonCounts = sortedMarketScanReasonCounts(notRetainedReasonCounts);
     const auditRows = marketScanAuditRows({ fetchedMarkets, observations, previousKeys, observedAt: scanRunAt });
 
-    state.marketObservations = retainMarketObservations(
-      mergeMarketObservationLists(observations, state.marketObservations || []).map(normalizeMarketObservationEconomics),
-    );
+    const mergedObservations = mergeMarketObservationLists(observations, state.marketObservations || [])
+      .map(normalizeMarketObservationEconomics);
+    state.marketObservations = retainMarketObservations(markLiveCatalogueProtection(
+      mergedObservations,
+      liveCatalogueProtection,
+    ));
     // Measured after the merge and the retention pass, so this is what the catalogue
     // really holds -- the one number that answers whether a run added anything.
     const activeObservationCountAfter = (state.marketObservations || [])
@@ -9494,6 +9642,9 @@ async function refreshMarketObservations(state) {
       lastBatchEndDate: batch?.__scanLastEndDate || null,
       lastScanAt: scanRunAt,
       lastBatchCount: fetchedMarkets.length,
+      liveOrderCatalogueCount: liveOrderMarkets.length,
+      liveExecutionRetentionProtectedCount: state.marketObservations
+        .filter((item) => item?.executionRetentionProtected === true).length,
       // The rotating scope's own rows. Reading this off fetchedMarkets would fold the
       // live and priority passes into the scope's count and overstate it several times.
       lastPreferredCount: scope.tag ? 0 : rotatingMarkets.length,
@@ -11917,6 +12068,11 @@ export {
   // The hook readStateWithSegments calls after fetching the core, so a test can put a
   // manifest in front of the writer the same way a real read does.
   rememberStateSegmentManifest,
+  retainMarketObservations,
+  activeLivePortfolioConfigs,
+  liveOrderRecords,
+  observationMatchesActiveLiveConfig,
+  markLiveCatalogueProtection,
   PUBLISHED_STATE_SEGMENT_NAMES,
   STATE_SEGMENT_NAMES,
   stateHasCurrentSchema,
