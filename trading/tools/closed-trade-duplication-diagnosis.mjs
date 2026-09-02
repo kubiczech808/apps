@@ -45,6 +45,12 @@ const ADDRESS_CANDIDATES = [
   process.env.POLYMARKET_DEPOSIT_WALLET_ADDRESS,
   "0x3252de913d9323667f21f4d88fa1f996fc282293",
 ];
+// The wallet that trades is discovered from the signing key, which this tool deliberately
+// does not have. The served live state records the address that discovery settled on, so
+// the account is read from production rather than guessed -- and the same document holds
+// the closed rows the dashboard is rendering, which is the other half of the comparison.
+const LIVE_STATE_URL = process.env.LIVE_STATE_URL
+  || "https://osobnizkusenosti.cz/trading/api.php?action=state&target=live";
 const ACTIVITY_LIMIT = Number(process.env.LIVE_ACTIVITY_LIMIT || 50);
 const TRADE_LIMIT = Number(process.env.LIVE_TRADE_LIMIT || 500);
 // The markets the user screenshotted, so the report speaks to the rows they were looking
@@ -122,12 +128,20 @@ async function proxyWalletFor(address) {
   }
 }
 
+async function fetchLiveState() {
+  const url = `${LIVE_STATE_URL}${LIVE_STATE_URL.includes("?") ? "&" : "?"}diagnosisAt=${Date.now()}`;
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(`live state HTTP ${response.status}`);
+  const payload = await response.json();
+  return payload?.state && typeof payload.state === "object" ? payload.state : payload;
+}
+
 // Which of the candidates actually has a history. Probing with limit=1 keeps this cheap and
 // makes "the account is elsewhere" a reported fact rather than a silent empty report.
-async function resolveAccount() {
+async function resolveAccount(extra = []) {
   const seen = new Set();
   const candidates = [];
-  for (const value of ADDRESS_CANDIDATES) {
+  for (const value of [...extra, ...ADDRESS_CANDIDATES]) {
     const address = String(value || "").trim().toLowerCase();
     if (!address || seen.has(address)) continue;
     seen.add(address);
@@ -161,6 +175,9 @@ async function resolveAccount() {
 }
 
 const isTradeRow = (item, source) => source === "trades" || String(item.type || "").toUpperCase().includes("TRADE");
+const matchesFilter = (item) => FILTER.test(
+  `${item?.question || ""} ${item?.title || ""} ${item?.slug || ""} ${item?.eventSlug || ""} ${item?.outcome || ""}`,
+);
 const describe = (item) => [
   `side=${item.side || item.type || "?"}`,
   `size=${JSON.stringify(item.size)}`,
@@ -177,7 +194,48 @@ async function main() {
   console.log(`/activity limit ${ACTIVITY_LIMIT}   /trades limit ${TRADE_LIMIT}`);
   console.log(`Read-only: public feeds only, no credentials, nothing written, no orders.\n`);
 
-  const address = await resolveAccount();
+  // The served state first: it names the account and carries the rows the dashboard draws,
+  // so the screenshot's figures are read rather than reconstructed.
+  let liveState = null;
+  try {
+    liveState = await fetchLiveState();
+  } catch (error) {
+    console.log(`!! could not read the served live state: ${error?.message || error}`);
+  }
+  const servedClosed = Array.isArray(liveState?.closedTrades) ? liveState.closedTrades : [];
+  const stateAddress = String(liveState?.account?.address || "").toLowerCase();
+  console.log(`== the served live state`);
+  console.log(`   generatedAt      ${liveState?.generatedAt || "(none)"}`);
+  console.log(`   account          ${shortAddress(stateAddress)}`);
+  console.log(`   closedTrades     ${servedClosed.length}`);
+  console.log(`   positions        ${Array.isArray(liveState?.positions) ? liveState.positions.length : "?"}`);
+
+  const servedHits = servedClosed.filter(matchesFilter);
+  console.log(`\n== what the dashboard is rendering for /${FILTER.source}/i (${servedHits.length} rows)`);
+  for (const row of servedHits) {
+    const shares = number(row.shares, 0);
+    const redeemed = number(row.redeemedShares, 0);
+    console.log(`\n   ${String(row.question || "?").slice(0, 88)}`);
+    console.log(`      outcome ${row.outcome}   status ${row.status}   closedAtSource ${row.closedAtSource || "-"}`);
+    console.log(`      stake ${money(number(row.stakeUsdc))}   shares ${shares.toFixed(4)}   redeemedShares ${redeemed.toFixed(4)}`
+      + `   ratio ${redeemed > 0 ? (shares / redeemed).toFixed(4) : "-"}`);
+    console.log(`      entry ${pct(number(row.entryPrice))}   exit ${pct(number(row.exitPrice))}`
+      + `   proceeds ${money(number(row.exitValueUsdc))}   P/L ${money(number(row.realizedPnlUsdc))}`);
+  }
+  const servedRedeemed = servedClosed.filter((row) => String(row.status || "").toUpperCase() === "REDEEMED");
+  const servedDoubled = servedRedeemed.filter((row) => number(row.redeemedShares, 0) > 0
+    && Math.abs(number(row.shares, 0) / number(row.redeemedShares) - 2) < 0.02);
+  const servedHalfExit = servedClosed.filter((row) => number(row.exitPrice) != null
+    && Math.abs(number(row.exitPrice) - 0.5) < 0.005);
+  const servedNegativeWins = servedRedeemed.filter((row) => number(row.realizedPnlUsdc, 0) < 0);
+  console.log(`\n== the same three symptoms across every served closed row`);
+  console.log(`   REDEEMED rows                                ${servedRedeemed.length} of ${servedClosed.length}`);
+  console.log(`   ... shares exactly 2x the redeemed count     ${servedDoubled.length}`);
+  console.log(`   exit price exactly 50.0%                     ${servedHalfExit.length}`);
+  console.log(`   REDEEMED rows carrying a NEGATIVE P/L        ${servedNegativeWins.length}`);
+  console.log(`   summed served P/L                            ${money(servedClosed.reduce((sum, row) => sum + number(row.realizedPnlUsdc, 0), 0))}`);
+
+  const address = await resolveAccount(stateAddress ? [stateAddress] : []);
   console.log(`\n== feeds for ${shortAddress(address)}`);
   const [activity, trades] = await Promise.all([
     fetchFeed("/activity", { user: address, limit: ACTIVITY_LIMIT }),
@@ -263,7 +321,6 @@ async function main() {
 
   // 4. The rows for the screenshotted markets, from the raw feeds.
   console.log(`\n== raw rows for /${FILTER.source}/i`);
-  const matchesFilter = (item) => FILTER.test(`${item.question || ""} ${item.title || ""} ${item.slug || ""} ${item.eventSlug || ""} ${item.outcome || ""}`);
   for (const [label, rows] of [["/trades", trades], ["/activity", activity]]) {
     const hits = rows.filter(matchesFilter);
     console.log(`\n   ${label}: ${hits.length} rows`);
