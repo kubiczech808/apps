@@ -1956,13 +1956,15 @@ test("5050 run log: a state with no batchLog is left as one", async () => {
 async function runPlacementLoop({ budgetMs, targetCount, perOrderMs, progressEvery = 5 }) {
   const source = readFileSync(new URL("../tools/live-order-executor.mjs", import.meta.url), "utf8");
   const start = source.indexOf("  const placementStartedAt = Date.now();");
-  const end = source.indexOf("  // Cleanup, layered on top of the guarantee above.");
+  // Anchored on the declaration that follows the loop rather than on the prose above it.
+  // The comment this used to cut at was rewritten, which silently unhooked the slice.
+  const end = source.indexOf("  const cancelledSiblings = [];");
   assert.ok(start > 0 && end > start, "the placement loop must still be identifiable");
   const loop = source.slice(start, end);
 
   const progress = [];
   const build = new Function(
-    "targets", "DRY_RUN", "hasFlag", "orderAttemptSummary", "submitOrderWithMakerPrecisionRecovery",
+    "targets", "DRY_RUN", "hasFlag", "orderAttemptSummary", "submitLiveEntryWithMakerPrecisionRecovery",
     "successfulOrderResponse", "orderResponseError", "tradingConfig", "FIXED_ENTRY_BUDGET_MS",
     "FIXED_ENTRY_PROGRESS_EVERY", "console",
     `return (async () => {
@@ -2432,12 +2434,21 @@ test("after a scrape: a scheduled scan dispatches too, not only one someone pres
   assert.match(condition, /if: success\(\)/, "but a failed scan must not wake an executor");
 
   // What makes the five-minute rate safe on the single self-hosted runner: a third
-  // dispatch replaces the queued one instead of stacking behind it.
+  // dispatch replaces the queued one instead of stacking behind it. Read as fields
+  // rather than as adjacent lines, so a comment inside the block cannot unhook this.
+  const concurrencyGroups = new Set();
   for (const file of ["polymarket-live-limit-order-test", "trading-live-5050"]) {
     const workflow = await readFile(new URL(`../../.github/workflows/${file}.yml`, import.meta.url), "utf8");
-    assert.match(workflow, /concurrency:\n  group: [^\n]+\n  cancel-in-progress: false/,
-      `${file} must serialize its own runs`);
+    const block = workflow.slice(workflow.indexOf("\nconcurrency:")).split(/\n(?=\S)/).slice(0, 2).join("\n");
+    const group = /^\s+group:\s*(.+)$/m.exec(block);
+    assert.ok(group, `${file} must serialize its own runs`);
+    assert.match(block, /^\s+cancel-in-progress:\s*false\s*$/m,
+      `${file} must queue a dispatch rather than cancel the run in flight`);
+    concurrencyGroups.add(group[1].trim());
   }
+  // Both live workflows spend the same funded proxy wallet, so serializing them apart
+  // would still let two entry passes race for the same collateral.
+  assert.equal(concurrencyGroups.size, 1, "the live workflows must share one concurrency group");
   assert.match(scan, /runs-on: ubuntu-latest/, "and the scan itself must not compete for that runner");
 });
 
