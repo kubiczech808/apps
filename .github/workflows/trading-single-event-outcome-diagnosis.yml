@@ -1,0 +1,45 @@
+name: Trading Single Event Outcome Diagnosis
+
+# Read-only diagnostic, manual only. Asks Gamma what one event actually resolved to and
+# compares it against what our state recorded for that trade, including what a voided
+# 0.50-a-share settlement and a fired stop loss would each have cost. Writes nothing,
+# publishes nothing, no secrets.
+on:
+  workflow_dispatch:
+    inputs:
+      event_slug:
+        description: "Polymarket event slug"
+        required: false
+        default: "cs2-ntr-gl1-2026-09-02"
+        type: string
+      match_text:
+        description: "Lowercase text to match the market by, when the slug is not stored on the row"
+        required: false
+        default: "map handicap"
+        type: string
+      stop_loss_multiplier:
+        description: "Configured stop-loss multiple of the win (1.75 = 175%)"
+        required: false
+        default: "1.75"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Diagnose the event's outcome
+        working-directory: trading
+        env:
+          EVENT_SLUG: ${{ inputs.event_slug || 'cs2-ntr-gl1-2026-09-02' }}
+          MATCH_TEXT: ${{ inputs.match_text || 'map handicap' }}
+          STOP_LOSS_MULTIPLIER: ${{ inputs.stop_loss_multiplier || '1.75' }}
+        run: node tools/single-event-outcome-diagnosis.mjs
