@@ -42,4 +42,9 @@ jobs:
           MARKET_FILTER: ${{ inputs.market_filter || 'infinite|chongqing|cirstea|badosa|sassuolo|frosinone|b8 vs' }}
           LIVE_TRADE_LIMIT: ${{ inputs.trade_limit || '500' }}
           LIVE_ACTIVITY_LIMIT: ${{ inputs.activity_limit || '50' }}
+          # Addresses only, the same ones trading-live-account.yml passes. The history
+          # feeds are public and take no key, but they take the wallet that holds it, and
+          # the repo default is not that wallet. No signing key is passed here.
+          POLYMARKET_ADDRESS: ${{ secrets.POLYMARKET_ADDRESS || secrets.POLYMARKET_FUNDER_ADDRESS || '0x3252de913d9323667f21f4d88fa1f996fc282293' }}
+          POLYMARKET_FUNDER_ADDRESS: ${{ secrets.POLYMARKET_FUNDER_ADDRESS || secrets.POLYMARKET_ADDRESS || '0x3252de913d9323667f21f4d88fa1f996fc282293' }}
         run: node tools/closed-trade-duplication-diagnosis.mjs

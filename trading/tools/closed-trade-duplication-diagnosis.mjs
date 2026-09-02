@@ -34,7 +34,17 @@
 import { closedTradesFromHistory } from "./live-account-sync.mjs";
 
 const DATA_API = process.env.POLYMARKET_DATA_API || "https://data-api.polymarket.com";
-const ADDRESS = (process.env.POLYMARKET_ADDRESS || "0x3252de913d9323667f21f4d88fa1f996fc282293").toLowerCase();
+const GAMMA_API = process.env.POLYMARKET_GAMMA_API || "https://gamma-api.polymarket.com";
+// The sync discovers which address actually holds the account, because the wallet that
+// trades is often a proxy of the configured one. The repo default returned an empty
+// history, so this resolves the same way instead of trusting one name.
+const ADDRESS_CANDIDATES = [
+  process.env.POLYMARKET_ADDRESS,
+  process.env.POLYMARKET_FUNDER_ADDRESS,
+  process.env.POLYMARKET_PROXY_WALLET_ADDRESS,
+  process.env.POLYMARKET_DEPOSIT_WALLET_ADDRESS,
+  "0x3252de913d9323667f21f4d88fa1f996fc282293",
+];
 const ACTIVITY_LIMIT = Number(process.env.LIVE_ACTIVITY_LIMIT || 50);
 const TRADE_LIMIT = Number(process.env.LIVE_TRADE_LIMIT || 500);
 // The markets the user screenshotted, so the report speaks to the rows they were looking
@@ -91,6 +101,65 @@ function identity(item) {
   ].join(":");
 }
 
+// Addresses are public on-chain data, but a shortened form keeps the report readable and
+// avoids pasting a wallet in full into a log that gets quoted around.
+const shortAddress = (value) => {
+  const text = String(value || "");
+  return text.length > 12 ? `${text.slice(0, 6)}...${text.slice(-4)}` : text || "(none)";
+};
+
+async function proxyWalletFor(address) {
+  const url = new URL("/public-profile", GAMMA_API);
+  url.searchParams.set("address", address);
+  try {
+    const response = await fetch(url, { headers: { "User-Agent": "osobnizkusenosti-trading-live-sync" } });
+    if (!response.ok) return null;
+    const profile = await response.json();
+    const proxy = String(profile?.proxyWallet || "").toLowerCase();
+    return proxy && proxy !== address ? proxy : null;
+  } catch {
+    return null;
+  }
+}
+
+// Which of the candidates actually has a history. Probing with limit=1 keeps this cheap and
+// makes "the account is elsewhere" a reported fact rather than a silent empty report.
+async function resolveAccount() {
+  const seen = new Set();
+  const candidates = [];
+  for (const value of ADDRESS_CANDIDATES) {
+    const address = String(value || "").trim().toLowerCase();
+    if (!address || seen.has(address)) continue;
+    seen.add(address);
+    candidates.push(address);
+  }
+  for (const address of [...candidates]) {
+    const proxy = await proxyWalletFor(address);
+    if (proxy && !seen.has(proxy)) {
+      seen.add(proxy);
+      candidates.push(proxy);
+    }
+  }
+  console.log(`== resolving which wallet holds the history (${candidates.length} candidates)`);
+  for (const address of candidates) {
+    const url = new URL("/trades", DATA_API);
+    url.searchParams.set("user", address);
+    url.searchParams.set("limit", "1");
+    let rows = [];
+    try {
+      const response = await fetch(url, { headers: { "User-Agent": "osobnizkusenosti-trading-live-sync" } });
+      const parsed = response.ok ? await response.json() : [];
+      rows = Array.isArray(parsed) ? parsed : (Array.isArray(parsed?.data) ? parsed.data : []);
+    } catch (error) {
+      console.log(`   ${shortAddress(address)}   probe failed: ${error?.message || error}`);
+      continue;
+    }
+    console.log(`   ${shortAddress(address)}   ${rows.length ? "HAS trade history" : "no trade history"}`);
+    if (rows.length) return address;
+  }
+  return candidates[0] || "";
+}
+
 const isTradeRow = (item, source) => source === "trades" || String(item.type || "").toUpperCase().includes("TRADE");
 const describe = (item) => [
   `side=${item.side || item.type || "?"}`,
@@ -105,13 +174,14 @@ const describe = (item) => [
 
 async function main() {
   console.log(`Closed-trade duplication diagnosis at ${new Date().toISOString()}`);
-  console.log(`account ${ADDRESS}   /activity limit ${ACTIVITY_LIMIT}   /trades limit ${TRADE_LIMIT}`);
+  console.log(`/activity limit ${ACTIVITY_LIMIT}   /trades limit ${TRADE_LIMIT}`);
   console.log(`Read-only: public feeds only, no credentials, nothing written, no orders.\n`);
 
-  console.log(`== feeds`);
+  const address = await resolveAccount();
+  console.log(`\n== feeds for ${shortAddress(address)}`);
   const [activity, trades] = await Promise.all([
-    fetchFeed("/activity", { user: ADDRESS, limit: ACTIVITY_LIMIT }),
-    fetchFeed("/trades", { user: ADDRESS, limit: TRADE_LIMIT }),
+    fetchFeed("/activity", { user: address, limit: ACTIVITY_LIMIT }),
+    fetchFeed("/trades", { user: address, limit: TRADE_LIMIT }),
   ]);
   console.log(`   /trades   ${trades.length} rows`);
   console.log(`   /activity ${activity.length} rows`
