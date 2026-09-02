@@ -1,0 +1,32 @@
+name: Trading Live Stop Loss Coverage Diagnosis
+
+# Read-only diagnostic, manual only. Reports whether a stop loss is configured for each
+# live portfolio, which token ids the RPi exit worker's policy payload actually covers, and
+# which open positions are absent from it. Writes nothing, publishes nothing, no secrets.
+on:
+  workflow_dispatch:
+    inputs:
+      focus_markets:
+        description: "Semicolon-separated substrings of the markets to report in full"
+        required: false
+        default: "bernet"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Diagnose live stop-loss coverage
+        working-directory: trading
+        env:
+          FOCUS_MARKETS: ${{ inputs.focus_markets || 'bernet' }}
+        run: node tools/live-stop-loss-coverage-diagnosis.mjs
