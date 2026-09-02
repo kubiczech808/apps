@@ -710,6 +710,32 @@ function portfolioEquityUsdc(mode = state.mode) {
   return Number.isFinite(equity) ? equity : null;
 }
 
+// Asked for: among the live portfolios, the ones that are switched ON come first, and ROI
+// orders them within that. A portfolio that is off is still shown -- it holds real positions
+// -- but it is not what the operator is watching, so it sinks below the running ones
+// whatever its historical return.
+//
+// Sorting a copy and falling back to the incoming order keeps it stable, so portfolios whose
+// numbers have not loaded yet do not shuffle between renders.
+function byActiveThenRoiDescending(modes) {
+  const order = new Map(modes.map((mode, index) => [mode, index]));
+  const roiOf = (mode) => {
+    const roi = portfolioAnnualizedRoiForMode(mode);
+    return roi && Number.isFinite(roi.annualized) ? roi.annualized : null;
+  };
+  return [...modes].sort((left, right) => {
+    const leftOn = automationIsEnabled(portfolioConfigForMode(left));
+    const rightOn = automationIsEnabled(portfolioConfigForMode(right));
+    if (leftOn !== rightOn) return leftOn ? -1 : 1;
+    const leftRoi = roiOf(left);
+    const rightRoi = roiOf(right);
+    if (leftRoi === rightRoi) return order.get(left) - order.get(right);
+    if (leftRoi == null) return 1;
+    if (rightRoi == null) return -1;
+    return rightRoi - leftRoi || order.get(left) - order.get(right);
+  });
+}
+
 // Asked for: order the portfolios by equity, largest first. Sorting a copy and falling
 // back to the incoming order keeps it stable, so portfolios whose equity is not loaded
 // yet (and portfolios level with each other) do not shuffle between renders.
@@ -754,7 +780,7 @@ function dashboardModes() {
     .map((id) => `live-custom-${id}`);
   const liveModes = ["live", "live-5050", ...customLiveModes].filter((mode) => !portfolioIsArchived(mode));
   const paperModes = paperStrategyIds().map((id) => `paper-${id}`);
-  return [...byEquityDescending(liveModes), ...byEquityDescending(paperModes)];
+  return [...byActiveThenRoiDescending(liveModes), ...byEquityDescending(paperModes)];
 }
 
 function defaultPortfolioNameForMode(mode = state.mode) {
@@ -5626,6 +5652,37 @@ function overviewAnnualizedRoi({ portfolio = null, firstOpenedAt = "" } = {}) {
   return { annualized, days };
 }
 
+// The ROI the overview column shows, for any mode. Factored out because the ordering now
+// sorts by it: a table sorted by one number while displaying another is a bug waiting to be
+// reported, so both read this.
+function portfolioAnnualizedRoiForMode(mode) {
+  if (isLivePortfolioMode(mode)) {
+    const live = state.liveState?.portfolio || null;
+    const configuredInitial = liveInitialCapitalForMode(mode, portfolioConfigForMode(mode));
+    const liveForRoi = configuredInitial == null
+      ? live
+      : { ...live, initialUsdc: configuredInitial, originalValueUsdc: configuredInitial, depositedUsdc: configuredInitial };
+    return overviewAnnualizedRoi({
+      portfolio: liveForRoi,
+      firstOpenedAt: state.liveState?.firstOpenedAt
+        || state.liveState?.portfolio?.firstOpenedAt
+        || firstOpenedAtFromTrades(
+          state.liveState?.positions,
+          state.liveState?.openPositions,
+          state.liveState?.closedTrades,
+          state.liveState?.openOrders,
+        ),
+    });
+  }
+  const strategyId = paperStrategyIdFromMode(mode);
+  return overviewAnnualizedRoi({
+    portfolio: overviewPortfolioNumbers(strategyId),
+    firstOpenedAt: state.botState?.paperPortfolios?.[strategyId]?.historySummary?.firstOpenedAt
+      || state.portfolioOverview?.[strategyId]?.historySummary?.firstOpenedAt
+      || "",
+  });
+}
+
 function renderPortfolioOverview() {
   if (!els.portfolioOverview) return;
   const live = state.liveState?.portfolio || null;
@@ -5653,17 +5710,7 @@ function renderPortfolioOverview() {
         positions: live ? Number(live.marketValueUsdc) : null,
         orders: live ? reservedByOpenOrders(state.liveState?.openOrders) : null,
         free: live ? Number(live.cashUsdc) : null,
-        roi: overviewAnnualizedRoi({
-          portfolio: liveForRoi,
-          firstOpenedAt: state.liveState?.firstOpenedAt
-            || state.liveState?.portfolio?.firstOpenedAt
-            || firstOpenedAtFromTrades(
-              state.liveState?.positions,
-              state.liveState?.openPositions,
-              state.liveState?.closedTrades,
-              state.liveState?.openOrders,
-            ),
-        }),
+        roi: portfolioAnnualizedRoiForMode(mode),
         live: true,
       };
     }
@@ -5681,12 +5728,7 @@ function renderPortfolioOverview() {
         : null,
       orders: portfolio ? Number(portfolio.restingLimitOrderUsdc || 0) : null,
       free: portfolio ? Number(portfolio.freeCapitalUsdc) : null,
-      roi: overviewAnnualizedRoi({
-        portfolio,
-        firstOpenedAt: state.botState?.paperPortfolios?.[paperStrategyIdFromMode(mode)]?.historySummary?.firstOpenedAt
-          || state.portfolioOverview?.[paperStrategyIdFromMode(mode)]?.historySummary?.firstOpenedAt
-          || "",
-      }),
+      roi: portfolioAnnualizedRoiForMode(mode),
       live: false,
     };
   });
@@ -8084,14 +8126,18 @@ async function triggerScrapedOpportunityRefresh(item) {
 
 async function loadLiveState(options = {}) {
   try {
-    // Both live execution logs are loaded regardless of which tab is open: the split
-    // between the two portfolios is decided by what 5050 placed, so the Live tab
-    // needs 5050's log to know what is not its own.
-    const [liveResult, botResult, executionResult, fixedEntryResult] = await Promise.allSettled([
+    // EVERY live portfolio's execution log is loaded, not only the open tab's, because a
+    // row belongs to whichever portfolio's log names its token -- and a log that is not
+    // loaded cannot name anything. With only the active tab's log in hand, another
+    // portfolio's positions and resting orders looked unowned, and unowned falls to the
+    // base Live portfolio: three live portfolios each showed the others' rows as their own.
+    const attributionModes = allLiveModes().map(normalizeMode);
+    const [liveResult, botResult, executionResult, fixedEntryResult, ...attributionResults] = await Promise.allSettled([
       fetchJson("data/live-state.json"),
       fetchJson("data/paper-state.json", { summary: "portfolio-overview" }),
       fetchJson(liveExecutionStateFile(options.requestedMode || state.mode)),
       fetchJson("data/live-5050-execution-state.json"),
+      ...attributionModes.map((mode) => fetchJson(liveExecutionStateFile(mode))),
     ]);
     if (dashboardLoadIsStale(options) || !isLiveMode()) return;
     if (liveResult.status === "rejected") throw liveResult.reason;
@@ -8113,6 +8159,14 @@ async function loadLiveState(options = {}) {
       state.liveExecutionByMode[executionMode] = null;
     }
     state.liveExecutionState = state.liveExecutionByMode[executionMode] || null;
+    // The other portfolios' logs, used only to decide whose rows are whose. A portfolio
+    // that has never run has no file, so a 404 here is ordinary -- and it must not clear a
+    // log already in hand, or that portfolio's rows would fall back to the Live tab for as
+    // long as the miss lasts. Only a successful fetch writes.
+    for (const [index, mode] of attributionModes.entries()) {
+      const result = attributionResults[index];
+      if (result?.status === "fulfilled") state.liveExecutionByMode[mode] = result.value;
+    }
     // Absent is not empty: a failed fetch must not silently reassign every 5050
     // position to the Live tab, so the last known log is kept.
     if (fixedEntryResult.status === "fulfilled") state.live5050ExecutionState = fixedEntryResult.value;
@@ -9618,30 +9672,10 @@ function renderBotState(botState) {
   openOpportunityFromCurrentUrl();
 }
 
-// The two live portfolios trade one Polymarket account, so the wallet cannot tell
-// them apart -- but each records what it placed. A token is 5050's if 5050 submitted
-// an order for it; everything else belongs to the main live portfolio. Without this
-// each portfolio would show the other's rows, and 5050 rests dozens of bids at once.
-function submittedTokenIds(executionState) {
-  const tokens = new Set();
-  const rows = [
-    executionState || {},
-    ...(Array.isArray(executionState?.runLog) ? executionState.runLog : []),
-  ];
-  for (const row of rows) {
-    for (const attempt of (Array.isArray(row?.attempts) ? row.attempts : [])) {
-      const action = String(attempt?.action || "").toUpperCase();
-      if (action.includes("REJECT") || action.startsWith("DRY_RUN")) continue;
-      const tokenId = String(attempt?.tokenId || "");
-      if (tokenId) tokens.add(tokenId);
-    }
-  }
-  return tokens;
-}
-
-function fixedEntryTokenIds() {
-  return submittedTokenIds(state.live5050ExecutionState);
-}
+// The live portfolios trade one Polymarket account, so the wallet cannot tell them apart --
+// but each records what it placed, and liveOrdersByToken below reads those records. It
+// replaced a pair of token-set helpers that discarded the order PRICE, which is what
+// separates a fill from another portfolio's resting bid on the same market.
 
 // Attribution must never hide a row from both portfolios: anything 5050 did not
 // place shows under Live, which is also the safe direction for a token whose
@@ -9773,14 +9807,107 @@ function boughtAtFixedEntryPrice(row) {
 // Attribution for any live portfolio, not only the selected one. The optimisation report
 // has to ask about every live portfolio in one pass, which the state.mode-bound version
 // below cannot answer.
+// Every live mode there is, archived ones included. Attribution has to consider a portfolio
+// that is currently hidden, or its rows would reappear under whichever tab is showing.
+function allLiveModes() {
+  const customLiveModes = Object.keys((state.portfolioConfig || {}).livePortfolios || {})
+    .filter((id) => CUSTOM_PAPER_STRATEGY_ID.test(id))
+    .map((id) => `live-custom-${id}`);
+  return ["live", "live-5050", ...customLiveModes];
+}
+
+// Every live portfolio's orders, per token: which portfolio, at what price, when. This is
+// fixedEntryOrderPricesByToken generalized from "5050's orders" to "each portfolio's", and
+// it is the only signal that can separate three or more live portfolios. They share one
+// wallet, and every portfolio but 5050 prices its bids the same way off the book, so
+// nothing about a row itself says who ordered it.
+//
+// Before this, attribution was a two-way split -- 5050, or everything else -- so with a
+// third live portfolio each of them showed the others' positions, resting orders, unfilled
+// orders and closed trades as its own, and the Resolved accuracy tile counted them all.
+function liveOrdersByToken() {
+  const orders = new Map();
+  for (const mode of allLiveModes()) {
+    const normalized = normalizeMode(mode);
+    const executionState = normalized === "live-5050"
+      ? (state.live5050ExecutionState || (state.liveExecutionByMode || {})[normalized])
+      : (state.liveExecutionByMode || {})[normalized];
+    if (!executionState) continue;
+    const records = [executionState, ...(Array.isArray(executionState.runLog) ? executionState.runLog : [])];
+    for (const record of records) {
+      const at = String(record?.generatedAt || record?.runAt || executionState.generatedAt || "");
+      for (const attempt of (Array.isArray(record?.attempts) ? record.attempts : [])) {
+        const action = String(attempt?.action || "").toUpperCase();
+        if (action.includes("REJECT") || action.startsWith("DRY_RUN")) continue;
+        const tokenId = String(attempt?.tokenId || "");
+        if (!tokenId) continue;
+        const price = Number(attempt?.orderPrice);
+        if (!orders.has(tokenId)) orders.set(tokenId, []);
+        orders.get(tokenId).push({ mode: normalized, price: Number.isFinite(price) ? price : null, at });
+      }
+    }
+  }
+  return orders;
+}
+
+// A token can appear in two portfolios' logs -- one traded it after the other closed out.
+// The newest order owns it, the same rule api.php applies to the stop-loss policy.
+function newestLiveOrder(orders) {
+  return orders.reduce((newest, order) => (!newest || String(order.at || "") >= String(newest.at || "") ? order : newest), null);
+}
+
+// Which live portfolio a row belongs to, or null when no log claims it.
+//
+// A filled row and a resting one are answered differently, and that distinction is load
+// bearing rather than fussy. Both portfolios draw from one candidate pool and rest bids on
+// the same markets, so the token alone cannot say who FILLED: claiming a fill by token
+// handed Live's positions and closed history to whichever portfolio merely had an unfilled
+// bid resting on that market, which is the ordinary case rather than a rare one. What a
+// position was actually bought at does say, because it matches the order that filled.
+function liveTokenOwnerMode(row) {
+  const tokenId = String(row?.tokenId || row?.assetId || "");
+  if (!tokenId) return null;
+  const orders = liveOrdersByToken().get(tokenId) || [];
+  if (!orders.length) return null;
+  const matches = (candidate, value) => Number.isFinite(candidate)
+    && Number.isFinite(value)
+    && Math.abs(value - candidate) < FIXED_ENTRY_PRICE_TOLERANCE;
+
+  if (isFilledPortfolioRow(row)) {
+    const paid = Number(row?.entryPrice ?? row?.avgPrice ?? row?.averagePrice);
+    // An unknown buy price leaves an unknown owner rather than a guessed one.
+    if (!Number.isFinite(paid)) return null;
+    const filled = orders.filter((order) => matches(order.price, paid));
+    return filled.length ? newestLiveOrder(filled).mode : null;
+  }
+
+  // A resting order carries the price it was rested at, so an exact match is the strongest
+  // claim; failing that, an order on this token is claim enough, since only a portfolio
+  // that ordered it can have it resting.
+  const resting = Number(row?.price ?? row?.orderPrice ?? row?.limitPrice);
+  const priced = orders.filter((order) => matches(order.price, resting));
+  return newestLiveOrder(priced.length ? priced : orders).mode;
+}
+
 function belongsToLivePortfolio(row, mode = state.mode) {
   const wantsFixedEntry = isFixedEntryMode(mode);
   const tokenId = String(row?.tokenId || row?.assetId || "");
   if (!tokenId) return !wantsFixedEntry;
-  const owned = isFilledPortfolioRow(row)
+  // A log that claims this row settles it, whichever portfolio wrote that log.
+  const owner = liveTokenOwnerMode(row);
+  if (owner) return owner === normalizeMode(mode);
+  // Nothing claims it. 5050 can still recognize its own by price -- it rests every bid at
+  // its configured entry, far from the market by construction, so its orders are visible
+  // on its tab before its run log publishes. Anything it did not place stays with the base
+  // Live portfolio rather than being hidden from every tab or shown on all of them. A
+  // custom live portfolio claims only what its own log names, because it prices exactly as
+  // Live does and no price could tell the two apart.
+  const looksLikeFixedEntry = isFilledPortfolioRow(row)
     ? boughtAtFixedEntryPrice(row)
-    : (fixedEntryTokenIds().has(tokenId) || restsAtFixedEntryPrice(row));
-  return wantsFixedEntry ? owned : !owned;
+    : restsAtFixedEntryPrice(row);
+  if (wantsFixedEntry) return looksLikeFixedEntry;
+  if (customLivePortfolioIdFromMode(mode)) return false;
+  return !looksLikeFixedEntry;
 }
 
 function belongsToActiveLivePortfolio(row) {
@@ -12876,14 +13003,33 @@ function liveOptimisationPortfolios() {
 // the live portfolios would silently analyse zero trades. A failure is swallowed: the
 // paper half of the report is still worth showing.
 async function loadLiveStateForOptimisation() {
-  if (state.liveState || state.optimisationLiveStatePending || state.optimisationLiveStateTried) return;
+  const haveExecutionLogs = Boolean(state.liveExecutionByMode
+    && Object.keys(state.liveExecutionByMode).length);
+  if ((state.liveState && haveExecutionLogs)
+    || state.optimisationLiveStatePending
+    || state.optimisationLiveStateTried) return;
   state.optimisationLiveStatePending = true;
   try {
-    const liveState = await fetchFreshState("live");
-    if (liveState && typeof liveState === "object") {
-      state.liveState = liveState;
-      renderPortfolioOptimizationReport();
+    // The execution logs come too, not only the account snapshot. This report reads each
+    // live portfolio's own closed trades, and whose a trade is gets decided by which
+    // portfolio's log names it -- so opening Settings directly, without the dashboard
+    // having loaded those logs first, would hand every live row to the base Live portfolio
+    // and report the other live portfolios as having traded nothing at all.
+    const modes = allLiveModes().map(normalizeMode);
+    const [liveState, ...executions] = await Promise.all([
+      state.liveState ? Promise.resolve(state.liveState) : fetchFreshState("live"),
+      ...modes.map((mode) => fetchJson(liveExecutionStateFile(mode)).catch(() => null)),
+    ]);
+    state.liveExecutionByMode = state.liveExecutionByMode || {};
+    for (const [index, mode] of modes.entries()) {
+      // A portfolio that has never run has no file. Absent must not clear a log already in
+      // hand, so only a real payload is written.
+      if (!executions[index]) continue;
+      state.liveExecutionByMode[mode] = executions[index];
+      if (mode === "live-5050") state.live5050ExecutionState = executions[index];
     }
+    if (liveState && typeof liveState === "object") state.liveState = liveState;
+    renderPortfolioOptimizationReport();
   } catch {
     // Keep the paper half rather than blanking the panel.
   } finally {

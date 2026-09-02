@@ -4016,12 +4016,17 @@ test("5050: it is its own live portfolio, not a copy of a paper one", async () =
 
   // Overview finances come from the shared Polymarket account, as they must --
   // there is one wallet -- but orders, positions and the run log are attributed.
-  assert.match(app, /function submittedTokenIds\(executionState\)/);
-  // The mode is a parameter now, so the optimisation report can ask about a live
-  // portfolio other than the selected one, but the either/or is unchanged.
+  assert.match(app, /function liveOrdersByToken\(\)/);
+  // The mode is a parameter, so the optimisation report can ask about a live portfolio
+  // other than the selected one.
   assert.match(app, /const wantsFixedEntry = isFixedEntryMode\(mode\);/);
-  assert.match(app, /return wantsFixedEntry \? owned : !owned;/,
-    "each token shows under exactly one of the two live portfolios");
+  // Attribution used to be a two-way either/or -- 5050, or everything else -- which with a
+  // third live portfolio meant each of them showed the others' rows. A row now belongs to
+  // whichever portfolio's own log claims it, and to no other.
+  assert.match(app, /const owner = liveTokenOwnerMode\(row\);\n\s*if \(owner\) return owner === normalizeMode\(mode\);/,
+    "each row shows under exactly one live portfolio");
+  assert.ok(!/return wantsFixedEntry \? owned : !owned;/.test(app),
+    "the two-portfolio either/or cannot come back: it is what mixed the portfolios up");
   assert.match(app, /\.filter\(belongsToActiveLivePortfolio\)/);
   assert.match(app, /!isFixedEntryMode\(\) && Array\.isArray\(state\.liveState\?\.runLog\)/,
     "and 5050's run log is its own");
@@ -4597,6 +4602,12 @@ test("5050: its own resting orders appear on its tab straight away", async () =>
     pick(/function isFilledPortfolioRow\([\s\S]*?\n\}/),
     pick(/function boughtAtFixedEntryPrice\([\s\S]*?\n\}/),
     pick(/function isClosedTrade\([\s\S]*?\n\}/),
+    pick(/function allLiveModes\([\s\S]*?\n\}/),
+    pick(/function liveOrdersByToken\([\s\S]*?\n\}/),
+    pick(/function newestLiveOrder\([\s\S]*?\n\}/),
+    pick(/function liveTokenOwnerMode\([\s\S]*?\n\}/),
+    pick(/function normalizeMode\([\s\S]*?\n\}/),
+    pick(/function customLivePortfolioIdFromMode\([\s\S]*?\n\}/),
     pick(/function belongsToLivePortfolio\([\s\S]*?\n\}/),
     pick(/function belongsToActiveLivePortfolio\([\s\S]*?\n\}/),
   ].join("\n");
@@ -4604,10 +4615,21 @@ test("5050: its own resting orders appear on its tab straight away", async () =>
     const isFixedEntryMode=()=>${fixed};
     const normalizeFixedEntryPrice=(v)=>v??0.5;
     const portfolioConfigForMode=()=>({fixedEntryPrice:0.51});
-    // No published run log in this case -- the point is that a bid is recognised before
-    // one exists, from the configured price alone.
-    const state={live5050ExecutionState:null};
-    const fixedEntryTokenIds=()=>new Set(${JSON.stringify(owned)});
+    const CUSTOM_PAPER_STRATEGY_ID = /^[a-z][a-zA-Z0-9]{1,30}$/;
+    const BUILT_IN_PAPER_STRATEGY_IDS = [];
+    const draftedCustomLivePortfolioId = () => null;
+    // The tokens 5050's log names, in the shape attribution reads them from: an order on
+    // the token, at the price it was rested at. The point of the test is the OTHER signal
+    // -- a bid recognised from the configured price before any log exists -- so the row
+    // under test is deliberately absent from this log.
+    const state={
+      mode: ${fixed} ? "live-5050" : "live",
+      liveExecutionByMode: {},
+      live5050ExecutionState: {
+        generatedAt: "2026-09-01T00:00:00Z",
+        attempts: ${JSON.stringify(owned)}.map((tokenId) => ({ action: "SUBMITTED", tokenId, orderPrice: 0.51 })),
+      },
+    };
     ${/const FIXED_ENTRY_PRICE_TOLERANCE = [\d.]+;/.exec(app)[0]}
     ${body}
     return belongsToActiveLivePortfolio(row);`);
@@ -5322,13 +5344,19 @@ function liveTradeAttribution(app, { mode, fixedEntryPrice = 0.51, execution5050
     }
     throw new Error(`unbalanced ${name}`);
   };
-  const body = ["submittedTokenIds", "fixedEntryTokenIds", "fixedEntryPriceSignatures", "matchesFixedEntryPrice",
+  const body = ["allLiveModes", "allLiveModes", "liveOrdersByToken", "newestLiveOrder", "liveTokenOwnerMode", "normalizeMode", "customLivePortfolioIdFromMode", "fixedEntryPriceSignatures", "matchesFixedEntryPrice",
     "restsAtFixedEntryPrice", "isFilledPortfolioRow", "fixedEntryOrderPricesByToken", "boughtAtFixedEntryPrice",
     "belongsToLivePortfolio", "belongsToActiveLivePortfolio", "isClosedTrade", "liveClosedTrades", "liveOpenOrders"]
     .map(pick).join("\n\n");
   const tolerance = /const FIXED_ENTRY_PRICE_TOLERANCE = [\d.]+;/.exec(app)[0];
+  // Attribution reads the portfolios' own execution logs, so the sandbox needs the
+  // constants those helpers close over. Both are trivially faithful here: these tests
+  // use only the two shipped live modes, which normalizeMode returns unchanged.
+  const constants = 'const CUSTOM_PAPER_STRATEGY_ID = /^[a-z][a-zA-Z0-9]{1,30}$/;'
+    + '\nconst BUILT_IN_PAPER_STRATEGY_IDS = [];'
+    + '\nconst draftedCustomLivePortfolioId = () => null;';
   return new Function("state", "isFixedEntryMode", "normalizeFixedEntryPrice", "portfolioConfigForMode",
-    `${tolerance}\n${body}\nreturn { liveClosedTrades, liveOpenOrders };`)(
+    `${tolerance}\n${constants}\n${body}\nreturn { liveClosedTrades, liveOpenOrders };`)(
     { mode, live5050ExecutionState: execution5050 },
     () => mode === "live-5050",
     (value) => Number(value),
@@ -5586,14 +5614,20 @@ test("5050 fills: a changed entry price does not hand old fills to Live", async 
     }
     throw new Error(`unbalanced ${name}`);
   };
-  const body = ["submittedTokenIds", "fixedEntryTokenIds", "fixedEntryPriceSignatures",
+  const body = ["allLiveModes", "allLiveModes", "liveOrdersByToken", "newestLiveOrder", "liveTokenOwnerMode", "normalizeMode", "customLivePortfolioIdFromMode", "fixedEntryPriceSignatures",
     "matchesFixedEntryPrice", "restsAtFixedEntryPrice", "fixedEntryOrderPricesByToken",
     "isFilledPortfolioRow", "boughtAtFixedEntryPrice", "belongsToLivePortfolio", "belongsToActiveLivePortfolio",
     "isClosedTrade"].map(pick).join("\n\n");
   const tolerance = /const FIXED_ENTRY_PRICE_TOLERANCE = [\d.]+;/.exec(app)[0];
+  // Attribution reads the portfolios' own execution logs, so the sandbox needs the
+  // constants those helpers close over. Both are trivially faithful here: these tests
+  // use only the two shipped live modes, which normalizeMode returns unchanged.
+  const constants = 'const CUSTOM_PAPER_STRATEGY_ID = /^[a-z][a-zA-Z0-9]{1,30}$/;'
+    + '\nconst BUILT_IN_PAPER_STRATEGY_IDS = [];'
+    + '\nconst draftedCustomLivePortfolioId = () => null;';
   const belongs = (mode, execution5050, configuredPrice) => new Function(
     "state", "isFixedEntryMode", "normalizeFixedEntryPrice", "portfolioConfigForMode",
-    `${tolerance}\n${body}\nreturn belongsToActiveLivePortfolio;`,
+    `${tolerance}\n${constants}\n${body}\nreturn belongsToActiveLivePortfolio;`,
   )(
     { mode, live5050ExecutionState: execution5050 },
     () => mode === "live-5050",
@@ -5678,14 +5712,20 @@ test("live fills: a price that merely matches 5050's setting does not hand the t
     }
     throw new Error(`unbalanced ${name}`);
   };
-  const body = ["submittedTokenIds", "fixedEntryTokenIds", "fixedEntryPriceSignatures",
+  const body = ["allLiveModes", "allLiveModes", "liveOrdersByToken", "newestLiveOrder", "liveTokenOwnerMode", "normalizeMode", "customLivePortfolioIdFromMode", "fixedEntryPriceSignatures",
     "matchesFixedEntryPrice", "restsAtFixedEntryPrice", "fixedEntryOrderPricesByToken",
     "isFilledPortfolioRow", "boughtAtFixedEntryPrice", "belongsToLivePortfolio", "belongsToActiveLivePortfolio",
     "isClosedTrade"].map(pick).join("\n\n");
   const tolerance = /const FIXED_ENTRY_PRICE_TOLERANCE = [\d.]+;/.exec(app)[0];
+  // Attribution reads the portfolios' own execution logs, so the sandbox needs the
+  // constants those helpers close over. Both are trivially faithful here: these tests
+  // use only the two shipped live modes, which normalizeMode returns unchanged.
+  const constants = 'const CUSTOM_PAPER_STRATEGY_ID = /^[a-z][a-zA-Z0-9]{1,30}$/;'
+    + '\nconst BUILT_IN_PAPER_STRATEGY_IDS = [];'
+    + '\nconst draftedCustomLivePortfolioId = () => null;';
   const belongs = (mode, execution5050, configuredPrice) => new Function(
     "state", "isFixedEntryMode", "normalizeFixedEntryPrice", "portfolioConfigForMode",
-    `${tolerance}\n${body}\nreturn belongsToActiveLivePortfolio;`,
+    `${tolerance}\n${constants}\n${body}\nreturn belongsToActiveLivePortfolio;`,
   )(
     { mode, live5050ExecutionState: execution5050 },
     () => mode === "live-5050",
@@ -5910,14 +5950,20 @@ test("5050 orders: a bid is recognised at every price the portfolio bids at", as
     }
     throw new Error(`unbalanced ${name}`);
   };
-  const body = ["submittedTokenIds", "fixedEntryTokenIds", "fixedEntryPriceSignatures",
+  const body = ["allLiveModes", "allLiveModes", "liveOrdersByToken", "newestLiveOrder", "liveTokenOwnerMode", "normalizeMode", "customLivePortfolioIdFromMode", "fixedEntryPriceSignatures",
     "matchesFixedEntryPrice", "restsAtFixedEntryPrice", "fixedEntryOrderPricesByToken",
     "isFilledPortfolioRow", "boughtAtFixedEntryPrice", "belongsToLivePortfolio", "belongsToActiveLivePortfolio",
     "isClosedTrade", "liveOpenOrders"].map(pick).join("\n\n");
   const tolerance = /const FIXED_ENTRY_PRICE_TOLERANCE = [\d.]+;/.exec(app)[0];
+  // Attribution reads the portfolios' own execution logs, so the sandbox needs the
+  // constants those helpers close over. Both are trivially faithful here: these tests
+  // use only the two shipped live modes, which normalizeMode returns unchanged.
+  const constants = 'const CUSTOM_PAPER_STRATEGY_ID = /^[a-z][a-zA-Z0-9]{1,30}$/;'
+    + '\nconst BUILT_IN_PAPER_STRATEGY_IDS = [];'
+    + '\nconst draftedCustomLivePortfolioId = () => null;';
   const openOrdersFor = (mode, execution5050, configuredPrice) => new Function(
     "state", "isFixedEntryMode", "normalizeFixedEntryPrice", "portfolioConfigForMode",
-    `${tolerance}\n${body}\nreturn liveOpenOrders;`,
+    `${tolerance}\n${constants}\n${body}\nreturn liveOpenOrders;`,
   )(
     { mode, live5050ExecutionState: execution5050 },
     () => mode === "live-5050",

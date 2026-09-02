@@ -509,6 +509,22 @@ test("dashboard: the tab row is built from the saved portfolios, archived ones l
     ${extractFunction(APP, "overviewPortfolioNumbers")}
     ${extractFunction(APP, "portfolioEquityUsdc")}
     ${extractFunction(APP, "byEquityDescending")}
+    // The live group is ordered by whether a portfolio is switched on, then by ROI, so the
+    // tab order needs both. Real, not stubbed: the ordering is what these tests measure.
+    ${extractFunction(APP, "automationIsEnabled")}
+    ${extractFunction(APP, "overviewAnnualizedRoi")}
+    ${extractFunction(APP, "firstOpenedAtFromTrades")}
+    ${extractFunction(APP, "liveInitialCapitalForMode")}
+    ${extractFunction(APP, "portfolioAnnualizedRoiForMode")}
+    // Ordering asks each portfolio whether its automation is on, which means the real
+    // config merge -- the shipped defaults matter here, since 5050 is the one portfolio
+    // that ships switched off.
+    ${extractFunction(APP, "customLivePortfolioDefaults")}
+    ${extractFunction(APP, "customPaperPortfolioDefaults")}
+    ${extractFunction(APP, "normalizePortfolioMarketType")}
+    ${extractFunction(APP, "liveConfigKeyForMode")}
+    ${extractFunction(APP, "portfolioConfigForMode")}
+    ${extractFunction(APP, "byActiveThenRoiDescending")}
     ${extractFunction(APP, "dashboardModes")}
     // A live portfolio can be created now, so "is this mode live" and "is it archived" both
     // have to ask whether a mode names one. The cluster comes across as the real thing --
@@ -553,6 +569,22 @@ test("dashboard: an archived 5050 leaves the tab row too, the plain live portfol
     ${extractFunction(APP, "overviewPortfolioNumbers")}
     ${extractFunction(APP, "portfolioEquityUsdc")}
     ${extractFunction(APP, "byEquityDescending")}
+    // The live group is ordered by whether a portfolio is switched on, then by ROI, so the
+    // tab order needs both. Real, not stubbed: the ordering is what these tests measure.
+    ${extractFunction(APP, "automationIsEnabled")}
+    ${extractFunction(APP, "overviewAnnualizedRoi")}
+    ${extractFunction(APP, "firstOpenedAtFromTrades")}
+    ${extractFunction(APP, "liveInitialCapitalForMode")}
+    ${extractFunction(APP, "portfolioAnnualizedRoiForMode")}
+    // Ordering asks each portfolio whether its automation is on, which means the real
+    // config merge -- the shipped defaults matter here, since 5050 is the one portfolio
+    // that ships switched off.
+    ${extractFunction(APP, "customLivePortfolioDefaults")}
+    ${extractFunction(APP, "customPaperPortfolioDefaults")}
+    ${extractFunction(APP, "normalizePortfolioMarketType")}
+    ${extractFunction(APP, "liveConfigKeyForMode")}
+    ${extractFunction(APP, "portfolioConfigForMode")}
+    ${extractFunction(APP, "byActiveThenRoiDescending")}
     ${extractFunction(APP, "dashboardModes")}
     // A live portfolio can be created now, so "is this mode live" and "is it archived" both
     // have to ask whether a mode names one. The cluster comes across as the real thing --
@@ -1612,6 +1644,22 @@ test("dashboard: live tabs lead, then each portfolio group is ordered by equity"
     ${extractFunction(APP, "overviewPortfolioNumbers")}
     ${extractFunction(APP, "portfolioEquityUsdc")}
     ${extractFunction(APP, "byEquityDescending")}
+    // The live group is ordered by whether a portfolio is switched on, then by ROI, so the
+    // tab order needs both. Real, not stubbed: the ordering is what these tests measure.
+    ${extractFunction(APP, "automationIsEnabled")}
+    ${extractFunction(APP, "overviewAnnualizedRoi")}
+    ${extractFunction(APP, "firstOpenedAtFromTrades")}
+    ${extractFunction(APP, "liveInitialCapitalForMode")}
+    ${extractFunction(APP, "portfolioAnnualizedRoiForMode")}
+    // Ordering asks each portfolio whether its automation is on, which means the real
+    // config merge -- the shipped defaults matter here, since 5050 is the one portfolio
+    // that ships switched off.
+    ${extractFunction(APP, "customLivePortfolioDefaults")}
+    ${extractFunction(APP, "customPaperPortfolioDefaults")}
+    ${extractFunction(APP, "normalizePortfolioMarketType")}
+    ${extractFunction(APP, "liveConfigKeyForMode")}
+    ${extractFunction(APP, "portfolioConfigForMode")}
+    ${extractFunction(APP, "byActiveThenRoiDescending")}
     ${extractFunction(APP, "dashboardModes")}
     // A live portfolio can be created now, so "is this mode live" and "is it archived" both
     // have to ask whether a mode names one. The cluster comes across as the real thing --
@@ -2938,4 +2986,219 @@ test("stop loss warning: the confirmation gates the switch and only on the way o
     "the question has to be asked before the setting is written");
   assert.match(APP, /function confirmAutomationEnable\(mode = state\.mode\) \{[\s\S]{0,200}?if \(!isLivePortfolioMode\(mode\)\) return true;/,
     "a paper portfolio holds no live position and must not be interrogated");
+});
+
+// Reported: unfilled limit orders, and the Resolved accuracy tile with them, showed rows
+// belonging to other live portfolios. The live portfolios share one Polymarket wallet, so
+// the account -- budget, cash, which markets are held -- is genuinely common, but what each
+// portfolio ORDERED is its own, and that is the whole point of the per-portfolio view.
+//
+// The cause was that attribution was a two-way split: 5050, or everything else. With a
+// third live portfolio, "everything else" is two portfolios, and each of them saw the
+// other's positions, resting orders, unfilled orders and closed trades as its own.
+test("live attribution: every live portfolio only shows what its own log ordered", () => {
+  const sandbox = new Function("state", `
+    const CUSTOM_PAPER_STRATEGY_ID = ${/^[a-z][a-zA-Z0-9]{1,30}$/.toString()};
+    const draftedCustomLivePortfolioId = () => null;
+    ${extractFunction(APP, "normalizeMode")}
+    ${extractFunction(APP, "customLivePortfolioIdFromMode")}
+    ${extractFunction(APP, "isFixedEntryMode")}
+    ${extractFunction(APP, "allLiveModes")}
+    ${extractFunction(APP, "liveOrdersByToken")}
+    ${extractFunction(APP, "newestLiveOrder")}
+    ${extractFunction(APP, "liveTokenOwnerMode")}
+    ${extractFunction(APP, "belongsToLivePortfolio")}
+    ${/const FIXED_ENTRY_PRICE_TOLERANCE = [\d.]+;/.exec(APP)[0]}
+    // Not under test: the price heuristics that let 5050 recognize an unlogged bid of its
+    // own. Stubbed to a fixed answer so the ownership decision is what is measured.
+    const isFilledPortfolioRow = (row) => Boolean(row?.filled);
+    const boughtAtFixedEntryPrice = (row) => Boolean(row?.looksLike5050);
+    const restsAtFixedEntryPrice = (row) => Boolean(row?.looksLike5050);
+    return (row, mode) => belongsToLivePortfolio(row, mode);
+  `);
+
+  const belongs = sandbox({
+    portfolioConfig: { livePortfolios: { live2: { displayName: "Live 2" } } },
+    liveExecutionByMode: {
+      live: { generatedAt: "2026-09-02T10:00:00Z", attempts: [{ action: "SUBMITTED", tokenId: "live-token", orderPrice: 0.8 }] },
+      "live-custom-live2": { generatedAt: "2026-09-02T11:00:00Z", attempts: [{ action: "SUBMITTED", tokenId: "live2-token", orderPrice: 0.7 }] },
+    },
+    live5050ExecutionState: { generatedAt: "2026-09-02T09:00:00Z", attempts: [{ action: "SUBMITTED", tokenId: "fixed-token", orderPrice: 0.5 }] },
+  });
+
+  // Each logged token belongs to exactly one portfolio, and to no other.
+  for (const [tokenId, owner] of [
+    ["live-token", "live"],
+    ["live2-token", "live-custom-live2"],
+    ["fixed-token", "live-5050"],
+  ]) {
+    for (const mode of ["live", "live-5050", "live-custom-live2"]) {
+      assert.equal(belongs({ tokenId }, mode), mode === owner,
+        `${tokenId} must appear under ${owner} and nowhere else, but ${mode} disagreed`);
+    }
+  }
+
+  // A token no log names still has to appear somewhere, or a row would be invisible on
+  // every tab. It stays with the base Live portfolio -- a custom live portfolio prices its
+  // bids exactly as Live does, so nothing about the row could justify claiming it.
+  assert.equal(belongs({ tokenId: "unlogged-token" }, "live"), true);
+  assert.equal(belongs({ tokenId: "unlogged-token" }, "live-custom-live2"), false);
+  assert.equal(belongs({ tokenId: "unlogged-token" }, "live-5050"), false);
+
+  // 5050 is the exception: it rests every bid at its configured entry price, far from the
+  // market by construction, so it can still recognize its own before its log publishes.
+  assert.equal(belongs({ tokenId: "unlogged-5050", looksLike5050: true }, "live-5050"), true);
+  assert.equal(belongs({ tokenId: "unlogged-5050", looksLike5050: true }, "live"), false);
+
+  // A rejected order claims nothing: the portfolio never got the position.
+  const rejected = sandbox({
+    portfolioConfig: { livePortfolios: { live2: {} } },
+    liveExecutionByMode: {
+      "live-custom-live2": { generatedAt: "2026-09-02T11:00:00Z", attempts: [{ action: "REJECTED", tokenId: "refused-token", orderPrice: 0.6 }] },
+    },
+  });
+  assert.equal(rejected({ tokenId: "refused-token" }, "live-custom-live2"), false);
+  assert.equal(rejected({ tokenId: "refused-token" }, "live"), true,
+    "an unclaimed token stays visible on the base Live tab rather than vanishing");
+
+  // Traded by one portfolio after another closed out of it: the newest order owns it,
+  // matching how api.php attributes the stop-loss policy.
+  const retraded = sandbox({
+    portfolioConfig: { livePortfolios: { live2: {} } },
+    liveExecutionByMode: {
+      live: { generatedAt: "2026-09-01T10:00:00Z", attempts: [{ action: "SUBMITTED", tokenId: "shared-token", orderPrice: 0.65 }] },
+      "live-custom-live2": { generatedAt: "2026-09-02T10:00:00Z", attempts: [{ action: "SUBMITTED", tokenId: "shared-token", orderPrice: 0.65 }] },
+    },
+  });
+  assert.equal(retraded({ tokenId: "shared-token" }, "live-custom-live2"), true);
+  assert.equal(retraded({ tokenId: "shared-token" }, "live"), false);
+});
+
+// Attribution can only see a log that was loaded. With just the open tab's log in hand,
+// every other portfolio's rows read as unowned -- and unowned falls to the base Live tab,
+// which is the mechanism behind the reported leak. So the loader has to fetch them all.
+test("live attribution: the dashboard loads every live portfolio's execution log", () => {
+  const loader = APP.slice(APP.indexOf("const attributionModes = allLiveModes()"));
+  const body = loader.slice(0, loader.indexOf("loadDispatchFailures("));
+  assert.match(body, /\.\.\.attributionModes\.map\(\(mode\) => fetchJson\(liveExecutionStateFile\(mode\)\)\)/);
+  assert.match(body, /if \(result\?\.status === "fulfilled"\) state\.liveExecutionByMode\[mode\] = result\.value;/,
+    "a portfolio that has never run has no file, and that miss must not clear a log in hand");
+  // The Resolved accuracy tile is fed the attributed closed trades, so separating the
+  // portfolios separates the tile too. Pinned, because a future refactor that hands it the
+  // unfiltered list would silently restore the mixed statistic.
+  const attributedAt = APP.indexOf("const closedTrades = liveClosedTrades(liveState).map(decorateLiveTradeForTable);");
+  assert.ok(attributedAt > 0, "the live renderer must build its closed rows from the attributed set");
+  // Within the same function: the tile is fed that variable, not the account's whole list.
+  const renderer = APP.slice(attributedAt, APP.indexOf("\nfunction ", attributedAt));
+  assert.match(renderer, /renderClosedAccuracy\(closedTrades\);/,
+    "Resolved accuracy must count this portfolio's own resolved positions, not the account's");
+});
+
+// Asked for: in the dashboard overview, a live portfolio that is switched ON comes first,
+// and ROI orders them within that. A portfolio that is off still holds real positions and
+// is still listed, but it is not what the operator is watching.
+test("overview order: switched-on live portfolios come first, then by ROI", () => {
+  const order = new Function("state", `
+    const CUSTOM_PAPER_STRATEGY_ID = ${/^[a-z][a-zA-Z0-9]{1,30}$/.toString()};
+    ${extractFunction(APP, "automationIsEnabled")}
+    ${extractFunction(APP, "byActiveThenRoiDescending")}
+    const portfolioConfigForMode = (mode) => state.configs[mode] || {};
+    const portfolioAnnualizedRoiForMode = (mode) => state.roi[mode] ?? null;
+    return byActiveThenRoiDescending(state.modes);
+  `);
+
+  const modes = ["live", "live-5050", "live-custom-live2", "live-custom-live3"];
+  assert.deepEqual(order({
+    modes,
+    configs: {
+      live: { automationEnabled: false },
+      "live-5050": { automationEnabled: true },
+      "live-custom-live2": { automationEnabled: true },
+      "live-custom-live3": { automationEnabled: false },
+    },
+    roi: {
+      live: { annualized: 9 },
+      "live-5050": { annualized: 0.2 },
+      "live-custom-live2": { annualized: 1.4 },
+      "live-custom-live3": { annualized: 4 },
+    },
+  }), ["live-custom-live2", "live-5050", "live", "live-custom-live3"],
+  "the two running portfolios come first in ROI order, and the two switched-off ones follow in ROI order");
+
+  // Absent means on, matching automationIsEnabled and the server's own default, so a
+  // portfolio saved before the switch existed is not demoted.
+  assert.deepEqual(order({
+    modes: ["live", "live-5050"],
+    configs: { live: {}, "live-5050": { automationEnabled: false } },
+    roi: { live: { annualized: 0.1 }, "live-5050": { annualized: 5 } },
+  }), ["live", "live-5050"]);
+
+  // An unknown ROI sorts last within its group rather than jumping to the top, and equal
+  // portfolios keep the incoming order so the table does not shuffle between renders.
+  assert.deepEqual(order({
+    modes: ["live", "live-5050", "live-custom-live2"],
+    configs: {},
+    roi: { "live-5050": { annualized: 0.5 } },
+  }), ["live-5050", "live", "live-custom-live2"]);
+
+  assert.match(APP, /return \[\.\.\.byActiveThenRoiDescending\(liveModes\), \.\.\.byEquityDescending\(paperModes\)\];/,
+    "the live group is ordered this way and the paper group keeps its equity order");
+  // The column and the ordering must read the same number, or the table is sorted by one
+  // value while showing another.
+  assert.match(APP, /roi: portfolioAnnualizedRoiForMode\(mode\),/);
+});
+
+// Asked for: the same separation in Settings -> Portfolio trade analysis. That report
+// already reads liveClosedTrades(state.liveState, mode), so it inherits the attribution --
+// but attribution can only read a log that was loaded, and this page loaded the account
+// snapshot alone. Opening Settings directly would therefore have handed every live row to
+// the base Live portfolio and reported the others as having traded nothing.
+test("trade analysis: the settings report loads the logs its attribution depends on", () => {
+  const loader = APP.slice(APP.indexOf("async function loadLiveStateForOptimisation()"));
+  const body = loader.slice(0, loader.indexOf("\n}\n"));
+  assert.match(body, /const modes = allLiveModes\(\)\.map\(normalizeMode\);/);
+  assert.match(body, /modes\.map\(\(mode\) => fetchJson\(liveExecutionStateFile\(mode\)\)\.catch\(\(\) => null\)\)/);
+  assert.match(body, /if \(!executions\[index\]\) continue;/,
+    "a portfolio that has never run has no file, and that must not clear a log in hand");
+  // The old guard returned as soon as the account snapshot existed, which would skip the
+  // logs forever once any other path had loaded the snapshot.
+  assert.match(body, /if \(\(state\.liveState && haveExecutionLogs\)/,
+    "having the snapshot is no longer reason enough to skip loading the logs");
+
+  // And the report itself must keep asking per portfolio rather than for the account.
+  const report = APP.slice(APP.indexOf("function portfolioTradeAnalysisPortfolios()"));
+  assert.match(report.slice(0, 4000), /liveClosedTrades\(state\.liveState, mode\)\.map\(decorateLiveTradeForTable\)/,
+    "each live card reads its own portfolio's closed trades");
+});
+
+// Reported as several unrelated changes disappearing at once -- the tags icon gone, the
+// amber chips red again, "more changes from the last 24 hours" lost. None of it had been
+// reverted: the published app.js was measured containing code pushed minutes earlier. The
+// hosting sent no Cache-Control header at all, so a browser could reuse a stored
+// index.html, and that page keeps asking for the PREVIOUS ?v=<commit> asset URL, which it
+// also holds. One stale page reverts the whole dashboard.
+test("deploy: the page revalidates, and its versioned assets stay cacheable", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const [htaccess, workflow] = await Promise.all([
+    readFile(new URL("../.htaccess", import.meta.url), "utf8"),
+    readFile(new URL("../../.github/workflows/trading-deploy.yml", import.meta.url), "utf8"),
+  ]);
+
+  // Guarded, so a host without mod_headers keeps serving the site instead of erroring.
+  assert.match(htaccess, /<IfModule mod_headers\.c>/);
+  const headers = htaccess.slice(htaccess.indexOf("<IfModule mod_headers.c>"));
+  assert.match(headers, /<FilesMatch "\\\.\(\?:html\|php\)\$">[\s\S]*?Header set Cache-Control "no-cache, must-revalidate"/,
+    "the page and the API must be re-checked on every visit");
+  assert.match(headers, /<FilesMatch "\\\.\(\?:js\|css\)\$">[\s\S]*?Header set Cache-Control "public, max-age=/,
+    "the assets stay cacheable: their URL already changes when their content does");
+
+  // Cacheable assets are only safe while the URL carries the deploy, so the two halves of
+  // this fix have to stay together.
+  assert.match(workflow, /Stamp asset cache-busting versions/);
+  assert.match(workflow, /ASSET_VERSION: \$\{\{ github\.sha \}\}/);
+  assert.match(workflow, /refusing to deploy an unstamped page/,
+    "a page with no version on its assets must fail the deploy, not ship");
+
+  // And the file that carries the rules has to actually be uploaded.
+  assert.match(workflow, /"index\.html", "api\.php", "storage\.php", "config\.php", "\.htaccess"/);
 });

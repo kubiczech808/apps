@@ -4,3 +4,37 @@ RewriteEngine On
 RewriteBase /trading/
 
 RewriteRule ^(settings|opportunities|portfolios)(?:/.*)?$ index.html [L]
+
+# Reported: the tags icon vanished, the amber chips went red again, and "more changes from
+# the last 24 hours" disappeared at once. Nothing had been reverted and every deploy was
+# green -- the published app.js contained code pushed minutes before it was checked. The
+# hosting simply sends no Cache-Control at all, which leaves a browser free to reuse a
+# stored index.html without asking.
+#
+# That one stale page is enough to undo everything: it names its assets with a
+# ?v=<deployed commit> query, so a cached page keeps requesting the PREVIOUS asset URL --
+# which that browser also holds -- and the dashboard reverts wholesale to a snapshot of
+# whenever the page was last fetched. Several unrelated changes then appear to vanish
+# together, which is exactly how it was reported.
+#
+# So the page has to be re-checked on every visit. It is one small file and a 304 costs
+# almost nothing; the assets it names are the large ones, and they stay cacheable because
+# their URL already changes whenever their content does.
+<IfModule mod_headers.c>
+  # The page and the API. no-cache still permits a conditional request answered with 304,
+  # so this is a revalidation rule rather than a ban on caching. api.php is covered for
+  # completeness -- the dashboard already appends its own cache-busting parameter to every
+  # data request.
+  <FilesMatch "\.(?:html|php)$">
+    Header set Cache-Control "no-cache, must-revalidate"
+  </FilesMatch>
+
+  # Versioned by the deploy, which stamps ?v=<commit sha> onto every reference in the page,
+  # so the same URL always means the same bytes and a new deploy is a new URL. An hour
+  # rather than a year deliberately: the version lives in the query string, and an
+  # intermediary that ignores query strings when caching would otherwise be entitled to
+  # pin a stale file for as long as it was told to.
+  <FilesMatch "\.(?:js|css)$">
+    Header set Cache-Control "public, max-age=3600"
+  </FilesMatch>
+</IfModule>
