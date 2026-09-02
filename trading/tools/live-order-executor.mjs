@@ -301,15 +301,60 @@ function parseJsonField(value) {
   return [];
 }
 
-async function fetchJson(url, label = url) {
-  const response = await fetch(url, {
-    headers: { "User-Agent": "osobnizkusenosti-live-order-executor" },
-  });
-  if (!response.ok) {
-    const body = await response.text().catch(() => "");
-    throw new Error(`${label} HTTP ${response.status}${body ? `: ${body.slice(0, 180)}` : ""}`);
+const READ_FETCH_ATTEMPTS = Math.max(1, Math.min(5, Math.round(envNumber("LIVE_READ_FETCH_ATTEMPTS", 3))));
+const READ_FETCH_TIMEOUT_MS = Math.max(1000, Math.min(30000, Math.round(envNumber("LIVE_READ_FETCH_TIMEOUT_MS", 12000))));
+
+function retryableReadFetchStatus(status) {
+  return status === 408 || status === 425 || status === 429 || status >= 500;
+}
+
+function retryableReadFetchError(error) {
+  if (error?.retryableReadFetch === true) return true;
+  const name = String(error?.name || "");
+  const message = String(error?.message || error || "");
+  return name === "AbortError" || name === "TypeError" || name === "SyntaxError"
+    || /fetch failed|network|socket|econn|eai_again|timed? ?out|abort/i.test(message);
+}
+
+function waitForReadRetry(ms) {
+  return new Promise((resolve) => setTimeout(resolve, Math.max(0, ms)));
+}
+
+// Every call through this helper is a read of public market/account state. A short
+// hosting, Gamma or CLOB interruption must not turn a whole live run into `fetch failed`.
+// Live order submission and the wallet-wide entry claim use their own fail-closed path.
+async function fetchJson(url, label = url, options = {}) {
+  const attempts = Math.max(1, Math.min(5, Number(options.attempts ?? READ_FETCH_ATTEMPTS) || READ_FETCH_ATTEMPTS));
+  const timeoutMs = Math.max(1000, Math.min(30000, Number(options.timeoutMs ?? READ_FETCH_TIMEOUT_MS) || READ_FETCH_TIMEOUT_MS));
+  const retryDelayMs = Math.max(0, Number(options.retryDelayMs ?? 500) || 0);
+  let lastError = null;
+
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const response = await fetch(url, {
+        headers: { "User-Agent": "osobnizkusenosti-live-order-executor" },
+        signal: controller.signal,
+      });
+      if (!response.ok) {
+        const body = await response.text().catch(() => "");
+        const error = new Error(`${label} HTTP ${response.status}${body ? `: ${body.slice(0, 180)}` : ""}`);
+        error.retryableReadFetch = retryableReadFetchStatus(response.status);
+        throw error;
+      }
+      return await response.json();
+    } catch (error) {
+      lastError = error;
+      if (attempt >= attempts || !retryableReadFetchError(error)) break;
+      await waitForReadRetry(retryDelayMs * attempt);
+    } finally {
+      clearTimeout(timeout);
+    }
   }
-  return response.json();
+
+  const detail = String(lastError?.message || lastError || "unknown read failure");
+  throw new Error(`${label} failed after ${attempts} attempt${attempts === 1 ? "" : "s"}: ${detail}`);
 }
 
 // The order book and the public account snapshot are both eventually consistent. A
@@ -5406,6 +5451,7 @@ export {
   openOrderActionExplanation,
   rotationComparisonRows,
   sharesForOrder,
+  fetchJson,
   prepareLiveCandidatePool,
   liveRevalidationUpdate,
   heldRiskItems,
