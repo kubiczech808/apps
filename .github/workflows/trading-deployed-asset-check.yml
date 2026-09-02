@@ -1,0 +1,36 @@
+name: Trading Deployed Asset Check
+
+# Read-only, manual only. Answers "is what the repo says shipped actually what the browser
+# is running", which a green deploy does not answer on its own. No credentials, no writes.
+on:
+  workflow_dispatch:
+    inputs:
+      files:
+        description: "Comma-separated paths under /trading to fetch"
+        required: false
+        default: "assets/app.js,assets/app.css,index.html"
+        type: string
+      markers:
+        description: "Comma-separated strings to look for in each file"
+        required: false
+        default: "market-tags-button,marketTagsInfo,openMarketTagsPanel,market-tags-panel"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Check the deployed assets
+        working-directory: trading
+        env:
+          ASSET_FILES: ${{ inputs.files || 'assets/app.js,assets/app.css,index.html' }}
+          ASSET_MARKERS: ${{ inputs.markers || 'market-tags-button,marketTagsInfo,openMarketTagsPanel,market-tags-panel' }}
+        run: node tools/deployed-asset-check.mjs
