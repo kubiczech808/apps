@@ -50,14 +50,30 @@ const number = (value, fallback = null) => {
 const money = (value) => (value == null ? "-" : `${value < 0 ? "-" : "+"}$${Math.abs(value).toFixed(2)}`);
 const pct = (value) => (value == null ? "-" : `${(value * 100).toFixed(1)}%`);
 
+// The same User-Agent live-account-sync.mjs sends. Omitting it returned 200 with an empty
+// array on the first run of this tool -- an answer indistinguishable from "this account has
+// no history" unless the response is reported, which is why the status and a body sample
+// are printed below rather than assumed.
 async function fetchFeed(path, params) {
   const url = new URL(path, DATA_API);
   for (const [key, value] of Object.entries(params)) url.searchParams.set(key, String(value));
-  const response = await fetch(url);
+  const response = await fetch(url, {
+    headers: { "User-Agent": "osobnizkusenosti-trading-live-sync" },
+  });
   const text = await response.text();
   if (!response.ok) throw new Error(`HTTP ${response.status} on ${path}: ${text.slice(0, 200)}`);
-  const parsed = JSON.parse(text);
-  return Array.isArray(parsed) ? parsed : (Array.isArray(parsed?.data) ? parsed.data : []);
+  let parsed;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    throw new Error(`${path} returned non-JSON (${text.length} bytes): ${text.slice(0, 200)}`);
+  }
+  const rows = Array.isArray(parsed) ? parsed : (Array.isArray(parsed?.data) ? parsed.data : []);
+  console.log(`   ${path.padEnd(10)} HTTP ${response.status}   ${text.length} bytes`
+    + `   ${Array.isArray(parsed) ? "array" : `object keys: ${Object.keys(parsed || {}).slice(0, 8).join(",") || "none"}`}`
+    + `   -> ${rows.length} rows`);
+  if (!rows.length) console.log(`      body: ${text.slice(0, 240)}`);
+  return rows;
 }
 
 // Copied deliberately rather than imported: live-account-sync.mjs keeps this private, and
@@ -92,11 +108,11 @@ async function main() {
   console.log(`account ${ADDRESS}   /activity limit ${ACTIVITY_LIMIT}   /trades limit ${TRADE_LIMIT}`);
   console.log(`Read-only: public feeds only, no credentials, nothing written, no orders.\n`);
 
+  console.log(`== feeds`);
   const [activity, trades] = await Promise.all([
     fetchFeed("/activity", { user: ADDRESS, limit: ACTIVITY_LIMIT }),
     fetchFeed("/trades", { user: ADDRESS, limit: TRADE_LIMIT }),
   ]);
-  console.log(`== feeds`);
   console.log(`   /trades   ${trades.length} rows`);
   console.log(`   /activity ${activity.length} rows`
     + `   (types: ${[...new Set(activity.map((row) => String(row.type || "?").toUpperCase()))].sort().join(", ") || "none"})`);
