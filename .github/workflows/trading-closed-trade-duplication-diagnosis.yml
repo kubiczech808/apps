@@ -1,0 +1,45 @@
+name: Trading Closed Trade Duplication Diagnosis
+
+# Read-only, manual only. Asks the two public Polymarket history feeds whether a single
+# BUY fill is being counted twice, which is the one cause that would make the closed live
+# trades list show a redeemed winner at a loss, a stake twice the real one, and a final
+# price of exactly 50.0% all at once. No credentials, nothing written, no orders.
+on:
+  workflow_dispatch:
+    inputs:
+      market_filter:
+        description: "Case-insensitive markets to print raw feed rows for"
+        required: false
+        default: "infinite|chongqing|cirstea|badosa|sassuolo|frosinone|b8 vs"
+        type: string
+      trade_limit:
+        description: "/trades rows to fetch (matches LIVE_TRADE_LIMIT in the sync)"
+        required: false
+        default: "500"
+        type: string
+      activity_limit:
+        description: "/activity rows to fetch (matches LIVE_ACTIVITY_LIMIT in the sync)"
+        required: false
+        default: "50"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Diagnose duplicated closed-trade fills
+        working-directory: trading
+        env:
+          MARKET_FILTER: ${{ inputs.market_filter || 'infinite|chongqing|cirstea|badosa|sassuolo|frosinone|b8 vs' }}
+          LIVE_TRADE_LIMIT: ${{ inputs.trade_limit || '500' }}
+          LIVE_ACTIVITY_LIMIT: ${{ inputs.activity_limit || '50' }}
+        run: node tools/closed-trade-duplication-diagnosis.mjs
