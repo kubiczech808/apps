@@ -1587,11 +1587,31 @@ function openLiveRiskItems(liveState, evaluationByToken = new Map()) {
     });
 }
 
+// A condition id identifies the actual Polymarket market independently of its outcome
+// token. A same-market Yes/No (or different score-line) candidate must not slip through
+// just because it has a different token or incomplete inferred risk tags.
+function liveMarketIdentitySet(item = {}) {
+  return new Set([
+    item.conditionId,
+    item.marketId,
+    item.market,
+  ].map((value) => String(value || "").trim().toLowerCase()).filter(Boolean));
+}
+
+function sharesLiveMarket(candidate, item) {
+  const candidateIds = liveMarketIdentitySet(candidate);
+  if (!candidateIds.size) return false;
+  return [...liveMarketIdentitySet(item)].some((id) => candidateIds.has(id));
+}
+
 function riskBlock(candidate, liveState, evaluationByToken = new Map()) {
   const candidateKeys = new Set(candidate.riskGroupKeys || []);
   for (const item of openLiveRiskItems(liveState, evaluationByToken)) {
     if (String(item.tokenId || item.assetId || "") === String(candidate.tokenId || "")) {
       return { reason: "duplicate token already open", overlap: [String(candidate.tokenId)] };
+    }
+    if (sharesLiveMarket(candidate, item)) {
+      return { reason: "same live market already open", overlap: [...liveMarketIdentitySet(candidate)].slice(0, 2) };
     }
     const itemRisk = riskProfile({
       question: item.question || "",
@@ -1629,7 +1649,11 @@ function heldRiskItems(liveState, evaluationByToken = new Map()) {
         outcome: item.outcome || "",
         tags: item.tags || tagQuestion(item.question || ""),
       }).keys;
-    return { tokenId: String(item.tokenId || item.assetId || ""), keys };
+    return {
+      tokenId: String(item.tokenId || item.assetId || ""),
+      marketIds: liveMarketIdentitySet(item),
+      keys,
+    };
   });
 }
 
@@ -1651,13 +1675,18 @@ function heldRiskItems(liveState, evaluationByToken = new Map()) {
 // riskBlock() still runs during revalidation as the authoritative check.
 function earlyRiskBlockReason(candidate, held) {
   const candidateKeys = Array.isArray(candidate?.riskGroupKeys) ? candidate.riskGroupKeys : [];
-  if (!candidateKeys.length || !held.length) return null;
+  if (!held.length) return null;
   const tokenId = String(candidate?.tokenId || "");
   const candidateKeySet = new Set(candidateKeys);
+  const candidateMarketIds = liveMarketIdentitySet(candidate);
   for (const item of held) {
     if (item.tokenId && item.tokenId === tokenId) {
       return "duplicate token already open";
     }
+    if (candidateMarketIds.size && [...(item.marketIds || [])].some((id) => candidateMarketIds.has(id))) {
+      return "same live market already open";
+    }
+    if (!candidateKeys.length) continue;
     const overlap = item.keys.filter((key) => candidateKeySet.has(key));
     const sameEventOrMatch = overlap.filter((key) => key.startsWith("event:") || key.startsWith("match:"));
     if (sameEventOrMatch.length) {
@@ -4612,7 +4641,7 @@ async function main() {
   const stakeCapBlockedCandidates = checked.filter((item) => item.executionBlocker === "STAKE_CAP");
   const makerPrecisionBlockedCandidates = checked.filter((item) => item.executionBlocker === "MAKER_PRECISION");
   const riskBlockedCandidates = checked.filter((item) => (item.rejectReasons || [])
-    .some((reason) => /^(correlated live exposure|duplicate token already open)/i.test(String(reason || ""))));
+    .some((reason) => /^(correlated live exposure|duplicate token already open|same live market already open|same live event or match already open)/i.test(String(reason || ""))));
   // A rotation is justified only for a genuine free-cash shortfall. A minimum
   // order above the configured stake cap cannot be fixed by freeing more cash.
   const hasUsableFreeCash = availableCash > 0.01;

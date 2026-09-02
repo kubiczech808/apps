@@ -8669,9 +8669,17 @@ function portfolioCandidateFilterReasons(item, mode = state.mode) {
 
 function activeExposureRowsForMode(mode = state.mode) {
   if (isLivePortfolioMode(mode)) {
+    // Balances, tables and history are attributed to an individual live portfolio, but
+    // risk is account-wide: every live portfolio shares one Polymarket wallet. Filtering
+    // this list through the display attribution let a candidate duplicate a position that
+    // belonged to another live strategy (or had not yet received attribution metadata).
+    const positions = Array.isArray(state.liveState?.positions)
+      ? state.liveState.positions.filter((trade) => !isClosedTrade(trade))
+      : [];
+    const openOrders = Array.isArray(state.liveState?.openOrders) ? state.liveState.openOrders : [];
     return [
-      ...livePositions(state.liveState),
-      ...liveOpenOrders(state.liveState),
+      ...positions,
+      ...openOrders,
     ].map((row) => {
       const metadata = liveMarketMetadataForTrade(row);
       if (!metadata) return row;
@@ -8747,10 +8755,18 @@ function riskKeysForRow(row, evaluationByToken = new Map()) {
 
 function candidateRiskBlockReason(item, activeRows = [], evaluationByToken = new Map()) {
   const token = String(item?.tokenId || item?.assetId || "");
+  const marketIds = new Set([
+    item?.conditionId,
+    item?.marketId,
+    item?.market,
+  ].map((value) => String(value || "").trim().toLowerCase()).filter(Boolean));
   const keys = new Set(riskKeysForRow(item, evaluationByToken));
   for (const row of activeRows) {
     const rowToken = String(row?.tokenId || row?.assetId || row?.asset || "");
     if (token && rowToken && token === rowToken) return "duplicate token already open";
+    const rowMarketIds = [row?.conditionId, row?.marketId, row?.market]
+      .map((value) => String(value || "").trim().toLowerCase()).filter(Boolean);
+    if (marketIds.size && rowMarketIds.some((id) => marketIds.has(id))) return "same live market already open";
     const overlap = riskKeysForRow(row, evaluationByToken).filter((key) => keys.has(key));
     const sameEventOrMatch = overlap.filter((key) => key.startsWith("event:") || key.startsWith("match:"));
     if (sameEventOrMatch.length) return `same event or match already open: ${sameEventOrMatch.slice(0, 2).join(", ")}`;
