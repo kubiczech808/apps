@@ -77,19 +77,42 @@ async function main() {
       continue;
     }
 
-    let markets = null;
-    try {
-      markets = await fetchJson(`${GAMMA}/markets?clob_token_ids=${encodeURIComponent(tokenId)}`);
-    } catch (error) {
-      console.log(`   VERDICT: Gamma lookup threw (${error.message}); the sync's catch swallows it\n`);
-      verdicts.set("gamma lookup throws", (verdicts.get("gamma lookup throws") || 0) + 1);
+    // The sync's own query is the first of these. The rest are the obvious ways a settled
+    // market might still be reachable -- notably `closed=true`, which is exactly what
+    // paper-trading-bot.mjs learned to pass (fetchMarketBySlugUncached loops closed
+    // true-then-false) and which this lookup never does.
+    const attempts = [
+      ["clob_token_ids (the sync's own query)", `${GAMMA}/markets?clob_token_ids=${encodeURIComponent(tokenId)}`],
+      ["clob_token_ids + closed=true", `${GAMMA}/markets?clob_token_ids=${encodeURIComponent(tokenId)}&closed=true`],
+      ["clob_token_ids + closed=false", `${GAMMA}/markets?clob_token_ids=${encodeURIComponent(tokenId)}&closed=false`],
+      ...(order.slug ? [["slug + closed=true", `${GAMMA}/markets?slug=${encodeURIComponent(order.slug)}&closed=true`]] : []),
+      ...(order.conditionId ? [["condition_ids", `${GAMMA}/markets?condition_ids=${encodeURIComponent(order.conditionId)}`]] : []),
+    ];
+    let market = null;
+    let foundBy = null;
+    for (const [label, url] of attempts) {
+      let payload = null;
+      try {
+        payload = await fetchJson(url);
+      } catch (error) {
+        console.log(`   ${label.padEnd(38)} threw: ${error.message.slice(0, 60)}`);
+        continue;
+      }
+      const hit = Array.isArray(payload) ? payload[0] : null;
+      console.log(`   ${label.padEnd(38)} ${hit ? `market found (closed=${JSON.stringify(hit.closed)})` : "no market"}`);
+      if (hit && !market) {
+        market = hit;
+        foundBy = label;
+      }
+    }
+    if (!market) {
+      console.log(`   VERDICT: no Gamma query reaches this market at all\n`);
+      verdicts.set("unreachable by every query", (verdicts.get("unreachable by every query") || 0) + 1);
       continue;
     }
-    const market = Array.isArray(markets) ? markets[0] : null;
-    if (!market) {
-      console.log(`   VERDICT: Gamma returned no market for this token\n`);
-      verdicts.set("gamma returns no market", (verdicts.get("gamma returns no market") || 0) + 1);
-      continue;
+    if (foundBy !== attempts[0][0]) {
+      console.log(`   -> the sync's own query misses it; ${foundBy} finds it`);
+      verdicts.set(`only reachable via ${foundBy}`, (verdicts.get(`only reachable via ${foundBy}`) || 0) + 1);
     }
 
     const tokenIds = parseArrayField(market.clobTokenIds).map(String);
