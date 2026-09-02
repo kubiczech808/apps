@@ -466,6 +466,29 @@ button:disabled {
   stroke-width: 2;
 }
 
+/* The day's low and high, thinner than the average so the average still reads as the
+   subject of the chart. Both keep their colour when the curve turns negative -- red is
+   "the day's worst" here, not "the account is down", and swapping them with the trend
+   would make the pair meaningless. */
+.equity-history-low,
+.equity-history-high {
+  fill: none;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.25;
+  opacity: 0.75;
+}
+
+.equity-history-svg .equity-history-low,
+.equity-history-svg.negative .equity-history-low {
+  stroke: #dc2626;
+}
+
+.equity-history-svg .equity-history-high,
+.equity-history-svg.negative .equity-history-high {
+  stroke: #16a34a;
+}
+
 .equity-history-svg.negative .equity-history-area {
   fill: rgba(194, 65, 12, 0.12);
 }

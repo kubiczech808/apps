@@ -1829,6 +1829,8 @@ test("live equity history: configured original value anchors the realised chart"
     ${extractFunction(APP, "chartTimestamp")}
     ${extractFunction(APP, "equityChartBucket")}
     ${extractFunction(APP, "equityChartScale")}
+    ${extractFunction(APP, "numericOrNull")}
+    ${extractFunction(APP, "equityHistoryFromDailySamples")}
     ${extractFunction(APP, "portfolioEquityHistory")}
     return portfolioEquityHistory;
   `)();

@@ -4359,10 +4359,45 @@ function equityChartTooltipDate(timestamp) {
   }).format(new Date(timestamp));
 }
 
+// The account sync records its own realised equity once per sync, bucketed by day. That
+// is a measurement, not a reconstruction, so it needs no reconciling against anything --
+// which is the whole point: the ledger-derived path below can only draw its intermediate
+// days when the stored trade ledger agrees with the account's realised balance, and on a
+// live account it did not, by 183 USDC.
+//
+// Each day yields three readings, all real: the day's mean (the running sum over the
+// number of syncs that day), and the day's low and high. None of the three is derivable
+// from settlements, because equity moves within a day whether or not anything settled.
+function equityHistoryFromDailySamples(rows, now) {
+  const days = (Array.isArray(rows) ? rows : [])
+    .map((row) => {
+      const timestamp = Date.parse(`${String(row?.day || "")}T12:00:00Z`);
+      const samples = Number(row?.samples);
+      const sum = numericOrNull(row?.realizedSum);
+      const low = numericOrNull(row?.realizedMin);
+      const high = numericOrNull(row?.realizedMax);
+      if (!Number.isFinite(timestamp) || !Number.isFinite(samples) || samples < 1) return null;
+      if (sum == null || low == null || high == null) return null;
+      return { timestamp, value: sum / samples, low, high, samples };
+    })
+    .filter((row) => row != null && row.timestamp <= now)
+    .sort((left, right) => left.timestamp - right.timestamp);
+  if (days.length < 2) return null;
+
+  return {
+    points: days.map(({ timestamp, value }) => ({ timestamp, value })),
+    // Named low/high rather than min/max because they are the day's extremes, not the
+    // chart's axis bounds, and the renderer needs both meanings at once.
+    lows: days.map(({ timestamp, low }) => ({ timestamp, value: low })),
+    highs: days.map(({ timestamp, high }) => ({ timestamp, value: high })),
+    samples: days.reduce((total, day) => total + day.samples, 0),
+  };
+}
+
 // The state has transaction-level P/L rather than periodic account snapshots. Rebuild a
 // compact realized-equity path from settled trades without publishing a second,
 // ever-growing history file.
-function portfolioEquityHistory(trades, equity, openPnl, generatedAt = "", originalValue = null, realizedPnl = null) {
+function portfolioEquityHistory(trades, equity, openPnl, generatedAt = "", originalValue = null, realizedPnl = null, equityHistory = null) {
   const timelineTrades = Array.isArray(trades) ? trades : [];
   const openedAt = timelineTrades
     .map((trade) => chartTimestamp(trade.openedAt || trade.date))
@@ -4378,6 +4413,24 @@ function portfolioEquityHistory(trades, equity, openPnl, generatedAt = "", origi
   const durationDays = Math.max(0, (now - firstOpenedAt) / 86400000);
   if (durationDays < 3) return null;
   const scale = equityChartScale(firstOpenedAt, now);
+
+  // Prefer the recorded series whenever there is one. It is what the account actually
+  // reported day by day, so it needs no reconciliation and it carries the intraday low
+  // and high that the reconstruction below cannot produce at all.
+  const measured = equityHistoryFromDailySamples(equityHistory, now);
+  if (measured) {
+    return {
+      points: measured.points,
+      lows: measured.lows,
+      highs: measured.highs,
+      source: "account-daily",
+      samples: measured.samples,
+      scale: equityChartScale(measured.points[0].timestamp, now),
+      openingEquity: measured.points[0].value,
+      originalValue: hasConfiguredOriginalValue ? configuredOriginalValue : null,
+      durationDays: (now - measured.points[0].timestamp) / 86400000,
+    };
+  }
   const settledEvents = timelineTrades
     .filter(isClosedTrade)
     .map((trade) => ({
@@ -4434,6 +4487,7 @@ function portfolioEquityHistory(trades, equity, openPnl, generatedAt = "", origi
   }
   return {
     points,
+    source: "settlement-ledger",
     scale,
     openingEquity,
     originalValue: hasConfiguredOriginalValue ? configuredOriginalValue : null,
@@ -4441,9 +4495,9 @@ function portfolioEquityHistory(trades, equity, openPnl, generatedAt = "", origi
   };
 }
 
-function renderPortfolioEquityChart({ trades = [], equity, openPnl = 0, generatedAt = "", originalValue = null, realizedPnl = null } = {}) {
+function renderPortfolioEquityChart({ trades = [], equity, openPnl = 0, generatedAt = "", originalValue = null, realizedPnl = null, equityHistory = null } = {}) {
   if (!els.portfolioEquityChart) return;
-  const history = portfolioEquityHistory(trades, equity, openPnl, generatedAt, originalValue, realizedPnl);
+  const history = portfolioEquityHistory(trades, equity, openPnl, generatedAt, originalValue, realizedPnl, equityHistory);
   if (!history || history.points.length < 2) {
     els.portfolioEquityChart.hidden = true;
     els.portfolioEquityChart.innerHTML = "";
@@ -4457,8 +4511,12 @@ function renderPortfolioEquityChart({ trades = [], equity, openPnl = 0, generate
   const width = 520;
   const height = 196;
   const padding = { top: 18, right: 14, bottom: 32, left: 58 };
+  const lows = Array.isArray(history.lows) ? history.lows : [];
+  const highs = Array.isArray(history.highs) ? history.highs : [];
   const values = [
     ...history.points.map((point) => point.value),
+    ...lows.map((point) => point.value),
+    ...highs.map((point) => point.value),
     ...(Number.isFinite(history.originalValue) ? [history.originalValue] : []),
   ];
   const rawMin = Math.min(...values);
@@ -4473,8 +4531,17 @@ function renderPortfolioEquityChart({ trades = [], equity, openPnl = 0, generate
   const plotHeight = height - padding.top - padding.bottom;
   const x = (timestamp) => padding.left + (Math.max(0, Math.min(1, (timestamp - start) / timeSpread)) * plotWidth);
   const y = (value) => padding.top + ((maxValue - value) / (maxValue - minValue)) * plotHeight;
-  const line = history.points.map((point) => `${x(point.timestamp).toFixed(1)},${y(point.value).toFixed(1)}`).join(" ");
+  const polyline = (points) => points.map((point) => `${x(point.timestamp).toFixed(1)},${y(point.value).toFixed(1)}`).join(" ");
+  const line = polyline(history.points);
   const area = `${padding.left},${(padding.top + plotHeight).toFixed(1)} ${line} ${(padding.left + plotWidth).toFixed(1)},${(padding.top + plotHeight).toFixed(1)}`;
+  // The day's low and high, drawn only when the series was measured -- the reconstruction
+  // from settlements has no notion of a low or a high within a day.
+  const lowLine = lows.length > 1
+    ? `<polyline class="equity-history-low" points="${polyline(lows)}"></polyline>`
+    : "";
+  const highLine = highs.length > 1
+    ? `<polyline class="equity-history-high" points="${polyline(highs)}"></polyline>`
+    : "";
   const grid = [0, 0.5, 1].map((ratio) => {
     const value = maxValue - ((maxValue - minValue) * ratio);
     const position = y(value);
@@ -4491,16 +4558,27 @@ function renderPortfolioEquityChart({ trades = [], equity, openPnl = 0, generate
   const last = history.points[history.points.length - 1];
   const direction = last.value >= history.openingEquity ? "positive" : "negative";
   const scaleLabel = history.scale === "day" ? "daily" : (history.scale === "week" ? "weekly" : "monthly");
+  // Names which of the two the reader is looking at, because they answer different
+  // questions: an average of the account's own readings, or a path rebuilt from the
+  // closed-trade ledger. Conflating them is how a wrong ledger reads as a wrong account.
+  const sourceLabel = history.source === "account-daily"
+    ? `${scaleLabel} average - realized`
+    : `${scaleLabel} - realized`;
+  const sourceNote = history.source === "account-daily"
+    ? `Each point is the mean of the account's own realised equity readings that day; the red line is the day's low and the green its high.`
+    : "Rebuilt from settled trades, because no recorded daily equity series covers this range yet.";
   els.portfolioEquityChart.innerHTML = `
     <div class="portfolio-equity-chart-head">
       <span class="label">Equity history</span>
-      <span>${escapeHtml(`${scaleLabel} - realized`)}</span>
+      <span title="${escapeHtml(sourceNote)}">${escapeHtml(sourceLabel)}</span>
     </div>
     <div class="equity-history-stage">
       <svg class="equity-history-svg ${direction}" viewBox="0 0 ${width} ${height}" role="img" aria-label="Realized portfolio equity from the first trade to today" tabindex="0">
       <g class="equity-history-grid">${grid}</g>
       ${originalValueLine}
       <polygon class="equity-history-area" points="${area}"></polygon>
+      ${lowLine}
+      ${highLine}
       <polyline class="equity-history-line" points="${line}"></polyline>
       <circle class="equity-history-point" cx="${x(last.timestamp).toFixed(1)}" cy="${y(last.value).toFixed(1)}" r="4"></circle>
       <g class="equity-history-labels">${labels}</g>
@@ -4515,11 +4593,19 @@ function renderPortfolioEquityChart({ trades = [], equity, openPnl = 0, generate
     if (!svg || !tooltip) return;
     const bounds = svg.getBoundingClientRect();
     const viewX = ((clientX - bounds.left) / Math.max(1, bounds.width)) * width;
-    const nearest = history.points.reduce((best, point) => (
-      Math.abs(x(point.timestamp) - viewX) < Math.abs(x(best.timestamp) - viewX) ? point : best
-    ), history.points[0]);
+    const nearestIndex = history.points.reduce((best, point, index) => (
+      Math.abs(x(point.timestamp) - viewX) < Math.abs(x(history.points[best].timestamp) - viewX) ? index : best
+    ), 0);
+    const nearest = history.points[nearestIndex];
     const left = Math.max(4, Math.min(96, (x(nearest.timestamp) / width) * 100));
-    tooltip.textContent = `${equityChartTooltipDate(nearest.timestamp)} - ${money(nearest.value)}`;
+    // The day's range is worth more than its average on its own, so say all three when
+    // the series carries them.
+    const low = lows[nearestIndex];
+    const high = highs[nearestIndex];
+    const range = low && high && Math.abs(high.value - low.value) > 0.0001
+      ? ` (${money(low.value)} - ${money(high.value)})`
+      : "";
+    tooltip.textContent = `${equityChartTooltipDate(nearest.timestamp)} - ${money(nearest.value)}${range}`;
     tooltip.style.left = `${left}%`;
     tooltip.hidden = false;
   };
@@ -9898,6 +9984,9 @@ function renderLiveState(liveState) {
     generatedAt: liveState.generatedAt,
     originalValue: deposited,
     realizedPnl,
+    // The wallet's own recorded per-day equity. A custom live portfolio has only its own
+    // trades, so the wallet-wide series would overstate it -- those keep the rebuilt path.
+    equityHistory: fixedEntry ? null : liveState.equityHistory,
   });
 
   if (els.accountSummary) {

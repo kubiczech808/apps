@@ -1758,6 +1758,72 @@ async function refreshUnfilledLimitOrderOutcomes(orders = [], generatedAt = new 
   return result;
 }
 
+// Kept long enough to cover more than a year of daily buckets, which is what the chart's
+// month scale spans. One bucket a day, so this is a few tens of kilobytes at worst --
+// unlike a per-sync series, which at a sync every half hour would grow by ~17,500 rows a
+// year.
+const EQUITY_HISTORY_MAX_DAYS = 400;
+
+// The equity chart used to be reconstructed from the closed-trade ledger, because the
+// state carried transaction P/L and no periodic account snapshots. That made the curve
+// only as trustworthy as the ledger -- measured on production, the ledger's own sum was
+// 183 USDC away from what the account itself reported, so the chart's reconciliation guard
+// discarded every intermediate step and drew one straight line from the opening baseline
+// to today.
+//
+// The account's equity at sync time needs no reconstruction and no reconciliation: it is
+// read from Polymarket. This records it, bucketed by day, so the chart has a real series.
+// Each bucket keeps the running sum and the count (so the day's mean is exact rather than
+// a midpoint of the extremes), and the day's low, high and last reading -- which is what
+// makes a daily average curve, or a low/high pair, answerable at all. Neither is derivable
+// from settlements, since equity moves within a day whether or not anything settled.
+//
+// Realised equity is stored alongside total equity because the chart deliberately plots
+// the realised path: a mark that can vanish next minute does not belong in a history.
+function appendEquityDaySample(previousHistory, sample = {}) {
+  const history = (Array.isArray(previousHistory) ? previousHistory : [])
+    .filter((row) => row && typeof row === "object" && typeof row.day === "string" && row.day);
+  const at = Date.parse(sample.generatedAt || "");
+  const totalEquity = optionalNumber(sample.equityUsdc);
+  if (!Number.isFinite(at) || totalEquity == null) return history.slice(-EQUITY_HISTORY_MAX_DAYS);
+  // Realised equity is what the chart plots, so an unreadable open P/L must not silently
+  // become a zero and shift the whole curve; the reading is simply skipped instead.
+  const openPnl = optionalNumber(sample.openPnlUsdc);
+  if (openPnl == null) return history.slice(-EQUITY_HISTORY_MAX_DAYS);
+  const realizedEquity = totalEquity - openPnl;
+
+  const day = new Date(at).toISOString().slice(0, 10);
+  const round = (value) => Number(value.toFixed(4));
+  const existing = history.findIndex((row) => row.day === day);
+  const previous = existing >= 0 ? history[existing] : null;
+  const samples = (Number.isFinite(Number(previous?.samples)) ? Number(previous.samples) : 0) + 1;
+  const prior = (key, fallback) => {
+    const value = optionalNumber(previous?.[key]);
+    return value == null ? fallback : value;
+  };
+  const bucket = {
+    day,
+    samples,
+    firstAt: previous?.firstAt || sample.generatedAt,
+    lastAt: sample.generatedAt,
+    realizedSum: round(prior("realizedSum", 0) + realizedEquity),
+    realizedMin: round(Math.min(prior("realizedMin", realizedEquity), realizedEquity)),
+    realizedMax: round(Math.max(prior("realizedMax", realizedEquity), realizedEquity)),
+    realizedLast: round(realizedEquity),
+    totalSum: round(prior("totalSum", 0) + totalEquity),
+    totalMin: round(Math.min(prior("totalMin", totalEquity), totalEquity)),
+    totalMax: round(Math.max(prior("totalMax", totalEquity), totalEquity)),
+    totalLast: round(totalEquity),
+  };
+  const next = existing >= 0
+    ? [...history.slice(0, existing), bucket, ...history.slice(existing + 1)]
+    : [...history, bucket];
+  // Sorted rather than appended blind: a sync whose clock or state file is out of order
+  // must not leave the series unsorted for the chart to plot as a zigzag.
+  next.sort((left, right) => String(left.day).localeCompare(String(right.day)));
+  return next.slice(-EQUITY_HISTORY_MAX_DAYS);
+}
+
 function portfolioSummary(positions, valueRows, closedTrades = []) {
   const valueRow = Array.isArray(valueRows) ? valueRows.find((row) => String(row.user || "").toLowerCase() === ACCOUNT_ADDRESS) : null;
   const marketValue = positions.reduce((sum, item) => sum + number(item.currentValueUsdc, 0), 0);
@@ -2286,6 +2352,14 @@ async function main() {
       pendingRedeemNote: "Winning resolved positions that Polymarket exposes as redeemable are counted in equity until cash balance shows the manual redeem.",
       cashSource: balanceAllowance?.status === "OK" ? "clob-balance-allowance" : null,
     },
+    // A real per-day equity series, read from the account rather than rebuilt from the
+    // trade ledger. It starts from the first sync that carries this field, so the chart
+    // falls back to the ledger reconstruction until there are two days of it.
+    equityHistory: appendEquityDaySample(previousLiveState?.equityHistory, {
+      generatedAt,
+      equityUsdc,
+      openPnlUsdc: portfolioBase.openPnlUsdc,
+    }),
     balanceAllowance,
     openOrders,
     releasedOrderCapital,
@@ -2347,4 +2421,6 @@ export {
   refreshUnfilledLimitOrderOutcomes,
   positionHasRedeemableValue,
   redeemNotifications,
+  appendEquityDaySample,
+  EQUITY_HISTORY_MAX_DAYS,
 };

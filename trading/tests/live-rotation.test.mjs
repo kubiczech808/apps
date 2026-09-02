@@ -259,6 +259,104 @@ test("unfilled limit orders: the header total adds up the graded rows and ignore
   assert.ok(Math.abs(stats.netPnl - 0.25) < 1e-9);
 });
 
+test("equity history: the sync records the account's own realised equity once a day", () => {
+  const day = (iso, equity, openPnl = 0) => ({ generatedAt: iso, equityUsdc: equity, openPnlUsdc: openPnl });
+
+  // Three readings on one day collapse into one bucket carrying all three facts.
+  let history = sync.appendEquityDaySample(null, day("2026-09-01T06:00:00Z", 100));
+  history = sync.appendEquityDaySample(history, day("2026-09-01T12:00:00Z", 90));
+  history = sync.appendEquityDaySample(history, day("2026-09-01T18:00:00Z", 110));
+  assert.equal(history.length, 1, "one bucket a day, not one row a sync");
+  assert.equal(history[0].day, "2026-09-01");
+  assert.equal(history[0].samples, 3);
+  assert.equal(history[0].realizedSum, 300, "the sum and the count together give the day's exact mean");
+  assert.equal(history[0].realizedMin, 90);
+  assert.equal(history[0].realizedMax, 110);
+  assert.equal(history[0].realizedLast, 110);
+
+  // Realised equity is total equity less the open mark, which is what the chart plots.
+  history = sync.appendEquityDaySample(history, day("2026-09-02T06:00:00Z", 120, 5));
+  assert.equal(history.length, 2);
+  assert.equal(history[1].realizedLast, 115);
+  assert.equal(history[1].totalLast, 120);
+
+  // An unreadable reading is skipped rather than recorded as a zero, which would drag
+  // the whole curve down to a value the account never held.
+  const guarded = sync.appendEquityDaySample(history, { generatedAt: "2026-09-03T06:00:00Z", equityUsdc: null, openPnlUsdc: 0 });
+  assert.equal(guarded.length, 2, "a missing equity reading adds no bucket");
+  assert.equal(sync.appendEquityDaySample(history, day("2026-09-03T06:00:00Z", 120, null)).length, 2,
+    "a missing open P/L would silently shift realised equity, so it adds no bucket either");
+  assert.equal(sync.appendEquityDaySample(history, day("not a date", 120)).length, 2);
+
+  // Out-of-order arrivals are sorted, or the chart would plot them as a zigzag.
+  const reordered = sync.appendEquityDaySample(history, day("2026-08-30T06:00:00Z", 80));
+  assert.deepEqual(reordered.map((row) => row.day), ["2026-08-30", "2026-09-01", "2026-09-02"]);
+
+  // Bounded, so the series cannot grow without limit the way a per-sync one would.
+  let long = null;
+  for (let index = 0; index < sync.EQUITY_HISTORY_MAX_DAYS + 30; index += 1) {
+    long = sync.appendEquityDaySample(long, day(new Date(Date.UTC(2024, 0, 1) + (index * 86400000)).toISOString(), 100 + index));
+  }
+  assert.equal(long.length, sync.EQUITY_HISTORY_MAX_DAYS);
+  assert.equal(long[long.length - 1].realizedLast, 100 + sync.EQUITY_HISTORY_MAX_DAYS + 29,
+    "the newest day is the one kept, not the oldest");
+});
+
+test("equity history: a recorded daily series replaces the ledger reconstruction", () => {
+  const app = readFileSync(new URL("../assets/app.js", import.meta.url), "utf8");
+  const build = new Function("numericOrNull", `${functionSource(app, "equityHistoryFromDailySamples")}
+    return equityHistoryFromDailySamples;`)((value) => {
+      if (value == null || value === "") return null;
+      const numeric = Number(value);
+      return Number.isFinite(numeric) ? numeric : null;
+    });
+  const now = Date.parse("2026-09-03T00:00:00Z");
+
+  const series = build([
+    { day: "2026-09-01", samples: 4, realizedSum: 400, realizedMin: 95, realizedMax: 105 },
+    { day: "2026-09-02", samples: 2, realizedSum: 210, realizedMin: 100, realizedMax: 110 },
+  ], now);
+  assert.equal(series.points.length, 2);
+  assert.equal(series.points[0].value, 100, "the mean is the sum over the count, not the midpoint of the extremes");
+  assert.equal(series.points[1].value, 105);
+  assert.deepEqual(series.lows.map((point) => point.value), [95, 100]);
+  assert.deepEqual(series.highs.map((point) => point.value), [105, 110]);
+  assert.equal(series.samples, 6);
+
+  // One day cannot be a curve, so the reconstruction still has to serve until there are
+  // two -- which is what makes this safe to ship before any history exists.
+  assert.equal(build([{ day: "2026-09-01", samples: 1, realizedSum: 100, realizedMin: 100, realizedMax: 100 }], now), null);
+  assert.equal(build([], now), null);
+  assert.equal(build(null, now), null);
+  // A bucket missing any of its three readings is dropped rather than half-read.
+  assert.equal(build([
+    { day: "2026-09-01", samples: 4, realizedSum: 400, realizedMin: 95, realizedMax: 105 },
+    { day: "2026-09-02", samples: 2, realizedSum: 210 },
+  ], now), null);
+  // A day stamped in the future is not plotted as though it had happened.
+  assert.equal(build([
+    { day: "2026-09-01", samples: 1, realizedSum: 100, realizedMin: 100, realizedMax: 100 },
+    { day: "2027-01-01", samples: 1, realizedSum: 100, realizedMin: 100, realizedMax: 100 },
+  ], now), null);
+});
+
+test("equity history: the chart prefers the measured series and says which one it drew", () => {
+  const app = readFileSync(new URL("../assets/app.js", import.meta.url), "utf8");
+  const css = readFileSync(new URL("../assets/app.css", import.meta.url), "utf8");
+
+  assert.match(app, /const measured = equityHistoryFromDailySamples\(equityHistory, now\);/);
+  assert.match(app, /source: "account-daily"/);
+  assert.match(app, /source: "settlement-ledger"/);
+  // The wallet-wide series must not be handed to a portfolio that owns only its own
+  // trades, or its curve would show the whole account's money.
+  assert.match(app, /equityHistory: fixedEntry \? null : liveState\.equityHistory/);
+  // The day's extremes are drawn, and keep their meaning when the trend turns negative.
+  assert.match(app, /class="equity-history-low"/);
+  assert.match(app, /class="equity-history-high"/);
+  assert.match(css, /\.equity-history-svg\.negative \.equity-history-low \{\s*stroke: #dc2626/);
+  assert.match(css, /\.equity-history-svg\.negative \.equity-history-high \{\s*stroke: #16a34a/);
+});
+
 test("unfilled limit orders: the header offers a CSV export and the pending chips read amber", () => {
   const html = readFileSync(new URL("../index.html", import.meta.url), "utf8");
   const app = readFileSync(new URL("../assets/app.js", import.meta.url), "utf8");
