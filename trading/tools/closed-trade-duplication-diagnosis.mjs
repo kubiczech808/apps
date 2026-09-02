@@ -31,7 +31,11 @@
 //   4. it runs the real exported closedTradesFromHistory and reports, for every redeemed
 //      row, the share/redeem ratio and the exit price -- so "exactly double" and "exactly
 //      0.50" are measured across the whole account, not just the six rows on screen.
-import { closedTradesFromHistory } from "./live-account-sync.mjs";
+import {
+  closedTradesFromHistory,
+  normalizeActivity,
+  normalizeTradeHistoryItem,
+} from "./live-account-sync.mjs";
 
 const DATA_API = process.env.POLYMARKET_DATA_API || "https://data-api.polymarket.com";
 const GAMMA_API = process.env.POLYMARKET_GAMMA_API || "https://gamma-api.polymarket.com";
@@ -405,8 +409,27 @@ async function main() {
     for (const item of hits.slice(0, 3)) console.log(`      full: ${JSON.stringify(item)}`);
   }
 
-  // 5. The real production function, on the real feeds.
-  const closed = closedTradesFromHistory(trades, activity, new Date().toISOString());
+  // 5. The real production function -- on NORMALIZED rows, because that is what it is fed.
+  //    Handing it raw feed rows measures a pipeline that does not exist: the raw payloads
+  //    call the token `asset` and the cash `usdcSize` (or omit the cash entirely), so every
+  //    group came out with a zero cost and every redeem fell through unmatched. That was an
+  //    artifact of this tool, not a fault in the sync.
+  const normalizedTrades = trades.map(normalizeTradeHistoryItem);
+  const normalizedActivity = activity.map(normalizeActivity);
+  console.log(`\n== how the normalizers describe the same fill from each feed`);
+  for (const row of normalizedTrades.filter(matchesFilter).slice(0, 4)) {
+    const twin = normalizedActivity.find((item) => item.transactionHash === row.transactionHash
+      && String(item.side || "").toUpperCase() === String(row.side || "").toUpperCase());
+    console.log(`   ${String(row.question || "?").slice(0, 54).padEnd(54)}`
+      + ` /trades cash ${money(number(row.usdcValue))} (${row.usdcValueSource || "?"})`
+      + `   /activity cash ${twin ? `${money(number(twin.usdcValue))} (${twin.usdcValueSource || "?"})` : "(not in window)"}`);
+    if (twin && number(row.usdcValue) != null && number(twin.usdcValue) != null) {
+      const gap = Math.abs(number(twin.usdcValue) - number(row.usdcValue));
+      console.log(`      the two feeds differ by ${money(gap)} on one fill`
+        + `${gap > 0 ? " -- which is what used to split it into two" : ""}`);
+    }
+  }
+  const closed = closedTradesFromHistory(normalizedTrades, normalizedActivity, new Date().toISOString());
   console.log(`\n== closedTradesFromHistory produced ${closed.length} rows`);
   const shown = closed.filter(matchesFilter);
   console.log(`   rows matching the filter: ${shown.length}`);

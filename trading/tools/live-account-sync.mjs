@@ -445,6 +445,8 @@ function normalizeActivity(item) {
     price: number(item.price),
     size: number(item.size ?? item.shares),
     usdcValue: number(item.usdcSize ?? item.value ?? item.amount),
+    // `/activity` reports the cash outright, so it is never a reconstruction here.
+    usdcValueSource: number(item.usdcSize ?? item.value ?? item.amount) == null ? "derived" : "reported",
     transactionHash: item.transactionHash || item.txHash || "",
   };
 }
@@ -456,7 +458,12 @@ function normalizeTradeHistoryItem(item) {
   const price = number(item.price ?? item.avgPrice);
   const timestamp = isoTime(item.timestamp ?? item.createdAt ?? item.updatedAt);
   const side = String(item.side || item.type || item.action || "").toUpperCase();
-  const notional = number(item.usdcSize ?? item.value ?? item.amountUsdc ?? (price != null ? price * size : null), 0);
+  // `/trades` carries no cash field, so price x size is a reconstruction -- and it differs
+  // from the cash `/activity` reports for the same fill, which includes fees. Recording
+  // which one this is lets the merge keep the reported figure when both feeds describe one
+  // fill, instead of silently dropping the fees along with the richer trade payload.
+  const reportedNotional = number(item.usdcSize ?? item.value ?? item.amountUsdc, null);
+  const notional = reportedNotional ?? (price != null ? price * size : 0);
 
   return {
     id: String(item.transactionHash || item.tradeId || item.id || `${item.asset || item.tokenId || item.conditionId || slug}-${timestamp || ""}-${side}`),
@@ -472,6 +479,7 @@ function normalizeTradeHistoryItem(item) {
     price,
     size,
     usdcValue: notional,
+    usdcValueSource: reportedNotional != null ? "reported" : "derived",
     transactionHash: item.transactionHash || item.txHash || "",
   };
 }
@@ -525,6 +533,23 @@ function isActiveOpenOrder(order) {
 // fill: collapsing it made a double buy look like one buy followed by a double
 // redeem. Keep the highest observed multiplicity for each detailed fill across
 // the two feeds, rather than adding both feeds or throwing away same-tx fills.
+//
+// Every field here must be one both feeds REPORT, never one we derive, because the two
+// feeds do not carry the same fields. `usdcValue` used to be part of this key and is
+// exactly that mistake: `/activity` reports the cash as `usdcSize` ($5.00, fees included),
+// while `/trades` has no cash field at all, so normalizeTradeHistoryItem falls back to
+// price x size ($4.95). One fill, two keys, five cents apart -- so both records survived
+// and every figure built from them doubled:
+//
+//   shares 6.11111 + 6.11111        = 12.22222   (twice the position ever held)
+//   cost   4.95 + 5.00              = 9.95       (not a clean double: hence the odd stake)
+//   entry  9.95 / 12.22222          = 81.4%      (plausible, which is why it went unnoticed)
+//   exit   6.11 proceeds / 12.22222 = 50.0%      (the long-standing "Final = 50.0%" rows)
+//   P/L    6.11 - 9.95              = -3.84      (a redeemed winner shown as a loss)
+//
+// It only ever hit fills recent enough to sit in both windows -- /trades keeps far more
+// history than /activity's 80 rows -- which is why the newest closed rows were wrong while
+// older ones were fine, and why this surfaced as the list suddenly showing nonsense.
 function publicHistoryFillIdentity(item) {
   return [
     item.transactionHash || item.txHash || item.id || "",
@@ -533,7 +558,6 @@ function publicHistoryFillIdentity(item) {
     item.timestamp || "",
     number(item.price, ""),
     number(item.size, ""),
-    number(item.usdcValue, ""),
     String(item.outcome || "").trim().toLowerCase(),
   ].join(":");
 }
@@ -555,7 +579,19 @@ function mergedPublicHistoryRows(trades, activity, predicate) {
   for (const group of grouped.values()) {
     // The dedicated trade endpoint wins a tie; it has the richer fill payload.
     const selected = group.trades.length >= group.activity.length ? group.trades : group.activity;
-    rows.push(...selected);
+    const other = selected === group.trades ? group.activity : group.trades;
+    for (const [index, row] of selected.entries()) {
+      // Keeping the richer payload must not cost the fill its real cash. `/trades` has no
+      // cash field, so its usdcValue is price x size and excludes the fees `/activity`
+      // reports -- take the reported figure when the same fill is described by both, and
+      // only when the two feeds agree on how many fills that is, so nothing is paired up
+      // with a different fill of the same transaction.
+      const twin = other.length === selected.length ? other[index] : null;
+      const reported = twin && twin.usdcValueSource === "reported" ? number(twin.usdcValue) : null;
+      rows.push(row.usdcValueSource === "derived" && reported != null
+        ? { ...row, usdcValue: reported, usdcValueSource: "reported" }
+        : row);
+    }
   }
   return rows;
 }
@@ -2413,6 +2449,12 @@ if (invokedDirectly) {
 export {
   resolvedPositionCloseTime,
   buildPreviousCloseTimeIndex,
+  // Exported because the closed-trade path is only correct on NORMALIZED feed rows, and a
+  // test or diagnosis that hand-writes its own rows measures a pipeline production does not
+  // have. That is how the double-counted fill went unnoticed: the existing test's fixture
+  // gave both feeds the same cash figure, which the normalizers never do.
+  normalizeActivity,
+  normalizeTradeHistoryItem,
   closedTradesFromHistory,
   mergeClosedTradeHistory,
   openOrderIdentityKeys,

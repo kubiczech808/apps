@@ -4765,6 +4765,81 @@ test("live history: matching trade and activity feeds are not counted twice", ()
   assert.ok(Math.abs(rows[0].totalCostUsdc - 4.9984) < 0.000001);
 });
 
+// The test above passed throughout, and the doubling shipped anyway, because its fixture
+// puts the SAME usdcValue on both feeds -- which the live pipeline never produces. The
+// normalizers derive that field differently per feed: /activity reports usdcSize (fees
+// included), /trades carries no cash field at all, so price x size stands in. Both records
+// of one fill therefore reached the grouping logic, five cents apart in the identity key.
+//
+// So this drives the real normalizers over raw payloads shaped exactly like production's,
+// taken from the Infinite row the user reported: one BUY of 6.11111 at 0.81 charged as
+// $5.00, redeemed for $6.11.
+test("live history: one fill described differently by each feed stays one fill", () => {
+  const rawTrade = {
+    proxyWallet: "0xwallet", side: "BUY", asset: "infinite-token",
+    conditionId: "0x111b48490eb05043c1629cc9cf79f85e70e2bc0acfe7222fb2362730f56ec15f",
+    size: 6.11111, price: 0.8099999836, timestamp: 1788361048,
+    title: "Counter-Strike: Black Phoenix vs Infinite (BO3)", slug: "cs2-blackp-inf6-2026-09-02",
+    eventSlug: "cs2-blackp-inf6-2026-09-02", outcome: "Infinite", outcomeIndex: 1,
+    transactionHash: "0xefc0da6c0d659defafebb148c0a34c1372102ff6033b26ea87c564a79ec03f0e",
+  };
+  // The same fill as /activity describes it: a type, and the cash Polymarket really charged.
+  const rawActivityTrade = { ...rawTrade, type: "TRADE", usdcSize: 5 };
+  const rawRedeem = {
+    proxyWallet: "0xwallet", timestamp: 1788372240, conditionId: rawTrade.conditionId,
+    type: "REDEEM", size: 6.11111, usdcSize: 6.11111, price: 0, asset: "", side: "",
+    outcomeIndex: 1, title: rawTrade.title, slug: rawTrade.slug, eventSlug: rawTrade.eventSlug,
+    outcome: "Infinite",
+    transactionHash: "0x07369269b6a563e64cbb8cb53b5bcef0b26636115d3d6c1f8ef2ae284a30d021",
+  };
+
+  const trades = [rawTrade].map(sync.normalizeTradeHistoryItem);
+  const activity = [rawActivityTrade, rawRedeem].map(sync.normalizeActivity);
+  const rows = sync.closedTradesFromHistory(trades, activity, "2026-09-02T19:37:55.784Z");
+
+  assert.equal(rows.length, 1);
+  const row = rows[0];
+  assert.ok(Math.abs(row.shares - 6.11111) < 0.000001,
+    `the position held 6.11111 shares, not ${row.shares}`);
+  assert.ok(Math.abs(row.redeemedShares - 6.11111) < 0.000001);
+  // The cash the account was charged, fees included -- not the price x size reconstruction,
+  // which is what survives if the richer /trades payload wins without its twin's figure.
+  assert.ok(Math.abs(row.stakeUsdc - 5) < 0.000001,
+    `the stake was the reported $5.00, not ${row.stakeUsdc}`);
+  assert.ok(Math.abs(row.exitValueUsdc - 6.11111) < 0.000001);
+  assert.ok(Math.abs(row.exitPrice - 1) < 0.000001,
+    `a redeemed winner settles at 1.00, not ${row.exitPrice}`);
+  assert.ok(row.realizedPnlUsdc > 1.11 && row.realizedPnlUsdc < 1.12,
+    `a redeemed winner is a profit, not ${row.realizedPnlUsdc}`);
+  assert.ok(Math.abs(row.entryPrice - 0.8182) < 0.001,
+    `entry is the real cost per share including fees, not ${row.entryPrice}`);
+});
+
+// Two genuine fills settled in one Polygon transaction must still count twice. Dropping the
+// cash from the identity key must not go so far as to collapse them, so this pins the
+// distinction the identity exists to make.
+test("live history: two real fills in one transaction are still two fills", () => {
+  const base = {
+    proxyWallet: "0xwallet", side: "BUY", asset: "same-tx-token", conditionId: "same-tx-condition",
+    timestamp: 1788361048, title: "Two fills, one transaction", slug: "two-fills",
+    eventSlug: "two-fills", outcome: "Yes", outcomeIndex: 1, transactionHash: "0xsametx",
+  };
+  const trades = [
+    { ...base, size: 4, price: 0.5, usdcSize: 2 },
+    { ...base, size: 6, price: 0.5, usdcSize: 3 },
+  ].map(sync.normalizeTradeHistoryItem);
+  const rows = sync.closedTradesFromHistory(trades, [sync.normalizeActivity({
+    proxyWallet: "0xwallet", timestamp: 1788372240, conditionId: base.conditionId, type: "REDEEM",
+    size: 10, usdcSize: 10, price: 0, asset: "", side: "", outcomeIndex: 1,
+    title: base.title, slug: base.slug, eventSlug: base.eventSlug, outcome: "Yes",
+    transactionHash: "0xredeem",
+  })], "2026-09-02T19:37:55.784Z");
+
+  assert.equal(rows.length, 1);
+  assert.ok(Math.abs(rows[0].shares - 10) < 0.000001, "both fills belong to the position");
+  assert.ok(Math.abs(rows[0].stakeUsdc - 5) < 0.000001, "both fills belong to the cost basis");
+});
+
 test("live entry protection serializes workflows and preserves pending bids", async () => {
   const [executorSource, primaryWorkflow, fixedWorkflow] = await Promise.all([
     import("node:fs/promises").then(({ readFile }) => readFile(new URL("../tools/live-order-executor.mjs", import.meta.url), "utf8")),
