@@ -1117,6 +1117,105 @@ function stopLossRiskLabel(config = {}) {
   return multiplier > 0 ? `${percent(multiplier)} of net win` : "Off";
 }
 
+// The same solve rpi-live-exit-worker.mjs runs, so a warning about what a stop would close
+// names the price that worker will actually use. It is deliberately a mirror rather than an
+// approximation, and a test imports the worker's own equalRiskExitPlan and compares the two
+// across a range of positions, so this copy cannot drift into telling a comfortable story.
+//
+// Solve for the lowest sell price at which the loss is still no larger than the configured
+// multiple of the potential net win.
+function stopLossFeeUsdc(shares, price, feeRate, feesEnabled) {
+  if (!feesEnabled || !(feeRate > 0)) return 0;
+  return Math.max(0, shares * feeRate * price * (1 - price));
+}
+
+function stopLossNetExitValue({ shares, price, feeRate = 0, feesEnabled = true } = {}) {
+  const size = Number(shares);
+  const quote = Number(price);
+  if (!Number.isFinite(size) || !Number.isFinite(quote) || !(size > 0) || quote < 0 || quote > 1) return null;
+  return size * quote - stopLossFeeUsdc(size, quote, feeRate, feesEnabled);
+}
+
+function equalRiskStopPrice(position = {}, multiplier = 1) {
+  const shares = numericOrNull(position.shares ?? position.size);
+  const cost = numericOrNull(position.totalCostUsdc ?? position.stakeUsdc ?? position.initialValue);
+  const feeRate = Number(position.feeRate) || 0;
+  const feesEnabled = position.feesEnabled !== false;
+  const potentialWin = numericOrNull(position.netGainIfWinUsdc)
+    ?? (shares != null && cost != null ? shares - cost : null);
+  if (!(shares > 0) || !(cost > 0) || potentialWin == null || potentialWin <= 0) return null;
+  const riskTarget = Math.min(cost, potentialWin * normalizeStopLossRiskMultiplier(multiplier, 0));
+  if (!(riskTarget > 0)) return null;
+  const minimumExitValue = Math.max(0, cost - riskTarget);
+  if (minimumExitValue <= 0) return null;
+  if ((stopLossNetExitValue({ shares, price: 1, feeRate, feesEnabled }) || 0) < minimumExitValue) return null;
+  let low = 0;
+  let high = 1;
+  for (let iteration = 0; iteration < 48; iteration += 1) {
+    const midpoint = (low + high) / 2;
+    if ((stopLossNetExitValue({ shares, price: midpoint, feeRate, feesEnabled }) || 0) >= minimumExitValue) high = midpoint;
+    else low = midpoint;
+  }
+  return Number(high.toFixed(6));
+}
+
+// Which of a portfolio's open positions this stop would close the moment it starts acting.
+// The comparison is the worker's: the current bid against the stop price. A position with
+// no quote is reported separately rather than counted as safe -- unknown is not below the
+// stop, but it is not above it either, and the operator is about to decide about it.
+function positionsAStopWouldCloseNow(mode = state.mode) {
+  const config = portfolioConfigForMode(mode);
+  const multiplier = stopLossRiskMultiplier(config);
+  if (!(multiplier > 0)) return { multiplier: 0, closing: [], unknown: [] };
+  const closing = [];
+  const unknown = [];
+  for (const position of livePositions(state.liveState)) {
+    const stopPrice = equalRiskStopPrice(position, multiplier);
+    if (stopPrice == null) continue;
+    const bid = numericOrNull(position.bestBid ?? position.currentPrice ?? position.markPrice);
+    const row = {
+      question: position.question || position.market || "-",
+      outcome: position.outcome || "",
+      stakeUsdc: numericOrNull(position.totalCostUsdc ?? position.stakeUsdc),
+      stopPrice,
+      price: bid,
+    };
+    if (bid == null || !(bid > 0)) unknown.push(row);
+    else if (bid <= stopPrice) closing.push(row);
+  }
+  closing.sort((left, right) => (left.price ?? 0) - (right.price ?? 0));
+  return { multiplier, closing, unknown };
+}
+
+// Turning a portfolio on is not only "start looking for entries": its stop loss begins
+// acting on positions it has been holding all along, and one whose price already sits below
+// the stop is sold as soon as the switch flips. That is a decision about real money taken
+// by a control that says nothing about it, so it is spelled out and confirmed.
+function confirmAutomationEnable(mode = state.mode) {
+  if (!isLivePortfolioMode(mode)) return true;
+  const { multiplier, closing, unknown } = positionsAStopWouldCloseNow(mode);
+  if (!(multiplier > 0) || (!closing.length && !unknown.length)) return true;
+  const name = portfolioNameForMode(mode);
+  const lines = closing.map((row) => `  - ${row.question}${row.outcome ? ` (${row.outcome})` : ""}`
+    + `  bid ${percent(row.price)} vs stop ${percent(row.stopPrice)}`
+    + `${row.stakeUsdc != null ? `, ${money(row.stakeUsdc)} at stake` : ""}`);
+  const unknownLines = unknown.map((row) => `  - ${row.question}${row.outcome ? ` (${row.outcome})` : ""}  nothing bid`);
+  return window.confirm([
+    `Turn "${name}" on?`,
+    "",
+    `Its stop loss is set to ${percent(multiplier)} of the net win, and it acts on the`,
+    "positions this portfolio already holds, not only on new ones.",
+    "",
+    closing.length
+      ? `${closing.length} open position${closing.length === 1 ? "" : "s"} would be sold straight away:`
+      : "No open position is below its stop right now.",
+    ...lines,
+    ...(unknown.length ? ["", `${unknown.length} cannot be checked because nothing is bid on them:`, ...unknownLines] : []),
+    "",
+    "Turn it on anyway?",
+  ].join("\n"));
+}
+
 function probabilitySourceLabel(value) {
   return normalizeProbabilitySource(value) === "polymarket" ? "Polymarket probability" : "AI probability";
 }
@@ -13797,6 +13896,8 @@ document.addEventListener("click", (event) => {
   // render, so the handler is delegated rather than bound to an element that would
   // be replaced out from under it.
   const value = !automationIsEnabled(portfolioConfigForMode(state.mode));
+  // Only on the way ON. Switching a portfolio off takes no position and needs no warning.
+  if (value && !confirmAutomationEnable(state.mode)) return;
   updatePortfolioConfigForMode(state.mode, { automationEnabled: value });
   savePortfolioConfigSoon();
   syncPortfolioParameterControls();

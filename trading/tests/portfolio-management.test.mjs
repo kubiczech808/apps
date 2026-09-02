@@ -2833,3 +2833,109 @@ test("live stop loss: a switched-off portfolio's positions are excluded by name"
     rmSync(directory, { recursive: true, force: true });
   }
 });
+
+// Reported: a live portfolio that has a stop loss configured is switched off, and turning
+// it back on must not quietly sell the positions it has been holding. The dashboard now
+// says which ones would go and asks first -- and for that warning to be worth anything, the
+// stop price it names has to be the price the RPi worker will actually use.
+//
+// So this is not a fixture comparison. It imports the worker's own equalRiskExitPlan and
+// compares it against the UI's mirror over a spread of positions, which is the only way a
+// copied solve stays honest: a drifting copy would keep passing its own expectations while
+// telling the operator a comfortable story about somebody else's money.
+test("stop loss warning: the UI solves for the same stop price the exit worker does", async () => {
+  const worker = await import("../tools/rpi-live-exit-worker.mjs");
+  const ui = new Function(`
+    ${extractFunction(APP, "numericOrNull")}
+    ${extractFunction(APP, "normalizeStopLossRiskMultiplier")}
+    ${extractFunction(APP, "stopLossFeeUsdc")}
+    ${extractFunction(APP, "stopLossNetExitValue")}
+    ${extractFunction(APP, "equalRiskStopPrice")}
+    return { equalRiskStopPrice };
+  `)();
+
+  const positions = [
+    { shares: 6.11111, totalCostUsdc: 5, netGainIfWinUsdc: 1.11111 },
+    { shares: 13.32, totalCostUsdc: 9.92, netGainIfWinUsdc: 3.4 },
+    { shares: 5.4, totalCostUsdc: 5, netGainIfWinUsdc: 0.4, feeRate: 0.02, feesEnabled: true },
+    { shares: 20, totalCostUsdc: 4, netGainIfWinUsdc: 16 },
+    { shares: 6.5, totalCostUsdc: 5, netGainIfWinUsdc: 1.5, feeRate: 0.02, feesEnabled: false },
+  ];
+  for (const multiplier of [0.5, 1, 1.75, 3]) {
+    for (const position of positions) {
+      const plan = worker.equalRiskExitPlan({ ...position, stopLossRiskMultiplier: multiplier });
+      const mirrored = ui.equalRiskStopPrice(position, multiplier);
+      if (!plan.protectable) {
+        assert.equal(mirrored, null,
+          `the UI must not offer a stop the worker considers unprotectable (x${multiplier})`);
+        continue;
+      }
+      assert.ok(Math.abs(mirrored - plan.stopPrice) < 0.000002,
+        `x${multiplier} on ${position.shares} shares: UI ${mirrored} vs worker ${plan.stopPrice}`);
+    }
+  }
+
+  // A multiplier of zero is "no stop loss", which has no price at all rather than a
+  // price of zero -- the same distinction the worker draws.
+  assert.equal(ui.equalRiskStopPrice(positions[0], 0), null);
+});
+
+test("stop loss warning: enabling a portfolio names the positions its stop would close", () => {
+  const decide = new Function("state", "window", `
+    ${extractFunction(APP, "numericOrNull")}
+    ${extractFunction(APP, "normalizeStopLossRiskMultiplier")}
+    ${extractFunction(APP, "stopLossRiskMultiplier")}
+    ${extractFunction(APP, "stopLossFeeUsdc")}
+    ${extractFunction(APP, "stopLossNetExitValue")}
+    ${extractFunction(APP, "equalRiskStopPrice")}
+    ${extractFunction(APP, "positionsAStopWouldCloseNow")}
+    const portfolioConfigForMode = () => state.config;
+    const livePositions = () => state.positions;
+    return positionsAStopWouldCloseNow("live-custom-live2");
+  `);
+
+  const result = decide({
+    config: { stopLossRiskMultiplier: 1.75 },
+    positions: [
+      // Bought at 0.82, now bid 0.03: far below its stop, so it goes immediately.
+      { question: "Iberian Soul", outcome: "Iberian Soul", shares: 6.5, totalCostUsdc: 5, netGainIfWinUsdc: 1.5, bestBid: 0.03 },
+      // Comfortably above its stop.
+      { question: "Celtic", outcome: "Yes", shares: 6.5, totalCostUsdc: 5, netGainIfWinUsdc: 1.5, bestBid: 0.9 },
+      // Nothing bid at all: reported apart, because unknown is not the same as safe.
+      { question: "WSG Tirol", outcome: "No", shares: 6.3, totalCostUsdc: 4.99, netGainIfWinUsdc: 1.31, bestBid: null },
+    ],
+  }, {});
+
+  assert.equal(result.multiplier, 1.75);
+  assert.deepEqual(result.closing.map((row) => row.question), ["Iberian Soul"]);
+  assert.deepEqual(result.unknown.map((row) => row.question), ["WSG Tirol"]);
+  assert.ok(result.closing[0].stopPrice > 0.03, "the position is below the stop, which is why it closes");
+
+  // With no stop loss configured there is nothing to warn about, whatever the prices are.
+  const off = new Function("state", `
+    ${extractFunction(APP, "numericOrNull")}
+    ${extractFunction(APP, "normalizeStopLossRiskMultiplier")}
+    ${extractFunction(APP, "stopLossRiskMultiplier")}
+    ${extractFunction(APP, "stopLossFeeUsdc")}
+    ${extractFunction(APP, "stopLossNetExitValue")}
+    ${extractFunction(APP, "equalRiskStopPrice")}
+    ${extractFunction(APP, "positionsAStopWouldCloseNow")}
+    const portfolioConfigForMode = () => state.config;
+    const livePositions = () => state.positions;
+    return positionsAStopWouldCloseNow("live");
+  `)({ config: { stopLossRiskMultiplier: 0 }, positions: [{ shares: 6.5, totalCostUsdc: 5, netGainIfWinUsdc: 1.5, bestBid: 0.01 }] });
+  assert.deepEqual(off, { multiplier: 0, closing: [], unknown: [] });
+});
+
+// The confirmation must be on the way ON only, and must actually gate the write: a dialog
+// whose answer is ignored is worse than none, because it reads as protection.
+test("stop loss warning: the confirmation gates the switch and only on the way on", () => {
+  const handler = APP.slice(APP.indexOf('const toggle = event.target?.closest?.("[data-automation-toggle]");'));
+  const body = handler.slice(0, handler.indexOf("\n});"));
+  assert.match(body, /if \(value && !confirmAutomationEnable\(state\.mode\)\) return;/,
+    "declining must stop the change, and switching off must not ask");
+  assert.ok(body.indexOf("confirmAutomationEnable") < body.indexOf("updatePortfolioConfigForMode"),
+    "the question has to be asked before the setting is written");
+  assert.match(APP, /function confirmAutomationEnable\(mode = state\.mode\) \{[\s\S]{0,200}?if \(!isLivePortfolioMode\(mode\)\) return true;/,
+    "a paper portfolio holds no live position and must not be interrogated");
+});
