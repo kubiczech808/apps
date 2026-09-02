@@ -1,0 +1,33 @@
+name: Trading Live Unfilled Outcome Probe
+
+# Read-only probe, manual only. Takes the live unfilled limit orders the account sync
+# would revisit next and asks Gamma about each of them with the same call the sync makes,
+# reporting which step of its outcome lookup is answering "no price". Writes nothing,
+# publishes nothing, no secrets.
+on:
+  workflow_dispatch:
+    inputs:
+      sample:
+        description: "How many rows to probe"
+        required: false
+        default: "8"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Probe live unfilled order outcomes
+        working-directory: trading
+        env:
+          PROBE_SAMPLE: ${{ inputs.sample || '8' }}
+        run: node tools/live-unfilled-outcome-probe.mjs
