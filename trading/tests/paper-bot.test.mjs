@@ -3206,11 +3206,10 @@ test("live events: the scan asks Gamma only for what was measured to work", asyn
   // A live-scan failure must never take the catalogue scan down with it: the rotating
   // scope is the job that has to keep working.
   assert.match(source, /Live event scan failed \(\$\{liveScanError\}\); continuing with the rotating scope only\./);
-  // Live rows still go first so bounded downstream steps keep them. They now share that
-  // head with the two other uncursored passes, and liveMarkets stays the first argument,
-  // so a market that is live and also resolving next keeps the live position.
-  assert.match(source, /const priorityMarkets = mergeMarketLists\(liveMarkets, frontierMarkets, highVolumeMarkets\);/,
-    "live rows go first so bounded downstream steps keep them");
+  // Markets backing existing live orders lead the priority queue, then genuinely live
+  // sports/esports rows. A working-set bound must never displace the former.
+  assert.match(source, /const priorityMarkets = mergeMarketLists\(liveOrderMarkets, liveMarkets, frontierMarkets, highVolumeMarkets\);/,
+    "open-order rows and live rows must lead the bounded downstream steps");
   assert.match(source, /const fetchedMarkets = mergeMarketLists\(priorityMarkets, rotatingMarkets\);/,
     "the priority passes precede the rotating scope");
   // The passes overlap by design, so this has to merge rather than concatenate: a market
