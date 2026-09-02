@@ -3139,9 +3139,17 @@ test("live events: the scan asks Gamma only for what was measured to work", asyn
   const windowed = bot.scanEventRequestParams({ tag_id: "1", end_date_max: "2026-08-05T20:00:00.000Z" });
   assert.equal(windowed.end_date_max, "2026-08-05T20:00:00.000Z");
 
+  // `sports/live` is an acquisition pass. It must not inherit the $40k floor
+  // configured for a rotating sports catalogue, because each portfolio applies
+  // its own volume rule after the live market has been retained.
+  const liveParams = bot.scanEventRequestParams({ tag_id: "1", live: "true", liquidity_min: 0 });
+  assert.equal(liveParams.liquidity_min, undefined, "an explicit zero omits Gamma's liquidity filter");
+
   // Exactly the two tags behind polymarket.com/sports/live and /esports/live.
   assert.deepEqual(bot.marketScanLiveTags().map((tag) => tag.slug), ["sports", "esports"]);
   assert.deepEqual(bot.marketScanLiveTags().map((tag) => tag.id), ["1", "64"]);
+  assert.match(source, /live: "true",\n\s+\/\/ Do not inherit[\s\S]*?liquidity_min: 0,/,
+    "the live pass must fetch all current sports/esports events before portfolio volume filtering");
 
   // A live-scan failure must never take the catalogue scan down with it: the rotating
   // scope is the job that has to keep working.

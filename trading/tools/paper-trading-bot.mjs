@@ -8374,6 +8374,16 @@ function scanEventRequestParams(params = {}) {
   const endDateMax = MARKET_SCAN_MAX_DAYS == null
     ? null
     : new Date(Date.now() + MARKET_SCAN_MAX_DAYS * 86400000).toISOString();
+  // A focused priority pass can explicitly opt out of the rotating scan's broad
+  // liquidity floor. In particular, `sports/live` must be captured before a
+  // portfolio applies its own threshold: a live market with $15k volume is useful
+  // to a $10k portfolio even while the background sports catalogue is being kept at
+  // $40k. Omitting the parameter is intentional; Gamma treats `liquidity_min=0`
+  // differently from no liquidity filter on some endpoint variants.
+  const requestedLiquidity = Object.prototype.hasOwnProperty.call(params, "liquidity_min")
+    ? Number(params.liquidity_min)
+    : MARKET_SCAN_LIQUIDITY_MIN;
+  const { liquidity_min: ignoredLiquidity, ...requestParams } = params;
   // Without a lower bound, ordering by endDate ascending starts every page on events
   // that ended months ago and are already closed, which retention then throws away.
   // See the note on MARKET_SCAN_LIVE_ENABLED for the measurement. A caller that has
@@ -8381,9 +8391,9 @@ function scanEventRequestParams(params = {}) {
   const endDateMin = new Date(Date.now() - MARKET_SCAN_END_DATE_GRACE_HOURS * 3600000).toISOString();
   return {
     end_date_min: endDateMin,
-    ...params,
-    ...(MARKET_SCAN_LIQUIDITY_MIN > 0 ? { liquidity_min: MARKET_SCAN_LIQUIDITY_MIN } : {}),
-    ...(endDateMax && !params.end_date_max ? { end_date_max: endDateMax } : {}),
+    ...requestParams,
+    ...(Number.isFinite(requestedLiquidity) && requestedLiquidity > 0 ? { liquidity_min: requestedLiquidity } : {}),
+    ...(endDateMax && !requestParams.end_date_max ? { end_date_max: endDateMax } : {}),
   };
 }
 
@@ -8405,6 +8415,10 @@ async function loadLiveMarketScanBatch({ auditCalls = null } = {}) {
       order: "endDate",
       ascending: "true",
       live: "true",
+      // Do not inherit the rotating sports scope's $40k floor. This is an
+      // acquisition pass, not a portfolio rule; each portfolio decides what
+      // volume it accepts later in its own candidate filter and executor.
+      liquidity_min: 0,
       end_date_max: endDateMax,
     }, {
       calls: auditCalls,
