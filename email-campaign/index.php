@@ -1098,6 +1098,7 @@ if (isset($_GET['cron'])) {
     // a aby byl kazdy krok videt v logu workflow vcetne velikosti pred a po.
     if (isset($_GET['db_cleanup'])) {
         $rounds = max(1, min(40, (int)($_GET['rounds'] ?? 1)));
+        $batchRows = (int)($_GET['batch'] ?? DB_CLEANUP_BATCH_ROWS);
         // Hosting ukonci request kolem 150 s, takze cely endpoint ma vlastni strop.
         // Co se nestihne, dobehne dalsi volani - kazda davka je samostatna transakce.
         $endpointDeadline = time() + 100;
@@ -1107,7 +1108,7 @@ if (isset($_GET['cron'])) {
                 $stop = 'Casovy strop requestu, zbytek dobehne dalsim volanim (davek hotovo: ' . ($round - 1) . ').';
                 break;
             }
-            $result = runGuardedDatabaseCleanup($pdo, 12);
+            $result = runGuardedDatabaseCleanup($pdo, 12, $batchRows);
             echo 'davka ' . $round . '/' . $rounds . ': ' . $result['message'] . "\n";
             if (!$result['ok']) {
                 $stop = 'Uklid zastaven po davce ' . $round . '.';
@@ -12110,28 +12111,32 @@ function databaseCleanupEstimate(PDO $pdo): array
  * Jedna davka uklidu. Bezi z cronu i z tlacitka, vzdy s casovym stropem, takze ji
  * hosting nema co ukoncit. Vraci popis toho, co se smazalo.
  */
-function runDatabaseCleanupBatch(PDO $pdo, int $budgetSeconds = 20): string
+function runDatabaseCleanupBatch(PDO $pdo, int $budgetSeconds = 20, int $batchRows = DB_CLEANUP_BATCH_ROWS): string
 {
     $deadline = time() + max(3, $budgetSeconds);
+    // Prubezny cron jede po malych davkach. Dohnani nahromadene historie ale takhle
+    // trva dny, takze rucni spusteni smi davku zvetsit - se stropem, aby jedna
+    // transakce nikdy nebyla tak velka, ze ji hosting nedokonci.
+    $batchRows = max(100, min(20000, $batchRows));
     $done = [];
-    $items = pruneScrapingJobItems($pdo, DB_CLEANUP_BATCH_ROWS);
+    $items = pruneScrapingJobItems($pdo, $batchRows);
     if ($items > 0) {
         $done[] = 'crawl log: ' . $items . ' radku';
     }
     if (time() < $deadline) {
-        $raw = pruneImportItemRawData($pdo, DB_CLEANUP_BATCH_ROWS);
+        $raw = pruneImportItemRawData($pdo, $batchRows);
         if ($raw > 0) {
             $done[] = 'surova data importu: ' . $raw . ' radku';
         }
     }
     if (time() < $deadline) {
-        $logs = pruneAiResearchLogs($pdo, DB_CLEANUP_BATCH_ROWS);
+        $logs = pruneAiResearchLogs($pdo, $batchRows);
         if ($logs > 0) {
             $done[] = 'provozni log: ' . $logs . ' radku';
         }
     }
     if (time() < $deadline) {
-        $sessions = pruneExpiredAppSessions($pdo, DB_CLEANUP_BATCH_ROWS);
+        $sessions = pruneExpiredAppSessions($pdo, $batchRows);
         if ($sessions > 0) {
             $done[] = 'sessiony: ' . $sessions;
         }
@@ -12288,7 +12293,7 @@ function databaseCleanupInvariantDiff(array $before, array $after): array
  *
  * Vraci pole ['ok' => bool, 'message' => string, 'rolled_back' => bool].
  */
-function runGuardedDatabaseCleanup(PDO $pdo, int $budgetSeconds = 20): array
+function runGuardedDatabaseCleanup(PDO $pdo, int $budgetSeconds = 20, int $batchRows = DB_CLEANUP_BATCH_ROWS): array
 {
     $before = databaseCleanupInvariant($pdo);
     $inTransaction = false;
@@ -12304,7 +12309,7 @@ function runGuardedDatabaseCleanup(PDO $pdo, int $budgetSeconds = 20): array
         ];
     }
     try {
-        $message = runDatabaseCleanupBatch($pdo, $budgetSeconds);
+        $message = runDatabaseCleanupBatch($pdo, $budgetSeconds, $batchRows);
         $diff = databaseCleanupInvariantDiff($before, databaseCleanupInvariant($pdo));
         if ($diff !== []) {
             $pdo->rollBack();

@@ -26,6 +26,10 @@ on:
         description: 'Preskocit mazani a jen uvolnit misto'
         required: false
         default: 'false'
+      batch_rows:
+        description: 'Radku v jedne davce (prubezny cron jede po 2000, dohnani historie snese vic)'
+        required: false
+        default: '2000'
 
 concurrency:
   group: email-campaign-db-cleanup
@@ -45,6 +49,7 @@ jobs:
           RUN_OPTIMIZE: ${{ github.event.inputs.run_optimize }}
           OPTIMIZE_TABLE: ${{ github.event.inputs.optimize_table }}
           SKIP_CLEANUP: ${{ github.event.inputs.skip_cleanup }}
+          BATCH_ROWS: ${{ github.event.inputs.batch_rows }}
         run: |
           if [ -z "$APP_DATABASE_NAME" ] || [ -z "$APP_DATABASE_USERNAME" ] || [ -z "$APP_DATABASE_PASSWORD" ]; then
             echo "Missing database secrets; cannot derive cron token."
@@ -61,6 +66,7 @@ jobs:
           base="https://www.osobnizkusenosti.cz/email-campaign/?cron=${TOKEN}"
           rounds="${CLEANUP_ROUNDS:-8}"
           calls="${CLEANUP_CALLS:-6}"
+          batch="${BATCH_ROWS:-2000}"
 
           summary() {
             python3 - "$1" <<'PY'
@@ -122,10 +128,10 @@ jobs:
           if [ "$SKIP_CLEANUP" = "true" ]; then
             echo "=== UKLID PRESKOCEN (skip_cleanup=true) ==="
           else
-          echo "=== UKLID (${calls} volani po ${rounds} davkach) ==="
+          echo "=== UKLID (${calls} volani po ${rounds} davkach po ${batch} radcich) ==="
           for call in $(seq 1 "$calls"); do
             echo "--- volani ${call}/${calls}"
-            http_code=$(curl --show-error --silent --max-time 170 --output /tmp/db-cleanup.txt --write-out "%{http_code}" "${base}&db_cleanup=1&rounds=${rounds}" || echo "000")
+            http_code=$(curl --show-error --silent --max-time 170 --output /tmp/db-cleanup.txt --write-out "%{http_code}" "${base}&db_cleanup=1&rounds=${rounds}&batch=${batch}" || echo "000")
             cat /tmp/db-cleanup.txt || true
             if grep -q "VRACEN ZPET" /tmp/db-cleanup.txt; then
               echo "::error::Uklid se vratil zpet, protoze by ubral data. Databaze zustala nezmenena."
