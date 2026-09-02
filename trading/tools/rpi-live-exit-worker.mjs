@@ -5,6 +5,7 @@
 // positions and never opens a new one. LIVE_EXIT_MODE defaults to `shadow`.
 
 import { execFile } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -18,6 +19,9 @@ const LIVE_STATE_URL = process.env.LIVE_EXIT_LIVE_STATE_URL
   || "https://osobnizkusenosti.cz/trading/api.php?action=state&target=live";
 const LIVE_EXIT_POLICY_URL = process.env.LIVE_EXIT_POLICY_URL
   || "https://osobnizkusenosti.cz/trading/api.php?action=live-exit-policy";
+const LIVE_ENTRY_CLAIM_URL = process.env.LIVE_ENTRY_CLAIM_URL
+  || "https://osobnizkusenosti.cz/trading/api.php?action=live-entry-claim";
+const TRADING_TRIGGER_KEY = String(process.env.TRADING_TRIGGER_KEY || "").trim();
 const MODE = String(process.env.LIVE_EXIT_MODE || "shadow").trim().toLowerCase();
 const POLL_INTERVAL_MS = clampInteger(process.env.LIVE_EXIT_POLL_INTERVAL_MS, 5000, 1500, 60000);
 const RETRY_INTERVAL_MS = clampInteger(process.env.LIVE_EXIT_RETRY_INTERVAL_MS, 20000, 5000, 300000);
@@ -63,6 +67,61 @@ async function fetchJson(url, label) {
   });
   if (!response.ok) throw new Error(`${label}: HTTP ${response.status}`);
   return response.json();
+}
+
+async function claimLiveEntry(tokenId, claimId) {
+  if (!TRADING_TRIGGER_KEY) throw new Error("live entry claim key is not configured");
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 12000);
+  try {
+    const response = await fetch(LIVE_ENTRY_CLAIM_URL, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-trading-trigger-key": TRADING_TRIGGER_KEY,
+        "user-agent": "trading-live-exit-worker/1.0",
+      },
+      body: JSON.stringify({
+        operation: "claim",
+        tokenId: String(tokenId),
+        side: "BUY",
+        portfolioId: "live-stop-loss",
+        claimId,
+      }),
+      signal: controller.signal,
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok || !payload?.ok) throw new Error(`live entry claim: HTTP ${response.status}`);
+    return payload;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function settleLiveEntryClaim(operation, tokenId, claimId) {
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 12000);
+    try {
+      const response = await fetch(LIVE_ENTRY_CLAIM_URL, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-trading-trigger-key": TRADING_TRIGGER_KEY,
+          "user-agent": "trading-live-exit-worker/1.0",
+        },
+        body: JSON.stringify({ operation, tokenId: String(tokenId), side: "BUY", portfolioId: "live-stop-loss", claimId }),
+        signal: controller.signal,
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    } finally {
+      clearTimeout(timeout);
+    }
+  } catch (error) {
+    // A missed confirmation leaves a conservative claim behind; it must never turn
+    // a successful CLOB order into a second order merely because bookkeeping timed out.
+    console.warn(`Live entry claim ${operation} failed for ${tokenId}: ${error?.message || String(error)}`);
+  }
 }
 
 async function readJson(path, fallback) {
@@ -300,9 +359,20 @@ async function submitStopLossReversal(plan) {
   // normal taker entry path; rounding down avoids sending a quote value above $5.
   const shares = Math.floor((STOP_LOSS_REVERSAL_STAKE_USDC / price) * 10000) / 10000;
   if (!(shares > 0)) return { success: false, reversal: { ...opposite, price }, error: "opposite order size is below the exchange minimum" };
+  const claimId = randomUUID();
+  const claim = await claimLiveEntry(opposite.tokenId, claimId);
+  if (!claim.claimed) {
+    return {
+      success: false,
+      reversal: { ...opposite, price: round(price, 6), shares: round(shares, 4), stakeUsdc: STOP_LOSS_REVERSAL_STAKE_USDC },
+      error: `duplicate entry guard: ${claim.reason || "an equivalent live buy is already claimed"}`,
+    };
+  }
   const { client, Side, OrderType } = await authenticatedClient();
   const signed = await client.createOrder({ tokenID: opposite.tokenId, price, size: shares, side: Side.BUY }, {});
   const response = await client.postOrder(signed, OrderType.FOK, false);
+  if (exitFilled(response)) await settleLiveEntryClaim("confirm", opposite.tokenId, claimId);
+  else await settleLiveEntryClaim("release", opposite.tokenId, claimId);
   return {
     ...response,
     reversal: { ...opposite, price: round(price, 6), shares: round(shares, 4), stakeUsdc: STOP_LOSS_REVERSAL_STAKE_USDC },

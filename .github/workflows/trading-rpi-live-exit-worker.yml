@@ -37,6 +37,7 @@ jobs:
       POLYMARKET_PRIVATE_KEY: ${{ secrets.POLYMARKET_PRIVATE_KEY }}
       POLYMARKET_FUNDER_ADDRESS: ${{ secrets.POLYMARKET_FUNDER_ADDRESS || secrets.POLYMARKET_ADDRESS || '0x3252de913d9323667f21f4d88fa1f996fc282293' }}
       POLYMARKET_SIGNATURE_TYPE: ${{ secrets.POLYMARKET_SIGNATURE_TYPE || '3' }}
+      TRADING_TRIGGER_KEY: ${{ secrets.POLYTRADING_DB_PASSWORD }}
       LIVE_EXIT_MODE: ${{ inputs.live_exit_mode }}
       LIVE_EXIT_PROTECT_ALL: ${{ inputs.protect_all }}
       LIVE_EXIT_CONFIRM_LIVE: ${{ inputs.confirm_live }}
@@ -100,6 +101,8 @@ jobs:
           POLYMARKET_PRIVATE_KEY=${POLYMARKET_PRIVATE_KEY}
           POLYMARKET_FUNDER_ADDRESS=${POLYMARKET_FUNDER_ADDRESS}
           POLYMARKET_SIGNATURE_TYPE=${POLYMARKET_SIGNATURE_TYPE}
+          TRADING_TRIGGER_KEY=${TRADING_TRIGGER_KEY}
+          LIVE_ENTRY_CLAIM_URL=https://osobnizkusenosti.cz/trading/api.php?action=live-entry-claim
           LIVE_EXIT_MODE=${exit_mode}
           LIVE_EXIT_CONFIRM_LIVE=${confirm_live}
           LIVE_EXIT_PROTECT_ALL=${protect_all}

@@ -3105,23 +3105,17 @@ const RESTING_BID = {
 const HOURS = (count) => new Date(Date.now() - count * 3600000).toISOString();
 
 test("expired orders: a bid on a market that is over is withdrawn, not left resting", () => {
-  const { expiredOrderWithdrawalReason: reasonFor, EXPIRED_ORDER_GRACE_HOURS: grace } = executor;
+  const { expiredOrderWithdrawalReason: reasonFor } = executor;
 
-  // Polymarket's own flags. Each means the book is shut, and none is ever set back.
-  assert.match(reasonFor({ ...RESTING_BID, marketClosed: true }), /closed on Polymarket/);
-  assert.match(reasonFor({ ...RESTING_BID, marketArchived: true }), /archived on Polymarket/);
-  assert.match(reasonFor({ ...RESTING_BID, marketAcceptingOrders: false }), /stopped accepting orders/);
-
-  // The reported case with no flag set yet: the match is long over, the market has not
-  // been settled, and the bid is still in the book.
-  assert.match(
-    reasonFor({ ...RESTING_BID, resolutionEndDate: HOURS(grace + 12) }),
-    /resolution window closed/,
-  );
+  assert.match(reasonFor({ ...RESTING_BID, marketResolved: true }), /resolved on Polymarket/);
+  assert.equal(reasonFor({ ...RESTING_BID, marketClosed: true }), "");
+  assert.equal(reasonFor({ ...RESTING_BID, marketArchived: true }), "");
+  assert.equal(reasonFor({ ...RESTING_BID, marketAcceptingOrders: false }), "");
+  assert.equal(reasonFor({ ...RESTING_BID, resolutionEndDate: HOURS(24) }), "");
 });
 
 test("expired orders: nothing is withdrawn without positive evidence the market is over", () => {
-  const { expiredOrderWithdrawalReason: reasonFor, EXPIRED_ORDER_GRACE_HOURS: grace } = executor;
+  const { expiredOrderWithdrawalReason: reasonFor } = executor;
 
   // A sell order is reducing a position, not holding collateral for a fill that will
   // never come, and cancelling one would strand the position it is exiting.
@@ -3140,16 +3134,11 @@ test("expired orders: nothing is withdrawn without positive evidence the market 
   assert.equal(reasonFor({ side: "BUY", price: 0.65 }), "");
   assert.equal(reasonFor({ ...RESTING_BID, resolutionEndDate: "not a date" }), "");
 
-  // Inside the settlement grace the market is over but the exchange may still be
-  // settling normally, and a bid that is about to be cancelled for us can be left alone.
-  assert.equal(reasonFor({ ...RESTING_BID, resolutionEndDate: HOURS(Math.max(0, grace - 0.5)) }), "");
-
-  // Gamma listing nothing is one unretried request, so on its own it could be a blip.
-  // It counts only alongside a window that has already closed -- which a market still
-  // trading cannot have, so a blip on a live market withdraws nothing.
+  // Listing, event dates, and an unavailable book are not resolution. They can all be
+  // transient and must leave the standing bid in place.
   const unlisted = { ...RESTING_BID, marketListed: false };
   assert.equal(reasonFor({ ...unlisted, resolutionEndDate: new Date(Date.now() + 3600000).toISOString() }), "");
-  assert.match(reasonFor({ ...unlisted, resolutionEndDate: HOURS(1) }), /no longer lists this market/);
+  assert.equal(reasonFor({ ...unlisted, resolutionEndDate: HOURS(1) }), "");
 });
 
 test("expired orders: the sweep runs before the run measures its own capital", async () => {
@@ -3183,7 +3172,7 @@ test("expired orders: the sweep runs before the run measures its own capital", a
   assert.match(withdraw, /if \(previewOnly\) remaining\.push\(order\);/);
   // A cancel the exchange refused leaves the order exactly where it was, collateral
   // included -- otherwise the run would go on to spend capital that is still committed.
-  assert.match(withdraw, /failed\.push\(summary\);\n\s+remaining\.push\(order\);/);
+  assert.match(withdraw, /failed\.push\(summary\);\r?\n\s+remaining\.push\(order\);/);
 });
 
 // Asked for explicitly: an archived 5050 stops resting new bids, but nothing it already
@@ -3229,6 +3218,7 @@ test("expired orders: the market's trading state is recorded where both readers 
   for (const [name, source] of [["account sync", sync], ["executor", executorSource]]) {
     assert.match(source, /marketClosed: market\.closed === true,/, `${name} records the closed flag`);
     assert.match(source, /marketArchived: market\.archived === true,/, `${name} records the archived flag`);
+    assert.match(source, /marketResolved: market\.resolved === true \|\| market\.isResolved === true,/, `${name} records the resolved flag`);
     assert.match(source, /marketAcceptingOrders: market\.acceptingOrders !== false,/,
       `${name} records whether the book still takes orders`);
   }
@@ -3276,6 +3266,7 @@ test("expired orders: the dashboard marks the row by the same rule that withdraw
   // a row marked as ended that the sweep will not withdraw, or the reverse, is worse
   // than no marker at all.
   const cases = [
+    { ...RESTING_BID, marketResolved: true },
     { ...RESTING_BID, marketClosed: true },
     { ...RESTING_BID, marketArchived: true },
     { ...RESTING_BID, marketAcceptingOrders: false },
@@ -4381,6 +4372,73 @@ test("closed date: once recorded it survives every later sync unchanged", async 
   const recomputed = sync.resolvedPositionCloseTime(position, new Map(), future, "2026-08-30T10:00:00.000Z");
   assert.equal(recomputed?.timestamp, "2026-08-30T10:00:00.000Z",
     "a future close date is corrupt and must not be kept");
+});
+
+test("live history: fills sharing a Polygon transaction remain separate fills", () => {
+  const buy = {
+    type: "TRADE",
+    side: "BUY",
+    timestamp: "2026-09-01T21:25:00Z",
+    question: "Same transaction, two real CLOB fills",
+    outcome: "Yes",
+    tokenId: "same-token",
+    conditionId: "same-condition",
+    size: 7.04,
+    price: 0.71,
+    usdcValue: 4.9984,
+    transactionHash: "one-polygon-transaction",
+  };
+  const rows = sync.closedTradesFromHistory([], [
+    buy,
+    { ...buy },
+    {
+      type: "REDEEM",
+      timestamp: "2026-09-02T00:33:28Z",
+      question: buy.question,
+      outcome: buy.outcome,
+      tokenId: buy.tokenId,
+      conditionId: buy.conditionId,
+      size: 14.08,
+      usdcValue: 14.08,
+      transactionHash: "redeem-transaction",
+    },
+  ], "2026-09-02T01:00:00Z");
+
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].shares, 14.08, "both CLOB fills must remain in the position");
+  assert.ok(Math.abs(rows[0].totalCostUsdc - 9.9968) < 0.000001);
+  assert.ok(Math.abs(rows[0].realizedPnlUsdc - 4.0832) < 0.000001,
+    "redeem proceeds are compared with both purchases, not just one");
+});
+
+test("live history: matching trade and activity feeds are not counted twice", () => {
+  const buy = {
+    side: "BUY", timestamp: "2026-09-01T21:25:00Z", question: "One fill in two feeds",
+    outcome: "Yes", tokenId: "cross-source-token", conditionId: "cross-source-condition",
+    size: 7.04, price: 0.71, usdcValue: 4.9984, transactionHash: "cross-source-transaction",
+  };
+  const rows = sync.closedTradesFromHistory([buy], [
+    { ...buy, type: "TRADE" },
+    { type: "REDEEM", timestamp: "2026-09-02T00:33:28Z", question: buy.question, outcome: buy.outcome,
+      tokenId: buy.tokenId, conditionId: buy.conditionId, size: 7.04, usdcValue: 7.04, transactionHash: "cross-source-redeem" },
+  ], "2026-09-02T01:00:00Z");
+
+  assert.equal(rows.length, 1);
+  assert.ok(Math.abs(rows[0].totalCostUsdc - 4.9984) < 0.000001);
+});
+
+test("live entry protection serializes workflows and preserves pending bids", async () => {
+  const [executorSource, primaryWorkflow, fixedWorkflow] = await Promise.all([
+    import("node:fs/promises").then(({ readFile }) => readFile(new URL("../tools/live-order-executor.mjs", import.meta.url), "utf8")),
+    import("node:fs/promises").then(({ readFile }) => readFile(new URL("../../.github/workflows/polymarket-live-limit-order-test.yml", import.meta.url), "utf8")),
+    import("node:fs/promises").then(({ readFile }) => readFile(new URL("../../.github/workflows/trading-live-5050.yml", import.meta.url), "utf8")),
+  ]);
+  assert.match(executorSource, /await liveEntryClaimRequest\("claim", order, claimId\)/);
+  assert.match(executorSource, /status: "duplicate_guard"/);
+  assert.match(executorSource, /const orderManagement = \{ action: "NONE", reviews: \[\] \};/);
+  assert.match(executorSource, /marketResolved === true/);
+  assert.match(primaryWorkflow, /group: trading-live-wallet-\$\{\{ github\.ref \}\}/);
+  assert.match(fixedWorkflow, /group: trading-live-wallet-\$\{\{ github\.ref \}\}/);
 });
 
 test("closed history: a later account sync enriches a row without moving its original close", () => {

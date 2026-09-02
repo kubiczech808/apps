@@ -100,7 +100,9 @@ on:
     - cron: '13 * * * *'
 
 concurrency:
-  group: trading-live-execution-${{ github.ref }}
+  # Every live portfolio uses the same funded Polymarket proxy wallet. Keep
+  # entry decisions serialized across all live strategy workflows.
+  group: trading-live-wallet-${{ github.ref }}
   cancel-in-progress: false
 
 permissions:
@@ -120,6 +122,10 @@ jobs:
       # also verifies the discovered proxy address, but type 3 is the safe
       # default whenever no explicit account override is configured.
       POLYMARKET_SIGNATURE_TYPE: ${{ secrets.POLYMARKET_SIGNATURE_TYPE || '3' }}
+      # The server-side claim is the durable final check: it also protects us
+      # from entries initiated outside this particular GitHub workflow.
+      TRADING_TRIGGER_KEY: ${{ secrets.POLYTRADING_DB_PASSWORD }}
+      LIVE_ENTRY_CLAIM_URL: https://osobnizkusenosti.cz/trading/api.php?action=live-entry-claim
       PAPER_STATE_URL: https://osobnizkusenosti.cz/trading/api.php?action=state&target=paper&summary=dashboard
       PAPER_SCRAPED_STATE_URL: https://osobnizkusenosti.cz/trading/api.php?action=state&target=paper&summary=execution
       LIVE_STATE_PATH: data/live-state.json

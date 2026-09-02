@@ -44,10 +44,10 @@ on:
     # on its own saved cadence, and a second scheduled entry delivered nothing extra.
     - cron: '37 * * * *'
 
-# Serialized against itself only. It shares the wallet with the main live portfolio
-# but not the state file, and the exchange is the authority on collateral.
+# The state files are separate, but every live strategy shares one funded wallet.
+# Serialize the entry decision with the regular live workflow as well.
 concurrency:
-  group: trading-live-5050-${{ github.ref }}
+  group: trading-live-wallet-${{ github.ref }}
   cancel-in-progress: false
 
 permissions:
@@ -62,6 +62,8 @@ jobs:
       POLYMARKET_PRIVATE_KEY: ${{ secrets.POLYMARKET_PRIVATE_KEY }}
       POLYMARKET_FUNDER_ADDRESS: ${{ secrets.POLYMARKET_FUNDER_ADDRESS || secrets.POLYMARKET_ADDRESS || '0x3252de913d9323667f21f4d88fa1f996fc282293' }}
       POLYMARKET_SIGNATURE_TYPE: ${{ secrets.POLYMARKET_SIGNATURE_TYPE || '3' }}
+      TRADING_TRIGGER_KEY: ${{ secrets.POLYTRADING_DB_PASSWORD }}
+      LIVE_ENTRY_CLAIM_URL: https://osobnizkusenosti.cz/trading/api.php?action=live-entry-claim
       PAPER_STATE_URL: https://osobnizkusenosti.cz/trading/api.php?action=state&target=paper&summary=dashboard
       PAPER_SCRAPED_STATE_URL: https://osobnizkusenosti.cz/trading/api.php?action=state&target=paper&summary=execution
       LIVE_STATE_PATH: data/live-state.json
