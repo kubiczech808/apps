@@ -68,7 +68,8 @@ function freshDb(): PDO
         plan_json TEXT DEFAULT "{}")');
     $db->exec('CREATE TABLE ai_research_contacts (id INTEGER PRIMARY KEY AUTOINCREMENT, run_id INTEGER)');
     $db->exec('CREATE TABLE app_sessions (id TEXT PRIMARY KEY, data BLOB, updated_at INTEGER, expires_at INTEGER)');
-    $db->exec('CREATE TABLE import_runs (id INTEGER PRIMARY KEY AUTOINCREMENT, finished_at TEXT DEFAULT "")');
+    $db->exec('CREATE TABLE import_runs (id INTEGER PRIMARY KEY AUTOINCREMENT, finished_at TEXT DEFAULT "",
+        created_at TEXT DEFAULT "")');
     $db->exec('CREATE TABLE import_run_items (id INTEGER PRIMARY KEY AUTOINCREMENT, import_run_id INTEGER,
         result TEXT DEFAULT "inserted", reason TEXT DEFAULT "", email TEXT DEFAULT "", raw_data TEXT DEFAULT "",
         row_num INTEGER DEFAULT 0)');
@@ -140,8 +141,8 @@ echo "\n== 4b. surova kopie radku u starych importu se vyprazdni, vysledek zusta
 // import_run_items je druha nejvetsi tabulka: kazdy nascrapovany kontakt se loguje i
 // jako radek importu s celou surovou radkou. Ta kopie uz nic nerozhoduje.
 $db = freshDb();
-$db->prepare('INSERT INTO import_runs (finished_at) VALUES (?)')->execute([$old]);
-$db->prepare('INSERT INTO import_runs (finished_at) VALUES (?)')->execute([$fresh]);
+$db->prepare('INSERT INTO import_runs (finished_at, created_at) VALUES (?, ?)')->execute([$old, $old]);
+$db->prepare('INSERT INTO import_runs (finished_at, created_at) VALUES (?, ?)')->execute([$fresh, $fresh]);
 $itemIns = $db->prepare('INSERT INTO import_run_items (import_run_id, result, reason, email, raw_data) VALUES (?,?,?,?,?)');
 $itemIns->execute([1, 'skipped', 'bez e-mailu', '', '["Firma s.r.o.","https://firma.cz"]']);
 $itemIns->execute([1, 'inserted', '', 'kontakt@firma.cz', '["Firma s.r.o.","kontakt@firma.cz"]']);
@@ -160,6 +161,25 @@ assert($rows[2]['raw_data'] !== '', 'nedavny import se nedotkne');
 $SETTINGS = ['recipient_source_backfill_import_item_id' => '2'];
 assert(countPrunableImportItemRaw($db) === 1, 'za vodoznakem uz smi i uspesny radek');
 $SETTINGS = [];
+
+echo "\n== 4c. vek importu se bere i z created_at, kdyz finished_at chybi ==\n";
+// Produkce: 446 073 radku drzelo surova data, ale ke smazani bylo 0, protoze zaznam
+// importu zalozeny scrapingem finished_at vubec nenastavuje - dost starych importu
+// bylo presne 1 ze 3 000.
+$db = freshDb();
+$db->prepare('INSERT INTO import_runs (finished_at, created_at) VALUES ("", ?)')->execute([$old]);
+$itemIns = $db->prepare('INSERT INTO import_run_items (import_run_id, result, email, raw_data) VALUES (?,?,?,?)');
+$itemIns->execute([1, 'skipped', '', '["Firma"]']);
+printf("  import bez finished_at, stary 90 dnu -> ke smazani %d\n", countPrunableImportItemRaw($db));
+assert(countPrunableImportItemRaw($db) === 1, 'stary import bez finished_at se musi uklidit taky');
+$rawSrc = extractFn($src, 'importRunsWithPrunableRaw');
+assert(str_contains($rawSrc, 'ELSE ir.created_at END'), 'vek musi mit zalozni sloupec');
+// Nedavny import bez finished_at se ale nedotkne.
+$db = freshDb();
+$db->prepare('INSERT INTO import_runs (finished_at, created_at) VALUES ("", ?)')->execute([$fresh]);
+$db->prepare('INSERT INTO import_run_items (import_run_id, result, email, raw_data) VALUES (?,?,?,?)')
+   ->execute([1, 'skipped', '', '["Firma"]']);
+assert(countPrunableImportItemRaw($db) === 0, 'nedavny import zustava cely');
 
 echo "\n== 5. provozni log se drzi na poslednich " . DB_AI_RESEARCH_LOG_KEEP_ROWS . " radcich ==\n";
 $db = freshDb();
@@ -327,6 +347,19 @@ foreach (['run_database_cleanup', 'optimize_database_tables', 'reset_ai_research
     assert(str_contains(substr($src, $pos, 400), 'requireDatabaseMaintenanceAccess()'), $action . ' musi byt jen pro spravce');
 }
 assert(str_contains($src, "!== 'VYNULOVAT'"), 'vynulovani se potvrzuje slovem');
+echo "  ok\n";
+
+echo "\n== 11b. OPTIMIZE si vyzvedne vysledkovou tabulku ==\n";
+// Bez toho zustane vysledek OPTIMIZE viset na spojeni, kazdy dalsi dotaz v requestu
+// spadne (a je odchycen do logu), takze se prestavi jen prvni tabulka a snimek "po"
+// je prazdny - hlaseni pak tvrdilo "uvolneno 804 MB", coz byla cela databaze.
+$optimizeSrc = extractFn($src, 'optimizeDatabaseTables');
+assert(str_contains($optimizeSrc, "\$pdo->query('OPTIMIZE TABLE"), 'OPTIMIZE musi jit pres query, ne exec');
+assert(str_contains($optimizeSrc, 'closeCursor()'), 'a vysledek se musi zavrit');
+assert(str_contains($optimizeSrc, "\$after['tables']"), 'usporu hlasit jen kdyz snimek po ma data');
+// Od nejmensich tabulek: prestavba potrebuje docasne misto velke jako tabulka sama.
+assert(str_contains($optimizeSrc, "\$a['total_bytes'] <=> \$b['total_bytes']"), 'poradi od nejmensi');
+assert(str_contains($optimizeSrc, '$onlyTable'), 'velka tabulka se da poslat samostatne');
 echo "  ok\n";
 
 echo "\n== 12. velikosti se ctou z information_schema vcetne volneho mista ==\n";

@@ -11855,11 +11855,13 @@ function importItemRawRetentionCutoff(): string
  */
 function importRunsWithPrunableRaw(PDO $pdo, int $runLimit, int $watermark): array
 {
+    // Vek se bere z finished_at, a kdyz chybi, z created_at: zaznam importu zalozeny
+    // scrapingem (logScrapingImportRun) finished_at nenastavuje vubec, takze podminka
+    // jen na finished_at nechytila skoro zadny z tech ctyr set tisic radku.
     $stmt = $pdo->prepare('
         SELECT ir.id
         FROM import_runs ir
-        WHERE ir.finished_at<>""
-          AND ir.finished_at<?
+        WHERE CASE WHEN ir.finished_at<>"" THEN ir.finished_at ELSE ir.created_at END<?
           AND EXISTS (
               SELECT 1 FROM import_run_items iri
               WHERE iri.import_run_id=ir.id
@@ -12160,6 +12162,7 @@ function optimizeDatabaseTables(PDO $pdo, int $budgetSeconds = 25, string $onlyT
     $before = databaseSizeSummary($pdo);
     $deadline = time() + max(5, $budgetSeconds);
     $optimized = [];
+    $failed = [];
     $skipped = 0;
     // Od nejmensich tabulek. Prestavba potrebuje docasne misto velke jako tabulka
     // sama, takze zacit tou nejvetsi znamena riskovat, ze narazi na kvotu hostingu a
@@ -12179,21 +12182,36 @@ function optimizeDatabaseTables(PDO $pdo, int $budgetSeconds = 25, string $onlyT
             continue;
         }
         try {
-            $pdo->exec('OPTIMIZE TABLE ' . quoteDatabaseIdentifier((string)$table['name']));
+            // OPTIMIZE TABLE vraci vysledkovou tabulku. Musi se vyzvednout a zavrit,
+            // jinak zustane na spojeni viset a kazdy dalsi dotaz v tomto requestu
+            // skonci chybou - prestavi se jen prvni tabulka a i snimek "po" je prazdny.
+            $statement = $pdo->query('OPTIMIZE TABLE ' . quoteDatabaseIdentifier((string)$table['name']));
+            if ($statement !== false) {
+                $statement->fetchAll(PDO::FETCH_ASSOC);
+                $statement->closeCursor();
+            }
             $optimized[] = (string)$table['name'] . ' (' . formatBytesHuman((int)$table['free_bytes']) . ')';
         } catch (Throwable $e) {
             error_log('Optimize table ' . $table['name'] . ' failed: ' . $e->getMessage());
+            $failed[] = (string)$table['name'] . ': ' . $e->getMessage();
         }
     }
     if (!$optimized) {
-        return $onlyTable !== ''
+        $reason = $onlyTable !== ''
             ? 'Uvolneni mista: tabulka ' . $onlyTable . ' nedrzi volne misto.'
             : 'Uvolneni mista: zadna tabulka nedrzi volne misto.';
+        return $failed ? $reason . ' Neuspesne: ' . implode('; ', $failed) : $reason;
     }
     $after = databaseSizeSummary($pdo);
-    $freed = max(0, ($before['total_bytes'] + $before['free_bytes']) - ($after['total_bytes'] + $after['free_bytes']));
-    return 'Uvolneno ' . formatBytesHuman($freed) . ' prestavbou tabulek: ' . implode(', ', $optimized)
-        . ($skipped > 0 ? '. Dalsich ' . $skipped . ' tabulek na dalsi klik (casovy strop requestu).' : '.');
+    // Kdyz se snimek "po" nepodari precist, radeji se necha usporu neuvedenou nez
+    // aby se vypsalo cislo velke jako cela databaze.
+    $freed = $after['tables']
+        ? max(0, ($before['total_bytes'] + $before['free_bytes']) - ($after['total_bytes'] + $after['free_bytes']))
+        : -1;
+    return ($freed >= 0 ? 'Uvolneno ' . formatBytesHuman($freed) : 'Prestaveno')
+        . ' prestavbou tabulek: ' . implode(', ', $optimized)
+        . ($skipped > 0 ? '. Dalsich ' . $skipped . ' tabulek na dalsi volani (casovy strop requestu).' : '.')
+        . ($failed ? ' Neuspesne: ' . implode('; ', $failed) . '.' : '');
 }
 
 /**
@@ -12224,10 +12242,11 @@ function databaseCleanupDiagnostics(PDO $pdo): array
         $diagnostics['scraping_items_max_id'] = (int)$pdo->query('SELECT COALESCE(MAX(id), 0) FROM scraping_job_items')->fetchColumn();
         $diagnostics['import_items_max_id'] = (int)$pdo->query('SELECT COALESCE(MAX(id), 0) FROM import_run_items')->fetchColumn();
         $diagnostics['import_items_with_raw'] = (int)$pdo->query('SELECT COUNT(*) FROM import_run_items WHERE raw_data<>""')->fetchColumn();
-        $diagnostics['import_runs_old_finished'] = (int)$pdo->query('
-            SELECT COUNT(*) FROM import_runs WHERE finished_at<>"" AND finished_at<"'
+        $diagnostics['import_runs_old_enough'] = (int)$pdo->query('
+            SELECT COUNT(*) FROM import_runs
+            WHERE CASE WHEN finished_at<>"" THEN finished_at ELSE created_at END<"'
             . importItemRawRetentionCutoff() . '"')->fetchColumn();
-        $diagnostics['import_runs_unfinished'] = (int)$pdo->query('SELECT COUNT(*) FROM import_runs WHERE finished_at=""')->fetchColumn();
+        $diagnostics['import_runs_without_finished_at'] = (int)$pdo->query('SELECT COUNT(*) FROM import_runs WHERE finished_at=""')->fetchColumn();
     } catch (Throwable $e) {
         $diagnostics['error'] = $e->getMessage();
     }

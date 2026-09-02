@@ -89,13 +89,13 @@ jobs:
                   cleanup.get("scraping_items_watermark", "?"),
                   (cleanup.get("scraping_items_cutoff") or "")[:10],
               ))
-              print("            surova data importu %s z %s radku s raw (vodoznak %s / max id %s, starych importu %s, nedokoncenych %s)" % (
+              print("            surova data importu %s z %s radku s raw (vodoznak %s / max id %s, dost starych importu %s, bez finished_at %s)" % (
                   cleanup.get("import_raw_prunable", "?"),
                   cleanup.get("import_items_with_raw", "?"),
                   cleanup.get("import_raw_watermark", "?"),
                   cleanup.get("import_items_max_id", "?"),
-                  cleanup.get("import_runs_old_finished", "?"),
-                  cleanup.get("import_runs_unfinished", "?"),
+                  cleanup.get("import_runs_old_enough", "?"),
+                  cleanup.get("import_runs_without_finished_at", "?"),
               ))
               print("            provozni log %s, propadle sessiony %s" % (
                   cleanup.get("ai_research_logs_prunable", "?"),
