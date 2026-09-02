@@ -8775,6 +8775,13 @@ function candidateRiskBlockReason(item, activeRows = [], evaluationByToken = new
   return "";
 }
 
+// A candidate for an already held market is not a diversification decision at all.
+// It cannot be opened again on the shared live wallet, so it must stay out of the
+// shortlist instead of appearing as a risk-blocked row beside genuinely available bets.
+function candidateAlreadyHeldMarketReason(reason) {
+  return reason === "duplicate token already open" || reason === "same live market already open";
+}
+
 function portfolioCandidateSortValue(item, key, mode = state.mode) {
   const config = portfolioConfigForMode(mode);
   if (key === "riskReward") return evaluationRiskReward(item) ?? -Infinity;
@@ -8837,6 +8844,7 @@ function portfolioCandidateDiagnostics(mode = state.mode) {
   const manuallyExcludedTokenIds = new Set(excludedCandidateTokenIdsForMode(mode));
   const ready = [];
   const riskBlocked = [];
+  const alreadyHeld = [];
   const manuallyExcluded = [];
   const filteredReasonCounts = new Map();
 
@@ -8859,13 +8867,15 @@ function portfolioCandidateDiagnostics(mode = state.mode) {
       expectedValueUsdc: portfolioExpectedValue(item, config),
       portfolioRiskBlockReason: candidateRiskBlockReason(item, activeRows, evaluationByToken),
     };
-    if (row.portfolioRiskBlockReason) riskBlocked.push(row);
+    if (candidateAlreadyHeldMarketReason(row.portfolioRiskBlockReason)) alreadyHeld.push(row);
+    else if (row.portfolioRiskBlockReason) riskBlocked.push(row);
     else ready.push(row);
   }
 
   return {
     ready: sortPortfolioCandidates(ready, mode),
     riskBlocked: sortPortfolioCandidates(riskBlocked, mode),
+    alreadyHeld: sortPortfolioCandidates(alreadyHeld, mode),
     manuallyExcluded: sortPortfolioCandidates(manuallyExcluded, mode),
     filteredReasonCounts,
   };
@@ -8906,6 +8916,9 @@ function showMoreCandidates() {
 function renderPortfolioCandidateRows(rows = [], mode = state.mode, diagnostics = null) {
   const manuallyExcluded = diagnostics?.manuallyExcluded || [];
   const riskBlocked = diagnostics?.riskBlocked || [];
+  // `alreadyHeld` is deliberately absent: this tab is a shortlist of markets that
+  // can still be entered. A same-market wallet position is neither a candidate nor
+  // a diversification warning, and is shown in Opened trades instead.
   const visibleRows = [...rows, ...riskBlocked, ...manuallyExcluded];
   if (!visibleRows.length) {
     const config = portfolioConfigForMode(mode);
@@ -9092,6 +9105,8 @@ function renderPortfolioCandidates() {
   if (els.portfolioCandidatesTitle) els.portfolioCandidatesTitle.textContent = `${label} execution candidates`;
   const blocked = diagnostics.riskBlocked.length;
   const excluded = diagnostics.manuallyExcluded.length;
+  // A directly held market is intentionally not part of the shortlist total. It is
+  // represented by the portfolio's open position/order, not by a candidate row.
   state.candidateTotalCount = rows.length + blocked + excluded;
   if (els.portfolioCandidatesSummary) {
     // The counts are the whole set. The table pages through it, so say how much of it

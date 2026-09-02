@@ -4499,7 +4499,7 @@ test("5050: candidates on an event already working are risk-blocked", async () =
   // and blocked nothing. Checking the token alone was also too narrow: one bid per
   // event means the other sub-markets of that event are different tokens and collide
   // only on the event key.
-  assert.match(app, /const activeRows = isFixedEntryMode\(mode\)\n\s*\? \[\n\s*\.\.\.\(Array\.isArray\(state\.liveState\?\.positions\)/,
+  assert.match(app, /const activeRows = isFixedEntryMode\(mode\)\r?\n\s*\? \[\r?\n\s*\.\.\.\(Array\.isArray\(state\.liveState\?\.positions\)/,
     "5050 must see the whole wallet, not its attributed subset");
   assert.ok(!/walletTokenIds/.test(app), "the narrower token-only check is superseded");
 
@@ -4521,6 +4521,21 @@ test("5050: candidates on an event already working are risk-blocked", async () =
 
   // The failure being fixed: an empty exposure set makes everything look ready.
   assert.equal(reason({ tokenId: "A2", riskGroupKeys: ["event:matchA"] }, []), "");
+});
+
+test("execution candidates: an already held market is absent instead of risk-blocked", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const app = await readFile(new URL("../assets/app.js", import.meta.url), "utf8");
+
+  // Correlated markets remain useful diagnostic rows. The exact same Polymarket
+  // market is different: it is already represented by its open position/order and
+  // must not inflate this portfolio's candidate shortlist.
+  assert.match(app, /function candidateAlreadyHeldMarketReason\(reason\)/);
+  assert.match(app, /const alreadyHeld = \[\];/);
+  assert.match(app, /if \(candidateAlreadyHeldMarketReason\(row\.portfolioRiskBlockReason\)\) alreadyHeld\.push\(row\);/);
+  assert.match(app, /alreadyHeld: sortPortfolioCandidates\(alreadyHeld, mode\),/);
+  assert.match(app, /const visibleRows = \[\.\.\.rows, \.\.\.riskBlocked, \.\.\.manuallyExcluded\];/,
+    "held markets must not be rendered in the candidate table");
 });
 
 test("5050: its own resting orders appear on its tab straight away", async () => {
