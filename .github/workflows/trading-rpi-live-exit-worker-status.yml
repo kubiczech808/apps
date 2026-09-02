@@ -1,0 +1,168 @@
+name: Trading RPi Live Exit Worker Status
+
+# READ-ONLY. Reports what the live exit worker on the Pi is actually doing. It writes
+# nothing, installs nothing, starts and stops nothing, and it deliberately does NOT go
+# through trading-rpi-live-exit-worker.yml -- dispatching that workflow REWRITES the
+# worker's EnvironmentFile, which would change live trading behaviour just to ask a
+# question about it.
+#
+# Asked because a live position lost its whole stake with no protective sell while its
+# token WAS in the policy payload the worker polls. Two switches on the Pi decide whether
+# a reached stop becomes a SELL or only a log line, and both default to the safe value:
+#
+#   LIVE_EXIT_MODE=shadow      -> rpi-live-exit-worker.mjs records SHADOW_STOP_TRIGGERED
+#   LIVE_EXIT_CONFIRM_LIVE     -> required alongside live mode before any SELL is sent
+#
+# So the worker's own state file is the deciding evidence: it keeps the last 500 events,
+# and a SHADOW_STOP_TRIGGERED for the market in question answers the question outright.
+#
+# Secrets in the EnvironmentFile are never printed: only the behavioural switches are read
+# by name, and the signing key is not among them.
+on:
+  workflow_dispatch:
+    inputs:
+      log_lines:
+        description: "How many journal lines to show"
+        required: false
+        default: "120"
+        type: string
+      market_filter:
+        description: "Case-insensitive text to look for in events and logs (a market or outcome name)"
+        required: false
+        default: "bernet|dodig"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  status:
+    runs-on: [self-hosted, Linux, ARM64]
+    env:
+      LOG_LINES: ${{ inputs.log_lines || '120' }}
+      MARKET_FILTER: ${{ inputs.market_filter || 'bernet|dodig' }}
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Report the armed mode
+        run: |
+          set -uo pipefail
+          env_file="$HOME/.config/trading-live-exit-worker.env"
+          echo "== armed configuration ($env_file)"
+          if [ ! -f "$env_file" ]; then
+            echo "   !! the file does not exist, so the worker has never been configured here"
+            exit 0
+          fi
+          echo "   modified: $(date -u -r "$env_file" '+%Y-%m-%dT%H:%M:%SZ')"
+          # By name, one at a time. Never cat the file: it holds the signing key.
+          for key in LIVE_EXIT_MODE LIVE_EXIT_CONFIRM_LIVE LIVE_EXIT_PROTECT_ALL \
+                     LIVE_EXIT_POLL_INTERVAL_MS LIVE_EXIT_RETRY_INTERVAL_MS \
+                     LIVE_EXIT_STATE_REFRESH_MS LIVE_EXIT_POLICY_URL; do
+            value="$(sed -n "s/^${key}=//p" "$env_file" | tail -n 1)"
+            printf '   %-32s %s\n' "$key" "${value:-(unset)}"
+          done
+          mode="$(sed -n 's/^LIVE_EXIT_MODE=//p' "$env_file" | tail -n 1)"
+          confirm="$(sed -n 's/^LIVE_EXIT_CONFIRM_LIVE=//p' "$env_file" | tail -n 1)"
+          echo ""
+          if [ "${mode:-shadow}" = "live" ] && [ "${confirm:-false}" = "true" ]; then
+            echo "   -> ARMED: a reached stop may be submitted as a protective SELL."
+          else
+            echo "   -> SHADOW: a reached stop is logged and nothing is sold."
+            echo "      A position can therefore lose its whole stake with the stop loss"
+            echo "      configured, watched, and never acted on."
+          fi
+
+      - name: Report the local watchlist size
+        run: |
+          set -uo pipefail
+          # PROTECT_ALL=false still watches anything the remote policy payload names, so an
+          # empty watchlist is not by itself a gap. Report the count only -- the file sits
+          # at mode 600 next to the credentials and its contents are not needed here.
+          watchlist="$HOME/.config/trading-live-exit-watchlist.json"
+          echo "== local watchlist ($watchlist)"
+          if [ ! -f "$watchlist" ]; then
+            echo "   (absent; the worker treats that as an empty allowlist)"
+            exit 0
+          fi
+          count="$(node -e 'const fs=require("fs");try{const v=JSON.parse(fs.readFileSync(process.argv[1],"utf8"));console.log(Array.isArray(v.positions)?v.positions.length:"unreadable")}catch(e){console.log("unreadable: "+e.message)}' "$watchlist")"
+          echo "   entries: ${count}"
+
+      - name: Report the service state
+        run: |
+          set -uo pipefail
+          runtime_dir="/run/user/$(id -u)"
+          export XDG_RUNTIME_DIR="$runtime_dir"
+          export DBUS_SESSION_BUS_ADDRESS="unix:path=$runtime_dir/bus"
+          echo "== systemd unit"
+          systemctl --user --no-pager --full status trading-live-exit-worker.service || true
+          echo ""
+          echo "== is-active / is-enabled"
+          echo "   active:  $(systemctl --user is-active trading-live-exit-worker.service 2>&1)"
+          echo "   enabled: $(systemctl --user is-enabled trading-live-exit-worker.service 2>&1)"
+
+      - name: Summarize the worker's own state file
+        run: |
+          set -uo pipefail
+          state="$HOME/.local/state/trading/live-exit-worker-state.json"
+          echo "== worker state ($state)"
+          if [ ! -f "$state" ]; then
+            echo "   !! no state file, so the worker has not completed a cycle here"
+            exit 0
+          fi
+          echo "   modified: $(date -u -r "$state" '+%Y-%m-%dT%H:%M:%SZ')   bytes: $(wc -c < "$state")"
+          # Summarized rather than dumped: history holds up to 500 events and the watch plan
+          # grows with every position, so a byte-truncated dump hides exactly the part that
+          # answers the question. Market metadata only -- no credentials live in this file.
+          node -e '
+            const fs = require("fs");
+            const state = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+            const filter = new RegExp(process.argv[2] || ".^", "i");
+            const text = (value) => JSON.stringify(value ?? null);
+            console.log(`   generatedAt   ${state.generatedAt || "(none)"}`);
+            console.log(`   mode          ${state.mode || "(none)"}`);
+            console.log(`   protectAll    ${state.protectAll}`);
+            console.log(`   policyError   ${state.policyError || "(none)"}`);
+            const watched = Array.isArray(state.watchedPositions) ? state.watchedPositions : [];
+            console.log(`\n   watched positions right now: ${watched.length}`);
+            for (const plan of watched) {
+              console.log(`      ${String(plan.question || "").slice(0, 58).padEnd(58)} ${String(plan.outcome || "").padEnd(14)}`
+                + ` stop ${String(plan.stopPrice).padStart(6)} trigger ${String(plan.triggerPrice).padStart(6)}`
+                + ` risk ${String(plan.riskTargetUsdc).padStart(7)} src ${plan.source || "?"}`);
+            }
+            const history = Array.isArray(state.history) ? state.history : [];
+            const tally = new Map();
+            for (const event of history) tally.set(event.type, (tally.get(event.type) || 0) + 1);
+            console.log(`\n   event history: ${history.length} retained (most recent first)`);
+            for (const [type, count] of [...tally].sort((a, b) => b[1] - a[1])) {
+              console.log(`      ${String(count).padStart(4)}  ${type}`);
+            }
+            const matching = history.filter((event) => filter.test(text(event)));
+            console.log(`\n   events matching /${process.argv[2]}/i: ${matching.length}`);
+            for (const event of matching.slice(0, 20)) console.log(`      ${text(event)}`);
+            console.log(`\n   last 12 events regardless of market:`);
+            for (const event of history.slice(0, 12)) console.log(`      ${text(event).slice(0, 400)}`);
+            const exits = state.exits && typeof state.exits === "object" ? state.exits : {};
+            const exitKeys = Object.keys(exits);
+            console.log(`\n   exit attempts recorded: ${exitKeys.length}`);
+            for (const key of exitKeys.slice(0, 20)) console.log(`      ${key} -> ${text(exits[key]).slice(0, 300)}`);
+          ' "$state" "$MARKET_FILTER"
+
+      - name: Report the journal
+        run: |
+          set -uo pipefail
+          runtime_dir="/run/user/$(id -u)"
+          export XDG_RUNTIME_DIR="$runtime_dir"
+          export DBUS_SESSION_BUS_ADDRESS="unix:path=$runtime_dir/bus"
+          echo "== last ${LOG_LINES} journal lines"
+          journalctl --user -u trading-live-exit-worker.service -n "${LOG_LINES}" --no-pager 2>&1 || true
+          echo ""
+          echo "== lines matching /${MARKET_FILTER}/i over the whole retained journal"
+          journalctl --user -u trading-live-exit-worker.service --no-pager 2>/dev/null \
+            | grep -i -E "${MARKET_FILTER}" | tail -n 40 || echo "   (none)"
+          echo ""
+          echo "== how often a stop was considered, triggered, or skipped"
+          journalctl --user -u trading-live-exit-worker.service --no-pager 2>/dev/null \
+            | grep -i -o -E 'shadow|would sell|SELL submitted|stop triggered|watch plan|declined|skipped|started' \
+            | sort | uniq -c | sort -rn | head -n 20 || echo "   (none)"
