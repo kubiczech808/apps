@@ -8552,6 +8552,38 @@ function scrapedTradedVolumeUsdc(item = {}) {
   return recorded ? 0 : null;
 }
 
+// The ceiling api.php enforces (MAX_TRADABLE_SPREAD) and paper-trading-bot.mjs applies at
+// entry. Stated here so the list can show the comparison rather than only its outcome.
+const SCRAPED_MAX_TRADABLE_SPREAD = 0.05;
+
+function scrapedObservationSpread(item = {}) {
+  const recorded = numericOrNull(item.spread);
+  if (recorded != null) return recorded;
+  const bid = numericOrNull(item.bestBid);
+  const ask = numericOrNull(item.bestAsk);
+  return bid != null && ask != null ? ask - bid : null;
+}
+
+// Reported repeatedly, and this is the column that answers it: a row shows an attractive
+// probability and a five-figure volume yet never becomes a candidate. Measured on
+// "2nd Half Spread: VfB Stuttgart (-1.5)" -- 78.0% probability, $22,347.98 volume, and a
+// book of 0.13 / 0.31. An 18-point spread against a 5-point ceiling: there is no
+// counterparty to buy from at 78%, so the market is correctly out of scope and nothing on
+// screen said why. Volume is turnover and says nothing about the book; that market's
+// depth was 857 USDC against its 22k of turnover.
+function scrapedSpreadCell(item = {}) {
+  const spread = scrapedObservationSpread(item);
+  if (spread == null) return '<span title="No bid/ask recorded for this market yet. A row with no spread is admitted rather than refused, so it is not excluded on this ground.">-</span>';
+  const bid = numericOrNull(item.bestBid);
+  const ask = numericOrNull(item.bestAsk);
+  const book = bid != null && ask != null ? `book ${probability(bid)} / ${probability(ask)}; ` : "";
+  const tradable = spread <= SCRAPED_MAX_TRADABLE_SPREAD;
+  const note = tradable
+    ? `${book}within the ${probability(SCRAPED_MAX_TRADABLE_SPREAD)} tradable ceiling`
+    : `${book}wider than the ${probability(SCRAPED_MAX_TRADABLE_SPREAD)} tradable ceiling, so this market cannot become an execution candidate however good its probability and volume look`;
+  return `<span class="${tradable ? "" : "negative"}" title="${escapeHtml(note)}">${probability(spread)}${tradable ? "" : " !"}</span>`;
+}
+
 function scrapedVolumeCell(item = {}) {
   // The live figure is the one the "Volume min >=" filter tests, so it is the one an open
   // row shows -- reading firstScrapedVolumeUsdc() here let a zero recorded at the first
@@ -10343,6 +10375,9 @@ function scrapedSortValue(item, key) {
   // sort on a value nobody recorded. (The key is still named "liquidity" because it is
   // persisted in the user's stored sort preference.)
   if (key === "liquidity") return scrapedTradedVolumeUsdc(item) ?? -1;
+  // A market with no recorded book sorts last rather than as the tightest: an unknown
+  // spread is admitted by the tradability gate, but it is not evidence of a tight book.
+  if (key === "spread") return scrapedObservationSpread(item) ?? Infinity;
   return "";
 }
 
@@ -10608,6 +10643,7 @@ function renderScrapedOpportunities() {
             ${scrapedSortableHeader("netYield", "Net yield %")}
             ${scrapedSortableHeader("potentialAnnualizedReturn", "Potential p.a.")}
             ${scrapedSortableHeader("liquidity", "Volume")}
+            ${scrapedSortableHeader("spread", "Spread")}
             ${scrapedSortableHeader("observedAt", "Scraped")}
             ${scrapedSortableHeader("status", "Status")}
             ${scrapedSortableHeader("endDate", "End date")}
@@ -10625,6 +10661,7 @@ function renderScrapedOpportunities() {
               <td data-label="Net yield %">${netYieldCell(item)}</td>
               <td data-label="Potential p.a."><span class="${pnlClass(potentialAnnualizedReturn(item))}">${signedPercent(potentialAnnualizedReturn(item))}</span></td>
               <td data-label="Volume">${scrapedVolumeCell(item)}</td>
+              <td data-label="Spread">${scrapedSpreadCell(item)}</td>
               <td data-label="Scraped">${escapeHtml(formatDate(item.observedAt || item.marketDataUpdatedAt || ""))}</td>
               <td data-label="Status" class="${scrapedObservationStatusClass(item)}"><strong>${scrapedObservationStatus(item)}</strong></td>
               <td data-label="End date">${evaluationEndDateCell(item)}</td>

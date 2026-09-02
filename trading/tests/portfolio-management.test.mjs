@@ -2640,3 +2640,36 @@ test("candidate reasons: the general branch still caps a portfolio's resolution-
   const branch = /if \(isFixedEntryMode\(mode\)\) \{[\s\S]*?return reasons;\n  \}/.exec(reasons)[0];
   assert.match(branch, /if \(Number\.isFinite\(days\) && Number\.isFinite\(maxDays\) && days > maxDays\) \{/);
 });
+
+test("scraped opportunities: the spread that keeps a market out of scope is on screen", () => {
+  const css = readFileSync(new URL("../assets/app.css", import.meta.url), "utf8");
+  const api = readFileSync(new URL("../api.php", import.meta.url), "utf8");
+
+  // Measured on "2nd Half Spread: VfB Stuttgart (-1.5)": 78.0% probability inside the
+  // portfolio's 0.72-0.82 band, $22,347.98 volume against a 20,000 minimum, 2.17 days
+  // against a 7-day ceiling, not an Over/Under, soccer tags not excluded -- and a book of
+  // 0.13 / 0.31. api.php's execution_scope_matches_observation refused it on that one
+  // gate, correctly: an 18-point spread has no counterparty at 78%. Nothing on screen
+  // said so, which is why it read as a missed opportunity.
+  assert.match(APP, /function scrapedSpreadCell\(item = \{\}\)/);
+  assert.match(APP, /scrapedSortableHeader\("spread", "Spread"\)/);
+  assert.match(APP, /<td data-label="Spread">\$\{scrapedSpreadCell\(item\)\}<\/td>/);
+
+  // The ceiling shown must be the ceiling enforced, or the column explains the wrong rule.
+  const phpCeiling = /const MAX_TRADABLE_SPREAD = ([\d.]+);/.exec(api);
+  assert.ok(phpCeiling, "api.php must state the tradable ceiling");
+  const uiCeiling = /const SCRAPED_MAX_TRADABLE_SPREAD = ([\d.]+);/.exec(APP);
+  assert.ok(uiCeiling, "the UI must state the ceiling it compares against");
+  assert.equal(uiCeiling[1], phpCeiling[1], "the displayed ceiling must be the enforced one");
+
+  // Derived from the book when the row has no stored spread, so an older row is not shown
+  // as unknown while the gate reads it from bestBid/bestAsk.
+  const cell = APP.slice(APP.indexOf("function scrapedObservationSpread"), APP.indexOf("function scrapedVolumeCell"));
+  assert.match(cell, /numericOrNull\(item\.bestBid\)/);
+  assert.match(cell, /numericOrNull\(item\.bestAsk\)/);
+  // An unrecorded spread is admitted by the gate, so it must not be flagged as untradable
+  // and must not sort as the tightest book.
+  assert.match(cell, /A row with no spread is admitted rather than refused/);
+  assert.match(APP, /if \(key === "spread"\) return scrapedObservationSpread\(item\) \?\? Infinity;/);
+  assert.match(css, /\.negative\b/, "the untradable marker needs its colour to exist");
+});
