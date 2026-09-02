@@ -1,0 +1,45 @@
+name: Trading Live Candidate Shortlist Diagnosis
+
+# Read-only diagnostic, manual only. Loads the live portfolio's real configuration, imports
+# the executor with it (importing does not start a run and cannot place an order), reads the
+# same scoped catalogue a real pass reads, and calls the executor's own
+# prepareLiveCandidatePool -- so every verdict is the production code's, not an imitation.
+# Reports each rejection reason with its count, and each named market's own gates in full.
+# Writes nothing, publishes nothing, no secrets.
+on:
+  workflow_dispatch:
+    inputs:
+      portfolio_id:
+        description: "Custom live portfolio id (blank = the main live portfolio)"
+        required: false
+        default: ""
+        type: string
+      focus_markets:
+        description: "Semicolon-separated substrings of the markets to explain in full"
+        required: false
+        default: "bayern;flamengo;koln;ipswich;barcelona;stuttgart;liverpool;frosinone;yunnan"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Diagnose the live candidate shortlist
+        working-directory: trading
+        env:
+          LIVE_PORTFOLIO_CONFIG_ID: ${{ inputs.portfolio_id || '' }}
+          FOCUS_MARKETS: ${{ inputs.focus_markets || 'bayern;flamengo;koln;ipswich;barcelona;stuttgart;liverpool;frosinone;yunnan' }}
+          # Explicitly absent: no private key, no API credentials. The executor cannot sign
+          # or submit anything without them, so this run is read-only by construction and
+          # not merely by intent.
+          DRY_RUN: "true"
+        run: node tools/live-candidate-shortlist-diagnosis.mjs
