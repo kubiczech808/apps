@@ -1714,12 +1714,16 @@ test("candidates: the precheck column has no WAITING state", async () => {
   const { readFile } = await import("node:fs/promises");
   const app = await readFile(new URL("../assets/app.js", import.meta.url), "utf8");
 
-  const precheckLine = app.split("\n").find((line) => line.includes("const precheck ="));
-  assert.ok(precheckLine, "the precheck label assignment must exist");
-  assert.match(precheckLine, /"EXCLUDED"/);
-  assert.match(precheckLine, /"RISK-BLOCKED"/);
-  assert.match(precheckLine, /"READY"/);
-  assert.doesNotMatch(precheckLine, /WAITING/, "a retryable verdict must not render as its own precheck state");
+  // The whole assignment, not one line of it: it spans several lines now that a held
+  // market has a state of its own.
+  const precheckStart = app.indexOf("const precheck = excluded");
+  assert.ok(precheckStart > 0, "the precheck label assignment must exist");
+  const precheckAssignment = app.slice(precheckStart, app.indexOf(";", app.indexOf("READY", precheckStart)) + 1);
+  assert.match(precheckAssignment, /"EXCLUDED"/);
+  assert.match(precheckAssignment, /"RISK-BLOCKED"/);
+  assert.match(precheckAssignment, /"READY"/);
+  assert.match(precheckAssignment, /"ALREADY HELD"/);
+  assert.doesNotMatch(precheckAssignment, /WAITING/, "a retryable verdict must not render as its own precheck state");
 
   // The retention rule must survive: a temporary block keeps the row in the shortlist so
   // the next run can retry it, while a permanent failure drops it. Read through the
@@ -4527,19 +4531,35 @@ test("5050: candidates on an event already working are risk-blocked", async () =
   assert.equal(reason({ tokenId: "A2", riskGroupKeys: ["event:matchA"] }, []), "");
 });
 
-test("execution candidates: an already held market is absent instead of risk-blocked", async () => {
+test("execution candidates: an already held market is labelled, not removed", async () => {
   const { readFile } = await import("node:fs/promises");
   const app = await readFile(new URL("../assets/app.js", import.meta.url), "utf8");
 
-  // Correlated markets remain useful diagnostic rows. The exact same Polymarket
-  // market is different: it is already represented by its open position/order and
-  // must not inflate this portfolio's candidate shortlist.
+  // The exact same Polymarket market is not a diversification decision -- the wallet
+  // already has it, so there is nothing left to enter -- and it earns its own precheck
+  // state rather than sitting among available bets. It stays on screen, though.
+  //
+  // This test previously required the opposite ("held markets must not be rendered").
+  // Reported against that behaviour: rows appeared during a refresh and then vanished.
+  // The cause is that `activeRows` comes from the live snapshot, which lands after the
+  // first render, so pass one cannot know what is held and pass two silently removed
+  // rows. Dropping them is what produced that, and "why is this market not a candidate"
+  // is the question this tab exists to answer -- so the row is kept and labelled.
   assert.match(app, /function candidateAlreadyHeldMarketReason\(reason\)/);
   assert.match(app, /const alreadyHeld = \[\];/);
   assert.match(app, /if \(candidateAlreadyHeldMarketReason\(row\.portfolioRiskBlockReason\)\) alreadyHeld\.push\(row\);/);
   assert.match(app, /alreadyHeld: sortPortfolioCandidates\(alreadyHeld, mode\),/);
-  assert.match(app, /const visibleRows = \[\.\.\.rows, \.\.\.riskBlocked, \.\.\.manuallyExcluded\];/,
-    "held markets must not be rendered in the candidate table");
+  assert.match(app, /const visibleRows = \[\.\.\.rows, \.\.\.riskBlocked, \.\.\.manuallyExcluded, \.\.\.alreadyHeld\];/,
+    "held markets are listed after the available ones, not dropped");
+  assert.match(app, /heldRow \? "ALREADY HELD"/, "and carry a state of their own, not READY");
+  // Counted, or the total would disagree with the rows on screen.
+  assert.match(app, /state\.candidateTotalCount = rows\.length \+ blocked \+ excluded \+ held;/);
+  assert.match(app, /already held/, "the summary names them");
+
+  // And the flash itself: no rows are drawn for a live portfolio until the snapshot that
+  // decides which markets are held has arrived.
+  assert.match(app, /if \(isLivePortfolioMode\(mode\) && !state\.liveState\) \{/,
+    "the shortlist must not be drawn before the inputs that classify it exist");
 });
 
 test("live candidates: a temporary quote failure is shared and stays retryable", async () => {

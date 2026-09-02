@@ -8804,9 +8804,15 @@ function candidateRiskBlockReason(item, activeRows = [], evaluationByToken = new
   return "";
 }
 
-// A candidate for an already held market is not a diversification decision at all.
-// It cannot be opened again on the shared live wallet, so it must stay out of the
-// shortlist instead of appearing as a risk-blocked row beside genuinely available bets.
+// A candidate for an already held market is not a diversification decision: it cannot be
+// opened again on the shared live wallet. That earns it its own precheck state rather than
+// sitting among genuinely available bets -- but it stays on screen and stays counted.
+//
+// Dropping these rows silently is what made candidates appear during a refresh and then
+// vanish: `activeRows` comes from the live snapshot, which arrives after the first render,
+// so the first pass cannot know what is held and the second pass removes rows with no
+// explanation. A row the reader watched disappear is worse than a row labelled ALREADY
+// HELD, and "why is this not a candidate" is exactly what this tab exists to answer.
 function candidateAlreadyHeldMarketReason(reason) {
   return reason === "duplicate token already open" || reason === "same live market already open";
 }
@@ -8945,10 +8951,12 @@ function showMoreCandidates() {
 function renderPortfolioCandidateRows(rows = [], mode = state.mode, diagnostics = null) {
   const manuallyExcluded = diagnostics?.manuallyExcluded || [];
   const riskBlocked = diagnostics?.riskBlocked || [];
-  // `alreadyHeld` is deliberately absent: this tab is a shortlist of markets that
-  // can still be entered. A same-market wallet position is neither a candidate nor
-  // a diversification warning, and is shown in Opened trades instead.
-  const visibleRows = [...rows, ...riskBlocked, ...manuallyExcluded];
+  // Listed, not dropped. A same-market wallet position is a real reason this market is not
+  // a candidate, and the reader needs to see it as a reason rather than watch the row
+  // disappear once the live snapshot lands. It sorts after the available bets, below the
+  // risk-blocked ones, because it is the least actionable of the four states.
+  const alreadyHeld = diagnostics?.alreadyHeld || [];
+  const visibleRows = [...rows, ...riskBlocked, ...manuallyExcluded, ...alreadyHeld];
   if (!visibleRows.length) {
     const config = portfolioConfigForMode(mode);
     const riskBlocked = diagnostics?.riskBlocked?.length || 0;
@@ -9015,12 +9023,19 @@ function renderPortfolioCandidateRows(rows = [], mode = state.mode, diagnostics 
           // carry "will verify live quote, fees and ranking", which is what every live
           // execution does to every candidate -- it said nothing about this row, on every
           // row, and the column is narrow enough that it crowded out what does.
+          // Held is its own state. It is not a diversification rule refusing the row --
+          // the wallet simply already has this market, so there is nothing left to enter.
+          const heldRow = candidateAlreadyHeldMarketReason(item.portfolioRiskBlockReason);
           const status = excluded
             ? "excluded manually for this portfolio"
-            : (riskBlockedRow
-              ? "excluded by diversification rules"
-              : (!live ? "ready for next paper execution" : ""));
-          const precheck = excluded ? "EXCLUDED" : (riskBlockedRow ? "RISK-BLOCKED" : "READY");
+            : (heldRow
+              ? `${item.portfolioRiskBlockReason}; see Opened trades`
+              : (riskBlockedRow
+                ? "excluded by diversification rules"
+                : (!live ? "ready for next paper execution" : "")));
+          const precheck = excluded
+            ? "EXCLUDED"
+            : (heldRow ? "ALREADY HELD" : (riskBlockedRow ? "RISK-BLOCKED" : "READY"));
           const selectedProbability = portfolioProbability(item, config);
           const selectedAnnualizedReturn = portfolioAnnualizedReturn(item, config);
           const selectedExpectedValue = portfolioExpectedValue(item, config);
@@ -9029,7 +9044,7 @@ function renderPortfolioCandidateRows(rows = [], mode = state.mode, diagnostics 
               <td data-label="Win">${gainCell(item)}</td>
               <td data-label="Days left">${evaluationDaysLeftCell(item)}</td>
               <td data-label="Market">${marketAnchor(item)}</td>
-              <td data-label="Precheck" class="${excluded ? "negative" : (riskBlockedRow ? "warning" : "positive")}">
+              <td data-label="Precheck" class="${excluded ? "negative" : (riskBlockedRow ? "warning" : "positive")}" data-precheck="${escapeHtml(precheck)}">
                 <strong>${precheck}</strong>${marketTagsInfo(item)}
                 ${status ? `<span>${escapeHtml(status)}</span>` : ""}
                 <label class="candidate-exclusion-control" title="Exclude this candidate from this portfolio's future executions">
@@ -9105,6 +9120,16 @@ function renderPortfolioCandidates() {
     if (els.portfolioCandidatesSummary) els.portfolioCandidatesSummary.textContent = "0 candidates";
     return;
   }
+  // What a live portfolio already holds is read from the live snapshot, and that snapshot
+  // arrives after this tab first renders. Drawing rows before it lands means drawing them
+  // as available and then reclassifying them once it does -- which is the "data flashing"
+  // reported: rows appear during the refresh and change or move a moment later. Waiting
+  // costs one loading line; not waiting costs the reader's trust in the list.
+  if (isLivePortfolioMode(mode) && !state.liveState) {
+    els.portfolioCandidates.innerHTML = '<div class="empty">Loading the live account snapshot, so held markets are classified before the shortlist is drawn...</div>';
+    if (els.portfolioCandidatesSummary) els.portfolioCandidatesSummary.textContent = "loading account";
+    return;
+  }
   if (usesPolymarketProbability && !scrapedMarketStateIsLoaded()) {
     if (state.scrapedMarketStateError) {
       els.portfolioCandidates.innerHTML = `<div class="empty">Scraped Polymarket economics could not be loaded: ${escapeHtml(state.scrapedMarketStateError)}. Use “Refresh shortlist” to try again.</div>`;
@@ -9134,16 +9159,17 @@ function renderPortfolioCandidates() {
   if (els.portfolioCandidatesTitle) els.portfolioCandidatesTitle.textContent = `${label} execution candidates`;
   const blocked = diagnostics.riskBlocked.length;
   const excluded = diagnostics.manuallyExcluded.length;
-  // A directly held market is intentionally not part of the shortlist total. It is
-  // represented by the portfolio's open position/order, not by a candidate row.
-  state.candidateTotalCount = rows.length + blocked + excluded;
+  const held = diagnostics.alreadyHeld.length;
+  // Held rows are listed, so they are counted. A total that excluded them disagreed with
+  // the number of rows on screen, which is its own way of making candidates look missing.
+  state.candidateTotalCount = rows.length + blocked + excluded + held;
   if (els.portfolioCandidatesSummary) {
     // The counts are the whole set. The table pages through it, so say how much of it
     // is on screen rather than letting the totals imply everything is listed.
     const total = state.candidateTotalCount;
     const shown = Math.min(total, candidateVisibleCount(mode));
     const paged = shown < total ? ` - showing ${formatInteger(shown)} of ${formatInteger(total)}` : "";
-    els.portfolioCandidatesSummary.textContent = `${rows.length} ready${blocked ? ` / ${blocked} risk-blocked` : ""}${excluded ? ` / ${excluded} excluded` : ""}${paged}`;
+    els.portfolioCandidatesSummary.textContent = `${rows.length} ready${blocked ? ` / ${blocked} risk-blocked` : ""}${held ? ` / ${held} already held` : ""}${excluded ? ` / ${excluded} excluded` : ""}${paged}`;
   }
   els.portfolioCandidates.innerHTML = renderPortfolioCandidateRows(rows, mode, diagnostics);
 }
