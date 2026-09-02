@@ -129,5 +129,40 @@ jobs:
           mkdir -p "$HOME/.config/systemd/user"
           install -m 644 trading/systemd/trading-live-exit-worker.service "$HOME/.config/systemd/user/trading-live-exit-worker.service"
           systemctl --user daemon-reload
-          systemctl --user enable --now trading-live-exit-worker.service
+          systemctl --user enable trading-live-exit-worker.service
+          # RESTART, not `enable --now`. `--now` starts a stopped unit and does nothing to a
+          # running one, so every install since the worker last came up published new code
+          # and a new EnvironmentFile that the live process never read. Measured: after a
+          # dispatch setting live mode, the worker's own state file still reported
+          # mode=shadow while cycling normally -- the file on disk said live and the process
+          # kept the environment it had started with hours earlier. The same silence hid two
+          # code fixes. A worker whose configuration cannot reach it is not configurable.
+          systemctl --user restart trading-live-exit-worker.service
           systemctl --user --no-pager --full status trading-live-exit-worker.service
+
+      - name: Confirm the running worker took the configured mode
+        run: |
+          set -uo pipefail
+          # The state file is written by the worker itself, so it is the one place the ARMED
+          # mode can be read rather than the intended one. Trusting that a restart implies
+          # it is what went unnoticed for a whole day.
+          state="$HOME/.local/state/trading/live-exit-worker-state.json"
+          expected="$(sed -n 's/^LIVE_EXIT_MODE=//p' "$HOME/.config/trading-live-exit-worker.env" | tail -n 1)"
+          expected="${expected:-shadow}"
+          running=""
+          for _attempt in 1 2 3 4 5 6 7 8 9 10; do
+            running="$(sed -n 's/.*"mode": *"\([a-z]*\)".*/\1/p' "$state" 2>/dev/null | head -n 1)"
+            if [ -n "$running" ]; then break; fi
+            sleep 3
+          done
+          echo "configured mode: ${expected}"
+          echo "worker reports:  ${running:-(no state file yet)}"
+          if [ -z "$running" ]; then
+            echo "   The worker has not written a cycle yet; mode unverified."
+            exit 0
+          fi
+          if [ "$running" != "$expected" ]; then
+            echo "   The worker is still running in ${running} after being configured for ${expected}."
+            exit 1
+          fi
+          echo "   Confirmed: the running process is in ${running}."

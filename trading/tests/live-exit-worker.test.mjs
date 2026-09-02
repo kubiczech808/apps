@@ -115,3 +115,25 @@ test("worker source keeps live exits opt-in and price-protected", async () => {
   assert.match(source, /context\.state\.excludedPositions =/,
     "what is deliberately unwatched has to be visible, not merely absent");
 });
+
+// Measured on the Pi: a dispatch that set live mode left the worker's own state file
+// reporting mode=shadow while it cycled normally. The EnvironmentFile on disk said live;
+// the process kept the environment it had started with hours earlier. `enable --now`
+// starts a STOPPED unit and does nothing to a running one, so every install since the
+// worker last came up published new code and new configuration that the live process never
+// read -- which also hid two code fixes pushed the same evening.
+test("configuring the worker actually reaches the running process", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const workflow = await readFile(new URL("../../.github/workflows/trading-rpi-live-exit-worker.yml", import.meta.url), "utf8");
+
+  assert.match(workflow, /systemctl --user restart trading-live-exit-worker\.service/,
+    "a running worker has to be replaced, not merely enabled");
+  assert.ok(!/systemctl --user enable --now trading-live-exit-worker\.service/.test(workflow),
+    "enable --now cannot come back: it is a no-op against the case that matters");
+
+  // And the claim is verified against the worker's own report rather than assumed from the
+  // restart, because assuming it is exactly what went unnoticed.
+  assert.match(workflow, /Confirm the running worker took the configured mode/);
+  assert.match(workflow, /if \[ "\$running" != "\$expected" \]; then[\s\S]*?exit 1/,
+    "a worker still in the previous mode has to fail the run, not pass quietly");
+});
