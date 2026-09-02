@@ -19,7 +19,7 @@ function extractFn(string $src, string $name): string
     $end = strrpos($body, '}');
     return $end === false ? $body : substr($body, 0, $end + 1);
 }
-foreach (['DB_SCRAPING_ITEM_RETENTION_DAYS', 'DB_AI_RESEARCH_LOG_KEEP_ROWS', 'DB_CLEANUP_BATCH_ROWS'] as $const) {
+foreach (['DB_SCRAPING_ITEM_RETENTION_DAYS', 'DB_IMPORT_RAW_RETENTION_DAYS', 'DB_AI_RESEARCH_LOG_KEEP_ROWS', 'DB_CLEANUP_BATCH_ROWS'] as $const) {
     preg_match('/const ' . $const . ' = (\d+);/', $src, $m);
     assert(isset($m[1]), 'konstanta chybi: ' . $const);
     eval('const ' . $const . ' = ' . $m[1] . ';');
@@ -41,7 +41,9 @@ function recentNoEmailScrapingCacheDays(string $source): int
 }
 foreach (['protectedContactOwnerEmails', 'databaseCleanupTables', 'formatBytesHuman',
           'scrapingItemRetentionCutoff', 'scrapingItemPruneWatermark', 'scrapingItemPruneItemCondition',
-          'scrapingJobsWithPrunableItems', 'countPrunableScrapingItems', 'pruneScrapingJobItems', 'countPrunableAiResearchLogs', 'pruneAiResearchLogs',
+          'scrapingJobsWithPrunableItems', 'countPrunableScrapingItems', 'pruneScrapingJobItems',
+          'importItemRawWatermark', 'importItemRawRetentionCutoff', 'importRunsWithPrunableRaw',
+          'countPrunableImportItemRaw', 'pruneImportItemRawData', 'countPrunableAiResearchLogs', 'pruneAiResearchLogs',
           'countExpiredAppSessions', 'pruneExpiredAppSessions', 'countAiResearchRunsWithCache',
           'stripAiResearchRunCaches', 'databaseCleanupEstimate', 'runDatabaseCleanupBatch',
           'quoteDatabaseIdentifier', 'resetAiResearchData', 'countRecipientsForOwnerEmail',
@@ -65,6 +67,10 @@ function freshDb(): PDO
         plan_json TEXT DEFAULT "{}")');
     $db->exec('CREATE TABLE ai_research_contacts (id INTEGER PRIMARY KEY AUTOINCREMENT, run_id INTEGER)');
     $db->exec('CREATE TABLE app_sessions (id TEXT PRIMARY KEY, data BLOB, updated_at INTEGER, expires_at INTEGER)');
+    $db->exec('CREATE TABLE import_runs (id INTEGER PRIMARY KEY AUTOINCREMENT, finished_at TEXT DEFAULT "")');
+    $db->exec('CREATE TABLE import_run_items (id INTEGER PRIMARY KEY AUTOINCREMENT, import_run_id INTEGER,
+        result TEXT DEFAULT "inserted", reason TEXT DEFAULT "", email TEXT DEFAULT "", raw_data TEXT DEFAULT "",
+        row_num INTEGER DEFAULT 0)');
     $db->exec('CREATE TABLE app_users (id INTEGER PRIMARY KEY AUTOINCREMENT, email TEXT)');
     $db->exec('CREATE TABLE contact_databases (id INTEGER PRIMARY KEY AUTOINCREMENT, owner_user_id INTEGER, name TEXT)');
     $db->exec('CREATE TABLE recipients (id INTEGER PRIMARY KEY AUTOINCREMENT, list_id INTEGER, email TEXT)');
@@ -127,6 +133,31 @@ $SETTINGS = ['recipient_source_backfill_scraping_item_id' => (string)$done];
 printf("  vodoznak backfillu #%d -> ke smazani %d z 2\n", $done, countPrunableScrapingItems($db));
 assert(countPrunableScrapingItems($db) === 1, 'jen radek, ktery backfill uz zpracoval');
 assert(pruneScrapingJobItems($db, 100) === 1, 'a smaze se prave on');
+$SETTINGS = [];
+
+echo "\n== 4b. surova kopie radku u starych importu se vyprazdni, vysledek zustava ==\n";
+// import_run_items je druha nejvetsi tabulka: kazdy nascrapovany kontakt se loguje i
+// jako radek importu s celou surovou radkou. Ta kopie uz nic nerozhoduje.
+$db = freshDb();
+$db->prepare('INSERT INTO import_runs (finished_at) VALUES (?)')->execute([$old]);
+$db->prepare('INSERT INTO import_runs (finished_at) VALUES (?)')->execute([$fresh]);
+$itemIns = $db->prepare('INSERT INTO import_run_items (import_run_id, result, reason, email, raw_data) VALUES (?,?,?,?,?)');
+$itemIns->execute([1, 'skipped', 'bez e-mailu', '', '["Firma s.r.o.","https://firma.cz"]']);
+$itemIns->execute([1, 'inserted', '', 'kontakt@firma.cz', '["Firma s.r.o.","kontakt@firma.cz"]']);
+$itemIns->execute([2, 'skipped', 'bez e-mailu', '', '["Nova firma"]']);
+// Vodoznak backfillu jeste nedosel k uspesnemu radku, takze ten musi zustat cely.
+$SETTINGS = ['recipient_source_backfill_import_item_id' => '0'];
+printf("  k vyprazdneni: %d ze 3\n", countPrunableImportItemRaw($db));
+assert(countPrunableImportItemRaw($db) === 1, 'jen radek stareho importu, ktery backfill nepotrebuje');
+assert(pruneImportItemRawData($db, 100) === 1, 'a vyprazdni se');
+$rows = $db->query('SELECT id, result, reason, raw_data FROM import_run_items ORDER BY id')->fetchAll(PDO::FETCH_ASSOC);
+assert($rows[0]['raw_data'] === '' && $rows[0]['result'] === 'skipped' && $rows[0]['reason'] === 'bez e-mailu',
+    'vysledek a duvod radku zustavaji, mizi jen surova kopie');
+assert($rows[1]['raw_data'] !== '', 'uspesny radek pred vodoznakem se nedotkne');
+assert($rows[2]['raw_data'] !== '', 'nedavny import se nedotkne');
+// Po posunu vodoznaku uz smi jit i uspesny radek.
+$SETTINGS = ['recipient_source_backfill_import_item_id' => '2'];
+assert(countPrunableImportItemRaw($db) === 1, 'za vodoznakem uz smi i uspesny radek');
 $SETTINGS = [];
 
 echo "\n== 5. provozni log se drzi na poslednich " . DB_AI_RESEARCH_LOG_KEEP_ROWS . " radcich ==\n";
