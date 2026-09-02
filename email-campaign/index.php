@@ -30,6 +30,11 @@ const AI_RESEARCH_MAX_STEPS_PER_TICK = 12;
 const DB_SCRAPING_ITEM_RETENTION_DAYS = 45;
 // Kolik radku provozniho logu automatiky se drzi.
 const DB_AI_RESEARCH_LOG_KEEP_ROWS = 500;
+// Kolik dnu se u dokoncenych importu drzi surovy radek zdroje (import_run_items.raw_data).
+// Kazdy nascrapovany kontakt se loguje i jako radek importu vcetne cele surove radky,
+// takze je to druha nejvetsi tabulka v databazi. Vysledek radku (co se s nim stalo a
+// proc) zustava; zahazuje se jen ta surova kopie.
+const DB_IMPORT_RAW_RETENTION_DAYS = 30;
 // Strop jedne davky mazani, aby request nikdy nespadl na case hostingu.
 const DB_CLEANUP_BATCH_ROWS = 2000;
 // Kolik pokusu o dokonceni dostane jeden beh, nez ho automatika trvale uzavre. Dokud
@@ -11588,7 +11593,7 @@ function protectedContactOwnerEmails(): array
  */
 function databaseCleanupTables(): array
 {
-    return ['scraping_job_items', 'ai_research_logs', 'ai_research_runs', 'ai_research_contacts', 'app_sessions'];
+    return ['scraping_job_items', 'import_run_items', 'ai_research_logs', 'ai_research_runs', 'ai_research_contacts', 'app_sessions'];
 }
 
 function formatBytesHuman(int $bytes): string
@@ -11785,6 +11790,104 @@ function pruneScrapingJobItems(PDO $pdo, int $limit = DB_CLEANUP_BATCH_ROWS): in
     }
 }
 
+/**
+ * Vodoznak backfillu zdroju pro importy. Backfill jeste z raw_data cte zdrojovou URL
+ * ke kontaktum, takze uspesny radek se smi vyprazdnit teprve az za nim.
+ */
+function importItemRawWatermark(PDO $pdo): int
+{
+    $settings = loadSettings($pdo);
+    return max(0, (int)($settings['recipient_source_backfill_import_item_id'] ?? 0));
+}
+
+function importItemRawRetentionCutoff(): string
+{
+    return date('c', time() - (DB_IMPORT_RAW_RETENTION_DAYS * 86400));
+}
+
+/**
+ * Importy, u kterych je surova kopie radku uz jen zatez. Zpracovava se po importech
+ * (pres index na import_run_id), ne pres celou tabulku.
+ */
+function importRunsWithPrunableRaw(PDO $pdo, int $runLimit, int $watermark): array
+{
+    $stmt = $pdo->prepare('
+        SELECT ir.id
+        FROM import_runs ir
+        WHERE ir.finished_at<>""
+          AND ir.finished_at<?
+          AND EXISTS (
+              SELECT 1 FROM import_run_items iri
+              WHERE iri.import_run_id=ir.id
+                AND iri.raw_data<>""
+                AND (iri.email="" OR iri.result NOT IN ("inserted", "updated") OR iri.id<=?)
+          )
+        ORDER BY ir.id ASC
+        LIMIT ' . max(1, $runLimit));
+    $stmt->execute([importItemRawRetentionCutoff(), $watermark]);
+    return array_map('intval', $stmt->fetchAll(PDO::FETCH_COLUMN));
+}
+
+function countPrunableImportItemRaw(PDO $pdo, int $runLimit = 25): int
+{
+    if (!tableExists($pdo, 'import_run_items') || !tableExists($pdo, 'import_runs')) {
+        return 0;
+    }
+    try {
+        $watermark = importItemRawWatermark($pdo);
+        $total = 0;
+        foreach (importRunsWithPrunableRaw($pdo, $runLimit, $watermark) as $runId) {
+            $stmt = $pdo->prepare('
+                SELECT COUNT(*) FROM import_run_items
+                WHERE import_run_id=? AND raw_data<>""
+                  AND (email="" OR result NOT IN ("inserted", "updated") OR id<=?)');
+            $stmt->execute([$runId, $watermark]);
+            $total += (int)$stmt->fetchColumn();
+        }
+        return $total;
+    } catch (Throwable $e) {
+        error_log('Prunable import raw count failed: ' . $e->getMessage());
+        return 0;
+    }
+}
+
+/**
+ * Vyprazdni surovou kopii radku u starych importu. Radek zustava - vysledek, duvod,
+ * e-mail i cislo radky jsou dal k dispozici; mizi jen ta cela surova radka, ktera u
+ * nascrapovanych kontaktu jen zdvojuje to, co uz je v kontaktech a v crawl logu.
+ */
+function pruneImportItemRawData(PDO $pdo, int $limit = DB_CLEANUP_BATCH_ROWS): int
+{
+    if ($limit < 1 || !tableExists($pdo, 'import_run_items') || !tableExists($pdo, 'import_runs')) {
+        return 0;
+    }
+    try {
+        $watermark = importItemRawWatermark($pdo);
+        $cleared = 0;
+        foreach (importRunsWithPrunableRaw($pdo, 10, $watermark) as $runId) {
+            if ($cleared >= $limit) {
+                break;
+            }
+            $stmt = $pdo->prepare('
+                SELECT id FROM import_run_items
+                WHERE import_run_id=? AND raw_data<>""
+                  AND (email="" OR result NOT IN ("inserted", "updated") OR id<=?)
+                ORDER BY id ASC LIMIT ' . (int)($limit - $cleared));
+            $stmt->execute([$runId, $watermark]);
+            $ids = array_map('intval', $stmt->fetchAll(PDO::FETCH_COLUMN));
+            if (!$ids) {
+                continue;
+            }
+            $pdo->exec('UPDATE import_run_items SET raw_data="" WHERE id IN (' . implode(',', $ids) . ')');
+            $cleared += count($ids);
+        }
+        return $cleared;
+    } catch (Throwable $e) {
+        error_log('Import raw prune failed: ' . $e->getMessage());
+        return 0;
+    }
+}
+
 function countPrunableAiResearchLogs(PDO $pdo): int
 {
     if (!tableExists($pdo, 'ai_research_logs')) {
@@ -11931,6 +12034,12 @@ function databaseCleanupEstimate(PDO $pdo): array
             'rows' => countPrunableScrapingItems($pdo),
         ],
         [
+            'key' => 'import_raw',
+            'label' => 'Surova kopie radku u importu dokoncenych pred vic nez ' . DB_IMPORT_RAW_RETENTION_DAYS . ' dny',
+            'detail' => 'Kazdy nascrapovany kontakt se loguje i jako radek importu s celou surovou radkou. Vysledek radku zustava, mizi jen ta kopie.',
+            'rows' => countPrunableImportItemRaw($pdo),
+        ],
+        [
             'key' => 'ai_research_logs',
             'label' => 'Provozni log automatiky nad ' . DB_AI_RESEARCH_LOG_KEEP_ROWS . ' radku',
             'detail' => 'Historie tiku cronu. Naplanovany radek zustava vzdy.',
@@ -11962,6 +12071,12 @@ function runDatabaseCleanupBatch(PDO $pdo, int $budgetSeconds = 20): string
     $items = pruneScrapingJobItems($pdo, DB_CLEANUP_BATCH_ROWS);
     if ($items > 0) {
         $done[] = 'crawl log: ' . $items . ' radku';
+    }
+    if (time() < $deadline) {
+        $raw = pruneImportItemRawData($pdo, DB_CLEANUP_BATCH_ROWS);
+        if ($raw > 0) {
+            $done[] = 'surova data importu: ' . $raw . ' radku';
+        }
     }
     if (time() < $deadline) {
         $logs = pruneAiResearchLogs($pdo, DB_CLEANUP_BATCH_ROWS);
