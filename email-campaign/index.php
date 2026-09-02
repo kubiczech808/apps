@@ -1083,7 +1083,11 @@ if (isset($_GET['cron'])) {
     }
     if (isset($_GET['storage_report'])) {
         try {
-            echo json_encode(databaseStorageReport($pdo), JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . "\n";
+            $report = databaseStorageReport($pdo);
+            // Bez tohoto se u tabulky, ktera se neuklidi, nepozna, jestli uz nic ke
+            // smazani neni, nebo to jen drzi vodoznak backfillu a retencni okno.
+            $report['cleanup'] = databaseCleanupDiagnostics($pdo);
+            echo json_encode($report, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . "\n";
         } catch (Throwable $e) {
             http_response_code(503);
             echo 'Storage report failed: ' . $e->getMessage() . "\n";
@@ -1122,7 +1126,8 @@ if (isset($_GET['cron'])) {
     }
     if (isset($_GET['db_optimize'])) {
         try {
-            echo optimizeDatabaseTables($pdo, 100) . "\n";
+            $onlyTable = preg_replace('/[^a-z0-9_]/i', '', (string)($_GET['table'] ?? ''));
+            echo optimizeDatabaseTables($pdo, 100, (string)$onlyTable) . "\n";
         } catch (Throwable $e) {
             http_response_code(503);
             echo 'Uvolneni mista selhalo: ' . $e->getMessage() . "\n";
@@ -12147,7 +12152,7 @@ function runDatabaseCleanupBatch(PDO $pdo, int $budgetSeconds = 20): string
  * do kvoty. Teprve prestavba tabulky (OPTIMIZE TABLE, u InnoDB rebuild) ho vrati, a
  * proto je to samostatny krok: je drahy a nesmi bezet pri kazdem cronu.
  */
-function optimizeDatabaseTables(PDO $pdo, int $budgetSeconds = 25): string
+function optimizeDatabaseTables(PDO $pdo, int $budgetSeconds = 25, string $onlyTable = ''): string
 {
     if (!isMysql($pdo)) {
         return 'Uvolneni mista: jen pro MySQL.';
@@ -12156,8 +12161,17 @@ function optimizeDatabaseTables(PDO $pdo, int $budgetSeconds = 25): string
     $deadline = time() + max(5, $budgetSeconds);
     $optimized = [];
     $skipped = 0;
-    foreach ($before['tables'] as $table) {
+    // Od nejmensich tabulek. Prestavba potrebuje docasne misto velke jako tabulka
+    // sama, takze zacit tou nejvetsi znamena riskovat, ze narazi na kvotu hostingu a
+    // nezustane po ni ani ten maly zisk. Velka tabulka se pak da poslat samostatne
+    // (db_optimize=1&table=nazev), aby mela cely request jen pro sebe.
+    $queue = $before['tables'];
+    usort($queue, static fn(array $a, array $b): int => $a['total_bytes'] <=> $b['total_bytes']);
+    foreach ($queue as $table) {
         if ($table['free_bytes'] <= 0) {
+            continue;
+        }
+        if ($onlyTable !== '' && (string)$table['name'] !== $onlyTable) {
             continue;
         }
         if (time() >= $deadline) {
@@ -12172,7 +12186,9 @@ function optimizeDatabaseTables(PDO $pdo, int $budgetSeconds = 25): string
         }
     }
     if (!$optimized) {
-        return 'Uvolneni mista: zadna tabulka nedrzi volne misto.';
+        return $onlyTable !== ''
+            ? 'Uvolneni mista: tabulka ' . $onlyTable . ' nedrzi volne misto.'
+            : 'Uvolneni mista: zadna tabulka nedrzi volne misto.';
     }
     $after = databaseSizeSummary($pdo);
     $freed = max(0, ($before['total_bytes'] + $before['free_bytes']) - ($after['total_bytes'] + $after['free_bytes']));
@@ -12187,6 +12203,37 @@ function optimizeDatabaseTables(PDO $pdo, int $budgetSeconds = 25): string
  * Tohle je to, co dela uklid vratnym: jinak by "obnovit, kdyz se neco nepovede"
  * znamenalo obnovit ze zalohy, kterou na 800 MB databazi na sdilenem hostingu nemame.
  */
+/**
+ * Proc uklid u jednotlivych tabulek nemaze. Bez tohoto se z velikosti nepozna, jestli
+ * uz nic ke smazani neni, nebo to jen drzi vodoznak backfillu a retencni okno - a to
+ * je presne rozdil mezi "hotovo" a "ceka".
+ */
+function databaseCleanupDiagnostics(PDO $pdo): array
+{
+    $diagnostics = [
+        'scraping_items_prunable' => countPrunableScrapingItems($pdo),
+        'scraping_items_watermark' => scrapingItemPruneWatermark($pdo),
+        'scraping_items_cutoff' => scrapingItemRetentionCutoff(),
+        'import_raw_prunable' => countPrunableImportItemRaw($pdo),
+        'import_raw_watermark' => importItemRawWatermark($pdo),
+        'import_raw_cutoff' => importItemRawRetentionCutoff(),
+        'ai_research_logs_prunable' => countPrunableAiResearchLogs($pdo),
+        'expired_sessions' => countExpiredAppSessions($pdo),
+    ];
+    try {
+        $diagnostics['scraping_items_max_id'] = (int)$pdo->query('SELECT COALESCE(MAX(id), 0) FROM scraping_job_items')->fetchColumn();
+        $diagnostics['import_items_max_id'] = (int)$pdo->query('SELECT COALESCE(MAX(id), 0) FROM import_run_items')->fetchColumn();
+        $diagnostics['import_items_with_raw'] = (int)$pdo->query('SELECT COUNT(*) FROM import_run_items WHERE raw_data<>""')->fetchColumn();
+        $diagnostics['import_runs_old_finished'] = (int)$pdo->query('
+            SELECT COUNT(*) FROM import_runs WHERE finished_at<>"" AND finished_at<"'
+            . importItemRawRetentionCutoff() . '"')->fetchColumn();
+        $diagnostics['import_runs_unfinished'] = (int)$pdo->query('SELECT COUNT(*) FROM import_runs WHERE finished_at=""')->fetchColumn();
+    } catch (Throwable $e) {
+        $diagnostics['error'] = $e->getMessage();
+    }
+    return $diagnostics;
+}
+
 function databaseCleanupInvariant(PDO $pdo): array
 {
     $snapshot = [];

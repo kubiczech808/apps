@@ -18,6 +18,14 @@ on:
         description: 'Po uklidu uvolnit misto hostingu (OPTIMIZE TABLE)'
         required: false
         default: 'true'
+      optimize_table:
+        description: 'Prestavet jen tuto tabulku (prazdne = vsechny, od nejmensi)'
+        required: false
+        default: ''
+      skip_cleanup:
+        description: 'Preskocit mazani a jen uvolnit misto'
+        required: false
+        default: 'false'
 
 concurrency:
   group: email-campaign-db-cleanup
@@ -35,6 +43,8 @@ jobs:
           CLEANUP_ROUNDS: ${{ github.event.inputs.cleanup_rounds }}
           CLEANUP_CALLS: ${{ github.event.inputs.cleanup_calls }}
           RUN_OPTIMIZE: ${{ github.event.inputs.run_optimize }}
+          OPTIMIZE_TABLE: ${{ github.event.inputs.optimize_table }}
+          SKIP_CLEANUP: ${{ github.event.inputs.skip_cleanup }}
         run: |
           if [ -z "$APP_DATABASE_NAME" ] || [ -z "$APP_DATABASE_USERNAME" ] || [ -z "$APP_DATABASE_PASSWORD" ]; then
             echo "Missing database secrets; cannot derive cron token."
@@ -72,6 +82,25 @@ jobs:
               mb(report.get("index_bytes", 0)),
               mb(report.get("free_bytes", 0)),
           ))
+          cleanup = report.get("cleanup") or {}
+          if cleanup:
+              print("ke smazani: crawl log %s (vodoznak %s, rez %s)" % (
+                  cleanup.get("scraping_items_prunable", "?"),
+                  cleanup.get("scraping_items_watermark", "?"),
+                  (cleanup.get("scraping_items_cutoff") or "")[:10],
+              ))
+              print("            surova data importu %s z %s radku s raw (vodoznak %s / max id %s, starych importu %s, nedokoncenych %s)" % (
+                  cleanup.get("import_raw_prunable", "?"),
+                  cleanup.get("import_items_with_raw", "?"),
+                  cleanup.get("import_raw_watermark", "?"),
+                  cleanup.get("import_items_max_id", "?"),
+                  cleanup.get("import_runs_old_finished", "?"),
+                  cleanup.get("import_runs_unfinished", "?"),
+              ))
+              print("            provozni log %s, propadle sessiony %s" % (
+                  cleanup.get("ai_research_logs_prunable", "?"),
+                  cleanup.get("expired_sessions", "?"),
+              ))
           for table in report.get("tables", [])[:6]:
               print("  %-22s %9s radku  %10s  (data %s, indexy %s, volne %s)" % (
                   table.get("table", "?"),
@@ -89,8 +118,11 @@ jobs:
           summary /tmp/db-before.json
 
           echo
-          echo "=== UKLID (${calls} volani po ${rounds} davkach) ==="
           failed=0
+          if [ "$SKIP_CLEANUP" = "true" ]; then
+            echo "=== UKLID PRESKOCEN (skip_cleanup=true) ==="
+          else
+          echo "=== UKLID (${calls} volani po ${rounds} davkach) ==="
           for call in $(seq 1 "$calls"); do
             echo "--- volani ${call}/${calls}"
             http_code=$(curl --show-error --silent --max-time 170 --output /tmp/db-cleanup.txt --write-out "%{http_code}" "${base}&db_cleanup=1&rounds=${rounds}" || echo "000")
@@ -108,6 +140,7 @@ jobs:
               break
             fi
           done
+          fi
 
           if [ "$RUN_OPTIMIZE" = "true" ] && [ "$failed" = "0" ]; then
             echo
@@ -116,7 +149,7 @@ jobs:
             # server-side, takze i kdyz hosting ukonci request, MySQL ji dokonci.
             for attempt in 1 2 3; do
               echo "--- pokus ${attempt}/3"
-              http_code=$(curl --show-error --silent --max-time 170 --output /tmp/db-optimize.txt --write-out "%{http_code}" "${base}&db_optimize=1" || echo "000")
+              http_code=$(curl --show-error --silent --max-time 170 --output /tmp/db-optimize.txt --write-out "%{http_code}" "${base}&db_optimize=1&table=${OPTIMIZE_TABLE}" || echo "000")
               cat /tmp/db-optimize.txt || true
               if grep -q "zadna tabulka nedrzi volne misto" /tmp/db-optimize.txt; then
                 break
