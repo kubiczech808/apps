@@ -348,8 +348,13 @@ test("equity history: the chart prefers the measured series and says which one i
   assert.match(app, /source: "account-daily"/);
   assert.match(app, /source: "settlement-ledger"/);
   // The wallet-wide series must not be handed to a portfolio that owns only its own
-  // trades, or its curve would show the whole account's money.
-  assert.match(app, /equityHistory: fixedEntry \? null : liveState\.equityHistory/);
+  // trades, or its curve would show the whole account's money. It used to be withheld from
+  // 5050 alone, under a comment about custom live portfolios that the condition did not
+  // implement; with five portfolios on one wallet the series belongs to none of them, and
+  // every live card rebuilds from its own attributed trades. That is also what keeps the
+  // chart's last point equal to the Realized tile beside it.
+  assert.match(app, /equityHistory: null,/);
+  assert.doesNotMatch(app, /equityHistory: fixedEntry \? null : liveState\.equityHistory/);
   // The day's extremes are drawn, and keep their meaning when the trend turns negative.
   assert.match(app, /class="equity-history-low"/);
   assert.match(app, /class="equity-history-high"/);

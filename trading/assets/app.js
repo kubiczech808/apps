@@ -5671,27 +5671,64 @@ function overviewAnnualizedRoi({ portfolio = null, firstOpenedAt = "" } = {}) {
   return { annualized, days };
 }
 
+// What one live portfolio's own trades did, as opposed to what the account did.
+//
+// Reported: the Realized figure on 80+ esports did not match the P/L of its own closed
+// positions. It could not: every P/L tile read the ACCOUNT's realized P/L -- equity minus
+// the original value minus open marks -- while the Closed trades table below it listed only
+// the rows attributed to that portfolio. The exception was 5050, which already derived its
+// own, with a comment explaining why: it was written when Live and 5050 were the only two
+// live portfolios, and "everything else" meant one portfolio whose history happened to be
+// the account's. There are five now, so four of them were showing each other's results.
+//
+// One reader for the card and the overview, because a table ordered by one number while a
+// tile displays another is the next bug in the queue.
+function liveOwnPortfolioPnl(mode = state.mode) {
+  const liveState = state.liveState;
+  if (!liveState) return null;
+  // Its own converter, deliberately not sharing a name with renderLiveState's: the test
+  // that forbids one renderer reading another's locals compares names textually and cannot
+  // tell two identically named locals apart.
+  const amount = (value) => {
+    const numeric = Number(value);
+    return Number.isFinite(numeric) ? numeric : 0;
+  };
+  const closedTrades = liveClosedTrades(liveState, mode);
+  const positions = livePositions(liveState, mode);
+  const realized = closedTrades.reduce((sum, trade) => sum + amount(trade.realizedPnlUsdc ?? trade.pnlUsdc), 0);
+  const open = positions.reduce((sum, trade) => sum + amount(trade.openPnlUsdc ?? trade.unrealizedPnlUsdc), 0);
+  // What the portfolio actually put at risk, which is the only base it has of its own: the
+  // deposit belongs to the wallet, not to any one of the portfolios drawing on it.
+  const stake = [...positions, ...closedTrades]
+    .reduce((sum, trade) => sum + amount(trade.totalCostUsdc ?? trade.stakeUsdc), 0);
+  return {
+    realized: Number(realized.toFixed(6)),
+    open: Number(open.toFixed(6)),
+    stake: Number(stake.toFixed(6)),
+    closedCount: closedTrades.length,
+    positionCount: positions.length,
+    firstOpenedAt: firstOpenedAtFromTrades(positions, closedTrades, liveOpenOrders(liveState, mode)),
+  };
+}
+
 // The ROI the overview column shows, for any mode. Factored out because the ordering now
 // sorts by it: a table sorted by one number while displaying another is a bug waiting to be
 // reported, so both read this.
 function portfolioAnnualizedRoiForMode(mode) {
   if (isLivePortfolioMode(mode)) {
-    const live = state.liveState?.portfolio || null;
+    // Its own realized P/L over its own base. Reading the account's equity here gave every
+    // live portfolio the same ROI, which also made ordering the overview by ROI meaningless
+    // -- the whole live group tied on the account's number.
+    const own = liveOwnPortfolioPnl(mode);
+    const opened = chartTimestamp(own?.firstOpenedAt || "");
+    if (!own || !opened) return null;
     const configuredInitial = liveInitialCapitalForMode(mode, portfolioConfigForMode(mode));
-    const liveForRoi = configuredInitial == null
-      ? live
-      : { ...live, initialUsdc: configuredInitial, originalValueUsdc: configuredInitial, depositedUsdc: configuredInitial };
-    return overviewAnnualizedRoi({
-      portfolio: liveForRoi,
-      firstOpenedAt: state.liveState?.firstOpenedAt
-        || state.liveState?.portfolio?.firstOpenedAt
-        || firstOpenedAtFromTrades(
-          state.liveState?.positions,
-          state.liveState?.openPositions,
-          state.liveState?.closedTrades,
-          state.liveState?.openOrders,
-        ),
-    });
+    const base = Number.isFinite(configuredInitial) && configuredInitial > 0 ? configuredInitial : own.stake;
+    if (!Number.isFinite(base) || base <= 0) return null;
+    const days = Math.max((Date.now() - opened) / 86400000, 1 / 24);
+    // Settled money only, exactly as the paper rows do it: marks on open positions belong
+    // in Open P/L and would make a historical ROI jump on every refresh.
+    return { annualized: (own.realized / base) * (365 / days), days };
   }
   const strategyId = paperStrategyIdFromMode(mode);
   return overviewAnnualizedRoi({
@@ -5715,19 +5752,27 @@ function renderPortfolioOverview() {
   const rows = dashboardModes().map((mode) => {
     const automationEnabled = automationIsEnabled(portfolioConfigForMode(mode));
     if (isLivePortfolioMode(mode)) {
-      const configuredInitial = liveInitialCapitalForMode(mode, portfolioConfigForMode(mode));
-      const liveForRoi = configuredInitial == null
-        ? live
-        : { ...live, initialUsdc: configuredInitial, originalValueUsdc: configuredInitial, depositedUsdc: configuredInitial };
+      // Equity and Free are the wallet's and are the same on every live row, which the
+      // shared-wallet note under the table states. "In positions" and "In orders" are not:
+      // they are what THIS portfolio is holding. Reading marketValueUsdc and the whole
+      // wallet's resting buys put the account's two totals on all five rows, beside tables
+      // listing only that portfolio's own positions and orders.
+      const ownPositions = state.liveState ? livePositions(state.liveState, mode) : [];
+      const ownOrders = state.liveState ? liveOpenOrders(state.liveState, mode) : [];
+      const marked = (row) => {
+        const value = Number(row?.marketValueUsdc ?? row?.currentValueUsdc);
+        if (Number.isFinite(value)) return value;
+        const price = Number(row?.currentPrice ?? row?.marketPrice);
+        const shares = Number(row?.shares ?? row?.size);
+        return Number.isFinite(price) && Number.isFinite(shares) ? price * shares : 0;
+      };
       return {
         mode,
         name: portfolioNameForMode(mode),
         automationEnabled,
         equity: live ? Number(live.equityUsdc) : null,
-        // marketValueUsdc is what the held tokens are worth, so it is the position half on
-        // its own; the order half comes from the wallet's resting buys.
-        positions: live ? Number(live.marketValueUsdc) : null,
-        orders: live ? reservedByOpenOrders(state.liveState?.openOrders) : null,
+        positions: state.liveState ? ownPositions.reduce((sum, row) => sum + marked(row), 0) : null,
+        orders: state.liveState ? reservedByOpenOrders(ownOrders) : null,
         free: live ? Number(live.cashUsdc) : null,
         roi: portfolioAnnualizedRoiForMode(mode),
         live: true,
@@ -9981,14 +10026,16 @@ function belongsToActiveLivePortfolio(row) {
   return belongsToLivePortfolio(row, state.mode);
 }
 
-function livePositions(liveState) {
+function livePositions(liveState, mode = state.mode) {
   return Array.isArray(liveState?.positions)
-    ? liveState.positions.filter((trade) => !isClosedTrade(trade)).filter(belongsToActiveLivePortfolio)
+    ? liveState.positions.filter((trade) => !isClosedTrade(trade)).filter((row) => belongsToLivePortfolio(row, mode))
     : [];
 }
 
-function liveOpenOrders(liveState) {
-  return Array.isArray(liveState?.openOrders) ? liveState.openOrders.filter(belongsToActiveLivePortfolio) : [];
+function liveOpenOrders(liveState, mode = state.mode) {
+  return Array.isArray(liveState?.openOrders)
+    ? liveState.openOrders.filter((row) => belongsToLivePortfolio(row, mode))
+    : [];
 }
 
 // History belongs to whichever portfolio placed the trade. Only the account itself
@@ -10436,26 +10483,36 @@ function renderLiveState(liveState) {
   const openPnlPct = hasOriginalValue ? openPnl / deposited : rawOpenPnlPct;
   const rawRealized = hasOriginalValue ? totalPnl - openPnl : rawRealizedPnl;
   const rawRealizedPct = hasOriginalValue ? rawRealized / deposited : rawRealizedPnlPct;
-  // Equity is the one figure the two live portfolios genuinely share, because there
-  // is one wallet. Every P/L number above is account-level, which is the main
-  // portfolio's whole history -- so 5050 derives its own from the trades it made.
-  // With no trades yet that is zero, which is the truth rather than a borrowed one.
-  const fixedEntry = isFixedEntryMode();
+  // Equity, the cash and the deposit are the figures the live portfolios genuinely share,
+  // because there is one wallet. Every P/L number above is account-level -- and that is not
+  // any one portfolio's result.
+  //
+  // Reported: Realized on 80+ esports did not match the P/L of its own closed positions. It
+  // could not, because this tile read the account's realized P/L while the Closed trades
+  // table below listed only that portfolio's rows. Only 5050 derived its own, under a
+  // comment written when Live and 5050 were the only two live portfolios: back then
+  // "everything else" was a single portfolio whose history happened to be the account's.
+  // With five, four of them were showing each other's results.
+  //
+  // So every live portfolio now reads its own attributed trades, through the same helper the
+  // overview's ROI column uses. With no trades yet that is zero, which is the truth rather
+  // than a borrowed one. rawRealized/rawTotalPnl stay computed above because the account
+  // figures still describe the wallet -- they are simply not what a portfolio tile shows.
   const usdc = (value) => {
     const numeric = Number(value);
     return Number.isFinite(numeric) ? numeric : 0;
   };
-  const ownRealized = closedTrades.reduce((sum, trade) => sum + usdc(trade.realizedPnlUsdc ?? trade.pnlUsdc), 0);
-  const ownOpen = positions.reduce((sum, trade) => sum + usdc(trade.openPnlUsdc ?? trade.unrealizedPnlUsdc), 0);
-  const ownStake = [...positions, ...closedTrades]
-    .reduce((sum, trade) => sum + usdc(trade.totalCostUsdc ?? trade.stakeUsdc), 0);
-  const realizedPnl = fixedEntry ? ownRealized : rawRealized;
-  const openPnlValue = fixedEntry ? ownOpen : openPnl;
-  const totalPnlValue = fixedEntry ? ownRealized + ownOpen : totalPnl;
+  const own = liveOwnPortfolioPnl(state.mode) || { realized: 0, open: 0, stake: 0 };
+  const ownRealized = own.realized;
+  const ownOpen = own.open;
+  const ownStake = own.stake;
+  const realizedPnl = ownRealized;
+  const openPnlValue = ownOpen;
+  const totalPnlValue = ownRealized + ownOpen;
   // Against what this portfolio actually put at risk, not against a deposit it
   // does not have of its own.
   const ownBasePct = (value) => (ownStake > 0 ? value / ownStake : null);
-  const realizedPnlPct = fixedEntry ? ownBasePct(ownRealized) : rawRealizedPct;
+  const realizedPnlPct = ownBasePct(ownRealized);
   const depositedLine = Number.isFinite(deposited)
     ? `Original value ${money(deposited)}`
     : "Original value not available";
@@ -10478,7 +10535,7 @@ function renderLiveState(liveState) {
   `;
   els.portfolioTotalPl.textContent = signedMoney(totalPnlValue);
   els.portfolioTotalPl.className = pnlClass(totalPnlValue);
-  els.portfolioTotalPlPct.textContent = signedPercent(fixedEntry ? ownBasePct(ownRealized + ownOpen) : totalPnlPct);
+  els.portfolioTotalPlPct.textContent = signedPercent(ownBasePct(ownRealized + ownOpen));
   if (els.portfolioAnnualized) {
     els.portfolioAnnualized.textContent = "-";
     els.portfolioAnnualized.className = "";
@@ -10490,7 +10547,7 @@ function renderLiveState(liveState) {
   renderClosedAccuracy(closedTrades);
   els.portfolioOpenPl.textContent = signedMoney(openPnlValue);
   els.portfolioOpenPl.className = pnlClass(openPnlValue);
-  els.portfolioOpenPlPct.textContent = signedPercent(fixedEntry ? ownBasePct(ownOpen) : openPnlPct);
+  els.portfolioOpenPlPct.textContent = signedPercent(ownBasePct(ownOpen));
   // Both exposure and resting bids belong to this portfolio only. The shared wallet's
   // position total must never stand in for this portfolio's own stake.
   els.portfolioOrders.textContent = money(openOrderRisk);
@@ -10503,9 +10560,13 @@ function renderLiveState(liveState) {
     generatedAt: liveState.generatedAt,
     originalValue: deposited,
     realizedPnl,
-    // The wallet's own recorded per-day equity. A custom live portfolio has only its own
-    // trades, so the wallet-wide series would overstate it -- those keep the rebuilt path.
-    equityHistory: fixedEntry ? null : liveState.equityHistory,
+    // The wallet's recorded per-day equity is the WALLET's, and no single portfolio drawing
+    // on it owns that curve. This used to be withheld from 5050 alone, which contradicted
+    // the comment it carried: that said a custom live portfolio has only its own trades and
+    // would be overstated by the wallet series, and then handed that series to every
+    // portfolio except 5050. Every live card now rebuilds from its own attributed trades,
+    // which is also what keeps the chart's last point equal to the Realized tile beside it.
+    equityHistory: null,
   });
 
   if (els.accountSummary) {

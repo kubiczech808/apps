@@ -4165,29 +4165,58 @@ test("portfolio settings: each portfolio owns its own, and cannot change another
     "a paper portfolio must never acquire a setting it does not have");
 });
 
-test("5050: only equity is shared with Live, never its history", async () => {
+// Reported: the Realized figure on 80+ esports did not match the P/L of its own closed
+// positions. It could not -- the tile read the ACCOUNT's realized P/L (equity minus the
+// original value minus open marks) while the Closed trades table below listed only the rows
+// attributed to that portfolio.
+//
+// Only 5050 derived its own, under a comment written when Live and 5050 were the only two
+// live portfolios: back then "everything else" was one portfolio whose history happened to
+// be the account's, so the shortcut was invisible. There are five now, and four of them were
+// showing each other's results.
+test("live portfolios: every P/L tile is the portfolio's own, only the wallet is shared", async () => {
   const { readFile } = await import("node:fs/promises");
   const app = await readFile(new URL("../assets/app.js", import.meta.url), "utf8");
 
-  // One wallet means one equity, and that figure is genuinely shared. Everything
-  // else on the overview is account-level -- the main portfolio's entire history --
-  // so showing it under 5050 would credit it with trades it never made.
+  // One wallet means one equity, one cash balance and one deposit, and those stay shared.
   assert.match(app, /els\.portfolioEquity\.textContent = money\(equity\);/,
     "equity stays the shared account figure");
 
-  const live = app.slice(app.indexOf("const fixedEntry = isFixedEntryMode();"));
-  const block = live.slice(0, live.indexOf("data-account-summary") + 1 || 4000);
-  assert.match(block, /const realizedPnl = fixedEntry \? ownRealized : rawRealized;/);
-  assert.match(block, /const totalPnlValue = fixedEntry \? ownRealized \+ ownOpen : totalPnl;/);
+  // Bounded by the end of the live card. The old anchor was a string that no longer
+  // appears after this point, so indexOf returned -1, the `|| 4000` fallback took over and
+  // the slice ran on into unrelated renderers -- which is how a "must not contain" check
+  // reports code it was never looking at.
+  const cardStart = app.indexOf("const own = liveOwnPortfolioPnl(state.mode)");
+  assert.ok(cardStart > 0, "the live card must still read the per-portfolio figures");
+  const cardEnd = app.indexOf("if (els.accountSummary)", cardStart);
+  assert.ok(cardEnd > cardStart, "the live card's end anchor must still exist");
+  const block = app.slice(cardStart, cardEnd);
+  assert.match(block, /const realizedPnl = ownRealized;/);
+  assert.match(block, /const totalPnlValue = ownRealized \+ ownOpen;/);
+  assert.match(block, /const openPnlValue = ownOpen;/);
   assert.match(block, /els\.portfolioTotalPl\.textContent = signedMoney\(totalPnlValue\);/);
   assert.match(block, /els\.portfolioOpenPl\.textContent = signedMoney\(openPnlValue\);/);
+  // No tile may fall back to the account figures. They are still computed, because they
+  // describe the wallet, but a portfolio tile is not where they belong.
+  assert.doesNotMatch(block, /= rawRealized;/);
+  assert.doesNotMatch(block, /fixedEntry \?/,
+    "the two-portfolio shortcut cannot come back: with five, four of them read the wrong number");
   // Percentages measure what this portfolio put at risk, not a deposit it does not
   // have of its own.
-  assert.match(block, /ownStake > 0 \? value \/ ownStake : null/);
+  assert.match(app, /ownStake > 0 \? value \/ ownStake : null/);
 
-  // Closed trades and the activity feed are attributed too, so the accuracy card
-  // and the closed-trades tab cannot show Live's history either.
+  // One reader for the tiles and for the overview's ROI column, so a table ordered by one
+  // number cannot display another.
+  assert.match(app, /function liveOwnPortfolioPnl\(mode = state\.mode\)/);
+  assert.match(app, /const own = liveOwnPortfolioPnl\(mode\);/,
+    "the overview ROI reads the same per-portfolio helper");
+  assert.match(app, /annualized: \(own\.realized \/ base\) \* \(365 \/ days\)/,
+    "and annualizes that portfolio's own realized P/L over its own base");
+
+  // Every row set it sums has to be attributed, or the sums would be the account's again.
   assert.match(app, /function liveClosedTrades\(liveState, mode = state\.mode\) \{[\s\S]*?belongsToLivePortfolio\(row, mode\)\);/);
+  assert.match(app, /function livePositions\(liveState, mode = state\.mode\)[\s\S]*?belongsToLivePortfolio\(row, mode\)\)/);
+  assert.match(app, /function liveOpenOrders\(liveState, mode = state\.mode\)[\s\S]*?belongsToLivePortfolio\(row, mode\)\)/);
   assert.match(app, /function liveActivity\(liveState\) \{[\s\S]*?\.filter\(belongsToActiveLivePortfolio\)/);
 });
 
@@ -4215,9 +4244,12 @@ test("dashboard: the browser file cannot borrow a Node-only helper", async () =>
     assert.ok(!called || defined, `app.js calls ${name}() but never defines it`);
   }
 
-  // The call site that broke: it must convert with something the browser has.
+  // The call site that broke: it must convert with something the browser has. Both the
+  // per-portfolio reader and renderLiveState define their own, and the two are named apart
+  // so the local-scope test below can tell them apart.
   assert.match(app, /const usdc = \(value\) => \{\n\s*const numeric = Number\(value\);/);
-  assert.match(app, /closedTrades\.reduce\(\(sum, trade\) => sum \+ usdc\(/);
+  assert.match(app, /const amount = \(value\) => \{\n\s*const numeric = Number\(value\);/);
+  assert.match(app, /closedTrades\.reduce\(\(sum, trade\) => sum \+ amount\(trade\.realizedPnlUsdc/);
 });
 
 test("dashboard: a renderer cannot read another renderer's local variables", async () => {
@@ -8527,8 +8559,15 @@ test("overview: the table shows the two halves of risk as their own columns", ()
   // than reporting the whole total as positions.
   assert.match(overview, /positionRiskUsdc\s*\n?\s*\?\?/,
     "the paper row falls back for a state that predates the field");
-  assert.match(overview, /reservedByOpenOrders\(state\.liveState\?\.openOrders\)/,
-    "the live row takes its order half from the wallet's resting buys");
+  // Both halves are this portfolio's, not the wallet's. marketValueUsdc and the whole
+  // wallet's resting buys put the account's two totals on all five live rows, beside tables
+  // listing only that portfolio's own positions and orders.
+  assert.match(overview, /reservedByOpenOrders\(ownOrders\)/,
+    "the live row's order half is what this portfolio has resting");
+  assert.match(overview, /livePositions\(state\.liveState, mode\)/);
+  assert.match(overview, /liveOpenOrders\(state\.liveState, mode\)/);
+  assert.doesNotMatch(overview, /Number\(live\.marketValueUsdc\)/,
+    "the account's position total is not one portfolio's exposure");
 });
 
 // -- A resting order the account cannot honour ------------------------------------------
