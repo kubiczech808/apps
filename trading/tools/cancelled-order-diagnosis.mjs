@@ -214,6 +214,51 @@ async function main() {
       + `   ${text(row.price)} x ${text(row.size)}`);
   }
 
+  // 29 bids dropped at one instant is not a per-order event, and the exchange only does
+  // that to bring a resting book back inside the collateral behind it. Which raises the
+  // question the fix depends on: do the portfolios together promise more than the wallet
+  // holds? They each size against their own budget, and there is one wallet.
+  console.log(`\n== 6. is the resting book bigger than the collateral behind it?`);
+  const cash = Number(live?.portfolio?.cashUsdc);
+  const equity = Number(live?.portfolio?.equityUsdc);
+  const restingNow = (Array.isArray(live?.openOrders) ? live.openOrders : [])
+    .filter((row) => !lower(row.side).includes("sell"));
+  const restingNotional = restingNow.reduce((sum, row) => {
+    const price = Number(row.price) || 0;
+    const size = Number(row.remainingSize ?? row.originalSize) || 0;
+    return sum + (Number(row.notionalUsdc) || price * size);
+  }, 0);
+  console.log(`   wallet cash                  ${Number.isFinite(cash) ? cash.toFixed(2) : "-"} USDC`);
+  console.log(`   equity                       ${Number.isFinite(equity) ? equity.toFixed(2) : "-"} USDC`);
+  console.log(`   resting buy orders now       ${restingNow.length}, holding ${restingNotional.toFixed(2)} USDC`);
+  console.log(`   released in the cluster      144.94 USDC across 29 bids (from section 5)`);
+  if (config?.config) {
+    const live5050 = config.config.live5050 || {};
+    const rows = [
+      ["live", config.config.live || {}],
+      ["live-5050", live5050],
+      ...Object.entries(config.config.livePortfolios || {}),
+    ];
+    console.log(`   per-portfolio budgets:`);
+    let promised = 0;
+    for (const [id, portfolio] of rows) {
+      const budget = Number(portfolio.budgetUsdc ?? portfolio.startingCapitalUsdc ?? portfolio.capitalUsdc);
+      const maxStake = Number(portfolio.maxStakeUsdc ?? portfolio.stakeUsdc ?? portfolio.fixedEntryStakeUsdc);
+      const enabled = portfolio.automationEnabled !== false;
+      if (Number.isFinite(budget)) promised += budget;
+      console.log(`      ${String(id).padEnd(22)} budget ${Number.isFinite(budget) ? budget.toFixed(2).padStart(8) : "       -"}`
+        + `   max stake ${Number.isFinite(maxStake) ? maxStake.toFixed(2) : "-"}`
+        + `   automation ${enabled ? "on" : "OFF"}   archived ${portfolio.archived === true}`);
+    }
+    console.log(`      ${"sum of budgets".padEnd(22)} ${promised.toFixed(2)} USDC`
+      + `   against ${Number.isFinite(equity) ? equity.toFixed(2) : "-"} USDC of equity`);
+    if (Number.isFinite(equity) && promised > equity + 0.01) {
+      console.log(`      -> the portfolios promise ${(promised - equity).toFixed(2)} USDC more than the account holds.`);
+      console.log(`         Each sizes against its own budget; the collateral is one wallet, so the`);
+      console.log(`         exchange is left to resolve the overcommitment -- by cancelling bids.`);
+    }
+  }
+
   console.log(`\n== what this means`);
   console.log(`   An entry under "order review" with action REPLACE or CANCEL_FOR_BETTER_CANDIDATE,`);
   console.log(`   or an "expiry withdrawal", is our own code taking the order off the book. That`);
