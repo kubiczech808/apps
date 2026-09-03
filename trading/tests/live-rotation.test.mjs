@@ -2194,7 +2194,7 @@ test("5050 run log: a state with no batchLog is left as one", async () => {
 // step ran 5s when there was little to do and 200s when it rested a full batch -- about
 // four seconds per bid, sequential, so the cost is the number of events. The pass is now
 // bounded: bids go best-first until the budget is spent, the rest wait for the next run.
-async function runPlacementLoop({ budgetMs, targetCount, perOrderMs, progressEvery = 5 }) {
+async function runPlacementLoop({ budgetMs, targetCount, perOrderMs, progressEvery = 5, restingHeadroom = Infinity, orderNotional = 0 }) {
   const source = readFileSync(new URL("../tools/live-order-executor.mjs", import.meta.url), "utf8");
   const start = source.indexOf("  const placementStartedAt = Date.now();");
   // Anchored on the declaration that follows the loop rather than on the prose above it.
@@ -2207,17 +2207,19 @@ async function runPlacementLoop({ budgetMs, targetCount, perOrderMs, progressEve
   const build = new Function(
     "targets", "DRY_RUN", "hasFlag", "orderAttemptSummary", "submitLiveEntryWithMakerPrecisionRecovery",
     "successfulOrderResponse", "orderResponseError", "tradingConfig", "FIXED_ENTRY_BUDGET_MS",
-    "FIXED_ENTRY_PROGRESS_EVERY", "console",
+    "FIXED_ENTRY_PROGRESS_EVERY", "console", "restingHeadroom", "number",
+    "RESTING_BOOK_CASH_MULTIPLE",
     `return (async () => {
       const attempts = [];
       let accepted = 0;
       let rejectedForFunds = 0;
       ${loop}
-      return { placed, deferredForBudget, accepted, elapsed: Date.now() - placementStartedAt };
+      return { placed, deferredForBudget, deferredForRestingBook, accepted,
+        elapsed: Date.now() - placementStartedAt };
     })();`,
   );
   const result = await build(
-    Array.from({ length: targetCount }, (_, index) => ({ tokenId: String(index) })),
+    Array.from({ length: targetCount }, (_, index) => ({ tokenId: String(index), notionalUsdc: orderNotional })),
     false,
     (flag) => flag === "confirm-live",
     () => ({}),
@@ -2231,6 +2233,13 @@ async function runPlacementLoop({ budgetMs, targetCount, perOrderMs, progressEve
     budgetMs,
     progressEvery,
     { log: (line) => progress.push(line) },
+    // The resting-book ceiling is a separate limit with its own tests; these measure the
+    // time budget, so they are given room and must not trip it.
+    restingHeadroom,
+    (value, fallback = null) => (value == null || value === "" || !Number.isFinite(Number(value))
+      ? fallback
+      : Number(value)),
+    2,
   );
   return { ...result, progress };
 }
@@ -2282,7 +2291,11 @@ test("5050 placement: a deferral is reported, not silent", async () => {
   assert.match(source, /const processedEvents = DRY_RUN \|\| !hasFlag\("confirm-live"\) \? targets\.length : placed;/);
   // The dashboard reads the run's counts, so the progress and its cost live there too.
   assert.match(source, /processedEvents,\n\s+acceptedOrders: accepted,/);
-  assert.match(source, /deferredForBudget,\n\s+placementBudgetMs: FIXED_ENTRY_BUDGET_MS,\n\s+placementElapsedMs: Date\.now\(\) - placementStartedAt,\n\s+placementPerOrderMs: placed \? Math\.round\(placementMs \/ placed\) : 0,/);
+  assert.match(source, /deferredForBudget,\n\s+deferredForRestingBook,\n\s+placementBudgetMs: FIXED_ENTRY_BUDGET_MS,\n\s+placementElapsedMs: Date\.now\(\) - placementStartedAt,\n\s+placementPerOrderMs: placed \? Math\.round\(placementMs \/ placed\) : 0,/);
+  // The other reason a pass stops short, and it has to be as visible as the time budget:
+  // a run that rested nothing because the book is already at its ceiling looks identical
+  // to a run with no candidates unless it says so.
+  assert.match(source, /\$\{deferredForRestingBook\} event\(s\) wait because the resting book has reached/);
 
   // Best-first ordering is what makes deferral acceptable: the tail is the weakest.
   assert.match(source, /if \(b\.marketProbability !== a\.marketProbability\) return b\.marketProbability - a\.marketProbability;/);
@@ -5175,4 +5188,76 @@ test("live rows: an unknown P/L and an unknown entry price render as unknown", (
   assert.equal(sandbox.tradePnlValue({ status: "WON", realizedPnlUsdc: 0 }), 0);
   assert.equal(sandbox.signedMoney(0), "+$0.00");
   assert.equal(sandbox.tradePnlValue({ status: "WON", realizedPnlUsdc: -3.5 }), -3.5);
+});
+
+// Reported: a resting bid on an event that is still running, still unresolved and still
+// accepting orders was cancelled, with capital free again -- the order would have filled
+// itself. Traced with tools/cancelled-order-diagnosis.mjs: the bid was SUBMITTED by
+// live-custom-esports at 02:57:29 and no portfolio's run log holds any cancel decision for
+// it. It did not vanish alone either: 29 unfilled bids holding 144.94 USDC left the book in
+// the same instant, against 15.02 USDC of cash. At the time of measuring, 16 bids holding
+// 79.96 USDC rested on that same 15.02.
+//
+// So nothing of ours cancelled it. The exchange culled a book five to ten times the
+// collateral behind it, and what it culls is arbitrary. availableLiveCashUsdc is right that
+// a resting bid is not money spent -- that was measured too -- but "what may this portfolio
+// spend" and "what will the exchange tolerate resting" are different questions, and only
+// the first was being asked.
+test("live cash: the resting book is capped against the collateral behind it", () => {
+  const source = readFileSync(new URL("../tools/live-order-executor.mjs", import.meta.url), "utf8");
+  const api = new Function(`
+    const process = { env: {} };
+    const envNumber = (name, fallback) => fallback;
+    ${functionSource(source, "number")}
+    ${functionSource(source, "liveCashUsdc")}
+    ${functionSource(source, "activeBuyOrderReservationUsdc")}
+    ${functionSource(source, "orderWasSubmittedByThisPortfolio")}
+    ${functionSource(source, "availableLiveCashUsdc")}
+    ${/const RESTING_BOOK_CASH_MULTIPLE = [^;]+;/.exec(source)[0]}
+    ${functionSource(source, "restingBookCeilingUsdc")}
+    ${functionSource(source, "restingBookHeadroomUsdc")}
+    return { availableLiveCashUsdc, restingBookCeilingUsdc, restingBookHeadroomUsdc,
+      activeBuyOrderReservationUsdc, RESTING_BOOK_CASH_MULTIPLE };
+  `)();
+
+  assert.equal(api.RESTING_BOOK_CASH_MULTIPLE, 2, "two: 1.23x was measured as ordinary, the culls were at 5x and 10x");
+
+  const bid = (index, notional) => ({
+    id: `o-${index}`, tokenId: `t${index}`, side: "BUY", status: "LIVE",
+    price: 0.7, remainingSize: notional / 0.7, notionalUsdc: notional,
+  });
+
+  // The account as measured: 79.96 USDC resting on 15.02 USDC of cash.
+  const overcommitted = {
+    account: { cashUsdc: 15.02 },
+    openOrders: Array.from({ length: 16 }, (unused, index) => bid(index, 4.9975)),
+  };
+  assert.equal(api.restingBookCeilingUsdc(15.02), 30.04);
+  assert.ok(api.activeBuyOrderReservationUsdc(overcommitted) > 79,
+    "the measured book was 79.96 USDC");
+  assert.equal(api.restingBookHeadroomUsdc(overcommitted, 15.02), 0,
+    "a book already past its ceiling has no room for another bid");
+  // And the other question still answers as it did: the cash is spendable in full.
+  assert.equal(api.availableLiveCashUsdc(overcommitted, 15.02), 15.02,
+    "a resting bid is still not money already spent -- that was measured on the account");
+
+  // An ordinary committed account still trades. 1.23x was the measured healthy state.
+  const healthy = {
+    account: { cashUsdc: 32.3788 },
+    openOrders: [bid(1, 39.9657)],
+  };
+  assert.ok(api.restingBookHeadroomUsdc(healthy, 32.3788) > 24,
+    "32.38 of cash and 39.97 resting is 1.23x, which must leave room rather than stop trading");
+
+  // Nothing resting means the whole ceiling is available, and no cash means no ceiling.
+  assert.equal(api.restingBookHeadroomUsdc({ account: { cashUsdc: 20 }, openOrders: [] }, 20), 40);
+  assert.equal(api.restingBookHeadroomUsdc({ account: { cashUsdc: 0 }, openOrders: [] }, 0), 0);
+
+  // The ceiling is on the WALLET, not this portfolio: the collateral the exchange checks is
+  // one balance, and every live portfolio rests against it. Counting only our own orders is
+  // what let two automated portfolios each believe they had room.
+  assert.ok(!/restingBookHeadroomUsdc\([^)]*ownSubmittedOrderIdentity/.test(source),
+    "the headroom must not be narrowed to this portfolio's own orders");
+  assert.match(source, /Math\.min\(maxNotional, availableCash, restingBookHeadroom\)/,
+    "the headroom has to actually limit what a pass may place");
 });

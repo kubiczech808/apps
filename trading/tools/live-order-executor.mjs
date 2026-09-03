@@ -1515,6 +1515,39 @@ function availableLiveCashUsdc(liveState, grossCash = liveCashUsdc(liveState)) {
   return Math.max(0, number(grossCash, 0));
 }
 
+// How much more notional this pass may put on the book.
+//
+// availableLiveCashUsdc above deliberately does not treat a resting bid as money spent --
+// Polymarket checks collateral when an order MATCHES, and measuring the account proved the
+// reported collateral is the whole uncommitted balance. That is right for "what may this
+// portfolio spend", and it is not the whole story, because the exchange also re-checks the
+// resting book against the collateral behind it and culls what no longer adds up.
+//
+// Measured on the account (tools/cancelled-order-diagnosis.mjs): at 03:37:23 twenty-nine
+// resting bids holding 144.94 USDC left the book in the same instant, every one of them
+// unfilled, with no cancel decision in any portfolio's run log -- against 15.02 USDC of
+// cash. At the time of measuring, 16 bids holding 79.96 USDC rested on the same 15.02. Each
+// pass reads the same untouched cash figure and rests one more bid, so the book grows until
+// the exchange trims it, and what it trims is arbitrary: a bid on a market that is still
+// running and still accepting orders goes along with the rest.
+//
+// So placement gets a ceiling that spending does not: the whole wallet's resting notional,
+// capped at a multiple of cash. Two by default -- 1.23x was measured as ordinary and safe,
+// and the culls happened at 5x and 10x -- so an account can still run committed without
+// walking into a cull. The cap is on the WALLET, not this portfolio, because the collateral
+// the exchange checks is one balance and every live portfolio rests against it.
+const RESTING_BOOK_CASH_MULTIPLE = envNumber("LIVE_RESTING_BOOK_CASH_MULTIPLE", 2);
+
+function restingBookCeilingUsdc(grossCash) {
+  return Math.max(0, number(grossCash, 0)) * Math.max(0, RESTING_BOOK_CASH_MULTIPLE);
+}
+
+function restingBookHeadroomUsdc(liveState, grossCash = liveCashUsdc(liveState)) {
+  const ceiling = restingBookCeilingUsdc(grossCash);
+  const resting = activeBuyOrderReservationUsdc(liveState);
+  return Number(Math.max(0, ceiling - resting).toFixed(5));
+}
+
 function daysValue(item) {
   // An absent horizon is unknown, not zero. `Number(null)` is 0, so reading it straight
   // would sort a row whose end date could not be parsed ahead of everything as the most
@@ -3352,17 +3385,36 @@ async function runFixedEntryBatch({ checked, liveState, tradingConfig, cash, ava
   const attempts = [];
   let accepted = 0;
   let rejectedForFunds = 0;
+  // Being refused at placement is harmless -- this batch is built to run past the cash on
+  // hand and let the exchange decline what it cannot fund. Having the book already on the
+  // exchange CULLED is the harm, and that is what an oversized resting book buys: measured
+  // on the account, 29 unfilled bids holding 144.94 USDC were dropped in one instant
+  // against 15.02 USDC of cash. So the same ceiling applies here, tracked as the batch
+  // places, and what does not fit waits for the next pass instead of enlarging the target.
+  //
+  // Read into a local before the loop, because the loop is extracted and run on its own by
+  // the placement tests: it should consume a number, not reach for the account state.
+  let restingHeadroom = restingBookHeadroomUsdc(liveState, cash);
   // `targets` is already ordered best-first -- highest probability, soonest to resolve --
   // so a pass that runs out of budget defers the weakest bids, not an arbitrary tail.
   const placementStartedAt = Date.now();
   let placed = 0;
   let placementMs = 0;
   let deferredForBudget = 0;
+  let deferredForRestingBook = 0;
 
   for (const order of targets) {
     if (DRY_RUN || !hasFlag("confirm-live")) {
       attempts.push(orderAttemptSummary(order, null, { action: "DRY_RUN_READY" }));
       continue;
+    }
+    const orderNotional = number(
+      order?.notionalUsdc,
+      number(order?.price, 0) * number(order?.size ?? order?.shares, 0),
+    );
+    if (number(orderNotional, 0) > restingHeadroom + 0.000001) {
+      deferredForRestingBook = targets.length - placed;
+      break;
     }
     // Stop before starting a bid the budget cannot pay for, priced from what this run
     // has actually measured rather than an assumed per-order cost. The first bid always
@@ -3377,7 +3429,10 @@ async function runFixedEntryBatch({ checked, liveState, tradingConfig, cash, ava
     placementMs += Date.now() - orderStartedAt;
     placed += 1;
     const ok = successfulOrderResponse(submission.response);
-    if (ok) accepted += 1;
+    if (ok) {
+      accepted += 1;
+      restingHeadroom = Number(Math.max(0, restingHeadroom - number(orderNotional, 0)).toFixed(5));
+    }
     // Running past the capital on hand is intended, so the exchange refusing an
     // order for want of collateral is an expected outcome and not a run failure.
     // It is counted separately so the log distinguishes "we ran out" from a fault.
@@ -3413,7 +3468,7 @@ async function runFixedEntryBatch({ checked, liveState, tradingConfig, cash, ava
   // The fraction leads, because this string is what the run log row shows: how far the
   // pass got through the batch is the first thing to know, ahead of what it rested.
   const reason = targets.length
-    ? `processed ${processedEvents} of ${targets.length} events in ${elapsedSeconds}s; rested ${accepted} bid(s) at ${FIXED_ENTRY_PRICE.toFixed(2)}, one per event from ${pool.length} qualifying of ${checked.length} scanned${rejectedForFunds ? `; ${rejectedForFunds} refused for available collateral, which is expected once the capital is committed` : ""}${deferredForBudget ? `; ${deferredForBudget} event(s) wait for the next run after the ${(FIXED_ENTRY_BUDGET_MS / 1000).toFixed(0)}s placement budget` : ""}${cancelledSiblings.length ? `; withdrew ${cancelledSiblings.length} resting bid(s) on events that already opened` : ""}${expiredNote}`
+    ? `processed ${processedEvents} of ${targets.length} events in ${elapsedSeconds}s; rested ${accepted} bid(s) at ${FIXED_ENTRY_PRICE.toFixed(2)}, one per event from ${pool.length} qualifying of ${checked.length} scanned${rejectedForFunds ? `; ${rejectedForFunds} refused for available collateral, which is expected once the capital is committed` : ""}${deferredForBudget ? `; ${deferredForBudget} event(s) wait for the next run after the ${(FIXED_ENTRY_BUDGET_MS / 1000).toFixed(0)}s placement budget` : ""}${deferredForRestingBook ? `; ${deferredForRestingBook} event(s) wait because the resting book has reached ${RESTING_BOOK_CASH_MULTIPLE}x cash, beyond which the exchange culls bids it is holding` : ""}${cancelledSiblings.length ? `; withdrew ${cancelledSiblings.length} resting bid(s) on events that already opened` : ""}${expiredNote}`
     : `no candidate cleared the ${(MIN_PROBABILITY * 100).toFixed(1)}% bar for a resting bid at ${FIXED_ENTRY_PRICE.toFixed(2)}, from ${checked.length} scanned${expiredNote}`;
 
   await emitDecision({
@@ -3438,6 +3493,7 @@ async function runFixedEntryBatch({ checked, liveState, tradingConfig, cash, ava
       // and the budget can be tuned against measurements rather than guesses.
       processedEvents,
       deferredForBudget,
+      deferredForRestingBook,
       placementBudgetMs: FIXED_ENTRY_BUDGET_MS,
       placementElapsedMs: Date.now() - placementStartedAt,
       placementPerOrderMs: placed ? Math.round(placementMs / placed) : 0,
@@ -3471,6 +3527,7 @@ async function runFixedEntryBatch({ checked, liveState, tradingConfig, cash, ava
         expiredOrdersWithdrawn: expiredOrderSweep.withdrawn.length,
         expiredOrderCashReleasedUsdc: expiredOrderSweep.releasedUsdc,
         deferredForBudget,
+        deferredForRestingBook,
         placementBudgetMs: FIXED_ENTRY_BUDGET_MS,
         placementElapsedMs: Date.now() - placementStartedAt,
         placementPerOrderMs: placed ? Math.round(placementMs / placed) : 0,
@@ -4607,6 +4664,11 @@ async function main() {
   // but they no longer reduce what this portfolio may spend: a resting bid is a claim on
   // collateral at match time, not money already gone.
   const availableCash = availableLiveCashUsdc(liveState, cash);
+  // What the exchange will tolerate resting, as opposed to what this portfolio may spend.
+  // See restingBookHeadroomUsdc: the two are different questions and only one of them was
+  // being asked.
+  const restingBookCeiling = Number(restingBookCeilingUsdc(cash).toFixed(5));
+  const restingBookHeadroom = restingBookHeadroomUsdc(liveState, cash);
   const portfolioValue = livePortfolioValue(liveState, cash);
   const legacyFractionNotional = portfolioValue * MAX_ORDER_FRACTION;
   const configuredStakeUsdc = Number.isFinite(LIVE_STAKE_USDC) && LIVE_STAKE_USDC > 0
@@ -4616,7 +4678,15 @@ async function main() {
   const regularMaxNotional = Math.min(configuredStakeUsdc, MAX_ORDER_NOTIONAL_USDC);
   const idleUtilizationNotional = monitoring.idleCashOverdue ? Math.max(0, availableCash - IDLE_CASH_MAX_USDC) : 0;
   const maxNotional = Number(regularMaxNotional.toFixed(5));
-  const directMaxNotional = Number(Math.min(maxNotional, availableCash).toFixed(5));
+  // The headroom joins the two limits that were already here. A pass with cash to spend but
+  // no headroom rests nothing rather than adding to a book the exchange is about to cull --
+  // and the run says so, because "nothing was placed" needs a reason a reader can act on.
+  const directMaxNotional = Number(Math.min(maxNotional, availableCash, restingBookHeadroom).toFixed(5));
+  if (restingBookHeadroom < maxNotional) {
+    console.log(`resting book is at ${activeBuyOrderReservationUsdc(liveState).toFixed(2)} USDC against`
+      + ` ${cash.toFixed(2)} USDC cash (ceiling ${restingBookCeiling.toFixed(2)} at ${RESTING_BOOK_CASH_MULTIPLE}x),`
+      + ` so this pass may rest at most ${restingBookHeadroom.toFixed(2)} USDC`);
+  }
   const storedEvaluations = storedEvaluationCount(paperState);
   const rawMarketObservations = Array.isArray(scrapedState?.marketObservations)
     ? scrapedState.marketObservations
@@ -4863,6 +4933,11 @@ async function main() {
       reservedOpenOrderUsdc: Number(reservedOpenOrderUsdc.toFixed(5)),
       ownReservedOpenOrderUsdc: Number(ownReservedOpenOrderUsdc.toFixed(5)),
       availableCashUsdc: Number(availableCash.toFixed(5)),
+      // What the exchange will tolerate on the book, and what is left of it. A cull shows
+      // up here as a headroom that was already zero when the pass ran.
+      restingBookCeilingUsdc: restingBookCeiling,
+      restingBookHeadroomUsdc: restingBookHeadroom,
+      restingBookCashMultiple: RESTING_BOOK_CASH_MULTIPLE,
       portfolioValueUsdc: Number(portfolioValue.toFixed(5)),
       stakeUsdc: Number(configuredStakeUsdc.toFixed(5)),
       maxOrderFraction: MAX_ORDER_FRACTION,
