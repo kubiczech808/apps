@@ -148,6 +148,116 @@ async function fetchGammaJson(path, params = {}) {
   return response.json();
 }
 
+// Reported: every event tried says "no tags recorded", though every Polymarket event
+// carries at least one.
+//
+// Measured (tools/market-tags-coverage-diagnosis.mjs, read-only against production):
+//   live positions            11 rows,    0 tagged
+//   live closed trades       127 rows,    0 tagged
+//   live unfilled orders      63 rows,    0 tagged
+//   scraped observations    1200 rows, 1200 tagged
+//   paper trades            1312 rows, 1312 tagged
+// So the gap is exactly the live rows, and it is total. They are built from the CLOB and
+// data-api feeds, which describe a fill -- price, size, outcome, timestamps -- and say
+// nothing about an event's taxonomy. Nothing in this file ever asked Gamma for it.
+//
+// The same diagnosis put six Gamma query shapes to four resolved markets taken from our
+// own state. Exactly one returns tags:
+//     GET /events?slug=<eventSlug>          4/4, on the event itself
+// Every filtered form comes back empty for a finished event -- including that same query
+// with `closed=true` -- and `include_tag=true` on /markets changes nothing. A backfill has
+// to use the unfiltered event lookup, and that is not a detail worth rediscovering.
+const TAG_LOOKUP_BUDGET = Math.max(0, Number(process.env.LIVE_TAG_LOOKUP_BUDGET || 120));
+
+function gammaEventTagSlugs(event) {
+  const tags = Array.isArray(event?.tags) ? event.tags : [];
+  const slugs = tags
+    .map((tag) => String(tag?.slug || tag?.label || tag || "").trim().toLowerCase()
+      .replace(/[^a-z0-9_-]+/g, "-").replace(/^-+|-+$/g, ""))
+    .filter(Boolean);
+  return [...new Set(slugs)];
+}
+
+function eventSlugOf(row) {
+  const slug = String(row?.eventSlug || row?.slug || "").trim().toLowerCase();
+  return /^[a-z0-9-]+$/.test(slug) ? slug : "";
+}
+
+function rowAlreadyTagged(row) {
+  return Array.isArray(row?.polymarketTags) && row.polymarketTags.length > 0;
+}
+
+// The tags every stored row needs, fetched once per event and remembered.
+//
+// The remembering is the point: a position is rebuilt from the API on every sync, so
+// without a cache the same handful of events would be looked up again every few minutes
+// forever. Closed trades keep whatever is written onto them (mergeClosedTradeHistory
+// preserves stored fields a rebuilt row does not carry), so they are asked for once in
+// their life; the cache is what spares the open positions and resting orders.
+//
+// Pruned to the slugs the state still references, so it is bounded by the ledger rather
+// than growing with every event ever traded.
+async function resolveEventTags(rows, previousLiveState, sync) {
+  const known = new Map();
+  const stored = previousLiveState?.marketTags;
+  if (stored && typeof stored === "object") {
+    for (const [slug, entry] of Object.entries(stored)) {
+      const tags = Array.isArray(entry?.tags) ? entry.tags.filter(Boolean) : [];
+      if (tags.length) known.set(slug, { tags, at: entry?.at || null });
+    }
+  }
+
+  const wanted = [];
+  for (const row of rows) {
+    if (rowAlreadyTagged(row)) continue;
+    const slug = eventSlugOf(row);
+    if (slug && !known.has(slug) && !wanted.includes(slug)) wanted.push(slug);
+  }
+
+  let fetched = 0;
+  let missed = 0;
+  for (const slug of wanted.slice(0, TAG_LOOKUP_BUDGET)) {
+    try {
+      // Unfiltered on purpose: `closed=true` returns nothing for a finished event, which is
+      // most of what a backfill is for.
+      const payload = await fetchGammaJson("/events", { slug });
+      const event = Array.isArray(payload) ? payload[0] : payload;
+      const tags = gammaEventTagSlugs(event);
+      fetched += 1;
+      if (tags.length) known.set(slug, { tags, at: new Date().toISOString() });
+      else missed += 1;
+    } catch (error) {
+      missed += 1;
+      sync.warnings.push(`market-tags ${slug}: ${error?.message || String(error)}`);
+    }
+  }
+
+  const referenced = new Set(rows.map(eventSlugOf).filter(Boolean));
+  const cache = {};
+  for (const [slug, entry] of known) {
+    if (referenced.has(slug)) cache[slug] = entry;
+  }
+  return {
+    cache,
+    tagsFor: (row) => known.get(eventSlugOf(row))?.tags || null,
+    stats: { wanted: wanted.length, fetched, missed, pending: Math.max(0, wanted.length - fetched) },
+  };
+}
+
+// Only ever adds. An empty result must not overwrite tags a previous run recorded, and a
+// row that already carries its own is left exactly as it is.
+function applyEventTags(rows, tagsFor) {
+  let tagged = 0;
+  for (const row of rows) {
+    if (!row || rowAlreadyTagged(row)) continue;
+    const tags = tagsFor(row);
+    if (!tags || !tags.length) continue;
+    row.polymarketTags = tags;
+    tagged += 1;
+  }
+  return tagged;
+}
+
 async function optionalValue(label, promise, fallback = null, warnings = null) {
   try {
     return await promise;
@@ -2337,6 +2447,14 @@ async function main() {
     ? number(number(pnl, 0) / originalValueUsdc)
     : null);
 
+  // Everything the dashboard shows a tag chip on, in one pass, so an event traded by two of
+  // these is looked up once. Budgeted rather than unbounded: the first sync after this ships
+  // has a few hundred untagged rows to catch up on, and a sync that spends minutes on
+  // taxonomy is a sync that stops reporting the account.
+  const taggableRows = [...reconciledPositions, ...closedTrades, ...unfilledLimitOrders];
+  const marketTags = await resolveEventTags(taggableRows, previousLiveState, sync);
+  const taggedRows = applyEventTags(taggableRows, marketTags.tagsFor);
+
   const payload = {
     schemaVersion: 1,
     mode: "LIVE",
@@ -2405,6 +2523,9 @@ async function main() {
     resolvedApiPositions: resolvedPositionRows,
     reconciliation,
     closedTrades,
+    // Kept so the next sync does not ask Gamma again for an event it already knows. Only
+    // slugs the state still references survive, so it stays the size of the ledger.
+    marketTags: marketTags.cache,
     notifications,
     tradeHistory,
     activity,
@@ -2429,6 +2550,9 @@ async function main() {
     unsentRedeemAlerts: notifications.unsentRedeemAlerts.length,
     tradeHistory: tradeHistory.length,
     activity: activity.length,
+    // "pending" is what the next run still has to look up, so a backfill that has not
+    // finished says so rather than looking complete.
+    marketTags: { tagged: taggedRows, ...marketTags.stats, cached: Object.keys(marketTags.cache).length },
     status: sync.status,
   }));
 }
@@ -2464,5 +2588,8 @@ export {
   positionHasRedeemableValue,
   redeemNotifications,
   appendEquityDaySample,
+  gammaEventTagSlugs,
+  applyEventTags,
+  eventSlugOf,
   EQUITY_HISTORY_MAX_DAYS,
 };

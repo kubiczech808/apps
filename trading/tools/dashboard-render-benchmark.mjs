@@ -86,7 +86,9 @@ const sandbox = new Function("state", `
   ${/const FIXED_ENTRY_PRICE_TOLERANCE = [\d.]+;/.exec(APP)[0]}
   ${extractFunction(APP, "memoizedByIdentity")}
   ${extractFunction(APP, "earliestIndexedMatch")}
+  ${extractFunction(APP, "sourceMarketTags")}
   ${extractFunction(APP, "liveMarketMetadataIndex")}
+  ${extractFunction(APP, "liveMarketIdentifiers")}
   ${extractFunction(APP, "normalizeMode")}
   ${extractFunction(APP, "customLivePortfolioIdFromMode")}
   ${extractFunction(APP, "isFixedEntryMode")}

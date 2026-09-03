@@ -4998,3 +4998,66 @@ test("execution catalogue: every live portfolio requests its own filtered scope"
   assert.match(source, /executionCatalogueUrlForPortfolio\(PAPER_SCRAPED_STATE_URL\)/,
     "the live run must use the portfolio-scoped URL rather than the generic first page");
 });
+
+// Reported: every event tried says "no tags recorded", though every Polymarket event carries
+// at least one. Measured against production (tools/market-tags-coverage-diagnosis.mjs): live
+// positions 0/11 tagged, closed trades 0/127, unfilled orders 0/63 -- against the scraped
+// catalogue at 1200/1200 and paper trades at 1312/1312. The gap is exactly the live rows and
+// it is total: they are built from feeds that describe a fill and say nothing about taxonomy.
+//
+// The same diagnosis put six Gamma query shapes to four resolved markets from our own state.
+// Exactly one returns tags -- GET /events?slug=<eventSlug>, unfiltered. Every filtered form,
+// including that query with closed=true, comes back empty for a finished event, which is most
+// of what a backfill is for. That is pinned here because it cannot be guessed from the code.
+test("market tags: the sync reads the one Gamma query that answers for a finished event", async () => {
+  const source = readFileSync(new URL("../tools/live-account-sync.mjs", import.meta.url), "utf8");
+  assert.match(source, /fetchGammaJson\("\/events", \{ slug \}\)/,
+    "the event lookup must carry the slug and nothing else -- a filter empties it");
+  assert.ok(!/fetchGammaJson\("\/events", \{ slug, closed/.test(source),
+    "closed=true returns no row for a finished event, which is what the backfill is for");
+  assert.match(source, /marketTags: marketTags\.cache/,
+    "an event already looked up must not be looked up again on the next sync");
+});
+
+test("market tags: tags are read from the event, added only, and never overwritten", async () => {
+  const { gammaEventTagSlugs, applyEventTags, eventSlugOf } = await import("../tools/live-account-sync.mjs");
+
+  // The shape Gamma actually returned, from the diagnosis output.
+  assert.deepEqual(gammaEventTagSlugs({
+    tags: [
+      { id: "1", label: "Sports", slug: "sports", forceShow: false },
+      { id: "2", label: "Games", slug: "games" },
+      { id: "3", label: "MLB", slug: "mlb" },
+      { id: "3", label: "MLB", slug: "mlb" },
+    ],
+  }), ["sports", "games", "mlb"]);
+  assert.deepEqual(gammaEventTagSlugs({}), []);
+  assert.deepEqual(gammaEventTagSlugs(null), []);
+  // A label with no slug still names the tag rather than being dropped.
+  assert.deepEqual(gammaEventTagSlugs({ tags: [{ label: "La Liga" }] }), ["la-liga"]);
+
+  assert.equal(eventSlugOf({ eventSlug: "mlb-bal-col-2026-09-02" }), "mlb-bal-col-2026-09-02");
+  assert.equal(eventSlugOf({ slug: "wta-jovic-frech-2026-08-30" }), "wta-jovic-frech-2026-08-30");
+  assert.equal(eventSlugOf({ eventSlug: "not a slug" }), "", "a free-text title is not an event slug");
+  assert.equal(eventSlugOf({}), "");
+
+  // Adding only. mergeClosedTradeHistory spreads {...existing, ...row}, so a rebuilt row
+  // that carried an empty tag list would erase what an earlier run recorded -- and a closed
+  // trade is rebuilt from the feed on every sync.
+  const rows = [
+    { eventSlug: "known-event" },
+    { eventSlug: "known-event", polymarketTags: ["already", "tagged"] },
+    { eventSlug: "unknown-event" },
+    { eventSlug: "" },
+  ];
+  const tagged = applyEventTags(rows, (row) => (row.eventSlug === "known-event" ? ["sports", "mlb"] : null));
+  assert.equal(tagged, 1, "only the untagged row with a known event is written");
+  assert.deepEqual(rows[0].polymarketTags, ["sports", "mlb"]);
+  assert.deepEqual(rows[1].polymarketTags, ["already", "tagged"], "an existing tag list is left alone");
+  assert.equal(rows[2].polymarketTags, undefined, "an unanswered event stays untagged rather than empty");
+  assert.equal(rows[3].polymarketTags, undefined);
+
+  // An empty answer is not an answer: it must not replace tags a previous run stored.
+  applyEventTags(rows, () => []);
+  assert.deepEqual(rows[0].polymarketTags, ["sports", "mlb"]);
+});

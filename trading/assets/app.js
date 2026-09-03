@@ -10030,6 +10030,14 @@ function evaluationByTokenId(tokenId) {
   return evaluationsByTokenId().get(token) || null;
 }
 
+function sourceMarketTags(source) {
+  for (const values of [source?.polymarketTags, source?.tags, source?.firstPolymarketTags]) {
+    const tags = (Array.isArray(values) ? values : []).filter(Boolean);
+    if (tags.length) return tags;
+  }
+  return [];
+}
+
 // Every market description the dashboard can name a trade from, indexed once: the current
 // portfolio's execution log first, then the scraped catalogue, then the evaluations. That
 // order is a priority order, so each source's position in it is kept alongside it.
@@ -10051,6 +10059,16 @@ function liveMarketMetadataIndex() {
       ].filter(Boolean);
       const byToken = new Map();
       const byMarket = new Map();
+      // Tags are indexed separately, over only the sources that actually carry them.
+      //
+      // The description a row is named from and the description that knows its taxonomy are
+      // not always the same object. A live row usually matches an execution-log attempt
+      // first -- {action, tokenId, orderPrice}, which has no tags at all -- while the
+      // scraped catalogue, which is 100% tagged, holds the same market further down the
+      // list. Reading tags off whichever source won the name is how a tagged market still
+      // showed "no tags recorded".
+      const tagsByToken = new Map();
+      const tagsByMarket = new Map();
       [...executionRows, ...scraped, ...evaluations].forEach((candidate, order) => {
         const token = String(
           candidate.tokenId || candidate.clobTokenId || candidate.assetId || candidate.asset || "",
@@ -10060,8 +10078,12 @@ function liveMarketMetadataIndex() {
           candidate.marketId || candidate.conditionId || candidate.market || "",
         ).trim().toLowerCase();
         if (market && !byMarket.has(market)) byMarket.set(market, { candidate, order });
+        const tags = sourceMarketTags(candidate);
+        if (!tags.length) return;
+        if (token && !tagsByToken.has(token)) tagsByToken.set(token, { candidate: tags, order });
+        if (market && !tagsByMarket.has(market)) tagsByMarket.set(market, { candidate: tags, order });
       });
-      return { byToken, byMarket };
+      return { byToken, byMarket, tagsByToken, tagsByMarket };
     },
   );
 }
@@ -10079,23 +10101,30 @@ function earliestIndexedMatch(index, keys) {
   return best ? best.candidate : null;
 }
 
+function liveMarketIdentifiers(item) {
+  return {
+    tokenIds: [item.tokenId, item.clobTokenId, item.assetId, item.asset, item.tokenID]
+      .map((value) => String(value || "").trim()).filter(Boolean),
+    marketIds: [item.marketId, item.conditionId, item.market]
+      .map((value) => String(value || "").trim().toLowerCase()).filter(Boolean),
+  };
+}
+
 function liveMarketMetadataForTrade(item = {}) {
   const { byToken, byMarket } = liveMarketMetadataIndex();
-  const tokenIds = [
-    item.tokenId,
-    item.clobTokenId,
-    item.assetId,
-    item.asset,
-    item.tokenID,
-  ].map((value) => String(value || "").trim()).filter(Boolean);
+  const { tokenIds, marketIds } = liveMarketIdentifiers(item);
   const tokenMatch = earliestIndexedMatch(byToken, tokenIds);
   if (tokenMatch) return tokenMatch;
-  const marketIds = [
-    item.marketId,
-    item.conditionId,
-    item.market,
-  ].map((value) => String(value || "").trim().toLowerCase()).filter(Boolean);
   return earliestIndexedMatch(byMarket, marketIds);
+}
+
+// The tags for a live row's market, from whichever known description of it has any.
+function liveMarketTagsForTrade(item = {}) {
+  const { tagsByToken, tagsByMarket } = liveMarketMetadataIndex();
+  const { tokenIds, marketIds } = liveMarketIdentifiers(item);
+  return earliestIndexedMatch(tagsByToken, tokenIds)
+    || earliestIndexedMatch(tagsByMarket, marketIds)
+    || [];
 }
 
 function normalizedMatchText(value) {
@@ -10131,9 +10160,14 @@ function evaluationByTrade(item) {
 
 function decorateLiveTradeForTable(trade) {
   const source = trade.sourceEvaluation || liveMarketMetadataForTrade(trade) || evaluationByTrade(trade);
+  // Independent of the source above, and deliberately so: the description that names a row
+  // is often an execution-log attempt, which carries no tags, while the catalogue holds the
+  // same market with all of them.
+  const knownTags = sourceMarketTags(trade).length ? [] : liveMarketTagsForTrade(trade);
   if (!source) {
     return {
       ...trade,
+      ...(knownTags.length ? { polymarketTags: knownTags, tags: knownTags } : {}),
       analysisSummary: trade.analysisSummary || "No matching AI evaluation was found for this live Polymarket row. Treat this as an audit gap until the order/execution ledger links it back to an evaluated candidate.",
     };
   }
@@ -10159,10 +10193,10 @@ function decorateLiveTradeForTable(trade) {
     sourceEvaluation: source,
     tags: Array.isArray(trade.tags) && trade.tags.length
       ? trade.tags
-      : (source.polymarketTags || source.tags || source.firstPolymarketTags || []),
+      : (sourceMarketTags(source).length ? sourceMarketTags(source) : knownTags),
     polymarketTags: Array.isArray(trade.polymarketTags) && trade.polymarketTags.length
       ? trade.polymarketTags
-      : (source.polymarketTags || []),
+      : (source.polymarketTags?.length ? source.polymarketTags : knownTags),
     marketType: trade.marketType || source.marketType || "",
     firstVolumeUsdc: trade.firstVolumeUsdc ?? source.firstVolumeUsdc ?? source.volumeUsdc ?? source.volume24hr ?? null,
     aiAnalysis: trade.aiAnalysis || source.aiAnalysis || null,

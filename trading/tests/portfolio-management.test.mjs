@@ -3116,9 +3116,12 @@ test("dashboard indexes are cached, and rebuild when the state behind them is re
     ${extractFunction(APP, "scrapedObservationIsError")}
     ${extractFunction(APP, "scrapedMarketObservations")}
     ${extractFunction(APP, "earliestIndexedMatch")}
+    ${extractFunction(APP, "sourceMarketTags")}
     ${extractFunction(APP, "liveMarketMetadataIndex")}
+    ${extractFunction(APP, "liveMarketIdentifiers")}
     ${extractFunction(APP, "liveMarketMetadataForTrade")}
-    return { liveOrdersByToken, liveMarketMetadataForTrade };
+    ${extractFunction(APP, "liveMarketTagsForTrade")}
+    return { liveOrdersByToken, liveMarketMetadataForTrade, liveMarketTagsForTrade };
   `);
 
   const live = { generatedAt: "2026-09-02T10:00:00Z", attempts: [{ action: "SUBMITTED", tokenId: "t1", orderPrice: 0.8 }] };
@@ -3127,7 +3130,7 @@ test("dashboard indexes are cached, and rebuild when the state behind them is re
     liveExecutionByMode: { live },
     live5050ExecutionState: null,
     scrapedMarketStateLoaded: true,
-    scrapedMarketObservations: [{ tokenId: "t1", question: "from the catalogue" }],
+    scrapedMarketObservations: [{ tokenId: "t1", question: "from the catalogue", polymarketTags: ["sports", "mlb"] }],
     botState: { evaluations: [] },
     liveExecutionState: { selected: { tokenId: "t2", question: "from the run" }, attempts: [], runLog: [] },
   };
@@ -3163,6 +3166,14 @@ test("dashboard indexes are cached, and rebuild when the state behind them is re
   assert.equal(app.liveMarketMetadataForTrade({ tokenId: "t1" })?.question, "the run knows it now",
     "the execution log outranks the catalogue, and a replaced log has to be read");
   assert.equal(app.liveMarketMetadataForTrade({ tokenId: "nothing-knows-this" }), null);
+
+  // And tags come from a separate lookup for exactly this reason: t1 is now named by an
+  // execution-log attempt, which has no tags, while the catalogue entry for the same token
+  // has them. Reading tags off whichever source won the name is how a tagged market showed
+  // "no tags recorded".
+  assert.deepEqual(app.liveMarketTagsForTrade({ tokenId: "t1" }), ["sports", "mlb"]);
+  assert.deepEqual(app.liveMarketTagsForTrade({ tokenId: "t2" }), [],
+    "a market nothing has tags for stays empty rather than borrowing another market's");
 });
 
 // Attribution can only see a log that was loaded. With just the open tab's log in hand,
