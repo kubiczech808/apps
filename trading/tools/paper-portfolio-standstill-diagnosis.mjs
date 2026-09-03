@@ -53,11 +53,26 @@ function rowTagSlugs(item = {}) {
 }
 
 function tagListOf(portfolio = {}) {
-  const raw = portfolio.includeOnlyMarketTags ?? portfolio.includedMarketTags ?? portfolio.marketTags;
-  const list = Array.isArray(raw)
-    ? raw
-    : String(raw || "").split(",");
+  const raw = portfolio.includeOnlyMarketTags;
+  const list = Array.isArray(raw) ? raw : String(raw || "").split(",");
   return [...new Set(list.map(slugify).filter(Boolean))];
+}
+
+// execution_scope_observation_tags() in api.php, quoted. It reads a DIFFERENT set of fields
+// from the bot's rowTagSlugs above -- firstPolymarketTags and polymarketCategories here,
+// firstTags and category/firstCategory there -- so the server's serving filter and the
+// portfolio's own filter can disagree about whether a row carries a tag at all.
+function serverTagSlugs(item = {}) {
+  const slugs = new Set();
+  for (const key of ["polymarketTags", "tags", "firstPolymarketTags", "firstTags",
+    "polymarketCategories", "firstPolymarketCategories", "riskCategory"]) {
+    const raw = item?.[key];
+    for (const entry of (Array.isArray(raw) ? raw : [raw])) {
+      const tag = slugify(entry && typeof entry === "object" ? (entry.slug || entry.label || entry.name || "") : entry);
+      if (tag) slugs.add(tag);
+    }
+  }
+  return slugs;
 }
 
 async function main() {
@@ -82,21 +97,16 @@ async function main() {
   console.log(`   most common: ${ranked.slice(0, 14).map(([tag, count]) => `${tag} (${count})`).join(", ")}`);
 
   console.log(`\n== 2. each paper portfolio's tag filter against that catalogue`);
-  const overview = await fetchJson(`${HOST}/api.php?action=state&target=paper&summary=portfolio-overview&t=${Date.now()}`)
-    .catch(() => null);
   const config = await fetchJson(`${HOST}/api.php?action=portfolio-config&t=${Date.now()}`).catch(() => null);
-  const portfolios = {
-    ...(config?.config?.paperPortfolios || {}),
-    ...(overview?.paperPortfolios || {}),
-  };
-  const ids = [...new Set([
-    ...Object.keys(config?.config?.paperPortfolios || {}),
-    ...Object.keys(overview?.paperPortfolios || {}),
-  ])];
-  if (!ids.length) console.log(`   no paper portfolios were returned by the config or the overview.`);
+  // api.php keeps paper settings under config.paper -- execution_scope_strategy_config()
+  // reads $config['paper'][$strategyId]. The first version of this tool looked in
+  // paperPortfolios, found nothing, and reported "no tag filter" for every portfolio
+  // including the one whose log says otherwise: a wrong answer, not a null result.
+  const paper = config?.config?.paper || {};
+  const ids = Object.keys(paper);
+  if (!ids.length) console.log(`   no paper portfolios were returned under config.paper.`);
   for (const id of ids) {
-    const portfolio = portfolios[id]?.portfolio || portfolios[id] || {};
-    const settings = config?.config?.paperPortfolios?.[id] || portfolio;
+    const settings = paper[id] || {};
     const required = tagListOf(settings);
     if (!required.length) {
       console.log(`   ${id.padEnd(22)} no tag filter -- every market is allowed through on tags`);
@@ -128,7 +138,36 @@ async function main() {
     }
   }
 
-  console.log(`\n== 3. what the stored reject reasons say across the catalogue`);
+  console.log(`\n== 3. the catalogue each portfolio actually receives`);
+  console.log(`   api.php filters the served rows by the portfolio's own tag list before the`);
+  console.log(`   bot ever sees them, so an empty scoped page means nothing to trade.`);
+  for (const id of ids) {
+    const scoped = await fetchJson(
+      `${HOST}/api.php?action=state&target=paper&summary=execution&strategy_id=${encodeURIComponent(id)}&t=${Date.now()}`,
+    ).catch(() => null);
+    const served = Array.isArray(scoped?.marketObservations) ? scoped.marketObservations : null;
+    const required = tagListOf(paper[id] || {});
+    if (served == null) {
+      console.log(`   ${id.padEnd(22)} scoped page unavailable`);
+      continue;
+    }
+    // The disagreement that matters: a row the server let through on its own tag reading,
+    // which the bot's reading then rejects. Every one of those is a candidate the portfolio
+    // is offered and cannot use.
+    const rejectedByBot = required.length
+      ? served.filter((row) => !required.some((tag) => rowTagSlugs(row).has(tag)))
+      : [];
+    const flag = served.length ? (rejectedByBot.length ? "?" : " ") : "!";
+    console.log(`  ${flag}${id.padEnd(22)} ${String(served.length).padStart(4)} row(s) served`
+      + `${required.length ? `   of which the bot's own tag reading rejects ${rejectedByBot.length}` : ""}`);
+    for (const row of rejectedByBot.slice(0, 3)) {
+      console.log(`   ${" ".repeat(23)} "${text(row.question).slice(0, 42)}"`);
+      console.log(`   ${" ".repeat(23)}   server sees: ${[...serverTagSlugs(row)].join(", ") || "(nothing)"}`);
+      console.log(`   ${" ".repeat(23)}   bot sees:    ${[...rowTagSlugs(row)].join(", ") || "(nothing)"}`);
+    }
+  }
+
+  console.log(`\n== 4. what the stored reject reasons say across the catalogue`);
   const reasons = new Map();
   let withReasons = 0;
   for (const row of rows) {
@@ -146,7 +185,7 @@ async function main() {
     console.log(`   ${String(count).padStart(5)}  ${shape.slice(0, 96)}`);
   }
 
-  console.log(`\n== 4. the NaN probability`);
+  console.log(`\n== 5. the NaN probability`);
   const nan = rows.filter((row) => (Array.isArray(row?.rejectReasons) ? row.rejectReasons : [])
     .some((reason) => /NaN/.test(text(reason))));
   console.log(`   rows whose stored reasons contain NaN: ${nan.length}`);
