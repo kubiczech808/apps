@@ -5061,3 +5061,118 @@ test("market tags: tags are read from the event, added only, and never overwritt
   applyEventTags(rows, () => []);
   assert.deepEqual(rows[0].polymarketTags, ["sports", "mlb"]);
 });
+
+// Reported: some live portfolios show REDEEMED rows with nothing filled in -- no stake, no
+// entry price, no verdict, P/L +$0.00. Measured on the account: 52 of 137 stored closed rows
+// were like that, and they were the NEWEST rows (median 36 h old, 34 within 48 h), which
+// rules out the "the buy aged out of a capped feed" premise the code was written on.
+//
+// The cause was one default. data-api's /trades returns the TAKER side unless told
+// otherwise, and this account rests limit orders and is filled by whoever crosses them, so
+// it is the maker on essentially every buy. Measured against the account:
+//
+//     /trades?user=...&limit=500                     74 rows,  23 buys
+//     /trades?user=...&limit=500&takerOnly=false    417 rows, 357 buys
+//
+// The sync was seeing 23 of 357 buys. When a redemption arrived for one of the other 334,
+// no buy could be found, so the row was stored as a resolved win with the stake unknown.
+test("live sync: /trades is asked for this account's maker fills, not just taker fills", () => {
+  const source = readFileSync(new URL("../tools/live-account-sync.mjs", import.meta.url), "utf8");
+  assert.match(source, /takerOnly: TRADE_TAKER_ONLY \? "true" : "false"/,
+    "the parameter has to be sent explicitly -- the default is the bug");
+  assert.match(source, /LIVE_TRADE_TAKER_ONLY \|\| "false"/,
+    "maker fills must be included unless someone deliberately asks for taker-only");
+  // The activity window was 80 rows, which covered under two days at this trading rate.
+  assert.match(source, /LIVE_ACTIVITY_LIMIT \|\| 500/);
+  const workflow = readFileSync(new URL("../../.github/workflows/trading-live-account.yml", import.meta.url), "utf8");
+  assert.match(workflow, /LIVE_ACTIVITY_LIMIT: "500"/,
+    "the workflow overrides the default, so raising only the default would change nothing");
+});
+
+// A row that arrives priced has to supersede the stake-less one already stored for the same
+// market, rather than sitting beside it. Both carry the same condition and outcome, so the
+// identity keys are what make the repair land on the existing row.
+test("live sync: a recovered stake repairs the stored row instead of duplicating it", async () => {
+  const { mergeClosedTradeHistory } = await import("../tools/live-account-sync.mjs");
+  const previous = {
+    closedTrades: [{
+      id: "redeem-activity:0xabc::iva jovic vs frech:iva jovic:2026-09-03T00:00:45.000Z",
+      status: "REDEEMED",
+      question: "US Open WTA: Iva Jovic vs Magdalena Frech",
+      outcome: "Iva Jovic",
+      // No tokenId: a redemption is reported per condition, which is why the stored row
+      // has none and why the condition key is the one that has to match.
+      tokenId: null,
+      conditionId: "0xabc",
+      closedAt: "2026-09-03T00:00:45.000Z",
+      entryPrice: null,
+      stakeUsdc: null,
+      realizedPnlUsdc: null,
+      reconciliationOnly: true,
+    }],
+  };
+  const priced = {
+    id: "77_token",
+    status: "REDEEMED",
+    question: "US Open WTA: Iva Jovic vs Magdalena Frech",
+    outcome: "Iva Jovic",
+    tokenId: "77_token",
+    conditionId: "0xabc",
+    closedAt: "2026-09-03T04:00:00.000Z",
+    entryPrice: 0.72,
+    stakeUsdc: 4.9968,
+    shares: 6.94,
+    realizedPnlUsdc: 1.9432,
+  };
+
+  const merged = mergeClosedTradeHistory([priced], previous, "2026-09-03T06:00:00.000Z");
+  assert.equal(merged.length, 1, "the priced row is the same trade, not a second one");
+  assert.equal(merged[0].stakeUsdc, 4.9968);
+  assert.equal(merged[0].entryPrice, 0.72);
+  assert.equal(merged[0].realizedPnlUsdc, 1.9432);
+  assert.equal(merged[0].reconciliationOnly, false,
+    "the flag means 'stake and P/L unknown', so a row that now has both must stop carrying it");
+  // The close time still comes from the first sighting: a later run must not restate when
+  // the position closed as the moment the account happened to be polled.
+  assert.equal(merged[0].closedAt, "2026-09-03T00:00:45.000Z");
+});
+
+// A genuinely unmatched redemption can still happen -- a buy older than the /trades window
+// really has gone -- and then the row has to say it knows nothing, not print a confident
+// zero. Number(null) is 0, and 0 is a plausible P/L and a plausible price, so the coercion
+// turned "no data" into "broke even, bought for free".
+test("live rows: an unknown P/L and an unknown entry price render as unknown", () => {
+  const app = readFileSync(new URL("../assets/app.js", import.meta.url), "utf8");
+  const extract = (name) => {
+    const start = app.indexOf(`function ${name}(`);
+    assert.ok(start > 0, `${name} was not found`);
+    let depth = 0;
+    for (let index = app.indexOf("{", app.indexOf(")", start)); index < app.length; index += 1) {
+      if (app[index] === "{") depth += 1;
+      else if (app[index] === "}" && --depth === 0) return app.slice(start, index + 1);
+    }
+    throw new Error(`unbalanced ${name}`);
+  };
+  const sandbox = new Function(`
+    ${extract("numericOrNull")}
+    ${extract("isClosedTrade")}
+    ${extract("tradePnlValue")}
+    ${extract("tradePnlPct")}
+    ${extract("money")}
+    ${extract("signedMoney")}
+    ${extract("probability")}
+    return { tradePnlValue, tradePnlPct, signedMoney, probability };
+  `)();
+
+  const unknown = { status: "REDEEMED", realizedPnlUsdc: null, realizedPnlPct: null, entryPrice: null };
+  assert.equal(sandbox.tradePnlValue(unknown), null);
+  assert.equal(sandbox.tradePnlPct(unknown), null);
+  assert.equal(sandbox.signedMoney(sandbox.tradePnlValue(unknown)), "-",
+    "a missing P/L is a dash, not +$0.00");
+  assert.equal(sandbox.probability(sandbox.tradePnlValue({ status: "REDEEMED", entryPrice: "" })), "-");
+
+  // A real zero still reads as a zero -- the guard rejects absence, not the number.
+  assert.equal(sandbox.tradePnlValue({ status: "WON", realizedPnlUsdc: 0 }), 0);
+  assert.equal(sandbox.signedMoney(0), "+$0.00");
+  assert.equal(sandbox.tradePnlValue({ status: "WON", realizedPnlUsdc: -3.5 }), -3.5);
+});

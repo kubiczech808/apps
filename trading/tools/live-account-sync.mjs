@@ -18,8 +18,19 @@ const CONFIGURED_FUNDER_ADDRESS = (process.env.POLYMARKET_FUNDER_ADDRESS || proc
 const STATE_PATH = process.env.LIVE_STATE_PATH || "data/live-state.json";
 const LIVE_STATE_URL = process.env.LIVE_STATE_URL || "";
 const LIVE_PORTFOLIO_CONFIG_URL = process.env.LIVE_PORTFOLIO_CONFIG_URL || "";
-const ACTIVITY_LIMIT = Number(process.env.LIVE_ACTIVITY_LIMIT || 50);
+const ACTIVITY_LIMIT = Number(process.env.LIVE_ACTIVITY_LIMIT || 500);
 const TRADE_LIMIT = Number(process.env.LIVE_TRADE_LIMIT || 500);
+// data-api's /trades returns the TAKER side of each fill unless told otherwise. This
+// account almost never takes: it rests limit orders away from the book and is filled by
+// whoever crosses them, which makes it the maker on essentially every buy.
+//
+// Measured against the account (tools/redeem-cost-basis-probe.mjs):
+//     /trades?user=…&limit=500                     74 rows,  23 buys
+//     /trades?user=…&limit=500&takerOnly=false    417 rows, 357 buys
+// The sync was seeing 23 of 357 buys. The other 334 were not late, not truncated and not
+// aged out -- they were the wrong side of a default, and no window size would have
+// recovered them.
+const TRADE_TAKER_ONLY = String(process.env.LIVE_TRADE_TAKER_ONLY || "false") === "true";
 const SIGNATURE_TYPE = Number(process.env.POLYMARKET_SIGNATURE_TYPE || 1);
 const OPEN_ORDER_FALLBACK_HORIZON_MS = 24 * 60 * 60 * 1000;
 const UNFILLED_LIMIT_OUTCOME_REFRESH_LIMIT = 16;
@@ -1062,6 +1073,13 @@ function mergeClosedTradeHistory(currentRows = [], previousState = null, generat
       merged.closedAt = immutableClosedAt;
       merged.resolvedAt = immutableClosedAt;
       merged.closedAtSource = existing.row.closedAtSource || "previous-live-state-close";
+    }
+    // reconciliationOnly means "this row's stake and P/L are unknown". A stored row that
+    // was kept as an unmatched redemption keeps that flag through the spread above, so a
+    // later run that DOES find the buy would leave a fully priced row still marked
+    // incomplete -- and the flag is the only durable way to tell the two apart.
+    if (merged.reconciliationOnly === true && number(merged.stakeUsdc) != null && number(merged.entryPrice) != null) {
+      merged.reconciliationOnly = false;
     }
     existing.row = merged;
     index(existing);
@@ -2256,7 +2274,13 @@ async function main() {
     optional("positions", fetchJson("/positions", { user: ACCOUNT_ADDRESS, limit: 500 }), []),
     optional("value", fetchJson("/value", { user: ACCOUNT_ADDRESS }), []),
     optional("activity", fetchJson("/activity", { user: ACCOUNT_ADDRESS, limit: ACTIVITY_LIMIT }), []),
-    optional("trades", fetchJson("/trades", { user: ACCOUNT_ADDRESS, limit: TRADE_LIMIT }), []),
+    optional("trades", fetchJson("/trades", {
+      user: ACCOUNT_ADDRESS,
+      limit: TRADE_LIMIT,
+      // Explicit both ways round: the default is the bug, so the value has to be sent
+      // rather than left to whatever data-api decides it means next.
+      takerOnly: TRADE_TAKER_ONLY ? "true" : "false",
+    }), []),
     optional("public-profile", fetchGammaJson("/public-profile", { address: ACCOUNT_ADDRESS }), { error: "not_available" }),
     optional("balance-allowance", loadClobBalanceAllowance(sync, {
       funderAddress: ACTIVE_FUNDER_ADDRESS,

@@ -32,7 +32,10 @@ jobs:
       LIVE_STATE_PATH: data/live-state.json
       LIVE_STATE_URL: https://osobnizkusenosti.cz/trading/api.php?action=state&target=live
       LIVE_PORTFOLIO_CONFIG_URL: https://osobnizkusenosti.cz/trading/api.php?action=portfolio-config
-      LIVE_ACTIVITY_LIMIT: "80"
+      # 80 covered less than two days at this trading rate, and a redemption whose buy
+      # had scrolled out was stored with no stake at all. data-api serves 500 without
+      # complaint.
+      LIVE_ACTIVITY_LIMIT: "500"
       POLYMARKET_ADDRESS: ${{ secrets.POLYMARKET_ADDRESS || secrets.POLYMARKET_FUNDER_ADDRESS || '0x3252de913d9323667f21f4d88fa1f996fc282293' }}
       POLYMARKET_FUNDER_ADDRESS: ${{ secrets.POLYMARKET_FUNDER_ADDRESS || secrets.POLYMARKET_ADDRESS || '0x3252de913d9323667f21f4d88fa1f996fc282293' }}
       POLYMARKET_PRIVATE_KEY: ${{ secrets.POLYMARKET_PRIVATE_KEY }}

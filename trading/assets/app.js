@@ -3064,16 +3064,16 @@ function marketAnchor(item) {
   return `<a class="market-link" href="${escapeHtml(polymarketUrl(item))}" target="_blank" rel="noopener noreferrer">${content}</a>`;
 }
 
+// Number(null) is 0, and 0 is a perfectly plausible P/L, so coercing first turns "this row
+// has no P/L" into "this row broke even" -- which is what a redemption whose stake could not
+// be recovered showed on screen: a confident +$0.00 beside a "-" for win and stake.
+// numericOrNull() rejects null and "" before the coercion; everything below reads it.
 function tradePnlValue(trade) {
-  const value = isClosedTrade(trade) ? trade.realizedPnlUsdc : trade.unrealizedPnlUsdc;
-  const numeric = Number(value);
-  return Number.isFinite(numeric) ? numeric : null;
+  return numericOrNull(isClosedTrade(trade) ? trade.realizedPnlUsdc : trade.unrealizedPnlUsdc);
 }
 
 function tradePnlPct(trade) {
-  const value = isClosedTrade(trade) ? trade.realizedPnlPct : trade.unrealizedPnlPct;
-  const numeric = Number(value);
-  return Number.isFinite(numeric) ? numeric : null;
+  return numericOrNull(isClosedTrade(trade) ? trade.realizedPnlPct : trade.unrealizedPnlPct);
 }
 
 function isClosedTrade(trade) {
@@ -4044,8 +4044,10 @@ function tradeTypeBadge(trade) {
 
 function tradePriceCell(trade, showStatus = false) {
   const currentLabel = showStatus ? "Final price" : "Current mark";
-  const entry = Number(trade.entryPrice);
-  const current = Number(trade.currentPrice);
+  // Same reason as tradePnlValue: Number(null) is 0, and a row with no entry price printed
+  // "0.0%" as though it had been bought for nothing.
+  const entry = numericOrNull(trade.entryPrice) ?? NaN;
+  const current = numericOrNull(trade.currentPrice) ?? NaN;
   const change = Number.isFinite(entry) && entry > 0 && Number.isFinite(current)
     ? (current / entry) - 1
     : null;
