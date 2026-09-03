@@ -55,8 +55,13 @@ const ADDRESS_CANDIDATES = [
 // the closed rows the dashboard is rendering, which is the other half of the comparison.
 const LIVE_STATE_URL = process.env.LIVE_STATE_URL
   || "https://osobnizkusenosti.cz/trading/api.php?action=state&target=live";
-const ACTIVITY_LIMIT = Number(process.env.LIVE_ACTIVITY_LIMIT || 50);
+// These have to track live-account-sync.mjs, because this tool's whole claim is that it
+// reads what the sync reads. When the sync started sending takerOnly=false -- without which
+// data-api returned 23 of this account's 357 buys -- a diagnosis left on the old default
+// would have been measuring a feed production does not use.
+const ACTIVITY_LIMIT = Number(process.env.LIVE_ACTIVITY_LIMIT || 500);
 const TRADE_LIMIT = Number(process.env.LIVE_TRADE_LIMIT || 500);
+const TRADE_TAKER_ONLY = String(process.env.LIVE_TRADE_TAKER_ONLY || "false") === "true";
 // The markets the user screenshotted, so the report speaks to the rows they were looking
 // at. Overridable, because the next odd row will be a different market.
 const FILTER = new RegExp(process.env.MARKET_FILTER
@@ -249,7 +254,11 @@ async function main() {
   console.log(`\n== feeds for ${shortAddress(address)}`);
   const [activity, trades] = await Promise.all([
     fetchFeed("/activity", { user: address, limit: ACTIVITY_LIMIT }),
-    fetchFeed("/trades", { user: address, limit: TRADE_LIMIT }),
+    fetchFeed("/trades", {
+      user: address,
+      limit: TRADE_LIMIT,
+      takerOnly: TRADE_TAKER_ONLY ? "true" : "false",
+    }),
   ]);
   console.log(`   /trades   ${trades.length} rows`);
   console.log(`   /activity ${activity.length} rows`

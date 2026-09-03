@@ -41,7 +41,7 @@ jobs:
         env:
           MARKET_FILTER: ${{ inputs.market_filter || 'infinite|chongqing|cirstea|badosa|sassuolo|frosinone|b8 vs' }}
           LIVE_TRADE_LIMIT: ${{ inputs.trade_limit || '500' }}
-          LIVE_ACTIVITY_LIMIT: ${{ inputs.activity_limit || '50' }}
+          LIVE_ACTIVITY_LIMIT: ${{ inputs.activity_limit || '500' }}
           # Addresses only, the same ones trading-live-account.yml passes. The history
           # feeds are public and take no key, but they take the wallet that holds it, and
           # the repo default is not that wallet. No signing key is passed here.
