@@ -6758,18 +6758,50 @@ function rowVolumeUsdc(item = {}) {
 // Gamma returns tags both as plain strings and as {label,slug} objects, and a row carries
 // them under more than one field depending on which pass recorded it. Category counts as a
 // tag here: it is the field a row scraped before tags were captured has to be judged on.
+// Every field a market's tags are stored in, because three readers had three different
+// lists and the narrowest one decided whether a portfolio could trade.
+//
+// Reported: paper portfolios not running, with "outside included tags
+// (league-of-legends)" logged against a League of Legends market. Measured on the served
+// catalogue (tools/paper-portfolio-standstill-diagnosis.mjs):
+//
+//   "LoL: Bilibili Gaming vs Team WE (BO5)"
+//      api.php sees: general, esports, league-of-legends, games, sports
+//      this bot saw: general
+//
+// api.php's execution_scope_observation_tags reads firstPolymarketTags and
+// polymarketCategories; this function did not, so on a row whose tags live there the bot
+// saw only the riskCategory and rejected the market as untagged. The server had already
+// selected that very row FOR the portfolio using the tags it could see. So the portfolio
+// was offered exactly the right markets and refused them: 4 of 20 for leagueoflegends,
+// 8 of 172 for leagueoflegends2, 9 of 130 for counterstrike2, 11 of 80 for esports2.
+//
+// The list below is the union of all three readers -- api.php's, this one's, and
+// portfolioAnalysisTags in app.js, which is why the dashboard showed the tags the filter
+// then claimed were absent.
+const TAG_FIELDS = [
+  "polymarketTags",
+  "tags",
+  "firstPolymarketTags",
+  "firstTags",
+  "polymarketCategories",
+  "firstPolymarketCategories",
+];
+const TAG_CATEGORY_FIELDS = ["riskCategory", "category", "firstCategory"];
+
 function rowTagSlugs(item = {}) {
   const slugs = new Set();
   const slugify = (value) => String(value ?? "")
     .trim().toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "");
-  for (const list of [item.polymarketTags, item.tags, item.firstTags]) {
+  for (const field of TAG_FIELDS) {
+    const list = item?.[field];
     for (const raw of (Array.isArray(list) ? list : [])) {
       const tag = slugify(raw && typeof raw === "object" ? (raw.slug || raw.label || raw.name || "") : raw);
       if (tag) slugs.add(tag);
     }
   }
-  for (const key of [item.riskCategory, item.category, item.firstCategory]) {
-    const tag = slugify(key);
+  for (const field of TAG_CATEGORY_FIELDS) {
+    const tag = slugify(item?.[field]);
     if (tag) slugs.add(tag);
   }
   return slugs;

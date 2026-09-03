@@ -6145,6 +6145,8 @@ test("excluded tags: dashboard, live executor and paper bot agree on what a tag 
       return { excludedMarketTags: envTagSet("PAPER_X_EXCLUDED_MARKET_TAGS") };
     `)({ env: { PAPER_X_EXCLUDED_MARKET_TAGS: tags } });
     const check = new Function(`
+      ${/const TAG_FIELDS = \[[\s\S]*?\];/.exec(bot)[0]}
+      ${/const TAG_CATEGORY_FIELDS = \[[^\]]*\];/.exec(bot)[0]}
       ${functionSource(bot, "rowTagSlugs")}
       ${functionSource(bot, "excludedTagsOnRow")}
       return excludedTagsOnRow;
@@ -9736,4 +9738,79 @@ test("scan log: the before/after catalogue counters measure the same population"
   const active = (list) => list.filter((item) => String(item?.status || "").toUpperCase() !== "RESOLVED").length;
   assert.equal(active(rows), 5000);
   assert.equal(active(rows) - active(rows), 0, "a steady catalogue must report a net of zero");
+});
+
+// Reported: paper portfolios not running, with "outside included tags (league-of-legends)"
+// logged against a League of Legends market whose tag chip in the dashboard plainly showed
+// league-of-legends.
+//
+// Three readers decided what tags a row carries and each read a different set of fields.
+// api.php's execution_scope_observation_tags selects the rows to SERVE a portfolio;
+// rowTagSlugs in the paper bot then decides whether to USE them. api.php read
+// firstPolymarketTags and polymarketCategories, the bot did not -- so on a row whose tags
+// live in those fields the bot saw only the riskCategory. Measured on the served catalogue:
+//
+//   "LoL: Bilibili Gaming vs Team WE (BO5)"
+//      api.php sees: general, esports, league-of-legends, games, sports
+//      the bot saw:  general
+//
+// The server had already picked that row FOR the portfolio using tags the bot then could
+// not see. The portfolio was handed exactly the right markets and refused them: 4 of the 20
+// served to leagueoflegends, 8 of 172 to leagueoflegends2, 9 of 130 to counterstrike2,
+// 11 of 80 to esports2.
+test("market tags: the bot reads every field the server selects rows by", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const [bot, api, app] = await Promise.all([
+    readFile(new URL("../tools/paper-trading-bot.mjs", import.meta.url), "utf8"),
+    readFile(new URL("../api.php", import.meta.url), "utf8"),
+    readFile(new URL("../assets/app.js", import.meta.url), "utf8"),
+  ]);
+
+  const botFields = [
+    ...JSON.parse(/const TAG_FIELDS = (\[[\s\S]*?\]);/.exec(bot)[1].replace(/,\s*\]/, "]")),
+    ...JSON.parse(/const TAG_CATEGORY_FIELDS = (\[[^\]]*\]);/.exec(bot)[1]),
+  ];
+
+  // The exact list api.php walks when it decides which rows a portfolio is served.
+  const serverList = /foreach \(\['polymarketTags'[^\]]*\] as \$key\)/.exec(api)[0];
+  const serverFields = [...serverList.matchAll(/'([a-zA-Z]+)'/g)].map((match) => match[1]);
+  assert.ok(serverFields.length >= 6, "api.php's tag field list must still be readable here");
+
+  for (const field of serverFields) {
+    assert.ok(botFields.includes(field),
+      `api.php selects rows by ${field} but the paper bot does not read it, so the portfolio `
+      + "is served markets it will then reject as untagged");
+  }
+
+  // The dashboard's reader too, or the chip shows a tag the filter says is absent -- which
+  // is exactly how this was noticed.
+  for (const field of ["polymarketTags", "tags", "firstPolymarketTags"]) {
+    assert.ok(new RegExp(`trade\\?\\.${field}|source\\?\\.${field}`).test(app),
+      `portfolioAnalysisTags must still read ${field}`);
+    assert.ok(botFields.includes(field), `and the bot must read ${field} too`);
+  }
+
+  // The specific row from the measurement: tags only in firstPolymarketTags, plus a
+  // riskCategory that is not the league. Before the fix this returned just "general".
+  const slugs = new Function(`
+    ${/const TAG_FIELDS = \[[\s\S]*?\];/.exec(bot)[0]}
+    ${/const TAG_CATEGORY_FIELDS = \[[^\]]*\];/.exec(bot)[0]}
+    ${functionSource(bot, "rowTagSlugs")}
+    return rowTagSlugs;
+  `)();
+  const row = {
+    question: "LoL: Bilibili Gaming vs Team WE (BO5)",
+    polymarketTags: [],
+    firstPolymarketTags: ["Esports", "League of Legends", "Games", "Sports"],
+    riskCategory: "general",
+  };
+  const carried = [...slugs(row)];
+  assert.ok(carried.includes("league-of-legends"),
+    `the row carries league-of-legends, but the bot read ${JSON.stringify(carried)}`);
+  assert.ok(carried.includes("esports"));
+  assert.ok(carried.includes("general"), "the riskCategory still counts as a tag");
+
+  // And a row with nothing anywhere still carries nothing: the wider read must not invent
+  // tags, or an include-filter would stop filtering.
+  assert.equal([...slugs({ question: "untagged" })].length, 0);
 });
