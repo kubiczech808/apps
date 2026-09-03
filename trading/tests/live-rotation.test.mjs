@@ -931,22 +931,69 @@ test("released capital: the account sync dispatches the execution workflow", asy
   // GITHUB_TOKEN may still start a run with, so no personal access token is needed.
   assert.match(workflow, /actions: write/);
   assert.match(workflow, /actions\/workflows\/\{workflow\}\/dispatches/);
-  assert.match(workflow, /"live_execution_trigger": "open_order_released"/);
+  // The trigger names which of the two reasons fired, so a run's provenance is readable.
+  assert.match(workflow, /"live_execution_trigger": trigger,/);
+  assert.match(workflow, /trigger = "open_order_released"/);
   // A scheduled run places real orders, and this stands in for one that would otherwise
   // happen hours later, so it must not be a dry run.
   assert.match(workflow, /"live_confirm": True/);
-  // The transient-failure guard has to be honoured by the workflow, not just computed.
-  assert.match(workflow, /if released\.get\("ordersUnavailable"\)/);
+  // The transient-failure guard has to be honoured by the workflow, not just computed: a
+  // CLOB read that failed makes every order look vanished, and dispatching on that would
+  // act on a book that never changed.
+  assert.match(workflow, /orders_unavailable = bool\(released\.get\("ordersUnavailable"\)\)/);
+  assert.match(workflow, /if vanished and not orders_unavailable:/,
+    "a failed read must not be read as released capital");
 
   // Order matters: dispatching after the upload means the published state no longer
   // lists the vanished order, so the next sync cannot fire a duplicate run.
   const uploadAt = workflow.indexOf("name: Upload live state");
-  const dispatchAt = workflow.indexOf("name: Dispatch execution run when an open order released its capital");
+  const dispatchAt = workflow.indexOf("name: Dispatch execution run when capital came back");
   assert.ok(uploadAt > 0 && dispatchAt > uploadAt, "the dispatch must come after the state upload");
 
   // The sync must actually publish what the workflow reads.
   const syncSource = await readFile(new URL("../tools/live-account-sync.mjs", import.meta.url), "utf8");
   assert.match(syncSource, /releasedOrderCapital,/);
+});
+
+// Reported: free capital was about 1 USDC, the resting book went from ~10 bids to one, and
+// the culled bids stayed gone. They cannot go back while there is no collateral to back
+// them -- the exchange refuses an order it cannot fund -- so the moment that matters is
+// when a redeem or a settlement turns a resolved position back into cash. This sync
+// dispatched an execution run only when an OPEN ORDER released capital, so a payout was
+// invisible to it and the restore pass never ran at a moment when it could have acted.
+test("returning capital: cash arriving dispatches a run when bids are waiting", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const [workflow, syncSource] = await Promise.all([
+    readFile(new URL("../../.github/workflows/trading-live-account.yml", import.meta.url), "utf8"),
+    readFile(new URL("../tools/live-account-sync.mjs", import.meta.url), "utf8"),
+  ]);
+
+  // The sync has to publish the signal, measured against its own previous snapshot: what
+  // decides whether a bid can go back is the balance, whatever moved it.
+  assert.match(syncSource, /restorableCapital,/, "the payload must carry the signal");
+  assert.match(syncSource, /const previousCashUsdc = number\(previousLiveState\?\.portfolio\?\.cashUsdc\)/);
+  assert.match(syncSource, /cashDeltaUsdc/);
+  // Only bids that could actually go back are counted: nothing filled, and the market has
+  // not settled. A settled market is what the expiry sweep is for.
+  assert.match(syncSource, /String\(order\?\.status \|\| ""\)\.toUpperCase\(\) === "LIVE_LIMIT_ORDER_UNFILLED"/);
+  assert.match(syncSource, /number\(order\?\.filledSize, 0\) <= 0\.000001/);
+  assert.match(syncSource, /optionalNumber\(order\?\.finalOutcomePrice\) == null/);
+  assert.match(syncSource, /smallestWaitingStakeUsdc/,
+    "the cheapest waiting bid is what decides whether the cash that arrived funds anything");
+
+  // And the workflow has to act on it, as a second reason rather than a replacement.
+  assert.match(workflow, /trigger = "capital_returned"/);
+  assert.match(workflow, /waiting = int\(restorable\.get\("waitingOrders"\) or 0\)/);
+  // Guards: no previous figure is not a reason to dispatch on a guess, cash going down is
+  // not cash arriving, and cash that cannot cover the cheapest waiting bid buys nothing.
+  assert.match(workflow, /cash figure to compare against/);
+  assert.match(workflow, /elif delta <= 0:/);
+  assert.match(workflow, /does not cover the cheapest of them/);
+  // The restore is what the dispatched run does with it, and it is charged against the
+  // resting-book ceiling so a restore cannot rebuild an overcommitted book.
+  const executor = await readFile(new URL("../tools/live-order-executor.mjs", import.meta.url), "utf8");
+  assert.match(executor, /const culledOrderRestore = await restoreCulledOrders\(/);
+  assert.match(executor, /headroomUsdc: restingBookHeadroom/);
 });
 
 test("live positions: a date-only resolution date means the end of that day", async () => {

@@ -152,7 +152,7 @@ jobs:
       # duplicate run. live_confirm is true because this stands in for the scheduled run
       # that would otherwise redeploy this capital hours later -- and a scheduled run
       # places real orders too.
-      - name: Dispatch execution run when an open order released its capital
+      - name: Dispatch execution run when capital came back
         env:
           GITHUB_TOKEN: ${{ github.token }}
           LIVE_STATE_FILE: trading/data/live-state.json
@@ -170,18 +170,61 @@ jobs:
           state = json.loads(Path(os.environ["LIVE_STATE_FILE"]).read_text(encoding="utf-8"))
           released = state.get("releasedOrderCapital") or {}
           vanished = released.get("vanished") or []
+          restorable = state.get("restorableCapital") or {}
 
-          if released.get("ordersUnavailable"):
-              print("Open orders could not be read this run, so no disappearance is trustworthy; not dispatching.")
-              raise SystemExit(0)
-          if not vanished:
-              print(f"No open order left the book ({released.get('checked', 0)} checked); nothing to dispatch.")
-              raise SystemExit(0)
+          def number(value):
+              try:
+                  return float(value)
+              except (TypeError, ValueError):
+                  return None
 
-          for order in vanished:
-              print(f"released: {order.get('question') or order.get('tokenId')} "
-                    f"({order.get('outcome') or '-'}) ~{order.get('releasedCapitalUsdc')} USDC")
-          print(f"total freed: {released.get('freedCapitalUsdc')} USDC")
+          orders_unavailable = bool(released.get("ordersUnavailable"))
+          if orders_unavailable:
+              print("Open orders could not be read this run, so no disappearance is trustworthy.")
+
+          trigger = None
+          if vanished and not orders_unavailable:
+              trigger = "open_order_released"
+              for order in vanished:
+                  print(f"released: {order.get('question') or order.get('tokenId')} "
+                        f"({order.get('outcome') or '-'}) ~{order.get('releasedCapitalUsdc')} USDC")
+              print(f"total freed: {released.get('freedCapitalUsdc')} USDC")
+
+          # Cash arriving is the other reason to run, and it used to be no reason at all.
+          # A bid cannot go back on the book while there is no collateral behind it -- the
+          # exchange refuses -- so the moment a redeem or settlement pays out is exactly
+          # when the restore pass can finally do something. Reported: free capital was
+          # about 1 USDC, the book went from ~10 resting bids to one, and nothing brought
+          # them back, because only a vanishing order dispatched a run.
+          #
+          # The bar is the cheapest bid actually waiting rather than a fixed figure: what
+          # matters is whether the money that arrived can fund something on the list.
+          waiting = int(restorable.get("waitingOrders") or 0)
+          delta = number(restorable.get("cashDeltaUsdc"))
+          cash = number(restorable.get("cashUsdc"))
+          smallest = number(restorable.get("smallestWaitingStakeUsdc"))
+          bar = smallest if smallest is not None else 5.0
+          if trigger is None and waiting:
+              if delta is None:
+                  print(f"{waiting} bid(s) waiting to be restored, but there is no previous "
+                        "cash figure to compare against; not dispatching on a guess.")
+              elif delta <= 0:
+                  print(f"{waiting} bid(s) waiting; cash did not rise this sync "
+                        f"({delta:+.2f} USDC), so nothing new can be funded.")
+              elif cash is not None and cash + 1e-6 < bar:
+                  print(f"{waiting} bid(s) waiting and cash rose {delta:+.2f} USDC, but "
+                        f"{cash:.2f} USDC does not cover the cheapest of them "
+                        f"({bar:.2f} USDC).")
+              else:
+                  trigger = "capital_returned"
+                  print(f"cash rose {delta:+.2f} USDC to {cash:.2f}; {waiting} bid(s) are "
+                        f"waiting to be restored, cheapest {bar:.2f} USDC. Dispatching so "
+                        "the restore pass can re-evaluate them.")
+
+          if trigger is None:
+              print(f"Nothing to dispatch ({released.get('checked', 0)} open order(s) checked, "
+                    f"{waiting} waiting to be restored).")
+              raise SystemExit(0)
 
           repository = os.environ["GITHUB_REPOSITORY"]
           workflow = os.environ["LIVE_EXECUTION_WORKFLOW_FILE"]
@@ -192,7 +235,7 @@ jobs:
                   "inputs": {
                       "live_confirm": True,
                       "live_run_source": "AUTO",
-                      "live_execution_trigger": "open_order_released",
+                      "live_execution_trigger": trigger,
                   },
               }).encode("utf-8"),
               headers={

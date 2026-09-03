@@ -4470,7 +4470,15 @@ function culledOrdersToRestore({ liveState, previousExecution, identity, headroo
   return considered;
 }
 
-async function restoreCulledOrders({ liveState, previousExecution, tradingConfig, headroomUsdc, availableCashUsdc }) {
+async function restoreCulledOrders({
+  liveState,
+  previousExecution,
+  tradingConfig,
+  headroomUsdc,
+  availableCashUsdc,
+  evaluationByToken = new Map(),
+  maxNotionalUsdc = null,
+}) {
   const identity = ownSubmittedOrderIdentity(previousExecution);
   const considered = culledOrdersToRestore({
     liveState,
@@ -4501,6 +4509,45 @@ async function restoreCulledOrders({ liveState, previousExecution, tradingConfig
     }
     if (market.acceptingOrders === false) {
       skipped.push({ ...item, restore: false, reason: "the market is not accepting orders" });
+      continue;
+    }
+    // And the portfolio's own rules, not just the exchange's. Asked for: restore the orders
+    // on the list "that still meet the portfolio's requirements". A market that has drifted
+    // out of the probability band, or whose spread has gone untradable, since the bid was
+    // placed is not one to re-enter -- the original decision no longer holds, and restoring
+    // it would be the machine re-entering on rules the portfolio has already rejected.
+    //
+    // No evaluation for the token means the catalogue no longer carries the market at all,
+    // which is an absence rather than a rejection: that is not enough to justify putting
+    // real money back on the book, so it waits for a pass that can judge it.
+    const evaluation = evaluationByToken.get(item.tokenId);
+    if (!evaluation) {
+      skipped.push({
+        ...item,
+        restore: false,
+        reason: "no current evaluation covers this market, so its rules cannot be re-checked",
+      });
+      continue;
+    }
+    let revalidated = null;
+    try {
+      revalidated = await revalidateEvaluation(
+        evaluation,
+        liveState,
+        number(availableCashUsdc, 0),
+        number(maxNotionalUsdc, number(item.notional, 0)),
+        evaluationByToken,
+      );
+    } catch (error) {
+      skipped.push({ ...item, restore: false, reason: `revalidation failed: ${error?.message || String(error)}` });
+      continue;
+    }
+    if (revalidated?.status !== "ELIGIBLE") {
+      skipped.push({
+        ...item,
+        restore: false,
+        reason: `the portfolio's rules no longer accept this market: ${(revalidated?.rejectReasons || []).join("; ") || "not eligible"}`,
+      });
       continue;
     }
     const response = await restoreOpenOrder({
@@ -4836,25 +4883,6 @@ async function main() {
   // being asked.
   const restingBookCeiling = Number(restingBookCeilingUsdc(cash).toFixed(5));
   let restingBookHeadroom = restingBookHeadroomUsdc(liveState, cash);
-  // A bid the exchange culled off a market that is still running goes back before anything
-  // new is considered. It is not a new decision -- the portfolio already chose that market
-  // at that price -- so it has first claim on the headroom, ahead of a fresh candidate.
-  // Charged against the same headroom, because restoring into an overcommitted book is how
-  // the next cull gets fed.
-  const culledOrderRestore = await restoreCulledOrders({
-    liveState,
-    previousExecution,
-    tradingConfig,
-    headroomUsdc: restingBookHeadroom,
-    availableCashUsdc: availableCash,
-  });
-  culledOrderRestoreForRun = culledOrderRestore;
-  const restoredNotional = culledOrderRestore.restored
-    .filter((entry) => entry.accepted)
-    .reduce((sum, entry) => sum + number(entry.notionalUsdc, 0), 0);
-  if (restoredNotional > 0) {
-    restingBookHeadroom = Number(Math.max(0, restingBookHeadroom - restoredNotional).toFixed(5));
-  }
   const portfolioValue = livePortfolioValue(liveState, cash);
   const legacyFractionNotional = portfolioValue * MAX_ORDER_FRACTION;
   const configuredStakeUsdc = Number.isFinite(LIVE_STAKE_USDC) && LIVE_STAKE_USDC > 0
@@ -4867,7 +4895,7 @@ async function main() {
   // The headroom joins the two limits that were already here. A pass with cash to spend but
   // no headroom rests nothing rather than adding to a book the exchange is about to cull --
   // and the run says so, because "nothing was placed" needs a reason a reader can act on.
-  const directMaxNotional = Number(Math.min(maxNotional, availableCash, restingBookHeadroom).toFixed(5));
+  let directMaxNotional = Number(Math.min(maxNotional, availableCash, restingBookHeadroom).toFixed(5));
   if (restingBookHeadroom < maxNotional) {
     console.log(`resting book is at ${activeBuyOrderReservationUsdc(liveState).toFixed(2)} USDC against`
       + ` ${cash.toFixed(2)} USDC cash (ceiling ${restingBookCeiling.toFixed(2)} at ${RESTING_BOOK_CASH_MULTIPLE}x),`
@@ -4887,6 +4915,40 @@ async function main() {
   const latestEvaluations = candidatePool.uniqueEvaluations;
   const evaluationByToken = new Map(latestEvaluations.map((item) => [String(item.tokenId || ""), item]).filter(([tokenId]) => tokenId));
   const manualShortlistFallback = candidatePool.diagnostics.manualShortlistFallback === true;
+
+  // A bid the exchange culled off a market that is still running goes back before anything
+  // new is considered. It is not a new decision -- the portfolio already chose that market
+  // at that price -- so it has first claim on the headroom, ahead of a fresh candidate.
+  //
+  // Placed here, after the evaluation map exists, because a restore has to be re-checked
+  // against the portfolio's own rules and not merely against the exchange: asked for, "all
+  // the orders on the list that still meet the portfolio's requirements". A market that has
+  // drifted out of the probability band since the bid was placed is not one to re-enter, and
+  // without the map there is nothing to judge that with. It still runs before any new
+  // candidate is placed, and its notional comes out of the headroom the rest of the pass may
+  // use, because restoring into an overcommitted book is how the next cull gets fed.
+  const culledOrderRestore = await restoreCulledOrders({
+    liveState,
+    previousExecution,
+    tradingConfig,
+    headroomUsdc: restingBookHeadroom,
+    availableCashUsdc: availableCash,
+    evaluationByToken,
+    maxNotionalUsdc: maxNotional,
+  });
+  culledOrderRestoreForRun = culledOrderRestore;
+  const restoredNotional = culledOrderRestore.restored
+    .filter((entry) => entry.accepted)
+    .reduce((sum, entry) => sum + number(entry.notionalUsdc, 0), 0);
+  if (restoredNotional > 0) {
+    restingBookHeadroom = Number(Math.max(0, restingBookHeadroom - restoredNotional).toFixed(5));
+    // A restored bid is on the book now, so the room a new candidate may take has to shrink
+    // by the same amount. Leaving directMaxNotional at its pre-restore value would let one
+    // pass rest the restored bid and then a fresh one on top of it, which is the very
+    // overcommitment the ceiling exists to stop.
+    directMaxNotional = Number(Math.min(maxNotional, availableCash, restingBookHeadroom).toFixed(5));
+  }
+
   // A rotation is a single approved swap. After its sell leg, the completion pass
   // must revalidate and buy exactly that approved replacement. Re-running the general
   // shortlist here previously sold a position and then sometimes bought the same token

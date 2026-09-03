@@ -2391,6 +2391,49 @@ async function main() {
     generatedAt,
   );
   const cashUsdc = number(balanceAllowance?.collateral?.balanceUsdc);
+  // Cash arriving is its own reason to run the executor, and until now nothing said so.
+  //
+  // Reported: free capital was about 1 USDC, the book went from ~10 resting bids to one,
+  // and the bids that were culled stayed gone. They cannot be re-rested while there is no
+  // collateral to back them -- the exchange would refuse -- so the moment that matters is
+  // when a redeem or a settlement turns a resolved position back into cash. This sync
+  // dispatches an execution run when an open order releases capital, and only then; a
+  // redeem paying out was invisible to it, so the restore pass simply never ran at a
+  // moment when it could have done anything.
+  //
+  // The delta is measured against our own previous snapshot rather than derived from the
+  // redeem alerts: what decides whether an order can go back is the balance, whatever moved
+  // it. Reported as a signal, not acted on here -- the sync publishes state, the workflow
+  // decides to dispatch.
+  const previousCashUsdc = number(previousLiveState?.portfolio?.cashUsdc);
+  const cashDeltaUsdc = cashUsdc != null && previousCashUsdc != null
+    ? Number((cashUsdc - previousCashUsdc).toFixed(6))
+    : null;
+  // A bid this account could put back: it left the book with nothing filled, and its market
+  // has not settled. `finalOutcomePrice` is set by refreshUnfilledLimitOrderOutcomes once
+  // Polymarket publishes a settlement, so its absence is what "still open" means here.
+  const restorableUnfilledOrders = unfilledLimitOrders.filter((order) => (
+    String(order?.status || "").toUpperCase() === "LIVE_LIMIT_ORDER_UNFILLED"
+    && number(order?.filledSize, 0) <= 0.000001
+    && optionalNumber(order?.finalOutcomePrice) == null
+  ));
+  const restorableStakeUsdc = Number(restorableUnfilledOrders
+    .reduce((sum, order) => sum + number(order?.stakeUsdc ?? order?.releasedCapitalUsdc, 0), 0)
+    .toFixed(6));
+  const restorableCapital = {
+    cashUsdc,
+    previousCashUsdc,
+    cashDeltaUsdc,
+    waitingOrders: restorableUnfilledOrders.length,
+    waitingStakeUsdc: restorableStakeUsdc,
+    // The cheapest bid on the list, because that is what decides whether the cash that just
+    // arrived is enough to put anything back at all.
+    smallestWaitingStakeUsdc: restorableUnfilledOrders.length
+      ? Number(Math.min(...restorableUnfilledOrders
+        .map((order) => number(order?.stakeUsdc ?? order?.releasedCapitalUsdc, Infinity)))
+        .toFixed(6))
+      : null,
+  };
   const pendingRedeemUsdc = number(portfolioBase.pendingRedeemUsdc, 0);
   const equityUsdc = cashUsdc == null
     ? portfolioBase.equityUsdc
@@ -2541,6 +2584,9 @@ async function main() {
     balanceAllowance,
     openOrders,
     releasedOrderCapital,
+    // Why an execution run may be worth dispatching even though no order left the book:
+    // cash arrived and there are bids waiting to go back on.
+    restorableCapital,
     unfilledLimitOrders,
     positions: reconciledPositions,
     apiPositions: openApiPositions,
@@ -2569,6 +2615,8 @@ async function main() {
     unfilledLimitOrders: unfilledLimitOrders.length,
     freedOrderCapitalUsdc: releasedOrderCapital.freedCapitalUsdc,
     cashUsdc: payload.portfolio.cashUsdc,
+    cashDeltaUsdc: restorableCapital.cashDeltaUsdc,
+    ordersWaitingToBeRestored: restorableCapital.waitingOrders,
     closedTrades: closedTrades.length,
     redeemAlerts: notifications.redeemAlerts.length,
     unsentRedeemAlerts: notifications.unsentRedeemAlerts.length,
