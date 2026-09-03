@@ -3994,8 +3994,10 @@ function marketTagsInfo(row = {}) {
   // page on click -- see openMarketTagsPanel. Rendering a list per row alongside the
   // button is what added a second line to every row: `.ledger td span` makes any span in
   // a table cell a block with a top margin.
+  // "tags", not an "i". The italic i is the convention for "more information", which said
+  // nothing about what was behind it; the word does.
   return `<button class="market-tags-button" type="button" data-market-tags="${escapeHtml(tags.join(","))}"
-    aria-expanded="false" title="${escapeHtml(label)}" aria-label="${escapeHtml(label)}">i</button>`;
+    aria-expanded="false" title="${escapeHtml(label)}" aria-label="${escapeHtml(label)}">tags</button>`;
 }
 
 function tradeTypeBadge(trade) {

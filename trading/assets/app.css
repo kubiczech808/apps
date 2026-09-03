@@ -2604,10 +2604,12 @@ body.modal-open {
   align-items: center;
   justify-content: center;
   flex: 0 0 auto;
-  width: 16px;
-  height: 16px;
+  /* Sized by its word rather than fixed at 16px square: it used to be an italic "i", the
+     convention for "more information", which said nothing about what was behind it. */
+  width: auto;
+  height: auto;
   margin: 0 0 0 5px !important;
-  padding: 0;
+  padding: 2px 6px;
   border: 1px solid var(--line);
   border-radius: 999px;
   background: var(--soft);
@@ -2615,8 +2617,9 @@ body.modal-open {
   font-family: inherit;
   font-size: 10px;
   font-weight: 800;
-  font-style: italic;
-  line-height: 1;
+  letter-spacing: 0.03em;
+  line-height: 1.2;
+  text-transform: uppercase;
   vertical-align: middle;
   cursor: pointer;
 }
@@ -3251,6 +3254,18 @@ body.modal-open {
     /* The base rule sets `margin: 0 0 6px !important`, so the gap to the text it is
        floated against has to be !important too or it is dropped. */
     margin: 0 0 4px 10px !important;
+  }
+
+  /* The tags button joins the state chip in the top-right corner instead of sitting at the
+     start of the outcome's line. On a narrow card the chip is the only thing up there, and
+     a lone control on the opposite side reads as part of the market name rather than as
+     something to press.
+     Floated right like the chip, and after it in the DOM, so it lands to the chip's left --
+     with a deliberately wide gap, because they say different things and a pair of pills
+     side by side reads as one control. */
+  .trade-ledger-scroll .trade-market-cell > .market-tags-button {
+    float: right;
+    margin: 0 22px 4px 10px !important;
   }
 
   .trade-ledger-scroll .opened-trades-table .trade-market-cell::before,

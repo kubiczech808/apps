@@ -279,6 +279,41 @@ test("opportunities: an info button reveals the market's tags next to the row's 
   assert.match(APP, /window\.addEventListener\("scroll", closeMarketTagsPanel, true\)/);
 });
 
+// Asked for: say "tags" rather than an italic "i", and on a phone put the control up in the
+// top-right corner beside the state chip, well clear of it.
+test("market tags: the control says what it opens and sits beside the chip on a phone", () => {
+  const css = readFileSync(new URL("../assets/app.css", import.meta.url), "utf8");
+
+  assert.match(APP, /aria-label="\$\{escapeHtml\(label\)\}">tags<\/button>/,
+    'the button reads "tags" -- an italic "i" is the convention for "more information", '
+    + "which says nothing about what is behind it");
+
+  const buttonCss = css.slice(css.indexOf(".market-tags-button {"), css.indexOf(".market-tags-button:hover"));
+  // A four-letter word does not fit a 16px square, so the button is sized by its text.
+  assert.match(buttonCss, /width:\s*auto/);
+  assert.doesNotMatch(buttonCss, /width:\s*16px/);
+  assert.doesNotMatch(buttonCss, /font-style:\s*italic/, "the italic was there to make an i look like a glyph");
+
+  // On a narrow card the market cell is a block and the state chip is floated right. The
+  // tags control floats too, and being after the chip in the DOM it lands to the chip's
+  // left -- the top-right corner, on the chip's own line rather than at the start of the
+  // market name.
+  const narrow = css.slice(css.indexOf("@media (max-width: 680px)"));
+  const mobileRule = narrow.slice(
+    narrow.indexOf(".trade-ledger-scroll .trade-market-cell > .market-tags-button"),
+  ).slice(0, 260);
+  assert.ok(mobileRule.startsWith(".trade-ledger-scroll .trade-market-cell > .market-tags-button"),
+    "the phone placement rule has to live inside the narrow-screen media query");
+  assert.match(mobileRule, /float:\s*right/);
+  // The gap is the point of the request: two pills touching read as one control.
+  const gap = /margin:\s*0 (\d+)px 4px 10px\s*!important/.exec(mobileRule);
+  assert.ok(gap, "the gap to the chip has to be !important -- the base rule sets margin that way");
+  assert.ok(Number(gap[1]) >= 16, `the gap to the state chip is ${gap[1]}px, which is not a wide one`);
+
+  // The chip stays floated right, or there is nothing for the button to sit beside.
+  assert.match(narrow, /\.trade-ledger-scroll \.trade-market-cell > \.order-chip \{[^}]*float:\s*right/);
+});
+
 test("opportunities: an unsettled market keeps its own label instead of a red pending chip", () => {
   // Requested: no "Pending resolution" label -- leave "Open position", or the resting
   // order's own label. The market has stopped trading but its settlement price is not
