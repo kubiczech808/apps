@@ -131,13 +131,24 @@ async function main() {
   }
 
   console.log(`\n== 4. what our executor decided about it, from the run logs`);
-  const modes = ["live", "live-5050", ...Object.keys((await fetchJson(`${HOST}/api.php?action=portfolio-config`).catch(() => ({})))?.config?.livePortfolios || {}).map((id) => `live-custom-${id}`)];
-  for (const mode of modes) {
-    const file = mode === "live" ? "live-execution-state.json" : `live-execution-state-${mode}.json`;
+  // The names app.js uses (liveExecutionStateFile). Guessing them wrong is not a null
+  // result: the first version of this tool fetched live-execution-state-live-5050.json,
+  // got a 404, skipped silently, and printed "0 log entries" for the one portfolio it had
+  // actually looked at -- which would have read as "our code did not do it".
+  const config = await fetchJson(`${HOST}/api.php?action=portfolio-config`).catch(() => null);
+  const customIds = Object.keys(config?.config?.livePortfolios || {});
+  const files = [
+    ["live", "data/live-execution-state.json"],
+    ["live-5050", "data/live-5050-execution-state.json"],
+    ...customIds.map((id) => [`live-custom-${id}`, `data/live-${id}-execution-state.json`]),
+  ];
+  console.log(`   portfolios to check: ${files.map(([mode]) => mode).join(", ")}`);
+  for (const [mode, file] of files) {
     let execution = null;
     try {
-      execution = await fetchJson(`${HOST}/data/${file}`);
-    } catch {
+      execution = await fetchJson(`${HOST}/${file}`);
+    } catch (error) {
+      console.log(`\n   ${mode}: log unavailable (${file}) -- ${String(error.message).slice(0, 60)}`);
       continue;
     }
     const runs = [execution, ...(Array.isArray(execution?.runLog) ? execution.runLog : [])];
@@ -160,7 +171,7 @@ async function main() {
         }
       }
     }
-    console.log(`\n   ${mode}: ${hits.length} log entr${hits.length === 1 ? "y" : "ies"} naming this event`);
+    console.log(`\n   ${mode}: ${runs.length} run(s) in the log, ${hits.length} entr${hits.length === 1 ? "y" : "ies"} naming this event`);
     for (const hit of hits.slice(0, 12)) {
       console.log(`      ${(hit.at || "-").slice(0, 19)}  ${hit.kind.padEnd(18)} ${hit.action || "-"}`);
       if (hit.reason) console.log(`         ${hit.reason.slice(0, 190)}`);
@@ -168,12 +179,48 @@ async function main() {
     }
   }
 
+  // The decisive test for the one cause the account owner already accepts as valid.
+  // Polymarket cancels resting orders whose collateral stops being covered, and the account
+  // rests several ~5 USDC bids against one balance. If that is what happened, this order did
+  // not vanish alone: a fill somewhere consumed the cash and the exchange dropped the rest of
+  // the book in the same moment. One order gone by itself is a different story entirely.
+  console.log(`\n== 5. did it vanish alone, or with a cluster?`);
+  const unfilled = Array.isArray(live?.unfilledLimitOrders) ? live.unfilledLimitOrders : [];
+  const clusters = new Map();
+  for (const row of unfilled) {
+    const at = text(row.closedAt || row.detectedAt);
+    if (!at) continue;
+    if (!clusters.has(at)) clusters.set(at, []);
+    clusters.get(at).push(row);
+  }
+  const ours = unfilled.filter(mentionsEvent).map((row) => text(row.closedAt || row.detectedAt));
+  for (const at of [...new Set(ours)]) {
+    const cluster = clusters.get(at) || [];
+    const staked = cluster.reduce((sum, row) => sum + Number(row.stakeUsdc || row.releasedCapitalUsdc || 0), 0);
+    console.log(`   ${at}: ${cluster.length} order(s) left the book together, ${staked.toFixed(2)} USDC released`);
+    for (const row of cluster.slice(0, 12)) {
+      console.log(`      ${mentionsEvent(row) ? "->" : "  "} [${text(row.outcome) || "-"}] ${text(row.question).slice(0, 44)}`
+        + `   price ${text(row.price)}   stake ${text(row.stakeUsdc)}   filled ${text(row.filledSize) || "0"}`);
+    }
+  }
+  // And what the account was holding at that moment, since a fill is what frees the cash
+  // the exchange then finds missing.
+  const filledAround = (Array.isArray(live?.activity) ? live.activity : [])
+    .filter((row) => ours.some((at) => Math.abs(Date.parse(at) - Date.parse(text(row.timestamp))) < 45 * 60 * 1000))
+    .filter((row) => lower(row.side || row.type).includes("buy"));
+  console.log(`\n   buys recorded within 45 min of that moment: ${filledAround.length}`);
+  for (const row of filledAround.slice(0, 10)) {
+    console.log(`      ${text(row.timestamp)}  ${text(row.question).slice(0, 46)}`
+      + `   ${text(row.price)} x ${text(row.size)}`);
+  }
+
   console.log(`\n== what this means`);
   console.log(`   An entry under "order review" with action REPLACE or CANCEL_FOR_BETTER_CANDIDATE,`);
-  console.log(`   or an "expiry withdrawal", is our own code taking the order off the book.`);
-  console.log(`   No such entry, while section 1 shows it left the book, means Polymarket removed`);
-  console.log(`   it -- which it does when the collateral behind a resting order stops being`);
-  console.log(`   covered, and when a market stops accepting orders.`);
+  console.log(`   or an "expiry withdrawal", is our own code taking the order off the book. That`);
+  console.log(`   only happens on a resolved market or alongside an immediate replacement.`);
+  console.log(`   No such entry in ANY portfolio's log, while section 1 shows it left the book,`);
+  console.log(`   means Polymarket removed it -- and section 5 says whether that was the`);
+  console.log(`   collateral cascade (a cluster) or something that took this order alone.`);
 }
 
 main().catch((error) => {
