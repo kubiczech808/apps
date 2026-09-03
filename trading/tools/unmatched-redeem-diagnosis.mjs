@@ -33,14 +33,18 @@ const questionKey = (item) => text(item?.question)
   .normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase()
   .replace(/[^a-z0-9]+/g, " ").trim();
 
-// The sync's own marker for these rows, plus the shape they have, so a row that lost the
-// marker in some merge is still recognised.
+// What actually makes one of these rows a problem is that it has no cost basis. The sync's
+// markers are a hint, not the definition: mergeClosedTradeHistory deliberately preserves
+// closedAtSource, so a row first seen as an unmatched redemption keeps that label for life
+// even after a later run finds its buy and prices it. Reading the label alone reported 52
+// broken rows when 46 of them were whole.
 function isUnmatchedRedeem(row = {}) {
+  const priced = row.stakeUsdc != null || row.entryPrice != null;
+  if (priced) return false;
   if (row.reconciliationOnly === true) return true;
   if (text(row.openedAtSource) === "redeem-activity-unmatched") return true;
   if (text(row.closedAtSource) === "redeem-activity-unmatched") return true;
-  return text(row.status).toUpperCase() === "REDEEMED"
-    && row.stakeUsdc == null && row.entryPrice == null;
+  return text(row.status).toUpperCase() === "REDEEMED";
 }
 
 const hours = (from, to) => (Date.parse(to) - Date.parse(from)) / 3600000;
