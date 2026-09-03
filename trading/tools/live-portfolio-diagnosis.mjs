@@ -69,7 +69,13 @@ function functionSource(source, name) {
 // The dashboard's own attribution chain, wired to a stubbed `state` and mode.
 async function attributionFor(mode, { fixedEntryExecution, config }) {
   const app = await readFile(new URL("../assets/app.js", import.meta.url), "utf8");
+  // submittedTokenIds and fixedEntryTokenIds used to be in this list. Attribution was
+  // rewritten to ask each live portfolio's own order log who owns a token -- the only signal
+  // that can separate three or more live portfolios sharing one wallet -- and both became
+  // dead code and were deleted, which left this naming functions that no longer exist. The
+  // chain below is the one the dashboard actually runs now.
   const names = [
+    "memoizedByIdentity",
     "isClosedTrade",
     "normalizeFixedEntryPrice",
     "fixedEntryPriceSignatures",
@@ -78,16 +84,25 @@ async function attributionFor(mode, { fixedEntryExecution, config }) {
     "isFilledPortfolioRow",
     "fixedEntryOrderPricesByToken",
     "boughtAtFixedEntryPrice",
-    "submittedTokenIds",
-    "fixedEntryTokenIds",
+    "normalizeMode",
+    "customLivePortfolioIdFromMode",
+    "allLiveModes",
+    "liveOrdersByToken",
+    "newestLiveOrder",
+    "liveTokenOwnerMode",
+    "belongsToLivePortfolio",
     "belongsToActiveLivePortfolio",
   ];
   const body = names.map((name) => functionSource(app, name)).join("\n\n");
   // The price matcher reads a module constant, so it has to come across too. Without it
   // the whole report died inside the first attribution call.
   const tolerance = /const FIXED_ENTRY_PRICE_TOLERANCE = [\d.]+;/.exec(app)?.[0] || "";
+  const constants = 'const CUSTOM_PAPER_STRATEGY_ID = /^[a-z][a-zA-Z0-9]{1,30}$/;'
+    + '\nconst BUILT_IN_PAPER_STRATEGY_IDS = [];'
+    + '\nconst draftedCustomLivePortfolioId = () => null;';
   return new Function("state", "isFixedEntryMode", "portfolioConfigForMode", `
     ${tolerance}
+    ${constants}
     ${body}
     return { belongsToActiveLivePortfolio, boughtAtFixedEntryPrice, isFilledPortfolioRow,
       restsAtFixedEntryPrice, fixedEntryPriceSignatures, fixedEntryOrderPricesByToken };

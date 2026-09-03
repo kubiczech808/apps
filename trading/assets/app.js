@@ -7152,10 +7152,47 @@ function scrapedMarketStateIsLoaded() {
   return state.scrapedMarketStateLoaded;
 }
 
+// Build an index once and keep it until the state behind it is replaced.
+//
+// Several lookups here are called once per table row and rebuild a whole index each time --
+// a fresh copy of the scraped catalogue, or a walk of every portfolio's run log. Each call
+// site reads like a lookup, which is exactly why the cost hid: it is quadratic in the row
+// count and invisible in the code. Measured at production sizes by
+// tools/dashboard-render-benchmark.mjs, one 150-row table spent 26 ms on attribution and
+// 14 ms on metadata, against 0.2 ms to build either index once.
+//
+// The cache key is the IDENTITY of the state each index reads. A new payload replaces those
+// objects wholesale, so the index rebuilds exactly when its inputs change and can never
+// serve a stale answer behind one. Identity, not a version counter, because there is nothing
+// to remember to increment.
+//
+// The cache hangs off the calling function rather than a closure variable beside it, so each
+// memoized function stays a single `function name() { ... }` declaration. The tests and the
+// diagnosis tools run these functions by extracting them from this file by name, and a memo
+// that lived outside the declaration would be silently left behind by every one of them.
+function memoizedByIdentity(owner, inputs, build) {
+  const cached = owner.memo;
+  if (cached && cached.inputs.length === inputs.length
+    && cached.inputs.every((key, index) => key === inputs[index])) return cached.value;
+  const value = build();
+  owner.memo = { inputs, value };
+  return value;
+}
+
+// Memoized for two reasons. It filters up to 1200 rows and is read once per table row --
+// but more importantly it returned a NEW array on every call, so anything keyed on its
+// identity could never hit a cache. A stable array is what makes the indexes below
+// cacheable at all.
 function scrapedMarketObservations() {
-  if (state.scrapedMarketStateLoaded) return state.scrapedMarketObservations;
-  const observations = Array.isArray(state.botState?.marketObservations) ? state.botState.marketObservations : [];
-  return observations.filter((item) => !scrapedObservationIsError(item));
+  return memoizedByIdentity(
+    scrapedMarketObservations,
+    [state.scrapedMarketStateLoaded, state.scrapedMarketObservations, state.botState?.marketObservations],
+    () => {
+      if (state.scrapedMarketStateLoaded) return state.scrapedMarketObservations;
+      const observations = Array.isArray(state.botState?.marketObservations) ? state.botState.marketObservations : [];
+      return observations.filter((item) => !scrapedObservationIsError(item));
+    },
+  );
 }
 
 function scrapedObservationIsError(item) {
@@ -9783,21 +9820,23 @@ function isFilledPortfolioRow(row) {
 // matching the moment it is set to 0.51 -- which handed 5050's own filled positions to
 // Live. The log remembers the price each bid was rested at, whatever the setting is now.
 function fixedEntryOrderPricesByToken() {
-  const prices = new Map();
-  const execution = state.live5050ExecutionState || {};
-  const rows = [execution, ...(Array.isArray(execution.runLog) ? execution.runLog : [])];
-  for (const row of rows) {
-    for (const attempt of (Array.isArray(row?.attempts) ? row.attempts : [])) {
-      const action = String(attempt?.action || "").toUpperCase();
-      if (action.includes("REJECT") || action.startsWith("DRY_RUN")) continue;
-      const tokenId = String(attempt?.tokenId || "");
-      const price = Number(attempt?.orderPrice);
-      if (!tokenId || !Number.isFinite(price)) continue;
-      if (!prices.has(tokenId)) prices.set(tokenId, new Set());
-      prices.get(tokenId).add(Number(price.toFixed(4)));
+  return memoizedByIdentity(fixedEntryOrderPricesByToken, [state.live5050ExecutionState], () => {
+    const prices = new Map();
+    const execution = state.live5050ExecutionState || {};
+    const rows = [execution, ...(Array.isArray(execution.runLog) ? execution.runLog : [])];
+    for (const row of rows) {
+      for (const attempt of (Array.isArray(row?.attempts) ? row.attempts : [])) {
+        const action = String(attempt?.action || "").toUpperCase();
+        if (action.includes("REJECT") || action.startsWith("DRY_RUN")) continue;
+        const tokenId = String(attempt?.tokenId || "");
+        const price = Number(attempt?.orderPrice);
+        if (!tokenId || !Number.isFinite(price)) continue;
+        if (!prices.has(tokenId)) prices.set(tokenId, new Set());
+        prices.get(tokenId).add(Number(price.toFixed(4)));
+      }
     }
-  }
-  return prices;
+    return prices;
+  });
 }
 
 // Reported live: a trade opened and shown under Live closed under 90 -> 50% instead.
@@ -9841,28 +9880,37 @@ function allLiveModes() {
 // third live portfolio each of them showed the others' positions, resting orders, unfilled
 // orders and closed trades as its own, and the Resolved accuracy tile counted them all.
 function liveOrdersByToken() {
-  const orders = new Map();
-  for (const mode of allLiveModes()) {
-    const normalized = normalizeMode(mode);
-    const executionState = normalized === "live-5050"
-      ? (state.live5050ExecutionState || (state.liveExecutionByMode || {})[normalized])
-      : (state.liveExecutionByMode || {})[normalized];
-    if (!executionState) continue;
-    const records = [executionState, ...(Array.isArray(executionState.runLog) ? executionState.runLog : [])];
-    for (const record of records) {
-      const at = String(record?.generatedAt || record?.runAt || executionState.generatedAt || "");
-      for (const attempt of (Array.isArray(record?.attempts) ? record.attempts : [])) {
-        const action = String(attempt?.action || "").toUpperCase();
-        if (action.includes("REJECT") || action.startsWith("DRY_RUN")) continue;
-        const tokenId = String(attempt?.tokenId || "");
-        if (!tokenId) continue;
-        const price = Number(attempt?.orderPrice);
-        if (!orders.has(tokenId)) orders.set(tokenId, []);
-        orders.get(tokenId).push({ mode: normalized, price: Number.isFinite(price) ? price : null, at });
+  const modes = allLiveModes();
+  const byMode = state.liveExecutionByMode || {};
+  // state.liveExecutionByMode is filled in place -- state.liveExecutionByMode[mode] = payload
+  // -- so the container's own identity never changes and would be a key that never
+  // invalidates. Each mode's payload IS replaced wholesale when it loads, so the key is the
+  // mode list plus the payload currently behind each mode.
+  const inputs = [modes.join("|"), state.live5050ExecutionState, ...modes.map((mode) => byMode[normalizeMode(mode)])];
+  return memoizedByIdentity(liveOrdersByToken, inputs, () => {
+    const orders = new Map();
+    for (const mode of modes) {
+      const normalized = normalizeMode(mode);
+      const executionState = normalized === "live-5050"
+        ? (state.live5050ExecutionState || byMode[normalized])
+        : byMode[normalized];
+      if (!executionState) continue;
+      const records = [executionState, ...(Array.isArray(executionState.runLog) ? executionState.runLog : [])];
+      for (const record of records) {
+        const at = String(record?.generatedAt || record?.runAt || executionState.generatedAt || "");
+        for (const attempt of (Array.isArray(record?.attempts) ? record.attempts : [])) {
+          const action = String(attempt?.action || "").toUpperCase();
+          if (action.includes("REJECT") || action.startsWith("DRY_RUN")) continue;
+          const tokenId = String(attempt?.tokenId || "");
+          if (!tokenId) continue;
+          const price = Number(attempt?.orderPrice);
+          if (!orders.has(tokenId)) orders.set(tokenId, []);
+          orders.get(tokenId).push({ mode: normalized, price: Number.isFinite(price) ? price : null, at });
+        }
       }
     }
-  }
-  return orders;
+    return orders;
+  });
 }
 
 // A token can appear in two portfolios' logs -- one traded it after the other closed out.
@@ -9958,49 +10006,96 @@ function liveUnfilledLimitOrders(liveState, mode = state.mode) {
   return rows.filter(isUnfilledLimitOrder).filter((row) => belongsToLivePortfolio(row, mode));
 }
 
+function evaluationsByTokenId() {
+  return memoizedByIdentity(
+    evaluationsByTokenId,
+    [state.botState?.evaluations, scrapedMarketObservations()],
+    () => {
+      const evaluations = Array.isArray(state.botState?.evaluations) ? state.botState.evaluations : [];
+      const byToken = new Map();
+      for (const item of [...evaluations, ...scrapedMarketObservations()]) {
+        const token = String(item.tokenId || item.clobTokenId || item.assetId || "");
+        // First wins, which is what the linear .find() this replaces returned.
+        if (!token || byToken.has(token)) continue;
+        byToken.set(token, item);
+      }
+      return byToken;
+    },
+  );
+}
+
 function evaluationByTokenId(tokenId) {
   const token = String(tokenId || "");
   if (!token) return null;
-  const evaluations = Array.isArray(state.botState?.evaluations) ? state.botState.evaluations : [];
-  const scraped = scrapedMarketObservations();
-  return [...evaluations, ...scraped]
-    .find((item) => String(item.tokenId || item.clobTokenId || item.assetId || "") === token) || null;
+  return evaluationsByTokenId().get(token) || null;
+}
+
+// Every market description the dashboard can name a trade from, indexed once: the current
+// portfolio's execution log first, then the scraped catalogue, then the evaluations. That
+// order is a priority order, so each source's position in it is kept alongside it.
+function liveMarketMetadataIndex() {
+  return memoizedByIdentity(
+    liveMarketMetadataIndex,
+    [state.botState?.evaluations, scrapedMarketObservations(), state.liveExecutionState],
+    () => {
+      const evaluations = Array.isArray(state.botState?.evaluations) ? state.botState.evaluations : [];
+      const scraped = scrapedMarketObservations();
+      const execution = state.liveExecutionState || {};
+      const executionRows = [
+        execution.selected,
+        ...(Array.isArray(execution.revalidationUpdates) ? execution.revalidationUpdates : []),
+        ...(Array.isArray(execution.attempts) ? execution.attempts : []),
+        ...(Array.isArray(execution.runLog)
+          ? execution.runLog.flatMap((run) => [run?.selected, ...(Array.isArray(run?.revalidationUpdates) ? run.revalidationUpdates : [])])
+          : []),
+      ].filter(Boolean);
+      const byToken = new Map();
+      const byMarket = new Map();
+      [...executionRows, ...scraped, ...evaluations].forEach((candidate, order) => {
+        const token = String(
+          candidate.tokenId || candidate.clobTokenId || candidate.assetId || candidate.asset || "",
+        ).trim();
+        if (token && !byToken.has(token)) byToken.set(token, { candidate, order });
+        const market = String(
+          candidate.marketId || candidate.conditionId || candidate.market || "",
+        ).trim().toLowerCase();
+        if (market && !byMarket.has(market)) byMarket.set(market, { candidate, order });
+      });
+      return { byToken, byMarket };
+    },
+  );
+}
+
+// A row carries several ids and any of them may hit. The scan this replaces walked the
+// sources in priority order and returned the first one that matched ANY of the row's ids, so
+// picking the lowest recorded position -- not the first id that happens to hit -- is what
+// keeps the answer identical.
+function earliestIndexedMatch(index, keys) {
+  let best = null;
+  for (const key of keys) {
+    const hit = index.get(key);
+    if (hit && (!best || hit.order < best.order)) best = hit;
+  }
+  return best ? best.candidate : null;
 }
 
 function liveMarketMetadataForTrade(item = {}) {
-  const evaluations = Array.isArray(state.botState?.evaluations) ? state.botState.evaluations : [];
-  const scraped = scrapedMarketObservations();
-  const execution = state.liveExecutionState || {};
-  const executionRows = [
-    execution.selected,
-    ...(Array.isArray(execution.revalidationUpdates) ? execution.revalidationUpdates : []),
-    ...(Array.isArray(execution.attempts) ? execution.attempts : []),
-    ...(Array.isArray(execution.runLog)
-      ? execution.runLog.flatMap((run) => [run?.selected, ...(Array.isArray(run?.revalidationUpdates) ? run.revalidationUpdates : [])])
-      : []),
-  ].filter(Boolean);
-  const sources = [...executionRows, ...scraped, ...evaluations];
-  const tokenIds = new Set([
+  const { byToken, byMarket } = liveMarketMetadataIndex();
+  const tokenIds = [
     item.tokenId,
     item.clobTokenId,
     item.assetId,
     item.asset,
     item.tokenID,
-  ].map((value) => String(value || "").trim()).filter(Boolean));
-  const marketIds = new Set([
+  ].map((value) => String(value || "").trim()).filter(Boolean);
+  const tokenMatch = earliestIndexedMatch(byToken, tokenIds);
+  if (tokenMatch) return tokenMatch;
+  const marketIds = [
     item.marketId,
     item.conditionId,
     item.market,
-  ].map((value) => String(value || "").trim().toLowerCase()).filter(Boolean));
-  const tokenMatch = sources.find((candidate) => tokenIds.has(String(
-    candidate.tokenId || candidate.clobTokenId || candidate.assetId || candidate.asset || "",
-  ).trim()));
-  if (tokenMatch) return tokenMatch;
-  const marketMatch = sources.find((candidate) => marketIds.has(String(
-    candidate.marketId || candidate.conditionId || candidate.market || "",
-  ).trim().toLowerCase()));
-  if (marketMatch) return marketMatch;
-  return null;
+  ].map((value) => String(value || "").trim().toLowerCase()).filter(Boolean);
+  return earliestIndexedMatch(byMarket, marketIds);
 }
 
 function normalizedMatchText(value) {

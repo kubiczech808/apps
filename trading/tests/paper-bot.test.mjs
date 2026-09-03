@@ -4594,6 +4594,9 @@ test("5050: its own resting orders appear on its tab straight away", async () =>
   // configured entry price, far from the market by construction.
   const pick = (re) => re.exec(app)[0];
   const body = [
+    // The index builders cache on their own function object through this helper, so it has
+    // to come across with them.
+    pick(/function memoizedByIdentity\([\s\S]*?\n\}/),
     pick(/function fixedEntryPriceSignatures\([\s\S]*?\n\}/),
     pick(/function matchesFixedEntryPrice\([\s\S]*?\n\}/),
     pick(/function restsAtFixedEntryPrice\([\s\S]*?\n\}/),
@@ -5344,7 +5347,7 @@ function liveTradeAttribution(app, { mode, fixedEntryPrice = 0.51, execution5050
     }
     throw new Error(`unbalanced ${name}`);
   };
-  const body = ["allLiveModes", "allLiveModes", "liveOrdersByToken", "newestLiveOrder", "liveTokenOwnerMode", "normalizeMode", "customLivePortfolioIdFromMode", "fixedEntryPriceSignatures", "matchesFixedEntryPrice",
+  const body = ["memoizedByIdentity", "allLiveModes", "allLiveModes", "liveOrdersByToken", "newestLiveOrder", "liveTokenOwnerMode", "normalizeMode", "customLivePortfolioIdFromMode", "fixedEntryPriceSignatures", "matchesFixedEntryPrice",
     "restsAtFixedEntryPrice", "isFilledPortfolioRow", "fixedEntryOrderPricesByToken", "boughtAtFixedEntryPrice",
     "belongsToLivePortfolio", "belongsToActiveLivePortfolio", "isClosedTrade", "liveClosedTrades", "liveOpenOrders"]
     .map(pick).join("\n\n");
@@ -5614,7 +5617,7 @@ test("5050 fills: a changed entry price does not hand old fills to Live", async 
     }
     throw new Error(`unbalanced ${name}`);
   };
-  const body = ["allLiveModes", "allLiveModes", "liveOrdersByToken", "newestLiveOrder", "liveTokenOwnerMode", "normalizeMode", "customLivePortfolioIdFromMode", "fixedEntryPriceSignatures",
+  const body = ["memoizedByIdentity", "allLiveModes", "allLiveModes", "liveOrdersByToken", "newestLiveOrder", "liveTokenOwnerMode", "normalizeMode", "customLivePortfolioIdFromMode", "fixedEntryPriceSignatures",
     "matchesFixedEntryPrice", "restsAtFixedEntryPrice", "fixedEntryOrderPricesByToken",
     "isFilledPortfolioRow", "boughtAtFixedEntryPrice", "belongsToLivePortfolio", "belongsToActiveLivePortfolio",
     "isClosedTrade"].map(pick).join("\n\n");
@@ -5712,7 +5715,7 @@ test("live fills: a price that merely matches 5050's setting does not hand the t
     }
     throw new Error(`unbalanced ${name}`);
   };
-  const body = ["allLiveModes", "allLiveModes", "liveOrdersByToken", "newestLiveOrder", "liveTokenOwnerMode", "normalizeMode", "customLivePortfolioIdFromMode", "fixedEntryPriceSignatures",
+  const body = ["memoizedByIdentity", "allLiveModes", "allLiveModes", "liveOrdersByToken", "newestLiveOrder", "liveTokenOwnerMode", "normalizeMode", "customLivePortfolioIdFromMode", "fixedEntryPriceSignatures",
     "matchesFixedEntryPrice", "restsAtFixedEntryPrice", "fixedEntryOrderPricesByToken",
     "isFilledPortfolioRow", "boughtAtFixedEntryPrice", "belongsToLivePortfolio", "belongsToActiveLivePortfolio",
     "isClosedTrade"].map(pick).join("\n\n");
@@ -5950,7 +5953,7 @@ test("5050 orders: a bid is recognised at every price the portfolio bids at", as
     }
     throw new Error(`unbalanced ${name}`);
   };
-  const body = ["allLiveModes", "allLiveModes", "liveOrdersByToken", "newestLiveOrder", "liveTokenOwnerMode", "normalizeMode", "customLivePortfolioIdFromMode", "fixedEntryPriceSignatures",
+  const body = ["memoizedByIdentity", "allLiveModes", "allLiveModes", "liveOrdersByToken", "newestLiveOrder", "liveTokenOwnerMode", "normalizeMode", "customLivePortfolioIdFromMode", "fixedEntryPriceSignatures",
     "matchesFixedEntryPrice", "restsAtFixedEntryPrice", "fixedEntryOrderPricesByToken",
     "isFilledPortfolioRow", "boughtAtFixedEntryPrice", "belongsToLivePortfolio", "belongsToActiveLivePortfolio",
     "isClosedTrade", "liveOpenOrders"].map(pick).join("\n\n");

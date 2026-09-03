@@ -3022,6 +3022,7 @@ test("live attribution: every live portfolio only shows what its own log ordered
     ${extractFunction(APP, "normalizeMode")}
     ${extractFunction(APP, "customLivePortfolioIdFromMode")}
     ${extractFunction(APP, "isFixedEntryMode")}
+    ${extractFunction(APP, "memoizedByIdentity")}
     ${extractFunction(APP, "allLiveModes")}
     ${extractFunction(APP, "liveOrdersByToken")}
     ${extractFunction(APP, "newestLiveOrder")}
@@ -3091,6 +3092,77 @@ test("live attribution: every live portfolio only shows what its own log ordered
   });
   assert.equal(retraded({ tokenId: "shared-token" }, "live-custom-live2"), true);
   assert.equal(retraded({ tokenId: "shared-token" }, "live"), false);
+});
+
+// Reported: the UI reacts slowly and stutters. Several of these lookups rebuilt a whole
+// index on every call, and every one of them is called once per table row -- quadratic, and
+// invisible in the code, because each call site reads like a lookup. Measured offline at
+// production sizes by tools/dashboard-render-benchmark.mjs: one 150-row pass cost 72 ms
+// before and 1.1 ms after.
+//
+// The risk that buys is a cache that answers about state it no longer reflects, which would
+// be a far worse bug than the slowness. So the invalidation is what is pinned here: the key
+// is the IDENTITY of the state each index reads, and the loader replaces those objects
+// wholesale.
+test("dashboard indexes are cached, and rebuild when the state behind them is replaced", () => {
+  const sandbox = new Function("state", `
+    const CUSTOM_PAPER_STRATEGY_ID = ${/^[a-z][a-zA-Z0-9]{1,30}$/.toString()};
+    const draftedCustomLivePortfolioId = () => null;
+    ${extractFunction(APP, "memoizedByIdentity")}
+    ${extractFunction(APP, "normalizeMode")}
+    ${extractFunction(APP, "customLivePortfolioIdFromMode")}
+    ${extractFunction(APP, "allLiveModes")}
+    ${extractFunction(APP, "liveOrdersByToken")}
+    ${extractFunction(APP, "scrapedObservationIsError")}
+    ${extractFunction(APP, "scrapedMarketObservations")}
+    ${extractFunction(APP, "earliestIndexedMatch")}
+    ${extractFunction(APP, "liveMarketMetadataIndex")}
+    ${extractFunction(APP, "liveMarketMetadataForTrade")}
+    return { liveOrdersByToken, liveMarketMetadataForTrade };
+  `);
+
+  const live = { generatedAt: "2026-09-02T10:00:00Z", attempts: [{ action: "SUBMITTED", tokenId: "t1", orderPrice: 0.8 }] };
+  const state = {
+    portfolioConfig: { livePortfolios: {} },
+    liveExecutionByMode: { live },
+    live5050ExecutionState: null,
+    scrapedMarketStateLoaded: true,
+    scrapedMarketObservations: [{ tokenId: "t1", question: "from the catalogue" }],
+    botState: { evaluations: [] },
+    liveExecutionState: { selected: { tokenId: "t2", question: "from the run" }, attempts: [], runLog: [] },
+  };
+  const app = sandbox(state);
+
+  // Cached: a second call is the same object, not an equal one built again.
+  assert.equal(app.liveOrdersByToken(), app.liveOrdersByToken());
+
+  // The loader fills state.liveExecutionByMode IN PLACE -- state.liveExecutionByMode[mode] =
+  // payload -- so keying on that container's identity would be a key that never changes.
+  // Replacing one mode's payload, exactly as a load does, has to be visible.
+  state.liveExecutionByMode.live = {
+    generatedAt: "2026-09-02T12:00:00Z",
+    attempts: [{ action: "SUBMITTED", tokenId: "t9", orderPrice: 0.4 }],
+  };
+  assert.deepEqual([...app.liveOrdersByToken().keys()], ["t9"],
+    "a payload loaded into the same container has to invalidate the index built from it");
+
+  // A newly created live portfolio adds a mode, which changes what there is to index even
+  // though every payload already in hand is untouched.
+  state.portfolioConfig = { livePortfolios: { live2: { displayName: "Live 2" } } };
+  state.liveExecutionByMode["live-custom-live2"] = {
+    generatedAt: "2026-09-02T13:00:00Z",
+    attempts: [{ action: "SUBMITTED", tokenId: "t5", orderPrice: 0.55 }],
+  };
+  assert.deepEqual([...app.liveOrdersByToken().keys()].sort(), ["t5", "t9"]);
+
+  // The metadata index answers exactly as the linear scan it replaces did: the running
+  // portfolio's own log outranks the scraped catalogue for the same token.
+  assert.equal(app.liveMarketMetadataForTrade({ tokenId: "t1" })?.question, "from the catalogue");
+  assert.equal(app.liveMarketMetadataForTrade({ tokenId: "t2" })?.question, "from the run");
+  state.liveExecutionState = { selected: { tokenId: "t1", question: "the run knows it now" }, attempts: [], runLog: [] };
+  assert.equal(app.liveMarketMetadataForTrade({ tokenId: "t1" })?.question, "the run knows it now",
+    "the execution log outranks the catalogue, and a replaced log has to be read");
+  assert.equal(app.liveMarketMetadataForTrade({ tokenId: "nothing-knows-this" }), null);
 });
 
 // Attribution can only see a log that was loaded. With just the open tab's log in hand,
