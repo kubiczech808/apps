@@ -1,0 +1,36 @@
+name: Trading Cancelled Order Diagnosis
+
+# Read-only diagnostic, manual only. A resting bid on an event that is still running was
+# cancelled. Our own state never cancels an order on purpose -- it records what left the
+# CLOB's book -- so this establishes WHO removed it: our executor (a review that chose
+# REPLACE / CANCEL_FOR_BETTER_CANDIDATE, or the resolved-market expiry sweep) or Polymarket
+# itself, which cancels a resting order whose collateral stops being covered. Also reports
+# whether the market is resolved at all, and whether its book is still tradable.
+# Writes nothing, publishes nothing, no secrets.
+on:
+  workflow_dispatch:
+    inputs:
+      event_slug:
+        description: "Polymarket event slug to trace"
+        required: false
+        default: "cs2-pha-og1-2026-09-03"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Trace the cancelled order
+        working-directory: trading
+        env:
+          EVENT_SLUG: ${{ inputs.event_slug || 'cs2-pha-og1-2026-09-03' }}
+        run: node tools/cancelled-order-diagnosis.mjs
