@@ -1,0 +1,35 @@
+name: Trading Redeem Cost Basis Probe
+
+# Read-only diagnostic, manual only. 52 of 137 stored closed rows are redemptions with no
+# stake and no P/L, and they are the newest rows rather than the oldest -- so the "the buy
+# aged out of a capped feed" premise the sync was written on does not hold. This asks
+# Polymarket which endpoint and parameters actually return the cost basis for those markets,
+# including whether /trades hides this account's maker fills by default.
+# Writes nothing, publishes nothing, no secrets.
+on:
+  workflow_dispatch:
+    inputs:
+      sample:
+        description: "How many affected markets to probe"
+        required: false
+        default: "4"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Probe redeem cost basis
+        working-directory: trading
+        env:
+          PROBE_SAMPLE: ${{ inputs.sample || '4' }}
+        run: node tools/redeem-cost-basis-probe.mjs
