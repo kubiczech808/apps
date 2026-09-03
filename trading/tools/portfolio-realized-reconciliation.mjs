@@ -145,12 +145,17 @@ async function main() {
       const key = text(row.id) || `${text(row.tokenId)}:${text(row.closedAt)}`;
       seen.set(key, (seen.get(key) || 0) + 1);
     }
-    const gap = accountRealized - realized;
+    const gap = realized - accountRealized;
+    // 5050 already derived its own before the fix, so it was never affected -- saying "the
+    // tile showed the account figure" of every portfolio alike would overstate the bug by
+    // one row, which is the sort of thing a reader then repeats.
+    const wasAffected = api.normalizeMode(mode) !== "live-5050";
     console.log(`   ${mode.padEnd(24)} own realized ${realized.toFixed(2).padStart(9)} USDC`
       + `   from ${String(own.length).padStart(3)} closed row(s)`
       + `   stake ${stake.toFixed(2).padStart(8)}`);
-    console.log(`   ${" ".repeat(24)} the tile showed ${accountRealized.toFixed(2)} instead`
-      + `  -> off by ${gap >= 0 ? "+" : ""}${gap.toFixed(2)} USDC`);
+    console.log(`   ${" ".repeat(24)} ${wasAffected
+      ? `the tile showed the account's ${accountRealized.toFixed(2)} -> was off by ${gap >= 0 ? "+" : ""}${gap.toFixed(2)} USDC`
+      : "already read its own before the fix, so it was never affected"}`);
   }
 
   console.log(`\n== do the parts add up?`);
