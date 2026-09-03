@@ -236,6 +236,11 @@ const ROTATION_NEAR_MAX_WIN_GAP = Math.max(
 // minimum rather than refusing to trade. This ceiling stops an unusual `mos` from
 // dragging the stake somewhere the portfolio never agreed to.
 const MIN_ORDER_STAKE_CEILING_USDC = Math.max(0, envNumber("LIVE_MIN_ORDER_STAKE_CEILING_USDC", 10));
+// Polymarket's minimum order size in shares, used as the fallback when a market does not
+// publish its own `mos`. Named because the pre-flight check below prices the cheapest order
+// this portfolio could possibly place from it, and a bare 5 in three places would not
+// survive the exchange changing it.
+const EXCHANGE_MIN_ORDER_SIZE = envNumber("LIVE_EXCHANGE_MIN_ORDER_SIZE", 5);
 const ROTATION_TIE_EPSILON = 0.000001;
 const LIVE_AUTO_ROTATE = String(process.env.LIVE_AUTO_ROTATE ?? "true").toLowerCase() !== "false";
 const OPEN_STATUSES = new Set(["OPEN", "PENDING_RESOLUTION", "MARKET_NOT_FOUND", "ORDER_STATUS_LIVE", "LIVE"]);
@@ -2866,7 +2871,7 @@ async function revalidateEvaluation(
   const clobMarket = await fetchClobMarket(market.conditionId).catch(() => null);
   const book = bestBook(await fetchJson(new URL(`/book?token_id=${evaluation.tokenId}`, CLOB_HOST), `CLOB book ${evaluation.tokenId}`));
   const tick = number(clobMarket?.mts ?? market.orderPriceMinTickSize ?? evaluation.tickSize, 0.01);
-  const minOrderSize = number(clobMarket?.mos, 5);
+  const minOrderSize = number(clobMarket?.mos, EXCHANGE_MIN_ORDER_SIZE);
   const takerEntry = ROTATION_ENTRY_CROSSES_SPREAD || forceTakerEntry;
   const price = orderPriceForBook(book, tick, { forceTakerEntry });
   if (!Number.isFinite(price) || price <= 0 || price >= 1) {
@@ -3264,7 +3269,7 @@ function fixedEntryOrder(row, { price = FIXED_ENTRY_PRICE, stakeUsdc = FIXED_ENT
   const tickSize = number(row.tickSize, 0.01);
   const limitPrice = roundToTick(price, tickSize, "down");
   if (!Number.isFinite(limitPrice) || limitPrice <= 0 || limitPrice >= 1) return null;
-  const minOrderSize = number(row.minOrderSize, 5) ?? 5;
+  const minOrderSize = number(row.minOrderSize, EXCHANGE_MIN_ORDER_SIZE) ?? EXCHANGE_MIN_ORDER_SIZE;
   const wanted = stakeUsdc > 0 ? Math.floor(stakeUsdc / limitPrice) : 0;
   let size = Math.max(minOrderSize, wanted);
   // Polymarket rejects a maker amount with more than two decimals, and price * size
@@ -4810,6 +4815,38 @@ async function reviewOpenOrders({ liveState, evaluationByToken, eligible, rotati
   return { action: selectedAction.action, selected: selectedAction, reviews };
 }
 
+// Whether a run has anything left to do once it cannot fund a new entry.
+//
+// Free cash is not the only way this executor acts, and each of these is a way the pre-flight
+// gate below could wrongly stop a run that would have traded:
+//   - a rotation sells a held position to fund a better candidate, so it needs no free cash;
+//   - a rotation-completion run is finishing a swap whose sell leg has already paid;
+//   - a stale rotation-exit SELL must be cancelled and repriced or the position it reserves
+//     stays frozen;
+//   - a culled bid waiting to be restored needs the cash that may have just arrived.
+// Anything added to main() that acts without free cash has to be added here too.
+function runCanActWithoutFreeCapital({
+  rotationCompletionRun = false,
+  autoRotate = false,
+  heldPositions = 0,
+  activeSellOrders = 0,
+  restorableOrders = 0,
+} = {}) {
+  if (rotationCompletionRun) return true;
+  if (autoRotate && number(heldPositions, 0) > 0) return true;
+  if (number(activeSellOrders, 0) > 0) return true;
+  return number(restorableOrders, 0) > 0;
+}
+
+// The cheapest order the exchange would accept on any market this portfolio would enter: its
+// minimum size at the lowest price the portfolio's own probability floor allows. Below this,
+// no book can produce a fundable order, so reading books cannot change the outcome.
+function cheapestFundableEntryUsdc(minProbability = MIN_PROBABILITY, minOrderSize = EXCHANGE_MIN_ORDER_SIZE) {
+  const size = Math.max(0, number(minOrderSize, 0));
+  const price = Math.max(0.01, Math.min(1, number(minProbability, 0.01)));
+  return Number((size * price).toFixed(5));
+}
+
 async function main() {
   const [loadedLiveState, previousExecution] = await Promise.all([
     loadJsonResource(LIVE_STATE_URL, "live state"),
@@ -4849,15 +4886,6 @@ async function main() {
     }, null, 2));
     return;
   }
-  const [paperState, scrapedState] = await Promise.all([
-    loadJsonResource(PAPER_STATE_URL, "paper state"),
-    PROBABILITY_SOURCE === "polymarket"
-      ? loadScopedExecutionCatalogue(
-        executionCatalogueUrlForPortfolio(PAPER_SCRAPED_STATE_URL),
-        "scraped Polymarket state",
-      )
-      : Promise.resolve(null),
-  ]);
   // Before anything is measured against the book: a bid on a market that is over can
   // never fill for a reason worth having, and until it is withdrawn its collateral is
   // counted as committed. Sweeping first means the cash it was holding is spendable in
@@ -4901,6 +4929,97 @@ async function main() {
       + ` ${cash.toFixed(2)} USDC cash (ceiling ${restingBookCeiling.toFixed(2)} at ${RESTING_BOOK_CASH_MULTIPLE}x),`
       + ` so this pass may rest at most ${restingBookHeadroom.toFixed(2)} USDC`);
   }
+  // Nothing this run could do, established before anything expensive is fetched or asked.
+  //
+  // Reported: a manual run ended SKIP for want of capital, and the verdict arrived at the
+  // very end. It did: the shortfall was discovered one candidate at a time. Every candidate
+  // in the served catalogue was revalidated against the CLOB -- a book fetch each -- only
+  // for sharesForOrder to report that the cash could not cover the exchange minimum, and the
+  // run then summed those identical rejections into cashSizingBlocked and skipped. The
+  // answer was knowable from the wallet before the first book was read.
+  //
+  // The gate is deliberately narrow, because the cheap thing to get wrong here is skipping a
+  // run that could have traded. Free cash is not the only way this executor acts:
+  //
+  //   - a rotation sells a held position to fund a better candidate, so it needs no free
+  //     cash at all -- and it needs the catalogue to know what "better" is;
+  //   - a rotation-completion run is finishing a swap whose sell leg already paid;
+  //   - a stale rotation-exit SELL has to be cancelled and repriced, or the position it
+  //     reserves is frozen;
+  //   - a culled bid waiting to be restored needs the cash that may have just arrived.
+  //
+  // So the run stops early only when none of those apply. The expiry sweep above has
+  // already run, because withdrawing a bid on a finished market is what RELEASES capital --
+  // gating that would be gating the one step that could have changed the answer.
+  const preflightHeldPositions = openPositionsForRotation(liveState).length;
+  const activeSellOrderCount = (Array.isArray(liveState?.openOrders) ? liveState.openOrders : [])
+    .filter((order) => String(order?.side || "").toUpperCase().includes("SELL")).length;
+  const restorableCount = culledOrdersToRestore({
+    liveState,
+    previousExecution,
+    identity: ownSubmittedOrderIdentity(previousExecution),
+    headroomUsdc: restingBookHeadroom,
+    availableCashUsdc: availableCash,
+  }).filter((entry) => entry.restore).length;
+  // The cheapest order the exchange will accept on any market this portfolio would enter:
+  // its minimum size at the lowest price the portfolio's own probability floor allows. Below
+  // that, no book can produce a fundable order, so reading books cannot change the outcome.
+  const cheapestPossibleOrderUsdc = cheapestFundableEntryUsdc();
+  const canFundAnyEntry = directMaxNotional + 0.000001 >= cheapestPossibleOrderUsdc;
+  const canActAnyway = runCanActWithoutFreeCapital({
+    rotationCompletionRun: ROTATION_COMPLETION_RUN,
+    autoRotate: LIVE_AUTO_ROTATE,
+    heldPositions: preflightHeldPositions,
+    activeSellOrders: activeSellOrderCount,
+    restorableOrders: restorableCount,
+  });
+  if (!canFundAnyEntry && !canActAnyway) {
+    const reason = `No order placed: ${directMaxNotional.toFixed(2)} USDC available to commit is below the`
+      + ` ${cheapestPossibleOrderUsdc.toFixed(2)} USDC minimum any entry would cost`
+      + `${restingBookHeadroom < availableCash ? ` (capped by the resting book at ${restingBookHeadroom.toFixed(2)} USDC)` : ""}`
+      + `, and nothing else this run can act on: ${preflightHeldPositions} position(s) held with rotation`
+      + ` ${LIVE_AUTO_ROTATE ? "on" : "off"}, ${activeSellOrderCount} sell order(s) resting,`
+      + ` ${restorableCount} bid(s) to restore.`;
+    await emitDecision({
+      generatedAt: new Date().toISOString(),
+      action: "SKIP",
+      reason,
+      account: {
+        cashUsdc: cash,
+        availableCashUsdc: Number(availableCash.toFixed(5)),
+        reservedOpenOrderUsdc: Number(reservedOpenOrderUsdc.toFixed(5)),
+        ownReservedOpenOrderUsdc: Number(ownReservedOpenOrderUsdc.toFixed(5)),
+        restingBookCeilingUsdc: restingBookCeiling,
+        restingBookHeadroomUsdc: restingBookHeadroom,
+        maxNotionalUsdc: maxNotional,
+        directMaxNotionalUsdc: directMaxNotional,
+        cheapestPossibleOrderUsdc,
+      },
+      batchLog: {
+        action: "SKIP",
+        reason,
+        explanation: "The wallet cannot fund the smallest order any market would accept, and this"
+          + " run has no position to rotate, no resting sell to repair and no culled bid to put"
+          + " back. The candidate catalogue was not fetched and no market was revalidated,"
+          + " because none of that could change the outcome.",
+        expiredOrdersWithdrawn: expiredOrderSweep.withdrawn.length,
+        expiredOrderCashReleasedUsdc: expiredOrderSweep.releasedUsdc,
+        preflightSkip: true,
+      },
+      attempts: [],
+    });
+    return;
+  }
+
+  const [paperState, scrapedState] = await Promise.all([
+    loadJsonResource(PAPER_STATE_URL, "paper state"),
+    PROBABILITY_SOURCE === "polymarket"
+      ? loadScopedExecutionCatalogue(
+        executionCatalogueUrlForPortfolio(PAPER_SCRAPED_STATE_URL),
+        "scraped Polymarket state",
+      )
+      : Promise.resolve(null),
+  ]);
   const storedEvaluations = storedEvaluationCount(paperState);
   const rawMarketObservations = Array.isArray(scrapedState?.marketObservations)
     ? scrapedState.marketObservations

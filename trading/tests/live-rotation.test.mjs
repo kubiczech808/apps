@@ -5450,3 +5450,73 @@ test("culled orders: a lost bid goes back, and only when it is safe to", () => {
   assert.match(source, /const culledOrderRestore = await restoreCulledOrders\(/);
   assert.match(source, /restingBookHeadroom = Number\(Math\.max\(0, restingBookHeadroom - restoredNotional\)/);
 });
+
+// Reported: a manual execution run on a live portfolio ended SKIP for want of capital, and
+// that verdict arrived at the very end. It did, and the shortfall was discovered one
+// candidate at a time: every row in the served catalogue was revalidated against the CLOB --
+// a book fetch each -- only for sharesForOrder to report the cash could not cover the
+// exchange minimum, and the run then summed those identical rejections and skipped. The
+// answer was knowable from the wallet before the first book was read.
+//
+// The gate that fixes it has one dangerous failure mode, and it is not the slow one: a run
+// that could have traded must never be skipped. Free cash is not the only way this executor
+// acts, so each of those ways is pinned here.
+test("execution pre-flight: a run with nothing to fund stops before it reads any book", () => {
+  const source = readFileSync(new URL("../tools/live-order-executor.mjs", import.meta.url), "utf8");
+  const api = new Function(`
+    const process = { env: {} };
+    const envNumber = (name, fallback) => fallback;
+    ${functionSource(source, "number")}
+    const MIN_PROBABILITY = 0.7;
+    const EXCHANGE_MIN_ORDER_SIZE = 5;
+    ${functionSource(source, "runCanActWithoutFreeCapital")}
+    ${functionSource(source, "cheapestFundableEntryUsdc")}
+    return { runCanActWithoutFreeCapital, cheapestFundableEntryUsdc };
+  `)();
+
+  // Five shares at the portfolio's own probability floor. Nothing cheaper can be bought, so
+  // below this no book could have produced a fundable order.
+  assert.equal(api.cheapestFundableEntryUsdc(0.7, 5), 3.5);
+  assert.equal(api.cheapestFundableEntryUsdc(0.95, 5), 4.75);
+  // A floor of zero must not make the cheapest order free, or the gate would never fire.
+  assert.ok(api.cheapestFundableEntryUsdc(0, 5) > 0);
+  assert.equal(api.cheapestFundableEntryUsdc(null, 5), 0.05, "an unreadable floor is not a free order");
+
+  // The reported case: no cash, nothing held, nothing resting, nothing to restore.
+  assert.equal(api.runCanActWithoutFreeCapital({
+    rotationCompletionRun: false, autoRotate: true, heldPositions: 0,
+    activeSellOrders: 0, restorableOrders: 0,
+  }), false, "with nothing to act on, the run has nothing to do and may stop early");
+
+  // Each way a run acts WITHOUT free cash. Every one of these must keep the run going, or
+  // the optimisation would cost trades rather than time.
+  assert.equal(api.runCanActWithoutFreeCapital({ autoRotate: true, heldPositions: 1 }), true,
+    "a rotation sells a held position to fund the buy, so it needs no free cash");
+  assert.equal(api.runCanActWithoutFreeCapital({ rotationCompletionRun: true }), true,
+    "a completion run is finishing a swap whose sell leg has already paid");
+  assert.equal(api.runCanActWithoutFreeCapital({ activeSellOrders: 1 }), true,
+    "a stale rotation-exit sell has to be repriced or the position it reserves stays frozen");
+  assert.equal(api.runCanActWithoutFreeCapital({ restorableOrders: 1 }), true,
+    "a culled bid is waiting for exactly the cash that may have just arrived");
+
+  // Rotation switched off is not a reason to keep going: with no free cash the review is
+  // gated on LIVE_AUTO_ROTATE, so holding positions changes nothing.
+  assert.equal(api.runCanActWithoutFreeCapital({ autoRotate: false, heldPositions: 4 }), false);
+
+  // And the ordering inside main(): the expiry sweep runs BEFORE the gate, because
+  // withdrawing a bid on a finished market is what releases the capital the gate then
+  // measures. Gating that would gate the one step that could change the answer.
+  const sweepAt = source.indexOf("const expiredOrderSweep = await withdrawExpiredOpenOrders(");
+  const gateAt = source.indexOf("const canActAnyway = runCanActWithoutFreeCapital(");
+  // The CALL, not the declaration -- which is defined near the top of the file and would
+  // make this assertion pass for the wrong reason.
+  const catalogueAt = source.indexOf("? loadScopedExecutionCatalogue(");
+  const revalidateAt = source.indexOf("checked.push(await revalidateEvaluation(");
+  assert.ok(sweepAt > 0 && gateAt > sweepAt, "the expiry sweep must run before the gate");
+  assert.ok(catalogueAt > gateAt,
+    "the candidate catalogue must not be fetched before the gate has decided");
+  assert.ok(revalidateAt > gateAt, "and no market may be revalidated before it either");
+  // The skip has to be recorded like any other decision, or a run that stopped early would
+  // look like a run that never happened.
+  assert.match(source, /preflightSkip: true/);
+});
