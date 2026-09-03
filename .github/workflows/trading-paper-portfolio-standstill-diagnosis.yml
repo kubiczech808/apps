@@ -1,0 +1,28 @@
+name: Trading Paper Portfolio Standstill Diagnosis
+
+# Read-only diagnostic, manual only. Reported: some paper portfolios are not running, with a
+# candidate rejected as "probability NaN% ... ; outside included tags (league-of-legends)"
+# against a row the table showed at 74%. This separates the three claims in that string: what
+# each portfolio's tag filter requires against what the served catalogue is actually tagged
+# with (a filter nothing can pass stops a portfolio dead), the histogram of stored reject
+# reasons, and the rows whose stored verdict was computed from a NaN probability.
+# Writes nothing, publishes nothing, no secrets.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Diagnose the stalled paper portfolios
+        working-directory: trading
+        run: node tools/paper-portfolio-standstill-diagnosis.mjs
