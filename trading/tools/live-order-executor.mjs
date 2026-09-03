@@ -261,6 +261,12 @@ const ROTATION_EXIT_ACTIONS = new Set(["ROTATION_EXIT_SUBMITTED", "ROTATION_EXIT
 const ROTATION_TAKER_ENTRY = String(process.env.LIVE_ROTATION_TAKER_ENTRY ?? "true").toLowerCase() !== "false";
 const ROTATION_ENTRY_CROSSES_SPREAD = ROTATION_COMPLETION_RUN && ROTATION_TAKER_ENTRY;
 let previousExecutionState = null;
+// What this run put back on the book after the exchange culled it. Module level, alongside
+// previousExecutionState and for the same reason: emitDecision has to record it whichever
+// branch the run takes, and the loop guard that stops a culled bid being re-rested forever
+// counts these entries out of the stored run log. A restore that happened but went
+// unrecorded would reset that count on every pass.
+let culledOrderRestoreForRun = null;
 
 function hasFlag(name) {
   return process.argv.includes(`--${name}`);
@@ -3562,6 +3568,12 @@ async function emitDecision(payload) {
     explanation: payload.batchLog?.explanation || payload.reason || "-",
     response: payload.response || null,
     attempts: Array.isArray(payload.attempts) ? payload.attempts : [],
+    // Recorded on every run that restored anything, from here rather than from each emit
+    // site, because the restore happens before the run knows which branch it will take and
+    // the loop guard reads these entries back out of the stored log.
+    ...(culledOrderRestoreForRun?.restored?.length
+      ? { restoredCulledOrders: culledOrderRestoreForRun.restored.filter((entry) => entry.accepted) }
+      : {}),
   };
   const rotation = rotationLegMerge({
     completionRun: ROTATION_COMPLETION_RUN,
@@ -4368,6 +4380,161 @@ async function restoreOpenOrder(review, tradingConfig = {}) {
   }
 }
 
+// Put back a bid the exchange took off the book while its market was still live.
+//
+// Asked for: an order must not end before its event resolves, and where the account did
+// lose one to a collateral cull, the portfolio should re-evaluate it on the same parameters
+// and rest it again as soon as there is room. The ceiling above stops the culls happening;
+// this recovers the bids already lost to them, and the two are needed together -- restoring
+// into an overcommitted book would simply feed the next cull, which is why every restore
+// here is charged against the same headroom.
+//
+// What makes a vanished order restorable is deliberately narrow:
+//   - the sync saw it leave the book with nothing filled (LIVE_LIMIT_ORDER_UNFILLED), so
+//     this is not a fill being re-bought;
+//   - THIS portfolio placed it, by the same order-id attribution the reservations use;
+//   - its market is still open and unresolved on Gamma -- an order whose event is over is
+//     exactly what the expiry sweep is for, and must stay withdrawn;
+//   - nothing is resting or held on that token now, so a restore cannot double an exposure;
+//   - and it has not already been restored more than RESTORE_ATTEMPT_LIMIT times, because a
+//     book that keeps getting culled must not turn into an endless re-submission loop.
+const RESTORE_ATTEMPT_LIMIT = envNumber("LIVE_CULLED_ORDER_RESTORE_ATTEMPTS", 2);
+
+function culledOrderKey(order = {}) {
+  return [
+    String(order?.tokenId || order?.assetId || "").trim(),
+    number(order?.price ?? order?.limitPrice, 0).toFixed(4),
+  ].join("@");
+}
+
+function previousRestoreAttempts(previousExecution) {
+  const counts = new Map();
+  const runs = [previousExecution, ...(Array.isArray(previousExecution?.runLog) ? previousExecution.runLog : [])];
+  for (const run of runs) {
+    for (const entry of (Array.isArray(run?.restoredCulledOrders) ? run.restoredCulledOrders : [])) {
+      const key = String(entry?.key || "");
+      if (key) counts.set(key, (counts.get(key) || 0) + 1);
+    }
+  }
+  return counts;
+}
+
+function culledOrdersToRestore({ liveState, previousExecution, identity, headroomUsdc, availableCashUsdc }) {
+  const rows = Array.isArray(liveState?.unfilledLimitOrders) ? liveState.unfilledLimitOrders : [];
+  const restingTokens = new Set((Array.isArray(liveState?.openOrders) ? liveState.openOrders : [])
+    .map((order) => String(order?.tokenId || order?.assetId || "").trim()));
+  const heldTokens = new Set((Array.isArray(liveState?.positions) ? liveState.positions : [])
+    .filter((position) => number(position?.shares ?? position?.size, 0) > 0.000001)
+    .map((position) => String(position?.tokenId || position?.assetId || "").trim()));
+  const attempts = previousRestoreAttempts(previousExecution);
+
+  const considered = [];
+  let budget = Math.max(0, Math.min(number(headroomUsdc, 0), number(availableCashUsdc, 0)));
+  for (const row of rows) {
+    const tokenId = String(row?.tokenId || row?.assetId || "").trim();
+    const key = culledOrderKey(row);
+    const price = number(row?.price ?? row?.limitPrice, null);
+    const size = number(row?.remainingSize ?? row?.releasedSize, null);
+    const notional = number(row?.stakeUsdc ?? row?.releasedCapitalUsdc, price != null && size != null ? price * size : null);
+    const skip = (reason) => considered.push({ key, tokenId, price, notional, restore: false, reason });
+
+    if (String(row?.status || "").toUpperCase() !== "LIVE_LIMIT_ORDER_UNFILLED") continue;
+    if (!tokenId || price == null || !(price > 0) || size == null || !(size > 0)) {
+      skip("the stored order does not carry a usable token, price and size");
+      continue;
+    }
+    if (number(row?.filledSize, 0) > 0.000001) {
+      skip("part of it filled, so this is a position rather than a lost bid");
+      continue;
+    }
+    if (identity && !orderWasSubmittedByThisPortfolio(row, identity)) continue;
+    if (restingTokens.has(tokenId)) {
+      skip("a bid is resting on this token again already");
+      continue;
+    }
+    if (heldTokens.has(tokenId)) {
+      skip("the account already holds this outcome");
+      continue;
+    }
+    if ((attempts.get(key) || 0) >= RESTORE_ATTEMPT_LIMIT) {
+      skip(`already restored ${attempts.get(key)} time(s); not resting it again`);
+      continue;
+    }
+    if (number(notional, 0) > budget + 0.000001) {
+      skip(`no room left this pass: ${number(notional, 0).toFixed(2)} USDC needed, ${budget.toFixed(2)} available`);
+      continue;
+    }
+    budget = Number((budget - number(notional, 0)).toFixed(5));
+    considered.push({ key, tokenId, price, size, notional, row, restore: true, reason: "" });
+  }
+  return considered;
+}
+
+async function restoreCulledOrders({ liveState, previousExecution, tradingConfig, headroomUsdc, availableCashUsdc }) {
+  const identity = ownSubmittedOrderIdentity(previousExecution);
+  const considered = culledOrdersToRestore({
+    liveState,
+    previousExecution,
+    identity,
+    headroomUsdc,
+    availableCashUsdc,
+  });
+  const restored = [];
+  const skipped = considered.filter((item) => !item.restore);
+  for (const item of considered.filter((entry) => entry.restore)) {
+    // Gamma is asked per order rather than up front: the list is short, and an order whose
+    // market has resolved since it vanished must not come back.
+    let market = null;
+    try {
+      market = await fetchMarketByToken(item.tokenId);
+    } catch (error) {
+      skipped.push({ ...item, restore: false, reason: `market lookup failed: ${error?.message || String(error)}` });
+      continue;
+    }
+    if (!market) {
+      skipped.push({ ...item, restore: false, reason: "Gamma lists no market for this token any more" });
+      continue;
+    }
+    if (market.closed === true || market.resolved === true || market.isResolved === true) {
+      skipped.push({ ...item, restore: false, reason: "the market is resolved or closed; a withdrawn bid stays withdrawn" });
+      continue;
+    }
+    if (market.acceptingOrders === false) {
+      skipped.push({ ...item, restore: false, reason: "the market is not accepting orders" });
+      continue;
+    }
+    const response = await restoreOpenOrder({
+      orderSnapshot: {
+        tokenId: item.tokenId,
+        orderPrice: item.price,
+        orderSize: item.size,
+        question: item.row?.question || market.question || "",
+        outcome: item.row?.outcome || "",
+        slug: item.row?.slug || market.slug || "",
+        eventSlug: item.row?.eventSlug || item.row?.slug || "",
+        conditionId: item.row?.conditionId || market.conditionId || null,
+      },
+    }, tradingConfig);
+    const ok = successfulOrderResponse(response) || response?.success === true;
+    restored.push({
+      key: item.key,
+      tokenId: item.tokenId,
+      question: item.row?.question || "",
+      outcome: item.row?.outcome || "",
+      price: item.price,
+      size: item.size,
+      notionalUsdc: item.notional,
+      leftBookAt: item.row?.closedAt || item.row?.detectedAt || null,
+      response,
+      accepted: ok,
+    });
+    console.log(`${ok ? "restored" : "could not restore"} culled bid at ${number(item.price, 0).toFixed(4)}`
+      + ` on "${String(item.row?.question || item.tokenId).slice(0, 60)}"`
+      + `${ok ? "" : `: ${JSON.stringify(response).slice(0, 120)}`}`);
+  }
+  return { restored, skipped, considered: considered.length };
+}
+
 async function reviewOpenOrders({ liveState, evaluationByToken, eligible, rotationCandidates = [], cash, maxNotional, tradingConfig }) {
   const openOrders = Array.isArray(liveState?.openOrders) ? liveState.openOrders : [];
   const reviews = [];
@@ -4668,7 +4835,26 @@ async function main() {
   // See restingBookHeadroomUsdc: the two are different questions and only one of them was
   // being asked.
   const restingBookCeiling = Number(restingBookCeilingUsdc(cash).toFixed(5));
-  const restingBookHeadroom = restingBookHeadroomUsdc(liveState, cash);
+  let restingBookHeadroom = restingBookHeadroomUsdc(liveState, cash);
+  // A bid the exchange culled off a market that is still running goes back before anything
+  // new is considered. It is not a new decision -- the portfolio already chose that market
+  // at that price -- so it has first claim on the headroom, ahead of a fresh candidate.
+  // Charged against the same headroom, because restoring into an overcommitted book is how
+  // the next cull gets fed.
+  const culledOrderRestore = await restoreCulledOrders({
+    liveState,
+    previousExecution,
+    tradingConfig,
+    headroomUsdc: restingBookHeadroom,
+    availableCashUsdc: availableCash,
+  });
+  culledOrderRestoreForRun = culledOrderRestore;
+  const restoredNotional = culledOrderRestore.restored
+    .filter((entry) => entry.accepted)
+    .reduce((sum, entry) => sum + number(entry.notionalUsdc, 0), 0);
+  if (restoredNotional > 0) {
+    restingBookHeadroom = Number(Math.max(0, restingBookHeadroom - restoredNotional).toFixed(5));
+  }
   const portfolioValue = livePortfolioValue(liveState, cash);
   const legacyFractionNotional = portfolioValue * MAX_ORDER_FRACTION;
   const configuredStakeUsdc = Number.isFinite(LIVE_STAKE_USDC) && LIVE_STAKE_USDC > 0
@@ -4938,6 +5124,8 @@ async function main() {
       restingBookCeilingUsdc: restingBookCeiling,
       restingBookHeadroomUsdc: restingBookHeadroom,
       restingBookCashMultiple: RESTING_BOOK_CASH_MULTIPLE,
+      culledOrdersRestored: culledOrderRestore.restored.filter((entry) => entry.accepted).length,
+      culledOrderRestoreNotionalUsdc: Number(restoredNotional.toFixed(5)),
       portfolioValueUsdc: Number(portfolioValue.toFixed(5)),
       stakeUsdc: Number(configuredStakeUsdc.toFixed(5)),
       maxOrderFraction: MAX_ORDER_FRACTION,

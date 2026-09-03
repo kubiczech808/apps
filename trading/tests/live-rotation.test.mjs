@@ -2134,6 +2134,10 @@ test("5050 run log: the executor publishes the batchLog its own log entry is key
   const build = new Function(
     "previousExecutionState", "compactLiveRunRecord", "rotationLegMerge", "ROTATION_COMPLETION_RUN",
     "mergeRunLog", "consoleDecisionSummary", "EXECUTION_STATE_PATH", "mkdir", "writeFile", "dirname", "console",
+    // Restored culled bids are recorded from inside emitDecision, so the sandbox has to
+    // supply the same module-level slot the real run writes to. These tests are about the
+    // batchLog key, so nothing was restored.
+    "culledOrderRestoreForRun",
     `${emit}\nreturn emitDecision;`,
   );
   const emitDecision = build(
@@ -2148,6 +2152,7 @@ test("5050 run log: the executor publishes the batchLog its own log entry is key
     async (_path, body) => { written = JSON.parse(body); },
     () => ".",
     { log() {} },
+    null,
   );
 
   // The 5050 payload, exactly as it is built: a batchLog with no id of its own.
@@ -2177,6 +2182,10 @@ test("5050 run log: a state with no batchLog is left as one", async () => {
   const build = new Function(
     "previousExecutionState", "compactLiveRunRecord", "rotationLegMerge", "ROTATION_COMPLETION_RUN",
     "mergeRunLog", "consoleDecisionSummary", "EXECUTION_STATE_PATH", "mkdir", "writeFile", "dirname", "console",
+    // Restored culled bids are recorded from inside emitDecision, so the sandbox has to
+    // supply the same module-level slot the real run writes to. These tests are about the
+    // batchLog key, so nothing was restored.
+    "culledOrderRestoreForRun",
     `${emit}\nreturn emitDecision;`,
   );
   const emitDecision = build(
@@ -5260,4 +5269,132 @@ test("live cash: the resting book is capped against the collateral behind it", (
     "the headroom must not be narrowed to this portfolio's own orders");
   assert.match(source, /Math\.min\(maxNotional, availableCash, restingBookHeadroom\)/,
     "the headroom has to actually limit what a pass may place");
+});
+
+// Asked for: an order must not end before its event resolves, and a bid the account did
+// lose to a collateral cull should be re-evaluated on the same parameters and rested again
+// as soon as there is room. The ceiling stops the culls; this recovers what earlier ones
+// took. The two belong together -- restoring into an overcommitted book feeds the next cull
+// -- so every restore is charged against the same headroom.
+test("culled orders: a lost bid goes back, and only when it is safe to", () => {
+  const source = readFileSync(new URL("../tools/live-order-executor.mjs", import.meta.url), "utf8");
+  const api = new Function(`
+    const process = { env: {} };
+    const envNumber = (name, fallback) => fallback;
+    ${functionSource(source, "number")}
+    ${functionSource(source, "successfulOrderResponse")}
+    ${functionSource(source, "orderWasSubmittedByThisPortfolio")}
+    ${functionSource(source, "ownSubmittedOrderIdentity")}
+    ${/const RESTORE_ATTEMPT_LIMIT = [^;]+;/.exec(source)[0]}
+    ${functionSource(source, "culledOrderKey")}
+    ${functionSource(source, "previousRestoreAttempts")}
+    ${functionSource(source, "culledOrdersToRestore")}
+    return { culledOrdersToRestore, culledOrderKey, previousRestoreAttempts,
+      ownSubmittedOrderIdentity, RESTORE_ATTEMPT_LIMIT };
+  `)();
+
+  const culled = (extra = {}) => ({
+    id: "o-1",
+    tokenId: "t1",
+    status: "LIVE_LIMIT_ORDER_UNFILLED",
+    question: "Map Handicap: OG (-1.5) vs Phantom (+1.5)",
+    outcome: "Phantom",
+    price: 0.81,
+    remainingSize: 6.17,
+    stakeUsdc: 4.9977,
+    filledSize: 0,
+    closedAt: "2026-09-03T03:37:23.390Z",
+    ...extra,
+  });
+  // The portfolio that placed it, as the reservations identify it: a successful submission
+  // in its own run log.
+  const previousExecution = {
+    runLog: [{
+      attempts: [{ tokenId: "t1", response: { success: true, orderID: "o-1" } }],
+    }],
+  };
+  const identity = api.ownSubmittedOrderIdentity(previousExecution);
+  const decide = (liveState, headroom = 20, cash = 20) => api.culledOrdersToRestore({
+    liveState, previousExecution, identity, headroomUsdc: headroom, availableCashUsdc: cash,
+  });
+
+  // The reported case: nothing filled, nothing resting, nothing held.
+  const lost = decide({ unfilledLimitOrders: [culled()], openOrders: [], positions: [] });
+  assert.equal(lost.length, 1);
+  assert.equal(lost[0].restore, true);
+  assert.equal(lost[0].price, 0.81, "the original price, not a fresh one off the book");
+  assert.equal(lost[0].size, 6.17, "and the original size");
+
+  // A bid already back on the book must not be doubled.
+  assert.equal(decide({
+    unfilledLimitOrders: [culled()], openOrders: [{ tokenId: "t1", side: "BUY" }], positions: [],
+  })[0].restore, false);
+
+  // Nor may a restore run alongside a position on the same outcome.
+  assert.equal(decide({
+    unfilledLimitOrders: [culled()], openOrders: [], positions: [{ tokenId: "t1", shares: 6.17 }],
+  })[0].restore, false);
+
+  // A partial fill is a position being re-bought, not a lost bid.
+  assert.equal(decide({
+    unfilledLimitOrders: [culled({ filledSize: 3 })], openOrders: [], positions: [],
+  })[0].restore, false);
+
+  // Another portfolio's bid is not ours to restore: they share one wallet, and each
+  // portfolio's own log is the only thing that says who placed what.
+  assert.deepEqual(decide({
+    unfilledLimitOrders: [culled({ id: "someone-else", tokenId: "t9" })], openOrders: [], positions: [],
+  }), [], "an order this portfolio never submitted is not even considered");
+
+  // Headroom is the budget, and it is spent as the list is walked, so a pass cannot restore
+  // its way back into a culled book.
+  const two = [culled(), culled({ id: "o-2", tokenId: "t2" })];
+  const identityForTwo = api.ownSubmittedOrderIdentity({
+    runLog: [{ attempts: [
+      { tokenId: "t1", response: { success: true, orderID: "o-1" } },
+      { tokenId: "t2", response: { success: true, orderID: "o-2" } },
+    ] }],
+  });
+  const tight = api.culledOrdersToRestore({
+    liveState: { unfilledLimitOrders: two, openOrders: [], positions: [] },
+    previousExecution, identity: identityForTwo, headroomUsdc: 6, availableCashUsdc: 20,
+  });
+  assert.equal(tight.filter((row) => row.restore).length, 1, "6 USDC of headroom pays for one 5 USDC bid");
+  assert.match(tight.find((row) => !row.restore).reason, /no room left this pass/);
+  // Cash is the other limit: headroom is meaningless if the wallet is empty.
+  assert.equal(api.culledOrdersToRestore({
+    liveState: { unfilledLimitOrders: [culled()], openOrders: [], positions: [] },
+    previousExecution, identity, headroomUsdc: 50, availableCashUsdc: 1,
+  })[0].restore, false);
+
+  // The loop guard. A book that keeps being culled must not become endless re-submission.
+  assert.equal(api.RESTORE_ATTEMPT_LIMIT, 2);
+  const restoredTwice = {
+    runLog: [
+      { attempts: [{ tokenId: "t1", response: { success: true, orderID: "o-1" } }],
+        restoredCulledOrders: [{ key: api.culledOrderKey(culled()) }] },
+      { restoredCulledOrders: [{ key: api.culledOrderKey(culled()) }] },
+    ],
+  };
+  const exhausted = api.culledOrdersToRestore({
+    liveState: { unfilledLimitOrders: [culled()], openOrders: [], positions: [] },
+    previousExecution: restoredTwice,
+    identity: api.ownSubmittedOrderIdentity(restoredTwice),
+    headroomUsdc: 50,
+    availableCashUsdc: 50,
+  });
+  assert.equal(exhausted[0].restore, false);
+  assert.match(exhausted[0].reason, /already restored 2 time\(s\)/);
+  // The key is the market and the price, so the same bid is recognised across runs.
+  assert.equal(api.culledOrderKey(culled()), "t1@0.8100");
+
+  // A resolved market is what the expiry sweep is for; its withdrawn bid stays withdrawn.
+  // Gamma is checked per order in restoreCulledOrders, so the rule is pinned on the source.
+  assert.match(source, /market\.closed === true \|\| market\.resolved === true \|\| market\.isResolved === true/);
+  assert.match(source, /the market is resolved or closed; a withdrawn bid stays withdrawn/);
+  assert.match(source, /market\.acceptingOrders === false/);
+  // The restore runs before the pass considers anything new, and takes its notional out of
+  // the headroom the rest of the pass may use.
+  assert.match(source, /const culledOrderRestore = await restoreCulledOrders\(/);
+  assert.match(source, /restingBookHeadroom = Number\(Math\.max\(0, restingBookHeadroom - restoredNotional\)/);
 });
