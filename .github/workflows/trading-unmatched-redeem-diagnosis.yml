@@ -1,0 +1,27 @@
+name: Trading Unmatched Redeem Diagnosis
+
+# Read-only diagnostic, manual only. Some live portfolios show REDEEMED rows with no stake,
+# no entry price and no verdict. They come from retainUnmatchedRedeem(), which keeps a
+# redemption whose original buy is missing from the retained /trades window, on the premise
+# that the buy has aged out. This tests that premise against the account's own data and
+# reports what the rows do to the closed P/L and the resolved-accuracy tile.
+# Writes nothing, publishes nothing, no secrets.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Diagnose unmatched redeem rows
+        working-directory: trading
+        run: node tools/unmatched-redeem-diagnosis.mjs
