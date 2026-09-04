@@ -88,4 +88,26 @@ printf("  Gemini free tier: %d/%d = %d seedu denne (drive %d)\n",
     $geminiCap, $perSeed, intdiv($geminiCap, $perSeed), intdiv($geminiCap, 3));
 assert(intdiv($geminiCap, $perSeed) > intdiv($geminiCap, 3), 'dva pozadavky na seed musi dat vic nez tri');
 
+echo "\n== 8. deploy config nesmi prebijet pocet pozadavku na seed nahoru ==\n";
+// Produkce hlasila 3 pozadavky na seed proti dvema v kodu, protoze deploy workflow
+// dosazoval vlastni vychozi "3". Stalo to tretinu propustnosti a z velikosti ani
+// z logu to nebylo videt.
+$deploy = file_get_contents(__DIR__ . '/../../.github/workflows/email-campaign-deploy.yml');
+assert($deploy !== false, 'deploy workflow se musi precist');
+preg_match_all('/RESEARCH_REQUESTS_PER_SEED"\) or "(\d+)"/', $deploy, $matches);
+printf("  deploy dosazuje: %s, kod ma vychozi %d\n", implode(', ', $matches[1]), $perSeed);
+assert($matches[1] !== [], 'deploy musi pocet pozadavku na seed nastavovat');
+foreach ($matches[1] as $deployed) {
+    assert((int)$deployed <= $perSeed,
+        'deploy nesmi nastavit vic pozadavku na seed (' . $deployed . ') nez kolik kod potrebuje (' . $perSeed . ')');
+}
+
+echo "\n== 9. automatika ma zapnuty cron, jinak nezpracuje nic ==\n";
+// Kategorie se nedojede, kdyz tik nic nespusti. Sest dni se nedelo nic presne proto,
+// ze tenhle trigger chybel.
+$research = file_get_contents(__DIR__ . '/../../.github/workflows/email-campaign-ai-research.yml');
+assert($research !== false, 'workflow AI research se musi precist');
+assert(preg_match('/schedule:\s*\n\s*- cron:/', $research) === 1, 'AI research musi mit scheduled trigger');
+printf("  trigger: %s\n", trim(preg_replace('/\s+/', ' ', (string)(preg_match("/- cron: '([^']+)'/", $research, $c) ? $c[1] : '?'))));
+
 echo "\nVSE OK\n";

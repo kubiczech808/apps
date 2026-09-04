@@ -1,8 +1,11 @@
 name: Email Campaign AI Research
 
 on:
-  # Automatika je zastavena na zadost - zadny scheduled trigger. Endpoint jde spustit
-  # jen rucne (workflow_dispatch), kdyby bylo potreba jednorazove overeni.
+  # AI research ma vlastni endpoint a bezi co peti minut. Soubeh nehrozi - aplikace
+  # drzi zamek a preskoci tik, dokud predchozi beh nedobehne, a jeden tik za sebe
+  # posila retez hopu, takze propustnost neurcuje kadence cronu.
+  schedule:
+    - cron: '*/5 * * * *'
   workflow_dispatch:
 
 concurrency:
