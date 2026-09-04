@@ -278,24 +278,50 @@ async function optionalValue(label, promise, fallback = null, warnings = null) {
   }
 }
 
+// The previously published state, which is the only copy of every ledger this sync keeps by
+// merging rather than by re-deriving: the unfilled-order history, the closed-trade history,
+// and the recorded close dates. Polymarket does not hold any of them, so a run that cannot
+// read this file cannot reconstruct them from anywhere.
+//
+// It used to answer a failed read with null, and every merge reads null as "there was no
+// history" -- so one failed fetch republished a state containing only what happened during
+// that single run and destroyed the accumulated ledger for good. Measured: an
+// unfilled-order ledger standing at 8 rows on an account whose own restore list had held 64
+// of them earlier the same day.
+//
+// A failed read is now distinguished from an empty one. 404 is a real answer -- nothing has
+// ever been published -- and returns null. Anything else is unknown, retried, and if it
+// stays unknown the caller refuses to publish rather than writing a truncated history over
+// a good one.
 async function loadPreviousLiveState(sync) {
   if (!LIVE_STATE_URL) return null;
-  try {
-    const url = new URL(LIVE_STATE_URL);
-    url.searchParams.set("_sync", String(Date.now()));
-    const response = await fetch(url, {
-      headers: { "User-Agent": "osobnizkusenosti-trading-live-sync" },
-    });
-    if (!response.ok) {
-      const body = await response.text().catch(() => "");
-      throw new Error(`HTTP ${response.status}${body ? `: ${body.slice(0, 120)}` : ""}`);
+  const attempts = 3;
+  let lastError = null;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      const url = new URL(LIVE_STATE_URL);
+      url.searchParams.set("_sync", String(Date.now()));
+      const response = await fetch(url, {
+        headers: { "User-Agent": "osobnizkusenosti-trading-live-sync" },
+      });
+      // Nothing has ever been published. That is a state, not a failure to read one.
+      if (response.status === 404) return null;
+      if (!response.ok) {
+        const body = await response.text().catch(() => "");
+        throw new Error(`HTTP ${response.status}${body ? `: ${body.slice(0, 120)}` : ""}`);
+      }
+      const payload = await response.json();
+      return payload && typeof payload === "object" ? payload : null;
+    } catch (error) {
+      lastError = error;
+      if (attempt < attempts) await new Promise((resolve) => setTimeout(resolve, attempt * 1500));
     }
-    const payload = await response.json();
-    return payload && typeof payload === "object" ? payload : null;
-  } catch (error) {
-    sync.warnings.push(`previous-live-state: ${error?.message || String(error)}`);
-    return null;
   }
+  sync.warnings.push(`previous-live-state: ${lastError?.message || String(lastError)}`);
+  // Read by main() before it publishes. Not a warning to be skimmed past: continuing would
+  // overwrite the only copy of the ledgers with whatever this one run happened to see.
+  sync.previousStateUnreadable = true;
+  return null;
 }
 
 async function loadLivePortfolioConfig(sync) {
@@ -2660,6 +2686,20 @@ async function main() {
     sync,
   };
 
+  // Refuse rather than truncate. Every ledger above is built by merging onto the previously
+  // published state, so if that could not be read this payload carries only what this one
+  // run saw -- and writing it would destroy the unfilled-order history, the closed trades
+  // and their recorded close dates, none of which can be re-derived from Polymarket.
+  //
+  // The asymmetry decides it: the account snapshot is fetched fresh every run, so refusing
+  // costs one cycle of freshness and the next run repairs it. Publishing costs history
+  // permanently, and silently, which is how the ledger reached 8 rows.
+  if (sync.previousStateUnreadable) {
+    throw new Error("previous live state could not be read after 3 attempts, so the durable"
+      + " ledgers (unfilled orders, closed trades, close dates) cannot be merged. Refusing to"
+      + " publish a state that would replace them with this run's rows alone."
+      + ` Last warning: ${sync.warnings[sync.warnings.length - 1] || "none"}`);
+  }
   await mkdir(dirname(STATE_PATH), { recursive: true });
   await writeFile(STATE_PATH, `${JSON.stringify(payload, null, 2)}\n`);
   console.log(JSON.stringify({

@@ -5725,3 +5725,64 @@ test("execution pre-flight: a run with nothing to fund stops before it reads any
   // look like a run that never happened.
   assert.match(source, /preflightSkip: true/);
 });
+
+// Reported: the "Unfilled ... limit orders" panel showing 0 rows on several portfolios.
+//
+// Measured on production (tools/unfilled-order-visibility-diagnosis.mjs): 8 rows published,
+// all 8 accepted by isUnfilledLimitOrder, all 8 attributed to a portfolio, 0 orphans -- so
+// the panel and the attribution are sound and the LEDGER itself is thin. The account's own
+// restore list had held 64 of these bids earlier the same day.
+//
+// unfilledLimitOrderHistory, mergeClosedTradeHistory and the close-date indexes are all
+// built by merging onto the previously published state, and Polymarket holds none of them.
+// loadPreviousLiveState answered a failed read with null, which every one of those merges
+// reads as "there was no history" -- so a single failed fetch republished only what that one
+// run saw and destroyed the rest permanently.
+test("live sync: a state it cannot read is never published over as an empty one", async () => {
+  const { readFileSync } = await import("node:fs");
+  const source = readFileSync(new URL("../tools/live-account-sync.mjs", import.meta.url), "utf8");
+  const sync = await import("../tools/live-account-sync.mjs");
+
+  // The merge that loses the ledger, driven directly: a null previous state must be the
+  // only way to get an empty result, which is exactly why null must mean "nothing was ever
+  // published" and never "the read failed".
+  const vanished = {
+    vanished: [{
+      id: "order-new", tokenId: "t-new", price: 0.7,
+      filledSize: 0, releasedSize: 5, releasedCapitalUsdc: 3.5,
+      createdAt: "2026-09-04T09:00:00.000Z", detectedAt: "2026-09-04T10:00:00.000Z",
+    }],
+  };
+  const stored = Array.from({ length: 64 }, (unused, index) => ({
+    id: `order-${index}`, orderId: `order-${index}`, tokenId: `t-${index}`,
+    status: "LIVE_LIMIT_ORDER_UNFILLED", mode: "LIVE_LIMIT_ORDER",
+    price: 0.7, stakeUsdc: 3.5, closedAt: "2026-09-03T10:00:00.000Z",
+  }));
+
+  const merged = sync.unfilledLimitOrderHistory({ unfilledLimitOrders: stored }, vanished);
+  assert.equal(merged.length, 65, "the stored ledger is carried and the new row added");
+
+  const lost = sync.unfilledLimitOrderHistory(null, vanished);
+  assert.equal(lost.length, 1,
+    "a null previous state keeps nothing -- which is why a failed read must not produce one");
+
+  // 404 is a real answer and must stay null: a first ever run has to be able to start.
+  assert.match(source, /if \(response\.status === 404\) return null;/,
+    "nothing published yet is an empty history, not an unreadable one");
+
+  // Any other failure is unknown, retried, and then refused.
+  const loader = source.slice(source.indexOf("async function loadPreviousLiveState("));
+  const loaderBody = loader.slice(0, loader.indexOf("\nasync function loadLivePortfolioConfig("));
+  assert.match(loaderBody, /attempt < attempts/, "an unknown read is retried before giving up");
+  assert.match(loaderBody, /sync\.previousStateUnreadable = true;/,
+    "and it has to be recorded as unreadable rather than only warned about");
+
+  // The refusal itself, and its position: before the write, or it refuses nothing.
+  const refusalAt = source.indexOf("if (sync.previousStateUnreadable) {");
+  const writeAt = source.indexOf("await writeFile(STATE_PATH,");
+  assert.ok(refusalAt > 0 && writeAt > refusalAt,
+    "the refusal must come before the state is written");
+  // A warning would be skimmed past; only throwing stops the publish.
+  assert.match(source.slice(refusalAt, writeAt), /throw new Error\(/,
+    "an unreadable previous state has to stop the run, not add a warning");
+});
