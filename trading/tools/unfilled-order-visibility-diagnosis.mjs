@@ -78,6 +78,8 @@ async function main() {
     ${functionSource(app, "scrapedObservationIsError")}
     ${functionSource(app, "scrapedMarketObservations")}
     ${functionSource(app, "isUnfilledLimitOrder")}
+    ${functionSource(app, "isClosedTrade")}
+    ${functionSource(app, "isFilledPortfolioRow")}
     ${functionSource(app, "fixedEntryPriceSignatures")}
     ${functionSource(app, "matchesFixedEntryPrice")}
     ${functionSource(app, "restsAtFixedEntryPrice")}
