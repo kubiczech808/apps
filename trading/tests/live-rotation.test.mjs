@@ -1763,6 +1763,32 @@ test("rotation exit: a refused sell reports which taker path the CLOB refused", 
     "the digest must print every path that was tried");
 });
 
+// Reported: "exekuce ted trva vyrazne dele nez minutu" against a requirement of under a
+// minute. Measured on run 5190 (8m30s total): npm install 6m18s, the executor itself one
+// second, everything else seconds. The run time was almost entirely a dependency install of
+// a tree that had not changed -- and both live workflows share the single self-hosted
+// runner, so a slow install on either delays the other.
+test("live execution: an unchanged dependency tree is not reinstalled every run", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const workflows = ["polymarket-live-limit-order-test", "trading-live-5050"];
+
+  for (const name of workflows) {
+    const workflow = await readFile(
+      new URL(`../../.github/workflows/${name}.yml`, import.meta.url), "utf8");
+    // The bare form is what cost the six minutes. `run: npm install` on its own line, with
+    // nothing guarding it, must not come back.
+    assert.doesNotMatch(workflow, /run: npm install\s*$/m,
+      `${name} must not install dependencies unconditionally on every run`);
+    assert.match(workflow, /sha256sum package-lock\.json/,
+      `${name} must decide from the lockfile whether an install is needed`);
+    // The stamp has to live inside node_modules, so a wiped or absent tree reinstalls
+    // itself. A stamp kept anywhere else would survive the tree it describes and skip an
+    // install the run actually needs -- which fails closed as a missing dependency.
+    assert.match(workflow, /stamp=node_modules\/\.deps-lock-sha/,
+      `${name} must keep the stamp inside node_modules so a missing tree reinstalls`);
+  }
+});
+
 test("run digest: a run carries the same timestamp label the dashboard shows", async () => {
   const { readFile } = await import("node:fs/promises");
   const workflow = await readFile(new URL("../../.github/workflows/polymarket-live-limit-order-test.yml", import.meta.url), "utf8");

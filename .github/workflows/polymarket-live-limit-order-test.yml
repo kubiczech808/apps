@@ -178,7 +178,24 @@ jobs:
 
       - name: Install trading dependencies
         working-directory: trading
-        run: npm install
+        # Measured on run 5190: this step took 6m18s of an 8m30s job, while the executor
+        # itself took one second. Reinstalling an unchanged dependency tree was the entire
+        # run time, and the requirement is a run under a minute.
+        #
+        # The self-hosted runner keeps its workspace between jobs, so node_modules is
+        # usually already correct. Install only when the lockfile has actually moved, and
+        # record which lockfile the tree was built from. The stamp lives inside
+        # node_modules, so a wiped or missing tree reinstalls by itself.
+        run: |
+          set -eu
+          stamp=node_modules/.deps-lock-sha
+          want=$(sha256sum package-lock.json | cut -d' ' -f1)
+          if [ -f "$stamp" ] && [ "$(cat "$stamp")" = "$want" ]; then
+            echo "trading dependencies already match package-lock.json ($want); skipping install"
+            exit 0
+          fi
+          npm install --no-audit --no-fund
+          printf '%s' "$want" > "$stamp"
 
       - name: Verify live order target
         run: |

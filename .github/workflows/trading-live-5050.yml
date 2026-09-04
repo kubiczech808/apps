@@ -114,7 +114,19 @@ jobs:
 
       - name: Install trading dependencies
         working-directory: trading
-        run: npm install
+        # Same guard as the main live execution workflow: reinstalling an unchanged tree on
+        # the Pi cost over six minutes per run, and both workflows share that one runner, so
+        # a slow install here delays live execution too. Install only when the lockfile moved.
+        run: |
+          set -eu
+          stamp=node_modules/.deps-lock-sha
+          want=$(sha256sum package-lock.json | cut -d' ' -f1)
+          if [ -f "$stamp" ] && [ "$(cat "$stamp")" = "$want" ]; then
+            echo "trading dependencies already match package-lock.json ($want); skipping install"
+            exit 0
+          fi
+          npm install --no-audit --no-fund
+          printf '%s' "$want" > "$stamp"
 
       - name: Verify live order target
         run: |
