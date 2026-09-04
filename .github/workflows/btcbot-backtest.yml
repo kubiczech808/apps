@@ -1,0 +1,62 @@
+name: BTC bot — backtest
+
+# Measures the shipped strategy against real candles and prints the result in
+# full, wins and losses alike. Run it before changing a setting, and after.
+
+on:
+  workflow_dispatch:
+    inputs:
+      source:
+        description: 'Candle source (bybit, kraken, coinbase). Empty tries each in turn.'
+        required: false
+        default: ''
+      limit:
+        description: 'Hourly candles to fetch'
+        required: false
+        default: '1000'
+      risk:
+        description: 'Risk per trade in % of equity'
+        required: false
+        default: '1'
+      minRR:
+        description: 'Minimum reward/risk, measured in sats'
+        required: false
+        default: '2'
+  schedule:
+    # Weekly, so a strategy that stops working shows up in the log rather than
+    # only in the account.
+    - cron: '17 5 * * 1'
+
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: btc-bot
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Backtest
+        run: |
+          args=(--limit "${{ inputs.limit || '1000' }}" --risk "${{ inputs.risk || '1' }}" --min-rr "${{ inputs.minRR || '2' }}" --json report.json)
+          if [ -n "${{ inputs.source }}" ]; then args+=(--source "${{ inputs.source }}"); fi
+          node tools/backtest.mjs "${args[@]}" | tee report.txt
+          {
+            echo '### Backtest'
+            echo '```'
+            cat report.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: btcbot-backtest
+          path: |
+            btc-bot/report.json
+            btc-bot/report.txt
+          retention-days: 30

@@ -1,0 +1,19 @@
+[Unit]
+Description=BTC price-action bot — one pass
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=%h/.config/btc-bot.env
+WorkingDirectory=%h/.local/lib/btc-bot
+ExecStart=/usr/bin/env node tools/run-bot.mjs
+# A pass is meant to take seconds. If it hangs on a network call, killing it is
+# correct: the exchange still holds every stop loss and take profit, and the
+# next tick starts clean rather than queueing behind a stuck process.
+TimeoutStartSec=120
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=%h/.local/state/btc-bot

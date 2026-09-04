@@ -1,0 +1,37 @@
+{
+  "enabled": true,
+  "mode": "paper",
+  "portfolioName": "BTC Price Action Swing",
+  "startingCapitalUsd": 100,
+  "maxOpenPositions": 1,
+  "maxTradesPerDay": 3,
+  "cooldownMinutesAfterLoss": 240,
+  "timeframes": { "htfHours": 4, "ltfHours": 1 },
+  "risk": {
+    "riskPct": 1.0,
+    "maxLeverage": 10,
+    "liquidationSafety": 2.0,
+    "maxNotionalPct": 300,
+    "minQuantityUsd": 1,
+    "minMarginSats": 1000,
+    "feeRate": 0.0006
+  },
+  "strategy": {
+    "htfLookback": 2,
+    "ltfLookback": 2,
+    "minRR": 2.0,
+    "tpMinR": 2.0,
+    "tpMaxR": 5.0,
+    "stopAtrBuffer": 0.5,
+    "zoneMaxDistanceAtr": 1.0,
+    "minZoneTouches": 1,
+    "atrPctMin": 0.15,
+    "atrPctMax": 4.0,
+    "minHtfCandles": 60,
+    "minLtfCandles": 60,
+    "breakevenAtR": 1.0,
+    "trailStartAtR": 1.5,
+    "trailAtrBuffer": 0.5,
+    "closeOnHtfFlip": true
+  }
+}

@@ -1,0 +1,14 @@
+[Unit]
+Description=Run the BTC price-action bot every minute
+
+[Timer]
+OnBootSec=90s
+OnUnitActiveSec=60s
+# A fixed cadence rather than a calendar: the pass is idempotent, so drifting a
+# few seconds costs nothing, and this avoids every timer on the Pi firing on the
+# same second.
+AccuracySec=10s
+Unit=btc-bot.service
+
+[Install]
+WantedBy=timers.target

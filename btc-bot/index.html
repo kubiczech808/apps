@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="cs">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>BTC Price Action Bot</title>
+<link rel="stylesheet" href="assets/app.css?v=dev">
+</head>
+<body>
+
+<div class="gate" id="gate" hidden>
+  <form id="gate-form">
+    <h2>BTC Price Action Bot</h2>
+    <p>Zadej přístupový klíč. Uloží se jen v tomto prohlížeči.</p>
+    <div class="field">
+      <label for="gate-key">Klíč</label>
+      <input id="gate-key" type="password" autocomplete="current-password" required>
+    </div>
+    <div class="actions">
+      <button class="primary" type="submit">Otevřít</button>
+      <span id="gate-error" class="neg"></span>
+    </div>
+  </form>
+</div>
+
+<div class="wrap" id="app" hidden>
+  <div class="top">
+    <span class="dot" id="status-dot" title="stav"></span>
+    <h1 id="portfolio-name">BTC Price Action Swing</h1>
+    <span class="badge" id="mode-badge">–</span>
+    <span class="spacer"></span>
+    <span class="badge" id="last-run">–</span>
+    <button id="refresh" type="button">Obnovit</button>
+  </div>
+
+  <div id="notices"></div>
+
+  <section class="tiles" id="tiles"></section>
+
+  <section class="card">
+    <h2>Vývoj kapitálu (sats)</h2>
+    <div class="chart" id="equity-chart">
+      <svg id="equity-svg" role="img" aria-label="Vývoj kapitálu účtu v sats"></svg>
+      <div class="tooltip" id="equity-tooltip" hidden></div>
+    </div>
+  </section>
+
+  <div class="tabs" role="tablist">
+    <button role="tab" data-tab="open" aria-selected="true">Otevřené pozice</button>
+    <button role="tab" data-tab="orders" aria-selected="false">Objednávky</button>
+    <button role="tab" data-tab="closed" aria-selected="false">Zavřené pozice</button>
+    <button role="tab" data-tab="runs" aria-selected="false">Běhy</button>
+    <button role="tab" data-tab="settings" aria-selected="false">Nastavení</button>
+  </div>
+
+  <section class="card" id="panel-open">
+    <div class="table-scroll"><table>
+      <thead><tr>
+        <th>Otevřeno</th><th>Směr</th><th>Velikost</th><th>Vstup</th>
+        <th>Stop loss</th><th>Take profit</th><th>Páka</th><th>Likvidace</th>
+        <th>Marže</th><th>P/L</th>
+      </tr></thead>
+      <tbody id="tbody-open"></tbody>
+    </table></div>
+    <div class="actions"><button class="danger" id="flatten" type="button">Zavřít všechny pozice</button></div>
+  </section>
+
+  <section class="card" id="panel-orders" hidden>
+    <div class="table-scroll"><table>
+      <thead><tr>
+        <th>Zadáno</th><th>Typ</th><th>Směr</th><th>Velikost</th><th>Cena</th>
+        <th>Stop loss</th><th>Take profit</th><th>Marže</th><th></th>
+      </tr></thead>
+      <tbody id="tbody-orders"></tbody>
+    </table></div>
+  </section>
+
+  <section class="card" id="panel-closed" hidden>
+    <div class="table-scroll"><table>
+      <thead><tr>
+        <th>Zavřeno</th><th>Směr</th><th>Velikost</th><th>Vstup</th><th>Výstup</th>
+        <th>Důvod</th><th>Poplatky</th><th>P/L</th>
+      </tr></thead>
+      <tbody id="tbody-closed"></tbody>
+    </table></div>
+  </section>
+
+  <section class="card" id="panel-runs" hidden>
+    <div class="table-scroll"><table>
+      <thead><tr><th>Čas</th><th>Runner</th><th>Režim</th><th>Akce</th><th>Trvání</th><th>Důvod</th></tr></thead>
+      <tbody id="tbody-runs"></tbody>
+    </table></div>
+  </section>
+
+  <section class="card" id="panel-settings" hidden>
+    <div class="fields">
+      <div class="field">
+        <label for="set-enabled">Automatické obchodování</label>
+        <select id="set-enabled">
+          <option value="true">Zapnuto</option>
+          <option value="false">Pozastaveno</option>
+        </select>
+        <div class="hint">Pozastavení zastaví jen nové vstupy. Otevřené pozice si drží SL i TP na burze.</div>
+      </div>
+      <div class="field">
+        <label for="set-mode">Režim</label>
+        <select id="set-mode">
+          <option value="paper">Paper (bez burzy)</option>
+          <option value="testnet4">LN Markets testnet4</option>
+          <option value="mainnet">LN Markets ostrý provoz</option>
+        </select>
+        <div class="hint">Ostrý provoz utrácí skutečné sats.</div>
+      </div>
+      <div class="field">
+        <label for="set-risk">Riziko na obchod (% kapitálu)</label>
+        <input id="set-risk" type="number" min="0.1" max="5" step="0.1">
+        <div class="hint">Ztráta na stop lossu, měřená v sats.</div>
+      </div>
+      <div class="field">
+        <label for="set-max-open">Max. otevřených pozic</label>
+        <input id="set-max-open" type="number" min="1" max="5" step="1">
+      </div>
+      <div class="field">
+        <label for="set-max-day">Max. obchodů za den</label>
+        <input id="set-max-day" type="number" min="1" max="20" step="1">
+      </div>
+      <div class="field">
+        <label for="set-min-rr">Minimální R/R</label>
+        <input id="set-min-rr" type="number" min="1" max="10" step="0.1">
+        <div class="hint">Měřeno v sats, ne ve vzdálenosti ceny.</div>
+      </div>
+      <div class="field">
+        <label for="set-cooldown">Pauza po ztrátě (minuty)</label>
+        <input id="set-cooldown" type="number" min="0" max="1440" step="10">
+      </div>
+      <div class="field">
+        <label for="set-max-leverage">Max. páka</label>
+        <input id="set-max-leverage" type="number" min="1" max="50" step="1">
+        <div class="hint">Skutečná páka se dopočítá ze vzdálenosti stopu; tohle je jen strop.</div>
+      </div>
+    </div>
+    <div class="actions">
+      <button class="primary" id="save-settings" type="button">Uložit nastavení</button>
+      <button id="forget-key" type="button">Zapomenout klíč</button>
+      <span id="settings-status"></span>
+    </div>
+  </section>
+</div>
+
+<script src="assets/app.js?v=dev"></script>
+</body>
+</html>

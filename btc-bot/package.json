@@ -1,0 +1,12 @@
+{
+  "name": "btc-price-action-bot",
+  "private": true,
+  "type": "module",
+  "description": "Swing trading bot for BTC on LN Markets, driven by price action, with a dashboard on btc-dca.com/bot/",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "test": "node --test \"tests/**/*.test.mjs\"",
+    "bot": "node tools/run-bot.mjs",
+    "backtest": "node tools/backtest.mjs"
+  }
+}
