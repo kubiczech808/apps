@@ -17,7 +17,8 @@ function extractFn(string $src, string $name): string
     $end = strrpos($body, '}');
     return $end === false ? $body : substr($body, 0, $end + 1);
 }
-foreach (['AI_RESEARCH_FIRST_BATCH_CONTACTS', 'AI_RESEARCH_FINISH_ATTEMPTS_MAX', 'AI_RESEARCH_BATCH_STEPS_PER_TICK'] as $const) {
+foreach (['AI_RESEARCH_FIRST_BATCH_CONTACTS', 'AI_RESEARCH_FINISH_ATTEMPTS_MAX', 'AI_RESEARCH_BATCH_STEPS_PER_TICK',
+          'AI_RESEARCH_BATCH_EXHAUSTED_RUNS'] as $const) {
     preg_match('/const ' . $const . ' = (\d+);/', $src, $m);
     assert(isset($m[1]), 'konstanta chybi: ' . $const);
     eval('const ' . $const . ' = ' . $m[1] . ';');
@@ -33,7 +34,7 @@ foreach (['aiResearchSupportedMarkets', 'aiResearchPlanTargetMarkets', 'aiResear
           'aiResearchWorkflowChecklist', 'aiResearchWorkflowRequiredDone', 'aiResearchWorkflowMissingSteps',
           'aiResearchRunWaitsOnlyForScraping', 'aiResearchNextWork', 'aiResearchWorkIsFinishing',
           'aiResearchCloseExhaustedRuns', 'aiResearchStepsNeedingModel', 'aiResearchRunProgressesWithoutModel',
-          'aiResearchChecklistProgress'] as $fn) {
+          'aiResearchChecklistProgress', 'aiResearchFirstBatchSourceExhausted'] as $fn) {
     eval(extractFn($src, $fn));
 }
 
@@ -190,6 +191,54 @@ $checklist = aiResearchWorkflowChecklist($db, ['id' => $runId, 'status' => 'done
 printf("  hotovy plan: %s\n", aiResearchChecklistProgress($checklist));
 assert(aiResearchChecklistProgress($checklist) !== (string)$work['progress'],
     'jiny stav checklistu musi dat jiny postup');
+echo "  ok\n";
+
+echo "\n== 10. vycerpany katalog je taky hotova davka ==\n";
+// Produkce: beh #114 stal na "26 z 100 kontaktu" a kazdy tik zalozil novy scraping
+// job, ktery pres cache nasel presne tytez kontakty. Katalog na ten keyword vic firem
+// nemel, cil 100 nesel splnit nikdy - a s pravidlem jeden subjekt naraz to drzelo
+// celou kategorii.
+$db = freshDb();
+$db->exec('CREATE TABLE scraping_jobs (id INTEGER PRIMARY KEY AUTOINCREMENT, container_id INTEGER,
+    status TEXT DEFAULT "finished", run_type TEXT DEFAULT "manual", inserted_count INTEGER DEFAULT 0,
+    processed_count INTEGER DEFAULT 0, discovery_done INTEGER DEFAULT 0)');
+$jobIns = $db->prepare('INSERT INTO scraping_jobs (container_id, status, inserted_count, processed_count, discovery_done) VALUES (4,?,?,?,?)');
+// Jeden dokonceny beh bez noveho kontaktu jeste nic nedokazuje.
+$jobIns->execute(['finished', 0, 30, 1]);
+printf("  po jednom prazdnem behu: %s\n", aiResearchFirstBatchSourceExhausted($db, 4, 8) ? 'vycerpano' : 'jeste ne');
+assert(!aiResearchFirstBatchSourceExhausted($db, 4, 8), 'jeden beh na vyhlaseni vycerpani nestaci');
+// Dva po sobe uz ano.
+$jobIns->execute(['finished', 0, 28, 1]);
+printf("  po dvou prazdnych behech: %s\n", aiResearchFirstBatchSourceExhausted($db, 4, 8) ? 'vycerpano' : 'jeste ne');
+assert(aiResearchFirstBatchSourceExhausted($db, 4, 8), 'dva dokoncene behy bez noveho kontaktu = vycerpany zdroj');
+// Beh, ktery jeste neprosel cely zdroj, nebo ktery neco pridal, vycerpani rusi.
+$jobIns->execute(['finished', 5, 40, 1]);
+assert(!aiResearchFirstBatchSourceExhausted($db, 4, 8), 'beh s novym kontaktem vycerpani rusi');
+$db->exec('DELETE FROM scraping_jobs');
+$jobIns->execute(['finished', 0, 30, 0]);
+$jobIns->execute(['finished', 0, 28, 0]);
+assert(!aiResearchFirstBatchSourceExhausted($db, 4, 8), 'bez dokonceneho prochazeni zdroje se vycerpani nehlasi');
+
+echo "\n== 10b. s priznakem vycerpani je krok davky splneny a beh pusti dalsi ==\n";
+$db2 = freshDb();
+$exhausted = $readyPlan;
+$exhausted['first_batch_exhausted'] = ['contacts' => 26, 'at' => date('c')];
+addRun($db2, 'PH Logistics', 'done', $exhausted, 26, '<p>x</p>');
+$SCRAPING = ['container_id' => 4, 'list_id' => 8, 'job' => ['id' => 77, 'status' => 'queued'], 'contacts_total' => 26];
+$checklist = aiResearchWorkflowChecklist($db2, ['id' => 1, 'status' => 'done', 'email_body_html' => '<p>x</p>'], $exhausted);
+$missing = aiResearchWorkflowMissingSteps($checklist);
+printf("  chybi: %s\n", implode('; ', $missing) ?: '(nic)');
+assert($missing === [], 's vycerpanym zdrojem uz nic nechybi, chybi: ' . implode('; ', $missing));
+$work = aiResearchNextWork($db2);
+printf("  dalsi prace: %s\n", $work['kind']);
+assert($work['kind'] === 'new_seed', 'a fronta pusti dalsi subjekt, mam ' . $work['kind']);
+
+echo "\n== 10c. novy job se uz nezaklada, kdyz je zdroj vycerpany ==\n";
+$ensureSrc = extractFn($src, 'aiResearchEnsureFirstBatchScrapingRun');
+assert(str_contains($ensureSrc, 'aiResearchFirstBatchSourceExhausted($pdo, $containerId'), 'pred zalozenim se overi vycerpani');
+assert(strpos($ensureSrc, 'aiResearchFirstBatchSourceExhausted') < strpos($ensureSrc, 'createScrapingRun'),
+    'kontrola musi byt pred zalozenim dalsiho behu');
+assert(str_contains($ensureSrc, 'aiResearchMarkFirstBatchExhausted'), 'a zapise se to do planu');
 echo "  ok\n";
 
 echo "\nVSE OK\n";

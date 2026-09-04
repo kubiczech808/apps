@@ -43,6 +43,10 @@ const DB_CLEANUP_BATCH_ROWS = 2000;
 const AI_RESEARCH_FINISH_ATTEMPTS_MAX = 3;
 // Kolik kroku scrapovaci davky posune jeden tik, kdyz uz behu nic jineho nechybi.
 const AI_RESEARCH_BATCH_STEPS_PER_TICK = 8;
+// Kolik po sobe dokoncenych behu bez jednoho noveho kontaktu znamena, ze zdroj na
+// dany keyword a lokalitu uz vic firem nema. Jeden beh muze skoncit i jinak, proto
+// se ceka na dva.
+const AI_RESEARCH_BATCH_EXHAUSTED_RUNS = 2;
 // Kolik casu musi v behu zbyvat, aby melo smysl zacit dalsi praci. Novy seed potrebuje
 // plan z webu i scraping, dokonceni rozdelaneho behu jen jeden dalsi krok.
 const AI_RESEARCH_NEW_SEED_RESERVE_SECONDS = 35;
@@ -8590,7 +8594,10 @@ function aiResearchWorkflowChecklist(PDO $pdo, array $run, array $plan): array
     $jobFinished = is_array($job) && in_array((string)$job['status'], ['finished', 'cancelled'], true);
     $jobFailed = is_array($job) && (string)$job['status'] === 'failed';
     $batchFull = $contactsScraped >= AI_RESEARCH_FIRST_BATCH_CONTACTS;
-    $batchDone = $batchFull || ($jobFinished && $contactsScraped > 0);
+    // Vycerpany zdroj je taky hotova davka. Katalog nemusi na dany keyword mit
+    // cilovy pocet firem a beh, ktery na cil ceka navzdy, drzi celou frontu.
+    $batchExhausted = !empty($plan['first_batch_exhausted']);
+    $batchDone = $batchFull || $batchExhausted || ($jobFinished && $contactsScraped > 0);
 
     $estimate = is_array($plan['contact_estimate'] ?? null) ? (array)$plan['contact_estimate'] : [];
     $estimateSources = count((array)($estimate['sources'] ?? []));
@@ -8661,7 +8668,9 @@ function aiResearchWorkflowChecklist(PDO $pdo, array $run, array $plan): array
                 : ($jobFailed
                     ? 'scraping selhal, zatím ' . $contactsScraped . ' kontaktů'
                     : $contactsScraped . ' z cílových ' . AI_RESEARCH_FIRST_BATCH_CONTACTS
-                        . ($batchDone ? ', scraping dokončen' : ', scraping běží')),
+                        . ($batchExhausted
+                            ? ', katalog víc firem nenabízí'
+                            : ($batchDone ? ', scraping dokončen' : ', scraping běží'))),
         ],
         [
             'key' => 'drafts',
@@ -9442,6 +9451,81 @@ function aiResearchOwnerSendCount(PDO $pdo, int $ownerId): int
  * rozesilka, dalsi kontakty nema smysl sbirat: uz nascrapovane stejne nestihne oslovit
  * a beh by jen blokoval frontu vsem ostatnim seedum. Po prvni rozesilce se sbira dal.
  */
+/**
+ * Je zdroj pro prvni davku vycerpany? Pozna se to na poslednich dokoncenych bezich
+ * stejneho kontejneru: kdyz uz zadny nevlozil novy kontakt, katalog na dany keyword
+ * a lokalitu vic firem nema a dalsi beh by jen prochazel to same z cache.
+ */
+function aiResearchFirstBatchSourceExhausted(PDO $pdo, int $containerId, int $listId): bool
+{
+    if ($containerId <= 0) {
+        return false;
+    }
+    try {
+        $stmt = $pdo->prepare('
+            SELECT COALESCE(inserted_count, 0) AS inserted_count,
+                   COALESCE(processed_count, 0) AS processed_count,
+                   COALESCE(discovery_done, 0) AS discovery_done
+            FROM scraping_jobs
+            WHERE container_id=? AND status IN ("finished", "cancelled") AND run_type<>"ai_research"
+            ORDER BY id DESC
+            LIMIT ?
+        ');
+        $stmt->execute([$containerId, AI_RESEARCH_BATCH_EXHAUSTED_RUNS]);
+        $jobs = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Throwable $e) {
+        error_log('First batch exhaustion check failed: ' . $e->getMessage());
+        return false;
+    }
+    if (count($jobs) < AI_RESEARCH_BATCH_EXHAUSTED_RUNS) {
+        return false;
+    }
+    foreach ($jobs as $job) {
+        // Beh, ktery jeste neprosel celou nabidku zdroje, o vycerpani nic nerika.
+        if ((int)$job['discovery_done'] !== 1) {
+            return false;
+        }
+        if ((int)$job['inserted_count'] > 0) {
+            return false;
+        }
+        // Beh, ktery vubec nic nezpracoval, mohl skoncit na case; to taky nestaci.
+        if ((int)$job['processed_count'] < 1) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/**
+ * Zapise do planu, ze prvni davka je hotova tim, co zdroj dal. Bez toho by krok
+ * "Nascrapovana prvni davka" nikdy nebyl splneny a beh by drzel frontu navzdy.
+ */
+function aiResearchMarkFirstBatchExhausted(PDO $pdo, int $runId, int $contacts): void
+{
+    if ($runId <= 0) {
+        return;
+    }
+    try {
+        $stmt = $pdo->prepare('SELECT plan_json FROM ai_research_runs WHERE id=? LIMIT 1');
+        $stmt->execute([$runId]);
+        $plan = json_decode((string)$stmt->fetchColumn(), true);
+        $plan = is_array($plan) ? $plan : [];
+        if (!empty($plan['first_batch_exhausted'])) {
+            return;
+        }
+        $plan['first_batch_exhausted'] = ['contacts' => $contacts, 'at' => date('c')];
+        $update = $pdo->prepare('UPDATE ai_research_runs SET plan_json=?, message=?, updated_at=? WHERE id=?');
+        $update->execute([
+            json_encode($plan, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?: '{}',
+            'Prvni davka je uzavrena na ' . $contacts . ' kontaktech: katalog na tento keyword a lokalitu vic firem nenabizi.',
+            date('c'),
+            $runId,
+        ]);
+    } catch (Throwable $e) {
+        error_log('First batch exhaustion mark for #' . $runId . ' failed: ' . $e->getMessage());
+    }
+}
+
 function aiResearchEnsureFirstBatchScrapingRun(PDO $pdo, int $containerId, int $runId): void
 {
     if ($containerId <= 0) {
@@ -9464,6 +9548,13 @@ function aiResearchEnsureFirstBatchScrapingRun(PDO $pdo, int $containerId, int $
             return;
         }
         if ($activeJobId > 0) {
+            return;
+        }
+        // Katalog nemusi na dany keyword a lokalitu mit cilovy pocet firem. Kdyz uz
+        // dokonceny beh nepridal ani jeden novy kontakt, dalsi beh najde pres cache
+        // presne to same - a beh by se o cil pokousel navzdy a drzel celou frontu.
+        if ($sends === 0 && aiResearchFirstBatchSourceExhausted($pdo, $containerId, (int)($container['list_id'] ?? 0))) {
+            aiResearchMarkFirstBatchExhausted($pdo, $runId, $contacts);
             return;
         }
         $message = $sends > 0
