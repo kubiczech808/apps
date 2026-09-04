@@ -136,7 +136,18 @@ export const fetchLnMarketsCandles = async ({ client, limit = 500, range = '1h',
   }
 
   for (let pageNumber = 1; cursor && collected.size < limit && pageNumber < maxPages; pageNumber += 1) {
-    const next = parse(await page(encode, cursor))
+    let next
+    try {
+      next = parse(await page(encode, cursor))
+    } catch (error) {
+      // Keep the pages already collected rather than losing the whole history
+      // to one refused request, but say so — a run that quietly returned a
+      // tenth of the window it asked for is a different measurement wearing
+      // the same name.
+      throw new Error(
+        `LN Markets candles failed on page ${pageNumber + 1} after ${collected.size} rows: ${error.message}`
+      )
+    }
     if (next === cursor) break
     cursor = next
   }

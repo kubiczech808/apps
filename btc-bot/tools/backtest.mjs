@@ -37,7 +37,16 @@ const loadCandles = async () => {
   return fetchCandlesWithFallback({ limit, client })
 }
 
-const { source, candles } = await loadCandles()
+const { source, candles, failures = [] } = await loadCandles()
+
+// A silent fallback is worse than a failure. A run that quietly dropped from
+// eight months of LN Markets candles to thirty days of Kraken reports a
+// different strategy on different data and looks like the same run.
+if (failures.length) {
+  console.log('Sources that did not answer:')
+  for (const failure of failures) console.log(`  ${failure}`)
+  console.log('')
+}
 
 const overrides = { strategy: {}, risk: {} }
 if (args.has('risk')) overrides.risk.riskPct = Number(args.get('risk'))
