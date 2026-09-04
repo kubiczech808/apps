@@ -5606,17 +5606,46 @@ test("5050 tags: the shortlist and the run agree on which markets qualify", asyn
 
   // Gamma hands tags back as plain strings and as {label,slug} objects, and a market
   // carries them under different fields depending on which pass recorded it.
+  //
+  // There is ONE case per field the server may use, and that is the point of the list.
+  // Reported: "LoL: Anyone's Legend vs LGD Gaming - Game 2 Winner" displayed as "outside
+  // included tags (esports)" under an esports-only portfolio. The server had tagged it
+  // through firstPolymarketTags, which neither reader opened -- and this test passed
+  // anyway, because it drove both of them through the same four fields and they agreed on
+  // the same blind spot. Two readers agreeing proves nothing if neither is asked about the
+  // field that actually carried the tag.
+  //
+  // The canonical set is the paper bot's TAG_FIELDS / TAG_CATEGORY_FIELDS: api.php selects
+  // a row for a portfolio across it and the bot decides whether to use the row across it,
+  // so anything narrower here refuses a market for lacking the tag it was chosen for.
+  const bot = await readFile(new URL("../tools/paper-trading-bot.mjs", import.meta.url), "utf8");
+  const fieldList = (name) => JSON.parse(
+    new RegExp(`const ${name} = (\\[[^\\]]+\\])`).exec(bot)[1].replace(/,(\s*])/, "$1").replace(/\n\s*/g, ""),
+  );
+  const listFields = fieldList("TAG_FIELDS");
+  const categoryFields = fieldList("TAG_CATEGORY_FIELDS");
+  assert.ok(listFields.includes("firstPolymarketTags"),
+    "the field that caused the report has to be in the canonical set");
+  assert.ok(listFields.includes("polymarketCategories"));
+
   const cases = [
-    [{ polymarketTags: ["esports", "counter-strike"] }, true],
-    [{ tags: [{ slug: "sports" }, { label: "EPL" }] }, true],
-    [{ firstTags: ["sports"] }, true],
-    [{ riskCategory: "Sports" }, true],
+    ...listFields.map((field) => [{ [field]: ["esports", "counter-strike"] }, true]),
+    ...listFields.map((field) => [{ [field]: [{ slug: "sports" }, { label: "EPL" }] }, true]),
+    ...categoryFields.map((field) => [{ [field]: "Sports" }, true]),
     [{ polymarketTags: ["politics", "elections"] }, false],
+    [{ firstPolymarketCategories: ["politics"] }, false],
     [{}, false],
   ];
   for (const [row, expected] of cases) {
     assert.equal(dashboard.marketMatchesAllowedTags(row, allowed), expected, `shortlist: ${JSON.stringify(row)}`);
     assert.equal(run.marketTagIsAllowed(row), expected, `run: ${JSON.stringify(row)}`);
+  }
+  // The executor also reads a candidate's own copy, because a revalidated shortlist row
+  // carries the market under `candidate` rather than at the top level.
+  for (const field of [...listFields, ...categoryFields]) {
+    const value = categoryFields.includes(field) ? "esports" : ["esports"];
+    assert.equal(run.marketTagIsAllowed({ candidate: { [field]: value } }), true,
+      `the executor must read ${field} on a revalidated candidate too`);
   }
 
   // Cleared means every tag, on both sides -- including a market carrying no tags.
@@ -9813,4 +9842,71 @@ test("market tags: the bot reads every field the server selects rows by", async 
   // And a row with nothing anywhere still carries nothing: the wider read must not invent
   // tags, or an include-filter would stop filtering.
   assert.equal([...slugs({ question: "untagged" })].length, 0);
+});
+
+// Reported on several paper portfolios: a row displayed at 62.0% with +45,260.0% p.a.
+// carrying "probability NaN% below high-confidence threshold and edge-opportunity
+// threshold; annualized EV 0.0% is non-profitable after fees".
+//
+// Both halves were artefacts of the retired AI pipeline. refreshEvaluationAfterProbability
+// is handed Number(item.aiProbability), nothing writes aiProbability any more, and
+// Number(undefined) is NaN. `economics` was then scored against that NaN while the VERDICT
+// came from marketEconomics -- so the row was judged on the market's own numbers and
+// explained by a dead path's. The "0.0%" is the same Number(null) trap once more:
+// annualizeReturn returns null for a non-finite input, (null * 100).toFixed(1) prints
+// "0.0", and null <= 0 judges it unprofitable.
+test("paper reject reasons: a missing number is reported as missing, not as zero", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const source = await readFile(new URL("../tools/paper-trading-bot.mjs", import.meta.url), "utf8");
+
+  const api = new Function(`
+    const MIN_PROBABILITY = 0.7;
+    const OPPORTUNITY_MIN_PROBABILITY = 0.6;
+    const OPPORTUNITY_MIN_EDGE = 0.04;
+    const OPPORTUNITY_MIN_ANNUAL_RETURN = 0.3;
+    const MIN_ANNUAL_RETURN = 0.05;
+    ${functionSource(source, "numericOrNaN")}
+    ${functionSource(source, "scoreStatus")}
+    ${functionSource(source, "annualizeReturn")}
+    ${functionSource(source, "annualizationDays")}
+    return { scoreStatus, annualizeReturn };
+  `)();
+
+  // The trap itself, so the reason it prints "0.0" is pinned rather than assumed.
+  assert.equal(api.annualizeReturn(NaN, 30), null, "a non-finite return is unknown, not zero");
+  assert.equal(Number(null) * 100, 0, "and Number(null) is 0, which is how it printed as 0.0%");
+
+  const missing = api.scoreStatus({
+    probability: NaN, annualizedReturn: null, edge: NaN,
+    spreadOk: true, volumeOk: true, depthOk: true,
+  });
+  const missingText = missing.rejectReasons.join("; ");
+  assert.doesNotMatch(missingText, /NaN/, "a probability that was never produced must not print as NaN%");
+  assert.doesNotMatch(missingText, /0\.0% is non-profitable/,
+    "an unknown annualized return must not be reported as a measured zero");
+  assert.match(missingText, /no probability was produced/);
+  assert.match(missingText, /annualized EV could not be computed/);
+  assert.equal(missing.status, "REJECTED", "and it is still not tradable -- only the wording changes");
+
+  // A genuinely low number still reads exactly as it did.
+  const low = api.scoreStatus({
+    probability: 0.42, annualizedReturn: -0.13, edge: 0.01,
+    spreadOk: true, volumeOk: true, depthOk: true,
+  });
+  assert.match(low.rejectReasons.join("; "), /probability 42\.0% below high-confidence/);
+  assert.match(low.rejectReasons.join("; "), /annualized EV -13\.0% is non-profitable after fees/);
+
+  // And the row must be described by the economics that judged it. Reading the reasons or
+  // the headline figures from `economics` while the status comes from scoringEconomics is
+  // what let a row carry a verdict and an explanation from two different calculations.
+  const refresh = functionSource(source, "refreshEvaluationAfterProbability");
+  assert.match(refresh, /const rejectReasons = scoringEconomics\.rejectReasons/,
+    "the reasons must come from the economics that produced the verdict");
+  for (const field of ["edge", "expectedRoi", "annualizedReturn", "expectedValueUsdc"]) {
+    assert.match(refresh, new RegExp(`${field}: rounded\\(scoringEconomics\\.`),
+      `${field} must follow the verdict, not the retired AI path`);
+  }
+  // The ai*-prefixed copies stay on that path on purpose: they are its own record.
+  assert.match(refresh, /aiExpectedValueUsdc: rounded\(economics\./);
+  assert.match(refresh, /aiAnnualizedReturn: rounded\(economics\./);
 });

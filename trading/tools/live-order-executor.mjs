@@ -3233,20 +3233,33 @@ function rotationLegMerge({ completionRun, previousState, exitEntry, runEntry, p
 // facts, which is what left a 300-candidate scan with nothing to bid on.
 // Gamma returns tags both as plain strings and as {label,slug} objects, and a market
 // carries them under more than one field depending on which pass recorded it.
+// The same field set the server tags with and the paper bot reads. This decided a live
+// portfolio's "outside included tags", and it opened three of the six list fields -- so a
+// market the server had tagged through firstPolymarketTags or the category lists could be
+// refused for not carrying the tag it was selected for. Kept inline rather than shared,
+// because the tag tests extract this function on its own.
 function marketTagSlugs(row = {}) {
   const source = row.candidate || {};
-  const lists = [row.polymarketTags, row.tags, row.firstTags, source.polymarketTags, source.tags, source.firstTags];
+  const listFields = ["polymarketTags", "tags", "firstPolymarketTags", "firstTags",
+    "polymarketCategories", "firstPolymarketCategories"];
+  const categoryFields = ["riskCategory", "category", "firstCategory"];
   const slugs = new Set();
-  for (const list of lists) {
-    for (const raw of (Array.isArray(list) ? list : [])) {
-      const text = String(raw && typeof raw === "object" ? (raw.slug || raw.label || raw.name || "") : (raw ?? ""))
-        .trim().toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "");
-      if (text) slugs.add(text);
+  const slug = (value) => String(value ?? "")
+    .trim().toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "");
+  for (const field of listFields) {
+    for (const holder of [row, source]) {
+      const list = holder?.[field];
+      for (const raw of (Array.isArray(list) ? list : [])) {
+        const text = slug(raw && typeof raw === "object" ? (raw.slug || raw.label || raw.name || "") : raw);
+        if (text) slugs.add(text);
+      }
     }
   }
-  for (const key of [row.riskCategory, source.riskCategory, row.category, source.category]) {
-    const text = String(key || "").trim().toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "");
-    if (text) slugs.add(text);
+  for (const field of categoryFields) {
+    for (const holder of [row, source]) {
+      const text = slug(holder?.[field]);
+      if (text) slugs.add(text);
+    }
   }
   return slugs;
 }

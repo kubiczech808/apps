@@ -1083,10 +1083,28 @@ function normalizeMarketTagList(value) {
 }
 
 // Gamma returns tags both as plain strings and as {label,slug} objects, and a market
-// carries them under more than one field depending on which pass recorded it.
+// carries them under more than one field depending on which pass recorded it -- more than
+// this reader used to open. api.php's execution_scope_observation_tags picks a row FOR a
+// portfolio across the whole set, and the paper bot's TAG_FIELDS decides whether to USE it
+// across the same set; this one decides what the shortlist SAYS about it, and it read three.
+//
+// Reported: an obvious esports market ("LoL: Anyone's Legend vs LGD Gaming - Game 2 Winner")
+// displayed as "outside included tags (esports)" under a portfolio that accepts only
+// esports. The server had tagged it, through firstPolymarketTags -- a field this function
+// never looked at -- so all it saw was the row's `general` category, and it reported the
+// market as off-topic for the very category it belongs to.
+//
+// The field lists stay inline rather than in a shared constant because the tag tests extract
+// these functions on their own, where a const declared beside the function is silently
+// dropped. What holds the readers together is the test that drives one case per field
+// through every one of them.
 function marketTagSlugsOf(item = {}) {
+  const listFields = ["polymarketTags", "tags", "firstPolymarketTags", "firstTags",
+    "polymarketCategories", "firstPolymarketCategories"];
+  const categoryFields = ["riskCategory", "category", "firstCategory"];
   const slugs = new Set();
-  for (const list of [item.polymarketTags, item.tags, item.firstTags]) {
+  for (const field of listFields) {
+    const list = item?.[field];
     for (const raw of (Array.isArray(list) ? list : [])) {
       const tag = normalizedScrapedScanTag(
         raw && typeof raw === "object" ? (raw.slug || raw.label || raw.name || "") : raw,
@@ -1094,8 +1112,8 @@ function marketTagSlugsOf(item = {}) {
       if (tag) slugs.add(tag);
     }
   }
-  for (const key of [item.riskCategory, item.category]) {
-    const tag = normalizedScrapedScanTag(key);
+  for (const field of categoryFields) {
+    const tag = normalizedScrapedScanTag(item?.[field]);
     if (tag) slugs.add(tag);
   }
   return slugs;

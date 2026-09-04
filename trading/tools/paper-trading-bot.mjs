@@ -5096,11 +5096,29 @@ function scoreStatus({ probability, annualizedReturn, edge, spreadOk, volumeOk, 
   return {
     status: eligible ? "ELIGIBLE" : "REJECTED",
     thesisType: highConfidenceOk ? "HIGH_CONFIDENCE" : (opportunityOk ? "EDGE_OPPORTUNITY" : "REJECTED"),
+    // A missing number is not a bad one, and these two lines used to say it was.
+    //
+    // `probability NaN%` came from printing a probability that was never produced, and
+    // `annualized EV 0.0% is non-profitable after fees` from annualizeReturn returning null
+    // for a non-finite input: `(null * 100).toFixed(1)` is "0.0" and `null <= 0` is true, so
+    // an unknown return was reported as a measured zero and judged unprofitable on it. Both
+    // now say what is actually the case, which is that there is no number to judge.
+    // The guard is numericOrNaN, NOT Number.isFinite(Number(value)): annualizeReturn
+    // returns null for a non-finite input, and Number(null) is 0, which is finite. Checking
+    // it that way reads a missing return as a measured zero and lands right back on
+    // "annualized EV 0.0% is non-profitable after fees" -- the reported string. This test
+    // caught exactly that in the first version of this fix.
     rejectReasons: [
-      highConfidenceOk || opportunityOk ? null : `probability ${(probability * 100).toFixed(1)}% below high-confidence threshold and edge-opportunity threshold`,
-      annualizedReturn <= 0
-        ? `annualized EV ${(annualizedReturn * 100).toFixed(1)}% is non-profitable after fees`
-        : (returnOk ? null : `annualized EV ${(annualizedReturn * 100).toFixed(1)}% below ${(MIN_ANNUAL_RETURN * 100).toFixed(1)}%`),
+      highConfidenceOk || opportunityOk
+        ? null
+        : (Number.isFinite(numericOrNaN(probability))
+          ? `probability ${(probability * 100).toFixed(1)}% below high-confidence threshold and edge-opportunity threshold`
+          : "no probability was produced for this market, so neither the high-confidence nor the edge-opportunity threshold could be tested"),
+      !Number.isFinite(numericOrNaN(annualizedReturn))
+        ? "annualized EV could not be computed for this market"
+        : (annualizedReturn <= 0
+          ? `annualized EV ${(annualizedReturn * 100).toFixed(1)}% is non-profitable after fees`
+          : (returnOk ? null : `annualized EV ${(annualizedReturn * 100).toFixed(1)}% below ${(MIN_ANNUAL_RETURN * 100).toFixed(1)}%`)),
       spreadOk ? null : "spread too wide",
       volumeOk ? null : "liquidity/volume too low",
       depthOk ? null : "insufficient ask depth for market buy",
@@ -5695,7 +5713,21 @@ function refreshEvaluationAfterProbability(evaluation, probability, modelName, m
   // something is right, and crashing the whole shortlist is not.
   const scoringEconomics = (AI_ANALYSIS_ENABLED ? economics : marketEconomics) || economics;
 
-  const rejectReasons = economics.rejectReasons.map((reason) => {
+  // The reasons come from whichever economics produced the verdict, which is the only set
+  // that can explain it. They used to come from `economics` regardless.
+  //
+  // Reported: a row displayed at 62.0% with +45,260.0% p.a. carrying "probability NaN%
+  // below high-confidence threshold and edge-opportunity threshold; annualized EV 0.0% is
+  // non-profitable after fees". Both halves are artefacts of the retired AI path. This
+  // function is handed Number(item.aiProbability), and with the AI pipeline gone nothing
+  // writes aiProbability any more, so that is Number(undefined) -- NaN. `economics` is then
+  // scored against NaN: no threshold can be met, expectedValue is NaN, and annualizeReturn
+  // returns null for a non-finite input, which `(null * 100).toFixed(1)` prints as "0.0"
+  // and `null <= 0` judges non-profitable. An unknown return reported as a zero one.
+  //
+  // With AI off, scoringEconomics is marketEconomics and the verdict was already sound --
+  // so the row was judged on the market's own numbers and explained by a dead path's.
+  const rejectReasons = scoringEconomics.rejectReasons.map((reason) => {
     if (reason === "spread too wide") return `spread ${Number.isFinite(spread) ? (spread * 100).toFixed(1) + " pts" : "n/a"} too wide`;
     if (reason === "insufficient ask depth for market buy") return `insufficient ask depth for ${stake.toFixed(2)} USDC market buy`;
     return reason;
@@ -5760,10 +5792,17 @@ function refreshEvaluationAfterProbability(evaluation, probability, modelName, m
     thesisType: scoringEconomics.thesisType,
     rejectReasons,
     aiProbability: Number(probability.toFixed(4)),
-    edge: rounded(economics.edge, 4),
-    expectedRoi: rounded(economics.expectedRoi, 4),
-    annualizedReturn: rounded(economics.annualizedReturn, 4),
-    expectedValueUsdc: rounded(economics.expectedValue, 4),
+    // The row's own figures follow the verdict, for the same reason the reasons do: with
+    // the AI pipeline retired these were read from an economics scored against a NaN
+    // probability, so every one of them stored as null while the market's own numbers sat
+    // unused beside them. The ai*-prefixed copies below stay on `economics` -- they are
+    // explicitly that path's record, and null is the honest value for a probability nothing
+    // produces any more. When AI is enabled, scoringEconomics IS economics and nothing here
+    // changes at all.
+    edge: rounded(scoringEconomics.edge, 4),
+    expectedRoi: rounded(scoringEconomics.expectedRoi, 4),
+    annualizedReturn: rounded(scoringEconomics.annualizedReturn, 4),
+    expectedValueUsdc: rounded(scoringEconomics.expectedValue, 4),
     aiExpectedValueUsdc: rounded(economics.expectedValue, 4),
     aiAnnualizedReturn: rounded(economics.annualizedReturn, 4),
     marketExpectedValueUsdc: marketEconomics ? Number(marketEconomics.expectedValue.toFixed(4)) : null,
@@ -5772,13 +5811,18 @@ function refreshEvaluationAfterProbability(evaluation, probability, modelName, m
     aiAnalysis,
     probabilityThesis: aiAnalysis.thesis || evaluation.probabilityThesis,
     analysisModel: modelName,
+    // Same rule once more: describe the row by the numbers it was judged on, and say
+    // nothing rather than "NaN%" about a probability the retired AI path never produced.
     analysisSummary: groundedSummary || [
       aiAnalysis.thesis || evaluation.probabilityThesis || "AI analysis produced no thesis.",
-      `Independent AI probability ${(probability * 100).toFixed(1)}%; Polymarket entry is used only after the AI estimate for EV calculation.`,
+      Number.isFinite(probability)
+        ? `Independent AI probability ${(probability * 100).toFixed(1)}%; Polymarket entry is used only after the AI estimate for EV calculation.`
+        : "No independent AI probability was produced for this market, so the verdict is the market's own economics.",
       aiAnalysis.probabilityRationale ? `Why this probability: ${aiAnalysis.probabilityRationale}` : "",
       aiAnalysis.probabilityPointRationale ? `Why these percentage points: ${aiAnalysis.probabilityPointRationale}` : "",
       aiAnalysis.marketComparisonSummary ? `AI vs Polymarket: ${aiAnalysis.marketComparisonSummary}` : "",
-      `Edge ${(economics.edge * 100).toFixed(1)} pts; expected annualized return ${(economics.annualizedReturn * 100).toFixed(1)}%; thesis type ${economics.thesisType}.`,
+      `Edge ${pointText(scoringEconomics.edge)}; expected annualized return`
+        + ` ${pctText(scoringEconomics.annualizedReturn)}; thesis type ${scoringEconomics.thesisType}.`,
     ].filter(Boolean).join(" "),
   };
 }
