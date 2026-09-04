@@ -4,15 +4,20 @@ on:
   # Rozvrh je jen startovni signal, ne kadence prace. GitHub planovane behy na tomto
   # repu zahazuje - obecny cron s */5 firoval napr. v 06:01, pred tim 01:21 a 23:42,
   # tedy mezery v hodinach misto peti minut. Propustnost proto nesmi stat na tom, jak
-  # casto se workflow spusti: jedno spusteni odjede tiku desitky za sebou.
+  # casto se workflow spusti: jedno spusteni odjede tiku desitky za sebou a pracuje
+  # hodiny. Proto staci hodinovy rozvrh - kratsi by jen skladal cekajici behy.
   schedule:
-    - cron: '*/5 * * * *'
+    - cron: '7 * * * *'
   workflow_dispatch:
     inputs:
       calls:
         description: 'Kolik tiku poslat za sebou v jednom spusteni'
         required: false
-        default: '40'
+        default: '120'
+      max_minutes:
+        description: 'Nejdele kolik minut serie tiku pracuje'
+        required: false
+        default: '300'
 
 concurrency:
   group: email-campaign-ai-research
@@ -24,7 +29,7 @@ jobs:
   ai-research:
     runs-on: ubuntu-latest
     # Jedno spusteni smi pracovat dlouho; propustnost pak neurcuje rozvrh GitHubu.
-    timeout-minutes: 180
+    timeout-minutes: 350
     steps:
       - name: Run AI research ticks until the queue is idle
         env:
@@ -32,6 +37,7 @@ jobs:
           APP_DATABASE_USERNAME: ${{ secrets.MYSQL_EMAILING_DB_USERNAME }}
           APP_DATABASE_PASSWORD: ${{ secrets.MYSQL_EMAILING_DB_PASSWORD }}
           RESEARCH_CALLS: ${{ github.event.inputs.calls }}
+          RESEARCH_MAX_MINUTES: ${{ github.event.inputs.max_minutes }}
         run: |
           if [ -z "$APP_DATABASE_NAME" ] || [ -z "$APP_DATABASE_USERNAME" ] || [ -z "$APP_DATABASE_PASSWORD" ]; then
             echo "Missing database secrets; cannot derive cron token."
@@ -45,13 +51,23 @@ jobs:
           print(hashlib.sha256(material.encode("utf-8")).hexdigest())
           PY
           )
-          calls="${RESEARCH_CALLS:-40}"
+          calls="${RESEARCH_CALLS:-120}"
+          # Vlastni deadline, aby zaverecny prehled stihl vypsat i tehdy, kdyz
+          # se cekani na minutova okna nasklada dlouho. Timeout jobu je az za nim.
+          deadline=$(( $(date +%s) + ${RESEARCH_MAX_MINUTES:-300} * 60 ))
           # hop=2 znamena "navazujici tik": aplikace pak necheka na interval, presne
           # jako kdyz si tik posle dalsi hop sam. Zamek proti souběhu, minutovy limit
           # i denni rozpocet plati dal, takze rychlejsi volani nic neprepali.
           url="https://www.osobnizkusenosti.cz/email-campaign/?cron=${TOKEN}&ai_research=1&hop=2"
+          # Nejdelsi pauza, kterou ma smysl preckat v bezicim jobu. Delsi znamena
+          # vycerpany denni limit - to se necha na dalsi spusteni.
+          max_wait="${RESEARCH_MAX_WAIT:-300}"
           idle=0
           for call in $(seq 1 "$calls"); do
+            if [ "$(date +%s)" -ge "$deadline" ]; then
+              echo "Casovy strop serie tiku vyprsel, konci se u tiku ${call}."
+              break
+            fi
             http_code=$(curl --show-error --silent --max-time 300 --output /tmp/ai-research-body.txt --write-out "%{http_code}" "$url" || echo "000")
             echo "--- tik ${call}/${calls} (HTTP ${http_code})"
             cat /tmp/ai-research-body.txt || true
@@ -59,9 +75,21 @@ jobs:
             if [ "$http_code" != "200" ]; then
               echo "::warning::Tik vratil HTTP ${http_code}; hosting mohl request ukoncit, pokracuji dalsim."
             fi
-            # Odlozeni kvuli kvote nebo backoffu znamena, ze dalsi volani nema smysl.
+            # Odlozeni neznamena konec. Free tier Google drzi minutove okno - to je
+            # normalni provozni stav po kazdych par pozadavcich a preckat ho stoji
+            # nekolik desitek sekund. Kdyby smycka na kazdem takovem odlozeni skoncila,
+            # jedno spusteni by zpracovalo dva pozadavky a zbytek serie by zahodila.
+            # Aplikace posila `[dalsi-pokus-za=N]`, takze kratke okno se odliseni od
+            # dlouhe pauzy (vycerpany denni limit) nemusi hadat z textu.
             if grep -q "AI research odlozen" /tmp/ai-research-body.txt; then
-              echo "Provider drzi limit, serie tiku konci."
+              wait_for=$(sed -n 's/.*\[dalsi-pokus-za=\([0-9]\+\)\].*/\1/p' /tmp/ai-research-body.txt | tail -n 1)
+              wait_for="${wait_for:-0}"
+              if [ "$wait_for" -gt 0 ] && [ "$wait_for" -le "$max_wait" ]; then
+                echo "Minutove okno providera: cekam ${wait_for} s a pokracuji."
+                sleep $((wait_for + 5))
+                continue
+              fi
+              echo "Provider drzi dlouhou pauzu (${wait_for} s), serie tiku konci."
               break
             fi
             # Prazdna fronta se muze objevit i kratkodobe (ceka se na scraping), proto

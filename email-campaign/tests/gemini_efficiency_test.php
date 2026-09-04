@@ -122,10 +122,40 @@ assert(preg_match('/timeout-minutes:\s*(\d+)/', $research, $t) === 1 && (int)$t[
 assert(preg_match('/cancel-in-progress:\s*false/', $research) === 1,
     'bezici serie tiku se nesmi zrusit prichodem dalsiho rozvrhu');
 assert(strpos($research, 'AI research odlozen') !== false,
-    'smycka musi skoncit, kdyz provider drzi limit');
+    'smycka musi reagovat na odlozeni tiku');
 assert(preg_match('/nebylo co zpracovat\|bez modelu uz neni co delat/', $research) === 1,
     'smycka musi skoncit i na prazdne fronte');
 printf("  smycka: %s tiku na spusteni, timeout %s min\n",
     preg_match("/default: '(\d+)'/", $research, $d) ? $d[1] : '?', $t[1]);
+
+echo "\n== 9c. minutove okno free tieru se preckava, nekonci serii ==\n";
+// Merene na produkci: tik udelal dva pozadavky, narazil na minutovy limit Google
+// free tieru a odlozil se o 75 s. Smycka na "odlozen" koncila, takze jedno spusteni
+// zpracovalo dva pozadavky ze 188 potrebnych. Kratke okno se musi preckat; skoncit
+// ma az dlouha pauza (vycerpany denni limit).
+$src = file_get_contents(__DIR__ . '/../index.php');
+assert($src !== false, 'index.php se musi precist');
+assert(strpos($src, 'function aiResearchRetryHintTag') !== false,
+    'odlozeny tik musi hlasit strojove citelnou pauzu');
+assert(strpos($src, "'[dalsi-pokus-za=' . \$wait . ']'") !== false,
+    'znacka musi nest pocet sekund do dalsiho pokusu');
+assert(strpos($src, 'aiResearchRetryHintTag($nextAllowedAt)') !== false,
+    'cron odpoved odlozeneho tiku musi znacku obsahovat');
+assert(strpos($research, 'dalsi-pokus-za=') !== false,
+    'smycka musi cislo pauzy cist ze znacky, ne hadat z textu');
+assert(strpos($research, 'sleep $((wait_for + 5))') !== false,
+    'kratke okno se musi preckat a pokracovat');
+assert(preg_match('/wait_for.*-le.*max_wait/', $research) === 1,
+    'jen pauza do max_wait se preckava, delsi serii konci');
+assert(strpos($research, 'Provider drzi dlouhou pauzu') !== false,
+    'dlouha pauza musi serii ukoncit');
+// Deadline musi byt pod timeoutem jobu, jinak GitHub job zabije driv, nez se
+// vypise zaverecny prehled.
+assert(preg_match('/max_minutes(?:.|\n)*?default: \'(\d+)\'/', $research, $m) === 1,
+    'vstup max_minutes musi mit default');
+assert((int)$m[1] < (int)$t[1], 'casovy strop serie musi byt pod timeoutem jobu ('
+    . $m[1] . ' vs ' . $t[1] . ')');
+printf("  strop serie: %s min pod timeoutem %s min, preckava se do %s s\n",
+    $m[1], $t[1], preg_match('/max_wait="\$\{RESEARCH_MAX_WAIT:-(\d+)\}"/', $research, $w) ? $w[1] : '?');
 
 echo "\nVSE OK\n";

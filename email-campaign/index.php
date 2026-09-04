@@ -3492,7 +3492,11 @@ function runCronAiResearch(PDO $pdo, array $config, bool $force = false): string
         closeAiResearchLog($pdo, $planned, 'deferred', $message, $startedAt, $config);
         return $message
             . ' Gemini pozadavku v behu: ' . aiResearchRequestsMadeThisProcess()
-            . ', za 24 h ' . ($usedToday + aiResearchRequestsMadeThisProcess()) . '/' . $dailyBudget . '.';
+            . ', za 24 h ' . ($usedToday + aiResearchRequestsMadeThisProcess()) . '/' . $dailyBudget . '.'
+            // Strojove citelna pauza pro volajiciho. Minutove okno free tieru je
+            // kratke - kdo jen precte prozu "odlozen" a skonci, zahodi cely zbytek
+            // serie tiku za 75 s cekani. Cislo rika, jak dlouho ma smysl pockat.
+            . ' ' . aiResearchRetryHintTag($nextAllowedAt);
     } catch (Throwable $e) {
         setSetting($pdo, 'ai_research_lock_until', '');
         closeAiResearchLog($pdo, $planned, 'failed', 'AI research selhal: ' . $e->getMessage(), $startedAt, $config);
@@ -8119,6 +8123,18 @@ function aiResearchFailureMessage(Throwable $e): string
         return 'Denni limit Gemini free tieru je vycerpany, beh se dokonci, az se okno uvolni.';
     }
     return $message;
+}
+
+/**
+ * Znacka `[dalsi-pokus-za=N]` v odpovedi odlozeneho tiku. N je pocet sekund do chvile,
+ * kdy ma dalsi tik smysl. Volajici (workflow se serii tiku) tak pozna kratke minutove
+ * okno free tieru od dlouhe pauzy pri vycerpanem dennim limitu: prvni se preckava,
+ * druhe znamena, ze serie konci. Bez tohoto cisla musel volajici hadat z textu.
+ */
+function aiResearchRetryHintTag(int $nextAllowedAt): string
+{
+    $wait = $nextAllowedAt > 0 ? max(0, $nextAllowedAt - time()) : 0;
+    return '[dalsi-pokus-za=' . $wait . ']';
 }
 
 function markAiResearchRunFailed(PDO $pdo, int $runId, string $message): void
