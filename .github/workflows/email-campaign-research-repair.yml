@@ -1,0 +1,81 @@
+name: Email Campaign Research Repair
+
+# Naprava behu, ktere trvale zavrel strop pokusu o dokonceni v dobe, kdy byla
+# vycerpana denni kvota modelu. Merene na produkci: jedna serie tiku narazila do
+# denniho stropu free tieru (20 pozadavku, gemini-3-flash) a protoze se kazdy naraz
+# pocital jako pokus o dokonceni, uzavrelo se za necelou hodinu 30 zdravych subjektu.
+# Vlastni pricina uz je opravena; tohle vraci zpatky, co se stihlo zavrit predtim.
+#
+# Beh, ktery je opravdu nedokoncitelny, se po trech skutecnych pokusech zavre znovu,
+# takze opakovane spusteni nic nerozbije.
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: email-campaign-research-repair
+  cancel-in-progress: false
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Reopen runs closed by the attempt cap
+        env:
+          APP_DATABASE_NAME: ${{ secrets.APP_DATABASE_NAME }}
+          APP_DATABASE_USERNAME: ${{ secrets.MYSQL_EMAILING_DB_USERNAME }}
+          APP_DATABASE_PASSWORD: ${{ secrets.MYSQL_EMAILING_DB_PASSWORD }}
+        run: |
+          if [ -z "$APP_DATABASE_NAME" ] || [ -z "$APP_DATABASE_USERNAME" ] || [ -z "$APP_DATABASE_PASSWORD" ]; then
+            echo "Missing database secrets; cannot derive cron token."
+            exit 1
+          fi
+          TOKEN=$(python3 - <<'PY'
+          import hashlib
+          import os
+
+          material = "email-campaign-cron:" + os.environ["APP_DATABASE_NAME"] + ":" + os.environ["APP_DATABASE_USERNAME"] + ":" + os.environ["APP_DATABASE_PASSWORD"]
+          print(hashlib.sha256(material.encode("utf-8")).hexdigest())
+          PY
+          )
+          base="https://www.osobnizkusenosti.cz/email-campaign/?cron=${TOKEN}"
+
+          summary () {
+            curl --show-error --silent --max-time 90 --output /tmp/throughput.json "${base}&throughput_report=1" || true
+            python3 - <<'PY'
+          import json
+
+          try:
+              with open("/tmp/throughput.json", encoding="utf-8") as handle:
+                  report = json.load(handle)
+          except Exception as exc:                      # noqa: BLE001
+              print("  prehled se nepodarilo precist: %s" % exc)
+              raise SystemExit(0)
+
+          category = report.get("category", {})
+          runs = report.get("runs", {})
+          model = report.get("model", {})
+          print("  kategorie: hotovo %s z %s (zbyva %s)" % (
+              category.get("completed", "?"), category.get("total", "?"), category.get("remaining", "?")))
+          print("  behy: ready %s, rozdelanych %s, uzavrenych %s" % (
+              runs.get("ready", "?"), runs.get("incomplete", "?"), runs.get("closed", "?")))
+          print("  model: denni rozpocet %s, za 24 h pouzito %s" % (
+              model.get("daily_budget", "?"), model.get("used_last_24h", "?")))
+          PY
+          }
+
+          echo "=== PRED NAPRAVOU ==="
+          summary
+
+          echo
+          echo "=== NAPRAVA ==="
+          http_code=$(curl --show-error --silent --max-time 120 --output /tmp/repair.txt --write-out "%{http_code}" "${base}&reopen_quota_closed=1" || echo "000")
+          cat /tmp/repair.txt || true
+          echo "(HTTP ${http_code})"
+          if [ "$http_code" != "200" ]; then
+            echo "::error::Naprava vratila HTTP ${http_code}."
+            exit 1
+          fi
+
+          echo
+          echo "=== PO NAPRAVE ==="
+          summary
