@@ -768,13 +768,36 @@ function preselectTopPortfolio() {
   if (state.portfolioPreselectDone) return;
   const [preferred] = dashboardModes();
   if (!preferred) return;
+  const preferLive = isLivePortfolioMode(preferred);
   // The INPUTS the ordering reads, not the values it produces. A live portfolio that has
   // closed nothing yet has no ROI at all, and waiting for a value it will never have would
   // hold the preselection open for the whole session.
   const orderingReady = Boolean(state.portfolioConfig)
-    && (isLivePortfolioMode(preferred)
+    && (preferLive
       ? Boolean(state.liveState)
       : portfolioEquityUsdc(preferred) != null);
+  // Reported: after a refresh the dashboard sat on the conservative paper portfolio
+  // instead of the top live one. Waiting for state.liveState is a wait that never ends on
+  // such a page, because nothing loads the live state until a live portfolio is SELECTED:
+  // loadDashboardState dispatches on the current mode, storedMode() defaults to
+  // paper-conservative, so the paper branch runs, renderLiveState never fires, and the
+  // condition this function is waiting on can never become true. The preselection was
+  // gated on the very thing it was supposed to bring about.
+  //
+  // The config alone already settles the question that matters here -- live portfolios
+  // exist, and which of them are archived -- so the group is switched to now and the flag
+  // is deliberately LEFT CLEAR. Ordering WITHIN the live group still needs the ROI, so
+  // this pick is provisional: the load it starts brings the live state, and the next pass
+  // refines to the right live portfolio and commits. That terminates, because by then
+  // orderingReady is true.
+  if (!orderingReady && preferLive && Boolean(state.portfolioConfig)) {
+    if (normalizeMode(preferred) === normalizeMode(state.mode)) return;
+    state.mode = normalizeMode(preferred);
+    saveMode(state.mode);
+    state.runLogFilters = storedRunLogFilter(state.mode);
+    loadDashboardState();
+    return;
+  }
   // Leave the flag clear so the next payload gets a turn.
   if (!orderingReady) return;
   state.portfolioPreselectDone = true;
@@ -8349,14 +8372,27 @@ async function loadLiveState(options = {}) {
 }
 
 async function loadDashboardState(options = {}) {
-  const requestedMode = normalizeMode(state.mode);
   const requestId = ++state.dashboardLoadSeq;
   syncModeUi();
-  renderKnownStateForMode(requestedMode);
+  renderKnownStateForMode(normalizeMode(state.mode));
   if (!state.portfolioConfig) {
     await loadPortfolioConfig();
-    if (dashboardLoadIsStale({ requestId, requestedMode })) return;
+    if (dashboardLoadIsStale({ requestId })) return;
+    // The syncModeUi above ran the preselection before this config existed, so it could
+    // not decide anything: which portfolios there are, which are archived and which are
+    // automated all come from the payload that just arrived. Without a turn here the first
+    // visit of a page whose stored mode is a paper tab commits to that tab and the
+    // preselection never runs again.
+    preselectTopPortfolio();
+    // A preselection that switched the mode has already started its own load, and that
+    // load is now the current one -- so this call must stop rather than fetch the mode it
+    // was originally asked for.
+    if (dashboardLoadIsStale({ requestId })) return;
   }
+  // Read AFTER the preselection, not before: the whole point is that it may have changed
+  // the mode, and dispatching on the pre-preselection value is what sent a page that
+  // should have opened on a live portfolio down the paper branch.
+  const requestedMode = normalizeMode(state.mode);
   return isLivePortfolioMode(requestedMode)
     ? loadLiveState({ ...options, requestId, requestedMode })
     : loadBotState({ ...options, requestId, requestedMode });

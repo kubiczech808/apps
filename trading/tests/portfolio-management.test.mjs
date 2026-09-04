@@ -1780,6 +1780,15 @@ test("dashboard: the top portfolio of the overview opens on load, but never over
 
   // It runs from the one place both the paper and the live render paths reach.
   assert.match(extractFunction(APP, "syncModeUi"), /preselectTopPortfolio\(\);/);
+  // And it gets a turn once the config exists, not only before. The syncModeUi call at the
+  // top of loadDashboardState runs while portfolioConfig is still null, so that pass can
+  // never decide anything; without a second turn after the await, a page whose stored mode
+  // is a paper tab commits to it. The dispatch must also read the mode AFTER that turn.
+  const load = extractFunction(APP, "loadDashboardState");
+  assert.ok(load.indexOf("preselectTopPortfolio();") > load.indexOf("await loadPortfolioConfig();"),
+    "the preselection must get a turn once the config it needs has arrived");
+  assert.ok(load.indexOf("const requestedMode = normalizeMode(state.mode);") > load.indexOf("preselectTopPortfolio();"),
+    "the branch must be chosen from the mode the preselection left behind, not the one before it");
   // And a deliberate click settles it for the rest of the page load, including a click
   // on the tab that is already open.
   const handler = APP.slice(APP.indexOf('const button = event.target.closest("[data-mode-toggle]");'));
@@ -3338,4 +3347,126 @@ test("deploy: the page revalidates, and its versioned assets stay cacheable", as
 
   // And the file that carries the rules has to actually be uploaded.
   assert.match(workflow, /"index\.html", "api\.php", "storage\.php", "config\.php", "\.htaccess"/);
+});
+
+// The behavioural half of the test above, which is the half that was missing. Reported:
+// "stary problem se vratil, po refreshi stranky mam aktivni conservative portfolio
+// namisto nejvykonejsiho live portfolia."
+//
+// The rule was asserted only by grepping app.js, so it kept passing while the behaviour
+// was broken. Driving it shows the deadlock: the preselection waited for state.liveState,
+// and nothing loads the live state until a live portfolio is already SELECTED --
+// loadDashboardState dispatches on the current mode, storedMode() defaults to
+// paper-conservative, so the paper branch ran, renderLiveState never fired, and the
+// condition could never become true. It was gated on the thing it existed to cause.
+test("dashboard: a page opening on a paper tab still reaches the top live portfolio", () => {
+  const harness = new Function("state", "calls", `
+    ${/const BUILT_IN_PAPER_STRATEGY_IDS = [^;]+;/.exec(APP)[0]}
+    ${/const CUSTOM_PAPER_STRATEGY_ID = [^;]+;/.exec(APP)[0]}
+    ${/const LIVE_MODES = [^;]+;/.exec(APP)[0]}
+    const readCachedPortfolioConfig = () => null;
+    const saveMode = (mode) => calls.push(["saveMode", mode]);
+    const storedRunLogFilter = () => ["ALL"];
+    const loadDashboardState = () => calls.push(["loadDashboardState", state.mode]);
+    const portfolioEquityUsdc = (mode) => (state.equity || {})[mode] ?? null;
+    const portfolioAnnualizedRoiForMode = (mode) => {
+      const value = (state.roi || {})[mode];
+      return value == null ? null : { annualized: value };
+    };
+    ${extractFunction(APP, "normalizeMode")}
+    ${extractFunction(APP, "customLivePortfolioIdFromMode")}
+    ${extractFunction(APP, "isLivePortfolioMode")}
+    ${extractFunction(APP, "automationIsEnabled")}
+    ${extractFunction(APP, "portfolioIsArchived")}
+    ${extractFunction(APP, "paperStrategyIds")}
+    ${extractFunction(APP, "byActiveThenRoiDescending")}
+    ${extractFunction(APP, "byEquityDescending")}
+    ${extractFunction(APP, "dashboardModes")}
+    ${extractFunction(APP, "preselectTopPortfolio")}
+    function portfolioConfigForMode(mode) {
+      const config = state.portfolioConfig || {};
+      const customId = customLivePortfolioIdFromMode(normalizeMode(mode));
+      if (customId) return (config.livePortfolios || {})[customId] || {};
+      if (normalizeMode(mode) === "live-5050") return config.live5050 || {};
+      if (normalizeMode(mode) === "live") return config.live || {};
+      return (config.paper || {})[String(mode).replace(/^paper-/, "")] || {};
+    }
+    return { preselectTopPortfolio, dashboardModes };
+  `);
+
+  // The account as measured: the plain Live portfolio with automation off, 5050 archived,
+  // and three custom live portfolios of which two are automated.
+  const portfolioConfig = {
+    live: { automationEnabled: false },
+    live5050: { archived: true },
+    livePortfolios: {
+      live2: { automationEnabled: false },
+      ewportfolio: { automationEnabled: true },
+      esports: { automationEnabled: true },
+    },
+    paper: { conservative: {}, highReward: {}, moreProbable: {}, equal: {} },
+  };
+  const fresh = () => ({
+    // What storedMode() returns on a first visit, and what the reader was left looking at.
+    mode: "paper-conservative",
+    portfolioPreselectDone: false,
+    portfolioConfig: null,
+    liveState: null,
+    equity: { "paper-conservative": 5000, "paper-highReward": 100 },
+    roi: {},
+  });
+
+  // Pass 1, from loadDashboardState's syncModeUi: nothing has loaded, so nothing is decided
+  // and nothing is committed.
+  const first = fresh();
+  const firstCalls = [];
+  harness(first, firstCalls).preselectTopPortfolio();
+  assert.equal(first.portfolioPreselectDone, false, "an undecidable pass must not commit");
+  assert.deepEqual(firstCalls, []);
+
+  // Pass 2, after the config arrives and before any live state exists. This is the pass the
+  // deadlock swallowed. The config alone settles that the live group leads, so the mode has
+  // to move off the paper tab here -- and the flag must stay clear, because ordering WITHIN
+  // the live group still needs the ROI.
+  const second = fresh();
+  const secondCalls = [];
+  second.portfolioConfig = portfolioConfig;
+  harness(second, secondCalls).preselectTopPortfolio();
+  assert.ok(second.mode.startsWith("live"),
+    `a page with live portfolios must not stay on ${second.mode} once the config is known`);
+  assert.equal(second.portfolioPreselectDone, false,
+    "the provisional pick must leave the flag clear so the ordering can still be refined");
+  assert.ok(secondCalls.some(([name]) => name === "loadDashboardState"),
+    "and it must start the load that fetches the live state it is waiting for");
+
+  // Pass 3, once that load has delivered the live state: the ROI now orders the live group
+  // and the choice is committed.
+  const third = { ...second, liveState: { positions: [], closedTrades: [] } };
+  third.roi = { "live-custom-esports": 4.2, "live-custom-ewportfolio": 0.9 };
+  const thirdCalls = [];
+  harness(third, thirdCalls).preselectTopPortfolio();
+  assert.equal(third.mode, "live-custom-esports", "the highest-ROI automated live portfolio wins");
+  assert.equal(third.portfolioPreselectDone, true, "and that decision is final for the page load");
+
+  // A reader's deliberate choice is still never overridden.
+  const clicked = { ...fresh(), portfolioConfig, portfolioPreselectDone: true, mode: "paper-equal" };
+  const clickedCalls = [];
+  harness(clicked, clickedCalls).preselectTopPortfolio();
+  assert.equal(clicked.mode, "paper-equal");
+  assert.deepEqual(clickedCalls, []);
+
+  // A dashboard with no live portfolios at all must not be dragged to a live tab.
+  const paperOnly = fresh();
+  paperOnly.portfolioConfig = {
+    live: { archived: true }, live5050: { archived: true }, livePortfolios: {},
+    paper: { conservative: {} },
+  };
+  const paperCalls = [];
+  const paperApi = harness(paperOnly, paperCalls);
+  const [topPaper] = paperApi.dashboardModes();
+  paperApi.preselectTopPortfolio();
+  assert.ok(!paperOnly.mode.startsWith("live-"),
+    `a config with no live portfolios must not select ${paperOnly.mode}`);
+  assert.ok(String(topPaper).startsWith("paper-") || topPaper === "live",
+    "and the overview's own top row is what it follows");
 });
