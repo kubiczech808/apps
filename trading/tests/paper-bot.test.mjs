@@ -9985,3 +9985,63 @@ test("paper revalidation: re-quoting a market must not strip the tags it was sel
   assert.ok(fn.indexOf("...preservedMarketTagFields(item)") > fn.indexOf("...evaluation,"),
     "the preserved tags must be applied after the fresh evaluation, not before it");
 });
+
+// The paper bot went down entirely: three consecutive runs killed at state loading by
+// "Refusing to continue because the published paper state is unavailable ... fetch failed",
+// naming a DIFFERENT segment each time -- esno1d, then leagueoflegends2 and ewportfolio3.
+// A broken file would name the same one every run; a shared host dropping some of two dozen
+// requests fired four at a time looks exactly like this.
+//
+// Refusing is right: publishing without a segment would empty that portfolio's whole
+// history. What was missing is that one dropped connection is not evidence the segment is
+// gone, so it has to be asked again before the run gives up.
+test("paper state segments: a dropped download is retried before the run gives up", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const source = await readFile(new URL("../tools/paper-trading-bot.mjs", import.meta.url), "utf8");
+
+  const block = source.slice(source.indexOf("const SEGMENT_FETCH_CONCURRENCY"));
+  const fetchOne = block.slice(0, block.indexOf("\n  let merged = payload;"));
+  assert.match(fetchOne, /SEGMENT_FETCH_ATTEMPTS/, "a segment fetch has to be retried");
+
+  // Driven, not just grepped: the retry has to actually recover a transient failure, and
+  // has to stop asking on a 404 rather than spending three attempts on a real answer.
+  const harness = new Function("fetchJson", `
+    ${fetchOne}
+    return fetchOne;
+  `);
+
+  let calls = 0;
+  const flaky = harness(async () => {
+    calls += 1;
+    if (calls < 3) throw new Error("fetch failed");
+    return { ok: true };
+  });
+  const recovered = await flaky({ name: "leagueoflegends2", url: "https://example.test/seg.json" });
+  assert.equal(recovered.error, undefined, "a segment that succeeds on a later attempt must not fail the run");
+  assert.deepEqual(recovered.segment, { ok: true });
+  assert.equal(calls, 3, "and it keeps asking until it gets an answer");
+
+  calls = 0;
+  const missing = harness(async () => {
+    calls += 1;
+    throw new Error("HTTP 404 Not Found");
+  });
+  const gone = await missing({ name: "esno1d", url: "https://example.test/seg.json" });
+  assert.match(String(gone.error?.message), /404/, "a 404 still reaches the caller that handles it");
+  assert.equal(calls, 1, "a 404 is a real answer about the file and must not be retried");
+
+  // A failure that never clears still fails, and still carries its reason -- the refusal
+  // below it is what stops a portfolio's history being published as empty.
+  calls = 0;
+  const broken = harness(async () => {
+    calls += 1;
+    throw new Error("fetch failed");
+  });
+  const dead = await broken({ name: "ewportfolio3", url: "https://example.test/seg.json" });
+  assert.match(String(dead.error?.message), /fetch failed/);
+  assert.ok(calls > 1, "and it was retried before being called dead");
+
+  // The refusal itself must stay: retrying is not a licence to continue without a segment.
+  assert.match(source, /Published state segment could not be read/);
+  assert.match(source, /Refusing to continue: publishing now would drop the history it holds/);
+});

@@ -1426,12 +1426,32 @@ async function readStateWithSegments(payload) {
   // That matters: mergeStateSegment replaces the resolved half of marketObservations and
   // appends the active half, so a different order would reassemble a different catalogue.
   const SEGMENT_FETCH_CONCURRENCY = 4;
+  // Retried, because a segment that fails to download is not a segment that is gone, and
+  // the code below correctly refuses to publish without it -- so one dropped connection
+  // takes the whole run down.
+  //
+  // Measured: three consecutive runs killed by "fetch failed", naming a DIFFERENT segment
+  // each time (esno1d, then leagueoflegends2 and ewportfolio3). A specific file being
+  // broken would name the same one; a shared host dropping some of two dozen requests
+  // fired four at a time looks exactly like this. The whole paper bot was down.
+  //
+  // A 404 is never retried: that is a real answer about the file, handled below, and
+  // asking again only adds delay to a run that is already going to fail closed.
+  const SEGMENT_FETCH_ATTEMPTS = 3;
   const fetchOne = async ({ name, url }) => {
-    try {
-      return { name, url, segment: await fetchJson(`${url}${url.includes("?") ? "&" : "?"}t=${Date.now()}`) };
-    } catch (error) {
-      return { name, url, error };
+    let lastError = null;
+    for (let attempt = 1; attempt <= SEGMENT_FETCH_ATTEMPTS; attempt += 1) {
+      try {
+        return { name, url, segment: await fetchJson(`${url}${url.includes("?") ? "&" : "?"}t=${Date.now()}`) };
+      } catch (error) {
+        lastError = error;
+        if (/HTTP 404\b/.test(String(error?.message || error))) break;
+        if (attempt < SEGMENT_FETCH_ATTEMPTS) {
+          await new Promise((resolve) => setTimeout(resolve, attempt * 1000));
+        }
+      }
     }
+    return { name, url, error: lastError };
   };
 
   let merged = payload;
