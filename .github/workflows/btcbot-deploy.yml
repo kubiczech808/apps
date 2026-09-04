@@ -44,31 +44,55 @@ jobs:
           php -l api.php
 
       - name: Check LN Markets is reachable and the credentials are accepted
-        # This is the only place the credentials are exercised before a pass
-        # uses them for real. A public ticker proves the network path; an
-        # authenticated /user proves the key, secret, passphrase AND the clock
-        # (the signature carries a timestamp the server rejects if it drifts).
+        # The one step that talks to the exchange before a pass does. It is a
+        # HARD failure when the public API cannot be reached: that is exactly
+        # what caught the stale `api.testnet.lnmarkets.com` host this bot was
+        # first written against (ENOTFOUND — LN Markets moved to testnet4 and
+        # deprecated v2 in January 2026). Missing credentials only warn, because
+        # a dashboard with no keys yet is a reasonable state to deploy.
         env:
           LNM_API_KEY: ${{ secrets.LNM_API_KEY }}
           LNM_API_SECRET: ${{ secrets.LNM_API_SECRET }}
           LNM_API_PASSPHRASE: ${{ secrets.LNM_API_PASSPHRASE }}
-          LNM_API_NETWORK: ${{ vars.LNM_API_NETWORK || 'testnet' }}
+          LNM_API_NETWORK: ${{ vars.LNM_API_NETWORK || 'testnet4' }}
         run: |
           node --input-type=module -e '
             import { createLnMarketsClient } from "./src/lnmarkets.mjs"
+
             const client = createLnMarketsClient()
+            console.log(`Base URL: ${client.baseUrl}`)
+
             const ticker = await client.getTicker()
-            const price = ticker?.lastPrice ?? ticker?.index ?? ticker?.bid
-            console.log(`LN Markets ${client.network} reachable, BTC ${price}`)
+            const price = ticker?.lastPrice ?? ticker?.index
+            if (!Number.isFinite(Number(price))) {
+              throw new Error(`Ticker came back without a price: ${JSON.stringify(ticker).slice(0, 200)}`)
+            }
+            console.log(`Reachable — BTC ${price}`)
+
+            const candles = await client.getCandles({
+              from: new Date(Date.now() - 48 * 3600e3).toISOString(),
+              to: new Date().toISOString(),
+              range: "1h",
+              limit: 48,
+            })
+            const rows = Array.isArray(candles) ? candles : (candles?.data ?? [])
+            console.log(`Candles: ${rows.length} hourly rows, newest ${rows.at(-1)?.time ?? rows.at(0)?.time}`)
+            if (rows.length === 0) {
+              console.log("::warning title=Candles::LN Markets returned no candles; the bot will fall back to spot venues.")
+            }
+
             if (!client.hasCredentials) {
-              console.log("::warning title=LN Markets::No credentials configured — the bot will run in paper mode until LNM_API_KEY, LNM_API_SECRET and LNM_API_PASSPHRASE are set.")
+              console.log("::warning title=LN Markets::No credentials configured — the bot runs in paper mode until LNM_API_KEY, LNM_API_SECRET and LNM_API_PASSPHRASE are set.")
               process.exit(0)
             }
-            const user = await client.getUser()
-            console.log(`Authenticated as ${user?.username ?? "(no username)"} — balance ${user?.balance ?? "?"} sats`)
-            if (!Number.isFinite(Number(user?.balance))) {
+
+            const account = await client.getAccount()
+            console.log(`Authenticated as ${account?.username ?? "(no username)"} — balance ${account?.balance} sats`)
+            if (!Number.isFinite(Number(account?.balance))) {
               throw new Error("Authenticated but the account has no readable balance")
             }
+            const running = await client.getRunningTrades()
+            console.log(`Open positions on the account: ${(Array.isArray(running) ? running : running?.data ?? []).length}`)
           '
 
       - name: Backtest the strategy on real candles
@@ -272,5 +296,5 @@ jobs:
           LNM_API_KEY: ${{ secrets.LNM_API_KEY }}
           LNM_API_SECRET: ${{ secrets.LNM_API_SECRET }}
           LNM_API_PASSPHRASE: ${{ secrets.LNM_API_PASSPHRASE }}
-          LNM_API_NETWORK: ${{ vars.LNM_API_NETWORK || 'testnet' }}
+          LNM_API_NETWORK: ${{ vars.LNM_API_NETWORK || 'testnet4' }}
         run: node tools/run-bot.mjs

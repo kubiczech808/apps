@@ -1,64 +1,85 @@
-// LN Markets execution.
+// LN Markets execution (v3, isolated futures).
 //
 // Two rules are enforced here rather than left to the caller, because both are
-// the kind of thing that is easy to get right on the happy path and catastrophic
-// to get wrong once:
+// easy to get right on the happy path and catastrophic to get wrong once:
 //
 //  1. A position is NEVER opened without both a stop loss and a take profit.
-//     They are sent with the order, and the order is re-read afterwards to
-//     confirm the exchange actually holds them. If it does not, the position is
-//     closed immediately — an unprotected position is worse than no position,
-//     and this bot runs on a timer, so nothing else would notice for minutes.
-//  2. Prices are rounded before they are sized, never after. Rounding a stop
-//     after computing the quantity silently changes the risk the position
-//     carries away from the 1% that was authorised.
+//     They are sent with the order, and the response is checked to confirm the
+//     exchange is actually holding them. If it is not, the position is closed
+//     immediately — an unprotected position is worse than no position, and this
+//     bot runs on a timer, so nothing else would notice for minutes.
+//  2. Everything the rest of the app sees goes through `normaliseTrade`. The
+//     API speaks 'buy'/'sell' and ISO timestamps; the app speaks long/short and
+//     epoch milliseconds, in one place.
 
-const sideToApi = (side) => (side === 'long' ? 'b' : 's')
-const sideFromApi = (side) => (side === 'b' ? 'long' : 'short')
+const sideToApi = (side) => (side === 'long' ? 'buy' : 'sell')
+const sideFromApi = (side) => (side === 'buy' ? 'long' : 'short')
 
 const num = (value) => {
   const parsed = Number(value)
   return Number.isFinite(parsed) ? parsed : null
 }
 
-/** Normalise an LN Markets trade into the one shape the rest of the app knows. */
-export const normaliseTrade = (trade) => {
-  const running = Boolean(trade.running)
-  const closed = Boolean(trade.closed)
-  const canceled = Boolean(trade.canceled ?? trade.cancelled)
+const millis = (value) => {
+  if (value === null || value === undefined) return null
+  const parsed = typeof value === 'number' ? value : Date.parse(value)
+  return Number.isFinite(parsed) ? parsed : null
+}
+
+/** Normalise a v3 futures trade into the one shape the rest of the app knows. */
+export const normaliseTrade = (trade = {}) => {
   let status = 'open'
-  if (canceled) status = 'cancelled'
-  else if (closed) status = 'closed'
-  else if (running) status = 'running'
+  if (trade.canceled) status = 'cancelled'
+  else if (trade.closed) status = 'closed'
+  else if (trade.running) status = 'running'
 
   return {
-    id: String(trade.id),
+    id: String(trade.id ?? ''),
     side: sideFromApi(trade.side),
-    type: trade.type === 'l' ? 'limit' : 'market',
+    type: trade.type === 'limit' ? 'limit' : 'market',
     status,
     quantityUsd: num(trade.quantity),
     marginSats: num(trade.margin),
     leverage: num(trade.leverage),
-    entry: num(trade.price),
+    // `entryPrice` is what the trade actually filled at; `price` is what was
+    // asked for. Reporting the requested price as the entry would misstate the
+    // P/L of every trade that slipped.
+    entry: num(trade.entryPrice) ?? num(trade.price),
+    requestedPrice: num(trade.price),
     liquidation: num(trade.liquidation),
     stopLoss: num(trade.stoploss),
     takeProfit: num(trade.takeprofit),
-    exitPrice: num(trade.exit_price),
+    exitPrice: num(trade.exitPrice),
     plSats: num(trade.pl),
-    openingFeeSats: num(trade.opening_fee),
-    closingFeeSats: num(trade.closing_fee),
-    carryFeesSats: num(trade.sum_carry_fees),
-    openedAt: num(trade.market_filled_ts) ?? num(trade.creation_ts),
-    createdAt: num(trade.creation_ts),
-    closedAt: num(trade.closed_ts),
+    openingFeeSats: num(trade.openingFee),
+    closingFeeSats: num(trade.closingFee),
+    carryFeesSats: num(trade.sumFundingFees),
+    createdAt: millis(trade.createdAt),
+    openedAt: millis(trade.filledAt) ?? millis(trade.createdAt),
+    closedAt: millis(trade.closedAt),
+    clientId: trade.clientId ?? null,
     source: 'lnmarkets',
   }
 }
 
-export const createLnMarketsExecutor = ({ client, logger = console }) => {
-  const listByType = async (type) => {
-    const trades = await client.getTrades({ type })
-    return (Array.isArray(trades) ? trades : []).map(normaliseTrade)
+const asArray = (payload) => {
+  if (Array.isArray(payload)) return payload
+  if (Array.isArray(payload?.data)) return payload.data
+  return []
+}
+
+export const createLnMarketsExecutor = ({ client, logger = console, closedLimit = 100 }) => {
+  const listTrades = async () => {
+    const [running, open, closed] = await Promise.all([
+      client.getRunningTrades(),
+      client.getOpenTrades(),
+      client.getClosedTrades({ limit: closedLimit }),
+    ])
+    return {
+      running: asArray(running).map(normaliseTrade),
+      open: asArray(open).map(normaliseTrade),
+      closed: asArray(closed).map(normaliseTrade),
+    }
   }
 
   return {
@@ -66,28 +87,22 @@ export const createLnMarketsExecutor = ({ client, logger = console }) => {
     live: true,
 
     getAccount: async () => {
-      const user = await client.getUser()
-      const balanceSats = num(user?.balance) ?? 0
-      const marginUsedSats = num(user?.total_margin ?? user?.margin) ?? 0
+      const [account, running] = await Promise.all([client.getAccount(), client.getRunningTrades()])
+      const balanceSats = num(account?.balance) ?? 0
+      // v3's account has no aggregate margin field, so it is summed from the
+      // isolated trades that are actually holding it.
+      const marginUsedSats = asArray(running).reduce((sum, trade) => sum + (num(trade.margin) ?? 0), 0)
       return {
         balanceSats,
         marginUsedSats,
         // Equity is what may be risked: free balance plus margin already posted.
         equitySats: balanceSats + marginUsedSats,
-        username: user?.username ?? null,
+        username: account?.username ?? null,
         source: 'lnmarkets',
       }
     },
 
-    listTrades: async () => {
-      const [running, open, closed] = await Promise.all([
-        listByType('running'),
-        listByType('open'),
-        listByType('closed'),
-      ])
-      return { running, open, closed }
-    },
-
+    listTrades,
     getTicker: () => client.getTicker(),
 
     openPosition: async (plan) => {
@@ -96,12 +111,13 @@ export const createLnMarketsExecutor = ({ client, logger = console }) => {
       }
 
       const created = await client.newTrade({
-        type: 'm',
+        type: 'market',
         side: sideToApi(plan.side),
         quantity: plan.quantityUsd,
         leverage: plan.leverage,
         stoploss: plan.stop,
         takeprofit: plan.takeProfit,
+        clientId: `btcbot-${Date.now()}`,
       })
 
       const position = normaliseTrade(created ?? {})
@@ -128,14 +144,10 @@ export const createLnMarketsExecutor = ({ client, logger = console }) => {
     },
 
     updateStops: async (id, { stopLoss, takeProfit } = {}) => {
-      const results = []
-      if (stopLoss > 0) {
-        results.push(await client.updateTrade({ id, type: 'stoploss', value: stopLoss }))
-      }
-      if (takeProfit > 0) {
-        results.push(await client.updateTrade({ id, type: 'takeprofit', value: takeProfit }))
-      }
-      return results.map((trade) => normaliseTrade(trade ?? {}))
+      const updated = []
+      if (stopLoss > 0) updated.push(normaliseTrade((await client.updateStopLoss(id, stopLoss)) ?? {}))
+      if (takeProfit > 0) updated.push(normaliseTrade((await client.updateTakeProfit(id, takeProfit)) ?? {}))
+      return updated
     },
 
     closePosition: async (id) => normaliseTrade((await client.closeTrade(id)) ?? {}),

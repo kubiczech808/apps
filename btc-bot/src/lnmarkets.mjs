@@ -1,24 +1,34 @@
-// Minimal LN Markets v2 REST client.
+// LN Markets v3 REST client.
 //
-// Deliberately dependency-free: the same file has to run on a Raspberry Pi, in a
+// Dependency-free on purpose: the same file runs on a Raspberry Pi, in a
 // GitHub Actions runner and inside `node --test`, and a bot that moves money is
-// easier to trust when its transport is forty lines you can read than when it is
-// a package tree you cannot.
+// easier to trust when its transport is a hundred lines you can read.
 //
-// The signing scheme is the one LN Markets' own SDK implements
-// (@ln-markets/api): base64 HMAC-SHA256 over
-//   `${timestamp}${METHOD}/v2${path}${payload}`
-// where payload is the URL-encoded query string for GET/DELETE and the JSON body
-// for POST/PUT. Query parameters must be serialised in the SAME order they are
-// signed in, or the server recomputes a different digest and answers 401 — so
-// both the signature and the URL are built from one pass over `data`.
+// Targets **v3**. The older v2 API was deprecated in January 2026, and the
+// widely-linked `@ln-markets/api` package still points at
+// `api.testnet.lnmarkets.com`, a host that no longer resolves — the first
+// deploy of this bot failed on exactly that, with ENOTFOUND. The contract below
+// is taken from LN Markets' current SDK (`@ln-markets/sdk`), not from memory.
+//
+// Signing, and the three details that are easy to get wrong:
+//   payload   = `${timestamp}${method.toLowerCase()}${pathname}${data}`
+//   method    is LOWERCASE in v3 (it was uppercase in v2)
+//   pathname  includes the `/v3` prefix
+//   data      is the JSON body for POST/PUT, otherwise the query string
+//             INCLUDING its leading `?` (empty when there are no parameters)
+// The signature is base64 HMAC-SHA256 of that with the API secret.
 
 import { createHmac } from 'node:crypto'
 
-export const HOSTNAMES = {
-  mainnet: 'api.lnmarkets.com',
-  testnet: 'api.testnet.lnmarkets.com',
+export const NETWORKS = {
+  mainnet: 'https://api.lnmarkets.com/v3',
+  testnet4: 'https://api.testnet4.lnmarkets.com/v3',
 }
+
+// 'testnet' is what people type and what earlier configs hold; Bitcoin's
+// testnet3 is gone and LN Markets moved to testnet4, so accept the short name
+// rather than failing on a value that is merely out of date.
+export const resolveNetwork = (network) => (network === 'testnet' ? 'testnet4' : network || 'mainnet')
 
 export class LnMarketsError extends Error {
   constructor(status, statusText, body, path) {
@@ -31,28 +41,23 @@ export class LnMarketsError extends Error {
   }
 }
 
-const isQueryMethod = (method) => method === 'GET' || method === 'DELETE'
+const hasBody = (method) => method === 'POST' || method === 'PUT'
 
-/**
- * Serialise request data once, so the signed payload and the sent bytes cannot
- * drift apart.
- */
-export const buildPayload = (method, data) => {
-  if (!data || Object.keys(data).length === 0) return ''
-  if (isQueryMethod(method)) {
-    const params = new URLSearchParams()
-    for (const [key, value] of Object.entries(data)) {
-      if (value === undefined || value === null) continue
-      params.append(key, String(value))
-    }
-    return params.toString()
+/** Drop undefined so they neither reach the URL nor change the signature. */
+export const buildQuery = (data) => {
+  if (!data) return ''
+  const params = new URLSearchParams()
+  for (const [key, value] of Object.entries(data)) {
+    if (value === undefined || value === null || value === '') continue
+    params.append(key, String(value))
   }
-  return JSON.stringify(data)
+  const query = params.toString()
+  return query ? `?${query}` : ''
 }
 
-export const signRequest = ({ secret, timestamp, method, path, payload }) =>
+export const signRequest = ({ secret, timestamp, method, pathname, data }) =>
   createHmac('sha256', secret)
-    .update(`${timestamp}${method}/v2${path}${payload}`)
+    .update(`${timestamp}${method.toLowerCase()}${pathname}${data}`)
     .digest('base64')
 
 export const createLnMarketsClient = (options = {}) => {
@@ -60,14 +65,17 @@ export const createLnMarketsClient = (options = {}) => {
     key = process.env.LNM_API_KEY,
     secret = process.env.LNM_API_SECRET,
     passphrase = process.env.LNM_API_PASSPHRASE,
-    network = process.env.LNM_API_NETWORK || 'testnet',
-    hostname = process.env.LNM_API_HOSTNAME || HOSTNAMES[network] || HOSTNAMES.testnet,
+    network = resolveNetwork(process.env.LNM_API_NETWORK),
+    baseUrl = process.env.LNM_API_URL || NETWORKS[resolveNetwork(network)] || NETWORKS.mainnet,
     fetchImpl = globalThis.fetch,
     timeoutMs = 20000,
     now = () => Date.now(),
   } = options
 
+  const resolved = resolveNetwork(network)
   const hasCredentials = Boolean(key && secret && passphrase)
+  const { pathname: basePath, origin } = new URL(baseUrl)
+  const prefix = basePath.replace(/\/$/, '')
 
   const request = async ({ method, path, data, auth = false }) => {
     if (auth && !hasCredentials) {
@@ -76,39 +84,32 @@ export const createLnMarketsClient = (options = {}) => {
       )
     }
 
-    const payload = buildPayload(method, data)
-    const headers = { Accept: 'application/json' }
+    const pathname = `${prefix}/${path}`
+    const body = hasBody(method) && data ? JSON.stringify(data) : undefined
+    const query = hasBody(method) ? '' : buildQuery(data)
+    const signed = body ?? query
 
+    const headers = { Accept: 'application/json' }
+    if (body) headers['Content-Type'] = 'application/json'
     if (auth) {
       const timestamp = now()
-      headers['LNM-ACCESS-KEY'] = key
-      headers['LNM-ACCESS-PASSPHRASE'] = passphrase
-      headers['LNM-ACCESS-TIMESTAMP'] = String(timestamp)
-      headers['LNM-ACCESS-SIGNATURE'] = signRequest({ secret, timestamp, method, path, payload })
-    }
-
-    let url = `https://${hostname}/v2${path}`
-    let body
-    if (isQueryMethod(method)) {
-      if (payload) url += `?${payload}`
-    } else if (payload) {
-      body = payload
-      headers['Content-Type'] = 'application/json'
+      headers['lnm-access-key'] = key
+      headers['lnm-access-passphrase'] = passphrase
+      headers['lnm-access-timestamp'] = String(timestamp)
+      headers['lnm-access-signature'] = signRequest({ secret, timestamp, method, pathname, data: signed })
     }
 
     const controller = new AbortController()
     const timer = setTimeout(() => controller.abort(), timeoutMs)
     let response
     try {
-      response = await fetchImpl(url, { method, body, headers, signal: controller.signal })
+      response = await fetchImpl(`${origin}${pathname}${query}`, { method, body, headers, signal: controller.signal })
     } finally {
       clearTimeout(timer)
     }
 
     const text = await response.text()
-    if (!response.ok) {
-      throw new LnMarketsError(response.status, response.statusText, text, path)
-    }
+    if (!response.ok) throw new LnMarketsError(response.status, response.statusText, text, pathname)
     if (!text) return null
     try {
       return JSON.parse(text)
@@ -118,29 +119,37 @@ export const createLnMarketsClient = (options = {}) => {
   }
 
   return {
-    network,
-    hostname,
+    network: resolved,
+    baseUrl: `${origin}${prefix}`,
     hasCredentials,
     request,
 
-    // ── public market data ────────────────────────────────────────────────
-    getTicker: () => request({ method: 'GET', path: '/futures/ticker' }),
-    getPriceHistory: (data) => request({ method: 'GET', path: '/futures/history/price', data }),
-    getIndexHistory: (data) => request({ method: 'GET', path: '/futures/history/index', data }),
+    // ── public ───────────────────────────────────────────────────────────
+    ping: () => request({ method: 'GET', path: 'ping' }),
+    getTicker: () => request({ method: 'GET', path: 'futures/ticker' }),
+    // `range` is a resolution such as '1m', '15m', '1h', '4h', '1d'. `from` is
+    // required. The response is paginated: { data: [...], nextCursor }.
+    getCandles: (data) => request({ method: 'GET', path: 'futures/candles', data }),
 
     // ── account ──────────────────────────────────────────────────────────
-    getUser: () => request({ method: 'GET', path: '/user', auth: true }),
+    getAccount: () => request({ method: 'GET', path: 'account', auth: true }),
 
-    // ── futures ──────────────────────────────────────────────────────────
-    // `type` is 'm' (market) or 'l' (limit); `side` is 'b' (buy/long) or 's'
-    // (sell/short). Stop loss and take profit are held by LN Markets, which is
-    // what lets this bot run on a timer instead of a socket.
-    newTrade: (data) => request({ method: 'POST', path: '/futures', data, auth: true }),
-    updateTrade: (data) => request({ method: 'PUT', path: '/futures', data, auth: true }),
-    closeTrade: (id) => request({ method: 'DELETE', path: '/futures', data: { id }, auth: true }),
-    cancelTrade: (id) => request({ method: 'POST', path: '/futures/cancel', data: { id }, auth: true }),
-    addMargin: (data) => request({ method: 'POST', path: '/futures/add-margin', data, auth: true }),
-    // type: 'running' (filled, open), 'open' (resting limit orders), 'closed'.
-    getTrades: (data) => request({ method: 'GET', path: '/futures', data, auth: true }),
+    // ── isolated futures ─────────────────────────────────────────────────
+    // Isolated rather than cross: each position carries its own margin, so one
+    // trade going wrong cannot reach into another's, and liquidation is a
+    // property of the trade the stop was sized against.
+    newTrade: (data) => request({ method: 'POST', path: 'futures/isolated/trade', data, auth: true }),
+    getRunningTrades: () => request({ method: 'GET', path: 'futures/isolated/trades/running', auth: true }),
+    getOpenTrades: () => request({ method: 'GET', path: 'futures/isolated/trades/open', auth: true }),
+    getClosedTrades: (data) =>
+      request({ method: 'GET', path: 'futures/isolated/trades/closed', data, auth: true }),
+    updateStopLoss: (id, value) =>
+      request({ method: 'PUT', path: 'futures/isolated/trade/stoploss', data: { id, value }, auth: true }),
+    updateTakeProfit: (id, value) =>
+      request({ method: 'PUT', path: 'futures/isolated/trade/takeprofit', data: { id, value }, auth: true }),
+    closeTrade: (id) =>
+      request({ method: 'POST', path: 'futures/isolated/trade/close', data: { id }, auth: true }),
+    cancelTrade: (id) =>
+      request({ method: 'POST', path: 'futures/isolated/trade/cancel', data: { id }, auth: true }),
   }
 }

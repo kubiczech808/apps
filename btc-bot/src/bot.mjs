@@ -12,7 +12,7 @@
 // position is judged; managing before entering means capital freed by an exit is
 // available to the entry in the same pass.
 
-import { aggregate, dropForming, fetchCandlesWithFallback, HOUR_MS } from './candles.mjs'
+import { aggregate, DEFAULT_SOURCE_ORDER, dropForming, fetchCandlesWithFallback, HOUR_MS } from './candles.mjs'
 import { createLnMarketsClient } from './lnmarkets.mjs'
 import { createLnMarketsExecutor } from './executor-lnm.mjs'
 import { createPaperExecutor } from './executor-paper.mjs'
@@ -50,10 +50,16 @@ const isoNow = (ms) => new Date(ms).toISOString()
  * Fetch the two timeframes the strategy reads, from one hourly series so the
  * 4h buckets cannot disagree with the 1h ones they are built from.
  */
-export const loadMarket = async ({ settings, candleLimit, fetchImpl, now }) => {
+export const loadMarket = async ({ settings, candleLimit, fetchImpl, now, client }) => {
+  // LN Markets' own candles are only offered when there is a client to fetch
+  // them with; in paper mode there is none, and listing the source anyway would
+  // spend a guaranteed failure on every pass.
+  const order = client ? DEFAULT_SOURCE_ORDER : DEFAULT_SOURCE_ORDER.filter((name) => name !== 'lnmarkets')
   const { source, candles, failures } = await fetchCandlesWithFallback({
+    order,
     limit: candleLimit,
     fetchImpl,
+    client,
   })
   const closed = dropForming(candles, HOUR_MS, now)
   const ltf = aggregate(closed, settings.timeframes.ltfHours)
@@ -221,10 +227,19 @@ export const runPass = async ({
       return { state, run, saved }
     }
 
-    const market = await loadMarket({ settings, candleLimit: config.candleLimit, fetchImpl, now })
-    const { executor, mode } = makeExecutor({ settings, state, config, logger, fetchImpl })
+    // The executor is built first because it owns the API client the primary
+    // candle source needs.
+    const { executor, mode, client } = makeExecutor({ settings, state, config, logger, fetchImpl })
     run.mode = mode
     state.mode = mode
+
+    const market = await loadMarket({
+      settings,
+      candleLimit: config.candleLimit,
+      fetchImpl,
+      now,
+      client,
+    })
 
     // Paper positions only settle when someone walks the candles past them.
     if (!executor.live) {

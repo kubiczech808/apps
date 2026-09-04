@@ -18,9 +18,10 @@ export const DEFAULT_SETTINGS = {
   // The master switch. `false` stops new entries; open positions keep their
   // exchange-side stop and take profit, and are still managed and closed.
   enabled: true,
-  // 'testnet' | 'mainnet' | 'paper'. Anything other than 'mainnet' cannot spend
-  // real money, and switching to 'mainnet' is a deliberate, separate act.
-  mode: 'testnet',
+  // 'testnet4' | 'mainnet' | 'paper'. Anything other than 'mainnet' cannot
+  // spend real money, and switching to 'mainnet' is a deliberate, separate act.
+  // ('testnet' is accepted and resolves to testnet4 — see resolveNetwork.)
+  mode: 'testnet4',
   portfolioName: 'BTC Price Action Swing',
   startingCapitalUsd: 100,
   maxOpenPositions: 1,

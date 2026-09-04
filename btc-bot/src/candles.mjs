@@ -1,11 +1,13 @@
 // OHLC candle sourcing.
 //
-// LN Markets serves its own index/price history, but not clean OHLC candles at
-// the timeframes a price-action reading needs, so the chart is read from public
-// spot venues and only the execution happens on LN Markets. Three sources are
-// tried in order because a single venue being unreachable (geo-block on a CI
-// runner, maintenance window, rate limit) must not stop the bot from seeing the
-// market.
+// LN Markets' own `futures/candles` is the primary source, and it is the right
+// one: the bot trades against the LN Markets index, so reading the chart from
+// the same place removes a whole class of disagreement between what the
+// strategy saw and what the stop was measured against. Public spot venues stay
+// behind it as a fallback, because a single venue being unreachable (an
+// outage, a geo-block on a CI runner, a rate limit) must not leave the bot
+// blind — and a spot chart of BTC is close enough to keep managing a position
+// that already exists.
 //
 // Everything downstream consumes ONE normalised shape, ascending by time:
 //   { time, open, high, low, close, volume }   time = candle OPEN, epoch ms
@@ -70,7 +72,51 @@ export const SOURCES = {
   },
 }
 
-export const DEFAULT_SOURCE_ORDER = ['bybit', 'kraken', 'coinbase']
+export const DEFAULT_SOURCE_ORDER = ['lnmarkets', 'bybit', 'kraken', 'coinbase']
+
+/**
+ * Hourly candles from LN Markets itself.
+ *
+ * `from` is documented as a string and the candles come back with string
+ * times, so ISO 8601 is sent first. A rejection is retried once with epoch
+ * milliseconds rather than assumed to be fatal — the parameter's encoding is
+ * the one detail of this route not pinned down by the SDK's types, and being
+ * wrong about it should cost one extra request, not the bot's eyesight.
+ */
+export const fetchLnMarketsCandles = async ({ client, limit = 500 }) => {
+  const to = Date.now()
+  const from = to - (limit + 2) * HOUR_MS
+
+  const attempt = async (encode) => {
+    const payload = await client.getCandles({
+      from: encode(from),
+      to: encode(to),
+      range: '1h',
+      limit: Math.min(limit, 1000),
+    })
+    const rows = Array.isArray(payload) ? payload : (payload?.data ?? [])
+    return rows.map((row) => ({
+      time: typeof row.time === 'number' ? row.time : Date.parse(row.time),
+      open: num(row.open),
+      high: num(row.high),
+      low: num(row.low),
+      close: num(row.close),
+      volume: num(row.volume ?? 0),
+    }))
+  }
+
+  let candles
+  try {
+    candles = await attempt((ms) => new Date(ms).toISOString())
+  } catch (error) {
+    if (error?.status !== 400 && error?.status !== 422) throw error
+    candles = await attempt((ms) => String(ms))
+  }
+
+  const usable = candles.filter((candle) => Number.isFinite(candle.time)).sort(byTimeAscending)
+  if (usable.length === 0) throw new Error('LN Markets returned no candles')
+  return usable.slice(-limit)
+}
 
 /**
  * Drop the candle that is still forming.
@@ -88,7 +134,13 @@ export const fetchCandles = async ({
   limit = 500,
   fetchImpl = globalThis.fetch,
   timeoutMs = 15000,
+  client,
 } = {}) => {
+  if (source === 'lnmarkets') {
+    if (!client) throw new Error('LN Markets candles need a client')
+    return fetchLnMarketsCandles({ client, limit })
+  }
+
   const spec = SOURCES[source]
   if (!spec) throw new Error(`Unknown candle source: ${source}`)
 

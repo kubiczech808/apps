@@ -420,7 +420,7 @@ const renderRuns = () => {
 const renderSettings = () => {
   const settings = state?.settings || {}
   $('set-enabled').value = settings.enabled === false ? 'false' : 'true'
-  $('set-mode').value = settings.mode || 'testnet'
+  $('set-mode').value = settings.mode === 'testnet' ? 'testnet4' : settings.mode || 'testnet4'
   $('set-risk').value = settings.risk?.riskPct ?? 1
   $('set-max-open').value = settings.maxOpenPositions ?? 1
   $('set-max-day').value = settings.maxTradesPerDay ?? 3
@@ -478,8 +478,8 @@ const saveSettings = async () => {
 const renderHeader = () => {
   const badge = $('mode-badge')
   const mode = state?.mode || state?.settings?.mode || '–'
-  badge.textContent = { testnet: 'TESTNET', mainnet: 'OSTRÝ PROVOZ', paper: 'PAPER' }[mode] || mode
-  badge.className = `badge mode-${mode}`
+  badge.textContent = { testnet: 'TESTNET', testnet4: 'TESTNET', mainnet: 'OSTRÝ PROVOZ', paper: 'PAPER' }[mode] || mode
+  badge.className = `badge mode-${mode === 'testnet4' ? 'testnet' : mode}`
 
   $('portfolio-name').textContent = state?.settings?.portfolioName || 'BTC Price Action Swing'
 

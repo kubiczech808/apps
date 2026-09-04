@@ -56,6 +56,28 @@ A pass does, in this order: take the lease → read the market → read the acco
 manage the open position → consider one new entry. It is idempotent, so running
 it more often is safe and skipping one costs nothing.
 
+## A note on the API version
+
+This targets LN Markets **v3**, and that is not a preference. v2 was deprecated
+in January 2026, and the package most search results point at
+(`@ln-markets/api`, last published for v2) still names
+`api.testnet.lnmarkets.com` — a host that no longer resolves. The first deploy
+of this bot failed on exactly that, `ENOTFOUND`, which is why the deploy
+workflow checks reachability before it uploads anything.
+
+The current contract is taken from `@ln-markets/sdk`. Three things differ from
+v2 and will bite anyone porting older code:
+
+- the test network is **testnet4** (`api.testnet4.lnmarkets.com`);
+- the signature payload lowercases the HTTP method, and the query string is
+  signed **with** its leading `?`;
+- sides are `buy`/`sell` and order types `market`/`limit`, not `b`/`s`
+  and `m`/`l`.
+
+In exchange, v3 serves `futures/candles` — so the chart is read from the same
+venue the position is opened on, rather than from a spot exchange whose price
+can drift from the LN Markets index.
+
 ## Setting it up
 
 ### GitHub secrets (repository `kubiczech808/apps`)
@@ -69,11 +91,11 @@ it more often is safe and skipping one costs nothing.
 | `BTCDCA_FTP_LOGIN` | already present — btc-dca.com FTP |
 | `BTCDCA_FTP_PASSWORD` | already present |
 
-Create the LN Markets key at **testnet.lnmarkets.com → Settings → API**, with
+Create the LN Markets key at **testnet4.lnmarkets.com → Settings → API**, with
 permission to read the account and to create and close positions. Generate the
 bot key with something like `openssl rand -base64 32`.
 
-Optional repository *variables*: `LNM_API_NETWORK` (`testnet` by default),
+Optional repository *variables*: `LNM_API_NETWORK` (`testnet4` by default),
 `BTC_BOT_URL`, `BTCDCA_FTP_HOSTS`.
 
 ### Deploy
