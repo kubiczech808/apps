@@ -89,7 +89,14 @@ export const DEFAULT_SOURCE_ORDER = ['lnmarkets', 'bybit', 'kraken', 'coinbase']
  * The route is public — no credentials — so this works in paper mode and in a
  * bare backtest, not only when the bot is armed to trade.
  */
-export const fetchLnMarketsCandles = async ({ client, limit = 500, range = '1h', maxPages = 20 }) => {
+export const fetchLnMarketsCandles = async ({
+  client,
+  limit = 500,
+  range = '1h',
+  maxPages = 20,
+  pauseMs = 250,
+  logger = console,
+}) => {
   const to = Date.now()
   const from = to - (limit + 2) * HOUR_MS
   const collected = new Map()
@@ -136,17 +143,23 @@ export const fetchLnMarketsCandles = async ({ client, limit = 500, range = '1h',
   }
 
   for (let pageNumber = 1; cursor && collected.size < limit && pageNumber < maxPages; pageNumber += 1) {
+    // A short pause between pages. Asking for eight months is a dozen requests,
+    // twice per deploy, and hammering a public endpoint to get history is how
+    // the endpoint stops answering.
+    if (pauseMs > 0) await new Promise((resolve) => setTimeout(resolve, pauseMs))
+
     let next
     try {
       next = parse(await page(encode, cursor))
     } catch (error) {
-      // Keep the pages already collected rather than losing the whole history
-      // to one refused request, but say so — a run that quietly returned a
-      // tenth of the window it asked for is a different measurement wearing
-      // the same name.
-      throw new Error(
-        `LN Markets candles failed on page ${pageNumber + 1} after ${collected.size} rows: ${error.message}`
+      // Keep the pages already collected. Throwing here sent the caller all the
+      // way down the fallback chain to thirty days of spot candles, which is a
+      // different measurement wearing the same name — but going quiet about it
+      // is the other half of that problem, so it is said out loud.
+      logger.warn(
+        `LN Markets candles stopped at page ${pageNumber + 1} with ${collected.size} of ${limit} rows: ${error.message}`
       )
+      break
     }
     if (next === cursor) break
     cursor = next
