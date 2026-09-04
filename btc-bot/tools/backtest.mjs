@@ -45,10 +45,76 @@ if (args.has('min-rr')) overrides.strategy.minRR = Number(args.get('min-rr'))
 if (args.has('max-trades')) overrides.maxTradesPerDay = Number(args.get('max-trades'))
 if (args.has('capital')) overrides.startingCapitalUsd = Number(args.get('capital'))
 
+const warmupHours = Number(args.get('warmup') ?? 400)
+
+// `--compare` is a DIAGNOSIS, not a menu.
+//
+// Each variant changes exactly one thing from the shipped configuration, so a
+// difference can be attributed. Picking whichever row scores best on this
+// window is how a 233-day sample becomes an overfitted strategy — the table
+// answers "which rule is costing money", and the answer then needs a reason
+// before it becomes a change.
+const VARIANTS = [
+  ['shipped', {}],
+  ['no breakeven/trail', { strategy: { breakevenAtR: 999, trailStartAtR: 999 } }],
+  ['no trend-flip close', { strategy: { closeOnHtfFlip: false } }],
+  ['neither', { strategy: { breakevenAtR: 999, trailStartAtR: 999, closeOnHtfFlip: false } }],
+  ['target fixed at 2R', { strategy: { tpMaxR: 2 } }],
+  ['require 3R', { strategy: { minRR: 3, tpMinR: 3 } }],
+]
+
+if (args.has('compare')) {
+  const merge = (variant) => ({
+    ...overrides,
+    ...variant,
+    strategy: { ...(overrides.strategy ?? {}), ...(variant.strategy ?? {}) },
+    risk: { ...(overrides.risk ?? {}), ...(variant.risk ?? {}) },
+  })
+
+  const rows = []
+  for (const [label, variant] of VARIANTS) {
+    const result = await runBacktest({ hourly: candles, settings: merge(variant), warmupHours })
+    const exits = result.trades.reduce((counts, trade) => {
+      counts[trade.exitReason] = (counts[trade.exitReason] ?? 0) + 1
+      return counts
+    }, {})
+    rows.push({
+      label,
+      trades: result.stats.trades,
+      winRate: result.stats.winRate,
+      pf: result.stats.profitFactor,
+      ret: result.returnPct,
+      avgWin: result.stats.averageWinSats,
+      avgLoss: result.stats.averageLossSats,
+      tp: exits.take_profit ?? 0,
+      sl: exits.stop_loss ?? 0,
+      manual: exits.manual ?? 0,
+    })
+  }
+
+  const fmt = (value, digits = 2) => (value === null || value === undefined ? '  n/a' : value.toFixed(digits))
+  console.log(`Candles       ${candles.length} hourly from ${source}`)
+  console.log('')
+  console.log('One change each from the shipped configuration, same candles:')
+  console.log('')
+  console.log('  variant                 trades   win%      PF   return%   avgW/avgL    TP   SL  man')
+  for (const row of rows) {
+    console.log(
+      `  ${row.label.padEnd(22)} ${String(row.trades).padStart(6)}  ${fmt(row.winRate, 1).padStart(5)}  ${fmt(row.pf).padStart(6)}  ${fmt(row.ret, 1).padStart(8)}` +
+        `   ${fmt(row.avgWin / (row.avgLoss || 1), 2).padStart(9)}  ${String(row.tp).padStart(4)} ${String(row.sl).padStart(4)} ${String(row.manual).padStart(4)}`
+    )
+  }
+  console.log('')
+  console.log('Read this as diagnosis. A row that scores better here has not been shown to')
+  console.log('be better — it has been shown to fit this window. It needs a reason, and then')
+  console.log('a second window, before it becomes the configuration.')
+  process.exit(0)
+}
+
 const report = await runBacktest({
   hourly: candles,
   settings: overrides,
-  warmupHours: Number(args.get('warmup') ?? 400),
+  warmupHours,
 })
 
 const first = new Date(candles[0].time).toISOString()

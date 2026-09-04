@@ -152,10 +152,19 @@ jobs:
         continue-on-error: true
         run: |
           node tools/backtest.mjs --limit 6000 --json /tmp/backtest.json | tee /tmp/backtest.txt
+          # One change at a time from the shipped configuration, on the same
+          # candles. The 233-day run came back at -37% with a 26% win rate and
+          # average wins only 1.7x average losses despite a 2R entry gate; this
+          # table is how that gets attributed to a rule rather than guessed at.
+          node tools/backtest.mjs --limit 6000 --compare true | tee /tmp/compare.txt
           {
             echo '### Backtest on real candles'
             echo '```'
             cat /tmp/backtest.txt
+            echo '```'
+            echo '### Where the money goes'
+            echo '```'
+            cat /tmp/compare.txt
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
