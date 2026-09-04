@@ -9910,3 +9910,78 @@ test("paper reject reasons: a missing number is reported as missing, not as zero
   assert.match(refresh, /aiExpectedValueUsdc: rounded\(economics\./);
   assert.match(refresh, /aiAnnualizedReturn: rounded\(economics\./);
 });
+
+// Reported on counter-strike-2 and asked of every paper portfolio: SKIP with "no candidates
+// passed <portfolio> portfolio filters", run after run.
+//
+// Measured on production: four tag-filtered portfolios each found 13-17 candidates that
+// PASSED their filter and then lost every one of them at revalidation, six consecutive SKIP
+// runs each -- and the stage-two reasons named the same filter that had just let them
+// through: "outside included tags (league-of-legends)". Meanwhile every portfolio without a
+// tag filter kept a healthy fraction and traded normally, because only a tag filter asks
+// the question a second time.
+//
+// A row cannot both carry and not carry a tag. What it can do is lose it in between:
+// revalidation rebuilds the evaluation through marketFromStoredEvaluation, which carries no
+// tag fields at all, so evaluateCandidate could only tag the row from the words in its
+// question -- and spreading that over the stored row erased the Polymarket tags.
+test("paper revalidation: re-quoting a market must not strip the tags it was selected for", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const source = await readFile(new URL("../tools/paper-trading-bot.mjs", import.meta.url), "utf8");
+
+  const api = new Function(`
+    ${/const TAG_FIELDS = \[[^\]]+\];/.exec(source)[0]}
+    ${/const TAG_CATEGORY_FIELDS = \[[^\]]+\];/.exec(source)[0]}
+    ${functionSource(source, "preservedMarketTagFields")}
+    ${functionSource(source, "rowTagSlugs")}
+    return { preservedMarketTagFields, rowTagSlugs, TAG_FIELDS, TAG_CATEGORY_FIELDS };
+  `)();
+
+  // The stored catalogue row, tagged by the server the way the reported markets were.
+  const stored = {
+    tokenId: "t1",
+    question: "LoL: Anyone's Legend vs LGD Gaming - Game 2 Winner",
+    firstPolymarketTags: ["esports", "league-of-legends"],
+    riskCategory: "general",
+  };
+  assert.ok(api.rowTagSlugs(stored).has("league-of-legends"),
+    "the stored row is exactly what the portfolio's filter accepted");
+
+  // What revalidation produces: a fresh evaluation tagged only from the question text.
+  const freshlyEvaluated = { tokenId: "t1", question: stored.question, tags: ["clear-resolution"] };
+  assert.ok(!api.rowTagSlugs(freshlyEvaluated).has("league-of-legends"),
+    "and the re-quoted row cannot know the tag, which is the whole defect");
+
+  // The spread as the code performs it. Without the preserved fields the tag is gone.
+  const naive = { ...freshlyEvaluated };
+  assert.ok(!api.rowTagSlugs(naive).has("league-of-legends"));
+  const preserved = { ...freshlyEvaluated, ...api.preservedMarketTagFields(stored) };
+  assert.ok(api.rowTagSlugs(preserved).has("league-of-legends"),
+    "a re-quoted candidate must still carry the tag its portfolio selected it for");
+  assert.ok(api.rowTagSlugs(preserved).has("esports"), "and every other tag with it");
+
+  // Every field the filter can read has to survive, or the filter is asked a question the
+  // row can no longer answer. Driven per field rather than asserted as a list.
+  for (const field of api.TAG_FIELDS) {
+    const row = { ...freshlyEvaluated, ...api.preservedMarketTagFields({ [field]: ["counter-strike"] }) };
+    assert.ok(api.rowTagSlugs(row).has("counter-strike"), `${field} must survive revalidation`);
+  }
+  for (const field of api.TAG_CATEGORY_FIELDS) {
+    const row = { ...freshlyEvaluated, ...api.preservedMarketTagFields({ [field]: "Counter-Strike" }) };
+    assert.ok(api.rowTagSlugs(row).has("counter-strike"), `${field} must survive revalidation`);
+  }
+
+  // A field the stored row does not have must not come back as undefined: spread later, an
+  // undefined would shadow a real value rather than leave it alone.
+  assert.deepEqual(api.preservedMarketTagFields({}), {});
+  assert.deepEqual(api.preservedMarketTagFields({ tags: null }), {});
+  const keptFromEvaluation = { ...{ tags: ["esports"] }, ...api.preservedMarketTagFields({}) };
+  assert.ok(api.rowTagSlugs(keptFromEvaluation).has("esports"),
+    "an absent stored tag must leave the evaluation's own tags untouched");
+
+  // And the call site: preserved AFTER the fresh evaluation is spread, or it is overwritten
+  // by the very row that lacks the tags.
+  const fn = functionSource(source, "revalidateStoredExecutionCandidate");
+  assert.ok(fn.indexOf("...preservedMarketTagFields(item)") > fn.indexOf("...evaluation,"),
+    "the preserved tags must be applied after the fresh evaluation, not before it");
+});

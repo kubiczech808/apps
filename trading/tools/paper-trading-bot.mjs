@@ -6833,6 +6833,22 @@ const TAG_FIELDS = [
 ];
 const TAG_CATEGORY_FIELDS = ["riskCategory", "category", "firstCategory"];
 
+// A market's tags belong to the market, not to the quote, so anything that re-quotes a
+// stored row has to hand them back rather than let a freshly built evaluation overwrite
+// them with nothing. Only fields the stored row actually has are returned, so this never
+// introduces an undefined that would shadow a real value further down a spread.
+//
+// It reads the same two lists rowTagSlugs does, deliberately: whatever the filter can ask
+// about is exactly what has to survive revalidation, or the filter is asked a question the
+// row can no longer answer.
+function preservedMarketTagFields(item = {}) {
+  const preserved = {};
+  for (const field of [...TAG_FIELDS, ...TAG_CATEGORY_FIELDS]) {
+    if (item?.[field] != null) preserved[field] = item[field];
+  }
+  return preserved;
+}
+
 function rowTagSlugs(item = {}) {
   const slugs = new Set();
   const slugify = (value) => String(value ?? "")
@@ -7587,6 +7603,19 @@ async function revalidateStoredExecutionCandidate(item, learningProfile) {
     }
     const refreshed = normalizeEvaluationRisk({
       ...evaluation,
+      // Revalidation re-quotes the market; it does not change what the market IS. The
+      // fresh evaluation is built by marketFromStoredEvaluation, which carries no tag
+      // fields at all, so evaluateCandidate can only tag it from the words in its question.
+      // Spreading that over the stored row therefore ERASED the Polymarket tags.
+      //
+      // Measured: a portfolio's own candidate rejected by its own tag filter twice over.
+      // storedExecutionShortlist accepted 13 league-of-legends markets, and after
+      // revalidation 8 of the same rows came back "outside included tags
+      // (league-of-legends)". Four tag-filtered paper portfolios were stalled on six
+      // consecutive SKIP runs each by exactly this, while every portfolio without a tag
+      // filter kept its candidates and traded normally -- because only a tag filter asks
+      // the question a second time.
+      ...preservedMarketTagFields(item),
       revalidationSource: "stored_execution_candidates",
       executionQuoteVerified: true,
       executionQuoteStatus: "VERIFIED",
