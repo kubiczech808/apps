@@ -1542,21 +1542,49 @@ function availableLiveCashUsdc(liveState, grossCash = liveCashUsdc(liveState)) {
 // the exchange trims it, and what it trims is arbitrary: a bid on a market that is still
 // running and still accepting orders goes along with the rest.
 //
-// So placement gets a ceiling that spending does not: the whole wallet's resting notional,
-// capped at a multiple of cash. Two by default -- 1.23x was measured as ordinary and safe,
-// and the culls happened at 5x and 10x -- so an account can still run committed without
-// walking into a cull. The cap is on the WALLET, not this portfolio, because the collateral
-// the exchange checks is one balance and every live portfolio rests against it.
-const RESTING_BOOK_CASH_MULTIPLE = envNumber("LIVE_RESTING_BOOK_CASH_MULTIPLE", 2);
+// That measurement is why a ceiling existed: the whole wallet's resting notional, capped at
+// a multiple of cash.
+//
+// It is OFF by default now, on the account owner's decision, and the reasoning is theirs:
+// the cap cost far more placement than it bought protection. It refused entries the account
+// could perfectly well fund, and the bids it was protecting resolve on their own anyway --
+// they fill, or they stop meeting the portfolio's rules and are withdrawn. Measured at the
+// point it was switched off, it had reduced a 12.76 USDC wallet to 0.00 USDC of room and
+// every execution run was ending SKIP without reading a single market.
+//
+// What guards the book instead is the restore path, which is the better guard because it
+// costs nothing when the exchange behaves: a culled bid goes on the restore list, is
+// re-evaluated against the portfolio's current rules, and is placed again once cash allows.
+// A cull then costs a delay rather than the order.
+//
+// A positive LIVE_RESTING_BOOK_CASH_MULTIPLE brings the cap back (2 was the old default);
+// 0 -- the default -- means no ceiling, and the ceiling is Infinity rather than a large
+// number so that nothing has to guess where "unbounded" begins. Infinity is NOT finite, so
+// every consumer that budgets against the headroom must say what it means by it: see
+// culledOrdersToRestore and preflightEntryBlock, both of which would otherwise read
+// number(Infinity, 0) as zero -- the exact opposite of unbounded.
+const RESTING_BOOK_CASH_MULTIPLE = envNumber("LIVE_RESTING_BOOK_CASH_MULTIPLE", 0);
+const RESTING_BOOK_CAPPED = Number.isFinite(RESTING_BOOK_CASH_MULTIPLE) && RESTING_BOOK_CASH_MULTIPLE > 0;
 
 function restingBookCeilingUsdc(grossCash) {
-  return Math.max(0, number(grossCash, 0)) * Math.max(0, RESTING_BOOK_CASH_MULTIPLE);
+  if (!RESTING_BOOK_CAPPED) return Infinity;
+  return Math.max(0, number(grossCash, 0)) * RESTING_BOOK_CASH_MULTIPLE;
 }
 
 function restingBookHeadroomUsdc(liveState, grossCash = liveCashUsdc(liveState)) {
+  if (!RESTING_BOOK_CAPPED) return Infinity;
   const ceiling = restingBookCeilingUsdc(grossCash);
   const resting = activeBuyOrderReservationUsdc(liveState);
   return Number(Math.max(0, ceiling - resting).toFixed(5));
+}
+
+// A headroom that may legitimately be Infinity, reduced to a spendable budget. `number()`
+// rejects Infinity as non-finite and would hand back the fallback, so unbounded headroom has
+// to be recognised before that happens.
+function headroomBudgetUsdc(headroomUsdc) {
+  const numeric = Number(headroomUsdc);
+  if (numeric === Infinity) return Infinity;
+  return Math.max(0, number(headroomUsdc, 0));
 }
 
 function daysValue(item) {
@@ -3406,8 +3434,13 @@ async function runFixedEntryBatch({ checked, liveState, tradingConfig, cash, ava
   // hand and let the exchange decline what it cannot fund. Having the book already on the
   // exchange CULLED is the harm, and that is what an oversized resting book buys: measured
   // on the account, 29 unfilled bids holding 144.94 USDC were dropped in one instant
-  // against 15.02 USDC of cash. So the same ceiling applies here, tracked as the batch
-  // places, and what does not fit waits for the next pass instead of enlarging the target.
+  // against 15.02 USDC of cash. The same ceiling therefore applies here when one is
+  // configured, tracked as the batch places, and what does not fit waits for the next pass
+  // instead of enlarging the target.
+  //
+  // With the cap off -- the default -- this is Infinity and the loop below never defers on
+  // it, which is the intent: the batch is meant to fill the book and let a cull be repaired
+  // by the restore path rather than pre-empted by refusing to place.
   //
   // Read into a local before the loop, because the loop is extracted and run on its own by
   // the placement tests: it should consume a number, not reach for the account state.
@@ -4440,7 +4473,9 @@ function culledOrdersToRestore({ liveState, previousExecution, identity, headroo
   const attempts = previousRestoreAttempts(previousExecution);
 
   const considered = [];
-  let budget = Math.max(0, Math.min(number(headroomUsdc, 0), number(availableCashUsdc, 0)));
+  // With the resting-book cap off the headroom is Infinity, so cash alone sets the budget.
+  // Reading it through number(headroomUsdc, 0) would make the budget zero and restore nothing.
+  let budget = Math.max(0, Math.min(headroomBudgetUsdc(headroomUsdc), number(availableCashUsdc, 0)));
   for (const row of rows) {
     const tokenId = String(row?.tokenId || row?.assetId || "").trim();
     const key = culledOrderKey(row);
@@ -4870,7 +4905,10 @@ function preflightEntryBlock({ spendableCashUsdc, bookHeadroomUsdc, cheapestOrde
   if (!(cheapest > 0)) return null;
   const epsilon = 0.000001;
   if (number(spendableCashUsdc, 0) + epsilon < cheapest) return "cash";
-  if (number(bookHeadroomUsdc, 0) + epsilon < cheapest) return "resting-book-ceiling";
+  // An unbounded book (the cap switched off) is Infinity, which number() would report as the
+  // fallback zero and so block every run on a ceiling that no longer exists.
+  const headroom = headroomBudgetUsdc(bookHeadroomUsdc);
+  if (headroom + epsilon < cheapest) return "resting-book-ceiling";
   return null;
 }
 
@@ -4947,8 +4985,10 @@ async function main() {
   const regularMaxNotional = Math.min(configuredStakeUsdc, MAX_ORDER_NOTIONAL_USDC);
   const idleUtilizationNotional = monitoring.idleCashOverdue ? Math.max(0, availableCash - IDLE_CASH_MAX_USDC) : 0;
   const maxNotional = Number(regularMaxNotional.toFixed(5));
-  // The headroom joins the two limits that were already here. A pass with cash to spend but
-  // no headroom rests nothing rather than adding to a book the exchange is about to cull --
+  // The headroom joins the two limits that were already here, and with the cap off it is
+  // Infinity, so the min falls through to cash and the stake as it did before the cap
+  // existed. A pass with cash to spend but no headroom -- only possible with a cap
+  // configured -- rests nothing rather than adding to a book the exchange is about to cull,
   // and the run says so, because "nothing was placed" needs a reason a reader can act on.
   let directMaxNotional = Number(Math.min(maxNotional, availableCash, restingBookHeadroom).toFixed(5));
   if (restingBookHeadroom < maxNotional) {
@@ -5037,8 +5077,9 @@ async function main() {
         availableCashUsdc: Number(availableCash.toFixed(5)),
         reservedOpenOrderUsdc: Number(reservedOpenOrderUsdc.toFixed(5)),
         ownReservedOpenOrderUsdc: Number(ownReservedOpenOrderUsdc.toFixed(5)),
-        restingBookCeilingUsdc: restingBookCeiling,
-        restingBookHeadroomUsdc: restingBookHeadroom,
+        restingBookCapped: RESTING_BOOK_CAPPED,
+        restingBookCeilingUsdc: RESTING_BOOK_CAPPED ? restingBookCeiling : null,
+        restingBookHeadroomUsdc: RESTING_BOOK_CAPPED ? restingBookHeadroom : null,
         maxNotionalUsdc: maxNotional,
         directMaxNotionalUsdc: directMaxNotional,
         cheapestPossibleOrderUsdc,
@@ -5356,8 +5397,13 @@ async function main() {
       availableCashUsdc: Number(availableCash.toFixed(5)),
       // What the exchange will tolerate on the book, and what is left of it. A cull shows
       // up here as a headroom that was already zero when the pass ran.
-      restingBookCeilingUsdc: restingBookCeiling,
-      restingBookHeadroomUsdc: restingBookHeadroom,
+      //
+      // With the cap off both are Infinity, which JSON.stringify writes as null -- and a
+      // null here would read as "not measured" rather than "no ceiling". The flag says
+      // which, so a reader never has to infer it from a missing number.
+      restingBookCapped: RESTING_BOOK_CAPPED,
+      restingBookCeilingUsdc: RESTING_BOOK_CAPPED ? restingBookCeiling : null,
+      restingBookHeadroomUsdc: RESTING_BOOK_CAPPED ? restingBookHeadroom : null,
       restingBookCashMultiple: RESTING_BOOK_CASH_MULTIPLE,
       culledOrdersRestored: culledOrderRestore.restored.filter((entry) => entry.accepted).length,
       culledOrderRestoreNotionalUsdc: Number(restoredNotional.toFixed(5)),

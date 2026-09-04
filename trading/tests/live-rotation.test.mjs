@@ -5264,63 +5264,91 @@ test("live rows: an unknown P/L and an unknown entry price render as unknown", (
 // a resting bid is not money spent -- that was measured too -- but "what may this portfolio
 // spend" and "what will the exchange tolerate resting" are different questions, and only
 // the first was being asked.
-test("live cash: the resting book is capped against the collateral behind it", () => {
+// The cap is now OFF by default, on the account owner's decision -- it refused entries the
+// wallet could fund, and at the point it was switched off it had reduced a 12.76 USDC wallet
+// to 0.00 USDC of room, so every execution run ended SKIP without reading a market. What
+// this test protects is the thing that goes wrong when a limit is removed by defaulting it
+// to zero: "no ceiling" is Infinity, Infinity is not finite, and every consumer that budgets
+// against the headroom reads it through number(value, 0), which hands back the fallback. A
+// disabled cap would then behave exactly like a cap of nothing -- the outage it was meant to
+// end. Both modes are driven here, because the escape hatch has to still work.
+test("live cash: the resting book cap is off by default and unbounded means unbounded", () => {
   const source = readFileSync(new URL("../tools/live-order-executor.mjs", import.meta.url), "utf8");
-  const api = new Function(`
+  const build = (multiple) => new Function(`
     const process = { env: {} };
-    const envNumber = (name, fallback) => fallback;
+    const envNumber = (name, fallback) => ${multiple == null ? "fallback" : multiple};
     ${functionSource(source, "number")}
     ${functionSource(source, "liveCashUsdc")}
     ${functionSource(source, "activeBuyOrderReservationUsdc")}
     ${functionSource(source, "orderWasSubmittedByThisPortfolio")}
     ${functionSource(source, "availableLiveCashUsdc")}
     ${/const RESTING_BOOK_CASH_MULTIPLE = [^;]+;/.exec(source)[0]}
+    ${/const RESTING_BOOK_CAPPED = [^;]+;/.exec(source)[0]}
     ${functionSource(source, "restingBookCeilingUsdc")}
     ${functionSource(source, "restingBookHeadroomUsdc")}
+    ${functionSource(source, "headroomBudgetUsdc")}
+    ${functionSource(source, "preflightEntryBlock")}
     return { availableLiveCashUsdc, restingBookCeilingUsdc, restingBookHeadroomUsdc,
-      activeBuyOrderReservationUsdc, RESTING_BOOK_CASH_MULTIPLE };
+      headroomBudgetUsdc, preflightEntryBlock, activeBuyOrderReservationUsdc,
+      RESTING_BOOK_CASH_MULTIPLE, RESTING_BOOK_CAPPED };
   `)();
-
-  assert.equal(api.RESTING_BOOK_CASH_MULTIPLE, 2, "two: 1.23x was measured as ordinary, the culls were at 5x and 10x");
 
   const bid = (index, notional) => ({
     id: `o-${index}`, tokenId: `t${index}`, side: "BUY", status: "LIVE",
     price: 0.7, remainingSize: notional / 0.7, notionalUsdc: notional,
   });
-
-  // The account as measured: 79.96 USDC resting on 15.02 USDC of cash.
+  // The account as measured when the cull happened: 79.96 USDC resting on 15.02 of cash.
   const overcommitted = {
     account: { cashUsdc: 15.02 },
     openOrders: Array.from({ length: 16 }, (unused, index) => bid(index, 4.9975)),
   };
-  assert.equal(api.restingBookCeilingUsdc(15.02), 30.04);
-  assert.ok(api.activeBuyOrderReservationUsdc(overcommitted) > 79,
-    "the measured book was 79.96 USDC");
-  assert.equal(api.restingBookHeadroomUsdc(overcommitted, 15.02), 0,
-    "a book already past its ceiling has no room for another bid");
-  // And the other question still answers as it did: the cash is spendable in full.
-  assert.equal(api.availableLiveCashUsdc(overcommitted, 15.02), 15.02,
-    "a resting bid is still not money already spent -- that was measured on the account");
 
-  // An ordinary committed account still trades. 1.23x was the measured healthy state.
-  const healthy = {
-    account: { cashUsdc: 32.3788 },
-    openOrders: [bid(1, 39.9657)],
-  };
-  assert.ok(api.restingBookHeadroomUsdc(healthy, 32.3788) > 24,
-    "32.38 of cash and 39.97 resting is 1.23x, which must leave room rather than stop trading");
+  const off = build(null);
+  assert.equal(off.RESTING_BOOK_CASH_MULTIPLE, 0, "no cap by default");
+  assert.equal(off.RESTING_BOOK_CAPPED, false);
+  assert.equal(off.restingBookCeilingUsdc(15.02), Infinity,
+    "unbounded is Infinity, so nothing has to guess where 'unbounded' begins");
+  assert.equal(off.restingBookHeadroomUsdc(overcommitted, 15.02), Infinity,
+    "the book the exchange once culled must no longer stop a placement");
 
-  // Nothing resting means the whole ceiling is available, and no cash means no ceiling.
-  assert.equal(api.restingBookHeadroomUsdc({ account: { cashUsdc: 20 }, openOrders: [] }, 20), 40);
-  assert.equal(api.restingBookHeadroomUsdc({ account: { cashUsdc: 0 }, openOrders: [] }, 0), 0);
+  // The regression this test exists for. number(Infinity, 0) is 0, so a headroom of
+  // Infinity read the ordinary way turns "no limit" into "no room at all".
+  assert.equal(off.headroomBudgetUsdc(Infinity), Infinity,
+    "unbounded headroom must survive being turned into a budget");
+  assert.equal(off.headroomBudgetUsdc(null), 0, "and a missing headroom is still nothing");
+  assert.equal(off.headroomBudgetUsdc(-5), 0, "as is a negative one");
+  assert.equal(off.headroomBudgetUsdc(12.5), 12.5);
+  assert.equal(off.preflightEntryBlock({
+    spendableCashUsdc: 12.76, bookHeadroomUsdc: Infinity, cheapestOrderUsdc: 4,
+  }), null, "with the cap off, a funded run is never stopped by the book");
+  // Cash is still a real limit with the cap off -- removing the ceiling must not remove that.
+  assert.equal(off.preflightEntryBlock({
+    spendableCashUsdc: 1.2, bookHeadroomUsdc: Infinity, cheapestOrderUsdc: 4,
+  }), "cash");
 
-  // The ceiling is on the WALLET, not this portfolio: the collateral the exchange checks is
-  // one balance, and every live portfolio rests against it. Counting only our own orders is
-  // what let two automated portfolios each believe they had room.
+  // The escape hatch: a configured multiple still behaves exactly as it did.
+  const capped = build(2);
+  assert.equal(capped.RESTING_BOOK_CAPPED, true);
+  assert.equal(capped.restingBookCeilingUsdc(15.02), 30.04);
+  assert.ok(capped.activeBuyOrderReservationUsdc(overcommitted) > 79, "the measured book was 79.96 USDC");
+  assert.equal(capped.restingBookHeadroomUsdc(overcommitted, 15.02), 0,
+    "a book already past a configured ceiling has no room for another bid");
+  assert.equal(capped.restingBookHeadroomUsdc({ account: { cashUsdc: 20 }, openOrders: [] }, 20), 40);
+  assert.equal(capped.preflightEntryBlock({
+    spendableCashUsdc: 15.02, bookHeadroomUsdc: 0, cheapestOrderUsdc: 4,
+  }), "resting-book-ceiling", "and it still reports the ceiling, not a phantom cash shortage");
+
+  // Unchanged by any of this: the cash is spendable in full. A resting bid is not money
+  // already spent, which was measured on the account.
+  assert.equal(off.availableLiveCashUsdc(overcommitted, 15.02), 15.02);
+  assert.equal(capped.availableLiveCashUsdc(overcommitted, 15.02), 15.02);
+
+  // A configured ceiling is on the WALLET, not this portfolio: the collateral the exchange
+  // checks is one balance, and every live portfolio rests against it.
   assert.ok(!/restingBookHeadroomUsdc\([^)]*ownSubmittedOrderIdentity/.test(source),
     "the headroom must not be narrowed to this portfolio's own orders");
   assert.match(source, /Math\.min\(maxNotional, availableCash, restingBookHeadroom\)/,
-    "the headroom has to actually limit what a pass may place");
+    "a configured headroom has to actually limit what a pass may place");
 });
 
 // Asked for: an order must not end before its event resolves, and a bid the account did
@@ -5340,6 +5368,7 @@ test("culled orders: a lost bid goes back, and only when it is safe to", () => {
     ${/const RESTORE_ATTEMPT_LIMIT = [^;]+;/.exec(source)[0]}
     ${functionSource(source, "culledOrderKey")}
     ${functionSource(source, "previousRestoreAttempts")}
+    ${functionSource(source, "headroomBudgetUsdc")}
     ${functionSource(source, "culledOrdersToRestore")}
     return { culledOrdersToRestore, culledOrderKey, previousRestoreAttempts,
       ownSubmittedOrderIdentity, RESTORE_ATTEMPT_LIMIT };
@@ -5471,6 +5500,7 @@ test("execution pre-flight: a run with nothing to fund stops before it reads any
     const EXCHANGE_MIN_ORDER_SIZE = 5;
     ${functionSource(source, "runCanActWithoutFreeCapital")}
     ${functionSource(source, "cheapestFundableEntryUsdc")}
+    ${functionSource(source, "headroomBudgetUsdc")}
     ${functionSource(source, "preflightEntryBlock")}
     return { runCanActWithoutFreeCapital, cheapestFundableEntryUsdc, preflightEntryBlock };
   `)();
