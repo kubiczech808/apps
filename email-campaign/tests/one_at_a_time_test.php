@@ -32,7 +32,8 @@ function loadSettings(PDO $pdo): array { return []; }
 foreach (['aiResearchSupportedMarkets', 'aiResearchPlanTargetMarkets', 'aiResearchEstimateSourcesForPlan',
           'aiResearchWorkflowChecklist', 'aiResearchWorkflowRequiredDone', 'aiResearchWorkflowMissingSteps',
           'aiResearchRunWaitsOnlyForScraping', 'aiResearchNextWork', 'aiResearchWorkIsFinishing',
-          'aiResearchCloseExhaustedRuns', 'aiResearchStepsNeedingModel', 'aiResearchRunProgressesWithoutModel'] as $fn) {
+          'aiResearchCloseExhaustedRuns', 'aiResearchStepsNeedingModel', 'aiResearchRunProgressesWithoutModel',
+          'aiResearchChecklistProgress'] as $fn) {
     eval(extractFn($src, $fn));
 }
 
@@ -153,6 +154,42 @@ $unfinishedFn = extractFn($src, 'runCronAiResearchUnfinished');
 assert(str_contains($unfinishedFn, "=== 'scrape_batch'"), 'davku posouva dokonceni behu');
 assert(strpos($unfinishedFn, "'scrape_batch'") < strpos($unfinishedFn, "\$plan['finish_attempts'] = "),
     'krok davky nesmi cerpat pokusy o dokonceni');
+echo "  ok\n";
+
+echo "\n== 9. opakovany krok davky se nesmi zamenit za zaseknuty beh ==\n";
+// Produkce: tik posunul davku behu #114 z 26 na vic kontaktu, ale hned pak napsal
+// "v tomto tiku se uz neposunul" a retez se zastavil - protoze podpis prace byl jen
+// kind#run_id, takze druhy krok davky vypadal jako prvni. Jeden krok za pet minut
+// znamena hodiny na jeden subjekt.
+$db = freshDb();
+addRun($db, 'C.B.I.S Security', 'done', $readyPlan, 0, '<p>x</p>');
+$SCRAPING = ['container_id' => 4, 'list_id' => 8, 'job' => ['id' => 77, 'status' => 'running'], 'contacts_total' => 26];
+$first = aiResearchNextWork($db);
+printf("  po 26 kontaktech: %s\n", (string)$first['progress']);
+assert($first['kind'] === 'scrape_batch', 'davka se posouva v tiku');
+assert((string)$first['progress'] === 'contacts:26', 'postup je pocet kontaktu');
+// Krok pridal kontakty -> podpis se zmenil -> tik pokracuje dal.
+$SCRAPING['contacts_total'] = 34;
+$second = aiResearchNextWork($db);
+printf("  po 34 kontaktech: %s\n", (string)$second['progress']);
+assert((string)$second['progress'] !== (string)$first['progress'], 'posunuta davka musi mit jiny podpis');
+// A kdyz krok nic nepridal, podpis zustane a tik ho spravne preskoci.
+$third = aiResearchNextWork($db);
+assert((string)$third['progress'] === (string)$second['progress'], 'bez postupu se podpis nemeni');
+
+echo "\n== 9b. podpis prace v tiku obsahuje postup ==\n";
+$tickSrc = extractFn($src, 'runCronAiResearch');
+assert(str_contains($tickSrc, "'#' . (string)(\$work['progress'] ?? '')"), 'podpis musi zahrnovat postup');
+// Dotahovani rozdelaneho behu ma postup podle hotovych kroku checklistu.
+$db = freshDb();
+$runId = addRun($db, 'Rozdelany', 'done', $plan);
+$work = aiResearchNextWork($db);
+printf("  dotahovani: %s (%s)\n", $work['kind'], (string)$work['progress']);
+assert(str_starts_with((string)$work['progress'], 'steps:'), 'u dotahovani je postup pocet hotovych kroku');
+$checklist = aiResearchWorkflowChecklist($db, ['id' => $runId, 'status' => 'done'], $readyPlan);
+printf("  hotovy plan: %s\n", aiResearchChecklistProgress($checklist));
+assert(aiResearchChecklistProgress($checklist) !== (string)$work['progress'],
+    'jiny stav checklistu musi dat jiny postup');
 echo "  ok\n";
 
 echo "\nVSE OK\n";

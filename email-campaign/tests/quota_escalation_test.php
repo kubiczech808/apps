@@ -41,7 +41,7 @@ foreach (['aiResearchRetryDelaySeconds', 'aiResearchQuotaIsMinuteWindow', 'aiRes
           'aiResearchStepsNeedingModel', 'aiResearchRunProgressesWithoutModel',
           'aiResearchSupportedMarkets', 'aiResearchPlanTargetMarkets', 'aiResearchEstimateSourcesForPlan',
           'aiResearchWorkflowChecklist', 'aiResearchWorkflowRequiredDone', 'aiResearchWorkflowMissingSteps',
-          'aiResearchRunWaitsOnlyForScraping', 'aiResearchNextWork'] as $fn) {
+          'aiResearchRunWaitsOnlyForScraping', 'aiResearchNextWork', 'aiResearchChecklistProgress'] as $fn) {
     eval(extractFn($src, $fn));
 }
 class FakePdo extends PDO { public function __construct() {} }

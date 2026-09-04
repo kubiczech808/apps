@@ -3382,10 +3382,16 @@ function runCronAiResearch(PDO $pdo, array $config, bool $force = false): string
                 break;
             }
             $finishing = aiResearchWorkIsFinishing($work);
-            $signature = (string)$work['kind'] . '#' . (int)$work['run_id'];
+            // Do podpisu patri i ukazatel postupu. Kroky, ktere se maji opakovat -
+            // typicky scrapovaci davka, kde jeden krok prida par kontaktu ze sta -
+            // by jinak po prvnim kroku vypadaly jako zaseknuty beh, tik by skoncil
+            // a retez se zastavil. Jeden krok za pet minut znamena hodiny na jeden
+            // subjekt; s tim se cela kategorie nedojede.
+            $signature = (string)$work['kind'] . '#' . (int)$work['run_id']
+                . '#' . (string)($work['progress'] ?? '');
             if ($processed > 0 && $signature === $lastSignature) {
-                // Beh se neposunul. Neni duvod kvuli nemu ukoncit cely tik - preskoci
-                // se a cas dostane dalsi prace, treba uplne novy seed.
+                // Podpis se nezmenil, tedy krok skutecne nic neposunul. Neni duvod
+                // kvuli nemu ukoncit cely tik - preskoci se a cas dostane dalsi prace.
                 if ((int)$work['run_id'] > 0) {
                     $skipRunIds[] = (int)$work['run_id'];
                     $lastSignature = '';
@@ -8779,18 +8785,26 @@ function aiResearchNextWork(PDO $pdo, array $skipRunIds = [], bool $modelAvailab
             continue;
         }
         if (in_array($status, ['deferred', 'failed'], true)) {
-            return $work + ['kind' => 'finish_deferred'];
+            return $work + ['kind' => 'finish_deferred', 'progress' => aiResearchChecklistProgress($checklist)];
         }
         if ($status === 'running') {
-            return $work + ['kind' => 'finish_running'];
+            return $work + ['kind' => 'finish_running', 'progress' => aiResearchChecklistProgress($checklist)];
         }
         // Beh, kteremu zbyva jen dobehnuti scrapovaci davky, si davku posune sam v tomto
         // tiku. Drive se preskocil a cas dostal novy seed - a prave tim v prehledu
         // narustaly z casti zpracovane subjekty.
         if (aiResearchRunWaitsOnlyForScraping($pdo, $plan, $checklist)) {
-            return $work + ['kind' => 'scrape_batch', 'checklist' => $checklist];
+            // Ukazatel postupu je pocet uz nascrapovanych kontaktu. Davka se dela po
+            // krocich a kazdy prida jen par kontaktu, takze bez tohoto vypadal druhy
+            // krok stejne jako prvni a tik ho vyhodnotil jako zaseknuty beh.
+            $progress = aiResearchScrapingProgress($pdo, $plan);
+            return $work + [
+                'kind' => 'scrape_batch',
+                'checklist' => $checklist,
+                'progress' => 'contacts:' . (int)($progress['contacts_total'] ?? 0),
+            ];
         }
-        return $work + ['kind' => 'finish_incomplete'];
+        return $work + ['kind' => 'finish_incomplete', 'progress' => aiResearchChecklistProgress($checklist)];
     }
     if ($blockedBy !== '') {
         return [
@@ -8935,6 +8949,27 @@ function aiResearchActiveRunId(PDO $pdo): int
         error_log('AI research active run lookup failed: ' . $e->getMessage());
         return 0;
     }
+}
+
+/**
+ * Kolik povinnych kroku workflow uz je hotovych. Slouzi jako ukazatel postupu: kdyz
+ * krok dotahne dalsi polozku checklistu, tik pozna, ze se beh posunul, a pokracuje
+ * dal misto aby ho odlozil na dalsi cron.
+ */
+function aiResearchChecklistProgress(array $checklist): string
+{
+    $done = 0;
+    $required = 0;
+    foreach ($checklist as $step) {
+        if (empty($step['required'])) {
+            continue;
+        }
+        $required++;
+        if (!empty($step['done'])) {
+            $done++;
+        }
+    }
+    return 'steps:' . $done . '/' . $required;
 }
 
 function aiResearchWorkIsFinishing(array $work): bool

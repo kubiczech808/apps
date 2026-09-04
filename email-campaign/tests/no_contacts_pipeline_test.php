@@ -29,7 +29,8 @@ function aiResearchScrapingProgress(PDO $pdo, array $plan): ?array { global $SCR
 function loadSettings(PDO $pdo): array { return []; }
 foreach (['aiResearchSupportedMarkets', 'aiResearchPlanTargetMarkets', 'aiResearchEstimateSourcesForPlan',
           'aiResearchWorkflowChecklist', 'aiResearchWorkflowRequiredDone', 'aiResearchWorkflowMissingSteps',
-          'aiResearchRunWaitsOnlyForScraping', 'aiResearchNextWork', 'aiResearchWorkIsFinishing'] as $fn) {
+          'aiResearchRunWaitsOnlyForScraping', 'aiResearchNextWork', 'aiResearchWorkIsFinishing',
+          'aiResearchChecklistProgress'] as $fn) {
     eval(extractFn($src, $fn));
 }
 
