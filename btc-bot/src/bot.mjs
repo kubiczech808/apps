@@ -389,7 +389,15 @@ export const runPass = async ({
     }
 
     state.positions = { running, orders: refreshed.open, closed }
-    state.stats = computeStats(closed)
+    // Drawdown needs the equity the account started from. The first recorded
+    // point is the truthful answer once there is one; before that, back it out
+    // of the current equity and the realised P/L so the figure is still about
+    // the account rather than about a P/L curve starting at zero.
+    const firstEquity = state.equityHistory?.[0]?.equitySats
+    const netSoFar = closed.reduce((sum, trade) => sum + (trade.plSats ?? 0), 0)
+    state.stats = computeStats(closed, {
+      startEquitySats: firstEquity ?? account.equitySats - netSoFar,
+    })
     state.lastDecision = {
       at: isoNow(now),
       action: decision.action,

@@ -78,7 +78,7 @@ export function emptyStats() {
  * dashboard that prints "∞" after two winning trades is telling the reader
  * something untrue about a sample of two.
  */
-export const computeStats = (closedTrades) => {
+export const computeStats = (closedTrades, { startEquitySats = null } = {}) => {
   const trades = closedTrades.filter((trade) => Number.isFinite(trade.plSats))
   if (trades.length === 0) return emptyStats()
 
@@ -87,9 +87,14 @@ export const computeStats = (closedTrades) => {
   const grossWinSats = wins.reduce((sum, trade) => sum + trade.plSats, 0)
   const grossLossSats = Math.abs(losses.reduce((sum, trade) => sum + trade.plSats, 0))
 
+  // Drawdown is a property of the ACCOUNT, so it is measured from the starting
+  // equity. Measuring the cumulative P/L curve from zero instead reports a 96%
+  // drawdown for an account that won 8k sats and then gave back 7.7k — true of
+  // the P/L series, wildly untrue of the balance, and alarming for no reason.
   const ordered = [...trades].sort((a, b) => (a.closedAt ?? 0) - (b.closedAt ?? 0))
-  let equity = 0
-  let peak = 0
+  const base = startEquitySats && startEquitySats > 0 ? startEquitySats : null
+  let equity = base ?? 0
+  let peak = equity
   let maxDrawdown = 0
   for (const trade of ordered) {
     equity += trade.plSats
@@ -108,7 +113,9 @@ export const computeStats = (closedTrades) => {
     profitFactor: grossLossSats > 0 ? grossWinSats / grossLossSats : null,
     averageWinSats: wins.length ? grossWinSats / wins.length : null,
     averageLossSats: losses.length ? grossLossSats / losses.length : null,
-    maxDrawdownPct: peak > 0 ? maxDrawdown * 100 : null,
+    // Without a starting equity the figure would describe the P/L curve rather
+    // than the account, which is worse than saying nothing.
+    maxDrawdownPct: base && peak > 0 ? maxDrawdown * 100 : null,
   }
 }
 

@@ -39,7 +39,24 @@ export const runBacktest = async ({
 
   const startBalance = Math.round((capitalUsd / hourly[warmupHours].close) * SATS_PER_BTC)
   const store = { balanceSats: startBalance, trades: [], nextId: 1 }
-  const executor = createPaperExecutor({ store, feeRate: settings.risk.feeRate })
+
+  // The executor's clock must be the CANDLE's clock, not the wall clock.
+  //
+  // This is not a nicety. `mark()` refuses to settle a candle older than the
+  // trade that is being marked — correct in production, where it stops a
+  // position being closed by a candle that predates it. With the default
+  // wall-clock, every historical candle is older than every backtest trade, so
+  // no stop loss and no take profit ever fired: positions could only be closed
+  // by the higher-timeframe flip rule, at market, wherever price happened to
+  // be. The first run to reach real data reported +10.5% with a 46.8%
+  // drawdown and average losses five times the 1% that was risked — the
+  // signature of a system with no stops, and entirely an artefact of this.
+  let clock = hourly[warmupHours].time
+  const executor = createPaperExecutor({
+    store,
+    feeRate: settings.risk.feeRate,
+    now: () => clock,
+  })
 
   const equityCurve = []
   const rejections = new Map()
@@ -49,6 +66,7 @@ export const runBacktest = async ({
 
   for (let index = warmupHours; index < hourly.length; index += 1) {
     const candle = hourly[index]
+    clock = candle.time
 
     // Settle first: an exit on this candle frees capital the same hour.
     executor.mark([candle])
@@ -123,7 +141,7 @@ export const runBacktest = async ({
   }
 
   const closed = store.trades.filter((trade) => trade.status === 'closed')
-  const stats = computeStats(closed)
+  const stats = computeStats(closed, { startEquitySats: startBalance })
   const finalEquity = equityCurve.at(-1)?.equitySats ?? startBalance
   const buyHoldSats = startBalance
 
@@ -157,6 +175,28 @@ export const formatBacktest = (report) => {
   lines.push(`Profit factor ${report.stats.profitFactor === null ? 'n/a (no losing trade)' : report.stats.profitFactor.toFixed(2)}`)
   lines.push(`Net P/L       ${sats(report.stats.netPnlSats)}   max drawdown ${pct(report.stats.maxDrawdownPct)}`)
   lines.push(`Avg win/loss  ${sats(report.stats.averageWinSats)} / ${sats(report.stats.averageLossSats)}`)
+  lines.push('')
+  // How positions ended is the first thing to check when a result looks odd:
+  // a run with no stop-loss exits is not a run with a good strategy, it is a
+  // run with broken stops.
+  const exits = report.trades.reduce((counts, trade) => {
+    counts[trade.exitReason] = (counts[trade.exitReason] ?? 0) + 1
+    return counts
+  }, {})
+  lines.push(`Exits         ${Object.entries(exits).map(([reason, count]) => `${reason} ×${count}`).join(', ') || 'none'}`)
+  if (report.trades.length) {
+    lines.push('')
+    lines.push('Trades:')
+    for (const trade of report.trades) {
+      lines.push(
+        `  ${new Date(trade.openedAt).toISOString().slice(0, 16)}  ${trade.side.padEnd(5)}` +
+          ` ${String(trade.quantityUsd).padStart(5)} USD  entry ${Math.round(trade.entry)}` +
+          `  stop ${Math.round(trade.initialStop)}  tp ${Math.round(trade.takeProfit)}` +
+          `  exit ${Math.round(trade.exitPrice)} (${trade.exitReason})` +
+          `  ${trade.plSats > 0 ? '+' : ''}${trade.plSats} sats`
+      )
+    }
+  }
   lines.push('')
   lines.push('Most common reasons no trade was taken:')
   for (const [reason, count] of report.rejections.slice(0, 8)) {

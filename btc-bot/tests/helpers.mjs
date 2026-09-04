@@ -62,3 +62,27 @@ export const stubFetch = (routes) => async (url, options = {}) => {
     text: async () => (typeof value.body === 'string' ? value.body : JSON.stringify(value.body)),
   }
 }
+
+/**
+ * A zigzag with deterministic noise on every candle.
+ *
+ * A perfectly smooth leg has an ATR far smaller than the leg itself, so the
+ * strategy's "price is N ATR from the zone" gate refuses everything and the
+ * series produces no trades at all — which makes it useless for testing what
+ * happens after an entry. The noise is generated from a fixed seed so the
+ * series is identical on every run.
+ */
+export const noisyZigzag = (points, { steps = 8, noise = 0.004, start = START, scale = 1, seed = 7 } = {}) => {
+  const candles = zigzag(points, { steps, start, scale })
+  let state = seed
+  const random = () => {
+    state = (state * 1103515245 + 12345) % 2147483648
+    return state / 2147483648
+  }
+  return candles.map((candle) => {
+    const wiggle = candle.close * noise
+    const high = Math.max(candle.open, candle.close) + wiggle * (0.4 + random())
+    const low = Math.min(candle.open, candle.close) - wiggle * (0.4 + random())
+    return { ...candle, high, low }
+  })
+}
