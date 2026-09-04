@@ -1,0 +1,97 @@
+name: Email Campaign Research Report
+
+# Rucne spousteny prehled propustnosti AI research. Nic nemeni, jen cte: kolik
+# subjektu kategorie je hotovych, co je strop a za jak dlouho by pri nem dojel zbytek.
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: email-campaign-research-report
+  cancel-in-progress: false
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Read AI research throughput
+        env:
+          APP_DATABASE_NAME: ${{ secrets.APP_DATABASE_NAME }}
+          APP_DATABASE_USERNAME: ${{ secrets.MYSQL_EMAILING_DB_USERNAME }}
+          APP_DATABASE_PASSWORD: ${{ secrets.MYSQL_EMAILING_DB_PASSWORD }}
+        run: |
+          if [ -z "$APP_DATABASE_NAME" ] || [ -z "$APP_DATABASE_USERNAME" ] || [ -z "$APP_DATABASE_PASSWORD" ]; then
+            echo "Missing database secrets; cannot derive cron token."
+            exit 1
+          fi
+          TOKEN=$(python3 - <<'PY'
+          import hashlib
+          import os
+
+          material = "email-campaign-cron:" + os.environ["APP_DATABASE_NAME"] + ":" + os.environ["APP_DATABASE_USERNAME"] + ":" + os.environ["APP_DATABASE_PASSWORD"]
+          print(hashlib.sha256(material.encode("utf-8")).hexdigest())
+          PY
+          )
+          base="https://www.osobnizkusenosti.cz/email-campaign/?cron=${TOKEN}"
+          curl --show-error --silent --max-time 90 --output /tmp/throughput.json "${base}&throughput_report=1"
+          python3 - <<'PY'
+          import json
+
+          try:
+              with open("/tmp/throughput.json", encoding="utf-8") as handle:
+                  report = json.load(handle)
+          except Exception as exc:                      # noqa: BLE001
+              print("Report se nepodarilo precist: %s" % exc)
+              with open("/tmp/throughput.json", encoding="utf-8", errors="replace") as handle:
+                  print(handle.read()[:2000])
+              raise SystemExit(1)
+
+          category = report.get("category", {})
+          runs = report.get("runs", {})
+          model = report.get("model", {})
+          ticks = report.get("ticks", {})
+          schedule = report.get("schedule", {})
+          forecast = report.get("forecast", {})
+
+          print("=== KATEGORIE FIRMY.CZ ===")
+          print("  hotovo %s z %s (zbyva %s), znamy celkovy pocet: %s" % (
+              category.get("completed", "?"), category.get("total", "?"),
+              category.get("remaining", "?"), category.get("total_known", "?")))
+          print("  fronta seedu v cache: %s, dalsi stranka katalogu: %s, velikost stranky: %s, cyklus: %s" % (
+              category.get("queue_cached", "?"), category.get("next_page", "?"),
+              category.get("known_page_size", "?"), category.get("cycle", "?")))
+
+          print("=== BEHY ===")
+          print("  celkem %s, ze vzorku %s: ready %s, rozdelanych %s, uzavrenych %s" % (
+              runs.get("total", "?"), runs.get("sampled", "?"), runs.get("ready", "?"),
+              runs.get("incomplete", "?"), runs.get("closed", "?")))
+
+          print("=== MODEL ===")
+          print("  poskytovatel %s, denni rozpocet %s, za 24 h pouzito %s, za minutu %s (strop %s/min)" % (
+              model.get("provider", "?"), model.get("daily_budget", "?"),
+              model.get("used_last_24h", "?"), model.get("used_last_minute", "?"),
+              model.get("rpm_budget", "?")))
+          print("  pozadavku na seed: %s  ->  %s seedu/den" % (
+              model.get("requests_per_seed", "?"), model.get("seeds_per_day_by_budget", "?")))
+
+          print("=== TIKY ===")
+          print("  vzorek %s, prumerne %s s a %s pozadavku na tik, nedokoncenych %s" % (
+              ticks.get("sampled", "?"), ticks.get("avg_seconds", "?"),
+              ticks.get("avg_requests", "?"), ticks.get("not_done_share", "?")))
+
+          print("=== BEH AUTOMATIKY ===")
+          print("  posledni tik: %s (pred %s s), dalsi nejdriv: %s, zamek: %s, serie kvot: %s" % (
+              schedule.get("last_run_at", "-") or "-",
+              schedule.get("seconds_since_last_run", "?"),
+              schedule.get("next_allowed_at", "-") or "-",
+              schedule.get("lock_until", "-") or "-",
+              schedule.get("quota_streak", "?")))
+
+          print("=== ODHAD ===")
+          days = forecast.get("days_by_model_budget", -1)
+          print("  zbyva %s seedu; pri soucasnem stropu %s dnu (limit: %s)" % (
+              forecast.get("remaining_seeds", "?"),
+              days if days is not None and days >= 0 else "nelze urcit",
+              forecast.get("limited_by", "?")))
+          if isinstance(days, (int, float)) and days > 3:
+              print("  ::POZOR:: soucasny strop nestaci na cil 'hodiny az jednotky dni'")
+          PY

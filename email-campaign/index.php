@@ -1081,6 +1081,15 @@ if (isset($_GET['cron'])) {
         }
         exit;
     }
+    if (isset($_GET['throughput_report'])) {
+        try {
+            echo json_encode(aiResearchThroughputReport($pdo, $config), JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . "\n";
+        } catch (Throwable $e) {
+            http_response_code(503);
+            echo 'Throughput report failed: ' . $e->getMessage() . "\n";
+        }
+        exit;
+    }
     if (isset($_GET['storage_report'])) {
         try {
             $report = databaseStorageReport($pdo);
@@ -4516,6 +4525,136 @@ function aiResearchRefreshFirmySeedCatalogTotal(PDO $pdo, array $state): array
         aiResearchFastFetchMode(false);
     }
     return $state;
+}
+
+/**
+ * Propustnost AI research: kolik subjektu kategorie je hotovych, co je strop a jak
+ * dlouho by pri nem trvalo dojet zbytek.
+ *
+ * Bez tohoto se o propustnosti jen hada. Rozhoduji tri veci naraz - denni rozpocet
+ * pozadavku na model, pocet pozadavku na jeden seed a realny cas jednoho seedu -
+ * a limitni je vzdy ta nejnizsi z nich.
+ */
+function aiResearchThroughputReport(PDO $pdo, array $config): array
+{
+    $report = ['generated_at' => date('c')];
+
+    $progress = aiResearchSeedCategoryProgress($pdo);
+    $state = aiResearchEnsureFirmySeedCatalogState($pdo, aiResearchSeedDiscoveryState($pdo));
+    $report['category'] = [
+        'completed' => (int)($progress['completed'] ?? 0),
+        'total' => (int)($progress['total'] ?? 0),
+        'total_known' => !empty($progress['total_known']),
+        'remaining' => max(0, (int)($progress['total'] ?? 0) - (int)($progress['completed'] ?? 0)),
+        'queue_cached' => count((array)($state['queue'] ?? [])),
+        'next_page' => (int)($state['next_page'] ?? 1),
+        'known_page_size' => (int)($state['known_page_size'] ?? 0),
+        'cycle' => (int)($state['cycle'] ?? 1),
+    ];
+
+    // Kolik behu je opravdu hotovych podle vsech povinnych kroku, ne jen podle statusu.
+    $ready = 0;
+    $incomplete = 0;
+    $closed = 0;
+    try {
+        $rows = $pdo->query('
+            SELECT id, status, plan_json, email_body_html,
+                   COALESCE(found_count, 0) AS found_count,
+                   COALESCE(accepted_count, 0) AS accepted_count
+            FROM ai_research_runs
+            ORDER BY id DESC
+            LIMIT 400
+        ')->fetchAll(PDO::FETCH_ASSOC);
+        foreach ($rows as $row) {
+            $plan = json_decode((string)$row['plan_json'], true);
+            $plan = is_array($plan) ? $plan : [];
+            if (!empty($plan['permanently_closed']) || !empty($plan['seed_unsuitable'])) {
+                $closed++;
+                continue;
+            }
+            if (aiResearchWorkflowRequiredDone(aiResearchWorkflowChecklist($pdo, $row, $plan))) {
+                $ready++;
+            } else {
+                $incomplete++;
+            }
+        }
+        $report['runs'] = [
+            'sampled' => count($rows),
+            'ready' => $ready,
+            'incomplete' => $incomplete,
+            'closed' => $closed,
+            'total' => (int)$pdo->query('SELECT COUNT(*) FROM ai_research_runs')->fetchColumn(),
+        ];
+    } catch (Throwable $e) {
+        $report['runs'] = ['error' => $e->getMessage()];
+    }
+
+    $dailyBudget = aiResearchDailyRequestBudgetOrDefault($config);
+    $perSeed = max(1, aiResearchEstimatedGeminiRequestsPerSeed($config));
+    $report['model'] = [
+        'provider' => aiResearchProviderName($config),
+        'daily_budget' => $dailyBudget,
+        'used_last_24h' => aiResearchGeminiRequestsUsedLast24h($pdo),
+        'used_last_minute' => aiResearchRequestsUsedLastMinute($pdo),
+        'rpm_budget' => aiResearchGeminiRequestsPerMinuteBudget($config),
+        'requests_per_seed' => $perSeed,
+        'seeds_per_day_by_budget' => (int)floor($dailyBudget / $perSeed),
+    ];
+
+    // Realny cas: z provozniho logu, kde kazdy tik zapsal trvani a pocet pozadavku.
+    try {
+        $logs = $pdo->query('
+            SELECT status, duration_seconds, requests, kind
+            FROM ai_research_logs
+            WHERE status IN ("done", "deferred", "failed") AND duration_seconds>0
+            ORDER BY id DESC
+            LIMIT 200
+        ')->fetchAll(PDO::FETCH_ASSOC);
+        $ticks = count($logs);
+        $seconds = 0;
+        $requests = 0;
+        $deferred = 0;
+        foreach ($logs as $log) {
+            $seconds += (int)$log['duration_seconds'];
+            $requests += (int)$log['requests'];
+            if ((string)$log['status'] !== 'done') {
+                $deferred++;
+            }
+        }
+        $report['ticks'] = [
+            'sampled' => $ticks,
+            'avg_seconds' => $ticks > 0 ? round($seconds / $ticks, 1) : 0,
+            'avg_requests' => $ticks > 0 ? round($requests / $ticks, 2) : 0,
+            'not_done_share' => $ticks > 0 ? round($deferred / $ticks, 2) : 0,
+        ];
+    } catch (Throwable $e) {
+        $report['ticks'] = ['error' => $e->getMessage()];
+    }
+
+    // Kdy se naposledy neco stalo - pozna se z toho, jestli automatika vubec bezi.
+    $settings = loadSettings($pdo);
+    $lastRun = (int)($settings['ai_research_last_run_at'] ?? 0);
+    $report['schedule'] = [
+        'last_run_at' => $lastRun > 0 ? date('c', $lastRun) : '',
+        'seconds_since_last_run' => $lastRun > 0 ? time() - $lastRun : -1,
+        'next_allowed_at' => (int)($settings['ai_research_next_allowed_at'] ?? 0) > 0
+            ? date('c', (int)$settings['ai_research_next_allowed_at'])
+            : '',
+        'lock_until' => (int)($settings['ai_research_lock_until'] ?? 0) > 0
+            ? date('c', (int)$settings['ai_research_lock_until'])
+            : '',
+        'quota_streak' => (int)($settings['ai_research_quota_streak'] ?? 0),
+    ];
+
+    // Nakonec to, co uzivatele zajima: za jak dlouho dojede zbytek kategorie.
+    $remaining = (int)$report['category']['remaining'];
+    $byBudget = (int)$report['model']['seeds_per_day_by_budget'];
+    $report['forecast'] = [
+        'remaining_seeds' => $remaining,
+        'days_by_model_budget' => $byBudget > 0 ? round($remaining / $byBudget, 1) : -1,
+        'limited_by' => $byBudget > 0 && $remaining > 0 ? 'denni rozpocet pozadavku na model' : 'nelze urcit',
+    ];
+    return $report;
 }
 
 function aiResearchSeedCategoryProgress(PDO $pdo, bool $refreshCatalogTotal = false): array
