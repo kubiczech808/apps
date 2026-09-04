@@ -36,6 +36,9 @@ function aiResearchScrapingProgress(PDO $pdo, array $plan): ?array { return $GLO
 foreach (['aiResearchRetryDelaySeconds', 'aiResearchQuotaIsMinuteWindow', 'aiResearchMinuteQuotaWaitSeconds',
           'aiResearchTemporaryBackoffUntil', 'aiResearchErrorIsMinuteQuota', 'aiResearchFailureMessage',
           'aiResearchErrorIsQuota', 'aiResearchQuotaStreak', 'aiResearchHardQuotaPauseSeconds',
+          'aiResearchQuotaReportedDailyRequestLimit', 'aiResearchObservedDailyRequestLimit',
+          'aiResearchRememberObservedDailyRequestLimit', 'aiResearchDailyGeminiRequestBudget',
+          'aiResearchDailyRequestBudgetOrDefault',
           'aiResearchProviderKey', 'aiResearchProviderPreference', 'aiResearchProviderExhausted',
           'aiResearchProviderName', 'aiResearchMarkProviderExhausted', 'aiResearchHandleQuotaFailure',
           'aiResearchStepsNeedingModel', 'aiResearchRunProgressesWithoutModel',
@@ -139,6 +142,64 @@ assert(strpos($tick, "if ((string)\$work['kind'] === 'none')") !== false, 'tik p
 assert(strpos($tick, 'aiResearchHandleQuotaFailure($pdo, $config, $e)') !== false, 'kvota ma jedno zpracovani');
 assert(strpos($tick, 'aiResearchQuotaStreak($pdo, 0)') !== false, 'uspesny tik nuluje serii');
 assert(strpos($tick, 'vsichni poskytovatele maji vycerpanou kvotu') !== false, 'tik nezacina marnym pozadavkem');
+echo "  ok\n";
+
+echo "\n== 7. vycerpany DENNI strop se pozna z cisla, ktere Google sam uvede ==\n";
+// Presna zprava z produkce, 04.09.2026. Nas denni rozpocet stal na 200, protoze tolik
+// mel free tier drivejsiho modelu; gemini-3-flash pripousti 20. Zbylych 119 pozadavku
+// v jedne serii byly zarucene chyby - a protoze retry hint zni "retry in 33s", cetly
+// se jako minutove okno a opakovaly se dokola.
+$exhausted = 'You exceeded your current quota, please check your plan and billing details. '
+    . 'Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, '
+    . 'limit: 20, model: gemini-3-flash Please retry in 33.76887199s.';
+printf("  ohlaseny denni strop: %d\n", aiResearchQuotaReportedDailyRequestLimit($exhausted));
+assert(aiResearchQuotaReportedDailyRequestLimit($exhausted) === 20, 'strop se musi precist z chyby');
+assert(aiResearchQuotaIsMinuteWindow($exhausted) === false,
+    'kratky retry hint nesmi vycerpany denni strop vydavat za minutove okno');
+$pause = aiResearchHardQuotaPauseSeconds($exhausted);
+printf("  pauza: %d min (do %s)\n", (int)round($pause / 60), date('d.m. H:i', time() + $pause));
+assert($pause > 3600, 'do konce dne se strop neuvolni, mam ' . $pause);
+// Minutove okno se timhle nesmi rozbit: male cislo neni denni strop.
+$minute = 'Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_requests_per_minute, '
+    . 'limit: 5, model: gemini-3-flash Please retry in 12s.';
+assert(aiResearchQuotaReportedDailyRequestLimit($minute) === 0, 'jednotky nejsou denni strop');
+assert(aiResearchQuotaIsMinuteWindow($minute) === true, 'minutove okno zustava minutovym oknem');
+
+echo "\n== 7b. rozpocet se podle ohlaseneho stropu opravi ==\n";
+$GLOBALS['SETTINGS'] = [];
+$onlyGemini = ['ai' => ['gemini_api_key' => 'AIza']];
+printf("  pred: %d\n", aiResearchDailyRequestBudgetOrDefault($onlyGemini, $pdo));
+assert(aiResearchDailyRequestBudgetOrDefault($onlyGemini, $pdo) === 200, 'vychozi strop zustava 200');
+assert(aiResearchRememberObservedDailyRequestLimit($pdo, $exhausted) === 20, 'strop se zapamatuje');
+printf("  po:   %d\n", aiResearchDailyRequestBudgetOrDefault($onlyGemini, $pdo));
+assert(aiResearchDailyRequestBudgetOrDefault($onlyGemini, $pdo) === 20,
+    'dalsi tiky uz nesmi posilat pozadavky, o kterych provider rekl, ze je odmitne');
+// Vlastni nastaveni ma prednost - kdo ma placeny tarif, nesmi ho pozorovani srazit.
+assert(aiResearchDailyRequestBudgetOrDefault(
+    ['ai' => ['gemini_api_key' => 'A', 'gemini_research_daily_request_budget' => 5000]], $pdo) === 5000,
+    'explicitni nastaveni pozorovani neprebiji');
+// A pozorovani se zapisuje tam, kde se kvotova chyba resi.
+$handle = extractFn($src, 'aiResearchHandleQuotaFailure');
+assert(strpos($handle, 'aiResearchRememberObservedDailyRequestLimit($pdo, $message)') !== false,
+    'kvotova chyba musi ohlaseny strop zapsat');
+
+echo "\n== 8. kvotovy naraz nesmi spotrebovat pokus o dokonceni behu ==\n";
+// Tohle je druha polovina te same skody: dokonceni behu polykalo vyjimku a vracelo ji
+// jako obycejnou zpravu kroku, takze (a) tik se vykazal jako hotovy a vynuloval serii
+// kvotovych neuspechu, takze eskalace na dlouhou pauzu nikdy nenastala, a (b) kazdy
+// naraz spotreboval jeden ze tri pokusu. Za jednu serii se tak trvale zavrelo 30
+// zdravych subjektu (uzavrenych behu 16 -> 46).
+$finish = extractFn($src, 'runCronAiResearchUnfinished');
+assert(strpos($finish, 'aiResearchErrorIsQuota($e->getMessage())') !== false,
+    'dokonceni musi kvotovou chybu poznat');
+assert(strpos($finish, 'aiResearchRefundFinishAttempt($pdo, $runId)') !== false,
+    'kvotovy naraz se musi vratit zpatky');
+assert(preg_match('/aiResearchRefundFinishAttempt\(\$pdo, \$runId\);\s*\n\s*throw \$e;/', $finish) === 1,
+    'a vyjimka musi jit nahoru, kde se kvota resi');
+assert(strpos($src, 'function reopenAiResearchRunsClosedByAttemptCap') !== false,
+    'behy uzavrene stropem pokusu se musi dat znovu otevrit');
+assert(strpos($src, "isset(\$_GET['reopen_quota_closed'])") !== false,
+    'naprava musi byt spustitelna z cronu');
 echo "  ok\n";
 
 echo "\nVSE OK\n";

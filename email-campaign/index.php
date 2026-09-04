@@ -255,6 +255,11 @@ function aiResearchQuotaIsMinuteWindow(string $message): bool
     if (preg_match('/per\s*day|daily|requests_per_day|\bRPD\b/i', $message)) {
         return false;
     }
+    // Vycerpany denni strop se od minutoveho okna nepozna z retry hintu - Google
+    // u obou rekne "retry in 33s". Pozna se z cisla, ktere u chyby uvede sam.
+    if (aiResearchQuotaReportedDailyRequestLimit($message) > 0) {
+        return false;
+    }
     $delay = aiResearchRetryDelaySeconds($message);
     return $delay > 0 && $delay <= 60;
 }
@@ -795,7 +800,7 @@ function aiResearchRecordGeminiUsage(PDO $pdo, int $requests): void
     setSetting($pdo, 'ai_research_gemini_request_log', json_encode($timestamps) ?: '[]');
 }
 
-function aiResearchDailyRequestBudgetOrDefault(array $config): int
+function aiResearchDailyRequestBudgetOrDefault(array $config, ?PDO $pdo = null): int
 {
     $configured = aiResearchDailyGeminiRequestBudget($config);
     if ($configured > 0) {
@@ -804,7 +809,47 @@ function aiResearchDailyRequestBudgetOrDefault(array $config): int
     // Vychozi strop musi byt pod skutecnym limitem poskytovatele, jinak si ho vycerpame,
     // dostaneme 429 a hodiny se jen opakuje marny pokus. Free tier Gemini dava radove
     // stovky pozadavku na den; kdo ma placeny tarif, zvedne cislo v nastaveni AI.
-    return aiResearchProviderName($config) === 'openai' ? 120 : 200;
+    $default = aiResearchProviderName($config) === 'openai' ? 120 : 200;
+    // Hadat cislo neni potreba, kdyz ho provider sam rekl. Merene na produkci: strop
+    // stal na 200, ale free tier gemini-3-flash pripousti 20 - zbylych 180 pozadavku
+    // byly zarucene chyby. Posledni pozorovany limit proto vychozi cislo srazi dolu.
+    $observed = $pdo instanceof PDO ? aiResearchObservedDailyRequestLimit($pdo) : 0;
+    return $observed > 0 ? min($default, $observed) : $default;
+}
+
+/**
+ * Posledni denni strop, ktery provider ohlasil ve sve vlastni chybe. Drzi se v
+ * nastaveni, protoze plati pro cely ucet, ne pro jeden request, a musi prezit i to,
+ * ze kazdy tik je jiny request.
+ */
+function aiResearchObservedDailyRequestLimit(PDO $pdo): int
+{
+    try {
+        return max(0, (int)(loadSettings($pdo)['ai_research_observed_daily_limit'] ?? 0));
+    } catch (Throwable $e) {
+        return 0;
+    }
+}
+
+/**
+ * Zapamatuje si denni strop z chyby providera. Vraci zapsane cislo, nebo 0, kdyz
+ * chyba zadny neuvadi. Novejsi pozorovani prepisuje starsi - kdyz ucet dostane vyssi
+ * tarif, chyby prestanou chodit a strop uz nic nesrazi.
+ */
+function aiResearchRememberObservedDailyRequestLimit(PDO $pdo, string $message): int
+{
+    $limit = aiResearchQuotaReportedDailyRequestLimit($message);
+    if ($limit <= 0) {
+        return 0;
+    }
+    try {
+        if (aiResearchObservedDailyRequestLimit($pdo) !== $limit) {
+            setSetting($pdo, 'ai_research_observed_daily_limit', (string)$limit);
+        }
+    } catch (Throwable $e) {
+        error_log('AI research observed daily limit not stored: ' . $e->getMessage());
+    }
+    return $limit;
 }
 
 function aiResearchTokensPerMinuteBudget(array $config): int
@@ -876,11 +921,38 @@ function aiResearchQuotaStreak(PDO $pdo, ?int $set = null): int
  */
 function aiResearchHardQuotaPauseSeconds(string $message): int
 {
-    if (preg_match('/per\s*day|daily|requests_per_day|\bRPD\b/i', $message)) {
+    if (preg_match('/per\s*day|daily|requests_per_day|\bRPD\b/i', $message)
+        || aiResearchQuotaReportedDailyRequestLimit($message) > 0) {
         $midnight = strtotime('tomorrow 00:10');
         return max(3600, ($midnight ?: time() + 86400) - time());
     }
     return AI_RESEARCH_HARD_QUOTA_PAUSE_SECONDS;
+}
+
+/**
+ * Kolik pozadavku za den provider podle sve vlastni chyby pripousti. Google to rika
+ * presne, jen jinym jazykem, nez cekal filtr na "per day":
+ *
+ *   Quota exceeded for metric: .../generate_content_free_tier_requests, limit: 20,
+ *   model: gemini-3-flash
+ *
+ * Merene na produkci: nas denni rozpocet stal na 200, protoze tolik mel free tier
+ * driveho modelu. gemini-3-flash ma 20. Zbylych 180 pozadavku byly zarucene chyby -
+ * a protoze retry hint u nich zni "retry in 33s", cetly se jako minutove okno a
+ * opakovaly se dokola. Cislo od providera je proto autorita: podle nej se pozna, ze
+ * jde o denni strop, a podle nej se opravi i vlastni rozpocet.
+ *
+ * Vraci 0, kdyz chyba zadny takovy strop nehlasi.
+ */
+function aiResearchQuotaReportedDailyRequestLimit(string $message): int
+{
+    if (!preg_match('/metric:\s*\S*?requests\b[^,]*,\s*limit:\s*(\d+)/i', $message, $m)) {
+        return 0;
+    }
+    $limit = (int)$m[1];
+    // Minutove stropy free tieru jsou v jednotkach; denni ve desitkach a vyse. Male
+    // cislo se proto nebere jako denni strop, aby se minutove okno neprotahlo na den.
+    return $limit >= 10 ? $limit : 0;
 }
 
 function aiResearchBackoffLabel(int $timestamp): string
@@ -1095,6 +1167,16 @@ if (isset($_GET['cron'])) {
         } catch (Throwable $e) {
             http_response_code(503);
             echo 'Throughput report failed: ' . $e->getMessage() . "\n";
+        }
+        exit;
+    }
+    if (isset($_GET['reopen_quota_closed'])) {
+        try {
+            $reopened = reopenAiResearchRunsClosedByAttemptCap($pdo);
+            echo 'Znovu otevrenych behu: ' . $reopened . "\n";
+        } catch (Throwable $e) {
+            http_response_code(503);
+            echo 'Reopen failed: ' . $e->getMessage() . "\n";
         }
         exit;
     }
@@ -3199,6 +3281,7 @@ function aiResearchHandleQuotaFailure(PDO $pdo, array $config, Throwable $e): ar
         return ['quota' => false, 'stop' => false, 'model_available' => true, 'message' => ''];
     }
     $provider = aiResearchProviderName($config);
+    aiResearchRememberObservedDailyRequestLimit($pdo, $message);
     $streak = aiResearchQuotaStreak($pdo, aiResearchQuotaStreak($pdo) + 1);
     if ($streak < AI_RESEARCH_QUOTA_STREAK_LIMIT) {
         // Prvni pokusy resi kratky backoff: minutove okno se opravdu casto uvolni samo.
@@ -3310,7 +3393,7 @@ function runCronAiResearch(PDO $pdo, array $config, bool $force = false): string
     if ($lockUntil > time()) {
         return 'AI research: uz bezi.';
     }
-    $dailyBudget = aiResearchDailyRequestBudgetOrDefault($config);
+    $dailyBudget = aiResearchDailyRequestBudgetOrDefault($config, $pdo);
     $usedToday = aiResearchGeminiRequestsUsedLast24h($pdo);
     $neededPerSeed = aiResearchEstimatedGeminiRequestsPerSeed($config);
     // Vycerpany denni rozpocet znamena "zadny novy pozadavek na model", ne "zadna
@@ -4274,6 +4357,59 @@ function reopenAiResearchRunsClosedForMissingContext(PDO $pdo): void
     }
 }
 
+/**
+ * Znovu otevre behy, ktere zavrel strop pokusu o dokonceni v dobe, kdy byla vycerpana
+ * kvota providera. Merene na produkci: jedna serie tiku narazila 120x do denniho
+ * stropu free tieru (20 pozadavku, model gemini-3-flash) a protoze se kazdy naraz
+ * pocital jako pokus o dokonceni, uzavrelo se za necelou hodinu 30 zdravych subjektu.
+ * Prvni oprava je, ze se kvotovy naraz uz jako pokus nepocita; tohle je naprava toho,
+ * co se stihlo zavrit predtim. Beh, ktery je opravdu nedokoncitelny, se po trech
+ * skutecnych pokusech zavre znovu - poradi se tim tedy nic neztrati.
+ *
+ * Vraci pocet znovu otevrenych behu.
+ */
+function reopenAiResearchRunsClosedByAttemptCap(PDO $pdo, int $limit = 200): int
+{
+    try {
+        $rows = $pdo->query('
+            SELECT id, plan_json
+            FROM ai_research_runs
+            WHERE plan_json LIKE "%permanently_closed%"
+            ORDER BY id DESC
+            LIMIT ' . max(1, min(1000, $limit)) . '
+        ')->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Throwable $e) {
+        error_log('AI research attempt-cap reopen skipped: ' . $e->getMessage());
+        return 0;
+    }
+    $update = $pdo->prepare('
+        UPDATE ai_research_runs
+        SET plan_json=?, status="deferred", message=?, updated_at=?
+        WHERE id=?
+    ');
+    $reopened = 0;
+    foreach ($rows as $row) {
+        $plan = json_decode((string)$row['plan_json'], true);
+        if (!is_array($plan) || empty($plan['permanently_closed'])) {
+            continue;
+        }
+        // Jen behy zavrene stropem pokusu. Seed bez pouzitelneho webu ma vlastni
+        // duvod a ten se tady nesaha - to by byl jiny problem s jinou opravou.
+        if (!str_starts_with((string)($plan['permanently_closed_reason'] ?? ''), 'po ')) {
+            continue;
+        }
+        unset($plan['permanently_closed'], $plan['permanently_closed_reason'], $plan['finish_attempts']);
+        $update->execute([
+            json_encode($plan, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?: (string)$row['plan_json'],
+            'Beh se zkusi dokoncit znovu: predchozi pokusy padly na vycerpanou kvotu modelu, ne na tento subjekt.',
+            date('c'),
+            (int)$row['id'],
+        ]);
+        $reopened++;
+    }
+    return $reopened;
+}
+
 function resetAiResearchFinishAttempts(PDO $pdo): void
 {
     try {
@@ -4607,7 +4743,7 @@ function aiResearchThroughputReport(PDO $pdo, array $config): array
         $report['runs'] = ['error' => $e->getMessage()];
     }
 
-    $dailyBudget = aiResearchDailyRequestBudgetOrDefault($config);
+    $dailyBudget = aiResearchDailyRequestBudgetOrDefault($config, $pdo);
     $perSeed = max(1, aiResearchEstimatedGeminiRequestsPerSeed($config));
     $report['model'] = [
         'provider' => aiResearchProviderName($config),
@@ -9104,7 +9240,48 @@ function runCronAiResearchUnfinished(PDO $pdo, array $config, ?array $work = nul
         return 'AI research dokonceni: ' . finishAiResearchRunNow($pdo, $config, $runId);
     } catch (Throwable $e) {
         error_log('AI research finish for #' . $runId . ' failed: ' . $e->getMessage());
+        // Vycerpana kvota providera neni chyba tohoto behu a nesmi se v nem utopit.
+        // Kdyz se spolkla a vratila jako obycejna zprava kroku, mela dva nasledky:
+        // tik se vykazal jako "hotovy", takze se vynulovala serie kvotovych neuspechu
+        // a eskalace na dlouhou pauzu nikdy nenastala - merene na produkci 120 tiku
+        // za sebou narazilo do stejne zdi (free tier gemini-3-flash ma 20 pozadavku
+        // na den) - a soucasne kazdy takovy naraz spotreboval jeden ze tri pokusu
+        // o dokonceni, takze se zdrave behy zaviraly trvale (16 -> 46 za jednu serii).
+        // Pokus se proto vraci zpatky a vyjimka jde nahoru, kde se kvota resi.
+        if ($e instanceof AiResearchTemporaryException && aiResearchErrorIsQuota($e->getMessage())) {
+            aiResearchRefundFinishAttempt($pdo, $runId);
+            throw $e;
+        }
         return 'AI research dokonceni behu #' . $runId . ' se nepodarilo: ' . $e->getMessage();
+    }
+}
+
+/**
+ * Vrati zpatky pokus o dokonceni, ktery se nespotreboval na behu, ale na vycerpane
+ * kvote providera. Bez toho by strop AI_RESEARCH_FINISH_ATTEMPTS_MAX zavrel trvale
+ * kazdy beh, ktery mel jen tu smulu, ze na nej padl vycerpany denni limit.
+ */
+function aiResearchRefundFinishAttempt(PDO $pdo, int $runId): void
+{
+    if ($runId <= 0) {
+        return;
+    }
+    try {
+        $stmt = $pdo->prepare('SELECT plan_json FROM ai_research_runs WHERE id=? LIMIT 1');
+        $stmt->execute([$runId]);
+        $plan = json_decode((string)$stmt->fetchColumn(), true);
+        if (!is_array($plan) || (int)($plan['finish_attempts'] ?? 0) <= 0) {
+            return;
+        }
+        $plan['finish_attempts'] = (int)$plan['finish_attempts'] - 1;
+        $update = $pdo->prepare('UPDATE ai_research_runs SET plan_json=?, updated_at=? WHERE id=?');
+        $update->execute([
+            json_encode($plan, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?: '{}',
+            date('c'),
+            $runId,
+        ]);
+    } catch (Throwable $e) {
+        error_log('AI research finish attempt refund failed: ' . $e->getMessage());
     }
 }
 
@@ -21420,7 +21597,7 @@ function renderApp(PDO $pdo, ?array $flash): void
         $researchDailyBudgetText = $researchGeminiDailyBudget > 0
             ? ', denní rozpočet ' . $researchGeminiDailyBudget . ' requestů'
             : '';
-        $researchEffectiveDailyBudget = aiResearchDailyRequestBudgetOrDefault($config);
+        $researchEffectiveDailyBudget = aiResearchDailyRequestBudgetOrDefault($config, $pdo);
         $researchUsageTimestamps = aiResearchGeminiUsageTimestamps($pdo);
         $researchRequestsLast24h = count($researchUsageTimestamps);
         $researchRequestsLastMinute = count(array_filter(

@@ -88,6 +88,7 @@ echo "  ok\n";
 
 echo "\n== 5. vlastni odlozeni kvuli minutovemu limitu nema delat backoff ==\n";
 eval(extractFn($src, 'aiResearchRetryDelaySeconds'));
+eval(extractFn($src, 'aiResearchQuotaReportedDailyRequestLimit'));
 eval(extractFn($src, 'aiResearchQuotaIsMinuteWindow'));
 eval(extractFn($src, 'aiResearchMinuteQuotaWaitSeconds'));
 eval(extractFn($src, 'aiResearchTemporaryBackoffUntil'));
