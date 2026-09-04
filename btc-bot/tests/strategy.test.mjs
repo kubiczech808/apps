@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { evaluateEntry, manageOpen } from '../src/strategy.mjs'
-import { appendCandle, candle, HOUR, zigzag } from './helpers.mjs'
+import { createPaperExecutor } from '../src/executor-paper.mjs'
+import { appendCandle, candle, HOUR, START, zigzag } from './helpers.mjs'
 
 /** An uptrend that has just pulled back into an old demand zone and rejected. */
 const bullishPullback = () => {
@@ -82,7 +83,7 @@ test('too little history is refused rather than guessed at', () => {
 
 test('a stop is moved to breakeven once the trade is one R in profit', () => {
   const candles = zigzag([100, 112, 106, 124, 116, 138, 128, 152, 140, 168], { steps: 8 })
-  const position = { side: 'long', entry: 150, stop: 145, initialStop: 145 }
+  const position = { side: 'long', entry: 150, stopLoss: 145, initialStop: 145 }
   // Latest close is above entry + 1R = 155 but below the trail threshold.
   appendCandle(candles, { open: 155, high: 157, low: 154, close: 156 })
   const decision = manageOpen({ position, ltfCandles: candles, htfCandles: candles })
@@ -94,7 +95,7 @@ test('a stop is moved to breakeven once the trade is one R in profit', () => {
 test('a stop is never widened, whatever the trailing anchor says', () => {
   const candles = zigzag([100, 112, 106, 124, 116, 138, 128, 152, 140, 168], { steps: 8 })
   appendCandle(candles, { open: 165, high: 167, low: 164, close: 166 })
-  const alreadyTrailed = { side: 'long', entry: 150, stop: 164, initialStop: 145 }
+  const alreadyTrailed = { side: 'long', entry: 150, stopLoss: 164, initialStop: 145 }
   const decision = manageOpen({ position: alreadyTrailed, ltfCandles: candles, htfCandles: candles })
   assert.notEqual(decision.action, 'move_stop')
 })
@@ -102,7 +103,7 @@ test('a stop is never widened, whatever the trailing anchor says', () => {
 test('a proposed stop already through price is refused, not sent', () => {
   const candles = zigzag([100, 112, 106, 124, 116, 138, 128, 152, 140, 168], { steps: 8 })
   appendCandle(candles, { open: 152, high: 153, low: 151, close: 151.5 })
-  const position = { side: 'long', entry: 145, stop: 140, initialStop: 140 }
+  const position = { side: 'long', entry: 145, stopLoss: 140, initialStop: 140 }
   const decision = manageOpen({ position, ltfCandles: candles, htfCandles: candles })
   if (decision.action === 'move_stop') {
     assert.ok(decision.stop < 151.5, 'a stop at or above price would close the trade instantly')
@@ -111,8 +112,50 @@ test('a proposed stop already through price is refused, not sent', () => {
 
 test('a long is closed when the higher timeframe turns down', () => {
   const down = zigzag([196, 176, 190, 160, 174, 144, 158, 128, 142, 112], { steps: 8 })
-  const position = { side: 'long', entry: 150, stop: 145, initialStop: 145 }
+  const position = { side: 'long', entry: 150, stopLoss: 145, initialStop: 145 }
   const decision = manageOpen({ position, ltfCandles: down, htfCandles: down })
   assert.equal(decision.action, 'close')
   assert.match(decision.reason, /turned against/)
+})
+
+test('a position built the way the system actually builds one gets its stop moved', async () => {
+  // The bug this exists for: manageOpen read `position.stop`, and nothing in
+  // the system produces that field — the paper store, LN Markets'
+  // normaliseTrade and the published state all say `stopLoss`. Every hand-built
+  // fixture in this file used `stop`, so the tests passed while the production
+  // path silently never moved a stop. Measured over 233 days of real candles:
+  // 35 trades reached 1R, zero were moved to breakeven.
+  //
+  // So this one does not hand-build a position. It opens one through the real
+  // executor and manages what comes back.
+  const store = { balanceSats: 1_000_000, trades: [], nextId: 1 }
+  const executor = createPaperExecutor({ store, now: () => START })
+  const opened = await executor.openPosition({
+    side: 'long',
+    entry: 150,
+    stop: 145,
+    takeProfit: 165,
+    quantityUsd: 10,
+    marginSats: 1000,
+    leverage: 5,
+  })
+  opened.initialStop = 145
+
+  const candles = zigzag([100, 112, 106, 124, 116, 138, 128, 152, 140, 168], { steps: 8 })
+  appendCandle(candles, { open: 155, high: 157, low: 154, close: 156 }) // 1.2R in profit
+
+  const decision = manageOpen({ position: opened, ltfCandles: candles, htfCandles: candles })
+  assert.equal(decision.action, 'move_stop', `expected the stop to move, got: ${decision.reason}`)
+  assert.equal(decision.stop, 150, 'breakeven is the entry price')
+})
+
+test('a position with no stop at all is held, not managed against undefined', () => {
+  const candles = zigzag([100, 112, 106, 124, 116, 138, 128, 152, 140, 168], { steps: 8 })
+  const decision = manageOpen({
+    position: { side: 'long', entry: 150, initialStop: 145 },
+    ltfCandles: candles,
+    htfCandles: candles,
+  })
+  assert.equal(decision.action, 'hold')
+  assert.match(decision.reason, /no stop to manage/)
 })

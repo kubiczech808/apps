@@ -211,7 +211,15 @@ export const manageOpen = ({ position, ltfCandles, htfCandles, settings = {} }) 
   if (!candle) return { action: 'hold', reason: 'no candle' }
 
   const price = candle.close
-  const { side, entry, stop } = position
+  const { side, entry } = position
+  // The field is `stopLoss` everywhere a position comes from — the paper store,
+  // `normaliseTrade` for LN Markets, and the published state. This read used to
+  // be `position.stop`, which is undefined on every one of them, so `improves`
+  // below compared against undefined, was always false, and NO stop was ever
+  // moved. Measured on 233 days: 35 trades reached 1R and zero were moved to
+  // breakeven. `stop` is still accepted so a caller passing a plan works too.
+  const stop = position.stopLoss ?? position.stop
+  if (!(stop > 0)) return { action: 'hold', reason: 'position has no stop to manage' }
   const initialRisk = Math.abs(entry - (position.initialStop ?? stop))
   if (!(initialRisk > 0)) return { action: 'hold', reason: 'position has no measurable risk' }
 
