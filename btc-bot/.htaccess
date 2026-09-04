@@ -1,0 +1,35 @@
+DirectoryIndex index.html
+
+# The state document names an account balance and open positions. It is served
+# through api.php, which requires the shared key; the raw files beside it must
+# not be reachable, or the key would be decoration.
+<FilesMatch "\.(json|log)$">
+  Require all denied
+</FilesMatch>
+<IfModule !mod_authz_core.c>
+  <FilesMatch "\.(json|log)$">
+    Order allow,deny
+    Deny from all
+  </FilesMatch>
+</IfModule>
+
+# config.php holds the key itself. PHP would normally execute rather than serve
+# it, but a hosting that loses its PHP handler serves source, and that failure
+# must not be the one that leaks the key.
+<Files "config.php">
+  Require all denied
+</Files>
+
+<IfModule mod_headers.c>
+  # The page and the API are re-checked on every visit: assets carry the deploy
+  # commit in their query string, so a cached page would keep asking for the
+  # previous asset and the dashboard would silently show an old build.
+  <FilesMatch "\.(?:html|php)$">
+    Header set Cache-Control "no-cache, must-revalidate"
+  </FilesMatch>
+  <FilesMatch "\.(?:js|css)$">
+    Header set Cache-Control "public, max-age=3600"
+  </FilesMatch>
+  Header set X-Content-Type-Options "nosniff"
+  Header set Referrer-Policy "same-origin"
+</IfModule>

@@ -1,0 +1,46 @@
+name: BTC bot — fallback runner
+
+# The Raspberry Pi is the primary runner and passes every minute. This is the
+# safety net for when it is not: it takes the same lease, so on a healthy day it
+# finds the Pi holding it and does nothing but note that the Pi is alive.
+#
+# GitHub's scheduler has a five-minute floor and routinely runs late, which is
+# exactly why it is the fallback and not the main loop.
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '*/15 * * * *'
+
+concurrency:
+  group: btcbot-run
+  cancel-in-progress: false
+
+jobs:
+  pass:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: btc-bot
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Run one pass
+        env:
+          BOT_RUNNER: actions
+          BOT_API_URL: ${{ vars.BTC_BOT_URL || 'https://www.btc-dca.com/bot/api.php' }}
+          BOT_API_KEY: ${{ secrets.BTC_BOT_KEY }}
+          # Shorter than the schedule interval: a lease this runner takes must
+          # expire before its next attempt, or a single slow pass would lock the
+          # Pi out for a quarter of an hour.
+          BOT_LEASE_TTL_MS: '120000'
+          LNM_API_KEY: ${{ secrets.LNM_API_KEY }}
+          LNM_API_SECRET: ${{ secrets.LNM_API_SECRET }}
+          LNM_API_PASSPHRASE: ${{ secrets.LNM_API_PASSPHRASE }}
+          LNM_API_NETWORK: ${{ vars.LNM_API_NETWORK || 'testnet' }}
+        run: node tools/run-bot.mjs

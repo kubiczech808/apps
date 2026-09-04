@@ -1,0 +1,5 @@
+config.php
+data/bot-state.json
+data/lease.json
+data/commands.json
+node_modules/

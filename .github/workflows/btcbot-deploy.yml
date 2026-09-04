@@ -1,0 +1,276 @@
+name: Deploy BTC bot
+
+# Testing is part of deploying, not a separate habit someone has to remember:
+# unit tests, a PHP lint, a live reachability check against LN Markets and a
+# real-data backtest all run here, and the FTP upload only happens after the
+# ones that can fail have passed.
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - claude/lnmarkets-btc-bot
+      - claude/energy-consumption-app-Nf7bh
+      - main
+    paths:
+      - 'btc-bot/**'
+      - '.github/workflows/btcbot-deploy.yml'
+
+concurrency:
+  group: btcbot-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: btc-bot
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Unit tests
+        run: node --test "tests/**/*.test.mjs"
+
+      - name: Lint PHP
+        run: |
+          php -v
+          php -l api.php
+
+      - name: Check LN Markets is reachable and the credentials are accepted
+        # This is the only place the credentials are exercised before a pass
+        # uses them for real. A public ticker proves the network path; an
+        # authenticated /user proves the key, secret, passphrase AND the clock
+        # (the signature carries a timestamp the server rejects if it drifts).
+        env:
+          LNM_API_KEY: ${{ secrets.LNM_API_KEY }}
+          LNM_API_SECRET: ${{ secrets.LNM_API_SECRET }}
+          LNM_API_PASSPHRASE: ${{ secrets.LNM_API_PASSPHRASE }}
+          LNM_API_NETWORK: ${{ vars.LNM_API_NETWORK || 'testnet' }}
+        run: |
+          node --input-type=module -e '
+            import { createLnMarketsClient } from "./src/lnmarkets.mjs"
+            const client = createLnMarketsClient()
+            const ticker = await client.getTicker()
+            const price = ticker?.lastPrice ?? ticker?.index ?? ticker?.bid
+            console.log(`LN Markets ${client.network} reachable, BTC ${price}`)
+            if (!client.hasCredentials) {
+              console.log("::warning title=LN Markets::No credentials configured — the bot will run in paper mode until LNM_API_KEY, LNM_API_SECRET and LNM_API_PASSPHRASE are set.")
+              process.exit(0)
+            }
+            const user = await client.getUser()
+            console.log(`Authenticated as ${user?.username ?? "(no username)"} — balance ${user?.balance ?? "?"} sats`)
+            if (!Number.isFinite(Number(user?.balance))) {
+              throw new Error("Authenticated but the account has no readable balance")
+            }
+          '
+
+      - name: Backtest the strategy on real candles
+        # Informational and allowed to fail: the point is that every deploy
+        # leaves a measured statement in the log about the strategy it shipped,
+        # rather than a claim nobody checked.
+        continue-on-error: true
+        run: |
+          node tools/backtest.mjs --limit 1000 --json /tmp/backtest.json | tee /tmp/backtest.txt
+          {
+            echo '### Backtest on real candles'
+            echo '```'
+            cat /tmp/backtest.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Build server config
+        env:
+          BTC_BOT_KEY: ${{ secrets.BTC_BOT_KEY }}
+        run: |
+          if [ -z "$BTC_BOT_KEY" ]; then
+            echo "::error title=Missing secret::BTC_BOT_KEY is required — the dashboard and both runners authenticate with it."
+            exit 1
+          fi
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+
+          def php_string(value: str) -> str:
+              return "'" + str(value).replace("\\", "\\\\").replace("'", "\\'") + "'"
+
+          Path("config.php").write_text(
+              "<?php\n\nreturn [\n    'bot_key' => "
+              + php_string(os.environ["BTC_BOT_KEY"])
+              + ",\n];\n",
+              encoding="utf-8",
+          )
+          PY
+          php -l config.php
+
+      - name: Stamp asset versions
+        # index.html names its assets with ?v=<commit>. Without this the browser
+        # keeps the previously cached app.js and the deploy looks like it did
+        # nothing — the exact failure the trading app hit and documented.
+        env:
+          ASSET_VERSION: ${{ github.sha }}
+        run: |
+          python3 - <<'PY'
+          import os, re
+          from pathlib import Path
+
+          version = (os.environ.get("ASSET_VERSION") or "")[:12] or "dev"
+          page = Path("index.html")
+          html = page.read_text(encoding="utf-8")
+          stamped, count = re.subn(
+              r'(href|src)="(assets/[^"?]+)(?:\?v=[^"]*)?"',
+              lambda m: f'{m.group(1)}="{m.group(2)}?v={version}"',
+              html,
+          )
+          if count == 0:
+              raise SystemExit("No asset references found in index.html; refusing to deploy an unstamped page.")
+          page.write_text(stamped, encoding="utf-8")
+          print(f"Stamped {count} asset reference(s) with v={version}")
+          PY
+
+      - name: Upload to btc-dca.com
+        env:
+          BTCDCA_FTP_LOGIN: ${{ secrets.BTCDCA_FTP_LOGIN }}
+          BTCDCA_FTP_PASSWORD: ${{ secrets.BTCDCA_FTP_PASSWORD }}
+          BTCDCA_FTP_HOSTS: ${{ vars.BTCDCA_FTP_HOSTS || 'ftp.btc-dca.com,neuron.blueboard.cz' }}
+          BTCBOT_FTP_DIR: /www/bot
+        run: |
+          python3 - <<'PY'
+          import ftplib, os
+          from pathlib import Path
+
+          hosts = [h.strip() for h in os.environ["BTCDCA_FTP_HOSTS"].split(",") if h.strip()]
+          login = os.environ["BTCDCA_FTP_LOGIN"]
+          password = os.environ["BTCDCA_FTP_PASSWORD"]
+          target = os.environ["BTCBOT_FTP_DIR"].strip("/").split("/")
+
+          # Only these are deployed, and nothing is ever deleted. data/ holds the
+          # published run state, the lease and the operator's settings -- runtime
+          # data the bots own. The trading app lost a portfolio's entire run-log
+          # history to a deploy that cleaned that directory; this one does not
+          # clean it at all.
+          files = ["index.html", "api.php", "config.php", ".htaccess", "assets/app.js", "assets/app.css"]
+          seed = ["data/settings.json"]
+
+          def connect():
+              last = None
+              for host in hosts:
+                  try:
+                      ftp = ftplib.FTP(host, timeout=30)
+                      ftp.login(login, password)
+                      print(f"Connected to {host}")
+                      return ftp
+                  except ftplib.all_errors as error:
+                      last = error
+                      print(f"FTP connection failed for {host}: {error}")
+              raise SystemExit(f"No FTP host answered. Last error: {last}")
+
+          def enter(ftp, parts):
+              ftp.cwd("/")
+              for part in parts:
+                  if not part:
+                      continue
+                  try:
+                      ftp.cwd(part)
+                  except ftplib.error_perm:
+                      ftp.mkd(part)
+                      ftp.cwd(part)
+
+          def exists(ftp, name):
+              try:
+                  ftp.size(name)
+                  return True
+              except ftplib.all_errors:
+                  return False
+
+          ftp = connect()
+          try:
+              for relative in files:
+                  path = Path(relative)
+                  enter(ftp, target + list(path.parts[:-1]))
+                  with path.open("rb") as handle:
+                      ftp.storbinary(f"STOR {path.name}", handle)
+                  print(f"uploaded {relative}")
+
+              # Settings are the operator's to change from the dashboard, so they
+              # are written once and then left alone. Overwriting them on every
+              # deploy would silently undo a pause or a risk change.
+              for relative in seed:
+                  path = Path(relative)
+                  enter(ftp, target + list(path.parts[:-1]))
+                  if exists(ftp, path.name):
+                      print(f"kept existing {relative}")
+                      continue
+                  with path.open("rb") as handle:
+                      ftp.storbinary(f"STOR {path.name}", handle)
+                  print(f"seeded {relative}")
+          finally:
+              try:
+                  ftp.quit()
+              except ftplib.all_errors:
+                  pass
+          PY
+
+      - name: Smoke-test the deployed endpoint
+        env:
+          BTC_BOT_KEY: ${{ secrets.BTC_BOT_KEY }}
+          BOT_URL: ${{ vars.BTC_BOT_URL || 'https://www.btc-dca.com/bot/api.php' }}
+        run: |
+          python3 - <<'PY'
+          import json, os, sys, urllib.error, urllib.request
+
+          base = os.environ["BOT_URL"]
+          key = os.environ["BTC_BOT_KEY"]
+
+          def call(action, key_header=None):
+              request = urllib.request.Request(f"{base}?action={action}")
+              if key_header is not None:
+                  request.add_header("X-Bot-Key", key_header)
+              try:
+                  with urllib.request.urlopen(request, timeout=30) as response:
+                      return response.status, json.loads(response.read().decode("utf-8"))
+              except urllib.error.HTTPError as error:
+                  body = error.read().decode("utf-8", "replace")
+                  try:
+                      return error.code, json.loads(body)
+                  except json.JSONDecodeError:
+                      return error.code, {"raw": body[:200]}
+
+          status, health = call("health")
+          print("health:", status, health)
+          if status != 200 or not health.get("ok"):
+              sys.exit(f"api.php is not answering at {base}")
+          if not health.get("configured"):
+              sys.exit("api.php answered but has no bot key — config.php did not deploy")
+
+          status, denied = call("state")
+          print("unauthenticated state:", status)
+          if status != 401:
+              sys.exit(f"state must refuse an unauthenticated read, got HTTP {status}")
+
+          status, payload = call("state", key)
+          print("authenticated state:", status, "hasState:", bool(payload.get("state")))
+          if status != 200 or not payload.get("ok"):
+              sys.exit("the shared key was refused by the deployed api.php")
+          print("Deployed and reachable.")
+          PY
+
+      - name: Kick off the first pass
+        # The dashboard is only useful once something has been published, so the
+        # deploy runs one pass rather than leaving an empty page until the next
+        # scheduled tick.
+        env:
+          BOT_RUNNER: deploy
+          BOT_API_URL: ${{ vars.BTC_BOT_URL || 'https://www.btc-dca.com/bot/api.php' }}
+          BOT_API_KEY: ${{ secrets.BTC_BOT_KEY }}
+          LNM_API_KEY: ${{ secrets.LNM_API_KEY }}
+          LNM_API_SECRET: ${{ secrets.LNM_API_SECRET }}
+          LNM_API_PASSPHRASE: ${{ secrets.LNM_API_PASSPHRASE }}
+          LNM_API_NETWORK: ${{ vars.LNM_API_NETWORK || 'testnet' }}
+        run: node tools/run-bot.mjs
