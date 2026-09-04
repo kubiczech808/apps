@@ -124,30 +124,138 @@ async function main() {
       }
     }
 
-    // The finding that matters: a gate that rejected the ENTIRE pool is a portfolio that
-    // cannot trade until its configuration changes, not one waiting for a better market.
+    // Stage two, which the pool histogram above cannot see. Those counts are the whole
+    // catalogue measured against the portfolio's rules; what happens NEXT is that the
+    // survivors are re-quoted against the live CLOB, and a portfolio can lose every one of
+    // them there. That is a different failure with different causes, and the run log keeps
+    // its reasons separately in revalidatedRejectedSample.
+    const revalidated = Number(filter.revalidatedCount ?? 0);
+    const survived = Number(filter.revalidatedPortfolioEligible ?? 0);
+    const sample = Array.isArray(filter.revalidatedRejectedSample) ? filter.revalidatedRejectedSample : [];
+    if (revalidated > 0 && survived === 0) {
+      const stageTwo = new Map();
+      for (const row of sample) {
+        for (const reason of (Array.isArray(row.portfolioRejectReasons) ? row.portfolioRejectReasons : [])) {
+          const shape = shapeOf(reason);
+          stageTwo.set(shape, (stageTwo.get(shape) || 0) + 1);
+        }
+      }
+      console.log(`   all ${revalidated} candidate(s) that passed the filter then died at revalidation:`);
+      if (!stageTwo.size) {
+        console.log(`      no per-candidate reasons recorded on this run.`);
+      }
+      for (const [shape, count] of [...stageTwo.entries()].sort((a, b) => b[1] - a[1]).slice(0, 8)) {
+        console.log(`      ${String(count).padStart(4)}  ${shape.slice(0, 92)}`);
+      }
+    }
+
+    // The findings that matter, in order of how badly they strand a portfolio.
+    const skipRuns = recent.filter((run) => text(run.action).toUpperCase() === "SKIP").length;
     const blocking = sorted.filter(([shape, count]) => pool > 0 && count >= pool && isStructural(shape));
+    // A tag no market carries. Not "every candidate failed" -- a whitelist is SUPPOSED to
+    // reject most of the catalogue -- but a whitelist matching a rounding error of it, which
+    // is what a misspelt or non-existent tag looks like from here.
+    const tagShape = sorted.find(([shape]) => /included tags/.test(shape));
+    const matched = pool > 0 && tagShape ? pool - tagShape[1] : null;
+    const tagIsPhantom = matched != null && pool >= 500 && matched <= Math.max(2, pool * 0.001);
+
     if (blocking.length) {
-      stuck.push({ id, label, pool, reasons: blocking.map(([shape]) => shape) });
+      stuck.push({ id, label, why: `every one of the ${pool} candidates fails: ${blocking.map(([s]) => s).join("; ")}` });
       console.log(`   -> STUCK: every one of the ${pool} candidates fails a structural gate here,`);
       console.log(`      so no market can pass until the setting changes.`);
     } else if (pool === 0) {
-      stuck.push({ id, label, pool, reasons: ["the candidate pool itself is empty"] });
+      stuck.push({ id, label, why: "the candidate pool itself is empty" });
       console.log(`   -> STUCK: the candidate pool is empty, so there is nothing to filter.`);
+    } else if (tagIsPhantom) {
+      stuck.push({
+        id,
+        label,
+        phantomTags: settings.includeOnlyMarketTags,
+        why: `only ${matched} of ${pool} markets carry ${JSON.stringify(settings.includeOnlyMarketTags)}`
+          + ` -- the tag looks wrong, not the market`,
+      });
+      console.log(`   -> STUCK: only ${matched} of the ${pool} markets carry the required tag. A`);
+      console.log(`      whitelist is meant to reject most of a catalogue, but not all but ${matched} of it:`);
+      console.log(`      that is a tag string no market actually uses.`);
+    } else if (revalidated > 0 && survived === 0 && skipRuns >= recent.length) {
+      stuck.push({
+        id,
+        label,
+        why: `finds ${revalidated} candidate(s) every run and loses all of them at revalidation,`
+          + ` ${skipRuns} SKIP run(s) in a row`,
+      });
+      console.log(`   -> STALLED: it does find candidates (${revalidated}) and loses every one of them`);
+      console.log(`      at revalidation, on ${skipRuns} consecutive SKIP runs. See the stage-two reasons above.`);
     }
     console.log("");
   }
 
-  console.log(`== portfolios that cannot trade as configured`);
+  console.log(`== portfolios that are not going to start trading on their own`);
   if (!stuck.length) {
     console.log(`   none -- every portfolio is rejecting on price/edge/return, which the market fixes by itself.`);
     return;
   }
   for (const entry of stuck) {
-    console.log(`   ${entry.label} (${entry.id}): ${entry.reasons.join("; ").slice(0, 120)}`);
+    console.log(`   ${entry.label} (${entry.id})`);
+    console.log(`      ${entry.why}`);
   }
-  console.log(`\n   These are configuration, not market conditions: they will keep logging`);
-  console.log(`   "no candidates passed portfolio filters" indefinitely.`);
+  console.log(`\n   A portfolio turning candidates down on price, edge or return is working: the`);
+  console.log(`   market will eventually offer what it asks for. These will not, on their own.`);
+
+  // For a tag nothing carries, saying so is only half an answer. What the markets it is
+  // plainly meant to trade ARE tagged with is the other half, and it comes from the served
+  // catalogue -- matched on the words in the question, precisely because the tags are the
+  // thing under suspicion.
+  const phantom = stuck.filter((entry) => Array.isArray(entry.phantomTags) && entry.phantomTags.length);
+  if (!phantom.length) return;
+  const catalogue = await fetchJson(
+    `${HOST}/api.php?action=state&target=paper&summary=execution&t=${Date.now()}`,
+  ).catch(() => null);
+  const rows = Array.isArray(catalogue?.marketObservations) ? catalogue.marketObservations : [];
+  if (!rows.length) return;
+
+  const slugify = (value) => String(value ?? "")
+    .trim().toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "");
+  const tagsOf = (item) => {
+    const slugs = new Set();
+    for (const field of ["polymarketTags", "tags", "firstPolymarketTags", "firstTags",
+      "polymarketCategories", "firstPolymarketCategories"]) {
+      for (const raw of (Array.isArray(item?.[field]) ? item[field] : [])) {
+        const tag = slugify(raw && typeof raw === "object" ? (raw.slug || raw.label || raw.name || "") : raw);
+        if (tag) slugs.add(tag);
+      }
+    }
+    for (const field of ["riskCategory", "category", "firstCategory"]) {
+      const tag = slugify(item?.[field]);
+      if (tag) slugs.add(tag);
+    }
+    return slugs;
+  };
+
+  console.log(`\n== what the markets those portfolios want are actually tagged with`);
+  for (const entry of phantom) {
+    const words = entry.phantomTags
+      .flatMap((tag) => String(tag).split("-"))
+      .filter((word) => word.length > 2 && !/^\d+$/.test(word));
+    const relevant = rows.filter((row) => {
+      const haystack = `${text(row.question)} ${text(row.slug)} ${text(row.eventSlug)}`.toLowerCase();
+      return words.some((word) => haystack.includes(word));
+    });
+    console.log(`\n   ${entry.label} (${entry.id}) wants ${JSON.stringify(entry.phantomTags)}`);
+    console.log(`   markets whose question or slug mentions it: ${relevant.length}`);
+    const histogram = new Map();
+    for (const row of relevant) for (const tag of tagsOf(row)) histogram.set(tag, (histogram.get(tag) || 0) + 1);
+    const ranked = [...histogram.entries()].sort((a, b) => b[1] - a[1]).slice(0, 12);
+    if (!ranked.length) {
+      console.log(`   those markets carry no tags at all, so no tag whitelist can select them.`);
+      continue;
+    }
+    console.log(`   the tags they DO carry: ${ranked.map(([tag, count]) => `${tag} (${count})`).join(", ")}`);
+    for (const row of relevant.slice(0, 3)) {
+      console.log(`      "${text(row.question).slice(0, 52)}"`);
+      console.log(`        tagged: ${[...tagsOf(row)].join(", ") || "(nothing)"}`);
+    }
+  }
 }
 
 main().catch((error) => {
