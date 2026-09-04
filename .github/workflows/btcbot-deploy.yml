@@ -143,9 +143,15 @@ jobs:
         # Informational and allowed to fail: the point is that every deploy
         # leaves a measured statement in the log about the strategy it shipped,
         # rather than a claim nobody checked.
+        #
+        # 6000 hourly candles is roughly eight months. A thousand gave thirteen
+        # trades over twenty-five days, which is too few to say anything about
+        # an edge — and a number too small to be meaningful is worse than no
+        # number, because it still reads like evidence. LN Markets pages its
+        # candle history, so the longer window costs a few seconds.
         continue-on-error: true
         run: |
-          node tools/backtest.mjs --limit 1000 --json /tmp/backtest.json | tee /tmp/backtest.txt
+          node tools/backtest.mjs --limit 6000 --json /tmp/backtest.json | tee /tmp/backtest.txt
           {
             echo '### Backtest on real candles'
             echo '```'
