@@ -169,23 +169,9 @@ export const formatBacktest = (report) => {
   const sats = (value) => (value === null || value === undefined ? 'n/a' : `${Math.round(value)} sats`)
   const pct = (value) => (value === null || value === undefined ? 'n/a' : `${value.toFixed(2)}%`)
 
-  lines.push(`Window        ${report.from} → ${report.to} (${report.hours} hours)`)
-  lines.push(`Start / end   ${sats(report.startBalanceSats)} → ${sats(report.finalEquitySats)}  (${pct(report.returnPct)})`)
-  lines.push(`Trades        ${report.stats.trades} (${report.stats.wins}W / ${report.stats.losses}L), win rate ${pct(report.stats.winRate)}`)
-  lines.push(`Profit factor ${report.stats.profitFactor === null ? 'n/a (no losing trade)' : report.stats.profitFactor.toFixed(2)}`)
-  lines.push(`Net P/L       ${sats(report.stats.netPnlSats)}   max drawdown ${pct(report.stats.maxDrawdownPct)}`)
-  lines.push(`Avg win/loss  ${sats(report.stats.averageWinSats)} / ${sats(report.stats.averageLossSats)}`)
-  lines.push('')
-  // How positions ended is the first thing to check when a result looks odd:
-  // a run with no stop-loss exits is not a run with a good strategy, it is a
-  // run with broken stops.
-  const exits = report.trades.reduce((counts, trade) => {
-    counts[trade.exitReason] = (counts[trade.exitReason] ?? 0) + 1
-    return counts
-  }, {})
-  lines.push(`Exits         ${Object.entries(exits).map(([reason, count]) => `${reason} ×${count}`).join(', ') || 'none'}`)
+  // Trades first, summary last. A CI log is read from the bottom, and a report
+  // that puts its headline above a hundred trade lines is a report nobody sees.
   if (report.trades.length) {
-    lines.push('')
     lines.push('Trades:')
     for (const trade of report.trades) {
       lines.push(
@@ -196,11 +182,34 @@ export const formatBacktest = (report) => {
           `  ${trade.plSats > 0 ? '+' : ''}${trade.plSats} sats`
       )
     }
+    lines.push('')
   }
-  lines.push('')
+
   lines.push('Most common reasons no trade was taken:')
   for (const [reason, count] of report.rejections.slice(0, 8)) {
     lines.push(`  ${String(count).padStart(6)}  ${reason}`)
+  }
+  lines.push('')
+
+  // How positions ended is the first thing to check when a result looks odd: a
+  // run with no stop-loss exits is not a good strategy, it is broken stops.
+  const exits = report.trades.reduce((counts, trade) => {
+    counts[trade.exitReason] = (counts[trade.exitReason] ?? 0) + 1
+    return counts
+  }, {})
+
+  lines.push('════ RESULT ════')
+  lines.push(`Window        ${report.from} → ${report.to} (${report.hours} hours, ${(report.hours / 24).toFixed(0)} days)`)
+  lines.push(`Start / end   ${sats(report.startBalanceSats)} → ${sats(report.finalEquitySats)}  (${pct(report.returnPct)})`)
+  lines.push(`Trades        ${report.stats.trades} (${report.stats.wins}W / ${report.stats.losses}L), win rate ${pct(report.stats.winRate)}`)
+  lines.push(`Exits         ${Object.entries(exits).map(([reason, count]) => `${reason} ×${count}`).join(', ') || 'none'}`)
+  lines.push(`Profit factor ${report.stats.profitFactor === null ? 'n/a (no losing trade)' : report.stats.profitFactor.toFixed(2)}`)
+  lines.push(`Net P/L       ${sats(report.stats.netPnlSats)}   max drawdown ${pct(report.stats.maxDrawdownPct)}`)
+  lines.push(`Avg win/loss  ${sats(report.stats.averageWinSats)} / ${sats(report.stats.averageLossSats)}`)
+  // Thirteen trades and a profit factor of 1.12 is noise wearing the clothes of
+  // a result. Say so in the output rather than leaving the reader to remember.
+  if (report.stats.trades < 30) {
+    lines.push(`\nSample of ${report.stats.trades} trades is too small to say anything about edge.`)
   }
   return lines.join('\n')
 }

@@ -51,8 +51,12 @@ const report = await runBacktest({
   warmupHours: Number(args.get('warmup') ?? 400),
 })
 
-console.log(`Source        ${source} (${candles.length} hourly candles)`)
+const first = new Date(candles[0].time).toISOString()
+const last = new Date(candles.at(-1).time).toISOString()
 console.log(formatBacktest(report))
+// Printed last, with the summary: if paging silently returned one page, the
+// window is short and that is the first thing to check.
+console.log(`Candles       ${candles.length} hourly from ${source} (${first} → ${last})`)
 
 if (args.has('json')) {
   await writeFile(args.get('json'), JSON.stringify(report, null, 2), 'utf8')
