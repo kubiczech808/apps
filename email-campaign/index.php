@@ -9102,6 +9102,36 @@ function runCronAiResearchUnfinished(PDO $pdo, array $config, ?array $work = nul
  * krok neco pridal, serie se nuluje. Drzi se v planu behu, takze prezije i to, ze
  * kazdy tik je jiny request.
  */
+/**
+ * Prosel scrapovaci beh celou nabidku zdroje a nezbyva mu uz zadna URL? Pak z nej
+ * dalsi kontakt neprijde, i kdyby se opakoval jakkoli dlouho.
+ */
+function aiResearchScrapingJobRanOutOfWork(PDO $pdo, int $jobId): bool
+{
+    if ($jobId <= 0) {
+        return false;
+    }
+    try {
+        $stmt = $pdo->prepare('SELECT status, COALESCE(discovery_done, 0) AS discovery_done FROM scraping_jobs WHERE id=? LIMIT 1');
+        $stmt->execute([$jobId]);
+        $job = $stmt->fetch(PDO::FETCH_ASSOC);
+        if (!$job) {
+            return false;
+        }
+        // Uzavreny beh uz zadnou dalsi URL neotevre, i kdyby jich ve fronte par bylo.
+        if (in_array((string)$job['status'], ['finished', 'cancelled', 'failed'], true)) {
+            return true;
+        }
+        if ((int)$job['discovery_done'] !== 1) {
+            return false;
+        }
+        return queuedScrapingItemCount($pdo, $jobId) === 0;
+    } catch (Throwable $e) {
+        error_log('Scraping job work check for #' . $jobId . ' failed: ' . $e->getMessage());
+        return false;
+    }
+}
+
 function aiResearchTrackFirstBatchStall(PDO $pdo, int $runId, int $contacts, bool $grew): int
 {
     if ($runId <= 0) {
@@ -9151,6 +9181,16 @@ function aiResearchAdvanceFirstBatch(PDO $pdo, int $runId, array $plan): string
     // kazdy tik totiz zaklada novy beh od prvni stranky, takze na "dokonceny" by se
     // nemuselo dojit nikdy a beh by drzel frontu navzdy.
     $stall = aiResearchTrackFirstBatchStall($pdo, $runId, $contacts, $contacts > $before);
+    // Jasny pripad se nemusi cekat na celou serii: kdyz beh uz prosel celou nabidku
+    // zdroje a nezbyva mu zadna URL k otevreni, dalsi kontakt uz odsud neprijde.
+    // Bez tohoto by kazdy zaseknuty beh potreboval AI_RESEARCH_BATCH_STALLED_STEPS
+    // tiku - zaseknuty beh se totiz v tiku preskoci, takze serie roste po jednom za
+    // tik a osmnact rozdelanych behu by se cistilo hodiny.
+    if ($stall > 0 && aiResearchScrapingJobRanOutOfWork($pdo, $jobId)) {
+        aiResearchMarkFirstBatchExhausted($pdo, $runId, $contacts);
+        return 'AI research davka behu #' . $runId . ': uzavrena na ' . $contacts
+            . ' kontaktech, zdroj uz zadnou dalsi firmu nenabizi.';
+    }
     if ($stall >= AI_RESEARCH_BATCH_STALLED_STEPS) {
         aiResearchMarkFirstBatchExhausted($pdo, $runId, $contacts);
         return 'AI research davka behu #' . $runId . ': uzavrena na ' . $contacts

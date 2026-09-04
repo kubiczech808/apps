@@ -35,7 +35,7 @@ foreach (['aiResearchSupportedMarkets', 'aiResearchPlanTargetMarkets', 'aiResear
           'aiResearchRunWaitsOnlyForScraping', 'aiResearchNextWork', 'aiResearchWorkIsFinishing',
           'aiResearchCloseExhaustedRuns', 'aiResearchStepsNeedingModel', 'aiResearchRunProgressesWithoutModel',
           'aiResearchChecklistProgress', 'aiResearchFirstBatchSourceExhausted',
-          'aiResearchTrackFirstBatchStall'] as $fn) {
+          'aiResearchTrackFirstBatchStall', 'aiResearchScrapingJobRanOutOfWork', 'queuedScrapingItemCount'] as $fn) {
     eval(extractFn($src, $fn));
 }
 
@@ -266,6 +266,36 @@ assert(str_contains($advanceSrc, 'aiResearchTrackFirstBatchStall'), 'krok davky 
 assert(str_contains($advanceSrc, 'AI_RESEARCH_BATCH_STALLED_STEPS'), 'a na stropu davku uzavre');
 assert(strpos($advanceSrc, 'aiResearchMarkFirstBatchExhausted') > strpos($advanceSrc, 'aiResearchTrackFirstBatchStall'),
     'uzavreni prijde az po vyhodnoceni serie');
+echo "  ok\n";
+
+echo "\n== 10e. beh bez zbyvajici prace uzavre davku hned, ne az po cele serii ==\n";
+// Zaseknuty beh se v tiku preskoci, takze serie roste po jednom za tik. Osmnact
+// rozdelanych behu by se takhle cistilo hodiny; jasny pripad se pozna hned.
+$db = freshDb();
+$db->exec('CREATE TABLE scraping_jobs (id INTEGER PRIMARY KEY AUTOINCREMENT, status TEXT DEFAULT "running",
+    discovery_done INTEGER DEFAULT 0)');
+$db->exec('CREATE TABLE scraping_job_items (id INTEGER PRIMARY KEY AUTOINCREMENT, job_id INTEGER, status TEXT DEFAULT "queued")');
+$db->exec('INSERT INTO scraping_jobs (id, status, discovery_done) VALUES (77, "running", 0)');
+printf("  discovery jeste bezi: %s\n", aiResearchScrapingJobRanOutOfWork($db, 77) ? 'bez prace' : 'jeste ma co delat');
+assert(!aiResearchScrapingJobRanOutOfWork($db, 77), 'dokud neprosel zdroj, o vycerpani nic nevime');
+// Zdroj prosel, ale jeste ma frontu.
+$db->exec('UPDATE scraping_jobs SET discovery_done=1 WHERE id=77');
+$db->exec('INSERT INTO scraping_job_items (job_id, status) VALUES (77, "queued")');
+assert(!aiResearchScrapingJobRanOutOfWork($db, 77), 's frontou URL jeste prace zbyva');
+// Fronta dojela.
+$db->exec('UPDATE scraping_job_items SET status="skipped" WHERE job_id=77');
+printf("  zdroj prosel a fronta je prazdna: %s\n", aiResearchScrapingJobRanOutOfWork($db, 77) ? 'bez prace' : 'jeste ma co delat');
+assert(aiResearchScrapingJobRanOutOfWork($db, 77), 'prosly zdroj bez fronty = zadna dalsi prace');
+// Uzavreny beh uz nic neotevre, i kdyby fronta neco mela.
+$db->exec('INSERT INTO scraping_jobs (id, status, discovery_done) VALUES (78, "finished", 0)');
+$db->exec('INSERT INTO scraping_job_items (job_id, status) VALUES (78, "queued")');
+assert(aiResearchScrapingJobRanOutOfWork($db, 78), 'uzavreny beh dalsi URL neotevre');
+// A krok davky to pouzije driv nez celou serii.
+$advanceSrc = extractFn($src, 'aiResearchAdvanceFirstBatch');
+assert(str_contains($advanceSrc, 'aiResearchScrapingJobRanOutOfWork($pdo, $jobId)'), 'krok davky se na to podiva');
+assert(strpos($advanceSrc, 'aiResearchScrapingJobRanOutOfWork($pdo, $jobId)')
+    < strpos($advanceSrc, '$stall >= AI_RESEARCH_BATCH_STALLED_STEPS'),
+    'jasny pripad se resi driv nez cela serie');
 echo "  ok\n";
 
 echo "\nVSE OK\n";
