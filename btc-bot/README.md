@@ -10,12 +10,50 @@ Two things are true of this bot and are worth stating before anything else:
    Not by this process. That is what makes it safe to run on a timer, to miss a
    run, or to lose the Raspberry Pi to a network outage — the account is
    protected by the exchange, not by the bot being awake.
-2. **The strategy has not been proven to have an edge.** The previous
-   price-action engine in the `openclaw` repository was measured across three
-   exchanges and four windows and lost money in every one of them; its own
-   source says so. This one is a different, narrower design, but it starts on
-   **testnet** and stays there until a backtest and a run of paper results say
-   otherwise. `.github/workflows/btcbot-backtest.yml` is how that gets answered.
+2. **The strategy has been measured, and it loses money.** Not "unproven" —
+   measured. See *What the backtest says* below. It runs in **paper** mode and
+   must not be pointed at a funded account on this evidence.
+
+## What the backtest says
+
+Eight months of LN Markets' own hourly candles (2025-12-28 → 2026-09-04),
+1% risk per trade, one position at a time. Each row changes exactly one rule
+from the shipped configuration:
+
+```
+variant                 trades   win%      PF   return%   avgW/avgL    TP   SL  man
+shipped                   133   22.6    0.61     -37.6        2.08    26   95   12
+no breakeven/trail        125   26.4    0.62     -37.3        1.72    29   83   13
+no trend-flip close       127   23.6    0.67     -34.1        2.16    29   98    0
+neither                   110   29.1    0.74     -27.4        1.80    32   78    0
+target fixed at 2R        133   23.3    0.61     -37.1        2.01    27   94   12
+require 3R                122   18.9    0.65     -32.9        2.81    16   95   11
+```
+
+**Every configuration loses.** The best profit factor is 0.74; break-even is
+1.0. This is not a tuning problem — turning individual rules off moves the
+result by ten points and never near zero, which is the shape of a system whose
+*entries* have no edge rather than one whose exits are misconfigured.
+
+Two things the table does say clearly:
+
+- **Risk control works.** Losses land on the intended 1% of equity, on stops
+  between 0.3% and 2.3% away, with position sizes adapting from 52 to 374 USD.
+  The machinery is sound; what it is pointed at is not.
+- **Stop management works and does not help.** Fixing it (it was reading a
+  field name nothing produces, so no stop had ever moved) raised the average
+  win-to-loss ratio from 1.72 to 2.08 and left the return unchanged at -37%.
+  Better R, fewer winners, same place.
+
+This is the same answer the previous price-action engine in the `openclaw`
+repository reached: 26-45% win rate, losing across every exchange and window.
+Two independent attempts at "trade the pullback into a zone in the direction of
+the higher-timeframe trend" have now measured the same thing.
+
+Before this goes anywhere near a funded account, the entry logic needs a reason
+to be expected to work that this one did not have — not a parameter sweep over
+these 233 days, which is how the number 0.74 becomes 1.05 on paper and 0.6
+again in the market.
 
 ## What it trades
 

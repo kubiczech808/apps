@@ -11,8 +11,15 @@
 // every rejection is named, so a losing run can be read afterwards and the
 // specific gate that let it through can be found.
 //
-// No claim is made that this has an edge. `backtest.mjs` exists to answer that,
-// and until it has, the account it trades is a testnet account.
+// MEASURED RESULT, 2026-09-04: this does NOT have an edge. Over eight months of
+// LN Markets hourly candles it returns -37% with a profit factor of 0.61 across
+// 133 trades, and every single-rule variation of it also loses (best: 0.74).
+// The risk machinery around it is sound — losses land on the intended 1% — but
+// the entries do not. See the README's "What the backtest says".
+//
+// Do not tune these constants against that window to find a positive number.
+// The openclaw engine's own notes record where that leads, and this is the
+// second independent attempt at the same idea to measure the same thing.
 
 import { riskRewardRatio, targetForR } from './risk.mjs'
 import {
