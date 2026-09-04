@@ -44,55 +44,96 @@ jobs:
           php -l api.php
 
       - name: Check LN Markets is reachable and the credentials are accepted
-        # The one step that talks to the exchange before a pass does. It is a
-        # HARD failure when the public API cannot be reached: that is exactly
-        # what caught the stale `api.testnet.lnmarkets.com` host this bot was
-        # first written against (ENOTFOUND — LN Markets moved to testnet4 and
-        # deprecated v2 in January 2026). Missing credentials only warn, because
-        # a dashboard with no keys yet is a reasonable state to deploy.
+        # The one step that talks to the exchange before a pass does.
+        #
+        # Mainnet reachability is a HARD failure: if api.lnmarkets.com does not
+        # answer the v3 ticker, either the network is broken or this client is
+        # pointed at the wrong contract, and neither is a thing to deploy over.
+        #
+        # The configured network is checked separately and only warns, because
+        # this check has already caught two dead test hosts —
+        # api.testnet.lnmarkets.com and api.testnet4.lnmarkets.com both fail
+        # DNS — and the useful output in that case is *which* hosts exist, not
+        # a stack trace. The candidate probe below answers that.
         env:
           LNM_API_KEY: ${{ secrets.LNM_API_KEY }}
           LNM_API_SECRET: ${{ secrets.LNM_API_SECRET }}
           LNM_API_PASSPHRASE: ${{ secrets.LNM_API_PASSPHRASE }}
-          LNM_API_NETWORK: ${{ vars.LNM_API_NETWORK || 'testnet4' }}
+          LNM_API_NETWORK: ${{ vars.LNM_API_NETWORK || 'mainnet' }}
         run: |
           node --input-type=module -e '
-            import { createLnMarketsClient } from "./src/lnmarkets.mjs"
+            import { createLnMarketsClient, NETWORKS, resolveNetwork } from "./src/lnmarkets.mjs"
 
-            const client = createLnMarketsClient()
-            console.log(`Base URL: ${client.baseUrl}`)
-
-            const ticker = await client.getTicker()
-            const price = ticker?.lastPrice ?? ticker?.index
-            if (!Number.isFinite(Number(price))) {
-              throw new Error(`Ticker came back without a price: ${JSON.stringify(ticker).slice(0, 200)}`)
-            }
-            console.log(`Reachable — BTC ${price}`)
-
-            const candles = await client.getCandles({
-              from: new Date(Date.now() - 48 * 3600e3).toISOString(),
-              to: new Date().toISOString(),
-              range: "1h",
-              limit: 48,
-            })
-            const rows = Array.isArray(candles) ? candles : (candles?.data ?? [])
-            console.log(`Candles: ${rows.length} hourly rows, newest ${rows.at(-1)?.time ?? rows.at(0)?.time}`)
-            if (rows.length === 0) {
-              console.log("::warning title=Candles::LN Markets returned no candles; the bot will fall back to spot venues.")
+            const probe = async (label, url) => {
+              try {
+                const response = await fetch(url, { signal: AbortSignal.timeout(12000) })
+                const text = (await response.text()).slice(0, 120)
+                console.log(`  ${label.padEnd(34)} HTTP ${response.status}  ${text}`)
+                return response.ok
+              } catch (error) {
+                console.log(`  ${label.padEnd(34)} ${error?.cause?.code ?? error.message}`)
+                return false
+              }
             }
 
-            if (!client.hasCredentials) {
+            console.log("Host probe:")
+            const candidates = {
+              "api.lnmarkets.com/v3": "https://api.lnmarkets.com/v3/futures/ticker",
+              "api.lnmarkets.com/v2": "https://api.lnmarkets.com/v2/futures/ticker",
+              "api.testnet4.lnmarkets.com/v3": "https://api.testnet4.lnmarkets.com/v3/futures/ticker",
+              "api.testnet.lnmarkets.com/v2": "https://api.testnet.lnmarkets.com/v2/futures/ticker",
+            }
+            const reachable = {}
+            for (const [label, url] of Object.entries(candidates)) {
+              reachable[label] = await probe(label, url)
+            }
+
+            if (!reachable["api.lnmarkets.com/v3"]) {
+              throw new Error("LN Markets v3 mainnet API did not answer — refusing to deploy against a contract that is not there")
+            }
+
+            const network = resolveNetwork(process.env.LNM_API_NETWORK)
+            const client = createLnMarketsClient({ network })
+            console.log(`\nConfigured network: ${network} (${client.baseUrl})`)
+
+            let networkUp = true
+            try {
+              const ticker = await client.getTicker()
+              console.log(`Ticker: last ${ticker?.lastPrice}, index ${ticker?.index}`)
+              const candles = await client.getCandles({
+                from: new Date(Date.now() - 48 * 3600e3).toISOString(),
+                to: new Date().toISOString(),
+                range: "1h",
+                limit: 48,
+              })
+              const rows = Array.isArray(candles) ? candles : (candles?.data ?? [])
+              console.log(`Candles: ${rows.length} hourly rows, newest ${rows.at(-1)?.time ?? "none"}`)
+              if (rows.length === 0) {
+                console.log("::warning title=Candles::LN Markets returned no candles; the bot will fall back to spot venues.")
+              }
+            } catch (error) {
+              networkUp = false
+              console.log(`::warning title=Network unreachable::${network} did not answer (${error?.cause?.code ?? error.message}). The bot will record the failure each pass and will not trade.`)
+            }
+
+            const withCredentials = createLnMarketsClient({ network })
+            if (!withCredentials.hasCredentials) {
               console.log("::warning title=LN Markets::No credentials configured — the bot runs in paper mode until LNM_API_KEY, LNM_API_SECRET and LNM_API_PASSPHRASE are set.")
               process.exit(0)
             }
+            if (!networkUp) {
+              console.log("::warning title=Credentials unverified::Skipping the authenticated check because the network is unreachable.")
+              process.exit(0)
+            }
 
-            const account = await client.getAccount()
+            const account = await withCredentials.getAccount()
             console.log(`Authenticated as ${account?.username ?? "(no username)"} — balance ${account?.balance} sats`)
             if (!Number.isFinite(Number(account?.balance))) {
               throw new Error("Authenticated but the account has no readable balance")
             }
-            const running = await client.getRunningTrades()
-            console.log(`Open positions on the account: ${(Array.isArray(running) ? running : running?.data ?? []).length}`)
+            const running = await withCredentials.getRunningTrades()
+            const open = Array.isArray(running) ? running : (running?.data ?? [])
+            console.log(`Open positions on the account: ${open.length}`)
           '
 
       - name: Backtest the strategy on real candles

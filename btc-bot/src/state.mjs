@@ -18,10 +18,15 @@ export const DEFAULT_SETTINGS = {
   // The master switch. `false` stops new entries; open positions keep their
   // exchange-side stop and take profit, and are still managed and closed.
   enabled: true,
-  // 'testnet4' | 'mainnet' | 'paper'. Anything other than 'mainnet' cannot
-  // spend real money, and switching to 'mainnet' is a deliberate, separate act.
-  // ('testnet' is accepted and resolves to testnet4 — see resolveNetwork.)
-  mode: 'testnet4',
+  // 'paper' | 'testnet4' | 'mainnet'.
+  //
+  // Defaults to paper, and not out of caution alone: LN Markets' public test
+  // networks are gone. Both api.testnet.lnmarkets.com and
+  // api.testnet4.lnmarkets.com fail DNS from a clean runner, so "start on
+  // testnet" is not currently an option, and the honest fallback is a mode that
+  // cannot spend anything. Moving to 'mainnet' is a deliberate, separate act
+  // and the dashboard asks twice.
+  mode: 'paper',
   portfolioName: 'BTC Price Action Swing',
   startingCapitalUsd: 100,
   maxOpenPositions: 1,

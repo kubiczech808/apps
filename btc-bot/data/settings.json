@@ -1,6 +1,6 @@
 {
   "enabled": true,
-  "mode": "testnet4",
+  "mode": "paper",
   "portfolioName": "BTC Price Action Swing",
   "startingCapitalUsd": 100,
   "maxOpenPositions": 1,
