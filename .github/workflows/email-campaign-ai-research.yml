@@ -1,26 +1,37 @@
 name: Email Campaign AI Research
 
 on:
-  # AI research ma vlastni endpoint a bezi co peti minut. Soubeh nehrozi - aplikace
-  # drzi zamek a preskoci tik, dokud predchozi beh nedobehne, a jeden tik za sebe
-  # posila retez hopu, takze propustnost neurcuje kadence cronu.
+  # Rozvrh je jen startovni signal, ne kadence prace. GitHub planovane behy na tomto
+  # repu zahazuje - obecny cron s */5 firoval napr. v 06:01, pred tim 01:21 a 23:42,
+  # tedy mezery v hodinach misto peti minut. Propustnost proto nesmi stat na tom, jak
+  # casto se workflow spusti: jedno spusteni odjede tiku desitky za sebou.
   schedule:
     - cron: '*/5 * * * *'
   workflow_dispatch:
+    inputs:
+      calls:
+        description: 'Kolik tiku poslat za sebou v jednom spusteni'
+        required: false
+        default: '40'
 
 concurrency:
   group: email-campaign-ai-research
-  cancel-in-progress: true
+  # Bezici serie tiku se nesmi zrusit prichodem dalsiho rozvrhu - jinak by se prace
+  # ukoncila v pulce a zamek by drzel do vyprseni.
+  cancel-in-progress: false
 
 jobs:
   ai-research:
     runs-on: ubuntu-latest
+    # Jedno spusteni smi pracovat dlouho; propustnost pak neurcuje rozvrh GitHubu.
+    timeout-minutes: 180
     steps:
-      - name: Run AI research endpoint
+      - name: Run AI research ticks until the queue is idle
         env:
           APP_DATABASE_NAME: ${{ secrets.APP_DATABASE_NAME }}
           APP_DATABASE_USERNAME: ${{ secrets.MYSQL_EMAILING_DB_USERNAME }}
           APP_DATABASE_PASSWORD: ${{ secrets.MYSQL_EMAILING_DB_PASSWORD }}
+          RESEARCH_CALLS: ${{ github.event.inputs.calls }}
         run: |
           if [ -z "$APP_DATABASE_NAME" ] || [ -z "$APP_DATABASE_USERNAME" ] || [ -z "$APP_DATABASE_PASSWORD" ]; then
             echo "Missing database secrets; cannot derive cron token."
@@ -34,7 +45,60 @@ jobs:
           print(hashlib.sha256(material.encode("utf-8")).hexdigest())
           PY
           )
-          http_code=$(curl --show-error --silent --max-time 300 --output /tmp/email-campaign-ai-research-body.txt --write-out "%{http_code}" "https://www.osobnizkusenosti.cz/email-campaign/?cron=${TOKEN}&ai_research=1")
-          echo "HTTP ${http_code}"
-          cat /tmp/email-campaign-ai-research-body.txt
-          test "$http_code" -ge 200 -a "$http_code" -lt 400
+          calls="${RESEARCH_CALLS:-40}"
+          # hop=2 znamena "navazujici tik": aplikace pak necheka na interval, presne
+          # jako kdyz si tik posle dalsi hop sam. Zamek proti souběhu, minutovy limit
+          # i denni rozpocet plati dal, takze rychlejsi volani nic neprepali.
+          url="https://www.osobnizkusenosti.cz/email-campaign/?cron=${TOKEN}&ai_research=1&hop=2"
+          idle=0
+          for call in $(seq 1 "$calls"); do
+            http_code=$(curl --show-error --silent --max-time 300 --output /tmp/ai-research-body.txt --write-out "%{http_code}" "$url" || echo "000")
+            echo "--- tik ${call}/${calls} (HTTP ${http_code})"
+            cat /tmp/ai-research-body.txt || true
+            echo
+            if [ "$http_code" != "200" ]; then
+              echo "::warning::Tik vratil HTTP ${http_code}; hosting mohl request ukoncit, pokracuji dalsim."
+            fi
+            # Odlozeni kvuli kvote nebo backoffu znamena, ze dalsi volani nema smysl.
+            if grep -q "AI research odlozen" /tmp/ai-research-body.txt; then
+              echo "Provider drzi limit, serie tiku konci."
+              break
+            fi
+            # Prazdna fronta se muze objevit i kratkodobe (ceka se na scraping), proto
+            # se konci teprve po dvou prazdnych tikach za sebou.
+            if grep -qE "nebylo co zpracovat|bez modelu uz neni co delat" /tmp/ai-research-body.txt; then
+              idle=$((idle + 1))
+              if [ "$idle" -ge 2 ]; then
+                echo "Fronta je prazdna, serie tiku konci."
+                break
+              fi
+              sleep 20
+              continue
+            fi
+            idle=0
+          done
+
+          echo
+          echo "=== STAV PO SERII TIKU ==="
+          curl --show-error --silent --max-time 90 --output /tmp/ai-research-report.json "https://www.osobnizkusenosti.cz/email-campaign/?cron=${TOKEN}&throughput_report=1" || true
+          python3 - <<'PY'
+          import json
+
+          try:
+              with open("/tmp/ai-research-report.json", encoding="utf-8") as handle:
+                  report = json.load(handle)
+          except Exception as exc:                      # noqa: BLE001
+              print("Prehled se nepodarilo precist: %s" % exc)
+              raise SystemExit(0)
+
+          category = report.get("category", {})
+          runs = report.get("runs", {})
+          model = report.get("model", {})
+          print("kategorie: hotovo %s z %s (zbyva %s)" % (
+              category.get("completed", "?"), category.get("total", "?"), category.get("remaining", "?")))
+          print("behy: ready %s, rozdelanych %s, uzavrenych %s" % (
+              runs.get("ready", "?"), runs.get("incomplete", "?"), runs.get("closed", "?")))
+          print("model: %s/%s pozadavku za 24 h, %s na seed" % (
+              model.get("used_last_24h", "?"), model.get("daily_budget", "?"),
+              model.get("requests_per_seed", "?")))
+          PY

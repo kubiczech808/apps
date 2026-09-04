@@ -110,4 +110,22 @@ assert($research !== false, 'workflow AI research se musi precist');
 assert(preg_match('/schedule:\s*\n\s*- cron:/', $research) === 1, 'AI research musi mit scheduled trigger');
 printf("  trigger: %s\n", trim(preg_replace('/\s+/', ' ', (string)(preg_match("/- cron: '([^']+)'/", $research, $c) ? $c[1] : '?'))));
 
+echo "\n== 9b. jedno spusteni musi odjet serii tiku, ne jediny ==\n";
+// GitHub planovane behy na tomto repu zahazuje (mezery v hodinach misto peti minut),
+// takze propustnost nesmi stat na kadenci rozvrhu. Jedno spusteni proto tiky opakuje.
+assert(strpos($research, 'for call in $(seq 1 "$calls")') !== false,
+    'workflow musi tiky opakovat ve smycce');
+assert(strpos($research, 'ai_research=1&hop=2') !== false,
+    'navazujici tik musi jit s hop=2, jinak ho zastavi interval guard');
+assert(preg_match('/timeout-minutes:\s*(\d+)/', $research, $t) === 1 && (int)$t[1] >= 60,
+    'serie tiku potrebuje dlouhy timeout jobu');
+assert(preg_match('/cancel-in-progress:\s*false/', $research) === 1,
+    'bezici serie tiku se nesmi zrusit prichodem dalsiho rozvrhu');
+assert(strpos($research, 'AI research odlozen') !== false,
+    'smycka musi skoncit, kdyz provider drzi limit');
+assert(preg_match('/nebylo co zpracovat\|bez modelu uz neni co delat/', $research) === 1,
+    'smycka musi skoncit i na prazdne fronte');
+printf("  smycka: %s tiku na spusteni, timeout %s min\n",
+    preg_match("/default: '(\d+)'/", $research, $d) ? $d[1] : '?', $t[1]);
+
 echo "\nVSE OK\n";
