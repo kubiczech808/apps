@@ -1070,9 +1070,25 @@ function mergeClosedTradeHistory(currentRows = [], previousState = null, generat
       ...row,
     };
     if (immutableClosedAt) {
-      merged.closedAt = immutableClosedAt;
-      merged.resolvedAt = immutableClosedAt;
-      merged.closedAtSource = existing.row.closedAtSource || "previous-live-state-close";
+      // One invariant for the whole close-date path: it may move EARLIER, never later.
+      //
+      // Never later is the reported bug -- a position closed a day ago showing a Closed
+      // date of this morning. Earlier is allowed because resolvedPositionCloseTime's last
+      // resort stamps the sync time when nothing can date the close, and rows carry dates
+      // it stamped while the drift was happening; refusing every change would freeze those
+      // permanently wrong. Since a correction can only reduce the date, no sequence of
+      // syncs can walk it forward again.
+      const incoming = stableCloseTimestamp(
+        row.closedAt || row.resolvedAt || row.closedTime,
+        generatedAt,
+      );
+      const correctsEarlier = Boolean(incoming)
+        && Date.parse(incoming) < Date.parse(immutableClosedAt);
+      merged.closedAt = correctsEarlier ? incoming : immutableClosedAt;
+      merged.resolvedAt = merged.closedAt;
+      merged.closedAtSource = correctsEarlier
+        ? (row.closedAtSource || "corrected-to-earlier-close")
+        : (existing.row.closedAtSource || "previous-live-state-close");
     }
     // reconciliationOnly means "this row's stake and P/L are unknown". A stored row that
     // was kept as an unmatched redemption keeps that flag through the spread above, so a
@@ -1163,8 +1179,26 @@ function buildPreviousCloseTimeIndex(previousState) {
     //
     // An approximate date that never moves is worth far more than an approximate date that
     // moves: the first is "when we noticed", the second is not a date at all.
+    //
+    // EARLIEST, not latest, and that is the rest of the same fault. Carrying the stored
+    // date forward was necessary but not sufficient. This index answers "what date does
+    // this row already have", and it is fed from closedTrades AND resolvedApiPositions, so
+    // one market outcome can arrive carrying more than one timestamp -- a position that is
+    // still redeemable is re-derived every sync alongside the closed row it already has.
+    // liveItemKeys also yields several keys per row (token, condition+outcome,
+    // question+outcome) which can hold different timestamps. Under "latest" the newest of
+    // all that won, so a recorded date could only ever move FORWARD, one sync at a time.
+    //
+    // Reported: a position closed roughly 24 hours earlier showing a Closed date of
+    // 04. 09. 2026 01:59. The earliest recorded close is the one nearest the truth, and the
+    // only choice a later sync cannot drag forward.
     if (!value) continue;
-    addTimestampToKeyIndex(index, item, value, "latest", "previous-live-state-close");
+    // Carry the row's OWN provenance, not a label for this index. How a date was obtained
+    // is what decides whether it may be corrected: a clock stamp from the last resort may,
+    // a real close date may not. Flattening every stored date to one source string made
+    // that indistinguishable, so nothing could be repaired.
+    addTimestampToKeyIndex(index, item, value, "earliest",
+      item.closedAtSource || "previous-live-state-close");
   }
   return index;
 }
@@ -1206,14 +1240,38 @@ function resolvedPositionCloseTime(position, closeTimeIndex, previousCloseTimeIn
   // stored, honouring it would still be a Closed date that changed after the fact, which is
   // the thing being fixed. The sanity check remains -- a stored value in the future is
   // corrupt and falls through to be recomputed.
-  const alreadyRecorded = bestIndexedTimestamp(previousCloseTimeIndex, position, "latest");
-  if (stableCloseTimestamp(alreadyRecorded?.timestamp, generatedAt)) return alreadyRecorded;
+  // "earliest" for the same reason the index stores the earliest: a row can carry several
+  // identity keys, and picking the newest of them is how a settled date moved forward.
+  const alreadyRecorded = bestIndexedTimestamp(previousCloseTimeIndex, position, "earliest");
+  const recorded = stableCloseTimestamp(alreadyRecorded?.timestamp, generatedAt) ? alreadyRecorded : null;
+  // A recorded date stands, with one exception: the last resort below stamps the sync time
+  // when nothing could date the close, and rows already carry dates it stamped while the
+  // drift was happening. Freezing those in place would leave them permanently wrong.
+  //
+  // So a stamped-by-clock date may be corrected by a real one -- and only BACKWARDS. A
+  // correction that moved a date forward is precisely the reported bug, so it is refused
+  // whatever it claims, which also means this can never reintroduce the drift.
+  const datedFromHistory = bestIndexedTimestamp(closeTimeIndex, position, "latest");
+  if (recorded) {
+    if (recorded.source !== "redeem-required-detected") return recorded;
+    const recordedMs = Date.parse(recorded.timestamp);
+    const better = [
+      datedFromHistory?.timestamp ? { ...datedFromHistory } : null,
+      adjustedResolutionEndDate(position)
+        ? { timestamp: adjustedResolutionEndDate(position), source: "event-end-date" }
+        : null,
+    ]
+      .filter((candidate) => candidate && stableCloseTimestamp(candidate.timestamp, generatedAt))
+      .filter((candidate) => Date.parse(candidate.timestamp) < recordedMs)
+      .sort((left, right) => Date.parse(left.timestamp) - Date.parse(right.timestamp))[0];
+    return better || recorded;
+  }
   const explicit = isoTime(position.resolvedAt || position.closedAt || position.closedTime || position.redeemedAt);
   const stableExplicit = stableCloseTimestamp(explicit, generatedAt);
   if (stableExplicit) return { timestamp: stableExplicit, source: "positions-api-resolved" };
-  const closeFromHistory = bestIndexedTimestamp(closeTimeIndex, position, "latest");
+  const closeFromHistory = datedFromHistory;
   if (stableCloseTimestamp(closeFromHistory?.timestamp, generatedAt)) return closeFromHistory;
-  const closeFromPrevious = bestIndexedTimestamp(previousCloseTimeIndex, position, "latest");
+  const closeFromPrevious = bestIndexedTimestamp(previousCloseTimeIndex, position, "earliest");
   if (stableCloseTimestamp(closeFromPrevious?.timestamp, generatedAt)) return closeFromPrevious;
   const endDate = adjustedResolutionEndDate(position);
   const stableEndDate = stableCloseTimestamp(endDate, generatedAt);

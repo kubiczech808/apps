@@ -4812,6 +4812,109 @@ test("closed date: once recorded it survives every later sync unchanged", async 
     "a future close date is corrupt and must not be kept");
 });
 
+// The rest of the same fault, reported again: "u closed pozic stale dochazi k aktualizacim
+// closed at datetime i po uzavreni" -- a position closed roughly 24 hours earlier showing a
+// Closed date of 04. 09. 2026 01:59.
+//
+// Carrying the stored date forward fixed the single-row loop above, but the selection stayed
+// on "latest". buildPreviousCloseTimeIndex is fed from closedTrades AND
+// resolvedApiPositions, and liveItemKeys gives a row several keys, so one market outcome can
+// offer several timestamps -- and the newest of them won. The date could then only ever move
+// FORWARD, which is the one direction a settled date must never move.
+test("closed date: a second source for the same market cannot move the date forward", async () => {
+  const sync = await import("../tools/live-account-sync.mjs");
+
+  const position = {
+    tokenId: "42", conditionId: "0xabc", outcome: "No",
+    question: "Will Independiente Santa Fe win on 2026-09-02?",
+    redeemable: true, endDate: null,
+  };
+  const settled = "2026-09-02T22:15:00.000Z";
+  const laterSyncStamp = "2026-09-03T23:59:00.000Z";
+
+  // The account as reported: the closed row carries the real close, while the position is
+  // still redeemable and so is re-derived every sync carrying a sync-time stamp.
+  const index = sync.buildPreviousCloseTimeIndex({
+    generatedAt: laterSyncStamp,
+    closedTrades: [{ ...position, closedAt: settled }],
+    resolvedApiPositions: [{ ...position, closedAt: laterSyncStamp }],
+  });
+  const picked = sync.resolvedPositionCloseTime(position, new Map(), index, "2026-09-04T01:59:00.000Z");
+  assert.equal(picked?.timestamp, settled,
+    "with two recorded dates for one market outcome, the earlier one is the close");
+
+  // And it holds across repeated syncs, which is how the drift accumulated.
+  let state = {
+    generatedAt: laterSyncStamp,
+    closedTrades: [{ ...position, closedAt: settled }],
+    resolvedApiPositions: [{ ...position, closedAt: laterSyncStamp }],
+  };
+  for (let hour = 1; hour <= 6; hour += 1) {
+    const runAt = new Date(Date.parse("2026-09-04T01:59:00.000Z") + hour * 3600000).toISOString();
+    const carried = sync.buildPreviousCloseTimeIndex(state);
+    const again = sync.resolvedPositionCloseTime(position, new Map(), carried, runAt);
+    assert.equal(again?.timestamp, settled, `sync ${hour} moved the close date to ${again?.timestamp}`);
+    state = {
+      generatedAt: runAt,
+      closedTrades: [{ ...position, closedAt: again.timestamp }],
+      resolvedApiPositions: [{ ...position, closedAt: runAt }],
+    };
+  }
+
+  // A date the last resort stamped from the clock may still be corrected by a real one --
+  // otherwise every row mis-dated while the drift was happening stays wrong forever. The
+  // correction is allowed in one direction only.
+  const clockStamped = sync.buildPreviousCloseTimeIndex({
+    generatedAt: "2026-09-04T01:59:00.000Z",
+    closedTrades: [{
+      ...position,
+      closedAt: "2026-09-04T01:59:00.000Z",
+      closedAtSource: "redeem-required-detected",
+    }],
+  });
+  const corrected = sync.resolvedPositionCloseTime(
+    { ...position, endDate: settled }, new Map(), clockStamped, "2026-09-04T08:00:00.000Z",
+  );
+  assert.equal(corrected?.timestamp, settled,
+    "a clock-stamped date is corrected by the market's own end date");
+
+  // But never forward, whatever the newer source claims -- that is the reported bug, and
+  // refusing it is what stops any sequence of syncs walking the date up again.
+  const clockStampedEarly = sync.buildPreviousCloseTimeIndex({
+    generatedAt: settled,
+    closedTrades: [{ ...position, closedAt: settled, closedAtSource: "redeem-required-detected" }],
+  });
+  const refused = sync.resolvedPositionCloseTime(
+    { ...position, endDate: "2026-09-03T20:00:00.000Z" }, new Map(), clockStampedEarly,
+    "2026-09-04T08:00:00.000Z",
+  );
+  assert.equal(refused?.timestamp, settled, "a later end date must not push a recorded close forward");
+
+  // A dated source is never overridden at all, clock stamp or not.
+  const dated = sync.buildPreviousCloseTimeIndex({
+    generatedAt: settled,
+    closedTrades: [{ ...position, closedAt: settled, closedAtSource: "trade-history-close" }],
+  });
+  const untouched = sync.resolvedPositionCloseTime(
+    { ...position, endDate: "2026-08-01T00:00:00.000Z" }, new Map(), dated, "2026-09-04T08:00:00.000Z",
+  );
+  assert.equal(untouched?.timestamp, settled, "a properly dated close is not re-dated by anything");
+
+  // The merge carries the same invariant: an earlier correction lands, a later one cannot.
+  const earlier = sync.mergeClosedTradeHistory(
+    [{ ...position, closedAt: settled, closedAtSource: "event-end-date" }],
+    { closedTrades: [{ ...position, closedAt: "2026-09-04T01:59:00.000Z" }] },
+    "2026-09-04T08:00:00.000Z",
+  );
+  assert.equal(earlier[0].closedAt, settled, "the merge accepts a correction backwards");
+  const forward = sync.mergeClosedTradeHistory(
+    [{ ...position, closedAt: "2026-09-04T01:59:00.000Z" }],
+    { closedTrades: [{ ...position, closedAt: settled }] },
+    "2026-09-04T08:00:00.000Z",
+  );
+  assert.equal(forward[0].closedAt, settled, "and refuses one forwards");
+});
+
 test("live history: fills sharing a Polygon transaction remain separate fills", () => {
   const buy = {
     type: "TRADE",
