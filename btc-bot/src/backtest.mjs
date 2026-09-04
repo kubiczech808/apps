@@ -60,6 +60,10 @@ export const runBacktest = async ({
 
   const equityCurve = []
   const rejections = new Map()
+  // Disabling the stop management produced a byte-identical result on 233 days
+  // of real candles, which does not mean it is harmless — it means it never
+  // fired. Counting the actions makes that checkable instead of inferred.
+  const management = { breakeven: 0, trail: 0, close: 0, reachedOneR: 0 }
   let lastLossAt = null
   let tradesTodayKey = null
   let tradesTodayCount = 0
@@ -80,12 +84,27 @@ export const runBacktest = async ({
     const running = store.trades.filter((trade) => trade.status === 'running')
 
     for (const position of running) {
+      const risk = Math.abs(position.entry - position.initialStop)
+      const progressR =
+        risk > 0
+          ? (position.side === 'long' ? candle.close - position.entry : position.entry - candle.close) / risk
+          : 0
+      if (progressR >= 1 && !position.everReachedOneR) {
+        position.everReachedOneR = true
+        management.reachedOneR += 1
+      }
+
       const decision = manageOpen({ position, ltfCandles: ltf, htfCandles: htf, settings: settings.strategy })
       if (decision.action === 'move_stop') {
         const stop = roundStop(position.side, decision.stop)
         const improves = position.side === 'long' ? stop > position.stopLoss : stop < position.stopLoss
-        if (improves) position.stopLoss = stop
+        if (improves) {
+          position.stopLoss = stop
+          if (/trailing/.test(decision.reason)) management.trail += 1
+          else management.breakeven += 1
+        }
       } else if (decision.action === 'close') {
+        management.close += 1
         await executor.closePosition(position.id, candle.close)
       }
     }
@@ -159,6 +178,7 @@ export const runBacktest = async ({
     stats,
     trades: closed,
     openAtEnd: store.trades.filter((trade) => trade.status === 'running').length,
+    management,
     equityCurve,
     rejections: [...rejections.entries()].sort((a, b) => b[1] - a[1]).slice(0, 20),
   }
@@ -206,6 +226,11 @@ export const formatBacktest = (report) => {
   lines.push(`Profit factor ${report.stats.profitFactor === null ? 'n/a (no losing trade)' : report.stats.profitFactor.toFixed(2)}`)
   lines.push(`Net P/L       ${sats(report.stats.netPnlSats)}   max drawdown ${pct(report.stats.maxDrawdownPct)}`)
   lines.push(`Avg win/loss  ${sats(report.stats.averageWinSats)} / ${sats(report.stats.averageLossSats)}`)
+  const m = report.management ?? {}
+  lines.push(
+    `Management    ${m.reachedOneR ?? 0} trades reached 1R; ` +
+      `${m.breakeven ?? 0} moved to breakeven, ${m.trail ?? 0} trailed, ${m.close ?? 0} closed on trend flip`
+  )
   // Thirteen trades and a profit factor of 1.12 is noise wearing the clothes of
   // a result. Say so in the output rather than leaving the reader to remember.
   if (report.stats.trades < 30) {
