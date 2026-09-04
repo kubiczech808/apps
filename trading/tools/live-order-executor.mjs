@@ -2951,7 +2951,13 @@ async function revalidateEvaluation(
         + " USDC including fees, above the " + availableCash.toFixed(4)
         + " USDC available; rotation may release capital"
       : (orderSizing.stakeCapBelowExchangeMinimum
-        ? "Polymarket minimum order " + minOrderSize.toFixed(4) + " shares costs " + minimumCost.toFixed(4) + " USDC, above this portfolio's fixed stake " + targetStake.toFixed(4) + " USDC and above the " + Number(orderSizing.stakeFloorCeilingUsdc || 0).toFixed(2) + " USDC stake-floor ceiling, so the stake was not raised to meet it; " + availableCash.toFixed(4) + " USDC remains free, so rotation is not needed"
+        // "the stake this pass may commit", not "this portfolio's fixed stake": what
+        // arrives here is already the lesser of the configured stake, the free cash and
+        // the resting book's remaining room, so on a run held back by the book ceiling
+        // this sentence used to report a number nobody configured as though it were a
+        // setting -- the same mislabel that had the pre-flight gate calling the book's
+        // headroom the money available to spend.
+        ? "Polymarket minimum order " + minOrderSize.toFixed(4) + " shares costs " + minimumCost.toFixed(4) + " USDC, above the " + targetStake.toFixed(4) + " USDC this pass may stake and above the " + Number(orderSizing.stakeFloorCeilingUsdc || 0).toFixed(2) + " USDC stake-floor ceiling, so the stake was not raised to meet it; " + availableCash.toFixed(4) + " USDC remains free, so rotation is not needed"
         : (orderSizing.makerPrecisionBlocked
           ? "configured stake would produce a sub-cent maker amount; changing the stake or order mode is required"
           : (minimumCost > 0
