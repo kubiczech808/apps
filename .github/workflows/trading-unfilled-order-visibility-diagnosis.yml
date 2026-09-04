@@ -1,0 +1,26 @@
+name: Trading Unfilled Order Visibility Diagnosis
+
+# Read-only diagnostic, manual only. Reported: the "Unfilled ... limit orders" panel shows
+# 0 rows on several portfolios, on an account that demonstrably cancels and expires bids.
+# This traces where the rows are lost -- whether the sync never published them, whether
+# isUnfilledLimitOrder refuses them, or whether portfolio attribution claims none of them --
+# using the dashboard's own functions extracted from app.js. Writes nothing, no secrets.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Trace unfilled limit order visibility
+        working-directory: trading
+        run: node tools/unfilled-order-visibility-diagnosis.mjs
