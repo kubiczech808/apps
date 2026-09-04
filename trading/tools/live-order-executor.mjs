@@ -4847,6 +4847,27 @@ function cheapestFundableEntryUsdc(minProbability = MIN_PROBABILITY, minOrderSiz
   return Number((size * price).toFixed(5));
 }
 
+// Which of the two independent limits, if either, stops this pass from opening an entry.
+//
+// They are two questions and they are asked separately on purpose. How much the wallet can
+// spend is one; how much more the resting book may hold against the cash behind it is
+// another, and a run can be stopped by the second while the first is not close to binding.
+// Answering them with one boolean is what produced "2.03 USDC available to commit" against a
+// wallet holding 17.76 -- the book's remaining room reported as the money on hand, turning a
+// deliberate risk limit into a shortage that did not exist.
+//
+// Cash is checked first because it is the harder limit: with too little to spend, the book's
+// room is irrelevant, so a run short of both is blocked by the cash.
+function preflightEntryBlock({ spendableCashUsdc, bookHeadroomUsdc, cheapestOrderUsdc } = {}) {
+  const cheapest = number(cheapestOrderUsdc, 0);
+  // No floor means nothing to be short of; never invent a block out of an unreadable number.
+  if (!(cheapest > 0)) return null;
+  const epsilon = 0.000001;
+  if (number(spendableCashUsdc, 0) + epsilon < cheapest) return "cash";
+  if (number(bookHeadroomUsdc, 0) + epsilon < cheapest) return "resting-book-ceiling";
+  return null;
+}
+
 async function main() {
   const [loadedLiveState, previousExecution] = await Promise.all([
     loadJsonResource(LIVE_STATE_URL, "live state"),
@@ -4965,7 +4986,18 @@ async function main() {
   // its minimum size at the lowest price the portfolio's own probability floor allows. Below
   // that, no book can produce a fundable order, so reading books cannot change the outcome.
   const cheapestPossibleOrderUsdc = cheapestFundableEntryUsdc();
-  const canFundAnyEntry = directMaxNotional + 0.000001 >= cheapestPossibleOrderUsdc;
+  // Two different reasons a pass can place nothing, told apart before either is reported.
+  //
+  // Reported: this said "2.03 USDC available to commit is below the 4.00 USDC minimum" while
+  // the wallet held 17.76 USDC. Measured: cash 17.76, seven resting bids holding 33.49, so
+  // the ceiling of 2x cash left 2.03 of headroom. The arithmetic was right and the sentence
+  // was wrong -- 2.03 was what the BOOK had room for, not what the account had to spend, and
+  // calling it "available to commit" turned a deliberate risk limit into a phantom shortage.
+  const preflightBlock = preflightEntryBlock({
+    spendableCashUsdc: Math.min(maxNotional, availableCash),
+    bookHeadroomUsdc: restingBookHeadroom,
+    cheapestOrderUsdc: cheapestPossibleOrderUsdc,
+  });
   const canActAnyway = runCanActWithoutFreeCapital({
     rotationCompletionRun: ROTATION_COMPLETION_RUN,
     autoRotate: LIVE_AUTO_ROTATE,
@@ -4973,13 +5005,23 @@ async function main() {
     activeSellOrders: activeSellOrderCount,
     restorableOrders: restorableCount,
   });
-  if (!canFundAnyEntry && !canActAnyway) {
-    const reason = `No order placed: ${directMaxNotional.toFixed(2)} USDC available to commit is below the`
-      + ` ${cheapestPossibleOrderUsdc.toFixed(2)} USDC minimum any entry would cost`
-      + `${restingBookHeadroom < availableCash ? ` (capped by the resting book at ${restingBookHeadroom.toFixed(2)} USDC)` : ""}`
-      + `, and nothing else this run can act on: ${preflightHeldPositions} position(s) held with rotation`
-      + ` ${LIVE_AUTO_ROTATE ? "on" : "off"}, ${activeSellOrderCount} sell order(s) resting,`
-      + ` ${restorableCount} bid(s) to restore.`;
+  if (preflightBlock && !canActAnyway) {
+    const restingNow = activeBuyOrderReservationUsdc(liveState);
+    const reason = preflightBlock === "resting-book-ceiling"
+      ? `No order placed: the resting book already holds ${restingNow.toFixed(2)} USDC against`
+        + ` ${cash.toFixed(2)} USDC of cash, which is its ${RESTING_BOOK_CASH_MULTIPLE}x ceiling`
+        + ` (${restingBookCeiling.toFixed(2)} USDC), leaving ${restingBookHeadroom.toFixed(2)} USDC of room`
+        + ` -- below the ${cheapestPossibleOrderUsdc.toFixed(2)} USDC any entry would cost. The wallet's`
+        + ` ${availableCash.toFixed(2)} USDC is not the constraint; the account is already promising more`
+        + ` on the book than the cash behind it, and adding to that is what the exchange culls.`
+        + ` Nothing else this run can act on: ${preflightHeldPositions} position(s) held with rotation`
+        + ` ${LIVE_AUTO_ROTATE ? "on" : "off"}, ${activeSellOrderCount} sell order(s) resting,`
+        + ` ${restorableCount} bid(s) to restore.`
+      : `No order placed: ${Math.min(maxNotional, availableCash).toFixed(2)} USDC of spendable cash is`
+        + ` below the ${cheapestPossibleOrderUsdc.toFixed(2)} USDC minimum any entry would cost,`
+        + ` and nothing else this run can act on: ${preflightHeldPositions} position(s) held with rotation`
+        + ` ${LIVE_AUTO_ROTATE ? "on" : "off"}, ${activeSellOrderCount} sell order(s) resting,`
+        + ` ${restorableCount} bid(s) to restore.`;
     await emitDecision({
       generatedAt: new Date().toISOString(),
       action: "SKIP",
@@ -4994,14 +5036,20 @@ async function main() {
         maxNotionalUsdc: maxNotional,
         directMaxNotionalUsdc: directMaxNotional,
         cheapestPossibleOrderUsdc,
+        restingBookUsdc: Number(activeBuyOrderReservationUsdc(liveState).toFixed(5)),
+        blockedBy: preflightBlock,
       },
       batchLog: {
         action: "SKIP",
         reason,
-        explanation: "The wallet cannot fund the smallest order any market would accept, and this"
-          + " run has no position to rotate, no resting sell to repair and no culled bid to put"
-          + " back. The candidate catalogue was not fetched and no market was revalidated,"
-          + " because none of that could change the outcome.",
+        explanation: (preflightBlock === "resting-book-ceiling"
+          ? "The resting book is at its ceiling against the cash behind it, so another bid cannot"
+            + " be added without inviting the cull this limit exists to prevent. The cash is not"
+            + " the constraint."
+          : "The wallet cannot fund the smallest order any market would accept.")
+          + " This run also has no position to rotate, no resting sell to repair and no culled bid"
+          + " to put back, so the candidate catalogue was not fetched and no market was"
+          + " revalidated: none of that could change the outcome.",
         expiredOrdersWithdrawn: expiredOrderSweep.withdrawn.length,
         expiredOrderCashReleasedUsdc: expiredOrderSweep.releasedUsdc,
         preflightSkip: true,

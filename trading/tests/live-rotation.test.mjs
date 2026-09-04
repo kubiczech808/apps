@@ -5471,7 +5471,8 @@ test("execution pre-flight: a run with nothing to fund stops before it reads any
     const EXCHANGE_MIN_ORDER_SIZE = 5;
     ${functionSource(source, "runCanActWithoutFreeCapital")}
     ${functionSource(source, "cheapestFundableEntryUsdc")}
-    return { runCanActWithoutFreeCapital, cheapestFundableEntryUsdc };
+    ${functionSource(source, "preflightEntryBlock")}
+    return { runCanActWithoutFreeCapital, cheapestFundableEntryUsdc, preflightEntryBlock };
   `)();
 
   // Five shares at the portfolio's own probability floor. Nothing cheaper can be bought, so
@@ -5481,6 +5482,51 @@ test("execution pre-flight: a run with nothing to fund stops before it reads any
   // A floor of zero must not make the cheapest order free, or the gate would never fire.
   assert.ok(api.cheapestFundableEntryUsdc(0, 5) > 0);
   assert.equal(api.cheapestFundableEntryUsdc(null, 5), 0.05, "an unreadable floor is not a free order");
+
+  // The reported regression, with the account's measured numbers: 17.76 USDC of cash, seven
+  // resting bids holding 33.49, so the 2x ceiling of 35.52 left 2.03 of headroom against a
+  // 4.00 cheapest order. The run was correctly stopped and then WRONGLY explained -- it
+  // reported "2.03 USDC available to commit", which is the book's remaining room described as
+  // the money on hand. The wallet was not short; the risk limit was binding.
+  assert.equal(api.preflightEntryBlock({
+    spendableCashUsdc: 17.76, bookHeadroomUsdc: 2.03, cheapestOrderUsdc: 4,
+  }), "resting-book-ceiling", "cash that covers the entry is never a cash shortage");
+  // And the genuine shortage, which must still be named as one.
+  assert.equal(api.preflightEntryBlock({
+    spendableCashUsdc: 1.2, bookHeadroomUsdc: 40, cheapestOrderUsdc: 4,
+  }), "cash");
+  // Short of both: cash is the harder limit and the honest answer, because room on the book
+  // is worth nothing without the money to use it.
+  assert.equal(api.preflightEntryBlock({
+    spendableCashUsdc: 1.2, bookHeadroomUsdc: 0.4, cheapestOrderUsdc: 4,
+  }), "cash");
+  // Enough of both, including exactly enough: a run that could have traded is never stopped.
+  assert.equal(api.preflightEntryBlock({
+    spendableCashUsdc: 40, bookHeadroomUsdc: 12, cheapestOrderUsdc: 4,
+  }), null);
+  assert.equal(api.preflightEntryBlock({
+    spendableCashUsdc: 4, bookHeadroomUsdc: 4, cheapestOrderUsdc: 4,
+  }), null, "the cheapest order exactly affordable is affordable");
+  // An unreadable cheapest order is not a shortfall of zero. Blocking on it would strand the
+  // account on a arithmetic slip rather than on a limit anyone chose.
+  assert.equal(api.preflightEntryBlock({
+    spendableCashUsdc: 0, bookHeadroomUsdc: 0, cheapestOrderUsdc: null,
+  }), null);
+
+  // The two causes must reach the log as two causes. The wording is the thing that was wrong,
+  // so it is pinned: the cash sentence may not quote the book's headroom, and the phrase that
+  // mislabelled it may not come back.
+  const gateBlock = source.slice(source.indexOf("if (preflightBlock && !canActAnyway) {"),
+    source.indexOf("preflightSkip: true"));
+  assert.ok(gateBlock.length > 0, "the pre-flight gate block must be findable");
+  assert.doesNotMatch(gateBlock, /available to commit/,
+    "the gate must never call anything 'available to commit' -- that is what mislabelled the headroom");
+  const cashSentence = gateBlock.slice(gateBlock.indexOf("USDC of spendable cash is"));
+  assert.doesNotMatch(cashSentence.slice(0, cashSentence.indexOf("bid(s) to restore")),
+    /restingBookHeadroom/,
+    "the cash shortage is measured against cash, never against the book's remaining room");
+  assert.match(gateBlock, /blockedBy: preflightBlock/,
+    "the digest must record which of the two limits stopped the run");
 
   // The reported case: no cash, nothing held, nothing resting, nothing to restore.
   assert.equal(api.runCanActWithoutFreeCapital({
