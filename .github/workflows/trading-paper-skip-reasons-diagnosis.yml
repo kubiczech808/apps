@@ -1,0 +1,41 @@
+name: Trading Paper Skip Reasons Diagnosis
+
+# Read-only diagnostic, manual only. Reported: paper portfolios logging "no candidates
+# passed <portfolio> portfolio filters", a message that names no rule. The bot already
+# records which rule -- storedExecutionShortlist keeps a histogram of every rejection reason
+# in the run's batchLog.prevalidationFilter -- so this reads the published run log for every
+# paper portfolio and reports it, flagging any portfolio whose entire candidate pool dies on
+# a structural gate rather than on price. Writes nothing, no secrets.
+on:
+  workflow_dispatch:
+    inputs:
+      paper_strategy_id:
+        description: "Limit to one paper portfolio id (leave blank for all)"
+        required: false
+        default: ""
+        type: string
+      runs:
+        description: "How many recent runs to read per portfolio"
+        required: false
+        default: "6"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Report why each paper portfolio skipped
+        working-directory: trading
+        env:
+          PAPER_DIAGNOSIS_STRATEGY_ID: ${{ inputs.paper_strategy_id || '' }}
+          PAPER_DIAGNOSIS_RUNS: ${{ inputs.runs || '6' }}
+        run: node tools/paper-portfolio-skip-reasons-diagnosis.mjs
