@@ -13,7 +13,7 @@
 // available to the entry in the same pass.
 
 import { aggregate, DEFAULT_SOURCE_ORDER, dropForming, fetchCandlesWithFallback, HOUR_MS } from './candles.mjs'
-import { createLnMarketsClient } from './lnmarkets.mjs'
+import { createLnMarketsClient, resolveNetwork } from './lnmarkets.mjs'
 import { createLnMarketsExecutor } from './executor-lnm.mjs'
 import { createPaperExecutor } from './executor-paper.mjs'
 import { atr, lastDefined, marketStructure } from './priceaction.mjs'
@@ -41,6 +41,10 @@ export const readConfig = (env = process.env) => ({
   leaseTtlMs: Number(env.BOT_LEASE_TTL_MS || 90_000),
   modeOverride: env.BOT_MODE || '',
   candleLimit: Number(env.BOT_CANDLE_LIMIT || 720),
+  // Which LN Markets network to read the chart from when the bot itself is not
+  // connected to one (paper mode). Mainnet, because that is the market being
+  // simulated.
+  marketNetwork: env.BOT_MARKET_NETWORK || 'mainnet',
   dryRun: env.BOT_DRY_RUN === 'true',
 })
 
@@ -54,9 +58,8 @@ export const loadMarket = async ({ settings, candleLimit, fetchImpl, now, client
   // LN Markets' own candles are only offered when there is a client to fetch
   // them with; in paper mode there is none, and listing the source anyway would
   // spend a guaranteed failure on every pass.
-  const order = client ? DEFAULT_SOURCE_ORDER : DEFAULT_SOURCE_ORDER.filter((name) => name !== 'lnmarkets')
   const { source, candles, failures } = await fetchCandlesWithFallback({
-    order,
+    order: DEFAULT_SOURCE_ORDER,
     limit: candleLimit,
     fetchImpl,
     client,
@@ -227,18 +230,26 @@ export const runPass = async ({
       return { state, run, saved }
     }
 
-    // The executor is built first because it owns the API client the primary
-    // candle source needs.
-    const { executor, mode, client } = makeExecutor({ settings, state, config, logger, fetchImpl })
+    const { executor, mode } = makeExecutor({ settings, state, config, logger, fetchImpl })
     run.mode = mode
     state.mode = mode
 
+    // Candles come from a client of their own, with no credentials attached.
+    // `futures/candles` is a public route, so paper mode reads the same chart
+    // the live mode does — which is the point: paper results are only worth
+    // anything if they were decided from the same data.
     const market = await loadMarket({
       settings,
       candleLimit: config.candleLimit,
       fetchImpl,
       now,
-      client,
+      client: createLnMarketsClient({
+        network: resolveNetwork(mode === 'paper' ? config.marketNetwork : mode),
+        fetchImpl,
+        key: '',
+        secret: '',
+        passphrase: '',
+      }),
     })
 
     // Paper positions only settle when someone walks the candles past them.

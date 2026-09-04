@@ -107,7 +107,10 @@ jobs:
                 limit: 48,
               })
               const rows = Array.isArray(candles) ? candles : (candles?.data ?? [])
-              console.log(`Candles: ${rows.length} hourly rows, newest ${rows.at(-1)?.time ?? "none"}`)
+              // Rows come back newest-first, so report the range rather than
+              // rows.at(-1) — which reads as two-day-old data and is not.
+              const times = rows.map((row) => row.time).sort()
+              console.log(`Candles: ${rows.length} hourly rows, ${times.at(0)} → ${times.at(-1)}`)
               if (rows.length === 0) {
                 console.log("::warning title=Candles::LN Markets returned no candles; the bot will fall back to spot venues.")
               }

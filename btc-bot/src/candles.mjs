@@ -77,43 +77,71 @@ export const DEFAULT_SOURCE_ORDER = ['lnmarkets', 'bybit', 'kraken', 'coinbase']
 /**
  * Hourly candles from LN Markets itself.
  *
- * `from` is documented as a string and the candles come back with string
- * times, so ISO 8601 is sent first. A rejection is retried once with epoch
- * milliseconds rather than assumed to be fatal — the parameter's encoding is
- * the one detail of this route not pinned down by the SDK's types, and being
- * wrong about it should cost one extra request, not the bot's eyesight.
+ * Two things measured against the live API, both of which would be bugs if
+ * assumed the other way:
+ *
+ *  - Rows come back NEWEST FIRST, so they are sorted before use. A backtest fed
+ *    a reversed series would read every trend backwards.
+ *  - `limit` is capped per request, and the response carries `nextCursor`, so
+ *    asking for a year of history means paging. Without this loop a backtest
+ *    silently measures the last few weeks and calls it history.
+ *
+ * The route is public — no credentials — so this works in paper mode and in a
+ * bare backtest, not only when the bot is armed to trade.
  */
-export const fetchLnMarketsCandles = async ({ client, limit = 500 }) => {
+export const fetchLnMarketsCandles = async ({ client, limit = 500, range = '1h', maxPages = 20 }) => {
   const to = Date.now()
   const from = to - (limit + 2) * HOUR_MS
+  const collected = new Map()
 
-  const attempt = async (encode) => {
-    const payload = await client.getCandles({
+  const parse = (payload) => {
+    const rows = Array.isArray(payload) ? payload : (payload?.data ?? [])
+    for (const row of rows) {
+      const time = typeof row.time === 'number' ? row.time : Date.parse(row.time)
+      if (!Number.isFinite(time)) continue
+      collected.set(time, {
+        time,
+        open: num(row.open),
+        high: num(row.high),
+        low: num(row.low),
+        close: num(row.close),
+        volume: num(row.volume ?? 0),
+      })
+    }
+    return payload?.nextCursor ?? null
+  }
+
+  const page = async (encode, cursor) =>
+    client.getCandles({
       from: encode(from),
       to: encode(to),
-      range: '1h',
+      range,
       limit: Math.min(limit, 1000),
+      ...(cursor ? { cursor } : {}),
     })
-    const rows = Array.isArray(payload) ? payload : (payload?.data ?? [])
-    return rows.map((row) => ({
-      time: typeof row.time === 'number' ? row.time : Date.parse(row.time),
-      open: num(row.open),
-      high: num(row.high),
-      low: num(row.low),
-      close: num(row.close),
-      volume: num(row.volume ?? 0),
-    }))
-  }
 
-  let candles
+  // ISO 8601 first: `from` is typed as a string and the candles come back with
+  // string times. A rejection is retried once as epoch milliseconds rather than
+  // treated as fatal — that encoding is the one detail of this route the SDK's
+  // types do not pin down, and being wrong should cost a request, not the
+  // bot's eyesight.
+  let encode = (ms) => new Date(ms).toISOString()
+  let cursor
   try {
-    candles = await attempt((ms) => new Date(ms).toISOString())
+    cursor = parse(await page(encode, undefined))
   } catch (error) {
     if (error?.status !== 400 && error?.status !== 422) throw error
-    candles = await attempt((ms) => String(ms))
+    encode = (ms) => String(ms)
+    cursor = parse(await page(encode, undefined))
   }
 
-  const usable = candles.filter((candle) => Number.isFinite(candle.time)).sort(byTimeAscending)
+  for (let pageNumber = 1; cursor && collected.size < limit && pageNumber < maxPages; pageNumber += 1) {
+    const next = parse(await page(encode, cursor))
+    if (next === cursor) break
+    cursor = next
+  }
+
+  const usable = [...collected.values()].sort(byTimeAscending)
   if (usable.length === 0) throw new Error('LN Markets returned no candles')
   return usable.slice(-limit)
 }

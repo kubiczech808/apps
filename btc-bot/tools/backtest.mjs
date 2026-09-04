@@ -9,6 +9,7 @@
 
 import { readFile, writeFile } from 'node:fs/promises'
 import { fetchCandles, fetchCandlesWithFallback } from '../src/candles.mjs'
+import { createLnMarketsClient, resolveNetwork } from '../src/lnmarkets.mjs'
 import { formatBacktest, runBacktest } from '../src/backtest.mjs'
 
 const args = new Map()
@@ -22,10 +23,18 @@ const loadCandles = async () => {
     return { source: args.get('file'), candles: Array.isArray(parsed) ? parsed : parsed.candles }
   }
   const limit = Number(args.get('limit') ?? 1000)
+  // `futures/candles` needs no credentials, so a backtest reads the same venue
+  // the bot trades without being armed to trade.
+  const client = createLnMarketsClient({
+    network: resolveNetwork(args.get('network') ?? 'mainnet'),
+    key: '',
+    secret: '',
+    passphrase: '',
+  })
   if (args.has('source')) {
-    return { source: args.get('source'), candles: await fetchCandles({ source: args.get('source'), limit }) }
+    return { source: args.get('source'), candles: await fetchCandles({ source: args.get('source'), limit, client }) }
   }
-  return fetchCandlesWithFallback({ limit })
+  return fetchCandlesWithFallback({ limit, client })
 }
 
 const { source, candles } = await loadCandles()
