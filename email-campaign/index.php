@@ -47,6 +47,10 @@ const AI_RESEARCH_BATCH_STEPS_PER_TICK = 8;
 // dany keyword a lokalitu uz vic firem nema. Jeden beh muze skoncit i jinak, proto
 // se ceka na dva.
 const AI_RESEARCH_BATCH_EXHAUSTED_RUNS = 2;
+// Kolik kroku davky po sobe smi skoncit bez jednoho noveho kontaktu, nez se davka
+// uzavre na tom, co zdroj dal. Nezavisle na tom, jestli scrapovaci beh dojde do
+// stavu dokonceny - proto je to hlavni signal vycerpaneho zdroje.
+const AI_RESEARCH_BATCH_STALLED_STEPS = 4;
 // Kolik casu musi v behu zbyvat, aby melo smysl zacit dalsi praci. Novy seed potrebuje
 // plan z webu i scraping, dokonceni rozdelaneho behu jen jeden dalsi krok.
 const AI_RESEARCH_NEW_SEED_RESERVE_SECONDS = 35;
@@ -9093,6 +9097,37 @@ function runCronAiResearchUnfinished(PDO $pdo, array $config, ?array $work = nul
  * pocet, takze se cely request nezasekne na jednom katalogu, a zaroven se cas nevenuje
  * novemu seedu, dokud tento subjekt neni hotovy.
  */
+/**
+ * Pocitadlo kroku davky, ktere nepridaly zadny kontakt. Vraci aktualni serii; kdyz
+ * krok neco pridal, serie se nuluje. Drzi se v planu behu, takze prezije i to, ze
+ * kazdy tik je jiny request.
+ */
+function aiResearchTrackFirstBatchStall(PDO $pdo, int $runId, int $contacts, bool $grew): int
+{
+    if ($runId <= 0) {
+        return 0;
+    }
+    try {
+        $stmt = $pdo->prepare('SELECT plan_json FROM ai_research_runs WHERE id=? LIMIT 1');
+        $stmt->execute([$runId]);
+        $plan = json_decode((string)$stmt->fetchColumn(), true);
+        $plan = is_array($plan) ? $plan : [];
+        $stall = $grew ? 0 : max(0, (int)($plan['first_batch_stalled_steps'] ?? 0)) + 1;
+        $plan['first_batch_stalled_steps'] = $stall;
+        $plan['first_batch_last_contacts'] = $contacts;
+        $update = $pdo->prepare('UPDATE ai_research_runs SET plan_json=?, updated_at=? WHERE id=?');
+        $update->execute([
+            json_encode($plan, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?: '{}',
+            date('c'),
+            $runId,
+        ]);
+        return $stall;
+    } catch (Throwable $e) {
+        error_log('First batch stall tracking for #' . $runId . ' failed: ' . $e->getMessage());
+        return 0;
+    }
+}
+
 function aiResearchAdvanceFirstBatch(PDO $pdo, int $runId, array $plan): string
 {
     $progress = aiResearchScrapingProgress($pdo, $plan);
@@ -9106,10 +9141,24 @@ function aiResearchAdvanceFirstBatch(PDO $pdo, int $runId, array $plan): string
         error_log('AI research batch step for #' . $runId . ' failed: ' . $e->getMessage());
         return 'AI research davka behu #' . $runId . ' se nepodarila: ' . $e->getMessage();
     }
+    $before = (int)($progress['contacts_total'] ?? 0);
     $after = aiResearchScrapingProgress($pdo, $plan);
     $contacts = (int)($after['contacts_total'] ?? 0);
+    // Kdyz krok davky nepridal ani jeden kontakt, je to bud docasna smula, nebo uz
+    // katalog na tento keyword a lokalitu vic firem nema. Rozhoduje se to podle
+    // serie: az nekolik krokU po sobe bez jednoho noveho kontaktu znamena vycerpany
+    // zdroj. Signal nezavisi na tom, jestli scrapovaci beh dojde do stavu dokonceny -
+    // kazdy tik totiz zaklada novy beh od prvni stranky, takze na "dokonceny" by se
+    // nemuselo dojit nikdy a beh by drzel frontu navzdy.
+    $stall = aiResearchTrackFirstBatchStall($pdo, $runId, $contacts, $contacts > $before);
+    if ($stall >= AI_RESEARCH_BATCH_STALLED_STEPS) {
+        aiResearchMarkFirstBatchExhausted($pdo, $runId, $contacts);
+        return 'AI research davka behu #' . $runId . ': uzavrena na ' . $contacts
+            . ' kontaktech, katalog na tento keyword a lokalitu vic firem nenabizi.';
+    }
     return 'AI research davka behu #' . $runId . ': ' . $contacts . ' z '
-        . AI_RESEARCH_FIRST_BATCH_CONTACTS . ' kontaktu (' . $message . ')';
+        . AI_RESEARCH_FIRST_BATCH_CONTACTS . ' kontaktu (' . $message . ')'
+        . ($stall > 0 ? ' [bez noveho kontaktu ' . $stall . 'x z ' . AI_RESEARCH_BATCH_STALLED_STEPS . ']' : '');
 }
 
 function runCronAiResearchContactEstimates(PDO $pdo, array $config, int $budgetSeconds = 60): string

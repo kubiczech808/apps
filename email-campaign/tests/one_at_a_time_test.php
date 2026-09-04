@@ -18,7 +18,7 @@ function extractFn(string $src, string $name): string
     return $end === false ? $body : substr($body, 0, $end + 1);
 }
 foreach (['AI_RESEARCH_FIRST_BATCH_CONTACTS', 'AI_RESEARCH_FINISH_ATTEMPTS_MAX', 'AI_RESEARCH_BATCH_STEPS_PER_TICK',
-          'AI_RESEARCH_BATCH_EXHAUSTED_RUNS'] as $const) {
+          'AI_RESEARCH_BATCH_EXHAUSTED_RUNS', 'AI_RESEARCH_BATCH_STALLED_STEPS'] as $const) {
     preg_match('/const ' . $const . ' = (\d+);/', $src, $m);
     assert(isset($m[1]), 'konstanta chybi: ' . $const);
     eval('const ' . $const . ' = ' . $m[1] . ';');
@@ -34,7 +34,8 @@ foreach (['aiResearchSupportedMarkets', 'aiResearchPlanTargetMarkets', 'aiResear
           'aiResearchWorkflowChecklist', 'aiResearchWorkflowRequiredDone', 'aiResearchWorkflowMissingSteps',
           'aiResearchRunWaitsOnlyForScraping', 'aiResearchNextWork', 'aiResearchWorkIsFinishing',
           'aiResearchCloseExhaustedRuns', 'aiResearchStepsNeedingModel', 'aiResearchRunProgressesWithoutModel',
-          'aiResearchChecklistProgress', 'aiResearchFirstBatchSourceExhausted'] as $fn) {
+          'aiResearchChecklistProgress', 'aiResearchFirstBatchSourceExhausted',
+          'aiResearchTrackFirstBatchStall'] as $fn) {
     eval(extractFn($src, $fn));
 }
 
@@ -239,6 +240,32 @@ assert(str_contains($ensureSrc, 'aiResearchFirstBatchSourceExhausted($pdo, $cont
 assert(strpos($ensureSrc, 'aiResearchFirstBatchSourceExhausted') < strpos($ensureSrc, 'createScrapingRun'),
     'kontrola musi byt pred zalozenim dalsiho behu');
 assert(str_contains($ensureSrc, 'aiResearchMarkFirstBatchExhausted'), 'a zapise se to do planu');
+echo "  ok\n";
+
+echo "\n== 10d. serie kroku bez noveho kontaktu uzavre davku i bez dokonceneho jobu ==\n";
+// Kazdy tik zaklada novy scrapovaci beh od prvni stranky, takze na stav "dokonceny"
+// se nemuselo dojit nikdy - a kontrola podle dokoncenych behu by se nespustila.
+// Rozhoduje proto serie kroku, ktere nepridaly ani jeden kontakt.
+$db = freshDb();
+$runId = addRun($db, 'PH Logistics', 'done', $readyPlan, 26, '<p>x</p>');
+for ($step = 1; $step <= AI_RESEARCH_BATCH_STALLED_STEPS; $step++) {
+    $stall = aiResearchTrackFirstBatchStall($db, $runId, 26, false);
+    printf("  krok %d bez noveho kontaktu -> serie %d\n", $step, $stall);
+    assert($stall === $step, 'serie musi rust po kazdem prazdnem kroku');
+}
+assert($stall >= AI_RESEARCH_BATCH_STALLED_STEPS, 'po ' . AI_RESEARCH_BATCH_STALLED_STEPS . ' krocich je zdroj vycerpany');
+// Jeden novy kontakt serii nuluje - docasna smula davku neuzavre.
+$reset = aiResearchTrackFirstBatchStall($db, $runId, 34, true);
+printf("  krok s novym kontaktem -> serie %d\n", $reset);
+assert($reset === 0, 'novy kontakt serii nuluje');
+$stored = json_decode((string)$db->query('SELECT plan_json FROM ai_research_runs WHERE id=' . $runId)->fetchColumn(), true);
+assert((int)$stored['first_batch_last_contacts'] === 34, 'plan si drzi posledni videny pocet');
+// A davka se pak opravdu uzavre.
+$advanceSrc = extractFn($src, 'aiResearchAdvanceFirstBatch');
+assert(str_contains($advanceSrc, 'aiResearchTrackFirstBatchStall'), 'krok davky serii pocita');
+assert(str_contains($advanceSrc, 'AI_RESEARCH_BATCH_STALLED_STEPS'), 'a na stropu davku uzavre');
+assert(strpos($advanceSrc, 'aiResearchMarkFirstBatchExhausted') > strpos($advanceSrc, 'aiResearchTrackFirstBatchStall'),
+    'uzavreni prijde az po vyhodnoceni serie');
 echo "  ok\n";
 
 echo "\nVSE OK\n";
