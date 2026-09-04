@@ -89,16 +89,25 @@ async function main() {
     console.log(`   last ${recent.length} run(s): ${[...actions.entries()].map(([a, n]) => `${a} x${n}`).join(", ")}`);
     console.log(`   newest ${text(recent[0]?.generatedAt || recent[0]?.at)}  ${text(recent[0]?.reason).slice(0, 96)}`);
 
-    // The histogram the bot itself kept, from the newest run that carries one.
-    const withFilter = recent.find((run) => run?.batchLog?.prevalidationFilter?.reasonCounts
-      && Object.keys(run.batchLog.prevalidationFilter.reasonCounts).length);
-    const filter = withFilter?.batchLog?.prevalidationFilter
-      || recent.find((run) => run?.batchLog?.prevalidationFilter)?.batchLog?.prevalidationFilter
-      || null;
+    // The histogram the bot itself kept, from the NEWEST run that carries one -- and the
+    // run it came from is named, because it need not be the newest run.
+    //
+    // This previously preferred the newest run with a non-empty reasonCounts and printed it
+    // directly under the newest run's action. When a portfolio had just started trading
+    // again, that paired an old SKIP's counts with a new OPENED headline: the block read
+    // "eligible after revalidation 0" for a portfolio that had, on its most recent run,
+    // opened a trade. Reporting two different runs as one is exactly the confusion this
+    // tool exists to remove.
+    const sourceRun = recent.find((run) => run?.batchLog?.prevalidationFilter);
+    const filter = sourceRun?.batchLog?.prevalidationFilter || null;
     if (!filter) {
       console.log(`   no prevalidationFilter recorded on these runs, so the pool cannot be read here.\n`);
       continue;
     }
+    const sourceIsNewest = sourceRun === recent[0];
+    console.log(`   figures below are from the ${sourceIsNewest ? "newest" : "most recent run that recorded them"}:`
+      + ` ${text(sourceRun.action) || "-"} ${text(sourceRun.generatedAt || sourceRun.at)}`
+      + `${sourceIsNewest ? "" : "  <- NOT the newest run; the newest is above"}`);
 
     const pool = Number(filter.uniqueEvaluations ?? 0);
     const passed = Number(filter.portfolioPrefilterPassed ?? filter.prefilterPassed ?? 0);
@@ -177,7 +186,7 @@ async function main() {
       console.log(`   -> STUCK: only ${matched} of the ${pool} markets carry the required tag. A`);
       console.log(`      whitelist is meant to reject most of a catalogue, but not all but ${matched} of it:`);
       console.log(`      that is a tag string no market actually uses.`);
-    } else if (revalidated > 0 && survived === 0 && skipRuns >= recent.length) {
+    } else if (revalidated > 0 && survived === 0 && skipRuns >= recent.length && sourceIsNewest) {
       stuck.push({
         id,
         label,
