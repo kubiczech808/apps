@@ -120,21 +120,48 @@ can drift from the LN Markets index.
 
 ### GitHub secrets (repository `kubiczech808/apps`)
 
+> **This repository is public.** Nothing secret may be committed to it — not the
+> dashboard key, not a config file, not "just for testing". The dashboard key is
+> the only thing between the internet and reading the account, changing the risk
+> settings, and flipping the bot to mainnet.
+
 | Secret | What it is |
 |---|---|
-| `LNM_API_KEY` | LN Markets API key |
-| `LNM_API_SECRET` | LN Markets API secret |
-| `LNM_API_PASSPHRASE` | LN Markets API passphrase |
-| `BTC_BOT_KEY` | A long random string you invent. Both runners and the dashboard authenticate with it. |
 | `BTCDCA_FTP_LOGIN` | already present — btc-dca.com FTP |
-| `BTCDCA_FTP_PASSWORD` | already present |
+| `BTCDCA_FTP_PASSWORD` | already present — also the seed for the dashboard key |
+| `LNM_API_KEY` | LN Markets API key. Not needed in paper mode. |
+| `LNM_API_SECRET` | " |
+| `LNM_API_PASSPHRASE` | " |
+| `BTC_BOT_KEY` | **Optional.** Set it to override the derived dashboard key. |
 
-Create the LN Markets key at **testnet4.lnmarkets.com → Settings → API**, with
-permission to read the account and to create and close positions. Generate the
-bot key with something like `openssl rand -base64 32`.
+Create the LN Markets key at **lnmarkets.com → Settings → API** with permission
+to read the account and to create and close positions. There is no test network
+to practise on — see the note on the API version above.
 
-Optional repository *variables*: `LNM_API_NETWORK` (`testnet4` by default),
-`BTC_BOT_URL`, `BTCDCA_FTP_HOSTS`.
+Optional repository *variables*: `LNM_API_NETWORK` (`mainnet`; the bot's own
+mode setting decides whether it trades), `BTC_BOT_URL`, `BTCDCA_FTP_HOSTS`.
+
+### The dashboard key
+
+You do not have to create one. If `BTC_BOT_KEY` is not set, the deploy and both
+runners derive the same key from `BTCDCA_FTP_PASSWORD`, which the repository
+already holds. Nothing new to add, and nothing secret in git.
+
+To find out what it is — you need it to open the dashboard — run this with your
+btc-dca.com FTP password:
+
+```bash
+printf 'btc-dca-bot dashboard key v1' \
+  | openssl dgst -sha256 -hmac "YOUR_BTCDCA_FTP_PASSWORD" -binary \
+  | base64 | tr '+/' '-_' | tr -d '='
+```
+
+The deploy log prints a 12-character fingerprint of the key it used, so you can
+confirm you computed the same one without either of you publishing it.
+
+The catch, stated plainly: **rotating the FTP password changes the dashboard
+key.** If you ever do that, recompute it, or set an explicit `BTC_BOT_KEY`
+secret — which wins over the derived one — and be done with the coupling.
 
 ### Deploy
 
@@ -160,9 +187,10 @@ systemctl --user enable --now btc-bot.timer
 
 ## Using the dashboard
 
-`https://www.btc-dca.com/bot/` asks for `BTC_BOT_KEY` once and keeps it in that
-browser. Nothing is readable without it — the state names the balance and the
-open positions.
+`https://www.btc-dca.com/bot/` asks for the dashboard key once and keeps it in
+that browser. Nothing is readable without it — the state names the balance and
+the open positions. See **The dashboard key** above for how to work out what
+yours is.
 
 It shows equity, open risk, realised and unrealised P/L, the four tables (open
 positions, resting orders, closed trades, run log) and the settings. The buttons

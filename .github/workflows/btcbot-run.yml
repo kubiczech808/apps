@@ -30,11 +30,47 @@ jobs:
         with:
           node-version: '22'
 
+      - name: Resolve the dashboard key
+        # Same derivation as the deploy, for the same reason: this repository is
+        # public, so the key is derived from a secret it already holds rather
+        # than committed or demanded as a new one. Both must agree, so if you
+        # change one, change the other.
+        env:
+          BTC_BOT_KEY: ${{ secrets.BTC_BOT_KEY }}
+          BTCDCA_FTP_PASSWORD: ${{ secrets.BTCDCA_FTP_PASSWORD }}
+        run: |
+          python3 - <<'PY' >> "$GITHUB_ENV"
+          import base64
+          import hashlib
+          import hmac
+          import os
+          import sys
+
+          explicit = os.environ.get("BTC_BOT_KEY", "")
+          seed = os.environ.get("BTCDCA_FTP_PASSWORD", "")
+
+          if explicit:
+              key = explicit
+          elif seed:
+              digest = hmac.new(seed.encode(), b"btc-dca-bot dashboard key v1", hashlib.sha256).digest()
+              key = base64.urlsafe_b64encode(digest).decode().rstrip("=")
+          else:
+              print(
+                  "::error title=No key material::Set BTC_BOT_KEY, or BTCDCA_FTP_PASSWORD so the key can be derived.",
+                  file=sys.stderr,
+              )
+              raise SystemExit(1)
+
+          print(f"::add-mask::{key}", file=sys.stderr)
+          print(f"BOT_API_KEY={key}")
+          PY
+
       - name: Run one pass
         env:
           BOT_RUNNER: actions
           BOT_API_URL: ${{ vars.BTC_BOT_URL || 'https://www.btc-dca.com/bot/api.php' }}
-          BOT_API_KEY: ${{ secrets.BTC_BOT_KEY }}
+          # BOT_API_KEY comes from the step above; naming it here from a secret
+          # that may not exist would overwrite it with an empty string.
           # Shorter than the schedule interval: a lease this runner takes must
           # expire before its next attempt, or a single slow pass would lock the
           # Pi out for a quarter of an hour.

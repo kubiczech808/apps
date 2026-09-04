@@ -168,14 +168,59 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Build server config
+      - name: Resolve the dashboard key
+        # This repository is PUBLIC, so the key can never be committed to it: it
+        # is the only thing between the internet and reading the account,
+        # changing the risk settings, or flipping the bot to mainnet.
+        #
+        # Rather than demand a new secret, it is DERIVED from one the repository
+        # already has, so a deploy works with nothing added. An explicit
+        # BTC_BOT_KEY wins if it is ever set. The derivation is deterministic,
+        # so every deploy and both runners produce the same key, and it can be
+        # recovered locally with one command — see the README.
+        #
+        # Resolved once here and masked, so the later steps and the first pass
+        # cannot drift from what was written into config.php.
         env:
           BTC_BOT_KEY: ${{ secrets.BTC_BOT_KEY }}
+          BTCDCA_FTP_PASSWORD: ${{ secrets.BTCDCA_FTP_PASSWORD }}
         run: |
-          if [ -z "$BTC_BOT_KEY" ]; then
-            echo "::error title=Missing secret::BTC_BOT_KEY is required — the dashboard and both runners authenticate with it."
-            exit 1
-          fi
+          python3 - <<'PY' >> "$GITHUB_ENV"
+          import base64
+          import hashlib
+          import hmac
+          import os
+          import sys
+
+          explicit = os.environ.get("BTC_BOT_KEY", "")
+          seed = os.environ.get("BTCDCA_FTP_PASSWORD", "")
+
+          if explicit:
+              key, source = explicit, "the BTC_BOT_KEY secret"
+          elif seed:
+              digest = hmac.new(seed.encode(), b"btc-dca-bot dashboard key v1", hashlib.sha256).digest()
+              key = base64.urlsafe_b64encode(digest).decode().rstrip("=")
+              source = "derived from BTCDCA_FTP_PASSWORD"
+          else:
+              print(
+                  "::error title=No key material::Set BTC_BOT_KEY, or BTCDCA_FTP_PASSWORD so the key can be derived.",
+                  file=sys.stderr,
+              )
+              raise SystemExit(1)
+
+          # Mask before anything can echo it. A fingerprint goes to the log
+          # instead: enough to confirm the dashboard and the runners agree,
+          # useless to anyone reading a public build log.
+          print(f"::add-mask::{key}", file=sys.stderr)
+          print(
+              f"Dashboard key {source}; fingerprint {hashlib.sha256(key.encode()).hexdigest()[:12]}",
+              file=sys.stderr,
+          )
+          print(f"BOT_API_KEY={key}")
+          PY
+
+      - name: Build server config
+        run: |
           python3 - <<'PY'
           import os
           from pathlib import Path
@@ -184,9 +229,7 @@ jobs:
               return "'" + str(value).replace("\\", "\\\\").replace("'", "\\'") + "'"
 
           Path("config.php").write_text(
-              "<?php\n\nreturn [\n    'bot_key' => "
-              + php_string(os.environ["BTC_BOT_KEY"])
-              + ",\n];\n",
+              "<?php\n\nreturn [\n    'bot_key' => " + php_string(os.environ["BOT_API_KEY"]) + ",\n];\n",
               encoding="utf-8",
           )
           PY
@@ -302,14 +345,16 @@ jobs:
 
       - name: Smoke-test the deployed endpoint
         env:
-          BTC_BOT_KEY: ${{ secrets.BTC_BOT_KEY }}
           BOT_URL: ${{ vars.BTC_BOT_URL || 'https://www.btc-dca.com/bot/api.php' }}
         run: |
           python3 - <<'PY'
           import json, os, sys, urllib.error, urllib.request
 
           base = os.environ["BOT_URL"]
-          key = os.environ["BTC_BOT_KEY"]
+          # The same value that was written into config.php one step earlier, so
+          # this proves the deployed key works rather than that two copies of a
+          # secret happen to match.
+          key = os.environ["BOT_API_KEY"]
 
           def call(action, key_header=None):
               request = urllib.request.Request(f"{base}?action={action}")
@@ -351,7 +396,9 @@ jobs:
         env:
           BOT_RUNNER: deploy
           BOT_API_URL: ${{ vars.BTC_BOT_URL || 'https://www.btc-dca.com/bot/api.php' }}
-          BOT_API_KEY: ${{ secrets.BTC_BOT_KEY }}
+          # BOT_API_KEY is already in the environment from "Resolve the
+          # dashboard key" — naming it here again from a secret that may not
+          # exist would overwrite it with an empty string.
           LNM_API_KEY: ${{ secrets.LNM_API_KEY }}
           LNM_API_SECRET: ${{ secrets.LNM_API_SECRET }}
           LNM_API_PASSPHRASE: ${{ secrets.LNM_API_PASSPHRASE }}
