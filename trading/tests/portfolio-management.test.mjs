@@ -3078,7 +3078,14 @@ test("live stop loss: with no default policy an unattributed position is reporte
 //   * omitting the token would not have been enough anyway, because the worker applies
 //     defaultPolicy to every position NOT named in `policies` -- so the position would have
 //     been sold under the main Live portfolio's cap instead of its own portfolio's.
-test("live stop loss: a switched-off portfolio's positions are excluded by name", () => {
+// Reported on "Will Wrexham AFC win on 2026-09-05?": priced at 100% for the outcome held,
+// its portfolio switched off, and "in the policy payload now: no". Switching a portfolio off
+// stops it OPENING positions -- it does not abandon the money already committed, and this
+// used to drop every position it held out of the worker's watch list entirely.
+//
+// The paper side has always drawn the line here: refreshTrades marks and manages every
+// portfolio's open positions on every pass, and only the entry path consults the switch.
+test("live stop loss: a switched-off portfolio keeps managing what it already holds", () => {
   const directory = mkdtempSync(join(tmpdir(), "stop-loss-automation-off-"));
   try {
     const cut = API.indexOf("\ntry {");
@@ -3086,12 +3093,19 @@ test("live stop loss: a switched-off portfolio's positions are excluded by name"
     mkdirSync(join(directory, "data"), { recursive: true });
     writeFileSync(definitions, API.slice(0, cut) + "\n");
 
-    // Live is on and protected. The custom portfolio has a stop loss configured too, but
-    // its automation is off -- and it is the one holding `sleeping-token`.
+    // Live is on and protected. The custom portfolio has a stop loss and a reversal
+    // configured too, but its automation is off -- and it is the one holding
+    // `sleeping-token`.
     writeFileSync(join(directory, "data", "portfolio-config.json"), JSON.stringify({
       live: { displayName: "Live", stopLossRiskMultiplier: 1.75, automationEnabled: true },
       livePortfolios: {
-        live2: { displayName: "Live 2", stopLossRiskMultiplier: 1.75, automationEnabled: false },
+        live2: {
+          displayName: "Live 2",
+          stopLossRiskMultiplier: 1.75,
+          reverseOnStopLoss: true,
+          settlementCloseBid: 0.99,
+          automationEnabled: false,
+        },
       },
     }));
     writeFileSync(join(directory, "data", "live-execution-state.json"), JSON.stringify({
@@ -3116,15 +3130,24 @@ test("live stop loss: a switched-off portfolio's positions are excluded by name"
 
     const covered = new Map((payload.policies || []).map((policy) => [policy.tokenId, policy]));
     assert.ok(covered.has("live-token"), "the running portfolio keeps its stop");
-    assert.ok(!covered.has("sleeping-token"), "a switched-off portfolio has no live stop");
+    assert.ok(covered.has("sleeping-token"),
+      "a switched-off portfolio still protects the position it is holding");
+    const sleeping = covered.get("sleeping-token");
+    assert.equal(sleeping.portfolioId, "live-custom-live2");
+    assert.equal(sleeping.stopLossRiskMultiplier, 1.75, "with its own cap, not somebody else's");
+    assert.equal(sleeping.settlementCloseBid, 0.99, "and its own certainty close");
+    assert.equal(sleeping.automationEnabled, false);
+    // The one thing the switch does still stop: the exit protects what is held, the
+    // reversal opens something new.
+    assert.equal(sleeping.reverseOnStopLoss, false,
+      "buying the opposite outcome is opening a position, which is what off must prevent");
+    // The running portfolio's reversal is untouched by any of this.
+    assert.equal(covered.get("live-token").automationEnabled, true);
 
+    // Nothing is excluded for being switched off any more.
     const excluded = new Map((payload.excluded || []).map((row) => [row.tokenId, row]));
-    assert.ok(excluded.has("sleeping-token"),
-      "the exclusion must be explicit: an omitted token is covered by defaultPolicy instead");
-    assert.equal(excluded.get("sleeping-token").portfolioId, "live-custom-live2");
-    assert.equal(excluded.get("sleeping-token").enabled, false);
-    assert.match(excluded.get("sleeping-token").reason, /automation is switched off/);
-    assert.equal(payload.positionsExcludedByOwner, 1);
+    assert.ok(!excluded.has("sleeping-token"));
+    assert.equal(payload.positionsExcludedByOwner, 0);
     // It must not be re-counted as unattributed and adopted by the fallback, which is the
     // path that would have applied Live's cap to another portfolio's position.
     assert.equal(payload.positionsWithoutRunLogAttribution, 0);

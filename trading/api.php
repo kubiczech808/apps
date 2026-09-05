@@ -4602,14 +4602,22 @@ function live_stop_loss_policy_config(array $config, string $portfolioId): ?arra
     if (($row['archived'] ?? false) === true) {
         return null;
     }
-    // A portfolio whose automation is switched off does not trade, and selling one of its
-    // positions is trading. Leaving the stop armed for it meant the switch stopped entries
-    // while an exit could still fire -- so turning a portfolio off did not mean what it
-    // says. Absent means on, matching normalize_portfolio_config, so a portfolio saved
-    // before this switch existed keeps its protection.
-    if (($row['automationEnabled'] ?? true) === false) {
-        return null;
-    }
+    // Switching a portfolio off stops it OPENING positions. It does not abandon the money
+    // already committed.
+    //
+    // This used to return null here, which took every position the portfolio held out of
+    // the worker's watch list entirely -- so a switched-off portfolio had no stop loss and
+    // no certainty close, and a position could run to zero unattended. Reported on "Will
+    // Wrexham AFC win on 2026-09-05?": priced at 100% for the outcome held, portfolio off,
+    // and "in the policy payload now: no".
+    //
+    // The paper side has always drawn the line here: refreshTrades marks and manages every
+    // portfolio's open positions on every pass, and only the ENTRY path
+    // (strategyMatchesExecutionTrigger) consults the switch. Live now matches it.
+    //
+    // What the switch does still stop is the reversal, below: buying the opposite outcome
+    // after a stop fires is opening a position, which is the one thing "off" must prevent.
+    $automationEnabled = ($row['automationEnabled'] ?? true) !== false;
     $multiplier = normalize_stop_loss_risk_multiplier_value(
         $row['stopLossRiskMultiplier'] ?? (($row['stopLossEnabled'] ?? false) ? 1.0 : 0.0),
         0.0
@@ -4624,7 +4632,10 @@ function live_stop_loss_policy_config(array $config, string $portfolioId): ?arra
     return [
         'portfolioId' => $portfolioId,
         'stopLossRiskMultiplier' => $multiplier,
-        'reverseOnStopLoss' => (bool) ($row['reverseOnStopLoss'] ?? false),
+        // Never on a switched-off portfolio: the exit protects what is held, the reversal
+        // opens something new.
+        'reverseOnStopLoss' => $automationEnabled && (bool) ($row['reverseOnStopLoss'] ?? false),
+        'automationEnabled' => $automationEnabled,
         // The bid at which the position is sold rather than held to settlement. 0 means the
         // portfolio does not take that shortcut.
         'settlementCloseBid' => $settlementCloseBid,
@@ -4656,14 +4667,19 @@ function live_stop_loss_policy_absence_reason(array $config, string $portfolioId
     if (($row['archived'] ?? false) === true) {
         return 'portfolio is archived';
     }
-    if (($row['automationEnabled'] ?? true) === false) {
-        return 'portfolio automation is switched off';
-    }
+    // Automation deliberately absent from this list. Switching a portfolio off stops it
+    // opening positions; it does not stop the rules that manage what it already holds, so
+    // it is no longer a reason a position goes unwatched.
     $multiplier = normalize_stop_loss_risk_multiplier_value(
         $row['stopLossRiskMultiplier'] ?? (($row['stopLossEnabled'] ?? false) ? 1.0 : 0.0),
         0.0
     );
-    return $multiplier > 0 ? null : 'no stop loss is configured';
+    if ($multiplier > 0) {
+        return null;
+    }
+    return normalize_settlement_close_bid_value($row['settlementCloseBid'] ?? null) > 0
+        ? null
+        : 'neither a stop loss nor a certainty close is configured';
 }
 
 function live_execution_state_path_for_policy(string $portfolioId): string
