@@ -33,6 +33,79 @@ const CONFIRM_LIVE = enabled(process.env.LIVE_EXIT_CONFIRM_LIVE);
 const ALLOW_PARTIAL = enabled(process.env.LIVE_EXIT_ALLOW_PARTIAL);
 const FUNDER_ADDRESS = process.env.POLYMARKET_FUNDER_ADDRESS || process.env.POLYMARKET_ADDRESS || "";
 const SIGNATURE_TYPE = Number(process.env.POLYMARKET_SIGNATURE_TYPE || 3);
+
+// WHICH ACCOUNT THIS WORKER SIGNS AS.
+//
+// The environment above is a guess, and it was the wrong one. The workflow writes
+// `secrets.POLYMARKET_FUNDER_ADDRESS || secrets.POLYMARKET_ADDRESS || <a hard-coded
+// address>`, so with that secret unset the Pi signed every protective sell as
+// 0x3252...2293 while the account actually being traded is 0xe219...39e2. Under signature
+// type 3 the funder address is the address the order presents as its signer, and the L2
+// API key belongs to the wallet -- so the CLOB refused every exit with
+//
+//   400 "the order signer address has to be the address of the API KEY"
+//
+// 106 times across 6 tokens, each left terminal:false and retried forever. Buys were
+// unaffected because live-order-executor.mjs does NOT trust its environment here: its
+// liveTradingConfig() reads the account configuration published in the live state. Two
+// paths signing for one wallet, only one of which knew which wallet it was.
+//
+// So this worker reads the same published configuration, and the environment becomes what
+// it should always have been -- the fallback for before the first live state arrives.
+let accountTrading = {
+  funderAddress: FUNDER_ADDRESS,
+  signatureType: SIGNATURE_TYPE,
+  source: "environment",
+};
+
+// Mirrors liveTradingConfig() in live-order-executor.mjs, deliberately: the two must
+// resolve the same account from the same fields, or they can disagree again.
+export function adoptAccountTradingConfig(liveState, state = null) {
+  const funderAddress = String(
+    liveState?.account?.trading?.funderAddress
+    || liveState?.accountDiscovery?.selectedFunderAddress
+    || "",
+  ).trim();
+  const signatureType = Number(
+    liveState?.account?.trading?.signatureType
+    ?? liveState?.accountDiscovery?.selectedSignatureType,
+  );
+  if (!funderAddress) return accountTrading;
+  const next = {
+    funderAddress,
+    signatureType: Number.isFinite(signatureType) ? signatureType : SIGNATURE_TYPE,
+    source: "live-state",
+  };
+  const changed = next.funderAddress.toLowerCase() !== String(accountTrading.funderAddress || "").toLowerCase()
+    || next.signatureType !== accountTrading.signatureType;
+  accountTrading = next;
+  // Recorded once, when it moves. A worker signing as the wrong wallet produced twelve
+  // hours of identical rejections and nothing anywhere said which address it was using.
+  if (changed && state) {
+    recordEvent(state, {
+      type: "SIGNING_ACCOUNT_ADOPTED",
+      funderAddress: next.funderAddress,
+      signatureType: next.signatureType,
+      previousFunderAddress: FUNDER_ADDRESS || null,
+      previousSignatureType: SIGNATURE_TYPE,
+      note: "the account published in the live state, which is what the executor signs as",
+    });
+  }
+  if (state) state.signingAccount = { ...accountTrading };
+  return accountTrading;
+}
+
+export function signingAccount() {
+  return { ...accountTrading };
+}
+
+// The CLOB says this when the address an order presents as its signer is not the address
+// that owns the API key. It is a configuration fault, never a market condition, so it must
+// not read as one more transient rejection in a list of hundreds.
+export function rejectionIsSignerMismatch(response) {
+  const message = String(response?.errorMsg || response?.error || "").toLowerCase();
+  return message.includes("signer address") && message.includes("api key");
+}
 const SYNC_COMMAND = String(process.env.LIVE_EXIT_POST_FILL_SYNC_COMMAND || "").trim();
 const STOP_LOSS_REVERSAL_STAKE_USDC = 5;
 // How many watched books are read at once. The books are independent reads, so this is
@@ -421,7 +494,9 @@ function watchPlan(position, entry = null) {
 
 async function authenticatedClient() {
   const privateKey = process.env.POLYMARKET_PRIVATE_KEY;
-  if (!privateKey || !FUNDER_ADDRESS) throw new Error("POLYMARKET_PRIVATE_KEY and POLYMARKET_FUNDER_ADDRESS are required for live exits");
+  const funderAddress = accountTrading.funderAddress;
+  const signatureType = accountTrading.signatureType;
+  if (!privateKey || !funderAddress) throw new Error("POLYMARKET_PRIVATE_KEY and POLYMARKET_FUNDER_ADDRESS are required for live exits");
   const [{ ClobClient, Side, OrderType, SignatureTypeV2 }, { createWalletClient, custom }, { privateKeyToAccount }] = await Promise.all([
     import("@polymarket/clob-client-v2"), import("viem"), import("viem/accounts"),
   ]);
@@ -432,8 +507,8 @@ async function authenticatedClient() {
   const signatureTypes = { 0: SignatureTypeV2.EOA, 1: SignatureTypeV2.POLY_PROXY, 2: SignatureTypeV2.GNOSIS_SAFE, 3: SignatureTypeV2.POLY_1271 };
   const client = new ClobClient({
     host: CLOB_HOST, chain: CHAIN_ID, signer, creds,
-    signatureType: signatureTypes[SIGNATURE_TYPE] ?? SignatureTypeV2.POLY_1271,
-    funderAddress: FUNDER_ADDRESS,
+    signatureType: signatureTypes[signatureType] ?? SignatureTypeV2.POLY_1271,
+    funderAddress,
   });
   return { client, Side, OrderType };
 }
@@ -673,6 +748,10 @@ async function checkOnce(context) {
   if (!context.liveState || Date.now() - context.liveStateFetchedAt >= STATE_REFRESH_MS) {
     context.liveState = await fetchJson(`${LIVE_STATE_URL}${LIVE_STATE_URL.includes("?") ? "&" : "?"}exitWorkerAt=${Date.now()}`, "live state");
     context.liveStateFetchedAt = Date.now();
+    // The same state that lists the positions also says which account holds them. Adopting
+    // it here means the worker signs as that account rather than as whatever address its
+    // environment happened to carry.
+    adoptAccountTradingConfig(context.liveState, context.state);
   }
   if (!context.policyState || Date.now() - context.policyStateFetchedAt >= STATE_REFRESH_MS) {
     try {
@@ -812,6 +891,23 @@ async function checkOnce(context) {
       response = { success: false, error: error?.message || String(error) };
     }
     const accepted = exitFilled(response);
+    // A signer mismatch is a configuration fault, not a market condition: it will refuse
+    // every order for every position until the address is corrected, so it is surfaced on
+    // the state itself rather than left to be inferred from hundreds of identical
+    // rejections. It stays non-terminal on purpose -- the next live state can correct the
+    // address, and a stop that has given up is worse than one that keeps trying.
+    if (!accepted && rejectionIsSignerMismatch(response)) {
+      context.state.signingError = {
+        at: now,
+        error: response?.errorMsg || response?.error || null,
+        funderAddress: accountTrading.funderAddress || null,
+        signatureType: accountTrading.signatureType,
+        source: accountTrading.source,
+        note: "every order will be refused until the signing address matches the API key's wallet",
+      };
+    } else if (accepted && context.state.signingError) {
+      delete context.state.signingError;
+    }
     context.state.exits = context.state.exits || {};
     context.state.exits[plan.tokenId] = {
       lastAttemptAt: now,

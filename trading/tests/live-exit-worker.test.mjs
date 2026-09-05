@@ -364,3 +364,83 @@ test("stop latency: every watched book is read in one pass, not in a queue", () 
     assert.deepEqual(await worker([], async () => 1, 4), [], "an empty watch list is not an error");
   })();
 });
+
+// Reported: a live position kept falling with its stop configured, watched and firing.
+// The worker's own state showed the mechanism working -- stop reached, price on the tick
+// grid, gap-sell at the bid -- and every order refused:
+//
+//   400 "the order signer address has to be the address of the API KEY"
+//
+// 106 rejections across 6 tokens, each left terminal:false and retried forever. Measured
+// on the Pi: POLYMARKET_FUNDER_ADDRESS was 0x3252...2293, the hard-coded fallback the
+// workflow writes when the secret is unset, while the account actually being traded is
+// 0xe219...39e2. Under signature type 3 the funder address is what the order presents as
+// its signer, and the API key belongs to the wallet -- so every exit was signed as a
+// different address than the one authorised to place it.
+//
+// Buys were unaffected because the executor does not trust its environment here: it reads
+// the account configuration published in the live state. Two paths signing for one wallet,
+// only one of which knew which wallet it was.
+test("signing: the worker signs as the account the live state publishes, not as its environment", () => {
+  const state = { history: [] };
+  const adopted = worker.adoptAccountTradingConfig({
+    account: { trading: { funderAddress: "0xE219de3B5081b45Dc5fD1d2225c19b1476f139e2", signatureType: 3 } },
+  }, state);
+  assert.equal(adopted.funderAddress, "0xE219de3B5081b45Dc5fD1d2225c19b1476f139e2");
+  assert.equal(adopted.signatureType, 3);
+  assert.equal(adopted.source, "live-state");
+  assert.equal(worker.signingAccount().funderAddress, "0xE219de3B5081b45Dc5fD1d2225c19b1476f139e2",
+    "the adopted account is what the next order is signed with");
+  // Recorded when it moves. Twelve hours of identical rejections said nothing about which
+  // address was being used, which is why the fault was invisible.
+  assert.equal(state.history.filter((event) => event.type === "SIGNING_ACCOUNT_ADOPTED").length, 1);
+  assert.equal(state.signingAccount.funderAddress, "0xE219de3B5081b45Dc5fD1d2225c19b1476f139e2");
+
+  // The discovery block is the executor's own second source, so it is read here too.
+  const discovered = worker.adoptAccountTradingConfig({
+    accountDiscovery: { selectedFunderAddress: "0xabc", selectedSignatureType: 1 },
+  });
+  assert.equal(discovered.funderAddress, "0xabc");
+  assert.equal(discovered.signatureType, 1);
+
+  // A live state that names no account must not blank the address the worker is using.
+  const kept = worker.adoptAccountTradingConfig({});
+  assert.equal(kept.funderAddress, "0xabc", "an empty state leaves the adopted account alone");
+
+  // Adopting the same account again is not a change and must not re-log.
+  const quiet = { history: [] };
+  worker.adoptAccountTradingConfig({ account: { trading: { funderAddress: "0xabc", signatureType: 1 } } }, quiet);
+  assert.equal(quiet.history.length, 0);
+});
+
+test("signing: a signer mismatch is named as a configuration fault, not one more rejection", () => {
+  assert.equal(
+    worker.rejectionIsSignerMismatch({ error: "the order signer address has to be the address of the API KEY" }),
+    true,
+  );
+  assert.equal(
+    worker.rejectionIsSignerMismatch({ errorMsg: "The order signer address has to be the address of the API key" }),
+    true,
+    "the CLOB's casing is not part of the contract",
+  );
+  // Ordinary refusals must not be dressed up as a broken configuration.
+  assert.equal(worker.rejectionIsSignerMismatch({ error: "not enough balance / allowance" }), false);
+  assert.equal(worker.rejectionIsSignerMismatch({ error: "invalid price" }), false);
+  assert.equal(worker.rejectionIsSignerMismatch({}), false);
+
+  const source = readFileSync(new URL("../tools/rpi-live-exit-worker.mjs", import.meta.url), "utf8");
+  // Surfaced on the state, so a worker that cannot place any order at all says so instead
+  // of being inferred from hundreds of identical events.
+  assert.match(source, /context\.state\.signingError = \{/);
+  // And deliberately NOT terminal: the next live state can correct the address, and a stop
+  // that has given up is worse than one that keeps trying.
+  assert.match(source, /It stays non-terminal on purpose/);
+
+  // The client must be built from the adopted account, never from the module's env
+  // constants -- reading those again is the whole defect.
+  const client = functionBody(source, "authenticatedClient");
+  assert.match(client, /const funderAddress = accountTrading\.funderAddress;/);
+  assert.match(client, /const signatureType = accountTrading\.signatureType;/);
+  assert.doesNotMatch(client, /funderAddress: FUNDER_ADDRESS/);
+  assert.doesNotMatch(client, /signatureTypes\[SIGNATURE_TYPE\]/);
+});
