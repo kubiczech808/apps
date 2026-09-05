@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { runBacktest } from '../src/backtest.mjs'
+import { formatBacktest, runBacktest } from '../src/backtest.mjs'
 import { noisyZigzag, zigzag } from './helpers.mjs'
 
 // A long, repeating uptrend at realistic prices: enough hours for the warmup
@@ -123,4 +123,25 @@ test('drawdown is measured against the account, not against the P/L curve', asyn
     report.stats.maxDrawdownPct < 30,
     `max drawdown ${report.stats.maxDrawdownPct.toFixed(1)}% is impossible at 1% risk per trade`
   )
+})
+
+test('a run starved of history says so instead of reporting zero trades as a result', async () => {
+  // The first momentum run returned zero trades across six variants and read
+  // like a verdict. It was not: the engine's trailing window was 100 daily
+  // candles and the strategy needs 140, so every bar was refused for lack of
+  // history. A measurement that measured nothing has to say so.
+  const report = await runBacktest({
+    hourly: tradeableSeries(),
+    warmupHours: 400,
+    // Far too short for the 14-period ATR and the structure the strategy reads.
+    windowHours: 20,
+  })
+
+  assert.equal(report.starved, true)
+  assert.match(formatBacktest(report), /INVALID: most bars were refused for lack of history/)
+})
+
+test('a properly sized run is not flagged as starved', async () => {
+  const report = await runBacktest({ hourly: tradeableSeries(), warmupHours: 400 })
+  assert.equal(report.starved, false)
 })

@@ -170,6 +170,16 @@ export const runBacktest = async ({
     lastLossAt = justClosed.reduce((latest, trade) => Math.max(latest, trade.closedAt ?? 0), lastLossAt ?? 0) || null
   }
 
+  // A run whose bars were mostly refused for lack of history measured nothing.
+  // Zero trades then means "the window was too small", not "the strategy does
+  // not trade" — and the first momentum run reported exactly that as if it were
+  // a result. Detected here so it cannot be read as one.
+  const totalRejections = [...rejections.values()].reduce((sum, count) => sum + count, 0)
+  const starvedRejections = [...rejections.entries()]
+    .filter(([reason]) => /not enough|are not defined yet/i.test(reason))
+    .reduce((sum, [, count]) => sum + count, 0)
+  const starved = totalRejections > 0 && starvedRejections / totalRejections > 0.5
+
   const closed = store.trades.filter((trade) => trade.status === 'closed')
   const stats = computeStats(closed, { startEquitySats: startBalance })
   const finalEquity = equityCurve.at(-1)?.equitySats ?? startBalance
@@ -190,6 +200,7 @@ export const runBacktest = async ({
     trades: closed,
     openAtEnd: store.trades.filter((trade) => trade.status === 'running').length,
     management,
+    starved,
     fees: {
       tradingSats: closed.reduce(
         (sum, trade) => sum + (trade.openingFeeSats ?? 0) + (trade.closingFeeSats ?? 0),
@@ -238,6 +249,14 @@ export const formatBacktest = (report) => {
   }, {})
 
   lines.push('════ RESULT ════')
+  if (report.starved) {
+    lines.push(
+      'INVALID: most bars were refused for lack of history. The window is too short for this'
+    )
+    lines.push(
+      'strategy, so this measured nothing — raise windowHours/warmupHours and run it again.'
+    )
+  }
   lines.push(`Window        ${report.from} → ${report.to} (${report.hours} hours, ${(report.hours / 24).toFixed(0)} days)`)
   lines.push(`Start / end   ${sats(report.startBalanceSats)} → ${sats(report.finalEquitySats)}  (${pct(report.returnPct)})`)
   lines.push(`Trades        ${report.stats.trades} (${report.stats.wins}W / ${report.stats.losses}L), win rate ${pct(report.stats.winRate)}`)

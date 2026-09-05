@@ -15,10 +15,27 @@ import { formatBacktest, runBacktest } from '../src/backtest.mjs'
 import * as priceAction from '../src/strategy.mjs'
 import * as momentum from '../src/strategy-momentum.mjs'
 
+// A strategy declares how much history it needs to see, because the engine
+// slices a trailing window at every step and a window too short for the
+// strategy silently produces no signals at all. Momentum reads a 100-day
+// average off DAILY candles; the default 2400-hour window is 100 daily candles
+// in total, which is fewer than it requires, so it rejected every single bar
+// with "not enough daily candles" and reported zero trades as if that were a
+// result.
 const STRATEGIES = {
-  'price-action': { module: priceAction, timeframes: { htfHours: 4, ltfHours: 1 } },
+  'price-action': {
+    module: priceAction,
+    timeframes: { htfHours: 4, ltfHours: 1 },
+    windowHours: 2400,
+    warmupHours: 400,
+  },
   // Signals off the daily chart, entry priced at the latest hourly close.
-  momentum: { module: momentum, timeframes: { htfHours: 24, ltfHours: 1 } },
+  momentum: {
+    module: momentum,
+    timeframes: { htfHours: 24, ltfHours: 1 },
+    windowHours: 6000, // 250 daily candles
+    warmupHours: 3600, // 150 days before the first decision
+  },
 }
 
 
@@ -94,7 +111,8 @@ if (args.has('min-rr')) overrides.strategy.minRR = Number(args.get('min-rr'))
 if (args.has('max-trades')) overrides.maxTradesPerDay = Number(args.get('max-trades'))
 if (args.has('capital')) overrides.startingCapitalUsd = Number(args.get('capital'))
 
-const warmupHours = Number(args.get('warmup') ?? 400)
+const warmupHours = Number(args.get('warmup') ?? chosen.warmupHours)
+const windowHours = chosen.windowHours
 
 // `--compare` is a DIAGNOSIS, not a menu.
 //
@@ -142,6 +160,7 @@ if (args.has('compare')) {
       hourly: candles,
       settings: merge(variant),
       warmupHours,
+      windowHours,
       fundingSettlements,
       strategy: chosen.module,
     })
@@ -186,6 +205,7 @@ const report = await runBacktest({
   hourly: candles,
   settings: overrides,
   warmupHours,
+  windowHours,
   fundingSettlements,
   strategy: chosen.module,
 })
