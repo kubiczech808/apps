@@ -346,8 +346,8 @@ const els = {
   riskAllocationNote: document.querySelector("[data-risk-allocation-note]"),
   maxResolutionHours: document.querySelector("[data-max-resolution-hours]"),
   maxResolutionHoursLabel: document.querySelector("[data-max-resolution-hours-label]"),
-  requireEventStarted: document.querySelector("[data-require-event-started]"),
-  requireEventStartedLabel: document.querySelector("[data-require-event-started-label]"),
+  liveEventMode: document.querySelector("[data-live-event-mode]"),
+  liveEventModeLabel: document.querySelector("[data-live-event-mode-label]"),
   selectionOrder: document.querySelector("[data-selection-order]"),
   selectionOrderLabel: document.querySelector("[data-selection-order-label]"),
   minLiquidity: document.querySelector("[data-min-liquidity]"),
@@ -1351,7 +1351,7 @@ function selectionOrderLabel(value, config = {}) {
 
 // Blank and non-positive both mean "not set". Zero is not a way to ask for events already
 // under way -- a horizon of zero hours is a market that has already resolved. That is its
-// own switch, requireEventStarted.
+// own setting, liveEventMode.
 function normalizeOptionalHours(value) {
   if (value === "" || value == null) return null;
   const numeric = Number(value);
@@ -1371,6 +1371,57 @@ function configMaxResolutionHours(config = {}, fallback = DEFAULT_MAX_RESOLUTION
 
 function resolutionHoursForMode(mode = state.mode) {
   return configMaxResolutionHours(portfolioConfigForMode(mode));
+}
+
+// What a portfolio does about fixtures that have already kicked off. Three states, because
+// two different things were asked for and they are genuinely different rules: ignore (the
+// default and the old behaviour -- a running fixture is judged by the horizon like anything
+// else), include (a running fixture is admitted whatever the horizon says, since the
+// horizon caps capital turnover and a match in play is the shortest turnover there is), and
+// only (nothing but running fixtures).
+const LIVE_EVENT_MODES = ["ignore", "include", "only"];
+const LIVE_EVENT_MODE_LABELS = {
+  ignore: "Judge by horizon",
+  include: "Include regardless of horizon",
+  only: "Only events under way",
+};
+
+function normalizeLiveEventMode(value) {
+  const mode = String(value ?? "").trim().toLowerCase();
+  return LIVE_EVENT_MODES.includes(mode) ? mode : null;
+}
+
+// Portfolios saved while this was a single checkbox carry requireEventStarted, which meant
+// exactly the "only" state.
+function configLiveEventMode(config = {}) {
+  const mode = normalizeLiveEventMode(config?.liveEventMode);
+  if (mode != null) return mode;
+  return config?.requireEventStarted === true ? "only" : "ignore";
+}
+
+function liveEventModeLabel(value) {
+  return LIVE_EVENT_MODE_LABELS[normalizeLiveEventMode(value) || "ignore"];
+}
+
+// One row for both questions the filter asks, because they are read together: how far out
+// a market may resolve, and what that means for a fixture already under way.
+function resolutionRuleValue(maxResolutionHours, config = {}) {
+  const ceiling = `Max ${formatHorizonHours(maxResolutionHours)}`;
+  const mode = configLiveEventMode(config);
+  if (mode === "only") return `${ceiling}, only events under way`;
+  if (mode === "include") return `${ceiling}, events under way always included`;
+  return ceiling;
+}
+
+// Hours until the market's own RESOLUTION date, not its endDate. For a sports fixture those
+// are different dates -- the bot substitutes the kickoff into endDate -- so the stored day
+// count measures time to the start of the match rather than to its settlement, and one
+// already under way reads as a negative number.
+function candidateHoursToResolution(item = {}) {
+  const resolution = Date.parse(item?.resolutionEndDate || "");
+  if (Number.isFinite(resolution)) return (resolution - Date.now()) / 3600000;
+  const days = evaluationDaysLeft(item);
+  return Number.isFinite(days) ? days * HOURS_PER_DAY : NaN;
 }
 
 // Hours read badly once the horizon is long -- "168 h" is a week nobody counts in hours --
@@ -5330,7 +5381,7 @@ function syncPortfolioParameterControls(configOverride = null, options = {}) {
   const mode = options.mode || state.mode;
   const config = configOverride || portfolioConfigForMode(mode);
   const maxHours = configMaxResolutionHours(config);
-  const requireEventStarted = config.requireEventStarted === true;
+  const liveEventMode = configLiveEventMode(config);
   const liquidity = normalizeOptionalMoney(config.minLiquidityUsdc);
   const minNetYield = normalizeMinimumNetYield(config.minNetYield);
   const order = normalizeSelectionOrder(config.selectionOrder);
@@ -5384,8 +5435,8 @@ function syncPortfolioParameterControls(configOverride = null, options = {}) {
   // The number typed is hours; the label reads it back in whichever unit is legible, so a
   // 168 stays recognisable as the week it is.
   if (els.maxResolutionHoursLabel) els.maxResolutionHoursLabel.textContent = formatHorizonHours(maxHours);
-  if (els.requireEventStarted) els.requireEventStarted.checked = requireEventStarted;
-  if (els.requireEventStartedLabel) els.requireEventStartedLabel.textContent = requireEventStarted ? "On" : "Off";
+  if (els.liveEventMode) els.liveEventMode.value = liveEventMode;
+  if (els.liveEventModeLabel) els.liveEventModeLabel.textContent = liveEventModeLabel(liveEventMode);
   if (els.selectionOrder) els.selectionOrder.value = order;
   if (els.selectionOrderLabel) els.selectionOrderLabel.textContent = selectionOrderLabel(order, config);
   if (els.minLiquidity) els.minLiquidity.value = liquidity == null ? "" : String(liquidity);
@@ -6134,7 +6185,12 @@ function parameterDraftFromControls(baseDraft = {}) {
       draft.maxResolutionDays = Math.max(1, Math.min(365, Math.round(value / HOURS_PER_DAY)));
     }
   }
-  if (els.requireEventStarted) draft.requireEventStarted = Boolean(els.requireEventStarted.checked);
+  if (els.liveEventMode) {
+    const mode = normalizeLiveEventMode(els.liveEventMode.value) || "ignore";
+    draft.liveEventMode = mode;
+    // Sent alongside for a reader that has not migrated past the single checkbox.
+    draft.requireEventStarted = mode === "only";
+  }
   if (els.selectionOrder) draft.selectionOrder = normalizeSelectionOrder(els.selectionOrder.value);
   if (els.minLiquidity) draft.minLiquidityUsdc = normalizeOptionalMoney(els.minLiquidity.value);
   if (hasValue(els.minNetYield)) draft.minNetYield = normalizeMinimumNetYield(numberValue(els.minNetYield) / 100);
@@ -8520,9 +8576,7 @@ function portfolioRuleRows(portfolio = {}) {
   const priority = config.selectionOrder === "highest_reward_risk_first"
     ? "Highest reward/risk, then net yield"
     : "Highest net yield, then net gain";
-  const resolution = config.requireEventStarted === true
-    ? `Max ${formatHorizonHours(maxResolutionHours)}, only events under way`
-    : `Max ${formatHorizonHours(maxResolutionHours)}`;
+  const resolution = resolutionRuleValue(maxResolutionHours, config);
   const rows = [
     ["Probability threshold", probabilityRangeRuleValue(config, threshold)],
     ["Stake sizing", stakeSizingRuleValue(mode, portfolio)],
@@ -8578,9 +8632,7 @@ function livePortfolioRuleRows() {
     ...(isLivePortfolioMode(mode) ? [["Initial capital", liveInitialCapitalForMode(mode, config) == null ? "not set" : money(liveInitialCapitalForMode(mode, config))]] : []),
     ["Probability threshold", probabilityRangeRuleValue(config, currentEligibilityThreshold())],
     ["Stake sizing", stakeSizingRuleValue(mode, state.liveState?.portfolio)],
-    ["Resolution filter", config.requireEventStarted === true
-      ? `Max ${formatHorizonHours(maxResolutionHours)}, only events under way`
-      : `Max ${formatHorizonHours(maxResolutionHours)}`],
+    ["Resolution filter", resolutionRuleValue(maxResolutionHours, config)],
     ["Trade priority", priority],
     ["Market type", portfolioMarketTypeLabel(config.marketType)],
     ...(config.excludeOverUnderMarkets === true ? [["Over/Under markets", "Excluded"]] : []),
@@ -8975,7 +9027,9 @@ function portfolioCandidateFilterReasons(item, mode = state.mode) {
   const selectedProbability = portfolioProbability(item, config);
   const maxHours = resolutionHoursForMode(normalizedMode);
   const days = evaluationDaysLeft(item);
-  const hours = Number.isFinite(days) ? days * HOURS_PER_DAY : NaN;
+  const hours = candidateHoursToResolution(item);
+  const liveEventMode = configLiveEventMode(config);
+  const eventIsRunning = item?.eventStarted === true;
   const liquidity = rowVolumeUsdc(item);
   const minLiquidity = normalizeOptionalMoney(config.minLiquidityUsdc);
   const minNetYield = normalizeMinimumNetYield(config.minNetYield);
@@ -9044,10 +9098,11 @@ function portfolioCandidateFilterReasons(item, mode = state.mode) {
     if (Number.isFinite(minLiquidity) && liquidity < minLiquidity) {
       reasons.push(`volume ${money(liquidity)} below ${money(minLiquidity)}`);
     }
-    if (Number.isFinite(hours) && Number.isFinite(maxHours) && hours > maxHours) {
+    if (!(liveEventMode === "include" && eventIsRunning)
+      && Number.isFinite(hours) && Number.isFinite(maxHours) && hours > maxHours) {
       reasons.push(`resolves in ${compactDays(days)}, beyond ${formatHorizonHours(maxHours)}`);
     }
-    if (config.requireEventStarted === true && item?.eventStarted !== true) {
+    if (liveEventMode === "only" && !eventIsRunning) {
       reasons.push(item?.eventStarted === false ? "event has not started yet" : "no kickoff time to confirm the event is under way");
     }
     return reasons;
@@ -9075,14 +9130,14 @@ function portfolioCandidateFilterReasons(item, mode = state.mode) {
       : "";
     reasons.push(`latest live revalidation ${String(executionCheck.status || "REJECTED").toLowerCase()}${detail}`);
   }
-  if (!Number.isFinite(days)) {
+  if (!Number.isFinite(hours)) {
     reasons.push("missing resolution date");
-  } else if (hours > maxHours) {
+  } else if (!(liveEventMode === "include" && eventIsRunning) && hours > maxHours) {
     reasons.push(`resolution ${formatHorizonHours(hours)} exceeds max ${formatHorizonHours(maxHours)}`);
   }
   // The horizon and "has it started" are different questions, so they are refused
   // separately -- a row can be well inside the window and still not be under way.
-  if (config.requireEventStarted === true && item?.eventStarted !== true) {
+  if (liveEventMode === "only" && !eventIsRunning) {
     reasons.push(item?.eventStarted === false ? "event has not started yet" : "no kickoff time to confirm the event is under way");
   }
   if (minLiquidity != null && liquidity < minLiquidity) {
@@ -9584,6 +9639,7 @@ const PORTFOLIO_CONFIG_HISTORY_LABELS = {
   maxResolutionDays: "Max resolution days",
   maxResolutionHours: "Max resolution hours",
   requireEventStarted: "Only events under way",
+  liveEventMode: "Events under way",
   selectionOrder: "Trade priority",
   marketType: "Market type",
   excludeOverUnderMarkets: "Exclude Over/Under (O/U)",
@@ -14284,10 +14340,13 @@ els.maxResolutionHours?.addEventListener("input", () => {
   rerenderCurrentDashboard();
 });
 
-els.requireEventStarted?.addEventListener("change", () => {
-  const value = Boolean(els.requireEventStarted.checked);
-  if (updateParameterDraft({ requireEventStarted: value })) return;
-  updatePortfolioConfigForMode(state.mode, { requireEventStarted: value });
+els.liveEventMode?.addEventListener("change", () => {
+  const value = normalizeLiveEventMode(els.liveEventMode.value) || "ignore";
+  // requireEventStarted travels alongside for a reader that has not migrated past the
+  // single checkbox. liveEventMode is the setting.
+  const updates = { liveEventMode: value, requireEventStarted: value === "only" };
+  if (updateParameterDraft(updates)) return;
+  updatePortfolioConfigForMode(state.mode, updates);
   savePortfolioConfigSoon();
   syncPortfolioParameterControls();
   rerenderCurrentDashboard();

@@ -1034,7 +1034,7 @@ function empty_configured_paper_portfolio(string $id, array $config): array
         'maxProbability' => $maxProbability,
         'maxResolutionHours' => $maxResolutionHours,
         'maxResolutionDays' => $maxResolutionDays,
-        'requireEventStarted' => ($config['requireEventStarted'] ?? false) === true,
+        'liveEventMode' => config_live_event_mode($config),
         'minLiquidityUsdc' => $minLiquidityUsdc,
         'minNetYield' => is_numeric($config['minNetYield'] ?? null) ? (float) $config['minNetYield'] : 0.0,
         'executionTrigger' => (string) ($config['executionTrigger'] ?? 'cron'),
@@ -1053,7 +1053,7 @@ function empty_configured_paper_portfolio(string $id, array $config): array
         'stakeUsdc' => $stakeUsdc,
         'maxResolutionHours' => $maxResolutionHours,
         'maxResolutionDays' => $maxResolutionDays,
-        'requireEventStarted' => $portfolio['requireEventStarted'],
+        'liveEventMode' => $portfolio['liveEventMode'],
         'minLiquidityUsdc' => $minLiquidityUsdc,
         'minNetYield' => $portfolio['minNetYield'],
         'executionTrigger' => $portfolio['executionTrigger'],
@@ -1821,6 +1821,21 @@ function execution_scope_observation_tags(array $item): array
     return normalize_market_tag_list($values);
 }
 
+// Hours until the market's own RESOLUTION date, not its endDate. For a sports fixture those
+// are different dates -- the bot substitutes the kickoff into endDate -- so daysToResolution
+// measures time to the start of the match rather than to its settlement. A fixture already
+// under way read as a negative number and slipped past every ceiling there is. Computed from
+// the date rather than the stored day count, which is frozen at scan time and goes stale.
+function observation_hours_to_resolution(array $item): ?float
+{
+    $resolution = strtotime((string) ($item['resolutionEndDate'] ?? ''));
+    if ($resolution !== false) {
+        return ($resolution - time()) / 3600.0;
+    }
+    $days = $item['daysToResolution'] ?? null;
+    return is_numeric($days) ? (float) $days * 24.0 : null;
+}
+
 function execution_scope_matches_observation(array $item, array $config): bool
 {
     if (!is_active_scraped_market_observation($item)) {
@@ -1832,14 +1847,20 @@ function execution_scope_matches_observation(array $item, array $config): bool
     if ($probability === null || $probability < $minimum || ($maximum !== null && $probability > $maximum)) {
         return false;
     }
-    $days = is_numeric($item['daysToResolution'] ?? null) ? (float) $item['daysToResolution'] : null;
+    $hours = observation_hours_to_resolution($item);
     $maxHours = config_max_resolution_hours(is_array($config) ? $config : []);
-    if ($days !== null && $maxHours !== null && $days * 24.0 > $maxHours) {
+    $liveEventMode = config_live_event_mode(is_array($config) ? $config : []);
+    $running = ($item['eventStarted'] ?? null) === true;
+    // A running fixture under "include" is admitted whatever the ceiling says: the ceiling
+    // caps how long capital is committed, and a match in play is the shortest commitment
+    // there is.
+    if (!($liveEventMode === 'include' && $running)
+        && $hours !== null && $maxHours !== null && $hours > $maxHours) {
         return false;
     }
     // A separate question from the horizon: has the event actually started. A row that
     // cannot answer is excluded rather than assumed to be under way.
-    if (($config['requireEventStarted'] ?? false) === true && ($item['eventStarted'] ?? null) !== true) {
+    if ($liveEventMode === 'only' && !$running) {
         return false;
     }
     $minimumLiquidity = normalize_optional_money_value($config['minLiquidityUsdc'] ?? null);
@@ -2751,7 +2772,7 @@ function portfolio_config_history_fields(): array
 {
     return [
         'displayName', 'initialUsdc', 'minProbability', 'maxProbability', 'stakeUsdc',
-        'maxResolutionDays', 'maxResolutionHours', 'requireEventStarted',
+        'maxResolutionDays', 'maxResolutionHours', 'liveEventMode', 'requireEventStarted',
         'selectionOrder', 'marketType', 'excludeOverUnderMarkets', 'probabilitySource',
         'minLiquidityUsdc', 'minNetYield', 'executionTrigger', 'executionCronMinutes',
         'useLimitOrders', 'autoRotatePositions', 'stopLossRiskMultiplier', 'reverseOnStopLoss',
@@ -3034,7 +3055,7 @@ const MAX_RESOLUTION_HOURS_CEILING = 365.0 * 24.0;
 // Blank and non-positive both mean "not set" and return null; each caller then decides
 // what unset means for it -- no ceiling when serving, the saved default when storing.
 // Zero is not a way to ask for events already under way: a horizon of zero hours is a
-// market that has already resolved. That is its own flag, requireEventStarted.
+// market that has already resolved. That is its own setting, liveEventMode.
 function normalize_optional_hours_value(mixed $value): ?float
 {
     if ($value === null || $value === '' || !is_numeric($value)) {
@@ -3045,6 +3066,29 @@ function normalize_optional_hours_value(mixed $value): ?float
         return null;
     }
     return max(1.0, min(MAX_RESOLUTION_HOURS_CEILING, round($hours, 2)));
+}
+
+// What a portfolio does about events that have already kicked off. Three states, because
+// two different things were asked for and they are genuinely different rules: ignore (the
+// default, and what every portfolio did before -- a running fixture is judged by the
+// horizon like everything else), include (a running fixture is admitted whatever the
+// horizon says, since the horizon caps capital turnover and a match in play is the
+// shortest turnover there is), and only (nothing but running fixtures).
+function normalize_live_event_mode_value(mixed $value): ?string
+{
+    $mode = strtolower(trim((string) $value));
+    return in_array($mode, ['ignore', 'include', 'only'], true) ? $mode : null;
+}
+
+// Portfolios saved while this was a single checkbox carry requireEventStarted, which meant
+// exactly the "only" state.
+function config_live_event_mode(array $row): string
+{
+    $mode = normalize_live_event_mode_value($row['liveEventMode'] ?? null);
+    if ($mode !== null) {
+        return $mode;
+    }
+    return ($row['requireEventStarted'] ?? false) === true ? 'only' : 'ignore';
 }
 
 // A row's horizon whatever unit it was stored in. Portfolios saved before the switch carry
@@ -3261,6 +3305,13 @@ function normalize_strategy_config(array $input, array $defaults): array
         $input,
         config_max_resolution_hours($defaults, DEFAULT_MAX_RESOLUTION_HOURS)
     );
+    // The mode if the client sent one, else its checkbox reading, else whatever the
+    // portfolio already had -- so an older client posting only the boolean cannot silently
+    // reset a portfolio set to "include".
+    $liveEventMode = normalize_live_event_mode_value($input['liveEventMode'] ?? null)
+        ?? (array_key_exists('requireEventStarted', $input)
+            ? (($input['requireEventStarted'] === true) ? 'only' : 'ignore')
+            : config_live_event_mode($defaults));
     return [
         'displayName' => normalize_portfolio_display_name(
             $input['displayName'] ?? $defaults['displayName'],
@@ -3280,7 +3331,10 @@ function normalize_strategy_config(array $input, array $defaults): array
         // has not migrated yet still sees a sane number instead of nothing.
         'maxResolutionHours' => $maxResolutionHours,
         'maxResolutionDays' => (int) max(1, min(365, (int) round($maxResolutionHours / 24.0))),
-        'requireEventStarted' => ($input['requireEventStarted'] ?? $defaults['requireEventStarted'] ?? false) === true,
+        'liveEventMode' => $liveEventMode,
+        // Derived and kept only while readers that predate the three states are still in
+        // circulation. liveEventMode is the stored setting.
+        'requireEventStarted' => $liveEventMode === 'only',
         'selectionOrder' => normalize_selection_order_value($input['selectionOrder'] ?? $defaults['selectionOrder']),
         'minLiquidityUsdc' => normalize_optional_money_value($input['minLiquidityUsdc'] ?? $defaults['minLiquidityUsdc']),
         'minNetYield' => normalize_net_yield_value($input['minNetYield'] ?? null, (float) $defaults['minNetYield']),

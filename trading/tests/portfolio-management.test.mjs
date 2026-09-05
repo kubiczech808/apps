@@ -410,16 +410,37 @@ test("resolution horizon: api.php stores hours, and a portfolio saved in days ke
   const round = normalizeConfig({ paper: { inPlay: saved.paper.inPlay } });
   assert.equal(round.paper.inPlay.maxResolutionHours, 6);
 
-  // And the in-play switch is stored, and defaults off so no existing portfolio starts
-  // refusing markets it used to trade.
+  // And the in-play setting is stored as one of three states, defaulting to "ignore" so no
+  // existing portfolio starts behaving differently.
   const inPlay = normalizeConfig({
     paper: {
-      running: { displayName: "Running", requireEventStarted: true },
+      running: { displayName: "Running", liveEventMode: "only" },
+      wider: { displayName: "Wider", liveEventMode: "include" },
       any: { displayName: "Any", maxResolutionHours: 6 },
+      // A client that has not migrated past the single checkbox.
+      legacyOn: { displayName: "Legacy on", requireEventStarted: true },
+      legacyOff: { displayName: "Legacy off", requireEventStarted: false },
+      nonsense: { displayName: "Nonsense", liveEventMode: "sideways" },
     },
   });
+  assert.equal(inPlay.paper.running.liveEventMode, "only");
+  assert.equal(inPlay.paper.wider.liveEventMode, "include");
+  assert.equal(inPlay.paper.any.liveEventMode, "ignore");
+  assert.equal(inPlay.paper.legacyOn.liveEventMode, "only", "the old checkbox meant exactly this state");
+  assert.equal(inPlay.paper.legacyOff.liveEventMode, "ignore");
+  assert.equal(inPlay.paper.nonsense.liveEventMode, "ignore", "an unknown mode is not a mode");
+
+  // The boolean is still written, derived, for a reader that has not migrated -- and it
+  // must agree with the mode rather than drift from it.
   assert.equal(inPlay.paper.running.requireEventStarted, true);
+  assert.equal(inPlay.paper.wider.requireEventStarted, false,
+    "include is not the same as only, and the compatibility boolean cannot express it");
   assert.equal(inPlay.paper.any.requireEventStarted, false);
+
+  // Re-saving must not drift: "include" has to survive a round trip, including the one
+  // where the derived boolean says false.
+  const modeRoundTrip = normalizeConfig({ paper: { wider: inPlay.paper.wider } });
+  assert.equal(modeRoundTrip.paper.wider.liveEventMode, "include");
 });
 
 test("created portfolios: an id that could not be a state key or mode is refused", () => {
@@ -502,6 +523,11 @@ test("created portfolios: the bot builds strategies from the config the workflow
     // was saved with, has to come along or the strategy has no ceiling at all.
     ${extractFunction(BOT, "normalizeMaxResolutionHours")}
     ${extractFunction(BOT, "configMaxResolutionHours")}
+    // And the three-state setting for fixtures already under way, which a created
+    // portfolio carries like any other rule.
+    ${/const LIVE_EVENT_MODES = new Set\(\[[^\]]*\]\);/.exec(BOT)[0]}
+    ${extractFunction(BOT, "normalizeLiveEventMode")}
+    ${extractFunction(BOT, "configLiveEventMode")}
     ${extractFunction(BOT, "customPaperStrategies")}
     return customPaperStrategies;
   `)(
@@ -563,9 +589,10 @@ test("created portfolios: the bot builds strategies from the config the workflow
   }));
   assert.equal(shortHorizon.inPlay.maxResolutionHours, 6);
   assert.equal(shortHorizon.inPlay.maxResolutionDays, 0.25);
-  assert.equal(shortHorizon.inPlay.requireEventStarted, true);
-  assert.equal(legacyStrategies.oldConfig.requireEventStarted, false,
-    "a portfolio that never set the switch must not start refusing markets");
+  assert.equal(shortHorizon.inPlay.liveEventMode, "only",
+    "a portfolio saved while this was a checkbox meant exactly the \"only\" state");
+  assert.equal(legacyStrategies.oldConfig.liveEventMode, "ignore",
+    "a portfolio that never set it must not start refusing markets");
   // Malformed input must not take the shipped portfolios down with it.
   assert.deepEqual(build("{not json"), {});
   assert.deepEqual(build(""), {});
@@ -1392,15 +1419,22 @@ test("portfolio rules: the resolution ceiling is shown on both the paper and liv
   const paper = extractFunction(APP, "portfolioRuleRows");
   assert.match(paper, /const maxResolutionHours = resolutionHoursForMode\(mode\);/);
   assert.match(paper, /\["Resolution filter", resolution\],/);
+  assert.match(paper, /const resolution = resolutionRuleValue\(maxResolutionHours, config\);/);
   // The ceiling is stored in hours, so a 6-hour one has to reach the card as six hours.
   // Rendering it back through whole days would round it to "1 d" -- the exact loss of
-  // precision the unit switch was made to end.
-  assert.match(paper, /formatHorizonHours\(maxResolutionHours\)/);
+  // precision the unit switch was made to end. And the card has to say what the portfolio
+  // does about fixtures already under way, since that changes what the ceiling means.
+  const rule = new Function("formatHorizonHours", "configLiveEventMode", `
+    ${extractFunction(APP, "resolutionRuleValue")}
+    return resolutionRuleValue;
+  `)((hours) => `${hours} h`, (config) => config?.liveEventMode || "ignore");
+  assert.equal(rule(6, {}), "Max 6 h");
+  assert.equal(rule(6, { liveEventMode: "include" }), "Max 6 h, events under way always included");
+  assert.equal(rule(6, { liveEventMode: "only" }), "Max 6 h, only events under way");
 
   const live = extractFunction(APP, "livePortfolioRuleRows");
   assert.match(live, /const maxResolutionHours = resolutionHoursForMode\(mode\);/);
-  assert.match(live, /\["Resolution filter", config\.requireEventStarted === true/);
-  assert.match(live, /formatHorizonHours\(maxResolutionHours\)/);
+  assert.match(live, /\["Resolution filter", resolutionRuleValue\(maxResolutionHours, config\)\]/);
 });
 
 // The read-only summary row above states the current value; this is the form that
@@ -1422,21 +1456,36 @@ test("portfolio parameters form: the resolution ceiling has an editable input, n
 // market that has ALREADY resolved, not one that is under way. Wanting only running
 // fixtures is a different question, so it gets its own switch rather than overloading
 // zero -- and that switch has to be a control the user can actually reach.
-test("portfolio parameters form: 'only events under way' is its own switch, not a horizon of zero", () => {
-  assert.match(HTML, /<span>Only events under way<\/span>\s*\n\s*<input type="checkbox" data-require-event-started>/,
-    "the parameter form must carry the in-play switch as its own control");
-  assert.match(APP, /requireEventStarted: document\.querySelector\("\[data-require-event-started\]"\)/);
-  assert.match(APP, /els\.requireEventStarted\?\.addEventListener\("change", \(\) => \{/);
-  assert.match(APP, /updatePortfolioConfigForMode\(state\.mode, \{ requireEventStarted: value \}\);/);
+test("portfolio parameters form: events under way are their own setting, not a horizon of zero", () => {
+  // Three states, not a checkbox: judging a running fixture by the ceiling, admitting it
+  // regardless, and taking nothing else are three different rules.
+  assert.match(HTML, /<span>Events under way<\/span>\s*\n\s*<select data-live-event-mode>/,
+    "the parameter form must carry the in-play setting as its own control");
+  for (const mode of ["ignore", "include", "only"]) {
+    assert.match(HTML, new RegExp(`<option value="${mode}">`), `${mode} must be selectable`);
+  }
+  assert.match(APP, /liveEventMode: document\.querySelector\("\[data-live-event-mode\]"\)/);
+  assert.match(APP, /els\.liveEventMode\?\.addEventListener\("change", \(\) => \{/);
+  assert.match(APP, /const updates = \{ liveEventMode: value, requireEventStarted: value === "only" \};/,
+    "the older boolean travels alongside for a reader that has not migrated");
 
   // Zero must not be a back door into the same behavior: it means "not set" everywhere.
   const normalize = extractFunction(APP, "normalizeOptionalHours");
   assert.match(normalize, /numeric <= 0\) return null;/);
 
-  // And every runtime has to refuse an un-started row separately from an over-horizon
-  // one, or the switch is a label with nothing behind it.
-  assert.match(BOT, /strategy\.requireEventStarted === true && item\?\.eventStarted !== true/);
-  assert.match(API, /\(\$config\['requireEventStarted'\] \?\? false\) === true && \(\$item\['eventStarted'\] \?\? null\) !== true/);
+  // Every runtime has to refuse an un-started row separately from an over-horizon one, or
+  // the setting is a label with nothing behind it -- and "include" has to let a running
+  // fixture past the ceiling, which is the state this was reopened for.
+  assert.match(BOT, /liveEventMode === "only" && !eventIsRunning/);
+  assert.match(BOT, /!\(liveEventMode === "include" && eventIsRunning\) && hours > maxResolutionHours/);
+  assert.match(API, /\$liveEventMode === 'only' && !\$running/);
+  assert.match(API, /!\(\$liveEventMode === 'include' && \$running\)/);
+
+  // A portfolio saved while this was a checkbox meant exactly the "only" state, in every
+  // runtime that has to read it back.
+  assert.match(APP, /return config\?\.requireEventStarted === true \? "only" : "ignore";/);
+  assert.match(BOT, /return row\?\.requireEventStarted === true \? "only" : "ignore";/);
+  assert.match(API, /return \(\$row\['requireEventStarted'\] \?\? false\) === true \? 'only' : 'ignore';/);
 });
 
 test("run log history: the workflow archives every portfolio's new runs, and the bot writes them", () => {
@@ -2855,16 +2904,22 @@ test("execution scope: custom live portfolios resolve their own saved filter", (
 test("candidate reasons: the general branch still caps a portfolio's resolution ceiling", () => {
   const reasons = extractFunction(APP, "portfolioCandidateFilterReasons");
   assert.match(reasons, /const maxHours = resolutionHoursForMode\(normalizedMode\);/);
-  assert.match(reasons, /const days = evaluationDaysLeft\(item\);/);
-  assert.match(reasons, /const hours = Number\.isFinite\(days\) \? days \* HOURS_PER_DAY : NaN;/);
-  assert.match(reasons, /if \(!Number\.isFinite\(days\)\) \{\s*\n\s*reasons\.push\("missing resolution date"\);\s*\n\s*\} else if \(hours > maxHours\) \{\s*\n\s*reasons\.push\(`resolution \$\{formatHorizonHours\(hours\)\} exceeds max \$\{formatHorizonHours\(maxHours\)\}`\);/);
+  // Counted to the market's own resolution date. The catalogue's endDate is the KICKOFF
+  // for a sports fixture, so the stored day count is time to the start of the match.
+  assert.match(reasons, /const hours = candidateHoursToResolution\(item\);/);
+  assert.match(reasons, /if \(!Number\.isFinite\(hours\)\) \{\s*\n\s*reasons\.push\("missing resolution date"\);\s*\n\s*\} else if \(!\(liveEventMode === "include" && eventIsRunning\) && hours > maxHours\) \{/);
   // The horizon and "has it started" are separate questions, so an un-started row is
   // refused on its own reason rather than being folded into the ceiling.
-  assert.match(reasons, /config\.requireEventStarted === true && item\?\.eventStarted !== true/);
+  assert.match(reasons, /liveEventMode === "only" && !eventIsRunning/);
   // And the fixed-entry (5050) branch keeps its own, symmetric checks.
   const branch = /if \(isFixedEntryMode\(mode\)\) \{[\s\S]*?return reasons;\n  \}/.exec(reasons)[0];
-  assert.match(branch, /if \(Number\.isFinite\(hours\) && Number\.isFinite\(maxHours\) && hours > maxHours\) \{/);
-  assert.match(branch, /config\.requireEventStarted === true && item\?\.eventStarted !== true/);
+  assert.match(branch, /!\(liveEventMode === "include" && eventIsRunning\)/);
+  assert.match(branch, /liveEventMode === "only" && !eventIsRunning/);
+
+  // The reader has to be able to see which rule bit: the ceiling and the in-play setting
+  // give different sentences.
+  const hoursHelper = extractFunction(APP, "candidateHoursToResolution");
+  assert.match(hoursHelper, /Date\.parse\(item\?\.resolutionEndDate \|\| ""\)/);
 });
 
 test("scraped opportunities: the spread that keeps a market out of scope is on screen", () => {

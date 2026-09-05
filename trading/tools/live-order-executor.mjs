@@ -90,7 +90,7 @@ const REJECTED_CANDIDATE_LOG_LIMIT = envNumber("LIVE_REJECTED_CANDIDATE_LOG_LIMI
 //
 // Zero is not a horizon and never falls through to a default: a portfolio set to 0 used to
 // trade a 7-day horizon, the opposite of what typing 0 intends. "Only events already under
-// way" is a separate question with its own switch -- see LIVE_REQUIRE_EVENT_STARTED.
+// way" is a separate question with its own setting -- see LIVE_EVENT_MODE.
 const HOURS_PER_DAY = 24;
 const MAX_RESOLUTION_HOURS = (() => {
   const hours = envNumber("LIVE_MAX_RESOLUTION_HOURS", null);
@@ -98,7 +98,17 @@ const MAX_RESOLUTION_HOURS = (() => {
   const days = envNumber("LIVE_MAX_RESOLUTION_DAYS", 7);
   return Number.isFinite(days) && days > 0 ? days * HOURS_PER_DAY : null;
 })();
-const REQUIRE_EVENT_STARTED = String(process.env.LIVE_REQUIRE_EVENT_STARTED || "").toLowerCase() === "true";
+// What this portfolio does about fixtures that have already kicked off. ignore (the default
+// and the old behaviour) judges them by the horizon like everything else; include admits
+// them whatever the horizon says, since the horizon caps how long capital is committed and
+// a match in play is the shortest commitment there is; only takes nothing else. The older
+// boolean is still read so an environment written before the three states keeps meaning
+// what it meant.
+const LIVE_EVENT_MODE = (() => {
+  const mode = String(process.env.LIVE_EVENT_MODE || "").trim().toLowerCase();
+  if (["ignore", "include", "only"].includes(mode)) return mode;
+  return String(process.env.LIVE_REQUIRE_EVENT_STARTED || "").toLowerCase() === "true" ? "only" : "ignore";
+})();
 
 // A horizon a person can read at either end of the scale.
 function formatHorizonHours(hours) {
@@ -1136,14 +1146,23 @@ function prefilterLiveCandidate(item) {
   // capital in a still-perfectly-tradable market. The two are independent, so this stays
   // even though a stale/estimated date is no longer used to decide whether a market has
   // ended.
-  const hours = Number.isFinite(days) ? days * HOURS_PER_DAY : null;
-  if (MAX_RESOLUTION_HOURS != null && hours != null && hours > MAX_RESOLUTION_HOURS) {
+  // Measured against the market's own RESOLUTION date, not the stored day count. For a
+  // sports fixture the catalogue's endDate is the KICKOFF, so daysToResolution is time to
+  // the start of the match: one already under way reads as a negative number and slips
+  // past every ceiling there is. The stored count is also frozen at scan time.
+  const resolutionTime = Date.parse(item?.resolutionEndDate || "");
+  const hours = Number.isFinite(resolutionTime)
+    ? (resolutionTime - Date.now()) / 3600000
+    : (Number.isFinite(days) ? days * HOURS_PER_DAY : null);
+  const running = item?.eventStarted === true;
+  if (!(LIVE_EVENT_MODE === "include" && running)
+    && MAX_RESOLUTION_HOURS != null && hours != null && hours > MAX_RESOLUTION_HOURS) {
     reasons.push(`stored resolution ${formatHorizonHours(hours)} exceeds live max ${formatHorizonHours(MAX_RESOLUTION_HOURS)}`);
   }
   // A different question from the horizon, and named separately so a reader can tell which
   // rule refused the market. A row that cannot show a kickoff is excluded rather than
   // assumed to have started.
-  if (REQUIRE_EVENT_STARTED && item?.eventStarted !== true) {
+  if (LIVE_EVENT_MODE === "only" && !running) {
     reasons.push(item?.eventStarted === false
       ? "this event has not started yet and this portfolio only takes events already under way"
       : "no kickoff time is published for this market, so it cannot be shown to be under way");
@@ -5480,7 +5499,7 @@ async function main() {
       minVolume24hr: MIN_VOLUME_24H,
       minNetYield: MIN_NET_YIELD,
       maxResolutionHours: MAX_RESOLUTION_HOURS,
-      requireEventStarted: REQUIRE_EVENT_STARTED,
+      liveEventMode: LIVE_EVENT_MODE,
       selectionOrder: SELECTION_ORDER,
       stakeUsdc: Number(configuredStakeUsdc.toFixed(5)),
       maxOrderNotionalCapUsdc: Number.isFinite(MAX_ORDER_NOTIONAL_USDC) ? MAX_ORDER_NOTIONAL_USDC : null,
@@ -5542,7 +5561,7 @@ async function main() {
         minVolume24hr: MIN_VOLUME_24H,
         minNetYield: MIN_NET_YIELD,
         maxResolutionHours: MAX_RESOLUTION_HOURS,
-        requireEventStarted: REQUIRE_EVENT_STARTED,
+        liveEventMode: LIVE_EVENT_MODE,
         executionTrigger: EXECUTION_TRIGGER,
         freeCapitalPriority: true,
         hasUsableFreeCash,

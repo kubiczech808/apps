@@ -3330,7 +3330,7 @@ test("portfolio parameters: both live portfolios state their order price", () =>
   const app = readFileSync(new URL("../assets/app.js", import.meta.url), "utf8");
   const rowsFor = (fixedEntry, limitOrders) => new Function(
     "state", "isFixedEntryMode", "portfolioConfigForMode", "resolutionHoursForMode",
-    "formatHorizonHours",
+    "formatHorizonHours", "resolutionRuleValue",
     "normalizeOptionalMoney", "normalizeMinimumNetYield", "normalizeMarketTagList",
     "portfolioReturnMetricLabel", "probabilitySourceLabel", "currentEligibilityThreshold",
     "stakeSizingRuleValue", "normalizeExecutionTrigger", "executionTriggerLabel",
@@ -3381,7 +3381,7 @@ test("portfolio parameters: both live portfolios state their order price", () =>
     }),
     // The horizon is a number of HOURS now, so the stub hands back 720 -- the same
     // 30-day ceiling this fixture always meant -- and the real formatter renders it.
-    () => 720, (hours) => `${hours / 24} d`,
+    () => 720, (hours) => `${hours / 24} d`, (hours) => `Max ${hours / 24} d`,
     (value) => value, (value) => value || 0, (value) => (Array.isArray(value) ? value : []),
     () => "Potential p.a.", () => "Polymarket probability", () => 0.93, () => "stake",
     (value) => value, () => "After each scraping batch", () => "x", (value) => Number(value),
@@ -4568,8 +4568,13 @@ test("finished events: only the current Polymarket status can close a candidate 
   // above), but "does this portfolio want to hold capital this long" -- so a still-tradable,
   // far-dated market gets skipped by it without ever being declared closed.
   const prefilter = source.slice(source.indexOf("function prefilterLiveCandidate"), source.indexOf("function sortLivePrefilterCandidates"));
-  assert.match(prefilter, /if \(MAX_RESOLUTION_HOURS != null && hours != null && hours > MAX_RESOLUTION_HOURS\)/,
+  assert.match(prefilter, /MAX_RESOLUTION_HOURS != null && hours != null && hours > MAX_RESOLUTION_HOURS/,
     "the candidate pool still caps how far out a portfolio will hold a position, independent of whether the market is tradable");
+  // Measured against the market's own resolution date. The catalogue's endDate is the
+  // KICKOFF for a sports fixture, so the stored day count is time to the start of the
+  // match: one already under way reads as a negative number and slips past every ceiling.
+  assert.match(prefilter, /const resolutionTime = Date\.parse\(item\?\.resolutionEndDate \|\| ""\);/,
+    "the horizon must be read from the resolution date, not from the kickoff-derived day count");
   // The ceiling is expressed in HOURS now: whole days could not say 12, 6 or 1, which is
   // what a short-dated portfolio needs. A live environment still set in days keeps meaning
   // what it meant, so the conversion is read here rather than assumed.
@@ -4581,9 +4586,18 @@ test("finished events: only the current Polymarket status can close a candidate 
   // to 0 quietly traded a week -- the opposite of what typing 0 intends.
   assert.match(source, /if \(Number\.isFinite\(hours\) && hours > 0\) return Math\.max\(1,/,
     "a non-positive hours setting must not be accepted as a horizon");
-  // "Already under way" is its own switch, not a magic value of the horizon: an event in
-  // play still has an hour or two left to resolve.
-  assert.match(prefilter, /REQUIRE_EVENT_STARTED && item\?\.eventStarted !== true/);
+  // "Already under way" is its own setting, not a magic value of the horizon: an event in
+  // play still has an hour or two left to resolve. Three states, because judging a running
+  // fixture by the ceiling, admitting it regardless, and taking nothing else are three
+  // different rules.
+  assert.match(source, /const LIVE_EVENT_MODE = \(\(\) => \{/);
+  assert.match(source, /\["ignore", "include", "only"\]\.includes\(mode\)/);
+  assert.match(source, /process\.env\.LIVE_REQUIRE_EVENT_STARTED \|\| ""\)\.toLowerCase\(\) === "true" \? "only" : "ignore"/,
+    "an environment written before the three states must keep meaning what it meant");
+  // include admits a running fixture whatever the ceiling says: the ceiling caps how long
+  // capital is committed, and a match in play is the shortest commitment there is.
+  assert.match(prefilter, /!\(LIVE_EVENT_MODE === "include" && running\)/);
+  assert.match(prefilter, /LIVE_EVENT_MODE === "only" && !running/);
   assert.match(prefilter, /no kickoff time is published/,
     "a market that cannot show it started is excluded by name, not silently");
   const ranking = source.slice(source.indexOf("function sortLivePrefilterCandidates"), source.indexOf("function prefilterReasonCountKey"));

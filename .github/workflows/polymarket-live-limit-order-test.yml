@@ -249,8 +249,10 @@ jobs:
               # through, so 12 or 6 hours can no longer be rounded back up to a day.
               "LIVE_MAX_RESOLUTION_HOURS": live.get("maxResolutionHours"),
               "LIVE_MAX_RESOLUTION_DAYS": live.get("maxResolutionDays"),
-              # A separate question from the horizon: only fixtures already under way.
-              "LIVE_REQUIRE_EVENT_STARTED": str(bool(live.get("requireEventStarted", False))).lower(),
+              # A separate question from the horizon: how this portfolio treats fixtures
+              # already under way -- ignore, include, or only. Always written, so switching
+              # back to "ignore" actually clears it.
+              "LIVE_EVENT_MODE": str(live.get("liveEventMode") or ("only" if live.get("requireEventStarted") else "ignore")),
               "LIVE_SELECTION_ORDER": live.get("selectionOrder"),
               "LIVE_CONFIG_MIN_LIQUIDITY_USDC": live.get("minLiquidityUsdc"),
               "LIVE_MIN_NET_YIELD": live.get("minNetYield"),

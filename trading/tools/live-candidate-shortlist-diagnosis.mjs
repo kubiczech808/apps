@@ -53,7 +53,7 @@ function environmentFromConfig(config, requestedId) {
       MAX_ORDER_FRACTION: live.maxOrderFraction,
       LIVE_MAX_RESOLUTION_HOURS: live.maxResolutionHours,
       LIVE_MAX_RESOLUTION_DAYS: live.maxResolutionDays,
-      LIVE_REQUIRE_EVENT_STARTED: String(Boolean(live.requireEventStarted)).toLowerCase(),
+      LIVE_EVENT_MODE: String(live.liveEventMode || (live.requireEventStarted ? "only" : "ignore")),
       LIVE_SELECTION_ORDER: live.selectionOrder,
       LIVE_CONFIG_MIN_LIQUIDITY_USDC: live.minLiquidityUsdc,
       LIVE_MIN_NET_YIELD: live.minNetYield,

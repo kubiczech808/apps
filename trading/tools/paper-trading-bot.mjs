@@ -416,7 +416,7 @@ const DEFAULT_MAX_RESOLUTION_HOURS = DEFAULT_MAX_RESOLUTION_DAYS * HOURS_PER_DAY
 // the default -- so a portfolio set to 0 silently traded a 7-day horizon, the opposite of
 // what anyone typing 0 intends. "Only events already under way" is a different question
 // from "how far ahead may this resolve", and it has its own setting; see
-// requireEventStarted.
+// liveEventMode.
 function normalizeMaxResolutionHours(value) {
   const hours = Number(value);
   if (!Number.isFinite(hours) || hours <= 0) return null;
@@ -443,9 +443,58 @@ function envMaxResolutionHours(prefix) {
 
 // Hours until this market resolves. Unknown stays unknown rather than becoming 0, which
 // would read as "resolves right now" and pass every horizon there is.
+//
+// Measured against the market's own RESOLUTION date, not its endDate. For a sports fixture
+// those are different dates: marketDateContext substitutes the kickoff into endDate, so
+// daysToResolution measures time to the start of the match rather than to its settlement.
+// A fixture kicking off in two hours but settling in four read as "2 h", and one already
+// under way read as a NEGATIVE number, which slipped past every ceiling there is. The
+// horizon is a capital-turnover rule -- how long the money stays committed -- so it has to
+// read the date the money actually comes back.
+//
+// Computed live rather than taken from the stored daysToResolution, which is frozen at
+// scan time and is already hours stale by the time a portfolio reads it.
 function hoursToResolution(item = {}) {
+  const resolution = Date.parse(item?.resolutionEndDate || "");
+  if (Number.isFinite(resolution)) return (resolution - Date.now()) / 3600000;
   const days = Number(item?.daysToResolution);
   return Number.isFinite(days) ? days * HOURS_PER_DAY : null;
+}
+
+// What a portfolio does about events that have already kicked off. Three states, because
+// two different things were asked for and they are genuinely different rules:
+//
+//   ignore  - the default, and what every portfolio did before: a running fixture is
+//             judged by the horizon like everything else.
+//   include - a running fixture is admitted whatever the horizon says. The horizon caps
+//             capital turnover, and a match in play is the shortest turnover there is, so
+//             a ceiling meant for markets days away should not be what keeps it out.
+//   only    - nothing but running fixtures.
+//
+// Only sports and esports publish a kickoff time, so under "only" everything else is
+// refused -- including markets that simply cannot answer the question.
+const LIVE_EVENT_MODES = new Set(["ignore", "include", "only"]);
+
+function normalizeLiveEventMode(value) {
+  const mode = String(value ?? "").trim().toLowerCase();
+  return LIVE_EVENT_MODES.has(mode) ? mode : null;
+}
+
+function configLiveEventMode(row = {}) {
+  const mode = normalizeLiveEventMode(row?.liveEventMode);
+  if (mode != null) return mode;
+  // Portfolios saved while this was a single checkbox carry requireEventStarted, which
+  // meant exactly the "only" state.
+  return row?.requireEventStarted === true ? "only" : "ignore";
+}
+
+// A shipped strategy's setting from its environment. The older boolean is still read, so an
+// environment written before the three states existed keeps meaning what it meant.
+function envLiveEventMode(prefix) {
+  return configLiveEventMode({
+    liveEventMode: process.env[`${prefix}_LIVE_EVENT_MODE`],
+    requireEventStarted: envBool(`${prefix}_REQUIRE_EVENT_STARTED`, false),
+  });
 }
 
 // A horizon a person can read at either end of the scale. "0.04 days" and "168 hours" are
@@ -577,7 +626,7 @@ const PAPER_STRATEGIES = {
     maxFraction: envNumber("PAPER_CONSERVATIVE_MAX_FRACTION", MAX_FRACTION),
     maxResolutionHours: envMaxResolutionHours("PAPER_CONSERVATIVE"),
     maxResolutionDays: envMaxResolutionHours("PAPER_CONSERVATIVE") / HOURS_PER_DAY,
-    requireEventStarted: envBool("PAPER_CONSERVATIVE_REQUIRE_EVENT_STARTED", false),
+    liveEventMode: envLiveEventMode("PAPER_CONSERVATIVE"),
     minLiquidityUsdc: envNumber("PAPER_CONSERVATIVE_MIN_LIQUIDITY_USDC", null),
     minNetYield: envNumber("PAPER_CONSERVATIVE_MIN_NET_YIELD", 0),
     executionTrigger: normalizeExecutionTrigger(process.env.PAPER_CONSERVATIVE_EXECUTION_TRIGGER),
@@ -613,7 +662,7 @@ const PAPER_STRATEGIES = {
     maxFraction: envNumber("PAPER_HIGH_REWARD_MAX_FRACTION", MAX_FRACTION),
     maxResolutionHours: envMaxResolutionHours("PAPER_HIGH_REWARD"),
     maxResolutionDays: envMaxResolutionHours("PAPER_HIGH_REWARD") / HOURS_PER_DAY,
-    requireEventStarted: envBool("PAPER_HIGH_REWARD_REQUIRE_EVENT_STARTED", false),
+    liveEventMode: envLiveEventMode("PAPER_HIGH_REWARD"),
     minLiquidityUsdc: envNumber("PAPER_HIGH_REWARD_MIN_LIQUIDITY_USDC", null),
     minNetYield: envNumber("PAPER_HIGH_REWARD_MIN_NET_YIELD", 0),
     executionTrigger: normalizeExecutionTrigger(process.env.PAPER_HIGH_REWARD_EXECUTION_TRIGGER),
@@ -647,7 +696,7 @@ const PAPER_STRATEGIES = {
     maxFraction: envNumber("PAPER_MORE_PROBABLE_MAX_FRACTION", MAX_FRACTION),
     maxResolutionHours: envMaxResolutionHours("PAPER_MORE_PROBABLE"),
     maxResolutionDays: envMaxResolutionHours("PAPER_MORE_PROBABLE") / HOURS_PER_DAY,
-    requireEventStarted: envBool("PAPER_MORE_PROBABLE_REQUIRE_EVENT_STARTED", false),
+    liveEventMode: envLiveEventMode("PAPER_MORE_PROBABLE"),
     minLiquidityUsdc: envNumber("PAPER_MORE_PROBABLE_MIN_LIQUIDITY_USDC", MORE_PROBABLE_MIN_LIQUIDITY_USDC),
     minNetYield: envNumber("PAPER_MORE_PROBABLE_MIN_NET_YIELD", 0),
     executionTrigger: normalizeExecutionTrigger(process.env.PAPER_MORE_PROBABLE_EXECUTION_TRIGGER),
@@ -681,7 +730,7 @@ const PAPER_STRATEGIES = {
     maxFraction: envNumber("PAPER_EQUAL_MAX_FRACTION", MAX_FRACTION),
     maxResolutionHours: envMaxResolutionHours("PAPER_EQUAL"),
     maxResolutionDays: envMaxResolutionHours("PAPER_EQUAL") / HOURS_PER_DAY,
-    requireEventStarted: envBool("PAPER_EQUAL_REQUIRE_EVENT_STARTED", false),
+    liveEventMode: envLiveEventMode("PAPER_EQUAL"),
     // This is traded volume, despite the legacy internal property name. Equal
     // depends on a usable secondary market for its synthetic protective exit.
     minLiquidityUsdc: envNumber("PAPER_EQUAL_MIN_LIQUIDITY_USDC", 20000),
@@ -755,7 +804,7 @@ function customPaperStrategies(raw = process.env.PAPER_CUSTOM_PORTFOLIOS) {
       // a whole day, which is exactly what the unit switch was for.
       maxResolutionHours: configMaxResolutionHours(row, DEFAULT_MAX_RESOLUTION_HOURS),
       maxResolutionDays: configMaxResolutionHours(row, DEFAULT_MAX_RESOLUTION_HOURS) / HOURS_PER_DAY,
-      requireEventStarted: row.requireEventStarted === true,
+      liveEventMode: configLiveEventMode(row),
       minLiquidityUsdc: Number.isFinite(Number(row.minLiquidityUsdc)) ? Number(row.minLiquidityUsdc) : null,
       minNetYield: Number.isFinite(Number(row.minNetYield)) ? Number(row.minNetYield) : 0,
       executionTrigger: normalizeExecutionTrigger(row.executionTrigger),
@@ -1227,7 +1276,7 @@ function compactPaperPortfolioForCore(portfolio) {
     // back to a whole day on every screen that reads the compacted core state.
     "maxResolutionHours",
     "maxResolutionDays",
-    "requireEventStarted",
+    "liveEventMode",
     "minLiquidityUsdc",
     "minNetYield",
     "executionTrigger",
@@ -1807,6 +1856,7 @@ function normalizePaperPortfolio(strategy, input = {}) {
     maxFraction: strategy.maxFraction,
     maxResolutionHours: strategyMaxResolutionHours(strategy),
     maxResolutionDays: strategyMaxResolutionHours(strategy) / HOURS_PER_DAY,
+    liveEventMode: configLiveEventMode(strategy),
     minLiquidityUsdc: strategy.minLiquidityUsdc,
     minNetYield: Math.max(0, Number(strategy.minNetYield) || 0),
     executionTrigger: normalizeExecutionTrigger(strategy.executionTrigger),
@@ -1860,6 +1910,7 @@ function normalizePaperPortfolio(strategy, input = {}) {
       opportunityMinAnnualReturn: Number(input.portfolio?.opportunityMinAnnualReturn || OPPORTUNITY_MIN_ANNUAL_RETURN),
       maxResolutionHours: strategyMaxResolutionHours(strategy),
       maxResolutionDays: strategyMaxResolutionHours(strategy) / HOURS_PER_DAY,
+      liveEventMode: configLiveEventMode(strategy),
       minLiquidityUsdc: strategy.minLiquidityUsdc == null ? null : Number(strategy.minLiquidityUsdc),
       minNetYield: Math.max(0, Number(strategy.minNetYield) || 0),
       executionTrigger: normalizeExecutionTrigger(strategy.executionTrigger),
@@ -4148,11 +4199,14 @@ function observationMatchesActiveLiveConfig(item, config) {
     || (maximum != null && probability > maximum)) return false;
   const hours = hoursToResolution(item);
   const maxHours = configMaxResolutionHours(config, null);
-  if (hours != null && maxHours != null && hours > maxHours) return false;
+  const liveEventMode = configLiveEventMode(config);
+  const running = item?.eventStarted === true;
+  if (!(liveEventMode === "include" && running)
+    && hours != null && maxHours != null && hours > maxHours) return false;
   // A separate question from the horizon: has the fixture actually started. Only applied
   // when asked for, and a market that cannot answer (no kickoff signal at all) is excluded
   // rather than assumed -- "we do not know whether it started" is not "it started".
-  if (config?.requireEventStarted === true && item?.eventStarted !== true) return false;
+  if (liveEventMode === "only" && !running) return false;
   const minimumVolume = Number(config?.minLiquidityUsdc);
   if (Number.isFinite(minimumVolume) && minimumVolume > 0 && rowVolumeUsdc(item) < minimumVolume) return false;
   const marketType = normalizePortfolioMarketType(config?.marketType, config?.requireMostProbableOutcome === true);
@@ -6914,6 +6968,7 @@ function dueExecutionStrategies(state) {
 function strategyEligibleCandidates(eligible, strategy) {
   const requiredMarketType = normalizePortfolioMarketType(strategy.marketType, strategy.requireMostProbableOutcome);
   const maxResolutionHours = strategyMaxResolutionHours(strategy);
+  const liveEventMode = configLiveEventMode(strategy);
   let rows = [...eligible].filter((item) => {
     const tokenId = String(item?.tokenId || item?.clobTokenId || item?.assetId || "");
     if (strategy.excludedCandidateTokenIds?.has(tokenId)) return false;
@@ -6932,9 +6987,13 @@ function strategyEligibleCandidates(eligible, strategy) {
     // whether the market is currently tradable (the check just above, which correctly
     // reads Polymarket's own status rather than a scheduled/estimated date). This ceiling
     // is deliberately date-derived: it caps how long capital sits in one position.
-    if (hoursValue(item) > maxResolutionHours) return false;
-    // The in-play switch, asked alongside the horizon rather than folded into it.
-    if (strategy.requireEventStarted === true && item?.eventStarted !== true) return false;
+    // A running fixture under "include" is admitted whatever the ceiling says: the
+    // ceiling caps how long capital is committed, and a match in play is the shortest
+    // commitment there is.
+    const running = item?.eventStarted === true;
+    if (!(liveEventMode === "include" && running) && hoursValue(item) > maxResolutionHours) return false;
+    // Asked alongside the horizon rather than folded into it.
+    if (liveEventMode === "only" && !running) return false;
     // The same test the statistics apply, for the same reason: an order sent into a book
     // this wide has no counterparty to fill against, so a row quoting an attractive
     // midpoint is not an opportunity. A volume floor does not catch it -- rowVolumeUsdc
@@ -7215,6 +7274,8 @@ function portfolioFilterResult(item, strategy) {
   const returnMetric = probabilitySource === "polymarket" ? "Potential p.a." : "EV p.a.";
   const hours = hoursValue(item);
   const maxResolutionHours = strategyMaxResolutionHours(strategy);
+  const liveEventMode = configLiveEventMode(strategy);
+  const eventIsRunning = item?.eventStarted === true;
 
   if (binaryOutcomeQuotesAreBothZero(item)) reasons.push("binary YES/NO quotes are both 0%; market appears resolved");
   if (strategy.excludedCandidateTokenIds?.has(tokenId)) reasons.push("manually excluded from this paper portfolio");
@@ -7259,12 +7320,12 @@ function portfolioFilterResult(item, strategy) {
   if (item?.marketClosed === true || item?.marketActive === false || item?.acceptingOrders === false) {
     reasons.push("market is closed or no longer accepting orders");
   }
-  if (hours > maxResolutionHours) {
+  if (!(liveEventMode === "include" && eventIsRunning) && hours > maxResolutionHours) {
     reasons.push(`resolution ${Number.isFinite(hours) ? formatHorizonHours(hours) : "-"} exceeds max ${formatHorizonHours(maxResolutionHours)}`);
   }
   // Named separately, because "it has not started" and "it resolves too far out" are
   // different refusals and a reader has to be able to tell which one applied.
-  if (strategy.requireEventStarted === true && item?.eventStarted !== true) {
+  if (liveEventMode === "only" && !eventIsRunning) {
     reasons.push(item?.eventStarted === false
       ? "this event has not started yet and the portfolio only takes events already under way"
       : "no kickoff time is published for this market, so it cannot be shown to be under way");
@@ -7889,6 +7950,7 @@ function buildTradeBatchLog({ portfolioState, strategy, evaluations = [], eligib
       maxFraction: strategy.maxFraction ?? null,
       maxResolutionHours: strategyMaxResolutionHours(strategy),
       maxResolutionDays: strategyMaxResolutionHours(strategy) / HOURS_PER_DAY,
+      liveEventMode: configLiveEventMode(strategy),
       minLiquidityUsdc: strategy.minLiquidityUsdc ?? null,
       minNetYield: Math.max(0, Number(strategy.minNetYield) || 0),
       selectionOrder: strategy.selectionOrder,
@@ -11473,6 +11535,7 @@ function updatePaperPortfolio(portfolioState) {
     opportunityMinAnnualReturn: OPPORTUNITY_MIN_ANNUAL_RETURN,
     maxResolutionHours: strategyMaxResolutionHours(portfolioState),
     maxResolutionDays: strategyMaxResolutionHours(portfolioState) / HOURS_PER_DAY,
+    liveEventMode: configLiveEventMode(portfolioState),
     minLiquidityUsdc: portfolioState.minLiquidityUsdc == null ? null : Number(portfolioState.minLiquidityUsdc),
     marketType: normalizePortfolioMarketType(portfolioState.marketType, portfolioState.requireMostProbableOutcome),
     requireMostProbableOutcome: Boolean(portfolioState.requireMostProbableOutcome),
@@ -12313,6 +12376,9 @@ export {
   portfolioFilterResult,
   normalizeMaxResolutionHours,
   configMaxResolutionHours,
+  normalizeLiveEventMode,
+  configLiveEventMode,
+  hoursToResolution,
   formatHorizonHours,
   portfolioProbabilityForStrategy,
   storedExecutionShortlist,

@@ -438,10 +438,14 @@
           <input type="number" min="1" max="8760" step="1" placeholder="auto" data-max-resolution-hours>
           <strong data-max-resolution-hours-label>auto</strong>
         </label>
-        <label class="parameter-control order-mode-toggle" title="Trade only fixtures that have already kicked off. This is a separate question from the horizon above: a horizon of zero hours would mean an already-resolved market, not a running one. Only sports and esports markets report a kickoff time, so everything else is skipped while this is on.">
-          <span>Only events under way</span>
-          <input type="checkbox" data-require-event-started>
-          <strong data-require-event-started-label>Off</strong>
+        <label class="parameter-control" title="How this portfolio treats fixtures that have already kicked off - typically sports and esports, the only markets that publish a kickoff time. Judge by horizon: a running fixture is capped by the hours above like everything else. Include regardless of horizon: a running fixture is always allowed, because the horizon caps how long capital is committed and a match in play is the shortest commitment there is. Only events under way: nothing else is traded, including markets that publish no kickoff at all.">
+          <span>Events under way</span>
+          <select data-live-event-mode>
+            <option value="ignore">Judge by horizon</option>
+            <option value="include">Include regardless of horizon</option>
+            <option value="only">Only events under way</option>
+          </select>
+          <strong data-live-event-mode-label>Judge by horizon</strong>
         </label>
         <label class="parameter-control">
           <span>Trade priority</span>

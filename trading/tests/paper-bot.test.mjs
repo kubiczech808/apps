@@ -902,7 +902,7 @@ test("candidate lifecycle: the in-play filter asks whether the event started, no
     minLiquidityUsdc: 0,
     minNetYield: 0,
     maxResolutionHours: 6,
-    requireEventStarted: true,
+    liveEventMode: "only",
     excludedCandidateTokenIds: new Set(),
   };
   const base = {
@@ -941,9 +941,131 @@ test("candidate lifecycle: the in-play filter asks whether the event started, no
   assert.match(bot.portfolioFilterResult(upcoming, strategy).reasons.join(" "), /has not started yet/);
   assert.match(bot.portfolioFilterResult(unknown, strategy).reasons.join(" "), /no kickoff time is published/);
 
-  // Switched off, it must not filter anything -- including the rows it cannot judge.
-  const off = { ...strategy, requireEventStarted: false };
+  // "ignore" must not filter anything -- including the rows it cannot judge.
+  const off = { ...strategy, liveEventMode: "ignore" };
   assert.equal(bot.strategyEligibleCandidates([running, upcoming, unknown], off).length, 3);
+
+  // A portfolio saved while this was a single checkbox carries requireEventStarted, and it
+  // meant exactly the "only" state.
+  assert.equal(bot.configLiveEventMode({ requireEventStarted: true }), "only");
+  assert.equal(bot.configLiveEventMode({ requireEventStarted: false }), "ignore");
+  assert.equal(bot.configLiveEventMode({}), "ignore");
+  // And the stored mode wins over the derived boolean the API writes beside it.
+  assert.equal(bot.configLiveEventMode({ liveEventMode: "include", requireEventStarted: false }), "include");
+  assert.equal(bot.normalizeLiveEventMode("nonsense"), null);
+});
+
+// The third state, and the one this whole setting was reopened for. A ceiling of six hours
+// is a capital-turnover rule -- how long the money stays committed -- and a match already
+// in play is the shortest commitment there is, so a ceiling meant for markets days away
+// should not be what keeps it out.
+test("candidate lifecycle: 'include' lets a running fixture past the horizon, and nothing else", () => {
+  const strategy = {
+    ...bot.PAPER_STRATEGIES.conservative,
+    minProbability: 0.7,
+    minLiquidityUsdc: 0,
+    minNetYield: 0,
+    maxResolutionHours: 6,
+    liveEventMode: "include",
+    excludedCandidateTokenIds: new Set(),
+  };
+  const base = {
+    status: "ELIGIBLE",
+    marketProbability: 0.8,
+    marketPrice: 0.8,
+    bestBid: 0.8,
+    bestAsk: 0.81,
+    spread: 0.01,
+    volumeUsdc: 50000,
+    totalCostUsdc: 5,
+    netGainIfWinUsdc: 1,
+    netYield: 0.2,
+    marketClosed: false,
+    marketActive: true,
+    acceptingOrders: true,
+  };
+  const inTwenty = (hours) => new Date(Date.now() + hours * 3600 * 1000).toISOString();
+
+  // A match under way whose settlement is twenty hours out -- far beyond the 6-hour
+  // ceiling. Under "ignore" it is refused; under "include" it is taken.
+  const runningLongMatch = { ...base, tokenId: "running", eventStarted: true, resolutionEndDate: inTwenty(20) };
+  assert.equal(bot.portfolioFilterResult(runningLongMatch, strategy).eligible, true);
+  assert.equal(bot.portfolioFilterResult(runningLongMatch, { ...strategy, liveEventMode: "ignore" }).eligible, false);
+
+  // Everything that is NOT under way is still capped, which is what separates "include"
+  // from simply removing the ceiling.
+  const upcomingLong = { ...base, tokenId: "upcoming", eventStarted: false, resolutionEndDate: inTwenty(20) };
+  const unknownLong = { ...base, tokenId: "unknown", eventStarted: null, resolutionEndDate: inTwenty(20) };
+  assert.equal(bot.portfolioFilterResult(upcomingLong, strategy).eligible, false);
+  assert.equal(bot.portfolioFilterResult(unknownLong, strategy).eligible, false);
+  assert.match(bot.portfolioFilterResult(upcomingLong, strategy).reasons.join(" "), /exceeds max 6 h/);
+
+  // And a row inside the ceiling is unaffected whichever way it is set.
+  const upcomingSoon = { ...base, tokenId: "soon", eventStarted: false, resolutionEndDate: inTwenty(2) };
+  assert.equal(bot.portfolioFilterResult(upcomingSoon, strategy).eligible, true);
+  assert.deepEqual(
+    bot.strategyEligibleCandidates([runningLongMatch, upcomingLong, unknownLong, upcomingSoon], strategy)
+      .map((row) => row.tokenId).sort(),
+    ["running", "soon"],
+  );
+});
+
+// The horizon is a number of hours until the market SETTLES. For a sports fixture the
+// catalogue's endDate is the KICKOFF -- marketDateContext substitutes it -- so the stored
+// daysToResolution measures time to the start of the match. A fixture kicking off in two
+// hours but settling in four read as "2 h", and one already under way read as a NEGATIVE
+// number, which slipped past every ceiling there is.
+test("candidate lifecycle: the horizon counts to the resolution date, not to the kickoff", () => {
+  const iso = (hours) => new Date(Date.now() + hours * 3600 * 1000).toISOString();
+
+  // Kickoff in 2h (what endDate/daysToResolution carry), settlement in 20h.
+  assert.equal(
+    Math.round(bot.hoursToResolution({ daysToResolution: 2 / 24, resolutionEndDate: iso(20) })),
+    20,
+    "the resolution date wins over the kickoff-derived day count",
+  );
+  // A match already under way: the day count is negative, the settlement is still ahead.
+  assert.equal(
+    Math.round(bot.hoursToResolution({ daysToResolution: -1 / 24, resolutionEndDate: iso(1) })),
+    1,
+    "a running fixture must report the hours it still has to run, not a negative number",
+  );
+  // No resolution date at all -- the stored count is the only thing left to read.
+  assert.equal(bot.hoursToResolution({ daysToResolution: 3 }), 72);
+  assert.equal(bot.hoursToResolution({}), null, "unknown stays unknown rather than becoming 0");
+
+  // End to end: a fixture that kicks off inside a 6-hour ceiling but settles well outside
+  // it is refused, which is the whole point of reading the settlement date.
+  const strategy = {
+    ...bot.PAPER_STRATEGIES.conservative,
+    minProbability: 0.7,
+    minLiquidityUsdc: 0,
+    minNetYield: 0,
+    maxResolutionHours: 6,
+    liveEventMode: "ignore",
+    excludedCandidateTokenIds: new Set(),
+  };
+  const kicksOffSoonSettlesLate = {
+    tokenId: "late-settlement",
+    status: "ELIGIBLE",
+    marketProbability: 0.8,
+    marketPrice: 0.8,
+    bestBid: 0.8,
+    bestAsk: 0.81,
+    spread: 0.01,
+    volumeUsdc: 50000,
+    totalCostUsdc: 5,
+    netGainIfWinUsdc: 1,
+    netYield: 0.2,
+    daysToResolution: 2 / 24,
+    resolutionEndDate: iso(20),
+    marketClosed: false,
+    marketActive: true,
+    acceptingOrders: true,
+  };
+  const result = bot.portfolioFilterResult(kicksOffSoonSettlesLate, strategy);
+  assert.equal(result.eligible, false);
+  assert.match(result.reasons.join(" "), /exceeds max 6 h/);
 });
 
 // The filter above reads item.eventStarted. The rows it actually runs against are the
@@ -4613,15 +4735,18 @@ test("5050: the candidate list is judged by its own rule, not market-price econo
   const branch = /if \(isFixedEntryMode\(mode\)\) \{[\s\S]*?return reasons;\n  \}/.exec(app)[0];
   const run = new Function("item", "config", "mode", "deps", `
     const {isFixedEntryMode,normalizeFixedEntryPrice,probability,money,compactDays,
-      normalizeMarketTagList,marketMatchesAllowedTags,formatHorizonHours}=deps;
+      normalizeMarketTagList,marketMatchesAllowedTags,formatHorizonHours,
+      candidateHoursToResolution,configLiveEventMode}=deps;
     const HOURS_PER_DAY=24;
     const reasons=[];
     const liquidity=Number(item.volumeUsdc||0), minLiquidity=Number(config.minLiquidityUsdc);
     const days=Number(item.daysToResolution);
-    // The horizon is a number of hours now. The row still reports days to resolution, so
-    // the branch converts rather than comparing two different units.
-    const hours=Number.isFinite(days)?days*HOURS_PER_DAY:NaN;
+    // The horizon is a number of hours until the market SETTLES, so the branch reads the
+    // resolution date rather than the kickoff-derived day count.
+    const hours=candidateHoursToResolution(item);
     const maxHours=Number(config.maxResolutionHours);
+    const liveEventMode=configLiveEventMode(config);
+    const eventIsRunning=item?.eventStarted===true;
     ${branch}
     return reasons;`);
   const deps = {
@@ -4634,6 +4759,13 @@ test("5050: the candidate list is judged by its own rule, not market-price econo
     normalizeMarketTagList: (value) => (Array.isArray(value) ? value : []),
     marketMatchesAllowedTags: () => true,
     formatHorizonHours: (value) => `${value / 24} d`,
+    candidateHoursToResolution: (item) => {
+      const resolution = Date.parse(item?.resolutionEndDate || "");
+      if (Number.isFinite(resolution)) return (resolution - Date.now()) / 3600000;
+      const value = Number(item?.daysToResolution);
+      return Number.isFinite(value) ? value * 24 : NaN;
+    },
+    configLiveEventMode: (config) => config?.liveEventMode || "ignore",
   };
   const config = { fixedEntryPrice: 0.5, minLiquidityUsdc: 100, maxResolutionHours: 30 * 24 };
   const reasons = (item) => run(item, config, "live-5050", deps);
