@@ -62,6 +62,26 @@ export const riskRewardRatio = ({ side, entry, stop, takeProfit }) => {
 }
 
 /**
+ * The largest reward/risk an inverse position can reach at ANY price.
+ *
+ * A long's reward per USD approaches 1/entry as price goes to infinity, so the
+ * payoff is bounded and so is R. A short's is not: price can approach zero, so
+ * its reward grows without limit.
+ *
+ * This is not a curiosity. A take profit asked for in R can be simply
+ * impossible — the momentum strategy asked for 15R behind a 2-ATR stop, which
+ * on BTC's daily volatility exceeds the ceiling, and it refused 1247 signals
+ * with "no price pays 15R" before anyone noticed the target was unreachable
+ * rather than the market unsuitable.
+ */
+export const maxAchievableR = ({ side, entry, stop }) => {
+  const riskPerUsd = Math.abs(1 / stop - 1 / entry)
+  if (!(riskPerUsd > 0)) return null
+  if (side === 'short') return Number.POSITIVE_INFINITY
+  return 1 / entry / riskPerUsd
+}
+
+/**
  * The exit price at which an inverse position earns exactly `r` times what it
  * risks.
  *

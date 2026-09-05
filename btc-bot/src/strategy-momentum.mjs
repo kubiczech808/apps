@@ -28,7 +28,7 @@
 // the classic way to destroy it.
 
 import { atr, lastDefined } from './priceaction.mjs'
-import { riskRewardRatio, targetForR } from './risk.mjs'
+import { maxAchievableR, riskRewardRatio, targetForR } from './risk.mjs'
 
 export const DEFAULT_MOMENTUM = {
   // Donchian breakout: enter when today closes beyond the extreme of this many
@@ -143,9 +143,19 @@ export const evaluateEntry = ({ htfCandles, ltfCandles, settings = {} }) => {
   const stop = side === 'long' ? price - dailyAtr * config.stopAtr : price + dailyAtr * config.stopAtr
   if (!(Math.abs(price - stop) > 0)) return reject('degenerate stop distance', context)
 
-  const takeProfit = targetForR({ side, entry: price, stop, r: config.takeProfitR })
-  if (takeProfit === null) {
-    return reject(`no price pays ${config.takeProfitR}R on this stop`, context)
+  // The backstop is asked for in R, but a long's payoff is bounded, so the
+  // request has to be clipped to what a price can actually pay. Asking for a
+  // flat 15R behind a 2-ATR stop is above BTC's ceiling most days, and the
+  // strategy then refuses every signal for a reason that sounds like the market
+  // and is really the target.
+  const ceiling = maxAchievableR({ side, entry: price, stop })
+  const wantedR = Math.min(config.takeProfitR, (ceiling ?? config.takeProfitR) * 0.8)
+  const takeProfit = targetForR({ side, entry: price, stop, r: wantedR })
+  if (takeProfit === null || !(wantedR > 1)) {
+    return reject(
+      `the stop is too wide for a usable target (ceiling ${ceiling === null ? '?' : ceiling.toFixed(1)}R)`,
+      context
+    )
   }
 
   return {
