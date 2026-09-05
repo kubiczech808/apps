@@ -58,7 +58,10 @@ async function main() {
   const configPayload = await fetchJson(`${HOST}/api.php?action=portfolio-config&t=${Date.now()}`);
   const config = configPayload?.config || configPayload || {};
 
-  const livePayload = await fetchJson(`${HOST}/api.php?action=live-state&t=${Date.now()}`);
+  // The account snapshot is a state target like any other -- `target=live` -- not an
+  // action of its own. This is the same read the dashboard does before it draws the
+  // positions and the unfilled-orders tabs.
+  const livePayload = await fetchJson(`${HOST}/api.php?action=state&target=live&t=${Date.now()}`);
   const liveState = livePayload?.liveState || livePayload?.state || livePayload || {};
   const positions = Array.isArray(liveState?.positions) ? liveState.positions : [];
   const openOrders = Array.isArray(liveState?.openOrders) ? liveState.openOrders : [];
