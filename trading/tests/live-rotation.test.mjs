@@ -5820,3 +5820,51 @@ test("live sync: a state it cannot read is never published over as an empty one"
   assert.match(source.slice(refusalAt, writeAt), /throw new Error\(/,
     "an unreadable previous state has to stop the run, not add a warning");
 });
+
+// Reported: the run log says an order was placed and accepted, and the position appears
+// neither in the open positions list nor on Polymarket. Measured across every submitted run
+// on the account -- 20 resting, 9 queued, 5 held by the duplicate guard, 1 filled -- with
+// the "Underway Live" example reading
+//
+//   FAK  status "delayed"  orderID 0x906e...  takingAmount ""  makingAmount ""
+//
+// A fill-and-kill order whose match was queued and which matched nothing: no position, and
+// no resting order either, because a kill order does not rest.
+test("order outcome: acceptance by the exchange is not the same as holding a position", async () => {
+  const { successfulOrderResponse, orderOutcome } = executor;
+
+  // `unmatched` is the exchange saying the order did not execute. It was counted as
+  // acceptance, which is how nothing became SUBMITTED.
+  assert.equal(successfulOrderResponse({ status: "unmatched", success: true }), false);
+  assert.equal(successfulOrderResponse({ status: "error" }), false);
+  assert.equal(successfulOrderResponse({ error: "boom" }), false);
+  // Everything the exchange really took still counts as taken.
+  assert.equal(successfulOrderResponse({ status: "matched", success: true }), true);
+  assert.equal(successfulOrderResponse({ status: "live", success: true }), true);
+  assert.equal(successfulOrderResponse({ status: "delayed", success: true }), true);
+
+  // Only a match is a position.
+  assert.deepEqual(orderOutcome({ status: "matched" }, "FAK"), { filled: true, pending: false, action: "SUBMITTED" });
+  assert.deepEqual(orderOutcome({ status: "matched" }, "GTC"), { filled: true, pending: false, action: "SUBMITTED" });
+
+  // A resting order type that rests is a real, visible order -- the unfilled-orders tab is
+  // where it belongs, and it stays SUBMITTED.
+  assert.deepEqual(orderOutcome({ status: "live" }, "GTC"), { filled: false, pending: false, action: "SUBMITTED" });
+
+  // The reported case, and its neighbours. A kill order does not rest, so queued means the
+  // account holds nothing and nothing is waiting for it either.
+  assert.equal(orderOutcome({ status: "delayed" }, "FAK").action, "PENDING_MATCH");
+  assert.equal(orderOutcome({ status: "delayed" }, "FOK").action, "PENDING_MATCH");
+  assert.equal(orderOutcome({ status: "delayed" }, "GTC").action, "PENDING_MATCH");
+  // `live` on an order type that cannot rest is not a resting order; it is unsettled.
+  assert.equal(orderOutcome({ status: "live" }, "FAK").action, "PENDING_MATCH");
+
+  const source = await import("node:fs").then((fs) => fs.readFileSync(new URL("../tools/live-order-executor.mjs", import.meta.url), "utf8"));
+  // The action written to the run log has to be the outcome's, or the fix stops at the
+  // predicate and the log keeps promising a position.
+  assert.match(source, /const action = outcome\.pending\s*\n\s*\? "PENDING_MATCH"/);
+  assert.match(source, /order queued by Polymarket, not yet filled/);
+  // And the row says what the exchange answered and why it is not a position yet.
+  assert.match(source, /so the match is queued and no position exists yet/);
+  assert.match(source, /a fill-and-kill order does not rest, so it either fills shortly or nothing was bought/);
+});

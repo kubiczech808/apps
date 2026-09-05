@@ -659,7 +659,7 @@ test("run log: a paper OPENED row keeps the selected order summary in the compac
   // Equal reports successful simulated entries as OPENED, unlike Live's SUBMITTED.
   // The compact list must not fall back to the generic ranking reason and hide the
   // market, outcome and economics that are available in Order placed.
-  assert.match(app, /\["SUBMITTED", "CANCELED_AND_SUBMITTED", "OPENED", "ROTATED_OPENED"\]\.includes\(action\)/);
+  assert.match(app, /\["SUBMITTED", "CANCELED_AND_SUBMITTED", "OPENED", "ROTATED_OPENED", "PENDING_MATCH"\]\.includes\(action\)/);
 });
 
 test("equal risk: the planned exit leaves no more loss than the net winning gain", () => {

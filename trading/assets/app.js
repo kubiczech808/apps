@@ -6536,7 +6536,7 @@ function analysisStatusClass(value) {
 
 function renderAnalysisInline(value) {
   let html = linkifyEscapedHtml(escapeHtml(value || "-"));
-  html = html.replace(/\b(ERROR|REJECTED|SKIP|LOST|RISK_BLOCKED|ELIGIBLE|EVALUATED|OPENED|SUBMITTED|DRY_RUN_READY|WON|RESOLVED|SOLD|PENDING_RESOLUTION)\b/g, (status) => {
+  html = html.replace(/\b(ERROR|REJECTED|SKIP|LOST|RISK_BLOCKED|ELIGIBLE|EVALUATED|OPENED|SUBMITTED|PENDING_MATCH|DRY_RUN_READY|WON|RESOLVED|SOLD|PENDING_RESOLUTION)\b/g, (status) => {
     const statusClass = analysisStatusClass(status);
     return `<span class="analysis-status ${statusClass}">${escapeHtml(status)}</span>`;
   });
@@ -12562,6 +12562,11 @@ function runActionClass(action) {
   const value = String(action || "").toUpperCase();
   if (["OPEN", "OPENED", "SUBMIT", "SUBMITTED", "CANCELED_AND_SUBMITTED", "DRY_RUN_READY", "DRY_RUN_ROTATION_EXIT", "ROTATION_EXIT_SUBMITTED", "ROTATE", "ROTATED"].includes(value)) return "positive";
   if (["SKIP", "REJECTED", "CANCELED_REPLACEMENT_REJECTED", "ERROR"].includes(value)) return "negative";
+  // The exchange took the order and has not settled it. Deliberately not positive: a
+  // queued fill-and-kill order that matches nothing leaves no position and no resting
+  // order, and reading it as green is what made the run log promise a position the
+  // account did not hold.
+  if (value === "PENDING_MATCH") return "warning";
   return "";
 }
 
@@ -12630,7 +12635,7 @@ function submittedOrderSummaryMarkup(run = {}) {
   // Paper portfolios record a successful new position as OPENED, while live uses
   // SUBMITTED. Both have the same selected-candidate detail and must read the same
   // way in the compact run-log list.
-  if (!selected || !["SUBMITTED", "CANCELED_AND_SUBMITTED", "OPENED", "ROTATED_OPENED"].includes(action)) return "";
+  if (!selected || !["SUBMITTED", "CANCELED_AND_SUBMITTED", "OPENED", "ROTATED_OPENED", "PENDING_MATCH"].includes(action)) return "";
   const settings = batch.settings || {};
   const probabilitySource = normalizeProbabilitySource(settings.probabilitySource);
   const selectedProbability = probabilitySource === "polymarket"

@@ -4041,9 +4041,45 @@ function compactOrderResponse(response) {
   }
 }
 
+// Whether the exchange took the order at all. It says nothing about whether a position
+// exists -- see orderOutcome, which is the question the run log was answering wrongly.
 function successfulOrderResponse(response) {
   if (!response || response.error || response.success === false || response.status === "error") return false;
-  return ["live", "matched", "delayed", "unmatched"].includes(String(response.status || "").toLowerCase()) || response.success === true || Boolean(response.orderID);
+  // `unmatched` is not acceptance. It is the exchange saying the order did not execute, and
+  // for a kill order that is the end of it: nothing filled and nothing rests.
+  if (String(response.status || "").toLowerCase() === "unmatched") return false;
+  return ["live", "matched", "delayed"].includes(String(response.status || "").toLowerCase()) || response.success === true || Boolean(response.orderID);
+}
+
+// A kill order does not rest. Whatever it does not fill immediately is cancelled, so there
+// is no third state where it sits waiting.
+const RESTING_ORDER_TYPES = new Set(["GTC", "GTD"]);
+
+// What actually happened to the account, which is not the same as whether the exchange
+// accepted the request.
+//
+// Reported: the run log said "Placing order ... accepted by Polymarket" and the position
+// appeared neither in the open positions list nor on Polymarket. Measured across every
+// submitted run on the account: 20 resting, 9 queued, 5 held by the duplicate guard, and
+// exactly 1 filled. The one from "Underway Live" read
+//
+//   FAK  status "delayed"  orderID 0x906e...  takingAmount ""  makingAmount ""
+//
+// -- a fill-and-kill order whose match was queued and which matched nothing. No position,
+// and no resting order either, because a kill order does not rest. The run log called it
+// SUBMITTED all the same.
+//
+// The exit worker has always drawn this line: exitFilled requires `matched`, with a comment
+// saying that reading `live` or `delayed` as a fill would leave a position unmonitored. The
+// entry path never did.
+function orderOutcome(response, orderType) {
+  const status = String(response?.status || "").toLowerCase();
+  const resting = RESTING_ORDER_TYPES.has(String(orderType || "").toUpperCase());
+  if (status === "matched") return { filled: true, pending: false, action: "SUBMITTED" };
+  if (status === "live" && resting) return { filled: false, pending: false, action: "SUBMITTED" };
+  // Anything else the exchange took but has not settled: queued, or resting when the order
+  // type says it cannot rest. Real enough to have an order id, not yet a position.
+  return { filled: false, pending: true, action: "PENDING_MATCH" };
 }
 
 function nonRetryableOrderFailure(response) {
@@ -5914,16 +5950,31 @@ async function main() {
       },
     ));
     if (successfulOrderResponse(response)) {
-      const action = canceledForBetterCandidate ? "CANCELED_AND_SUBMITTED" : "SUBMITTED";
+      const outcome = orderOutcome(response, submittedCandidate.orderType);
+      const action = outcome.pending
+        ? "PENDING_MATCH"
+        : (canceledForBetterCandidate ? "CANCELED_AND_SUBMITTED" : "SUBMITTED");
       const precisionNote = submittedCandidate.makerPrecisionAdjusted
         ? ` The same limit price was kept and the share size was reduced to ${Number(submittedCandidate.orderSize).toFixed(2)} so Polymarket's maker amount has valid precision.`
         : "";
-      const reason = canceledForBetterCandidate
-        ? `waiting limit order cancelled and the better replacement order was accepted by Polymarket${precisionNote}`
-        : `live order accepted by Polymarket${precisionNote}`;
-      const explanation = canceledForBetterCandidate
-        ? `The existing limit order was cancelled after the revalidated shortlist found a better candidate. The released capital was immediately used for the selected replacement order.${precisionNote}`
-        : `Live batch revalidated candidates and Polymarket accepted the selected order.${precisionNote}`;
+      // Named for what the account holds, not for what the request returned. "Accepted"
+      // was true of every one of these and told the reader nothing: a queued kill order
+      // that matches nothing leaves no position and no resting order behind it.
+      const pendingNote = ` Polymarket answered "${response?.status}" for a ${submittedCandidate.orderType} order,`
+        + ` so the match is queued and no position exists yet;`
+        + ` ${RESTING_ORDER_TYPES.has(String(submittedCandidate.orderType || "").toUpperCase())
+          ? "it rests until it fills or is cancelled."
+          : "a fill-and-kill order does not rest, so it either fills shortly or nothing was bought."}`;
+      const reason = outcome.pending
+        ? `order queued by Polymarket, not yet filled${precisionNote}`
+        : (canceledForBetterCandidate
+          ? `waiting limit order cancelled and the better replacement order was accepted by Polymarket${precisionNote}`
+          : `live order accepted by Polymarket${precisionNote}`);
+      const explanation = outcome.pending
+        ? `Live batch revalidated candidates and submitted the selected order.${pendingNote}${precisionNote}`
+        : (canceledForBetterCandidate
+          ? `The existing limit order was cancelled after the revalidated shortlist found a better candidate. The released capital was immediately used for the selected replacement order.${precisionNote}`
+          : `Live batch revalidated candidates and Polymarket accepted the selected order.${precisionNote}`);
       await emitDecision({
         ...decision,
         action,
@@ -6049,6 +6100,8 @@ if (invokedDirectly) {
 
 // Exported for tests only.
 export {
+  successfulOrderResponse,
+  orderOutcome,
   compareShorterHorizon,
   daysValue,
   MIN_ORDER_STAKE_CEILING_USDC,
