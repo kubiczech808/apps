@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       strategy_id:
-        description: "Paper portfolio to inspect"
+        description: "Paper portfolio to inspect (id or the label shown on the dashboard)"
         required: false
         default: "ewportfolio2"
         type: string
