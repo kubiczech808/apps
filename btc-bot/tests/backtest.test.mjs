@@ -80,7 +80,7 @@ test('stop losses and take profits actually fire — the backtest clock is the c
   // trade, so no bracket ever fired and positions could only be closed at
   // market by the trend-flip rule. The run looked profitable and was measuring
   // a system with no stops.
-  const report = await runBacktest({ hourly: tradeableSeries(), warmupHours: 400 })
+  const report = await runBacktest({ hourly: tradeableSeries(), warmupHours: 400, settings: { strategy: { requireSweep: false, requireImbalance: false } } })
 
   assert.ok(report.stats.trades > 0, 'the fixture must produce trades for this test to mean anything')
   const bracketed = report.trades.filter(
@@ -98,7 +98,7 @@ test('a loss never exceeds the risk that was authorised, plus fees', async () =>
   const report = await runBacktest({
     hourly: tradeableSeries(),
     warmupHours: 400,
-    settings: { risk: { riskPct: 1 } },
+    settings: { risk: { riskPct: 1 }, strategy: { requireSweep: false, requireImbalance: false } },
   })
 
   for (const trade of report.trades) {
@@ -115,7 +115,7 @@ test('a loss never exceeds the risk that was authorised, plus fees', async () =>
 })
 
 test('drawdown is measured against the account, not against the P/L curve', async () => {
-  const report = await runBacktest({ hourly: tradeableSeries(), warmupHours: 400 })
+  const report = await runBacktest({ hourly: tradeableSeries(), warmupHours: 400, settings: { strategy: { requireSweep: false, requireImbalance: false } } })
   if (report.stats.maxDrawdownPct === null) return
   // Every trade risks 1%, one position at a time, three a day. A drawdown of
   // tens of percent would mean the risk rule is not being applied.
@@ -142,6 +142,6 @@ test('a run starved of history says so instead of reporting zero trades as a res
 })
 
 test('a properly sized run is not flagged as starved', async () => {
-  const report = await runBacktest({ hourly: tradeableSeries(), warmupHours: 400 })
+  const report = await runBacktest({ hourly: tradeableSeries(), warmupHours: 400, settings: { strategy: { requireSweep: false, requireImbalance: false } } })
   assert.equal(report.starved, false)
 })

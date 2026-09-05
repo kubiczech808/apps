@@ -101,6 +101,15 @@ export const targetForR = ({ side, entry, stop, r }) => {
 }
 
 export const DEFAULT_RISK_SETTINGS = {
+  // 'spot' holds the asset outright: no leverage, no liquidation, no funding,
+  // and a position can never exceed the capital behind it. 'futures' is the
+  // leveraged inverse contract with carry.
+  //
+  // Spot is the honest starting point. It removes three ways to lose money that
+  // have nothing to do with whether the signal is any good — liquidation,
+  // funding drift and leverage-amplified error — so what is left to measure is
+  // the strategy.
+  market: 'spot',
   riskPct: 1.0,
   maxLeverage: 10,
   liquidationSafety: 2.0,
@@ -135,25 +144,38 @@ export const planPosition = ({ side, entry, stop, takeProfit, equitySats, settin
   const distancePct = stopDistancePct({ side, entry, stop })
   if (!(distancePct > 0)) return { ok: false, reason: 'stop distance is zero' }
 
+  const spot = config.market === 'spot'
+
   // Liquidation must sit beyond the stop by `liquidationSafety`, otherwise the
   // exchange closes the trade before the thesis is disproved. This is a
   // property of the stop alone, so it is answered before the account size is
   // consulted — otherwise a stop no leverage can survive is reported as
   // "position too small", which sends the reader looking at the wrong thing.
-  const leverageCeiling = 1 / (distancePct * config.liquidationSafety) - 1
-  if (leverageCeiling < 1) {
-    return {
-      ok: false,
-      reason: `stop is ${(distancePct * 100).toFixed(2)}% away; even 1x liquidates before it`,
+  //
+  // Spot has no liquidation at all, so the whole question is skipped there
+  // rather than answered with a leverage of 1 that happens to pass.
+  let leverage = 1
+  if (!spot) {
+    const leverageCeiling = 1 / (distancePct * config.liquidationSafety) - 1
+    if (leverageCeiling < 1) {
+      return {
+        ok: false,
+        reason: `stop is ${(distancePct * 100).toFixed(2)}% away; even 1x liquidates before it`,
+      }
     }
+    leverage = Math.max(1, Math.min(config.maxLeverage, Math.floor(leverageCeiling)))
   }
-  const leverage = Math.max(1, Math.min(config.maxLeverage, Math.floor(leverageCeiling)))
 
   const riskSats = equitySats * (config.riskPct / 100)
   const lossPerUsd = SATS_PER_BTC * Math.abs(1 / stop - 1 / entry)
   let quantityUsd = riskSats / lossPerUsd
 
-  const maxNotionalUsd = ((equitySats / SATS_PER_BTC) * entry * config.maxNotionalPct) / 100
+  // Spot cannot hold more than the capital behind it — that IS what unleveraged
+  // means, and it binds long before the configured notional cap does. A tight
+  // stop then buys less risk than was asked for rather than more position than
+  // exists, which is reported so the difference is visible.
+  const notionalCapPct = spot ? 100 : config.maxNotionalPct
+  const maxNotionalUsd = ((equitySats / SATS_PER_BTC) * entry * notionalCapPct) / 100
   let notionalCapped = false
   if (quantityUsd > maxNotionalUsd) {
     quantityUsd = maxNotionalUsd
@@ -182,6 +204,7 @@ export const planPosition = ({ side, entry, stop, takeProfit, equitySats, settin
 
   return {
     ok: true,
+    market: config.market,
     side,
     entry,
     stop,

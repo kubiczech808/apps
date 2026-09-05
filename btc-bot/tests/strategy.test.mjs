@@ -5,6 +5,12 @@ import { createPaperExecutor } from '../src/executor-paper.mjs'
 import { appendCandle, candle, HOUR, START, zigzag } from './helpers.mjs'
 
 /** An uptrend that has just pulled back into an old demand zone and rejected. */
+// The quality filters get their own tests below. The fixtures here are smooth
+// synthetic zigzags with no swept liquidity and no imbalance, so leaving the
+// filters on would make every test in this file fail for the same new reason
+// and stop testing what it was written for.
+const NO_QUALITY_FILTERS = { requireSweep: false, requireImbalance: false }
+
 const bullishPullback = () => {
   const candles = zigzag([100, 112, 106, 124, 116, 138, 128, 152, 140, 168, 152, 180, 164, 196, 166], { steps: 8 })
   appendCandle(candles, { open: 166, high: 167.5, low: 163, close: 167 })
@@ -23,7 +29,7 @@ const bearishPullback = () => {
 
 test('a pullback into demand inside an uptrend is a long, bracketed on both sides', () => {
   const candles = bullishPullback()
-  const decision = evaluateEntry({ htfCandles: candles, ltfCandles: candles })
+  const decision = evaluateEntry({ htfCandles: candles, ltfCandles: candles, settings: NO_QUALITY_FILTERS })
 
   assert.equal(decision.action, 'open')
   assert.equal(decision.side, 'long')
@@ -35,7 +41,7 @@ test('a pullback into demand inside an uptrend is a long, bracketed on both side
 
 test('a rally into supply inside a downtrend is a short', () => {
   const candles = bearishPullback()
-  const decision = evaluateEntry({ htfCandles: candles, ltfCandles: candles })
+  const decision = evaluateEntry({ htfCandles: candles, ltfCandles: candles, settings: NO_QUALITY_FILTERS })
 
   assert.equal(decision.action, 'open')
   assert.equal(decision.side, 'short')
@@ -45,14 +51,14 @@ test('a rally into supply inside a downtrend is a short', () => {
 
 test('a ranging higher timeframe is refused outright', () => {
   const candles = zigzag([100, 110, 100, 110, 100, 110, 100, 110, 100, 110, 100], { steps: 8 })
-  const decision = evaluateEntry({ htfCandles: candles, ltfCandles: candles })
+  const decision = evaluateEntry({ htfCandles: candles, ltfCandles: candles, settings: NO_QUALITY_FILTERS })
   assert.equal(decision.action, 'none')
   assert.match(decision.reason, /no trend|ranging/)
 })
 
 test('price far from the zone is refused even in a clean trend', () => {
   const candles = zigzag([100, 112, 106, 124, 116, 138, 128, 152, 140, 168, 152, 180, 164, 196, 194], { steps: 8 })
-  const decision = evaluateEntry({ htfCandles: candles, ltfCandles: candles })
+  const decision = evaluateEntry({ htfCandles: candles, ltfCandles: candles, settings: NO_QUALITY_FILTERS })
   assert.equal(decision.action, 'none')
   assert.match(decision.reason, /ATR from the demand zone|no bullish trigger/)
 })
@@ -62,21 +68,21 @@ test('reaching the zone without a trigger candle is refused', () => {
   // A candle that wicks into the zone but shows no rejection: the lower wick is
   // shorter than its body and it closes in the lower half of its range.
   appendCandle(candles, { open: 165.5, high: 165.8, low: 163, close: 164.2 })
-  const decision = evaluateEntry({ htfCandles: candles, ltfCandles: candles })
+  const decision = evaluateEntry({ htfCandles: candles, ltfCandles: candles, settings: NO_QUALITY_FILTERS })
   assert.equal(decision.action, 'none')
   assert.match(decision.reason, /no bullish trigger/)
 })
 
 test('a reward/risk gate above what the structure offers refuses the trade', () => {
   const candles = bullishPullback()
-  const decision = evaluateEntry({ htfCandles: candles, ltfCandles: candles, settings: { minRR: 12 } })
+  const decision = evaluateEntry({ htfCandles: candles, ltfCandles: candles, settings: { ...NO_QUALITY_FILTERS, minRR: 12 } })
   assert.equal(decision.action, 'none')
   assert.match(decision.reason, /reward\/risk/)
 })
 
 test('too little history is refused rather than guessed at', () => {
   const candles = zigzag([100, 110, 105, 120], { steps: 4 })
-  const decision = evaluateEntry({ htfCandles: candles, ltfCandles: candles })
+  const decision = evaluateEntry({ htfCandles: candles, ltfCandles: candles, settings: NO_QUALITY_FILTERS })
   assert.equal(decision.action, 'none')
   assert.match(decision.reason, /not enough/)
 })

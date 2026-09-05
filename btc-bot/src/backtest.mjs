@@ -60,10 +60,16 @@ export const runBacktest = async ({
   // drawdown and average losses five times the 1% that was risked — the
   // signature of a system with no stops, and entirely an artefact of this.
   let clock = hourly[warmupHours].time
+  // Spot pays no funding — holding the asset costs nothing but the spread you
+  // already paid. Enforced here rather than trusted to the caller, because a
+  // spot backtest charged carry would understate a strategy for a cost it never
+  // incurs, and the mistake would be invisible in the result.
+  const spot = settings.risk.market === 'spot'
+  const carrySchedule = spot ? [] : fundingSettlements
   const executor = createPaperExecutor({
     store,
     feeRate: settings.risk.feeRate,
-    fundingSettlements,
+    fundingSettlements: carrySchedule,
     now: () => clock,
   })
 
@@ -207,7 +213,8 @@ export const runBacktest = async ({
         0
       ),
       carrySats: closed.reduce((sum, trade) => sum + (trade.carryFeesSats ?? 0), 0),
-      settlementsUsed: fundingSettlements.length,
+      settlementsUsed: carrySchedule.length,
+      market: settings.risk.market,
     },
     equityCurve,
     rejections: [...rejections.entries()].sort((a, b) => b[1] - a[1]).slice(0, 20),
@@ -271,8 +278,10 @@ export const formatBacktest = (report) => {
   )
   const fees = report.fees ?? {}
   lines.push(
-    `Fees          trading ${sats(fees.tradingSats)}, carry ${sats(fees.carrySats)}` +
-      (fees.settlementsUsed ? ` (${fees.settlementsUsed} real settlements)` : ' — CARRY NOT MODELLED')
+    fees.market === 'spot'
+      ? `Fees          trading ${sats(fees.tradingSats)} (spot: no leverage, no carry)`
+      : `Fees          trading ${sats(fees.tradingSats)}, carry ${sats(fees.carrySats)}` +
+          (fees.settlementsUsed ? ` (${fees.settlementsUsed} real settlements)` : ' — CARRY NOT MODELLED')
   )
   // Thirteen trades and a profit factor of 1.12 is noise wearing the clothes of
   // a result. Say so in the output rather than leaving the reader to remember.

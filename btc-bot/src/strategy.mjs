@@ -51,6 +51,18 @@ export const DEFAULT_STRATEGY = {
   // close and still count as trading "from" the zone.
   zoneMaxDistanceAtr: 1.0,
   minZoneTouches: 1,
+  // Quality filters from the supply-and-demand school this was tuned towards.
+  // Both ask whether a level is worth trading rather than whether it exists,
+  // which is the question the original engine never asked — and a 26% win rate
+  // is what not asking it looks like.
+  //
+  // requireSweep: the candle forming the zone must have taken out the previous
+  //   candle's extreme. A zone that left stops sitting under it tends to get
+  //   traded through on the way to collect them.
+  // requireImbalance: an unfilled three-candle gap must sit at the zone. It
+  //   marks a one-sided move rather than a two-way auction.
+  requireSweep: true,
+  requireImbalance: true,
   // Volatility band, ATR as a percentage of price on the entry timeframe. Too
   // quiet and the stop is inside the spread; too violent and the zone is noise.
   atrPctMin: 0.15,
@@ -123,6 +135,19 @@ export const evaluateEntry = ({ htfCandles, ltfCandles, settings = {} }) => {
 
   const zone = candidates[0]
   if (!zone) return reject(`no ${wantedZoneType} zone on the ${side === 'long' ? 'downside' : 'upside'}`, context)
+
+  if (config.requireSweep && !zone.swept) {
+    return reject('the zone never swept the liquidity below it — stops are still resting there', {
+      ...context,
+      zone,
+    })
+  }
+  if (config.requireImbalance && !zone.imbalance) {
+    return reject('no unfilled imbalance at the zone — the move away from it was two-sided', {
+      ...context,
+      zone,
+    })
+  }
 
   // Inside the zone the distance is zero, not negative.
   const distance = Math.max(0, side === 'long' ? price - zone.high : zone.low - price)

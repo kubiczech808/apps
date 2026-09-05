@@ -124,13 +124,16 @@ const windowHours = chosen.windowHours
 // Per strategy, because the rules differ. Each entry changes exactly ONE thing
 // from what ships, so a difference can be attributed to it.
 const VARIANTS_BY_STRATEGY = {
+  // The question now is whether the two quality filters earn their place. The
+  // baseline row is the strategy as it lost 37%, so every other row is measured
+  // against the thing being fixed rather than against nothing.
   'price-action': [
-    ['shipped', {}],
-    ['no breakeven/trail', { strategy: { breakevenAtR: 999, trailStartAtR: 999 } }],
-    ['no trend-flip close', { strategy: { closeOnHtfFlip: false } }],
-    ['neither', { strategy: { breakevenAtR: 999, trailStartAtR: 999, closeOnHtfFlip: false } }],
-    ['target fixed at 2R', { strategy: { tpMaxR: 2 } }],
-    ['require 3R', { strategy: { minRR: 3, tpMinR: 3 } }],
+    ['as it lost (no filters)', { strategy: { requireSweep: false, requireImbalance: false } }],
+    ['sweep only', { strategy: { requireSweep: true, requireImbalance: false } }],
+    ['imbalance only', { strategy: { requireSweep: false, requireImbalance: true } }],
+    ['both (shipped)', {}],
+    ['both, no trend-flip close', { strategy: { closeOnHtfFlip: false } }],
+    ['both, require 3R', { strategy: { minRR: 3, tpMinR: 3 } }],
   ],
   // Structural questions, not a parameter sweep: does each RULE earn its place?
   // The lookback numbers are left at their long-standing defaults on purpose —

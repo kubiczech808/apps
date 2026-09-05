@@ -106,11 +106,26 @@ const fakeExecutor = ({ equitySats = 200_000, running = [], closed = [], orders 
 }
 
 const baseEnv = { BOT_RUNNER: 'test', BOT_CANDLE_LIMIT: '900' }
+
+// Same reason as in strategy.test.mjs: the synthetic market has no swept
+// liquidity and no imbalance, and these tests are about the pass, not the
+// filters.
+// fakeStore takes a whole STATE, so the flags belong under settings.strategy —
+// putting them at the top level left the filters on and the tests failing for
+// the new reason rather than their own.
+const noQualityFilters = (state = {}) => ({
+  ...state,
+  settings: {
+    ...(state.settings ?? {}),
+    strategy: { requireSweep: false, requireImbalance: false, ...(state.settings?.strategy ?? {}) },
+  },
+  paper: { balanceSats: 0, trades: [], nextId: 1 },
+})
 const nowAfter = (candles) => candles.at(-1).time + HOUR + 60_000
 
 test('a pass opens exactly one position, with a stop loss and a take profit', async () => {
   const candles = marketCandles()
-  const store = fakeStore()
+  const store = fakeStore(noQualityFilters())
   const executor = fakeExecutor()
 
   const { state, run } = await runPass({
@@ -142,7 +157,7 @@ test('the position it opens risks the configured 1% of equity, not more', async 
   await runPass({
     env: baseEnv,
     fetchImpl: bybitStub(candles),
-    store: fakeStore(),
+    store: fakeStore(noQualityFilters()),
     logger: { info() {}, warn() {}, error() {} },
     now: nowAfter(candles),
     makeExecutor: executor.factory,
@@ -157,7 +172,7 @@ test('the position it opens risks the configured 1% of equity, not more', async 
 test('nothing is opened while trading is paused, and the reason says so', async () => {
   const candles = marketCandles()
   const executor = fakeExecutor()
-  const paused = { settings: { enabled: false }, paper: { balanceSats: 0, trades: [], nextId: 1 } }
+  const paused = noQualityFilters({ settings: { enabled: false } })
 
   const { run, state } = await runPass({
     env: baseEnv,
@@ -190,7 +205,7 @@ test('a second position is refused while one is already open', async () => {
   const { run } = await runPass({
     env: baseEnv,
     fetchImpl: bybitStub(candles),
-    store: fakeStore(),
+    store: fakeStore(noQualityFilters()),
     logger: { info() {}, warn() {}, error() {} },
     now: nowAfter(candles),
     makeExecutor: executor.factory,
@@ -229,7 +244,7 @@ test('a quiet range produces no trade and records why', async () => {
   const { state } = await runPass({
     env: baseEnv,
     fetchImpl: bybitStub(candles),
-    store: fakeStore(),
+    store: fakeStore(noQualityFilters()),
     logger: { info() {}, warn() {}, error() {} },
     now: nowAfter(candles),
     makeExecutor: executor.factory,
@@ -246,7 +261,7 @@ test('a failing candle source is recorded as an error rather than trading blind'
     fetchImpl: async () => {
       throw new Error('network down')
     },
-    store: fakeStore(),
+    store: fakeStore(noQualityFilters()),
     logger: { info() {}, warn() {}, error() {} },
     now: Date.now(),
     makeExecutor: executor.factory,
@@ -315,10 +330,7 @@ test('mainnet is refused while the dashboard key is one published in the repo', 
   const { state, run } = await runPass({
     env: { ...baseEnv, BOT_API_KEY: 'ahoj1234567890' },
     fetchImpl: bybitStub(candles),
-    store: fakeStore({
-      settings: { mode: 'mainnet' },
-      paper: { balanceSats: 0, trades: [], nextId: 1 },
-    }),
+    store: fakeStore(noQualityFilters({ settings: { mode: 'mainnet' } })),
     logger: { info() {}, warn() {}, error: (message) => errors.push(message) },
     now: nowAfter(candles),
   })
@@ -336,10 +348,7 @@ test('mainnet is allowed once the key is not a published one', async () => {
   const { run } = await runPass({
     env: { ...baseEnv, BOT_API_KEY: 'a-real-secret-nobody-published' },
     fetchImpl: bybitStub(candles),
-    store: fakeStore({
-      settings: { mode: 'mainnet' },
-      paper: { balanceSats: 0, trades: [], nextId: 1 },
-    }),
+    store: fakeStore(noQualityFilters({ settings: { mode: 'mainnet' } })),
     logger: { info() {}, warn() {}, error() {} },
     now: nowAfter(candles),
   })

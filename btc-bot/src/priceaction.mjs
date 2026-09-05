@@ -144,15 +144,28 @@ export const buildZones = (candles, { lookback = 2, tolerance, maxAgeCandles = 4
   const band = tolerance ?? reference * 0.75
   const oldestIndex = Math.max(0, candles.length - maxAgeCandles)
 
+  const gaps = fairValueGaps(candles, { atrValue: reference, minSizeAtr: 0.1 })
+
   const raw = swings
     .filter((swing) => swing.index >= oldestIndex)
     .map((swing) => {
       const { candle } = swing
       const bodyLow = Math.min(candle.open, candle.close)
       const bodyHigh = Math.max(candle.open, candle.close)
-      return swing.kind === 'low'
-        ? { type: 'demand', low: candle.low, high: Math.max(bodyLow, candle.low + band * 0.5), swing }
-        : { type: 'supply', low: Math.min(bodyHigh, candle.high - band * 0.5), high: candle.high, swing }
+      const swept = sweptLiquidity(candles, swing.index, swing.kind === 'low' ? 'low' : 'high')
+      const zone =
+        swing.kind === 'low'
+          ? { type: 'demand', low: candle.low, high: Math.max(bodyLow, candle.low + band * 0.5), swing }
+          : { type: 'supply', low: Math.min(bodyHigh, candle.high - band * 0.5), high: candle.high, swing }
+      return {
+        ...zone,
+        swept,
+        imbalance: hasImbalanceNear(gaps, {
+          low: zone.low,
+          high: zone.high,
+          direction: swing.kind === 'low' ? 'bullish' : 'bearish',
+        }),
+      }
     })
 
   const zones = []
@@ -164,6 +177,10 @@ export const buildZones = (candles, { lookback = 2, tolerance, maxAgeCandles = 4
       match.touches += 1
       match.lastIndex = Math.max(match.lastIndex, item.swing.index)
       match.lastTime = Math.max(match.lastTime, item.swing.time)
+      // A merged zone is as good as its best constituent: one qualifying turn
+      // is enough to say the liquidity was taken or the move was imbalanced.
+      match.swept = match.swept || item.swept
+      match.imbalance = match.imbalance || item.imbalance
       continue
     }
     zones.push({
@@ -171,6 +188,8 @@ export const buildZones = (candles, { lookback = 2, tolerance, maxAgeCandles = 4
       low: item.low,
       high: item.high,
       touches: 1,
+      swept: item.swept,
+      imbalance: item.imbalance,
       firstIndex: item.swing.index,
       lastIndex: item.swing.index,
       lastTime: item.swing.time,
@@ -248,3 +267,63 @@ export const nextSwingAbove = (structure, price) =>
 /** Nearest confirmed swing low strictly below `price` — a short's structural target. */
 export const nextSwingBelow = (structure, price) =>
   structure.lows.filter((swing) => swing.price < price).sort((a, b) => b.price - a.price)[0] ?? null
+
+// ── quality filters ─────────────────────────────────────────────────────────
+//
+// The two below come from the supply-and-demand school this strategy is being
+// tuned towards (JeaFx's "market flow": structure, supply/demand, liquidity,
+// imbalance). Both answer the same question the original engine never asked —
+// not "is there a level here" but "is this level worth trading" — and the
+// original's 26% win rate is what not asking it looks like.
+
+/**
+ * Did this candle take out the previous candle's extreme?
+ *
+ * A demand zone whose forming candle swept the prior low has already collected
+ * the stops resting under it. One that did not leave them sitting there, and
+ * price tends to come back for them before it goes anywhere — so the zone gets
+ * traded through on the way to the liquidity, stopping out anyone who bought it.
+ */
+export const sweptLiquidity = (candles, index, kind) => {
+  const candle = candles[index]
+  const previous = candles[index - 1]
+  if (!candle || !previous) return false
+  return kind === 'low' ? candle.low < previous.low : candle.high > previous.high
+}
+
+/**
+ * Three-candle imbalance: the first and third candles' wicks do not overlap, so
+ * price moved through the middle without trading both sides. It marks a move
+ * driven by one side rather than by two-way auction, and unfilled gaps act as
+ * magnets — which is why they serve as targets as well as a quality filter.
+ */
+export const fairValueGaps = (candles, { minSizeAtr = 0, atrValue } = {}) => {
+  const gaps = []
+  const floor = atrValue && minSizeAtr ? atrValue * minSizeAtr : 0
+
+  for (let index = 1; index < candles.length - 1; index += 1) {
+    const before = candles[index - 1]
+    const after = candles[index + 1]
+
+    if (after.low > before.high && after.low - before.high > floor) {
+      gaps.push({ index, direction: 'bullish', low: before.high, high: after.low })
+    } else if (before.low > after.high && before.low - after.high > floor) {
+      gaps.push({ index, direction: 'bearish', low: after.high, high: before.low })
+    }
+  }
+
+  // A gap price has already traded back through is spent — it is neither a
+  // quality signal nor a target any more.
+  return gaps.filter((gap) => {
+    const later = candles.slice(gap.index + 2)
+    const filled = later.some((candle) => candle.low <= gap.low && candle.high >= gap.high)
+    gap.filled = filled
+    return true
+  })
+}
+
+/** Is there an unfilled imbalance overlapping this price band? */
+export const hasImbalanceNear = (gaps, { low, high, direction }) =>
+  gaps.some(
+    (gap) => !gap.filled && gap.direction === direction && gap.low <= high && gap.high >= low
+  )

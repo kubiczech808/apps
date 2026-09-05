@@ -3,6 +3,8 @@ import test from 'node:test'
 import {
   atr,
   buildZones,
+  fairValueGaps,
+  sweptLiquidity,
   candleSignal,
   findSwings,
   lastDefined,
@@ -107,4 +109,56 @@ test('a candle that has not closed yet is dropped', () => {
   const hourly = [candle(START, 1, 2, 0.5, 1.5), candle(START + HOUR, 1, 2, 0.5, 1.5)]
   assert.equal(dropForming(hourly, HOUR_MS, START + HOUR + 60_000).length, 1)
   assert.equal(dropForming(hourly, HOUR_MS, START + 2 * HOUR).length, 2)
+})
+
+test('a liquidity sweep is a candle taking out the previous candle extreme', () => {
+  const swept = [candle(START, 105, 106, 100, 104), candle(START + HOUR, 104, 105, 98, 103)]
+  assert.equal(sweptLiquidity(swept, 1, 'low'), true, 'the low was taken')
+  assert.equal(sweptLiquidity(swept, 1, 'high'), false)
+
+  const notSwept = [candle(START, 105, 106, 100, 104), candle(START + HOUR, 104, 105, 101, 103)]
+  assert.equal(sweptLiquidity(notSwept, 1, 'low'), false, 'the prior low is still resting there')
+})
+
+test('a fair value gap is three candles whose outer wicks do not overlap', () => {
+  // Candle 1 high 102, candle 3 low 108: price skipped 102-108 entirely.
+  const bullish = [
+    candle(START, 100, 102, 99, 101),
+    candle(START + HOUR, 101, 112, 101, 111),
+    candle(START + 2 * HOUR, 111, 113, 108, 112),
+  ]
+  const gaps = fairValueGaps(bullish)
+  assert.equal(gaps.length, 1)
+  assert.equal(gaps[0].direction, 'bullish')
+  assert.equal(gaps[0].low, 102)
+  assert.equal(gaps[0].high, 108)
+
+  // Overlapping wicks are an ordinary two-sided auction, not an imbalance.
+  const overlapping = [
+    candle(START, 100, 105, 99, 101),
+    candle(START + HOUR, 101, 112, 101, 111),
+    candle(START + 2 * HOUR, 111, 113, 104, 112),
+  ]
+  assert.equal(fairValueGaps(overlapping).length, 0)
+})
+
+test('a gap price has traded back through is marked filled', () => {
+  const candles = [
+    candle(START, 100, 102, 99, 101),
+    candle(START + HOUR, 101, 112, 101, 111),
+    candle(START + 2 * HOUR, 111, 113, 108, 112),
+    candle(START + 3 * HOUR, 112, 113, 101, 103), // trades back through 102-108
+  ]
+  const [gap] = fairValueGaps(candles)
+  assert.equal(gap.filled, true)
+})
+
+test('zones carry whether they swept liquidity and whether an imbalance sits at them', () => {
+  const candles = zigzag([120, 100, 118, 100.5, 119, 100.2, 130], { steps: 6 })
+  const zones = buildZones(candles)
+  assert.ok(zones.length > 0)
+  for (const zone of zones) {
+    assert.equal(typeof zone.swept, 'boolean', 'every zone states whether it took the liquidity')
+    assert.equal(typeof zone.imbalance, 'boolean', 'every zone states whether it has an imbalance')
+  }
 })

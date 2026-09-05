@@ -70,6 +70,7 @@ test('liquidation is kept beyond the stop by the safety factor', () => {
       stop,
       takeProfit: 100_000 + (100_000 - stop) * 3,
       equitySats: EQUITY,
+      settings: { market: 'futures' },
     })
     if (!plan.ok) continue
     assert.ok(
@@ -84,16 +85,60 @@ test('the liquidation formula matches the leverage it was derived from', () => {
   assert.ok(Math.abs(liquidationPrice({ side: 'short', entry: 100_000, leverage: 11 }) - 110_000) < 1)
 })
 
-test('a stop so wide that even 1x liquidates first is refused', () => {
+test('a stop so wide that even 1x liquidates first is refused — on futures', () => {
   const plan = planPosition({
     side: 'long',
     entry: 100_000,
     stop: 40_000,
     takeProfit: 300_000,
     equitySats: EQUITY,
+    settings: { market: 'futures' },
   })
   assert.equal(plan.ok, false)
   assert.match(plan.reason, /liquidates before it/)
+})
+
+test('spot has no liquidation, so the same wide stop is allowed', () => {
+  // A bigger account, because at 100k sats a 60% stop sizes below the exchange
+  // minimum and the test would pass or fail for that reason instead.
+  const plan = planPosition({
+    side: 'long',
+    entry: 100_000,
+    stop: 40_000,
+    takeProfit: 300_000,
+    equitySats: EQUITY * 100,
+    settings: { market: 'spot' },
+  })
+  // Holding the asset outright cannot be liquidated; the only limit is capital.
+  assert.equal(plan.ok, true, plan.reason)
+  assert.equal(plan.leverage, 1)
+})
+
+test('a spot position never exceeds the capital behind it', () => {
+  // A tight stop asks for a position several times equity. Unleveraged, that
+  // cannot exist, so the size is capped and less than 1% is risked — the
+  // opposite of the failure mode where the cap is missed and leverage appears.
+  const plan = planPosition({
+    side: 'long',
+    entry: 100_000,
+    stop: 99_800,
+    takeProfit: 101_000,
+    equitySats: EQUITY,
+    settings: { market: 'spot' },
+  })
+  assert.equal(plan.ok, true, plan.reason)
+  assert.equal(plan.leverage, 1)
+  assert.equal(plan.notionalCapped, true)
+  assert.ok(plan.marginSats <= EQUITY, `margin ${plan.marginSats} exceeds equity ${EQUITY}`)
+  assert.ok(plan.riskSats < EQUITY * 0.01, 'a capped spot position risks less, never more')
+})
+
+test('futures may exceed equity in notional, spot may not', () => {
+  const shared = { side: 'long', entry: 100_000, stop: 99_800, takeProfit: 101_000, equitySats: EQUITY }
+  const futures = planPosition({ ...shared, settings: { market: 'futures', maxNotionalPct: 300 } })
+  const spot = planPosition({ ...shared, settings: { market: 'spot' } })
+  assert.ok(futures.ok && spot.ok)
+  assert.ok(futures.quantityUsd > spot.quantityUsd)
 })
 
 test('inverted brackets are refused rather than silently flipped', () => {
@@ -126,7 +171,7 @@ test('notional is capped even when the stop is very tight', () => {
     stop: 99_950,
     takeProfit: 100_200,
     equitySats: EQUITY,
-    settings: { maxNotionalPct: 300 },
+    settings: { market: 'futures', maxNotionalPct: 300 },
   })
   if (plan.ok) {
     assert.equal(plan.notionalCapped, true)
