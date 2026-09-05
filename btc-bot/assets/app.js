@@ -213,6 +213,72 @@ const renderTiles = () => {
 
 const CHART = { width: 900, height: 190, padLeft: 62, padRight: 12, padTop: 12, padBottom: 24 }
 
+/**
+ * What the bot is looking at right now.
+ *
+ * An untraded portfolio shows five zeroes and four empty tables, which reads as
+ * a bot that is not running. Usually it is running and refusing — this strategy
+ * takes roughly one trade every two days by design, and with the zone quality
+ * filters on, fewer. So the refusal goes on screen beside the empty tables
+ * instead of being buried in the run log.
+ */
+const renderDecision = () => {
+  const card = $('decision-card')
+  const box = $('decision')
+  const decision = state?.lastDecision
+  if (!decision) {
+    card.hidden = true
+    return
+  }
+  card.hidden = false
+  box.replaceChildren()
+
+  const opening = decision.action === 'open' && (decision.gates ?? []).length === 0
+  const verdict = opening
+    ? `Otevírá ${decision.side === 'long' ? 'long' : 'short'}`
+    : decision.action === 'open'
+      ? 'Signál je, ale portfolio ho nepustilo'
+      : 'Čeká — žádný signál'
+
+  box.append(
+    el('div', { className: 'decision-line' }, [
+      el('span', { className: 'decision-verdict', text: verdict }),
+      el('span', { className: 'decision-reason', text: decision.reason ?? '' }),
+    ])
+  )
+
+  const context = decision.context ?? {}
+  const bias = { up: 'vzestupný', down: 'sestupný', range: 'do strany' }[context.htfBias] ?? null
+  const facts = [
+    bias ? `4h trend ${bias}` : null,
+    Number.isFinite(context.price) ? `cena ${price(context.price)}` : null,
+    Number.isFinite(context.atrPct) ? `ATR ${pct(context.atrPct, 2)}` : null,
+    context.zone ? `zóna ${price(context.zone.low)}–${price(context.zone.high)}` : null,
+    context.zone && context.zone.swept !== undefined
+      ? `sweep ${context.zone.swept ? 'ano' : 'ne'}`
+      : null,
+    context.zone && context.zone.imbalance !== undefined
+      ? `imbalance ${context.zone.imbalance ? 'ano' : 'ne'}`
+      : null,
+    context.confirmation ? `spouštěč ${context.confirmation}` : null,
+  ].filter(Boolean)
+
+  if (facts.length) {
+    box.append(
+      el('div', { className: 'decision-facts' }, facts.map((fact) => el('span', { className: 'fact', text: fact })))
+    )
+  }
+
+  if ((decision.gates ?? []).length) {
+    box.append(
+      el('ul', { className: 'gates' }, decision.gates.map((gate) => el('li', { text: gate })))
+    )
+  }
+  if (decision.planRejection) {
+    box.append(el('ul', { className: 'gates' }, [el('li', { text: decision.planRejection })]))
+  }
+}
+
 const renderChart = () => {
   const svg = $('equity-svg')
   const tooltip = $('equity-tooltip')
@@ -222,7 +288,12 @@ const renderChart = () => {
   const points = (state?.equityHistory || []).filter((point) => Number.isFinite(point.equitySats))
   if (points.length < 2) {
     svg.append(
-      el('text', { x: 12, y: 40, className: 'tick', text: 'Zatím není dost historie — graf se objeví po několika bězích.' })
+      el('text', {
+        x: 12,
+        y: 40,
+        className: 'tick',
+        text: `Zatím ${points.length === 1 ? 'jeden bod' : 'žádný bod'} — kapitál se vzorkuje po 15 minutách, graf naskočí do půl hodiny.`,
+      })
     )
     return
   }
@@ -514,6 +585,7 @@ const renderAll = () => {
   renderHeader()
   renderNotices()
   renderTiles()
+  renderDecision()
   renderChart()
   renderOpen()
   renderOrders()

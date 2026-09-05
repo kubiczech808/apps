@@ -124,10 +124,16 @@ export const recordRun = (state, run) => {
   return state
 }
 
+// Every 15 minutes rather than every hour. The bot passes once a minute, so an
+// hourly point meant a chart with two points after two hours of running — which
+// renders as an empty box and reads as "nothing is happening". At 15 minutes the
+// 2000-point cap still holds three weeks.
+export const EQUITY_SAMPLE_MS = 15 * 60_000
+
 export const recordEquity = (state, equitySats, at) => {
   const points = state.equityHistory ?? []
   const previous = points.at(-1)
-  if (previous && previous.equitySats === equitySats && at - previous.at < 3600_000) return state
+  if (previous && previous.equitySats === equitySats && at - previous.at < EQUITY_SAMPLE_MS) return state
   state.equityHistory = [...points, { at, equitySats }].slice(-MAX_EQUITY_POINTS)
   return state
 }

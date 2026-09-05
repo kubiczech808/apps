@@ -4,7 +4,7 @@ import {
   atr,
   buildZones,
   fairValueGaps,
-  sweptLiquidity,
+  sweptPreviousSwing,
   candleSignal,
   findSwings,
   lastDefined,
@@ -111,13 +111,16 @@ test('a candle that has not closed yet is dropped', () => {
   assert.equal(dropForming(hourly, HOUR_MS, START + 2 * HOUR).length, 2)
 })
 
-test('a liquidity sweep is a candle taking out the previous candle extreme', () => {
-  const swept = [candle(START, 105, 106, 100, 104), candle(START + HOUR, 104, 105, 98, 103)]
-  assert.equal(sweptLiquidity(swept, 1, 'low'), true, 'the low was taken')
-  assert.equal(sweptLiquidity(swept, 1, 'high'), false)
+test('a sweep is a pivot reaching past the previous pivot, not past its neighbours', () => {
+  const lower = { kind: 'low', price: 95 }
+  const higher = { kind: 'low', price: 105 }
+  assert.equal(sweptPreviousSwing(lower, higher), true, 'it reached under the prior low')
+  assert.equal(sweptPreviousSwing(higher, lower), false, 'a higher low left that liquidity in place')
+  assert.equal(sweptPreviousSwing(lower, null), false, 'nothing to have swept')
 
-  const notSwept = [candle(START, 105, 106, 100, 104), candle(START + HOUR, 104, 105, 101, 103)]
-  assert.equal(sweptLiquidity(notSwept, 1, 'low'), false, 'the prior low is still resting there')
+  const high = { kind: 'high', price: 120 }
+  assert.equal(sweptPreviousSwing(high, { kind: 'high', price: 110 }), true)
+  assert.equal(sweptPreviousSwing({ kind: 'high', price: 110 }, high), false)
 })
 
 test('a fair value gap is three candles whose outer wicks do not overlap', () => {

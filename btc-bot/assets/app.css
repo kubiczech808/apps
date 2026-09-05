@@ -267,3 +267,24 @@ tbody tr:hover { background: var(--series-1-soft); }
 }
 .gate h2 { margin: 0 0 6px; font-size: 16px; }
 .gate p { margin: 0 0 14px; color: var(--text-secondary); font-size: 13px; }
+
+/* ── what the bot is deciding ───────────────────────────────────────────────
+ *
+ * A portfolio that has not traded shows empty tables, which reads as a bot that
+ * is not running. It usually is running and refusing, so the refusal is put on
+ * screen next to the tables rather than buried in the run log.
+ */
+.decision-line { display: flex; flex-wrap: wrap; gap: 8px 18px; align-items: baseline; }
+.decision-verdict { font-size: 15px; font-weight: 600; }
+.decision-reason { color: var(--text-secondary); }
+.decision-facts { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.fact {
+  font-size: 12px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+.gates { margin: 10px 0 0; padding-left: 18px; color: var(--text-secondary); font-size: 13px; }
+.gates li { margin: 2px 0; }

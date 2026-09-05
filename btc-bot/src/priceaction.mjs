@@ -146,13 +146,24 @@ export const buildZones = (candles, { lookback = 2, tolerance, maxAgeCandles = 4
 
   const gaps = fairValueGaps(candles, { atrValue: reference, minSizeAtr: 0.1 })
 
+  // Each pivot is judged against the previous pivot of the same kind, so the
+  // sweep test needs the whole ordered list rather than a candle window.
+  const previousSameKind = new Map()
+  let lastLow = null
+  let lastHigh = null
+  for (const swing of swings) {
+    previousSameKind.set(swing, swing.kind === 'low' ? lastLow : lastHigh)
+    if (swing.kind === 'low') lastLow = swing
+    else lastHigh = swing
+  }
+
   const raw = swings
     .filter((swing) => swing.index >= oldestIndex)
     .map((swing) => {
       const { candle } = swing
       const bodyLow = Math.min(candle.open, candle.close)
       const bodyHigh = Math.max(candle.open, candle.close)
-      const swept = sweptLiquidity(candles, swing.index, swing.kind === 'low' ? 'low' : 'high')
+      const swept = sweptPreviousSwing(swing, previousSameKind.get(swing))
       const zone =
         swing.kind === 'low'
           ? { type: 'demand', low: candle.low, high: Math.max(bodyLow, candle.low + band * 0.5), swing }
@@ -277,18 +288,31 @@ export const nextSwingBelow = (structure, price) =>
 // original's 26% win rate is what not asking it looks like.
 
 /**
- * Did this candle take out the previous candle's extreme?
+ * Did this pivot take the liquidity resting at the PREVIOUS pivot?
  *
- * A demand zone whose forming candle swept the prior low has already collected
- * the stops resting under it. One that did not leave them sitting there, and
- * price tends to come back for them before it goes anywhere — so the zone gets
- * traded through on the way to the liquidity, stopping out anyone who bought it.
+ * The rule is "if the previous wick isn't taken out, the market will likely
+ * come back to sweep it before moving in your direction". The liquidity in
+ * question sits under an earlier swing low (or above an earlier swing high),
+ * because that is where stops accumulate — not under the candle that happens to
+ * precede this one.
+ *
+ * Two earlier attempts at this were vacuous, and both failed the same way. A
+ * fractal pivot is by construction the strict extreme of its neighbourhood, so
+ * "did it exceed the previous candle" is automatically true for every pivot;
+ * and on a descending leg it is also automatically below the last several
+ * candles. Both versions rejected nothing at all — measured, twice, as a
+ * variant table where the filter on and the filter off were identical to the
+ * sat.
+ *
+ * Comparing pivot to PREVIOUS PIVOT is selective: in an uptrend most higher
+ * lows do not reach under the prior low, and the ones that do are the stop
+ * hunts the doctrine is actually about.
  */
-export const sweptLiquidity = (candles, index, kind) => {
-  const candle = candles[index]
-  const previous = candles[index - 1]
-  if (!candle || !previous) return false
-  return kind === 'low' ? candle.low < previous.low : candle.high > previous.high
+export const sweptPreviousSwing = (swing, previousSameKind) => {
+  if (!previousSameKind) return false
+  return swing.kind === 'low'
+    ? swing.price < previousSameKind.price
+    : swing.price > previousSameKind.price
 }
 
 /**
