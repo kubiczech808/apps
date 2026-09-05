@@ -9,12 +9,28 @@
 
 import { readFile, writeFile } from 'node:fs/promises'
 import { fetchCandles, fetchCandlesWithFallback } from '../src/candles.mjs'
+import { describeFunding, fetchFundingSettlements } from '../src/funding.mjs'
 import { createLnMarketsClient, resolveNetwork } from '../src/lnmarkets.mjs'
 import { formatBacktest, runBacktest } from '../src/backtest.mjs'
+import * as priceAction from '../src/strategy.mjs'
+import * as momentum from '../src/strategy-momentum.mjs'
+
+const STRATEGIES = {
+  'price-action': { module: priceAction, timeframes: { htfHours: 4, ltfHours: 1 } },
+  // Signals off the daily chart, entry priced at the latest hourly close.
+  momentum: { module: momentum, timeframes: { htfHours: 24, ltfHours: 1 } },
+}
+
 
 const args = new Map()
 for (let index = 2; index < process.argv.length; index += 2) {
   args.set(process.argv[index].replace(/^--/, ''), process.argv[index + 1])
+}
+
+const chosen = STRATEGIES[args.get('strategy') ?? 'price-action']
+if (!chosen) {
+  console.error(`Unknown strategy. Choose one of: ${Object.keys(STRATEGIES).join(', ')}`)
+  process.exit(1)
 }
 
 const loadCandles = async () => {
@@ -39,6 +55,30 @@ const loadCandles = async () => {
 
 const { source, candles, failures = [] } = await loadCandles()
 
+// Real carry, not an assumed constant. `--no-funding` measures the same
+// strategy held for free, which is only useful for showing how much the carry
+// was costing.
+let fundingSettlements = []
+if (!args.has('no-funding')) {
+  try {
+    const fundingClient = createLnMarketsClient({
+      network: resolveNetwork(args.get('network') ?? 'mainnet'),
+      key: '',
+      secret: '',
+      passphrase: '',
+    })
+    fundingSettlements = await fetchFundingSettlements({
+      client: fundingClient,
+      hours: Number(args.get('limit') ?? 1000) + 48,
+    })
+    console.log(`Funding       ${describeFunding(fundingSettlements)}`)
+    console.log('')
+  } catch (error) {
+    console.log(`Funding       could not be fetched (${error.message}); carry will NOT be charged`)
+    console.log('')
+  }
+}
+
 // A silent fallback is worse than a failure. A run that quietly dropped from
 // eight months of LN Markets candles to thirty days of Kraken reports a
 // different strategy on different data and looks like the same run.
@@ -48,7 +88,7 @@ if (failures.length) {
   console.log('')
 }
 
-const overrides = { strategy: {}, risk: {} }
+const overrides = { strategy: {}, risk: {}, timeframes: chosen.timeframes }
 if (args.has('risk')) overrides.risk.riskPct = Number(args.get('risk'))
 if (args.has('min-rr')) overrides.strategy.minRR = Number(args.get('min-rr'))
 if (args.has('max-trades')) overrides.maxTradesPerDay = Number(args.get('max-trades'))
@@ -63,14 +103,30 @@ const warmupHours = Number(args.get('warmup') ?? 400)
 // window is how a 233-day sample becomes an overfitted strategy — the table
 // answers "which rule is costing money", and the answer then needs a reason
 // before it becomes a change.
-const VARIANTS = [
-  ['shipped', {}],
-  ['no breakeven/trail', { strategy: { breakevenAtR: 999, trailStartAtR: 999 } }],
-  ['no trend-flip close', { strategy: { closeOnHtfFlip: false } }],
-  ['neither', { strategy: { breakevenAtR: 999, trailStartAtR: 999, closeOnHtfFlip: false } }],
-  ['target fixed at 2R', { strategy: { tpMaxR: 2 } }],
-  ['require 3R', { strategy: { minRR: 3, tpMinR: 3 } }],
-]
+// Per strategy, because the rules differ. Each entry changes exactly ONE thing
+// from what ships, so a difference can be attributed to it.
+const VARIANTS_BY_STRATEGY = {
+  'price-action': [
+    ['shipped', {}],
+    ['no breakeven/trail', { strategy: { breakevenAtR: 999, trailStartAtR: 999 } }],
+    ['no trend-flip close', { strategy: { closeOnHtfFlip: false } }],
+    ['neither', { strategy: { breakevenAtR: 999, trailStartAtR: 999, closeOnHtfFlip: false } }],
+    ['target fixed at 2R', { strategy: { tpMaxR: 2 } }],
+    ['require 3R', { strategy: { minRR: 3, tpMinR: 3 } }],
+  ],
+  // Structural questions, not a parameter sweep: does each RULE earn its place?
+  // The lookback numbers are left at their long-standing defaults on purpose —
+  // tuning them against this window is how a backtest stops meaning anything.
+  momentum: [
+    ['shipped', {}],
+    ['long only', { strategy: { allowShorts: false } }],
+    ['no regime filter', { strategy: { regimeMaDays: 1 } }],
+    ['stop only, no trail', { strategy: { exitLookbackDays: 9999 } }],
+    ['tighter stop, 1 ATR', { strategy: { stopAtr: 1 } }],
+    ['wider stop, 3 ATR', { strategy: { stopAtr: 3 } }],
+  ],
+}
+const VARIANTS = VARIANTS_BY_STRATEGY[args.get('strategy') ?? 'price-action']
 
 if (args.has('compare')) {
   const merge = (variant) => ({
@@ -82,7 +138,13 @@ if (args.has('compare')) {
 
   const rows = []
   for (const [label, variant] of VARIANTS) {
-    const result = await runBacktest({ hourly: candles, settings: merge(variant), warmupHours })
+    const result = await runBacktest({
+      hourly: candles,
+      settings: merge(variant),
+      warmupHours,
+      fundingSettlements,
+      strategy: chosen.module,
+    })
     const exits = result.trades.reduce((counts, trade) => {
       counts[trade.exitReason] = (counts[trade.exitReason] ?? 0) + 1
       return counts
@@ -124,6 +186,8 @@ const report = await runBacktest({
   hourly: candles,
   settings: overrides,
   warmupHours,
+  fundingSettlements,
+  strategy: chosen.module,
 })
 
 const first = new Date(candles[0].time).toISOString()

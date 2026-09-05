@@ -10,24 +10,60 @@
 //    taken. Real intrabar order is unknown, and assuming the good one is how a
 //    backtest flatters itself into a strategy nobody should trade.
 
+import { carryForSettlement } from './funding.mjs'
 import { pnlSats, SATS_PER_BTC } from './risk.mjs'
 
-export const createPaperExecutor = ({ store, feeRate = 0.0006, now = () => Date.now() }) => {
+export const createPaperExecutor = ({
+  store,
+  feeRate = 0.0006,
+  // Real settlement history, ascending by time. Without it a position is held
+  // for free, which flatters every slow strategy and flatters the slowest most.
+  fundingSettlements = [],
+  now = () => Date.now(),
+}) => {
   store.trades ??= []
   store.balanceSats ??= 0
   store.nextId ??= 1
+  store.carryCursor ??= 0
 
   const running = () => store.trades.filter((trade) => trade.status === 'running')
 
   const feeFor = (quantityUsd, price) => Math.ceil(((quantityUsd * SATS_PER_BTC) / price) * feeRate)
 
+  /**
+   * Charge every funding settlement up to `timeMs` against the positions that
+   * were open when it happened.
+   */
+  const chargeCarryUpTo = (timeMs) => {
+    while (store.carryCursor < fundingSettlements.length && fundingSettlements[store.carryCursor].time <= timeMs) {
+      const settlement = fundingSettlements[store.carryCursor]
+      store.carryCursor += 1
+      for (const trade of running()) {
+        if ((trade.openedAt ?? 0) > settlement.time) continue
+        trade.carryFeesSats =
+          (trade.carryFeesSats ?? 0) +
+          carryForSettlement({
+            side: trade.side,
+            quantityUsd: trade.quantityUsd,
+            settlement,
+            fallbackPrice: trade.entry,
+          })
+      }
+    }
+  }
+
   const settle = (trade, exitPrice, exitReason, at) => {
     const gross = pnlSats({ side: trade.side, entry: trade.entry, exit: exitPrice, quantityUsd: trade.quantityUsd })
     const closingFee = feeFor(trade.quantityUsd, exitPrice)
+    const carry = Math.round(trade.carryFeesSats ?? 0)
     trade.status = 'closed'
     trade.exitPrice = exitPrice
     trade.closingFeeSats = closingFee
-    trade.plSats = Math.round(gross - closingFee)
+    trade.carryFeesSats = carry
+    // Carry is a cost when positive, which is why it is subtracted: a long in a
+    // positive-funding market pays to hold, and that is the whole point of
+    // charging it.
+    trade.plSats = Math.round(gross - closingFee - carry)
     trade.closedAt = at
     trade.exitReason = exitReason
     store.balanceSats += trade.marginSats + trade.plSats
@@ -79,6 +115,7 @@ export const createPaperExecutor = ({ store, feeRate = 0.0006, now = () => Date.
         plSats: null,
         openingFeeSats: openingFee,
         closingFeeSats: null,
+        carryFeesSats: 0,
         openedAt: now(),
         createdAt: now(),
         closedAt: null,
@@ -117,6 +154,9 @@ export const createPaperExecutor = ({ store, feeRate = 0.0006, now = () => Date.
     mark: (candles) => {
       const settled = []
       for (const candle of candles) {
+        // Carry first: a position pays for the hours it held before the candle
+        // that closes it, not after.
+        chargeCarryUpTo(candle.time)
         for (const trade of running()) {
           if (trade.openedAt && candle.time < trade.openedAt) continue
           const hitStop =

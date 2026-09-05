@@ -130,6 +130,11 @@ export const createLnMarketsClient = (options = {}) => {
     // `range` is a resolution such as '1m', '15m', '1h', '4h', '1d'. `from` is
     // required. The response is paginated: { data: [...], nextCursor }.
     getCandles: (data) => request({ method: 'GET', path: 'futures/candles', data }),
+    // Historical funding: { id, time, fundingRate, fixingPrice }, paginated.
+    // Public, so a backtest can charge the carry a position would really have
+    // paid instead of a guess at it.
+    getFundingSettlements: (data) =>
+      request({ method: 'GET', path: 'futures/funding-settlements', data }),
 
     // ── account ──────────────────────────────────────────────────────────
     getAccount: () => request({ method: 'GET', path: 'account', auth: true }),

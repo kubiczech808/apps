@@ -20,7 +20,7 @@
 import { aggregate } from './candles.mjs'
 import { createPaperExecutor } from './executor-paper.mjs'
 import { planPosition, SATS_PER_BTC } from './risk.mjs'
-import { evaluateEntry, manageOpen } from './strategy.mjs'
+import * as priceActionStrategy from './strategy.mjs'
 import { computeStats, DEFAULT_SETTINGS, mergeSettings } from './state.mjs'
 import { roundStop, roundTarget } from './bot.mjs'
 
@@ -30,6 +30,14 @@ export const runBacktest = async ({
   warmupHours = 400,
   windowHours = 2400,
   startingCapitalUsd,
+  // Real LN Markets settlement history. Passing none means positions are held
+  // for free, which is a different and more flattering question than the one
+  // this is supposed to answer — so the report says which was measured.
+  fundingSettlements = [],
+  // Any module exporting evaluateEntry and manageOpen. The engine below knows
+  // nothing about what a signal is, so a new idea is a new file rather than a
+  // branch inside an old one.
+  strategy = priceActionStrategy,
 } = {}) => {
   const settings = mergeSettings({ ...DEFAULT_SETTINGS, ...overrides })
   const capitalUsd = startingCapitalUsd ?? settings.startingCapitalUsd
@@ -55,6 +63,7 @@ export const runBacktest = async ({
   const executor = createPaperExecutor({
     store,
     feeRate: settings.risk.feeRate,
+    fundingSettlements,
     now: () => clock,
   })
 
@@ -79,7 +88,9 @@ export const runBacktest = async ({
     const slice = hourly.slice(from, index + 1)
     const ltf = aggregate(slice, settings.timeframes.ltfHours)
     const htf = aggregate(slice, settings.timeframes.htfHours)
-    if (ltf.length < settings.strategy.minLtfCandles || htf.length < settings.strategy.minHtfCandles) continue
+    // The strategy states its own requirements by refusing; the engine only
+    // needs enough to be worth asking.
+    if (ltf.length < 2 || htf.length < 2) continue
 
     const running = store.trades.filter((trade) => trade.status === 'running')
 
@@ -94,7 +105,7 @@ export const runBacktest = async ({
         management.reachedOneR += 1
       }
 
-      const decision = manageOpen({ position, ltfCandles: ltf, htfCandles: htf, settings: settings.strategy })
+      const decision = strategy.manageOpen({ position, ltfCandles: ltf, htfCandles: htf, settings: settings.strategy })
       if (decision.action === 'move_stop') {
         const stop = roundStop(position.side, decision.stop)
         const improves = position.side === 'long' ? stop > position.stopLoss : stop < position.stopLoss
@@ -125,7 +136,7 @@ export const runBacktest = async ({
     if (tradesTodayCount >= settings.maxTradesPerDay) continue
     if (lastLossAt && candle.time - lastLossAt < settings.cooldownMinutesAfterLoss * 60_000) continue
 
-    const decision = evaluateEntry({ htfCandles: htf, ltfCandles: ltf, settings: settings.strategy })
+    const decision = strategy.evaluateEntry({ htfCandles: htf, ltfCandles: ltf, settings: settings.strategy })
     if (decision.action !== 'open') {
       rejections.set(decision.reason, (rejections.get(decision.reason) ?? 0) + 1)
       continue
@@ -179,6 +190,14 @@ export const runBacktest = async ({
     trades: closed,
     openAtEnd: store.trades.filter((trade) => trade.status === 'running').length,
     management,
+    fees: {
+      tradingSats: closed.reduce(
+        (sum, trade) => sum + (trade.openingFeeSats ?? 0) + (trade.closingFeeSats ?? 0),
+        0
+      ),
+      carrySats: closed.reduce((sum, trade) => sum + (trade.carryFeesSats ?? 0), 0),
+      settlementsUsed: fundingSettlements.length,
+    },
     equityCurve,
     rejections: [...rejections.entries()].sort((a, b) => b[1] - a[1]).slice(0, 20),
   }
@@ -230,6 +249,11 @@ export const formatBacktest = (report) => {
   lines.push(
     `Management    ${m.reachedOneR ?? 0} trades reached 1R; ` +
       `${m.breakeven ?? 0} moved to breakeven, ${m.trail ?? 0} trailed, ${m.close ?? 0} closed on trend flip`
+  )
+  const fees = report.fees ?? {}
+  lines.push(
+    `Fees          trading ${sats(fees.tradingSats)}, carry ${sats(fees.carrySats)}` +
+      (fees.settlementsUsed ? ` (${fees.settlementsUsed} real settlements)` : ' — CARRY NOT MODELLED')
   )
   // Thirteen trades and a profit factor of 1.12 is noise wearing the clothes of
   // a result. Say so in the output rather than leaving the reader to remember.
