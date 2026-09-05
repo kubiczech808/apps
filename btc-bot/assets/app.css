@@ -68,6 +68,19 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
+/* The `hidden` attribute must beat any layout rule.
+ *
+ * The browser's own stylesheet says `[hidden] { display: none }`, but ANY author
+ * rule outranks the browser's, whatever its specificity. `.gate { display: grid }`
+ * below therefore kept the login overlay on screen permanently: entering the
+ * right key authenticated, fetched the state and called `gate.hidden = true`,
+ * and nothing visibly happened, because the overlay was still painted over the
+ * dashboard. It looked exactly like a button that does not respond.
+ *
+ * Declared once, here, so no future `display:` on a toggled element can bring
+ * it back. */
+[hidden] { display: none !important; }
+
 .wrap { max-width: 1180px; margin: 0 auto; padding: 20px 16px 64px; }
 
 /* ── header ─────────────────────────────────────────────────────────────── */
