@@ -94,12 +94,14 @@ async function main() {
     for (const run of runs) {
       const action = String(run.action || "").toUpperCase();
       if (!action.includes("SUBMITTED")) continue;
-      const attempts = Array.isArray(run.orderAttempts) ? run.orderAttempts : [];
+      const attempts = Array.isArray(run.attempts) ? run.attempts : [];
       const selected = run.selected || run.order || {};
       const rows = attempts.length ? attempts : [selected];
       for (const row of rows) {
-        const response = row?.response || row?.orderResponse || {};
-        const status = response.status ?? row?.status ?? null;
+        const response = row?.response || {};
+        // responseStatus is the field orderAttemptSummary writes; row.status is the
+        // CANDIDATE's evaluation status and answers a different question entirely.
+        const status = row?.responseStatus ?? response.status ?? null;
         const [label, note] = verdict(status, row?.orderType);
         tally.set(label, (tally.get(label) || 0) + 1);
         console.log(`   ${String(run.generatedAt || run.runAt || "").padEnd(26)} ${action.padEnd(22)}`
@@ -108,7 +110,8 @@ async function main() {
           + `${row?.outcome ? ` (${row.outcome})` : ""}`);
         console.log(`      status ${JSON.stringify(status)}   orderId ${JSON.stringify(response.orderID || response.orderId || null)}`
           + `   size ${JSON.stringify(row?.orderSize ?? null)}   price ${JSON.stringify(row?.orderPrice ?? null)}`
-          + `   error ${JSON.stringify(response.errorMsg || response.error || null)}`);
+          + `   error ${JSON.stringify(row?.responseError ?? response.errorMsg ?? response.error ?? null)}`);
+        if (row?.responseSummary) console.log(`      summary ${JSON.stringify(row.responseSummary)}`);
         printed += 1;
       }
     }
