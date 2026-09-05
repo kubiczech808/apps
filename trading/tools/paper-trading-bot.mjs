@@ -5076,7 +5076,7 @@ function stopLossReversalCapacity(trades, portfolioState) {
 }
 
 async function buildStopLossReversalTrade(sourceTrade, strategy) {
-  if (!strategy?.reverseOnStopLoss || sourceTrade?.isStopLossReversal === true) {
+  if (!stopLossReversalAllowed(strategy) || sourceTrade?.isStopLossReversal === true) {
     return { trade: null, reason: "reverse after stop loss is disabled or already used for this position" };
   }
   let market;
@@ -5141,6 +5141,26 @@ function reversalFailureIsTerminal(reason) {
 
 const REVERSAL_RETRY_LIMIT = 8;
 
+// Buying the opposite outcome after a stop is an ENTRY, and a switched-off portfolio must
+// not open positions. Everything else this pass does for a switched-off portfolio --
+// marking, stopping, closing at certainty -- keeps running, because switching a portfolio
+// off stops it committing new money, it does not abandon money already committed.
+//
+// This is the line live draws: live_stop_loss_policy_config hands the exit worker
+// reverseOnStopLoss only when automation is on. Paper drew it in one place fewer, so a
+// switched-off paper portfolio would still open the opposite position and there was no
+// safe way to see that difference before it happened on the live wallet.
+//
+// No manual-run carve-out, deliberately, even though the entry trigger has one: on live
+// the reversal is executed by the always-on exit worker, which has no manual mode at all,
+// so a carve-out here would exist only on paper -- the asymmetry this removes.
+function stopLossReversalAllowed(strategy) {
+  if (!strategy?.reverseOnStopLoss) return false;
+  // Absent means on, the same reading the entry path uses: a portfolio saved before the
+  // switch existed must not lose its reversal to a field it never had.
+  return strategy?.automationEnabled !== false;
+}
+
 function recordStopLossReversalResult(trade, result) {
   const at = nowIso();
   if (result.trade) {
@@ -5185,7 +5205,7 @@ async function refreshTrades(trades, portfolioState = null, strategy = null) {
       + ` fund the position; left ${funding.deferred} order(s) resting for a later pass`
       + `${funding.funded ? ` after funding ${funding.funded}` : ""}.`);
   }
-  if (!strategy?.reverseOnStopLoss) return funding.trades;
+  if (!stopLossReversalAllowed(strategy)) return funding.trades;
 
   const originalById = new Map((Array.isArray(trades) ? trades : []).map((trade) => [trade.id, trade]));
   let nextTrades = [...funding.trades];
@@ -12548,6 +12568,9 @@ export {
   openPaperTradeForStrategy,
   paperTradeFromCandidate,
   oppositeBinaryOutcome,
+  // Whether the stop's opposite position may be opened at all. Opening is the one step a
+  // switched-off portfolio must not take; protecting what it holds continues regardless.
+  stopLossReversalAllowed,
   buildStopLossReversalTrade,
   mergeStates,
   mergeExecutionObservationSnapshot,

@@ -3157,6 +3157,40 @@ test("live stop loss: a switched-off portfolio keeps managing what it already ho
   }
 });
 
+// The paper half of the rule above, and the half that was missing. Live suppresses the
+// reversal for a switched-off portfolio in live_stop_loss_policy_config; paper gated the
+// reversal on reverseOnStopLoss alone, so a switched-off paper portfolio would still buy
+// the opposite outcome after a stop -- which is the one thing "off" has to prevent.
+//
+// Asked for: paper portfolios are where a setting gets tried before real money touches it,
+// so a rule that holds only on live cannot be tested without risking the live wallet.
+// Both sides now answer the same question the same way.
+test("paper stop loss: a switched-off portfolio protects but does not reverse", () => {
+  const allowed = new Function("strategy", `
+    ${extractFunction(BOT, "stopLossReversalAllowed")}
+    return stopLossReversalAllowed(strategy);
+  `);
+
+  assert.equal(allowed({ reverseOnStopLoss: true, automationEnabled: true }), true,
+    "a running portfolio with the reversal configured still reverses");
+  assert.equal(allowed({ reverseOnStopLoss: true, automationEnabled: false }), false,
+    "buying the opposite outcome is opening a position, which is what off must prevent");
+  assert.equal(allowed({ reverseOnStopLoss: false, automationEnabled: true }), false,
+    "and a portfolio that never asked for the reversal does not get one");
+
+  // Absent means on, the same reading the entry path uses: a portfolio saved before the
+  // automation switch existed must not lose its reversal to a field it never had.
+  assert.equal(allowed({ reverseOnStopLoss: true }), true,
+    "a portfolio stored before the switch existed keeps reversing");
+
+  // The gate has to sit on the path refreshTrades actually takes, not only in a helper
+  // nothing calls -- a rule stated once and applied nowhere reads as fixed and is not.
+  assert.ok(BOT.includes("if (!stopLossReversalAllowed(strategy)) return funding.trades;"),
+    "refreshTrades asks before reversing");
+  assert.ok(/buildStopLossReversalTrade\(sourceTrade, strategy\) \{\s*\n\s*if \(!stopLossReversalAllowed\(strategy\)/
+    .test(BOT), "and so does the builder, for whichever entry point reaches it");
+});
+
 // Reported: a live portfolio that has a stop loss configured is switched off, and turning
 // it back on must not quietly sell the positions it has been holding. The dashboard now
 // says which ones would go and asks first -- and for that warning to be worth anything, the
