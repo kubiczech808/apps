@@ -1,0 +1,31 @@
+name: Trading Live Exit Signing Diagnosis
+
+# Read-only diagnostic, manual only. Compares the signature type the LIVE EXECUTOR signs
+# with -- read from the account configuration published in the live state -- against the
+# one the RPi exit worker signs with, which comes only from its environment.
+#
+# Asked because every protective sell came back
+#   400 "the order signer address has to be the address of the API KEY"
+# while buys from the same wallet kept being accepted.
+#
+# It places no orders, writes nothing, needs no secrets, and never reads a key: only
+# addresses and signature-type numbers are printed.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Diagnose live exit signing
+        working-directory: trading
+        run: node tools/live-exit-signing-diagnosis.mjs
