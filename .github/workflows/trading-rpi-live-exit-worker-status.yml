@@ -56,10 +56,17 @@ jobs:
             exit 0
           fi
           echo "   modified: $(date -u -r "$env_file" '+%Y-%m-%dT%H:%M:%SZ')"
-          # By name, one at a time. Never cat the file: it holds the signing key.
+          # By name, one at a time. Never cat the file: it holds the signing key, and
+          # POLYMARKET_PRIVATE_KEY is deliberately absent from this list.
+          #
+          # The two POLYMARKET_ addresses and the signature type are here because every
+          # protective sell came back 400 "the order signer address has to be the address
+          # of the API KEY", and those three are what decide the address an order is
+          # signed as. They are public on-chain identifiers, not credentials.
           for key in LIVE_EXIT_MODE LIVE_EXIT_CONFIRM_LIVE LIVE_EXIT_PROTECT_ALL \
                      LIVE_EXIT_POLL_INTERVAL_MS LIVE_EXIT_RETRY_INTERVAL_MS \
-                     LIVE_EXIT_STATE_REFRESH_MS LIVE_EXIT_POLICY_URL; do
+                     LIVE_EXIT_STATE_REFRESH_MS LIVE_EXIT_POLICY_URL \
+                     POLYMARKET_FUNDER_ADDRESS POLYMARKET_ADDRESS POLYMARKET_SIGNATURE_TYPE; do
             value="$(sed -n "s/^${key}=//p" "$env_file" | tail -n 1)"
             printf '   %-32s %s\n' "$key" "${value:-(unset)}"
           done
