@@ -550,3 +550,104 @@ test("settlement close: the sell is priced at the bid, because there is no floor
     "capped at fifteen minutes, so the answer is never staler than that");
   assert.match(source, /if \(Date\.now\(\) - last < SETTLEMENT_SCAN_INTERVAL_MS\) return false;/);
 });
+
+// Reported: the stop sold a WINNING position. Measured on "Avispa Fukuoka vs. FC Mito Holly
+// Hock: 1st Half O/U 1.5", four minutes after a 12:00 kickoff, holding Under 1.5 bought at
+// 0.70 with the floor at 0.129981:
+//
+//   bestBid 0.10  exitPrice 0.10  -> sold 7 Under at 9.6c
+//
+// The first half finished 0-0 and Under resolved at 1.00. Under was never near 0.10; the
+// market simply had no bid side at kickoff, and the stop read the one lowball order resting
+// there as the price. A neighbouring market's bid bounced 0.13, 0.07, 0.06, 0.12, 0.06,
+// 0.01 inside four minutes over the same window -- not a price series, an empty book.
+test("stop trigger: a lowball bid the rest of the book contradicts is not a price", () => {
+  const floor = { stopPrice: 0.129981, triggerPrice: 0.131981 };
+
+  // The reported case: bid through the floor, ask still up where the market really is.
+  assert.equal(worker.exitTrigger({ ...floor, bestBidPrice: 0.10, bestAskPrice: 0.90 }), false,
+    "a 0.10 bid against a 0.90 ask is a 0.50 mid: the market has not moved against us");
+  assert.equal(worker.exitTrigger({ ...floor, bestBidPrice: 0.10, bestAskPrice: 0.75 }), false);
+
+  // A genuinely collapsing outcome must still fire: its ask collapses with it.
+  assert.equal(worker.exitTrigger({ ...floor, bestBidPrice: 0.01, bestAskPrice: 0.05 }), true,
+    "bid 0.01 against ask 0.05 is a 0.03 mid, still through the floor");
+  assert.equal(worker.exitTrigger({ ...floor, bestBidPrice: 0.09, bestAskPrice: 0.11 }), true,
+    "a healthy tight book is unaffected -- bid, ask and mid agree");
+
+  // Nobody offering at all is a state the midpoint cannot describe, so the bid stands alone
+  // there, exactly as it always has.
+  assert.equal(worker.exitTrigger({ ...floor, bestBidPrice: 0.10, bestAskPrice: null }), true);
+  assert.equal(worker.exitTrigger({ ...floor, bestBidPrice: 0.10 }), true);
+
+  // The guards that were already there are untouched: no bid is not a low bid.
+  assert.equal(worker.exitTrigger({ ...floor, bestBidPrice: null, bestAskPrice: 0.9 }), false);
+  assert.equal(worker.exitTrigger({ ...floor, bestBidPrice: 0, bestAskPrice: 0.9 }), false);
+  // And a bid above the trigger is not a stop whatever the ask says.
+  assert.equal(worker.exitTrigger({ ...floor, bestBidPrice: 0.70, bestAskPrice: 0.72 }), false);
+
+  // exitReason has to pass the ask through, or the rule above never reaches the decision.
+  assert.equal(
+    worker.exitReason({ bestBidPrice: 0.10, bestAskPrice: 0.90, ...floor, settlementCloseBid: null }),
+    null,
+  );
+  assert.equal(
+    worker.exitReason({ bestBidPrice: 0.01, bestAskPrice: 0.05, ...floor, settlementCloseBid: null }),
+    "stop",
+  );
+
+  const source = readFileSync(new URL("../tools/rpi-live-exit-worker.mjs", import.meta.url), "utf8");
+  assert.match(source, /const currentBestAsk = bestAsk\(book\);/);
+  assert.match(source, /bestAskPrice: currentBestAsk,/);
+  // Recorded on the event, because the bid alone could not tell a collapsing market from an
+  // empty book and there was no way to tell afterwards which one had sold.
+  assert.match(source, /bestAsk: currentBestAsk,/);
+  assert.match(source, /midPrice: currentBestBid != null && currentBestAsk != null/);
+});
+
+// Measured live in the same window: four positions in four unrelated markets sold within
+// the same second, each at 0.67-0.70 against an entry of 0.7028, each carrying
+// stopPrice 0.704193 and riskTargetUsdc 0.040192. A four-cent risk target on a 4.92 stake
+// puts the floor ABOVE the entry, so the first book read liquidated all of them.
+test("stop plan: a floor at or above the entry price is refused, not armed", () => {
+  // 7 shares for 4.9199 is an entry of 0.702843 -- the production position, fees on, which
+  // is what pushes the floor of a tiny risk target above the entry in the first place.
+  const position = { shares: 7, totalCostUsdc: 4.9199, netGainIfWinUsdc: 2.0096, feeRate: 0.02, feesEnabled: true };
+
+  const collapsed = worker.equalRiskExitPlan({ ...position, riskTargetUsdc: 0.02 });
+  assert.equal(collapsed.protectable, false);
+  assert.match(collapsed.reason, /is not below the .* entry price/);
+  assert.match(collapsed.reason, /risk target 0\.0200 USDC on a 4\.92 USDC position/,
+    "the refusal names the numbers it was refused for, or the next report says nothing again");
+  assert.ok(collapsed.stopPrice >= collapsed.entryPrice);
+
+  // The portfolio's real setting is unaffected: a 2x multiplier puts the floor far below.
+  const armed = worker.equalRiskExitPlan({ ...position, stopLossRiskMultiplier: 2 });
+  assert.equal(armed.protectable, true);
+  assert.ok(armed.stopPrice < armed.entryPrice);
+  assert.ok(Math.abs(armed.riskTargetUsdc - 4.0192) < 0.0001);
+
+  // The smaller the target, the further ABOVE entry the floor sits -- every one of them a
+  // liquidation at entry rather than a loss cap.
+  for (const riskTargetUsdc of [0.02, 0.01, 0.001]) {
+    assert.equal(worker.equalRiskExitPlan({ ...position, riskTargetUsdc }).protectable, false, `risk target ${riskTargetUsdc}`);
+  }
+
+  // A refused plan must not be watched, or the worker would act on it anyway. This is the
+  // real path: the policy payload's multiplier is copied onto the position before the plan
+  // is derived, so a collapsed multiplier arrives exactly here.
+  assert.equal(
+    worker.watchPlan({ ...position, tokenId: "1", riskTargetUsdc: 0.02 }, { enabled: true }),
+    null,
+    "nothing to watch: no stop can be armed and no settlement close is configured",
+  );
+  // But the settlement close is a separate reason to watch, and an unarmed stop must not
+  // take it down with it.
+  const stillWatched = worker.watchPlan(
+    { ...position, tokenId: "1", riskTargetUsdc: 0.02 },
+    { enabled: true, settlementCloseBid: 0.99 },
+  );
+  assert.ok(stillWatched);
+  assert.equal(stillWatched.stopPrice, null);
+  assert.equal(stillWatched.settlementCloseBid, 0.99);
+});

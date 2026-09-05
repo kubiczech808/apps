@@ -324,6 +324,30 @@ export function equalRiskExitPlan(position = {}) {
     if ((netExitValue({ shares, price: midpoint, feeRate, feesEnabled }) || 0) >= minimumExitValueUsdc) high = midpoint;
     else low = midpoint;
   }
+  const stopPrice = round(high, 6);
+  // A floor at or above what the position cost is not a stop loss. It cannot cap a loss --
+  // it liquidates at the entry price the moment it is armed, which is the opposite of
+  // protection.
+  //
+  // Measured live: four positions in four different markets were sold within the same
+  // second, every one of them at 0.67-0.70 against an entry of 0.7028, every one carrying
+  // stopPrice 0.704193 and riskTargetUsdc 0.040192. A four-cent risk target on a 4.92 stake
+  // puts the floor a tenth of a percent ABOVE the entry, so the first book read sold them
+  // all. However the multiplier came to be that small -- a mis-entered setting reaches this
+  // code the same way a bug does -- the plan it produces is not one this worker should ever
+  // act on, and refusing it here is what makes that true for every source of the number.
+  const entryPrice = shares > 0 ? cost / shares : null;
+  if (entryPrice != null && stopPrice >= entryPrice) {
+    return {
+      protectable: false,
+      reason: `stop floor ${stopPrice.toFixed(4)} is not below the ${entryPrice.toFixed(4)} entry price,`
+        + ` so it would liquidate at entry rather than cap a loss`
+        + ` (risk target ${riskTargetUsdc.toFixed(4)} USDC on a ${cost.toFixed(2)} USDC position)`,
+      riskTargetUsdc,
+      stopPrice,
+      entryPrice: round(entryPrice, 6),
+    };
+  }
   return {
     protectable: true,
     shares,
@@ -331,7 +355,8 @@ export function equalRiskExitPlan(position = {}) {
     riskTargetUsdc,
     stopLossRiskMultiplier: riskMultiplier,
     minimumExitValueUsdc,
-    stopPrice: round(high, 6),
+    stopPrice,
+    entryPrice: entryPrice == null ? null : round(entryPrice, 6),
     feeRate,
     feesEnabled,
   };
@@ -353,12 +378,33 @@ export function bestBid(book = {}) {
 // Both are stated as their own condition rather than left to the null check, because the
 // null check alone has already failed once: number() coerced a missing bid to 0 and every
 // bidless market read as a triggered stop.
-export function exitTrigger({ bestBidPrice, stopPrice, triggerPrice = stopPrice } = {}) {
+export function exitTrigger({ bestBidPrice, stopPrice, triggerPrice = stopPrice, bestAskPrice = null } = {}) {
   const bid = number(bestBidPrice);
   const floor = number(stopPrice);
   const trigger = number(triggerPrice);
   if (bid == null || !(bid > 0)) return false;
-  return floor != null && trigger != null && bid <= trigger;
+  if (floor == null || trigger == null || bid > trigger) return false;
+  // The bid alone is not the price. On these markets it is routinely not even close to it:
+  // an illiquid first-half total at kickoff has no real bid side, just whatever lowball
+  // order somebody left resting.
+  //
+  // Measured live on "Avispa Fukuoka vs. FC Mito Holly Hock: 1st Half O/U 1.5". Four
+  // minutes after kickoff, 0-0, holding Under 1.5 bought at 0.70, the best bid read 0.10.
+  // The stop fired, sold 7 shares at 0.096, and the market resolved Under at 1.00. In the
+  // same window a neighbouring market's bid bounced 0.13, 0.07, 0.06, 0.12, 0.06, 0.01
+  // within four minutes -- that is not a price series, it is an empty book.
+  //
+  // So the other side has to agree. Where both sides are quoted the midpoint decides: on a
+  // healthy book bid, ask and mid are within a tick of each other and nothing changes,
+  // while a 0.10 bid against a 0.90 ask puts the mid at 0.50 and says the market has not
+  // moved against us at all. A genuinely collapsing outcome fails no test here, because
+  // its ask collapses too -- bid 0.01 against ask 0.05 is a mid of 0.03, still through the
+  // floor, and that exit still fires.
+  const ask = number(bestAskPrice);
+  // No ask at all means nobody is offering, which the midpoint cannot describe. The bid
+  // stands alone there, as it always has.
+  if (ask == null || !(ask > 0)) return true;
+  return (bid + ask) / 2 <= trigger;
 }
 
 function livePositions(state = {}) {
@@ -527,8 +573,8 @@ export function watchPlan(position, entry = null) {
 // The stop is checked first: both can be true only in a market that has moved from a loss
 // to certainty within one pass, and a stop that has been reached is the more urgent of the
 // two. Returns null when neither applies.
-export function exitReason({ bestBidPrice, stopPrice, triggerPrice, settlementCloseBid: closeBid } = {}) {
-  if (stopPrice != null && exitTrigger({ bestBidPrice, stopPrice, triggerPrice })) return "stop";
+export function exitReason({ bestBidPrice, bestAskPrice = null, stopPrice, triggerPrice, settlementCloseBid: closeBid } = {}) {
+  if (stopPrice != null && exitTrigger({ bestBidPrice, bestAskPrice, stopPrice, triggerPrice })) return "stop";
   const bid = number(bestBidPrice);
   if (closeBid != null && bid != null && bid >= closeBid) return "settlement";
   return null;
@@ -926,6 +972,7 @@ async function checkOnce(context) {
       continue;
     }
     const currentBestBid = bestBid(book);
+    const currentBestAsk = bestAsk(book);
     const crossing = stopCrossing({ bestBidPrice: currentBestBid, stopPrice: plan.stopPrice });
     const event = {
       at: now,
@@ -935,6 +982,12 @@ async function checkOnce(context) {
       stopPrice: plan.stopPrice,
       triggerPrice: plan.triggerPrice,
       bestBid: currentBestBid,
+      // Recorded because the bid alone could not tell a collapsing market from an empty
+      // book, and without them there was no way to tell afterwards which one had sold.
+      bestAsk: currentBestAsk,
+      midPrice: currentBestBid != null && currentBestAsk != null
+        ? round((currentBestBid + currentBestAsk) / 2, 6)
+        : null,
       riskTargetUsdc: plan.riskTargetUsdc,
       // Whether the stop is firing now or the book jumped it long ago. Recorded on every
       // event, so a shadow log answers "what would arming this actually sell, and at what
@@ -943,6 +996,7 @@ async function checkOnce(context) {
     };
     const reason = exitReason({
       bestBidPrice: currentBestBid,
+      bestAskPrice: currentBestAsk,
       stopPrice: plan.stopPrice,
       triggerPrice: plan.triggerPrice,
       settlementCloseBid: plan.settlementCloseBid,

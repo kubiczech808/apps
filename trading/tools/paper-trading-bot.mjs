@@ -4109,13 +4109,23 @@ function equalRiskEntryProtection({ plan, bestBid, shares, feeRate = 0, feesEnab
 // position was last observed and is below it now, it traded through, and that order filled
 // at the floor. Only a position already below the floor when first seen has genuinely
 // gapped past a stop that could not fill -- and that, and only that, is a STOP_GAP.
-function equalRiskStopExitDecision({ plan, bestBid, shares, feeRate = 0, feesEnabled = true, previousBid = null } = {}) {
+function equalRiskStopExitDecision({ plan, bestBid, bestAsk = null, shares, feeRate = 0, feesEnabled = true, previousBid = null } = {}) {
   if (!plan?.protectable || !plan.requiresStop) return null;
   const bid = Number(bestBid);
   const size = Number(shares);
   if (!Number.isFinite(bid) || !(bid >= 0) || !Number.isFinite(size) || !(size > 0)) return null;
   const currentValue = netExitValueAtPrice({ shares: size, price: bid, feeRate, feesEnabled });
   if (!Number.isFinite(currentValue) || currentValue > Number(plan.minimumExitValueUsdc) + 0.00001) return null;
+  // The same corroboration the live worker applies, so the two models still describe one
+  // mechanism. The bid alone is not the price on an illiquid market: measured live, a
+  // first-half total four minutes after kickoff showed a 0.10 bid against a book that
+  // resolved that outcome at 1.00. Where both sides are quoted the midpoint decides; a
+  // genuinely collapsing outcome still fires, because its ask collapses with it.
+  const ask = Number(bestAsk);
+  if (Number.isFinite(ask) && ask > 0) {
+    const midValue = netExitValueAtPrice({ shares: size, price: (bid + ask) / 2, feeRate, feesEnabled });
+    if (Number.isFinite(midValue) && midValue > Number(plan.minimumExitValueUsdc) + 0.00001) return null;
+  }
 
   const floor = Number(plan.stopPrice);
   const observedAtOrAboveFloor = bid + 0.000001 >= floor;
@@ -4813,7 +4823,7 @@ async function markOpenTrade(trade, strategy = null) {
 
   try {
     const book = await fetchJson(`https://clob.polymarket.com/book?token_id=${encodeURIComponent(trade.tokenId)}`);
-    const { bestBid } = bestBook(book);
+    const { bestBid, bestAsk } = bestBook(book);
     if (Number.isFinite(bestBid)) {
       const equalRiskPlan = stopPlanForTrade();
       const grossCurrentValue = Number((Number(trade.shares || 0) * bestBid).toFixed(4));
@@ -4824,6 +4834,7 @@ async function markOpenTrade(trade, strategy = null) {
       const equalStopDecision = equalRiskStopExitDecision({
         plan: equalRiskPlan,
         bestBid,
+        bestAsk,
         shares: trade.shares,
         feeRate: trade.feeRate,
         feesEnabled: trade.feesEnabled,
