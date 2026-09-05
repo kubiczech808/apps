@@ -1256,6 +1256,20 @@ function equalRiskStopPrice(position = {}, multiplier = 1) {
 // The comparison is the worker's: the current bid against the stop price. A position with
 // no quote is reported separately rather than counted as safe -- unknown is not below the
 // stop, but it is not above it either, and the operator is about to decide about it.
+// The open positions a stop-loss change would act on, for ANY portfolio.
+//
+// This used to read the live account and nothing else, so every warning below was live-only
+// -- and a paper portfolio, which is where a setting is supposed to be tried before real
+// money touches it, could not exercise the warning at all. A rule that cannot be rehearsed
+// on paper has to be learned on the live wallet, which is the opposite of what paper is for.
+function openPositionsForMode(mode = state.mode) {
+  if (isLivePortfolioMode(mode)) return livePositions(state.liveState, mode);
+  const strategyId = paperStrategyIdFromMode(mode);
+  const portfolios = paperPortfolioList(state.botState || {});
+  const portfolioState = portfolios.find((item) => item.id === strategyId) || selectedPaperPortfolio(state.botState || {});
+  return paperPortfolioTrades(portfolioState).filter((trade) => !isClosedTrade(trade));
+}
+
 function positionsAStopWouldCloseNow(mode = state.mode, multiplierOverride = null) {
   const config = portfolioConfigForMode(mode);
   // The proposed value when there is one, so a change can be judged BEFORE it is saved
@@ -1266,10 +1280,10 @@ function positionsAStopWouldCloseNow(mode = state.mode, multiplierOverride = nul
   if (!(multiplier > 0)) return { multiplier: 0, closing: [], unknown: [] };
   const closing = [];
   const unknown = [];
-  for (const position of livePositions(state.liveState)) {
+  for (const position of openPositionsForMode(mode)) {
     const stopPrice = equalRiskStopPrice(position, multiplier);
     if (stopPrice == null) continue;
-    const bid = numericOrNull(position.bestBid ?? position.currentPrice ?? position.markPrice);
+    const bid = numericOrNull(position.bestBid ?? position.lastLiveBid ?? position.currentPrice ?? position.markPrice);
     const shares = numericOrNull(position.shares ?? position.size);
     const cost = numericOrNull(position.totalCostUsdc ?? position.stakeUsdc ?? position.initialValue);
     const entryPrice = shares != null && cost != null && shares > 0 ? cost / shares : null;
@@ -1307,7 +1321,6 @@ function positionsAStopWouldCloseNow(mode = state.mode, multiplierOverride = nul
 // setting is not news, and burying the new ones among them is how a confirmation stops
 // being read.
 function confirmStopLossChange(mode = state.mode, nextMultiplier = 0) {
-  if (!isLivePortfolioMode(mode)) return true;
   const before = positionsAStopWouldCloseNow(mode);
   const after = positionsAStopWouldCloseNow(mode, nextMultiplier);
   const already = new Set(before.closing.map((row) => row.key));
@@ -1347,7 +1360,6 @@ function confirmStopLossChange(mode = state.mode, nextMultiplier = 0) {
 // the stop is sold as soon as the switch flips. That is a decision about real money taken
 // by a control that says nothing about it, so it is spelled out and confirmed.
 function confirmAutomationEnable(mode = state.mode) {
-  if (!isLivePortfolioMode(mode)) return true;
   const { multiplier, closing, unknown } = positionsAStopWouldCloseNow(mode);
   if (!(multiplier > 0) || (!closing.length && !unknown.length)) return true;
   const name = portfolioNameForMode(mode);
@@ -1462,6 +1474,19 @@ function configLiveEventMode(config = {}) {
   const mode = normalizeLiveEventMode(config?.liveEventMode);
   if (mode != null) return mode;
   return config?.requireEventStarted === true ? "only" : "ignore";
+}
+
+// Whether the fixture is under way, decided from the kickoff the row carries rather than
+// from a boolean written when the row was evaluated. "Has it started" is true of a moment,
+// not of a row.
+function rowEventIsRunning(item = {}) {
+  const kickoff = Date.parse(item?.eventStartTime || "");
+  if (Number.isFinite(kickoff)) return kickoff <= Date.now();
+  return item?.eventStarted === true;
+}
+
+function rowEventStartKnown(item = {}) {
+  return Number.isFinite(Date.parse(item?.eventStartTime || "")) || typeof item?.eventStarted === "boolean";
 }
 
 // Whether the resolution ceiling is a rule for THIS row, given the mode. Under "only" it is
@@ -9147,7 +9172,7 @@ function portfolioCandidateFilterReasons(item, mode = state.mode) {
   const days = evaluationDaysLeft(item);
   const hours = candidateHoursToResolution(item);
   const liveEventMode = configLiveEventMode(config);
-  const eventIsRunning = item?.eventStarted === true;
+  const eventIsRunning = rowEventIsRunning(item);
   const liquidity = rowVolumeUsdc(item);
   const minLiquidity = normalizeOptionalMoney(config.minLiquidityUsdc);
   const minNetYield = normalizeMinimumNetYield(config.minNetYield);
@@ -9221,7 +9246,7 @@ function portfolioCandidateFilterReasons(item, mode = state.mode) {
       reasons.push(`resolves in ${compactDays(days)}, beyond ${formatHorizonHours(maxHours)}`);
     }
     if (liveEventMode === "only" && !eventIsRunning) {
-      reasons.push(item?.eventStarted === false ? "event has not started yet" : "no kickoff time to confirm the event is under way");
+      reasons.push(rowEventStartKnown(item) ? "event has not started yet" : "no kickoff time to confirm the event is under way");
     }
     return reasons;
   }
@@ -9256,7 +9281,7 @@ function portfolioCandidateFilterReasons(item, mode = state.mode) {
   // The horizon and "has it started" are different questions, so they are refused
   // separately -- a row can be well inside the window and still not be under way.
   if (liveEventMode === "only" && !eventIsRunning) {
-    reasons.push(item?.eventStarted === false ? "event has not started yet" : "no kickoff time to confirm the event is under way");
+    reasons.push(rowEventStartKnown(item) ? "event has not started yet" : "no kickoff time to confirm the event is under way");
   }
   if (minLiquidity != null && liquidity < minLiquidity) {
     reasons.push(`volume ${money(liquidity)} below ${money(minLiquidity)}`);

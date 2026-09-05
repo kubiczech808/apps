@@ -3190,7 +3190,7 @@ test("stop loss warning: enabling a portfolio names the positions its stop would
     ${extractFunction(APP, "equalRiskStopPrice")}
     ${extractFunction(APP, "positionsAStopWouldCloseNow")}
     const portfolioConfigForMode = () => state.config;
-    const livePositions = () => state.positions;
+    const openPositionsForMode = () => state.positions;
     return positionsAStopWouldCloseNow("live-custom-live2");
   `);
 
@@ -3221,7 +3221,7 @@ test("stop loss warning: enabling a portfolio names the positions its stop would
     ${extractFunction(APP, "equalRiskStopPrice")}
     ${extractFunction(APP, "positionsAStopWouldCloseNow")}
     const portfolioConfigForMode = () => state.config;
-    const livePositions = () => state.positions;
+    const openPositionsForMode = () => state.positions;
     return positionsAStopWouldCloseNow("live");
   `)({ config: { stopLossRiskMultiplier: 0 }, positions: [{ shares: 6.5, totalCostUsdc: 5, netGainIfWinUsdc: 1.5, bestBid: 0.01 }] });
   assert.deepEqual(off, { multiplier: 0, closing: [], unknown: [] });
@@ -3236,8 +3236,21 @@ test("stop loss warning: the confirmation gates the switch and only on the way o
     "declining must stop the change, and switching off must not ask");
   assert.ok(body.indexOf("confirmAutomationEnable") < body.indexOf("updatePortfolioConfigForMode"),
     "the question has to be asked before the setting is written");
-  assert.match(APP, /function confirmAutomationEnable\(mode = state\.mode\) \{[\s\S]{0,200}?if \(!isLivePortfolioMode\(mode\)\) return true;/,
-    "a paper portfolio holds no live position and must not be interrogated");
+  // Paper portfolios are asked too. They are where a setting is meant to be tried before
+  // real money touches it, and a warning that only exists on the live wallet can only be
+  // learned there -- which is the opposite of what paper is for.
+  const confirmEnable = extractFunction(APP, "confirmAutomationEnable");
+  assert.doesNotMatch(confirmEnable, /isLivePortfolioMode/,
+    "the warning must not be live-only: paper is where this gets rehearsed");
+  const confirmChange = extractFunction(APP, "confirmStopLossChange");
+  assert.doesNotMatch(confirmChange, /isLivePortfolioMode/);
+  // And the positions it reads come from whichever portfolio is open.
+  const openFor = extractFunction(APP, "openPositionsForMode");
+  assert.match(openFor, /if \(isLivePortfolioMode\(mode\)\) return livePositions\(state\.liveState, mode\);/);
+  assert.match(openFor, /paperPortfolioTrades\(portfolioState\)\.filter\(\(trade\) => !isClosedTrade\(trade\)\)/);
+  // A paper row records its bid as lastLiveBid, a live row as bestBid. Reading only the
+  // live spelling would make every paper position look unquoted.
+  assert.match(APP, /position\.bestBid \?\? position\.lastLiveBid \?\? position\.currentPrice/);
 });
 
 // Reported: unfilled limit orders, and the Resolved accuracy tile with them, showed rows

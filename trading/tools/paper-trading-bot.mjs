@@ -3735,8 +3735,37 @@ function marketDateContext(market = {}, fallbackDate = null) {
 // whether it started" is not "it has not started", and both of those are refused when a
 // portfolio asks for in-play markets only, but they are not the same fact.
 function marketEventStarted(dateContext = {}) {
-  if (!dateContext.scheduledEventDate || dateContext.preciseEventStart !== true) return null;
-  return dateContext.sportsEventStarted === true;
+  if (dateContext.preciseEventStart !== true) return null;
+  // Asked of the kickoff itself, and of nothing else.
+  //
+  // This used to return dateContext.sportsEventStarted, which is gated on useScheduledDate
+  // -- the flag deciding whether the KICKOFF or the resolution window supplies endDate.
+  // That is a different question, and its answer flips at exactly the wrong moment: for a
+  // live market Gamma routinely sets endDate to the kickoff, so once the match starts
+  // scheduledTime < resolutionTime is false, scheduledIsFuture is false, useScheduledDate
+  // goes false -- and a fixture that has just kicked off reports "not started". The in-play
+  // window was unreachable by construction.
+  const kickoff = Date.parse(dateContext.scheduledEventDate || "");
+  if (!Number.isFinite(kickoff)) return null;
+  return kickoff <= Date.now();
+}
+
+// Whether the fixture is under way, decided from the kickoff the row carries rather than
+// from a boolean written when the row was last evaluated.
+//
+// "Has it started" is true of a moment, not of a row. A market evaluated forty minutes
+// before kickoff stored false, and nothing recomputed it -- so an in-play portfolio was
+// refused on that stale false through the entire window it exists to trade.
+function rowEventIsRunning(item = {}) {
+  const kickoff = Date.parse(item?.eventStartTime || "");
+  if (Number.isFinite(kickoff)) return kickoff <= Date.now();
+  return item?.eventStarted === true;
+}
+
+// The same question, but able to say "cannot tell" -- which is a different refusal from
+// "has not started", and the two are reported separately.
+function rowEventStartKnown(item = {}) {
+  return Number.isFinite(Date.parse(item?.eventStartTime || "")) || typeof item?.eventStarted === "boolean";
 }
 
 function normalizeStoredMarketObservationTiming(item = {}) {
@@ -4239,7 +4268,7 @@ function observationMatchesActiveLiveConfig(item, config) {
   const hours = hoursToResolution(item);
   const maxHours = configMaxResolutionHours(config, null);
   const liveEventMode = configLiveEventMode(config);
-  const running = item?.eventStarted === true;
+  const running = rowEventIsRunning(item);
   if (horizonApplies(liveEventMode, running)
     && hours != null && maxHours != null && hours > maxHours) return false;
   // A separate question from the horizon: has the fixture actually started. Only applied
@@ -5667,6 +5696,9 @@ function evaluateCandidate({ market, outcomeIndex, tokenId, book, learningProfil
     // already derived here and used only locally; storing it is what lets a portfolio ask
     // for in-play markets at all.
     eventStarted: marketEventStarted(dateContext),
+    // The kickoff itself, so the answer above can be recomputed whenever this row is read.
+    // Storing only the verdict froze it at evaluation time; see rowEventIsRunning.
+    eventStartTime: dateContext.preciseEventStart ? dateContext.scheduledEventDate : null,
     // annualizeReturn() returns null for a non-finite input, so any of these can be
     // null when the probability estimate is unavailable — which is normal for a
     // scraped candidate that was never AI-analysed. Calling .toFixed() on that threw
@@ -7062,7 +7094,7 @@ function strategyEligibleCandidates(eligible, strategy) {
     // A running fixture under "include" is admitted whatever the ceiling says: the
     // ceiling caps how long capital is committed, and a match in play is the shortest
     // commitment there is.
-    const running = item?.eventStarted === true;
+    const running = rowEventIsRunning(item);
     if (horizonApplies(liveEventMode, running) && hoursValue(item) > maxResolutionHours) return false;
     // Asked alongside the horizon rather than folded into it.
     if (liveEventMode === "only" && !running) return false;
@@ -7347,7 +7379,7 @@ function portfolioFilterResult(item, strategy) {
   const hours = hoursValue(item);
   const maxResolutionHours = strategyMaxResolutionHours(strategy);
   const liveEventMode = configLiveEventMode(strategy);
-  const eventIsRunning = item?.eventStarted === true;
+  const eventIsRunning = rowEventIsRunning(item);
 
   if (binaryOutcomeQuotesAreBothZero(item)) reasons.push("binary YES/NO quotes are both 0%; market appears resolved");
   if (strategy.excludedCandidateTokenIds?.has(tokenId)) reasons.push("manually excluded from this paper portfolio");
@@ -7398,7 +7430,7 @@ function portfolioFilterResult(item, strategy) {
   // Named separately, because "it has not started" and "it resolves too far out" are
   // different refusals and a reader has to be able to tell which one applied.
   if (liveEventMode === "only" && !eventIsRunning) {
-    reasons.push(item?.eventStarted === false
+    reasons.push(rowEventStartKnown(item)
       ? "this event has not started yet and the portfolio only takes events already under way"
       : "no kickoff time is published for this market, so it cannot be shown to be under way");
   }
@@ -7961,6 +7993,15 @@ async function revalidateStoredExecutionCandidate(item, learningProfile) {
       // filter kept its candidates and traded normally -- because only a tag filter asks
       // the question a second time.
       ...preservedMarketTagFields(item),
+      // Same trap as the tags directly above, same cause: marketFromStoredEvaluation
+      // carries no kickoff signal, so evaluateCandidate recomputes these as null and the
+      // spread erases what the stored row knew.
+      //
+      // Measured: "Underway 70+" had one candidate pass its filter and then die at
+      // revalidation on "no kickoff time is published for this market" -- the same row,
+      // in the same run, refused by the same rule it had just satisfied.
+      ...(item?.eventStartTime ? { eventStartTime: item.eventStartTime } : {}),
+      ...(typeof item?.eventStarted === "boolean" ? { eventStarted: item.eventStarted } : {}),
       revalidationSource: "stored_execution_candidates",
       executionQuoteVerified: true,
       executionQuoteStatus: "VERIFIED",
@@ -12453,6 +12494,7 @@ export {
   configMaxResolutionHours,
   normalizeLiveEventMode,
   configLiveEventMode,
+  rowEventIsRunning,
   horizonApplies,
   normalizeSettlementCloseBid,
   hoursToResolution,

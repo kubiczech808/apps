@@ -10519,3 +10519,123 @@ test("close at certainty: a paper position is sold at the bid once the market ha
   assert.ok(closeAt > 0 && pendingAt > 0 && closeAt < pendingAt,
     "the certainty close is decided before the position is parked as awaiting resolution");
 });
+
+// Reported: the "Underway 70+" portfolio never trades. Measured on its newest run --
+// pool 8208, one candidate passed its filter, nothing survived revalidation:
+//
+//   6115  no kickoff time is published for this market (75% of the pool)
+//   1861  this event has not started yet (23% of the pool)
+//   all 1 candidate(s) that passed the filter then died at revalidation:
+//         1  no kickoff time is published for this market
+//
+// Two faults. This is the first: a fixture that HAS kicked off reported that it had not.
+test("in-play: a fixture reports started once its kickoff has passed, even when endDate is the kickoff", () => {
+  const iso = (minutes) => new Date(Date.now() + minutes * 60000).toISOString();
+  const market = (extra) => ({
+    conditionId: "0xabc",
+    question: "Avispa Fukuoka vs. FC Mito Holly Hock: 1st Half O/U 1.5",
+    slug: "avispa-fukuoka-vs-fc-mito-2026-09-05",
+    outcomes: JSON.stringify(["Over", "Under"]),
+    outcomePrices: JSON.stringify(["0.30", "0.70"]),
+    clobTokenIds: JSON.stringify(["111", "222"]),
+    bestBid: 0.69,
+    bestAsk: 0.71,
+    spread: 0.02,
+    liquidity: 50000,
+    volume24hr: 20000,
+    active: true,
+    closed: false,
+    acceptingOrders: true,
+    gameId: "g1",
+    ...extra,
+  });
+
+  // The shape Polymarket actually publishes for a live market: endDate IS the kickoff.
+  // The verdict used to route through useScheduledDate, which needs kickoff < endDate, so
+  // the moment the match started the row flipped back to "not started" -- the in-play
+  // window was unreachable by construction.
+  const kickedOff = iso(-20);
+  const started = bot.preferredMarketObservation(market({
+    gameStartTime: kickedOff,
+    endDate: kickedOff,
+  }));
+  assert.equal(started.eventStarted, true, "kicked off twenty minutes ago");
+  assert.equal(started.eventStartTime, kickedOff);
+
+  // Still upcoming is still upcoming, whatever endDate says.
+  const upcoming = bot.preferredMarketObservation(market({
+    gameStartTime: iso(30),
+    endDate: iso(30),
+  }));
+  assert.equal(upcoming.eventStarted, false);
+
+  // And a market with a kickoff well before its resolution window is unaffected.
+  const normal = bot.preferredMarketObservation(market({
+    gameStartTime: iso(-20),
+    endDate: iso(70),
+  }));
+  assert.equal(normal.eventStarted, true);
+});
+
+// The second fault: the verdict was frozen at evaluation time, and the revalidation that
+// re-quotes a stored candidate erased it entirely -- so a row could satisfy the rule and
+// then be refused by it inside one run.
+test("in-play: the answer is recomputed from the stored kickoff, not read off a stale boolean", () => {
+  const iso = (minutes) => new Date(Date.now() + minutes * 60000).toISOString();
+
+  // A row evaluated forty minutes before kickoff stored false. The kickoff has since
+  // passed, and nothing re-evaluated it: the stored boolean must not decide.
+  assert.equal(bot.rowEventIsRunning({ eventStarted: false, eventStartTime: iso(-5) }), true,
+    "the kickoff has passed, whatever the row said when it was written");
+  assert.equal(bot.rowEventIsRunning({ eventStarted: true, eventStartTime: iso(30) }), false,
+    "and a row that claims started cannot outrank a kickoff still ahead");
+
+  // With no kickoff stored -- a row written before the field existed -- the boolean is all
+  // there is, so it still answers.
+  assert.equal(bot.rowEventIsRunning({ eventStarted: true }), true);
+  assert.equal(bot.rowEventIsRunning({ eventStarted: false }), false);
+  assert.equal(bot.rowEventIsRunning({}), false, "unknown is not running");
+
+  // End to end through the portfolio filter, which is where it actually mattered.
+  const strategy = {
+    ...bot.PAPER_STRATEGIES.conservative,
+    minProbability: 0.7,
+    minLiquidityUsdc: 0,
+    minNetYield: 0,
+    maxResolutionHours: 6,
+    liveEventMode: "only",
+    excludedCandidateTokenIds: new Set(),
+  };
+  const base = {
+    status: "ELIGIBLE",
+    marketProbability: 0.8,
+    marketPrice: 0.8,
+    bestBid: 0.8,
+    bestAsk: 0.81,
+    spread: 0.01,
+    volumeUsdc: 50000,
+    totalCostUsdc: 5,
+    netGainIfWinUsdc: 1,
+    netYield: 0.2,
+    resolutionEndDate: iso(90),
+    marketClosed: false,
+    marketActive: true,
+    acceptingOrders: true,
+  };
+  const stale = { ...base, tokenId: "stale", eventStarted: false, eventStartTime: iso(-5) };
+  assert.equal(bot.portfolioFilterResult(stale, strategy).eligible, true,
+    "the match is under way; the stale false must not keep the portfolio out of it");
+  assert.deepEqual(bot.strategyEligibleCandidates([stale], strategy).map((row) => row.tokenId), ["stale"]);
+
+  // The two refusals stay distinguishable: "has not started" is not "cannot tell".
+  const upcoming = { ...base, tokenId: "upcoming", eventStartTime: iso(30) };
+  const unknown = { ...base, tokenId: "unknown" };
+  assert.match(bot.portfolioFilterResult(upcoming, strategy).reasons.join(" "), /has not started yet/);
+  assert.match(bot.portfolioFilterResult(unknown, strategy).reasons.join(" "), /no kickoff time is published/);
+
+  // And revalidation must not erase what the stored row knew. Same trap as the tag fields
+  // it sits beside, same cause: the synthetic market carries no kickoff signal.
+  const source = readFileSync(new URL("../tools/paper-trading-bot.mjs", import.meta.url), "utf8");
+  assert.match(source, /\.\.\.\(item\?\.eventStartTime \? \{ eventStartTime: item\.eventStartTime \} : \{\}\),/);
+  assert.match(source, /\.\.\.\(typeof item\?\.eventStarted === "boolean" \? \{ eventStarted: item\.eventStarted \} : \{\}\),/);
+});

@@ -1424,8 +1424,11 @@ function compact_evaluation(array $item): array
         'resolutionEndDate',
         'endDateSource',
         // The in-play answer travels with the row for the same reason as on the catalogue
-        // row above: the browser explains its own candidate refusals.
+        // row above: the browser explains its own candidate refusals. The kickoff comes
+        // with it, because the answer has to be recomputed rather than read off a boolean
+        // frozen when the row was evaluated.
         'eventStarted',
+        'eventStartTime',
         'evaluatedAt',
         'firstEvaluatedAt',
         'lastSeenAt',
@@ -1821,6 +1824,19 @@ function execution_scope_observation_tags(array $item): array
     return normalize_market_tag_list($values);
 }
 
+// Whether the fixture is under way, decided from the kickoff the row carries rather than
+// from a boolean written when the row was last scanned. "Has it started" is true of a
+// moment, not of a row, and a row scanned before kickoff stored false for the whole window
+// an in-play portfolio exists to trade.
+function observation_event_is_running(array $item): bool
+{
+    $kickoff = strtotime((string) ($item['eventStartTime'] ?? ''));
+    if ($kickoff !== false) {
+        return $kickoff <= time();
+    }
+    return ($item['eventStarted'] ?? null) === true;
+}
+
 // Hours until the market's own RESOLUTION date, not its endDate. For a sports fixture those
 // are different dates -- the bot substitutes the kickoff into endDate -- so daysToResolution
 // measures time to the start of the match rather than to its settlement. A fixture already
@@ -1850,7 +1866,7 @@ function execution_scope_matches_observation(array $item, array $config): bool
     $hours = observation_hours_to_resolution($item);
     $maxHours = config_max_resolution_hours(is_array($config) ? $config : []);
     $liveEventMode = config_live_event_mode(is_array($config) ? $config : []);
-    $running = ($item['eventStarted'] ?? null) === true;
+    $running = observation_event_is_running($item);
     // A running fixture under "include" is admitted whatever the ceiling says: the ceiling
     // caps how long capital is committed, and a match in play is the shortest commitment
     // there is. Under "only" the ceiling is not a rule at all -- that mode admits nothing

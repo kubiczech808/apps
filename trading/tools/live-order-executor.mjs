@@ -1154,7 +1154,10 @@ function prefilterLiveCandidate(item) {
   const hours = Number.isFinite(resolutionTime)
     ? (resolutionTime - Date.now()) / 3600000
     : (Number.isFinite(days) ? days * HOURS_PER_DAY : null);
-  const running = item?.eventStarted === true;
+  // Decided from the kickoff the row carries, not from a boolean frozen when it was
+  // scanned: "has it started" is true of a moment, not of a row.
+  const kickoff = Date.parse(item?.eventStartTime || "");
+  const running = Number.isFinite(kickoff) ? kickoff <= Date.now() : item?.eventStarted === true;
   // Under "only" the ceiling is not a rule at all: that mode admits nothing by its horizon,
   // and the dashboard hides the input, so enforcing one here would be an invisible filter.
   const horizonApplies = LIVE_EVENT_MODE !== "only" && !(LIVE_EVENT_MODE === "include" && running);
@@ -1166,7 +1169,7 @@ function prefilterLiveCandidate(item) {
   // rule refused the market. A row that cannot show a kickoff is excluded rather than
   // assumed to have started.
   if (LIVE_EVENT_MODE === "only" && !running) {
-    reasons.push(item?.eventStarted === false
+    reasons.push(Number.isFinite(kickoff) || typeof item?.eventStarted === "boolean"
       ? "this event has not started yet and this portfolio only takes events already under way"
       : "no kickoff time is published for this market, so it cannot be shown to be under way");
   }
