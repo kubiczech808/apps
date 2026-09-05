@@ -131,6 +131,19 @@ jobs:
             console.log(`   mode          ${state.mode || "(none)"}`);
             console.log(`   protectAll    ${state.protectAll}`);
             console.log(`   policyError   ${state.policyError || "(none)"}`);
+            // Which wallet the worker signs as, and whether the exchange has refused an
+            // order for that reason. A worker signing as the wrong account produced twelve
+            // hours of identical rejections with nothing anywhere naming the address.
+            console.log(`   signingAccount ${text(state.signingAccount)}`);
+            console.log(`   signingError   ${text(state.signingError)}`);
+            const bookErrors = state.bookErrors && typeof state.bookErrors === "object" ? state.bookErrors : {};
+            const noisiest = Object.values(bookErrors).sort((a, b) => (b.count || 0) - (a.count || 0)).slice(0, 6);
+            if (noisiest.length) {
+              console.log(`\n   book errors, collapsed by market:`);
+              for (const entry of noisiest) {
+                console.log(`      ${String(entry.count).padStart(5)}x since ${entry.firstAt} ${String(entry.question || "").slice(0, 46).padEnd(46)} ${entry.error}`);
+              }
+            }
             const watched = Array.isArray(state.watchedPositions) ? state.watchedPositions : [];
             console.log(`\n   watched positions right now: ${watched.length}`);
             for (const plan of watched) {

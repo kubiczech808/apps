@@ -1155,7 +1155,10 @@ function prefilterLiveCandidate(item) {
     ? (resolutionTime - Date.now()) / 3600000
     : (Number.isFinite(days) ? days * HOURS_PER_DAY : null);
   const running = item?.eventStarted === true;
-  if (!(LIVE_EVENT_MODE === "include" && running)
+  // Under "only" the ceiling is not a rule at all: that mode admits nothing by its horizon,
+  // and the dashboard hides the input, so enforcing one here would be an invisible filter.
+  const horizonApplies = LIVE_EVENT_MODE !== "only" && !(LIVE_EVENT_MODE === "include" && running);
+  if (horizonApplies
     && MAX_RESOLUTION_HOURS != null && hours != null && hours > MAX_RESOLUTION_HOURS) {
     reasons.push(`stored resolution ${formatHorizonHours(hours)} exceeds live max ${formatHorizonHours(MAX_RESOLUTION_HOURS)}`);
   }

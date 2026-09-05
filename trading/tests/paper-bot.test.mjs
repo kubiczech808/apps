@@ -4736,7 +4736,7 @@ test("5050: the candidate list is judged by its own rule, not market-price econo
   const run = new Function("item", "config", "mode", "deps", `
     const {isFixedEntryMode,normalizeFixedEntryPrice,probability,money,compactDays,
       normalizeMarketTagList,marketMatchesAllowedTags,formatHorizonHours,
-      candidateHoursToResolution,configLiveEventMode}=deps;
+      candidateHoursToResolution,configLiveEventMode,horizonApplies}=deps;
     const HOURS_PER_DAY=24;
     const reasons=[];
     const liquidity=Number(item.volumeUsdc||0), minLiquidity=Number(config.minLiquidityUsdc);
@@ -4766,6 +4766,7 @@ test("5050: the candidate list is judged by its own rule, not market-price econo
       return Number.isFinite(value) ? value * 24 : NaN;
     },
     configLiveEventMode: (config) => config?.liveEventMode || "ignore",
+    horizonApplies: (mode, running) => mode !== "only" && !(mode === "include" && running),
   };
   const config = { fixedEntryPrice: 0.5, minLiquidityUsdc: 100, maxResolutionHours: 30 * 24 };
   const reasons = (item) => run(item, config, "live-5050", deps);

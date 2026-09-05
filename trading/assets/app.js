@@ -346,6 +346,7 @@ const els = {
   riskAllocationNote: document.querySelector("[data-risk-allocation-note]"),
   maxResolutionHours: document.querySelector("[data-max-resolution-hours]"),
   maxResolutionHoursLabel: document.querySelector("[data-max-resolution-hours-label]"),
+  maxResolutionHoursRow: document.querySelector("[data-max-resolution-hours-row]"),
   liveEventMode: document.querySelector("[data-live-event-mode]"),
   liveEventModeLabel: document.querySelector("[data-live-event-mode-label]"),
   selectionOrder: document.querySelector("[data-selection-order]"),
@@ -1399,6 +1400,14 @@ function configLiveEventMode(config = {}) {
   return config?.requireEventStarted === true ? "only" : "ignore";
 }
 
+// Whether the resolution ceiling is a rule for THIS row, given the mode. Under "only" it is
+// not a rule at all -- that mode admits nothing by its horizon, and the dashboard hides the
+// input accordingly, so enforcing one anyway would be an invisible filter.
+function horizonApplies(liveEventMode, eventIsRunning) {
+  if (liveEventMode === "only") return false;
+  return !(liveEventMode === "include" && eventIsRunning);
+}
+
 function liveEventModeLabel(value) {
   return LIVE_EVENT_MODE_LABELS[normalizeLiveEventMode(value) || "ignore"];
 }
@@ -1406,9 +1415,11 @@ function liveEventModeLabel(value) {
 // One row for both questions the filter asks, because they are read together: how far out
 // a market may resolve, and what that means for a fixture already under way.
 function resolutionRuleValue(maxResolutionHours, config = {}) {
-  const ceiling = `Max ${formatHorizonHours(maxResolutionHours)}`;
   const mode = configLiveEventMode(config);
-  if (mode === "only") return `${ceiling}, only events under way`;
+  // Stated without a ceiling, because under this mode there is none: nothing is admitted
+  // by its horizon. Printing one would describe a rule the run does not apply.
+  if (mode === "only") return "Only events under way";
+  const ceiling = `Max ${formatHorizonHours(maxResolutionHours)}`;
   if (mode === "include") return `${ceiling}, events under way always included`;
   return ceiling;
 }
@@ -5429,6 +5440,10 @@ function syncPortfolioParameterControls(configOverride = null, options = {}) {
   if (els.maxEligibilityThresholdLabel) els.maxEligibilityThresholdLabel.textContent = maxThreshold == null ? "No maximum" : probability(maxThreshold);
   syncDraftRiskAllocationControl(allocation, capitalContext);
   if (els.limitOrders) els.limitOrders.checked = Boolean(limitOrders);
+  // Hidden under "only events under way": that mode admits nothing by its horizon, so the
+  // number would sit there asking to be set while changing nothing. The saved value is
+  // left untouched underneath, so switching back restores the horizon that was there.
+  if (els.maxResolutionHoursRow) els.maxResolutionHoursRow.hidden = liveEventMode === "only";
   if (els.maxResolutionHours && document.activeElement !== els.maxResolutionHours) {
     els.maxResolutionHours.value = String(maxHours);
   }
@@ -9098,7 +9113,7 @@ function portfolioCandidateFilterReasons(item, mode = state.mode) {
     if (Number.isFinite(minLiquidity) && liquidity < minLiquidity) {
       reasons.push(`volume ${money(liquidity)} below ${money(minLiquidity)}`);
     }
-    if (!(liveEventMode === "include" && eventIsRunning)
+    if (horizonApplies(liveEventMode, eventIsRunning)
       && Number.isFinite(hours) && Number.isFinite(maxHours) && hours > maxHours) {
       reasons.push(`resolves in ${compactDays(days)}, beyond ${formatHorizonHours(maxHours)}`);
     }
@@ -9132,7 +9147,7 @@ function portfolioCandidateFilterReasons(item, mode = state.mode) {
   }
   if (!Number.isFinite(hours)) {
     reasons.push("missing resolution date");
-  } else if (!(liveEventMode === "include" && eventIsRunning) && hours > maxHours) {
+  } else if (horizonApplies(liveEventMode, eventIsRunning) && hours > maxHours) {
     reasons.push(`resolution ${formatHorizonHours(hours)} exceeds max ${formatHorizonHours(maxHours)}`);
   }
   // The horizon and "has it started" are different questions, so they are refused

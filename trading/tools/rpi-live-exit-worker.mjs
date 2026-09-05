@@ -733,6 +733,31 @@ async function notifyAccountSync() {
   }
 }
 
+// The same book failing on every 5s pass wrote one event per pass. Measured on the Pi:
+// 389 of the 500 retained events were BOOK_ERROR, nearly all of them one market repeating
+// the same message, and they had pushed every exit rejection and the worker's own startup
+// out of the window. A history that can only show the last forty minutes of one broken
+// market cannot answer what the stop loss did.
+//
+// So a repeat of the same message for the same token updates a counter instead of adding a
+// row. The first occurrence is still recorded immediately -- this collapses noise, it does
+// not delay the signal.
+function recordBookError(state, plan, error, at) {
+  const message = error?.message || String(error);
+  state.bookErrors = state.bookErrors || {};
+  const previous = state.bookErrors[plan.tokenId];
+  const repeated = previous && previous.error === message;
+  state.bookErrors[plan.tokenId] = {
+    question: plan.question,
+    error: message,
+    firstAt: repeated ? previous.firstAt : at,
+    lastAt: at,
+    count: repeated ? (Number(previous.count) || 1) + 1 : 1,
+  };
+  if (repeated) return;
+  recordEvent(state, { at, type: "BOOK_ERROR", tokenId: plan.tokenId, question: plan.question, error: message });
+}
+
 function recordEvent(state, event) {
   const history = Array.isArray(state.history) ? state.history : [];
   state.history = [event, ...history].slice(0, 500);
@@ -838,7 +863,7 @@ async function checkOnce(context) {
 
   for (const { plan, book, error: bookError } of observed) {
     if (bookError) {
-      recordEvent(context.state, { at: now, type: "BOOK_ERROR", tokenId: plan.tokenId, question: plan.question, error: bookError?.message || String(bookError) });
+      recordBookError(context.state, plan, bookError, now);
       continue;
     }
     const currentBestBid = bestBid(book);

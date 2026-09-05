@@ -433,19 +433,19 @@
           <em><strong data-risk-allocation-value>$5.00</strong> fixed maximum stake per trade; <span data-risk-allocation-note>not tied to portfolio equity</span></em>
           <em class="capital-status" data-capital-status>Capital status pending.</em>
         </label>
-        <label class="parameter-control" title="How far ahead a market may resolve, in hours. 24 is a day, 12 is half a day, 1 keeps only fixtures resolving within the hour.">
-          <span>Max resolution hours</span>
-          <input type="number" min="1" max="8760" step="1" placeholder="auto" data-max-resolution-hours>
-          <strong data-max-resolution-hours-label>auto</strong>
-        </label>
-        <label class="parameter-control" title="How this portfolio treats fixtures that have already kicked off - typically sports and esports, the only markets that publish a kickoff time. Judge by horizon: a running fixture is capped by the hours above like everything else. Include regardless of horizon: a running fixture is always allowed, because the horizon caps how long capital is committed and a match in play is the shortest commitment there is. Only events under way: nothing else is traded, including markets that publish no kickoff at all.">
-          <span>Events under way</span>
+        <label class="parameter-control" title="What this portfolio does about fixtures that have already kicked off - typically sports and esports, the only markets that publish a kickoff time. Judge by horizon: a running fixture is capped by the hours below like everything else. Include regardless of horizon: a running fixture is always allowed, because the horizon caps how long capital is committed and a match in play is the shortest commitment there is. Only events under way: nothing else is traded, including markets that publish no kickoff at all - and the horizon stops applying, so it is hidden.">
+          <span>Resolution filter</span>
           <select data-live-event-mode>
             <option value="ignore">Judge by horizon</option>
-            <option value="include">Include regardless of horizon</option>
+            <option value="include">Include events under way regardless of horizon</option>
             <option value="only">Only events under way</option>
           </select>
           <strong data-live-event-mode-label>Judge by horizon</strong>
+        </label>
+        <label class="parameter-control" data-max-resolution-hours-row title="How far ahead a market may resolve, in hours. 24 is a day, 12 is half a day, 1 keeps only fixtures resolving within the hour.">
+          <span>Max resolution hours</span>
+          <input type="number" min="1" max="8760" step="1" placeholder="auto" data-max-resolution-hours>
+          <strong data-max-resolution-hours-label>auto</strong>
         </label>
         <label class="parameter-control">
           <span>Trade priority</span>

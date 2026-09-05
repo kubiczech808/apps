@@ -444,3 +444,36 @@ test("signing: a signer mismatch is named as a configuration fault, not one more
   assert.doesNotMatch(client, /funderAddress: FUNDER_ADDRESS/);
   assert.doesNotMatch(client, /signatureTypes\[SIGNATURE_TYPE\]/);
 });
+
+// Measured on the Pi: 389 of the 500 retained events were BOOK_ERROR, nearly all of them
+// one closed market repeating "HTTP 404" every five seconds. They had pushed the exit
+// rejections and the worker's own startup out of the window, so the history could only
+// show the last forty minutes of one broken market -- while the question being asked of it
+// was what the stop loss had done all night.
+test("book errors: a market repeating the same failure is counted, not re-logged every pass", () => {
+  const source = readFileSync(new URL("../tools/rpi-live-exit-worker.mjs", import.meta.url), "utf8");
+  const record = new Function("recordEvent", `${functionBody(source, "recordBookError")}\nreturn recordBookError;`)(
+    (state, event) => { state.history.push(event); },
+  );
+  const state = { history: [] };
+  const plan = { tokenId: "1", question: "FC Juárez vs. CF Pachuca: FC Juárez O/U 0.5" };
+
+  record(state, plan, new Error("HTTP 404"), "2026-09-05T07:14:45.598Z");
+  record(state, plan, new Error("HTTP 404"), "2026-09-05T07:14:50.752Z");
+  record(state, plan, new Error("HTTP 404"), "2026-09-05T07:15:01.098Z");
+  assert.equal(state.history.length, 1, "the first occurrence is recorded immediately, the repeats are not");
+  assert.equal(state.bookErrors["1"].count, 3);
+  assert.equal(state.bookErrors["1"].firstAt, "2026-09-05T07:14:45.598Z");
+  assert.equal(state.bookErrors["1"].lastAt, "2026-09-05T07:15:01.098Z");
+
+  // A DIFFERENT failure on the same market is new information and is recorded.
+  record(state, plan, new Error("fetch failed"), "2026-09-05T08:03:34.323Z");
+  assert.equal(state.history.length, 2);
+  assert.equal(state.bookErrors["1"].count, 1, "the counter restarts with the new condition");
+  assert.equal(state.bookErrors["1"].error, "fetch failed");
+
+  // And another market is its own row, never folded into the first.
+  record(state, { tokenId: "2", question: "Games Total: O/U 4.5" }, new Error("fetch failed"), "2026-09-05T08:03:34.323Z");
+  assert.equal(state.history.length, 3);
+  assert.equal(state.bookErrors["2"].count, 1);
+});

@@ -1430,7 +1430,9 @@ test("portfolio rules: the resolution ceiling is shown on both the paper and liv
   `)((hours) => `${hours} h`, (config) => config?.liveEventMode || "ignore");
   assert.equal(rule(6, {}), "Max 6 h");
   assert.equal(rule(6, { liveEventMode: "include" }), "Max 6 h, events under way always included");
-  assert.equal(rule(6, { liveEventMode: "only" }), "Max 6 h, only events under way");
+  // No ceiling is stated under "only", because none is applied: that mode admits nothing
+  // by its horizon, and the parameter form hides the input for the same reason.
+  assert.equal(rule(6, { liveEventMode: "only" }), "Only events under way");
 
   const live = extractFunction(APP, "livePortfolioRuleRows");
   assert.match(live, /const maxResolutionHours = resolutionHoursForMode\(mode\);/);
@@ -1459,8 +1461,12 @@ test("portfolio parameters form: the resolution ceiling has an editable input, n
 test("portfolio parameters form: events under way are their own setting, not a horizon of zero", () => {
   // Three states, not a checkbox: judging a running fixture by the ceiling, admitting it
   // regardless, and taking nothing else are three different rules.
-  assert.match(HTML, /<span>Events under way<\/span>\s*\n\s*<select data-live-event-mode>/,
+  // The type of filter is chosen first, then the number it needs -- and under "only" the
+  // number needs nothing, so the input below it is hidden.
+  assert.match(HTML, /<span>Resolution filter<\/span>\s*\n\s*<select data-live-event-mode>/,
     "the parameter form must carry the in-play setting as its own control");
+  assert.ok(HTML.indexOf("data-live-event-mode") < HTML.indexOf("data-max-resolution-hours"),
+    "the choice comes before the hours it governs");
   for (const mode of ["ignore", "include", "only"]) {
     assert.match(HTML, new RegExp(`<option value="${mode}">`), `${mode} must be selectable`);
   }
@@ -1477,9 +1483,21 @@ test("portfolio parameters form: events under way are their own setting, not a h
   // the setting is a label with nothing behind it -- and "include" has to let a running
   // fixture past the ceiling, which is the state this was reopened for.
   assert.match(BOT, /liveEventMode === "only" && !eventIsRunning/);
-  assert.match(BOT, /!\(liveEventMode === "include" && eventIsRunning\) && hours > maxResolutionHours/);
+  assert.match(BOT, /horizonApplies\(liveEventMode, eventIsRunning\) && hours > maxResolutionHours/);
   assert.match(API, /\$liveEventMode === 'only' && !\$running/);
-  assert.match(API, /!\(\$liveEventMode === 'include' && \$running\)/);
+  assert.match(API, /\$horizonApplies = \$liveEventMode !== 'only' && !\(\$liveEventMode === 'include' && \$running\)/);
+
+  // Hiding the input is only honest if the ceiling really stops applying. A hidden number
+  // that still filters is worse than a visible one, so every runtime states the same rule.
+  assert.match(HTML, /data-max-resolution-hours-row/);
+  assert.match(APP, /els\.maxResolutionHoursRow\.hidden = liveEventMode === "only"/);
+  const applies = new Function(`${extractFunction(APP, "horizonApplies")}\nreturn horizonApplies;`)();
+  assert.equal(applies("ignore", false), true);
+  assert.equal(applies("ignore", true), true, "ignore caps a running fixture like anything else");
+  assert.equal(applies("include", true), false, "include exempts the running fixture");
+  assert.equal(applies("include", false), true, "and caps everything that has not started");
+  assert.equal(applies("only", true), false);
+  assert.equal(applies("only", false), false, "under only there is no ceiling at all");
 
   // A portfolio saved while this was a checkbox meant exactly the "only" state, in every
   // runtime that has to read it back.
@@ -2907,13 +2925,13 @@ test("candidate reasons: the general branch still caps a portfolio's resolution 
   // Counted to the market's own resolution date. The catalogue's endDate is the KICKOFF
   // for a sports fixture, so the stored day count is time to the start of the match.
   assert.match(reasons, /const hours = candidateHoursToResolution\(item\);/);
-  assert.match(reasons, /if \(!Number\.isFinite\(hours\)\) \{\s*\n\s*reasons\.push\("missing resolution date"\);\s*\n\s*\} else if \(!\(liveEventMode === "include" && eventIsRunning\) && hours > maxHours\) \{/);
+  assert.match(reasons, /if \(!Number\.isFinite\(hours\)\) \{\s*\n\s*reasons\.push\("missing resolution date"\);\s*\n\s*\} else if \(horizonApplies\(liveEventMode, eventIsRunning\) && hours > maxHours\) \{/);
   // The horizon and "has it started" are separate questions, so an un-started row is
   // refused on its own reason rather than being folded into the ceiling.
   assert.match(reasons, /liveEventMode === "only" && !eventIsRunning/);
   // And the fixed-entry (5050) branch keeps its own, symmetric checks.
   const branch = /if \(isFixedEntryMode\(mode\)\) \{[\s\S]*?return reasons;\n  \}/.exec(reasons)[0];
-  assert.match(branch, /!\(liveEventMode === "include" && eventIsRunning\)/);
+  assert.match(branch, /horizonApplies\(liveEventMode, eventIsRunning\)/);
   assert.match(branch, /liveEventMode === "only" && !eventIsRunning/);
 
   // The reader has to be able to see which rule bit: the ceiling and the in-play setting

@@ -1853,9 +1853,11 @@ function execution_scope_matches_observation(array $item, array $config): bool
     $running = ($item['eventStarted'] ?? null) === true;
     // A running fixture under "include" is admitted whatever the ceiling says: the ceiling
     // caps how long capital is committed, and a match in play is the shortest commitment
-    // there is.
-    if (!($liveEventMode === 'include' && $running)
-        && $hours !== null && $maxHours !== null && $hours > $maxHours) {
+    // there is. Under "only" the ceiling is not a rule at all -- that mode admits nothing
+    // by its horizon, and the dashboard hides the input, so enforcing one here would be an
+    // invisible filter.
+    $horizonApplies = $liveEventMode !== 'only' && !($liveEventMode === 'include' && $running);
+    if ($horizonApplies && $hours !== null && $maxHours !== null && $hours > $maxHours) {
         return false;
     }
     // A separate question from the horizon: has the event actually started. A row that

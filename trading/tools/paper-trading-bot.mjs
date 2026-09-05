@@ -488,6 +488,16 @@ function configLiveEventMode(row = {}) {
   return row?.requireEventStarted === true ? "only" : "ignore";
 }
 
+// Whether the resolution ceiling is a rule for THIS row, given the mode.
+//
+// Under "only" it is not a rule at all: that mode admits nothing by its horizon, so a
+// ceiling would be an invisible second filter behind a setting the dashboard does not even
+// show. Under "include" a running fixture is exempt, and everything else is capped.
+function horizonApplies(liveEventMode, eventIsRunning) {
+  if (liveEventMode === "only") return false;
+  return !(liveEventMode === "include" && eventIsRunning);
+}
+
 // A shipped strategy's setting from its environment. The older boolean is still read, so an
 // environment written before the three states existed keeps meaning what it meant.
 function envLiveEventMode(prefix) {
@@ -4201,7 +4211,7 @@ function observationMatchesActiveLiveConfig(item, config) {
   const maxHours = configMaxResolutionHours(config, null);
   const liveEventMode = configLiveEventMode(config);
   const running = item?.eventStarted === true;
-  if (!(liveEventMode === "include" && running)
+  if (horizonApplies(liveEventMode, running)
     && hours != null && maxHours != null && hours > maxHours) return false;
   // A separate question from the horizon: has the fixture actually started. Only applied
   // when asked for, and a market that cannot answer (no kickoff signal at all) is excluded
@@ -6991,7 +7001,7 @@ function strategyEligibleCandidates(eligible, strategy) {
     // ceiling caps how long capital is committed, and a match in play is the shortest
     // commitment there is.
     const running = item?.eventStarted === true;
-    if (!(liveEventMode === "include" && running) && hoursValue(item) > maxResolutionHours) return false;
+    if (horizonApplies(liveEventMode, running) && hoursValue(item) > maxResolutionHours) return false;
     // Asked alongside the horizon rather than folded into it.
     if (liveEventMode === "only" && !running) return false;
     // The same test the statistics apply, for the same reason: an order sent into a book
@@ -7320,7 +7330,7 @@ function portfolioFilterResult(item, strategy) {
   if (item?.marketClosed === true || item?.marketActive === false || item?.acceptingOrders === false) {
     reasons.push("market is closed or no longer accepting orders");
   }
-  if (!(liveEventMode === "include" && eventIsRunning) && hours > maxResolutionHours) {
+  if (horizonApplies(liveEventMode, eventIsRunning) && hours > maxResolutionHours) {
     reasons.push(`resolution ${Number.isFinite(hours) ? formatHorizonHours(hours) : "-"} exceeds max ${formatHorizonHours(maxResolutionHours)}`);
   }
   // Named separately, because "it has not started" and "it resolves too far out" are
@@ -12378,6 +12388,7 @@ export {
   configMaxResolutionHours,
   normalizeLiveEventMode,
   configLiveEventMode,
+  horizonApplies,
   hoursToResolution,
   formatHorizonHours,
   portfolioProbabilityForStrategy,
