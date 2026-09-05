@@ -230,3 +230,55 @@ test("stop reversal: an owed position survives the pass that failed to open it",
     "an empty book now says nothing about the book in a minute");
   assert.equal(worker.reversalFailureIsTerminal(null), false);
 });
+
+// Reported: on the live portfolio "70+ 3d incl. O/U" (live-custom-ewportfolio) the stop
+// loss does not work at all.
+//
+// Measured on the worker's own state, and it was not a coverage problem -- that portfolio's
+// multiplier is 2, its stopLossEnabled is true, and all nine of its open positions are in
+// the policy payload. The worker was firing and being refused:
+//
+//   stopPrice 0.129981  triggerPrice 0.131981  bestBid 0.09
+//   type EXIT_REJECTED  response { success:false, status:400 }
+//
+// eleven times in eleven minutes on one position, and all six tokens it had ever tried to
+// exit sat at status 400 with no order id. Two causes, both visible in that one line.
+test("protected exit: the sell is priced on the tick grid and where it can fill", () => {
+  // 0.129981 is not a price the CLOB accepts. Rounding is DOWN for a sell: it is the
+  // marketable direction, and one tick of extra loss is nothing beside not exiting at all.
+  assert.equal(worker.roundToTick(0.129981, 0.01, "down"), 0.12);
+  assert.equal(worker.roundToTick(0.129981, 0.001, "down"), 0.129);
+  assert.equal(worker.roundToTick(0.13, 0.01, "down"), 0.13, "a price already on the grid is unchanged");
+  assert.equal(worker.roundToTick(0.5, 0, "down"), 0.5, "an unusable tick must not produce NaN");
+
+  // The reported position exactly: floor 0.129981, book gapped down to 0.09. Insisting on
+  // the floor there cannot match at any price, which is why it never sold.
+  const gapped = worker.protectedExitPrice({ stopPrice: 0.129981, bestBidPrice: 0.09, tickSize: 0.01 });
+  assert.equal(gapped, 0.09, "once the book is through the floor, sell where the buyers are");
+
+  // Not gapped: the floor is the price, on the grid.
+  const atFloor = worker.protectedExitPrice({ stopPrice: 0.129981, bestBidPrice: 0.20, tickSize: 0.01 });
+  assert.equal(atFloor, 0.12, "with bids above the floor the sell rests at the floor, tick-aligned");
+
+  // A bid exactly at the floor is not a gap.
+  assert.equal(worker.protectedExitPrice({ stopPrice: 0.12, bestBidPrice: 0.12, tickSize: 0.01 }), 0.12);
+
+  // Nothing sellable stays nothing sellable rather than becoming a zero-price order.
+  assert.equal(worker.protectedExitPrice({ stopPrice: 0.129981, bestBidPrice: 0, tickSize: 0.01 }), 0.12);
+  assert.equal(worker.protectedExitPrice({ stopPrice: 0.004, bestBidPrice: 0.003, tickSize: 0.01 }), null,
+    "a floor that rounds to zero on this grid is not an order");
+
+  const source = readFileSync(new URL("../tools/rpi-live-exit-worker.mjs", import.meta.url), "utf8");
+  const submit = source.slice(source.indexOf("async function submitProtectedExit("));
+  const body = submit.slice(0, submit.indexOf("\nasync function "));
+  assert.match(body, /protectedExitPrice\(/, "the raw six-decimal floor must not be sent as a price");
+  assert.match(body, /options = \{ tickSize: String\(constraints\.tickSize\) \}/,
+    "the order has to declare the grid it is priced on");
+  // Same trap the executor documents: an unknown negRisk must stay unknown.
+  assert.match(body, /typeof constraints\.negRisk === "boolean"/,
+    "negRisk must only be sent when it is actually known");
+  assert.doesNotMatch(body, /price: plan\.stopPrice/, "the unrounded floor must not reach createOrder");
+  // And the bid that decided the trigger has to reach the pricing, or the gap case cannot
+  // be seen from inside it.
+  assert.match(source, /submitProtectedExit\(plan, \{ bestBidPrice: currentBestBid \}\)/);
+});

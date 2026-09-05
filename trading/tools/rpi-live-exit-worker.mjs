@@ -425,15 +425,86 @@ function exitFilled(response) {
   return Boolean(response?.success) && String(response?.status || "").toLowerCase() === "matched";
 }
 
-async function submitProtectedExit(plan) {
+// What the CLOB enforces on every order and this worker was never asking about: prices must
+// sit on the market's tick grid, and a neg-risk market must be declared as one. The executor
+// has always read both (see roundToTick and the tickSize/negRisk options it passes); this
+// worker sent a raw price and an empty options object.
+async function exchangeConstraintsForToken(tokenId) {
+  try {
+    const market = await marketForToken(tokenId);
+    const tick = number(market?.orderPriceMinTickSize);
+    return {
+      tickSize: tick != null && tick > 0 ? tick : 0.01,
+      negRisk: typeof market?.negRisk === "boolean" ? market.negRisk : undefined,
+    };
+  } catch {
+    // A market lookup that fails must not stop the exit. 0.01 is the CLOB's ordinary tick
+    // and is a valid multiple of every finer one, so an order priced on it stays valid.
+    return { tickSize: 0.01, negRisk: undefined };
+  }
+}
+
+export function roundToTick(value, tick, direction = "nearest") {
+  const price = number(value);
+  const step = number(tick);
+  if (price == null || step == null || !(step > 0)) return price;
+  const scale = Math.round(1 / step);
+  if (!Number.isFinite(scale) || scale <= 0) return price;
+  const raw = price * scale;
+  const rounded = direction === "down" ? Math.floor(raw) : direction === "up" ? Math.ceil(raw) : Math.round(raw);
+  return Number((rounded / scale).toFixed(String(step).split(".")[1]?.length || 4));
+}
+
+// The price a protective SELL has to carry to actually leave the position.
+//
+// Two things were wrong and both had to be, because every rejected exit showed both.
+//
+// The price was the raw binary-search floor, rounded to six decimals: 0.129981. The CLOB
+// prices on a tick grid, so that is not a price at all and the order came back 400 --
+// eleven times in eleven minutes on one position, and every one of the six tokens the
+// worker had ever tried to exit sat at status 400 with no order id. That is the whole of
+// "the stop loss does not work": it fired every time and was refused every time.
+//
+// And the floor is not where the position can be sold once the book has moved through it.
+// In every one of those events the best bid (0.07 to 0.10) was already BELOW the 0.13
+// floor, so even a validly priced sell at the floor could never have matched. A stop that
+// insists on its floor after the market has gapped past it does not cap the loss, it just
+// stops selling -- and the position keeps falling. Selling into the gap is what the paper
+// model already books as FILLED_AFTER_GAP, so this is also what makes the two agree.
+export function protectedExitPrice({ stopPrice, bestBidPrice, tickSize = 0.01 } = {}) {
+  const floor = roundToTick(stopPrice, tickSize, "down");
+  const bid = number(bestBidPrice);
+  if (floor == null) return null;
+  // Below the floor the book has gapped; sell where the buyers actually are.
+  if (bid != null && bid > 0 && bid < floor) {
+    const gapped = roundToTick(bid, tickSize, "down");
+    return gapped != null && gapped > 0 ? gapped : null;
+  }
+  return floor > 0 ? floor : null;
+}
+
+async function submitProtectedExit(plan, { bestBidPrice = null } = {}) {
   const { client, Side, OrderType } = await authenticatedClient();
+  const constraints = await exchangeConstraintsForToken(plan.tokenId);
+  const price = protectedExitPrice({
+    stopPrice: plan.stopPrice,
+    bestBidPrice,
+    tickSize: constraints.tickSize,
+  });
+  if (price == null || !(price > 0)) {
+    return { success: false, error: "no valid exit price on this market's tick grid" };
+  }
+  const options = { tickSize: String(constraints.tickSize) };
+  // Only when it is actually known. Turning "unknown" into a confident false is what
+  // deadlocked neg-risk exits in the executor, and the same trap is here.
+  if (typeof constraints.negRisk === "boolean") options.negRisk = constraints.negRisk;
   // FOK keeps the price floor strict: the complete position is sold at this price
   // or better, or it remains intact. FAK is only an explicit opt-in because partial
   // exits complicate the remaining stop plan.
-  const signed = await client.createOrder({ tokenID: plan.tokenId, price: plan.stopPrice, size: plan.shares, side: Side.SELL }, {});
+  const signed = await client.createOrder({ tokenID: plan.tokenId, price, size: plan.shares, side: Side.SELL }, options);
   let response = await client.postOrder(signed, OrderType.FOK, false);
   if (!exitFilled(response) && ALLOW_PARTIAL) response = await client.postOrder(signed, OrderType.FAK, false);
-  return response;
+  return { ...response, exitPrice: price, tickSize: constraints.tickSize };
 }
 
 async function marketForToken(tokenId) {
@@ -677,15 +748,32 @@ async function checkOnce(context) {
     }
     let response;
     try {
-      response = await submitProtectedExit(plan);
+      // The bid the trigger was decided on, so the exit is priced where the position can
+      // actually be sold rather than at a floor the book has already moved past.
+      response = await submitProtectedExit(plan, { bestBidPrice: currentBestBid });
     } catch (error) {
       response = { success: false, error: error?.message || String(error) };
     }
     const accepted = exitFilled(response);
     context.state.exits = context.state.exits || {};
-    context.state.exits[plan.tokenId] = { lastAttemptAt: now, terminal: accepted, orderId: response?.orderID || null, status: response?.status || null };
+    context.state.exits[plan.tokenId] = {
+      lastAttemptAt: now,
+      terminal: accepted,
+      orderId: response?.orderID || null,
+      status: response?.status || null,
+      // The price and grid it was sent on. Six-decimal floors were being refused as
+      // invalid prices with nothing on the row to show it, so this is recorded.
+      exitPrice: response?.exitPrice ?? null,
+      tickSize: response?.tickSize ?? null,
+    };
     const type = accepted ? "EXIT_SUBMITTED" : "EXIT_REJECTED";
-    recordEvent(context.state, { ...event, type, response: { success: Boolean(response?.success), status: response?.status || null, error: response?.errorMsg || response?.error || null, orderId: response?.orderID || null } });
+    recordEvent(context.state, {
+      ...event,
+      type,
+      exitPrice: response?.exitPrice ?? null,
+      tickSize: response?.tickSize ?? null,
+      response: { success: Boolean(response?.success), status: response?.status || null, error: response?.errorMsg || response?.error || null, orderId: response?.orderID || null },
+    });
     if (accepted) {
       // A reverse is a second, independent FOK order. It is intentionally attempted
       // only after the CLOB said the complete protective SELL matched; a rejected
