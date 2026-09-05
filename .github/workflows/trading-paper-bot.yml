@@ -294,6 +294,10 @@ jobs:
               # already under way -- ignore, include, or only. Always written, so switching
               # back to "ignore" actually clears it.
               emit(f"{prefix}_LIVE_EVENT_MODE", str(row.get("liveEventMode") or ("only" if row.get("requireEventStarted") else "ignore")))
+              # The bid at which a position is sold rather than held to settlement. Absent
+              # or 0 means the portfolio waits for Polymarket, which is what every portfolio
+              # did before this existed.
+              emit(f"{prefix}_SETTLEMENT_CLOSE_BID", row.get("settlementCloseBid"))
               emit(f"{prefix}_SELECTION_ORDER", row.get("selectionOrder"))
               emit(f"{prefix}_MIN_LIQUIDITY_USDC", row.get("minLiquidityUsdc"))
               emit(f"{prefix}_MIN_NET_YIELD", row.get("minNetYield"))

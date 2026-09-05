@@ -347,6 +347,8 @@ const els = {
   maxResolutionHours: document.querySelector("[data-max-resolution-hours]"),
   maxResolutionHoursLabel: document.querySelector("[data-max-resolution-hours-label]"),
   maxResolutionHoursRow: document.querySelector("[data-max-resolution-hours-row]"),
+  settlementCloseBid: document.querySelector("[data-settlement-close-bid]"),
+  settlementCloseBidLabel: document.querySelector("[data-settlement-close-bid-label]"),
   liveEventMode: document.querySelector("[data-live-event-mode]"),
   liveEventModeLabel: document.querySelector("[data-live-event-mode-label]"),
   selectionOrder: document.querySelector("[data-selection-order]"),
@@ -1406,6 +1408,16 @@ function configLiveEventMode(config = {}) {
 function horizonApplies(liveEventMode, eventIsRunning) {
   if (liveEventMode === "only") return false;
   return !(liveEventMode === "include" && eventIsRunning);
+}
+
+// The bid at which a position is sold rather than held to settlement, or null for off.
+// Bounded the way the API bounds it: below 0.5 this is not a settlement shortcut but simply
+// selling, and at 1.0 nothing would ever trigger -- a resolved market is no longer quoted.
+function normalizeSettlementCloseBid(value) {
+  if (value === "" || value == null) return null;
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric <= 0) return null;
+  return Math.max(0.5, Math.min(0.999, Math.round(numeric * 10000) / 10000));
 }
 
 function liveEventModeLabel(value) {
@@ -5393,6 +5405,7 @@ function syncPortfolioParameterControls(configOverride = null, options = {}) {
   const config = configOverride || portfolioConfigForMode(mode);
   const maxHours = configMaxResolutionHours(config);
   const liveEventMode = configLiveEventMode(config);
+  const settlementCloseBid = normalizeSettlementCloseBid(config.settlementCloseBid);
   const liquidity = normalizeOptionalMoney(config.minLiquidityUsdc);
   const minNetYield = normalizeMinimumNetYield(config.minNetYield);
   const order = normalizeSelectionOrder(config.selectionOrder);
@@ -5450,6 +5463,12 @@ function syncPortfolioParameterControls(configOverride = null, options = {}) {
   // The number typed is hours; the label reads it back in whichever unit is legible, so a
   // 168 stays recognisable as the week it is.
   if (els.maxResolutionHoursLabel) els.maxResolutionHoursLabel.textContent = formatHorizonHours(maxHours);
+  if (els.settlementCloseBid && document.activeElement !== els.settlementCloseBid) {
+    els.settlementCloseBid.value = settlementCloseBid == null ? "0" : String(Number((settlementCloseBid * 100).toFixed(1)));
+  }
+  if (els.settlementCloseBidLabel) {
+    els.settlementCloseBidLabel.textContent = settlementCloseBid == null ? "Off" : `Sell at ${probability(settlementCloseBid)}`;
+  }
   if (els.liveEventMode) els.liveEventMode.value = liveEventMode;
   if (els.liveEventModeLabel) els.liveEventModeLabel.textContent = liveEventModeLabel(liveEventMode);
   if (els.selectionOrder) els.selectionOrder.value = order;
@@ -6199,6 +6218,10 @@ function parameterDraftFromControls(baseDraft = {}) {
       // than nothing. Hours is what the server stores; this is only its days reading.
       draft.maxResolutionDays = Math.max(1, Math.min(365, Math.round(value / HOURS_PER_DAY)));
     }
+  }
+  if (hasValue(els.settlementCloseBid)) {
+    const bid = normalizeSettlementCloseBid(numberValue(els.settlementCloseBid) / 100);
+    draft.settlementCloseBid = bid == null ? 0 : bid;
   }
   if (els.liveEventMode) {
     const mode = normalizeLiveEventMode(els.liveEventMode.value) || "ignore";
@@ -8622,6 +8645,12 @@ function portfolioRuleRows(portfolio = {}) {
   }
   // Only when something is actually excluded: a row reading "none" on every portfolio
   // that never touched the setting is noise in a list meant to be read at a glance.
+  const closeBid = normalizeSettlementCloseBid(config.settlementCloseBid);
+  // Only when it is on. A row reading "Off" on every portfolio that never touched the
+  // setting is noise in a list meant to be read at a glance.
+  if (closeBid != null) {
+    rows.push(["Close at certainty", `Sold once the bid reaches ${probability(closeBid)}, without waiting for resolution`]);
+  }
   const includeOnlyTags = normalizeMarketTagList(config.includeOnlyMarketTags);
   const excludedTags = normalizeMarketTagList(config.excludedMarketTags);
   if (includeOnlyTags.length) rows.push(["Included tags", includeOnlyTags.join(", ")]);
@@ -9655,6 +9684,7 @@ const PORTFOLIO_CONFIG_HISTORY_LABELS = {
   maxResolutionHours: "Max resolution hours",
   requireEventStarted: "Only events under way",
   liveEventMode: "Events under way",
+  settlementCloseBid: "Close at certainty",
   selectionOrder: "Trade priority",
   marketType: "Market type",
   excludeOverUnderMarkets: "Exclude Over/Under (O/U)",
@@ -14350,6 +14380,16 @@ els.maxResolutionHours?.addEventListener("input", () => {
   const days = Math.max(1, Math.min(365, Math.round(value / HOURS_PER_DAY)));
   if (updateParameterDraft({ maxResolutionHours: value, maxResolutionDays: days })) return;
   updatePortfolioConfigForMode(state.mode, { maxResolutionHours: value, maxResolutionDays: days });
+  savePortfolioConfigSoon();
+  syncPortfolioParameterControls();
+  rerenderCurrentDashboard();
+});
+
+els.settlementCloseBid?.addEventListener("input", () => {
+  const bid = normalizeSettlementCloseBid(numberValue(els.settlementCloseBid) / 100);
+  const value = bid == null ? 0 : bid;
+  if (updateParameterDraft({ settlementCloseBid: value })) return;
+  updatePortfolioConfigForMode(state.mode, { settlementCloseBid: value });
   savePortfolioConfigSoon();
   syncPortfolioParameterControls();
   rerenderCurrentDashboard();

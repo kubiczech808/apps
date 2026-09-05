@@ -129,7 +129,9 @@ test("worker source keeps live exits opt-in and price-protected", async () => {
   assert.match(source, /LIVE_EXIT_POLICY_URL/);
   assert.match(source, /remotePolicyMap\(context\.policyState\)/);
   assert.match(source, /defaultRemotePolicy\(context\.policyState\)/);
-  assert.match(source, /if \(plan\.reverseOnStopLoss\)/);
+  // Never after a settlement close: that position won, and buying the opposite outcome of
+  // a decided market is buying the loser.
+  assert.match(source, /if \(plan\.reverseOnStopLoss && reason !== "settlement"\)/);
   assert.match(source, /submitStopLossReversal\(plan\)/);
   assert.match(source, /STOP_LOSS_REVERSAL_STAKE_USDC = 5/);
   // The exclusion is checked before PROTECT_ALL and the local watchlist, not after, or
@@ -476,4 +478,75 @@ test("book errors: a market repeating the same failure is counted, not re-logged
   record(state, { tokenId: "2", question: "Games Total: O/U 4.5" }, new Error("fetch failed"), "2026-09-05T08:03:34.323Z");
   assert.equal(state.history.length, 3);
   assert.equal(state.bookErrors["2"].count, 1);
+});
+
+// Asked for: a position whose outcome the market has already decided still waits hours for
+// Polymarket to resolve it, with the stake locked the whole time. Selling one tick below
+// certainty pays about a cent a share to get that capital back now.
+test("settlement close: a decided market is sold at the bid rather than held to resolution", () => {
+  const position = { tokenId: "1", shares: 6.9, totalCostUsdc: 4.92, netGainIfWinUsdc: 2.01, feeRate: 0, feesEnabled: false };
+
+  const reason = (bid, plan) => worker.exitReason({ bestBidPrice: bid, ...plan });
+
+  // A portfolio that only wants this must still be WATCHED. Requiring a stop in watchPlan
+  // is what would have left it out of the watch list entirely -- the books below are read
+  // for exactly what that returns, so an unwatched position is never looked at again.
+  const settlementOnly = worker.watchPlan(position, {
+    enabled: true,
+    stopLossEnabled: false,
+    stopLossRiskMultiplier: 0,
+    settlementCloseBid: 0.99,
+  });
+  assert.ok(settlementOnly, "a settlement-close-only portfolio's position is watched");
+  assert.equal(settlementOnly.stopPrice, null, "with no stop invented from a 0 multiplier");
+  assert.equal(settlementOnly.triggerPrice, null);
+  assert.equal(settlementOnly.settlementCloseBid, 0.99);
+
+  // Neither reason configured is still not watched: nothing would ever act on it.
+  assert.equal(worker.watchPlan(position, { enabled: true, stopLossEnabled: false, stopLossRiskMultiplier: 0 }), null);
+
+  // And a portfolio with both keeps its stop as well.
+  const both = worker.watchPlan(position, { enabled: true, stopLossRiskMultiplier: 2, settlementCloseBid: 0.99 });
+  assert.ok(both.stopPrice > 0 && both.stopPrice < 1);
+  assert.equal(both.settlementCloseBid, 0.99);
+
+  // The stop is unaffected by the new rule.
+  assert.equal(reason(0.12, { stopPrice: 0.13, triggerPrice: 0.132, settlementCloseBid: null }), "stop");
+  assert.equal(reason(0.5, { stopPrice: 0.13, triggerPrice: 0.132, settlementCloseBid: null }), null);
+
+  // And the settlement close fires on its own, with no stop configured at all.
+  assert.equal(reason(0.99, { stopPrice: null, triggerPrice: null, settlementCloseBid: 0.99 }), "settlement");
+  assert.equal(reason(0.995, { stopPrice: null, triggerPrice: null, settlementCloseBid: 0.99 }), "settlement");
+  assert.equal(reason(0.98, { stopPrice: null, triggerPrice: null, settlementCloseBid: 0.99 }), null);
+
+  // A market with no bid at all is not a decided market.
+  assert.equal(reason(0, { stopPrice: null, triggerPrice: null, settlementCloseBid: 0.99 }), null);
+  assert.equal(reason(null, { stopPrice: null, triggerPrice: null, settlementCloseBid: 0.99 }), null);
+
+  // Both can be true only in a market that went from a loss to certainty within one pass.
+  // The stop is the more urgent of the two, so it wins.
+  assert.equal(reason(0.99, { stopPrice: 0.995, triggerPrice: 0.997, settlementCloseBid: 0.99 }), "stop");
+
+});
+
+test("settlement close: the sell is priced at the bid, because there is no floor to protect", () => {
+  // A stop keeps its floor: the whole point of one is not to sell below it while the book
+  // is still there.
+  assert.equal(worker.protectedExitPrice({ stopPrice: 0.13, bestBidPrice: 0.5, tickSize: 0.01 }), 0.13);
+  // A settlement close has no floor. Passing the stop price here would price the sell under
+  // a book that is quoting near certainty -- 0.13 into a 0.99 bid.
+  assert.equal(worker.protectedExitPrice({ stopPrice: null, bestBidPrice: 0.99, tickSize: 0.01 }), 0.99);
+  assert.equal(worker.protectedExitPrice({ stopPrice: null, bestBidPrice: 0.9994, tickSize: 0.001 }), 0.999);
+  // And with no bid there is nothing to sell into, floor or not.
+  assert.equal(worker.protectedExitPrice({ stopPrice: null, bestBidPrice: 0, tickSize: 0.01 }), null);
+  assert.equal(worker.protectedExitPrice({ stopPrice: null, bestBidPrice: null, tickSize: 0.01 }), null);
+
+  const source = readFileSync(new URL("../tools/rpi-live-exit-worker.mjs", import.meta.url), "utf8");
+  // The submission has to drop the floor, or the price above is never the one sent.
+  assert.match(source, /await submitProtectedExit\(\{ \.\.\.plan, stopPrice: null \}, \{ bestBidPrice: exitBid \}\)/);
+  // A position that is only waiting for certainty does not need the stop's five-second
+  // cadence, and adding a book fetch every pass for it would be pure load.
+  assert.match(source, /const SETTLEMENT_SCAN_INTERVAL_MS = clampInteger\(process\.env\.LIVE_EXIT_SETTLEMENT_SCAN_MS, 60000, 5000, 900000\)/,
+    "capped at fifteen minutes, so the answer is never staler than that");
+  assert.match(source, /if \(Date\.now\(\) - last < SETTLEMENT_SCAN_INTERVAL_MS\) return false;/);
 });

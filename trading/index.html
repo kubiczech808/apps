@@ -478,6 +478,11 @@
           <input type="checkbox" data-auto-rotate-positions>
           <strong data-auto-rotate-positions-label>On</strong>
         </label>
+        <label class="parameter-control" title="Sell a position once the market prices its outcome as decided, instead of waiting for Polymarket to resolve it - which routinely takes hours while the stake stays locked. 99 sells at a 99c bid, paying about a cent a share to get the capital back now. 0 waits for resolution, which is what every portfolio did before this existed.">
+          <span>Close at certainty</span>
+          <input type="number" min="0" max="99.9" step="0.1" value="0" data-settlement-close-bid>
+          <strong data-settlement-close-bid-label>Off</strong>
+        </label>
         <label class="parameter-control" title="0 disables the protective exit. 100 means the planned maximum loss equals the net potential win; 150 means one and a half times the net potential win. Live exits are checked by the RPi worker and submitted only when its live mode is armed.">
           <span>Stop loss risk</span>
           <input type="number" min="0" max="300" step="10" value="0" data-stop-loss-risk-multiplier>

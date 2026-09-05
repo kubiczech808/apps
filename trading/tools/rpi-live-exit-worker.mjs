@@ -25,6 +25,11 @@ const TRADING_TRIGGER_KEY = String(process.env.TRADING_TRIGGER_KEY || "").trim()
 const MODE = String(process.env.LIVE_EXIT_MODE || "shadow").trim().toLowerCase();
 const POLL_INTERVAL_MS = clampInteger(process.env.LIVE_EXIT_POLL_INTERVAL_MS, 5000, 1500, 60000);
 const RETRY_INTERVAL_MS = clampInteger(process.env.LIVE_EXIT_RETRY_INTERVAL_MS, 20000, 5000, 300000);
+// How often a position that is ONLY waiting to be closed at certainty has its book read.
+// A stop needs the poll interval, because how fast the loop goes round is its reaction
+// time; this does not -- a market that has settled stays settled. Capped at 15 minutes so
+// the answer is never more than that stale, and defaulted well inside it.
+const SETTLEMENT_SCAN_INTERVAL_MS = clampInteger(process.env.LIVE_EXIT_SETTLEMENT_SCAN_MS, 60000, 5000, 900000);
 const STATE_REFRESH_MS = clampInteger(process.env.LIVE_EXIT_STATE_REFRESH_MS, 30000, 5000, 300000);
 const WATCHLIST_PATH = process.env.LIVE_EXIT_WATCHLIST_PATH || ".live-exit-watchlist.json";
 const STATE_PATH = process.env.LIVE_EXIT_STATE_PATH || ".live-exit-worker-state.json";
@@ -473,23 +478,60 @@ export function excludedRemoteTokens(payload = {}) {
     }]));
 }
 
-function watchPlan(position, entry = null) {
+// The bid at which a position is sold rather than held to settlement, or null for off.
+//
+// A market that has already decided still takes hours to resolve on Polymarket, and the
+// stake is locked for all of it. Selling one tick below certainty pays about a cent a share
+// to get that capital back now, which is the whole point of the setting.
+//
+// Bounded the same way the API bounds it, because a local watchlist can also carry one and
+// nothing else would check it.
+function settlementCloseBid(entry = null) {
+  const bid = number(entry?.settlementCloseBid);
+  if (bid == null || !(bid > 0)) return null;
+  return Math.max(0.5, Math.min(0.999, bid));
+}
+
+export function watchPlan(position, entry = null) {
   if (entry && entry.enabled === false) return null;
   const derived = equalRiskExitPlan(position);
   const configuredStop = number(entry?.stopPrice);
-  const stopPrice = configuredStop != null ? configuredStop : derived.stopPrice;
-  if (!derived.protectable || stopPrice == null || !(stopPrice > 0) || stopPrice >= 1) return null;
+  // A policy that exists only for the settlement close carries a 0 multiplier, and reading
+  // the derived stop from it would invent one. stopLossEnabled says which it is.
+  const stopIsConfigured = entry?.stopLossEnabled !== false;
+  const candidateStop = configuredStop != null ? configuredStop : (stopIsConfigured ? derived.stopPrice : null);
+  const stopPrice = derived.protectable && candidateStop != null && candidateStop > 0 && candidateStop < 1
+    ? candidateStop
+    : null;
+  const closeBid = settlementCloseBid(entry);
+  // Either reason is enough to watch the position. Requiring a stop here is what would keep
+  // a portfolio that only wants its settled positions closed early from being watched at
+  // all -- the books below are read for exactly what this returns.
+  if (stopPrice == null && closeBid == null) return null;
   return {
     ...derived,
     tokenId: String(position.tokenId || position.assetId),
     question: entry?.question || position.question || position.market || "Unknown market",
     outcome: entry?.outcome || position.outcome || "",
     stopPrice,
-    triggerPrice: round(Math.min(0.999999, stopPrice + STOP_PRETRIGGER_BUFFER), 6),
+    triggerPrice: stopPrice == null ? null : round(Math.min(0.999999, stopPrice + STOP_PRETRIGGER_BUFFER), 6),
+    settlementCloseBid: closeBid,
     reverseOnStopLoss: entry?.reverseOnStopLoss === true,
     reverseStakeUsdc: STOP_LOSS_REVERSAL_STAKE_USDC,
     source: entry?.source || (configuredStop != null ? "watchlist" : "equal-risk-derived"),
   };
+}
+
+// Which rule, if either, wants this position sold at the current bid.
+//
+// The stop is checked first: both can be true only in a market that has moved from a loss
+// to certainty within one pass, and a stop that has been reached is the more urgent of the
+// two. Returns null when neither applies.
+export function exitReason({ bestBidPrice, stopPrice, triggerPrice, settlementCloseBid: closeBid } = {}) {
+  if (stopPrice != null && exitTrigger({ bestBidPrice, stopPrice, triggerPrice })) return "stop";
+  const bid = number(bestBidPrice);
+  if (closeBid != null && bid != null && bid >= closeBid) return "settlement";
+  return null;
 }
 
 async function authenticatedClient() {
@@ -569,7 +611,14 @@ export function roundToTick(value, tick, direction = "nearest") {
 export function protectedExitPrice({ stopPrice, bestBidPrice, tickSize = 0.01 } = {}) {
   const floor = roundToTick(stopPrice, tickSize, "down");
   const bid = number(bestBidPrice);
-  if (floor == null) return null;
+  // No floor at all is the settlement close: nothing is being protected, the point is to
+  // take the bid the market is already showing. Any floor here would price the sell under a
+  // book quoting near certainty.
+  if (floor == null) {
+    if (bid == null || !(bid > 0)) return null;
+    const atBid = roundToTick(bid, tickSize, "down");
+    return atBid != null && atBid > 0 ? atBid : null;
+  }
   // Below the floor the book has gapped; sell where the buyers actually are.
   if (bid != null && bid > 0 && bid < floor) {
     const gapped = roundToTick(bid, tickSize, "down");
@@ -820,7 +869,7 @@ async function checkOnce(context) {
   context.state.protectAll = PROTECT_ALL;
   context.state.policyUrl = LIVE_EXIT_POLICY_URL;
   context.state.policyError = context.policyError || null;
-  context.state.watchedPositions = plans.map((plan) => ({ tokenId: plan.tokenId, question: plan.question, outcome: plan.outcome, stopPrice: plan.stopPrice, triggerPrice: plan.triggerPrice, riskTargetUsdc: plan.riskTargetUsdc, reverseOnStopLoss: plan.reverseOnStopLoss, source: plan.source }));
+  context.state.watchedPositions = plans.map((plan) => ({ tokenId: plan.tokenId, question: plan.question, outcome: plan.outcome, stopPrice: plan.stopPrice, triggerPrice: plan.triggerPrice, settlementCloseBid: plan.settlementCloseBid, riskTargetUsdc: plan.riskTargetUsdc, reverseOnStopLoss: plan.reverseOnStopLoss, source: plan.source }));
   // What is deliberately NOT watched, and why. A position missing from the watch list is
   // otherwise indistinguishable from one the worker failed to notice, which is the whole
   // difficulty this file has been debugged for twice.
@@ -847,10 +896,20 @@ async function checkOnce(context) {
   // poll interval.
   //
   // Reading them together makes one pass cost about one round trip instead of N.
+  context.settlementScannedAt = context.settlementScannedAt || new Map();
   const candidates = plans.filter((plan) => {
     const pending = context.state.exits?.[plan.tokenId];
     if (pending?.terminal) return false;
     if (pending?.lastAttemptAt && Date.now() - Date.parse(pending.lastAttemptAt) < RETRY_INTERVAL_MS) return false;
+    // A plan with a stop keeps the five-second cadence: how fast this loop goes round is
+    // the stop's reaction time. A plan that is only waiting for the market to price its
+    // outcome as certain does not need that -- a settled market stays settled -- so it is
+    // read on its own slower interval rather than adding a book fetch every pass.
+    if (plan.stopPrice == null) {
+      const last = context.settlementScannedAt.get(plan.tokenId) || 0;
+      if (Date.now() - last < SETTLEMENT_SCAN_INTERVAL_MS) return false;
+      context.settlementScannedAt.set(plan.tokenId, Date.now());
+    }
     return true;
   });
   const observed = await mapWithConcurrency(candidates, async (plan) => {
@@ -882,14 +941,24 @@ async function checkOnce(context) {
       // price" without anyone having to re-derive it from the bid.
       crossing: crossing ? { recoveredFraction: crossing.recoveredFraction, gapped: crossing.gapped } : null,
     };
-    if (!exitTrigger({ bestBidPrice: currentBestBid, stopPrice: plan.stopPrice, triggerPrice: plan.triggerPrice })) continue;
+    const reason = exitReason({
+      bestBidPrice: currentBestBid,
+      stopPrice: plan.stopPrice,
+      triggerPrice: plan.triggerPrice,
+      settlementCloseBid: plan.settlementCloseBid,
+    });
+    if (!reason) continue;
+    event.reasonKind = reason;
+    if (reason === "settlement") event.settlementCloseBid = plan.settlementCloseBid;
     if (MODE !== "live" || !CONFIRM_LIVE) {
       recordEvent(context.state, {
         ...event,
-        type: "SHADOW_STOP_TRIGGERED",
-        reason: crossing?.gapped
-          ? `the book is already at ${(crossing.recoveredFraction * 100).toFixed(0)}% of the stop, so this sells a residue rather than capping the loss; no SELL is allowed in shadow mode`
-          : "price reached the stop; no SELL is allowed in shadow mode",
+        type: reason === "settlement" ? "SHADOW_SETTLEMENT_CLOSE" : "SHADOW_STOP_TRIGGERED",
+        reason: reason === "settlement"
+          ? `the bid is ${currentBestBid} at or above the ${plan.settlementCloseBid} settlement close; no SELL is allowed in shadow mode`
+          : crossing?.gapped
+            ? `the book is already at ${(crossing.recoveredFraction * 100).toFixed(0)}% of the stop, so this sells a residue rather than capping the loss; no SELL is allowed in shadow mode`
+            : "price reached the stop; no SELL is allowed in shadow mode",
       });
       continue;
     }
@@ -911,7 +980,12 @@ async function checkOnce(context) {
       } catch {
         // Keep the bid the trigger was decided on rather than abandoning the exit.
       }
-      response = await submitProtectedExit(plan, { bestBidPrice: exitBid });
+      // A settlement close is not a stop: there is no floor to respect, because the point is
+      // to take the bid the market is already showing. Passing the stop price here would
+      // price the sell below a book that is quoting near certainty.
+      response = reason === "settlement"
+        ? await submitProtectedExit({ ...plan, stopPrice: null }, { bestBidPrice: exitBid })
+        : await submitProtectedExit(plan, { bestBidPrice: exitBid });
     } catch (error) {
       response = { success: false, error: error?.message || String(error) };
     }
@@ -944,7 +1018,9 @@ async function checkOnce(context) {
       exitPrice: response?.exitPrice ?? null,
       tickSize: response?.tickSize ?? null,
     };
-    const type = accepted ? "EXIT_SUBMITTED" : "EXIT_REJECTED";
+    const type = accepted
+      ? (reason === "settlement" ? "SETTLEMENT_CLOSE_SUBMITTED" : "EXIT_SUBMITTED")
+      : (reason === "settlement" ? "SETTLEMENT_CLOSE_REJECTED" : "EXIT_REJECTED");
     recordEvent(context.state, {
       ...event,
       type,
@@ -956,7 +1032,7 @@ async function checkOnce(context) {
       // A reverse is a second, independent FOK order. It is intentionally attempted
       // only after the CLOB said the complete protective SELL matched; a rejected
       // reverse never changes the fact that the original position was already exited.
-      if (plan.reverseOnStopLoss) {
+      if (plan.reverseOnStopLoss && reason !== "settlement") {
         // Owed from here on. Once the protective SELL has matched the position is gone, so
         // this plan will not be in the next pass's plan list -- if the reverse is only
         // tried here and fails, nothing ever tries again. Recording it first means a

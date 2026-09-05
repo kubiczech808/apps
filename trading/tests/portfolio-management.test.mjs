@@ -528,6 +528,7 @@ test("created portfolios: the bot builds strategies from the config the workflow
     ${/const LIVE_EVENT_MODES = new Set\(\[[^\]]*\]\);/.exec(BOT)[0]}
     ${extractFunction(BOT, "normalizeLiveEventMode")}
     ${extractFunction(BOT, "configLiveEventMode")}
+    ${extractFunction(BOT, "normalizeSettlementCloseBid")}
     ${extractFunction(BOT, "customPaperStrategies")}
     return customPaperStrategies;
   `)(
@@ -3657,4 +3658,49 @@ test("dashboard: a page opening on a paper tab still reaches the top live portfo
     `a config with no live portfolios must not select ${paperOnly.mode}`);
   assert.ok(String(topPaper).startsWith("paper-") || topPaper === "live",
     "and the overview's own top row is what it follows");
+});
+
+// Asked for: a position whose outcome is already decided still waits hours for Polymarket
+// to resolve it, with the stake locked the whole time. Selling one tick below certainty
+// pays about a cent a share to get that capital back now.
+test("close at certainty: the threshold is stored per portfolio, and off is the default", () => {
+  const saved = normalizeConfig({
+    paper: {
+      early: { displayName: "Early", settlementCloseBid: 0.99 },
+      finer: { displayName: "Finer", settlementCloseBid: 0.999 },
+      waits: { displayName: "Waits" },
+      off: { displayName: "Off", settlementCloseBid: 0 },
+      // Nonsense is off, never a default: a portfolio must not start selling early because
+      // a bad value was posted.
+      junk: { displayName: "Junk", settlementCloseBid: "later" },
+      // Below the band this is not a settlement shortcut, it is just selling.
+      tooLow: { displayName: "Too low", settlementCloseBid: 0.2 },
+      // And 1.0 would never trigger, because a resolved market is no longer quoted.
+      tooHigh: { displayName: "Too high", settlementCloseBid: 1 },
+    },
+  });
+  assert.equal(saved.paper.early.settlementCloseBid, 0.99);
+  assert.equal(saved.paper.finer.settlementCloseBid, 0.999);
+  assert.equal(saved.paper.waits.settlementCloseBid, 0, "a portfolio that never set it waits for resolution");
+  assert.equal(saved.paper.off.settlementCloseBid, 0);
+  assert.equal(saved.paper.junk.settlementCloseBid, 0);
+  assert.equal(saved.paper.tooLow.settlementCloseBid, 0.5);
+  assert.equal(saved.paper.tooHigh.settlementCloseBid, 0.999);
+
+  // Re-saving must not drift, or every save of an unrelated field would move the threshold.
+  const round = normalizeConfig({ paper: { early: saved.paper.early } });
+  assert.equal(round.paper.early.settlementCloseBid, 0.99);
+
+  // The form control, and the value it saves.
+  assert.match(HTML, /<span>Close at certainty<\/span>\s*\n\s*<input type="number" min="0" max="99\.9" step="0\.1" value="0" data-settlement-close-bid>/);
+  assert.match(APP, /els\.settlementCloseBid\?\.addEventListener\("input", \(\) => \{/);
+  assert.match(APP, /updatePortfolioConfigForMode\(state\.mode, \{ settlementCloseBid: value \}\);/);
+
+  // The live worker only ever watches what the policy payload names, so a portfolio with
+  // no stop loss but this setting on has to reach it -- otherwise the setting does nothing
+  // at all for exactly the portfolios most likely to use it.
+  assert.match(API, /if \(\$multiplier <= 0 && \$settlementCloseBid <= 0\) \{\s*\n\s*return null;/);
+  assert.match(API, /'settlementCloseBid' => \$settlementCloseBid,/);
+  // And the worker must not read a stop out of a policy that exists only for this.
+  assert.match(API, /'stopLossEnabled' => \$multiplier > 0,/);
 });

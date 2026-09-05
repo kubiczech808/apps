@@ -7236,7 +7236,7 @@ test("equal stop: the paper fill is modelled on what the live worker actually su
 
   // The live worker sells at the floor and triggers a touch above it so the order has
   // room to fill. That is the mechanism paper is estimating.
-  assert.match(worker, /triggerPrice: round\(Math\.min\(0\.999999, stopPrice \+ STOP_PRETRIGGER_BUFFER\), 6\)/);
+  assert.match(worker, /triggerPrice: stopPrice == null \? null : round\(Math\.min\(0\.999999, stopPrice \+ STOP_PRETRIGGER_BUFFER\), 6\)/);
   assert.match(worker, /const POLL_INTERVAL_MS = clampInteger\(process\.env\.LIVE_EXIT_POLL_INTERVAL_MS, 5000,/);
 
   // Paper needs the previous mark to know a crossing happened; it is written by the
@@ -10483,4 +10483,39 @@ test("paper stop reversal: a momentary failure is retried, a real one is not", a
     "the reversal loop must revisit a position still owed from an earlier pass");
   assert.ok(refresh.indexOf("owedFromEarlier") > 0,
     "and must not gate solely on whether an attempt was ever made");
+});
+
+// The same rule on the paper side, so a paper portfolio and its live twin are comparable.
+// Without it the paper simulation would hold every decided position to resolution while the
+// live one sold it hours earlier, and the two P/L curves would stop meaning the same thing.
+test("close at certainty: a paper position is sold at the bid once the market has decided", () => {
+  const source = readFileSync(new URL("../tools/paper-trading-bot.mjs", import.meta.url), "utf8");
+
+  assert.equal(bot.normalizeSettlementCloseBid(0.99), 0.99);
+  assert.equal(bot.normalizeSettlementCloseBid(0), null, "0 waits for resolution");
+  assert.equal(bot.normalizeSettlementCloseBid(null), null);
+  assert.equal(bot.normalizeSettlementCloseBid("nonsense"), null);
+  assert.equal(bot.normalizeSettlementCloseBid(0.2), 0.5, "below the band this is just selling");
+  assert.equal(bot.normalizeSettlementCloseBid(1), 0.999, "at 1.0 nothing would ever trigger");
+
+  // The portfolio's CURRENT setting decides, not the one stamped when the position opened:
+  // turning this on is meant to free the capital that is already committed.
+  assert.match(source, /const closeBid = normalizeSettlementCloseBid\(strategy\?\.settlementCloseBid \?\? trade\.settlementCloseBid\);/);
+  assert.match(source, /markOpenTrade\(trade, strategy\)/);
+
+  // Sold at the bid, and booked as a finished position.
+  assert.match(source, /if \(closeBid != null && bestBid >= closeBid\) \{/);
+  assert.match(source, /status: "CLOSED",\s*\n\s*closeReason: "certainty",/);
+  // CLOSED rather than a status of its own, on purpose: every accounting path already
+  // treats CLOSED as finished, and one list missed would leave a sold position counted as
+  // open forever.
+  const app = readFileSync(new URL("../assets/app.js", import.meta.url), "utf8");
+  assert.match(app, /"WON", "LOST", "CLOSED"/);
+
+  // It has to be checked before the awaiting-resolution return, or a position past its end
+  // date -- the exact case this exists to shorten -- would never reach the rule.
+  const closeAt = source.indexOf('closeReason: "certainty"');
+  const pendingAt = source.indexOf("if (awaitingResolution) {\n        return pendingResolutionResult({");
+  assert.ok(closeAt > 0 && pendingAt > 0 && closeAt < pendingAt,
+    "the certainty close is decided before the position is parked as awaiting resolution");
 });

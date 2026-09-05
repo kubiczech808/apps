@@ -2775,6 +2775,7 @@ function portfolio_config_history_fields(): array
     return [
         'displayName', 'initialUsdc', 'minProbability', 'maxProbability', 'stakeUsdc',
         'maxResolutionDays', 'maxResolutionHours', 'liveEventMode', 'requireEventStarted',
+        'settlementCloseBid',
         'selectionOrder', 'marketType', 'excludeOverUnderMarkets', 'probabilitySource',
         'minLiquidityUsdc', 'minNetYield', 'executionTrigger', 'executionCronMinutes',
         'useLimitOrders', 'autoRotatePositions', 'stopLossRiskMultiplier', 'reverseOnStopLoss',
@@ -3108,6 +3109,22 @@ function config_max_resolution_hours(array $row, ?float $fallback = null): ?floa
     return $fallback;
 }
 
+// A probability, or 0 for off. Bounded below at 0.5 because "the outcome is certain" is
+// the only thing this is for: a portfolio closing at even money is not taking a settlement
+// shortcut, it is just selling. Bounded above at 0.999 because at 1.0 nothing would ever
+// trigger -- a resolved market is no longer quoted.
+function normalize_settlement_close_bid_value(mixed $value): float
+{
+    if ($value === null || $value === '' || !is_numeric($value)) {
+        return 0.0;
+    }
+    $bid = (float) $value;
+    if ($bid <= 0) {
+        return 0.0;
+    }
+    return max(0.5, min(0.999, round($bid, 4)));
+}
+
 function normalize_optional_money_value(mixed $value): ?float
 {
     if ($value === null || $value === '') {
@@ -3295,6 +3312,13 @@ function normalize_strategy_config(array $input, array $defaults): array
     } else {
         $stopLossRiskMultiplier = $defaultStopLossRiskMultiplier;
     }
+    // The bid at which a position is sold rather than held to settlement. A market quoting
+    // the outcome as certain still takes hours to resolve on Polymarket, and the capital is
+    // locked for all of it. Selling one tick below pays about a cent a share to get it back
+    // now. 0 means off, matching stopLossRiskMultiplier's idiom.
+    $settlementCloseBid = normalize_settlement_close_bid_value(
+        $input['settlementCloseBid'] ?? ($defaults['settlementCloseBid'] ?? null)
+    );
     $minProbability = normalize_probability_value($input['minProbability'] ?? null, (float) $defaults['minProbability']);
     $maxProbability = normalize_optional_probability_value($input['maxProbability'] ?? ($defaults['maxProbability'] ?? null));
     if ($maxProbability !== null && $maxProbability < $minProbability) {
@@ -3333,6 +3357,7 @@ function normalize_strategy_config(array $input, array $defaults): array
         // has not migrated yet still sees a sane number instead of nothing.
         'maxResolutionHours' => $maxResolutionHours,
         'maxResolutionDays' => (int) max(1, min(365, (int) round($maxResolutionHours / 24.0))),
+        'settlementCloseBid' => $settlementCloseBid,
         'liveEventMode' => $liveEventMode,
         // Derived and kept only while readers that predate the three states are still in
         // circulation. liveEventMode is the stored setting.
@@ -4573,13 +4598,23 @@ function live_stop_loss_policy_config(array $config, string $portfolioId): ?arra
         $row['stopLossRiskMultiplier'] ?? (($row['stopLossEnabled'] ?? false) ? 1.0 : 0.0),
         0.0
     );
-    if ($multiplier <= 0) {
+    // Two independent reasons to watch a position, and either one is enough. Requiring a
+    // stop loss here would mean a portfolio that only wants its settled positions closed
+    // early was never watched at all -- the worker only ever looks at what this names.
+    $settlementCloseBid = normalize_settlement_close_bid_value($row['settlementCloseBid'] ?? null);
+    if ($multiplier <= 0 && $settlementCloseBid <= 0) {
         return null;
     }
     return [
         'portfolioId' => $portfolioId,
         'stopLossRiskMultiplier' => $multiplier,
         'reverseOnStopLoss' => (bool) ($row['reverseOnStopLoss'] ?? false),
+        // The bid at which the position is sold rather than held to settlement. 0 means the
+        // portfolio does not take that shortcut.
+        'settlementCloseBid' => $settlementCloseBid,
+        // Named so the worker never infers a stop from a policy that exists only for the
+        // settlement close: a 0 multiplier must not be read as "use the default".
+        'stopLossEnabled' => $multiplier > 0,
         'enabled' => true,
     ];
 }

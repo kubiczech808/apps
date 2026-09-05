@@ -488,6 +488,16 @@ function configLiveEventMode(row = {}) {
   return row?.requireEventStarted === true ? "only" : "ignore";
 }
 
+// The bid at which a position is sold rather than held to settlement, or null for off.
+// Bounded the way the API bounds it: below 0.5 this would not be a settlement shortcut but
+// simply selling, and at 1.0 nothing would ever trigger because a resolved market is no
+// longer quoted.
+function normalizeSettlementCloseBid(value) {
+  const bid = Number(value);
+  if (!Number.isFinite(bid) || bid <= 0) return null;
+  return Math.max(0.5, Math.min(0.999, Number(bid.toFixed(4))));
+}
+
 // Whether the resolution ceiling is a rule for THIS row, given the mode.
 //
 // Under "only" it is not a rule at all: that mode admits nothing by its horizon, so a
@@ -637,6 +647,7 @@ const PAPER_STRATEGIES = {
     maxResolutionHours: envMaxResolutionHours("PAPER_CONSERVATIVE"),
     maxResolutionDays: envMaxResolutionHours("PAPER_CONSERVATIVE") / HOURS_PER_DAY,
     liveEventMode: envLiveEventMode("PAPER_CONSERVATIVE"),
+    settlementCloseBid: normalizeSettlementCloseBid(envNumber("PAPER_CONSERVATIVE_SETTLEMENT_CLOSE_BID", null)),
     minLiquidityUsdc: envNumber("PAPER_CONSERVATIVE_MIN_LIQUIDITY_USDC", null),
     minNetYield: envNumber("PAPER_CONSERVATIVE_MIN_NET_YIELD", 0),
     executionTrigger: normalizeExecutionTrigger(process.env.PAPER_CONSERVATIVE_EXECUTION_TRIGGER),
@@ -673,6 +684,7 @@ const PAPER_STRATEGIES = {
     maxResolutionHours: envMaxResolutionHours("PAPER_HIGH_REWARD"),
     maxResolutionDays: envMaxResolutionHours("PAPER_HIGH_REWARD") / HOURS_PER_DAY,
     liveEventMode: envLiveEventMode("PAPER_HIGH_REWARD"),
+    settlementCloseBid: normalizeSettlementCloseBid(envNumber("PAPER_HIGH_REWARD_SETTLEMENT_CLOSE_BID", null)),
     minLiquidityUsdc: envNumber("PAPER_HIGH_REWARD_MIN_LIQUIDITY_USDC", null),
     minNetYield: envNumber("PAPER_HIGH_REWARD_MIN_NET_YIELD", 0),
     executionTrigger: normalizeExecutionTrigger(process.env.PAPER_HIGH_REWARD_EXECUTION_TRIGGER),
@@ -707,6 +719,7 @@ const PAPER_STRATEGIES = {
     maxResolutionHours: envMaxResolutionHours("PAPER_MORE_PROBABLE"),
     maxResolutionDays: envMaxResolutionHours("PAPER_MORE_PROBABLE") / HOURS_PER_DAY,
     liveEventMode: envLiveEventMode("PAPER_MORE_PROBABLE"),
+    settlementCloseBid: normalizeSettlementCloseBid(envNumber("PAPER_MORE_PROBABLE_SETTLEMENT_CLOSE_BID", null)),
     minLiquidityUsdc: envNumber("PAPER_MORE_PROBABLE_MIN_LIQUIDITY_USDC", MORE_PROBABLE_MIN_LIQUIDITY_USDC),
     minNetYield: envNumber("PAPER_MORE_PROBABLE_MIN_NET_YIELD", 0),
     executionTrigger: normalizeExecutionTrigger(process.env.PAPER_MORE_PROBABLE_EXECUTION_TRIGGER),
@@ -741,6 +754,7 @@ const PAPER_STRATEGIES = {
     maxResolutionHours: envMaxResolutionHours("PAPER_EQUAL"),
     maxResolutionDays: envMaxResolutionHours("PAPER_EQUAL") / HOURS_PER_DAY,
     liveEventMode: envLiveEventMode("PAPER_EQUAL"),
+    settlementCloseBid: normalizeSettlementCloseBid(envNumber("PAPER_EQUAL_SETTLEMENT_CLOSE_BID", null)),
     // This is traded volume, despite the legacy internal property name. Equal
     // depends on a usable secondary market for its synthetic protective exit.
     minLiquidityUsdc: envNumber("PAPER_EQUAL_MIN_LIQUIDITY_USDC", 20000),
@@ -815,6 +829,7 @@ function customPaperStrategies(raw = process.env.PAPER_CUSTOM_PORTFOLIOS) {
       maxResolutionHours: configMaxResolutionHours(row, DEFAULT_MAX_RESOLUTION_HOURS),
       maxResolutionDays: configMaxResolutionHours(row, DEFAULT_MAX_RESOLUTION_HOURS) / HOURS_PER_DAY,
       liveEventMode: configLiveEventMode(row),
+      settlementCloseBid: normalizeSettlementCloseBid(row.settlementCloseBid),
       minLiquidityUsdc: Number.isFinite(Number(row.minLiquidityUsdc)) ? Number(row.minLiquidityUsdc) : null,
       minNetYield: Number.isFinite(Number(row.minNetYield)) ? Number(row.minNetYield) : 0,
       executionTrigger: normalizeExecutionTrigger(row.executionTrigger),
@@ -1287,6 +1302,7 @@ function compactPaperPortfolioForCore(portfolio) {
     "maxResolutionHours",
     "maxResolutionDays",
     "liveEventMode",
+    "settlementCloseBid",
     "minLiquidityUsdc",
     "minNetYield",
     "executionTrigger",
@@ -1867,6 +1883,7 @@ function normalizePaperPortfolio(strategy, input = {}) {
     maxResolutionHours: strategyMaxResolutionHours(strategy),
     maxResolutionDays: strategyMaxResolutionHours(strategy) / HOURS_PER_DAY,
     liveEventMode: configLiveEventMode(strategy),
+    settlementCloseBid: normalizeSettlementCloseBid(strategy?.settlementCloseBid),
     minLiquidityUsdc: strategy.minLiquidityUsdc,
     minNetYield: Math.max(0, Number(strategy.minNetYield) || 0),
     executionTrigger: normalizeExecutionTrigger(strategy.executionTrigger),
@@ -1921,6 +1938,8 @@ function normalizePaperPortfolio(strategy, input = {}) {
       maxResolutionHours: strategyMaxResolutionHours(strategy),
       maxResolutionDays: strategyMaxResolutionHours(strategy) / HOURS_PER_DAY,
       liveEventMode: configLiveEventMode(strategy),
+      settlementCloseBid: normalizeSettlementCloseBid(strategy?.settlementCloseBid),
+    settlementCloseBid: normalizeSettlementCloseBid(strategy?.settlementCloseBid),
       minLiquidityUsdc: strategy.minLiquidityUsdc == null ? null : Number(strategy.minLiquidityUsdc),
       minNetYield: Math.max(0, Number(strategy.minNetYield) || 0),
       executionTrigger: normalizeExecutionTrigger(strategy.executionTrigger),
@@ -4601,9 +4620,13 @@ async function markWaitingLimitOrder(trade) {
   };
 }
 
-async function markOpenTrade(trade) {
+async function markOpenTrade(trade, strategy = null) {
   if (trade.status === "LIMIT_ORDER_WAITING") return markWaitingLimitOrder(trade);
   if (!OPEN_STATUSES.has(trade.status)) return trade;
+  // The portfolio's CURRENT setting, not the one stamped when the position was opened:
+  // turning this on is meant to apply to what is already held, which is where the capital
+  // that would be freed actually is.
+  const closeBid = normalizeSettlementCloseBid(strategy?.settlementCloseBid ?? trade.settlementCloseBid);
 
   const checkedAt = nowIso();
   const cost = totalCost(trade);
@@ -4836,6 +4859,34 @@ async function markOpenTrade(trade) {
             : (equalStopDecision.executableAtFloor
               ? `Synthetic Equal paper stop exited at executable bid ${bestBid.toFixed(4)} within its planned loss target.`
               : `Equal stop could not fill: this position was already below its ${equalRiskPlan.stopPrice.toFixed(4)} floor when first observed, at bid ${bestBid.toFixed(4)}. The loss target was exceeded by ${capBreachUsdc.toFixed(4)} USDC.`),
+        };
+      }
+      // The market is quoting this outcome as decided. Polymarket still takes hours to
+      // resolve it, and the stake is locked for all of them, so the position is sold at the
+      // bid instead: about a cent a share to get the capital back now.
+      if (closeBid != null && bestBid >= closeBid) {
+        const exitValue = netExitValueAtPrice({ shares: trade.shares, price: bestBid, feeRate: trade.feeRate, feesEnabled: trade.feesEnabled });
+        const realizedPnl = Number((exitValue - cost).toFixed(4));
+        return {
+          ...base,
+          // CLOSED rather than a status of its own: every accounting path, both here and in
+          // the dashboard, already treats CLOSED as a finished position. A new status would
+          // have to be added to each of those lists, and one missed list leaves a sold
+          // position counted as open forever. What kind of close it was is a field.
+          status: "CLOSED",
+          closeReason: "certainty",
+          closedAt: checkedAt,
+          resolvedAt: checkedAt,
+          currentPrice: Number(bestBid.toFixed(4)),
+          lastLiveBid: Number(bestBid.toFixed(4)),
+          currentValueUsdc: exitValue,
+          unrealizedPnlUsdc: 0,
+          unrealizedPnlPct: 0,
+          realizedPnlUsdc: realizedPnl,
+          realizedPnlPct: pnlPercent(realizedPnl, cost),
+          settlementCloseBid: closeBid,
+          statusNote: `Sold at ${bestBid.toFixed(4)}, at or above this portfolio's ${closeBid.toFixed(4)} certainty`
+            + ` threshold, rather than waiting for Polymarket to resolve it.`,
         };
       }
       if (awaitingResolution) {
@@ -5084,7 +5135,7 @@ async function refreshTrades(trades, portfolioState = null, strategy = null) {
   // mapWithConcurrency returns input order, so this is the same array the sequential
   // loop built -- markOpenTrade reads the market and returns a new trade, and touches
   // nothing another trade can see.
-  const refreshed = await mapWithConcurrency(trades, (trade) => markOpenTrade(trade));
+  const refreshed = await mapWithConcurrency(trades, (trade) => markOpenTrade(trade, strategy));
   // Funding is decided after the fan-out, not inside it: whether one fill fits depends on
   // every other fill on the same pass, which a per-trade worker cannot see.
   if (!portfolioState) return refreshed;
@@ -7961,6 +8012,8 @@ function buildTradeBatchLog({ portfolioState, strategy, evaluations = [], eligib
       maxResolutionHours: strategyMaxResolutionHours(strategy),
       maxResolutionDays: strategyMaxResolutionHours(strategy) / HOURS_PER_DAY,
       liveEventMode: configLiveEventMode(strategy),
+      settlementCloseBid: normalizeSettlementCloseBid(strategy?.settlementCloseBid),
+    settlementCloseBid: normalizeSettlementCloseBid(strategy?.settlementCloseBid),
       minLiquidityUsdc: strategy.minLiquidityUsdc ?? null,
       minNetYield: Math.max(0, Number(strategy.minNetYield) || 0),
       selectionOrder: strategy.selectionOrder,
@@ -11546,6 +11599,7 @@ function updatePaperPortfolio(portfolioState) {
     maxResolutionHours: strategyMaxResolutionHours(portfolioState),
     maxResolutionDays: strategyMaxResolutionHours(portfolioState) / HOURS_PER_DAY,
     liveEventMode: configLiveEventMode(portfolioState),
+    settlementCloseBid: normalizeSettlementCloseBid(portfolioState?.settlementCloseBid),
     minLiquidityUsdc: portfolioState.minLiquidityUsdc == null ? null : Number(portfolioState.minLiquidityUsdc),
     marketType: normalizePortfolioMarketType(portfolioState.marketType, portfolioState.requireMostProbableOutcome),
     requireMostProbableOutcome: Boolean(portfolioState.requireMostProbableOutcome),
@@ -12389,6 +12443,7 @@ export {
   normalizeLiveEventMode,
   configLiveEventMode,
   horizonApplies,
+  normalizeSettlementCloseBid,
   hoursToResolution,
   formatHorizonHours,
   portfolioProbabilityForStrategy,
