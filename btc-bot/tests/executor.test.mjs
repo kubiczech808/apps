@@ -3,6 +3,7 @@ import test from 'node:test'
 import { createLnMarketsExecutor, normaliseTrade } from '../src/executor-lnm.mjs'
 import { createPaperExecutor } from '../src/executor-paper.mjs'
 import { fetchLnMarketsCandles } from '../src/candles.mjs'
+import { pnlSats } from '../src/risk.mjs'
 import { candle, HOUR, START } from './helpers.mjs'
 
 const silent = { info() {}, warn() {}, error() {} }
@@ -256,4 +257,67 @@ test('an error that is not about the date encoding is not retried', async () => 
   }
   await assert.rejects(() => fetchLnMarketsCandles({ client, limit: 10 }), /unauthorized/)
   assert.equal(calls, 1)
+})
+
+test('carry is charged against a held position, and a long pays positive funding', async () => {
+  const store = { balanceSats: 1_000_000, trades: [], nextId: 1 }
+  const settlement = { time: START + HOUR / 2, fundingRate: 0.0001, fixingPrice: 100_000 }
+  const executor = createPaperExecutor({
+    store,
+    now: () => START,
+    fundingSettlements: [settlement],
+  })
+  const opened = await executor.openPosition({
+    side: 'long',
+    entry: 100_000,
+    stop: 98_000,
+    takeProfit: 104_000,
+    quantityUsd: 100,
+    marginSats: 10_000,
+    leverage: 10,
+  })
+
+  executor.mark([candle(START + HOUR, 100_500, 104_500, 100_100, 104_200)])
+
+  // 100 USD at 100k is 100,000 sats of notional; 0.01% of that is 10 sats.
+  assert.equal(opened.carryFeesSats, 10)
+  assert.equal(opened.exitReason, 'take_profit')
+
+  const gross = pnlSats({ side: 'long', entry: 100_000, exit: 104_000, quantityUsd: 100 })
+  assert.equal(opened.plSats, Math.round(gross - opened.closingFeeSats - 10))
+})
+
+test('a short is paid the same funding a long pays', async () => {
+  const settlement = { time: START + HOUR / 2, fundingRate: 0.0001, fixingPrice: 100_000 }
+  const store = { balanceSats: 1_000_000, trades: [], nextId: 1 }
+  const executor = createPaperExecutor({ store, now: () => START, fundingSettlements: [settlement] })
+  const opened = await executor.openPosition({
+    side: 'short',
+    entry: 100_000,
+    stop: 102_000,
+    takeProfit: 96_000,
+    quantityUsd: 100,
+    marginSats: 10_000,
+    leverage: 10,
+  })
+
+  executor.mark([candle(START + HOUR, 99_500, 99_900, 95_000, 96_000)])
+  assert.equal(opened.carryFeesSats, -10, 'a short receives what a long pays')
+})
+
+test('a position opened after a settlement is not charged for it', async () => {
+  const settlement = { time: START - HOUR, fundingRate: 0.001, fixingPrice: 100_000 }
+  const store = { balanceSats: 1_000_000, trades: [], nextId: 1 }
+  const executor = createPaperExecutor({ store, now: () => START, fundingSettlements: [settlement] })
+  const opened = await executor.openPosition({
+    side: 'long',
+    entry: 100_000,
+    stop: 98_000,
+    takeProfit: 104_000,
+    quantityUsd: 100,
+    marginSats: 10_000,
+    leverage: 10,
+  })
+  executor.mark([candle(START + HOUR, 100_500, 104_500, 100_100, 104_200)])
+  assert.equal(opened.carryFeesSats, 0)
 })

@@ -6,14 +6,27 @@ name: BTC bot — backtest
 on:
   workflow_dispatch:
     inputs:
+      strategy:
+        description: 'Which strategy to measure'
+        required: false
+        default: 'price-action'
+        type: choice
+        options:
+          - price-action
+          - momentum
+      compare:
+        description: 'Run the one-change-at-a-time variant table instead'
+        required: false
+        default: false
+        type: boolean
       source:
         description: 'Candle source (bybit, kraken, coinbase). Empty tries each in turn.'
         required: false
         default: ''
       limit:
-        description: 'Hourly candles to fetch'
+        description: 'Hourly candles to fetch. Momentum needs years, not weeks — 15000 is about 20 months.'
         required: false
-        default: '1000'
+        default: '6000'
       risk:
         description: 'Risk per trade in % of equity'
         required: false
@@ -43,8 +56,14 @@ jobs:
 
       - name: Backtest
         run: |
-          args=(--limit "${{ inputs.limit || '1000' }}" --risk "${{ inputs.risk || '1' }}" --min-rr "${{ inputs.minRR || '2' }}" --json report.json)
+          args=(--strategy "${{ inputs.strategy || 'price-action' }}" --limit "${{ inputs.limit || '6000' }}" --risk "${{ inputs.risk || '1' }}")
+          if [ -n "${{ inputs.minRR }}" ]; then args+=(--min-rr "${{ inputs.minRR }}"); fi
           if [ -n "${{ inputs.source }}" ]; then args+=(--source "${{ inputs.source }}"); fi
+          if [ "${{ inputs.compare }}" = "true" ]; then
+            args+=(--compare true)
+          else
+            args+=(--json report.json)
+          fi
           node tools/backtest.mjs "${args[@]}" | tee report.txt
           {
             echo '### Backtest'
@@ -55,7 +74,10 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: btcbot-backtest
+          # --compare prints a table and writes no JSON, so the report file is
+          # legitimately absent in that mode.
+          if-no-files-found: ignore
+          name: btcbot-backtest-${{ inputs.strategy || 'price-action' }}
           path: |
             btc-bot/report.json
             btc-bot/report.txt
