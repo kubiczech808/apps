@@ -1,0 +1,36 @@
+name: Trading Live Order Acceptance Diagnosis
+
+# Read-only diagnostic, manual only. Reported: the run log says an order was placed and
+# accepted, and the position appears neither in the open positions list nor on Polymarket.
+#
+# "Accepted" is decided by successfulOrderResponse, which counts live, matched, delayed and
+# unmatched alike. Only `matched` is a position. This prints what the exchange actually
+# answered for each recent submitted run, so "resting", "queued" and "did not execute" stop
+# looking identical. Places no orders, writes nothing, needs no secrets.
+on:
+  workflow_dispatch:
+    inputs:
+      runs:
+        description: "How many recent runs to read per live portfolio"
+        required: false
+        default: "12"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Diagnose live order acceptance
+        working-directory: trading
+        env:
+          LIVE_DIAGNOSIS_RUNS: ${{ inputs.runs || '12' }}
+        run: node tools/live-order-acceptance-diagnosis.mjs
