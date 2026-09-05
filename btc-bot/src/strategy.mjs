@@ -61,8 +61,27 @@ export const DEFAULT_STRATEGY = {
   //   traded through on the way to collect them.
   // requireImbalance: an unfilled three-candle gap must sit at the zone. It
   //   marks a one-sided move rather than a two-way auction.
+  //
+  // MEASURED, 625 days of LN Markets candles, spot, 1% risk:
+  //
+  //   no filters       373 trades  PF 0.88  -31.9%
+  //   sweep only       272 trades  PF 0.96  -16.9%   <- shipped
+  //   imbalance only   214 trades  PF 0.86  -20.3%
+  //   both             166 trades  PF 0.90  -14.0%
+  //
+  // The sweep earns its place: profit factor rises, so each trade got better,
+  // not merely rarer. The imbalance test does not — alone it LOWERS profit
+  // factor, and added to the sweep it drags 0.96 down to 0.90. Its smaller loss
+  // comes from taking fewer trades, and less bad is not better.
+  //
+  // So it ships off, and the code stays because the finding is about this
+  // implementation of it — an unfilled gap merely overlapping the zone band is
+  // a crude reading of the idea — not proof that imbalance is worthless.
+  //
+  // 0.96 is still below the 1.0 that breaks even. This is a much smaller loss,
+  // not a profit, and one window is not enough to call even that established.
   requireSweep: true,
-  requireImbalance: true,
+  requireImbalance: false,
   // Volatility band, ATR as a percentage of price on the entry timeframe. Too
   // quiet and the stop is inside the spread; too violent and the zone is noise.
   atrPctMin: 0.15,

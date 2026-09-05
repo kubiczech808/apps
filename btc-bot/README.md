@@ -16,44 +16,60 @@ Two things are true of this bot and are worth stating before anything else:
 
 ## What the backtest says
 
-Eight months of LN Markets' own hourly candles (2025-12-28 → 2026-09-04),
-1% risk per trade, one position at a time. Each row changes exactly one rule
-from the shipped configuration:
+625 days of LN Markets' own hourly candles, **spot** (no leverage, no
+liquidation, no funding — fees on the buy and the sell only), 1% risk per trade,
+one position at a time. Each row changes exactly one rule:
 
 ```
 variant                 trades   win%      PF   return%   avgW/avgL    TP   SL  man
-shipped                   133   22.6    0.61     -37.6        2.08    26   95   12
-no breakeven/trail        125   26.4    0.62     -37.3        1.72    29   83   13
-no trend-flip close       127   23.6    0.67     -34.1        2.16    29   98    0
-neither                   110   29.1    0.74     -27.4        1.80    32   78    0
-target fixed at 2R        133   23.3    0.61     -37.1        2.01    27   94   12
-require 3R                122   18.9    0.65     -32.9        2.81    16   95   11
+as it lost (no filters)    373   29.0    0.88     -31.9        2.16    94  249   30
+sweep only                 272   31.6    0.96     -16.9        2.08    71  170   31   <- shipped
+imbalance only             214   30.4    0.86     -20.3        1.98    55  137   22
+both                       166   31.9    0.90     -14.0        1.92    43  101   22
+both, no trend-flip close  144   29.2    0.86     -15.5        2.08    38  106    0
+both, require 3R           162   27.8    0.87     -16.0        2.25    26  114   22
 ```
 
-**Every configuration loses.** The best profit factor is 0.74; break-even is
-1.0. This is not a tuning problem — turning individual rules off moves the
-result by ten points and never near zero, which is the shape of a system whose
-*entries* have no edge rather than one whose exits are misconfigured.
+**It still loses.** Profit factor 0.96 against the 1.0 that breaks even, about
+-9.9% a year. What changed is the size of the hole, and one rule is responsible.
 
-Two things the table does say clearly:
+- **The liquidity sweep earns its place.** Profit factor 0.88 → 0.96 and win
+  rate 29.0% → 31.6%: each trade got better, not merely rarer. Requiring the
+  zone to have reached under the previous swing low — collecting the stops
+  resting there — is the single change that moved per-trade quality.
+- **The imbalance filter does not.** Alone it lowers profit factor to 0.86, and
+  added to the sweep it drags 0.96 down to 0.90. Its smaller headline loss comes
+  from taking 40% fewer trades. Less bad is not better, and the column that says
+  so is PF, not return%.
 
-- **Risk control works.** Losses land on the intended 1% of equity, on stops
-  between 0.3% and 2.3% away, with position sizes adapting from 52 to 374 USD.
-  The machinery is sound; what it is pointed at is not.
-- **Stop management works and does not help.** Fixing it (it was reading a
-  field name nothing produces, so no stop had ever moved) raised the average
-  win-to-loss ratio from 1.72 to 2.08 and left the return unchanged at -37%.
-  Better R, fewer winners, same place.
+Read the return column with that in mind throughout: any filter that removes
+trades shrinks the loss of a losing system. Only profit factor says whether the
+trades that remain are better ones.
 
-This is the same answer the previous price-action engine in the `openclaw`
-repository reached: 26-45% win rate, losing across every exchange and window.
-Two independent attempts at "trade the pullback into a zone in the direction of
-the higher-timeframe trend" have now measured the same thing.
+### Two ways this measurement lied before it was fixed
 
-Before this goes anywhere near a funded account, the entry logic needs a reason
-to be expected to work that this one did not have — not a parameter sweep over
-these 233 days, which is how the number 0.74 becomes 1.05 on paper and 0.6
-again in the market.
+Both were caught by the table, not by reasoning, and both looked like results:
+
+- The stop management never moved a stop (it read `position.stop`; every
+  position carries `stopLoss`), so 35 trades reached 1R and none were protected.
+- The first two sweep implementations were tautologies. A fractal pivot IS the
+  extreme of its neighbourhood, so "did it take out the previous candle's low"
+  is true for every swing low. The filter on and the filter off returned
+  identical numbers to the sat — twice — before the comparison was moved to the
+  previous *pivot*.
+
+A filter whose presence and absence agree exactly is not a strict filter. It is
+a filter that does nothing.
+
+### On the source
+
+These rules follow the supply-and-demand method Jakub pointed at (JeaFx: market
+structure, supply and demand, liquidity, imbalance). **The videos were not
+watched** — YouTube and jeafx.com are both unreachable from the machine this was
+built on — so this is built from the publicly documented rules, not from the
+course. Where the implementation is a crude reading of an idea, as the imbalance
+test probably is, that is a limitation of this code and not a verdict on the
+method.
 
 ## What it trades
 

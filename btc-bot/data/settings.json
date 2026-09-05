@@ -25,6 +25,8 @@
     "stopAtrBuffer": 0.5,
     "zoneMaxDistanceAtr": 1.0,
     "minZoneTouches": 1,
+    "requireSweep": true,
+    "requireImbalance": false,
     "atrPctMin": 0.15,
     "atrPctMax": 4.0,
     "minHtfCandles": 60,
