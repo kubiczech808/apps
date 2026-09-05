@@ -4,6 +4,28 @@ import { readFileSync } from "node:fs";
 
 const worker = await import("../tools/rpi-live-exit-worker.mjs");
 
+// Brace-matched, because slicing to "the next async function" silently swallowed the rest
+// of the file once another function was inserted between them -- and an assertion that
+// searches too much text passes or fails for the wrong reason.
+function functionBody(source, name) {
+  const at = source.indexOf(`function ${name}(`);
+  if (at < 0) throw new Error(`function ${name} was not found`);
+  // Keep a preceding `async`. Slicing from "function" alone drops it, and the body then
+  // contains `await` inside something declared synchronous -- which fails as a syntax
+  // error rather than as the assertion the test meant to make.
+  const start = source.slice(Math.max(0, at - 6), at) === "async " ? at - 6 : at;
+  let depth = 0;
+  for (let index = source.indexOf("{", source.indexOf(")", start)); index < source.length; index += 1) {
+    if (source[index] === "{") depth += 1;
+    else if (source[index] === "}") {
+      depth -= 1;
+      if (depth === 0) return source.slice(start, index + 1);
+    }
+  }
+  throw new Error(`function ${name} is unbalanced`);
+}
+
+
 test("equal-risk exit plan limits planned loss to the potential win", () => {
   const plan = worker.equalRiskExitPlan({
     shares: 5.4,
@@ -194,8 +216,7 @@ test("stop reversal: the entry is priced to actually take the size it needs", ()
   // The reverse must be marketable AND partial-friendly. The protective SELL keeps FOK on
   // purpose -- a partial exit leaves a stop plan that no longer matches the position -- but
   // for an entry a smaller position is still the position the rule asks for.
-  const reversal = source.slice(source.indexOf("async function submitStopLossReversal("));
-  const body = reversal.slice(0, reversal.indexOf("\nasync function "));
+  const body = functionBody(source, "submitStopLossReversal");
   assert.match(body, /marketableBuyPrice\(/, "the reverse must not price at bare bestAsk");
   assert.match(body, /OrderType\.FAK/, "and must not be all-or-nothing");
   assert.ok(body.indexOf("OrderType.FAK") < body.indexOf("OrderType.FOK"),
@@ -269,8 +290,7 @@ test("protected exit: the sell is priced on the tick grid and where it can fill"
     "a floor that rounds to zero on this grid is not an order");
 
   const source = readFileSync(new URL("../tools/rpi-live-exit-worker.mjs", import.meta.url), "utf8");
-  const submit = source.slice(source.indexOf("async function submitProtectedExit("));
-  const body = submit.slice(0, submit.indexOf("\nasync function "));
+  const body = functionBody(source, "submitProtectedExit");
   assert.match(body, /protectedExitPrice\(/, "the raw six-decimal floor must not be sent as a price");
   assert.match(body, /options = \{ tickSize: String\(constraints\.tickSize\) \}/,
     "the order has to declare the grid it is priced on");
@@ -278,7 +298,69 @@ test("protected exit: the sell is priced on the tick grid and where it can fill"
   assert.match(body, /typeof constraints\.negRisk === "boolean"/,
     "negRisk must only be sent when it is actually known");
   assert.doesNotMatch(body, /price: plan\.stopPrice/, "the unrounded floor must not reach createOrder");
-  // And the bid that decided the trigger has to reach the pricing, or the gap case cannot
-  // be seen from inside it.
-  assert.match(source, /submitProtectedExit\(plan, \{ bestBidPrice: currentBestBid \}\)/);
+  // And a bid has to reach the pricing, or the gap case cannot be seen from inside it.
+  assert.match(source, /submitProtectedExit\(plan, \{ bestBidPrice: exitBid \}\)/);
+  // That bid is re-read at the moment of the exit. The books are read in one batch, so by
+  // the time a given position is acted on its bid can be seconds old -- long enough on a
+  // resolving event to price the sell where nobody is buying any more.
+  assert.match(source, /let exitBid = currentBestBid;/,
+    "the trigger's own bid is the fallback when the fresh read fails");
+  const act = source.slice(source.indexOf("let exitBid = currentBestBid;"));
+  const upToSubmit = act.slice(0, act.indexOf("submitProtectedExit("));
+  assert.match(upToSubmit, /CLOB book/, "the exit price must come from a freshly read book");
+  // It re-prices; it must not re-decide. A stop that has fired sells, or a tick back above
+  // the trigger cancels the exit and the position keeps falling.
+  assert.doesNotMatch(upToSubmit, /exitTrigger\(/,
+    "the trigger must not be re-evaluated after it has already fired");
+});
+
+// Asked: is the real problem that the breach is noticed too late? Price on a resolving
+// event falls in seconds, and a stop cannot be pre-placed on Polymarket -- a resting SELL
+// priced below the current bid is immediately marketable and fills at once, and the CLOB
+// has no stop or trigger order type. So this loop IS the stop's reaction time, and how
+// fast it goes round is the whole of the answer.
+//
+// It read the books strictly one after another, each awaited before the next began, and
+// submitted an exit in the middle of that queue. With seventeen open positions the last
+// one was looked at seventeen round trips after the first, and one exit -- an order plus a
+// possible reverse -- blocked every position behind it.
+test("stop latency: every watched book is read in one pass, not in a queue", () => {
+  const source = readFileSync(new URL("../tools/rpi-live-exit-worker.mjs", import.meta.url), "utf8");
+
+  // The reads are batched before anything is acted on.
+  assert.match(source, /const observed = await mapWithConcurrency\(candidates,/,
+    "the books must be read together rather than one at a time");
+  const check = source.slice(source.indexOf("const candidates = plans.filter("));
+  const batchAt = check.indexOf("mapWithConcurrency(candidates");
+  const actAt = check.indexOf("for (const { plan, book, error: bookError } of observed)");
+  assert.ok(batchAt >= 0 && actAt > batchAt,
+    "reading has to finish before acting, or one exit delays the next position's price check");
+
+  // The old shape must not come back: a book fetch awaited inside the loop over plans.
+  assert.doesNotMatch(source, /for \(const plan of plans\) \{[\s\S]{0,400}?await fetchJson\(`\$\{CLOB_HOST\}\/book/,
+    "a per-plan awaited book fetch is the queue this replaced");
+
+  // The bounded map itself, driven: order preserved, and genuinely concurrent.
+  const started = [];
+  let peak = 0;
+  let active = 0;
+  const items = [1, 2, 3, 4, 5, 6, 7, 8, 9];
+  return (async () => {
+    const worker = new Function("items", "limit", `
+      ${functionBody(source, "mapWithConcurrency")}
+      return mapWithConcurrency;
+    `)();
+    const out = await worker(items, async (value) => {
+      active += 1;
+      peak = Math.max(peak, active);
+      started.push(value);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      active -= 1;
+      return value * 2;
+    }, 4);
+    assert.deepEqual(out, items.map((value) => value * 2), "results must stay in input order");
+    assert.ok(peak > 1, "the whole point is that reads overlap");
+    assert.ok(peak <= 4, `the bound must hold, saw ${peak} at once`);
+    assert.deepEqual(await worker([], async () => 1, 4), [], "an empty watch list is not an error");
+  })();
 });

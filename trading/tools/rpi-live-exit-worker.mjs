@@ -35,6 +35,26 @@ const FUNDER_ADDRESS = process.env.POLYMARKET_FUNDER_ADDRESS || process.env.POLY
 const SIGNATURE_TYPE = Number(process.env.POLYMARKET_SIGNATURE_TYPE || 3);
 const SYNC_COMMAND = String(process.env.LIVE_EXIT_POST_FILL_SYNC_COMMAND || "").trim();
 const STOP_LOSS_REVERSAL_STAKE_USDC = 5;
+// How many watched books are read at once. The books are independent reads, so this is
+// bounded only to stay polite to the CLOB rather than for correctness.
+const BOOK_FETCH_CONCURRENCY = clampInteger(process.env.LIVE_EXIT_BOOK_CONCURRENCY, 8, 1, 32);
+
+// Bounded parallel map, preserving input order.
+async function mapWithConcurrency(items, worker, limit = 8) {
+  const list = Array.isArray(items) ? items : [];
+  const width = Math.max(1, Math.min(limit, list.length));
+  const results = new Array(list.length);
+  let next = 0;
+  await Promise.all(Array.from({ length: width }, async () => {
+    for (;;) {
+      const index = next;
+      next += 1;
+      if (index >= list.length) return;
+      results[index] = await worker(list[index], index);
+    }
+  }));
+  return results;
+}
 // How far through the ask side the reverse entry may pay to get filled. It is a market
 // order, so it crosses the spread by design; this is what keeps "market order" from
 // meaning "at any price" on a thin book.
@@ -708,15 +728,38 @@ async function checkOnce(context) {
     })
     .filter(Boolean);
 
-  for (const plan of plans) {
+  // Every watched book is read AT ONCE, and only then are the triggers acted on.
+  //
+  // Polymarket has no stop order: a resting SELL priced below the current bid is
+  // immediately marketable and fills straight away, so a stop cannot be left sitting on the
+  // exchange. Detection therefore happens here, and how fast this loop goes round IS the
+  // stop's reaction time.
+  //
+  // It used to read the books one after another, each awaited before the next began, and
+  // submit an exit in the middle of that queue. With seventeen open positions the last one
+  // was looked at seventeen round trips after the first, and a single exit -- an order
+  // submission plus a possible reverse -- blocked every position behind it. Prices on a
+  // resolving event move in seconds, so that queue was the stop's real latency, not the
+  // poll interval.
+  //
+  // Reading them together makes one pass cost about one round trip instead of N.
+  const candidates = plans.filter((plan) => {
     const pending = context.state.exits?.[plan.tokenId];
-    if (pending?.terminal) continue;
-    if (pending?.lastAttemptAt && Date.now() - Date.parse(pending.lastAttemptAt) < RETRY_INTERVAL_MS) continue;
-    let book;
+    if (pending?.terminal) return false;
+    if (pending?.lastAttemptAt && Date.now() - Date.parse(pending.lastAttemptAt) < RETRY_INTERVAL_MS) return false;
+    return true;
+  });
+  const observed = await mapWithConcurrency(candidates, async (plan) => {
     try {
-      book = await fetchJson(`${CLOB_HOST}/book?token_id=${encodeURIComponent(plan.tokenId)}`, `CLOB book ${plan.tokenId}`);
+      return { plan, book: await fetchJson(`${CLOB_HOST}/book?token_id=${encodeURIComponent(plan.tokenId)}`, `CLOB book ${plan.tokenId}`) };
     } catch (error) {
-      recordEvent(context.state, { at: now, type: "BOOK_ERROR", tokenId: plan.tokenId, question: plan.question, error: error?.message || String(error) });
+      return { plan, error };
+    }
+  }, BOOK_FETCH_CONCURRENCY);
+
+  for (const { plan, book, error: bookError } of observed) {
+    if (bookError) {
+      recordEvent(context.state, { at: now, type: "BOOK_ERROR", tokenId: plan.tokenId, question: plan.question, error: bookError?.message || String(bookError) });
       continue;
     }
     const currentBestBid = bestBid(book);
@@ -748,9 +791,23 @@ async function checkOnce(context) {
     }
     let response;
     try {
-      // The bid the trigger was decided on, so the exit is priced where the position can
-      // actually be sold rather than at a floor the book has already moved past.
-      response = await submitProtectedExit(plan, { bestBidPrice: currentBestBid });
+      // The books above were read together, so by the time this position's turn comes the
+      // bid can be a second or two old -- and on a resolving event that is enough to price
+      // an exit where nobody is buying any more. One fresh read, only on the rare path
+      // where a stop has actually fired.
+      //
+      // It re-prices, it does not re-decide. A stop that has triggered sells; letting a
+      // momentary tick back above the trigger cancel it is how a stop ends up never
+      // selling at all in a falling book.
+      let exitBid = currentBestBid;
+      try {
+        const fresh = await fetchJson(`${CLOB_HOST}/book?token_id=${encodeURIComponent(plan.tokenId)}`, `CLOB book ${plan.tokenId}`);
+        const freshBid = bestBid(fresh);
+        if (freshBid != null && freshBid > 0) exitBid = freshBid;
+      } catch {
+        // Keep the bid the trigger was decided on rather than abandoning the exit.
+      }
+      response = await submitProtectedExit(plan, { bestBidPrice: exitBid });
     } catch (error) {
       response = { success: false, error: error?.message || String(error) };
     }
