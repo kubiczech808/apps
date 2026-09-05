@@ -196,6 +196,24 @@ async function main() {
     for (const [status, count] of [...byStatus].sort((a, b) => b[1] - a[1])) {
       console.log(`   ${String(status).padEnd(24)} ${String(count).padStart(4)}`);
     }
+    // "never attempted" means one of two very different things, and only the dates tell
+    // them apart: stops that closed before the reverse rule existed (history, nothing to
+    // fix) versus stops since then that the rule simply did not reach (a live gap).
+    const closedAtOf = (trade) => Date.parse(trade.closedAt || trade.resolvedAt || "") || 0;
+    const attempted = stopped.filter((trade) => trade.stopLossReversalAttemptedAt);
+    const never = stopped.filter((trade) => !trade.stopLossReversalAttemptedAt);
+    if (never.length && attempted.length) {
+      const firstAttempt = Math.min(...attempted.map((trade) => closedAtOf(trade)).filter(Boolean));
+      const neverSince = never.filter((trade) => closedAtOf(trade) > firstAttempt);
+      console.log(`   earliest stop that DID attempt a reverse : ${new Date(firstAttempt).toISOString().slice(0, 19)}`);
+      console.log(`   never-attempted stops older than that    : ${never.length - neverSince.length}  (history, before the rule ran)`);
+      console.log(`   never-attempted stops NEWER than that    : ${neverSince.length}`
+        + `${neverSince.length ? "  <- the rule did not reach these" : ""}`);
+      for (const trade of neverSince.slice(0, 5)) {
+        console.log(`      ${String(trade.closedAt || trade.resolvedAt || "-").slice(0, 19)}`
+          + ` "${String(trade.question || "").slice(0, 46)}" [${trade.outcome}]`);
+      }
+    }
     // Did the reversal it claims to have opened actually end up in the book of trades?
     // "OPENED" is written next to the source trade; the position is a separate row.
     const byId = new Map(trades.map((trade) => [String(trade.id), trade]));

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { readFileSync } from "node:fs";
 
 const worker = await import("../tools/rpi-live-exit-worker.mjs");
 
@@ -143,4 +144,89 @@ test("configuring the worker actually reaches the running process", async () => 
     "a state file older than the restart is the predecessor's, and answers the wrong question");
   assert.match(workflow, /if \[ "\$running" != "\$expected" \]; then[\s\S]*?exit 1/,
     "a worker still in the previous mode has to fail the run, not pass quietly");
+});
+
+// Reported: the position that is supposed to open on the opposite outcome after a stop did
+// not open, and the rule is specified as a market order -- so barring a market that cannot
+// be bought at all, a position should always result.
+//
+// It was priced at exactly bestAsk and posted FOK. That is a limit order at the top of the
+// book, all-or-nothing: it fills only if the entire size sits at that single price level at
+// the instant it lands. A 5 USDC order at 0.20 needs 25 shares; a top level holding 4 of
+// them kills the whole order and nothing opens.
+test("stop reversal: the entry is priced to actually take the size it needs", () => {
+  // A book whose top level is far too thin for the order, which is the ordinary case.
+  const thinTop = {
+    asks: [
+      { price: 0.20, size: 4 },
+      { price: 0.21, size: 10 },
+      { price: 0.22, size: 200 },
+    ],
+  };
+  assert.equal(worker.bestAsk(thinTop), 0.20, "the top of book is still 0.20");
+  const price = worker.marketableBuyPrice({ book: thinTop, notionalUsdc: 5 });
+  assert.equal(price, 0.22,
+    "5 USDC is only covered once the 0.22 level is reached, so that is what it must pay");
+
+  // Enough depth at the top: it must not pay away the spread for nothing.
+  const deepTop = { asks: [{ price: 0.20, size: 500 }, { price: 0.30, size: 500 }] };
+  assert.equal(worker.marketableBuyPrice({ book: deepTop, notionalUsdc: 5 }), 0.20,
+    "a top level that already covers the order is the price");
+
+  // "Market order" is not "any price". Beyond the slippage cap the order is fitted to the
+  // deepest price inside it rather than chasing the book.
+  const gapped = { asks: [{ price: 0.20, size: 1 }, { price: 0.90, size: 900 }] };
+  const capped = worker.marketableBuyPrice({ book: gapped, notionalUsdc: 5, maxSlippage: 0.05 });
+  assert.ok(capped <= 0.25, `a 0.05 cap must not reach 0.90, got ${capped}`);
+  assert.ok(capped >= 0.20);
+
+  // Never at or above 1: at 1.00 the outcome cannot profit at all.
+  const nearOne = { asks: [{ price: 0.985, size: 1 }, { price: 1, size: 1000 }] };
+  const near = worker.marketableBuyPrice({ book: nearOne, notionalUsdc: 5, maxSlippage: 0.5 });
+  assert.ok(near == null || near < 1, `must stay below 1, got ${near}`);
+
+  // Nothing to buy is still nothing to buy.
+  assert.equal(worker.marketableBuyPrice({ book: { asks: [] }, notionalUsdc: 5 }), null);
+  assert.equal(worker.marketableBuyPrice({ book: { asks: [{ price: 0.2, size: 10 }] } }), null,
+    "no notional means no answer, rather than a price for an unknown size");
+
+  const source = readFileSync(new URL("../tools/rpi-live-exit-worker.mjs", import.meta.url), "utf8");
+  // The reverse must be marketable AND partial-friendly. The protective SELL keeps FOK on
+  // purpose -- a partial exit leaves a stop plan that no longer matches the position -- but
+  // for an entry a smaller position is still the position the rule asks for.
+  const reversal = source.slice(source.indexOf("async function submitStopLossReversal("));
+  const body = reversal.slice(0, reversal.indexOf("\nasync function "));
+  assert.match(body, /marketableBuyPrice\(/, "the reverse must not price at bare bestAsk");
+  assert.match(body, /OrderType\.FAK/, "and must not be all-or-nothing");
+  assert.ok(body.indexOf("OrderType.FAK") < body.indexOf("OrderType.FOK"),
+    "FAK is the first attempt; FOK is only the fallback for a venue that refuses it");
+  // The protective SELL is untouched by all this.
+  const exit = source.slice(source.indexOf("async function submitProtectedExit("));
+  assert.match(exit.slice(0, exit.indexOf("\nasync function ")), /OrderType\.FOK/,
+    "the protective sell keeps its strict price floor");
+});
+
+// The other half: a reverse that failed was never tried again. Once the protective SELL
+// matches, the position is gone, so that plan is absent from every later pass -- there was
+// no list of owed reversals at all, and a momentary rejection meant no opposite position
+// ever opened.
+test("stop reversal: an owed position survives the pass that failed to open it", () => {
+  const source = readFileSync(new URL("../tools/rpi-live-exit-worker.mjs", import.meta.url), "utf8");
+
+  assert.match(source, /context\.state\.pendingReversals\[plan\.tokenId\] = \{/,
+    "an owed reverse has to be recorded before it is attempted, not after it succeeds");
+  const check = source.slice(source.indexOf("async function checkOnce("));
+  const plansAt = check.indexOf("context.liveState");
+  const retryAt = check.indexOf("await retryPendingReversals(context);");
+  assert.ok(retryAt >= 0 && retryAt < plansAt,
+    "owed reverses must be retried before the plan list, which no longer contains them");
+
+  // Terminal versus momentary. Only a market that cannot be bought at all is final.
+  assert.equal(worker.reversalFailureIsTerminal("opposite market is no longer accepting orders"), true);
+  assert.equal(worker.reversalFailureIsTerminal("position is not in a two-outcome market"), true);
+  assert.equal(worker.reversalFailureIsTerminal("CLOB book read failed: socket hang up"), false,
+    "a failed read is a moment, not an answer");
+  assert.equal(worker.reversalFailureIsTerminal("opposite outcome has no executable ask"), false,
+    "an empty book now says nothing about the book in a minute");
+  assert.equal(worker.reversalFailureIsTerminal(null), false);
 });

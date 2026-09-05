@@ -10045,3 +10045,141 @@ test("paper state segments: a dropped download is retried before the run gives u
   assert.match(source, /Published state segment could not be read/);
   assert.match(source, /Refusing to continue: publishing now would drop the history it holds/);
 });
+
+// Reported on the paper portfolio "80-90 sl": the protective exit works some of the time
+// and not others.
+//
+// Measured there: "Exact Score: CA Platense 0 - 1 CD Riestra?" entered at 0.9600 with a
+// 0.8998 floor and a 0.35 USDC risk target, settled at 0, and booked the FULL 5.01 USDC
+// with stopLossStatus still reading ARMED -- fourteen times the loss the floor exists to
+// cap. Its lastLiveBid was never recorded, and currentPrice had already been overwritten by
+// the settlement print of 0, so the settlement stop had no usable mark and declined to fill.
+//
+// The entry price is the mark that is always known. A position is bought above its own
+// floor by construction -- the floor is derived from the entry -- so the entry is itself an
+// observation of the position sitting above the floor, and a sell resting there existed
+// from that moment. A settlement at zero proves the price travelled through it.
+test("paper stop: a settled loser still fills its floor when no live quote was recorded", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const source = await readFile(new URL("../tools/paper-trading-bot.mjs", import.meta.url), "utf8");
+
+  const api = new Function(`
+    ${functionSource(source, "netExitValueAtPrice")}
+    ${functionSource(source, "settlementStopFill")}
+    return { settlementStopFill };
+  `)();
+
+  // The reported position, to the number.
+  const plan = { protectable: true, requiresStop: true, stopPrice: 0.8998, riskTargetUsdc: 0.35 };
+  const shares = 5.2188;
+  const cost = 5.01;
+
+  const noQuote = api.settlementStopFill({
+    plan,
+    lastLiveMark: 0,          // the settlement print, which is not a quote
+    entryPrice: 0.96,
+    shares,
+    feeRate: 0,
+    feesEnabled: false,
+    totalCostUsdc: cost,
+  });
+  assert.ok(noQuote, "a protected loser with no recorded quote must still fill its floor");
+  assert.equal(noQuote.markSource, "entry-price", "and must say which mark proved it");
+  assert.equal(noQuote.fillPrice, 0.8998);
+  // The whole point: the loss is capped near the risk target instead of taking the stake.
+  assert.ok(noQuote.realizedPnlUsdc > -1, `loss must be capped, got ${noQuote.realizedPnlUsdc}`);
+  assert.ok(Math.abs(noQuote.realizedPnlUsdc) < cost / 2,
+    "the capped loss must be nothing like the full 5.01 USDC that was booked");
+
+  // A real quote still wins over the entry, and is still reported as the real quote.
+  const withQuote = api.settlementStopFill({
+    plan, lastLiveMark: 0.93, entryPrice: 0.96, shares, feeRate: 0, feesEnabled: false, totalCostUsdc: cost,
+  });
+  assert.equal(withQuote.markSource, "last-live-bid");
+  assert.equal(withQuote.lastLiveMark, 0.93);
+
+  // The genuine gap is untouched: a position observed BELOW its floor was never fillable
+  // there, and that full loss still stands. The entry must not be used to paper over it.
+  const gapped = api.settlementStopFill({
+    plan, lastLiveMark: 0.5, entryPrice: 0.96, shares, feeRate: 0, feesEnabled: false, totalCostUsdc: cost,
+  });
+  assert.equal(gapped, null, "an observed quote below the floor is a real gap, not a fill");
+
+  // And a settlement print of 1 is no more a quote than 0 is.
+  const settledHigh = api.settlementStopFill({
+    plan, lastLiveMark: 1, entryPrice: 0.96, shares, feeRate: 0, feesEnabled: false, totalCostUsdc: cost,
+  });
+  assert.equal(settledHigh.markSource, "entry-price");
+  // An entry at or below its own floor cannot prove anything, so nothing is invented.
+  assert.equal(api.settlementStopFill({
+    plan, lastLiveMark: 0, entryPrice: 0.5, shares, feeRate: 0, feesEnabled: false, totalCostUsdc: cost,
+  }), null);
+  assert.equal(api.settlementStopFill({
+    plan, lastLiveMark: 0, entryPrice: null, shares, feeRate: 0, feesEnabled: false, totalCostUsdc: cost,
+  }), null);
+});
+
+// The second half of the same report: after a stop, the position on the opposite outcome
+// did not open. That entry is a market order, so barring a market that cannot be bought at
+// all it should always produce a position.
+//
+// It was attempted exactly once, on the single pass the status flipped to STOP_LOSS, and
+// stopLossReversalAttemptedAt then barred it for good -- so a momentary failure (a quote
+// gap, a failed read, capital busy for one pass) was permanent.
+test("paper stop reversal: a momentary failure is retried, a real one is not", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const source = await readFile(new URL("../tools/paper-trading-bot.mjs", import.meta.url), "utf8");
+
+  const api = new Function(`
+    const nowIso = () => "2026-09-05T04:00:00.000Z";
+    const STOP_LOSS_REVERSAL_STAKE_USDC = 5;
+    ${/const TERMINAL_REVERSAL_PATTERNS = \[[\s\S]*?\];/.exec(source)[0]}
+    ${/const REVERSAL_RETRY_LIMIT = [^;]+;/.exec(source)[0]}
+    ${functionSource(source, "reversalFailureIsTerminal")}
+    ${functionSource(source, "recordStopLossReversalResult")}
+    return { recordStopLossReversalResult, reversalFailureIsTerminal, REVERSAL_RETRY_LIMIT };
+  `)();
+
+  // Only a market that cannot be bought at all is final.
+  assert.equal(api.reversalFailureIsTerminal("the stopped market is no longer accepting orders"), true);
+  assert.equal(api.reversalFailureIsTerminal("the stopped position is not a resolvable binary market"), true);
+  assert.equal(api.reversalFailureIsTerminal("could not quote the opposite outcome: fetch failed"), false,
+    "a failed quote is a moment, not an answer");
+  assert.equal(api.reversalFailureIsTerminal("only 0.42 USDC is free after the stop"), false,
+    "capital busy on one pass says nothing about the next");
+  assert.equal(api.reversalFailureIsTerminal("the opposite outcome has no executable ask"), false);
+
+  const stopped = { id: "t1", status: "STOP_LOSS", statusNote: "Stop loss filled." };
+
+  // A momentary failure leaves the position owed, not abandoned.
+  const first = api.recordStopLossReversalResult(stopped, { trade: null, reason: "could not quote the opposite outcome: fetch failed" });
+  assert.equal(first.stopLossReversalStatus, "PENDING", "a retryable failure must not read as SKIPPED");
+  assert.equal(first.stopLossReversalAttempts, 1);
+  assert.match(first.statusNote, /retried on the next pass/);
+
+  // Attempts accumulate rather than resetting, and eventually stop.
+  let row = first;
+  for (let attempt = 2; attempt <= api.REVERSAL_RETRY_LIMIT; attempt += 1) {
+    row = api.recordStopLossReversalResult(row, { trade: null, reason: "could not quote the opposite outcome: fetch failed" });
+  }
+  assert.equal(row.stopLossReversalAttempts, api.REVERSAL_RETRY_LIMIT);
+  assert.equal(row.stopLossReversalStatus, "SKIPPED", "it must not retry forever");
+
+  // A terminal reason is final on the first attempt: retrying it would be noise.
+  const terminal = api.recordStopLossReversalResult(stopped, { trade: null, reason: "the stopped market is no longer accepting orders" });
+  assert.equal(terminal.stopLossReversalStatus, "SKIPPED");
+  assert.equal(terminal.stopLossReversalAttempts, 1);
+
+  // Success is success.
+  const opened = api.recordStopLossReversalResult(stopped, { trade: { id: "t1-rev" } });
+  assert.equal(opened.stopLossReversalStatus, "OPENED");
+  assert.equal(opened.stopLossReversalTradeId, "t1-rev");
+
+  // And the loop has to actually pick a PENDING row up again. The old gate returned on any
+  // stopLossReversalAttemptedAt, which is what made one failure the last word.
+  const refresh = functionSource(source, "refreshTrades");
+  assert.match(refresh, /stopLossReversalStatus === "PENDING"/,
+    "the reversal loop must revisit a position still owed from an earlier pass");
+  assert.ok(refresh.indexOf("owedFromEarlier") > 0,
+    "and must not gate solely on whether an attempt was ever made");
+});

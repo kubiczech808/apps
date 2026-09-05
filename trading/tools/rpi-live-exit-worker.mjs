@@ -35,6 +35,14 @@ const FUNDER_ADDRESS = process.env.POLYMARKET_FUNDER_ADDRESS || process.env.POLY
 const SIGNATURE_TYPE = Number(process.env.POLYMARKET_SIGNATURE_TYPE || 3);
 const SYNC_COMMAND = String(process.env.LIVE_EXIT_POST_FILL_SYNC_COMMAND || "").trim();
 const STOP_LOSS_REVERSAL_STAKE_USDC = 5;
+// How far through the ask side the reverse entry may pay to get filled. It is a market
+// order, so it crosses the spread by design; this is what keeps "market order" from
+// meaning "at any price" on a thin book.
+const REVERSAL_MAX_SLIPPAGE = Number(process.env.LIVE_EXIT_REVERSAL_MAX_SLIPPAGE || 0.05);
+// A reverse that did not fill is retried on later passes rather than abandoned: the stop
+// has already sold, so the opposite position is still owed, and the reasons it fails are
+// usually momentary.
+const REVERSAL_RETRY_LIMIT = Number(process.env.LIVE_EXIT_REVERSAL_RETRY_LIMIT || 12);
 
 function enabled(value) {
   return ["1", "true", "yes", "on"].includes(String(value || "").trim().toLowerCase());
@@ -278,6 +286,44 @@ export function bestAsk(book = {}) {
   return prices.length ? Math.min(...prices) : null;
 }
 
+// The price a BUY must be willing to pay to actually take the size it wants, as opposed to
+// the price at the very top of the book.
+//
+// The reverse-after-stop entry is specified as a market order: once the stop has fired, the
+// opposite position opens. It was being priced at exactly bestAsk and posted FOK, which
+// fills only if the entire order sits at that one price level at the instant it lands -- so
+// a top level thinner than the order, or one tick of movement, killed it and no position
+// opened at all.
+//
+// Walking the asks answers the question a market order actually asks: consume levels in
+// price order until the notional is covered, and be willing to pay the level that finishes
+// the fill. maxSlippage bounds it, because "market order" is not "at any price": beyond
+// that the entry is refused rather than paying an arbitrary premium for a small position.
+export function marketableBuyPrice({ book = {}, notionalUsdc, maxSlippage = 0.05 } = {}) {
+  const need = number(notionalUsdc);
+  if (need == null || !(need > 0)) return null;
+  const levels = (Array.isArray(book?.asks) ? book.asks : [])
+    .map((row) => ({ price: number(row?.price ?? row?.p), size: number(row?.size ?? row?.s) }))
+    .filter((level) => level.price != null && level.price > 0 && level.price < 1
+      && level.size != null && level.size > 0)
+    .sort((left, right) => left.price - right.price);
+  if (!levels.length) return null;
+  const slip = number(maxSlippage);
+  // Kept below 1: at 1.00 the outcome cannot profit at all.
+  const ceiling = Math.min(0.99, levels[0].price + Math.max(0, slip == null ? 0 : slip));
+  let filled = 0;
+  for (const level of levels) {
+    if (level.price > ceiling) break;
+    filled += level.price * level.size;
+    if (filled + 0.000001 >= need) return level.price;
+  }
+  // Not enough depth inside the cap to cover the whole stake. That is not a reason to place
+  // nothing -- a smaller position is still the position this rule asks for -- so the
+  // deepest price still within the cap is returned and the size is fitted to it.
+  const affordable = levels.filter((level) => level.price <= ceiling);
+  return affordable.length ? affordable[affordable.length - 1].price : null;
+}
+
 function parseJsonArray(value) {
   if (Array.isArray(value)) return value;
   if (typeof value !== "string" || !value.trim()) return [];
@@ -406,12 +452,18 @@ async function submitStopLossReversal(plan) {
   const opposite = oppositeBinaryToken(market, plan.tokenId);
   if (!opposite.eligible) return { success: false, reversal: null, error: opposite.reason };
   const book = await fetchJson(`${CLOB_HOST}/book?token_id=${encodeURIComponent(opposite.tokenId)}`, `CLOB opposite book ${opposite.tokenId}`);
-  const price = bestAsk(book);
+  // Marketable, not top-of-book: this entry is specified as a market order, so it has to be
+  // willing to pay through the levels its own size consumes. See marketableBuyPrice.
+  const price = marketableBuyPrice({
+    book,
+    notionalUsdc: STOP_LOSS_REVERSAL_STAKE_USDC,
+    maxSlippage: REVERSAL_MAX_SLIPPAGE,
+  });
   if (!(price > 0) || price >= 1) {
     return { success: false, reversal: { ...opposite }, error: "opposite outcome has no executable ask" };
   }
   // The quoted stake is principal. Fees remain exchange fees on top, exactly like the
-  // normal taker entry path; rounding down avoids sending a quote value above $5.
+  // normal taker entry path; rounding down avoids sending a quote value above the stake.
   const shares = Math.floor((STOP_LOSS_REVERSAL_STAKE_USDC / price) * 10000) / 10000;
   if (!(shares > 0)) return { success: false, reversal: { ...opposite, price }, error: "opposite order size is below the exchange minimum" };
   const claimId = randomUUID();
@@ -425,13 +477,82 @@ async function submitStopLossReversal(plan) {
   }
   const { client, Side, OrderType } = await authenticatedClient();
   const signed = await client.createOrder({ tokenID: opposite.tokenId, price, size: shares, side: Side.BUY }, {});
-  const response = await client.postOrder(signed, OrderType.FOK, false);
+  // FAK, not FOK. The protective SELL uses FOK deliberately, because a partial exit leaves
+  // a position with a stop plan that no longer matches it. This is the opposite case: the
+  // rule asks for a position to be opened, and a smaller one is still that position. FOK
+  // turned every shortfall in depth into no position at all.
+  let response = await client.postOrder(signed, OrderType.FAK, false);
+  // A venue that will not take FAK is not a reason to place nothing.
+  if (!exitFilled(response)) response = await client.postOrder(signed, OrderType.FOK, false);
   if (exitFilled(response)) await settleLiveEntryClaim("confirm", opposite.tokenId, claimId);
   else await settleLiveEntryClaim("release", opposite.tokenId, claimId);
   return {
     ...response,
     reversal: { ...opposite, price: round(price, 6), shares: round(shares, 4), stakeUsdc: STOP_LOSS_REVERSAL_STAKE_USDC },
   };
+}
+
+// The same failures the paper bot treats as final: the opposite side cannot be bought at
+// all, so no number of retries changes it. Everything else is a condition of one moment.
+const TERMINAL_REVERSAL_PATTERNS = [
+  /no longer accepting orders/i,
+  /not in a two-outcome market/i,
+  /no distinct opposite token/i,
+];
+
+export function reversalFailureIsTerminal(reason) {
+  const text = String(reason || "");
+  return TERMINAL_REVERSAL_PATTERNS.some((pattern) => pattern.test(text));
+}
+
+// One attempt at an owed reverse, from wherever it is called: right after the stop filled,
+// or on a later pass from the pending list. Clears the entry once the position exists, or
+// once the market says it never will.
+async function attemptPendingReversal(context, tokenId, event = {}) {
+  const pending = context.state.pendingReversals?.[tokenId];
+  if (!pending) return;
+  const now = new Date().toISOString();
+  let reversal;
+  try {
+    reversal = await submitStopLossReversal(pending.plan);
+  } catch (error) {
+    reversal = { success: false, error: error?.message || String(error) };
+  }
+  const accepted = exitFilled(reversal);
+  const reason = reversal?.errorMsg || reversal?.error || null;
+  pending.attempts = Number(pending.attempts || 0) + 1;
+  pending.lastAttemptAt = now;
+  pending.lastError = accepted ? null : reason;
+  const exhausted = pending.attempts >= REVERSAL_RETRY_LIMIT;
+  const terminal = accepted || reversalFailureIsTerminal(reason) || exhausted;
+  recordEvent(context.state, {
+    ...event,
+    at: now,
+    tokenId,
+    question: pending.plan.question,
+    outcome: pending.plan.outcome,
+    type: accepted ? "STOP_REVERSAL_SUBMITTED" : (terminal ? "STOP_REVERSAL_REJECTED" : "STOP_REVERSAL_RETRY"),
+    reverseStakeUsdc: STOP_LOSS_REVERSAL_STAKE_USDC,
+    reverseAttempt: pending.attempts,
+    reversal: reversal?.reversal || null,
+    response: {
+      success: Boolean(reversal?.success),
+      status: reversal?.status || null,
+      error: reason,
+      orderId: reversal?.orderID || null,
+    },
+  });
+  if (terminal) delete context.state.pendingReversals[tokenId];
+}
+
+// Reverses still owed from an earlier pass. Run before the plans below, because the
+// position that triggered them is already sold and nothing in the plan list represents it.
+async function retryPendingReversals(context) {
+  const pendingIds = Object.keys(context.state.pendingReversals || {});
+  for (const tokenId of pendingIds) {
+    if (MODE !== "live" || !CONFIRM_LIVE) continue;
+    await attemptPendingReversal(context, tokenId);
+  }
 }
 
 async function notifyAccountSync() {
@@ -454,6 +575,10 @@ function recordEvent(state, event) {
 
 async function checkOnce(context) {
   const now = new Date().toISOString();
+  // Before anything else, because these are owed positions whose own plan is gone: the
+  // protective SELL already matched, so the position no longer appears in the live state
+  // the plans below are built from.
+  await retryPendingReversals(context);
   if (!context.liveState || Date.now() - context.liveStateFetchedAt >= STATE_REFRESH_MS) {
     context.liveState = await fetchJson(`${LIVE_STATE_URL}${LIVE_STATE_URL.includes("?") ? "&" : "?"}exitWorkerAt=${Date.now()}`, "live state");
     context.liveStateFetchedAt = Date.now();
@@ -566,25 +691,25 @@ async function checkOnce(context) {
       // only after the CLOB said the complete protective SELL matched; a rejected
       // reverse never changes the fact that the original position was already exited.
       if (plan.reverseOnStopLoss) {
-        let reversal;
-        try {
-          reversal = await submitStopLossReversal(plan);
-        } catch (error) {
-          reversal = { success: false, error: error?.message || String(error) };
-        }
-        const reversalAccepted = exitFilled(reversal);
-        recordEvent(context.state, {
-          ...event,
-          type: reversalAccepted ? "STOP_REVERSAL_SUBMITTED" : "STOP_REVERSAL_REJECTED",
-          reverseStakeUsdc: STOP_LOSS_REVERSAL_STAKE_USDC,
-          reversal: reversal?.reversal || null,
-          response: {
-            success: Boolean(reversal?.success),
-            status: reversal?.status || null,
-            error: reversal?.errorMsg || reversal?.error || null,
-            orderId: reversal?.orderID || null,
+        // Owed from here on. Once the protective SELL has matched the position is gone, so
+        // this plan will not be in the next pass's plan list -- if the reverse is only
+        // tried here and fails, nothing ever tries again. Recording it first means a
+        // failure is a retry rather than the end of it.
+        context.state.pendingReversals = context.state.pendingReversals || {};
+        context.state.pendingReversals[plan.tokenId] = {
+          plan: {
+            tokenId: plan.tokenId,
+            question: plan.question,
+            outcome: plan.outcome,
+            stopPrice: plan.stopPrice,
+            triggerPrice: plan.triggerPrice,
+            riskTargetUsdc: plan.riskTargetUsdc,
+            reverseOnStopLoss: true,
           },
-        });
+          owedSince: now,
+          attempts: 0,
+        };
+        await attemptPendingReversal(context, plan.tokenId, event);
       }
       context.liveStateFetchedAt = 0;
       const sync = await notifyAccountSync();

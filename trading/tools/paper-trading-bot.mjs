@@ -4145,9 +4145,21 @@ function shouldCheckEqualStopBeforePending({ equalRiskProtection = false, awaiti
 // At or below it means the floor had already been breached with no stop booked -- a real
 // gap, not a fill -- and the full loss stands. A settlement print of 0 or 1 is not a quote
 // and cannot stand in for that mark, which is why lastLiveBid is carried separately.
+//
+// The ENTRY price is the other mark that proves the same thing, and leaving it out was a
+// hole. A position is bought above its own floor by construction -- the floor is derived
+// from the entry -- so the entry is itself an observation of the position sitting above the
+// floor, and the resting sell existed from that moment. Requiring a later quote meant a
+// position whose market closed before any successful poll had no usable mark at all and
+// paid its whole stake with the stop still reading ARMED.
+//
+// Measured on 80-90 sl: "Exact Score: CA Platense 0 - 1 CD Riestra?" entered at 0.9600 with
+// a 0.8998 floor and a 0.35 USDC risk target, lastLiveBid never recorded, settled at 0, and
+// booked the full 5.01 USDC -- fourteen times the loss the floor was there to cap.
 function settlementStopFill({
   plan,
   lastLiveMark,
+  entryPrice,
   shares,
   feeRate = 0,
   feesEnabled = true,
@@ -4157,17 +4169,25 @@ function settlementStopFill({
   const floor = Number(plan.stopPrice);
   const size = Number(shares);
   const cost = Number(totalCostUsdc);
-  const mark = Number(lastLiveMark);
   if (!Number.isFinite(floor) || !(floor > 0)) return null;
   if (!Number.isFinite(size) || !(size > 0) || !Number.isFinite(cost) || !(cost > 0)) return null;
-  // A quote, not a settlement. 0 and 1 are what the closing write leaves behind.
-  if (!Number.isFinite(mark) || !(mark > 0) || !(mark < 1) || !(mark > floor)) return null;
+  // A quote, not a settlement. 0 and 1 are what the closing write leaves behind, so they
+  // are rejected here and the entry is used instead -- never as a better mark, only as the
+  // one that is always known.
+  const isQuote = (value) => Number.isFinite(value) && value > 0 && value < 1;
+  const observed = Number(lastLiveMark);
+  const entry = Number(entryPrice);
+  const mark = isQuote(observed) ? observed : (isQuote(entry) ? entry : NaN);
+  if (!isQuote(mark) || !(mark > floor)) return null;
   const exitValueUsdc = netExitValueAtPrice({ shares: size, price: floor, feeRate, feesEnabled });
   if (!Number.isFinite(exitValueUsdc)) return null;
   const realizedPnlUsdc = Number((exitValueUsdc - cost).toFixed(4));
   return {
     fillPrice: floor,
     lastLiveMark: Number(mark.toFixed(4)),
+    // Which of the two proved the position sat above the floor, so the note it produces
+    // does not claim a quote that was never taken.
+    markSource: isQuote(observed) ? "last-live-bid" : "entry-price",
     exitValueUsdc: Number(exitValueUsdc.toFixed(4)),
     realizedPnlUsdc,
     riskTargetUsdc: plan.riskTargetUsdc,
@@ -4510,6 +4530,8 @@ async function markOpenTrade(trade) {
         ? settlementStopFill({
           plan: stopPlanForTrade(),
           lastLiveMark: trade.lastLiveBid ?? trade.currentPrice,
+          // The mark that is always known: a position was bought above its own floor.
+          entryPrice: trade.entryPrice,
           shares: trade.shares,
           feeRate: trade.feeRate,
           feesEnabled: trade.feesEnabled,
@@ -4536,9 +4558,14 @@ async function markOpenTrade(trade) {
           riskTargetUsdc: settlementStop.riskTargetUsdc,
           stopLossRiskMultiplier: settlementStop.stopLossRiskMultiplier ?? trade.stopLossRiskMultiplier ?? null,
           stopLossCapBreachUsdc: settlementStop.capBreachUsdc,
-          statusNote: `Equal stop filled at its ${settlementStop.fillPrice.toFixed(4)} floor: the market was`
-            + ` quoted at ${settlementStop.lastLiveMark.toFixed(4)} at the last look and settled at`
-            + ` ${resolvedPrice}, so it traded through the resting exit before resolving.`,
+          statusNote: settlementStop.markSource === "entry-price"
+            ? `Equal stop filled at its ${settlementStop.fillPrice.toFixed(4)} floor: no live quote was`
+              + ` recorded before the market closed, but the position was bought at`
+              + ` ${settlementStop.lastLiveMark.toFixed(4)} -- above its own floor by construction --`
+              + ` and settled at ${resolvedPrice}, so it traded through the resting exit on the way down.`
+            : `Equal stop filled at its ${settlementStop.fillPrice.toFixed(4)} floor: the market was`
+              + ` quoted at ${settlementStop.lastLiveMark.toFixed(4)} at the last look and settled at`
+              + ` ${resolvedPrice}, so it traded through the resting exit before resolving.`,
         };
       }
       const realizedPnl = won ? Number((Number(trade.shares || 0) - cost).toFixed(4)) : Number((-cost).toFixed(4));
@@ -4832,6 +4859,28 @@ async function buildStopLossReversalTrade(sourceTrade, strategy) {
   }
 }
 
+// Which failures are the market's final answer and which were only true at that instant.
+//
+// The reverse entry is a market order, so the only thing that can genuinely prevent it is
+// the opposite side no longer being buyable at all: the market is closed, it stopped
+// accepting orders, or it is not a binary market and has no opposite. Everything else --
+// a quote gap, a Gamma or CLOB read that failed, capital busy on the pass the stop
+// happened to fill -- was a condition of that moment and is very likely gone a minute
+// later. Treating those as final is what left stops with no opposite position at all.
+const TERMINAL_REVERSAL_PATTERNS = [
+  /no longer accepting orders/i,
+  /not a resolvable binary market/i,
+  /no distinct opposite token/i,
+  /disabled or already used/i,
+];
+
+function reversalFailureIsTerminal(reason) {
+  const text = String(reason || "");
+  return TERMINAL_REVERSAL_PATTERNS.some((pattern) => pattern.test(text));
+}
+
+const REVERSAL_RETRY_LIMIT = 8;
+
 function recordStopLossReversalResult(trade, result) {
   const at = nowIso();
   if (result.trade) {
@@ -4843,12 +4892,22 @@ function recordStopLossReversalResult(trade, result) {
       statusNote: `${trade.statusNote || "Stop loss filled."} Opposite outcome opened with a fixed ${STOP_LOSS_REVERSAL_STAKE_USDC.toFixed(2)} USDC stake.`,
     };
   }
+  const attempts = Number(trade.stopLossReversalAttempts || 0) + 1;
+  const terminal = reversalFailureIsTerminal(result.reason) || attempts >= REVERSAL_RETRY_LIMIT;
+  const reason = result.reason || "opposite outcome could not be opened";
   return {
     ...trade,
     stopLossReversalAttemptedAt: at,
-    stopLossReversalStatus: "SKIPPED",
-    stopLossReversalReason: result.reason || "opposite outcome could not be opened",
-    statusNote: `${trade.statusNote || "Stop loss filled."} Opposite outcome was not opened: ${result.reason || "not executable"}.`,
+    stopLossReversalAttempts: attempts,
+    // PENDING is the difference between "we are still trying" and "this will never open".
+    // The retry loop reads this, so a momentary failure comes back next pass instead of
+    // being the last word.
+    stopLossReversalStatus: terminal ? "SKIPPED" : "PENDING",
+    stopLossReversalReason: reason,
+    statusNote: terminal
+      ? `${trade.statusNote || "Stop loss filled."} Opposite outcome was not opened: ${reason}.`
+      : `${trade.statusNote || "Stop loss filled."} Opposite outcome not opened yet (attempt ${attempts}`
+        + ` of ${REVERSAL_RETRY_LIMIT}): ${reason}. It will be retried on the next pass.`,
   };
 }
 
@@ -4876,7 +4935,14 @@ async function refreshTrades(trades, portfolioState = null, strategy = null) {
     const justStopped = OPEN_STATUSES.has(String(original?.status || ""))
       && String(original?.status || "") !== "LIMIT_ORDER_WAITING"
       && String(marked?.status || "") === "STOP_LOSS";
-    if (!justStopped || marked.stopLossReversalAttemptedAt || marked.isStopLossReversal === true) continue;
+    // A stop that filled on THIS pass, or one still owed an opposite position from an
+    // earlier pass. The second half is what was missing: the reverse used to be attempted
+    // only in the single tick the status flipped, and stopLossReversalAttemptedAt then
+    // barred it for good -- so any failure, however momentary, was permanent.
+    const owedFromEarlier = String(marked?.status || "") === "STOP_LOSS"
+      && marked.stopLossReversalStatus === "PENDING";
+    if ((!justStopped && !owedFromEarlier) || marked.isStopLossReversal === true) continue;
+    if (justStopped && marked.stopLossReversalAttemptedAt && !owedFromEarlier) continue;
     const capacity = stopLossReversalCapacity(nextTrades, portfolioState);
     if (capacity + 0.00001 < STOP_LOSS_REVERSAL_STAKE_USDC) {
       nextTrades[index] = recordStopLossReversalResult(marked, {
