@@ -13,6 +13,7 @@
 // available to the entry in the same pass.
 
 import { aggregate, DEFAULT_SOURCE_ORDER, dropForming, fetchCandlesWithFallback, HOUR_MS } from './candles.mjs'
+import { isPublicKey, PUBLIC_KEY_REFUSAL } from './keys.mjs'
 import { createLnMarketsClient, resolveNetwork } from './lnmarkets.mjs'
 import { createLnMarketsExecutor } from './executor-lnm.mjs'
 import { createPaperExecutor } from './executor-paper.mjs'
@@ -177,6 +178,20 @@ export const buildExecutor = ({ settings, state, config, logger, fetchImpl }) =>
   if (mode === 'paper') {
     return { mode, executor: createPaperExecutor({ store: state.paper }), client: null }
   }
+  // A key anyone can read out of a public repository may guard a simulation. It
+  // may not guard an account. This refuses here rather than relying on the
+  // dashboard's confirmation dialog, because that dialog is on the far side of
+  // whoever has the key.
+  if (mode === 'mainnet' && isPublicKey(config.apiKey)) {
+    logger.error(`Refusing mainnet: ${PUBLIC_KEY_REFUSAL}`)
+    return {
+      mode: 'paper',
+      executor: createPaperExecutor({ store: state.paper }),
+      client: null,
+      refusal: PUBLIC_KEY_REFUSAL,
+    }
+  }
+
   const client = createLnMarketsClient({ network: mode, fetchImpl })
   if (!client.hasCredentials) {
     logger.warn(`Mode is ${mode} but LN Markets credentials are missing — degrading to paper so nothing trades blind`)
@@ -230,9 +245,12 @@ export const runPass = async ({
       return { state, run, saved }
     }
 
-    const { executor, mode } = makeExecutor({ settings, state, config, logger, fetchImpl })
+    const { executor, mode, refusal } = makeExecutor({ settings, state, config, logger, fetchImpl })
     run.mode = mode
     state.mode = mode
+    // Surfaced on the state so the dashboard can say why it is still on paper
+    // after someone asked for mainnet, instead of looking like it ignored them.
+    state.modeRefusal = refusal ?? null
 
     // Candles come from a client of their own, with no credentials attached.
     // `futures/candles` is a public route, so paper mode reads the same chart

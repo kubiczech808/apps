@@ -192,11 +192,20 @@ jobs:
           import os
           import sys
 
+          # Chosen by Jakub for convenience. It is committed here, in a PUBLIC
+          # repository, so treat it as known to everyone — because it is. That is
+          # a fine guard for a paper portfolio and not one for an account, so
+          # src/keys.mjs and api.php both refuse to run mainnet while it is in
+          # use. Setting a BTC_BOT_KEY secret overrides it and lifts that lock.
+          committed = "ahoj1234567890"
+
           explicit = os.environ.get("BTC_BOT_KEY", "")
           seed = os.environ.get("BTCDCA_FTP_PASSWORD", "")
 
           if explicit:
               key, source = explicit, "the BTC_BOT_KEY secret"
+          elif committed:
+              key, source = committed, "the committed public default (mainnet is locked)"
           elif seed:
               digest = hmac.new(seed.encode(), b"btc-dca-bot dashboard key v1", hashlib.sha256).digest()
               key = base64.urlsafe_b64encode(digest).decode().rstrip("=")

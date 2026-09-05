@@ -308,3 +308,43 @@ test('prices round in the direction that cannot enlarge the risk', () => {
   assert.equal(roundTarget('long', 110_000.9), 110_000)
   assert.equal(roundTarget('short', 90_000.1), 90_001)
 })
+
+test('mainnet is refused while the dashboard key is one published in the repo', async () => {
+  const candles = marketCandles()
+  const errors = []
+  const { state, run } = await runPass({
+    env: { ...baseEnv, BOT_API_KEY: 'ahoj1234567890' },
+    fetchImpl: bybitStub(candles),
+    store: fakeStore({
+      settings: { mode: 'mainnet' },
+      paper: { balanceSats: 0, trades: [], nextId: 1 },
+    }),
+    logger: { info() {}, warn() {}, error: (message) => errors.push(message) },
+    now: nowAfter(candles),
+  })
+
+  // Falls back to paper rather than trading, and says why on the state so the
+  // dashboard can explain itself instead of looking like it ignored the change.
+  assert.equal(run.mode, 'paper')
+  assert.equal(state.mode, 'paper')
+  assert.match(state.modeRefusal, /public repository/)
+  assert.ok(errors.some((message) => /Refusing mainnet/.test(message)))
+})
+
+test('mainnet is allowed once the key is not a published one', async () => {
+  const candles = marketCandles()
+  const { run } = await runPass({
+    env: { ...baseEnv, BOT_API_KEY: 'a-real-secret-nobody-published' },
+    fetchImpl: bybitStub(candles),
+    store: fakeStore({
+      settings: { mode: 'mainnet' },
+      paper: { balanceSats: 0, trades: [], nextId: 1 },
+    }),
+    logger: { info() {}, warn() {}, error() {} },
+    now: nowAfter(candles),
+  })
+
+  // No LN Markets credentials in this environment, so it still degrades to
+  // paper — but for the credential reason, not the key one.
+  assert.equal(run.mode, 'paper')
+})

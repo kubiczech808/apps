@@ -18,6 +18,7 @@ const SATS_PER_BTC = 1e8
 const $ = (id) => document.getElementById(id)
 
 let state = null
+let keyIsPublic = false
 let refreshTimer = null
 
 // ── formatting ────────────────────────────────────────────────────────────
@@ -118,6 +119,16 @@ const renderNotices = () => {
 
   if (state.mode === 'mainnet') {
     notices.push(['bad', 'Ostrý provoz: obchody se otevírají za skutečné sats.'])
+  }
+  if (keyIsPublic) {
+    notices.push([
+      '',
+      'Přístupový klíč je veřejně v repozitáři, takže ostrý provoz je zamčený. ' +
+        'Pro obchodování za skutečné sats nastav secret BTC_BOT_KEY a nasaď znovu.',
+    ])
+  }
+  if (state.modeRefusal) {
+    notices.push(['bad', `Bot odmítl ostrý provoz a zůstal na paper: ${state.modeRefusal}`])
   }
   if (settings.enabled === false) {
     notices.push(['', 'Automatické obchodování je pozastavené — nové vstupy se neotevírají.'])
@@ -419,6 +430,13 @@ const renderRuns = () => {
 
 const renderSettings = () => {
   const settings = state?.settings || {}
+  const mainnet = $('set-mode').querySelector('option[value="mainnet"]')
+  if (mainnet) {
+    mainnet.disabled = keyIsPublic
+    mainnet.textContent = keyIsPublic
+      ? 'LN Markets ostrý provoz — zamčeno (veřejný klíč)'
+      : 'LN Markets ostrý provoz'
+  }
   $('set-enabled').value = settings.enabled === false ? 'false' : 'true'
   $('set-mode').value = settings.mode === 'testnet' ? 'testnet4' : settings.mode || 'testnet4'
   $('set-risk').value = settings.risk?.riskPct ?? 1
@@ -506,6 +524,7 @@ const renderAll = () => {
 
 const load = async () => {
   const payload = await api('state')
+  keyIsPublic = Boolean(payload.keyIsPublic)
   state = payload.state || null
   if (!state) {
     $('notices').replaceChildren(

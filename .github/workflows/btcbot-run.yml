@@ -46,11 +46,17 @@ jobs:
           import os
           import sys
 
+          # Must match the deploy's committed default, or the runner and the
+          # dashboard authenticate with different keys.
+          committed = "ahoj1234567890"
+
           explicit = os.environ.get("BTC_BOT_KEY", "")
           seed = os.environ.get("BTCDCA_FTP_PASSWORD", "")
 
           if explicit:
               key = explicit
+          elif committed:
+              key = committed
           elif seed:
               digest = hmac.new(seed.encode(), b"btc-dca-bot dashboard key v1", hashlib.sha256).digest()
               key = base64.urlsafe_b64encode(digest).decode().rstrip("=")

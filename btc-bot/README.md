@@ -120,19 +120,19 @@ can drift from the LN Markets index.
 
 ### GitHub secrets (repository `kubiczech808/apps`)
 
-> **This repository is public.** Nothing secret may be committed to it — not the
-> dashboard key, not a config file, not "just for testing". The dashboard key is
-> the only thing between the internet and reading the account, changing the risk
-> settings, and flipping the bot to mainnet.
+> **This repository is public.** The LN Markets credentials must never be
+> committed to it. The dashboard key currently *is* committed — deliberately,
+> for convenience, and the bot refuses to trade live because of it. See **The
+> dashboard key** below.
 
 | Secret | What it is |
 |---|---|
 | `BTCDCA_FTP_LOGIN` | already present — btc-dca.com FTP |
-| `BTCDCA_FTP_PASSWORD` | already present — also the seed for the dashboard key |
+| `BTCDCA_FTP_PASSWORD` | already present |
 | `LNM_API_KEY` | LN Markets API key. Not needed in paper mode. |
 | `LNM_API_SECRET` | " |
 | `LNM_API_PASSPHRASE` | " |
-| `BTC_BOT_KEY` | **Optional.** Set it to override the derived dashboard key. |
+| `BTC_BOT_KEY` | Overrides the committed dashboard key — **required before mainnet**. |
 
 Create the LN Markets key at **lnmarkets.com → Settings → API** with permission
 to read the account and to create and close positions. There is no test network
@@ -143,12 +143,27 @@ mode setting decides whether it trades), `BTC_BOT_URL`, `BTCDCA_FTP_HOSTS`.
 
 ### The dashboard key
 
-You do not have to create one. If `BTC_BOT_KEY` is not set, the deploy and both
-runners derive the same key from `BTCDCA_FTP_PASSWORD`, which the repository
-already holds. Nothing new to add, and nothing secret in git.
+The key is **`ahoj1234567890`**, committed in `btcbot-deploy.yml`. You do not
+have to add anything to use the dashboard.
 
-To find out what it is — you need it to open the dashboard — run this with your
-btc-dca.com FTP password:
+It is in a public repository, so treat it as known to everyone — because it is.
+That is a reasonable guard for a paper portfolio, where the worst an outsider
+can do is pause a simulation. It is not a guard for an account, so the lock is
+enforced rather than written down:
+
+- `src/keys.mjs` makes the runner refuse `mainnet` while this key is in use; it
+  falls back to paper and records the reason on the published state.
+- `api.php` refuses to save `mode: mainnet` for the same reason, so the
+  dashboard says why instead of appearing to accept the change.
+- The dashboard greys the mainnet option out and explains the lock.
+
+**To trade real money, set a `BTC_BOT_KEY` secret** on the repository and deploy
+again. It overrides the committed default, and the lock lifts on its own once
+the key is no longer a published one — nothing else to remember.
+
+If you would rather not manage a secret at all, deleting the `committed = ...`
+line from both workflows falls back to deriving the key from
+`BTCDCA_FTP_PASSWORD`:
 
 ```bash
 printf 'btc-dca-bot dashboard key v1' \
@@ -156,12 +171,7 @@ printf 'btc-dca-bot dashboard key v1' \
   | base64 | tr '+/' '-_' | tr -d '='
 ```
 
-The deploy log prints a 12-character fingerprint of the key it used, so you can
-confirm you computed the same one without either of you publishing it.
-
-The catch, stated plainly: **rotating the FTP password changes the dashboard
-key.** If you ever do that, recompute it, or set an explicit `BTC_BOT_KEY`
-secret — which wins over the derived one — and be done with the coupling.
+The deploy log prints a 12-character fingerprint of whichever key it used.
 
 ### Deploy
 

@@ -59,6 +59,17 @@ function config(): array
 }
 
 /**
+ * Is the configured key one that is published in the repository?
+ *
+ * Kept in step with PUBLIC_DEV_KEYS in src/keys.mjs — the runner enforces the
+ * same rule, and the two lists must agree or one of them becomes a way in.
+ */
+function keyIsPublic(): bool
+{
+    return in_array((string) (config()['bot_key'] ?? ''), ['ahoj1234567890'], true);
+}
+
+/**
  * Constant-time key check.
  *
  * hash_equals rather than === so a wrong key cannot be discovered one byte at a
@@ -144,6 +155,9 @@ if ($action === 'health') {
     ok([
         'service' => 'btc-bot',
         'configured' => (string) (config()['bot_key'] ?? '') !== '',
+        // Public here is deliberate: it is not a secret that the key is not a
+        // secret, and the dashboard needs it to explain why mainnet is locked.
+        'keyIsPublic' => keyIsPublic(),
         'hasState' => is_readable(STATE_FILE),
         'serverTime' => gmdate('c'),
     ]);
@@ -165,6 +179,7 @@ switch ($action) {
             'state' => $state,
             'settings' => $settings,
             'commands' => readJsonFile(COMMANDS_FILE, []),
+            'keyIsPublic' => keyIsPublic(),
         ]);
     }
 
@@ -217,6 +232,18 @@ switch ($action) {
         $settings = requestBody();
         if ($settings === []) {
             fail(400, 'No settings supplied.');
+        }
+        // A key published in a public repository may guard a simulation; it may
+        // not guard an account. The runner refuses to trade live on one too —
+        // both, because either check alone leaves the other as a way in. This
+        // one exists so the dashboard says why instead of appearing to accept
+        // the change and silently staying on paper.
+        if (($settings['mode'] ?? '') === 'mainnet' && keyIsPublic()) {
+            fail(
+                403,
+                'Ostrý provoz je zamčený: klíč k dashboardu je ten, který je veřejně v repozitáři. '
+                . 'Nastav secret BTC_BOT_KEY (má přednost před odvozeným) a nasaď znovu.'
+            );
         }
         $existing = readJsonFile(SETTINGS_FILE, []);
         writeJsonFile(SETTINGS_FILE, array_replace_recursive(is_array($existing) ? $existing : [], $settings));
