@@ -1256,9 +1256,13 @@ function equalRiskStopPrice(position = {}, multiplier = 1) {
 // The comparison is the worker's: the current bid against the stop price. A position with
 // no quote is reported separately rather than counted as safe -- unknown is not below the
 // stop, but it is not above it either, and the operator is about to decide about it.
-function positionsAStopWouldCloseNow(mode = state.mode) {
+function positionsAStopWouldCloseNow(mode = state.mode, multiplierOverride = null) {
   const config = portfolioConfigForMode(mode);
-  const multiplier = stopLossRiskMultiplier(config);
+  // The proposed value when there is one, so a change can be judged BEFORE it is saved
+  // rather than explained afterwards.
+  const multiplier = multiplierOverride == null
+    ? stopLossRiskMultiplier(config)
+    : normalizeStopLossRiskMultiplier(multiplierOverride, 0);
   if (!(multiplier > 0)) return { multiplier: 0, closing: [], unknown: [] };
   const closing = [];
   const unknown = [];
@@ -1266,18 +1270,76 @@ function positionsAStopWouldCloseNow(mode = state.mode) {
     const stopPrice = equalRiskStopPrice(position, multiplier);
     if (stopPrice == null) continue;
     const bid = numericOrNull(position.bestBid ?? position.currentPrice ?? position.markPrice);
+    const shares = numericOrNull(position.shares ?? position.size);
+    const cost = numericOrNull(position.totalCostUsdc ?? position.stakeUsdc ?? position.initialValue);
+    const entryPrice = shares != null && cost != null && shares > 0 ? cost / shares : null;
     const row = {
+      key: String(position.tokenId || position.assetId || position.question || ""),
       question: position.question || position.market || "-",
       outcome: position.outcome || "",
-      stakeUsdc: numericOrNull(position.totalCostUsdc ?? position.stakeUsdc),
+      stakeUsdc: cost,
       stopPrice,
+      entryPrice,
+      // A floor at or above what the position cost is not a stop loss at all: it cannot cap
+      // a loss, it sells at the entry price the moment it is armed. Named separately
+      // because it is not "the market moved against this position" -- it is a setting that
+      // cannot do what it says.
+      aboveEntry: entryPrice != null && stopPrice >= entryPrice,
       price: bid,
     };
-    if (bid == null || !(bid > 0)) unknown.push(row);
+    if (row.aboveEntry) closing.push(row);
+    else if (bid == null || !(bid > 0)) unknown.push(row);
     else if (bid <= stopPrice) closing.push(row);
   }
   closing.sort((left, right) => (left.price ?? 0) - (right.price ?? 0));
   return { multiplier, closing, unknown };
+}
+
+// Changing the stop loss acts on the positions the portfolio ALREADY holds, immediately.
+//
+// Reported after it happened: a 2 typed into a field that means percent is 0.02x, 0.02x
+// puts the floor above the entry price, and four positions in four unrelated markets were
+// sold within one second of the save -- at entry, for no reason the operator could see.
+// The control said nothing beforehand.
+//
+// So a change that would close something says which somethings, and asks. Only what the
+// change ITSELF closes is listed: a position already below its stop under the current
+// setting is not news, and burying the new ones among them is how a confirmation stops
+// being read.
+function confirmStopLossChange(mode = state.mode, nextMultiplier = 0) {
+  if (!isLivePortfolioMode(mode)) return true;
+  const before = positionsAStopWouldCloseNow(mode);
+  const after = positionsAStopWouldCloseNow(mode, nextMultiplier);
+  const already = new Set(before.closing.map((row) => row.key));
+  const newlyClosing = after.closing.filter((row) => !already.has(row.key));
+  if (!newlyClosing.length) return true;
+  const name = portfolioNameForMode(mode);
+  const stake = newlyClosing.reduce((total, row) => total + (row.stakeUsdc || 0), 0);
+  const brokenFloor = newlyClosing.filter((row) => row.aboveEntry);
+  const lines = newlyClosing.map((row) => `  - ${row.question}${row.outcome ? ` (${row.outcome})` : ""}`
+    + (row.aboveEntry
+      ? `  stop ${percent(row.stopPrice)} is ABOVE the ${percent(row.entryPrice)} entry`
+      : `  bid ${percent(row.price)} vs stop ${percent(row.stopPrice)}`)
+    + `${row.stakeUsdc != null ? `, ${money(row.stakeUsdc)} at stake` : ""}`);
+  return window.confirm([
+    `Save a ${percent(nextMultiplier)} stop loss on "${name}"?`,
+    "",
+    `${newlyClosing.length} open position${newlyClosing.length === 1 ? "" : "s"}`
+      + ` holding ${money(stake)} would be sold as soon as this saves:`,
+    ...lines,
+    ...(brokenFloor.length ? [
+      "",
+      `${brokenFloor.length === newlyClosing.length ? "Every one of them" : `${brokenFloor.length} of them`}`
+        + ` would be sold at the entry price, not at a loss limit:`,
+      `a ${percent(nextMultiplier)} multiple of the net win is a smaller risk target than the`,
+      "position's own spread, so the floor lands above what it cost. That is not a stop loss.",
+      "",
+      "This field is a PERCENTAGE of the net potential win: 200 means twice the net win,",
+      "150 means one and a half times. 2 means two percent of it.",
+    ] : []),
+    "",
+    "Cancel keeps the current setting.",
+  ].join("\n"));
 }
 
 // Turning a portfolio on is not only "start looking for entries": its stop loss begins
@@ -4175,6 +4237,18 @@ function tradeTypeBadge(trade) {
   // what the row is: still an open position, or still a resting order. It fell through
   // to those labels below, and a red "Pending resolution" chip on top read as a fault.
   if (String(trade.status || "").toUpperCase() === "STOP_LOSS") return '<span class="order-chip warning">Protective exit</span>';
+  // A live position carries no STOP_LOSS status of its own: the account sync learns from
+  // Polymarket, where a protective sell and any other sell are the same event, so a closed
+  // live row said nothing about why it closed. The exit worker now reports the reason and
+  // it is attached to the position here, which is the only place that fact exists.
+  if (trade.exitReason === "stop") {
+    const at = numericOrNull(trade.exitPrice);
+    return `<span class="order-chip warning">Protective exit${at != null ? ` &middot; sold at ${percent(at)}` : ""}</span>`;
+  }
+  if (trade.exitReason === "settlement") {
+    const at = numericOrNull(trade.exitPrice);
+    return `<span class="order-chip">Closed at certainty${at != null ? ` &middot; sold at ${percent(at)}` : ""}</span>`;
+  }
   if (String(trade.status || "").toUpperCase() === "STOP_BREACH") return '<span class="order-chip warning">Stop breached · no floor exit</span>';
   if (String(trade.status || "").toUpperCase() === "STOP_GAP") return '<span class="order-chip warning">Stop gap · cap missed</span>';
   // A settled row's kind IS its result, so the chip carries it. "Settled position" only
@@ -14530,20 +14604,42 @@ els.autoRotatePositions?.addEventListener("change", () => {
   rerenderCurrentDashboard();
 });
 
+function stopLossMultiplierUpdates(multiplier) {
+  return { stopLossEnabled: multiplier > 0, stopLossRiskMultiplier: multiplier };
+}
+
+// Typing previews, it does not commit.
+//
+// This control used to save on every keystroke, and "200" passes through 2 on the way in --
+// a 0.02x stop, whose floor sits above the entry price. Every debounced save in that
+// sequence is a live instruction to the exit worker, so a half-typed number sold four
+// positions. The commit moved to `change`, which is where the value the operator actually
+// meant is known and where it can be confirmed.
 els.stopLossRiskMultiplier?.addEventListener("input", () => {
   if (parameterDraftInputIsEmpty(els.stopLossRiskMultiplier)) {
     if (els.stopLossRiskMultiplierLabel) els.stopLossRiskMultiplierLabel.textContent = "-";
     return;
   }
   const multiplier = normalizeStopLossRiskMultiplier(Number(els.stopLossRiskMultiplier.value) / 100, 0);
-  const updates = {
-    stopLossEnabled: multiplier > 0,
-    stopLossRiskMultiplier: multiplier,
-  };
   if (els.stopLossRiskMultiplierLabel) {
     els.stopLossRiskMultiplierLabel.textContent = multiplier > 0 ? `${percent(multiplier)} of net win` : "Off";
   }
+  // A draft portfolio holds nothing yet and is not persisted until the form is submitted,
+  // so there is nothing a keystroke there can sell.
+  updateParameterDraft(stopLossMultiplierUpdates(multiplier));
+});
+
+els.stopLossRiskMultiplier?.addEventListener("change", () => {
+  if (parameterDraftInputIsEmpty(els.stopLossRiskMultiplier)) return;
+  const multiplier = normalizeStopLossRiskMultiplier(Number(els.stopLossRiskMultiplier.value) / 100, 0);
+  const updates = stopLossMultiplierUpdates(multiplier);
   if (updateParameterDraft(updates)) return;
+  if (!confirmStopLossChange(state.mode, multiplier)) {
+    // Put the saved value back on screen, so the field never shows a setting that is not
+    // the one in force.
+    syncPortfolioParameterControls();
+    return;
+  }
   updatePortfolioConfigForMode(state.mode, updates);
   savePortfolioConfigSoon();
   syncPortfolioParameterControls();

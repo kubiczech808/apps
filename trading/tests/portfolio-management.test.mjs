@@ -3704,3 +3704,79 @@ test("close at certainty: the threshold is stored per portfolio, and off is the 
   // And the worker must not read a stop out of a policy that exists only for this.
   assert.match(API, /'stopLossEnabled' => \$multiplier > 0,/);
 });
+
+// Reported after it happened: a 2 typed into a field that means percent is a 0.02x stop,
+// 0.02x puts the floor above the entry price, and four positions in four unrelated markets
+// were sold within one second of the save -- at entry, for no reason visible anywhere. The
+// control said nothing beforehand and the closed rows said nothing afterwards.
+test("stop loss form: a change that would sell open positions is named and confirmed first", () => {
+  // Typing must not save. "200" passes through 2 on its way in, and every debounced save in
+  // that sequence is a live instruction to the exit worker.
+  assert.match(APP, /els\.stopLossRiskMultiplier\?\.addEventListener\("input", \(\) => \{/);
+  assert.match(APP, /els\.stopLossRiskMultiplier\?\.addEventListener\("change", \(\) => \{/);
+  const input = extractFunction(APP, "stopLossMultiplierUpdates");
+  assert.match(input, /stopLossEnabled: multiplier > 0/);
+  // The input handler previews and updates a draft; it must not reach the save path.
+  const inputHandler = /els\.stopLossRiskMultiplier\?\.addEventListener\("input"[\s\S]*?\n\}\);/.exec(APP)[0];
+  assert.doesNotMatch(inputHandler, /savePortfolioConfigSoon\(\)/,
+    "a keystroke must not be persisted: half a number is a different stop loss");
+  assert.doesNotMatch(inputHandler, /updatePortfolioConfigForMode/);
+  const changeHandler = /els\.stopLossRiskMultiplier\?\.addEventListener\("change"[\s\S]*?\n\}\);/.exec(APP)[0];
+  assert.match(changeHandler, /if \(!confirmStopLossChange\(state\.mode, multiplier\)\) \{/);
+  assert.match(changeHandler, /savePortfolioConfigSoon\(\);/);
+  // Declining has to put the saved value back, or the field shows a setting that is not in
+  // force.
+  assert.match(changeHandler, /syncPortfolioParameterControls\(\);\s*\n\s*return;/);
+
+  // The plan calculation has to be able to answer for a PROPOSED multiplier, or the
+  // question can only be asked after the save.
+  const which = extractFunction(APP, "positionsAStopWouldCloseNow");
+  assert.match(which, /function positionsAStopWouldCloseNow\(mode = state\.mode, multiplierOverride = null\)/);
+  assert.match(which, /multiplierOverride == null/);
+  // A floor at or above the entry is its own category: not "the market moved against this
+  // position" but a setting that cannot do what it says.
+  assert.match(which, /aboveEntry: entryPrice != null && stopPrice >= entryPrice/);
+
+  const confirm = extractFunction(APP, "confirmStopLossChange");
+  // Only what the change itself closes. Burying the new ones among positions already below
+  // their stop is how a confirmation stops being read.
+  assert.match(confirm, /const already = new Set\(before\.closing\.map\(\(row\) => row\.key\)\);/);
+  assert.match(confirm, /if \(!newlyClosing\.length\) return true;/);
+  assert.match(confirm, /would be sold as soon as this saves/);
+  // And it says what the field's units are, because that is the mistake it exists to catch.
+  assert.match(confirm, /This field is a PERCENTAGE of the net potential win/);
+});
+
+// Reported: the closed-positions list shows no record that a stop loss ever fired. It could
+// not -- the exit worker recorded every fill in its own state file on the Pi, which nothing
+// publishes, and the account sync that produces those rows learns only from Polymarket,
+// where a protective sell and any other sell are the same event.
+test("closed positions: a live row says why it was sold, not just that it is gone", () => {
+  // The worker reports the reason at the moment it knows it.
+  const worker = readFileSync(new URL("../tools/rpi-live-exit-worker.mjs", import.meta.url), "utf8");
+  assert.match(worker, /async function recordLiveExit\(plan, \{ reason, response, bestBidPrice, bestAskPrice \}\)/);
+  assert.match(worker, /await recordLiveExit\(plan, \{/);
+  // Best effort: a position that is already sold must not be un-sold because the annotation
+  // could not be delivered.
+  assert.match(worker, /\} catch \{\s*\n\s*\/\/ Swallowed on purpose\. The position is already sold/);
+
+  // The endpoint that receives it, behind the same key every other write uses.
+  assert.match(API, /if \(\$action === 'live-exit-record'\) \{/);
+  assert.match(API, /require_trading_trigger_key\(\);\s*\n\s*respond\(live_exit_record_request\(request_payload\(\)\)\);/);
+  // Keyed by token, so a retried exit updates its record instead of adding a second one.
+  assert.match(API, /\$records\[\$tokenId\] = \$record;/);
+
+  // And it is attached to the position when the live state is served.
+  assert.match(API, /if \(\$target === 'live'\) \{\s*\n\s*\$payload = live_state_with_exit_reasons\(\$payload\);/);
+  const attach = /function live_state_with_exit_reasons\(array \$payload\): array[\s\S]*?\n\}/.exec(API)[0];
+  assert.match(attach, /\$positions\[\$index\]\['exitReason'\]/);
+  // Annotation only. A recorded exit that has not settled yet must not make a position look
+  // closed before the account says it is.
+  assert.match(attach, /Annotation only/);
+  assert.doesNotMatch(attach, /\['status'\] =/);
+
+  // The dashboard shows it.
+  assert.match(APP, /if \(trade\.exitReason === "stop"\) \{/);
+  assert.match(APP, /Protective exit\$\{at != null \? ` &middot; sold at \$\{percent\(at\)\}` : ""\}/);
+  assert.match(APP, /if \(trade\.exitReason === "settlement"\) \{/);
+});

@@ -112,6 +112,8 @@ export function rejectionIsSignerMismatch(response) {
   return message.includes("signer address") && message.includes("api key");
 }
 const SYNC_COMMAND = String(process.env.LIVE_EXIT_POST_FILL_SYNC_COMMAND || "").trim();
+const LIVE_EXIT_RECORD_URL = process.env.LIVE_EXIT_RECORD_URL
+  || "https://osobnizkusenosti.cz/trading/api.php?action=live-exit-record";
 const STOP_LOSS_REVERSAL_STAKE_USDC = 5;
 // How many watched books are read at once. The books are independent reads, so this is
 // bounded only to stay polite to the CLOB rather than for correctness.
@@ -202,6 +204,51 @@ async function fetchJson(url, label) {
   });
   if (!response.ok) throw new Error(`${label}: HTTP ${response.status}`);
   return response.json();
+}
+
+// The reason a position was sold, sent to the dashboard at the moment this worker knows it.
+//
+// Reported: the closed-positions list shows no record that a stop loss ever fired. It could
+// not -- every fill was recorded in this worker's own state file on the Pi, which nothing
+// publishes, and the account sync that produces those rows learns only from Polymarket,
+// where a protective sell and any other sell are the same event. The reason existed on one
+// machine and the screen showed a position that had simply vanished.
+//
+// Best effort by design: a position that has already been sold must not be un-sold because
+// the annotation could not be delivered.
+async function recordLiveExit(plan, { reason, response, bestBidPrice, bestAskPrice }) {
+  if (!TRADING_TRIGGER_KEY) return;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 12000);
+  try {
+    await fetch(LIVE_EXIT_RECORD_URL, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-trading-trigger-key": TRADING_TRIGGER_KEY,
+        "user-agent": "trading-live-exit-worker/1.0",
+      },
+      body: JSON.stringify({
+        tokenId: String(plan.tokenId),
+        reason,
+        portfolioId: String(plan.source || "").replace(/^portfolio:/, ""),
+        question: plan.question,
+        outcome: plan.outcome,
+        exitPrice: response?.exitPrice ?? null,
+        stopPrice: plan.stopPrice ?? null,
+        bestBid: bestBidPrice ?? null,
+        bestAsk: bestAskPrice ?? null,
+        shares: plan.shares ?? null,
+        orderId: response?.orderID || null,
+      }),
+      signal: controller.signal,
+    });
+  } catch {
+    // Swallowed on purpose. The position is already sold; failing here would only turn a
+    // missing annotation into a crashed pass, and the next exit still records normally.
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 async function claimLiveEntry(tokenId, claimId) {
@@ -1083,6 +1130,14 @@ async function checkOnce(context) {
       response: { success: Boolean(response?.success), status: response?.status || null, error: response?.errorMsg || response?.error || null, orderId: response?.orderID || null },
     });
     if (accepted) {
+      // Why this position was sold, sent before anything else is attempted: the reverse
+      // below can fail, and the fill it follows still happened.
+      await recordLiveExit(plan, {
+        reason,
+        response,
+        bestBidPrice: currentBestBid,
+        bestAskPrice: currentBestAsk,
+      });
       // A reverse is a second, independent FOK order. It is intentionally attempted
       // only after the CLOB said the complete protective SELL matched; a rejected
       // reverse never changes the fact that the original position was already exited.

@@ -4841,6 +4841,139 @@ function live_entry_claim_path(): string
     return __DIR__ . '/data/live-entry-claims.json';
 }
 
+// Why a live position was sold, keyed by the token it was sold from.
+//
+// Reported: the closed-positions list shows no record that a stop loss ever fired. It
+// could not: the exit worker records every fill in its own state file ON THE PI, which is
+// never published, and the account sync that produces the dashboard's closed positions
+// learns only from Polymarket -- where a protective sell and a manual one are the same
+// event. So the reason lived on a machine nobody reads and the screen showed a position
+// that had simply vanished.
+//
+// This is the reason travelling with the fill, written by the worker at the moment it
+// knows it, and attached to the closed position when the state is served.
+function live_exit_record_path(): string
+{
+    return __DIR__ . '/data/live-exit-records.json';
+}
+
+function live_exit_records(): array
+{
+    $stored = decode_state_file(live_exit_record_path(), false);
+    return is_array($stored['records'] ?? null) ? $stored['records'] : [];
+}
+
+function live_exit_record_request(array $payload): array
+{
+    $tokenId = preg_replace('/[^0-9]/', '', (string) ($payload['tokenId'] ?? ''));
+    if ($tokenId === '') {
+        return ['ok' => false, 'error' => 'tokenId is required'];
+    }
+    $reason = strtolower(trim((string) ($payload['reason'] ?? 'stop')));
+    if (!in_array($reason, ['stop', 'settlement'], true)) {
+        $reason = 'stop';
+    }
+    $record = [
+        'tokenId' => $tokenId,
+        'reason' => $reason,
+        'at' => gmdate('c'),
+        'portfolioId' => preg_replace('/[^A-Za-z0-9_-]/', '', (string) ($payload['portfolioId'] ?? '')),
+        'question' => compact_text($payload['question'] ?? '', 200),
+        'outcome' => compact_text($payload['outcome'] ?? '', 60),
+        'exitPrice' => is_numeric($payload['exitPrice'] ?? null) ? round((float) $payload['exitPrice'], 6) : null,
+        'stopPrice' => is_numeric($payload['stopPrice'] ?? null) ? round((float) $payload['stopPrice'], 6) : null,
+        'bestBid' => is_numeric($payload['bestBid'] ?? null) ? round((float) $payload['bestBid'], 6) : null,
+        'bestAsk' => is_numeric($payload['bestAsk'] ?? null) ? round((float) $payload['bestAsk'], 6) : null,
+        'shares' => is_numeric($payload['shares'] ?? null) ? round((float) $payload['shares'], 6) : null,
+        'orderId' => preg_replace('/[^A-Za-z0-9x-]/', '', (string) ($payload['orderId'] ?? '')),
+    ];
+
+    $path = live_exit_record_path();
+    $directory = dirname($path);
+    if (!is_dir($directory) && !@mkdir($directory, 0775, true) && !is_dir($directory)) {
+        return ['ok' => false, 'error' => 'Live exit record storage is unavailable.'];
+    }
+    $handle = @fopen($path, 'c+');
+    if ($handle === false) {
+        return ['ok' => false, 'error' => 'Live exit record storage is unavailable.'];
+    }
+    try {
+        if (!flock($handle, LOCK_EX)) {
+            return ['ok' => false, 'error' => 'Live exit record storage could not acquire its lock.'];
+        }
+        rewind($handle);
+        $raw = stream_get_contents($handle);
+        $stored = json_decode(is_string($raw) ? $raw : '', true);
+        $records = is_array($stored['records'] ?? null) ? $stored['records'] : [];
+        // Keyed by token, so a retried exit updates its record rather than adding a second
+        // one for the same position. Bounded and aged out: this is an annotation on closed
+        // trades, not an audit log, and the trades themselves are already retained.
+        $records[$tokenId] = $record;
+        $cutoff = time() - (120 * 86400);
+        foreach ($records as $key => $entry) {
+            $at = is_array($entry) ? strtotime((string) ($entry['at'] ?? '')) : false;
+            if ($at !== false && $at < $cutoff) {
+                unset($records[$key]);
+            }
+        }
+        if (count($records) > 2000) {
+            uasort($records, static fn ($left, $right): int => strcmp((string) ($right['at'] ?? ''), (string) ($left['at'] ?? '')));
+            $records = array_slice($records, 0, 2000, true);
+        }
+        $encoded = json_encode(['records' => $records], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+        rewind($handle);
+        ftruncate($handle, 0);
+        fwrite($handle, (string) $encoded);
+        fflush($handle);
+    } finally {
+        flock($handle, LOCK_UN);
+        fclose($handle);
+    }
+    return ['ok' => true, 'record' => $record];
+}
+
+// The account sync knows a position is gone; only the exit worker knows why. This is where
+// the two meet, so a closed position can say "sold by the stop loss at 0.10" instead of
+// simply disappearing from the open list.
+function live_state_with_exit_reasons(array $payload): array
+{
+    $state = is_array($payload['state'] ?? null) ? $payload['state'] : $payload;
+    $positions = is_array($state['positions'] ?? null) ? $state['positions'] : [];
+    if ($positions === []) {
+        return $payload;
+    }
+    $records = live_exit_records();
+    if ($records === []) {
+        return $payload;
+    }
+    foreach ($positions as $index => $position) {
+        if (!is_array($position)) {
+            continue;
+        }
+        $tokenId = trim((string) ($position['tokenId'] ?? $position['assetId'] ?? ''));
+        $record = $tokenId === '' ? null : ($records[$tokenId] ?? null);
+        if (!is_array($record)) {
+            continue;
+        }
+        // Annotation only. Whether the position is open or closed remains Polymarket's
+        // answer -- a recorded exit that has not settled yet must not make a position look
+        // closed before the account says it is.
+        $positions[$index]['exitReason'] = $record['reason'] ?? 'stop';
+        $positions[$index]['exitRecordedAt'] = $record['at'] ?? null;
+        $positions[$index]['exitPrice'] = $record['exitPrice'] ?? null;
+        $positions[$index]['exitStopPrice'] = $record['stopPrice'] ?? null;
+        $positions[$index]['exitBestBid'] = $record['bestBid'] ?? null;
+        $positions[$index]['exitBestAsk'] = $record['bestAsk'] ?? null;
+        $positions[$index]['exitOrderId'] = $record['orderId'] ?? null;
+    }
+    if (is_array($payload['state'] ?? null)) {
+        $payload['state']['positions'] = $positions;
+        return $payload;
+    }
+    $payload['positions'] = $positions;
+    return $payload;
+}
+
 function live_entry_claim_key(string $tokenId, string $side): string
 {
     return strtoupper($side) . ':' . $tokenId;
@@ -4952,6 +5085,14 @@ function live_entry_claim_request(array $payload): array
 
 try {
     $action = $_GET['action'] ?? 'markets';
+
+    if ($action === 'live-exit-record') {
+        if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+            respond(['ok' => false, 'error' => 'POST is required'], 405);
+        }
+        require_trading_trigger_key();
+        respond(live_exit_record_request(request_payload()));
+    }
 
     if ($action === 'live-entry-claim') {
         if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
@@ -5442,6 +5583,9 @@ try {
         if ($target === 'paper') {
             $payload = paper_state_with_consistent_portfolios($payload, $summary, $strategyId);
             $payload = compact_state_payload($target, $payload, $summary, $strategyId, $executionOffset);
+        }
+        if ($target === 'live') {
+            $payload = live_state_with_exit_reasons($payload);
         }
         respond($payload);
     }
