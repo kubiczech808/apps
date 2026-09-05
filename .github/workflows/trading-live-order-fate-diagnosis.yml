@@ -1,0 +1,39 @@
+name: Trading Live Order Fate Diagnosis
+
+# Read-only diagnostic, manual only. The acceptance diagnosis answered what the exchange
+# SAID about each order. This answers what the account ended up HOLDING, by cross-checking
+# every submitted attempt in the retained run logs against live-state's positions and
+# resting orders.
+#
+# The count that matters is by order type: a fill-and-kill order that is neither held nor
+# resting was killed, because a kill order does not rest and nothing survives it. If the
+# queued FAK orders are all gone, `delayed` on this account is not a fill on its way.
+#
+# Places no orders, writes nothing, needs no secrets.
+on:
+  workflow_dispatch:
+    inputs:
+      runs:
+        description: "How many recent runs to read per live portfolio"
+        required: false
+        default: "24"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Diagnose what each accepted live order turned into
+        working-directory: trading
+        env:
+          LIVE_DIAGNOSIS_RUNS: ${{ inputs.runs || '24' }}
+        run: node tools/live-order-fate-diagnosis.mjs
