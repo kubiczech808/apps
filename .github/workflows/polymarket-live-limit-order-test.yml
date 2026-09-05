@@ -244,7 +244,13 @@ jobs:
               "LIVE_MAX_PROBABILITY": live.get("maxProbability"),
               "LIVE_STAKE_USDC": live.get("stakeUsdc"),
               "MAX_ORDER_FRACTION": live.get("maxOrderFraction"),
+              # Hours is the stored unit. Days is still exported for a portfolio saved
+              # before the switch; the executor reads it only when no hours value came
+              # through, so 12 or 6 hours can no longer be rounded back up to a day.
+              "LIVE_MAX_RESOLUTION_HOURS": live.get("maxResolutionHours"),
               "LIVE_MAX_RESOLUTION_DAYS": live.get("maxResolutionDays"),
+              # A separate question from the horizon: only fixtures already under way.
+              "LIVE_REQUIRE_EVENT_STARTED": str(bool(live.get("requireEventStarted", False))).lower(),
               "LIVE_SELECTION_ORDER": live.get("selectionOrder"),
               "LIVE_CONFIG_MIN_LIQUIDITY_USDC": live.get("minLiquidityUsdc"),
               "LIVE_MIN_NET_YIELD": live.get("minNetYield"),

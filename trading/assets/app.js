@@ -229,6 +229,12 @@ const DEFAULT_RISK_ALLOCATION = 5;
 const MIN_RISK_ALLOCATION = 0.01;
 const MAX_RISK_ALLOCATION = 1000;
 const DEFAULT_MAX_RESOLUTION_DAYS = 7;
+const HOURS_PER_DAY = 24;
+// Hours is the unit the resolution filter is set in. Days could not express 12, 6 or 1
+// hour at all: the field rounded to a whole day with a minimum of 1, so everything under
+// a day became 24 hours.
+const DEFAULT_MAX_RESOLUTION_HOURS = DEFAULT_MAX_RESOLUTION_DAYS * HOURS_PER_DAY;
+const MAX_RESOLUTION_HOURS_CEILING = 365 * HOURS_PER_DAY;
 // Annualizing a few minutes as if the trade could be repeated continuously is
 // misleading, so potential p.a. is floored. The floor is one hour rather than one
 // day: the strategy targets markets resolving the same day or already running, and
@@ -338,8 +344,10 @@ const els = {
   riskAllocationLabel: document.querySelector("[data-risk-allocation-label]"),
   riskAllocationValue: document.querySelector("[data-risk-allocation-value]"),
   riskAllocationNote: document.querySelector("[data-risk-allocation-note]"),
-  maxResolutionDays: document.querySelector("[data-max-resolution-days]"),
-  maxResolutionDaysLabel: document.querySelector("[data-max-resolution-days-label]"),
+  maxResolutionHours: document.querySelector("[data-max-resolution-hours]"),
+  maxResolutionHoursLabel: document.querySelector("[data-max-resolution-hours-label]"),
+  requireEventStarted: document.querySelector("[data-require-event-started]"),
+  requireEventStartedLabel: document.querySelector("[data-require-event-started-label]"),
   selectionOrder: document.querySelector("[data-selection-order]"),
   selectionOrderLabel: document.querySelector("[data-selection-order-label]"),
   minLiquidity: document.querySelector("[data-min-liquidity]"),
@@ -1341,15 +1349,39 @@ function selectionOrderLabel(value, config = {}) {
   return normalizeSelectionOrder(value) === "highest_reward_risk_first" ? "Reward/risk" : "Net yield";
 }
 
-function normalizeOptionalDays(value) {
+// Blank and non-positive both mean "not set". Zero is not a way to ask for events already
+// under way -- a horizon of zero hours is a market that has already resolved. That is its
+// own switch, requireEventStarted.
+function normalizeOptionalHours(value) {
   if (value === "" || value == null) return null;
   const numeric = Number(value);
   if (!Number.isFinite(numeric) || numeric <= 0) return null;
-  return Math.min(365, Math.max(1, Math.round(numeric)));
+  return Math.min(MAX_RESOLUTION_HOURS_CEILING, Math.max(1, Math.round(numeric * 100) / 100));
 }
 
-function resolutionDaysForMode(mode = state.mode) {
-  return normalizeOptionalDays(portfolioConfigForMode(mode).maxResolutionDays) || DEFAULT_MAX_RESOLUTION_DAYS;
+// A config's horizon whatever unit it was saved in. Portfolios written before the switch
+// carry only maxResolutionDays and have to keep meaning exactly what they meant.
+function configMaxResolutionHours(config = {}, fallback = DEFAULT_MAX_RESOLUTION_HOURS) {
+  const hours = normalizeOptionalHours(config?.maxResolutionHours);
+  if (hours != null) return hours;
+  const days = Number(config?.maxResolutionDays);
+  if (Number.isFinite(days) && days > 0) return normalizeOptionalHours(days * HOURS_PER_DAY);
+  return fallback;
+}
+
+function resolutionHoursForMode(mode = state.mode) {
+  return configMaxResolutionHours(portfolioConfigForMode(mode));
+}
+
+// Hours read badly once the horizon is long -- "168 h" is a week nobody counts in hours --
+// and days read badly once it is short, so each range is shown in its own unit.
+function formatHorizonHours(hours) {
+  const value = Number(hours);
+  if (!Number.isFinite(value)) return "-";
+  if (value < 1) return `${Math.round(value * 60)} min`;
+  if (value < 48) return `${Number(value.toFixed(value < 10 ? 1 : 0))} h`;
+  const days = value / HOURS_PER_DAY;
+  return `${Number(days.toFixed(days < 10 ? 1 : 0))} d`;
 }
 
 function normalizeOptionalMoney(value) {
@@ -5297,7 +5329,8 @@ function syncDraftRiskAllocationControl(value, context = {}) {
 function syncPortfolioParameterControls(configOverride = null, options = {}) {
   const mode = options.mode || state.mode;
   const config = configOverride || portfolioConfigForMode(mode);
-  const maxDays = normalizeOptionalDays(config.maxResolutionDays) || DEFAULT_MAX_RESOLUTION_DAYS;
+  const maxHours = configMaxResolutionHours(config);
+  const requireEventStarted = config.requireEventStarted === true;
   const liquidity = normalizeOptionalMoney(config.minLiquidityUsdc);
   const minNetYield = normalizeMinimumNetYield(config.minNetYield);
   const order = normalizeSelectionOrder(config.selectionOrder);
@@ -5345,8 +5378,14 @@ function syncPortfolioParameterControls(configOverride = null, options = {}) {
   if (els.maxEligibilityThresholdLabel) els.maxEligibilityThresholdLabel.textContent = maxThreshold == null ? "No maximum" : probability(maxThreshold);
   syncDraftRiskAllocationControl(allocation, capitalContext);
   if (els.limitOrders) els.limitOrders.checked = Boolean(limitOrders);
-  if (els.maxResolutionDays) els.maxResolutionDays.value = String(maxDays);
-  if (els.maxResolutionDaysLabel) els.maxResolutionDaysLabel.textContent = `${maxDays} d`;
+  if (els.maxResolutionHours && document.activeElement !== els.maxResolutionHours) {
+    els.maxResolutionHours.value = String(maxHours);
+  }
+  // The number typed is hours; the label reads it back in whichever unit is legible, so a
+  // 168 stays recognisable as the week it is.
+  if (els.maxResolutionHoursLabel) els.maxResolutionHoursLabel.textContent = formatHorizonHours(maxHours);
+  if (els.requireEventStarted) els.requireEventStarted.checked = requireEventStarted;
+  if (els.requireEventStartedLabel) els.requireEventStartedLabel.textContent = requireEventStarted ? "On" : "Off";
   if (els.selectionOrder) els.selectionOrder.value = order;
   if (els.selectionOrderLabel) els.selectionOrderLabel.textContent = selectionOrderLabel(order, config);
   if (els.minLiquidity) els.minLiquidity.value = liquidity == null ? "" : String(liquidity);
@@ -5491,7 +5530,11 @@ function portfolioPrefillFromDataset(dataset = {}) {
   const maxProbability = Number(read("maxProbability"));
   if (Number.isFinite(maxProbability) && maxProbability > 0 && maxProbability <= 1) prefill.maxProbability = maxProbability;
   const days = Number(read("days"));
-  if (Number.isFinite(days) && days > 0) prefill.maxResolutionDays = Math.round(days);
+  if (Number.isFinite(days) && days > 0) {
+    prefill.maxResolutionDays = Math.round(days);
+    // The simulation grid measures in whole days; the portfolio it seeds stores hours.
+    prefill.maxResolutionHours = normalizeOptionalHours(Math.round(days) * HOURS_PER_DAY);
+  }
   const marketType = read("marketType");
   if (["all", "binary", "multi"].includes(marketType)) {
     prefill.marketType = marketType;
@@ -6082,10 +6125,16 @@ function parameterDraftFromControls(baseDraft = {}) {
     const value = normalizeRiskAllocation(numberValue(els.riskAllocation));
     if (value != null) draft.stakeUsdc = value;
   }
-  if (hasValue(els.maxResolutionDays)) {
-    const value = normalizeOptionalDays(els.maxResolutionDays.value);
-    if (value != null) draft.maxResolutionDays = value;
+  if (hasValue(els.maxResolutionHours)) {
+    const value = normalizeOptionalHours(els.maxResolutionHours.value);
+    if (value != null) {
+      draft.maxResolutionHours = value;
+      // Sent alongside so a reader that has not migrated yet still gets a horizon rather
+      // than nothing. Hours is what the server stores; this is only its days reading.
+      draft.maxResolutionDays = Math.max(1, Math.min(365, Math.round(value / HOURS_PER_DAY)));
+    }
   }
+  if (els.requireEventStarted) draft.requireEventStarted = Boolean(els.requireEventStarted.checked);
   if (els.selectionOrder) draft.selectionOrder = normalizeSelectionOrder(els.selectionOrder.value);
   if (els.minLiquidity) draft.minLiquidityUsdc = normalizeOptionalMoney(els.minLiquidity.value);
   if (hasValue(els.minNetYield)) draft.minNetYield = normalizeMinimumNetYield(numberValue(els.minNetYield) / 100);
@@ -8465,13 +8514,15 @@ function portfolioRuleRows(portfolio = {}) {
   const mode = portfolio.id ? paperModeFromStrategyId(portfolio.id) : state.mode;
   const config = portfolioConfigForMode(mode);
   const threshold = thresholdForMode(mode);
-  const maxResolutionDays = resolutionDaysForMode(mode);
+  const maxResolutionHours = resolutionHoursForMode(mode);
   const minLiquidityUsdc = Number(config.minLiquidityUsdc);
   const minNetYield = normalizeMinimumNetYield(config.minNetYield);
   const priority = config.selectionOrder === "highest_reward_risk_first"
     ? "Highest reward/risk, then net yield"
     : "Highest net yield, then net gain";
-  const resolution = `Max ${maxResolutionDays.toLocaleString("en-US", { maximumFractionDigits: 0 })} days`;
+  const resolution = config.requireEventStarted === true
+    ? `Max ${formatHorizonHours(maxResolutionHours)}, only events under way`
+    : `Max ${formatHorizonHours(maxResolutionHours)}`;
   const rows = [
     ["Probability threshold", probabilityRangeRuleValue(config, threshold)],
     ["Stake sizing", stakeSizingRuleValue(mode, portfolio)],
@@ -8515,7 +8566,7 @@ function livePortfolioRuleRows() {
   const mode = isLiveMode() ? state.mode : "live";
   const config = portfolioConfigForMode(mode);
   const useLimitOrders = config.useLimitOrders === true;
-  const maxResolutionDays = resolutionDaysForMode(mode);
+  const maxResolutionHours = resolutionHoursForMode(mode);
   const minLiquidityUsdc = normalizeOptionalMoney(config.minLiquidityUsdc);
   const minNetYield = normalizeMinimumNetYield(config.minNetYield);
   const includeOnlyTags = normalizeMarketTagList(config.includeOnlyMarketTags);
@@ -8527,7 +8578,9 @@ function livePortfolioRuleRows() {
     ...(isLivePortfolioMode(mode) ? [["Initial capital", liveInitialCapitalForMode(mode, config) == null ? "not set" : money(liveInitialCapitalForMode(mode, config))]] : []),
     ["Probability threshold", probabilityRangeRuleValue(config, currentEligibilityThreshold())],
     ["Stake sizing", stakeSizingRuleValue(mode, state.liveState?.portfolio)],
-    ["Resolution filter", `Max ${maxResolutionDays} days`],
+    ["Resolution filter", config.requireEventStarted === true
+      ? `Max ${formatHorizonHours(maxResolutionHours)}, only events under way`
+      : `Max ${formatHorizonHours(maxResolutionHours)}`],
     ["Trade priority", priority],
     ["Market type", portfolioMarketTypeLabel(config.marketType)],
     ...(config.excludeOverUnderMarkets === true ? [["Over/Under markets", "Excluded"]] : []),
@@ -8920,8 +8973,9 @@ function portfolioCandidateFilterReasons(item, mode = state.mode) {
   const displayStatus = portfolioEvaluationStatus(item);
   const probabilitySource = normalizeProbabilitySource(config.probabilitySource);
   const selectedProbability = portfolioProbability(item, config);
-  const maxDays = resolutionDaysForMode(normalizedMode);
+  const maxHours = resolutionHoursForMode(normalizedMode);
   const days = evaluationDaysLeft(item);
+  const hours = Number.isFinite(days) ? days * HOURS_PER_DAY : NaN;
   const liquidity = rowVolumeUsdc(item);
   const minLiquidity = normalizeOptionalMoney(config.minLiquidityUsdc);
   const minNetYield = normalizeMinimumNetYield(config.minNetYield);
@@ -8990,8 +9044,11 @@ function portfolioCandidateFilterReasons(item, mode = state.mode) {
     if (Number.isFinite(minLiquidity) && liquidity < minLiquidity) {
       reasons.push(`volume ${money(liquidity)} below ${money(minLiquidity)}`);
     }
-    if (Number.isFinite(days) && Number.isFinite(maxDays) && days > maxDays) {
-      reasons.push(`resolves in ${compactDays(days)}, beyond ${maxDays} days`);
+    if (Number.isFinite(hours) && Number.isFinite(maxHours) && hours > maxHours) {
+      reasons.push(`resolves in ${compactDays(days)}, beyond ${formatHorizonHours(maxHours)}`);
+    }
+    if (config.requireEventStarted === true && item?.eventStarted !== true) {
+      reasons.push(item?.eventStarted === false ? "event has not started yet" : "no kickoff time to confirm the event is under way");
     }
     return reasons;
   }
@@ -9020,8 +9077,13 @@ function portfolioCandidateFilterReasons(item, mode = state.mode) {
   }
   if (!Number.isFinite(days)) {
     reasons.push("missing resolution date");
-  } else if (days > maxDays) {
-    reasons.push(`resolution ${days.toFixed(2)} days exceeds max ${maxDays}`);
+  } else if (hours > maxHours) {
+    reasons.push(`resolution ${formatHorizonHours(hours)} exceeds max ${formatHorizonHours(maxHours)}`);
+  }
+  // The horizon and "has it started" are different questions, so they are refused
+  // separately -- a row can be well inside the window and still not be under way.
+  if (config.requireEventStarted === true && item?.eventStarted !== true) {
+    reasons.push(item?.eventStarted === false ? "event has not started yet" : "no kickoff time to confirm the event is under way");
   }
   if (minLiquidity != null && liquidity < minLiquidity) {
     reasons.push(`volume ${money(liquidity)} below ${money(minLiquidity)}`);
@@ -9520,6 +9582,8 @@ const PORTFOLIO_CONFIG_HISTORY_LABELS = {
   maxProbability: "Maximum probability",
   stakeUsdc: "Fixed stake",
   maxResolutionDays: "Max resolution days",
+  maxResolutionHours: "Max resolution hours",
+  requireEventStarted: "Only events under way",
   selectionOrder: "Trade priority",
   marketType: "Market type",
   excludeOverUnderMarkets: "Exclude Over/Under (O/U)",
@@ -14205,14 +14269,25 @@ els.limitOrders?.addEventListener("change", () => {
   rerenderCurrentDashboard();
 });
 
-els.maxResolutionDays?.addEventListener("input", () => {
-  if (parameterDraftInputIsEmpty(els.maxResolutionDays)) {
-    if (els.maxResolutionDaysLabel) els.maxResolutionDaysLabel.textContent = "-";
+els.maxResolutionHours?.addEventListener("input", () => {
+  if (parameterDraftInputIsEmpty(els.maxResolutionHours)) {
+    if (els.maxResolutionHoursLabel) els.maxResolutionHoursLabel.textContent = "-";
     return;
   }
-  const value = normalizeOptionalDays(els.maxResolutionDays.value) || DEFAULT_MAX_RESOLUTION_DAYS;
-  if (updateParameterDraft({ maxResolutionDays: value })) return;
-  updatePortfolioConfigForMode(state.mode, { maxResolutionDays: value });
+  const value = normalizeOptionalHours(els.maxResolutionHours.value) || DEFAULT_MAX_RESOLUTION_HOURS;
+  // Days is written alongside so a reader that has not migrated yet still sees a horizon.
+  const days = Math.max(1, Math.min(365, Math.round(value / HOURS_PER_DAY)));
+  if (updateParameterDraft({ maxResolutionHours: value, maxResolutionDays: days })) return;
+  updatePortfolioConfigForMode(state.mode, { maxResolutionHours: value, maxResolutionDays: days });
+  savePortfolioConfigSoon();
+  syncPortfolioParameterControls();
+  rerenderCurrentDashboard();
+});
+
+els.requireEventStarted?.addEventListener("change", () => {
+  const value = Boolean(els.requireEventStarted.checked);
+  if (updateParameterDraft({ requireEventStarted: value })) return;
+  updatePortfolioConfigForMode(state.mode, { requireEventStarted: value });
   savePortfolioConfigSoon();
   syncPortfolioParameterControls();
   rerenderCurrentDashboard();

@@ -84,7 +84,31 @@ const LIVE_STAKE_USDC = envNumber("LIVE_STAKE_USDC", envNumber("LIVE_FIXED_STAKE
 const MAX_ORDER_NOTIONAL_USDC = envNumber("MAX_ORDER_NOTIONAL_USDC", envNumber("LIVE_MAX_ORDER_NOTIONAL_USDC", Infinity));
 const CANDIDATE_SCAN_LIMIT = envNumber("LIVE_CANDIDATE_SCAN_LIMIT", 120);
 const REJECTED_CANDIDATE_LOG_LIMIT = envNumber("LIVE_REJECTED_CANDIDATE_LOG_LIMIT", 16);
-const MAX_RESOLUTION_DAYS = envNumber("LIVE_MAX_RESOLUTION_DAYS", 7);
+// The resolution horizon, in HOURS. Whole days could not express 12, 6 or 1 hour at all,
+// which is what short-dated portfolios need. LIVE_MAX_RESOLUTION_DAYS is still read so an
+// environment set before this change keeps meaning exactly what it meant.
+//
+// Zero is not a horizon and never falls through to a default: a portfolio set to 0 used to
+// trade a 7-day horizon, the opposite of what typing 0 intends. "Only events already under
+// way" is a separate question with its own switch -- see LIVE_REQUIRE_EVENT_STARTED.
+const HOURS_PER_DAY = 24;
+const MAX_RESOLUTION_HOURS = (() => {
+  const hours = envNumber("LIVE_MAX_RESOLUTION_HOURS", null);
+  if (Number.isFinite(hours) && hours > 0) return Math.max(1, Math.min(365 * HOURS_PER_DAY, hours));
+  const days = envNumber("LIVE_MAX_RESOLUTION_DAYS", 7);
+  return Number.isFinite(days) && days > 0 ? days * HOURS_PER_DAY : null;
+})();
+const REQUIRE_EVENT_STARTED = String(process.env.LIVE_REQUIRE_EVENT_STARTED || "").toLowerCase() === "true";
+
+// A horizon a person can read at either end of the scale.
+function formatHorizonHours(hours) {
+  const value = Number(hours);
+  if (!Number.isFinite(value)) return "-";
+  if (value < 1) return `${Math.round(value * 60)} min`;
+  if (value < 48) return `${Number(value.toFixed(value < 10 ? 1 : 0))} h`;
+  const days = value / HOURS_PER_DAY;
+  return `${Number(days.toFixed(days < 10 ? 1 : 0))} d`;
+}
 const SELECTION_ORDER = process.env.LIVE_SELECTION_ORDER === "highest_reward_risk_first" ? "highest_reward_risk_first" : "highest_ev_pa_first";
 const ORDER_SIZE_MODE = String(process.env.LIVE_ORDER_SIZE_MODE || "stake_fraction").toLowerCase();
 const USE_LIMIT_ORDERS = String(process.env.USE_LIMIT_ORDERS ?? "true").toLowerCase() !== "false";
@@ -1112,8 +1136,17 @@ function prefilterLiveCandidate(item) {
   // capital in a still-perfectly-tradable market. The two are independent, so this stays
   // even though a stale/estimated date is no longer used to decide whether a market has
   // ended.
-  if (Number.isFinite(MAX_RESOLUTION_DAYS) && Number.isFinite(days) && days > MAX_RESOLUTION_DAYS) {
-    reasons.push(`stored resolution ${days.toFixed(2)} days exceeds live max ${MAX_RESOLUTION_DAYS} days`);
+  const hours = Number.isFinite(days) ? days * HOURS_PER_DAY : null;
+  if (MAX_RESOLUTION_HOURS != null && hours != null && hours > MAX_RESOLUTION_HOURS) {
+    reasons.push(`stored resolution ${formatHorizonHours(hours)} exceeds live max ${formatHorizonHours(MAX_RESOLUTION_HOURS)}`);
+  }
+  // A different question from the horizon, and named separately so a reader can tell which
+  // rule refused the market. A row that cannot show a kickoff is excluded rather than
+  // assumed to have started.
+  if (REQUIRE_EVENT_STARTED && item?.eventStarted !== true) {
+    reasons.push(item?.eventStarted === false
+      ? "this event has not started yet and this portfolio only takes events already under way"
+      : "no kickoff time is published for this market, so it cannot be shown to be under way");
   }
   return {
     passed: reasons.length === 0,
@@ -5446,7 +5479,8 @@ async function main() {
       maxSpread: MAX_SPREAD,
       minVolume24hr: MIN_VOLUME_24H,
       minNetYield: MIN_NET_YIELD,
-      maxResolutionDays: MAX_RESOLUTION_DAYS,
+      maxResolutionHours: MAX_RESOLUTION_HOURS,
+      requireEventStarted: REQUIRE_EVENT_STARTED,
       selectionOrder: SELECTION_ORDER,
       stakeUsdc: Number(configuredStakeUsdc.toFixed(5)),
       maxOrderNotionalCapUsdc: Number.isFinite(MAX_ORDER_NOTIONAL_USDC) ? MAX_ORDER_NOTIONAL_USDC : null,
@@ -5507,7 +5541,8 @@ async function main() {
         maxSpread: MAX_SPREAD,
         minVolume24hr: MIN_VOLUME_24H,
         minNetYield: MIN_NET_YIELD,
-        maxResolutionDays: MAX_RESOLUTION_DAYS,
+        maxResolutionHours: MAX_RESOLUTION_HOURS,
+        requireEventStarted: REQUIRE_EVENT_STARTED,
         executionTrigger: EXECUTION_TRIGGER,
         freeCapitalPriority: true,
         hasUsableFreeCash,

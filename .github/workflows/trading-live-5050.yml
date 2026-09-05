@@ -160,7 +160,13 @@ jobs:
               "LIVE_MAX_PROBABILITY": cfg.get("maxProbability"),
               "LIVE_MARKET_TYPE": cfg.get("marketType"),
               "LIVE_EXCLUDE_OVER_UNDER_MARKETS": str(bool(cfg.get("excludeOverUnderMarkets", False))).lower(),
+              # Hours is the stored unit. Days is still exported for a portfolio saved
+              # before the switch; the executor reads it only when no hours value came
+              # through, so 12 or 6 hours can no longer be rounded back up to a day.
+              "LIVE_MAX_RESOLUTION_HOURS": cfg.get("maxResolutionHours"),
               "LIVE_MAX_RESOLUTION_DAYS": cfg.get("maxResolutionDays"),
+              # A separate question from the horizon: only fixtures already under way.
+              "LIVE_REQUIRE_EVENT_STARTED": str(bool(cfg.get("requireEventStarted", False))).lower(),
               "LIVE_CONFIG_MIN_LIQUIDITY_USDC": cfg.get("minLiquidityUsdc"),
               # Which Polymarket tags this portfolio may bid on. A saved empty list means
               # every tag, and has to reach the executor as an empty string rather than

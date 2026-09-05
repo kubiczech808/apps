@@ -816,6 +816,10 @@ test("candidate lifecycle: a portfolio's resolution-day ceiling still applies to
     minProbability: 0.7,
     minLiquidityUsdc: 0,
     minNetYield: 0,
+    // A portfolio saved before the unit switch: days only, no hours. Hours wins wherever
+    // both are present, so leaving the shipped strategy's hours in place would make every
+    // maxResolutionDays below a no-op and the assertions meaningless.
+    maxResolutionHours: undefined,
     maxResolutionDays: 7,
     excludedCandidateTokenIds: new Set(),
   };
@@ -845,7 +849,160 @@ test("candidate lifecycle: a portfolio's resolution-day ceiling still applies to
     "still tradable, but 60 days exceeds this portfolio's 7-day ceiling");
   const filtered = bot.portfolioFilterResult(farOut, strategy);
   assert.equal(filtered.eligible, false);
-  assert.match(filtered.reasons.join(" "), /resolution 60\.00 days exceeds max 7/);
+  assert.match(filtered.reasons.join(" "), /resolution 60 d exceeds max 7 d/);
+
+  // The horizon is stored in HOURS now, so a portfolio can finally say 12, 6 or 1 -- which
+  // whole days could not express at all: the API normaliser rounded to an integer day with
+  // a minimum of 1, so everything under a day became 24 hours.
+  //
+  // A portfolio still holding the old maxResolutionDays must keep meaning exactly what it
+  // meant, which is what the assertions above just showed.
+  const hourly = { ...strategy, maxResolutionDays: undefined, maxResolutionHours: 6 };
+  const inSix = { ...nearby, tokenId: "in-six-hours", daysToResolution: 5 / 24 };
+  const inTwelve = { ...nearby, tokenId: "in-twelve-hours", daysToResolution: 12 / 24 };
+  assert.equal(bot.portfolioFilterResult(inSix, hourly).eligible, true, "5 hours is inside a 6-hour horizon");
+  assert.equal(bot.portfolioFilterResult(inTwelve, hourly).eligible, false, "12 hours is not");
+  assert.equal(bot.strategyEligibleCandidates([inSix, inTwelve], hourly).length, 1);
+  assert.match(bot.portfolioFilterResult(inTwelve, hourly).reasons.join(" "), /exceeds max 6 h/);
+
+  // One hour, the tightest setting asked for, and half an hour inside it.
+  const oneHour = { ...strategy, maxResolutionDays: undefined, maxResolutionHours: 1 };
+  assert.equal(bot.portfolioFilterResult({ ...nearby, daysToResolution: 0.5 / 24 }, oneHour).eligible, true);
+  assert.equal(bot.portfolioFilterResult({ ...nearby, daysToResolution: 2 / 24 }, oneHour).eligible, false);
+
+  // Zero is not a horizon and must never again mean "use the default". It used to fall
+  // through to 7 days, so a portfolio set to 0 quietly traded a week-long horizon -- the
+  // exact opposite of what typing 0 intends.
+  assert.equal(bot.normalizeMaxResolutionHours(0), null);
+  assert.equal(bot.normalizeMaxResolutionHours(-5), null);
+  assert.equal(bot.normalizeMaxResolutionHours("12"), 12);
+  assert.equal(bot.normalizeMaxResolutionHours(0.25), 1, "below an hour is clamped, not accepted as zero");
+
+  // Days and hours describe the same horizon, so a converted setting behaves identically.
+  const asDays = { ...strategy, maxResolutionDays: 2 };
+  assert.equal(asDays.maxResolutionHours, undefined, "the days fixture must not carry an hours value that would win");
+  const asHours = { ...strategy, maxResolutionDays: undefined, maxResolutionHours: 48 };
+  for (const days of [1, 1.9, 2.1, 5]) {
+    const row = { ...nearby, daysToResolution: days };
+    assert.equal(
+      bot.portfolioFilterResult(row, asDays).eligible,
+      bot.portfolioFilterResult(row, asHours).eligible,
+      `2 days and 48 hours must agree at ${days} days`,
+    );
+  }
+});
+
+// Asked for alongside the hours: a way to take only events that are already under way.
+// That is a different question from the horizon -- a match in play still has an hour or
+// two to resolution -- so it is its own setting rather than a magic value of the horizon.
+test("candidate lifecycle: the in-play filter asks whether the event started, not when it ends", () => {
+  const strategy = {
+    ...bot.PAPER_STRATEGIES.conservative,
+    minProbability: 0.7,
+    minLiquidityUsdc: 0,
+    minNetYield: 0,
+    maxResolutionHours: 6,
+    requireEventStarted: true,
+    excludedCandidateTokenIds: new Set(),
+  };
+  const base = {
+    status: "ELIGIBLE",
+    marketProbability: 0.8,
+    marketPrice: 0.8,
+    bestBid: 0.8,
+    bestAsk: 0.81,
+    spread: 0.01,
+    volumeUsdc: 50000,
+    totalCostUsdc: 5,
+    netGainIfWinUsdc: 1,
+    netYield: 0.2,
+    daysToResolution: 2 / 24,
+    marketClosed: false,
+    marketActive: true,
+    acceptingOrders: true,
+  };
+
+  const running = { ...base, tokenId: "running", eventStarted: true };
+  const upcoming = { ...base, tokenId: "upcoming", eventStarted: false };
+  // No kickoff is published at all -- most non-sports markets. "We cannot tell" must not
+  // be read as "it started", which is why the row carries null rather than false.
+  const unknown = { ...base, tokenId: "unknown", eventStarted: null };
+
+  assert.equal(bot.portfolioFilterResult(running, strategy).eligible, true);
+  assert.equal(bot.portfolioFilterResult(upcoming, strategy).eligible, false);
+  assert.equal(bot.portfolioFilterResult(unknown, strategy).eligible, false,
+    "a market that cannot show it is under way is excluded, not assumed");
+  assert.deepEqual(
+    bot.strategyEligibleCandidates([running, upcoming, unknown], strategy).map((row) => row.tokenId),
+    ["running"],
+  );
+
+  // The two refusals have to be distinguishable, or a reader cannot tell which rule bit.
+  assert.match(bot.portfolioFilterResult(upcoming, strategy).reasons.join(" "), /has not started yet/);
+  assert.match(bot.portfolioFilterResult(unknown, strategy).reasons.join(" "), /no kickoff time is published/);
+
+  // Switched off, it must not filter anything -- including the rows it cannot judge.
+  const off = { ...strategy, requireEventStarted: false };
+  assert.equal(bot.strategyEligibleCandidates([running, upcoming, unknown], off).length, 3);
+});
+
+// The filter above reads item.eventStarted. The rows it actually runs against are the
+// catalogue's, so the field has to be written THERE, not only onto the evaluation row --
+// otherwise every market reads as "unknown" and an in-play portfolio refuses all of them.
+test("candidate lifecycle: the catalogue row itself records whether the fixture kicked off", () => {
+  const market = (extra) => ({
+    conditionId: "0xabc",
+    question: "Will Team A win?",
+    slug: "team-a-vs-team-b-2026-09-05",
+    outcomes: JSON.stringify(["Yes", "No"]),
+    outcomePrices: JSON.stringify(["0.80", "0.20"]),
+    clobTokenIds: JSON.stringify(["111", "222"]),
+    bestBid: 0.79,
+    bestAsk: 0.81,
+    spread: 0.02,
+    liquidity: 50000,
+    volume24hr: 20000,
+    active: true,
+    closed: false,
+    acceptingOrders: true,
+    endDate: new Date(Date.now() + 6 * 3600 * 1000).toISOString(),
+    ...extra,
+  });
+  // A real kickoff from Gamma, corroborated by a fixture signal, two hours in the past.
+  const started = bot.preferredMarketObservation(market({
+    gameId: "g1",
+    gameStartTime: new Date(Date.now() - 2 * 3600 * 1000).toISOString(),
+  }));
+  assert.equal(started.eventStarted, true);
+
+  const upcoming = bot.preferredMarketObservation(market({
+    gameId: "g1",
+    gameStartTime: new Date(Date.now() + 2 * 3600 * 1000).toISOString(),
+  }));
+  assert.equal(upcoming.eventStarted, false);
+
+  // No kickoff published at all -- most non-sports markets. Unknown stays unknown: false
+  // would claim the fixture has not started, which nothing here actually knows.
+  const unknown = bot.preferredMarketObservation(market({ slug: "will-the-fed-cut-rates" }));
+  assert.equal(unknown.eventStarted, null);
+
+  // A date recovered from the slug is a whole-day bucket stretched to 23:59:59. It can
+  // say which day, never whether the match is under way, so it must not answer at all.
+  const slugOnly = bot.preferredMarketObservation(market());
+  assert.equal(slugOnly.eventStarted, null,
+    "a slug-derived day is not a kickoff time and must not be read as one");
+
+  // And the answer is recomputed when a stored row is loaded: it is true of a moment, not
+  // of the row. A market scanned twenty minutes before kickoff stored false, and a stored
+  // false would keep an in-play portfolio out of the fixture until the next rescan --
+  // exactly the window such a portfolio exists to trade.
+  assert.equal(upcoming.eventStartTime, upcoming.scheduledEventDate,
+    "the published kickoff is stored, which is the only thing the answer can be recomputed from");
+  assert.equal(slugOnly.eventStartTime, null, "a slug-derived day is not a kickoff and is not stored as one");
+  const stale = { ...upcoming, eventStarted: false, eventStartTime: new Date(Date.now() - 60000).toISOString() };
+  assert.equal(bot.normalizeMarketObservationLifecycle(stale).eventStarted, true);
+  // And a stored row with no kickoff still cannot answer, rather than inventing one.
+  assert.equal(bot.normalizeMarketObservationLifecycle({ ...unknown }).eventStarted, null);
 });
 
 test("economics: net yield is measured against the real stake, not the target win", () => {
@@ -4456,10 +4613,15 @@ test("5050: the candidate list is judged by its own rule, not market-price econo
   const branch = /if \(isFixedEntryMode\(mode\)\) \{[\s\S]*?return reasons;\n  \}/.exec(app)[0];
   const run = new Function("item", "config", "mode", "deps", `
     const {isFixedEntryMode,normalizeFixedEntryPrice,probability,money,compactDays,
-      normalizeMarketTagList,marketMatchesAllowedTags}=deps;
+      normalizeMarketTagList,marketMatchesAllowedTags,formatHorizonHours}=deps;
+    const HOURS_PER_DAY=24;
     const reasons=[];
     const liquidity=Number(item.volumeUsdc||0), minLiquidity=Number(config.minLiquidityUsdc);
-    const days=Number(item.daysToResolution), maxDays=Number(config.maxResolutionDays);
+    const days=Number(item.daysToResolution);
+    // The horizon is a number of hours now. The row still reports days to resolution, so
+    // the branch converts rather than comparing two different units.
+    const hours=Number.isFinite(days)?days*HOURS_PER_DAY:NaN;
+    const maxHours=Number(config.maxResolutionHours);
     ${branch}
     return reasons;`);
   const deps = {
@@ -4471,8 +4633,9 @@ test("5050: the candidate list is judged by its own rule, not market-price econo
     // The tag restriction is covered by its own test; here it must not interfere.
     normalizeMarketTagList: (value) => (Array.isArray(value) ? value : []),
     marketMatchesAllowedTags: () => true,
+    formatHorizonHours: (value) => `${value / 24} d`,
   };
-  const config = { fixedEntryPrice: 0.5, minLiquidityUsdc: 100, maxResolutionDays: 30 };
+  const config = { fixedEntryPrice: 0.5, minLiquidityUsdc: 100, maxResolutionHours: 30 * 24 };
   const reasons = (item) => run(item, config, "live-5050", deps);
 
   // The case the old filter wrongly hid: expensive now, which is the whole point.
@@ -4495,7 +4658,12 @@ test("5050: the candidate list is judged by its own rule, not market-price econo
   // capital-turnover preference independent of whether the market is tradable. Restored
   // alongside its paper-side (strategyEligibleCandidates/portfolioFilterResult) and
   // live-executor (prefilterLiveCandidate) twins, and the settings-card row that showed it.
-  assert.match(reasons({ bestAsk: 0.95, volumeUsdc: 60000, daysToResolution: 45 })[0], /beyond 30 days/);
+  assert.match(reasons({ bestAsk: 0.95, volumeUsdc: 60000, daysToResolution: 45 })[0], /beyond 30 d/);
+  // And the sub-day horizons the unit switch was made for: whole days could not express
+  // six hours at all, so this row would have been judged against a full day.
+  const sixHours = { ...config, maxResolutionHours: 6 };
+  assert.deepEqual(run({ bestAsk: 0.95, volumeUsdc: 60000, daysToResolution: 5 / 24 }, sixHours, "live-5050", deps), []);
+  assert.match(run({ bestAsk: 0.95, volumeUsdc: 60000, daysToResolution: 12 / 24 }, sixHours, "live-5050", deps)[0], /beyond/);
 
   // It must return before the market-price economics, or those would re-reject it.
   const after = app.slice(app.indexOf(branch) + branch.length);

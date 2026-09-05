@@ -370,6 +370,58 @@ test("created portfolios: a config carrying one is stored beside the shipped fou
   assert.equal(created.archived, false);
 });
 
+// The horizon is saved in HOURS. Whole days could not express 12, 6 or 1 at all -- the
+// normaliser rounded to an integer day with a minimum of 1, so everything under a day
+// silently became 24 hours.
+test("resolution horizon: api.php stores hours, and a portfolio saved in days keeps its ceiling", () => {
+  const saved = normalizeConfig({
+    paper: {
+      inPlay: { displayName: "In-play", maxResolutionHours: 6 },
+      halfDay: { displayName: "Half day", maxResolutionHours: 12 },
+      oneHour: { displayName: "One hour", maxResolutionHours: 1 },
+      // What a client that has not migrated still posts.
+      legacy: { displayName: "Legacy", maxResolutionDays: 3 },
+      // Both, hours authoritative: this is the shape the dashboard sends and the shape
+      // the file itself writes, so the two must not fight.
+      both: { displayName: "Both", maxResolutionHours: 6, maxResolutionDays: 1 },
+    },
+  });
+  assert.equal(saved.paper.inPlay.maxResolutionHours, 6);
+  assert.equal(saved.paper.halfDay.maxResolutionHours, 12);
+  assert.equal(saved.paper.oneHour.maxResolutionHours, 1);
+  assert.equal(saved.paper.legacy.maxResolutionHours, 72, "3 days is 72 hours, unchanged in meaning");
+  assert.equal(saved.paper.both.maxResolutionHours, 6, "hours is the stored unit and wins");
+
+  // Days is written alongside, derived, so a reader that has not migrated sees a sane
+  // number rather than nothing. It is a floor of one day: sub-day precision is exactly
+  // what days cannot carry, which is why hours is what the runtimes read first.
+  assert.equal(saved.paper.inPlay.maxResolutionDays, 1);
+  assert.equal(saved.paper.legacy.maxResolutionDays, 3);
+
+  // Zero is not a horizon and must not fall through to the default. A portfolio set to 0
+  // used to trade the 7-day fallback -- the opposite of what typing 0 intends -- and a
+  // horizon of zero hours would mean an already-resolved market anyway. Wanting only
+  // running fixtures is a separate switch, asserted below.
+  const zeroed = normalizeConfig({ paper: { zero: { displayName: "Zero", maxResolutionHours: 0 } } });
+  assert.equal(zeroed.paper.zero.maxResolutionHours, 168, "0 means unset, so the saved default stands");
+
+  // Re-saving must not drift: a stored 6 has to survive a round trip unchanged, or every
+  // save of an unrelated field would coarsen the horizon a step at a time.
+  const round = normalizeConfig({ paper: { inPlay: saved.paper.inPlay } });
+  assert.equal(round.paper.inPlay.maxResolutionHours, 6);
+
+  // And the in-play switch is stored, and defaults off so no existing portfolio starts
+  // refusing markets it used to trade.
+  const inPlay = normalizeConfig({
+    paper: {
+      running: { displayName: "Running", requireEventStarted: true },
+      any: { displayName: "Any", maxResolutionHours: 6 },
+    },
+  });
+  assert.equal(inPlay.paper.running.requireEventStarted, true);
+  assert.equal(inPlay.paper.any.requireEventStarted, false);
+});
+
 test("created portfolios: an id that could not be a state key or mode is refused", () => {
   const config = normalizeConfig({
     paper: {
@@ -438,19 +490,27 @@ test("created portfolios: the bot builds strategies from the config the workflow
   // PORTFOLIO_USDC and STAKE_USDC arrived with fixed-USDC stake sizing: a created
   // portfolio saved before that field existed still derives its stake from the
   // fraction, so both have to be in scope here or the extraction throws.
-  const build = new Function("process", "MAX_FRACTION", "DEFAULT_MAX_RESOLUTION_DAYS", "PAPER_STRATEGIES",
+  const build = new Function("process", "MAX_FRACTION", "DEFAULT_MAX_RESOLUTION_DAYS",
+    "DEFAULT_MAX_RESOLUTION_HOURS", "MAX_RESOLUTION_HOURS_CEILING", "HOURS_PER_DAY", "PAPER_STRATEGIES",
     "normalizeExecutionTrigger", "PORTFOLIO_USDC", "STAKE_USDC", "console", `
     ${extractFunction(BOT, "normalizeStopLossRiskMultiplier")}
     ${extractFunction(BOT, "rowStopLossRiskMultiplier")}
     // A created portfolio can carry an upper probability bound as well as a floor, so the
     // helper that reads it has to be in scope here too.
     ${extractFunction(BOT, "normalizeOptionalProbability")}
+    // The horizon is stored in hours; the pair that reads it, in whichever unit the row
+    // was saved with, has to come along or the strategy has no ceiling at all.
+    ${extractFunction(BOT, "normalizeMaxResolutionHours")}
+    ${extractFunction(BOT, "configMaxResolutionHours")}
     ${extractFunction(BOT, "customPaperStrategies")}
     return customPaperStrategies;
   `)(
     { env: {} },
     0.05,
     7,
+    7 * 24,
+    365 * 24,
+    24,
     { conservative: { id: "conservative" } },
     (value) => (value === "after_scrape" ? "after_scrape" : "cron"),
     100,
@@ -477,6 +537,8 @@ test("created portfolios: the bot builds strategies from the config the workflow
   assert.equal(strategies.esports.label, "Esports 60");
   assert.equal(strategies.esports.minProbability, 0.6);
   assert.equal(strategies.esports.maxResolutionDays, 3);
+  assert.equal(strategies.esports.maxResolutionHours, 72,
+    "a portfolio saved in days keeps exactly the horizon it had, read as hours");
   assert.equal(strategies.esports.marketType, "binary");
   assert.equal(strategies.esports.automationEnabled, true);
   assert.equal(strategies.esports.allowRotation, true);
@@ -486,6 +548,24 @@ test("created portfolios: the bot builds strategies from the config the workflow
   }));
   assert.equal(legacyStrategies.oldConfig.automationEnabled, true,
     "a created portfolio without the field must keep trading automatically");
+
+  // The whole point of the unit: a sub-day horizon has to survive the trip. Reading days
+  // first would round 6 up to a whole day and quietly trade a 24-hour window.
+  const shortHorizon = build(JSON.stringify({
+    inPlay: {
+      displayName: "In-play only",
+      maxResolutionHours: 6,
+      // What the API writes alongside hours for readers that have not migrated. It must
+      // lose to the hours value, not overrule it.
+      maxResolutionDays: 1,
+      requireEventStarted: true,
+    },
+  }));
+  assert.equal(shortHorizon.inPlay.maxResolutionHours, 6);
+  assert.equal(shortHorizon.inPlay.maxResolutionDays, 0.25);
+  assert.equal(shortHorizon.inPlay.requireEventStarted, true);
+  assert.equal(legacyStrategies.oldConfig.requireEventStarted, false,
+    "a portfolio that never set the switch must not start refusing markets");
   // Malformed input must not take the shipped portfolios down with it.
   assert.deepEqual(build("{not json"), {});
   assert.deepEqual(build(""), {});
@@ -847,11 +927,14 @@ test("dashboard: a portfolio not yet run does not show another portfolio's trade
 });
 
 test("dashboard: a statistics row prefills the portfolio it would create", () => {
-  const run = new Function(`
+  const run = new Function("HOURS_PER_DAY", "MAX_RESOLUTION_HOURS_CEILING", `
     ${extractFunction(APP, "normalizePortfolioName")}
+    // The grid measures in whole days; the portfolio it seeds stores hours, so the
+    // converter has to be in scope or the prefill throws on every statistics row.
+    ${extractFunction(APP, "normalizeOptionalHours")}
     ${extractFunction(APP, "portfolioPrefillFromDataset")}
     return portfolioPrefillFromDataset;
-  `)();
+  `)(24, 365 * 24);
 
   // A tag row measured one tag at one probability, so the created portfolio trades that.
   assert.deepEqual(run({ prefillName: "league-of-legends", prefillProbability: "0.7", prefillTag: "league-of-legends" }), {
@@ -862,8 +945,9 @@ test("dashboard: a statistics row prefills the portfolio it would create", () =>
   // A parameter row measured a probability, a market type and a resolution ceiling.
   assert.deepEqual(run({ prefillName: "75% Yes/No 3d", prefillProbability: "0.75", prefillDays: "3", prefillMarketType: "binary" }), {
     displayName: "75% Yes/No 3d",
-    minProbability: 0.75,
     maxResolutionDays: 3,
+    maxResolutionHours: 72,
+    minProbability: 0.75,
     marketType: "binary",
     requireMostProbableOutcome: false,
   });
@@ -1304,14 +1388,19 @@ test("paper portfolio rules: 'Order mode' is shown, mirroring the live card", ()
 // market had ended. The two questions are independent -- this row states a portfolio's
 // configured ceiling, not the market's live status -- so the row belongs on both cards
 // regardless of that change.
-test("portfolio rules: the resolution-day ceiling is shown on both the paper and live cards", () => {
+test("portfolio rules: the resolution ceiling is shown on both the paper and live cards", () => {
   const paper = extractFunction(APP, "portfolioRuleRows");
-  assert.match(paper, /const maxResolutionDays = resolutionDaysForMode\(mode\);/);
+  assert.match(paper, /const maxResolutionHours = resolutionHoursForMode\(mode\);/);
   assert.match(paper, /\["Resolution filter", resolution\],/);
+  // The ceiling is stored in hours, so a 6-hour one has to reach the card as six hours.
+  // Rendering it back through whole days would round it to "1 d" -- the exact loss of
+  // precision the unit switch was made to end.
+  assert.match(paper, /formatHorizonHours\(maxResolutionHours\)/);
 
   const live = extractFunction(APP, "livePortfolioRuleRows");
-  assert.match(live, /const maxResolutionDays = resolutionDaysForMode\(mode\);/);
-  assert.match(live, /\["Resolution filter", `Max \$\{maxResolutionDays\} days`\],/);
+  assert.match(live, /const maxResolutionHours = resolutionHoursForMode\(mode\);/);
+  assert.match(live, /\["Resolution filter", config\.requireEventStarted === true/);
+  assert.match(live, /formatHorizonHours\(maxResolutionHours\)/);
 });
 
 // The read-only summary row above states the current value; this is the form that
@@ -1319,14 +1408,35 @@ test("portfolio rules: the resolution-day ceiling is shown on both the paper and
 // deleted the <input> from index.html itself, so app.js kept querying
 // [data-max-resolution-days] and silently found nothing -- neither an error nor a
 // visible gap, just a setting nobody could edit any more.
-test("portfolio parameters form: the resolution-day ceiling has an editable input, not just a summary row", () => {
-  assert.match(HTML, /<span>Max resolution days<\/span>\s*\n\s*<input type="number" min="1" max="365" step="1" placeholder="auto" data-max-resolution-days>\s*\n\s*<strong data-max-resolution-days-label>auto<\/strong>/,
+test("portfolio parameters form: the resolution ceiling has an editable input, not just a summary row", () => {
+  assert.match(HTML, /<span>Max resolution hours<\/span>\s*\n\s*<input type="number" min="1" max="8760" step="1" placeholder="auto" data-max-resolution-hours>\s*\n\s*<strong data-max-resolution-hours-label>auto<\/strong>/,
     "the parameter form must have an input for this setting, not only the summary card's display");
-  assert.match(APP, /maxResolutionDays: document\.querySelector\("\[data-max-resolution-days\]"\)/);
-  assert.match(APP, /maxResolutionDaysLabel: document\.querySelector\("\[data-max-resolution-days-label\]"\)/);
-  assert.match(APP, /els\.maxResolutionDays\?\.addEventListener\("input", \(\) => \{/,
+  assert.match(APP, /maxResolutionHours: document\.querySelector\("\[data-max-resolution-hours\]"\)/);
+  assert.match(APP, /maxResolutionHoursLabel: document\.querySelector\("\[data-max-resolution-hours-label\]"\)/);
+  assert.match(APP, /els\.maxResolutionHours\?\.addEventListener\("input", \(\) => \{/,
     "changing the input has to save it, the same as every other parameter control");
-  assert.match(APP, /updatePortfolioConfigForMode\(state\.mode, \{ maxResolutionDays: value \}\);/);
+  assert.match(APP, /updatePortfolioConfigForMode\(state\.mode, \{ maxResolutionHours: value, maxResolutionDays: days \}\);/);
+});
+
+// Hours and days are not one question asked in two units: a horizon of zero hours is a
+// market that has ALREADY resolved, not one that is under way. Wanting only running
+// fixtures is a different question, so it gets its own switch rather than overloading
+// zero -- and that switch has to be a control the user can actually reach.
+test("portfolio parameters form: 'only events under way' is its own switch, not a horizon of zero", () => {
+  assert.match(HTML, /<span>Only events under way<\/span>\s*\n\s*<input type="checkbox" data-require-event-started>/,
+    "the parameter form must carry the in-play switch as its own control");
+  assert.match(APP, /requireEventStarted: document\.querySelector\("\[data-require-event-started\]"\)/);
+  assert.match(APP, /els\.requireEventStarted\?\.addEventListener\("change", \(\) => \{/);
+  assert.match(APP, /updatePortfolioConfigForMode\(state\.mode, \{ requireEventStarted: value \}\);/);
+
+  // Zero must not be a back door into the same behavior: it means "not set" everywhere.
+  const normalize = extractFunction(APP, "normalizeOptionalHours");
+  assert.match(normalize, /numeric <= 0\) return null;/);
+
+  // And every runtime has to refuse an un-started row separately from an over-horizon
+  // one, or the switch is a label with nothing behind it.
+  assert.match(BOT, /strategy\.requireEventStarted === true && item\?\.eventStarted !== true/);
+  assert.match(API, /\(\$config\['requireEventStarted'\] \?\? false\) === true && \(\$item\['eventStarted'\] \?\? null\) !== true/);
 });
 
 test("run log history: the workflow archives every portfolio's new runs, and the bot writes them", () => {
@@ -2742,14 +2852,19 @@ test("execution scope: custom live portfolios resolve their own saved filter", (
 // that is answered by portfolioEvaluationStatus/evaluationResolvedByMarket, already
 // checked earlier in this same function via displayStatus -- so both stay independent of
 // the market-status fix.
-test("candidate reasons: the general branch still caps a portfolio's resolution-day ceiling", () => {
+test("candidate reasons: the general branch still caps a portfolio's resolution ceiling", () => {
   const reasons = extractFunction(APP, "portfolioCandidateFilterReasons");
-  assert.match(reasons, /const maxDays = resolutionDaysForMode\(normalizedMode\);/);
+  assert.match(reasons, /const maxHours = resolutionHoursForMode\(normalizedMode\);/);
   assert.match(reasons, /const days = evaluationDaysLeft\(item\);/);
-  assert.match(reasons, /if \(!Number\.isFinite\(days\)\) \{\s*\n\s*reasons\.push\("missing resolution date"\);\s*\n\s*\} else if \(days > maxDays\) \{\s*\n\s*reasons\.push\(`resolution \$\{days\.toFixed\(2\)\} days exceeds max \$\{maxDays\}`\);/);
-  // And the fixed-entry (5050) branch keeps its own, symmetric check.
+  assert.match(reasons, /const hours = Number\.isFinite\(days\) \? days \* HOURS_PER_DAY : NaN;/);
+  assert.match(reasons, /if \(!Number\.isFinite\(days\)\) \{\s*\n\s*reasons\.push\("missing resolution date"\);\s*\n\s*\} else if \(hours > maxHours\) \{\s*\n\s*reasons\.push\(`resolution \$\{formatHorizonHours\(hours\)\} exceeds max \$\{formatHorizonHours\(maxHours\)\}`\);/);
+  // The horizon and "has it started" are separate questions, so an un-started row is
+  // refused on its own reason rather than being folded into the ceiling.
+  assert.match(reasons, /config\.requireEventStarted === true && item\?\.eventStarted !== true/);
+  // And the fixed-entry (5050) branch keeps its own, symmetric checks.
   const branch = /if \(isFixedEntryMode\(mode\)\) \{[\s\S]*?return reasons;\n  \}/.exec(reasons)[0];
-  assert.match(branch, /if \(Number\.isFinite\(days\) && Number\.isFinite\(maxDays\) && days > maxDays\) \{/);
+  assert.match(branch, /if \(Number\.isFinite\(hours\) && Number\.isFinite\(maxHours\) && hours > maxHours\) \{/);
+  assert.match(branch, /config\.requireEventStarted === true && item\?\.eventStarted !== true/);
 });
 
 test("scraped opportunities: the spread that keeps a market out of scope is on screen", () => {

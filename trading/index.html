@@ -433,10 +433,15 @@
           <em><strong data-risk-allocation-value>$5.00</strong> fixed maximum stake per trade; <span data-risk-allocation-note>not tied to portfolio equity</span></em>
           <em class="capital-status" data-capital-status>Capital status pending.</em>
         </label>
-        <label class="parameter-control">
-          <span>Max resolution days</span>
-          <input type="number" min="1" max="365" step="1" placeholder="auto" data-max-resolution-days>
-          <strong data-max-resolution-days-label>auto</strong>
+        <label class="parameter-control" title="How far ahead a market may resolve, in hours. 24 is a day, 12 is half a day, 1 keeps only fixtures resolving within the hour.">
+          <span>Max resolution hours</span>
+          <input type="number" min="1" max="8760" step="1" placeholder="auto" data-max-resolution-hours>
+          <strong data-max-resolution-hours-label>auto</strong>
+        </label>
+        <label class="parameter-control order-mode-toggle" title="Trade only fixtures that have already kicked off. This is a separate question from the horizon above: a horizon of zero hours would mean an already-resolved market, not a running one. Only sports and esports markets report a kickoff time, so everything else is skipped while this is on.">
+          <span>Only events under way</span>
+          <input type="checkbox" data-require-event-started>
+          <strong data-require-event-started-label>Off</strong>
         </label>
         <label class="parameter-control">
           <span>Trade priority</span>

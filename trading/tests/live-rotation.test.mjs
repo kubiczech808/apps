@@ -3329,7 +3329,8 @@ test("portfolio parameters: both live portfolios state their order price", () =>
   // where the price comes from instead of saying nothing.
   const app = readFileSync(new URL("../assets/app.js", import.meta.url), "utf8");
   const rowsFor = (fixedEntry, limitOrders) => new Function(
-    "state", "isFixedEntryMode", "portfolioConfigForMode", "resolutionDaysForMode",
+    "state", "isFixedEntryMode", "portfolioConfigForMode", "resolutionHoursForMode",
+    "formatHorizonHours",
     "normalizeOptionalMoney", "normalizeMinimumNetYield", "normalizeMarketTagList",
     "portfolioReturnMetricLabel", "probabilitySourceLabel", "currentEligibilityThreshold",
     "stakeSizingRuleValue", "normalizeExecutionTrigger", "executionTriggerLabel",
@@ -3378,7 +3379,10 @@ test("portfolio parameters: both live portfolios state their order price", () =>
       excludedMarketTags: [],
       useLimitOrders: limitOrders,
     }),
-    () => 30, (value) => value, (value) => value || 0, (value) => (Array.isArray(value) ? value : []),
+    // The horizon is a number of HOURS now, so the stub hands back 720 -- the same
+    // 30-day ceiling this fixture always meant -- and the real formatter renders it.
+    () => 720, (hours) => `${hours / 24} d`,
+    (value) => value, (value) => value || 0, (value) => (Array.isArray(value) ? value : []),
     () => "Potential p.a.", () => "Polymarket probability", () => 0.93, () => "stake",
     (value) => value, () => "After each scraping batch", () => "x", (value) => Number(value),
     (value) => `${(value * 100).toFixed(1)}%`, (value) => `$${value}`, () => limitOrders, () => ({}),
@@ -4564,8 +4568,24 @@ test("finished events: only the current Polymarket status can close a candidate 
   // above), but "does this portfolio want to hold capital this long" -- so a still-tradable,
   // far-dated market gets skipped by it without ever being declared closed.
   const prefilter = source.slice(source.indexOf("function prefilterLiveCandidate"), source.indexOf("function sortLivePrefilterCandidates"));
-  assert.match(prefilter, /if \(Number\.isFinite\(MAX_RESOLUTION_DAYS\) && Number\.isFinite\(days\) && days > MAX_RESOLUTION_DAYS\)/,
+  assert.match(prefilter, /if \(MAX_RESOLUTION_HOURS != null && hours != null && hours > MAX_RESOLUTION_HOURS\)/,
     "the candidate pool still caps how far out a portfolio will hold a position, independent of whether the market is tradable");
+  // The ceiling is expressed in HOURS now: whole days could not say 12, 6 or 1, which is
+  // what a short-dated portfolio needs. A live environment still set in days keeps meaning
+  // what it meant, so the conversion is read here rather than assumed.
+  assert.match(source, /const days = envNumber\("LIVE_MAX_RESOLUTION_DAYS", 7\);/,
+    "an environment set in days must keep working");
+  assert.match(source, /return Number\.isFinite\(days\) && days > 0 \? days \* HOURS_PER_DAY : null;/,
+    "and must be converted rather than compared against hours");
+  // Zero is not a horizon. It used to fall through to a 7-day default, so a portfolio set
+  // to 0 quietly traded a week -- the opposite of what typing 0 intends.
+  assert.match(source, /if \(Number\.isFinite\(hours\) && hours > 0\) return Math\.max\(1,/,
+    "a non-positive hours setting must not be accepted as a horizon");
+  // "Already under way" is its own switch, not a magic value of the horizon: an event in
+  // play still has an hour or two left to resolve.
+  assert.match(prefilter, /REQUIRE_EVENT_STARTED && item\?\.eventStarted !== true/);
+  assert.match(prefilter, /no kickoff time is published/,
+    "a market that cannot show it started is excluded by name, not silently");
   const ranking = source.slice(source.indexOf("function sortLivePrefilterCandidates"), source.indexOf("function prefilterReasonCountKey"));
   assert.doesNotMatch(ranking, /compareShorterHorizon|selectedAnnualizedReturn/,
     "the candidate ranking must not derive a preference from the scheduled horizon");

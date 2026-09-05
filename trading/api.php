@@ -1007,7 +1007,11 @@ function empty_configured_paper_portfolio(string $id, array $config): array
     $stakeUsdc = is_numeric($config['stakeUsdc'] ?? null) ? (float) $config['stakeUsdc'] : 5.0;
     $minProbability = is_numeric($config['minProbability'] ?? null) ? (float) $config['minProbability'] : 0.5;
     $maxProbability = normalize_optional_probability_value($config['maxProbability'] ?? null);
-    $maxResolutionDays = is_numeric($config['maxResolutionDays'] ?? null) ? (int) $config['maxResolutionDays'] : 7;
+    // Hours is the stored unit; days is derived alongside it so a reader that has not
+    // migrated still sees a number. Reading days first would round a 6-hour portfolio's
+    // ceiling up to a whole day on its own dashboard card.
+    $maxResolutionHours = config_max_resolution_hours($config, DEFAULT_MAX_RESOLUTION_HOURS);
+    $maxResolutionDays = (int) max(1, min(365, (int) round($maxResolutionHours / 24.0)));
     $minLiquidityUsdc = is_numeric($config['minLiquidityUsdc'] ?? null) ? (float) $config['minLiquidityUsdc'] : null;
     $selectionOrder = (string) ($config['selectionOrder'] ?? 'highest_ev_pa_first');
     $portfolio = [
@@ -1028,7 +1032,9 @@ function empty_configured_paper_portfolio(string $id, array $config): array
         'stakeUsdc' => $stakeUsdc,
         'minProbability' => $minProbability,
         'maxProbability' => $maxProbability,
+        'maxResolutionHours' => $maxResolutionHours,
         'maxResolutionDays' => $maxResolutionDays,
+        'requireEventStarted' => ($config['requireEventStarted'] ?? false) === true,
         'minLiquidityUsdc' => $minLiquidityUsdc,
         'minNetYield' => is_numeric($config['minNetYield'] ?? null) ? (float) $config['minNetYield'] : 0.0,
         'executionTrigger' => (string) ($config['executionTrigger'] ?? 'cron'),
@@ -1045,7 +1051,9 @@ function empty_configured_paper_portfolio(string $id, array $config): array
         'minProbability' => $minProbability,
         'maxProbability' => $maxProbability,
         'stakeUsdc' => $stakeUsdc,
+        'maxResolutionHours' => $maxResolutionHours,
         'maxResolutionDays' => $maxResolutionDays,
+        'requireEventStarted' => $portfolio['requireEventStarted'],
         'minLiquidityUsdc' => $minLiquidityUsdc,
         'minNetYield' => $portfolio['minNetYield'],
         'executionTrigger' => $portfolio['executionTrigger'],
@@ -1415,6 +1423,9 @@ function compact_evaluation(array $item): array
         'scheduledEventDate',
         'resolutionEndDate',
         'endDateSource',
+        // The in-play answer travels with the row for the same reason as on the catalogue
+        // row above: the browser explains its own candidate refusals.
+        'eventStarted',
         'evaluatedAt',
         'firstEvaluatedAt',
         'lastSeenAt',
@@ -1511,6 +1522,13 @@ function compact_market_observation(array $item): array
         'scheduledEventDate',
         'resolutionEndDate',
         'endDateSource',
+        // Whether the fixture has actually kicked off, and the published kickoff it was
+        // derived from. A separate question from the horizon -- a match in play still has
+        // an hour or two to resolution -- and the browser explains its own candidate
+        // refusals, so without these every row reaches it as "unknown" and a portfolio
+        // set to in-play markets only looks like it is refusing everything at random.
+        'eventStarted',
+        'eventStartTime',
         'resolvedAt',
         'resolvedDetectedAt',
         'resolutionStatus',
@@ -1815,8 +1833,13 @@ function execution_scope_matches_observation(array $item, array $config): bool
         return false;
     }
     $days = is_numeric($item['daysToResolution'] ?? null) ? (float) $item['daysToResolution'] : null;
-    $maxDays = normalize_optional_days_value($config['maxResolutionDays'] ?? null);
-    if ($days !== null && $maxDays !== null && $days > $maxDays) {
+    $maxHours = config_max_resolution_hours(is_array($config) ? $config : []);
+    if ($days !== null && $maxHours !== null && $days * 24.0 > $maxHours) {
+        return false;
+    }
+    // A separate question from the horizon: has the event actually started. A row that
+    // cannot answer is excluded rather than assumed to be under way.
+    if (($config['requireEventStarted'] ?? false) === true && ($item['eventStarted'] ?? null) !== true) {
         return false;
     }
     $minimumLiquidity = normalize_optional_money_value($config['minLiquidityUsdc'] ?? null);
@@ -2728,7 +2751,8 @@ function portfolio_config_history_fields(): array
 {
     return [
         'displayName', 'initialUsdc', 'minProbability', 'maxProbability', 'stakeUsdc',
-        'maxResolutionDays', 'selectionOrder', 'marketType', 'excludeOverUnderMarkets', 'probabilitySource',
+        'maxResolutionDays', 'maxResolutionHours', 'requireEventStarted',
+        'selectionOrder', 'marketType', 'excludeOverUnderMarkets', 'probabilitySource',
         'minLiquidityUsdc', 'minNetYield', 'executionTrigger', 'executionCronMinutes',
         'useLimitOrders', 'autoRotatePositions', 'stopLossRiskMultiplier', 'reverseOnStopLoss',
         'includeOnlyMarketTags', 'excludedMarketTags', 'automationEnabled', 'archived',
@@ -2999,20 +3023,43 @@ function normalize_initial_usdc_value(mixed $value, mixed $fallback = null): ?fl
     return max(0.01, min(10000000.0, round((float) $value, 2)));
 }
 
-function normalize_optional_days_value(mixed $value): ?int
+// The horizon a portfolio falls back to when neither it nor the request names one. Seven
+// days, the ceiling every portfolio carried before the unit switch.
+const DEFAULT_MAX_RESOLUTION_HOURS = 7.0 * 24.0;
+const MAX_RESOLUTION_HOURS_CEILING = 365.0 * 24.0;
+
+// The resolution horizon in HOURS. Days could not express 12, 6 or 1 hour at all: it
+// rounded to a whole day with a minimum of 1, so everything under a day became 24 hours.
+//
+// Blank and non-positive both mean "not set" and return null; each caller then decides
+// what unset means for it -- no ceiling when serving, the saved default when storing.
+// Zero is not a way to ask for events already under way: a horizon of zero hours is a
+// market that has already resolved. That is its own flag, requireEventStarted.
+function normalize_optional_hours_value(mixed $value): ?float
 {
-    if ($value === null || $value === '') {
+    if ($value === null || $value === '' || !is_numeric($value)) {
         return null;
     }
-    if (!is_numeric($value)) {
+    $hours = (float) $value;
+    if ($hours <= 0) {
         return null;
     }
-    return max(1, min(365, (int) round((float) $value)));
+    return max(1.0, min(MAX_RESOLUTION_HOURS_CEILING, round($hours, 2)));
 }
 
-function normalize_days_value(mixed $value, int $fallback): int
+// A row's horizon whatever unit it was stored in. Portfolios saved before the switch carry
+// maxResolutionDays and must keep meaning exactly what they meant.
+function config_max_resolution_hours(array $row, ?float $fallback = null): ?float
 {
-    return normalize_optional_days_value($value) ?? max(1, min(365, $fallback));
+    $hours = normalize_optional_hours_value($row['maxResolutionHours'] ?? null);
+    if ($hours !== null) {
+        return $hours;
+    }
+    $days = $row['maxResolutionDays'] ?? null;
+    if (is_numeric($days) && (float) $days > 0) {
+        return normalize_optional_hours_value((float) $days * 24.0);
+    }
+    return $fallback;
 }
 
 function normalize_optional_money_value(mixed $value): ?float
@@ -3207,6 +3254,13 @@ function normalize_strategy_config(array $input, array $defaults): array
     if ($maxProbability !== null && $maxProbability < $minProbability) {
         $maxProbability = $minProbability;
     }
+    // Hours if the client sent hours, else its days reading, else whatever the portfolio
+    // already had -- so an older client that still posts only days cannot blank the
+    // horizon, and a portfolio saved before the switch keeps exactly its old ceiling.
+    $maxResolutionHours = config_max_resolution_hours(
+        $input,
+        config_max_resolution_hours($defaults, DEFAULT_MAX_RESOLUTION_HOURS)
+    );
     return [
         'displayName' => normalize_portfolio_display_name(
             $input['displayName'] ?? $defaults['displayName'],
@@ -3222,7 +3276,11 @@ function normalize_strategy_config(array $input, array $defaults): array
         // Kept for backward compatibility with older workflow inputs and archived
         // states. New sizing uses the fixed stakeUsdc field above.
         'maxOrderFraction' => normalize_fraction_value($input['maxOrderFraction'] ?? null, (float) $defaults['maxOrderFraction']),
-        'maxResolutionDays' => normalize_days_value($input['maxResolutionDays'] ?? null, (int) $defaults['maxResolutionDays']),
+        // Hours is the stored unit; days is written alongside it, derived, so a reader that
+        // has not migrated yet still sees a sane number instead of nothing.
+        'maxResolutionHours' => $maxResolutionHours,
+        'maxResolutionDays' => (int) max(1, min(365, (int) round($maxResolutionHours / 24.0))),
+        'requireEventStarted' => ($input['requireEventStarted'] ?? $defaults['requireEventStarted'] ?? false) === true,
         'selectionOrder' => normalize_selection_order_value($input['selectionOrder'] ?? $defaults['selectionOrder']),
         'minLiquidityUsdc' => normalize_optional_money_value($input['minLiquidityUsdc'] ?? $defaults['minLiquidityUsdc']),
         'minNetYield' => normalize_net_yield_value($input['minNetYield'] ?? null, (float) $defaults['minNetYield']),

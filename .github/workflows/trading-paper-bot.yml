@@ -103,6 +103,10 @@ jobs:
       PAPER_CONSERVATIVE_MAX_RESOLUTION_DAYS: ""
       PAPER_HIGH_REWARD_MAX_RESOLUTION_DAYS: ""
       PAPER_MORE_PROBABLE_MAX_RESOLUTION_DAYS: ""
+      PAPER_CONSERVATIVE_MAX_RESOLUTION_HOURS: ""
+      PAPER_HIGH_REWARD_MAX_RESOLUTION_HOURS: ""
+      PAPER_MORE_PROBABLE_MAX_RESOLUTION_HOURS: ""
+      PAPER_EQUAL_MAX_RESOLUTION_HOURS: ""
       PAPER_CONSERVATIVE_SELECTION_ORDER: ""
       PAPER_HIGH_REWARD_SELECTION_ORDER: ""
       PAPER_MORE_PROBABLE_SELECTION_ORDER: ""
@@ -281,7 +285,14 @@ jobs:
               emit(f"{prefix}_MAX_PROBABILITY", row.get("maxProbability"))
               emit(f"{prefix}_STAKE_USDC", row.get("stakeUsdc"))
               emit(f"{prefix}_MAX_FRACTION", row.get("maxOrderFraction"))
+              # Hours is the stored unit. Days is still emitted for a portfolio saved
+              # before the switch; the bot reads it only when no hours value arrived, so
+              # 12 or 6 hours can no longer be rounded back up to a whole day.
+              emit(f"{prefix}_MAX_RESOLUTION_HOURS", row.get("maxResolutionHours"))
               emit(f"{prefix}_MAX_RESOLUTION_DAYS", row.get("maxResolutionDays"))
+              # A separate question from the horizon: only fixtures already under way.
+              # Always written, so switching it back off actually clears it.
+              emit(f"{prefix}_REQUIRE_EVENT_STARTED", str(bool(row.get("requireEventStarted", False))).lower())
               emit(f"{prefix}_SELECTION_ORDER", row.get("selectionOrder"))
               emit(f"{prefix}_MIN_LIQUIDITY_USDC", row.get("minLiquidityUsdc"))
               emit(f"{prefix}_MIN_NET_YIELD", row.get("minNetYield"))
