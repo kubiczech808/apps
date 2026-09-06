@@ -63,10 +63,22 @@ export const createPaperExecutor = ({
     // Carry is a cost when positive, which is why it is subtracted: a long in a
     // positive-funding market pays to hold, and that is the whole point of
     // charging it.
-    trade.plSats = Math.round(gross - closingFee - carry)
+    //
+    // The OPENING fee belongs here too, and leaving it out flattered every
+    // number built on `plSats`. It was charged to the balance at open, so the
+    // equity curve was right — but the trade said it lost 658 sats when it had
+    // really cost 715, and win rate, profit factor and average win were all
+    // computed from the trade. Measured on 525 days: profit factor read 0.93
+    // and the sum of trade P/L came to -7285 sats against an equity curve that
+    // fell 20846. That 13561-sat gap WAS the opening fees.
+    //
+    // A trade's P/L is what the account felt, both sides of the spread
+    // included. The balance adds the opening fee back because it was already
+    // taken at open; without that the fee would be charged twice.
+    trade.plSats = Math.round(gross - trade.openingFeeSats - closingFee - carry)
     trade.closedAt = at
     trade.exitReason = exitReason
-    store.balanceSats += trade.marginSats + trade.plSats
+    store.balanceSats += trade.marginSats + trade.openingFeeSats + trade.plSats
   }
 
   return {

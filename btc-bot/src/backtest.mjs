@@ -19,7 +19,7 @@
 
 import { aggregate } from './candles.mjs'
 import { createPaperExecutor } from './executor-paper.mjs'
-import { planPosition, SATS_PER_BTC } from './risk.mjs'
+import { planPosition, pnlSats, SATS_PER_BTC } from './risk.mjs'
 import * as priceActionStrategy from './strategy.mjs'
 import { computeStats, DEFAULT_SETTINGS, mergeSettings } from './state.mjs'
 import { roundStop, roundTarget } from './bot.mjs'
@@ -191,6 +191,27 @@ export const runBacktest = async ({
   const finalEquity = equityCurve.at(-1)?.equitySats ?? startBalance
   const buyHoldSats = startBalance
 
+  // What each trade paid in fees, as a fraction of what it RISKED.
+  //
+  // This is the number that decides whether an edge survives contact with a
+  // fee schedule, and nothing else in the report shows it. A stop 0.25% from
+  // entry pays 0.12% of notional to open and close, which is nearly half the
+  // risked amount — so such a trade must be right far more often than the same
+  // idea taken with a wider stop, for reasons that have nothing to do with the
+  // chart.
+  const frictions = closed
+    .map((trade) => {
+      const risk = Math.abs(
+        pnlSats({ side: trade.side, entry: trade.entry, exit: trade.initialStop, quantityUsd: trade.quantityUsd })
+      )
+      const fees = (trade.openingFeeSats ?? 0) + (trade.closingFeeSats ?? 0)
+      return risk > 0 ? fees / risk : null
+    })
+    .filter((value) => value !== null)
+    .sort((a, b) => a - b)
+  const quantile = (fraction) =>
+    frictions.length === 0 ? null : frictions[Math.min(frictions.length - 1, Math.floor(frictions.length * fraction))]
+
   return {
     settings,
     from: new Date(hourly[warmupHours].time).toISOString(),
@@ -216,7 +237,18 @@ export const runBacktest = async ({
       settlementsUsed: carrySchedule.length,
       market: settings.risk.market,
     },
+    friction: {
+      medianFeeShareOfRisk: quantile(0.5),
+      worstDecileFeeShareOfRisk: quantile(0.9),
+      tradesPayingOverQuarter: frictions.filter((value) => value > 0.25).length,
+    },
     equityCurve,
+    // A closed trade's P/L must add up to what the account did. It did not:
+    // the opening fee was charged to the balance but left out of `plSats`, so
+    // every statistic computed from trades was measured on a cheaper strategy
+    // than the equity curve was. The gap is reported rather than trusted,
+    // because that bug was invisible for three runs.
+    reconciliationSats: finalEquity - startBalance - (stats.netPnlSats ?? 0),
     rejections: [...rejections.entries()].sort((a, b) => b[1] - a[1]).slice(0, 20),
   }
 }
@@ -283,6 +315,31 @@ export const formatBacktest = (report) => {
       : `Fees          trading ${sats(fees.tradingSats)}, carry ${sats(fees.carrySats)}` +
           (fees.settlementsUsed ? ` (${fees.settlementsUsed} real settlements)` : ' — CARRY NOT MODELLED')
   )
+  // Gross and net side by side, because they answer different questions. Gross
+  // says whether the CHART READING is worth anything; net says whether it
+  // survives the fee schedule. A strategy that is positive gross and negative
+  // net has an execution problem, not a signal problem, and the fix is a
+  // different one.
+  const totalFees = (fees.tradingSats ?? 0) + (fees.carrySats ?? 0)
+  const grossSats = report.finalEquitySats - report.startBalanceSats + totalFees
+  lines.push(
+    `Before fees   ${grossSats > 0 ? '+' : ''}${sats(grossSats)} ` +
+      `(${pct((grossSats / report.startBalanceSats) * 100)}) — the edge the fees are charged against`
+  )
+  const friction = report.friction ?? {}
+  if (friction.medianFeeShareOfRisk !== null && friction.medianFeeShareOfRisk !== undefined) {
+    lines.push(
+      `Friction      fees are ${pct(friction.medianFeeShareOfRisk * 100)} of the risk on the median trade, ` +
+        `${pct(friction.worstDecileFeeShareOfRisk * 100)} on the worst tenth; ` +
+        `${friction.tradesPayingOverQuarter} trades paid more than a quarter of what they risked`
+    )
+  }
+  if (Math.abs(report.reconciliationSats ?? 0) > Math.max(10, report.stats.trades)) {
+    lines.push(
+      `WARNING       trade P/L and the equity curve disagree by ${sats(report.reconciliationSats)} — ` +
+        'a cost is being charged to one and not the other'
+    )
+  }
   // Thirteen trades and a profit factor of 1.12 is noise wearing the clothes of
   // a result. Say so in the output rather than leaving the reader to remember.
   if (report.stats.trades < 30) {

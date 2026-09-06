@@ -94,6 +94,27 @@ test('stop losses and take profits actually fire — the backtest clock is the c
   )
 })
 
+test('the trades explain the equity curve exactly, fees included', async () => {
+  // Third measurement bug of the same family, and the one this test exists to
+  // stop: the opening fee was deducted from the balance but omitted from the
+  // trade's P/L. The equity curve was right and every statistic built from
+  // trades — win rate, profit factor, average win — was computed on a cheaper
+  // strategy than the account actually ran. On 525 days of real candles the two
+  // disagreed by 13561 sats and nothing said so.
+  const report = await runBacktest({
+    hourly: tradeableSeries(),
+    warmupHours: 400,
+    settings: { strategy: { requireSweep: false, requireImbalance: false } },
+  })
+
+  assert.ok(report.stats.trades > 0, 'the fixture must produce trades for this test to mean anything')
+  assert.equal(report.openAtEnd, 0, 'a position still open would legitimately break the identity')
+  assert.ok(
+    Math.abs(report.reconciliationSats) <= report.stats.trades,
+    `trade P/L and the equity curve disagree by ${report.reconciliationSats} sats over ${report.stats.trades} trades`
+  )
+})
+
 test('a loss never exceeds the risk that was authorised, plus fees', async () => {
   const report = await runBacktest({
     hourly: tradeableSeries(),

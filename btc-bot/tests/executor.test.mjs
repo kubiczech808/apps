@@ -186,7 +186,12 @@ test('a paper win credits the margin back plus the profit, minus both fees', asy
 
   assert.equal(opened.exitReason, 'take_profit')
   assert.ok(opened.plSats > 0)
-  assert.equal(store.balanceSats, afterOpen + opened.marginSats + opened.plSats)
+  assert.equal(store.balanceSats, afterOpen + opened.marginSats + opened.openingFeeSats + opened.plSats)
+  // The property that matters, and the one that was broken: a round trip
+  // leaves the balance exactly the trade's P/L away from where it started. It
+  // did not, because the opening fee was taken from the balance and left out
+  // of plSats — so the equity curve fell further than the trades explained.
+  assert.equal(store.balanceSats, 1_000_000 + opened.plSats)
 })
 
 test('paper refuses a position it cannot fund', async () => {
@@ -284,7 +289,7 @@ test('carry is charged against a held position, and a long pays positive funding
   assert.equal(opened.exitReason, 'take_profit')
 
   const gross = pnlSats({ side: 'long', entry: 100_000, exit: 104_000, quantityUsd: 100 })
-  assert.equal(opened.plSats, Math.round(gross - opened.closingFeeSats - 10))
+  assert.equal(opened.plSats, Math.round(gross - opened.openingFeeSats - opened.closingFeeSats - 10))
 })
 
 test('a short is paid the same funding a long pays', async () => {
