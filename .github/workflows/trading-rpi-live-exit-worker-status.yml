@@ -136,6 +136,20 @@ jobs:
             // hours of identical rejections with nothing anywhere naming the address.
             console.log(`   signingAccount ${text(state.signingAccount)}`);
             console.log(`   signingError   ${text(state.signingError)}`);
+            // What a pass actually costs. "Is one second enough" is answered here: if the
+            // work regularly fills the interval, the reaction time is the pass rather than
+            // the setting, and lowering the interval buys nothing.
+            const timing = state.passTiming && typeof state.passTiming === "object" ? state.passTiming : null;
+            if (timing) {
+              console.log(`\n   pass timing since ${timing.since} (interval ${timing.intervalMs}ms)`);
+              console.log(`      passes ${timing.passes}   mean ${timing.meanMs}ms   slowest ${timing.maxMs}ms`
+                + `   filling the whole interval ${timing.overrunning} time(s)`);
+              for (const [bucket, count] of Object.entries(timing.buckets || {})) {
+                console.log(`      ${String(count).padStart(7)}  ${bucket}`);
+              }
+            } else {
+              console.log("   pass timing    (none yet -- the running worker predates this)");
+            }
             const bookErrors = state.bookErrors && typeof state.bookErrors === "object" ? state.bookErrors : {};
             const noisiest = Object.values(bookErrors).sort((a, b) => (b.count || 0) - (a.count || 0)).slice(0, 6);
             if (noisiest.length) {

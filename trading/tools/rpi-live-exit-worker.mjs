@@ -3,6 +3,30 @@
 // Persistent, deliberately conservative exit monitor for the self-hosted RPi.
 // It is independent of the entry/rotation workflow: it only watches existing
 // positions and never opens a new one. LIVE_EXIT_MODE defaults to `shadow`.
+//
+// ---------------------------------------------------------------------------------------
+// NOT BUILT, ON PURPOSE, AND WORTH BUILDING IF THIS EVER REACTS TOO SLOWLY:
+// replace the /books poll with Polymarket's WebSocket market channel.
+//
+// This loop asks for every watched book once a second. That is a poll: the reaction time
+// can never be better than the interval plus a round trip, however cheap each pass is made.
+// The market channel pushes book changes instead, so a price crossing the floor arrives
+// when it happens -- tens of milliseconds -- and the cost stops depending on how many
+// positions are held at all.
+//
+// It was left unbuilt because the polling version was first made to cost ONE request per
+// pass regardless of position count, which took the loop to one second and is expected to
+// be enough. The decision to revisit is a measurement, not a hunch, and the worker records
+// it: `passTiming` in the state file, printed by the worker-status workflow. If passes
+// regularly fill the interval, or a stop is seen firing late against a price that moved
+// inside one pass, the reaction time has become the loop rather than the setting -- and
+// that is the moment this is worth the persistent connection, the reconnect handling and
+// the polling fallback it needs.
+//
+// Note also that speed is not uniformly valuable here. It matters for the stop loss and
+// for taking a chosen entry; the certainty close does not need it, because a settled
+// market stays settled.
+// ---------------------------------------------------------------------------------------
 
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -1090,6 +1114,33 @@ function recordBookError(state, plan, error, at) {
   recordEvent(state, { at, type: "BOOK_ERROR", tokenId: plan.tokenId, question: plan.question, error: message });
 }
 
+// A rolling picture of what a pass costs, as counters rather than a log: the loop runs
+// once a second, so one row per pass would bury everything else in the state file within
+// minutes. The percentile that matters is the slow end -- a mean under the interval says
+// nothing if one pass in twenty takes three times as long, because the stop is late in
+// exactly those passes.
+function recordPassDuration(state, ms) {
+  const stats = state.passTiming && typeof state.passTiming === "object"
+    ? state.passTiming
+    : { passes: 0, totalMs: 0, maxMs: 0, overrunning: 0, buckets: {} };
+  stats.passes += 1;
+  stats.totalMs += ms;
+  stats.maxMs = Math.max(stats.maxMs || 0, ms);
+  stats.meanMs = Math.round(stats.totalMs / stats.passes);
+  // How often the work alone already fills the interval. This is the number that says
+  // whether the setting is still the thing deciding the reaction time.
+  if (ms >= POLL_INTERVAL_MS) stats.overrunning += 1;
+  const bucket = ms < 100 ? "<100ms"
+    : ms < 250 ? "100-250ms"
+      : ms < 500 ? "250-500ms"
+        : ms < 1000 ? "500-1000ms"
+          : ms < 2000 ? "1-2s" : ">2s";
+  stats.buckets[bucket] = (stats.buckets[bucket] || 0) + 1;
+  stats.intervalMs = POLL_INTERVAL_MS;
+  stats.since = stats.since || new Date().toISOString();
+  state.passTiming = stats;
+}
+
 function recordEvent(state, event) {
   const history = Array.isArray(state.history) ? state.history : [];
   state.history = [event, ...history].slice(0, 500);
@@ -1435,6 +1486,11 @@ async function main() {
       await writeJson(STATE_PATH, context.state).catch(() => {});
       console.error(error?.stack || error?.message || String(error));
     }
+    // What a pass actually costs, kept so "is one second enough" is answered with numbers
+    // rather than opinion. A pass that regularly approaches the interval means the loop is
+    // running flat out and the reaction time is the pass, not the setting -- which is the
+    // condition that would make the WebSocket feed worth building.
+    recordPassDuration(context.state, Date.now() - startedAt);
     // Sleep for what is LEFT of the interval, not the whole of it. The pass itself costs a
     // round trip, so sleeping the full interval afterwards made the real period
     // interval + work -- and at one second the work is a large share of it. A pass that

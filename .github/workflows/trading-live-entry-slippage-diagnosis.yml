@@ -1,0 +1,40 @@
+name: Trading Live Entry Slippage Diagnosis
+
+# Read-only diagnostic, manual only. Speed matters in two places: the stop loss, which is
+# now a one-second loop, and taking the candidate we chose -- and the second has never been
+# measured.
+#
+# This compares, per live order, what the candidate was priced at when it was SELECTED,
+# what the order was actually BID at after revalidation repriced it, and what the account
+# says it PAID. The split matters because the two gaps have different fixes: the first is
+# latency between choosing and submitting, the second is the spread and the book's depth,
+# which no amount of speed removes.
+#
+# Places no orders, writes nothing, needs no secrets.
+on:
+  workflow_dispatch:
+    inputs:
+      runs:
+        description: "How many recent runs to read per live portfolio"
+        required: false
+        default: "40"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Measure intended against actual entry
+        working-directory: trading
+        env:
+          LIVE_DIAGNOSIS_RUNS: ${{ inputs.runs || '40' }}
+        run: node tools/live-entry-slippage-diagnosis.mjs
