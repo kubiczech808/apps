@@ -4995,8 +4995,14 @@ function live_exit_record_request(array $payload): array
     if ($tokenId === '') {
         return ['ok' => false, 'error' => 'tokenId is required'];
     }
+    // "stop-declined" is a stop that fired and deliberately did NOT sell, because the book had
+    // gapped below the band the stop will sell in. It is the one exit outcome that leaves the
+    // position OPEN, and without a record of it a position sitting open with its stop long
+    // since reached is indistinguishable from one the stop never noticed -- which is exactly
+    // what was asked for: "uvedes v poznamce ... na jake urovni s jakym p/l byla snaha o stop
+    // loss a jak to proc dopadlo".
     $reason = strtolower(trim((string) ($payload['reason'] ?? 'stop')));
-    if (!in_array($reason, ['stop', 'settlement'], true)) {
+    if (!in_array($reason, ['stop', 'settlement', 'stop-declined'], true)) {
         $reason = 'stop';
     }
     $record = [
@@ -5013,6 +5019,19 @@ function live_exit_record_request(array $payload): array
         'shares' => is_numeric($payload['shares'] ?? null) ? round((float) $payload['shares'], 6) : null,
         'orderId' => preg_replace('/[^A-Za-z0-9x-]/', '', (string) ($payload['orderId'] ?? '')),
     ];
+    if ($reason === 'stop-declined') {
+        // The lowest price this stop would have sold at, the worst the book has shown since,
+        // and how long it has been refusing. Together they are the answer to "why is this
+        // still open" -- and to whether the band is set where it should be.
+        $record['gapFloor'] = is_numeric($payload['gapFloor'] ?? null) ? round((float) $payload['gapFloor'], 6) : null;
+        $record['worstBid'] = is_numeric($payload['worstBid'] ?? null) ? round((float) $payload['worstBid'], 6) : null;
+        $record['declinedSince'] = compact_text($payload['declinedSince'] ?? '', 40);
+        $record['declinedPasses'] = is_numeric($payload['declinedPasses'] ?? null) ? (int) $payload['declinedPasses'] : null;
+        $record['unrealizedPnlUsdc'] = is_numeric($payload['unrealizedPnlUsdc'] ?? null)
+            ? round((float) $payload['unrealizedPnlUsdc'], 6) : null;
+        $record['riskTargetUsdc'] = is_numeric($payload['riskTargetUsdc'] ?? null)
+            ? round((float) $payload['riskTargetUsdc'], 6) : null;
+    }
 
     // What the stop did AFTER selling, recorded against the position it sold. The reversal
     // is the second half of that stop, and it is only knowable once the exit has already
@@ -5061,6 +5080,15 @@ function live_exit_record_request(array $payload): array
         // the exit's own fields and carries any reversal forward. Either way the two halves
         // of one stop end up on one record instead of overwriting each other.
         $existing = is_array($records[$tokenId] ?? null) ? $records[$tokenId] : null;
+        // A decline is a not-yet, so it must never bury a sale that already happened. The
+        // worker stops watching a sold position and would not post one, but the record is
+        // what a closed row reads to explain itself and a single stray post would silently
+        // turn "sold by the stop at 0.44" back into "still waiting".
+        if ($reason === 'stop-declined'
+            && is_array($existing)
+            && in_array((string) ($existing['reason'] ?? ''), ['stop', 'settlement'], true)) {
+            return ['ok' => true, 'record' => $existing, 'skipped' => 'a completed exit is already recorded'];
+        }
         if ($reversal !== null) {
             $record = $existing ?? $record;
             $record['reversal'] = $reversal;
@@ -5124,6 +5152,16 @@ function live_state_with_exit_reasons(array $payload): array
         $positions[$index]['exitBestBid'] = $record['bestBid'] ?? null;
         $positions[$index]['exitBestAsk'] = $record['bestAsk'] ?? null;
         $positions[$index]['exitOrderId'] = $record['orderId'] ?? null;
+        // A stop that fired and declined to sell. The position is still open, so these ride
+        // along on an OPEN row -- the one case where an exit record describes something that
+        // has NOT happened, and the reason the row can explain why.
+        if (($record['reason'] ?? '') === 'stop-declined') {
+            $positions[$index]['exitGapFloor'] = $record['gapFloor'] ?? null;
+            $positions[$index]['exitWorstBid'] = $record['worstBid'] ?? null;
+            $positions[$index]['exitDeclinedSince'] = $record['declinedSince'] ?? null;
+            $positions[$index]['exitDeclinedPasses'] = $record['declinedPasses'] ?? null;
+            $positions[$index]['exitRiskTargetUsdc'] = $record['riskTargetUsdc'] ?? null;
+        }
         // The second half of the stop, so the closed row can explain that the opposite
         // position was opened out of this one.
         if (is_array($record['reversal'] ?? null)) {

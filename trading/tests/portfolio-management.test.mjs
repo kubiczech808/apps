@@ -4379,6 +4379,70 @@ test("closed trades: a protective exit shows the level, the bid and the gap", ()
   assert.equal(note({ entryPrice: 0.72 }), "");
 });
 
+// Asked for in the same message that retracted "sell at any cost": if a stop cannot be
+// caught within about 10% of the level, do not apply it -- "to ze se tak stalo mi uvedes v
+// poznamce toho closed trade". A declined stop leaves the position OPEN, so on screen it is
+// indistinguishable from a position whose stop never noticed anything. That is the fault.
+test("open positions: a stop that fired and refused to sell says so on its own row", () => {
+  const note = new Function("trade", `
+    ${extractFunction(APP, "numericOrNull")}
+    ${extractFunction(APP, "percent")}
+    ${extractFunction(APP, "probability")}
+    ${extractFunction(APP, "money")}
+    ${extractFunction(APP, "signedMoney")}
+    ${extractFunction(APP, "formatDate")}
+    ${extractFunction(APP, "formatInteger")}
+    ${extractFunction(APP, "escapeHtml")}
+    ${extractFunction(APP, "stopDeclinedNote")}
+    return stopDeclinedNote(trade);
+  `);
+
+  // A live row: the standing decline arrives from the exit record.
+  const live = note({
+    exitStopPrice: 0.49, exitGapFloor: 0.44, exitBestBid: 0.39, exitWorstBid: 0.12,
+    exitDeclinedSince: "2026-09-06T16:03:23.991Z", exitDeclinedPasses: 1599,
+    unrealizedPnlUsdc: -2.74, exitRiskTargetUsdc: 2.74,
+  });
+  assert.match(live, /class="info-button"/, "reached through an i, not printed inline");
+  assert.match(live, /stop was reached at 49/i);
+  assert.match(live, /best bid was 39/);
+  assert.match(live, /NOT sold: this stop will not sell below 44/);
+  assert.match(live, /worst bid seen since is 12/);
+  // What refusing is costing, which is the number the band is judged on.
+  assert.match(live, /this position is \$-2\.74/);
+  assert.match(live, /against a \$2\.74 planned loss/);
+  // The separator is whatever cs-CZ grouping produces, which is a non-breaking space.
+  assert.match(live, /1.599 checks/);
+  assert.match(live, /re-checked on every pass, so it still sells if the book comes back/);
+
+  // A paper row records the same facts on itself under different names, so the rule can be
+  // watched on a paper portfolio before it is trusted on the wallet.
+  const paper = note({
+    stopLossPrice: 0.89998, stopLossGapFloor: 0.8, stopLossDeclinedBid: 0.05,
+    stopLossTriggeredAt: "2026-09-06T16:03:23.991Z", unrealizedPnlUsdc: -4.47,
+  });
+  assert.match(paper, /stop was reached at 90/i);
+  assert.match(paper, /best bid was 5/);
+  assert.match(paper, /will not sell below 80/);
+
+  // A row with none of it says nothing rather than an empty tooltip.
+  assert.equal(note({ entryPrice: 0.72 }), "");
+});
+
+test("open positions: the declined chip is read before the ordinary open-position chip", () => {
+  const badge = APP.slice(APP.indexOf("function tradeTypeBadge"), APP.indexOf("function tradePriceCell"));
+  const declined = badge.indexOf('trade.exitReason === "stop-declined"');
+  const closed = badge.indexOf("if (isClosedTrade(trade))");
+  const open = badge.indexOf('trade.mode === "LIVE"');
+  assert.ok(declined > 0, "the declined case has to be handled at all");
+  assert.ok(declined < closed && declined < open,
+    "an ordinary open-position chip below would hide the one fact worth reading on this row");
+  // Both sides reach it: the live worker publishes an exit record, the paper bot writes the
+  // status onto the trade.
+  assert.match(badge, /String\(trade\.stopLossStatus \|\| ""\)\.toUpperCase\(\) === "DECLINED_GAPPED"/);
+  assert.match(badge, /Stop reached &middot; not sold/);
+});
+
 // Asked for: 49% as the default floor on every portfolio whose stop loss is armed.
 //
 // Applied in the normalizer rather than written into the stored configs, because that

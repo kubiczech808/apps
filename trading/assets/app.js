@@ -4299,6 +4299,49 @@ function stopExecutionNote(trade = {}) {
     + `</span>`;
 }
 
+// A stop that fired and deliberately did NOT sell. The position is still open, which is the
+// whole difficulty: on the screen it is indistinguishable from a position whose stop never
+// noticed anything, and that is precisely the case the owner asked to be told about --
+// "to ze se tak stalo mi uvedes v poznamce".
+//
+// One reader for both sides, like the notes above: the live worker publishes the standing
+// decline as an exit record, the paper bot writes it onto the trade as it declines.
+function stopDeclinedNote(trade = {}) {
+  const level = numericOrNull(trade.exitStopPrice ?? trade.stopLossPrice ?? trade.stopPrice);
+  const floor = numericOrNull(trade.exitGapFloor ?? trade.stopLossGapFloor);
+  const bid = numericOrNull(trade.exitBestBid ?? trade.stopLossDeclinedBid ?? trade.currentPrice);
+  const worst = numericOrNull(trade.exitWorstBid);
+  const since = trade.exitDeclinedSince || trade.stopLossTriggeredAt || "";
+  const passes = numericOrNull(trade.exitDeclinedPasses);
+  const pnl = numericOrNull(trade.unrealizedPnlUsdc);
+  const risk = numericOrNull(trade.exitRiskTargetUsdc ?? trade.riskTargetUsdc);
+  if (level == null && floor == null && bid == null) return "";
+
+  const lines = [];
+  if (level != null) lines.push(`The stop was reached at ${probability(level)}.`);
+  if (bid != null) lines.push(`The best bid was ${probability(bid)}.`);
+  if (floor != null) {
+    lines.push(`\nIt was NOT sold: this stop will not sell below ${probability(floor)}, and the`
+      + ` book is under that. Selling into a gap that wide takes far less than the level that`
+      + ` was set, so the position is left to resolve instead.`);
+  }
+  if (worst != null && bid != null && worst < bid - 0.0001) {
+    lines.push(`\nThe worst bid seen since is ${probability(worst)}.`);
+  }
+  if (pnl != null) {
+    lines.push(`\nAt the current bid this position is ${signedMoney(pnl)}`
+      + `${risk != null ? `, against a ${money(risk)} planned loss` : ""}.`);
+  }
+  if (since) {
+    lines.push(`\nDeclining since ${formatDate(since)}${passes != null ? ` (${formatInteger(passes)} checks)` : ""}.`
+      + ` It is re-checked on every pass, so it still sells if the book comes back.`);
+  }
+  return `<span class="analysis-popover">`
+    + `<button class="info-button" type="button" aria-label="Why this stop did not sell">i</button>`
+    + `<span class="analysis-tooltip" role="tooltip">${escapeHtml(lines.join(" "))}</span>`
+    + `</span>`;
+}
+
 function stopLossReversalNote(trade = {}) {
   const live = trade.exitReversal && typeof trade.exitReversal === "object" ? trade.exitReversal : null;
   const status = String(live?.status || trade.stopLossReversalStatus || "").toUpperCase();
@@ -4372,6 +4415,15 @@ function tradeTypeBadge(trade) {
   if (trade.exitReason === "settlement") {
     const at = numericOrNull(trade.exitPrice);
     return `<span class="order-chip">Closed at certainty${at != null ? ` &middot; sold at ${percent(at)}` : ""}</span>`;
+  }
+  // Still open, and that is the point: the stop fired and refused to sell into a gap. Placed
+  // before the closed-row and open-position chips below, both of which would otherwise label
+  // this an ordinary open position and hide the one fact worth reading on it.
+  if (trade.exitReason === "stop-declined"
+    || String(trade.stopLossStatus || "").toUpperCase() === "DECLINED_GAPPED") {
+    const floor = numericOrNull(trade.exitGapFloor ?? trade.stopLossGapFloor);
+    return `<span class="order-chip warning">Stop reached &middot; not sold${floor != null ? ` below ${percent(floor)}` : ""}</span>`
+      + stopDeclinedNote(trade);
   }
   if (String(trade.status || "").toUpperCase() === "STOP_BREACH") return '<span class="order-chip warning">Stop breached · no floor exit</span>';
   if (String(trade.status || "").toUpperCase() === "STOP_GAP") return '<span class="order-chip warning">Stop gap · cap missed</span>';

@@ -1280,6 +1280,12 @@ function recordBookError(state, plan, error, at) {
 //
 // The row is what the dashboard needs anyway: "this position's stop fired and deliberately
 // did not sell, here is the level, the bid, and how long".
+// How often the standing row is also published to the dashboard. The row itself is updated
+// every pass; posting it every pass would be one HTTP request a second per declined position,
+// and 1599 of them for a single position in the last sample. Fifteen minutes keeps the bid on
+// the dashboard current enough to judge the band without turning the annotation into traffic.
+const DECLINED_STOP_PUBLISH_MS = 15 * 60 * 1000;
+
 function recordDeclinedStop(state, plan, { bestBid, gapFloor, at, reason }) {
   state.declinedStops = state.declinedStops || {};
   const previous = state.declinedStops[plan.tokenId];
@@ -1297,19 +1303,78 @@ function recordDeclinedStop(state, plan, { bestBid, gapFloor, at, reason }) {
     firstAt: previous ? previous.firstAt : at,
     lastAt: at,
     count: previous ? (Number(previous.count) || 1) + 1 : 1,
+    publishedAt: previous ? previous.publishedAt : null,
     reason,
   };
-  if (previous) return;
+  // Whether the dashboard is due a copy of this row. Returned rather than acted on here, so
+  // the caller owns the await and this stays a pure state update.
+  const row = state.declinedStops[plan.tokenId];
+  const publishedAt = Date.parse(row.publishedAt || "");
+  const due = !Number.isFinite(publishedAt) || Date.parse(at) - publishedAt >= DECLINED_STOP_PUBLISH_MS;
+  if (due) row.publishedAt = at;
+  if (previous) return due;
   recordEvent(state, {
     at, type: "STOP_DECLINED_GAPPED", tokenId: plan.tokenId,
     question: plan.question, outcome: plan.outcome,
     stopPrice: plan.stopPrice, gapFloor, bestBid, reason,
   });
+  return due;
 }
 
 // A stop that sold, or a position that left the account, has nothing left to decline.
 function clearDeclinedStop(state, tokenId) {
   if (state.declinedStops && state.declinedStops[tokenId]) delete state.declinedStops[tokenId];
+}
+
+// The standing row, sent to the dashboard so an open position can explain itself. Same
+// endpoint and the same best-effort contract as a completed exit: the stop's decision stands
+// whether or not the annotation is delivered, and a failed post must never become a crashed
+// pass. The record is keyed by token, so this refreshes rather than accumulates.
+async function recordDeclinedStopOnDashboard(state, plan, bestBid) {
+  if (!TRADING_TRIGGER_KEY) return;
+  const row = state.declinedStops?.[plan.tokenId];
+  if (!row) return;
+  const shares = number(plan.shares);
+  const entry = number(plan.entryPrice);
+  const bid = number(bestBid);
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 12000);
+  try {
+    await fetch(LIVE_EXIT_RECORD_URL, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-trading-trigger-key": TRADING_TRIGGER_KEY,
+        "user-agent": "trading-live-exit-worker/1.0",
+      },
+      body: JSON.stringify({
+        tokenId: String(plan.tokenId),
+        reason: "stop-declined",
+        portfolioId: String(plan.source || "").replace(/^portfolio:/, ""),
+        question: plan.question,
+        outcome: plan.outcome,
+        stopPrice: row.stopPrice ?? plan.stopPrice ?? null,
+        gapFloor: row.gapFloor ?? null,
+        bestBid: bid,
+        worstBid: row.worstBid ?? null,
+        shares: shares ?? null,
+        declinedSince: row.firstAt || null,
+        declinedPasses: row.count ?? null,
+        riskTargetUsdc: row.riskTargetUsdc ?? plan.riskTargetUsdc ?? null,
+        // What refusing to sell is currently costing, at the bid it refused. The band is a
+        // judgement call between two bad outcomes, and this is the number it is judged on.
+        unrealizedPnlUsdc: shares != null && entry != null && bid != null
+          ? round((bid - entry) * shares, 6)
+          : null,
+      }),
+      signal: controller.signal,
+    });
+  } catch {
+    // Swallowed on purpose, exactly as recordLiveExit does: the stop's decision is already
+    // made and holds regardless, and the next publish window tries again.
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 // A rolling picture of what a pass costs, as counters rather than a log: the loop runs
@@ -1546,7 +1611,7 @@ async function checkOnce(context) {
       // into one that has since collapsed.
       if (reason === "stop" && stopGapIsTooWide({ bestBidPrice: exitBid, stopPrice: activeFloor })) {
         const limit = stopGapFloorPrice(activeFloor);
-        recordDeclinedStop(context.state, plan, {
+        const due = recordDeclinedStop(context.state, plan, {
           bestBid: exitBid,
           gapFloor: limit,
           at: now,
@@ -1555,6 +1620,10 @@ async function checkOnce(context) {
             + ` would take far less than the level that was set, so the position is left to resolve`
             + ` and the stop is re-checked every pass in case the book recovers.`,
         });
+        // Published to the dashboard, so the position can say on its own row why it is still
+        // open with its stop long since reached. Rate-limited inside recordDeclinedStop --
+        // this branch runs once a second for as long as the book stays down.
+        if (due) await recordDeclinedStopOnDashboard(context.state, plan, exitBid);
         // Deliberately not terminal and not recorded as an exit attempt: nothing was sent,
         // and the next pass must ask again. A book that gapped on one tick often comes back.
         continue;

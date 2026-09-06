@@ -897,13 +897,25 @@ test("a stop declines to sell into a gap far below its own floor", async () => {
     "and the tolerance is measured against the level that fired, not against the other one");
   // Nothing is sent and nothing is recorded as an attempt, so the next pass asks again: a
   // book that gapped on one tick often comes back, and a terminal mark would abandon it.
-  assert.match(source, /recordDeclinedStop\(context\.state, plan, \{/);
+  assert.match(source, /const due = recordDeclinedStop\(context\.state, plan, \{/);
   assert.doesNotMatch(source, /terminal: true[\s\S]{0,200}STOP_DECLINED_GAPPED/);
   // Collapsed to a standing row. At one pass a second an event each would bury the whole
   // history in minutes, which is the trap the book errors already fell into once.
-  assert.match(source, /if \(previous\) return;\s*\n\s*recordEvent\(state, \{\s*\n\s*at, type: "STOP_DECLINED_GAPPED"/);
+  assert.match(source, /if \(previous\) return due;\s*\n\s*recordEvent\(state, \{\s*\n\s*at, type: "STOP_DECLINED_GAPPED"/);
   // And cleared once it does sell, or the row would outlive what it describes.
   assert.match(source, /clearDeclinedStop\(context\.state, plan\.tokenId\);/);
+
+  // The same collapsing on the way OUT to the dashboard. The row is what an open position
+  // reads to explain why its stop fired and did not sell, so it has to be published -- but
+  // one HTTP request per pass is 1599 of them for a single position, which is the sample
+  // this rule was measured on.
+  assert.match(source, /const DECLINED_STOP_PUBLISH_MS = 15 \* 60 \* 1000;/);
+  assert.match(source, /if \(due\) await recordDeclinedStopOnDashboard\(context\.state, plan, exitBid\);/);
+  assert.match(source, /reason: "stop-declined",/);
+  // Best effort, exactly as a completed exit is: the stop's decision stands whether or not
+  // the annotation is delivered, and a failed post must not become a crashed pass.
+  const publisher = source.slice(source.indexOf("async function recordDeclinedStopOnDashboard"));
+  assert.match(publisher.slice(0, 2400), /\} catch \{/);
 });
 
 // Asked for: sell when the probability falls to a set level OR when the loss reaches its
