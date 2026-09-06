@@ -73,6 +73,50 @@ test('reaching the zone without a trigger candle is refused', () => {
   assert.match(decision.reason, /no bullish trigger/)
 })
 
+// The diagnostic switches get the same treatment the sweep filter needed twice:
+// a switch is only proved by showing the answer CHANGES when it is thrown. Two
+// implementations of the sweep were tautologies that returned identical numbers
+// with the filter on and off, and nothing but a test like this catches that.
+test('requireTrigger:false takes the entry the trigger gate refused', () => {
+  const candles = zigzag([100, 112, 106, 124, 116, 138, 128, 152, 140, 168, 152, 180, 164, 196, 166], { steps: 8 })
+  appendCandle(candles, { open: 165.5, high: 165.8, low: 163, close: 164.2 })
+
+  const withGate = evaluateEntry({ htfCandles: candles, ltfCandles: candles, settings: NO_QUALITY_FILTERS })
+  assert.equal(withGate.action, 'none')
+  assert.match(withGate.reason, /no bullish trigger/)
+
+  const withoutGate = evaluateEntry({
+    htfCandles: candles,
+    ltfCandles: candles,
+    settings: { ...NO_QUALITY_FILTERS, requireTrigger: false },
+  })
+  assert.equal(withoutGate.action, 'open', 'the switch must change the decision, not merely exist')
+  assert.match(withoutGate.reason, /no trigger required/)
+})
+
+test('triggerKinds refuses a valid trigger of the wrong kind', () => {
+  const candles = bullishPullback()
+  const anyKind = evaluateEntry({ htfCandles: candles, ltfCandles: candles, settings: NO_QUALITY_FILTERS })
+  assert.equal(anyKind.action, 'open')
+  const kind = anyKind.context.confirmation.replace(/^(bullish|bearish)_/, '')
+  const other = kind === 'engulfing' ? 'rejection' : 'engulfing'
+
+  const sameKind = evaluateEntry({
+    htfCandles: candles,
+    ltfCandles: candles,
+    settings: { ...NO_QUALITY_FILTERS, triggerKinds: [kind] },
+  })
+  assert.equal(sameKind.action, 'open', 'asking for the kind it found must still accept')
+
+  const otherKind = evaluateEntry({
+    htfCandles: candles,
+    ltfCandles: candles,
+    settings: { ...NO_QUALITY_FILTERS, triggerKinds: [other] },
+  })
+  assert.equal(otherKind.action, 'none')
+  assert.match(otherKind.reason, new RegExp(`only ${other} counts`))
+})
+
 test('a reward/risk gate above what the structure offers refuses the trade', () => {
   const candles = bullishPullback()
   const decision = evaluateEntry({ htfCandles: candles, ltfCandles: candles, settings: { ...NO_QUALITY_FILTERS, minRR: 12 } })

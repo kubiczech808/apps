@@ -84,6 +84,17 @@ export const DEFAULT_STRATEGY = {
   requireImbalance: false,
   // Volatility band, ATR as a percentage of price on the entry timeframe. Too
   // quiet and the stop is inside the spread; too violent and the zone is noise.
+  // Diagnostic switches, both set to what ships. They exist so `--compare` can
+  // ISOLATE the closed-candle trigger's contribution rather than assume it: a
+  // filter that costs more in missed entries than it saves in bad ones cannot
+  // be told from a useful one by reading the code.
+  //
+  // requireTrigger: false skips the pattern gate entirely — enter as soon as
+  //   price is in an aligned zone.
+  // triggerKinds: ['engulfing'] or ['rejection'] restricts which pattern
+  //   counts; null accepts either.
+  requireTrigger: true,
+  triggerKinds: null,
   atrPctMin: 0.15,
   atrPctMax: 4.0,
   minHtfCandles: 60,
@@ -185,12 +196,21 @@ export const evaluateEntry = ({ htfCandles, ltfCandles, settings = {} }) => {
 
   const signal = candleSignal(ltfCandles, ltfCandles.length - 1, { atrValue: ltfAtr })
   const confirmation = side === 'long' ? signal.bullish : signal.bearish
-  if (!confirmation) {
-    return reject(`no ${side === 'long' ? 'bullish' : 'bearish'} trigger candle at the zone`, {
-      ...context,
-      zone,
-      patterns: signal.patterns,
-    })
+  if (config.requireTrigger) {
+    if (!confirmation) {
+      return reject(`no ${side === 'long' ? 'bullish' : 'bearish'} trigger candle at the zone`, {
+        ...context,
+        zone,
+        patterns: signal.patterns,
+      })
+    }
+    if (Array.isArray(config.triggerKinds) && !config.triggerKinds.some((kind) => confirmation.endsWith(kind))) {
+      return reject(`trigger is ${confirmation}, and only ${config.triggerKinds.join('/')} counts here`, {
+        ...context,
+        zone,
+        patterns: signal.patterns,
+      })
+    }
   }
 
   const entry = price
@@ -236,7 +256,7 @@ export const evaluateEntry = ({ htfCandles, ltfCandles, settings = {} }) => {
     stop,
     takeProfit,
     rr,
-    reason: `${htf.bias} trend, ${confirmation} at ${wantedZoneType} ${zone.low.toFixed(0)}-${zone.high.toFixed(0)} (${zone.touches} touch${zone.touches > 1 ? 'es' : ''})`,
+    reason: `${htf.bias} trend, ${confirmation ?? 'no trigger required'} at ${wantedZoneType} ${zone.low.toFixed(0)}-${zone.high.toFixed(0)} (${zone.touches} touch${zone.touches > 1 ? 'es' : ''})`,
     context: { ...context, zone, confirmation, patterns: signal.patterns, structuralTarget: structural?.price ?? null },
   }
 }

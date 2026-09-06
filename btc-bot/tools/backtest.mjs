@@ -127,13 +127,22 @@ const VARIANTS_BY_STRATEGY = {
   // The question now is whether the two quality filters earn their place. The
   // baseline row is the strategy as it lost 37%, so every other row is measured
   // against the thing being fixed rather than against nothing.
+  // The filter question is answered and recorded in the README (the sweep earns
+  // its place, the imbalance test does not). The open question is WHICH of the
+  // remaining price-action components is unreliable enough to leave the system
+  // at PF 0.96 — so each row here removes or loosens exactly one of them:
+  // the closed-candle trigger, the kind of trigger, the stop's distance from
+  // the zone, the target, and how close to the zone price must be.
   'price-action': [
-    ['as it lost (no filters)', { strategy: { requireSweep: false, requireImbalance: false } }],
-    ['sweep only', { strategy: { requireSweep: true, requireImbalance: false } }],
-    ['imbalance only', { strategy: { requireSweep: false, requireImbalance: true } }],
-    ['both (shipped)', {}],
-    ['both, no trend-flip close', { strategy: { closeOnHtfFlip: false } }],
-    ['both, require 3R', { strategy: { minRR: 3, tpMinR: 3 } }],
+    ['shipped', {}],
+    ['no candle trigger', { strategy: { requireTrigger: false } }],
+    ['engulfing trigger only', { strategy: { triggerKinds: ['engulfing'] } }],
+    ['rejection trigger only', { strategy: { triggerKinds: ['rejection'] } }],
+    ['stop 1.0 ATR past zone', { strategy: { stopAtrBuffer: 1.0 } }],
+    ['stop 1.5 ATR past zone', { strategy: { stopAtrBuffer: 1.5 } }],
+    ['fixed 2R target', { strategy: { tpMaxR: 2 } }],
+    ['must close inside zone', { strategy: { zoneMaxDistanceAtr: 0 } }],
+    ['no trend-flip close', { strategy: { closeOnHtfFlip: false } }],
   ],
   // Structural questions, not a parameter sweep: does each RULE earn its place?
   // The lookback numbers are left at their long-standing defaults on purpose —
