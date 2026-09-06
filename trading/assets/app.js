@@ -12560,14 +12560,46 @@ function setRunLogFilterMenuOpen(open) {
 
 function runActionClass(action) {
   const value = String(action || "").toUpperCase();
-  if (["OPEN", "OPENED", "SUBMIT", "SUBMITTED", "CANCELED_AND_SUBMITTED", "DRY_RUN_READY", "DRY_RUN_ROTATION_EXIT", "ROTATION_EXIT_SUBMITTED", "ROTATE", "ROTATED"].includes(value)) return "positive";
+  // FILLED and RESTING are not written by any run. They are what a PENDING_MATCH row
+  // resolves to once the account says how the queued match ended.
+  if (["OPEN", "OPENED", "SUBMIT", "SUBMITTED", "CANCELED_AND_SUBMITTED", "FILLED", "DRY_RUN_READY", "DRY_RUN_ROTATION_EXIT", "ROTATION_EXIT_SUBMITTED", "ROTATE", "ROTATED"].includes(value)) return "positive";
   if (["SKIP", "REJECTED", "CANCELED_REPLACEMENT_REJECTED", "ERROR"].includes(value)) return "negative";
+  // A resting order is real and visible in its own tab, but it is not a position.
+  if (value === "RESTING") return "";
   // The exchange took the order and has not settled it. Deliberately not positive: a
   // queued fill-and-kill order that matches nothing leaves no position and no resting
   // order, and reading it as green is what made the run log promise a position the
   // account did not hold.
   if (value === "PENDING_MATCH") return "warning";
   return "";
+}
+
+// "Not yet filled" is true of a moment, not of a row. The run log records what the
+// exchange had answered by the time the run ended, and a queued match resolves minutes
+// later -- so a PENDING_MATCH row goes on saying the position does not exist while the
+// position sits in the opened list beside it.
+//
+// Reported exactly that way, and it is the same mistake as the frozen kickoff verdict:
+// a question about now, answered once and stored. So it is asked again at render time,
+// against the account, rather than rewritten in the stored run.
+function pendingRunOutcome(run = {}, liveState = state.liveState) {
+  const batch = run.batchLog || run;
+  if (String(run.action || batch.action || "").toUpperCase() !== "PENDING_MATCH") return null;
+  const tokenId = String((batch.selected || run.selected || {})?.tokenId || "");
+  if (!tokenId) return null;
+  const held = (Array.isArray(liveState?.positions) ? liveState.positions : [])
+    .some((position) => String(position?.tokenId || position?.assetId || "") === tokenId);
+  if (held) return "FILLED";
+  const resting = (Array.isArray(liveState?.openOrders) ? liveState.openOrders : [])
+    .some((order) => String(order?.tokenId || order?.assetId || "") === tokenId
+      && !String(order?.side || "").toUpperCase().includes("SELL"));
+  return resting ? "RESTING" : null;
+}
+
+// What the row should say now, which is the stored action until the account disagrees.
+function resolvedRunAction(run = {}, liveState = state.liveState) {
+  const batch = run.batchLog || run;
+  return pendingRunOutcome(run, liveState) || String(run.action || batch.action || "");
 }
 
 function runCapitalNote(run = {}) {
@@ -12655,6 +12687,15 @@ function submittedOrderSummaryMarkup(run = {}) {
 }
 
 function runLogMessageMarkup(run = {}) {
+  // The stored reason for a queued order says "not yet filled", which stops being true
+  // the moment the match resolves. Say what happened instead of what was pending.
+  const pending = pendingRunOutcome(run);
+  if (pending) {
+    const settled = pending === "FILLED"
+      ? "the queued order filled and the position is open"
+      : "the queued order did not fill and is resting on the book";
+    return `${submittedOrderSummaryMarkup(run) || escapeHtml(humanRunReason(run))} <em>${escapeHtml(settled)}.</em>`;
+  }
   return submittedOrderSummaryMarkup(run) || escapeHtml(humanRunReason(run));
 }
 
@@ -12734,7 +12775,7 @@ function renderRunLog() {
       ${runs.map((run, index) => {
         const batch = run.batchLog || run;
         const cells = `
-            <span class="${runActionClass(run.action || batch.action)}">${escapeHtml(run.action || batch.action || "-")}</span>
+            <span class="${runActionClass(resolvedRunAction(run))}">${escapeHtml(resolvedRunAction(run) || "-")}</span>
             <strong>${escapeHtml(run.runAt || run.generatedAt ? formatDate(run.runAt || run.generatedAt) : "-")}</strong>
             <span>${runLogMessageMarkup(run)}</span>
             <span class="portfolio-run-source">${portfolioRunSource(run)}</span>
