@@ -4378,3 +4378,50 @@ test("closed trades: a protective exit shows the level, the bid and the gap", ()
   // A row with none of it says nothing rather than an empty tooltip.
   assert.equal(note({ entryPrice: 0.72 }), "");
 });
+
+// Asked for: 49% as the default floor on every portfolio whose stop loss is armed.
+//
+// Applied in the normalizer rather than written into the stored configs, because that
+// normalizer runs on every read: an existing portfolio picks it up with no migration, and
+// one created tomorrow starts with it.
+test("stop floor: 49% by default wherever a stop loss is armed, and off stays off", () => {
+  const config = normalizeConfig({
+    paper: {
+      armed: { displayName: "Armed", stopLossRiskMultiplier: 1.75 },
+      unarmed: { displayName: "Unarmed", stopLossRiskMultiplier: 0 },
+      turnedOff: { displayName: "Off", stopLossRiskMultiplier: 1.75, stopLossProbabilityFloor: 0 },
+      chosen: { displayName: "Chosen", stopLossRiskMultiplier: 1.75, stopLossProbabilityFloor: 0.4 },
+    },
+  });
+
+  assert.equal(config.paper.armed.stopLossProbabilityFloor, 0.49,
+    "a portfolio with a stop loss and no floor of its own gets the default");
+
+  // Tied to the stop being armed. A portfolio with no protective exit has not asked for
+  // one, and giving it a floor here would arm a stop nobody configured.
+  assert.equal(config.paper.unarmed.stopLossProbabilityFloor, 0,
+    "a portfolio with no stop loss is not given one by this");
+
+  assert.equal(config.paper.turnedOff.stopLossProbabilityFloor, 0,
+    "an explicit zero means off and must survive the next read");
+
+  // What distinguishes reading the key from a plain ??, which a later simplification would
+  // reach for. A stored 0 survives either way, because 0 is not null. An explicitly stored
+  // NULL is where they part: ?? would fall through and re-arm the stop, and since every read
+  // normalizes, that would be permanent.
+  const explicitNull = normalizeConfig({
+    paper: { off: { displayName: "Off", stopLossRiskMultiplier: 1.75, stopLossProbabilityFloor: null } },
+  });
+  assert.equal(explicitNull.paper.off.stopLossProbabilityFloor, 0,
+    "a stored null is off, not an absent setting waiting for the default");
+  assert.equal(config.paper.chosen.stopLossProbabilityFloor, 0.4,
+    "and an explicit level is honoured rather than overridden by the default");
+
+  // The live side reads the same normalizer, so it inherits this too.
+  const live = normalizeConfig({
+    live: { displayName: "Live", stopLossRiskMultiplier: 1.5 },
+    livePortfolios: { underway: { displayName: "Underway", stopLossRiskMultiplier: 1.75 } },
+  });
+  assert.equal(live.live.stopLossProbabilityFloor, 0.49);
+  assert.equal(live.livePortfolios.underway.stopLossProbabilityFloor, 0.49);
+});

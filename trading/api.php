@@ -3146,6 +3146,11 @@ function config_max_resolution_hours(array $row, ?float $fallback = null): ?floa
  *
  * 0 means off, matching how the stop multiplier and the certainty close read.
  */
+// Where a stop loss is armed but no floor was chosen. Below 50% the market has the other
+// side winning, and 49 is the first level that says so without sitting exactly on the coin
+// flip a market hovers around.
+const DEFAULT_STOP_LOSS_PROBABILITY_FLOOR = 0.49;
+
 function normalize_stop_loss_probability_floor_value(mixed $value): float
 {
     if ($value === null || $value === '' || !is_numeric($value)) {
@@ -3359,6 +3364,26 @@ function normalize_strategy_config(array $input, array $defaults): array
     } else {
         $stopLossRiskMultiplier = $defaultStopLossRiskMultiplier;
     }
+    // 49% by default wherever a stop loss is armed, asked for after two stops on one
+    // portfolio fired one too early and one too late. Applied here rather than written into
+    // every stored config, because this normalizer runs on every read: an existing portfolio
+    // picks it up without a migration, and one created tomorrow starts with it.
+    //
+    // Explicit key beats the default, exactly as the multiplier above does: absent means the
+    // default, present means what it says. A stored 0 is the owner having turned it off and
+    // survives either way, since 0 is not null -- what array_key_exists settles, and ?? does
+    // not, is an explicitly stored NULL, which this reads as "off" rather than silently
+    // re-arming a stop at the next read. Every read normalizes, so that would be for ever.
+    //
+    // Tied to the stop loss being armed: a portfolio with no protective exit has not asked
+    // for one, and giving it a floor here would arm a stop nobody configured.
+    if (array_key_exists('stopLossProbabilityFloor', $input)) {
+        $stopLossProbabilityFloor = normalize_stop_loss_probability_floor_value($input['stopLossProbabilityFloor']);
+    } elseif (array_key_exists('stopLossProbabilityFloor', $defaults)) {
+        $stopLossProbabilityFloor = normalize_stop_loss_probability_floor_value($defaults['stopLossProbabilityFloor']);
+    } else {
+        $stopLossProbabilityFloor = $stopLossRiskMultiplier > 0 ? DEFAULT_STOP_LOSS_PROBABILITY_FLOOR : 0.0;
+    }
     // The bid at which a position is sold rather than held to settlement. A market quoting
     // the outcome as certain still takes hours to resolve on Polymarket, and the capital is
     // locked for all of it. Selling one tick below pays about a cent a share to get it back
@@ -3407,9 +3432,7 @@ function normalize_strategy_config(array $input, array $defaults): array
         'settlementCloseBid' => $settlementCloseBid,
         // Sold at this probability whatever the entry cost. Combined with the equal-risk
         // floor by taking whichever the price meets first on the way down.
-        'stopLossProbabilityFloor' => normalize_stop_loss_probability_floor_value(
-            $input['stopLossProbabilityFloor'] ?? $defaults['stopLossProbabilityFloor'] ?? null,
-        ),
+        'stopLossProbabilityFloor' => $stopLossProbabilityFloor,
         'liveEventMode' => $liveEventMode,
         // Derived and kept only while readers that predate the three states are still in
         // circulation. liveEventMode is the stored setting.
