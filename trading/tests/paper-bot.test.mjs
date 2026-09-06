@@ -7237,7 +7237,10 @@ test("equal stop: the paper fill is modelled on what the live worker actually su
   // The live worker sells at the floor and triggers a touch above it so the order has
   // room to fill. That is the mechanism paper is estimating.
   assert.match(worker, /triggerPrice: stopPrice == null \? null : round\(Math\.min\(0\.999999, stopPrice \+ STOP_PRETRIGGER_BUFFER\), 6\)/);
-  assert.match(worker, /const POLL_INTERVAL_MS = clampInteger\(process\.env\.LIVE_EXIT_POLL_INTERVAL_MS, 5000,/);
+  // The live stop reacts at the loop's cadence, which is now one second. Paper is only
+  // marked when the bot runs, so it stays slower by design -- but the asymmetry is stated
+  // rather than assumed, and a change to the live cadence has to come past this line.
+  assert.match(worker, /const POLL_INTERVAL_MS = clampInteger\(process\.env\.LIVE_EXIT_POLL_INTERVAL_MS, 1000,/);
 
   // Paper needs the previous mark to know a crossing happened; it is written by the
   // check before, so nothing new has to be stored for this.

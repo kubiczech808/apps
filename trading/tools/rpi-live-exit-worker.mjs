@@ -23,13 +23,17 @@ const LIVE_ENTRY_CLAIM_URL = process.env.LIVE_ENTRY_CLAIM_URL
   || "https://osobnizkusenosti.cz/trading/api.php?action=live-entry-claim";
 const TRADING_TRIGGER_KEY = String(process.env.TRADING_TRIGGER_KEY || "").trim();
 const MODE = String(process.env.LIVE_EXIT_MODE || "shadow").trim().toLowerCase();
-const POLL_INTERVAL_MS = clampInteger(process.env.LIVE_EXIT_POLL_INTERVAL_MS, 5000, 1500, 60000);
+// How fast this goes round IS the stop's reaction time. Measured on a stopped position:
+// under a minute from healthy to through the floor, so five seconds was already coarse
+// against the thing being measured. One pass is now one request regardless of how many
+// positions are held, which is what makes a one-second loop affordable rather than
+// merely faster.
+const POLL_INTERVAL_MS = clampInteger(process.env.LIVE_EXIT_POLL_INTERVAL_MS, 1000, 250, 60000);
 const RETRY_INTERVAL_MS = clampInteger(process.env.LIVE_EXIT_RETRY_INTERVAL_MS, 20000, 5000, 300000);
 // How often a position that is ONLY waiting to be closed at certainty has its book read.
 // A stop needs the poll interval, because how fast the loop goes round is its reaction
 // time; this does not -- a market that has settled stays settled. Capped at 15 minutes so
 // the answer is never more than that stale, and defaulted well inside it.
-const SETTLEMENT_SCAN_INTERVAL_MS = clampInteger(process.env.LIVE_EXIT_SETTLEMENT_SCAN_MS, 60000, 5000, 900000);
 const STATE_REFRESH_MS = clampInteger(process.env.LIVE_EXIT_STATE_REFRESH_MS, 30000, 5000, 300000);
 const WATCHLIST_PATH = process.env.LIVE_EXIT_WATCHLIST_PATH || ".live-exit-watchlist.json";
 const STATE_PATH = process.env.LIVE_EXIT_STATE_PATH || ".live-exit-worker-state.json";
@@ -204,6 +208,43 @@ async function fetchJson(url, label) {
   });
   if (!response.ok) throw new Error(`${label}: HTTP ${response.status}`);
   return response.json();
+}
+
+// Every watched book in ONE request.
+//
+// How fast this loop goes round IS the stop's reaction time, and a position measured
+// falling to its floor in under a minute says the loop has to be quick. Reading a book per
+// token made a pass cost N requests, which put a floor under the interval and a ceiling on
+// the account at the same time: twenty positions at one second is twenty requests a second,
+// against a rate limit, for nothing gained.
+//
+// The CLOB answers /books with every book asked for, so a pass now costs one round trip
+// whether the account holds one position or twenty. That is what makes a one-second loop
+// possible -- and it is also why the settlement-only positions no longer need a slower
+// cadence of their own: they ride along in a request that was going out anyway.
+//
+// Returns a map from token to book. A token the CLOB did not answer for is simply absent,
+// which the caller reports against that position alone rather than losing the whole pass.
+async function fetchBooks(tokenIds) {
+  const wanted = [...new Set(tokenIds.map((tokenId) => String(tokenId)).filter(Boolean))];
+  if (!wanted.length) return new Map();
+  const response = await fetch(`${CLOB_HOST}/books`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "accept": "application/json",
+      "user-agent": "trading-live-exit-worker/1.0",
+    },
+    body: JSON.stringify(wanted.map((tokenId) => ({ token_id: tokenId }))),
+  });
+  if (!response.ok) throw new Error(`CLOB books: HTTP ${response.status}`);
+  const rows = await response.json();
+  const books = new Map();
+  for (const row of Array.isArray(rows) ? rows : []) {
+    const tokenId = String(row?.asset_id || row?.assetId || row?.token_id || "");
+    if (tokenId) books.set(tokenId, row);
+  }
+  return books;
 }
 
 // The reason a position was sold, sent to the dashboard at the moment this worker knows it.
@@ -1082,8 +1123,14 @@ async function checkOnce(context) {
       context.policyStateFetchedAt = Date.now();
     }
   }
-  const watchlist = await readJson(WATCHLIST_PATH, { positions: [] });
-  const explicitlyWatched = watchlistEntryMap(watchlist);
+  // Re-read on the same cadence as the remote policy rather than every pass. It is a
+  // hand-maintained emergency file that changes when a person edits it, and a disk read
+  // per second buys nothing.
+  if (!context.watchlist || Date.now() - (context.watchlistReadAt || 0) >= STATE_REFRESH_MS) {
+    context.watchlist = await readJson(WATCHLIST_PATH, { positions: [] });
+    context.watchlistReadAt = Date.now();
+  }
+  const explicitlyWatched = watchlistEntryMap(context.watchlist);
   const remotePolicies = remotePolicyMap(context.policyState);
   const fallbackPolicy = defaultRemotePolicy(context.policyState);
   const excludedTokens = excludedRemoteTokens(context.policyState);
@@ -1138,29 +1185,36 @@ async function checkOnce(context) {
   // poll interval.
   //
   // Reading them together makes one pass cost about one round trip instead of N.
-  context.settlementScannedAt = context.settlementScannedAt || new Map();
   const candidates = plans.filter((plan) => {
     const pending = context.state.exits?.[plan.tokenId];
     if (pending?.terminal) return false;
     if (pending?.lastAttemptAt && Date.now() - Date.parse(pending.lastAttemptAt) < RETRY_INTERVAL_MS) return false;
-    // A plan with a stop keeps the five-second cadence: how fast this loop goes round is
-    // the stop's reaction time. A plan that is only waiting for the market to price its
-    // outcome as certain does not need that -- a settled market stays settled -- so it is
-    // read on its own slower interval rather than adding a book fetch every pass.
-    if (plan.stopPrice == null) {
-      const last = context.settlementScannedAt.get(plan.tokenId) || 0;
-      if (Date.now() - last < SETTLEMENT_SCAN_INTERVAL_MS) return false;
-      context.settlementScannedAt.set(plan.tokenId, Date.now());
-    }
+    // Every plan, every pass. Settlement-only plans used to be held back to their own
+    // slower interval because each one added a request; batching removed that cost, so the
+    // reason is gone -- and holding a position back from the pass that would have sold it
+    // is exactly the delay this loop exists to avoid.
     return true;
   });
-  const observed = await mapWithConcurrency(candidates, async (plan) => {
-    try {
-      return { plan, book: await fetchJson(`${CLOB_HOST}/book?token_id=${encodeURIComponent(plan.tokenId)}`, `CLOB book ${plan.tokenId}`) };
-    } catch (error) {
-      return { plan, error };
-    }
-  }, BOOK_FETCH_CONCURRENCY);
+  let observed = [];
+  try {
+    const books = await fetchBooks(candidates.map((plan) => plan.tokenId));
+    observed = candidates.map((plan) => {
+      const book = books.get(String(plan.tokenId));
+      return book
+        ? { plan, book }
+        : { plan, error: new Error("the CLOB returned no book for this token") };
+    });
+  } catch (error) {
+    // One failed batch must not blind the worker to every position at once, so it falls
+    // back to reading them individually. Slower, and only for the pass that failed.
+    observed = await mapWithConcurrency(candidates, async (plan) => {
+      try {
+        return { plan, book: await fetchJson(`${CLOB_HOST}/book?token_id=${encodeURIComponent(plan.tokenId)}`, `CLOB book ${plan.tokenId}`) };
+      } catch (bookError) {
+        return { plan, error: bookError };
+      }
+    }, BOOK_FETCH_CONCURRENCY);
+  }
 
   for (const { plan, book, error: bookError } of observed) {
     if (bookError) {
@@ -1332,6 +1386,33 @@ async function checkOnce(context) {
       if (sync.attempted && !sync.ok) recordEvent(context.state, { at: new Date().toISOString(), type: "POST_EXIT_SYNC_ERROR", tokenId: plan.tokenId, error: sync.error });
     }
   }
+  await persistState(context);
+}
+
+// The state file is a quarter of a megabyte -- five hundred retained events, most of them
+// large -- and it was rewritten on every pass. At five seconds that was merely wasteful; at
+// one second it is 280 KB/s of synchronous writes onto the Pi's SD card, slow enough to
+// lengthen the very loop it is timing and hard on the card besides.
+//
+// So it is written when it has something new to say -- an event recorded, an exit
+// attempted, the watched set changed -- and otherwise on a slow heartbeat so `generatedAt`
+// still shows the worker alive. Nothing that decides an exit is read back from this file
+// mid-run: it is a report, not state the loop depends on.
+const STATE_HEARTBEAT_MS = clampInteger(process.env.LIVE_EXIT_STATE_WRITE_MS, 30000, 5000, 300000);
+
+async function persistState(context, { force = false } = {}) {
+  const stamp = JSON.stringify([
+    context.state.lastEvent?.at || null,
+    Object.keys(context.state.exits || {}).length,
+    context.state.watchedPositions?.length || 0,
+    context.state.excludedPositions?.length || 0,
+    context.state.policyError || null,
+    context.state.signingError?.at || null,
+  ]);
+  const due = Date.now() - (context.statePersistedAt || 0) >= STATE_HEARTBEAT_MS;
+  if (!force && !due && stamp === context.statePersistedStamp) return;
+  context.statePersistedStamp = stamp;
+  context.statePersistedAt = Date.now();
   await writeJson(STATE_PATH, context.state);
 }
 
@@ -1346,6 +1427,7 @@ async function main() {
   };
   console.log(`Live exit worker started: mode=${MODE}, protectAll=${PROTECT_ALL}, poll=${POLL_INTERVAL_MS}ms`);
   for (;;) {
+    const startedAt = Date.now();
     try {
       await checkOnce(context);
     } catch (error) {
@@ -1353,7 +1435,12 @@ async function main() {
       await writeJson(STATE_PATH, context.state).catch(() => {});
       console.error(error?.stack || error?.message || String(error));
     }
-    await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
+    // Sleep for what is LEFT of the interval, not the whole of it. The pass itself costs a
+    // round trip, so sleeping the full interval afterwards made the real period
+    // interval + work -- and at one second the work is a large share of it. A pass that
+    // overruns simply starts the next one immediately rather than accumulating drift.
+    const remaining = POLL_INTERVAL_MS - (Date.now() - startedAt);
+    if (remaining > 0) await new Promise((resolve) => setTimeout(resolve, remaining));
   }
 }
 

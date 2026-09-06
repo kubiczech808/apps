@@ -333,11 +333,13 @@ test("protected exit: the sell is priced on the tick grid and where it can fill"
 test("stop latency: every watched book is read in one pass, not in a queue", () => {
   const source = readFileSync(new URL("../tools/rpi-live-exit-worker.mjs", import.meta.url), "utf8");
 
-  // The reads are batched before anything is acted on.
-  assert.match(source, /const observed = await mapWithConcurrency\(candidates,/,
-    "the books must be read together rather than one at a time");
+  // One request for every book, not one request per book. This is what puts a floor under
+  // the poll interval: N requests a pass means N per second at a one-second loop.
+  assert.match(source, /const books = await fetchBooks\(candidates\.map\(\(plan\) => plan\.tokenId\)\);/,
+    "the books must be read in a single batched request");
+  assert.match(source, /await fetch\(`\$\{CLOB_HOST\}\/books`/, "which is the CLOB's own /books endpoint");
   const check = source.slice(source.indexOf("const candidates = plans.filter("));
-  const batchAt = check.indexOf("mapWithConcurrency(candidates");
+  const batchAt = check.indexOf("await fetchBooks(candidates");
   const actAt = check.indexOf("for (const { plan, book, error: bookError } of observed)");
   assert.ok(batchAt >= 0 && actAt > batchAt,
     "reading has to finish before acting, or one exit delays the next position's price check");
@@ -345,6 +347,11 @@ test("stop latency: every watched book is read in one pass, not in a queue", () 
   // The old shape must not come back: a book fetch awaited inside the loop over plans.
   assert.doesNotMatch(source, /for \(const plan of plans\) \{[\s\S]{0,400}?await fetchJson\(`\$\{CLOB_HOST\}\/book/,
     "a per-plan awaited book fetch is the queue this replaced");
+
+  // A failed batch falls back to reading them individually rather than blinding the worker
+  // to every position at once.
+  assert.match(source, /observed = await mapWithConcurrency\(candidates, async \(plan\) => \{/,
+    "one bad batch must not cost the pass entirely");
 
   // The bounded map itself, driven: order preserved, and genuinely concurrent.
   const started = [];
@@ -548,11 +555,13 @@ test("settlement close: the sell is priced at the bid, because there is no floor
   const source = readFileSync(new URL("../tools/rpi-live-exit-worker.mjs", import.meta.url), "utf8");
   // The submission has to drop the floor, or the price above is never the one sent.
   assert.match(source, /await submitProtectedExit\(\{ \.\.\.plan, stopPrice: null \}, \{ bestBidPrice: exitBid \}\)/);
-  // A position that is only waiting for certainty does not need the stop's five-second
-  // cadence, and adding a book fetch every pass for it would be pure load.
-  assert.match(source, /const SETTLEMENT_SCAN_INTERVAL_MS = clampInteger\(process\.env\.LIVE_EXIT_SETTLEMENT_SCAN_MS, 60000, 5000, 900000\)/,
-    "capped at fifteen minutes, so the answer is never staler than that");
-  assert.match(source, /if \(Date\.now\(\) - last < SETTLEMENT_SCAN_INTERVAL_MS\) return false;/);
+  // A settlement-only position used to be held back to a slower cadence of its own, because
+  // reading its book cost a request of its own. Batching removed that cost, so the reason
+  // is gone -- and holding a position back from the pass that would have sold it is the
+  // delay this loop exists to avoid. Every plan is now read every pass.
+  assert.doesNotMatch(source, /SETTLEMENT_SCAN_INTERVAL_MS/,
+    "no position waits for a cadence of its own any more");
+  assert.doesNotMatch(source, /settlementScannedAt/);
 });
 
 // Reported: the stop sold a WINNING position. Measured on "Avispa Fukuoka vs. FC Mito Holly

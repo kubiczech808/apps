@@ -106,7 +106,11 @@ jobs:
           LIVE_EXIT_MODE=${exit_mode}
           LIVE_EXIT_CONFIRM_LIVE=${confirm_live}
           LIVE_EXIT_PROTECT_ALL=${protect_all}
-          LIVE_EXIT_POLL_INTERVAL_MS=5000
+          # How fast the loop goes round IS the stop's reaction time. Measured on a stopped
+          # position: under a minute from healthy to through the floor. One pass is one
+          # batched /books request regardless of how many positions are held, so a one-second
+          # loop costs one request a second no matter how large the account gets.
+          LIVE_EXIT_POLL_INTERVAL_MS=1000
           LIVE_EXIT_RETRY_INTERVAL_MS=20000
           LIVE_EXIT_STATE_REFRESH_MS=30000
           LIVE_EXIT_POLICY_URL=https://osobnizkusenosti.cz/trading/api.php?action=live-exit-policy
