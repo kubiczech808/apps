@@ -7456,6 +7456,23 @@ function syncPortfolioCandidateRefreshControl() {
   els.portfolioCandidatesRefresh.textContent = busy ? "Refreshing..." : "Refresh shortlist";
 }
 
+// The width of the quote, preferring the stated spread and falling back to the two sides it
+// can be derived from. A port of observation_spread in api.php, and it has to stay one: that
+// endpoint builds this shortlist and the bot re-filters it, so a disagreement shows the
+// screen one set of candidates and trades another.
+const MAX_TRADABLE_SPREAD = 0.05;
+
+function candidateQuoteSpread(item = {}) {
+  for (const [stated, askKey, bidKey] of [["spread", "bestAsk", "bestBid"], ["firstSpread", "firstBestAsk", "firstBestBid"]]) {
+    const value = numericOrNull(item[stated]);
+    if (value != null) return Math.abs(value);
+    const ask = numericOrNull(item[askKey]);
+    const bid = numericOrNull(item[bidKey]);
+    if (ask != null && bid != null) return Math.abs(ask - bid);
+  }
+  return null;
+}
+
 // The best price on one side of a book, or null when that side is empty. An absent side is
 // not a price of zero -- reading it as one is what once had a stop selling into a vacuum.
 function shortlistBookSide(levels, pick) {
@@ -9422,6 +9439,24 @@ function portfolioCandidateFilterReasons(item, mode = state.mode) {
     } else if (freshAsk == null) {
       // A buy needs somebody offering. A bid alone is what this outcome could be SOLD at.
       reasons.push("nothing is offered on this outcome, so there is nothing to buy");
+    }
+  }
+  // Two more rules the endpoint and the bot both apply and this list did not, which is why
+  // rows kept surviving it that the run then refused. Reported with the shortlist down to
+  // seven and still disagreeing: a market quoting 5c against 95c has a counterparty in name
+  // only, and one that has traded $3.92 all day cannot fill an order of this size.
+  //
+  // Applied to every row, not only re-quoted ones. The point is that the list and the run
+  // answer alike, and the server has always asked both of these.
+  const currentSpread = candidateQuoteSpread(item);
+  if (currentSpread != null && currentSpread > MAX_TRADABLE_SPREAD) {
+    reasons.push(`spread ${probability(currentSpread)} is wider than the ${probability(MAX_TRADABLE_SPREAD)} a fill needs`);
+  }
+  const minimumVolume = numericOrNull(config.minLiquidityUsdc);
+  if (minimumVolume != null && minimumVolume > 0) {
+    const volume = numericOrNull(item.volumeUsdc) ?? numericOrNull(item.liquidity) ?? 0;
+    if (volume < minimumVolume) {
+      reasons.push(`volume ${money(volume)} is below this portfolio's ${money(minimumVolume)} minimum`);
     }
   }
   if (!Number.isFinite(selectedProbability)) {
