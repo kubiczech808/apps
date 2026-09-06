@@ -706,7 +706,7 @@ test("equal risk: stop multiplier widens the allowed paper loss band", () => {
   assert.ok(Math.abs(exitValue - 4.25) < 0.0001, `expected $4.25 exit value, got ${exitValue}`);
 });
 
-test("equal risk: a bid below the sell floor exits immediately and records the gap", () => {
+test("equal risk: a bid a little below the floor still exits, and records the gap", () => {
   const plan = bot.equalRiskStopPlan({
     totalCostUsdc: 5,
     netGainIfWinUsdc: 0.5,
@@ -718,10 +718,58 @@ test("equal risk: a bid below the sell floor exits immediately and records the g
   assert.equal(filled.executableAtFloor, true);
   assert.ok(Math.abs(filled.realizedLossUsdc - 0.5) < 0.0001);
 
-  const gap = bot.equalRiskStopExitDecision({ plan, bestBid: plan.stopPrice - 0.1, shares: 5.5, feesEnabled: false });
-  assert.equal(gap.executableAtFloor, false);
-  assert.ok(gap.realizedLossUsdc > plan.riskTargetUsdc);
-  assert.ok(gap.exitValueUsdc < plan.minimumExitValueUsdc);
+  // Slipping past the floor is not a gap: the stop exists to cap the loss near the level,
+  // not to refuse every stop that misses it slightly. 0.81818 floor, 0.73 band.
+  const slipped = bot.equalRiskStopExitDecision({ plan, bestBid: 0.75, shares: 5.5, feesEnabled: false });
+  assert.equal(slipped.declinedGap, undefined);
+  assert.equal(slipped.executableAtFloor, false);
+  assert.ok(slipped.realizedLossUsdc > plan.riskTargetUsdc);
+  assert.ok(slipped.exitValueUsdc < plan.minimumExitValueUsdc);
+});
+
+// Retracting "sell at any cost" on the owner's instruction, and on the same rule the live
+// worker uses -- paper portfolios are where this gets tested without risking the wallet, so
+// a rule that lives only on the live side cannot be tested at all.
+test("equal risk: a bid far below the floor declines to sell and leaves the position open", () => {
+  const plan = bot.equalRiskStopPlan({
+    totalCostUsdc: 5,
+    netGainIfWinUsdc: 0.5,
+    shares: 5.5,
+    entryPrice: 0.9,
+    feesEnabled: false,
+  });
+  // 10% under the 0.81818 floor is 0.736362, snapped down to the 0.73 a bid can be at.
+  assert.equal(bot.paperStopGapFloorPrice(plan.stopPrice), 0.73);
+
+  const declined = bot.equalRiskStopExitDecision({ plan, bestBid: 0.2, shares: 5.5, feesEnabled: false });
+  assert.equal(declined.triggered, true);
+  assert.equal(declined.declinedGap, true);
+  assert.equal(declined.gapFloor, 0.73);
+  assert.equal(declined.observedBid, 0.2);
+  // No fill is invented for a sale that did not happen.
+  assert.equal(declined.exitValueUsdc, undefined);
+  assert.equal(declined.realizedPnlUsdc, undefined);
+
+  // A crossing fills AT the floor, which is inside the band by definition -- so a position
+  // that was above the floor at the previous look is never declined.
+  const crossed = bot.equalRiskStopExitDecision({
+    plan, bestBid: 0.2, shares: 5.5, feesEnabled: false, previousBid: 0.95,
+  });
+  assert.equal(crossed.declinedGap, undefined);
+  assert.equal(crossed.filledByCrossing, true);
+  assert.equal(crossed.fillPrice, plan.stopPrice);
+});
+
+// One mechanism, two models. A paper portfolio that decides differently from the live worker
+// is worse than no paper portfolio, so the two floors are held to the same number here.
+test("equal risk: the paper gap floor is the live worker's gap floor", async () => {
+  const worker = await import("../tools/rpi-live-exit-worker.mjs");
+  for (const stop of [0.13, 0.2575, 0.30, 0.324969, 0.424986, 0.49, 0.81818, 0.95]) {
+    assert.equal(bot.paperStopGapFloorPrice(stop), worker.stopGapFloorPrice(stop),
+      `the two models disagree about the band under a ${stop} stop`);
+  }
+  assert.equal(bot.paperStopGapFloorPrice(null), worker.stopGapFloorPrice(null));
+  assert.equal(bot.paperStopGapFloorPrice(0), worker.stopGapFloorPrice(0));
 });
 
 test("equal risk: entry is rejected when the current bid is already below the stop floor", () => {
@@ -7181,11 +7229,14 @@ test("equal stop: a watched position exits at its floor, not at the collapsed bi
   const { readFile } = await import("node:fs/promises");
   const bot = await readFile(new URL("../tools/paper-trading-bot.mjs", import.meta.url), "utf8");
   const api = new Function(`
+    const PAPER_STOP_GAP_TOLERANCE = 0.1;
+    const PAPER_STOP_GAP_PRICE_GRID = 0.01;
     ${functionSource(bot, "netExitValueAtPrice")}
     ${functionSource(bot, "normalizeStopLossRiskMultiplier")}
+    ${functionSource(bot, "paperStopGapFloorPrice")}
     ${functionSource(bot, "equalRiskStopPlan")}
     ${functionSource(bot, "equalRiskStopExitDecision")}
-    return { equalRiskStopPlan, equalRiskStopExitDecision };
+    return { equalRiskStopPlan, equalRiskStopExitDecision, paperStopGapFloorPrice };
   `)();
 
   // The reported trade, to its own arithmetic.
@@ -7224,14 +7275,22 @@ test("equal stop: a watched position exits at its floor, not at the collapsed bi
   assert.equal(inside.filledByCrossing, false);
   assert.equal(inside.executableAtFloor, true);
 
-  // Never observed above the floor: no resting exit could have filled, so this is the
-  // genuine gap the status was invented for -- and it still reports the real loss.
+  // Never observed above the floor, so no resting exit could have filled -- and 0.05 against
+  // a 0.9 floor is the liquidation the owner retracted "sell at any cost" over. It declines
+  // and the position stays open, rather than booking a 4.7 loss the model refused to take.
+  assert.equal(api.paperStopGapFloorPrice(plan.stopPrice), 0.8);
   const gapped = decide(0.05, null);
-  assert.equal(gapped.fillPrice, 0.05);
-  assert.equal(gapped.filledByCrossing, false);
-  assert.ok(gapped.realizedLossUsdc > 4.7, "a true gap still books what it really cost");
+  assert.equal(gapped.declinedGap, true);
+  assert.equal(gapped.gapFloor, 0.8);
+  assert.equal(gapped.fillPrice, undefined);
   // Already below the floor at the previous look is the same case.
-  assert.equal(decide(0.05, 0.5).fillPrice, 0.05);
+  assert.equal(decide(0.05, 0.5).declinedGap, true);
+  // Inside the band it still sells: the rule caps the loss near the level, it does not
+  // refuse every stop that misses.
+  const slipped = decide(0.85, null);
+  assert.equal(slipped.declinedGap, undefined);
+  assert.equal(slipped.fillPrice, 0.85);
+  assert.equal(slipped.filledByCrossing, false);
 
   // Above the floor is not a stop at all.
   assert.equal(decide(0.95, 0.95), null);

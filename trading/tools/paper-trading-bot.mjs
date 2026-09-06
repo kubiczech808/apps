@@ -4179,6 +4179,28 @@ function planWithProbabilityFloor(plan, probabilityFloor, trade) {
   };
 }
 
+// How far below its floor a paper stop is still willing to sell, and the price grid the line
+// is compared on. Both are the live worker's rule, held here as its own copy on purpose: the
+// paper model must not import the worker, which pulls in the CLOB client and the signing key
+// path. A test asserts the two produce the same number across a table of levels, because a
+// paper portfolio that decides differently from the live one is worse than no paper at all.
+//
+// Read as a fraction OF THE STOP, not as percentage points: 10% under a 0.30 floor declines
+// below 0.27, not below 0.20. Snapped down to the grid a bid can be at -- an un-snapped 0.441
+// line refuses the 0.44 that is the only price inside its own band.
+const PAPER_STOP_GAP_TOLERANCE = Math.min(1, Math.max(0, Number(process.env.LIVE_EXIT_STOP_GAP_TOLERANCE ?? 0.1) || 0));
+const PAPER_STOP_GAP_PRICE_GRID = 0.01;
+
+export function paperStopGapFloorPrice(stopPrice, tolerance = PAPER_STOP_GAP_TOLERANCE, grid = PAPER_STOP_GAP_PRICE_GRID) {
+  const floor = Number(stopPrice);
+  if (!Number.isFinite(floor) || !(floor > 0)) return null;
+  const raw = Number((floor * (1 - tolerance)).toFixed(6));
+  const scale = Math.round(1 / grid);
+  if (!Number.isFinite(scale) || scale <= 0) return raw;
+  const snapped = Number((Math.floor(raw * scale) / scale).toFixed(6));
+  return snapped > 0 ? snapped : raw;
+}
+
 function equalRiskStopExitDecision({ plan, bestBid, bestAsk = null, shares, feeRate = 0, feesEnabled = true, previousBid = null } = {}) {
   if (!plan?.protectable || !plan.requiresStop) return null;
   const bid = Number(bestBid);
@@ -4207,6 +4229,24 @@ function equalRiskStopExitDecision({ plan, bestBid, bestAsk = null, shares, feeR
   // Filled at the floor by the crossing, or at the bid when that is better than the floor.
   const fillPrice = observedAtOrAboveFloor ? bid : (crossedSinceLastLook ? floor : bid);
   const executableAtFloor = observedAtOrAboveFloor || crossedSinceLastLook;
+
+  // The same refusal the live worker makes, so a paper portfolio can be used to test it.
+  // Selling twenty points under the level that was set is not a capped loss, it is a
+  // liquidation at whatever happened to be resting -- so below the band the stop declines and
+  // the position is left to resolve. Only where the fill would be the raw bid: a crossing
+  // fills AT the floor, which is inside the band by definition.
+  const gapFloor = paperStopGapFloorPrice(floor);
+  if (!executableAtFloor && gapFloor != null && bid > 0 && bid < gapFloor) {
+    return {
+      triggered: true,
+      declinedGap: true,
+      gapFloor,
+      stopPrice: Number(floor.toFixed(6)),
+      observedBid: Number(bid.toFixed(6)),
+      currentValueUsdc: Number(currentValue.toFixed(5)),
+    };
+  }
+
   const exitValueUsdc = netExitValueAtPrice({ shares: size, price: fillPrice, feeRate, feesEnabled });
   const realizedPnlUsdc = Number((Number(exitValueUsdc) - Number(plan.costUsdc || 0)).toFixed(5));
   return {
@@ -4929,6 +4969,35 @@ async function markOpenTrade(trade, strategy = null) {
         // filled by -- or was already through it before this position was ever watched.
         previousBid: trade.currentPrice,
       });
+      // Triggered and deliberately not sold. The position stays OPEN and is re-checked on
+      // every pass, because a book that gapped on one look often comes back -- and closing it
+      // here would book a loss the model just refused to take. The note is the whole point of
+      // the row: a position sitting open with its stop long since reached is otherwise
+      // indistinguishable from one the stop never noticed.
+      if (equalStopDecision?.declinedGap) {
+        return {
+          ...base,
+          status: "OPEN",
+          currentPrice: Number(bestBid.toFixed(4)),
+          lastLiveBid: Number(bestBid.toFixed(4)),
+          currentValueUsdc: currentValue,
+          unrealizedPnlUsdc: unrealizedPnl,
+          unrealizedPnlPct: pnlPercent(unrealizedPnl, cost),
+          equalRiskProtection: Boolean(trade.equalRiskProtection),
+          riskTargetUsdc: equalRiskPlan.riskTargetUsdc,
+          stopLossRiskMultiplier: equalRiskPlan.stopLossRiskMultiplier ?? trade.stopLossRiskMultiplier ?? null,
+          stopLossPrice: equalRiskPlan.stopPrice,
+          stopLossStatus: "DECLINED_GAPPED",
+          stopLossTriggeredAt: trade.stopLossTriggeredAt || checkedAt,
+          stopLossGapFloor: equalStopDecision.gapFloor,
+          stopLossDeclinedBid: equalStopDecision.observedBid,
+          statusNote: `Stop reached at ${equalRiskPlan.stopPrice.toFixed(4)} and NOT sold: the best bid is`
+            + ` ${bestBid.toFixed(4)}, below the ${equalStopDecision.gapFloor.toFixed(4)} floor this stop will`
+            + ` sell at (${(PAPER_STOP_GAP_TOLERANCE * 100).toFixed(0)}% under the stop). Selling here would take far`
+            + ` less than the level that was set, so the position is left to resolve and the stop is`
+            + ` re-checked on every pass.`,
+        };
+      }
       if (equalStopDecision?.triggered) {
         const capBreachUsdc = Number(Math.max(0, equalStopDecision.realizedLossUsdc - equalRiskPlan.riskTargetUsdc).toFixed(5));
         return {
