@@ -158,6 +158,20 @@ jobs:
                 console.log(`      ${String(entry.count).padStart(5)}x since ${entry.firstAt} ${String(entry.question || "").slice(0, 46).padEnd(46)} ${entry.error}`);
               }
             }
+            // Stops that fired and deliberately did NOT sell, because the book had gapped
+            // far below the configured level. This is the row that explains a position which
+            // is still open with its stop long since reached.
+            const declined = state.declinedStops && typeof state.declinedStops === "object" ? state.declinedStops : {};
+            const declinedRows = Object.values(declined);
+            if (declinedRows.length) {
+              console.log(`\n   stops declining to sell into a gap: ${declinedRows.length}`);
+              for (const row of declinedRows) {
+                console.log(`      ${String(row.question || "").slice(0, 44).padEnd(44)} ${String(row.outcome || "").padEnd(12)}`
+                  + ` stop ${row.stopPrice} floor ${row.gapFloor} bid ${row.bestBid} worst ${row.worstBid}`
+                  + ` risk ${row.riskTargetUsdc}`);
+                console.log(`         since ${row.firstAt}, ${row.count} pass(es)`);
+              }
+            }
             const watched = Array.isArray(state.watchedPositions) ? state.watchedPositions : [];
             console.log(`\n   watched positions right now: ${watched.length}`);
             for (const plan of watched) {

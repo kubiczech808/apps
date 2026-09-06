@@ -873,6 +873,45 @@ export function exitFailureIsTerminal(response) {
   return /not enough balance|balance is not enough|no position to sell/i.test(text);
 }
 
+// How far below its floor a stop is still willing to sell.
+//
+// The rule this replaces was "sell at any cost": below the floor the book has gapped, so
+// take whatever the buyers are showing. Measured on the account, that meant positions
+// bought near 76-80c being sold at 1.5c and 5.7c against floors around 25-37c -- twenty
+// points and more below the level that was configured, which is not a capped loss but a
+// liquidation at whatever happened to be resting.
+//
+// So the floor now has a floor. Outside it the stop declines to sell and the position is
+// left to resolve, which is the owner's instruction: if it cannot be caught near the level
+// that was set, waiting is the better of two bad outcomes. A market that has gapped that
+// far usually has no real buyer anyway -- the 1.5c "bid" is somebody's lowball resting
+// order, not a price.
+//
+// Read as a fraction OF THE STOP, not as percentage points: a 10% tolerance under a 0.30
+// floor declines below 0.27, not below 0.20. That is what "10% under what I have set"
+// means when the stop is itself a price.
+const STOP_GAP_TOLERANCE = Math.min(1, Math.max(0, number(process.env.LIVE_EXIT_STOP_GAP_TOLERANCE, 0.1)));
+
+// The lowest price this stop will accept. Null when there is no floor to measure against,
+// which is the settlement close: that one takes the bid on purpose.
+export function stopGapFloorPrice(stopPrice, tolerance = STOP_GAP_TOLERANCE) {
+  const floor = number(stopPrice);
+  if (floor == null || !(floor > 0)) return null;
+  return round(floor * (1 - tolerance), 6);
+}
+
+// Whether the book has fallen so far below the stop that selling into it is worse than
+// waiting. Never true for a settlement close, which has no floor and is not capping a loss.
+export function stopGapIsTooWide({ bestBidPrice, stopPrice, tolerance = STOP_GAP_TOLERANCE } = {}) {
+  const limit = stopGapFloorPrice(stopPrice, tolerance);
+  if (limit == null) return false;
+  const bid = number(bestBidPrice);
+  // No bid at all is not a wide gap, it is no market. exitTrigger already refuses that
+  // case, and answering it here would make two rules disagree about one book.
+  if (bid == null || !(bid > 0)) return false;
+  return bid < limit;
+}
+
 async function submitProtectedExit(plan, { bestBidPrice = null } = {}) {
   const { client, Side, OrderType } = await authenticatedClient();
   const constraints = await exchangeConstraintsForToken(plan.tokenId);
@@ -1145,6 +1184,46 @@ function recordBookError(state, plan, error, at) {
   recordEvent(state, { at, type: "BOOK_ERROR", tokenId: plan.tokenId, question: plan.question, error: message });
 }
 
+// A stop that is declining to sell does so on every pass for as long as the book stays
+// down there, which at one pass a second would bury the whole history within minutes -- the
+// same trap the book errors above already fell into. So it is kept as a standing row per
+// position, with the worst bid seen and how long it has been declining, and only the first
+// one is written to the event log.
+//
+// The row is what the dashboard needs anyway: "this position's stop fired and deliberately
+// did not sell, here is the level, the bid, and how long".
+function recordDeclinedStop(state, plan, { bestBid, gapFloor, at, reason }) {
+  state.declinedStops = state.declinedStops || {};
+  const previous = state.declinedStops[plan.tokenId];
+  const worst = previous && Number.isFinite(Number(previous.worstBid))
+    ? Math.min(Number(previous.worstBid), Number(bestBid))
+    : bestBid;
+  state.declinedStops[plan.tokenId] = {
+    question: plan.question,
+    outcome: plan.outcome,
+    stopPrice: plan.stopPrice,
+    gapFloor,
+    bestBid,
+    worstBid: worst,
+    riskTargetUsdc: plan.riskTargetUsdc,
+    firstAt: previous ? previous.firstAt : at,
+    lastAt: at,
+    count: previous ? (Number(previous.count) || 1) + 1 : 1,
+    reason,
+  };
+  if (previous) return;
+  recordEvent(state, {
+    at, type: "STOP_DECLINED_GAPPED", tokenId: plan.tokenId,
+    question: plan.question, outcome: plan.outcome,
+    stopPrice: plan.stopPrice, gapFloor, bestBid, reason,
+  });
+}
+
+// A stop that sold, or a position that left the account, has nothing left to decline.
+function clearDeclinedStop(state, tokenId) {
+  if (state.declinedStops && state.declinedStops[tokenId]) delete state.declinedStops[tokenId];
+}
+
 // A rolling picture of what a pass costs, as counters rather than a log: the loop runs
 // once a second, so one row per pass would bury everything else in the state file within
 // minutes. The percentile that matters is the slow end -- a mean under the interval says
@@ -1369,6 +1448,24 @@ async function checkOnce(context) {
       // A settlement close is not a stop: there is no floor to respect, because the point is
       // to take the bid the market is already showing. Passing the stop price here would
       // price the sell below a book that is quoting near certainty.
+      // Decided on the FRESH bid, which is the one the sell would actually meet. Deciding
+      // on the older read would decline against a price that has since recovered, or sell
+      // into one that has since collapsed.
+      if (reason === "stop" && stopGapIsTooWide({ bestBidPrice: exitBid, stopPrice: plan.stopPrice })) {
+        const limit = stopGapFloorPrice(plan.stopPrice);
+        recordDeclinedStop(context.state, plan, {
+          bestBid: exitBid,
+          gapFloor: limit,
+          at: now,
+          reason: `the stop is ${plan.stopPrice} and the best bid is ${exitBid}, below the ${limit} floor`
+            + ` this stop will sell at (${(STOP_GAP_TOLERANCE * 100).toFixed(0)}% under the stop). Selling here`
+            + ` would take far less than the level that was set, so the position is left to resolve`
+            + ` and the stop is re-checked every pass in case the book recovers.`,
+        });
+        // Deliberately not terminal and not recorded as an exit attempt: nothing was sent,
+        // and the next pass must ask again. A book that gapped on one tick often comes back.
+        continue;
+      }
       response = reason === "settlement"
         ? await submitProtectedExit({ ...plan, stopPrice: null }, { bestBidPrice: exitBid })
         : await submitProtectedExit(plan, { bestBidPrice: exitBid });
@@ -1431,6 +1528,8 @@ async function checkOnce(context) {
       response: { success: Boolean(response?.success), status: response?.status || null, error: response?.errorMsg || response?.error || null, orderId: response?.orderID || null },
     });
     if (accepted) {
+      // It sold, so it is no longer declining to.
+      clearDeclinedStop(context.state, plan.tokenId);
       // Why this position was sold, sent before anything else is attempted: the reverse
       // below can fail, and the fill it follows still happened.
       await recordLiveExit(plan, {

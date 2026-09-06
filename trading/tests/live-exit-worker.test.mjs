@@ -804,3 +804,51 @@ test("a size the exchange will not accept is retried coarser, not smaller", asyn
   // loop this whole file has been fixed for twice comes back.
   assert.match(source, /if \(exitFilled\(retried\) \|\| !makerAmountPrecisionRefusal\(retried\)\)/);
 });
+
+// Asked for, retracting an earlier instruction: the stop should NOT sell at any cost. If it
+// cannot be caught within about 10% of the level that was set, leave the position and see
+// what happens.
+//
+// Measured on the account, which is what prompted it: positions bought near 76-80c sold at
+// 1.5c and 5.7c against floors around 25-37c. Twenty points and more below the configured
+// level is not a capped loss, it is a liquidation at whatever happened to be resting.
+test("a stop declines to sell into a gap far below its own floor", async () => {
+  const worker = await import("../tools/rpi-live-exit-worker.mjs");
+
+  // Read as a fraction OF THE STOP, not as percentage points: 10% under a 0.30 floor is
+  // 0.27, not 0.20. That is what "10% under what I have set" means when the stop is a price.
+  assert.equal(worker.stopGapFloorPrice(0.30, 0.1), 0.27);
+  assert.equal(worker.stopGapFloorPrice(0.2575, 0.1), 0.23175);
+  assert.equal(worker.stopGapFloorPrice(null, 0.1), null);
+  assert.equal(worker.stopGapFloorPrice(0, 0.1), null);
+
+  // The reported case: a 0.2575 stop against a 1.5c book.
+  assert.equal(worker.stopGapIsTooWide({ bestBidPrice: 0.015, stopPrice: 0.2575, tolerance: 0.1 }), true);
+  // Just inside the tolerance still sells -- the point is to cap the loss near the level,
+  // not to refuse every stop that slips a little.
+  assert.equal(worker.stopGapIsTooWide({ bestBidPrice: 0.24, stopPrice: 0.2575, tolerance: 0.1 }), false);
+  assert.equal(worker.stopGapIsTooWide({ bestBidPrice: 0.2575, stopPrice: 0.2575, tolerance: 0.1 }), false);
+
+  // A settlement close has no floor and is not capping a loss: it takes the bid on purpose,
+  // so this must never refuse it.
+  assert.equal(worker.stopGapIsTooWide({ bestBidPrice: 0.999, stopPrice: null, tolerance: 0.1 }), false);
+
+  // No bid at all is no market rather than a wide gap. exitTrigger already refuses that,
+  // and answering it here too would make two rules disagree about one book.
+  assert.equal(worker.stopGapIsTooWide({ bestBidPrice: null, stopPrice: 0.30, tolerance: 0.1 }), false);
+  assert.equal(worker.stopGapIsTooWide({ bestBidPrice: 0, stopPrice: 0.30, tolerance: 0.1 }), false);
+
+  const source = readFileSync(new URL("../tools/rpi-live-exit-worker.mjs", import.meta.url), "utf8");
+  // Decided on the FRESH bid -- the one the sell would actually meet -- not the batched read
+  // the trigger was decided on.
+  assert.match(source, /if \(reason === "stop" && stopGapIsTooWide\(\{ bestBidPrice: exitBid, stopPrice: plan\.stopPrice \}\)\)/);
+  // Nothing is sent and nothing is recorded as an attempt, so the next pass asks again: a
+  // book that gapped on one tick often comes back, and a terminal mark would abandon it.
+  assert.match(source, /recordDeclinedStop\(context\.state, plan, \{/);
+  assert.doesNotMatch(source, /terminal: true[\s\S]{0,200}STOP_DECLINED_GAPPED/);
+  // Collapsed to a standing row. At one pass a second an event each would bury the whole
+  // history in minutes, which is the trap the book errors already fell into once.
+  assert.match(source, /if \(previous\) return;\s*\n\s*recordEvent\(state, \{\s*\n\s*at, type: "STOP_DECLINED_GAPPED"/);
+  // And cleared once it does sell, or the row would outlive what it describes.
+  assert.match(source, /clearDeclinedStop\(context\.state, plan\.tokenId\);/);
+});
