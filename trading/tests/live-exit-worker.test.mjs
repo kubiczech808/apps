@@ -125,12 +125,11 @@ test("worker source keeps live exits opt-in and price-protected", async () => {
   assert.match(source, /MODE !== "live" \|\| !CONFIRM_LIVE/);
   assert.match(source, /client\.postOrder\(signed, OrderType\.FOK, false\)/);
   assert.match(source, /String\(response\?\.status \|\| ""\)\.toLowerCase\(\) === "matched"/);
-  // FOK first, so a full exit keeps its price floor strict. Partial fills stay opt-in --
-  // with one exception the owner asked for: an order already resized down to the balance is
-  // a rescue of less than the position, and refusing to part-fill THAT would throw the
-  // rescue away on a technicality.
-  assert.match(source, /if \(!exitFilled\(response\) && \(ALLOW_PARTIAL \|\| partialRescue\)\)/);
-  assert.match(source, /const partialRescue = held != null && size < number\(plan\.shares\);/);
+  // FOK first on the WHOLE position, with nothing asked of the exchange beforehand.
+  assert.match(source, /if \(!exitFilled\(response\) && ALLOW_PARTIAL\) response = await sell\(size, OrderType\.FAK\);/);
+  // The retry after a size refusal always part-fills: it is already a rescue of less than
+  // the position, and holding out for all-or-nothing would throw the rescue away.
+  assert.match(source, /response = await sell\(size, OrderType\.FAK\);\s*\n\s*\}\s*\n\s*return \{/);
   assert.match(source, /LIVE_EXIT_POLICY_URL/);
   assert.match(source, /remotePolicyMap\(context\.policyState\)/);
   assert.match(source, /defaultRemotePolicy\(context\.policyState\)/);
@@ -687,16 +686,36 @@ test("exit refusals: the account's own answer ends the attempt, everything else 
   assert.equal(worker.exitFailureIsTerminal({}), false);
   assert.equal(worker.exitFailureIsTerminal(null), false);
 
-  // The sizing rule itself, read off the source: capped at the plan and floored, never
-  // rounded up. Asking for a hair more than the balance is the refusal this path exists to
-  // avoid, and rounding is the easy way to reintroduce it.
+  // Nothing is asked of the exchange before selling. A balance query is a race with
+  // itself -- the answer is stale by the time the order lands, and on a resolving market it
+  // can be stale inside the five seconds between passes -- so the whole position is offered
+  // and the refusal supplies the number for the one retry that follows.
   const source = readFileSync(new URL("../tools/rpi-live-exit-worker.mjs", import.meta.url), "utf8");
-  assert.match(source, /size = Math\.floor\(Math\.min\(size, held\) \* 10000\) \/ 10000;/,
-    "the sell is sized from the smaller of plan and balance, floored");
-  assert.match(source, /if \(!\(held > 0\)\) \{\s*\n\s*return \{ success: false, terminal: true/,
+  assert.doesNotMatch(source, /getBalanceAllowance/,
+    "the balance is never queried ahead of the sell");
+  assert.match(source, /let size = planned;\s*\n\s*let response = await sell\(size, OrderType\.FOK\);/,
+    "the first attempt offers the whole position");
+
+  // The refusal carries the balance at the instant it rejected the order, which is as fresh
+  // as this can be. 0.007221 shares against the 6.84 the plan asked for.
+  assert.equal(worker.balanceFromRejection({
+    error: "not enough balance / allowance: the balance is not enough -> balance: 7221, order amount: 6840000",
+  }), 0.007221);
+  // A refusal about something else is not a size question and must not resize anything.
+  assert.equal(worker.balanceFromRejection({ error: "invalid POLY_1271 signature" }), null);
+  assert.equal(worker.balanceFromRejection({ error: "not enough balance" }), null,
+    "a size refusal that quotes no number leaves the size alone rather than guessing zero");
+  assert.equal(worker.balanceFromRejection({}), null);
+  assert.equal(worker.balanceFromRejection(null), null);
+  // Nothing held at all: the retry is skipped and the attempt ends.
+  assert.equal(worker.balanceFromRejection({
+    error: "the balance is not enough -> balance: 0, order amount: 6840000",
+  }), 0);
+
+  // Floored, never rounded up -- asking for a hair more than the balance is the refusal
+  // being answered -- and capped at the plan, because the account may hold the same token
+  // for another portfolio and only this one's position is being closed.
+  assert.match(source, /size = Math\.floor\(Math\.min\(planned, held\) \* 10000\) \/ 10000;/);
+  assert.match(source, /if \(!\(held > 0\)\) \{[\s\S]{0,240}terminal: true/,
     "a position the account does not hold ends the attempt instead of repeating it");
-  // Null is "could not ask", which must never be read as "sell nothing" -- that would
-  // abandon a live position on a failed lookup.
-  assert.match(source, /if \(held != null\) \{/,
-    "an unanswerable balance query leaves the plan's size alone");
 });

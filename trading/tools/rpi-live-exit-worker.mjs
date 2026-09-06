@@ -658,7 +658,7 @@ async function authenticatedClient() {
   const funderAddress = accountTrading.funderAddress;
   const signatureType = accountTrading.signatureType;
   if (!privateKey || !funderAddress) throw new Error("POLYMARKET_PRIVATE_KEY and POLYMARKET_FUNDER_ADDRESS are required for live exits");
-  const [{ ClobClient, Side, OrderType, SignatureTypeV2, AssetType }, { createWalletClient, custom }, { privateKeyToAccount }] = await Promise.all([
+  const [{ ClobClient, Side, OrderType, SignatureTypeV2 }, { createWalletClient, custom }, { privateKeyToAccount }] = await Promise.all([
     import("@polymarket/clob-client-v2"), import("viem"), import("viem/accounts"),
   ]);
   const account = privateKeyToAccount(privateKey);
@@ -671,7 +671,7 @@ async function authenticatedClient() {
     signatureType: signatureTypes[signatureType] ?? SignatureTypeV2.POLY_1271,
     funderAddress,
   });
-  return { client, Side, OrderType, AssetType };
+  return { client, Side, OrderType };
 }
 
 function exitFilled(response) {
@@ -756,20 +756,23 @@ export function protectedExitPrice({ stopPrice, bestBidPrice, tickSize = 0.01 } 
 // the account snapshot when the plan was built and the exchange had moved on since.
 const CONDITIONAL_TOKEN_UNIT = 1e6;
 
-// What the account can actually sell right now, asked of the exchange rather than of a
-// snapshot. Null means the question could not be put -- which is not the same as zero and
-// must never be read as "sell nothing".
-async function sellableShares(client, AssetType, tokenId) {
-  try {
-    const answer = await client.getBalanceAllowance({
-      asset_type: AssetType.CONDITIONAL,
-      token_id: String(tokenId),
-    });
-    const raw = Number(answer?.balance);
-    return Number.isFinite(raw) && raw >= 0 ? raw / CONDITIONAL_TOKEN_UNIT : null;
-  } catch {
-    return null;
-  }
+// The balance out of the exchange's own refusal, in shares.
+//
+// Asking what the account holds BEFORE selling is a race with itself: the answer is stale
+// by the time the order lands, and on a resolving market it can be stale within the five
+// seconds between passes. It also spends a round trip on every exit to serve the rare one.
+//
+// So nothing is asked. The whole position is offered, and the refusal -- which quotes the
+// balance at the instant it rejected the order, which is as fresh as this can ever be --
+// supplies the number for the one retry that follows. Null means this rejection was about
+// something else and the size is not in question.
+export function balanceFromRejection(response) {
+  const text = String(response?.errorMsg || response?.error || "");
+  if (!/not enough balance|balance is not enough/i.test(text)) return null;
+  const quoted = text.match(/balance:\s*(\d+(?:\.\d+)?)/i);
+  if (!quoted) return null;
+  const raw = Number(quoted[1]);
+  return Number.isFinite(raw) && raw >= 0 ? raw / CONDITIONAL_TOKEN_UNIT : null;
 }
 
 // A refusal no retry can talk the exchange out of. The account does not hold the shares,
@@ -782,7 +785,7 @@ export function exitFailureIsTerminal(response) {
 }
 
 async function submitProtectedExit(plan, { bestBidPrice = null } = {}) {
-  const { client, Side, OrderType, AssetType } = await authenticatedClient();
+  const { client, Side, OrderType } = await authenticatedClient();
   const constraints = await exchangeConstraintsForToken(plan.tokenId);
   const price = protectedExitPrice({
     stopPrice: plan.stopPrice,
@@ -792,55 +795,70 @@ async function submitProtectedExit(plan, { bestBidPrice = null } = {}) {
   if (price == null || !(price > 0)) {
     return { success: false, error: "no valid exit price on this market's tick grid" };
   }
-  // Sell what the account HAS, not what the plan remembers. Asked for in these words:
-  // if we are reacting late and can save less of the position than intended, save what can
-  // be saved. A plan sized from a stale snapshot asks for shares that are not there, and
-  // the exchange refuses the whole order -- so being slightly late used to rescue nothing
-  // at all rather than rescuing less.
-  //
-  // Capped at the plan, never raised to the balance: the plan is this portfolio's position,
-  // and the account may hold the same token for another one.
-  const held = await sellableShares(client, AssetType, plan.tokenId);
-  let size = number(plan.shares);
-  if (held != null) {
-    // Nothing to sell. Not an error to retry -- there is no position here to protect, and
-    // saying so ends the attempt instead of repeating it every twenty seconds.
-    if (!(held > 0)) {
-      return { success: false, terminal: true, error: "the account no longer holds this position" };
-    }
-    // Floored, never rounded up: asking for a hair more than the balance is the refusal
-    // this whole path exists to avoid.
-    size = Math.floor(Math.min(size, held) * 10000) / 10000;
-  }
-  if (!(size > 0)) {
-    return { success: false, terminal: true, error: "the remaining position is too small to sell" };
-  }
   const options = { tickSize: String(constraints.tickSize) };
   // Only when it is actually known. Turning "unknown" into a confident false is what
   // deadlocked neg-risk exits in the executor, and the same trap is here.
   if (typeof constraints.negRisk === "boolean") options.negRisk = constraints.negRisk;
-  // FOK keeps the price floor strict: the complete position is sold at this price
-  // or better, or it remains intact. FAK is only an explicit opt-in because partial
-  // exits complicate the remaining stop plan.
+
+  const sell = async (size, orderType) => {
+    const signed = await client.createOrder(
+      { tokenID: plan.tokenId, price, size, side: Side.SELL },
+      options,
+    );
+    return client.postOrder(signed, orderType, false);
+  };
+
+  // Offer the WHOLE position first, and ask the exchange nothing beforehand. A balance
+  // query is a race with itself -- the answer is stale by the time the order lands, and on
+  // a resolving market it can be stale inside the five seconds between passes -- and it
+  // would spend a round trip on every exit to serve the rare one.
   //
-  // A partial rescue is the exception the owner asked for: when the balance is short of
-  // the plan we are already selling less than intended, and refusing to part-fill THAT
-  // would throw away the rescue on a technicality. So a resized order takes whatever it
-  // can get.
-  const partialRescue = held != null && size < number(plan.shares);
-  const signed = await client.createOrder({ tokenID: plan.tokenId, price, size, side: Side.SELL }, options);
-  let response = await client.postOrder(signed, OrderType.FOK, false);
-  if (!exitFilled(response) && (ALLOW_PARTIAL || partialRescue)) {
-    response = await client.postOrder(signed, OrderType.FAK, false);
+  // FOK keeps the price floor strict: the complete position sells at this price or better,
+  // or it remains intact. FAK is an explicit opt-in because partial exits complicate the
+  // remaining stop plan.
+  const planned = number(plan.shares);
+  let size = planned;
+  let response = await sell(size, OrderType.FOK);
+  if (!exitFilled(response) && ALLOW_PARTIAL) response = await sell(size, OrderType.FAK);
+
+  // Refused for size, and the refusal names the balance it refused against -- as fresh as
+  // this can ever be, because it is what the exchange saw at the instant it said no. That
+  // is the number to retry with, and it is the whole of what a pre-flight query would have
+  // told us, without the query.
+  const held = balanceFromRejection(response);
+  if (held != null) {
+    // Nothing there. Not worth another pass: there is no position here to protect, and
+    // saying so ends the attempt instead of repeating it every twenty seconds.
+    if (!(held > 0)) {
+      return {
+        success: false, terminal: true, exitPrice: price, tickSize: constraints.tickSize,
+        plannedShares: planned, heldShares: 0,
+        error: "the account no longer holds this position",
+      };
+    }
+    // Floored, never rounded up: asking for a hair more than the balance is the refusal
+    // being answered. Capped at the plan as well, because the account may hold the same
+    // token for another portfolio and only this one's position is being closed.
+    size = Math.floor(Math.min(planned, held) * 10000) / 10000;
+    if (!(size > 0)) {
+      return {
+        success: false, terminal: true, exitPrice: price, tickSize: constraints.tickSize,
+        plannedShares: planned, heldShares: held,
+        error: "the remaining position is too small to sell",
+      };
+    }
+    // Already a rescue of less than the position, so it takes whatever it can get. Holding
+    // out for all-or-nothing here would throw the rescue away on a technicality.
+    response = await sell(size, OrderType.FAK);
   }
   return {
     ...response,
     exitPrice: price,
     tickSize: constraints.tickSize,
     exitShares: size,
-    // So the run's record says the rescue was partial rather than leaving the reader to
-    // infer it from a size that does not match the position.
-    plannedShares: number(plan.shares),
+    // So the record says the rescue was partial rather than leaving the reader to infer it
+    // from a size that does not match the position.
+    plannedShares: planned,
     heldShares: held,
   };
 }
