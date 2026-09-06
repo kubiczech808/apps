@@ -3157,6 +3157,40 @@ test("live stop loss: a switched-off portfolio keeps managing what it already ho
   }
 });
 
+// Reported: the "counter-strike-2" portfolio never opens a position. Its one candidate,
+// measured on production, read p=0.805 and bestBid=0.19 on the same row -- 1 - 0.81, the
+// other side of the same book -- because the row selects the favourite outcome while
+// bestBid/bestAsk were copied from the market-level quote, which describes token 0.
+//
+// The equal-risk gate then measured the selected side's stop floor against the wrong
+// side's bid and refused every run. So the mirror matters, and its direction matters more:
+// a bid mirrors the ASK. Getting that backwards produces numbers that look plausible and
+// are wrong by the spread, which no eye would catch on a dashboard.
+test("catalogue row: the quote belongs to the outcome the row selected", async () => {
+  const { selectedOutcomeQuote } = await import("../tools/paper-trading-bot.mjs");
+  const market = { bestBid: 0.19, bestAsk: 0.20 };
+
+  // Token 0 is what Gamma's quote already describes, so it is copied through untouched.
+  assert.deepEqual(selectedOutcomeQuote(market, 0, 2), { bestBid: 0.19, bestAsk: 0.20 });
+
+  // Token 1 is the other side of the same book. Its bid is 1 - the stored ASK.
+  const mirrored = selectedOutcomeQuote(market, 1, 2);
+  assert.deepEqual(mirrored, { bestBid: 0.80, bestAsk: 0.81 });
+  assert.ok(mirrored.bestBid < mirrored.bestAsk, "the mirror must not invert the spread");
+  assert.equal(Number((mirrored.bestAsk - mirrored.bestBid).toFixed(4)), 0.01,
+    "and must preserve its width");
+
+  // The reported row: a favourite at 80.5% must not carry the 19% bid that blocked it.
+  assert.ok(mirrored.bestBid > 0.5,
+    "a bid on the favourite side reads as the favourite, not as its complement");
+
+  // Only a two-token book has a complement to mirror. Anything else is left alone rather
+  // than guessed at -- a wrong quote is worse than the one already stored.
+  assert.deepEqual(selectedOutcomeQuote(market, 1, 3), { bestBid: 0.19, bestAsk: 0.20 });
+  // A missing side stays missing; 1 - null is not a price.
+  assert.deepEqual(selectedOutcomeQuote({ bestBid: 0.19 }, 1, 2), { bestBid: null, bestAsk: 0.81 });
+});
+
 // The paper half of the rule above, and the half that was missing. Live suppresses the
 // reversal for a switched-off portfolio in live_stop_loss_policy_config; paper gated the
 // reversal on reverseOnStopLoss alone, so a switched-off paper portfolio would still buy

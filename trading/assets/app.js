@@ -5739,9 +5739,13 @@ function newPortfolioId(name, existing) {
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
     .replace(/[^a-zA-Z0-9]+/g, "")
+    // Lowercase BEFORE trimming the leading non-letters, not after. This rule wants "an id
+    // starts with a letter, not a digit", but run against mixed case it read a capital as
+    // a non-letter and ate it: "New portfolio" became "ewportfolio", "Underway Live" became
+    // "nderwaylive". Both are live on the account, which is how it was noticed.
+    .toLowerCase()
     .replace(/^[^a-z]+/, "")
-    .slice(0, 24)
-    .toLowerCase();
+    .slice(0, 24);
   const seed = CUSTOM_PAPER_STRATEGY_ID.test(base) ? base : "portfolio";
   if (!existing.has(seed) && CUSTOM_PAPER_STRATEGY_ID.test(seed)) return seed;
   for (let suffix = 2; suffix < 200; suffix += 1) {

@@ -9668,6 +9668,35 @@ function normalizeMarketObservationEconomics(observation) {
   };
 }
 
+// Gamma publishes one bestBid/bestAsk per market, and it describes the market's FIRST
+// token. Every other economic field on a catalogue row is computed for the outcome the
+// row selected -- and the row selects the favourite, which is token 1 whenever token 1
+// is the one trading high. Copying the market-level quote onto such a row puts the
+// opposite side's price on it.
+//
+// Reported: the "counter-strike-2" portfolio never opens a position. Measured on its one
+// candidate, "Map Handicap: TS (-2.5) vs MOUZ (+2.5)": p=0.805 and bestBid=0.19 on the
+// same row -- exactly 1 - 0.81, the other side of the same book. The equal-risk gate then
+// compared the selected side's 26.1% stop floor against that 19% bid, found the bid
+// "below the floor", and refused the trade. Six consecutive runs skipped for it.
+//
+// A two-token book is complementary by construction: a bid of x on one token is an ask of
+// 1 - x on the other. So the selected side's quote is the stored one mirrored -- and the
+// bid mirrors the ASK, not the bid, which is the half that is easy to get backwards.
+//
+// Keyed on the token index rather than on the outcome labels, because the labels are
+// whatever the market names its sides ("TS", "MOUZ", "Yes", "No") while the quote's owner
+// is always token 0.
+function selectedOutcomeQuote(market, outcomeIndex, outcomeCount) {
+  const bid = numericOrNull(market?.bestBid);
+  const ask = numericOrNull(market?.bestAsk);
+  if (outcomeCount !== 2 || outcomeIndex !== 1) return { bestBid: bid, bestAsk: ask };
+  return {
+    bestBid: ask == null ? null : Number((1 - ask).toFixed(4)),
+    bestAsk: bid == null ? null : Number((1 - bid).toFixed(4)),
+  };
+}
+
 function preferredMarketObservation(market, observedAt = nowIso()) {
   const outcomes = parseJsonField(market?.outcomes).map((outcome) => String(outcome || ""));
   const prices = parseJsonField(market?.outcomePrices).map(validMarketProbability);
@@ -9697,6 +9726,7 @@ function preferredMarketObservation(market, observedAt = nowIso()) {
   const probability = binary && outcomeIndex === binary.noIndex ? binaryNoPrice : prices[outcomeIndex];
   const tokenId = tokenIds[outcomeIndex];
   if (outcomeIndex < 0 || probability == null || probability < 0.5 || !tokenId) return null;
+  const selectedQuote = selectedOutcomeQuote(market, outcomeIndex, outcomes.length);
 
   const marketKey = binary
     ? binaryMarketKeyFromMarket(market)
@@ -9775,9 +9805,10 @@ function preferredMarketObservation(market, observedAt = nowIso()) {
     // The live quote's width, refreshed on every scan alongside liquidity and volume.
     // firstSpread below records what it was when the row was discovered; this one is what
     // an order placed now would have to cross.
+    // Spread is the same number on both sides of a two-token book, so it needs no mirror.
     spread: numericOrNull(market.spread),
-    bestAsk: numericOrNull(market.bestAsk),
-    bestBid: numericOrNull(market.bestBid),
+    bestAsk: selectedQuote.bestAsk,
+    bestBid: selectedQuote.bestBid,
     liquidity: Number(market.liquidity || 0),
     volume24hr: Number(market.volume24hr || 0),
     volumeUsdc: Number(marketVolumeUsdc(market).toFixed(2)),
@@ -12526,6 +12557,9 @@ export {
   marketDateContext,
   marketEventStarted,
   preferredMarketObservation,
+  // The selected outcome's own bid and ask, mirrored off the market-level quote when the
+  // row picked token 1. Exported because getting the mirror backwards is silent.
+  selectedOutcomeQuote,
   normalizeMarketObservationLifecycle,
   marketScanRetentionReason,
   marketScanLiveTags,
