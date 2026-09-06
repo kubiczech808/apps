@@ -163,6 +163,27 @@ jobs:
             for (const event of matching.slice(0, 20)) console.log(`      ${text(event)}`);
             console.log(`\n   last 12 events regardless of market:`);
             for (const event of history.slice(0, 12)) console.log(`      ${text(event).slice(0, 400)}`);
+            // Why the exchange refused, which is the only field that matters when a stop
+            // triggers and then does not sell. The dump above truncates at 400 characters
+            // and `response` sits at the END of an event, so a run of refused stops printed
+            // everything about them EXCEPT the reason -- 84 rejections on this worker, not
+            // one of them saying what was wrong. Printed on its own, and whole.
+            const refused = history.filter((event) => /_REJECTED$/.test(String(event.type || "")));
+            console.log(`\n   refused exits (${refused.length} of ${history.length} retained), collapsed by reason:`);
+            const byError = new Map();
+            for (const event of refused) {
+              const key = `${event.type} status=${text(event.response?.status)} ${event.response?.error || "(no error text)"}`;
+              byError.set(key, (byError.get(key) || 0) + 1);
+            }
+            for (const [key, count] of [...byError].sort((a, b) => b[1] - a[1])) {
+              console.log(`      ${String(count).padStart(4)}x  ${key}`);
+            }
+            console.log(`\n   the six most recent, with the book they were priced against:`);
+            for (const event of refused.slice(0, 6)) {
+              console.log(`      ${event.at} ${String(event.question || "").slice(0, 38).padEnd(38)}`
+                + ` px ${text(event.exitPrice)} tick ${text(event.tickSize)}`
+                + ` bid ${text(event.bestBid)} ask ${text(event.bestAsk)} -> ${text(event.response)}`);
+            }
             const exits = state.exits && typeof state.exits === "object" ? state.exits : {};
             const exitKeys = Object.keys(exits);
             console.log(`\n   exit attempts recorded: ${exitKeys.length}`);

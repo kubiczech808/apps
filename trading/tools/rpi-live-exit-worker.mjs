@@ -1114,6 +1114,14 @@ async function checkOnce(context) {
       terminal: accepted,
       orderId: response?.orderID || null,
       status: response?.status || null,
+      // WHY it was refused, beside the fact that it was. This row is the first thing any
+      // diagnosis reads and it recorded a bare `status: 400` -- true, and useless: a run
+      // of rejected stop exits looks identical whether the price was off the tick grid,
+      // the size below the exchange minimum, or the signature wrong. The event log carried
+      // the text all along, which is precisely why it was easy not to notice its absence
+      // here, and a stop that is refused every time is the one case where the reason has
+      // to be on the surface.
+      error: response?.errorMsg || response?.error || null,
       // The price and grid it was sent on. Six-decimal floors were being refused as
       // invalid prices with nothing on the row to show it, so this is recorded.
       exitPrice: response?.exitPrice ?? null,
