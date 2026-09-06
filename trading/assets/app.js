@@ -9106,6 +9106,22 @@ function mergeCurrentMarketEconomics(evaluations = [], observations = []) {
       "feeRate",
     ].forEach(copyIfPresent);
 
+    // The quote is the exception to copyIfPresent, and the exception matters more than the
+    // rule here. That guard exists so a partial observation cannot blank a field it simply
+    // did not carry -- but a freshly read book reporting NO ask is not a missing field, it
+    // is the market saying nothing is offered. Skipping it left the last price standing, so
+    // a finished fixture kept the ask it had when it was still trading and went on reading
+    // as tradable no matter how many times the list was refreshed.
+    //
+    // Applied only to rows that were actually re-quoted, which quotedAt is how we know: a
+    // stored observation without one keeps the conservative copy above.
+    if (fresh.quotedAt) {
+      current.bestBid = fresh.bestBid ?? null;
+      current.bestAsk = fresh.bestAsk ?? null;
+      current.spread = fresh.spread ?? null;
+      current.quotedAt = fresh.quotedAt;
+    }
+
     const cost = evaluationTotalCost(current);
     const shares = evaluationShares(current);
     const win = gainIfWin(current);
@@ -9380,6 +9396,24 @@ function portfolioCandidateFilterReasons(item, mode = state.mode) {
   }
   if (marketProbabilityRoundsToCertain(item)) {
     reasons.push("market probability rounds to 100.0%; no executable upside remains");
+  }
+  // The book as it is now, which the refresh has just read from Polymarket. Nothing in
+  // this list used to ask: the precheck had four states and every row that was not
+  // excluded, held or risk-blocked read READY -- so a market that had stopped quoting sat
+  // in the shortlist looking ready while the run refused it on sight. Reported twice, and
+  // the second time with a re-quoted list still showing sixteen.
+  //
+  // Only for rows that were actually re-quoted. A stored row without quotedAt is judged
+  // exactly as before rather than on a field it never carried.
+  if (item.quotedAt) {
+    const freshAsk = numericOrNull(item.bestAsk);
+    const freshBid = numericOrNull(item.bestBid);
+    if (freshAsk == null && freshBid == null) {
+      reasons.push("Polymarket is no longer quoting this market");
+    } else if (freshAsk == null) {
+      // A buy needs somebody offering. A bid alone is what this outcome could be SOLD at.
+      reasons.push("nothing is offered on this outcome, so there is nothing to buy");
+    }
   }
   if (!Number.isFinite(selectedProbability)) {
     reasons.push(`missing ${probabilitySourceLabel(probabilitySource).toLowerCase()}`);

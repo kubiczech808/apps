@@ -4204,3 +4204,49 @@ test("refresh shortlist: the quote comes from Polymarket, and says so when it do
   assert.match(APP, /prices are as last scraped/);
   assert.match(APP, /stored prices, Polymarket quotes unavailable/);
 });
+
+// Reported twice. The second time with the fresh quote demonstrably working -- the summary
+// read "16 READY / 1 ALREADY HELD / QUOTED 06. 09. 2026 07:47" -- and the execution still
+// skipped. So the quote was arriving and nothing was reading it.
+//
+// Two links were missing, one after the other, and either alone would have kept the row.
+test("a re-quoted market that stopped quoting stops reading as READY", () => {
+  // 1. The merge dropped it. copyIfPresent only copies a value that is not null, which is
+  // right for a partial observation that simply lacks a field -- and wrong for a freshly
+  // read book reporting NO ask, which is the market saying nothing is offered. The stale
+  // ask survived, so the row kept the price it had when it was still trading.
+  // The economics recomputed after the copy are not what is under test, so they are
+  // stubbed to NaN -- every one of them then falls back to the row's stored value and the
+  // quote fields are what remains to assert on.
+  const merge = new Function("evaluations", "observations", `
+    const nan = () => NaN;
+    const evaluationTotalCost = nan, evaluationShares = nan, gainIfWin = nan;
+    const marketExpectedValueFromQuote = nan, expectedValue = nan, daysToResolution = nan;
+    const annualizeReturn = nan;
+    ${extractFunction(APP, "mergeCurrentMarketEconomics")}
+    return mergeCurrentMarketEconomics(evaluations, observations);
+  `);
+  const [merged] = merge(
+    [{ tokenId: "1", bestBid: 0.72, bestAsk: 0.73, spread: 0.01 }],
+    [{ tokenId: "1", bestBid: null, bestAsk: null, spread: null, quotedAt: "2026-09-06T07:47:00Z" }],
+  );
+  assert.equal(merged.bestAsk, null, "a freshly quoted empty book must clear the stale ask");
+  assert.equal(merged.bestBid, null);
+  assert.equal(merged.quotedAt, "2026-09-06T07:47:00Z", "and the row must carry when it was quoted");
+
+  // A row that was NOT re-quoted keeps the conservative copy, so this cannot blank a stored
+  // observation that merely lacks the field.
+  const [untouched] = merge(
+    [{ tokenId: "1", bestBid: 0.72, bestAsk: 0.73 }],
+    [{ tokenId: "1", bestBid: null, bestAsk: null }],
+  );
+  assert.equal(untouched.bestAsk, 0.73, "no quotedAt means no fresh reading to trust");
+
+  // 2. Nothing asked. The precheck had four states -- excluded, held, risk-blocked, else
+  // READY -- so tradability was never part of the verdict at all.
+  assert.match(APP, /reasons\.push\("Polymarket is no longer quoting this market"\);/);
+  assert.match(APP, /reasons\.push\("nothing is offered on this outcome, so there is nothing to buy"\);/,
+    "a buy needs somebody offering; a bid alone is what the outcome could be SOLD at");
+  assert.match(APP, /if \(item\.quotedAt\) \{\s*\n\s*const freshAsk/,
+    "and it is asked only of rows that were actually re-quoted");
+});
