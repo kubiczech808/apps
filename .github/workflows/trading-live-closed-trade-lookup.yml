@@ -1,0 +1,38 @@
+name: Trading Live Closed Trade Lookup
+
+# Read-only diagnostic, manual only. Reported: markets that were bought and sold on the
+# account cannot be found in ANY live portfolio's closed positions.
+#
+# Prints every row matching the search text from every collection in the live state, with
+# the fields attribution is decided on, and then which portfolio's run log ordered at a
+# price those rows could have filled at. That separates "the sync never produced the row"
+# from "it exists but is owned by a portfolio with no tab".
+#
+# Places no orders, writes nothing, needs no secrets.
+on:
+  workflow_dispatch:
+    inputs:
+      search:
+        description: "Semicolon-separated text to look for in the market name"
+        required: false
+        default: "yokohama;games total"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  lookup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Find these markets in the live state
+        working-directory: trading
+        env:
+          CLOSED_TRADE_SEARCH: ${{ inputs.search || 'yokohama;games total' }}
+        run: node tools/live-closed-trade-lookup.mjs
