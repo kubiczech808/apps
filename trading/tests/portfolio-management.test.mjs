@@ -4297,3 +4297,44 @@ test("overview ROI: realized P/L over what the closed trades cost", () => {
   assert.doesNotMatch(APP, /overviewAnnualizedRoi|portfolioAnnualizedRoiForMode/);
   assert.match(APP, /<th title="Realized P\/L as a share of what the closed trades cost[^"]*">ROI<\/th>/);
 });
+
+// Reported three times running: the shortlist shows candidates the execution then refuses.
+// The quote gate took it from sixteen to seven; these are the seven.
+//
+// Measured rather than guessed, after guessing wrong once. The executor's own verdict on
+// the two rows from the report -- via its own prepareLiveCandidatePool, not an imitation --
+// was "volume below live minimum" for both, and twelve of its sixteen rejections across
+// that catalogue were the same gate. Their spreads were 3 and 4 points, well inside the
+// limit, so the spread rule would have passed them.
+test("shortlist volume gate: the same figure and the same floor the run uses", () => {
+  const volumeOf = new Function("item", `
+    ${extractFunction(APP, "candidateVolumeUsdc")}
+    return candidateVolumeUsdc(item);
+  `);
+
+  // The first POSITIVE of four fields, in order -- not the first present one. Both reported
+  // rows carried a tiny volumeUsdc beside a large liquidity, so which field is read is the
+  // entire verdict.
+  assert.equal(volumeOf({ volumeUsdc: 3.92, liquidity: 33999.79 }), 3.92);
+  assert.equal(volumeOf({ volumeUsdc: 26.74, liquidity: 25555.14 }), 26.74);
+  assert.equal(volumeOf({ volumeUsdc: 0, volume24hr: 250, liquidity: 9 }), 250,
+    "a zero is skipped rather than returned, or every unscored row would read as zero volume");
+  assert.equal(volumeOf({ volumeUsdc: null, volume24hr: null, firstVolume24hr: 40 }), 40);
+  assert.equal(volumeOf({}), 0);
+
+  // It has to stay a port. The executor builds the run's verdict from its own copy, and a
+  // drift between them is exactly this bug.
+  const executor = readFileSync(new URL("../tools/live-order-executor.mjs", import.meta.url), "utf8");
+  const fields = /\[item\.volumeUsdc, item\.volume24hr, item\.firstVolume24hr, item\.liquidity\]/;
+  assert.match(executor, fields, "the executor still reads these four in this order");
+  assert.match(APP, fields, "and so does the browser");
+
+  // The floor is 100 by DEFAULT, not only when a portfolio names one. The endpoint that
+  // serves this shortlist applies no such default, which is how rows reach the screen that
+  // the run refuses on sight.
+  assert.match(APP, /const DEFAULT_MIN_VOLUME_USDC = 100;/);
+  assert.match(APP, /minimumVolume != null && minimumVolume > 0 \? minimumVolume : DEFAULT_MIN_VOLUME_USDC/,
+    "a portfolio's own minimum wins, and absence means the run's default rather than none");
+  assert.match(executor, /envNumber\("PAPER_MIN_VOLUME_24H", 100\)/,
+    "which is the executor's last fallback; if that changes, this default has to follow");
+});

@@ -7456,6 +7456,21 @@ function syncPortfolioCandidateRefreshControl() {
   els.portfolioCandidatesRefresh.textContent = busy ? "Refreshing..." : "Refresh shortlist";
 }
 
+// A port of candidateVolumeUsdc in live-order-executor.mjs, kept identical field for field
+// and in this order. The first POSITIVE value, not the first present one: a row can carry
+// volumeUsdc 3.92 beside liquidity 33999, and which of them is read is the whole verdict.
+function candidateVolumeUsdc(item = {}) {
+  for (const candidate of [item.volumeUsdc, item.volume24hr, item.firstVolume24hr, item.liquidity]) {
+    const numeric = Number(candidate);
+    if (Number.isFinite(numeric) && numeric > 0) return numeric;
+  }
+  return 0;
+}
+
+// What the executor requires when the portfolio names no minimum of its own. Mirrors the
+// last fallback of MIN_VOLUME_24H, which is where a run gets its floor from.
+const DEFAULT_MIN_VOLUME_USDC = 100;
+
 // The width of the quote, preferring the stated spread and falling back to the two sides it
 // can be derived from. A port of observation_spread in api.php, and it has to stay one: that
 // endpoint builds this shortlist and the bot re-filters it, so a disagreement shows the
@@ -9452,12 +9467,23 @@ function portfolioCandidateFilterReasons(item, mode = state.mode) {
   if (currentSpread != null && currentSpread > MAX_TRADABLE_SPREAD) {
     reasons.push(`spread ${probability(currentSpread)} is wider than the ${probability(MAX_TRADABLE_SPREAD)} a fill needs`);
   }
+  // Measured, after guessing wrong once: the executor's own verdict on the two rows from the
+  // report was "volume below live minimum" for both, and twelve of its sixteen rejections
+  // across that catalogue were the same gate. The spread was 3 and 4 points -- well inside
+  // the limit -- so the spread rule above would have let them through.
+  //
+  // Two details decide whether this agrees with the run, and both were wrong in the first
+  // attempt. The minimum is 100 USDC by DEFAULT, not only when the portfolio sets one:
+  // MIN_VOLUME_24H falls back through LIVE_MIN_VOLUME_24H to PAPER_MIN_VOLUME_24H to 100.
+  // And the endpoint that builds this shortlist applies no such default, which is why rows
+  // it serves can be refused on sight by the run. And the figure is the first POSITIVE of
+  // four fields in a fixed order, not the first non-null of two: these rows carried
+  // volumeUsdc 3.92 against liquidity 33999, so which field is asked decides the answer.
+  const candidateVolume = candidateVolumeUsdc(item);
   const minimumVolume = numericOrNull(config.minLiquidityUsdc);
-  if (minimumVolume != null && minimumVolume > 0) {
-    const volume = numericOrNull(item.volumeUsdc) ?? numericOrNull(item.liquidity) ?? 0;
-    if (volume < minimumVolume) {
-      reasons.push(`volume ${money(volume)} is below this portfolio's ${money(minimumVolume)} minimum`);
-    }
+  const volumeFloor = minimumVolume != null && minimumVolume > 0 ? minimumVolume : DEFAULT_MIN_VOLUME_USDC;
+  if (candidateVolume < volumeFloor) {
+    reasons.push(`volume ${money(candidateVolume)} is below the ${money(volumeFloor)} minimum a live order needs`);
   }
   if (!Number.isFinite(selectedProbability)) {
     reasons.push(`missing ${probabilitySourceLabel(probabilitySource).toLowerCase()}`);
