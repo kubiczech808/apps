@@ -125,7 +125,12 @@ test("worker source keeps live exits opt-in and price-protected", async () => {
   assert.match(source, /MODE !== "live" \|\| !CONFIRM_LIVE/);
   assert.match(source, /client\.postOrder\(signed, OrderType\.FOK, false\)/);
   assert.match(source, /String\(response\?\.status \|\| ""\)\.toLowerCase\(\) === "matched"/);
-  assert.match(source, /if \(!exitFilled\(response\) && ALLOW_PARTIAL\)/);
+  // FOK first, so a full exit keeps its price floor strict. Partial fills stay opt-in --
+  // with one exception the owner asked for: an order already resized down to the balance is
+  // a rescue of less than the position, and refusing to part-fill THAT would throw the
+  // rescue away on a technicality.
+  assert.match(source, /if \(!exitFilled\(response\) && \(ALLOW_PARTIAL \|\| partialRescue\)\)/);
+  assert.match(source, /const partialRescue = held != null && size < number\(plan\.shares\);/);
   assert.match(source, /LIVE_EXIT_POLICY_URL/);
   assert.match(source, /remotePolicyMap\(context\.policyState\)/);
   assert.match(source, /defaultRemotePolicy\(context\.policyState\)/);
@@ -650,4 +655,48 @@ test("stop plan: a floor at or above the entry price is refused, not armed", () 
   assert.ok(stillWatched);
   assert.equal(stillWatched.stopPrice, null);
   assert.equal(stillWatched.settlementCloseBid, 0.99);
+});
+
+// Asked for, in these words: if we react late and can save less of the position than
+// intended, save what can be saved and just sell. And if the account does not hold the
+// position, there is no point trying at all.
+//
+// Measured on the Pi before this: 84 EXIT_REJECTED against 5 EXIT_SUBMITTED, every refusal
+//
+//   "not enough balance / allowance: the balance is not enough
+//    -> balance: 7221, order amount: 6840000"
+//
+// 0.007221 shares held against the 6.84 the plan asked to sell. The exchange refuses the
+// whole order, so being late rescued nothing at all rather than rescuing less -- and the
+// attempt was not terminal, so it repeated every twenty seconds for days.
+test("exit refusals: the account's own answer ends the attempt, everything else retries", async () => {
+  const worker = await import("../tools/rpi-live-exit-worker.mjs");
+
+  // The exchange's own view of the account. No retry can talk it out of this.
+  assert.equal(worker.exitFailureIsTerminal({
+    error: "not enough balance / allowance: the balance is not enough -> balance: 7221, order amount: 6840000",
+  }), true);
+  assert.equal(worker.exitFailureIsTerminal({ errorMsg: "the balance is not enough" }), true);
+
+  // Everything else is a condition of the moment and is worth another pass. A stop that
+  // has given up on a position it could still sell is the worse failure of the two.
+  assert.equal(worker.exitFailureIsTerminal({ error: "no valid exit price on this market's tick grid" }), false);
+  assert.equal(worker.exitFailureIsTerminal({ error: "fetch failed" }), false);
+  assert.equal(worker.exitFailureIsTerminal({ error: "invalid POLY_1271 signature" }), false,
+    "a signing fault is a configuration problem the next live state can correct");
+  assert.equal(worker.exitFailureIsTerminal({}), false);
+  assert.equal(worker.exitFailureIsTerminal(null), false);
+
+  // The sizing rule itself, read off the source: capped at the plan and floored, never
+  // rounded up. Asking for a hair more than the balance is the refusal this path exists to
+  // avoid, and rounding is the easy way to reintroduce it.
+  const source = readFileSync(new URL("../tools/rpi-live-exit-worker.mjs", import.meta.url), "utf8");
+  assert.match(source, /size = Math\.floor\(Math\.min\(size, held\) \* 10000\) \/ 10000;/,
+    "the sell is sized from the smaller of plan and balance, floored");
+  assert.match(source, /if \(!\(held > 0\)\) \{\s*\n\s*return \{ success: false, terminal: true/,
+    "a position the account does not hold ends the attempt instead of repeating it");
+  // Null is "could not ask", which must never be read as "sell nothing" -- that would
+  // abandon a live position on a failed lookup.
+  assert.match(source, /if \(held != null\) \{/,
+    "an unanswerable balance query leaves the plan's size alone");
 });
