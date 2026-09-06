@@ -76,6 +76,44 @@ async function main() {
     console.log("");
   }
 
+  // The state is built from the account's trade history, one page of it. If the account has
+  // outgrown that page the row was never seen, which is a different fault from a row that
+  // was seen and mis-attributed -- so ask the source directly.
+  const account = String(live.accountAddress || live.account?.address || live.funderAddress || "").trim();
+  if (account) {
+    const limit = Number(process.env.LIVE_TRADE_LIMIT || 500);
+    try {
+      const url = `https://data-api.polymarket.com/trades?user=${encodeURIComponent(account)}`
+        + `&limit=${limit}&takerOnly=false`;
+      const rows = await fetchJson(url);
+      const list = Array.isArray(rows) ? rows : [];
+      const stamps = list.map((row) => Number(row?.timestamp)).filter(Number.isFinite).sort((a, b) => a - b);
+      const iso = (seconds) => (Number.isFinite(seconds) ? new Date(seconds * 1000).toISOString() : "-");
+      console.log(`== the account's own trade feed, one page of ${limit}`);
+      console.log(`   returned ${list.length} row(s)`
+        + `   oldest ${iso(stamps[0])}   newest ${iso(stamps[stamps.length - 1])}`);
+      if (list.length >= limit) {
+        console.log(`   !! the page is FULL, so this is a window rather than the history:`);
+        console.log(`      anything older than the oldest row above is invisible to the sync,`);
+        console.log(`      and a trade that fell out of it was never turned into a row at all.`);
+      }
+      const hits = list.filter((row) => matches({ question: row?.title || row?.question, outcome: row?.outcome, slug: row?.slug }));
+      console.log(`   ${hits.length} matching row(s) in the feed`);
+      for (const row of hits.slice(0, 12)) {
+        console.log(`      ${iso(Number(row?.timestamp))} ${String(row?.side || "").padEnd(4)}`
+          + ` ${text(row?.size)} @ ${text(row?.price)}  ${String(row?.title || row?.question || "").slice(0, 46)}`);
+      }
+      if (!hits.length) {
+        console.log("      -> the source does not carry these trades in this page either.");
+      }
+      console.log("");
+    } catch (error) {
+      console.log(`== the account's own trade feed: !! ${error.message}\n`);
+    }
+  } else {
+    console.log("== the account address is not published in the live state, so the feed cannot be read here\n");
+  }
+
   if (!found) {
     console.log("== nothing matched anywhere in the live state");
     console.log("   So the account sync never published these as rows at all, and no");
