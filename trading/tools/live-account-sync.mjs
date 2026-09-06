@@ -743,6 +743,39 @@ function mergedPublicHistoryRows(trades, activity, predicate) {
   return rows;
 }
 
+// What counts as having sold the whole position.
+//
+// This asked for the two share counts to match within a MILLIONTH of a share, which nothing
+// on this account can satisfy: the protective exit rounds its size down to two decimals to
+// get past the exchange's precision rule, so a sell of a 6.573332-share position is 6.57 and
+// leaves 0.003332 behind by construction.
+//
+// Reported as a trade that exists in Polymarket's own activity and appears in NO portfolio's
+// closed positions. Measured on the account:
+//
+//   BUY  6.573332 @ 0.75   Will Yokohama FC win on 2026-09-06?
+//   SELL 6.57     @ 0.581
+//
+// Both rows are in the trade feed. The position is not in `positions` either, because a
+// third of a hundredth of a share is not a position the account reports -- so the trade fell
+// between the two lists and was invisible in the app entirely.
+//
+// A remainder under a hundredth of a share cannot be sold: it is below any size the exchange
+// will accept, and at any price at all it is worth less than a cent. Holding the row open
+// for it describes a position nobody has and hides the trade that really happened.
+const DUST_SHARES = 0.01;
+
+function positionIsFullyExited(group) {
+  const bought = number(group?.sharesBought, 0);
+  const sold = number(group?.sharesSold, 0);
+  if (!(bought > 0)) return false;
+  const remainder = bought - sold;
+  // Negative means more was sold than this group recorded buying, which is a grouping
+  // problem rather than an open position, and the row is still worth publishing.
+  if (remainder <= 0) return true;
+  return remainder < DUST_SHARES;
+}
+
 function closedTradesFromHistory(trades, activity, generatedAt) {
   const groups = new Map();
   const groupsByQuestion = new Map();
@@ -908,7 +941,7 @@ function closedTradesFromHistory(trades, activity, generatedAt) {
   }
 
   const matchedRows = [...groups.values()]
-    .filter((group) => group.buyCost > 0 && (Math.abs(group.sharesBought - group.sharesSold) < 0.000001 || group.status === "REDEEMED"))
+    .filter((group) => group.buyCost > 0 && (positionIsFullyExited(group) || group.status === "REDEEMED"))
     .map((group) => {
       const realizedPnl = group.sellProceeds - group.buyCost;
       const realizedPct = group.buyCost > 0 ? realizedPnl / group.buyCost : null;
@@ -939,6 +972,11 @@ function closedTradesFromHistory(trades, activity, generatedAt) {
         currentPrice: exitPrice,
         finalOutcomePrice: exitPrice,
         shares: group.sharesBought,
+        // What was bought and never sold. Normally zero; a few thousandths when the exit
+        // rounded its size down to clear the exchange's precision rule. Recorded because a
+        // row whose buy and sell sizes differ should say so rather than look like a clean
+        // round trip that happens not to reconcile.
+        unsoldShares: Number(Math.max(0, group.sharesBought - group.sharesSold).toFixed(6)),
         redeemedShares: number(group.redeemedShares),
         stakeUsdc: group.buyCost,
         totalCostUsdc: group.buyCost,

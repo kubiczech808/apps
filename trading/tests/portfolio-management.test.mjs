@@ -4425,3 +4425,54 @@ test("stop floor: 49% by default wherever a stop loss is armed, and off stays of
   assert.equal(live.live.stopLossProbabilityFloor, 0.49);
   assert.equal(live.livePortfolios.underway.stopLossProbabilityFloor, 0.49);
 });
+
+// Reported: a market bought and sold on the account -- both rows in Polymarket's own
+// activity -- appears in NO live portfolio's closed positions.
+//
+// Measured on the account's trade feed, which does carry them:
+//
+//   BUY  6.573332 @ 0.75   Will Yokohama FC win on 2026-09-06?
+//   SELL 6.57     @ 0.581
+//
+// The sync asked the two share counts to match within a MILLIONTH of a share. Nothing on
+// this account can satisfy that: the protective exit rounds its size down to two decimals to
+// clear the exchange's precision rule, so 0.003332 is left behind by construction. The
+// position was not in `positions` either, since a third of a hundredth of a share is not a
+// position the account reports -- so the trade fell between the two lists and vanished.
+test("closed trades: a position sold down to dust is closed, not lost", () => {
+  const SYNC = readFileSync(new URL("../tools/live-account-sync.mjs", import.meta.url), "utf8");
+  const exited = new Function("group", `
+    ${extractFunction(SYNC, "number")}
+    const DUST_SHARES = 0.01;
+    ${extractFunction(SYNC, "positionIsFullyExited")}
+    return positionIsFullyExited(group);
+  `);
+
+  // The reported trade.
+  assert.equal(exited({ sharesBought: 6.573332, sharesSold: 6.57 }), true);
+  // An exact round trip, which always worked.
+  assert.equal(exited({ sharesBought: 6.57, sharesSold: 6.57 }), true);
+  // More sold than this group recorded buying is a grouping problem, not an open position,
+  // and the row is still worth publishing.
+  assert.equal(exited({ sharesBought: 6.57, sharesSold: 6.6 }), true);
+
+  // A genuinely part-sold position stays open. This is the line that must not move: half a
+  // position still held is a position, and calling it closed would book a P/L for shares the
+  // account still owns.
+  assert.equal(exited({ sharesBought: 6.57, sharesSold: 3.2 }), false);
+  assert.equal(exited({ sharesBought: 6.57, sharesSold: 6.55 }), false,
+    "two hundredths is still sellable and still held");
+  assert.equal(exited({ sharesBought: 0, sharesSold: 0 }), false);
+
+  // The threshold is tied to why the dust exists: the exit floors its size to two decimals,
+  // so a remainder is under a hundredth of a share by construction -- and at any price at
+  // all, a hundredth of a share is worth less than a cent.
+  assert.match(SYNC, /const DUST_SHARES = 0\.01;/);
+  assert.doesNotMatch(SYNC, /Math\.abs\(group\.sharesBought - group\.sharesSold\) < 0\.000001/,
+    "the millionth-of-a-share test is gone, not merely bypassed");
+
+  // The remainder is recorded rather than rounded out of existence: a row whose buy and sell
+  // sizes differ should say so instead of looking like a clean round trip that will not
+  // reconcile.
+  assert.match(SYNC, /unsoldShares: Number\(Math\.max\(0, group\.sharesBought - group\.sharesSold\)\.toFixed\(6\)\),/);
+});
