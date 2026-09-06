@@ -4694,10 +4694,31 @@ function live_execution_state_path_for_policy(string $portfolioId): string
     return __DIR__ . '/data/live-' . $id . '-execution-state.json';
 }
 
+// Which run records say "this portfolio sent an order for this token". Ownership only --
+// it decides whose stop loss protects the position, never whether one exists.
+//
+// PENDING_MATCH belongs here and its absence was a critical fault. It is written when the
+// exchange takes an order whose match is queued, which is the normal answer for the
+// fill-and-kill orders an in-play portfolio sends: "Underway Live" opens almost entirely
+// this way. Naming that case separately from SUBMITTED was right for the run log and
+// wrong here, and it silently un-owned every position that portfolio opened -- dropping
+// them out of the policy payload, so nothing watched them and no stop could fire.
+//
+// The lesson is in the asymmetry: a queued order is NOT a position, which is why the run
+// log must not call it one -- but it IS this portfolio's order, which is all ownership
+// asks. A position that does not exist yet needs no stop; one that appears later needs its
+// own portfolio's, and this is the only record that says whose it is.
+const LIVE_EXECUTION_SUBMITTED_ACTIONS = [
+    'SUBMITTED',
+    'CANCELED_AND_SUBMITTED',
+    'ROTATED_OPENED',
+    'PENDING_MATCH',
+];
+
 function live_execution_record_was_submitted(array $record): bool
 {
     $action = strtoupper(trim((string) ($record['action'] ?? ($record['batchLog']['action'] ?? ''))));
-    return in_array($action, ['SUBMITTED', 'CANCELED_AND_SUBMITTED', 'ROTATED_OPENED'], true);
+    return in_array($action, LIVE_EXECUTION_SUBMITTED_ACTIONS, true);
 }
 
 function live_execution_record_token_ids(array $record): array

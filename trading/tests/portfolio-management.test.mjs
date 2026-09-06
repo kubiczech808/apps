@@ -16,6 +16,7 @@ const APP = readFileSync(new URL("../assets/app.js", import.meta.url), "utf8");
 const CSS = readFileSync(new URL("../assets/app.css", import.meta.url), "utf8");
 const HTML = readFileSync(new URL("../index.html", import.meta.url), "utf8");
 const BOT = readFileSync(new URL("../tools/paper-trading-bot.mjs", import.meta.url), "utf8");
+const EXECUTOR = readFileSync(new URL("../tools/live-order-executor.mjs", import.meta.url), "utf8");
 const WORKFLOW = readFileSync(new URL("../../.github/workflows/trading-paper-bot.yml", import.meta.url), "utf8");
 
 // Drives api.php's own normalizer. The file is loaded up to its request dispatch, so
@@ -3189,6 +3190,93 @@ test("catalogue row: the quote belongs to the outcome the row selected", async (
   assert.deepEqual(selectedOutcomeQuote(market, 1, 3), { bestBid: 0.19, bestAsk: 0.20 });
   // A missing side stays missing; 1 - null is not a price.
   assert.deepEqual(selectedOutcomeQuote({ bestBid: 0.19 }, 1, 2), { bestBid: null, bestAsk: 0.81 });
+});
+
+// Reported as critical: "Underway Live" has no working stop loss. Caused by the commit
+// that introduced PENDING_MATCH -- ownership is decided by the run record's action, that
+// list was not updated, and an in-play portfolio opens almost entirely through queued
+// fill-and-kill orders. Every position it opened stopped having an owner, fell out of the
+// policy payload, and went unwatched.
+//
+// The asymmetry is the whole point, and it is why the mistake was easy to make: a queued
+// order is NOT a position, which is why the run log must not call it one -- but it IS this
+// portfolio's order, which is all ownership asks. A position that does not exist yet needs
+// no stop; one that appears later needs its OWN portfolio's, and this record is the only
+// thing that says whose it is.
+test("live stop loss: a position opened by a queued order is still its portfolio's", () => {
+  const directory = mkdtempSync(join(tmpdir(), "stop-loss-pending-match-"));
+  try {
+    const cut = API.indexOf("\ntry {");
+    const definitions = join(directory, "definitions.php");
+    mkdirSync(join(directory, "data"), { recursive: true });
+    writeFileSync(definitions, API.slice(0, cut) + "\n");
+
+    writeFileSync(join(directory, "data", "portfolio-config.json"), JSON.stringify({
+      live: { displayName: "Live", stopLossRiskMultiplier: 1.75, automationEnabled: true },
+      livePortfolios: {
+        underway: {
+          displayName: "Underway Live",
+          stopLossRiskMultiplier: 2.5,
+          automationEnabled: true,
+          useLimitOrders: false,
+        },
+      },
+    }));
+    writeFileSync(join(directory, "data", "live-execution-state.json"), JSON.stringify({
+      generatedAt: "2026-09-06T10:00:00Z", action: "SUBMITTED",
+      selected: { tokenId: "live-token" }, runLog: [],
+    }));
+    // The shape the in-play portfolio actually writes: the exchange took a fill-and-kill
+    // order, answered "delayed", and the match filled a few minutes later.
+    writeFileSync(join(directory, "data", "live-underway-execution-state.json"), JSON.stringify({
+      generatedAt: "2026-09-06T11:00:00Z", action: "PENDING_MATCH",
+      selected: { tokenId: "queued-token" }, runLog: [],
+    }));
+    writeFileSync(join(directory, "data", "live-state.json"), JSON.stringify({
+      positions: [
+        { tokenId: "live-token", question: "Opened by an order that matched at once" },
+        { tokenId: "queued-token", question: "Opened by an order whose match was queued" },
+      ],
+    }));
+
+    const payload = JSON.parse(execFileSync("php", ["-r",
+      `chdir('${directory}'); require '${definitions}';`
+      + ` echo json_encode(live_stop_loss_policy_payload());`,
+    ], { encoding: "utf8", cwd: directory }));
+
+    const covered = new Map((payload.policies || []).map((policy) => [policy.tokenId, policy]));
+    assert.ok(covered.has("queued-token"),
+      "a position opened through a queued match is watched like any other");
+    const queued = covered.get("queued-token");
+    assert.equal(queued.portfolioId, "live-custom-underway");
+    // Under its OWN cap. Falling through to the fallback would have protected it at the
+    // main Live portfolio's 1.75 instead of the 2.5 this portfolio chose, which is a
+    // different trade being managed under somebody else's risk.
+    assert.equal(queued.stopLossRiskMultiplier, 2.5);
+
+    assert.equal(payload.positionsWithoutRunLogAttribution, 0,
+      "and it is not counted as unattributed");
+    assert.equal(payload.positionsAdoptedFromAccount, 0);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+// The structural half of the fault above: two lists, in two languages, that have to agree
+// about which actions mean "this portfolio sent an order". They drifted once and cost a
+// live portfolio its stop loss, so the agreement is asserted rather than remembered.
+test("live stop loss: every action the executor writes for an accepted order confers ownership", () => {
+  const owning = API.slice(API.indexOf("LIVE_EXECUTION_SUBMITTED_ACTIONS"));
+  const list = owning.slice(0, owning.indexOf("]"));
+
+  // Every action the executor can write once successfulOrderResponse said the exchange
+  // took the order. Read off the submission site rather than restated from memory.
+  for (const action of ["SUBMITTED", "CANCELED_AND_SUBMITTED", "PENDING_MATCH"]) {
+    assert.ok(EXECUTOR.includes(`"${action}"`),
+      `the executor still writes ${action}; if it stopped, this test is the thing to update`);
+    assert.ok(list.includes(`'${action}'`),
+      `${action} means this portfolio sent an order, so it must confer ownership of the position`);
+  }
 });
 
 // The paper half of the rule above, and the half that was missing. Live suppresses the
