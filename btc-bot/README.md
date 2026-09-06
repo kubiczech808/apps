@@ -16,39 +16,73 @@ Two things are true of this bot and are worth stating before anything else:
 
 ## What the backtest says
 
-625 days of LN Markets' own hourly candles, **spot** (no leverage, no
+608 days of LN Markets' own hourly candles, **spot** (no leverage, no
 liquidation, no funding — fees on the buy and the sell only), 1% risk per trade,
-one position at a time. Each row changes exactly one rule:
+one position at a time.
+
+```
+Start / end   100496 sats → 84152 sats  (-16.26%)
+Trades        271 (85W / 186L), win rate 31.37%
+Exits         stop_loss ×169, take_profit ×71, manual ×31
+Profit factor 0.86        max drawdown 20.97%
+Avg win/loss  1170 sats / 623 sats
+Fees          trading 25804 sats
+Before fees   +9460 sats (+9.41%) — the edge the fees are charged against
+Friction      fees are 14.56% of the risk on the median trade, 37.14% on the
+              worst tenth; 64 trades paid more than a quarter of what they risked
+```
+
+**The chart reading is not what loses the money. The fee schedule is.**
+
+Before fees this makes +9.4% over 608 days. It pays 25804 sats to earn 9460 —
+so it hands back the whole edge and 16% of the account on top. Per trade that
+is a gross expectancy of about +0.06R against a fee of 0.15R.
+
+The friction line says why, and no other number in the report showed it: a stop
+placed half an ATR beyond a 1h zone is often 0.3–0.8% from entry, while the
+round trip costs 0.12% of notional. On such a trade the fee is a fifth to a half
+of everything at risk. It has to be right far more often than the same idea
+taken on a wider stop, for reasons that have nothing to do with the chart.
+
+Break-even needs a 34.7% win rate at this 1.88 payoff. It gets 31.4%.
+
+### Which component is unreliable
+
+Each row changes exactly one rule from the shipped configuration, same candles:
 
 ```
 variant                 trades   win%      PF   return%   avgW/avgL    TP   SL  man
-as it lost (no filters)    373   29.0    0.88     -31.9        2.16    94  249   30
-sweep only                 272   31.6    0.96     -16.9        2.08    71  170   31   <- shipped
-imbalance only             214   30.4    0.86     -20.3        1.98    55  137   22
-both                       166   31.9    0.90     -14.0        1.92    43  101   22
-both, no trend-flip close  144   29.2    0.86     -15.5        2.08    38  106    0
-both, require 3R           162   27.8    0.87     -16.0        2.25    26  114   22
+shipped                   271   31.4    0.86     -16.3        1.88    71  169   31
+no candle trigger         551   28.3    0.75     -47.8        1.89   130  345   76
+engulfing trigger only    228   31.6    0.88     -12.4        1.90    62  140   26
+rejection trigger only    116   28.4    0.76     -12.4        1.91    28   72   16
+stop 1.0 ATR past zone    230   29.6    0.77     -23.1        1.81    50  136   44
+stop 1.5 ATR past zone    215   30.7    0.76     -22.6        1.71    43  119   53
+fixed 2R target           271   31.4    0.84     -18.0        1.84    71  169   31
+must close inside zone    242   29.3    0.74     -24.5        1.79    61  155   26
+no trend-flip close       236   29.2    0.83     -18.4        2.01    65  171    0
 ```
 
-**It still loses.** Profit factor 0.96 against the 1.0 that breaks even, about
--9.9% a year. What changed is the size of the hole, and one rule is responsible.
+- **The closed-candle trigger is the one rule that clearly earns its place.**
+  Removing it doubles the trade count and takes profit factor 0.86 → 0.75.
+- **The pin bar is the weak half of it.** Engulfing alone scores 0.88, rejection
+  alone 0.76. A wick twice the body is a common accident in a quiet hour; a bar
+  that closes through the whole of the previous one is not.
+- **A wider stop makes it worse, not better** — 0.77 and 0.76. So the stop is not
+  simply "inside the noise". Widening it without widening the target in the same
+  proportion just moves the same trades further from a target they already only
+  reach 26% of the time.
+- **No row reaches 1.0.** The best single change is worth +0.02 profit factor,
+  which is noise on 271 trades. There is no one broken rule to fix here.
 
-- **The liquidity sweep earns its place.** Profit factor 0.88 → 0.96 and win
-  rate 29.0% → 31.6%: each trade got better, not merely rarer. Requiring the
-  zone to have reached under the previous swing low — collecting the stops
-  resting there — is the single change that moved per-trade quality.
-- **The imbalance filter does not.** Alone it lowers profit factor to 0.86, and
-  added to the sweep it drags 0.96 down to 0.90. Its smaller headline loss comes
-  from taking 40% fewer trades. Less bad is not better, and the column that says
-  so is PF, not return%.
+Read the return column with care throughout: any filter that removes trades
+shrinks the loss of a losing system. Only profit factor says whether the trades
+that remain are better ones.
 
-Read the return column with that in mind throughout: any filter that removes
-trades shrinks the loss of a losing system. Only profit factor says whether the
-trades that remain are better ones.
+### Three ways this measurement lied before it was fixed
 
-### Two ways this measurement lied before it was fixed
-
-Both were caught by the table, not by reasoning, and both looked like results:
+All three were caught by comparing two numbers that had to agree, none by
+reading the code, and all three looked like results:
 
 - The stop management never moved a stop (it read `position.stop`; every
   position carries `stopLoss`), so 35 trades reached 1R and none were protected.
@@ -57,9 +91,14 @@ Both were caught by the table, not by reasoning, and both looked like results:
   is true for every swing low. The filter on and the filter off returned
   identical numbers to the sat — twice — before the comparison was moved to the
   previous *pivot*.
+- The opening fee was charged to the balance but left out of the trade's P/L.
+  The equity curve was right and every statistic computed from trades was not:
+  the trades summed to -7285 sats while the account fell 20846. Profit factor
+  read 0.93 and was really 0.86.
 
-A filter whose presence and absence agree exactly is not a strict filter. It is
-a filter that does nothing.
+A filter whose presence and absence agree exactly is not a strict filter. A
+trade list that does not add up to the equity curve is not a trade list. Both
+identities are asserted by tests now.
 
 ### On the source
 
@@ -84,8 +123,10 @@ One idea, applied in one direction at a time:
 - **Stop** goes half an ATR beyond the zone. **Target** is the next place the
   market has already reacted, clamped between 2R and 5R.
 - **Size** is whatever risks exactly 1% of account equity if the stop is hit.
-  Leverage is derived from the stop distance so that liquidation sits well
-  beyond it — it is never a setting that multiplies risk.
+  In spot that is capped by the capital itself, so a tight stop buys a smaller
+  position and risks less than 1% rather than borrowing to reach it. On futures
+  the leverage is derived from the stop distance so liquidation sits well beyond
+  it — it is never a setting that multiplies risk.
 
 Reward/risk is measured **in sats, not in price distance**. On an inverse
 contract those differ by several percent: a "2R" target read off the chart is
@@ -230,7 +271,7 @@ asks twice.
 
 ```bash
 cd btc-bot
-npm test                      # 62 tests, no network needed
+npm test                      # 96 tests, no network needed
 node tools/backtest.mjs --limit 1000
 node tools/run-bot.mjs        # honours BOT_* and LNM_* from the environment
 BOT_DRY_RUN=true node tools/run-bot.mjs   # decides, reports, sends nothing
