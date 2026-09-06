@@ -480,11 +480,27 @@ export function exitTrigger({ bestBidPrice, stopPrice, triggerPrice = stopPrice,
   return (bid + ask) / 2 <= trigger;
 }
 
+// Positions still worth watching. A finished one is excluded because there is nothing left
+// to protect: the shares are gone, or the settlement price is already published.
+//
+// PENDING_RESOLUTION is not one of those, and excluding it was the fault. It means the
+// market has stopped trading and its settlement price has not been published yet -- the
+// shares are still held, and the dashboard has always counted such a row as an open
+// position. Worse, it is the exact state the certainty close exists for: the outcome is
+// decided, the bid sits at 0.999, and the point is to sell now rather than wait hours for
+// Polymarket to settle. So the moment a position became the kind this rule is meant to act
+// on, it dropped out of the watch list and the rule could never fire.
+//
+// Reported on "Set 2 Winner: Zverev vs Tabilo": another position of the same portfolio sold
+// at 99.9 and this one never did. That one was still trading when its bid reached the
+// close; this one crossed into PENDING_RESOLUTION first.
+export const FINISHED_POSITION_STATUSES = ["CLOSED", "LOST", "WON", "REDEEM_REQUIRED", "SOLD"];
+
 function livePositions(state = {}) {
   const positions = Array.isArray(state.positions) ? state.positions : [];
   return positions.filter((position) => {
     const status = String(position.status || "").toUpperCase();
-    return !["CLOSED", "LOST", "WON", "REDEEM_REQUIRED", "PENDING_RESOLUTION", "SOLD"].includes(status)
+    return !FINISHED_POSITION_STATUSES.includes(status)
       && String(position.tokenId || position.assetId || "").trim()
       && number(position.shares ?? position.size, 0) > 0;
   });

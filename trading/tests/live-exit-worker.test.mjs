@@ -719,3 +719,47 @@ test("exit refusals: the account's own answer ends the attempt, everything else 
   assert.match(source, /if \(!\(held > 0\)\) \{[\s\S]{0,240}terminal: true/,
     "a position the account does not hold ends the attempt instead of repeating it");
 });
+
+// Reported: certainty selling works, but one position of the same portfolio sold at 99.9
+// and "Set 2 Winner: Zverev vs Tabilo" never did. Measured beforehand, it was in the policy
+// payload -- "covered ... stake 4.9299" -- and absent from the worker's seven watched
+// positions, so nothing was reading its book.
+//
+// The difference between the two positions was their status. PENDING_RESOLUTION means the
+// market has stopped trading and its settlement price is not published yet: the shares are
+// still held, and it is the exact state the certainty close exists for. Excluding it meant
+// that the moment a position became the kind this rule acts on, it stopped being watched.
+test("a position awaiting resolution is still watched, because that is when it sells", () => {
+  const source = readFileSync(new URL("../tools/rpi-live-exit-worker.mjs", import.meta.url), "utf8");
+  const positions = new Function("state", `
+    ${functionBody(source, "number")}
+    const FINISHED_POSITION_STATUSES = ${JSON.stringify(worker.FINISHED_POSITION_STATUSES)};
+    ${functionBody(source, "livePositions")}
+    return livePositions(state).map((position) => position.question);
+  `);
+
+  const held = { tokenId: "1", shares: 4.93 };
+  const watched = positions({
+    positions: [
+      { ...held, question: "Set 2 Winner: Zverev vs Tabilo", status: "PENDING_RESOLUTION" },
+      { ...held, question: "still trading", status: "OPEN" },
+      { ...held, question: "no status at all" },
+      // Genuinely finished: the shares are gone or the settlement is already published, so
+      // there is nothing left for a stop or a close to do.
+      { ...held, question: "sold", status: "SOLD" },
+      { ...held, question: "won", status: "WON" },
+      { ...held, question: "lost", status: "LOST" },
+      { ...held, question: "closed", status: "CLOSED" },
+      { ...held, question: "redeem", status: "REDEEM_REQUIRED" },
+    ],
+  });
+
+  assert.deepEqual(watched, ["Set 2 Winner: Zverev vs Tabilo", "still trading", "no status at all"]);
+  assert.ok(!worker.FINISHED_POSITION_STATUSES.includes("PENDING_RESOLUTION"),
+    "awaiting a settlement price is not the same as being settled");
+
+  // The other two reasons to skip a position are untouched: without a token there is
+  // nothing to place an order against, and without shares there is nothing to sell.
+  assert.deepEqual(positions({ positions: [{ shares: 4.93, question: "no token" }] }), []);
+  assert.deepEqual(positions({ positions: [{ tokenId: "1", shares: 0, question: "no shares" }] }), []);
+});
