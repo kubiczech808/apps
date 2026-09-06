@@ -4489,8 +4489,18 @@ test("live portfolios: every P/L tile is the portfolio's own, only the wallet is
   assert.match(app, /function liveOwnPortfolioPnl\(mode = state\.mode\)/);
   assert.match(app, /const own = liveOwnPortfolioPnl\(mode\);/,
     "the overview ROI reads the same per-portfolio helper");
-  assert.match(app, /annualized: \(own\.realized \/ base\) \* \(365 \/ days\)/,
-    "and annualizes that portfolio's own realized P/L over its own base");
+  // The column is a plain ROI now, not an annualized one: realized P/L over what the closed
+  // trades cost. Annualizing divided by elapsed time, so a portfolio a few hours old
+  // reported hundreds of percent on a couple of dollars while a months-old one looked worse
+  // for the same trading.
+  assert.match(app, /invested = own\.investedClosed;/,
+    "the overview ROI divides that portfolio's own realized P/L by its own invested amount");
+  assert.match(app, /return \{ roi: realized \/ invested, realized, invested, closedCount \};/);
+  // Numerator and denominator describe the same trades: money that completed a round trip.
+  // The `stake` figure spans open positions too and would understate every portfolio still
+  // holding something.
+  assert.match(app, /const investedClosed = closedTrades\s*\n\s*\.reduce\(/,
+    "and the base is the closed trades' cost, not every trade's");
 
   // Every row set it sums has to be attributed, or the sums would be the account's again.
   assert.match(app, /function liveClosedTrades\(liveState, mode = state\.mode\) \{[\s\S]*?belongsToLivePortfolio\(row, mode\)\);/);

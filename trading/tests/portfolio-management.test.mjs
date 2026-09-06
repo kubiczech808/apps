@@ -656,10 +656,9 @@ test("dashboard: the tab row is built from the saved portfolios, archived ones l
     // The live group is ordered by whether a portfolio is switched on, then by ROI, so the
     // tab order needs both. Real, not stubbed: the ordering is what these tests measure.
     ${extractFunction(APP, "automationIsEnabled")}
-    ${extractFunction(APP, "overviewAnnualizedRoi")}
     ${extractFunction(APP, "firstOpenedAtFromTrades")}
     ${extractFunction(APP, "liveInitialCapitalForMode")}
-    ${extractFunction(APP, "portfolioAnnualizedRoiForMode")}
+    ${extractFunction(APP, "portfolioRealizedRoiForMode")}
     // Ordering asks each portfolio whether its automation is on, which means the real
     // config merge -- the shipped defaults matter here, since 5050 is the one portfolio
     // that ships switched off.
@@ -716,10 +715,9 @@ test("dashboard: an archived 5050 leaves the tab row too, the plain live portfol
     // The live group is ordered by whether a portfolio is switched on, then by ROI, so the
     // tab order needs both. Real, not stubbed: the ordering is what these tests measure.
     ${extractFunction(APP, "automationIsEnabled")}
-    ${extractFunction(APP, "overviewAnnualizedRoi")}
     ${extractFunction(APP, "firstOpenedAtFromTrades")}
     ${extractFunction(APP, "liveInitialCapitalForMode")}
-    ${extractFunction(APP, "portfolioAnnualizedRoiForMode")}
+    ${extractFunction(APP, "portfolioRealizedRoiForMode")}
     // Ordering asks each portfolio whether its automation is on, which means the real
     // config merge -- the shipped defaults matter here, since 5050 is the one portfolio
     // that ships switched off.
@@ -1861,10 +1859,9 @@ test("dashboard: live tabs lead, then each portfolio group is ordered by equity"
     // The live group is ordered by whether a portfolio is switched on, then by ROI, so the
     // tab order needs both. Real, not stubbed: the ordering is what these tests measure.
     ${extractFunction(APP, "automationIsEnabled")}
-    ${extractFunction(APP, "overviewAnnualizedRoi")}
     ${extractFunction(APP, "firstOpenedAtFromTrades")}
     ${extractFunction(APP, "liveInitialCapitalForMode")}
-    ${extractFunction(APP, "portfolioAnnualizedRoiForMode")}
+    ${extractFunction(APP, "portfolioRealizedRoiForMode")}
     // Ordering asks each portfolio whether its automation is on, which means the real
     // config merge -- the shipped defaults matter here, since 5050 is the one portfolio
     // that ships switched off.
@@ -3780,7 +3777,7 @@ test("overview order: switched-on live portfolios come first, then by ROI", () =
     ${extractFunction(APP, "automationIsEnabled")}
     ${extractFunction(APP, "byActiveThenRoiDescending")}
     const portfolioConfigForMode = (mode) => state.configs[mode] || {};
-    const portfolioAnnualizedRoiForMode = (mode) => state.roi[mode] ?? null;
+    const portfolioRealizedRoiForMode = (mode) => state.roi[mode] ?? null;
     return byActiveThenRoiDescending(state.modes);
   `);
 
@@ -3794,10 +3791,10 @@ test("overview order: switched-on live portfolios come first, then by ROI", () =
       "live-custom-live3": { automationEnabled: false },
     },
     roi: {
-      live: { annualized: 9 },
-      "live-5050": { annualized: 0.2 },
-      "live-custom-live2": { annualized: 1.4 },
-      "live-custom-live3": { annualized: 4 },
+      live: { roi: 9 },
+      "live-5050": { roi: 0.2 },
+      "live-custom-live2": { roi: 1.4 },
+      "live-custom-live3": { roi: 4 },
     },
   }), ["live-custom-live2", "live-5050", "live", "live-custom-live3"],
   "the two running portfolios come first in ROI order, and the two switched-off ones follow in ROI order");
@@ -3807,7 +3804,7 @@ test("overview order: switched-on live portfolios come first, then by ROI", () =
   assert.deepEqual(order({
     modes: ["live", "live-5050"],
     configs: { live: {}, "live-5050": { automationEnabled: false } },
-    roi: { live: { annualized: 0.1 }, "live-5050": { annualized: 5 } },
+    roi: { live: { roi: 0.1 }, "live-5050": { roi: 5 } },
   }), ["live", "live-5050"]);
 
   // An unknown ROI sorts last within its group rather than jumping to the top, and equal
@@ -3815,14 +3812,14 @@ test("overview order: switched-on live portfolios come first, then by ROI", () =
   assert.deepEqual(order({
     modes: ["live", "live-5050", "live-custom-live2"],
     configs: {},
-    roi: { "live-5050": { annualized: 0.5 } },
+    roi: { "live-5050": { roi: 0.5 } },
   }), ["live-5050", "live", "live-custom-live2"]);
 
   assert.match(APP, /return \[\.\.\.byActiveThenRoiDescending\(liveModes\), \.\.\.byEquityDescending\(paperModes\)\];/,
     "the live group is ordered this way and the paper group keeps its equity order");
   // The column and the ordering must read the same number, or the table is sorted by one
   // value while showing another.
-  assert.match(APP, /roi: portfolioAnnualizedRoiForMode\(mode\),/);
+  assert.match(APP, /roi: portfolioRealizedRoiForMode\(mode\),/);
 });
 
 // Asked for: the same separation in Settings -> Portfolio trade analysis. That report
@@ -3900,9 +3897,9 @@ test("dashboard: a page opening on a paper tab still reaches the top live portfo
     const storedRunLogFilter = () => ["ALL"];
     const loadDashboardState = () => calls.push(["loadDashboardState", state.mode]);
     const portfolioEquityUsdc = (mode) => (state.equity || {})[mode] ?? null;
-    const portfolioAnnualizedRoiForMode = (mode) => {
+    const portfolioRealizedRoiForMode = (mode) => {
       const value = (state.roi || {})[mode];
-      return value == null ? null : { annualized: value };
+      return value == null ? null : { roi: value };
     };
     ${extractFunction(APP, "normalizeMode")}
     ${extractFunction(APP, "customLivePortfolioIdFromMode")}
@@ -4249,4 +4246,54 @@ test("a re-quoted market that stopped quoting stops reading as READY", () => {
     "a buy needs somebody offering; a bid alone is what the outcome could be SOLD at");
   assert.match(APP, /if \(item\.quotedAt\) \{\s*\n\s*const freshAsk/,
     "and it is asked only of rows that were actually re-quoted");
+});
+
+// Asked for: replace the overview's "ROI p.a." column with a plain ROI -- realized P/L over
+// the amount actually invested.
+//
+// The two answer different questions and the annualized one is the easier to misread: it
+// divides by elapsed time, so a portfolio a few hours old reported hundreds of percent on a
+// couple of dollars, while one running for months looked worse for identical trading.
+test("overview ROI: realized P/L over what the closed trades cost", () => {
+  const roiOf = new Function("state", "mode", `
+    const isLivePortfolioMode = () => true;
+    // The per-portfolio P/L is fed in, so what is under test is the arithmetic on top of
+    // it rather than the attribution below it -- which has its own tests.
+    const liveOwnPortfolioPnl = () => state.own;
+    ${extractFunction(APP, "portfolioRealizedRoiForMode")}
+    return portfolioRealizedRoiForMode(mode);
+  `);
+
+  // 12.50 back on 100.00 that completed a round trip.
+  const won = roiOf({ own: { realized: 12.5, investedClosed: 100, closedCount: 4 } }, "live");
+  assert.equal(Number(won.roi.toFixed(6)), 0.125);
+  assert.equal(won.invested, 100);
+  assert.equal(won.closedCount, 4);
+
+  // Losses are a return too, and must keep their sign.
+  const lost = roiOf({ own: { realized: -7.5, investedClosed: 50, closedCount: 2 } }, "live");
+  assert.equal(Number(lost.roi.toFixed(6)), -0.15);
+
+  // Nothing has come back yet. Absent, not zero -- zero would sort a portfolio that has
+  // never closed a trade above a losing one that has.
+  assert.equal(roiOf({ own: { realized: 0, investedClosed: 0, closedCount: 0 } }, "live"), null);
+  assert.equal(roiOf({ own: { realized: 5, investedClosed: 0, closedCount: 1 } }, "live"), null,
+    "a return on nothing is not a percentage");
+  assert.equal(roiOf({ own: null }, "live"), null);
+
+  // The denominator is the CLOSED trades' cost, not `stake`, which spans open positions and
+  // would charge a finished result against money still working.
+  assert.match(APP, /const investedClosed = closedTrades\s*\n\s*\.reduce\(/);
+  assert.match(APP, /invested = own\.investedClosed;/);
+
+  // On the paper side an unfilled limit order never bought anything, so it is neither
+  // profit nor capital spent -- counting its reserved notional would dilute the return of
+  // every portfolio that rests bids.
+  assert.match(APP, /const filled = trades\.filter\(\(trade\) => !isUnfilledLimitOrder\(trade\)\);/);
+
+  // The column and the ordering read one number, or the table is sorted by one value while
+  // showing another. The old annualized helper is gone rather than left to be picked up.
+  assert.match(APP, /const roi = portfolioRealizedRoiForMode\(mode\);\s*\n\s*return roi && Number\.isFinite\(roi\.roi\)/);
+  assert.doesNotMatch(APP, /overviewAnnualizedRoi|portfolioAnnualizedRoiForMode/);
+  assert.match(APP, /<th title="Realized P\/L as a share of what the closed trades cost[^"]*">ROI<\/th>/);
 });

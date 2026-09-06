@@ -731,8 +731,8 @@ function portfolioEquityUsdc(mode = state.mode) {
 function byActiveThenRoiDescending(modes) {
   const order = new Map(modes.map((mode, index) => [mode, index]));
   const roiOf = (mode) => {
-    const roi = portfolioAnnualizedRoiForMode(mode);
-    return roi && Number.isFinite(roi.annualized) ? roi.annualized : null;
+    const roi = portfolioRealizedRoiForMode(mode);
+    return roi && Number.isFinite(roi.roi) ? roi.roi : null;
   };
   return [...modes].sort((left, right) => {
     const leftOn = automationIsEnabled(portfolioConfigForMode(left));
@@ -5968,24 +5968,6 @@ function firstOpenedAtFromTrades(...groups) {
   return timestamps.length ? new Date(Math.min(...timestamps)).toISOString() : "";
 }
 
-function overviewAnnualizedRoi({ portfolio = null, firstOpenedAt = "" } = {}) {
-  const initial = Number(
-    portfolio?.initialUsdc
-      ?? portfolio?.originalValueUsdc
-      ?? portfolio?.depositedUsdc,
-  );
-  const equity = Number(portfolio?.equityUsdc);
-  const openPnl = Number(portfolio?.openPnlUsdc || 0);
-  const opened = chartTimestamp(firstOpenedAt);
-  if (!Number.isFinite(initial) || initial <= 0 || !Number.isFinite(equity) || !opened) return null;
-  const days = Math.max((Date.now() - opened) / 86400000, 1 / 24);
-  // The overview deliberately measures only settled money: marks on open positions
-  // belong in Open P/L and would make a historical ROI jump around on every refresh.
-  const realizedEquity = equity - (Number.isFinite(openPnl) ? openPnl : 0);
-  const annualized = ((realizedEquity - initial) / initial) * (365 / days);
-  return { annualized, days };
-}
-
 // What one live portfolio's own trades did, as opposed to what the account did.
 //
 // Reported: the Realized figure on 80+ esports did not match the P/L of its own closed
@@ -6016,42 +5998,69 @@ function liveOwnPortfolioPnl(mode = state.mode) {
   // deposit belongs to the wallet, not to any one of the portfolios drawing on it.
   const stake = [...positions, ...closedTrades]
     .reduce((sum, trade) => sum + amount(trade.totalCostUsdc ?? trade.stakeUsdc), 0);
+  // What the CLOSED trades cost, which is the only base the realized P/L can honestly be
+  // divided by: the money that completed a round trip and produced that number. `stake`
+  // above spans the open positions too, and dividing a realized result by capital still
+  // working would understate every portfolio holding anything.
+  const investedClosed = closedTrades
+    .reduce((sum, trade) => sum + amount(trade.totalCostUsdc ?? trade.stakeUsdc), 0);
   return {
     realized: Number(realized.toFixed(6)),
     open: Number(open.toFixed(6)),
     stake: Number(stake.toFixed(6)),
+    investedClosed: Number(investedClosed.toFixed(6)),
     closedCount: closedTrades.length,
     positionCount: positions.length,
     firstOpenedAt: firstOpenedAtFromTrades(positions, closedTrades, liveOpenOrders(liveState, mode)),
   };
 }
 
-// The ROI the overview column shows, for any mode. Factored out because the ordering now
-// sorts by it: a table sorted by one number while displaying another is a bug waiting to be
+// The ROI the overview column shows, for any mode. Factored out because the ordering sorts
+// by it: a table sorted by one number while displaying another is a bug waiting to be
 // reported, so both read this.
-function portfolioAnnualizedRoiForMode(mode) {
+//
+// Asked for, replacing an annualized figure: realized P/L over the amount actually invested.
+// The two answer different questions and the plain one is the harder to misread. An
+// annualized return divides by elapsed time, so a portfolio a few hours old reported
+// hundreds of percent from a couple of dollars, and one that had been running for months
+// looked worse for the same trading. This says only what came back on what went out.
+//
+// The denominator is the cost of the CLOSED trades, not the portfolio's capital and not
+// every trade it has open. Numerator and denominator then describe the same set of trades:
+// money that completed a round trip, and what that round trip returned. Dividing by the
+// deposit would measure how much of the capital happened to be used; dividing by open
+// positions too would charge a finished result against money still working.
+function portfolioRealizedRoiForMode(mode) {
+  const amount = (value) => {
+    const numeric = Number(value);
+    return Number.isFinite(numeric) ? numeric : 0;
+  };
+  let realized = null;
+  let invested = null;
+  let closedCount = 0;
   if (isLivePortfolioMode(mode)) {
-    // Its own realized P/L over its own base. Reading the account's equity here gave every
-    // live portfolio the same ROI, which also made ordering the overview by ROI meaningless
-    // -- the whole live group tied on the account's number.
     const own = liveOwnPortfolioPnl(mode);
-    const opened = chartTimestamp(own?.firstOpenedAt || "");
-    if (!own || !opened) return null;
-    const configuredInitial = liveInitialCapitalForMode(mode, portfolioConfigForMode(mode));
-    const base = Number.isFinite(configuredInitial) && configuredInitial > 0 ? configuredInitial : own.stake;
-    if (!Number.isFinite(base) || base <= 0) return null;
-    const days = Math.max((Date.now() - opened) / 86400000, 1 / 24);
-    // Settled money only, exactly as the paper rows do it: marks on open positions belong
-    // in Open P/L and would make a historical ROI jump on every refresh.
-    return { annualized: (own.realized / base) * (365 / days), days };
+    if (!own) return null;
+    realized = own.realized;
+    invested = own.investedClosed;
+    closedCount = own.closedCount;
+  } else {
+    const strategyId = paperStrategyIdFromMode(mode);
+    const trades = paperPortfolioTrades(state.botState?.paperPortfolios?.[strategyId])
+      .filter((trade) => isClosedTrade(trade));
+    // Unfilled orders never bought anything, so they are neither profit nor capital spent.
+    // Counting their reserved notional as invested would dilute the return of every
+    // portfolio that rests bids.
+    const filled = trades.filter((trade) => !isUnfilledLimitOrder(trade));
+    realized = filled.reduce((sum, trade) => sum + amount(trade.realizedPnlUsdc ?? trade.pnlUsdc), 0);
+    invested = filled.reduce((sum, trade) => sum + amount(trade.totalCostUsdc ?? trade.stakeUsdc), 0);
+    closedCount = filled.length;
   }
-  const strategyId = paperStrategyIdFromMode(mode);
-  return overviewAnnualizedRoi({
-    portfolio: overviewPortfolioNumbers(strategyId),
-    firstOpenedAt: state.botState?.paperPortfolios?.[strategyId]?.historySummary?.firstOpenedAt
-      || state.portfolioOverview?.[strategyId]?.historySummary?.firstOpenedAt
-      || "",
-  });
+  // Nothing has come back yet, so there is no return to state. Reported as absent rather
+  // than as zero, which would sort a portfolio that has never closed a trade above a losing
+  // one that has.
+  if (!Number.isFinite(invested) || invested <= 0 || !closedCount) return null;
+  return { roi: realized / invested, realized, invested, closedCount };
 }
 
 function renderPortfolioOverview() {
@@ -6089,7 +6098,7 @@ function renderPortfolioOverview() {
         positions: state.liveState ? ownPositions.reduce((sum, row) => sum + marked(row), 0) : null,
         orders: state.liveState ? reservedByOpenOrders(ownOrders) : null,
         free: live ? Number(live.cashUsdc) : null,
-        roi: portfolioAnnualizedRoiForMode(mode),
+        roi: portfolioRealizedRoiForMode(mode),
         live: true,
       };
     }
@@ -6107,7 +6116,7 @@ function renderPortfolioOverview() {
         : null,
       orders: portfolio ? Number(portfolio.restingLimitOrderUsdc || 0) : null,
       free: portfolio ? Number(portfolio.freeCapitalUsdc) : null,
-      roi: portfolioAnnualizedRoiForMode(mode),
+      roi: portfolioRealizedRoiForMode(mode),
       live: false,
     };
   });
@@ -6118,14 +6127,14 @@ function renderPortfolioOverview() {
   els.portfolioOverview.innerHTML = `
     <table class="portfolio-summary">
       <thead>
-        <tr><th>Portfolio</th><th>Equity</th><th title="Annualized return from the first opened trade to today. It uses only realized equity and excludes unrealized P/L.">ROI p.a.</th><th title="Capital in filled positions: exposure that moves with the market.">In positions</th><th title="Capital reserved by resting orders that have not filled. Not exposure -- an unfilled order is discarded intact when the event ends.">In orders</th><th>Free</th></tr>
+        <tr><th>Portfolio</th><th>Equity</th><th title="Realized P/L as a share of what the closed trades cost. Open positions are excluded from both halves, so this is what came back on money that has completed a round trip.">ROI</th><th title="Capital in filled positions: exposure that moves with the market.">In positions</th><th title="Capital reserved by resting orders that have not filled. Not exposure -- an unfilled order is discarded intact when the event ends.">In orders</th><th>Free</th></tr>
       </thead>
       <tbody>
         ${rows.map((row) => `
           <tr class="${row.mode === state.mode ? "portfolio-summary-current" : ""}${row.live ? " portfolio-summary-live" : ""}">
             <td data-label="Portfolio"><span class="portfolio-summary-name"><span class="portfolio-status-dot${row.automationEnabled ? "" : " is-off"}" title="Automation ${row.automationEnabled ? "on" : "off"}" aria-label="Automation ${row.automationEnabled ? "on" : "off"}"></span><button class="portfolio-summary-link" type="button" data-mode-toggle="${escapeHtml(row.mode)}">${escapeHtml(row.name)}</button></span>${row.live && sharedWallet ? ' <span class="portfolio-summary-note" title="These live portfolios trade one Polymarket account, so they report the same account capital.">shared account</span>' : ""}</td>
             <td data-label="Equity">${cell(row.equity)}</td>
-            <td data-label="ROI p.a." title="${row.roi ? `${row.roi.days.toFixed(1)} days since first opened trade; unrealized P/L excluded.` : "No first opened trade is available yet."}">${row.roi ? signedPercent(row.roi.annualized) : "-"}</td>
+            <td data-label="ROI" class="${row.roi ? pnlClass(row.roi.roi) : ""}" title="${row.roi ? `${signedMoney(row.roi.realized)} realized on ${money(row.roi.invested)} invested across ${row.roi.closedCount} closed trade(s); open positions excluded.` : "No closed trade has returned yet."}">${row.roi ? signedPercent(row.roi.roi) : "-"}</td>
             <td data-label="In positions">${cell(row.positions)}</td>
             <td data-label="In orders">${cell(row.orders)}</td>
             <td data-label="Free">${cell(row.free)}</td>
