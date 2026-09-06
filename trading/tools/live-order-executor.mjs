@@ -454,7 +454,10 @@ async function submitLiveEntryWithMakerPrecisionRecovery(order) {
     const response = {
       status: "duplicate_guard",
       success: false,
-      error: claim.reason || "A live BUY for this outcome was already submitted or is awaiting confirmation.",
+      // The guard always sends its own reason and it names which of the three cases this
+      // is: the account already holds the outcome, a buy is already resting on it, or a
+      // submission is still in flight. This fallback is only for a reply that carried none.
+      error: claim.reason || "The entry guard refused this outcome without giving a reason.",
     };
     return { order, response, attempts: [{ order, response, precisionRecovery: false }], entryClaim: claim };
   }

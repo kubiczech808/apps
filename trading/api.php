@@ -5094,6 +5094,11 @@ function live_entry_claims_mutate(callable $mutator): array
         $raw = stream_get_contents($handle);
         $stored = json_decode(is_string($raw) ? $raw : '', true);
         $claims = is_array($stored['claims'] ?? null) ? $stored['claims'] : [];
+        // Housekeeping so this file cannot grow without limit, and nothing more. It is
+        // emphatically NOT the guard: a claim stops blocking its outcome as soon as the
+        // account has been read and shows nothing behind it, which is usually within
+        // minutes. Anything still here after three months is a row for a token nobody has
+        // asked about since, not a lock anyone is waiting on.
         $cutoff = time() - (90 * 86400);
         foreach ($claims as $key => $claim) {
             $claimedAt = is_array($claim) ? strtotime((string) ($claim['claimedAt'] ?? '')) : false;
@@ -5124,6 +5129,51 @@ function live_entry_claims_mutate(callable $mutator): array
     }
 }
 
+/**
+ * What the account itself says about this outcome, which is the question the entry guard
+ * is actually asking: is this position open right now.
+ *
+ * The guard exists so the same position is not opened twice at one moment. It used to
+ * answer that by remembering, for ninety days, that somebody had once submitted an order
+ * -- which is a different question, and a worse one. An order that was killed bought
+ * nothing and blocked its outcome for three months; an order that filled was already
+ * covered by the executor's own held/resting checks, so the memory added nothing.
+ *
+ * `observedAt` is what makes the guard honest without a clock: it says WHEN the account
+ * last spoke, so a claim can be judged against whether the account has been read since it
+ * was made, rather than against how long ago it happened.
+ */
+function live_entry_claim_account_state(string $tokenId): array
+{
+    $liveState = decode_state_file(state_file_paths()['live'] ?? '', false);
+    $held = false;
+    foreach ((array) ($liveState['positions'] ?? []) as $position) {
+        if (is_array($position) && trim((string) ($position['tokenId'] ?? $position['assetId'] ?? '')) === $tokenId) {
+            $held = true;
+            break;
+        }
+    }
+    $resting = false;
+    foreach ((array) ($liveState['openOrders'] ?? []) as $order) {
+        if (!is_array($order)) {
+            continue;
+        }
+        // A resting SELL is an exit, not a second entry, and must not block a buy.
+        if (str_contains(strtoupper((string) ($order['side'] ?? '')), 'SELL')) {
+            continue;
+        }
+        if (trim((string) ($order['tokenId'] ?? $order['assetId'] ?? '')) === $tokenId) {
+            $resting = true;
+            break;
+        }
+    }
+    return [
+        'held' => $held,
+        'resting' => $resting,
+        'observedAt' => trim((string) ($liveState['generatedAt'] ?? $liveState['updatedAt'] ?? '')),
+    ];
+}
+
 function live_entry_claim_request(array $payload): array
 {
     $operation = strtolower(trim((string) ($payload['operation'] ?? 'claim')));
@@ -5138,20 +5188,52 @@ function live_entry_claim_request(array $payload): array
         respond(['ok' => false, 'error' => 'Invalid live entry guard claim id.'], 400);
     }
     $key = live_entry_claim_key($tokenId, $side);
-    return live_entry_claims_mutate(static function (array &$claims) use ($operation, $key, $tokenId, $side, $portfolioId, $claimId): array {
+    // Read outside the lock: it is a different file, and holding the claim lock across it
+    // would serialise every entry behind one state read.
+    $account = $operation === 'claim'
+        ? live_entry_claim_account_state($tokenId)
+        : ['held' => false, 'resting' => false, 'observedAt' => ''];
+    return live_entry_claims_mutate(static function (array &$claims) use ($operation, $key, $tokenId, $side, $portfolioId, $claimId, $account): array {
         $existing = is_array($claims[$key] ?? null) ? $claims[$key] : null;
         if ($operation === 'claim') {
-            if ($existing !== null) {
+            $claimSummary = $existing === null ? null : [
+                'status' => (string) ($existing['status'] ?? 'claimed'),
+                'claimedAt' => (string) ($existing['claimedAt'] ?? ''),
+                'portfolioId' => (string) ($existing['portfolioId'] ?? ''),
+            ];
+            // The duplicate this guard exists to prevent, asked of the account rather than
+            // of a memory: the outcome is already open, or a buy for it is already resting.
+            if ($account['held'] || $account['resting']) {
                 return [
                     'ok' => true,
                     'claimed' => false,
-                    'reason' => 'A live BUY for this outcome was already submitted or is awaiting confirmation.',
-                    'claim' => [
-                        'status' => (string) ($existing['status'] ?? 'claimed'),
-                        'claimedAt' => (string) ($existing['claimedAt'] ?? ''),
-                        'portfolioId' => (string) ($existing['portfolioId'] ?? ''),
-                    ],
+                    'reason' => $account['held']
+                        ? 'The account already holds this outcome.'
+                        : 'A BUY for this outcome is already resting on the book.',
+                    'claim' => $claimSummary,
+                    'account' => $account,
                 ];
+            }
+            if ($existing !== null) {
+                // A claim with nothing behind it, and the difference is causal rather than
+                // clocked: has the account been read SINCE this claim was made? If it has,
+                // and it shows neither a position nor a resting order, then whatever was
+                // submitted did not become anything -- a killed fill-and-kill leaves
+                // exactly this -- and the claim has nothing left to protect.
+                //
+                // If it has not, the submission is still in flight and this really would be
+                // the second order for one outcome, which is the case worth refusing.
+                $claimedAt = strtotime((string) ($existing['claimedAt'] ?? ''));
+                $observedAt = $account['observedAt'] !== '' ? strtotime($account['observedAt']) : false;
+                if ($claimedAt === false || $observedAt === false || $observedAt <= $claimedAt) {
+                    return [
+                        'ok' => true,
+                        'claimed' => false,
+                        'reason' => 'A live BUY for this outcome is in flight and the account has not been read since.',
+                        'claim' => $claimSummary,
+                        'account' => $account,
+                    ];
+                }
             }
             $claims[$key] = [
                 'tokenId' => $tokenId,

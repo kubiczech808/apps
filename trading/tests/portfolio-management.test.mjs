@@ -3280,6 +3280,89 @@ test("live stop loss: every action the executor writes for an accepted order con
   }
 });
 
+// The entry guard exists so the same position is not opened twice at one moment. It used
+// to answer that by remembering for ninety days that somebody had once submitted an order,
+// which is a different question and a worse one: an order that was killed bought nothing
+// and blocked its outcome for three months, while an order that filled was already covered
+// by the executor's own held/resting checks, so the memory added nothing either way.
+//
+// It now asks the account. The one piece of timekeeping left is causal rather than clocked
+// -- has the account been read SINCE this claim was made -- which is what separates "the
+// order produced nothing" from "the order is still in flight".
+test("live entry guard: the account decides, not the clock", () => {
+  const directory = mkdtempSync(join(tmpdir(), "entry-guard-"));
+  // A real Polymarket token id: the guard requires one, and a short stand-in is refused
+  // before any of this logic is reached.
+  const TOKEN = "11122233344455566677788899900011122233";
+  const claim = (liveState, claims, tokenId = TOKEN) => {
+    mkdirSync(join(directory, "data"), { recursive: true });
+    writeFileSync(join(directory, "data", "live-state.json"), JSON.stringify(liveState));
+    writeFileSync(join(directory, "data", "live-entry-claims.json"), JSON.stringify({ claims }));
+    const cut = API.indexOf("\ntry {");
+    const definitions = join(directory, "definitions.php");
+    writeFileSync(definitions, API.slice(0, cut) + "\n");
+    const payload = Buffer.from(JSON.stringify({
+      operation: "claim", tokenId, side: "BUY", portfolioId: "underway",
+      claimId: "abcdefghijklmnop0123",
+    })).toString("base64");
+    return JSON.parse(execFileSync("php", ["-r",
+      `chdir('${directory}'); require '${definitions}';`
+      + ` echo json_encode(live_entry_claim_request(json_decode(base64_decode('${payload}'), true)));`,
+    ], { encoding: "utf8", cwd: directory }));
+  };
+  try {
+    const observed = { generatedAt: "2026-09-06T12:00:00Z" };
+    const madeAt = { tokenId: TOKEN, side: "BUY", portfolioId: "x", claimId: "y", status: "claimed" };
+
+    // Nothing held, nothing claimed: the ordinary case, and it must not be blocked.
+    assert.equal(claim({ ...observed, positions: [] }, {}).claimed, true);
+
+    // The duplicate the guard is FOR, and it is decided by the account alone -- no claim
+    // is on file here at all, and it is still refused.
+    const held = claim({ ...observed, positions: [{ tokenId: TOKEN }] }, {});
+    assert.equal(held.claimed, false);
+    assert.match(held.reason, /already holds this outcome/);
+
+    // A resting BUY is not a position yet but is already this outcome's order.
+    const resting = claim({ ...observed, positions: [], openOrders: [{ tokenId: TOKEN, side: "BUY" }] }, {});
+    assert.equal(resting.claimed, false);
+    assert.match(resting.reason, /already resting/);
+
+    // A resting SELL is an exit. It must not block a buy.
+    assert.equal(claim({ ...observed, positions: [], openOrders: [{ tokenId: TOKEN, side: "SELL" }] }, {}).claimed,
+      true, "a resting exit is not a second entry");
+
+    // In flight: a claim was made and the account has NOT been read since. This really
+    // would be the second order for one outcome.
+    const inFlight = claim(
+      { generatedAt: "2026-09-06T12:00:00Z", positions: [] },
+      { [`BUY:${TOKEN}`]: { ...madeAt, claimedAt: "2026-09-06T12:00:30Z" } },
+    );
+    assert.equal(inFlight.claimed, false);
+    assert.match(inFlight.reason, /in flight/);
+
+    // The case that used to cost three months: the account HAS been read since the claim
+    // and shows nothing behind it, so whatever was submitted did not become anything. A
+    // killed fill-and-kill leaves exactly this, and the outcome is free again.
+    const producedNothing = claim(
+      { generatedAt: "2026-09-06T12:05:00Z", positions: [] },
+      { [`BUY:${TOKEN}`]: { ...madeAt, claimedAt: "2026-09-06T12:00:30Z" } },
+    );
+    assert.equal(producedNothing.claimed, true,
+      "a claim the account has since looked past no longer blocks its outcome");
+
+    // An account that has never spoken cannot clear a claim -- absent evidence is not
+    // evidence of absence, and this is the direction that risks a double position.
+    assert.equal(claim({ positions: [] }, { [`BUY:${TOKEN}`]: { ...madeAt, claimedAt: "2026-09-06T12:00:30Z" } }).claimed,
+      false, "with no observation time, the in-flight claim stands");
+
+    // The retention sweep is housekeeping, not the guard, and must not be read as one.
+    assert.ok(/Housekeeping so this file cannot grow without limit[\s\S]{0,400}NOT the guard/.test(API));
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 // Asked for: when a stop takes the opposite side, the closed row of the position it sold
 // should say so, behind an "i". That row is the only place the reader is looking when the
 // question comes up -- the reversal is a separate position, opened seconds later under a
