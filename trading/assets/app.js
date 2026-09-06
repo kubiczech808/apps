@@ -7447,6 +7447,69 @@ function syncPortfolioCandidateRefreshControl() {
   els.portfolioCandidatesRefresh.textContent = busy ? "Refreshing..." : "Refresh shortlist";
 }
 
+// The best price on one side of a book, or null when that side is empty. An absent side is
+// not a price of zero -- reading it as one is what once had a stop selling into a vacuum.
+function shortlistBookSide(levels, pick) {
+  const prices = (Array.isArray(levels) ? levels : [])
+    .map((level) => Number(level?.price ?? level?.p))
+    .filter((price) => Number.isFinite(price) && price > 0);
+  return prices.length ? pick(...prices) : null;
+}
+
+// "Refresh shortlist" means the price NOW, which is what a reader means by the word. It
+// used to mean "re-read the stored scrape": the rows came back from a scan that may be
+// minutes or hours old, and on an in-play market that is the difference between a tradable
+// row and a finished one. The button reported "current market quotes" for it, which was the
+// claim without the substance.
+//
+// One request for every token. The CLOB's /books takes a list -- the same endpoint the exit
+// worker polls -- so a shortlist of eighty rows costs one round trip rather than eighty.
+const SHORTLIST_QUOTE_LIMIT = 120;
+const SHORTLIST_QUOTE_TIMEOUT_MS = 8000;
+
+async function refreshShortlistQuotesFromPolymarket(observations) {
+  const rows = Array.isArray(observations) ? observations : [];
+  const tokens = [...new Set(rows.map((row) => String(row?.tokenId || "")).filter(Boolean))]
+    .slice(0, SHORTLIST_QUOTE_LIMIT);
+  if (!tokens.length) return { quoted: 0, at: null };
+  const controller = new AbortController();
+  const deadline = setTimeout(() => controller.abort(), SHORTLIST_QUOTE_TIMEOUT_MS);
+  try {
+    const response = await fetch("https://clob.polymarket.com/books", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(tokens.map((token) => ({ token_id: token }))),
+      signal: controller.signal,
+    });
+    if (!response.ok) throw new Error(`Polymarket books HTTP ${response.status}`);
+    const books = new Map();
+    for (const book of await response.json()) {
+      const token = String(book?.asset_id || book?.token_id || "");
+      if (token) books.set(token, book);
+    }
+    const at = new Date().toISOString();
+    let quoted = 0;
+    for (const row of rows) {
+      const book = books.get(String(row?.tokenId || ""));
+      if (!book) continue;
+      const bid = shortlistBookSide(book.bids, Math.max);
+      const ask = shortlistBookSide(book.asks, Math.min);
+      // Written even when both sides come back empty, and that is the point: a market that
+      // has stopped quoting must stop reading as tradable rather than keep the last price
+      // it had. Leaving the stored quote in place is what let finished fixtures sit in the
+      // list looking ready.
+      row.bestBid = bid;
+      row.bestAsk = ask;
+      row.spread = bid != null && ask != null ? Number(Math.max(0, ask - bid).toFixed(4)) : null;
+      row.quotedAt = at;
+      quoted += 1;
+    }
+    return { quoted, at };
+  } finally {
+    clearTimeout(deadline);
+  }
+}
+
 async function refreshPortfolioCandidates(options = {}) {
   // The post-execution refresh is the one that must not be skipped: it is what turns the
   // waiting tab back into a list, and dropping it silently would leave the reader with a
@@ -7491,6 +7554,20 @@ async function refreshPortfolioCandidates(options = {}) {
       state.botState = botStateWithPreservedEvaluations(botState);
       state.botStateFull = state.botStateFull || botStateIsFull(botState);
     }
+    // Before storing, so every downstream reader -- the economics merge, the tradability
+    // gate, the rendered row -- sees the book as it is now rather than as it was scraped.
+    try {
+      const quotes = await refreshShortlistQuotesFromPolymarket(scrapedState?.marketObservations);
+      state.shortlistQuotedAt = quotes.at;
+      state.shortlistQuotedCount = quotes.quoted;
+      state.shortlistQuoteError = "";
+    } catch (quoteError) {
+      // Stored quotes are still worth showing; presenting them AS current is not. The
+      // summary says which it is rather than letting the button's promise stand.
+      state.shortlistQuotedAt = null;
+      state.shortlistQuotedCount = 0;
+      state.shortlistQuoteError = quoteError?.message || String(quoteError);
+    }
     storeScrapedMarketState(scrapedState, "execution");
     if (Array.isArray(state.botState?.evaluations) && Array.isArray(scrapedState?.marketObservations)) {
       state.botState = {
@@ -7503,7 +7580,12 @@ async function refreshPortfolioCandidates(options = {}) {
     } else {
       renderPortfolioCandidates();
     }
-    if (!options.quiet) setExecutionStatus("shortlist refreshed with current market quotes and calculated values");
+    if (!options.quiet) {
+      setExecutionStatus(state.shortlistQuoteError
+        ? `shortlist refreshed, but Polymarket quotes could not be read (${state.shortlistQuoteError}); prices are as last scraped`
+        : `shortlist refreshed with ${state.shortlistQuotedCount} live Polymarket quote(s)`,
+      state.shortlistQuoteError ? "error" : undefined);
+    }
   } catch (error) {
     if (!options.quiet) setExecutionStatus(error.message || "shortlist refresh failed", "error");
     renderPortfolioCandidates();
@@ -9867,7 +9949,13 @@ function renderPortfolioCandidates() {
     const total = state.candidateTotalCount;
     const shown = Math.min(total, candidateVisibleCount(mode));
     const paged = shown < total ? ` - showing ${formatInteger(shown)} of ${formatInteger(total)}` : "";
-    els.portfolioCandidatesSummary.textContent = `${rows.length} ready${blocked ? ` / ${blocked} risk-blocked` : ""}${held ? ` / ${held} already held` : ""}${excluded ? ` / ${excluded} excluded` : ""}${paged}`;
+    // Whether these prices are the market's now or the scrape's then. The list looks
+    // identical either way, and the difference is what decides whether a row can be traded
+    // at all -- so it is stated rather than left to be assumed from the button's name.
+    const quoteNote = state.shortlistQuoteError
+      ? " / stored prices, Polymarket quotes unavailable"
+      : (state.shortlistQuotedAt ? ` / quoted ${formatDate(state.shortlistQuotedAt)}` : "");
+    els.portfolioCandidatesSummary.textContent = `${rows.length} ready${blocked ? ` / ${blocked} risk-blocked` : ""}${held ? ` / ${held} already held` : ""}${excluded ? ` / ${excluded} excluded` : ""}${paged}${quoteNote}`;
   }
   els.portfolioCandidates.innerHTML = renderPortfolioCandidateRows(rows, mode, diagnostics);
 }

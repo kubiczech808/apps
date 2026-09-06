@@ -4162,3 +4162,45 @@ test("candidate shortlist: an execution's verdicts arrive before the list does",
     "the forced refresh waits its turn rather than returning");
   assert.match(APP, /refreshPortfolioCandidates\(\{ quiet: true, force: true \}\)/);
 });
+
+// Asked for: "Refresh shortlist" should not just re-read the database, it should fetch the
+// prices fresh from Polymarket. It did the former while the status line claimed the latter
+// -- "refreshed with current market quotes" over rows from a scrape that could be hours
+// old. On an in-play market that gap is the difference between a tradable row and a
+// finished one.
+test("refresh shortlist: the quote comes from Polymarket, and says so when it does not", () => {
+  const side = new Function("levels", "pick", `
+    ${extractFunction(APP, "shortlistBookSide")}
+    return shortlistBookSide(levels, pick);
+  `);
+
+  assert.equal(side([{ price: "0.72" }, { price: "0.69" }], Math.max), 0.72);
+  assert.equal(side([{ price: "0.75" }, { price: "0.80" }], Math.min), 0.75);
+  // An empty side is unknown, not free. Reading it as zero is what once had a stop selling
+  // into a vacuum, and the same mistake here would price an untradable row as a bargain.
+  assert.equal(side([], Math.max), null);
+  assert.equal(side(undefined, Math.min), null);
+  assert.equal(side([{ price: "0" }], Math.max), null, "a quoted zero is the same vacuum");
+
+  // One request for every token, not one per token.
+  assert.match(APP, /await fetch\("https:\/\/clob\.polymarket\.com\/books", \{/,
+    "the shortlist is re-quoted from the CLOB's batched books endpoint");
+  assert.match(APP, /body: JSON\.stringify\(tokens\.map\(\(token\) => \(\{ token_id: token \}\)\)\)/);
+
+  // Re-quoted BEFORE the observations are stored, so the tradability gate and the rendered
+  // row both read the book as it is now rather than as it was scraped.
+  const flow = APP.slice(APP.indexOf("async function refreshPortfolioCandidates("));
+  const quoteAt = flow.indexOf("refreshShortlistQuotesFromPolymarket(scrapedState?.marketObservations)");
+  const storeAt = flow.indexOf('storeScrapedMarketState(scrapedState, "execution")');
+  assert.ok(quoteAt > 0 && storeAt > quoteAt, "the fresh quote lands before the row is stored");
+
+  // A market that has stopped quoting must stop reading as tradable rather than keep the
+  // last price it had -- which is what let finished fixtures sit in the list looking ready.
+  assert.match(APP, /row\.bestBid = bid;\s*\n\s*row\.bestAsk = ask;/,
+    "both sides are written even when empty, rather than only when a price came back");
+
+  // And the claim is never made without the substance: a failed quote says the prices are
+  // stored, in the status line and in the summary.
+  assert.match(APP, /prices are as last scraped/);
+  assert.match(APP, /stored prices, Polymarket quotes unavailable/);
+});
