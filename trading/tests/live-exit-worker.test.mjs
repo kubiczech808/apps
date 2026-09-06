@@ -127,9 +127,9 @@ test("worker source keeps live exits opt-in and price-protected", async () => {
   assert.match(source, /String\(response\?\.status \|\| ""\)\.toLowerCase\(\) === "matched"/);
   // FOK first on the WHOLE position, with nothing asked of the exchange beforehand.
   assert.match(source, /if \(!exitFilled\(response\) && ALLOW_PARTIAL\) response = await sell\(size, OrderType\.FAK\);/);
-  // The retry after a size refusal always part-fills: it is already a rescue of less than
-  // the position, and holding out for all-or-nothing would throw the rescue away.
-  assert.match(source, /response = await sell\(size, OrderType\.FAK\);\s*\n\s*\}\s*\n\s*return \{/);
+  // The retry after a balance refusal always part-fills: it is already a rescue of less
+  // than the position, and holding out for all-or-nothing would throw the rescue away.
+  assert.match(source, /Holding\s*\n\s*\/\/ out for all-or-nothing here would throw the rescue away[\s\S]{0,120}?response = await sell\(size, OrderType\.FAK\);/);
   assert.match(source, /LIVE_EXIT_POLICY_URL/);
   assert.match(source, /remotePolicyMap\(context\.policyState\)/);
   assert.match(source, /defaultRemotePolicy\(context\.policyState\)/);
@@ -771,4 +771,36 @@ test("a position awaiting resolution is still watched, because that is when it s
   // nothing to place an order against, and without shares there is nothing to sell.
   assert.deepEqual(positions({ positions: [{ shares: 4.93, question: "no token" }] }), []);
   assert.deepEqual(positions({ positions: [{ tokenId: "1", shares: 0, question: "no shares" }] }), []);
+});
+
+// Measured as the current blocker on the certainty close: twelve refusals, the most recent
+// failures on the account, all at px 0.999 on a 0.001 tick with sizes carrying four
+// decimals. "invalid maker amount" is the exchange refusing the SIZE's precision -- a
+// different question from the balance, and it wants a different answer.
+test("a size the exchange will not accept is retried coarser, not smaller", async () => {
+  const worker = await import("../tools/rpi-live-exit-worker.mjs");
+
+  assert.equal(worker.makerAmountPrecisionRefusal({ error: "invalid maker amount" }), true);
+  assert.equal(worker.makerAmountPrecisionRefusal({ errorMsg: "invalid amounts: maker amount precision" }), true);
+
+  // Each refusal has its own answer, and confusing them is how a retry loop forms: a
+  // balance refusal is retried SMALLER, a precision refusal COARSER, and a signer fault is
+  // not a size question at all.
+  const balance = { error: "not enough balance / allowance: the balance is not enough -> balance: 7221, order amount: 6840000" };
+  assert.equal(worker.makerAmountPrecisionRefusal(balance), false);
+  assert.equal(worker.exitFailureIsTerminal(balance), true);
+  assert.equal(worker.makerAmountPrecisionRefusal({ error: "the order signer address has to be the address of the API KEY" }), false);
+  assert.equal(worker.makerAmountPrecisionRefusal({}), false);
+  assert.equal(worker.makerAmountPrecisionRefusal(null), false);
+
+  // A precision refusal is NOT terminal: it is answerable, and giving up on it would
+  // abandon a position the account still holds.
+  assert.equal(worker.exitFailureIsTerminal({ error: "invalid maker amount" }), false);
+
+  const source = readFileSync(new URL("../tools/rpi-live-exit-worker.mjs", import.meta.url), "utf8");
+  assert.match(source, /const coarse = Math\.floor\(size \* 100\) \/ 100;/,
+    "two decimals, floored -- never up, which would ask for shares that are not held");
+  // Once. A retry that is refused the same way again is not tried a third time, or the
+  // loop this whole file has been fixed for twice comes back.
+  assert.match(source, /if \(exitFilled\(retried\) \|\| !makerAmountPrecisionRefusal\(retried\)\)/);
 });

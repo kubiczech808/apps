@@ -860,6 +860,14 @@ export function balanceFromRejection(response) {
 // and that is the exchange's own view of the account rather than ours -- so trying again in
 // twenty seconds asks a question already answered. Retrying it is what turned single dead
 // positions into 84 identical rejections in the retained history.
+// The exchange refusing the size's precision rather than the price or the balance. Worth
+// its own name because the answer is different: this one is retried at a coarser size,
+// where a balance refusal is retried at a smaller one and a signer fault at neither.
+export function makerAmountPrecisionRefusal(response) {
+  const text = `${response?.errorMsg || ""} ${response?.error || ""}`;
+  return /invalid maker amount|maker amount.*(?:accuracy|decimal|precision)/i.test(text);
+}
+
 export function exitFailureIsTerminal(response) {
   const text = String(response?.errorMsg || response?.error || "");
   return /not enough balance|balance is not enough|no position to sell/i.test(text);
@@ -931,6 +939,29 @@ async function submitProtectedExit(plan, { bestBidPrice = null } = {}) {
     // Already a rescue of less than the position, so it takes whatever it can get. Holding
     // out for all-or-nothing here would throw the rescue away on a technicality.
     response = await sell(size, OrderType.FAK);
+  }
+
+  // "invalid maker amount" is the exchange refusing the SIZE's precision, not the price or
+  // the balance. Measured as the current blocker on the certainty close: twelve refusals,
+  // the most recent failures on the account, all at px 0.999 on a 0.001 tick with sizes
+  // carrying four decimals (6.5009, 6.8485).
+  //
+  // The executor already recovers from this by keeping the price and shrinking the size to
+  // a grid the exchange accepts; this worker never learned to. Retried once at two decimals,
+  // which is the size precision Polymarket's own interface uses.
+  //
+  // Stated plainly because it is inferred rather than measured: two decimals is the
+  // convention, not a documented rule I have confirmed. If it does not clear the refusals,
+  // the next status read says so -- the error text is recorded now.
+  if (!exitFilled(response) && makerAmountPrecisionRefusal(response)) {
+    const coarse = Math.floor(size * 100) / 100;
+    if (coarse > 0 && coarse < size) {
+      const retried = await sell(coarse, OrderType.FAK);
+      if (exitFilled(retried) || !makerAmountPrecisionRefusal(retried)) {
+        response = retried;
+        size = coarse;
+      }
+    }
   }
   return {
     ...response,
