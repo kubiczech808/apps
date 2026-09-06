@@ -7448,7 +7448,18 @@ function syncPortfolioCandidateRefreshControl() {
 }
 
 async function refreshPortfolioCandidates(options = {}) {
-  if (state.candidateRefreshBusy || state.candidateBotStateBusy) return;
+  // The post-execution refresh is the one that must not be skipped: it is what turns the
+  // waiting tab back into a list, and dropping it silently would leave the reader with a
+  // permanent "awaiting verdicts". So it waits its turn instead of returning.
+  if (state.candidateRefreshBusy || state.candidateBotStateBusy) {
+    if (!options.force) return;
+    for (let attempt = 0; attempt < 60 && (state.candidateRefreshBusy || state.candidateBotStateBusy); attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+    if (state.candidateRefreshBusy || state.candidateBotStateBusy) {
+      throw new Error("another shortlist refresh is still running");
+    }
+  }
   state.candidateRefreshBusy = true;
   state.scrapedMarketStateError = "";
   syncPortfolioCandidateRefreshControl();
@@ -7975,6 +7986,11 @@ async function triggerOneTimeExecution(target) {
   }
 
   state.executionBusy = target;
+  // From here until the run's verdicts are back, this portfolio's candidate rows are stale
+  // by definition: the run is re-judging every one of them. The tab shows that rather than
+  // the answers it is replacing.
+  state.candidatesAwaitingExecution = target;
+  renderPortfolioCandidates();
   syncExecutionButtons();
   setExecutionStatus(target === "live-5050" ? "starting 5050 workflow" : (live ? "starting live workflow" : "starting paper workflow"));
 
@@ -8081,6 +8097,22 @@ async function triggerOneTimeExecution(target) {
       steps = addExecutionStep(steps, "Workflow finished with warning", `Conclusion: ${workflow.run.conclusion}.${failureDetail} ${actualResult}`, "error");
       setExecutionStatus(`${executionTargetLabel(target)} workflow ${workflow.run.conclusion}`, "error");
     }
+    // The last step of the execution, and deliberately last: the run has just re-judged
+    // every candidate against the exchange, and this is what brings those verdicts back.
+    // Until it finishes the candidate tab shows nothing rather than the verdicts the run
+    // was in the middle of replacing -- asked for in exactly those terms, so that what
+    // appears afterwards is the run's own answer rather than the list it started from.
+    steps = addExecutionStep(steps, "Candidate shortlist re-judged", "Every candidate is being re-read with the verdict this run gave it.", "active");
+    try {
+      await refreshPortfolioCandidates({ quiet: true, force: true });
+      steps = addExecutionStep(steps, "Candidate shortlist re-judged", "The shortlist now shows this run's verdicts, not the ones it started from.", "done");
+    } catch (candidateError) {
+      // A failed refresh must not read as a failed execution: the trade is already decided
+      // and recorded. It costs the reader a stale list, and says so.
+      steps = addExecutionStep(steps, "Candidate shortlist not re-read", `The execution finished and is recorded above; the shortlist could not be refreshed: ${candidateError.message || candidateError}. Use "Refresh shortlist".`, "error");
+    } finally {
+      state.candidatesAwaitingExecution = null;
+    }
     steps = addExecutionStep(steps, "Dashboard refreshed", "Open positions and limit orders are shown in the tables below.", "done");
     if (!workflow.run?.conclusion || workflow.run.conclusion === "success") {
       setExecutionStatus(`${executionTargetLabel(target)} workflow completed`);
@@ -8091,7 +8123,11 @@ async function triggerOneTimeExecution(target) {
     setExecutionStatus(error.message || "workflow failed", "error");
   } finally {
     state.executionBusy = null;
+    // Never left set: an execution that failed to start is not one whose verdicts are
+    // coming, and a tab waiting for them for ever is worse than a stale list.
+    state.candidatesAwaitingExecution = null;
     syncExecutionButtons();
+    renderPortfolioCandidates();
   }
 }
 
@@ -9760,6 +9796,21 @@ function renderPortfolioCandidates() {
   if (!els.portfolioCandidates) return;
   syncPortfolioCandidateRefreshControl();
   const mode = state.mode;
+  // An execution is running against this portfolio, and every row here is about to be
+  // re-judged. Showing the old verdicts meanwhile is worse than showing nothing: they are
+  // the verdicts the run is in the middle of replacing, and a row still reading READY while
+  // the run refuses it is exactly the disagreement reported -- a freshly refreshed list of
+  // 23 READY candidates against a run log saying none of them passed.
+  //
+  // Same trade the live-snapshot gate below makes, for the same reason: waiting costs one
+  // line, not waiting costs the reader's trust in the list.
+  if (state.candidatesAwaitingExecution === mode) {
+    els.portfolioCandidates.innerHTML = '<div class="empty">An execution is running for this portfolio.'
+      + ' The shortlist is re-judged as its final step, and is shown once every candidate has'
+      + ' its new verdict -- so what you see next is what the run actually decided.</div>';
+    if (els.portfolioCandidatesSummary) els.portfolioCandidatesSummary.textContent = "awaiting execution verdicts";
+    return;
+  }
   const config = portfolioConfigForMode(mode);
   const usesPolymarketProbability = normalizeProbabilitySource(config.probabilitySource) === "polymarket";
   if (!state.botState && !usesPolymarketProbability) {

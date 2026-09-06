@@ -4122,3 +4122,43 @@ test("closed positions: a live row says why it was sold, not just that it is gon
   assert.match(APP, /Protective exit\$\{at != null \? ` &middot; sold at \$\{percent\(at\)\}` : ""\}/);
   assert.match(APP, /if \(trade\.exitReason === "settlement"\) \{/);
 });
+
+// Asked for: the candidate list should be re-judged as the very last step of an execution,
+// and must not be shown until every candidate has its new verdict -- so what appears is
+// what the run decided, not the list it started from.
+//
+// Reported as the thing that made this necessary: a freshly refreshed shortlist showing 23
+// READY candidates, an execution started against it, and a run log saying none of them
+// passed. Both were true; the list was simply the one the run was in the middle of
+// replacing.
+test("candidate shortlist: an execution's verdicts arrive before the list does", () => {
+  // The gate itself. While a run is judging this portfolio, the tab shows that rather than
+  // the verdicts being replaced.
+  assert.match(APP, /if \(state\.candidatesAwaitingExecution === mode\) \{/,
+    "the candidate renderer refuses to draw a list the running execution is replacing");
+  assert.match(APP, /awaiting execution verdicts/);
+
+  // Set when the run starts, so the old rows stop being presented the moment they are
+  // known to be stale.
+  assert.match(APP, /state\.candidatesAwaitingExecution = target;\s*\n\s*renderPortfolioCandidates\(\);/,
+    "and it is set as the execution begins, not after it ends");
+
+  // The refresh is the LAST step, after the execution result has been waited for. Order is
+  // the whole request: refreshing before the run would show the list it started from.
+  const flow = APP.slice(APP.indexOf("const result = await waitForExecutionResult("));
+  const rejudgedAt = flow.indexOf("Candidate shortlist re-judged");
+  const dashboardAt = flow.indexOf("Dashboard refreshed");
+  assert.ok(rejudgedAt > 0 && dashboardAt > rejudgedAt,
+    "the shortlist is re-read after the execution result, as its final step");
+
+  // Cleared on every path. A run that never started is not one whose verdicts are coming,
+  // and a tab waiting for them for ever is worse than a stale list.
+  assert.match(APP, /state\.executionBusy = null;[\s\S]{0,300}?state\.candidatesAwaitingExecution = null;/,
+    "the waiting state is cleared even when the execution failed");
+
+  // And the post-execution refresh must not be silently dropped by the busy guard, or the
+  // tab would wait for a list that never arrives.
+  assert.match(APP, /if \(!options\.force\) return;/,
+    "the forced refresh waits its turn rather than returning");
+  assert.match(APP, /refreshPortfolioCandidates\(\{ quiet: true, force: true \}\)/);
+});
