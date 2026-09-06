@@ -5868,3 +5868,54 @@ test("order outcome: acceptance by the exchange is not the same as holding a pos
   assert.match(source, /so the match is queued and no position exists yet/);
   assert.match(source, /a fill-and-kill order does not rest, so it either fills shortly or nothing was bought/);
 });
+
+// Reported: a freshly refreshed shortlist showed 23 candidates as READY, execution was
+// started, and the run log said "none of the candidates passed the fresh Polymarket
+// verification". Every row carried DAYS LEFT -6.1 h against an end date of 01:00, read at
+// 07:05 -- fixtures that had finished six hours earlier.
+//
+// The chain that publishes a verdict back to the shortlist was already there and working.
+// What went wrong is which verdict a finished fixture produced. Gamma is slow to close a
+// market, so until it does the row still reads as active and accepting orders; the book is
+// empty, the entry price comes out invalid, and "no valid current entry price" is
+// classified as a momentary QUOTE problem -- retryable, so the row stays READY and is
+// re-fetched and re-rejected on every run, for ever.
+test("a finished fixture is retired from the shortlist, not offered again as READY", async () => {
+  const executor = await import("../tools/live-order-executor.mjs");
+  const source = readFileSync(new URL("../tools/live-order-executor.mjs", import.meta.url), "utf8");
+
+  // Neither signal decides it alone, and the conjunction is the whole point: an in-play
+  // market is past its end date because the end date IS the kickoff, and a thin market may
+  // lack an ask for a moment. A live book always has bids, so no bid AND no ask, on a
+  // market whose end date has passed, is an event that is over.
+  assert.match(source, /const bookIsEmpty = book\.bestBid == null && book\.bestAsk == null;/);
+  assert.match(source, /if \(bookIsEmpty && overdueDays != null && overdueDays < 0\) \{/);
+
+  const finished = executor.liveRevalidationUpdate({
+    tokenId: "9",
+    status: "REJECTED",
+    marketGone: true,
+    rejectReasons: ["this market's end date passed 6.1 h ago and its order book has neither"
+      + " a bid nor an ask, so the event has finished and Polymarket has not closed the"
+      + " market yet"],
+  }, "2026-09-06T07:05:00Z");
+
+  assert.equal(finished.status, "CLOSED", "which retires the stored row from the pool");
+  assert.equal(finished.retryable, false, "and it must never be retried");
+  assert.equal(finished.retryClass, null);
+
+  // The wording matters as much as the flag: "no valid current entry price" is the phrase
+  // that marks a rejection retryable, so the finished-fixture reason must not contain it.
+  assert.ok(!finished.rejectReasons[0].includes("no valid current entry price"),
+    "the reason must not read as the transient case it is being distinguished from");
+
+  // The transient case still is transient. An empty book on a market that has NOT reached
+  // its end date keeps its retryable verdict, so a quiet minute does not close a market out.
+  const quiet = executor.liveRevalidationUpdate({
+    tokenId: "10",
+    status: "REJECTED",
+    rejectReasons: ["no valid current entry price"],
+  }, "2026-09-06T07:05:00Z");
+  assert.equal(quiet.status, "WAITING_QUOTE");
+  assert.equal(quiet.retryable, true, "a momentarily unpriceable book must be looked at again");
+});

@@ -2964,6 +2964,36 @@ async function revalidateEvaluation(
   const takerEntry = ROTATION_ENTRY_CROSSES_SPREAD || forceTakerEntry;
   const price = orderPriceForBook(book, tick, { forceTakerEntry });
   if (!Number.isFinite(price) || price <= 0 || price >= 1) {
+    // An empty book is ordinarily transient, and rejecting it terminally would close out a
+    // market that is merely quiet for a moment. But Gamma is slow to close a finished
+    // fixture, and until it does, the row keeps its market as active and accepting orders
+    // -- so a match that ended hours ago comes through here every run, is refused for a
+    // missing quote, is classified as a momentary QUOTE problem, and goes on being offered
+    // to the operator as READY. Reported exactly that way: a shortlist of candidates whose
+    // end date had passed six hours earlier, every one of them refused by the fresh check.
+    //
+    // Neither signal decides this alone. A market past its end date may still be trading,
+    // because for an in-play fixture the end date IS the kickoff. And a market with no ask
+    // may be thin rather than finished. Together they are conclusive: a live book always
+    // has bids, so a book with NEITHER side, on a market whose end date has already passed,
+    // is an event that is over.
+    const overdueDays = daysToEnd(market.endDate || evaluation.resolutionEndDate || evaluation.endDate);
+    const bookIsEmpty = book.bestBid == null && book.bestAsk == null;
+    if (bookIsEmpty && overdueDays != null && overdueDays < 0) {
+      return {
+        candidate: evaluation,
+        eligible: false,
+        // Terminal, so the stored row is closed out instead of being offered again. The
+        // wording deliberately avoids "no valid current entry price": that phrase is what
+        // marks a rejection retryable, and this one is not.
+        marketGone: true,
+        rejectReasons: [
+          `this market's end date passed ${formatHorizonHours(Math.abs(overdueDays) * HOURS_PER_DAY)} ago`
+          + " and its order book has neither a bid nor an ask, so the event has finished and"
+          + " Polymarket has not closed the market yet",
+        ],
+      };
+    }
     return { candidate: evaluation, eligible: false, rejectReasons: ["no valid current entry price"] };
   }
   if (USE_LIMIT_ORDERS && POST_ONLY && !takerEntry && book.bestAsk != null && price >= book.bestAsk) {
