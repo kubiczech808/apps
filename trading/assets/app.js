@@ -4243,6 +4243,51 @@ function marketTagsInfo(row = {}) {
 // thing: paper writes the result onto the stopped trade, while a live position has no
 // status of its own and gets it from the exit record as exitReversal. A live-only note
 // could only ever be checked on the live wallet.
+// The numbers behind a protective exit, on the row it closed.
+//
+// Asked for: "I don't actually know what percentage it sold at." Nothing said. The chip
+// read "Protective exit" and the price column showed the fill, but the level the stop was
+// SET at, the bid it found when it fired, and the gap between them were nowhere -- which is
+// exactly what is needed to judge whether a stop fired too early or too late.
+//
+// One reader for both sides, because they store it differently and mean the same thing: a
+// live position gets the level and the bid from the exit record, a paper trade records them
+// on itself as it stops.
+function stopExecutionNote(trade = {}) {
+  const entry = numericOrNull(trade.entryPrice ?? trade.marketPrice);
+  const level = numericOrNull(trade.exitStopPrice ?? trade.stopPrice);
+  const bid = numericOrNull(trade.exitBestBid ?? trade.observedBidAtStop);
+  const sold = numericOrNull(trade.exitPrice ?? trade.currentPrice);
+  if (level == null && bid == null && sold == null) return "";
+
+  const lines = [];
+  if (entry != null) lines.push(`Bought at ${probability(entry)}.`);
+  if (level != null) lines.push(`The stop was set at ${probability(level)}.`);
+  if (bid != null) lines.push(`When it fired the best bid was ${probability(bid)}.`);
+  if (sold != null) lines.push(`It sold at ${probability(sold)}.`);
+  // The gap is the number worth reading on its own: it is the difference between the level
+  // that was chosen and the price the market actually paid, which is what decides whether
+  // the stop did its job.
+  if (level != null && sold != null) {
+    const slip = level - sold;
+    lines.push(slip > 0.0001
+      ? `\nThat is ${probability(slip)} below the level, so the loss is that much larger than the stop was meant to cap.`
+      : `\nThat is at or above the level, so the stop capped the loss where it was meant to.`);
+  }
+  // Why the distance from entry to stop is what it is. Without this the two ends of a
+  // portfolio's range look inconsistent for no visible reason -- a high-probability entry
+  // gets a tight floor and a low-probability one a very wide floor, from the same setting.
+  if (entry != null && level != null) {
+    lines.push(`\nThe level is derived from the entry: the further below 100% the entry is,`
+      + ` the more room the position has to fall before the planned loss matches the potential`
+      + ` win. This entry gave it ${probability(entry - level)} of room.`);
+  }
+  return `<span class="analysis-popover">`
+    + `<button class="info-button" type="button" aria-label="Show what this stop loss did">i</button>`
+    + `<span class="analysis-tooltip" role="tooltip">${escapeHtml(lines.join(" "))}</span>`
+    + `</span>`;
+}
+
 function stopLossReversalNote(trade = {}) {
   const live = trade.exitReversal && typeof trade.exitReversal === "object" ? trade.exitReversal : null;
   const status = String(live?.status || trade.stopLossReversalStatus || "").toUpperCase();
@@ -4303,7 +4348,7 @@ function tradeTypeBadge(trade) {
   // trading but its settlement price is not published yet, which changes nothing about
   // what the row is: still an open position, or still a resting order. It fell through
   // to those labels below, and a red "Pending resolution" chip on top read as a fault.
-  if (String(trade.status || "").toUpperCase() === "STOP_LOSS") return `<span class="order-chip warning">Protective exit</span>${stopLossReversalNote(trade)}`;
+  if (String(trade.status || "").toUpperCase() === "STOP_LOSS") return `<span class="order-chip warning">Protective exit</span>${stopExecutionNote(trade)}${stopLossReversalNote(trade)}`;
   // A live position carries no STOP_LOSS status of its own: the account sync learns from
   // Polymarket, where a protective sell and any other sell are the same event, so a closed
   // live row said nothing about why it closed. The exit worker now reports the reason and
@@ -4311,7 +4356,7 @@ function tradeTypeBadge(trade) {
   if (trade.exitReason === "stop") {
     const at = numericOrNull(trade.exitPrice);
     return `<span class="order-chip warning">Protective exit${at != null ? ` &middot; sold at ${percent(at)}` : ""}</span>`
-      + stopLossReversalNote(trade);
+      + stopExecutionNote(trade) + stopLossReversalNote(trade);
   }
   if (trade.exitReason === "settlement") {
     const at = numericOrNull(trade.exitPrice);

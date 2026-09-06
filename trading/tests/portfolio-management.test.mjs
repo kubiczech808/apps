@@ -4338,3 +4338,43 @@ test("shortlist volume gate: the same figure and the same floor the run uses", (
   assert.match(executor, /envNumber\("PAPER_MIN_VOLUME_24H", 100\)/,
     "which is the executor's last fallback; if that changes, this default has to follow");
 });
+
+// Asked for: "I don't actually know what percentage it sold at." Nothing on the closed row
+// said. The chip read "Protective exit" and the price column showed the fill, but the level
+// the stop was SET at, the bid it found, and the gap between them were nowhere -- which is
+// exactly what is needed to judge whether a stop fired too early or too late.
+test("closed trades: a protective exit shows the level, the bid and the gap", () => {
+  const note = new Function("trade", `
+    ${extractFunction(APP, "numericOrNull")}
+    ${extractFunction(APP, "percent")}
+    ${extractFunction(APP, "probability")}
+    ${extractFunction(APP, "escapeHtml")}
+    ${extractFunction(APP, "stopExecutionNote")}
+    return stopExecutionNote(trade);
+  `);
+
+  // A live row: the level and the bid arrive from the exit record.
+  const live = note({ entryPrice: 0.72, exitStopPrice: 0.2575, exitBestBid: 0.015, exitPrice: 0.015 });
+  assert.match(live, /class="info-button"/, "reached through an i, not printed inline");
+  assert.match(live, /Bought at 72/);
+  assert.match(live, /stop was set at 25\.8/);
+  assert.match(live, /best bid was 1\.5/);
+  assert.match(live, /sold at 1\.5/);
+  assert.match(live, /below the level, so the loss is that much larger/,
+    "the gap between the level and the fill is the number that judges the stop");
+
+  // A paper row records the same facts on itself under different names.
+  const paper = note({ entryPrice: 0.95, stopPrice: 0.8625, observedBidAtStop: 0.86, currentPrice: 0.8625 });
+  assert.match(paper, /Bought at 95/);
+  assert.match(paper, /stop was set at 86\.3/);
+  assert.match(paper, /at or above the level, so the stop capped the loss where it was meant to/);
+
+  // Why the two ends of a portfolio's range behave differently, which is the thing that
+  // looked inconsistent: the same setting gives a 95c entry 8.8 points of room and a 72c
+  // entry 46.3.
+  assert.match(paper, /gave it 8\.7/);
+  assert.match(live, /gave it 46\.3/);
+
+  // A row with none of it says nothing rather than an empty tooltip.
+  assert.equal(note({ entryPrice: 0.72 }), "");
+});
