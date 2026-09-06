@@ -5141,24 +5141,22 @@ function reversalFailureIsTerminal(reason) {
 
 const REVERSAL_RETRY_LIMIT = 8;
 
-// Buying the opposite outcome after a stop is an ENTRY, and a switched-off portfolio must
-// not open positions. Everything else this pass does for a switched-off portfolio --
-// marking, stopping, closing at certainty -- keeps running, because switching a portfolio
-// off stops it committing new money, it does not abandon money already committed.
+// Whether the stop may take the opposite side, which is a question about the portfolio's
+// own setting and nothing else.
 //
-// This is the line live draws: live_stop_loss_policy_config hands the exit worker
-// reverseOnStopLoss only when automation is on. Paper drew it in one place fewer, so a
-// switched-off paper portfolio would still open the opposite position and there was no
-// safe way to see that difference before it happened on the live wallet.
+// Switching a portfolio off is narrower than it sounds, and I read it too widely yesterday:
+// it stops the portfolio EVALUATING candidates and OPENING positions and orders of its own
+// -- the work the run log reports. It does not stand down over the positions the portfolio
+// already holds. Those keep their stop loss, their certainty close, AND their reversal, on
+// every portfolio, because the reversal is part of how the stop closes a position that was
+// opened while the portfolio was running. A stop that sells but may not take the other side
+// is half a stop, and which half you get would depend on a switch that is about something
+// else entirely.
 //
-// No manual-run carve-out, deliberately, even though the entry trigger has one: on live
-// the reversal is executed by the always-on exit worker, which has no manual mode at all,
-// so a carve-out here would exist only on paper -- the asymmetry this removes.
+// So automation is deliberately not consulted here. The gate that matters for "off" lives
+// in strategyMatchesExecutionTrigger, on the entry path, where it belongs.
 function stopLossReversalAllowed(strategy) {
-  if (!strategy?.reverseOnStopLoss) return false;
-  // Absent means on, the same reading the entry path uses: a portfolio saved before the
-  // switch existed must not lose its reversal to a field it never had.
-  return strategy?.automationEnabled !== false;
+  return Boolean(strategy?.reverseOnStopLoss);
 }
 
 function recordStopLossReversalResult(trade, result) {
@@ -5169,6 +5167,13 @@ function recordStopLossReversalResult(trade, result) {
       stopLossReversalAttemptedAt: at,
       stopLossReversalStatus: "OPENED",
       stopLossReversalTradeId: result.trade.id,
+      // Which side was bought, and at what. The trade id alone identifies the new position
+      // without describing it, and this note is read on the OLD row -- where the reader
+      // cannot see the new one. Named to match what the live record carries, so the
+      // dashboard has one reader for both.
+      stopLossReversalOutcome: result.trade.outcome || null,
+      stopLossReversalShares: result.trade.shares ?? null,
+      stopLossReversalPrice: result.trade.entryPrice ?? null,
       statusNote: `${trade.statusNote || "Stop loss filled."} Opposite outcome opened with a fixed ${STOP_LOSS_REVERSAL_STAKE_USDC.toFixed(2)} USDC stake.`,
     };
   }

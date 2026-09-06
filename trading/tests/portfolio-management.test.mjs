@@ -3138,10 +3138,11 @@ test("live stop loss: a switched-off portfolio keeps managing what it already ho
     assert.equal(sleeping.stopLossRiskMultiplier, 1.75, "with its own cap, not somebody else's");
     assert.equal(sleeping.settlementCloseBid, 0.99, "and its own certainty close");
     assert.equal(sleeping.automationEnabled, false);
-    // The one thing the switch does still stop: the exit protects what is held, the
-    // reversal opens something new.
-    assert.equal(sleeping.reverseOnStopLoss, false,
-      "buying the opposite outcome is opening a position, which is what off must prevent");
+    // Including the reversal. "Off" stops the portfolio evaluating and opening positions
+    // of its own; it does not stand down over what it already holds, and the reversal is
+    // part of how the stop closes such a position rather than a new idea of its own.
+    assert.equal(sleeping.reverseOnStopLoss, true,
+      "a switched-off portfolio's stop may still take the opposite side");
     // The running portfolio's reversal is untouched by any of this.
     assert.equal(covered.get("live-token").automationEnabled, true);
 
@@ -3279,34 +3280,100 @@ test("live stop loss: every action the executor writes for an accepted order con
   }
 });
 
-// The paper half of the rule above, and the half that was missing. Live suppresses the
-// reversal for a switched-off portfolio in live_stop_loss_policy_config; paper gated the
-// reversal on reverseOnStopLoss alone, so a switched-off paper portfolio would still buy
-// the opposite outcome after a stop -- which is the one thing "off" has to prevent.
+// Asked for: when a stop takes the opposite side, the closed row of the position it sold
+// should say so, behind an "i". That row is the only place the reader is looking when the
+// question comes up -- the reversal is a separate position, opened seconds later under a
+// different outcome, and nothing on it says where it came from.
 //
-// Asked for: paper portfolios are where a setting gets tried before real money touches it,
-// so a rule that holds only on live cannot be tested without risking the live wallet.
-// Both sides now answer the same question the same way.
-test("paper stop loss: a switched-off portfolio protects but does not reverse", () => {
+// Paper and live store the fact differently and mean the same thing, so one reader serves
+// both. Asserting that here is the point of the test: a live-only note could only ever be
+// checked with real money.
+test("closed trades: a stopped position explains the reversal it produced", () => {
+  const note = new Function("trade", `
+    ${extractFunction(APP, "numericOrNull")}
+    ${extractFunction(APP, "percent")}
+    ${extractFunction(APP, "escapeHtml")}
+    ${extractFunction(APP, "stopLossReversalNote")}
+    return stopLossReversalNote(trade);
+  `);
+
+  // A position with no reversal says nothing at all -- the note must not appear on every
+  // stopped row and mean nothing.
+  assert.equal(note({ status: "STOP_LOSS" }), "");
+
+  // Paper: written onto the stopped trade itself.
+  const paper = note({
+    status: "STOP_LOSS",
+    stopLossReversalStatus: "OPENED",
+    stopLossReversalOutcome: "No",
+    stopLossReversalShares: 6.25,
+    stopLossReversalPrice: 0.32,
+  });
+  assert.match(paper, /Reversed/);
+  assert.match(paper, /class="info-button"/, "reached through an i, not printed inline");
+  assert.match(paper, /role="tooltip"/);
+  assert.match(paper, /&quot;No&quot;/, "names the side that was bought");
+  assert.match(paper, /6\.25 shares at 32/, "and what was paid for it");
+  assert.match(paper, /closed and its result is final/,
+    "and says the reversal's outcome is counted on its own row, not this one");
+
+  // Live: the same fact arriving on the position from the exit record.
+  const live = note({
+    exitReason: "stop",
+    exitReversal: { status: "OPENED", outcome: "Yes", shares: 5, price: 0.4 },
+  });
+  assert.match(live, /Reversed/);
+  assert.match(live, /&quot;Yes&quot;/);
+  assert.match(live, /5\.00 shares at 40/);
+
+  // A reversal that did not happen is the case worth reading, so it carries the reason and
+  // is marked rather than left looking like a success.
+  const failed = note({
+    exitReason: "stop",
+    exitReversal: { status: "SKIPPED", outcome: "Yes", reason: "the market is no longer accepting orders" },
+  });
+  assert.match(failed, /Not reversed/);
+  assert.match(failed, /order-chip warning/);
+  assert.match(failed, /no longer accepting orders/);
+  assert.match(failed, /protective exit itself completed/,
+    "and does not imply the position went unprotected");
+
+  const pending = note({ exitReason: "stop", exitReversal: { status: "PENDING", outcome: "Yes" } });
+  assert.match(pending, /Reversal pending/);
+  assert.match(pending, /retried on the next pass/);
+});
+
+// The paper half of the rule above, and it has to answer identically -- paper is where a
+// setting gets tried before real money touches it, so a rule that holds only on live can
+// only be learned on the live wallet.
+//
+// The rule itself, stated by the owner after I had implemented a narrower one: switching a
+// portfolio off stops it EVALUATING and OPENING new positions and orders. Everything that
+// manages what it already holds keeps running -- stop loss, certainty close, and the
+// reversal alike, on every portfolio.
+test("paper stop loss: a switched-off portfolio still stops, closes and reverses", () => {
   const allowed = new Function("strategy", `
     ${extractFunction(BOT, "stopLossReversalAllowed")}
     return stopLossReversalAllowed(strategy);
   `);
 
   assert.equal(allowed({ reverseOnStopLoss: true, automationEnabled: true }), true,
-    "a running portfolio with the reversal configured still reverses");
-  assert.equal(allowed({ reverseOnStopLoss: true, automationEnabled: false }), false,
-    "buying the opposite outcome is opening a position, which is what off must prevent");
+    "a running portfolio with the reversal configured reverses");
+  assert.equal(allowed({ reverseOnStopLoss: true, automationEnabled: false }), true,
+    "and so does a switched-off one: off is about opening new positions, not about"
+    + " abandoning the stop on positions it already holds");
   assert.equal(allowed({ reverseOnStopLoss: false, automationEnabled: true }), false,
-    "and a portfolio that never asked for the reversal does not get one");
+    "only the portfolio's own setting decides, and a portfolio that never asked for the"
+    + " reversal does not get one");
+  assert.equal(allowed({ reverseOnStopLoss: false, automationEnabled: false }), false);
 
-  // Absent means on, the same reading the entry path uses: a portfolio saved before the
-  // automation switch existed must not lose its reversal to a field it never had.
-  assert.equal(allowed({ reverseOnStopLoss: true }), true,
-    "a portfolio stored before the switch existed keeps reversing");
+  // The switch that "off" really controls is on the entry path, which is the run log's
+  // work. Asserted here so the two rules stay in their own lanes.
+  assert.ok(BOT.includes("if (strategy?.automationEnabled === false) return false;"),
+    "strategyMatchesExecutionTrigger is where automation stops a portfolio");
 
   // The gate has to sit on the path refreshTrades actually takes, not only in a helper
-  // nothing calls -- a rule stated once and applied nowhere reads as fixed and is not.
+  // nothing calls -- a rule stated once and applied nowhere reads as settled and is not.
   assert.ok(BOT.includes("if (!stopLossReversalAllowed(strategy)) return funding.trades;"),
     "refreshTrades asks before reversing");
   assert.ok(/buildStopLossReversalTrade\(sourceTrade, strategy\) \{\s*\n\s*if \(!stopLossReversalAllowed\(strategy\)/

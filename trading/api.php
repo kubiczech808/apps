@@ -4632,9 +4632,14 @@ function live_stop_loss_policy_config(array $config, string $portfolioId): ?arra
     return [
         'portfolioId' => $portfolioId,
         'stopLossRiskMultiplier' => $multiplier,
-        // Never on a switched-off portfolio: the exit protects what is held, the reversal
-        // opens something new.
-        'reverseOnStopLoss' => $automationEnabled && (bool) ($row['reverseOnStopLoss'] ?? false),
+        // Runs on a switched-off portfolio too, and that is the owner's rule rather than an
+        // oversight. I gated this on automation yesterday, arguing that buying the opposite
+        // outcome opens a position and "off" must prevent that. The rule is narrower than I
+        // read it: switching a portfolio off stops it EVALUATING and OPENING new positions
+        // of its own -- what the run log shows. The reversal is not that. It is part of how
+        // the stop loss closes a position the portfolio already had, and a stop that sells
+        // but cannot take the other side is half a stop.
+        'reverseOnStopLoss' => (bool) ($row['reverseOnStopLoss'] ?? false),
         'automationEnabled' => $automationEnabled,
         // The bid at which the position is sold rather than held to settlement. 0 means the
         // portfolio does not take that shortcut.
@@ -4941,6 +4946,29 @@ function live_exit_record_request(array $payload): array
         'orderId' => preg_replace('/[^A-Za-z0-9x-]/', '', (string) ($payload['orderId'] ?? '')),
     ];
 
+    // What the stop did AFTER selling, recorded against the position it sold. The reversal
+    // is the second half of that stop, and it is only knowable once the exit has already
+    // been written -- so it arrives as a separate post that annotates the existing record
+    // rather than replacing it. Asked for: the closed trade should say, in its own row,
+    // that the opposite position was opened.
+    $reversal = null;
+    if (is_array($payload['reversal'] ?? null)) {
+        $status = strtoupper(trim((string) ($payload['reversal']['status'] ?? '')));
+        $reversal = [
+            'status' => in_array($status, ['OPENED', 'SKIPPED', 'PENDING'], true) ? $status : 'PENDING',
+            'at' => gmdate('c'),
+            'outcome' => compact_text($payload['reversal']['outcome'] ?? '', 60),
+            'shares' => is_numeric($payload['reversal']['shares'] ?? null)
+                ? round((float) $payload['reversal']['shares'], 6) : null,
+            'price' => is_numeric($payload['reversal']['price'] ?? null)
+                ? round((float) $payload['reversal']['price'], 6) : null,
+            'orderId' => preg_replace('/[^A-Za-z0-9x-]/', '', (string) ($payload['reversal']['orderId'] ?? '')),
+            // Why it did not open, when it did not. This is the half a reader actually
+            // needs: "the stop reversed" is visible from the new position either way.
+            'reason' => compact_text($payload['reversal']['reason'] ?? '', 200),
+        ];
+    }
+
     $path = live_exit_record_path();
     $directory = dirname($path);
     if (!is_dir($directory) && !@mkdir($directory, 0775, true) && !is_dir($directory)) {
@@ -4961,6 +4989,16 @@ function live_exit_record_request(array $payload): array
         // Keyed by token, so a retried exit updates its record rather than adding a second
         // one for the same position. Bounded and aged out: this is an annotation on closed
         // trades, not an audit log, and the trades themselves are already retained.
+        // A reversal post annotates the exit already stored; a repeated exit post refreshes
+        // the exit's own fields and carries any reversal forward. Either way the two halves
+        // of one stop end up on one record instead of overwriting each other.
+        $existing = is_array($records[$tokenId] ?? null) ? $records[$tokenId] : null;
+        if ($reversal !== null) {
+            $record = $existing ?? $record;
+            $record['reversal'] = $reversal;
+        } elseif ($existing !== null && is_array($existing['reversal'] ?? null)) {
+            $record['reversal'] = $existing['reversal'];
+        }
         $records[$tokenId] = $record;
         $cutoff = time() - (120 * 86400);
         foreach ($records as $key => $entry) {
@@ -5018,6 +5056,11 @@ function live_state_with_exit_reasons(array $payload): array
         $positions[$index]['exitBestBid'] = $record['bestBid'] ?? null;
         $positions[$index]['exitBestAsk'] = $record['bestAsk'] ?? null;
         $positions[$index]['exitOrderId'] = $record['orderId'] ?? null;
+        // The second half of the stop, so the closed row can explain that the opposite
+        // position was opened out of this one.
+        if (is_array($record['reversal'] ?? null)) {
+            $positions[$index]['exitReversal'] = $record['reversal'];
+        }
     }
     if (is_array($payload['state'] ?? null)) {
         $payload['state']['positions'] = $positions;

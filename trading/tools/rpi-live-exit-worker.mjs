@@ -251,6 +251,32 @@ async function recordLiveExit(plan, { reason, response, bestBidPrice, bestAskPri
   }
 }
 
+// The reversal's outcome, posted against the exit record already written for the position
+// it came out of. Same endpoint and same key, because it annotates the same record -- the
+// exit is stored first, and this fills in what the stop did next.
+async function recordLiveExitReversal(plan, reversal) {
+  if (!TRADING_TRIGGER_KEY) return;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 12000);
+  try {
+    await fetch(LIVE_EXIT_RECORD_URL, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-trading-trigger-key": TRADING_TRIGGER_KEY,
+        "user-agent": "trading-live-exit-worker/1.0",
+      },
+      body: JSON.stringify({ tokenId: String(plan.tokenId), reason: "stop", reversal }),
+      signal: controller.signal,
+    });
+  } catch {
+    // Swallowed for the same reason the exit record is: the reverse has already been
+    // decided on the exchange, and a failed annotation must not crash the pass.
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 async function claimLiveEntry(tokenId, claimId) {
   if (!TRADING_TRIGGER_KEY) throw new Error("live entry claim key is not configured");
   const controller = new AbortController();
@@ -850,6 +876,20 @@ async function attemptPendingReversal(context, tokenId, event = {}) {
       orderId: reversal?.orderID || null,
     },
   });
+  // Told to the closed trade this reversal came out of, so its row can explain itself.
+  // Only once the answer is settled: a retry that will be tried again is not yet news, and
+  // writing PENDING on every attempt would make the note flicker between states for a
+  // position the reader is looking at exactly once.
+  if (terminal) {
+    await recordLiveExitReversal(pending.plan, {
+      status: accepted ? "OPENED" : "SKIPPED",
+      outcome: reversal?.reversal?.outcome || null,
+      shares: reversal?.reversal?.shares ?? null,
+      price: reversal?.reversal?.price ?? null,
+      orderId: reversal?.orderID || null,
+      reason: accepted ? null : (reason || "the opposite position could not be opened"),
+    });
+  }
   if (terminal) delete context.state.pendingReversals[tokenId];
 }
 

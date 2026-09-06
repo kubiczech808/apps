@@ -4234,6 +4234,47 @@ function marketTagsInfo(row = {}) {
     aria-expanded="false" title="${escapeHtml(label)}" aria-label="${escapeHtml(label)}">tags</button>`;
 }
 
+// Asked for: when a stop takes the opposite side, say so on the closed row of the
+// position it sold. That row is the only place a reader is looking at the moment the
+// question arises, and the new position -- a separate row, opened seconds later, under a
+// different market outcome -- does not explain where it came from.
+//
+// One reader for both sides, because these are stored differently and mean the same
+// thing: paper writes the result onto the stopped trade, while a live position has no
+// status of its own and gets it from the exit record as exitReversal. A live-only note
+// could only ever be checked on the live wallet.
+function stopLossReversalNote(trade = {}) {
+  const live = trade.exitReversal && typeof trade.exitReversal === "object" ? trade.exitReversal : null;
+  const status = String(live?.status || trade.stopLossReversalStatus || "").toUpperCase();
+  if (!status) return "";
+  const outcome = live?.outcome || trade.stopLossReversalOutcome || "";
+  const shares = numericOrNull(live?.shares ?? trade.stopLossReversalShares);
+  const price = numericOrNull(live?.price ?? trade.stopLossReversalPrice);
+  const reason = live?.reason || trade.stopLossReversalReason || "";
+  const side = outcome ? `"${outcome}"` : "the opposite outcome";
+  const size = shares != null && price != null
+    ? ` ${shares.toFixed(2)} shares at ${percent(price)}`
+    : "";
+  const detail = status === "OPENED"
+    ? `This portfolio reverses after a stop loss, so when the protective exit sold this`
+      + ` position it opened the other side of the same market: ${side}${size}.\n\n`
+      + `That is a separate position with its own row. This one is closed and its result`
+      + ` is final; what happens to the reversal is counted there, not here.`
+    : status === "PENDING"
+      ? `This portfolio reverses after a stop loss. The protective exit sold this position,`
+        + ` and ${side} has not been opened yet${reason ? `: ${reason}` : ""}.\n\n`
+        + `It will be retried on the next pass.`
+      : `This portfolio reverses after a stop loss, but ${side} was not opened after this`
+        + ` position was sold${reason ? `: ${reason}` : ""}.\n\n`
+        + `The protective exit itself completed; only the reversal did not.`;
+  const label = status === "OPENED" ? "Reversed" : (status === "PENDING" ? "Reversal pending" : "Not reversed");
+  return `<span class="analysis-popover">`
+    + `<span class="order-chip ${status === "OPENED" ? "" : "warning"}">${escapeHtml(label)}</span>`
+    + `<button class="info-button" type="button" aria-label="Why this position was reversed">i</button>`
+    + `<span class="analysis-tooltip" role="tooltip">${escapeHtml(detail)}</span>`
+    + `</span>`;
+}
+
 function tradeTypeBadge(trade) {
   // "Waiting" is only true while the market can still fill it. Once the event is over the
   // bid is holding collateral for nothing, and the next execution pass withdraws it --
@@ -4257,18 +4298,20 @@ function tradeTypeBadge(trade) {
       : '<span class="order-chip warning">Limit order expired &middot; unfilled</span>';
   }
   if (String(trade.status || "").toUpperCase() === "REDEEM_REQUIRED") return '<span class="order-chip warning">Redeem needed</span>';
+
   // PENDING_RESOLUTION deliberately has no chip of its own. The market has stopped
   // trading but its settlement price is not published yet, which changes nothing about
   // what the row is: still an open position, or still a resting order. It fell through
   // to those labels below, and a red "Pending resolution" chip on top read as a fault.
-  if (String(trade.status || "").toUpperCase() === "STOP_LOSS") return '<span class="order-chip warning">Protective exit</span>';
+  if (String(trade.status || "").toUpperCase() === "STOP_LOSS") return `<span class="order-chip warning">Protective exit</span>${stopLossReversalNote(trade)}`;
   // A live position carries no STOP_LOSS status of its own: the account sync learns from
   // Polymarket, where a protective sell and any other sell are the same event, so a closed
   // live row said nothing about why it closed. The exit worker now reports the reason and
   // it is attached to the position here, which is the only place that fact exists.
   if (trade.exitReason === "stop") {
     const at = numericOrNull(trade.exitPrice);
-    return `<span class="order-chip warning">Protective exit${at != null ? ` &middot; sold at ${percent(at)}` : ""}</span>`;
+    return `<span class="order-chip warning">Protective exit${at != null ? ` &middot; sold at ${percent(at)}` : ""}</span>`
+      + stopLossReversalNote(trade);
   }
   if (trade.exitReason === "settlement") {
     const at = numericOrNull(trade.exitPrice);
