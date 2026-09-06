@@ -853,9 +853,22 @@ test("a stop declines to sell into a gap far below its own floor", async () => {
   // Read as a fraction OF THE STOP, not as percentage points: 10% under a 0.30 floor is
   // 0.27, not 0.20. That is what "10% under what I have set" means when the stop is a price.
   assert.equal(worker.stopGapFloorPrice(0.30, 0.1), 0.27);
-  assert.equal(worker.stopGapFloorPrice(0.2575, 0.1), 0.23175);
   assert.equal(worker.stopGapFloorPrice(null, 0.1), null);
   assert.equal(worker.stopGapFloorPrice(0, 0.1), null);
+
+  // And snapped DOWN to the price grid a bid can actually sit on. 10% under the 0.49
+  // probability floor is 0.441, and on a one-cent tick the best price at or below that line
+  // is 0.44 -- so an un-snapped line refuses the only price inside its own band. Measured:
+  // four live positions declined at bid 0.44 against a 0.441 floor, missing by a tenth of a
+  // cent, from a rule that exists to prevent twenty-point liquidations.
+  assert.equal(worker.stopGapFloorPrice(0.49, 0.1), 0.44);
+  assert.equal(worker.stopGapFloorPrice(0.2575, 0.1), 0.23);
+  // Never up: snapping toward the stop would tighten the band the owner asked to widen.
+  for (const stop of [0.13, 0.2575, 0.33, 0.49, 0.876]) {
+    const limit = worker.stopGapFloorPrice(stop, 0.1);
+    assert.ok(limit <= stop * 0.9 + 1e-9, `${stop} snapped up to ${limit}`);
+    assert.ok(limit > stop * 0.9 - 0.01, `${stop} gave away more than a cent: ${limit}`);
+  }
 
   // The reported case: a 0.2575 stop against a 1.5c book.
   assert.equal(worker.stopGapIsTooWide({ bestBidPrice: 0.015, stopPrice: 0.2575, tolerance: 0.1 }), true);
@@ -863,6 +876,10 @@ test("a stop declines to sell into a gap far below its own floor", async () => {
   // not to refuse every stop that slips a little.
   assert.equal(worker.stopGapIsTooWide({ bestBidPrice: 0.24, stopPrice: 0.2575, tolerance: 0.1 }), false);
   assert.equal(worker.stopGapIsTooWide({ bestBidPrice: 0.2575, stopPrice: 0.2575, tolerance: 0.1 }), false);
+  // The four positions that were sitting un-sold: bid at the tick immediately under the raw
+  // 10% line now sells, and a bid a further tick down still declines.
+  assert.equal(worker.stopGapIsTooWide({ bestBidPrice: 0.44, stopPrice: 0.49, tolerance: 0.1 }), false);
+  assert.equal(worker.stopGapIsTooWide({ bestBidPrice: 0.43, stopPrice: 0.49, tolerance: 0.1 }), true);
 
   // A settlement close has no floor and is not capping a loss: it takes the bid on purpose,
   // so this must never refuse it.

@@ -954,10 +954,27 @@ const STOP_GAP_TOLERANCE = Math.min(1, Math.max(0, number(process.env.LIVE_EXIT_
 
 // The lowest price this stop will accept. Null when there is no floor to measure against,
 // which is the settlement close: that one takes the bid on purpose.
-export function stopGapFloorPrice(stopPrice, tolerance = STOP_GAP_TOLERANCE) {
+//
+// Snapped DOWN to the market's price grid, because the band is compared against a bid and a
+// bid can only exist on that grid. A 0.49 stop puts the raw line at 0.441, and on a one-cent
+// tick the best price at or below that line is 0.44 -- so an un-snapped line refuses the only
+// price inside its own band, and the effective tolerance becomes 8% instead of the 10% that
+// was asked for. Measured: four positions declined at bid 0.44 against a 0.441 floor, missing
+// by a tenth of a cent, while the rule exists to avoid twenty-point liquidations.
+//
+// One cent, not the market's real tick. Reading the true tick means a Gamma lookup, and this
+// runs once a second for as long as a stop stays declined -- 1599 passes on one position in
+// the last sample. On a finer grid this is at most one cent more generous than an exact 10%,
+// which is immaterial against what the band is for, and it errs toward selling: the owner's
+// instruction is that the stop should apply.
+const STOP_GAP_PRICE_GRID = 0.01;
+
+export function stopGapFloorPrice(stopPrice, tolerance = STOP_GAP_TOLERANCE, grid = STOP_GAP_PRICE_GRID) {
   const floor = number(stopPrice);
   if (floor == null || !(floor > 0)) return null;
-  return round(floor * (1 - tolerance), 6);
+  const raw = round(floor * (1 - tolerance), 6);
+  const snapped = roundToTick(raw, grid, "down");
+  return snapped != null && snapped > 0 ? snapped : raw;
 }
 
 // Whether the book has fallen so far below the stop that selling into it is worse than
