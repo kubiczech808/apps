@@ -483,6 +483,11 @@
           <input type="number" min="0" max="99.9" step="0.1" value="0" data-settlement-close-bid>
           <strong data-settlement-close-bid-label>Off</strong>
         </label>
+        <label class="parameter-control" title="Sell whenever the market prices this outcome at or below this probability, whatever the position cost. The stop loss risk below derives its floor from the entry, so one setting gives a 95c entry about 9 points of room and a 72c entry about 46 - which is why two stops on one portfolio can fire one too early and one too late. This floor does not move with the entry: below it the market has the other side winning. Whichever of the two the price reaches first is the one that sells. 0 disables it.">
+          <span>Sell below probability</span>
+          <input type="number" min="0" max="95" step="1" value="0" data-stop-loss-probability-floor>
+          <strong data-stop-loss-probability-floor-label>Off</strong>
+        </label>
         <label class="parameter-control" title="0 disables the protective exit. 100 means the planned maximum loss equals the net potential win; 150 means one and a half times the net potential win. Live exits are checked by the RPi worker and submitted only when its live mode is armed.">
           <span>Stop loss risk</span>
           <input type="number" min="0" max="300" step="10" value="0" data-stop-loss-risk-multiplier>

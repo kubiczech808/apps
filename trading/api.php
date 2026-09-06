@@ -3129,6 +3129,37 @@ function config_max_resolution_hours(array $row, ?float $fallback = null): ?floa
 // the only thing this is for: a portfolio closing at even money is not taking a settlement
 // shortcut, it is just selling. Bounded above at 0.999 because at 1.0 nothing would ever
 // trigger -- a resolved market is no longer quoted.
+/**
+ * The probability at which a position is sold regardless of what it cost.
+ *
+ * Asked for after two stops on one portfolio behaved oppositely: one fired too early and one
+ * too late, from the same setting. That is not a misconfiguration, it is what the equal-risk
+ * floor does -- the room a position gets before its planned loss matches its potential win
+ * depends on the entry, so a 95c entry gets 8.7 points of room and a 72c entry gets 46.3.
+ *
+ * This floor does not depend on the entry at all. Below it the market has the other side
+ * winning, which is the same statement whatever the position cost, and it is what stops a
+ * cheap entry riding almost to zero before the equal-risk floor is reached.
+ *
+ * The two are combined by taking whichever the price meets first on the way down, which is
+ * simply the higher of them -- "whichever comes first", as asked.
+ *
+ * 0 means off, matching how the stop multiplier and the certainty close read.
+ */
+function normalize_stop_loss_probability_floor_value(mixed $value): float
+{
+    if ($value === null || $value === '' || !is_numeric($value)) {
+        return 0.0;
+    }
+    $floor = (float) $value;
+    if ($floor <= 0) {
+        return 0.0;
+    }
+    // Above 0.95 is not a stop, it is an instruction to sell immediately: every position
+    // this portfolio opens is bought below that. Bounded rather than accepted literally.
+    return max(0.01, min(0.95, round($floor, 4)));
+}
+
 function normalize_settlement_close_bid_value(mixed $value): float
 {
     if ($value === null || $value === '' || !is_numeric($value)) {
@@ -3374,6 +3405,11 @@ function normalize_strategy_config(array $input, array $defaults): array
         'maxResolutionHours' => $maxResolutionHours,
         'maxResolutionDays' => (int) max(1, min(365, (int) round($maxResolutionHours / 24.0))),
         'settlementCloseBid' => $settlementCloseBid,
+        // Sold at this probability whatever the entry cost. Combined with the equal-risk
+        // floor by taking whichever the price meets first on the way down.
+        'stopLossProbabilityFloor' => normalize_stop_loss_probability_floor_value(
+            $input['stopLossProbabilityFloor'] ?? $defaults['stopLossProbabilityFloor'] ?? null,
+        ),
         'liveEventMode' => $liveEventMode,
         // Derived and kept only while readers that predate the three states are still in
         // circulation. liveEventMode is the stored setting.
@@ -4626,7 +4662,11 @@ function live_stop_loss_policy_config(array $config, string $portfolioId): ?arra
     // stop loss here would mean a portfolio that only wants its settled positions closed
     // early was never watched at all -- the worker only ever looks at what this names.
     $settlementCloseBid = normalize_settlement_close_bid_value($row['settlementCloseBid'] ?? null);
-    if ($multiplier <= 0 && $settlementCloseBid <= 0) {
+    $probabilityFloor = normalize_stop_loss_probability_floor_value($row['stopLossProbabilityFloor'] ?? null);
+    // A third independent reason to watch a position. A portfolio that sets only this one
+    // still has a stop, and requiring one of the other two here would leave it unwatched --
+    // the same fault the settlement close had before it was added to this line.
+    if ($multiplier <= 0 && $settlementCloseBid <= 0 && $probabilityFloor <= 0) {
         return null;
     }
     return [
@@ -4644,8 +4684,13 @@ function live_stop_loss_policy_config(array $config, string $portfolioId): ?arra
         // The bid at which the position is sold rather than held to settlement. 0 means the
         // portfolio does not take that shortcut.
         'settlementCloseBid' => $settlementCloseBid,
+        // The probability at which the position is sold regardless of what it cost. Unlike
+        // the multiplier's floor this does not move with the entry, which is what stops a
+        // cheap entry riding almost to zero before the equal-risk floor is reached.
+        'stopLossProbabilityFloor' => $probabilityFloor,
         // Named so the worker never infers a stop from a policy that exists only for the
-        // settlement close: a 0 multiplier must not be read as "use the default".
+        // settlement close: a 0 multiplier must not be read as "use the default". The
+        // probability floor is its own trigger and does not need the multiplier armed.
         'stopLossEnabled' => $multiplier > 0,
         'enabled' => true,
     ];

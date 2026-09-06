@@ -707,7 +707,11 @@ export function watchPlan(position, entry = null) {
   // Either reason is enough to watch the position. Requiring a stop here is what would keep
   // a portfolio that only wants its settled positions closed early from being watched at
   // all -- the books below are read for exactly what this returns.
-  if (stopPrice == null && closeBid == null) return null;
+  const flatFloor = number(entry?.stopLossProbabilityFloor) || null;
+  // Three independent reasons to watch, and any one is enough. A portfolio that sets only
+  // the probability floor still has a stop, and requiring one of the other two here would
+  // leave it unwatched -- the fault the settlement close had before it joined this line.
+  if (stopPrice == null && closeBid == null && flatFloor == null) return null;
   return {
     ...derived,
     tokenId: String(position.tokenId || position.assetId),
@@ -716,6 +720,9 @@ export function watchPlan(position, entry = null) {
     stopPrice,
     triggerPrice: stopPrice == null ? null : round(Math.min(0.999999, stopPrice + STOP_PRETRIGGER_BUFFER), 6),
     settlementCloseBid: closeBid,
+    // Kept beside the derived stop rather than folded into it, so the row says which of the
+    // two levels is in force and a reader can tell why a stop fired where it did.
+    probabilityFloor: flatFloor,
     reverseOnStopLoss: entry?.reverseOnStopLoss === true,
     reverseStakeUsdc: STOP_LOSS_REVERSAL_STAKE_USDC,
     source: entry?.source || (configuredStop != null ? "watchlist" : "equal-risk-derived"),
@@ -727,8 +734,33 @@ export function watchPlan(position, entry = null) {
 // The stop is checked first: both can be true only in a market that has moved from a loss
 // to certainty within one pass, and a stop that has been reached is the more urgent of the
 // two. Returns null when neither applies.
-export function exitReason({ bestBidPrice, bestAskPrice = null, stopPrice, triggerPrice, settlementCloseBid: closeBid } = {}) {
-  if (stopPrice != null && exitTrigger({ bestBidPrice, bestAskPrice, stopPrice, triggerPrice })) return "stop";
+// The level a falling price meets first, which is simply the higher of the two floors.
+//
+// The equal-risk floor moves with the entry -- a 95c entry gets 8.7 points of room, a 72c
+// entry 46.3, from one setting -- which is why two stops on the same portfolio could fire
+// one too early and one too late with nothing misconfigured. The probability floor does not
+// move at all: below it the market has the other side winning, and that is the same
+// statement whatever the position cost.
+//
+// Combining them by "whichever comes first" is combining them by max, since both are floors
+// and the price arrives from above. Either may be absent, and the answer is then the other.
+export function effectiveStopFloor({ stopPrice, probabilityFloor } = {}) {
+  const risk = number(stopPrice);
+  const flat = number(probabilityFloor);
+  const levels = [risk, flat].filter((level) => level != null && level > 0);
+  return levels.length ? Math.max(...levels) : null;
+}
+
+export function exitReason({ bestBidPrice, bestAskPrice = null, stopPrice, triggerPrice, probabilityFloor = null, settlementCloseBid: closeBid } = {}) {
+  const floor = effectiveStopFloor({ stopPrice, probabilityFloor });
+  if (floor != null) {
+    // The pre-trigger buffer belongs to the level actually in force. Carrying the stored
+    // trigger over would test the equal-risk floor's buffer against the probability floor.
+    const trigger = floor === number(stopPrice) && triggerPrice != null
+      ? triggerPrice
+      : round(Math.min(0.999999, floor + STOP_PRETRIGGER_BUFFER), 6);
+    if (exitTrigger({ bestBidPrice, bestAskPrice, stopPrice: floor, triggerPrice: trigger })) return "stop";
+  }
   const bid = number(bestBidPrice);
   if (closeBid != null && bid != null && bid >= closeBid) return "settlement";
   return null;
@@ -1410,8 +1442,13 @@ async function checkOnce(context) {
       bestAskPrice: currentBestAsk,
       stopPrice: plan.stopPrice,
       triggerPrice: plan.triggerPrice,
+      probabilityFloor: plan.probabilityFloor,
       settlementCloseBid: plan.settlementCloseBid,
     });
+    // The level actually in force, which is what the sell is priced at and what the gap
+    // tolerance is measured against. Using plan.stopPrice for either would price against a
+    // floor the trigger did not use.
+    const activeFloor = effectiveStopFloor({ stopPrice: plan.stopPrice, probabilityFloor: plan.probabilityFloor });
     if (!reason) continue;
     event.reasonKind = reason;
     if (reason === "settlement") event.settlementCloseBid = plan.settlementCloseBid;
@@ -1451,13 +1488,13 @@ async function checkOnce(context) {
       // Decided on the FRESH bid, which is the one the sell would actually meet. Deciding
       // on the older read would decline against a price that has since recovered, or sell
       // into one that has since collapsed.
-      if (reason === "stop" && stopGapIsTooWide({ bestBidPrice: exitBid, stopPrice: plan.stopPrice })) {
-        const limit = stopGapFloorPrice(plan.stopPrice);
+      if (reason === "stop" && stopGapIsTooWide({ bestBidPrice: exitBid, stopPrice: activeFloor })) {
+        const limit = stopGapFloorPrice(activeFloor);
         recordDeclinedStop(context.state, plan, {
           bestBid: exitBid,
           gapFloor: limit,
           at: now,
-          reason: `the stop is ${plan.stopPrice} and the best bid is ${exitBid}, below the ${limit} floor`
+          reason: `the stop is ${activeFloor} and the best bid is ${exitBid}, below the ${limit} floor`
             + ` this stop will sell at (${(STOP_GAP_TOLERANCE * 100).toFixed(0)}% under the stop). Selling here`
             + ` would take far less than the level that was set, so the position is left to resolve`
             + ` and the stop is re-checked every pass in case the book recovers.`,
@@ -1468,7 +1505,7 @@ async function checkOnce(context) {
       }
       response = reason === "settlement"
         ? await submitProtectedExit({ ...plan, stopPrice: null }, { bestBidPrice: exitBid })
-        : await submitProtectedExit(plan, { bestBidPrice: exitBid });
+        : await submitProtectedExit({ ...plan, stopPrice: activeFloor }, { bestBidPrice: exitBid });
     } catch (error) {
       response = { success: false, error: error?.message || String(error) };
     }

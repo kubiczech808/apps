@@ -347,6 +347,8 @@ const els = {
   maxResolutionHours: document.querySelector("[data-max-resolution-hours]"),
   maxResolutionHoursLabel: document.querySelector("[data-max-resolution-hours-label]"),
   maxResolutionHoursRow: document.querySelector("[data-max-resolution-hours-row]"),
+  stopLossProbabilityFloor: document.querySelector("[data-stop-loss-probability-floor]"),
+  stopLossProbabilityFloorLabel: document.querySelector("[data-stop-loss-probability-floor-label]"),
   settlementCloseBid: document.querySelector("[data-settlement-close-bid]"),
   settlementCloseBidLabel: document.querySelector("[data-settlement-close-bid-label]"),
   liveEventMode: document.querySelector("[data-live-event-mode]"),
@@ -1500,6 +1502,15 @@ function horizonApplies(liveEventMode, eventIsRunning) {
 // The bid at which a position is sold rather than held to settlement, or null for off.
 // Bounded the way the API bounds it: below 0.5 this is not a settlement shortcut but simply
 // selling, and at 1.0 nothing would ever trigger -- a resolved market is no longer quoted.
+// Mirrors normalize_stop_loss_probability_floor_value in api.php, bounds included. Above
+// 0.95 is not a stop but an instruction to sell immediately, since every position these
+// portfolios open is bought below that.
+function normalizeStopLossProbabilityFloor(value) {
+  const floor = Number(value);
+  if (!Number.isFinite(floor) || floor <= 0) return null;
+  return Math.max(0.01, Math.min(0.95, Number(floor.toFixed(4))));
+}
+
 function normalizeSettlementCloseBid(value) {
   if (value === "" || value == null) return null;
   const numeric = Number(value);
@@ -5650,6 +5661,15 @@ function syncPortfolioParameterControls(configOverride = null, options = {}) {
   // The number typed is hours; the label reads it back in whichever unit is legible, so a
   // 168 stays recognisable as the week it is.
   if (els.maxResolutionHoursLabel) els.maxResolutionHoursLabel.textContent = formatHorizonHours(maxHours);
+  const probabilityFloor = normalizeStopLossProbabilityFloor(config.stopLossProbabilityFloor);
+  if (els.stopLossProbabilityFloor && document.activeElement !== els.stopLossProbabilityFloor) {
+    els.stopLossProbabilityFloor.value = probabilityFloor == null ? "0" : String(Number((probabilityFloor * 100).toFixed(1)));
+  }
+  if (els.stopLossProbabilityFloorLabel) {
+    els.stopLossProbabilityFloorLabel.textContent = probabilityFloor == null
+      ? "Off"
+      : `Sell at or below ${probability(probabilityFloor)}`;
+  }
   if (els.settlementCloseBid && document.activeElement !== els.settlementCloseBid) {
     els.settlementCloseBid.value = settlementCloseBid == null ? "0" : String(Number((settlementCloseBid * 100).toFixed(1)));
   }
@@ -6418,6 +6438,10 @@ function parameterDraftFromControls(baseDraft = {}) {
       // than nothing. Hours is what the server stores; this is only its days reading.
       draft.maxResolutionDays = Math.max(1, Math.min(365, Math.round(value / HOURS_PER_DAY)));
     }
+  }
+  if (hasValue(els.stopLossProbabilityFloor)) {
+    const floor = normalizeStopLossProbabilityFloor(numberValue(els.stopLossProbabilityFloor) / 100);
+    draft.stopLossProbabilityFloor = floor == null ? 0 : floor;
   }
   if (hasValue(els.settlementCloseBid)) {
     const bid = normalizeSettlementCloseBid(numberValue(els.settlementCloseBid) / 100);
@@ -10118,6 +10142,7 @@ const PORTFOLIO_CONFIG_HISTORY_LABELS = {
   maxResolutionHours: "Max resolution hours",
   requireEventStarted: "Only events under way",
   liveEventMode: "Events under way",
+  stopLossProbabilityFloor: "Sell below probability",
   settlementCloseBid: "Close at certainty",
   selectionOrder: "Trade priority",
   marketType: "Market type",

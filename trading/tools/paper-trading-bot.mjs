@@ -840,6 +840,9 @@ function customPaperStrategies(raw = process.env.PAPER_CUSTOM_PORTFOLIOS) {
       automationEnabled: row.automationEnabled !== false,
       allowRotation: row.autoRotatePositions === true,
       equalRiskMultiplier: rowStopLossRiskMultiplier(row, 0),
+      // A floor that does not move with the entry, so the two ends of a portfolio's
+      // probability range stop behaving oppositely under one setting.
+      stopLossProbabilityFloor: Number(row.stopLossProbabilityFloor) > 0 ? Number(row.stopLossProbabilityFloor) : null,
       equalRiskProtection: rowStopLossRiskMultiplier(row, 0) > 0,
       reverseOnStopLoss: row.reverseOnStopLoss === true,
       useLimitOrders: row.useLimitOrders === true,
@@ -1893,7 +1896,14 @@ function normalizePaperPortfolio(strategy, input = {}) {
     probabilitySource: strategy.probabilitySource,
     equalRiskMultiplier: normalizeStopLossRiskMultiplier(strategy.equalRiskMultiplier, strategy.equalRiskProtection ? 1 : 0),
     equalRiskProtection: Boolean(strategy.equalRiskProtection),
+    stopLossProbabilityFloor: Number(strategy.stopLossProbabilityFloor) > 0 ? Number(strategy.stopLossProbabilityFloor) : null,
     reverseOnStopLoss: Boolean(strategy.reverseOnStopLoss),
+    // Carried onto the trade rather than looked up from the strategy later, like every
+    // other stop setting here: a portfolio's configuration can change while a position is
+    // open, and the stop a position was opened under is the one it should be judged by.
+    stopLossProbabilityFloor: Number(strategy.stopLossProbabilityFloor) > 0
+      ? Number(strategy.stopLossProbabilityFloor)
+      : null,
     allowRotation: strategy.allowRotation !== false,
     // Carried like the other per-portfolio execution switches, because how the next order
     // is sized depends on it: a resting limit order holds capital without being exposure,
@@ -1949,6 +1959,7 @@ function normalizePaperPortfolio(strategy, input = {}) {
       probabilitySource: strategy.probabilitySource,
       equalRiskMultiplier: normalizeStopLossRiskMultiplier(strategy.equalRiskMultiplier, strategy.equalRiskProtection ? 1 : 0),
       equalRiskProtection: Boolean(strategy.equalRiskProtection),
+    stopLossProbabilityFloor: Number(strategy.stopLossProbabilityFloor) > 0 ? Number(strategy.stopLossProbabilityFloor) : null,
       reverseOnStopLoss: Boolean(strategy.reverseOnStopLoss),
       allowRotation: strategy.allowRotation !== false,
     },
@@ -4138,6 +4149,36 @@ function equalRiskEntryProtection({ plan, bestBid, shares, feeRate = 0, feesEnab
 // position was last observed and is below it now, it traded through, and that order filled
 // at the floor. Only a position already below the floor when first seen has genuinely
 // gapped past a stop that could not fill -- and that, and only that, is a STOP_GAP.
+// The equal-risk plan raised to whichever floor the price meets first.
+//
+// The equal-risk floor moves with the entry: one setting gives a 95c entry 8.7 points of
+// room and a 72c entry 46.3, which is why two stops on one portfolio fired one too early
+// and one too late with nothing misconfigured. The probability floor does not move -- below
+// it the market has the other side winning, whatever the position cost.
+//
+// Both are floors and the price arrives from above, so "whichever comes first" is the
+// higher of them. The minimum exit value has to be recomputed at the new price or the
+// trigger would still be testing the old one: this decision is made on value, not on price.
+function planWithProbabilityFloor(plan, probabilityFloor, trade) {
+  const floor = Number(probabilityFloor);
+  if (!plan?.protectable || !Number.isFinite(floor) || !(floor > 0)) return plan;
+  const current = Number(plan.stopPrice);
+  if (Number.isFinite(current) && current >= floor) return plan;
+  const minimumExitValueUsdc = netExitValueAtPrice({
+    shares: trade.shares, price: floor, feeRate: trade.feeRate, feesEnabled: trade.feesEnabled,
+  });
+  if (!Number.isFinite(minimumExitValueUsdc)) return plan;
+  return {
+    ...plan,
+    // requiresStop, because a probability floor is a stop even where the equal-risk one
+    // decided the position needed none.
+    requiresStop: true,
+    stopPrice: Number(floor.toFixed(6)),
+    minimumExitValueUsdc: Number(minimumExitValueUsdc.toFixed(6)),
+    stopSource: "probability-floor",
+  };
+}
+
 function equalRiskStopExitDecision({ plan, bestBid, bestAsk = null, shares, feeRate = 0, feesEnabled = true, previousBid = null } = {}) {
   if (!plan?.protectable || !plan.requiresStop) return null;
   const bid = Number(bestBid);
@@ -4747,6 +4788,22 @@ async function markOpenTrade(trade, strategy = null) {
       riskMultiplier: trade.riskTargetUsdc ? 1 : (trade.stopLossRiskMultiplier ?? 1),
     })
     : null);
+  // Applied to whatever the equal-risk rule produced, including nothing: a portfolio may
+  // set only the probability floor, and that is still a stop.
+  const stopPlanWithFloor = () => {
+    const base = stopPlanForTrade();
+    const floor = Number(trade.stopLossProbabilityFloor);
+    if (!Number.isFinite(floor) || !(floor > 0)) return base;
+    return planWithProbabilityFloor(base || equalRiskStopPlan({
+      totalCostUsdc: cost,
+      netGainIfWinUsdc: trade.riskTargetUsdc ?? trade.netGainIfWinUsdc,
+      shares: trade.shares,
+      entryPrice: trade.entryPrice,
+      feeRate: trade.feeRate,
+      feesEnabled: trade.feesEnabled,
+      riskMultiplier: trade.riskTargetUsdc ? 1 : (trade.stopLossRiskMultiplier ?? 1),
+    }), floor, trade);
+  };
 
   if (market.closed && Number.isFinite(resolvedPrice)) {
     const won = resolvedPrice >= 0.999;
@@ -4759,7 +4816,7 @@ async function markOpenTrade(trade, strategy = null) {
       // closed between two polls took the whole stake and left the stop reading ARMED.
       const settlementStop = lost
         ? settlementStopFill({
-          plan: stopPlanForTrade(),
+          plan: stopPlanWithFloor(),
           lastLiveMark: trade.lastLiveBid ?? trade.currentPrice,
           // The mark that is always known: a position was bought above its own floor.
           entryPrice: trade.entryPrice,
@@ -4854,7 +4911,7 @@ async function markOpenTrade(trade, strategy = null) {
     const book = await fetchJson(`https://clob.polymarket.com/book?token_id=${encodeURIComponent(trade.tokenId)}`);
     const { bestBid, bestAsk } = bestBook(book);
     if (Number.isFinite(bestBid)) {
-      const equalRiskPlan = stopPlanForTrade();
+      const equalRiskPlan = stopPlanWithFloor();
       const grossCurrentValue = Number((Number(trade.shares || 0) * bestBid).toFixed(4));
       const currentValue = equalRiskPlan
         ? netExitValueAtPrice({ shares: trade.shares, price: bestBid, feeRate: trade.feeRate, feesEnabled: trade.feesEnabled })
@@ -7675,6 +7732,7 @@ function paperTradeFromCandidate(best, strategy, today, stake) {
     unrealizedPnlUsdc: 0,
     unrealizedPnlPct: 0,
     equalRiskProtection: Boolean(strategy.equalRiskProtection),
+    stopLossProbabilityFloor: Number(strategy.stopLossProbabilityFloor) > 0 ? Number(strategy.stopLossProbabilityFloor) : null,
     reverseOnStopLoss: Boolean(strategy.reverseOnStopLoss),
     stopLossRiskMultiplier: equalRiskPlan?.stopLossRiskMultiplier ?? (strategy.equalRiskProtection ? normalizeStopLossRiskMultiplier(strategy.equalRiskMultiplier, 1) : null),
     riskTargetUsdc: equalRiskPlan?.riskTargetUsdc ?? null,

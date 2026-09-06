@@ -4038,7 +4038,7 @@ test("close at certainty: the threshold is stored per portfolio, and off is the 
   // The live worker only ever watches what the policy payload names, so a portfolio with
   // no stop loss but this setting on has to reach it -- otherwise the setting does nothing
   // at all for exactly the portfolios most likely to use it.
-  assert.match(API, /if \(\$multiplier <= 0 && \$settlementCloseBid <= 0\) \{\s*\n\s*return null;/);
+  assert.match(API, /if \(\$multiplier <= 0 && \$settlementCloseBid <= 0 && \$probabilityFloor <= 0\) \{\s*\n\s*return null;/);
   assert.match(API, /'settlementCloseBid' => \$settlementCloseBid,/);
   // And the worker must not read a stop out of a policy that exists only for this.
   assert.match(API, /'stopLossEnabled' => \$multiplier > 0,/);

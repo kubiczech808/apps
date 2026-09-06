@@ -305,7 +305,9 @@ test("protected exit: the sell is priced on the tick grid and where it can fill"
     "negRisk must only be sent when it is actually known");
   assert.doesNotMatch(body, /price: plan\.stopPrice/, "the unrounded floor must not reach createOrder");
   // And a bid has to reach the pricing, or the gap case cannot be seen from inside it.
-  assert.match(source, /submitProtectedExit\(plan, \{ bestBidPrice: exitBid \}\)/);
+  // Priced at the level actually in force -- the higher of the equal-risk floor and the
+  // probability floor -- not at plan.stopPrice, which may not be the one that triggered.
+  assert.match(source, /submitProtectedExit\(\{ \.\.\.plan, stopPrice: activeFloor \}, \{ bestBidPrice: exitBid \}\)/);
   // That bid is re-read at the moment of the exit. The books are read in one batch, so by
   // the time a given position is acted on its bid can be seconds old -- long enough on a
   // resolving event to price the sell where nobody is buying any more.
@@ -841,7 +843,8 @@ test("a stop declines to sell into a gap far below its own floor", async () => {
   const source = readFileSync(new URL("../tools/rpi-live-exit-worker.mjs", import.meta.url), "utf8");
   // Decided on the FRESH bid -- the one the sell would actually meet -- not the batched read
   // the trigger was decided on.
-  assert.match(source, /if \(reason === "stop" && stopGapIsTooWide\(\{ bestBidPrice: exitBid, stopPrice: plan\.stopPrice \}\)\)/);
+  assert.match(source, /if \(reason === "stop" && stopGapIsTooWide\(\{ bestBidPrice: exitBid, stopPrice: activeFloor \}\)\)/,
+    "and the tolerance is measured against the level that fired, not against the other one");
   // Nothing is sent and nothing is recorded as an attempt, so the next pass asks again: a
   // book that gapped on one tick often comes back, and a terminal mark would abandon it.
   assert.match(source, /recordDeclinedStop\(context\.state, plan, \{/);
@@ -851,4 +854,46 @@ test("a stop declines to sell into a gap far below its own floor", async () => {
   assert.match(source, /if \(previous\) return;\s*\n\s*recordEvent\(state, \{\s*\n\s*at, type: "STOP_DECLINED_GAPPED"/);
   // And cleared once it does sell, or the row would outlive what it describes.
   assert.match(source, /clearDeclinedStop\(context\.state, plan\.tokenId\);/);
+});
+
+// Asked for: sell when the probability falls to a set level OR when the loss reaches its
+// cap, whichever comes first -- on every portfolio, configurable per portfolio.
+//
+// The reason it was asked for: two stops on one portfolio fired one too early and one too
+// late from the same setting, with nothing misconfigured. The equal-risk floor moves with
+// the entry, so a 95c entry gets 8.7 points of room and a 72c entry 46.3.
+test("two stop floors, and the price meets the higher one first", async () => {
+  const worker = await import("../tools/rpi-live-exit-worker.mjs");
+
+  // Both are floors and the price arrives from above, so "whichever comes first" is max.
+  assert.equal(worker.effectiveStopFloor({ stopPrice: 0.8625, probabilityFloor: 0.49 }), 0.8625,
+    "a high entry's equal-risk floor is already above the probability floor");
+  assert.equal(worker.effectiveStopFloor({ stopPrice: 0.2575, probabilityFloor: 0.49 }), 0.49,
+    "a cheap entry stops at the probability floor instead of riding almost to zero");
+
+  // Either may be absent, and the answer is then the other.
+  assert.equal(worker.effectiveStopFloor({ stopPrice: 0.30, probabilityFloor: null }), 0.30);
+  assert.equal(worker.effectiveStopFloor({ stopPrice: null, probabilityFloor: 0.49 }), 0.49);
+  assert.equal(worker.effectiveStopFloor({ stopPrice: 0, probabilityFloor: 0 }), null);
+  assert.equal(worker.effectiveStopFloor({}), null);
+
+  // Driven end to end: the same position, with and without the floor.
+  const book = { bestBidPrice: 0.45, bestAskPrice: 0.47, stopPrice: 0.2575, triggerPrice: 0.2595 };
+  assert.equal(worker.exitReason(book), null,
+    "on the equal-risk floor alone a 45c bid is nowhere near selling");
+  assert.equal(worker.exitReason({ ...book, probabilityFloor: 0.49 }), "stop",
+    "with the floor it sells, which is the whole point");
+
+  // The settlement close still outranks nothing and is unaffected.
+  assert.equal(worker.exitReason({ bestBidPrice: 0.999, stopPrice: null, probabilityFloor: 0.49, settlementCloseBid: 0.99 }),
+    "settlement");
+
+  const source = readFileSync(new URL("../tools/rpi-live-exit-worker.mjs", import.meta.url), "utf8");
+  // A portfolio may set only this floor, and that is still a stop: requiring one of the
+  // other two to watch it would leave it unwatched, which is the fault the settlement close
+  // had before it joined that line.
+  assert.match(source, /if \(stopPrice == null && closeBid == null && flatFloor == null\) return null;/);
+  // The pre-trigger buffer belongs to the level in force. Carrying the stored trigger over
+  // would test the equal-risk floor's buffer against the probability floor.
+  assert.match(source, /const trigger = floor === number\(stopPrice\) && triggerPrice != null/);
 });
