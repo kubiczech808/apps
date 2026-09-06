@@ -212,6 +212,32 @@ jobs:
                 + ` px ${text(event.exitPrice)} tick ${text(event.tickSize)}`
                 + ` bid ${text(event.bestBid)} ask ${text(event.bestAsk)} -> ${text(event.response)}`);
             }
+            // "invalid maker amount" is a complaint about an AMOUNT, and an amount has two
+            // factors. The reason lines above carry only the price, so two rounds of fixes
+            // were aimed at a number nobody had actually looked at. Accepted and refused
+            // orders are printed together here so the rule can be read off the arithmetic
+            // instead of inferred: if a whole-cent USDC leg is what separates them, every
+            // ACCEPTED row lands on a whole cent and no refused one does. If that does not
+            // hold, the rule is something else, and this is what says so.
+            const amountRows = history.filter((event) => /^(EXIT|SETTLEMENT_CLOSE)_(SUBMITTED|REJECTED)$/
+              .test(String(event.type || "")) && event.exitShares != null);
+            console.log(`\n   price x size on the orders that carry it (${amountRows.length} of ${history.length}):`);
+            if (!amountRows.length) {
+              console.log("      (none yet -- the running worker predates size recording)");
+            }
+            for (const event of amountRows.slice(0, 24)) {
+              const px = Number(event.exitPrice);
+              const size = Number(event.exitShares);
+              const usdc = Number.isFinite(px) && Number.isFinite(size) ? px * size : NaN;
+              const cents = usdc * 100;
+              const wholeCent = Number.isFinite(cents) && Math.abs(cents - Math.round(cents)) <= 1e-7;
+              const verdict = /_SUBMITTED$/.test(event.type) ? "ACCEPTED" : "refused ";
+              console.log(`      ${verdict} ${String(event.exitPrice).padStart(7)} x ${String(event.exitShares).padStart(9)}`
+                + ` = ${Number.isFinite(usdc) ? usdc.toFixed(8) : "?"}`
+                + `  ${wholeCent ? "whole cent" : "FRACTIONAL"}`
+                + `  resized ${text(event.resizedForMakerAmount)}`
+                + `  ${String(event.response?.error || event.response?.status || "").slice(0, 26)}`);
+            }
             const exits = state.exits && typeof state.exits === "object" ? state.exits : {};
             const exitKeys = Object.keys(exits);
             console.log(`\n   exit attempts recorded: ${exitKeys.length}`);

@@ -775,19 +775,17 @@ test("a position awaiting resolution is still watched, because that is when it s
   assert.deepEqual(positions({ positions: [{ tokenId: "1", shares: 0, question: "no shares" }] }), []);
 });
 
-// Measured as the current blocker on the certainty close: twelve refusals, the most recent
-// failures on the account, all at px 0.999 on a 0.001 tick with sizes carrying four
-// decimals. "invalid maker amount" is the exchange refusing the SIZE's precision -- a
-// different question from the balance, and it wants a different answer.
-test("a size the exchange will not accept is retried coarser, not smaller", async () => {
+// "invalid maker amount" is the exchange refusing the order's AMOUNT -- a different question
+// from the balance, and it wants a different answer.
+test("a refused maker amount is retried at a size whose USDC leg is a whole cent", async () => {
   const worker = await import("../tools/rpi-live-exit-worker.mjs");
 
   assert.equal(worker.makerAmountPrecisionRefusal({ error: "invalid maker amount" }), true);
   assert.equal(worker.makerAmountPrecisionRefusal({ errorMsg: "invalid amounts: maker amount precision" }), true);
 
   // Each refusal has its own answer, and confusing them is how a retry loop forms: a
-  // balance refusal is retried SMALLER, a precision refusal COARSER, and a signer fault is
-  // not a size question at all.
+  // balance refusal is retried SMALLER, an amount refusal at a DIFFERENT size, and a signer
+  // fault is not a size question at all.
   const balance = { error: "not enough balance / allowance: the balance is not enough -> balance: 7221, order amount: 6840000" };
   assert.equal(worker.makerAmountPrecisionRefusal(balance), false);
   assert.equal(worker.exitFailureIsTerminal(balance), true);
@@ -799,12 +797,47 @@ test("a size the exchange will not accept is retried coarser, not smaller", asyn
   // abandon a position the account still holds.
   assert.equal(worker.exitFailureIsTerminal({ error: "invalid maker amount" }), false);
 
+  // The rule the executor already recovers live orders with: keep the price, take the
+  // largest size at or below the plan whose price * size lands on a whole cent.
+  //
+  // 0.46 needs the size in whole halves of a share -- 13.31 does not qualify, 13.00 does.
+  assert.equal(worker.makerAmountSafeSize({ price: 0.46, size: 13.31 }), 13);
+  // A size that is already good comes back untouched, so nothing is given away for nothing.
+  assert.equal(worker.makerAmountSafeSize({ price: 0.45, size: 13.2 }), 13.2);
+  assert.equal(worker.makerAmountSafeSize({ price: 0.5, size: 7.14 }), 7.14);
+  // Never up: asking for shares the account does not hold is the refusal being answered.
+  for (const price of [0.07, 0.33, 0.46, 0.5, 0.99]) {
+    for (const size of [3.07, 6.5009, 13.31, 41.9999]) {
+      const safe = worker.makerAmountSafeSize({ price, size });
+      if (safe == null) continue;
+      assert.ok(safe <= size, `${price} x ${size} resized upward to ${safe}`);
+      const cents = price * safe * 100;
+      assert.ok(Math.abs(cents - Math.round(cents)) <= 1e-7,
+        `${price} x ${safe} = ${price * safe} is not a whole cent`);
+    }
+  }
+  // No answer is an answer. 0.999 needs the size in whole tens of shares, so a 6.5-share
+  // position has none -- and saying so keeps the original refusal instead of inventing a
+  // sale of nothing.
+  assert.equal(worker.makerAmountSafeSize({ price: 0.999, size: 6.5009 }), null);
+  assert.equal(worker.makerAmountSafeSize({ price: 0.46, size: 0 }), null);
+  assert.equal(worker.makerAmountSafeSize({ price: 0, size: 10 }), null);
+  assert.equal(worker.makerAmountSafeSize({}), null);
+
   const source = readFileSync(new URL("../tools/rpi-live-exit-worker.mjs", import.meta.url), "utf8");
-  assert.match(source, /const coarse = Math\.floor\(size \* 100\) \/ 100;/,
-    "two decimals, floored -- never up, which would ask for shares that are not held");
+  // The retry that this replaces floored the size to two decimals -- which the CLOB client
+  // already does before signing, so it always re-sent the size that had just been refused.
+  // It shipped, and 155 of 500 retained events were still refused. Never again by accident:
+  assert.doesNotMatch(source, /const coarse = Math\.floor\(size \* 100\) \/ 100;/,
+    "a retry that re-sends the refused size is not a retry");
+  assert.match(source, /const safe = makerAmountSafeSize\(\{ price, size \}\);/);
   // Once. A retry that is refused the same way again is not tried a third time, or the
   // loop this whole file has been fixed for twice comes back.
   assert.match(source, /if \(exitFilled\(retried\) \|\| !makerAmountPrecisionRefusal\(retried\)\)/);
+  // And the size is on the record now, next to the price. Two rounds of fixes were aimed at
+  // this refusal while only one of its two factors was ever written down.
+  assert.match(source, /exitShares: response\?\.exitShares \?\? null,/);
+  assert.match(source, /makerAmountUsdc: response\?\.makerAmountUsdc \?\? null,/);
 });
 
 // Asked for, retracting an earlier instruction: the stop should NOT sell at any cost. If it

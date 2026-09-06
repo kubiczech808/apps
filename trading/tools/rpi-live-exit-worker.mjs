@@ -900,6 +900,34 @@ export function makerAmountPrecisionRefusal(response) {
   return /invalid maker amount|maker amount.*(?:accuracy|decimal|precision)/i.test(text);
 }
 
+// The largest size at or below `size` whose USDC leg lands on a whole cent, at the SAME
+// price. Returns null when no such size exists above the floor, which is the honest answer
+// -- a caller that got null should keep its original refusal rather than sell a token amount.
+//
+// This is the executor's rule (largestTwoDecimalMakerSafeSize), not a new one. It is the
+// only rule in this codebase observed to recover a live order from "invalid maker amount",
+// so the two paths now share it instead of each guessing separately.
+//
+// The previous attempt here floored the size to two decimals. That could never fire: the
+// CLOB client already floors a SELL size to two decimals before signing, so the "coarser"
+// size was always the size it had just refused, and the retry was a no-op dressed as a fix.
+// Measured on the worker after shipping it: 155 of 500 retained events still refused.
+const MAKER_AMOUNT_RESIZE_STEPS = 2000;
+
+export function makerAmountSafeSize({ price, size, minimumSize = 0 } = {}) {
+  const limit = number(price);
+  const from = number(size);
+  if (limit == null || from == null || !(limit > 0) || !(from > 0)) return null;
+  const floorCents = Math.ceil(Math.max(0, number(minimumSize, 0)) * 100 - 1e-7);
+  let cents = Math.floor(from * 100 + 1e-7);
+  const stopAt = Math.max(floorCents, cents - MAKER_AMOUNT_RESIZE_STEPS);
+  for (; cents >= stopAt && cents > 0; cents -= 1) {
+    const usdc = (limit * cents) / 100;
+    if (Math.abs(usdc * 100 - Math.round(usdc * 100)) <= 1e-7) return round(cents / 100, 2);
+  }
+  return null;
+}
+
 export function exitFailureIsTerminal(response) {
   const text = String(response?.errorMsg || response?.error || "");
   return /not enough balance|balance is not enough|no position to sell/i.test(text);
@@ -1012,25 +1040,31 @@ async function submitProtectedExit(plan, { bestBidPrice = null } = {}) {
     response = await sell(size, OrderType.FAK);
   }
 
-  // "invalid maker amount" is the exchange refusing the SIZE's precision, not the price or
-  // the balance. Measured as the current blocker on the certainty close: twelve refusals,
-  // the most recent failures on the account, all at px 0.999 on a 0.001 tick with sizes
-  // carrying four decimals (6.5009, 6.8485).
+  // "invalid maker amount" is the exchange refusing the ORDER'S AMOUNTS, not the price and
+  // not the balance. What separates a refusal from a fill is the product rather than either
+  // factor: the same position on Games Total: O/U 3.5 was accepted at 0.45 and refused at
+  // 0.46 minutes later, same size, same book side.
   //
-  // The executor already recovers from this by keeping the price and shrinking the size to
-  // a grid the exchange accepts; this worker never learned to. Retried once at two decimals,
-  // which is the size precision Polymarket's own interface uses.
+  // So the price is kept -- it is the whole point of a stop -- and the size walks down to
+  // the nearest one whose USDC leg is a whole number of cents.
   //
-  // Stated plainly because it is inferred rather than measured: two decimals is the
-  // convention, not a documented rule I have confirmed. If it does not clear the refusals,
-  // the next status read says so -- the error text is recorded now.
+  // Said plainly, because the rule is inferred from the exchange's behaviour rather than
+  // from its documentation: whole-cent is what the executor recovers with in production, and
+  // it is the best-evidenced rule available. Every refusal now records the price AND the
+  // size, so the next status read shows the product on both the refused and the accepted
+  // orders and can confirm or replace this rule with arithmetic instead of inference.
+  let resizedForMakerAmount = null;
   if (!exitFilled(response) && makerAmountPrecisionRefusal(response)) {
-    const coarse = Math.floor(size * 100) / 100;
-    if (coarse > 0 && coarse < size) {
-      const retried = await sell(coarse, OrderType.FAK);
+    const safe = makerAmountSafeSize({ price, size });
+    if (safe != null && safe > 0 && safe < size) {
+      resizedForMakerAmount = safe;
+      const retried = await sell(safe, OrderType.FAK);
+      // Kept even when it fails for a NEW reason: that is progress worth recording, where
+      // the same refusal again means the rule is wrong and the original row is the honest
+      // one to keep.
       if (exitFilled(retried) || !makerAmountPrecisionRefusal(retried)) {
         response = retried;
-        size = coarse;
+        size = safe;
       }
     }
   }
@@ -1039,6 +1073,11 @@ async function submitProtectedExit(plan, { bestBidPrice = null } = {}) {
     exitPrice: price,
     tickSize: constraints.tickSize,
     exitShares: size,
+    // The other half of the number the exchange refused. A row carrying only the price
+    // cannot distinguish a bad price from a bad product, which is exactly the distinction
+    // that took two rounds to make here.
+    makerAmountUsdc: round(price * size, 6),
+    resizedForMakerAmount,
     // So the record says the rescue was partial rather than leaving the reader to infer it
     // from a size that does not match the position.
     plannedShares: planned,
@@ -1553,6 +1592,14 @@ async function checkOnce(context) {
       // invalid prices with nothing on the row to show it, so this is recorded.
       exitPrice: response?.exitPrice ?? null,
       tickSize: response?.tickSize ?? null,
+      // And the size, which is the other factor in the amount the exchange judges. Without
+      // it a run of "invalid maker amount" refusals shows the price it was refused at and
+      // nothing about the number that was actually invalid -- so the fix for them was
+      // guessed twice rather than derived once.
+      exitShares: response?.exitShares ?? null,
+      plannedShares: response?.plannedShares ?? null,
+      makerAmountUsdc: response?.makerAmountUsdc ?? null,
+      resizedForMakerAmount: response?.resizedForMakerAmount ?? null,
     };
     const type = accepted
       ? (reason === "settlement" ? "SETTLEMENT_CLOSE_SUBMITTED" : "EXIT_SUBMITTED")
@@ -1562,6 +1609,9 @@ async function checkOnce(context) {
       type,
       exitPrice: response?.exitPrice ?? null,
       tickSize: response?.tickSize ?? null,
+      exitShares: response?.exitShares ?? null,
+      makerAmountUsdc: response?.makerAmountUsdc ?? null,
+      resizedForMakerAmount: response?.resizedForMakerAmount ?? null,
       response: { success: Boolean(response?.success), status: response?.status || null, error: response?.errorMsg || response?.error || null, orderId: response?.orderID || null },
     });
     if (accepted) {
