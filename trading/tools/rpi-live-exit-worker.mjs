@@ -561,13 +561,28 @@ export function exitTrigger({ bestBidPrice, stopPrice, triggerPrice = stopPrice,
 // close; this one crossed into PENDING_RESOLUTION first.
 export const FINISHED_POSITION_STATUSES = ["CLOSED", "LOST", "WON", "REDEEM_REQUIRED", "SOLD"];
 
+// Below this a holding is dust, not a position: the exit floors its size to two decimals, so
+// a sold-out position leaves a remainder under 0.01 shares behind. The same number as
+// DUST_SHARES in live-account-sync.mjs, which is where a position sold down to a remainder is
+// counted as closed -- and a test holds the two together, because a remainder the sync calls
+// closed and the worker calls open is exactly what happened here.
+//
+// Measured, and it is not a small effect: 333 of the worker's 500 retained events were the
+// exchange refusing sells of 0.0031 and 0.0034 shares -- below its minimum order size, which
+// it reports as "invalid maker amount". One attempt every twenty seconds, forever, for
+// positions that no longer exist. Two rounds of fixes chased that error as a precision rule.
+//
+// The worse cost was the diagnosis: at 93% dust the 500-event history covered a few hours, so
+// the record of a real stop loss decision had already scrolled out of the log it is kept in.
+export const DUST_SHARES = 0.01;
+
 function livePositions(state = {}) {
   const positions = Array.isArray(state.positions) ? state.positions : [];
   return positions.filter((position) => {
     const status = String(position.status || "").toUpperCase();
     return !FINISHED_POSITION_STATUSES.includes(status)
       && String(position.tokenId || position.assetId || "").trim()
-      && number(position.shares ?? position.size, 0) > 0;
+      && number(position.shares ?? position.size, 0) >= DUST_SHARES;
   });
 }
 
@@ -892,45 +907,20 @@ export function balanceFromRejection(response) {
 // and that is the exchange's own view of the account rather than ours -- so trying again in
 // twenty seconds asks a question already answered. Retrying it is what turned single dead
 // positions into 84 identical rejections in the retained history.
-// The exchange refusing the size's precision rather than the price or the balance. Worth
-// its own name because the answer is different: this one is retried at a coarser size,
-// where a balance refusal is retried at a smaller one and a signer fault at neither.
-export function makerAmountPrecisionRefusal(response) {
-  const text = `${response?.errorMsg || ""} ${response?.error || ""}`;
-  return /invalid maker amount|maker amount.*(?:accuracy|decimal|precision)/i.test(text);
-}
-
-// The largest size at or below `size` whose USDC leg lands on a whole cent, at the SAME
-// price. Returns null when no such size exists above the floor, which is the honest answer
-// -- a caller that got null should keep its original refusal rather than sell a token amount.
 //
-// This is the executor's rule (largestTwoDecimalMakerSafeSize), not a new one. It is the
-// only rule in this codebase observed to recover a live order from "invalid maker amount",
-// so the two paths now share it instead of each guessing separately.
+// "invalid maker amount" is one of those, and it took three attempts to see why. It is not a
+// precision rule -- measured, every single one of them was an order for 0.0031 or 0.0034
+// shares, which is below the minimum order size the exchange accepts. The order is dust. It
+// cannot be resized into validity, only stopped: 333 of 500 retained events were this one
+// refusal repeating, and the two fixes before this one were rules invented to explain it.
 //
-// The previous attempt here floored the size to two decimals. That could never fire: the
-// CLOB client already floors a SELL size to two decimals before signing, so the "coarser"
-// size was always the size it had just refused, and the retry was a no-op dressed as a fix.
-// Measured on the worker after shipping it: 155 of 500 retained events still refused.
-const MAKER_AMOUNT_RESIZE_STEPS = 2000;
-
-export function makerAmountSafeSize({ price, size, minimumSize = 0 } = {}) {
-  const limit = number(price);
-  const from = number(size);
-  if (limit == null || from == null || !(limit > 0) || !(from > 0)) return null;
-  const floorCents = Math.ceil(Math.max(0, number(minimumSize, 0)) * 100 - 1e-7);
-  let cents = Math.floor(from * 100 + 1e-7);
-  const stopAt = Math.max(floorCents, cents - MAKER_AMOUNT_RESIZE_STEPS);
-  for (; cents >= stopAt && cents > 0; cents -= 1) {
-    const usdc = (limit * cents) / 100;
-    if (Math.abs(usdc * 100 - Math.round(usdc * 100)) <= 1e-7) return round(cents / 100, 2);
-  }
-  return null;
-}
-
+// The position filter above now keeps dust out of the watch list, so this should stop being
+// reachable. It stays terminal for the case that gets there anyway -- a position that falls
+// to dust between the watch plan and the order -- because retrying it forever is the actual
+// damage: it floods the event history that every other diagnosis reads.
 export function exitFailureIsTerminal(response) {
   const text = String(response?.errorMsg || response?.error || "");
-  return /not enough balance|balance is not enough|no position to sell/i.test(text);
+  return /not enough balance|balance is not enough|no position to sell|invalid maker amount/i.test(text);
 }
 
 // How far below its floor a stop is still willing to sell.
@@ -1037,6 +1027,19 @@ async function submitProtectedExit(plan, { bestBidPrice = null } = {}) {
   // or it remains intact. FAK is an explicit opt-in because partial exits complicate the
   // remaining stop plan.
   const planned = number(plan.shares);
+  // Dust is not a position, and the exchange will not take an order for it: measured, every
+  // "invalid maker amount" refusal on this worker was an order for 0.0031 or 0.0034 shares.
+  // The watch list already excludes them, so this is the position that fell to dust between
+  // the plan and the order -- terminal, because the alternative is one refusal every twenty
+  // seconds for the rest of the day.
+  if (planned == null || planned < DUST_SHARES) {
+    return {
+      success: false, terminal: true, exitPrice: price, tickSize: constraints.tickSize,
+      plannedShares: planned, heldShares: null,
+      error: `the remaining ${planned == null ? "unknown" : planned} shares are dust,`
+        + ` below the ${DUST_SHARES} the exchange will accept an order for`,
+    };
+  }
   let size = planned;
   let response = await sell(size, OrderType.FOK);
   if (!exitFilled(response) && ALLOW_PARTIAL) response = await sell(size, OrderType.FAK);
@@ -1072,49 +1075,18 @@ async function submitProtectedExit(plan, { bestBidPrice = null } = {}) {
     response = await sell(size, OrderType.FAK);
   }
 
-  // "invalid maker amount" is the exchange refusing the ORDER'S AMOUNTS, not the price and
-  // not the balance. What separates a refusal from a fill is the product rather than either
-  // factor: the same position on Games Total: O/U 3.5 was accepted at 0.45 and refused at
-  // 0.46 minutes later, same size, same book side.
-  //
-  // The rule itself is NOT known. The whole-cent rule this retry uses -- keep the price, walk
-  // the size down until the USDC leg lands on a whole cent -- was taken from the executor,
-  // and the first measurement refuted it: a settlement close of 6.8472 shares at 0.999 has a
-  // fractional-cent leg either way it is rounded, and the exchange accepted it. So the retry
-  // is a blind second attempt at a different size after a size-shaped refusal, which is worth
-  // making and is not an explanation.
-  //
-  // What replaces the guessing is above: every order now records the makerAmount and
-  // takerAmount it was SIGNED with. Those are the two fields the error names, and until this
-  // commit nothing anywhere recorded either of them -- which is why two rounds of fixes were
-  // aimed at a number nobody had seen.
-  let resizedForMakerAmount = null;
-  if (!exitFilled(response) && makerAmountPrecisionRefusal(response)) {
-    const safe = makerAmountSafeSize({ price, size });
-    if (safe != null && safe > 0 && safe < size) {
-      resizedForMakerAmount = safe;
-      const retried = await sell(safe, OrderType.FAK);
-      // Kept even when it fails for a NEW reason: that is progress worth recording, where
-      // the same refusal again means the rule is wrong and the original row is the honest
-      // one to keep.
-      if (exitFilled(retried) || !makerAmountPrecisionRefusal(retried)) {
-        response = retried;
-        size = safe;
-      }
-    }
-  }
   return {
     ...response,
     exitPrice: price,
     tickSize: constraints.tickSize,
     exitShares: size,
-    // The other half of the number the exchange refused. A row carrying only the price
-    // cannot distinguish a bad price from a bad product, which is exactly the distinction
-    // that took two rounds to make here.
+    // The other half of the number the exchange judged. A row carrying only the price cannot
+    // distinguish a bad price from a bad size, and the size is what "invalid maker amount"
+    // turned out to be about: 0.0031 shares, below the exchange minimum. Three attempts to
+    // explain that error were made while only the price was ever written down.
     makerAmountUsdc: round(price * size, 6),
-    resizedForMakerAmount,
-    // In the exchange's own base units, off the signed order. The row above is what we asked
-    // for; this is what was sent.
+    // In base units, off the signed order. The row above is what we asked for; this is what
+    // was sent, and the two differ because the client rounds a SELL size down before signing.
     signedAmounts,
     // So the record says the rescue was partial rather than leaving the reader to infer it
     // from a size that does not match the position.
@@ -1706,7 +1678,6 @@ async function checkOnce(context) {
       exitShares: response?.exitShares ?? null,
       plannedShares: response?.plannedShares ?? null,
       makerAmountUsdc: response?.makerAmountUsdc ?? null,
-      resizedForMakerAmount: response?.resizedForMakerAmount ?? null,
     };
     const type = accepted
       ? (reason === "settlement" ? "SETTLEMENT_CLOSE_SUBMITTED" : "EXIT_SUBMITTED")
@@ -1718,7 +1689,6 @@ async function checkOnce(context) {
       tickSize: response?.tickSize ?? null,
       exitShares: response?.exitShares ?? null,
       makerAmountUsdc: response?.makerAmountUsdc ?? null,
-      resizedForMakerAmount: response?.resizedForMakerAmount ?? null,
       signedAmounts: response?.signedAmounts ?? null,
       response: { success: Boolean(response?.success), status: response?.status || null, error: response?.errorMsg || response?.error || null, orderId: response?.orderID || null },
     });

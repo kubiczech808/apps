@@ -250,7 +250,6 @@ jobs:
                 + `  = ${Number.isFinite(shares) ? shares.toFixed(6) : "?"} sh`
                 + ` for ${Number.isFinite(usdc) ? usdc.toFixed(6) : "?"}`
                 + `  implied px ${Number.isFinite(impliedPrice) ? impliedPrice.toFixed(6) : "?"}`
-                + `  resized ${text(event.resizedForMakerAmount)}`
                 + `  ${String(event.response?.error || event.response?.status || "").slice(0, 26)}`);
             }
             const exits = state.exits && typeof state.exits === "object" ? state.exits : {};
