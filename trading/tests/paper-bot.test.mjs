@@ -762,6 +762,70 @@ test("equal risk: a bid far below the floor declines to sell and leaves the posi
   assert.equal(crossed.fillPrice, plan.stopPrice);
 });
 
+// Asked for with the book in evidence: a live position bought at 75% was left at about 25% on
+// a market with $291 of volume whose order book showed asks on one side and no bids on the
+// other. Nothing had happened to the fixture -- there was no counterparty, and the price that
+// fired the stop was the absence of one. Held on paper too, so it can be watched without risk.
+test("equal risk: a paper stop refuses a book with no counterparty", () => {
+  const plan = bot.equalRiskStopPlan({
+    totalCostUsdc: 5, netGainIfWinUsdc: 0.5, shares: 5.5, entryPrice: 0.9, feesEnabled: false,
+  });
+  const levels = (rows) => rows.map(([price, size]) => ({ price, size }));
+  const decide = (bids, bestAsk) => bot.equalRiskStopExitDecision({
+    plan, bestBid: 0.7, bestAsk, shares: 5.5, feesEnabled: false, bids: levels(bids),
+  });
+
+  // Depth is summed over every level at or above the price, never read off the top.
+  assert.equal(bot.paperBidDepthShares(levels([[0.7, 2], [0.69, 30]]), 0.7), 2);
+  assert.equal(bot.paperBidDepthShares(levels([[0.7, 2], [0.69, 30]]), 0.69), 32);
+  assert.equal(bot.paperBidDepthShares(null, 0.5), 0);
+
+  // A healthy book still sells: this must not become a reason never to stop.
+  assert.equal(decide([[0.7, 50]], 0.72).declinedGap, undefined);
+
+  // The reported shape: a lone bid with nothing offered against it.
+  assert.equal(decide([[0.7, 50]], null).declineKind, "one-sided");
+  // Three cents, as asked.
+  assert.equal(decide([[0.7, 50]], 0.9).declineKind, "wide-spread");
+  assert.equal(decide([[0.7, 50]], 0.73).declinedGap, undefined, "exactly three cents still sells");
+  // And enough capital behind the bid to take the whole position.
+  assert.equal(decide([[0.7, 2]], 0.72).declineKind, "thin-depth");
+
+  // A caller that passes no book has said nothing about the market, and declining on the
+  // ABSENCE of data would silently disable every paper stop instead of describing a thin book.
+  assert.equal(bot.equalRiskStopExitDecision({
+    plan, bestBid: 0.7, bestAsk: null, shares: 5.5, feesEnabled: false,
+  }).declinedGap, undefined);
+
+  // The real call site does pass them, or the guard would be dead code.
+  const source = readFileSync(new URL("../tools/paper-trading-bot.mjs", import.meta.url), "utf8");
+  assert.match(source, /const \{ bestBid, bestAsk, bids \} = bestBook\(book\);/);
+  assert.match(source, /^\s*bids,$/m);
+});
+
+test("equal risk: the paper book rule is the live worker's book rule", async () => {
+  const worker = await import("../tools/rpi-live-exit-worker.mjs");
+  const levels = (rows) => rows.map(([price, size]) => ({ price, size }));
+  const cases = [
+    { bids: [[0.7, 50]], ask: 0.72, shares: 5.5 },
+    { bids: [[0.7, 50]], ask: null, shares: 5.5 },
+    { bids: [[0.7, 50]], ask: 0.9, shares: 5.5 },
+    { bids: [[0.7, 2]], ask: 0.72, shares: 5.5 },
+    { bids: [[0.7, 2], [0.69, 40]], ask: 0.72, shares: 5.5 },
+  ];
+  for (const { bids, ask, shares } of cases) {
+    const paper = bot.paperStopBookIsUntradable({
+      bids: levels(bids), bestBid: 0.7, bestAsk: ask, exitPrice: 0.7, shares,
+    });
+    const live = worker.stopBookIsUntradable({
+      book: { bids: levels(bids), asks: ask == null ? [] : [{ price: ask, size: 50 }] },
+      bestBidPrice: 0.7, bestAskPrice: ask, exitPrice: 0.7, shares,
+    });
+    assert.equal(paper?.kind ?? null, live?.kind ?? null,
+      `the two models disagree about bids ${JSON.stringify(bids)} ask ${ask}`);
+  }
+});
+
 // One mechanism, two models. A paper portfolio that decides differently from the live worker
 // is worse than no paper portfolio, so the two floors are held to the same number here.
 test("equal risk: the paper gap floor is the live worker's gap floor", async () => {

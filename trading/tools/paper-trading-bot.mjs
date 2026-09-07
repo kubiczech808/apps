@@ -3974,7 +3974,56 @@ function bestBook(book) {
     spread: bestBid != null && bestAsk != null ? Math.max(0, bestAsk - bestBid) : null,
     askDepth: asks.slice(0, 5).reduce((sum, level) => sum + Number(level.size || 0), 0),
     asks,
+    // The side an EXIT has to sell into. askDepth above is the entry's side, and having only
+    // that is how a market with plenty of offers and no buyers passed as tradable.
+    bids,
   };
+}
+
+// Shares bid at or above a price: the size a sell at that price could actually fill against,
+// summed over every qualifying level rather than read off the top of the book. The live
+// worker's bidDepthShares, kept here as its own copy for the same reason the gap floor is --
+// the paper model must not import the worker and its signing path to do arithmetic.
+export function paperBidDepthShares(bids, atOrAbove = 0) {
+  const floor = Number(atOrAbove);
+  const levels = Array.isArray(bids) ? bids : [];
+  let shares = 0;
+  for (const level of levels) {
+    const price = Number(level?.price);
+    const size = Number(level?.size) || 0;
+    if (!Number.isFinite(price) || !(price > 0)) continue;
+    if (Number.isFinite(floor) && price + 1e-9 < floor) continue;
+    shares += size;
+  }
+  return Number(shares.toFixed(6));
+}
+
+// How wide a spread a paper stop will act on, and how much of the position the buyers must be
+// able to take. The live worker's numbers, from the same variables.
+//
+// Asked for after a live position bought at 75% was left at about 25% on a market with $291
+// of volume whose book showed asks on one side and no bids on the other: nothing had happened
+// to the fixture, there was no counterparty, and the price that fired the stop was the absence
+// of one.
+const PAPER_STOP_MAX_SPREAD = Math.max(0, Number(process.env.LIVE_EXIT_STOP_MAX_SPREAD ?? 0.03) || 0);
+const PAPER_STOP_MIN_DEPTH_FRACTION = Math.min(1, Math.max(0, Number(process.env.LIVE_EXIT_STOP_MIN_DEPTH_FRACTION ?? 1)));
+
+export function paperStopBookIsUntradable({ bids, bestBid, bestAsk, exitPrice, shares } = {}) {
+  const bid = Number(bestBid);
+  const ask = Number(bestAsk);
+  if (!Number.isFinite(bid) || !(bid > 0)) return null;
+  if (!Number.isFinite(ask) || !(ask > 0)) {
+    return { kind: "one-sided", spread: null };
+  }
+  const spread = Number((ask - bid).toFixed(6));
+  if (spread > PAPER_STOP_MAX_SPREAD + 1e-9) return { kind: "wide-spread", spread };
+  const needed = Number((Math.max(0, Number(shares) || 0) * PAPER_STOP_MIN_DEPTH_FRACTION).toFixed(6));
+  const at = Number.isFinite(Number(exitPrice)) ? Number(exitPrice) : bid;
+  const available = paperBidDepthShares(bids, at);
+  if (needed > 0 && available + 1e-9 < needed) {
+    return { kind: "thin-depth", spread, depthShares: available, neededShares: needed };
+  }
+  return null;
 }
 
 function simulateMarketBuy(asks, stakeUsdc) {
@@ -4207,7 +4256,7 @@ export function paperStopGapFloorPrice(stopPrice, tolerance = PAPER_STOP_GAP_TOL
   return snapped > 0 ? snapped : raw;
 }
 
-function equalRiskStopExitDecision({ plan, bestBid, bestAsk = null, shares, feeRate = 0, feesEnabled = true, previousBid = null } = {}) {
+function equalRiskStopExitDecision({ plan, bestBid, bestAsk = null, shares, feeRate = 0, feesEnabled = true, previousBid = null, bids = null } = {}) {
   if (!plan?.protectable || !plan.requiresStop) return null;
   const bid = Number(bestBid);
   const size = Number(shares);
@@ -4246,7 +4295,32 @@ function equalRiskStopExitDecision({ plan, bestBid, bestAsk = null, shares, feeR
     return {
       triggered: true,
       declinedGap: true,
+      declineKind: "gapped",
       gapFloor,
+      stopPrice: Number(floor.toFixed(6)),
+      observedBid: Number(bid.toFixed(6)),
+      currentValueUsdc: Number(currentValue.toFixed(5)),
+    };
+  }
+
+  // And the book itself has to be able to absorb the sell. Checked after the gap band and
+  // regardless of a crossing, because a one-sided book means there was never a resting exit
+  // to be filled either -- the paper model must not book a fill the live account could not
+  // have got.
+  //
+  // Only when a book was actually observed. A caller that passes no levels has told us
+  // nothing about the market, and declining on the ABSENCE of data would silently disable
+  // every paper stop rather than describe a thin book. The real call site always passes them.
+  const untradable = Array.isArray(bids)
+    ? paperStopBookIsUntradable({ bids, bestBid: bid, bestAsk, exitPrice: Math.min(floor, bid), shares: size })
+    : null;
+  if (untradable) {
+    return {
+      triggered: true,
+      declinedGap: true,
+      declineKind: untradable.kind,
+      declineSpread: untradable.spread ?? null,
+      gapFloor: gapFloor ?? null,
       stopPrice: Number(floor.toFixed(6)),
       observedBid: Number(bid.toFixed(6)),
       currentValueUsdc: Number(currentValue.toFixed(5)),
@@ -4955,7 +5029,9 @@ async function markOpenTrade(trade, strategy = null) {
 
   try {
     const book = await fetchJson(`https://clob.polymarket.com/book?token_id=${encodeURIComponent(trade.tokenId)}`);
-    const { bestBid, bestAsk } = bestBook(book);
+    // bids too: the exit's own side of the book, which decides whether a stop can be filled
+    // at all. Reading only the best bid is how a market with offers and no buyers passed.
+    const { bestBid, bestAsk, bids } = bestBook(book);
     if (Number.isFinite(bestBid)) {
       const equalRiskPlan = stopPlanWithFloor();
       const grossCurrentValue = Number((Number(trade.shares || 0) * bestBid).toFixed(4));
@@ -4974,6 +5050,9 @@ async function markOpenTrade(trade, strategy = null) {
         // crossed the floor between two looks -- which a resting stop would have been
         // filled by -- or was already through it before this position was ever watched.
         previousBid: trade.currentPrice,
+        // The depth behind the bid, so the paper stop refuses the same untradable book the
+        // live worker refuses instead of booking a fill nothing could have matched.
+        bids,
       });
       // Triggered and deliberately not sold. The position stays OPEN and is re-checked on
       // every pass, because a book that gapped on one look often comes back -- and closing it
@@ -4997,11 +5076,29 @@ async function markOpenTrade(trade, strategy = null) {
           stopLossTriggeredAt: trade.stopLossTriggeredAt || checkedAt,
           stopLossGapFloor: equalStopDecision.gapFloor,
           stopLossDeclinedBid: equalStopDecision.observedBid,
-          statusNote: `Stop reached at ${equalRiskPlan.stopPrice.toFixed(4)} and NOT sold: the best bid is`
-            + ` ${bestBid.toFixed(4)}, below the ${equalStopDecision.gapFloor.toFixed(4)} floor this stop will`
-            + ` sell at (${(PAPER_STOP_GAP_TOLERANCE * 100).toFixed(0)}% under the stop). Selling here would take far`
-            + ` less than the level that was set, so the position is left to resolve and the stop is`
-            + ` re-checked on every pass.`,
+          // Which rule refused. A gapped book has moved hard against the position; an
+          // untradable one has not moved at all and simply has nobody on the other side, and
+          // the row reads identically either way unless it says so.
+          stopLossDeclineKind: equalStopDecision.declineKind || "gapped",
+          stopLossDeclineSpread: equalStopDecision.declineSpread ?? null,
+          statusNote: `Stop reached at ${equalRiskPlan.stopPrice.toFixed(4)} and NOT sold: `
+            + (equalStopDecision.declineKind === "one-sided"
+              ? `nobody is offering this outcome at all, so the ${bestBid.toFixed(4)} bid is the only`
+                + ` number in this market and nothing corroborates it. A stop priced off it would be`
+                + ` selling into the absence of a counterparty rather than into a fall.`
+              : equalStopDecision.declineKind === "wide-spread"
+                ? `the spread is ${Number(equalStopDecision.declineSpread || 0).toFixed(4)} on a`
+                  + ` ${bestBid.toFixed(4)} bid, wider than the ${PAPER_STOP_MAX_SPREAD.toFixed(4)} a stop`
+                  + ` will act on. A book this wide has no agreed price.`
+                : equalStopDecision.declineKind === "thin-depth"
+                  ? `there is not enough capital behind the ${bestBid.toFixed(4)} bid to take the whole`
+                    + ` position, so selling into it would fill a fraction at the top and the rest at`
+                    + ` whatever is underneath.`
+                  : `the best bid is ${bestBid.toFixed(4)}, below the`
+                    + ` ${Number(equalStopDecision.gapFloor || 0).toFixed(4)} floor this stop will sell at`
+                    + ` (${(PAPER_STOP_GAP_TOLERANCE * 100).toFixed(0)}% under the stop). Selling here would`
+                    + ` take far less than the level that was set.`)
+            + ` The position is left to resolve and the stop is re-checked on every pass.`,
         };
       }
       if (equalStopDecision?.triggered) {

@@ -5027,6 +5027,17 @@ function live_exit_record_request(array $payload): array
         $record['worstBid'] = is_numeric($payload['worstBid'] ?? null) ? round((float) $payload['worstBid'], 6) : null;
         $record['declinedSince'] = compact_text($payload['declinedSince'] ?? '', 40);
         $record['declinedPasses'] = is_numeric($payload['declinedPasses'] ?? null) ? (int) $payload['declinedPasses'] : null;
+        // Which rule refused. "gapped" means the price fell far below the level; the others
+        // mean the book could not absorb the sell at all -- no ask, too wide a spread, or not
+        // enough capital behind the bid. They look identical on the row (a position still
+        // open with its stop reached) and they mean opposite things about the market.
+        $declineKind = strtolower(trim((string) ($payload['declineKind'] ?? 'gapped')));
+        $record['declineKind'] = in_array($declineKind, ['gapped', 'one-sided', 'wide-spread', 'thin-depth'], true)
+            ? $declineKind
+            : 'gapped';
+        $record['declineSpread'] = is_numeric($payload['declineSpread'] ?? null)
+            ? round((float) $payload['declineSpread'], 6) : null;
+        $record['declineReason'] = compact_text($payload['declineReason'] ?? '', 400);
         $record['unrealizedPnlUsdc'] = is_numeric($payload['unrealizedPnlUsdc'] ?? null)
             ? round((float) $payload['unrealizedPnlUsdc'], 6) : null;
         $record['riskTargetUsdc'] = is_numeric($payload['riskTargetUsdc'] ?? null)
@@ -5161,6 +5172,9 @@ function live_state_with_exit_reasons(array $payload): array
             $positions[$index]['exitDeclinedSince'] = $record['declinedSince'] ?? null;
             $positions[$index]['exitDeclinedPasses'] = $record['declinedPasses'] ?? null;
             $positions[$index]['exitRiskTargetUsdc'] = $record['riskTargetUsdc'] ?? null;
+            $positions[$index]['exitDeclineKind'] = $record['declineKind'] ?? 'gapped';
+            $positions[$index]['exitDeclineSpread'] = $record['declineSpread'] ?? null;
+            $positions[$index]['exitDeclineReason'] = $record['declineReason'] ?? null;
         }
         // The second half of the stop, so the closed row can explain that the opposite
         // position was opened out of this one.

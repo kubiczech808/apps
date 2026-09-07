@@ -4320,7 +4320,27 @@ function stopDeclinedNote(trade = {}) {
   const lines = [];
   if (level != null) lines.push(`The stop was reached at ${probability(level)}.`);
   if (bid != null) lines.push(`The best bid was ${probability(bid)}.`);
-  if (floor != null) {
+  // Which rule refused, because they mean opposite things about the market and the row looks
+  // identical either way. A gapped book has moved hard against the position; an untradable
+  // one has not moved at all and simply has nobody on the other side.
+  const kind = String(
+    trade.exitDeclineKind || trade.stopLossDeclineKind || (floor != null ? "gapped" : ""),
+  ).toLowerCase();
+  const spread = numericOrNull(trade.exitDeclineSpread ?? trade.stopLossDeclineSpread);
+  if (level == null && floor == null && bid == null && !kind) return "";
+  if (kind === "one-sided") {
+    lines.push(`\nIt was NOT sold: nobody is offering this outcome at all, so that bid is the`
+      + ` only number in the market and nothing corroborates it. A stop priced off it would be`
+      + ` selling into the absence of a counterparty rather than into a fall.`);
+  } else if (kind === "wide-spread") {
+    lines.push(`\nIt was NOT sold: the spread is ${spread != null ? probability(spread) : "too wide"},`
+      + ` so this book has no agreed price and the bid is a lowball order rather than what the`
+      + ` position is worth.`);
+  } else if (kind === "thin-depth") {
+    lines.push(`\nIt was NOT sold: there is not enough capital behind that bid to take the whole`
+      + ` position. Selling into it would fill a fraction at the top and the rest at whatever is`
+      + ` underneath, which is a liquidation rather than a capped loss.`);
+  } else if (floor != null) {
     lines.push(`\nIt was NOT sold: this stop will not sell below ${probability(floor)}, and the`
       + ` book is under that. Selling into a gap that wide takes far less than the level that`
       + ` was set, so the position is left to resolve instead.`);

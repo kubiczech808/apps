@@ -866,6 +866,84 @@ test("the worker status script survives being one single-quoted shell argument",
     `an apostrophe inside the single-quoted node script ends it: ${JSON.stringify(offenders)}`);
 });
 
+// Reported with the book in evidence: Games Total O/U 2.5 on a match that had not started,
+// $291 of volume in the whole market, an order book showing asks at 97-99c and "No bids" on
+// the other side. A position bought at 75% was left at about 25% for a 3.33 loss. Nothing had
+// happened to the fixture -- there was no counterparty, and the price that fired the stop was
+// the absence of one.
+test("a stop does not sell into a book that has no counterparty", async () => {
+  const worker = await import("../tools/rpi-live-exit-worker.mjs");
+  const book = (bids, asks) => ({
+    bids: bids.map(([price, size]) => ({ price, size })),
+    asks: asks.map(([price, size]) => ({ price, size })),
+  });
+
+  // Depth is summed over every level at or above the price, not read off the top: a 5-share
+  // top bid does not sell a 6.6-share position however good its price is.
+  const deep = book([[0.74, 5], [0.73, 40], [0.6, 100]], [[0.76, 50]]);
+  assert.equal(worker.bidDepthShares(deep, 0.74), 5);
+  assert.equal(worker.bidDepthShares(deep, 0.73), 45);
+  assert.equal(worker.bidDepthShares(deep, 0.5), 145);
+  assert.equal(worker.bidDepthShares({}, 0.5), 0);
+
+  const untradable = (options) => worker.stopBookIsUntradable(options);
+
+  // A healthy book sells. The rule must not become a reason never to stop.
+  assert.equal(untradable({
+    book: deep, bestBidPrice: 0.74, bestAskPrice: 0.76, exitPrice: 0.73, shares: 6.6,
+  }), null);
+
+  // The reported case: a lone bid with nothing offered against it. exitTrigger deliberately
+  // let this through -- "the bid stands alone there" -- and that is the hole.
+  const oneSided = untradable({
+    book: book([[0.25, 40]], []), bestBidPrice: 0.25, bestAskPrice: null, exitPrice: 0.25, shares: 6.6,
+  });
+  assert.equal(oneSided.kind, "one-sided");
+  assert.match(oneSided.reason, /no ask at all/);
+
+  // Three cents, as asked. A 0.10 bid against a 0.90 ask is not a price either.
+  const wide = untradable({
+    book: book([[0.1, 500]], [[0.9, 500]]), bestBidPrice: 0.1, bestAskPrice: 0.9, exitPrice: 0.1, shares: 6.6,
+  });
+  assert.equal(wide.kind, "wide-spread");
+  assert.equal(wide.spread, 0.8);
+  // And the boundary is inclusive: exactly three cents still sells.
+  assert.equal(untradable({
+    book: book([[0.71, 50]], [[0.74, 50]]), bestBidPrice: 0.71, bestAskPrice: 0.74, exitPrice: 0.71, shares: 6.6,
+  }), null);
+  assert.equal(untradable({
+    book: book([[0.71, 50]], [[0.75, 50]]), bestBidPrice: 0.71, bestAskPrice: 0.75, exitPrice: 0.71, shares: 6.6,
+  })?.kind, "wide-spread");
+
+  // Enough capital behind the bid to take the position, measured at or above the price the
+  // sell is priced at -- which is what a fill-and-kill order can actually match against.
+  const thin = untradable({
+    book: book([[0.74, 2]], [[0.75, 50]]), bestBidPrice: 0.74, bestAskPrice: 0.75, exitPrice: 0.74, shares: 6.6,
+  });
+  assert.equal(thin.kind, "thin-depth");
+  assert.equal(thin.depthShares, 2);
+  assert.equal(thin.neededShares, 6.6);
+
+  // A bidless book is exitTrigger's business, not this rule's: answering it here too would
+  // have two rules disagreeing about one book, which this file has been fixed for before.
+  assert.equal(untradable({
+    book: book([], [[0.75, 50]]), bestBidPrice: null, bestAskPrice: 0.75, shares: 6.6,
+  }), null);
+
+  const source = readFileSync(new URL("../tools/rpi-live-exit-worker.mjs", import.meta.url), "utf8");
+  // Decided on the SAME read as the price and the depth, or the three describe different
+  // moments -- the trap the gap band was already fixed for once.
+  assert.match(source, /exitAsk = bestAsk\(fresh\);/);
+  assert.match(source, /exitBook = fresh;/);
+  // Only for a stop. A settlement close takes the bid on purpose on a book quoting near
+  // certainty, where one-sided is the normal shape and refusing it would strand the capital
+  // that rule exists to free.
+  assert.match(source, /if \(reason === "stop"\) \{\s*\n\s*const untradable = stopBookIsUntradable\(\{/);
+  // Recorded under its own event name: collapsing it into STOP_DECLINED_GAPPED would make the
+  // tally say "the book gapped" about a market where nothing had happened at all.
+  assert.match(source, /type: declineKind === "gapped" \? "STOP_DECLINED_GAPPED" : "STOP_DECLINED_UNTRADABLE",/);
+});
+
 // Asked for, retracting an earlier instruction: the stop should NOT sell at any cost. If it
 // cannot be caught within about 10% of the level that was set, leave the position and see
 // what happens.
@@ -945,7 +1023,8 @@ test("a stop declines to sell into a gap far below its own floor", async () => {
   assert.doesNotMatch(source, /terminal: true[\s\S]{0,200}STOP_DECLINED_GAPPED/);
   // Collapsed to a standing row. At one pass a second an event each would bury the whole
   // history in minutes, which is the trap the book errors already fell into once.
-  assert.match(source, /if \(previous\) return due;\s*\n\s*recordEvent\(state, \{\s*\n\s*at, type: "STOP_DECLINED_GAPPED"/);
+  assert.match(source, /if \(previous\) return due;\s*\n\s*recordEvent\(state, \{/);
+  assert.match(source, /type: declineKind === "gapped" \? "STOP_DECLINED_GAPPED" :/);
   // And cleared once it does sell, or the row would outlive what it describes.
   assert.match(source, /clearDeclinedStop\(context\.state, plan\.tokenId\);/);
 

@@ -972,6 +972,106 @@ const STOP_GAP_TOLERANCE = Math.min(1, Math.max(0, number(process.env.LIVE_EXIT_
 // instruction is that the stop should apply.
 const STOP_GAP_PRICE_GRID = 0.01;
 
+// How wide a spread a stop will still act on, and how much of the position the buyers have to
+// be able to absorb.
+//
+// Reported with the book in evidence: Games Total O/U 2.5 on a match that had not started,
+// $291 of volume in the whole market, an order book showing asks at 97-99c and "No bids" on
+// the other side. A position bought at 75% left at about 25% for a 3.33 loss. Nothing had
+// happened to the fixture -- there was simply no counterparty, and the price that fired the
+// stop was the absence of one.
+//
+// exitTrigger already refuses to read a lone bid as a price when both sides are quoted: it
+// makes the midpoint agree. The hole is the case with NO ask, where the bid stood alone by
+// design, and that is exactly this book. So the test moves to the book itself.
+//
+// Three cents, as asked. It is deliberately tight, and it will refuse a lot of stops on these
+// markets -- a 0.10 bid against a 0.90 ask is not a 3c spread and never will be. That is the
+// instruction and it is the right way round: a stop that cannot be filled near its level is
+// not protection, it is a market order into a vacuum.
+const STOP_MAX_SPREAD = Math.max(0, number(process.env.LIVE_EXIT_STOP_MAX_SPREAD, 0.03));
+
+// The buyers have to be able to take the whole position at or above the price the sell is
+// priced at. That is not a guess about liquidity: it is what a fill-and-kill order can
+// actually match against, so anything less is a partial exit at a worse price.
+const STOP_MIN_DEPTH_FRACTION = Math.min(1, Math.max(0, number(process.env.LIVE_EXIT_STOP_MIN_DEPTH_FRACTION, 1)));
+
+// Shares bid at or above a price. The size a sell at that price could actually fill against,
+// summed over every level that qualifies rather than read off the top of the book -- a 5-share
+// top bid does not sell a 6.6-share position however good its price is.
+export function bidDepthShares(book = {}, atOrAbove = 0) {
+  const floor = number(atOrAbove, 0) ?? 0;
+  const bids = Array.isArray(book?.bids) ? book.bids : [];
+  let shares = 0;
+  for (const level of bids) {
+    const price = number(level?.price ?? level?.p);
+    const size = number(level?.size ?? level?.s ?? level?.amount, 0) || 0;
+    if (price == null || !(price > 0) || price + 1e-9 < floor) continue;
+    shares += size;
+  }
+  return round(shares, 6);
+}
+
+// Whether this book can absorb a protective sell at all. Null means it can; otherwise the
+// reason, which is recorded so a position left open says why rather than looking unwatched.
+//
+// Never applied to a settlement close: that one takes the bid on purpose on a book that is
+// quoting near certainty, where a one-sided book is the normal and correct shape.
+export function stopBookIsUntradable({
+  book,
+  bestBidPrice,
+  bestAskPrice,
+  exitPrice,
+  shares,
+  maxSpread = STOP_MAX_SPREAD,
+  minDepthFraction = STOP_MIN_DEPTH_FRACTION,
+} = {}) {
+  const bid = number(bestBidPrice);
+  const ask = number(bestAskPrice);
+  if (bid == null || !(bid > 0)) return null; // exitTrigger already refuses a bidless book.
+
+  // No ask is not a tight book, it is half a book. Nobody is offering this outcome, so the
+  // lone bid is the only number in the market and there is nothing to corroborate it with.
+  if (ask == null || !(ask > 0)) {
+    return {
+      kind: "one-sided",
+      spread: null,
+      reason: `the book has a ${bid} bid and no ask at all, so the bid is the only number in`
+        + ` this market and nothing corroborates it. A stop priced off it would be selling into`
+        + ` the absence of a counterparty rather than into a fall`,
+    };
+  }
+
+  const spread = round(ask - bid, 6);
+  if (spread > maxSpread + 1e-9) {
+    return {
+      kind: "wide-spread",
+      spread,
+      reason: `the spread is ${spread} (bid ${bid}, ask ${ask}), wider than the ${maxSpread}`
+        + ` a stop will act on. A book this wide has no agreed price, so the bid is a lowball`
+        + ` order rather than what this position is worth`,
+    };
+  }
+
+  // And enough capital behind that bid to take the position. Measured at or above the price
+  // the sell would be priced at, because that is what the order can match against.
+  const needed = round(Math.max(0, number(shares, 0) || 0) * minDepthFraction, 6);
+  const available = bidDepthShares(book, number(exitPrice) ?? bid);
+  if (needed > 0 && available + 1e-9 < needed) {
+    return {
+      kind: "thin-depth",
+      spread,
+      depthShares: available,
+      neededShares: needed,
+      reason: `the buyers show ${available} shares at or above ${number(exitPrice) ?? bid} and this`
+        + ` position is ${round(number(shares, 0) || 0, 6)}. Selling into that fills a fraction at`
+        + ` the top and the rest at whatever is underneath, which is a liquidation rather than a`
+        + ` capped loss`,
+    };
+  }
+  return null;
+}
+
 export function stopGapFloorPrice(stopPrice, tolerance = STOP_GAP_TOLERANCE, grid = STOP_GAP_PRICE_GRID) {
   const floor = number(stopPrice);
   if (floor == null || !(floor > 0)) return null;
@@ -1292,7 +1392,7 @@ function recordBookError(state, plan, error, at) {
 // the dashboard current enough to judge the band without turning the annotation into traffic.
 const DECLINED_STOP_PUBLISH_MS = 15 * 60 * 1000;
 
-function recordDeclinedStop(state, plan, { bestBid, gapFloor, at, reason }) {
+function recordDeclinedStop(state, plan, { bestBid, gapFloor, at, reason, declineKind = "gapped", spread = null }) {
   state.declinedStops = state.declinedStops || {};
   const previous = state.declinedStops[plan.tokenId];
   const worst = previous && Number.isFinite(Number(previous.worstBid))
@@ -1306,6 +1406,11 @@ function recordDeclinedStop(state, plan, { bestBid, gapFloor, at, reason }) {
     bestBid,
     worstBid: worst,
     riskTargetUsdc: plan.riskTargetUsdc,
+    // WHICH rule declined: the price is too far below the level, or the book cannot absorb
+    // the sell at all. They read the same on the row -- a position still open with its stop
+    // reached -- and they want opposite responses, so the row has to say which.
+    declineKind,
+    spread,
     firstAt: previous ? previous.firstAt : at,
     lastAt: at,
     count: previous ? (Number(previous.count) || 1) + 1 : 1,
@@ -1320,9 +1425,15 @@ function recordDeclinedStop(state, plan, { bestBid, gapFloor, at, reason }) {
   if (due) row.publishedAt = at;
   if (previous) return due;
   recordEvent(state, {
-    at, type: "STOP_DECLINED_GAPPED", tokenId: plan.tokenId,
+    // Named by the rule that declined it. Collapsing both into STOP_DECLINED_GAPPED would
+    // make the event tally say "the book gapped" about a market where nothing had happened
+    // and there was simply nobody on the other side.
+    at,
+    type: declineKind === "gapped" ? "STOP_DECLINED_GAPPED" : "STOP_DECLINED_UNTRADABLE",
+    declineKind,
+    tokenId: plan.tokenId,
     question: plan.question, outcome: plan.outcome,
-    stopPrice: plan.stopPrice, gapFloor, bestBid, reason,
+    stopPrice: plan.stopPrice, gapFloor, bestBid, spread, reason,
   });
   return due;
 }
@@ -1366,6 +1477,12 @@ async function recordDeclinedStopOnDashboard(state, plan, bestBid) {
         shares: shares ?? null,
         declinedSince: row.firstAt || null,
         declinedPasses: row.count ?? null,
+        // Which rule refused, and the spread it refused on. Without these the row says only
+        // "the stop did not sell", and the two reasons want opposite responses: a gapped book
+        // has moved against the position, while a one-sided one has not moved at all.
+        declineKind: row.declineKind || "gapped",
+        declineSpread: row.spread ?? null,
+        declineReason: row.reason || null,
         riskTargetUsdc: row.riskTargetUsdc ?? plan.riskTargetUsdc ?? null,
         // What refusing to sell is currently costing, at the bid it refused. The band is a
         // judgement call between two bad outcomes, and this is the number it is judged on.
@@ -1602,12 +1719,50 @@ async function checkOnce(context) {
       // momentary tick back above the trigger cancel it is how a stop ends up never
       // selling at all in a falling book.
       let exitBid = currentBestBid;
+      let exitAsk = currentBestAsk;
+      let exitBook = book;
       try {
         const fresh = await fetchJson(`${CLOB_HOST}/book?token_id=${encodeURIComponent(plan.tokenId)}`, `CLOB book ${plan.tokenId}`);
         const freshBid = bestBid(fresh);
-        if (freshBid != null && freshBid > 0) exitBid = freshBid;
+        if (freshBid != null && freshBid > 0) {
+          exitBid = freshBid;
+          // The whole fresh book, not just its best bid: the depth and the spread are decided
+          // on the same read as the price, or the three describe different moments.
+          exitAsk = bestAsk(fresh);
+          exitBook = fresh;
+        }
       } catch {
         // Keep the bid the trigger was decided on rather than abandoning the exit.
+      }
+      // A book that cannot absorb this sell at all. Asked for after a position bought at 75%
+      // was left at about 25% on a market with $291 of volume, asks on one side and no bids
+      // on the other: nothing had happened to the fixture, there was no counterparty, and the
+      // price that fired the stop was the absence of one.
+      //
+      // Only for a stop. A settlement close takes the bid on purpose on a book quoting near
+      // certainty, where one-sided is the normal shape and refusing it would strand the
+      // capital this rule exists to free.
+      if (reason === "stop") {
+        const untradable = stopBookIsUntradable({
+          book: exitBook,
+          bestBidPrice: exitBid,
+          bestAskPrice: exitAsk,
+          exitPrice: protectedExitPrice({ stopPrice: activeFloor, bestBidPrice: exitBid }),
+          shares: plan.shares,
+        });
+        if (untradable) {
+          const due = recordDeclinedStop(context.state, plan, {
+            bestBid: exitBid,
+            gapFloor: null,
+            at: now,
+            declineKind: untradable.kind,
+            spread: untradable.spread,
+            reason: `${untradable.reason}. The position is left to resolve and the stop is`
+              + ` re-checked every pass in case a real counterparty appears.`,
+          });
+          if (due) await recordDeclinedStopOnDashboard(context.state, plan, exitBid);
+          continue;
+        }
       }
       // A settlement close is not a stop: there is no floor to respect, because the point is
       // to take the bid the market is already showing. Passing the stop price here would
