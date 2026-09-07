@@ -122,6 +122,15 @@ jobs:
           # of the stop.
           LIVE_EXIT_STOP_GAP_TOLERANCE=0.5
           LIVE_EXIT_RETRY_INTERVAL_MS=20000
+          # How long an order the exchange QUEUED (`delayed`) is left to settle before another
+          # is sent for the same position. Written here so a status read shows the number in
+          # force: three orders went out for one position inside 90 seconds -- 04:59:26,
+          # 05:00:12, 05:00:53 -- because a queued order was recorded as a rejection and the
+          # retry timer started on it. The first had filled.
+          LIVE_EXIT_PENDING_MATCH_MS=60000
+          # And how often the exchange is asked what became of it. Not every pass: the pass is
+          # one second, and each question is an authenticated round trip.
+          LIVE_EXIT_PENDING_POLL_MS=5000
           LIVE_EXIT_STATE_REFRESH_MS=30000
           LIVE_EXIT_POLICY_URL=https://osobnizkusenosti.cz/trading/api.php?action=live-exit-policy
           LIVE_EXIT_STATE_PATH=$HOME/.local/state/trading/live-exit-worker-state.json

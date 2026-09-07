@@ -66,6 +66,7 @@ jobs:
           for key in LIVE_EXIT_MODE LIVE_EXIT_CONFIRM_LIVE LIVE_EXIT_PROTECT_ALL \
                      LIVE_EXIT_POLL_INTERVAL_MS LIVE_EXIT_RETRY_INTERVAL_MS \
                      LIVE_EXIT_STOP_GAP_TOLERANCE \
+                     LIVE_EXIT_PENDING_MATCH_MS LIVE_EXIT_PENDING_POLL_MS \
                      LIVE_EXIT_STATE_REFRESH_MS LIVE_EXIT_POLICY_URL \
                      POLYMARKET_FUNDER_ADDRESS POLYMARKET_ADDRESS POLYMARKET_SIGNATURE_TYPE; do
             value="$(sed -n "s/^${key}=//p" "$env_file" | tail -n 1)"
@@ -171,6 +172,20 @@ jobs:
                   + ` stop ${row.stopPrice} floor ${row.gapFloor} bid ${row.bestBid} worst ${row.worstBid}`
                   + ` risk ${row.riskTargetUsdc}`);
                 console.log(`         since ${row.firstAt}, ${row.count} pass(es)`);
+              }
+            }
+            // Orders the exchange took and has not decided. A `delayed` response used to be
+            // written down as a rejection, so the retry timer sent another order on top of it
+            // -- three for one position inside 90 seconds, of which the first had filled.
+            const exits = state.exits && typeof state.exits === "object" ? state.exits : {};
+            const queued = Object.entries(exits).filter(([, row]) => row && row.pending && row.pending.orderId);
+            if (queued.length) {
+              console.log(`\n   orders queued on the exchange, awaiting a match: ${queued.length}`);
+              for (const [tokenId, row] of queued) {
+                const p = row.pending;
+                console.log(`      ${String(p.plan && p.plan.question || "").slice(0, 44).padEnd(44)} ${String(p.plan && p.plan.outcome || "").padEnd(12)}`
+                  + ` ${p.reason} ${p.exitShares} @ ${p.exitPrice}`);
+                console.log(`         order ${p.orderId} queued ${p.since} last checked ${p.checkedAt || "(not yet)"} token ${tokenId}`);
               }
             }
             const watched = Array.isArray(state.watchedPositions) ? state.watchedPositions : [];

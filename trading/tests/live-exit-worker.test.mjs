@@ -125,8 +125,10 @@ test("worker source keeps live exits opt-in and price-protected", async () => {
   assert.match(source, /MODE !== "live" \|\| !CONFIRM_LIVE/);
   assert.match(source, /client\.postOrder\(signed, OrderType\.FOK, false\)/);
   assert.match(source, /String\(response\?\.status \|\| ""\)\.toLowerCase\(\) === "matched"/);
-  // FOK first on the WHOLE position, with nothing asked of the exchange beforehand.
-  assert.match(source, /if \(!exitFilled\(response\) && ALLOW_PARTIAL\) response = await sell\(size, OrderType\.FAK\);/);
+  // FOK first on the WHOLE position, with nothing asked of the exchange beforehand. The FAK
+  // follows only once the FOK is DECIDED -- a queued FOK has not failed, and sending the FAK
+  // on top of it would be a second live order for the same shares.
+  assert.match(source, /if \(!exitFilled\(response\) && !exitPendingMatch\(response\) && ALLOW_PARTIAL\) \{\s*\n\s*response = await sell\(size, OrderType\.FAK\);/);
   // The retry after a balance refusal always part-fills: it is already a rescue of less
   // than the position, and holding out for all-or-nothing would throw the rescue away.
   assert.match(source, /Holding\s*\n\s*\/\/ out for all-or-nothing here would throw the rescue away[\s\S]{0,120}?response = await sell\(size, OrderType\.FAK\);/);
@@ -1171,4 +1173,137 @@ test("two stop floors, and the price meets the higher one first", async () => {
   // The pre-trigger buffer belongs to the level in force. Carrying the stored trigger over
   // would test the equal-risk floor's buffer against the probability floor.
   assert.match(source, /const trigger = floor === number\(stopPrice\) && triggerPrice != null/);
+});
+
+// Reported by the state file, not by anyone: an order the exchange had QUEUED was written
+// down as EXIT_REJECTED. Measured on the account -- three orders for the same position at
+// 04:59:26, 05:00:12 and 05:00:53, then "the account no longer holds this position" at
+// 05:01:13. The first had filled all along.
+//
+// Two faults from one missing name. The retry timer started on an order that was still
+// alive, and when a queued order later filled, nothing annotated the closed trade, because
+// only the `matched` branch does that.
+test("an order the exchange queued is submitted, not rejected", async () => {
+  const worker = await import("../tools/rpi-live-exit-worker.mjs");
+
+  // The response that started this. `delayed` with an order id: taken, undecided.
+  const delayed = { success: true, status: "delayed", error: null, orderID: "0x906e" };
+  assert.equal(worker.exitPendingMatch(delayed), true);
+  assert.equal(worker.exitPendingMatch({ success: true, status: "live", orderID: "0x1" }), true);
+
+  // Decided, in either direction, is not pending.
+  assert.equal(worker.exitPendingMatch({ success: true, status: "matched", orderID: "0x1" }), false,
+    "a fill is a fill, and exitFilled owns it");
+  assert.equal(worker.exitPendingMatch({ success: true, status: "unmatched", orderID: "0x1" }), false,
+    "a kill order that executed nothing has nothing left to wait for");
+
+  // A refusal carries an error and no order id, so there is nothing to wait for.
+  assert.equal(worker.exitPendingMatch({ success: false, error: "invalid maker amount" }), false);
+  assert.equal(worker.exitPendingMatch({ status: "delayed" }), false,
+    "without an order id there is no order on the exchange to wait for");
+  assert.equal(worker.exitPendingMatch(null), false);
+
+  // The window. Open while the order may still match, closed once it has run out -- and
+  // absent entirely on a record that never queued anything.
+  const at = Date.parse("2026-09-07T05:00:00.000Z");
+  const record = { pending: { since: "2026-09-07T05:00:00.000Z" } };
+  assert.equal(worker.pendingExitIsOpen(record, at + 30000, 60000), true);
+  assert.equal(worker.pendingExitIsOpen(record, at + 60001, 60000), false);
+  assert.equal(worker.pendingExitIsOpen({ pending: null }, at), false);
+  assert.equal(worker.pendingExitIsOpen({}, at), false);
+  assert.equal(worker.pendingExitIsOpen({ pending: { since: "not a date" } }, at), false);
+});
+
+// What the exchange says became of it. `size_matched` decides, because a status string
+// alone cannot tell "still queued" from "matched and no longer open".
+test("a queued order is resolved against the exchange, not guessed", async () => {
+  const worker = await import("../tools/rpi-live-exit-worker.mjs");
+
+  assert.equal(worker.pendingOrderOutcome({ status: "matched" }).kind, "filled");
+  assert.equal(worker.pendingOrderOutcome({ status: "delayed", original_size: "6.84", size_matched: "6.84" }).kind,
+    "filled", "the whole size matched, whatever the status still says");
+  assert.equal(worker.pendingOrderOutcome({ status: "delayed", original_size: "6.84", size_matched: "2.00" }).kind,
+    "open", "a part-matched order is still running");
+  assert.equal(worker.pendingOrderOutcome({ status: "cancelled" }).kind, "cancelled");
+  assert.equal(worker.pendingOrderOutcome({ status: "unmatched" }).kind, "cancelled");
+  assert.equal(worker.pendingOrderOutcome({ status: "delayed" }).kind, "open");
+  assert.equal(worker.pendingOrderOutcome({ status: "live" }).kind, "open");
+  // Not knowing is its own answer, and must never be read as either of the other two: a
+  // filled order is not an OPEN order, so a 404 covers a fill and a cancel alike.
+  assert.equal(worker.pendingOrderOutcome(null).kind, "unknown");
+  assert.equal(worker.pendingOrderOutcome({ status: "something new" }).kind, "unknown");
+  assert.equal(worker.pendingOrderOutcome(null).filled, false);
+
+  // The requested size stands in when the exchange does not echo the original.
+  assert.equal(worker.pendingOrderOutcome({ status: "delayed", size_matched: "6.84" }, { requestedShares: 6.84 }).kind,
+    "filled");
+
+  const source = readFileSync(new URL("../tools/rpi-live-exit-worker.mjs", import.meta.url), "utf8");
+  // The retry gate consults the queue BEFORE the retry interval, or the interval fires
+  // another order for a position that already has one on the exchange.
+  const gate = source.slice(source.indexOf("const candidates = plans.filter"));
+  const queueAt = gate.indexOf("pendingExitIsOpen(pending");
+  const intervalAt = gate.indexOf("RETRY_INTERVAL_MS) return false");
+  assert.ok(queueAt > 0 && intervalAt > queueAt,
+    "the queued-order check has to come before the retry interval");
+
+  // A queued FOK must not have a FAK sent on top of it: that is a second live order for the
+  // same shares, which is the duplicate being fixed.
+  assert.match(source, /if \(!exitFilled\(response\) && !exitPendingMatch\(response\) && ALLOW_PARTIAL\)/);
+
+  // A queued order that fills runs the SAME post-fill work as one that came back matched --
+  // the dashboard annotation and the owed reverse. Both call sites, one function.
+  assert.equal(source.split("await afterExitFilled(").length - 1, 2,
+    "the fill path is shared by the matched response and the resolved queue");
+  const resolver = functionBody(source, "resolvePendingExits");
+  assert.match(resolver, /await afterExitFilled\(/,
+    "a queue that filled has to go through the shared post-fill path");
+  assert.match(functionBody(source, "afterExitFilled"), /await recordLiveExit\(/,
+    "and that path is what annotates the closed trade with the stop that sold it");
+  // Released when the window runs out rather than held forever: an order nobody can account
+  // for must not become a stop that never tries again.
+  assert.match(resolver, /EXIT_QUEUE_TIMED_OUT/);
+  // And re-armed at once when the exchange says it ended without matching, because the
+  // position is still exposed and the retry timer would be the wrong wait.
+  assert.match(resolver, /record\.lastAttemptAt = null;/);
+});
+
+// Found while reading the retry gate: exit records are keyed by token, are terminal by
+// design, and nothing ever removed them. "The account no longer holds this position" is a
+// correct terminal answer for as long as the position exists, and permanently wrong once it
+// does not -- a market re-entered later inherits the row from its previous life and is
+// filtered out of every pass, so its stop is never tried at all.
+test("an exit record ends when the position it describes does", async () => {
+  const worker = await import("../tools/rpi-live-exit-worker.mjs");
+
+  const state = {
+    exits: {
+      held: { terminal: true, error: "invalid maker amount" },
+      sold: { terminal: true, error: "the account no longer holds this position" },
+      queued: { terminal: false, pending: { orderId: "0x906e", since: "2026-09-07T05:00:00.000Z" } },
+      alsoHeld: { terminal: false, lastAttemptAt: "2026-09-07T05:00:00.000Z" },
+    },
+  };
+  const dropped = worker.pruneSettledExits(state, new Set(["held", "alsoHeld"]));
+
+  assert.deepEqual(dropped, ["sold"]);
+  assert.deepEqual(Object.keys(state.exits).sort(), ["alsoHeld", "held", "queued"]);
+  assert.equal(state.exits.queued.pending.orderId, "0x906e",
+    "a queued order outlives its position on purpose -- that is how a filled queue is found");
+
+  // Strings and numbers key the same row: the plan list carries String(tokenId).
+  const numeric = { exits: { 123: { terminal: true } } };
+  assert.deepEqual(worker.pruneSettledExits(numeric, ["123"]), []);
+  assert.deepEqual(worker.pruneSettledExits({ exits: {} }, []), []);
+  assert.deepEqual(worker.pruneSettledExits({}, []), []);
+
+  const source = readFileSync(new URL("../tools/rpi-live-exit-worker.mjs", import.meta.url), "utf8");
+  // Pruned from the positions actually held, and only after the queued orders have been
+  // resolved -- the fill is the moment the position disappears.
+  const pass = functionBody(source, "checkOnce");
+  const resolveAt = pass.indexOf("resolvePendingExits(context)");
+  const pruneAt = pass.indexOf("pruneSettledExits(context.state");
+  assert.ok(resolveAt > 0 && pruneAt > resolveAt,
+    "queued orders are resolved before their records could be pruned");
+  assert.match(pass, /pruneSettledExits\(context\.state, new Set\(plans\.map\(\(plan\) => String\(plan\.tokenId\)\)\)\);/);
 });

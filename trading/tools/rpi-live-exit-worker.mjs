@@ -54,6 +54,23 @@ const MODE = String(process.env.LIVE_EXIT_MODE || "shadow").trim().toLowerCase()
 // merely faster.
 const POLL_INTERVAL_MS = clampInteger(process.env.LIVE_EXIT_POLL_INTERVAL_MS, 1000, 250, 60000);
 const RETRY_INTERVAL_MS = clampInteger(process.env.LIVE_EXIT_RETRY_INTERVAL_MS, 20000, 5000, 300000);
+// How long an order the exchange QUEUED is left alone before this worker sends another.
+//
+// Polymarket answers some orders with `delayed`: taken, given an order id, and held before
+// matching. That is not a fill, and this worker was right never to treat it as one -- but it
+// was recorded as a rejection, which made the retry timer start immediately. Measured on the
+// account: three orders for the same position inside 90 seconds (04:59:26, 05:00:12,
+// 05:00:53), then "the account no longer holds this position" at 05:01:13. The first one had
+// filled all along; the other two were sent into a position that no longer existed.
+//
+// So a queued order gets a window to settle in. Longer than the retry interval on purpose:
+// re-sending while an order may still match is the failure being fixed, and a stop that
+// waits one minute for an order it has already sent is not an unprotected stop.
+const PENDING_MATCH_WINDOW_MS = clampInteger(process.env.LIVE_EXIT_PENDING_MATCH_MS, 60000, 5000, 600000);
+// How often the exchange is asked what became of a queued order. Not every pass: the pass is
+// one second, and asking costs an authenticated round trip -- sixty of them per queued order
+// would lengthen the very loop whose latency is the stop's reaction time.
+const PENDING_MATCH_POLL_MS = clampInteger(process.env.LIVE_EXIT_PENDING_POLL_MS, 5000, 1000, 60000);
 // How often a position that is ONLY waiting to be closed at certainty has its book read.
 // A stop needs the poll interval, because how fast the loop goes round is its reaction
 // time; this does not -- a market that has settled stays settled. Capped at 15 minutes so
@@ -809,6 +826,70 @@ function exitFilled(response) {
   return Boolean(response?.success) && String(response?.status || "").toLowerCase() === "matched";
 }
 
+// Taken by the exchange, not yet decided. The third answer, between a fill and a refusal,
+// and the one this worker had no name for: every `delayed` response was written down as
+// EXIT_REJECTED, which is false in both directions -- the order exists, and nothing has
+// been rejected.
+//
+// Two things followed from having no name for it. Another order went out on the retry timer
+// while the first was still queued, and when the queued one filled, nothing annotated the
+// closed trade with the stop that sold it, because only the `matched` branch does that.
+export function exitPendingMatch(response) {
+  if (!response || response.success === false) return false;
+  const status = String(response?.status || "").toLowerCase();
+  // Decided already, in either direction. `unmatched` is the exchange saying a kill order
+  // executed nothing, which for FOK/FAK is the end of it -- there is nothing left to wait for.
+  if (status === "matched" || status === "unmatched") return false;
+  // The order id is the evidence. A refusal carries an error and no id; an accepted order
+  // carries an id whatever the exchange calls its state.
+  return Boolean(response?.orderID);
+}
+
+// Whether a queued order is still worth waiting for, rather than re-sending on top of.
+export function pendingExitIsOpen(record, now = Date.now(), windowMs = PENDING_MATCH_WINDOW_MS) {
+  const since = Date.parse(String(record?.pending?.since || ""));
+  if (!Number.isFinite(since)) return false;
+  return now - since < windowMs;
+}
+
+// What the exchange says became of an order it queued. `size_matched` is the deciding
+// field: a FOK that matched reports its whole size, and a status string alone cannot
+// distinguish "still queued" from "queued, matched, and no longer open".
+export function pendingOrderOutcome(order, { requestedShares = null } = {}) {
+  if (!order) return { kind: "unknown", filled: false };
+  const status = String(order?.status || "").toLowerCase();
+  const matched = number(order?.size_matched, 0);
+  const original = number(order?.original_size) ?? number(requestedShares);
+  if (status === "matched" || (matched > 0 && original != null && matched >= original - 1e-9)) {
+    return { kind: "filled", filled: true, sizeMatched: matched };
+  }
+  // Gone without matching. There is nothing to wait for and the next pass may try again at
+  // once -- this is the one outcome where the ordinary retry timer is too slow, not too fast.
+  if (["cancelled", "canceled", "unmatched", "expired", "killed"].includes(status)) {
+    return { kind: "cancelled", filled: false, sizeMatched: matched };
+  }
+  if (["live", "delayed", "pending", "matching", "open"].includes(status)) {
+    return { kind: "open", filled: false, sizeMatched: matched };
+  }
+  return { kind: "unknown", filled: false, sizeMatched: matched };
+}
+
+// Best effort, and deliberately so. A lookup that fails must not decide anything: the
+// pending window expires on its own, and the worst case of not knowing is that the retry
+// happens a minute later than it might have.
+async function lookupOrder(orderId) {
+  if (!orderId) return null;
+  try {
+    const { client } = await authenticatedClient();
+    return await client.getOrder(String(orderId));
+  } catch {
+    // A filled or cancelled order is not an OPEN order, so the endpoint answering with a
+    // 404 is itself ambiguous -- it means "not resting", which covers both. Treated as
+    // unknown rather than read as either.
+    return null;
+  }
+}
+
 // What the CLOB enforces on every order and this worker was never asking about: prices must
 // sit on the market's tick grid, and a neg-risk market must be declared as one. The executor
 // has always read both (see roundToTick and the tickSize/negRisk options it passes); this
@@ -1233,7 +1314,12 @@ async function submitProtectedExit(plan, { bestBidPrice = null } = {}) {
   }
   let size = planned;
   let response = await sell(size, OrderType.FOK);
-  if (!exitFilled(response) && ALLOW_PARTIAL) response = await sell(size, OrderType.FAK);
+  // Only when the FOK is DECIDED and did not fill. A queued FOK has not failed yet -- sending
+  // the FAK on top of it is a second live order for the same shares, which is the duplicate
+  // this pass is trying not to create.
+  if (!exitFilled(response) && !exitPendingMatch(response) && ALLOW_PARTIAL) {
+    response = await sell(size, OrderType.FAK);
+  }
 
   // Refused for size, and the refusal names the balance it refused against -- as fresh as
   // this can ever be, because it is what the exchange saw at the instant it said no. That
@@ -1417,6 +1503,142 @@ async function retryPendingReversals(context) {
     if (MODE !== "live" || !CONFIRM_LIVE) continue;
     await attemptPendingReversal(context, tokenId);
   }
+}
+
+// Everything owed once a protective SELL has actually matched. Extracted because there are
+// now two ways to learn that it did -- the order came back `matched`, or an order the
+// exchange had queued is later found filled -- and the second one used to do none of this.
+// A position sold by a queued order lost its dashboard annotation and its reverse.
+async function afterExitFilled(context, plan, { reason, response, event = {}, at, bestBidPrice = null, bestAskPrice = null }) {
+  const now = at || new Date().toISOString();
+  // It sold, so it is no longer declining to.
+  clearDeclinedStop(context.state, plan.tokenId);
+  // Why this position was sold, sent before anything else is attempted: the reverse
+  // below can fail, and the fill it follows still happened.
+  await recordLiveExit(plan, { reason, response, bestBidPrice, bestAskPrice });
+  // A reverse is a second, independent FOK order. It is intentionally attempted
+  // only after the CLOB said the complete protective SELL matched; a rejected
+  // reverse never changes the fact that the original position was already exited.
+  if (plan.reverseOnStopLoss && reason !== "settlement") {
+    // Owed from here on. Once the protective SELL has matched the position is gone, so
+    // this plan will not be in the next pass's plan list -- if the reverse is only
+    // tried here and fails, nothing ever tries again. Recording it first means a
+    // failure is a retry rather than the end of it.
+    context.state.pendingReversals = context.state.pendingReversals || {};
+    context.state.pendingReversals[plan.tokenId] = {
+      plan: {
+        tokenId: plan.tokenId,
+        question: plan.question,
+        outcome: plan.outcome,
+        stopPrice: plan.stopPrice,
+        triggerPrice: plan.triggerPrice,
+        riskTargetUsdc: plan.riskTargetUsdc,
+        reverseOnStopLoss: true,
+      },
+      owedSince: now,
+      attempts: 0,
+    };
+    await attemptPendingReversal(context, plan.tokenId, event);
+  }
+  context.liveStateFetchedAt = 0;
+  const sync = await notifyAccountSync();
+  if (sync.attempted && !sync.ok) recordEvent(context.state, { at: new Date().toISOString(), type: "POST_EXIT_SYNC_ERROR", tokenId: plan.tokenId, error: sync.error });
+}
+
+// What became of the orders the exchange took but had not decided. Run before the plans,
+// for the same reason the reverses are: a queued order that filled has already removed the
+// position from the account, so nothing in the plan list represents it any more and the
+// pass below would never look at it again.
+async function resolvePendingExits(context) {
+  const entries = Object.entries(context.state.exits || {})
+    .filter(([, record]) => record?.pending?.orderId);
+  for (const [tokenId, record] of entries) {
+    const pending = record.pending;
+    // Throttled per order, and never at the cost of the window: once the window has run out
+    // the record is released below whether or not it was due for a look.
+    const checked = Date.parse(String(pending.checkedAt || ""));
+    const due = !Number.isFinite(checked) || Date.now() - checked >= PENDING_MATCH_POLL_MS;
+    if (!due && pendingExitIsOpen(record, Date.now())) continue;
+    pending.checkedAt = new Date().toISOString();
+    const order = await lookupOrder(pending.orderId);
+    const outcome = pendingOrderOutcome(order, { requestedShares: pending.exitShares });
+    const now = new Date().toISOString();
+    if (outcome.kind === "filled") {
+      record.pending = null;
+      record.terminal = true;
+      record.status = "matched";
+      recordEvent(context.state, {
+        at: now,
+        type: pending.reason === "settlement" ? "SETTLEMENT_CLOSE_FILLED" : "EXIT_FILLED",
+        tokenId,
+        question: pending.plan?.question || null,
+        outcome: pending.plan?.outcome || null,
+        orderId: pending.orderId,
+        exitPrice: pending.exitPrice ?? null,
+        exitShares: outcome.sizeMatched ?? pending.exitShares ?? null,
+        queuedSince: pending.since,
+        reason: `the order the exchange queued has matched; it was recorded as queued at ${pending.since}`,
+      });
+      await afterExitFilled(context, pending.plan || { tokenId }, {
+        reason: pending.reason,
+        response: { ...pending, orderID: pending.orderId, status: "matched" },
+        at: now,
+        bestBidPrice: pending.bestBidPrice ?? null,
+        bestAskPrice: pending.bestAskPrice ?? null,
+      });
+      continue;
+    }
+    if (outcome.kind === "cancelled") {
+      // Decided, and it did not sell. The position is still exposed, so the next pass must
+      // be free to try again immediately rather than wait out the retry timer.
+      record.pending = null;
+      record.lastAttemptAt = null;
+      record.status = order?.status || "cancelled";
+      recordEvent(context.state, {
+        at: now,
+        type: "EXIT_QUEUE_CANCELLED",
+        tokenId,
+        question: pending.plan?.question || null,
+        orderId: pending.orderId,
+        queuedSince: pending.since,
+        reason: `the queued order ended as ${order?.status || "cancelled"} without matching; the stop is re-armed for the next pass`,
+      });
+      continue;
+    }
+    // Still queued, or the exchange would not say. Left alone until the window runs out --
+    // and then released to the ordinary retry timer rather than held forever, because an
+    // order nobody can account for must not become a stop that never tries again.
+    if (!pendingExitIsOpen(record, Date.now())) {
+      record.pending = null;
+      recordEvent(context.state, {
+        at: now,
+        type: "EXIT_QUEUE_TIMED_OUT",
+        tokenId,
+        question: pending.plan?.question || null,
+        orderId: pending.orderId,
+        queuedSince: pending.since,
+        reason: `the order queued at ${pending.since} is still ${outcome.kind === "unknown" ? "unaccounted for" : "unmatched"}`
+          + ` after ${Math.round(PENDING_MATCH_WINDOW_MS / 1000)}s; the stop returns to the ordinary retry interval`,
+      });
+    }
+  }
+}
+
+// Exit records outlive the positions they describe, and they are terminal on purpose. Held
+// past the position they belong to, a token re-entered later starts with its stop already
+// filtered out of every pass. Returns the tokens dropped, so a caller can say so.
+export function pruneSettledExits(state, heldTokenIds) {
+  const held = heldTokenIds instanceof Set ? heldTokenIds : new Set(Array.from(heldTokenIds || []).map(String));
+  const dropped = [];
+  for (const [tokenId, record] of Object.entries(state?.exits || {})) {
+    if (held.has(String(tokenId))) continue;
+    // An order is still on the exchange for it. The position being gone is the expected
+    // shape here, not a reason to forget the order.
+    if (record?.pending?.orderId) continue;
+    delete state.exits[tokenId];
+    dropped.push(String(tokenId));
+  }
+  return dropped;
 }
 
 async function notifyAccountSync() {
@@ -1621,6 +1843,9 @@ async function checkOnce(context) {
   // protective SELL already matched, so the position no longer appears in the live state
   // the plans below are built from.
   await retryPendingReversals(context);
+  // And orders the exchange queued, for the same reason: if one has matched, the position it
+  // sold is already gone from the live state below.
+  if (MODE === "live" && CONFIRM_LIVE) await resolvePendingExits(context);
   if (!context.liveState || Date.now() - context.liveStateFetchedAt >= STATE_REFRESH_MS) {
     context.liveState = await fetchJson(`${LIVE_STATE_URL}${LIVE_STATE_URL.includes("?") ? "&" : "?"}exitWorkerAt=${Date.now()}`, "live state");
     context.liveStateFetchedAt = Date.now();
@@ -1689,6 +1914,20 @@ async function checkOnce(context) {
     })
     .filter(Boolean);
 
+  // Exit records for positions the account no longer holds are dropped here.
+  //
+  // Nothing ever removed them, and they are terminal by design -- "the account no longer
+  // holds this position", "invalid maker amount", a fill. That is correct for as long as the
+  // position exists and permanently WRONG once it does not: the record is keyed by token, so
+  // a market re-entered later inherits a terminal row from its previous life and its stop is
+  // then filtered out of every pass without ever being tried. A position with no stop is the
+  // failure this whole file exists to prevent, so the record ends when the position does.
+  //
+  // Never a queued one: a pending order is precisely the case where the position vanishes
+  // from the account BEFORE the record has done its job, which is how a filled queue gets
+  // annotated at all.
+  pruneSettledExits(context.state, new Set(plans.map((plan) => String(plan.tokenId))));
+
   // Every watched book is read AT ONCE, and only then are the triggers acted on.
   //
   // Polymarket has no stop order: a resting SELL priced below the current bid is
@@ -1707,6 +1946,10 @@ async function checkOnce(context) {
   const candidates = plans.filter((plan) => {
     const pending = context.state.exits?.[plan.tokenId];
     if (pending?.terminal) return false;
+    // An order for this position is already on the exchange, queued and undecided. Sending
+    // another is how one stop became three orders in 90 seconds, of which one filled and two
+    // were sent into a position that had already been sold.
+    if (pendingExitIsOpen(pending, Date.now())) return false;
     if (pending?.lastAttemptAt && Date.now() - Date.parse(pending.lastAttemptAt) < RETRY_INTERVAL_MS) return false;
     // Every plan, every pass. Settlement-only plans used to be held back to their own
     // slower interval because each one added a request; batching removed that cost, so the
@@ -1900,6 +2143,7 @@ async function checkOnce(context) {
       response = { success: false, error: error?.message || String(error) };
     }
     const accepted = exitFilled(response);
+    const queued = !accepted && exitPendingMatch(response);
     // A signer mismatch is a configuration fault, not a market condition: it will refuse
     // every order for every position until the address is corrected, so it is surfaced on
     // the state itself rather than left to be inferred from hundreds of identical
@@ -1950,10 +2194,40 @@ async function checkOnce(context) {
       exitShares: response?.exitShares ?? null,
       plannedShares: response?.plannedShares ?? null,
       makerAmountUsdc: response?.makerAmountUsdc ?? null,
+      // An order that exists on the exchange and has not been decided yet. Everything the
+      // fill will need is snapshotted here, because by the time it fills the position is
+      // gone from the account and this plan is no longer in the pass -- which is exactly
+      // why a queued exit that filled was never annotated on the closed trade.
+      pending: queued
+        ? {
+          orderId: response?.orderID || null,
+          status: response?.status || null,
+          since: now,
+          reason,
+          bestBidPrice: currentBestBid,
+          bestAskPrice: currentBestAsk,
+          exitPrice: response?.exitPrice ?? null,
+          exitShares: response?.exitShares ?? null,
+          tickSize: response?.tickSize ?? null,
+          plan: {
+            tokenId: plan.tokenId,
+            question: plan.question,
+            outcome: plan.outcome,
+            source: plan.source,
+            shares: response?.exitShares ?? plan.shares,
+            stopPrice: plan.stopPrice,
+            triggerPrice: plan.triggerPrice,
+            riskTargetUsdc: plan.riskTargetUsdc,
+            reverseOnStopLoss: Boolean(plan.reverseOnStopLoss),
+          },
+        }
+        : null,
     };
     const type = accepted
       ? (reason === "settlement" ? "SETTLEMENT_CLOSE_SUBMITTED" : "EXIT_SUBMITTED")
-      : (reason === "settlement" ? "SETTLEMENT_CLOSE_REJECTED" : "EXIT_REJECTED");
+      : queued
+        ? (reason === "settlement" ? "SETTLEMENT_CLOSE_QUEUED" : "EXIT_QUEUED")
+        : (reason === "settlement" ? "SETTLEMENT_CLOSE_REJECTED" : "EXIT_REJECTED");
     recordEvent(context.state, {
       ...event,
       type,
@@ -1965,43 +2239,11 @@ async function checkOnce(context) {
       response: { success: Boolean(response?.success), status: response?.status || null, error: response?.errorMsg || response?.error || null, orderId: response?.orderID || null },
     });
     if (accepted) {
-      // It sold, so it is no longer declining to.
-      clearDeclinedStop(context.state, plan.tokenId);
-      // Why this position was sold, sent before anything else is attempted: the reverse
-      // below can fail, and the fill it follows still happened.
-      await recordLiveExit(plan, {
-        reason,
-        response,
+      await afterExitFilled(context, plan, {
+        reason, response, event, at: now,
         bestBidPrice: currentBestBid,
         bestAskPrice: currentBestAsk,
       });
-      // A reverse is a second, independent FOK order. It is intentionally attempted
-      // only after the CLOB said the complete protective SELL matched; a rejected
-      // reverse never changes the fact that the original position was already exited.
-      if (plan.reverseOnStopLoss && reason !== "settlement") {
-        // Owed from here on. Once the protective SELL has matched the position is gone, so
-        // this plan will not be in the next pass's plan list -- if the reverse is only
-        // tried here and fails, nothing ever tries again. Recording it first means a
-        // failure is a retry rather than the end of it.
-        context.state.pendingReversals = context.state.pendingReversals || {};
-        context.state.pendingReversals[plan.tokenId] = {
-          plan: {
-            tokenId: plan.tokenId,
-            question: plan.question,
-            outcome: plan.outcome,
-            stopPrice: plan.stopPrice,
-            triggerPrice: plan.triggerPrice,
-            riskTargetUsdc: plan.riskTargetUsdc,
-            reverseOnStopLoss: true,
-          },
-          owedSince: now,
-          attempts: 0,
-        };
-        await attemptPendingReversal(context, plan.tokenId, event);
-      }
-      context.liveStateFetchedAt = 0;
-      const sync = await notifyAccountSync();
-      if (sync.attempted && !sync.ok) recordEvent(context.state, { at: new Date().toISOString(), type: "POST_EXIT_SYNC_ERROR", tokenId: plan.tokenId, error: sync.error });
     }
   }
   await persistState(context);
