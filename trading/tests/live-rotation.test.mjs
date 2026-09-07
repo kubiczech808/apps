@@ -123,6 +123,21 @@ test("live history: one token traded twice is two trades, not one doubled trade"
   ], [], "2026-09-07T05:00:00Z");
   assert.equal(staged.length, 1, "four fills, one round trip");
   assert.equal(staged[0].shares, 6);
+
+  // And the durable merge has to keep them apart. It matches stored rows to fresh ones by
+  // token, so without a round-trip qualifier both fresh rows would find the ONE stored row
+  // and the second would overwrite the first -- leaving a single row again, which is exactly
+  // what it looked like before the split and would read as the fix having worked.
+  const merged = sync.mergeClosedTradeHistory(
+    rows,
+    { closedTrades: [{ ...rows[1], shares: 13.235493, stakeUsdc: 9.95, realizedPnlUsdc: -0.26 }] },
+    "2026-09-07T05:00:00Z",
+  );
+  assert.equal(merged.length, 2, "the stored merged row must not swallow both round trips");
+  assert.ok(merged.some((row) => Math.abs(row.shares - 6.573332) < 1e-6), "the first trip survives");
+  assert.ok(merged.some((row) => Math.abs(row.shares - 6.662161) < 1e-6), "and so does the second");
+  assert.ok(!merged.some((row) => Math.abs(Number(row.shares) - 13.235493) < 1e-6),
+    "and the doubled row is replaced rather than kept beside them");
 });
 
 test("live history: only fully unfilled limit orders are retained as their own audit ledger", () => {

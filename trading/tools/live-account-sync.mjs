@@ -1130,16 +1130,30 @@ function bestIndexedTimestamp(index, item, mode = "earliest") {
 // old close or add a newer redeem activity. Match the same market outcome across snapshots
 // so that subsequent syncs can refresh P/L/status without turning the close time into the
 // time at which the account happened to be polled.
+// Which round trip a row is, off its own id. closedTradesFromHistory keys the second and
+// later round trips on one token as "<token>#2", and two complete round trips are two trades
+// that must not share an identity here: the merge below matches on the token, so without this
+// the split rows collapse straight back into one -- and into the LAST one seen, so the first
+// trade disappears altogether. That would be worse than the merged row it replaced, and it
+// would look like the fix had worked, because one row is what it looked like before.
+function closedTradeRoundTrip(item = {}) {
+  const match = String(item.id || "").match(/#(\d+)$/);
+  return match ? `#${match[1]}` : "";
+}
+
 function closedTradeIdentityKeys(item = {}) {
   const tokenId = String(item.tokenId || item.assetId || item.asset || "").trim();
   const conditionId = String(item.conditionId || item.market || "").trim();
   const outcome = normalizedKeyText(item.outcome || item.side);
   const question = normalizedKeyText(item.question || item.title || item.market);
   const id = String(item.id || "").trim();
+  // Empty for a first (or only) round trip, which is almost every row, so stored rows keep
+  // matching exactly as before and no history is orphaned by this change.
+  const trip = closedTradeRoundTrip(item);
   const keys = [];
-  if (tokenId) keys.push(`token:${tokenId}`);
-  if (conditionId && outcome) keys.push(`condition:${conditionId}:${outcome}`);
-  if (!tokenId && !conditionId && question && outcome) keys.push(`question:${question}:${outcome}`);
+  if (tokenId) keys.push(`token:${tokenId}${trip}`);
+  if (conditionId && outcome) keys.push(`condition:${conditionId}:${outcome}${trip}`);
+  if (!tokenId && !conditionId && question && outcome) keys.push(`question:${question}:${outcome}${trip}`);
   if (!keys.length && id) keys.push(`id:${id}`);
   return keys;
 }
