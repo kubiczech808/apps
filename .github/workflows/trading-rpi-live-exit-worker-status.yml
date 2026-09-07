@@ -218,8 +218,14 @@ jobs:
             // close of 6.8472 shares at 0.999 has a fractional-cent USDC leg however it is
             // rounded, and the exchange ACCEPTED it.
             //
-            // So this prints what was actually signed, in the exchange's own base units,
-            // beside what was asked for -- the client rounds a SELL size down before signing,
+            // So this prints what was actually signed, in the base units the exchange itself
+            // holds, beside what was asked for. The client rounds a SELL size down before
+            // signing, which is exactly where the two numbers diverge.
+            //
+            // No apostrophes anywhere in this script: it is one single-quoted argument to
+            // node, so a lone apostrophe in a COMMENT ends the string and the rest of the
+            // line becomes shell words. Not hypothetical -- the phrase "the exchange" plus a
+            // possessive s on this very line made node try to open a file named "own".
             // which is exactly where the two diverge. Accepted and refused together, because
             // the rule is whatever separates the two columns.
             const amountRows = history.filter((event) => /^(EXIT|SETTLEMENT_CLOSE)_(SUBMITTED|REJECTED)$/

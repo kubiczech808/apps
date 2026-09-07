@@ -858,6 +858,30 @@ test("a refused maker amount is retried at a size whose USDC leg is a whole cent
     "the amounts have to be captured before the order is posted, or a refusal loses them");
 });
 
+// The status workflow reads this state, and it reads it through `node -e '<script>'` -- one
+// single-quoted shell argument. A lone apostrophe anywhere inside it, in a COMMENT included,
+// closes the string and the remaining words become arguments.
+//
+// Not hypothetical: a possessive in one comment made node try to open a file named "own",
+// and the read that was meant to explain a stop loss that did not fire failed instead. The
+// diagnosis tool has to be the one thing that does not break while something is wrong.
+test("the worker status script survives being one single-quoted shell argument", () => {
+  const workflow = readFileSync(
+    new URL("../../.github/workflows/trading-rpi-live-exit-worker-status.yml", import.meta.url),
+    "utf8",
+  );
+  const lines = workflow.split("\n");
+  const start = lines.findIndex((line) => line.trim() === "node -e '");
+  assert.ok(start > 0, "the inline node script has to be found for this to mean anything");
+  const end = lines.findIndex((line, index) => index > start && line.trim().startsWith("' \"$state\""));
+  assert.ok(end > start, "and its closing quote too");
+  const offenders = lines.slice(start + 1, end)
+    .map((line, index) => [start + index + 2, line])
+    .filter(([, line]) => line.includes("'"));
+  assert.deepEqual(offenders, [],
+    `an apostrophe inside the single-quoted node script ends it: ${JSON.stringify(offenders)}`);
+});
+
 // Asked for, retracting an earlier instruction: the stop should NOT sell at any cost. If it
 // cannot be caught within about 10% of the level that was set, leave the position and see
 // what happens.
