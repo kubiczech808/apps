@@ -77,16 +77,32 @@ jobs:
           # fired -- three entries, one per scope -- which only works while the schedule is
           # delivered, and it is not: the scope that got scanned was whichever entry GitHub
           # happened to keep. Rotating on the tick counter instead makes the alternation
-          # exact, and each scope comes round every third tick rather than sometimes never.
+          # exact, and each scope comes round on a fixed cadence rather than sometimes never.
           #
-          # The broad slot keeps the seven-day unfiltered catalogue semantics; the two tag
-          # slots keep the short-horizon, liquid-market focus they were given, which is why
-          # the liquidity floor and the horizon travel with the tag rather than separately.
+          # The broad slot keeps the seven-day unfiltered catalogue semantics; the tag slots
+          # keep the short-horizon, liquid-market focus they were given, which is why the
+          # liquidity floor and the horizon travel with the tag rather than separately.
+          #
+          # Esports takes four slots of six, on the owner's instruction: it is the only tag
+          # the live portfolio trades, so it is the one whose quotes going stale costs real
+          # money. Sports and the broad catalogue keep one slot each and come round hourly.
+          #
+          # Six slots rather than a shorter interval, and that is the whole point: frequency
+          # here is a SHARE OF THE TICKS, not the tick length. Scans serialise behind the
+          # trading-paper-bot concurrency group, and the ten-minute spacing exists because a
+          # whole scan-plus-execution cycle has to publish before the next one starts.
+          # Lowering the interval would queue scans behind that lock rather than run them
+          # sooner -- the fault the ten-minute slot was chosen to end -- while raising
+          # esports' share of the ticks buys the same freshness for nothing.
+          #
+          # At the ten-minute default: esports every ~15 minutes on average against every 30
+          # before, with no gap longer than 20. Laid out 0..5 as broad, esports, esports,
+          # sports, esports, esports, so the two quiet slots do not fall next to each other.
           tick=$(printf '%.0f' "${TICK:-0}" 2>/dev/null || echo 0)
-          case $(( tick % 3 )) in
-            1) tag=sports;  liquidity=40000; days=2 ;;
-            2) tag=esports; liquidity=40000; days=2 ;;
-            *) tag="";      liquidity=0;     days=7 ;;
+          case $(( tick % 6 )) in
+            3) tag=sports;  liquidity=40000; days=2 ;;
+            0) tag="";      liquidity=0;     days=7 ;;
+            *) tag=esports; liquidity=40000; days=2 ;;
           esac
           echo "Tick ${tick}: scanning ${tag:-the broad catalogue}."
           # A transient failure here must not stop the clock: the chain is handed on either

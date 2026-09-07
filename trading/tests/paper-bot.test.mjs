@@ -6312,9 +6312,12 @@ test("5050 run log: the merge publishes a superset, never less", async () => {
 // Five minutes is the floor -- GitHub does not run a scheduled workflow more often --
 // and measured over seven hours of this repo's own scheduled runs it does not reliably
 // manage even the ten minutes it was asked for: median gap 10 min, mean 14, worst 47.
-// So two entries offset by five, each naming one tag, and no assumption that every tick
-// arrives.
-test("scan scope: sports and esports alternate on the pacer's tick, not on which cron survived", async () => {
+// So the pacer rotates the scopes on its own tick counter, and no tick is assumed to
+// arrive.
+//
+// Esports then took four of the six slots, on the owner's instruction: it is the only tag
+// the live portfolio trades, so it is the one whose quotes going stale costs real money.
+test("scan scope: esports takes four slots of six, and the others come round hourly", async () => {
   const { readFile } = await import("node:fs/promises");
   const scan = await readFile(new URL("../../.github/workflows/trading-market-scan.yml", import.meta.url), "utf8");
   const pacer = await readFile(new URL("../../.github/workflows/trading-pacer.yml", import.meta.url), "utf8");
@@ -6324,19 +6327,45 @@ test("scan scope: sports and esports alternate on the pacer's tick, not on which
   // this workflow asked for 144 runs and got 6, in bursts. Whichever entry GitHub happened
   // to keep decided what got scanned, so a scope could go a day without a pass. The pacer
   // rotates them on its tick counter instead, which is exact.
-  const rotation = /case \$\(\( tick % 3 \)\) in([\s\S]*?)esac/.exec(pacer);
+  const rotation = /case \$\(\( tick % 6 \)\) in([\s\S]*?)esac/.exec(pacer);
   assert.ok(rotation, "the pacer must choose the scan scope");
   for (const tag of ["sports", "esports"]) {
     assert.match(rotation[1], new RegExp(`tag=${tag}\\b`), `${tag} must get its own slot`);
   }
-  assert.match(rotation[1], /\*\) *tag="";/, "one slot stays untagged or the broad cursor never advances");
+  assert.match(rotation[1], /tag=""/, "one slot stays untagged or the broad cursor never advances");
 
-  // The two tag slots keep the short-horizon, liquid-market focus they were given, and the
+  // The tag slots keep the short-horizon, liquid-market focus they were given, and the
   // broad slot keeps the seven-day unfiltered catalogue. Sending the tag without them
   // would scan sports over the broad window and quietly change what the slot means.
   assert.match(rotation[1], /tag=sports; +liquidity=40000; days=2/);
   assert.match(rotation[1], /tag=esports; liquidity=40000; days=2/);
   assert.match(rotation[1], /tag=""; +liquidity=0; +days=7/);
+
+  // The shares, worked out over one whole cycle rather than read off the case arms: esports
+  // must be the DEFAULT arm, so a slot nobody claimed goes to it rather than to the broad
+  // scan, and the two quiet slots must not be adjacent or esports would go 30 minutes cold.
+  const slotFor = (tick) => {
+    if (tick % 6 === 3) return "sports";
+    if (tick % 6 === 0) return "broad";
+    return "esports";
+  };
+  const cycle = Array.from({ length: 6 }, (_, tick) => slotFor(tick));
+  assert.deepEqual(cycle, ["broad", "esports", "esports", "sports", "esports", "esports"]);
+  assert.equal(cycle.filter((slot) => slot === "esports").length, 4,
+    "esports takes four of six, which at the ten-minute default is every ~15 minutes");
+  assert.equal(cycle.filter((slot) => slot === "sports").length, 1);
+  assert.equal(cycle.filter((slot) => slot === "broad").length, 1);
+  // No two non-esports slots in a row, around the cycle.
+  for (let tick = 0; tick < 6; tick += 1) {
+    assert.ok(slotFor(tick) === "esports" || slotFor(tick + 1) === "esports",
+      `ticks ${tick} and ${tick + 1} are both quiet, so esports would go 20+ minutes cold`);
+  }
+
+  // Frequency is a share of the ticks, not the tick length. Scans serialise behind the
+  // trading-paper-bot concurrency group and the ten-minute spacing exists so a whole
+  // scan-plus-execution cycle can publish first; lowering the interval would queue them
+  // behind that lock instead of running them sooner.
+  assert.match(pacer, /default: "10"/, "the tick stays at ten minutes");
 
   // And the scan has to accept them as dispatch inputs, or the rotation is decoration.
   for (const input of ["market_scan_tag", "market_scan_liquidity_min", "market_scan_max_days"]) {
