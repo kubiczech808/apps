@@ -866,6 +866,96 @@ test("the worker status script survives being one single-quoted shell argument",
     `an apostrophe inside the single-quoted node script ends it: ${JSON.stringify(offenders)}`);
 });
 
+// Asked for as a strict rule, with the trade and the market side by side: Counter-Strike
+// A Great Chaos vs DNK, bought at 77.9%, exited around 50% for a 1.79 loss -- and Polymarket
+// showed M1, M2 and M3 all blank on a market with 4.06K of volume. Not one map had been
+// played, so nothing had happened for the price to be about.
+test("a stop does not sell before the fixture has started", async () => {
+  const worker = await import("../tools/rpi-live-exit-worker.mjs");
+
+  // The kickoff is read on the corroborated rule, not off a bare gameStartTime. Gamma
+  // populates that field on markets that are not fixtures at all -- a tweet-count market
+  // carried the tracking window's start there with every sports field blank -- so one of
+  // gameId, sportsMarketType, eventStartTime, teamAID or teamBID has to back it up.
+  assert.equal(worker.preciseKickoffAt({ gameStartTime: "2026-09-07T20:00:00Z" }), null,
+    "a lone gameStartTime is not proof of a fixture");
+  assert.equal(
+    worker.preciseKickoffAt({ gameStartTime: "2026-09-07T20:00:00Z", gameId: "abc" }),
+    "2026-09-07T20:00:00.000Z",
+  );
+  assert.equal(worker.preciseKickoffAt({ eventStartTime: "2026-09-07T20:00:00Z" }), "2026-09-07T20:00:00.000Z");
+  assert.equal(
+    worker.preciseKickoffAt({ events: [{ startDateIso: "2026-09-07T20:00:00Z" }] }),
+    "2026-09-07T20:00:00.000Z",
+  );
+  assert.equal(worker.preciseKickoffAt({}), null);
+  assert.equal(worker.preciseKickoffAt({ gameStartTime: "not a date", gameId: "abc" }), null);
+
+  const at = Date.parse("2026-09-07T19:26:00Z");
+  // The reported trade: the stop fired at 19:26 on a fixture scheduled later.
+  assert.equal(worker.stopIsBeforeKickoff({ kickoffAt: "2026-09-07T20:00:00Z", now: at }), true);
+  // Under way, so the stop is the owner's rule again and this one stands aside.
+  assert.equal(worker.stopIsBeforeKickoff({ kickoffAt: "2026-09-07T19:00:00Z", now: at }), false);
+  // An unknown kickoff ABSTAINS. Refusing on a missing date would switch every stop off on
+  // every market Gamma does not schedule, which is the opposite of a strict rule.
+  assert.equal(worker.stopIsBeforeKickoff({ kickoffAt: null, now: at }), false);
+  assert.equal(worker.stopIsBeforeKickoff({ kickoffAt: "", now: at }), false);
+  assert.equal(worker.stopIsBeforeKickoff({}), false);
+
+  const source = readFileSync(new URL("../tools/rpi-live-exit-worker.mjs", import.meta.url), "utf8");
+  // First of the stop's refusals. The others describe a book that moved against the
+  // position; this one says nothing has happened at all, and reporting a wide spread on a
+  // match that has not begun sends the reader after the book when the answer is the clock.
+  const stopBranch = source.slice(source.indexOf('if (reason === "stop") {'));
+  assert.ok(stopBranch.indexOf("stopIsBeforeKickoff") < stopBranch.indexOf("stopBookIsUntradable"),
+    "the kickoff is checked before the book");
+  assert.match(source, /declineKind: "before-kickoff",/);
+  // Cached, or a triggered stop would ask Gamma for an unmoving date once every twenty
+  // seconds for as long as the book stays down.
+  assert.match(source, /async function kickoffForToken\(state, tokenId, at\)/);
+  assert.match(source, /const KICKOFF_UNKNOWN_RECHECK_MS = 15 \* 60 \* 1000;/);
+  // A failed lookup is unknown, not "before kickoff": a Gamma outage must not become a
+  // reason to hold every position.
+  const lookup = source.slice(source.indexOf("async function kickoffForToken"));
+  assert.match(lookup.slice(0, 1200), /\} catch \{[\s\S]*?kickoff = null;/);
+});
+
+test("a stop before kickoff is refused the same way on paper", async () => {
+  const bot = await import("../tools/paper-trading-bot.mjs");
+  const worker = await import("../tools/rpi-live-exit-worker.mjs");
+
+  // One rule, two models: a paper portfolio that stops when the live worker would not is
+  // worse than no paper portfolio, because it is what the rule gets tried on.
+  const at = Date.parse("2026-09-07T19:26:00Z");
+  for (const kickoffAt of ["2026-09-07T20:00:00Z", "2026-09-07T19:00:00Z", null, "", "not a date"]) {
+    assert.equal(
+      bot.paperStopIsBeforeKickoff({ kickoffAt, now: at }),
+      worker.stopIsBeforeKickoff({ kickoffAt, now: at }),
+      `the two models disagree about a ${kickoffAt} kickoff`,
+    );
+  }
+
+  // And the paper side reads the kickoff off the market with the same corroboration, via
+  // the bot's own sportsScheduledEventDateDetail rather than a second copy of the rule.
+  assert.equal(bot.paperPreciseKickoffAt({}), null);
+  assert.equal(
+    bot.paperPreciseKickoffAt({ gameStartTime: "2026-09-07T20:00:00Z", gameId: "abc", question: "Team A vs Team B winner" }),
+    "2026-09-07T20:00:00.000Z",
+  );
+
+  const source = readFileSync(new URL("../tools/paper-trading-bot.mjs", import.meta.url), "utf8");
+  assert.match(source, /const detail = sportsScheduledEventDateDetail\(market\);/,
+    "the kickoff rule is read from the bot's own function, not re-derived");
+  assert.match(source, /if \(!detail\?\.precise \|\| !detail\.date\) return null;/,
+    "only a precise kickoff counts; a slug date is a whole-day bucket");
+  // Regardless of a crossing: a crossing before kickoff is a drift on a thin book, and
+  // booking a fill at the floor for it would record a loss the live account cannot take.
+  const decision = source.slice(source.indexOf("function equalRiskStopExitDecision"));
+  assert.ok(decision.indexOf("paperStopIsBeforeKickoff") < decision.indexOf("paperStopGapFloorPrice(floor)"),
+    "the kickoff is checked before the gap band");
+  assert.match(source, /kickoffAt: paperPreciseKickoffAt\(market\),/);
+});
+
 // Reported with the book in evidence: Games Total O/U 2.5 on a match that had not started,
 // $291 of volume in the whole market, an order book showing asks at 97-99c and "No bids" on
 // the other side. A position bought at 75% was left at about 25% for a 3.33 loss. Nothing had

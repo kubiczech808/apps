@@ -1072,6 +1072,84 @@ export function stopBookIsUntradable({
   return null;
 }
 
+// A stop must not sell before the fixture has started. Asked for as a strict rule, with the
+// trade and the market side by side: Counter-Strike A Great Chaos vs DNK, bought at 77.9%,
+// exited around 50% for a 1.79 loss -- and Polymarket showed M1, M2 and M3 all blank on a
+// market with 4.06K of volume. Not one map had been played. Nothing had happened to be
+// right or wrong about; the price had drifted on a thin book and the stop sold into the
+// drift.
+//
+// That is the general case, not one bad trade. Before kickoff there is no information for a
+// price to carry, so a stop can only be reacting to noise, and the loss it books is real
+// while the fall it reacted to is not.
+//
+// The kickoff is read on the same corroborated rule the paper bot uses
+// (sportsScheduledEventDateDetail): a bare gameStartTime is NOT proof of a fixture, because
+// Gamma populates it on non-sports markets too -- a tweet-count market carried the tracking
+// window's start there with every other sports field blank -- so one of gameId,
+// sportsMarketType, eventStartTime, teamAID or teamBID has to corroborate it.
+//
+// Slug-derived dates are deliberately not candidates. A date recovered from a slug is the
+// DAY a fixture belongs to, stretched to 23:59:59, and treating a whole-day bucket as a
+// kickoff would hold stops off for a whole day after the match had finished.
+export function preciseKickoffAt(market = {}) {
+  const events = Array.isArray(market?.events) ? market.events : [];
+  const corroborated = Boolean(
+    market?.gameId || market?.sportsMarketType || market?.eventStartTime
+    || market?.teamAID || market?.teamBID,
+  );
+  const candidates = [
+    corroborated ? market?.gameStartTime : null,
+    market?.eventStartTime,
+    ...events.flatMap((event) => [event?.gameStartTime, event?.eventStartTime, event?.startDateIso]),
+  ];
+  for (const candidate of candidates) {
+    const parsed = Date.parse(String(candidate || ""));
+    if (Number.isFinite(parsed)) return new Date(parsed).toISOString();
+  }
+  return null;
+}
+
+// True only when the kickoff is KNOWN and still ahead. An unknown kickoff abstains on
+// purpose: refusing on the absence of a date would switch every stop off on any market
+// Gamma does not schedule -- politics, and any fixture whose time it has not published --
+// which is the opposite of a strict rule.
+export function stopIsBeforeKickoff({ kickoffAt, now = Date.now() } = {}) {
+  const kickoff = Date.parse(String(kickoffAt || ""));
+  if (!Number.isFinite(kickoff)) return false;
+  const at = typeof now === "number" ? now : Date.parse(String(now));
+  return Number.isFinite(at) ? kickoff > at : false;
+}
+
+// How long a "no kickoff published" answer is trusted before Gamma is asked again. A known
+// kickoff never changes and is kept for the life of the process; an unknown one is re-read
+// occasionally because Gamma does fill schedules in late.
+const KICKOFF_UNKNOWN_RECHECK_MS = 15 * 60 * 1000;
+
+// The kickoff for a token, cached. A triggered stop re-runs every twenty seconds for as
+// long as the book stays down, and asking Gamma on every one of those passes would spend a
+// request a second on a date that does not move.
+async function kickoffForToken(state, tokenId, at) {
+  state.kickoffs = state.kickoffs || {};
+  const cached = state.kickoffs[tokenId];
+  if (cached) {
+    if (cached.at) return cached.at;
+    const checked = Date.parse(cached.checkedAt || "");
+    if (Number.isFinite(checked) && Date.parse(at) - checked < KICKOFF_UNKNOWN_RECHECK_MS) return null;
+  }
+  let kickoff = null;
+  try {
+    kickoff = preciseKickoffAt(await marketForToken(tokenId));
+  } catch {
+    // A lookup that failed says nothing about the fixture. Recorded as unknown so the rule
+    // abstains and the stop is decided by the other rules, rather than a Gamma outage
+    // becoming a reason to hold every position.
+    kickoff = null;
+  }
+  state.kickoffs[tokenId] = { at: kickoff, checkedAt: at };
+  return kickoff;
+}
+
 export function stopGapFloorPrice(stopPrice, tolerance = STOP_GAP_TOLERANCE, grid = STOP_GAP_PRICE_GRID) {
   const floor = number(stopPrice);
   if (floor == null || !(floor > 0)) return null;
@@ -1392,7 +1470,7 @@ function recordBookError(state, plan, error, at) {
 // the dashboard current enough to judge the band without turning the annotation into traffic.
 const DECLINED_STOP_PUBLISH_MS = 15 * 60 * 1000;
 
-function recordDeclinedStop(state, plan, { bestBid, gapFloor, at, reason, declineKind = "gapped", spread = null }) {
+function recordDeclinedStop(state, plan, { bestBid, gapFloor, at, reason, declineKind = "gapped", spread = null, kickoffAt = null }) {
   state.declinedStops = state.declinedStops || {};
   const previous = state.declinedStops[plan.tokenId];
   const worst = previous && Number.isFinite(Number(previous.worstBid))
@@ -1411,6 +1489,9 @@ function recordDeclinedStop(state, plan, { bestBid, gapFloor, at, reason, declin
     // reached -- and they want opposite responses, so the row has to say which.
     declineKind,
     spread,
+    // When the refusal is the clock rather than the book, the scheduled kickoff IS the
+    // explanation and the row is unreadable without it.
+    kickoffAt,
     firstAt: previous ? previous.firstAt : at,
     lastAt: at,
     count: previous ? (Number(previous.count) || 1) + 1 : 1,
@@ -1433,7 +1514,7 @@ function recordDeclinedStop(state, plan, { bestBid, gapFloor, at, reason, declin
     declineKind,
     tokenId: plan.tokenId,
     question: plan.question, outcome: plan.outcome,
-    stopPrice: plan.stopPrice, gapFloor, bestBid, spread, reason,
+    stopPrice: plan.stopPrice, gapFloor, bestBid, spread, kickoffAt, reason,
   });
   return due;
 }
@@ -1482,6 +1563,7 @@ async function recordDeclinedStopOnDashboard(state, plan, bestBid) {
         // has moved against the position, while a one-sided one has not moved at all.
         declineKind: row.declineKind || "gapped",
         declineSpread: row.spread ?? null,
+        declineKickoffAt: row.kickoffAt ?? null,
         declineReason: row.reason || null,
         riskTargetUsdc: row.riskTargetUsdc ?? plan.riskTargetUsdc ?? null,
         // What refusing to sell is currently costing, at the bid it refused. The band is a
@@ -1742,6 +1824,28 @@ async function checkOnce(context) {
       // Only for a stop. A settlement close takes the bid on purpose on a book quoting near
       // certainty, where one-sided is the normal shape and refusing it would strand the
       // capital this rule exists to free.
+      // Before the fixture starts, a stop can only be selling into noise. Checked FIRST of
+      // the stop's refusals, because it is the most fundamental of them: the others describe
+      // a book that has moved against the position, and this one says nothing has happened
+      // at all yet. Reporting a wide spread on a match that has not begun would send the
+      // reader after the book when the answer is the clock.
+      if (reason === "stop") {
+        const kickoffAt = await kickoffForToken(context.state, plan.tokenId, now);
+        if (stopIsBeforeKickoff({ kickoffAt, now })) {
+          const due = recordDeclinedStop(context.state, plan, {
+            bestBid: exitBid,
+            gapFloor: null,
+            at: now,
+            declineKind: "before-kickoff",
+            kickoffAt,
+            reason: `the fixture has not started yet -- it is scheduled for ${kickoffAt} -- so no`
+              + ` result has happened for this price to be about. A stop here would be selling`
+              + ` into a drift on a thin book rather than into a fall`,
+          });
+          if (due) await recordDeclinedStopOnDashboard(context.state, plan, exitBid);
+          continue;
+        }
+      }
       if (reason === "stop") {
         const untradable = stopBookIsUntradable({
           book: exitBook,

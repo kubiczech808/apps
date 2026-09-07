@@ -4328,7 +4328,13 @@ function stopDeclinedNote(trade = {}) {
   ).toLowerCase();
   const spread = numericOrNull(trade.exitDeclineSpread ?? trade.stopLossDeclineSpread);
   if (level == null && floor == null && bid == null && !kind) return "";
-  if (kind === "one-sided") {
+  if (kind === "before-kickoff") {
+    const kickoff = trade.exitDeclineKickoffAt || trade.stopLossDeclineKickoffAt || "";
+    lines.push(`\nIt was NOT sold: the match has not started yet`
+      + `${kickoff ? `, it is scheduled for ${formatDate(kickoff)}` : ""}. No result has happened`
+      + ` for this price to be about, so a stop here would be selling into a drift on a thin`
+      + ` book rather than into a fall. The stop arms itself once the fixture is under way.`);
+  } else if (kind === "one-sided") {
     lines.push(`\nIt was NOT sold: nobody is offering this outcome at all, so that bid is the`
       + ` only number in the market and nothing corroborates it. A stop priced off it would be`
       + ` selling into the absence of a counterparty rather than into a fall.`);

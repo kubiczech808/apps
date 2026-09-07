@@ -4026,6 +4026,27 @@ export function paperBidDepthShares(bids, atOrAbove = 0) {
 const PAPER_STOP_MAX_SPREAD = Math.max(0, Number(process.env.LIVE_EXIT_STOP_MAX_SPREAD ?? 0.03) || 0);
 const PAPER_STOP_MIN_DEPTH_FRACTION = Math.min(1, Math.max(0, Number(process.env.LIVE_EXIT_STOP_MIN_DEPTH_FRACTION ?? 1)));
 
+// The kickoff, only when it is a real one. sportsScheduledEventDateDetail already carries
+// the hard-won rule -- a bare gameStartTime is not proof of a fixture, and a slug date is a
+// whole-day bucket rather than a start time -- so this reads its `precise` flag rather than
+// re-deriving any of it. Null means unknown, and unknown abstains.
+export function paperPreciseKickoffAt(market = {}) {
+  const detail = sportsScheduledEventDateDetail(market);
+  if (!detail?.precise || !detail.date) return null;
+  const parsed = detail.date instanceof Date ? detail.date.getTime() : Date.parse(String(detail.date));
+  return Number.isFinite(parsed) ? new Date(parsed).toISOString() : null;
+}
+
+// A stop must not sell before the fixture has started. The live worker's rule, on the same
+// terms: true only when the kickoff is KNOWN and still ahead, because refusing on a missing
+// date would switch every stop off on every market Gamma does not schedule.
+export function paperStopIsBeforeKickoff({ kickoffAt, now = Date.now() } = {}) {
+  const kickoff = Date.parse(String(kickoffAt || ""));
+  if (!Number.isFinite(kickoff)) return false;
+  const at = typeof now === "number" ? now : Date.parse(String(now));
+  return Number.isFinite(at) ? kickoff > at : false;
+}
+
 export function paperStopBookIsUntradable({ bids, bestBid, bestAsk, exitPrice, shares } = {}) {
   const bid = Number(bestBid);
   const ask = Number(bestAsk);
@@ -4274,7 +4295,7 @@ export function paperStopGapFloorPrice(stopPrice, tolerance = PAPER_STOP_GAP_TOL
   return snapped > 0 ? snapped : raw;
 }
 
-function equalRiskStopExitDecision({ plan, bestBid, bestAsk = null, shares, feeRate = 0, feesEnabled = true, previousBid = null, bids = null } = {}) {
+function equalRiskStopExitDecision({ plan, bestBid, bestAsk = null, shares, feeRate = 0, feesEnabled = true, previousBid = null, bids = null, kickoffAt = null } = {}) {
   if (!plan?.protectable || !plan.requiresStop) return null;
   const bid = Number(bestBid);
   const size = Number(shares);
@@ -4308,6 +4329,22 @@ function equalRiskStopExitDecision({ plan, bestBid, bestAsk = null, shares, feeR
   // liquidation at whatever happened to be resting -- so below the band the stop declines and
   // the position is left to resolve. Only where the fill would be the raw bid: a crossing
   // fills AT the floor, which is inside the band by definition.
+  // Before the fixture starts, a stop can only be selling into noise: no result has
+  // happened for the price to be about. Checked FIRST of the refusals, and regardless of a
+  // crossing -- a crossing before kickoff is a drift on a thin book, and booking a fill at
+  // the floor for it would record a loss the live account is now forbidden to take.
+  if (paperStopIsBeforeKickoff({ kickoffAt })) {
+    return {
+      triggered: true,
+      declinedGap: true,
+      declineKind: "before-kickoff",
+      declineKickoffAt: kickoffAt,
+      stopPrice: Number(floor.toFixed(6)),
+      observedBid: Number(bid.toFixed(6)),
+      currentValueUsdc: Number(currentValue.toFixed(5)),
+    };
+  }
+
   const gapFloor = paperStopGapFloorPrice(floor);
   if (!executableAtFloor && gapFloor != null && bid > 0 && bid < gapFloor) {
     return {
@@ -5071,6 +5108,10 @@ async function markOpenTrade(trade, strategy = null) {
         // The depth behind the bid, so the paper stop refuses the same untradable book the
         // live worker refuses instead of booking a fill nothing could have matched.
         bids,
+        // And the kickoff, so it refuses a stop before the fixture has started for the same
+        // reason. Read off the market rather than the trade: a paper trade stores no
+        // kickoff, and the market is already in hand here.
+        kickoffAt: paperPreciseKickoffAt(market),
       });
       // Triggered and deliberately not sold. The position stays OPEN and is re-checked on
       // every pass, because a book that gapped on one look often comes back -- and closing it
@@ -5099,8 +5140,14 @@ async function markOpenTrade(trade, strategy = null) {
           // the row reads identically either way unless it says so.
           stopLossDeclineKind: equalStopDecision.declineKind || "gapped",
           stopLossDeclineSpread: equalStopDecision.declineSpread ?? null,
+          stopLossDeclineKickoffAt: equalStopDecision.declineKickoffAt ?? null,
           statusNote: `Stop reached at ${equalRiskPlan.stopPrice.toFixed(4)} and NOT sold: `
-            + (equalStopDecision.declineKind === "one-sided"
+            + (equalStopDecision.declineKind === "before-kickoff"
+              ? `the match has not started yet, it is scheduled for`
+                + ` ${equalStopDecision.declineKickoffAt}. No result has happened for this price to`
+                + ` be about, so a stop here would be selling into a drift on a thin book rather`
+                + ` than into a fall.`
+              : equalStopDecision.declineKind === "one-sided"
               ? `nobody is offering this outcome at all, so the ${bestBid.toFixed(4)} bid is the only`
                 + ` number in this market and nothing corroborates it. A stop priced off it would be`
                 + ` selling into the absence of a counterparty rather than into a fall.`

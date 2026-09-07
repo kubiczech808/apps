@@ -5081,11 +5081,14 @@ function live_exit_record_request(array $payload): array
         // enough capital behind the bid. They look identical on the row (a position still
         // open with its stop reached) and they mean opposite things about the market.
         $declineKind = strtolower(trim((string) ($payload['declineKind'] ?? 'gapped')));
-        $record['declineKind'] = in_array($declineKind, ['gapped', 'one-sided', 'wide-spread', 'thin-depth'], true)
+        $record['declineKind'] = in_array($declineKind, ['gapped', 'one-sided', 'wide-spread', 'thin-depth', 'before-kickoff'], true)
             ? $declineKind
             : 'gapped';
         $record['declineSpread'] = is_numeric($payload['declineSpread'] ?? null)
             ? round((float) $payload['declineSpread'], 6) : null;
+        // The scheduled kickoff, when the clock is what refused. Without it the row says a
+        // stop did not sell and cannot say the match had not begun.
+        $record['declineKickoffAt'] = compact_text($payload['declineKickoffAt'] ?? '', 40);
         $record['declineReason'] = compact_text($payload['declineReason'] ?? '', 400);
         $record['unrealizedPnlUsdc'] = is_numeric($payload['unrealizedPnlUsdc'] ?? null)
             ? round((float) $payload['unrealizedPnlUsdc'], 6) : null;
@@ -5223,6 +5226,7 @@ function live_state_with_exit_reasons(array $payload): array
             $positions[$index]['exitRiskTargetUsdc'] = $record['riskTargetUsdc'] ?? null;
             $positions[$index]['exitDeclineKind'] = $record['declineKind'] ?? 'gapped';
             $positions[$index]['exitDeclineSpread'] = $record['declineSpread'] ?? null;
+            $positions[$index]['exitDeclineKickoffAt'] = $record['declineKickoffAt'] ?? null;
             $positions[$index]['exitDeclineReason'] = $record['declineReason'] ?? null;
         }
         // The second half of the stop, so the closed row can explain that the opposite

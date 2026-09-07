@@ -7371,6 +7371,10 @@ test("equal stop: a watched position exits at its floor, not at the collapsed bi
     ${functionSource(bot, "netExitValueAtPrice")}
     ${functionSource(bot, "normalizeStopLossRiskMultiplier")}
     ${functionSource(bot, "paperStopGapFloorPrice")}
+    // The kickoff rule abstains without a kickoff, which is what this sandbox passes, so it
+    // is brought in rather than stubbed: stubbing it would hide the case where the rule
+    // stops abstaining and starts refusing every crossing.
+    ${functionSource(bot, "paperStopIsBeforeKickoff")}
     ${functionSource(bot, "equalRiskStopPlan")}
     ${functionSource(bot, "equalRiskStopExitDecision")}
     return { equalRiskStopPlan, equalRiskStopExitDecision, paperStopGapFloorPrice };
