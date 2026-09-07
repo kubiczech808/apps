@@ -1005,11 +1005,26 @@ async function submitProtectedExit(plan, { bestBidPrice = null } = {}) {
   // deadlocked neg-risk exits in the executor, and the same trap is here.
   if (typeof constraints.negRisk === "boolean") options.negRisk = constraints.negRisk;
 
+  // The amounts the last order was SIGNED with -- what the exchange itself saw, not what we
+  // asked for. Those are not the same number: the CLOB client rounds a SELL size down before
+  // signing, so a plan asking for 6.8472 shares is posted as 6.84, and every attempt to
+  // explain "invalid maker amount" so far reasoned about the number we passed in.
+  //
+  // Two rounds of fixes were aimed at that gap, and the first measurement refuted the rule
+  // they were built on. This closes the guessing: makerAmount and takerAmount are the two
+  // fields the error names, in the exact base units the exchange judged.
+  let signedAmounts = null;
   const sell = async (size, orderType) => {
     const signed = await client.createOrder(
       { tokenID: plan.tokenId, price, size, side: Side.SELL },
       options,
     );
+    const order = signed?.order || signed;
+    signedAmounts = {
+      requestedShares: size,
+      makerAmount: order?.makerAmount != null ? String(order.makerAmount) : null,
+      takerAmount: order?.takerAmount != null ? String(order.takerAmount) : null,
+    };
     return client.postOrder(signed, orderType, false);
   };
 
@@ -1062,14 +1077,17 @@ async function submitProtectedExit(plan, { bestBidPrice = null } = {}) {
   // factor: the same position on Games Total: O/U 3.5 was accepted at 0.45 and refused at
   // 0.46 minutes later, same size, same book side.
   //
-  // So the price is kept -- it is the whole point of a stop -- and the size walks down to
-  // the nearest one whose USDC leg is a whole number of cents.
+  // The rule itself is NOT known. The whole-cent rule this retry uses -- keep the price, walk
+  // the size down until the USDC leg lands on a whole cent -- was taken from the executor,
+  // and the first measurement refuted it: a settlement close of 6.8472 shares at 0.999 has a
+  // fractional-cent leg either way it is rounded, and the exchange accepted it. So the retry
+  // is a blind second attempt at a different size after a size-shaped refusal, which is worth
+  // making and is not an explanation.
   //
-  // Said plainly, because the rule is inferred from the exchange's behaviour rather than
-  // from its documentation: whole-cent is what the executor recovers with in production, and
-  // it is the best-evidenced rule available. Every refusal now records the price AND the
-  // size, so the next status read shows the product on both the refused and the accepted
-  // orders and can confirm or replace this rule with arithmetic instead of inference.
+  // What replaces the guessing is above: every order now records the makerAmount and
+  // takerAmount it was SIGNED with. Those are the two fields the error names, and until this
+  // commit nothing anywhere recorded either of them -- which is why two rounds of fixes were
+  // aimed at a number nobody had seen.
   let resizedForMakerAmount = null;
   if (!exitFilled(response) && makerAmountPrecisionRefusal(response)) {
     const safe = makerAmountSafeSize({ price, size });
@@ -1095,6 +1113,9 @@ async function submitProtectedExit(plan, { bestBidPrice = null } = {}) {
     // that took two rounds to make here.
     makerAmountUsdc: round(price * size, 6),
     resizedForMakerAmount,
+    // In the exchange's own base units, off the signed order. The row above is what we asked
+    // for; this is what was sent.
+    signedAmounts,
     // So the record says the rescue was partial rather than leaving the reader to infer it
     // from a size that does not match the position.
     plannedShares: planned,
@@ -1698,6 +1719,7 @@ async function checkOnce(context) {
       exitShares: response?.exitShares ?? null,
       makerAmountUsdc: response?.makerAmountUsdc ?? null,
       resizedForMakerAmount: response?.resizedForMakerAmount ?? null,
+      signedAmounts: response?.signedAmounts ?? null,
       response: { success: Boolean(response?.success), status: response?.status || null, error: response?.errorMsg || response?.error || null, orderId: response?.orderID || null },
     });
     if (accepted) {

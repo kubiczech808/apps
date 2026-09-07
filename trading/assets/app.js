@@ -12756,8 +12756,77 @@ function mergeUniqueByRun(rows = []) {
   return merged;
 }
 
+// Every stop-loss decision this portfolio has made, as run-log rows.
+//
+// Asked for: a per-portfolio log carrying "presne takova zprava ktera presne rekne co se
+// stalo -- na jake urovni s jakym p/l byla snaha o stop loss a jak to proc dopadlo". There is
+// already a run log per portfolio, so these go INTO it rather than into a second log beside
+// it: two run-log-shaped tabs would be worse than one, and this is the tab a reader is
+// already in when they ask what happened.
+//
+// Derived from the trades the dashboard already holds, on both sides. Nothing new is stored
+// and nothing is fetched, so a stop decision reaches the log at the moment it reaches the
+// position -- and a paper portfolio logs the same lines as the live one, which is the whole
+// point of testing a stop rule on paper first.
+function stopDecisionRunLogRows() {
+  const trades = isLiveMode()
+    ? [...livePositions(state.liveState, state.mode), ...liveClosedTrades(state.liveState, state.mode)]
+    : paperPortfolioTrades(selectedPaperPortfolio(state.botState || {}));
+  const rows = [];
+  for (const trade of trades) {
+    if (!trade || typeof trade !== "object") continue;
+    const market = `"${trade.question || trade.market || "-"}" / ${trade.outcome || "-"}`;
+    const level = numericOrNull(trade.exitStopPrice ?? trade.stopLossPrice ?? trade.stopPrice);
+    const at = (level != null ? `at ${probability(level)}` : "");
+
+    const declined = trade.exitReason === "stop-declined"
+      || String(trade.stopLossStatus || "").toUpperCase() === "DECLINED_GAPPED";
+    if (declined) {
+      const floor = numericOrNull(trade.exitGapFloor ?? trade.stopLossGapFloor);
+      const bid = numericOrNull(trade.exitBestBid ?? trade.stopLossDeclinedBid ?? trade.currentPrice);
+      const pnl = numericOrNull(trade.unrealizedPnlUsdc);
+      rows.push({
+        stopDecision: true,
+        action: "STOP_DECLINED",
+        runAt: trade.exitDeclinedSince || trade.stopLossTriggeredAt || trade.openedAt || null,
+        strategyId: trade.strategyId || trade.portfolioId || "",
+        humanReason: `Stop reached ${at} on ${market} and NOT sold:`
+          + `${bid != null ? ` the best bid was ${probability(bid)}` : ""}`
+          + `${floor != null ? `, below the ${probability(floor)} floor this stop will sell at` : ""}.`
+          + `${pnl != null ? ` At that bid the position is ${signedMoney(pnl)}.` : ""}`
+          + ` Left to resolve and re-checked on every pass.`,
+      });
+      continue;
+    }
+
+    const sold = trade.exitReason === "stop" || String(trade.status || "").toUpperCase() === "STOP_LOSS";
+    if (!sold) continue;
+    const bid = numericOrNull(trade.exitBestBid ?? trade.observedBidAtStop);
+    const fill = numericOrNull(trade.exitPrice ?? trade.currentPrice);
+    const pnl = numericOrNull(trade.realizedPnlUsdc);
+    const slip = level != null && fill != null ? level - fill : null;
+    rows.push({
+      stopDecision: true,
+      action: "STOP_SOLD",
+      runAt: trade.exitRecordedAt || trade.closedAt || trade.stopLossTriggeredAt || null,
+      strategyId: trade.strategyId || trade.portfolioId || "",
+      humanReason: `Stop ${at} on ${market} sold`
+        + `${fill != null ? ` at ${probability(fill)}` : ""}`
+        + `${bid != null ? ` (best bid ${probability(bid)})` : ""}.`
+        + `${pnl != null ? ` Realized ${signedMoney(pnl)}.` : ""}`
+        // The number that judges the stop: how far under the chosen level it actually got out.
+        + `${slip != null && slip > 0.0001 ? ` That is ${probability(slip)} below the level.` : ""}`,
+    });
+  }
+  return rows.filter((row) => row.runAt);
+}
+
 function currentPortfolioRunLog() {
-  if (isLiveMode()) return withRunningExecutionRow(liveRunLogRows());
+  // Interleaved by time with the execution runs, not appended: a stop that fired between two
+  // runs belongs between them, and that ordering is most of what makes the log readable.
+  if (isLiveMode()) {
+    return withRunningExecutionRow(sortRunLogRows([...liveRunLogRows(), ...stopDecisionRunLogRows()]));
+  }
   const portfolio = selectedPaperPortfolio(state.botState || {});
   const live = Array.isArray(portfolio.runLog) ? portfolio.runLog : [];
   // Once "load more" has paged in older history, merge it with whatever the live state's
@@ -12774,7 +12843,10 @@ function currentPortfolioRunLog() {
     });
     source = sortRunLogRows([...merged.values()]);
   }
-  const rows = sortRunLogRows(source.filter((row) => !isCadenceWaitRun(row)));
+  const rows = sortRunLogRows([
+    ...source.filter((row) => !isCadenceWaitRun(row)),
+    ...stopDecisionRunLogRows(),
+  ]);
   return withRunningExecutionRow(rows);
 }
 
@@ -12983,6 +13055,11 @@ function runActionClass(action) {
   // order, and reading it as green is what made the run log promise a position the
   // account did not hold.
   if (value === "PENDING_MATCH") return "warning";
+  // A stop that sold did its job, so it reads like any other completed action. A stop that
+  // fired and refused to sell is the one that wants attention: the position is still open
+  // and still falling, which is the state the owner asked to be told about.
+  if (value === "STOP_SOLD") return "";
+  if (value === "STOP_DECLINED") return "warning";
   return "";
 }
 
@@ -13192,6 +13269,12 @@ function renderRunLog() {
             <span>${runLogMessageMarkup(run)}</span>
             <span class="portfolio-run-source">${portfolioRunSource(run)}</span>
         `;
+        // A stop decision is not an execution run: there is no candidate list, no capital
+        // check and no batch behind it, so a detail button would open an empty modal. The
+        // whole of what it has to say is already in the message.
+        if (run.stopDecision) {
+          return `<div class="trade-batch portfolio-run-row portfolio-run-stop">${cells}</div>`;
+        }
         // A run still going has no decision to open, so it is not a detail button. It
         // links to its GitHub run instead, which is the only place with more to say.
         if (run.runningExecution) {

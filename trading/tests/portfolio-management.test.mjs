@@ -1202,6 +1202,15 @@ test("run log history: the dashboard merges loaded history with the live cap, ne
     ${extractFunction(APP, "isCadenceWaitRun")}
     ${extractFunction(APP, "runLogTimestamp")}
     ${extractFunction(APP, "sortRunLogRows")}
+    ${extractFunction(APP, "numericOrNull")}
+    ${extractFunction(APP, "money")}
+    ${extractFunction(APP, "signedMoney")}
+    ${extractFunction(APP, "probability")}
+    ${extractFunction(APP, "paperPortfolioTrades")}
+    // Live-only accessors. This exercises a paper portfolio, so they are not reached.
+    function livePositions() { return []; }
+    function liveClosedTrades() { return []; }
+    ${extractFunction(APP, "stopDecisionRunLogRows")}
     function withRunningExecutionRow(rows) { return rows; }
     ${extractFunction(APP, "currentPortfolioRunLog")}
     return currentPortfolioRunLog;
@@ -1236,6 +1245,49 @@ test("run log history: the dashboard merges loaded history with the live cap, ne
   assert.deepEqual(rows.map((r) => r.runAt), [
     "2026-08-12T00:00:00Z", "2026-08-10T00:00:00Z", "2026-08-05T00:00:00Z",
   ], "the fresh run leads, the overlap appears once, older history still follows");
+
+  // Asked for: a per-portfolio log saying what the stop loss tried and how it turned out.
+  // The run log is that log -- a stop that fired between two runs belongs BETWEEN them, not
+  // appended after the last one, because the ordering is most of what makes it readable.
+  const withStop = run({
+    ...state,
+    botState: {
+      paperPortfolios: {
+        moreProbable: {
+          ...state.botState.paperPortfolios.moreProbable,
+          trades: [
+            {
+              question: "Games Total: O/U 3.5", outcome: "Over",
+              stopLossStatus: "DECLINED_GAPPED", stopLossPrice: 0.49,
+              stopLossGapFloor: 0.44, stopLossDeclinedBid: 0.12,
+              stopLossTriggeredAt: "2026-08-11T00:00:00Z", unrealizedPnlUsdc: -2.74,
+            },
+            {
+              question: "Will Chelsea FC win?", outcome: "No",
+              status: "STOP_LOSS", stopPrice: 0.52, observedBidAtStop: 0.5,
+              currentPrice: 0.5, closedAt: "2026-08-06T00:00:00Z", realizedPnlUsdc: -1.1,
+            },
+          ],
+        },
+      },
+    },
+  })();
+  assert.deepEqual(withStop.map((r) => r.runAt), [
+    "2026-08-12T00:00:00Z", "2026-08-11T00:00:00Z", "2026-08-10T00:00:00Z",
+    "2026-08-06T00:00:00Z", "2026-08-05T00:00:00Z",
+  ], "interleaved by time with the execution runs, not appended");
+  const declined = withStop.find((row) => row.action === "STOP_DECLINED");
+  assert.match(declined.humanReason, /Stop reached at 49\.0% .* and NOT sold/);
+  assert.match(declined.humanReason, /best bid was 12\.0%, below the 44\.0% floor/);
+  assert.match(declined.humanReason, /position is \$-2\.74/);
+  const sold = withStop.find((row) => row.action === "STOP_SOLD");
+  assert.match(sold.humanReason, /Stop at 52\.0% .* sold at 50\.0%/);
+  assert.match(sold.humanReason, /Realized \$-1\.10/);
+  assert.match(sold.humanReason, /2\.0% below the level/,
+    "how far under the chosen level it got out is the number that judges the stop");
+  // Not execution runs: there is no candidate list or capital check behind them, so they are
+  // not detail buttons.
+  assert.ok(withStop.filter((row) => row.stopDecision).length === 2);
 });
 
 test("capital rebase: the accuracy note names pre-reset trades separately from early exits", () => {

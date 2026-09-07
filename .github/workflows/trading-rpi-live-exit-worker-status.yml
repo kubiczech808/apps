@@ -212,29 +212,38 @@ jobs:
                 + ` px ${text(event.exitPrice)} tick ${text(event.tickSize)}`
                 + ` bid ${text(event.bestBid)} ask ${text(event.bestAsk)} -> ${text(event.response)}`);
             }
-            // "invalid maker amount" is a complaint about an AMOUNT, and an amount has two
-            // factors. The reason lines above carry only the price, so two rounds of fixes
-            // were aimed at a number nobody had actually looked at. Accepted and refused
-            // orders are printed together here so the rule can be read off the arithmetic
-            // instead of inferred: if a whole-cent USDC leg is what separates them, every
-            // ACCEPTED row lands on a whole cent and no refused one does. If that does not
-            // hold, the rule is something else, and this is what says so.
+            // "invalid maker amount" names two fields, and until now nothing recorded either
+            // of them -- so two rounds of fixes were aimed at a number nobody had seen. The
+            // first measurement already refuted the rule they were built on: a settlement
+            // close of 6.8472 shares at 0.999 has a fractional-cent USDC leg however it is
+            // rounded, and the exchange ACCEPTED it.
+            //
+            // So this prints what was actually signed, in the exchange's own base units,
+            // beside what was asked for -- the client rounds a SELL size down before signing,
+            // which is exactly where the two diverge. Accepted and refused together, because
+            // the rule is whatever separates the two columns.
             const amountRows = history.filter((event) => /^(EXIT|SETTLEMENT_CLOSE)_(SUBMITTED|REJECTED)$/
-              .test(String(event.type || "")) && event.exitShares != null);
-            console.log(`\n   price x size on the orders that carry it (${amountRows.length} of ${history.length}):`);
+              .test(String(event.type || "")) && (event.exitShares != null || event.signedAmounts));
+            console.log(`\n   what was signed vs what was asked for (${amountRows.length} of ${history.length}):`);
             if (!amountRows.length) {
-              console.log("      (none yet -- the running worker predates size recording)");
+              console.log("      (none yet -- the running worker predates amount recording)");
             }
             for (const event of amountRows.slice(0, 24)) {
-              const px = Number(event.exitPrice);
-              const size = Number(event.exitShares);
-              const usdc = Number.isFinite(px) && Number.isFinite(size) ? px * size : NaN;
-              const cents = usdc * 100;
-              const wholeCent = Number.isFinite(cents) && Math.abs(cents - Math.round(cents)) <= 1e-7;
+              const signed = event.signedAmounts || {};
+              const maker = Number(signed.makerAmount);
+              const taker = Number(signed.takerAmount);
+              // Shares and USDC as the exchange holds them: six decimals, base units.
+              const shares = Number.isFinite(maker) ? maker / 1e6 : NaN;
+              const usdc = Number.isFinite(taker) ? taker / 1e6 : NaN;
+              const impliedPrice = Number.isFinite(shares) && shares > 0 ? usdc / shares : NaN;
               const verdict = /_SUBMITTED$/.test(event.type) ? "ACCEPTED" : "refused ";
-              console.log(`      ${verdict} ${String(event.exitPrice).padStart(7)} x ${String(event.exitShares).padStart(9)}`
-                + ` = ${Number.isFinite(usdc) ? usdc.toFixed(8) : "?"}`
-                + `  ${wholeCent ? "whole cent" : "FRACTIONAL"}`
+              console.log(`      ${verdict} px ${String(event.exitPrice).padStart(7)}`
+                + `  asked ${String(event.exitShares).padStart(9)}`
+                + `  signed maker ${String(signed.makerAmount ?? "-").padStart(10)}`
+                + ` taker ${String(signed.takerAmount ?? "-").padStart(10)}`
+                + `  = ${Number.isFinite(shares) ? shares.toFixed(6) : "?"} sh`
+                + ` for ${Number.isFinite(usdc) ? usdc.toFixed(6) : "?"}`
+                + `  implied px ${Number.isFinite(impliedPrice) ? impliedPrice.toFixed(6) : "?"}`
                 + `  resized ${text(event.resizedForMakerAmount)}`
                 + `  ${String(event.response?.error || event.response?.status || "").slice(0, 26)}`);
             }

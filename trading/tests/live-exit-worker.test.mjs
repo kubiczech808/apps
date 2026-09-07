@@ -797,8 +797,13 @@ test("a refused maker amount is retried at a size whose USDC leg is a whole cent
   // abandon a position the account still holds.
   assert.equal(worker.exitFailureIsTerminal({ error: "invalid maker amount" }), false);
 
-  // The rule the executor already recovers live orders with: keep the price, take the
-  // largest size at or below the plan whose price * size lands on a whole cent.
+  // The retry's rule, taken from the executor: keep the price, take the largest size at or
+  // below the plan whose price * size lands on a whole cent.
+  //
+  // Held to its own arithmetic here, NOT presented as the exchange's rule. Measurement
+  // refuted that: a 6.8472-share settlement close at 0.999 has a fractional-cent USDC leg
+  // however it is rounded, and the exchange accepted it. What the retry is worth is a second
+  // attempt at a different size after a size-shaped refusal.
   //
   // 0.46 needs the size in whole halves of a share -- 13.31 does not qualify, 13.00 does.
   assert.equal(worker.makerAmountSafeSize({ price: 0.46, size: 13.31 }), 13);
@@ -838,6 +843,19 @@ test("a refused maker amount is retried at a size whose USDC leg is a whole cent
   // this refusal while only one of its two factors was ever written down.
   assert.match(source, /exitShares: response\?\.exitShares \?\? null,/);
   assert.match(source, /makerAmountUsdc: response\?\.makerAmountUsdc \?\? null,/);
+
+  // And the two fields the error actually names, off the SIGNED order rather than off the
+  // request. They are different numbers -- the client rounds a SELL size down before signing,
+  // so a plan asking for 6.8472 shares is posted as 6.84 -- and reasoning about the request
+  // instead of the order is what made the last two attempts guesses.
+  assert.match(source, /makerAmount: order\?\.makerAmount != null \? String\(order\.makerAmount\) : null,/);
+  assert.match(source, /takerAmount: order\?\.takerAmount != null \? String\(order\.takerAmount\) : null,/);
+  assert.match(source, /signedAmounts: response\?\.signedAmounts \?\? null,/);
+  // Captured where the order is built, so a refusal carries it too -- a field recorded only
+  // on success would be absent from every row worth reading.
+  const builder = source.slice(source.indexOf("const sell = async (size, orderType)"));
+  assert.ok(builder.indexOf("signedAmounts = {") < builder.indexOf("client.postOrder"),
+    "the amounts have to be captured before the order is posted, or a refusal loses them");
 });
 
 // Asked for, retracting an earlier instruction: the stop should NOT sell at any cost. If it
