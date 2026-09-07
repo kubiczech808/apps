@@ -7638,6 +7638,22 @@ function shortlistBookSide(levels, pick) {
   return prices.length ? pick(...prices) : null;
 }
 
+// Shares bid at or above a price, summed over every qualifying level. The executor's
+// bidDepthShares, in the browser: a top level of 5 shares does not sell a 13-share position
+// however good its price is, so the extremes of the book cannot answer this.
+function shortlistBidDepthShares(levels, atOrAbove = 0) {
+  const floor = Number(atOrAbove);
+  let shares = 0;
+  for (const level of Array.isArray(levels) ? levels : []) {
+    const price = Number(level?.price ?? level?.p);
+    const size = Number(level?.size ?? level?.s) || 0;
+    if (!Number.isFinite(price) || !(price > 0)) continue;
+    if (Number.isFinite(floor) && price + 1e-9 < floor) continue;
+    shares += size;
+  }
+  return Number(shares.toFixed(6));
+}
+
 // "Refresh shortlist" means the price NOW, which is what a reader means by the word. It
 // used to mean "re-read the stored scrape": the rows came back from a scan that may be
 // minutes or hours old, and on an in-play market that is the difference between a tradable
@@ -7683,6 +7699,15 @@ async function refreshShortlistQuotesFromPolymarket(observations) {
       row.bestBid = bid;
       row.bestAsk = ask;
       row.spread = bid != null && ask != null ? Number(Math.max(0, ask - bid).toFixed(4)) : null;
+      // The capital behind the bid, which is the side an EXIT has to sell into. A tight spread
+      // on nothing is still tight: the market that prompted this had $291 of volume, asks on
+      // one side and no bids on the other, and passed both the volume and the spread gate.
+      //
+      // Measured at or above half the bid, matching the executor's rule. It measures against
+      // the price it is about to submit, which is within the spread of this one, so the two
+      // can disagree by a fraction of a cent right on the threshold -- the run stays
+      // authoritative and this is here so the list does not advertise the obvious cases.
+      row.bidDepthShares = bid != null && bid > 0 ? shortlistBidDepthShares(book.bids, bid / 2) : 0;
       row.quotedAt = at;
       quoted += 1;
     }
@@ -9625,6 +9650,24 @@ function portfolioCandidateFilterReasons(item, mode = state.mode) {
   const volumeFloor = minimumVolume != null && minimumVolume > 0 ? minimumVolume : DEFAULT_MIN_VOLUME_USDC;
   if (candidateVolume < volumeFloor) {
     reasons.push(`volume ${money(candidateVolume)} is below the ${money(volumeFloor)} minimum a live order needs`);
+  }
+  // And whether this position could be got OUT of, which volume and spread both fail to ask.
+  // The market that prompted this had $291 of volume with asks on one side and no bids on the
+  // other -- a tight spread on nothing -- and it passed every gate above before a stop
+  // liquidated the position for want of a counterparty.
+  //
+  // Only when a quote was actually read. A row that has never been quoted has said nothing
+  // about its book, and refusing it here would blame the row for the refresh not having run.
+  const quotedBid = numericOrNull(item.bestBid);
+  const bidDepth = numericOrNull(item.bidDepthShares);
+  if (item.quotedAt && quotedBid != null && quotedBid > 0 && bidDepth != null) {
+    const stake = normalizeRiskAllocation(config.stakeUsdc) ?? DEFAULT_RISK_ALLOCATION;
+    const neededShares = stake > 0 ? stake / quotedBid : 0;
+    if (neededShares > 0 && bidDepth + 1e-9 < neededShares) {
+      reasons.push(`the buyers show only ${bidDepth.toFixed(2)} shares at or above ${probability(quotedBid / 2)}`
+        + ` (half the ${probability(quotedBid)} bid) and this order needs ${neededShares.toFixed(2)},`
+        + ` so the position could not be sold if it fell`);
+    }
   }
   if (!Number.isFinite(selectedProbability)) {
     reasons.push(`missing ${probabilitySourceLabel(probabilitySource).toLowerCase()}`);

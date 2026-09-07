@@ -140,6 +140,60 @@ test("live history: one token traded twice is two trades, not one doubled trade"
     "and the doubled row is replaced rather than kept beside them");
 });
 
+// Asked for after a position bought at 75% was liquidated at about 25% on a market with $291
+// of volume whose book showed asks on one side and no bids on the other. Volume and spread
+// both passed -- a tight spread on nothing is still tight -- so the missing question is the
+// one an exit actually asks: is there capital behind the bid?
+test("entry: a candidate that cannot be exited is refused before it is bought", () => {
+  const levels = (rows) => rows.map(([price, size]) => ({ price, size }));
+
+  // Depth is summed over every level at or above the price, never read off the top: a 5-share
+  // top bid does not sell a 13-share position however good its price is.
+  assert.equal(executor.bidDepthShares(levels([[0.74, 5], [0.5, 40], [0.3, 100]]), 0.375), 45);
+  assert.equal(executor.bidDepthShares(levels([[0.74, 5]]), 0.375), 5);
+  assert.equal(executor.bidDepthShares(null, 0.375), 0);
+
+  const short = (bids, entryPrice, shares) => executor.exitLiquidityShortfall({
+    bids: levels(bids), entryPrice, shares,
+  });
+
+  // A book with real capital under the entry passes.
+  assert.equal(short([[0.74, 5], [0.5, 40]], 0.75, 6.6), null);
+  // The reported shape: no bids at all behind a 75% entry.
+  const none = short([], 0.75, 6.6);
+  assert.equal(none.availableShares, 0);
+  assert.equal(none.atPrice, 0.375);
+  assert.match(none.reason, /could not be sold if it fell/);
+  // Deep, but all of it above the entry -- which is no help on the way down.
+  const shallow = short([[0.74, 2]], 0.75, 6.6);
+  assert.equal(shallow.availableShares, 2);
+  assert.equal(shallow.neededShares, 6.6);
+  // Half the entry is the measuring line, matching the stop's own gap band rather than being
+  // a second arbitrary number.
+  assert.equal(short([[0.38, 10]], 0.75, 6.6), null, "0.38 is above the 0.375 line");
+  assert.equal(short([[0.37, 10]], 0.75, 6.6)?.availableShares, 0, "0.37 is below it");
+  // Nothing to judge is not a refusal: an unpriced or unsized candidate is somebody else's
+  // rejection, and answering it here would report the wrong cause.
+  assert.equal(short([[0.5, 40]], null, 6.6), null);
+  assert.equal(short([[0.5, 40]], 0.75, 0), null);
+
+  const source = readFileSync(new URL("../tools/live-order-executor.mjs", import.meta.url), "utf8");
+  // Asked with the size settled and the book already in hand, because the answer needs both.
+  assert.match(source, /const exitLiquidity = exitLiquidityShortfall\(\{\s*\n\s*bids: book\.bids,\s*\n\s*entryPrice: price,\s*\n\s*shares: size,/);
+  // The book keeps its levels now. Returning only the extremes is what left this unanswerable.
+  assert.match(source, /bids,\s*\n\s*asks,\s*\n\s*\};/);
+  // And the run states the rule it applied, so a rejection is not a threshold nobody can find.
+  assert.match(source, /exitLiquidityPriceFraction: EXIT_LIQUIDITY_PRICE_FRACTION,/);
+
+  // The browser shortlist applies the same measure, so the list stops advertising rows the
+  // run will refuse -- the disagreement that produced a whole run of "the list says READY,
+  // the run says SKIP" reports.
+  const app = readFileSync(new URL("../assets/app.js", import.meta.url), "utf8");
+  assert.match(app, /function shortlistBidDepthShares\(levels, atOrAbove = 0\)/);
+  assert.match(app, /row\.bidDepthShares = bid != null && bid > 0 \? shortlistBidDepthShares\(book\.bids, bid \/ 2\) : 0;/);
+  assert.match(app, /the buyers show only \$\{bidDepth\.toFixed\(2\)\} shares at or above/);
+});
+
 test("live history: only fully unfilled limit orders are retained as their own audit ledger", () => {
   const generatedAt = "2026-08-30T18:10:00Z";
   const history = sync.unfilledLimitOrderHistory({

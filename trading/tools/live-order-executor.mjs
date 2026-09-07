@@ -880,6 +880,69 @@ function bestBook(book) {
     bestBid: bidPrices.length ? Math.max(...bidPrices) : null,
     bestAsk: askPrices.length ? Math.min(...askPrices) : null,
     spread: bidPrices.length && askPrices.length ? Math.max(0, Math.min(...askPrices) - Math.max(...bidPrices)) : null,
+    // The levels, not only their extremes. This entry has to be exitable, and whether it is
+    // depends on how much capital sits behind the bid rather than on its price.
+    bids,
+    asks,
+  };
+}
+
+// How far below the entry the buyers have to still be there, and how much of the position
+// they have to be able to take.
+//
+// Asked for after a live position was liquidated by the absence of a counterparty rather than
+// by a fall: "ujisti se, ze prilezitost ma predpoklad z hlediska dostatecne likvidity uz pri
+// vyhodnoceni kandidata". Volume and spread did not catch it -- the market had $291 of volume
+// and a book with asks on one side and no bids on the other, which is a tight spread on
+// nothing.
+//
+// Half the entry price, matching the stop's own gap band, so the two settings are the same
+// shape rather than two arbitrary numbers: if this position halves, is there anybody to sell
+// it to? A market that cannot answer yes is one this portfolio cannot get out of.
+const EXIT_LIQUIDITY_PRICE_FRACTION = Math.min(1, Math.max(0, envNumber("LIVE_EXIT_LIQUIDITY_PRICE_FRACTION", 0.5)));
+// As a multiple of the position. 1 means the buyers must be able to take all of it.
+const EXIT_LIQUIDITY_SHARE_FRACTION = Math.max(0, envNumber("LIVE_EXIT_LIQUIDITY_SHARE_FRACTION", 1));
+
+export function bidDepthShares(bids, atOrAbove = 0) {
+  const floor = Number(atOrAbove);
+  const levels = Array.isArray(bids) ? bids : [];
+  let shares = 0;
+  for (const level of levels) {
+    const price = Number(level?.price);
+    const size = Number(level?.size) || 0;
+    if (!Number.isFinite(price) || !(price > 0)) continue;
+    if (Number.isFinite(floor) && price + 1e-9 < floor) continue;
+    shares += size;
+  }
+  return Number(shares.toFixed(6));
+}
+
+// Null when this candidate can be got out of; otherwise why not, in the words the run log
+// will carry.
+export function exitLiquidityShortfall({
+  bids,
+  entryPrice,
+  shares,
+  priceFraction = EXIT_LIQUIDITY_PRICE_FRACTION,
+  shareFraction = EXIT_LIQUIDITY_SHARE_FRACTION,
+} = {}) {
+  const entry = Number(entryPrice);
+  const size = Number(shares);
+  if (!Number.isFinite(entry) || !(entry > 0)) return null;
+  if (!Number.isFinite(size) || !(size > 0)) return null;
+  if (!(shareFraction > 0)) return null;
+  const at = Number((entry * priceFraction).toFixed(6));
+  const needed = Number((size * shareFraction).toFixed(6));
+  const available = bidDepthShares(bids, at);
+  if (available + 1e-9 >= needed) return null;
+  return {
+    atPrice: at,
+    neededShares: needed,
+    availableShares: available,
+    reason: `the buyers show only ${available.toFixed(2)} shares at or above ${(at * 100).toFixed(1)}%`
+      + ` (half this ${(entry * 100).toFixed(1)}% entry) and this order is ${needed.toFixed(2)} shares,`
+      + ` so the position could not be sold if it fell -- a stop here would be a liquidation`
+      + ` for want of a counterparty rather than a capped loss`,
   };
 }
 
@@ -3090,6 +3153,37 @@ async function revalidateEvaluation(
       currentPrice: price,
       minOrderSize,
       minOrderNotionalUsdc: Number(minimumCost.toFixed(5)),
+    };
+  }
+
+  // Can this position be got out of? Asked here, with the size settled and the book already
+  // in hand, because the answer depends on both.
+  //
+  // Asked for after a position bought at 75% was liquidated at about 25% on a market with
+  // $291 of volume whose book showed asks on one side and no bids on the other. Nothing had
+  // happened to the fixture. Volume and spread both passed -- a tight spread on nothing is
+  // still tight -- so neither of the existing gates could have caught it, and the missing
+  // question is the one an exit actually asks: is there capital behind the bid?
+  const exitLiquidity = exitLiquidityShortfall({
+    bids: book.bids,
+    entryPrice: price,
+    shares: size,
+  });
+  if (exitLiquidity) {
+    return {
+      candidate: evaluation,
+      eligible: false,
+      status: "REJECTED",
+      rejectReasons: [exitLiquidity.reason],
+      currentPrice: price,
+      currentBestBid: book.bestBid,
+      currentBestAsk: book.bestAsk,
+      currentSpread: book.spread,
+      // The numbers behind the refusal, so the row can be judged rather than believed.
+      exitLiquidityAtPrice: exitLiquidity.atPrice,
+      exitLiquidityNeededShares: exitLiquidity.neededShares,
+      exitLiquidityAvailableShares: exitLiquidity.availableShares,
+      minOrderSize,
     };
   }
 
@@ -5572,6 +5666,10 @@ async function main() {
       minAnnualReturn: MIN_ANNUAL_RETURN,
       maxSpread: MAX_SPREAD,
       minVolume24hr: MIN_VOLUME_24H,
+      // Published so a run states the exit-liquidity rule it applied rather than leaving a
+      // rejection to be read as a threshold nobody can find.
+      exitLiquidityPriceFraction: EXIT_LIQUIDITY_PRICE_FRACTION,
+      exitLiquidityShareFraction: EXIT_LIQUIDITY_SHARE_FRACTION,
       minNetYield: MIN_NET_YIELD,
       maxResolutionHours: MAX_RESOLUTION_HOURS,
       liveEventMode: LIVE_EVENT_MODE,
@@ -5634,6 +5732,10 @@ async function main() {
         minAnnualReturn: MIN_ANNUAL_RETURN,
         maxSpread: MAX_SPREAD,
         minVolume24hr: MIN_VOLUME_24H,
+      // Published so a run states the exit-liquidity rule it applied rather than leaving a
+      // rejection to be read as a threshold nobody can find.
+      exitLiquidityPriceFraction: EXIT_LIQUIDITY_PRICE_FRACTION,
+      exitLiquidityShareFraction: EXIT_LIQUIDITY_SHARE_FRACTION,
         minNetYield: MIN_NET_YIELD,
         maxResolutionHours: MAX_RESOLUTION_HOURS,
         liveEventMode: LIVE_EVENT_MODE,
