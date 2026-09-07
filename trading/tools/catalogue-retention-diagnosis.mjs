@@ -59,6 +59,32 @@ async function main() {
   const totals = scraped.json?.observationTotals || {};
   const rows = Array.isArray(scraped.json?.marketObservations) ? scraped.json.marketObservations : [];
 
+  // The scraped summary is PAGED now, so this response is one page rather than the
+  // catalogue. Every horizon below is measured off these rows, and reading a page as the
+  // retained set is not a small error: on the first run after paging shipped, section 4
+  // reported "furthest retained 0.06 d" and concluded the cap discards everything past an
+  // hour and a half. It discards nothing of the sort -- 0.06 d was simply where the first
+  // 1200 rows ended. That is the same mistake this tool already carries a note about
+  // higher up, one level down, so the pages are walked here.
+  const pageLimit = Math.max(1, num(scraped.json?.scrapedScopeLimit, 1200));
+  const pagedRows = [...rows];
+  if (scraped.json?.scrapedScopeTruncated === true) {
+    const scopeTotal = num(scraped.json?.scrapedScopeTotal, 0);
+    console.log(`walking the paged scraped catalogue: ${scopeTotal} rows in pages of ${pageLimit}`);
+    for (let offset = pageLimit; offset < scopeTotal; offset += pageLimit) {
+      const page = await measure(`${SCRAPED_STATE_URL}&offset=${offset}`, `scraped page @${offset}`)
+        .catch((error) => ({ error }));
+      if (page.error) {
+        console.log(`   !! page @${offset} failed: ${page.error.message}; horizons below are short`);
+        break;
+      }
+      const pageRows = Array.isArray(page.json?.marketObservations) ? page.json.marketObservations : [];
+      pagedRows.push(...pageRows);
+      if (page.json?.scrapedScopeTruncated !== true) break;
+    }
+    console.log(`   walked ${pagedRows.length} row(s) in total\n`);
+  }
+
   console.log("1. WHAT THE FILTER IS READING");
   console.log(`   observationTotals.scraped   ${num(totals.scraped ?? totals.active)}`);
   console.log(`   observationTotals.resolved  ${num(totals.resolved)}`);
@@ -132,7 +158,10 @@ async function main() {
   // is cutting markets no portfolio would have taken anyway.
   const HORIZONS = [1, 2, 3, 7, 30];
   const now = Date.now();
-  const activeRows = rows.filter((row) => String(row?.status || row?.selectionStatus || "").toUpperCase() !== "RESOLVED");
+  // pagedRows, not rows: the horizons describe the retained CATALOGUE, and rows is one page
+  // of it. Measuring them off a page is how this section came to report a 0.06-day retention
+  // horizon and conclude the cap throws away everything past ninety minutes.
+  const activeRows = pagedRows.filter((row) => String(row?.status || row?.selectionStatus || "").toUpperCase() !== "RESOLVED");
   const days = activeRows
     .map((row) => (Date.parse(row?.endDate || "") - now) / 86400000)
     .filter(Number.isFinite)
@@ -140,7 +169,7 @@ async function main() {
   const undated = activeRows.length - days.length;
 
   console.log(`\n4. DOES THE CAP CUT ANYTHING A PORTFOLIO COULD TRADE?`);
-  console.log(`   active rows in this response  ${activeRows.length} (${undated} with no usable end date)`);
+  console.log(`   active rows walked            ${activeRows.length} (${undated} with no usable end date)`);
   if (days.length) {
     console.log(`   soonest to resolve            ${days[0].toFixed(2)} d`);
     console.log(`   furthest retained             ${days[days.length - 1].toFixed(2)} d   <- the horizon the cap buys`);
