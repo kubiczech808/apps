@@ -706,8 +706,8 @@ test("exit refusals: the account's own answer ends the attempt, everything else 
   const source = readFileSync(new URL("../tools/rpi-live-exit-worker.mjs", import.meta.url), "utf8");
   assert.doesNotMatch(source, /getBalanceAllowance/,
     "the balance is never queried ahead of the sell");
-  assert.match(source, /let size = planned;\s*\n\s*let response = await sell\(size, OrderType\.FOK\);/,
-    "the first attempt offers the whole position");
+  assert.match(source, /let size = sellableSize\(planned\);[\s\S]{0,700}?let response = await sell\(size, OrderType\.FOK\);/,
+    "the first attempt offers the whole position, on the size grid the exchange signs it on");
 
   // The refusal carries the balance at the instant it rejected the order, which is as fresh
   // as this can be. 0.007221 shares against the 6.84 the plan asked for.
@@ -727,8 +727,10 @@ test("exit refusals: the account's own answer ends the attempt, everything else 
 
   // Floored, never rounded up -- asking for a hair more than the balance is the refusal
   // being answered -- and capped at the plan, because the account may hold the same token
-  // for another portfolio and only this one's position is being closed.
-  assert.match(source, /size = Math\.floor\(Math\.min\(planned, held\) \* 10000\) \/ 10000;/);
+  // for another portfolio and only this one's position is being closed. Floored onto the
+  // exchange's own two-decimal size grid, not to four decimals: the client signs on that
+  // grid, so anything finer is a number the order never carried.
+  assert.match(source, /size = sellableSize\(Math\.min\(planned, held\)\);/);
   assert.match(source, /if \(!\(held > 0\)\) \{[\s\S]{0,240}terminal: true/,
     "a position the account does not hold ends the attempt instead of repeating it");
 });
@@ -1301,9 +1303,55 @@ test("an exit record ends when the position it describes does", async () => {
   // Pruned from the positions actually held, and only after the queued orders have been
   // resolved -- the fill is the moment the position disappears.
   const pass = functionBody(source, "checkOnce");
-  const resolveAt = pass.indexOf("resolvePendingExits(context)");
-  const pruneAt = pass.indexOf("pruneSettledExits(context.state");
+  const resolveAt = pass.indexOf("resolvePendingExits(context, heldTokens)");
+  const pruneAt = pass.indexOf("pruneSettledExits(context.state, heldTokens)");
   assert.ok(resolveAt > 0 && pruneAt > resolveAt,
     "queued orders are resolved before their records could be pruned");
-  assert.match(pass, /pruneSettledExits\(context\.state, new Set\(plans\.map\(\(plan\) => String\(plan\.tokenId\)\)\)\);/);
+  // Both ask what the ACCOUNT holds, not what is watched: a position may be held and
+  // deliberately excluded from the watch list, and dropping its record would be wrong.
+  assert.match(pass, /const heldTokens = new Set\(livePositions\(context\.liveState\)/);
+});
+
+// The measurement that reframed "invalid maker amount". It was called dust and made
+// terminal, which was right about what it IS and wrong about where it comes from.
+//
+// Read off the retained history, eight pairs, no exception: a `delayed` order for 6.5733
+// shares is signed as 6.57, and about twenty seconds later -- the retry interval -- this
+// worker sent an order for exactly 0.0033 and was told "invalid maker amount". The residue
+// is asked minus floor(asked, 2) every single time, which means the queued order FILLED and
+// the retry was sizing itself against the remainder the exchange left behind.
+//
+// So the dust refusals were not an independent fault. They were the visible end of
+// recording a queued order as a rejection: 453 of the 500 retained events, and every one of
+// those exits sold without ever being recorded as sold.
+test("the dust an exit leaves behind is the exchange's two-decimal size grid", async () => {
+  const worker = await import("../tools/rpi-live-exit-worker.mjs");
+
+  // asked -> the dust the next attempt was refused for, straight off the production read.
+  const measured = [
+    [6.5733, 0.0033], [6.1111, 0.0011], [6.6621, 0.0021], [6.2531, 0.0031], [6.1875, 0.0075],
+  ];
+  for (const [asked, dust] of measured) {
+    const signed = worker.sellableSize(asked);
+    assert.ok(Math.abs((asked - signed) - dust) < 1e-9,
+      `${asked} shares sign as ${signed}, leaving ${asked - signed}, and ${dust} was refused`);
+  }
+
+  assert.equal(worker.sellableSize(6.5733), 6.57);
+  assert.equal(worker.sellableSize(6.5), 6.5, "an exact size is left alone");
+  assert.equal(worker.sellableSize(0.0033), 0, "dust floors to nothing, which is what it is");
+  // Never rounded up: asking for a hair more than the position is a balance refusal.
+  assert.equal(worker.sellableSize(6.999), 6.99);
+  assert.equal(worker.sellableSize(0), 0);
+  assert.equal(worker.sellableSize(null), 0);
+  assert.equal(worker.sellableSize(-1), 0);
+
+  const source = readFileSync(new URL("../tools/rpi-live-exit-worker.mjs", import.meta.url), "utf8");
+  const submit = functionBody(source, "submitProtectedExit");
+  // Both sizings go through the grid: the first offer and the retry after a balance refusal.
+  // The retry used to floor to four decimals, which is finer than the exchange signs.
+  assert.equal(submit.split("sellableSize(").length - 1, 2);
+  assert.doesNotMatch(submit, /Math\.floor\(Math\.min\(planned, held\) \* 10000\)/);
+  // A size that floors below the minimum is terminal rather than sent and refused.
+  assert.match(submit, /which is below the \$\{DUST_SHARES\} it will accept an order for/);
 });

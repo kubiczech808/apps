@@ -127,7 +127,7 @@ jobs:
           # force: three orders went out for one position inside 90 seconds -- 04:59:26,
           # 05:00:12, 05:00:53 -- because a queued order was recorded as a rejection and the
           # retry timer started on it. The first had filled.
-          LIVE_EXIT_PENDING_MATCH_MS=60000
+          LIVE_EXIT_PENDING_MATCH_MS=120000
           # And how often the exchange is asked what became of it. Not every pass: the pass is
           # one second, and each question is an authenticated round trip.
           LIVE_EXIT_PENDING_POLL_MS=5000

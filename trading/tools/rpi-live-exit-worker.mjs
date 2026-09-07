@@ -66,7 +66,11 @@ const RETRY_INTERVAL_MS = clampInteger(process.env.LIVE_EXIT_RETRY_INTERVAL_MS, 
 // So a queued order gets a window to settle in. Longer than the retry interval on purpose:
 // re-sending while an order may still match is the failure being fixed, and a stop that
 // waits one minute for an order it has already sent is not an unprotected stop.
-const PENDING_MATCH_WINDOW_MS = clampInteger(process.env.LIVE_EXIT_PENDING_MATCH_MS, 60000, 5000, 600000);
+//
+// 120s is a ceiling, not a wait: an order lookup that answers releases it in seconds, and
+// only an order nobody can account for runs the clock down. It is set here rather than
+// tuned by opinion, and the resolved events say which signal decided each one.
+const PENDING_MATCH_WINDOW_MS = clampInteger(process.env.LIVE_EXIT_PENDING_MATCH_MS, 120000, 5000, 600000);
 // How often the exchange is asked what became of a queued order. Not every pass: the pass is
 // one second, and asking costs an authenticated round trip -- sixty of them per queued order
 // would lengthen the very loop whose latency is the stop's reaction time.
@@ -819,6 +823,15 @@ async function authenticatedClient() {
   return { client, Side, OrderType };
 }
 
+// The exchange's size grid for a SELL. The CLOB client floors to two decimals before
+// signing, so this is the size an order will actually carry -- and asking for anything
+// finer only means the difference is left behind as dust.
+export function sellableSize(shares) {
+  const value = number(shares);
+  if (value == null || !(value > 0)) return 0;
+  return Math.floor(value * 100) / 100;
+}
+
 function exitFilled(response) {
   // A FOK exit is useful only after the CLOB confirms the whole order matched.
   // Treating a generic `live`/`delayed` acknowledgement as a fill would stop
@@ -1300,7 +1313,7 @@ async function submitProtectedExit(plan, { bestBidPrice = null } = {}) {
   // remaining stop plan.
   const planned = number(plan.shares);
   // Dust is not a position, and the exchange will not take an order for it: measured, every
-  // "invalid maker amount" refusal on this worker was an order for 0.0031 or 0.0034 shares.
+  // "invalid maker amount" refusal on this worker was an order for 0.0011 to 0.0075 shares.
   // The watch list already excludes them, so this is the position that fell to dust between
   // the plan and the order -- terminal, because the alternative is one refusal every twenty
   // seconds for the rest of the day.
@@ -1312,7 +1325,26 @@ async function submitProtectedExit(plan, { bestBidPrice = null } = {}) {
         + ` below the ${DUST_SHARES} the exchange will accept an order for`,
     };
   }
-  let size = planned;
+  // Asked for on the grid the exchange will sign it on, because the client floors a SELL size
+  // to two decimals and the difference is not cosmetic.
+  //
+  // Measured across every sized order in the retained history, eight for eight: an order for
+  // 6.5733 shares is signed as 6.57 and 0.0033 is left behind, and twenty seconds later this
+  // worker sent an order for exactly that 0.0033 and was told "invalid maker amount". The
+  // residue is asked minus floor(asked, 2) every single time.
+  //
+  // Sending the floored size does not remove the residue -- the exchange's size grid does
+  // that -- but it makes the record honest, and the size we asked for is now the size an
+  // order lookup can be compared against.
+  let size = sellableSize(planned);
+  if (!(size >= DUST_SHARES)) {
+    return {
+      success: false, terminal: true, exitPrice: price, tickSize: constraints.tickSize,
+      plannedShares: planned, heldShares: null,
+      error: `${planned} shares floor to ${size} on the exchange's two-decimal size grid,`
+        + ` which is below the ${DUST_SHARES} it will accept an order for`,
+    };
+  }
   let response = await sell(size, OrderType.FOK);
   // Only when the FOK is DECIDED and did not fill. A queued FOK has not failed yet -- sending
   // the FAK on top of it is a second live order for the same shares, which is the duplicate
@@ -1339,7 +1371,7 @@ async function submitProtectedExit(plan, { bestBidPrice = null } = {}) {
     // Floored, never rounded up: asking for a hair more than the balance is the refusal
     // being answered. Capped at the plan as well, because the account may hold the same
     // token for another portfolio and only this one's position is being closed.
-    size = Math.floor(Math.min(planned, held) * 10000) / 10000;
+    size = sellableSize(Math.min(planned, held));
     if (!(size > 0)) {
       return {
         success: false, terminal: true, exitPrice: price, tickSize: constraints.tickSize,
@@ -1549,7 +1581,8 @@ async function afterExitFilled(context, plan, { reason, response, event = {}, at
 // for the same reason the reverses are: a queued order that filled has already removed the
 // position from the account, so nothing in the plan list represents it any more and the
 // pass below would never look at it again.
-async function resolvePendingExits(context) {
+async function resolvePendingExits(context, heldTokenIds = null) {
+  const held = heldTokenIds instanceof Set ? heldTokenIds : null;
   const entries = Object.entries(context.state.exits || {})
     .filter(([, record]) => record?.pending?.orderId);
   for (const [tokenId, record] of entries) {
@@ -1561,7 +1594,14 @@ async function resolvePendingExits(context) {
     if (!due && pendingExitIsOpen(record, Date.now())) continue;
     pending.checkedAt = new Date().toISOString();
     const order = await lookupOrder(pending.orderId);
-    const outcome = pendingOrderOutcome(order, { requestedShares: pending.exitShares });
+    let outcome = pendingOrderOutcome(order, { requestedShares: pending.exitShares });
+    // The account is the second witness, and often the only one: a filled FOK is not an OPEN
+    // order, so the lookup that answers "is it still resting" cannot distinguish a fill from
+    // a cancel. The position no longer being held is not ambiguous -- an order to sell it
+    // was on the exchange, and it is gone.
+    if (outcome.kind === "unknown" && held && !held.has(String(tokenId))) {
+      outcome = { kind: "filled", filled: true, sizeMatched: pending.exitShares ?? null, via: "position" };
+    }
     const now = new Date().toISOString();
     if (outcome.kind === "filled") {
       record.pending = null;
@@ -1577,7 +1617,10 @@ async function resolvePendingExits(context) {
         exitPrice: pending.exitPrice ?? null,
         exitShares: outcome.sizeMatched ?? pending.exitShares ?? null,
         queuedSince: pending.since,
-        reason: `the order the exchange queued has matched; it was recorded as queued at ${pending.since}`,
+        resolvedVia: outcome.via || "order",
+        reason: outcome.via === "position"
+          ? `the order the exchange queued at ${pending.since} filled: the account no longer holds this position`
+          : `the order the exchange queued at ${pending.since} has matched`,
       });
       await afterExitFilled(context, pending.plan || { tokenId }, {
         reason: pending.reason,
@@ -1843,9 +1886,6 @@ async function checkOnce(context) {
   // protective SELL already matched, so the position no longer appears in the live state
   // the plans below are built from.
   await retryPendingReversals(context);
-  // And orders the exchange queued, for the same reason: if one has matched, the position it
-  // sold is already gone from the live state below.
-  if (MODE === "live" && CONFIRM_LIVE) await resolvePendingExits(context);
   if (!context.liveState || Date.now() - context.liveStateFetchedAt >= STATE_REFRESH_MS) {
     context.liveState = await fetchJson(`${LIVE_STATE_URL}${LIVE_STATE_URL.includes("?") ? "&" : "?"}exitWorkerAt=${Date.now()}`, "live state");
     context.liveStateFetchedAt = Date.now();
@@ -1914,6 +1954,18 @@ async function checkOnce(context) {
     })
     .filter(Boolean);
 
+  // What the account actually holds, which is not the same as what is watched: a position
+  // may be held and deliberately excluded from the watch list. Both the questions below are
+  // about the position existing at all, so they ask this rather than the plan list.
+  const heldTokens = new Set(livePositions(context.liveState)
+    .map((position) => String(position.tokenId || position.assetId || ""))
+    .filter(Boolean));
+
+  // Orders the exchange queued and has not decided. Resolved here, after the live state, so
+  // the account itself can answer: a filled FOK is not an OPEN order, so the order lookup
+  // cannot tell a fill from a cancel, and the position being gone can.
+  if (MODE === "live" && CONFIRM_LIVE) await resolvePendingExits(context, heldTokens);
+
   // Exit records for positions the account no longer holds are dropped here.
   //
   // Nothing ever removed them, and they are terminal by design -- "the account no longer
@@ -1922,11 +1974,13 @@ async function checkOnce(context) {
   // a market re-entered later inherits a terminal row from its previous life and its stop is
   // then filtered out of every pass without ever being tried. A position with no stop is the
   // failure this whole file exists to prevent, so the record ends when the position does.
+  // Measured on the Pi: 133 records retained, three positions watched, the oldest three days
+  // old.
   //
   // Never a queued one: a pending order is precisely the case where the position vanishes
   // from the account BEFORE the record has done its job, which is how a filled queue gets
-  // annotated at all.
-  pruneSettledExits(context.state, new Set(plans.map((plan) => String(plan.tokenId))));
+  // annotated at all. resolvePendingExits above runs first for that reason.
+  pruneSettledExits(context.state, heldTokens);
 
   // Every watched book is read AT ONCE, and only then are the triggers acted on.
   //
@@ -2244,6 +2298,14 @@ async function checkOnce(context) {
         bestBidPrice: currentBestBid,
         bestAskPrice: currentBestAsk,
       });
+    } else if (queued) {
+      // The account is asked to refresh NOW rather than when the fill is noticed, because
+      // the position disappearing IS how the fill gets noticed when the order lookup cannot
+      // say -- a filled kill order is not an open order. Same dispatch a fill would make,
+      // and measured on this account every queued exit filled, so it is not a wasted one.
+      context.liveStateFetchedAt = 0;
+      const sync = await notifyAccountSync();
+      if (sync.attempted && !sync.ok) recordEvent(context.state, { at: new Date().toISOString(), type: "POST_EXIT_SYNC_ERROR", tokenId: plan.tokenId, error: sync.error });
     }
   }
   await persistState(context);
