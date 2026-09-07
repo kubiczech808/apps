@@ -704,16 +704,26 @@ function trading_storage_observations_upsert(array $items): int
     return $count;
 }
 
-function trading_storage_observations_fetch(string $lifecycle, int $limit = 0): array
+function trading_storage_observations_fetch(string $lifecycle, int $limit = 0, int $offset = 0): array
 {
     $pdo = trading_storage_pdo();
     if (!$pdo instanceof PDO) {
         return [];
     }
     trading_storage_bootstrap($pdo);
-    $sql = 'SELECT payload FROM trading_observations WHERE lifecycle = :lifecycle ORDER BY updated_at DESC';
+    // The id tie-break is what makes the order total, and paging needs it: updated_at
+    // alone has thousands of ties on this table -- one scan writes a whole page inside a
+    // single transaction -- and the database is free to return tied rows in a different
+    // order for each page. A walk over a non-total order silently misses and repeats rows.
+    $sql = 'SELECT payload FROM trading_observations WHERE lifecycle = :lifecycle'
+        . ' ORDER BY updated_at DESC, id DESC';
     if ($limit > 0) {
         $sql .= ' LIMIT ' . min(100000, $limit);
+        // OFFSET is only legal after LIMIT, so an offset on its own would quietly serve
+        // the whole table from row zero -- the failure this paging exists to avoid.
+        if ($offset > 0) {
+            $sql .= ' OFFSET ' . max(0, $offset);
+        }
     }
     $statement = $pdo->prepare($sql);
     $statement->execute(['lifecycle' => $lifecycle]);

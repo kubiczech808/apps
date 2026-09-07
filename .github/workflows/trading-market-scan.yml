@@ -75,7 +75,7 @@ jobs:
       # is now published as separate segment files, so they are sized by what a
       # response can carry: measured at 5000 active + 3000 resolved, the heaviest
       # endpoint (scraped) peaks at 66 MB, inside a 128 MB limit.
-      PAPER_MARKET_OBSERVATION_RETAIN_LIMIT: "5000"
+      PAPER_MARKET_OBSERVATION_RETAIN_LIMIT: "8000"
       PAPER_MARKET_SCAN_AUDIT_ROW_LIMIT: "750"
       PAPER_MARKET_SCAN_HISTORY_LIMIT: "20"
       PAPER_MARKET_SCAN_AUDIT_HISTORY_LIMIT: "3"

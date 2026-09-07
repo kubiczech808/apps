@@ -2607,8 +2607,14 @@ test("state segments: api.php loads only the segments a summary reads", async ()
   assert.match(api, /'scanHistory' => \['marketScanHistory'\]/);
 
   // Every state read must declare its segments; an undeclared one decodes the lot.
-  // Comments and the compact_state_payload() helper are not call sites.
-  const reads = (api.match(/(?<![\w])state_payload\([^;\n]*/g) || [])
+  // Comments and the compact_state_payload() helper are not call sites, and neither is the
+  // definition -- which now spans several lines, so excluding it by what FOLLOWS the paren
+  // stopped working and read as a call with no segments. It is excluded by the `function`
+  // in front of it instead, which is what actually distinguishes the two.
+  // Up to the statement's own semicolon, newlines included: a call with enough arguments
+  // to wrap was captured as the bare `state_payload(` by a line-bounded pattern and then
+  // failed for declaring no segments, which is a formatting complaint dressed as a finding.
+  const reads = (api.match(/(?<![\w])(?<!function )state_payload\([^;]*/g) || [])
     .filter((call) => !/^state_payload\((?:\)|string)/.test(call));
   assert.ok(reads.length >= 3, `expected at least three state reads, found ${reads.length}: ${reads.join(" | ")}`);
   for (const call of reads) {
@@ -3051,7 +3057,18 @@ test("state segments: retention is not silently throttled by workflow env", asyn
       `${name} must not cap resolved history`);
     const resolved = Number.NaN;
     if (Number.isFinite(active)) {
-      assert.ok(active >= 5000, `${name} throttles the active catalogue to ${active}`);
+      // 8000, raised from 5000 once the scraped response was paged. At 5000 the retained
+      // set was pinned exactly to the cap -- net change 0 on most of twelve consecutive
+      // scans -- and reached only 6.44 days while DEFAULT_MAX_RESOLUTION_HOURS is seven,
+      // so the cap was discarding markets inside the horizon the portfolios trade.
+      //
+      // Asserted as a floor AND against the bot's own default, because the whole point of
+      // this test is that a workflow pin silently overrides the default: raising one
+      // without the other changes nothing in production, which is how the resolved cap
+      // survived being "fixed".
+      assert.ok(active >= 8000, `${name} throttles the active catalogue to ${active}`);
+      assert.equal(active, bot.MARKET_OBSERVATION_RETAIN_LIMIT ?? active,
+        `${name} pins ${active} while the bot defaults to ${bot.MARKET_OBSERVATION_RETAIN_LIMIT}`);
     }
     if (Number.isFinite(resolved)) {
       assert.ok(resolved >= 3000, `${name} throttles resolved history to ${resolved}, so it cannot accumulate`);
@@ -5314,9 +5331,34 @@ test("scraped counts: the UI reports the archive, not the page it was served", a
   // and the count is the total -- otherwise the labels shrink as the archive grows,
   // which reads as records disappearing.
   assert.match(api, /\$resolvedServeLimit = 3000;/);
-  assert.match(api, /'observationTotals' => state_observation_totals\(\$data\)/,
+  assert.match(api, /\$totals = state_observation_totals\(\$data\);/,
     "the true totals must be served alongside the page");
+  assert.match(api, /'observationTotals' => \$totals \+ \[/);
   assert.match(api, /'resolvedTruncated' => \$resolvedTruncated/);
+
+  // The active catalogue is served in pages now, so the page has to say where it sits and
+  // whether more remains. A short page and the end of the catalogue are otherwise the same
+  // response, and the walk would stop wherever the active-row filter thinned one out.
+  assert.match(api, /const SCRAPED_SCOPE_PAGE_LIMIT = 1200;/);
+  assert.match(api, /'scrapedScopeOffset' => \$executionOffset,/);
+  assert.match(api, /'scrapedScopeTotal' => \$activeTotal,/);
+  assert.match(api, /'scrapedScopeTruncated' => \$activeTotal > \$executionOffset \+ SCRAPED_SCOPE_PAGE_LIMIT,/);
+  // The total comes off the COUNT query, never off the page.
+  assert.match(api, /\$activeTotal = max\(0, \(int\) \(\$totals\['scraped'\] \?\? \$totals\['active'\] \?\? 0\)\);/);
+  // Resolved rows ride the first page only. Appending them to every page would send three
+  // thousand rows once per page, which is worse than the single large response paging replaced.
+  assert.match(api, /\$resolved = \$executionOffset > 0 \? \[\] : array_values\(array_filter\(/);
+  // And the database is asked for one page, so the decode is bounded as well as the response.
+  assert.match(api, /trading_storage_observations_fetch\('SCRAPED', \$observationsLimit, \$observationsOffset\)/);
+
+  // The browser walks the pages into the same array every filter and tab count reads, so
+  // nothing downstream has to learn about paging -- and it dedupes, because a scan writing
+  // between two requests shifts the rows under the offset.
+  assert.match(app, /async function walkRemainingScrapedPages\(firstPage, options = \{\}\)/);
+  assert.match(app, /if \(summary === "scraped" && scrapedState\?\.scrapedScopeTruncated === true\)/);
+  assert.match(app, /if \(key && seen\.has\(key\)\) continue;/);
+  assert.match(app, /const SCRAPED_PAGE_WALK_LIMIT = 24;/,
+    "a server that misreports the last page must cost a bounded number of requests");
   assert.match(api, /'scraped' => \$active/,
     "the active scraped count must be an explicit server total, not a browser page count");
 

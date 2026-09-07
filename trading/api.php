@@ -402,15 +402,30 @@ function execution_dispatch_failure_records(string $key): array
     return $records;
 }
 
-function state_payload(string $target, array $segments = ['observations', 'evaluations'], ?string $selectedStrategyId = null): array
-{
+function state_payload(
+    string $target,
+    array $segments = ['observations', 'evaluations'],
+    ?string $selectedStrategyId = null,
+    int $observationsLimit = 0,
+    int $observationsOffset = 0
+): array {
     if (trading_storage_is_active()) {
         $document = trading_storage_document_get('state:' . $target);
         if ($document === null) {
             respond(['ok' => false, 'error' => 'Trading database state is not available yet'], 503);
         }
         if (in_array('observations', $segments, true)) {
-            $document['marketObservations'] = trading_storage_observations_fetch('SCRAPED');
+            // One page of the active catalogue, not all of it. Decoding every row into
+            // memory before compacting it is the cost that put a ceiling on the cap: the
+            // response size is one problem and the decode is the other, and paging only
+            // the response would leave the second one exactly where it was.
+            //
+            // Zero means the whole lifecycle, which is what every caller other than the
+            // scraped list wants -- the refresh worker merges one quote into the complete
+            // set and must not be handed a page.
+            $document['marketObservations'] = $observationsLimit > 0
+                ? trading_storage_observations_fetch('SCRAPED', $observationsLimit, $observationsOffset)
+                : trading_storage_observations_fetch('SCRAPED');
         }
         if (in_array('resolvedObservations', $segments, true)) {
             $document['marketObservations'] = array_merge(
@@ -1934,6 +1949,10 @@ function execution_scope_sort_value(array $item, array $config): float
 }
 
 const EXECUTION_SCOPE_PAGE_LIMIT = 1200;
+// The same width for the scraped list, measured rather than chosen: 1200 compacted rows is
+// about 3 MB, which the shared host serves in roughly a second. The whole active catalogue
+// in one response was 21.32 MB in 2511 ms and it is what held the retention cap at 5000.
+const SCRAPED_SCOPE_PAGE_LIMIT = 1200;
 
 function scoped_execution_observations(array $observations, ?string $strategyId, int $offset = 0): array
 {
@@ -2538,10 +2557,23 @@ function compact_state_payload(string $target, array $data, string $summary, ?st
     if ($summary === 'scraped') {
         $observations = is_array($data['marketObservations'] ?? null) ? $data['marketObservations'] : [];
         $active = array_values(array_filter($observations, static fn($item): bool => is_array($item) && is_active_scraped_market_observation($item)));
+        // Who applied the page. With the database serving, state_payload asked it for one
+        // page and the offset is already spent -- slicing again here would return an empty
+        // page for every offset past the first. Without it the segment files carry the whole
+        // catalogue, and this is the only place the page can be taken, so a walk would
+        // otherwise receive the SAME full list for every offset and loop on duplicates.
+        if (!trading_storage_is_active()) {
+            $active = array_slice($active, $executionOffset, SCRAPED_SCOPE_PAGE_LIMIT);
+        }
         // Resolved markets belong in this view too: the Resolved tab lists them and
         // shows their count. They are appended rather than merged into $active so the
         // active catalogue keeps its own ordering.
-        $resolved = array_values(array_filter(
+        //
+        // First page only. The active catalogue is paged now, and appending the same
+        // resolved rows to every page would send them once per page -- three thousand rows
+        // multiplied by however many pages the walk takes, which is worse than the single
+        // large response the paging replaced.
+        $resolved = $executionOffset > 0 ? [] : array_values(array_filter(
             $observations,
             static fn($item): bool => is_array($item)
                 && !is_active_scraped_market_observation($item)
@@ -2560,9 +2592,18 @@ function compact_state_payload(string $target, array $data, string $summary, ?st
         // total regardless, so the tab labels keep growing while the list serves the
         // most recent page of it.
         $resolvedServeLimit = 3000;
-        $resolvedTruncated = count($resolved) > $resolvedServeLimit;
+        $resolvedTruncated = $executionOffset > 0
+            ? false
+            : count($resolved) > $resolvedServeLimit;
         $resolved = array_slice($resolved, 0, $resolvedServeLimit);
         $active = array_merge($active, $resolved);
+        $totals = state_observation_totals($data);
+        // From the COUNT query when the database is serving, so the walk is driven by the
+        // true size of the catalogue rather than by how many rows survived this page's
+        // active-row filter -- reading it off the page is what would make a thinned page
+        // look like the end of the list. On the file fallback the manifest count plays the
+        // same part, and a pre-segmentation state counts its own inline rows.
+        $activeTotal = max(0, (int) ($totals['scraped'] ?? $totals['active'] ?? 0));
         $scanHistory = is_array($data['marketScanHistory'] ?? null)
             ? array_values(array_filter($data['marketScanHistory'], 'is_array'))
             : [];
@@ -2577,7 +2618,15 @@ function compact_state_payload(string $target, array $data, string $summary, ?st
                 static fn($item): array => is_array($item) ? compact_market_observation($item) : [],
                 $active
             ),
-            'observationTotals' => state_observation_totals($data) + ['resolvedTruncated' => $resolvedTruncated],
+            'observationTotals' => $totals + ['resolvedTruncated' => $resolvedTruncated],
+            // Where this page sits, how wide a page is, and whether more of the active
+            // catalogue remains. Without these a caller cannot tell a short page from the
+            // end of the catalogue, and the browser would stop walking wherever the
+            // active-row filter happened to thin a page out.
+            'scrapedScopeOffset' => $executionOffset,
+            'scrapedScopeLimit' => SCRAPED_SCOPE_PAGE_LIMIT,
+            'scrapedScopeTotal' => $activeTotal,
+            'scrapedScopeTruncated' => $activeTotal > $executionOffset + SCRAPED_SCOPE_PAGE_LIMIT,
             'marketScan' => is_array($data['marketScan'] ?? null) ? $data['marketScan'] : [],
             'marketScanHistory' => $scanHistory,
             'marketDetailsMode' => 'compact',
@@ -5872,12 +5921,25 @@ try {
         $target = (string) ($_GET['target'] ?? '');
         $summary = (string) ($_GET['summary'] ?? '');
         $strategyId = isset($_GET['strategy_id']) ? (string) $_GET['strategy_id'] : null;
-        // Which page of the execution scope to serve. Only the execution summary reads it;
-        // every other view ignores it.
+        // Which page to serve. The execution and scraped summaries both read it; every
+        // other view ignores it.
         $executionOffset = max(0, (int) ($_GET['offset'] ?? 0));
+        // The scraped list is the one view that reads the whole active catalogue, so it is
+        // the one that has to be paged: measured on production it carried 8001 rows in a
+        // 21.32 MB response, which is what stopped the retention cap from being raised.
+        // Requesting a page bounds the decode as well as the response -- paging only the
+        // output would leave the memory cost, which is the other half of the ceiling.
+        $observationsLimit = $summary === 'scraped' ? SCRAPED_SCOPE_PAGE_LIMIT : 0;
+        $observationsOffset = $summary === 'scraped' ? $executionOffset : 0;
         // Load the segments this summary reads before decoding anything else. The
         // dashboard is by far the most requested view and needs none of them.
-        $payload = state_payload($target, state_segments_for_summary($summary), $strategyId);
+        $payload = state_payload(
+            $target,
+            state_segments_for_summary($summary),
+            $strategyId,
+            $observationsLimit,
+            $observationsOffset
+        );
         if ($target === 'paper') {
             $payload = paper_state_with_consistent_portfolios($payload, $summary, $strategyId);
             $payload = compact_state_payload($target, $payload, $summary, $strategyId, $executionOffset);

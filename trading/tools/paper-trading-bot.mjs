@@ -231,7 +231,25 @@ const MARKET_SCAN_PAGE_SIZE = Math.max(1, Math.min(500, envNumber("PAPER_MARKET_
 const MARKET_SCAN_EVENT_BATCH_LIMIT = Math.max(1, Math.min(500, envNumber("PAPER_MARKET_SCAN_EVENT_BATCH_LIMIT", MARKET_SCAN_PAGE_SIZE)));
 // These are retention limits for the local, UI-facing quote cache. They do
 // not limit Gamma intake: keyset cursors keep advancing through every result.
-const MARKET_OBSERVATION_RETAIN_LIMIT = Math.max(500, envNumber("PAPER_MARKET_OBSERVATION_RETAIN_LIMIT", 5000));
+//
+// 8000, raised from 5000 on the owner's instruction, and the number is measured rather
+// than picked. At 5000 the retained set was pinned exactly to the cap -- net change 0 on
+// most of twelve consecutive scans, eviction cancelling intake -- and it reached only 6.44
+// days ahead while DEFAULT_MAX_RESOLUTION_HOURS is 168 h, seven days. So the cap was
+// discarding markets inside the horizon the portfolios actually trade, and re-scraping them
+// on every pass to discard them again.
+//
+// The band above one day is sparse: 4737 of those 5001 rows resolved within 24 hours, so
+// roughly 260 rows covered the remaining 5.4 days. A few hundred more slots reach the full
+// seven days with room to spare, and 8000 leaves that room without inviting the response
+// problem back.
+//
+// What made raising it safe is the paging, not the size: the scraped response carried the
+// whole active catalogue in one 21.32 MB body, so every extra row grew it linearly until
+// the shared host answered 500. It is served in 1200-row pages now (SCRAPED_SCOPE_PAGE_LIMIT
+// in api.php, walked by walkRemainingScrapedPages in the browser), and the database is asked
+// for one page at a time so the decode is bounded too.
+const MARKET_OBSERVATION_RETAIN_LIMIT = Math.max(500, envNumber("PAPER_MARKET_OBSERVATION_RETAIN_LIMIT", 8000));
 // Resolved observations are published in their own segment file, so retaining more
 // of them no longer costs the active catalogue anything and no longer inflates the
 // requests that never read them. The old 1000 cap is why the resolved count stopped

@@ -7916,6 +7916,57 @@ function storeScrapedMarketState(scrapedState = {}, summary = "scraped") {
   return true;
 }
 
+// A hard stop on the walk. The server decides when a page is the last one, and a server
+// that gets that wrong must cost a bounded number of requests rather than loop forever --
+// this runs in the reader's browser. Twenty-four pages is 28,800 rows, comfortably above
+// any cap this catalogue is likely to be given, so hitting it means something is wrong
+// rather than that the catalogue is large.
+const SCRAPED_PAGE_WALK_LIMIT = 24;
+
+function scrapedObservationRowKey(row) {
+  return String(row?.tokenId || row?.id || row?.clobTokenId || row?.assetId || "");
+}
+
+// Fetch the remaining pages of the active catalogue and append them to what is loaded.
+//
+// Deduplicated by token, because a scan writing between two of these requests shifts the
+// rows under the offset: the walk would otherwise show one market twice and miss another.
+// A row with no key at all is kept rather than dropped -- an unkeyable row is a data fault
+// worth seeing, not one worth hiding.
+async function walkRemainingScrapedPages(firstPage, options = {}) {
+  const limit = Math.max(1, Number(firstPage?.scrapedScopeLimit) || 1200);
+  const total = Math.max(0, Number(firstPage?.scrapedScopeTotal) || 0);
+  const seen = new Set(state.scrapedMarketObservations.map(scrapedObservationRowKey).filter(Boolean));
+  for (let page = 1; page < SCRAPED_PAGE_WALK_LIMIT; page += 1) {
+    const offset = page * limit;
+    if (offset >= total) break;
+    if (state.opportunityView === "scraped" && els.botEvaluations) {
+      els.botEvaluations.innerHTML = `<div class="empty">Loading scraped Polymarket opportunities`
+        + ` (${formatInteger(state.scrapedMarketObservations.length) || state.scrapedMarketObservations.length}`
+        + ` of ${formatInteger(total) || total})...</div>`;
+    }
+    let payload = null;
+    try {
+      payload = await fetchJsonWithTimeout("data/paper-state.json", { summary: "scraped", offset }, 15000);
+    } catch (error) {
+      // A page that will not load leaves the list short rather than empty, and says so.
+      // Throwing here would discard the pages that did arrive, which is strictly worse.
+      state.scrapedMarketStateError = `Only part of the scraped catalogue loaded: ${error?.message || error}`;
+      return;
+    }
+    if (dashboardLoadIsStale(options)) return;
+    const rows = Array.isArray(payload?.marketObservations) ? payload.marketObservations : [];
+    for (const row of rows) {
+      if (scrapedObservationIsError(row)) continue;
+      const key = scrapedObservationRowKey(row);
+      if (key && seen.has(key)) continue;
+      if (key) seen.add(key);
+      state.scrapedMarketObservations.push(row);
+    }
+    if (payload?.scrapedScopeTruncated !== true) break;
+  }
+}
+
 async function ensureScrapedMarketState(options = {}) {
   const summary = options.summary || (shouldRenderCandidateBotState() ? "execution" : "scraped");
   const executionStrategyId = summary === "execution" ? executionScopeStrategyIdForMode(state.mode) : "";
@@ -7934,6 +7985,17 @@ async function ensureScrapedMarketState(options = {}) {
     );
     if (dashboardLoadIsStale(options)) return;
     storeScrapedMarketState(scrapedState, summary);
+    // The scraped catalogue is served in pages now, so the first response is a page rather
+    // than the list. Every filter, sort and tab count in this view reads
+    // state.scrapedMarketObservations, so the pages are walked and concatenated here and
+    // nothing downstream has to learn about paging.
+    //
+    // The whole catalogue in one response was 21.32 MB in 2511 ms and that is what held the
+    // retention cap at 5000 rows: raising the cap grows the response linearly until the
+    // shared host answers 500. Paged, each response is about 3 MB whatever the cap is.
+    if (summary === "scraped" && scrapedState?.scrapedScopeTruncated === true) {
+      await walkRemainingScrapedPages(scrapedState, options);
+    }
     if (state.opportunityView === "scraped" || state.opportunityView === "scan-log") renderBotEvaluations();
     if (isLiveMode() && state.liveState) {
       // Open CLOB orders only expose a token ID. Re-render after scraped market
@@ -7993,11 +8055,15 @@ async function fetchJson(path, options = {}) {
   const strategyId = stateTarget === "paper" && options.strategyId
     ? `&strategy_id=${encodeURIComponent(options.strategyId)}`
     : "";
-  const cacheSummary = options.strategyId
-    ? `${options.summary || "full"}:${options.strategyId}`
-    : (options.summary || "full");
+  // Which page of a paged summary. Part of the cache key too, or every page of one walk
+  // would overwrite the last under a single entry and the fallback would serve page five
+  // as though it were the whole catalogue.
+  const offset = Number(options.offset) > 0 ? `&offset=${encodeURIComponent(Math.floor(options.offset))}` : "";
+  const cacheSummary = [options.summary || "full", options.strategyId || null, offset ? `@${Math.floor(options.offset)}` : null]
+    .filter(Boolean)
+    .join(":");
   const url = stateTarget
-    ? appPath(`api.php?action=state&target=${stateTarget}${summary}${strategyId}&t=${Date.now()}`)
+    ? appPath(`api.php?action=state&target=${stateTarget}${summary}${strategyId}${offset}&t=${Date.now()}`)
     : appPath(`${statePath}?t=${Date.now()}`);
   try {
     const fetchOptions = { cache: "no-store" };
