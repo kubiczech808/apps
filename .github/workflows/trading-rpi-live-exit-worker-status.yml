@@ -297,6 +297,14 @@ jobs:
             const exitKeys = Object.keys(exits);
             console.log(`\n   exit attempts recorded: ${exitKeys.length}`);
             for (const key of exitKeys.slice(0, 20)) console.log(`      ${key} -> ${text(exits[key]).slice(0, 300)}`);
+            // Repeated LAST, because a long log gets read from the end. The armed verdict is
+            // printed near the top by the first step, and a redeploy that quietly disarmed
+            // the stop loss went unnoticed through a whole read for exactly that reason:
+            // the tally said 147 SHADOW_STOP_TRIGGERED and the line saying why was 400
+            // lines above it.
+            const armed = String(state.mode || "") === "live";
+            console.log(`\n   ${armed ? "ARMED" : "SHADOW"}: the running worker reports mode=${state.mode || "(none)"}`
+              + `${armed ? "" : " -- a reached stop is logged and NOTHING is sold"}`);
           ' "$state" "$MARKET_FILTER"
 
       - name: Report the journal

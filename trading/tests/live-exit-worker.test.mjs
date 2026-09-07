@@ -1364,3 +1364,51 @@ test("the dust an exit leaves behind is the exchange's two-decimal size grid", a
   // A size that floors below the minimum is terminal rather than sent and refused.
   assert.match(submit, /which is below the \$\{DUST_SHARES\} it will accept an order for/);
 });
+
+// A redeploy must not disarm the live stop loss.
+//
+// It did. Dispatching the configure workflow to ship a code fix, with no inputs, wrote
+// LIVE_EXIT_MODE=shadow -- and the next status read showed 147 SHADOW_STOP_TRIGGERED:
+// stops reached, nothing sold, on a live account. The push path had preserved the armed
+// mode all along and its comment says exactly why; the dispatch path, which is the one a
+// person actually uses, defaulted over it.
+test("a redeploy preserves the armed mode instead of defaulting over it", () => {
+  const workflow = readFileSync(
+    new URL("../../.github/workflows/trading-rpi-live-exit-worker.yml", import.meta.url),
+    "utf8",
+  );
+
+  // Arming and disarming have to be asked for by name, so every switch defaults to `keep`.
+  for (const input of ["live_exit_mode", "protect_all", "confirm_live"]) {
+    const block = workflow.slice(workflow.indexOf(`      ${input}:`));
+    assert.match(block.slice(0, 400), /required: false/, `${input} must not be required`);
+    assert.match(block.slice(0, 400), /default: keep/, `${input} must default to keep`);
+    assert.match(block.slice(0, 400), /options: \[keep,/, `${input} must offer keep`);
+  }
+
+  // And `keep` reads the EnvironmentFile rather than a literal.
+  assert.match(workflow, /keep\|""\) read_existing "\$1" ;;/);
+  for (const key of ["LIVE_EXIT_MODE", "LIVE_EXIT_PROTECT_ALL", "LIVE_EXIT_CONFIRM_LIVE"]) {
+    assert.match(workflow, new RegExp(`keep_or_existing ${key} "\\$\\{${key}:-\\}"`),
+      `${key} has to fall back to what is already armed`);
+  }
+  // The old defaults are what caused it, so they must not come back.
+  assert.doesNotMatch(workflow, /exit_mode="\$\{LIVE_EXIT_MODE:-shadow\}"/);
+  assert.doesNotMatch(workflow, /confirm_live="\$\{LIVE_EXIT_CONFIRM_LIVE:-false\}"/);
+
+  // The deploy says which of the two it left the worker in, so a redeploy that disarms is
+  // visible in its own log rather than three steps later in another workflow.
+  assert.match(workflow, /-> ARMED: a reached stop may be submitted as a protective SELL\./);
+  assert.match(workflow, /-> SHADOW: a reached stop is logged and NOTHING is sold\./);
+
+  // And the status read repeats the verdict at the END, because a long log is read from
+  // the end: the tally said 147 SHADOW_STOP_TRIGGERED and the line saying why was 400
+  // lines above it.
+  const status = readFileSync(
+    new URL("../../.github/workflows/trading-rpi-live-exit-worker-status.yml", import.meta.url),
+    "utf8",
+  );
+  const verdictAt = status.indexOf("the running worker reports mode=");
+  const tallyAt = status.indexOf("exit attempts recorded:");
+  assert.ok(verdictAt > tallyAt && tallyAt > 0, "the armed verdict has to be the last thing printed");
+});

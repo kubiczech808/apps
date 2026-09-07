@@ -10,22 +10,34 @@ on:
       - 'trading/package-lock.json'
   workflow_dispatch:
     inputs:
+      # `keep` is the default on purpose, and it is the whole point of these three.
+      #
+      # They used to default to shadow/false/false, so dispatching this workflow to ship a
+      # code fix DISARMED the live stop loss -- which is exactly what happened: a redeploy
+      # with no inputs turned an armed worker into 147 SHADOW_STOP_TRIGGERED events, stops
+      # reached and nothing sold, and it was noticed only because the event tally looked
+      # wrong. The push path had always preserved the armed mode and said why; the dispatch
+      # path, the one a person actually uses, overwrote it with a default.
+      #
+      # Arming and disarming are now things you have to ask for by name.
       live_exit_mode:
-        description: Shadow logs only; live permits explicitly configured protective sells.
-        required: true
-        default: shadow
+        description: keep leaves the armed mode alone. shadow logs only; live permits protective sells.
+        required: false
+        default: keep
         type: choice
-        options: [shadow, live]
+        options: [keep, shadow, live]
       protect_all:
-        description: Protect all recognized open positions. false only watches local allowlisted tokens.
-        required: true
-        default: false
-        type: boolean
+        description: keep leaves it alone. Protect all recognized open positions, or only local allowlisted tokens.
+        required: false
+        default: keep
+        type: choice
+        options: [keep, "true", "false"]
       confirm_live:
-        description: Required alongside live mode before a SELL may be submitted.
-        required: true
-        default: false
-        type: boolean
+        description: keep leaves it alone. Required alongside live mode before a SELL may be submitted.
+        required: false
+        default: keep
+        type: choice
+        options: [keep, "true", "false"]
 
 permissions:
   contents: read
@@ -81,20 +93,31 @@ jobs:
               sed -n "s/^$1=//p" "$existing_env" | tail -n 1
             fi
           }
-          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
-            exit_mode="${LIVE_EXIT_MODE:-shadow}"
-            protect_all="${LIVE_EXIT_PROTECT_ALL:-false}"
-            confirm_live="${LIVE_EXIT_CONFIRM_LIVE:-false}"
+          # A code update must not silently disarm a worker that the account owner already
+          # armed. That was true of the push path and NOT of the dispatch path, which
+          # defaulted the three switches to shadow/false/false -- so a redeploy shipping a
+          # fix disarmed the live stop loss and logged 147 reached stops it did not sell.
+          #
+          # Every switch now falls back to what the EnvironmentFile already says, and only
+          # an explicit value other than `keep` changes it. A first install still has
+          # nothing to preserve, so it remains shadow-only.
+          keep_or_existing() {
+            case "${2:-keep}" in
+              keep|"") read_existing "$1" ;;
+              *) printf '%s' "$2" ;;
+            esac
+          }
+          exit_mode="$(keep_or_existing LIVE_EXIT_MODE "${LIVE_EXIT_MODE:-}")"
+          protect_all="$(keep_or_existing LIVE_EXIT_PROTECT_ALL "${LIVE_EXIT_PROTECT_ALL:-}")"
+          confirm_live="$(keep_or_existing LIVE_EXIT_CONFIRM_LIVE "${LIVE_EXIT_CONFIRM_LIVE:-}")"
+          exit_mode="${exit_mode:-shadow}"
+          protect_all="${protect_all:-false}"
+          confirm_live="${confirm_live:-false}"
+          echo "mode=${exit_mode} confirm_live=${confirm_live} protect_all=${protect_all}"
+          if [ "$exit_mode" = "live" ] && [ "$confirm_live" = "true" ]; then
+            echo "-> ARMED: a reached stop may be submitted as a protective SELL."
           else
-            # A code update must not silently disarm a worker that the account owner
-            # already armed. Preserve the explicit mode and safeguards from its prior
-            # local EnvironmentFile; a first install remains shadow-only.
-            exit_mode="$(read_existing LIVE_EXIT_MODE)"
-            protect_all="$(read_existing LIVE_EXIT_PROTECT_ALL)"
-            confirm_live="$(read_existing LIVE_EXIT_CONFIRM_LIVE)"
-            exit_mode="${exit_mode:-shadow}"
-            protect_all="${protect_all:-false}"
-            confirm_live="${confirm_live:-false}"
+            echo "-> SHADOW: a reached stop is logged and NOTHING is sold."
           fi
           case "$exit_mode" in shadow|live) ;; *) exit_mode=shadow ;; esac
           cat > "$HOME/.config/trading-live-exit-worker.env" <<EOF
