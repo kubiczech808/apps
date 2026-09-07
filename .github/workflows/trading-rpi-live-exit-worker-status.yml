@@ -231,20 +231,44 @@ jobs:
             // the rule is whatever separates the two columns.
             const amountRows = history.filter((event) => /^(EXIT|SETTLEMENT_CLOSE)_(SUBMITTED|REJECTED)$/
               .test(String(event.type || "")) && (event.exitShares != null || event.signedAmounts));
+            // Collapsed by what was actually sent, with the FIRST and LAST time it was sent.
+            // The dust refusals repeat identically hundreds of times, and printing 24 copies
+            // of one row crowded out every row that differed -- the same trap this file has
+            // fallen into twice. The times are what say whether a refusal is still happening
+            // or is retained history from before a fix, which a bare list cannot answer.
             console.log(`\n   what was signed vs what was asked for (${amountRows.length} of ${history.length}):`);
             if (!amountRows.length) {
               console.log("      (none yet -- the running worker predates amount recording)");
             }
-            for (const event of amountRows.slice(0, 24)) {
+            const byAmount = new Map();
+            for (const event of amountRows) {
               const signed = event.signedAmounts || {};
+              const key = [
+                /_SUBMITTED$/.test(event.type) ? "ACCEPTED" : "refused ",
+                event.exitPrice, event.exitShares,
+                signed.makerAmount ?? "-", signed.takerAmount ?? "-",
+                String(event.response?.error || event.response?.status || "").slice(0, 26),
+              ].join("|");
+              const at = String(event.at || "");
+              const row = byAmount.get(key);
+              if (!row) {
+                byAmount.set(key, { event, signed, count: 1, firstAt: at, lastAt: at });
+                continue;
+              }
+              row.count += 1;
+              if (at && (!row.firstAt || at < row.firstAt)) row.firstAt = at;
+              if (at && (!row.lastAt || at > row.lastAt)) row.lastAt = at;
+            }
+            for (const row of [...byAmount.values()].sort((a, b) => String(b.lastAt).localeCompare(String(a.lastAt))).slice(0, 20)) {
+              const { event, signed } = row;
               const maker = Number(signed.makerAmount);
               const taker = Number(signed.takerAmount);
-              // Shares and USDC as the exchange holds them: six decimals, base units.
+              // Shares and USDC in the base units the exchange holds: six decimals.
               const shares = Number.isFinite(maker) ? maker / 1e6 : NaN;
               const usdc = Number.isFinite(taker) ? taker / 1e6 : NaN;
               const impliedPrice = Number.isFinite(shares) && shares > 0 ? usdc / shares : NaN;
               const verdict = /_SUBMITTED$/.test(event.type) ? "ACCEPTED" : "refused ";
-              console.log(`      ${verdict} px ${String(event.exitPrice).padStart(7)}`
+              console.log(`      ${String(row.count).padStart(4)}x ${verdict} px ${String(event.exitPrice).padStart(7)}`
                 + `  asked ${String(event.exitShares).padStart(9)}`
                 + `  signed maker ${String(signed.makerAmount ?? "-").padStart(10)}`
                 + ` taker ${String(signed.takerAmount ?? "-").padStart(10)}`
@@ -252,6 +276,7 @@ jobs:
                 + ` for ${Number.isFinite(usdc) ? usdc.toFixed(6) : "?"}`
                 + `  implied px ${Number.isFinite(impliedPrice) ? impliedPrice.toFixed(6) : "?"}`
                 + `  ${String(event.response?.error || event.response?.status || "").slice(0, 26)}`);
+              console.log(`           ${row.firstAt || "?"} .. ${row.lastAt || "?"}`);
             }
             const exits = state.exits && typeof state.exits === "object" ? state.exits : {};
             const exitKeys = Object.keys(exits);
