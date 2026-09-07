@@ -177,8 +177,8 @@ jobs:
             // Orders the exchange took and has not decided. A `delayed` response used to be
             // written down as a rejection, so the retry timer sent another order on top of it
             // -- three for one position inside 90 seconds, of which the first had filled.
-            const exits = state.exits && typeof state.exits === "object" ? state.exits : {};
-            const queued = Object.entries(exits).filter(([, row]) => row && row.pending && row.pending.orderId);
+            const exitRecords = state.exits && typeof state.exits === "object" ? state.exits : {};
+            const queued = Object.entries(exitRecords).filter(([, row]) => row && row.pending && row.pending.orderId);
             if (queued.length) {
               console.log(`\n   orders queued on the exchange, awaiting a match: ${queued.length}`);
               for (const [tokenId, row] of queued) {

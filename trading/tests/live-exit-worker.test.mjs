@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { readFileSync } from "node:fs";
+import { Script } from "node:vm";
 
 const worker = await import("../tools/rpi-live-exit-worker.mjs");
 
@@ -863,11 +864,19 @@ test("the worker status script survives being one single-quoted shell argument",
   assert.ok(start > 0, "the inline node script has to be found for this to mean anything");
   const end = lines.findIndex((line, index) => index > start && line.trim().startsWith("' \"$state\""));
   assert.ok(end > start, "and its closing quote too");
-  const offenders = lines.slice(start + 1, end)
+  const body = lines.slice(start + 1, end);
+  const offenders = body
     .map((line, index) => [start + index + 2, line])
     .filter(([, line]) => line.includes("'"));
   assert.deepEqual(offenders, [],
     `an apostrophe inside the single-quoted node script ends it: ${JSON.stringify(offenders)}`);
+
+  // And that it is valid JavaScript at all. The apostrophe rule was written after one
+  // syntax fault broke this read, and the next one that broke it was an ordinary duplicate
+  // declaration -- caught only by dispatching the workflow, which is the slowest possible
+  // place to find out. Parsing it here catches every kind at once.
+  assert.doesNotThrow(() => new Script(body.join("\n")),
+    "the inline status script has to parse");
 });
 
 // Asked for as a strict rule, with the trade and the market side by side: Counter-Strike
