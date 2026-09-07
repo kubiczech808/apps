@@ -776,6 +776,66 @@ function positionIsFullyExited(group) {
   return remainder < DUST_SHARES;
 }
 
+// Round trips, not tokens. The account re-enters the same outcome hours later, and one group
+// per token sums both into a single row: twice the stake that was ever at risk, a blended
+// entry price belonging to neither entry, and -- worst -- ONE net P/L, so a real loss and a
+// real win cancel out and the portfolio never sees either of them.
+//
+// Reported as "the stake is 9.99" when every neighbouring trade staked 4.99. Measured on
+// Valorant: 100 Thieves vs LOUD (BO5), one token, two complete round trips:
+//
+//   20:31 BUY 6.573332 @ 0.75   21:21 SELL 6.57 @ 0.48    -> a 1.77 loss
+//   22:12 BUY 6.662161 @ 0.74   22:14 SELL 6.66 @ 0.999   -> a 1.73 win
+//
+// published as one row: 13.235493 shares, entry 75.4%, P/L -0.26. Neither trade is visible,
+// and the pair reads as one mediocre trade. The executor was right to make both -- the entry
+// guard allows the second because the first had already been sold.
+//
+// A BUY opens the next round trip only once the previous one is fully exited, so a position
+// built up over several fills is still one trade. Index 1 keeps the bare token as its key, so
+// the id of every single-round-trip row -- almost all of them -- does not change.
+//
+// Shared rather than written twice: the fallback ledger path groups the same history the same
+// way, and two paths quietly disagreeing about what one trade is has been the shape of
+// several faults in this file.
+export function roundTripKeying(groups, groupKey) {
+  const roundTripIndex = new Map();
+  const keyAt = (base, index) => (index <= 1 ? base : `${base}#${index}`);
+
+  return {
+    // The newest round trip on a token, whether open or not.
+    latestGroupKey(base) {
+      const index = roundTripIndex.get(base) || 0;
+      return index ? keyAt(base, index) : null;
+    },
+    // The round trip a fill belongs to. Requires fills in chronological order: a buy is only
+    // recognised as the start of a new trade once the previous one is already complete.
+    currentGroupKey(item, side) {
+      const base = groupKey(item);
+      let index = roundTripIndex.get(base) || 0;
+      if (!index) {
+        index = 1;
+      } else if (String(side || "").toUpperCase().includes("BUY")) {
+        const open = groups.get(keyAt(base, index));
+        // Only a BUY can start one. A SELL always belongs to the round trip it is closing,
+        // including the sell that completes it, which arrives while the group is still open.
+        if (open && positionIsFullyExited(open)) index += 1;
+      }
+      roundTripIndex.set(base, index);
+      return keyAt(base, index);
+    },
+  };
+}
+
+// Oldest first. The round-trip split reads "is the previous trade finished?" off the group as
+// it stands, so it is only correct in chronological order -- and the trade feed arrives newest
+// first. It also makes latestPrice mean the latest price rather than the earliest.
+export function chronological(rows) {
+  return [...rows].sort((left, right) => (
+    (Date.parse(left?.timestamp || "") || 0) - (Date.parse(right?.timestamp || "") || 0)
+  ));
+}
+
 function closedTradesFromHistory(trades, activity, generatedAt) {
   const groups = new Map();
   const groupsByQuestion = new Map();
@@ -793,6 +853,8 @@ function closedTradesFromHistory(trades, activity, generatedAt) {
   function groupKey(item) {
     return String(item.tokenId || `${item.conditionId || item.slug || item.question}:${item.outcome || ""}`);
   }
+
+  const { currentGroupKey, latestGroupKey } = roundTripKeying(groups, groupKey);
 
   function unmatchedRedeemIdentity(item) {
     return [
@@ -856,7 +918,10 @@ function closedTradesFromHistory(trades, activity, generatedAt) {
   }
 
   function bestRedeemGroup(item) {
-    const direct = groups.get(groupKey(item));
+    // The newest round trip on this token, which is the one a redemption closes: a redeemed
+    // position was never sold, so it is still the open group.
+    const key = latestGroupKey(groupKey(item));
+    const direct = key ? groups.get(key) : null;
     if (direct) return direct;
     const candidates = groupsByQuestion.get(questionKey(item)) || [];
     if (!candidates.length) return null;
@@ -872,8 +937,10 @@ function closedTradesFromHistory(trades, activity, generatedAt) {
   }
 
   function ingestTrade(trade) {
-    const key = groupKey(trade);
-    if (!key || key === "null") return;
+    const side = String(trade.side || "").toUpperCase();
+    const base = groupKey(trade);
+    if (!base || base === "null") return;
+    const key = currentGroupKey(trade, side);
     if (!groups.has(key)) {
       groups.set(key, {
         id: key,
@@ -901,7 +968,6 @@ function closedTradesFromHistory(trades, activity, generatedAt) {
     const group = groups.get(key);
     const size = number(trade.size, 0);
     const value = number(trade.usdcValue, 0);
-    const side = String(trade.side || "").toUpperCase();
     if (!group.openedAt || Date.parse(trade.timestamp || "") < Date.parse(group.openedAt || "")) group.openedAt = trade.timestamp;
     if (!group.resolvedAt || Date.parse(trade.timestamp || "") > Date.parse(group.resolvedAt || "")) group.resolvedAt = trade.timestamp;
     if (number(trade.price) != null) group.latestPrice = number(trade.price);
@@ -915,9 +981,9 @@ function closedTradesFromHistory(trades, activity, generatedAt) {
     }
   }
 
-  for (const trade of mergedPublicHistoryRows(trades, activity, (item, source) => (
+  for (const trade of chronological(mergedPublicHistoryRows(trades, activity, (item, source) => (
     source === "trades" || String(item.type || "").toUpperCase().includes("TRADE")
-  ))) {
+  )))) {
     ingestTrade(trade);
   }
 
@@ -1687,9 +1753,15 @@ function ledgerReconciliationFallbacks(trades, activity, positions, closedTrades
     if (!list.includes(group)) list.push(group);
   }
 
-  function ensureGroup(item) {
-    const key = groupKey(item);
-    if (!key || key === "null") return null;
+  const { currentGroupKey, latestGroupKey } = roundTripKeying(groups, groupKey);
+
+  function ensureGroup(item, side = item?.side) {
+    const base = groupKey(item);
+    if (!base || base === "null") return null;
+    // Split per round trip on the same rule as the main path. Left merged, a token bought,
+    // sold, then bought again carries the first trip's realized result into the second one's
+    // cost basis, so the still-open position gets an entry price it never had.
+    const key = currentGroupKey(item, side);
     if (!groups.has(key)) {
       groups.set(key, {
         id: key,
@@ -1715,7 +1787,7 @@ function ledgerReconciliationFallbacks(trades, activity, positions, closedTrades
   }
 
   function ingestTrade(item) {
-    const group = ensureGroup(item);
+    const group = ensureGroup(item, String(item.side || "").toUpperCase());
     if (!group) return;
     const timestamp = Date.parse(item.timestamp || "") || 0;
     if (!group.openedAt || timestamp < (Date.parse(group.openedAt || "") || Infinity)) group.openedAt = item.timestamp;
@@ -1735,7 +1807,10 @@ function ledgerReconciliationFallbacks(trades, activity, positions, closedTrades
   }
 
   function bestRedeemGroup(item) {
-    const direct = groups.get(groupKey(item));
+    // The newest round trip on this token: a redeemed position was never sold, so it is the
+    // one still open.
+    const key = latestGroupKey(groupKey(item));
+    const direct = key ? groups.get(key) : null;
     if (direct) return direct;
     const candidates = groupsByQuestion.get(questionKey(item)) || [];
     if (!candidates.length) return null;
@@ -1749,9 +1824,9 @@ function ledgerReconciliationFallbacks(trades, activity, positions, closedTrades
       })[0] || null;
   }
 
-  for (const trade of mergedPublicHistoryRows(trades, activity, (item, source) => (
+  for (const trade of chronological(mergedPublicHistoryRows(trades, activity, (item, source) => (
     source === "trades" || String(item.type || "").toUpperCase().includes("TRADE")
-  ))) {
+  )))) {
     ingestTrade(trade);
   }
   for (const item of mergedPublicHistoryRows([], activity, (entry) => (

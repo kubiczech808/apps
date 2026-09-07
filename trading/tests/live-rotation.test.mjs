@@ -68,6 +68,63 @@ test("live history: an unmatched redeem remains a closed, correct position", () 
   assert.equal(rows[0].realizedPnlUsdc, null, "the missing buy is not guessed as zero P/L");
 });
 
+// Reported as "the stake is 9.99" on a portfolio that stakes 4.99. The account re-enters the
+// same outcome hours later, and one group per token summed both round trips into one row.
+test("live history: one token traded twice is two trades, not one doubled trade", () => {
+  const fill = (side, size, price, timestamp) => ({
+    type: "TRADE",
+    side,
+    size,
+    price,
+    usdcValue: Number((size * price).toFixed(6)),
+    usdcValueSource: "derived",
+    timestamp,
+    question: "Valorant: 100 Thieves vs LOUD (BO5) - VCT Americas Stage 2 Playoffs",
+    outcome: "100 Thieves",
+    tokenId: "114485627222454764",
+    transactionHash: `tx-${side}-${timestamp}`,
+  });
+
+  // The account's own feed, newest first as it actually arrives -- the split reads "is the
+  // previous trade finished?" off the group as it stands, so the order matters.
+  const rows = sync.closedTradesFromHistory([
+    fill("SELL", 6.66, 0.999, "2026-09-06T22:14:09Z"),
+    fill("BUY", 6.662161, 0.74, "2026-09-06T22:12:03Z"),
+    fill("SELL", 6.57, 0.48, "2026-09-06T21:21:45Z"),
+    fill("BUY", 6.573332, 0.75, "2026-09-06T20:31:31Z"),
+  ], [], "2026-09-07T05:00:00Z");
+
+  assert.equal(rows.length, 2, "two complete round trips are two closed trades");
+  const [second, first] = rows; // newest first
+  assert.equal(first.openedAt, "2026-09-06T20:31:31Z");
+  assert.equal(second.openedAt, "2026-09-06T22:12:03Z");
+
+  // Each trade carries its own stake, its own entry, and -- the point -- its own result. The
+  // merged row reported 13.235493 shares, a 75.4% entry belonging to neither buy, and a
+  // -0.26 P/L that was a 1.77 loss and a 1.73 win cancelling each other out.
+  assert.ok(Math.abs(first.shares - 6.573332) < 1e-6);
+  assert.ok(Math.abs(second.shares - 6.662161) < 1e-6);
+  assert.ok(Math.abs(first.entryPrice - 0.75) < 1e-6, `first entry ${first.entryPrice}`);
+  assert.ok(Math.abs(second.entryPrice - 0.74) < 1e-6, `second entry ${second.entryPrice}`);
+  assert.ok(first.realizedPnlUsdc < -1.7, `the loss is a loss: ${first.realizedPnlUsdc}`);
+  assert.ok(second.realizedPnlUsdc > 1.7, `the win is a win: ${second.realizedPnlUsdc}`);
+  // Distinct ids, or the dashboard would collapse them back into one row.
+  assert.notEqual(first.id, second.id);
+  assert.equal(first.id, "114485627222454764",
+    "the first round trip keeps the bare token as its id, so existing rows do not change");
+
+  // A position built up in several fills and sold in several is still ONE trade: only a buy
+  // into an already-closed position starts the next one.
+  const staged = sync.closedTradesFromHistory([
+    fill("BUY", 3, 0.75, "2026-09-06T20:31:31Z"),
+    fill("BUY", 3, 0.77, "2026-09-06T20:33:00Z"),
+    fill("SELL", 2, 0.8, "2026-09-06T21:00:00Z"),
+    fill("SELL", 4, 0.82, "2026-09-06T21:05:00Z"),
+  ], [], "2026-09-07T05:00:00Z");
+  assert.equal(staged.length, 1, "four fills, one round trip");
+  assert.equal(staged[0].shares, 6);
+});
+
 test("live history: only fully unfilled limit orders are retained as their own audit ledger", () => {
   const generatedAt = "2026-08-30T18:10:00Z";
   const history = sync.unfilledLimitOrderHistory({
