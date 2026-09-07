@@ -65,6 +65,7 @@ jobs:
           # signed as. They are public on-chain identifiers, not credentials.
           for key in LIVE_EXIT_MODE LIVE_EXIT_CONFIRM_LIVE LIVE_EXIT_PROTECT_ALL \
                      LIVE_EXIT_POLL_INTERVAL_MS LIVE_EXIT_RETRY_INTERVAL_MS \
+                     LIVE_EXIT_STOP_GAP_TOLERANCE \
                      LIVE_EXIT_STATE_REFRESH_MS LIVE_EXIT_POLICY_URL \
                      POLYMARKET_FUNDER_ADDRESS POLYMARKET_ADDRESS POLYMARKET_SIGNATURE_TYPE; do
             value="$(sed -n "s/^${key}=//p" "$env_file" | tail -n 1)"

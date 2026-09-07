@@ -4185,10 +4185,16 @@ function planWithProbabilityFloor(plan, probabilityFloor, trade) {
 // path. A test asserts the two produce the same number across a table of levels, because a
 // paper portfolio that decides differently from the live one is worse than no paper at all.
 //
-// Read as a fraction OF THE STOP, not as percentage points: 10% under a 0.30 floor declines
-// below 0.27, not below 0.20. Snapped down to the grid a bid can be at -- an un-snapped 0.441
-// line refuses the 0.44 that is the only price inside its own band.
-const PAPER_STOP_GAP_TOLERANCE = Math.min(1, Math.max(0, Number(process.env.LIVE_EXIT_STOP_GAP_TOLERANCE ?? 0.1) || 0));
+// Read as a fraction OF THE STOP, not as percentage points: 50% under a 0.30 floor declines
+// below 0.15. Snapped down to the grid a bid can be at -- an un-snapped 0.441 line refuses
+// the 0.44 that is the only price inside its own band.
+//
+// 50%, not the 10% this started at, and the same number as the worker. 10% is unreachable on
+// a market that moves: measured, a stop at 0.524963 saw the price go from above its trigger
+// to a 0.45 bid between two one-second passes -- 14% under, declined, and the position then
+// resolved at zero for the whole stake instead of a capped 2.20. 50% still refuses the cases
+// the band exists for, where the bid sits at a tenth of the stop.
+const PAPER_STOP_GAP_TOLERANCE = Math.min(1, Math.max(0, Number(process.env.LIVE_EXIT_STOP_GAP_TOLERANCE ?? 0.5) || 0));
 const PAPER_STOP_GAP_PRICE_GRID = 0.01;
 
 export function paperStopGapFloorPrice(stopPrice, tolerance = PAPER_STOP_GAP_TOLERANCE, grid = PAPER_STOP_GAP_PRICE_GRID) {

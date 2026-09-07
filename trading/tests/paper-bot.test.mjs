@@ -719,7 +719,7 @@ test("equal risk: a bid a little below the floor still exits, and records the ga
   assert.ok(Math.abs(filled.realizedLossUsdc - 0.5) < 0.0001);
 
   // Slipping past the floor is not a gap: the stop exists to cap the loss near the level,
-  // not to refuse every stop that misses it slightly. 0.81818 floor, 0.73 band.
+  // not to refuse every stop that misses it slightly. 0.81818 floor, 0.40 band.
   const slipped = bot.equalRiskStopExitDecision({ plan, bestBid: 0.75, shares: 5.5, feesEnabled: false });
   assert.equal(slipped.declinedGap, undefined);
   assert.equal(slipped.executableAtFloor, false);
@@ -738,13 +738,15 @@ test("equal risk: a bid far below the floor declines to sell and leaves the posi
     entryPrice: 0.9,
     feesEnabled: false,
   });
-  // 10% under the 0.81818 floor is 0.736362, snapped down to the 0.73 a bid can be at.
-  assert.equal(bot.paperStopGapFloorPrice(plan.stopPrice), 0.73);
+  // Half of the 0.81818 floor is 0.40909, snapped down to the 0.40 a bid can be at. The band
+  // was 10% and is now 50%: 10% was unreachable on a market that moves, and a stop that
+  // declined at 14% under went on to lose its whole stake.
+  assert.equal(bot.paperStopGapFloorPrice(plan.stopPrice), 0.4);
 
   const declined = bot.equalRiskStopExitDecision({ plan, bestBid: 0.2, shares: 5.5, feesEnabled: false });
   assert.equal(declined.triggered, true);
   assert.equal(declined.declinedGap, true);
-  assert.equal(declined.gapFloor, 0.73);
+  assert.equal(declined.gapFloor, 0.4);
   assert.equal(declined.observedBid, 0.2);
   // No fill is invented for a sale that did not happen.
   assert.equal(declined.exitValueUsdc, undefined);
@@ -7229,7 +7231,7 @@ test("equal stop: a watched position exits at its floor, not at the collapsed bi
   const { readFile } = await import("node:fs/promises");
   const bot = await readFile(new URL("../tools/paper-trading-bot.mjs", import.meta.url), "utf8");
   const api = new Function(`
-    const PAPER_STOP_GAP_TOLERANCE = 0.1;
+    const PAPER_STOP_GAP_TOLERANCE = 0.5;
     const PAPER_STOP_GAP_PRICE_GRID = 0.01;
     ${functionSource(bot, "netExitValueAtPrice")}
     ${functionSource(bot, "normalizeStopLossRiskMultiplier")}
@@ -7278,10 +7280,10 @@ test("equal stop: a watched position exits at its floor, not at the collapsed bi
   // Never observed above the floor, so no resting exit could have filled -- and 0.05 against
   // a 0.9 floor is the liquidation the owner retracted "sell at any cost" over. It declines
   // and the position stays open, rather than booking a 4.7 loss the model refused to take.
-  assert.equal(api.paperStopGapFloorPrice(plan.stopPrice), 0.8);
+  assert.equal(api.paperStopGapFloorPrice(plan.stopPrice), 0.44);
   const gapped = decide(0.05, null);
   assert.equal(gapped.declinedGap, true);
-  assert.equal(gapped.gapFloor, 0.8);
+  assert.equal(gapped.gapFloor, 0.44);
   assert.equal(gapped.fillPrice, undefined);
   // Already below the floor at the previous look is the same case.
   assert.equal(decide(0.05, 0.5).declinedGap, true);
@@ -7290,6 +7292,10 @@ test("equal stop: a watched position exits at its floor, not at the collapsed bi
   const slipped = decide(0.85, null);
   assert.equal(slipped.declinedGap, undefined);
   assert.equal(slipped.fillPrice, 0.85);
+  // And a bid well below the floor but inside the widened band now sells rather than waiting,
+  // which is the change: 0.5 against a 0.9 stop is 44% under.
+  assert.equal(decide(0.5, null).declinedGap, undefined);
+  assert.equal(decide(0.5, null).fillPrice, 0.5);
   assert.equal(slipped.filledByCrossing, false);
 
   // Above the floor is not a stop at all.

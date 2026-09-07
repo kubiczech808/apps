@@ -889,6 +889,24 @@ test("a stop declines to sell into a gap far below its own floor", async () => {
   // cent, from a rule that exists to prevent twenty-point liquidations.
   assert.equal(worker.stopGapFloorPrice(0.49, 0.1), 0.44);
   assert.equal(worker.stopGapFloorPrice(0.2575, 0.1), 0.23);
+
+  // The band in force is 50%, widened from 10% on the owner's instruction after a stop
+  // declined at 14% under and the position then lost its whole stake. One global value, so
+  // the default IS the setting and it is asserted rather than left implied.
+  assert.equal(worker.stopGapFloorPrice(0.524963), 0.26, "half of the stop, snapped down");
+  assert.equal(worker.stopGapFloorPrice(0.30), 0.15);
+
+  // The trade that prompted it now sells. That is the whole point of the change.
+  assert.equal(worker.stopGapIsTooWide({ bestBidPrice: 0.45, stopPrice: 0.524963 }), false,
+    "0.45 against a 0.525 stop is a real price on a book that moved, and it sells");
+
+  // And every case the band was BUILT for is still refused, which is the test that matters.
+  // These are the measured liquidations: bought near 76-80c, floors around 25-37c, sold at
+  // 1.5c and 5.7c -- bids at roughly a tenth of the stop.
+  for (const [stop, bid] of [[0.2575, 0.015], [0.37, 0.057], [0.25, 0.02], [0.30, 0.03]]) {
+    assert.equal(worker.stopGapIsTooWide({ bestBidPrice: bid, stopPrice: stop }), true,
+      `a ${bid} bid against a ${stop} stop is a liquidation, not a price`);
+  }
   // Never up: snapping toward the stop would tighten the band the owner asked to widen.
   for (const stop of [0.13, 0.2575, 0.33, 0.49, 0.876]) {
     const limit = worker.stopGapFloorPrice(stop, 0.1);

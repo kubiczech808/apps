@@ -111,6 +111,16 @@ jobs:
           # batched /books request regardless of how many positions are held, so a one-second
           # loop costs one request a second no matter how large the account gets.
           LIVE_EXIT_POLL_INTERVAL_MS=1000
+          # How far below its own level a stop will still sell, as a fraction OF THE STOP.
+          # One global value on the owner's instruction, written here rather than left to the
+          # code default so a status read shows the number actually in force.
+          #
+          # 0.5, widened from 0.1: a stop at 0.524963 saw the price go from above its trigger
+          # to a 0.45 bid between two one-second passes -- 14% under, so it declined, and the
+          # position then resolved at zero for the whole stake instead of a capped 2.20. 50%
+          # still refuses the liquidations the band exists for, where the bid sits at a tenth
+          # of the stop.
+          LIVE_EXIT_STOP_GAP_TOLERANCE=0.5
           LIVE_EXIT_RETRY_INTERVAL_MS=20000
           LIVE_EXIT_STATE_REFRESH_MS=30000
           LIVE_EXIT_POLICY_URL=https://osobnizkusenosti.cz/trading/api.php?action=live-exit-policy

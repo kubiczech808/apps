@@ -937,10 +937,23 @@ export function exitFailureIsTerminal(response) {
 // far usually has no real buyer anyway -- the 1.5c "bid" is somebody's lowball resting
 // order, not a price.
 //
-// Read as a fraction OF THE STOP, not as percentage points: a 10% tolerance under a 0.30
-// floor declines below 0.27, not below 0.20. That is what "10% under what I have set"
-// means when the stop is itself a price.
-const STOP_GAP_TOLERANCE = Math.min(1, Math.max(0, number(process.env.LIVE_EXIT_STOP_GAP_TOLERANCE, 0.1)));
+// Read as a fraction OF THE STOP, not as percentage points: a 50% tolerance under a 0.30
+// floor declines below 0.15, not below a 0.30 minus 50 points that does not exist. That is
+// what "under what I have set" means when the stop is itself a price.
+//
+// It was 10%, and 10% was too tight to survive a market that moves. Measured, on the trade
+// that prompted widening it: Counter-Strike Map 2 Winner, stop 0.524963, and the price went
+// from above the 0.527 trigger to a 0.45 bid between two one-second passes. 0.45 is 14% under
+// the stop, so the stop declined, the bid then fell to 0.03, and the position resolved at
+// zero. Selling at 0.45 would have capped the loss near 2.20; waiting cost the whole 4.95
+// stake. A one-second loop cannot be late enough for 10% to be a reachable band.
+//
+// 50% still refuses every case the band was built for, which is the test that matters: the
+// positions bought near 76-80c and sold at 1.5c and 5.7c had floors around 25-37c, so their
+// bids sat at a tenth of the stop and are declined by a wide margin. A bid at half the stop
+// is a real price on a book that has moved; a bid at a twentieth of it is somebody's lowball
+// resting order.
+const STOP_GAP_TOLERANCE = Math.min(1, Math.max(0, number(process.env.LIVE_EXIT_STOP_GAP_TOLERANCE, 0.5)));
 
 // The lowest price this stop will accept. Null when there is no floor to measure against,
 // which is the settlement close: that one takes the bid on purpose.
