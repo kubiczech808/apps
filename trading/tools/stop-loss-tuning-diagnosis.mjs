@@ -130,50 +130,86 @@ async function main() {
   console.log(`Portfolio match: ${PORTFOLIO_MATCH.join(", ") || "(all)"}\n`);
 
   // ---------------------------------------------------------------------------------
-  console.log("== 1. how every live portfolio's stop loss is configured right now");
-  const configPayload = await fetchJson(`${HOST}/api.php?action=portfolio-config&t=${Date.now()}`);
+  // Both catalogues, always, whether or not the match needs them. A portfolio named like
+  // the live ones can be a paper one -- the naming convention is the same -- and looking in
+  // only one place is how "0 trades in the matched portfolio" gets read as "no data".
+  console.log("== 1. every portfolio, and how its stop loss is configured right now");
+  const [configPayload, livePayload, paperPayload] = await Promise.all([
+    fetchJson(`${HOST}/api.php?action=portfolio-config&t=${Date.now()}`),
+    fetchJson(`${HOST}/api.php?action=state&target=live&t=${Date.now()}`),
+    fetchJson(`${HOST}/api.php?action=state&target=paper&t=${Date.now()}`),
+  ]);
   const config = configPayload?.config || configPayload || {};
-  const rows = [
-    ["live", config.live],
-    ["live5050", config.live5050],
-    ...Object.entries(config.livePortfolios || {}).map(([id, row]) => [`live-custom-${id}`, row]),
-  ].filter(([, row]) => row && typeof row === "object");
+  const live = livePayload?.liveState || livePayload?.state || livePayload || {};
+  const paper = paperPayload?.botState || paperPayload?.state || paperPayload || {};
+  const paperPortfolios = paper?.paperPortfolios && typeof paper.paperPortfolios === "object"
+    ? paper.paperPortfolios : {};
+
+  const liveClosed = [
+    ...(Array.isArray(live.closedTrades) ? live.closedTrades : []),
+    ...(Array.isArray(live.trades?.closed) ? live.trades.closed : []),
+  ];
+
+  const catalogue = [
+    ...[["live", config.live], ["live5050", config.live5050],
+      ...Object.entries(config.livePortfolios || {}).map(([id, row]) => [`live-custom-${id}`, row])]
+      .filter(([, row]) => row && typeof row === "object")
+      .map(([id, row]) => ({
+        kind: "live", id, name: String(row.displayName || id), row,
+        // Live closed rows carry no portfolioId in this payload -- the dashboard attributes
+        // them from each portfolio's own execution run log. Only rows that DO carry one are
+        // claimed here; the rest are reported unattributed rather than silently split.
+        closed: liveClosed.filter((trade) => String(trade.portfolioId || "") === id).map(normalizeTrade),
+      })),
+    ...Object.entries(config.paper || {})
+      .filter(([, row]) => row && typeof row === "object")
+      .map(([id, row]) => ({
+        kind: "paper", id, name: String(row.displayName || id), row,
+        closed: (Array.isArray(paperPortfolios[id]?.trades) ? paperPortfolios[id].trades : [])
+          .filter((trade) => {
+            const status = String(trade?.status || "").toUpperCase();
+            // A trade with a settled result. Unfilled limit orders never became positions
+            // and would drag the P/L of a portfolio that never held them.
+            if (["OPEN", "PENDING", "PENDING_FILL", "UNFILLED", "CANCELLED"].includes(status)) return false;
+            return num(trade?.realizedPnlUsdc ?? trade?.pnlUsdc) != null;
+          })
+          .map(normalizeTrade),
+      })),
+  ];
 
   const matched = [];
-  for (const [id, row] of rows) {
-    const name = String(row.displayName || id);
+  for (const entry of catalogue) {
     const isMatch = !PORTFOLIO_MATCH.length
-      || PORTFOLIO_MATCH.some((needle) => `${name} ${id}`.toLowerCase().includes(needle));
-    if (isMatch) matched.push({ id, name, row });
-    console.log(`   ${isMatch ? "->" : "  "} ${clip(id, 26)} "${clip(name, 22)}"`
-      + `  multiplier ${String(row.stopLossRiskMultiplier ?? "-").padStart(5)}`
-      + `  probFloor ${String(row.stopLossProbabilityFloor ?? "-").padStart(5)}`
-      + `  closeBid ${String(row.settlementCloseBid ?? "-").padStart(5)}`
-      + `  minProb ${String(row.minProbability ?? "-").padStart(5)}`
-      + `  stake ${String(row.stakeUsdc ?? "-").padStart(5)}`
-      + `  reverse ${row.reverseOnStopLoss === true ? "yes" : "no"}`
-      + `  archived ${row.archived === true ? "YES" : "no"}`);
+      || PORTFOLIO_MATCH.some((needle) => `${entry.name} ${entry.id}`.toLowerCase().includes(needle));
+    if (isMatch) matched.push(entry);
+    console.log(`   ${isMatch ? "->" : "  "} ${entry.kind.padEnd(5)} ${clip(entry.id, 24)} "${clip(entry.name, 22)}"`
+      + `  multiplier ${String(entry.row.stopLossRiskMultiplier ?? "-").padStart(5)}`
+      + `  probFloor ${String(entry.row.stopLossProbabilityFloor ?? "-").padStart(5)}`
+      + `  closeBid ${String(entry.row.settlementCloseBid ?? "-").padStart(5)}`
+      + `  minProb ${String(entry.row.minProbability ?? "-").padStart(5)}`
+      + `  stake ${String(entry.row.stakeUsdc ?? "-").padStart(5)}`
+      + `  reverse ${entry.row.reverseOnStopLoss === true ? "yes" : "no"}`
+      + `  archived ${entry.row.archived === true ? "YES" : "no"}`
+      + `  closed ${String(entry.closed.length).padStart(4)}`);
+  }
+  const unattributed = liveClosed.filter((trade) => !String(trade.portfolioId || "").trim()).length;
+  if (unattributed) {
+    console.log(`\n   ${unattributed} of ${liveClosed.length} live closed row(s) carry no portfolioId, so they are`);
+    console.log("   attributed on the dashboard from each portfolio's execution run log rather than");
+    console.log("   from the row. This tool claims only rows that name their portfolio.");
   }
   if (!matched.length) {
-    console.log(`\n   !! nothing matched /${PORTFOLIO_MATCH.join("|")}/ -- pass PORTFOLIO_MATCH to pick one of the ids above`);
+    console.log(`\n   !! nothing matched /${PORTFOLIO_MATCH.join("|")}/ -- pass PORTFOLIO_MATCH to pick one above`);
     return;
   }
-  const matchedIds = new Set(matched.map((entry) => entry.id));
   console.log("");
 
   // ---------------------------------------------------------------------------------
   console.log("== 2. the closed trades of the matched portfolio(s)");
-  const statePayload = await fetchJson(`${HOST}/api.php?action=state&target=live&t=${Date.now()}`);
-  const live = statePayload?.liveState || statePayload?.state || statePayload || {};
-  const allClosed = [
-    ...(Array.isArray(live.closedTrades) ? live.closedTrades : []),
-    ...(Array.isArray(live.trades?.closed) ? live.trades.closed : []),
-  ].map(normalizeTrade);
-  const trades = allClosed.filter((trade) => matchedIds.has(trade.portfolioId));
-  console.log(`   ${allClosed.length} closed trade(s) on the account, ${trades.length} in the matched portfolio(s)`);
+  const trades = matched.flatMap((entry) => entry.closed);
+  console.log(`   matched: ${matched.map((entry) => `${entry.kind}:${entry.id} (${entry.closed.length})`).join(", ")}`);
   if (!trades.length) {
-    const seen = [...new Set(allClosed.map((trade) => trade.portfolioId || "(none)"))];
-    console.log(`   !! portfolioIds present on the closed rows: ${seen.join(", ")}`);
+    console.log("   !! the matched portfolio(s) have no settled closed trade in this payload");
     return;
   }
   const openTimes = trades.map((trade) => trade.openedAt).filter(Boolean).sort();
