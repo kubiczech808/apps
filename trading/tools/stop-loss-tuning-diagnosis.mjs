@@ -134,16 +134,41 @@ async function main() {
   // the live ones can be a paper one -- the naming convention is the same -- and looking in
   // only one place is how "0 trades in the matched portfolio" gets read as "no data".
   console.log("== 1. every portfolio, and how its stop loss is configured right now");
-  const [configPayload, livePayload, paperPayload] = await Promise.all([
+  // The unnamed paper summary decodes the whole evaluation archive on the way out and
+  // answers HTTP 500 on this host -- the dashboard carries the same note. So the overview
+  // is fetched first, and the matched portfolio's trades are asked for by strategy_id:
+  // `summary=dashboard` only includes trades for the ONE portfolio it is given.
+  const [configPayload, livePayload, overviewPayload] = await Promise.all([
     fetchJson(`${HOST}/api.php?action=portfolio-config&t=${Date.now()}`),
     fetchJson(`${HOST}/api.php?action=state&target=live&t=${Date.now()}`),
-    fetchJson(`${HOST}/api.php?action=state&target=paper&t=${Date.now()}`),
+    fetchJson(`${HOST}/api.php?action=state&target=paper&summary=portfolio-overview&t=${Date.now()}`),
   ]);
   const config = configPayload?.config || configPayload || {};
   const live = livePayload?.liveState || livePayload?.state || livePayload || {};
-  const paper = paperPayload?.botState || paperPayload?.state || paperPayload || {};
-  const paperPortfolios = paper?.paperPortfolios && typeof paper.paperPortfolios === "object"
-    ? paper.paperPortfolios : {};
+  const overview = overviewPayload?.botState || overviewPayload?.state || overviewPayload || {};
+  const overviewPortfolios = overview?.paperPortfolios && typeof overview.paperPortfolios === "object"
+    ? overview.paperPortfolios : {};
+
+  // Trades for the paper portfolios whose name matches, one request each. Asking for every
+  // portfolio's trades is what the 500 was about, so only the matches are fetched.
+  const paperIds = Object.keys(config.paper || {}).filter((id) => {
+    const name = String(config.paper?.[id]?.displayName || id);
+    return !PORTFOLIO_MATCH.length
+      || PORTFOLIO_MATCH.some((needle) => `${name} ${id}`.toLowerCase().includes(needle));
+  });
+  const paperPortfolios = { ...overviewPortfolios };
+  for (const id of paperIds) {
+    try {
+      const payload = await fetchJson(
+        `${HOST}/api.php?action=state&target=paper&summary=dashboard&strategy_id=${encodeURIComponent(id)}&t=${Date.now()}`,
+      );
+      const state = payload?.botState || payload?.state || payload || {};
+      const row = state?.paperPortfolios?.[id];
+      if (row) paperPortfolios[id] = row;
+    } catch (error) {
+      console.log(`   !! could not read paper portfolio ${id}: ${error?.message || error}`);
+    }
+  }
 
   const liveClosed = [
     ...(Array.isArray(live.closedTrades) ? live.closedTrades : []),
