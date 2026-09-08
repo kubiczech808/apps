@@ -1245,6 +1245,14 @@ function stopLossRiskLabel(config = {}) {
   return multiplier > 0 ? `${percent(multiplier)} of net win` : "Off";
 }
 
+// One reader for the probability floor's label, because the typing preview and the saved
+// render would otherwise word the same setting differently -- and a label that changes its
+// phrasing when the value has not changed reads as the value having changed.
+function stopLossProbabilityFloorLabel(floor) {
+  const level = normalizeStopLossProbabilityFloor(floor);
+  return level == null ? "Off" : `Sell at or below ${probability(level)}`;
+}
+
 // The same solve rpi-live-exit-worker.mjs runs, so a warning about what a stop would close
 // names the price that worker will actually use. It is deliberately a mirror rather than an
 // approximation, and a test imports the worker's own equalRiskExitPlan and compares the two
@@ -1305,23 +1313,45 @@ function openPositionsForMode(mode = state.mode) {
   return paperPortfolioTrades(portfolioState).filter((trade) => !isClosedTrade(trade));
 }
 
-function positionsAStopWouldCloseNow(mode = state.mode, multiplierOverride = null) {
+function positionsAStopWouldCloseNow(mode = state.mode, overrides = null) {
   const config = portfolioConfigForMode(mode);
   // The proposed value when there is one, so a change can be judged BEFORE it is saved
-  // rather than explained afterwards.
-  const multiplier = multiplierOverride == null
+  // rather than explained afterwards. A bare number is the multiplier, which is all the
+  // first caller ever proposed; an object proposes either level, or both.
+  const proposed = typeof overrides === "number" ? { multiplier: overrides } : (overrides || {});
+  const multiplier = proposed.multiplier == null
     ? stopLossRiskMultiplier(config)
-    : normalizeStopLossRiskMultiplier(multiplierOverride, 0);
-  if (!(multiplier > 0)) return { multiplier: 0, closing: [], unknown: [] };
+    : normalizeStopLossRiskMultiplier(proposed.multiplier, 0);
+  const probabilityFloor = proposed.probabilityFloor === undefined
+    ? normalizeStopLossProbabilityFloor(config.stopLossProbabilityFloor)
+    : normalizeStopLossProbabilityFloor(proposed.probabilityFloor);
+  // Either level on its own is a stop, which is the rule the exit worker already applies:
+  // "a portfolio that sets only the probability floor still has a stop". Requiring the
+  // multiplier here kept the floor's own sales out of this preview altogether, so setting
+  // a floor on a portfolio whose multiplier is 0 -- which is how the winning paper
+  // portfolios are configured -- warned about nothing and sold on save.
+  if (!(multiplier > 0) && !(probabilityFloor > 0)) {
+    return { multiplier: 0, probabilityFloor: null, closing: [], unknown: [] };
+  }
   const closing = [];
   const unknown = [];
   for (const position of openPositionsForMode(mode)) {
-    const stopPrice = equalRiskStopPrice(position, multiplier);
-    if (stopPrice == null) continue;
     const bid = numericOrNull(position.bestBid ?? position.lastLiveBid ?? position.currentPrice ?? position.markPrice);
     const shares = numericOrNull(position.shares ?? position.size);
     const cost = numericOrNull(position.totalCostUsdc ?? position.stakeUsdc ?? position.initialValue);
     const entryPrice = shares != null && cost != null && shares > 0 ? cost / shares : null;
+    const equalRisk = multiplier > 0 ? equalRiskStopPrice(position, multiplier) : null;
+    // effectiveStopFloor's rule, so this preview promises only what the worker will really
+    // do: a probability floor at or above the entry is refused rather than applied, since
+    // there it caps no loss -- it liquidates the position the instant the stop arms.
+    const flat = probabilityFloor != null && probabilityFloor > 0
+      && (entryPrice == null || probabilityFloor < entryPrice)
+      ? probabilityFloor
+      : null;
+    // The price arrives from above, so the level it meets first is the higher of the two.
+    const levels = [equalRisk, flat].filter((level) => level != null && level > 0);
+    const stopPrice = levels.length ? Math.max(...levels) : null;
+    if (stopPrice == null) continue;
     const row = {
       key: String(position.tokenId || position.assetId || position.question || ""),
       question: position.question || position.market || "-",
@@ -1329,10 +1359,14 @@ function positionsAStopWouldCloseNow(mode = state.mode, multiplierOverride = nul
       stakeUsdc: cost,
       stopPrice,
       entryPrice,
+      // Which of the two levels is the one that would sell, so the confirmation can say
+      // why the stop lands where it does instead of naming a price with no reason.
+      stopSource: flat != null && stopPrice === flat ? "probability" : "equal-risk",
       // A floor at or above what the position cost is not a stop loss at all: it cannot cap
       // a loss, it sells at the entry price the moment it is armed. Named separately
       // because it is not "the market moved against this position" -- it is a setting that
-      // cannot do what it says.
+      // cannot do what it says. Only the equal-risk level can land here now; the flat floor
+      // is refused above.
       aboveEntry: entryPrice != null && stopPrice >= entryPrice,
       price: bid,
     };
@@ -1341,7 +1375,7 @@ function positionsAStopWouldCloseNow(mode = state.mode, multiplierOverride = nul
     else if (bid <= stopPrice) closing.push(row);
   }
   closing.sort((left, right) => (left.price ?? 0) - (right.price ?? 0));
-  return { multiplier, closing, unknown };
+  return { multiplier, probabilityFloor, closing, unknown };
 }
 
 // Changing the stop loss acts on the positions the portfolio ALREADY holds, immediately.
@@ -1355,26 +1389,41 @@ function positionsAStopWouldCloseNow(mode = state.mode, multiplierOverride = nul
 // change ITSELF closes is listed: a position already below its stop under the current
 // setting is not news, and burying the new ones among them is how a confirmation stops
 // being read.
-function confirmStopLossChange(mode = state.mode, nextMultiplier = 0) {
+function confirmStopLossChange(mode = state.mode, next = 0) {
+  // A bare number is the multiplier, the only level this used to be able to confirm.
+  const proposed = typeof next === "number" ? { multiplier: next } : (next || {});
+  const nextMultiplier = proposed.multiplier;
+  const nextFloor = proposed.probabilityFloor;
   const before = positionsAStopWouldCloseNow(mode);
-  const after = positionsAStopWouldCloseNow(mode, nextMultiplier);
+  const after = positionsAStopWouldCloseNow(mode, proposed);
   const already = new Set(before.closing.map((row) => row.key));
   const newlyClosing = after.closing.filter((row) => !already.has(row.key));
   if (!newlyClosing.length) return true;
   const name = portfolioNameForMode(mode);
   const stake = newlyClosing.reduce((total, row) => total + (row.stakeUsdc || 0), 0);
-  const brokenFloor = newlyClosing.filter((row) => row.aboveEntry);
+  // Only the multiplier's arithmetic can put a floor above the entry, so its explanation
+  // only belongs on a multiplier change. Attaching it to a floor change would explain the
+  // wrong field's units.
+  const brokenFloor = nextMultiplier == null ? [] : newlyClosing.filter((row) => row.aboveEntry);
   const lines = newlyClosing.map((row) => `  - ${row.question}${row.outcome ? ` (${row.outcome})` : ""}`
     + (row.aboveEntry
       ? `  stop ${percent(row.stopPrice)} is ABOVE the ${percent(row.entryPrice)} entry`
       : `  bid ${percent(row.price)} vs stop ${percent(row.stopPrice)}`)
     + `${row.stakeUsdc != null ? `, ${money(row.stakeUsdc)} at stake` : ""}`);
+  const heading = nextFloor != null
+    ? `Sell below ${percent(nextFloor)} on "${name}"?`
+    : `Save a ${percent(nextMultiplier)} stop loss on "${name}"?`;
   return window.confirm([
-    `Save a ${percent(nextMultiplier)} stop loss on "${name}"?`,
+    heading,
     "",
     `${newlyClosing.length} open position${newlyClosing.length === 1 ? "" : "s"}`
       + ` holding ${money(stake)} would be sold as soon as this saves:`,
     ...lines,
+    ...(nextFloor != null ? [
+      "",
+      "This floor does not move with the entry price: any position the market already",
+      "prices at or below it is sold at once, whatever it cost.",
+    ] : []),
     ...(brokenFloor.length ? [
       "",
       `${brokenFloor.length === newlyClosing.length ? "Every one of them" : `${brokenFloor.length} of them`}`
@@ -5777,9 +5826,7 @@ function syncPortfolioParameterControls(configOverride = null, options = {}) {
     els.stopLossProbabilityFloor.value = probabilityFloor == null ? "0" : String(Number((probabilityFloor * 100).toFixed(1)));
   }
   if (els.stopLossProbabilityFloorLabel) {
-    els.stopLossProbabilityFloorLabel.textContent = probabilityFloor == null
-      ? "Off"
-      : `Sell at or below ${probability(probabilityFloor)}`;
+    els.stopLossProbabilityFloorLabel.textContent = stopLossProbabilityFloorLabel(probabilityFloor);
   }
   if (els.settlementCloseBid && document.activeElement !== els.settlementCloseBid) {
     els.settlementCloseBid.value = settlementCloseBid == null ? "0" : String(Number((settlementCloseBid * 100).toFixed(1)));
@@ -15236,7 +15283,18 @@ els.maxResolutionHours?.addEventListener("input", () => {
   rerenderCurrentDashboard();
 });
 
+// Reported while filling in a new portfolio: this field zeroed itself mid-form.
+//
+// It had no empty-input guard, unlike every other numeric control here. Clearing the box to
+// retype makes Number("") === 0, 0 normalizes to null, null was written as 0 -- so the DRAFT
+// took a 0 the moment the box was momentarily blank, and the next sync put that 0 back on
+// screen as soon as focus left. The value the person was halfway through typing was gone
+// without them touching this control again.
 els.settlementCloseBid?.addEventListener("input", () => {
+  if (parameterDraftInputIsEmpty(els.settlementCloseBid)) {
+    if (els.settlementCloseBidLabel) els.settlementCloseBidLabel.textContent = "-";
+    return;
+  }
   const bid = normalizeSettlementCloseBid(numberValue(els.settlementCloseBid) / 100);
   const value = bid == null ? 0 : bid;
   if (updateParameterDraft({ settlementCloseBid: value })) return;
@@ -15417,6 +15475,50 @@ els.stopLossRiskMultiplier?.addEventListener("input", () => {
   // A draft portfolio holds nothing yet and is not persisted until the form is submitted,
   // so there is nothing a keystroke there can sell.
   updateParameterDraft(stopLossMultiplierUpdates(multiplier));
+});
+
+// Reported while filling in a new portfolio: this field zeroed itself mid-form.
+//
+// It had no listener at all -- the only control in the modal with none. Every other one
+// writes what was typed into the draft, and syncPortfolioParameterControls then renders the
+// controls FROM that draft; the activeElement guard keeps the box intact while the cursor is
+// in it, and nothing kept it afterwards. So typing 49 here and then touching any other
+// control replaced the 49 with the draft's own value, which for a new portfolio is 0. The
+// submitted config read the box, and by then the box said 0.
+//
+// Split across input and change for the reason the multiplier above is: a keystroke on a
+// SAVED portfolio is a live instruction to the exit worker, and half a number is a different
+// stop. Typing previews; change commits and confirms.
+els.stopLossProbabilityFloor?.addEventListener("input", () => {
+  if (parameterDraftInputIsEmpty(els.stopLossProbabilityFloor)) {
+    if (els.stopLossProbabilityFloorLabel) els.stopLossProbabilityFloorLabel.textContent = "-";
+    return;
+  }
+  const floor = normalizeStopLossProbabilityFloor(numberValue(els.stopLossProbabilityFloor) / 100);
+  if (els.stopLossProbabilityFloorLabel) {
+    els.stopLossProbabilityFloorLabel.textContent = stopLossProbabilityFloorLabel(floor);
+  }
+  // A draft portfolio holds nothing yet and is not persisted until the form is submitted,
+  // so there is nothing a keystroke there can sell.
+  updateParameterDraft({ stopLossProbabilityFloor: floor == null ? 0 : floor });
+});
+
+els.stopLossProbabilityFloor?.addEventListener("change", () => {
+  if (parameterDraftInputIsEmpty(els.stopLossProbabilityFloor)) return;
+  const floor = normalizeStopLossProbabilityFloor(numberValue(els.stopLossProbabilityFloor) / 100);
+  const value = floor == null ? 0 : floor;
+  if (updateParameterDraft({ stopLossProbabilityFloor: value })) return;
+  // This floor does not move with the entry, so any position the market already prices at
+  // or below it sells the moment this saves -- the same immediate consequence the
+  // multiplier's confirmation exists for.
+  if (!confirmStopLossChange(state.mode, { probabilityFloor: value })) {
+    syncPortfolioParameterControls();
+    return;
+  }
+  updatePortfolioConfigForMode(state.mode, { stopLossProbabilityFloor: value });
+  savePortfolioConfigSoon();
+  syncPortfolioParameterControls();
+  rerenderCurrentDashboard();
 });
 
 els.stopLossRiskMultiplier?.addEventListener("change", () => {

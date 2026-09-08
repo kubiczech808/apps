@@ -3592,6 +3592,7 @@ test("stop loss warning: enabling a portfolio names the positions its stop would
   const decide = new Function("state", "window", `
     ${extractFunction(APP, "numericOrNull")}
     ${extractFunction(APP, "normalizeStopLossRiskMultiplier")}
+    ${extractFunction(APP, "normalizeStopLossProbabilityFloor")}
     ${extractFunction(APP, "stopLossRiskMultiplier")}
     ${extractFunction(APP, "stopLossFeeUsdc")}
     ${extractFunction(APP, "stopLossNetExitValue")}
@@ -3623,6 +3624,7 @@ test("stop loss warning: enabling a portfolio names the positions its stop would
   const off = new Function("state", `
     ${extractFunction(APP, "numericOrNull")}
     ${extractFunction(APP, "normalizeStopLossRiskMultiplier")}
+    ${extractFunction(APP, "normalizeStopLossProbabilityFloor")}
     ${extractFunction(APP, "stopLossRiskMultiplier")}
     ${extractFunction(APP, "stopLossFeeUsdc")}
     ${extractFunction(APP, "stopLossNetExitValue")}
@@ -3632,7 +3634,9 @@ test("stop loss warning: enabling a portfolio names the positions its stop would
     const openPositionsForMode = () => state.positions;
     return positionsAStopWouldCloseNow("live");
   `)({ config: { stopLossRiskMultiplier: 0 }, positions: [{ shares: 6.5, totalCostUsdc: 5, netGainIfWinUsdc: 1.5, bestBid: 0.01 }] });
-  assert.deepEqual(off, { multiplier: 0, closing: [], unknown: [] });
+  // probabilityFloor travels alongside now: a portfolio with a floor and no multiplier
+  // still has a stop, so "no stop" has to say both levels were looked at.
+  assert.deepEqual(off, { multiplier: 0, probabilityFloor: null, closing: [], unknown: [] });
 });
 
 // The confirmation must be on the way ON only, and must actually gate the write: a dialog
@@ -4149,11 +4153,13 @@ test("stop loss form: a change that would sell open positions is named and confi
   // force.
   assert.match(changeHandler, /syncPortfolioParameterControls\(\);\s*\n\s*return;/);
 
-  // The plan calculation has to be able to answer for a PROPOSED multiplier, or the
-  // question can only be asked after the save.
+  // The plan calculation has to be able to answer for a PROPOSED setting, or the question
+  // can only be asked after the save. A bare number stays the multiplier, which is what
+  // this caller passes.
   const which = extractFunction(APP, "positionsAStopWouldCloseNow");
-  assert.match(which, /function positionsAStopWouldCloseNow\(mode = state\.mode, multiplierOverride = null\)/);
-  assert.match(which, /multiplierOverride == null/);
+  assert.match(which, /function positionsAStopWouldCloseNow\(mode = state\.mode, overrides = null\)/);
+  assert.match(which, /typeof overrides === "number" \? \{ multiplier: overrides \}/);
+  assert.match(which, /proposed\.multiplier == null/);
   // A floor at or above the entry is its own category: not "the market moved against this
   // position" but a setting that cannot do what it says.
   assert.match(which, /aboveEntry: entryPrice != null && stopPrice >= entryPrice/);
@@ -4711,4 +4717,121 @@ test("observation_market_shape (PHP) agrees with marketShape (Node) on the same 
     const nodeShape = bot.marketShape(item);
     assert.equal(phpShape, nodeShape, `PHP and Node disagree on: ${question}`);
   }
+});
+
+// Reported: filling in a new portfolio form, "Close at certainty" and "Sell below
+// probability" zeroed themselves partway through.
+//
+// Both had the same cause, in two shapes. Every control in the modal writes what was typed
+// into state.parameterDraft, and syncPortfolioParameterControls then renders the controls
+// FROM that draft; an activeElement guard keeps a box intact while the cursor is in it, and
+// nothing keeps it afterwards. So a value that never reaches the draft is replaced by the
+// draft's own -- 0 for a new portfolio -- as soon as focus leaves and any other control
+// fires a sync. The form is then submitted from the boxes, which by then say 0.
+//
+//   Sell below probability  had no listener at all, so nothing ever reached the draft.
+//   Close at certainty      had one with no empty-input guard, so clearing the box to
+//                           retype wrote Number("") === 0 into the draft immediately.
+//
+// This checks the class rather than the two instances: every numeric control in the modal
+// must reach the draft, and must not commit a value while its box is empty.
+test("portfolio form: no control loses what was typed into it", () => {
+  const html = readFileSync(new URL("../index.html", import.meta.url), "utf8");
+  const modal = html.slice(html.indexOf("data-parameter-modal"));
+  const attributes = [...modal.matchAll(/<input[^>]*type="number"[^>]*?data-([a-z0-9-]+)[^>]*>/g)]
+    .map((match) => match[1]);
+  assert.ok(attributes.length >= 8, `expected the modal's numeric controls, found ${attributes.length}`);
+  // Both fields the report named have to be in the set this test actually covers, or it
+  // could pass while saying nothing about them.
+  assert.ok(attributes.includes("settlement-close-bid"));
+  assert.ok(attributes.includes("stop-loss-probability-floor"));
+
+  const camel = (attribute) => attribute.replace(/-(\w)/g, (_, letter) => letter.toUpperCase());
+  const handlersFor = (name) => [...APP.matchAll(
+    new RegExp(`els\\.${name}\\?\\.addEventListener\\("(input|change)"[\\s\\S]*?\\n\\}\\);`, "g"),
+  )].map((match) => match[0]);
+
+  for (const attribute of attributes) {
+    assert.ok(handlersFor(camel(attribute)).length,
+      `${attribute} has no listener, so what is typed into it never reaches the draft and`
+      + " the next sync overwrites it with the draft's own value");
+  }
+
+  // The empty-input guard is only needed where "unset" is RENDERED AS ZERO, and that is
+  // the whole distinction the two reported fields turned on.
+  //
+  // minLiquidity, maxProbability and the initial capital all render unset as an EMPTY box,
+  // so clearing one to retype writes null, the box stays empty, and the digits reappear as
+  // they are typed. Nothing is lost and no guard is needed.
+  //
+  // These two render unset as the string "0". So a box that is momentarily blank commits a
+  // 0 to the draft, and the next sync writes that 0 back on screen -- indistinguishable
+  // from a number the person typed and then lost. Derived from app.js rather than listed
+  // here, so a control that starts rendering unset as 0 is caught the day it does.
+  const zeroRendered = [...APP.matchAll(/els\.([A-Za-z]+)\.value = \w+ == null \? "0"/g)]
+    .map((match) => match[1]);
+  assert.ok(zeroRendered.includes("settlementCloseBid") && zeroRendered.includes("stopLossProbabilityFloor"),
+    `expected both reported fields among the zero-rendered controls, found ${zeroRendered.join(", ")}`);
+  for (const name of zeroRendered) {
+    for (const handler of handlersFor(name)) {
+      // `change` fires on commit, where the value is the one that was meant. `input` fires
+      // on every keystroke, including the one that empties the box.
+      if (!handler.includes('addEventListener("input"')) continue;
+      assert.ok(
+        handler.includes("parameterDraftInputIsEmpty") || handler.includes("hasValue"),
+        `${name} renders unset as "0" and commits on every keystroke with no empty-input`
+        + ' guard: clearing the box to retype writes Number("") into the draft, and the next'
+        + " sync puts that 0 on screen",
+      );
+    }
+  }
+});
+
+// The probability floor is a stop, on its own, with no multiplier set at all -- which is
+// how the winning paper portfolios are configured (stopLossRiskMultiplier 0). The preview
+// that warns "these positions would be sold as soon as this saves" required a multiplier
+// above zero and returned nothing otherwise, so setting a floor on one of those portfolios
+// warned about nothing and then sold on save.
+test("stop loss preview: the probability floor is a stop on its own", () => {
+  const build = (mode, overrides) => {
+    const body = ["positionsAStopWouldCloseNow", "equalRiskStopPrice", "stopLossNetExitValue",
+      "normalizeStopLossRiskMultiplier", "normalizeStopLossProbabilityFloor", "stopLossRiskMultiplier",
+      "numericOrNull", "isClosedTrade"]
+      .map((each) => extractFunction(APP, each)).join("\n\n");
+    return new Function("portfolioConfigForMode", "openPositionsForMode", `
+      ${body}
+      return positionsAStopWouldCloseNow;
+    `)(
+      () => ({ stopLossRiskMultiplier: 0, stopLossProbabilityFloor: 0 }),
+      () => [
+        // Bought at 0.80, the market now bids 0.40: a 0.49 floor sells it, an equal-risk
+        // floor derived from a 0 multiplier does not exist.
+        { tokenId: "a", question: "Below the floor", shares: 6.25, totalCostUsdc: 5,
+          netGainIfWinUsdc: 1.25, bestBid: 0.4 },
+        // Bought at 0.45 -- BELOW the floor. Selling here caps no loss, it liquidates on
+        // arming, so effectiveStopFloor refuses it and this preview must refuse it too or
+        // it promises a sale the worker will not make.
+        { tokenId: "b", question: "Bought under the floor", shares: 11.11, totalCostUsdc: 5,
+          netGainIfWinUsdc: 6.11, bestBid: 0.42 },
+      ],
+    )(mode, overrides);
+  };
+
+  // The deployed setting is multiplier 0 and floor 0: nothing is a stop, nothing closes.
+  const off = build("paper-esports", null);
+  assert.equal(off.multiplier, 0);
+  assert.deepEqual(off.closing, [], "with neither level set there is no stop to preview");
+
+  // Proposing only a floor. The position bought above it closes; the one bought below it
+  // does not, because the worker would refuse that floor.
+  const proposed = build("paper-esports", { probabilityFloor: 0.49 });
+  assert.deepEqual(proposed.closing.map((row) => row.key), ["a"],
+    "a position bought BELOW the floor must not be reported as one the floor would sell");
+  assert.equal(proposed.closing[0].stopSource, "probability",
+    "the row has to say which of the two levels is the one that would sell");
+  assert.equal(proposed.probabilityFloor, 0.49);
+
+  // A bare number still means the multiplier, so the caller that only ever proposed one
+  // keeps working.
+  assert.equal(build("paper-esports", 0).multiplier, 0);
 });
