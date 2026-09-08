@@ -1,0 +1,60 @@
+name: Trading Stop Loss Tuning Diagnosis
+
+# Read-only diagnostic, manual only. Reads the portfolio config and the live state over
+# HTTPS and prices every closed trade against a grid of stop-loss settings. Places no
+# orders, writes nothing, publishes nothing, and uses no secrets.
+#
+# Asked for: a live portfolio running a 25%-of-net-win stop loss keeps giving back the whole
+# stake on its LOST trades. This reports what the stop actually put in force on those
+# positions, and which settings would have capped them without costing the winners.
+on:
+  workflow_dispatch:
+    inputs:
+      portfolio_match:
+        description: "Semicolon-separated substrings of the portfolio name or id to analyse"
+        required: false
+        default: "underway"
+        type: string
+      multiplier_grid:
+        description: "Comma-separated stop-loss risk multipliers to price"
+        required: false
+        default: "0.25,0.5,0.75,1,1.5,2,3"
+        type: string
+      probability_floor_grid:
+        description: "Comma-separated probability floors to price (0 = off)"
+        required: false
+        default: "0,0.35,0.49,0.6,0.7,0.8"
+        type: string
+      gap_tolerance_grid:
+        description: "Comma-separated gap-band tolerances; the first is treated as the deployed one"
+        required: false
+        default: "0.5,0.7,0.85,1"
+        type: string
+      trade_rows:
+        description: "How many individual closed trades to print in full"
+        required: false
+        default: "80"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Price the closed trades against a grid of stop-loss settings
+        working-directory: trading
+        env:
+          PORTFOLIO_MATCH: ${{ inputs.portfolio_match || 'underway' }}
+          MULTIPLIER_GRID: ${{ inputs.multiplier_grid || '0.25,0.5,0.75,1,1.5,2,3' }}
+          PROBABILITY_FLOOR_GRID: ${{ inputs.probability_floor_grid || '0,0.35,0.49,0.6,0.7,0.8' }}
+          GAP_TOLERANCE_GRID: ${{ inputs.gap_tolerance_grid || '0.5,0.7,0.85,1' }}
+          TRADE_ROWS: ${{ inputs.trade_rows || '80' }}
+        run: node tools/stop-loss-tuning-diagnosis.mjs
