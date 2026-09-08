@@ -63,6 +63,23 @@ const clip = (value, width) => String(value ?? "").replace(/\s+/g, " ").trim().s
 // paid out" is a property of the market and whoever holds it -- paper or live -- observes
 // the same thing. Deliberately keyed by token and not by question: matching on the
 // question would pair our YES against somebody else's NO and score it backwards.
+// Three tiers of evidence, and the difference between them decides the whole report.
+//
+// SETTLED  the row carries a settlement price at 0 or 1: the market itself said so.
+// STATUS   the row says WON or LOST.
+// PNL      neither, so only the sign of the P/L is left.
+//
+// PNL is the weak one and it is weak in a specific, dangerous direction: a position SOLD
+// EARLY at a loss on a market that went on to resolve in our favour reads as a loss there.
+// The live account is full of exactly those -- 115 of its closed rows are early sales -- so
+// scoring live orders off the P/L sign measures "the exits gave money back", and reporting
+// that as "the picks were bad" is the one way to get this backwards.
+//
+// So the best evidence anywhere wins, not the first source read. This was first-writer-wins
+// and the live account is read first, which handed every early sale a PNL verdict even when
+// a paper portfolio held the same token to settlement and knew the real answer.
+const EVIDENCE_RANK = { settled: 3, status: 2, pnl: 1 };
+
 export function outcomeByToken(sources) {
   const outcomes = new Map();
   for (const { label, trades } of sources) {
@@ -77,17 +94,21 @@ export function outcomeByToken(sources) {
       const exitPrice = num(row?.exitPrice ?? row?.finalOutcomePrice);
       const pnl = num(row?.realizedPnlUsdc ?? row?.pnlUsdc);
       let won = null;
-      // The settlement price is the direct evidence and is preferred: a P/L can be
-      // negative on a token that WON if the position was sold early at a loss, and reading
-      // that as "the market went against us" is the one way to get this backwards.
-      if (exitPrice != null && (exitPrice >= 0.99 || exitPrice <= 0.01)) won = exitPrice >= 0.99;
-      else if (status === "WON") won = true;
-      else if (status === "LOST") won = false;
-      else if (pnl != null) won = pnl > 0;
+      let evidence = null;
+      if (exitPrice != null && (exitPrice >= 0.99 || exitPrice <= 0.01)) {
+        won = exitPrice >= 0.99;
+        evidence = "settled";
+      } else if (status === "WON" || status === "LOST") {
+        won = status === "WON";
+        evidence = "status";
+      } else if (pnl != null) {
+        won = pnl > 0;
+        evidence = "pnl";
+      }
       if (won == null) continue;
-      // First writer wins, so a token resolved by two portfolios is not counted twice and
-      // cannot flip depending on iteration order.
-      if (!outcomes.has(tokenId)) outcomes.set(tokenId, { won, via: label, exitPrice });
+      const existing = outcomes.get(tokenId);
+      if (existing && EVIDENCE_RANK[existing.evidence] >= EVIDENCE_RANK[evidence]) continue;
+      outcomes.set(tokenId, { won, via: label, exitPrice, evidence });
     }
   }
   return outcomes;
@@ -210,7 +231,17 @@ async function main() {
     console.log(`   ${clip(source.label, 22)} ${String(source.trades.length).padStart(5)} settled row(s),`
       + ` ${String(withToken).padStart(5)} carry a tokenId`);
   }
-  console.log(`   -> ${outcomes.size} token(s) with a known resolution\n`);
+  const tiers = new Map();
+  for (const outcome of outcomes.values()) tiers.set(outcome.evidence, (tiers.get(outcome.evidence) || 0) + 1);
+  console.log(`   -> ${outcomes.size} token(s) with a known resolution, by strength of evidence:`);
+  for (const tier of ["settled", "status", "pnl"]) {
+    if (!tiers.get(tier)) continue;
+    const note = tier === "settled" ? "settlement price at 0 or 1 -- the market said so"
+      : tier === "status" ? "the row says WON or LOST"
+        : "only the P/L sign, so an early sale at a loss reads as a loss";
+    console.log(`      ${String(tiers.get(tier)).padStart(5)}  ${tier.padEnd(8)} ${note}`);
+  }
+  console.log("");
 
   const liveIds = [
     ...(config.live && typeof config.live === "object" ? [["live", config.live, "live-execution"]] : []),
@@ -222,6 +253,8 @@ async function main() {
   ];
 
   const pooled = { filled: { won: 0, total: 0 }, unfilled: { won: 0, total: 0 } };
+  const pooledHard = { filled: { won: 0, total: 0 }, unfilled: { won: 0, total: 0 } };
+  const pooledPrices = [];
 
   for (const [id, row, target] of liveIds) {
     const name = String(row.displayName || id);
@@ -276,6 +309,11 @@ async function main() {
     console.log("      biased sample of the selections, not a smaller one.");
     const groups = { filled: { won: 0, total: 0 }, unfilled: { won: 0, total: 0 } };
     const prices = { filled: [], unfilled: [] };
+    // The same split again over the two strong evidence tiers only. If the weak tier is
+    // what drags the win rate down, the picks were fine and the EXITS gave the money back,
+    // which is a completely different problem with a completely different fix.
+    const hard = { filled: { won: 0, total: 0 }, unfilled: { won: 0, total: 0 } };
+    const filledPrices = { won: [], lost: [] };
     let unscored = 0;
     for (const attempt of attempts) {
       const outcome = outcomes.get(attempt.tokenId);
@@ -289,6 +327,16 @@ async function main() {
       if (outcome.won) groups[group].won += 1;
       pooled[group].total += 1;
       if (outcome.won) pooled[group].won += 1;
+      if (outcome.evidence !== "pnl") {
+        hard[group].total += 1;
+        if (outcome.won) hard[group].won += 1;
+        pooledHard[group].total += 1;
+        if (outcome.won) pooledHard[group].won += 1;
+      }
+      if (group === "filled" && attempt.orderPrice != null) {
+        filledPrices[outcome.won ? "won" : "lost"].push(attempt.orderPrice);
+        pooledPrices.push(attempt.orderPrice);
+      }
     }
     const mean = (values) => (values.length
       ? values.reduce((sum, value) => sum + value, 0) / values.length : null);
@@ -298,6 +346,27 @@ async function main() {
         + ` ${String(groups[group].won).padStart(5)}   ${pct(rate(groups[group].won, groups[group].total))}`
         + `   ${(mean(prices[group]) ?? 0).toFixed(4).padStart(16)}`
         + `   ${String(prices[group].length - groups[group].total).padStart(8)}`);
+    }
+    console.log("      the same rows, counting only settlement-price and WON/LOST evidence:");
+    for (const group of ["filled", "unfilled"]) {
+      console.log(`      ${clip(group, 9)} ${String(hard[group].total).padStart(7)}`
+        + ` ${String(hard[group].won).padStart(5)}   ${pct(rate(hard[group].won, hard[group].total))}`);
+    }
+
+    // The bar the picks have to clear. Buying a share at p and holding it to settlement
+    // breaks even at a win rate of exactly p, so the mean order price IS the break-even
+    // win rate -- and comparing the two is the only way to tell an edge from a habit of
+    // buying favourites. A portfolio can win 87% of its trades and still lose money.
+    const meanFilled = mean(prices.filled);
+    if (meanFilled != null && groups.filled.total > 0) {
+      const observed = rate(groups.filled.won, groups.filled.total);
+      const se = Math.sqrt(meanFilled * (1 - meanFilled) / groups.filled.total);
+      console.log(`\n      mean price paid ${meanFilled.toFixed(4)} => break-even win rate ${pct(meanFilled)};`
+        + ` observed ${pct(observed)}`);
+      console.log(`      edge ${observed - meanFilled >= 0 ? "+" : ""}${((observed - meanFilled) * 100).toFixed(1)} pts`
+        + `  (${se > 0 ? ((observed - meanFilled) / se).toFixed(2) : "-"} sigma on ${groups.filled.total} order(s))`);
+      console.log(`      mean price of the ones that won ${(mean(filledPrices.won) ?? 0).toFixed(4)},`
+        + ` of the ones that lost ${(mean(filledPrices.lost) ?? 0).toFixed(4)}`);
     }
     const sigma = sigmaOfDifference(groups.filled, groups.unfilled);
     console.log(`      ${unscored} attempt(s) had no resolvable outcome and are excluded above`);
@@ -332,23 +401,50 @@ async function main() {
   console.log("=".repeat(88));
   console.log("POOLED across every live portfolio");
   console.log("=".repeat(88));
-  const pooledSigma = sigmaOfDifference(pooled.filled, pooled.unfilled);
   for (const group of ["filled", "unfilled"]) {
     console.log(`   ${clip(group, 9)} ${String(pooled[group].total).padStart(5)} scored`
-      + ` ${String(pooled[group].won).padStart(5)} won   ${pct(rate(pooled[group].won, pooled[group].total))}`);
+      + ` ${String(pooled[group].won).padStart(5)} won   ${pct(rate(pooled[group].won, pooled[group].total))}`
+      + `   |  strong evidence only: ${String(pooledHard[group].total).padStart(4)} scored`
+      + ` ${String(pooledHard[group].won).padStart(4)} won   ${pct(rate(pooledHard[group].won, pooledHard[group].total))}`);
   }
-  if (pooledSigma != null) {
+
+  // Question one, and the one this report can actually answer: did the orders that DID
+  // fill clear the bar the price they were bought at sets?
+  const meanPooled = pooledPrices.length
+    ? pooledPrices.reduce((sum, value) => sum + value, 0) / pooledPrices.length : null;
+  if (meanPooled != null && pooled.filled.total > 0) {
+    for (const [label, group] of [["all evidence", pooled.filled], ["strong evidence only", pooledHard.filled]]) {
+      if (!group.total) continue;
+      const observed = group.won / group.total;
+      const se = Math.sqrt(meanPooled * (1 - meanPooled) / group.total);
+      console.log(`\n   ${label}: mean price paid ${meanPooled.toFixed(4)}, so break-even is`
+        + ` ${pct(meanPooled)}; observed ${pct(observed)}`);
+      console.log(`      edge ${observed - meanPooled >= 0 ? "+" : ""}${((observed - meanPooled) * 100).toFixed(1)} pts`
+        + `  (${se > 0 ? ((observed - meanPooled) / se).toFixed(2) : "-"} sigma on ${group.total} order(s))`);
+    }
+  }
+
+  // Question two, which needs unfilled orders to be scoreable at all. It usually is not:
+  // an unfilled order's token only has a resolution if some paper portfolio happened to
+  // hold that exact token, and mostly none did. Reported as unanswered rather than as no.
+  const pooledSigma = sigmaOfDifference(pooled.filled, pooled.unfilled);
+  console.log("");
+  if (pooledSigma == null) {
+    console.log("   ADVERSE SELECTION: UNANSWERED. No unfilled order has a resolvable outcome, so");
+    console.log("   whether the counterparty was picking which of our orders to take cannot be");
+    console.log("   measured from this data -- neither confirmed nor ruled out. Answering it needs");
+    console.log("   the resolution of the markets we did NOT end up holding, which nothing records.");
+  } else {
     const gap = (rate(pooled.filled.won, pooled.filled.total) || 0)
       - (rate(pooled.unfilled.won, pooled.unfilled.total) || 0);
-    console.log(`   filled minus unfilled = ${gap >= 0 ? "+" : ""}${(gap * 100).toFixed(1)} pts`
+    console.log(`   ADVERSE SELECTION: filled minus unfilled = ${gap >= 0 ? "+" : ""}${(gap * 100).toFixed(1)} pts`
       + ` (${pooledSigma.toFixed(2)} sigma)`);
     console.log(Math.abs(pooledSigma) < 2
-      ? "\n   VERDICT: no measurable selection effect. The live shortfall has to be explained by\n"
-        + "   the fill RATE and the per-trade costs, not by which orders filled."
+      ? "   Below 2 sigma: consistent with the fills being a fair sample. Not proof of one."
       : pooledSigma < 0
-        ? "\n   VERDICT: the orders that went unfilled resolved better than the ones that filled.\n"
-          + "   Cloning a winning paper config to live cannot be expected to reproduce its P/L."
-        : "\n   VERDICT: the filled orders resolved better than the unfilled ones.");
+        ? "   The unfilled orders resolved BETTER. Cloning a winning paper config to live cannot\n"
+          + "   be expected to reproduce its P/L."
+        : "   The filled orders resolved better, which is the opposite of adverse selection.");
   }
   console.log("\nDone. Nothing was written.");
 }

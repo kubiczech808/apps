@@ -6174,3 +6174,92 @@ test("live attribution: the diagnosis tool splits closed rows exactly as the das
   assert.equal(diagnosis.liveModeForId("live"), "live");
   assert.equal(diagnosis.liveModeForId("live-custom-esportslive"), "live-custom-esportslive");
 });
+
+// The three tiers of resolution evidence, and why the weakest one cannot be allowed to
+// win. A live position SOLD EARLY at a loss on a market that went on to resolve in our
+// favour carries a negative P/L and no settlement price -- so scoring it by the P/L sign
+// records "the market went against us" about a market that did not.
+//
+// The live account holds 115 such rows, so getting this wrong does not shade the answer,
+// it inverts it: the report would blame the picks for money the exits gave back, and the
+// fix for those two is not remotely the same.
+test("resolution evidence: a market's settlement outranks our own P/L on it", async () => {
+  const conversion = await import("../tools/paper-to-live-conversion-diagnosis.mjs");
+
+  // One token, two witnesses. The live account sold early at a loss; a paper portfolio
+  // held the same token to settlement and saw it pay out. The account is read FIRST, so
+  // first-writer-wins would take the loss and be wrong.
+  const outcomes = conversion.outcomeByToken([
+    { label: "live account", trades: [{ tokenId: "t1", status: "CLOSED", realizedPnlUsdc: -1.2, exitPrice: 0.63 }] },
+    { label: "paper:esports", trades: [{ tokenId: "t1", status: "WON", exitPrice: 1, realizedPnlUsdc: 1.4 }] },
+  ]);
+  assert.equal(outcomes.get("t1").won, true,
+    "the market settled at 1; an early sale at a loss does not make it a losing market");
+  assert.equal(outcomes.get("t1").evidence, "settled");
+
+  // Order must not matter, which is the whole point of ranking rather than sequencing.
+  const reversed = conversion.outcomeByToken([
+    { label: "paper:esports", trades: [{ tokenId: "t1", status: "WON", exitPrice: 1 }] },
+    { label: "live account", trades: [{ tokenId: "t1", status: "CLOSED", realizedPnlUsdc: -1.2 }] },
+  ]);
+  assert.equal(reversed.get("t1").won, true);
+  assert.equal(reversed.get("t1").evidence, "settled");
+
+  // With nothing better on offer the weak tier is still used -- and still labelled weak,
+  // so the report can count it separately instead of quietly averaging it in.
+  const weak = conversion.outcomeByToken([
+    { label: "live account", trades: [{ tokenId: "t2", status: "CLOSED", realizedPnlUsdc: -1.2 }] },
+  ]);
+  assert.equal(weak.get("t2").evidence, "pnl");
+  assert.equal(weak.get("t2").won, false);
+
+  // A settlement at 0 is evidence too, not a missing value.
+  const lost = conversion.outcomeByToken([
+    { label: "live account", trades: [{ tokenId: "t3", status: "LOST", exitPrice: 0, realizedPnlUsdc: -5 }] },
+  ]);
+  assert.equal(lost.get("t3").evidence, "settled");
+  assert.equal(lost.get("t3").won, false);
+
+  // A resting bid that expired never held the token, so it is not a witness at all.
+  const unfilled = conversion.outcomeByToken([
+    { label: "paper:esports", trades: [{ tokenId: "t4", status: "LIMIT_ORDER_EXPIRED", realizedPnlUsdc: 0 }] },
+  ]);
+  assert.equal(unfilled.has("t4"), false, "an order that never filled says nothing about the market");
+});
+
+// A fill is what the ACCOUNT holds, not what the exchange said. `delayed` is a queued
+// match that usually becomes one, `live` is a resting order, `unmatched` did not execute
+// -- and the account outranks all three, because a token in the positions or the closed
+// history filled whatever the response was called at the time.
+test("order fate: the account outranks the response that announced it", async () => {
+  const conversion = await import("../tools/paper-to-live-conversion-diagnosis.mjs");
+  const held = new Set(["held"]);
+  const closed = new Set(["done"]);
+
+  assert.equal(conversion.attemptFilled({ tokenId: "held", status: "live", action: "ORDER_SUBMITTED" },
+    { heldTokens: held, closedTokens: closed }).filled, true,
+  "a resting order whose token is now a position did fill");
+  assert.equal(conversion.attemptFilled({ tokenId: "done", status: "delayed", action: "ORDER_SUBMITTED" },
+    { heldTokens: held, closedTokens: closed }).filled, true);
+  assert.equal(conversion.attemptFilled({ tokenId: "gone", status: "matched", action: "ORDER_SUBMITTED" },
+    { heldTokens: held, closedTokens: closed }).filled, true,
+  "matched is a fill even after the position is no longer on record");
+  // Accepted and yet nothing is held: a fill-and-kill that was killed.
+  assert.equal(conversion.attemptFilled({ tokenId: "gone", status: "delayed", action: "ORDER_SUBMITTED" },
+    { heldTokens: held, closedTokens: closed }).filled, false);
+  assert.equal(conversion.attemptFilled({ tokenId: "gone", status: "", action: "ORDER_REJECTED" },
+    { heldTokens: held, closedTokens: closed }).via, "rejected");
+
+  // A dry run is not an order and must not enter the funnel at all.
+  const attempts = conversion.liveOrderAttempts({
+    generatedAt: "2026-09-01T00:00:00Z",
+    attempts: [
+      { action: "DRY_RUN_ORDER", tokenId: "x", orderPrice: 0.8, responseStatus: "matched" },
+      { action: "ORDER_SUBMITTED", tokenId: "y", orderPrice: 0.8, responseStatus: "matched" },
+      { action: "ORDER_SUBMITTED", orderPrice: 0.8, responseStatus: "matched" },
+    ],
+    runLog: [{ generatedAt: "2026-09-02T00:00:00Z", attempts: [{ action: "ORDER_SUBMITTED", tokenId: "z", orderPrice: 0.7 }] }],
+  });
+  assert.deepEqual(attempts.map((attempt) => attempt.tokenId), ["y", "z"],
+    "a dry run and a tokenless row are not entry attempts");
+});
