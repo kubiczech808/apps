@@ -102,6 +102,130 @@ function normalizeTrade(row) {
   };
 }
 
+// ---------------------------------------------------------------------------------
+// Whose live trade is this? Mirrors the dashboard, deliberately literally.
+//
+// Live closed rows carry no portfolioId -- 473 of 473 on production -- and they cannot:
+// every live portfolio draws on ONE wallet, so the account's history is the wallet's and
+// not any one portfolio's. The dashboard answers ownership from each portfolio's own
+// execution run log, which remembers the token it ordered and the price it rested the bid
+// at; a closed row's paid entry price then matches the order that filled it.
+//
+// Without this the tool reported "0 closed trades" for a live portfolio whose dashboard tab
+// shows hundreds -- which turns a live-vs-paper comparison into a comparison of paper
+// against nothing. Kept as a near-transcription of app.js's liveOrdersByToken /
+// liveTokenOwnerMode / belongsToLivePortfolio rather than tidied up: the two have to agree,
+// because the report is only worth something if it splits the rows the same way the tab the
+// person is looking at does.
+const FIXED_ENTRY_PRICE_TOLERANCE = 0.02;
+
+const priceMatches = (candidate, value) => candidate != null && value != null
+  && Math.abs(value - candidate) < FIXED_ENTRY_PRICE_TOLERANCE;
+
+// A token can appear in two portfolios' logs -- one traded it after the other closed out.
+// The newest order owns it, the same rule api.php applies to the stop-loss policy.
+function newestLiveOrder(orders) {
+  return orders.reduce(
+    (newest, order) => (!newest || String(order.at || "") >= String(newest.at || "") ? order : newest),
+    null,
+  );
+}
+
+// The catalogue id a live portfolio is known by here vs the mode the dashboard attributes
+// under. They differ for exactly one portfolio and forgetting it silently empties that one.
+export function liveModeForId(id) {
+  return id === "live5050" ? "live-5050" : String(id);
+}
+
+export function buildLiveAttribution(executionByMode, config) {
+  const ordersByToken = new Map();
+  for (const [mode, execution] of Object.entries(executionByMode)) {
+    if (!execution || typeof execution !== "object") continue;
+    const records = [execution, ...(Array.isArray(execution.runLog) ? execution.runLog : [])];
+    for (const record of records) {
+      const at = String(record?.generatedAt || record?.runAt || execution.generatedAt || "");
+      for (const attempt of (Array.isArray(record?.attempts) ? record.attempts : [])) {
+        const action = String(attempt?.action || "").toUpperCase();
+        // A rejected attempt never reached the book, so it never bought anything and must
+        // not claim a fill. A dry run never even asked.
+        if (action.includes("REJECT") || action.startsWith("DRY_RUN")) continue;
+        const tokenId = String(attempt?.tokenId || "");
+        if (!tokenId) continue;
+        if (!ordersByToken.has(tokenId)) ordersByToken.set(tokenId, []);
+        ordersByToken.get(tokenId).push({ mode, price: num(attempt?.orderPrice), at });
+      }
+    }
+  }
+
+  // 5050's own prices, per token and in general. It rests every bid at one configured
+  // price far from the market, so price alone recognises its rows -- the one signal that
+  // survives a run log that was trimmed or never published.
+  const fixedByToken = new Map();
+  const fixedPrices = new Set();
+  const addFixed = (value) => {
+    const price = num(value);
+    if (price != null && price > 0 && price < 1) fixedPrices.add(Number(price.toFixed(4)));
+  };
+  addFixed(config?.live5050?.fixedEntryPrice);
+  for (const price of (Array.isArray(config?.live5050?.fixedEntryPriceHistory)
+    ? config.live5050.fixedEntryPriceHistory : [])) addFixed(price);
+  const fixedExecution = executionByMode["live-5050"] || {};
+  for (const record of [fixedExecution, ...(Array.isArray(fixedExecution.runLog) ? fixedExecution.runLog : [])]) {
+    addFixed(record?.fixedEntry?.entryPrice);
+    for (const attempt of (Array.isArray(record?.attempts) ? record.attempts : [])) {
+      if (String(attempt?.action || "").toUpperCase().startsWith("DRY_RUN")) continue;
+      addFixed(attempt?.orderPrice);
+      const tokenId = String(attempt?.tokenId || "");
+      const price = num(attempt?.orderPrice);
+      if (!tokenId || price == null) continue;
+      if (!fixedByToken.has(tokenId)) fixedByToken.set(tokenId, new Set());
+      fixedByToken.get(tokenId).add(Number(price.toFixed(4)));
+    }
+  }
+  return { ordersByToken, fixedByToken, fixedPrices };
+}
+
+export function liveTokenOwnerMode(row, attribution) {
+  const tokenId = String(row?.tokenId || row?.assetId || "");
+  if (!tokenId) return null;
+  const orders = attribution.ordersByToken.get(tokenId) || [];
+  if (!orders.length) return null;
+  // Every row this tool attributes is a CLOSED trade, so it filled: the token alone cannot
+  // say who bought it (all the portfolios rest bids on the same markets), but what it was
+  // actually paid does, because that matches the order that filled.
+  const paid = num(row?.entryPrice ?? row?.avgPrice ?? row?.averagePrice);
+  if (paid == null) return null;
+  const filled = orders.filter((order) => priceMatches(order.price, paid));
+  return filled.length ? newestLiveOrder(filled).mode : null;
+}
+
+// Does 5050's own price signal claim this filled row? Per-token only: 5050's configured
+// prices (0.50, 0.65) are ordinary enough that Live lands on them too, so a bare price
+// match with no order from 5050 on that token used to steal Live's trades.
+function boughtAtFixedEntryPrice(row, attribution) {
+  const paid = num(row?.entryPrice ?? row?.avgPrice ?? row?.averagePrice);
+  if (paid == null) return false;
+  const ordered = attribution.fixedByToken.get(String(row?.tokenId || row?.assetId || ""));
+  return Boolean(ordered && [...ordered].some((price) => priceMatches(price, paid)));
+}
+
+// app.js's belongsToLivePortfolio, closed-row branch. The asymmetry is the load-bearing
+// part: a custom live portfolio claims ONLY what its own log names, while the base Live
+// portfolio keeps everything unclaimed. So "Live 72-82" owning hundreds of rows is not the
+// same kind of statement as a custom portfolio owning a handful -- one is a positive claim
+// and the other is a default -- and the report has to say which it is.
+export function belongsToLiveMode(row, mode, attribution) {
+  const wantsFixedEntry = mode === "live-5050";
+  const tokenId = String(row?.tokenId || row?.assetId || "");
+  if (!tokenId) return { owned: !wantsFixedEntry, basis: "no-token" };
+  const owner = liveTokenOwnerMode(row, attribution);
+  if (owner) return { owned: owner === mode, basis: "run-log" };
+  const looksLikeFixedEntry = boughtAtFixedEntryPrice(row, attribution);
+  if (wantsFixedEntry) return { owned: looksLikeFixedEntry, basis: "fixed-price" };
+  if (mode.startsWith("live-custom-")) return { owned: false, basis: "unclaimed" };
+  return { owned: !looksLikeFixedEntry, basis: "fallback" };
+}
+
 // How a trade ended, in the terms the question is about. `full-stake` is the bucket the
 // stop loss exists to empty.
 function classify(trade) {
@@ -204,17 +328,48 @@ async function main() {
     ...(Array.isArray(live.trades?.closed) ? live.trades.closed : []),
   ];
 
+  // Every live portfolio's execution run log, one request each and sequential for the same
+  // reason as everything else here. This is what makes a live row attributable at all.
+  const liveIds = [
+    ...(config.live && typeof config.live === "object" ? [["live", config.live]] : []),
+    ...(config.live5050 && typeof config.live5050 === "object" ? [["live5050", config.live5050]] : []),
+    ...Object.entries(config.livePortfolios || {}).filter(([, row]) => row && typeof row === "object"),
+  ];
+  const executionByMode = {};
+  for (const [rawId] of liveIds) {
+    const id = rawId === "live" || rawId === "live5050" ? rawId : `live-custom-${rawId}`;
+    const target = id === "live" ? "live-execution"
+      : id === "live5050" ? "live-5050-execution"
+        : `${id}-execution`;
+    try {
+      const payload = await fetchJson(`${HOST}/api.php?action=state&target=${target}&t=${Date.now()}`);
+      executionByMode[liveModeForId(id)] = payload?.state || payload || null;
+    } catch (error) {
+      console.log(`   !! could not read execution log for ${id}: ${error?.message || error}`);
+    }
+  }
+  const attribution = buildLiveAttribution(executionByMode, config);
+
   const catalogue = [
-    ...[["live", config.live], ["live5050", config.live5050],
-      ...Object.entries(config.livePortfolios || {}).map(([id, row]) => [`live-custom-${id}`, row])]
-      .filter(([, row]) => row && typeof row === "object")
-      .map(([id, row]) => ({
-        kind: "live", id, name: String(row.displayName || id), row,
-        // Live closed rows carry no portfolioId in this payload -- the dashboard attributes
-        // them from each portfolio's own execution run log. Only rows that DO carry one are
-        // claimed here; the rest are reported unattributed rather than silently split.
-        closed: liveClosed.filter((trade) => String(trade.portfolioId || "") === id).map(normalizeTrade),
-      })),
+    ...liveIds
+      .map(([rawId, row]) => {
+        const id = rawId === "live" || rawId === "live5050" ? rawId : `live-custom-${rawId}`;
+        const mode = liveModeForId(id);
+        // Live closed rows carry no portfolioId, so the row itself cannot say whose it is.
+        // Attributed exactly as the dashboard tab does, and the basis is kept per row so
+        // section 2 can separate a positive run-log claim from the base portfolio's
+        // catch-everything default. Reading those as the same thing is how "Live has 400
+        // closed trades" gets mistaken for "Live placed 400 trades".
+        const claimed = [];
+        for (const trade of liveClosed) {
+          const verdict = belongsToLiveMode(trade, mode, attribution);
+          if (!verdict.owned) continue;
+          const normalized = normalizeTrade(trade);
+          normalized.attributionBasis = verdict.basis;
+          claimed.push(normalized);
+        }
+        return { kind: "live", id, mode, name: String(row.displayName || id), row, closed: claimed };
+      }),
     ...Object.entries(config.paper || {})
       .filter(([, row]) => row && typeof row === "object")
       .map(([id, row]) => ({
@@ -253,11 +408,16 @@ async function main() {
     // the only way to see a portfolio's real settings without guessing at field names.
     if (isMatch) console.log(`        full config: ${JSON.stringify(entry.row)}`);
   }
-  const unattributed = liveClosed.filter((trade) => !String(trade.portfolioId || "").trim()).length;
-  if (unattributed) {
-    console.log(`\n   ${unattributed} of ${liveClosed.length} live closed row(s) carry no portfolioId, so they are`);
-    console.log("   attributed on the dashboard from each portfolio's execution run log rather than");
-    console.log("   from the row. This tool claims only rows that name their portfolio.");
+  const logClaimed = liveClosed.filter((trade) => liveTokenOwnerMode(trade, attribution)).length;
+  if (liveClosed.length) {
+    console.log(`\n   live closed rows: ${liveClosed.length} on the account,`
+      + ` ${logClaimed} claimed positively by a run log,`
+      + ` ${liveClosed.length - logClaimed} unclaimed`);
+    console.log(`   execution logs read: ${Object.entries(executionByMode)
+      .map(([mode, execution]) => `${mode}=${Array.isArray(execution?.runLog) ? execution.runLog.length + 1 : (execution ? 1 : 0)}`)
+      .join(" ")} run(s)`);
+    console.log("   An unclaimed row falls to the base Live portfolio, which is what the dashboard");
+    console.log("   does. That is a default, not evidence Live placed it -- run logs are trimmed.");
   }
   if (!matched.length) {
     console.log(`\n   !! nothing matched /${PORTFOLIO_MATCH.join("|")}/ -- pass PORTFOLIO_MATCH to pick one above`);
@@ -322,6 +482,30 @@ async function report(entry, live) {
     + `    ${usd(totalPnl)}    ${totalStake.toFixed(2).padStart(6)}`
     + `   ${usd(totalPnl / trades.length)}`);
   console.log(`   return on staked capital: ${pct(totalStake > 0 ? totalPnl / totalStake : null)}`);
+
+  // For a live portfolio, how strong the ownership claim on these rows actually is. A
+  // run-log claim is evidence; the base Live portfolio's fallback is a default. A report
+  // that pools them reads as certainty it does not have.
+  const bases = new Map();
+  for (const trade of trades) {
+    if (!trade.attributionBasis) continue;
+    const basis = bases.get(trade.attributionBasis) || { count: 0, pnl: 0, stake: 0 };
+    basis.count += 1;
+    basis.pnl += trade.realizedPnl || 0;
+    basis.stake += trade.cost || 0;
+    bases.set(trade.attributionBasis, basis);
+  }
+  if (bases.size) {
+    console.log("\n   how these rows came to be this portfolio's:");
+    for (const [basis, stats] of [...bases].sort((a, b) => b[1].count - a[1].count)) {
+      const label = basis === "run-log" ? "its own execution log names the token and price"
+        : basis === "fallback" ? "unclaimed by any log -- base Live keeps it by default"
+          : basis === "fixed-price" ? "recognised by 5050's own resting price"
+            : basis;
+      console.log(`      ${String(stats.count).padStart(3)}  ${usd(stats.pnl)} on ${stats.stake.toFixed(2).padStart(7)}`
+        + `  ${pct(stats.stake > 0 ? stats.pnl / stats.stake : null)}  ${label}`);
+    }
+  }
 
   const exitReasons = new Map();
   for (const trade of trades) {

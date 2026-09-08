@@ -6051,3 +6051,126 @@ test("a finished fixture is retired from the shortlist, not offered again as REA
   assert.equal(quiet.status, "WAITING_QUOTE");
   assert.equal(quiet.retryable, true, "a momentarily unpriceable book must be looked at again");
 });
+
+// A live closed trade carries no portfolioId, so the only thing that can say whose it is
+// is each portfolio's own execution run log. The dashboard reads that log; so does the
+// stop-loss tuning diagnosis, in its own copy -- because the diagnosis runs in Node with
+// no `state` object and app.js's version is written against one.
+//
+// Two copies of an attribution rule is exactly the drift this repo keeps paying for, and
+// the failure mode is quiet: a report that splits 473 rows differently from the tab the
+// person is looking at answers a question about a portfolio that does not exist. So this
+// test does not check the diagnosis against a hand-written expectation. It checks it
+// against app.js, on the same fixture, row by row.
+test("live attribution: the diagnosis tool splits closed rows exactly as the dashboard does", async () => {
+  const diagnosis = await import("../tools/stop-loss-tuning-diagnosis.mjs");
+  const app = readFileSync(new URL("../assets/app.js", import.meta.url), "utf8");
+
+  const config = {
+    live: { displayName: "Live 72-82" },
+    live5050: { displayName: "5050", fixedEntryPrice: 0.5, fixedEntryPriceHistory: [0.65] },
+    livePortfolios: { esportslive: { displayName: "80+ esports" } },
+  };
+  // Three portfolios, one wallet. Each log names the token it ordered and the price it
+  // rested the bid at, which is the whole basis for telling their fills apart.
+  const executionByMode = {
+    live: {
+      generatedAt: "2026-09-01T00:00:00Z",
+      attempts: [{ action: "ORDER_SUBMITTED", tokenId: "aaa", orderPrice: 0.78 }],
+      runLog: [{
+        generatedAt: "2026-09-02T00:00:00Z",
+        attempts: [
+          { action: "ORDER_SUBMITTED", tokenId: "ccc", orderPrice: 0.81 },
+          // Rejected: never reached the book, so it cannot claim a fill.
+          { action: "ORDER_REJECTED", tokenId: "ddd", orderPrice: 0.79 },
+        ],
+      }],
+    },
+    "live-5050": {
+      generatedAt: "2026-09-01T00:00:00Z",
+      attempts: [{ action: "ORDER_SUBMITTED", tokenId: "bbb", orderPrice: 0.5 }],
+      runLog: [],
+    },
+    "live-custom-esportslive": {
+      generatedAt: "2026-09-03T00:00:00Z",
+      attempts: [{ action: "ORDER_SUBMITTED", tokenId: "eee", orderPrice: 0.74 }],
+      runLog: [],
+    },
+  };
+  const closed = [
+    // Claimed by Live's log: same token, and the price it paid matches the bid.
+    { tokenId: "aaa", status: "WON", entryPrice: 0.78, totalCostUsdc: 5, realizedPnlUsdc: 1.4 },
+    // Claimed by 5050's log.
+    { tokenId: "bbb", status: "LOST", entryPrice: 0.5, totalCostUsdc: 5, realizedPnlUsdc: -5 },
+    // Claimed by the custom portfolio's log.
+    { tokenId: "eee", status: "WON", entryPrice: 0.74, totalCostUsdc: 5, realizedPnlUsdc: 1.75 },
+    // On a token Live ordered, but paid nowhere near the bid: the order that filled this
+    // was not Live's, so no log claims it and the base portfolio keeps it by default.
+    { tokenId: "ccc", status: "LOST", entryPrice: 0.55, totalCostUsdc: 5, realizedPnlUsdc: -5 },
+    // No log mentions this token at all -- the ordinary case, because run logs are trimmed.
+    { tokenId: "zzz", status: "WON", entryPrice: 0.9, totalCostUsdc: 5, realizedPnlUsdc: 0.55 },
+    // Only a rejected order names this token, and a rejection bought nothing.
+    { tokenId: "ddd", status: "LOST", entryPrice: 0.79, totalCostUsdc: 5, realizedPnlUsdc: -5 },
+  ];
+
+  // app.js's own answer, evaluated against a `state` shaped the way the dashboard holds it.
+  const body = ["allLiveModes", "liveOrdersByToken", "newestLiveOrder", "liveTokenOwnerMode",
+    "belongsToLivePortfolio", "isFilledPortfolioRow", "boughtAtFixedEntryPrice",
+    "restsAtFixedEntryPrice", "matchesFixedEntryPrice", "fixedEntryPriceSignatures",
+    "fixedEntryOrderPricesByToken", "isClosedTrade", "isFixedEntryMode",
+    "customLivePortfolioIdFromMode", "normalizeMode"]
+    .map((name) => functionSource(app, name)).join("\n\n");
+  const dashboardOwner = new Function("state", "memoizedByIdentity", "CUSTOM_PAPER_STRATEGY_ID",
+    "BUILT_IN_PAPER_STRATEGY_IDS", "LIVE_MODES", "portfolioConfigForMode", "normalizeFixedEntryPrice",
+    "draftedCustomLivePortfolioId", "FIXED_ENTRY_PRICE_TOLERANCE", `
+    ${body}
+    return belongsToLivePortfolio;
+  `)(
+    {
+      mode: "live",
+      portfolioConfig: config,
+      live5050ExecutionState: executionByMode["live-5050"],
+      liveExecutionByMode: executionByMode,
+    },
+    // No memoization in the harness: the point is the rule, not the cache.
+    (_fn, _inputs, compute) => compute(),
+    /^[a-z0-9]+$/,
+    [],
+    new Set(["live", "live-5050"]),
+    () => config.live5050,
+    (value) => Number(value),
+    () => null,
+    0.02,
+  );
+
+  const attribution = diagnosis.buildLiveAttribution(executionByMode, config);
+  for (const mode of ["live", "live-5050", "live-custom-esportslive"]) {
+    for (const row of closed) {
+      assert.equal(
+        diagnosis.belongsToLiveMode(row, mode, attribution).owned,
+        dashboardOwner(row, mode),
+        `token ${row.tokenId} @${row.entryPrice} under ${mode}: the tool and the dashboard disagree`,
+      );
+    }
+  }
+
+  // And the split it actually produces, so a change to BOTH copies still has to be meant.
+  const owned = (mode) => closed
+    .filter((row) => diagnosis.belongsToLiveMode(row, mode, attribution).owned)
+    .map((row) => row.tokenId).sort();
+  assert.deepEqual(owned("live"), ["aaa", "ccc", "ddd", "zzz"],
+    "the base Live portfolio keeps every row no log claims -- a default, not a claim");
+  assert.deepEqual(owned("live-5050"), ["bbb"]);
+  assert.deepEqual(owned("live-custom-esportslive"), ["eee"],
+    "a custom live portfolio claims only what its own log names");
+
+  // The basis has to survive alongside the verdict. Reading Live's 4 rows as 4 positive
+  // claims is how "Live traded this" gets asserted about a row nothing recorded.
+  assert.equal(diagnosis.belongsToLiveMode(closed[0], "live", attribution).basis, "run-log");
+  assert.equal(diagnosis.belongsToLiveMode(closed[4], "live", attribution).basis, "fallback");
+
+  // The one id that is spelled differently in the two places.
+  assert.equal(diagnosis.liveModeForId("live5050"), "live-5050");
+  assert.equal(diagnosis.liveModeForId("live"), "live");
+  assert.equal(diagnosis.liveModeForId("live-custom-esportslive"), "live-custom-esportslive");
+});
