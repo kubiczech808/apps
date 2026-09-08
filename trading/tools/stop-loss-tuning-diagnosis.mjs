@@ -33,11 +33,24 @@ const GAP_TOLERANCES = String(process.env.GAP_TOLERANCE_GRID || "0.5,0.7,0.85,1"
   .split(",").map((text) => Number(text.trim())).filter((value) => Number.isFinite(value) && value > 0);
 const TRADE_ROWS = Number(process.env.TRADE_ROWS || 80);
 
-async function fetchJson(url) {
-  const response = await fetch(url);
-  const text = await response.text();
-  if (!response.ok) throw new Error(`HTTP ${response.status}: ${text.slice(0, 200)}`);
-  return JSON.parse(text);
+// Sequential and retried, never concurrent. This runs against a 128 MB shared host that
+// answers 500 when several state requests decode at once: the first attempt at this tool
+// fired three in a Promise.all and got a 500 on a different one of the three each run,
+// which reads as "the endpoint is broken" rather than "I asked for too much at once".
+async function fetchJson(url, attempts = 4) {
+  let lastError = null;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    if (attempt) await new Promise((resolve) => setTimeout(resolve, 2000 * (2 ** (attempt - 1))));
+    try {
+      const response = await fetch(url);
+      const text = await response.text();
+      if (!response.ok) throw new Error(`HTTP ${response.status}: ${text.slice(0, 200)}`);
+      return JSON.parse(text);
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError;
 }
 
 const num = (value, fallback = null) => {
@@ -138,11 +151,11 @@ async function main() {
   // answers HTTP 500 on this host -- the dashboard carries the same note. So the overview
   // is fetched first, and the matched portfolio's trades are asked for by strategy_id:
   // `summary=dashboard` only includes trades for the ONE portfolio it is given.
-  const [configPayload, livePayload, overviewPayload] = await Promise.all([
-    fetchJson(`${HOST}/api.php?action=portfolio-config&t=${Date.now()}`),
-    fetchJson(`${HOST}/api.php?action=state&target=live&t=${Date.now()}`),
-    fetchJson(`${HOST}/api.php?action=state&target=paper&summary=portfolio-overview&t=${Date.now()}`),
-  ]);
+  const configPayload = await fetchJson(`${HOST}/api.php?action=portfolio-config&t=${Date.now()}`);
+  const livePayload = await fetchJson(`${HOST}/api.php?action=state&target=live&t=${Date.now()}`);
+  const overviewPayload = await fetchJson(
+    `${HOST}/api.php?action=state&target=paper&summary=portfolio-overview&t=${Date.now()}`,
+  );
   const config = configPayload?.config || configPayload || {};
   const live = livePayload?.liveState || livePayload?.state || livePayload || {};
   const overview = overviewPayload?.botState || overviewPayload?.state || overviewPayload || {};
