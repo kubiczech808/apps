@@ -11068,10 +11068,19 @@ test("excludedMarketShapes: the setting is wired end to end, not only in the bot
 
   // Every excludable shape gets a checkbox in the settings panel; "outright" does not,
   // because excluding the shape every stop already protects is not a real choice to offer.
-  for (const shape of ["over-under", "spread", "exact-score", "draw", "in-event-leg", "both-teams"]) {
+  for (const shape of ["over-under", "spread", "exact-score", "draw", "in-event-leg", "both-teams", "outright"]) {
     assert.match(html, new RegExp(`data-exclude-market-shape="${shape}"`));
   }
-  assert.doesNotMatch(html, /data-exclude-market-shape="outright"/);
+  // outright HAS a switch now. It had none at first, on the reasoning that a stop loss can
+  // already protect a walk-shaped market so excluding it was not a real choice -- which
+  // silently assumed the stop was on. Measured with the stop OFF it is the largest LOSING
+  // shape (-1.0% over 1580 trades) while in-event-leg is the best (+8.3% over 70), so
+  // excluding it is the only way to express a portfolio that trades legs alone.
+  assert.match(html, /data-exclude-market-shape="outright"/);
+  // Which makes "exclude everything" reachable, and that portfolio can never take a
+  // candidate. It is recoverable by unticking a box but it fails SILENTLY, so the summary
+  // has to say so rather than list seven shapes and leave the reader to count them.
+  assert.match(app, /every shape - this portfolio cannot trade anything/);
   assert.match(css, /\.market-shape-filter\s*\{/);
 
   // Populated on open, read back on save, and saved immediately on change -- the same three

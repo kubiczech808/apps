@@ -1111,7 +1111,15 @@ function configExcludedMarketShapes(config) {
 
 function excludedMarketShapesSummaryValue(config) {
   const shapes = configExcludedMarketShapes(config);
-  return shapes.length ? shapes.map(marketShapeLabel).join(", ") : null;
+  if (!shapes.length) return null;
+  // Every shape excluded is a portfolio that can never take a candidate. It is recoverable
+  // by unticking a box, but it fails SILENTLY -- no orders, no rejections worth reading, no
+  // hint on the card -- so the summary says it outright rather than listing seven shapes and
+  // leaving the reader to notice that is all of them.
+  if (Object.keys(MARKET_SHAPE_LABELS).every((shape) => shapes.includes(shape))) {
+    return "every shape - this portfolio cannot trade anything";
+  }
+  return shapes.map(marketShapeLabel).join(", ");
 }
 
 // The AI probability pipeline was retired, so every portfolio scores on the

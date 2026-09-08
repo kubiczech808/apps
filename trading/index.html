@@ -567,6 +567,10 @@
               <input type="checkbox" data-exclude-market-shape="both-teams">
               <span>Both teams to score</span>
             </label>
+            <label class="parameter-control order-mode-toggle market-shape-option" title="Who wins the event, with no total, spread, score or leg attached. It is the fallback shape and the largest by volume. It had no switch here at first, on the reasoning that a stop loss can already protect a walk-shaped market so excluding it was not a real choice -- which assumed the stop was on. Measured with the stop OFF, outright is the largest LOSING shape (-1.0% over 1580 trades) while in-event-leg is the best (+8.3% over 70), so excluding it is now the only way to express a portfolio that trades legs alone.">
+              <input type="checkbox" data-exclude-market-shape="outright">
+              <span>Outright (who wins)</span>
+            </label>
           </div>
         </div>
         <label class="parameter-control order-mode-toggle">
