@@ -139,13 +139,20 @@ function summarize(rows) {
   };
 }
 
-function table(title, buckets, { bar = null, note = null } = {}) {
+// showEmpty matters where the emptiness IS the finding. The stacked-filter section asked
+// for five combinations and printed one, because the other four matched nothing and this
+// skipped them -- so a filter that selects zero trades read as a filter that was never
+// asked about. Same class of fault as a report pooling zero trades and saying "Done".
+function table(title, buckets, { bar = null, note = null, showEmpty = false } = {}) {
   console.log(`\n${title}`);
   if (note) console.log(note);
   console.log("   bucket           n  decided   won   win%   break-even  sigma"
     + "     total P/L    staked     ROI       z    mean hold   ROI/day  full-stake");
   for (const [label, rows] of buckets) {
-    if (!rows.length) continue;
+    if (!rows.length) {
+      if (showEmpty) console.log(`   ${pad(label, 14)}    0   -- no trade matches this combination --`);
+      continue;
+    }
     const stats = summarize(rows);
     // Either the bucket's own price (for a price cut) or the pooled mean entry (for every
     // other cut, where the bar is whatever those trades were actually bought at).
@@ -404,7 +411,15 @@ async function main() {
       ["everything, any tag", tagged],
     ];
     table("   the combination as configured, and each filter on its own for comparison",
-      combos, { bar: "self" });
+      combos, { bar: "self", showEmpty: true });
+    console.log(`   tags actually present, most common first: ${(() => {
+      const counts = new Map();
+      for (const row of tagged) for (const tag of row.tags) counts.set(tag, (counts.get(tag) || 0) + 1);
+      return [...counts].sort((a, b) => b[1] - a[1]).slice(0, 14)
+        .map(([tag, count]) => `${tag}(${count})`).join(" ");
+    })()}`);
+    console.log("   That list is printed because a combination matching nothing is far more often a");
+    console.log("   filter written against tags the stored rows do not carry than a real absence.");
     console.log("   Read the n column first. A row with fewer than ~50 trades cannot distinguish a");
     console.log("   real edge from noise at any ROI, and stacking two filters is how a few hundred");
     console.log("   rows becomes a few dozen.");
