@@ -211,6 +211,16 @@ async function main() {
       const entry = num(trade?.entryPrice) ?? (stake != null && shares > 0 ? stake / shares : null);
       const openedAt = Date.parse(trade?.openedAt || trade?.date || "");
       const closedAt = Date.parse(trade?.closedAt || trade?.resolvedAt || "");
+      // How far away the market's resolution was WHEN WE BOUGHT, which is the quantity
+      // maxResolutionHours actually filters on -- and a different thing from how long the
+      // position was then held. A leg entered while the match is running and a leg entered
+      // two days before kick-off are the same SHAPE and completely different bets, and only
+      // this number tells them apart.
+      const endDate = Date.parse(trade?.endDate || trade?.resolutionEndDate || "");
+      const storedDays = num(trade?.firstDaysToResolution ?? trade?.daysToResolution);
+      const horizonHours = Number.isFinite(endDate) && Number.isFinite(openedAt) && endDate > openedAt
+        ? (endDate - openedAt) / 3600000
+        : (storedDays != null && storedDays >= 0 ? storedDays * 24 : null);
       const exitPrice = num(trade?.exitPrice ?? trade?.finalOutcomePrice);
       // The market's own verdict where it exists, then the status, then the P/L sign. The
       // order matters: a position sold early at a loss on a market that resolved our way is
@@ -228,6 +238,7 @@ async function main() {
         hoursHeld: Number.isFinite(openedAt) && Number.isFinite(closedAt) && closedAt > openedAt
           ? (closedAt - openedAt) / 3600000
           : null,
+        horizonHours,
         stopped: configRow.stopLossRiskMultiplier > 0 || configRow.stopLossProbabilityFloor > 0,
       };
       rows.push(row);
@@ -312,8 +323,42 @@ async function main() {
     });
 
   // ---------------------------------------------------------------------------------
+  // The horizon AT ENTRY, which is what maxResolutionHours sets -- as opposed to section 2,
+  // which is how long the position turned out to be held. Asked directly: does in-event-leg
+  // still look good when the bet can be placed 48 hours before the event?
   console.log(`\n${"=".repeat(112)}`);
-  table("== 4. per portfolio, for orientation only -- these differ in every parameter at once",
+  const horizonBands = [
+    ["< 3h", (hours) => hours < 3],
+    ["3-12h", (hours) => hours >= 3 && hours < 12],
+    ["12-24h", (hours) => hours >= 12 && hours < 24],
+    ["24-48h", (hours) => hours >= 24 && hours < 48],
+    ["48-96h", (hours) => hours >= 48 && hours < 96],
+    ["> 96h", (hours) => hours >= 96],
+  ];
+  const withHorizon = rows.filter((row) => row.horizonHours != null);
+  console.log(`   ${withHorizon.length} of ${rows.length} row(s) carry a resolution date, so the rest are absent below.`);
+  table("== 5. by HOW FAR AWAY RESOLUTION WAS WHEN WE BOUGHT -- this is the maxResolutionHours setting",
+    horizonBands.map(([label, test]) => [label, withHorizon.filter((row) => test(row.horizonHours))]),
+    { bar: "self" });
+
+  // And the cross-tab that is the actual question. A shape's pooled ROI is an average over
+  // whatever horizons it happened to be bought at; if the good rows are all short-horizon,
+  // then raising maxResolutionHours admits a population the number says nothing about.
+  console.log(`\n${"=".repeat(112)}`);
+  console.log("== 6. SHAPE x HORIZON. A shape's headline ROI is an average over the horizons it");
+  console.log("   happened to be bought at. If its winners are all short-horizon, a 48h setting");
+  console.log("   lets in trades the headline number has no evidence about.");
+  for (const shape of shapeIds) {
+    const shapeRows = withHorizon.filter((row) => row.shape === shape);
+    if (shapeRows.length < 20) continue;
+    table(`   -- ${shape} (${shapeRows.length} row(s) with a resolution date)`,
+      horizonBands.map(([label, test]) => [label, shapeRows.filter((row) => test(row.horizonHours))]),
+      { bar: "self" });
+  }
+
+  // ---------------------------------------------------------------------------------
+  console.log(`\n${"=".repeat(112)}`);
+  table("== 7. per portfolio, for orientation only -- these differ in every parameter at once",
     perPortfolio, { bar: "self" });
 
   console.log("\nDone. Nothing was written.");
