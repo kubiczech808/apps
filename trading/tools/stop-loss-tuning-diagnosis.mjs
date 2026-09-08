@@ -148,9 +148,13 @@ function floorFor(trade, multiplier, probabilityFloor) {
     feesEnabled: true,
   });
   const equalRiskFloor = plan.protectable ? plan.stopPrice : null;
+  // entryPrice matters here: a probability floor at or above the entry is not a cap, it
+  // liquidates on arming, and effectiveStopFloor now refuses to use it once it knows the
+  // entry. Omitting it here would report a floor the fixed worker no longer applies.
   const floor = effectiveStopFloor({
     stopPrice: equalRiskFloor,
     probabilityFloor: probabilityFloor > 0 ? probabilityFloor : null,
+    entryPrice: trade.entry,
   });
   return {
     plan,

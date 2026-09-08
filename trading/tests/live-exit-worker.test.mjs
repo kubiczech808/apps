@@ -1412,3 +1412,54 @@ test("a redeploy preserves the armed mode instead of defaulting over it", () => 
   const tallyAt = status.indexOf("exit attempts recorded:");
   assert.ok(verdictAt > tallyAt && tallyAt > 0, "the armed verdict has to be the last thing printed");
 });
+
+// Found while retuning "55+ underway": a closed trade read entry 0.4500, floor 0.4900 --
+// the probability floor sat ABOVE the entry. That is not a stop, it is a liquidation the
+// instant the stop arms, because the position starts out already past the level that is
+// supposed to trigger a sale. The equal-risk floor can never do this -- equalRiskExitPlan's
+// own binary search is bounded by the entry and refuses to return one at or above it -- but
+// the probability floor is a flat number with no such bound, on "Will CA Nacional Potosi
+// win?", outcome No, bought at 45c against a 49% floor set for the portfolio generally.
+test("a probability floor at or above the entry does not become the active stop", async () => {
+  const worker = await import("../tools/rpi-live-exit-worker.mjs");
+
+  // The measured case: entry 0.45, floor 0.49. The floor must be refused, and the equal-risk
+  // level (here null, since none was configured) is all that is left.
+  assert.equal(worker.effectiveStopFloor({ stopPrice: null, probabilityFloor: 0.49, entryPrice: 0.45 }), null,
+    "a floor above the entry is not a stop, and there is no equal-risk floor to fall back to");
+  assert.equal(worker.effectiveStopFloor({ stopPrice: 0.30, probabilityFloor: 0.49, entryPrice: 0.45 }), 0.30,
+    "with an equal-risk floor present, the position keeps that protection instead of none");
+
+  // Equal to the entry is refused too -- armed exactly at the entry still liquidates rather
+  // than capping a loss.
+  assert.equal(worker.effectiveStopFloor({ stopPrice: null, probabilityFloor: 0.45, entryPrice: 0.45 }), null);
+
+  // Below the entry, the floor applies exactly as before -- this is not a new restriction on
+  // the ordinary case, only on the inverted one.
+  assert.equal(worker.effectiveStopFloor({ stopPrice: null, probabilityFloor: 0.35, entryPrice: 0.45 }), 0.35);
+  assert.equal(worker.effectiveStopFloor({ stopPrice: 0.30, probabilityFloor: 0.35, entryPrice: 0.45 }), 0.35,
+    "below the entry, the higher of the two floors still wins as before");
+
+  // entryPrice unknown must not newly withhold protection: every existing call this worker
+  // makes before a plan is fully resolved has to keep behaving as it did.
+  assert.equal(worker.effectiveStopFloor({ stopPrice: null, probabilityFloor: 0.49 }), 0.49,
+    "without an entry to compare against, the floor is trusted as before");
+  assert.equal(worker.effectiveStopFloor({ stopPrice: null, probabilityFloor: 0.49, entryPrice: null }), 0.49);
+
+  // Driven through exitReason: a floor above the entry must not fire a stop off a bid that
+  // is actually above where the position was bought -- that would be selling a position
+  // that has not lost anything at all.
+  assert.equal(
+    worker.exitReason({ bestBidPrice: 0.47, bestAskPrice: 0.49, stopPrice: null, probabilityFloor: 0.49, entryPrice: 0.45 }),
+    null,
+    "0.47 is above the 0.45 entry -- there is no loss here for a stop to be capping",
+  );
+
+  const source = readFileSync(new URL("../tools/rpi-live-exit-worker.mjs", import.meta.url), "utf8");
+  assert.match(source, /const flat = flatRaw != null && entry != null && flatRaw >= entry \? null : flatRaw;/);
+  // Both call sites in the pass loop have to forward the entry, or the fix never reaches
+  // a live decision.
+  const pass = functionBody(source, "checkOnce");
+  assert.match(pass, /exitReason\(\{[\s\S]{0,220}?entryPrice: plan\.entryPrice,/);
+  assert.match(pass, /effectiveStopFloor\(\{ stopPrice: plan\.stopPrice, probabilityFloor: plan\.probabilityFloor, entryPrice: plan\.entryPrice \}\);/);
+});

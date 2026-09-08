@@ -4250,6 +4250,13 @@ function equalRiskEntryProtection({ plan, bestBid, shares, feeRate = 0, feesEnab
 function planWithProbabilityFloor(plan, probabilityFloor, trade) {
   const floor = Number(probabilityFloor);
   if (!plan?.protectable || !Number.isFinite(floor) || !(floor > 0)) return plan;
+  // A floor at or above the entry does not cap a loss -- it liquidates the position the
+  // instant the stop arms. equalRiskStopPlan's own binary search is bounded by the entry and
+  // can never return one; this flat floor has no such bound, and a position bought BELOW it
+  // (entry 0.45, floor 0.49) armed a stop that was already past its own trigger at the
+  // moment of purchase. Left at whatever the equal-risk rule already decided instead.
+  const entry = Number(trade?.entryPrice);
+  if (Number.isFinite(entry) && floor >= entry) return plan;
   const current = Number(plan.stopPrice);
   if (Number.isFinite(current) && current >= floor) return plan;
   const minimumExitValueUsdc = netExitValueAtPrice({
@@ -12955,6 +12962,7 @@ export {
   takerFeeForFills,
   netExitValueAtPrice,
   equalRiskStopPlan,
+  planWithProbabilityFloor,
   equalRiskEntryProtection,
   equalRiskStopExitDecision,
   shouldCheckEqualStopBeforePending,

@@ -10856,3 +10856,47 @@ test("in-play: the answer is recomputed from the stored kickoff, not read off a 
   assert.match(source, /\.\.\.\(item\?\.eventStartTime \? \{ eventStartTime: item\.eventStartTime \} : \{\}\),/);
   assert.match(source, /\.\.\.\(typeof item\?\.eventStarted === "boolean" \? \{ eventStarted: item\.eventStarted \} : \{\}\),/);
 });
+
+// Found while retuning "55+ underway": a closed trade read entry 0.4500, stopLossProbability
+// Floor 0.4900 -- the floor sat ABOVE the entry. That is not a stop, it liquidates the
+// position the instant it arms, because the position starts out already past the level
+// that is supposed to trigger a sale. equalRiskStopPlan's own binary search is bounded by
+// the entry and can never return one there; planWithProbabilityFloor is a flat number with
+// no such bound, and had no check against the entry at all.
+test("a probability floor at or above the entry is not applied", () => {
+  // The measured shape: bought No at 0.45, cost 4.99, on a portfolio whose floor is 0.49.
+  const trade = { entryPrice: 0.45, shares: 11.0889, feeRate: 0.02, feesEnabled: true };
+  const basePlan = bot.equalRiskStopPlan({
+    totalCostUsdc: 4.99,
+    netGainIfWinUsdc: 11.0889 - 4.99,
+    shares: 11.0889,
+    entryPrice: 0.45,
+    riskMultiplier: 0.25,
+  });
+  assert.equal(basePlan.protectable, true);
+  assert.ok(basePlan.stopPrice < 0.45, "the equal-risk floor is below the entry, as it always is");
+
+  const withFloor = bot.planWithProbabilityFloor(basePlan, 0.49, trade);
+  assert.equal(withFloor.stopPrice, basePlan.stopPrice,
+    "a floor above the entry must not override the equal-risk floor with a liquidation price");
+  assert.notEqual(withFloor.stopSource, "probability-floor");
+
+  // Equal to the entry is refused too.
+  assert.equal(bot.planWithProbabilityFloor(basePlan, 0.45, trade).stopPrice, basePlan.stopPrice);
+
+  // Below the entry, the floor still overrides exactly as before -- not a new restriction
+  // on the ordinary case.
+  const belowEntry = bot.planWithProbabilityFloor(basePlan, 0.40, trade);
+  assert.equal(belowEntry.stopPrice, 0.4);
+  assert.equal(belowEntry.stopSource, "probability-floor");
+
+  // No entryPrice on the trade must not newly withhold protection -- every existing caller
+  // that has not been touched by this fix keeps its prior behavior. Everything else the
+  // computation needs (shares, fee terms) is still present; only entryPrice is missing.
+  const noEntry = bot.planWithProbabilityFloor(basePlan, 0.49, { shares: trade.shares, feeRate: trade.feeRate, feesEnabled: trade.feesEnabled });
+  assert.equal(noEntry.stopPrice, 0.49);
+  assert.equal(noEntry.stopSource, "probability-floor");
+
+  const source = readFileSync(new URL("../tools/paper-trading-bot.mjs", import.meta.url), "utf8");
+  assert.match(source, /const entry = Number\(trade\?\.entryPrice\);\s*\n\s*if \(Number\.isFinite\(entry\) && floor >= entry\) return plan;/);
+});

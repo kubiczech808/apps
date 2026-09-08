@@ -780,15 +780,25 @@ export function watchPlan(position, entry = null) {
 //
 // Combining them by "whichever comes first" is combining them by max, since both are floors
 // and the price arrives from above. Either may be absent, and the answer is then the other.
-export function effectiveStopFloor({ stopPrice, probabilityFloor } = {}) {
+//
+// The equal-risk floor can never sit at or above the entry -- equalRiskExitPlan refuses to
+// return one, because a floor there does not cap a loss, it liquidates the position the
+// instant the stop arms. The probability floor had no such guard: it is a flat number that
+// does not move with the entry, and a position bought BELOW it (entry 0.45, floor 0.49 on
+// "Will CA Nacional Potosi win?", No) armed a stop that was already past its own trigger at
+// the moment of purchase. entryPrice is optional so a caller that does not have it yet still
+// gets the pre-fix behavior rather than a silently unprotected position.
+export function effectiveStopFloor({ stopPrice, probabilityFloor, entryPrice = null } = {}) {
   const risk = number(stopPrice);
-  const flat = number(probabilityFloor);
+  const flatRaw = number(probabilityFloor);
+  const entry = number(entryPrice);
+  const flat = flatRaw != null && entry != null && flatRaw >= entry ? null : flatRaw;
   const levels = [risk, flat].filter((level) => level != null && level > 0);
   return levels.length ? Math.max(...levels) : null;
 }
 
-export function exitReason({ bestBidPrice, bestAskPrice = null, stopPrice, triggerPrice, probabilityFloor = null, settlementCloseBid: closeBid } = {}) {
-  const floor = effectiveStopFloor({ stopPrice, probabilityFloor });
+export function exitReason({ bestBidPrice, bestAskPrice = null, stopPrice, triggerPrice, probabilityFloor = null, entryPrice = null, settlementCloseBid: closeBid } = {}) {
+  const floor = effectiveStopFloor({ stopPrice, probabilityFloor, entryPrice });
   if (floor != null) {
     // The pre-trigger buffer belongs to the level actually in force. Carrying the stored
     // trigger over would test the equal-risk floor's buffer against the probability floor.
@@ -2066,12 +2076,13 @@ async function checkOnce(context) {
       stopPrice: plan.stopPrice,
       triggerPrice: plan.triggerPrice,
       probabilityFloor: plan.probabilityFloor,
+      entryPrice: plan.entryPrice,
       settlementCloseBid: plan.settlementCloseBid,
     });
     // The level actually in force, which is what the sell is priced at and what the gap
     // tolerance is measured against. Using plan.stopPrice for either would price against a
     // floor the trigger did not use.
-    const activeFloor = effectiveStopFloor({ stopPrice: plan.stopPrice, probabilityFloor: plan.probabilityFloor });
+    const activeFloor = effectiveStopFloor({ stopPrice: plan.stopPrice, probabilityFloor: plan.probabilityFloor, entryPrice: plan.entryPrice });
     if (!reason) continue;
     event.reasonKind = reason;
     if (reason === "settlement") event.settlementCloseBid = plan.settlementCloseBid;
