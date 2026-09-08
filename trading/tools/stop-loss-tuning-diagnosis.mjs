@@ -15,6 +15,7 @@
 // exact. They do not carry the price path, so "would this winner have been stopped out on
 // the way up" is not answerable from them and is reported as exposure rather than as a
 // number. The declined-stop annotations are the evidence for what the stop actually did.
+import { pathToFileURL } from "node:url";
 import {
   equalRiskExitPlan,
   effectiveStopFloor,
@@ -94,6 +95,33 @@ function normalizeTrade(row) {
     stopLossPrice: num(row.stopLossPrice),
     closeReason: row.closeReason || null,
   };
+}
+
+// Whether this market's price can WALK to the stop, or only jump past it.
+//
+// This is the distinction the ARMED full-stake losses turned out to be about. A stop loss is
+// a tool for a price that moves through levels. An over/under, a draw-at-half, an exact
+// score, a set or game winner: the price sits near the entry while the event runs and then
+// settles at 0 in one step, the instant a goal goes in or a set ends. There is no downward
+// path for a stop to catch, at any setting.
+//
+// Matched on the question text, which is how these markets are named. Deliberately coarse
+// and deliberately reported as counts, so a group that is really a mixture shows up as one.
+const JUMP_PATTERNS = [
+  [/\bO\/U\b|\bover\/under\b|\bover \d|\bunder \d/i, "over-under"],
+  [/^spread:|\bspread\b|\([-+]\d/i, "spread"],
+  [/exact score/i, "exact-score"],
+  [/\bdraw\b/i, "draw"],
+  [/set \d+ winner|\bgames total\b|map \d+|\bmap handicap\b|first .*(map|set|goal|blood)/i, "in-event-leg"],
+  [/both teams to/i, "both-teams"],
+];
+
+export function marketShape(question = "") {
+  const text = String(question || "");
+  for (const [pattern, label] of JUMP_PATTERNS) {
+    if (pattern.test(text)) return label;
+  }
+  return "outright";
 }
 
 // How a trade ended, in the terms the question is about. `full-stake` is the bucket the
@@ -566,9 +594,66 @@ async function report(entry, live) {
       + `  ->  worst ${usd(scenario.worst)}  best ${usd(scenario.best)}`
       + `  (actual ${usd(totalPnl)}, ${scenario.exposed} winner(s) exposed)`);
   }
+
+  // ---------------------------------------------------------------------------------
+  console.log("\n== 9. by market shape: where a stop can work at all");
+  console.log("   Every full-stake loss above whose stop was merely ARMED is a market that");
+  console.log("   settles in one step -- an over/under, a draw-at-half, an exact score, a set or");
+  console.log("   map leg. The price sits near the entry while the event runs and goes to 0 the");
+  console.log("   instant a goal lands. There is no downward path for a stop to catch, at any");
+  console.log("   setting, so this asks whether those markets pay for themselves.\n");
+  const shapes = new Map();
+  for (const trade of trades) {
+    const shape = marketShape(trade.question);
+    const row = shapes.get(shape) || {
+      n: 0, pnl: 0, stake: 0, won: 0, lostFull: 0, lostFullPnl: 0,
+      armedLost: 0, stopSold: 0, stopSoldPnl: 0,
+    };
+    row.n += 1;
+    row.pnl += trade.realizedPnl || 0;
+    row.stake += trade.cost || 0;
+    if (trade.bucket === "won") row.won += 1;
+    if (trade.bucket === "lost-full") {
+      row.lostFull += 1;
+      row.lostFullPnl += trade.realizedPnl || 0;
+      if (String(trade.stopLossStatus || "").toUpperCase() === "ARMED") row.armedLost += 1;
+    }
+    if (["FILLED_AT_FLOOR", "FILLED_AFTER_GAP", "GAP_BEYOND_TARGET"].includes(String(trade.stopLossStatus || "").toUpperCase())) {
+      row.stopSold += 1;
+      row.stopSoldPnl += trade.realizedPnl || 0;
+    }
+    shapes.set(shape, row);
+  }
+  console.log("   shape            n   win%   total P/L   ROI     stop sold   full-stake   of those ARMED   full-stake P/L");
+  for (const [shape, row] of [...shapes].sort((a, b) => a[1].pnl - b[1].pnl)) {
+    console.log(`   ${clip(shape, 14)} ${String(row.n).padStart(3)}`
+      + `  ${pct(row.n ? row.won / row.n : null)}`
+      + `   ${usd(row.pnl)}   ${pct(row.stake > 0 ? row.pnl / row.stake : null)}`
+      + `   ${String(row.stopSold).padStart(9)}   ${String(row.lostFull).padStart(10)}`
+      + `   ${String(row.armedLost).padStart(14)}   ${usd(row.lostFullPnl)}`);
+  }
+  // The counterfactual that needs no price path at all: drop a shape and keep the rest.
+  console.log("\n   dropping one shape and keeping every other trade exactly as it happened:");
+  for (const [shape, row] of [...shapes].sort((a, b) => a[1].pnl - b[1].pnl)) {
+    const without = totalPnl - row.pnl;
+    const stakeWithout = totalStake - row.stake;
+    console.log(`   without ${clip(shape, 14)} -> P/L ${usd(without)} on ${stakeWithout.toFixed(2).padStart(7)} staked`
+      + `  = ${pct(stakeWithout > 0 ? without / stakeWithout : null)}`
+      + `   (${row.lostFull} full-stake loss(es) removed, ${usd(-row.lostFullPnl)} of them)`);
+  }
+  console.log(`   keeping everything    -> P/L ${usd(totalPnl)} on ${totalStake.toFixed(2).padStart(7)} staked`
+    + `  = ${pct(totalStake > 0 ? totalPnl / totalStake : null)}`);
 }
 
-main().catch((error) => {
-  console.error(error?.stack || error?.message || String(error));
-  process.exit(1);
-});
+// Guarded like the worker's, so importing this module to test marketShape does not fire a
+// production read. Without it, checking the classifier against real question strings ran the
+// whole report as a side effect.
+const invokedDirectly = process.argv[1]
+  ? import.meta.url === pathToFileURL(process.argv[1]).href
+  : false;
+if (invokedDirectly) {
+  main().catch((error) => {
+    console.error(error?.stack || error?.message || String(error));
+    process.exit(1);
+  });
+}
