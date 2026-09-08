@@ -422,6 +422,30 @@ async function main() {
       console.log(`      edge ${observed - meanPooled >= 0 ? "+" : ""}${((observed - meanPooled) * 100).toFixed(1)} pts`
         + `  (${se > 0 ? ((observed - meanPooled) / se).toFixed(2) : "-"} sigma on ${group.total} order(s))`);
     }
+
+    // The gap between those two lines IS the finding, and neither line alone is the answer,
+    // so the report says so itself rather than leaving the reader to pick the flattering one.
+    //
+    // Every order in the weak tier is a position SOLD BEFORE RESOLUTION. Its market's real
+    // outcome is recorded nowhere -- we stopped holding the token, so the account never
+    // learned how it settled, and no paper portfolio held that exact token either. Scoring
+    // it by the P/L sign is therefore an assumption, not a measurement: it assumes every
+    // position we sold at a loss was one that would have lost anyway.
+    const weak = pooled.filled.total - pooledHard.filled.total;
+    const weakWins = pooled.filled.won - pooledHard.filled.won;
+    if (weak > 0) {
+      console.log(`\n   ${weak} of the ${pooled.filled.total} scored order(s) rest on the P/L sign alone`
+        + ` (${weakWins} of them counted as wins).`);
+      console.log("   Every one is a position sold before its market resolved, so its true outcome is");
+      console.log("   recorded nowhere. That makes the two lines above a LOWER and an UPPER bound:");
+      console.log(`      lower ${pct(pooled.filled.won / pooled.filled.total)}`
+        + " -- assumes every position sold at a loss was a market that would have lost anyway");
+      console.log(`      upper ${pct(pooledHard.filled.won / pooledHard.filled.total)}`
+        + " -- counts only the markets that actually reached settlement");
+      console.log("   The truth is between them, and which end decides whether the ENTRIES or the");
+      console.log("   EXITS are what costs this account money. If the upper bound clears break-even");
+      console.log("   and the lower does not, the picks are paying and the exit policy is not.");
+    }
   }
 
   // Question two, which needs unfilled orders to be scoreable at all. It usually is not:
