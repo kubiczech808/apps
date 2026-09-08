@@ -245,6 +245,13 @@ async function main() {
       + `  reverse ${entry.row.reverseOnStopLoss === true ? "yes" : "no"}`
       + `  archived ${entry.row.archived === true ? "YES" : "no"}`
       + `  closed ${String(entry.closed.length).padStart(4)}`);
+    // The curated line above is what most runs need. The full row is printed only for a
+    // match, and only here, because a live-vs-paper comparison lives or dies on fields
+    // that line does not carry -- maxProbability, minLiquidityUsdc, marketType,
+    // useLimitOrders, executionTrigger, excludeOverUnderMarkets, excludedMarketShapes --
+    // and none of those are in the repo: portfolio-config.json is not tracked, so this is
+    // the only way to see a portfolio's real settings without guessing at field names.
+    if (isMatch) console.log(`        full config: ${JSON.stringify(entry.row)}`);
   }
   const unattributed = liveClosed.filter((trade) => !String(trade.portfolioId || "").trim()).length;
   if (unattributed) {
