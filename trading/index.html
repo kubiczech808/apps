@@ -540,12 +540,8 @@
           </select>
           <strong data-portfolio-market-type-label>All markets</strong>
         </label>
-        <label class="parameter-control order-mode-toggle" title="When enabled, Over/Under (O/U) totals are excluded before a market can become a candidate or be executed.">
-          <input type="checkbox" data-exclude-over-under-markets>
-          <span>Exclude Over/Under (O/U)</span>
-        </label>
-        <div class="market-shape-filter" title="A stop loss cannot protect a position in a market that settles in one jump rather than walking down to it -- an over/under, a draw at halftime, an exact score, a set or map leg all go from the entry price to 0 the instant the event ends. Excluding a shape here removes it from candidates before it can arm a stop that structurally cannot reach it.">
-          <span class="market-shape-filter-label">Exclude market shapes a stop loss can't protect</span>
+        <div class="market-shape-filter" title="A market's SHAPE is how its price moves: whether it can walk down to a stop loss or only jump straight past it. An over/under, a draw at halftime, an exact score, a set or map leg all sit near the entry price while the event runs and go to 0 the instant it ends, so a stop cannot protect a position there at any multiplier or floor. Excluding a shape removes it from candidates before it can arm a stop that structurally cannot reach it. This is a different question from Market type above, which is how many outcomes the market has: an over/under is Yes/No AND a jump, while a two-team match is Yes/No AND a walk. Nothing is excluded by default -- on measured results these shapes are worth excluding when the portfolio relies on a stop loss, and worth keeping when it does not.">
+          <span class="market-shape-filter-label">Exclude market shapes</span>
           <div class="market-shape-filter-options">
             <label class="parameter-control order-mode-toggle market-shape-option">
               <input type="checkbox" data-exclude-market-shape="over-under">

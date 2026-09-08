@@ -710,11 +710,23 @@ export function marketShape(item = {}) {
 
 // Read off a portfolio row (or a normalized strategy's Set) whichever way it is stored,
 // into the one thing every filter site needs: a Set to test membership against.
-function marketShapeExclusionSet(value) {
-  if (value instanceof Set) return value;
-  return new Set((Array.isArray(value) ? value : [])
-    .map((shape) => String(shape).trim().toLowerCase())
-    .filter((shape) => MARKET_SHAPE_IDS.includes(shape)));
+// excludeOverUnderMarkets is folded in here rather than checked beside every call.
+//
+// It was a second switch for exactly one of the seven shapes -- its own checkbox directly
+// above the shape group, its own env var, its own gate at each of the filter sites -- and
+// the two did not even agree across live and paper: the live order executor knew nothing
+// about shapes, so on a live portfolio the Over/Under switch worked while the other five
+// checkboxes silently did nothing. Folding it into the set makes the set the only thing any
+// filter has to consult, and keeps a portfolio saved before the merge restricting exactly
+// what it always restricted.
+function marketShapeExclusionSet(value, legacyExcludeOverUnder = false) {
+  const shapes = value instanceof Set
+    ? new Set(value)
+    : new Set((Array.isArray(value) ? value : [])
+      .map((shape) => String(shape).trim().toLowerCase())
+      .filter((shape) => MARKET_SHAPE_IDS.includes(shape)));
+  if (legacyExcludeOverUnder === true) shapes.add("over-under");
+  return shapes;
 }
 
 const PAPER_STRATEGIES = {
@@ -747,7 +759,10 @@ const PAPER_STRATEGIES = {
     useLimitOrders: envBool("PAPER_CONSERVATIVE_USE_LIMIT_ORDERS", false),
     marketType: envPortfolioMarketType("PAPER_CONSERVATIVE_MARKET_TYPE", "PAPER_CONSERVATIVE_REQUIRE_MOST_PROBABLE", "all"),
     excludeOverUnderMarkets: envBool("PAPER_CONSERVATIVE_EXCLUDE_OVER_UNDER_MARKETS", false),
-    excludedMarketShapes: envTagSet("PAPER_CONSERVATIVE_EXCLUDED_MARKET_SHAPES"),
+    excludedMarketShapes: marketShapeExclusionSet(
+      envTagSet("PAPER_CONSERVATIVE_EXCLUDED_MARKET_SHAPES"),
+      envBool("PAPER_CONSERVATIVE_EXCLUDE_OVER_UNDER_MARKETS", false),
+    ),
     requireMostProbableOutcome: envPortfolioMarketType("PAPER_CONSERVATIVE_MARKET_TYPE", "PAPER_CONSERVATIVE_REQUIRE_MOST_PROBABLE", "all") === "multi",
     probabilitySource: envProbabilitySource("PAPER_CONSERVATIVE_PROBABILITY_SOURCE"),
     excludedCandidateTokenIds: envTokenIdSet("PAPER_CONSERVATIVE_EXCLUDED_CANDIDATE_TOKEN_IDS"),
@@ -783,7 +798,10 @@ const PAPER_STRATEGIES = {
     useLimitOrders: envBool("PAPER_HIGH_REWARD_USE_LIMIT_ORDERS", false),
     marketType: envPortfolioMarketType("PAPER_HIGH_REWARD_MARKET_TYPE", "PAPER_HIGH_REWARD_REQUIRE_MOST_PROBABLE", "all"),
     excludeOverUnderMarkets: envBool("PAPER_HIGH_REWARD_EXCLUDE_OVER_UNDER_MARKETS", false),
-    excludedMarketShapes: envTagSet("PAPER_HIGH_REWARD_EXCLUDED_MARKET_SHAPES"),
+    excludedMarketShapes: marketShapeExclusionSet(
+      envTagSet("PAPER_HIGH_REWARD_EXCLUDED_MARKET_SHAPES"),
+      envBool("PAPER_HIGH_REWARD_EXCLUDE_OVER_UNDER_MARKETS", false),
+    ),
     requireMostProbableOutcome: envPortfolioMarketType("PAPER_HIGH_REWARD_MARKET_TYPE", "PAPER_HIGH_REWARD_REQUIRE_MOST_PROBABLE", "all") === "multi",
     probabilitySource: envProbabilitySource("PAPER_HIGH_REWARD_PROBABILITY_SOURCE"),
     excludedCandidateTokenIds: envTokenIdSet("PAPER_HIGH_REWARD_EXCLUDED_CANDIDATE_TOKEN_IDS"),
@@ -819,7 +837,10 @@ const PAPER_STRATEGIES = {
     useLimitOrders: envBool("PAPER_MORE_PROBABLE_USE_LIMIT_ORDERS", false),
     marketType: envPortfolioMarketType("PAPER_MORE_PROBABLE_MARKET_TYPE", "PAPER_MORE_PROBABLE_REQUIRE_MOST_PROBABLE", "multi"),
     excludeOverUnderMarkets: envBool("PAPER_MORE_PROBABLE_EXCLUDE_OVER_UNDER_MARKETS", false),
-    excludedMarketShapes: envTagSet("PAPER_MORE_PROBABLE_EXCLUDED_MARKET_SHAPES"),
+    excludedMarketShapes: marketShapeExclusionSet(
+      envTagSet("PAPER_MORE_PROBABLE_EXCLUDED_MARKET_SHAPES"),
+      envBool("PAPER_MORE_PROBABLE_EXCLUDE_OVER_UNDER_MARKETS", false),
+    ),
     requireMostProbableOutcome: envPortfolioMarketType("PAPER_MORE_PROBABLE_MARKET_TYPE", "PAPER_MORE_PROBABLE_REQUIRE_MOST_PROBABLE", "multi") === "multi",
     probabilitySource: envProbabilitySource("PAPER_MORE_PROBABLE_PROBABILITY_SOURCE"),
     excludedCandidateTokenIds: envTokenIdSet("PAPER_MORE_PROBABLE_EXCLUDED_CANDIDATE_TOKEN_IDS"),
@@ -859,7 +880,10 @@ const PAPER_STRATEGIES = {
     useLimitOrders: envBool("PAPER_EQUAL_USE_LIMIT_ORDERS", false),
     marketType: envPortfolioMarketType("PAPER_EQUAL_MARKET_TYPE", "PAPER_EQUAL_REQUIRE_MOST_PROBABLE", "all"),
     excludeOverUnderMarkets: envBool("PAPER_EQUAL_EXCLUDE_OVER_UNDER_MARKETS", false),
-    excludedMarketShapes: envTagSet("PAPER_EQUAL_EXCLUDED_MARKET_SHAPES"),
+    excludedMarketShapes: marketShapeExclusionSet(
+      envTagSet("PAPER_EQUAL_EXCLUDED_MARKET_SHAPES"),
+      envBool("PAPER_EQUAL_EXCLUDE_OVER_UNDER_MARKETS", false),
+    ),
     requireMostProbableOutcome: envPortfolioMarketType("PAPER_EQUAL_MARKET_TYPE", "PAPER_EQUAL_REQUIRE_MOST_PROBABLE", "all") === "multi",
     probabilitySource: envProbabilitySource("PAPER_EQUAL_PROBABILITY_SOURCE"),
     excludedCandidateTokenIds: envTokenIdSet("PAPER_EQUAL_EXCLUDED_CANDIDATE_TOKEN_IDS"),
@@ -935,7 +959,7 @@ function customPaperStrategies(raw = process.env.PAPER_CUSTOM_PORTFOLIOS) {
       archived: row.archived === true,
       marketType,
       excludeOverUnderMarkets: row.excludeOverUnderMarkets === true,
-      excludedMarketShapes: marketShapeExclusionSet(row.excludedMarketShapes),
+      excludedMarketShapes: marketShapeExclusionSet(row.excludedMarketShapes, row.excludeOverUnderMarkets === true),
       requireMostProbableOutcome: marketType === "multi",
       probabilitySource: row.probabilitySource === "ai" ? "ai" : "polymarket",
       excludedCandidateTokenIds: new Set((Array.isArray(row.excludedCandidateTokenIds) ? row.excludedCandidateTokenIds : [])
@@ -1979,7 +2003,7 @@ function normalizePaperPortfolio(strategy, input = {}) {
     executionTrigger: normalizeExecutionTrigger(strategy.executionTrigger),
     marketType: normalizePortfolioMarketType(strategy.marketType, strategy.requireMostProbableOutcome),
     excludeOverUnderMarkets: Boolean(strategy.excludeOverUnderMarkets),
-    excludedMarketShapes: marketShapeExclusionSet(strategy.excludedMarketShapes),
+    excludedMarketShapes: marketShapeExclusionSet(strategy.excludedMarketShapes, strategy.excludeOverUnderMarkets === true),
     requireMostProbableOutcome: Boolean(strategy.requireMostProbableOutcome),
     probabilitySource: strategy.probabilitySource,
     equalRiskMultiplier: normalizeStopLossRiskMultiplier(strategy.equalRiskMultiplier, strategy.equalRiskProtection ? 1 : 0),
@@ -2043,7 +2067,7 @@ function normalizePaperPortfolio(strategy, input = {}) {
       executionTrigger: normalizeExecutionTrigger(strategy.executionTrigger),
       marketType: normalizePortfolioMarketType(strategy.marketType, strategy.requireMostProbableOutcome),
       excludeOverUnderMarkets: Boolean(strategy.excludeOverUnderMarkets),
-    excludedMarketShapes: marketShapeExclusionSet(strategy.excludedMarketShapes),
+    excludedMarketShapes: marketShapeExclusionSet(strategy.excludedMarketShapes, strategy.excludeOverUnderMarkets === true),
       requireMostProbableOutcome: Boolean(strategy.requireMostProbableOutcome),
       probabilitySource: strategy.probabilitySource,
       equalRiskMultiplier: normalizeStopLossRiskMultiplier(strategy.equalRiskMultiplier, strategy.equalRiskProtection ? 1 : 0),
@@ -4573,8 +4597,10 @@ function observationMatchesActiveLiveConfig(item, config) {
   if (Number.isFinite(minimumVolume) && minimumVolume > 0 && rowVolumeUsdc(item) < minimumVolume) return false;
   const marketType = normalizePortfolioMarketType(config?.marketType, config?.requireMostProbableOutcome === true);
   if (marketType !== "all" && reportMarketType(item) !== marketType) return false;
-  if (config?.excludeOverUnderMarkets === true && isOverUnderMarket(item)) return false;
-  if (marketShapeExclusionSet(config?.excludedMarketShapes).has(marketShape(item))) return false;
+  // One gate for every shape, over-under included -- it was checked separately on the line
+  // above, duplicating one of the seven.
+  if (marketShapeExclusionSet(config?.excludedMarketShapes, config?.excludeOverUnderMarkets === true)
+    .has(marketShape(item))) return false;
   const tags = rowTagSlugs(item);
   const include = configTagSet(config?.includeOnlyMarketTags || config?.allowedMarketTags);
   if (include.size && ![...include].some((tag) => tags.has(tag))) return false;
@@ -7512,8 +7538,13 @@ function strategyEligibleCandidates(eligible, strategy) {
     // came to disagree about the same market.
     const marketType = reportMarketType(item);
     if (requiredMarketType !== "all" && marketType !== requiredMarketType) return false;
-    if (strategy.excludeOverUnderMarkets && isOverUnderMarket(item)) return false;
-    if (strategy.excludedMarketShapes?.has(marketShape(item))) return false;
+    // Folded here rather than trusting the normalizer to have done it. These filters are
+    // called with raw strategy objects too -- a stored row, a test fixture, a portfolio
+    // saved before the merge -- and reading a pre-built Set that may not exist is how a
+    // portfolio carrying only the retired excludeOverUnderMarkets flag silently stopped
+    // excluding anything.
+    if (marketShapeExclusionSet(strategy.excludedMarketShapes, strategy.excludeOverUnderMarkets === true)
+      .has(marketShape(item))) return false;
     if (strategy.equalRiskProtection) {
       const entry = paperEntryEconomics(item, strategy);
       const plan = equalRiskStopPlan({
@@ -7849,12 +7880,12 @@ function portfolioFilterResult(item, strategy) {
   if (requiredMarketType !== "all" && marketType !== requiredMarketType) {
     reasons.push(`market type ${marketType || "-"} does not match portfolio market type ${requiredMarketType}`);
   }
-  if (strategy.excludeOverUnderMarkets && isOverUnderMarket(item)) {
-    reasons.push("Over/Under market is excluded by this paper portfolio");
-  }
   {
+    // Folded here for the same reason as the shortlist filter above: a raw strategy may
+    // carry only the retired excludeOverUnderMarkets flag and no Set at all.
     const shape = marketShape(item);
-    if (strategy.excludedMarketShapes?.has(shape)) {
+    if (marketShapeExclusionSet(strategy.excludedMarketShapes, strategy.excludeOverUnderMarkets === true)
+      .has(shape)) {
       reasons.push(`${shape} market shape is excluded by this paper portfolio`);
     }
   }

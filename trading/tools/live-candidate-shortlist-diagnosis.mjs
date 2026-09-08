@@ -59,6 +59,13 @@ function environmentFromConfig(config, requestedId) {
       LIVE_MIN_NET_YIELD: live.minNetYield,
       LIVE_MARKET_TYPE: live.marketType,
       LIVE_EXCLUDE_OVER_UNDER_MARKETS: String(Boolean(live.excludeOverUnderMarkets)).toLowerCase(),
+      // Same merge the executor applies: shapes are the one list, and the legacy
+      // over-under flag above is an input to it rather than a second switch. Passing
+      // only the flag is how this diagnosis came to model a filter the executor no
+      // longer has, and a shortlist report that models the wrong filter is worse
+      // than none.
+      LIVE_EXCLUDED_MARKET_SHAPES: (Array.isArray(live.excludedMarketShapes) ? live.excludedMarketShapes : [])
+        .map((shape) => String(shape).trim().toLowerCase()).filter(Boolean).join(","),
       LIVE_EXCLUDED_CANDIDATE_TOKEN_IDS: (live.excludedCandidateTokenIds || []).filter((token) => /^\d+$/.test(String(token))).join(","),
       LIVE_EXCLUDED_MARKET_TAGS: (live.excludedMarketTags || []).map((tag) => String(tag).trim()).filter(Boolean).join(","),
       LIVE_INCLUDE_ONLY_MARKET_TAGS: (live.includeOnlyMarketTags || []).map((tag) => String(tag).trim()).filter(Boolean).join(","),

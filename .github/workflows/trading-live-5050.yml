@@ -160,6 +160,16 @@ jobs:
               "LIVE_MAX_PROBABILITY": cfg.get("maxProbability"),
               "LIVE_MARKET_TYPE": cfg.get("marketType"),
               "LIVE_EXCLUDE_OVER_UNDER_MARKETS": str(bool(cfg.get("excludeOverUnderMarkets", False))).lower(),
+              # Shapes this portfolio refuses, comma joined. A saved empty list means every
+              # shape and has to reach the executor as an empty string rather than being
+              # dropped as "unset", or the restriction could never be lifted once set.
+              # excludeOverUnderMarkets travels alongside for an executor that predates the
+              # merge; the current one folds it into this list and never gates on it twice.
+              "LIVE_EXCLUDED_MARKET_SHAPES": ",".join(
+                  str(shape).strip().lower()
+                  for shape in (cfg.get("excludedMarketShapes") or [])
+                  if str(shape).strip()
+              ),
               # Hours is the stored unit. Days is still exported for a portfolio saved
               # before the switch; the executor reads it only when no hours value came
               # through, so 12 or 6 hours can no longer be rounded back up to a day.

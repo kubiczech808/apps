@@ -1814,6 +1814,30 @@ function normalize_market_shape_list(mixed $value): array
     return array_keys($shapes);
 }
 
+/**
+ * The one place the retired excludeOverUnderMarkets switch becomes part of the shape list.
+ *
+ * That boolean and the shape list were two switches for one restriction, sitting next to
+ * each other in the form and enforced separately in about twenty places -- and because the
+ * live order executor knew nothing about shapes, an over/under exclusion worked on a live
+ * portfolio while the other five shape checkboxes silently did nothing there.
+ *
+ * So the list is now the only source of truth and the boolean is an INPUT to it: a config
+ * saved before the merge, or written by an older client, keeps restricting exactly what it
+ * always restricted. Everything that stores a config writes the boolean back DERIVED from
+ * the list, so unchecking Over/Under in the shape group actually clears it -- honouring a
+ * stored true alongside an explicit list would fold the exclusion straight back in and make
+ * it impossible to turn off.
+ */
+function merge_excluded_market_shapes(mixed $shapes, mixed $legacyExcludeOverUnder): array
+{
+    $merged = normalize_market_shape_list($shapes);
+    if ($legacyExcludeOverUnder === true && !in_array('over-under', $merged, true)) {
+        $merged[] = 'over-under';
+    }
+    return $merged;
+}
+
 function is_active_scraped_market_observation(array $item): bool
 {
     $status = strtoupper((string) ($item['status'] ?? $item['selectionStatus'] ?? ''));
@@ -1971,10 +1995,13 @@ function execution_scope_matches_observation(array $item, array $config): bool
     if ($marketType !== 'all' && observation_market_type($item) !== $marketType) {
         return false;
     }
-    if (($config['excludeOverUnderMarkets'] ?? false) === true && observation_is_over_under_market($item)) {
-        return false;
-    }
-    $excludedShapes = normalize_market_shape_list($config['excludedMarketShapes'] ?? []);
+    // One gate for every shape, over-under included. excludeOverUnderMarkets used to be
+    // checked separately right above the shape list, duplicating exactly one of the seven
+    // shapes, so the same restriction had two switches that could disagree.
+    $excludedShapes = merge_excluded_market_shapes(
+        $config['excludedMarketShapes'] ?? [],
+        $config['excludeOverUnderMarkets'] ?? false,
+    );
     if ($excludedShapes !== [] && in_array(observation_market_shape($item), $excludedShapes, true)) {
         return false;
     }
@@ -2904,7 +2931,7 @@ function portfolio_config_history_fields(): array
         'displayName', 'initialUsdc', 'minProbability', 'maxProbability', 'stakeUsdc',
         'maxResolutionDays', 'maxResolutionHours', 'liveEventMode', 'requireEventStarted',
         'settlementCloseBid',
-        'selectionOrder', 'marketType', 'excludeOverUnderMarkets', 'excludedMarketShapes', 'probabilitySource',
+        'selectionOrder', 'marketType', 'excludedMarketShapes', 'probabilitySource',
         'minLiquidityUsdc', 'minNetYield', 'executionTrigger', 'executionCronMinutes',
         'useLimitOrders', 'autoRotatePositions', 'stopLossRiskMultiplier', 'reverseOnStopLoss',
         'includeOnlyMarketTags', 'excludedMarketTags', 'automationEnabled', 'archived',
@@ -3522,6 +3549,15 @@ function normalize_strategy_config(array $input, array $defaults): array
         ?? (array_key_exists('requireEventStarted', $input)
             ? (($input['requireEventStarted'] === true) ? 'only' : 'ignore')
             : config_live_event_mode($defaults));
+    // The shape list the client sent, else the portfolio's own, with the retired
+    // excludeOverUnderMarkets boolean folded in. The boolean is read from $input ONLY, never
+    // from $defaults: the stored value is now derived from this very list, so falling back
+    // to it would fold a cleared exclusion straight back in and Over/Under could never be
+    // unchecked again.
+    $excludedMarketShapes = merge_excluded_market_shapes(
+        $input['excludedMarketShapes'] ?? $defaults['excludedMarketShapes'] ?? [],
+        ($input['excludeOverUnderMarkets'] ?? false) === true,
+    );
     return [
         'displayName' => normalize_portfolio_display_name(
             $input['displayName'] ?? $defaults['displayName'],
@@ -3567,14 +3603,21 @@ function normalize_strategy_config(array $input, array $defaults): array
         // saving and the bot fell back to market orders.
         'useLimitOrders' => (bool) ($input['useLimitOrders'] ?? $defaults['useLimitOrders'] ?? false),
         'marketType' => $marketType,
-        'excludeOverUnderMarkets' => (bool) ($input['excludeOverUnderMarkets'] ?? $defaults['excludeOverUnderMarkets'] ?? false),
         // Which market SHAPES this portfolio refuses -- over-under, spread, exact-score,
-        // draw, in-event-leg, both-teams, outright. A stop loss cannot protect a position
-        // in a market that settles in one jump rather than walking down to it, whatever the
-        // multiplier or floor; this is how a portfolio excludes those shapes rather than
-        // tuning a stop that structurally cannot reach them. Absent means every shape is
-        // still tradable, matching an unset excludeOverUnderMarkets.
-        'excludedMarketShapes' => normalize_market_shape_list($input['excludedMarketShapes'] ?? $defaults['excludedMarketShapes'] ?? []),
+        // draw, in-event-leg, both-teams, outright. A shape is how the price MOVES: whether
+        // it can walk down to a stop or only jump past it. That is a different axis from
+        // marketType above, which is how many outcomes the market has, and the two do not
+        // collapse into one control: an over/under is binary and a jump, an outright
+        // two-team match is binary and a walk, a tournament winner is multi and a walk, an
+        // exact score is multi and a jump. Absent means every shape is tradable.
+        //
+        // excludeOverUnderMarkets was a second switch for one of these seven, and is now
+        // folded in rather than stored independently -- see merge_excluded_market_shapes.
+        'excludedMarketShapes' => $excludedMarketShapes,
+        // Derived, never an input of its own from here on, so a reader that predates the
+        // merge still sees the restriction and unchecking Over/Under in the shape group
+        // actually clears it.
+        'excludeOverUnderMarkets' => in_array('over-under', $excludedMarketShapes, true),
         // Kept while older workflows are still in circulation. The three-value
         // marketType field above is the source of truth.
         'requireMostProbableOutcome' => $marketType === 'multi',

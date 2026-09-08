@@ -382,7 +382,6 @@ const els = {
   excludedTagsRow: document.querySelector("[data-excluded-tags-row]"),
   portfolioMarketType: document.querySelector("[data-portfolio-market-type]"),
   portfolioMarketTypeLabel: document.querySelector("[data-portfolio-market-type-label]"),
-  excludeOverUnderMarkets: document.querySelector("[data-exclude-over-under-markets]"),
   marketShapeCheckboxes: document.querySelectorAll("[data-exclude-market-shape]"),
   crossLiveRisk: document.querySelector("[data-cross-live-risk]"),
   capitalStatus: document.querySelector("[data-capital-status]"),
@@ -1083,13 +1082,35 @@ function marketShapeLabel(shape) {
   return MARKET_SHAPE_LABELS[shape] || String(shape || "");
 }
 
+// Which market shapes a config refuses, as ONE list, with the retired
+// excludeOverUnderMarkets boolean folded in.
+//
+// That boolean was a second switch for exactly one of the seven shapes: it sat directly
+// above the shape checkboxes in the same form, and the two were enforced separately in
+// about twenty places. Worse, they did not agree across live and paper -- the live order
+// executor knew nothing about shapes, so on a live portfolio the Over/Under switch worked
+// while the other five checkboxes silently did nothing at all.
+//
+// The list is the only source of truth now and the boolean is an input to it: a portfolio
+// saved before the merge keeps restricting what it always restricted, and its shape group
+// renders with Over/Under already ticked -- which is also what migrates it, since the next
+// save writes the list. Everything stores the boolean back DERIVED from the list, and that
+// is what lets Over/Under be unticked at all: honouring a stored true beside an explicit
+// list would fold the exclusion straight back in.
+//
 // A stop loss cannot protect a position in a market that settles in one jump rather than
 // walking down to a floor -- see marketShape() below for the classifier and the measurement
-// behind it. Read for the settings summary the same way excludeOverUnderMarkets is.
-function excludedMarketShapesSummaryValue(config) {
+// behind it.
+function configExcludedMarketShapes(config) {
   const shapes = (Array.isArray(config?.excludedMarketShapes) ? config.excludedMarketShapes : [])
     .map((shape) => String(shape).trim().toLowerCase())
     .filter(Boolean);
+  if (config?.excludeOverUnderMarkets === true && !shapes.includes("over-under")) shapes.push("over-under");
+  return shapes;
+}
+
+function excludedMarketShapesSummaryValue(config) {
+  const shapes = configExcludedMarketShapes(config);
   return shapes.length ? shapes.map(marketShapeLabel).join(", ") : null;
 }
 
@@ -5914,10 +5935,12 @@ function syncPortfolioParameterControls(configOverride = null, options = {}) {
   const marketType = normalizePortfolioMarketType(config.marketType, config.requireMostProbableOutcome);
   if (els.portfolioMarketType) els.portfolioMarketType.value = marketType;
   if (els.portfolioMarketTypeLabel) els.portfolioMarketTypeLabel.textContent = portfolioMarketTypeLabel(marketType);
-  if (els.excludeOverUnderMarkets) els.excludeOverUnderMarkets.checked = config.excludeOverUnderMarkets === true;
   if (els.marketShapeCheckboxes) {
-    const excludedShapes = new Set((Array.isArray(config.excludedMarketShapes) ? config.excludedMarketShapes : [])
-      .map((shape) => String(shape).trim().toLowerCase()));
+    // configExcludedMarketShapes, not the raw field: a portfolio saved before the merge
+    // carries its Over/Under restriction in the retired boolean, and rendering the group
+    // without it would show the box unticked on a portfolio that IS excluding over/unders
+    // -- and then store that lie on the next save.
+    const excludedShapes = new Set(configExcludedMarketShapes(config));
     for (const checkbox of els.marketShapeCheckboxes) {
       checkbox.checked = excludedShapes.has(checkbox.dataset.excludeMarketShape);
     }
@@ -6639,11 +6662,14 @@ function parameterDraftFromControls(baseDraft = {}) {
     draft.marketType = marketType;
     draft.requireMostProbableOutcome = marketType === "multi";
   }
-  if (els.excludeOverUnderMarkets) draft.excludeOverUnderMarkets = Boolean(els.excludeOverUnderMarkets.checked);
   if (els.marketShapeCheckboxes?.length) {
     draft.excludedMarketShapes = [...els.marketShapeCheckboxes]
       .filter((checkbox) => checkbox.checked)
       .map((checkbox) => checkbox.dataset.excludeMarketShape);
+    // Written alongside, derived, for a reader that predates the merge. It has to be sent
+    // even when false: api.php folds a true it receives into the list, so omitting it on an
+    // untick would leave the stored true in place and the exclusion could never be cleared.
+    draft.excludeOverUnderMarkets = draft.excludedMarketShapes.includes("over-under");
   }
   if (els.limitOrders) draft.useLimitOrders = Boolean(els.limitOrders.checked);
   return draft;
@@ -9256,7 +9282,6 @@ function portfolioRuleRows(portfolio = {}) {
     ["Resolution filter", resolution],
     ["Trade priority", priority],
     ["Market type", portfolioMarketTypeLabel(config.marketType)],
-    ...(config.excludeOverUnderMarkets === true ? [["Over/Under markets", "Excluded"]] : []),
     ...(excludedMarketShapesSummaryValue(config) != null ? [["Excluded market shapes", excludedMarketShapesSummaryValue(config)]] : []),
     ["Execution trigger", normalizeExecutionTrigger(config.executionTrigger) === "cron"
       ? `${executionTriggerLabel(config.executionTrigger)} · ${executionCronMinutesLabel(config.executionCronMinutes)}`
@@ -9315,7 +9340,6 @@ function livePortfolioRuleRows() {
     ["Resolution filter", resolutionRuleValue(maxResolutionHours, config)],
     ["Trade priority", priority],
     ["Market type", portfolioMarketTypeLabel(config.marketType)],
-    ...(config.excludeOverUnderMarkets === true ? [["Over/Under markets", "Excluded"]] : []),
     ...(excludedMarketShapesSummaryValue(config) != null ? [["Excluded market shapes", excludedMarketShapesSummaryValue(config)]] : []),
     ["Execution trigger", normalizeExecutionTrigger(config.executionTrigger) === "cron"
       ? `${executionTriggerLabel(config.executionTrigger)} · ${executionCronMinutesLabel(config.executionCronMinutes)}`
@@ -9931,11 +9955,9 @@ function portfolioCandidateFilterReasons(item, mode = state.mode) {
   if (requiredMarketType !== "all" && candidateMarketType(item) !== requiredMarketType) {
     reasons.push(`market type ${portfolioMarketTypeLabel(candidateMarketType(item))} does not match ${portfolioMarketTypeLabel(requiredMarketType)}`);
   }
-  if (config.excludeOverUnderMarkets === true && candidateIsOverUnderMarket(item)) {
-    reasons.push("Over/Under market is excluded by this portfolio");
-  }
-  const excludedShapes = new Set((Array.isArray(config.excludedMarketShapes) ? config.excludedMarketShapes : [])
-    .map((shape) => String(shape).trim().toLowerCase()));
+  // One gate for every shape, over-under included -- it used to be checked separately
+  // immediately above, duplicating one of the seven.
+  const excludedShapes = new Set(configExcludedMarketShapes(config));
   const shape = candidateMarketShape(item);
   if (excludedShapes.has(shape)) {
     reasons.push(`${marketShapeLabel(shape)} market shape is excluded by this portfolio`);
@@ -10455,7 +10477,6 @@ const PORTFOLIO_CONFIG_HISTORY_LABELS = {
   settlementCloseBid: "Close at certainty",
   selectionOrder: "Trade priority",
   marketType: "Market type",
-  excludeOverUnderMarkets: "Exclude Over/Under (O/U)",
   excludedMarketShapes: "Excluded market shapes",
   probabilitySource: "Probability source",
   minLiquidityUsdc: "Minimum volume",
@@ -15421,22 +15442,19 @@ els.portfolioMarketType?.addEventListener("change", () => {
   rerenderCurrentDashboard();
 });
 
-els.excludeOverUnderMarkets?.addEventListener("change", () => {
-  const value = Boolean(els.excludeOverUnderMarkets.checked);
-  if (updateParameterDraft({ excludeOverUnderMarkets: value })) return;
-  updatePortfolioConfigForMode(state.mode, { excludeOverUnderMarkets: value });
-  savePortfolioConfigSoon();
-  syncPortfolioParameterControls();
-  rerenderCurrentDashboard();
-});
-
 for (const checkbox of els.marketShapeCheckboxes || []) {
   checkbox.addEventListener("change", () => {
     const excludedMarketShapes = [...els.marketShapeCheckboxes]
       .filter((box) => box.checked)
       .map((box) => box.dataset.excludeMarketShape);
-    if (updateParameterDraft({ excludedMarketShapes })) return;
-    updatePortfolioConfigForMode(state.mode, { excludedMarketShapes });
+    // Derived and always written, for the same reason the draft does it: a cleared
+    // Over/Under has to reach the store as false, or the stored true folds it back in.
+    const updates = {
+      excludedMarketShapes,
+      excludeOverUnderMarkets: excludedMarketShapes.includes("over-under"),
+    };
+    if (updateParameterDraft(updates)) return;
+    updatePortfolioConfigForMode(state.mode, updates);
     savePortfolioConfigSoon();
     syncPortfolioParameterControls();
     rerenderCurrentDashboard();

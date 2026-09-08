@@ -51,7 +51,32 @@ const PORTFOLIO_MARKET_TYPE = normalizePortfolioMarketType(
   process.env.LIVE_MARKET_TYPE,
   String(process.env.LIVE_REQUIRE_MOST_PROBABLE || "").toLowerCase() === "true",
 );
-const EXCLUDE_OVER_UNDER_MARKETS = String(process.env.LIVE_EXCLUDE_OVER_UNDER_MARKETS || "").toLowerCase() === "true";
+// Which market SHAPES this portfolio refuses. A shape is how the price MOVES -- whether it
+// can walk down to a stop or only jump past it -- and that is a different axis from
+// LIVE_MARKET_TYPE, which is how many outcomes the market has. An over/under is binary and a
+// jump; an outright two-team match is binary and a walk; a tournament winner is multi and a
+// walk; an exact score is multi and a jump. One dropdown cannot say "binary only, but no
+// over/unders", which is what this account's live portfolio is actually set to.
+//
+// LIVE_EXCLUDE_OVER_UNDER_MARKETS folds in here rather than being read separately. It used
+// to be its own switch, sitting beside the shape list and duplicating exactly one of the
+// seven shapes -- and because this executor knew nothing about shapes, an over/under
+// exclusion worked on a live portfolio while the other five checkboxes silently did nothing.
+// That is the live-vs-paper inconsistency the merge exists to remove, so the legacy flag
+// stays an INPUT (an older workflow, or a config saved before the merge, still restricts
+// what it always restricted) and never a second gate.
+const EXCLUDED_MARKET_SHAPES = new Set(
+  String(process.env.LIVE_EXCLUDED_MARKET_SHAPES || "")
+    .split(",")
+    .map((shape) => shape.trim().toLowerCase())
+    .filter(Boolean),
+);
+if (String(process.env.LIVE_EXCLUDE_OVER_UNDER_MARKETS || "").toLowerCase() === "true") {
+  EXCLUDED_MARKET_SHAPES.add("over-under");
+}
+// Derived from the set for the run-log fields that publish it, so a reader still sees the
+// restriction it always saw. Never consulted as a gate of its own.
+const EXCLUDE_OVER_UNDER_MARKETS = EXCLUDED_MARKET_SHAPES.has("over-under");
 // The AI probability pipeline was retired, so scoring always uses the
 // Polymarket outcome probability. LIVE_PROBABILITY_SOURCE is deliberately
 // ignored: an older stored portfolio config must not resurrect "ai".
@@ -1142,6 +1167,40 @@ function isOverUnderMarket(item = {}) {
     && /(?:\bo\s*\/\s*u\b|\bover\b|\bunder\b|\btotal\b|\b\d+(?:[.,]\d+)?\b)/i.test(question);
 }
 
+// The fourth independent copy of this classifier, and deliberately a copy: the paper bot,
+// api.php, the dashboard and this executor are deployed separately and must not import one
+// another. The test suite compares all four against the same fixtures, which is what keeps
+// them from drifting -- a shared module here would be a shared deployment.
+//
+// over-under delegates to isOverUnderMarket above rather than restating its patterns, so the
+// shape list and that function can never disagree about the same market.
+const MARKET_SHAPE_PATTERNS = [
+  [/^spread:|\bspread\b|\([-+]\d/i, "spread"],
+  [/exact score/i, "exact-score"],
+  [/\bdraw\b/i, "draw"],
+  [/set \d+ winner|\bgames total\b|map \d+|\bmap handicap\b|first .*(map|set|goal|blood)/i, "in-event-leg"],
+  [/both teams to/i, "both-teams"],
+];
+
+function marketShape(item = {}) {
+  if (isOverUnderMarket(item)) return "over-under";
+  const source = item?.candidate || {};
+  const question = String(item?.question || source?.question || "");
+  for (const [pattern, label] of MARKET_SHAPE_PATTERNS) {
+    if (pattern.test(question)) return label;
+  }
+  return "outright";
+}
+
+// The one gate, for every shape including over-under. Returns the excluded shape so the
+// rejection can name it, because "excluded by this live portfolio" with no shape named is
+// how an operator ends up unable to tell which checkbox did it.
+function excludedMarketShape(item) {
+  if (!EXCLUDED_MARKET_SHAPES.size) return null;
+  const shape = marketShape(item);
+  return EXCLUDED_MARKET_SHAPES.has(shape) ? shape : null;
+}
+
 function prefilterLiveCandidate(item) {
   const reasons = [];
   const tokenId = String(item?.tokenId || "");
@@ -1155,8 +1214,9 @@ function prefilterLiveCandidate(item) {
   if (PORTFOLIO_MARKET_TYPE !== "all" && marketType !== PORTFOLIO_MARKET_TYPE) {
     reasons.push(`market type ${marketType} does not match live portfolio market type ${PORTFOLIO_MARKET_TYPE}`);
   }
-  if (EXCLUDE_OVER_UNDER_MARKETS && isOverUnderMarket(item)) {
-    reasons.push("Over/Under market is excluded by this live portfolio");
+  const excludedShape = excludedMarketShape(item);
+  if (excludedShape) {
+    reasons.push(`${excludedShape} market shape is excluded by this live portfolio`);
   }
   if (EXCLUDED_CANDIDATE_TOKEN_IDS.has(tokenId)) reasons.push("manually excluded from this live portfolio");
   // Applied in the shared prefilter so both live strategies share the same shortlist.
@@ -3247,17 +3307,21 @@ async function revalidateEvaluation(
       minOrderSize,
     };
   }
-  if (EXCLUDE_OVER_UNDER_MARKETS && isOverUnderMarket({
+  // Re-checked against the FRESH market rather than the stored candidate, the same reason
+  // the market type above is: the question and the outcome are what classify the shape, and
+  // a revalidation exists precisely because the stored copy can be stale.
+  const currentExcludedShape = excludedMarketShape({
     ...evaluation,
     question: market.question || evaluation.question,
     eventSlug: marketEventSlug(market) || evaluation.eventSlug,
     outcome: outcomes[tokenIndex] || evaluation.outcome,
-  })) {
+  });
+  if (currentExcludedShape) {
     return {
       candidate: evaluation,
       eligible: false,
       status: "REJECTED",
-      rejectReasons: ["current market is Over/Under and is excluded by this live portfolio"],
+      rejectReasons: [`current market shape is ${currentExcludedShape} and is excluded by this live portfolio`],
       currentPrice: price,
       marketProbability,
       minOrderSize,
@@ -5662,6 +5726,7 @@ async function main() {
       maxProbability: MAX_PROBABILITY,
       marketType: PORTFOLIO_MARKET_TYPE,
       excludeOverUnderMarkets: EXCLUDE_OVER_UNDER_MARKETS,
+      excludedMarketShapes: [...EXCLUDED_MARKET_SHAPES],
       probabilitySource: PROBABILITY_SOURCE,
       minAnnualReturn: MIN_ANNUAL_RETURN,
       maxSpread: MAX_SPREAD,
@@ -5728,6 +5793,7 @@ async function main() {
         maxProbability: MAX_PROBABILITY,
         marketType: PORTFOLIO_MARKET_TYPE,
         excludeOverUnderMarkets: EXCLUDE_OVER_UNDER_MARKETS,
+        excludedMarketShapes: [...EXCLUDED_MARKET_SHAPES],
         probabilitySource: PROBABILITY_SOURCE,
         minAnnualReturn: MIN_ANNUAL_RETURN,
         maxSpread: MAX_SPREAD,

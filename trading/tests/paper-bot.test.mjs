@@ -3845,7 +3845,11 @@ test("portfolio market type: Yes/No and multichoice use the same three-value fil
     import("node:fs/promises").then(({ readFile }) => readFile(new URL("../tools/live-order-executor.mjs", import.meta.url), "utf8")),
   ]);
   assert.match(html, /data-portfolio-market-type/);
-  assert.match(html, /data-exclude-over-under-markets/);
+  // The standalone Over/Under checkbox is gone: it duplicated one of the seven shapes in
+  // the group directly below it. Over/Under is now that group's first option.
+  assert.ok(!html.includes("data-exclude-over-under-markets"),
+    "the standalone Over/Under switch must not come back beside the shape it duplicates");
+  assert.match(html, /data-exclude-market-shape="over-under"/);
   assert.match(html, /<option value="binary">Yes\/No<\/option>/);
   assert.ok(!html.includes("Only multichoice events"));
   assert.match(app, /market type .* does not match/i);
@@ -3855,10 +3859,27 @@ test("portfolio market type: Yes/No and multichoice use the same three-value fil
   assert.match(liveWorkflow, /LIVE_EXCLUDE_OVER_UNDER_MARKETS/);
   assert.match(fixedWorkflow, /"LIVE_MARKET_TYPE": cfg\.get\("marketType"\)/);
   assert.match(fixedWorkflow, /LIVE_EXCLUDE_OVER_UNDER_MARKETS/);
+  // The shape list has to reach the executor too, from BOTH workflows that configure it.
+  // Before the merge only the over-under boolean did, so on a live portfolio that switch
+  // worked while the other five shape checkboxes silently did nothing -- and merging the
+  // control away without this would have removed the only live shape filter there was.
+  assert.match(liveWorkflow, /"LIVE_EXCLUDED_MARKET_SHAPES"/);
+  assert.match(fixedWorkflow, /"LIVE_EXCLUDED_MARKET_SHAPES"/);
   assert.match(functionSource(executor, "prefilterLiveCandidate"), /PORTFOLIO_MARKET_TYPE !== "all"/);
-  assert.match(functionSource(executor, "prefilterLiveCandidate"), /EXCLUDE_OVER_UNDER_MARKETS/);
+  // One gate for every shape, and it is the shape gate: reading the legacy flag here again
+  // is what made the same restriction two switches that could disagree.
+  assert.match(functionSource(executor, "prefilterLiveCandidate"), /excludedMarketShape\(item\)/);
+  assert.doesNotMatch(functionSource(executor, "prefilterLiveCandidate"), /EXCLUDE_OVER_UNDER_MARKETS/);
+  assert.match(executor, /EXCLUDED_MARKET_SHAPES\.add\("over-under"\)/,
+    "the legacy flag has to fold into the set, or a config saved before the merge loses it");
 });
 
+// This was "portfolio O/U exclusion removes totals from the shortlist", and the exclusion
+// still has to do exactly that -- but it now travels in excludedMarketShapes rather than in
+// a boolean of its own. So the property under test is the MIGRATION: a portfolio still
+// carrying only the retired flag must filter precisely as it always did, because that is
+// every live and paper portfolio saved before the merge, and one of them is a live
+// portfolio configured with excludeOverUnderMarkets true.
 test("portfolio O/U exclusion removes totals from the paper shortlist and final selection", () => {
   const strategy = {
     ...bot.PAPER_STRATEGIES.conservative,
@@ -3897,8 +3918,29 @@ test("portfolio O/U exclusion removes totals from the paper shortlist and final 
   assert.equal(bot.isOverUnderMarket(ordinary), false);
   const filtered = bot.portfolioFilterResult(total, strategy);
   assert.equal(filtered.eligible, false);
-  assert.ok(filtered.reasons.some((reason) => /Over\/Under market is excluded/.test(reason)));
+  // Reported as a shape now, by the one gate, rather than by a second Over/Under-only gate.
+  assert.ok(filtered.reasons.some((reason) => /over-under market shape is excluded/.test(reason)),
+    `expected a shape exclusion reason, got ${JSON.stringify(filtered.reasons)}`);
   assert.deepEqual(bot.strategyEligibleCandidates([total, ordinary], strategy), [ordinary]);
+
+  // The same portfolio expressed the new way filters identically.
+  const byShape = { ...strategy, excludeOverUnderMarkets: false, excludedMarketShapes: ["over-under"] };
+  assert.equal(bot.portfolioFilterResult(total, byShape).eligible, false);
+  assert.deepEqual(bot.strategyEligibleCandidates([total, ordinary], byShape), [ordinary]);
+
+  // And the merge is a fold, not a replacement: a portfolio carrying the retired flag AND
+  // its own shape list keeps both restrictions.
+  const both = { ...strategy, excludedMarketShapes: ["draw"] };
+  const draw = { ...ordinary, tokenId: "32345678901234567890", question: "Will Lions vs Tigers end in a draw?" };
+  assert.equal(bot.portfolioFilterResult(total, both).eligible, false, "the folded-in flag still excludes");
+  assert.equal(bot.portfolioFilterResult(draw, both).eligible, false, "and its own list still excludes");
+
+  // Neither switch set means nothing is excluded -- there is no default exclusion, because
+  // the measurements point opposite ways depending on whether a stop loss is in force:
+  // on "55+ underway" (stop at 0.25x) outright-only turned 4.8% into 16.0%, while on
+  // "70-80 esports" (no stop at all) over-under was its second-best shape at 12.8%.
+  const open = { ...strategy, excludeOverUnderMarkets: false, excludedMarketShapes: [] };
+  assert.equal(bot.portfolioFilterResult(total, open).eligible, true);
 });
 
 // Asked for: expose the stop-loss-tuning report's market-shape breakdown as a portfolio
@@ -11037,11 +11079,27 @@ test("excludedMarketShapes: the setting is wired end to end, not only in the bot
   assert.match(app, /els\.marketShapeCheckboxes\?\.length/);
   assert.match(app, /checkbox\.checked = excludedShapes\.has\(checkbox\.dataset\.excludeMarketShape\)/);
   assert.match(app, /draft\.excludedMarketShapes = \[\.\.\.els\.marketShapeCheckboxes\]/);
-  assert.match(app, /updatePortfolioConfigForMode\(state\.mode, \{ excludedMarketShapes \}\)/);
+  assert.match(app, /updatePortfolioConfigForMode\(state\.mode, updates\)/);
+  // The retired boolean is written back DERIVED from the checkboxes, from BOTH the draft
+  // and the live-save path. It has to travel even when false: api.php folds a true it
+  // receives into the list, so omitting it on an untick would leave the stored true in
+  // place and Over/Under could never be cleared again.
+  assert.match(app, /draft\.excludeOverUnderMarkets = draft\.excludedMarketShapes\.includes\("over-under"\)/);
+  assert.match(app, /excludeOverUnderMarkets: excludedMarketShapes\.includes\("over-under"\)/);
+  // And the reader that folds it the other way, so a portfolio saved before the merge
+  // renders with Over/Under already ticked instead of showing an exclusion it does have as
+  // absent -- which would then be stored as absent on the next save.
+  assert.match(app, /function configExcludedMarketShapes\(config\)/);
+  assert.match(app, /config\?\.excludeOverUnderMarkets === true && !shapes\.includes\("over-under"\)/);
   // The settings summary and the change-history reader both name it, or a saved exclusion
   // is invisible everywhere a reader would look for it.
   assert.match(app, /excludedMarketShapesSummaryValue\(config\)/);
   assert.match(app, /excludedMarketShapes: "Excluded market shapes",/);
+  // And the retired field is NOT tracked separately any more: it is derived, so one change
+  // would otherwise write two history rows saying the same thing.
+  assert.ok(!app.includes('excludeOverUnderMarkets: "Exclude Over/Under (O/U)"'),
+    "a derived field must not get its own history label");
+  assert.doesNotMatch(api, /'excludeOverUnderMarkets', 'excludedMarketShapes'/);
   // The client-side candidate preview honors it too, using its own copy of the classifier --
   // client-side code cannot import the bot, so it is checked against the same production
   // questions rather than assumed to agree.
@@ -11067,10 +11125,20 @@ test("excludedMarketShapes: the setting is wired end to end, not only in the bot
   assert.match(paperWorkflow, /excluded_shapes = \[str\(shape\)\.strip\(\)\.lower\(\) for shape in \(row\.get\("excludedMarketShapes"\) or \[\]\) if str\(shape\)\.strip\(\)\]/);
 
   // And the shared PHP normalizer persists it for every portfolio type -- paper, live, and
-  // both custom variants -- through the one function that builds all of them.
-  assert.match(api, /'excludedMarketShapes' => normalize_market_shape_list\(\$input\['excludedMarketShapes'\] \?\? \$defaults\['excludedMarketShapes'\] \?\? \[\]\),/);
+  // both custom variants -- through the one function that builds all of them, with the
+  // retired boolean folded in and then stored back derived from the result.
+  assert.match(api, /function merge_excluded_market_shapes\(mixed \$shapes, mixed \$legacyExcludeOverUnder\): array/);
+  assert.match(api, /'excludedMarketShapes' => \$excludedMarketShapes,/);
+  assert.match(api, /'excludeOverUnderMarkets' => in_array\('over-under', \$excludedMarketShapes, true\),/);
+  // The legacy boolean is read from $input ONLY on save. Falling back to $defaults would
+  // read back the value this function itself just derived from the list, folding a cleared
+  // Over/Under straight back in -- so it could never be unticked.
+  assert.match(api, /\(\$input\['excludeOverUnderMarkets'\] \?\? false\) === true,/);
+  assert.doesNotMatch(api, /\$defaults\['excludeOverUnderMarkets'\]/);
   assert.match(api, /function observation_market_shape\(array \$item\): string/);
-  assert.match(api, /\$excludedShapes = normalize_market_shape_list\(\$config\['excludedMarketShapes'\] \?\? \[\]\);/);
+  // One gate for every shape in the execution-scope check, over-under included.
+  assert.match(api, /\$excludedShapes = merge_excluded_market_shapes\(/);
+  assert.doesNotMatch(api, /\(\$config\['excludeOverUnderMarkets'\] \?\? false\) === true && observation_is_over_under_market/);
 });
 
 // Every paper bot run died on load for over two hours, and 656 tests passed the whole time.

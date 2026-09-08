@@ -258,6 +258,16 @@ jobs:
               "LIVE_MIN_NET_YIELD": live.get("minNetYield"),
               "LIVE_MARKET_TYPE": live.get("marketType"),
               "LIVE_EXCLUDE_OVER_UNDER_MARKETS": str(bool(live.get("excludeOverUnderMarkets", False))).lower(),
+              # Shapes this portfolio refuses, comma joined. A saved empty list means every
+              # shape and has to reach the executor as an empty string rather than being
+              # dropped as "unset", or the restriction could never be lifted once set.
+              # excludeOverUnderMarkets travels alongside for an executor that predates the
+              # merge; the current one folds it into this list and never gates on it twice.
+              "LIVE_EXCLUDED_MARKET_SHAPES": ",".join(
+                  str(shape).strip().lower()
+                  for shape in (live.get("excludedMarketShapes") or [])
+                  if str(shape).strip()
+              ),
               "LIVE_EXECUTION_TRIGGER": live.get("executionTrigger"),
               "LIVE_EXECUTION_CRON_MINUTES": live.get("executionCronMinutes"),
               # Default on: a portfolio that never stored the field must keep trading.

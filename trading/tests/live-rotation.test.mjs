@@ -3498,6 +3498,9 @@ test("portfolio parameters: both live portfolios state their order price", () =>
     // above -- pure, so a stub here would only prove the harness agrees with itself.
     + `${/const MARKET_SHAPE_LABELS = \{[\s\S]*?\n\};/.exec(app)[0]}\n`
     + `${functionSource(app, "marketShapeLabel")}\n`
+    // configExcludedMarketShapes is what folds the retired excludeOverUnderMarkets
+    // boolean into the list, so the summary reads the same merged set the filters do.
+    + `${functionSource(app, "configExcludedMarketShapes")}\n`
     + `${functionSource(app, "excludedMarketShapesSummaryValue")}\n`
     + `${functionSource(app, "livePortfolioRuleRows")}\nreturn livePortfolioRuleRows;`,
   )(
