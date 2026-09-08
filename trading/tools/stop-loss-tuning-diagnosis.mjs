@@ -86,7 +86,13 @@ function normalizeTrade(row) {
     exitStopPrice: num(row.exitStopPrice ?? row.stopPrice),
     declineKind: row.declineKind || null,
     unsoldShares: num(row.unsoldShares),
-    status: row.status || null,
+    status: String(row.status || "").toUpperCase() || null,
+    // The paper bot's own account of what the stop did, and the only place any of these
+    // rows says so: ARMED on a LOST trade means the stop was watching and never fired,
+    // DECLINED_GAPPED means the gap band refused it, FILLED_AT_FLOOR means it worked.
+    stopLossStatus: row.stopLossStatus || null,
+    stopLossPrice: num(row.stopLossPrice),
+    closeReason: row.closeReason || null,
   };
 }
 
@@ -241,15 +247,34 @@ async function main() {
     return;
   }
   console.log("");
-
-  // ---------------------------------------------------------------------------------
-  console.log("== 2. the closed trades of the matched portfolio(s)");
-  const trades = matched.flatMap((entry) => entry.closed);
   console.log(`   matched: ${matched.map((entry) => `${entry.kind}:${entry.id} (${entry.closed.length})`).join(", ")}`);
-  if (!trades.length) {
-    console.log("   !! the matched portfolio(s) have no settled closed trade in this payload");
+
+  // One report per portfolio, never pooled. The first run matched three portfolios on
+  // "underway" -- multipliers 0.25, 2 and 2 -- and pooled 473 trades into one P/L and one
+  // "deployed setting" taken from whichever happened to be first. That is an average of
+  // three different strategies, which is not a fact about any of them.
+  const analysable = matched.filter((entry) => entry.closed.length);
+  if (!analysable.length) {
+    console.log("   !! no matched portfolio has a settled closed trade in this payload");
     return;
   }
+  for (const entry of analysable) {
+    console.log(`\n${"=".repeat(88)}`);
+    console.log(`REPORT: ${entry.kind}:${entry.id} "${entry.name}"`
+      + `  multiplier ${entry.row.stopLossRiskMultiplier ?? "-"}`
+      + `  probFloor ${entry.row.stopLossProbabilityFloor ?? "-"}`
+      + `  closeBid ${entry.row.settlementCloseBid ?? "-"}`
+      + `  minProb ${entry.row.minProbability ?? "-"}`);
+    console.log("=".repeat(88));
+    await report(entry, live);
+  }
+  console.log("\nDone. Nothing was written.");
+}
+
+async function report(entry, live) {
+  const trades = entry.closed;
+  const matched = [entry];
+  console.log("== 2. the closed trades");
   const openTimes = trades.map((trade) => trade.openedAt).filter(Boolean).sort();
   console.log(`   opened ${openTimes[0] || "?"} .. ${openTimes[openTimes.length - 1] || "?"}`);
 
@@ -476,14 +501,37 @@ async function main() {
   console.log("");
 
   // ---------------------------------------------------------------------------------
-  console.log("== 7. what the stop actually did, as the dashboard recorded it");
-  const declined = trades.filter((trade) => trade.exitReason === "stop-declined" || trade.declineKind);
-  const stopped = trades.filter((trade) => String(trade.exitReason || "").startsWith("stop"));
-  console.log(`   ${stopped.length} closed trade(s) carry a stop exit reason, ${declined.length} a decline`);
-  for (const trade of [...declined, ...stopped].slice(0, 20)) {
-    console.log(`      ${clip(trade.question, 46)} ${clip(trade.outcome, 14)}`
-      + ` entry ${px(trade.entry)} exit ${px(trade.exitPrice)} P/L ${usd(trade.realizedPnl)}`
-      + ` reason ${trade.exitReason || "-"}${trade.declineKind ? `/${trade.declineKind}` : ""}`);
+  console.log("== 7. what the stop ACTUALLY did, in the rows' own words");
+  console.log("   This is the decisive section. stopLossStatus is what the bot wrote down at the");
+  console.log("   time: ARMED on a losing trade means the stop was watching and never fired,");
+  console.log("   DECLINED_GAPPED means the gap band refused it, FILLED_AT_FLOOR means it worked.\n");
+  const byStop = new Map();
+  for (const trade of trades) {
+    const key = `${String(trade.stopLossStatus || "(none)").padEnd(20)} status ${String(trade.status || "-").padEnd(12)}`;
+    const row = byStop.get(key) || { count: 0, pnl: 0, buckets: new Map() };
+    row.count += 1;
+    row.pnl += trade.realizedPnl || 0;
+    row.buckets.set(trade.bucket, (row.buckets.get(trade.bucket) || 0) + 1);
+    byStop.set(key, row);
+  }
+  console.log("   stopLossStatus       trade status     n    total P/L   outcomes");
+  for (const [key, row] of [...byStop].sort((a, b) => b[1].count - a[1].count)) {
+    const outcomes = [...row.buckets].sort((a, b) => b[1] - a[1])
+      .map(([bucket, count]) => `${bucket}:${count}`).join(" ");
+    console.log(`   ${key} ${String(row.count).padStart(4)}   ${usd(row.pnl)}   ${outcomes}`);
+  }
+
+  // The bucket the whole question is about, named row by row: a full-stake loss whose stop
+  // was armed and did not sell.
+  const missed = trades.filter((trade) => trade.bucket === "lost-full"
+    && ["ARMED", "DECLINED_GAPPED", "GAP_BEYOND_TARGET"].includes(String(trade.stopLossStatus || "").toUpperCase()));
+  console.log(`\n   full-stake losses whose stop was armed and did not sell: ${missed.length}`
+    + `  (${usd(missed.reduce((sum, trade) => sum + (trade.realizedPnl || 0), 0))})`);
+  for (const trade of missed.slice(0, 16)) {
+    console.log(`      ${clip(trade.question, 44)} ${clip(trade.outcome, 12)}`
+      + ` entry ${px(trade.entry)} floor ${px(trade.stopLossPrice)}`
+      + ` gapFloor ${px(trade.stopLossPrice == null ? null : stopGapFloorPrice(trade.stopLossPrice, GAP_TOLERANCES[0]))}`
+      + ` P/L ${usd(trade.realizedPnl)}  ${trade.stopLossStatus}`);
   }
   // Open positions still carry live decline state, which is the freshest evidence of the
   // band refusing a stop -- a closed row has lost the book it was refused against.
@@ -518,7 +566,6 @@ async function main() {
       + `  ->  worst ${usd(scenario.worst)}  best ${usd(scenario.best)}`
       + `  (actual ${usd(totalPnl)}, ${scenario.exposed} winner(s) exposed)`);
   }
-  console.log("\nDone. Nothing was written.");
 }
 
 main().catch((error) => {
