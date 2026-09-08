@@ -1,0 +1,41 @@
+name: Trading Portfolio Parameter Evidence
+
+# Read-only diagnostic, manual only. Reads the portfolio config and every paper portfolio's
+# settled history over HTTPS. Places no orders, writes nothing, publishes nothing, uses no
+# secrets.
+#
+# Asked against a recommended parameter set: are 70% and 71% entries actually profitable or
+# does positive P/L only start at 72%? Is a 48-hour horizon really better than a shorter one
+# that turns the capital over faster? Does excluding a market shape mean anything once the
+# stop loss is off, given the filter exists to protect a stop that cannot reach a jump?
+#
+# Each of those is a question about a PARAMETER rather than a portfolio, so this pools every
+# portfolio's closed trades and cuts them by that parameter -- which is the only way the
+# thin shapes and the individual price buckets have enough rows to say anything.
+on:
+  workflow_dispatch:
+    inputs:
+      price_bucket_step:
+        description: "Width of each entry-price bucket (0.02 = two cents)"
+        required: false
+        default: "0.02"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Cut every settled paper trade by entry price, holding period and market shape
+        working-directory: trading
+        env:
+          PRICE_BUCKET_STEP: ${{ inputs.price_bucket_step || '0.02' }}
+        run: node tools/portfolio-parameter-evidence-diagnosis.mjs
