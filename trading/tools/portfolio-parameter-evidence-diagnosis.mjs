@@ -49,6 +49,29 @@ const pct = (value) => (value == null ? "     -" : `${(value * 100).toFixed(1).p
 const usd = (value) => (value == null ? "      -" : `${value < 0 ? "-" : "+"}${Math.abs(value).toFixed(2).padStart(6)}`);
 const pad = (value, width) => String(value ?? "").padEnd(width);
 
+// A trade's tag slugs. The paper bot's rowTagSlugs is not exported and this needs only the
+// same fields, so it reads them directly rather than reaching into the module -- the fields
+// are the market's own, carried on the stored row precisely so a re-quote cannot lose them.
+const TAG_FIELDS = ["polymarketTags", "tags", "firstPolymarketTags", "firstTags"];
+const TAG_CATEGORY_FIELDS = ["riskCategory", "category", "firstCategory"];
+
+function tradeTags(trade) {
+  const slugify = (value) => String(value ?? "")
+    .trim().toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "");
+  const tags = new Set();
+  for (const field of TAG_FIELDS) {
+    for (const raw of (Array.isArray(trade?.[field]) ? trade[field] : [])) {
+      const tag = slugify(raw && typeof raw === "object" ? (raw.slug || raw.label || raw.name || "") : raw);
+      if (tag) tags.add(tag);
+    }
+  }
+  for (const field of TAG_CATEGORY_FIELDS) {
+    const tag = slugify(trade?.[field]);
+    if (tag) tags.add(tag);
+  }
+  return tags;
+}
+
 // One standard error on a proportion. Valid ONLY inside a narrow price bucket, because it
 // compares the win rate to the MEAN price, and a mean is not a break-even once the prices
 // in the bucket differ: a pool of 0.60 and 0.98 trades has two different bars, not one at
@@ -239,6 +262,7 @@ async function main() {
           ? (closedAt - openedAt) / 3600000
           : null,
         horizonHours,
+        tags: tradeTags(trade),
         stopped: configRow.stopLossRiskMultiplier > 0 || configRow.stopLossProbabilityFloor > 0,
       };
       rows.push(row);
@@ -357,8 +381,38 @@ async function main() {
   }
 
   // ---------------------------------------------------------------------------------
+  // A stacked config is not the intersection of two headline numbers, it is its own much
+  // smaller sample. "esports" scored well and "in-event-leg" scored well, and the portfolio
+  // set to BOTH trades neither of those populations -- it trades the overlap, and the only
+  // honest thing to report about the overlap is how many rows are in it.
   console.log(`\n${"=".repeat(112)}`);
-  table("== 7. per portfolio, for orientation only -- these differ in every parameter at once",
+  const tagged = rows.filter((row) => row.tags && row.tags.size);
+  console.log(`== 7. STACKED FILTERS -- ${tagged.length} of ${rows.length} row(s) carry any tag at all`);
+  if (!tagged.length) {
+    console.log("   No settled trade carries a tag, so nothing below can be cut by one. The tag");
+    console.log("   fields live on the market rather than the quote; if they are absent here they");
+    console.log("   were absent from the stored row, and a tag-filtered result cannot be checked.");
+  } else {
+    const esports = tagged.filter((row) => [...row.tags].some((tag) => /esport|counter-strike|league-of-legends|dota|valorant|cs2|csgo/.test(tag)));
+    const combos = [
+      ["esports, any shape", esports],
+      ["esports + in-event-leg", esports.filter((row) => row.shape === "in-event-leg")],
+      ["esports + outright", esports.filter((row) => row.shape === "outright")],
+      ["esports 0.70-0.80", esports.filter((row) => row.entry != null && row.entry >= 0.70 && row.entry < 0.80)],
+      ["esports 0.70-0.80 + leg", esports.filter((row) => row.entry != null && row.entry >= 0.70
+        && row.entry < 0.80 && row.shape === "in-event-leg")],
+      ["everything, any tag", tagged],
+    ];
+    table("   the combination as configured, and each filter on its own for comparison",
+      combos, { bar: "self" });
+    console.log("   Read the n column first. A row with fewer than ~50 trades cannot distinguish a");
+    console.log("   real edge from noise at any ROI, and stacking two filters is how a few hundred");
+    console.log("   rows becomes a few dozen.");
+  }
+
+  // ---------------------------------------------------------------------------------
+  console.log(`\n${"=".repeat(112)}`);
+  table("== 8. per portfolio, for orientation only -- these differ in every parameter at once",
     perPortfolio, { bar: "self" });
 
   console.log("\nDone. Nothing was written.");
