@@ -653,6 +653,70 @@ const SCRAPED_SIMULATION_CATEGORY_ROW_LIMIT = Math.max(
   20,
   envNumber("PAPER_SCRAPED_SIMULATION_CATEGORY_ROW_LIMIT", 300),
 );
+// Declared here, ~10,000 lines above where the rest of the classifier's callers live, and
+// deliberately so. `Object.assign(PAPER_STRATEGIES, customPaperStrategies())` below runs at
+// MODULE LOAD, and it reads a created portfolio's excludedMarketShapes through
+// marketShapeExclusionSet -- which tests MARKET_SHAPE_IDS. A const is hoisted but not
+// initialized, so with these left further down the file every paper bot run died on load:
+//
+//   ReferenceError: Cannot access 'MARKET_SHAPE_IDS' before initialization
+//       at marketShapeExclusionSet -> customPaperStrategies -> module top level
+//
+// It passed every test and a local import because customPaperStrategies only reaches that
+// line when a created portfolio EXISTS -- PAPER_<ID>_* in the environment -- which the
+// workflow sets and a test run does not. Moving these back down re-breaks production
+// without failing anything locally, so the test named below loads the module with those
+// variables set.
+// Whether this market's price can WALK to a stop, or only JUMP past it -- and so whether a
+// stop loss can protect a position here at ANY setting.
+//
+// Measured on "55+ underway" (218 closed trades, a 25%-of-net-win stop): every full-stake
+// loss whose stop was merely ARMED and never fired was one of these shapes -- Estoril Praia
+// O/U 1.5, Pogon Szczecin Draw at halftime, Set 1 Winner Cecchinato vs Djere, Exact Score
+// Delfin 0-0, Spread: Notre Dame (-24.5). An over/under, a draw-at-half, an exact score, a
+// set or map leg: the price sits near the entry while the event runs and settles at 0 or 1
+// in one step, the instant a goal lands or a set ends. There is no downward path there for a
+// stop to catch, at any multiplier or floor. Restricting that portfolio to "outright"
+// markets alone (who wins the event) turned +65.07 on 2403.19 staked into +97.85 on 858.38
+// -- a third of the capital at risk, and full-stake losses down from 38 to 6.
+//
+// over-under reuses isOverUnderMarket's own definition rather than inventing a second one,
+// so the existing exclude-over-under switch and this classifier can never disagree about
+// the same market. Everything else is read off the question text alone, which is how these
+// markets are named.
+const MARKET_SHAPE_PATTERNS = [
+  [/^spread:|\bspread\b|\([-+]\d/i, "spread"],
+  [/exact score/i, "exact-score"],
+  [/\bdraw\b/i, "draw"],
+  [/set \d+ winner|\bgames total\b|map \d+|\bmap handicap\b|first .*(map|set|goal|blood)/i, "in-event-leg"],
+  [/both teams to/i, "both-teams"],
+];
+
+// Every id marketShape() can return. Exported so the config normalizer and the dashboard
+// validate against exactly what the classifier knows, rather than a hand-kept list that
+// drifts from it. "outright" is the fallback and is not something a portfolio would
+// sensibly exclude, but it is not special-cased out of the list: a config field that only
+// half matches its own classifier is how these things drift.
+export const MARKET_SHAPE_IDS = ["over-under", "spread", "exact-score", "draw", "in-event-leg", "both-teams", "outright"];
+
+export function marketShape(item = {}) {
+  if (isOverUnderMarket(item)) return "over-under";
+  const question = String(item?.question || "");
+  for (const [pattern, label] of MARKET_SHAPE_PATTERNS) {
+    if (pattern.test(question)) return label;
+  }
+  return "outright";
+}
+
+// Read off a portfolio row (or a normalized strategy's Set) whichever way it is stored,
+// into the one thing every filter site needs: a Set to test membership against.
+function marketShapeExclusionSet(value) {
+  if (value instanceof Set) return value;
+  return new Set((Array.isArray(value) ? value : [])
+    .map((shape) => String(shape).trim().toLowerCase())
+    .filter((shape) => MARKET_SHAPE_IDS.includes(shape)));
+}
+
 const PAPER_STRATEGIES = {
   conservative: {
     id: "conservative",
@@ -11243,56 +11307,6 @@ function isOverUnderMarket(item = {}) {
   if (/(?:^|[-_])(?:o[-_]?u|over[-_]?under|total[-_]\d)/i.test(slug)) return true;
   return (outcome === "over" || outcome === "under")
     && /(?:\bo\s*\/\s*u\b|\bover\b|\bunder\b|\btotal\b|\b\d+(?:[.,]\d+)?\b)/i.test(question);
-}
-
-// Whether this market's price can WALK to a stop, or only JUMP past it -- and so whether a
-// stop loss can protect a position here at ANY setting.
-//
-// Measured on "55+ underway" (218 closed trades, a 25%-of-net-win stop): every full-stake
-// loss whose stop was merely ARMED and never fired was one of these shapes -- Estoril Praia
-// O/U 1.5, Pogon Szczecin Draw at halftime, Set 1 Winner Cecchinato vs Djere, Exact Score
-// Delfin 0-0, Spread: Notre Dame (-24.5). An over/under, a draw-at-half, an exact score, a
-// set or map leg: the price sits near the entry while the event runs and settles at 0 or 1
-// in one step, the instant a goal lands or a set ends. There is no downward path there for a
-// stop to catch, at any multiplier or floor. Restricting that portfolio to "outright"
-// markets alone (who wins the event) turned +65.07 on 2403.19 staked into +97.85 on 858.38
-// -- a third of the capital at risk, and full-stake losses down from 38 to 6.
-//
-// over-under reuses isOverUnderMarket's own definition rather than inventing a second one,
-// so the existing exclude-over-under switch and this classifier can never disagree about
-// the same market. Everything else is read off the question text alone, which is how these
-// markets are named.
-const MARKET_SHAPE_PATTERNS = [
-  [/^spread:|\bspread\b|\([-+]\d/i, "spread"],
-  [/exact score/i, "exact-score"],
-  [/\bdraw\b/i, "draw"],
-  [/set \d+ winner|\bgames total\b|map \d+|\bmap handicap\b|first .*(map|set|goal|blood)/i, "in-event-leg"],
-  [/both teams to/i, "both-teams"],
-];
-
-// Every id marketShape() can return. Exported so the config normalizer and the dashboard
-// validate against exactly what the classifier knows, rather than a hand-kept list that
-// drifts from it. "outright" is the fallback and is not something a portfolio would
-// sensibly exclude, but it is not special-cased out of the list: a config field that only
-// half matches its own classifier is how these things drift.
-export const MARKET_SHAPE_IDS = ["over-under", "spread", "exact-score", "draw", "in-event-leg", "both-teams", "outright"];
-
-export function marketShape(item = {}) {
-  if (isOverUnderMarket(item)) return "over-under";
-  const question = String(item?.question || "");
-  for (const [pattern, label] of MARKET_SHAPE_PATTERNS) {
-    if (pattern.test(question)) return label;
-  }
-  return "outright";
-}
-
-// Read off a portfolio row (or a normalized strategy's Set) whichever way it is stored,
-// into the one thing every filter site needs: a Set to test membership against.
-function marketShapeExclusionSet(value) {
-  if (value instanceof Set) return value;
-  return new Set((Array.isArray(value) ? value : [])
-    .map((shape) => String(shape).trim().toLowerCase())
-    .filter((shape) => MARKET_SHAPE_IDS.includes(shape)));
 }
 
 function reportPolymarketProbability(item) {

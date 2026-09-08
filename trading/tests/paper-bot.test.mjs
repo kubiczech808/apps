@@ -11072,3 +11072,63 @@ test("excludedMarketShapes: the setting is wired end to end, not only in the bot
   assert.match(api, /function observation_market_shape\(array \$item\): string/);
   assert.match(api, /\$excludedShapes = normalize_market_shape_list\(\$config\['excludedMarketShapes'\] \?\? \[\]\);/);
 });
+
+// Every paper bot run died on load for over two hours, and 656 tests passed the whole time.
+//
+//   ReferenceError: Cannot access 'MARKET_SHAPE_IDS' before initialization
+//       at marketShapeExclusionSet -> customPaperStrategies -> module top level
+//
+// `Object.assign(PAPER_STRATEGIES, customPaperStrategies())` runs at module load and reads a
+// created portfolio's excludedMarketShapes through marketShapeExclusionSet, which tests
+// MARKET_SHAPE_IDS -- a const that was declared ten thousand lines further down. A const is
+// hoisted but not initialized, so the read threw.
+//
+// What made it invisible is the part worth keeping: customPaperStrategies only reaches that
+// line when a created portfolio EXISTS, and a created portfolio exists only when
+// PAPER_CUSTOM_PORTFOLIOS is in the environment -- which the workflow sets and a test run
+// does not. Importing the module in a test, and running it locally, both took the early
+// `if (!text) return {}` and never touched the fault.
+//
+// So this loads the module the way the workflow does: as a child process, with a created
+// portfolio in its environment. It is the only test here that can catch an initialization
+// order fault at all, because the fault is in module evaluation and every other test in this
+// file runs after the import has already succeeded.
+test("paper bot: the module loads with a created portfolio in the environment", () => {
+  // Keyed by id, and the id has to pass the API's own /^[a-z][a-zA-Z0-9]{1,30}$/ -- an array
+  // of rows gives Object.entries the indices "0", "1", which are skipped, and the test then
+  // proves nothing. This is exactly how the first attempt at this test passed against the
+  // broken file.
+  const portfolios = JSON.stringify({
+    llmarkets3d: { displayName: "70% All markets 3d", excludedMarketShapes: ["over-under", "spread"] },
+  });
+  const script = `
+    const module = await import(${JSON.stringify(new URL("../tools/paper-trading-bot.mjs", import.meta.url).href)});
+    // Read back through the same path the workflow exercises, so the assertion is about the
+    // classifier being usable at load time and not merely about the import not throwing.
+    process.stdout.write(JSON.stringify({ shapes: module.MARKET_SHAPE_IDS }));
+  `;
+  const output = execFileSync(process.execPath, ["--input-type=module", "-e", script], {
+    encoding: "utf8",
+    env: { ...process.env, PAPER_CUSTOM_PORTFOLIOS: portfolios },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  const parsed = JSON.parse(output);
+  assert.deepEqual(parsed.shapes,
+    ["over-under", "spread", "exact-score", "draw", "in-event-leg", "both-teams", "outright"],
+    "the shape ids have to be initialized before the module-level portfolio assembly reads them");
+});
+
+// The structural half of the same fault, which fails fast and points straight at the cause.
+// A const the top-level portfolio assembly reads has to be declared above it.
+test("paper bot: the shape ids are declared before the code that reads them at load", () => {
+  const source = readFileSync(new URL("../tools/paper-trading-bot.mjs", import.meta.url), "utf8");
+  const declaration = source.indexOf("export const MARKET_SHAPE_IDS =");
+  const exclusionSet = source.indexOf("function marketShapeExclusionSet(");
+  const assembly = source.indexOf("Object.assign(PAPER_STRATEGIES, customPaperStrategies());");
+  assert.ok(declaration > 0 && exclusionSet > 0 && assembly > 0);
+  assert.ok(declaration < assembly,
+    "MARKET_SHAPE_IDS is read during the module-level portfolio assembly, so it has to be"
+    + " initialized before it -- a const declared after it is in its temporal dead zone");
+  assert.ok(exclusionSet < assembly,
+    "marketShapeExclusionSet is called during the module-level portfolio assembly");
+});
