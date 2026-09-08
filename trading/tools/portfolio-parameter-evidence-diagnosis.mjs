@@ -49,12 +49,42 @@ const pct = (value) => (value == null ? "     -" : `${(value * 100).toFixed(1).p
 const usd = (value) => (value == null ? "      -" : `${value < 0 ? "-" : "+"}${Math.abs(value).toFixed(2).padStart(6)}`);
 const pad = (value, width) => String(value ?? "").padEnd(width);
 
-// One standard error on a proportion, so a bucket's gap over its own break-even can be read
-// as signal or as noise instead of by eye.
+// One standard error on a proportion. Valid ONLY inside a narrow price bucket, because it
+// compares the win rate to the MEAN price, and a mean is not a break-even once the prices
+// in the bucket differ: a pool of 0.60 and 0.98 trades has two different bars, not one at
+// 0.79. The first run of this report reported -18 sigma on a pool whose ROI was -0.6%,
+// which is that approximation breaking, not a finding. Kept for the price buckets, where
+// the spread inside a bucket is two cents.
 function sigma(won, total, bar) {
   if (!(total > 0) || !(bar > 0) || !(bar < 1)) return null;
   const se = Math.sqrt(bar * (1 - bar) / total);
   return se > 0 ? ((won / total) - bar) / se : null;
+}
+
+// The significance test that works at ANY price mix, and the one every table below the
+// price buckets needs.
+//
+// Under "the market priced it fairly", a share bought at p for stake S pays S(1-p)/p with
+// probability p and -S otherwise, so its expected P/L is exactly zero and its variance is
+// S^2(1-p)/p. Expectations and variances add, so the whole pool's expected P/L is zero and
+// z is just the realized total over the root of the summed variance. No mean price, no
+// single break-even win rate, nothing to break when the prices differ.
+//
+// It is conservative where a stop loss was in force: a capped loss is smaller than -S, so
+// the real variance is below this and the real z above it. Erring that way is the right
+// direction for a number a decision rests on.
+function poolZ(rows) {
+  let total = 0;
+  let variance = 0;
+  for (const row of rows) {
+    if (row.pnl == null) continue;
+    total += row.pnl;
+    const stake = row.stake;
+    const price = row.entry;
+    if (stake == null || price == null || !(price > 0) || !(price < 1)) continue;
+    variance += (stake * stake) * (1 - price) / price;
+  }
+  return variance > 0 ? total / Math.sqrt(variance) : null;
 }
 
 function summarize(rows) {
@@ -90,7 +120,7 @@ function table(title, buckets, { bar = null, note = null } = {}) {
   console.log(`\n${title}`);
   if (note) console.log(note);
   console.log("   bucket           n  decided   won   win%   break-even  sigma"
-    + "     total P/L    staked     ROI    mean hold   ROI/day  full-stake");
+    + "     total P/L    staked     ROI       z    mean hold   ROI/day  full-stake");
   for (const [label, rows] of buckets) {
     if (!rows.length) continue;
     const stats = summarize(rows);
@@ -105,6 +135,7 @@ function table(title, buckets, { bar = null, note = null } = {}) {
       + `  ${s == null ? "    -" : s.toFixed(2).padStart(5)}`
       + `    ${usd(stats.pnl)}  ${stats.stake.toFixed(2).padStart(8)}`
       + `  ${pct(stats.roi)}`
+      + `  ${(() => { const z = poolZ(rows); return z == null ? "      -" : z.toFixed(2).padStart(6); })()}`
       + `  ${stats.meanHours == null ? "      -" : `${stats.meanHours.toFixed(1).padStart(6)}h`}`
       + `  ${pct(stats.roiPerDay)}`
       + `  ${String(stats.fullStakeLosses).padStart(6)}`);
@@ -116,18 +147,20 @@ function table(title, buckets, { bar = null, note = null } = {}) {
 // whether ADDING it to everything above it pays.
 function cumulativeFromBelow(rows, edges) {
   console.log("\n   and cumulatively, which is what a minProbability setting actually buys:");
-  console.log("   minProbability      n  decided   won   win%   break-even  sigma     total P/L    staked     ROI");
+  // No win%-vs-mean-price sigma here on purpose: these pools span 0.60 to 1.00, where a
+  // mean price is not a break-even and that statistic is meaningless. z is the valid one.
+  console.log("   minProbability      n  decided   won   win%   mean price     total P/L    staked     ROI       z");
   for (const edge of edges) {
     const kept = rows.filter((row) => row.entry != null && row.entry >= edge - 1e-9);
     if (kept.length < 10) continue;
     const stats = summarize(kept);
-    const s = stats.meanEntry == null ? null : sigma(stats.won, stats.decided, stats.meanEntry);
+    const z = poolZ(kept);
     console.log(`   >= ${edge.toFixed(2)}       ${String(stats.n).padStart(6)}`
       + ` ${String(stats.decided).padStart(8)} ${String(stats.won).padStart(5)}`
       + `  ${pct(stats.decided ? stats.won / stats.decided : null)}`
-      + `      ${stats.meanEntry == null ? "    -" : (stats.meanEntry * 100).toFixed(1).padStart(5)}`
-      + `  ${s == null ? "    -" : s.toFixed(2).padStart(5)}`
-      + `    ${usd(stats.pnl)}  ${stats.stake.toFixed(2).padStart(8)}  ${pct(stats.roi)}`);
+      + `        ${stats.meanEntry == null ? "    -" : (stats.meanEntry * 100).toFixed(1).padStart(5)}`
+      + `    ${usd(stats.pnl)}  ${stats.stake.toFixed(2).padStart(8)}  ${pct(stats.roi)}`
+      + `  ${z == null ? "      -" : z.toFixed(2).padStart(6)}`);
   }
 }
 
