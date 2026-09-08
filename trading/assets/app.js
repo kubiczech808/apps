@@ -5958,7 +5958,24 @@ function syncPortfolioParameterControls(configOverride = null, options = {}) {
   }
 }
 
+// A button that cannot do anything must not look like it can. The refusal was only ever
+// discoverable by tapping and then finding the message -- which on a phone landed in an
+// element with no box at all, so the tap simply appeared to do nothing.
+function syncCreatePortfolioAvailability() {
+  const reason = createPaperPortfolioBlockedReason();
+  for (const button of document.querySelectorAll("[data-create-portfolio]")) {
+    button.disabled = Boolean(reason);
+    // The reason travels on the control, so hovering or long-pressing explains it, and it
+    // survives the table re-renders that replace these buttons wholesale.
+    if (reason) button.title = reason;
+    else if (button.title.startsWith(`${CUSTOM_PAPER_PORTFOLIO_LIMIT} active portfolios`)) {
+      button.title = "Create a paper or live portfolio configuration";
+    }
+  }
+}
+
 function rerenderCurrentDashboard() {
+  syncCreatePortfolioAvailability();
   if (isLiveMode() && state.liveState) {
     renderLiveState(state.liveState);
   } else if (state.botState) {
@@ -6075,11 +6092,49 @@ function executionScopeStrategyIdForMode(mode = state.mode) {
     : paperStrategyIdFromMode(normalized);
 }
 
-function canCreatePaperPortfolio() {
+// Reported: "+ Portfolio" does nothing, at least on mobile. It was refusing, correctly --
+// 24 custom portfolios against a limit of 24 -- and saying so into [data-execution-status],
+// an element that measures 0x0 and sits in a different page section. A refusal nobody can
+// see is indistinguishable from a dead button.
+//
+// Two faults behind it. This is the counting one: ARCHIVED portfolios were counted against
+// the limit even though every scheduled pass filters them out, and since a portfolio can be
+// archived but never deleted, archiving was a one-way ratchet into the cap with no way back.
+// Eleven archived experiments plus thirteen active ones and the form could never open again.
+// Active and archived are now bounded separately, matching api.php.
+function customPaperPortfolios() {
   const paper = state.portfolioConfig?.paper || defaultPortfolioConfig().paper || {};
-  return Object.keys(paper)
-    .filter((id) => !BUILT_IN_PAPER_STRATEGY_IDS.includes(id) && CUSTOM_PAPER_STRATEGY_ID.test(id))
-    .length < CUSTOM_PAPER_PORTFOLIO_LIMIT;
+  return Object.entries(paper)
+    .filter(([id]) => !BUILT_IN_PAPER_STRATEGY_IDS.includes(id) && CUSTOM_PAPER_STRATEGY_ID.test(id));
+}
+
+function canCreatePaperPortfolio() {
+  const active = customPaperPortfolios().filter(([, row]) => row?.archived !== true).length;
+  return active < CUSTOM_PAPER_PORTFOLIO_LIMIT;
+}
+
+// Why it cannot be created, in words, or null when it can. Used to explain the refusal on
+// the button itself rather than only after a tap that appears to do nothing.
+function createPaperPortfolioBlockedReason() {
+  const rows = customPaperPortfolios();
+  const active = rows.filter(([, row]) => row?.archived !== true).length;
+  if (active < CUSTOM_PAPER_PORTFOLIO_LIMIT) return null;
+  const archived = rows.length - active;
+  return `${active} active portfolios is the limit (${CUSTOM_PAPER_PORTFOLIO_LIMIT}).`
+    + ` Archive one to make room${archived ? `; ${archived} already archived do not count` : ""}.`;
+}
+
+// The refusal has to be visible where the tap happened. [data-execution-status] is rendered
+// only on some sections, so when it is not on screen the message would land nowhere at all.
+function reportBlockedCreate(reason) {
+  setExecutionStatus(reason, "error");
+  const status = els.executionStatus;
+  const box = status?.getBoundingClientRect?.();
+  const onScreen = Boolean(status) && Boolean(box) && box.height > 0 && box.bottom > 0
+    && box.top < (window.innerHeight || 0);
+  // Not a nicety: without this the person taps and nothing whatsoever happens, which is
+  // exactly how this was reported.
+  if (!onScreen) window.alert(reason);
 }
 
 function createPortfolioDraftForType(type, strategyId, prefill = {}, displayName = "") {
@@ -6151,14 +6206,17 @@ function switchCreatePortfolioType(type) {
  */
 function openCreatePortfolioModal(prefill = {}, trigger = null) {
   if (!els.parameterModal) return;
-  if (!canCreatePaperPortfolio()) {
-    setExecutionStatus(`portfolio limit reached (${CUSTOM_PAPER_PORTFOLIO_LIMIT}); archive or remove an unused portfolio before creating another`, "error");
+  const blocked = createPaperPortfolioBlockedReason();
+  if (blocked) {
+    reportBlockedCreate(blocked);
     return;
   }
   const label = normalizePortfolioName(prefill.displayName, "") || "New portfolio";
   const strategyId = newPaperPortfolioId(label);
   if (!strategyId) {
-    setExecutionStatus("no room for another portfolio", "error");
+    // Same reason as the limit above: this fires with the modal closed, so the status line
+    // may not be on screen to carry it.
+    reportBlockedCreate("no room for another portfolio id; archive one to make room");
     return;
   }
   state.parameterDraftCreateType = "paper";

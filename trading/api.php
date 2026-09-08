@@ -9,6 +9,13 @@ declare(strict_types=1);
 // protects a scheduled pass from unbounded work while still leaving room for archived
 // experiments and the active portfolios a user actually wants to compare.
 const CUSTOM_PAPER_PORTFOLIO_LIMIT = 24;
+// Archived portfolios are bounded separately, and much more loosely, because they cost
+// nothing the limit above exists to bound. A portfolio can be archived but never deleted,
+// so with one shared cap archiving was a one-way ratchet: eleven archived experiments and
+// thirteen active ones filled all 24, "+ Portfolio" stopped working, and there was no way
+// back short of editing the stored config by hand. Archived rows are filtered out of every
+// scheduled pass, so they add no work -- only stored records, which is what this bounds.
+const ARCHIVED_PAPER_PORTFOLIO_LIMIT = 48;
 // A real wallet may be shared, but its strategies must not share a configuration
 // record. Keep the live collection smaller because every active one dispatches a
 // signed execution workflow against that account.
@@ -3712,16 +3719,32 @@ function normalize_portfolio_config(array $input): array
     // Portfolios the user created. They are stored beside the shipped ones and are
     // otherwise identical; the count is bounded because every one of them becomes a
     // strategy the bot runs and a row in the published state.
+    // Counted apart, because the two are bounded for different reasons: an ACTIVE portfolio
+    // is a strategy every scheduled pass runs, while an ARCHIVED one is only a stored
+    // record. Sharing one cap meant archiving consumed the run budget it had just stopped
+    // using, and since nothing can delete a portfolio the cap could only ever be reached.
     $customCount = 0;
+    $archivedCount = 0;
     foreach ($paperInput as $rawId => $strategyInput) {
         if (isset($config['paper'][$rawId]) || !is_array($strategyInput)) {
             continue;
         }
         $id = normalize_custom_paper_portfolio_id($rawId);
-        if ($id === null || $customCount >= CUSTOM_PAPER_PORTFOLIO_LIMIT) {
+        if ($id === null) {
             continue;
         }
-        $customCount += 1;
+        $isArchived = ($strategyInput['archived'] ?? false) === true;
+        if ($isArchived) {
+            if ($archivedCount >= ARCHIVED_PAPER_PORTFOLIO_LIMIT) {
+                continue;
+            }
+            $archivedCount += 1;
+        } else {
+            if ($customCount >= CUSTOM_PAPER_PORTFOLIO_LIMIT) {
+                continue;
+            }
+            $customCount += 1;
+        }
         $config['paper'][$id] = normalize_strategy_config($strategyInput, custom_paper_portfolio_defaults($id));
         // Stated rather than inferred from "not one of the four shipped ids", so the
         // browser and the bot agree on which portfolios the user owns outright.

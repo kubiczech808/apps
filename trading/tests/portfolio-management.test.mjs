@@ -4835,3 +4835,109 @@ test("stop loss preview: the probability floor is a stop on its own", () => {
   // keeps working.
   assert.equal(build("paper-esports", 0).multiplier, 0);
 });
+
+// Reported: "+ Portfolio" does nothing, at least on mobile.
+//
+// It was refusing, and refusing correctly: 24 custom paper portfolios against a limit of
+// 24. What made it read as a dead button is that the refusal was written into
+// [data-execution-status] -- measured in a real browser at a phone viewport as a 0x0 box
+// in a different page section, so the message landed nowhere at all.
+//
+// Behind that sat the reason the limit was reached and could never be un-reached: ARCHIVED
+// portfolios counted against it, every scheduled pass filters archived rows out, and
+// nothing can delete a portfolio. So archiving was a one-way ratchet into the cap -- eleven
+// archived experiments plus thirteen active ones, and the form could not open again ever.
+test("portfolio limit: archiving must not be a one-way ratchet into the cap", () => {
+  const extract = (name) => {
+    let start = APP.indexOf(`function ${name}(`);
+    assert.ok(start > 0, `missing ${name}`);
+    const bodyStart = APP.indexOf("{", APP.indexOf(")", start));
+    let depth = 0;
+    for (let i = bodyStart; i < APP.length; i += 1) {
+      if (APP[i] === "{") depth += 1;
+      else if (APP[i] === "}") { depth -= 1; if (!depth) return APP.slice(start, i + 1); }
+    }
+    throw new Error(`unbalanced ${name}`);
+  };
+  const rules = (paper) => new Function("state", "defaultPortfolioConfig",
+    "BUILT_IN_PAPER_STRATEGY_IDS", "CUSTOM_PAPER_STRATEGY_ID", "CUSTOM_PAPER_PORTFOLIO_LIMIT", `
+      ${extract("customPaperPortfolios")}
+      ${extract("canCreatePaperPortfolio")}
+      ${extract("createPaperPortfolioBlockedReason")}
+      return { canCreatePaperPortfolio, createPaperPortfolioBlockedReason };
+    `)({ portfolioConfig: { paper } }, () => ({ paper: {} }),
+    ["conservative", "highReward", "moreProbable", "equal"], /^[a-z][a-zA-Z0-9]{1,30}$/, 24);
+
+  // The catalogue exactly as production had it when this was reported: 24 custom, 11 of
+  // them archived, so 13 actually running.
+  const reported = { conservative: {}, highReward: {}, moreProbable: {}, equal: {} };
+  const archived = new Set(["ewportfolio2", "leagueoflegends", "esno1d", "esno3d", "ewportfolio3",
+    "multistrikes", "ewportfolio4", "esports2", "bitcoin", "ultioutcome3d", "ewportfolio5"]);
+  for (const id of ["ultioutcome1d", "ewportfolio", "ewportfolio2", "leagueoflegends", "esno1d",
+    "esno3d", "ewportfolio3", "esno3d2", "llmarkets3d", "multistrikes", "counterstrike2",
+    "leagueoflegends2", "ewportfolio4", "esports", "esports2", "leagueoflegends3", "bitcoin",
+    "ultioutcome3d", "ewportfolio5", "ewportfolio6", "ewportfolio7", "newportfolio",
+    "newportfolio2", "newportfolio3"]) reported[id] = { archived: archived.has(id) };
+
+  const onReported = rules(reported);
+  assert.equal(onReported.canCreatePaperPortfolio(), true,
+    "13 active portfolios is nowhere near the limit; the 11 archived ones run nothing");
+  assert.equal(onReported.createPaperPortfolioBlockedReason(), null);
+
+  // The limit still bites, on the thing it exists to bound: portfolios a pass has to run.
+  const allActive = { conservative: {}, highReward: {}, moreProbable: {}, equal: {} };
+  for (let i = 0; i < 24; i += 1) allActive[`active${i}`] = { archived: false };
+  const onFull = rules(allActive);
+  assert.equal(onFull.canCreatePaperPortfolio(), false);
+  const reason = onFull.createPaperPortfolioBlockedReason();
+  assert.match(reason, /24 active portfolios is the limit \(24\)/);
+  assert.match(reason, /Archive one to make room/,
+    "the reason has to say what to do about it, or it is only a complaint");
+
+  // And archiving one of those 24 has to actually make room -- the whole point.
+  const afterArchiving = { ...allActive, active0: { archived: true } };
+  assert.equal(rules(afterArchiving).canCreatePaperPortfolio(), true,
+    "archiving must free a slot; if it does not, the cap can only ever be reached");
+});
+
+// api.php is authoritative -- the browser guard exists only to avoid opening a form that
+// cannot save -- so the same split has to hold there, driven through the real normalizer.
+test("portfolio limit: api.php bounds active and archived separately", () => {
+  const paper = {};
+  for (let i = 0; i < 24; i += 1) paper[`active${i}`] = { displayName: `active ${i}`, archived: false };
+  for (let i = 0; i < 11; i += 1) paper[`archived${i}`] = { displayName: `archived ${i}`, archived: true };
+  const saved = normalizeConfig({ paper });
+  const ids = Object.keys(saved.paper).filter((id) => /^(active|archived)\d+$/.test(id));
+  assert.equal(ids.filter((id) => id.startsWith("active")).length, 24,
+    "all 24 active portfolios have to survive the save");
+  assert.equal(ids.filter((id) => id.startsWith("archived")).length, 11,
+    "archived portfolios must not be dropped to make room for active ones, nor consume their budget");
+
+  // The active bound still holds: a 25th active portfolio is refused rather than stored,
+  // which is exactly what the browser guard is mirroring.
+  const overfull = { ...paper };
+  for (let i = 24; i < 30; i += 1) overfull[`active${i}`] = { displayName: `active ${i}`, archived: false };
+  const cappedIds = Object.keys(normalizeConfig({ paper: overfull }))
+    .length && Object.keys(normalizeConfig({ paper: overfull }).paper).filter((id) => /^active\d+$/.test(id));
+  assert.equal(cappedIds.length, 24, "the active limit still caps at 24");
+});
+
+// The refusal itself has to be visible. This is the fault that turned a correct refusal
+// into "the button is broken".
+test("portfolio limit: a refusal nobody can see is a dead button", () => {
+  assert.match(APP, /function reportBlockedCreate\(reason\)/);
+  // It must not trust [data-execution-status] to be on screen: measured at 390x844 that
+  // element is a 0x0 box in another section.
+  assert.match(APP, /box\.height > 0 && box\.bottom > 0/);
+  assert.match(APP, /window\.alert\(reason\)/);
+  // And the control says so before it is ever tapped.
+  assert.match(APP, /function syncCreatePortfolioAvailability\(\)/);
+  assert.match(APP, /button\.disabled = Boolean\(reason\)/);
+  // Wired into the one function that runs after every state change, so it survives the
+  // table re-renders that replace these buttons wholesale.
+  const rerender = /function rerenderCurrentDashboard\(\) \{\s*\n\s*syncCreatePortfolioAvailability\(\);/;
+  assert.match(APP, rerender);
+  // The old silent path must be gone.
+  assert.ok(!APP.includes("portfolio limit reached (${CUSTOM_PAPER_PORTFOLIO_LIMIT})"),
+    "the refusal that only wrote to the hidden status line must not come back");
+});
