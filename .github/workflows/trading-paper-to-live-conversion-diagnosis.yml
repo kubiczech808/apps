@@ -1,0 +1,33 @@
+name: Trading Paper To Live Conversion Diagnosis
+
+# Read-only diagnostic, manual only. Reads the portfolio config, the live state, each live
+# portfolio's execution run log and every paper portfolio's settled history over HTTPS.
+# Places no orders, writes nothing, publishes nothing, and uses no secrets.
+#
+# Asked for: "if I set up a new live portfolio with the remaining balance, configured
+# identically to a paper portfolio that is winning, will the total P/L grow?"
+#
+# The paper P/L cannot answer that alone. Paper fills every candidate it selects, at the
+# price it was shown, for free. A live portfolio trades only the subset of those selections
+# somebody took the other side of -- and the paper result forecasts live only if that subset
+# is a FAIR sample. This scores every live order, filled and unfilled alike, against how its
+# market actually resolved, which is what says whether it is.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Score every live order, filled and unfilled, against its resolution
+        working-directory: trading
+        run: node tools/paper-to-live-conversion-diagnosis.mjs
