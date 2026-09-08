@@ -148,7 +148,11 @@ async function main() {
     if (!configRow || typeof configRow !== "object") continue;
     let trades = Array.isArray(overview?.paperPortfolios?.[id]?.trades)
       ? overview.paperPortfolios[id].trades : null;
-    if (!trades) {
+    // `!trades` alone was the whole bug in the first run: the overview summary is trimmed
+    // and carries an EMPTY trades array, an empty array is truthy, so the per-portfolio
+    // fetch below never fired and the report pooled 0 trades across 0 portfolios while
+    // saying nothing was wrong. Length, not existence, is the question being asked.
+    if (!trades || !trades.length) {
       try {
         const payload = await fetchJson(
           `${HOST}/api.php?action=state&target=paper&summary=dashboard&strategy_id=${encodeURIComponent(id)}&t=${Date.now()}`,
@@ -202,6 +206,15 @@ async function main() {
   }
 
   console.log(`Pooled ${rows.length} settled paper trade(s) across ${perPortfolio.length} portfolio(s).`);
+  if (!rows.length) {
+    // The first run printed every table empty and said "Done", which reads as "the data
+    // says nothing" rather than "the data never arrived". A report cannot be allowed to
+    // fail quietly when its whole purpose is to answer a question from evidence.
+    console.log(`   !! nothing to analyse. ${Object.keys(config.paper || {}).length} paper portfolio(s)`
+      + " in the config; every one returned no settled trade.");
+    process.exitCode = 1;
+    return;
+  }
   console.log("Every table below cuts the SAME pool by one parameter. n is printed because a");
   console.log("two-row bucket is not evidence, whatever its ROI says.\n");
   console.log("=".repeat(112));
