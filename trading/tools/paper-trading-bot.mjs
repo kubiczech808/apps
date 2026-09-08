@@ -683,6 +683,7 @@ const PAPER_STRATEGIES = {
     useLimitOrders: envBool("PAPER_CONSERVATIVE_USE_LIMIT_ORDERS", false),
     marketType: envPortfolioMarketType("PAPER_CONSERVATIVE_MARKET_TYPE", "PAPER_CONSERVATIVE_REQUIRE_MOST_PROBABLE", "all"),
     excludeOverUnderMarkets: envBool("PAPER_CONSERVATIVE_EXCLUDE_OVER_UNDER_MARKETS", false),
+    excludedMarketShapes: envTagSet("PAPER_CONSERVATIVE_EXCLUDED_MARKET_SHAPES"),
     requireMostProbableOutcome: envPortfolioMarketType("PAPER_CONSERVATIVE_MARKET_TYPE", "PAPER_CONSERVATIVE_REQUIRE_MOST_PROBABLE", "all") === "multi",
     probabilitySource: envProbabilitySource("PAPER_CONSERVATIVE_PROBABILITY_SOURCE"),
     excludedCandidateTokenIds: envTokenIdSet("PAPER_CONSERVATIVE_EXCLUDED_CANDIDATE_TOKEN_IDS"),
@@ -718,6 +719,7 @@ const PAPER_STRATEGIES = {
     useLimitOrders: envBool("PAPER_HIGH_REWARD_USE_LIMIT_ORDERS", false),
     marketType: envPortfolioMarketType("PAPER_HIGH_REWARD_MARKET_TYPE", "PAPER_HIGH_REWARD_REQUIRE_MOST_PROBABLE", "all"),
     excludeOverUnderMarkets: envBool("PAPER_HIGH_REWARD_EXCLUDE_OVER_UNDER_MARKETS", false),
+    excludedMarketShapes: envTagSet("PAPER_HIGH_REWARD_EXCLUDED_MARKET_SHAPES"),
     requireMostProbableOutcome: envPortfolioMarketType("PAPER_HIGH_REWARD_MARKET_TYPE", "PAPER_HIGH_REWARD_REQUIRE_MOST_PROBABLE", "all") === "multi",
     probabilitySource: envProbabilitySource("PAPER_HIGH_REWARD_PROBABILITY_SOURCE"),
     excludedCandidateTokenIds: envTokenIdSet("PAPER_HIGH_REWARD_EXCLUDED_CANDIDATE_TOKEN_IDS"),
@@ -753,6 +755,7 @@ const PAPER_STRATEGIES = {
     useLimitOrders: envBool("PAPER_MORE_PROBABLE_USE_LIMIT_ORDERS", false),
     marketType: envPortfolioMarketType("PAPER_MORE_PROBABLE_MARKET_TYPE", "PAPER_MORE_PROBABLE_REQUIRE_MOST_PROBABLE", "multi"),
     excludeOverUnderMarkets: envBool("PAPER_MORE_PROBABLE_EXCLUDE_OVER_UNDER_MARKETS", false),
+    excludedMarketShapes: envTagSet("PAPER_MORE_PROBABLE_EXCLUDED_MARKET_SHAPES"),
     requireMostProbableOutcome: envPortfolioMarketType("PAPER_MORE_PROBABLE_MARKET_TYPE", "PAPER_MORE_PROBABLE_REQUIRE_MOST_PROBABLE", "multi") === "multi",
     probabilitySource: envProbabilitySource("PAPER_MORE_PROBABLE_PROBABILITY_SOURCE"),
     excludedCandidateTokenIds: envTokenIdSet("PAPER_MORE_PROBABLE_EXCLUDED_CANDIDATE_TOKEN_IDS"),
@@ -792,6 +795,7 @@ const PAPER_STRATEGIES = {
     useLimitOrders: envBool("PAPER_EQUAL_USE_LIMIT_ORDERS", false),
     marketType: envPortfolioMarketType("PAPER_EQUAL_MARKET_TYPE", "PAPER_EQUAL_REQUIRE_MOST_PROBABLE", "all"),
     excludeOverUnderMarkets: envBool("PAPER_EQUAL_EXCLUDE_OVER_UNDER_MARKETS", false),
+    excludedMarketShapes: envTagSet("PAPER_EQUAL_EXCLUDED_MARKET_SHAPES"),
     requireMostProbableOutcome: envPortfolioMarketType("PAPER_EQUAL_MARKET_TYPE", "PAPER_EQUAL_REQUIRE_MOST_PROBABLE", "all") === "multi",
     probabilitySource: envProbabilitySource("PAPER_EQUAL_PROBABILITY_SOURCE"),
     excludedCandidateTokenIds: envTokenIdSet("PAPER_EQUAL_EXCLUDED_CANDIDATE_TOKEN_IDS"),
@@ -867,6 +871,7 @@ function customPaperStrategies(raw = process.env.PAPER_CUSTOM_PORTFOLIOS) {
       archived: row.archived === true,
       marketType,
       excludeOverUnderMarkets: row.excludeOverUnderMarkets === true,
+      excludedMarketShapes: marketShapeExclusionSet(row.excludedMarketShapes),
       requireMostProbableOutcome: marketType === "multi",
       probabilitySource: row.probabilitySource === "ai" ? "ai" : "polymarket",
       excludedCandidateTokenIds: new Set((Array.isArray(row.excludedCandidateTokenIds) ? row.excludedCandidateTokenIds : [])
@@ -1910,6 +1915,7 @@ function normalizePaperPortfolio(strategy, input = {}) {
     executionTrigger: normalizeExecutionTrigger(strategy.executionTrigger),
     marketType: normalizePortfolioMarketType(strategy.marketType, strategy.requireMostProbableOutcome),
     excludeOverUnderMarkets: Boolean(strategy.excludeOverUnderMarkets),
+    excludedMarketShapes: marketShapeExclusionSet(strategy.excludedMarketShapes),
     requireMostProbableOutcome: Boolean(strategy.requireMostProbableOutcome),
     probabilitySource: strategy.probabilitySource,
     equalRiskMultiplier: normalizeStopLossRiskMultiplier(strategy.equalRiskMultiplier, strategy.equalRiskProtection ? 1 : 0),
@@ -1973,6 +1979,7 @@ function normalizePaperPortfolio(strategy, input = {}) {
       executionTrigger: normalizeExecutionTrigger(strategy.executionTrigger),
       marketType: normalizePortfolioMarketType(strategy.marketType, strategy.requireMostProbableOutcome),
       excludeOverUnderMarkets: Boolean(strategy.excludeOverUnderMarkets),
+    excludedMarketShapes: marketShapeExclusionSet(strategy.excludedMarketShapes),
       requireMostProbableOutcome: Boolean(strategy.requireMostProbableOutcome),
       probabilitySource: strategy.probabilitySource,
       equalRiskMultiplier: normalizeStopLossRiskMultiplier(strategy.equalRiskMultiplier, strategy.equalRiskProtection ? 1 : 0),
@@ -4503,6 +4510,7 @@ function observationMatchesActiveLiveConfig(item, config) {
   const marketType = normalizePortfolioMarketType(config?.marketType, config?.requireMostProbableOutcome === true);
   if (marketType !== "all" && reportMarketType(item) !== marketType) return false;
   if (config?.excludeOverUnderMarkets === true && isOverUnderMarket(item)) return false;
+  if (marketShapeExclusionSet(config?.excludedMarketShapes).has(marketShape(item))) return false;
   const tags = rowTagSlugs(item);
   const include = configTagSet(config?.includeOnlyMarketTags || config?.allowedMarketTags);
   if (include.size && ![...include].some((tag) => tags.has(tag))) return false;
@@ -7441,6 +7449,7 @@ function strategyEligibleCandidates(eligible, strategy) {
     const marketType = reportMarketType(item);
     if (requiredMarketType !== "all" && marketType !== requiredMarketType) return false;
     if (strategy.excludeOverUnderMarkets && isOverUnderMarket(item)) return false;
+    if (strategy.excludedMarketShapes?.has(marketShape(item))) return false;
     if (strategy.equalRiskProtection) {
       const entry = paperEntryEconomics(item, strategy);
       const plan = equalRiskStopPlan({
@@ -7778,6 +7787,12 @@ function portfolioFilterResult(item, strategy) {
   }
   if (strategy.excludeOverUnderMarkets && isOverUnderMarket(item)) {
     reasons.push("Over/Under market is excluded by this paper portfolio");
+  }
+  {
+    const shape = marketShape(item);
+    if (strategy.excludedMarketShapes?.has(shape)) {
+      reasons.push(`${shape} market shape is excluded by this paper portfolio`);
+    }
   }
   if (strategy.equalRiskProtection) {
     const entry = paperEntryEconomics(item, strategy);
@@ -11228,6 +11243,56 @@ function isOverUnderMarket(item = {}) {
   if (/(?:^|[-_])(?:o[-_]?u|over[-_]?under|total[-_]\d)/i.test(slug)) return true;
   return (outcome === "over" || outcome === "under")
     && /(?:\bo\s*\/\s*u\b|\bover\b|\bunder\b|\btotal\b|\b\d+(?:[.,]\d+)?\b)/i.test(question);
+}
+
+// Whether this market's price can WALK to a stop, or only JUMP past it -- and so whether a
+// stop loss can protect a position here at ANY setting.
+//
+// Measured on "55+ underway" (218 closed trades, a 25%-of-net-win stop): every full-stake
+// loss whose stop was merely ARMED and never fired was one of these shapes -- Estoril Praia
+// O/U 1.5, Pogon Szczecin Draw at halftime, Set 1 Winner Cecchinato vs Djere, Exact Score
+// Delfin 0-0, Spread: Notre Dame (-24.5). An over/under, a draw-at-half, an exact score, a
+// set or map leg: the price sits near the entry while the event runs and settles at 0 or 1
+// in one step, the instant a goal lands or a set ends. There is no downward path there for a
+// stop to catch, at any multiplier or floor. Restricting that portfolio to "outright"
+// markets alone (who wins the event) turned +65.07 on 2403.19 staked into +97.85 on 858.38
+// -- a third of the capital at risk, and full-stake losses down from 38 to 6.
+//
+// over-under reuses isOverUnderMarket's own definition rather than inventing a second one,
+// so the existing exclude-over-under switch and this classifier can never disagree about
+// the same market. Everything else is read off the question text alone, which is how these
+// markets are named.
+const MARKET_SHAPE_PATTERNS = [
+  [/^spread:|\bspread\b|\([-+]\d/i, "spread"],
+  [/exact score/i, "exact-score"],
+  [/\bdraw\b/i, "draw"],
+  [/set \d+ winner|\bgames total\b|map \d+|\bmap handicap\b|first .*(map|set|goal|blood)/i, "in-event-leg"],
+  [/both teams to/i, "both-teams"],
+];
+
+// Every id marketShape() can return. Exported so the config normalizer and the dashboard
+// validate against exactly what the classifier knows, rather than a hand-kept list that
+// drifts from it. "outright" is the fallback and is not something a portfolio would
+// sensibly exclude, but it is not special-cased out of the list: a config field that only
+// half matches its own classifier is how these things drift.
+export const MARKET_SHAPE_IDS = ["over-under", "spread", "exact-score", "draw", "in-event-leg", "both-teams", "outright"];
+
+export function marketShape(item = {}) {
+  if (isOverUnderMarket(item)) return "over-under";
+  const question = String(item?.question || "");
+  for (const [pattern, label] of MARKET_SHAPE_PATTERNS) {
+    if (pattern.test(question)) return label;
+  }
+  return "outright";
+}
+
+// Read off a portfolio row (or a normalized strategy's Set) whichever way it is stored,
+// into the one thing every filter site needs: a Set to test membership against.
+function marketShapeExclusionSet(value) {
+  if (value instanceof Set) return value;
+  return new Set((Array.isArray(value) ? value : [])
+    .map((shape) => String(shape).trim().toLowerCase())
+    .filter((shape) => MARKET_SHAPE_IDS.includes(shape)));
 }
 
 function reportPolymarketProbability(item) {

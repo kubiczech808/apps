@@ -3493,6 +3493,12 @@ test("portfolio parameters: both live portfolios state their order price", () =>
     // predicates -- come across for the same reason as the pair above.
     + `${functionSource(app, "stopLossIsEnabled")}\n`
     + `${functionSource(app, "stopLossReverseIsEnabled")}\n`
+    // The rows also state which market shapes are excluded, a stop loss cannot protect
+    // any setting from. Comes across as the real thing for the same reason as the pairs
+    // above -- pure, so a stub here would only prove the harness agrees with itself.
+    + `${/const MARKET_SHAPE_LABELS = \{[\s\S]*?\n\};/.exec(app)[0]}\n`
+    + `${functionSource(app, "marketShapeLabel")}\n`
+    + `${functionSource(app, "excludedMarketShapesSummaryValue")}\n`
     + `${functionSource(app, "livePortfolioRuleRows")}\nreturn livePortfolioRuleRows;`,
   )(
     { liveState: { portfolio: {} } },

@@ -383,6 +383,7 @@ const els = {
   portfolioMarketType: document.querySelector("[data-portfolio-market-type]"),
   portfolioMarketTypeLabel: document.querySelector("[data-portfolio-market-type-label]"),
   excludeOverUnderMarkets: document.querySelector("[data-exclude-over-under-markets]"),
+  marketShapeCheckboxes: document.querySelectorAll("[data-exclude-market-shape]"),
   crossLiveRisk: document.querySelector("[data-cross-live-risk]"),
   capitalStatus: document.querySelector("[data-capital-status]"),
   limitOrders: document.querySelector("[data-limit-orders]"),
@@ -902,6 +903,7 @@ function defaultPortfolioConfig() {
         reverseOnStopLoss: false,
         marketType: "all",
         excludeOverUnderMarkets: false,
+        excludedMarketShapes: [],
         requireMostProbableOutcome: false,
         probabilitySource: "polymarket",
         excludedCandidateTokenIds: [],
@@ -926,6 +928,7 @@ function defaultPortfolioConfig() {
         reverseOnStopLoss: false,
         marketType: "all",
         excludeOverUnderMarkets: false,
+        excludedMarketShapes: [],
         requireMostProbableOutcome: false,
         probabilitySource: "polymarket",
         excludedCandidateTokenIds: [],
@@ -950,6 +953,7 @@ function defaultPortfolioConfig() {
         reverseOnStopLoss: false,
         marketType: "multi",
         excludeOverUnderMarkets: false,
+        excludedMarketShapes: [],
         requireMostProbableOutcome: true,
         probabilitySource: "polymarket",
         excludedCandidateTokenIds: [],
@@ -976,6 +980,7 @@ function defaultPortfolioConfig() {
         reverseOnStopLoss: false,
         marketType: "all",
         excludeOverUnderMarkets: false,
+        excludedMarketShapes: [],
         requireMostProbableOutcome: false,
         probabilitySource: "polymarket",
         excludedCandidateTokenIds: [],
@@ -1002,6 +1007,7 @@ function defaultPortfolioConfig() {
       useLimitOrders: true,
       marketType: "all",
       excludeOverUnderMarkets: false,
+      excludedMarketShapes: [],
       requireMostProbableOutcome: false,
       probabilitySource: "polymarket",
       excludedCandidateTokenIds: [],
@@ -1033,6 +1039,7 @@ function defaultPortfolioConfig() {
       useLimitOrders: true,
       marketType: "all",
       excludeOverUnderMarkets: false,
+      excludedMarketShapes: [],
       requireMostProbableOutcome: false,
       probabilitySource: "polymarket",
       excludedCandidateTokenIds: [],
@@ -1058,6 +1065,32 @@ function portfolioMarketTypeLabel(value) {
   if (normalized === "binary") return "Yes/No";
   if (normalized === "multi") return "Multi-outcome";
   return "All markets";
+}
+
+// Display text for each id marketShape()/MARKET_SHAPE_IDS can produce. Kept in one place
+// so the settings summary and the config-history reader read the same words.
+const MARKET_SHAPE_LABELS = {
+  "over-under": "Over/Under",
+  spread: "Spread",
+  "exact-score": "Exact score",
+  draw: "Draw",
+  "in-event-leg": "In-event leg",
+  "both-teams": "Both teams to score",
+  outright: "Outright",
+};
+
+function marketShapeLabel(shape) {
+  return MARKET_SHAPE_LABELS[shape] || String(shape || "");
+}
+
+// A stop loss cannot protect a position in a market that settles in one jump rather than
+// walking down to a floor -- see marketShape() below for the classifier and the measurement
+// behind it. Read for the settings summary the same way excludeOverUnderMarkets is.
+function excludedMarketShapesSummaryValue(config) {
+  const shapes = (Array.isArray(config?.excludedMarketShapes) ? config.excludedMarketShapes : [])
+    .map((shape) => String(shape).trim().toLowerCase())
+    .filter(Boolean);
+  return shapes.length ? shapes.map(marketShapeLabel).join(", ") : null;
 }
 
 // The AI probability pipeline was retired, so every portfolio scores on the
@@ -5835,6 +5868,13 @@ function syncPortfolioParameterControls(configOverride = null, options = {}) {
   if (els.portfolioMarketType) els.portfolioMarketType.value = marketType;
   if (els.portfolioMarketTypeLabel) els.portfolioMarketTypeLabel.textContent = portfolioMarketTypeLabel(marketType);
   if (els.excludeOverUnderMarkets) els.excludeOverUnderMarkets.checked = config.excludeOverUnderMarkets === true;
+  if (els.marketShapeCheckboxes) {
+    const excludedShapes = new Set((Array.isArray(config.excludedMarketShapes) ? config.excludedMarketShapes : [])
+      .map((shape) => String(shape).trim().toLowerCase()));
+    for (const checkbox of els.marketShapeCheckboxes) {
+      checkbox.checked = excludedShapes.has(checkbox.dataset.excludeMarketShape);
+    }
+  }
   if (els.crossLiveRisk) {
     els.crossLiveRisk.checked = (options.systemConfig || systemConfig()).crossLivePortfolioRiskDiversification !== false;
   }
@@ -6553,6 +6593,11 @@ function parameterDraftFromControls(baseDraft = {}) {
     draft.requireMostProbableOutcome = marketType === "multi";
   }
   if (els.excludeOverUnderMarkets) draft.excludeOverUnderMarkets = Boolean(els.excludeOverUnderMarkets.checked);
+  if (els.marketShapeCheckboxes?.length) {
+    draft.excludedMarketShapes = [...els.marketShapeCheckboxes]
+      .filter((checkbox) => checkbox.checked)
+      .map((checkbox) => checkbox.dataset.excludeMarketShape);
+  }
   if (els.limitOrders) draft.useLimitOrders = Boolean(els.limitOrders.checked);
   return draft;
 }
@@ -9165,6 +9210,7 @@ function portfolioRuleRows(portfolio = {}) {
     ["Trade priority", priority],
     ["Market type", portfolioMarketTypeLabel(config.marketType)],
     ...(config.excludeOverUnderMarkets === true ? [["Over/Under markets", "Excluded"]] : []),
+    ...(excludedMarketShapesSummaryValue(config) != null ? [["Excluded market shapes", excludedMarketShapesSummaryValue(config)]] : []),
     ["Execution trigger", normalizeExecutionTrigger(config.executionTrigger) === "cron"
       ? `${executionTriggerLabel(config.executionTrigger)} · ${executionCronMinutesLabel(config.executionCronMinutes)}`
       : executionTriggerLabel(config.executionTrigger)],
@@ -9223,6 +9269,7 @@ function livePortfolioRuleRows() {
     ["Trade priority", priority],
     ["Market type", portfolioMarketTypeLabel(config.marketType)],
     ...(config.excludeOverUnderMarkets === true ? [["Over/Under markets", "Excluded"]] : []),
+    ...(excludedMarketShapesSummaryValue(config) != null ? [["Excluded market shapes", excludedMarketShapesSummaryValue(config)]] : []),
     ["Execution trigger", normalizeExecutionTrigger(config.executionTrigger) === "cron"
       ? `${executionTriggerLabel(config.executionTrigger)} · ${executionCronMinutesLabel(config.executionCronMinutes)}`
       : executionTriggerLabel(config.executionTrigger)],
@@ -9506,6 +9553,28 @@ function candidateIsOverUnderMarket(item = {}) {
   if (/(?:^|[-_])(?:o[-_]?u|over[-_]?under|total[-_]\d)/i.test(slug)) return true;
   return (outcome === "over" || outcome === "under")
     && /(?:\bo\s*\/\s*u\b|\bover\b|\bunder\b|\btotal\b|\b\d+(?:[.,]\d+)?\b)/i.test(question);
+}
+
+// Mirrors marketShape() in paper-trading-bot.mjs exactly (over-under reuses
+// candidateIsOverUnderMarket for the same reason the Node copy reuses isOverUnderMarket:
+// one definition of "over-under", not two that can disagree). See that function for the
+// measurement behind it -- a stop loss cannot protect a position in a market that settles
+// in one jump rather than walking down to a floor.
+const CANDIDATE_MARKET_SHAPE_PATTERNS = [
+  [/^spread:|\bspread\b|\([-+]\d/i, "spread"],
+  [/exact score/i, "exact-score"],
+  [/\bdraw\b/i, "draw"],
+  [/set \d+ winner|\bgames total\b|map \d+|\bmap handicap\b|first .*(map|set|goal|blood)/i, "in-event-leg"],
+  [/both teams to/i, "both-teams"],
+];
+
+function candidateMarketShape(item = {}) {
+  if (candidateIsOverUnderMarket(item)) return "over-under";
+  const question = String(item?.question || "");
+  for (const [pattern, label] of CANDIDATE_MARKET_SHAPE_PATTERNS) {
+    if (pattern.test(question)) return label;
+  }
+  return "outright";
 }
 
 function scrapedMarketType(item = {}) {
@@ -9817,6 +9886,12 @@ function portfolioCandidateFilterReasons(item, mode = state.mode) {
   }
   if (config.excludeOverUnderMarkets === true && candidateIsOverUnderMarket(item)) {
     reasons.push("Over/Under market is excluded by this portfolio");
+  }
+  const excludedShapes = new Set((Array.isArray(config.excludedMarketShapes) ? config.excludedMarketShapes : [])
+    .map((shape) => String(shape).trim().toLowerCase()));
+  const shape = candidateMarketShape(item);
+  if (excludedShapes.has(shape)) {
+    reasons.push(`${marketShapeLabel(shape)} market shape is excluded by this portfolio`);
   }
   return reasons;
 }
@@ -10334,6 +10409,7 @@ const PORTFOLIO_CONFIG_HISTORY_LABELS = {
   selectionOrder: "Trade priority",
   marketType: "Market type",
   excludeOverUnderMarkets: "Exclude Over/Under (O/U)",
+  excludedMarketShapes: "Excluded market shapes",
   probabilitySource: "Probability source",
   minLiquidityUsdc: "Minimum volume",
   minNetYield: "Minimum net profit",
@@ -15295,6 +15371,19 @@ els.excludeOverUnderMarkets?.addEventListener("change", () => {
   syncPortfolioParameterControls();
   rerenderCurrentDashboard();
 });
+
+for (const checkbox of els.marketShapeCheckboxes || []) {
+  checkbox.addEventListener("change", () => {
+    const excludedMarketShapes = [...els.marketShapeCheckboxes]
+      .filter((box) => box.checked)
+      .map((box) => box.dataset.excludeMarketShape);
+    if (updateParameterDraft({ excludedMarketShapes })) return;
+    updatePortfolioConfigForMode(state.mode, { excludedMarketShapes });
+    savePortfolioConfigSoon();
+    syncPortfolioParameterControls();
+    rerenderCurrentDashboard();
+  });
+}
 
 els.autoRotatePositions?.addEventListener("change", () => {
   const value = Boolean(els.autoRotatePositions.checked);

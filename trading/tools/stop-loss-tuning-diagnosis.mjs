@@ -22,6 +22,11 @@ import {
   stopGapFloorPrice,
   netExitValue,
 } from "./rpi-live-exit-worker.mjs";
+// The market-shape classifier that this report's section 9 is built around is not
+// re-derived here either, for the same reason the stop maths above is not: it is now a
+// portfolio config field (excludedMarketShapes), enforced by the paper bot's own filter, and
+// a second copy in a diagnosis tool is exactly how the two came to disagree before.
+import { marketShape, MARKET_SHAPE_IDS } from "./paper-trading-bot.mjs";
 
 const HOST = process.env.TRADING_HOST || "https://osobnizkusenosti.cz/trading";
 const PORTFOLIO_MATCH = String(process.env.PORTFOLIO_MATCH || "underway")
@@ -95,33 +100,6 @@ function normalizeTrade(row) {
     stopLossPrice: num(row.stopLossPrice),
     closeReason: row.closeReason || null,
   };
-}
-
-// Whether this market's price can WALK to the stop, or only jump past it.
-//
-// This is the distinction the ARMED full-stake losses turned out to be about. A stop loss is
-// a tool for a price that moves through levels. An over/under, a draw-at-half, an exact
-// score, a set or game winner: the price sits near the entry while the event runs and then
-// settles at 0 in one step, the instant a goal goes in or a set ends. There is no downward
-// path for a stop to catch, at any setting.
-//
-// Matched on the question text, which is how these markets are named. Deliberately coarse
-// and deliberately reported as counts, so a group that is really a mixture shows up as one.
-const JUMP_PATTERNS = [
-  [/\bO\/U\b|\bover\/under\b|\bover \d|\bunder \d/i, "over-under"],
-  [/^spread:|\bspread\b|\([-+]\d/i, "spread"],
-  [/exact score/i, "exact-score"],
-  [/\bdraw\b/i, "draw"],
-  [/set \d+ winner|\bgames total\b|map \d+|\bmap handicap\b|first .*(map|set|goal|blood)/i, "in-event-leg"],
-  [/both teams to/i, "both-teams"],
-];
-
-export function marketShape(question = "") {
-  const text = String(question || "");
-  for (const [pattern, label] of JUMP_PATTERNS) {
-    if (pattern.test(text)) return label;
-  }
-  return "outright";
 }
 
 // How a trade ended, in the terms the question is about. `full-stake` is the bucket the
@@ -605,10 +583,12 @@ async function report(entry, live) {
   console.log("   settles in one step -- an over/under, a draw-at-half, an exact score, a set or");
   console.log("   map leg. The price sits near the entry while the event runs and goes to 0 the");
   console.log("   instant a goal lands. There is no downward path for a stop to catch, at any");
-  console.log("   setting, so this asks whether those markets pay for themselves.\n");
+  console.log("   setting, so this asks whether those markets pay for themselves.");
+  console.log(`   Portfolio config carries excludedMarketShapes for exactly this: ${MARKET_SHAPE_IDS
+    .filter((id) => id !== "outright").join(", ")}.\n`);
   const shapes = new Map();
   for (const trade of trades) {
-    const shape = marketShape(trade.question);
+    const shape = marketShape(trade);
     const row = shapes.get(shape) || {
       n: 0, pnl: 0, stake: 0, won: 0, lostFull: 0, lostFullPnl: 0,
       armedLost: 0, stopSold: 0, stopSoldPnl: 0,

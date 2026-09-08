@@ -544,6 +544,35 @@
           <input type="checkbox" data-exclude-over-under-markets>
           <span>Exclude Over/Under (O/U)</span>
         </label>
+        <div class="market-shape-filter" title="A stop loss cannot protect a position in a market that settles in one jump rather than walking down to it -- an over/under, a draw at halftime, an exact score, a set or map leg all go from the entry price to 0 the instant the event ends. Excluding a shape here removes it from candidates before it can arm a stop that structurally cannot reach it.">
+          <span class="market-shape-filter-label">Exclude market shapes a stop loss can't protect</span>
+          <div class="market-shape-filter-options">
+            <label class="parameter-control order-mode-toggle market-shape-option">
+              <input type="checkbox" data-exclude-market-shape="over-under">
+              <span>Over/Under</span>
+            </label>
+            <label class="parameter-control order-mode-toggle market-shape-option">
+              <input type="checkbox" data-exclude-market-shape="spread">
+              <span>Spread</span>
+            </label>
+            <label class="parameter-control order-mode-toggle market-shape-option">
+              <input type="checkbox" data-exclude-market-shape="exact-score">
+              <span>Exact score</span>
+            </label>
+            <label class="parameter-control order-mode-toggle market-shape-option">
+              <input type="checkbox" data-exclude-market-shape="draw">
+              <span>Draw</span>
+            </label>
+            <label class="parameter-control order-mode-toggle market-shape-option">
+              <input type="checkbox" data-exclude-market-shape="in-event-leg">
+              <span>In-event leg (set/map)</span>
+            </label>
+            <label class="parameter-control order-mode-toggle market-shape-option">
+              <input type="checkbox" data-exclude-market-shape="both-teams">
+              <span>Both teams to score</span>
+            </label>
+          </div>
+        </div>
         <label class="parameter-control order-mode-toggle">
           <input type="checkbox" data-limit-orders>
           <span>Use limit orders</span>

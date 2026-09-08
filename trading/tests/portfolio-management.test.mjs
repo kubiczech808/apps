@@ -40,6 +40,27 @@ function normalizeConfig(input) {
   }
 }
 
+// The same cut-above-dispatch load as normalizeConfig, but for a single expression rather
+// than one fixed entry point -- used below to drive execution_scope_matches_observation and
+// observation_market_shape directly, with real rows, rather than restating their regex as
+// a second copy that could disagree with the file.
+function evalPhpExpression(expression, args) {
+  const directory = mkdtempSync(join(tmpdir(), "php-expr-"));
+  try {
+    const cut = API.indexOf("\ntry {");
+    assert.ok(cut > 0, "api.php still ends with its request dispatch");
+    const definitions = join(directory, "definitions.php");
+    writeFileSync(definitions, API.slice(0, cut) + "\n");
+    const encoded = Buffer.from(JSON.stringify(args)).toString("base64");
+    const output = execFileSync("php", ["-r",
+      `require '${definitions}'; $args = json_decode(base64_decode('${encoded}'), true); echo json_encode(${expression});`,
+    ], { encoding: "utf8" });
+    return JSON.parse(output);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+}
+
 // Runs the real request dispatch (unlike normalizeConfig above, which cuts it away), the
 // same way taxonomy-drilldown.test.mjs drives api.php: a temp directory standing in for
 // the hosting docroot, $_GET set from the query, and the file required whole so its own
@@ -530,6 +551,11 @@ test("created portfolios: the bot builds strategies from the config the workflow
     ${extractFunction(BOT, "normalizeLiveEventMode")}
     ${extractFunction(BOT, "configLiveEventMode")}
     ${extractFunction(BOT, "normalizeSettlementCloseBid")}
+    // Market shapes a stop loss cannot protect at any setting -- over-under, spread,
+    // exact-score, draw, in-event-leg, both-teams -- come along for the same reason as
+    // the pairs above: pure, so the real validator runs rather than a stub.
+    ${/export const MARKET_SHAPE_IDS = \[[^\]]*\];/.exec(BOT)[0].replace("export const", "const")}
+    ${extractFunction(BOT, "marketShapeExclusionSet")}
     ${extractFunction(BOT, "customPaperStrategies")}
     return customPaperStrategies;
   `)(
@@ -555,6 +581,7 @@ test("created portfolios: the bot builds strategies from the config the workflow
       automationEnabled: true,
       autoRotatePositions: true,
       includeOnlyMarketTags: ["league-of-legends"],
+      excludedMarketShapes: ["over-under", "not-a-real-shape", "draw"],
     },
     // Refused for the same reasons the API refuses them.
     "9bad": { displayName: "leading digit" },
@@ -571,6 +598,9 @@ test("created portfolios: the bot builds strategies from the config the workflow
   assert.equal(strategies.esports.automationEnabled, true);
   assert.equal(strategies.esports.allowRotation, true);
   assert.deepEqual([...strategies.esports.includeOnlyMarketTags], ["league-of-legends"]);
+  // A created portfolio's stored array becomes the same Set a shipped portfolio's env-var
+  // default is, and a shape the classifier does not know is dropped rather than kept.
+  assert.deepEqual([...strategies.esports.excludedMarketShapes].sort(), ["draw", "over-under"]);
   const legacyStrategies = build(JSON.stringify({
     oldConfig: { displayName: "Saved before automation switch" },
   }));
@@ -4591,4 +4621,94 @@ test("closed trades: a position sold down to dust is closed, not lost", () => {
   // sizes differ should say so instead of looking like a clean round trip that will not
   // reconcile.
   assert.match(SYNC, /unsoldShares: Number\(Math\.max\(0, group\.sharesBought - group\.sharesSold\)\.toFixed\(6\)\),/);
+});
+
+// Asked for: expose the stop-loss-tuning report's market-shape breakdown as a portfolio
+// parameter, so a shape that structurally cannot be stopped -- over-under, spread,
+// exact-score, draw, in-event-leg, both-teams all settle in one jump rather than walking
+// down to a floor -- can be excluded per portfolio instead of tuning a stop that can never
+// reach it. This drives the REAL api.php normalizer and gate, not a restatement of them.
+test("excludedMarketShapes: the normalizer validates against the classifier's own ids", () => {
+  const saved = normalizeConfig({ paper: { conservative: { excludedMarketShapes: ["spread", "draw"] } } });
+  assert.deepEqual(saved.paper.conservative.excludedMarketShapes, ["spread", "draw"]);
+
+  // Garbage, duplicates and case are all handled the same way excludedMarketTags handles
+  // its own free text -- except the vocabulary here is fixed, so an id the classifier does
+  // not know is dropped rather than stored to silently exclude nothing.
+  const messy = normalizeConfig({ paper: { conservative: {
+    excludedMarketShapes: ["Spread", "spread", "not-a-real-shape", "", null, "OUTRIGHT"],
+  } } });
+  assert.deepEqual(messy.paper.conservative.excludedMarketShapes, ["spread", "outright"]);
+
+  // Absent means every shape is still tradable, matching an unset excludeOverUnderMarkets.
+  const untouched = normalizeConfig({ paper: { conservative: {} } });
+  assert.deepEqual(untouched.paper.conservative.excludedMarketShapes, []);
+
+  // Every portfolio type shares the one normalizer, so a live and a live-custom portfolio
+  // carry it too.
+  const live = normalizeConfig({ live: { excludedMarketShapes: ["exact-score"] },
+    livePortfolios: { custom1: { excludedMarketShapes: ["both-teams"] } } });
+  assert.deepEqual(live.live.excludedMarketShapes, ["exact-score"]);
+  assert.deepEqual(live.livePortfolios.custom1.excludedMarketShapes, ["both-teams"]);
+
+  // Saving other fields must not clear a previously stored exclusion -- the same guarantee
+  // excludeOverUnderMarkets and the tag lists already have.
+  const first = normalizeConfig({ paper: { conservative: { excludedMarketShapes: ["draw"] } } });
+  const second = normalizeConfig({ paper: { conservative: { ...first.paper.conservative, minProbability: 0.8 } } });
+  assert.deepEqual(second.paper.conservative.excludedMarketShapes, ["draw"]);
+});
+
+test("excludedMarketShapes: the real execution-scope gate rejects the shape it names", () => {
+  const question = "Cincinnati Reds vs. Los Angeles Dodgers: O/U 8.5";
+  const item = {
+    question, outcome: "Over", status: "ELIGIBLE", marketProbability: 0.6,
+    daysToResolution: 2, bestBid: 0.59, bestAsk: 0.61, netYield: 0.05,
+  };
+  const config = { minProbability: 0, excludedMarketShapes: ["over-under"] };
+  const [inScopeExcluded, shapeExcluded] = evalPhpExpression(
+    "[execution_scope_matches_observation($args[0], $args[1]), observation_market_shape($args[0])]",
+    [item, config],
+  );
+  assert.equal(shapeExcluded, "over-under");
+  assert.equal(inScopeExcluded, false, "the gate must reject a market whose shape is excluded");
+
+  // The same row, same portfolio, with the exclusion for a DIFFERENT shape: unaffected.
+  const [inScopeOther] = evalPhpExpression(
+    "[execution_scope_matches_observation($args[0], $args[1]), null]",
+    [item, { minProbability: 0, excludedMarketShapes: ["draw"] }],
+  );
+  assert.equal(inScopeOther, true, "excluding a different shape must not reject this row");
+
+  // And an empty or absent list excludes nothing, matching every other exclusion field.
+  const [inScopeEmpty] = evalPhpExpression(
+    "[execution_scope_matches_observation($args[0], $args[1]), null]",
+    [item, { minProbability: 0, excludedMarketShapes: [] }],
+  );
+  assert.equal(inScopeEmpty, true);
+});
+
+test("observation_market_shape (PHP) agrees with marketShape (Node) on the same questions", async () => {
+  const bot = await import("../tools/paper-trading-bot.mjs");
+  // The production question strings this feature was built to classify, off the stop-loss
+  // tuning report -- checked against BOTH copies, because the whole point of importing one
+  // canonical classifier in Node was to stop two definitions from disagreeing, and the PHP
+  // copy is a third that has to agree with it independently.
+  const cases = [
+    "Cincinnati Reds vs. Los Angeles Dodgers: O/U 8.5",
+    "Spread: San Francisco Giants (-1.5)",
+    "Map Handicap: TLR (-1.5) vs MOUZ NXT (+1.5)",
+    "Set 1 Winner: Cecchinato vs Djere",
+    "Exact Score: Delfin SC 0 - 0 CD Universidad",
+    "Bromley FC vs. AFC Wimbledon: Both Teams to Score",
+    "Will CA Nacional Potosi win on 2026-09-06?",
+    "Will Vitoria SC vs. Casa Pia AC end in a draw?",
+    "Games Total: O/U 4.5",
+    "Counter-Strike: BIG Academy vs BLUEJAYS.de (BO3)",
+  ];
+  for (const question of cases) {
+    const item = { question };
+    const phpShape = evalPhpExpression("observation_market_shape($args[0])", [item]);
+    const nodeShape = bot.marketShape(item);
+    assert.equal(phpShape, nodeShape, `PHP and Node disagree on: ${question}`);
+  }
 });

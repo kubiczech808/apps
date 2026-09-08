@@ -3901,6 +3901,119 @@ test("portfolio O/U exclusion removes totals from the paper shortlist and final 
   assert.deepEqual(bot.strategyEligibleCandidates([total, ordinary], strategy), [ordinary]);
 });
 
+// Asked for: expose the stop-loss-tuning report's market-shape breakdown as a portfolio
+// parameter. Measured on "55+ underway": every full-stake loss whose stop was merely ARMED
+// and never fired was an over-under, a draw, an exact score, or a set/map leg -- a shape
+// that settles in one jump rather than walking down to a floor, so no multiplier or floor
+// reaches it. This is the mechanism that lets a portfolio exclude those shapes instead.
+test("marketShape classifies the production question shapes, delegating over-under", () => {
+  assert.equal(bot.marketShape({ question: "Cincinnati Reds vs. Los Angeles Dodgers: O/U 8.5" }), "over-under");
+  assert.equal(bot.marketShape({ question: "Games Total: O/U 4.5" }), "over-under");
+  assert.equal(bot.marketShape({ question: "Spread: San Francisco Giants (-1.5)" }), "spread");
+  assert.equal(bot.marketShape({ question: "Map Handicap: TLR (-1.5) vs MOUZ NXT (+1.5)" }), "spread");
+  assert.equal(bot.marketShape({ question: "Set 1 Winner: Cecchinato vs Djere" }), "in-event-leg");
+  assert.equal(bot.marketShape({ question: "Exact Score: Delfin SC 0 - 0 CD Universidad" }), "exact-score");
+  assert.equal(bot.marketShape({ question: "Bromley FC vs. AFC Wimbledon: Both Teams to Score" }), "both-teams");
+  assert.equal(bot.marketShape({ question: "Will CA Nacional Potosi win on 2026-09-06?" }), "outright");
+  assert.equal(bot.marketShape({ question: "Will Vitoria SC vs. Casa Pia AC end in a draw?" }), "draw");
+  assert.equal(bot.marketShape({ question: "Counter-Strike: BIG Academy vs BLUEJAYS.de (BO3)" }), "outright",
+    "an unsigned parenthesized best-of count is not a spread");
+
+  // over-under reuses isOverUnderMarket rather than a second regex, so the existing switch
+  // and this classifier can never disagree about the same market -- checked by construction:
+  // a row that isOverUnderMarket recognizes only by its slug still classifies as over-under.
+  const slugOnly = { question: "Lions vs Tigers", eventSlug: "lions-tigers-total-2pt5" };
+  assert.equal(bot.isOverUnderMarket(slugOnly), true);
+  assert.equal(bot.marketShape(slugOnly), "over-under");
+
+  // Every id the classifier can return is in the exported list, and nothing else is.
+  for (const shape of ["over-under", "spread", "exact-score", "draw", "in-event-leg", "both-teams", "outright"]) {
+    assert.ok(bot.MARKET_SHAPE_IDS.includes(shape));
+  }
+  assert.equal(bot.MARKET_SHAPE_IDS.length, 7);
+});
+
+test("excludedMarketShapes removes the excluded shape from the paper shortlist", () => {
+  const strategy = {
+    ...bot.PAPER_STRATEGIES.conservative,
+    probabilitySource: "polymarket",
+    minProbability: 0.5,
+    minLiquidityUsdc: 0,
+    marketType: "all",
+    excludedMarketShapes: new Set(["draw"]),
+  };
+  const base = {
+    tokenId: "12345678901234567890",
+    status: "SCRAPED",
+    marketProbability: 0.6,
+    marketPrice: 0.6,
+    spread: 0.02,
+    volumeUsdc: 100000,
+    daysToResolution: 1,
+    netGainIfWinUsdc: 0.25,
+    totalCostUsdc: 5,
+  };
+  const drawMarket = {
+    ...base,
+    tokenId: "22345678901234567890",
+    question: "Will Vitoria SC vs. Casa Pia AC end in a draw?",
+    eventSlug: "vitoria-casa-pia-draw",
+    outcome: "Yes",
+  };
+  const ordinary = {
+    ...base,
+    tokenId: "32345678901234567890",
+    question: "Will Lions win the match?",
+    eventSlug: "lions-win-match",
+    outcome: "Yes",
+  };
+  const filtered = bot.portfolioFilterResult(drawMarket, strategy);
+  assert.equal(filtered.eligible, false);
+  assert.ok(filtered.reasons.some((reason) => /draw market shape is excluded/.test(reason)));
+  assert.equal(bot.portfolioFilterResult(ordinary, strategy).eligible, true);
+  assert.deepEqual(bot.strategyEligibleCandidates([drawMarket, ordinary], strategy), [ordinary]);
+
+  // strategyEligibleCandidates and portfolioFilterResult read a normalized strategy, which
+  // always carries this as a Set by the time it reaches them -- the same contract
+  // excludedCandidateTokenIds and the tag Sets already have. Array input is
+  // customPaperStrategies' and normalizePaperPortfolio's job to bridge, covered by their
+  // own tests; this checks only that an empty Set, or the field absent entirely, excludes
+  // nothing -- the same idiom as excludeOverUnderMarkets and the tag lists.
+  const unrestricted = { ...strategy, excludedMarketShapes: new Set() };
+  assert.deepEqual(bot.strategyEligibleCandidates([drawMarket, ordinary], unrestricted), [drawMarket, ordinary]);
+  const { excludedMarketShapes, ...noField } = strategy;
+  assert.deepEqual(bot.strategyEligibleCandidates([drawMarket, ordinary], noField), [drawMarket, ordinary]);
+});
+
+test("excludedMarketShapes also gates live-catalogue retention protection", () => {
+  const item = {
+    question: "Will Vitoria SC vs. Casa Pia AC end in a draw?",
+    eventSlug: "vitoria-casa-pia-draw",
+    outcome: "Yes",
+    marketProbability: 0.6,
+    daysToResolution: 1,
+  };
+  // observationMatchesActiveLiveConfig is not exported (it is read off a fetched config,
+  // never off a normalized strategy's Set), so this drives it the same way the source
+  // does: a plain array, exactly as api.php's stored config carries it.
+  const source = readFileSync(new URL("../tools/paper-trading-bot.mjs", import.meta.url), "utf8");
+  const fn = new Function("isOverUnderMarket", "marketShape", "marketShapeExclusionSet",
+    "reportMarketType", "normalizePortfolioMarketType", "normalizeOptionalProbability",
+    "hoursToResolution", "configMaxResolutionHours", "configLiveEventMode",
+    "horizonApplies", "rowEventIsRunning", "rowVolumeUsdc", "rowTagSlugs", "configTagSet",
+    `${functionSource(source, "observationMatchesActiveLiveConfig")}\nreturn observationMatchesActiveLiveConfig;`,
+  )(
+    bot.isOverUnderMarket, bot.marketShape,
+    (value) => new Set((Array.isArray(value) ? value : []).map((s) => String(s).toLowerCase())),
+    () => "binary", (value) => value || "all", (value) => (Number.isFinite(Number(value)) ? Number(value) : null),
+    () => 1, () => 720, () => "ignore", () => false, () => false, () => 100000,
+    () => new Set(), (value) => new Set(Array.isArray(value) ? value : []),
+  );
+  assert.equal(fn(item, { minProbability: 0, excludedMarketShapes: ["draw"] }), false);
+  assert.equal(fn(item, { minProbability: 0, excludedMarketShapes: ["spread"] }), true);
+  assert.equal(fn(item, { minProbability: 0 }), true);
+});
+
 test("execution revalidation: an unavailable CLOB quote cannot remain an Equal candidate", () => {
   const strategy = {
     ...bot.PAPER_STRATEGIES.equal,
@@ -10899,4 +11012,63 @@ test("a probability floor at or above the entry is not applied", () => {
 
   const source = readFileSync(new URL("../tools/paper-trading-bot.mjs", import.meta.url), "utf8");
   assert.match(source, /const entry = Number\(trade\?\.entryPrice\);\s*\n\s*if \(Number\.isFinite\(entry\) && floor >= entry\) return plan;/);
+});
+
+test("excludedMarketShapes: the setting is wired end to end, not only in the bot", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const [html, css, app, paperWorkflow, api] = await Promise.all([
+    readFile(new URL("../index.html", import.meta.url), "utf8"),
+    readFile(new URL("../assets/app.css", import.meta.url), "utf8"),
+    readFile(new URL("../assets/app.js", import.meta.url), "utf8"),
+    readFile(new URL("../../.github/workflows/trading-paper-bot.yml", import.meta.url), "utf8"),
+    readFile(new URL("../api.php", import.meta.url), "utf8"),
+  ]);
+
+  // Every excludable shape gets a checkbox in the settings panel; "outright" does not,
+  // because excluding the shape every stop already protects is not a real choice to offer.
+  for (const shape of ["over-under", "spread", "exact-score", "draw", "in-event-leg", "both-teams"]) {
+    assert.match(html, new RegExp(`data-exclude-market-shape="${shape}"`));
+  }
+  assert.doesNotMatch(html, /data-exclude-market-shape="outright"/);
+  assert.match(css, /\.market-shape-filter\s*\{/);
+
+  // Populated on open, read back on save, and saved immediately on change -- the same three
+  // touchpoints excludeOverUnderMarkets has.
+  assert.match(app, /els\.marketShapeCheckboxes\?\.length/);
+  assert.match(app, /checkbox\.checked = excludedShapes\.has\(checkbox\.dataset\.excludeMarketShape\)/);
+  assert.match(app, /draft\.excludedMarketShapes = \[\.\.\.els\.marketShapeCheckboxes\]/);
+  assert.match(app, /updatePortfolioConfigForMode\(state\.mode, \{ excludedMarketShapes \}\)/);
+  // The settings summary and the change-history reader both name it, or a saved exclusion
+  // is invisible everywhere a reader would look for it.
+  assert.match(app, /excludedMarketShapesSummaryValue\(config\)/);
+  assert.match(app, /excludedMarketShapes: "Excluded market shapes",/);
+  // The client-side candidate preview honors it too, using its own copy of the classifier --
+  // client-side code cannot import the bot, so it is checked against the same production
+  // questions rather than assumed to agree.
+  assert.match(app, /excludedShapes\.has\(shape\)/);
+  const candidateShape = functionSource(app, "candidateMarketShape");
+  const questions = [
+    ["Cincinnati Reds vs. Los Angeles Dodgers: O/U 8.5", "over-under"],
+    ["Spread: San Francisco Giants (-1.5)", "spread"],
+    ["Will Vitoria SC vs. Casa Pia AC end in a draw?", "draw"],
+  ];
+  for (const [question, want] of questions) {
+    const got = new Function("candidateIsOverUnderMarket",
+      `${functionSource(app, "candidateIsOverUnderMarket")}\n`
+      + `${/const CANDIDATE_MARKET_SHAPE_PATTERNS = \[[\s\S]*?\n\];/.exec(app)[0]}\n`
+      + `${candidateShape}\nreturn candidateMarketShape;`,
+    )()({ question });
+    assert.equal(got, want, `client-side classifier disagrees on: ${question}`);
+  }
+
+  // The paper-bot workflow emits it for the four shipped portfolios, the same way it emits
+  // excludeOverUnderMarkets and the tag lists.
+  assert.match(paperWorkflow, /_EXCLUDED_MARKET_SHAPES/);
+  assert.match(paperWorkflow, /excluded_shapes = \[str\(shape\)\.strip\(\)\.lower\(\) for shape in \(row\.get\("excludedMarketShapes"\) or \[\]\) if str\(shape\)\.strip\(\)\]/);
+
+  // And the shared PHP normalizer persists it for every portfolio type -- paper, live, and
+  // both custom variants -- through the one function that builds all of them.
+  assert.match(api, /'excludedMarketShapes' => normalize_market_shape_list\(\$input\['excludedMarketShapes'\] \?\? \$defaults\['excludedMarketShapes'\] \?\? \[\]\),/);
+  assert.match(api, /function observation_market_shape\(array \$item\): string/);
+  assert.match(api, /\$excludedShapes = normalize_market_shape_list\(\$config\['excludedMarketShapes'\] \?\? \[\]\);/);
 });

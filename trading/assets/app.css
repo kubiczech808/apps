@@ -1885,6 +1885,35 @@ body.modal-open {
   background: #ffffff;
 }
 
+.market-shape-filter {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--soft);
+}
+
+.market-shape-filter-label {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 850;
+  text-transform: uppercase;
+}
+
+.market-shape-filter-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.market-shape-option {
+  min-height: 30px;
+  padding: 0 10px;
+  font-size: 11px;
+}
+
 .parameter-modal-footer {
   display: flex;
   flex: 0 0 auto;

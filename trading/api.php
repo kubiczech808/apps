@@ -1761,6 +1761,59 @@ function observation_is_over_under_market(array $item): bool
         && preg_match('/(?:\bo\s*\/\s*u\b|\bover\b|\bunder\b|\btotal\b|\b\d+(?:[.,]\d+)?\b)/i', $question) === 1;
 }
 
+// Every id observation_market_shape() can return. Kept beside the classifier so the config
+// normalizer validates against exactly what it knows, not a hand-kept list that drifts from it.
+const MARKET_SHAPE_IDS = ['over-under', 'spread', 'exact-score', 'draw', 'in-event-leg', 'both-teams', 'outright'];
+
+/**
+ * Whether this market's price can WALK to a stop, or only JUMP past it -- and so whether a
+ * stop loss can protect a position here at ANY setting. Mirrors paper-trading-bot.mjs's
+ * marketShape() exactly (over-under reuses observation_is_over_under_market for the same
+ * reason the Node copy reuses isOverUnderMarket: one definition of "over-under", not two
+ * that can disagree). See that function for the measurement behind it.
+ */
+function observation_market_shape(array $item): string
+{
+    if (observation_is_over_under_market($item)) {
+        return 'over-under';
+    }
+    $question = (string) ($item['question'] ?? '');
+    $patterns = [
+        '/^spread:|\bspread\b|\([-+]\d/i' => 'spread',
+        '/exact score/i' => 'exact-score',
+        '/\bdraw\b/i' => 'draw',
+        '/set \d+ winner|\bgames total\b|map \d+|\bmap handicap\b|first .*(map|set|goal|blood)/i' => 'in-event-leg',
+        '/both teams to/i' => 'both-teams',
+    ];
+    foreach ($patterns as $pattern => $label) {
+        if (preg_match($pattern, $question) === 1) {
+            return $label;
+        }
+    }
+    return 'outright';
+}
+
+/**
+ * A config's excludedMarketShapes, whatever it holds, reduced to only the ids the
+ * classifier can actually produce -- an unknown value stored by an older or a future
+ * client must not silently exclude nothing it did not mean to, nor crash on a value it
+ * does not recognize.
+ */
+function normalize_market_shape_list(mixed $value): array
+{
+    if (!is_array($value)) {
+        return [];
+    }
+    $shapes = [];
+    foreach ($value as $candidate) {
+        $shape = strtolower(trim((string) $candidate));
+        if (in_array($shape, MARKET_SHAPE_IDS, true) && !isset($shapes[$shape])) {
+            $shapes[$shape] = true;
+        }
+    }
+    return array_keys($shapes);
+}
+
 function is_active_scraped_market_observation(array $item): bool
 {
     $status = strtoupper((string) ($item['status'] ?? $item['selectionStatus'] ?? ''));
@@ -1919,6 +1972,10 @@ function execution_scope_matches_observation(array $item, array $config): bool
         return false;
     }
     if (($config['excludeOverUnderMarkets'] ?? false) === true && observation_is_over_under_market($item)) {
+        return false;
+    }
+    $excludedShapes = normalize_market_shape_list($config['excludedMarketShapes'] ?? []);
+    if ($excludedShapes !== [] && in_array(observation_market_shape($item), $excludedShapes, true)) {
         return false;
     }
     $tags = execution_scope_observation_tags($item);
@@ -2666,6 +2723,7 @@ function default_portfolio_config(): array
                 'useLimitOrders' => false,
                 'marketType' => 'all',
                 'excludeOverUnderMarkets' => false,
+                'excludedMarketShapes' => [],
                 'requireMostProbableOutcome' => false,
                 'probabilitySource' => 'ai',
                 'autoRotatePositions' => true,
@@ -2691,6 +2749,7 @@ function default_portfolio_config(): array
                 'useLimitOrders' => false,
                 'marketType' => 'all',
                 'excludeOverUnderMarkets' => false,
+                'excludedMarketShapes' => [],
                 'requireMostProbableOutcome' => false,
                 'probabilitySource' => 'ai',
                 'autoRotatePositions' => true,
@@ -2714,6 +2773,7 @@ function default_portfolio_config(): array
                 'useLimitOrders' => false,
                 'marketType' => 'multi',
                 'excludeOverUnderMarkets' => false,
+                'excludedMarketShapes' => [],
                 'requireMostProbableOutcome' => true,
                 'probabilitySource' => 'ai',
                 'autoRotatePositions' => true,
@@ -2742,6 +2802,7 @@ function default_portfolio_config(): array
                 'useLimitOrders' => false,
                 'marketType' => 'all',
                 'excludeOverUnderMarkets' => false,
+                'excludedMarketShapes' => [],
                 'requireMostProbableOutcome' => false,
                 'probabilitySource' => 'polymarket',
                 // Equal remains conservative by default, but the same On/Off control
@@ -2771,6 +2832,7 @@ function default_portfolio_config(): array
             'useLimitOrders' => true,
             'marketType' => 'all',
             'excludeOverUnderMarkets' => false,
+            'excludedMarketShapes' => [],
             'requireMostProbableOutcome' => false,
             'probabilitySource' => 'ai',
             'autoRotatePositions' => true,
@@ -2803,6 +2865,7 @@ function default_portfolio_config(): array
             'useLimitOrders' => true,
             'marketType' => 'all',
             'excludeOverUnderMarkets' => false,
+            'excludedMarketShapes' => [],
             'requireMostProbableOutcome' => false,
             'probabilitySource' => 'polymarket',
             'automationEnabled' => false,
@@ -2841,7 +2904,7 @@ function portfolio_config_history_fields(): array
         'displayName', 'initialUsdc', 'minProbability', 'maxProbability', 'stakeUsdc',
         'maxResolutionDays', 'maxResolutionHours', 'liveEventMode', 'requireEventStarted',
         'settlementCloseBid',
-        'selectionOrder', 'marketType', 'excludeOverUnderMarkets', 'probabilitySource',
+        'selectionOrder', 'marketType', 'excludeOverUnderMarkets', 'excludedMarketShapes', 'probabilitySource',
         'minLiquidityUsdc', 'minNetYield', 'executionTrigger', 'executionCronMinutes',
         'useLimitOrders', 'autoRotatePositions', 'stopLossRiskMultiplier', 'reverseOnStopLoss',
         'includeOnlyMarketTags', 'excludedMarketTags', 'automationEnabled', 'archived',
@@ -3505,6 +3568,13 @@ function normalize_strategy_config(array $input, array $defaults): array
         'useLimitOrders' => (bool) ($input['useLimitOrders'] ?? $defaults['useLimitOrders'] ?? false),
         'marketType' => $marketType,
         'excludeOverUnderMarkets' => (bool) ($input['excludeOverUnderMarkets'] ?? $defaults['excludeOverUnderMarkets'] ?? false),
+        // Which market SHAPES this portfolio refuses -- over-under, spread, exact-score,
+        // draw, in-event-leg, both-teams, outright. A stop loss cannot protect a position
+        // in a market that settles in one jump rather than walking down to it, whatever the
+        // multiplier or floor; this is how a portfolio excludes those shapes rather than
+        // tuning a stop that structurally cannot reach them. Absent means every shape is
+        // still tradable, matching an unset excludeOverUnderMarkets.
+        'excludedMarketShapes' => normalize_market_shape_list($input['excludedMarketShapes'] ?? $defaults['excludedMarketShapes'] ?? []),
         // Kept while older workflows are still in circulation. The three-value
         // marketType field above is the source of truth.
         'requireMostProbableOutcome' => $marketType === 'multi',
