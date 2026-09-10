@@ -6498,6 +6498,11 @@ function renderArchivedPortfolios() {
   // stored account, so it carries no equity/trades detail of its own here -- only
   // whether new bids are currently paused, which is the one thing archiving it changes.
   if (config.live5050?.archived === true) archived.push(["live-5050", config.live5050]);
+  // The base live portfolio. It became archivable only recently and this list did not
+  // know about it, so archiving it removed it from the dashboard AND from the one place
+  // that offers a Restore button -- unrecoverable without editing the stored config by
+  // hand. Listed first among the live ones because it is the wallet's own row.
+  if (config.live?.archived === true) archived.push(["live", config.live]);
   Object.entries(config.livePortfolios || {})
     .filter(([, row]) => row?.archived === true)
     .forEach(([id, row]) => archived.push([`live-custom-${id}`, row]));
@@ -6517,8 +6522,11 @@ function renderArchivedPortfolios() {
     <div class="archived-portfolio-list">
       ${archived.map(([id, row]) => {
         const isCustomLive = id.startsWith("live-custom-");
-        const stored = (id === "live-5050" || isCustomLive) ? null : state.botState?.paperPortfolios?.[id];
-        const archive = (id === "live-5050" || isCustomLive)
+        // "live" joins 5050 and the custom live ones: a live portfolio draws on the
+        // shared wallet and has no paper account of its own to summarise.
+        const isLiveRow = id === "live" || id === "live-5050" || isCustomLive;
+        const stored = isLiveRow ? null : state.botState?.paperPortfolios?.[id];
+        const archive = isLiveRow
           ? null
           : (Array.isArray(state.botState?.paperPortfolioArchives)
             ? state.botState.paperPortfolioArchives
@@ -6533,7 +6541,7 @@ function renderArchivedPortfolios() {
         // the archive snapshot is the immutable record of the actual trades. Prefer it
         // so an archived portfolio never renders as "0 of 0" after a state refresh.
         const archivedSummary = archive?.summary || stored?.historySummary || null;
-        const detail = (id === "live-5050" || isCustomLive)
+        const detail = isLiveRow
           ? "new bids paused; existing orders and positions are still watched"
           : (archivedSummary
             ? `${formatInteger(archivedSummary.resolvedCount) || 0} resolved trades`
@@ -6542,7 +6550,7 @@ function renderArchivedPortfolios() {
         return `
           <article class="archived-portfolio-card">
             <div class="archived-portfolio-head">
-              <span><strong>${escapeHtml(normalizePortfolioName(row?.displayName, id === "live-5050" ? "5050" : id.replace(/^live-custom-/, "")))}</strong> <span class="muted">${escapeHtml(detail)}</span></span>
+              <span><strong>${escapeHtml(normalizePortfolioName(row?.displayName, id === "live-5050" ? "5050" : (id === "live" ? "Live" : id.replace(/^live-custom-/, ""))))}</strong> <span class="muted">${escapeHtml(detail)}</span></span>
               <button class="execution-button" type="button" data-restore-portfolio="${escapeHtml(id)}">Restore</button>
             </div>
             <div class="portfolio-summary-table archived-portfolio-rules">

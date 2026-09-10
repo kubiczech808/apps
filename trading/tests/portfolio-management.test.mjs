@@ -5006,3 +5006,26 @@ test("archiving: the base live portfolio is reachable and leaves a mode it can r
   // as paper, so "live" would have been looked up as "paper-live" and named wrongly.
   assert.match(APP, /strategyId === "live" \|\| strategyId === "live-5050"/);
 });
+
+// Archiving is meant to clear the overview, never to lose data -- and it must be
+// reversible. When the base live portfolio became archivable, the archive list in Settings
+// did not know about it: it collected paper portfolios, 5050 and the custom live ones, so
+// archiving "Live 72-82" would have removed it from the dashboard AND from the only place
+// that offers a Restore button. Unrecoverable without hand-editing the stored config.
+test("archiving: every archivable portfolio can be restored, base live included", () => {
+  const render = extractFunction(APP, "renderArchivedPortfolios");
+  // Each of the four kinds has to reach the list.
+  assert.match(render, /Object\.entries\(paper\)\.filter\(\(\[, row\]\) => row\?\.archived === true\)/);
+  assert.match(render, /config\.live5050\?\.archived === true\) archived\.push\(\["live-5050"/);
+  assert.match(render, /config\.live\?\.archived === true\) archived\.push\(\["live", config\.live\]\)/,
+    "an archivable portfolio missing from this list can be hidden but never brought back");
+  assert.match(render, /Object\.entries\(config\.livePortfolios \|\| \{\}\)/);
+  // Restore is only clearing the flag, and setPortfolioArchived has to know the id -- the
+  // same branch archiving needed.
+  assert.match(APP, /data-restore-portfolio="\$\{escapeHtml\(id\)\}"/);
+  assert.match(extractFunction(APP, "setPortfolioArchived"), /if \(strategyId === "live"\) \{/);
+  // A live row has no paper account of its own, so the card must not read one for it.
+  assert.match(render, /const isLiveRow = id === "live" \|\| id === "live-5050" \|\| isCustomLive;/);
+  // And the promise the panel makes has to stay on it, because it is the whole point.
+  assert.match(render, /Every trade, run log and statistic they hold is kept/);
+});
