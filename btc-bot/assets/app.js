@@ -274,6 +274,36 @@ const STRATEGY_CANDIDATES = [
     },
     command: 'node tools/backtest.mjs --strategy momentum --compare --years 5 --source binance --no-funding',
   },
+  {
+    status: 'watchlist',
+    statusKind: 'neutral',
+    name: 'TF-2 Long-only 1 ATR breakout',
+    thesis: 'Nejbližší robustní optimalizace: BTC long bias, 20denní breakout, 100D trend filter, 1 ATR stop a 10D trailing exit. Bez shortů.',
+    rules: ['long-only', '20D breakout', '100D režim', '1 ATR stop', '10D trail', 'spot cap'],
+    backtest: {
+      status: 'neutral',
+      label: '5y + 3y',
+      result: '+84,4 % / cca 13 % p.a.',
+      detail: '5y: 29 obchodů, PF 2,07, max DD 15,5 %. Poslední 3 roky: +65,5 %, cca 18 % p.a., DD 12,0 %. Blízko, ale 20 % p.a. nesplněno.',
+    },
+    command:
+      'node tools/backtest.mjs --strategy momentum --years 5 --source binance --no-funding --set strategy.stopAtr=1,strategy.allowShorts=false,risk.riskPct=15',
+  },
+  {
+    status: 'rejected',
+    statusKind: 'unmet',
+    name: 'TF-X Stop-only convex breakout',
+    thesis: 'Varianta bez trailing exit nechává vítěze dojít až na vzdálený bracket. Vypadá dobře v 5y okně, ale stojí na příliš málo obchodech.',
+    rules: ['20D breakout', 'žádný trail', '15R backstop', 'risk 15 %', 'spot cap'],
+    backtest: {
+      status: 'unmet',
+      label: 'overfit risk',
+      result: '+150,8 % / cca 20 % p.a.',
+      detail: '5y splní výnos, ale jen 13 obchodů. Poslední 3 roky: -14,7 %, 3 ztrátové obchody. Nepropagovat do live strategie.',
+    },
+    command:
+      'node tools/backtest.mjs --strategy momentum --years 5 --source binance --no-funding --set strategy.exitLookbackDays=9999,risk.riskPct=15',
+  },
 ]
 
 // ── api ───────────────────────────────────────────────────────────────────

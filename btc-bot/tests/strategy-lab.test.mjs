@@ -57,3 +57,13 @@ test('backtest CLI accepts boolean flags without swallowing the next option', ()
   assert.match(cli, /!next\.startsWith\('--'\)/)
   assert.match(cli, /args\.set\(key, true\)/)
 })
+
+test('backtest CLI exposes explicit optimization overrides', () => {
+  const cli = read('tools/backtest.mjs')
+  assert.match(cli, /const parseSetValue/)
+  assert.match(cli, /const applySet/)
+  assert.match(cli, /args\.has\('set'\)/)
+  assert.match(cli, /strategy\.stopAtr=1/)
+  assert.match(cli, /row\.annual/)
+  assert.match(cli, /row\.dd/)
+})

@@ -3,6 +3,7 @@
 //
 //   node tools/backtest.mjs --source bybit --limit 1000
 //   node tools/backtest.mjs --file candles.json --risk 1 --min-rr 2
+//   node tools/backtest.mjs --strategy momentum --set strategy.stopAtr=1,risk.riskPct=10
 //
 // Prints the honest summary; `--json out.json` writes the full report including
 // every trade, so a claim about the strategy can be checked rather than trusted.
@@ -90,6 +91,30 @@ const horizonHours = years ? Math.ceil(years * 365.25 * 24) : null
 const maxWarmupHours = Math.max(...selectedStrategies.map(([, strategy]) => strategy.warmupHours))
 const candleLimit = Number(args.get('limit') ?? (horizonHours ? horizonHours + maxWarmupHours : 1000))
 
+const parseSetValue = (raw) => {
+  if (raw === 'true') return true
+  if (raw === 'false') return false
+  if (raw === 'null') return null
+  const numeric = Number(raw)
+  if (raw !== '' && Number.isFinite(numeric)) return numeric
+  return raw
+}
+
+const applySet = (target, spec) => {
+  for (const assignment of String(spec).split(',').map((item) => item.trim()).filter(Boolean)) {
+    const [path, raw] = assignment.split('=')
+    if (!path || raw === undefined) throw new Error(`bad --set assignment "${assignment}", expected path=value`)
+    const parts = path.split('.').filter(Boolean)
+    if (parts.length < 2) throw new Error(`bad --set path "${path}", expected e.g. strategy.stopAtr=1`)
+    let node = target
+    for (const part of parts.slice(0, -1)) {
+      node[part] ??= {}
+      node = node[part]
+    }
+    node[parts.at(-1)] = parseSetValue(raw)
+  }
+}
+
 const loadCandles = async () => {
   if (args.has('file')) {
     const parsed = JSON.parse(await readFile(args.get('file'), 'utf8'))
@@ -152,6 +177,7 @@ const overridesFor = (strategy) => {
   if (args.has('min-rr')) overrides.strategy.minRR = Number(args.get('min-rr'))
   if (args.has('max-trades')) overrides.maxTradesPerDay = Number(args.get('max-trades'))
   if (args.has('capital')) overrides.startingCapitalUsd = Number(args.get('capital'))
+  if (args.has('set')) applySet(overrides, args.get('set'))
   return overrides
 }
 
@@ -326,6 +352,8 @@ if (args.has('compare')) {
       winRate: result.stats.winRate,
       pf: result.stats.profitFactor,
       ret: result.returnPct,
+      annual: annualised(result.returnPct, result.hours),
+      dd: result.stats.maxDrawdownPct,
       avgWin: result.stats.averageWinSats,
       avgLoss: result.stats.averageLossSats,
       tp: exits.take_profit ?? 0,
@@ -339,11 +367,12 @@ if (args.has('compare')) {
   console.log('')
   console.log(`One change each from ${STRATEGIES[chosenName].label}, same candles:`)
   console.log('')
-  console.log('  variant                 trades   win%      PF   return%   avgW/avgL    TP   SL  man')
+  console.log('  variant                 trades   win%      PF   return%      p.a.   maxDD% avgW/avgL    TP   SL  man')
   for (const row of rows) {
     console.log(
       `  ${row.label.padEnd(22)} ${String(row.trades).padStart(6)}  ${fmt(row.winRate, 1).padStart(5)}  ${fmt(row.pf).padStart(6)}  ${fmt(row.ret, 1).padStart(8)}` +
-        `   ${fmt(row.avgWin / (row.avgLoss || 1), 2).padStart(9)}  ${String(row.tp).padStart(4)} ${String(row.sl).padStart(4)} ${String(row.manual).padStart(4)}`
+        `  ${fmt(row.annual, 1).padStart(8)}  ${fmt(row.dd, 1).padStart(7)}` +
+        ` ${fmt(row.avgWin / (row.avgLoss || 1), 2).padStart(9)}  ${String(row.tp).padStart(4)} ${String(row.sl).padStart(4)} ${String(row.manual).padStart(4)}`
     )
   }
   console.log('')
