@@ -37,6 +37,11 @@ foreach (['aiResearchRetryDelaySeconds', 'aiResearchQuotaIsMinuteWindow', 'aiRes
           'aiResearchTemporaryBackoffUntil', 'aiResearchErrorIsMinuteQuota', 'aiResearchFailureMessage',
           'aiResearchErrorIsQuota', 'aiResearchQuotaStreak', 'aiResearchHardQuotaPauseSeconds',
           'aiResearchQuotaReportedDailyRequestLimit', 'aiResearchObservedDailyRequestLimit',
+          'aiResearchQuotaExhaustedModel', 'aiResearchSwitchToNextGeminiModel',
+          'aiResearchModelExhausted', 'aiResearchUsableGeminiModel', 'aiResearchMarkModelExhausted',
+          'aiResearchModelStateMap', 'aiResearchCombinedDailyRequestLimit',
+          'geminiModelCandidates', 'geminiRuntimeModel', 'normalizeGeminiModelName',
+          'aiResearchModelName', 'aiModelName',
           'aiResearchRememberObservedDailyRequestLimit', 'aiResearchDailyGeminiRequestBudget',
           'aiResearchDailyRequestBudgetOrDefault',
           'aiResearchProviderKey', 'aiResearchProviderPreference', 'aiResearchProviderExhausted',
@@ -165,23 +170,80 @@ $minute = 'Quota exceeded for metric: generativelanguage.googleapis.com/generate
 assert(aiResearchQuotaReportedDailyRequestLimit($minute) === 0, 'jednotky nejsou denni strop');
 assert(aiResearchQuotaIsMinuteWindow($minute) === true, 'minutove okno zustava minutovym oknem');
 
-echo "\n== 7b. rozpocet se podle ohlaseneho stropu opravi ==\n";
+echo "\n== 7b. strop je per model, takze rozpocet je soucet pres modely ==\n";
+// Free tier Google pocita denni strop pro kazdy model zvlast. Odstavit celeho
+// providera kvuli jednomu vycerpanemu modelu proto zahazovalo kvotu, kterou mame.
 $GLOBALS['SETTINGS'] = [];
+foreach (geminiModelCandidates() as $candidate) {
+    aiResearchModelExhausted($candidate, 0);
+}
+geminiRuntimeModel('');
 $onlyGemini = ['ai' => ['gemini_api_key' => 'AIza']];
-printf("  pred: %d\n", aiResearchDailyRequestBudgetOrDefault($onlyGemini, $pdo));
-assert(aiResearchDailyRequestBudgetOrDefault($onlyGemini, $pdo) === 200, 'vychozi strop zustava 200');
-assert(aiResearchRememberObservedDailyRequestLimit($pdo, $exhausted) === 20, 'strop se zapamatuje');
-printf("  po:   %d\n", aiResearchDailyRequestBudgetOrDefault($onlyGemini, $pdo));
-assert(aiResearchDailyRequestBudgetOrDefault($onlyGemini, $pdo) === 20,
-    'dalsi tiky uz nesmi posilat pozadavky, o kterych provider rekl, ze je odmitne');
+$candidateCount = count(geminiModelCandidates());
+printf("  modelu v zebriku: %d, rozpocet bez pozorovani: %d\n",
+    $candidateCount, aiResearchDailyRequestBudgetOrDefault($onlyGemini, $pdo));
+assert(aiResearchDailyRequestBudgetOrDefault($onlyGemini, $pdo) === 200 * $candidateCount,
+    'bez pozorovani se kazdy model pocita vychozim stropem');
+// Ohlaseny strop plati pro model, ktery ho ohlasil - ne pro ostatni.
+// Model se urcuje tou samou cestou jako v provozu: Google echuje "gemini-3-flash",
+// coz v nasem zebriku neni, takze strop patri modelu, se kterym request odesel.
+$blamed = aiResearchQuotaExhaustedModel($exhausted, $onlyGemini);
+printf("  strop pripsan modelu: %s\n", $blamed);
+assert(in_array($blamed, geminiModelCandidates(), true),
+    'strop musi patrit modelu ze zebriku, jinak ho soucet nikdy neuvidi');
+assert(aiResearchRememberObservedDailyRequestLimit($pdo, $exhausted, $blamed) === 20,
+    'strop se zapamatuje k modelu');
+$after = aiResearchDailyRequestBudgetOrDefault($onlyGemini, $pdo);
+printf("  po pozorovani gemini-3-flash=20: %d\n", $after);
+assert($after === 200 * ($candidateCount - 1) + 20,
+    'cislo jednoho modelu nesmi srazit rozpocet ostatnim, mam ' . $after);
 // Vlastni nastaveni ma prednost - kdo ma placeny tarif, nesmi ho pozorovani srazit.
 assert(aiResearchDailyRequestBudgetOrDefault(
     ['ai' => ['gemini_api_key' => 'A', 'gemini_research_daily_request_budget' => 5000]], $pdo) === 5000,
     'explicitni nastaveni pozorovani neprebiji');
 // A pozorovani se zapisuje tam, kde se kvotova chyba resi.
 $handle = extractFn($src, 'aiResearchHandleQuotaFailure');
-assert(strpos($handle, 'aiResearchRememberObservedDailyRequestLimit($pdo, $message)') !== false,
+assert(strpos($handle, 'aiResearchRememberObservedDailyRequestLimit($pdo, $message') !== false,
     'kvotova chyba musi ohlaseny strop zapsat');
+
+echo "\n== 7c. vycerpany model prepne na dalsi, ne na odstaveni providera ==\n";
+// Tohle je cesta, jak zvysit denni propustnost bez placeneho tarifu: nejsilnejsi
+// model se pouziva, dokud ma kvotu, pak se spadne o stupen niz. Kvalita klesa
+// teprve tehdy, kdyz lepsi model uz na dnes nema nic.
+$GLOBALS['SETTINGS'] = [];
+foreach (geminiModelCandidates() as $candidate) {
+    aiResearchModelExhausted($candidate, 0);
+}
+geminiRuntimeModel('');
+$candidates = geminiModelCandidates();
+printf("  zebrik: %s\n", implode(' -> ', $candidates));
+$blamed = aiResearchQuotaExhaustedModel($exhausted, $onlyGemini);
+assert($blamed === $candidates[0],
+    'bez shody v zebriku plati model, se kterym request odesel, mam ' . $blamed);
+$next = aiResearchSwitchToNextGeminiModel($onlyGemini, $exhausted, $pdo);
+printf("  po vycerpani %s -> %s\n", $blamed, $next);
+assert($next === $candidates[1], 'prepne se na dalsi model ze zebriku');
+assert(aiResearchModelExhausted($blamed), 'vycerpany model zustava odstaveny');
+assert(aiResearchModelName($onlyGemini) === $next, 'dalsi pozadavek uz jde na novy model');
+// Odstaveni prezije i to, ze kazdy tik je jiny request.
+assert(isset(aiResearchModelStateMap($pdo)[$blamed]),
+    'odstaveny model se musi ulozit, jinak kazdy tik zacne znovu u 429');
+// Vycerpany model uz se do rozpoctu nepocita vubec.
+$dropped = aiResearchDailyRequestBudgetOrDefault($onlyGemini, $pdo);
+printf("  rozpocet bez vycerpaneho modelu: %d\n", $dropped);
+assert($dropped === 200 * ($candidateCount - 1),
+    'vycerpany model uz kvotu nepridava, mam ' . $dropped);
+// Minutove okno na slabsi model neprepina - uvolni se samo.
+assert(aiResearchSwitchToNextGeminiModel($onlyGemini, $minute, $pdo) === '',
+    'minutove okno nesmi snizovat kvalitu prepnutim na slabsi model');
+// A kdyz uz zadny model nezbyva, prepnuti nelze nabidnout.
+foreach ($candidates as $candidate) {
+    aiResearchMarkModelExhausted($candidate, 3600, $pdo);
+}
+assert(aiResearchUsableGeminiModel() === '', 'vycerpane vsechny modely = neni kam jit');
+assert(aiResearchSwitchToNextGeminiModel($onlyGemini, $exhausted, $pdo) === '',
+    'bez volneho modelu se teprve odstavi provider');
+printf("  vsechny vycerpane -> prepnuti: %s\n", aiResearchUsableGeminiModel() === '' ? 'zadne' : 'chyba');
 
 echo "\n== 8. kvotovy naraz nesmi spotrebovat pokus o dokonceni behu ==\n";
 // Tohle je druha polovina te same skody: dokonceni behu polykalo vyjimku a vracelo ji

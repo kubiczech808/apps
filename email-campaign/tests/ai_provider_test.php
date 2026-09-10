@@ -83,7 +83,14 @@ echo "\n== 4. fallback je v ceste volani, ne az v dalsim cronu ==\n";
 $callFn = extractFn($src, 'aiResearchModelCall');
 assert(strpos($callFn, 'aiResearchErrorIsQuota') !== false, 'kvotova chyba se rozpozna');
 assert(strpos($callFn, 'aiResearchMarkProviderExhausted') !== false, 'vycerpani se poznamena');
-assert(substr_count($callFn, 'aiResearchCallProvider(') === 2, 'pozadavek se zkusi znovu na zaloze');
+// Dve cesty zopakovani v tom samem volani: nejdriv dalsi model ze zebriku (denni
+// strop free tieru plati per model), teprve pak jiny provider. Proto tri vyskyty:
+// prvni pokus a dve zopakovani.
+assert(substr_count($callFn, 'aiResearchCallProvider(') === 3, 'pozadavek se zkusi znovu na dalsim modelu i na zaloznim providerovi');
+assert(strpos($callFn, 'aiResearchSwitchToNextGeminiModel') !== false,
+    'vycerpany denni strop jednoho modelu nesmi odstavit celeho providera');
+assert(strpos($callFn, 'aiResearchSwitchToNextGeminiModel') < strpos($callFn, 'aiResearchMarkProviderExhausted'),
+    'zebrik modelu ma prednost pred odstavenim providera');
 $providerCall = extractFn($src, 'aiResearchCallProvider');
 assert(strpos($providerCall, "aiModelName(\$config, \$provider)") !== false, 'model odpovida providerovi po prepnuti');
 echo "  ok\n";

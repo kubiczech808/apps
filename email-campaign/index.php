@@ -578,6 +578,101 @@ function aiResearchProviderExhausted(string $provider, ?int $exhaustedUntil = nu
 }
 
 /**
+ * Vycerpany DENNI limit se u free tieru Google pocita zvlast pro kazdy model, ne pro
+ * cely ucet: gemini-3-flash dava 20 pozadavku na den, ale ostatni modely maji vlastni
+ * strop. Odstavovat kvuli jednomu modelu celeho providera proto zahazovalo kvotu,
+ * kterou jsme meli k dispozici. Tady se drzi, ktery model je do kdy vycerpany.
+ */
+function aiResearchModelExhausted(string $model, ?int $exhaustedUntil = null): bool
+{
+    static $until = [];
+    $model = strtolower(trim($model));
+    if ($model === '') {
+        return false;
+    }
+    if ($exhaustedUntil !== null) {
+        $until[$model] = $exhaustedUntil;
+    }
+    return (int)($until[$model] ?? 0) > time();
+}
+
+/**
+ * Prvni model ze zebriku, ktery jeste ma dnes kvotu. Zebrik zacina nejsilnejsim
+ * modelem, takze kvalita klesa teprve tehdy, kdyz lepsi model uz na dnes nema nic.
+ * Prazdny string znamena, ze uz nezbyva zadny.
+ */
+function aiResearchUsableGeminiModel(string $preferred = ''): string
+{
+    $candidates = geminiModelCandidates();
+    $preferred = strtolower(trim($preferred));
+    if ($preferred !== '') {
+        // Preferovany model jde na zacatek, aby se zebrik neposouval zpatky nahoru
+        // na model, o kterem uz vime, ze dnes nema kvotu.
+        $candidates = array_values(array_unique(array_merge([$preferred], $candidates)));
+    }
+    foreach ($candidates as $candidate) {
+        if (!aiResearchModelExhausted($candidate)) {
+            return $candidate;
+        }
+    }
+    return '';
+}
+
+/**
+ * Zapamatuje si, ze model dnes uz nema kvotu, a vrati dalsi pouzitelny ze zebriku.
+ * Pauza konci s dnem, protoze denni strop se uvolni az pres pulnoc.
+ */
+function aiResearchMarkModelExhausted(string $model, int $seconds, ?PDO $pdo = null): string
+{
+    $model = strtolower(trim($model));
+    if ($model === '') {
+        return '';
+    }
+    $until = time() + max(60, $seconds);
+    aiResearchModelExhausted($model, $until);
+    if ($pdo instanceof PDO) {
+        try {
+            $state = aiResearchModelStateMap($pdo);
+            $state[$model] = $until;
+            setSetting($pdo, 'ai_research_model_exhausted_until', json_encode($state) ?: '{}');
+        } catch (Throwable $e) {
+            error_log('AI research model state not stored: ' . $e->getMessage());
+        }
+    }
+    $next = aiResearchUsableGeminiModel();
+    return $next !== '' && $next !== $model ? $next : '';
+}
+
+/**
+ * Mapa model => do kdy je vycerpany, jak je ulozena v nastaveni.
+ */
+function aiResearchModelStateMap(PDO $pdo): array
+{
+    $raw = json_decode((string)(loadSettings($pdo)['ai_research_model_exhausted_until'] ?? ''), true);
+    if (!is_array($raw)) {
+        return [];
+    }
+    $out = [];
+    foreach ($raw as $model => $until) {
+        if (is_string($model) && (int)$until > time()) {
+            $out[strtolower(trim($model))] = (int)$until;
+        }
+    }
+    return $out;
+}
+
+/**
+ * Obnovi vycerpane modely z nastaveni. Bez toho by kazdy tik (novy request) zacinal
+ * znovu u nejsilnejsiho modelu, dostal 429 a spotreboval pozadavek na nic.
+ */
+function aiResearchLoadModelState(PDO $pdo): void
+{
+    foreach (aiResearchModelStateMap($pdo) as $model => $until) {
+        aiResearchModelExhausted($model, $until);
+    }
+}
+
+/**
  * Zaznamena vycerpanou kvotu providera a rekne, jestli je k dispozici zaloha.
  * Fallback je tim padem otazka jednoho dalsiho pokusu, ne cekani na dalsi cron.
  */
@@ -604,6 +699,7 @@ function aiResearchMarkProviderExhausted(array $config, string $provider, int $s
  */
 function aiResearchLoadProviderState(PDO $pdo): void
 {
+    aiResearchLoadModelState($pdo);
     $settings = loadSettings($pdo);
     foreach (['openai', 'gemini'] as $provider) {
         $until = (int)($settings['ai_research_' . $provider . '_exhausted_until'] ?? 0);
@@ -665,6 +761,18 @@ function aiResearchModelCall(array $config, string $step, array $payload, int $t
             throw $e;
         }
         $retryAfter = aiResearchRetryDelaySeconds($e->getMessage());
+        // Vycerpany DENNI strop plati u free tieru pro jeden model, ne pro cely ucet.
+        // Nez se odstavi provider, zkusi se dalsi model ze zebriku - jinak bychom
+        // zahodili kvotu, kterou mame k dispozici. Zebrik zacina nejsilnejsim modelem,
+        // takze kvalita klesa teprve tehdy, kdyz lepsi model uz na dnes nema nic.
+        if ($provider !== 'openai') {
+            $nextModel = aiResearchSwitchToNextGeminiModel($config, $e->getMessage(), $pdo);
+            if ($nextModel !== '') {
+                error_log('AI ' . $step . ': model ' . aiResearchQuotaExhaustedModel($e->getMessage(), $config)
+                    . ' ma vycerpanou denni kvotu, prepinam na ' . $nextModel);
+                return aiResearchCallProvider($config, $provider, $step, $payload, $timeout);
+            }
+        }
         $fallback = aiResearchMarkProviderExhausted($config, $provider, $retryAfter > 0 ? $retryAfter : 900, $pdo);
         if ($fallback === '') {
             throw $e;
@@ -672,6 +780,54 @@ function aiResearchModelCall(array $config, string $step, array $payload, int $t
         error_log('AI ' . $step . ': ' . $provider . ' hlasi vycerpanou kvotu, prepinam na ' . $fallback);
         return aiResearchCallProvider($config, $fallback, $step, $payload, $timeout);
     }
+}
+
+/**
+ * Ktery model podle chyby narazil na strop. Google ho v te same zprave jmenuje
+ * ("model: gemini-3-flash"); kdyz ne, plati ten, se kterym request odesel.
+ */
+function aiResearchQuotaExhaustedModel(string $message, array $config): string
+{
+    $current = strtolower(trim(aiResearchModelName($config)));
+    if (!preg_match('/\bmodel:\s*([a-z0-9.\-]+)/i', $message, $m)) {
+        return $current;
+    }
+    $reported = strtolower(trim($m[1]));
+    // Google echuje interni nazev, ktery nemusi byt ten nas: u pozadavku na
+    // gemini-3-flash-preview hlasi "model: gemini-3-flash". Kdyz ohlaseny nazev v
+    // zebriku neni, plati model, se kterym request opravdu odesel - hadat prevod by
+    // mohlo odstavit spatny model, a to ten nejsilnejsi.
+    return in_array($reported, geminiModelCandidates(), true) ? $reported : $current;
+}
+
+/**
+ * Odstavi model, ktery ohlasil vycerpany denni strop, a prepne na dalsi ze zebriku.
+ * Vraci nazev noveho modelu, nebo prazdny string, kdyz nejde o denni strop nebo uz
+ * zadny dalsi model nezbyva.
+ */
+function aiResearchSwitchToNextGeminiModel(array $config, string $message, ?PDO $pdo = null): string
+{
+    // Jen vycerpany DENNI strop. Minutove okno se uvolni samo a prepinat kvuli nemu
+    // na slabsi model by kvalitu snizovalo bez duvodu.
+    if (aiResearchQuotaReportedDailyRequestLimit($message) <= 0
+        && !preg_match('/per\s*day|daily|requests_per_day|\bRPD\b/i', $message)) {
+        return '';
+    }
+    $exhausted = aiResearchQuotaExhaustedModel($message, $config);
+    if ($exhausted === '') {
+        return '';
+    }
+    $midnight = strtotime('tomorrow 00:10');
+    $next = aiResearchMarkModelExhausted(
+        $exhausted,
+        max(3600, ($midnight ?: time() + 86400) - time()),
+        $pdo
+    );
+    if ($next === '') {
+        return '';
+    }
+    geminiRuntimeModel($next);
+    return $next;
 }
 
 function aiResearchCallProvider(array $config, string $provider, string $step, array $payload, int $timeout): array
@@ -813,8 +969,17 @@ function aiResearchDailyRequestBudgetOrDefault(array $config, ?PDO $pdo = null):
     // Hadat cislo neni potreba, kdyz ho provider sam rekl. Merene na produkci: strop
     // stal na 200, ale free tier gemini-3-flash pripousti 20 - zbylych 180 pozadavku
     // byly zarucene chyby. Posledni pozorovany limit proto vychozi cislo srazi dolu.
-    $observed = $pdo instanceof PDO ? aiResearchObservedDailyRequestLimit($pdo) : 0;
-    return $observed > 0 ? min($default, $observed) : $default;
+    if (!$pdo instanceof PDO) {
+        return $default;
+    }
+    if (aiResearchProviderName($config) === 'openai') {
+        $observed = aiResearchObservedDailyRequestLimit($pdo);
+        return $observed > 0 ? min($default, $observed) : $default;
+    }
+    // U Gemini je strop per model, takze rozpocet je soucet pres modely, ktere dnes
+    // jeste maji kvotu. Vycerpany nejsilnejsi model uz tim praci nezastavi.
+    $combined = aiResearchCombinedDailyRequestLimit($pdo, $default);
+    return $combined > 0 ? $combined : 0;
 }
 
 /**
@@ -822,13 +987,41 @@ function aiResearchDailyRequestBudgetOrDefault(array $config, ?PDO $pdo = null):
  * nastaveni, protoze plati pro cely ucet, ne pro jeden request, a musi prezit i to,
  * ze kazdy tik je jiny request.
  */
-function aiResearchObservedDailyRequestLimit(PDO $pdo): int
+function aiResearchObservedDailyRequestLimit(PDO $pdo, string $model = ''): int
 {
     try {
-        return max(0, (int)(loadSettings($pdo)['ai_research_observed_daily_limit'] ?? 0));
+        $settings = loadSettings($pdo);
+        $model = strtolower(trim($model));
+        if ($model !== '') {
+            $map = json_decode((string)($settings['ai_research_observed_model_limits'] ?? ''), true);
+            if (is_array($map) && isset($map[$model])) {
+                return max(0, (int)$map[$model]);
+            }
+            return 0;
+        }
+        return max(0, (int)($settings['ai_research_observed_daily_limit'] ?? 0));
     } catch (Throwable $e) {
         return 0;
     }
+}
+
+/**
+ * Denni strop pres vsechny modely, ktere dnes jeste maji kvotu. Strop free tieru je
+ * per model, takze rozpocet nesmi byt cislo jednoho modelu - to by po vycerpani
+ * nejsilnejsiho modelu zastavilo praci, i kdyz ostatni jeste mohou.
+ */
+function aiResearchCombinedDailyRequestLimit(PDO $pdo, int $default): int
+{
+    $total = 0;
+    foreach (geminiModelCandidates() as $candidate) {
+        if (aiResearchModelExhausted($candidate)) {
+            continue;
+        }
+        $observed = aiResearchObservedDailyRequestLimit($pdo, $candidate);
+        // Model, u ktereho jsme strop jeste nevideli, se pocita vychozim cislem.
+        $total += $observed > 0 ? $observed : $default;
+    }
+    return $total;
 }
 
 /**
@@ -836,7 +1029,7 @@ function aiResearchObservedDailyRequestLimit(PDO $pdo): int
  * chyba zadny neuvadi. Novejsi pozorovani prepisuje starsi - kdyz ucet dostane vyssi
  * tarif, chyby prestanou chodit a strop uz nic nesrazi.
  */
-function aiResearchRememberObservedDailyRequestLimit(PDO $pdo, string $message): int
+function aiResearchRememberObservedDailyRequestLimit(PDO $pdo, string $message, string $model = ''): int
 {
     $limit = aiResearchQuotaReportedDailyRequestLimit($message);
     if ($limit <= 0) {
@@ -845,6 +1038,17 @@ function aiResearchRememberObservedDailyRequestLimit(PDO $pdo, string $message):
     try {
         if (aiResearchObservedDailyRequestLimit($pdo) !== $limit) {
             setSetting($pdo, 'ai_research_observed_daily_limit', (string)$limit);
+        }
+        // Strop plati pro model, ktery ho ohlasil. Bez tohoto by cislo jednoho modelu
+        // srazilo rozpocet i modelum, ktere maji vlastni, vyssi strop.
+        $model = strtolower(trim($model));
+        if ($model !== '') {
+            $map = json_decode((string)(loadSettings($pdo)['ai_research_observed_model_limits'] ?? ''), true);
+            $map = is_array($map) ? $map : [];
+            if ((int)($map[$model] ?? 0) !== $limit) {
+                $map[$model] = $limit;
+                setSetting($pdo, 'ai_research_observed_model_limits', json_encode($map) ?: '{}');
+            }
         }
     } catch (Throwable $e) {
         error_log('AI research observed daily limit not stored: ' . $e->getMessage());
@@ -1167,6 +1371,16 @@ if (isset($_GET['cron'])) {
         } catch (Throwable $e) {
             http_response_code(503);
             echo 'Throughput report failed: ' . $e->getMessage() . "\n";
+        }
+        exit;
+    }
+    if (isset($_GET['quality_report'])) {
+        try {
+            $report = aiResearchQualityReport($pdo, $config, (int)($_GET['limit'] ?? 8));
+            echo json_encode($report, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . "\n";
+        } catch (Throwable $e) {
+            http_response_code(503);
+            echo 'Quality report failed: ' . $e->getMessage() . "\n";
         }
         exit;
     }
@@ -2729,11 +2943,18 @@ function aiResearchModelName(array $config): string
         return aiModelName($config, 'openai');
     }
     $runtime = geminiRuntimeModel();
-    if ($runtime !== '') {
+    if ($runtime !== '' && !aiResearchModelExhausted($runtime)) {
         return $runtime;
     }
     $configured = trim((string)($config['ai']['gemini_research_model'] ?? ''));
-    return $configured !== '' ? normalizeGeminiModelName($configured) : aiModelName($config, 'gemini');
+    $preferred = $configured !== '' ? normalizeGeminiModelName($configured) : aiModelName($config, 'gemini');
+    // Model, o kterem uz vime, ze dnes nema kvotu, by jen spotreboval pozadavek na
+    // 429. Kazdy tik je jiny request, takze bez tohoto by se zebrik porad resetoval.
+    if (!aiResearchModelExhausted($preferred)) {
+        return $preferred;
+    }
+    $usable = aiResearchUsableGeminiModel($preferred);
+    return $usable !== '' ? $usable : $preferred;
 }
 
 function aiResearchDisplayModel(string $model): string
@@ -3281,11 +3502,27 @@ function aiResearchHandleQuotaFailure(PDO $pdo, array $config, Throwable $e): ar
         return ['quota' => false, 'stop' => false, 'model_available' => true, 'message' => ''];
     }
     $provider = aiResearchProviderName($config);
-    aiResearchRememberObservedDailyRequestLimit($pdo, $message);
+    aiResearchRememberObservedDailyRequestLimit($pdo, $message, aiResearchQuotaExhaustedModel($message, $config));
     $streak = aiResearchQuotaStreak($pdo, aiResearchQuotaStreak($pdo) + 1);
     if ($streak < AI_RESEARCH_QUOTA_STREAK_LIMIT) {
         // Prvni pokusy resi kratky backoff: minutove okno se opravdu casto uvolni samo.
         return ['quota' => true, 'stop' => true, 'model_available' => false, 'message' => aiResearchFailureMessage($e)];
+    }
+    // Nez se odstavi provider, zkusi se dalsi model ze zebriku: denni strop free
+    // tieru plati pro jeden model, ne pro cely ucet, takze odstavit gemini kvuli
+    // vycerpanemu gemini-3-flash by zahodilo kvotu ostatnich modelu.
+    if ($provider !== 'openai') {
+        $nextModel = aiResearchSwitchToNextGeminiModel($config, $message, $pdo);
+        if ($nextModel !== '') {
+            aiResearchQuotaStreak($pdo, 0);
+            return [
+                'quota' => true,
+                'stop' => false,
+                'model_available' => true,
+                'message' => 'model ' . aiResearchQuotaExhaustedModel($message, $config)
+                    . ' ma vycerpanou denni kvotu, pokracuje se na ' . $nextModel . '.',
+            ];
+        }
     }
     $pause = aiResearchHardQuotaPauseSeconds($message);
     $fallback = aiResearchMarkProviderExhausted($config, $provider, $pause, $pdo);
@@ -4689,6 +4926,106 @@ function aiResearchRefreshFirmySeedCatalogTotal(PDO $pdo, array $state): array
  * pozadavku na model, pocet pozadavku na jeden seed a realny cas jednoho seedu -
  * a limitni je vzdy ta nejnizsi z nich.
  */
+/**
+ * Kvalita vystupu po jednotlivych subjektech, aby se nemusela posuzovat z dojmu.
+ * Vraci u kazdeho behu texty, ktere model napsal, a signaly, na kterych se kvalita
+ * pozna: kolik segmentu opravdu porovnal, jak si je jisty, jaky model to psal a
+ * jestli osloveni vzniklo z hromadne odpovedi nebo az ze samostatneho pozadavku.
+ *
+ * Smysl je konkretni: kdyz se kvuli setreni pozadavku zvysi davkovani nebo se
+ * spadne na slabsi model ze zebriku, musi byt videt, jestli tim kvalita netrpi -
+ * a u ktereho modelu presne.
+ */
+function aiResearchQualityReport(PDO $pdo, array $config, int $limit = 8): array
+{
+    $limit = max(1, min(40, $limit));
+    try {
+        $rows = $pdo->query('
+            SELECT id, seed_business, seed_email, status, plan_json,
+                   COALESCE(found_count, 0) AS found_count,
+                   COALESCE(accepted_count, 0) AS accepted_count
+            FROM ai_research_runs
+            ORDER BY id DESC
+            LIMIT ' . $limit . '
+        ')->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Throwable $e) {
+        return ['error' => $e->getMessage()];
+    }
+    $runs = [];
+    $byModel = [];
+    foreach ($rows as $row) {
+        $plan = json_decode((string)$row['plan_json'], true);
+        $plan = is_array($plan) ? $plan : [];
+        $models = [];
+        foreach (aiResearchNormalizeModelAudit($plan['ai_model_audit'] ?? []) as $entry) {
+            $step = (string)($entry['step'] ?? '');
+            $model = (string)($entry['model'] ?? '');
+            if ($step !== '' && $model !== '') {
+                $models[$step] = $model;
+            }
+        }
+        $planModel = (string)($models['plan_generation'] ?? '');
+        $candidates = is_array($plan['candidate_segments'] ?? null) ? (array)$plan['candidate_segments'] : [];
+        $rejected = is_array($plan['rejected_alternatives'] ?? null) ? (array)$plan['rejected_alternatives'] : [];
+        $seedDraft = is_array($plan['seed_outreach_draft'] ?? null) ? (array)$plan['seed_outreach_draft'] : [];
+        $variants = is_array($plan['outreach_variants'] ?? null) ? (array)$plan['outreach_variants'] : [];
+        $entry = [
+            'run_id' => (int)$row['id'],
+            'subject' => (string)$row['seed_business'],
+            'status' => (string)$row['status'],
+            'closed' => !empty($plan['permanently_closed']) || !empty($plan['seed_unsuitable']),
+            'model_plan' => $planModel,
+            'model_draft' => (string)($models['outreach_draft'] ?? ''),
+            // Texty, ktere ma clovek precist. Kvalitu neurci zadne cislo - urci ji to,
+            // jestli business_understanding opravdu popisuje tuhle firmu podle jejiho
+            // webu a jestli targeting_reason obhaji zvolenou cilovku.
+            'business_understanding' => (string)($plan['business_understanding'] ?? ''),
+            'primary_segment' => (string)($plan['primary_segment'] ?? ''),
+            'audience_label' => (string)($plan['audience_label'] ?? ''),
+            'scraping_keyword' => aiResearchPrimaryKeyword($plan),
+            'targeting_reason' => (string)($plan['targeting_reason'] ?? ''),
+            'seed_outreach_subject' => (string)($seedDraft['subject'] ?? ''),
+            // Signaly, ktere jde porovnavat mezi modely a mezi nastavenim davkovani.
+            'candidate_segments' => count($candidates),
+            'rejected_alternatives' => count($rejected),
+            'outreach_variants' => count($variants),
+            'confidence' => (int)($plan['confidence'] ?? 0),
+            'found' => (int)$row['found_count'],
+            'accepted' => (int)$row['accepted_count'],
+        ];
+        $runs[] = $entry;
+        if ($planModel !== '') {
+            $bucket = $byModel[$planModel] ?? ['runs' => 0, 'confidence' => 0, 'candidates' => 0, 'thin' => 0];
+            $bucket['runs']++;
+            $bucket['confidence'] += $entry['confidence'];
+            $bucket['candidates'] += $entry['candidate_segments'];
+            // "Tenky" vystup: model neporovnal dost segmentu nebo nenapsal obhajobu
+            // cileni. Presne to jsou priznaky, ktere se objevi driv nez zjevny nesmysl.
+            if ($entry['candidate_segments'] < 4 || mb_strlen($entry['targeting_reason']) < 120) {
+                $bucket['thin']++;
+            }
+            $byModel[$planModel] = $bucket;
+        }
+    }
+    $summary = [];
+    foreach ($byModel as $model => $bucket) {
+        $count = max(1, (int)$bucket['runs']);
+        $summary[$model] = [
+            'runs' => (int)$bucket['runs'],
+            'avg_confidence' => round($bucket['confidence'] / $count, 1),
+            'avg_candidate_segments' => round($bucket['candidates'] / $count, 1),
+            'thin_outputs' => (int)$bucket['thin'],
+        ];
+    }
+    return [
+        'generated_at' => date('c'),
+        'current_model' => aiResearchModelName($config),
+        'exhausted_models' => array_keys(aiResearchModelStateMap($pdo)),
+        'by_model' => $summary,
+        'runs' => $runs,
+    ];
+}
+
 function aiResearchThroughputReport(PDO $pdo, array $config): array
 {
     $report = ['generated_at' => date('c')];
