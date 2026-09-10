@@ -1377,7 +1377,8 @@ test("rotation exit: a sell that never filled is re-closed, not waited on foreve
   assert.match(source, /const ROTATION_EXIT_STALE_MINUTES = envNumber\("LIVE_ROTATION_EXIT_STALE_MINUTES", 2\)/);
 
   const waiting = source.slice(source.indexOf("if (activeSellOrders.length && !best) {"));
-  const block = waiting.slice(0, waiting.indexOf('action: "ROTATION_EXIT_WAITING"'));
+  const block = waiting.slice(0, waiting.indexOf("const waitingAction = LIVE_AUTO_ROTATE"));
+  assert.ok(block.length > 0, "the stale-order repair must still precede the waiting branch");
   // The stale order is cancelled first: its reservation is what blocks the re-close.
   assert.match(block, /const staleSellOrders = activeSellOrders/);
   assert.match(block, /openOrderAgeHours\(order\) \* 60 >= ROTATION_EXIT_STALE_MINUTES/);
@@ -1401,7 +1402,59 @@ test("rotation exit: a sell that never filled is re-closed, not waited on foreve
   assert.match(workflow, /npm run live:execute -- --confirm-live/);
 
   // Still waiting is correct while the order is fresh: a FAK can be in flight.
-  assert.match(source, /action: "ROTATION_EXIT_WAITING"/);
+  assert.match(source, /const waitingAction = LIVE_AUTO_ROTATE \? "ROTATION_EXIT_WAITING"/);
+
+  // Reported: a live portfolio with rotation switched OFF logged ROTATION_EXIT_REJECTED --
+  // "stale rotation exit could not be re-closed: rotation exit has no executable bid".
+  // This run can place no rotation exit at all when rotation is off, so calling the resting
+  // sell one was wrong; worse, having cancelled it the run then tried to dump the position
+  // into the book at whatever the bid was, and in that run there was no bid, so it removed
+  // the only sell working on the position and put nothing back.
+  //
+  // Cancelling stays: a resting sell reserves the shares, and while they are reserved the
+  // exit worker's protective FOK sell cannot match, so a stop loss could not get out.
+  // Re-closing goes: that is a market exit the portfolio never asked for.
+  assert.match(block, /if \(!LIVE_AUTO_ROTATE\) \{[\s\S]*?action: "STALE_SELL_CANCELLED" \}\);\s*\n\s*continue;/,
+    "with rotation off the stale sell is cancelled and the position is left alone");
+  const rotationOffAt = block.indexOf("if (!LIVE_AUTO_ROTATE) {");
+  assert.ok(rotationOffAt > 0 && rotationOffAt < rebuildAt,
+    "the rotation-off path must return before the re-close is built, or it re-closes anyway");
+  assert.match(block, /action: LIVE_AUTO_ROTATE \? "ROTATION_EXIT_CANCEL_FAILED" : "STALE_SELL_CANCEL_FAILED"/);
+  // And nothing in this block may claim a rotation when there is none.
+  assert.match(block, /const action = LIVE_AUTO_ROTATE\n/);
+  assert.match(block, /rotation is off, so the position is left as it is/);
+  assert.match(block, /Rotation is off for this portfolio, so this run places no exits of its own\./);
+});
+
+// Reported: a run of the live portfolio "70-80 sports, esports" appeared as
+// `Portfolio: Live`. The batch log hardcoded strategyId "live" and strategyLabel "Live",
+// and only the 5050 executor named itself -- so every custom live portfolio filed its runs
+// under the base portfolio's name and its run log could not be told apart from Live's.
+test("run log: each live portfolio files its runs under its own name", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const [source, app] = await Promise.all([
+    readFile(new URL("../tools/live-order-executor.mjs", import.meta.url), "utf8"),
+    readFile(new URL("../assets/app.js", import.meta.url), "utf8"),
+  ]);
+
+  assert.match(source, /strategyId: LIVE_PORTFOLIO_ID,\s*\n\s*strategyLabel: LIVE_PORTFOLIO_RUN_LABEL,/,
+    "the batch log must name the portfolio that ran, not a hardcoded one");
+  assert.ok(!/strategyId: "live",\s*\n\s*strategyLabel: "Live",/.test(source),
+    "the hardcoded pair must not come back");
+  // 5050 keeps its own name, and the base portfolio keeps reading "Live".
+  assert.match(source, /LIVE_PORTFOLIO_ID === "live"\s*\n?\s*\? "Live"/);
+  assert.match(source, /LIVE_PORTFOLIO_ID === "live-5050" \? "5050" : LIVE_PORTFOLIO_ID/);
+
+  // The dashboard prefers the saved display name, because a renamed portfolio would
+  // otherwise keep reporting whatever the workflow was written with.
+  assert.match(app, /function runPortfolioName\(run = \{\}\)/);
+  assert.match(app, /`Portfolio: \$\{runPortfolioName\(batch\)\}`/);
+  assert.match(app, /const configured = isLivePortfolioMode\(mode\)/,
+    "a run of a portfolio that no longer exists must not be named after a paper strategy");
+  // And "is this a live run" has to recognise a custom live id, or the row gets the paper
+  // wording: "evaluated" instead of "market-checked".
+  assert.match(app, /id === "live" \|\| id === "live-5050" \|\| id === "live5050" \|\| id\.startsWith\("live-custom-"\)/);
+  assert.match(app, /const isLiveRun = runIsLive\(run\);/);
 });
 
 test("live candidates: an execution rejection survives the next scrape", async () => {

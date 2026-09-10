@@ -13022,7 +13022,7 @@ function tradeBatchDetail(batch) {
     : "";
   const lines = [
     "Run summary",
-    `Portfolio: ${batch.strategyLabel || batch.strategyId || "-"}`,
+    `Portfolio: ${runPortfolioName(batch)}`,
     `Run time: ${batch.runAt ? formatDate(batch.runAt) : "-"}`,
     `Action: ${action}`,
     `Reason: ${primaryReason}`,
@@ -13587,6 +13587,37 @@ function humanRunReason(run = {}) {
   return reason || "-";
 }
 
+// A run row's own id, and whether it is a live run at all. The executor used to file every
+// live run as "live", so the plain equality below was enough; each live portfolio names
+// itself now, so a custom live run has to be recognised as live or it gets the paper
+// wording ("evaluated" rather than "market-checked").
+function runStrategyId(run = {}) {
+  const batch = run.batchLog || run;
+  return String(run.strategyId || batch.strategyId || "").trim();
+}
+
+function runIsLive(run = {}) {
+  const id = runStrategyId(run).toLowerCase();
+  return id === "live" || id === "live-5050" || id === "live5050" || id.startsWith("live-custom-");
+}
+
+// The name to print for a run. The executor can only know its own id, so a portfolio that
+// has been renamed on the dashboard would keep reporting whatever it was called when the
+// workflow was written. The saved config is the authority on names, so it wins where it has
+// one; the row's own label is the fallback for a run whose portfolio no longer exists.
+function runPortfolioName(run = {}) {
+  const batch = run.batchLog || run;
+  const id = runStrategyId(run);
+  const mode = id === "live5050" ? "live-5050" : id;
+  // isLivePortfolioMode, not the string test above: a run belonging to a live portfolio
+  // that no longer exists would otherwise fall through portfolioConfigForMode's live
+  // branch into the paper one and come back named after a paper strategy.
+  const configured = isLivePortfolioMode(mode)
+    ? normalizePortfolioName(portfolioConfigForMode(mode).displayName, "")
+    : "";
+  return configured || batch.strategyLabel || run.strategyLabel || id || "-";
+}
+
 function runDecisionSummary(run = {}) {
   const batch = run.batchLog || run;
   const counts = batch.counts || {};
@@ -13594,7 +13625,7 @@ function runDecisionSummary(run = {}) {
   const evaluated = Number(run.evaluatedCount ?? counts.scannedCandidates ?? counts.revalidatedCandidates);
   const eligible = Number(run.eligibleCount ?? counts.rankedEligible ?? counts.eligibleCandidates);
   const riskSkipped = Number(run.riskSkippedCount ?? counts.skippedForRisk);
-  const isLiveRun = String(run.strategyId || batch.strategyId || "").toLowerCase() === "live";
+  const isLiveRun = runIsLive(run);
   const usesPolymarketProbability = normalizeProbabilitySource(batch.settings?.probabilitySource) === "polymarket";
   const countParts = [
     Number.isFinite(evaluated) ? `${evaluated} ${isLiveRun ? "market-checked" : "evaluated"}` : "",

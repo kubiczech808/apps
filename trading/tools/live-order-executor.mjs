@@ -188,6 +188,17 @@ const FIXED_ENTRY_STRATEGY = String(process.env.LIVE_STRATEGY || "").trim().toLo
 // never a decision log. The workflow supplies this stable owner id for custom runs.
 const LIVE_PORTFOLIO_ID = process.env.LIVE_PORTFOLIO_ID || (FIXED_ENTRY_STRATEGY ? "live-5050" : "live");
 
+// What a run row calls itself. Reported: a run of the live portfolio "70-80 sports,
+// esports" appeared as `Portfolio: Live`, because the batch log hardcoded "live"/"Live" --
+// only the 5050 executor named itself. Every custom live portfolio therefore filed its runs
+// under the base portfolio's name, so a run log could not be told apart from Live's. The
+// dashboard resolves a configured display name from the id where it has one; this is the
+// fallback for a reader that does not, and the id itself is more honest than "Live".
+const LIVE_PORTFOLIO_RUN_LABEL = process.env.LIVE_PORTFOLIO_NAME
+  || (LIVE_PORTFOLIO_ID === "live"
+    ? "Live"
+    : (LIVE_PORTFOLIO_ID === "live-5050" ? "5050" : LIVE_PORTFOLIO_ID));
+
 // The API deliberately serves one compact, portfolio-filtered execution catalogue.
 // Without this scope, the generic catalogue is sorted before its first page is sent;
 // a 70-82% live portfolio can therefore receive only 82.5%+ rows and conclude that it
@@ -5779,8 +5790,8 @@ async function main() {
     batchLog: {
       id: `live-trade-batch-${new Date().toISOString()}`,
       runAt: new Date().toISOString(),
-      strategyId: "live",
-      strategyLabel: "Live",
+      strategyId: LIVE_PORTFOLIO_ID,
+      strategyLabel: LIVE_PORTFOLIO_RUN_LABEL,
       runSource: String(process.env.LIVE_RUN_SOURCE || "AUTO").toUpperCase() === "MANUAL" ? "MANUAL" : "AUTO",
       manualRunOnce: String(process.env.LIVE_RUN_SOURCE || "").toUpperCase() === "MANUAL",
       selectionMetric: returnMetricLabel(),
@@ -5925,6 +5936,20 @@ async function main() {
     // what a market close means here. The run then reports ROTATION_EXIT_SUBMITTED, so
     // the workflow's immediate-replacement step buys the selected opportunity in the
     // same run rather than waiting for a fill that is not coming.
+    //
+    // Reported: a portfolio with rotation switched OFF kept logging ROTATION_EXIT_REJECTED
+    // -- "stale rotation exit could not be re-closed: rotation exit has no executable bid".
+    // Two things were wrong with that. It called the sell a rotation exit when this run can
+    // place no rotation exit at all, and having cancelled the order it then tried to dump
+    // the position into the book at whatever the bid was, which nobody asked it to do; in
+    // the reported run there was no bid, so it cancelled the sell and left the position
+    // with no exit working on it.
+    //
+    // Cancelling is still right with rotation off -- a resting sell reserves the position's
+    // shares, and while they are reserved the protective FOK sell the exit worker fires
+    // cannot match, so a stop loss could not get out. Re-closing is not: that is a market
+    // exit this portfolio never asked for. So with rotation off the order is cancelled and
+    // nothing more, and the run says exactly that.
     const staleSellOrders = activeSellOrders
       .filter((order) => openOrderAgeHours(order) * 60 >= ROTATION_EXIT_STALE_MINUTES);
     if (staleSellOrders.length) {
@@ -5934,7 +5959,18 @@ async function main() {
           ? { status: "dry_run_cancel", success: true }
           : await cancelOrder(order, tradingConfig);
         if (!successfulCancelResponse(cancelResponse, order.id || order.orderID || order.orderId)) {
-          repairs.push({ order, cancelResponse, response: null, action: "ROTATION_EXIT_CANCEL_FAILED" });
+          repairs.push({
+            order,
+            cancelResponse,
+            response: null,
+            action: LIVE_AUTO_ROTATE ? "ROTATION_EXIT_CANCEL_FAILED" : "STALE_SELL_CANCEL_FAILED",
+          });
+          continue;
+        }
+        if (!LIVE_AUTO_ROTATE) {
+          // The shares are free again, which is the whole point. What to do with the
+          // position now is the exit worker's decision, not this run's.
+          repairs.push({ order, cancelResponse, response: cancelResponse, action: "STALE_SELL_CANCELLED" });
           continue;
         }
         // Re-price against the book as it stands now, not the price that failed.
@@ -5960,12 +5996,27 @@ async function main() {
         });
       }
       const repriced = repairs.filter((repair) => repair.action === "ROTATION_EXIT_REPRICED");
-      const action = repriced.length
-        ? (DRY_RUN || !hasFlag("confirm-live") ? "DRY_RUN_ROTATION_EXIT" : "ROTATION_EXIT_SUBMITTED")
-        : "ROTATION_EXIT_REJECTED";
-      const reason = repriced.length
-        ? `stale rotation exit re-closed at the current bid after ${ROTATION_EXIT_STALE_MINUTES} minutes without a fill; the replacement buy follows in this run`
-        : `stale rotation exit could not be re-closed: ${repairs.map((repair) => orderResponseError(repair.response) || orderResponseError(repair.cancelResponse) || repair.action).join("; ")}`;
+      const cancelledOnly = repairs.filter((repair) => repair.action === "STALE_SELL_CANCELLED");
+      const failures = () => repairs
+        .map((repair) => orderResponseError(repair.response) || orderResponseError(repair.cancelResponse) || repair.action)
+        .join("; ");
+      // With rotation off this run neither placed the sell nor replaces the position, so it
+      // says what it actually did and never claims a rotation.
+      const action = LIVE_AUTO_ROTATE
+        ? (repriced.length
+          ? (DRY_RUN || !hasFlag("confirm-live") ? "DRY_RUN_ROTATION_EXIT" : "ROTATION_EXIT_SUBMITTED")
+          : "ROTATION_EXIT_REJECTED")
+        : (cancelledOnly.length ? "STALE_SELL_CANCELLED" : "STALE_SELL_CANCEL_FAILED");
+      const reason = LIVE_AUTO_ROTATE
+        ? (repriced.length
+          ? `stale rotation exit re-closed at the current bid after ${ROTATION_EXIT_STALE_MINUTES} minutes without a fill; the replacement buy follows in this run`
+          : `stale rotation exit could not be re-closed: ${failures()}`)
+        : (cancelledOnly.length
+          ? `${cancelledOnly.length} sell order(s) resting for over ${ROTATION_EXIT_STALE_MINUTES} minutes were cancelled, releasing the shares they reserved; rotation is off, so the position is left as it is`
+          : `stale sell order(s) could not be cancelled: ${failures()}`);
+      const explanation = LIVE_AUTO_ROTATE
+        ? "A rotation exit is a taker order, so a sell still resting on the book never filled. It was cancelled and re-closed against the current bid; leaving it would reserve the position's shares and block every later run."
+        : "Rotation is off for this portfolio, so this run places no exits of its own. A sell left resting on the book still reserves the position's shares, and while they are reserved the protective sell behind the stop loss cannot match -- so the stale order is cancelled and nothing else is done to the position.";
       await emitDecision({
         ...decision,
         action,
@@ -5975,7 +6026,7 @@ async function main() {
           ...decision.batchLog,
           action,
           reason,
-          explanation: "A rotation exit is a taker order, so a sell still resting on the book never filled. It was cancelled and re-closed against the current bid; leaving it would reserve the position's shares and block every later run.",
+          explanation,
           rotationExit: repriced.length ? { ...(pendingRotationExit || {}), repricedAt: new Date().toISOString() } : pendingRotationExit,
         },
         attempts: repairs.map((repair) => orderAttemptSummary(repair.order, repair.response, {
@@ -5985,21 +6036,30 @@ async function main() {
       });
       return;
     }
+    // Same distinction as above, and for the same reason: with rotation off there is no
+    // rotation exit to be waiting on, only a sell not yet old enough to be called stale.
+    const waitingAction = LIVE_AUTO_ROTATE ? "ROTATION_EXIT_WAITING" : "STALE_SELL_WAITING";
+    const waitingReason = LIVE_AUTO_ROTATE
+      ? "waiting for the live sell order to fill before selecting a replacement"
+      : `a sell order is resting on the book and has not been open for ${ROTATION_EXIT_STALE_MINUTES} minutes yet`;
+    const waitingExplanation = LIVE_AUTO_ROTATE
+      ? "No replacement buy is allowed while the rotation exit remains open. The next account sync will release the token exposure once the sell fills."
+      : `Rotation is off for this portfolio, so this run places no exits. A resting sell reserves the position's shares, and it is left alone until it has been open for ${ROTATION_EXIT_STALE_MINUTES} minutes -- long enough to be sure it is not simply about to fill -- after which it is cancelled to release them.`;
     await emitDecision({
       ...decision,
-      action: "ROTATION_EXIT_WAITING",
-      reason: "waiting for the live sell order to fill before selecting a replacement",
+      action: waitingAction,
+      reason: waitingReason,
       rotationExit: pendingRotationExit,
       batchLog: {
         ...decision.batchLog,
-        action: "ROTATION_EXIT_WAITING",
-        reason: "waiting for the live sell order to fill before selecting a replacement",
-        explanation: "No replacement buy is allowed while the rotation exit remains open. The next account sync will release the token exposure once the sell fills.",
+        action: waitingAction,
+        reason: waitingReason,
+        explanation: waitingExplanation,
         rotationExit: pendingRotationExit,
       },
       attempts: activeSellOrders.map((order) => orderAttemptSummary({
         ...order,
-        question: order.question || "Rotation exit",
+        question: order.question || (LIVE_AUTO_ROTATE ? "Rotation exit" : "Resting sell order"),
         outcome: order.outcome || "",
         orderType: "GTC",
         orderPrice: order.price,

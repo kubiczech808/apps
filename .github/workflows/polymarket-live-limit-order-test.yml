@@ -283,6 +283,11 @@ jobs:
               "USE_LIMIT_ORDERS": str(bool(live.get("useLimitOrders", True))).lower(),
               "LIVE_CROSS_PORTFOLIO_RISK_DIVERSIFICATION": str(bool(system.get("crossLivePortfolioRiskDiversification", True))).lower(),
               "LIVE_PORTFOLIO_ID": portfolio_id,
+              # What the run row calls itself. Without it every portfolio's batch log read
+              # "Live", so a custom live portfolio's runs were indistinguishable from the
+              # base one's. Blank or absent falls back to a label derived from the id, and
+              # the dashboard prefers the saved display name over both.
+              "LIVE_PORTFOLIO_NAME": str(live.get("displayName") or "").strip(),
               "LIVE_EXECUTION_STATE_PATH": execution_path,
               "LIVE_EXECUTION_STATE_URL": execution_url,
               "LIVE_EXECUTION_PUBLISH_FILE": execution_publish_file,
