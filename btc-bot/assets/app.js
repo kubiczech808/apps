@@ -101,6 +101,157 @@ const decisionFactElement = (fact) =>
 
 const decisionIsBlockedBy = (decision, pattern) => pattern.test(String(decision?.reason ?? ''))
 
+// ── strategy doctrine ────────────────────────────────────────────────────
+
+const fact = (status, text, title = null) => decisionFact(text, status, title)
+
+const decisionContext = () => state?.lastDecision?.context ?? {}
+
+const htfTrendChangedAgainst = (context) =>
+  (context.htfBias === 'up' && context.htfEvent === 'CHoCH_DOWN') ||
+  (context.htfBias === 'down' && context.htfEvent === 'CHoCH_UP')
+
+const zoneDistanceInAtr = (context) => {
+  const side = context.htfBias === 'up' ? 'long' : context.htfBias === 'down' ? 'short' : null
+  if (!context.zone || !Number.isFinite(context.price) || !Number.isFinite(context.ltfAtr) || !(context.ltfAtr > 0) || !side) {
+    return null
+  }
+  return Math.max(0, side === 'long' ? context.price - context.zone.high : context.zone.low - context.price) / context.ltfAtr
+}
+
+const STRATEGY_RULEBOOK = [
+  {
+    title: 'Vyšší timeframe vede směr',
+    text: 'Obchod smí jít jen ve směru čitelné struktury. Range a čerstvý CHoCH proti směru jsou důvod stát stranou.',
+    status: () => {
+      const context = decisionContext()
+      if (!context.htfBias) return fact('neutral', 'čeká na strukturu')
+      if (['up', 'down'].includes(context.htfBias) && !htfTrendChangedAgainst(context)) {
+        return fact('met', context.htfBias === 'up' ? 'trend long' : 'trend short')
+      }
+      return fact('unmet', context.htfBias === 'range' ? 'range' : 'CHoCH proti směru')
+    },
+  },
+  {
+    title: 'Vstup patří do POI',
+    text: 'Setup musí vznikat v supply/demand zóně, kterou trh už respektoval. Honění ceny uprostřed ničeho nemá edge.',
+    status: () => {
+      const context = decisionContext()
+      if (context.zone) return fact('met', `${context.zone.type === 'demand' ? 'demand' : 'supply'} zóna`)
+      if (decisionIsBlockedBy(state?.lastDecision, /no (demand|supply) zone/i)) return fact('unmet', 'zóna chybí')
+      return fact('neutral', 'čeká na POI')
+    },
+  },
+  {
+    title: 'Cena musí být u zóny',
+    text: 'Reakci bereme jen na hraně zóny nebo těsně u ní. Vzdálený vstup obvykle zhorší stop i R/R.',
+    status: () => {
+      const context = decisionContext()
+      const distance = zoneDistanceInAtr(context)
+      if (distance === null) return fact('neutral', 'nelze změřit')
+      const max = strategySetting('zoneMaxDistanceAtr', 1)
+      return fact(distance <= max ? 'met' : 'unmet', `${nf(2).format(distance)} ATR od zóny`)
+    },
+  },
+  {
+    title: 'Likvidita má být sebraná',
+    text: 'Preferujeme zóny po sweepu. Bez sweepu mohou pod/above zónou stále ležet stop-lossy, pro které si trh přijde.',
+    status: () => {
+      const zone = decisionContext().zone
+      if (!zone || zone.swept === undefined) return fact('neutral', 'čeká na sweep')
+      return fact(zone.swept ? 'met' : 'unmet', zone.swept ? 'sweep ano' : 'sweep ne')
+    },
+  },
+  {
+    title: 'Move ze zóny má být jednostranný',
+    text: 'Imbalance / nevyplněná neefektivita je známka, že od zóny přišla rozhodná objednávková převaha.',
+    status: () => {
+      const zone = decisionContext().zone
+      if (!zone || zone.imbalance === undefined) return fact('neutral', 'neověřeno')
+      return fact(zone.imbalance ? 'met' : 'unmet', zone.imbalance ? 'imbalance ano' : 'imbalance ne')
+    },
+  },
+  {
+    title: 'Vstup potvrzuje zavřená svíčka',
+    text: 'Strategie nemá predikovat dotyk zóny. Chceme uzavřený trigger, ideálně momentum/engulfing místo slabého pin baru.',
+    status: () => {
+      const context = decisionContext()
+      if (context.confirmation) return fact('met', context.confirmation.replace('_', ' '))
+      if (decisionIsBlockedBy(state?.lastDecision, /no (bullish|bearish) trigger/i)) return fact('unmet', 'trigger chybí')
+      return fact('neutral', 'čeká na trigger')
+    },
+  },
+  {
+    title: 'Setup musí přežít poplatky',
+    text: 'Stop nesmí být tak těsný, aby poplatek sebral velkou část risku. Cílíme na méně obchodů s větším R a nižší frikcí.',
+    status: () => {
+      const context = decisionContext()
+      const atrMin = strategySetting('atrPctMin', 0.15)
+      const atrMax = strategySetting('atrPctMax', 4)
+      const atrOk = Number.isFinite(context.atrPct) && context.atrPct >= atrMin && context.atrPct <= atrMax
+      const planRr = Number(state?.lastDecision?.plan?.rr)
+      if (Number.isFinite(planRr)) return fact(planRr >= strategySetting('minRR', 2) && atrOk ? 'met' : 'unmet', `R/R ${nf(2).format(planRr)}`)
+      if (decisionIsBlockedBy(state?.lastDecision, /reward\/risk|too quiet|too volatile/i)) return fact('unmet', 'frikce/RR')
+      return fact(atrOk ? 'neutral' : 'unmet', Number.isFinite(context.atrPct) ? `ATR ${pct(context.atrPct, 2)}` : 'čeká na volatilitu')
+    },
+  },
+  {
+    title: 'Riziko řídí účet, ne názor',
+    text: 'Každý obchod má předem daný SL, TP, maximální risk a portfolio gate. Otevřená pozice se nesmí nechat bez ochrany.',
+    status: () => {
+      const gates = state?.lastDecision?.gates ?? []
+      if (gates.length) return fact('unmet', 'gate blokuje')
+      if (state?.settings?.enabled === false) return fact('unmet', 'pozastaveno')
+      return fact('met', 'risk gate OK')
+    },
+  },
+  {
+    title: 'Strategie musí být měřená mimo jeden hezký úsek',
+    text: 'Cílem je stabilita: více oken, out-of-sample, paper monitoring, drawdown a výkonnost po poplatcích.',
+    status: () => {
+      const trades = Number(state?.stats?.trades ?? 0)
+      if (trades < 30) return fact('neutral', `${trades} obchodů`)
+      const pf = Number(state?.stats?.profitFactor)
+      return fact(Number.isFinite(pf) && pf >= 1 ? 'met' : 'unmet', Number.isFinite(pf) ? `PF ${nf(2).format(pf)}` : `${trades} obchodů`)
+    },
+  },
+]
+
+const STRATEGY_CANDIDATES = [
+  {
+    status: 'active',
+    statusKind: 'neutral',
+    name: 'PA-0 Baseline price action',
+    thesis: 'Současná supply/demand strategie. Slouží jako kontrolní vzorek, protože víme, kde prodělává: poplatky a slabé vstupy.',
+    rules: ['4h trend', '1h zóna', 'sweep', 'engulfing/rejection trigger', '2R+ v sats'],
+    command: 'node tools/backtest.mjs --strategy price-action --compare --limit 5000',
+  },
+  {
+    status: 'implemented',
+    statusKind: 'met',
+    name: 'JF-1 HTF swing S/D',
+    thesis: 'JeaFx-inspirovaný swing model: daily směr, 4h POI, kvalitnější trigger, širší stop a menší fee-to-risk tlak.',
+    rules: ['daily bias', '4h supply/demand', 'sweep + imbalance', 'engulfing only', 'nižší frikce'],
+    command: 'node tools/backtest.mjs --strategy jeafx-swing --compare --limit 5000',
+  },
+  {
+    status: 'draft',
+    statusKind: 'neutral',
+    name: 'JF-2 Sweep & reclaim',
+    thesis: 'Neobchoduje samotný sweep. Čeká na návrat zpět do struktury a LTF shift po vybrání likvidity.',
+    rules: ['equal high/low nebo swing liquidity', 'sweep', 'reclaim close', 'LTF structure shift'],
+    command: 'čeká na implementaci samostatného entry modelu',
+  },
+  {
+    status: 'lab',
+    statusKind: 'neutral',
+    name: 'TF-1 Daily momentum',
+    thesis: 'Ne-JeaFx kontrolní strategie: trend following s denním breakoutem. Pomáhá poznat, jestli BTC aktuálně platí spíš za momentum než za mean reversion.',
+    rules: ['daily breakout', '100D režim', '2 ATR stop', 'dlouhý trailing exit'],
+    command: 'node tools/backtest.mjs --strategy momentum --compare --limit 5000',
+  },
+]
+
 // ── api ───────────────────────────────────────────────────────────────────
 
 const getKey = () => {
@@ -647,6 +798,40 @@ const renderRuns = () => {
   }
 }
 
+const renderStrategyLab = () => {
+  const rules = $('strategy-rules')
+  const candidates = $('strategy-candidates')
+  rules.replaceChildren()
+  candidates.replaceChildren()
+
+  for (const rule of STRATEGY_RULEBOOK) {
+    const status = rule.status()
+    rules.append(
+      el('div', { className: 'rule-row' }, [
+        el('div', { className: 'rule-head' }, [
+          el('strong', { text: rule.title }),
+          decisionFactElement(status),
+        ]),
+        el('p', { text: rule.text }),
+      ])
+    )
+  }
+
+  for (const strategy of STRATEGY_CANDIDATES) {
+    candidates.append(
+      el('div', { className: 'strategy-card' }, [
+        el('div', { className: 'strategy-card-head' }, [
+          el('strong', { text: strategy.name }),
+          decisionFactElement(decisionFact(strategy.status, strategy.statusKind)),
+        ]),
+        el('p', { text: strategy.thesis }),
+        el('div', { className: 'strategy-tags' }, strategy.rules.map((rule) => decisionFactElement(decisionFact(rule)))),
+        el('code', { text: strategy.command }),
+      ])
+    )
+  }
+}
+
 const renderSettings = () => {
   const settings = state?.settings || {}
   const mainnet = $('set-mode').querySelector('option[value="mainnet"]')
@@ -739,6 +924,7 @@ const renderAll = () => {
   renderOrders()
   renderClosed()
   renderRuns()
+  renderStrategyLab()
   renderSettings()
 }
 

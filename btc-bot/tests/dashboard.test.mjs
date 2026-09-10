@@ -69,3 +69,15 @@ test('capital tile separates USD benchmark from sats trading result', () => {
   assert.match(js, /tile\(\s*'Výkon od startu'/, 'dashboard must render a start benchmark tile')
   assert.match(js, /BTC.*obchody.*v sats/s)
 })
+
+test('strategy tab shows rules and candidate strategies', () => {
+  assert.ok(html.includes('data-tab="strategy"'), 'dashboard must expose the strategy tab')
+  assert.ok(html.includes('id="panel-strategy"'), 'strategy tab must have a panel')
+  assert.ok(html.includes('id="strategy-rules"'), 'strategy panel must contain the rule list')
+  assert.ok(html.includes('id="strategy-candidates"'), 'strategy panel must contain candidates')
+  assert.match(js, /STRATEGY_RULEBOOK/)
+  assert.match(js, /STRATEGY_CANDIDATES/)
+  assert.match(js, /renderStrategyLab/)
+  assert.match(js, /Vyšší timeframe vede směr/)
+  assert.match(js, /JF-1 HTF swing S\/D/)
+})

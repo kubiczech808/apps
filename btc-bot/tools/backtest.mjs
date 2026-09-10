@@ -12,6 +12,7 @@ import { fetchCandles, fetchCandlesWithFallback } from '../src/candles.mjs'
 import { describeFunding, fetchFundingSettlements } from '../src/funding.mjs'
 import { createLnMarketsClient, resolveNetwork } from '../src/lnmarkets.mjs'
 import { formatBacktest, runBacktest } from '../src/backtest.mjs'
+import * as jeafxSwing from '../src/strategy-jeafx-swing.mjs'
 import * as priceAction from '../src/strategy.mjs'
 import * as momentum from '../src/strategy-momentum.mjs'
 
@@ -29,6 +30,13 @@ const STRATEGIES = {
     windowHours: 2400,
     warmupHours: 400,
   },
+  // JeaFx-inspired swing variant: daily bias, 4h supply/demand POI and trigger.
+  'jeafx-swing': {
+    module: jeafxSwing,
+    timeframes: { htfHours: 24, ltfHours: 4 },
+    windowHours: 6000,
+    warmupHours: 3600,
+  },
   // Signals off the daily chart, entry priced at the latest hourly close.
   momentum: {
     module: momentum,
@@ -40,8 +48,17 @@ const STRATEGIES = {
 
 
 const args = new Map()
-for (let index = 2; index < process.argv.length; index += 2) {
-  args.set(process.argv[index].replace(/^--/, ''), process.argv[index + 1])
+for (let index = 2; index < process.argv.length; index += 1) {
+  const token = process.argv[index]
+  if (!token.startsWith('--')) continue
+  const key = token.replace(/^--/, '')
+  const next = process.argv[index + 1]
+  if (next && !next.startsWith('--')) {
+    args.set(key, next)
+    index += 1
+  } else {
+    args.set(key, true)
+  }
 }
 
 const chosen = STRATEGIES[args.get('strategy') ?? 'price-action']
@@ -143,6 +160,16 @@ const VARIANTS_BY_STRATEGY = {
     ['fixed 2R target', { strategy: { tpMaxR: 2 } }],
     ['must close inside zone', { strategy: { zoneMaxDistanceAtr: 0 } }],
     ['no trend-flip close', { strategy: { closeOnHtfFlip: false } }],
+  ],
+  'jeafx-swing': [
+    ['shipped', {}],
+    ['imbalance off', { strategy: { requireImbalance: false } }],
+    ['rejection also allowed', { strategy: { triggerKinds: null } }],
+    ['no candle trigger', { strategy: { requireTrigger: false } }],
+    ['stop 0.5 ATR past zone', { strategy: { stopAtrBuffer: 0.5 } }],
+    ['stop 1.0 ATR past zone', { strategy: { stopAtrBuffer: 1.0 } }],
+    ['zone up to 1.0 ATR', { strategy: { zoneMaxDistanceAtr: 1.0 } }],
+    ['fixed 2R target', { strategy: { tpMaxR: 2 } }],
   ],
   // Structural questions, not a parameter sweep: does each RULE earn its place?
   // The lookback numbers are left at their long-standing defaults on purpose —

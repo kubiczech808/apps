@@ -56,6 +56,7 @@
     <button role="tab" data-tab="orders" aria-selected="false">Objednávky</button>
     <button role="tab" data-tab="closed" aria-selected="false">Zavřené pozice</button>
     <button role="tab" data-tab="runs" aria-selected="false">Běhy</button>
+    <button role="tab" data-tab="strategy" aria-selected="false">Strategie</button>
     <button role="tab" data-tab="settings" aria-selected="false">Nastavení</button>
   </div>
 
@@ -96,6 +97,19 @@
       <thead><tr><th>Čas</th><th>Runner</th><th>Režim</th><th>Akce</th><th>Trvání</th><th>Důvod</th></tr></thead>
       <tbody id="tbody-runs"></tbody>
     </table></div>
+  </section>
+
+  <section class="card" id="panel-strategy" hidden>
+    <div class="strategy-layout">
+      <div>
+        <h2>Pravidla ideální strategie</h2>
+        <div id="strategy-rules" class="rule-list"></div>
+      </div>
+      <div>
+        <h2>Testovací strategie</h2>
+        <div id="strategy-candidates" class="strategy-candidates"></div>
+      </div>
+    </div>
   </section>
 
   <section class="card" id="panel-settings" hidden>

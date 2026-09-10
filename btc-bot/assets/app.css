@@ -315,3 +315,63 @@ tbody tr:hover { background: var(--series-1-soft); }
 }
 .gates { margin: 10px 0 0; padding-left: 18px; color: var(--text-secondary); font-size: 13px; }
 .gates li { margin: 2px 0; }
+
+/* ── strategy lab ───────────────────────────────────────────────────────── */
+
+.strategy-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(280px, 0.85fr);
+  gap: 18px;
+}
+.rule-list,
+.strategy-candidates {
+  display: grid;
+  gap: 10px;
+}
+.rule-row,
+.strategy-card {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 11px 12px;
+  background: var(--page);
+}
+.rule-head,
+.strategy-card-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 10px;
+}
+.rule-head strong,
+.strategy-card-head strong {
+  font-size: 13px;
+  line-height: 1.35;
+}
+.rule-row p,
+.strategy-card p {
+  margin: 7px 0 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+.strategy-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 9px;
+}
+.strategy-card code {
+  display: block;
+  margin-top: 10px;
+  padding: 7px 8px;
+  border-radius: 6px;
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  white-space: normal;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+}
+
+@media (max-width: 760px) {
+  .strategy-layout { grid-template-columns: 1fr; }
+}
