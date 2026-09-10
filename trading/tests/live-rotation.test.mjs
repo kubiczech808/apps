@@ -3535,6 +3535,13 @@ test("portfolio parameters: both live portfolios state their order price", () =>
     + `${functionSource(app, "probabilityRangeRuleValue")}\n`
     // And the stop-loss row, whose label reads the risk multiplier. Pure again, so the
     // real pair comes across rather than a stub agreeing with the harness.
+    // The rules card lists the dip-entry rule when it is on, so its three pure helpers come
+    // across as the real thing rather than as stubs that would agree with the harness.
+    + `${/const DIP_ENTRY_RULE_DEFAULTS = [^\n]+/.exec(app)[0]}\n`
+    + `${functionSource(app, "dipEntryBound")}\n`
+    + `${functionSource(app, "dipEntryRuleFromConfig")}\n`
+    + `${functionSource(app, "dipEntryRuleFault")}\n`
+    + `${functionSource(app, "dipEntryRuleSummaryValue")}\n`
     + `${functionSource(app, "normalizeStopLossRiskMultiplier")}\n`
     + `${functionSource(app, "stopLossRiskMultiplier")}\n`
     + `${functionSource(app, "stopLossRiskLabel")}\n`

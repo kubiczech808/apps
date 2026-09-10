@@ -4810,9 +4810,17 @@ test("portfolio form: no control loses what was typed into it", () => {
   const handlersFor = (name) => [...APP.matchAll(
     new RegExp(`els\\.${name}\\?\\.addEventListener\\("(input|change)"[\\s\\S]*?\\n\\}\\);`, "g"),
   )].map((match) => match[0]);
+  // A group of boxes that are ONE setting may wire them in a loop instead of repeating the
+  // same pair of listeners per box. The guarantee is unchanged and still checked: the loop
+  // has to name this element and attach both events. Only the shape differs.
+  const loopHandlersFor = (name) => [...APP.matchAll(/for \(const element of \[([\s\S]*?)\]\) \{([\s\S]*?)\n\}/g)]
+    .filter((match) => match[1].includes(`els.${name}`)
+      && match[2].includes('element?.addEventListener("input"')
+      && match[2].includes('element?.addEventListener("change"'))
+    .map((match) => match[0]);
 
   for (const attribute of attributes) {
-    assert.ok(handlersFor(camel(attribute)).length,
+    assert.ok(handlersFor(camel(attribute)).length || loopHandlersFor(camel(attribute)).length,
       `${attribute} has no listener, so what is typed into it never reaches the draft and`
       + " the next sync overwrites it with the draft's own value");
   }
@@ -5168,5 +5176,117 @@ test("parameter modal: every control inside it is handled inside its own click b
     const handledAfter = APP.slice(branchEnd).includes(`closest("[${hook}]")`);
     assert.ok(!handledAfter || handledInBranch,
       `${hook} is inside the parameter modal but handled after its branch returns, so clicking it does nothing`);
+  }
+});
+
+// Asked for: buy a favourite that has collapsed inside a fixture already under way -- it
+// opened at 70-80%, it is trading at 30-40% now, and the bet is on the comeback -- with
+// both bands settable per portfolio, and built so the whole thing can be thrown away if it
+// turns out not to be profitable.
+//
+// So the rule lives in ONE file, tools/dip-entry-rule.mjs, and this test is what stops the
+// three copies that cannot import it -- api.php, app.js and (later) the poller -- from
+// drifting away from it.
+test("dip entry: one rule, and every copy of it agrees", async () => {
+  const rule = await import("../tools/dip-entry-rule.mjs");
+
+  // The reference implementation, on the reported case: INOX opened at 78%, lost a map,
+  // traded at 35% and went on to win.
+  const inox = { openProbability: 0.78, probability: 0.35, eventRunning: true };
+  const on = { enabled: true, openMin: 0.7, openMax: 0.8, buyMin: 0.3, buyMax: 0.4 };
+  assert.equal(rule.dipEntrySignal(inox, on).admit, true);
+
+  // Each half of the premise has to hold on its own.
+  assert.match(rule.dipEntrySignal({ ...inox, openProbability: 0.55 }, on).reason,
+    /opened at 55%, outside the 70%-80% opening band/,
+    "a market that was never the favourite has not collapsed, it is just cheap");
+  assert.match(rule.dipEntrySignal({ ...inox, probability: 0.62 }, on).reason,
+    /at 62%, outside the 30%-40% entry band/);
+  assert.match(rule.dipEntrySignal({ ...inox, openProbability: null }, on).reason,
+    /no opening probability on record/,
+    "an unverified premise is not a premise: no opening price means no entry");
+  // Underway only, enforced by the rule itself rather than left to the portfolio's own
+  // resolution filter -- before kick-off a 35% price is not a collapse.
+  assert.match(rule.dipEntrySignal({ ...inox, eventRunning: false }, on).reason,
+    /the event is not under way/);
+
+  // Off means invisible: no gate, no reason, nothing.
+  assert.equal(rule.dipEntrySignal(inox, { ...on, enabled: false }).admit, true);
+  assert.equal(rule.dipEntryProbabilityBand({ ...on, enabled: false }), null);
+
+  // Overlapping bands would fire on a market that never fell, so they are reported rather
+  // than silently corrected -- moving them would invent an intent nobody expressed.
+  const overlap = { ...on, buyMax: 0.75 };
+  assert.match(rule.dipEntryRuleFault(overlap), /must sit below the opening band/);
+  assert.equal(rule.dipEntryRuleIsActive(overlap), false);
+  assert.match(rule.dipEntrySignal(inox, overlap).reason, /misconfigured/);
+  // A band typed the wrong way round IS just an ordering slip, and is swapped.
+  const swapped = rule.normalizeDipEntryRule({ enabled: true, openMin: 0.8, openMax: 0.7, buyMin: 0.4, buyMax: 0.3 });
+  assert.deepEqual([swapped.openMin, swapped.openMax, swapped.buyMin, swapped.buyMax], [0.7, 0.8, 0.3, 0.4]);
+
+  // While the rule is on, the buy band REPLACES the portfolio's own probability range.
+  // Without that a 70-80% portfolio would reject the very market the rule exists to buy.
+  assert.deepEqual(rule.dipEntryProbabilityBand(on), { min: 0.3, max: 0.4 });
+
+  // Percent or fraction, because the form sends 70 and the config stores 0.70.
+  assert.equal(rule.normalizeDipEntryRule({ openMin: 70 }).openMin, 0.7);
+
+  // api.php's copy of the normalizer has to land on the same five values, or a portfolio
+  // saves one rule and trades another.
+  const saved = normalizeConfig({
+    live: { dipEntryEnabled: true, dipEntryOpenMin: 72, dipEntryOpenMax: 68, dipEntryBuyMin: 41, dipEntryBuyMax: 29 },
+  }).live;
+  const fromPhp = rule.normalizeDipEntryRule({
+    enabled: saved.dipEntryEnabled,
+    openMin: saved.dipEntryOpenMin,
+    openMax: saved.dipEntryOpenMax,
+    buyMin: saved.dipEntryBuyMin,
+    buyMax: saved.dipEntryBuyMax,
+  });
+  assert.deepEqual(fromPhp, rule.normalizeDipEntryRule({
+    enabled: true, openMin: 0.72, openMax: 0.68, buyMin: 0.41, buyMax: 0.29,
+  }), "PHP and the module must normalize identically, swap included");
+  // Off by default on every portfolio: an experiment that turns itself on is not one.
+  assert.equal(normalizeConfig({}).live.dipEntryEnabled, false);
+  assert.equal(normalizeConfig({}).paper.conservative.dipEntryEnabled, false);
+
+  // app.js's copy, driven for real rather than restated.
+  const dashboard = new Function("probability", `
+    ${/const DIP_ENTRY_RULE_DEFAULTS = [^\n]+/.exec(APP)[0]}
+    ${extractFunction(APP, "dipEntryBound")}
+    ${extractFunction(APP, "dipEntryRuleFromConfig")}
+    ${extractFunction(APP, "dipEntryRuleFault")}
+    ${extractFunction(APP, "dipEntryRuleSummaryValue")}
+    return { dipEntryRuleFromConfig, dipEntryRuleFault, dipEntryRuleSummaryValue };
+  `)((value) => `${Math.round(Number(value) * 100)}%`);
+  assert.deepEqual(dashboard.dipEntryRuleFromConfig(saved), fromPhp,
+    "the dashboard must read a saved rule as the module does");
+  assert.equal(dashboard.dipEntryRuleFault(dashboard.dipEntryRuleFromConfig(saved)), "",
+    "72-68 / 41-29 swaps into a valid rule, so it must not report a fault");
+  assert.match(dashboard.dipEntryRuleSummaryValue(dashboard.dipEntryRuleFromConfig(saved)),
+    /On: opened 68%-72%, buy at 29%-41%, events under way only/);
+  assert.equal(dashboard.dipEntryRuleSummaryValue(dashboard.dipEntryRuleFromConfig({})), "Off");
+
+  // The whole feature has to stay removable, which means nothing outside these places may
+  // grow a dependency on it.
+  const owners = ["tools/dip-entry-rule.mjs", "api.php", "assets/app.js", "index.html"];
+  assert.ok(owners.length === 4, "if this list grows, throwing the rule away stopped being one commit");
+});
+
+// The form has to carry both bands and the switch, or the rule cannot be configured at all.
+test("dip entry: both bands are settable on a portfolio", () => {
+  for (const hook of ["data-dip-entry-enabled", "data-dip-entry-open-min", "data-dip-entry-open-max",
+    "data-dip-entry-buy-min", "data-dip-entry-buy-max", "data-dip-entry-label"]) {
+    assert.ok(HTML.includes(hook), `${hook} is missing from the parameter form`);
+  }
+  // Inside the parameter modal, and therefore -- see the reachability invariant above --
+  // read by the sync and the listeners rather than by a click branch below the modal's.
+  const modal = HTML.slice(HTML.indexOf("data-parameter-modal"));
+  assert.ok(modal.includes("data-dip-entry-enabled"));
+  // Saved with the rest of the form, and recorded in the config history like every other
+  // parameter, or a change to it would be invisible afterwards.
+  for (const key of ["dipEntryEnabled", "dipEntryOpenMin", "dipEntryOpenMax", "dipEntryBuyMin", "dipEntryBuyMax"]) {
+    assert.match(API, new RegExp(`'${key}'`), `${key} must be stored by api.php`);
+    assert.match(APP, new RegExp(`${key}:`), `${key} must have a history label`);
   }
 });

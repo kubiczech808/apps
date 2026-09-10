@@ -1876,6 +1876,44 @@ body.modal-open {
   text-transform: uppercase;
 }
 
+/* The dip-entry rule needs a checkbox and two pairs of bounds, which the three-column grid
+   above cannot hold. One block that stacks, so it reads as a single setting rather than
+   five loose controls -- and so deleting the feature is deleting one rule here. */
+.parameter-control-group {
+  grid-template-columns: 1fr;
+  gap: 8px;
+}
+
+.parameter-control-group .parameter-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 800;
+}
+
+.parameter-control-group .parameter-checkbox input {
+  width: auto;
+}
+
+.parameter-band-row {
+  display: grid;
+  gap: 8px;
+}
+
+.parameter-band-row > label {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.parameter-band-row > label > span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+  min-width: 118px;
+}
+
 .parameter-control input[type="number"],
 .parameter-control select {
   width: 84px;

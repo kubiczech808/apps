@@ -2942,6 +2942,7 @@ function portfolio_config_history_fields(): array
         'minLiquidityUsdc', 'minNetYield', 'executionTrigger', 'executionCronMinutes',
         'useLimitOrders', 'autoRotatePositions', 'stopLossRiskMultiplier', 'reverseOnStopLoss',
         'includeOnlyMarketTags', 'excludedMarketTags', 'automationEnabled', 'archived',
+        'dipEntryEnabled', 'dipEntryOpenMin', 'dipEntryOpenMax', 'dipEntryBuyMin', 'dipEntryBuyMax',
     ];
 }
 
@@ -3161,6 +3162,37 @@ function normalize_probability_value(mixed $value, float $fallback): float
         $probability /= 100;
     }
     return max(0.01, min(0.99, $probability));
+}
+
+/**
+ * The dip-entry rule's four bounds, as a portfolio stores them. The rule itself lives in
+ * tools/dip-entry-rule.mjs; this is the PHP copy of its normalizer, and a test holds the
+ * two against each other.
+ *
+ * A band typed the wrong way round is swapped, because that is an ordering slip. Bands in
+ * the wrong PLACE relative to each other are not corrected -- the buy band has to sit below
+ * the opening band or the rule fires without a collapse -- because silently moving them
+ * would invent an intent nobody expressed. The dashboard reports that as a fault instead.
+ *
+ * @return array{dipEntryEnabled: bool, dipEntryOpenMin: float, dipEntryOpenMax: float, dipEntryBuyMin: float, dipEntryBuyMax: float}
+ */
+function normalize_dip_entry_rule(array $input, array $defaults): array
+{
+    $bound = static function (string $key, float $fallback) use ($input, $defaults): float {
+        return normalize_probability_value($input[$key] ?? ($defaults[$key] ?? null), $fallback);
+    };
+    $openMin = $bound('dipEntryOpenMin', 0.70);
+    $openMax = $bound('dipEntryOpenMax', 0.80);
+    $buyMin = $bound('dipEntryBuyMin', 0.30);
+    $buyMax = $bound('dipEntryBuyMax', 0.40);
+    $enabled = $input['dipEntryEnabled'] ?? ($defaults['dipEntryEnabled'] ?? false);
+    return [
+        'dipEntryEnabled' => $enabled === true || $enabled === 'true' || $enabled === 1 || $enabled === '1',
+        'dipEntryOpenMin' => min($openMin, $openMax),
+        'dipEntryOpenMax' => max($openMin, $openMax),
+        'dipEntryBuyMin' => min($buyMin, $buyMax),
+        'dipEntryBuyMax' => max($buyMin, $buyMax),
+    ];
 }
 
 /**
@@ -3625,6 +3657,14 @@ function normalize_strategy_config(array $input, array $defaults): array
         // merge still sees the restriction and unchecking Over/Under in the shape group
         // actually clears it.
         'excludeOverUnderMarkets' => in_array('over-under', $excludedMarketShapes, true),
+        // The dip-entry rule: buy a favourite that has collapsed inside a fixture already
+        // under way. Two bands rather than one threshold -- where the market OPENED, and
+        // where it is trading NOW -- because the pattern is a fall, not a level. Off by
+        // default on every portfolio, and self-contained: tools/dip-entry-rule.mjs holds
+        // the rule, these five keys hold its configuration, and removing both removes the
+        // feature. See that file for why it needs its own watch rather than the scraped
+        // catalogue, which cannot see a fallen favourite at all.
+        ...normalize_dip_entry_rule(is_array($input) ? $input : [], $defaults),
         // Kept while older workflows are still in circulation. The three-value
         // marketType field above is the source of truth.
         'requireMostProbableOutcome' => $marketType === 'multi',

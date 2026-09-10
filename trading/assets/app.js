@@ -343,6 +343,12 @@ const els = {
   maxResolutionHours: document.querySelector("[data-max-resolution-hours]"),
   maxResolutionHoursLabel: document.querySelector("[data-max-resolution-hours-label]"),
   maxResolutionHoursRow: document.querySelector("[data-max-resolution-hours-row]"),
+  dipEntryEnabled: document.querySelector("[data-dip-entry-enabled]"),
+  dipEntryOpenMin: document.querySelector("[data-dip-entry-open-min]"),
+  dipEntryOpenMax: document.querySelector("[data-dip-entry-open-max]"),
+  dipEntryBuyMin: document.querySelector("[data-dip-entry-buy-min]"),
+  dipEntryBuyMax: document.querySelector("[data-dip-entry-buy-max]"),
+  dipEntryLabel: document.querySelector("[data-dip-entry-label]"),
   stopLossProbabilityFloor: document.querySelector("[data-stop-loss-probability-floor]"),
   stopLossProbabilityFloorLabel: document.querySelector("[data-stop-loss-probability-floor-label]"),
   settlementCloseBid: document.querySelector("[data-settlement-close-bid]"),
@@ -1267,6 +1273,55 @@ function stopLossReverseIsEnabled(config = {}) {
 function stopLossRiskLabel(config = {}) {
   const multiplier = stopLossRiskMultiplier(config);
   return multiplier > 0 ? `${percent(multiplier)} of net win` : "Off";
+}
+
+// The dip-entry rule, the dashboard's copy. The reference implementation is
+// tools/dip-entry-rule.mjs and a test holds the two against each other -- app.js cannot
+// import it, because it is served to a browser as one file.
+//
+// Buy a favourite that has collapsed inside a fixture already under way: it opened in the
+// first band, it is trading in the second one now, and the bet is on the comeback. Two
+// bands rather than one threshold, because the pattern is a fall and not a level.
+const DIP_ENTRY_RULE_DEFAULTS = { enabled: false, openMin: 0.7, openMax: 0.8, buyMin: 0.3, buyMax: 0.4 };
+
+function dipEntryBound(value, fallback) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return fallback;
+  const fraction = numeric > 1 ? numeric / 100 : numeric;
+  if (!Number.isFinite(fraction)) return fallback;
+  return Math.min(0.99, Math.max(0.01, Math.round(fraction * 10000) / 10000));
+}
+
+function dipEntryRuleFromConfig(config = {}) {
+  const openMin = dipEntryBound(config.dipEntryOpenMin, DIP_ENTRY_RULE_DEFAULTS.openMin);
+  const openMax = dipEntryBound(config.dipEntryOpenMax, DIP_ENTRY_RULE_DEFAULTS.openMax);
+  const buyMin = dipEntryBound(config.dipEntryBuyMin, DIP_ENTRY_RULE_DEFAULTS.buyMin);
+  const buyMax = dipEntryBound(config.dipEntryBuyMax, DIP_ENTRY_RULE_DEFAULTS.buyMax);
+  return {
+    // A band typed the wrong way round is an ordering slip and is swapped. Bands in the
+    // wrong PLACE relative to each other are reported as a fault instead -- see below.
+    enabled: config.dipEntryEnabled === true,
+    openMin: Math.min(openMin, openMax),
+    openMax: Math.max(openMin, openMax),
+    buyMin: Math.min(buyMin, buyMax),
+    buyMax: Math.max(buyMin, buyMax),
+  };
+}
+
+function dipEntryRuleFault(rule) {
+  return rule.buyMax >= rule.openMin
+    ? "the buy band must sit below the opening band, or the rule fires without a collapse"
+    : "";
+}
+
+// The one wording for this setting, so the typing preview, the saved render and the rules
+// card cannot describe it differently.
+function dipEntryRuleSummaryValue(rule) {
+  if (!rule.enabled) return "Off";
+  const bands = `opened ${probability(rule.openMin)}-${probability(rule.openMax)}`
+    + `, buy at ${probability(rule.buyMin)}-${probability(rule.buyMax)}`;
+  const fault = dipEntryRuleFault(rule);
+  return fault ? `Not applied - ${fault}` : `On: ${bands}, events under way only`;
 }
 
 // One reader for the probability floor's label, because the typing preview and the saved
@@ -5818,6 +5873,18 @@ function syncPortfolioParameterControls(configOverride = null, options = {}) {
   // The number typed is hours; the label reads it back in whichever unit is legible, so a
   // 168 stays recognisable as the week it is.
   if (els.maxResolutionHoursLabel) els.maxResolutionHoursLabel.textContent = formatHorizonHours(maxHours);
+  const dipEntry = dipEntryRuleFromConfig(config);
+  if (els.dipEntryEnabled) els.dipEntryEnabled.checked = dipEntry.enabled;
+  for (const [element, value] of [
+    [els.dipEntryOpenMin, dipEntry.openMin],
+    [els.dipEntryOpenMax, dipEntry.openMax],
+    [els.dipEntryBuyMin, dipEntry.buyMin],
+    [els.dipEntryBuyMax, dipEntry.buyMax],
+  ]) {
+    // Never while it is being typed into, or the normalizer rewrites the digit just entered.
+    if (element && document.activeElement !== element) element.value = String(Math.round(value * 100));
+  }
+  if (els.dipEntryLabel) els.dipEntryLabel.textContent = dipEntryRuleSummaryValue(dipEntry);
   const probabilityFloor = normalizeStopLossProbabilityFloor(config.stopLossProbabilityFloor);
   if (els.stopLossProbabilityFloor && document.activeElement !== els.stopLossProbabilityFloor) {
     els.stopLossProbabilityFloor.value = probabilityFloor == null ? "0" : String(Number((probabilityFloor * 100).toFixed(1)));
@@ -6710,6 +6777,18 @@ function parameterDraftFromControls(baseDraft = {}) {
   if (hasValue(els.stopLossProbabilityFloor)) {
     const floor = normalizeStopLossProbabilityFloor(numberValue(els.stopLossProbabilityFloor) / 100);
     draft.stopLossProbabilityFloor = floor == null ? 0 : floor;
+  }
+  if (els.dipEntryEnabled) draft.dipEntryEnabled = els.dipEntryEnabled.checked === true;
+  for (const [key, element] of [
+    ["dipEntryOpenMin", els.dipEntryOpenMin],
+    ["dipEntryOpenMax", els.dipEntryOpenMax],
+    ["dipEntryBuyMin", els.dipEntryBuyMin],
+    ["dipEntryBuyMax", els.dipEntryBuyMax],
+  ]) {
+    // An empty bound is left out rather than read as zero. That is the bug reported on
+    // "Close at certainty" and "Sell below probability": a field cleared for retyping wrote
+    // itself away as 0 and the setting was gone by the time the form was saved.
+    if (hasValue(element)) draft[key] = dipEntryBound(numberValue(element) / 100, null);
   }
   if (hasValue(els.settlementCloseBid)) {
     const bid = normalizeSettlementCloseBid(numberValue(els.settlementCloseBid) / 100);
@@ -9361,6 +9440,9 @@ function portfolioRuleRows(portfolio = {}) {
     ["Trade priority", priority],
     ["Market type", portfolioMarketTypeLabel(config.marketType)],
     ...(excludedMarketShapesSummaryValue(config) != null ? [["Excluded market shapes", excludedMarketShapesSummaryValue(config)]] : []),
+    // Listed only when it is on, because it is off on every portfolio by default and a row
+    // reading "Off" on all of them is noise on the card that has to fit on a phone.
+    ...(dipEntryRuleFromConfig(config).enabled ? [["Dip entry", dipEntryRuleSummaryValue(dipEntryRuleFromConfig(config))]] : []),
     ["Execution trigger", normalizeExecutionTrigger(config.executionTrigger) === "cron"
       ? `${executionTriggerLabel(config.executionTrigger)} · ${executionCronMinutesLabel(config.executionCronMinutes)}`
       : executionTriggerLabel(config.executionTrigger)],
@@ -9418,6 +9500,9 @@ function livePortfolioRuleRows() {
     ["Trade priority", priority],
     ["Market type", portfolioMarketTypeLabel(config.marketType)],
     ...(excludedMarketShapesSummaryValue(config) != null ? [["Excluded market shapes", excludedMarketShapesSummaryValue(config)]] : []),
+    // Listed only when it is on, because it is off on every portfolio by default and a row
+    // reading "Off" on all of them is noise on the card that has to fit on a phone.
+    ...(dipEntryRuleFromConfig(config).enabled ? [["Dip entry", dipEntryRuleSummaryValue(dipEntryRuleFromConfig(config))]] : []),
     ["Execution trigger", normalizeExecutionTrigger(config.executionTrigger) === "cron"
       ? `${executionTriggerLabel(config.executionTrigger)} · ${executionCronMinutesLabel(config.executionCronMinutes)}`
       : executionTriggerLabel(config.executionTrigger)],
@@ -10574,6 +10659,11 @@ const PORTFOLIO_CONFIG_HISTORY_LABELS = {
   selectionOrder: "Trade priority",
   marketType: "Market type",
   excludedMarketShapes: "Excluded market shapes",
+  dipEntryEnabled: "Dip entry",
+  dipEntryOpenMin: "Dip entry opening band from",
+  dipEntryOpenMax: "Dip entry opening band to",
+  dipEntryBuyMin: "Dip entry buy band from",
+  dipEntryBuyMax: "Dip entry buy band to",
   probabilitySource: "Probability source",
   minLiquidityUsdc: "Minimum volume",
   minNetYield: "Minimum net profit",
@@ -15666,6 +15756,44 @@ els.stopLossRiskMultiplier?.addEventListener("input", () => {
 // Split across input and change for the reason the multiplier above is: a keystroke on a
 // SAVED portfolio is a live instruction to the exit worker, and half a number is a different
 // stop. Typing previews; change commits and confirms.
+// The dip-entry rule's five controls. One handler, because the four bounds and the switch
+// are one setting: any of them changing rewrites the same summary line and saves together.
+// This is the only wiring the feature has -- removing it removes the control.
+function dipEntryControlChanged(persist) {
+  const current = dipEntryRuleFromConfig(
+    state.parameterDraftCreate ? (state.parameterDraft || {}) : portfolioConfigForMode(state.mode),
+  );
+  const updates = { dipEntryEnabled: els.dipEntryEnabled ? els.dipEntryEnabled.checked === true : current.enabled };
+  for (const [key, element, fallback] of [
+    ["dipEntryOpenMin", els.dipEntryOpenMin, current.openMin],
+    ["dipEntryOpenMax", els.dipEntryOpenMax, current.openMax],
+    ["dipEntryBuyMin", els.dipEntryBuyMin, current.buyMin],
+    ["dipEntryBuyMax", els.dipEntryBuyMax, current.buyMax],
+  ]) {
+    // A field cleared for retyping keeps the saved bound instead of writing itself away as
+    // zero, which is the failure reported on "Close at certainty" and "Sell below
+    // probability": the value was gone before the form was saved.
+    const typed = element && !parameterDraftInputIsEmpty(element)
+      ? dipEntryBound(numberValue(element) / 100, null)
+      : null;
+    updates[key] = typed == null ? fallback : typed;
+  }
+  if (els.dipEntryLabel) els.dipEntryLabel.textContent = dipEntryRuleSummaryValue(dipEntryRuleFromConfig(updates));
+  if (updateParameterDraft(updates)) return;
+  if (!persist) return;
+  updatePortfolioConfigForMode(state.mode, updates);
+  savePortfolioConfigSoon();
+  rerenderCurrentDashboard();
+}
+
+for (const element of [els.dipEntryOpenMin, els.dipEntryOpenMax, els.dipEntryBuyMin, els.dipEntryBuyMax]) {
+  // Typed: preview only. Committed: saved. A half-typed band would otherwise be persisted
+  // on every keystroke and briefly put a nonsense rule in force.
+  element?.addEventListener("input", () => dipEntryControlChanged(false));
+  element?.addEventListener("change", () => dipEntryControlChanged(true));
+}
+els.dipEntryEnabled?.addEventListener("change", () => dipEntryControlChanged(true));
+
 els.stopLossProbabilityFloor?.addEventListener("input", () => {
   if (parameterDraftInputIsEmpty(els.stopLossProbabilityFloor)) {
     if (els.stopLossProbabilityFloorLabel) els.stopLossProbabilityFloorLabel.textContent = "-";
