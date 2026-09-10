@@ -63,6 +63,7 @@ jobs:
           # vycerpany denni limit - to se necha na dalsi spusteni.
           max_wait="${RESEARCH_MAX_WAIT:-300}"
           idle=0
+          locked=0
           for call in $(seq 1 "$calls"); do
             if [ "$(date +%s)" -ge "$deadline" ]; then
               echo "Casovy strop serie tiku vyprsel, konci se u tiku ${call}."
@@ -92,6 +93,21 @@ jobs:
               echo "Provider drzi dlouhou pauzu (${wait_for} s), serie tiku konci."
               break
             fi
+            # Drzeny zamek znamena, ze predchozi tik jeste pracuje (nebo ho hosting
+            # ukoncil a zamek dobiha). Merene na produkci: od 54. tiku uz kazdy jen
+            # hlasil "preskoceno" a smycka na tom profrcela zbytek serie po 1,3 s -
+            # sedm tiku z rozpoctu za nic. Ma se pockat, ne hamerit.
+            if grep -q "preskoceno, predchozi beh jeste bezi" /tmp/ai-research-body.txt; then
+              locked=$((locked + 1))
+              if [ "$locked" -ge 10 ]; then
+                echo "Zamek drzi dlouho, serie tiku konci; dalsi spusteni navaze."
+                break
+              fi
+              echo "Predchozi beh jeste pracuje, cekam 30 s."
+              sleep 30
+              continue
+            fi
+            locked=0
             # Prazdna fronta se muze objevit i kratkodobe (ceka se na scraping), proto
             # se konci teprve po dvou prazdnych tikach za sebou.
             if grep -qE "nebylo co zpracovat|bez modelu uz neni co delat" /tmp/ai-research-body.txt; then

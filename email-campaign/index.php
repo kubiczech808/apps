@@ -41,6 +41,14 @@ const DB_CLEANUP_BATCH_ROWS = 2000;
 // beh neni dotazeny, nezaklada se novy seed - proto musi mit konec, jinak by jeden
 // nedotazitelny subjekt zastavil celou frontu.
 const AI_RESEARCH_FINISH_ATTEMPTS_MAX = 3;
+/**
+ * Pod tuto jistotu uz plan nema smysl pouzit. Merene na skutecnych vystupech:
+ * pouzitelne plany hlasily 85-90, kdezto beh #159 ("Zajisteni sidla firem") hlasil 35
+ * a v pochopeni firmy sam napsal, ze web prezentuje repliky hodinek a jde nejspis o
+ * napadenou prezentaci - a presto se podle nazvu firmy naplanovalo cileni na ucetni
+ * kancelare. Kdyz model rekne, ze subjektu nerozumi, ma se mu verit.
+ */
+const AI_RESEARCH_MIN_PLAN_CONFIDENCE = 50;
 // Kolik kroku scrapovaci davky posune jeden tik, kdyz uz behu nic jineho nechybi.
 const AI_RESEARCH_BATCH_STEPS_PER_TICK = 8;
 // Kolik po sobe dokoncenych behu bez jednoho noveho kontaktu znamena, ze zdroj na
@@ -6045,6 +6053,15 @@ function aiResearchPlan(array $config, array $seed, ?array &$fetchedContext = nu
         }
         $plan['filters'] = $filters ?: ['Kontakt musi odpovidat navrzenemu B2B segmentu a mit dohledatelny email.'];
         $plan = aiResearchEnrichPlan($plan, $seed);
+        // Nizka jistota se neresi opakovanim - opakovany pozadavek na tentyz web da
+        // stejne nizkou jistotu a jen spotrebuje kvotu. Seed se proto oznaci jako
+        // nevhodny a fronta jde dal, presne jako u seedu bez citelneho webu.
+        $lowConfidence = aiResearchPlanConfidenceTooLow($plan);
+        if ($lowConfidence !== '') {
+            $plan['seed_unsuitable'] = true;
+            $plan['seed_unsuitable_reason'] = $lowConfidence;
+            return $plan;
+        }
         aiResearchAssertPlanQuality($plan);
         return $plan;
     } catch (Throwable $e) {
@@ -6130,6 +6147,26 @@ function aiResearchAssertPlanQuality(array $plan): void
     if (count($candidateSegments) < 3) {
         throw new AiResearchTemporaryException('AI plan_generation neporovnal dostatek kandidatnich segmentu.');
     }
+}
+
+/**
+ * Rekl model sam, ze subjektu nerozumi? Pak plan neni k niceho, i kdyz projde
+ * kontrolami delky a konkretnosti: cileni pak vznika z nazvu firmy, ne z jejiho webu.
+ * Vraci duvod pro seed_unsuitable, nebo prazdny string.
+ */
+function aiResearchPlanConfidenceTooLow(array $plan): string
+{
+    if (!isset($plan['confidence'])) {
+        return '';
+    }
+    $confidence = (int)$plan['confidence'];
+    if ($confidence <= 0 || $confidence >= AI_RESEARCH_MIN_PLAN_CONFIDENCE) {
+        return '';
+    }
+    $notes = trim((string)($plan['confidence_notes'] ?? ''));
+    return 'model si planem neni jisty (' . $confidence . ' %, pod hranici '
+        . AI_RESEARCH_MIN_PLAN_CONFIDENCE . ' %)'
+        . ($notes !== '' ? ': ' . truncatePlainText($notes, 200) : '');
 }
 
 function aiResearchAssertDraftQuality(string $subject, string $html, array $plan): void
@@ -23794,7 +23831,57 @@ function aiResearchSeedOutreachIsSpecific(string $subject, string $html, array $
     if ($segment !== '' && !str_contains($folded, aiResearchFoldText(mb_substr($segment, 0, 24)))) {
         return 'text nezminuje cilovy segment';
     }
+    // Predmet je jediny radek, ktery clovek precte vzdy, a musi mluvit o tom samem
+    // segmentu jako plan. Merene na behu #156: plan cilil na prazske IT firmy
+    // (keyword "softwarova firma"), ale predmet zval k "akvizici logistickych firem
+    // v okoli D1". Telo segment zminovalo, takze puvodni kontrola to propustila.
+    if (!aiResearchSubjectMatchesSegment($subject, $plan, $segment)) {
+        return 'predmet mluvi o jinem segmentu, nez na ktery cili plan';
+    }
     return '';
+}
+
+/**
+ * Zmiuje predmet ten segment, na ktery plan cili? Cestina sklonuje ("stavebni firmy"
+ * v planu vs "stavebnich firem" v predmetu), takze se porovnavaji zaklady slov, ne
+ * cela slova. Obecna slova jako "firmy" nebo "spolecnost" se vynechavaji - ta sedi
+ * na cokoli a prave kvuli nim by kontrola propustila i predmet o jinem odvetvi.
+ */
+function aiResearchSubjectMatchesSegment(string $subject, array $plan, string $segment = ''): bool
+{
+    $folded = aiResearchFoldText($subject);
+    if ($folded === '') {
+        return false;
+    }
+    $sources = [
+        aiResearchPrimaryKeyword($plan),
+        $segment,
+        (string)($plan['audience_label'] ?? ''),
+        (string)($plan['primary_segment'] ?? ''),
+    ];
+    $generic = ['firma', 'firmy', 'firem', 'firmam', 'firemni', 'spolecnost', 'spolecnosti',
+        'podnik', 'podniky', 'sluzby', 'sluzeb', 'zakaznik', 'zakaznici', 'klient', 'klienti',
+        'provoz', 'provozy', 'subjekt', 'subjekty', 'ktere', 'ktera', 'ktery', 'resici',
+        'hledajici', 'potrebou', 'potrebuji', 'vlastnim', 'zamerene'];
+    $stems = [];
+    foreach ($sources as $source) {
+        foreach (preg_split('/[^\p{L}\p{N}]+/u', aiResearchFoldText($source)) ?: [] as $word) {
+            if (mb_strlen($word) < 5 || in_array($word, $generic, true)) {
+                continue;
+            }
+            $stems[mb_substr($word, 0, 5)] = true;
+        }
+    }
+    if (!$stems) {
+        // Plan nedava zadne konkretni slovo k porovnani, takze predmet nelze vyvratit.
+        return true;
+    }
+    foreach (array_keys($stems) as $stem) {
+        if (str_contains($folded, $stem)) {
+            return true;
+        }
+    }
+    return false;
 }
 
 /**
