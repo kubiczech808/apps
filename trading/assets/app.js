@@ -11149,7 +11149,15 @@ function liveTokenOwnerMode(row) {
 function belongsToLivePortfolio(row, mode = state.mode) {
   const wantsFixedEntry = isFixedEntryMode(mode);
   const tokenId = String(row?.tokenId || row?.assetId || "");
-  if (!tokenId) return !wantsFixedEntry;
+  // Reported: a custom live portfolio listed closed trades that were plainly not its own,
+  // including a Bitcoin market in a sports/esports portfolio. They were REDEEMED rows with
+  // every number blank -- unmatched redemptions, which retainUnmatchedRedeem() writes with
+  // tokenId null because Polymarket's activity feed reports a redemption against the
+  // condition rather than the outcome token. With no token there is nothing to attribute
+  // on: no run log can name the row and no price can stand in for one. So it falls to the
+  // base Live portfolio, the documented home for an unclaimed row, and NOT to every live
+  // portfolio at once -- which is what returning !wantsFixedEntry alone did.
+  if (!tokenId) return !wantsFixedEntry && !customLivePortfolioIdFromMode(mode);
   // A log that claims this row settles it, whichever portfolio wrote that log.
   const owner = liveTokenOwnerMode(row);
   if (owner) return owner === normalizeMode(mode);

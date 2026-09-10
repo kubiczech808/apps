@@ -6114,6 +6114,18 @@ test("live attribution: the diagnosis tool splits closed rows exactly as the das
     { tokenId: "zzz", status: "WON", entryPrice: 0.9, totalCostUsdc: 5, realizedPnlUsdc: 0.55 },
     // Only a rejected order names this token, and a rejection bought nothing.
     { tokenId: "ddd", status: "LOST", entryPrice: 0.79, totalCostUsdc: 5, realizedPnlUsdc: -5 },
+    // Reported: an unmatched redemption. retainUnmatchedRedeem() writes it with tokenId
+    // null -- Polymarket's activity feed reports a redemption against the condition, not
+    // the outcome token -- and with no stake and no P/L, because the buy it belongs to is
+    // outside the retained history. There is nothing here to attribute on, so it may reach
+    // the base Live portfolio and nothing else; being claimed by every live portfolio at
+    // once is how a Bitcoin market came to sit in a sports/esports portfolio.
+    {
+      id: "redeem-activity:0xabc", tokenId: null, status: "REDEEMED",
+      question: "Will Bitcoin reach $80,000 in August?", outcome: "No",
+      entryPrice: null, stakeUsdc: null, totalCostUsdc: null, realizedPnlUsdc: null,
+      reconciliationOnly: true,
+    },
   ];
 
   // app.js's own answer, evaluated against a `state` shaped the way the dashboard holds it.
@@ -6160,12 +6172,12 @@ test("live attribution: the diagnosis tool splits closed rows exactly as the das
   // And the split it actually produces, so a change to BOTH copies still has to be meant.
   const owned = (mode) => closed
     .filter((row) => diagnosis.belongsToLiveMode(row, mode, attribution).owned)
-    .map((row) => row.tokenId).sort();
-  assert.deepEqual(owned("live"), ["aaa", "ccc", "ddd", "zzz"],
+    .map((row) => row.tokenId || row.id).sort();
+  assert.deepEqual(owned("live"), ["aaa", "ccc", "ddd", "redeem-activity:0xabc", "zzz"],
     "the base Live portfolio keeps every row no log claims -- a default, not a claim");
   assert.deepEqual(owned("live-5050"), ["bbb"]);
   assert.deepEqual(owned("live-custom-esportslive"), ["eee"],
-    "a custom live portfolio claims only what its own log names");
+    "a custom live portfolio claims only what its own log names, tokenless rows included");
 
   // The basis has to survive alongside the verdict. Reading Live's 4 rows as 4 positive
   // claims is how "Live traded this" gets asserted about a row nothing recorded.

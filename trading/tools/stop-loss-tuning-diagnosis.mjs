@@ -217,7 +217,11 @@ function boughtAtFixedEntryPrice(row, attribution) {
 export function belongsToLiveMode(row, mode, attribution) {
   const wantsFixedEntry = mode === "live-5050";
   const tokenId = String(row?.tokenId || row?.assetId || "");
-  if (!tokenId) return { owned: !wantsFixedEntry, basis: "no-token" };
+  // A tokenless row cannot be attributed at all -- an unmatched redemption arrives this way
+  // -- so it falls to the base Live portfolio only, never to every live portfolio at once.
+  if (!tokenId) {
+    return { owned: !wantsFixedEntry && !mode.startsWith("live-custom-"), basis: "no-token" };
+  }
   const owner = liveTokenOwnerMode(row, attribution);
   if (owner) return { owned: owner === mode, basis: "run-log" };
   const looksLikeFixedEntry = boughtAtFixedEntryPrice(row, attribution);

@@ -4597,8 +4597,10 @@ test("5050: it is its own live portfolio, not a copy of a paper one", async () =
     "and 5050's run log is its own");
 
   // A token nobody claims belongs to Live: attribution must never hide a row from
-  // both tabs, and a failed fetch must not reassign 5050's positions wholesale.
-  assert.match(app, /if \(!tokenId\) return !wantsFixedEntry;/);
+  // both tabs, and a failed fetch must not reassign 5050's positions wholesale. A row
+  // with no token at all lands there too -- and only there, never in a custom live
+  // portfolio as well, which is what put an unmatched redemption in every live tab.
+  assert.match(app, /if \(!tokenId\) return !wantsFixedEntry && !customLivePortfolioIdFromMode\(mode\);/);
   assert.match(app, /if \(fixedEntryResult\.status === "fulfilled"\) state\.live5050ExecutionState/);
 
   // Its own identity, and automation off by default: this is the portfolio that
