@@ -1,0 +1,97 @@
+name: Email Campaign Research Quality
+
+# Kvalita vystupu AI research po jednotlivych subjektech. Nic nemeni, jen cte.
+#
+# Proc to existuje: propustnost na free tieru se zvysuje tim, ze se setri pozadavky -
+# zebrikem modelu (po vycerpani nejsilnejsiho se spadne o stupen niz) a davkovanim
+# vic vystupu do jedne odpovedi. Oboji muze snizit kvalitu, a kvalita se neposuzuje
+# z dojmu: tady jsou texty, ktere model napsal, a signaly srovnatelne mezi modely.
+on:
+  workflow_dispatch:
+    inputs:
+      limit:
+        description: 'Kolik poslednich behu vypsat'
+        required: false
+        default: '8'
+
+concurrency:
+  group: email-campaign-research-quality
+  cancel-in-progress: false
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Read AI research output quality
+        env:
+          APP_DATABASE_NAME: ${{ secrets.APP_DATABASE_NAME }}
+          APP_DATABASE_USERNAME: ${{ secrets.MYSQL_EMAILING_DB_USERNAME }}
+          APP_DATABASE_PASSWORD: ${{ secrets.MYSQL_EMAILING_DB_PASSWORD }}
+          QUALITY_LIMIT: ${{ github.event.inputs.limit }}
+        run: |
+          if [ -z "$APP_DATABASE_NAME" ] || [ -z "$APP_DATABASE_USERNAME" ] || [ -z "$APP_DATABASE_PASSWORD" ]; then
+            echo "Missing database secrets; cannot derive cron token."
+            exit 1
+          fi
+          TOKEN=$(python3 - <<'PY'
+          import hashlib
+          import os
+
+          material = "email-campaign-cron:" + os.environ["APP_DATABASE_NAME"] + ":" + os.environ["APP_DATABASE_USERNAME"] + ":" + os.environ["APP_DATABASE_PASSWORD"]
+          print(hashlib.sha256(material.encode("utf-8")).hexdigest())
+          PY
+          )
+          limit="${QUALITY_LIMIT:-8}"
+          curl --show-error --silent --max-time 90 --output /tmp/quality.json \
+            "https://www.osobnizkusenosti.cz/email-campaign/?cron=${TOKEN}&quality_report=1&limit=${limit}"
+          python3 - <<'PY'
+          import json
+
+          try:
+              with open("/tmp/quality.json", encoding="utf-8") as handle:
+                  report = json.load(handle)
+          except Exception as exc:                      # noqa: BLE001
+              print("Report se nepodarilo precist: %s" % exc)
+              with open("/tmp/quality.json", encoding="utf-8", errors="replace") as handle:
+                  print(handle.read()[:2000])
+              raise SystemExit(1)
+
+          if "error" in report:
+              print("Report vratil chybu: %s" % report["error"])
+              raise SystemExit(1)
+
+          print("=== NASTAVENI MODELU ===")
+          print("  aktualni model: %s" % report.get("current_model", "?"))
+          exhausted = report.get("exhausted_models") or []
+          print("  vycerpane dnes: %s" % (", ".join(exhausted) if exhausted else "zadny"))
+
+          print()
+          print("=== KVALITA PODLE MODELU ===")
+          by_model = report.get("by_model") or {}
+          if not by_model:
+              print("  zadny beh nema zaznam o modelu")
+          for model, stats in by_model.items():
+              print("  %s: behu %s, prumerna confidence %s, prumerne segmentu %s, tenkych vystupu %s" % (
+                  model, stats.get("runs", "?"), stats.get("avg_confidence", "?"),
+                  stats.get("avg_candidate_segments", "?"), stats.get("thin_outputs", "?")))
+
+          print()
+          print("=== JEDNOTLIVE SUBJEKTY ===")
+          for run in report.get("runs") or []:
+              print()
+              print("--- beh #%s  %s  [%s%s]" % (
+                  run.get("run_id"), run.get("subject"), run.get("status"),
+                  ", uzavreny" if run.get("closed") else ""))
+              print("  model planu: %s | osloveni: %s" % (
+                  run.get("model_plan") or "-", run.get("model_draft") or "-"))
+              print("  segment: %s" % (run.get("primary_segment") or "-"))
+              print("  cilovka: %s" % (run.get("audience_label") or "-"))
+              print("  keyword: %s" % (run.get("scraping_keyword") or "-"))
+              print("  pochopeni firmy: %s" % (run.get("business_understanding") or "-"))
+              print("  duvod cileni: %s" % (run.get("targeting_reason") or "-"))
+              print("  subject osloveni: %s" % (run.get("seed_outreach_subject") or "-"))
+              print("  segmentu porovnano %s, zamitnutych %s, variant %s, confidence %s, kontaktu %s/%s" % (
+                  run.get("candidate_segments"), run.get("rejected_alternatives"),
+                  run.get("outreach_variants"), run.get("confidence"),
+                  run.get("accepted"), run.get("found")))
+          PY
