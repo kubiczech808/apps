@@ -50,3 +50,13 @@ test('the key is read from the field the form actually contains', () => {
   assert.match(js, /\$\('gate-key'\)\.value/)
   assert.ok(html.includes('id="gate-key"'))
 })
+
+test('decision facts carry signal-state classes', () => {
+  for (const className of ['fact-met', 'fact-unmet', 'fact-neutral']) {
+    assert.ok(css.includes(`.${className}`), `app.css must style .${className}`)
+  }
+  assert.match(js, /DECISION_SIGNAL_STATES/)
+  assert.match(js, /className:\s*`fact fact-\$\{fact\.status\}`/)
+  assert.match(js, /ATR.*atrMin.*atrMax/s)
+  assert.match(js, /R\/R.*minRR/s)
+})

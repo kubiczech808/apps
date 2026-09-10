@@ -14,6 +14,7 @@
 const KEY_STORAGE = 'btc-bot-key'
 const REFRESH_MS = 30_000
 const SATS_PER_BTC = 1e8
+const DECISION_SIGNAL_STATES = new Set(['met', 'unmet', 'neutral'])
 
 const $ = (id) => document.getElementById(id)
 
@@ -68,6 +69,31 @@ const el = (tag, attributes = {}, children = []) => {
   }
   return node
 }
+
+const strategySetting = (key, fallback) => {
+  const value = Number(state?.settings?.strategy?.[key])
+  return Number.isFinite(value) ? value : fallback
+}
+
+const strategyFlag = (key, fallback) => {
+  const value = state?.settings?.strategy?.[key]
+  return value === undefined ? fallback : Boolean(value)
+}
+
+const decisionFact = (text, status = 'neutral', title = null) => ({
+  text,
+  status: DECISION_SIGNAL_STATES.has(status) ? status : 'neutral',
+  title,
+})
+
+const decisionFactElement = (fact) =>
+  el('span', {
+    className: `fact fact-${fact.status}`,
+    text: fact.text,
+    title: fact.title,
+  })
+
+const decisionIsBlockedBy = (decision, pattern) => pattern.test(String(decision?.reason ?? ''))
 
 // ── api ───────────────────────────────────────────────────────────────────
 
@@ -249,23 +275,86 @@ const renderDecision = () => {
 
   const context = decision.context ?? {}
   const bias = { up: 'vzestupný', down: 'sestupný', range: 'do strany' }[context.htfBias] ?? null
+  const side = context.htfBias === 'up' ? 'long' : context.htfBias === 'down' ? 'short' : null
+  const trendChangedAgainst =
+    (context.htfBias === 'up' && context.htfEvent === 'CHoCH_DOWN') ||
+    (context.htfBias === 'down' && context.htfEvent === 'CHoCH_UP')
+  const atrMin = strategySetting('atrPctMin', 0.15)
+  const atrMax = strategySetting('atrPctMax', 4.0)
+  const atrOk = Number.isFinite(context.atrPct) && context.atrPct >= atrMin && context.atrPct <= atrMax
+  const zoneMaxDistanceAtr = strategySetting('zoneMaxDistanceAtr', 1.0)
+  const zoneDistanceAtr =
+    context.zone && Number.isFinite(context.price) && Number.isFinite(context.ltfAtr) && context.ltfAtr > 0 && side
+      ? Math.max(0, side === 'long' ? context.price - context.zone.high : context.zone.low - context.price) / context.ltfAtr
+      : null
+  const requireSweep = strategyFlag('requireSweep', true)
+  const requireImbalance = strategyFlag('requireImbalance', false)
+  const requireTrigger = strategyFlag('requireTrigger', true)
+  const minRR = strategySetting('minRR', 2.0)
+  const planRr = Number(decision.plan?.rr)
+  const rrBlocked = decisionIsBlockedBy(decision, /reward\/risk/i)
   const facts = [
-    bias ? `4h trend ${bias}` : null,
-    Number.isFinite(context.price) ? `cena ${price(context.price)}` : null,
-    Number.isFinite(context.atrPct) ? `ATR ${pct(context.atrPct, 2)}` : null,
-    context.zone ? `zóna ${price(context.zone.low)}–${price(context.zone.high)}` : null,
+    bias
+      ? decisionFact(
+          `4h trend ${bias}`,
+          ['up', 'down'].includes(context.htfBias) && !trendChangedAgainst ? 'met' : 'unmet',
+          trendChangedAgainst ? 'Trend právě udělal CHoCH proti směru, takže vstup stojí.' : 'Vyšší timeframe musí mít směr.'
+        )
+      : null,
+    Number.isFinite(context.price) ? decisionFact(`cena ${price(context.price)}`) : null,
+    Number.isFinite(context.atrPct)
+      ? decisionFact(
+          `ATR ${pct(context.atrPct, 2)} · ${nf(2).format(atrMin)}–${nf(2).format(atrMax)} %`,
+          atrOk ? 'met' : 'unmet',
+          'Vstup se bere jen, když volatilita není moc tichá ani moc divoká.'
+        )
+      : null,
+    context.zone
+      ? decisionFact(`zóna ${price(context.zone.low)}–${price(context.zone.high)}`, 'met', 'Platná zóna ve směru vyššího trendu.')
+      : decisionIsBlockedBy(decision, /no (demand|supply) zone/i)
+        ? decisionFact('zóna chybí', 'unmet', 'Bez zóny ve směru trendu bot nevstupuje.')
+        : null,
+    zoneDistanceAtr !== null
+      ? decisionFact(
+          `vzdálenost ${nf(2).format(zoneDistanceAtr)} ATR · max ${nf(2).format(zoneMaxDistanceAtr)}`,
+          zoneDistanceAtr <= zoneMaxDistanceAtr ? 'met' : 'unmet',
+          'Cena musí být u zóny, ne daleko od ní.'
+        )
+      : null,
     context.zone && context.zone.swept !== undefined
-      ? `sweep ${context.zone.swept ? 'ano' : 'ne'}`
+      ? decisionFact(
+          `sweep ${context.zone.swept ? 'ano' : 'ne'}`,
+          requireSweep ? (context.zone.swept ? 'met' : 'unmet') : 'neutral',
+          requireSweep ? 'Sweep je zapnutý filtr kvality zóny.' : 'Sweep je v nastavení vypnutý, takže jen informativně.'
+        )
       : null,
     context.zone && context.zone.imbalance !== undefined
-      ? `imbalance ${context.zone.imbalance ? 'ano' : 'ne'}`
+      ? decisionFact(
+          `imbalance ${context.zone.imbalance ? 'ano' : 'ne'}`,
+          requireImbalance ? (context.zone.imbalance ? 'met' : 'unmet') : 'neutral',
+          requireImbalance ? 'Imbalance je zapnutý filtr kvality zóny.' : 'Imbalance je v nastavení vypnutý, takže jen informativně.'
+        )
       : null,
-    context.confirmation ? `spouštěč ${context.confirmation}` : null,
+    context.confirmation
+      ? decisionFact(
+          `spouštěč ${context.confirmation}`,
+          requireTrigger ? 'met' : 'neutral',
+          requireTrigger ? 'Uzavřená 1h svíčka potvrdila reakci na zóně.' : 'Trigger je v nastavení vypnutý, takže jen informativně.'
+        )
+      : context.zone && (Array.isArray(context.patterns) || decisionIsBlockedBy(decision, /no (bullish|bearish) trigger/i))
+        ? decisionFact('spouštěč chybí', requireTrigger ? 'unmet' : 'neutral', 'Bez potvrzovací svíčky bot nevstupuje.')
+        : null,
+    Number.isFinite(planRr)
+      ? decisionFact(`R/R ${nf(2).format(planRr)} · min ${nf(2).format(minRR)}`, planRr >= minRR ? 'met' : 'unmet')
+      : rrBlocked
+        ? decisionFact(`R/R pod ${nf(2).format(minRR)}`, 'unmet', 'Potenciální obchod nedává minimální odměnu vůči riziku.')
+        : null,
+    (decision.gates ?? []).length ? decisionFact('portfolio gate ne', 'unmet', 'Strategie viděla signál, ale účetní/pravidlový gate ho nepustil.') : null,
   ].filter(Boolean)
 
   if (facts.length) {
     box.append(
-      el('div', { className: 'decision-facts' }, facts.map((fact) => el('span', { className: 'fact', text: fact })))
+      el('div', { className: 'decision-facts' }, facts.map(decisionFactElement))
     )
   }
 
