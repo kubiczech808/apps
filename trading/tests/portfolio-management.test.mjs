@@ -5029,3 +5029,75 @@ test("archiving: every archivable portfolio can be restored, base live included"
   // And the promise the panel makes has to stay on it, because it is the whole point.
   assert.match(render, /Every trade, run log and statistic they hold is kept/);
 });
+
+// Asked for: try a winning paper portfolio in production on one click -- a live portfolio
+// with the same parameters, switched off. The value is in what does NOT get copied.
+test("copy to live: every parameter carries over except the three that must not", () => {
+  const prefill = new Function("normalizePortfolioAccountType", `
+    ${extractFunction(APP, "livePrefillFromPaperPortfolio")}
+    return livePrefillFromPaperPortfolio;
+  `)((value) => value);
+
+  // "55+ underway" as it actually stands, plus the paper-only fields.
+  const paper = {
+    displayName: "55+ underway",
+    minProbability: 0.55,
+    maxProbability: null,
+    stakeUsdc: 5,
+    stopLossRiskMultiplier: 0.25,
+    stopLossProbabilityFloor: 0.49,
+    settlementCloseBid: 0.999,
+    reverseOnStopLoss: true,
+    excludedMarketShapes: ["exact-score"],
+    liveEventMode: "only",
+    selectionOrder: "highest_ev_pa_first",
+    // The three that must not survive the copy, and one paper-only leftover.
+    initialUsdc: 100,
+    archived: true,
+    automationEnabled: true,
+    custom: true,
+  };
+  const copied = prefill(paper, "55+ underway live");
+
+  // Automation off is the whole safety property: a copy that starts trading on creation is
+  // not a copy, it is a live order.
+  assert.equal(copied.automationEnabled, false);
+  // Paper capital is play money and must not become a live order size. It is also the one
+  // field confirmParameterModal insists on, so leaving it out is what forces the decision.
+  assert.ok(!("initialUsdc" in copied), "a paper portfolio's capital must not seed a live one");
+  // Copying an archived experiment has to produce a visible portfolio.
+  assert.ok(!("archived" in copied));
+
+  // Everything the portfolio was measured under does carry, stake included: a copy that
+  // quietly traded a different size would not be the thing that was measured.
+  for (const [key, value] of Object.entries({
+    minProbability: 0.55, stakeUsdc: 5, stopLossRiskMultiplier: 0.25,
+    stopLossProbabilityFloor: 0.49, settlementCloseBid: 0.999, reverseOnStopLoss: true,
+    liveEventMode: "only", selectionOrder: "highest_ev_pa_first",
+  })) assert.deepEqual(copied[key], value, `${key} has to survive the copy`);
+  assert.deepEqual(copied.excludedMarketShapes, ["exact-score"]);
+  assert.equal(copied.displayName, "55+ underway live");
+});
+
+test("copy to live: the control is offered only where it means something, and creates live", () => {
+  // The opener has to be able to start as live at all; it was hardcoded to paper.
+  assert.match(APP, /function openCreatePortfolioModal\(prefill = \{\}, trigger = null, accountType = "paper"\)/);
+  assert.match(APP, /const strategyId = type === "live" \? newLivePortfolioId\(label\) : newPaperPortfolioId\(label\)/);
+  // And it has to check the LIVE limit when creating live, not the paper one.
+  assert.match(APP, /canCreateLivePortfolio\(\) \? null : `live portfolio limit reached/);
+
+  // Offered for an existing paper portfolio only: a live one is already live.
+  const sync = extractFunction(APP, "syncPortfolioParameterControls");
+  assert.match(sync, /const copyable = !state\.parameterDraftCreate && !isLivePortfolioMode\(mode\);/);
+  assert.match(sync, /els\.parameterCopyToLive\.hidden = !copyable;/);
+
+  // The handler passes "live" through, or it would silently create another paper portfolio.
+  const handler = /const copyToLiveButton = event\.target\.closest\("\[data-parameter-copy-to-live\]"\);[\s\S]*?\n    return;\n  \}/.exec(APP);
+  assert.ok(handler, "the copy-to-live click handler is missing");
+  assert.match(handler[0], /openCreatePortfolioModal\(\s*livePrefillFromPaperPortfolio\([\s\S]*?"live",\s*\)/);
+  // And it says what happened, because "automation is off" is the thing to know.
+  assert.match(handler[0], /Automation is OFF; set the initial capital and save/);
+
+  const html = readFileSync(new URL("../index.html", import.meta.url), "utf8");
+  assert.match(html, /data-parameter-copy-to-live hidden/);
+});

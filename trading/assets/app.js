@@ -400,6 +400,7 @@ const els = {
   parameterModalClose: document.querySelector("[data-parameter-modal-close]"),
   parameterModalConfirm: document.querySelector("[data-parameter-modal-confirm]"),
   parameterModalArchive: document.querySelector("[data-parameter-modal-archive]"),
+  parameterCopyToLive: document.querySelector("[data-parameter-copy-to-live]"),
   parameterModalStatus: document.querySelector("[data-parameter-modal-status]"),
   createPortfolio: document.querySelector("[data-create-portfolio]"),
   archivedPortfolios: document.querySelector("[data-archived-portfolios]"),
@@ -5911,6 +5912,14 @@ function syncPortfolioParameterControls(configOverride = null, options = {}) {
         : paperStrategyIdFromMode(mode))
       : "";
   }
+  if (els.parameterCopyToLive) {
+    // Only an existing paper portfolio has anything to copy: a live one is already live,
+    // and one being created does not exist yet. Kept out of the way rather than disabled,
+    // because on the other modes it is not a refusal -- it is simply not the question.
+    const copyable = !state.parameterDraftCreate && !isLivePortfolioMode(mode);
+    els.parameterCopyToLive.hidden = !copyable;
+    els.parameterCopyToLive.dataset.portfolioId = copyable ? paperStrategyIdFromMode(mode) : "";
+  }
   const cronMinutes = normalizeExecutionCronMinutes(config.executionCronMinutes);
   if (els.executionCronMinutes) els.executionCronMinutes.value = String(cronMinutes);
   if (els.executionCronMinutesLabel) els.executionCronMinutesLabel.textContent = executionCronMinutesLabel(cronMinutes);
@@ -6208,24 +6217,53 @@ function switchCreatePortfolioType(type) {
  * whatever the caller already knows -- a statistics row passes the rule it was measured
  * under -- so the created portfolio trades what that row describes.
  */
-function openCreatePortfolioModal(prefill = {}, trigger = null) {
+// Every parameter of a paper portfolio, ready to be handed to the live create form.
+//
+// Asked for: try "55+ underway" in production without retyping fifteen fields. So this is
+// a copy, and the three fields that must NOT be copied are the point of it:
+//
+//   automationEnabled  false, always. A live portfolio that starts trading the moment it
+//                      is created is not a copy, it is a live order. It goes on when the
+//                      person says so.
+//   initialUsdc        dropped. A paper portfolio's capital is play money; the live one
+//                      needs a real figure, and confirmParameterModal already refuses to
+//                      create a live portfolio without one -- which is the one field left
+//                      to fill in.
+//   archived           false, so copying an archived experiment produces a visible one.
+//
+// stakeUsdc DOES carry over: paper and live both size from it, and a copy that quietly
+// traded a different stake would not be the thing that was measured.
+function livePrefillFromPaperPortfolio(config, displayName) {
+  const {
+    initialUsdc, archived, custom, automationEnabled,
+    fixedEntryPrice, fixedEntryPriceHistory, stakePerOrderUsdc,
+    ...carried
+  } = config || {};
+  return { ...carried, displayName, automationEnabled: false };
+}
+
+function openCreatePortfolioModal(prefill = {}, trigger = null, accountType = "paper") {
   if (!els.parameterModal) return;
-  const blocked = createPaperPortfolioBlockedReason();
+  const type = normalizePortfolioAccountType(accountType);
+  const blocked = type === "live"
+    ? (canCreateLivePortfolio() ? null : `live portfolio limit reached (${CUSTOM_LIVE_PORTFOLIO_LIMIT});`
+      + " archive an unused live portfolio before creating another")
+    : createPaperPortfolioBlockedReason();
   if (blocked) {
     reportBlockedCreate(blocked);
     return;
   }
-  const label = normalizePortfolioName(prefill.displayName, "") || "New portfolio";
-  const strategyId = newPaperPortfolioId(label);
+  const label = normalizePortfolioName(prefill.displayName, "") || (type === "live" ? "Live" : "New portfolio");
+  const strategyId = type === "live" ? newLivePortfolioId(label) : newPaperPortfolioId(label);
   if (!strategyId) {
     // Same reason as the limit above: this fires with the modal closed, so the status line
     // may not be on screen to carry it.
     reportBlockedCreate("no room for another portfolio id; archive one to make room");
     return;
   }
-  state.parameterDraftCreateType = "paper";
+  state.parameterDraftCreateType = type;
   state.parameterDraftCreatePrefill = { ...prefill, displayName: label };
-  const next = createPortfolioDraftForType("paper", strategyId, state.parameterDraftCreatePrefill, label);
+  const next = createPortfolioDraftForType(type, strategyId, state.parameterDraftCreatePrefill, label);
   state.parameterDraftMode = next.mode;
   state.parameterDraftCreate = strategyId;
   state.parameterDraft = next.draft;
@@ -15885,6 +15923,28 @@ document.addEventListener("click", (event) => {
     // A statistics row carries the rule it was measured under, so the created portfolio
     // trades what that row describes rather than a blank template.
     openCreatePortfolioModal(portfolioPrefillFromDataset(createPortfolioButton.dataset), createPortfolioButton);
+    return;
+  }
+
+  const copyToLiveButton = event.target.closest("[data-parameter-copy-to-live]");
+  if (copyToLiveButton) {
+    event.preventDefault();
+    const strategyId = copyToLiveButton.dataset.portfolioId || "";
+    if (!strategyId) return;
+    const source = portfolioConfigForMode(`paper-${strategyId}`);
+    const sourceName = normalizePortfolioName(source.displayName, strategyId);
+    // The form still opens, deliberately. A live portfolio cannot be created without an
+    // initial capital figure -- confirmParameterModal refuses -- and that is the one thing
+    // a paper portfolio cannot supply, so it is the one field left to fill in.
+    closeParameterModal();
+    openCreatePortfolioModal(
+      livePrefillFromPaperPortfolio(source, `${sourceName} live`),
+      copyToLiveButton,
+      "live",
+    );
+    setParameterModalStatus(
+      `Copied every parameter from "${sourceName}". Automation is OFF; set the initial capital and save.`,
+    );
     return;
   }
 
