@@ -99,11 +99,17 @@ jobs:
             # sedm tiku z rozpoctu za nic. Ma se pockat, ne hamerit.
             if grep -q "preskoceno, predchozi beh jeste bezi" /tmp/ai-research-body.txt; then
               locked=$((locked + 1))
-              if [ "$locked" -ge 10 ]; then
-                echo "Zamek drzi dlouho, serie tiku konci; dalsi spusteni navaze."
-                break
+              # Cekat je spravne, ukoncit serii ne. Aplikace zpracovava jeden subjekt
+              # naraz, takze drzeny zamek je normalni stav - uvolni se za par minut,
+              # az beh dojde. Merene na produkci: serie koncila po deseti pokusech,
+              # tedy po pouhych peti minutach, a zahodila tim zbytek casoveho
+              # rozpoctu; pri hodinovem rozvrhu se pak celou hodinu nedelo nic.
+              # Hranici drzi vlastni deadline serie vys v cyklu.
+              if [ "$locked" -ge 60 ]; then
+                echo "::warning::Zamek drzi uz pres pul hodiny; muze byt zablokovany po ukonceni requestu hostingem."
+                locked=0
               fi
-              echo "Predchozi beh jeste pracuje, cekam 30 s."
+              echo "Predchozi beh jeste pracuje, cekam 30 s (pokus ${locked})."
               sleep 30
               continue
             fi
