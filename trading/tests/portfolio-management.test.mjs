@@ -1095,12 +1095,19 @@ test("portfolio creation: user chooses paper or the connected live account", () 
 });
 
 test("archiving: it is confirmed before it happens and restorable afterwards", () => {
-  const handler = /const archiveButton = event\.target\.closest\("\[data-parameter-modal-archive\]"\);[\s\S]*?\n  \}/.exec(APP);
+  const handler = /const directArchiveButton = event\.target\.closest\("\[data-portfolio-archive-direct\]"\);[\s\S]*?\n  \}/.exec(APP);
   assert.ok(handler, "the archive control is wired");
   // The confirmation must gate the archive, not merely appear near it.
-  assert.match(handler[0], /\n    if \(!window\.confirm\([\s\S]*?\)\) \{\n      return;\n    \}/,
+  assert.match(handler[0], /\n    if \(!window\.confirm\(confirmMessage\)\) \{\n      return;\n    \}/,
     "asked for explicitly: archiving is confirmed first, and declining stops it");
   assert.match(handler[0], /setPortfolioArchived\(strategyId, true\)/);
+  // The parameter modal's own "Archive portfolio" button is gone, on request. It duplicated
+  // the icon on the card -- and it could never have worked from there: every control inside
+  // [data-parameter-modal] must be handled in that block, which ends in an unconditional
+  // return so a click on the form is not read as a click on the backdrop, making any branch
+  // wired further down this listener unreachable from inside the modal.
+  assert.ok(!APP.includes("data-parameter-modal-archive"), "the duplicate must not come back");
+  assert.ok(!HTML.includes("data-parameter-modal-archive"));
   assert.match(APP, /data-restore-portfolio/, "and restoring is offered in settings");
   assert.match(APP, /setPortfolioArchived\(restoreButton\.dataset\.restorePortfolio \|\| "", false\)/);
   assert.match(HTML, /data-archived-portfolios/);
@@ -1112,23 +1119,30 @@ test("archiving: it is confirmed before it happens and restorable afterwards", (
 // Reported live: archiving existed only inside the parameter-edit modal, so it read as
 // not existing at all -- the user expected it next to the edit icon and found nothing
 // there. A second, direct control now sits beside the pencil icon on the rules card.
-test("archiving: a direct control sits next to the edit icon, for paper and 5050", () => {
+test("archiving: a direct control sits next to the edit icon, on every portfolio", () => {
   const card = extractFunction(APP, "renderPortfolioRulesCard");
   assert.match(card, /archiveStrategyId \? `[\s\S]*?data-portfolio-archive-direct="\$\{escapeHtml\(archiveStrategyId\)\}"[\s\S]*?` : ""/,
     "the button only renders when a strategy id is actually passed in");
+  // Copy-to-live is the third icon in the same row, for the same reason: it was looked for
+  // beside the other two, and its modal footer button could never have worked.
+  assert.match(card, /copyToLiveStrategyId \? `[\s\S]*?data-portfolio-copy-to-live="\$\{escapeHtml\(copyToLiveStrategyId\)\}"[\s\S]*?` : ""/);
 
-  assert.match(APP, /renderPortfolioRulesCard\(portfolioState\.label \|\| "Paper portfolio", portfolioRuleRows\(\{ \.\.\.portfolioState, \.\.\.portfolio \}\), portfolioState\.id\)/,
-    "the paper card passes its own strategy id");
-  // A created live portfolio can be archived like 5050 can. The one that still cannot is
-  // the plain connected live account: archiving it would leave the wallet with no portfolio
-  // watching it at all, so it passes null and gets no control.
-  assert.match(APP, /renderPortfolioRulesCard\(`\$\{portfolioNameForMode\(\)\} portfolio`, livePortfolioRuleRows\(\), \(isFixedEntryMode\(\) \|\| customLivePortfolioIdFromMode\(\)\) \? state\.mode : null\)/,
-    "the live card offers archiving for 5050 and created live portfolios, never for the plain live account");
+  // Paper passes its own id for both: it can be archived, and it is the only kind with
+  // anything to copy into a live portfolio.
+  assert.match(APP, /renderPortfolioRulesCard\(portfolioState\.label \|\| "Paper portfolio", portfolioRuleRows\(\{ \.\.\.portfolioState, \.\.\.portfolio \}\), portfolioState\.id, portfolioState\.id\)/,
+    "the paper card passes its own strategy id for archiving and for copying");
+  // Reported: "Live 72-82" showed the edit icon with nothing beside it. The base live
+  // portfolio used to be excluded here on the grounds that archiving would leave the wallet
+  // unwatched -- which stopped being true once an archived portfolio's holdings stayed on
+  // the exit worker's watch. Every live portfolio gets the icon; none gets copy-to-live,
+  // because a live portfolio is already live.
+  assert.match(APP, /renderPortfolioRulesCard\(`\$\{portfolioNameForMode\(\)\} portfolio`, livePortfolioRuleRows\(\), state\.mode\)/,
+    "the live card offers archiving for every live portfolio, the base one included");
 
   const handler = /const directArchiveButton = event\.target\.closest\("\[data-portfolio-archive-direct\]"\);[\s\S]*?\n  \}/.exec(APP);
   assert.ok(handler, "the direct archive control is wired");
   assert.match(handler[0], /if \(!window\.confirm\(confirmMessage\)\) \{\n      return;\n    \}/,
-    "the same confirmation gates it as the modal's own archive button");
+    "archiving is confirmed before it happens");
   assert.match(handler[0], /setPortfolioArchived\(strategyId, true\)/);
   // The live5050 branch must resolve its own saved config, not a paper portfolio's --
   // the two are keyed differently, and this exact mismatch was live in one draft of
@@ -5000,8 +5014,9 @@ test("archiving: the base live portfolio is reachable and leaves a mode it can r
   assert.doesNotMatch(branch, /state\.mode = "live";/,
     "archiving the base live portfolio must not leave the dashboard pointing at it");
 
-  // And the archive control is offered for it, having been hidden for every live mode.
-  assert.match(APP, /const archivable = !state\.parameterDraftCreate;/);
+  // And the archive icon is offered for it. The live card used to pass null for the base
+  // live portfolio, so it rendered no control at all beside the edit icon.
+  assert.match(APP, /renderPortfolioRulesCard\(`\$\{portfolioNameForMode\(\)\} portfolio`, livePortfolioRuleRows\(\), state\.mode\)/);
   // The confirmation's label lookup used to treat anything without a live-custom- prefix
   // as paper, so "live" would have been looked up as "paper-live" and named wrongly.
   assert.match(APP, /strategyId === "live" \|\| strategyId === "live-5050"/);
@@ -5086,18 +5101,68 @@ test("copy to live: the control is offered only where it means something, and cr
   // And it has to check the LIVE limit when creating live, not the paper one.
   assert.match(APP, /canCreateLivePortfolio\(\) \? null : `live portfolio limit reached/);
 
-  // Offered for an existing paper portfolio only: a live one is already live.
-  const sync = extractFunction(APP, "syncPortfolioParameterControls");
-  assert.match(sync, /const copyable = !state\.parameterDraftCreate && !isLivePortfolioMode\(mode\);/);
-  assert.match(sync, /els\.parameterCopyToLive\.hidden = !copyable;/);
+  // Offered for an existing paper portfolio only: a live one is already live, and one being
+  // created does not exist yet. The card renders the icon only when an id is passed, and
+  // only the paper card passes one.
+  const card = extractFunction(APP, "renderPortfolioRulesCard");
+  assert.match(card, /copyToLiveStrategyId \? `[\s\S]*?data-portfolio-copy-to-live=/);
+  assert.match(APP, /portfolioRuleRows\(\{ \.\.\.portfolioState, \.\.\.portfolio \}\), portfolioState\.id, portfolioState\.id\)/);
+  assert.match(APP, /renderPortfolioRulesCard\(`\$\{portfolioNameForMode\(\)\} portfolio`, livePortfolioRuleRows\(\), state\.mode\)/,
+    "a live portfolio has nothing to copy into a live portfolio");
 
   // The handler passes "live" through, or it would silently create another paper portfolio.
-  const handler = /const copyToLiveButton = event\.target\.closest\("\[data-parameter-copy-to-live\]"\);[\s\S]*?\n    return;\n  \}/.exec(APP);
+  const handler = /const copyToLiveButton = event\.target\.closest\("\[data-portfolio-copy-to-live\]"\);[\s\S]*?\n    return;\n  \}/.exec(APP);
   assert.ok(handler, "the copy-to-live click handler is missing");
   assert.match(handler[0], /openCreatePortfolioModal\(\s*livePrefillFromPaperPortfolio\([\s\S]*?"live",\s*\)/);
   // And it says what happened, because "automation is off" is the thing to know.
   assert.match(handler[0], /Automation is OFF; set the initial capital and save/);
 
+  // Asked for: both controls belong on the card beside the edit icon. In the modal footer
+  // they were unreachable -- the modal's click branch returns before anything wired below
+  // it in the listener -- so the footer must not grow them back.
   const html = readFileSync(new URL("../index.html", import.meta.url), "utf8");
-  assert.match(html, /data-parameter-copy-to-live hidden/);
+  assert.ok(!html.includes("data-parameter-copy-to-live"));
+  assert.ok(!APP.includes("data-parameter-copy-to-live"));
+});
+
+// Two controls in a row were reported as "does nothing": the parameter modal's "Archive
+// portfolio" button, and before that "Copy to live". Neither was wired wrongly -- both were
+// simply unreachable. The delegated click listener answers [data-parameter-modal] first and
+// that branch ends in an unconditional return, so that a click on the form is not read as a
+// click on the backdrop. Every branch below it is therefore dead for clicks inside the
+// modal. Source assertions could not see it: the handler existed and looked correct.
+//
+// So this is the invariant rather than another spot check: any control INSIDE the parameter
+// modal must be handled INSIDE that branch.
+test("parameter modal: every control inside it is handled inside its own click branch", () => {
+  const html = readFileSync(new URL("../index.html", import.meta.url), "utf8");
+  const modalStart = html.indexOf('data-parameter-modal hidden>');
+  assert.ok(modalStart > 0, "the parameter modal must still be findable");
+  const modalEnd = html.indexOf("\n  </div>", modalStart);
+  assert.ok(modalEnd > modalStart, "and its end must still be findable");
+  const modal = html.slice(modalStart, modalEnd);
+
+  // Where the modal's own branch begins and where its unconditional return ends it.
+  const branchStart = APP.indexOf('const parameterModal = event.target.closest("[data-parameter-modal]");');
+  assert.ok(branchStart > 0, "the modal's click branch must still exist");
+  const branchEnd = APP.indexOf('const execution = event.target.closest("[data-execution-modal]");', branchStart);
+  assert.ok(branchEnd > branchStart);
+  const branch = APP.slice(branchStart, branchEnd);
+  assert.match(branch, /\n    return;\n  \}/,
+    "the branch has to keep its unconditional return, or a click on the form closes it");
+
+  // Every clickable data- hook on a control inside the modal.
+  const hooks = new Set();
+  for (const tag of modal.match(/<(?:button|a)\b[^>]*>/g) || []) {
+    for (const attribute of tag.match(/\bdata-[a-z0-9-]+/g) || []) hooks.add(attribute);
+  }
+  assert.ok(hooks.size >= 2, `expected the modal to have controls, found ${[...hooks]}`);
+  for (const hook of hooks) {
+    // A hook the listener does not handle at all is fine -- it may be read by a sync
+    // function instead. What must never happen is handling it BELOW the branch.
+    const handledInBranch = branch.includes(`closest("[${hook}]")`);
+    const handledAfter = APP.slice(branchEnd).includes(`closest("[${hook}]")`);
+    assert.ok(!handledAfter || handledInBranch,
+      `${hook} is inside the parameter modal but handled after its branch returns, so clicking it does nothing`);
+  }
 });

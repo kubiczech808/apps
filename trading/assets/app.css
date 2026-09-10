@@ -1215,8 +1215,37 @@ button:disabled {
   stroke-linejoin: round;
 }
 
-/* Same shape as the edit button, and the same warning colour the parameter modal's own
-   archive button already carries: archiving looks destructive but is reversible. */
+/* Same shape as the edit button. Copying to live creates something new rather than
+   changing this portfolio, so it keeps the accent colour instead of a warning one. */
+.portfolio-rules-copy-live {
+  display: inline-grid;
+  flex: 0 0 auto;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #ffffff;
+  color: var(--muted);
+}
+
+.portfolio-rules-copy-live:hover {
+  border-color: var(--accent);
+  color: var(--accent-dark);
+}
+
+.portfolio-rules-copy-live svg {
+  width: 17px;
+  height: 17px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* Same shape as the edit button, and a warning colour because archiving reads as
+   destructive even though it is reversible. */
 .portfolio-rules-archive {
   display: inline-grid;
   flex: 0 0 auto;

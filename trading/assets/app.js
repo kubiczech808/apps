@@ -399,8 +399,6 @@ const els = {
   parameterModal: document.querySelector("[data-parameter-modal]"),
   parameterModalClose: document.querySelector("[data-parameter-modal-close]"),
   parameterModalConfirm: document.querySelector("[data-parameter-modal-confirm]"),
-  parameterModalArchive: document.querySelector("[data-parameter-modal-archive]"),
-  parameterCopyToLive: document.querySelector("[data-parameter-copy-to-live]"),
   parameterModalStatus: document.querySelector("[data-parameter-modal-status]"),
   createPortfolio: document.querySelector("[data-create-portfolio]"),
   archivedPortfolios: document.querySelector("[data-archived-portfolios]"),
@@ -5898,28 +5896,6 @@ function syncPortfolioParameterControls(configOverride = null, options = {}) {
       ? (reverseOnStopLoss ? "On: $5 opposite outcome" : "Off")
       : "Off: stop loss disabled";
   }
-  if (els.parameterModalArchive) {
-    // Any existing portfolio can be archived, the base live one included. It was excluded
-    // before on the grounds that hiding a live portfolio hides real exposure -- true while
-    // archiving also dropped its positions from the exit worker's watch, which it no longer
-    // does: an archived portfolio's holdings stay watched, so archiving is a display
-    // decision and nothing more. A portfolio being created does not exist yet.
-    const archivable = !state.parameterDraftCreate;
-    els.parameterModalArchive.hidden = !archivable;
-    els.parameterModalArchive.dataset.portfolioId = archivable
-      ? (isLivePortfolioMode(mode)
-        ? (customLivePortfolioIdFromMode(mode) ? `live-custom-${customLivePortfolioIdFromMode(mode)}` : normalizeMode(mode))
-        : paperStrategyIdFromMode(mode))
-      : "";
-  }
-  if (els.parameterCopyToLive) {
-    // Only an existing paper portfolio has anything to copy: a live one is already live,
-    // and one being created does not exist yet. Kept out of the way rather than disabled,
-    // because on the other modes it is not a refusal -- it is simply not the question.
-    const copyable = !state.parameterDraftCreate && !isLivePortfolioMode(mode);
-    els.parameterCopyToLive.hidden = !copyable;
-    els.parameterCopyToLive.dataset.portfolioId = copyable ? paperStrategyIdFromMode(mode) : "";
-  }
   const cronMinutes = normalizeExecutionCronMinutes(config.executionCronMinutes);
   if (els.executionCronMinutes) els.executionCronMinutes.value = String(cronMinutes);
   if (els.executionCronMinutesLabel) els.executionCronMinutesLabel.textContent = executionCronMinutesLabel(cronMinutes);
@@ -10745,11 +10721,21 @@ function automationBadgeMarkup() {
   </button>`;
 }
 
-// Reported: archiving existed only inside the parameter-edit modal, so a user looking
-// for a way to deactivate a portfolio next to the edit icon found nothing there at all.
-// Only an existing paper portfolio can be archived -- a live one holds real positions and
-// open orders, and archiving here always means an already-existing one, never a draft.
-function renderPortfolioRulesCard(title, rows, archiveStrategyId = null) {
+// Reported twice: a user looking for a way to deactivate a portfolio next to the edit icon
+// found nothing there, and then looked for the copy-to-live control in the same place. Both
+// lived in the parameter-edit modal, and neither could ever have worked from there -- the
+// modal's click branch returns before anything wired below it in the listener. So both are
+// icons here, beside the pencil, and the modal's footer buttons are gone.
+//
+// Every existing portfolio gets the archive icon, the base live one included. It was
+// withheld from Live on the grounds that a live portfolio holds real positions and open
+// orders -- true while archiving also dropped them from the exit worker's watch, which it
+// no longer does. An archived portfolio's holdings stay watched and its expired orders
+// still get withdrawn; only opening new bids stops. So "Live 72-82" showed an edit icon and
+// nothing beside it, which is the report. A portfolio being CREATED gets neither icon: it
+// does not exist yet. Copy-to-live is offered on paper portfolios only -- a live one is
+// already live, and there is nothing to copy it into.
+function renderPortfolioRulesCard(title, rows, archiveStrategyId = null, copyToLiveStrategyId = null) {
   return `
     <div class="portfolio-rules-card">
       <div class="portfolio-rules-head">
@@ -10761,6 +10747,14 @@ function renderPortfolioRulesCard(title, rows, archiveStrategyId = null) {
             <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5Z"></path>
           </svg>
         </button>
+        ${copyToLiveStrategyId ? `
+          <button class="portfolio-rules-copy-live" type="button" data-portfolio-copy-to-live="${escapeHtml(copyToLiveStrategyId)}" aria-label="Copy to a live portfolio" title="Create a live portfolio with these exact parameters, switched off. Only the initial capital is left to set.">
+            <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+              <rect x="9" y="9" width="12" height="12" rx="2"></rect>
+              <path d="M5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1"></path>
+            </svg>
+          </button>
+        ` : ""}
         ${archiveStrategyId ? `
           <button class="portfolio-rules-archive" type="button" data-portfolio-archive-direct="${escapeHtml(archiveStrategyId)}" aria-label="Archive portfolio" title="Archive portfolio">
             <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
@@ -10906,7 +10900,7 @@ function renderBotState(botState) {
   if (els.portfolioRules) {
     els.portfolioRules.innerHTML = `
     <div class="bot-summary">
-      ${renderPortfolioRulesCard(portfolioState.label || "Paper portfolio", portfolioRuleRows({ ...portfolioState, ...portfolio }), portfolioState.id)}
+      ${renderPortfolioRulesCard(portfolioState.label || "Paper portfolio", portfolioRuleRows({ ...portfolioState, ...portfolio }), portfolioState.id, portfolioState.id)}
     </div>
   `;
   }
@@ -11771,7 +11765,7 @@ function renderLiveState(liveState) {
   if (els.portfolioRules) {
     els.portfolioRules.innerHTML = `
     <div class="bot-summary">
-      ${renderPortfolioRulesCard(`${portfolioNameForMode()} portfolio`, livePortfolioRuleRows(), (isFixedEntryMode() || customLivePortfolioIdFromMode()) ? state.mode : null)}
+      ${renderPortfolioRulesCard(`${portfolioNameForMode()} portfolio`, livePortfolioRuleRows(), state.mode)}
     </div>
   `;
   }
@@ -15856,6 +15850,13 @@ document.addEventListener("click", (event) => {
     return;
   }
 
+  // Every control inside the parameter modal has to be handled HERE. The block ends in an
+  // unconditional return -- so that a click on the form itself is not read as a click on
+  // the backdrop, which closes it -- and that return swallows every branch further down
+  // this listener. Any button added to the modal footer and wired below it is therefore
+  // dead on arrival: that is what happened to "Archive portfolio", reported as not
+  // reacting at all, and to "Copy to live", wired below and never firing either. Both are
+  // icons on the portfolio card now, where the click actually reaches them.
   const parameterModal = event.target.closest("[data-parameter-modal]");
   if (parameterModal) {
     if (event.target.closest("[data-parameter-modal-confirm]")) {
@@ -15940,19 +15941,47 @@ document.addEventListener("click", (event) => {
     return;
   }
 
-  // Asked for explicitly: a direct way to archive next to the edit icon, not only buried
-  // inside the parameter modal. Same confirmation and action, no modal to open first.
+  // Asked for: the copy-to-live control belongs beside the archive and edit icons. It used
+  // to be a footer button in the parameter modal, where the click never reached it.
+  const copyToLiveButton = event.target.closest("[data-portfolio-copy-to-live]");
+  if (copyToLiveButton) {
+    event.preventDefault();
+    const strategyId = copyToLiveButton.dataset.portfolioCopyToLive || "";
+    if (!strategyId) return;
+    const source = portfolioConfigForMode(`paper-${strategyId}`);
+    const sourceName = normalizePortfolioName(source.displayName, strategyId);
+    // The form opens rather than the portfolio being created outright, deliberately: a live
+    // portfolio cannot be created without an initial capital figure -- confirmParameterModal
+    // refuses -- and that is the one thing a paper portfolio cannot supply, so it is the one
+    // field left to fill in.
+    openCreatePortfolioModal(
+      livePrefillFromPaperPortfolio(source, `${sourceName} live`),
+      copyToLiveButton,
+      "live",
+    );
+    setParameterModalStatus(
+      `Copied every parameter from "${sourceName}". Automation is OFF; set the initial capital and save.`,
+    );
+    return;
+  }
+
+  // Asked for explicitly: a direct way to archive next to the edit icon. This is now the
+  // only way -- the parameter modal's button was removed as a duplicate that never fired.
   const directArchiveButton = event.target.closest("[data-portfolio-archive-direct]");
   if (directArchiveButton) {
     event.preventDefault();
     const strategyId = directArchiveButton.dataset.portfolioArchiveDirect || "";
     if (!strategyId) return;
-    const isLiveStrategy = strategyId === "live-5050" || strategyId.startsWith("live-custom-");
+    // "live" belongs in this list. Leaving it out sent the base live portfolio's label
+    // lookup to portfolioConfigForMode("paper-live"), a paper strategy that does not
+    // exist, so the confirmation would have named a portfolio nobody has.
+    const isLiveStrategy = strategyId === "live" || strategyId === "live-5050"
+      || strategyId.startsWith("live-custom-");
     const label = normalizePortfolioName(
       portfolioConfigForMode(isLiveStrategy ? strategyId : `paper-${strategyId}`).displayName,
       strategyId === "live-5050" ? "5050" : strategyId.replace(/^live-custom-/, ""),
     );
-    // 5050 holds real positions and open orders, unlike a paper portfolio, so its
+    // A live portfolio holds real positions and open orders, unlike a paper one, so its
     // confirmation says plainly what keeps running: withdrawing an expired resting
     // order and refreshing the account snapshot are unconditional in the executor,
     // and only opening new bids actually stops.
@@ -15972,49 +16001,6 @@ document.addEventListener("click", (event) => {
     // A statistics row carries the rule it was measured under, so the created portfolio
     // trades what that row describes rather than a blank template.
     openCreatePortfolioModal(portfolioPrefillFromDataset(createPortfolioButton.dataset), createPortfolioButton);
-    return;
-  }
-
-  const copyToLiveButton = event.target.closest("[data-parameter-copy-to-live]");
-  if (copyToLiveButton) {
-    event.preventDefault();
-    const strategyId = copyToLiveButton.dataset.portfolioId || "";
-    if (!strategyId) return;
-    const source = portfolioConfigForMode(`paper-${strategyId}`);
-    const sourceName = normalizePortfolioName(source.displayName, strategyId);
-    // The form still opens, deliberately. A live portfolio cannot be created without an
-    // initial capital figure -- confirmParameterModal refuses -- and that is the one thing
-    // a paper portfolio cannot supply, so it is the one field left to fill in.
-    closeParameterModal();
-    openCreatePortfolioModal(
-      livePrefillFromPaperPortfolio(source, `${sourceName} live`),
-      copyToLiveButton,
-      "live",
-    );
-    setParameterModalStatus(
-      `Copied every parameter from "${sourceName}". Automation is OFF; set the initial capital and save.`,
-    );
-    return;
-  }
-
-  const archiveButton = event.target.closest("[data-parameter-modal-archive]");
-  if (archiveButton) {
-    event.preventDefault();
-    const strategyId = archiveButton.dataset.portfolioId || "";
-    if (!strategyId) return;
-    const isLiveStrategy = strategyId === "live" || strategyId === "live-5050"
-      || strategyId.startsWith("live-custom-");
-    const label = normalizePortfolioName(
-      portfolioConfigForMode(isLiveStrategy ? strategyId : `paper-${strategyId}`).displayName,
-      strategyId.replace(/^live-custom-/, ""),
-    );
-    // Asked for explicitly: archiving is a deliberate act, so it is confirmed before it
-    // happens rather than offered as an undo afterwards.
-    if (!window.confirm(`Archive "${label}"?\n\nIt disappears from the dashboard and stops trading. Every trade, run log and statistic it holds is kept, and you can restore it from Settings.`)) {
-      return;
-    }
-    closeParameterModal();
-    setPortfolioArchived(strategyId, true);
     return;
   }
 
