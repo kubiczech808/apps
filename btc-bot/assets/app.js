@@ -31,6 +31,12 @@ const usd = (value) => (Number.isFinite(value) ? `$${nf(0).format(Math.round(val
 const price = (value) => (Number.isFinite(value) ? nf(0).format(Math.round(value)) : '–')
 const pct = (value, digits = 1) => (Number.isFinite(value) ? `${nf(digits).format(value)} %` : '–')
 
+const signedPct = (value, digits = 2) => {
+  if (!Number.isFinite(value)) return { text: '–', className: '' }
+  const text = `${value > 0 ? '+' : value < 0 ? '−' : ''}${nf(digits).format(Math.abs(value))} %`
+  return { text, className: value > 0 ? 'pos' : value < 0 ? 'neg' : '' }
+}
+
 const when = (value) => {
   if (!value) return '–'
   const date = typeof value === 'number' ? new Date(value) : new Date(String(value))
@@ -190,6 +196,49 @@ const tile = (label, value, sub, className = '') =>
     el('div', { className: 'sub', text: sub ?? '' }),
   ])
 
+const firstPositiveEquitySats = () =>
+  (state?.equityHistory || []).find((point) => Number.isFinite(point.equitySats) && point.equitySats > 0)
+    ?.equitySats ?? null
+
+const capitalBenchmark = ({ account, market, stats }) => {
+  const startUsd = Number(state?.settings?.startingCapitalUsd)
+  const currentSats = Number(account?.equitySats)
+  const currentBtcPrice = Number(market?.price)
+  const paperStartSats = Number(state?.paper?.startingBalanceSats)
+  const inferredStartSats =
+    Number.isFinite(currentSats) && Number.isFinite(stats?.netPnlSats)
+      ? currentSats - stats.netPnlSats
+      : null
+  const startSats =
+    firstPositiveEquitySats() ??
+    (Number.isFinite(paperStartSats) && paperStartSats > 0 ? paperStartSats : null) ??
+    (Number.isFinite(inferredStartSats) && inferredStartSats > 0 ? inferredStartSats : null)
+  const startBtcPrice =
+    Number.isFinite(startUsd) && startUsd > 0 && Number.isFinite(startSats) && startSats > 0
+      ? (startUsd * SATS_PER_BTC) / startSats
+      : null
+  const equityUsd =
+    Number.isFinite(currentSats) && Number.isFinite(currentBtcPrice)
+      ? (currentSats / SATS_PER_BTC) * currentBtcPrice
+      : null
+
+  return {
+    equityUsd,
+    usdReturnPct:
+      Number.isFinite(equityUsd) && Number.isFinite(startUsd) && startUsd > 0
+        ? ((equityUsd / startUsd) - 1) * 100
+        : null,
+    btcReturnPct:
+      Number.isFinite(currentBtcPrice) && Number.isFinite(startBtcPrice) && startBtcPrice > 0
+        ? ((currentBtcPrice / startBtcPrice) - 1) * 100
+        : null,
+    satsReturnPct:
+      Number.isFinite(currentSats) && Number.isFinite(startSats) && startSats > 0
+        ? ((currentSats / startSats) - 1) * 100
+        : null,
+  }
+}
+
 const renderTiles = () => {
   const box = $('tiles')
   box.replaceChildren()
@@ -201,7 +250,11 @@ const renderTiles = () => {
   const running = state.positions?.running || []
 
   const btcPrice = market.price
-  const equityUsd = Number.isFinite(btcPrice) ? (account.equitySats / SATS_PER_BTC) * btcPrice : null
+  const benchmark = capitalBenchmark({ account, market, stats })
+  const equityUsd = benchmark.equityUsd
+  const usdReturn = signedPct(benchmark.usdReturnPct)
+  const btcReturn = signedPct(benchmark.btcReturnPct)
+  const satsReturn = signedPct(benchmark.satsReturnPct)
 
   const openRisk = running.reduce((sum, position) => {
     if (!Number.isFinite(position.entry) || !Number.isFinite(position.stopLoss)) return sum
@@ -215,6 +268,12 @@ const renderTiles = () => {
 
   box.append(
     tile('Kapitál', sats(account.equitySats), equityUsd === null ? '–' : `≈ ${usd(equityUsd)}`),
+    tile(
+      'Výkon od startu',
+      Number.isFinite(benchmark.usdReturnPct) ? `USD ${usdReturn.text}` : '–',
+      `BTC ${btcReturn.text} · obchody ${satsReturn.text} v sats`,
+      usdReturn.className
+    ),
     tile(
       'Otevřené riziko',
       running.length ? sats(openRisk) : '0 sats',

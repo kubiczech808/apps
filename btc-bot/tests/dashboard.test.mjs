@@ -60,3 +60,12 @@ test('decision facts carry signal-state classes', () => {
   assert.match(js, /ATR.*atrMin.*atrMax/s)
   assert.match(js, /R\/R.*minRR/s)
 })
+
+test('capital tile separates USD benchmark from sats trading result', () => {
+  assert.match(js, /const signedPct/)
+  assert.match(js, /const capitalBenchmark/)
+  assert.match(js, /startingCapitalUsd/)
+  assert.match(js, /firstPositiveEquitySats/)
+  assert.match(js, /tile\(\s*'Výkon od startu'/, 'dashboard must render a start benchmark tile')
+  assert.match(js, /BTC.*obchody.*v sats/s)
+})
