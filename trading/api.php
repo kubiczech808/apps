@@ -5051,6 +5051,168 @@ function live_execution_record_token_ids(array $record): array
     return array_keys($ids);
 }
 
+/**
+ * Ready-to-fire dip-entry plans, one per portfolio and token.
+ *
+ * The dip-entry rule buys a favourite that has collapsed inside a fixture already under
+ * way, and the trough lasts minutes. Nothing that has to start a GitHub runner can act on
+ * that, so the decision is split the same way the stop loss already is: everything slow is
+ * computed HERE, and the RPi worker -- which is already round the loop every second, with
+ * the signing key and the entry claim -- does nothing at fire time but place the order.
+ *
+ * "Pre-prepared" means literally that. Each plan carries the size, the price ceiling, the
+ * tick size and a diversification verdict, all decided before the price ever reaches the
+ * band. The worker's only remaining questions are the two that cannot be answered early:
+ * is the book inside the buy band right now, and is there cash.
+ *
+ * The watch entry is built while the market is STILL THE FAVOURITE, which is what makes
+ * this work at all: at 70-80% the row is in the catalogue, and at 35% it is not -- both the
+ * scan's retention and is_active_scraped_market_observation() keep only the leading outcome
+ * above 0.50. So the token is picked up on the way in and followed down by the worker, which
+ * holds the watch set itself. This endpoint is deliberately stateless.
+ */
+function live_dip_entry_watch_payload(): array
+{
+    $config = load_portfolio_config();
+    $portfolioIds = ['live', 'live5050'];
+    foreach ((array) ($config['livePortfolios'] ?? []) as $id => $row) {
+        if (is_array($row)) {
+            $portfolioIds[] = 'live-custom-' . (string) $id;
+        }
+    }
+
+    $active = [];
+    foreach ($portfolioIds as $portfolioId) {
+        $portfolio = execution_scope_strategy_config($portfolioId === 'live5050' ? 'live5050' : $portfolioId);
+        if (!is_array($portfolio)) {
+            continue;
+        }
+        $rule = normalize_dip_entry_rule($portfolio, []);
+        // Off, archived or automation-off portfolios contribute nothing to watch. An
+        // experiment that keeps trading after it is switched off is not switched off.
+        if (!$rule['dipEntryEnabled'] || ($portfolio['archived'] ?? false) === true) {
+            continue;
+        }
+        if (($portfolio['automationEnabled'] ?? true) !== true) {
+            continue;
+        }
+        // The same refusal the rule reports on the dashboard: a buy band reaching into the
+        // opening band would fire on a market that never fell.
+        if ($rule['dipEntryBuyMax'] >= $rule['dipEntryOpenMin']) {
+            continue;
+        }
+        $active[$portfolioId] = ['portfolio' => $portfolio, 'rule' => $rule];
+    }
+    if ($active === []) {
+        return ['ok' => true, 'generatedAt' => gmdate('c'), 'cashUsdc' => null, 'plans' => [], 'portfolios' => []];
+    }
+
+    $live = decode_state_file(live_state_path(), false);
+    $live = is_array($live) ? $live : [];
+    $cash = is_numeric($live['portfolio']['cashUsdc'] ?? null) ? (float) $live['portfolio']['cashUsdc'] : null;
+    // What the wallet is already exposed to. A dip entry must not double an existing
+    // position or collide with a resting bid, and the worker cannot work that out at fire
+    // time -- so it is decided here, while there is time to be careful about it.
+    $heldTokens = [];
+    $heldConditions = [];
+    foreach ([$live['positions'] ?? [], $live['openOrders'] ?? []] as $rows) {
+        foreach (is_array($rows) ? $rows : [] as $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+            $token = trim((string) ($row['tokenId'] ?? $row['assetId'] ?? ''));
+            if ($token !== '') {
+                $heldTokens[$token] = true;
+            }
+            $condition = trim((string) ($row['conditionId'] ?? ''));
+            if ($condition !== '') {
+                $heldConditions[$condition] = true;
+            }
+        }
+    }
+
+    $state = state_payload('paper', ['observations']);
+    $observations = is_array($state['marketObservations'] ?? null) ? $state['marketObservations'] : [];
+    $plans = [];
+    foreach ($observations as $item) {
+        if (!is_array($item)) {
+            continue;
+        }
+        // Underway only, and the rule says so rather than the portfolio's resolution
+        // filter: before kick-off a collapsed price is not a collapse, it is a different
+        // market.
+        if (!observation_event_is_running($item)) {
+            continue;
+        }
+        $opened = null;
+        foreach (['firstMarketProbability', 'marketProbability', 'marketPrice'] as $field) {
+            if (is_numeric($item[$field] ?? null)) {
+                $opened = (float) $item[$field];
+                break;
+            }
+        }
+        if ($opened === null) {
+            continue;
+        }
+        $tokenId = trim((string) ($item['tokenId'] ?? $item['clobTokenIds'][0] ?? ''));
+        if ($tokenId === '') {
+            continue;
+        }
+        $conditionId = trim((string) ($item['conditionId'] ?? ''));
+        foreach ($active as $portfolioId => $entry) {
+            $rule = $entry['rule'];
+            if ($opened < $rule['dipEntryOpenMin'] || $opened > $rule['dipEntryOpenMax']) {
+                continue;
+            }
+            // Every other filter this portfolio has, applied now rather than at fire time.
+            // execution_scope_matches_observation reads the portfolio's own probability
+            // range, which the row still satisfies while it is the favourite -- and that is
+            // the point: the tags, shape, market type, liquidity and spread checks are all
+            // settled here, on the way in.
+            if (!execution_scope_matches_observation($item, $entry['portfolio'])) {
+                continue;
+            }
+            $blocked = '';
+            if (isset($heldTokens[$tokenId])) {
+                $blocked = 'the wallet already holds or has a resting order on this token';
+            } elseif ($conditionId !== '' && isset($heldConditions[$conditionId])) {
+                $blocked = 'the wallet already has a position in this market';
+            }
+            $stake = normalize_optional_money_value($entry['portfolio']['stakeUsdc'] ?? null);
+            $plans[] = [
+                'portfolioId' => $portfolioId,
+                'tokenId' => $tokenId,
+                'conditionId' => $conditionId,
+                'question' => (string) ($item['question'] ?? ''),
+                'outcome' => (string) ($item['outcome'] ?? ''),
+                'openProbability' => round($opened, 4),
+                // The band the worker fires inside. Its ceiling is also the highest price
+                // the order may pay, so a book that has already recovered cannot be bought
+                // at the recovered price by a worker that was a second late.
+                'buyMin' => $rule['dipEntryBuyMin'],
+                'buyMax' => $rule['dipEntryBuyMax'],
+                'stakeUsdc' => $stake,
+                'tickSize' => is_numeric($item['tickSize'] ?? null) ? (float) $item['tickSize'] : 0.01,
+                'negRisk' => ($item['negRisk'] ?? null) === true,
+                // Empty means clear to fire. Published rather than filtered out, so the
+                // worker's log can say why a watched market was not bought.
+                'blockedReason' => $blocked,
+                'preparedAt' => gmdate('c'),
+            ];
+        }
+    }
+
+    return [
+        'ok' => true,
+        'generatedAt' => gmdate('c'),
+        // The worker will not place an order without cash for it. Published so the refusal
+        // is one number rather than a second account fetch inside the fast path.
+        'cashUsdc' => $cash,
+        'plans' => $plans,
+        'portfolios' => array_keys($active),
+    ];
+}
+
 function live_stop_loss_policy_payload(): array
 {
     $config = load_portfolio_config();
@@ -6108,6 +6270,14 @@ try {
 
     if ($action === 'live-exit-policy') {
         respond(live_stop_loss_policy_payload());
+    }
+
+    // Read-only, like the exit policy beside it: the RPi worker asks what to watch and
+    // what it may pay, and everything slow about that answer is decided here. No key is
+    // required because nothing is written and nothing secret is published -- the plans are
+    // token ids, bands and sizes, all of which are already in the dashboard.
+    if ($action === 'dip-entry-watch') {
+        respond(live_dip_entry_watch_payload());
     }
 
     if ($action === 'state') {

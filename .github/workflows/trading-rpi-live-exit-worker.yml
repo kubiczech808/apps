@@ -38,6 +38,16 @@ on:
         default: keep
         type: choice
         options: [keep, "true", "false"]
+      # Same `keep` default and the same reason: a redeploy must not arm or disarm the dip
+      # rule as a side effect. `off` does not even fetch the watch list; `shadow` follows the
+      # markets and records what it would buy; `live` also needs live_exit_mode=live and
+      # confirm_live=true, so buying is a deliberate act in three places.
+      dip_entry_mode:
+        description: keep leaves it alone. off watches nothing; shadow logs the entries it would take; live permits real dip buys.
+        required: false
+        default: keep
+        type: choice
+        options: [keep, "off", shadow, live]
 
 permissions:
   contents: read
@@ -53,6 +63,7 @@ jobs:
       LIVE_EXIT_MODE: ${{ inputs.live_exit_mode }}
       LIVE_EXIT_PROTECT_ALL: ${{ inputs.protect_all }}
       LIVE_EXIT_CONFIRM_LIVE: ${{ inputs.confirm_live }}
+      LIVE_DIP_ENTRY_MODE: ${{ inputs.dip_entry_mode }}
       LIVE_EXIT_REF: ${{ github.ref_name }}
     steps:
       - uses: actions/checkout@v4
@@ -110,10 +121,20 @@ jobs:
           exit_mode="$(keep_or_existing LIVE_EXIT_MODE "${LIVE_EXIT_MODE:-}")"
           protect_all="$(keep_or_existing LIVE_EXIT_PROTECT_ALL "${LIVE_EXIT_PROTECT_ALL:-}")"
           confirm_live="$(keep_or_existing LIVE_EXIT_CONFIRM_LIVE "${LIVE_EXIT_CONFIRM_LIVE:-}")"
+          dip_entry_mode="$(keep_or_existing LIVE_DIP_ENTRY_MODE "${LIVE_DIP_ENTRY_MODE:-}")"
           exit_mode="${exit_mode:-shadow}"
           protect_all="${protect_all:-false}"
           confirm_live="${confirm_live:-false}"
-          echo "mode=${exit_mode} confirm_live=${confirm_live} protect_all=${protect_all}"
+          dip_entry_mode="${dip_entry_mode:-off}"
+          case "$dip_entry_mode" in off|shadow|live) ;; *) dip_entry_mode=off ;; esac
+          echo "mode=${exit_mode} confirm_live=${confirm_live} protect_all=${protect_all} dip_entry=${dip_entry_mode}"
+          if [ "$dip_entry_mode" = "live" ] && [ "$exit_mode" = "live" ] && [ "$confirm_live" = "true" ]; then
+            echo "-> DIP ENTRY ARMED: a collapsed favourite in the buy band may be BOUGHT."
+          elif [ "$dip_entry_mode" = "off" ]; then
+            echo "-> DIP ENTRY OFF: the watch list is not even fetched."
+          else
+            echo "-> DIP ENTRY SHADOW: entries are logged and NOTHING is bought."
+          fi
           if [ "$exit_mode" = "live" ] && [ "$confirm_live" = "true" ]; then
             echo "-> ARMED: a reached stop may be submitted as a protective SELL."
           else
@@ -129,6 +150,17 @@ jobs:
           LIVE_EXIT_MODE=${exit_mode}
           LIVE_EXIT_CONFIRM_LIVE=${confirm_live}
           LIVE_EXIT_PROTECT_ALL=${protect_all}
+          # The dip-entry rule. It rides this worker rather than the hourly executor because
+          # the trough it buys lasts minutes, and this loop is already round every second
+          # with the signing key and the entry claim. Everything slow -- size, tick,
+          # diversification, cash -- is decided by api.php's dip-entry-watch before the price
+          # ever reaches the band.
+          LIVE_DIP_ENTRY_MODE=${dip_entry_mode}
+          LIVE_DIP_ENTRY_WATCH_URL=https://osobnizkusenosti.cz/trading/api.php?action=dip-entry-watch
+          # A collapsed favourite LEAVES the catalogue -- above 50% it is a row, at 35% it is
+          # not -- so a watch entry has to outlive the very collapse it waits for.
+          LIVE_DIP_ENTRY_TTL_MS=14400000
+          LIVE_DIP_ENTRY_MAX_SLIPPAGE=0.02
           # How fast the loop goes round IS the stop's reaction time. Measured on a stopped
           # position: under a minute from healthy to through the floor. One pass is one
           # batched /books request regardless of how many positions are held, so a one-second

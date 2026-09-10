@@ -1890,6 +1890,163 @@ function recordEvent(state, event) {
   state.lastEvent = event;
 }
 
+// ---------------------------------------------------------------------------------------
+// DIP ENTRY. One block, on purpose: this whole section, the dip-entry-watch endpoint and
+// tools/dip-entry-rule.mjs are the entire feature, and deleting the three removes it.
+//
+// Asked for: buy a favourite that has collapsed inside a fixture already under way -- it
+// opened at 70-80%, it is trading at 30-40% now -- and do it without waiting one to two
+// minutes for a runner, with every other parameter already decided.
+//
+// So it lives here rather than in the hourly executor, for the reason written at the top of
+// this file: speed matters for taking a chosen entry. This loop is already round every
+// second with the signing key and the entry claim, and the trough lasts minutes.
+//
+// Everything slow is decided by api.php's dip-entry-watch: which tokens to watch, the size,
+// the tick, the price ceiling, whether the wallet already holds the market, and how much
+// cash there is. Nothing here ranks, filters or sizes. The two questions left are the only
+// two that cannot be answered early -- is the book inside the band right now, and is there
+// cash -- and then it places the order.
+//
+// The watch set is held HERE rather than served each time, because a dipped favourite
+// leaves the catalogue: at 70-80% it is a row, at 35% it is not. Entries are picked up on
+// the way in and kept until they expire.
+const DIP_ENTRY_WATCH_URL = process.env.LIVE_DIP_ENTRY_WATCH_URL
+  || "https://osobnizkusenosti.cz/trading/api.php?action=dip-entry-watch";
+// Off unless deliberately armed, exactly like LIVE_EXIT_MODE. An experiment must not start
+// buying because a file was deployed.
+const DIP_ENTRY_MODE = String(process.env.LIVE_DIP_ENTRY_MODE || "off").trim().toLowerCase();
+// How long a watch entry survives after the catalogue stops listing it. A fixture runs for
+// an hour or two, and the entry has to outlive the collapse that removes the row.
+const DIP_ENTRY_TTL_MS = clampInteger(process.env.LIVE_DIP_ENTRY_TTL_MS, 4 * 3600 * 1000, 600000, 24 * 3600 * 1000);
+const DIP_ENTRY_MAX_SLIPPAGE = Number(process.env.LIVE_DIP_ENTRY_MAX_SLIPPAGE || 0.02);
+
+function dipEntryPlanKey(plan) {
+  return `${String(plan.portfolioId || "")}:${String(plan.tokenId || "")}`;
+}
+
+// Accumulate rather than replace. A plan that has left the catalogue keeps the fields it
+// was prepared with; a plan still listed refreshes them.
+function mergeDipEntryWatch(watch, payload, at) {
+  const merged = watch instanceof Map ? watch : new Map();
+  for (const plan of (Array.isArray(payload?.plans) ? payload.plans : [])) {
+    if (!plan?.tokenId || !(Number(plan.buyMax) > 0)) continue;
+    merged.set(dipEntryPlanKey(plan), { ...plan, seenAt: at });
+  }
+  for (const [key, plan] of merged) {
+    // seenAt is Date.now(), a NUMBER. Reading it through Date.parse coerced it to a string
+    // first -- "1757534..." parses as a year, not a timestamp -- so the age came out
+    // meaningless and the TTL either expired everything at once or nothing ever.
+    const seenAt = Number(plan.seenAt);
+    if (!Number.isFinite(seenAt) || at - seenAt > DIP_ENTRY_TTL_MS) merged.delete(key);
+  }
+  return merged;
+}
+
+// Is the book inside the buy band. The ASK is what an entry pays, so the ask decides -- the
+// bid would report a collapse the buyer cannot actually get filled at.
+function dipEntryTrigger(plan, book) {
+  const ask = bestAsk(book);
+  if (ask == null || !(ask > 0)) return { fire: false, reason: "no executable ask" };
+  if (ask > Number(plan.buyMax)) return { fire: false, reason: `ask ${ask} is above the buy band` };
+  if (ask < Number(plan.buyMin)) return { fire: false, reason: `ask ${ask} is below the buy band` };
+  return { fire: true, ask };
+}
+
+async function submitDipEntry(plan, book, cashUsdc) {
+  const stake = Number(plan.stakeUsdc);
+  if (!(stake > 0)) return { success: false, error: "no stake is configured for this portfolio" };
+  if (!(Number(cashUsdc) >= stake)) {
+    return { success: false, error: `cash ${cashUsdc} does not cover the ${stake} stake` };
+  }
+  // Marketable through the levels this size consumes, then capped at the band's ceiling.
+  // The cap is the point: a worker that was one second late must not buy the recovery.
+  const marketable = marketableBuyPrice({ book, notionalUsdc: stake, maxSlippage: DIP_ENTRY_MAX_SLIPPAGE });
+  if (!(marketable > 0) || marketable >= 1) return { success: false, error: "no executable ask for the whole stake" };
+  const price = Math.min(marketable, Number(plan.buyMax));
+  const shares = Math.floor((stake / price) * 10000) / 10000;
+  if (!(shares > 0)) return { success: false, error: "order size is below the exchange minimum" };
+  const claimId = randomUUID();
+  const claim = await claimLiveEntry(plan.tokenId, claimId);
+  if (!claim.claimed) {
+    return { success: false, error: `duplicate entry guard: ${claim.reason || "an equivalent live buy is already claimed"}` };
+  }
+  try {
+    const { client, Side, OrderType } = await authenticatedClient();
+    const signed = await client.createOrder({ tokenID: String(plan.tokenId), price, size: shares, side: Side.BUY }, {});
+    // FAK first, for the same reason the stop-loss reversal does it: the rule asks for a
+    // position to be opened, and a smaller one is still that position. FOK turned every
+    // shortfall in depth into no position at all.
+    let response = await client.postOrder(signed, OrderType.FAK, false);
+    if (!exitFilled(response)) response = await client.postOrder(signed, OrderType.FOK, false);
+    if (exitFilled(response)) await settleLiveEntryClaim("confirm", plan.tokenId, claimId);
+    else await settleLiveEntryClaim("release", plan.tokenId, claimId);
+    return { ...response, price: round(price, 6), shares: round(shares, 4), stakeUsdc: stake };
+  } catch (error) {
+    await settleLiveEntryClaim("release", plan.tokenId, claimId);
+    return { success: false, error: error?.message || String(error), price: round(price, 6), shares: round(shares, 4) };
+  }
+}
+
+// One pass over the watch set, given the books already fetched for this pass.
+async function fireDipEntries(context, books, now) {
+  const watch = context.dipWatch instanceof Map ? context.dipWatch : new Map();
+  const entered = context.state.dipEntries && typeof context.state.dipEntries === "object"
+    ? context.state.dipEntries
+    : (context.state.dipEntries = {});
+  const cash = Number(context.dipWatchPayload?.cashUsdc);
+  for (const [key, plan] of watch) {
+    // Bought once, ever. A price wobbling across the band's edge must not buy repeatedly,
+    // and the claim alone would not stop it once the first order has settled.
+    if (entered[key]?.terminal) continue;
+    const book = books.get(String(plan.tokenId));
+    if (!book) continue;
+    const trigger = dipEntryTrigger(plan, book);
+    if (!trigger.fire) continue;
+    // Decided when the plan was prepared, and printed rather than hidden so the log says
+    // why a market that reached the band was not bought.
+    const event = {
+      at: now,
+      type: "DIP_ENTRY_TRIGGERED",
+      portfolioId: plan.portfolioId,
+      tokenId: plan.tokenId,
+      question: plan.question,
+      outcome: plan.outcome,
+      openProbability: plan.openProbability,
+      ask: trigger.ask,
+      buyMin: plan.buyMin,
+      buyMax: plan.buyMax,
+      stakeUsdc: plan.stakeUsdc,
+      cashUsdc: Number.isFinite(cash) ? cash : null,
+    };
+    if (plan.blockedReason) {
+      recordEvent(context.state, { ...event, type: "DIP_ENTRY_BLOCKED", error: plan.blockedReason });
+      entered[key] = { terminal: true, at: now, reason: plan.blockedReason };
+      continue;
+    }
+    if (DIP_ENTRY_MODE !== "live" || MODE !== "live" || !CONFIRM_LIVE) {
+      // Shadow: the whole decision is recorded, at the price it would have paid, and
+      // nothing is sent. This is how the rule gets measured before it is trusted.
+      recordEvent(context.state, { ...event, type: "DIP_ENTRY_SHADOW" });
+      entered[key] = { terminal: true, at: now, reason: "shadow mode" };
+      continue;
+    }
+    const response = await submitDipEntry(plan, book, cash);
+    const filled = exitFilled(response);
+    recordEvent(context.state, {
+      ...event,
+      type: filled ? "DIP_ENTRY_SUBMITTED" : "DIP_ENTRY_REJECTED",
+      price: response?.price ?? null,
+      shares: response?.shares ?? null,
+      error: filled ? null : (response?.errorMsg || response?.error || "order was not accepted"),
+    });
+    // A rejection is terminal for this token too. The band is a moment; retrying into a
+    // book that has already refused the size is how one decision became three orders.
+    entered[key] = { terminal: true, at: now, reason: filled ? "submitted" : "rejected" };
+  }
+}
+// ---------------------------------------------------------------------------------------
+
 async function checkOnce(context) {
   const now = new Date().toISOString();
   // Before anything else, because these are owed positions whose own plan is gone: the
@@ -1916,6 +2073,23 @@ async function checkOnce(context) {
       context.policyError = error?.message || String(error);
       context.policyStateFetchedAt = Date.now();
     }
+  }
+  // The dip-entry watch, on the same cadence and with the same tolerance for failure: a
+  // watch that cannot be refreshed keeps the entries it already has, because the market it
+  // is following has by then left the catalogue and could not be re-fetched anyway.
+  if (DIP_ENTRY_MODE !== "off"
+    && (!context.dipWatchPayload || Date.now() - (context.dipWatchFetchedAt || 0) >= STATE_REFRESH_MS)) {
+    try {
+      context.dipWatchPayload = await fetchJson(
+        `${DIP_ENTRY_WATCH_URL}${DIP_ENTRY_WATCH_URL.includes("?") ? "&" : "?"}exitWorkerAt=${Date.now()}`,
+        "dip entry watch",
+      );
+      context.dipWatch = mergeDipEntryWatch(context.dipWatch, context.dipWatchPayload, Date.now());
+      context.dipWatchError = null;
+    } catch (error) {
+      context.dipWatchError = error?.message || String(error);
+    }
+    context.dipWatchFetchedAt = Date.now();
   }
   // Re-read on the same cadence as the remote policy rather than every pass. It is a
   // hand-maintained emergency file that changes when a person edits it, and a disk read
@@ -2021,9 +2195,17 @@ async function checkOnce(context) {
     // is exactly the delay this loop exists to avoid.
     return true;
   });
+  // The dip tokens ride the same batched /books call as the watched positions. A separate
+  // fetch would add a round trip to every pass, which is the cost this batching removed in
+  // the first place -- and the dip path needs the same speed the stop does.
+  const dipTokens = [...(context.dipWatch instanceof Map ? context.dipWatch.values() : [])]
+    .filter((plan) => !context.state.dipEntries?.[dipEntryPlanKey(plan)]?.terminal)
+    .map((plan) => String(plan.tokenId));
   let observed = [];
+  let dipBooks = new Map();
   try {
-    const books = await fetchBooks(candidates.map((plan) => plan.tokenId));
+    const books = await fetchBooks([...new Set([...candidates.map((plan) => plan.tokenId), ...dipTokens])]);
+    dipBooks = books;
     observed = candidates.map((plan) => {
       const book = books.get(String(plan.tokenId));
       return book
@@ -2317,6 +2499,38 @@ async function checkOnce(context) {
       context.liveStateFetchedAt = 0;
       const sync = await notifyAccountSync();
       if (sync.attempted && !sync.ok) recordEvent(context.state, { at: new Date().toISOString(), type: "POST_EXIT_SYNC_ERROR", tokenId: plan.tokenId, error: sync.error });
+    }
+  }
+  // After the exits, deliberately. An exit is protecting capital already committed and a dip
+  // entry is committing more of it; if one pass can only do one of the two, the protection
+  // goes first. The books are the ones already read above, so this costs no round trip and
+  // reacts on the same one-second beat the stop does.
+  if (DIP_ENTRY_MODE !== "off") {
+    context.state.dipEntryMode = DIP_ENTRY_MODE;
+    context.state.dipEntryWatchUrl = DIP_ENTRY_WATCH_URL;
+    context.state.dipEntryError = context.dipWatchError || null;
+    // What is being followed and what each entry would pay, so a pass that bought nothing
+    // is still legible: the alternative is a watch set that can only be inferred from the
+    // absence of events.
+    context.state.dipEntryWatch = [...(context.dipWatch instanceof Map ? context.dipWatch.values() : [])]
+      .map((plan) => ({
+        portfolioId: plan.portfolioId,
+        tokenId: plan.tokenId,
+        question: plan.question,
+        outcome: plan.outcome,
+        openProbability: plan.openProbability,
+        buyMin: plan.buyMin,
+        buyMax: plan.buyMax,
+        stakeUsdc: plan.stakeUsdc,
+        blockedReason: plan.blockedReason || null,
+        settled: context.state.dipEntries?.[dipEntryPlanKey(plan)]?.reason || null,
+      }));
+    try {
+      await fireDipEntries(context, dipBooks, now);
+    } catch (error) {
+      // The dip rule is an experiment bolted onto the loop that protects real positions.
+      // It must never be able to stop a stop loss from running on the next pass.
+      recordEvent(context.state, { at: now, type: "DIP_ENTRY_ERROR", error: error?.message || String(error) });
     }
   }
   await persistState(context);

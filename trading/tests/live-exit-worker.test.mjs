@@ -340,11 +340,14 @@ test("stop latency: every watched book is read in one pass, not in a queue", () 
 
   // One request for every book, not one request per book. This is what puts a floor under
   // the poll interval: N requests a pass means N per second at a one-second loop.
-  assert.match(source, /const books = await fetchBooks\(candidates\.map\(\(plan\) => plan\.tokenId\)\);/,
+  // One request for every book INCLUDING the dip-entry watch, which rides the same call for
+  // the same reason: it needs the stop's reaction time, and a second fetch would put back
+  // the round trip per pass that this batching removed.
+  assert.match(source, /const books = await fetchBooks\(\[\.\.\.new Set\(\[\.\.\.candidates\.map\(\(plan\) => plan\.tokenId\), \.\.\.dipTokens\]\)\]\);/,
     "the books must be read in a single batched request");
   assert.match(source, /await fetch\(`\$\{CLOB_HOST\}\/books`/, "which is the CLOB's own /books endpoint");
   const check = source.slice(source.indexOf("const candidates = plans.filter("));
-  const batchAt = check.indexOf("await fetchBooks(candidates");
+  const batchAt = check.indexOf("await fetchBooks([");
   const actAt = check.indexOf("for (const { plan, book, error: bookError } of observed)");
   assert.ok(batchAt >= 0 && actAt > batchAt,
     "reading has to finish before acting, or one exit delays the next position's price check");
@@ -1462,4 +1465,179 @@ test("a probability floor at or above the entry does not become the active stop"
   const pass = functionBody(source, "checkOnce");
   assert.match(pass, /exitReason\(\{[\s\S]{0,220}?entryPrice: plan\.entryPrice,/);
   assert.match(pass, /effectiveStopFloor\(\{ stopPrice: plan\.stopPrice, probabilityFloor: plan\.probabilityFloor, entryPrice: plan\.entryPrice \}\);/);
+});
+
+// Asked for: buy a favourite that has collapsed inside a fixture already under way, and do
+// it WITHOUT waiting one to two minutes for a runner -- "just try to insert the position,
+// with every other parameter already prepared, diversification settled, and only when
+// capital is available".
+//
+// That is why this lives in the loop that is already round every second with the signing
+// key rather than in the hourly executor. Everything slow is decided by api.php's
+// dip-entry-watch; the fast path answers only the two questions that cannot be answered
+// early, and then places the order.
+test("dip entry: the fast path decides only what cannot be prepared in advance", () => {
+  const source = readFileSync(new URL("../tools/rpi-live-exit-worker.mjs", import.meta.url), "utf8");
+
+  // Armed deliberately or not at all. A deployed file must not start buying.
+  assert.match(source, /const DIP_ENTRY_MODE = String\(process\.env\.LIVE_DIP_ENTRY_MODE \|\| "off"\)/);
+  assert.match(source, /if \(DIP_ENTRY_MODE !== "live" \|\| MODE !== "live" \|\| !CONFIRM_LIVE\) \{/,
+    "live buying needs the worker's own live mode and its confirmation as well as this one");
+  // Shadow records the whole decision instead, which is how the rule gets measured first.
+  assert.match(source, /type: "DIP_ENTRY_SHADOW"/);
+
+  // Exits come first in a pass: an exit protects capital already committed, an entry
+  // commits more of it.
+  const exitAt = source.indexOf("for (const { plan, book, error: bookError } of observed)");
+  const dipAt = source.indexOf("await fireDipEntries(context, dipBooks, now)");
+  assert.ok(exitAt > 0 && dipAt > exitAt, "the dip entry must not be able to delay a stop loss");
+  // And it cannot break the loop that protects real positions.
+  assert.match(source, /type: "DIP_ENTRY_ERROR"/);
+
+  // The trigger reads the ASK, because that is what an entry pays. The bid would report a
+  // collapse the buyer cannot be filled at.
+  const trigger = new Function("bestAsk", `
+    ${functionBody(source, "dipEntryTrigger")}
+    return dipEntryTrigger;
+  `)((book) => book.ask ?? null);
+  const plan = { buyMin: 0.3, buyMax: 0.4 };
+  assert.equal(trigger(plan, { ask: 0.35 }).fire, true);
+  assert.equal(trigger(plan, { ask: 0.45 }).fire, false, "above the band is not a collapse yet");
+  assert.equal(trigger(plan, { ask: 0.22 }).fire, false, "below the band is a different bet");
+  assert.equal(trigger(plan, { ask: null }).fire, false, "an empty book is not an opportunity");
+
+  // The watch set is held by the worker, not served fresh each pass, because a dipped
+  // favourite LEAVES the catalogue: at 70-80% it is a row, at 35% it is not.
+  const merge = new Function("DIP_ENTRY_TTL_MS", "dipEntryPlanKey", `
+    ${functionBody(source, "mergeDipEntryWatch")}
+    return mergeDipEntryWatch;
+  `)(3600000, (row) => `${row.portfolioId}:${row.tokenId}`);
+  const first = merge(null, { plans: [{ portfolioId: "live", tokenId: "aaa", buyMax: 0.4 }] }, 1000);
+  assert.equal(first.size, 1);
+  // The market has dipped out of the catalogue, so the endpoint no longer lists it. The
+  // entry has to survive exactly that, or it disappears at the moment it is needed.
+  const kept = merge(first, { plans: [] }, 2000);
+  assert.equal(kept.size, 1, "an entry that left the catalogue must not be dropped");
+  assert.equal(merge(kept, { plans: [] }, 1000 + 3600001).size, 0, "but it does expire");
+});
+
+test("dip entry: it fires once, needs cash, and honours what was prepared", async () => {
+  const source = readFileSync(new URL("../tools/rpi-live-exit-worker.mjs", import.meta.url), "utf8");
+  const submitted = [];
+  const build = (overrides = {}) => new Function(
+    "bestAsk", "exitFilled", "recordEvent", "submitDipEntry", "dipEntryTrigger", "dipEntryPlanKey",
+    "DIP_ENTRY_MODE", "MODE", "CONFIRM_LIVE",
+    `${functionBody(source, "fireDipEntries")}\nreturn fireDipEntries;`,
+  )(
+    (book) => book.ask ?? null,
+    (response) => response?.success === true,
+    (state, event) => { state.history = [event, ...(state.history || [])]; },
+    async (plan, book, cash) => {
+      submitted.push({ tokenId: plan.tokenId, cash });
+      return { success: overrides.accept !== false, price: 0.35, shares: 14 };
+    },
+    (plan, book) => {
+      const ask = book.ask ?? null;
+      return ask != null && ask <= plan.buyMax && ask >= plan.buyMin ? { fire: true, ask } : { fire: false };
+    },
+    (row) => `${row.portfolioId}:${row.tokenId}`,
+    overrides.dipMode || "live",
+    overrides.mode || "live",
+    overrides.confirm !== false,
+  );
+
+  const plan = {
+    portfolioId: "live-custom-dip", tokenId: "aaa", question: "INOX vs Black Phoenix",
+    openProbability: 0.78, buyMin: 0.3, buyMax: 0.4, stakeUsdc: 5, blockedReason: "",
+  };
+  const books = new Map([["aaa", { ask: 0.35 }]]);
+  const context = () => ({
+    state: { dipEntries: {} },
+    dipWatch: new Map([["live-custom-dip:aaa", plan]]),
+    dipWatchPayload: { cashUsdc: 40 },
+  });
+
+  // The reported case: it opened at 78%, it is asked at 35%, so it is bought.
+  const live = context();
+  await build()(live, books, "2026-09-10T20:27:00Z");
+  assert.deepEqual(submitted.map((row) => row.tokenId), ["aaa"]);
+  assert.equal(submitted[0].cash, 40, "the cash the plan was prepared with reaches the order");
+  assert.equal(live.state.history[0].type, "DIP_ENTRY_SUBMITTED");
+
+  // Once, ever. A price wobbling across the band's edge must not buy repeatedly, and the
+  // claim alone stops that only until the first order settles.
+  submitted.length = 0;
+  await build()(live, books, "2026-09-10T20:28:00Z");
+  assert.deepEqual(submitted, [], "a settled token is never bought again");
+
+  // A rejection is terminal too: retrying into a book that already refused the size is how
+  // one decision became three orders.
+  submitted.length = 0;
+  const rejected = context();
+  await build({ accept: false })(rejected, books, "2026-09-10T20:27:00Z");
+  assert.equal(rejected.state.history[0].type, "DIP_ENTRY_REJECTED");
+  await build({ accept: false })(rejected, books, "2026-09-10T20:28:00Z");
+  assert.equal(submitted.length, 1, "a rejected entry is not retried on the next pass");
+
+  // Diversification was settled when the plan was prepared, and a blocked plan is recorded
+  // rather than silently skipped -- otherwise a watched market that reached the band and
+  // was not bought looks like a worker that missed it.
+  submitted.length = 0;
+  const blocked = context();
+  blocked.dipWatch = new Map([["live-custom-dip:aaa", { ...plan, blockedReason: "the wallet already has a position in this market" }]]);
+  await build()(blocked, books, "2026-09-10T20:27:00Z");
+  assert.deepEqual(submitted, []);
+  assert.equal(blocked.state.history[0].type, "DIP_ENTRY_BLOCKED");
+  assert.match(blocked.state.history[0].error, /already has a position/);
+
+  // Shadow: the whole decision at the price it would have paid, and nothing sent.
+  submitted.length = 0;
+  const shadow = context();
+  await build({ dipMode: "shadow" })(shadow, books, "2026-09-10T20:27:00Z");
+  assert.deepEqual(submitted, []);
+  assert.equal(shadow.state.history[0].type, "DIP_ENTRY_SHADOW");
+  assert.equal(shadow.state.history[0].ask, 0.35, "and it records the price it would have paid");
+});
+
+test("dip entry: the order never pays above the band, and never without cash", () => {
+  const source = readFileSync(new URL("../tools/rpi-live-exit-worker.mjs", import.meta.url), "utf8");
+
+  // "Only when capital is available", checked against the stake this plan was prepared
+  // with rather than against a hopeful balance.
+  assert.match(source, /if \(!\(Number\(cashUsdc\) >= stake\)\) \{/);
+  // The band's ceiling is also the price ceiling. A worker that was a second late must not
+  // buy the recovery it was too slow to catch.
+  assert.match(source, /const price = Math\.min\(marketable, Number\(plan\.buyMax\)\);/,
+    "the buy band's top is the highest price the order may pay");
+  // Marketable through the levels the size consumes, not top-of-book: the same reasoning as
+  // the stop-loss reversal, which is specified as a market order too.
+  assert.match(source, /marketableBuyPrice\(\{ book, notionalUsdc: stake, maxSlippage: DIP_ENTRY_MAX_SLIPPAGE \}\)/);
+  // The claim is what stops this and the hourly executor from both entering the same
+  // market, and a failed order releases it rather than leaving it held.
+  assert.match(source, /const claim = await claimLiveEntry\(plan\.tokenId, claimId\);/);
+  assert.match(source, /await settleLiveEntryClaim\("release", plan\.tokenId, claimId\);\n    return \{ success: false, error: error\?\.message/,
+    "a thrown order must release its claim, or the market can never be entered again");
+  // FAK then FOK, for the reason the reversal already documents: a smaller position is
+  // still the position the rule asked for.
+  assert.match(source, /postOrder\(signed, OrderType\.FAK, false\)[\s\S]{0,200}?postOrder\(signed, OrderType\.FOK, false\)/);
+});
+
+// The same trap the three exit switches were fixed for: dispatching this workflow to ship a
+// code change must not arm or disarm anything as a side effect. A redeploy with no inputs
+// once turned an armed stop loss into 147 shadow events.
+test("dip entry: arming it is deliberate, and a redeploy never changes it", () => {
+  const workflow = readFileSync(new URL("../../.github/workflows/trading-rpi-live-exit-worker.yml", import.meta.url), "utf8");
+  assert.match(workflow, /dip_entry_mode:[\s\S]*?default: keep/,
+    "keep must be the default, or shipping a fix rearms the rule");
+  assert.match(workflow, /options: \[keep, "off", shadow, live\]/);
+  assert.match(workflow, /dip_entry_mode="\$\(keep_or_existing LIVE_DIP_ENTRY_MODE "\$\{LIVE_DIP_ENTRY_MODE:-\}"\)"/,
+    "an absent input has to fall back to what the EnvironmentFile already says");
+  assert.match(workflow, /dip_entry_mode="\$\{dip_entry_mode:-off\}"/, "and a first install is off");
+  assert.match(workflow, /case "\$dip_entry_mode" in off\|shadow\|live\) ;; \*\) dip_entry_mode=off ;; esac/,
+    "an unrecognised value must fall back to off, never to live");
+  // The install says out loud what it just armed, because that is how the disarmed stop
+  // loss went unnoticed for 147 events.
+  assert.match(workflow, /DIP ENTRY ARMED: a collapsed favourite in the buy band may be BOUGHT/);
+  assert.match(workflow, /LIVE_DIP_ENTRY_MODE=\$\{dip_entry_mode\}/);
+  assert.match(workflow, /LIVE_DIP_ENTRY_WATCH_URL=https:\/\/osobnizkusenosti\.cz\/trading\/api\.php\?action=dip-entry-watch/);
 });
