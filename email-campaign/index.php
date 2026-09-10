@@ -4940,22 +4940,33 @@ function aiResearchQualityReport(PDO $pdo, array $config, int $limit = 8): array
 {
     $limit = max(1, min(40, $limit));
     try {
+        // Nacita se vic radku, nez se vypise: behy, ktere k planu nikdy nedosly
+        // (spadly na kvote hned na prvnim kroku), o kvalite nerikaji nic a nesmi
+        // vytlacit ty, ktere model opravdu napsal.
         $rows = $pdo->query('
             SELECT id, seed_business, seed_email, status, plan_json,
                    COALESCE(found_count, 0) AS found_count,
                    COALESCE(accepted_count, 0) AS accepted_count
             FROM ai_research_runs
             ORDER BY id DESC
-            LIMIT ' . $limit . '
+            LIMIT ' . ($limit * 10) . '
         ')->fetchAll(PDO::FETCH_ASSOC);
     } catch (Throwable $e) {
         return ['error' => $e->getMessage()];
     }
     $runs = [];
+    $skippedWithoutPlan = 0;
     $byModel = [];
     foreach ($rows as $row) {
+        if (count($runs) >= $limit) {
+            break;
+        }
         $plan = json_decode((string)$row['plan_json'], true);
         $plan = is_array($plan) ? $plan : [];
+        if (trim((string)($plan['business_understanding'] ?? '')) === '') {
+            $skippedWithoutPlan++;
+            continue;
+        }
         $models = [];
         foreach (aiResearchNormalizeModelAudit($plan['ai_model_audit'] ?? []) as $entry) {
             $step = (string)($entry['step'] ?? '');
@@ -5022,6 +5033,7 @@ function aiResearchQualityReport(PDO $pdo, array $config, int $limit = 8): array
         'current_model' => aiResearchModelName($config),
         'exhausted_models' => array_keys(aiResearchModelStateMap($pdo)),
         'by_model' => $summary,
+        'skipped_without_plan' => $skippedWithoutPlan,
         'runs' => $runs,
     ];
 }

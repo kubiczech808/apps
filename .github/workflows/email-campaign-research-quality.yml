@@ -64,6 +64,9 @@ jobs:
           print("  aktualni model: %s" % report.get("current_model", "?"))
           exhausted = report.get("exhausted_models") or []
           print("  vycerpane dnes: %s" % (", ".join(exhausted) if exhausted else "zadny"))
+          skipped = report.get("skipped_without_plan")
+          if skipped:
+              print("  preskoceno behu bez planu: %s (spadly na kvote driv, nez model neco napsal)" % skipped)
 
           print()
           print("=== KVALITA PODLE MODELU ===")
