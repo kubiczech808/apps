@@ -40,6 +40,8 @@ export const DEFAULT_JEAFX_SWING = {
   atrPctMax: 6.0,
 }
 
+export const DEFAULT_BACKTEST_SETTINGS = DEFAULT_JEAFX_SWING
+
 export const evaluateEntry = ({ htfCandles, ltfCandles, settings = {} }) =>
   evaluatePriceActionEntry({
     htfCandles,

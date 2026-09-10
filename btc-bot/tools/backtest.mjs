@@ -12,6 +12,7 @@ import { fetchCandles, fetchCandlesWithFallback } from '../src/candles.mjs'
 import { describeFunding, fetchFundingSettlements } from '../src/funding.mjs'
 import { createLnMarketsClient, resolveNetwork } from '../src/lnmarkets.mjs'
 import { formatBacktest, runBacktest } from '../src/backtest.mjs'
+import * as jeafxSweepReclaim from '../src/strategy-jeafx-sweep-reclaim.mjs'
 import * as jeafxSwing from '../src/strategy-jeafx-swing.mjs'
 import * as priceAction from '../src/strategy.mjs'
 import * as momentum from '../src/strategy-momentum.mjs'
@@ -25,6 +26,7 @@ import * as momentum from '../src/strategy-momentum.mjs'
 // result.
 const STRATEGIES = {
   'price-action': {
+    label: 'PA-0 price action',
     module: priceAction,
     timeframes: { htfHours: 4, ltfHours: 1 },
     windowHours: 2400,
@@ -32,13 +34,23 @@ const STRATEGIES = {
   },
   // JeaFx-inspired swing variant: daily bias, 4h supply/demand POI and trigger.
   'jeafx-swing': {
+    label: 'JF-1 HTF swing S/D',
     module: jeafxSwing,
+    timeframes: { htfHours: 24, ltfHours: 4 },
+    windowHours: 6000,
+    warmupHours: 3600,
+  },
+  // JeaFx-inspired liquidity model: sweep, reclaim, then momentum confirmation.
+  'jeafx-sweep-reclaim': {
+    label: 'JF-2 sweep & reclaim',
+    module: jeafxSweepReclaim,
     timeframes: { htfHours: 24, ltfHours: 4 },
     windowHours: 6000,
     warmupHours: 3600,
   },
   // Signals off the daily chart, entry priced at the latest hourly close.
   momentum: {
+    label: 'TF-1 daily momentum',
     module: momentum,
     timeframes: { htfHours: 24, ltfHours: 1 },
     windowHours: 6000, // 250 daily candles
@@ -61,18 +73,28 @@ for (let index = 2; index < process.argv.length; index += 1) {
   }
 }
 
-const chosen = STRATEGIES[args.get('strategy') ?? 'price-action']
-if (!chosen) {
+const selectedName = args.has('all') ? 'all' : args.get('strategy') ?? 'price-action'
+const selectedStrategies =
+  selectedName === 'all' ? Object.entries(STRATEGIES) : [[selectedName, STRATEGIES[selectedName]]]
+if (selectedStrategies.some(([, strategy]) => !strategy)) {
   console.error(`Unknown strategy. Choose one of: ${Object.keys(STRATEGIES).join(', ')}`)
   process.exit(1)
 }
+
+const years = args.has('years') ? Number(args.get('years')) : null
+if (years !== null && (!(years > 0) || !Number.isFinite(years))) {
+  console.error('--years must be a positive number')
+  process.exit(1)
+}
+const horizonHours = years ? Math.ceil(years * 365.25 * 24) : null
+const maxWarmupHours = Math.max(...selectedStrategies.map(([, strategy]) => strategy.warmupHours))
+const candleLimit = Number(args.get('limit') ?? (horizonHours ? horizonHours + maxWarmupHours : 1000))
 
 const loadCandles = async () => {
   if (args.has('file')) {
     const parsed = JSON.parse(await readFile(args.get('file'), 'utf8'))
     return { source: args.get('file'), candles: Array.isArray(parsed) ? parsed : parsed.candles }
   }
-  const limit = Number(args.get('limit') ?? 1000)
   // `futures/candles` needs no credentials, so a backtest reads the same venue
   // the bot trades without being armed to trade.
   const client = createLnMarketsClient({
@@ -82,12 +104,14 @@ const loadCandles = async () => {
     passphrase: '',
   })
   if (args.has('source')) {
-    return { source: args.get('source'), candles: await fetchCandles({ source: args.get('source'), limit, client }) }
+    return { source: args.get('source'), candles: await fetchCandles({ source: args.get('source'), limit: candleLimit, client }) }
   }
-  return fetchCandlesWithFallback({ limit, client })
+  return fetchCandlesWithFallback({ limit: candleLimit, client })
 }
 
 const { source, candles, failures = [] } = await loadCandles()
+const first = new Date(candles[0].time).toISOString()
+const last = new Date(candles.at(-1).time).toISOString()
 
 // Real carry, not an assumed constant. `--no-funding` measures the same
 // strategy held for free, which is only useful for showing how much the carry
@@ -103,7 +127,7 @@ if (!args.has('no-funding')) {
     })
     fundingSettlements = await fetchFundingSettlements({
       client: fundingClient,
-      hours: Number(args.get('limit') ?? 1000) + 48,
+      hours: candleLimit + 48,
     })
     console.log(`Funding       ${describeFunding(fundingSettlements)}`)
     console.log('')
@@ -122,14 +146,18 @@ if (failures.length) {
   console.log('')
 }
 
-const overrides = { strategy: {}, risk: {}, timeframes: chosen.timeframes }
-if (args.has('risk')) overrides.risk.riskPct = Number(args.get('risk'))
-if (args.has('min-rr')) overrides.strategy.minRR = Number(args.get('min-rr'))
-if (args.has('max-trades')) overrides.maxTradesPerDay = Number(args.get('max-trades'))
-if (args.has('capital')) overrides.startingCapitalUsd = Number(args.get('capital'))
+const overridesFor = (strategy) => {
+  const overrides = { strategy: {}, risk: {}, timeframes: strategy.timeframes }
+  if (args.has('risk')) overrides.risk.riskPct = Number(args.get('risk'))
+  if (args.has('min-rr')) overrides.strategy.minRR = Number(args.get('min-rr'))
+  if (args.has('max-trades')) overrides.maxTradesPerDay = Number(args.get('max-trades'))
+  if (args.has('capital')) overrides.startingCapitalUsd = Number(args.get('capital'))
+  return overrides
+}
 
-const warmupHours = Number(args.get('warmup') ?? chosen.warmupHours)
-const windowHours = chosen.windowHours
+const warmupFor = (strategy) => Number(args.get('warmup') ?? strategy.warmupHours)
+const annualised = (returnPct, hours) =>
+  Number.isFinite(returnPct) && hours > 0 ? ((1 + returnPct / 100) ** (8766 / hours) - 1) * 100 : null
 
 // `--compare` is a DIAGNOSIS, not a menu.
 //
@@ -171,6 +199,16 @@ const VARIANTS_BY_STRATEGY = {
     ['zone up to 1.0 ATR', { strategy: { zoneMaxDistanceAtr: 1.0 } }],
     ['fixed 2R target', { strategy: { tpMaxR: 2 } }],
   ],
+  'jeafx-sweep-reclaim': [
+    ['shipped', {}],
+    ['rejection also allowed', { strategy: { triggerKinds: null } }],
+    ['no candle trigger', { strategy: { requireTrigger: false } }],
+    ['longer reclaim window', { strategy: { reclaimMaxBars: 12 } }],
+    ['older sweeps allowed', { strategy: { sweepLookbackBars: 96 } }],
+    ['faster confirmation', { strategy: { triggerMaxBarsAfterReclaim: 2 } }],
+    ['stop 0.75 ATR past sweep', { strategy: { stopAtrBuffer: 0.75 } }],
+    ['fixed 2R target', { strategy: { tpMaxR: 2 } }],
+  ],
   // Structural questions, not a parameter sweep: does each RULE earn its place?
   // The lookback numbers are left at their long-standing defaults on purpose —
   // tuning them against this window is how a backtest stops meaning anything.
@@ -183,7 +221,85 @@ const VARIANTS_BY_STRATEGY = {
     ['wider stop, 3 ATR', { strategy: { stopAtr: 3 } }],
   ],
 }
-const VARIANTS = VARIANTS_BY_STRATEGY[args.get('strategy') ?? 'price-action']
+const VARIANTS = VARIANTS_BY_STRATEGY[selectedName]
+
+const fmt = (value, digits = 2) => (value === null || value === undefined ? '  n/a' : value.toFixed(digits))
+const runStrategy = async (strategy, variant = {}) => {
+  const base = overridesFor(strategy)
+  return runBacktest({
+    hourly: candles,
+    settings: {
+      ...base,
+      ...variant,
+      strategy: { ...(base.strategy ?? {}), ...(variant.strategy ?? {}) },
+      risk: { ...(base.risk ?? {}), ...(variant.risk ?? {}) },
+    },
+    warmupHours: warmupFor(strategy),
+    windowHours: strategy.windowHours,
+    fundingSettlements,
+    strategy: strategy.module,
+  })
+}
+
+const exitCounts = (trades) =>
+  trades.reduce((counts, trade) => {
+    counts[trade.exitReason] = (counts[trade.exitReason] ?? 0) + 1
+    return counts
+  }, {})
+
+if (selectedName === 'all') {
+  const rows = []
+  for (const [name, strategy] of selectedStrategies) {
+    const result = await runStrategy(strategy)
+    const exits = exitCounts(result.trades)
+    rows.push({
+      name,
+      label: strategy.label,
+      days: result.hours / 24,
+      trades: result.stats.trades,
+      winRate: result.stats.winRate,
+      pf: result.stats.profitFactor,
+      ret: result.returnPct,
+      annual: annualised(result.returnPct, result.hours),
+      dd: result.stats.maxDrawdownPct,
+      avgWinLoss: result.stats.averageWinSats / (result.stats.averageLossSats || 1),
+      tp: exits.take_profit ?? 0,
+      sl: exits.stop_loss ?? 0,
+      manual: exits.manual ?? 0,
+      starved: result.starved,
+    })
+  }
+
+  console.log(`Candles       ${candles.length} hourly from ${source} (${first} → ${last})`)
+  if (years) console.log(`Requested     ${years} years after warmup; ${Math.round(candleLimit / 24)} days of candles requested`)
+  console.log('')
+  console.log('Strategy comparison, same candles:')
+  console.log('')
+  console.log('  strategy                    days trades   win%      PF   return%      p.a.   maxDD% avgW/avgL    TP   SL  man')
+  for (const row of rows) {
+    console.log(
+      `  ${row.label.padEnd(26)} ${String(Math.round(row.days)).padStart(5)} ${String(row.trades).padStart(6)}` +
+        `  ${fmt(row.winRate, 1).padStart(5)}  ${fmt(row.pf).padStart(6)}  ${fmt(row.ret, 1).padStart(8)}` +
+        `  ${fmt(row.annual, 1).padStart(8)}  ${fmt(row.dd, 1).padStart(7)}` +
+        ` ${fmt(row.avgWinLoss, 2).padStart(9)}  ${String(row.tp).padStart(4)} ${String(row.sl).padStart(4)} ${String(row.manual).padStart(4)}` +
+        `${row.starved ? '  INVALID' : ''}`
+    )
+  }
+  console.log('')
+  console.log('Read this as a first pass. The target is stable 20%+ p.a. with tolerable drawdown,')
+  console.log('so a candidate needs enough trades, out-of-sample windows and fee-aware robustness before promotion.')
+  if (args.has('json')) {
+    await writeFile(args.get('json'), JSON.stringify({ source, first, last, rows }, null, 2), 'utf8')
+    console.log(`\nFull comparison written to ${args.get('json')}`)
+  }
+  process.exit(0)
+}
+
+const chosen = selectedStrategies[0][1]
+const chosenName = selectedStrategies[0][0]
+const overrides = overridesFor(chosen)
+const warmupHours = warmupFor(chosen)
+const windowHours = chosen.windowHours
 
 if (args.has('compare')) {
   const merge = (variant) => ({
@@ -203,10 +319,7 @@ if (args.has('compare')) {
       fundingSettlements,
       strategy: chosen.module,
     })
-    const exits = result.trades.reduce((counts, trade) => {
-      counts[trade.exitReason] = (counts[trade.exitReason] ?? 0) + 1
-      return counts
-    }, {})
+    const exits = exitCounts(result.trades)
     rows.push({
       label,
       trades: result.stats.trades,
@@ -221,10 +334,10 @@ if (args.has('compare')) {
     })
   }
 
-  const fmt = (value, digits = 2) => (value === null || value === undefined ? '  n/a' : value.toFixed(digits))
-  console.log(`Candles       ${candles.length} hourly from ${source}`)
+  console.log(`Candles       ${candles.length} hourly from ${source} (${first} → ${last})`)
+  if (years) console.log(`Requested     ${years} years after warmup; ${Math.round(candleLimit / 24)} days of candles requested`)
   console.log('')
-  console.log('One change each from the shipped configuration, same candles:')
+  console.log(`One change each from ${STRATEGIES[chosenName].label}, same candles:`)
   console.log('')
   console.log('  variant                 trades   win%      PF   return%   avgW/avgL    TP   SL  man')
   for (const row of rows) {
@@ -249,8 +362,6 @@ const report = await runBacktest({
   strategy: chosen.module,
 })
 
-const first = new Date(candles[0].time).toISOString()
-const last = new Date(candles.at(-1).time).toISOString()
 console.log(formatBacktest(report))
 // Printed last, with the summary: if paging silently returned one page, the
 // window is short and that is the first thing to check.

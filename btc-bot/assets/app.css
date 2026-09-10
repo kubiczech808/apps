@@ -359,6 +359,25 @@ tbody tr:hover { background: var(--series-1-soft); }
   gap: 6px;
   margin-top: 9px;
 }
+.strategy-backtest {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+.strategy-backtest-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.strategy-backtest-head strong {
+  font-size: 12px;
+  line-height: 1.35;
+  text-align: right;
+}
+.strategy-backtest p {
+  margin-top: 6px;
+}
 .strategy-card code {
   display: block;
   margin-top: 10px;

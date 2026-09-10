@@ -17,12 +17,35 @@
 // holds, and the fact that LN Markets' own index can differ from the spot venue
 // the candles came from. Results should be read as an upper bound.
 
-import { aggregate } from './candles.mjs'
+import { HOUR_MS, aggregate } from './candles.mjs'
 import { createPaperExecutor } from './executor-paper.mjs'
 import { planPosition, pnlSats, SATS_PER_BTC } from './risk.mjs'
 import * as priceActionStrategy from './strategy.mjs'
 import { computeStats, DEFAULT_SETTINGS, mergeSettings } from './state.mjs'
 import { roundStop, roundTarget } from './bot.mjs'
+
+const lowerBoundTime = (candles, time) => {
+  let low = 0
+  let high = candles.length
+  while (low < high) {
+    const mid = Math.floor((low + high) / 2)
+    if (candles[mid].time < time) low = mid + 1
+    else high = mid
+  }
+  return low
+}
+
+const upperBoundClosed = (candles, throughTime, timeframeHours) => {
+  let low = 0
+  let high = candles.length
+  const duration = timeframeHours * HOUR_MS
+  while (low < high) {
+    const mid = Math.floor((low + high) / 2)
+    if (candles[mid].time + duration <= throughTime) low = mid + 1
+    else high = mid
+  }
+  return low
+}
 
 export const runBacktest = async ({
   hourly,
@@ -39,7 +62,12 @@ export const runBacktest = async ({
   // branch inside an old one.
   strategy = priceActionStrategy,
 } = {}) => {
-  const settings = mergeSettings({ ...DEFAULT_SETTINGS, ...overrides })
+  const strategyDefaults = strategy.DEFAULT_BACKTEST_SETTINGS ?? {}
+  const settings = mergeSettings({
+    ...DEFAULT_SETTINGS,
+    ...overrides,
+    strategy: { ...strategyDefaults, ...(overrides.strategy ?? {}) },
+  })
   const capitalUsd = startingCapitalUsd ?? settings.startingCapitalUsd
   if (!Array.isArray(hourly) || hourly.length <= warmupHours) {
     throw new Error(`need more than ${warmupHours} hourly candles, got ${hourly?.length ?? 0}`)
@@ -72,6 +100,8 @@ export const runBacktest = async ({
     fundingSettlements: carrySchedule,
     now: () => clock,
   })
+  const allLtf = aggregate(hourly, settings.timeframes.ltfHours)
+  const allHtf = aggregate(hourly, settings.timeframes.htfHours)
 
   const equityCurve = []
   const rejections = new Map()
@@ -91,9 +121,16 @@ export const runBacktest = async ({
     executor.mark([candle])
 
     const from = Math.max(0, index - windowHours)
-    const slice = hourly.slice(from, index + 1)
-    const ltf = aggregate(slice, settings.timeframes.ltfHours)
-    const htf = aggregate(slice, settings.timeframes.htfHours)
+    const fromTime = hourly[from].time
+    const throughTime = candle.time + HOUR_MS
+    const ltf = allLtf.slice(
+      lowerBoundTime(allLtf, fromTime),
+      upperBoundClosed(allLtf, throughTime, settings.timeframes.ltfHours)
+    )
+    const htf = allHtf.slice(
+      lowerBoundTime(allHtf, fromTime),
+      upperBoundClosed(allHtf, throughTime, settings.timeframes.htfHours)
+    )
     // The strategy states its own requirements by refusing; the engine only
     // needs enough to be worth asking.
     if (ltf.length < 2 || htf.length < 2) continue

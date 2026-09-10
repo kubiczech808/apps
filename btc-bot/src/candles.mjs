@@ -27,6 +27,20 @@ const num = (value) => {
 const byTimeAscending = (a, b) => a.time - b.time
 
 export const SOURCES = {
+  binance: {
+    label: 'Binance',
+    url: ({ limit }) =>
+      `https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=1h&limit=${Math.min(limit, 1000)}`,
+    parse: (payload) =>
+      (Array.isArray(payload) ? payload : []).map((row) => ({
+        time: num(row[0]),
+        open: num(row[1]),
+        high: num(row[2]),
+        low: num(row[3]),
+        close: num(row[4]),
+        volume: num(row[5]),
+      })),
+  },
   bybit: {
     label: 'Bybit',
     url: ({ limit }) =>
@@ -72,7 +86,50 @@ export const SOURCES = {
   },
 }
 
-export const DEFAULT_SOURCE_ORDER = ['lnmarkets', 'bybit', 'kraken', 'coinbase']
+export const DEFAULT_SOURCE_ORDER = ['lnmarkets', 'binance', 'bybit', 'kraken', 'coinbase']
+
+export const fetchBinanceCandles = async ({
+  limit = 500,
+  fetchImpl = globalThis.fetch,
+  timeoutMs = 15000,
+  pauseMs = 100,
+}) => {
+  const collected = new Map()
+  let endTime = Date.now()
+
+  while (collected.size < limit) {
+    const batchLimit = Math.min(1000, limit - collected.size)
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), timeoutMs)
+    let response
+    try {
+      response = await fetchImpl(
+        `https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=1h&limit=${batchLimit}&endTime=${endTime}`,
+        {
+          headers: { Accept: 'application/json', 'User-Agent': 'btc-dca-bot/1' },
+          signal: controller.signal,
+        }
+      )
+    } finally {
+      clearTimeout(timer)
+    }
+
+    if (!response.ok) throw new Error(`Binance candles HTTP ${response.status}`)
+    const rows = await response.json()
+    if (!Array.isArray(rows) || rows.length === 0) break
+
+    for (const row of SOURCES.binance.parse(rows)) collected.set(row.time, row)
+    const oldest = Math.min(...rows.map((row) => num(row[0])))
+    const nextEnd = oldest - 1
+    if (!(nextEnd < endTime)) break
+    endTime = nextEnd
+    if (pauseMs > 0 && collected.size < limit) await new Promise((resolve) => setTimeout(resolve, pauseMs))
+  }
+
+  const usable = [...collected.values()].sort(byTimeAscending)
+  if (usable.length === 0) throw new Error('Binance returned no candles')
+  return usable.slice(-limit)
+}
 
 /**
  * Hourly candles from LN Markets itself.
@@ -190,7 +247,10 @@ export const fetchCandles = async ({
 } = {}) => {
   if (source === 'lnmarkets') {
     if (!client) throw new Error('LN Markets candles need a client')
-    return fetchLnMarketsCandles({ client, limit })
+    return fetchLnMarketsCandles({ client, limit, maxPages: Math.ceil(limit / 1000) + 5 })
+  }
+  if (source === 'binance' && limit > 1000) {
+    return fetchBinanceCandles({ limit, fetchImpl, timeoutMs })
   }
 
   const spec = SOURCES[source]

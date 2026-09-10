@@ -59,6 +59,8 @@ export const DEFAULT_MOMENTUM = {
   minCandles: 140,
 }
 
+export const DEFAULT_BACKTEST_SETTINGS = DEFAULT_MOMENTUM
+
 const reject = (reason, context = {}) => ({ action: 'none', reason, context })
 
 const simpleMovingAverage = (candles, days) => {
