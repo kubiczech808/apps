@@ -332,10 +332,6 @@ const els = {
   portfolioAccountType: document.querySelector("[data-portfolio-account-type]"),
   portfolioAccountTypeLabel: document.querySelector("[data-portfolio-account-type-label]"),
   portfolioAccountTypeNote: document.querySelector("[data-portfolio-account-type-note]"),
-  liveInitialCapitalRow: document.querySelector("[data-live-initial-capital-row]"),
-  liveInitialCapital: document.querySelector("[data-live-initial-capital]"),
-  liveInitialCapitalLabel: document.querySelector("[data-live-initial-capital-label]"),
-  liveInitialCapitalNote: document.querySelector("[data-live-initial-capital-note]"),
   eligibilityThreshold: document.querySelector("[data-eligibility-threshold]"),
   eligibilityThresholdLabel: document.querySelector("[data-eligibility-threshold-label]"),
   maxEligibilityThreshold: document.querySelector("[data-max-eligibility-threshold]"),
@@ -1673,22 +1669,10 @@ function normalizeOptionalMoney(value) {
   return Math.round(numeric * 100) / 100;
 }
 
-function normalizeInitialCapital(value) {
-  if (value === "" || value == null) return null;
-  const numeric = Number(value);
-  if (!Number.isFinite(numeric) || numeric <= 0) return null;
-  return Math.min(10000000, Math.round(numeric * 100) / 100);
-}
-
-function liveInitialCapitalForMode(mode = state.mode, configOverride = null) {
-  if (!isLivePortfolioMode(mode)) return null;
-  const configured = normalizeInitialCapital((configOverride || portfolioConfigForMode(mode)).initialUsdc);
-  if (configured != null) return configured;
-  if (normalizeMode(mode) !== "live") return null;
-  return normalizeInitialCapital(
-    state.liveState?.portfolio?.originalValueUsdc ?? state.liveState?.portfolio?.depositedUsdc,
-  );
-}
+// normalizeInitialCapital and liveInitialCapitalForMode used to live here. A live
+// portfolio's Original value is derived now -- the account balance minus that portfolio's
+// own P/L -- so there is no stored initialUsdc left to read or validate on the live side.
+// api.php still accepts and keeps the field, so an existing config loses nothing.
 
 function portfolioConfigForMode(mode = state.mode) {
   const defaults = defaultPortfolioConfig();
@@ -5818,21 +5802,6 @@ function syncPortfolioParameterControls(configOverride = null, options = {}) {
   if (els.portfolioAccountTypeNote) {
     els.portfolioAccountTypeNote.textContent = portfolioAccountTypeNote(createType);
   }
-  const liveInitialCapital = liveInitialCapitalForMode(mode, config);
-  if (els.liveInitialCapitalRow) {
-    els.liveInitialCapitalRow.hidden = !isLive;
-  }
-  if (els.liveInitialCapital && document.activeElement !== els.liveInitialCapital) {
-    els.liveInitialCapital.value = liveInitialCapital == null ? "" : String(liveInitialCapital);
-  }
-  if (els.liveInitialCapitalLabel) {
-    els.liveInitialCapitalLabel.textContent = liveInitialCapital == null ? "not set" : money(liveInitialCapital);
-  }
-  if (els.liveInitialCapitalNote) {
-    els.liveInitialCapitalNote.textContent = normalizeMode(mode) === "live"
-      ? "Set to total deposited/allocated live capital; top-ups belong here, not in P/L."
-      : "Required baseline for this live strategy's P/L.";
-  }
   if (els.eligibilityThreshold) els.eligibilityThreshold.value = String(Math.round(threshold * 100));
   if (els.eligibilityThresholdLabel) els.eligibilityThresholdLabel.textContent = probability(threshold);
   if (els.maxEligibilityThreshold) els.maxEligibilityThreshold.value = maxThreshold == null ? "" : String(Math.round(maxThreshold * 100));
@@ -6201,10 +6170,9 @@ function switchCreatePortfolioType(type) {
 //   automationEnabled  false, always. A live portfolio that starts trading the moment it
 //                      is created is not a copy, it is a live order. It goes on when the
 //                      person says so.
-//   initialUsdc        dropped. A paper portfolio's capital is play money; the live one
-//                      needs a real figure, and confirmParameterModal already refuses to
-//                      create a live portfolio without one -- which is the one field left
-//                      to fill in.
+//   initialUsdc        dropped. A paper portfolio's capital is play money, and the live
+//                      side has no use for the field at all now: its Original value is
+//                      derived from the account balance minus its own P/L.
 //   archived           false, so copying an archived experiment produces a visible one.
 //
 // stakeUsdc DOES carry over: paper and live both size from it, and a copy that quietly
@@ -6413,13 +6381,11 @@ function renderPortfolioOverview() {
   const rows = dashboardModes().map((mode) => {
     const automationEnabled = automationIsEnabled(portfolioConfigForMode(mode));
     if (isLivePortfolioMode(mode)) {
-      // Free is the wallet's and is the same on every live row, which the shared-account
-      // note on the row states. Equity, "In positions" and "In orders" are not: they are
-      // what THIS portfolio has and is holding. Reading marketValueUsdc and the whole
+      // Equity and Free are the wallet's and are the same on every live row, which the
+      // shared-account note on the row states. "In positions" and "In orders" are not:
+      // they are what THIS portfolio is holding. Reading marketValueUsdc and the whole
       // wallet's resting buys put the account's two totals on all five rows, beside tables
-      // listing only that portfolio's own positions and orders -- and the wallet's equity
-      // did the same to this column, so it disagreed with the portfolio card, where equity
-      // is the portfolio's Original value plus its own P/L.
+      // listing only that portfolio's own positions and orders.
       const ownPositions = state.liveState ? livePositions(state.liveState, mode) : [];
       const ownOrders = state.liveState ? liveOpenOrders(state.liveState, mode) : [];
       const marked = (row) => {
@@ -6429,18 +6395,14 @@ function renderPortfolioOverview() {
         const shares = Number(row?.shares ?? row?.size);
         return Number.isFinite(price) && Number.isFinite(shares) ? price * shares : 0;
       };
-      // Same arithmetic as the portfolio card: Original value plus this portfolio's own
-      // realized and open P/L. Without an original value there is nothing to add to, so
-      // the wallet figure stands, as it does on the card.
-      const ownInitial = liveInitialCapitalForMode(mode);
-      const ownPnl = liveOwnPortfolioPnl(mode);
       return {
         mode,
         name: portfolioNameForMode(mode),
         automationEnabled,
-        equity: ownInitial != null && ownPnl
-          ? ownInitial + ownPnl.realized + ownPnl.open
-          : (live ? Number(live.equityUsdc) : null),
+        // The account's real balance, the same on every live row -- what the wallet holds
+        // is a fact, not a per-portfolio one. A portfolio's own result is the ROI column
+        // beside it, and its own original value is derived from the two on its card.
+        equity: live ? Number(live.equityUsdc) : null,
         positions: state.liveState ? ownPositions.reduce((sum, row) => sum + marked(row), 0) : null,
         orders: state.liveState ? reservedByOpenOrders(ownOrders) : null,
         free: live ? Number(live.cashUsdc) : null,
@@ -6478,7 +6440,7 @@ function renderPortfolioOverview() {
       <tbody>
         ${rows.map((row) => `
           <tr class="${row.mode === state.mode ? "portfolio-summary-current" : ""}${row.live ? " portfolio-summary-live" : ""}">
-            <td data-label="Portfolio"><span class="portfolio-summary-name"><span class="portfolio-status-dot${row.automationEnabled ? "" : " is-off"}" title="Automation ${row.automationEnabled ? "on" : "off"}" aria-label="Automation ${row.automationEnabled ? "on" : "off"}"></span><button class="portfolio-summary-link" type="button" data-mode-toggle="${escapeHtml(row.mode)}">${escapeHtml(row.name)}</button></span>${row.live && sharedWallet ? ' <span class="portfolio-summary-note" title="These live portfolios trade one Polymarket account, so Free is the same on every one of them. Equity, positions, orders and ROI belong to the individual portfolio.">shared account</span>' : ""}</td>
+            <td data-label="Portfolio"><span class="portfolio-summary-name"><span class="portfolio-status-dot${row.automationEnabled ? "" : " is-off"}" title="Automation ${row.automationEnabled ? "on" : "off"}" aria-label="Automation ${row.automationEnabled ? "on" : "off"}"></span><button class="portfolio-summary-link" type="button" data-mode-toggle="${escapeHtml(row.mode)}">${escapeHtml(row.name)}</button></span>${row.live && sharedWallet ? ' <span class="portfolio-summary-note" title="These live portfolios trade one Polymarket account, so Equity and Free belong to the account and read the same on every one of them. Positions, orders and ROI belong to the individual portfolio.">shared account</span>' : ""}</td>
             <td data-label="Equity">${cell(row.equity)}</td>
             <td data-label="ROI" class="${row.roi ? pnlClass(row.roi.roi) : ""}" title="${row.roi ? `${signedMoney(row.roi.realized)} realized on ${money(row.roi.invested)} invested across ${row.roi.closedCount} closed trade(s); open positions excluded.` : "No closed trade has returned yet."}">${row.roi ? signedPercent(row.roi.roi) : "-"}</td>
             <td data-label="In positions">${cell(row.positions)}</td>
@@ -6722,9 +6684,6 @@ function parameterDraftFromControls(baseDraft = {}) {
   if (els.portfolioName) {
     draft.displayName = normalizePortfolioName(els.portfolioName.value, draft.displayName || "New portfolio");
   }
-  if (isLivePortfolioMode(state.parameterDraftMode || state.mode) && els.liveInitialCapital) {
-    draft.initialUsdc = normalizeInitialCapital(els.liveInitialCapital.value);
-  }
   if (hasValue(els.eligibilityThreshold)) {
     const value = normalizeEligibilityThreshold(numberValue(els.eligibilityThreshold) / 100);
     if (value != null) draft.minProbability = value;
@@ -6830,9 +6789,10 @@ async function confirmParameterModal() {
   const creatingType = normalizePortfolioAccountType(state.parameterDraftCreateType);
   setParameterModalStatus();
   try {
-    if (creating && creatingType === "live" && normalizeInitialCapital(draft.initialUsdc) == null) {
-      throw new Error("Set the initial capital for the live portfolio first");
-    }
+    // Creating a live portfolio used to be refused until an initial capital figure was
+    // typed in. There is nothing to type any more: Original value is derived from the
+    // account balance and this portfolio's own P/L, and on a shared wallet it moves as the
+    // other portfolios trade, so no fixed baseline exists to be asked for.
     if (creating) {
       // The portfolio comes into existence here, on Save -- not when the form was
       // opened. Closing the form without saving leaves the config exactly as it was.
@@ -6900,9 +6860,6 @@ async function confirmParameterModal() {
     const message = error.message || "portfolio parameter save failed";
     setExecutionStatus(message, "error");
     setParameterModalStatus(message, "error");
-    if (creating && creatingType === "live" && normalizeInitialCapital(draft.initialUsdc) == null) {
-      els.liveInitialCapital?.focus();
-    }
   } finally {
     state.parameterSavePending = false;
     if (els.parameterModalConfirm) {
@@ -9455,7 +9412,6 @@ function livePortfolioRuleRows() {
     ? "Highest reward/risk, then net yield"
     : "Highest net yield, then net gain";
   return [
-    ...(isLivePortfolioMode(mode) ? [["Initial capital", liveInitialCapitalForMode(mode, config) == null ? "not set" : money(liveInitialCapitalForMode(mode, config))]] : []),
     ["Probability threshold", probabilityRangeRuleValue(config, currentEligibilityThreshold())],
     ["Stake sizing", stakeSizingRuleValue(mode, state.liveState?.portfolio)],
     ["Resolution filter", resolutionRuleValue(maxResolutionHours, config)],
@@ -10748,7 +10704,7 @@ function renderPortfolioRulesCard(title, rows, archiveStrategyId = null, copyToL
           </svg>
         </button>
         ${copyToLiveStrategyId ? `
-          <button class="portfolio-rules-copy-live" type="button" data-portfolio-copy-to-live="${escapeHtml(copyToLiveStrategyId)}" aria-label="Copy to a live portfolio" title="Create a live portfolio with these exact parameters, switched off. Only the initial capital is left to set.">
+          <button class="portfolio-rules-copy-live" type="button" data-portfolio-copy-to-live="${escapeHtml(copyToLiveStrategyId)}" aria-label="Copy to a live portfolio" title="Create a live portfolio with these exact parameters, switched off.">
             <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
               <rect x="9" y="9" width="12" height="12" rx="2"></rect>
               <path d="M5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1"></path>
@@ -11640,8 +11596,9 @@ function renderLiveState(liveState) {
   const equity = Number.isFinite(Number(portfolio.equityUsdc))
     ? Number(portfolio.equityUsdc)
     : (Number.isFinite(marketValue) ? marketValue : 0);
-  const configuredLiveInitial = liveInitialCapitalForMode(state.mode);
-  const deposited = configuredLiveInitial ?? Number(portfolio.depositedUsdc);
+  // The WALLET's deposit, for the wallet-level figures below it. A portfolio's own
+  // original value is derived further down and is a different number.
+  const deposited = Number(portfolio.depositedUsdc);
   const rawTotalPnl = Number(portfolio.totalPnlUsdc);
   const rawTotalPnlPct = Number(portfolio.totalPnlPct);
   const rawRealizedPnl = Number(portfolio.realizedPnlUsdc);
@@ -11688,22 +11645,22 @@ function renderLiveState(liveState) {
   // does not have of its own.
   const ownBasePct = (value) => (ownStake > 0 ? value / ownStake : null);
   const realizedPnlPct = ownBasePct(ownRealized);
-  // Reported: equity did not equal Original value + Total P/L. It could not, because the
-  // three numbers were not about the same thing: equity was the WALLET's, while Total P/L
-  // and Original value are this portfolio's own. One wallet funds five portfolios, so its
-  // equity is not any one of their results -- the same reason the P/L tiles moved onto
-  // attributed trades, and the same reason portfolioEquityHistory already draws Original
-  // value plus this portfolio's realised ledger instead of the wallet series (it invented
-  // 190 USD of capital on a 148 USD portfolio when it did not).
+  // Equity did not equal Original value + Total P/L, and the fix went the wrong way round
+  // the first time: it derived equity from a typed-in original value. Of the three numbers
+  // only one is a bookkeeping construct. Equity is the balance the Polymarket account
+  // actually holds and Total P/L comes from this portfolio's own trades, so both are
+  // measured -- which leaves Original value as the one to compute:
   //
-  // The tile reads this portfolio's own equity now, so Equity, Total P/L, Realized and
-  // Open are one arithmetic again and the chart's last point is the tile above it. The
-  // wallet's own equity stays in the portfolio overview, which labels it shared account.
-  // With no original value there is nothing to add to, so the wallet figure stands.
-  const ownEquity = hasOriginalValue ? deposited + totalPnlValue : equity;
-  const depositedLine = Number.isFinite(deposited)
-    ? `Original value ${money(deposited)}`
-    : "Original value not available";
+  //     Original value = equity - this portfolio's total P/L
+  //
+  // "What the account would hold if this portfolio had never traded." On a shared wallet
+  // that moves as the other portfolios trade, and it is meant to: there is no fixed sum of
+  // money behind any one of them. So nothing has to be entered when a live portfolio is
+  // created -- the figure is counted from its first trade onwards instead.
+  const originalValue = Number.isFinite(equity) ? equity - totalPnlValue : null;
+  const depositedLine = originalValue == null
+    ? "Original value not available"
+    : `Original value ${money(originalValue)}`;
   const redeemLine = Number.isFinite(pendingRedeem) && pendingRedeem > 0.000001
     ? `includes ${money(pendingRedeem)} pending redeem`
     : "";
@@ -11715,7 +11672,7 @@ function renderLiveState(liveState) {
 
   if (els.botAction) els.botAction.textContent = "live";
   if (els.botInlineAction) els.botInlineAction.textContent = `${positions.length} positions / ${openOrders.length} orders`;
-  els.portfolioEquity.textContent = money(ownEquity);
+  els.portfolioEquity.textContent = money(equity);
   els.portfolioEquity.className = pnlClass(totalPnlValue);
   els.portfolioLastRun.innerHTML = `
     <small class="metric-note">${escapeHtml(depositedLine)}</small>
@@ -11743,10 +11700,12 @@ function renderLiveState(liveState) {
   els.portfolioFree.textContent = freeCash == null ? "-" : money(freeCash);
   renderPortfolioEquityChart({
     trades: [...closedTrades, ...positions],
-    equity: ownEquity,
+    equity,
     openPnl: openPnlValue,
     generatedAt: liveState.generatedAt,
-    originalValue: deposited,
+    // The derived figure, not the wallet's deposit: the chart's baseline has to be the same
+    // number the tile prints, or its last point stops meeting the Realized tile beside it.
+    originalValue: originalValue,
     realizedPnl,
     // The wallet's recorded per-day equity is the WALLET's, and no single portfolio drawing
     // on it owns that curve. This used to be withheld from 5050 alone, which contradicted
@@ -15438,16 +15397,6 @@ els.portfolioAccountType?.addEventListener("change", () => {
   switchCreatePortfolioType(els.portfolioAccountType.value);
 });
 
-els.liveInitialCapital?.addEventListener("input", () => {
-  const value = normalizeInitialCapital(els.liveInitialCapital.value);
-  if (els.liveInitialCapitalLabel) els.liveInitialCapitalLabel.textContent = value == null ? "not set" : money(value);
-  if (updateParameterDraft({ initialUsdc: value })) return;
-  if (!isLivePortfolioMode(state.mode)) return;
-  updatePortfolioConfigForMode(state.mode, { initialUsdc: value });
-  savePortfolioConfigSoon();
-  rerenderCurrentDashboard();
-});
-
 els.eligibilityThreshold?.addEventListener("input", () => {
   if (parameterDraftInputIsEmpty(els.eligibilityThreshold)) {
     if (els.eligibilityThresholdLabel) els.eligibilityThresholdLabel.textContent = "-";
@@ -15981,17 +15930,17 @@ document.addEventListener("click", (event) => {
     if (!strategyId) return;
     const source = portfolioConfigForMode(`paper-${strategyId}`);
     const sourceName = normalizePortfolioName(source.displayName, strategyId);
-    // The form opens rather than the portfolio being created outright, deliberately: a live
-    // portfolio cannot be created without an initial capital figure -- confirmParameterModal
-    // refuses -- and that is the one thing a paper portfolio cannot supply, so it is the one
-    // field left to fill in.
+    // The form still opens rather than the portfolio being created outright. The reason it
+    // had to is gone -- there is no initial capital left to type -- but the name is worth a
+    // look before a live portfolio exists, and Save now takes one click with nothing filled
+    // in, which is what "copy on one click" was asking for.
     openCreatePortfolioModal(
       livePrefillFromPaperPortfolio(source, `${sourceName} live`),
       copyToLiveButton,
       "live",
     );
     setParameterModalStatus(
-      `Copied every parameter from "${sourceName}". Automation is OFF; set the initial capital and save.`,
+      `Copied every parameter from "${sourceName}". Automation is OFF -- save to create it.`,
     );
     return;
   }

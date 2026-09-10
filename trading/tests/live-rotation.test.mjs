@@ -3533,10 +3533,6 @@ test("portfolio parameters: both live portfolios state their order price", () =>
     + `${functionSource(app, "normalizeEligibilityThreshold")}\n`
     + `${functionSource(app, "normalizeOptionalProbability")}\n`
     + `${functionSource(app, "probabilityRangeRuleValue")}\n`
-    // The rows now state the portfolio's initial capital, so its two pure helpers come
-    // across as the real thing for the same reason as the ones above.
-    + `${functionSource(app, "normalizeInitialCapital")}\n`
-    + `${functionSource(app, "liveInitialCapitalForMode")}\n`
     // And the stop-loss row, whose label reads the risk multiplier. Pure again, so the
     // real pair comes across rather than a stub agreeing with the harness.
     + `${functionSource(app, "normalizeStopLossRiskMultiplier")}\n`

@@ -729,7 +729,6 @@ test("dashboard: the tab row is built from the saved portfolios, archived ones l
     // tab order needs both. Real, not stubbed: the ordering is what these tests measure.
     ${extractFunction(APP, "automationIsEnabled")}
     ${extractFunction(APP, "firstOpenedAtFromTrades")}
-    ${extractFunction(APP, "liveInitialCapitalForMode")}
     ${extractFunction(APP, "portfolioRealizedRoiForMode")}
     // Ordering asks each portfolio whether its automation is on, which means the real
     // config merge -- the shipped defaults matter here, since 5050 is the one portfolio
@@ -788,7 +787,6 @@ test("dashboard: an archived 5050 leaves the tab row too, the plain live portfol
     // tab order needs both. Real, not stubbed: the ordering is what these tests measure.
     ${extractFunction(APP, "automationIsEnabled")}
     ${extractFunction(APP, "firstOpenedAtFromTrades")}
-    ${extractFunction(APP, "liveInitialCapitalForMode")}
     ${extractFunction(APP, "portfolioRealizedRoiForMode")}
     // Ordering asks each portfolio whether its automation is on, which means the real
     // config merge -- the shipped defaults matter here, since 5050 is the one portfolio
@@ -882,8 +880,12 @@ test("portfolio creation: the live form keeps validation errors inside the modal
     "confirmation repairs a stale type selection before collecting form values");
   assert.match(confirm, /setParameterModalStatus\(message, "error"\)/,
     "save errors remain visible in the modal");
-  assert.match(confirm, /els\.liveInitialCapital\?\.focus\(\)/,
-    "missing live capital focuses the required field");
+  // Creating a live portfolio used to be refused until an initial capital figure was typed
+  // in, and the error focused that field. There is nothing to type now: Original value is
+  // derived from the account balance and the portfolio's own P/L, and on a shared wallet it
+  // moves as the other portfolios trade, so no fixed baseline exists to ask for.
+  assert.ok(!confirm.includes("Set the initial capital for the live portfolio first"),
+    "a live portfolio must not be gated on a baseline it derives");
 });
 
 test("storage migration: database diagnostics stay private and require the trigger key", () => {
@@ -1998,7 +2000,6 @@ test("dashboard: live tabs lead, then each portfolio group is ordered by equity"
     // tab order needs both. Real, not stubbed: the ordering is what these tests measure.
     ${extractFunction(APP, "automationIsEnabled")}
     ${extractFunction(APP, "firstOpenedAtFromTrades")}
-    ${extractFunction(APP, "liveInitialCapitalForMode")}
     ${extractFunction(APP, "portfolioRealizedRoiForMode")}
     // Ordering asks each portfolio whether its automation is on, which means the real
     // config merge -- the shipped defaults matter here, since 5050 is the one portfolio
@@ -2467,9 +2468,12 @@ test("live equity history: configured original value anchors the realised chart"
   assert.equal(staleLedger.points.length, 2,
     "unreconciled historical rows are not rendered as fictitious equity movements");
 
-  assert.match(APP, /const configuredLiveInitial = liveInitialCapitalForMode\(state\.mode\);/,
-    "custom live portfolios use their own configured original value too");
-  assert.match(APP, /originalValue: deposited,/, "the live chart receives that value explicitly");
+  // The baseline is derived rather than configured now: the account balance minus this
+  // portfolio's own P/L. The chart has to receive that same figure, or its last point
+  // stops meeting the Realized tile beside it.
+  assert.match(APP, /const originalValue = Number\.isFinite\(equity\) \? equity - totalPnlValue : null;/,
+    "each live portfolio derives its own original value from the shared balance");
+  assert.match(APP, /originalValue: originalValue,/, "the live chart receives that value explicitly");
   assert.match(APP, /realizedPnl,/, "the live chart receives the authoritative realised P\/L from its account snapshot");
   assert.match(APP, /equity-history-original-value/, "the renderer includes the visible reference line");
 });
@@ -5115,7 +5119,7 @@ test("copy to live: the control is offered only where it means something, and cr
   assert.ok(handler, "the copy-to-live click handler is missing");
   assert.match(handler[0], /openCreatePortfolioModal\(\s*livePrefillFromPaperPortfolio\([\s\S]*?"live",\s*\)/);
   // And it says what happened, because "automation is off" is the thing to know.
-  assert.match(handler[0], /Automation is OFF; set the initial capital and save/);
+  assert.match(handler[0], /Automation is OFF -- save to create it/);
 
   // Asked for: both controls belong on the card beside the edit icon. In the modal footer
   // they were unreachable -- the modal's click branch returns before anything wired below

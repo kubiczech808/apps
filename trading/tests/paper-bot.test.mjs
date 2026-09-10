@@ -4745,19 +4745,26 @@ test("live portfolios: every P/L tile is the portfolio's own, only the wallet is
   const { readFile } = await import("node:fs/promises");
   const app = await readFile(new URL("../assets/app.js", import.meta.url), "utf8");
 
-  // Equity used to stay the shared account figure, and then it did not add up with the two
-  // tiles beside it: Original value and Total P/L are this portfolio's, so a wallet-wide
-  // equity made "Original value + Total P/L" wrong on every card. Equity is the portfolio's
-  // own now, by exactly that arithmetic, and the wallet's cash is what stays shared.
-  assert.match(app, /const ownEquity = hasOriginalValue \? deposited \+ totalPnlValue : equity;/,
-    "the card's equity must be Original value plus this portfolio's own P/L");
-  assert.match(app, /els\.portfolioEquity\.textContent = money\(ownEquity\);/);
+  // Equity did not add up with the two tiles beside it, and the first fix went the wrong
+  // way round: it derived equity from a typed-in original value. Of the three numbers only
+  // one is a construct. Equity is the balance the Polymarket account actually holds and
+  // Total P/L comes from this portfolio's real trades, so Original value is the derived
+  // one -- what the account would hold had this portfolio never traded.
+  assert.match(app, /const originalValue = Number\.isFinite\(equity\) \? equity - totalPnlValue : null;/,
+    "Original value must be derived from the balance and this portfolio's own P/L");
+  assert.match(app, /els\.portfolioEquity\.textContent = money\(equity\);/,
+    "the equity tile must be the account balance, never a computed figure");
   assert.match(app, /els\.portfolioFree\.textContent = freeCash == null \? "-" : money\(freeCash\);/,
-    "cash is the one figure that is genuinely the wallet's");
-  // The overview table has to agree with the card, or the same portfolio reports two
-  // different equities depending on which screen it is read from.
-  assert.match(app, /equity: ownInitial != null && ownPnl\s*\n\s*\? ownInitial \+ ownPnl\.realized \+ ownPnl\.open/,
-    "the overview column must use the same arithmetic as the card");
+    "cash is the wallet's too");
+  // The chart's baseline has to be the same derived figure, or its last point stops
+  // meeting the Realized tile beside it.
+  assert.match(app, /originalValue: originalValue,/);
+  // Nothing may be typed in for it any more, on any screen.
+  assert.ok(!app.includes("liveInitialCapitalForMode("),
+    "a stored initial capital must not come back as the live baseline");
+  const html = await readFile(new URL("../index.html", import.meta.url), "utf8");
+  assert.ok(!html.includes("data-live-initial-capital"),
+    "the live form must not ask for a baseline it derives");
 
   // Bounded by the end of the live card. The old anchor was a string that no longer
   // appears after this point, so indexOf returned -1, the `|| 4000` fallback took over and

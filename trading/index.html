@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <base href="/trading/">
   <title>Polymarket Trading Desk</title>
-  <link rel="stylesheet" href="assets/app.css?v=20260910-run-portfolio-name">
+  <link rel="stylesheet" href="assets/app.css?v=20260910-derived-original-value">
 </head>
 <body>
   <main class="shell" data-app-shell>
@@ -410,12 +410,12 @@
           <strong data-portfolio-account-type-label>Paper</strong>
           <em data-portfolio-account-type-note>Paper keeps its own simulated account.</em>
         </label>
-        <label class="parameter-control" data-live-initial-capital-row hidden title="For the connected live wallet this is the total capital you deliberately allocated or deposited. Increasing it after a top-up prevents that cash from being reported as trading profit.">
-          <span>Initial capital</span>
-          <input type="number" min="0.01" max="10000000" step="0.01" placeholder="Set live baseline" data-live-initial-capital>
-          <strong data-live-initial-capital-label>not set</strong>
-          <em data-live-initial-capital-note>Used as the live P/L baseline.</em>
-        </label>
+        <!-- "Initial capital" used to be here, and a live portfolio could not be created
+             until it was filled in. It is derived now: Original value is the account
+             balance minus this portfolio's own P/L. Equity is what the Polymarket account
+             really holds and the P/L comes from real trades, so the baseline is the only
+             one of the three worth computing -- and on a shared wallet it moves as the
+             other portfolios trade, so there was never a fixed number to type. -->
         <label class="parameter-control">
           <span>Probability threshold</span>
           <input type="number" min="1" max="99" step="1" value="95" data-eligibility-threshold>
@@ -593,6 +593,6 @@
 
   <!-- Bump on every assets/app.js change. The browser caches this exact URL, so a deploy
        that leaves it alone publishes the new file and keeps serving the old one. -->
-  <script src="assets/app.js?v=20260910-run-portfolio-name"></script>
+  <script src="assets/app.js?v=20260910-derived-original-value"></script>
 </body>
 </html>
