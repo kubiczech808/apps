@@ -4745,9 +4745,19 @@ test("live portfolios: every P/L tile is the portfolio's own, only the wallet is
   const { readFile } = await import("node:fs/promises");
   const app = await readFile(new URL("../assets/app.js", import.meta.url), "utf8");
 
-  // One wallet means one equity, one cash balance and one deposit, and those stay shared.
-  assert.match(app, /els\.portfolioEquity\.textContent = money\(equity\);/,
-    "equity stays the shared account figure");
+  // Equity used to stay the shared account figure, and then it did not add up with the two
+  // tiles beside it: Original value and Total P/L are this portfolio's, so a wallet-wide
+  // equity made "Original value + Total P/L" wrong on every card. Equity is the portfolio's
+  // own now, by exactly that arithmetic, and the wallet's cash is what stays shared.
+  assert.match(app, /const ownEquity = hasOriginalValue \? deposited \+ totalPnlValue : equity;/,
+    "the card's equity must be Original value plus this portfolio's own P/L");
+  assert.match(app, /els\.portfolioEquity\.textContent = money\(ownEquity\);/);
+  assert.match(app, /els\.portfolioFree\.textContent = freeCash == null \? "-" : money\(freeCash\);/,
+    "cash is the one figure that is genuinely the wallet's");
+  // The overview table has to agree with the card, or the same portfolio reports two
+  // different equities depending on which screen it is read from.
+  assert.match(app, /equity: ownInitial != null && ownPnl\s*\n\s*\? ownInitial \+ ownPnl\.realized \+ ownPnl\.open/,
+    "the overview column must use the same arithmetic as the card");
 
   // Bounded by the end of the live card. The old anchor was a string that no longer
   // appears after this point, so indexOf returned -1, the `|| 4000` fallback took over and
@@ -11210,4 +11220,59 @@ test("paper bot: the shape ids are declared before the code that reads them at l
     + " initialized before it -- a const declared after it is in its temporal dead zone");
   assert.ok(exclusionSet < assembly,
     "marketShapeExclusionSet is called during the module-level portfolio assembly");
+});
+
+// Asked for: the execution candidate list should read down by Potential p.a.
+//
+// It did not on a portfolio whose trade priority is Reward/risk. The primary sort key was
+// the portfolio's own selection order, so those lists were ordered by a ratio that has no
+// column in that table -- the rows looked shuffled because the number they were sorted on
+// was not on screen at all.
+test("execution candidates: the list is ordered by Potential p.a. on every portfolio", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const app = await readFile(new URL("../assets/app.js", import.meta.url), "utf8");
+  const body = ["sortPortfolioCandidates", "portfolioCandidateSortValue"]
+    .map((name) => functionSource(app, name)).join("\n\n");
+  const sortFor = (selectionOrder) => new Function(
+    "state", "portfolioConfigForMode", "normalizeSelectionOrder", "portfolioAnnualizedReturn",
+    "portfolioExpectedValue", "evaluationRiskReward", "evaluationDaysLeft",
+    `${body}\nreturn sortPortfolioCandidates;`,
+  )(
+    { mode: "live" },
+    () => ({ selectionOrder }),
+    (value) => (value === "highest_reward_risk_first" ? "highest_reward_risk_first" : "highest_ev_pa_first"),
+    (item) => item.pa,
+    (item) => item.ev,
+    (item) => item.rr,
+    (item) => item.days,
+  );
+
+  // Deliberately in conflict: the best yield is the worst ratio and the other way round.
+  const rows = [
+    { id: "mid", pa: 0.8, rr: 2, ev: 1, days: 4 },
+    { id: "best-pa", pa: 1.9, rr: 1.1, ev: 0.4, days: 2 },
+    { id: "best-rr", pa: 0.2, rr: 9, ev: 2, days: 9 },
+  ];
+  const ids = (selectionOrder) => sortFor(selectionOrder)(rows, "live").map((row) => row.id);
+  assert.deepEqual(ids("highest_ev_pa_first"), ["best-pa", "mid", "best-rr"]);
+  assert.deepEqual(ids("highest_reward_risk_first"), ["best-pa", "mid", "best-rr"],
+    "a Reward/risk portfolio reads down by yield too; the ratio is only a tie-break");
+
+  // And the ratio still decides between equal yields, so the order the executor picks in
+  // is preserved wherever the yield cannot separate two rows.
+  const tied = [
+    { id: "low-rr", pa: 1, rr: 1.2, ev: 5, days: 1 },
+    { id: "high-rr", pa: 1, rr: 7, ev: 0.1, days: 8 },
+  ];
+  assert.deepEqual(sortFor("highest_reward_risk_first")(tied, "live").map((row) => row.id),
+    ["high-rr", "low-rr"]);
+  // Without that priority the tie falls to the nearer resolution, as it always did.
+  assert.deepEqual(sortFor("highest_ev_pa_first")(tied, "live").map((row) => row.id),
+    ["low-rr", "high-rr"]);
+
+  // A list ordered by a metric it does not show is the bug. When reward/risk is the
+  // portfolio's priority, the ratio gets a column of its own.
+  assert.match(app, /const showRiskReward = normalizeSelectionOrder\(config\.selectionOrder\) === "highest_reward_risk_first";/);
+  assert.match(app, /\$\{showRiskReward \? "<th>R\/R<\/th>" : ""\}/);
+  assert.match(app, /\$\{showRiskReward \? `<td data-label="R\/R">\$\{evaluationRiskRewardCell\(item\)\}<\/td>` : ""\}/);
 });

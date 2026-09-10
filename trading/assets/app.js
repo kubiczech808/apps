@@ -6437,11 +6437,13 @@ function renderPortfolioOverview() {
   const rows = dashboardModes().map((mode) => {
     const automationEnabled = automationIsEnabled(portfolioConfigForMode(mode));
     if (isLivePortfolioMode(mode)) {
-      // Equity and Free are the wallet's and are the same on every live row, which the
-      // shared-wallet note under the table states. "In positions" and "In orders" are not:
-      // they are what THIS portfolio is holding. Reading marketValueUsdc and the whole
+      // Free is the wallet's and is the same on every live row, which the shared-account
+      // note on the row states. Equity, "In positions" and "In orders" are not: they are
+      // what THIS portfolio has and is holding. Reading marketValueUsdc and the whole
       // wallet's resting buys put the account's two totals on all five rows, beside tables
-      // listing only that portfolio's own positions and orders.
+      // listing only that portfolio's own positions and orders -- and the wallet's equity
+      // did the same to this column, so it disagreed with the portfolio card, where equity
+      // is the portfolio's Original value plus its own P/L.
       const ownPositions = state.liveState ? livePositions(state.liveState, mode) : [];
       const ownOrders = state.liveState ? liveOpenOrders(state.liveState, mode) : [];
       const marked = (row) => {
@@ -6451,11 +6453,18 @@ function renderPortfolioOverview() {
         const shares = Number(row?.shares ?? row?.size);
         return Number.isFinite(price) && Number.isFinite(shares) ? price * shares : 0;
       };
+      // Same arithmetic as the portfolio card: Original value plus this portfolio's own
+      // realized and open P/L. Without an original value there is nothing to add to, so
+      // the wallet figure stands, as it does on the card.
+      const ownInitial = liveInitialCapitalForMode(mode);
+      const ownPnl = liveOwnPortfolioPnl(mode);
       return {
         mode,
         name: portfolioNameForMode(mode),
         automationEnabled,
-        equity: live ? Number(live.equityUsdc) : null,
+        equity: ownInitial != null && ownPnl
+          ? ownInitial + ownPnl.realized + ownPnl.open
+          : (live ? Number(live.equityUsdc) : null),
         positions: state.liveState ? ownPositions.reduce((sum, row) => sum + marked(row), 0) : null,
         orders: state.liveState ? reservedByOpenOrders(ownOrders) : null,
         free: live ? Number(live.cashUsdc) : null,
@@ -6493,7 +6502,7 @@ function renderPortfolioOverview() {
       <tbody>
         ${rows.map((row) => `
           <tr class="${row.mode === state.mode ? "portfolio-summary-current" : ""}${row.live ? " portfolio-summary-live" : ""}">
-            <td data-label="Portfolio"><span class="portfolio-summary-name"><span class="portfolio-status-dot${row.automationEnabled ? "" : " is-off"}" title="Automation ${row.automationEnabled ? "on" : "off"}" aria-label="Automation ${row.automationEnabled ? "on" : "off"}"></span><button class="portfolio-summary-link" type="button" data-mode-toggle="${escapeHtml(row.mode)}">${escapeHtml(row.name)}</button></span>${row.live && sharedWallet ? ' <span class="portfolio-summary-note" title="These live portfolios trade one Polymarket account, so they report the same account capital.">shared account</span>' : ""}</td>
+            <td data-label="Portfolio"><span class="portfolio-summary-name"><span class="portfolio-status-dot${row.automationEnabled ? "" : " is-off"}" title="Automation ${row.automationEnabled ? "on" : "off"}" aria-label="Automation ${row.automationEnabled ? "on" : "off"}"></span><button class="portfolio-summary-link" type="button" data-mode-toggle="${escapeHtml(row.mode)}">${escapeHtml(row.name)}</button></span>${row.live && sharedWallet ? ' <span class="portfolio-summary-note" title="These live portfolios trade one Polymarket account, so Free is the same on every one of them. Equity, positions, orders and ROI belong to the individual portfolio.">shared account</span>' : ""}</td>
             <td data-label="Equity">${cell(row.equity)}</td>
             <td data-label="ROI" class="${row.roi ? pnlClass(row.roi.roi) : ""}" title="${row.roi ? `${signedMoney(row.roi.realized)} realized on ${money(row.roi.invested)} invested across ${row.roi.closedCount} closed trade(s); open positions excluded.` : "No closed trade has returned yet."}">${row.roi ? signedPercent(row.roi.roi) : "-"}</td>
             <td data-label="In positions">${cell(row.positions)}</td>
@@ -10232,13 +10241,24 @@ function portfolioCandidateSortValue(item, key, mode = state.mode) {
   return 0;
 }
 
+// Asked for: the candidate list reads down by Potential p.a. The primary key used to be
+// the portfolio's own trade priority, so a Reward/risk portfolio ordered its list by a
+// metric that has no column in this table -- the rows looked shuffled because the number
+// they were sorted on was not on screen. Yield is the primary key on every portfolio now,
+// and a Reward/risk portfolio keeps its priority as the first tie-break AND gains the R/R
+// column, so the order the executor will actually pick in is still readable.
 function sortPortfolioCandidates(rows = [], mode = state.mode) {
   const config = portfolioConfigForMode(mode);
-  const primary = config.selectionOrder === "highest_reward_risk_first" ? "riskReward" : "annualizedReturn";
+  const prioritizesRiskReward = normalizeSelectionOrder(config.selectionOrder) === "highest_reward_risk_first";
   const sorted = [...rows].sort((a, b) => {
-    const aPrimary = portfolioCandidateSortValue(a, primary, mode);
-    const bPrimary = portfolioCandidateSortValue(b, primary, mode);
+    const aPrimary = portfolioCandidateSortValue(a, "annualizedReturn", mode);
+    const bPrimary = portfolioCandidateSortValue(b, "annualizedReturn", mode);
     if (bPrimary !== aPrimary) return bPrimary - aPrimary;
+    if (prioritizesRiskReward) {
+      const aRatio = portfolioCandidateSortValue(a, "riskReward", mode);
+      const bRatio = portfolioCandidateSortValue(b, "riskReward", mode);
+      if (bRatio !== aRatio) return bRatio - aRatio;
+    }
     const aDays = portfolioCandidateSortValue(a, "days", mode);
     const bDays = portfolioCandidateSortValue(b, "days", mode);
     if (Number.isFinite(aDays) && Number.isFinite(bDays) && aDays !== bDays) return aDays - bDays;
@@ -10387,6 +10407,10 @@ function renderPortfolioCandidateRows(rows = [], mode = state.mode, diagnostics 
   // flag above still gates which columns appear, but it can no longer be false.
   const probabilityLabel = "Mkt prob.";
   const returnMetric = portfolioReturnMetricLabel(config);
+  // The list is ordered by yield on every portfolio. A portfolio that picks by reward/risk
+  // therefore trades in an order this table no longer reads down in, so the ratio it picks
+  // by gets a column rather than being left to be guessed at.
+  const showRiskReward = normalizeSelectionOrder(config.selectionOrder) === "highest_reward_risk_first";
   return `
     <div class="ledger-scroll candidate-ledger-scroll" tabindex="0" aria-label="Execution candidates table">
     <table class="ledger-wide-table execution-candidates-table">
@@ -10398,6 +10422,7 @@ function renderPortfolioCandidateRows(rows = [], mode = state.mode, diagnostics 
           <th>Precheck</th>
           ${useLiveMarketColumnOrder ? `
             <th>${returnMetric}</th>
+            ${showRiskReward ? "<th>R/R</th>" : ""}
             <th>Volume</th>
             <th>${probabilityLabel}</th>
             <th>End date</th>
@@ -10406,6 +10431,7 @@ function renderPortfolioCandidateRows(rows = [], mode = state.mode, diagnostics 
             <th>${probabilityLabel}</th>
             ${usesPolymarketPotential ? "" : "<th>Mkt entry</th>"}
             <th>${returnMetric}</th>
+            ${showRiskReward ? "<th>R/R</th>" : ""}
             ${usesPolymarketPotential ? "" : "<th>EV</th>"}
             <th>Volume</th>
           `}
@@ -10459,6 +10485,7 @@ function renderPortfolioCandidateRows(rows = [], mode = state.mode, diagnostics 
               </td>
               ${useLiveMarketColumnOrder ? `
                 <td data-label="${returnMetric}" title="${escapeHtml(annualizationHorizonNote(item))}"><span class="${pnlClass(selectedAnnualizedReturn)}">${signedPercent(selectedAnnualizedReturn)}</span></td>
+                ${showRiskReward ? `<td data-label="R/R">${evaluationRiskRewardCell(item)}</td>` : ""}
                 <td data-label="Volume">${money(rowVolumeUsdc(item))}</td>
                 <td data-label="${probabilityLabel}">${probability(selectedProbability)}</td>
                 <td data-label="End date">${evaluationEndDateCell(item)}</td>
@@ -10467,6 +10494,7 @@ function renderPortfolioCandidateRows(rows = [], mode = state.mode, diagnostics 
                 <td data-label="${probabilityLabel}">${probability(selectedProbability)}</td>
                 ${usesPolymarketPotential ? "" : `<td data-label="Mkt entry">${probability(evaluationEntryPrice(item))}</td>`}
                 <td data-label="${returnMetric}" title="${escapeHtml(annualizationHorizonNote(item))}"><span class="${pnlClass(selectedAnnualizedReturn)}">${signedPercent(selectedAnnualizedReturn)}</span></td>
+                ${showRiskReward ? `<td data-label="R/R">${evaluationRiskRewardCell(item)}</td>` : ""}
                 ${usesPolymarketPotential ? "" : `<td data-label="EV">${signedMoney(selectedExpectedValue, 4)}</td>`}
                 <td data-label="Volume">${money(rowVolumeUsdc(item))}</td>
               `}
@@ -11666,6 +11694,19 @@ function renderLiveState(liveState) {
   // does not have of its own.
   const ownBasePct = (value) => (ownStake > 0 ? value / ownStake : null);
   const realizedPnlPct = ownBasePct(ownRealized);
+  // Reported: equity did not equal Original value + Total P/L. It could not, because the
+  // three numbers were not about the same thing: equity was the WALLET's, while Total P/L
+  // and Original value are this portfolio's own. One wallet funds five portfolios, so its
+  // equity is not any one of their results -- the same reason the P/L tiles moved onto
+  // attributed trades, and the same reason portfolioEquityHistory already draws Original
+  // value plus this portfolio's realised ledger instead of the wallet series (it invented
+  // 190 USD of capital on a 148 USD portfolio when it did not).
+  //
+  // The tile reads this portfolio's own equity now, so Equity, Total P/L, Realized and
+  // Open are one arithmetic again and the chart's last point is the tile above it. The
+  // wallet's own equity stays in the portfolio overview, which labels it shared account.
+  // With no original value there is nothing to add to, so the wallet figure stands.
+  const ownEquity = hasOriginalValue ? deposited + totalPnlValue : equity;
   const depositedLine = Number.isFinite(deposited)
     ? `Original value ${money(deposited)}`
     : "Original value not available";
@@ -11680,7 +11721,7 @@ function renderLiveState(liveState) {
 
   if (els.botAction) els.botAction.textContent = "live";
   if (els.botInlineAction) els.botInlineAction.textContent = `${positions.length} positions / ${openOrders.length} orders`;
-  els.portfolioEquity.textContent = money(equity);
+  els.portfolioEquity.textContent = money(ownEquity);
   els.portfolioEquity.className = pnlClass(totalPnlValue);
   els.portfolioLastRun.innerHTML = `
     <small class="metric-note">${escapeHtml(depositedLine)}</small>
@@ -11708,7 +11749,7 @@ function renderLiveState(liveState) {
   els.portfolioFree.textContent = freeCash == null ? "-" : money(freeCash);
   renderPortfolioEquityChart({
     trades: [...closedTrades, ...positions],
-    equity,
+    equity: ownEquity,
     openPnl: openPnlValue,
     generatedAt: liveState.generatedAt,
     originalValue: deposited,
