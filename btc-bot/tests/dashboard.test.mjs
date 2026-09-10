@@ -70,7 +70,7 @@ test('capital tile separates USD benchmark from sats trading result', () => {
   assert.match(js, /BTC.*obchody.*v sats/s)
 })
 
-test('strategy tab shows rules and candidate strategies', () => {
+test('strategy tab shows rules and an honest empty candidate state', () => {
   assert.ok(html.includes('data-tab="strategy"'), 'dashboard must expose the strategy tab')
   assert.ok(html.includes('id="panel-strategy"'), 'strategy tab must have a panel')
   assert.ok(html.includes('id="strategy-rules"'), 'strategy panel must contain the rule list')
@@ -79,14 +79,8 @@ test('strategy tab shows rules and candidate strategies', () => {
   assert.match(js, /STRATEGY_CANDIDATES/)
   assert.match(js, /renderStrategyLab/)
   assert.match(js, /Vyšší timeframe vede směr/)
-  assert.match(js, /JF-1 HTF swing S\/D/)
-  assert.match(js, /JF-2 Sweep & reclaim/)
-  assert.match(js, /strategy-backtest/)
-  assert.match(js, /5y Binance/)
-  assert.match(js, /Nejčistší baseline/)
-  assert.match(js, /TF-2 Long-only 1 ATR breakout/)
-  assert.match(js, /TF-X Stop-only convex breakout/)
-  assert.match(js, /strategy\.stopAtr=1/)
-  assert.match(js, /overfit risk/)
-  assert.match(js, /jeafx-sweep-reclaim --compare --years 5/)
+  assert.match(js, /const STRATEGY_CANDIDATES = \[\]/)
+  assert.match(js, /Žádný kandidát nyní nesplňuje minimální požadavky/)
+  assert.doesNotMatch(js, /JF-1 HTF swing S\/D/)
+  assert.doesNotMatch(js, /TF-X Stop-only convex breakout/)
 })
