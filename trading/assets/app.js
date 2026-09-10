@@ -5898,13 +5898,17 @@ function syncPortfolioParameterControls(configOverride = null, options = {}) {
       : "Off: stop loss disabled";
   }
   if (els.parameterModalArchive) {
-    // Only an existing paper portfolio can be archived. A live one holds real positions
-    // and open orders, and hiding those would hide real exposure; one being created does
-    // not exist yet.
-    const archivable = (customLivePortfolioIdFromMode(mode) !== null || !isLivePortfolioMode(mode)) && !state.parameterDraftCreate;
+    // Any existing portfolio can be archived, the base live one included. It was excluded
+    // before on the grounds that hiding a live portfolio hides real exposure -- true while
+    // archiving also dropped its positions from the exit worker's watch, which it no longer
+    // does: an archived portfolio's holdings stay watched, so archiving is a display
+    // decision and nothing more. A portfolio being created does not exist yet.
+    const archivable = !state.parameterDraftCreate;
     els.parameterModalArchive.hidden = !archivable;
     els.parameterModalArchive.dataset.portfolioId = archivable
-      ? (customLivePortfolioIdFromMode(mode) ? `live-custom-${customLivePortfolioIdFromMode(mode)}` : paperStrategyIdFromMode(mode))
+      ? (isLivePortfolioMode(mode)
+        ? (customLivePortfolioIdFromMode(mode) ? `live-custom-${customLivePortfolioIdFromMode(mode)}` : normalizeMode(mode))
+        : paperStrategyIdFromMode(mode))
       : "";
   }
   const cronMinutes = normalizeExecutionCronMinutes(config.executionCronMinutes);
@@ -6583,7 +6587,27 @@ function archivedPortfolioRuleRows(config = {}, summary = null) {
 // portfolio's, keyed by mode rather than by strategy id, so it is handled separately.
 async function setPortfolioArchived(strategyId, archived) {
   const config = state.portfolioConfig || defaultPortfolioConfig();
-  if (strategyId === "live-5050") {
+  if (strategyId === "live") {
+    // The base live portfolio. Without this branch the id fell through to the paper
+    // lookup, found nothing and returned -- so the confirmation appeared, the person
+    // confirmed, and absolutely nothing happened.
+    const saved = config.live;
+    if (!saved) return;
+    state.portfolioConfig = { ...config, live: { ...saved, archived } };
+    if (archived && state.mode === "live") {
+      // Every other branch falls back to "live", which is the one thing that cannot be
+      // the fallback here. Prefer another live portfolio that is still showing, so the
+      // wallet stays on screen; otherwise leave the live view entirely.
+      const nextLive = [
+        ...(config.live5050 && config.live5050.archived !== true ? ["live-5050"] : []),
+        ...Object.entries(config.livePortfolios || {})
+          .filter(([, row]) => row && row.archived !== true)
+          .map(([id]) => `live-custom-${id}`),
+      ][0];
+      state.mode = nextLive || "paper-conservative";
+      saveMode(state.mode);
+    }
+  } else if (strategyId === "live-5050") {
     const saved = config.live5050;
     if (!saved) return;
     state.portfolioConfig = { ...config, live5050: { ...saved, archived } };
@@ -15861,7 +15885,8 @@ document.addEventListener("click", (event) => {
     event.preventDefault();
     const strategyId = archiveButton.dataset.portfolioId || "";
     if (!strategyId) return;
-    const isLiveStrategy = strategyId.startsWith("live-custom-");
+    const isLiveStrategy = strategyId === "live" || strategyId === "live-5050"
+      || strategyId.startsWith("live-custom-");
     const label = normalizePortfolioName(
       portfolioConfigForMode(isLiveStrategy ? strategyId : `paper-${strategyId}`).displayName,
       strategyId.replace(/^live-custom-/, ""),

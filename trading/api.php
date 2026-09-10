@@ -3751,10 +3751,16 @@ function normalize_portfolio_config(array $input): array
         $config['paper'][$id]['custom'] = true;
     }
     $config['live'] = normalize_strategy_config($liveInput, $defaults['live']);
-    // The legacy live portfolio stays permanently visible because it represents the
-    // connected wallet. User-created live strategies can be archived independently;
-    // their state files remain available for history and any existing exposure.
-    $config['live']['archived'] = false;
+    // The base live portfolio used to be pinned visible here -- archived forced back to
+    // false on every save -- because it represents the connected wallet and hiding it
+    // would hide real exposure. That reasoning rested on archiving abandoning the
+    // positions, which it no longer does: an archived portfolio's holdings stay under the
+    // exit worker's watch, so archiving is now only a dashboard decision and the person
+    // whose wallet it is can make it.
+    //
+    // Worth knowing before making it: this portfolio is the catch-all for every live row
+    // no run log claims -- 327 of 333 closed rows on this account -- so archiving it takes
+    // that history off the dashboard as well. The money stays managed either way.
     $customLiveCount = 0;
     foreach ($customLiveInput as $rawId => $strategyInput) {
         if (!is_array($strategyInput)) {
@@ -4843,9 +4849,16 @@ function live_stop_loss_policy_config(array $config, string $portfolioId): ?arra
     if (!is_array($row)) {
         return null;
     }
-    if (($row['archived'] ?? false) === true) {
-        return null;
-    }
+    // Archiving deliberately absent, exactly like automation below. Archiving is a display
+    // decision -- take this portfolio off my dashboard -- and it used to return null here,
+    // which silently took every position the portfolio still held out of the worker's watch
+    // list: no stop loss, no certainty close, a position free to run to zero unattended.
+    // That is the same fault the automation switch had, reported on "Will Wrexham AFC win",
+    // and hiding a row is even less of a reason to abandon it than switching it off.
+    //
+    // What still stops an archived portfolio is OPENING positions, which is decided
+    // elsewhere; nothing here re-enables entries.
+
     // Switching a portfolio off stops it OPENING positions. It does not abandon the money
     // already committed.
     //
@@ -4922,9 +4935,9 @@ function live_stop_loss_policy_absence_reason(array $config, string $portfolioId
     if (!is_array($row)) {
         return 'portfolio is not configured';
     }
-    if (($row['archived'] ?? false) === true) {
-        return 'portfolio is archived';
-    }
+    // Archiving deliberately absent from this list too, for the reason given in
+    // live_stop_loss_policy_config: an archived portfolio's open positions are still
+    // watched, so "archived" is no longer a reason one goes unwatched.
     // Automation deliberately absent from this list. Switching a portfolio off stops it
     // opening positions; it does not stop the rules that manage what it already holds, so
     // it is no longer a reason a position goes unwatched.

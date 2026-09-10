@@ -494,7 +494,7 @@ test("created portfolios: the stored count is bounded", () => {
 
 // Asked for explicitly: archiving hides a portfolio and deactivates it, without losing
 // anything, and restoring is only clearing the flag.
-test("archiving: the flag round-trips on paper and 5050, and is refused on plain live", () => {
+test("archiving: the flag round-trips on every portfolio, plain live included", () => {
   const config = normalizeConfig({
     paper: { equal: { archived: true }, conservative: { archived: false } },
     live: { archived: true },
@@ -502,13 +502,55 @@ test("archiving: the flag round-trips on paper and 5050, and is refused on plain
   });
   assert.equal(config.paper.equal.archived, true);
   assert.equal(config.paper.conservative.archived, false);
-  // The plain live portfolio holds real positions and open orders with no automatic
-  // way to stop opening more; hiding it from the dashboard would hide real exposure.
-  assert.equal(config.live.archived, false);
-  // 5050 is the one live portfolio archiving was asked for. Withdrawing an expired
-  // resting order and refreshing the account snapshot are unconditional in the
-  // executor, so archiving it only stops new bids -- nothing already held goes dark.
   assert.equal(config.live5050.archived, true);
+  // Reported: "Live 72-82" cannot be archived. It could not -- archived was forced back
+  // to false on every save, on the grounds that hiding a live portfolio hides real
+  // exposure. That was true only because archiving ALSO dropped the portfolio's holdings
+  // from the exit worker's watch; with that fixed below, archiving is a display decision
+  // and the person whose wallet it is gets to make it.
+  assert.equal(config.live.archived, true);
+});
+
+// The reason archiving a live portfolio used to be unsafe, and the property that makes it
+// safe now. live_stop_loss_policy_config returned null for an archived portfolio, so
+// archiving silently took every position it still held out of the worker's watch list: no
+// stop loss, no certainty close, free to run to zero. Exactly the fault the automation
+// switch had, and hiding a row is even less of a reason to abandon money than switching it
+// off. This account's base live portfolio is also the catch-all for every live row no run
+// log claims -- 327 of 333 -- so it is the last one that should go dark.
+test("archiving: an archived portfolio's open positions are still watched", () => {
+  const policyFor = (config, portfolioId) => {
+    const directory = mkdtempSync(join(tmpdir(), "archive-policy-"));
+    try {
+      const cut = API.indexOf("\ntry {");
+      const definitions = join(directory, "definitions.php");
+      mkdirSync(join(directory, "data"), { recursive: true });
+      writeFileSync(definitions, API.slice(0, cut) + "\n");
+      const encoded = Buffer.from(JSON.stringify({ config, portfolioId })).toString("base64");
+      const output = execFileSync("php", ["-r",
+        `require '${definitions}'; $a = json_decode(base64_decode('${encoded}'), true);`
+        + " echo json_encode(['policy' => live_stop_loss_policy_config($a['config'], $a['portfolioId']),"
+        + " 'reason' => live_stop_loss_policy_absence_reason($a['config'], $a['portfolioId'])]);",
+      ], { encoding: "utf8" });
+      return JSON.parse(output);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  };
+
+  const armed = { stopLossRiskMultiplier: 1.5, stopLossEnabled: true, stopLossProbabilityFloor: 0.49 };
+  for (const portfolioId of ["live", "live5050", "live-custom-esports"]) {
+    const config = normalizeConfig({
+      live: { ...armed, archived: true },
+      live5050: { ...armed, archived: true },
+      livePortfolios: { esports: { ...armed, archived: true } },
+    });
+    const { policy, reason } = policyFor(config, portfolioId);
+    assert.ok(policy, `${portfolioId}: an archived portfolio must keep its exit policy, or its`
+      + " positions lose the stop loss the moment it leaves the dashboard");
+    assert.equal(reason, null, `${portfolioId}: "archived" must not be reported as a reason a`
+      + " position goes unwatched, or the dashboard says it is unprotected while it is not");
+  }
 });
 
 test("archiving: nothing a portfolio was traded under is dropped by archiving it", () => {
@@ -4940,4 +4982,27 @@ test("portfolio limit: a refusal nobody can see is a dead button", () => {
   // The old silent path must be gone.
   assert.ok(!APP.includes("portfolio limit reached (${CUSTOM_PAPER_PORTFOLIO_LIMIT})"),
     "the refusal that only wrote to the hidden status line must not come back");
+});
+
+// The client half. Archiving "Live 72-82" put up its confirmation, took the confirmation,
+// and then did nothing: setPortfolioArchived knew "live-5050", "live-custom-*" and paper,
+// so the id "live" fell through to the paper lookup, found no such paper portfolio and
+// returned. And every other branch falls back to mode "live" when the archived portfolio
+// was the one on screen, which is the single mode that cannot be the fallback here.
+test("archiving: the base live portfolio is reachable and leaves a mode it can return to", () => {
+  const set = extractFunction(APP, "setPortfolioArchived");
+  assert.match(set, /if \(strategyId === "live"\) \{/,
+    "without its own branch the id falls through to the paper lookup and silently does nothing");
+  assert.match(set, /state\.portfolioConfig = \{ \.\.\.config, live: \{ \.\.\.saved, archived \} \}/);
+  // The fallback must not be "live" itself.
+  const branch = set.slice(set.indexOf('if (strategyId === "live") {'), set.indexOf('} else if (strategyId === "live-5050")'));
+  assert.match(branch, /nextLive \|\| "paper-conservative"/);
+  assert.doesNotMatch(branch, /state\.mode = "live";/,
+    "archiving the base live portfolio must not leave the dashboard pointing at it");
+
+  // And the archive control is offered for it, having been hidden for every live mode.
+  assert.match(APP, /const archivable = !state\.parameterDraftCreate;/);
+  // The confirmation's label lookup used to treat anything without a live-custom- prefix
+  // as paper, so "live" would have been looked up as "paper-live" and named wrongly.
+  assert.match(APP, /strategyId === "live" \|\| strategyId === "live-5050"/);
 });
