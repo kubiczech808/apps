@@ -612,6 +612,156 @@ function trading_storage_slim_stored_events(PDO $pdo, string $cursor = '', int $
     ];
 }
 
+/**
+ * Move run-log events older than $days out of MySQL and into a gzipped NDJSON archive.
+ *
+ * Asked for: keep at most a week of run log in the database, archive the rest so it takes
+ * little space, and be able to restore it if it is ever needed.
+ *
+ * The database is the scarce resource here -- one 2000 MB quota shared with every other
+ * application on the hosting -- while a gzipped file on disk is cheap, and this codebase
+ * already keeps portfolio run logs that way. So the row is written to the archive FIRST and
+ * only deleted once the archive has it: a crash between the two leaves a duplicate in the
+ * archive, which the importer upserts away, rather than a hole in the history.
+ *
+ * Attribution does not depend on these rows any more. Which portfolio placed a trade is
+ * stamped onto the trade itself in trading_trades and kept in the executor's own
+ * orderOwnership ledger, so archiving the narrative does not take the answer with it.
+ */
+/**
+ * Put an archived month back into the table. The other half of archiving, and the half that
+ * makes it archiving rather than deletion: every write is the same idempotent upsert the
+ * live ingest uses, so restoring a file twice costs nothing and restoring one whose rows are
+ * still present changes nothing.
+ */
+function trading_storage_restore_events(string $file): array
+{
+    $root = realpath(__DIR__ . '/data/event-archive');
+    $path = $root === false ? false : realpath($root . '/' . $file);
+    // Resolved and then checked against the archive root, so a name with .. in it cannot
+    // reach a file outside it.
+    if ($root === false || $path === false || !str_starts_with($path, $root . '/')) {
+        throw new InvalidArgumentException('That archive file is not in the event archive.');
+    }
+    $handle = gzopen($path, 'rb');
+    if ($handle === false) {
+        throw new RuntimeException('Could not read the archive ' . basename($path));
+    }
+    $restored = 0;
+    while (($line = gzgets($handle)) !== false) {
+        $row = json_decode(trim($line), true);
+        if (!is_array($row) || !is_array($row['payload'] ?? null)) {
+            continue;
+        }
+        trading_storage_event_append(
+            (string) ($row['stream'] ?? 'state-run-log'),
+            isset($row['portfolioId']) && $row['portfolioId'] !== null ? (string) $row['portfolioId'] : null,
+            $row['payload'],
+            isset($row['occurredAt']) ? (string) $row['occurredAt'] : null,
+        );
+        $restored++;
+    }
+    gzclose($handle);
+    return ['file' => $file, 'restored' => $restored];
+}
+
+/**
+ * What is in the archive, so restoring does not require guessing a filename.
+ */
+function trading_storage_archive_listing(): array
+{
+    $root = __DIR__ . '/data/event-archive';
+    $files = [];
+    foreach (glob($root . '/*/*.ndjson.gz') ?: [] as $path) {
+        $files[] = [
+            'file' => str_replace($root . '/', '', $path),
+            'bytes' => filesize($path) ?: 0,
+            'modifiedAt' => gmdate('c', filemtime($path) ?: time()),
+        ];
+    }
+    usort($files, static fn (array $left, array $right): int => strcmp($left['file'], $right['file']));
+    return $files;
+}
+
+function trading_storage_archive_events(PDO $pdo, int $days = 7, int $limit = 500): array
+{
+    trading_storage_bootstrap($pdo);
+    $days = max(1, min(365, $days));
+    $limit = max(1, min(2000, $limit));
+    $cutoff = gmdate('Y-m-d H:i:s', time() - $days * 86400);
+    $statement = $pdo->prepare(
+        'SELECT event_key, stream, portfolio_id, occurred_at, payload FROM trading_event_log
+         WHERE stream IN (:live, :paper) AND occurred_at IS NOT NULL AND occurred_at < :cutoff
+         ORDER BY occurred_at ASC LIMIT ' . $limit
+    );
+    $statement->execute(['live' => 'state-run-log', 'paper' => 'portfolio-run-log', 'cutoff' => $cutoff]);
+    $rows = $statement->fetchAll();
+    if (!$rows) {
+        return ['cutoff' => $cutoff, 'archived' => 0, 'deleted' => 0, 'files' => [], 'done' => true];
+    }
+
+    $root = __DIR__ . '/data/event-archive';
+    $handles = [];
+    $files = [];
+    $archived = 0;
+    foreach ($rows as $row) {
+        $decoded = trading_storage_unpack($row['payload']);
+        if (!is_array($decoded)) {
+            // Unreadable payloads are not archived and not deleted either: losing a row we
+            // could not read is the one outcome worse than keeping it.
+            continue;
+        }
+        $stream = preg_replace('/[^a-z0-9_-]/', '', (string) $row['stream']);
+        $month = substr((string) $row['occurred_at'], 0, 7);
+        $name = $root . '/' . $stream . '/' . $month . '.ndjson.gz';
+        if (!isset($handles[$name])) {
+            if (!is_dir(dirname($name))) {
+                mkdir(dirname($name), 0775, true);
+            }
+            $handle = gzopen($name, 'ab9');
+            if ($handle === false) {
+                throw new RuntimeException('Could not open the event archive ' . basename($name));
+            }
+            $handles[$name] = $handle;
+            $files[] = str_replace($root . '/', '', $name);
+        }
+        // The portfolio and the occurred_at travel with the payload, because the archive has
+        // to be restorable on its own -- the table columns are not in the JSON otherwise.
+        $line = json_encode([
+            'stream' => $row['stream'],
+            'portfolioId' => $row['portfolio_id'],
+            'occurredAt' => $row['occurred_at'],
+            'payload' => $decoded,
+        ], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+        if (!is_string($line)) {
+            continue;
+        }
+        gzwrite($handles[$name], $line . "\n");
+        $archived++;
+    }
+    foreach ($handles as $handle) {
+        gzclose($handle);
+    }
+
+    // Deleted only after every archive file is closed, so the bytes are on disk before the
+    // rows leave the table.
+    $deleted = 0;
+    if ($archived > 0) {
+        $keys = array_column($rows, 'event_key');
+        $placeholders = implode(',', array_fill(0, count($keys), '?'));
+        $delete = $pdo->prepare('DELETE FROM trading_event_log WHERE event_key IN (' . $placeholders . ')');
+        $delete->execute($keys);
+        $deleted = $delete->rowCount();
+    }
+    return [
+        'cutoff' => $cutoff,
+        'archived' => $archived,
+        'deleted' => $deleted,
+        'files' => array_values(array_unique($files)),
+        'done' => count($rows) < $limit,
+    ];
+}
+
 function trading_storage_rebuild_compacted_table(PDO $pdo, string $table): array
 {
     trading_storage_bootstrap($pdo);

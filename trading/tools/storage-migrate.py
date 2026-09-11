@@ -194,12 +194,54 @@ def slim_events(url: str, key: str) -> int:
     return 0
 
 
+def archive_events(url: str, key: str) -> int:
+    """Move run-log events older than a week out of MySQL and into gzipped files on disk.
+
+    Batched and paced like everything else that touches this host, and it stops on the time
+    budget rather than running until it is done -- the point is to free space without being
+    the reason a live execution waits.
+    """
+    status_url = os.environ.get("STATUS_URL", "").strip()
+    days = int(os.environ.get("ARCHIVE_DAYS") or 7)
+    before = trading_size_bytes(status_url) if status_url else None
+    print(f"== archiving run-log events older than {days} days"
+          f" (trading tables at {'unknown' if before is None else str(round(before / 1048576)) + ' MB'})")
+    deadline = time.monotonic() + BUDGET_MINUTES * 60
+    archived = deleted = 0
+    files: set[str] = set()
+    for batch in range(10000):
+        if time.monotonic() > deadline:
+            print("\n== paused on the time budget; dispatch archive-events again to continue")
+            break
+        result = post(url, key, {"operation": "archive-events", "days": days, "limit": PAGE_LIMIT}).get("result", {})
+        archived += int(result.get("archived") or 0)
+        deleted += int(result.get("deleted") or 0)
+        files.update(result.get("files") or [])
+        if batch % 10 == 0 or result.get("done"):
+            print(f"   archived {archived}, deleted {deleted}, cutoff {result.get('cutoff')}")
+        if result.get("done"):
+            print("   nothing older than the cutoff is left in the table")
+            break
+        time.sleep(PAUSE_SECONDS)
+    after = trading_size_bytes(status_url) if status_url else None
+    print(f"\narchived {archived} rows into {len(files)} file(s), deleted {deleted} from the table")
+    for name in sorted(files):
+        print(f"   {name}")
+    if before is not None and after is not None:
+        print(f"trading tables {round(before / 1048576)} MB -> {round(after / 1048576)} MB")
+    print("Restore any of them with operation=archive-restore and the file name; every write"
+          " is the same idempotent upsert, so restoring twice costs nothing.")
+    print("MySQL keeps the freed pages inside the table file -- dispatch rebuild-event-table"
+          " to hand them back.")
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--operation",
         default="migrate",
-        choices=["migrate", "activate", "deactivate", "status", "slim-events"],
+        choices=["migrate", "activate", "deactivate", "status", "slim-events", "archive-events"],
     )
     args = parser.parse_args()
 
@@ -216,6 +258,9 @@ def main() -> int:
 
     if args.operation == "slim-events":
         return slim_events(url, key)
+
+    if args.operation == "archive-events":
+        return archive_events(url, key)
 
     phases = ["documents", "scraped", "resolved", "events", "finalize"]
     resume_phase = os.environ.get("MIGRATE_PHASE", "").strip()

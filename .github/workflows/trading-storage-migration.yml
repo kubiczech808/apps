@@ -26,7 +26,7 @@ on:
         required: true
         default: status
         type: choice
-        options: [status, migrate, slim-events, rebuild-event-table, activate, deactivate]
+        options: [status, migrate, slim-events, archive-events, archive-list, rebuild-event-table, activate, deactivate]
       confirm:
         description: "Type ACTIVATE to allow the activate operation. Ignored otherwise."
         required: false
@@ -68,6 +68,11 @@ on:
         required: false
         default: ""
         type: string
+      archive_days:
+        description: "Keep this many days of run log in the database; archive anything older."
+        required: false
+        default: "7"
+        type: string
 
 permissions:
   contents: read
@@ -95,6 +100,7 @@ jobs:
       MIGRATE_BUDGET_MINUTES: ${{ inputs.budget_minutes || '35' }}
       MIGRATE_GROWTH_CAP_MB: ${{ inputs.growth_cap_mb || '100' }}
       SLIM_CURSOR: ${{ inputs.slim_cursor }}
+      ARCHIVE_DAYS: ${{ inputs.archive_days || '7' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -113,6 +119,19 @@ jobs:
       - name: Rewrite the fat run-log events
         if: inputs.operation == 'slim-events'
         run: python3 trading/tools/storage-migrate.py --operation slim-events
+
+      - name: Archive run-log events older than the retention window
+        if: inputs.operation == 'archive-events'
+        run: python3 trading/tools/storage-migrate.py --operation archive-events
+
+      - name: List what is in the archive
+        if: inputs.operation == 'archive-list'
+        run: |
+          curl -sS -X POST "$STORAGE_URL" \
+            -H "Content-Type: application/json" \
+            -H "X-Trading-Trigger-Key: ${TRADING_TRIGGER_KEY}" \
+            -d '{"operation":"archive-list"}' \
+            | python3 -m json.tool
 
       - name: Reclaim the freed pages on disk
         if: inputs.operation == 'rebuild-event-table'

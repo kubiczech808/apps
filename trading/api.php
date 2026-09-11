@@ -6070,6 +6070,25 @@ try {
             );
             respond(['ok' => true, 'operation' => 'slim-events', 'result' => $result]);
         }
+        // Asked for: keep at most a week of run log in the database and archive the rest so
+        // it takes little space, with the ability to restore it. The database is the scarce
+        // resource -- one 2000 MB quota shared with every other application on this hosting
+        // -- and a gzipped file on disk is not.
+        if ($operation === 'archive-events') {
+            $result = trading_storage_archive_events(
+                $pdo,
+                (int) ($storageRequest['days'] ?? 7),
+                (int) ($storageRequest['limit'] ?? 500),
+            );
+            respond(['ok' => true, 'operation' => 'archive-events', 'result' => $result]);
+        }
+        if ($operation === 'archive-list') {
+            respond(['ok' => true, 'operation' => 'archive-list', 'files' => trading_storage_archive_listing()]);
+        }
+        if ($operation === 'archive-restore') {
+            $result = trading_storage_restore_events((string) ($storageRequest['file'] ?? ''));
+            respond(['ok' => true, 'operation' => 'archive-restore', 'result' => $result]);
+        }
         if ($operation === 'rebuild-table') {
             $tables = trading_storage_rebuild_compacted_table($pdo, (string) ($storageRequest['table'] ?? ''));
             respond(['ok' => true, 'operation' => 'rebuild-table', 'tables' => $tables, 'storage' => trading_storage_diagnostics()]);
