@@ -5562,3 +5562,42 @@ test("equity chart: the curve is smooth and never overshoots the data", () => {
   // disagree with it.
   assert.match(APP, /const area = line\s*\n\s*\? `\$\{line\} L/);
 });
+
+// The other half of the durable-ownership fix, and the half that decides what the numbers
+// say. 211 of 352 closed rows on the live account were placed before ownership was recorded
+// and lost their claim when the run log rolled over. They cannot be attributed now -- no
+// price could tell those portfolios apart -- so the question is what to do with them, and
+// both obvious answers are wrong: dropping them makes real trades vanish from the account,
+// which is the reported complaint rather than a fix for it, and counting them as base Live's
+// reports 211 trades that portfolio never made.
+test("live totals: a row nothing can claim stays on screen and out of the arithmetic", () => {
+  const predicate = extractFunction(APP, "liveRowIsUnattributed");
+  // Only a row with a token. A tokenless redemption is base Live's by documented rule rather
+  // than by accident, and a row at the fixed entry price is 5050's by its own signature --
+  // marking either one "unknown" would be a new wrong answer.
+  assert.match(predicate, /if \(!String\(row\?\.tokenId \|\| row\?\.assetId \|\| ""\)\) return false;/);
+  assert.match(predicate, /if \(liveTokenOwnerMode\(row\)\) return false;/);
+  assert.match(predicate, /boughtAtFixedEntryPrice\(row\) : restsAtFixedEntryPrice\(row\)/);
+
+  const totals = extractFunction(APP, "liveOwnPortfolioPnl");
+  // The list keeps everything; the sums keep only what is attributed.
+  assert.match(totals, /const unattributedClosed = allClosed\.filter\(liveRowIsUnattributed\);/);
+  assert.match(totals, /const closedTrades = allClosed\.filter\(\(trade\) => !liveRowIsUnattributed\(trade\)\);/);
+  assert.match(totals, /const positions = allPositions\.filter\(\(trade\) => !liveRowIsUnattributed\(trade\)\);/);
+  // Counted on their own rather than discarded, or the gap is invisible again.
+  assert.match(totals, /unattributedClosedCount: unattributedClosed\.length,/);
+  assert.match(totals, /unattributedRealized: Number\(unattributedClosed/);
+  // The horizon still spans every row on the tab: the account started trading when its first
+  // row did, whoever placed it. Reading it off the attributed rows alone would move the
+  // equity chart's start date every time an old row lost its claim.
+  assert.match(totals, /firstOpenedAt: firstOpenedAtFromTrades\(allPositions, allClosed,/);
+
+  // And it has to be visible in two places: on the row, and in the tile whose totals now
+  // differ from the table below it.
+  assert.match(APP, /\$\{tradeTypeBadge\(trade\)\}\$\{marketTagsInfo\(trade\)\}\$\{unattributedBadge\(trade\)\}/);
+  const badge = extractFunction(APP, "unattributedBadge");
+  assert.match(badge, /if \(!isLiveMode\(\) \|\| !liveRowIsUnattributed\(trade\)\) return "";/,
+    "a paper row carries its portfolio in the row and can never be in this state");
+  assert.match(APP, /const unattributedLine = own\.unattributedClosedCount \|\| own\.unattributedPositionCount/);
+  assert.match(APP, /\$\{unattributedLine \? `<small class="metric-note">\$\{escapeHtml\(unattributedLine\)\}<\/small>` : ""\}/);
+});

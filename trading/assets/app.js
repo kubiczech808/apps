@@ -4663,6 +4663,17 @@ function stopLossReversalNote(trade = {}) {
     + `</span>`;
 }
 
+// Says outright that nothing knows whose trade this is, rather than letting it sit on base
+// Live looking like base Live's. Only live rows can be in that position -- a paper trade
+// carries its portfolio in the row -- and only while the row itself is unclaimed, so the
+// badge disappears on its own as the durable ledger fills in.
+function unattributedBadge(trade) {
+  if (!isLiveMode() || !liveRowIsUnattributed(trade)) return "";
+  return '<span class="order-chip warning" title="This row was placed before the portfolio that ordered it was recorded durably,'
+    + ' and its order has since aged out of every execution log. It is shown here because it is a real trade on the account,'
+    + ' but it is left out of this portfolio\'s totals rather than counted as its own.">Portfolio unknown</span>';
+}
+
 function tradeTypeBadge(trade) {
   // "Waiting" is only true while the market can still fill it. Once the event is over the
   // bid is holding collateral for nothing, and the next execution pass withdraws it --
@@ -4878,7 +4889,7 @@ function renderTradeRows(trades, emptyText, options = {}) {
               ${signedMoney(tradePnlValue(trade))}
             </td>
             <td class="trade-market-cell" data-label="Market">
-              ${tradeTypeBadge(trade)}${marketTagsInfo(trade)}
+              ${tradeTypeBadge(trade)}${marketTagsInfo(trade)}${unattributedBadge(trade)}
               ${marketAnchor(trade)}
             </td>
             <td data-label="Win p.a.">${potentialAnnualizedCell(trade)}</td>
@@ -6624,8 +6635,16 @@ function liveOwnPortfolioPnl(mode = state.mode) {
     const numeric = Number(value);
     return Number.isFinite(numeric) ? numeric : 0;
   };
-  const closedTrades = liveClosedTrades(liveState, mode);
-  const positions = livePositions(liveState, mode);
+  // Set apart rather than dropped. These rows belong to SOME portfolio -- they were placed by
+  // one, and the record of which was lost with the run log -- so folding them into base Live
+  // reports trades it did not make, and hiding them reports an account smaller than it is.
+  // They stay in the list and out of the arithmetic, counted on their own.
+  const allClosed = liveClosedTrades(liveState, mode);
+  const allPositions = livePositions(liveState, mode);
+  const unattributedClosed = allClosed.filter(liveRowIsUnattributed);
+  const unattributedPositions = allPositions.filter(liveRowIsUnattributed);
+  const closedTrades = allClosed.filter((trade) => !liveRowIsUnattributed(trade));
+  const positions = allPositions.filter((trade) => !liveRowIsUnattributed(trade));
   const realized = closedTrades.reduce((sum, trade) => sum + amount(trade.realizedPnlUsdc ?? trade.pnlUsdc), 0);
   const open = positions.reduce((sum, trade) => sum + amount(trade.openPnlUsdc ?? trade.unrealizedPnlUsdc), 0);
   // What the portfolio actually put at risk, which is the only base it has of its own: the
@@ -6645,7 +6664,17 @@ function liveOwnPortfolioPnl(mode = state.mode) {
     investedClosed: Number(investedClosed.toFixed(6)),
     closedCount: closedTrades.length,
     positionCount: positions.length,
-    firstOpenedAt: firstOpenedAtFromTrades(positions, closedTrades, liveOpenOrders(liveState, mode)),
+    // Reported separately so the gap is readable instead of being silently absorbed: how many
+    // rows on this tab nothing can claim, and what they are worth.
+    unattributedClosedCount: unattributedClosed.length,
+    unattributedPositionCount: unattributedPositions.length,
+    unattributedRealized: Number(unattributedClosed
+      .reduce((sum, trade) => sum + amount(trade.realizedPnlUsdc ?? trade.pnlUsdc), 0).toFixed(6)),
+    unattributedStake: Number([...unattributedPositions, ...unattributedClosed]
+      .reduce((sum, trade) => sum + amount(trade.totalCostUsdc ?? trade.stakeUsdc), 0).toFixed(6)),
+    // The horizon still spans everything on the tab: the account started trading when its
+    // first row did, whoever placed it.
+    firstOpenedAt: firstOpenedAtFromTrades(allPositions, allClosed, liveOpenOrders(liveState, mode)),
   };
 }
 
@@ -11531,6 +11560,22 @@ function belongsToActiveLivePortfolio(row) {
   return belongsToLivePortfolio(row, state.mode);
 }
 
+// A row nothing can claim. Measured on the live account: 211 of 352 closed rows, carrying
+// 255 USDC of realized P/L and 1027 USDC of stake, were placed before ownership was recorded
+// durably and lost their claim when the run log rolled over. They still show under base Live
+// -- removing them would make them vanish from the account altogether, which is the reported
+// complaint, not a fix for it -- but they are NOT base Live's trades, and counting them as if
+// they were makes that portfolio's statistics wrong in the opposite direction.
+//
+// Only rows with a token qualify. A tokenless redemption has nothing to attribute on and is
+// base Live's by documented rule rather than by accident, and a row priced at the fixed entry
+// is 5050's by its own signature.
+function liveRowIsUnattributed(row) {
+  if (!String(row?.tokenId || row?.assetId || "")) return false;
+  if (liveTokenOwnerMode(row)) return false;
+  return !(isFilledPortfolioRow(row) ? boughtAtFixedEntryPrice(row) : restsAtFixedEntryPrice(row));
+}
+
 function livePositions(liveState, mode = state.mode) {
   return Array.isArray(liveState?.positions)
     ? liveState.positions.filter((trade) => !isClosedTrade(trade)).filter((row) => belongsToLivePortfolio(row, mode))
@@ -12038,6 +12083,14 @@ function renderLiveState(liveState) {
   const redeemLine = Number.isFinite(pendingRedeem) && pendingRedeem > 0.000001
     ? `includes ${money(pendingRedeem)} pending redeem`
     : "";
+  // The gap, stated. Without it the tile and the table below disagree by however much these
+  // rows are worth, and nothing on screen says why -- which is the shape of the original
+  // report: the list is short, the numbers do not add up, and there is no third fact to
+  // reconcile them with.
+  const unattributedLine = own.unattributedClosedCount || own.unattributedPositionCount
+    ? `${own.closedCount} closed rows attributed, ${own.unattributedClosedCount} of unknown portfolio`
+      + ` (${signedMoney(own.unattributedRealized)}), left out of these totals`
+    : "";
   const liveSizingCapitalBase = Number.isFinite(equity) ? Math.max(0, equity - (Number.isFinite(openPnl) ? openPnl : 0)) : null;
   syncRiskAllocationControl(freeCash, "live portfolio equity excl. unrealized P/L", {
     baseCapital: liveSizingCapitalBase,
@@ -12051,6 +12104,7 @@ function renderLiveState(liveState) {
   els.portfolioLastRun.innerHTML = `
     <small class="metric-note">${escapeHtml(depositedLine)}</small>
     ${redeemLine ? `<small class="metric-note">${escapeHtml(redeemLine)}</small>` : ""}
+    ${unattributedLine ? `<small class="metric-note">${escapeHtml(unattributedLine)}</small>` : ""}
   `;
   els.portfolioTotalPl.textContent = signedMoney(totalPnlValue);
   els.portfolioTotalPl.className = pnlClass(totalPnlValue);
