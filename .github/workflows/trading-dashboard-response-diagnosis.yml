@@ -1,0 +1,37 @@
+name: Trading Dashboard Response Diagnosis
+
+# READ-ONLY, manual only. Public GETs against the published API, no secrets, no writes.
+#
+# Reported from a phone: the Scraping log tab showed "0 RECORDED SCRAPING RUNS" over
+# "data/paper-state.json timed out after 10 seconds", while the market scans themselves were
+# running normally every ten minutes. So the scraping worked and the READ of its result did
+# not, and a timeout says nothing about its own cause.
+#
+# This times each request the scraped views make and prints the payload size with it, twice,
+# so a slow host can be told apart from a query that has become expensive -- and so a single
+# unlucky moment is not mistaken for a state.
+on:
+  workflow_dispatch:
+    inputs:
+      passes:
+        description: "How many times to repeat the whole set"
+        required: false
+        default: "2"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Time the requests the dashboard makes
+        env:
+          TRADING_HOST: https://osobnizkusenosti.cz/trading
+          DASHBOARD_TIMEOUT_SECONDS: "10"
+          PROBE_PASSES: ${{ inputs.passes || '2' }}
+        run: python3 trading/tools/dashboard-response-probe.py
