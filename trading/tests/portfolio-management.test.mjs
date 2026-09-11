@@ -5726,3 +5726,44 @@ test("the mirror sends only the retained window of run-log history", () => {
       `${stream} is not a run log and must not be truncated`);
   }
 });
+
+// The database keeps every market it has ever seen active; the published catalogue does not.
+//
+// Measured before database reads were switched on: the catalogue held 8135 active markets
+// and the database held 21402. The import was not at fault -- the difference is everything
+// the catalogue has dropped. A market that RESOLVES is re-sent under the resolved lifecycle
+// and its row follows it, but one that simply leaves the active set (expired, delisted, aged
+// past the retention cap) is never mentioned again, and its row stayed marked active for
+// ever. Reading from that would have shown thirteen thousand dead markets as tradable -- and
+// the paper bots pick their candidates from the same list, so it is not only a display fault.
+test("stale active observations are pruned, and the live catalogue cannot be", () => {
+  const prune = /function trading_storage_observations_prune[\s\S]*?\n\}/.exec(STORAGE);
+  assert.ok(prune, "storage.php must be able to prune stale observations");
+
+  // The cutoff is MySQL's own clock. The rows carry the server's timestamps, so a cutoff
+  // built on the worker's clock would be comparing two of them.
+  assert.match(prune[0], /updated_at < \(NOW\(6\) - INTERVAL ' \. \$staleMinutes \. ' MINUTE\)/);
+  // Never less than half an hour: a short window plus one slow mirror pass would delete the
+  // live catalogue, and re-importing it costs far more than keeping a stale row longer.
+  assert.match(prune[0], /\$staleMinutes = max\(30, min\(20160, \$staleMinutes\)\);/);
+  // Scoped to one lifecycle, and that is the only value still bound -- the two inlined ones
+  // are integers clamped above.
+  assert.match(prune[0], /WHERE lifecycle = :lifecycle/);
+  assert.match(prune[0], /\$statement->execute\(\['lifecycle' => \$lifecycle\]\);/);
+  // Batched, and it says whether more remain, so a large first prune is never one long lock
+  // on a table the dashboard reads.
+  assert.match(prune[0], /LIMIT ' \. \$limit/);
+  assert.match(prune[0], /'done' => \$deleted < \$limit,/);
+
+  // The API accepts it only for a known lifecycle, so a typo cannot widen the delete.
+  assert.match(API, /if \(in_array\(\$lifecycle, \['SCRAPED', 'RESOLVED'\], true\)\) \{/);
+  assert.match(API, /'pruned' => \$pruned,/, "a silent prune is how the last gap went unnoticed");
+
+  // And the mirror asks for it ONLY after importing the whole active catalogue. post() raises
+  // on a failed batch, so reaching the flag means every batch was accepted; pruning against a
+  // partial catalogue would delete the markets that did not make it.
+  const INGEST = readFileSync(new URL("../tools/ingest-trading-state.py", import.meta.url), "utf8");
+  assert.match(INGEST, /if field == "marketObservations":\n\s+imported_active = True/);
+  assert.match(INGEST, /if imported_active:\n\s+pruned = post\(url, key, \{/);
+  assert.match(INGEST, /"lifecycle": "SCRAPED",/);
+});

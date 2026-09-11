@@ -235,6 +235,7 @@ def ingest_paper(url: str, key: str, state_file: Path, state: dict[str, Any], ta
         sources.append((resolved_path, "resolvedMarketObservations"))
     elif isinstance(state.get("resolvedMarketObservations"), list):
         sources.append((state_file, "resolvedMarketObservations"))
+    imported_active = False
     for source, field in sources:
         try:
             rows = list_rows(json.loads(source.read_text(encoding="utf-8")).get(field))
@@ -244,6 +245,38 @@ def ingest_paper(url: str, key: str, state_file: Path, state: dict[str, Any], ta
             result = post(url, key, {"target": target, "observations": rows[offset:offset + 300]})
             imported += int(((result.get("ingest") or {}).get("observations") or 0))
             batches += 1
+        # Reached only when every batch of this source was accepted -- post raises otherwise,
+        # and a partial catalogue must never be treated as the whole of it.
+        if field == "marketObservations":
+            imported_active = True
+
+    # Measured before the database was switched on: the published catalogue held 8135 active
+    # markets and the database held 21402. The import was fine; the difference is everything
+    # the catalogue has ever dropped. A market that resolves is re-sent under the resolved
+    # lifecycle and its row follows it, but one that simply leaves the active set -- expired,
+    # delisted, aged past the retention cap -- is never mentioned again, and its row stayed
+    # marked active for ever. Serving reads from that would show thirteen thousand dead
+    # markets as tradable, and the paper bots pick their candidates from the same list.
+    #
+    # So the catalogue that was just written in full is also the authority on what is no
+    # longer in it. The cutoff is MySQL's own clock, not this machine's: the rows carry the
+    # server's timestamps, and the rows of the current catalogue were rewritten seconds ago.
+    if imported_active:
+        pruned = post(url, key, {
+            "target": target,
+            "pruneObservations": {
+                "lifecycle": "SCRAPED",
+                "staleMinutes": int(os.environ.get("OBSERVATION_PRUNE_STALE_MINUTES") or 180),
+                "limit": int(os.environ.get("OBSERVATION_PRUNE_LIMIT") or 500),
+            },
+        })
+        detail = ((pruned.get("ingest") or {}).get("pruned") or {})
+        if detail:
+            print(
+                f"Pruned {detail.get('deleted')} active observation(s) not refreshed in"
+                f" {detail.get('staleMinutes')} minutes"
+                + ("" if detail.get("done") else "; more remain, the next pass continues")
+            )
     return imported, batches
 
 
