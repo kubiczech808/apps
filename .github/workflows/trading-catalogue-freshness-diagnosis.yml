@@ -1,0 +1,28 @@
+name: Trading Catalogue Freshness Diagnosis
+
+# READ-ONLY, manual only. Public GETs against the published API, no secrets, no writes.
+#
+# Asked before adding a resolution horizon to catalogue retention. The idea is that holding
+# markets resolving days out spends capacity that imminent markets could use -- but that only
+# buys candidates if the capacity cap is actually binding, and a horizon shorter than a
+# portfolio's own resolution window empties that portfolio without any visible error.
+#
+# Also measures whether `video-games` overlaps sport and esport, since the esports portfolios
+# are the ones in use and dropping a tag they share would starve them.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: How the catalogue is spread over time
+        env:
+          TRADING_HOST: https://osobnizkusenosti.cz/trading
+        run: python3 trading/tools/catalogue-freshness-probe.py
