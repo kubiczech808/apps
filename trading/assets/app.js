@@ -5431,12 +5431,20 @@ function renderPortfolioEquityChart({ trades = [], equity, openPnl = 0, generate
   const spread = Math.max(0.01, rawMax - rawMin);
   const minValue = rawMin - (spread * 0.14);
   const maxValue = rawMax + (spread * 0.14);
-  const start = history.points[0].timestamp;
-  const end = history.points[history.points.length - 1].timestamp;
-  const timeSpread = Math.max(1, end - start);
   const plotWidth = width - padding.left - padding.right;
   const plotHeight = height - padding.top - padding.bottom;
-  const x = (timestamp) => padding.left + (Math.max(0, Math.min(1, (timestamp - start) / timeSpread)) * plotWidth);
+  // One slot per reading, evenly spaced, rather than each reading at its distance in time.
+  //
+  // Reported from a phone: a chart of three readings drew the first two on top of each other
+  // at the left edge and the third alone at the right, because two were taken minutes apart
+  // and the third a day later. Spacing by time collapses a sparse series into a couple of
+  // clusters -- unreadable, and nearly impossible to hit with a finger, which matters here
+  // because tapping a point is how the value is read on a phone.
+  //
+  // This chart is a sequence of readings, and the dates printed along the axis carry the
+  // real intervals for whoever needs them.
+  const pointX = (index, count = history.points.length) =>
+    padding.left + (count <= 1 ? 0 : (Math.max(0, Math.min(count - 1, index)) / (count - 1)) * plotWidth);
   const y = (value) => padding.top + ((maxValue - value) / (maxValue - minValue)) * plotHeight;
   // Drawn as a smooth curve rather than steps. Steps were tried and were worse to read: the
   // vertical risers dominate a chart this small, and the eye follows them instead of the
@@ -5448,7 +5456,9 @@ function renderPortfolioEquityChart({ trades = [], equity, openPnl = 0, generate
   // from 60 to 69 would dip below 60 first and print a loss that never happened.
   const curve = (points) => {
     if (points.length < 2) return "";
-    const px = points.map((point) => x(point.timestamp));
+    // By its own index within its own series. The low and high series are built from the
+    // same days as the points, one entry each, so they land in the same slots.
+    const px = points.map((_, index) => pointX(index, points.length));
     const py = points.map((point) => y(point.value));
     const clamp = (value, a, b) => Math.min(Math.max(value, Math.min(a, b)), Math.max(a, b));
     let path = `M${px[0].toFixed(1)},${py[0].toFixed(1)}`;
@@ -5472,8 +5482,8 @@ function renderPortfolioEquityChart({ trades = [], equity, openPnl = 0, generate
   const line = curve(history.points);
   const floor = (padding.top + plotHeight).toFixed(1);
   const area = line
-    ? `${line} L${x(history.points[history.points.length - 1].timestamp).toFixed(1)},${floor}`
-      + ` L${x(history.points[0].timestamp).toFixed(1)},${floor} Z`
+    ? `${line} L${pointX(history.points.length - 1).toFixed(1)},${floor}`
+      + ` L${pointX(0).toFixed(1)},${floor} Z`
     : "";
   // The day's low and high, drawn only when the series was measured -- the reconstruction
   // from settlements has no notion of a low or a high within a day.
@@ -5490,7 +5500,7 @@ function renderPortfolioEquityChart({ trades = [], equity, openPnl = 0, generate
   const labelIndexes = [...new Set([0, Math.floor((history.points.length - 1) / 2), history.points.length - 1])];
   const labels = labelIndexes.map((index) => {
     const point = history.points[index];
-    return `<text x="${x(point.timestamp).toFixed(1)}" y="${height - 9}" text-anchor="${index === 0 ? "start" : (index === history.points.length - 1 ? "end" : "middle")}">${escapeHtml(equityChartDate(point.timestamp, history.scale))}</text>`;
+    return `<text x="${pointX(index).toFixed(1)}" y="${height - 9}" text-anchor="${index === 0 ? "start" : (index === history.points.length - 1 ? "end" : "middle")}">${escapeHtml(equityChartDate(point.timestamp, history.scale))}</text>`;
   }).join("");
   const last = history.points[history.points.length - 1];
   const direction = last.value >= history.openingEquity ? "positive" : "negative";
@@ -5520,7 +5530,7 @@ function renderPortfolioEquityChart({ trades = [], equity, openPnl = 0, generate
       ${lowLine}
       ${highLine}
       <path class="equity-history-line" d="${line}"></path>
-      <circle class="equity-history-point" cx="${x(last.timestamp).toFixed(1)}" cy="${y(last.value).toFixed(1)}" r="4"></circle>
+      <circle class="equity-history-point" cx="${pointX(history.points.length - 1).toFixed(1)}" cy="${y(last.value).toFixed(1)}" r="4"></circle>
       <circle class="equity-history-cursor" cx="0" cy="0" r="5"></circle>
       <g class="equity-history-labels">${labels}</g>
       </svg>
@@ -5543,14 +5553,14 @@ function renderPortfolioEquityChart({ trades = [], equity, openPnl = 0, generate
     const bounds = svg.getBoundingClientRect();
     const viewX = ((clientX - bounds.left) / Math.max(1, bounds.width)) * width;
     return history.points.reduce((best, point, index) => (
-      Math.abs(x(point.timestamp) - viewX) < Math.abs(x(history.points[best].timestamp) - viewX) ? index : best
+      Math.abs(pointX(index) - viewX) < Math.abs(pointX(best) - viewX) ? index : best
     ), 0);
   };
   const showIndex = (index) => {
     if (!tooltip) return;
     const nearest = history.points[index];
     if (!nearest) return;
-    const left = Math.max(4, Math.min(96, (x(nearest.timestamp) / width) * 100));
+    const left = Math.max(4, Math.min(96, (pointX(index) / width) * 100));
     // The day's range is worth more than its average on its own, so say all three when
     // the series carries them.
     const low = lows[index];
@@ -5564,7 +5574,7 @@ function renderPortfolioEquityChart({ trades = [], equity, openPnl = 0, generate
     // Which point is being read. Without it a pinned value on a phone says a number with
     // nothing on the curve to tie it to.
     if (cursor) {
-      cursor.setAttribute("cx", x(nearest.timestamp).toFixed(1));
+      cursor.setAttribute("cx", pointX(index).toFixed(1));
       cursor.setAttribute("cy", y(nearest.value).toFixed(1));
       cursor.classList.add("is-visible");
     }

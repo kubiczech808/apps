@@ -5525,10 +5525,13 @@ test("equity chart: a tap pins the value and a second tap clears it", () => {
 test("equity chart: the curve is smooth and never overshoots the data", () => {
   const source = /const curve = \(points\) => \{[\s\S]*?\n  \};/.exec(APP);
   assert.ok(source, "the curve builder must still be findable");
-  const build = new Function("x", "y", `
+  // Positions come from the index now rather than the timestamp, so the stand-in maps index
+  // to the coordinates those timestamps used to produce. Every assertion below is about the
+  // SHAPE of the curve and stays exactly as it was written.
+  const build = new Function("pointX", "y", `
     ${source[0]}
     return curve;
-  `)((timestamp) => timestamp, (value) => value);
+  `)((index) => index * 10, (value) => value);
 
   const points = [
     { timestamp: 0, value: 100 },
@@ -5797,4 +5800,58 @@ test("the mirror stops re-sending a resolved archive that cannot have changed", 
   const INGEST = readFileSync(new URL("../tools/ingest-trading-state.py", import.meta.url), "utf8");
   assert.match(INGEST, /if field == "resolvedMarketObservations":\n\s+rows = recently_resolved\(rows\)/);
   assert.doesNotMatch(INGEST, /if field == "marketObservations":\n\s+rows = recently_resolved\(rows\)/);
+});
+
+// The equity chart placed each reading at its distance in TIME.
+//
+// Reported from a phone: a chart of three readings drew the first two on top of each other
+// at the left edge and the third alone at the right, because two were taken minutes apart
+// and the third a day later. Spacing by time collapses a sparse series into clusters, and it
+// makes the points nearly impossible to hit with a finger -- which matters here, because
+// tapping a point is how the value is read on a phone.
+test("the equity chart spaces its readings evenly, not by the gap between them", () => {
+  // The real shape from the report: two readings minutes apart on the 9th, one a day later.
+  const points = [
+    { timestamp: Date.parse("2026-09-09T18:00:00Z"), value: 57.66 },
+    { timestamp: Date.parse("2026-09-09T18:04:00Z"), value: 62.10 },
+    { timestamp: Date.parse("2026-09-11T18:00:00Z"), value: 53.04 },
+  ];
+  const width = 520;
+  const padding = { left: 58, right: 14 };
+  const plotWidth = width - padding.left - padding.right;
+
+  const pointX = new Function("history", "padding", "plotWidth", `
+    ${/const pointX = [\s\S]*?\(count - 1\)\) \* plotWidth\);/.exec(APP)[0]}
+    return pointX;
+  `)({ points }, padding, plotWidth);
+
+  const placed = points.map((_, index) => pointX(index));
+  assert.equal(placed[0], padding.left, "the first reading sits at the left edge");
+  assert.equal(placed[2], padding.left + plotWidth, "the last sits at the right edge");
+  // The point of the fix: the middle reading belongs in the middle, however close in time it
+  // happened to be taken to the first.
+  assert.equal(placed[1], padding.left + plotWidth / 2);
+  // Which is what the old scale got wrong -- four minutes into a two day span put it 0.1% of
+  // the way across, on top of its neighbour.
+  const byTime = padding.left
+    + ((points[1].timestamp - points[0].timestamp) / (points[2].timestamp - points[0].timestamp)) * plotWidth;
+  assert.ok(byTime - padding.left < 1, "the old scale really did stack them");
+
+  // A single reading must not divide by zero, and an index outside the series is clamped
+  // rather than drawn off the canvas.
+  assert.equal(pointX(0, 1), padding.left);
+  assert.equal(pointX(9), padding.left + plotWidth);
+  assert.equal(pointX(-3), padding.left);
+
+  // Every place that positions something horizontally uses it, or the curve, the axis
+  // labels, the filled area and the tap cursor would disagree with each other.
+  const chart = extractFunction(APP, "renderPortfolioEquityChart");
+  assert.match(chart, /const px = points\.map\(\(_, index\) => pointX\(index, points\.length\)\);/);
+  assert.match(chart, /L\$\{pointX\(history\.points\.length - 1\)\.toFixed\(1\)\},\$\{floor\}/);
+  assert.match(chart, /<text x="\$\{pointX\(index\)\.toFixed\(1\)\}"/);
+  assert.match(chart, /cx="\$\{pointX\(history\.points\.length - 1\)\.toFixed\(1\)\}"/);
+  assert.match(chart, /Math\.abs\(pointX\(index\) - viewX\) < Math\.abs\(pointX\(best\) - viewX\)/);
+  assert.match(chart, /cursor\.setAttribute\("cx", pointX\(index\)\.toFixed\(1\)\);/);
+  // And nothing is left positioning by timestamp.
+  assert.doesNotMatch(chart, /x\((?:point|nearest|last)\.timestamp\)/);
 });
