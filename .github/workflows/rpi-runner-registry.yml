@@ -1,0 +1,61 @@
+name: RPi Runner Registry
+
+# READ-ONLY, and it does not need the Pi.
+#
+# The on-Pi inventory workflow cannot answer the question it was written for: it needs a
+# Pi runner to run on, and the whole doubt is whether the Pi still has a working one. Two
+# dispatches of it sat queued and were cancelled without ever being assigned an agent.
+#
+# GitHub itself knows the answer. This asks the registry which runner agents this
+# repository has, what they are called, whether they are online and what labels they
+# carry -- from a hosted runner, so it tells us something even when the Pi is mute.
+#
+# Registers nothing, removes nothing, starts and stops nothing.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  registry:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Ask GitHub which runners this repository has
+        env:
+          # GITHUB_TOKEN cannot read the runner registry -- that needs repository admin.
+          GH_TOKEN: ${{ secrets.TRADING_GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -uo pipefail
+          if [ -z "${GH_TOKEN}" ]; then
+            echo "TRADING_GITHUB_TOKEN is not set, so the runner registry cannot be read."
+            exit 1
+          fi
+          code=$(curl -sS -o /tmp/runners.json -w "%{http_code}" \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/${REPO}/actions/runners?per_page=100")
+          echo "HTTP ${code}"
+          if [ "${code}" != "200" ]; then
+            echo "The registry could not be read. A 403 here means the token lacks repository"
+            echo "administration rights, not that the runners are gone."
+            head -c 400 /tmp/runners.json
+            echo ""
+            exit 1
+          fi
+          echo ""
+          echo "== runner agents registered to ${REPO}"
+          jq -r '"total: \(.total_count)", (.runners[] | "  name=\(.name)  id=\(.id)  status=\(.status)  busy=\(.busy)  os=\(.os)  labels=\([.labels[].name] | join(","))")' /tmp/runners.json
+
+          echo ""
+          echo "== what this means"
+          online=$(jq -r '[.runners[] | select(.status == "online")] | length' /tmp/runners.json)
+          maint=$(jq -r '[.runners[] | select([.labels[].name] | index("maintenance"))] | length' /tmp/runners.json)
+          echo "   online agents: ${online}"
+          echo "   agents carrying the maintenance label: ${maint}"
+          if [ "${online}" = "0" ]; then
+            echo "   !! no agent is online -- nothing labelled self-hosted can run at all"
+          fi
