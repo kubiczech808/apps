@@ -1,0 +1,31 @@
+name: Trading Certainty Close Diagnosis
+
+# Read-only diagnostic, manual only. Reads the portfolio config, the live account snapshot,
+# the exit policy and the CLOB order books over HTTPS. Places no orders, writes nothing,
+# publishes nothing, uses no secrets.
+#
+# Reported: the certainty close does not fire. Positions the market prices at 100%, waiting
+# only for settlement, sit there until they are sold by hand.
+#
+# The trigger compares the best BID against the setting, so this separates the three things
+# that can be failing -- the setting is not stored, the position is not watched, or the bid
+# never reaches the level -- before anything is changed.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Compare every open position against its certainty-close level
+        working-directory: trading
+        run: node tools/certainty-close-diagnosis.mjs
