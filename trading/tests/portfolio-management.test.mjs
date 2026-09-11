@@ -771,7 +771,15 @@ test("dashboard: the tab row is built from the saved portfolios, archived ones l
   assert.equal(api.normalizeMode("live-5050"), "live-5050");
 });
 
-test("dashboard: an archived 5050 leaves the tab row too, the plain live portfolio never does", () => {
+// Reported twice, and the second time is the reason this test changed shape: archiving
+// "Live 72-82" left it in the portfolio overview. By then the icon, setPortfolioArchived,
+// api.php and the restore panel had all been fixed for the base live portfolio -- the flag
+// was being stored correctly -- but portfolioIsArchived still answered `false` for it
+// unconditionally, and that is the one predicate dashboardModes reads. So the config said
+// archived and every list went on showing it.
+//
+// Nothing exercised it, because this test asserted the OLD rule as intended behaviour.
+test("dashboard: an archived live portfolio leaves the tab row, the base one included", () => {
   const run = new Function("state", `
     ${/const BUILT_IN_PAPER_STRATEGY_IDS = \[[^\]]*\];/.exec(APP)[0]}
     ${/const CUSTOM_PAPER_STRATEGY_ID = [^\n]+/.exec(APP)[0]}
@@ -813,13 +821,31 @@ test("dashboard: an archived 5050 leaves the tab row too, the plain live portfol
   const archived5050 = run({ mode: "live", portfolioConfig: { live5050: { archived: true } } });
   assert.equal(archived5050.portfolioIsArchived("live-5050"), true);
   assert.equal(archived5050.portfolioIsArchived("live"), false,
-    "archiving 5050 must not also archive the plain live portfolio -- they are different config keys");
+    "archiving 5050 must not also archive the base live portfolio -- they are different config keys");
   assert.deepEqual(archived5050.dashboardModes(),
     ["live", "paper-conservative", "paper-highReward", "paper-moreProbable", "paper-equal"],
     "an archived 5050 leaves the tab row, the same as an archived paper portfolio would");
 
+  // The report itself: the base live portfolio is archived, and it has to go.
+  const archivedLive = run({ mode: "paper-conservative", portfolioConfig: { live: { archived: true } } });
+  assert.equal(archivedLive.portfolioIsArchived("live"), true,
+    "the predicate has to read config.live.archived, not answer false for every live mode");
+  assert.ok(!archivedLive.dashboardModes().includes("live"),
+    "an archived base live portfolio must leave the tab row and the overview");
+  assert.deepEqual(archivedLive.dashboardModes(),
+    ["live-5050", "paper-conservative", "paper-highReward", "paper-moreProbable", "paper-equal"]);
+  // And it is only that one: archiving Live must not take 5050 or a created live portfolio
+  // with it, because they are separate config keys.
+  const together = run({
+    mode: "paper-conservative",
+    portfolioConfig: { live: { archived: true }, livePortfolios: { dip: {} } },
+  });
+  assert.equal(together.portfolioIsArchived("live-custom-dip"), false);
+  assert.ok(together.dashboardModes().includes("live-custom-dip"));
+
   const neither = run({ mode: "live", portfolioConfig: {} });
   assert.equal(neither.portfolioIsArchived("live-5050"), false);
+  assert.equal(neither.portfolioIsArchived("live"), false);
   assert.deepEqual(neither.dashboardModes(),
     ["live", "live-5050", "paper-conservative", "paper-highReward", "paper-moreProbable", "paper-equal"],
     "unarchived, both live tabs still show exactly as before this feature existed");

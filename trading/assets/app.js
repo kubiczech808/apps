@@ -693,15 +693,22 @@ function paperStrategyIds({ includeArchived = false } = {}) {
     .filter((id) => includeArchived || paper[id]?.archived !== true);
 }
 
+// Reported twice: archiving "Live 72-82" left it in the portfolio overview. The stored flag
+// was being written correctly by then -- the icon, the setter, api.php and the restore panel
+// had all been fixed for the base live portfolio -- but THIS predicate still answered `false`
+// for it unconditionally, and this is the one the overview and the tab row read. So the
+// config said archived and every list went on showing it.
+//
+// Archiving any live portfolio is safe for the reason 5050 was allowed first: withdrawing an
+// expired resting order and refreshing the account snapshot are unconditional in the
+// executor, and an archived portfolio's holdings stay on the exit worker's watch. Only
+// opening new bids stops. Nothing held goes dark.
 function portfolioIsArchived(mode = state.mode) {
   const normalized = normalizeMode(mode);
-  // Unlike the plain live portfolio, 5050 may be archived -- withdrawing an expired
-  // resting order and refreshing the account snapshot are unconditional in the
-  // executor, so archiving it only stops new bids, nothing already held goes dark.
+  if (normalized === "live") return (state.portfolioConfig || {}).live?.archived === true;
   if (normalized === "live-5050") return (state.portfolioConfig || {}).live5050?.archived === true;
   const customLiveId = customLivePortfolioIdFromMode(normalized);
   if (customLiveId) return (state.portfolioConfig || {}).livePortfolios?.[customLiveId]?.archived === true;
-  if (LIVE_MODES.has(normalized)) return false;
   const paper = (state.portfolioConfig || {}).paper || {};
 
   return paper[paperStrategyIdFromMode(normalized)]?.archived === true;
