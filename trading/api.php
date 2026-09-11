@@ -6047,6 +6047,10 @@ try {
             // Which stream is using the event log, so retention can be aimed at the one that
             // is actually growing rather than at whichever is easiest to reach.
             'eventStreams' => [],
+            // How old the stored markets are. The published catalogue is a window and the
+            // database keeps everything, so the two counts differ by design -- what decides
+            // whether that is safe to serve is the age of what it holds, not the size.
+            'observationFreshness' => [],
             'generatedAt' => gmdate('c'),
         ];
         if ($storage['schemaReady'] === true) {
@@ -6057,6 +6061,7 @@ try {
                 $status['lastIngestAt'] = trading_storage_meta_get('last-ingest-at');
                 $status['counts'] = trading_storage_observation_counts();
                 $status['eventStreams'] = trading_storage_event_stream_stats();
+                $status['observationFreshness'] = trading_storage_observation_freshness();
             } catch (Throwable) {
                 $status['storage']['schemaReady'] = false;
             }

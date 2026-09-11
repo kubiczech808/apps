@@ -1205,6 +1205,54 @@ function trading_storage_observations_upsert(array $items): int
     return $count;
 }
 
+/**
+ * How old the stored observations are, per lifecycle.
+ *
+ * The published catalogue is a window -- 8135 active markets -- while the database holds
+ * everything it has ever been sent, 23003. That gap is the history the migration exists to
+ * keep, not a fault, and deleting it was the wrong answer.
+ *
+ * What it does raise is a freshness question. A row whose LAST snapshot said "active,
+ * accepting orders" goes on saying so however long ago that snapshot was taken, and the
+ * paper bots pick candidates from the same list the dashboard renders. So this reports the
+ * distribution rather than one count, because the answer decides something real: if nearly
+ * every active row was seen in the last day, serving the whole set costs nothing; if most
+ * are weeks old, the candidate list needs an age bound and the row needs to say its age.
+ */
+function trading_storage_observation_freshness(): array
+{
+    $pdo = trading_storage_pdo();
+    if (!$pdo instanceof PDO) {
+        return [];
+    }
+    trading_storage_bootstrap($pdo);
+    $statement = $pdo->query(
+        'SELECT lifecycle,
+                COUNT(*) AS rows_total,
+                SUM(updated_at >= NOW() - INTERVAL 1 DAY) AS within_1d,
+                SUM(updated_at >= NOW() - INTERVAL 7 DAY) AS within_7d,
+                SUM(updated_at >= NOW() - INTERVAL 30 DAY) AS within_30d,
+                MIN(updated_at) AS oldest,
+                MAX(updated_at) AS newest
+         FROM trading_observations
+         GROUP BY lifecycle
+         ORDER BY rows_total DESC'
+    );
+    $stats = [];
+    foreach ($statement->fetchAll() as $row) {
+        $stats[] = [
+            'lifecycle' => (string) ($row['lifecycle'] ?? ''),
+            'rows' => (int) ($row['rows_total'] ?? 0),
+            'within1Day' => (int) ($row['within_1d'] ?? 0),
+            'within7Days' => (int) ($row['within_7d'] ?? 0),
+            'within30Days' => (int) ($row['within_30d'] ?? 0),
+            'oldest' => $row['oldest'] ?? null,
+            'newest' => $row['newest'] ?? null,
+        ];
+    }
+    return $stats;
+}
+
 function trading_storage_observations_fetch(string $lifecycle, int $limit = 0, int $offset = 0): array
 {
     $pdo = trading_storage_pdo();

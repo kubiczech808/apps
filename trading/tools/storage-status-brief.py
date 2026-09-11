@@ -138,6 +138,23 @@ def main() -> int:
                 f" {entry.get('oldest')} .. {entry.get('newest')}"
             )
 
+    freshness = payload.get("observationFreshness")
+    if isinstance(freshness, list) and freshness:
+        print("   stored markets by age of their last observation:")
+        for entry in freshness:
+            if not isinstance(entry, dict):
+                continue
+            rows = int(entry.get("rows") or 0)
+            day = int(entry.get("within1Day") or 0)
+            week = int(entry.get("within7Days") or 0)
+            month = int(entry.get("within30Days") or 0)
+            share = f"{round(100 * day / rows)}%" if rows else "-"
+            print(
+                f"      {entry.get('lifecycle')}: {rows} rows,"
+                f" {day} seen in the last day ({share}), {week} in 7d, {month} in 30d"
+            )
+            print(f"         oldest {entry.get('oldest')}, newest {entry.get('newest')}")
+
     counts = payload.get("counts") or {}
     print(
         f"   reads from database: {payload.get('active')}"
