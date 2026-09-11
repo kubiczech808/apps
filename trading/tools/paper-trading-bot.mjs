@@ -8013,25 +8013,69 @@ async function loadDipEntryHits() {
 // the trough is over by the time this bot runs. bestAsk and bestBid are set to it so the
 // spread gate sees a tradable quote rather than refusing a row it has no book for -- the
 // worker read a real book at that moment, which is the evidence the gate wants.
-function dipEntryCandidateRows(strategy) {
+export function dipEntryCandidateRows(strategy, hits = DIP_ENTRY_HITS) {
   const prefix = `paper-${strategy.id}`;
-  return DIP_ENTRY_HITS
+  return (Array.isArray(hits) ? hits : [])
     .filter((hit) => hit && String(hit.portfolioId || "") === prefix)
     .map((hit) => {
       const price = Number(hit.price);
       if (!Number.isFinite(price) || price <= 0 || price >= 1) return null;
       const endDate = String(hit.endDate || "");
+      // The economics, computed exactly as preferredMarketObservation does for a scraped
+      // row. Without them the row is refused by three separate filters -- "missing EV p.a.",
+      // "net profit below 0% after fees", "base status UNKNOWN is not ELIGIBLE" -- which is
+      // how a candidate pool that looked correct produced nothing at all. Measured against
+      // the real filter rather than assumed.
+      const stake = Number(strategy.stakeUsdc) > 0 ? Number(strategy.stakeUsdc) : STAKE_USDC;
+      const fees = feeConfig({});
+      const shares = stake / price;
+      const takerFee = takerFeeForFills([{ price, size: shares }], fees.feeRate);
+      const totalCost = stake + takerFee;
+      const netGainIfWin = shares - stake - takerFee;
+      const netYield = totalCost > 0 ? netGainIfWin / totalCost : 0;
+      const days = daysToEnd(endDate);
+      const expectedValue = (shares * price) - totalCost;
       return {
         tokenId: String(hit.tokenId || ""),
         conditionId: String(hit.conditionId || ""),
         question: String(hit.question || ""),
         outcome: String(hit.outcome || ""),
         slug: String(hit.slug || ""),
+        // The worker read a real book at this price, which is the evidence every gate below
+        // wants: a quote that existed, with no spread to refuse.
+        status: "ELIGIBLE",
+        selectionStatus: "ELIGIBLE",
         marketProbability: price,
         marketPrice: price,
+        // Set for an AI-source portfolio too. It is not a fabricated opinion: this rule is
+        // entirely about the market price, so the market price IS the probability it trades
+        // on, whichever source the portfolio is nominally set to.
+        aiProbability: price,
         bestAsk: price,
         bestBid: price,
         spread: 0,
+        volumeUsdc: Number.isFinite(Number(hit.volumeUsdc)) ? Number(hit.volumeUsdc) : 0,
+        liquidity: Number.isFinite(Number(hit.volumeUsdc)) ? Number(hit.volumeUsdc) : 0,
+        stakeUsdc: Number(stake.toFixed(5)),
+        executableShares: Number(shares.toFixed(4)),
+        shares: Number(shares.toFixed(4)),
+        takerFeeUsdc: Number(takerFee.toFixed(5)),
+        totalCostUsdc: Number(totalCost.toFixed(5)),
+        netGainIfWinUsdc: Number(netGainIfWin.toFixed(4)),
+        netYield: Number(netYield.toFixed(4)),
+        riskReward: totalCost > 0 ? Number((netGainIfWin / totalCost).toFixed(4)) : null,
+        expectedValueUsdc: Number(expectedValue.toFixed(4)),
+        marketExpectedValueUsdc: Number(expectedValue.toFixed(4)),
+        annualizedReturn: annualizeReturn(netYield, days),
+        potentialAnnualizedReturn: annualizeReturn(netYield, days),
+        marketAnnualizedReturn: annualizeReturn(netYield, days),
+        feesEnabled: fees.feesEnabled,
+        feeType: fees.feeType,
+        feeRate: fees.feeRate,
+        daysToResolution: days,
+        marketClosed: false,
+        marketActive: true,
+        acceptingOrders: true,
         // The premise the rule is about, carried from the watch so the gate can verify it
         // here too rather than taking the record's word for it.
         firstMarketProbability: Number.isFinite(Number(hit.openProbability)) ? Number(hit.openProbability) : null,

@@ -11303,17 +11303,13 @@ test("dip entry on paper: recorded dips are the candidate pool, and only for tho
   // Every other portfolio is untouched.
   assert.match(bot, /const strategyRows = strategyEligibleCandidates\(pool, strategy\);/);
 
-  // The rows a hit becomes, driven rather than described.
-  const build = new Function("DIP_ENTRY_HITS", `
-    ${functionSource(bot, "dipEntryCandidateRows")}
-    return dipEntryCandidateRows;
-  `);
+  // The rows a hit becomes, from the real module rather than a sandboxed copy of it.
   const hits = [
     { portfolioId: "paper-dip", tokenId: "aaa", price: 0.35, openProbability: 0.78, question: "INOX vs Black Phoenix", endDate: "2026-09-11T22:00:00Z", at: "2026-09-11T20:27:00Z" },
     { portfolioId: "paper-other", tokenId: "bbb", price: 0.33, openProbability: 0.75 },
     { portfolioId: "paper-dip", tokenId: "ccc", price: 0, openProbability: 0.75 },
   ];
-  const rows = build(hits)({ id: "dip" });
+  const rows = (await import("../tools/paper-trading-bot.mjs")).dipEntryCandidateRows({ id: "dip", stakeUsdc: 5 }, hits);
   assert.equal(rows.length, 1, "another portfolio's hit and an unusable price are both dropped");
   const [row] = rows;
   // The price is the one the WORKER saw. That is the entire point: by the time this bot
@@ -11327,10 +11323,8 @@ test("dip entry on paper: recorded dips are the candidate pool, and only for tho
   assert.equal(row.eventStarted, true);
   assert.equal(row.tokenId, "aaa");
 
-  // And a hit with no opening probability cannot pass the gate, because an unverified
-  // premise is not a premise -- the gate reads firstMarketProbability and refuses null.
-  const noOpen = build([{ portfolioId: "paper-dip", tokenId: "ddd", price: 0.35 }])({ id: "dip" });
-  assert.equal(noOpen[0].firstMarketProbability, null);
+  // And a hit with no opening probability carries null rather than a guess -- the gate
+  // refuses it, which the test below drives through the real filter.
   assert.match(bot, /if \(opened == null\) return false;/);
 
   // The fetch is once per run, before any portfolio is evaluated, and never fatal.
@@ -11361,4 +11355,53 @@ test("dip entry on paper: the worker records it instead of buying, whatever the 
   // It is trigger-key protected, because an open endpoint that appends to a list the bot
   // trades from would let anyone put a position in a portfolio.
   assert.match(worker, /"x-trading-trigger-key": TRADING_TRIGGER_KEY,[\s\S]{0,200}?"user-agent": "trading-live-exit-worker\/1\.0",\s*\n\s*\},\s*\n\s*body: JSON\.stringify\(\{\s*\n\s*portfolioId: plan\.portfolioId,/);
+});
+
+// The decisive check on the paper half, driven through the REAL filter rather than a
+// restatement of it. A candidate pool that looks correct and is then refused by three gates
+// nobody thought about produces nothing at all -- which is what a first draft of this did:
+// "base status UNKNOWN is not ELIGIBLE", "missing EV p.a.", "net profit below 0% after fees".
+test("dip entry on paper: a recorded dip survives the portfolio filter it has to pass", () => {
+  const strategy = {
+    id: "dip", minProbability: 0.30, maxProbability: 0.40, marketType: "all",
+    liveEventMode: "only", maxResolutionHours: 48, minNetYield: 0, minLiquidityUsdc: 0,
+    stakeUsdc: 5, selectionOrder: "highest_ev_pa_first",
+    dipEntryEnabled: true, dipEntryOpenMin: 0.7, dipEntryOpenMax: 0.8,
+  };
+  const hit = {
+    portfolioId: "paper-dip", tokenId: "aaa", price: 0.35, openProbability: 0.78,
+    question: "INOX vs Black Phoenix", outcome: "INOX", volumeUsdc: 117240,
+    endDate: new Date(Date.now() + 3 * 3600000).toISOString(), at: new Date().toISOString(),
+  };
+  const rows = bot.dipEntryCandidateRows(strategy, [hit]);
+  assert.equal(rows.length, 1);
+  assert.deepEqual(bot.portfolioFilterResult(rows[0], strategy), { eligible: true, reasons: [] },
+    "the reported case has to pass every gate, not just the rule's own");
+  assert.equal(bot.strategyEligibleCandidates(rows, strategy).length, 1);
+  // The entry is at the price the worker saw. That is the whole reason the record exists.
+  assert.equal(rows[0].marketProbability, 0.35);
+  assert.equal(rows[0].netYield > 0, true, "a 35c entry on a 1.00 payout is a positive yield");
+
+  // Both halves of the premise, through the same real filter.
+  const neverFavourite = bot.dipEntryCandidateRows(strategy, [{ ...hit, openProbability: 0.55 }]);
+  assert.equal(bot.strategyEligibleCandidates(neverFavourite, strategy).length, 0,
+    "a market that was never the favourite has not collapsed, it is just cheap");
+  const unverified = bot.dipEntryCandidateRows(strategy, [{ ...hit, openProbability: null }]);
+  assert.equal(bot.strategyEligibleCandidates(unverified, strategy).length, 0,
+    "no opening price on record means the premise cannot be verified");
+  // The portfolio's own range still decides where it buys.
+  const tooHigh = bot.dipEntryCandidateRows(strategy, [{ ...hit, price: 0.55 }]);
+  assert.equal(bot.strategyEligibleCandidates(tooHigh, strategy).length, 0);
+  // And its minimum-volume floor still applies, which is why the plan carries the volume:
+  // by the time the hit is read the market is out of the catalogue entirely.
+  const thin = bot.dipEntryCandidateRows({ ...strategy, minLiquidityUsdc: 5000 }, [{ ...hit, volumeUsdc: 40 }]);
+  assert.equal(bot.strategyEligibleCandidates(thin, { ...strategy, minLiquidityUsdc: 5000 }).length, 0);
+  assert.equal(bot.strategyEligibleCandidates(
+    bot.dipEntryCandidateRows({ ...strategy, minLiquidityUsdc: 5000 }, [hit]),
+    { ...strategy, minLiquidityUsdc: 5000 },
+  ).length, 1, "and a liquid one still passes");
+
+  // A misconfigured rule trades nothing rather than falling back to ordinary favourites.
+  const noMax = { ...strategy, maxProbability: null };
+  assert.equal(bot.strategyEligibleCandidates(bot.dipEntryCandidateRows(noMax, [hit]), noMax).length, 0);
 });

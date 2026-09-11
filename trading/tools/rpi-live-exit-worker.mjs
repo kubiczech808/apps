@@ -1976,6 +1976,7 @@ async function recordDipEntryHit(plan, price) {
         slug: plan.slug || "",
         price,
         openProbability: plan.openProbability ?? null,
+        volumeUsdc: plan.volumeUsdc ?? null,
         endDate: plan.endDate || "",
       }),
       signal: controller.signal,

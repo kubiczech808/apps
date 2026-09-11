@@ -5242,6 +5242,13 @@ function live_dip_entry_watch_payload(): array
                 'buyMax' => $entry['buyMax'],
                 'stakeUsdc' => $stake,
                 'tickSize' => is_numeric($item['tickSize'] ?? null) ? (float) $item['tickSize'] : 0.01,
+                // Carried so a portfolio's minimum-volume floor still applies when the row
+                // reaches the paper bot as a recorded hit -- by then the market is out of
+                // the catalogue and there is nothing else to read it from.
+                'volumeUsdc' => is_numeric($item['volumeUsdc'] ?? null)
+                    ? (float) $item['volumeUsdc']
+                    : (is_numeric($item['liquidity'] ?? null) ? (float) $item['liquidity'] : null),
+                'endDate' => (string) ($item['resolutionEndDate'] ?? $item['endDate'] ?? ''),
                 'negRisk' => ($item['negRisk'] ?? null) === true,
                 // Empty means clear to fire. Published rather than filtered out, so the
                 // worker's log can say why a watched market was not bought.
@@ -5479,6 +5486,7 @@ function record_dip_entry_hit(array $input): array
         // whole value of recording this is that it is not the price an hour later.
         'price' => round($price, 6),
         'openProbability' => is_numeric($input['openProbability'] ?? null) ? round((float) $input['openProbability'], 4) : null,
+        'volumeUsdc' => is_numeric($input['volumeUsdc'] ?? null) ? (float) $input['volumeUsdc'] : null,
         'endDate' => (string) ($input['endDate'] ?? ''),
         'at' => gmdate('c'),
     ];
