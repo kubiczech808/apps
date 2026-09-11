@@ -128,8 +128,11 @@ def trade_rows(account: str, portfolio_id: str, rows: list[dict[str, Any]]) -> l
     upserts them, which is what makes the open-then-closed transition an UPDATE rather than
     a second row.
 
-    A trade with no portfolio is not sent at all. The API refuses those anyway rather than
-    filing them under an empty string, and sending them would only make the refusal noisy.
+    Live and paper trades are stored the same way and told apart by the account attribute. A
+    live trade whose portfolio is not known yet still travels: there is one live wallet, the
+    owner is derived afterwards from the order history, and the API fills the id in on a later
+    pass. A paper trade always comes out of a named portfolio segment, so one arriving without
+    an id is a defect and the API reports it.
     """
     out: list[dict[str, Any]] = []
     for row in rows:
@@ -237,13 +240,17 @@ def main() -> int:
             observations, batches = ingest_paper(url, key, state_file, state, target)
             print(f"Mirrored paper state, {observations} observations in {batches} batch(es)")
         else:
-            # Live rows carry their portfolio only once the sync has stamped it, and the API
-            # refuses a trade without one rather than filing it under an empty string. So an
-            # unstamped row is simply not sent -- it is the row whose owner is genuinely
-            # unknown, and inventing a portfolio for it is the one thing this must not do.
+            # Every live trade is sent, stamped with a portfolio or not.
+            #
+            # Filtering on the stamp used to drop the lot: the sync stamps a live row only once
+            # the order history proves who opened it, so at any moment a good share of the
+            # account is unattributed -- and with the API refusing those too, the live account
+            # had zero rows stored while paper had thousands. Nothing is invented here: an
+            # unattributed row goes in with an empty portfolio and the id is filled in by the
+            # pass that works the owner out.
             live_trades = trade_rows("live", "", list_rows(state.get("positions"))) \
                 + trade_rows("live", "", list_rows(state.get("closedTrades")))
-            live_trades = [row for row in live_trades if str(row.get("portfolioId") or "").strip()]
+            attributed = sum(1 for row in live_trades if str(row.get("portfolioId") or "").strip())
             post(url, key, {
                 "target": target,
                 "state": state,
@@ -252,7 +259,10 @@ def main() -> int:
             })
             for start in range(2000, len(live_trades), 2000):
                 post(url, key, {"target": target, "trades": live_trades[start:start + 2000]})
-            print(f"Mirrored {target} state, {len(live_trades)} attributed trade(s)")
+            print(
+                f"Mirrored {target} state, {len(live_trades)} trade(s)"
+                f" ({attributed} with a portfolio, {len(live_trades) - attributed} still unattributed)"
+            )
         return 0
     except (OSError, ValueError, RuntimeError, urllib.error.URLError, urllib.error.HTTPError) as error:
         print(f"Trading SQL mirror failed: {error}", file=sys.stderr)

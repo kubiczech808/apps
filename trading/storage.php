@@ -149,9 +149,10 @@ function trading_storage_bootstrap(PDO $pdo): void
 }
 
 /**
- * Identity of one trade: the account, the portfolio that placed it, the market, and which
- * round trip on that market it is. Falling back to the condition and outcome keeps a row
- * identifiable when a feed reports a redemption against the condition rather than the token.
+ * Identity of one trade: the account, the market, which round trip on that market it is, and
+ * -- for paper only -- the portfolio that placed it. Falling back to the condition and outcome
+ * keeps a row identifiable when a feed reports a redemption against the condition rather than
+ * the token.
  */
 function trading_storage_trade_key(array $trade): string
 {
@@ -165,9 +166,23 @@ function trading_storage_trade_key(array $trade): string
     } else {
         $identity = 'row:' . trim((string) ($trade['id'] ?? ''));
     }
+    $account = strtolower(trim((string) ($trade['account'] ?? '')));
+    // The portfolio belongs in the identity only where it genuinely distinguishes one trade
+    // from another.
+    //
+    // Paper: several paper portfolios hold the same token at the same time on purpose, so two
+    // rows differing only by portfolio really are two trades and the id belongs here.
+    //
+    // Live: there is ONE wallet. A token in a given round trip is one on-chain position
+    // whichever portfolio opened it, and the owner is derived afterwards from the order
+    // history -- so it can still be unknown the first time the position is seen. Keying on it
+    // would file that position twice, once unattributed and again under its real owner once
+    // that is worked out. Here the portfolio is a property of the trade, filled in by a later
+    // pass, and the account column is what separates live from paper.
+    $owner = $account === 'live' ? '' : (string) ($trade['portfolioId'] ?? '');
     return hash('sha256', implode("\x1F", [
         (string) ($trade['account'] ?? ''),
-        (string) ($trade['portfolioId'] ?? ''),
+        $owner,
         $identity,
         (string) max(1, (int) ($trade['roundTrip'] ?? 1)),
     ]));
@@ -203,6 +218,10 @@ function trading_storage_trade_upsert(array $trade): void
          ON DUPLICATE KEY UPDATE
             status = VALUES(status),
             closed = VALUES(closed),
+            -- A live position is often stored before anyone knows which portfolio opened it;
+            -- the owner is derived later from the order history. So an incoming id fills an
+            -- empty one in place, and an empty incoming id never blanks an id already known.
+            portfolio_id = COALESCE(NULLIF(VALUES(portfolio_id), :emptyOwner), portfolio_id),
             condition_id = COALESCE(VALUES(condition_id), condition_id),
             question = COALESCE(VALUES(question), question),
             outcome = COALESCE(VALUES(outcome), outcome),
@@ -229,6 +248,9 @@ function trading_storage_trade_upsert(array $trade): void
         'key' => trading_storage_trade_key($trade),
         'account' => substr((string) ($trade['account'] ?? 'live'), 0, 16),
         'portfolioId' => substr((string) ($trade['portfolioId'] ?? ''), 0, 80),
+        // Bound rather than written inline so the empty-string marker is one value in one
+        // place; the column is NOT NULL, so unattributed is stored as the empty string.
+        'emptyOwner' => '',
         'status' => substr((string) ($trade['status'] ?? ($closed ? 'CLOSED' : 'OPEN')), 0, 32),
         'closed' => $closed ? 1 : 0,
         'tokenId' => substr((string) ($trade['tokenId'] ?? $trade['assetId'] ?? ''), 0, 191) ?: null,

@@ -5601,3 +5601,84 @@ test("live totals: a row nothing can claim stays on screen and out of the arithm
   assert.match(APP, /const unattributedLine = own\.unattributedClosedCount \|\| own\.unattributedPositionCount/);
   assert.match(APP, /\$\{unattributedLine \? `<small class="metric-note">\$\{escapeHtml\(unattributedLine\)\}<\/small>` : ""\}/);
 });
+
+// A live trade is keyed on the position, not on the portfolio that turned out to own it.
+//
+// Measured: trade-rows-summary reported 6032 paper trades across 31 portfolios and ZERO live
+// rows, while the live sync ran successfully every few minutes with mirroring enabled. Two
+// things dropped them. The ingest filtered live rows to those already stamped with a
+// portfolio, and the API refused the rest rather than filing them under an empty string --
+// but a live row is stamped only once the order history proves who opened it, so at any
+// moment a large share of the account is unattributed and the whole account fell through.
+//
+// Storing them is only safe if the portfolio is NOT part of a live trade's identity,
+// otherwise the same position lands twice: once unattributed, again under its real owner. It
+// is safe, because there is one live wallet -- a token in a given round trip is one on-chain
+// position whoever opened it. Paper is the opposite: several paper portfolios hold the same
+// token at once on purpose, so there the portfolio is part of what makes a trade distinct.
+function tradeKey(trade) {
+  const directory = mkdtempSync(join(tmpdir(), "trade-key-"));
+  try {
+    const cut = API.indexOf("\ntry {");
+    assert.ok(cut > 0, "api.php still ends with its request dispatch");
+    // storage.php goes in beside it: api.php loads it from its own directory, and without it
+    // the no-storage fallback leaves the function under test undefined.
+    writeFileSync(join(directory, "storage.php"), STORAGE);
+    writeFileSync(join(directory, "definitions.php"), API.slice(0, cut) + "\n");
+    const encoded = Buffer.from(JSON.stringify(trade)).toString("base64");
+    return execFileSync("php", ["-r",
+      `require '${join(directory, "definitions.php")}';`
+      + ` echo trading_storage_trade_key(json_decode(base64_decode('${encoded}'), true));`,
+    ], { encoding: "utf8" }).trim();
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+}
+
+test("a live trade keeps one row while its portfolio is worked out; paper keeps one per portfolio", () => {
+  const position = { tokenId: "tok-1", roundTrip: 1, outcome: "Yes" };
+
+  // The case that was losing the account: the same position seen before and after the sync
+  // works out who opened it has to be ONE row, so the later pass updates it in place.
+  const unattributed = tradeKey({ ...position, account: "live", portfolioId: "" });
+  const attributed = tradeKey({ ...position, account: "live", portfolioId: "live5050" });
+  assert.equal(attributed, unattributed,
+    "an unattributed live position and the same position once attributed are one trade");
+
+  // And two live portfolios cannot own the same token separately -- it is one wallet.
+  assert.equal(tradeKey({ ...position, account: "live", portfolioId: "live70" }), unattributed);
+
+  // Paper is genuinely per portfolio: this must NOT collapse.
+  const paperOne = tradeKey({ ...position, account: "paper", portfolioId: "esports2" });
+  const paperTwo = tradeKey({ ...position, account: "paper", portfolioId: "leagueoflegends" });
+  assert.notEqual(paperOne, paperTwo,
+    "two paper portfolios holding the same token are two trades, not one");
+  assert.notEqual(paperOne, unattributed, "paper and live are separate accounts");
+
+  // The position is still what identifies a live trade: a different market, or the next
+  // round trip on the same market, is a different row.
+  assert.notEqual(tradeKey({ ...position, tokenId: "tok-2", account: "live", portfolioId: "" }), unattributed);
+  assert.notEqual(tradeKey({ ...position, roundTrip: 2, account: "live", portfolioId: "" }), unattributed);
+});
+
+test("the owner of a live trade is filled in later and never blanked", () => {
+  // One row, so the id has to be able to arrive after the row does -- and a resync that
+  // cannot attribute the position must not wipe an id that is already known.
+  assert.match(STORAGE, /portfolio_id = COALESCE\(NULLIF\(VALUES\(portfolio_id\), :emptyOwner\), portfolio_id\),/,
+    "an incoming id fills an empty one; an empty incoming id leaves a known one alone");
+  assert.match(STORAGE, /'emptyOwner' => '',/);
+
+  // Refused for paper, where a missing portfolio really is a defect; accepted for live.
+  assert.match(API, /\$tradeAccount = strtolower\(trim\(\(string\) \(\$trade\['account'\] \?\? ''\)\)\);/);
+  assert.match(API, /if \(\$tradeAccount !== 'live' && trim\(\(string\) \(\$trade\['portfolioId'\] \?\? ''\)\) === ''\) \{/);
+  assert.match(API, /\$tradeErrors\[\] = 'a paper trade arrived with no portfolioId';/);
+
+  // And the mirror has to stop filtering them out before they ever reach the API.
+  const INGEST = readFileSync(new URL("../tools/ingest-trading-state.py", import.meta.url), "utf8");
+  assert.ok(
+    !/live_trades = \[row for row in live_trades if str\(row\.get\("portfolioId"\)/.test(INGEST),
+    "the live mirror no longer drops rows whose portfolio is not known yet",
+  );
+  assert.match(INGEST, /attributed = sum\(1 for row in live_trades if str\(row\.get\("portfolioId"\) or ""\)\.strip\(\)\)/,
+    "it still reports how many are attributed, so the gap stays visible");
+});

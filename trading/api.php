@@ -915,10 +915,20 @@ function trading_storage_ingest(array $payload): array
             if (!is_array($trade)) {
                 continue;
             }
-            // A trade with no portfolio is exactly the gap this was built to close, so it is
-            // refused rather than filed under an empty string where it would be invisible.
-            if (trim((string) ($trade['portfolioId'] ?? '')) === '') {
-                $tradeErrors[] = 'a trade arrived with no portfolioId';
+            // Every trade is stored, live and paper alike, told apart by the account column.
+            //
+            // A PAPER trade always comes out of a named portfolio segment, so one without a
+            // portfolio is a defect and is refused rather than filed under an empty string.
+            //
+            // A LIVE trade is different: there is one wallet, and which portfolio opened a
+            // position is derived afterwards from the order history. Refusing those dropped
+            // the entire live account on the floor -- thousands of paper rows stored and not
+            // one live row. A live trade is now stored with an empty portfolio, and the id is
+            // filled in by the pass that works the owner out, which the trade key allows
+            // because a live trade is keyed on the position rather than on its portfolio.
+            $tradeAccount = strtolower(trim((string) ($trade['account'] ?? '')));
+            if ($tradeAccount !== 'live' && trim((string) ($trade['portfolioId'] ?? '')) === '') {
+                $tradeErrors[] = 'a paper trade arrived with no portfolioId';
                 continue;
             }
             try {

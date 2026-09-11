@@ -2042,6 +2042,12 @@ function isWholeDayBucket(value) {
 async function enrichPositionDatesFromGamma(positions = [], generatedAt = new Date().toISOString()) {
   const rows = Array.isArray(positions) ? positions : [];
   if (!rows.length) return rows;
+  // One instant for the whole snapshot. These comparisons used to read the wall clock, so a
+  // sync that took a minute could call the same market open on one row and past resolution on
+  // the next, and the behaviour was only observable at the right hour of the right day.
+  // generatedAt IS the moment the snapshot describes; the wall clock is the fallback for a
+  // caller that passes something unparseable.
+  const at = Number.isFinite(Date.parse(generatedAt)) ? Date.parse(generatedAt) : Date.now();
   return Promise.all(rows.map(async (position) => {
     const stored = position?.endDate;
     if (stored && !isWholeDayBucket(stored)) return position;
@@ -2076,7 +2082,7 @@ async function enrichPositionDatesFromGamma(positions = [], generatedAt = new Da
     const pendingResolution = !position.redeemable
       && !position.resolved
       && Number.isFinite(resolutionAt)
-      && resolutionAt <= Date.now();
+      && resolutionAt <= at;
     const settled = position.resolved || position.redeemable || position.claimable;
     return {
       ...position,
@@ -2084,7 +2090,7 @@ async function enrichPositionDatesFromGamma(positions = [], generatedAt = new Da
       endDateSource: "gamma-market-end-date",
       scheduledEventDate: dates.scheduledEventDate || position.scheduledEventDate || null,
       resolutionEndDate: dates.resolutionEndDate || position.resolutionEndDate || null,
-      daysToResolution: (endTime - Date.now()) / OPEN_ORDER_FALLBACK_HORIZON_MS,
+      daysToResolution: (endTime - at) / OPEN_ORDER_FALLBACK_HORIZON_MS,
       status: settled ? position.status : (pendingResolution ? "PENDING_RESOLUTION" : "OPEN"),
       officialResolutionStatus: settled
         ? position.officialResolutionStatus
