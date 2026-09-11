@@ -1331,6 +1331,18 @@ function dipEntryRuleSummaryValue(rule) {
   return fault ? `Not applied - ${fault}` : `On: ${bands}, events under way only`;
 }
 
+// Reported: the certainty close never fired. The setting was stored and the positions were
+// watched -- but most markets quote on a 1c grid, where the highest bid that can exist is
+// 99c, so a level above it was unsatisfiable by construction. The worker clamps the trigger
+// to what a book can quote (reachableSettlementCloseBid), and the label says so rather than
+// promising a price no market will ever show.
+function settlementCloseBidLabelValue(bid) {
+  if (bid == null || !(bid > 0)) return "Off";
+  return bid > 0.99
+    ? `Sell at ${probability(0.99)} (${probability(bid)} is above the 1c grid)`
+    : `Sell at ${probability(bid)}`;
+}
+
 // One reader for the probability floor's label, because the typing preview and the saved
 // render would otherwise word the same setting differently -- and a label that changes its
 // phrasing when the value has not changed reads as the value having changed.
@@ -5903,7 +5915,7 @@ function syncPortfolioParameterControls(configOverride = null, options = {}) {
     els.settlementCloseBid.value = settlementCloseBid == null ? "0" : String(Number((settlementCloseBid * 100).toFixed(1)));
   }
   if (els.settlementCloseBidLabel) {
-    els.settlementCloseBidLabel.textContent = settlementCloseBid == null ? "Off" : `Sell at ${probability(settlementCloseBid)}`;
+    els.settlementCloseBidLabel.textContent = settlementCloseBidLabelValue(settlementCloseBid);
   }
   if (els.liveEventMode) els.liveEventMode.value = liveEventMode;
   if (els.liveEventModeLabel) els.liveEventModeLabel.textContent = liveEventModeLabel(liveEventMode);
@@ -15574,6 +15586,7 @@ els.settlementCloseBid?.addEventListener("input", () => {
   }
   const bid = normalizeSettlementCloseBid(numberValue(els.settlementCloseBid) / 100);
   const value = bid == null ? 0 : bid;
+  if (els.settlementCloseBidLabel) els.settlementCloseBidLabel.textContent = settlementCloseBidLabelValue(bid);
   if (updateParameterDraft({ settlementCloseBid: value })) return;
   updatePortfolioConfigForMode(state.mode, { settlementCloseBid: value });
   savePortfolioConfigSoon();

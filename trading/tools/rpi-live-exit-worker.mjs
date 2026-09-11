@@ -797,6 +797,26 @@ export function effectiveStopFloor({ stopPrice, probabilityFloor, entryPrice = n
   return levels.length ? Math.max(...levels) : null;
 }
 
+// The coarsest tick Polymarket quotes on, and the reason the certainty close never fired.
+//
+// Reported: positions the market prices as decided are not sold and have to be closed by
+// hand. Measured on the account: the setting is 0.999 on every live portfolio, it IS stored,
+// the positions ARE in the policy the worker watches -- and six of ten open positions trade
+// on a 0.01 grid, where THE HIGHEST BID THAT CAN EXIST IS 0.99. The rule was correct, the
+// wiring was correct, and `bid >= 0.999` was unsatisfiable by construction.
+//
+// So the level is clamped to what a book can actually quote. 0.999 on a 0.01 market means
+// 0.99, the top of its grid; on a finer grid it fires a tenth of a cent early, which is well
+// inside what this setting exists to pay -- about a cent a share to have the capital back
+// now instead of hours later. A reachable setting is untouched: 0.95 still means 0.95.
+const COARSEST_MARKET_TICK = 0.01;
+
+export function reachableSettlementCloseBid(closeBid) {
+  const level = number(closeBid);
+  if (level == null || !(level > 0)) return null;
+  return Math.min(level, round(1 - COARSEST_MARKET_TICK, 6));
+}
+
 export function exitReason({ bestBidPrice, bestAskPrice = null, stopPrice, triggerPrice, probabilityFloor = null, entryPrice = null, settlementCloseBid: closeBid } = {}) {
   const floor = effectiveStopFloor({ stopPrice, probabilityFloor, entryPrice });
   if (floor != null) {
@@ -808,7 +828,8 @@ export function exitReason({ bestBidPrice, bestAskPrice = null, stopPrice, trigg
     if (exitTrigger({ bestBidPrice, bestAskPrice, stopPrice: floor, triggerPrice: trigger })) return "stop";
   }
   const bid = number(bestBidPrice);
-  if (closeBid != null && bid != null && bid >= closeBid) return "settlement";
+  const reachable = reachableSettlementCloseBid(closeBid);
+  if (reachable != null && bid != null && bid >= reachable) return "settlement";
   return null;
 }
 
@@ -2267,13 +2288,20 @@ async function checkOnce(context) {
     const activeFloor = effectiveStopFloor({ stopPrice: plan.stopPrice, probabilityFloor: plan.probabilityFloor, entryPrice: plan.entryPrice });
     if (!reason) continue;
     event.reasonKind = reason;
-    if (reason === "settlement") event.settlementCloseBid = plan.settlementCloseBid;
+    if (reason === "settlement") {
+      event.settlementCloseBid = plan.settlementCloseBid;
+      // The level the trigger actually used, which is not the stored one on an ordinary
+      // 0.01 market. Recorded separately so a log never reports a number no book could meet.
+      event.settlementCloseBidInForce = reachableSettlementCloseBid(plan.settlementCloseBid);
+    }
     if (MODE !== "live" || !CONFIRM_LIVE) {
       recordEvent(context.state, {
         ...event,
         type: reason === "settlement" ? "SHADOW_SETTLEMENT_CLOSE" : "SHADOW_STOP_TRIGGERED",
         reason: reason === "settlement"
-          ? `the bid is ${currentBestBid} at or above the ${plan.settlementCloseBid} settlement close; no SELL is allowed in shadow mode`
+          ? `the bid is ${currentBestBid} at or above the ${reachableSettlementCloseBid(plan.settlementCloseBid)} settlement close`
+            + ` (set to ${plan.settlementCloseBid}, capped at what the market's grid can quote);`
+            + ` no SELL is allowed in shadow mode`
           : crossing?.gapped
             ? `the book is already at ${(crossing.recoveredFraction * 100).toFixed(0)}% of the stop, so this sells a residue rather than capping the loss; no SELL is allowed in shadow mode`
             : "price reached the stop; no SELL is allowed in shadow mode",

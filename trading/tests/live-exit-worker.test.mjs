@@ -1641,3 +1641,48 @@ test("dip entry: arming it is deliberate, and a redeploy never changes it", () =
   assert.match(workflow, /LIVE_DIP_ENTRY_MODE=\$\{dip_entry_mode\}/);
   assert.match(workflow, /LIVE_DIP_ENTRY_WATCH_URL=https:\/\/osobnizkusenosti\.cz\/trading\/api\.php\?action=dip-entry-watch/);
 });
+
+// Reported: positions the market prices as decided are not sold automatically and have to be
+// closed by hand. Measured on the account before changing anything: the setting IS stored
+// (0.999 on every live portfolio), the positions ARE in the policy the worker watches, and
+// six of ten open positions trade on a 0.01 tick grid -- where the highest bid that can
+// exist is 0.99. The rule was right, the wiring was right, and `bid >= 0.999` was
+// unsatisfiable by construction.
+test("certainty close: the level is clamped to a price a book can actually quote", () => {
+  // 0.999 on an ordinary market means the top of its grid, not an unreachable number.
+  assert.equal(worker.reachableSettlementCloseBid(0.999), 0.99);
+  assert.equal(worker.reachableSettlementCloseBid(0.995), 0.99);
+  // A reachable setting is untouched. This must not quietly lower every level.
+  assert.equal(worker.reachableSettlementCloseBid(0.95), 0.95);
+  assert.equal(worker.reachableSettlementCloseBid(0.5), 0.5);
+  // Off stays off.
+  assert.equal(worker.reachableSettlementCloseBid(0), null);
+  assert.equal(worker.reachableSettlementCloseBid(null), null);
+
+  const fires = (bid, closeBid) => worker.exitReason({
+    bestBidPrice: bid, bestAskPrice: null, stopPrice: null, triggerPrice: null, settlementCloseBid: closeBid,
+  });
+  // The reported case: a 0.01-grid market at the top of its book, with the setting at 0.999.
+  assert.equal(fires(0.99, 0.999), "settlement", "0.99 is certainty on a 0.01 market");
+  // One tick below the top is not certainty, and must not sell.
+  assert.equal(fires(0.98, 0.999), null);
+  // A position still a long way out is untouched -- the account had these at 0.69 to 0.90,
+  // and selling one of those as though it were decided would be far worse than not selling.
+  assert.equal(fires(0.9, 0.999), null, "90% is not certainty and must never read as it");
+  assert.equal(fires(0.71, 0.999), null);
+  // A lower setting keeps meaning exactly what it says.
+  assert.equal(fires(0.95, 0.95), "settlement");
+  assert.equal(fires(0.94, 0.95), null);
+  // Off sells nothing, however high the bid goes.
+  assert.equal(fires(0.99, 0), null);
+
+  // The stop still outranks it: both can be true only in a market that moved from a loss
+  // back to certainty, and the stop is checked first.
+  assert.equal(worker.exitReason({
+    bestBidPrice: 0.99, stopPrice: 0.995, triggerPrice: 0.996, settlementCloseBid: 0.999,
+  }), "stop");
+
+  // And a log must never report a level the trigger did not use.
+  const source = readFileSync(new URL("../tools/rpi-live-exit-worker.mjs", import.meta.url), "utf8");
+  assert.match(source, /event\.settlementCloseBidInForce = reachableSettlementCloseBid\(plan\.settlementCloseBid\);/);
+});
