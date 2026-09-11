@@ -126,12 +126,21 @@ jobs:
           sleep 5
           sudo ./svc.sh status || true
 
-      - name: Say what the Pi now has
+      - name: Say what the Pi actually has
         if: always()
         run: |
+          # Reports what is there, not what was intended. The first run printed "the Pi now
+          # answers jobs on two agents" after the token check had already refused and nothing
+          # had been installed -- a summary that contradicts the failure above it is worse
+          # than no summary.
           echo "== runner directories on this Pi"
           ls -d "${HOME}"/actions-runner-* 2>/dev/null || true
           echo ""
-          echo "The Pi now answers jobs on two agents. Trading jobs ask for"
-          echo "[self-hosted, Linux, ARM64] and can use either; maintenance jobs ask for"
-          echo "[self-hosted, Linux, ARM64, maintenance] and stay on the new one."
+          if [ -d "${HOME}/${WORK_DIR}" ]; then
+            echo "The maintenance agent is installed. Trading jobs ask for"
+            echo "[self-hosted, Linux, ARM64] and can now use either agent; maintenance jobs"
+            echo "ask for [self-hosted, Linux, ARM64, maintenance] and stay on the new one."
+          else
+            echo "The maintenance agent was NOT installed; the Pi still has one slot."
+            echo "Nothing on the Pi was changed."
+          fi
