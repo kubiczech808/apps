@@ -1,0 +1,36 @@
+name: Trading Catalogue Horizon Diagnosis
+
+# READ-ONLY, manual only. Public GETs against the published API, no secrets, no writes.
+#
+# Reported: a scan ran and the scraped count did not move. It is pinned to the retention cap
+# -- 8000 retained plus the rows a live portfolio protects from eviction -- so every new
+# market evicts an old one and intake cancels out. That is the cap working, not the scrape
+# failing to store anything.
+#
+# The question the cap raises is whether it is evicting markets the portfolios would trade.
+# It was raised from 5000 to 8000 for exactly that reason: at 5000 the retained set reached
+# only 6.44 days ahead against a 168 hour horizon. This measures the same thing at 8000.
+on:
+  workflow_dispatch:
+    inputs:
+      horizon_hours:
+        description: "The resolution horizon the portfolios trade within"
+        required: false
+        default: "168"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: How far ahead the retained catalogue reaches
+        env:
+          TRADING_HOST: https://osobnizkusenosti.cz/trading
+          RESOLUTION_HORIZON_HOURS: ${{ inputs.horizon_hours || '168' }}
+        run: python3 trading/tools/catalogue-horizon-probe.py
