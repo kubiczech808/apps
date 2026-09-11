@@ -30,7 +30,9 @@ PASSES = int(os.environ.get("PROBE_PASSES") or 2)
 # are here so a slow host can be told apart from one query having become expensive.
 REQUESTS = [
     ("scraping log / scraped tab", "action=state&target=paper&summary=scraped&offset=0"),
-    ("scraping log, second page", "action=state&target=paper&summary=scraped&offset=1"),
+    ("scraped, second page", "action=state&target=paper&summary=scraped&offset=1200"),
+    ("resolved archive, first page", "action=state&target=paper&summary=scraped&scope=resolved&offset=0"),
+    ("resolved archive, second page", "action=state&target=paper&summary=scraped&scope=resolved&offset=1200"),
     ("dashboard", "action=state&target=paper&summary=dashboard"),
     ("portfolio overview", "action=state&target=paper&summary=portfolio-overview"),
     ("live account", "action=state&target=live"),
@@ -61,6 +63,18 @@ def probe(label: str, query: str) -> None:
                     note += f", {len(history)} scan(s) in history"
                 if payload.get("scrapedScopeTruncated") is True:
                     note += ", more pages follow"
+                scope = payload.get("scrapedScope")
+                if scope:
+                    note += f", scope={scope}"
+                # The totals are what tells a complete migration from a partial one: the
+                # file path reports the manifest counts and the database reports its own
+                # COUNT, so running this before and after the cutover compares them.
+                totals = payload.get("observationTotals")
+                if isinstance(totals, dict):
+                    note += (
+                        f", totals scraped={totals.get('scraped')}"
+                        f" resolved={totals.get('resolved')}"
+                    )
             except (ValueError, AttributeError):
                 note = ", response was not JSON"
             verdict = "OK" if elapsed < DASHBOARD_TIMEOUT_SECONDS else "TOO SLOW FOR THE DASHBOARD"
