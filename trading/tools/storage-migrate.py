@@ -69,12 +69,18 @@ def run_phase(url: str, key: str, phase: str) -> None:
                 "offset": offset,
                 "limit": limit,
             }).get("result", {})
-        except RuntimeError as error:
-            # A gateway timeout means the page was too big for this hosting right now, not
-            # that the migration cannot run. Halving and retrying the SAME offset is safe
-            # because every write is an upsert keyed by content, so whatever did land is
-            # simply written again.
-            if "504" not in str(error) and "502" not in str(error):
+        except (RuntimeError, urllib.error.URLError, OSError) as error:
+            # A gateway timeout, a reset connection or a dropped socket all mean the same
+            # thing: the page was too big for this hosting right now, not that the migration
+            # cannot run. The second attempt died on "[Errno 104] Connection reset by peer",
+            # which is not an HTTPError at all -- catching only 504 left it uncovered.
+            #
+            # Halving and retrying the SAME offset is safe because every write is an upsert
+            # keyed by content, so whatever did land is simply written again.
+            text = str(error)
+            transient = isinstance(error, (urllib.error.URLError, OSError)) \
+                or "504" in text or "502" in text or "timed out" in text.lower()
+            if not transient:
                 raise
             if limit <= MIN_PAGE_LIMIT:
                 raise RuntimeError(f"{phase} timed out even at {limit} rows per call: {error}") from error

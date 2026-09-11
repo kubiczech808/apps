@@ -82,6 +82,43 @@ def event_rows(stream: str, portfolio_id: str | None, rows: list[dict[str, Any]]
     ]
 
 
+def slim_run_log_row(row: dict[str, Any]) -> dict[str, Any]:
+    """A run-log entry reduced to what the database is actually asked for.
+
+    Measured the moment the mirror was switched on: trading_event_log went from 713 rows and
+    7 MB to 21315 rows and 204 MB, which took the whole database 18 MB past its 300 MB growth
+    budget on its own. The cause is that the full record travels -- topCandidates,
+    topRejected, the prevalidation filter, the whole shortlist -- roughly 10 KB per run, most
+    of it a snapshot of markets that is already in the published state file.
+
+    What the stored history is read back FOR is narrow: which portfolio ordered which token
+    at what price (live-order-ownership), and what each run decided. So that is what is kept.
+    Everything else stays available in the published execution state, which is where the
+    dashboard reads it from anyway.
+    """
+    attempts = []
+    for attempt in list_rows(row.get("attempts")):
+        attempts.append({
+            "action": attempt.get("action"),
+            "tokenId": attempt.get("tokenId"),
+            "orderPrice": attempt.get("orderPrice"),
+            "shares": attempt.get("shares"),
+            "question": attempt.get("question"),
+            "outcome": attempt.get("outcome"),
+        })
+    slim = {
+        "id": row.get("id"),
+        "runAt": row.get("runAt") or row.get("generatedAt"),
+        "generatedAt": row.get("generatedAt"),
+        "strategyId": row.get("strategyId"),
+        "strategyLabel": row.get("strategyLabel"),
+        "action": row.get("action"),
+        "reason": row.get("reason"),
+        "attempts": attempts,
+    }
+    return {key: value for key, value in slim.items() if value is not None}
+
+
 def trade_rows(account: str, portfolio_id: str, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Trades as rows for the database, each one carrying the portfolio that placed it.
 
@@ -133,7 +170,7 @@ def ingest_paper(url: str, key: str, state_file: Path, state: dict[str, Any], ta
         portfolio = segment.get("paperPortfolio")
         if isinstance(portfolio, dict):
             portfolio_states[portfolio_id] = portfolio
-            events.extend(event_rows("portfolio-run-log", portfolio_id, list_rows(portfolio.get("runLog"))))
+            events.extend(event_rows("portfolio-run-log", portfolio_id, [slim_run_log_row(row) for row in list_rows(portfolio.get("runLog"))]))
             trades.extend(trade_rows("paper", portfolio_id, list_rows(portfolio.get("trades"))))
 
     # Trades go in their own batches so one large portfolio cannot push another out of the
@@ -210,7 +247,7 @@ def main() -> int:
             post(url, key, {
                 "target": target,
                 "state": state,
-                "events": event_rows("state-run-log", target, list_rows(state.get("runLog"))),
+                "events": event_rows("state-run-log", target, [slim_run_log_row(row) for row in list_rows(state.get("runLog"))]),
                 "trades": live_trades[:2000],
             })
             for start in range(2000, len(live_trades), 2000):
