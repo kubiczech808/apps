@@ -48,9 +48,16 @@ def trades(payload: dict) -> int:
             continue
         bucket = accounts.setdefault(
             str(row.get("account") or "?"),
-            {"portfolios": 0, "total": 0, "open": 0, "closed": 0, "last": ""},
+            {"portfolios": 0, "total": 0, "open": 0, "closed": 0, "unattributed": 0, "last": ""},
         )
-        bucket["portfolios"] = int(bucket["portfolios"]) + 1
+        owner = str(row.get("portfolioId") or "").strip()
+        if owner:
+            bucket["portfolios"] = int(bucket["portfolios"]) + 1
+        else:
+            # Live rows are stored before anyone knows who opened them. Counted rather than
+            # folded into the total, because "364 trades across 1 portfolios" reads like an
+            # attributed account and is the opposite.
+            bucket["unattributed"] = int(bucket["unattributed"]) + int(row.get("total") or 0)
         for field in ("total", "open", "closed"):
             bucket[field] = int(bucket[field]) + int(row.get(field) or 0)
         last = str(row.get("lastUpdatedAt") or "")
@@ -61,10 +68,12 @@ def trades(payload: dict) -> int:
         return 0
     for name in sorted(accounts):
         bucket = accounts[name]
+        unattributed = int(bucket["unattributed"])
         print(
             f"   {name}: {bucket['total']} trades across {bucket['portfolios']} portfolios"
-            f" ({bucket['open']} open, {bucket['closed']} closed),"
-            f" last updated {bucket['last'] or 'never'}"
+            f" ({bucket['open']} open, {bucket['closed']} closed"
+            + (f", {unattributed} with NO portfolio yet" if unattributed else "")
+            + f"), last updated {bucket['last'] or 'never'}"
         )
     return 0
 
