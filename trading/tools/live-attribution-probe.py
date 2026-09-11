@@ -61,8 +61,22 @@ def main() -> int:
         if token:
             by_token.setdefault(token, []).append(order)
 
+    # The single most likely reason for an empty record, and the one that is not a defect:
+    # the endpoint reads the event log out of MySQL and returns nothing at all while database
+    # reads are switched off. Printed first so an empty result explains itself.
+    active = ownership.get("storageActive")
+    print(f"== database reads active: {active}")
+    if active is not True:
+        print("   The ownership record is read from the event log in MySQL and is empty by")
+        print("   design until reads are activated. Stored live trades stay unattributed")
+        print("   until then; this is the migration finishing, not a fault.")
+    runs = ownership.get("runsPerMode")
+    if isinstance(runs, dict):
+        print(f"   runs read per live portfolio: {runs}")
+    print(f"   oldest run in the record: {ownership.get('oldestRunAt')}")
+
     modes = sorted({str(order.get("mode") or "?") for order in orders})
-    print(f"== ownership record: {len(orders)} order(s), {len(by_token)} distinct token(s)")
+    print(f"\n== ownership record: {len(orders)} order(s), {len(by_token)} distinct token(s)")
     print(f"   portfolios seen in it: {', '.join(modes) if modes else '(none)'}")
     priced = sum(1 for order in orders if order.get("price") is not None)
     print(f"   orders carrying a price: {priced} of {len(orders)}")
