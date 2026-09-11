@@ -23,9 +23,13 @@ import urllib.request
 from typing import Any
 
 TIMEOUT_SECONDS = 300
-# Observations are the bulk of the import. Small enough that one call finishes inside the
-# hosting's limit, large enough that seventy thousand rows do not take a thousand requests.
-PAGE_LIMIT = 750
+# Observations are the bulk of the import. Measured: 750 per call returns HTTP 504 from this
+# hosting's gateway -- the request is still running upstream when the gateway gives up, which
+# is the worst kind of failure because the rows may or may not have landed. 200 finishes well
+# inside the limit, and the retry below halves it again rather than giving up, so a hosting
+# that is merely slow today does not need a code change to get through.
+PAGE_LIMIT = 200
+MIN_PAGE_LIMIT = 25
 # A phase that reports done immediately still costs a round trip; this only bounds runaway.
 MAX_PAGES = 400
 
@@ -56,13 +60,28 @@ def post(url: str, key: str, payload: dict[str, Any]) -> dict[str, Any]:
 def run_phase(url: str, key: str, phase: str) -> None:
     """One migration phase, paged to completion when it pages."""
     offset = 0
+    limit = PAGE_LIMIT
     for page in range(MAX_PAGES):
-        result = post(url, key, {
-            "operation": "migrate-json-batch",
-            "phase": phase,
-            "offset": offset,
-            "limit": PAGE_LIMIT,
-        }).get("result", {})
+        try:
+            result = post(url, key, {
+                "operation": "migrate-json-batch",
+                "phase": phase,
+                "offset": offset,
+                "limit": limit,
+            }).get("result", {})
+        except RuntimeError as error:
+            # A gateway timeout means the page was too big for this hosting right now, not
+            # that the migration cannot run. Halving and retrying the SAME offset is safe
+            # because every write is an upsert keyed by content, so whatever did land is
+            # simply written again.
+            if "504" not in str(error) and "502" not in str(error):
+                raise
+            if limit <= MIN_PAGE_LIMIT:
+                raise RuntimeError(f"{phase} timed out even at {limit} rows per call: {error}") from error
+            limit = max(MIN_PAGE_LIMIT, limit // 2)
+            print(f"   {phase}: gateway timeout at offset {offset}, retrying with {limit} rows per call")
+            time.sleep(5)
+            continue
         # The non-paging phases (documents, events, finalize) answer once and carry no
         # offset. Treating a missing "done" as finished is what keeps them from looping.
         if "done" not in result:
@@ -71,6 +90,9 @@ def run_phase(url: str, key: str, phase: str) -> None:
         processed = int(result.get("processed") or 0)
         imported = int(result.get("imported") or 0)
         print(f"   {phase}: offset {offset} processed {processed} imported {imported}")
+        # "done" means this call returned fewer rows than it asked for. With a limit that
+        # may have been halved, that is still the right test -- it is the server saying the
+        # source ran out, not a statement about the original page size.
         if result.get("done") is True:
             return
         next_offset = int(result.get("nextOffset") or (offset + processed))
