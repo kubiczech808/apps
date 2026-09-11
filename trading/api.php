@@ -2942,7 +2942,7 @@ function portfolio_config_history_fields(): array
         'minLiquidityUsdc', 'minNetYield', 'executionTrigger', 'executionCronMinutes',
         'useLimitOrders', 'autoRotatePositions', 'stopLossRiskMultiplier', 'reverseOnStopLoss',
         'includeOnlyMarketTags', 'excludedMarketTags', 'automationEnabled', 'archived',
-        'dipEntryEnabled', 'dipEntryOpenMin', 'dipEntryOpenMax', 'dipEntryBuyMin', 'dipEntryBuyMax',
+        'dipEntryEnabled', 'dipEntryOpenMin', 'dipEntryOpenMax',
     ];
 }
 
@@ -3165,7 +3165,14 @@ function normalize_probability_value(mixed $value, float $fallback): float
 }
 
 /**
- * The dip-entry rule's four bounds, as a portfolio stores them. The rule itself lives in
+ * The dip-entry rule's opening band, as a portfolio stores it.
+ *
+ * There is no buy band here on purpose: the portfolio's ORDINARY probability range is where
+ * the rule buys. Storing it twice was the first shape of this and it was wrong in the way
+ * that matters -- the range is what execution_scope_matches_observation and the bot actually
+ * filter on, so a portfolio whose range said 70-80 shortlisted favourites however its buy
+ * band was set, which is exactly what was reported.
+ * The rule itself lives in
  * tools/dip-entry-rule.mjs; this is the PHP copy of its normalizer, and a test holds the
  * two against each other.
  *
@@ -3174,7 +3181,7 @@ function normalize_probability_value(mixed $value, float $fallback): float
  * the opening band or the rule fires without a collapse -- because silently moving them
  * would invent an intent nobody expressed. The dashboard reports that as a fault instead.
  *
- * @return array{dipEntryEnabled: bool, dipEntryOpenMin: float, dipEntryOpenMax: float, dipEntryBuyMin: float, dipEntryBuyMax: float}
+ * @return array{dipEntryEnabled: bool, dipEntryOpenMin: float, dipEntryOpenMax: float}
  */
 function normalize_dip_entry_rule(array $input, array $defaults): array
 {
@@ -3183,15 +3190,11 @@ function normalize_dip_entry_rule(array $input, array $defaults): array
     };
     $openMin = $bound('dipEntryOpenMin', 0.70);
     $openMax = $bound('dipEntryOpenMax', 0.80);
-    $buyMin = $bound('dipEntryBuyMin', 0.30);
-    $buyMax = $bound('dipEntryBuyMax', 0.40);
     $enabled = $input['dipEntryEnabled'] ?? ($defaults['dipEntryEnabled'] ?? false);
     return [
         'dipEntryEnabled' => $enabled === true || $enabled === 'true' || $enabled === 1 || $enabled === '1',
         'dipEntryOpenMin' => min($openMin, $openMax),
         'dipEntryOpenMax' => max($openMin, $openMax),
-        'dipEntryBuyMin' => min($buyMin, $buyMax),
-        'dipEntryBuyMax' => max($buyMin, $buyMax),
     ];
 }
 
@@ -5096,12 +5099,15 @@ function live_dip_entry_watch_payload(): array
         if (($portfolio['automationEnabled'] ?? true) !== true) {
             continue;
         }
-        // The same refusal the rule reports on the dashboard: a buy band reaching into the
-        // opening band would fire on a market that never fell.
-        if ($rule['dipEntryBuyMax'] >= $rule['dipEntryOpenMin']) {
+        // The same refusal the rule reports on the dashboard: a probability range reaching
+        // into the opening band would fire on a market that never fell. No maximum is the
+        // same fault -- an open-ended range necessarily overlaps.
+        $buyMax = normalize_optional_probability_value($portfolio['maxProbability'] ?? null);
+        if ($buyMax === null || $buyMax >= $rule['dipEntryOpenMin']) {
             continue;
         }
-        $active[$portfolioId] = ['portfolio' => $portfolio, 'rule' => $rule];
+        $buyMin = normalize_probability_value($portfolio['minProbability'] ?? null, 0.01);
+        $active[$portfolioId] = ['portfolio' => $portfolio, 'rule' => $rule, 'buyMin' => $buyMin, 'buyMax' => $buyMax];
     }
     if ($active === []) {
         return ['ok' => true, 'generatedAt' => gmdate('c'), 'cashUsdc' => null, 'plans' => [], 'portfolios' => []];
@@ -5169,7 +5175,17 @@ function live_dip_entry_watch_payload(): array
             // range, which the row still satisfies while it is the favourite -- and that is
             // the point: the tags, shape, market type, liquidity and spread checks are all
             // settled here, on the way in.
-            if (!execution_scope_matches_observation($item, $entry['portfolio'])) {
+            // Shortlisted on the OPENING band, deliberately, not on the portfolio's own
+            // probability range. The market is picked up while it is STILL the favourite --
+            // at 70-80%, which is where the catalogue has it -- and followed down; the
+            // range is where it will be BOUGHT, hours later, by which time this row is
+            // gone from the catalogue entirely. Applying the range here would reject every
+            // market the rule exists to find.
+            $scope = array_merge($entry['portfolio'], [
+                'minProbability' => $rule['dipEntryOpenMin'],
+                'maxProbability' => $rule['dipEntryOpenMax'],
+            ]);
+            if (!execution_scope_matches_observation($item, $scope)) {
                 continue;
             }
             $blocked = '';
@@ -5189,8 +5205,8 @@ function live_dip_entry_watch_payload(): array
                 // The band the worker fires inside. Its ceiling is also the highest price
                 // the order may pay, so a book that has already recovered cannot be bought
                 // at the recovered price by a worker that was a second late.
-                'buyMin' => $rule['dipEntryBuyMin'],
-                'buyMax' => $rule['dipEntryBuyMax'],
+                'buyMin' => $entry['buyMin'],
+                'buyMax' => $entry['buyMax'],
                 'stakeUsdc' => $stake,
                 'tickSize' => is_numeric($item['tickSize'] ?? null) ? (float) $item['tickSize'] : 0.01,
                 'negRisk' => ($item['negRisk'] ?? null) === true,

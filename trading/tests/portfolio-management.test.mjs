@@ -5250,27 +5250,36 @@ test("dip entry: one rule, and every copy of it agrees", async () => {
   const swapped = rule.normalizeDipEntryRule({ enabled: true, openMin: 0.8, openMax: 0.7, buyMin: 0.4, buyMax: 0.3 });
   assert.deepEqual([swapped.openMin, swapped.openMax, swapped.buyMin, swapped.buyMax], [0.7, 0.8, 0.3, 0.4]);
 
-  // While the rule is on, the buy band REPLACES the portfolio's own probability range.
-  // Without that a 70-80% portfolio would reject the very market the rule exists to buy.
+  // The buy band IS the portfolio's probability range -- there is no second pair of numbers.
+  // Storing it twice was the first shape of this and it is what was reported: the range is
+  // what every filter actually reads, so a portfolio whose range said 70-80 shortlisted
+  // favourites however its buy band was set.
   assert.deepEqual(rule.dipEntryProbabilityBand(on), { min: 0.3, max: 0.4 });
+  assert.deepEqual(rule.dipEntryRuleFromConfig({
+    dipEntryEnabled: true, dipEntryOpenMin: 0.7, dipEntryOpenMax: 0.8,
+    minProbability: 0.3, maxProbability: 0.4,
+  }), on, "the rule reads the portfolio's own range as its buy band");
+  // No maximum is an open-ended range, which necessarily reaches into the opening band.
+  assert.match(rule.dipEntryRuleFault(rule.dipEntryRuleFromConfig({
+    dipEntryEnabled: true, dipEntryOpenMin: 0.7, dipEntryOpenMax: 0.8, minProbability: 0.3,
+  })), /must sit below the opening band/);
+  // And the WATCH shortlists on the opening band instead, because a dipped favourite is
+  // picked up while it is still the favourite -- the range is where it is later bought.
+  assert.deepEqual(rule.dipEntryWatchBand(on), { min: 0.7, max: 0.8 });
 
   // Percent or fraction, because the form sends 70 and the config stores 0.70.
   assert.equal(rule.normalizeDipEntryRule({ openMin: 70 }).openMin, 0.7);
 
-  // api.php's copy of the normalizer has to land on the same five values, or a portfolio
-  // saves one rule and trades another.
+  // api.php's copy of the normalizer has to land on the same values, or a portfolio saves
+  // one rule and trades another. Three keys now, not five: the buy band is the range.
   const saved = normalizeConfig({
-    live: { dipEntryEnabled: true, dipEntryOpenMin: 72, dipEntryOpenMax: 68, dipEntryBuyMin: 41, dipEntryBuyMax: 29 },
+    live: { dipEntryEnabled: true, dipEntryOpenMin: 72, dipEntryOpenMax: 68, minProbability: 29, maxProbability: 41 },
   }).live;
-  const fromPhp = rule.normalizeDipEntryRule({
-    enabled: saved.dipEntryEnabled,
-    openMin: saved.dipEntryOpenMin,
-    openMax: saved.dipEntryOpenMax,
-    buyMin: saved.dipEntryBuyMin,
-    buyMax: saved.dipEntryBuyMax,
-  });
+  assert.equal(saved.dipEntryBuyMin, undefined, "a stored buy band would be the duplicate all over again");
+  assert.equal(saved.dipEntryBuyMax, undefined);
+  const fromPhp = rule.dipEntryRuleFromConfig(saved);
   assert.deepEqual(fromPhp, rule.normalizeDipEntryRule({
-    enabled: true, openMin: 0.72, openMax: 0.68, buyMin: 0.41, buyMax: 0.29,
+    enabled: true, openMin: 0.72, openMax: 0.68, buyMin: 0.29, buyMax: 0.41,
   }), "PHP and the module must normalize identically, swap included");
   // Off by default on every portfolio: an experiment that turns itself on is not one.
   assert.equal(normalizeConfig({}).live.dipEntryEnabled, false);
@@ -5279,6 +5288,7 @@ test("dip entry: one rule, and every copy of it agrees", async () => {
   // app.js's copy, driven for real rather than restated.
   const dashboard = new Function("probability", `
     ${/const DIP_ENTRY_RULE_DEFAULTS = [^\n]+/.exec(APP)[0]}
+    ${extractFunction(APP, "numericOrNull")}
     ${extractFunction(APP, "dipEntryBound")}
     ${extractFunction(APP, "dipEntryRuleFromConfig")}
     ${extractFunction(APP, "dipEntryRuleFault")}
@@ -5291,6 +5301,31 @@ test("dip entry: one rule, and every copy of it agrees", async () => {
     "72-68 / 41-29 swaps into a valid rule, so it must not report a fault");
   assert.match(dashboard.dipEntryRuleSummaryValue(dashboard.dipEntryRuleFromConfig(saved)),
     /On: opened 68%-72%, buy at 29%-41%, events under way only/);
+  // The paper bot's copy, which is what actually decides a trade. It fails CLOSED: a
+  // misconfigured dip portfolio trades NOTHING rather than falling back to ordinary
+  // favourites, which is precisely what was reported.
+  const bot = readFileSync(new URL("../tools/paper-trading-bot.mjs", import.meta.url), "utf8");
+  const state = new Function("normalizeOptionalProbability", `
+    ${extractFunction(readFileSync(new URL("../tools/paper-trading-bot.mjs", import.meta.url), "utf8"), "dipEntryRuleState")}
+    return dipEntryRuleState;
+  `)((value) => (value == null ? null : Number(value)));
+  assert.deepEqual(state({}), { enabled: false, fault: "" }, "off is invisible");
+  assert.deepEqual(state({ dipEntryEnabled: true, dipEntryOpenMin: 0.7, dipEntryOpenMax: 0.8, maxProbability: 0.4 }),
+    { enabled: true, fault: "" });
+  assert.match(state({ dipEntryEnabled: true, dipEntryOpenMin: 0.7, dipEntryOpenMax: 0.8 }).fault,
+    /no probability maximum/, "an open-ended range cannot be a buy band");
+  assert.match(state({ dipEntryEnabled: true, dipEntryOpenMin: 0.7, dipEntryOpenMax: 0.8, maxProbability: 0.75 }).fault,
+    /reaches into the opening band/);
+  // The gate itself, and the direction it fails in.
+  assert.match(bot, /if \(dipEntry\.fault\) return false;/,
+    "a misconfigured dip portfolio must trade nothing, never trade normally");
+  assert.match(bot, /const opened = validMarketProbability\(item\?\.firstMarketProbability\);/);
+  assert.match(bot, /if \(opened == null\) return false;/,
+    "an unverified premise is not a premise");
+  // And the three keys have to reach the strategy at all -- the builder copies named fields
+  // only, which is why the gate previously had nothing to read.
+  assert.match(bot, /dipEntryEnabled: row\.dipEntryEnabled === true,/);
+  assert.match(bot, /dipEntryOpenMin: normalizeOptionalProbability\(row\.dipEntryOpenMin\) \?\? 0\.7,/);
   assert.equal(dashboard.dipEntryRuleSummaryValue(dashboard.dipEntryRuleFromConfig({})), "Off");
 
   // The whole feature has to stay removable, which means nothing outside these places may
@@ -5299,19 +5334,29 @@ test("dip entry: one rule, and every copy of it agrees", async () => {
   assert.ok(owners.length === 4, "if this list grows, throwing the rule away stopped being one commit");
 });
 
-// The form has to carry both bands and the switch, or the rule cannot be configured at all.
-test("dip entry: both bands are settable on a portfolio", () => {
+// Reported: the form asks for a probability range AND a buy band, which is the same number
+// twice -- and the range is the one every filter reads, so a dip portfolio whose range was
+// set to the opening band traded ordinary favourites. The form carries the switch and the
+// opening band only.
+test("dip entry: the form carries the switch and the opening band, and nothing duplicated", () => {
   for (const hook of ["data-dip-entry-enabled", "data-dip-entry-open-min", "data-dip-entry-open-max",
-    "data-dip-entry-buy-min", "data-dip-entry-buy-max", "data-dip-entry-label"]) {
+    "data-dip-entry-label", "data-dip-entry-band-note"]) {
     assert.ok(HTML.includes(hook), `${hook} is missing from the parameter form`);
   }
+  assert.ok(!HTML.includes("data-dip-entry-buy-min") && !HTML.includes("data-dip-entry-buy-max"),
+    "a second pair of band inputs is the duplication that made the rule not work");
+  assert.ok(!APP.includes("dipEntryBuyMin") && !APP.includes("dipEntryBuyMax"));
+  assert.ok(!API.includes("dipEntryBuyMin") && !API.includes("dipEntryBuyMax"));
+  // And the form has to SAY that the range is the buy band, or the reader goes looking for
+  // inputs that no longer exist.
+  assert.match(APP, /Buys inside this portfolio's probability range/);
   // Inside the parameter modal, and therefore -- see the reachability invariant above --
   // read by the sync and the listeners rather than by a click branch below the modal's.
   const modal = HTML.slice(HTML.indexOf("data-parameter-modal"));
   assert.ok(modal.includes("data-dip-entry-enabled"));
   // Saved with the rest of the form, and recorded in the config history like every other
   // parameter, or a change to it would be invisible afterwards.
-  for (const key of ["dipEntryEnabled", "dipEntryOpenMin", "dipEntryOpenMax", "dipEntryBuyMin", "dipEntryBuyMax"]) {
+  for (const key of ["dipEntryEnabled", "dipEntryOpenMin", "dipEntryOpenMax"]) {
     assert.match(API, new RegExp(`'${key}'`), `${key} must be stored by api.php`);
     assert.match(APP, new RegExp(`${key}:`), `${key} must have a history label`);
   }

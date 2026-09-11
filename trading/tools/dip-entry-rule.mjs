@@ -73,16 +73,26 @@ export function normalizeDipEntryRule(value) {
   };
 }
 
-// The rule as a portfolio stores it. The config keeps five flat keys rather than a nested
-// object, matching every other parameter, so this is the one place that knows both shapes.
+// The rule as a portfolio stores it.
+//
+// The buy band is NOT a setting of its own: it is the portfolio's ordinary probability
+// range. Storing it twice was the first shape of this, and it was wrong in the way that
+// matters -- the range is what every filter in the bot, the executor and the catalogue
+// actually reads, so a portfolio whose range said 70-80 shortlisted favourites however its
+// buy band was set. One number in two places is one number too many.
+//
+// So a dip portfolio reads: range 30-40 (where it buys), opening band 70-80 (where the
+// market must have started). Three keys, not five.
 export function dipEntryRuleFromConfig(config) {
   const source = config && typeof config === "object" ? config : {};
   return normalizeDipEntryRule({
     enabled: source.dipEntryEnabled,
     openMin: source.dipEntryOpenMin,
     openMax: source.dipEntryOpenMax,
-    buyMin: source.dipEntryBuyMin,
-    buyMax: source.dipEntryBuyMax,
+    buyMin: source.minProbability,
+    // No maximum means the buy band has no ceiling, which necessarily reaches into the
+    // opening band -- reported below as a fault rather than guessed at.
+    buyMax: source.maxProbability == null ? 0.99 : source.maxProbability,
   });
 }
 
@@ -96,7 +106,7 @@ export function dipEntryRuleFromConfig(config) {
 export function dipEntryRuleFault(rule) {
   const normalized = normalizeDipEntryRule(rule);
   if (normalized.buyMax >= normalized.openMin) {
-    return "the entry band must sit below the opening band, or the rule fires without a collapse";
+    return "the probability range must sit below the opening band, or the rule fires without a collapse";
   }
   return "";
 }
@@ -106,10 +116,9 @@ export function dipEntryRuleIsActive(rule) {
   return normalized.enabled && !dipEntryRuleFault(normalized);
 }
 
-// The band that REPLACES the portfolio's own minimum/maximum probability while the rule is
-// on. Without this the portfolio's ordinary range -- 70-80%, say -- would reject the very
-// market the rule exists to buy, because by then it is trading at 35%. Returns null when
-// the rule is off, so the ordinary range applies untouched.
+// The band the rule buys in, which is the portfolio's own probability range -- returned here
+// so a caller can ask for it by name rather than reaching for minProbability and having to
+// know that is what it means. Null when the rule is off.
 export function dipEntryProbabilityBand(rule) {
   if (!dipEntryRuleIsActive(rule)) return null;
   const normalized = normalizeDipEntryRule(rule);
@@ -185,6 +194,16 @@ export function dipEntryRuleSummary(rule) {
 // Which markets are worth polling at minute resolution: the ones that opened inside the
 // band and could still fall into the entry band. Kept here rather than in the poller so
 // the poller has no rule logic of its own to drift from this file.
+// The range to shortlist ON, which is not the range the portfolio buys in. A dipped
+// favourite is picked up while it is STILL the favourite -- at 70-80%, where the catalogue
+// has it -- and followed down. Applying the portfolio's own 30-40% range to that search
+// would reject every market the rule exists to find.
+export function dipEntryWatchBand(rule) {
+  if (!dipEntryRuleIsActive(rule)) return null;
+  const normalized = normalizeDipEntryRule(rule);
+  return { min: normalized.openMin, max: normalized.openMax };
+}
+
 export function dipEntryWatchlist(observations, rule) {
   if (!dipEntryRuleIsActive(rule)) return [];
   const normalized = normalizeDipEntryRule(rule);

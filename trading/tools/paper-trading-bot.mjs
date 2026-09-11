@@ -953,6 +953,12 @@ function customPaperStrategies(raw = process.env.PAPER_CUSTOM_PORTFOLIOS) {
       // A floor that does not move with the entry, so the two ends of a portfolio's
       // probability range stop behaving oppositely under one setting.
       stopLossProbabilityFloor: Number(row.stopLossProbabilityFloor) > 0 ? Number(row.stopLossProbabilityFloor) : null,
+      // The dip-entry rule. This builder copies named fields only, so without these three
+      // the gate below had nothing to read and a dip portfolio traded as an ordinary one --
+      // which is what was reported.
+      dipEntryEnabled: row.dipEntryEnabled === true,
+      dipEntryOpenMin: normalizeOptionalProbability(row.dipEntryOpenMin) ?? 0.7,
+      dipEntryOpenMax: normalizeOptionalProbability(row.dipEntryOpenMax) ?? 0.8,
       equalRiskProtection: rowStopLossRiskMultiplier(row, 0) > 0,
       reverseOnStopLoss: row.reverseOnStopLoss === true,
       useLimitOrders: row.useLimitOrders === true,
@@ -1417,6 +1423,9 @@ function compactPaperPortfolioForCore(portfolio) {
     "maxResolutionDays",
     "liveEventMode",
     "settlementCloseBid",
+    "dipEntryEnabled",
+    "dipEntryOpenMin",
+    "dipEntryOpenMax",
     "minLiquidityUsdc",
     "minNetYield",
     "executionTrigger",
@@ -7493,6 +7502,29 @@ function dueExecutionStrategies(state) {
     .filter((strategy) => strategyCadenceIsDue(strategy, lastRunAtForStrategy(state, strategy)));
 }
 
+// The dip-entry rule, the paper bot's copy. tools/dip-entry-rule.mjs is the reference and a
+// test holds the two together; this file cannot import it, because it is deployed alone.
+//
+// A function declaration on purpose. A const here would sit in its temporal dead zone during
+// the module-level portfolio assembly, which is how this file took the bot down once.
+function dipEntryRuleState(strategy = {}) {
+  if (strategy?.dipEntryEnabled !== true) return { enabled: false, fault: "" };
+  const openMin = Number(strategy.dipEntryOpenMin);
+  const openMax = Number(strategy.dipEntryOpenMax);
+  if (!Number.isFinite(openMin) || !Number.isFinite(openMax)) {
+    return { enabled: true, fault: "the opening band is not set" };
+  }
+  // The portfolio's own probability range IS the buy band, so it has to sit below the
+  // opening band. An open-ended range necessarily overlaps it, and an overlap would fire on
+  // a market that never fell.
+  const buyMax = normalizeOptionalProbability(strategy.maxProbability);
+  if (buyMax == null) return { enabled: true, fault: "the portfolio has no probability maximum" };
+  if (buyMax >= Math.min(openMin, openMax)) {
+    return { enabled: true, fault: "the probability range reaches into the opening band" };
+  }
+  return { enabled: true, fault: "" };
+}
+
 function strategyEligibleCandidates(eligible, strategy) {
   const requiredMarketType = normalizePortfolioMarketType(strategy.marketType, strategy.requireMostProbableOutcome);
   const maxResolutionHours = strategyMaxResolutionHours(strategy);
@@ -7522,6 +7554,29 @@ function strategyEligibleCandidates(eligible, strategy) {
     if (horizonApplies(liveEventMode, running) && hoursValue(item) > maxResolutionHours) return false;
     // Asked alongside the horizon rather than folded into it.
     if (liveEventMode === "only" && !running) return false;
+    // The dip-entry rule: buy a favourite that has COLLAPSED inside a fixture already under
+    // way. The probability range above is where it buys -- the range IS the buy band, there
+    // is no second pair of numbers -- and this adds the half the range cannot express: the
+    // market has to have STARTED in the opening band, or it never fell, it was always cheap.
+    //
+    // Reported: a paper portfolio created to test this opened trades at completely different
+    // probabilities. It could not do otherwise -- the rule and its configuration shipped and
+    // this gate did not, so the portfolio was an ordinary one with an unread setting.
+    //
+    // Underway is enforced by the rule itself, not left to liveEventMode: before kick-off a
+    // collapsed price is not a collapse, it is a different market.
+    const dipEntry = dipEntryRuleState(strategy);
+    if (dipEntry.enabled) {
+      // Misconfigured means it trades NOTHING, never "trades normally". A dip portfolio
+      // silently falling back to ordinary favourites is the failure this gate exists for.
+      if (dipEntry.fault) return false;
+      if (!running) return false;
+      const opened = validMarketProbability(item?.firstMarketProbability);
+      // No opening price on record leaves the premise unverified, and an unverified premise
+      // is not one. Refused rather than assumed.
+      if (opened == null) return false;
+      if (opened < Number(strategy.dipEntryOpenMin) || opened > Number(strategy.dipEntryOpenMax)) return false;
+    }
     // The same test the statistics apply, for the same reason: an order sent into a book
     // this wide has no counterparty to fill against, so a row quoting an attractive
     // midpoint is not an opportunity. A volume floor does not catch it -- rowVolumeUsdc

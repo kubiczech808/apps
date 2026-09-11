@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <base href="/trading/">
   <title>Polymarket Trading Desk</title>
-  <link rel="stylesheet" href="assets/app.css?v=20260911-equity-chart">
+  <link rel="stylesheet" href="assets/app.css?v=20260911-dip-range">
 </head>
 <body>
   <main class="shell" data-app-shell>
@@ -485,7 +485,7 @@
         </label>
         <!-- The dip-entry rule. Deliberately one block, so removing the feature is removing
              this block, the five config keys and tools/dip-entry-rule.mjs. -->
-        <div class="parameter-control parameter-control-group" data-dip-entry-group title="Buy a favourite that has collapsed inside a fixture already under way: it opened in the first band, it is trading in the second one now, and the bet is that it turns the match around. The two bands must not overlap - the buy band has to sit below the opening band, or the rule fires on a market that never fell. Only events under way are considered, whatever this portfolio's resolution filter says, and while the rule is on the buy band replaces the portfolio's own probability range.">
+        <div class="parameter-control parameter-control-group" data-dip-entry-group title="Buy a favourite that has collapsed inside a fixture already under way: it opened in the band below, it has since fallen into this portfolio's own probability range, and the bet is that it turns the match around. The portfolio's probability range IS the buy band - set it to where you want to buy, for example 30-40, and the opening band to where the market must have started, for example 70-80. The two must not overlap, or the rule fires on a market that never fell. Only events under way are considered, whatever this portfolio's resolution filter says.">
           <span>Dip entry</span>
           <label class="parameter-checkbox">
             <input type="checkbox" data-dip-entry-enabled>
@@ -496,11 +496,13 @@
               <input type="number" min="1" max="99" step="1" value="70" data-dip-entry-open-min>
               <input type="number" min="1" max="99" step="1" value="80" data-dip-entry-open-max>
             </label>
-            <label><span>Buy between</span>
-              <input type="number" min="1" max="99" step="1" value="30" data-dip-entry-buy-min>
-              <input type="number" min="1" max="99" step="1" value="40" data-dip-entry-buy-max>
-            </label>
           </div>
+          <!-- The buy band used to be a second pair of inputs here, and that was the bug:
+               the portfolio's own probability range is what every filter in the bot, the
+               executor and the catalogue actually reads, so a portfolio whose range said
+               70-80 shortlisted favourites however its buy band was set. One number in two
+               places is one number too many. The range above IS the buy band. -->
+          <em data-dip-entry-band-note></em>
           <strong data-dip-entry-label>Off</strong>
         </div>
         <label class="parameter-control" title="Sell whenever the market prices this outcome at or below this probability, whatever the position cost. The stop loss risk below derives its floor from the entry, so one setting gives a 95c entry about 9 points of room and a 72c entry about 46 - which is why two stops on one portfolio can fire one too early and one too late. This floor does not move with the entry: below it the market has the other side winning. Whichever of the two the price reaches first is the one that sells. 0 disables it.">
@@ -613,6 +615,6 @@
 
   <!-- Bump on every assets/app.js change. The browser caches this exact URL, so a deploy
        that leaves it alone publishes the new file and keeps serving the old one. -->
-  <script src="assets/app.js?v=20260911-equity-chart"></script>
+  <script src="assets/app.js?v=20260911-dip-range"></script>
 </body>
 </html>

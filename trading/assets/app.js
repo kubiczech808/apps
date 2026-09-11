@@ -346,9 +346,8 @@ const els = {
   dipEntryEnabled: document.querySelector("[data-dip-entry-enabled]"),
   dipEntryOpenMin: document.querySelector("[data-dip-entry-open-min]"),
   dipEntryOpenMax: document.querySelector("[data-dip-entry-open-max]"),
-  dipEntryBuyMin: document.querySelector("[data-dip-entry-buy-min]"),
-  dipEntryBuyMax: document.querySelector("[data-dip-entry-buy-max]"),
   dipEntryLabel: document.querySelector("[data-dip-entry-label]"),
+  dipEntryBandNote: document.querySelector("[data-dip-entry-band-note]"),
   stopLossProbabilityFloor: document.querySelector("[data-stop-loss-probability-floor]"),
   stopLossProbabilityFloorLabel: document.querySelector("[data-stop-loss-probability-floor-label]"),
   settlementCloseBid: document.querySelector("[data-settlement-close-bid]"),
@@ -1299,11 +1298,17 @@ function dipEntryBound(value, fallback) {
   return Math.min(0.99, Math.max(0.01, Math.round(fraction * 10000) / 10000));
 }
 
+// The buy band is the portfolio's ORDINARY probability range, not a setting of its own.
+// Storing it twice was the first shape of this and it was wrong in the way that matters:
+// the range is what every filter in the bot, the executor and the catalogue actually reads,
+// so a portfolio whose range said 70-80 shortlisted favourites however its buy band was set.
 function dipEntryRuleFromConfig(config = {}) {
   const openMin = dipEntryBound(config.dipEntryOpenMin, DIP_ENTRY_RULE_DEFAULTS.openMin);
   const openMax = dipEntryBound(config.dipEntryOpenMax, DIP_ENTRY_RULE_DEFAULTS.openMax);
-  const buyMin = dipEntryBound(config.dipEntryBuyMin, DIP_ENTRY_RULE_DEFAULTS.buyMin);
-  const buyMax = dipEntryBound(config.dipEntryBuyMax, DIP_ENTRY_RULE_DEFAULTS.buyMax);
+  const buyMin = dipEntryBound(config.minProbability, DIP_ENTRY_RULE_DEFAULTS.buyMin);
+  // No maximum means the range has no ceiling, which necessarily reaches into the opening
+  // band. Reported as a fault rather than guessed at.
+  const buyMax = dipEntryBound(config.maxProbability == null ? 0.99 : config.maxProbability, 0.99);
   return {
     // A band typed the wrong way round is an ordering slip and is swapped. Bands in the
     // wrong PLACE relative to each other are reported as a fault instead -- see below.
@@ -1317,7 +1322,7 @@ function dipEntryRuleFromConfig(config = {}) {
 
 function dipEntryRuleFault(rule) {
   return rule.buyMax >= rule.openMin
-    ? "the buy band must sit below the opening band, or the rule fires without a collapse"
+    ? "the probability range must sit below the opening band, or the rule fires without a collapse"
     : "";
 }
 
@@ -5964,13 +5969,20 @@ function syncPortfolioParameterControls(configOverride = null, options = {}) {
   for (const [element, value] of [
     [els.dipEntryOpenMin, dipEntry.openMin],
     [els.dipEntryOpenMax, dipEntry.openMax],
-    [els.dipEntryBuyMin, dipEntry.buyMin],
-    [els.dipEntryBuyMax, dipEntry.buyMax],
   ]) {
     // Never while it is being typed into, or the normalizer rewrites the digit just entered.
     if (element && document.activeElement !== element) element.value = String(Math.round(value * 100));
   }
   if (els.dipEntryLabel) els.dipEntryLabel.textContent = dipEntryRuleSummaryValue(dipEntry);
+  if (els.dipEntryBandNote) {
+    // Named rather than implied. The reader has to know that the probability range above is
+    // what this rule buys in, or they will look for a second pair of inputs that no longer
+    // exists -- and the previous shape, where both existed, is exactly what made a dip
+    // portfolio trade ordinary favourites.
+    els.dipEntryBandNote.textContent = dipEntry.enabled
+      ? `Buys inside this portfolio's probability range, ${probability(dipEntry.buyMin)}-${probability(dipEntry.buyMax)}.`
+      : "The portfolio's own probability range is where this buys; the band above is where the market must have started.";
+  }
   const probabilityFloor = normalizeStopLossProbabilityFloor(config.stopLossProbabilityFloor);
   if (els.stopLossProbabilityFloor && document.activeElement !== els.stopLossProbabilityFloor) {
     els.stopLossProbabilityFloor.value = probabilityFloor == null ? "0" : String(Number((probabilityFloor * 100).toFixed(1)));
@@ -6868,8 +6880,6 @@ function parameterDraftFromControls(baseDraft = {}) {
   for (const [key, element] of [
     ["dipEntryOpenMin", els.dipEntryOpenMin],
     ["dipEntryOpenMax", els.dipEntryOpenMax],
-    ["dipEntryBuyMin", els.dipEntryBuyMin],
-    ["dipEntryBuyMax", els.dipEntryBuyMax],
   ]) {
     // An empty bound is left out rather than read as zero. That is the bug reported on
     // "Close at certainty" and "Sell below probability": a field cleared for retyping wrote
@@ -10748,8 +10758,6 @@ const PORTFOLIO_CONFIG_HISTORY_LABELS = {
   dipEntryEnabled: "Dip entry",
   dipEntryOpenMin: "Dip entry opening band from",
   dipEntryOpenMax: "Dip entry opening band to",
-  dipEntryBuyMin: "Dip entry buy band from",
-  dipEntryBuyMax: "Dip entry buy band to",
   probabilitySource: "Probability source",
   minLiquidityUsdc: "Minimum volume",
   minNetYield: "Minimum net profit",
@@ -15854,8 +15862,6 @@ function dipEntryControlChanged(persist) {
   for (const [key, element, fallback] of [
     ["dipEntryOpenMin", els.dipEntryOpenMin, current.openMin],
     ["dipEntryOpenMax", els.dipEntryOpenMax, current.openMax],
-    ["dipEntryBuyMin", els.dipEntryBuyMin, current.buyMin],
-    ["dipEntryBuyMax", els.dipEntryBuyMax, current.buyMax],
   ]) {
     // A field cleared for retyping keeps the saved bound instead of writing itself away as
     // zero, which is the failure reported on "Close at certainty" and "Sell below
@@ -15873,7 +15879,7 @@ function dipEntryControlChanged(persist) {
   rerenderCurrentDashboard();
 }
 
-for (const element of [els.dipEntryOpenMin, els.dipEntryOpenMax, els.dipEntryBuyMin, els.dipEntryBuyMax]) {
+for (const element of [els.dipEntryOpenMin, els.dipEntryOpenMax]) {
   // Typed: preview only. Committed: saved. A half-typed band would otherwise be persisted
   // on every keystroke and briefly put a nonsense rule in force.
   element?.addEventListener("input", () => dipEntryControlChanged(false));
