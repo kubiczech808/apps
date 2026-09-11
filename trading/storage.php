@@ -105,7 +105,194 @@ function trading_storage_bootstrap(PDO $pdo): void
             KEY trading_event_log_portfolio_time (portfolio_id, occurred_at)
         ) ENGINE=InnoDB ROW_FORMAT=DYNAMIC DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci'
     );
+    // Trades as their own queryable rows, which is what statistics and reposting need and
+    // what a state document cannot give. That document is one compressed object replaced
+    // wholesale on every sync, so a trade cannot be looked up, counted per portfolio, or
+    // asked when it became closed without decoding the whole account.
+    //
+    // One row per trade, identified by the ROUND TRIP rather than by the token alone: the
+    // same token bought again after an earlier position closed is a second trade, and keying
+    // on the token would have the second overwrite the first and lose it.
+    $pdo->exec(
+        'CREATE TABLE IF NOT EXISTS trading_trades (
+            trade_key CHAR(64) NOT NULL PRIMARY KEY,
+            account VARCHAR(16) NOT NULL,
+            portfolio_id VARCHAR(80) NOT NULL,
+            status VARCHAR(32) NOT NULL,
+            closed TINYINT(1) NOT NULL DEFAULT 0,
+            token_id VARCHAR(191) NULL,
+            condition_id VARCHAR(191) NULL,
+            round_trip INT NOT NULL DEFAULT 1,
+            question VARCHAR(512) NULL,
+            outcome VARCHAR(191) NULL,
+            event_slug VARCHAR(191) NULL,
+            opened_at DATETIME NULL,
+            closed_at DATETIME NULL,
+            end_at DATETIME NULL,
+            entry_price DECIMAL(12,9) NULL,
+            exit_price DECIMAL(12,9) NULL,
+            shares DECIMAL(24,6) NULL,
+            stake_usdc DECIMAL(24,6) NULL,
+            realized_pnl_usdc DECIMAL(24,6) NULL,
+            unrealized_pnl_usdc DECIMAL(24,6) NULL,
+            payload MEDIUMBLOB NOT NULL,
+            payload_checksum CHAR(64) NOT NULL,
+            created_at DATETIME(6) NOT NULL,
+            updated_at DATETIME(6) NOT NULL,
+            KEY trading_trades_portfolio_status (portfolio_id, closed, closed_at),
+            KEY trading_trades_portfolio_opened (portfolio_id, opened_at),
+            KEY trading_trades_token (token_id),
+            KEY trading_trades_account_updated (account, updated_at)
+        ) ENGINE=InnoDB ROW_FORMAT=DYNAMIC DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci'
+    );
     trading_storage_optimize_schema($pdo);
+}
+
+/**
+ * Identity of one trade: the account, the portfolio that placed it, the market, and which
+ * round trip on that market it is. Falling back to the condition and outcome keeps a row
+ * identifiable when a feed reports a redemption against the condition rather than the token.
+ */
+function trading_storage_trade_key(array $trade): string
+{
+    $tokenId = trim((string) ($trade['tokenId'] ?? $trade['assetId'] ?? ''));
+    $conditionId = trim((string) ($trade['conditionId'] ?? ''));
+    $outcome = trim((string) ($trade['outcome'] ?? ''));
+    if ($tokenId !== '') {
+        $identity = 'token:' . $tokenId;
+    } elseif ($conditionId !== '') {
+        $identity = 'condition:' . $conditionId . ':' . $outcome;
+    } else {
+        $identity = 'row:' . trim((string) ($trade['id'] ?? ''));
+    }
+    return hash('sha256', implode("\x1F", [
+        (string) ($trade['account'] ?? ''),
+        (string) ($trade['portfolioId'] ?? ''),
+        $identity,
+        (string) max(1, (int) ($trade['roundTrip'] ?? 1)),
+    ]));
+}
+
+/**
+ * Write a trade, or update the one already stored. The row is created the first time the
+ * trade is seen open and updated in place when it closes -- that transition is the point, so
+ * nothing here ever inserts a second row for a trade that already exists.
+ */
+function trading_storage_trade_upsert(array $trade): void
+{
+    $pdo = trading_storage_pdo();
+    if (!$pdo instanceof PDO) {
+        throw new RuntimeException('Trading MySQL storage is unavailable.');
+    }
+    trading_storage_bootstrap($pdo);
+    $encoded = trading_storage_encode($trade);
+    $closed = ($trade['closed'] ?? null) === true
+        || in_array(strtoupper((string) ($trade['status'] ?? '')), ['CLOSED', 'REDEEMED', 'RESOLVED', 'SOLD'], true);
+    $now = trading_storage_now();
+    $statement = $pdo->prepare(
+        'INSERT INTO trading_trades (
+            trade_key, account, portfolio_id, status, closed, token_id, condition_id, round_trip,
+            question, outcome, event_slug, opened_at, closed_at, end_at, entry_price, exit_price,
+            shares, stake_usdc, realized_pnl_usdc, unrealized_pnl_usdc, payload, payload_checksum,
+            created_at, updated_at
+         ) VALUES (
+            :key, :account, :portfolioId, :status, :closed, :tokenId, :conditionId, :roundTrip,
+            :question, :outcome, :eventSlug, :openedAt, :closedAt, :endAt, :entryPrice, :exitPrice,
+            :shares, :stake, :realized, :unrealized, :payload, :checksum, :createdAt, :updatedAt
+         )
+         ON DUPLICATE KEY UPDATE
+            status = VALUES(status),
+            closed = VALUES(closed),
+            condition_id = COALESCE(VALUES(condition_id), condition_id),
+            question = COALESCE(VALUES(question), question),
+            outcome = COALESCE(VALUES(outcome), outcome),
+            event_slug = COALESCE(VALUES(event_slug), event_slug),
+            -- The open time is the one fact a later pass must never move. A resync that
+            -- cannot date the open would otherwise stamp today over the real entry, and the
+            -- holding period of every old trade would collapse to nothing.
+            opened_at = COALESCE(opened_at, VALUES(opened_at)),
+            closed_at = COALESCE(VALUES(closed_at), closed_at),
+            end_at = COALESCE(VALUES(end_at), end_at),
+            entry_price = COALESCE(VALUES(entry_price), entry_price),
+            exit_price = COALESCE(VALUES(exit_price), exit_price),
+            shares = COALESCE(VALUES(shares), shares),
+            stake_usdc = COALESCE(VALUES(stake_usdc), stake_usdc),
+            realized_pnl_usdc = COALESCE(VALUES(realized_pnl_usdc), realized_pnl_usdc),
+            -- Unrealized is the one figure that must be allowed to fall back to nothing: it
+            -- is a mark on an OPEN position, and a closed trade has none.
+            unrealized_pnl_usdc = VALUES(unrealized_pnl_usdc),
+            payload = VALUES(payload),
+            payload_checksum = VALUES(payload_checksum),
+            updated_at = VALUES(updated_at)'
+    );
+    $statement->execute([
+        'key' => trading_storage_trade_key($trade),
+        'account' => substr((string) ($trade['account'] ?? 'live'), 0, 16),
+        'portfolioId' => substr((string) ($trade['portfolioId'] ?? ''), 0, 80),
+        'status' => substr((string) ($trade['status'] ?? ($closed ? 'CLOSED' : 'OPEN')), 0, 32),
+        'closed' => $closed ? 1 : 0,
+        'tokenId' => substr((string) ($trade['tokenId'] ?? $trade['assetId'] ?? ''), 0, 191) ?: null,
+        'conditionId' => substr((string) ($trade['conditionId'] ?? ''), 0, 191) ?: null,
+        'roundTrip' => max(1, (int) ($trade['roundTrip'] ?? 1)),
+        'question' => substr((string) ($trade['question'] ?? ''), 0, 512) ?: null,
+        'outcome' => substr((string) ($trade['outcome'] ?? ''), 0, 191) ?: null,
+        'eventSlug' => substr((string) ($trade['eventSlug'] ?? $trade['slug'] ?? ''), 0, 191) ?: null,
+        'openedAt' => trading_storage_datetime($trade['openedAt'] ?? $trade['date'] ?? null),
+        'closedAt' => trading_storage_datetime($trade['closedAt'] ?? $trade['resolvedAt'] ?? null),
+        'endAt' => trading_storage_datetime($trade['endDate'] ?? null),
+        'entryPrice' => trading_storage_number($trade, ['entryPrice', 'avgPrice']),
+        'exitPrice' => trading_storage_number($trade, ['exitPrice', 'closePrice', 'currentPrice']),
+        'shares' => trading_storage_number($trade, ['shares', 'size']),
+        'stake' => trading_storage_number($trade, ['totalCostUsdc', 'stakeUsdc']),
+        'realized' => trading_storage_number($trade, ['realizedPnlUsdc', 'pnlUsdc']),
+        'unrealized' => trading_storage_number($trade, ['unrealizedPnlUsdc', 'openPnlUsdc']),
+        'payload' => trading_storage_pack_encoded($encoded),
+        'checksum' => hash('sha256', $encoded),
+        'createdAt' => $now,
+        'updatedAt' => $now,
+    ]);
+}
+
+/**
+ * What is actually stored, per portfolio. Deliberately a count rather than the rows, so
+ * "are the trades in the database" can be asked cheaply and often.
+ */
+function trading_storage_trade_summary(): array
+{
+    $pdo = trading_storage_pdo();
+    if (!$pdo instanceof PDO) {
+        return [];
+    }
+    trading_storage_bootstrap($pdo);
+    $statement = $pdo->query(
+        'SELECT account, portfolio_id,
+                COUNT(*) AS total,
+                SUM(closed = 0) AS open_rows,
+                SUM(closed = 1) AS closed_rows,
+                SUM(realized_pnl_usdc) AS realized,
+                MIN(opened_at) AS first_opened_at,
+                MAX(updated_at) AS last_updated_at
+         FROM trading_trades
+         GROUP BY account, portfolio_id
+         ORDER BY total DESC'
+    );
+    if ($statement === false) {
+        return [];
+    }
+    $rows = [];
+    foreach ($statement->fetchAll() as $row) {
+        $rows[] = [
+            'account' => (string) ($row['account'] ?? ''),
+            'portfolioId' => (string) ($row['portfolio_id'] ?? ''),
+            'total' => (int) ($row['total'] ?? 0),
+            'open' => (int) ($row['open_rows'] ?? 0),
+            'closed' => (int) ($row['closed_rows'] ?? 0),
+            'realizedPnlUsdc' => $row['realized'] === null ? null : round((float) $row['realized'], 6),
+            'firstOpenedAt' => $row['first_opened_at'] === null ? null : (string) $row['first_opened_at'],
+            'lastUpdatedAt' => $row['last_updated_at'] === null ? null : (string) $row['last_updated_at'],
+        ];
+    }
+    return $rows;
 }
 
 /**

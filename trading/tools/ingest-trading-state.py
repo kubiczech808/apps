@@ -82,9 +82,36 @@ def event_rows(stream: str, portfolio_id: str | None, rows: list[dict[str, Any]]
     ]
 
 
+def trade_rows(account: str, portfolio_id: str, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Trades as rows for the database, each one carrying the portfolio that placed it.
+
+    Asked for: every trade written when it opens and updated when it closes, kept long-term
+    so statistics and reposting can be built on it. The state document cannot serve that --
+    it is replaced wholesale on every run -- so the trades travel separately and the API
+    upserts them, which is what makes the open-then-closed transition an UPDATE rather than
+    a second row.
+
+    A trade with no portfolio is not sent at all. The API refuses those anyway rather than
+    filing them under an empty string, and sending them would only make the refusal noisy.
+    """
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        status = str(row.get("status") or "").upper()
+        out.append({
+            **row,
+            "account": account,
+            "portfolioId": portfolio_id,
+            "closed": status in {"CLOSED", "REDEEMED", "RESOLVED", "SOLD"},
+        })
+    return out
+
+
 def ingest_paper(url: str, key: str, state_file: Path, state: dict[str, Any], target: str) -> tuple[int, int]:
     segments = segment_paths(state_file, state)
     portfolio_states: dict[str, dict[str, Any]] = {}
+    trades: list[dict[str, Any]] = []
     events = event_rows("market-scan-history", None, list_rows(state.get("marketScanHistory")))
     history_path = segments.get("scanHistory")
     if history_path is not None:
@@ -105,13 +132,19 @@ def ingest_paper(url: str, key: str, state_file: Path, state: dict[str, Any], ta
         if isinstance(portfolio, dict):
             portfolio_states[portfolio_id] = portfolio
             events.extend(event_rows("portfolio-run-log", portfolio_id, list_rows(portfolio.get("runLog"))))
+            trades.extend(trade_rows("paper", portfolio_id, list_rows(portfolio.get("trades"))))
 
+    # Trades go in their own batches so one large portfolio cannot push another out of the
+    # single request, and so a batch that fails does not take the state document with it.
     post(url, key, {
         "target": target,
         "state": state,
         "paperPortfolios": portfolio_states,
         "events": events[:1000],
+        "trades": trades[:2000],
     })
+    for start in range(2000, len(trades), 2000):
+        post(url, key, {"target": target, "trades": trades[start:start + 2000]})
 
     imported = 0
     batches = 0

@@ -899,6 +899,37 @@ function trading_storage_ingest(array $payload): array
         }
     }
 
+    // Trades, as rows rather than as part of the state blob. Asked for: every trade written
+    // when it opens and updated when it closes, each carrying the portfolio that placed it,
+    // kept long-term so statistics and reposting can be built on it. A row that fails to
+    // write does not fail the whole ingest -- the state document is the more important half
+    // and losing it to one malformed trade would be the worse trade.
+    $tradeCount = 0;
+    $tradeErrors = [];
+    $trades = $payload['trades'] ?? [];
+    if (is_array($trades)) {
+        if (count($trades) > 2000) {
+            throw new InvalidArgumentException('An ingest batch may contain at most 2000 trades.');
+        }
+        foreach ($trades as $trade) {
+            if (!is_array($trade)) {
+                continue;
+            }
+            // A trade with no portfolio is exactly the gap this was built to close, so it is
+            // refused rather than filed under an empty string where it would be invisible.
+            if (trim((string) ($trade['portfolioId'] ?? '')) === '') {
+                $tradeErrors[] = 'a trade arrived with no portfolioId';
+                continue;
+            }
+            try {
+                trading_storage_trade_upsert($trade);
+                $tradeCount++;
+            } catch (Throwable $error) {
+                $tradeErrors[] = trading_storage_safe_migration_error($error);
+            }
+        }
+    }
+
     $eventCount = 0;
     $events = $payload['events'] ?? [];
     if (is_array($events)) {
@@ -925,6 +956,10 @@ function trading_storage_ingest(array $payload): array
         'observations' => $observationCount,
         'paperPortfolioDocuments' => $portfolioDocuments,
         'events' => $eventCount,
+        'trades' => $tradeCount,
+        // Reported rather than swallowed: a mirror that writes 0 trades and says nothing is
+        // how this whole subsystem went unnoticed for ten days.
+        'tradeErrors' => array_slice($tradeErrors, 0, 5),
     ];
 }
 
@@ -6431,6 +6466,26 @@ try {
     // since an hourly bot can never witness a trough that lasts minutes.
     if ($action === 'dip-entry-hits') {
         respond(['ok' => true, 'generatedAt' => gmdate('c'), 'hits' => read_dip_entry_hits()]);
+    }
+
+    // Are the trades actually in the database, per portfolio. Public and read-only: it
+    // returns counts, never the trades themselves, and it is the standing answer to "is the
+    // long-term record being kept" -- the question that went unasked while the mirror was
+    // writing nothing for ten days.
+    if ($action === 'trade-rows-summary') {
+        $rows = [];
+        try {
+            $rows = trading_storage_trade_summary();
+        } catch (Throwable) {
+            $rows = [];
+        }
+        respond([
+            'ok' => true,
+            'generatedAt' => gmdate('c'),
+            'storageActive' => trading_storage_is_active(),
+            'total' => array_sum(array_map(static fn (array $row): int => (int) $row['total'], $rows)),
+            'portfolios' => $rows,
+        ]);
     }
 
     // Which live portfolio ordered which token, over the WHOLE recorded history.
