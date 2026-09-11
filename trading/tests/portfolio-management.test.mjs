@@ -5916,3 +5916,86 @@ test("a portfolio's scope narrows in SQL without ever narrowing more than its ru
   assert.match(API, /\$action === 'execution-scope-probe'/);
   assert.match(API, /'missedByQuery' => count\(\$missedByQuery\),/);
 });
+
+// The scan is limited to sport and esport, and the catalogue keeps nothing else.
+//
+// Set on the owner's instruction: these portfolios trade sport and esport, and every other
+// category was spending the catalogue's 8000 slots on markets that would never be picked.
+//
+// Measured before anything was dropped: sports + esports keeps 6845 of 8000 and drops 1155,
+// and not one sport or esport slug disappears with them -- what goes is weather (489
+// highest-temperature, 282 lowest-temperature, a tail of cities), crypto strike ladders (141
+// ethereum, 284 multi-strikes), macro and geopolitics. The games survive because their
+// markets carry `esports` alongside the game: league-of-legends 370 rows, dota-2 172,
+// valorant 31, all covered. Worth checking rather than assuming: a filter that starved
+// leagueoflegends or counterstrike2 would have shown up only as positions quietly ceasing
+// to open, days later and hard to attribute to a tag list.
+test("the catalogue keeps sport and esport, and never drops a market someone holds", () => {
+  const source = /function marketObservationInScannedScope[\s\S]*?\n\}/.exec(BOT);
+  assert.ok(source, "the scope rule must be findable");
+  const unknown = /const UNKNOWN_TAG_SLUGS = new Set\(\[[^\]]*\]\);/.exec(BOT);
+  assert.ok(unknown, "the unknown-tag placeholder set must be findable");
+  // Built through the real rowTagSlugs, reading the real TAG_FIELDS and TAG_CATEGORY_FIELDS,
+  // so the test cannot pass by consulting a field production does not.
+  const tagSlugs = new Function(`
+    ${/const TAG_FIELDS = \[[\s\S]*?\n\];/.exec(BOT)[0]}
+    ${/const TAG_CATEGORY_FIELDS = \[[^\]]*\];/.exec(BOT)[0]}
+    ${/function rowTagSlugs[\s\S]*?\n\}/.exec(BOT)[0]}
+    return rowTagSlugs;
+  `)();
+  const inScope = (scope, item) => new Function("MARKET_SCAN_TAG_SCOPE", "rowTagSlugs", `
+    ${unknown[0]}
+    ${source[0]}
+    return marketObservationInScannedScope;
+  `)(scope, tagSlugs)(item);
+
+  const scope = ["sports", "esports"];
+  assert.equal(inScope(scope, { polymarketTags: ["sports", "nfl"] }), true);
+  assert.equal(inScope(scope, { polymarketTags: ["esports", "league-of-legends"] }), true);
+  assert.equal(inScope(scope, { polymarketTags: ["weather", "london", "highest-temperature"] }), false);
+  assert.equal(inScope(scope, { polymarketTags: ["crypto", "ethereum", "multi-strikes"] }), false);
+  // Untagged is not the same as out of scope. The next scan re-tags the row; deleting it
+  // would lose a market on the strength of missing metadata.
+  assert.equal(inScope(scope, {}), true);
+  // And "general" IS untagged. normalizeState stamps it wherever the category is unknown,
+  // and rowTagSlugs reads riskCategory -- so treating it as a real tag deletes every market
+  // whose tags have not landed yet. The recorded fixture is exactly this shape.
+  assert.equal(inScope(scope, { riskCategory: "general" }), true);
+  assert.equal(inScope(scope, { category: "general", firstCategory: "general" }), true);
+  // A real category still decides, whether it arrives as a tag or as riskCategory.
+  assert.equal(inScope(scope, { riskCategory: "sports" }), true);
+  assert.equal(inScope(scope, { riskCategory: "politics" }), false);
+  // An empty scope turns the restriction off rather than scanning nothing, so it can be
+  // widened again from configuration alone.
+  assert.equal(inScope([], { polymarketTags: ["weather"] }), true);
+
+  // It reads through rowTagSlugs, which consults every tag field the codebase uses. A row
+  // whose tags live in the one field a reader forgot has cost this codebase real money
+  // before -- portfolios refusing the very markets the server had selected for them.
+  assert.match(source[0], /rowTagSlugs\(item\)/);
+
+  // Wired into retention, and the protection for held markets outranks it: a row backing an
+  // open position must stay readable however the scope has narrowed since.
+  assert.match(BOT, /if \(!marketObservationInScannedScope\(item\) && item\?\.executionRetentionProtected !== true\) \{\n\s+continue;/);
+  // Resolved rows are untouched. That archive is the settled history every report is
+  // measured against, and narrowing the scan is not a reason to rewrite the past.
+  const retain = /function retainMarketObservations[\s\S]*?\n\}/.exec(BOT)[0];
+  assert.ok(retain.indexOf("marketObservationInScannedScope") < retain.indexOf("resolved.push(item)"),
+    "the scope check must sit on the active branch, before resolved rows are collected");
+
+  // And the scan itself visits only those tags.
+  assert.match(BOT, /const MARKET_SCAN_TAG_SCOPE = String\(process\.env\.PAPER_MARKET_SCAN_TAG_SCOPE \?\? "sports,esports"\)/);
+  assert.match(BOT, /const MARKET_SCAN_ROTATION_TAGS = MARKET_SCAN_TAG_SCOPE\.length\n\s+\? MARKET_SCAN_CATEGORY_TAGS\.filter\(\(tag\) => MARKET_SCAN_TAG_SCOPE\.includes\(tag\.slug\)\)\n\s+: MARKET_SCAN_CATEGORY_TAGS;/);
+
+  // The rotation is narrowed; the registry is NOT. MARKET_SCAN_CATEGORY_TAGS is also the
+  // slug-to-Gamma-id lookup and the vocabulary the archive rebuilds a settled market's
+  // categories from, so filtering it would rewrite recorded history and make every
+  // out-of-scope slug cost a network round trip. Narrowing it once broke five tests.
+  const registry = /const MARKET_SCAN_CATEGORY_TAGS = \[[\s\S]*?\n\];/.exec(BOT);
+  assert.ok(registry, "the registry must stay a complete literal list");
+  for (const slug of ["sports", "esports", "politics", "crypto", "weather", "video-games"]) {
+    assert.ok(registry[0].includes(`slug: "${slug}"`), `the registry must still know ${slug}`);
+  }
+  assert.match(/function resolveMarketScanTag[\s\S]*?\n\}/.exec(BOT)[0], /MARKET_SCAN_CATEGORY_TAGS\.find/);
+  assert.match(/function scrapedSimulationCategories[\s\S]*?\n\}/.exec(BOT)[0], /MARKET_SCAN_CATEGORY_TAGS\.map/);
+});

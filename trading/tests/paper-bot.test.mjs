@@ -1985,9 +1985,13 @@ test("market scan: sports and esports get a guaranteed slot every hour", async (
   const scopes = await bot.marketScanScopes();
   const indexOf = (slug) => scopes.findIndex((scope) => scope.tag?.slug === slug);
   assert.deepEqual(bot.MARKET_SCAN_HOURLY_TAG_SLUGS, ["sports", "esports"]);
-  // The rotation is long enough that these tags' full pass came round only every few
-  // hours, which is what the guaranteed slot exists to fix.
-  assert.ok(scopes.length > 20, `expected the full rotation, got ${scopes.length}`);
+  // The rotation used to be the whole navigation tree, and these tags' full pass came round
+  // only every few hours -- which is what the guaranteed slot exists to fix. The scan is now
+  // scoped to sport and esport, so the rotation is exactly those two: no untagged sweep, and
+  // nothing else to starve them. The guaranteed slot still earns its keep, because a single
+  // tag's pass walks every cursor page and can itself run past the hour.
+  assert.ok(indexOf("sports") >= 0 && indexOf("esports") >= 0, "both tags must be in the rotation");
+  assert.deepEqual(scopes.map((scope) => scope.tag?.slug ?? "all"), ["sports", "esports"]);
 
   const now = Date.parse("2026-08-06T18:00:00Z");
   const iso = (minutesAgoValue) => new Date(now - minutesAgoValue * 60000).toISOString();

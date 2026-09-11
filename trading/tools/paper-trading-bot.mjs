@@ -373,9 +373,14 @@ const MARKET_SCAN_MIN_RESOLUTION_HOURS = MARKET_SCAN_MIN_RESOLUTION_MINUTES / 60
 const ONE_HOUR_IN_DAYS = 1 / 24;
 const MIN_ANNUALIZATION_DAYS = Math.max(ONE_HOUR_IN_DAYS, envNumber("PAPER_MIN_ANNUALIZATION_DAYS", ONE_HOUR_IN_DAYS));
 const MARKET_SCAN_TAG = String(process.env.PAPER_MARKET_SCAN_TAG || "").trim().toLowerCase();
-// These are Polymarket's broad navigation tags plus active geopolitical
-// subcategories. Every scheduled catalogue scan walks every page of every
-// listed scope. The untagged request covers general/unclassified events.
+// Polymarket's broad navigation tags plus active geopolitical subcategories, with the
+// numeric Gamma id each slug resolves to.
+//
+// This is the registry, not the scan plan. Three readers depend on it staying complete:
+// `resolveMarketScanTag` uses it to turn a slug into an id without a Gamma request, the
+// archive rebuilds a settled market's broad categories from it, and the scan-state caps are
+// sized by it. Narrowing THIS list would rewrite the recorded past and make every
+// out-of-scope slug cost a network round trip. What the scan visits is the rotation below.
 const MARKET_SCAN_CATEGORY_TAGS = [
   { id: "1", slug: "sports" },
   { id: "2", slug: "politics" },
@@ -401,6 +406,36 @@ const MARKET_SCAN_CATEGORY_TAGS = [
   { id: "180", slug: "israel" },
   { id: "303", slug: "china" },
 ];
+
+// Which of those the scan actually visits, and the only markets the catalogue retains.
+//
+// Set on the owner's instruction: these portfolios trade sport and esport, and every other
+// category was spending the catalogue's capacity on markets that would never be picked.
+//
+// Measured before anything was dropped, on the 8000 retained rows: sports + esports keeps
+// 6845 and drops 1155, and not one sport or esport slug disappears with them. What goes is
+// weather (489 highest-temperature, 282 lowest-temperature, and a long tail of cities),
+// crypto strike ladders (141 ethereum, 284 multi-strikes), macro and geopolitics.
+//
+// The games are safe because their markets carry `esports` alongside the game itself:
+// league-of-legends 370 rows, dota-2 172, valorant 31, honor-of-kings and rainbow-six-siege
+// too -- all covered. That was worth checking rather than assuming, because a filter that
+// starved leagueoflegends or counterstrike2 would have shown up only as positions quietly
+// ceasing to open, days later and hard to attribute.
+//
+// An empty scope turns the restriction off rather than scanning nothing, so it can be
+// widened again from configuration alone.
+const MARKET_SCAN_TAG_SCOPE = String(process.env.PAPER_MARKET_SCAN_TAG_SCOPE ?? "sports,esports")
+  .split(",")
+  .map((slug) => slug.trim().toLowerCase())
+  .filter(Boolean);
+
+// The rotation: the scopes a scheduled scan walks, in order. A narrowed scope also drops the
+// untagged "all active events" sweep, because that sweep is what pulls in the categories
+// retention then immediately deletes -- paying for pages of weather to throw them away.
+const MARKET_SCAN_ROTATION_TAGS = MARKET_SCAN_TAG_SCOPE.length
+  ? MARKET_SCAN_CATEGORY_TAGS.filter((tag) => MARKET_SCAN_TAG_SCOPE.includes(tag.slug))
+  : MARKET_SCAN_CATEGORY_TAGS;
 // The portfolios run on Polymarket's own quoted probability; no external model is
 // consulted. This is the single switch that keeps it that way, and it is off unless
 // explicitly turned on: it forces every probability source to polymarket, stops any
@@ -2828,12 +2863,40 @@ function mergeMarketObservationLists(primary = [], secondary = []) {
   return normalized;
 }
 
+// Whether a market belongs to the scanned categories at all.
+//
+// Reads every tag field the codebase consults, through the same helper the portfolio filters
+// use -- a row whose tags live in the one field a reader forgot has cost this codebase real
+// money before, and it would cost it here as a market silently deleted.
+//
+// A row carrying no readable tag is KEPT. Untagged is not the same as out of scope, and the
+// next scan re-tags it; deleting it would lose a market on the strength of missing metadata.
+//
+// "general" counts as no tag. It is the placeholder this codebase stamps in nine places when
+// it does not know a row's category, and rowTagSlugs reads riskCategory -- so without this
+// line a market whose tags had not landed yet reads as tagged, out of scope, and is deleted.
+// That is the exact failure this rule exists to prevent, arriving through the back door.
+const UNKNOWN_TAG_SLUGS = new Set(["general"]);
+
+function marketObservationInScannedScope(item = {}) {
+  if (!MARKET_SCAN_TAG_SCOPE.length) return true;
+  const slugs = [...rowTagSlugs(item)].filter((slug) => !UNKNOWN_TAG_SLUGS.has(slug));
+  if (!slugs.length) return true;
+  return MARKET_SCAN_TAG_SCOPE.some((slug) => slugs.includes(slug));
+}
+
 function retainMarketObservations(items = []) {
   const active = [];
   const resolved = [];
   for (const item of Array.isArray(items) ? items : []) {
     const status = String(item?.status || item?.selectionStatus || "").toUpperCase();
     if (status !== "RESOLVED") {
+      // Out of scope, so it goes -- unless a portfolio is holding it. A market someone has
+      // a position in must stay readable however the scope has narrowed since, or the row
+      // backing an open position disappears from under it.
+      if (!marketObservationInScannedScope(item) && item?.executionRetentionProtected !== true) {
+        continue;
+      }
       active.push(item);
       continue;
     }
@@ -10113,7 +10176,7 @@ function scanCategoriesForRun(previousScan = {}) {
     const selected = MARKET_SCAN_CATEGORY_TAGS.find((tag) => tag.slug === MARKET_SCAN_TAG);
     return selected ? [selected] : [];
   }
-  return MARKET_SCAN_CATEGORY_TAGS;
+  return MARKET_SCAN_ROTATION_TAGS;
 }
 
 function annotateCategoryScanMarkets(markets, tag) {
@@ -10554,8 +10617,10 @@ async function marketScanScopes(resolvedTagIds = {}, auditCalls = null) {
     return [{ key: `tag:${selected.slug}`, label: `Category: ${selected.slug}`, tag: selected }];
   }
   return [
-    { key: "all", label: "All active events", tag: null },
-    ...MARKET_SCAN_CATEGORY_TAGS.map((tag) => ({ key: `tag:${tag.slug}`, label: `Category: ${tag.slug}`, tag })),
+    // The untagged sweep is what makes the scan broad. With a narrowed scope it would fetch
+    // page after page of categories retention deletes on arrival, so it goes with them.
+    ...(MARKET_SCAN_TAG_SCOPE.length ? [] : [{ key: "all", label: "All active events", tag: null }]),
+    ...MARKET_SCAN_ROTATION_TAGS.map((tag) => ({ key: `tag:${tag.slug}`, label: `Category: ${tag.slug}`, tag })),
   ];
 }
 
