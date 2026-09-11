@@ -102,7 +102,9 @@ def trade_rows(account: str, portfolio_id: str, rows: list[dict[str, Any]]) -> l
         out.append({
             **row,
             "account": account,
-            "portfolioId": portfolio_id,
+            # The row's own portfolio wins when it has one: live rows are stamped by the
+            # sync, and only paper rows take the id from the segment they were read out of.
+            "portfolioId": str(row.get("portfolioId") or portfolio_id or "").strip(),
             "closed": status in {"CLOSED", "REDEEMED", "RESOLVED", "SOLD"},
         })
     return out
@@ -198,8 +200,22 @@ def main() -> int:
             observations, batches = ingest_paper(url, key, state_file, state, target)
             print(f"Mirrored paper state, {observations} observations in {batches} batch(es)")
         else:
-            post(url, key, {"target": target, "state": state, "events": event_rows("state-run-log", target, list_rows(state.get("runLog")))})
-            print(f"Mirrored {target} state")
+            # Live rows carry their portfolio only once the sync has stamped it, and the API
+            # refuses a trade without one rather than filing it under an empty string. So an
+            # unstamped row is simply not sent -- it is the row whose owner is genuinely
+            # unknown, and inventing a portfolio for it is the one thing this must not do.
+            live_trades = trade_rows("live", "", list_rows(state.get("positions"))) \
+                + trade_rows("live", "", list_rows(state.get("closedTrades")))
+            live_trades = [row for row in live_trades if str(row.get("portfolioId") or "").strip()]
+            post(url, key, {
+                "target": target,
+                "state": state,
+                "events": event_rows("state-run-log", target, list_rows(state.get("runLog"))),
+                "trades": live_trades[:2000],
+            })
+            for start in range(2000, len(live_trades), 2000):
+                post(url, key, {"target": target, "trades": live_trades[start:start + 2000]})
+            print(f"Mirrored {target} state, {len(live_trades)} attributed trade(s)")
         return 0
     except (OSError, ValueError, RuntimeError, urllib.error.URLError, urllib.error.HTTPError) as error:
         print(f"Trading SQL mirror failed: {error}", file=sys.stderr)

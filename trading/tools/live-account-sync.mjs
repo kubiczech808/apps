@@ -5,6 +5,11 @@ import { dirname } from "node:path";
 import { pathToFileURL } from "node:url";
 
 const DATA_API = process.env.POLYMARKET_DATA_API || "https://data-api.polymarket.com";
+const TRADING_HOST = process.env.TRADING_HOST || "https://www.osobnizkusenosti.cz/trading";
+// The dashboard's tolerance for matching a fill back to the order that placed it, copied so
+// a row is attributed here exactly as it is on screen. A looser one here would file trades
+// under a portfolio the dashboard shows in another.
+const OWNERSHIP_PRICE_TOLERANCE = 0.02;
 const GAMMA_API = process.env.POLYMARKET_GAMMA_API || "https://gamma-api.polymarket.com";
 const CLOB_HOST = process.env.POLYMARKET_HOST || "https://clob.polymarket.com";
 const POLYGON_RPC = process.env.POLYGON_RPC_URL || "https://polygon-bor-rpc.publicnode.com";
@@ -2088,6 +2093,59 @@ async function enrichPositionDatesFromGamma(positions = [], generatedAt = new Da
   }));
 }
 
+// Which portfolio placed a row, stamped ONTO the row so it never has to be worked out again.
+//
+// Live rows carry no portfolio of their own: one wallet, and every live portfolio but 5050
+// prices its bids the same way off the book, so ownership has always been re-derived on each
+// render from the execution run log. That log is a rolling window, and past its end 211 of
+// 352 closed rows belonged to nobody and fell to base Live with their stake and their P/L.
+//
+// The database will not take a trade without a portfolio -- filing one under an empty string
+// is how the gap stayed invisible -- so this is also what makes the long-term record
+// possible at all. Stamped once here, it travels with the row through
+// mergeClosedTradeHistory forever, and stops depending on any window.
+async function liveOrderOwnership() {
+  try {
+    const payload = await fetchJson(`${TRADING_HOST}/api.php?action=live-order-ownership`, "live order ownership");
+    const rows = Array.isArray(payload?.orders) ? payload.orders : [];
+    const byToken = new Map();
+    for (const row of rows) {
+      const tokenId = String(row?.tokenId || "");
+      if (!tokenId) continue;
+      if (!byToken.has(tokenId)) byToken.set(tokenId, []);
+      byToken.get(tokenId).push({ mode: String(row?.mode || ""), price: number(row?.price), at: String(row?.at || "") });
+    }
+    return byToken;
+  } catch {
+    // An unreachable endpoint leaves rows unstamped, which is the state they are in today.
+    // It must never fail the sync: the account snapshot is the more important half.
+    return new Map();
+  }
+}
+
+function stampPortfolioOwnership(rows, ownership) {
+  if (!(ownership instanceof Map) || !ownership.size) return Array.isArray(rows) ? rows : [];
+  return (Array.isArray(rows) ? rows : []).map((row) => {
+    // Never re-decide a row that already carries one. The stamp is meant to be permanent,
+    // and a later pass whose ownership lookup came back thin would otherwise take it away.
+    if (row?.portfolioId) return row;
+    const tokenId = String(row?.tokenId || row?.assetId || "");
+    const orders = tokenId ? ownership.get(tokenId) : null;
+    if (!orders?.length) return row;
+    const paid = number(row?.entryPrice ?? row?.avgPrice);
+    // An unknown buy price leaves an unknown owner rather than a guessed one -- the same
+    // rule the dashboard applies, and the reason this is a record and not an inference.
+    if (paid == null) return row;
+    const matched = orders.filter((order) => order.price != null
+      && Math.abs(paid - order.price) < OWNERSHIP_PRICE_TOLERANCE);
+    if (!matched.length) return row;
+    // The newest order for a token wins, so a market re-entered after another portfolio
+    // closed out belongs to whoever ordered it last.
+    const owner = matched.sort((left, right) => (Date.parse(right.at || "") || 0) - (Date.parse(left.at || "") || 0))[0];
+    return owner?.mode ? { ...row, portfolioId: owner.mode } : row;
+  });
+}
+
 // CLOB open-order records contain trading fields only. Preserve the Gamma
 // event identity so another market from the same match is never treated as an
 // unrelated opportunity. Gamma can occasionally return an empty response
@@ -2637,10 +2695,17 @@ async function main() {
     sync.warnings.push(`position-history-overlap-${String(position.tokenId || position.conditionId || position.question || "").slice(0, 24)}:`
       + ` kept an unresolved position of ${shares.toFixed(4)} shares that the closed-trade history also claims`);
   }
-  const closedTrades = mergeClosedTradeHistory(
-    [...historyClosedTrades, ...resolvedPositionRows],
-    previousLiveState,
-    generatedAt,
+  // Stamped before the merge, so the merge carries the stamp forward with everything else it
+  // preserves -- and stamped on both halves, because an open position becomes a closed trade
+  // and the portfolio must not change when it does.
+  const ownership = await liveOrderOwnership();
+  const closedTrades = stampPortfolioOwnership(
+    mergeClosedTradeHistory(
+      [...historyClosedTrades, ...resolvedPositionRows],
+      previousLiveState,
+      generatedAt,
+    ),
+    ownership,
   );
   const openOrders = await enrichOpenOrdersWithMarketMetadata(
     Array.isArray(balanceAllowance?.openOrders) ? balanceAllowance.openOrders : [],
@@ -2655,7 +2720,7 @@ async function main() {
     openOrders,
     generatedAt,
   );
-  const reconciledPositions = [...openApiPositions];
+  const reconciledPositions = stampPortfolioOwnership([...openApiPositions], ownership);
   if (reconciliation.orphanedCount > 0) {
     sync.status = sync.status === "ERROR" ? "ERROR" : "PARTIAL";
     sync.warnings.push(`${reconciliation.orphanedCount} live ledger trade(s) are visible only via activity/trade history and were kept as audit-only reconciliation rows`);
