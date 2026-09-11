@@ -9,6 +9,10 @@ name: RPi Runner Inventory
 # under the wrong name, or its .runner file is missing and svc.sh fell back to the machine
 # name. Those need different fixes, and guessing between them risks the runner that
 # everything on this Pi depends on.
+#
+# No heredocs anywhere below: a heredoc inside a YAML block scalar has to be indented into
+# the block, and getting that wrong makes the whole workflow file unparseable -- which is
+# exactly what the first version of this file did.
 on:
   workflow_dispatch:
 
@@ -28,25 +32,24 @@ jobs:
             [ -d "$dir" ] || continue
             echo "   ${dir}"
             if [ -f "${dir}/.runner" ]; then
-              # The agent name and the pool it joined. No tokens live in this file; the
-              # credentials are in .credentials, which is deliberately not read here.
-              python3 - "$dir/.runner" <<'PY'
-import json, sys
-try:
-    cfg = json.load(open(sys.argv[1]))
-    print(f"      agentName: {cfg.get('agentName')}   pool: {cfg.get('poolName')}   work: {cfg.get('workFolder')}")
-except Exception as error:
-    print(f"      .runner could not be read: {error}")
-PY
+              # The agent name and the pool it joined. No credentials are read: those live in
+              # .credentials, which this deliberately never touches.
+              python3 -c "import json,sys; c=json.load(open(sys.argv[1])); print('      agentName:', c.get('agentName'), '  pool:', c.get('poolName'), '  work:', c.get('workFolder'))" "${dir}/.runner" \
+                || echo "      .runner could not be read"
             else
               echo "      !! no .runner file -- this agent is NOT configured"
             fi
-            [ -f "${dir}/.service" ] && echo "      .service: $(cat "${dir}/.service")" || echo "      no .service file"
+            if [ -f "${dir}/.service" ]; then
+              echo "      .service: $(cat "${dir}/.service")"
+            else
+              echo "      no .service file"
+            fi
           done
 
           echo ""
           echo "== runner services known to systemd"
           ls -1 /etc/systemd/system/actions.runner.*.service 2>/dev/null || echo "   (none)"
+
           echo ""
           echo "== their state"
           for unit in /etc/systemd/system/actions.runner.*.service; do
