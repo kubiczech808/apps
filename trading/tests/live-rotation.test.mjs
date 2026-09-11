@@ -6431,3 +6431,29 @@ test("position dates: a failed lookup leaves the stored date alone", async () =>
     globalThis.fetch = originalFetch;
   }
 });
+
+// isWholeDayBucket exists twice on purpose: each runtime in this repo is deployed as one
+// self-contained file with no local imports, so a shared helper cannot be imported and has
+// to be copied. What must not happen is the two copies disagreeing -- one runtime writing a
+// marker the other does not recognize puts the 01:59 date straight back on screen, with
+// both files looking correct in isolation.
+test("day bucket: the sync and the dashboard recognize the same marker", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const [syncSource, appSource] = await Promise.all([
+    readFile(new URL("../tools/live-account-sync.mjs", import.meta.url), "utf8"),
+    readFile(new URL("../assets/app.js", import.meta.url), "utf8"),
+  ]);
+  const bodyOf = (source) => {
+    const at = source.indexOf("function isWholeDayBucket(value) {");
+    assert.ok(at > -1, "both files must carry the marker test");
+    return source.slice(at, source.indexOf("}", at) + 1).replace(/\s+/g, " ");
+  };
+  assert.equal(bodyOf(syncSource), bodyOf(appSource),
+    "the two copies of the whole-day marker must stay identical");
+
+  // And it must be the marker, not any 23:59. Gamma publishes a real 23:59:00 for some
+  // non-sports markets, and coarsening that would invent the very problem being fixed.
+  const isBucket = new Function(`${bodyOf(appSource)}\nreturn isWholeDayBucket;`)();
+  assert.equal(isBucket("2026-09-11T23:59:59.000Z"), true);
+  assert.equal(isBucket("2026-09-06T23:59:00.000Z"), false);
+});
