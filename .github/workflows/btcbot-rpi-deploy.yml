@@ -1,0 +1,117 @@
+name: Deploy BTC bot runner to Raspberry Pi
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - claude/energy-consumption-app-Nf7bh
+      - main
+    paths:
+      - 'btc-bot/src/**'
+      - 'btc-bot/tools/**'
+      - 'btc-bot/package.json'
+      - 'btc-bot/systemd/**'
+      - '.github/workflows/btcbot-rpi-deploy.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: btcbot-rpi-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy-rpi:
+    runs-on: [self-hosted, Linux, ARM64]
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: btc-bot
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Unit tests
+        run: node --test "tests/**/*.test.mjs"
+
+      - name: Install runtime without replacing state or credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          target=/home/openclaw2/.local/lib/btc-bot
+          config=/home/openclaw2/.config/btc-bot.env
+
+          test -f "$config"
+          sudo install -d -o openclaw2 -g openclaw2 -m 0755 "$target/src" "$target/tools"
+          sudo rsync -a --delete src/ "$target/src/"
+          sudo rsync -a --delete tools/ "$target/tools/"
+          sudo install -o openclaw2 -g openclaw2 -m 0644 package.json "$target/package.json"
+          sudo chown -R openclaw2:openclaw2 "$target/src" "$target/tools"
+
+          sudo install -d -o openclaw2 -g openclaw2 -m 0755 /home/openclaw2/.config/systemd/user
+          sudo install -o openclaw2 -g openclaw2 -m 0644 \
+            systemd/btc-bot.service /home/openclaw2/.config/systemd/user/btc-bot.service
+          sudo install -o openclaw2 -g openclaw2 -m 0644 \
+            systemd/btc-bot.timer /home/openclaw2/.config/systemd/user/btc-bot.timer
+
+          # Keep every existing credential and operator value. Only this data
+          # requirement changed: the daily strategy needs 140 complete days.
+          sudo env CONFIG_PATH="$config" python3 - <<'PY'
+          import os
+          import pwd
+          from pathlib import Path
+
+          path = Path(os.environ["CONFIG_PATH"])
+          lines = path.read_text(encoding="utf-8").splitlines()
+          updated = []
+          found = False
+          for line in lines:
+              if line.startswith("BOT_CANDLE_LIMIT="):
+                  updated.append("BOT_CANDLE_LIMIT=3600")
+                  found = True
+              else:
+                  updated.append(line)
+          if not found:
+              updated.append("BOT_CANDLE_LIMIT=3600")
+          path.write_text("\n".join(updated) + "\n", encoding="utf-8")
+          account = pwd.getpwnam("openclaw2")
+          os.chown(path, account.pw_uid, account.pw_gid)
+          os.chmod(path, 0o600)
+          PY
+
+      - name: Restart timer and run one verified pass
+        shell: bash
+        run: |
+          set -euo pipefail
+          uid="$(id -u openclaw2)"
+          user_systemctl=(sudo -u openclaw2 -H env \
+            XDG_RUNTIME_DIR="/run/user/$uid" \
+            DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$uid/bus" \
+            systemctl --user)
+
+          "${user_systemctl[@]}" daemon-reload
+          "${user_systemctl[@]}" enable --now btc-bot.timer
+          "${user_systemctl[@]}" restart btc-bot.timer
+          "${user_systemctl[@]}" restart btc-bot.service
+          "${user_systemctl[@]}" --no-pager --full status btc-bot.timer
+
+          sudo -u openclaw2 -H node - <<'NODE'
+          const fs = require('node:fs')
+          const path = '/home/openclaw2/.local/state/btc-bot/bot-state.json'
+          const state = JSON.parse(fs.readFileSync(path, 'utf8'))
+          const summary = {
+            updatedAt: state.updatedAt,
+            status: state.status,
+            savedBy: state.savedBy,
+            strategyId: state.settings?.strategyId,
+            portfolioName: state.settings?.portfolioName,
+            riskPct: state.settings?.risk?.riskPct,
+            stopAtr: state.settings?.strategy?.stopAtr,
+            lastAction: state.runs?.[0]?.action,
+            lastError: state.runs?.[0]?.error,
+          }
+          console.log(summary)
+          if (summary.strategyId !== 'momentum-breakout-v1') throw new Error('new strategy was not activated')
+          if (summary.riskPct !== 2 || summary.stopAtr !== 1) throw new Error('selected risk settings are not active')
+          if (summary.status === 'error' || summary.lastError) throw new Error(`first pass failed: ${summary.lastError}`)
+          NODE

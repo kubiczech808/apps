@@ -164,6 +164,11 @@ until the unit tests pass, `api.php` lints, and LN Markets accepts the
 credentials. After uploading it checks the live endpoint refuses an
 unauthenticated read, then runs one pass so the dashboard has something to show.
 
+Runtime changes also trigger `btcbot-rpi-deploy.yml` on the Pi's self-hosted
+runner. It preserves the env file and paper state, replaces only the versioned
+runtime and systemd units, then requires a successful pass with the selected
+strategy before the workflow can pass.
+
 > Scheduled workflows only run from the repository's **default branch**. Until
 > this branch is merged there, `btcbot-run.yml` and the weekly backtest can be
 > started by hand from the Actions tab but will not fire on their own.
