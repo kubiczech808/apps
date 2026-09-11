@@ -33,7 +33,10 @@ async function fetchJson(url, label) {
 
 const num = (value) => (Number.isFinite(Number(value)) ? Number(value) : null);
 const money = (value) => (num(value) == null ? "    -   " : `${num(value) >= 0 ? " " : ""}${num(value).toFixed(2)}`.padStart(8));
-const CUSTOM_ID = /^[a-z][a-z0-9]{2,23}$/;
+// The dashboard's own CUSTOM_PAPER_STRATEGY_ID. Copied rather than approximated: a narrower
+// pattern here silently drops portfolios from the report, which is exactly the kind of
+// probe bug that produces a confident wrong answer.
+const CUSTOM_ID = /^[a-z][a-zA-Z0-9]{1,30}$/;
 // The dashboard's own tolerance for matching a fill back to the order that placed it.
 const FIXED_ENTRY_PRICE_TOLERANCE = 0.02;
 
@@ -91,12 +94,20 @@ function ownerMode(row, orders) {
 }
 
 async function main() {
-  const [config, live] = await Promise.all([
+  const [configPayload, live] = await Promise.all([
     fetchJson(`${HOST}/api.php?action=portfolio-config`, "portfolio config"),
     fetchJson(`${HOST}/api.php?action=state&target=live`, "live state"),
   ]);
+  // The endpoint answers {ok, config}. Reading livePortfolios off the ENVELOPE finds
+  // nothing, and a report that silently covers only the two built-in portfolios looks
+  // exactly like a report that found nothing wrong with the others.
+  const config = (configPayload && typeof configPayload.config === "object" && configPayload.config) || configPayload || {};
   const livePortfolios = (config && typeof config.livePortfolios === "object" && config.livePortfolios) || {};
   const customIds = Object.keys(livePortfolios).filter((id) => CUSTOM_ID.test(id));
+  if (!customIds.length) {
+    console.log("!! no custom live portfolios found in the config -- the report below covers"
+      + " only the built-in Live and 5050 portfolios, which is probably a bug in this probe\n");
+  }
   const modes = [
     ["live", "data/live-execution-state.json"],
     ["live-5050", "data/live-5050-execution-state.json"],
