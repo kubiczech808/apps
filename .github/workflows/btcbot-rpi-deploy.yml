@@ -37,14 +37,14 @@ jobs:
       - name: Install runtime without replacing state or credentials
         shell: bash
         run: |
-          set -euo pipefail
+          set -euxo pipefail
           target=/home/openclaw2/.local/lib/btc-bot
           config=/home/openclaw2/.config/btc-bot.env
 
           test -f "$config"
           sudo install -d -o openclaw2 -g openclaw2 -m 0755 "$target/src" "$target/tools"
-          sudo rsync -a --delete src/ "$target/src/"
-          sudo rsync -a --delete tools/ "$target/tools/"
+          sudo cp -a src/. "$target/src/"
+          sudo cp -a tools/. "$target/tools/"
           sudo install -o openclaw2 -g openclaw2 -m 0644 package.json "$target/package.json"
           sudo chown -R openclaw2:openclaw2 "$target/src" "$target/tools"
 
