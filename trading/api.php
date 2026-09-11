@@ -431,7 +431,13 @@ function state_payload(
     array $segments = ['observations', 'evaluations'],
     ?string $selectedStrategyId = null,
     int $observationsLimit = 0,
-    int $observationsOffset = 0
+    int $observationsOffset = 0,
+    // Whether the active observations are the CURRENT catalogue or everything ever stored.
+    // Explicit rather than inferred from the limit, because the two readers that take no
+    // limit want opposite things: the execution summary feeds the bots their candidates and
+    // must see the catalogue, while the refresh worker merges one quote into the complete set
+    // and writes it back -- handing that one a filtered set would delete the rest on publish.
+    bool $freshObservationsOnly = false
 ): array {
     if (trading_storage_is_active()) {
         $document = trading_storage_document_get('state:' . $target);
@@ -447,9 +453,18 @@ function state_payload(
             // Zero means the whole lifecycle, which is what every caller other than the
             // scraped list wants -- the refresh worker merges one quote into the complete
             // set and must not be handed a page.
+            //
+            // And the CURRENT catalogue, not every market ever seen active. The database
+            // keeps all of them on purpose -- that history is why it exists -- but while the
+            // JSON files served these views the bound was implicit, because the published
+            // catalogue is itself a window. Measured before the cutover: 11442 of 23124
+            // stored active markets had been refreshed within a day and the rest were last
+            // seen seven to eleven days ago, with nothing in between. Serving all of them
+            // would have put eleven thousand week-old snapshots in front of the paper bots
+            // as tradable candidates.
             $document['marketObservations'] = $observationsLimit > 0
-                ? trading_storage_observations_fetch('SCRAPED', $observationsLimit, $observationsOffset)
-                : trading_storage_observations_fetch('SCRAPED');
+                ? trading_storage_observations_fetch('SCRAPED', $observationsLimit, $observationsOffset, $freshObservationsOnly)
+                : trading_storage_observations_fetch('SCRAPED', 0, 0, $freshObservationsOnly);
         }
         if (in_array('resolvedObservations', $segments, true)) {
             $document['marketObservations'] = array_merge(
@@ -1165,9 +1180,21 @@ function state_observation_totals(array $data): array
 {
     if (trading_storage_is_active()) {
         $counts = trading_storage_observation_counts();
-        $active = max(0, (int) ($counts['SCRAPED'] ?? 0));
+        // The active total is the CURRENT catalogue, because that is what the active views
+        // serve -- a label larger than the list it heads is the "records disappeared" report
+        // in reverse, and the page walk would chase rows that are never sent. The resolved
+        // total stays the whole archive: those views read all of it.
+        $active = max(0, (int) ($counts['SCRAPED_FRESH'] ?? $counts['SCRAPED'] ?? 0));
         $resolved = max(0, (int) ($counts['RESOLVED'] ?? 0));
-        return ['active' => $active, 'scraped' => $active, 'resolved' => $resolved, 'all' => $active + $resolved];
+        return [
+            'active' => $active,
+            'scraped' => $active,
+            'resolved' => $resolved,
+            'all' => $active + $resolved,
+            // Kept visible rather than folded away: the difference between the catalogue and
+            // everything ever mined is the history the database exists to hold.
+            'scrapedStored' => max(0, (int) ($counts['SCRAPED'] ?? 0)),
+        ];
     }
     $manifest = is_array($data['stateSegments'] ?? null) ? $data['stateSegments'] : [];
     $active = null;
@@ -6674,12 +6701,18 @@ try {
         $scrapedScope = ((string) ($_GET['scope'] ?? '')) === 'resolved' ? 'resolved' : 'active';
         // Load the segments this summary reads before decoding anything else. The
         // dashboard is by far the most requested view and needs none of them.
+        // The two views that present markets as tradable: the opportunities list and the
+        // shortlist the paper bots pick from. Both must see the current catalogue rather than
+        // every market ever stored -- while the JSON files served them that bound was
+        // implicit, because the published catalogue is itself a window.
+        $freshObservationsOnly = in_array($summary, ['scraped', 'execution'], true);
         $payload = state_payload(
             $target,
             state_segments_for_summary($summary, $scrapedScope),
             $strategyId,
             $observationsLimit,
-            $observationsOffset
+            $observationsOffset,
+            $freshObservationsOnly
         );
         if ($target === 'paper') {
             $payload = paper_state_with_consistent_portfolios($payload, $summary, $strategyId);

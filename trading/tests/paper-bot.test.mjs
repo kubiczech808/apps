@@ -5574,7 +5574,22 @@ test("scraped counts: the UI reports the archive, not the page it was served", a
   // The total comes off the COUNT query, never off the page.
   assert.match(api, /\$scopeTotal = max\(0, \(int\) \(\$totals\['scraped'\] \?\? \$totals\['active'\] \?\? 0\)\);/);
   // And the database is asked for one page, so the decode is bounded as well as the response.
-  assert.match(api, /trading_storage_observations_fetch\('SCRAPED', \$observationsLimit, \$observationsOffset\)/);
+  assert.match(api, /trading_storage_observations_fetch\('SCRAPED', \$observationsLimit, \$observationsOffset, \$freshObservationsOnly\)/);
+
+  // For the CURRENT catalogue, not every market ever stored. Measured before the cutover:
+  // 11442 of 23124 stored active markets had been refreshed within a day and the rest were
+  // last seen seven to eleven days ago, with nothing in between. Nothing is deleted -- the
+  // history is the point of the database -- but a market last seen eleven days ago is not a
+  // candidate, and the paper bots read the same list the dashboard renders.
+  assert.match(api, /\$freshObservationsOnly = in_array\(\$summary, \['scraped', 'execution'\], true\);/);
+  // Explicit, never inferred from the limit: the two readers that pass no limit want
+  // opposite things, and the refresh worker writes what it read back.
+  assert.match(api, /bool \$freshObservationsOnly = false\n\): array \{/);
+  // The label has to be counted on the same terms as the list, or it heads a list it does
+  // not match and the page walk chases rows that are never sent.
+  assert.match(api, /\$active = max\(0, \(int\) \(\$counts\['SCRAPED_FRESH'\] \?\? \$counts\['SCRAPED'\] \?\? 0\)\);/);
+  assert.match(api, /'scrapedStored' => max\(0, \(int\) \(\$counts\['SCRAPED'\] \?\? 0\)\),/,
+    "what the database holds beyond the catalogue stays visible rather than folded away");
 
   // ONE catalogue per response.
   //

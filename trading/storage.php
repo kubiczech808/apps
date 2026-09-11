@@ -1253,7 +1253,7 @@ function trading_storage_observation_freshness(): array
     return $stats;
 }
 
-function trading_storage_observations_fetch(string $lifecycle, int $limit = 0, int $offset = 0): array
+function trading_storage_observations_fetch(string $lifecycle, int $limit = 0, int $offset = 0, bool $freshOnly = false): array
 {
     $pdo = trading_storage_pdo();
     if (!$pdo instanceof PDO) {
@@ -1264,7 +1264,14 @@ function trading_storage_observations_fetch(string $lifecycle, int $limit = 0, i
     // alone has thousands of ties on this table -- one scan writes a whole page inside a
     // single transaction -- and the database is free to return tied rows in a different
     // order for each page. A walk over a non-total order silently misses and repeats rows.
+    //
+    // freshOnly is what the CURRENT catalogue means once the database is serving. Nothing is
+    // deleted -- the history stays and the archive views read all of it -- but a market last
+    // seen eleven days ago is not part of the catalogue the bots choose candidates from.
     $sql = 'SELECT payload FROM trading_observations WHERE lifecycle = :lifecycle'
+        . ($freshOnly
+            ? ' AND updated_at >= (NOW(6) - INTERVAL ' . trading_storage_catalogue_fresh_minutes() . ' MINUTE)'
+            : '')
         . ' ORDER BY updated_at DESC, id DESC';
     if ($limit > 0) {
         $sql .= ' LIMIT ' . min(100000, $limit);
@@ -1286,19 +1293,54 @@ function trading_storage_observations_fetch(string $lifecycle, int $limit = 0, i
     return $rows;
 }
 
+/**
+ * How long an observation counts as part of the CURRENT catalogue.
+ *
+ * The database keeps every market it has been sent -- that history is the point of it. The
+ * views are a different question: a row whose last snapshot said "active, accepting orders"
+ * goes on saying so however old that snapshot is, and the paper bots pick their candidates
+ * from the same list the dashboard renders. While the JSON files served those views the
+ * bound was implicit, because the published catalogue is itself a window.
+ *
+ * Measured on 23124 stored active markets: 11442 were refreshed within a day, the same 11442
+ * within seven days, and the remaining 11682 were last seen between seven and eleven days
+ * ago. Nothing at all falls between one day and seven, so any cutoff inside that gap
+ * separates the live catalogue from the historical one with days of margin either side.
+ * Three days sits in the middle of it.
+ */
+function trading_storage_catalogue_fresh_minutes(): int
+{
+    $configured = (int) (getenv('TRADING_CATALOGUE_FRESH_MINUTES') ?: 0);
+    if ($configured > 0) {
+        // Never tighter than a day: the scanner covers different tag slices on different
+        // passes, and a bound shorter than its own cycle would hide live markets.
+        return max(1440, min(525600, $configured));
+    }
+    return 4320;
+}
+
 function trading_storage_observation_counts(): array
 {
     $pdo = trading_storage_pdo();
     if (!$pdo instanceof PDO) {
-        return ['SCRAPED' => 0, 'RESOLVED' => 0];
+        return ['SCRAPED' => 0, 'RESOLVED' => 0, 'SCRAPED_FRESH' => 0, 'RESOLVED_FRESH' => 0];
     }
     trading_storage_bootstrap($pdo);
-    $rows = $pdo->query('SELECT lifecycle, COUNT(*) AS total FROM trading_observations GROUP BY lifecycle')->fetchAll();
-    $counts = ['SCRAPED' => 0, 'RESOLVED' => 0];
+    // Both numbers from one pass. The stored total is what was mined and is what the archive
+    // views report; the fresh count is the current catalogue and has to match what the active
+    // views actually serve, or the browser walks towards a total it can never reach and keeps
+    // asking for pages that come back empty.
+    $rows = $pdo->query(
+        'SELECT lifecycle, COUNT(*) AS total,
+                SUM(updated_at >= (NOW(6) - INTERVAL ' . trading_storage_catalogue_fresh_minutes() . ' MINUTE)) AS fresh
+         FROM trading_observations GROUP BY lifecycle'
+    )->fetchAll();
+    $counts = ['SCRAPED' => 0, 'RESOLVED' => 0, 'SCRAPED_FRESH' => 0, 'RESOLVED_FRESH' => 0];
     foreach ($rows as $row) {
         $lifecycle = strtoupper((string) ($row['lifecycle'] ?? ''));
         if (array_key_exists($lifecycle, $counts)) {
             $counts[$lifecycle] = (int) ($row['total'] ?? 0);
+            $counts[$lifecycle . '_FRESH'] = (int) ($row['fresh'] ?? 0);
         }
     }
     return $counts;
