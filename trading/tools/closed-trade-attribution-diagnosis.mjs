@@ -116,6 +116,28 @@ async function main() {
   const states = await Promise.all(modes.map(async ([mode, file]) => [mode, await executionState(file)]));
   const { orders, spans } = ordersByToken(states);
 
+  // The durable half: every run's log, mirrored into the event store on every execution and
+  // kept because the append is idempotent. The published state above is a 160-run window
+  // onto the same thing, so this can only ever add claims, never contradict one.
+  let ownership = null;
+  try {
+    ownership = await fetchJson(`${HOST}/api.php?action=live-order-ownership`, "live order ownership");
+  } catch (error) {
+    console.log(`!! the durable ownership endpoint failed: ${error?.message || error}\n`);
+  }
+  const windowOnly = new Map([...orders].map(([token, rows]) => [token, [...rows]]));
+  for (const entry of (Array.isArray(ownership?.orders) ? ownership.orders : [])) {
+    const tokenId = String(entry?.tokenId || "");
+    if (!tokenId) continue;
+    if (!orders.has(tokenId)) orders.set(tokenId, []);
+    orders.get(tokenId).push({ mode: String(entry?.mode || ""), price: num(entry?.price), at: String(entry?.at || "") });
+  }
+  if (ownership) {
+    console.log(`durable run-log history: storage ${ownership.storageActive ? "ACTIVE" : "INACTIVE"},`
+      + ` oldest run ${ownership.oldestRunAt || "-"}, ${(ownership.orders || []).length} orders on record`);
+    console.log(`   runs per portfolio: ${JSON.stringify(ownership.runsPerMode || {})}\n`);
+  }
+
   const closed = Array.isArray(live?.closedTrades) ? live.closedTrades : [];
   console.log(`live state generated ${live?.generatedAt || "(unknown)"}`);
   console.log(`closed rows on the account: ${closed.length}`);
@@ -138,12 +160,16 @@ async function main() {
   const claimed = new Map(modes.map(([mode]) => [mode, []]));
   const unclaimedTokenless = [];
   const unclaimedAged = [];
+  // What the 160-run window alone could claim, so the report says what the durable history
+  // actually recovered rather than only what the total is now.
+  let windowClaimed = 0;
   for (const row of closed) {
     const tokenId = String(row?.tokenId || row?.assetId || "");
     if (!tokenId) {
       unclaimedTokenless.push(row);
       continue;
     }
+    if (ownerMode(row, windowOnly)) windowClaimed += 1;
     const owner = ownerMode(row, orders);
     if (owner && claimed.has(owner)) claimed.get(owner).push(row);
     else unclaimedAged.push(row);
@@ -161,6 +187,8 @@ async function main() {
 
   const lostPnl = unclaimedAged.reduce((sum, row) => sum + (num(row.realizedPnlUsdc) || 0), 0);
   const lostStake = unclaimedAged.reduce((sum, row) => sum + (num(row.totalCostUsdc ?? row.stakeUsdc) || 0), 0);
+  console.log(`\n   claimable from the 160-run window alone: ${windowClaimed} rows`);
+  console.log(`   claimable with the durable history:      ${closed.length - unclaimedAged.length - unclaimedTokenless.length} rows`);
   console.log(`\n   UNCLAIMED, with a token       ${String(unclaimedAged.length).padStart(4)} rows`
     + `   realized ${money(lostPnl)}   stake ${money(lostStake)}`);
   console.log(`   unclaimed, tokenless          ${String(unclaimedTokenless.length).padStart(4)} rows`
