@@ -5999,3 +5999,235 @@ test("the catalogue keeps sport and esport, and never drops a market someone hol
   assert.match(/function resolveMarketScanTag[\s\S]*?\n\}/.exec(BOT)[0], /MARKET_SCAN_CATEGORY_TAGS\.find/);
   assert.match(/function scrapedSimulationCategories[\s\S]*?\n\}/.exec(BOT)[0], /MARKET_SCAN_CATEGORY_TAGS\.map/);
 });
+
+test("tag policy: a whitelist and an exclusion combine, so sport without tennis is expressible", () => {
+  // The two lists used to be alternatives: a populated whitelist discarded the exclusions
+  // entirely, so a tennis exclusion sat in the form looking active while tennis kept
+  // trading. They are one policy in two steps now -- include narrows, exclude subtracts.
+  const allows = new Function("strategy", "item", `
+    ${/const TAG_FIELDS = \[[\s\S]*?\n\];/.exec(BOT)[0]}
+    ${/const TAG_CATEGORY_FIELDS = \[[^\]]*\];/.exec(BOT)[0]}
+    ${/function rowTagSlugs[\s\S]*?\n\}/.exec(BOT)[0]}
+    ${/function excludedTagsOnRow[\s\S]*?\n\}/.exec(BOT)[0]}
+    ${/function includedTagsOnRow[\s\S]*?\n\}/.exec(BOT)[0]}
+    ${/function strategyAllowsTags[\s\S]*?\n\}/.exec(BOT)[0]}
+    return strategyAllowsTags(item, strategy);
+  `);
+  const policy = {
+    includeOnlyMarketTags: new Set(["sports"]),
+    excludedMarketTags: new Set(["tennis"]),
+  };
+  const market = (...tags) => ({ polymarketTags: tags });
+
+  // The case the owner asked for, and the one the old rule could not express.
+  assert.equal(allows(policy, market("sports", "soccer")), true);
+  assert.equal(allows(policy, market("sports", "tennis")), false);
+  // Still outside the whitelist, exclusions or not.
+  assert.equal(allows(policy, market("politics")), false);
+
+  // Each list alone keeps working exactly as before.
+  assert.equal(allows({ includeOnlyMarketTags: new Set(["sports"]) }, market("sports", "tennis")), true);
+  assert.equal(allows({ excludedMarketTags: new Set(["tennis"]) }, market("politics")), true);
+  assert.equal(allows({ excludedMarketTags: new Set(["tennis"]) }, market("sports", "tennis")), false);
+  // No policy at all admits everything.
+  assert.equal(allows({}, market("tennis")), true);
+
+  // The dashboard has to reject for the same reason the bot does, or the shortlist explains
+  // a market the bot then trades. Both rejection builders stopped using `else`.
+  for (const [label, source] of [["bot", BOT], ["dashboard", APP]]) {
+    const clause = /outside included tags[\s\S]{0,220}/.exec(source);
+    assert.ok(clause, `${label} must still name the whitelist rejection`);
+    assert.ok(!/\}\s*else\s*\{/.test(clause[0]),
+      `${label} must not make the exclusions an else branch of the whitelist`);
+  }
+  // And the scope filter that feeds the reports, which had the same shape.
+  const scope = /const include = configTagSet[\s\S]{0,600}?return true;/.exec(BOT);
+  assert.ok(scope, "the scope tag filter must be findable");
+  assert.ok(!/if \(!include\.size\) \{/.test(scope[0]),
+    "the scope filter must apply exclusions whether or not a whitelist is set");
+
+  // The form must offer both at once. Hiding the exclusions behind a populated whitelist is
+  // what made them look inert in the first place.
+  assert.ok(!/excludedTagsRow\?\.toggleAttribute\("hidden"/.test(APP),
+    "the excluded tags row must not be hidden when a whitelist is set");
+});
+
+// A DOM small enough to read in full, so a passing test cannot be the stub being generous.
+// Only what the widget actually touches is implemented; anything else throws by absence.
+function stubDocument() {
+  const create = (tag) => {
+    const node = {
+      tagName: String(tag).toUpperCase(),
+      children: [], parentNode: null, attributes: {}, listeners: {},
+      className: "", textContent: "", value: "", type: "", placeholder: "",
+      autocomplete: "", hidden: false,
+      append(...kids) { for (const kid of kids) { kid.parentNode = node; node.children.push(kid); } },
+      replaceChildren(...kids) { node.children = []; node.append(...kids); },
+      setAttribute(name, value) { node.attributes[name] = String(value); },
+      getAttribute(name) { return Object.hasOwn(node.attributes, name) ? node.attributes[name] : null; },
+      toggleAttribute(name, force) {
+        const on = force === undefined ? !Object.hasOwn(node.attributes, name) : Boolean(force);
+        if (on) node.attributes[name] = ""; else delete node.attributes[name];
+        return on;
+      },
+      matches(selector) {
+        const attribute = /^\[([a-z-]+)\]$/.exec(selector);
+        return attribute ? Object.hasOwn(node.attributes, attribute[1]) : false;
+      },
+      closest(selector) {
+        for (let at = node; at; at = at.parentNode) if (at.matches(selector)) return at;
+        return null;
+      },
+      addEventListener(type, handler) { (node.listeners[type] ||= []).push(handler); },
+      dispatchEvent(event) {
+        for (const handler of (node.listeners[event.type] || [])) handler(event);
+        return true;
+      },
+      focus() { document.activeElement = node; },
+    };
+    return node;
+  };
+  const document = { createElement: create, activeElement: null };
+  return document;
+}
+
+test("tag policy form: slugs are chosen from the catalogue as removable chips, not typed into a comma list", () => {
+  const document = stubDocument();
+  const host = document.createElement("div");
+  host.setAttribute("data-tag-chip-field", "");
+  const input = document.createElement("input");
+  input.type = "hidden";
+  host.append(input);
+
+  const sandbox = new Function("document", "state", `
+    ${/const PER_FIXTURE_TAXONOMY_LABEL = .*/.exec(APP)[0]}
+    const MARKET_SCAN_CATEGORIES = ["sports", "esports", "politics"];
+    const formatInteger = (value) => String(value);
+    const tagChipFields = new WeakMap();
+    ${extractFunction(APP, "normalizedScrapedScanTag")}
+    ${extractFunction(APP, "normalizeMarketTagList")}
+    ${extractFunction(APP, "marketTagSlugsOf")}
+    ${extractFunction(APP, "tagVocabulary")}
+    ${extractFunction(APP, "tagChipValues")}
+    ${extractFunction(APP, "writeTagChipValues")}
+    ${extractFunction(APP, "renderTagChips")}
+    ${extractFunction(APP, "closeTagChipMenu")}
+    ${extractFunction(APP, "renderTagChipMenu")}
+    ${extractFunction(APP, "highlightTagChipOption")}
+    ${extractFunction(APP, "commitTagChip")}
+    ${extractFunction(APP, "initTagChipField")}
+    ${extractFunction(APP, "syncTagChipField")}
+    return { initTagChipField, syncTagChipField, tagVocabulary, tagChipFields };
+  `);
+
+  const state = {
+    scrapedMarketObservations: [
+      { polymarketTags: ["sports", "tennis"] },
+      { polymarketTags: ["sports", "tennis"] },
+      { polymarketTags: ["sports", "soccer"] },
+      // A per-fixture label. Offering these would bury the handful of slugs a policy can
+      // usefully name under thousands of one-offs, so the taxonomy filter drops them.
+      { polymarketTags: ["team:arsenal-2026-04-02"] },
+    ],
+  };
+  const api = sandbox(document, state);
+
+  // The catalogue is the vocabulary, commonest first.
+  const vocabulary = api.tagVocabulary().map((entry) => entry.slug);
+  assert.equal(vocabulary[0], "sports", "the commonest slug must be offered first");
+  assert.ok(vocabulary.includes("tennis") && vocabulary.includes("soccer"));
+  // The normalised spelling, which is the one that would actually reach the list: asserting
+  // the raw "team:arsenal-2026-04-02" passes whether or not the filter runs, because the
+  // colon never survives normalisation anyway.
+  assert.ok(!vocabulary.includes("team-arsenal-2026-04-02"), "per-fixture labels must not be offered");
+  assert.ok(vocabulary.includes("politics"), "the broad scan categories stay offerable");
+
+  let changes = 0;
+  input.addEventListener("change", () => { changes += 1; });
+  api.initTagChipField(input, "sports");
+  const field = api.tagChipFields.get(input);
+  const entry = field.entry;
+  const chipLabels = () => field.chips.children.map((chip) => chip.children[0].textContent);
+  const menuLabels = () => field.menu.children.map((option) => option.children[0].textContent);
+
+  // Typing narrows the suggestions to what the catalogue actually carries.
+  entry.value = "ten";
+  entry.dispatchEvent(new Event("input"));
+  assert.deepEqual(menuLabels(), ["tennis"]);
+  assert.equal(field.menu.hidden, false);
+
+  // Enter commits the highlighted suggestion as a chip, and the hidden input -- which is
+  // still the value every reader and the save path use -- is written and announced.
+  entry.dispatchEvent(new Event("keydown") && Object.assign(new Event("keydown"), {
+    key: "Enter", preventDefault() {},
+  }));
+  assert.deepEqual(chipLabels(), ["tennis"]);
+  assert.equal(input.value, "tennis");
+  assert.equal(changes, 1, "committing a chip must announce the change");
+  assert.equal(entry.value, "", "the typed text is consumed by the chip");
+  assert.equal(field.menu.hidden, true);
+
+  // Clicking a suggestion adds it too. mousedown, because blur would close the menu first.
+  entry.dispatchEvent(new Event("input"));
+  const sports = field.menu.children.find((option) => option.children[0].textContent === "sports");
+  assert.ok(sports, "an already-chosen tag is filtered out but sports is still offered");
+  sports.dispatchEvent(Object.assign(new Event("mousedown"), { preventDefault() {} }));
+  assert.deepEqual(chipLabels(), ["tennis", "sports"]);
+  assert.equal(input.value, "tennis, sports");
+  assert.equal(changes, 2);
+
+  // A committed tag is no longer suggested, or the list offers duplicates it would ignore.
+  entry.value = "tenn";
+  entry.dispatchEvent(new Event("input"));
+  assert.ok(!menuLabels().includes("tennis"));
+
+  // The cross removes exactly its own tag. Tested on the MIDDLE chip of three: removing the
+  // first is indistinguishable from "drop whichever chip is first", which is a bug that
+  // would delete the wrong half of someone's policy.
+  entry.value = "";
+  api.syncTagChipField(input, ["tennis", "sports", "esports"]);
+  const removeSports = field.chips.children[1].children[1];
+  assert.equal(removeSports.getAttribute("aria-label"), "Remove sports",
+    "each cross must name its own tag, or a screen reader hears a row of identical buttons");
+  removeSports.dispatchEvent(Object.assign(new Event("click"), {
+    preventDefault() {}, stopPropagation() {},
+  }));
+  assert.deepEqual(chipLabels(), ["tennis", "esports"]);
+  assert.equal(input.value, "tennis, esports");
+  assert.equal(changes, 3);
+
+  // Backspace on an empty box drops the LAST chip, not just any chip.
+  entry.dispatchEvent(Object.assign(new Event("keydown"), { key: "Backspace", preventDefault() {} }));
+  assert.deepEqual(chipLabels(), ["tennis"]);
+  entry.dispatchEvent(Object.assign(new Event("keydown"), { key: "Backspace", preventDefault() {} }));
+  assert.deepEqual(chipLabels(), []);
+  assert.equal(input.value, "");
+
+  // Half-typed text is committed on the way out rather than dropped: losing a tag because
+  // the box was left without pressing Enter is the silent loss this widget exists to stop.
+  entry.value = "esports";
+  entry.dispatchEvent(new Event("blur"));
+  assert.deepEqual(chipLabels(), ["esports"]);
+  assert.equal(input.value, "esports");
+
+  // A slug the catalogue has never carried is still allowed -- a tag can be correct before
+  // anything scraped uses it -- so the box must not look broken when nothing matches.
+  entry.value = "kabaddi";
+  entry.dispatchEvent(new Event("input"));
+  assert.deepEqual(menuLabels(), ["kabaddi"]);
+
+  // Reloading the config repaints the chips without going through change again, or every
+  // sync would look like an edit and re-save.
+  entry.value = "";
+  const before = changes;
+  api.syncTagChipField(input, ["sports", "esports"]);
+  assert.deepEqual(chipLabels(), ["sports", "esports"]);
+  assert.equal(changes, before, "a config repaint is not an edit");
+
+  // The form is wired to the widget rather than assigning .value behind its back, which
+  // would leave the chips showing a policy the input no longer holds.
+  assert.match(APP, /syncTagChipField\(els\.includeOnlyTags, includeOnlyTags\);/);
+  assert.match(APP, /syncTagChipField\(els\.excludedTags, excludedTags\);/);
+  assert.match(APP, /initTagChipField\(els\.includeOnlyTags,/);
+  assert.match(APP, /initTagChipField\(els\.excludedTags,/);
+});

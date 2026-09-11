@@ -1955,6 +1955,124 @@ body.modal-open {
   color: var(--accent-dark);
 }
 
+/* Tag policy fields. A row of removable chips plus a text entry that searches the
+   catalogue's own slugs, so a policy is built from tags that exist rather than typed from
+   memory into a comma list where a misspelling is invisible. */
+.tag-chip-field {
+  position: relative;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-height: 38px;
+  padding: 5px 8px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #ffffff;
+  cursor: text;
+}
+
+.tag-chip-field:focus-within {
+  border-color: var(--accent-dark);
+}
+
+.tag-chips {
+  display: contents;
+}
+
+.tag-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 4px 3px 9px;
+  border-radius: 999px;
+  background: var(--soft);
+  border: 1px solid var(--line);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.tag-chip-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  /* 20px, so the cross is a real touch target on a phone rather than a decoration. */
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--muted);
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.tag-chip-remove:hover,
+.tag-chip-remove:focus-visible {
+  background: var(--accent-dark);
+  color: #ffffff;
+}
+
+.tag-chip-entry {
+  flex: 1 1 90px;
+  min-width: 90px;
+  border: 0;
+  padding: 4px 2px;
+  font: inherit;
+  font-weight: 800;
+  background: transparent;
+}
+
+.tag-chip-entry:focus {
+  outline: none;
+}
+
+.tag-chip-menu {
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  max-height: 240px;
+  overflow-y: auto;
+  margin: 0;
+  padding: 4px;
+  list-style: none;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.16);
+}
+
+.tag-chip-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 7px 9px;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.tag-chip-option[data-active],
+.tag-chip-option:hover {
+  background: var(--soft);
+}
+
+/* Scoped through .tag-chip-menu to outrank `.parameter-control em`, which sits later in the
+   file and would otherwise restyle the count badge inside the dropdown. */
+.tag-chip-menu .tag-chip-option em {
+  grid-column: auto;
+  color: var(--muted);
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 750;
+}
+
 .parameter-control em {
   grid-column: 2 / -1;
   color: var(--muted);

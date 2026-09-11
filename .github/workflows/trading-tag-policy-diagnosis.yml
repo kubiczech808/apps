@@ -1,0 +1,26 @@
+name: Trading Tag Policy Diagnosis
+
+# READ-ONLY, manual only. One public GET against the published config, no secrets, no writes.
+#
+# Asked because the include-only and excluded tag lists now combine instead of the whitelist
+# discarding the exclusions. That is the point of the change -- it is what lets a portfolio
+# ask for sport WITHOUT tennis -- but it also means an exclusion that had been inert starts
+# applying. This names the portfolios that holds both, so a narrowing is expected rather than
+# discovered later from a portfolio that quietly stopped opening positions.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Which portfolios hold both tag lists
+        env:
+          TRADING_HOST: https://osobnizkusenosti.cz/trading
+        run: python3 trading/tools/tag-policy-probe.py

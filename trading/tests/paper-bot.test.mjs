@@ -6294,9 +6294,11 @@ test("5050 tags: the setting defaults to sports and esports and reaches the exec
   // same slugging; this used to be an inline `new Set(...)`.
   assert.match(executor, /const FIXED_ENTRY_ALLOWED_TAGS = envTagSet\("LIVE_FIXED_ENTRY_ALLOWED_TAGS"\);/);
   assert.match(executor, /if \(!marketTagIsAllowed\(row\)\) \{\n\s+note\(`outside this portfolio's tags/);
-  // And it is editable, with the tag row shown only on the 5050 tab.
-  assert.match(html, /<input type="text" placeholder="sports, esports" data-fixed-entry-tags>/);
-  assert.match(html, /data-fixed-entry-row title="Comma separated Polymarket tags/);
+  // And it is editable, with the tag row shown only on the 5050 tab. The box is a chip
+  // field now: the input is hidden and still carries the comma list, while the slugs are
+  // chosen from the catalogue rather than typed.
+  assert.match(html, /<div class="tag-chip-field" data-tag-chip-field>\n\s+<input type="hidden" data-fixed-entry-tags>/);
+  assert.match(html, /data-fixed-entry-row title="Polymarket tags/);
 });
 
 test("5050 tags: the shortlist and the run agree on which markets qualify", async () => {
@@ -6903,9 +6905,13 @@ test("excluded tags: every portfolio carries the setting, and it starts empty", 
 
   // Editable on every tab: the row carries no data-fixed-entry-row, which is what hides
   // the 5050-only controls everywhere else.
-  const row = html.slice(html.indexOf('data-excluded-tags-label') - 400, html.indexOf('data-excluded-tags-label') + 60);
-  assert.match(row, /<input type="text" placeholder="politics, elections" data-excluded-tags>/);
+  const row = html.slice(html.indexOf('data-excluded-tags-row'), html.indexOf('data-excluded-tags-label') + 60);
+  assert.match(row, /<div class="tag-chip-field" data-tag-chip-field>\n\s+<input type="hidden" data-excluded-tags>/);
   assert.doesNotMatch(row, /data-fixed-entry-row/);
+  // And never hidden. It used to disappear whenever an include-only whitelist was set,
+  // which is how the exclusions came to look inert -- and the logic then matched the lie.
+  // A bare `hidden` attribute on an element, not the value-carrier's type="hidden".
+  assert.doesNotMatch(row, /\shidden[\s>]/);
 });
 
 test("excluded tags: dashboard, live executor and paper bot agree on what a tag is", async () => {
@@ -7006,13 +7012,17 @@ test("excluded tags: the rule sits above every mode-specific test", async () => 
   assert.match(functionSource(bot, "portfolioFilterResult"),
     /const excludedTags = excludedTagsOnRow\(item, strategy\);/);
 
-  // And the precedence that rule introduced: a populated whitelist is the whole policy,
-  // but an empty one must fall through to the exclusions rather than admitting
-  // everything -- an empty list is how the whitelist is cleared, and clearing it must
-  // not quietly switch the exclusions off too.
+  // And the precedence: the whitelist says what is considered, the exclusions then subtract
+  // from it. Both directions matter. An empty whitelist must fall through to the exclusions
+  // rather than admitting everything -- an empty list is how the whitelist is cleared, and
+  // clearing it must not quietly switch the exclusions off too. A populated one must not
+  // switch them off either, which it used to: that is what stopped "sport without tennis"
+  // being expressible, and left a tennis exclusion sitting in the form while tennis traded.
   const allows = functionSource(bot, "strategyAllowsTags");
-  assert.match(allows, /if \(strategy\?\.includeOnlyMarketTags\?\.size\) return includedTagsOnRow\(item, strategy\)\.length > 0;/);
+  assert.match(allows, /if \(strategy\?\.includeOnlyMarketTags\?\.size && !includedTagsOnRow\(item, strategy\)\.length\) return false;/);
   assert.match(allows, /return excludedTagsOnRow\(item, strategy\)\.length === 0;/);
+  assert.ok(!/return includedTagsOnRow\(item, strategy\)\.length > 0;/.test(allows),
+    "a populated whitelist must not short-circuit past the exclusions");
 });
 
 test("excluded tags: the saved value reaches all three runtimes", async () => {

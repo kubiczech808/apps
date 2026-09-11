@@ -4690,10 +4690,10 @@ function observationMatchesActiveLiveConfig(item, config) {
   const tags = rowTagSlugs(item);
   const include = configTagSet(config?.includeOnlyMarketTags || config?.allowedMarketTags);
   if (include.size && ![...include].some((tag) => tags.has(tag))) return false;
-  if (!include.size) {
-    const excluded = configTagSet(config?.excludedMarketTags);
-    if ([...excluded].some((tag) => tags.has(tag))) return false;
-  }
+  // Always, not only when the whitelist is empty: the lists are one policy in two steps, so
+  // "sports without tennis" is expressible here exactly as it is in selection.
+  const excluded = configTagSet(config?.excludedMarketTags);
+  if ([...excluded].some((tag) => tags.has(tag))) return false;
   return true;
 }
 
@@ -7813,10 +7813,13 @@ function includedTagsOnRow(item, strategy) {
   return [...included].filter((tag) => slugs.has(tag));
 }
 
-// A populated whitelist is the portfolio's tag policy. The exclusion list is retained
-// for when the whitelist is cleared, but must not influence selection meanwhile.
+// The two lists are one policy in two steps: the whitelist says which markets are even
+// considered, the exclusion list then subtracts from whatever survived. That is what lets a
+// portfolio ask for sport WITHOUT tennis, which is the shape people actually want and which
+// the old rule could not express -- it dropped the exclusions entirely whenever a whitelist
+// was set, so a tennis exclusion sat in the form looking active while tennis kept trading.
 function strategyAllowsTags(item, strategy) {
-  if (strategy?.includeOnlyMarketTags?.size) return includedTagsOnRow(item, strategy).length > 0;
+  if (strategy?.includeOnlyMarketTags?.size && !includedTagsOnRow(item, strategy).length) return false;
   return excludedTagsOnRow(item, strategy).length === 0;
 }
 
@@ -7948,11 +7951,12 @@ function portfolioFilterResult(item, strategy) {
   const includedTags = includedTagsOnRow(item, strategy);
   if (strategy?.includeOnlyMarketTags?.size && !includedTags.length) {
     reasons.push(`outside included tags (${[...strategy.includeOnlyMarketTags].join(", ")})`);
-  } else {
-    const excludedTags = excludedTagsOnRow(item, strategy);
-    if (excludedTags.length) {
-      reasons.push(`excluded tag${excludedTags.length > 1 ? "s" : ""} ${excludedTags.join(", ")}`);
-    }
+  }
+  // Not an else: the exclusions subtract from whatever the whitelist admitted, so a market
+  // inside "sports" can still be rejected for carrying "tennis".
+  const excludedTags = excludedTagsOnRow(item, strategy);
+  if (excludedTags.length) {
+    reasons.push(`excluded tag${excludedTags.length > 1 ? "s" : ""} ${excludedTags.join(", ")}`);
   }
   if (probabilitySource === "ai" && status !== "ELIGIBLE") reasons.push(`base status ${status || "UNKNOWN"} is not ELIGIBLE`);
   if (probabilitySource === "polymarket" && ["ERROR", "RESOLVED", "CLOSED", "FINALIZED", "SETTLED"].includes(status)) {

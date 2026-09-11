@@ -525,21 +525,31 @@
           <input type="number" min="1" max="99" step="1" value="50" data-fixed-entry-price>
           <strong data-fixed-entry-price-label>50%</strong>
         </label>
-        <label class="parameter-control" data-fixed-entry-row title="Comma separated Polymarket tags this portfolio may bid on. Leave empty for every tag.">
+        <!-- Tag policies are chip fields: type to search the catalogue's own slugs, Enter or
+             click to add, the cross to remove. The hidden input still carries the comma list
+             every reader and the save path expect. A div rather than a label, because a
+             label owning two inputs sends clicks to the wrong one. -->
+        <div class="parameter-control" data-fixed-entry-row title="Polymarket tags this portfolio may bid on. Leave empty for every tag.">
           <span>Tags (5050)</span>
-          <input type="text" placeholder="sports, esports" data-fixed-entry-tags>
+          <div class="tag-chip-field" data-tag-chip-field>
+            <input type="hidden" data-fixed-entry-tags>
+          </div>
           <strong data-fixed-entry-tags-label>sports, esports</strong>
-        </label>
-        <label class="parameter-control" title="Comma separated Polymarket tags this portfolio may use. When set, every other tag is excluded before it can become a candidate.">
+        </div>
+        <div class="parameter-control" title="Polymarket tags this portfolio may use. When set, every other tag is excluded before it can become a candidate. Combine with Excluded tags to say things like sport but not tennis.">
           <span>Include only tags</span>
-          <input type="text" placeholder="sports, esports" data-include-only-tags>
+          <div class="tag-chip-field" data-tag-chip-field>
+            <input type="hidden" data-include-only-tags>
+          </div>
           <strong data-include-only-tags-label>every tag</strong>
-        </label>
-        <label class="parameter-control" data-excluded-tags-row title="Comma separated Polymarket tags this portfolio refuses. A market carrying any of them is dropped before it can become a candidate. Leave empty to exclude nothing.">
+        </div>
+        <div class="parameter-control" data-excluded-tags-row title="Polymarket tags this portfolio refuses. A market carrying any of them is dropped even when it also carries an included tag, so sport minus tennis works. Leave empty to exclude nothing.">
           <span>Excluded tags</span>
-          <input type="text" placeholder="politics, elections" data-excluded-tags>
+          <div class="tag-chip-field" data-tag-chip-field>
+            <input type="hidden" data-excluded-tags>
+          </div>
           <strong data-excluded-tags-label>none</strong>
-        </label>
+        </div>
         <label class="parameter-control" data-execution-cron-row>
           <span>Run the cron every</span>
           <select data-execution-cron-minutes>

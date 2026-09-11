@@ -1244,6 +1244,250 @@ function marketExcludedByTags(item, excludedTags = []) {
   return excludedTags.filter((tag) => slugs.has(tag));
 }
 
+// ---------------------------------------------------------------------------
+// Tag chip fields
+//
+// A portfolio's tag policy used to be two comma-separated text boxes, which made a
+// misspelt slug indistinguishable from a correct one: both match nothing, silently, and
+// the portfolio simply stops finding candidates. So the slugs are offered from the
+// catalogue the portfolio is actually choosing from, and what gets committed is a chip --
+// visible, removable, and spelled the way the data spells it.
+//
+// The hidden input remains the value: it still holds the comma list every reader and the
+// save path already expect, and every commit dispatches `change` on it, so this is a new
+// way of editing the same field rather than a second source of truth.
+// ---------------------------------------------------------------------------
+
+// Slugs the loaded catalogue carries, most common first. Per-fixture labels are dropped
+// through the same filter the taxonomy views use -- offering "team:arsenal-2026-04-02"
+// would bury the handful of slugs a policy can usefully name under thousands of one-offs.
+function tagVocabulary() {
+  const counts = new Map();
+  const add = (slug, weight) => {
+    if (!slug || PER_FIXTURE_TAXONOMY_LABEL.test(slug)) return;
+    counts.set(slug, (counts.get(slug) || 0) + weight);
+  };
+  const rows = Array.isArray(state.scrapedMarketObservations) ? state.scrapedMarketObservations : [];
+  for (const item of rows) {
+    for (const slug of marketTagSlugsOf(item)) add(slug, 1);
+  }
+  // The broad scan categories are always offerable, even before a catalogue has loaded and
+  // even when nothing currently scraped carries them, because they are what a policy is
+  // usually written in terms of.
+  for (const slug of MARKET_SCAN_CATEGORIES) add(normalizedScrapedScanTag(slug), 0);
+  return [...counts.entries()]
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .map(([slug, count]) => ({ slug, count }));
+}
+
+const tagChipFields = new WeakMap();
+
+function tagChipValues(input) {
+  return normalizeMarketTagList(input?.value);
+}
+
+// One place that writes the field, so every path -- chip added, chip removed, config
+// reloaded -- goes through the same normalisation and the same `change` dispatch.
+function writeTagChipValues(field, tags) {
+  const next = normalizeMarketTagList(tags);
+  const previous = tagChipValues(field.input);
+  field.input.value = next.join(", ");
+  renderTagChips(field);
+  if (next.join(",") !== previous.join(",")) {
+    field.input.dispatchEvent(new Event("change", { bubbles: true }));
+  }
+}
+
+function renderTagChips(field) {
+  const tags = tagChipValues(field.input);
+  field.chips.replaceChildren(...tags.map((tag) => {
+    const chip = document.createElement("span");
+    chip.className = "tag-chip";
+    const label = document.createElement("span");
+    label.className = "tag-chip-label";
+    label.textContent = tag;
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "tag-chip-remove";
+    remove.textContent = "×";
+    // Named, not just "remove": a row of identical crosses tells a screen reader nothing
+    // about which tag each one drops.
+    remove.setAttribute("aria-label", `Remove ${tag}`);
+    remove.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      writeTagChipValues(field, tags.filter((value) => value !== tag));
+      field.entry.focus();
+    });
+    chip.append(label, remove);
+    return chip;
+  }));
+}
+
+function closeTagChipMenu(field) {
+  field.menu.hidden = true;
+  field.menu.replaceChildren();
+  field.options = [];
+  field.active = -1;
+  field.entry.setAttribute("aria-expanded", "false");
+}
+
+function renderTagChipMenu(field) {
+  const typed = normalizedScrapedScanTag(field.entry.value);
+  const chosen = new Set(tagChipValues(field.input));
+  const options = tagVocabulary()
+    .filter(({ slug }) => !chosen.has(slug) && (!typed || slug.includes(typed)))
+    .slice(0, 12);
+  // A slug the catalogue has never carried is still allowed -- a tag can be correct before
+  // anything scraped uses it -- so a typed value that matched nothing is offered as itself,
+  // rather than leaving the box looking broken.
+  //
+  // Only when nothing matched. Offering the raw fragment alongside real slugs would put
+  // "ten" above "tennis" and let Enter commit the half-typed word, which is precisely the
+  // silent mismatch the chips exist to prevent.
+  if (typed && !options.length && !chosen.has(typed)) {
+    options.push({ slug: typed, count: 0 });
+  }
+  field.options = options;
+  field.active = options.length ? 0 : -1;
+  if (!options.length) {
+    closeTagChipMenu(field);
+    return;
+  }
+  field.menu.replaceChildren(...options.map((option, index) => {
+    const entry = document.createElement("li");
+    entry.className = "tag-chip-option";
+    entry.setAttribute("role", "option");
+    entry.toggleAttribute("data-active", index === field.active);
+    const label = document.createElement("span");
+    label.textContent = option.slug;
+    entry.append(label);
+    if (option.count > 0) {
+      const count = document.createElement("em");
+      count.textContent = formatInteger(option.count);
+      entry.append(count);
+    }
+    // mousedown, not click: the entry's blur would close the menu before a click landed.
+    entry.addEventListener("mousedown", (event) => {
+      event.preventDefault();
+      commitTagChip(field, option.slug);
+    });
+    return entry;
+  }));
+  field.menu.hidden = false;
+  field.entry.setAttribute("aria-expanded", "true");
+}
+
+function highlightTagChipOption(field, delta) {
+  if (!field.options.length) return;
+  const count = field.options.length;
+  field.active = (field.active + delta + count) % count;
+  [...field.menu.children].forEach((child, index) => {
+    child.toggleAttribute("data-active", index === field.active);
+  });
+}
+
+function commitTagChip(field, value) {
+  const tag = normalizedScrapedScanTag(value);
+  if (!tag) return;
+  writeTagChipValues(field, [...tagChipValues(field.input), tag]);
+  field.entry.value = "";
+  closeTagChipMenu(field);
+  field.entry.focus();
+}
+
+function initTagChipField(input, placeholder = "") {
+  if (!input || tagChipFields.has(input)) return;
+  const host = input.closest("[data-tag-chip-field]");
+  if (!host) return;
+  const chips = document.createElement("span");
+  chips.className = "tag-chips";
+  const entry = document.createElement("input");
+  entry.type = "text";
+  entry.className = "tag-chip-entry";
+  entry.placeholder = placeholder;
+  entry.autocomplete = "off";
+  entry.setAttribute("role", "combobox");
+  entry.setAttribute("aria-expanded", "false");
+  const menu = document.createElement("ul");
+  menu.className = "tag-chip-menu";
+  menu.hidden = true;
+  menu.setAttribute("role", "listbox");
+  host.append(chips, entry, menu);
+  const field = { input, host, chips, entry, menu, options: [], active: -1 };
+  tagChipFields.set(input, field);
+
+  entry.addEventListener("input", () => renderTagChipMenu(field));
+  entry.addEventListener("focus", () => renderTagChipMenu(field));
+  // A click anywhere in the box lands on the text entry, so the whole control behaves like
+  // one input rather than a strip of chips with a small target beside them.
+  host.addEventListener("mousedown", (event) => {
+    if (event.target === host || event.target === chips) {
+      event.preventDefault();
+      entry.focus();
+    }
+  });
+  entry.addEventListener("keydown", (event) => {
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      if (field.menu.hidden) renderTagChipMenu(field);
+      else highlightTagChipOption(field, 1);
+      return;
+    }
+    if (event.key === "ArrowUp") {
+      event.preventDefault();
+      highlightTagChipOption(field, -1);
+      return;
+    }
+    if (event.key === "Enter" || event.key === "," || event.key === "Tab") {
+      const highlighted = field.options[field.active];
+      const typed = normalizedScrapedScanTag(entry.value);
+      // Tab only commits when there is something to commit, so it still moves on normally.
+      if (event.key === "Tab" && !typed) return;
+      if (!typed && !highlighted) return;
+      event.preventDefault();
+      commitTagChip(field, event.key === "Enter" && highlighted ? highlighted.slug : (typed || highlighted?.slug));
+      return;
+    }
+    if (event.key === "Escape") {
+      closeTagChipMenu(field);
+      return;
+    }
+    // Backspace on an empty box removes the last chip, the behaviour every token field has.
+    if (event.key === "Backspace" && !entry.value) {
+      const tags = tagChipValues(field.input);
+      if (!tags.length) return;
+      event.preventDefault();
+      writeTagChipValues(field, tags.slice(0, -1));
+    }
+  });
+  entry.addEventListener("blur", () => {
+    // Whatever is half-typed when focus leaves is committed rather than dropped: losing a
+    // tag because the box was left without pressing Enter is the kind of silent loss this
+    // widget exists to stop.
+    const typed = normalizedScrapedScanTag(entry.value);
+    if (typed) {
+      entry.value = "";
+      writeTagChipValues(field, [...tagChipValues(field.input), typed]);
+    }
+    closeTagChipMenu(field);
+  });
+  renderTagChips(field);
+}
+
+// Called by the parameter sync. It repaints the chips from the stored config without
+// touching what is half-typed, so a reload landing mid-edit cannot swallow the keystrokes.
+function syncTagChipField(input, tags) {
+  if (!input) return;
+  const field = tagChipFields.get(input);
+  if (!field) {
+    if (document.activeElement !== input) input.value = normalizeMarketTagList(tags).join(", ");
+    return;
+  }
+  input.value = normalizeMarketTagList(tags).join(", ");
+  renderTagChips(field);
+}
+
 function automationIsEnabled(config = {}) {
   return config.automationEnabled !== false;
 }
@@ -6225,28 +6469,22 @@ function syncPortfolioParameterControls(configOverride = null, options = {}) {
   if (els.fixedEntryPrice) els.fixedEntryPrice.value = String(Math.round(fixedEntryPrice * 100));
   if (els.fixedEntryPriceLabel) els.fixedEntryPriceLabel.textContent = percent(fixedEntryPrice);
   const allowedTags = normalizeMarketTagList(config.allowedMarketTags);
-  // Not overwritten while it has focus, or normalizing would fight the typing.
-  if (els.fixedEntryTags && document.activeElement !== els.fixedEntryTags) {
-    els.fixedEntryTags.value = allowedTags.join(", ");
-  }
+  syncTagChipField(els.fixedEntryTags, allowedTags);
   if (els.fixedEntryTagsLabel) els.fixedEntryTagsLabel.textContent = allowedTags.length ? allowedTags.join(", ") : "every tag";
   // These steer only the fixed-entry strategy, so they are meaningless anywhere else.
   // Keyed on the mode this call is for, like every other line in this function. Reading
   // state.mode instead made the 5050 rows follow the open tab rather than the portfolio
   // being edited, so the order price could be hidden on the panel that owns it.
   els.fixedEntryRows?.forEach((row) => row.toggleAttribute("hidden", !isFixedEntryMode(mode)));
-  // A nonempty allow-list is the active tag policy. The stored exclusions are preserved
-  // but inactive until the allow-list is cleared.
+  // Both lists are always editable. They are one policy in two steps -- the allow-list says
+  // what is considered, the exclusions subtract from it -- so "sport without tennis" needs
+  // both boxes at once. Hiding the exclusions behind a populated allow-list is what made
+  // them look inert, and the logic then matched the lie by ignoring them.
   const includeOnlyTags = normalizeMarketTagList(config.includeOnlyMarketTags);
-  if (els.includeOnlyTags && document.activeElement !== els.includeOnlyTags) {
-    els.includeOnlyTags.value = includeOnlyTags.join(", ");
-  }
+  syncTagChipField(els.includeOnlyTags, includeOnlyTags);
   if (els.includeOnlyTagsLabel) els.includeOnlyTagsLabel.textContent = includeOnlyTags.length ? includeOnlyTags.join(", ") : "every tag";
-  els.excludedTagsRow?.toggleAttribute("hidden", includeOnlyTags.length > 0);
   const excludedTags = normalizeMarketTagList(config.excludedMarketTags);
-  if (els.excludedTags && document.activeElement !== els.excludedTags) {
-    els.excludedTags.value = excludedTags.join(", ");
-  }
+  syncTagChipField(els.excludedTags, excludedTags);
   if (els.excludedTagsLabel) els.excludedTagsLabel.textContent = excludedTags.length ? excludedTags.join(", ") : "none";
   const marketType = normalizePortfolioMarketType(config.marketType, config.requireMostProbableOutcome);
   if (els.portfolioMarketType) els.portfolioMarketType.value = marketType;
@@ -9833,8 +10071,10 @@ function portfolioRuleRows(portfolio = {}) {
   }
   const includeOnlyTags = normalizeMarketTagList(config.includeOnlyMarketTags);
   const excludedTags = normalizeMarketTagList(config.excludedMarketTags);
+  // Both, not one or the other: a portfolio can include sport and still exclude tennis, and
+  // hiding the exclusions behind a whitelist is how they came to look inert.
   if (includeOnlyTags.length) rows.push(["Included tags", includeOnlyTags.join(", ")]);
-  else if (excludedTags.length) rows.push(["Excluded tags", excludedTags.join(", ")]);
+  if (excludedTags.length) rows.push(["Excluded tags", excludedTags.join(", ")]);
   return rows;
 }
 
@@ -10312,16 +10552,17 @@ function portfolioCandidateFilterReasons(item, mode = state.mode) {
   const executionCheckIsCurrent = Boolean(executionCheck);
 
   // Above every mode-specific rule, and above 5050's early return, because a tag policy
-  // disqualifies the market whatever else is true of it. A whitelist wins over exclusion.
+  // disqualifies the market whatever else is true of it. The whitelist says what is
+  // considered; the exclusions then subtract from it.
   const includeOnlyTags = normalizeMarketTagList(config.includeOnlyMarketTags);
   const excludedTags = normalizeMarketTagList(config.excludedMarketTags);
   if (includeOnlyTags.length && !marketMatchesAllowedTags(item, includeOnlyTags)) {
     reasons.push(`outside included tags (${includeOnlyTags.join(", ")})`);
-  } else {
-    const hitExclusions = marketExcludedByTags(item, excludedTags);
-    if (hitExclusions.length) {
-      reasons.push(`excluded tag${hitExclusions.length > 1 ? "s" : ""} ${hitExclusions.join(", ")}`);
-    }
+  }
+  // Not an else: a market inside "sports" can still be rejected for carrying "tennis".
+  const hitExclusions = marketExcludedByTags(item, excludedTags);
+  if (hitExclusions.length) {
+    reasons.push(`excluded tag${hitExclusions.length > 1 ? "s" : ""} ${hitExclusions.join(", ")}`);
   }
 
   if (displayStatus !== "EVALUATED") reasons.push(`status ${displayStatus}`);
@@ -16267,6 +16508,11 @@ els.includeOnlyTags?.addEventListener("change", () => {
   syncPortfolioParameterControls();
   rerenderCurrentDashboard();
 });
+
+// After the change listeners, so a chip committed during setup still reaches them.
+initTagChipField(els.includeOnlyTags, "sports, esports");
+initTagChipField(els.excludedTags, "tennis, politics");
+initTagChipField(els.fixedEntryTags, "sports, esports");
 
 els.crossLiveRisk?.addEventListener("change", () => {
   const value = Boolean(els.crossLiveRisk.checked);
