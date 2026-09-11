@@ -154,6 +154,19 @@ jobs:
             } else {
               console.log("   pass timing    (none yet -- the running worker predates this)");
             }
+            // Failures of the whole pass, collapsed the same way the book errors are. An
+            // outage of the host the worker polls fires one of these a second, so the count
+            // and the window are the readable form of it; the rows themselves are in the
+            // event log once per episode.
+            const workerErrors = state.workerErrors && typeof state.workerErrors === "object" ? state.workerErrors : {};
+            const workerRows = Object.values(workerErrors).sort((a, b) => (b.totalCount || 0) - (a.totalCount || 0));
+            if (workerRows.length) {
+              console.log(`\n   pass failures, collapsed by message:`);
+              for (const row of workerRows.slice(0, 8)) {
+                console.log(`      ${String(row.totalCount ?? row.count).padStart(6)}x total, ${row.episodes ?? 1} episode(s),`
+                  + ` latest run of ${row.count} from ${row.firstAt} to ${row.lastAt}: ${row.error}`);
+              }
+            }
             const bookErrors = state.bookErrors && typeof state.bookErrors === "object" ? state.bookErrors : {};
             const noisiest = Object.values(bookErrors).sort((a, b) => (b.count || 0) - (a.count || 0)).slice(0, 6);
             if (noisiest.length) {

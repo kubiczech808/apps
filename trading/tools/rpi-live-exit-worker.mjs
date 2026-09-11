@@ -1911,6 +1911,40 @@ function recordEvent(state, event) {
   state.lastEvent = event;
 }
 
+// How long the same failure must have been gone before its return is worth a new row.
+const WORKER_ERROR_EPISODE_MS = 600000;
+
+// The third instance of the trap recordBookError and the declined stops above already fixed,
+// and the worst of the three, because this one is not scoped to a single market. Measured on
+// the Pi: 482 of the 500 retained events were WORKER_ERROR "fetch failed", one per second
+// through a nine-minute outage of the host the worker polls, leaving eighteen rows for
+// everything else the worker had ever done. Nine minutes of one unreachable host is enough
+// to erase the record of a settlement close, a protective sell, or the single recorded dip
+// this whole rule is meant to be judged by.
+//
+// So an identical message repeating becomes a counter, exactly as a repeating book error
+// does. The first one is still written immediately -- noise is collapsed, the signal is not
+// delayed -- and a failure that has been gone for WORKER_ERROR_EPISODE_MS opens a new
+// episode, because "it broke again an hour later" is a different fact from "it never
+// stopped", and a bare counter cannot tell them apart.
+function recordWorkerError(state, error, at) {
+  const message = error?.message || String(error);
+  state.workerErrors = state.workerErrors && typeof state.workerErrors === "object" ? state.workerErrors : {};
+  const previous = state.workerErrors[message];
+  const gap = previous ? Date.parse(at) - Date.parse(previous.lastAt) : null;
+  const continuing = Boolean(previous) && Number.isFinite(gap) && gap >= 0 && gap < WORKER_ERROR_EPISODE_MS;
+  state.workerErrors[message] = {
+    error: message,
+    firstAt: continuing ? previous.firstAt : at,
+    lastAt: at,
+    count: continuing ? (Number(previous.count) || 1) + 1 : 1,
+    episodes: previous ? (Number(previous.episodes) || 1) + (continuing ? 0 : 1) : 1,
+    totalCount: previous ? (Number(previous.totalCount) || 0) + 1 : 1,
+  };
+  if (continuing) return;
+  recordEvent(state, { at, type: "WORKER_ERROR", error: message });
+}
+
 // ---------------------------------------------------------------------------------------
 // DIP ENTRY. One block, on purpose: this whole section, the dip-entry-watch endpoint and
 // tools/dip-entry-rule.mjs are the entire feature, and deleting the three removes it.
@@ -2671,7 +2705,7 @@ async function main() {
     try {
       await checkOnce(context);
     } catch (error) {
-      recordEvent(context.state, { at: new Date().toISOString(), type: "WORKER_ERROR", error: error?.message || String(error) });
+      recordWorkerError(context.state, error, new Date().toISOString());
       await writeJson(STATE_PATH, context.state).catch(() => {});
       console.error(error?.stack || error?.message || String(error));
     }

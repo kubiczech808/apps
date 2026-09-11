@@ -499,6 +499,57 @@ test("book errors: a market repeating the same failure is counted, not re-logged
   assert.equal(state.bookErrors["2"].count, 1);
 });
 
+// The same trap one level up, and measured too: 482 of the 500 retained events were
+// WORKER_ERROR "fetch failed", one per second through a nine-minute outage of the host the
+// worker polls. Eighteen rows were left for everything else the worker had ever done, which
+// is not enough to hold a settlement close, a protective sell, or the one recorded dip the
+// new rule is supposed to be judged by.
+test("worker errors: an outage is counted once per episode, not once per second", () => {
+  const source = readFileSync(new URL("../tools/rpi-live-exit-worker.mjs", import.meta.url), "utf8");
+  // The episode window is taken from the module rather than restated here: a test that
+  // declares its own threshold passes no matter what the worker actually uses.
+  const window = Number(/WORKER_ERROR_EPISODE_MS = (\d+)/.exec(source)?.[1]);
+  assert.equal(window, 600000, "ten minutes; the assertions below are written against it");
+  const record = new Function(
+    "recordEvent",
+    "WORKER_ERROR_EPISODE_MS",
+    `${functionBody(source, "recordWorkerError")}\nreturn recordWorkerError;`,
+  )((state, event) => { state.history.push(event); }, window);
+  const state = { history: [] };
+
+  // One second apart, as the real loop produces them.
+  record(state, new Error("fetch failed"), "2026-09-11T06:16:21.616Z");
+  record(state, new Error("fetch failed"), "2026-09-11T06:16:22.594Z");
+  record(state, new Error("fetch failed"), "2026-09-11T06:16:23.609Z");
+  assert.equal(state.history.length, 1, "the first failure is logged at once, the repeats are counted");
+  assert.equal(state.workerErrors["fetch failed"].count, 3);
+  assert.equal(state.workerErrors["fetch failed"].episodes, 1);
+  assert.equal(state.workerErrors["fetch failed"].firstAt, "2026-09-11T06:16:21.616Z");
+  assert.equal(state.workerErrors["fetch failed"].lastAt, "2026-09-11T06:16:23.609Z");
+
+  // Still the same episode nine minutes in, so still no second row.
+  record(state, new Error("fetch failed"), "2026-09-11T06:25:00.000Z");
+  assert.equal(state.history.length, 1);
+  assert.equal(state.workerErrors["fetch failed"].count, 4);
+
+  // Gone for over ten minutes and back: a new outage is new information and is logged.
+  record(state, new Error("fetch failed"), "2026-09-11T07:30:00.000Z");
+  assert.equal(state.history.length, 2, "a failure that had stopped and returned is logged again");
+  assert.equal(state.workerErrors["fetch failed"].count, 1, "the run counter restarts with the episode");
+  assert.equal(state.workerErrors["fetch failed"].episodes, 2);
+  assert.equal(state.workerErrors["fetch failed"].totalCount, 5, "the lifetime total is kept across episodes");
+
+  // A different message is its own row and is never folded into the first.
+  record(state, new Error("HTTP 502"), "2026-09-11T07:30:01.000Z");
+  assert.equal(state.history.length, 3);
+  assert.equal(state.workerErrors["HTTP 502"].count, 1);
+
+  // The flood must be gone at the call site too, or the collapsing helper is dead code --
+  // which is exactly how the BOOK_ERROR fix could have been shipped without working.
+  assert.match(source, /recordWorkerError\(context\.state, error, new Date\(\)\.toISOString\(\)\)/);
+  assert.doesNotMatch(source, /type: "WORKER_ERROR", error: error\?\.message/);
+});
+
 // Asked for: a position whose outcome the market has already decided still waits hours for
 // Polymarket to resolve it, with the stake locked the whole time. Selling one tick below
 // certainty pays about a cent a share to get that capital back now.
