@@ -1,0 +1,60 @@
+name: RPi Runner Inventory
+
+# READ-ONLY. Says what runner agents the Pi actually has and which services are running.
+# Installs nothing, registers nothing, starts and stops nothing.
+#
+# Asked because adding a second agent half-worked: config.sh completed and the directory
+# exists, but svc.sh refused with "exists actions.runner.kubiczech808-apps.pi5-apps.service"
+# -- the service name it derived was the FIRST runner's. Either the new agent registered
+# under the wrong name, or its .runner file is missing and svc.sh fell back to the machine
+# name. Those need different fixes, and guessing between them risks the runner that
+# everything on this Pi depends on.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  inventory:
+    runs-on: [self-hosted, Linux, ARM64]
+    timeout-minutes: 10
+    steps:
+      - name: What is on disk and what is registered
+        run: |
+          set -uo pipefail
+          echo "== runner directories"
+          for dir in "${HOME}"/actions-runner-*; do
+            [ -d "$dir" ] || continue
+            echo "   ${dir}"
+            if [ -f "${dir}/.runner" ]; then
+              # The agent name and the pool it joined. No tokens live in this file; the
+              # credentials are in .credentials, which is deliberately not read here.
+              python3 - "$dir/.runner" <<'PY'
+import json, sys
+try:
+    cfg = json.load(open(sys.argv[1]))
+    print(f"      agentName: {cfg.get('agentName')}   pool: {cfg.get('poolName')}   work: {cfg.get('workFolder')}")
+except Exception as error:
+    print(f"      .runner could not be read: {error}")
+PY
+            else
+              echo "      !! no .runner file -- this agent is NOT configured"
+            fi
+            [ -f "${dir}/.service" ] && echo "      .service: $(cat "${dir}/.service")" || echo "      no .service file"
+          done
+
+          echo ""
+          echo "== runner services known to systemd"
+          ls -1 /etc/systemd/system/actions.runner.*.service 2>/dev/null || echo "   (none)"
+          echo ""
+          echo "== their state"
+          for unit in /etc/systemd/system/actions.runner.*.service; do
+            [ -e "$unit" ] || continue
+            name="$(basename "$unit")"
+            echo "   ${name}: $(systemctl is-active "$name" 2>&1) / $(systemctl is-enabled "$name" 2>&1)"
+          done
+
+          echo ""
+          echo "== the machine's own name, which svc.sh falls back to"
+          hostname
