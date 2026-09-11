@@ -32,6 +32,32 @@ on:
         required: false
         default: ""
         type: string
+      phase:
+        description: "Resume from this phase (blank = start at the beginning)"
+        required: false
+        default: ""
+        type: choice
+        options: ["", documents, scraped, resolved, events, finalize]
+      start_offset:
+        description: "Resume the first phase from this offset"
+        required: false
+        default: "0"
+        type: string
+      page_limit:
+        description: "Rows per request. Lower is gentler on the live host."
+        required: false
+        default: "100"
+        type: string
+      pause_seconds:
+        description: "Seconds between requests. This is what leaves room for live execution."
+        required: false
+        default: "2"
+        type: string
+      budget_minutes:
+        description: "Stop after this long and report where to resume."
+        required: false
+        default: "35"
+        type: string
 
 permissions:
   contents: read
@@ -43,7 +69,8 @@ concurrency:
 jobs:
   storage:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    # The tool stops itself at budget_minutes; this only catches a hang.
+    timeout-minutes: 50
     env:
       STORAGE_URL: https://www.osobnizkusenosti.cz/trading/api.php?action=storage-admin
       STATUS_URL: https://www.osobnizkusenosti.cz/trading/api.php?action=storage-status
@@ -51,6 +78,11 @@ jobs:
       TRADING_TRIGGER_KEY: ${{ secrets.POLYTRADING_DB_PASSWORD }}
       OPERATION: ${{ inputs.operation }}
       CONFIRM: ${{ inputs.confirm }}
+      MIGRATE_PHASE: ${{ inputs.phase }}
+      MIGRATE_START_OFFSET: ${{ inputs.start_offset || '0' }}
+      MIGRATE_PAGE_LIMIT: ${{ inputs.page_limit || '100' }}
+      MIGRATE_PAUSE_SECONDS: ${{ inputs.pause_seconds || '2' }}
+      MIGRATE_BUDGET_MINUTES: ${{ inputs.budget_minutes || '35' }}
     steps:
       - uses: actions/checkout@v4
 

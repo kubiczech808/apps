@@ -23,15 +23,26 @@ import urllib.request
 from typing import Any
 
 TIMEOUT_SECONDS = 300
-# Observations are the bulk of the import. Measured: 750 per call returns HTTP 504 from this
-# hosting's gateway -- the request is still running upstream when the gateway gives up, which
-# is the worst kind of failure because the rows may or may not have landed. 200 finishes well
-# inside the limit, and the retry below halves it again rather than giving up, so a hosting
-# that is merely slow today does not need a code change to get through.
-PAGE_LIMIT = 200
+# The trading system runs 24/7, so there is no quiet window to wait for: the import has to
+# share the host with live execution rather than take it over. Three settings do that, and
+# all three are deliberately conservative.
+#
+#   PAGE_LIMIT      how much work one request asks the host to do. 750 returned HTTP 504 --
+#                   the gateway gave up while the request was still running, which is the
+#                   worst shape of failure because the rows may or may not have landed.
+#   PAUSE_SECONDS   the gap BETWEEN requests. This is what actually leaves room for the
+#                   executor: without it the import is a continuous stream of PHP processes
+#                   on a shared host, and the live run waiting behind them is the cost.
+#   BUDGET_MINUTES  when to stop and hand the machine back. The import resumes exactly where
+#                   it stopped, so a long import becomes several short ones instead of one
+#                   session that holds the host for an hour.
+PAGE_LIMIT = int(os.environ.get("MIGRATE_PAGE_LIMIT") or 100)
+PAUSE_SECONDS = float(os.environ.get("MIGRATE_PAUSE_SECONDS") or 2.0)
+BUDGET_MINUTES = float(os.environ.get("MIGRATE_BUDGET_MINUTES") or 35)
 MIN_PAGE_LIMIT = 25
-# A phase that reports done immediately still costs a round trip; this only bounds runaway.
-MAX_PAGES = 400
+# Above this, one request is holding the host long enough to be worth slowing down for.
+SLOW_REQUEST_SECONDS = 15.0
+MAX_PAGES = 4000
 
 
 def post(url: str, key: str, payload: dict[str, Any]) -> dict[str, Any]:
@@ -57,11 +68,21 @@ def post(url: str, key: str, payload: dict[str, Any]) -> dict[str, Any]:
     return parsed
 
 
-def run_phase(url: str, key: str, phase: str) -> None:
-    """One migration phase, paged to completion when it pages."""
-    offset = 0
+def run_phase(url: str, key: str, phase: str, deadline: float, start_offset: int = 0) -> int | None:
+    """One migration phase, paged to completion when it pages.
+
+    Returns None when the phase finished, or the offset to resume from when the time budget
+    ran out. Stopping on a boundary and reporting where is what makes a 24/7 import possible:
+    nothing is half-written, because every page is a complete upsert.
+    """
+    offset = start_offset
     limit = PAGE_LIMIT
+    pause = PAUSE_SECONDS
     for page in range(MAX_PAGES):
+        if time.monotonic() > deadline:
+            print(f"   {phase}: time budget reached at offset {offset}, handing the host back")
+            return offset
+        started = time.monotonic()
         try:
             result = post(url, key, {
                 "operation": "migrate-json-batch",
@@ -105,8 +126,16 @@ def run_phase(url: str, key: str, phase: str) -> None:
         if next_offset <= offset:
             raise RuntimeError(f"{phase} stopped advancing at offset {offset}; refusing to loop")
         offset = next_offset
-        # Gentle on a shared host: the import is a one-off and does not need to race.
-        time.sleep(0.5)
+        # Adaptive: a request that took a long time means the host is busy, and the right
+        # response is to ask for less and wait longer rather than to keep the same cadence
+        # and hope. It never speeds back up on its own -- a shared host that struggled once
+        # will struggle again, and the import has nowhere to be.
+        elapsed = time.monotonic() - started
+        if elapsed > SLOW_REQUEST_SECONDS:
+            pause = min(pause * 2, 30.0)
+            limit = max(MIN_PAGE_LIMIT, limit // 2)
+            print(f"   {phase}: that call took {elapsed:.0f}s -- easing to {limit} rows every {pause:.0f}s")
+        time.sleep(pause)
     raise RuntimeError(f"{phase} did not finish within {MAX_PAGES} pages")
 
 
@@ -126,13 +155,31 @@ def main() -> int:
         print(json.dumps(result, indent=2))
         return 0
 
-    print("== migrating the JSON state into MySQL")
+    phases = ["documents", "scraped", "resolved", "events", "finalize"]
+    resume_phase = os.environ.get("MIGRATE_PHASE", "").strip()
+    start_offset = int(os.environ.get("MIGRATE_START_OFFSET") or 0)
+    if resume_phase:
+        if resume_phase not in phases:
+            print(f"Unknown phase {resume_phase}", file=sys.stderr)
+            return 1
+        phases = phases[phases.index(resume_phase):]
+
+    deadline = time.monotonic() + BUDGET_MINUTES * 60
+    print(f"== migrating the JSON state into MySQL")
+    print(f"   {PAGE_LIMIT} rows per call, {PAUSE_SECONDS:.0f}s between calls,"
+          f" stopping after {BUDGET_MINUTES:.0f} minutes")
     # Documents first: the activation gate checks for state:paper, and the observation
     # phases read the same files, so a failure here stops the run before it spends an hour
     # importing rows that could not be switched to anyway.
-    for phase in ["documents", "scraped", "resolved", "events", "finalize"]:
+    for index, phase in enumerate(phases):
         print(f" -> {phase}")
-        run_phase(url, key, phase)
+        stopped_at = run_phase(url, key, phase, deadline, start_offset if index == 0 else 0)
+        if stopped_at is not None:
+            print("\n== paused, not failed")
+            print(f"Resume with phase={phase} and start_offset={stopped_at}.")
+            print("Nothing is half-written: every page is a complete upsert, and the rows"
+                  " already imported are simply written again if you re-run from earlier.")
+            return 0
 
     status = post(url, key, {"operation": "status"})
     print("\n== after the migration")
