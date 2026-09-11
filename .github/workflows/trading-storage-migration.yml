@@ -78,7 +78,13 @@ permissions:
   contents: read
 
 concurrency:
-  group: trading-storage-migration
+  # Writes queue behind each other, which is the point: two migrations paging the same tables
+  # at once would double the load on a host this whole design is trying to be gentle with.
+  #
+  # A status read does NOT belong in that queue. It was in it, and a status dispatched while a
+  # 35-minute migration was running sat pending for the rest of the migration -- so the one
+  # cheap way to ask what is happening was unavailable exactly when something was happening.
+  group: trading-storage-migration-${{ inputs.operation == 'status' && 'status' || 'write' }}
   cancel-in-progress: false
 
 jobs:
