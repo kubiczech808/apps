@@ -219,6 +219,20 @@ async function main() {
   // and the defect is that the renderer is not reading it.
   const stamped = closed.filter((row) => row && row.portfolioId).length;
   console.log(`\nclosed rows carrying a durable portfolioId of their own: ${stamped} of ${closed.length}`);
+
+  // Repeated at the END on purpose. This is the line that says whether the durable store has
+  // anything in it, and printed only at the top it sat above a hundred rows of detail -- out
+  // of reach of a log reader that can only fetch the tail, which is how a run that answered
+  // the question still left it unanswered.
+  console.log("\ndurable run-log history (the answer to whether the old rows are recoverable):");
+  if (!ownership) {
+    console.log("   the endpoint did not answer at all -- see the failure printed at the top");
+  } else {
+    console.log(`   storage ${ownership.storageActive ? "ACTIVE" : "INACTIVE"}`
+      + `   oldest stored run ${ownership.oldestRunAt || "(none)"}`
+      + `   orders on record ${(ownership.orders || []).length}`);
+    console.log(`   runs per portfolio: ${JSON.stringify(ownership.runsPerMode || {})}`);
+  }
 }
 
 main().catch((error) => {
