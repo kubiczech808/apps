@@ -2014,6 +2014,80 @@ function openOrderMarketDates(market = {}, order = {}, generatedAt = new Date().
   };
 }
 
+// The signature of a date with no clock. A whole-day value is stretched to the last second
+// of its day everywhere in this codebase, so that "is it past" only turns true once the day
+// is over -- which makes 23:59:59Z a marker rather than a time anything happens at.
+function isWholeDayBucket(value) {
+  return /T23:59:59(\.\d+)?Z$/.test(String(value || ""));
+}
+
+// Measured on the live account, and it was every open position without exception: stored
+// endDate 2026-09-11T23:59:59Z, source positions-api, while Gamma held a real time for every
+// single one of them -- 08:30, 10:00, 12:00, 14:00, 15:00, 15:25, 15:45, 16:00, 16:15,
+// 17:00. So the dashboard showed fourteen positions all resolving at 01:59 on the TWELFTH in
+// local time: a clock time nothing resolves at, on the day AFTER the fixture was played,
+// with a fabricated "16.1 h left" beside it.
+//
+// The positions API reports a market's end as a DAY. The precise time is one Gamma lookup
+// away and this file already makes exactly that lookup for open ORDERS; positions simply
+// never asked, so a day bucket was the best they ever had.
+//
+// Deliberately one-directional. A stored date that already carries a real clock time is left
+// untouched: this fills in a missing clock, it does not second-guess the positions API.
+async function enrichPositionDatesFromGamma(positions = [], generatedAt = new Date().toISOString()) {
+  const rows = Array.isArray(positions) ? positions : [];
+  if (!rows.length) return rows;
+  return Promise.all(rows.map(async (position) => {
+    const stored = position?.endDate;
+    if (stored && !isWholeDayBucket(stored)) return position;
+    const tokenId = String(position?.tokenId || "").trim();
+    if (!tokenId) return position;
+    let market = null;
+    try {
+      market = await gammaMarketForOpenOrder(tokenId);
+    } catch {
+      // A Gamma outage must not empty a date that is already there. A coarse date is wrong;
+      // no date at all is worse, and this runs on every sync.
+      return position;
+    }
+    const dates = openOrderMarketDates(
+      market || {},
+      { createdAt: position?.openedAt || generatedAt, question: position?.question },
+      generatedAt,
+    );
+    // That helper invents a 24h horizon for an order with no market date anywhere. An order
+    // has nothing else; a position already has a value, so inventing one would be a
+    // downgrade rather than a correction.
+    if (!dates.endDate || dates.endDateSource === "open-order-24h-fallback") return position;
+    if (isWholeDayBucket(dates.endDate)) return position;
+    const endTime = Date.parse(dates.endDate);
+    if (!Number.isFinite(endTime)) return position;
+    // Asked of the RESOLUTION window, never of the kickoff. For sports the corrected endDate
+    // above is deliberately the kickoff -- it is the capital-lock horizon the annualization
+    // wants -- and a BO5 that started at 08:00 resolves at 14:00. Reading "past resolution"
+    // off the kickoff would mark every position PENDING_RESOLUTION the moment its match
+    // began, which is both wrong and the opposite of the old bug rather than a fix for it.
+    const resolutionAt = Date.parse(dates.resolutionEndDate || dates.endDate || "");
+    const pendingResolution = !position.redeemable
+      && !position.resolved
+      && Number.isFinite(resolutionAt)
+      && resolutionAt <= Date.now();
+    const settled = position.resolved || position.redeemable || position.claimable;
+    return {
+      ...position,
+      endDate: dates.endDate,
+      endDateSource: "gamma-market-end-date",
+      scheduledEventDate: dates.scheduledEventDate || position.scheduledEventDate || null,
+      resolutionEndDate: dates.resolutionEndDate || position.resolutionEndDate || null,
+      daysToResolution: (endTime - Date.now()) / OPEN_ORDER_FALLBACK_HORIZON_MS,
+      status: settled ? position.status : (pendingResolution ? "PENDING_RESOLUTION" : "OPEN"),
+      officialResolutionStatus: settled
+        ? position.officialResolutionStatus
+        : (pendingResolution ? "pending-polymarket-resolution" : "open"),
+    };
+  }));
+}
+
 // CLOB open-order records contain trading fields only. Preserve the Gamma
 // event identity so another market from the same match is never treated as an
 // unrelated opportunity. Gamma can occasionally return an empty response
@@ -2520,7 +2594,10 @@ async function main() {
   const tradeHistory = Array.isArray(rawTrades)
     ? rawTrades.map(normalizeTradeHistoryItem).filter((item) => item.timestamp || item.question !== "-")
     : [];
-  const positions = enrichOpenTimesFromHistory(rawPositionRows, [...tradeHistory, ...activity], previousLiveState);
+  const positions = await enrichPositionDatesFromGamma(
+    enrichOpenTimesFromHistory(rawPositionRows, [...tradeHistory, ...activity], previousLiveState),
+    generatedAt,
+  );
   const historyClosedTrades = closedTradesFromHistory(tradeHistory, activity, generatedAt);
   const knownClosedKeys = new Set();
   for (const item of historyClosedTrades) {
@@ -2883,6 +2960,10 @@ export {
   unfilledLimitOrderHistory,
   refreshUnfilledLimitOrderOutcomes,
   positionHasRedeemableValue,
+  // Exported for the same reason: the day-bucket correction has to be measured against the
+  // real helper chain (correctedEndDate, openOrderMarketDates), not a restatement of it.
+  isWholeDayBucket,
+  enrichPositionDatesFromGamma,
   redeemNotifications,
   appendEquityDaySample,
   gammaEventTagSlugs,

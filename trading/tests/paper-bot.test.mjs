@@ -2317,11 +2317,61 @@ test("closed trades: the Resolution column shows Polymarket's date, not our clos
   assert.doesNotMatch(accessor, /resolvedAt/, "nor from when we booked the result");
   assert.match(accessor, /trade\?\.endDate/, "it reads Polymarket's end date");
 
-  // The cell must render that accessor, not the fallback-bearing one.
+  // The cell must render that accessor, not the fallback-bearing one. A date with no clock
+  // is now printed as the day it names rather than as a fabricated 23:59:59, so the literal
+  // is the branch, not a single call -- but it is still resolutionDate that is rendered.
   const cell = app.slice(app.indexOf("function resolutionCell"), app.indexOf("function holdingCell"));
-  assert.match(cell, /escapeHtml\(resolutionDate \? formatDate\(resolutionDate\) : "-"\)/);
+  assert.match(cell, /escapeHtml\(resolutionDate \? \(dayOnly \? wholeDayBucketLabel\(resolutionDate\) : formatDate\(resolutionDate\)\) : "-"\)/);
+  assert.doesNotMatch(cell, /escapeHtml\(\s*(endDate|tradeEndDate)/,
+    "the horizon date must not reach the Resolution column");
   // The horizon maths keeps its own fallback, so days-left behaviour is untouched.
   assert.match(cell, /const endDate = tradeEndDate\(trade\);/);
+});
+
+// Reported: every open position in the active live portfolio showed the same resolution --
+// "12. 09. 2026 01:59, 16.1 h left" -- for fixtures being played that afternoon.
+//
+// 01:59 local is 23:59:59Z, this codebase's marker for a date with no clock. Two separate
+// defects put it on screen, and each of them is checked here because fixing one alone still
+// leaves a wrong date in the column.
+test("resolution column: a date with no clock is shown as a day, not as 01:59 the next morning", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const app = await readFile(new URL("../assets/app.js", import.meta.url), "utf8");
+
+  const label = new Function(
+    `${app.slice(app.indexOf("function wholeDayBucketLabel"), app.indexOf("function resolutionCell"))}\nreturn wholeDayBucketLabel;`,
+  )();
+  const isBucket = new Function(
+    `${app.slice(app.indexOf("function isWholeDayBucket"), app.indexOf("// The day such a bucket names"))}\nreturn isWholeDayBucket;`,
+  )();
+
+  assert.equal(isBucket("2026-09-11T23:59:59.000Z"), true);
+  assert.equal(isBucket("2026-09-11T23:59:59Z"), true);
+  // Gamma publishes 23:59:00 for some non-sports markets. That is a real published minute,
+  // not the marker, and must keep its clock.
+  assert.equal(isBucket("2026-09-06T23:59:00.000Z"), false);
+  assert.equal(isBucket("2026-09-11T16:15:00.000Z"), false);
+  assert.equal(isBucket(null), false);
+
+  // The day it NAMES, in the zone it was built in. Rendered through the local formatter a
+  // 23:59:59Z bucket lands on the following calendar day for every reader east of UTC --
+  // which is how a fixture played on the 11th came to be reported as resolving on the 12th.
+  assert.equal(label("2026-09-11T23:59:59.000Z"), "11. 09. 2026");
+  assert.equal(label("2026-12-31T23:59:59.000Z"), "31. 12. 2026");
+
+  // And the accessor must prefer the resolution window over the horizon. For sports the
+  // horizon is deliberately the KICKOFF, so a BO5 starting at 08:00 and resolving at 14:00
+  // reported 08:00 in a column headed Resolution.
+  const accessor = app.slice(app.indexOf("function tradeResolutionDate"), app.indexOf("// A date with no clock"));
+  const resolutionDate = new Function(`${accessor}\nreturn tradeResolutionDate;`)();
+  assert.equal(
+    resolutionDate({ endDate: "2026-09-11T08:00:00.000Z", resolutionEndDate: "2026-09-11T14:00:00.000Z" }),
+    "2026-09-11T14:00:00.000Z",
+  );
+  // With no resolution window recorded the horizon is still better than nothing.
+  assert.equal(resolutionDate({ endDate: "2026-09-11T08:00:00.000Z" }), "2026-09-11T08:00:00.000Z");
+  assert.equal(resolutionDate({ scheduledEventDate: "2026-09-11T08:00:00.000Z" }), "2026-09-11T08:00:00.000Z");
+  assert.equal(resolutionDate({}), null);
 });
 
 test("scraping: a market that already reads 100% is not stored", () => {

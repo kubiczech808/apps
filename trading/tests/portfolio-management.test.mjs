@@ -4876,7 +4876,10 @@ test("portfolio form: no control loses what was typed into it", () => {
   // 0 to the draft, and the next sync writes that 0 back on screen -- indistinguishable
   // from a number the person typed and then lost. Derived from app.js rather than listed
   // here, so a control that starts rendering unset as 0 is caught the day it does.
-  const zeroRendered = [...APP.matchAll(/els\.([A-Za-z]+)\.value = \w+ == null \? "0"/g)]
+  // Both shapes count: the bare `== null ? "0"`, and the later one that writes "0" only for
+  // a value the config actually carries. Either way a 0 can appear in the box, which is the
+  // condition the empty-input guard below exists for.
+  const zeroRendered = [...APP.matchAll(/els\.([A-Za-z]+)\.value = \w+ == null\s*\r?\n?\s*\?[^;]*?"0"/g)]
     .map((match) => match[1]);
   assert.ok(zeroRendered.includes("settlementCloseBid") && zeroRendered.includes("stopLossProbabilityFloor"),
     `expected both reported fields among the zero-rendered controls, found ${zeroRendered.join(", ")}`);
@@ -4892,6 +4895,69 @@ test("portfolio form: no control loses what was typed into it", () => {
         + " sync puts that 0 on screen",
       );
     }
+  }
+});
+
+// Reported again, after the guards above shipped: "Close at certainty" still zeroes itself
+// in the form before the form is saved, and it happens while OTHER fields are being changed.
+//
+// The guards above cover the control's own listener. They cannot cover this: a sync called
+// with NO arguments rendered portfolioConfigForMode(state.mode) -- the SAVED config of
+// whatever portfolio the dashboard is on, which need not be the one the modal is editing.
+// There are roughly two dozen such calls (the tail of every non-draft handler, the
+// dashboard re-render, a finished scan), and any one of them landing while the modal is
+// open repainted every field from saved values. Close at certainty came back as "0"
+// because that was what the renderer wrote for a config with no value, and the save then
+// stored the 0 as "off".
+test("portfolio form: an open draft owns its fields, whatever else triggers a sync", () => {
+  const sync = extractFunction(APP, "syncPortfolioParameterControls");
+
+  // The guard has to run BEFORE the config is resolved, or it changes nothing.
+  const guardAt = sync.indexOf("if (!configOverride && parameterDraftActive())");
+  const resolveAt = sync.indexOf("const config = configOverride || portfolioConfigForMode(mode)");
+  assert.ok(guardAt > -1, "a sync with no override must fall back to the open draft");
+  assert.ok(resolveAt > -1, "the config resolution line moved; this test is anchored on it");
+  assert.ok(guardAt < resolveAt,
+    "the draft fallback must precede the config resolution, or the saved config still wins");
+
+  // And it has to carry the draft's MODE with it. Rendering the draft under state.mode
+  // reintroduces the same defect one level down: portfolio name, capital and the live-only
+  // rows would all be drawn for the wrong portfolio.
+  const guard = sync.slice(guardAt, resolveAt);
+  assert.match(guard, /configOverride = state\.parameterDraft;/);
+  assert.match(guard, /mode: draftMode/);
+  assert.match(guard, /state\.parameterDraftMode \|\| state\.mode/);
+
+  // Every no-argument call site is now safe by construction, which is the point of putting
+  // the rule here. Check there is more than one of them, so this is not a single caller
+  // that could just as well have passed the draft itself.
+  const bareCalls = [...APP.matchAll(/syncPortfolioParameterControls\(\);/g)].length;
+  assert.ok(bareCalls > 5,
+    `expected many no-argument sync calls to be covered by the guard, found ${bareCalls}`);
+});
+
+// The other half of the same report: where the 0 came from in the first place.
+test("portfolio form: an unset setting renders an empty box, never the digit 0", () => {
+  const isSet = new Function(`${extractFunction(APP, "configValueIsSet")}\nreturn configValueIsSet;`)();
+  assert.equal(isSet(undefined), false);
+  assert.equal(isSet(null), false);
+  assert.equal(isSet(""), false);
+  // An explicit 0 IS a value -- the portfolio was configured with the feature off, and the
+  // box must keep saying so rather than going blank.
+  assert.equal(isSet(0), true);
+  assert.equal(isSet(0.99), true);
+
+  const sync = extractFunction(APP, "syncPortfolioParameterControls");
+  for (const [element, key] of [
+    ["settlementCloseBid", "settlementCloseBid"],
+    ["stopLossProbabilityFloor", "stopLossProbabilityFloor"],
+  ]) {
+    assert.match(
+      sync,
+      new RegExp(`els\\.${element}\\.value = \\w+ == null\\s*\\r?\\n?\\s*\\? \\(configValueIsSet\\(config\\.${key}\\) \\? "0" : ""\\)`),
+      `${element} must render an unset config as an empty box: writing "0" turns "never`
+      + ' configured" into "explicitly off" the next time the form is saved',
+    );
   }
 });
 

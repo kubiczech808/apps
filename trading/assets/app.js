@@ -1398,6 +1398,12 @@ function dipEntryRuleSummaryValue(rule) {
 // 99c, so a level above it was unsatisfiable by construction. The worker clamps the trigger
 // to what a book can quote (reachableSettlementCloseBid), and the label says so rather than
 // promising a price no market will ever show.
+// Whether the config carries a value at all, as opposed to carrying one that normalizes
+// away. Both are rendered "Off", but only one of them may put a digit in the input box.
+function configValueIsSet(value) {
+  return value != null && value !== "";
+}
+
 function settlementCloseBidLabelValue(bid) {
   if (bid == null || !(bid > 0)) return "Off";
   return bid > 0.99
@@ -3919,10 +3925,31 @@ function decoratePendingLiveAnnualization(trades = []) {
 // using them made every closed row repeat its own Closed timestamp in the
 // Resolution column. Horizon maths keeps using tradeEndDate, which may fall back.
 function tradeResolutionDate(trade) {
-  for (const value of [trade?.endDate, trade?.resolutionEndDate, trade?.scheduledEventDate]) {
+  // resolutionEndDate first, and that ordering is the point of this function. For a sports
+  // market endDate is deliberately the KICKOFF -- it is the capital-lock horizon the
+  // annualization wants -- so reading the Resolution column off it answered a different
+  // question than the heading asks. A BO5 that starts at 08:00 and resolves at 14:00 was
+  // reported as resolving at 08:00, six hours before it can.
+  for (const value of [trade?.resolutionEndDate, trade?.endDate, trade?.scheduledEventDate]) {
     if (Number.isFinite(Date.parse(value || ""))) return value;
   }
   return null;
+}
+
+// A date with no clock, stretched to the last second of its day so that "is it past" only
+// turns true once the day is over. It is a marker, not a time anything resolves at, and
+// printing it as one is how every open position came to claim it resolved at 01:59 the
+// following morning: 23:59:59Z rendered in local time lands on the NEXT calendar day.
+function isWholeDayBucket(value) {
+  return /T23:59:59(\.\d+)?Z$/.test(String(value || ""));
+}
+
+// The day such a bucket names, in the zone it was built in (UTC), so it is not shifted onto
+// a neighbouring day by the reader's offset.
+function wholeDayBucketLabel(value) {
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return "-";
+  return `${String(date.getUTCDate()).padStart(2, "0")}. ${String(date.getUTCMonth() + 1).padStart(2, "0")}. ${date.getUTCFullYear()}`;
 }
 
 function resolutionCell(trade) {
@@ -3941,13 +3968,19 @@ function resolutionCell(trade) {
   // sits under and nothing else -- on a card, under a heading that already says RESOLUTION,
   // it was a whole line spent twice. The note survives only where it explains something the
   // date cannot: a missing date, where the value is a bare dash.
+  // A whole-day bucket says which DAY, and nothing finer. Printing "16.1 h left" beside it
+  // states a precision the value does not have -- and the figure was not even wrong by a
+  // rounding: it counted down to midnight UTC for fixtures that were over by mid-afternoon.
+  const dayOnly = isWholeDayBucket(resolutionDate);
   const note = isClosedTrade(trade)
     ? (resolutionDate ? "" : "no Polymarket date")
     : (awaitingSettlement
       ? `awaiting settlement, ${compactDays(days)}`
-      : `${compactDays(days)} left${inferredNote ? `, ${inferredNote}` : ""}`);
+      : (dayOnly
+        ? `no time published, ${wholeDayBucketLabel(resolutionDate)} at the latest`
+        : `${compactDays(days)} left${inferredNote ? `, ${inferredNote}` : ""}`));
   return `
-    ${escapeHtml(resolutionDate ? formatDate(resolutionDate) : "-")}
+    ${escapeHtml(resolutionDate ? (dayOnly ? wholeDayBucketLabel(resolutionDate) : formatDate(resolutionDate)) : "-")}
     ${note ? `<span>${escapeHtml(note)}</span>` : ""}
   `;
 }
@@ -4982,7 +5015,10 @@ function closedTradeCsvRow(trade) {
     opened_at_iso: trade.openedAt || trade.date || "",
     closed_at: formatDate(closedAt),
     closed_at_iso: closedAt,
-    resolution_at: formatDate(resolutionAt),
+    // Same rule as the Resolution column: a date with no clock exports as the day it names,
+    // not as a local-time 01:59 that falls on the following calendar day. The ISO beside it
+    // is unchanged, so nothing is hidden from a reader who wants the raw value.
+    resolution_at: isWholeDayBucket(resolutionAt) ? wholeDayBucketLabel(resolutionAt) : formatDate(resolutionAt),
     resolution_at_iso: resolutionAt,
     entry_price_pct: csvNumber(trade.entryPrice, 100, 4),
     entry_volume_usdc: csvNumber(tradeEntryVolumeUsdc(trade), 1, 2),
@@ -6010,6 +6046,31 @@ function syncDraftRiskAllocationControl(value, context = {}) {
 }
 
 function syncPortfolioParameterControls(configOverride = null, options = {}) {
+  // Reported: "Close at certainty" zeroes itself in the form, before the form is saved, and
+  // it happens while OTHER fields are being changed.
+  //
+  // This function is called with no arguments from roughly two dozen places -- the tail of
+  // every non-draft control handler, the dashboard re-render, a finished scan. With no
+  // override it rendered portfolioConfigForMode(state.mode): the SAVED config of whatever
+  // portfolio the dashboard is on, which is not necessarily the one the modal is editing.
+  // So one of those calls landing while the modal is open repainted the whole form from
+  // saved values, discarding every unsaved edit -- and Close at certainty in particular
+  // came back as a literal "0", because that is what the renderer below writes when the
+  // config it is handed carries no value. The next save then stored that 0 as "off".
+  //
+  // Guarding two dozen call sites one at a time is how this gets reintroduced. The open
+  // modal is authoritative over its own fields for as long as it is open, so the rule lives
+  // here: a sync that was not told what to render, renders the draft.
+  if (!configOverride && parameterDraftActive()) {
+    const draftMode = state.parameterDraftMode || state.mode;
+    configOverride = state.parameterDraft;
+    options = {
+      mode: draftMode,
+      systemConfig: state.parameterDraftSystem || systemConfig(),
+      capitalContext: state.parameterCapitalContext || parameterCapitalContextForMode(draftMode),
+      ...options,
+    };
+  }
   const mode = options.mode || state.mode;
   const config = configOverride || portfolioConfigForMode(mode);
   const maxHours = configMaxResolutionHours(config);
@@ -6077,14 +6138,24 @@ function syncPortfolioParameterControls(configOverride = null, options = {}) {
       : "The portfolio's own probability range is where this buys; the band above is where the market must have started.";
   }
   const probabilityFloor = normalizeStopLossProbabilityFloor(config.stopLossProbabilityFloor);
+  // An absent setting renders as an EMPTY field, not as the digit 0. Both of these controls
+  // used to write a literal "0" whenever the config carried no value, and the two states are
+  // not the same: "never configured" became "explicitly off" the next time the form was
+  // saved, and a 0 appearing in a field nobody touched is exactly what was reported as the
+  // setting zeroing itself. The label beside each already says "Off", so nothing is lost by
+  // leaving the box empty, and an empty box is skipped when the form is read back.
   if (els.stopLossProbabilityFloor && document.activeElement !== els.stopLossProbabilityFloor) {
-    els.stopLossProbabilityFloor.value = probabilityFloor == null ? "0" : String(Number((probabilityFloor * 100).toFixed(1)));
+    els.stopLossProbabilityFloor.value = probabilityFloor == null
+      ? (configValueIsSet(config.stopLossProbabilityFloor) ? "0" : "")
+      : String(Number((probabilityFloor * 100).toFixed(1)));
   }
   if (els.stopLossProbabilityFloorLabel) {
     els.stopLossProbabilityFloorLabel.textContent = stopLossProbabilityFloorLabel(probabilityFloor);
   }
   if (els.settlementCloseBid && document.activeElement !== els.settlementCloseBid) {
-    els.settlementCloseBid.value = settlementCloseBid == null ? "0" : String(Number((settlementCloseBid * 100).toFixed(1)));
+    els.settlementCloseBid.value = settlementCloseBid == null
+      ? (configValueIsSet(config.settlementCloseBid) ? "0" : "")
+      : String(Number((settlementCloseBid * 100).toFixed(1)));
   }
   if (els.settlementCloseBidLabel) {
     els.settlementCloseBidLabel.textContent = settlementCloseBidLabelValue(settlementCloseBid);

@@ -6334,3 +6334,100 @@ test("order fate: the account outranks the response that announced it", async ()
   assert.deepEqual(attempts.map((attempt) => attempt.tokenId), ["y", "z"],
     "a dry run and a tokenless row are not entry attempts");
 });
+
+// Reported: every open position in the active live portfolio showed the same resolution,
+// "12. 09. 2026 01:59, 16.1 h left", for fixtures being played that afternoon.
+//
+// Measured before anything was changed, on all fourteen live positions: stored endDate
+// 2026-09-11T23:59:59Z with source positions-api, while Gamma held a real time for every
+// single one -- 08:30, 10:00, 12:00, 14:00, 15:00, 15:25, 15:45, 16:00, 16:15, 17:00. The
+// positions API reports the market's end as a DAY, isoTime stretches a day to its last
+// second, and 23:59:59Z rendered in local time lands at 01:59 on the following morning.
+//
+// The precise value was one Gamma lookup away, and this file already made that lookup for
+// open ORDERS. Positions never asked.
+test("position dates: a day bucket is replaced by the real time, a real time is left alone", async () => {
+  const { enrichPositionDatesFromGamma, isWholeDayBucket } = await import("../tools/live-account-sync.mjs");
+  const originalFetch = globalThis.fetch;
+  const asked = [];
+  globalThis.fetch = async (url) => {
+    const tokenId = new URL(String(url)).searchParams.get("clob_token_ids");
+    asked.push(tokenId);
+    const markets = {
+      // A football market: Gamma publishes the kickoff and the same moment as the end.
+      kickoff: [{
+        question: "BK Hacken vs. Mjallby AIF: Mjallby AIF O/U 1.5",
+        slug: "swe-hac-mja-2026-09-11-team-total-away-1pt5",
+        endDate: "2026-09-11T17:00:00Z",
+        gameStartTime: "2026-09-11T17:00:00Z",
+      }],
+      // A BO5: it starts at 08:00 and cannot resolve before 14:00. The horizon and the
+      // resolution window are different moments here, which is the case that separates them.
+      bo5: [{
+        question: "LoL: KT Rolster Challengers vs DN SOOPers Challengers (BO5)",
+        slug: "lol-ktc-dnsc-2026-09-11",
+        endDate: "2026-09-11T14:00:00Z",
+        gameStartTime: "2026-09-11T08:00:00Z",
+      }],
+      // Gamma has nothing better than a day either.
+      dayonly: [{ question: "Will something happen?", slug: "will-something-happen", endDate: "2026-09-11" }],
+    }[tokenId] || [];
+    return { ok: true, status: 200, json: async () => markets, text: async () => JSON.stringify(markets) };
+  };
+
+  try {
+    const [kickoff, bo5, dayonly, precise, untouched] = await enrichPositionDatesFromGamma([
+      { tokenId: "kickoff", question: "BK Hacken", endDate: "2026-09-11T23:59:59.000Z", endDateSource: "positions-api", status: "OPEN" },
+      { tokenId: "bo5", question: "LoL", endDate: "2026-09-11T23:59:59.000Z", endDateSource: "positions-api", status: "OPEN" },
+      { tokenId: "dayonly", question: "Something", endDate: "2026-09-11T23:59:59.000Z", endDateSource: "positions-api", status: "OPEN" },
+      { tokenId: "precise", question: "Already timed", endDate: "2026-09-11T16:15:00.000Z", endDateSource: "positions-api", status: "OPEN" },
+      { question: "No token id", endDate: "2026-09-11T23:59:59.000Z", endDateSource: "positions-api", status: "OPEN" },
+    ], "2026-09-11T09:00:00.000Z");
+
+    assert.equal(kickoff.endDate, "2026-09-11T17:00:00.000Z");
+    assert.equal(kickoff.endDateSource, "gamma-market-end-date");
+    assert.equal(isWholeDayBucket(kickoff.endDate), false);
+
+    // The horizon keeps the codebase's convention -- for sports it is the kickoff, because
+    // that is when the capital is committed -- while the resolution window stays recorded
+    // separately, so the Resolution column has a true value to show.
+    assert.equal(bo5.endDate, "2026-09-11T08:00:00.000Z");
+    assert.equal(bo5.resolutionEndDate, "2026-09-11T14:00:00.000Z");
+    // And PENDING_RESOLUTION is read off the resolution window, never off the kickoff. At
+    // 09:00 this BO5 is under way; calling it "awaiting settlement" the moment it started
+    // would be the opposite error, not a fix for the first one.
+    assert.equal(bo5.status, "OPEN");
+
+    // Gamma has no clock either, so nothing is gained by rewriting the row -- and a value
+    // that says "sometime on the 11th" is still true.
+    assert.equal(dayonly.endDate, "2026-09-11T23:59:59.000Z");
+    assert.equal(dayonly.endDateSource, "positions-api");
+
+    // One-directional: a stored date that already carries a real time is never second-guessed,
+    // and the lookup is not even made for it.
+    assert.equal(precise.endDate, "2026-09-11T16:15:00.000Z");
+    assert.equal(precise.endDateSource, "positions-api");
+    assert.ok(!asked.includes("precise"), "a row with a real time must not cost a round trip");
+
+    assert.equal(untouched.endDate, "2026-09-11T23:59:59.000Z");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+// A Gamma outage must leave the dates that are already there. A coarse date is wrong; an
+// empty one is worse, and this runs on every sync.
+test("position dates: a failed lookup leaves the stored date alone", async () => {
+  const { enrichPositionDatesFromGamma } = await import("../tools/live-account-sync.mjs");
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => { throw new Error("connect ETIMEDOUT"); };
+  try {
+    const [row] = await enrichPositionDatesFromGamma([
+      { tokenId: "x", question: "Anything", endDate: "2026-09-11T23:59:59.000Z", endDateSource: "positions-api", status: "OPEN" },
+    ], "2026-09-11T09:00:00.000Z");
+    assert.equal(row.endDate, "2026-09-11T23:59:59.000Z");
+    assert.equal(row.status, "OPEN");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
