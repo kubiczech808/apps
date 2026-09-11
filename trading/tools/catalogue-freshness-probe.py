@@ -25,6 +25,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 import os
+import time
 import urllib.request
 from collections import Counter
 
@@ -63,10 +64,24 @@ def row_tags(row: dict) -> set[str]:
     return slugs - UNKNOWN
 
 
-def get(path: str) -> dict:
-    request = urllib.request.Request(f"{HOST}/{path}", headers={"Accept": "application/json"})
-    with urllib.request.urlopen(request, timeout=120) as response:
-        return json.loads(response.read().decode("utf-8") or "{}")
+def get(path: str, attempts: int = 3) -> dict:
+    """One GET, retried gently.
+
+    The hosting has been intermittently returning 500 and dropping connections under load,
+    and a probe that dies on the first blip tells us nothing while still having cost the
+    host the request. Retry with a widening pause, then give up loudly rather than silently.
+    """
+    last: Exception | None = None
+    for attempt in range(attempts):
+        try:
+            request = urllib.request.Request(f"{HOST}/{path}", headers={"Accept": "application/json"})
+            with urllib.request.urlopen(request, timeout=120) as response:
+                return json.loads(response.read().decode("utf-8") or "{}")
+        except Exception as error:  # noqa: BLE001 - any transport failure is worth retrying once
+            last = error
+            if attempt + 1 < attempts:
+                time.sleep(2 ** attempt * 3)
+    raise RuntimeError(f"GET {path} failed after {attempts} attempts: {last}")
 
 
 def hours_to_end(row: dict, now: dt.datetime) -> float | None:
@@ -89,8 +104,18 @@ def main() -> int:
     now = dt.datetime.now(dt.timezone.utc)
     rows: list[dict] = []
     seen: set[str] = set()
+    partial = False
     for page in range(MAX_PAGES):
-        payload = get(f"api.php?action=state&target=paper&summary=scraped&offset={page * PAGE_LIMIT}")
+        # A page that will not come back is not a reason to lose the pages that did. The
+        # distribution is the point, and it is readable from a partial catalogue as long as
+        # the shortfall is stated rather than hidden.
+        try:
+            payload = get(f"api.php?action=state&target=paper&summary=scraped&offset={page * PAGE_LIMIT}")
+        except Exception as error:  # noqa: BLE001
+            print(f"!! stopped paging at offset {page * PAGE_LIMIT}: {error}")
+            print("!! the figures below cover only the pages that were readable.")
+            partial = True
+            break
         batch = payload.get("marketObservations")
         if not isinstance(batch, list) or not batch:
             break
@@ -110,7 +135,10 @@ def main() -> int:
     print(f"== retained active catalogue: {total} rows")
     # The cap is 8000. Whether it BINDS is the whole question behind a horizon: under the
     # cap, dropping far-dated rows frees capacity nothing is waiting to use.
-    print(f"   capacity cap 8000 -> {'BINDING, eviction is happening' if total >= 7900 else 'NOT binding, there is free capacity'}")
+    if partial:
+        print("   capacity cap 8000 -> cannot be judged: the catalogue was only partly readable")
+    else:
+        print(f"   capacity cap 8000 -> {'BINDING, eviction is happening' if total >= 7900 else 'NOT binding, there is free capacity'}")
 
     undated = [row for row in rows if hours_to_end(row, now) is None]
     past = [row for row in rows if (hours_to_end(row, now) or 0) < 0 and hours_to_end(row, now) is not None]
