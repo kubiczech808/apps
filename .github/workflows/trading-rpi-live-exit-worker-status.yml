@@ -68,6 +68,8 @@ jobs:
                      LIVE_EXIT_STOP_GAP_TOLERANCE \
                      LIVE_EXIT_PENDING_MATCH_MS LIVE_EXIT_PENDING_POLL_MS \
                      LIVE_EXIT_STATE_REFRESH_MS LIVE_EXIT_POLICY_URL \
+                     LIVE_DIP_ENTRY_MODE LIVE_DIP_ENTRY_WATCH_URL LIVE_DIP_ENTRY_RECORD_URL \
+                     LIVE_DIP_ENTRY_TTL_MS LIVE_DIP_ENTRY_MAX_SLIPPAGE \
                      POLYMARKET_FUNDER_ADDRESS POLYMARKET_ADDRESS POLYMARKET_SIGNATURE_TYPE; do
             value="$(sed -n "s/^${key}=//p" "$env_file" | tail -n 1)"
             printf '   %-32s %s\n' "$key" "${value:-(unset)}"
@@ -195,6 +197,26 @@ jobs:
                 + ` stop ${String(plan.stopPrice).padStart(6)} trigger ${String(plan.triggerPrice).padStart(6)}`
                 + ` risk ${String(plan.riskTargetUsdc).padStart(7)} src ${plan.source || "?"}`);
             }
+            // The dip rule: what it is following and whether it can still read the watch.
+            // Without this, a rule that is armed but watching nothing and a rule whose watch
+            // endpoint is unreachable produce the same output -- no events at all -- and that
+            // is exactly the ambiguity this feature was reported for in the first place.
+            console.log(`\n   dip entry mode  ${state.dipEntryMode || "(off / not armed)"}`);
+            if (state.dipEntryMode) {
+              console.log(`   dip watch url   ${state.dipEntryWatchUrl || "(none)"}`);
+              console.log(`   dip watch error ${text(state.dipEntryError)}`);
+              const dipWatch = Array.isArray(state.dipEntryWatch) ? state.dipEntryWatch : [];
+              console.log(`   dip watch set right now: ${dipWatch.length}`);
+              for (const plan of dipWatch.slice(0, 30)) {
+                console.log(`      ${String(plan.portfolioId || "?").padEnd(22)} ${String(plan.question || "").slice(0, 44).padEnd(44)}`
+                  + ` ${String(plan.outcome || "").padEnd(12)} open ${String(plan.openProbability).padStart(6)}`
+                  + ` buy ${String(plan.buyMin).padStart(5)}-${String(plan.buyMax).padStart(5)}`
+                  + ` stake ${String(plan.stakeUsdc).padStart(6)}`
+                  + `${plan.blockedReason ? ` BLOCKED ${plan.blockedReason}` : ""}`
+                  + `${plan.settled ? ` settled: ${plan.settled}` : ""}`);
+              }
+              if (dipWatch.length > 30) console.log(`      ... and ${dipWatch.length - 30} more`);
+            }
             const history = Array.isArray(state.history) ? state.history : [];
             const tally = new Map();
             for (const event of history) tally.set(event.type, (tally.get(event.type) || 0) + 1);
@@ -202,6 +224,12 @@ jobs:
             for (const [type, count] of [...tally].sort((a, b) => b[1] - a[1])) {
               console.log(`      ${String(count).padStart(4)}  ${type}`);
             }
+            // On their own, because a dip event is rare by design -- it needs a favourite to
+            // collapse into the band -- and twelve stop-loss passes would push the one row
+            // that matters out of the generic dump below.
+            const dipEvents = history.filter((event) => /^DIP_ENTRY_/.test(String(event.type || "")));
+            console.log(`\n   dip entry events: ${dipEvents.length}`);
+            for (const event of dipEvents.slice(0, 20)) console.log(`      ${text(event).slice(0, 400)}`);
             const matching = history.filter((event) => filter.test(text(event)));
             console.log(`\n   events matching /${process.argv[2]}/i: ${matching.length}`);
             for (const event of matching.slice(0, 20)) console.log(`      ${text(event)}`);
