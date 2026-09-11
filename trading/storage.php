@@ -511,6 +511,107 @@ function trading_storage_compact_payload_batch(PDO $pdo, string $table, string $
     ];
 }
 
+/**
+ * A run-log event reduced to what the stored history is read back FOR: which portfolio
+ * ordered which token at what price, and what the run decided.
+ *
+ * The same shape ingest-trading-state.py now sends, restated here because the rows already
+ * in the table were written before it did -- and the difference is not small. Measured:
+ * 21315 rows at roughly ten kilobytes each, because the whole record travelled, including
+ * topCandidates, topRejected and the entire prevalidation shortlist. All of that is a
+ * snapshot of markets that also sits in the published execution state the dashboard reads.
+ */
+function trading_storage_slim_run_log_payload(array $payload): array
+{
+    $attempts = [];
+    foreach ((is_array($payload['attempts'] ?? null) ? $payload['attempts'] : []) as $attempt) {
+        if (!is_array($attempt)) {
+            continue;
+        }
+        $attempts[] = array_filter([
+            'action' => $attempt['action'] ?? null,
+            'tokenId' => $attempt['tokenId'] ?? null,
+            'orderPrice' => $attempt['orderPrice'] ?? null,
+            'shares' => $attempt['shares'] ?? null,
+            'question' => $attempt['question'] ?? null,
+            'outcome' => $attempt['outcome'] ?? null,
+        ], static fn (mixed $value): bool => $value !== null);
+    }
+    $slim = array_filter([
+        'id' => $payload['id'] ?? null,
+        'runAt' => $payload['runAt'] ?? $payload['generatedAt'] ?? null,
+        'generatedAt' => $payload['generatedAt'] ?? null,
+        'strategyId' => $payload['strategyId'] ?? null,
+        'strategyLabel' => $payload['strategyLabel'] ?? null,
+        'action' => $payload['action'] ?? null,
+        'reason' => $payload['reason'] ?? null,
+    ], static fn (mixed $value): bool => $value !== null && $value !== '');
+    // Kept even when empty: "this run ordered nothing" is a fact the attribution reader
+    // relies on, and an absent key would be read as a row that was never slimmed.
+    $slim['attempts'] = $attempts;
+    return $slim;
+}
+
+/**
+ * Rewrite already-stored run-log events in the slim shape, in batches.
+ *
+ * Rewriting rather than deleting, because the attribution history is the reason the stream
+ * exists -- deleting it to save space would throw away the only durable record of which
+ * portfolio placed which trade, which is the thing this whole storage move is for.
+ *
+ * Cursor-paged on the primary key rather than OFFSET, because OFFSET on a two hundred
+ * megabyte table re-reads everything it skips. Idempotent: a row already slim is rewritten
+ * to the identical bytes and simply costs nothing.
+ */
+function trading_storage_slim_stored_events(PDO $pdo, string $cursor = '', int $limit = 200): array
+{
+    trading_storage_bootstrap($pdo);
+    $limit = max(1, min(1000, $limit));
+    $statement = $pdo->prepare(
+        'SELECT event_key, payload FROM trading_event_log
+         WHERE stream IN (:live, :paper) AND event_key > :cursor
+         ORDER BY event_key ASC LIMIT ' . $limit
+    );
+    $statement->execute(['live' => 'state-run-log', 'paper' => 'portfolio-run-log', 'cursor' => $cursor]);
+    $rows = $statement->fetchAll();
+    if (!$rows) {
+        return ['scanned' => 0, 'rewritten' => 0, 'bytesBefore' => 0, 'bytesAfter' => 0, 'cursor' => $cursor, 'done' => true];
+    }
+    $update = $pdo->prepare('UPDATE trading_event_log SET payload = :payload WHERE event_key = :key');
+    $scanned = 0;
+    $rewritten = 0;
+    $before = 0;
+    $after = 0;
+    $cursorOut = $cursor;
+    foreach ($rows as $row) {
+        $scanned++;
+        $cursorOut = (string) $row['event_key'];
+        $packed = $row['payload'];
+        $before += is_string($packed) ? strlen($packed) : 0;
+        $decoded = trading_storage_unpack($packed);
+        if (!is_array($decoded)) {
+            $after += is_string($packed) ? strlen($packed) : 0;
+            continue;
+        }
+        $slimPacked = trading_storage_pack(trading_storage_slim_run_log_payload($decoded));
+        $after += strlen($slimPacked);
+        // Only write when it actually shrinks. A row that is already slim, or one whose slim
+        // form is somehow larger, is left exactly as it is.
+        if (strlen($slimPacked) < strlen((string) $packed)) {
+            $update->execute(['payload' => $slimPacked, 'key' => $cursorOut]);
+            $rewritten++;
+        }
+    }
+    return [
+        'scanned' => $scanned,
+        'rewritten' => $rewritten,
+        'bytesBefore' => $before,
+        'bytesAfter' => $after,
+        'cursor' => $cursorOut,
+        'done' => $scanned < $limit,
+    ];
+}
+
 function trading_storage_rebuild_compacted_table(PDO $pdo, string $table): array
 {
     trading_storage_bootstrap($pdo);

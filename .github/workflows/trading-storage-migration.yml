@@ -26,7 +26,7 @@ on:
         required: true
         default: status
         type: choice
-        options: [status, migrate, activate, deactivate]
+        options: [status, migrate, slim-events, rebuild-event-table, activate, deactivate]
       confirm:
         description: "Type ACTIVATE to allow the activate operation. Ignored otherwise."
         required: false
@@ -58,6 +58,16 @@ on:
         required: false
         default: "35"
         type: string
+      growth_cap_mb:
+        description: "Stop if the trading tables grow by more than this. The hosting quota is the real limit."
+        required: false
+        default: "100"
+        type: string
+      slim_cursor:
+        description: "Resume slim-events from this cursor (blank = from the start)"
+        required: false
+        default: ""
+        type: string
 
 permissions:
   contents: read
@@ -83,6 +93,8 @@ jobs:
       MIGRATE_PAGE_LIMIT: ${{ inputs.page_limit || '100' }}
       MIGRATE_PAUSE_SECONDS: ${{ inputs.pause_seconds || '2' }}
       MIGRATE_BUDGET_MINUTES: ${{ inputs.budget_minutes || '35' }}
+      MIGRATE_GROWTH_CAP_MB: ${{ inputs.growth_cap_mb || '100' }}
+      SLIM_CURSOR: ${{ inputs.slim_cursor }}
     steps:
       - uses: actions/checkout@v4
 
@@ -97,6 +109,22 @@ jobs:
       - name: Run the JSON migration
         if: inputs.operation == 'migrate'
         run: python3 trading/tools/storage-migrate.py
+
+      - name: Rewrite the fat run-log events
+        if: inputs.operation == 'slim-events'
+        run: python3 trading/tools/storage-migrate.py --operation slim-events
+
+      - name: Reclaim the freed pages on disk
+        if: inputs.operation == 'rebuild-event-table'
+        run: |
+          # MySQL keeps the pages a rewrite frees inside the table file. OPTIMIZE TABLE is
+          # what actually hands them back, and on InnoDB it rebuilds the table -- so it is
+          # its own operation rather than something bolted onto the end of the rewrite.
+          curl -sS -X POST "$STORAGE_URL" \
+            -H "Content-Type: application/json" \
+            -H "X-Trading-Trigger-Key: ${TRADING_TRIGGER_KEY}" \
+            -d '{"operation":"rebuild-table","table":"trading_event_log"}' \
+            | python3 -m json.tool
 
       - name: Activate database reads
         if: inputs.operation == 'activate'

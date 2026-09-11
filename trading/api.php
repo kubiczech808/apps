@@ -6056,6 +6056,20 @@ try {
             );
             respond(['ok' => true, 'operation' => 'compact-batch', 'batch' => $result]);
         }
+        // Rewrite the run-log events that were stored fat, before this hosting runs out of
+        // database. Measured: the whole MySQL instance is at 1785 MB of a 2000 MB quota, and
+        // trading_event_log alone holds 222 MB of it in 21315 rows -- roughly ten kilobytes
+        // each, nearly all of it a market snapshot that also sits in the published state.
+        //
+        // Rewriting, not deleting: the attribution history is the reason the stream exists.
+        if ($operation === 'slim-events') {
+            $result = trading_storage_slim_stored_events(
+                $pdo,
+                (string) ($storageRequest['cursor'] ?? ''),
+                (int) ($storageRequest['limit'] ?? 200),
+            );
+            respond(['ok' => true, 'operation' => 'slim-events', 'result' => $result]);
+        }
         if ($operation === 'rebuild-table') {
             $tables = trading_storage_rebuild_compacted_table($pdo, (string) ($storageRequest['table'] ?? ''));
             respond(['ok' => true, 'operation' => 'rebuild-table', 'tables' => $tables, 'storage' => trading_storage_diagnostics()]);

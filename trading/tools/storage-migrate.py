@@ -68,7 +68,8 @@ def post(url: str, key: str, payload: dict[str, Any]) -> dict[str, Any]:
     return parsed
 
 
-def run_phase(url: str, key: str, phase: str, deadline: float, start_offset: int = 0) -> int | None:
+def run_phase(url: str, key: str, phase: str, deadline: float, start_offset: int = 0,
+              size_guard=None) -> int | None:
     """One migration phase, paged to completion when it pages.
 
     Returns None when the phase finished, or the offset to resume from when the time budget
@@ -81,6 +82,12 @@ def run_phase(url: str, key: str, phase: str, deadline: float, start_offset: int
     for page in range(MAX_PAGES):
         if time.monotonic() > deadline:
             print(f"   {phase}: time budget reached at offset {offset}, handing the host back")
+            return offset
+        # Checked on a cadence rather than every page: the status endpoint is a round trip of
+        # its own, and asking it as often as we write would double the load this is trying to
+        # keep down.
+        if page and page % 20 == 0 and size_guard is not None and not size_guard():
+            print(f"   {phase}: growth cap reached at offset {offset}, stopping")
             return offset
         started = time.monotonic()
         try:
@@ -139,9 +146,61 @@ def run_phase(url: str, key: str, phase: str, deadline: float, start_offset: int
     raise RuntimeError(f"{phase} did not finish within {MAX_PAGES} pages")
 
 
+def trading_size_bytes(status_url: str) -> int | None:
+    """How big the trading tables are right now, read from the public status endpoint."""
+    try:
+        with urllib.request.urlopen(status_url, timeout=60) as response:
+            payload = json.loads(response.read().decode("utf-8", "replace"))
+        return int(payload.get("storage", {}).get("tradingSizeBytes") or 0) or None
+    except Exception:
+        return None
+
+
+def slim_events(url: str, key: str) -> int:
+    """Rewrite the run-log events that were stored fat, in batches, until there are none left.
+
+    Paced exactly like the import, and for the same reason: it runs against the host that
+    live execution depends on, and the system never stops.
+    """
+    status_url = os.environ.get("STATUS_URL", "").strip()
+    before = trading_size_bytes(status_url) if status_url else None
+    print(f"== slimming stored run-log events (trading tables at "
+          f"{'unknown' if before is None else str(round(before / 1048576)) + ' MB'})")
+    cursor = os.environ.get("SLIM_CURSOR", "")
+    deadline = time.monotonic() + BUDGET_MINUTES * 60
+    scanned = rewritten = saved = 0
+    for batch in range(10000):
+        if time.monotonic() > deadline:
+            print(f"\n== paused at cursor {cursor}")
+            print(f"Resume by dispatching slim-events again with SLIM_CURSOR={cursor}.")
+            break
+        result = post(url, key, {"operation": "slim-events", "cursor": cursor, "limit": PAGE_LIMIT}).get("result", {})
+        scanned += int(result.get("scanned") or 0)
+        rewritten += int(result.get("rewritten") or 0)
+        saved += int(result.get("bytesBefore") or 0) - int(result.get("bytesAfter") or 0)
+        cursor = str(result.get("cursor") or cursor)
+        if batch % 10 == 0 or result.get("done"):
+            print(f"   scanned {scanned}, rewritten {rewritten}, saved {saved / 1048576:.0f} MB")
+        if result.get("done"):
+            print("   no rows left to slim")
+            break
+        time.sleep(PAUSE_SECONDS)
+    after = trading_size_bytes(status_url) if status_url else None
+    print(f"\nscanned {scanned}, rewritten {rewritten}, payload saved {saved / 1048576:.0f} MB")
+    if before is not None and after is not None:
+        print(f"trading tables {round(before / 1048576)} MB -> {round(after / 1048576)} MB")
+    print("MySQL does not hand the freed pages back on its own -- dispatch rebuild-table on"
+          " trading_event_log to reclaim them on disk.")
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--operation", default="migrate", choices=["migrate", "activate", "deactivate", "status"])
+    parser.add_argument(
+        "--operation",
+        default="migrate",
+        choices=["migrate", "activate", "deactivate", "status", "slim-events"],
+    )
     args = parser.parse_args()
 
     url = os.environ.get("STORAGE_URL", "").strip()
@@ -155,6 +214,9 @@ def main() -> int:
         print(json.dumps(result, indent=2))
         return 0
 
+    if args.operation == "slim-events":
+        return slim_events(url, key)
+
     phases = ["documents", "scraped", "resolved", "events", "finalize"]
     resume_phase = os.environ.get("MIGRATE_PHASE", "").strip()
     start_offset = int(os.environ.get("MIGRATE_START_OFFSET") or 0)
@@ -165,7 +227,19 @@ def main() -> int:
         phases = phases[phases.index(resume_phase):]
 
     deadline = time.monotonic() + BUDGET_MINUTES * 60
+    # The hard limit, and the reason it exists: the whole MySQL instance has a 2000 MB quota
+    # and is already at 1785 MB. An import that fills the last 215 MB does not just fail --
+    # it takes down every site on the hosting, including the api.php the live exit worker
+    # polls every second. So the growth is measured, not trusted.
+    status_url = os.environ.get("STATUS_URL", "").strip()
+    growth_cap = float(os.environ.get("MIGRATE_GROWTH_CAP_MB") or 100) * 1048576
+    size_at_start = trading_size_bytes(status_url) if status_url else None
+    if size_at_start is None:
+        print("!! could not read the current storage size, so the growth cap cannot be enforced")
+        return 1
     print(f"== migrating the JSON state into MySQL")
+    print(f"   trading tables at {round(size_at_start / 1048576)} MB,"
+          f" stopping if they grow by more than {round(growth_cap / 1048576)} MB")
     print(f"   {PAGE_LIMIT} rows per call, {PAUSE_SECONDS:.0f}s between calls,"
           f" stopping after {BUDGET_MINUTES:.0f} minutes")
     # Documents first: the activation gate checks for state:paper, and the observation
@@ -173,7 +247,25 @@ def main() -> int:
     # importing rows that could not be switched to anyway.
     for index, phase in enumerate(phases):
         print(f" -> {phase}")
-        stopped_at = run_phase(url, key, phase, deadline, start_offset if index == 0 else 0)
+        def within_cap() -> bool:
+            now = trading_size_bytes(status_url)
+            if now is None:
+                # An unreadable size is not permission to keep going: the cap is the only
+                # thing standing between this import and a full disk.
+                print("   !! storage size could not be read; stopping rather than guessing")
+                return False
+            grown = now - size_at_start
+            if grown > growth_cap:
+                print(f"   !! trading tables have grown {round(grown / 1048576)} MB"
+                      f" (cap {round(growth_cap / 1048576)} MB)")
+                return False
+            return True
+
+        stopped_at = run_phase(url, key, phase, deadline, start_offset if index == 0 else 0, within_cap)
+        if stopped_at is None and not within_cap():
+            print("\n== stopped on the growth cap")
+            print(f"Resume with phase={phase} once space has been freed.")
+            return 0
         if stopped_at is not None:
             print("\n== paused, not failed")
             print(f"Resume with phase={phase} and start_offset={stopped_at}.")
