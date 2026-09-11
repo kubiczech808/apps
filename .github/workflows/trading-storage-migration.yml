@@ -1,0 +1,90 @@
+name: Trading Storage Migration
+
+# Moves the trading data structure from the JSON files into MySQL, and switches reads over
+# once that is verified. Manual only, one operation per dispatch, and the destructive-looking
+# one is behind its own confirmation.
+#
+# Why this exists at all: the database is configured, reachable and holds the schema, but its
+# JSON migration had never been run and the runner mirror was gated behind a flag nothing
+# ever set, so nothing had written to it for ten days. Turning the mirror on restarted the
+# writes; this does the one-off import and the switch.
+#
+#   status     read-only. What the database holds, whether the import ran, when it was last
+#              written to, and whether reads currently come from it.
+#   migrate    the one-off JSON import, phase by phase, paging the observation phases until
+#              they report done. Safe to re-run: every write is an upsert keyed by content.
+#   activate   switches READS to the database. Refused by the API unless the import has
+#              finished, and refused here unless the confirmation matches -- it is the step
+#              that changes where the dashboard's data comes from.
+#   deactivate switches reads back to the JSON files. The escape hatch, deliberately as easy
+#              to run as the switch itself.
+on:
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: "status (read-only), migrate, activate, deactivate"
+        required: true
+        default: status
+        type: choice
+        options: [status, migrate, activate, deactivate]
+      confirm:
+        description: "Type ACTIVATE to allow the activate operation. Ignored otherwise."
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: trading-storage-migration
+  cancel-in-progress: false
+
+jobs:
+  storage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      STORAGE_URL: https://www.osobnizkusenosti.cz/trading/api.php?action=storage-admin
+      STATUS_URL: https://www.osobnizkusenosti.cz/trading/api.php?action=storage-status
+      TRADE_ROWS_URL: https://www.osobnizkusenosti.cz/trading/api.php?action=trade-rows-summary
+      TRADING_TRIGGER_KEY: ${{ secrets.POLYTRADING_DB_PASSWORD }}
+      OPERATION: ${{ inputs.operation }}
+      CONFIRM: ${{ inputs.confirm }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Report the current state
+        run: |
+          echo "== storage-status (public, read-only)"
+          curl -sS "$STATUS_URL" | python3 -m json.tool || true
+          echo ""
+          echo "== trade rows per portfolio"
+          curl -sS "$TRADE_ROWS_URL" | python3 -m json.tool || true
+
+      - name: Run the JSON migration
+        if: inputs.operation == 'migrate'
+        run: python3 trading/tools/storage-migrate.py
+
+      - name: Activate database reads
+        if: inputs.operation == 'activate'
+        run: |
+          if [ "$CONFIRM" != "ACTIVATE" ]; then
+            echo "Refused: activation switches where every read comes from."
+            echo "Re-dispatch with confirm=ACTIVATE once the migration above reports done."
+            exit 1
+          fi
+          python3 trading/tools/storage-migrate.py --operation activate
+
+      - name: Switch reads back to the JSON files
+        if: inputs.operation == 'deactivate'
+        run: python3 trading/tools/storage-migrate.py --operation deactivate
+
+      - name: Report the state afterwards
+        if: always() && inputs.operation != 'status'
+        run: |
+          echo "== storage-status after ${OPERATION}"
+          curl -sS "$STATUS_URL" | python3 -m json.tool || true
+          echo ""
+          echo "== trade rows per portfolio"
+          curl -sS "$TRADE_ROWS_URL" | python3 -m json.tool || true
