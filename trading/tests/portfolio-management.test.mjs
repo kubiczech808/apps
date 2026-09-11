@@ -5682,3 +5682,47 @@ test("the owner of a live trade is filled in later and never blanked", () => {
   assert.match(INGEST, /attributed = sum\(1 for row in live_trades if str\(row\.get\("portfolioId"\) or ""\)\.strip\(\)\)/,
     "it still reports how many are attributed, so the gap stays visible");
 });
+
+// The mirror must not re-send run-log history the retention rule has already archived.
+//
+// Measured: trading_event_log held 21506 portfolio-run-log rows using 103 MB, and its oldest
+// row was from 13 July -- two months back -- despite a rule that archives and deletes
+// anything past a week. Archiving was not failing. The mirror sends the portfolio's whole
+// JSON run log on every pass, so every row the archive deleted came back on the next run and
+// the table could never fall below two months however often it was cleaned. The database
+// went from 396.9 MB to 513.9 MB in fifteen minutes on the back of it.
+test("the mirror sends only the retained window of run-log history", () => {
+  const script = new URL("../tools/ingest-trading-state.py", import.meta.url).pathname;
+  const run = (stream) => JSON.parse(execFileSync("python3", ["-c",
+    [
+      "import importlib.util, json",
+      `spec = importlib.util.spec_from_file_location('ing', '${script}')`,
+      "mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)",
+      "rows = [",
+      "  {'runAt': '2026-07-13T11:21:34.000Z', 'id': 'old'},",
+      "  {'runAt': '9999-01-01T00:00:00.000Z', 'id': 'recent'},",
+      "  {'id': 'undated'},",
+      "  {'runAt': 'nonsense', 'id': 'unparseable'},",
+      "]",
+      `print(json.dumps([r['payload']['id'] for r in mod.event_rows('${stream}', 'p1', rows)]))`,
+    ].join("\n"),
+  ], { encoding: "utf8" }));
+
+  // The two streams the archive covers are cut, so the database and the archive agree on
+  // where the boundary is instead of fighting over it.
+  for (const stream of ["portfolio-run-log", "state-run-log"]) {
+    const kept = run(stream);
+    assert.ok(!kept.includes("old"), `${stream} still re-sends history older than the window`);
+    assert.ok(kept.includes("recent"), `${stream} must keep sending the retained window`);
+    // Fails open: losing history to a date the parser could not read would be worse than
+    // storing it, so an undated or unreadable row travels.
+    assert.deepEqual(kept, ["recent", "undated", "unparseable"]);
+  }
+
+  // Config history is a permanent record and tiny -- 281 rows, under a megabyte -- and the
+  // scan history is not what grew. Neither is cut.
+  for (const stream of ["portfolio-config-history", "market-scan-history"]) {
+    assert.deepEqual(run(stream), ["old", "recent", "undated", "unparseable"],
+      `${stream} is not a run log and must not be truncated`);
+  }
+});

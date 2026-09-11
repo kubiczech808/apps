@@ -18,8 +18,25 @@ import os
 import sys
 import urllib.error
 import urllib.request
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
+
+# How much run-log history travels to the database.
+#
+# Measured: trading_event_log held 21506 portfolio-run-log rows using 103 MB, and its OLDEST
+# row was two months old -- despite a retention rule that archives and deletes anything past
+# a week. Archiving was not failing. The mirror sends the portfolio's whole JSON run log on
+# every pass, so every row the archive deleted came straight back on the next run, and the
+# table could never fall below two months of history however often it was cleaned.
+#
+# Cutting it here is the fix that holds: the database keeps the retention window, the archive
+# keeps everything older in gzipped files, and the published JSON keeps its own longer
+# history for the dashboard. Only the run-log streams are cut -- the same two the archive
+# covers -- so the two rules agree. Config history is a permanent record and tiny, and is
+# deliberately not cut.
+RUN_LOG_RETENTION_DAYS = int(os.environ.get("RUN_LOG_RETENTION_DAYS") or 7)
+RETAINED_RUN_LOG_STREAMS = {"portfolio-run-log", "state-run-log"}
 
 
 def env_bool(name: str, default: bool = False) -> bool:
@@ -70,16 +87,33 @@ def list_rows(value: Any) -> list[dict[str, Any]]:
     return [row for row in value if isinstance(row, dict)] if isinstance(value, list) else []
 
 
+def run_log_cutoff() -> str:
+    """The oldest run-log moment worth sending, as a comparable ISO prefix.
+
+    Nineteen characters -- YYYY-MM-DDTHH:MM:SS -- so the comparison never depends on whether
+    a timestamp ends in Z or +00:00 or carries milliseconds. Every timestamp in these streams
+    is produced by toISOString and is therefore UTC.
+    """
+    moment = datetime.now(timezone.utc) - timedelta(days=RUN_LOG_RETENTION_DAYS)
+    return moment.strftime("%Y-%m-%dT%H:%M:%S")
+
+
 def event_rows(stream: str, portfolio_id: str | None, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    return [
-        {
+    cut = run_log_cutoff() if (stream in RETAINED_RUN_LOG_STREAMS and RUN_LOG_RETENTION_DAYS > 0) else None
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        at = row.get("changedAt") or row.get("runAt") or row.get("date")
+        # Fails open: a row whose moment cannot be read is sent rather than dropped. Losing
+        # history to a date this could not parse would be a worse outcome than storing it.
+        if cut and isinstance(at, str) and len(at) >= 19 and at[:19] < cut:
+            continue
+        out.append({
             "stream": stream,
             "portfolioId": portfolio_id,
-            "occurredAt": row.get("changedAt") or row.get("runAt") or row.get("date"),
+            "occurredAt": at,
             "payload": row,
-        }
-        for row in rows
-    ]
+        })
+    return out
 
 
 def slim_run_log_row(row: dict[str, Any]) -> dict[str, Any]:
