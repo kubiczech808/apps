@@ -116,6 +116,52 @@ def event_rows(stream: str, portfolio_id: str | None, rows: list[dict[str, Any]]
     return out
 
 
+def recently_resolved(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The resolved markets worth re-sending, newest first.
+
+    Measured while working out why the hosting collapsed under database reads: the mirror was
+    posting the WHOLE resolved archive on every pass. 84183 rows in batches of 300 is 281 POST
+    requests, each one an upsert transaction, every ten minutes -- on top of 28 for the active
+    catalogue -- against the same shared host that serves the dashboard. That is why every
+    resolved row showed as written within the last day: not because any of them changed, but
+    because all of them were being rewritten, constantly.
+
+    A resolved market does not change. The backfill is the migration's job and it is done, so
+    the mirror only has to carry what has resolved since. Bounded twice over, because one
+    bound alone can fail open: a window, so nothing old travels, and a hard cap, so a segment
+    whose rows carry no readable resolution date cannot quietly restore the old behaviour.
+    """
+    days = max(1, int(os.environ.get("RESOLVED_MIRROR_DAYS") or 3))
+    cap = max(100, int(os.environ.get("RESOLVED_MIRROR_LIMIT") or 1500))
+    cut = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%S")
+
+    def resolved_at(row: dict[str, Any]) -> str:
+        for field in ("resolvedAt", "endDate", "closedAt", "observedAt"):
+            value = row.get(field)
+            if isinstance(value, str) and len(value) >= 19:
+                return value[:19]
+        return ""
+
+    recent = sorted(
+        (row for row in rows if resolved_at(row) >= cut),
+        key=resolved_at,
+        reverse=True,
+    )
+    # A row whose resolution moment cannot be read is not old, it is unplaceable -- so it
+    # travels rather than being silently dropped, behind the rows that can be dated and
+    # inside the same cap. Dropping it would be the one way a newly resolved market could
+    # never reach the database at all.
+    undated = [row for row in rows if not resolved_at(row)]
+    send = (recent + undated)[:cap]
+    if len(send) < len(rows):
+        print(
+            f"Resolved archive: sending {len(send)} of {len(rows)}"
+            f" (window {days}d, cap {cap}; the rest resolved earlier and cannot change,"
+            f" and the backfill is the migration's job)"
+        )
+    return send
+
+
 def slim_run_log_row(row: dict[str, Any]) -> dict[str, Any]:
     """A run-log entry reduced to what the database is actually asked for.
 
@@ -240,6 +286,8 @@ def ingest_paper(url: str, key: str, state_file: Path, state: dict[str, Any], ta
             rows = list_rows(json.loads(source.read_text(encoding="utf-8")).get(field))
         except (OSError, ValueError) as error:
             raise RuntimeError(f"could not read observation segment {source.name}: {error}") from error
+        if field == "resolvedMarketObservations":
+            rows = recently_resolved(rows)
         for offset in range(0, len(rows), 300):
             result = post(url, key, {"target": target, "observations": rows[offset:offset + 300]})
             imported += int(((result.get("ingest") or {}).get("observations") or 0))

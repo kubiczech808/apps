@@ -5726,3 +5726,75 @@ test("the mirror sends only the retained window of run-log history", () => {
       `${stream} is not a run log and must not be truncated`);
   }
 });
+
+// The mirror was re-sending the entire resolved archive on every pass.
+//
+// Measured while working out why the hosting collapsed under database reads: 84183 resolved
+// rows in batches of 300 is 281 POST requests, each an upsert transaction, every ten minutes
+// -- on top of 28 for the active catalogue -- against the same shared host that serves the
+// dashboard. It also explained a reading that had looked reassuring: every resolved row
+// showed as written within the last day, not because any had changed but because all of them
+// were being rewritten constantly.
+//
+// A resolved market does not change. The backfill is the migration's job and it is done, so
+// the mirror only carries what has resolved since.
+test("the mirror stops re-sending a resolved archive that cannot have changed", async () => {
+  const script = new URL("../tools/ingest-trading-state.py", import.meta.url).pathname;
+  // Rows travel on stdin, not as an argument: the realistic case below is an archive of
+  // 84183 of them and an argument that size is E2BIG. Only the id list is returned, and only
+  // the LAST line of it, because the function reports what it skipped on stdout -- that
+  // report is the point of it, so the test reads around it rather than silencing it.
+  const probe = (rows, env = {}) => JSON.parse(execFileSync("python3", ["-c",
+    [
+      "import importlib.util, json, sys",
+      `spec = importlib.util.spec_from_file_location('ing', '${script}')`,
+      "mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)",
+      "rows = json.load(sys.stdin)",
+      "print(json.dumps([r['id'] for r in mod.recently_resolved(rows)]))",
+    ].join("\n"),
+  ], {
+    encoding: "utf8",
+    env: { ...process.env, ...env },
+    input: JSON.stringify(rows),
+    maxBuffer: 64 * 1024 * 1024,
+  }).trim().split("\n").pop());
+
+  const daysAgo = (days) =>
+    new Date(Date.now() - days * 86400000).toISOString().replace(/\.\d+Z$/, ".000Z");
+
+  const kept = probe([
+    { id: "today", resolvedAt: daysAgo(0) },
+    { id: "yesterday", resolvedAt: daysAgo(1) },
+    { id: "lastMonth", resolvedAt: daysAgo(30) },
+    { id: "endDateOnly", endDate: daysAgo(2) },
+    { id: "undated" },
+  ]);
+  assert.ok(kept.includes("today") && kept.includes("yesterday"));
+  assert.ok(kept.includes("endDateOnly"), "a row dated only by endDate is still placeable");
+  assert.ok(!kept.includes("lastMonth"), "a market resolved last month cannot change again");
+  // Unplaceable, not old. Dropping it is the one way a newly resolved market could never
+  // reach the database at all, so it travels behind the dated rows and inside the same cap.
+  assert.ok(kept.includes("undated"));
+
+  // Two bounds, because one alone fails open: a segment whose rows all carried unreadable
+  // dates would otherwise restore the old behaviour in full.
+  const flood = Array.from({ length: 4000 }, (_, index) => ({ id: `u${index}` }));
+  assert.equal(probe(flood).length, 1500, "the cap holds when nothing can be dated");
+  assert.equal(probe(flood, { RESOLVED_MIRROR_LIMIT: "250" }).length, 250);
+
+  // And the real shape: an archive of 84183 with a day of new resolutions in it.
+  const archive = [
+    ...Array.from({ length: 84143 }, (_, index) => ({ id: `old${index}`, resolvedAt: daysAgo(100) })),
+    ...Array.from({ length: 40 }, (_, index) => ({ id: `new${index}`, resolvedAt: daysAgo(1) })),
+  ];
+  assert.equal(probe(archive).length, 40,
+    "281 upsert requests every ten minutes become one");
+
+  // And it has to be WIRED IN. Everything above passes just as well with the call site
+  // removed -- which is exactly what happened when this was first written -- so the import
+  // loop is pinned too: the resolved source goes through it, and the active catalogue does
+  // not, because active rows really do change on every scan.
+  const INGEST = readFileSync(new URL("../tools/ingest-trading-state.py", import.meta.url), "utf8");
+  assert.match(INGEST, /if field == "resolvedMarketObservations":\n\s+rows = recently_resolved\(rows\)/);
+  assert.doesNotMatch(INGEST, /if field == "marketObservations":\n\s+rows = recently_resolved\(rows\)/);
+});
