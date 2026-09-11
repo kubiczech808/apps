@@ -3914,6 +3914,15 @@ async function emitDecision(payload) {
     // stamped here rather than at each call site, which is what let it be forgotten.
     ...(payload.batchLog ? { batchLog: { ...payload.batchLog, id: mergedEntry.id, runAt: mergedEntry.runAt } } : {}),
     runLog: nextRunLog,
+    // Which tokens THIS portfolio ordered, kept past the run log's horizon. Written from the
+    // merged entry so a rotation's sell and buy legs are both recorded, and seeded from the
+    // previous state so a run that places nothing preserves what came before.
+    orderOwnership: mergeOrderOwnership(
+      previousExecutionState?.orderOwnership,
+      mergedEntry.attempts,
+      mergedEntry.strategyId,
+      mergedEntry.runAt,
+    ),
   };
 
   console.log(JSON.stringify(consoleDecisionSummary(output), null, 2));
@@ -3972,6 +3981,62 @@ function mergeRunLog(rows = [], limit = 160) {
   return merged
     .sort((a, b) => Date.parse(b.runAt || b.generatedAt || 0) - Date.parse(a.runAt || a.generatedAt || 0))
     .slice(0, limit);
+}
+
+// One entry per token this portfolio ever ordered. Four fields, kept forever.
+const ORDER_OWNERSHIP_LIMIT = 4000;
+
+// Reported: closed positions disappear from a live portfolio's Closed list over time and its
+// statistics stop adding up.
+//
+// Measured on the live account, and it is not a rounding error: 211 of 352 closed rows --
+// carrying 255 USDC of realized P/L and 1027 USDC of stake -- belonged to no portfolio at
+// all, and none of the 352 carried a portfolio of its own.
+//
+// The cause is that a permanent fact was being re-derived from a rolling window. Live rows
+// carry no portfolio: one wallet, and every live portfolio but 5050 prices its bids the same
+// way off the book, so ownership is worked out on each render by asking which portfolio's RUN
+// LOG names the token. That log holds 160 runs, which measured 1.1 to 2.8 days per portfolio
+// -- "70-80 sports, esports" reached back 1.2 days. Past that the row is claimed by nobody,
+// and belongsToLivePortfolio then refuses it for a custom portfolio by design, because no
+// price could tell it apart from base Live. The row does not leave the account; it silently
+// moves to base Live, taking its stake and its P/L out of the statistics being read.
+//
+// So the fact is recorded instead of inferred. This ledger is not the run log: it is four
+// fields per ORDER rather than a whole run record, so keeping 4000 of them costs less than
+// the 160 runs beside it and spans months rather than a day. Raising the run-log cap instead
+// would have multiplied the payload every dashboard load fetches, to store a hundred fields
+// per run for the sake of one.
+function mergeOrderOwnership(previous = [], attempts = [], mode = "live", at = "") {
+  const rows = [];
+  const seen = new Set();
+  const push = (entry) => {
+    const tokenId = String(entry?.tokenId || "");
+    if (!tokenId) return;
+    const price = Number(entry?.price);
+    // Keyed on token AND price: a token re-entered at a different price by another portfolio
+    // is a different claim, and the dashboard matches a fill back to the price that was
+    // ordered. Dropping the price from the key would make the first claim permanent.
+    const key = `${tokenId}:${Number.isFinite(price) ? price.toFixed(4) : "-"}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    rows.push({
+      tokenId,
+      price: Number.isFinite(price) ? price : null,
+      mode: String(entry?.mode || mode || "live"),
+      at: String(entry?.at || at || ""),
+    });
+  };
+  // This run first, so a fresh claim on a token wins over a stale one for the same price.
+  for (const attempt of (Array.isArray(attempts) ? attempts : [])) {
+    const action = String(attempt?.action || "").toUpperCase();
+    // The same two exclusions the dashboard applies when reading the run log: a refused
+    // order and a dry run never owned anything.
+    if (action.includes("REJECT") || action.startsWith("DRY_RUN")) continue;
+    push({ tokenId: attempt?.tokenId, price: attempt?.orderPrice, mode, at });
+  }
+  for (const entry of (Array.isArray(previous) ? previous : [])) push(entry);
+  return rows.slice(0, ORDER_OWNERSHIP_LIMIT);
 }
 
 async function submitOrder(order) {
@@ -6362,6 +6427,10 @@ if (invokedDirectly) {
 // Exported for tests only.
 export {
   successfulOrderResponse,
+  // Exported so the durable ownership ledger is measured on the real merge rather than a
+  // restatement of it: the dedupe key and the two exclusions are the whole correctness.
+  mergeOrderOwnership,
+  ORDER_OWNERSHIP_LIMIT,
   orderOutcome,
   compareShorterHorizon,
   daysValue,

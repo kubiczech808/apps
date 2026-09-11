@@ -11436,6 +11436,24 @@ function liveOrdersByToken() {
           orders.get(tokenId).push({ mode: normalized, price: Number.isFinite(price) ? price : null, at });
         }
       }
+      // The durable half, and the reason the two exist. The run log above is a rolling
+      // window of 160 runs -- measured at 1.1 to 2.8 days per portfolio -- so a closed row
+      // older than that was claimed by nobody, and belongsToLivePortfolio then refuses it
+      // for a custom portfolio because no price could tell it apart from base Live. It
+      // moved silently to base Live, taking its stake and its P/L out of the statistics
+      // being read: 211 of 352 closed rows on the live account, 255 USDC of realized P/L.
+      //
+      // orderOwnership is four fields per ORDER rather than a whole run record, so it keeps
+      // months of them for less than the window beside it costs. The mode comes from which
+      // portfolio's file this is, exactly as it does for the run log above -- the executor
+      // does not need to know what the dashboard calls it.
+      for (const entry of (Array.isArray(executionState.orderOwnership) ? executionState.orderOwnership : [])) {
+        const tokenId = String(entry?.tokenId || "");
+        if (!tokenId) continue;
+        const price = Number(entry?.price);
+        if (!orders.has(tokenId)) orders.set(tokenId, []);
+        orders.get(tokenId).push({ mode: normalized, price: Number.isFinite(price) ? price : null, at: String(entry?.at || "") });
+      }
     }
     return orders;
   });

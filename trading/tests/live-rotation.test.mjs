@@ -2390,7 +2390,7 @@ test("5050 run log: the executor publishes the batchLog its own log entry is key
   let written = null;
   const build = new Function(
     "previousExecutionState", "compactLiveRunRecord", "rotationLegMerge", "ROTATION_COMPLETION_RUN",
-    "mergeRunLog", "consoleDecisionSummary", "EXECUTION_STATE_PATH", "mkdir", "writeFile", "dirname", "console",
+    "mergeRunLog", "mergeOrderOwnership", "consoleDecisionSummary", "EXECUTION_STATE_PATH", "mkdir", "writeFile", "dirname", "console",
     // Restored culled bids are recorded from inside emitDecision, so the sandbox has to
     // supply the same module-level slot the real run writes to. These tests are about the
     // batchLog key, so nothing was restored.
@@ -2403,6 +2403,9 @@ test("5050 run log: the executor publishes the batchLog its own log entry is key
     () => null,
     false,
     (rows) => rows,
+    // The durable ownership ledger is exercised on its own; here it only has to exist, or
+    // emitDecision throws before it writes and these tests fail for an unrelated reason.
+    () => [],
     (output) => output,
     "state.json",
     async () => {},
@@ -2438,7 +2441,7 @@ test("5050 run log: a state with no batchLog is left as one", async () => {
   let written = null;
   const build = new Function(
     "previousExecutionState", "compactLiveRunRecord", "rotationLegMerge", "ROTATION_COMPLETION_RUN",
-    "mergeRunLog", "consoleDecisionSummary", "EXECUTION_STATE_PATH", "mkdir", "writeFile", "dirname", "console",
+    "mergeRunLog", "mergeOrderOwnership", "consoleDecisionSummary", "EXECUTION_STATE_PATH", "mkdir", "writeFile", "dirname", "console",
     // Restored culled bids are recorded from inside emitDecision, so the sandbox has to
     // supply the same module-level slot the real run writes to. These tests are about the
     // batchLog key, so nothing was restored.
@@ -2446,7 +2449,7 @@ test("5050 run log: a state with no batchLog is left as one", async () => {
     `${emit}\nreturn emitDecision;`,
   );
   const emitDecision = build(
-    { runLog: [] }, (batchLog) => batchLog, () => null, false, (rows) => rows, (output) => output,
+    { runLog: [] }, (batchLog) => batchLog, () => null, false, (rows) => rows, () => [], (output) => output,
     "state.json", async () => {}, async (_path, body) => { written = JSON.parse(body); }, () => ".", { log() {} },
   );
 
@@ -6456,4 +6459,92 @@ test("day bucket: the sync and the dashboard recognize the same marker", async (
   const isBucket = new Function(`${bodyOf(appSource)}\nreturn isWholeDayBucket;`)();
   assert.equal(isBucket("2026-09-11T23:59:59.000Z"), true);
   assert.equal(isBucket("2026-09-06T23:59:00.000Z"), false);
+});
+
+// Reported: closed positions disappear from a live portfolio's Closed list over time and the
+// portfolio's statistics stop adding up.
+//
+// Measured on the live account before anything was changed: 211 of 352 closed rows -- 255
+// USDC of realized P/L and 1027 USDC of stake -- belonged to no portfolio at all, and none of
+// the 352 carried a portfolio of its own. Every execution log holds 160 runs, which measured
+// 1.1 to 2.8 days per portfolio; "70-80 sports, esports" reached back 1.2 days. Past that
+// nothing claims the row, and belongsToLivePortfolio refuses it for a custom portfolio by
+// design, so it moves silently to base Live with its stake and its P/L.
+//
+// The fix is to record the fact instead of re-deriving it from a window.
+test("order ownership: the portfolio that ordered a token is recorded, not re-derived", async () => {
+  const { mergeOrderOwnership, ORDER_OWNERSHIP_LIMIT } = await import("../tools/live-order-executor.mjs");
+
+  const first = mergeOrderOwnership([], [
+    { action: "ORDER_SUBMITTED", tokenId: "a", orderPrice: 0.72 },
+    { action: "ORDER_REJECTED", tokenId: "b", orderPrice: 0.74 },
+    { action: "DRY_RUN_ORDER", tokenId: "c", orderPrice: 0.75 },
+    { action: "ORDER_SUBMITTED", orderPrice: 0.76 },
+  ], "underway", "2026-09-10T05:28:59.783Z");
+
+  // The same two exclusions the dashboard applies to the run log. A refused order and a dry
+  // run never owned anything, and recording them would hand a portfolio somebody else's row.
+  assert.deepEqual(first, [{ tokenId: "a", price: 0.72, mode: "underway", at: "2026-09-10T05:28:59.783Z" }]);
+
+  // A later run keeps what came before -- that is the entire point, and a run that places
+  // nothing must not erase the history.
+  const second = mergeOrderOwnership(first, [
+    { action: "ORDER_SUBMITTED", tokenId: "d", orderPrice: 0.73 },
+  ], "underway", "2026-09-11T05:00:00.000Z");
+  assert.deepEqual(second.map((row) => row.tokenId), ["d", "a"]);
+  const third = mergeOrderOwnership(second, [], "underway", "2026-09-11T06:00:00.000Z");
+  assert.deepEqual(third.map((row) => row.tokenId), ["d", "a"]);
+
+  // Keyed on token AND price. The dashboard matches a fill back to the price that was
+  // ordered, so a token re-entered at a different price is a second claim; folding the two
+  // together would make the first portfolio's claim permanent.
+  const repriced = mergeOrderOwnership(third, [
+    { action: "ORDER_SUBMITTED", tokenId: "a", orderPrice: 0.79 },
+  ], "underway", "2026-09-11T07:00:00.000Z");
+  assert.deepEqual(repriced.filter((row) => row.tokenId === "a").map((row) => row.price), [0.79, 0.72]);
+
+  // The same token at the same price twice is one claim, and the NEWER time wins, so a
+  // re-entry after another portfolio closed out is attributed to whoever ordered it last.
+  const repeated = mergeOrderOwnership(
+    [{ tokenId: "a", price: 0.72, mode: "underway", at: "2026-09-10T05:28:59.783Z" }],
+    [{ action: "ORDER_SUBMITTED", tokenId: "a", orderPrice: 0.72 }],
+    "esports",
+    "2026-09-11T08:00:00.000Z",
+  );
+  assert.equal(repeated.length, 1);
+  assert.equal(repeated[0].at, "2026-09-11T08:00:00.000Z");
+
+  // Bounded, but by a horizon measured in months rather than the run log's day: four fields
+  // per order, not a whole run record.
+  assert.ok(ORDER_OWNERSHIP_LIMIT >= 2000,
+    `the ledger must outlive the run log by a wide margin, found ${ORDER_OWNERSHIP_LIMIT}`);
+  const overflow = mergeOrderOwnership(
+    Array.from({ length: ORDER_OWNERSHIP_LIMIT + 50 }, (unused, index) => ({ tokenId: `t${index}`, price: 0.5, at: "2026-09-01T00:00:00Z" })),
+    [],
+    "underway",
+    "2026-09-11T09:00:00.000Z",
+  );
+  assert.equal(overflow.length, ORDER_OWNERSHIP_LIMIT);
+});
+
+// The ledger is worth nothing if it is written and never read, and the reader is the half
+// that decides which portfolio a closed row is counted in.
+test("order ownership: the dashboard reads the ledger alongside the run log", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const [app, executor] = await Promise.all([
+    readFile(new URL("../assets/app.js", import.meta.url), "utf8"),
+    readFile(new URL("../tools/live-order-executor.mjs", import.meta.url), "utf8"),
+  ]);
+
+  // Written on every run, from the merged entry so a rotation's both legs are recorded.
+  assert.match(executor, /orderOwnership: mergeOrderOwnership\(\s*previousExecutionState\?\.orderOwnership,\s*mergedEntry\.attempts,/);
+
+  const reader = app.slice(app.indexOf("function liveOrdersByToken"), app.indexOf("function newestLiveOrder"));
+  assert.match(reader, /executionState\.orderOwnership/,
+    "the durable ledger must be read, or closed rows keep expiring with the run log");
+  // The run log stays: it carries this run's orders before the next state is published.
+  assert.match(reader, /executionState\.runLog/);
+  // The mode comes from whose file this is, exactly as it does for the run log. Trusting a
+  // mode written by the executor would require it to know what the dashboard calls it.
+  assert.match(reader, /orders\.get\(tokenId\)\.push\(\{ mode: normalized, price: Number\.isFinite\(price\) \? price : null, at: String\(entry\?\.at \|\| ""\) \}\)/);
 });
