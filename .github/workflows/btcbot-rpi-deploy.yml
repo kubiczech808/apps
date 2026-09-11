@@ -34,26 +34,42 @@ jobs:
       - name: Unit tests
         run: node --test "tests/**/*.test.mjs"
 
-      - name: Install runtime without replacing state or credentials
+      - name: Audit existing BTC bot installation
+        shell: bash
+        run: |
+          set -euxo pipefail
+          id
+          getent passwd openclaw2
+          sudo -n true
+          sudo test -f /home/openclaw2/.config/btc-bot.env
+          sudo ls -ld /home/openclaw2/.local/lib/btc-bot /home/openclaw2/.config/btc-bot.env
+
+      - name: Copy versioned runtime
         shell: bash
         run: |
           set -euxo pipefail
           target=/home/openclaw2/.local/lib/btc-bot
-          config=/home/openclaw2/.config/btc-bot.env
-
-          test -f "$config"
           sudo install -d -o openclaw2 -g openclaw2 -m 0755 "$target/src" "$target/tools"
           sudo cp -a src/. "$target/src/"
           sudo cp -a tools/. "$target/tools/"
           sudo install -o openclaw2 -g openclaw2 -m 0644 package.json "$target/package.json"
           sudo chown -R openclaw2:openclaw2 "$target/src" "$target/tools"
 
+      - name: Install systemd units
+        shell: bash
+        run: |
+          set -euxo pipefail
           sudo install -d -o openclaw2 -g openclaw2 -m 0755 /home/openclaw2/.config/systemd/user
           sudo install -o openclaw2 -g openclaw2 -m 0644 \
             systemd/btc-bot.service /home/openclaw2/.config/systemd/user/btc-bot.service
           sudo install -o openclaw2 -g openclaw2 -m 0644 \
             systemd/btc-bot.timer /home/openclaw2/.config/systemd/user/btc-bot.timer
 
+      - name: Raise candle history without replacing credentials
+        shell: bash
+        run: |
+          set -euxo pipefail
+          config=/home/openclaw2/.config/btc-bot.env
           # Keep every existing credential and operator value. Only this data
           # requirement changed: the daily strategy needs 140 complete days.
           sudo env CONFIG_PATH="$config" python3 - <<'PY'
