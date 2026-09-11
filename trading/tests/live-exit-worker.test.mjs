@@ -1737,3 +1737,78 @@ test("certainty close: the level is clamped to a price a book can actually quote
   const source = readFileSync(new URL("../tools/rpi-live-exit-worker.mjs", import.meta.url), "utf8");
   assert.match(source, /event\.settlementCloseBidInForce = reachableSettlementCloseBid\(plan\.settlementCloseBid\);/);
 });
+
+// Reported: a market reached 100%, sat at a 0.999 bid for over five minutes with the
+// certainty close set to 99.9, and was never sold.
+//
+// Measured on the live account before anything was changed: the bid WAS at the setting and
+// the tick was 0.001, so the trigger was satisfied -- "WOULD FIRE". What refused it was the
+// exit itself, with "the remaining UNKNOWN shares are dust". Unknown, not small: the
+// position holds 6.93 shares.
+//
+// The path is exact. That portfolio runs with the stop loss OFF, so equalRiskExitPlan
+// returns { protectable: false, reason: "position stop-loss multiplier is disabled" } and
+// NOTHING else -- no share count. watchPlan still watches the position, correctly, because
+// the settlement close is its own independent reason; but it spread that refusal into the
+// plan, so the close could never size an order. A portfolio with the stop loss off and the
+// certainty close on could therefore never close at certainty.
+test("settlement close: a position with no stop still carries its share count", () => {
+  // Stop loss off, certainty close on: the exact pair of settings on the live portfolio.
+  const position = {
+    tokenId: "1",
+    shares: 6.9295,
+    totalCostUsdc: 4.92,
+    netGainIfWinUsdc: 2.01,
+    stopLossRiskMultiplier: 0,
+    feeRate: 0,
+    feesEnabled: false,
+  };
+  const plan = worker.watchPlan(position, {
+    portfolioId: "live-custom-underway",
+    settlementCloseBid: 0.999,
+    stopLossEnabled: false,
+    stopLossRiskMultiplier: 0,
+    enabled: true,
+  });
+
+  assert.ok(plan, "the settlement close is its own reason to watch, with or without a stop");
+  assert.equal(plan.protectable, false, "there is no stop here, and the plan should still say so");
+  assert.equal(plan.stopPrice, null);
+  // The fix: the share count is a fact about the position, not about the stop.
+  assert.equal(plan.shares, 6.9295,
+    "without this the exit cannot size an order and refuses the position as unknown shares");
+  assert.equal(plan.totalCostUsdc, 4.92);
+  assert.equal(plan.settlementCloseBid, 0.999);
+
+  // And a position that IS protectable keeps the derived numbers rather than being
+  // overwritten by the raw ones.
+  const protectedPlan = worker.watchPlan(
+    { ...position, stopLossRiskMultiplier: 1 },
+    { portfolioId: "live", settlementCloseBid: 0.999, stopLossEnabled: true, enabled: true },
+  );
+  assert.equal(protectedPlan.shares, 6.9295);
+  assert.ok(protectedPlan.stopPrice > 0 && protectedPlan.stopPrice < 1);
+});
+
+// The other half: nine positions were already marked terminal by that refusal, and a
+// terminal exit record is filtered out of every later pass. Fixing the plan alone would have
+// reached none of them.
+test("settlement close: terminality earned by the defect is released, the exchange's is not", () => {
+  const source = readFileSync(new URL("../tools/rpi-live-exit-worker.mjs", import.meta.url), "utf8");
+  const submit = functionBody(source, "submitProtectedExit");
+
+  // An unknown size is no longer terminal at all: it is a plan that failed to carry its
+  // size, not a fact about the position.
+  assert.match(submit, /terminal: planned != null,/);
+  assert.match(submit, /the position's share count was missing from the exit plan/);
+  // A genuinely tiny holding stays terminal -- retrying it forever is the fault that rule
+  // was written for.
+  assert.match(submit, /shares are dust,/);
+
+  // And the records already stored are released, matched on their recorded reason so a
+  // refusal that came from the exchange keeps meaning what it said.
+  assert.match(source, /EXIT_TERMINAL_CLEARED/);
+  assert.match(source, /share count was missing\|shares are dust/);
+  assert.match(source, /&& number\(plan\.shares\) != null && number\(plan\.shares\) >= DUST_SHARES/,
+    "release it only once the plan can actually size an order, or it retries into the same refusal");
+});

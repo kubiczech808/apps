@@ -750,6 +750,27 @@ export function watchPlan(position, entry = null) {
   if (stopPrice == null && closeBid == null && flatFloor == null) return null;
   return {
     ...derived,
+    // How many shares are held is a fact about the POSITION, not about whether a stop can be
+    // derived from it -- and every early return in equalRiskExitPlan omits it.
+    //
+    // Reported: a market reached 100%, sat at a 0.999 bid for over five minutes with the
+    // certainty close set to 99.9, and was never sold. Measured: the bid was at the setting
+    // and the tick was 0.001, so the trigger was satisfied; what refused it was the exit
+    // itself, with "the remaining UNKNOWN shares are dust" -- and terminally, so it was never
+    // retried. Unknown, not small: the position holds 6.93 shares.
+    //
+    // The path is exact. "70-80 sports, esports" runs with the stop loss OFF, so
+    // equalRiskExitPlan returns { protectable: false, reason: "position stop-loss multiplier
+    // is disabled" } and nothing else. watchPlan still watches the position, correctly,
+    // because the settlement close is its own independent reason -- but the plan it spread
+    // that refusal into carried no share count, so the close could never size an order.
+    //
+    // So a portfolio with the stop loss off and the certainty close on could never close at
+    // certainty, which is precisely the pair of settings this portfolio has. The nine
+    // SETTLEMENT_CLOSE_REJECTED events already in the worker's history say "unknown shares"
+    // too: this has been failing for every such position, not just this one.
+    shares: number(derived.shares, number(position.shares ?? position.size)),
+    totalCostUsdc: number(derived.totalCostUsdc, number(position.totalCostUsdc ?? position.stakeUsdc ?? position.initialValue)),
     tokenId: String(position.tokenId || position.assetId),
     question: entry?.question || position.question || position.market || "Unknown market",
     outcome: entry?.outcome || position.outcome || "",
@@ -1349,11 +1370,18 @@ async function submitProtectedExit(plan, { bestBidPrice = null } = {}) {
   // the plan and the order -- terminal, because the alternative is one refusal every twenty
   // seconds for the rest of the day.
   if (planned == null || planned < DUST_SHARES) {
+    // Terminal only when the holding is genuinely tiny. An UNKNOWN size is not a fact about
+    // the position at all -- it is a plan that failed to carry its share count -- and
+    // treating the two the same is what froze nine live positions out of every later pass,
+    // including every pass after the plan was fixed. A position whose size we could not read
+    // is one to try again, not one to give up on.
     return {
-      success: false, terminal: true, exitPrice: price, tickSize: constraints.tickSize,
+      success: false, terminal: planned != null, exitPrice: price, tickSize: constraints.tickSize,
       plannedShares: planned, heldShares: null,
-      error: `the remaining ${planned == null ? "unknown" : planned} shares are dust,`
-        + ` below the ${DUST_SHARES} the exchange will accept an order for`,
+      error: planned == null
+        ? "the position's share count was missing from the exit plan, so no order could be sized"
+        : `the remaining ${planned} shares are dust,`
+          + ` below the ${DUST_SHARES} the exchange will accept an order for`,
     };
   }
   // Asked for on the grid the exchange will sign it on, because the client floors a SELL size
@@ -2303,6 +2331,26 @@ async function checkOnce(context) {
   // Reading them together makes one pass cost about one round trip instead of N.
   const candidates = plans.filter((plan) => {
     const pending = context.state.exits?.[plan.tokenId];
+    // Terminality earned by a DEFECT has to be released when the defect is fixed, or the fix
+    // reaches no position that already hit it. Nine live positions were marked terminal by
+    // the missing-share-count refusal above and would have stayed frozen for as long as they
+    // were held, with the certainty close set, the bid at the setting, and the worker
+    // skipping them every pass. Matched on the recorded reason rather than cleared wholesale:
+    // a refusal from the exchange is still terminal and still means what it said.
+    if (pending?.terminal && /share count was missing|shares are dust/.test(String(pending.error || ""))
+      && number(plan.shares) != null && number(plan.shares) >= DUST_SHARES) {
+      recordEvent(context.state, {
+        at: new Date().toISOString(),
+        type: "EXIT_TERMINAL_CLEARED",
+        tokenId: plan.tokenId,
+        question: plan.question || null,
+        outcome: plan.outcome || null,
+        shares: number(plan.shares),
+        note: "the plan now carries a share count, so the refusal that had no size to work with is released",
+      });
+      delete pending.terminal;
+      delete pending.error;
+    }
     if (pending?.terminal) return false;
     // An order for this position is already on the exchange, queued and undecided. Sending
     // another is how one stop became three orders in 90 seconds, of which one filled and two
