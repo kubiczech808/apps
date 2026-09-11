@@ -1,0 +1,137 @@
+name: RPi Add Maintenance Runner
+
+# Adds a SECOND GitHub Actions runner agent to the Pi, so maintenance jobs stop blocking
+# trading ones. Manual only, and it never touches the runner that already exists.
+#
+# Measured incident this cost us: the live executor runs on the Pi, the Pi had exactly one
+# runner slot, and a worker deploy queued at 11:14 did not start until 11:55. Live executions
+# queued behind it for 10-20 minutes each, piled up in the trading-live-wallet concurrency
+# group, and GitHub cancelled the waiting ones -- eight cancelled runs and one failure in
+# ninety minutes. The executions themselves were healthy; they simply never got the machine.
+#
+# A self-hosted runner runs ONE job at a time by design. Concurrency comes from running more
+# agents, which is free: no GitHub charge, no new hardware, just another process on the Pi
+# that idles until a job arrives.
+#
+# The new agent carries an extra `maintenance` label as well as the standard three, so:
+#   - maintenance jobs ask for `maintenance` and can only land on the new agent
+#   - trading jobs ask for the standard labels and can use EITHER agent
+# which means trading gains a second slot and can never again be stuck behind a deploy.
+on:
+  workflow_dispatch:
+    inputs:
+      runner_name:
+        description: "Name for the new runner"
+        required: false
+        default: pi5-apps-maintenance
+        type: string
+      work_dir:
+        description: "Directory to install it in, relative to the home directory"
+        required: false
+        default: actions-runner-apps-maintenance
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rpi-add-maintenance-runner
+  cancel-in-progress: false
+
+jobs:
+  add-runner:
+    # Has to run ON the Pi: it installs a service there. It asks for the plain labels
+    # because the maintenance agent it is about to create does not exist yet.
+    runs-on: [self-hosted, Linux, ARM64]
+    timeout-minutes: 20
+    env:
+      RUNNER_NAME: ${{ inputs.runner_name || 'pi5-apps-maintenance' }}
+      WORK_DIR: ${{ inputs.work_dir || 'actions-runner-apps-maintenance' }}
+      REPO: ${{ github.repository }}
+      # Registering a runner needs administration rights, which GITHUB_TOKEN does not have.
+      # If this secret lacks them the step below says so in one line rather than failing
+      # somewhere deep in config.sh.
+      ADMIN_TOKEN: ${{ secrets.TRADING_GITHUB_TOKEN || secrets.POLY_TRADING_GITHUB_TOKEN }}
+    steps:
+      - name: Check the token can register a runner
+        run: |
+          set -uo pipefail
+          if [ -z "${ADMIN_TOKEN:-}" ]; then
+            echo "No admin token is configured. Add a fine-grained PAT with"
+            echo "Administration: read and write on this repository as TRADING_GITHUB_TOKEN."
+            exit 1
+          fi
+          code="$(curl -sS -o /tmp/reg-token.json -w '%{http_code}' -X POST \
+            -H "Authorization: Bearer ${ADMIN_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${REPO}/actions/runners/registration-token")"
+          if [ "$code" != "201" ]; then
+            echo "The token cannot register runners (HTTP ${code})."
+            echo "It needs Administration: read and write on ${REPO}."
+            sed -n '1,5p' /tmp/reg-token.json
+            exit 1
+          fi
+          echo "Registration token acquired."
+
+      - name: Install the second runner, leaving the first alone
+        run: |
+          set -euo pipefail
+          target="${HOME}/${WORK_DIR}"
+          if [ -d "$target" ]; then
+            echo "${target} already exists -- the maintenance runner is already installed."
+            echo "Nothing to do. Remove it by hand if you want it rebuilt."
+            exit 0
+          fi
+          # The same version the existing agent runs, so one Pi never carries two runtimes.
+          existing="$(ls -d "${HOME}"/actions-runner-* 2>/dev/null | head -n 1 || true)"
+          version=""
+          if [ -n "$existing" ] && [ -f "${existing}/bin/Runner.Listener" ]; then
+            version="$(cat "${existing}/.runner_version" 2>/dev/null || true)"
+          fi
+          if [ -z "$version" ]; then
+            version="$(curl -sS https://api.github.com/repos/actions/runner/releases/latest \
+              | python3 -c 'import sys,json;print(json.load(sys.stdin)["tag_name"].lstrip("v"))')"
+          fi
+          echo "Installing runner ${version} into ${target}"
+          mkdir -p "$target"
+          curl -sSL -o /tmp/actions-runner.tar.gz \
+            "https://github.com/actions/runner/releases/download/v${version}/actions-runner-linux-arm64-${version}.tar.gz"
+          tar xzf /tmp/actions-runner.tar.gz -C "$target"
+          rm -f /tmp/actions-runner.tar.gz
+          echo "$version" > "${target}/.runner_version"
+
+          token="$(python3 -c 'import json;print(json.load(open("/tmp/reg-token.json"))["token"])')"
+          cd "$target"
+          # --unattended so it never waits for input, --replace so a re-run after a failed
+          # attempt reuses the name instead of refusing it.
+          ./config.sh \
+            --url "https://github.com/${REPO}" \
+            --token "$token" \
+            --name "${RUNNER_NAME}" \
+            --labels "self-hosted,Linux,ARM64,maintenance" \
+            --work _work \
+            --unattended \
+            --replace
+          rm -f /tmp/reg-token.json
+
+      - name: Start it as a service that survives a reboot
+        run: |
+          set -euo pipefail
+          target="${HOME}/${WORK_DIR}"
+          cd "$target"
+          # The runner ships its own systemd installer. Run as the current user, which is
+          # the same account the existing agent and the trading services already run under.
+          sudo ./svc.sh install "$(whoami)"
+          sudo ./svc.sh start
+          sleep 5
+          sudo ./svc.sh status || true
+
+      - name: Say what the Pi now has
+        if: always()
+        run: |
+          echo "== runner directories on this Pi"
+          ls -d "${HOME}"/actions-runner-* 2>/dev/null || true
+          echo ""
+          echo "The Pi now answers jobs on two agents. Trading jobs ask for"
+          echo "[self-hosted, Linux, ARM64] and can use either; maintenance jobs ask for"
+          echo "[self-hosted, Linux, ARM64, maintenance] and stay on the new one."
