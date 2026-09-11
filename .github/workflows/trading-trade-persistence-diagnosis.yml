@@ -1,0 +1,29 @@
+name: Trading Trade Persistence Diagnosis
+
+# Read-only diagnostic, manual only. Reads the public storage-status endpoint and the trade
+# row summary over HTTPS. Writes nothing, migrates nothing, activates nothing.
+#
+# Asked for: every trade should be written to the database when it opens and updated when it
+# closes, each carrying the portfolio that placed it, kept long-term for statistics and
+# reposting. Three things have to be true for that and they fail independently -- the schema
+# exists, the storage is activated, and trades are actually stored as queryable rows rather
+# than only inside a state blob. This says which of the three is missing.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Report whether trades are being persisted per portfolio
+        working-directory: trading
+        run: node tools/trade-persistence-diagnosis.mjs
