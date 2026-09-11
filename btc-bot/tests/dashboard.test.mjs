@@ -8,6 +8,7 @@ const read = (relative) => readFileSync(fileURLToPath(new URL(`../${relative}`, 
 const css = read('assets/app.css')
 const html = read('index.html')
 const js = read('assets/app.js')
+const api = read('api.php')
 
 test('the hidden attribute outranks every layout rule in the stylesheet', () => {
   // The bug this exists for: `.gate { display: grid }` is an author rule, and
@@ -57,8 +58,10 @@ test('decision facts carry signal-state classes', () => {
   }
   assert.match(js, /DECISION_SIGNAL_STATES/)
   assert.match(js, /className:\s*`fact fact-\$\{fact\.status\}`/)
-  assert.match(js, /ATR.*atrMin.*atrMax/s)
-  assert.match(js, /R\/R.*minRR/s)
+  assert.match(js, /100D průměr/)
+  assert.match(js, /20D high/)
+  assert.match(js, /denní ATR/)
+  assert.match(js, /plan\?\.leverage/)
 })
 
 test('capital tile separates USD benchmark from sats trading result', () => {
@@ -70,7 +73,7 @@ test('capital tile separates USD benchmark from sats trading result', () => {
   assert.match(js, /BTC.*obchody.*v sats/s)
 })
 
-test('strategy tab shows rules and an honest empty candidate state', () => {
+test('strategy tab shows the selected leveraged momentum strategy', () => {
   assert.ok(html.includes('data-tab="strategy"'), 'dashboard must expose the strategy tab')
   assert.ok(html.includes('id="panel-strategy"'), 'strategy tab must have a panel')
   assert.ok(html.includes('id="strategy-rules"'), 'strategy panel must contain the rule list')
@@ -78,9 +81,24 @@ test('strategy tab shows rules and an honest empty candidate state', () => {
   assert.match(js, /STRATEGY_RULEBOOK/)
   assert.match(js, /STRATEGY_CANDIDATES/)
   assert.match(js, /renderStrategyLab/)
-  assert.match(js, /Vyšší timeframe vede směr/)
-  assert.match(js, /const STRATEGY_CANDIDATES = \[\]/)
-  assert.match(js, /Žádný kandidát nyní nesplňuje minimální požadavky/)
+  assert.match(js, /Obchodujeme jen dlouhodobou sílu/)
+  assert.match(js, /TF-2L Leveraged momentum/)
+  assert.match(js, /5y \+ skutečný funding/)
+  assert.match(js, /risk\.market=futures,risk\.riskPct=2/)
   assert.doesNotMatch(js, /JF-1 HTF swing S\/D/)
   assert.doesNotMatch(js, /TF-X Stop-only convex breakout/)
+})
+
+test('settings edit the selected strategy stop rather than a stale R\/R gate', () => {
+  assert.ok(html.includes('id="set-stop-atr"'))
+  assert.ok(!html.includes('id="set-min-rr"'))
+  assert.match(js, /const payload = \{\s*\.\.\.settings,/)
+  assert.match(js, /risk:\s*\{\s*\.\.\.\(settings\.risk \|\| \{\}\),/)
+  assert.match(js, /strategy:\s*\{\s*\.\.\.\(settings\.strategy \|\| \{\}\),\s*stopAtr:/)
+})
+
+test('the first migrated publish persists the strategy-versioned settings', () => {
+  assert.match(api, /!isset\(\$existingSettings\['strategyId'\]\)/)
+  assert.match(api, /isset\(\$publishedSettings\['strategyId'\]\)/)
+  assert.match(api, /writeJsonFile\(SETTINGS_FILE, \$publishedSettings\)/)
 })

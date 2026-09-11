@@ -1,5 +1,5 @@
 [Unit]
-Description=BTC price-action bot — one pass
+Description=BTC leveraged momentum bot - one pass
 After=network-online.target
 Wants=network-online.target
 

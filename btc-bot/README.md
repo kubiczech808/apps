@@ -1,137 +1,64 @@
-# BTC price-action bot
+# BTC leveraged momentum bot
 
-Swing trading on [LN Markets](https://lnmarkets.com) futures, decided by reading
-the chart rather than by an indicator crossover, with a dashboard at
-**https://www.btc-dca.com/bot/**.
+Selective BTC trend following on [LN Markets](https://lnmarkets.com) futures,
+with a dashboard at **https://www.btc-dca.com/bot/**. The selected portfolio is
+`momentum-breakout-v1`; rejected price-action strategies remain available only
+as reproducible research modules.
 
-Two things are true of this bot and are worth stating before anything else:
+Two invariants come before return:
 
-1. **Every position carries a stop loss and a take profit held by LN Markets.**
-   Not by this process. That is what makes it safe to run on a timer, to miss a
-   run, or to lose the Raspberry Pi to a network outage — the account is
-   protected by the exchange, not by the bot being awake.
-2. **The strategy has been measured, and it loses money.** Not "unproven" —
-   measured. See *What the backtest says* below. It runs in **paper** mode and
-   must not be pointed at a funded account on this evidence.
+1. **Every position carries an exchange-side stop loss and take profit.** A
+   missed timer or offline runner therefore cannot leave an unprotected trade.
+2. **The stop determines size and leverage.** The bot first places the
+   volatility-based stop, sizes the position to a fixed account risk, and only
+   then chooses leverage. Leverage reduces locked margin; it does not authorize
+   extra loss.
 
-## What the backtest says
+The selected configuration remains in **paper** mode. Moving it to mainnet is a
+separate operator decision and is additionally refused while the dashboard key
+is public.
 
-608 days of LN Markets' own hourly candles, **spot** (no leverage, no
-liquidation, no funding — fees on the buy and the sell only), 1% risk per trade,
-one position at a time.
+## Selected strategy
 
-```
-Start / end   100496 sats → 84152 sats  (-16.26%)
-Trades        271 (85W / 186L), win rate 31.37%
-Exits         stop_loss ×169, take_profit ×71, manual ×31
-Profit factor 0.86        max drawdown 20.97%
-Avg win/loss  1170 sats / 623 sats
-Fees          trading 25804 sats
-Before fees   +9460 sats (+9.41%) — the edge the fees are charged against
-Friction      fees are 14.56% of the risk on the median trade, 37.14% on the
-              worst tenth; 64 trades paid more than a quarter of what they risked
-```
+- **Direction:** long-only. BTC must close above its 100-day moving average.
+- **Entry:** a fresh daily close above the highest high of the previous 20 days.
+- **Initial stop:** one 20-day daily ATR below the actual entry price.
+- **Size:** the exact inverse-contract quantity whose stop loss risks at most
+  2% of current equity in sats, capped at 300% notional.
+- **Leverage:** derived after the stop, capped at 10x. Liquidation must remain at
+  least twice the stop distance away from entry.
+- **Exit:** the stop can only move upward, following the 10-day low. A distant
+  take profit is retained as a mandatory emergency bracket, not as the normal
+  profit-taking rule.
+- **Concurrency:** one position and at most one new trade per day.
 
-**The chart reading is not what loses the money. The fee schedule is.**
+Positions opened before the `2026-09-11` strategy cutover retain the manager
+that was active when they entered. New positions are tagged with the selected
+strategy id.
 
-Before fees this makes +9.4% over 608 days. It pays 25804 sats to earn 9460 —
-so it hands back the whole edge and 16% of the account on top. Per trade that
-is a gross expectancy of about +0.06R against a fee of 0.15R.
+## Backtest evidence
 
-The friction line says why, and no other number in the report showed it: a stop
-placed half an ATR beyond a 1h zone is often 0.3–0.8% from entry, while the
-round trip costs 0.12% of notional. On such a trade the fee is a fifth to a half
-of everything at risk. It has to be right far more often than the same idea
-taken on a wider stop, for reasons that have nothing to do with the chart.
-
-Break-even needs a 34.7% win rate at this 1.88 payoff. It gets 31.4%.
-
-### Which component is unreliable
-
-Each row changes exactly one rule from the shipped configuration, same candles:
+Five years of Binance hourly candles were replayed through the production
+backtester with 5,410 real LN Markets funding settlements. Results are measured
+in sats and include the configured 0.06% fee on entry and exit:
 
 ```
-variant                 trades   win%      PF   return%   avgW/avgL    TP   SL  man
-shipped                   271   31.4    0.86     -16.3        1.88    71  169   31
-no candle trigger         551   28.3    0.75     -47.8        1.89   130  345   76
-engulfing trigger only    228   31.6    0.88     -12.4        1.90    62  140   26
-rejection trigger only    116   28.4    0.76     -12.4        1.91    28   72   16
-stop 1.0 ATR past zone    230   29.6    0.77     -23.1        1.81    50  136   44
-stop 1.5 ATR past zone    215   30.7    0.76     -22.6        1.71    43  119   53
-fixed 2R target           271   31.4    0.84     -18.0        1.84    71  169   31
-must close inside zone    242   29.3    0.74     -24.5        1.79    61  155   26
-no trend-flip close       236   29.2    0.83     -18.4        2.01    65  171    0
+risk   trades   total return   return p.a.   hourly max DD   PF
+ 2%      30        40.9%          7.1%          15.6%      2.00   selected
+ 3%      30        62.5%         10.2%          22.5%      1.93   rejected: DD
 ```
 
-- **The closed-candle trigger is the one rule that clearly earns its place.**
-  Removing it doubles the trade count and takes profit factor 0.86 → 0.75.
-- **The pin bar is the weak half of it.** Engulfing alone scores 0.88, rejection
-  alone 0.76. A wick twice the body is a common accident in a quiet hour; a bar
-  that closes through the whole of the previous one is not.
-- **A wider stop makes it worse, not better** — 0.77 and 0.76. So the stop is not
-  simply "inside the noise". Widening it without widening the target in the same
-  proportion just moves the same trades further from a target they already only
-  reach 26% of the time.
-- **No row reaches 1.0.** The best single change is worth +0.02 profit factor,
-  which is noise on 271 trades. There is no one broken rule to fix here.
+The selected 2% variant returned 11.5% p.a. over the most recent three years,
+with 15.6% drawdown. Median hold was 12.7 days and the 90th percentile 40.3
+days. With the current LN Markets tier-1 fee of 0.1% per side used as a stress
+case, it returned 6.8% p.a. with 16.0% drawdown. The 3% variant was rejected:
+its full hourly mark-to-market drawdown was 22.5%, despite looking like 15.2%
+when drawdown was measured only between closed trades.
 
-Read the return column with care throughout: any filter that removes trades
-shrinks the loss of a losing system. Only profit factor says whether the trades
-that remain are better ones.
-
-### Three ways this measurement lied before it was fixed
-
-All three were caught by comparing two numbers that had to agree, none by
-reading the code, and all three looked like results:
-
-- The stop management never moved a stop (it read `position.stop`; every
-  position carries `stopLoss`), so 35 trades reached 1R and none were protected.
-- The first two sweep implementations were tautologies. A fractal pivot IS the
-  extreme of its neighbourhood, so "did it take out the previous candle's low"
-  is true for every swing low. The filter on and the filter off returned
-  identical numbers to the sat — twice — before the comparison was moved to the
-  previous *pivot*.
-- The opening fee was charged to the balance but left out of the trade's P/L.
-  The equity curve was right and every statistic computed from trades was not:
-  the trades summed to -7285 sats while the account fell 20846. Profit factor
-  read 0.93 and was really 0.86.
-
-A filter whose presence and absence agree exactly is not a strict filter. A
-trade list that does not add up to the equity curve is not a trade list. Both
-identities are asserted by tests now.
-
-### On the source
-
-These rules follow the supply-and-demand method Jakub pointed at (JeaFx: market
-structure, supply and demand, liquidity, imbalance). **The videos were not
-watched** — YouTube and jeafx.com are both unreachable from the machine this was
-built on — so this is built from the publicly documented rules, not from the
-course. Where the implementation is a crude reading of an idea, as the imbalance
-test probably is, that is a limitation of this code and not a verdict on the
-method.
-
-## What it trades
-
-One idea, applied in one direction at a time:
-
-- **Trend** comes from the 4h chart: higher highs with higher lows, or lower
-  highs with lower lows. A range is not traded at all.
-- **Location** comes from a zone the market has already turned at — a cluster of
-  swing lows for a long, swing highs for a short. Price must be at or inside it.
-- **Trigger** is a closed 1h candle that rejects the zone: an engulfing bar or a
-  long-wicked rejection, big enough relative to ATR to mean something.
-- **Stop** goes half an ATR beyond the zone. **Target** is the next place the
-  market has already reacted, clamped between 2R and 5R.
-- **Size** is whatever risks exactly 1% of account equity if the stop is hit.
-  In spot that is capped by the capital itself, so a tight stop buys a smaller
-  position and risks less than 1% rather than borrowing to reach it. On futures
-  the leverage is derived from the stop distance so liquidation sits well beyond
-  it — it is never a setting that multiplies risk.
-
-Reward/risk is measured **in sats, not in price distance**. On an inverse
-contract those differ by several percent: a "2R" target read off the chart is
-worth about 1.91R in the account for a long. Gating on the chart ratio silently
-takes trades that do not meet the rule.
+Funding is not optional bookkeeping. Across the measured history its mean was
+0.0130% per eight-hour settlement, positive 94% of the time. The paper executor
+therefore loads real settlements, persists the last charged timestamp and
+refuses a futures pass when funding history is unavailable.
 
 ## How it runs
 
@@ -271,7 +198,7 @@ asks twice.
 
 ```bash
 cd btc-bot
-npm test                      # 96 tests, no network needed
+npm test                      # no network needed
 node tools/backtest.mjs --limit 1000
 node tools/run-bot.mjs        # honours BOT_* and LNM_* from the environment
 BOT_DRY_RUN=true node tools/run-bot.mjs   # decides, reports, sends nothing
@@ -281,15 +208,17 @@ The layers are separate on purpose and depend in one direction:
 
 | File | Answers |
 |---|---|
-| `src/candles.mjs` | what the chart looks like (three venues, 4h built from 1h) |
-| `src/priceaction.mjs` | swings, structure, zones, candle patterns, ATR |
-| `src/strategy.mjs` | is this a trade, and where do the stop and target go |
-| `src/risk.mjs` | how big, at what leverage, for exactly 1% risk |
+| `src/candles.mjs` | normalized hourly market history and higher-timeframe aggregation |
+| `src/strategy-registry.mjs` | selected strategy and the legacy manager used across cutover |
+| `src/strategy-momentum.mjs` | fresh breakout entry, ATR stop and trailing exit |
+| `src/strategy.mjs` | archived price-action strategy and legacy position management |
+| `src/risk.mjs` | exact inverse-contract sizing and stop-derived leverage |
 | `src/executor-lnm.mjs` | send it to LN Markets — and never unbracketed |
 | `src/executor-paper.mjs` | the same interface, simulated |
 | `src/bot.mjs` | one pass, in order, with the portfolio gates |
 | `src/backtest.mjs` | walk it forward over history without peeking |
 | `api.php` | state, lease, settings, command queue |
 
-`src/strategy.mjs` and `src/risk.mjs` are pure functions. If you change what the
-bot trades, that is where it lives, and a test should fail.
+Strategy modules and `src/risk.mjs` are pure functions. Selection and migration
+live in `src/strategy-registry.mjs` and `src/state.mjs`; changing any of those
+contracts should make a test fail.

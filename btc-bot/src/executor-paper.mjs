@@ -24,20 +24,30 @@ export const createPaperExecutor = ({
   store.trades ??= []
   store.balanceSats ??= 0
   store.nextId ??= 1
-  store.carryCursor ??= 0
+  store.lastFundingAt ??= null
 
   const running = () => store.trades.filter((trade) => trade.status === 'running')
 
   const feeFor = (quantityUsd, price) => Math.ceil(((quantityUsd * SATS_PER_BTC) / price) * feeRate)
+
+  const markTrade = (trade, price) => {
+    const gross = pnlSats({ side: trade.side, entry: trade.entry, exit: price, quantityUsd: trade.quantityUsd })
+    const closingFee = feeFor(trade.quantityUsd, price)
+    const carry = Math.round(trade.carryFeesSats ?? 0)
+    trade.markPrice = price
+    // Same all-in definition as a closed trade, including the cost that would
+    // be paid to exit at this mark. Open and closed P/L stay comparable.
+    trade.plSats = Math.round(gross - trade.openingFeeSats - closingFee - carry)
+  }
 
   /**
    * Charge every funding settlement up to `timeMs` against the positions that
    * were open when it happened.
    */
   const chargeCarryUpTo = (timeMs) => {
-    while (store.carryCursor < fundingSettlements.length && fundingSettlements[store.carryCursor].time <= timeMs) {
-      const settlement = fundingSettlements[store.carryCursor]
-      store.carryCursor += 1
+    for (const settlement of fundingSettlements) {
+      if (settlement.time <= (store.lastFundingAt ?? Number.NEGATIVE_INFINITY)) continue
+      if (settlement.time > timeMs) break
       for (const trade of running()) {
         if ((trade.openedAt ?? 0) > settlement.time) continue
         trade.carryFeesSats =
@@ -49,6 +59,10 @@ export const createPaperExecutor = ({
             fallbackPrice: trade.entry,
           })
       }
+      // Advance even with no open position. Otherwise a later position would
+      // be charged for settlements that happened before it existed when the
+      // paper executor is recreated on the next bot pass.
+      store.lastFundingAt = settlement.time
     }
   }
 
@@ -88,10 +102,18 @@ export const createPaperExecutor = ({
 
     getAccount: async () => {
       const marginUsedSats = running().reduce((sum, trade) => sum + trade.marginSats, 0)
+      // Opening fees have already left balanceSats. Open P/L includes them for
+      // display, so add each one back before applying the adjustment here or
+      // the fee would be counted twice in equity.
+      const unrealizedSats = running().reduce(
+        (sum, trade) =>
+          sum + (Number.isFinite(trade.plSats) ? trade.plSats + (trade.openingFeeSats ?? 0) : 0),
+        0
+      )
       return {
         balanceSats: store.balanceSats,
         marginUsedSats,
-        equitySats: store.balanceSats + marginUsedSats,
+        equitySats: store.balanceSats + marginUsedSats + unrealizedSats,
         source: 'paper',
       }
     },
@@ -181,6 +203,8 @@ export const createPaperExecutor = ({
           } else if (hitTarget) {
             settle(trade, trade.takeProfit, 'take_profit', candle.time)
             settled.push(trade)
+          } else {
+            markTrade(trade, candle.close)
           }
         }
       }

@@ -63,20 +63,25 @@ test('shorts are sized to the same risk as longs', () => {
 })
 
 test('liquidation is kept beyond the stop by the safety factor', () => {
-  for (const stop of [99_000, 98_000, 95_000, 90_000]) {
-    const plan = planPosition({
-      side: 'long',
-      entry: 100_000,
-      stop,
-      takeProfit: 100_000 + (100_000 - stop) * 3,
-      equitySats: EQUITY,
-      settings: { market: 'futures' },
-    })
-    if (!plan.ok) continue
-    assert.ok(
-      plan.liquidation < stop,
-      `liquidation ${plan.liquidation} is not beyond the stop ${stop} at ${plan.leverage}x`
-    )
+  for (const side of ['long', 'short']) {
+    for (const distance of [1_000, 2_000, 5_000, 10_000]) {
+      const stop = side === 'long' ? 100_000 - distance : 100_000 + distance
+      const takeProfit = side === 'long' ? 100_000 + distance * 3 : 100_000 - distance * 3
+      const plan = planPosition({
+        side,
+        entry: 100_000,
+        stop,
+        takeProfit,
+        equitySats: EQUITY,
+        settings: { market: 'futures', liquidationSafety: 2 },
+      })
+      if (!plan.ok) continue
+      const liquidationDistance = Math.abs(plan.entry - plan.liquidation)
+      assert.ok(
+        liquidationDistance >= distance * 2 - 1,
+        `liquidation distance ${liquidationDistance} is below 2x stop distance ${distance} at ${plan.leverage}x`
+      )
+    }
   }
 })
 

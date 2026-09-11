@@ -144,27 +144,21 @@ jobs:
         # leaves a measured statement in the log about the strategy it shipped,
         # rather than a claim nobody checked.
         #
-        # 6000 hourly candles is roughly eight months. A thousand gave thirteen
-        # trades over twenty-five days, which is too few to say anything about
-        # an edge — and a number too small to be meaningful is worse than no
-        # number, because it still reads like evidence. LN Markets pages its
-        # candle history, so the longer window costs a few seconds.
+        # Re-run the exact selected portfolio. The five-year window is long
+        # enough for the daily signal and includes real funding settlements;
+        # a short diagnostic window would be a different strategy claim.
         continue-on-error: true
         run: |
-          node tools/backtest.mjs --limit 6000 --json /tmp/backtest.json | tee /tmp/backtest.txt
-          # One change at a time from the shipped configuration, on the same
-          # candles. The 233-day run came back at -37% with a 26% win rate and
-          # average wins only 1.7x average losses despite a 2R entry gate; this
-          # table is how that gets attributed to a rule rather than guessed at.
-          node tools/backtest.mjs --limit 6000 --compare true | tee /tmp/compare.txt
+          node tools/backtest.mjs \
+            --strategy momentum \
+            --years 5 \
+            --source binance \
+            --set strategy.stopAtr=1,strategy.allowShorts=false,risk.market=futures,risk.riskPct=2 \
+            --json /tmp/backtest.json | tee /tmp/backtest.txt
           {
-            echo '### Backtest on real candles'
+            echo '### Selected strategy: five-year backtest'
             echo '```'
             cat /tmp/backtest.txt
-            echo '```'
-            echo '### Where the money goes'
-            echo '```'
-            cat /tmp/compare.txt
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 

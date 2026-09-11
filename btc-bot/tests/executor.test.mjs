@@ -326,3 +326,51 @@ test('a position opened after a settlement is not charged for it', async () => {
   executor.mark([candle(START + HOUR, 100_500, 104_500, 100_100, 104_200)])
   assert.equal(opened.carryFeesSats, 0)
 })
+
+test('recreating the paper executor does not charge the same funding twice', async () => {
+  const first = { time: START + HOUR / 2, fundingRate: 0.0001, fixingPrice: 100_000 }
+  const second = { time: START + HOUR * 1.5, fundingRate: 0.0001, fixingPrice: 100_000 }
+  const store = { balanceSats: 1_000_000, trades: [], nextId: 1 }
+  let executor = createPaperExecutor({ store, now: () => START, fundingSettlements: [first] })
+  const opened = await executor.openPosition({
+    side: 'long',
+    entry: 100_000,
+    stop: 90_000,
+    takeProfit: 120_000,
+    quantityUsd: 100,
+    marginSats: 10_000,
+    leverage: 5,
+  })
+  executor.mark([candle(START + HOUR, 100_000, 101_000, 99_000, 100_000)])
+
+  executor = createPaperExecutor({ store, now: () => START + HOUR, fundingSettlements: [first, second] })
+  executor.mark([candle(START + 2 * HOUR, 100_000, 101_000, 99_000, 100_000)])
+
+  assert.equal(opened.carryFeesSats, 20)
+  assert.equal(store.lastFundingAt, second.time)
+})
+
+test('paper equity and open P/L are marked to market with fees and funding', async () => {
+  let now = 1_000
+  const store = { balanceSats: 100_000, trades: [], nextId: 1 }
+  const fundingSettlements = [{ time: 2_000, fundingRate: 0.001, fixingPrice: 100_000 }]
+  const executor = createPaperExecutor({ store, feeRate: 0.001, fundingSettlements, now: () => now })
+  const trade = await executor.openPosition({
+    side: 'long',
+    quantityUsd: 100,
+    marginSats: 10_000,
+    leverage: 10,
+    entry: 100_000,
+    stop: 90_000,
+    takeProfit: 120_000,
+    liquidation: 80_000,
+  })
+
+  now = 3_000
+  executor.mark([{ time: now, open: 100_000, high: 111_000, low: 99_000, close: 110_000 }])
+  const account = await executor.getAccount()
+
+  assert.equal(trade.carryFeesSats, 100)
+  assert.equal(trade.plSats, 8_800)
+  assert.equal(account.equitySats, 108_800)
+})

@@ -17,9 +17,10 @@ import { isPublicKey, PUBLIC_KEY_REFUSAL } from './keys.mjs'
 import { createLnMarketsClient, resolveNetwork } from './lnmarkets.mjs'
 import { createLnMarketsExecutor } from './executor-lnm.mjs'
 import { createPaperExecutor } from './executor-paper.mjs'
+import { fetchFundingSettlements } from './funding.mjs'
 import { atr, lastDefined, marketStructure } from './priceaction.mjs'
 import { planPosition, SATS_PER_BTC } from './risk.mjs'
-import { evaluateEntry, manageOpen } from './strategy.mjs'
+import { LEGACY_PRICE_ACTION_ID, strategyConfig } from './strategy-registry.mjs'
 import {
   capClosed,
   computeStats,
@@ -41,7 +42,7 @@ export const readConfig = (env = process.env) => ({
   runner: env.BOT_RUNNER || 'manual',
   leaseTtlMs: Number(env.BOT_LEASE_TTL_MS || 90_000),
   modeOverride: env.BOT_MODE || '',
-  candleLimit: Number(env.BOT_CANDLE_LIMIT || 720),
+  candleLimit: Number(env.BOT_CANDLE_LIMIT || 3600),
   // Which LN Markets network to read the chart from when the bot itself is not
   // connected to one (paper mode). Mainnet, because that is the market being
   // simulated.
@@ -69,6 +70,30 @@ export const loadMarket = async ({ settings, candleLimit, fetchImpl, now, client
   const ltf = aggregate(closed, settings.timeframes.ltfHours)
   const htf = aggregate(closed, settings.timeframes.htfHours)
   return { source, failures, hourly: closed, ltf, htf }
+}
+
+const candlesForStrategy = (market, strategy) => ({
+  ltf: aggregate(market.hourly, strategy.timeframes.ltfHours),
+  htf: aggregate(market.hourly, strategy.timeframes.htfHours),
+})
+
+const timestamp = (value) => {
+  if (Number.isFinite(value)) return value
+  const parsed = Date.parse(value)
+  return Number.isFinite(parsed) ? parsed : null
+}
+
+/**
+ * Positions opened before the strategy cutover keep their original manager.
+ * Their protective brackets remain exchange-side either way, but changing a
+ * trailing rule halfway through a trade would change the trade after entry.
+ */
+export const strategyIdForPosition = (position, settings) => {
+  if (position.strategyId) return position.strategyId
+  const openedAt = timestamp(position.openedAt ?? position.createdAt)
+  const activatedAt = timestamp(settings.strategyActivatedAt)
+  if (openedAt !== null && activatedAt !== null && openedAt >= activatedAt) return settings.strategyId
+  return LEGACY_PRICE_ACTION_ID
 }
 
 const bracketFallback = ({ position, ltfCandles }) => {
@@ -173,10 +198,10 @@ export const applyCommands = async ({ executor, commands, positions, logger, dry
   return results
 }
 
-export const buildExecutor = ({ settings, state, config, logger, fetchImpl }) => {
+export const buildExecutor = ({ settings, state, config, logger, fetchImpl, fundingSettlements = [] }) => {
   const mode = config.modeOverride || settings.mode
   if (mode === 'paper') {
-    return { mode, executor: createPaperExecutor({ store: state.paper }), client: null }
+    return { mode, executor: createPaperExecutor({ store: state.paper, fundingSettlements }), client: null }
   }
   // A key anyone can read out of a public repository may guard a simulation. It
   // may not guard an account. This refuses here rather than relying on the
@@ -186,7 +211,7 @@ export const buildExecutor = ({ settings, state, config, logger, fetchImpl }) =>
     logger.error(`Refusing mainnet: ${PUBLIC_KEY_REFUSAL}`)
     return {
       mode: 'paper',
-      executor: createPaperExecutor({ store: state.paper }),
+      executor: createPaperExecutor({ store: state.paper, fundingSettlements }),
       client: null,
       refusal: PUBLIC_KEY_REFUSAL,
     }
@@ -195,7 +220,11 @@ export const buildExecutor = ({ settings, state, config, logger, fetchImpl }) =>
   const client = createLnMarketsClient({ network: mode, fetchImpl })
   if (!client.hasCredentials) {
     logger.warn(`Mode is ${mode} but LN Markets credentials are missing — degrading to paper so nothing trades blind`)
-    return { mode: 'paper', executor: createPaperExecutor({ store: state.paper }), client: null }
+    return {
+      mode: 'paper',
+      executor: createPaperExecutor({ store: state.paper, fundingSettlements }),
+      client: null,
+    }
   }
   return { mode, executor: createLnMarketsExecutor({ client, logger }), client }
 }
@@ -210,6 +239,7 @@ export const runPass = async ({
   // exchange account, and the alternative — mocking fetch deeply enough to
   // impersonate LN Markets — would test the mock rather than the bot.
   makeExecutor = buildExecutor,
+  loadFunding = fetchFundingSettlements,
 } = {}) => {
   const config = readConfig(env)
   const startedAt = Date.now()
@@ -220,6 +250,7 @@ export const runPass = async ({
   // paper executor writes straight into it.
   state.paper ??= { balanceSats: 0, trades: [], nextId: 1 }
   const settings = state.settings
+  const activeStrategy = strategyConfig(settings.strategyId)
 
   const run = {
     at: isoNow(now),
@@ -245,7 +276,36 @@ export const runPass = async ({
       return { state, run, saved }
     }
 
-    const { executor, mode, refusal } = makeExecutor({ settings, state, config, logger, fetchImpl })
+    const requestedMode = config.modeOverride || settings.mode
+    let fundingSettlements = []
+    if (requestedMode === 'paper' && settings.risk.market === 'futures') {
+      const openTimes = (state.paper.trades ?? [])
+        .filter((trade) => trade.status === 'running')
+        .map((trade) => timestamp(trade.openedAt ?? trade.createdAt))
+        .filter((value) => value !== null)
+      const from = Math.min(state.paper.lastFundingAt ?? now, ...openTimes, now)
+      const hours = Math.max(72, Math.ceil((now - from) / HOUR_MS) + 24)
+      const fundingClient = createLnMarketsClient({
+        network: resolveNetwork(config.marketNetwork),
+        fetchImpl,
+        key: '',
+        secret: '',
+        passphrase: '',
+      })
+      fundingSettlements = await loadFunding({ client: fundingClient, hours, logger })
+      if (fundingSettlements.length === 0) {
+        throw new Error('paper futures refused: funding history is unavailable')
+      }
+    }
+
+    const { executor, mode, refusal } = makeExecutor({
+      settings,
+      state,
+      config,
+      logger,
+      fetchImpl,
+      fundingSettlements,
+    })
     run.mode = mode
     state.mode = mode
     // Surfaced on the state so the dashboard can say why it is still on paper
@@ -305,15 +365,17 @@ export const runPass = async ({
 
     const managed = []
     for (const position of trades.running) {
-      const decision = manageOpen({
+      const managingStrategy = strategyConfig(strategyIdForPosition(position, settings))
+      const managingMarket = candlesForStrategy(market, managingStrategy)
+      const decision = managingStrategy.module.manageOpen({
         position: { ...position, initialStop: position.initialStop ?? position.stopLoss },
-        ltfCandles: market.ltf,
-        htfCandles: market.htf,
-        settings: settings.strategy,
+        ltfCandles: managingMarket.ltf,
+        htfCandles: managingMarket.htf,
+        settings: managingStrategy.id === activeStrategy.id ? settings.strategy : managingStrategy.settings,
       })
       if (decision.action === 'hold') continue
       if (config.dryRun) {
-        managed.push({ id: position.id, ...decision, applied: false })
+        managed.push({ id: position.id, strategyId: managingStrategy.id, ...decision, applied: false })
         continue
       }
       try {
@@ -324,9 +386,9 @@ export const runPass = async ({
           await executor.updateStops(position.id, { stopLoss: stop })
           position.stopLoss = stop
         }
-        managed.push({ id: position.id, ...decision, applied: true })
+        managed.push({ id: position.id, strategyId: managingStrategy.id, ...decision, applied: true })
       } catch (error) {
-        managed.push({ id: position.id, ...decision, applied: false, error: error.message })
+        managed.push({ id: position.id, strategyId: managingStrategy.id, ...decision, applied: false, error: error.message })
         logger.error(`Managing ${position.id} failed: ${error.message}`)
       }
     }
@@ -349,7 +411,11 @@ export const runPass = async ({
       asOf: isoNow(market.ltf.at(-1)?.time ?? now),
     }
 
-    let decision = evaluateEntry({ htfCandles: market.htf, ltfCandles: market.ltf, settings: settings.strategy })
+    let decision = activeStrategy.module.evaluateEntry({
+      htfCandles: market.htf,
+      ltfCandles: market.ltf,
+      settings: settings.strategy,
+    })
 
     // Portfolio gates. They sit outside the strategy on purpose: the strategy
     // answers "is this a trade", these answer "may this account take it now".
@@ -383,8 +449,11 @@ export const runPass = async ({
       })
       if (!plan.ok) {
         gates.push(plan.reason)
-      } else if (plan.rr < settings.strategy.minRR) {
-        gates.push(`reward/risk fell to ${plan.rr.toFixed(2)} after rounding`)
+      } else {
+        const minRR = Number(settings.strategy.minRR)
+        if (Number.isFinite(minRR) && plan.rr < minRR) {
+          gates.push(`reward/risk fell to ${plan.rr.toFixed(2)} after rounding`)
+        }
       }
     }
 
@@ -395,6 +464,7 @@ export const runPass = async ({
       } else {
         const opened = await executor.openPosition({ ...plan, side: decision.side })
         opened.initialStop = plan.stop
+        opened.strategyId = activeStrategy.id
         opened.plan = { reason: decision.reason, rr: plan.rr, riskSats: plan.riskSats }
         running.push(opened)
         run.action = 'opened'
@@ -419,6 +489,7 @@ export const runPass = async ({
     state.lastDecision = {
       at: isoNow(now),
       action: decision.action,
+      strategyId: activeStrategy.id,
       side: decision.side ?? null,
       reason: decision.reason,
       gates,

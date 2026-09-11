@@ -20,6 +20,7 @@ test('a backtest reports a complete, internally consistent account', async () =>
   assert.ok(report.hours > 0)
   assert.equal(report.stats.trades, report.stats.wins + report.stats.losses + (report.stats.trades - report.stats.wins - report.stats.losses))
   assert.ok(report.equityCurve.length > 0)
+  assert.equal(report.openAtEnd, 0, 'the final bar must settle every position for a comparable result')
   assert.ok(Number.isFinite(report.finalEquitySats))
   assert.ok(Number.isFinite(report.returnPct))
   for (const trade of report.trades) {

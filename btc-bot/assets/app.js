@@ -1,4 +1,4 @@
-/* BTC price-action bot dashboard.
+/* BTC leveraged-momentum bot dashboard.
  *
  * A reader with no build step: the page fetches one JSON document from api.php
  * and renders it. Every write goes back through the same endpoint with the
@@ -76,16 +76,6 @@ const el = (tag, attributes = {}, children = []) => {
   return node
 }
 
-const strategySetting = (key, fallback) => {
-  const value = Number(state?.settings?.strategy?.[key])
-  return Number.isFinite(value) ? value : fallback
-}
-
-const strategyFlag = (key, fallback) => {
-  const value = state?.settings?.strategy?.[key]
-  return value === undefined ? fallback : Boolean(value)
-}
-
 const decisionFact = (text, status = 'neutral', title = null) => ({
   text,
   status: DECISION_SIGNAL_STATES.has(status) ? status : 'neutral',
@@ -99,100 +89,73 @@ const decisionFactElement = (fact) =>
     title: fact.title,
   })
 
-const decisionIsBlockedBy = (decision, pattern) => pattern.test(String(decision?.reason ?? ''))
-
 // ── strategy doctrine ────────────────────────────────────────────────────
 
 const fact = (status, text, title = null) => decisionFact(text, status, title)
 
 const decisionContext = () => state?.lastDecision?.context ?? {}
 
-const htfTrendChangedAgainst = (context) =>
-  (context.htfBias === 'up' && context.htfEvent === 'CHoCH_DOWN') ||
-  (context.htfBias === 'down' && context.htfEvent === 'CHoCH_UP')
-
-const zoneDistanceInAtr = (context) => {
-  const side = context.htfBias === 'up' ? 'long' : context.htfBias === 'down' ? 'short' : null
-  if (!context.zone || !Number.isFinite(context.price) || !Number.isFinite(context.ltfAtr) || !(context.ltfAtr > 0) || !side) {
-    return null
-  }
-  return Math.max(0, side === 'long' ? context.price - context.zone.high : context.zone.low - context.price) / context.ltfAtr
-}
-
 const STRATEGY_RULEBOOK = [
   {
-    title: 'Vyšší timeframe vede směr',
-    text: 'Obchod smí jít jen ve směru čitelné struktury. Range a čerstvý CHoCH proti směru jsou důvod stát stranou.',
+    title: 'Obchodujeme jen dlouhodobou sílu',
+    text: 'Portfolio je long-only a nový vstup povolí jen tehdy, když je BTC nad svým 100denním průměrem.',
     status: () => {
       const context = decisionContext()
-      if (!context.htfBias) return fact('neutral', 'čeká na strukturu')
-      if (['up', 'down'].includes(context.htfBias) && !htfTrendChangedAgainst(context)) {
-        return fact('met', context.htfBias === 'up' ? 'trend long' : 'trend short')
-      }
-      return fact('unmet', context.htfBias === 'range' ? 'range' : 'CHoCH proti směru')
+      if (!Number.isFinite(context.dailyClose) || !Number.isFinite(context.regimeMa)) return fact('neutral', 'čeká na 100D průměr')
+      return fact(context.dailyClose >= context.regimeMa ? 'met' : 'unmet', context.dailyClose >= context.regimeMa ? 'nad 100D MA' : 'pod 100D MA')
     },
   },
   {
-    title: 'Vstup patří do POI',
-    text: 'Setup musí vznikat v supply/demand zóně, kterou trh už respektoval. Honění ceny uprostřed ničeho nemá edge.',
+    title: 'Vstup spouští nový 20denní breakout',
+    text: 'Nestačí být nad kanálem. Denní svíčka musí právě uzavřít nad nejvyšším high předchozích 20 dnů.',
     status: () => {
       const context = decisionContext()
-      if (context.zone) return fact('met', `${context.zone.type === 'demand' ? 'demand' : 'supply'} zóna`)
-      if (decisionIsBlockedBy(state?.lastDecision, /no (demand|supply) zone/i)) return fact('unmet', 'zóna chybí')
-      return fact('neutral', 'čeká na POI')
+      if (!Number.isFinite(context.dailyClose) || !Number.isFinite(context.channelHigh)) return fact('neutral', 'kanál se načítá')
+      const broken = context.dailyClose > context.channelHigh
+      return fact(broken ? 'met' : 'unmet', broken ? '20D high proraženo' : 'uvnitř 20D kanálu')
     },
   },
   {
-    title: 'Cena musí být u zóny',
-    text: 'Reakci bereme jen na hraně zóny nebo těsně u ní. Vzdálený vstup obvykle zhorší stop i R/R.',
+    title: 'Stop určuje volatilita',
+    text: 'Po vstupu leží počáteční stop jeden denní ATR od ceny. Neutahuje se dovnitř běžného denního šumu.',
     status: () => {
       const context = decisionContext()
-      const distance = zoneDistanceInAtr(context)
-      if (distance === null) return fact('neutral', 'nelze změřit')
-      const max = strategySetting('zoneMaxDistanceAtr', 1)
-      return fact(distance <= max ? 'met' : 'unmet', `${nf(2).format(distance)} ATR od zóny`)
+      if (!Number.isFinite(context.dailyAtr) || !Number.isFinite(context.price)) return fact('neutral', 'čeká na ATR')
+      return fact('met', `1 ATR = ${pct((context.dailyAtr / context.price) * 100, 2)}`)
     },
   },
   {
-    title: 'Likvidita má být sebraná',
-    text: 'Preferujeme zóny po sweepu. Bez sweepu mohou pod/above zónou stále ležet stop-lossy, pro které si trh přijde.',
+    title: 'Velikost pozice vychází ze stopu',
+    text: 'Množství kontraktů se dopočítá tak, aby zásah počátečního stopu stál nejvýše 2 % účtu v sats.',
     status: () => {
-      const zone = decisionContext().zone
-      if (!zone || zone.swept === undefined) return fact('neutral', 'čeká na sweep')
-      return fact(zone.swept ? 'met' : 'unmet', zone.swept ? 'sweep ano' : 'sweep ne')
+      const plan = state?.lastDecision?.plan
+      if (!plan) return fact('neutral', 'počítá se při signálu')
+      return fact('met', `risk ${pct(state?.settings?.risk?.riskPct ?? 2)}`)
     },
   },
   {
-    title: 'Move ze zóny má být jednostranný',
-    text: 'Imbalance / nevyplněná neefektivita je známka, že od zóny přišla rozhodná objednávková převaha.',
+    title: 'Páka následuje stop',
+    text: 'Páka není cíl. Volí se až po stopu, nejvýše 10x, a likvidace musí být nejméně dvakrát dál než stop.',
     status: () => {
-      const zone = decisionContext().zone
-      if (!zone || zone.imbalance === undefined) return fact('neutral', 'neověřeno')
-      return fact(zone.imbalance ? 'met' : 'unmet', zone.imbalance ? 'imbalance ano' : 'imbalance ne')
+      const plan = state?.lastDecision?.plan
+      if (!Number.isFinite(plan?.leverage)) return fact('neutral', 'určí se při signálu')
+      const safe = plan.side === 'long' ? plan.liquidation < plan.stop : plan.liquidation > plan.stop
+      return fact(safe ? 'met' : 'unmet', `${plan.leverage}x · likv. ${price(plan.liquidation)}`)
     },
   },
   {
-    title: 'Vstup potvrzuje zavřená svíčka',
-    text: 'Strategie nemá predikovat dotyk zóny. Chceme uzavřený trigger, ideálně momentum/engulfing místo slabého pin baru.',
+    title: 'Profit necháváme růst',
+    text: 'Stop se posouvá pouze ve prospěch pozice podle 10denního minima. Vzdálený TP je nouzový bracket, ne běžný výstup.',
     status: () => {
-      const context = decisionContext()
-      if (context.confirmation) return fact('met', context.confirmation.replace('_', ' '))
-      if (decisionIsBlockedBy(state?.lastDecision, /no (bullish|bearish) trigger/i)) return fact('unmet', 'trigger chybí')
-      return fact('neutral', 'čeká na trigger')
+      const running = state?.positions?.running ?? []
+      return running.length ? fact('met', '10D trailing aktivní') : fact('neutral', 'bez otevřené pozice')
     },
   },
   {
-    title: 'Setup musí přežít poplatky',
-    text: 'Stop nesmí být tak těsný, aby poplatek sebral velkou část risku. Cílíme na méně obchodů s větším R a nižší frikcí.',
+    title: 'Funding patří do výsledku',
+    text: 'Pákový paper účet účtuje skutečné osmihodinové funding sazby. Strategie byla testovaná na 5 410 settlements.',
     status: () => {
-      const context = decisionContext()
-      const atrMin = strategySetting('atrPctMin', 0.15)
-      const atrMax = strategySetting('atrPctMax', 4)
-      const atrOk = Number.isFinite(context.atrPct) && context.atrPct >= atrMin && context.atrPct <= atrMax
-      const planRr = Number(state?.lastDecision?.plan?.rr)
-      if (Number.isFinite(planRr)) return fact(planRr >= strategySetting('minRR', 2) && atrOk ? 'met' : 'unmet', `R/R ${nf(2).format(planRr)}`)
-      if (decisionIsBlockedBy(state?.lastDecision, /reward\/risk|too quiet|too volatile/i)) return fact('unmet', 'frikce/RR')
-      return fact(atrOk ? 'neutral' : 'unmet', Number.isFinite(context.atrPct) ? `ATR ${pct(context.atrPct, 2)}` : 'čeká na volatilitu')
+      return state?.settings?.risk?.market === 'futures' ? fact('met', 'funding započten') : fact('unmet', 'není futures režim')
     },
   },
   {
@@ -217,7 +180,23 @@ const STRATEGY_RULEBOOK = [
   },
 ]
 
-const STRATEGY_CANDIDATES = []
+const STRATEGY_CANDIDATES = [
+  {
+    status: 'aktivní',
+    statusKind: 'met',
+    name: 'TF-2L Leveraged momentum',
+    thesis: 'Selektivní long-only trend following. Čeká na nový 20denní breakout v dlouhodobém uptrendu a velikost pozice odvozuje od 1 ATR stopu.',
+    rules: ['daily signál', '20D breakout', '100D trend', '1 ATR stop', '10D trail', '2 % risk', 'dynamická páka ≤10x'],
+    backtest: {
+      status: 'met',
+      label: '5y + skutečný funding',
+      result: '+7,1 % p.a. v sats',
+      detail: '30 obchodů, PF 2,00, hodinový max DD 15,6 %. Poslední 3 roky +11,5 % p.a.; medián držení 12,7 dne, 90. percentil 40,3 dne.',
+    },
+    command:
+      'node tools/backtest.mjs --strategy momentum --years 5 --source binance --set strategy.stopAtr=1,strategy.allowShorts=false,risk.market=futures,risk.riskPct=2',
+  },
+]
 
 // ── api ───────────────────────────────────────────────────────────────────
 
@@ -451,81 +430,58 @@ const renderDecision = () => {
   )
 
   const context = decision.context ?? {}
-  const bias = { up: 'vzestupný', down: 'sestupný', range: 'do strany' }[context.htfBias] ?? null
-  const side = context.htfBias === 'up' ? 'long' : context.htfBias === 'down' ? 'short' : null
-  const trendChangedAgainst =
-    (context.htfBias === 'up' && context.htfEvent === 'CHoCH_DOWN') ||
-    (context.htfBias === 'down' && context.htfEvent === 'CHoCH_UP')
-  const atrMin = strategySetting('atrPctMin', 0.15)
-  const atrMax = strategySetting('atrPctMax', 4.0)
-  const atrOk = Number.isFinite(context.atrPct) && context.atrPct >= atrMin && context.atrPct <= atrMax
-  const zoneMaxDistanceAtr = strategySetting('zoneMaxDistanceAtr', 1.0)
-  const zoneDistanceAtr =
-    context.zone && Number.isFinite(context.price) && Number.isFinite(context.ltfAtr) && context.ltfAtr > 0 && side
-      ? Math.max(0, side === 'long' ? context.price - context.zone.high : context.zone.low - context.price) / context.ltfAtr
+  const aboveRegime =
+    Number.isFinite(context.dailyClose) && Number.isFinite(context.regimeMa)
+      ? context.dailyClose >= context.regimeMa
       : null
-  const requireSweep = strategyFlag('requireSweep', true)
-  const requireImbalance = strategyFlag('requireImbalance', false)
-  const requireTrigger = strategyFlag('requireTrigger', true)
-  const minRR = strategySetting('minRR', 2.0)
-  const planRr = Number(decision.plan?.rr)
-  const rrBlocked = decisionIsBlockedBy(decision, /reward\/risk/i)
+  const breakout =
+    Number.isFinite(context.dailyClose) && Number.isFinite(context.channelHigh)
+      ? context.dailyClose > context.channelHigh
+      : null
+  const plan = decision.plan
   const facts = [
-    bias
-      ? decisionFact(
-          `4h trend ${bias}`,
-          ['up', 'down'].includes(context.htfBias) && !trendChangedAgainst ? 'met' : 'unmet',
-          trendChangedAgainst ? 'Trend právě udělal CHoCH proti směru, takže vstup stojí.' : 'Vyšší timeframe musí mít směr.'
-        )
-      : null,
     Number.isFinite(context.price) ? decisionFact(`cena ${price(context.price)}`) : null,
-    Number.isFinite(context.atrPct)
+    aboveRegime !== null
       ? decisionFact(
-          `ATR ${pct(context.atrPct, 2)} · ${nf(2).format(atrMin)}–${nf(2).format(atrMax)} %`,
-          atrOk ? 'met' : 'unmet',
-          'Vstup se bere jen, když volatilita není moc tichá ani moc divoká.'
+          `100D průměr ${price(context.regimeMa)}`,
+          aboveRegime ? 'met' : 'unmet',
+          aboveRegime ? 'Cena je na správné straně dlouhodobého trendu.' : 'Pod 100denním průměrem se long nevstupuje.'
         )
       : null,
-    context.zone
-      ? decisionFact(`zóna ${price(context.zone.low)}–${price(context.zone.high)}`, 'met', 'Platná zóna ve směru vyššího trendu.')
-      : decisionIsBlockedBy(decision, /no (demand|supply) zone/i)
-        ? decisionFact('zóna chybí', 'unmet', 'Bez zóny ve směru trendu bot nevstupuje.')
-        : null,
-    zoneDistanceAtr !== null
+    breakout !== null
       ? decisionFact(
-          `vzdálenost ${nf(2).format(zoneDistanceAtr)} ATR · max ${nf(2).format(zoneMaxDistanceAtr)}`,
-          zoneDistanceAtr <= zoneMaxDistanceAtr ? 'met' : 'unmet',
-          'Cena musí být u zóny, ne daleko od ní.'
+          `20D high ${price(context.channelHigh)}`,
+          breakout ? 'met' : 'unmet',
+          breakout ? 'Denní close prorazil vstupní kanál.' : 'Denní close je stále uvnitř vstupního kanálu.'
         )
       : null,
-    context.zone && context.zone.swept !== undefined
+    Number.isFinite(context.dailyAtr) && Number.isFinite(context.price)
       ? decisionFact(
-          `sweep ${context.zone.swept ? 'ano' : 'ne'}`,
-          requireSweep ? (context.zone.swept ? 'met' : 'unmet') : 'neutral',
-          requireSweep ? 'Sweep je zapnutý filtr kvality zóny.' : 'Sweep je v nastavení vypnutý, takže jen informativně.'
+          `denní ATR ${price(context.dailyAtr)} · ${pct((context.dailyAtr / context.price) * 100, 2)}`,
+          'neutral',
+          'Počáteční stop bude jeden denní ATR od vstupu.'
         )
       : null,
-    context.zone && context.zone.imbalance !== undefined
+    decision.action === 'open'
+      ? decisionFact('čerstvý breakout ano', 'met')
+      : decisionFact('čerstvý breakout ne', 'unmet'),
+    Number.isFinite(plan?.stop)
+      ? decisionFact(`SL ${price(plan.stop)}`, 'met', 'Počáteční stop jeden denní ATR pod vstupem.')
+      : null,
+    Number.isFinite(plan?.takeProfit)
       ? decisionFact(
-          `imbalance ${context.zone.imbalance ? 'ano' : 'ne'}`,
-          requireImbalance ? (context.zone.imbalance ? 'met' : 'unmet') : 'neutral',
-          requireImbalance ? 'Imbalance je zapnutý filtr kvality zóny.' : 'Imbalance je v nastavení vypnutý, takže jen informativně.'
+          `TP bracket ${price(plan.takeProfit)}`,
+          'met',
+          'Vzdálený ochranný TP; běžný výstup řídí 10denní trailing stop.'
         )
       : null,
-    context.confirmation
+    Number.isFinite(plan?.leverage)
       ? decisionFact(
-          `spouštěč ${context.confirmation}`,
-          requireTrigger ? 'met' : 'neutral',
-          requireTrigger ? 'Uzavřená 1h svíčka potvrdila reakci na zóně.' : 'Trigger je v nastavení vypnutý, takže jen informativně.'
+          `${plan.leverage}x páka`,
+          'met',
+          `Likvidace ${price(plan.liquidation)} leží za stopem ${price(plan.stop)}.`
         )
-      : context.zone && (Array.isArray(context.patterns) || decisionIsBlockedBy(decision, /no (bullish|bearish) trigger/i))
-        ? decisionFact('spouštěč chybí', requireTrigger ? 'unmet' : 'neutral', 'Bez potvrzovací svíčky bot nevstupuje.')
-        : null,
-    Number.isFinite(planRr)
-      ? decisionFact(`R/R ${nf(2).format(planRr)} · min ${nf(2).format(minRR)}`, planRr >= minRR ? 'met' : 'unmet')
-      : rrBlocked
-        ? decisionFact(`R/R pod ${nf(2).format(minRR)}`, 'unmet', 'Potenciální obchod nedává minimální odměnu vůči riziku.')
-        : null,
+      : null,
     (decision.gates ?? []).length ? decisionFact('portfolio gate ne', 'unmet', 'Strategie viděla signál, ale účetní/pravidlový gate ho nepustil.') : null,
   ].filter(Boolean)
 
@@ -831,8 +787,8 @@ const renderSettings = () => {
   $('set-risk').value = settings.risk?.riskPct ?? 1
   $('set-max-open').value = settings.maxOpenPositions ?? 1
   $('set-max-day').value = settings.maxTradesPerDay ?? 3
-  $('set-min-rr').value = settings.strategy?.minRR ?? 2
-  $('set-cooldown').value = settings.cooldownMinutesAfterLoss ?? 240
+  $('set-stop-atr').value = settings.strategy?.stopAtr ?? 1
+  $('set-cooldown').value = settings.cooldownMinutesAfterLoss ?? 0
   $('set-max-leverage').value = settings.risk?.maxLeverage ?? 10
 }
 
@@ -861,14 +817,20 @@ const saveSettings = async () => {
   const mode = $('set-mode').value
   if (mode === 'mainnet' && !confirm('Přepnout na OSTRÝ provoz? Bot začne obchodovat za skutečné sats.')) return
 
+  const settings = state?.settings || {}
   const payload = {
+    ...settings,
     enabled: $('set-enabled').value === 'true',
     mode,
     maxOpenPositions: Number($('set-max-open').value),
     maxTradesPerDay: Number($('set-max-day').value),
     cooldownMinutesAfterLoss: Number($('set-cooldown').value),
-    risk: { riskPct: Number($('set-risk').value), maxLeverage: Number($('set-max-leverage').value) },
-    strategy: { minRR: Number($('set-min-rr').value) },
+    risk: {
+      ...(settings.risk || {}),
+      riskPct: Number($('set-risk').value),
+      maxLeverage: Number($('set-max-leverage').value),
+    },
+    strategy: { ...(settings.strategy || {}), stopAtr: Number($('set-stop-atr').value) },
   }
 
   try {
@@ -888,7 +850,7 @@ const renderHeader = () => {
   badge.textContent = { testnet: 'TESTNET', testnet4: 'TESTNET', mainnet: 'OSTRÝ PROVOZ', paper: 'PAPER' }[mode] || mode
   badge.className = `badge mode-${mode === 'testnet4' ? 'testnet' : mode}`
 
-  $('portfolio-name').textContent = state?.settings?.portfolioName || 'BTC Price Action Swing'
+  $('portfolio-name').textContent = state?.settings?.portfolioName || 'BTC Leveraged Momentum'
 
   const dot = $('status-dot')
   const updated = state?.updatedAt ? Date.parse(state.updatedAt) : NaN

@@ -13,14 +13,16 @@
 //    settles at the stop.
 //  - Fees are charged on both sides.
 //
-// What it still cannot model: slippage beyond the fee, funding/carry over long
-// holds, and the fact that LN Markets' own index can differ from the spot venue
-// the candles came from. Results should be read as an upper bound.
+// What it still cannot model: slippage beyond the fee and the fact that LN
+// Markets' own index can differ from the spot venue the candles came from.
+// Futures runs can use real historical funding settlements, but results should
+// still be read as a model rather than as executable fills.
 
 import { HOUR_MS, aggregate } from './candles.mjs'
 import { createPaperExecutor } from './executor-paper.mjs'
-import { planPosition, pnlSats, SATS_PER_BTC } from './risk.mjs'
+import { DEFAULT_RISK_SETTINGS, planPosition, pnlSats, SATS_PER_BTC } from './risk.mjs'
 import * as priceActionStrategy from './strategy.mjs'
+import { LEGACY_PRICE_ACTION_ID } from './strategy-registry.mjs'
 import { computeStats, DEFAULT_SETTINGS, mergeSettings } from './state.mjs'
 import { roundStop, roundTarget } from './bot.mjs'
 
@@ -65,8 +67,14 @@ export const runBacktest = async ({
   const strategyDefaults = strategy.DEFAULT_BACKTEST_SETTINGS ?? {}
   const settings = mergeSettings({
     ...DEFAULT_SETTINGS,
+    strategyId: LEGACY_PRICE_ACTION_ID,
     ...overrides,
+    timeframes: { htfHours: 4, ltfHours: 1, ...(overrides.timeframes ?? {}) },
     strategy: { ...strategyDefaults, ...(overrides.strategy ?? {}) },
+    // Research strategies keep the historical neutral baseline unless a run
+    // explicitly asks for futures. Changing the selected production strategy
+    // must not silently rewrite old comparisons from spot/1% to futures/3%.
+    risk: { ...DEFAULT_RISK_SETTINGS, ...(overrides.risk ?? {}) },
   })
   const capitalUsd = startingCapitalUsd ?? settings.startingCapitalUsd
   if (!Array.isArray(hourly) || hourly.length <= warmupHours) {
@@ -170,9 +178,8 @@ export const runBacktest = async ({
       tradesTodayCount = 0
     }
 
-    const balance = store.balanceSats
-    const marginUsed = stillRunning.reduce((sum, trade) => sum + trade.marginSats, 0)
-    const equitySats = balance + marginUsed
+    const account = await executor.getAccount()
+    const equitySats = account.equitySats
     equityCurve.push({ at: candle.time, equitySats, price: candle.close })
 
     if (stillRunning.length >= settings.maxOpenPositions) continue
@@ -213,6 +220,18 @@ export const runBacktest = async ({
     lastLossAt = justClosed.reduce((latest, trade) => Math.max(latest, trade.closedAt ?? 0), lastLossAt ?? 0) || null
   }
 
+  // A performance window needs a fully realised closing balance. Leaving a
+  // position open at the last bar ignores both its mark-to-market P/L and the
+  // closing fee, so the headline return cannot reconcile with the trade list.
+  // Liquidate only for measurement; production keeps managing the position.
+  const finalCandle = hourly.at(-1)
+  clock = finalCandle.time + HOUR_MS
+  for (const position of store.trades.filter((trade) => trade.status === 'running')) {
+    await executor.closePosition(position.id, finalCandle.close)
+  }
+  const finalAccount = await executor.getAccount()
+  equityCurve.push({ at: finalCandle.time, equitySats: finalAccount.equitySats, price: finalCandle.close })
+
   // A run whose bars were mostly refused for lack of history measured nothing.
   // Zero trades then means "the window was too small", not "the strategy does
   // not trade" — and the first momentum run reported exactly that as if it were
@@ -224,7 +243,16 @@ export const runBacktest = async ({
   const starved = totalRejections > 0 && starvedRejections / totalRejections > 0.5
 
   const closed = store.trades.filter((trade) => trade.status === 'closed')
-  const stats = computeStats(closed, { startEquitySats: startBalance })
+  const closedStats = computeStats(closed, { startEquitySats: startBalance })
+  let equityPeak = startBalance
+  let maxEquityDrawdown = 0
+  for (const point of equityCurve) {
+    equityPeak = Math.max(equityPeak, point.equitySats)
+    if (equityPeak > 0) {
+      maxEquityDrawdown = Math.max(maxEquityDrawdown, (equityPeak - point.equitySats) / equityPeak)
+    }
+  }
+  const stats = { ...closedStats, maxDrawdownPct: maxEquityDrawdown * 100 }
   const finalEquity = equityCurve.at(-1)?.equitySats ?? startBalance
   const buyHoldSats = startBalance
 

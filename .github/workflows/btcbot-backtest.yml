@@ -9,7 +9,7 @@ on:
       strategy:
         description: 'Which strategy to measure'
         required: false
-        default: 'price-action'
+        default: 'momentum'
         type: choice
         options:
           - price-action
@@ -20,21 +20,21 @@ on:
         default: false
         type: boolean
       source:
-        description: 'Candle source (bybit, kraken, coinbase). Empty tries each in turn.'
+        description: 'Candle source (binance, bybit, kraken, coinbase).'
         required: false
-        default: ''
-      limit:
-        description: 'Hourly candles to fetch. Momentum needs years, not weeks — 15000 is about 20 months.'
+        default: 'binance'
+      years:
+        description: 'Measured years after warmup'
         required: false
-        default: '6000'
+        default: '5'
       risk:
         description: 'Risk per trade in % of equity'
         required: false
-        default: '1'
+        default: '2'
       minRR:
         description: 'Minimum reward/risk, measured in sats'
         required: false
-        default: '2'
+        default: ''
   schedule:
     # Weekly, so a strategy that stops working shows up in the log rather than
     # only in the account.
@@ -56,9 +56,13 @@ jobs:
 
       - name: Backtest
         run: |
-          args=(--strategy "${{ inputs.strategy || 'price-action' }}" --limit "${{ inputs.limit || '6000' }}" --risk "${{ inputs.risk || '1' }}")
+          strategy="${{ inputs.strategy || 'momentum' }}"
+          args=(--strategy "$strategy" --years "${{ inputs.years || '5' }}" --risk "${{ inputs.risk || '2' }}")
           if [ -n "${{ inputs.minRR }}" ]; then args+=(--min-rr "${{ inputs.minRR }}"); fi
-          if [ -n "${{ inputs.source }}" ]; then args+=(--source "${{ inputs.source }}"); fi
+          if [ -n "${{ inputs.source || 'binance' }}" ]; then args+=(--source "${{ inputs.source || 'binance' }}"); fi
+          if [ "$strategy" = "momentum" ]; then
+            args+=(--set strategy.stopAtr=1,strategy.allowShorts=false,risk.market=futures)
+          fi
           if [ "${{ inputs.compare }}" = "true" ]; then
             args+=(--compare true)
           else
@@ -77,7 +81,7 @@ jobs:
           # --compare prints a table and writes no JSON, so the report file is
           # legitimately absent in that mode.
           if-no-files-found: ignore
-          name: btcbot-backtest-${{ inputs.strategy || 'price-action' }}
+          name: btcbot-backtest-${{ inputs.strategy || 'momentum' }}
           path: |
             btc-bot/report.json
             btc-bot/report.txt

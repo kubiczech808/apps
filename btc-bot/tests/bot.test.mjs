@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { reconcileBrackets, roundStop, roundTarget, runPass } from '../src/bot.mjs'
+import { reconcileBrackets, roundStop, roundTarget, runPass, strategyIdForPosition } from '../src/bot.mjs'
+import { LEGACY_PRICE_ACTION_ID } from '../src/strategy-registry.mjs'
 import { appendCandle, zigzag } from './helpers.mjs'
 
 const HOUR = 3600_000
@@ -117,9 +118,13 @@ const noQualityFilters = (state = {}) => ({
   ...state,
   settings: {
     ...(state.settings ?? {}),
+    strategyId: state.settings?.strategyId ?? LEGACY_PRICE_ACTION_ID,
+    portfolioName: state.settings?.portfolioName ?? 'BTC Price Action Swing',
+    timeframes: { htfHours: 4, ltfHours: 1, ...(state.settings?.timeframes ?? {}) },
+    risk: { market: 'spot', riskPct: 1, ...(state.settings?.risk ?? {}) },
     strategy: { requireSweep: false, requireImbalance: false, ...(state.settings?.strategy ?? {}) },
   },
-  paper: { balanceSats: 0, trades: [], nextId: 1 },
+  paper: { balanceSats: 0, trades: [], nextId: 1, lastFundingAt: null },
 })
 const nowAfter = (candles) => candles.at(-1).time + HOUR + 60_000
 
@@ -235,6 +240,48 @@ test('a pass that loses the lease does nothing and says who holds it', async () 
   assert.equal(run.action, 'skipped')
   assert.match(run.reason, /rpi/)
   assert.equal(executor.calls.length, 0)
+})
+
+test('paper futures refuses to run without funding history', async () => {
+  let madeExecutor = false
+  const { run, state } = await runPass({
+    env: baseEnv,
+    fetchImpl: () => {
+      throw new Error('market data must not be read after funding was refused')
+    },
+    store: fakeStore({}),
+    logger: { info() {}, warn() {}, error() {} },
+    now: Date.now(),
+    loadFunding: async () => [],
+    makeExecutor: () => {
+      madeExecutor = true
+      return fakeExecutor().factory()
+    },
+  })
+
+  assert.equal(madeExecutor, false)
+  assert.equal(run.action, 'error')
+  assert.match(run.error, /funding history is unavailable/)
+  assert.equal(state.status, 'error')
+})
+
+test('positions opened before the cutover keep the legacy manager', () => {
+  const settings = {
+    strategyId: 'momentum-breakout-v1',
+    strategyActivatedAt: '2026-09-11T06:04:00.000Z',
+  }
+  assert.equal(
+    strategyIdForPosition({ openedAt: '2026-09-10T12:00:00.000Z' }, settings),
+    LEGACY_PRICE_ACTION_ID
+  )
+  assert.equal(
+    strategyIdForPosition({ openedAt: '2026-09-12T12:00:00.000Z' }, settings),
+    'momentum-breakout-v1'
+  )
+  assert.equal(
+    strategyIdForPosition({ openedAt: '2026-09-10T12:00:00.000Z', strategyId: 'custom' }, settings),
+    'custom'
+  )
 })
 
 test('a quiet range produces no trade and records why', async () => {

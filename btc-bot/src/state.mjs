@@ -6,13 +6,17 @@
 // be curl'd is easier to debug at 2am than a schema. Every list is capped so
 // the file cannot grow without bound on a shared hosting.
 
-import { DEFAULT_MANAGEMENT, DEFAULT_STRATEGY } from './strategy.mjs'
 import { DEFAULT_RISK_SETTINGS } from './risk.mjs'
+import { ACTIVE_STRATEGY_ID, strategyConfig } from './strategy-registry.mjs'
 
 export const STATE_VERSION = 1
 export const MAX_RUNS = 200
 export const MAX_EQUITY_POINTS = 2000
 export const MAX_CLOSED_TRADES = 500
+
+export const STRATEGY_ACTIVATED_AT = '2026-09-11T06:04:00.000Z'
+
+const activeStrategy = strategyConfig(ACTIVE_STRATEGY_ID)
 
 export const DEFAULT_SETTINGS = {
   // The master switch. `false` stops new entries; open positions keep their
@@ -27,14 +31,23 @@ export const DEFAULT_SETTINGS = {
   // cannot spend anything. Moving to 'mainnet' is a deliberate, separate act
   // and the dashboard asks twice.
   mode: 'paper',
-  portfolioName: 'BTC Price Action Swing',
+  strategyId: ACTIVE_STRATEGY_ID,
+  strategyActivatedAt: STRATEGY_ACTIVATED_AT,
+  portfolioName: activeStrategy.name,
   startingCapitalUsd: 100,
   maxOpenPositions: 1,
-  maxTradesPerDay: 3,
-  cooldownMinutesAfterLoss: 240,
-  timeframes: { htfHours: 4, ltfHours: 1 },
-  risk: { ...DEFAULT_RISK_SETTINGS },
-  strategy: { ...DEFAULT_STRATEGY, ...DEFAULT_MANAGEMENT },
+  maxTradesPerDay: 1,
+  cooldownMinutesAfterLoss: 0,
+  timeframes: { ...activeStrategy.timeframes },
+  risk: {
+    ...DEFAULT_RISK_SETTINGS,
+    market: 'futures',
+    riskPct: 2,
+    maxLeverage: 10,
+    liquidationSafety: 2,
+    maxNotionalPct: 300,
+  },
+  strategy: { ...activeStrategy.settings },
 }
 
 export const emptyState = (overrides = {}) => ({
@@ -51,7 +64,7 @@ export const emptyState = (overrides = {}) => ({
   runs: [],
   equityHistory: [],
   stats: emptyStats(),
-  paper: { balanceSats: 0, trades: [], nextId: 1 },
+  paper: { balanceSats: 0, trades: [], nextId: 1, lastFundingAt: null },
   ...overrides,
 })
 
@@ -139,13 +152,32 @@ export const recordEquity = (state, equitySats, at) => {
 }
 
 /** Merge stored settings over the defaults so a new setting gains its default. */
-export const mergeSettings = (stored = {}) => ({
-  ...DEFAULT_SETTINGS,
-  ...stored,
-  timeframes: { ...DEFAULT_SETTINGS.timeframes, ...(stored.timeframes ?? {}) },
-  risk: { ...DEFAULT_SETTINGS.risk, ...(stored.risk ?? {}) },
-  strategy: { ...DEFAULT_SETTINGS.strategy, ...(stored.strategy ?? {}) },
-})
+export const mergeSettings = (stored = {}) => {
+  // Settings published before strategies had an id belong to the rejected
+  // price-action model. Carry operational choices such as mode and enabled
+  // across, but do not leak its 4h timeframes, filters or spot risk into the
+  // newly selected momentum portfolio.
+  const migratingLegacy = !stored.strategyId
+  const selected = strategyConfig(migratingLegacy ? ACTIVE_STRATEGY_ID : stored.strategyId)
+  const selectedDefaults = {
+    ...DEFAULT_SETTINGS,
+    strategyId: selected.id,
+    portfolioName: selected.name,
+    timeframes: { ...selected.timeframes },
+    strategy: { ...selected.settings },
+  }
+
+  return {
+    ...selectedDefaults,
+    ...stored,
+    strategyId: selected.id,
+    strategyActivatedAt: stored.strategyActivatedAt ?? STRATEGY_ACTIVATED_AT,
+    portfolioName: migratingLegacy ? selected.name : stored.portfolioName ?? selected.name,
+    timeframes: { ...selected.timeframes, ...(migratingLegacy ? {} : stored.timeframes ?? {}) },
+    risk: { ...selectedDefaults.risk, ...(migratingLegacy ? {} : stored.risk ?? {}) },
+    strategy: { ...selected.settings, ...(migratingLegacy ? {} : stored.strategy ?? {}) },
+  }
+}
 
 export const tradesToday = (closedTrades, runningTrades, nowMs) => {
   const startOfDay = new Date(nowMs)

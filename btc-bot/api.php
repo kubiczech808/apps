@@ -1,6 +1,6 @@
 <?php
 /**
- * BTC price-action bot — server side.
+ * BTC leveraged-momentum bot - server side.
  *
  * Deliberately small. It holds no strategy and places no orders; it is the one
  * place the Raspberry Pi runner, the GitHub Actions fallback and the browser
@@ -190,6 +190,21 @@ switch ($action) {
             fail(400, 'State document is missing its version.');
         }
         writeJsonFile(STATE_FILE, $state);
+
+        // Runtime settings survive deploys. The runner owns strategy-version
+        // migration, so persist its complete migrated settings once instead of
+        // letting an unversioned file replace them on every dashboard read.
+        $existingSettings = readJsonFile(SETTINGS_FILE, []);
+        $publishedSettings = $state['settings'] ?? null;
+        if (
+            is_array($existingSettings)
+            && !isset($existingSettings['strategyId'])
+            && is_array($publishedSettings)
+            && isset($publishedSettings['strategyId'])
+        ) {
+            writeJsonFile(SETTINGS_FILE, $publishedSettings);
+        }
+
         // A pass consumes the queue as it publishes; clearing it here rather
         // than in a separate call means a command cannot be executed twice by a
         // runner that crashed between the two.

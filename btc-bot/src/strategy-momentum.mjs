@@ -12,7 +12,7 @@
 //
 //   the old one           this one
 //   fades a move          joins a move
-//   tight stop            wide stop, 2 ATR
+//   tight structure stop  volatility-based ATR stop
 //   precise timing        timing barely matters
 //   many trades           few trades
 //   pays fees often       pays carry for a long time

@@ -1,5 +1,5 @@
 [Unit]
-Description=Run the BTC price-action bot every minute
+Description=Run the BTC leveraged momentum bot every minute
 
 [Timer]
 OnBootSec=90s
