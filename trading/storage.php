@@ -1205,56 +1205,6 @@ function trading_storage_observations_upsert(array $items): int
     return $count;
 }
 
-/**
- * Drop observations of one lifecycle that the mirror has stopped refreshing.
- *
- * Measured before the database was switched on: the published catalogue held 8135 active
- * markets and the database held 21402. Nothing was wrong with the import -- the difference
- * is everything the catalogue has ever dropped. A market that resolves is re-sent under the
- * RESOLVED lifecycle and its row follows, but a market that simply leaves the active set,
- * by expiring or ageing past the retention cap, is never mentioned again and its row stayed
- * SCRAPED for ever. Serving reads from that would have shown thirteen thousand dead markets
- * as tradable, and the paper bots read the same list to pick candidates from.
- *
- * The cutoff is computed by MySQL from its own clock, deliberately: the rows carry the
- * server's timestamps, so a cutoff built anywhere else would be comparing two clocks. Every
- * market in the current catalogue was just rewritten by the run that calls this, so only
- * rows absent from the catalogue for longer than the window can match.
- *
- * Batched, and reports whether more remain, so a large first prune never becomes one long
- * lock on a table the dashboard reads.
- */
-function trading_storage_observations_prune(string $lifecycle, int $staleMinutes = 60, int $limit = 500): array
-{
-    $pdo = trading_storage_pdo();
-    if (!$pdo instanceof PDO) {
-        throw new RuntimeException('Trading MySQL storage is unavailable.');
-    }
-    trading_storage_bootstrap($pdo);
-    // Never less than half an hour. A short window plus one slow mirror pass would delete
-    // the live catalogue, and re-importing it is far more expensive than keeping a stale
-    // row a while longer.
-    $staleMinutes = max(30, min(20160, $staleMinutes));
-    $limit = max(1, min(5000, $limit));
-    // The window and the batch size are inlined, not bound: both are already clamped to an
-    // integer range above, and a placeholder inside INTERVAL is not portable across MySQL
-    // versions with emulated prepares turned off. The lifecycle, which is the only value
-    // that could carry anything unexpected, stays bound.
-    $statement = $pdo->prepare(
-        'DELETE FROM trading_observations
-         WHERE lifecycle = :lifecycle AND updated_at < (NOW(6) - INTERVAL ' . $staleMinutes . ' MINUTE)
-         LIMIT ' . $limit
-    );
-    $statement->execute(['lifecycle' => $lifecycle]);
-    $deleted = $statement->rowCount();
-    return [
-        'lifecycle' => $lifecycle,
-        'staleMinutes' => $staleMinutes,
-        'deleted' => $deleted,
-        'done' => $deleted < $limit,
-    ];
-}
-
 function trading_storage_observations_fetch(string $lifecycle, int $limit = 0, int $offset = 0): array
 {
     $pdo = trading_storage_pdo();

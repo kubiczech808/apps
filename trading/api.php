@@ -911,23 +911,6 @@ function trading_storage_ingest(array $payload): array
         $observationCount = trading_storage_observations_upsert($observations);
     }
 
-    // Sent only by a mirror run that has just imported the WHOLE active catalogue, which is
-    // what makes the deletion safe: every market still in the catalogue was rewritten
-    // moments ago and cannot be older than the window. A run whose import failed part way
-    // raises before it gets here, so a partial catalogue never prunes.
-    $pruned = null;
-    if (is_array($payload['pruneObservations'] ?? null)) {
-        $prune = $payload['pruneObservations'];
-        $lifecycle = strtoupper(trim((string) ($prune['lifecycle'] ?? '')));
-        if (in_array($lifecycle, ['SCRAPED', 'RESOLVED'], true)) {
-            $pruned = trading_storage_observations_prune(
-                $lifecycle,
-                (int) ($prune['staleMinutes'] ?? 60),
-                (int) ($prune['limit'] ?? 500),
-            );
-        }
-    }
-
     $portfolioDocuments = 0;
     if ($target === 'paper' && is_array($payload['paperPortfolios'] ?? null)) {
         foreach ($payload['paperPortfolios'] as $id => $portfolio) {
@@ -1010,7 +993,6 @@ function trading_storage_ingest(array $payload): array
         // Reported rather than swallowed: a mirror that writes 0 trades and says nothing is
         // how this whole subsystem went unnoticed for ten days.
         'tradeErrors' => array_slice($tradeErrors, 0, 5),
-        'pruned' => $pruned,
     ];
 }
 
