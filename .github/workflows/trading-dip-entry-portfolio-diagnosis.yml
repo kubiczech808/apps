@@ -1,0 +1,36 @@
+name: Trading Dip Entry Portfolio Diagnosis
+
+# Read-only diagnostic, manual only. Reads the portfolio config and the paper dashboard
+# summary over HTTPS. Places no orders, writes nothing, publishes nothing, uses no secrets.
+#
+# Reported: a paper portfolio created to test the dip-entry rule is opening trades at
+# completely different probabilities from its buy band. This separates the two causes --
+# the portfolio's own probability range duplicating the band, and the gate missing from the
+# bot entirely -- because they have different fixes.
+on:
+  workflow_dispatch:
+    inputs:
+      portfolio:
+        description: "Name or id to focus on (blank reports every portfolio carrying the rule)"
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Compare what the rule is configured as against what was bought
+        working-directory: trading
+        env:
+          DIP_PORTFOLIO: ${{ inputs.portfolio }}
+        run: node tools/dip-entry-portfolio-diagnosis.mjs
