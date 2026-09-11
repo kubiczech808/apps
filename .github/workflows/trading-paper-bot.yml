@@ -411,6 +411,15 @@ jobs:
           # JSON remains authoritative until the database has caught up and is
           # explicitly activated. The mirror therefore cannot interrupt a trade run.
           TRADING_STORAGE_INGEST_REQUIRED: "false"
+          # The mirror was gated behind this flag and NOTHING ever set it, so every one of
+          # these steps has printed "Trading SQL mirror is disabled pending storage
+          # verification" and written nothing. Measured on the database: last ingest
+          # 2026-09-01, no live run-log events at all, and a migration that never ran.
+          #
+          # Turning it on only starts WRITING. Reads still come from the JSON files until the
+          # storage is explicitly activated, which is a separate operation on purpose -- so
+          # this cannot make the dashboard read a database that is behind.
+          TRADING_STORAGE_MIRROR_ENABLED: "true"
         run: python3 trading/tools/ingest-trading-state.py
 
       - name: Append compact scraping history entry
