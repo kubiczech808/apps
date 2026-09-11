@@ -107,18 +107,30 @@ def main() -> int:
     print(f"\n== a filter on {sorted(KEEP)}")
     print(f"   keeps {len(keep)} of {len(rows)}, deletes {len(rows) - len(keep)}")
 
-    # The question the whole probe exists for. If a game slug carries markets that the
-    # two-slug filter would NOT keep, the filter has to include that slug as well.
-    print("\n== esports markets that a two-slug filter would miss")
-    for game in ("league-of-legends", "leagueoflegends", "counter-strike", "counterstrike",
-                 "cs2", "valorant", "dota", "dota-2", "video-games", "csgo", "call-of-duty",
-                 "rocket-league", "overwatch", "starcraft"):
-        tagged = [row for row in rows if game in row_tags(row)]
-        if not tagged:
-            continue
-        missed = [row for row in tagged if not (row_tags(row) & KEEP)]
-        verdict = "ALL COVERED" if not missed else f"{len(missed)} WOULD BE DELETED"
-        print(f"   {game}: {len(tagged)} row(s), {verdict}")
+    # The question the whole probe exists for, asked of the data rather than of a list of
+    # games I thought to write down. Guessing which slugs to check is how honor-of-kings and
+    # rainbow-six-siege were missed on the first pass: every tag that appears ONLY on rows
+    # the filter drops is a thing that stops being scraped, so all of them are named.
+    dropped = [row for row in rows if not (row_tags(row) & KEEP)]
+    dropped_counts = Counter()
+    for row in dropped:
+        dropped_counts.update(row_tags(row))
+    print(f"\n== what the {len(dropped)} deleted rows are tagged with")
+    for slug, count in dropped_counts.most_common(40):
+        total = counts[slug]
+        share = f"{round(100 * count / total)}%" if total else "-"
+        print(f"   {count:>5} of {total:>5} ({share:>4}) {slug}")
+    if len(dropped_counts) > 40:
+        print(f"   ... and {len(dropped_counts) - 40} more slugs")
+
+    # A slug that loses EVERY one of its rows disappears from the catalogue entirely. If one
+    # of those is a sport or an esport, the filter is wrong and this is where it shows.
+    vanishing = sorted(slug for slug, count in dropped_counts.items() if count == counts[slug])
+    print(f"\n== slugs that would vanish completely: {len(vanishing)}")
+    for slug in vanishing[:60]:
+        print(f"   {counts[slug]:>5}  {slug}")
+    if len(vanishing) > 60:
+        print(f"   ... and {len(vanishing) - 60} more")
     return 0
 
 
