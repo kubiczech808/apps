@@ -17,6 +17,20 @@ name: RPi Add Maintenance Runner
 #   - maintenance jobs ask for `maintenance` and can only land on the new agent
 #   - trading jobs ask for the standard labels and can use EITHER agent
 # which means trading gains a second slot and can never again be stuck behind a deploy.
+#
+# WHAT THIS FILE GOT WRONG ONCE, AND WHY IT IS WRITTEN THIS WAY NOW
+#
+# The new name used to be carried in an env var called RUNNER_NAME. The Actions runner sets
+# RUNNER_NAME itself, to the name of the agent executing the job, and a job-level env: cannot
+# override a RUNNER_* default -- so `--name "${RUNNER_NAME}"` expanded to the EXISTING agent
+# and `--replace` handed its registration to the new directory. GitHub then had one agent, not
+# two; its credentials lived in the new directory while the service still started from the old
+# one, and that service died with "the runner registration has been deleted from the server".
+# The Pi took no jobs at all for about eighty minutes.
+#
+# Two things stop that repeating: the name travels in NEW_RUNNER_NAME, and the job refuses to
+# start if that name matches the agent it is running on. --replace is gone as well: a name
+# collision must fail loudly, never take a working registration over.
 on:
   workflow_dispatch:
     inputs:
@@ -45,7 +59,9 @@ jobs:
     runs-on: [self-hosted, Linux, ARM64]
     timeout-minutes: 20
     env:
-      RUNNER_NAME: ${{ inputs.runner_name || 'pi5-apps-maintenance' }}
+      # NOT RUNNER_NAME: that name belongs to the runner executing this job and cannot be
+      # overridden here. Using it once cost the Pi eighty minutes of taking no jobs.
+      NEW_RUNNER_NAME: ${{ inputs.runner_name || 'pi5-apps-maintenance' }}
       WORK_DIR: ${{ inputs.work_dir || 'actions-runner-apps-maintenance' }}
       REPO: ${{ github.repository }}
       # Registering a runner needs administration rights, which GITHUB_TOKEN does not have.
@@ -53,6 +69,25 @@ jobs:
       # somewhere deep in config.sh.
       ADMIN_TOKEN: ${{ secrets.TRADING_GITHUB_TOKEN || secrets.POLY_TRADING_GITHUB_TOKEN }}
     steps:
+      - name: Refuse to register over the agent running this job
+        run: |
+          set -uo pipefail
+          # RUNNER_NAME here is the runner executing this step -- the one everything on this
+          # Pi depends on. If the requested name equals it, registering would replace it.
+          echo "this job is running on: ${RUNNER_NAME:-unknown}"
+          echo "requested new agent:    ${NEW_RUNNER_NAME}"
+          if [ -z "${NEW_RUNNER_NAME}" ]; then
+            echo "Refused: the new agent has no name."
+            exit 1
+          fi
+          if [ "${NEW_RUNNER_NAME}" = "${RUNNER_NAME:-}" ]; then
+            echo "Refused: that is the name of the agent running this job."
+            echo "Registering it would take over the existing registration instead of adding one,"
+            echo "which is exactly the failure this check exists for. Choose another name."
+            exit 1
+          fi
+          echo "Names differ, so the existing agent cannot be taken over."
+
       - name: Check the token can register a runner
         run: |
           set -uo pipefail
@@ -102,16 +137,16 @@ jobs:
 
           token="$(python3 -c 'import json;print(json.load(open("/tmp/reg-token.json"))["token"])')"
           cd "$target"
-          # --unattended so it never waits for input, --replace so a re-run after a failed
-          # attempt reuses the name instead of refusing it.
+          # --unattended so it never waits for input. Deliberately NO --replace: if the name
+          # is already registered this must fail and say so, because --replace is what turned
+          # an attempt to add an agent into the silent removal of the working one.
           ./config.sh \
             --url "https://github.com/${REPO}" \
             --token "$token" \
-            --name "${RUNNER_NAME}" \
+            --name "${NEW_RUNNER_NAME}" \
             --labels "self-hosted,Linux,ARM64,maintenance" \
             --work _work \
-            --unattended \
-            --replace
+            --unattended
           rm -f /tmp/reg-token.json
 
       - name: Start it as a service that survives a reboot
@@ -136,11 +171,25 @@ jobs:
           echo "== runner directories on this Pi"
           ls -d "${HOME}"/actions-runner-* 2>/dev/null || true
           echo ""
-          if [ -d "${HOME}/${WORK_DIR}" ]; then
-            echo "The maintenance agent is installed. Trading jobs ask for"
-            echo "[self-hosted, Linux, ARM64] and can now use either agent; maintenance jobs"
-            echo "ask for [self-hosted, Linux, ARM64, maintenance] and stay on the new one."
+          echo "== runner services and whether they are running"
+          for path in /etc/systemd/system/actions.runner.*.service; do
+            [ -e "$path" ] || continue
+            unit="$(basename "$path")"
+            echo "   ${unit}: $(systemctl is-active "$unit" 2>&1)"
+          done
+          echo ""
+          # A directory proves a download, not a working agent. The claim below is made only
+          # when the new agent has a service and systemd says it is active -- an earlier
+          # version announced success off the directory alone while svc.sh had just refused,
+          # and the agent existed on disk answering nothing.
+          slug="$(echo "${REPO}" | tr '/' '-')"
+          unit="actions.runner.${slug}.${NEW_RUNNER_NAME}.service"
+          if [ "$(systemctl is-active "${unit}" 2>/dev/null)" = "active" ]; then
+            echo "The maintenance agent is installed AND running (${unit})."
+            echo "Trading jobs ask for [self-hosted, Linux, ARM64] and can now use either agent;"
+            echo "maintenance jobs ask for the extra maintenance label and stay on the new one."
           else
-            echo "The maintenance agent was NOT installed; the Pi still has one slot."
-            echo "Nothing on the Pi was changed."
+            echo "The maintenance agent is NOT running (${unit} is not active)."
+            echo "The Pi still has one usable slot. Do NOT repoint any workflow at the"
+            echo "maintenance label until this says it is running."
           fi
