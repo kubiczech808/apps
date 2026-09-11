@@ -1281,6 +1281,63 @@ function stopLossRiskLabel(config = {}) {
   return multiplier > 0 ? `${percent(multiplier)} of net win` : "Off";
 }
 
+// What the dip-entry rule is watching and what it has caught. Without this a dip portfolio
+// is a black box: its Execution candidates tab reads the scraped catalogue, which by
+// construction holds none of its candidates, so the tab says "no opportunities" whether the
+// rule is watching forty markets or is not running at all. That is not a testable feature.
+async function loadDipEntryStatus(mode) {
+  const config = portfolioConfigForMode(mode);
+  if (!dipEntryRuleFromConfig(config).enabled) {
+    state.dipEntryStatus = null;
+    return;
+  }
+  if (state.dipEntryStatusPending) return;
+  if (state.dipEntryStatusAt && Date.now() - state.dipEntryStatusAt < 60000) return;
+  state.dipEntryStatusPending = true;
+  try {
+    const [watch, hits] = await Promise.all([
+      fetchApiJson("api.php?action=dip-entry-watch").catch(() => null),
+      fetchApiJson("api.php?action=dip-entry-hits").catch(() => null),
+    ]);
+    state.dipEntryStatus = {
+      watch: Array.isArray(watch?.plans) ? watch.plans : [],
+      hits: Array.isArray(hits?.hits) ? hits.hits : [],
+      at: new Date().toISOString(),
+    };
+    state.dipEntryStatusAt = Date.now();
+    rerenderCurrentDashboard();
+  } finally {
+    state.dipEntryStatusPending = false;
+  }
+}
+
+// One line the reader can act on: is anything being watched, and has anything been caught.
+function dipEntryStatusMarkup(mode) {
+  const config = portfolioConfigForMode(mode);
+  const rule = dipEntryRuleFromConfig(config);
+  if (!rule.enabled) return "";
+  const fault = dipEntryRuleFault(rule);
+  if (fault) {
+    return `<div class="empty">Dip entry is on but not applied: ${escapeHtml(fault)}.`
+      + ` Set the probability range to where you want to buy and the opening band above it.</div>`;
+  }
+  const status = state.dipEntryStatus;
+  if (!status) return `<div class="empty">Dip entry is on. Loading what it is watching...</div>`;
+  const mine = `paper-${paperStrategyIdFromMode(mode)}`;
+  const watched = status.watch.filter((plan) => String(plan?.portfolioId || "") === mine
+    || String(plan?.portfolioId || "") === normalizeMode(mode));
+  const caught = status.hits.filter((hit) => String(hit?.portfolioId || "") === mine
+    || String(hit?.portfolioId || "") === normalizeMode(mode));
+  const newest = caught.reduce((best, hit) => (!best || String(hit.at || "") > String(best.at || "") ? hit : best), null);
+  return `<div class="empty">Dip entry: watching ${formatInteger(watched.length)} market(s) that opened`
+    + ` ${probability(rule.openMin)}-${probability(rule.openMax)} and are under way, for a fall into`
+    + ` ${probability(rule.buyMin)}-${probability(rule.buyMax)}.`
+    + ` ${caught.length ? `${formatInteger(caught.length)} dip(s) recorded` : "No dip recorded yet"}`
+    + `${newest ? `, newest ${escapeHtml(formatDate(newest.at))} at ${probability(Number(newest.price))}` : ""}.`
+    + ` The RPi worker watches these every second; this bot opens the position on its next run,`
+    + ` at the price the dip reached.</div>`;
+}
+
 // The dip-entry rule, the dashboard's copy. The reference implementation is
 // tools/dip-entry-rule.mjs and a test holds the two against each other -- app.js cannot
 // import it, because it is served to a browser as one file.
@@ -10544,6 +10601,11 @@ function renderPortfolioCandidateRows(rows = [], mode = state.mode, diagnostics 
         ? `${nonProfitable} scraped market quote${nonProfitable === 1 ? " is" : "s are"} non-profitable after fees at the current entry price.`
         : "",
     ].filter(Boolean).join(" ");
+    // A dip portfolio's candidates are never in the catalogue this panel reads, so the
+    // ordinary "no opportunities" line would be true and useless. Say what the rule is
+    // actually doing instead.
+    const dip = dipEntryStatusMarkup(mode);
+    if (dip) return dip;
     return `<div class="empty">No opportunities currently pass this portfolio shortlist.${details ? ` ${escapeHtml(details)}` : " The next scan will refresh market data and newly analyzed opportunities."}</div>`;
   }
   const shown = Math.min(visibleRows.length, candidateVisibleCount(mode));
@@ -10750,6 +10812,9 @@ function renderPortfolioCandidates() {
     if (els.portfolioCandidatesSummary) els.portfolioCandidatesSummary.textContent = "loading";
     return;
   }
+  // Fires the fetch the status line needs, once a minute at most. Called from here because
+  // this panel is the only screen that shows it, so a portfolio without the rule never asks.
+  loadDipEntryStatus(mode);
   const diagnostics = portfolioCandidateDiagnostics(mode);
   const rows = diagnostics.ready;
   const label = portfolioNavigationLabelForMode(mode);
