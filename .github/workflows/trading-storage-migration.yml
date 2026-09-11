@@ -106,11 +106,10 @@ jobs:
 
       - name: Report the current state
         run: |
-          echo "== storage-status (public, read-only)"
-          curl -sS "$STATUS_URL" | python3 -m json.tool || true
-          echo ""
-          echo "== trade rows per portfolio"
-          curl -sS "$TRADE_ROWS_URL" | python3 -m json.tool || true
+          echo "== storage-status before ${OPERATION} (public, read-only)"
+          curl -sS "$STATUS_URL" | python3 trading/tools/storage-status-brief.py || true
+          echo "== trade rows"
+          curl -sS "$TRADE_ROWS_URL" | python3 trading/tools/storage-status-brief.py --trades || true
 
       - name: Run the JSON migration
         if: inputs.operation == 'migrate'
@@ -163,7 +162,6 @@ jobs:
         if: always() && inputs.operation != 'status'
         run: |
           echo "== storage-status after ${OPERATION}"
-          curl -sS "$STATUS_URL" | python3 -m json.tool || true
-          echo ""
-          echo "== trade rows per portfolio"
-          curl -sS "$TRADE_ROWS_URL" | python3 -m json.tool || true
+          curl -sS "$STATUS_URL" | python3 trading/tools/storage-status-brief.py || true
+          echo "== trade rows"
+          curl -sS "$TRADE_ROWS_URL" | python3 trading/tools/storage-status-brief.py --trades || true
