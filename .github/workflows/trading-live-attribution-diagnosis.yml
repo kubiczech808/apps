@@ -1,0 +1,33 @@
+name: Trading Live Attribution Diagnosis
+
+# READ-ONLY, manual only. Reads the published live state and the live-order-ownership record
+# over HTTPS. Places no orders, writes nothing, publishes nothing, uses no secrets.
+#
+# Reported: live trades are now stored -- 364 of them -- and every single one carries no
+# portfolio, while the dashboard shows most live rows attributed. The dashboard resolves
+# ownership at render time; the SYNC is what stamps the stored rows, and the stored rows are
+# what the long-term statistics will be built on. So this measures the stored side.
+on:
+  workflow_dispatch:
+    inputs:
+      tolerance:
+        description: "How far a fill may sit from the logged order price and still match"
+        required: false
+        default: "0.02"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Why stored live trades carry no portfolio
+        env:
+          TRADING_HOST: https://osobnizkusenosti.cz/trading
+          OWNERSHIP_PRICE_TOLERANCE: ${{ inputs.tolerance || '0.02' }}
+        run: python3 trading/tools/live-attribution-probe.py
