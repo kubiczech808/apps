@@ -1,0 +1,34 @@
+name: Trading Catalogue Tag Diagnosis
+
+# READ-ONLY, manual only. Public GETs against the published API, no secrets, no writes.
+#
+# Asked before narrowing the scan to sports and esports and deleting everything else from the
+# active catalogue. The deletion is wanted; the risk is narrowing on the wrong key. The
+# portfolios in use are named leagueoflegends, counterstrike2 and esports2, so if those
+# markets are tagged only with their game and not with `esports`, a two-slug filter starves
+# exactly the portfolios it is meant to serve -- and the symptom is positions quietly ceasing
+# to open, which is slow to notice and slow to attribute.
+on:
+  workflow_dispatch:
+    inputs:
+      keep_tag_slugs:
+        description: "Comma separated slugs the filter would keep"
+        required: false
+        default: "sports,esports"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: What the catalogue is tagged with
+        env:
+          TRADING_HOST: https://osobnizkusenosti.cz/trading
+          KEEP_TAG_SLUGS: ${{ inputs.keep_tag_slugs || 'sports,esports' }}
+        run: python3 trading/tools/catalogue-tag-probe.py
