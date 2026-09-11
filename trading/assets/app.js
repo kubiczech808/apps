@@ -5264,18 +5264,32 @@ function portfolioEquityHistory(trades, equity, openPnl, generatedAt = "", origi
       runningEquity += change;
       points.push({ timestamp, value: runningEquity });
     });
-  // The final point is realized equity only. It still updates to today even when no
-  // trade settled in the latest period.
-  if (now > points[points.length - 1].timestamp || Math.abs(points[points.length - 1].value - finalRealizedEquity) > 0.0001) {
-    points.push({ timestamp: now, value: finalRealizedEquity });
-  }
+  // Today's point is the CURRENT EQUITY, which is what the tile above the chart says.
+  //
+  // Reported: the portfolio held about 55 USDC and the chart ended at 69. Both numbers were
+  // right about different things -- the curve excluded unrealized P/L on the stated grounds
+  // that an open mark can vanish next minute, so it drew equity minus open P/L, and with
+  // open positions 14 down that is 69. A chart whose last point contradicts the number
+  // beside it is not being careful, it is being confusing.
+  //
+  // The earlier points stay realized-only, because there is no record of what the open
+  // positions were marked at on a past day and inventing one would be worse. So the last
+  // step of the curve carries the open P/L with it, and the note under the head says so.
+  points.push({ timestamp: now, value: Number.isFinite(equity) ? equity : finalRealizedEquity });
+  // At most one point per day, and the one that survives is the LAST computed for that day.
+  //
+  // Reported: the 11th appeared twice. It had to -- a settlement bucketed to today and then
+  // the current value appended after it, both on the same date, which the axis then labelled
+  // twice and the curve drew as a vertical pair. Collapsing by bucket also removes a whole
+  // class of this rather than the one case that was seen.
+  const byBucket = new Map();
+  for (const point of points) byBucket.set(equityChartBucket(point.timestamp, scale), point);
+  const dedupedPoints = [...byBucket.entries()]
+    .sort(([left], [right]) => left - right)
+    .map(([, point]) => point);
   return {
-    points,
+    points: dedupedPoints,
     source: "settlement-ledger",
-    // Equity is a step function: it does not drift between settlements, it sits still and
-    // then jumps. Drawing a diagonal from one settlement to the next invents a slope nothing
-    // measured -- see the renderer, which draws this one as steps.
-    stepped: true,
     scale,
     openingEquity,
     originalValue: hasConfiguredOriginalValue ? configuredOriginalValue : null,
@@ -5320,28 +5334,47 @@ function renderPortfolioEquityChart({ trades = [], equity, openPnl = 0, generate
   const plotHeight = height - padding.top - padding.bottom;
   const x = (timestamp) => padding.left + (Math.max(0, Math.min(1, (timestamp - start) / timeSpread)) * plotWidth);
   const y = (value) => padding.top + ((maxValue - value) / (maxValue - minValue)) * plotHeight;
-  // A measured daily series is a reading per day, so a line between two readings is a fair
-  // interpolation. A rebuilt one is not: equity holds still between settlements and then
-  // jumps, so its honest shape is a step -- hold the level to the moment of the settlement,
-  // then move. Drawing it as a diagonal invented a slope nothing measured, and over a gap of
-  // days that slope is most of what the reader sees.
-  const stepped = history.stepped === true;
-  const polyline = (points) => points.flatMap((point, index) => {
-    const at = `${x(point.timestamp).toFixed(1)},${y(point.value).toFixed(1)}`;
-    if (!stepped || index === 0) return [at];
-    // The corner: still at the previous level, already at the new moment.
-    return [`${x(point.timestamp).toFixed(1)},${y(points[index - 1].value).toFixed(1)}`, at];
-  }).join(" ");
-  const line = polyline(history.points);
-  const area = `${padding.left},${(padding.top + plotHeight).toFixed(1)} ${line} ${(padding.left + plotWidth).toFixed(1)},${(padding.top + plotHeight).toFixed(1)}`;
+  // Drawn as a smooth curve rather than steps. Steps were tried and were worse to read: the
+  // vertical risers dominate a chart this small, and the eye follows them instead of the
+  // level. A Catmull-Rom spline keeps every measured point exactly on the curve and only
+  // bends between them.
+  //
+  // Each control point is CLAMPED to the two values it sits between, which is the part worth
+  // keeping: an unclamped spline overshoots on a sharp jump, so a curve drawn through a rise
+  // from 60 to 69 would dip below 60 first and print a loss that never happened.
+  const curve = (points) => {
+    if (points.length < 2) return "";
+    const px = points.map((point) => x(point.timestamp));
+    const py = points.map((point) => y(point.value));
+    const clamp = (value, a, b) => Math.min(Math.max(value, Math.min(a, b)), Math.max(a, b));
+    let path = `M${px[0].toFixed(1)},${py[0].toFixed(1)}`;
+    for (let index = 0; index < points.length - 1; index += 1) {
+      const x0 = px[Math.max(0, index - 1)];
+      const y0 = py[Math.max(0, index - 1)];
+      const x1 = px[index];
+      const y1 = py[index];
+      const x2 = px[index + 1];
+      const y2 = py[index + 1];
+      const x3 = px[Math.min(points.length - 1, index + 2)];
+      const y3 = py[Math.min(points.length - 1, index + 2)];
+      const c1x = x1 + (x2 - x0) / 6;
+      const c1y = clamp(y1 + (y2 - y0) / 6, y1, y2);
+      const c2x = x2 - (x3 - x1) / 6;
+      const c2y = clamp(y2 - (y3 - y1) / 6, y1, y2);
+      path += ` C${c1x.toFixed(1)},${c1y.toFixed(1)} ${c2x.toFixed(1)},${c2y.toFixed(1)} ${x2.toFixed(1)},${y2.toFixed(1)}`;
+    }
+    return path;
+  };
+  const line = curve(history.points);
+  const floor = (padding.top + plotHeight).toFixed(1);
+  const area = line
+    ? `${line} L${x(history.points[history.points.length - 1].timestamp).toFixed(1)},${floor}`
+      + ` L${x(history.points[0].timestamp).toFixed(1)},${floor} Z`
+    : "";
   // The day's low and high, drawn only when the series was measured -- the reconstruction
   // from settlements has no notion of a low or a high within a day.
-  const lowLine = lows.length > 1
-    ? `<polyline class="equity-history-low" points="${polyline(lows)}"></polyline>`
-    : "";
-  const highLine = highs.length > 1
-    ? `<polyline class="equity-history-high" points="${polyline(highs)}"></polyline>`
-    : "";
+  const lowLine = lows.length > 1 ? `<path class="equity-history-low" d="${curve(lows)}"></path>` : "";
+  const highLine = highs.length > 1 ? `<path class="equity-history-high" d="${curve(highs)}"></path>` : "";
   const grid = [0, 0.5, 1].map((ratio) => {
     const value = maxValue - ((maxValue - minValue) * ratio);
     const position = y(value);
@@ -5366,7 +5399,10 @@ function renderPortfolioEquityChart({ trades = [], equity, openPnl = 0, generate
     : `${scaleLabel} - realized`;
   const sourceNote = history.source === "account-daily"
     ? `Each point is the mean of the account's own realised equity readings that day; the red line is the day's low and the green its high.`
-    : "Rebuilt from settled trades, because no recorded daily equity series covers this range yet.";
+    : "Rebuilt from settled trades, because no recorded daily equity series covers this range yet."
+      + " Earlier points are realised only -- there is no record of what open positions were"
+      + " marked at on a past day -- while the last point is the current equity, the same"
+      + " figure as the tile above.";
   els.portfolioEquityChart.innerHTML = `
     <div class="portfolio-equity-chart-head">
       <span class="label">Equity history</span>
@@ -5376,10 +5412,10 @@ function renderPortfolioEquityChart({ trades = [], equity, openPnl = 0, generate
       <svg class="equity-history-svg ${direction}" viewBox="0 0 ${width} ${height}" role="img" aria-label="Realized portfolio equity from the first trade to today" tabindex="0">
       <g class="equity-history-grid">${grid}</g>
       ${originalValueLine}
-      <polygon class="equity-history-area" points="${area}"></polygon>
+      <path class="equity-history-area" d="${area}"></path>
       ${lowLine}
       ${highLine}
-      <polyline class="equity-history-line" points="${line}"></polyline>
+      <path class="equity-history-line" d="${line}"></path>
       <circle class="equity-history-point" cx="${x(last.timestamp).toFixed(1)}" cy="${y(last.value).toFixed(1)}" r="4"></circle>
       <circle class="equity-history-cursor" cx="0" cy="0" r="5"></circle>
       <g class="equity-history-labels">${labels}</g>

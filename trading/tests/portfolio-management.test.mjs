@@ -2479,18 +2479,32 @@ test("live equity history: configured original value anchors the realised chart"
   assert.equal(history.originalValue, 148);
   assert.equal(history.points[0].value, 148,
     "the first plot point is the configured original value, not wallet equity minus another portfolio's losses");
-  assert.equal(history.points[history.points.length - 1].value, 140,
-    "the final realized value is original value plus this portfolio's settled P/L only");
+  // Reported: the portfolio held about 55 USDC and the chart ended at 69. Both were right
+  // about different things -- the curve excluded unrealized P/L, so it drew equity minus
+  // open P/L. A last point that contradicts the tile beside it is confusing rather than
+  // careful, so the last point is now the equity passed in. On a real card that IS
+  // original value + realized + open, so the final step is exactly the open P/L; here the
+  // fixture's numbers are arbitrary, which is what makes the rule visible.
+  assert.equal(history.points[history.points.length - 1].value, 98.5,
+    "the last point is the current equity, the same figure as the tile above the chart");
+  // Everything BEFORE it stays realised-only: there is no record of what open positions
+  // were marked at on a past day, and inventing one would be worse than the jump.
+  assert.equal(history.points[history.points.length - 2].value, 140,
+    "the point before it is original value plus this portfolio's settled P/L");
   assert.ok(!history.points.some((point) => Math.abs(point.value - 190) < 0.0001),
     "the old back-calculated wallet-wide starting point must not leak into the series");
+  // Reported: the last day appeared twice -- a settlement bucketed to today and the current
+  // value appended after it. At most one point per day, and the last computed one wins.
+  const days = history.points.map((point) => new Date(point.timestamp).toISOString().slice(0, 10));
+  assert.equal(new Set(days).size, days.length, `a day may appear once: ${days.join(", ")}`);
 
   const staleLedger = historyBuilder([
     { status: "LOST", openedAt: "2026-08-11T08:00:00Z", resolvedAt: "2026-08-12T08:00:00Z", realizedPnlUsdc: -45 },
     { status: "REDEEMED", openedAt: "2026-08-12T09:00:00Z", resolvedAt: "2026-08-14T08:00:00Z", realizedPnlUsdc: 3 },
   ], 98.25249, -4.1618, "2026-08-30T10:00:00Z", 101.3, 1.11429);
   assert.equal(staleLedger.points[0].value, 101.3);
-  assert.ok(Math.abs(staleLedger.points.at(-1).value - 102.41429) < 0.0001,
-    "the final live point uses authoritative realised equity, not stale retained rows");
+  assert.equal(staleLedger.points.at(-1).value, 98.25249,
+    "the last point is the equity, whatever the retained rows say");
   assert.equal(staleLedger.points.length, 2,
     "unreconciled historical rows are not rendered as fictitious equity movements");
 
@@ -5398,19 +5412,23 @@ test("equity chart: the curve opens one day before the first change, not at the 
     151, 0, "2026-09-12T12:00:00Z", 150, 1), null,
     "a portfolio younger than three days is still not charted");
 
-  // A settlement is a step, not a slope: equity holds still between settlements and then
-  // jumps. Every point after the first therefore contributes a corner as well as itself.
-  assert.match(APP, /const stepped = history\.stepped === true;/);
-  assert.match(APP, /return \[`\$\{x\(point\.timestamp\)\.toFixed\(1\)\},\$\{y\(points\[index - 1\]\.value\)\.toFixed\(1\)\}`, at\];/,
-    "the corner holds the PREVIOUS value at the NEW moment, which is what makes it a step");
-  assert.equal(history.stepped, true, "a rebuilt curve is a step function");
-  // A measured daily series is a reading per day, so a line between two readings is a fair
-  // interpolation and must not be turned into stairs.
-  const sample = (dayOf, value) => ({ day: `2026-09-${dayOf}`, samples: 4, realizedSum: value * 4, realizedMin: value - 1, realizedMax: value + 1 });
+  // At most one point per day, whichever series is drawn. Reported on the rebuilt one, where
+  // a settlement bucketed to today and the current value was appended after it.
+  const dayOf = (point) => new Date(point.timestamp).toISOString().slice(0, 10);
+  const days = history.points.map(dayOf);
+  assert.equal(new Set(days).size, days.length, `a day may appear once: ${days.join(", ")}`);
+  // And the last point is today, carrying the equity that was passed in -- the same figure
+  // as the tile above the chart.
+  assert.equal(dayOf(history.points.at(-1)), "2026-09-12");
+  assert.equal(history.points.at(-1).value, 152);
+
+  // A measured daily series is a reading per day and is taken whenever one exists.
+  const sample = (dayOf2, value) => ({ day: `2026-09-${dayOf2}`, samples: 4, realizedSum: value * 4, realizedMin: value - 1, realizedMax: value + 1 });
   const measured = build(trades, 152, 0, "2026-09-12T12:00:00Z", 150, 2,
     [sample("08", 150), sample("09", 154), sample("10", 154), sample("11", 152)]);
   assert.equal(measured.source, "account-daily", "the measured series has to actually be taken");
-  assert.notEqual(measured.stepped, true, "a measured series is a reading per day, so it is not stepped");
+  const measuredDays = measured.points.map(dayOf);
+  assert.equal(new Set(measuredDays).size, measuredDays.length, "one point per day there too");
 });
 
 // Reported: on a phone the value only showed while a finger was held on the chart -- and the
@@ -5433,26 +5451,48 @@ test("equity chart: a tap pins the value and a second tap clears it", () => {
   assert.match(css, /\.equity-history-cursor\.is-visible \{\s*\n\s*opacity: 1;/);
 });
 
-// The step itself, driven rather than described. The polyline expression is inline in the
-// renderer, so it is lifted out of the source and run with stub scales -- a rendering change
-// asserted only by a regex is a rendering change nobody has actually looked at.
-test("equity chart: a step holds the old level to the new moment, then moves", () => {
-  const source = /const polyline = \(points\) => points\.flatMap[\s\S]*?\.join\(" "\);/.exec(APP);
-  assert.ok(source, "the polyline builder must still be findable");
-  const build = (stepped) => new Function("x", "y", "stepped", `
-    ${source[0].replace("const stepped = history.stepped === true;", "")}
-    return polyline;
-  `)((timestamp) => timestamp, (value) => value, stepped);
+// Steps were tried and were worse to read: on a chart this small the vertical risers
+// dominate and the eye follows them instead of the level. So it is a smooth curve -- and the
+// one property that MUST hold is that smoothing never invents a value outside the data.
+// The builder is lifted out of the source and driven, because a rendering change asserted
+// only by a regex is a rendering change nobody has actually looked at.
+test("equity chart: the curve is smooth and never overshoots the data", () => {
+  const source = /const curve = \(points\) => \{[\s\S]*?\n  \};/.exec(APP);
+  assert.ok(source, "the curve builder must still be findable");
+  const build = new Function("x", "y", `
+    ${source[0]}
+    return curve;
+  `)((timestamp) => timestamp, (value) => value);
 
   const points = [
     { timestamp: 0, value: 100 },
     { timestamp: 10, value: 104 },
     { timestamp: 20, value: 102 },
   ];
-  // Stepped: flat to the moment of the change, then the jump. Five vertices for three points.
-  assert.equal(build(true)(points), "0.0,100.0 10.0,100.0 10.0,104.0 20.0,104.0 20.0,102.0");
-  // Not stepped: one vertex per reading, as a measured daily series should be.
-  assert.equal(build(false)(points), "0.0,100.0 10.0,104.0 20.0,102.0");
-  // A single point cannot step anywhere.
-  assert.equal(build(true)([{ timestamp: 0, value: 100 }]), "0.0,100.0");
+  const path = build(points);
+  // Every measured point is ON the curve: it starts at the first and each segment ends on
+  // the next. Smoothing bends between points, it does not move them.
+  assert.match(path, /^M0\.0,100\.0 C/);
+  assert.ok(path.includes(" 10.0,104.0 "), `the second point must be on the curve: ${path}`);
+  assert.ok(path.endsWith(" 20.0,102.0"), `the last point must end the curve: ${path}`);
+
+  // The overshoot guard, which is the part worth having. An unclamped spline drawn through
+  // a rise from 60 to 69 dips below 60 first -- printing a loss that never happened. Every
+  // control point has to sit between the two values it spans.
+  const rise = build([
+    { timestamp: 0, value: 60 },
+    { timestamp: 10, value: 60 },
+    { timestamp: 20, value: 69 },
+    { timestamp: 30, value: 69 },
+  ]);
+  const ys = [...rise.matchAll(/[-\d.]+,([-\d.]+)/g)].map((match) => Number(match[1]));
+  assert.ok(ys.every((value) => value >= 60 && value <= 69),
+    `no control point may leave the 60-69 range: ${rise}`);
+
+  // Two points still draw, one cannot.
+  assert.ok(build([{ timestamp: 0, value: 1 }, { timestamp: 5, value: 2 }]).startsWith("M0.0,1.0 C"));
+  assert.equal(build([{ timestamp: 0, value: 100 }]), "");
+  // And the area is the same curve closed to the floor, not a second shape that could
+  // disagree with it.
+  assert.match(APP, /const area = line\s*\n\s*\? `\$\{line\} L/);
 });
