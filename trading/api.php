@@ -235,7 +235,7 @@ function state_segment_fields(): array
  * Which segments a summary genuinely reads. Anything not listed here gets the
  * core file alone.
  */
-function state_segments_for_summary(string $summary): array
+function state_segments_for_summary(string $summary, string $scope = 'active'): array
 {
     switch ($summary) {
         case 'dashboard':
@@ -253,9 +253,26 @@ function state_segments_for_summary(string $summary): array
             // never decoded for this view no matter how large it grows.
             return ['observations'];
         case 'scraped':
-            // The recent page, never the whole archive. observationTotals still reports
-            // the true totals from the manifest, so the tab labels keep growing.
-            return ['observations', 'resolvedRecent', 'scanHistory'];
+            // One page of ONE catalogue, never both at once.
+            //
+            // Measured from a phone on LTE: the first scraped response was 11.56 MB and the
+            // dashboard gives it ten seconds, so it timed out and the Scraping log showed
+            // "0 recorded scraping runs" -- the history was in that response and never
+            // arrived. The page limit is 1200 rows, but the first page also carried all
+            // 3000 resolved markets, because sending them on EVERY page would have been
+            // worse. Both are true; the way out is to page the resolved archive too and
+            // walk it after the active catalogue, so no single response carries both.
+            //
+            // observationTotals still reports the true totals either way, so the tab labels
+            // keep growing while the list serves a page of it.
+            //
+            // Still resolvedRecent rather than resolvedObservations: that name is the capped
+            // page, and the paper bot deliberately refuses to rebuild its state from it. A
+            // reader that reassembled the archive from a page would publish the page back as
+            // the whole archive and lose every older resolved market permanently.
+            return $scope === 'resolved'
+                ? ['resolvedRecent', 'scanHistory']
+                : ['observations', 'scanHistory'];
         case 'refresh':
             // The worker fetches segments straight from the data directory, so
             // this response only carries the core and the manifest that names
@@ -440,9 +457,15 @@ function state_payload(
                 trading_storage_observations_fetch('RESOLVED'),
             );
         } elseif (in_array('resolvedRecent', $segments, true)) {
+            // Paged on the same terms as the active catalogue when the caller asked for a
+            // page. Fetching thousands of resolved rows on every request is what made the
+            // first scraped response 11.56 MB; a caller that passes no limit still gets the
+            // capped page, which is what the views that only show a recent slice need.
             $document['marketObservations'] = array_merge(
                 is_array($document['marketObservations'] ?? null) ? $document['marketObservations'] : [],
-                trading_storage_observations_fetch('RESOLVED', 5000),
+                $observationsLimit > 0
+                    ? trading_storage_observations_fetch('RESOLVED', $observationsLimit, $observationsOffset)
+                    : trading_storage_observations_fetch('RESOLVED', 5000),
             );
         }
         if ($target === 'paper' && $selectedStrategyId !== null && preg_match('/^[A-Za-z0-9_-]{1,64}$/', $selectedStrategyId)) {
@@ -2609,7 +2632,7 @@ function compact_dashboard_paper_portfolios(array $data, ?string $selectedStrate
     return $data;
 }
 
-function compact_state_payload(string $target, array $data, string $summary, ?string $selectedStrategyId = null, int $executionOffset = 0): array
+function compact_state_payload(string $target, array $data, string $summary, ?string $selectedStrategyId = null, int $executionOffset = 0, string $scrapedScope = 'active'): array
 {
     if ($target !== 'paper') {
         return $data;
@@ -2692,54 +2715,56 @@ function compact_state_payload(string $target, array $data, string $summary, ?st
 
     if ($summary === 'scraped') {
         $observations = is_array($data['marketObservations'] ?? null) ? $data['marketObservations'] : [];
-        $active = array_values(array_filter($observations, static fn($item): bool => is_array($item) && is_active_scraped_market_observation($item)));
-        // Who applied the page. With the database serving, state_payload asked it for one
-        // page and the offset is already spent -- slicing again here would return an empty
-        // page for every offset past the first. Without it the segment files carry the whole
-        // catalogue, and this is the only place the page can be taken, so a walk would
-        // otherwise receive the SAME full list for every offset and loop on duplicates.
-        if (!trading_storage_is_active()) {
-            $active = array_slice($active, $executionOffset, SCRAPED_SCOPE_PAGE_LIMIT);
-        }
-        // Resolved markets belong in this view too: the Resolved tab lists them and
-        // shows their count. They are appended rather than merged into $active so the
-        // active catalogue keeps its own ordering.
-        //
-        // First page only. The active catalogue is paged now, and appending the same
-        // resolved rows to every page would send them once per page -- three thousand rows
-        // multiplied by however many pages the walk takes, which is worse than the single
-        // large response the paging replaced.
-        $resolved = $executionOffset > 0 ? [] : array_values(array_filter(
-            $observations,
-            static fn($item): bool => is_array($item)
-                && !is_active_scraped_market_observation($item)
-                && is_resolved_scraped_market_observation($item),
-        ));
-        usort($resolved, static function (array $a, array $b): int {
-            $left = strtotime((string) ($a['resolvedAt'] ?? $a['endDate'] ?? '')) ?: 0;
-            $right = strtotime((string) ($b['resolvedAt'] ?? $b['endDate'] ?? '')) ?: 0;
-            return $right <=> $left;
-        });
-        // Nothing is discarded on disk any more: the archive keeps every resolved
-        // market so the counts reflect what was really mined. This is purely a
-        // response-size guard, and it has to be a real one -- measured on a 5000-row
-        // active catalogue, this summary peaks near 111 MB at 8000 resolved rows and a
-        // 128 MB host answers 500 before that. observationTotals reports the true
-        // total regardless, so the tab labels keep growing while the list serves the
-        // most recent page of it.
-        $resolvedServeLimit = 3000;
-        $resolvedTruncated = $executionOffset > 0
-            ? false
-            : count($resolved) > $resolvedServeLimit;
-        $resolved = array_slice($resolved, 0, $resolvedServeLimit);
-        $active = array_merge($active, $resolved);
         $totals = state_observation_totals($data);
-        // From the COUNT query when the database is serving, so the walk is driven by the
-        // true size of the catalogue rather than by how many rows survived this page's
-        // active-row filter -- reading it off the page is what would make a thinned page
-        // look like the end of the list. On the file fallback the manifest count plays the
-        // same part, and a pre-segmentation state counts its own inline rows.
-        $activeTotal = max(0, (int) ($totals['scraped'] ?? $totals['active'] ?? 0));
+        // Nothing is discarded on disk any more: the archive keeps every resolved market so
+        // the counts reflect what was really mined. This is purely a response-size guard,
+        // and it has to be a real one -- measured on a 5000-row active catalogue, serving
+        // the whole resolved archive peaks near 111 MB at 8000 rows and a 128 MB host
+        // answers 500 before that. observationTotals reports the true total regardless, so
+        // the tab labels keep growing while the list serves pages of it.
+        $resolvedServeLimit = 3000;
+
+        // ONE catalogue per response. The first page used to carry its 1200 active rows AND
+        // all 3000 resolved ones, which made the very request the dashboard blocks on the
+        // largest of the walk: 11.56 MB, against a ten second timeout, over LTE. Now the
+        // browser walks the active catalogue and then walks the resolved archive, and every
+        // response is one page of one list.
+        if ($scrapedScope === 'resolved') {
+            $rows = array_values(array_filter(
+                $observations,
+                static fn($item): bool => is_array($item)
+                    && !is_active_scraped_market_observation($item)
+                    && is_resolved_scraped_market_observation($item),
+            ));
+            // Sorted before the page is taken, never within it, or each page would be
+            // ordered only against itself and the archive would come out interleaved.
+            usort($rows, static function (array $a, array $b): int {
+                $left = strtotime((string) ($a['resolvedAt'] ?? $a['endDate'] ?? '')) ?: 0;
+                $right = strtotime((string) ($b['resolvedAt'] ?? $b['endDate'] ?? '')) ?: 0;
+                return $right <=> $left;
+            });
+            // Who applied the page: with the database serving, state_payload already asked
+            // it for one page and slicing again would empty every offset past the first.
+            if (!trading_storage_is_active()) {
+                $rows = array_slice($rows, 0, $resolvedServeLimit);
+                $rows = array_slice($rows, $executionOffset, SCRAPED_SCOPE_PAGE_LIMIT);
+            }
+            $scopeTotal = min($resolvedServeLimit, max(0, (int) ($totals['resolved'] ?? 0)));
+            $resolvedTruncated = max(0, (int) ($totals['resolved'] ?? 0)) > $resolvedServeLimit;
+        } else {
+            $rows = array_values(array_filter($observations, static fn($item): bool => is_array($item) && is_active_scraped_market_observation($item)));
+            if (!trading_storage_is_active()) {
+                $rows = array_slice($rows, $executionOffset, SCRAPED_SCOPE_PAGE_LIMIT);
+            }
+            // From the COUNT query when the database is serving, so the walk is driven by
+            // the true size of the catalogue rather than by how many rows survived this
+            // page's filter -- reading it off the page is what would make a thinned page
+            // look like the end of the list. On the file fallback the manifest count plays
+            // the same part, and a pre-segmentation state counts its own inline rows.
+            $scopeTotal = max(0, (int) ($totals['scraped'] ?? $totals['active'] ?? 0));
+            $resolvedTruncated = max(0, (int) ($totals['resolved'] ?? 0)) > $resolvedServeLimit;
+        }
+        $active = $rows;
         $scanHistory = is_array($data['marketScanHistory'] ?? null)
             ? array_values(array_filter($data['marketScanHistory'], 'is_array'))
             : [];
@@ -2755,14 +2780,15 @@ function compact_state_payload(string $target, array $data, string $summary, ?st
                 $active
             ),
             'observationTotals' => $totals + ['resolvedTruncated' => $resolvedTruncated],
-            // Where this page sits, how wide a page is, and whether more of the active
-            // catalogue remains. Without these a caller cannot tell a short page from the
-            // end of the catalogue, and the browser would stop walking wherever the
-            // active-row filter happened to thin a page out.
+            // Where this page sits, how wide a page is, WHICH catalogue it is a page of, and
+            // whether more of that catalogue remains. Without these a caller cannot tell a
+            // short page from the end of the list, and the browser would stop walking
+            // wherever the row filter happened to thin a page out.
+            'scrapedScope' => $scrapedScope === 'resolved' ? 'resolved' : 'active',
             'scrapedScopeOffset' => $executionOffset,
             'scrapedScopeLimit' => SCRAPED_SCOPE_PAGE_LIMIT,
-            'scrapedScopeTotal' => $activeTotal,
-            'scrapedScopeTruncated' => $activeTotal > $executionOffset + SCRAPED_SCOPE_PAGE_LIMIT,
+            'scrapedScopeTotal' => $scopeTotal,
+            'scrapedScopeTruncated' => $scopeTotal > $executionOffset + SCRAPED_SCOPE_PAGE_LIMIT,
             'marketScan' => is_array($data['marketScan'] ?? null) ? $data['marketScan'] : [],
             'marketScanHistory' => $scanHistory,
             'marketDetailsMode' => 'compact',
@@ -6636,18 +6662,23 @@ try {
         // output would leave the memory cost, which is the other half of the ceiling.
         $observationsLimit = $summary === 'scraped' ? SCRAPED_SCOPE_PAGE_LIMIT : 0;
         $observationsOffset = $summary === 'scraped' ? $executionOffset : 0;
+        // Which of the two catalogues this page belongs to. The browser walks the active one
+        // and then walks the resolved archive, so that no single response carries both --
+        // the first one used to carry 1200 active rows AND all 3000 resolved, 11.56 MB
+        // against the ten second timeout the dashboard gives it.
+        $scrapedScope = ((string) ($_GET['scope'] ?? '')) === 'resolved' ? 'resolved' : 'active';
         // Load the segments this summary reads before decoding anything else. The
         // dashboard is by far the most requested view and needs none of them.
         $payload = state_payload(
             $target,
-            state_segments_for_summary($summary),
+            state_segments_for_summary($summary, $scrapedScope),
             $strategyId,
             $observationsLimit,
             $observationsOffset
         );
         if ($target === 'paper') {
             $payload = paper_state_with_consistent_portfolios($payload, $summary, $strategyId);
-            $payload = compact_state_payload($target, $payload, $summary, $strategyId, $executionOffset);
+            $payload = compact_state_payload($target, $payload, $summary, $strategyId, $executionOffset, $scrapedScope);
         }
         if ($target === 'live') {
             $payload = live_state_with_exit_reasons($payload);

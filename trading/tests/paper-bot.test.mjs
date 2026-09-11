@@ -2218,8 +2218,12 @@ test("resolved observations: the scraped view surfaces them without a days filte
   ]);
 
   // The backend must send resolved rows, otherwise the tab can never list or count them.
+  // They arrive as their own pages now rather than riding the first active one, so what has
+  // to hold is that asking for the resolved scope really does select resolved rows.
   assert.match(api, /function is_resolved_scraped_market_observation/);
-  assert.match(api, /\$active = array_merge\(\$active, \$resolved\);/);
+  assert.match(api, /if \(\$scrapedScope === 'resolved'\) \{\s*\n\s*\$rows = array_values\(array_filter\(\s*\n\s*\$observations,\s*\n\s*static fn\(\$item\): bool => is_array\(\$item\)\s*\n\s*&& !is_active_scraped_market_observation\(\$item\)\s*\n\s*&& is_resolved_scraped_market_observation\(\$item\),/);
+  // And the browser must actually ask for that scope, or the rows are served and never read.
+  assert.match(app, /\{ summary: "scraped", scope: "resolved", offset: 0 \}/);
   // And the fields the tab needs must survive compaction.
   for (const field of [
     "'lastLiveMarketProbability'",
@@ -5565,22 +5569,43 @@ test("scraped counts: the UI reports the archive, not the page it was served", a
   // response, and the walk would stop wherever the active-row filter thinned one out.
   assert.match(api, /const SCRAPED_SCOPE_PAGE_LIMIT = 1200;/);
   assert.match(api, /'scrapedScopeOffset' => \$executionOffset,/);
-  assert.match(api, /'scrapedScopeTotal' => \$activeTotal,/);
-  assert.match(api, /'scrapedScopeTruncated' => \$activeTotal > \$executionOffset \+ SCRAPED_SCOPE_PAGE_LIMIT,/);
+  assert.match(api, /'scrapedScopeTotal' => \$scopeTotal,/);
+  assert.match(api, /'scrapedScopeTruncated' => \$scopeTotal > \$executionOffset \+ SCRAPED_SCOPE_PAGE_LIMIT,/);
   // The total comes off the COUNT query, never off the page.
-  assert.match(api, /\$activeTotal = max\(0, \(int\) \(\$totals\['scraped'\] \?\? \$totals\['active'\] \?\? 0\)\);/);
-  // Resolved rows ride the first page only. Appending them to every page would send three
-  // thousand rows once per page, which is worse than the single large response paging replaced.
-  assert.match(api, /\$resolved = \$executionOffset > 0 \? \[\] : array_values\(array_filter\(/);
+  assert.match(api, /\$scopeTotal = max\(0, \(int\) \(\$totals\['scraped'\] \?\? \$totals\['active'\] \?\? 0\)\);/);
   // And the database is asked for one page, so the decode is bounded as well as the response.
   assert.match(api, /trading_storage_observations_fetch\('SCRAPED', \$observationsLimit, \$observationsOffset\)/);
+
+  // ONE catalogue per response.
+  //
+  // Measured from a phone on LTE: the first scraped response was 11.56 MB and the dashboard
+  // gives it ten seconds, so it timed out -- and because the scan history rides in the same
+  // response, the Scraping log read "0 recorded scraping runs" while the scans themselves
+  // were running perfectly well. The page limit was 1200 rows, but the FIRST page also
+  // carried all 3000 resolved markets, because sending them on every page would have been
+  // worse. Both were true; the way out is to page the resolved archive too and walk it after
+  // the active catalogue.
+  assert.match(api, /\$scrapedScope = \(\(string\) \(\$_GET\['scope'\] \?\? ''\)\) === 'resolved' \? 'resolved' : 'active';/);
+  assert.match(api, /\? \['resolvedRecent', 'scanHistory'\]\s*\n\s*: \['observations', 'scanHistory'\];/,
+    "a scraped response carries one catalogue, never both");
+  assert.match(api, /'scrapedScope' => \$scrapedScope === 'resolved' \? 'resolved' : 'active',/,
+    "the page must say which catalogue it is a page of");
+  // The database serves the resolved archive a page at a time as well, rather than the whole
+  // of it on every request, which is what made the first response large in the first place.
+  assert.match(api, /\? trading_storage_observations_fetch\('RESOLVED', \$observationsLimit, \$observationsOffset\)/);
 
   // The browser walks the pages into the same array every filter and tab count reads, so
   // nothing downstream has to learn about paging -- and it dedupes, because a scan writing
   // between two requests shifts the rows under the offset.
   assert.match(app, /async function walkRemainingScrapedPages\(firstPage, options = \{\}\)/);
-  assert.match(app, /if \(summary === "scraped" && scrapedState\?\.scrapedScopeTruncated === true\)/);
-  assert.match(app, /if \(key && seen\.has\(key\)\) continue;/);
+  assert.match(app, /await walkScrapedScopePages\(firstPage, "active", options, seen\)/);
+  assert.match(app, /await loadResolvedScrapedPages\(options, seen\);/);
+  assert.match(app, /\{ summary: "scraped", scope: "resolved", offset \}/);
+  // The resolved archive is a second list now, not a passenger on the first response, so an
+  // active catalogue that happens to fit in one page must not leave the Resolved tab empty.
+  assert.match(app, /\} else \{\s*\n\s*await loadResolvedScrapedPages\(options\);/,
+    "the resolved archive is walked even when the active catalogue was not truncated");
+  assert.match(app, /if \(key && known\.has\(key\)\) continue;/);
   assert.match(app, /const SCRAPED_PAGE_WALK_LIMIT = 24;/,
     "a server that misreports the last page must cost a bounded number of requests");
   assert.match(api, /'scraped' => \$active/,
@@ -7430,8 +7455,16 @@ test("state segments: the opportunities page reads the capped page, not the arch
   const { readFile } = await import("node:fs/promises");
   const api = await readFile(new URL("../api.php", import.meta.url), "utf8");
 
-  // The one line that decides whether this page costs a constant or grows with history.
-  assert.match(api, /case 'scraped':\n[\s\S]*?return \['observations', 'resolvedRecent', 'scanHistory'\];/);
+  // The lines that decide whether this page costs a constant or grows with history. The
+  // active catalogue and the resolved archive are separate requests now -- one response
+  // carrying both is what made the first one 11.56 MB -- but neither may reach for the
+  // UNCAPPED archive, which is what this has always been guarding.
+  assert.match(api, /case 'scraped':\n[\s\S]*?return \$scope === 'resolved'\n\s*\? \['resolvedRecent', 'scanHistory'\]\n\s*: \['observations', 'scanHistory'\];/);
+  assert.doesNotMatch(
+    /case 'scraped':[\s\S]*?case 'refresh':/.exec(api)?.[0] || "",
+    /'resolvedObservations'/,
+    "the opportunities page must never ask for the uncapped archive",
+  );
   // It merges through the same transport field, so nothing downstream changes shape.
   assert.match(api, /'resolvedRecent' => \['resolvedMarketObservations'\],/);
   // And the totals still come from the archive's own manifest entry, untouched.

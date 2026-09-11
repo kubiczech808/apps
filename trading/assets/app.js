@@ -8497,43 +8497,95 @@ function scrapedObservationRowKey(row) {
   return String(row?.tokenId || row?.id || row?.clobTokenId || row?.assetId || "");
 }
 
-// Fetch the remaining pages of the active catalogue and append them to what is loaded.
+// Fetch the remaining pages of one catalogue and append them to what is loaded.
 //
 // Deduplicated by token, because a scan writing between two of these requests shifts the
 // rows under the offset: the walk would otherwise show one market twice and miss another.
 // A row with no key at all is kept rather than dropped -- an unkeyable row is a data fault
 // worth seeing, not one worth hiding.
-async function walkRemainingScrapedPages(firstPage, options = {}) {
+//
+// Returns false when a page failed to load, so the caller does not start a second walk on
+// top of a broken one.
+async function walkScrapedScopePages(firstPage, scope, options = {}, seen = null) {
   const limit = Math.max(1, Number(firstPage?.scrapedScopeLimit) || 1200);
   const total = Math.max(0, Number(firstPage?.scrapedScopeTotal) || 0);
-  const seen = new Set(state.scrapedMarketObservations.map(scrapedObservationRowKey).filter(Boolean));
+  const known = seen || new Set(state.scrapedMarketObservations.map(scrapedObservationRowKey).filter(Boolean));
+  const label = scope === "resolved" ? "resolved Polymarket markets" : "scraped Polymarket opportunities";
   for (let page = 1; page < SCRAPED_PAGE_WALK_LIMIT; page += 1) {
     const offset = page * limit;
     if (offset >= total) break;
     if (state.opportunityView === "scraped" && els.botEvaluations) {
-      els.botEvaluations.innerHTML = `<div class="empty">Loading scraped Polymarket opportunities`
+      els.botEvaluations.innerHTML = `<div class="empty">Loading ${label}`
         + ` (${formatInteger(state.scrapedMarketObservations.length) || state.scrapedMarketObservations.length}`
         + ` of ${formatInteger(total) || total})...</div>`;
     }
     let payload = null;
+    const query = scope === "resolved"
+      ? { summary: "scraped", scope: "resolved", offset }
+      : { summary: "scraped", offset };
     try {
-      payload = await fetchJsonWithTimeout("data/paper-state.json", { summary: "scraped", offset }, 15000);
+      payload = await fetchJsonWithTimeout("data/paper-state.json", query, 15000);
     } catch (error) {
       // A page that will not load leaves the list short rather than empty, and says so.
       // Throwing here would discard the pages that did arrive, which is strictly worse.
       state.scrapedMarketStateError = `Only part of the scraped catalogue loaded: ${error?.message || error}`;
-      return;
+      return false;
     }
-    if (dashboardLoadIsStale(options)) return;
+    if (dashboardLoadIsStale(options)) return false;
     const rows = Array.isArray(payload?.marketObservations) ? payload.marketObservations : [];
     for (const row of rows) {
       if (scrapedObservationIsError(row)) continue;
       const key = scrapedObservationRowKey(row);
-      if (key && seen.has(key)) continue;
-      if (key) seen.add(key);
+      if (key && known.has(key)) continue;
+      if (key) known.add(key);
       state.scrapedMarketObservations.push(row);
     }
     if (payload?.scrapedScopeTruncated !== true) break;
+  }
+  return true;
+}
+
+// The active catalogue first, then the resolved archive.
+//
+// They used to arrive together: the first response carried its page of active rows AND all
+// three thousand resolved ones, which made the very request the dashboard blocks on the
+// largest of the whole walk -- 11.56 MB against a ten second timeout. On a phone over LTE
+// that timed out, and because the scan history rides in the same response the Scraping log
+// showed "0 recorded scraping runs" while the scans themselves were running perfectly well.
+// Walked separately, every response is one page of one list.
+async function walkRemainingScrapedPages(firstPage, options = {}) {
+  const seen = new Set(state.scrapedMarketObservations.map(scrapedObservationRowKey).filter(Boolean));
+  if (!(await walkScrapedScopePages(firstPage, "active", options, seen))) return;
+  await loadResolvedScrapedPages(options, seen);
+}
+
+// The resolved archive, from its own first page. The Resolved tab lists these and shows
+// their count, and nothing else in the view depends on them, so a failure here leaves the
+// active catalogue exactly as it was rather than taking it down too.
+async function loadResolvedScrapedPages(options = {}, seen = null) {
+  const known = seen || new Set(state.scrapedMarketObservations.map(scrapedObservationRowKey).filter(Boolean));
+  let firstResolved = null;
+  try {
+    firstResolved = await fetchJsonWithTimeout(
+      "data/paper-state.json",
+      { summary: "scraped", scope: "resolved", offset: 0 },
+      15000,
+    );
+  } catch (error) {
+    state.scrapedMarketStateError = `The resolved archive did not load: ${error?.message || error}`;
+    return;
+  }
+  if (dashboardLoadIsStale(options)) return;
+  const rows = Array.isArray(firstResolved?.marketObservations) ? firstResolved.marketObservations : [];
+  for (const row of rows) {
+    if (scrapedObservationIsError(row)) continue;
+    const key = scrapedObservationRowKey(row);
+    if (key && known.has(key)) continue;
+    if (key) known.add(key);
+    state.scrapedMarketObservations.push(row);
+  }
+  if (firstResolved?.scrapedScopeTruncated === true) {
+    await walkScrapedScopePages(firstResolved, "resolved", options, known);
   }
 }
 
@@ -8563,8 +8615,16 @@ async function ensureScrapedMarketState(options = {}) {
     // The whole catalogue in one response was 21.32 MB in 2511 ms and that is what held the
     // retention cap at 5000 rows: raising the cap grows the response linearly until the
     // shared host answers 500. Paged, each response is about 3 MB whatever the cap is.
-    if (summary === "scraped" && scrapedState?.scrapedScopeTruncated === true) {
-      await walkRemainingScrapedPages(scrapedState, options);
+    //
+    // The resolved archive is walked whether or not the ACTIVE catalogue had more pages: it
+    // is a second list now, not a passenger on the first response, so an active catalogue
+    // that happens to fit in one page must not mean the Resolved tab stays empty.
+    if (summary === "scraped") {
+      if (scrapedState?.scrapedScopeTruncated === true) {
+        await walkRemainingScrapedPages(scrapedState, options);
+      } else {
+        await loadResolvedScrapedPages(options);
+      }
     }
     if (state.opportunityView === "scraped" || state.opportunityView === "scan-log") renderBotEvaluations();
     if (isLiveMode() && state.liveState) {
