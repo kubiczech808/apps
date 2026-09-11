@@ -1,0 +1,32 @@
+name: Trading Resolution Date Diagnosis
+
+# Read-only diagnostic, manual only. Reads the published live account snapshot and the
+# Gamma market for each open position over HTTPS. Places no orders, writes nothing,
+# publishes nothing, uses no secrets.
+#
+# Reported: every open position in the active live portfolio shows the same resolution,
+# "12. 09. 2026 01:59, 16.1 h left", for fixtures being played today.
+#
+# 01:59 local is 23:59:59Z -- the marker this codebase uses for a whole-day bucket, a date
+# with no clock stretched to the last second of its day. Three code paths can produce one
+# and the fix differs for each, so this says which produced it, and whether Gamma held a
+# precise date that was discarded.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Compare every open position's stored resolution date against Gamma
+        working-directory: trading
+        run: node tools/resolution-date-diagnosis.mjs
