@@ -157,6 +157,20 @@ const LIVE_STATE_URL = process.env.PAPER_LIVE_STATE_URL
   || derivedTradingApiUrl(REMOTE_STATE_URL, "state", { target: "live" });
 const LIVE_CATALOGUE_REHYDRATE_LIMIT = Math.max(1, Math.min(40,
   envNumber("PAPER_LIVE_CATALOGUE_REHYDRATE_LIMIT", 20)));
+// Dips the RPi worker saw, for a paper portfolio running the dip-entry rule.
+//
+// This bot runs hourly and the trough it buys lasts minutes, so it can never witness one --
+// and the collapsed favourite is not in the scraped catalogue either, because retention
+// keeps only the leading outcome above 50%. The worker is already round the loop every
+// second with those tokens in its batch, so it records when the price entered the band and
+// at what price, and this reads the record and opens a simulated position AT THE RECORDED
+// PRICE rather than at whatever the market has drifted to since.
+//
+// Declared here with an empty default so every reader is safe before the fetch lands: a bot
+// that cannot reach the endpoint trades exactly as it did before this existed.
+const DIP_ENTRY_HITS_URL = process.env.PAPER_DIP_ENTRY_HITS_URL
+  || derivedTradingApiUrl(REMOTE_STATE_URL, "dip-entry-hits");
+let DIP_ENTRY_HITS = [];
 // The PHP summary endpoint is preferred because it is small and validated by
 // the app. The static file is a recovery path for a state that is temporarily
 // too large for PHP to parse during a migration.
@@ -7978,8 +7992,69 @@ function incrementCount(counts, key) {
   counts[key] = Number(counts[key] || 0) + 1;
 }
 
+// Fetched once per run, and a failure is not fatal: a bot that cannot reach the endpoint
+// trades exactly as it did before this existed.
+async function loadDipEntryHits() {
+  if (!DIP_ENTRY_HITS_URL) return;
+  try {
+    const separator = DIP_ENTRY_HITS_URL.includes("?") ? "&" : "?";
+    const payload = await fetchJson(`${DIP_ENTRY_HITS_URL}${separator}t=${Date.now()}`);
+    DIP_ENTRY_HITS = Array.isArray(payload?.hits) ? payload.hits : [];
+    if (DIP_ENTRY_HITS.length) console.log(`Dip-entry hits available: ${DIP_ENTRY_HITS.length}`);
+  } catch (error) {
+    console.warn(`Dip-entry hits unavailable (${error?.message || error}); dip portfolios will find no candidate this run.`);
+    DIP_ENTRY_HITS = [];
+  }
+}
+
+// A recorded dip, shaped as the candidate row every filter downstream already understands.
+//
+// The price is the one the worker saw, not the current one, and that is the entire point:
+// the trough is over by the time this bot runs. bestAsk and bestBid are set to it so the
+// spread gate sees a tradable quote rather than refusing a row it has no book for -- the
+// worker read a real book at that moment, which is the evidence the gate wants.
+function dipEntryCandidateRows(strategy) {
+  const prefix = `paper-${strategy.id}`;
+  return DIP_ENTRY_HITS
+    .filter((hit) => hit && String(hit.portfolioId || "") === prefix)
+    .map((hit) => {
+      const price = Number(hit.price);
+      if (!Number.isFinite(price) || price <= 0 || price >= 1) return null;
+      const endDate = String(hit.endDate || "");
+      return {
+        tokenId: String(hit.tokenId || ""),
+        conditionId: String(hit.conditionId || ""),
+        question: String(hit.question || ""),
+        outcome: String(hit.outcome || ""),
+        slug: String(hit.slug || ""),
+        marketProbability: price,
+        marketPrice: price,
+        bestAsk: price,
+        bestBid: price,
+        spread: 0,
+        // The premise the rule is about, carried from the watch so the gate can verify it
+        // here too rather than taking the record's word for it.
+        firstMarketProbability: Number.isFinite(Number(hit.openProbability)) ? Number(hit.openProbability) : null,
+        endDate,
+        resolutionEndDate: endDate,
+        // The worker only ever watches fixtures already under way, and the gate asks again.
+        eventStarted: true,
+        observedAt: String(hit.at || ""),
+        firstObservedAt: String(hit.at || ""),
+        dipEntryHit: true,
+      };
+    })
+    .filter((row) => row && row.tokenId);
+}
+
 function sortEligibleForStrategy(eligible, strategy = PAPER_STRATEGIES.conservative) {
-  const strategyRows = strategyEligibleCandidates(eligible, strategy);
+  // A dip portfolio's candidates are the dips the worker RECORDED, not the catalogue. The
+  // catalogue cannot hold them: a collapsed favourite drops out of it entirely, and the
+  // portfolio's own range is where it buys, which is below everything the catalogue keeps.
+  // Every filter below still applies to these rows -- the range, the tags, the shape, the
+  // liquidity and the rule's own opening-band check.
+  const pool = dipEntryRuleState(strategy).enabled ? dipEntryCandidateRows(strategy) : eligible;
+  const strategyRows = strategyEligibleCandidates(pool, strategy);
   const rows = strategyRows;
   if (strategy.selectionOrder === "highest_reward_risk_first") {
     return rows.sort((a, b) => {
@@ -12505,6 +12580,10 @@ async function run() {
   await rm(SCAN_HISTORY_ENTRY_PATH, { force: true }).catch(() => {});
   await rm(SCAN_ERROR_MARKER_PATH, { force: true }).catch(() => {});
   await rm(PORTFOLIO_RUN_LOG_ENTRY_PATH, { force: true }).catch(() => {});
+  // Before any portfolio is evaluated, because a dip portfolio's entire candidate pool is
+  // this list. It never throws: a bot that cannot reach the endpoint trades exactly as it
+  // did before the rule existed.
+  await timed("loadDipEntryHits", () => loadDipEntryHits());
   const state = await timed("readState", () => readState());
   if (PAPER_RESET_PORTFOLIO) {
     if (!PAPER_STRATEGY_ID) {

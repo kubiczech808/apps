@@ -5083,10 +5083,27 @@ function live_dip_entry_watch_payload(): array
             $portfolioIds[] = 'live-custom-' . (string) $id;
         }
     }
+    // Paper portfolios watch too, and that is the whole point of this half: the rule fires
+    // on a trough that lasts minutes, and the paper bot runs hourly, so a paper portfolio
+    // could never test it from its own cadence. It contributes its tokens to the SAME
+    // one-second poll the live portfolios use, and what the poll finds is recorded as a hit
+    // for the bot to open a simulated position from at the price the dip actually reached.
+    //
+    // Nothing about the scraped catalogue changes for this. A collapsed favourite is not in
+    // the catalogue at all -- above 50% it is a row, at 35% it is not -- so the token is
+    // picked up here while it is still the favourite and followed down by the worker.
+    foreach ((array) ($config['paper'] ?? []) as $id => $row) {
+        if (is_array($row)) {
+            $portfolioIds[] = 'paper-' . (string) $id;
+        }
+    }
 
     $active = [];
     foreach ($portfolioIds as $portfolioId) {
-        $portfolio = execution_scope_strategy_config($portfolioId === 'live5050' ? 'live5050' : $portfolioId);
+        $paperId = str_starts_with($portfolioId, 'paper-') ? substr($portfolioId, strlen('paper-')) : null;
+        $portfolio = $paperId === null
+            ? execution_scope_strategy_config($portfolioId === 'live5050' ? 'live5050' : $portfolioId)
+            : (is_array($config['paper'][$paperId] ?? null) ? $config['paper'][$paperId] : null);
         if (!is_array($portfolio)) {
             continue;
         }
@@ -5107,7 +5124,15 @@ function live_dip_entry_watch_payload(): array
             continue;
         }
         $buyMin = normalize_probability_value($portfolio['minProbability'] ?? null, 0.01);
-        $active[$portfolioId] = ['portfolio' => $portfolio, 'rule' => $rule, 'buyMin' => $buyMin, 'buyMax' => $buyMax];
+        $active[$portfolioId] = [
+            'portfolio' => $portfolio,
+            'rule' => $rule,
+            'buyMin' => $buyMin,
+            'buyMax' => $buyMax,
+            // What the worker does when the price arrives: place an order, or record a hit
+            // for the paper bot. Decided here rather than by the worker parsing an id.
+            'accountType' => $paperId === null ? 'live' : 'paper',
+        ];
     }
     if ($active === []) {
         return ['ok' => true, 'generatedAt' => gmdate('c'), 'cashUsdc' => null, 'plans' => [], 'portfolios' => []];
@@ -5188,15 +5213,23 @@ function live_dip_entry_watch_payload(): array
             if (!execution_scope_matches_observation($item, $scope)) {
                 continue;
             }
+            // Diversification, decided here so the worker has nothing to work out at fire
+            // time. Only for LIVE: these are the shared wallet's holdings, and a paper
+            // portfolio has its own -- the paper bot applies its own risk rules when it
+            // opens the simulated position, and borrowing the wallet's here would refuse a
+            // paper entry because some live portfolio happens to hold the market.
             $blocked = '';
-            if (isset($heldTokens[$tokenId])) {
-                $blocked = 'the wallet already holds or has a resting order on this token';
-            } elseif ($conditionId !== '' && isset($heldConditions[$conditionId])) {
-                $blocked = 'the wallet already has a position in this market';
+            if ($entry['accountType'] === 'live') {
+                if (isset($heldTokens[$tokenId])) {
+                    $blocked = 'the wallet already holds or has a resting order on this token';
+                } elseif ($conditionId !== '' && isset($heldConditions[$conditionId])) {
+                    $blocked = 'the wallet already has a position in this market';
+                }
             }
             $stake = normalize_optional_money_value($entry['portfolio']['stakeUsdc'] ?? null);
             $plans[] = [
                 'portfolioId' => $portfolioId,
+                'accountType' => $entry['accountType'],
                 'tokenId' => $tokenId,
                 'conditionId' => $conditionId,
                 'question' => (string) ($item['question'] ?? ''),
@@ -5378,6 +5411,95 @@ function workflow_target_key(string $target): string
  * signed BUY. The account snapshot is intentionally not that lock: two runners can
  * both have read the same snapshot before either newly submitted order is visible.
  */
+/**
+ * Dips the RPi worker actually saw, for the paper bot to open simulated positions from.
+ *
+ * This is the paper half of the rule and the reason it exists at all. The trough lasts
+ * minutes; the paper bot runs hourly, so it can never witness one. The worker is already
+ * round the loop every second with these tokens in its batch, so it records WHEN the price
+ * entered the band and AT WHAT PRICE, and the bot opens the position from that record on its
+ * next run -- a simulated entry at the price the dip actually reached rather than at
+ * whatever the market has drifted to an hour later.
+ *
+ * Append-only with a TTL. Nothing here is authoritative about a portfolio's state: it is a
+ * record of observations, and the bot decides what to do with them under its own rules.
+ */
+function dip_entry_hits_path(): string
+{
+    return __DIR__ . '/data/dip-entry-hits.json';
+}
+
+const DIP_ENTRY_HIT_TTL_SECONDS = 172800;
+const DIP_ENTRY_HIT_LIMIT = 500;
+
+function read_dip_entry_hits(): array
+{
+    $stored = decode_state_file(dip_entry_hits_path(), false);
+    $hits = is_array($stored['hits'] ?? null) ? $stored['hits'] : [];
+    $cutoff = time() - DIP_ENTRY_HIT_TTL_SECONDS;
+    $kept = [];
+    foreach ($hits as $hit) {
+        if (!is_array($hit)) {
+            continue;
+        }
+        $at = strtotime((string) ($hit['at'] ?? ''));
+        if ($at === false || $at < $cutoff) {
+            continue;
+        }
+        $kept[] = $hit;
+    }
+    return $kept;
+}
+
+function record_dip_entry_hit(array $input): array
+{
+    $tokenId = trim((string) ($input['tokenId'] ?? ''));
+    $portfolioId = trim((string) ($input['portfolioId'] ?? ''));
+    $price = is_numeric($input['price'] ?? null) ? (float) $input['price'] : null;
+    if ($tokenId === '' || $portfolioId === '' || $price === null || $price <= 0 || $price >= 1) {
+        return ['ok' => false, 'reason' => 'tokenId, portfolioId and a price between 0 and 1 are required'];
+    }
+    $hits = read_dip_entry_hits();
+    // One hit per portfolio and token, ever. The worker already refuses to fire twice, but
+    // it restarts, and a second record would become a second simulated position in a market
+    // the portfolio entered once.
+    foreach ($hits as $hit) {
+        if ((string) ($hit['tokenId'] ?? '') === $tokenId && (string) ($hit['portfolioId'] ?? '') === $portfolioId) {
+            return ['ok' => true, 'recorded' => false, 'reason' => 'already recorded'];
+        }
+    }
+    $hits[] = [
+        'portfolioId' => $portfolioId,
+        'tokenId' => $tokenId,
+        'conditionId' => trim((string) ($input['conditionId'] ?? '')),
+        'question' => (string) ($input['question'] ?? ''),
+        'outcome' => (string) ($input['outcome'] ?? ''),
+        'slug' => (string) ($input['slug'] ?? ''),
+        // The price the dip actually reached, which is what the simulated entry pays. The
+        // whole value of recording this is that it is not the price an hour later.
+        'price' => round($price, 6),
+        'openProbability' => is_numeric($input['openProbability'] ?? null) ? round((float) $input['openProbability'], 4) : null,
+        'endDate' => (string) ($input['endDate'] ?? ''),
+        'at' => gmdate('c'),
+    ];
+    if (count($hits) > DIP_ENTRY_HIT_LIMIT) {
+        $hits = array_slice($hits, -DIP_ENTRY_HIT_LIMIT);
+    }
+    $path = dip_entry_hits_path();
+    $dir = dirname($path);
+    if (!is_dir($dir) && !mkdir($dir, 0775, true) && !is_dir($dir)) {
+        return ['ok' => false, 'reason' => 'unable to create the data directory'];
+    }
+    $encoded = json_encode(
+        ['generatedAt' => gmdate('c'), 'hits' => $hits],
+        JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE
+    );
+    if (!is_string($encoded) || file_put_contents($path, $encoded . "\n", LOCK_EX) === false) {
+        return ['ok' => false, 'reason' => 'unable to persist the dip entry hit'];
+    }
+    return ['ok' => true, 'recorded' => true];
+}
+
 function live_entry_claim_path(): string
 {
     return __DIR__ . '/data/live-entry-claims.json';
@@ -6294,6 +6416,23 @@ try {
     // token ids, bands and sizes, all of which are already in the dashboard.
     if ($action === 'dip-entry-watch') {
         respond(live_dip_entry_watch_payload());
+    }
+
+    // What the worker saw. Read by the paper bot on its hourly run, which opens a simulated
+    // position at the price the dip actually reached -- the reason the record exists at all,
+    // since an hourly bot can never witness a trough that lasts minutes.
+    if ($action === 'dip-entry-hits') {
+        respond(['ok' => true, 'generatedAt' => gmdate('c'), 'hits' => read_dip_entry_hits()]);
+    }
+
+    // Written by the RPi worker only. Trigger-key protected like every other write from it:
+    // a public endpoint that appends to a list the paper bot trades from would let anyone
+    // put a position in a portfolio.
+    if ($action === 'dip-entry-record') {
+        require_trading_trigger_key();
+        $payload = json_decode((string) file_get_contents('php://input'), true);
+        $result = record_dip_entry_hit(is_array($payload) ? $payload : []);
+        respond($result, ($result['ok'] ?? false) ? 200 : 400);
     }
 
     if ($action === 'state') {

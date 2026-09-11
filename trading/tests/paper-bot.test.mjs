@@ -11283,3 +11283,82 @@ test("execution candidates: the list is ordered by Potential p.a. on every portf
   assert.match(app, /\$\{showRiskReward \? "<th>R\/R<\/th>" : ""\}/);
   assert.match(app, /\$\{showRiskReward \? `<td data-label="R\/R">\$\{evaluationRiskRewardCell\(item\)\}<\/td>` : ""\}/);
 });
+
+// Asked for: watch the events whose parameters match the dip rule and check whether a dip
+// happened -- on PAPER portfolios too, at the highest frequency the hardware allows.
+//
+// The paper bot runs hourly and the trough lasts minutes, so it can never witness one. And
+// the collapsed favourite is not in the scraped catalogue either: retention keeps only the
+// leading outcome above 50%. So the detection happens where it already runs every second --
+// the RPi worker, with those tokens in the batch it already fetches -- and what it records
+// becomes this bot's candidate pool.
+test("dip entry on paper: recorded dips are the candidate pool, and only for those portfolios", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const bot = await readFile(new URL("../tools/paper-trading-bot.mjs", import.meta.url), "utf8");
+
+  // The pool swap, which is the whole mechanism. A dip portfolio must NOT fall back to the
+  // catalogue: the catalogue cannot hold a collapsed favourite, so falling back would mean
+  // trading ordinary markets, which is the failure this rule was reported for.
+  assert.match(bot, /const pool = dipEntryRuleState\(strategy\)\.enabled \? dipEntryCandidateRows\(strategy\) : eligible;/);
+  // Every other portfolio is untouched.
+  assert.match(bot, /const strategyRows = strategyEligibleCandidates\(pool, strategy\);/);
+
+  // The rows a hit becomes, driven rather than described.
+  const build = new Function("DIP_ENTRY_HITS", `
+    ${functionSource(bot, "dipEntryCandidateRows")}
+    return dipEntryCandidateRows;
+  `);
+  const hits = [
+    { portfolioId: "paper-dip", tokenId: "aaa", price: 0.35, openProbability: 0.78, question: "INOX vs Black Phoenix", endDate: "2026-09-11T22:00:00Z", at: "2026-09-11T20:27:00Z" },
+    { portfolioId: "paper-other", tokenId: "bbb", price: 0.33, openProbability: 0.75 },
+    { portfolioId: "paper-dip", tokenId: "ccc", price: 0, openProbability: 0.75 },
+  ];
+  const rows = build(hits)({ id: "dip" });
+  assert.equal(rows.length, 1, "another portfolio's hit and an unusable price are both dropped");
+  const [row] = rows;
+  // The price is the one the WORKER saw. That is the entire point: by the time this bot
+  // runs the trough is over, and entering at the current price would be a different trade.
+  assert.equal(row.marketProbability, 0.35);
+  assert.equal(row.bestAsk, 0.35);
+  assert.equal(row.bestBid, 0.35);
+  // The premise travels with it, so the rule's own gate can verify it here rather than
+  // taking the record's word for it.
+  assert.equal(row.firstMarketProbability, 0.78);
+  assert.equal(row.eventStarted, true);
+  assert.equal(row.tokenId, "aaa");
+
+  // And a hit with no opening probability cannot pass the gate, because an unverified
+  // premise is not a premise -- the gate reads firstMarketProbability and refuses null.
+  const noOpen = build([{ portfolioId: "paper-dip", tokenId: "ddd", price: 0.35 }])({ id: "dip" });
+  assert.equal(noOpen[0].firstMarketProbability, null);
+  assert.match(bot, /if \(opened == null\) return false;/);
+
+  // The fetch is once per run, before any portfolio is evaluated, and never fatal.
+  assert.match(bot, /await timed\("loadDipEntryHits", \(\) => loadDipEntryHits\(\)\);/);
+  assert.match(bot, /DIP_ENTRY_HITS = \[\];/, "an unreachable endpoint leaves an empty pool, not a crash");
+  assert.match(bot, /let DIP_ENTRY_HITS = \[\];/,
+    "declared at module level with an empty default, so every reader is safe before the fetch lands");
+});
+
+// The worker's side of the same mechanism: a paper portfolio's dip is RECORDED, never
+// bought, and that path must not require the live keys to be armed -- a paper test that
+// needed them would not be a paper test.
+test("dip entry on paper: the worker records it instead of buying, whatever the live switches say", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const worker = await readFile(new URL("../tools/rpi-live-exit-worker.mjs", import.meta.url), "utf8");
+
+  assert.match(worker, /if \(plan\.accountType === "paper"\) \{/);
+  const branch = worker.slice(worker.indexOf('if (plan.accountType === "paper") {'));
+  assert.match(branch.slice(0, 900), /const recorded = await recordDipEntryHit\(plan, trigger\.ask\);/);
+  // Ordered before the shadow/live gate, deliberately: nothing is signed and no money moves.
+  const paperAt = worker.indexOf('if (plan.accountType === "paper") {');
+  const armedAt = worker.indexOf('if (DIP_ENTRY_MODE !== "live" || MODE !== "live" || !CONFIRM_LIVE) {');
+  assert.ok(paperAt > 0 && armedAt > paperAt,
+    "the paper path must not be gated behind the live switches");
+  // A failed POST is NOT terminal. The price is still in the band on the next pass, and a
+  // dip lost to a timeout is a dip lost.
+  assert.match(branch.slice(0, 1200), /if \(recorded\.ok\) entered\[key\] = \{ terminal: true/);
+  // It is trigger-key protected, because an open endpoint that appends to a list the bot
+  // trades from would let anyone put a position in a portfolio.
+  assert.match(worker, /"x-trading-trigger-key": TRADING_TRIGGER_KEY,[\s\S]{0,200}?"user-agent": "trading-live-exit-worker\/1\.0",\s*\n\s*\},\s*\n\s*body: JSON\.stringify\(\{\s*\n\s*portfolioId: plan\.portfolioId,/);
+});

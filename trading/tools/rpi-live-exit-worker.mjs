@@ -1941,6 +1941,54 @@ const DIP_ENTRY_MODE = String(process.env.LIVE_DIP_ENTRY_MODE || "off").trim().t
 // an hour or two, and the entry has to outlive the collapse that removes the row.
 const DIP_ENTRY_TTL_MS = clampInteger(process.env.LIVE_DIP_ENTRY_TTL_MS, 4 * 3600 * 1000, 600000, 24 * 3600 * 1000);
 const DIP_ENTRY_MAX_SLIPPAGE = Number(process.env.LIVE_DIP_ENTRY_MAX_SLIPPAGE || 0.02);
+const DIP_ENTRY_RECORD_URL = process.env.LIVE_DIP_ENTRY_RECORD_URL
+  || "https://osobnizkusenosti.cz/trading/api.php?action=dip-entry-record";
+
+// A paper portfolio's dip, recorded rather than bought.
+//
+// This is the half that makes the rule testable at all. The trough lasts minutes and the
+// paper bot runs hourly, so a paper portfolio can never witness one from its own cadence --
+// but this loop is already round every second with the same tokens in its batch. So it
+// records WHEN the price entered the band and AT WHAT PRICE, and the bot opens a simulated
+// position from that record: an entry at the price the dip actually reached, rather than at
+// whatever the market has drifted to an hour later.
+//
+// Nothing is signed and no money moves, so this path runs whatever the live switches say --
+// a paper test that needed the live keys armed would not be a paper test.
+async function recordDipEntryHit(plan, price) {
+  if (!TRADING_TRIGGER_KEY) return { ok: false, error: "dip entry record key is not configured" };
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 12000);
+  try {
+    const response = await fetch(DIP_ENTRY_RECORD_URL, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-trading-trigger-key": TRADING_TRIGGER_KEY,
+        "user-agent": "trading-live-exit-worker/1.0",
+      },
+      body: JSON.stringify({
+        portfolioId: plan.portfolioId,
+        tokenId: String(plan.tokenId),
+        conditionId: plan.conditionId || "",
+        question: plan.question || "",
+        outcome: plan.outcome || "",
+        slug: plan.slug || "",
+        price,
+        openProbability: plan.openProbability ?? null,
+        endDate: plan.endDate || "",
+      }),
+      signal: controller.signal,
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok || !payload?.ok) return { ok: false, error: `HTTP ${response.status}` };
+    return { ok: true, recorded: payload.recorded !== false };
+  } catch (error) {
+    return { ok: false, error: error?.message || String(error) };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
 
 function dipEntryPlanKey(plan) {
   return `${String(plan.portfolioId || "")}:${String(plan.tokenId || "")}`;
@@ -2043,6 +2091,22 @@ async function fireDipEntries(context, books, now) {
     if (plan.blockedReason) {
       recordEvent(context.state, { ...event, type: "DIP_ENTRY_BLOCKED", error: plan.blockedReason });
       entered[key] = { terminal: true, at: now, reason: plan.blockedReason };
+      continue;
+    }
+    // A paper portfolio's dip is recorded, never bought. It runs whatever the live switches
+    // say, because nothing is signed and no money moves -- and a paper test that needed the
+    // live keys armed would not be a paper test.
+    if (plan.accountType === "paper") {
+      const recorded = await recordDipEntryHit(plan, trigger.ask);
+      recordEvent(context.state, {
+        ...event,
+        type: recorded.ok ? "DIP_ENTRY_PAPER_RECORDED" : "DIP_ENTRY_PAPER_RECORD_FAILED",
+        price: trigger.ask,
+        error: recorded.ok ? null : recorded.error,
+      });
+      // A failed record is NOT terminal: the price is still in the band on the next pass, so
+      // the next one can record it. A dip missed because a POST timed out is a dip lost.
+      if (recorded.ok) entered[key] = { terminal: true, at: now, reason: "recorded for paper" };
       continue;
     }
     if (DIP_ENTRY_MODE !== "live" || MODE !== "live" || !CONFIRM_LIVE) {

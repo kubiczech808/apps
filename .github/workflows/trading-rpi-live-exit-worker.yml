@@ -43,7 +43,7 @@ on:
       # markets and records what it would buy; `live` also needs live_exit_mode=live and
       # confirm_live=true, so buying is a deliberate act in three places.
       dip_entry_mode:
-        description: keep leaves it alone. off watches nothing; shadow logs the entries it would take; live permits real dip buys.
+        description: keep leaves it alone. off watches nothing; shadow records paper dips and logs the live ones it would take; live also permits real dip buys.
         required: false
         default: keep
         type: choice
@@ -157,6 +157,10 @@ jobs:
           # ever reaches the band.
           LIVE_DIP_ENTRY_MODE=${dip_entry_mode}
           LIVE_DIP_ENTRY_WATCH_URL=https://osobnizkusenosti.cz/trading/api.php?action=dip-entry-watch
+          # Where a PAPER portfolio's dip is recorded. That path is not gated on the live
+          # switches -- nothing is signed and no money moves -- so `shadow` is enough to
+          # start collecting the evidence the rule needs.
+          LIVE_DIP_ENTRY_RECORD_URL=https://osobnizkusenosti.cz/trading/api.php?action=dip-entry-record
           # A collapsed favourite LEAVES the catalogue -- above 50% it is a row, at 35% it is
           # not -- so a watch entry has to outlive the very collapse it waits for.
           LIVE_DIP_ENTRY_TTL_MS=14400000
