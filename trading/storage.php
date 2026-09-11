@@ -1031,6 +1031,47 @@ function trading_storage_event_append(string $stream, ?string $portfolioId, arra
     ]);
 }
 
+/**
+ * How much of the event log each stream is actually using.
+ *
+ * The table grew 117 MB in fifteen minutes and the per-table figure could not say which
+ * stream did it, so the retention rules were being aimed by guesswork. Rows AND bytes,
+ * because a stream can be large either by having many rows or by having fat ones, and the
+ * fix is different in each case: more aggressive archiving for the first, a slimmer payload
+ * for the second.
+ */
+function trading_storage_event_stream_stats(): array
+{
+    $pdo = trading_storage_pdo();
+    if (!$pdo instanceof PDO) {
+        return [];
+    }
+    trading_storage_bootstrap($pdo);
+    $statement = $pdo->query(
+        'SELECT stream,
+                COUNT(*) AS rows_total,
+                SUM(LENGTH(payload)) AS bytes_total,
+                MAX(LENGTH(payload)) AS bytes_max,
+                MIN(occurred_at) AS oldest,
+                MAX(occurred_at) AS newest
+         FROM trading_event_log
+         GROUP BY stream
+         ORDER BY bytes_total DESC'
+    );
+    $stats = [];
+    foreach ($statement->fetchAll() as $row) {
+        $stats[] = [
+            'stream' => (string) ($row['stream'] ?? ''),
+            'rows' => (int) ($row['rows_total'] ?? 0),
+            'bytes' => (int) ($row['bytes_total'] ?? 0),
+            'largestRowBytes' => (int) ($row['bytes_max'] ?? 0),
+            'oldest' => $row['oldest'] ?? null,
+            'newest' => $row['newest'] ?? null,
+        ];
+    }
+    return $stats;
+}
+
 function trading_storage_event_records(string $stream, ?string $portfolioId = null, int $limit = 500): array
 {
     $pdo = trading_storage_pdo();

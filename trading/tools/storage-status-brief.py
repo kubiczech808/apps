@@ -123,6 +123,21 @@ def main() -> int:
             f" {mb(size)} ({mb(stats.get('freeBytes'))} free)"
         )
 
+    streams = payload.get("eventStreams")
+    if isinstance(streams, list) and streams:
+        print("   event log by stream:")
+        for entry in streams:
+            if not isinstance(entry, dict):
+                continue
+            rows = int(entry.get("rows") or 0)
+            total = int(entry.get("bytes") or 0)
+            average = round(total / rows) if rows else 0
+            print(
+                f"      {entry.get('stream')}: {rows} rows, {mb(total)}"
+                f" (avg {average} B, largest {entry.get('largestRowBytes')} B)"
+                f" {entry.get('oldest')} .. {entry.get('newest')}"
+            )
+
     counts = payload.get("counts") or {}
     print(
         f"   reads from database: {payload.get('active')}"

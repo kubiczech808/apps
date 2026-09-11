@@ -6018,6 +6018,9 @@ try {
             'lastMigrationError' => null,
             'lastIngestAt' => null,
             'counts' => ['SCRAPED' => 0, 'RESOLVED' => 0],
+            // Which stream is using the event log, so retention can be aimed at the one that
+            // is actually growing rather than at whichever is easiest to reach.
+            'eventStreams' => [],
             'generatedAt' => gmdate('c'),
         ];
         if ($storage['schemaReady'] === true) {
@@ -6027,6 +6030,7 @@ try {
                 $status['lastMigrationError'] = trading_storage_meta_get('last-migration-error');
                 $status['lastIngestAt'] = trading_storage_meta_get('last-ingest-at');
                 $status['counts'] = trading_storage_observation_counts();
+                $status['eventStreams'] = trading_storage_event_stream_stats();
             } catch (Throwable) {
                 $status['storage']['schemaReady'] = false;
             }
