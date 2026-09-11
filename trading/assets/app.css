@@ -466,6 +466,27 @@ button:disabled {
   stroke-width: 2;
 }
 
+/* The point currently being read. Hidden until the reader asks for one -- a tap on a phone,
+   a hover on a desktop -- because on a phone the value is pinned and the finger has moved
+   away, so the number needs something on the curve to point at. Opacity rather than the
+   hidden attribute: browsers do not apply the HTML hidden style to SVG elements. */
+.equity-history-cursor {
+  fill: #fff;
+  stroke: #0f766e;
+  stroke-width: 2.5;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 90ms ease-out;
+}
+
+.equity-history-cursor.is-visible {
+  opacity: 1;
+}
+
+.equity-history-svg.negative .equity-history-cursor {
+  stroke: #c2410c;
+}
+
 /* The day's low and high, thinner than the average so the average still reads as the
    subject of the chart. Both keep their colour when the curve turns negative -- red is
    "the day's worst" here, not "the account is down", and swapping them with the trend

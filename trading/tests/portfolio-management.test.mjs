@@ -5316,3 +5316,98 @@ test("dip entry: both bands are settable on a portfolio", () => {
     assert.match(APP, new RegExp(`${key}:`), `${key} must have a history label`);
   }
 });
+
+// Reported: the curve began on the 4th while the first closed trade was the 9th, so the
+// first five days of the chart were one flat line. Equity cannot move before a trade
+// settles, and a chart that spends a third of its width saying nothing has spent it.
+test("equity chart: the curve opens one day before the first change, not at the first trade", () => {
+  const build = new Function(`
+    ${extractFunction(APP, "chartTimestamp")}
+    ${extractFunction(APP, "equityChartScale")}
+    ${extractFunction(APP, "equityChartBucket")}
+    ${extractFunction(APP, "numericOrNull")}
+    ${extractFunction(APP, "equityHistoryFromDailySamples")}
+    ${extractFunction(APP, "isClosedTrade")}
+    ${extractFunction(APP, "tradeClosedAt")}
+    ${extractFunction(APP, "portfolioEquityHistory")}
+    return portfolioEquityHistory;
+  `)();
+
+  const day = (date) => Date.parse(`2026-09-${date}T12:00:00Z`);
+  // The reported shape: opened on the 4th, first settlement on the 9th, read on the 12th.
+  const trades = [
+    { status: "WON", openedAt: "2026-09-04T09:00:00Z", resolvedAt: "2026-09-09T18:00:00Z", realizedPnlUsdc: 4 },
+    { status: "LOST", openedAt: "2026-09-09T10:00:00Z", resolvedAt: "2026-09-11T18:00:00Z", realizedPnlUsdc: -2 },
+  ];
+  const history = build(trades, 152, 0, "2026-09-12T12:00:00Z", 150, 2);
+  assert.ok(history, "a portfolio five days old must still be charted");
+  const startedAt = history.points[0].timestamp;
+  assert.equal(startedAt, Date.parse("2026-09-09T18:00:00Z") - 86400000,
+    "the curve must open exactly one day before the first settlement, not on the 4th when the trade was opened");
+  assert.ok(startedAt > day("04"), "and therefore well after the first trade was opened");
+  assert.equal(history.points[0].value, 150, "and it opens at the original value");
+  // The portfolio's own age is what decides whether to draw a chart AT ALL. Measuring that
+  // from the new start would hide the chart of a portfolio whose first trade settled
+  // yesterday, which is a different question from where the curve begins.
+  assert.equal(build([{ status: "WON", openedAt: "2026-09-11T09:00:00Z", resolvedAt: "2026-09-11T18:00:00Z", realizedPnlUsdc: 1 }],
+    151, 0, "2026-09-12T12:00:00Z", 150, 1), null,
+    "a portfolio younger than three days is still not charted");
+
+  // A settlement is a step, not a slope: equity holds still between settlements and then
+  // jumps. Every point after the first therefore contributes a corner as well as itself.
+  assert.match(APP, /const stepped = history\.stepped === true;/);
+  assert.match(APP, /return \[`\$\{x\(point\.timestamp\)\.toFixed\(1\)\},\$\{y\(points\[index - 1\]\.value\)\.toFixed\(1\)\}`, at\];/,
+    "the corner holds the PREVIOUS value at the NEW moment, which is what makes it a step");
+  assert.equal(history.stepped, true, "a rebuilt curve is a step function");
+  // A measured daily series is a reading per day, so a line between two readings is a fair
+  // interpolation and must not be turned into stairs.
+  const sample = (dayOf, value) => ({ day: `2026-09-${dayOf}`, samples: 4, realizedSum: value * 4, realizedMin: value - 1, realizedMax: value + 1 });
+  const measured = build(trades, 152, 0, "2026-09-12T12:00:00Z", 150, 2,
+    [sample("08", 150), sample("09", 154), sample("10", 154), sample("11", 152)]);
+  assert.equal(measured.source, "account-daily", "the measured series has to actually be taken");
+  assert.notEqual(measured.stepped, true, "a measured series is a reading per day, so it is not stepped");
+});
+
+// Reported: on a phone the value only showed while a finger was held on the chart -- and the
+// finger was on top of it.
+test("equity chart: a tap pins the value and a second tap clears it", () => {
+  assert.match(APP, /let pinnedIndex = null;/);
+  // A tap on the point already pinned clears it. That is the whole request.
+  assert.match(APP, /if \(pinnedIndex === index\) \{\s*\n\s*pinnedIndex = null;\s*\n\s*clear\(\);/);
+  // A pin outranks hovering, or moving across the chart would silently replace a point the
+  // reader chose deliberately -- and on a phone a drag would undo the tap that pinned it.
+  assert.match(APP, /if \(pinnedIndex != null \|\| event\.pointerType !== "mouse"\) return;/);
+  // Leaving the chart must not clear a deliberate pin.
+  assert.match(APP, /svg\?\.addEventListener\("pointerleave", \(\) => \{ if \(pinnedIndex == null\) clear\(\); \}\);/);
+  // And the pinned value needs something on the curve to point at, since the finger has
+  // moved away by the time it is read.
+  assert.match(APP, /cursor\.classList\.add\("is-visible"\);/);
+  const css = readFileSync(new URL("../assets/app.css", import.meta.url), "utf8");
+  assert.match(css, /\.equity-history-cursor \{[\s\S]*?opacity: 0;/,
+    "the cursor is hidden by opacity, because the HTML hidden style does not apply to SVG");
+  assert.match(css, /\.equity-history-cursor\.is-visible \{\s*\n\s*opacity: 1;/);
+});
+
+// The step itself, driven rather than described. The polyline expression is inline in the
+// renderer, so it is lifted out of the source and run with stub scales -- a rendering change
+// asserted only by a regex is a rendering change nobody has actually looked at.
+test("equity chart: a step holds the old level to the new moment, then moves", () => {
+  const source = /const polyline = \(points\) => points\.flatMap[\s\S]*?\.join\(" "\);/.exec(APP);
+  assert.ok(source, "the polyline builder must still be findable");
+  const build = (stepped) => new Function("x", "y", "stepped", `
+    ${source[0].replace("const stepped = history.stepped === true;", "")}
+    return polyline;
+  `)((timestamp) => timestamp, (value) => value, stepped);
+
+  const points = [
+    { timestamp: 0, value: 100 },
+    { timestamp: 10, value: 104 },
+    { timestamp: 20, value: 102 },
+  ];
+  // Stepped: flat to the moment of the change, then the jump. Five vertices for three points.
+  assert.equal(build(true)(points), "0.0,100.0 10.0,100.0 10.0,104.0 20.0,104.0 20.0,102.0");
+  // Not stepped: one vertex per reading, as a measured daily series should be.
+  assert.equal(build(false)(points), "0.0,100.0 10.0,104.0 20.0,102.0");
+  // A single point cannot step anywhere.
+  assert.equal(build(true)([{ timestamp: 0, value: 100 }]), "0.0,100.0");
+});

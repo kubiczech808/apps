@@ -5174,9 +5174,10 @@ function portfolioEquityHistory(trades, equity, openPnl, generatedAt = "", origi
   // A state file can be a few minutes old while the dashboard is open. The final point
   // is always "today", not the timestamp of that older snapshot.
   const now = Math.max(chartTimestamp(generatedAt) || 0, Date.now());
-  const durationDays = Math.max(0, (now - firstOpenedAt) / 86400000);
-  if (durationDays < 3) return null;
-  const scale = equityChartScale(firstOpenedAt, now);
+  // The gate is about the PORTFOLIO's age -- has it been running long enough to be worth
+  // charting -- so it stays measured from the first trade even though the curve below starts
+  // later. Moving it would hide the chart of a portfolio whose first trade settled yesterday.
+  if (Math.max(0, (now - firstOpenedAt) / 86400000) < 3) return null;
 
   // Prefer the recorded series whenever there is one. It is what the account actually
   // reported day by day, so it needs no reconciliation and it carries the intraday low
@@ -5225,6 +5226,20 @@ function portfolioEquityHistory(trades, equity, openPnl, generatedAt = "", origi
   const settledLedgerMatchesBalance = !hasAuthoritativeRealizedPnl
     || Math.abs(settledPnl - authoritativeRealizedPnl) < 0.01;
   const chartEvents = settledLedgerMatchesBalance ? settledEvents : [];
+  // Reported: the curve began on the 4th while the first closed trade was the 9th, so the
+  // first five days were one flat line carrying no information. Equity cannot move before a
+  // trade settles, and a chart that spends a third of its width saying nothing has spent it.
+  //
+  // So it opens one day before the first change -- enough to show the level the portfolio
+  // started from, and no more. Clamped to the first trade, because a portfolio cannot have
+  // an equity before it had a trade.
+  const firstChangeAt = chartEvents.length
+    ? Math.min(...chartEvents.map((event) => event.timestamp))
+    : null;
+  const chartStart = firstChangeAt == null
+    ? firstOpenedAt
+    : Math.max(firstOpenedAt, firstChangeAt - 86400000);
+  const scale = equityChartScale(chartStart, now);
   const finalRealizedEquity = hasAuthoritativeRealizedPnl
     ? openingEquity + authoritativeRealizedPnl
     : hasConfiguredOriginalValue
@@ -5232,12 +5247,12 @@ function portfolioEquityHistory(trades, equity, openPnl, generatedAt = "", origi
     : realizedEquity;
   const changesByBucket = new Map();
   chartEvents.forEach((event) => {
-    const bucket = Math.max(firstOpenedAt, equityChartBucket(event.timestamp, scale));
+    const bucket = Math.max(chartStart, equityChartBucket(event.timestamp, scale));
     changesByBucket.set(bucket, (changesByBucket.get(bucket) || 0) + event.pnl);
   });
 
   let runningEquity = openingEquity;
-  const points = [{ timestamp: firstOpenedAt, value: runningEquity }];
+  const points = [{ timestamp: chartStart, value: runningEquity }];
   [...changesByBucket.entries()]
     .sort(([left], [right]) => left - right)
     .forEach(([timestamp, change]) => {
@@ -5252,10 +5267,15 @@ function portfolioEquityHistory(trades, equity, openPnl, generatedAt = "", origi
   return {
     points,
     source: "settlement-ledger",
+    // Equity is a step function: it does not drift between settlements, it sits still and
+    // then jumps. Drawing a diagonal from one settlement to the next invents a slope nothing
+    // measured -- see the renderer, which draws this one as steps.
+    stepped: true,
     scale,
     openingEquity,
     originalValue: hasConfiguredOriginalValue ? configuredOriginalValue : null,
-    durationDays,
+    // The span actually drawn, which is no longer the portfolio's whole age.
+    durationDays: (now - chartStart) / 86400000,
   };
 }
 
@@ -5295,7 +5315,18 @@ function renderPortfolioEquityChart({ trades = [], equity, openPnl = 0, generate
   const plotHeight = height - padding.top - padding.bottom;
   const x = (timestamp) => padding.left + (Math.max(0, Math.min(1, (timestamp - start) / timeSpread)) * plotWidth);
   const y = (value) => padding.top + ((maxValue - value) / (maxValue - minValue)) * plotHeight;
-  const polyline = (points) => points.map((point) => `${x(point.timestamp).toFixed(1)},${y(point.value).toFixed(1)}`).join(" ");
+  // A measured daily series is a reading per day, so a line between two readings is a fair
+  // interpolation. A rebuilt one is not: equity holds still between settlements and then
+  // jumps, so its honest shape is a step -- hold the level to the moment of the settlement,
+  // then move. Drawing it as a diagonal invented a slope nothing measured, and over a gap of
+  // days that slope is most of what the reader sees.
+  const stepped = history.stepped === true;
+  const polyline = (points) => points.flatMap((point, index) => {
+    const at = `${x(point.timestamp).toFixed(1)},${y(point.value).toFixed(1)}`;
+    if (!stepped || index === 0) return [at];
+    // The corner: still at the previous level, already at the new moment.
+    return [`${x(point.timestamp).toFixed(1)},${y(points[index - 1].value).toFixed(1)}`, at];
+  }).join(" ");
   const line = polyline(history.points);
   const area = `${padding.left},${(padding.top + plotHeight).toFixed(1)} ${line} ${(padding.left + plotWidth).toFixed(1)},${(padding.top + plotHeight).toFixed(1)}`;
   // The day's low and high, drawn only when the series was measured -- the reconstruction
@@ -5345,6 +5376,7 @@ function renderPortfolioEquityChart({ trades = [], equity, openPnl = 0, generate
       ${highLine}
       <polyline class="equity-history-line" points="${line}"></polyline>
       <circle class="equity-history-point" cx="${x(last.timestamp).toFixed(1)}" cy="${y(last.value).toFixed(1)}" r="4"></circle>
+      <circle class="equity-history-cursor" cx="0" cy="0" r="5"></circle>
       <g class="equity-history-labels">${labels}</g>
       </svg>
       <div class="equity-history-tooltip" hidden></div>
@@ -5353,29 +5385,64 @@ function renderPortfolioEquityChart({ trades = [], equity, openPnl = 0, generate
 
   const svg = els.portfolioEquityChart.querySelector(".equity-history-svg");
   const tooltip = els.portfolioEquityChart.querySelector(".equity-history-tooltip");
-  const showTooltip = (clientX) => {
-    if (!svg || !tooltip) return;
+  const cursor = els.portfolioEquityChart.querySelector(".equity-history-cursor");
+  // Reported: on a phone the value only showed while a finger was held on the chart, and
+  // the finger was on top of it. So a tap PINS the value and a second tap clears it --
+  // the reader can lift their hand and still read the number.
+  //
+  // A mouse keeps following the pointer, because hovering is not a commitment and losing
+  // the running readout would be a worse trade on a desktop. A pin outranks the hover: once
+  // a point is chosen deliberately, moving across the chart must not silently replace it.
+  let pinnedIndex = null;
+  const nearestIndexTo = (clientX) => {
     const bounds = svg.getBoundingClientRect();
     const viewX = ((clientX - bounds.left) / Math.max(1, bounds.width)) * width;
-    const nearestIndex = history.points.reduce((best, point, index) => (
+    return history.points.reduce((best, point, index) => (
       Math.abs(x(point.timestamp) - viewX) < Math.abs(x(history.points[best].timestamp) - viewX) ? index : best
     ), 0);
-    const nearest = history.points[nearestIndex];
+  };
+  const showIndex = (index) => {
+    if (!tooltip) return;
+    const nearest = history.points[index];
+    if (!nearest) return;
     const left = Math.max(4, Math.min(96, (x(nearest.timestamp) / width) * 100));
     // The day's range is worth more than its average on its own, so say all three when
     // the series carries them.
-    const low = lows[nearestIndex];
-    const high = highs[nearestIndex];
+    const low = lows[index];
+    const high = highs[index];
     const range = low && high && Math.abs(high.value - low.value) > 0.0001
       ? ` (${money(low.value)} - ${money(high.value)})`
       : "";
     tooltip.textContent = `${equityChartTooltipDate(nearest.timestamp)} - ${money(nearest.value)}${range}`;
     tooltip.style.left = `${left}%`;
     tooltip.hidden = false;
+    // Which point is being read. Without it a pinned value on a phone says a number with
+    // nothing on the curve to tie it to.
+    if (cursor) {
+      cursor.setAttribute("cx", x(nearest.timestamp).toFixed(1));
+      cursor.setAttribute("cy", y(nearest.value).toFixed(1));
+      cursor.classList.add("is-visible");
+    }
   };
-  svg?.addEventListener("pointermove", (event) => showTooltip(event.clientX));
-  svg?.addEventListener("pointerdown", (event) => showTooltip(event.clientX));
-  svg?.addEventListener("pointerleave", () => { if (tooltip) tooltip.hidden = true; });
+  const clear = () => {
+    if (tooltip) tooltip.hidden = true;
+    cursor?.classList.remove("is-visible");
+  };
+  svg?.addEventListener("pointermove", (event) => {
+    if (pinnedIndex != null || event.pointerType !== "mouse") return;
+    showIndex(nearestIndexTo(event.clientX));
+  });
+  svg?.addEventListener("pointerdown", (event) => {
+    const index = nearestIndexTo(event.clientX);
+    if (pinnedIndex === index) {
+      pinnedIndex = null;
+      clear();
+      return;
+    }
+    pinnedIndex = index;
+    showIndex(index);
+  });
+  svg?.addEventListener("pointerleave", () => { if (pinnedIndex == null) clear(); });
 }
 
 function compactToken(tokenId) {
