@@ -6433,6 +6433,83 @@ try {
         respond(['ok' => true, 'generatedAt' => gmdate('c'), 'hits' => read_dip_entry_hits()]);
     }
 
+    // Which live portfolio ordered which token, over the WHOLE recorded history.
+    //
+    // Reported: closed positions older than about a day disappear from a live portfolio's
+    // list and its statistics stop adding up. Ownership was re-derived from the published
+    // execution state, whose run log holds 160 runs -- measured at 1.1 to 2.8 days per
+    // portfolio. Past that, 211 of 352 closed rows on the account were claimed by nobody and
+    // fell to base Live with their stake and their P/L.
+    //
+    // The history was never actually lost. Every live execution run mirrors its whole run log
+    // into the `state-run-log` event stream (ingest-trading-state.py), and that append is
+    // idempotent -- the event key hashes stream, target, time and identity, with ON DUPLICATE
+    // KEY UPDATE -- so re-sending the same 160 rows on every run stores each one exactly once
+    // and keeps it. What was missing was a way to read it back out.
+    //
+    // This is a RECORD, not an inference: every entry is an order the executor itself logged,
+    // under the target whose runner logged it. Nothing here guesses from price bands, which
+    // could not separate these portfolios anyway.
+    if ($action === 'live-order-ownership') {
+        $ownershipConfig = load_portfolio_config();
+        $targets = ['live' => 'live-execution', 'live-5050' => 'live-5050-execution'];
+        foreach (array_keys(is_array($ownershipConfig['livePortfolios'] ?? null) ? $ownershipConfig['livePortfolios'] : []) as $id) {
+            if (is_string($id) && preg_match('/^[a-z][a-zA-Z0-9]{1,30}$/', $id)) {
+                $targets['live-custom-' . $id] = 'live-custom-' . $id . '-execution';
+            }
+        }
+        $orders = [];
+        $runCounts = [];
+        $oldest = null;
+        foreach ($targets as $mode => $target) {
+            $records = trading_storage_is_active()
+                ? trading_storage_event_records('state-run-log', $target, 5000)
+                : [];
+            $runCounts[$mode] = count($records);
+            foreach ($records as $record) {
+                if (!is_array($record)) {
+                    continue;
+                }
+                $at = (string) ($record['runAt'] ?? $record['generatedAt'] ?? '');
+                if ($at !== '' && ($oldest === null || strcmp($at, $oldest) < 0)) {
+                    $oldest = $at;
+                }
+                foreach ((is_array($record['attempts'] ?? null) ? $record['attempts'] : []) as $attempt) {
+                    if (!is_array($attempt)) {
+                        continue;
+                    }
+                    // The same two exclusions the dashboard applies to a run log it reads
+                    // itself: a refused order and a dry run never owned anything.
+                    $attemptAction = strtoupper((string) ($attempt['action'] ?? ''));
+                    if (str_contains($attemptAction, 'REJECT') || str_starts_with($attemptAction, 'DRY_RUN')) {
+                        continue;
+                    }
+                    $tokenId = trim((string) ($attempt['tokenId'] ?? ''));
+                    if ($tokenId === '') {
+                        continue;
+                    }
+                    $price = is_numeric($attempt['orderPrice'] ?? null) ? round((float) $attempt['orderPrice'], 6) : null;
+                    // Keyed on token AND price, the same pairing the dashboard matches a fill
+                    // back on. The newest order for a pair wins, so a token re-entered after
+                    // another portfolio closed out belongs to whoever ordered it last.
+                    $key = $tokenId . '@' . ($price === null ? '-' : (string) $price);
+                    if (isset($orders[$key]) && strcmp((string) $orders[$key]['at'], $at) >= 0) {
+                        continue;
+                    }
+                    $orders[$key] = ['tokenId' => $tokenId, 'price' => $price, 'mode' => $mode, 'at' => $at];
+                }
+            }
+        }
+        respond([
+            'ok' => true,
+            'generatedAt' => gmdate('c'),
+            'storageActive' => trading_storage_is_active(),
+            'runsPerMode' => $runCounts,
+            'oldestRunAt' => $oldest,
+            'orders' => array_values($orders),
+        ]);
+    }
+
     // Written by the RPi worker only. Trigger-key protected like every other write from it:
     // a public endpoint that appends to a list the paper bot trades from would let anyone
     // put a position in a portfolio.
