@@ -2140,6 +2140,47 @@ const EXECUTION_SCOPE_PAGE_LIMIT = 1200;
 // in one response was 21.32 MB in 2511 ms and it is what held the retention cap at 5000.
 const SCRAPED_SCOPE_PAGE_LIMIT = 1200;
 
+/**
+ * A portfolio's scope expressed as database bounds.
+ *
+ * The contract that makes this safe: what comes back MUST be a superset of what
+ * execution_scope_matches_observation() would keep. The database narrows on the three rules
+ * that are columns -- the probability band, the resolution horizon, the liquidity floor --
+ * and every rule that lives inside the payload still runs afterwards on what survived. A
+ * bound that cannot be expressed exactly is left out rather than approximated, because a
+ * clause that is slightly too tight silently hides tradable markets and nothing downstream
+ * could tell.
+ */
+function execution_scope_storage_criteria(?array $config): array
+{
+    if (!is_array($config)) {
+        return [];
+    }
+    $criteria = [];
+    $minimum = normalize_probability_value($config['minProbability'] ?? null, 0.01);
+    if (is_numeric($minimum)) {
+        $criteria['minProbability'] = (float) $minimum;
+    }
+    $maximum = normalize_optional_probability_value($config['maxProbability'] ?? null);
+    if ($maximum !== null) {
+        $criteria['maxProbability'] = (float) $maximum;
+    }
+    $liquidity = normalize_optional_money_value($config['minLiquidityUsdc'] ?? null);
+    if ($liquidity !== null) {
+        $criteria['minLiquidityUsdc'] = (float) $liquidity;
+    }
+    // The horizon becomes a bound only when it applies to every row. Under "only" it is not
+    // a rule at all, and under "include" a fixture already under way is admitted however far
+    // its end date is -- both are per-row decisions, so turning either into a WHERE clause
+    // would drop markets the portfolio trades.
+    $mode = config_live_event_mode($config);
+    $hours = config_max_resolution_hours($config);
+    if ($mode !== 'only' && $mode !== 'include' && is_numeric($hours) && $hours > 0) {
+        $criteria['endBefore'] = gmdate('Y-m-d H:i:s', time() + (int) round(((float) $hours) * 3600));
+    }
+    return $criteria;
+}
+
 function scoped_execution_observations(array $observations, ?string $strategyId, int $offset = 0): array
 {
     $config = execution_scope_strategy_config($strategyId);
@@ -6577,6 +6618,73 @@ try {
     // returns counts, never the trades themselves, and it is the standing answer to "is the
     // long-term record being kept" -- the question that went unasked while the mirror was
     // writing nothing for ten days.
+    // Does asking the database in a portfolio's own shape return the same markets as reading
+    // the whole catalogue and filtering it? Read-only, and it runs whichever source is live,
+    // so the comparison can be made BEFORE reads are switched over rather than after.
+    //
+    // The narrowed query is only safe if its result is a superset of what the payload rules
+    // keep, so this reports the difference both ways: a market the catalogue path keeps and
+    // the query misses is a bug in the bounds, and that is the number to watch.
+    if ($action === 'execution-scope-probe') {
+        $strategyId = isset($_GET['strategy_id']) ? (string) $_GET['strategy_id'] : null;
+        if ($strategyId !== null && !preg_match('/^[A-Za-z0-9_-]{1,64}$/', $strategyId)) {
+            respond(['ok' => false, 'error' => 'strategy_id is not a valid id'], 400);
+        }
+        $scopeConfig = execution_scope_strategy_config($strategyId);
+        $criteria = execution_scope_storage_criteria($scopeConfig);
+
+        $startedCatalogue = microtime(true);
+        $catalogueState = state_payload('paper', ['observations'], null, 0, 0, true);
+        $catalogueRows = is_array($catalogueState['marketObservations'] ?? null)
+            ? $catalogueState['marketObservations']
+            : [];
+        $catalogueKept = array_values(array_filter($catalogueRows, static function ($item) use ($scopeConfig): bool {
+            return is_array($item) && ($scopeConfig === null
+                ? is_active_scraped_market_observation($item)
+                : execution_scope_matches_observation($item, $scopeConfig));
+        }));
+        $catalogueSeconds = microtime(true) - $startedCatalogue;
+
+        $startedQuery = microtime(true);
+        $queryRows = trading_storage_observations_for_scope($criteria, 5000);
+        $queryKept = array_values(array_filter($queryRows, static function ($item) use ($scopeConfig): bool {
+            return is_array($item) && ($scopeConfig === null
+                ? is_active_scraped_market_observation($item)
+                : execution_scope_matches_observation($item, $scopeConfig));
+        }));
+        $querySeconds = microtime(true) - $startedQuery;
+
+        $keyOf = static fn ($item): string => is_array($item)
+            ? (string) ($item['tokenId'] ?? $item['id'] ?? $item['marketKey'] ?? '')
+            : '';
+        $catalogueKeys = array_values(array_filter(array_map($keyOf, $catalogueKept)));
+        $queryKeys = array_values(array_filter(array_map($keyOf, $queryKept)));
+        $missedByQuery = array_values(array_diff($catalogueKeys, $queryKeys));
+
+        respond([
+            'ok' => true,
+            'generatedAt' => gmdate('c'),
+            'strategyId' => $strategyId,
+            'storageActive' => trading_storage_is_active(),
+            'criteria' => $criteria,
+            'catalogue' => [
+                'read' => count($catalogueRows),
+                'kept' => count($catalogueKept),
+                'seconds' => round($catalogueSeconds, 3),
+            ],
+            'scopedQuery' => [
+                'read' => count($queryRows),
+                'kept' => count($queryKept),
+                'seconds' => round($querySeconds, 3),
+            ],
+            // The number that decides it. Anything above zero means the bounds are tighter
+            // than the rules and the query is hiding markets the portfolio would trade.
+            'missedByQuery' => count($missedByQuery),
+            'missedSample' => array_slice($missedByQuery, 0, 10),
+            'extraFromQuery' => max(0, count($queryKeys) - (count($catalogueKeys) - count($missedByQuery))),
+        ]);
+    }
+
     if ($action === 'trade-rows-summary') {
         $rows = [];
         try {

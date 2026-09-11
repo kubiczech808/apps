@@ -90,7 +90,12 @@ function trading_storage_bootstrap(PDO $pdo): void
             created_at DATETIME(6) NOT NULL,
             updated_at DATETIME(6) NOT NULL,
             KEY trading_observations_lifecycle_end (lifecycle, end_at),
-            KEY trading_observations_lifecycle_updated (lifecycle, updated_at)
+            KEY trading_observations_lifecycle_updated (lifecycle, updated_at),
+            -- The shape a portfolio actually asks in: the current catalogue, inside a
+            -- probability band, resolving before a horizon. Without it every portfolio scan
+            -- reads the whole lifecycle and filters afterwards, which is the cost that made
+            -- serving reads from here collapse the host.
+            KEY trading_observations_scope (lifecycle, updated_at, market_probability, end_at)
         ) ENGINE=InnoDB ROW_FORMAT=DYNAMIC DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci'
     );
     $pdo->exec(
@@ -365,14 +370,25 @@ function trading_storage_optimize_schema(PDO $pdo): void
             }
         }
     }
-    $statement = $pdo->prepare(
-        'SELECT 1 FROM information_schema.STATISTICS
-         WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = "trading_observations"
-           AND INDEX_NAME = "trading_observations_lifecycle_updated" LIMIT 1'
-    );
-    $statement->execute();
-    if ($statement->fetchColumn() === false) {
-        $pdo->exec('ALTER TABLE `trading_observations` ADD INDEX `trading_observations_lifecycle_updated` (`lifecycle`, `updated_at`)');
+    // CREATE TABLE IF NOT EXISTS never touches a table that already exists, so an index
+    // added to the schema above reaches production only by being added here as well.
+    foreach ([
+        'trading_observations_lifecycle_updated' => '(`lifecycle`, `updated_at`)',
+        // The shape a portfolio actually asks in: the current catalogue, inside a probability
+        // band, resolving before a horizon. Without it every portfolio scan reads the whole
+        // lifecycle and filters afterwards -- the cost that made serving reads from here
+        // collapse the host.
+        'trading_observations_scope' => '(`lifecycle`, `updated_at`, `market_probability`, `end_at`)',
+    ] as $index => $columns) {
+        $statement = $pdo->prepare(
+            'SELECT 1 FROM information_schema.STATISTICS
+             WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = "trading_observations"
+               AND INDEX_NAME = :index LIMIT 1'
+        );
+        $statement->execute(['index' => $index]);
+        if ($statement->fetchColumn() === false) {
+            $pdo->exec('ALTER TABLE `trading_observations` ADD INDEX `' . $index . '` ' . $columns);
+        }
     }
 }
 
@@ -1251,6 +1267,71 @@ function trading_storage_observation_freshness(): array
         ];
     }
     return $stats;
+}
+
+/**
+ * The markets one portfolio could trade, narrowed by the database rather than by PHP.
+ *
+ * The catalogue used to be shipped whole and filtered afterwards: every portfolio pass
+ * decoded 8000 payloads to keep a few dozen. That is why the JSON file needs a retention cap
+ * at all -- one file has to stay small enough to send -- and it is why serving reads from
+ * MySQL collapsed the host, because the same whole-catalogue read simply moved.
+ *
+ * Asked in the shape a portfolio is actually described in: a probability band, a resolution
+ * horizon, a liquidity floor. Those three are columns and the index covers them, so the
+ * database returns the candidates instead of the catalogue. The rules that live inside the
+ * payload -- the spread, the market shape, whether a fixture has kicked off -- still run in
+ * PHP afterwards, but on the handful of rows that survived rather than on all of them.
+ *
+ * Every bound is optional: a portfolio that does not set one gets no clause for it.
+ */
+function trading_storage_observations_for_scope(array $criteria, int $limit = 400, bool $freshOnly = true): array
+{
+    $pdo = trading_storage_pdo();
+    if (!$pdo instanceof PDO) {
+        return [];
+    }
+    trading_storage_bootstrap($pdo);
+    $where = ['lifecycle = :lifecycle'];
+    $params = ['lifecycle' => 'SCRAPED'];
+    if ($freshOnly) {
+        $where[] = 'updated_at >= (NOW(6) - INTERVAL ' . trading_storage_catalogue_fresh_minutes() . ' MINUTE)';
+    }
+    if (isset($criteria['minProbability']) && is_numeric($criteria['minProbability'])) {
+        $where[] = 'market_probability >= :minProbability';
+        $params['minProbability'] = (float) $criteria['minProbability'];
+    }
+    if (isset($criteria['maxProbability']) && is_numeric($criteria['maxProbability'])) {
+        $where[] = 'market_probability <= :maxProbability';
+        $params['maxProbability'] = (float) $criteria['maxProbability'];
+    }
+    // A row with no end date is KEPT rather than excluded: a market whose resolution time is
+    // unknown is not the same as one that resolves too late, and the payload rules decide it
+    // properly. Excluding it here would hide it with no way to see that it had been.
+    if (isset($criteria['endBefore']) && is_string($criteria['endBefore']) && $criteria['endBefore'] !== '') {
+        $where[] = '(end_at IS NULL OR end_at <= :endBefore)';
+        $params['endBefore'] = $criteria['endBefore'];
+    }
+    if (isset($criteria['minLiquidityUsdc']) && is_numeric($criteria['minLiquidityUsdc'])) {
+        $where[] = '(volume_usdc IS NULL OR volume_usdc >= :minLiquidity)';
+        $params['minLiquidity'] = (float) $criteria['minLiquidityUsdc'];
+    }
+    // Ordered the way the executor ranks: the best return first, then the nearer resolution.
+    // Taking the page BEFORE the ranking is what once served the executor an arbitrary slice
+    // of storage order, so the order belongs in the query, not after it.
+    $sql = 'SELECT payload FROM trading_observations WHERE ' . implode(' AND ', $where)
+        . ' ORDER BY annualized_return DESC, end_at ASC, observation_key ASC'
+        . ' LIMIT ' . max(1, min(5000, $limit));
+    $statement = $pdo->prepare($sql);
+    $statement->execute($params);
+    $rows = [];
+    while (($payload = $statement->fetchColumn()) !== false) {
+        $decoded = trading_storage_unpack($payload);
+        if (is_array($decoded)) {
+            $rows[] = $decoded;
+        }
+    }
+    return $rows;
 }
 
 function trading_storage_observations_fetch(string $lifecycle, int $limit = 0, int $offset = 0, bool $freshOnly = false): array

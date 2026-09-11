@@ -5855,3 +5855,64 @@ test("the equity chart spaces its readings evenly, not by the gap between them",
   // And nothing is left positioning by timestamp.
   assert.doesNotMatch(chart, /x\((?:point|nearest|last)\.timestamp\)/);
 });
+
+// Each portfolio asks the database in its own shape, instead of the catalogue being shipped
+// whole and filtered afterwards.
+//
+// That whole-catalogue read is why the JSON file needs a retention cap at all -- one file has
+// to stay small enough to send -- and it is why serving reads from MySQL collapsed the host:
+// the same read simply moved. A portfolio is described by a probability band, a resolution
+// horizon and a liquidity floor, and all three are columns.
+//
+// The property everything rests on: the bounds must return a SUPERSET of what the payload
+// rules keep. A clause that is slightly too tight hides tradable markets and nothing
+// downstream could tell, so a rule that cannot be expressed exactly is left out.
+test("a portfolio's scope narrows in SQL without ever narrowing more than its rules", () => {
+  const criteria = (config) => JSON.parse(evalPhpExpression(
+    "json_encode(execution_scope_storage_criteria($args['config']))",
+    { config },
+  ));
+
+  const band = criteria({ minProbability: 0.7, maxProbability: 0.8 });
+  assert.equal(band.minProbability, 0.7);
+  assert.equal(band.maxProbability, 0.8);
+
+  // The horizon becomes a bound only when it applies to every row.
+  const plain = criteria({ minProbability: 0.7, maxResolutionHours: 12 });
+  assert.ok(typeof plain.endBefore === "string" && plain.endBefore.length === 19,
+    `a plain horizon is a bound: ${JSON.stringify(plain)}`);
+  // Under "only" the horizon is not a rule at all, and under "include" a fixture already
+  // under way is admitted however far off its end date is. Both are per-row decisions, so
+  // turning either into a WHERE clause would drop markets the portfolio trades.
+  for (const liveEventMode of ["only", "include"]) {
+    const scoped = criteria({ minProbability: 0.7, maxResolutionHours: 12, liveEventMode });
+    assert.equal(scoped.endBefore, undefined,
+      `${liveEventMode} must not become a horizon clause: ${JSON.stringify(scoped)}`);
+  }
+
+  // An unset bound produces no clause rather than a guessed one.
+  const bare = criteria({});
+  assert.equal(bare.maxProbability, undefined);
+  assert.equal(bare.minLiquidityUsdc, undefined);
+  assert.equal(bare.endBefore, undefined);
+
+  // And the query itself: a market with no end date is KEPT, because unknown is not the same
+  // as too late, and the payload rules decide it properly. Excluding it in SQL would hide it
+  // with no way to see that it had been.
+  const scope = /function trading_storage_observations_for_scope[\s\S]*?\n\}/.exec(STORAGE);
+  assert.ok(scope, "the scoped query must exist");
+  assert.match(scope[0], /\(end_at IS NULL OR end_at <= :endBefore\)/);
+  assert.match(scope[0], /\(volume_usdc IS NULL OR volume_usdc >= :minLiquidity\)/);
+  // Ranked in the query, not after it: taking a page before ranking is what once served the
+  // executor an arbitrary slice of storage order.
+  assert.match(scope[0], /ORDER BY annualized_return DESC, end_at ASC, observation_key ASC/);
+  // The index that makes it a lookup rather than a scan, and it has to be added to tables
+  // that already exist -- CREATE TABLE IF NOT EXISTS never touches one.
+  assert.match(STORAGE, /KEY trading_observations_scope \(lifecycle, updated_at, market_probability, end_at\)/);
+  assert.match(STORAGE, /'trading_observations_scope' => '\(`lifecycle`, `updated_at`, `market_probability`, `end_at`\)'/);
+
+  // The comparison is measurable in production before anything is switched over, and reports
+  // the one number that decides it.
+  assert.match(API, /\$action === 'execution-scope-probe'/);
+  assert.match(API, /'missedByQuery' => count\(\$missedByQuery\),/);
+});
