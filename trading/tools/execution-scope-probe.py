@@ -100,6 +100,19 @@ def main() -> int:
     print(f"   reads served by SQL: {status.get('active', status.get('storageActive'))}")
     print("   (this probe reads only; it does not flip anything)")
 
+    # Whether the mirror is writing at all, and how current what it holds is.
+    #
+    # The per-portfolio lag below is a median over a handful of markets, which cannot tell a
+    # mirror that has STOPPED from one that writes only part of the catalogue each pass --
+    # and those want opposite fixes. The newest stored row settles it: minutes old means the
+    # mirror is running and the lag is coverage; hours old means it is not running.
+    print(f"   last ingest: {status.get('lastIngestAt')}")
+    print(f"   rows: {json.dumps(status.get('counts'), sort_keys=True)}")
+    for entry in status.get("observationFreshness") or []:
+        print(f"   {entry.get('lifecycle')}: {entry.get('rows')} rows,"
+              f" newest {entry.get('newest')}, oldest {entry.get('oldest')},"
+              f" within a day {entry.get('within1Day')}, within a week {entry.get('within7Days')}")
+
     print("\n== whole-catalogue read against the per-portfolio query")
     probe(None)
     for strategy in STRATEGIES:
