@@ -6818,8 +6818,17 @@ try {
         $sqlCatalogue = null;
         $sqlScoped = null;
         if (function_exists('trading_storage_observations_fetch')) {
+            // A PAGE, not the whole catalogue. Reading all of it here returned HTTP 500:
+            // this one request would then hold the catalogue from the file, the catalogue
+            // from the database, the 5000-row comparison query and the scoped walk at once,
+            // and the hosting has no room for four catalogues. That is not a detour from
+            // the measurement, it IS the measurement -- the whole-catalogue read is what
+            // this migration removes, and it cannot even be timed beside the rest.
+            //
+            // 2000 rows costs a quarter of the catalogue, so the full read is about four
+            // times this, and the scoped walk beneath it is the number that matters.
             $sqlCatalogue = $timeSqlRead(
-                static fn (): array => trading_storage_observations_fetch('SCRAPED', 0, 0, true),
+                static fn (): array => trading_storage_observations_fetch('SCRAPED', 2000, 0, true),
                 'read',
             );
             $sqlScoped = $timeSqlRead(
