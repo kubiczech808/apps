@@ -1,0 +1,33 @@
+name: Trading Portfolio Inventory
+
+# READ-ONLY, manual only. Public GETs against the published API, no writes, no Pi runner,
+# no secrets: contents: read and nothing else.
+#
+# Asked because every paper row in the overview shows equity $100.00 and no positions.
+# Three very different things look identical from that table -- a portfolio that was reset,
+# a history that is not being loaded, and a portfolio that simply never traded -- so this
+# asks the server for the numbers behind each row rather than reading the row.
+on:
+  workflow_dispatch:
+    inputs:
+      deep:
+        description: "Portfolio ids to open individually (comma separated)"
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  inventory:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: What each paper portfolio actually holds
+        env:
+          TRADING_HOST: https://osobnizkusenosti.cz/trading
+          DEEP_PORTFOLIOS: ${{ inputs.deep }}
+        run: python3 trading/tools/portfolio-inventory-probe.py
