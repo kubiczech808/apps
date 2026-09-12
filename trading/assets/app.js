@@ -2509,11 +2509,13 @@ function portfolioTabRoutePath(tab = "daily-picks") {
   return `/trading/portfolios/${segment}/`;
 }
 
-function opportunityRoutePath(view = "scraped") {
+function opportunityRoutePath(view = DEFAULT_OPPORTUNITY_VIEW) {
   const normalized = normalizeOpportunityView(view);
   return normalized === "scan-log"
     ? "/trading/opportunities/scraped/scan-log/"
-    : `/trading/opportunities/${normalized}/`;
+    // The table's own segment. `/opportunities/scraped/` is the page and lands on the log,
+    // so a link meant for the table has to say table or it would open the log instead.
+    : "/trading/opportunities/scraped/table/";
 }
 
 function normalizeScrapedTaxonomyKind(value) {
@@ -2679,9 +2681,14 @@ function currentRouteState() {
       opportunityView: "scan-log",
     };
   }
-  const opportunityRoute = path.match(/(?:^|\/)opportunities(?:\/([^/]+))?\/$/);
+  const tableRoute = /(?:^|\/)opportunities\/scraped\/table\/$/.test(path);
+  const opportunityRoute = tableRoute || path.match(/(?:^|\/)opportunities(?:\/([^/]+))?\/$/);
   if (opportunityRoute) {
-    const opportunityView = normalizeOpportunityView(opportunityRoute[1]);
+    // `/opportunities/scraped/` names the page, not the table -- it lands on the default
+    // view. The table has its own segment, so both can be linked to unambiguously.
+    const opportunityView = tableRoute
+      ? "scraped"
+      : (opportunityRoute[1] === "scan-log" ? "scan-log" : opportunityViewForBarePath());
     return {
       page: "opportunities",
       tab: "settings-runs",
@@ -2813,8 +2820,23 @@ function setEvaluationStatus(status) {
 // The evaluated view is retired: it showed the AI pipeline's own verdicts, and nothing
 // produces those any more. Old links and stored routes still say "evaluated", so they are
 // answered with the scraped list rather than a blank page.
+// "table" is the scraped list's own segment. It has one because the bare path lands on the
+// scraping log now, and the two needed telling apart: without it the Scraped button would
+// route to the very path that defaults to the log, and bounce straight back to it.
 function normalizeOpportunityView(view) {
-  return view === "scan-log" ? view : "scraped";
+  return view === "scan-log" ? "scan-log" : "scraped";
+}
+
+// What a visit carrying no view of its own gets. The log is what a visit to this page is
+// usually about: it is where the manual scan lives, and what that scan writes.
+const DEFAULT_OPPORTUNITY_VIEW = "scan-log";
+
+// Except when the URL carries filters. Those mean nothing to the log, so a link someone
+// saved or shared with a probability band on it opens the table it was describing rather
+// than a view that would silently ignore every one of them.
+function opportunityViewForBarePath() {
+  const query = new URLSearchParams(window.location.search || "");
+  return [...query.keys()].length ? "scraped" : DEFAULT_OPPORTUNITY_VIEW;
 }
 
 function syncOpportunityPageHeading() {

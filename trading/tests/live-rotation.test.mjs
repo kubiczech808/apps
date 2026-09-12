@@ -4080,7 +4080,11 @@ test("opportunities page: the active choice is obvious and the filters belong to
   // The evaluated view is retired -- nothing produces AI verdicts any more -- so the tab
   // is gone and any stored route or old link resolves to the scraped list, not a blank.
   assert.doesNotMatch(html, /data-opportunity-view="evaluated"/);
-  assert.match(app, /function normalizeOpportunityView\(view\) \{\n  return view === "scan-log" \? view : "scraped";/);
+  assert.match(app, /function normalizeOpportunityView\(view\) \{\n  return view === "scan-log" \? "scan-log" : "scraped";/);
+  // And a visit that names no view at all lands on the scraping log, which is where the
+  // manual scan lives -- unless it carries filters, which only the table can honour.
+  assert.match(app, /const DEFAULT_OPPORTUNITY_VIEW = "scan-log";/);
+  assert.match(app, /return \[\.\.\.query\.keys\(\)\]\.length \? "scraped" : DEFAULT_OPPORTUNITY_VIEW;/);
   assert.doesNotMatch(app, /opportunityRoutePath\("evaluated"\)/);
   assert.doesNotMatch(app, /routePath\("opportunities", "evaluated"\)/);
 

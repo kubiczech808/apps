@@ -6422,3 +6422,50 @@ test("dashboard tabs: unfilled limit orders sits last", () => {
   // button must still be the one the page opens on.
   assert.match(list[0], /<button class="tab-button active"[^>]*data-tab-target="daily-picks"/);
 });
+
+test("opportunities page: a plain visit lands on the scraping log, and the table keeps its own link", () => {
+  // Driven, not matched. The href was pointed at the log once already and the page still
+  // opened on the table, because the URL people actually load is /opportunities/scraped/
+  // and the ROUTER decided that one -- which asserting on the markup could never show.
+  const resolve = (path, search = "") => new Function("window", "URLSearchParams", `
+    ${/const DEFAULT_OPPORTUNITY_VIEW = "[^"]+";/.exec(APP)[0]}
+    ${extractFunction(APP, "normalizeOpportunityView")}
+    ${extractFunction(APP, "opportunityViewForBarePath")}
+    const path = ${JSON.stringify(path)};
+    // currentRouteState answers the explicit scan-log path in a branch of its own, before
+    // the general one. The harness mirrors that order or it would report no-match for the
+    // very path the log links to -- which is what it did on the first run.
+    if (/(?:^|\\/)opportunities\\/scraped\\/scan-log\\/$/.test(path)) return "scan-log";
+    const tableRoute = /(?:^|\\/)opportunities\\/scraped\\/table\\/$/.test(path);
+    const matched = tableRoute || path.match(/(?:^|\\/)opportunities(?:\\/([^/]+))?\\/$/);
+    if (!matched) return "no-match";
+    return tableRoute
+      ? "scraped"
+      : (matched[1] === "scan-log" ? "scan-log" : opportunityViewForBarePath());
+  `)({ location: { search } }, URLSearchParams);
+
+  // The URL the owner actually opens.
+  assert.equal(resolve("/trading/opportunities/scraped/"), "scan-log");
+  assert.equal(resolve("/trading/opportunities/"), "scan-log");
+  assert.equal(resolve("/trading/opportunities/scraped/scan-log/"), "scan-log");
+  // The table is still reachable, by a link that says so.
+  assert.equal(resolve("/trading/opportunities/scraped/table/"), "scraped");
+  // A saved or shared link carrying filters opens the table those filters describe, rather
+  // than a log that would ignore every one of them.
+  assert.equal(resolve("/trading/opportunities/scraped/", "?probability=0.7"), "scraped");
+  assert.equal(resolve("/trading/opportunities/scraped/", "?status=RESOLVED"), "scraped");
+
+  // And the paths the app generates match what the router reads back, or the Scraped button
+  // would route to the path that defaults to the log and bounce straight back to it.
+  const buildPath = new Function(`
+    ${/const DEFAULT_OPPORTUNITY_VIEW = "[^"]+";/.exec(APP)[0]}
+    ${extractFunction(APP, "normalizeOpportunityView")}
+    ${extractFunction(APP, "opportunityRoutePath")}
+    return opportunityRoutePath;
+  `)();
+  assert.equal(buildPath("scraped"), "/trading/opportunities/scraped/table/");
+  assert.equal(buildPath("scan-log"), "/trading/opportunities/scraped/scan-log/");
+  assert.equal(buildPath(), "/trading/opportunities/scraped/scan-log/", "the default path is the log");
+  assert.equal(resolve(buildPath("scraped")), "scraped", "the table link must round-trip");
+  assert.equal(resolve(buildPath("scan-log")), "scan-log", "and so must the log link");
+});
