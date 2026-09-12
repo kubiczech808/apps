@@ -6304,3 +6304,103 @@ test("resolved accuracy: a position sold at certainty is a hit, not an ungraded 
   assert.match(stats, /excluded: Math\.max\(0, rows\.length - total\)/,
     "the excluded count must stay derived from what was graded, not tracked separately");
 });
+
+test("manual scan: one button, both scanned tags, the next 24 hours, no choices", () => {
+  const HTML = readFileSync(new URL("../index.html", import.meta.url), "utf8");
+
+  // The page opens on the scraping log, which is where the manual scan now lives.
+  assert.match(HTML, /href="opportunities\/scraped\/scan-log\/" data-page-link="opportunities"/);
+
+  // The controls moved off the scraped table and onto the log the scan writes.
+  assert.match(HTML, /class="scraped-scan-controls" data-scan-log-only/);
+  assert.match(APP, /els\.scanLogOnlyControls\.forEach\(\(element\) => \{\n\s+element\.hidden = !scanLog;/);
+
+  // No tag select: the scan takes no choices at all.
+  assert.ok(!/data-scraped-scan-tag/.test(HTML), "the tag picker must be gone from the page");
+
+  // Fixed request, not read from the table's display filters. A manual scan used to
+  // inherit whatever the list happened to be filtered by, which made the same button do
+  // something different depending on a filter nobody was thinking about.
+  assert.match(APP, /const MANUAL_SCAN_TAG = "";/);
+  assert.match(APP, /const MANUAL_SCAN_LIQUIDITY_MIN = 0;/);
+  assert.match(APP, /const MANUAL_SCAN_MAX_DAYS = 1;/);
+  const dispatch = /const dispatchScan = async \(\) => \{[\s\S]*?\n  \};/.exec(APP);
+  assert.ok(dispatch, "the scan dispatch must be findable");
+  assert.match(dispatch[0], /market_scan_tag: MANUAL_SCAN_TAG,/);
+  assert.match(dispatch[0], /market_scan_liquidity_min: MANUAL_SCAN_LIQUIDITY_MIN,/);
+  assert.match(dispatch[0], /market_scan_max_days: MANUAL_SCAN_MAX_DAYS,/);
+  assert.ok(!/currentEvaluationLiquidityFilter\(\)/.test(dispatch[0])
+    && !/currentEvaluationDaysFilter\(\)/.test(dispatch[0]),
+    "the manual scan must not inherit the table's display filters");
+
+  // The empty tag means the whole rotation, and the rotation is sports + esports, so one
+  // press covers both. That is only true while the bot's scope says so, and if the scope
+  // is ever widened this button quietly widens with it -- so the link is asserted.
+  assert.match(BOT, /const MARKET_SCAN_TAG_SCOPE = String\(process\.env\.PAPER_MARKET_SCAN_TAG_SCOPE \?\? "sports,esports"\)/);
+  assert.match(BOT, /if \(MARKET_SCAN_TAG && MARKET_SCAN_TAG !== "all"\) \{[\s\S]*?\n  \}\n  return MARKET_SCAN_ROTATION_TAGS;/);
+
+  // And the status line stops calling that "all tags", which it no longer is.
+  assert.match(APP, /const MANUAL_SCAN_SCOPE_LABEL = "Sports and esports";/);
+  assert.match(APP, /const label = scanned \? scrapedScanTagLabel\(scanned\) : MANUAL_SCAN_SCOPE_LABEL;/);
+
+  // The live category counts existed only to fill the picker's brackets. Leaving them
+  // would have kept firing a row of cross-origin requests on every visit for nothing.
+  for (const orphan of ["loadScanCategoryCounts", "scrapedScanTagOptions", "MARKET_SCAN_CATEGORY_TAG_IDS", "SCAN_CATEGORY_LIQUIDITY_MIN"]) {
+    assert.ok(!APP.includes(orphan), `${orphan} lost its only reader with the picker and must go`);
+  }
+});
+
+test("scraped catalogue: a market quoted at 25% is stored as its 75% side", () => {
+  // The expectation to confirm: for a 70-80 portfolio the interesting markets are the ones
+  // whose YES sits around 20-30, and the candidate is their NO. That is what the catalogue
+  // already does -- it stores the FAVOURITE side, with that side's token -- and this pins
+  // it, because a scraper that stored the quoted side instead would leave every such market
+  // looking like a 25% row that no 70-80 portfolio would ever look at.
+  const pick = new Function("market", `
+    ${extractFunction(BOT, "parseJsonField")}
+    ${extractFunction(BOT, "validMarketProbability")}
+    ${extractFunction(BOT, "binaryYesNoOutcomeIndexes")}
+    const outcomes = parseJsonField(market?.outcomes).map((outcome) => String(outcome || ""));
+    const prices = parseJsonField(market?.outcomePrices).map(validMarketProbability);
+    const tokenIds = parseJsonField(market?.clobTokenIds).map((tokenId) => String(tokenId || ""));
+    const binary = binaryYesNoOutcomeIndexes(outcomes);
+    let outcomeIndex = -1;
+    let binaryYesPrice = null;
+    let binaryNoPrice = null;
+    if (binary) {
+      binaryYesPrice = prices[binary.yesIndex];
+      binaryNoPrice = prices[binary.noIndex] ?? (binaryYesPrice == null ? null : 1 - binaryYesPrice);
+      outcomeIndex = binaryYesPrice != null && (binaryNoPrice == null || binaryYesPrice >= binaryNoPrice)
+        ? binary.yesIndex
+        : binary.noIndex;
+    }
+    const probability = binary && outcomeIndex === binary.noIndex ? binaryNoPrice : prices[outcomeIndex];
+    return { outcome: outcomes[outcomeIndex], probability, tokenId: tokenIds[outcomeIndex] };
+  `);
+
+  const market = (yes) => ({
+    outcomes: JSON.stringify(["Yes", "No"]),
+    outcomePrices: JSON.stringify([String(yes), String(Number((1 - yes).toFixed(4)))]),
+    clobTokenIds: JSON.stringify(["yes-token", "no-token"]),
+  });
+
+  // The case named: YES at 25 is stored as NO at 75, on the NO token.
+  const underdog = pick(market(0.25));
+  assert.equal(underdog.outcome, "No");
+  assert.equal(Number(underdog.probability.toFixed(4)), 0.75);
+  assert.equal(underdog.tokenId, "no-token", "the stored token must be the side being bought");
+  // And the whole 20-30 band lands inside 70-80, which is what makes it tradable there.
+  for (const yes of [0.2, 0.22, 0.25, 0.28, 0.3]) {
+    const row = pick(market(yes));
+    assert.equal(row.outcome, "No");
+    assert.ok(row.probability >= 0.7 && row.probability <= 0.8, `YES ${yes} must store inside 70-80`);
+  }
+  // The favourite is kept when YES is the favourite, on its own token.
+  const favourite = pick(market(0.78));
+  assert.equal(favourite.outcome, "Yes");
+  assert.equal(favourite.tokenId, "yes-token");
+
+  // Only the favourite is ever stored: the underdog side is refused outright, so a 25% row
+  // can never reach a portfolio as a 25% candidate.
+  assert.match(BOT, /if \(outcomeIndex < 0 \|\| probability == null \|\| probability < 0\.5 \|\| !tokenId\) return null;/);
+});

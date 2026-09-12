@@ -56,9 +56,6 @@ const state = {
   scrapedScanBusy: false,
   // Live per-category counts from Polymarket, and when they were fetched. Absent until
   // the first successful round, which is what makes the picker render plain names.
-  scanCategoryCounts: null,
-  scanCategoryCountsAt: 0,
-  scanCategoryCountsPending: false,
   scrapedScanStatus: "",
   scrapedScanPreferenceSaveTimer: null,
   scrapedRefreshKeys: new Set(),
@@ -397,6 +394,7 @@ const els = {
   opportunityFilterControls: document.querySelectorAll("[data-opportunity-filter]"),
   evaluationOnlyControls: document.querySelectorAll("[data-evaluation-only]"),
   scrapedOnlyControls: document.querySelectorAll("[data-scraped-only]"),
+  scanLogOnlyControls: document.querySelectorAll("[data-scan-log-only]"),
   parameterModal: document.querySelector("[data-parameter-modal]"),
   parameterModalClose: document.querySelector("[data-parameter-modal-close]"),
   parameterModalConfirm: document.querySelector("[data-parameter-modal-confirm]"),
@@ -2839,6 +2837,10 @@ function syncOpportunityViewControls() {
   els.scrapedOnlyControls.forEach((element) => {
     element.hidden = !scraped;
   });
+  // The manual scan sits with the log it writes, not with the table it refills.
+  els.scanLogOnlyControls.forEach((element) => {
+    element.hidden = !scanLog;
+  });
   els.opportunityFilterControls.forEach((element) => {
     element.hidden = scanLog;
   });
@@ -2861,7 +2863,6 @@ function syncOpportunityViewControls() {
   renderScrapedScanControls();
   syncScrapedTaxonomyFilterControl();
   syncScrapedMarketTypeFilterControl();
-  if (scraped) loadScanCategoryCounts();
 }
 
 function normalizedScrapedScanTag(value) {
@@ -3119,94 +3120,7 @@ const MARKET_SCAN_CATEGORIES = [
   "movies",
 ];
 
-// Gamma's own tag ids for those categories, so the count below costs one request each
-// rather than a lookup first.
-const MARKET_SCAN_CATEGORY_TAG_IDS = {
-  politics: "2",
-  geopolitics: "100265",
-  sports: "1",
-  esports: "64",
-  crypto: "21",
-  finance: "120",
-  business: "107",
-  technology: "22",
-  science: "74",
-  news: "38",
-  weather: "84",
-  "video-games": "3",
-  music: "100",
-  movies: "53",
-};
 
-// What the picker's number means: how many events Polymarket lists right now that match
-// what the scheduled scan actually takes. The stored count was replaced by it because
-// "how many we already have" answers a question nobody was asking -- the useful one is
-// whether there is anything there worth scanning.
-//
-// The scan's filters are applied deliberately. Measured against Gamma, sports has 12,312
-// open events and 191 that clear the scan's liquidity floor inside its window; a raw total
-// would report twelve thousand markets the scan will never fetch by design.
-//
-// Measured cost for all fourteen categories in parallel: 303ms. The budget given was two
-// seconds for the whole picker, and it is enforced rather than assumed -- a number that
-// arrives late is worse than no number, so on timeout, failure, or a browser that refuses
-// the cross-origin read, the label stays a plain category name.
-const SCAN_CATEGORY_COUNT_BUDGET_MS = 2000;
-const SCAN_CATEGORY_COUNT_TTL_MS = 5 * 60 * 1000;
-const SCAN_CATEGORY_LIQUIDITY_MIN = 40000;
-const SCAN_CATEGORY_WINDOW_DAYS = 2;
-
-async function loadScanCategoryCounts() {
-  const now = Date.now();
-  if (state.scanCategoryCountsAt && now - state.scanCategoryCountsAt < SCAN_CATEGORY_COUNT_TTL_MS) return;
-  if (state.scanCategoryCountsPending) return;
-  state.scanCategoryCountsPending = true;
-
-  // One controller for the whole picker: the budget is on the row of numbers arriving
-  // together, not on each request separately.
-  const controller = new AbortController();
-  const deadline = setTimeout(() => controller.abort(), SCAN_CATEGORY_COUNT_BUDGET_MS);
-  const endDateMin = new Date(now - 6 * 3600000).toISOString();
-  const endDateMax = new Date(now + SCAN_CATEGORY_WINDOW_DAYS * 86400000).toISOString();
-  const counts = new Map();
-  try {
-    await Promise.all(MARKET_SCAN_CATEGORIES.map(async (category) => {
-      const tagId = MARKET_SCAN_CATEGORY_TAG_IDS[category];
-      if (!tagId) return;
-      const url = "https://gamma-api.polymarket.com/events/pagination"
-        + `?tag_id=${encodeURIComponent(tagId)}&closed=false&limit=1`
-        + `&liquidity_min=${SCAN_CATEGORY_LIQUIDITY_MIN}`
-        + `&end_date_min=${encodeURIComponent(endDateMin)}`
-        + `&end_date_max=${encodeURIComponent(endDateMax)}`;
-      try {
-        const response = await fetch(url, { signal: controller.signal });
-        if (!response.ok) return;
-        const body = await response.json();
-        const total = Number(body?.pagination?.totalResults);
-        if (Number.isFinite(total)) counts.set(category, total);
-      } catch {
-        // One category failing leaves the others their numbers; it just gets no bracket.
-      }
-    }));
-  } finally {
-    clearTimeout(deadline);
-    state.scanCategoryCountsPending = false;
-  }
-  // Only overwrite when something came back, so a failed refresh keeps the last good row
-  // rather than blanking every bracket.
-  if (counts.size) {
-    state.scanCategoryCounts = counts;
-    state.scanCategoryCountsAt = Date.now();
-    renderScrapedScanControls();
-  }
-}
-
-// Categories in their listed order, not by how much of each is stored: a picker that
-// reorders itself as scraping progresses is one you have to re-read every time.
-function scrapedScanTagOptions() {
-  const counts = state.scanCategoryCounts;
-  return MARKET_SCAN_CATEGORIES.map((tag) => [tag, counts?.has(tag) ? Number(counts.get(tag)) : null]);
-}
 
 function scrapedScanTagLabel(tag) {
   return String(tag || "")
@@ -3217,28 +3131,13 @@ function scrapedScanTagLabel(tag) {
 }
 
 function renderScrapedScanControls() {
-  if (!els.scrapedScanTag) return;
-  const options = scrapedScanTagOptions();
-  const availableTags = new Set(options.map(([tag]) => tag));
-  if (state.scrapedScanTag && !availableTags.has(state.scrapedScanTag)) state.scrapedScanTag = "";
-  els.scrapedScanTag.innerHTML = [
-    '<option value="">All tags</option>',
-    // A category with nothing stored is the normal state for one never scanned, and the
-    // whole point of offering it -- so it reads as "nothing yet" rather than "(0 stored)",
-    // which looks like an empty category rather than an unvisited one.
-    // No bracket at all when the count did not arrive inside the budget. That is the
-    // stated fallback: a plain category name rather than a stale or invented number.
-    ...options.map(([tag, count]) => {
-      const label = escapeHtml(scrapedScanTagLabel(tag));
-      const suffix = count == null ? "" : ` (${formatInteger(count) || count} on Polymarket)`;
-      return `<option value="${escapeHtml(tag)}">${label}${suffix}</option>`;
-    }),
-  ].join("");
-  els.scrapedScanTag.value = state.scrapedScanTag;
+  // No tag select any more: the scan takes no choices, so there is nothing to sync and
+  // nothing to leave in a stale state. The button and its status line render regardless --
+  // this used to return early when the select was missing, which would now hide both.
   if (els.scrapedScanButton) {
     els.scrapedScanButton.disabled = state.scrapedScanBusy;
     els.scrapedScanButton.hidden = state.scrapedScanBusy;
-    els.scrapedScanButton.textContent = "Scan Polymarket";
+    els.scrapedScanButton.textContent = "Scan next 24 hours";
   }
   if (els.scrapedScanStatus) {
     els.scrapedScanStatus.hidden = !state.scrapedScanBusy && !state.scrapedScanStatus;
@@ -9679,7 +9578,10 @@ function publishedScanSummary(scrapedState, startedAt, selectedTag = "", previou
     const runAt = Date.parse(item?.runAt || "");
     return Number.isFinite(runAt) && (!Number.isFinite(startedAtMs) || runAt >= startedAtMs - 180000);
   });
-  const label = scrapedScanTagLabel(run?.scanTag || selectedTag || "all tags");
+  // "All tags" was true when the scan could visit the whole navigation tree. It is scoped to
+  // sports and esports now, so the fallback names that rather than promising everything.
+  const scanned = run?.scanTag || selectedTag;
+  const label = scanned ? scrapedScanTagLabel(scanned) : MANUAL_SCAN_SCOPE_LABEL;
   if (!run) return `Updated ${formatDate(scrapedState?.marketScan?.lastScanAt || "")}`;
   // A failed scan now publishes a run of its own, so name what went wrong rather than
   // reporting the zero counts it recorded as though they were a result.
@@ -9743,6 +9645,19 @@ async function publishedScanFailureReason(baseline = {}) {
   }
 }
 
+// What the manual scan asks for, fixed so the button needs no choices.
+//
+// The empty tag is the whole rotation rather than "everything on Polymarket": the scan is
+// scoped to sports and esports, so one pass covers both. One day, because that is the
+// window this button exists to refresh. No liquidity floor, because a portfolio applies its
+// own and a floor here would decide for all of them.
+const MANUAL_SCAN_TAG = "";
+const MANUAL_SCAN_LIQUIDITY_MIN = 0;
+const MANUAL_SCAN_MAX_DAYS = 1;
+// What that empty tag actually covers, for the status line. Saying "all tags" would promise
+// a breadth the scan no longer has.
+const MANUAL_SCAN_SCOPE_LABEL = "Sports and esports";
+
 async function triggerOneTimeMarketScan() {
   if (state.scrapedScanBusy) return;
   state.scrapedScanBusy = true;
@@ -9762,9 +9677,17 @@ async function triggerOneTimeMarketScan() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         target: "paper-scan",
-        market_scan_tag: state.scrapedScanTag,
-        market_scan_liquidity_min: currentEvaluationLiquidityFilter(),
-        market_scan_max_days: currentEvaluationDaysFilter(),
+        // Fixed, not read from the page. An empty tag scans the whole rotation, which is
+        // sports and esports since the scan was scoped to them -- so both come back in one
+        // pass with nothing to choose. No liquidity floor and a one-day horizon: the point
+        // of this button is to pull in everything running in the next 24 hours and let the
+        // portfolios judge it, so every probability is wanted.
+        //
+        // These used to come from the table's display filters, which meant a manual scan
+        // silently fetched whatever the list was filtered by at the time.
+        market_scan_tag: MANUAL_SCAN_TAG,
+        market_scan_liquidity_min: MANUAL_SCAN_LIQUIDITY_MIN,
+        market_scan_max_days: MANUAL_SCAN_MAX_DAYS,
       }),
     });
   };

@@ -7068,46 +7068,30 @@ test("include-only tags: whitelist reaches every shortlist and execution path", 
 // Asked for: the Polymarket tag box holds minor tags; it should offer only a few main
 // ones, category-style, and politics and geopolitics are missing from it.
 
-test("scan categories: the picker offers categories, not whatever was scraped", async () => {
+test("scan categories: the list holds categories, not whatever was scraped", async () => {
   const { readFile } = await import("node:fs/promises");
   const app = await readFile(new URL("../assets/app.js", import.meta.url), "utf8");
 
-  // The counting moved out of here: the bracket used to report how many of our own rows
-  // carried the tag, and now reports how many events Polymarket lists that match what the
-  // scan takes. What this test still owns is *which* categories are offered and in what
-  // order, so it drives the option builder against a supplied count map instead.
-  const build = (counts) => new Function("state", `
+  // The picker this used to fill is gone -- the manual scan takes no choices now -- but the
+  // list outlived it: it seeds the tag suggestions the portfolio policy fields offer. A
+  // per-league slug in here would bury the handful of categories a policy can usefully
+  // name, which is the same fault in a new place, so the claim is asserted on the list
+  // itself rather than through the option builder that used to read it.
+  const offered = new Function(`
     ${/const MARKET_SCAN_CATEGORIES = \[[\s\S]*?\n\];/.exec(app)[0]}
-    ${functionSource(app, "scrapedScanTagOptions")}
-    return scrapedScanTagOptions;
-  `)({ scanCategoryCounts: counts })();
+    return MARKET_SCAN_CATEGORIES;
+  `)();
 
   // Measured off Gamma, these are the per-league slugs the sports and esports scopes
   // produce. They are what used to fill the box, and exactly what must not.
-  const options = build(new Map([["sports", 191], ["esports", 32]]));
-  const offered = options.map(([tag]) => tag);
-
   for (const minor of ["uslc", "usl1", "bra3", "brazil-serie-a", "setkamemd", "setka", "chl2", "ecu1", "games"]) {
-    assert.ok(!offered.includes(minor), `${minor} is a league, not a category, and must not be offered`);
+    assert.ok(!offered.includes(minor), `${minor} is a league, not a category, and must not be listed`);
   }
-  // The two the box was missing. It could not have shown them while the list came from
-  // scraped rows: only sports and esports are scraped, so a category could never appear
-  // until it had already been scanned -- which needed it in the box first.
-  assert.ok(offered.includes("politics"), "politics must be offerable");
-  assert.ok(offered.includes("geopolitics"), "geopolitics must be offerable");
-  assert.ok(offered.length <= 16, `a category picker, not a tag dump: ${offered.length} entries`);
-
-  // Fixed order, so the box does not rearrange itself as counts arrive.
-  assert.deepEqual(offered, build(null).map(([tag]) => tag), "the list is the same whatever is counted");
-  assert.equal(offered[0], "politics");
-
-  // The count is whatever Polymarket reported for that category, and a category with no
-  // answer carries null rather than a zero -- "no number yet" and "none there" are
-  // different facts, and only the second is worth putting in a bracket.
-  assert.equal(options.find(([tag]) => tag === "sports")[1], 191);
-  assert.equal(options.find(([tag]) => tag === "esports")[1], 32);
-  assert.equal(options.find(([tag]) => tag === "politics")[1], null, "no answer is not a zero");
-  assert.equal(build(new Map([["politics", 0]])).find(([tag]) => tag === "politics")[1], 0);
+  assert.ok(offered.includes("politics"), "politics must be listed");
+  assert.ok(offered.includes("geopolitics"), "geopolitics must be listed");
+  assert.ok(offered.includes("sports") && offered.includes("esports"), "the scanned scopes must be listed");
+  assert.ok(offered.length <= 16, `a category list, not a tag dump: ${offered.length} entries`);
+  assert.equal(offered[0], "politics", "fixed order, so the list does not rearrange itself");
 });
 
 test("scan categories: every offered category is one the scanner can resolve", async () => {
@@ -7132,13 +7116,10 @@ test("scan categories: every offered category is one the scanner can resolve", a
     assert.ok(known.has(tag), `${tag} is offered but the scanner has no tag id for it`);
   }
 
-  // A stored preference for a tag no longer offered has to fall back rather than sit
-  // selected and invisible -- the per-league slugs people picked before are all gone now.
-  const render = functionSource(app, "renderScrapedScanControls");
-  assert.match(render, /if \(state\.scrapedScanTag && !availableTags\.has\(state\.scrapedScanTag\)\) state\.scrapedScanTag = "";/);
-  // And a category whose count did not arrive inside the budget gets no bracket at all,
-  // rather than a zero that would read as "nothing there".
-  assert.match(render, /const suffix = count == null \? "" :/);
+  // The stale-selection reset and the count brackets that used to be asserted here went
+  // with the picker itself: the manual scan takes no tag, so there is no selection to go
+  // stale and no bracket to fill. What the scanner can resolve still matters, because the
+  // list seeds the tag suggestions offered in the portfolio policy fields.
 });
 
 test("paper rotation: free capital is spent before a position is given up", async () => {

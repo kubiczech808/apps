@@ -4087,7 +4087,7 @@ test("opportunities page: the active choice is obvious and the filters belong to
   // The view switch belongs to the page heading, while the tag picker and scan action
   // remain scraped-only. This keeps the switch available on the scan-log route without
   // making the filter row compete with it for space.
-  assert.match(html, /class="panel-head-actions opportunity-header-actions"[\s\S]*?data-opportunity-view-toggle[\s\S]*?class="scraped-scan-controls" data-scraped-only/);
+  assert.match(html, /class="panel-head-actions opportunity-header-actions"[\s\S]*?data-opportunity-view-toggle[\s\S]*?class="scraped-scan-controls" data-scan-log-only/);
   assert.doesNotMatch(html, /<span>Polymarket tag<\/span>/);
   assert.doesNotMatch(app, /Choose a category to scan\./);
   assert.match(app, /els\.scrapedScanButton\.hidden = state\.scrapedScanBusy;/);
@@ -4333,45 +4333,6 @@ test("rotation entry: crossing the spread is charged, not assumed away", () => {
 // The filters matter: sports has 12,312 open events and 191 that clear the scan's
 // liquidity floor inside its window, so a raw total would advertise twelve thousand
 // markets the scan will never fetch.
-test("tag picker: the bracket is a live Polymarket count, on a budget, or nothing", () => {
-  const app = readFileSync(new URL("../assets/app.js", import.meta.url), "utf8");
-
-  // The stored count is gone -- label and the function that computed it.
-  assert.doesNotMatch(app, /nothing stored yet/);
-  assert.doesNotMatch(app, /stored`/);
-  assert.doesNotMatch(app, /function scrapedScanStoredTagCounts/,
-    "the stored counter has no other caller; leaving it would rot");
-
-  // Counted the way the scan counts, not the way the category advertises itself.
-  assert.match(app, /const SCAN_CATEGORY_LIQUIDITY_MIN = 40000;/);
-  assert.match(app, /liquidity_min=\$\{SCAN_CATEGORY_LIQUIDITY_MIN\}/);
-  assert.match(app, /end_date_min=\$\{encodeURIComponent\(endDateMin\)\}/);
-  assert.match(app, /end_date_max=\$\{encodeURIComponent\(endDateMax\)\}/);
-  assert.match(app, /pagination\?\.totalResults/);
-
-  // The budget is enforced, not assumed, and it covers the row arriving together.
-  assert.match(app, /const SCAN_CATEGORY_COUNT_BUDGET_MS = 2000;/);
-  assert.match(app, /const controller = new AbortController\(\);/);
-  assert.match(app, /setTimeout\(\(\) => controller\.abort\(\), SCAN_CATEGORY_COUNT_BUDGET_MS\)/);
-  assert.match(app, /signal: controller\.signal/);
-
-  // "Otherwise nothing": no number means no bracket, never a stale or invented one.
-  const options = functionSource(app, "renderScrapedScanControls");
-  assert.match(options, /const suffix = count == null \? "" :/);
-  assert.match(functionSource(app, "scrapedScanTagOptions"),
-    /counts\?\.has\(tag\) \? Number\(counts\.get\(tag\)\) : null/);
-  // A failed refresh keeps the last good row rather than blanking every bracket.
-  assert.match(functionSource(app, "loadScanCategoryCounts"), /if \(counts\.size\) \{/);
-
-  // Every category the picker offers must have a tag id, or its bracket can never fill.
-  const listed = /const MARKET_SCAN_CATEGORIES = \[([\s\S]*?)\];/.exec(app)[1]
-    .match(/"([^"]+)"/g).map((entry) => entry.replace(/"/g, ""));
-  const ids = /const MARKET_SCAN_CATEGORY_TAG_IDS = \{([\s\S]*?)\n\};/.exec(app)[1];
-  for (const category of listed) {
-    assert.match(ids, new RegExp(`(^|\\s|")${category.replace(/[-]/g, "[-]")}"?:`),
-      `${category} is offered in the picker but has no Gamma tag id`);
-  }
-});
 
 // Reported from the live run log: ERROR "paper state HTTP 500". The same shape as the
 // scraped-state failure, on the other endpoint the run reads.
