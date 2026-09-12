@@ -6625,3 +6625,60 @@ test("scan log: New counts what joined the tradable catalogue, not what was fetc
     "the tooltip explained the behaviour that was just removed");
   assert.match(APP, /new is the markets that joined the active set/);
 });
+
+test("scraped list: the renderer is handed every binding the extraction took from it", () => {
+  // Reported: /opportunities/scraped/table/ rendered blank. Splitting the filter chain out
+  // into filteredScrapedObservations left the renderer still naming `drilldownKey` and
+  // `observations`, which had moved with it -- a ReferenceError on every render, and an
+  // empty panel. `node --check` cannot see it and no test ran the renderer, so nothing did.
+  //
+  // This compares the two directly: any name the helper declares and the renderer still
+  // uses has to come back through the destructure, or it is a reference to nothing.
+  const helper = extractFunction(APP, "filteredScrapedObservations");
+  const renderer = extractFunction(APP, "renderScrapedOpportunities");
+
+  const declaredInHelper = new Set(
+    [...helper.matchAll(/\n  const (?:\{\s*([^}]*)\s*\}|([A-Za-z_$][\w$]*))\s*=/g)]
+      .flatMap((match) => (match[1] ? match[1].split(",") : [match[2]]))
+      .map((name) => String(name).trim().split(":").pop().trim())
+      .filter(Boolean),
+  );
+  // Comments are stripped line by line before splitting: a note sitting above an entry ate
+  // the entry itself on the first run, and the test then blamed the code for its own parser.
+  const identifiers = (text) => new Set(String(text || "")
+    .split("\n")
+    .map((line) => line.replace(/\/\/.*$/, ""))
+    .join("\n")
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter((entry) => /^[A-Za-z_$][\w$]*$/.test(entry)));
+  const returned = identifiers(/\n  return \{([\s\S]*?)\n  \};/.exec(helper)?.[1]);
+  const destructured = identifiers(/const \{([\s\S]*?)\} = filteredScrapedObservations\(\);/.exec(renderer)?.[1]);
+  assert.ok(destructured.size > 0, "the renderer must take its rows from the shared helper");
+
+  // Names the renderer declares for itself are its own; everything else it uses has to
+  // arrive through the destructure.
+  const declaredInRenderer = new Set(
+    [...renderer.matchAll(/\n  (?:const|let) (?:\{\s*([^}]*)\s*\}|([A-Za-z_$][\w$]*))\s*=/g)]
+      .flatMap((match) => (match[1] ? match[1].split(",") : [match[2]]))
+      .map((name) => String(name).trim().split(":").pop().trim())
+      .filter(Boolean),
+  );
+  const body = renderer.slice(renderer.indexOf("filteredScrapedObservations();"));
+  for (const name of declaredInHelper) {
+    if (destructured.has(name) || declaredInRenderer.has(name)) continue;
+    const used = new RegExp(`(?<![\\w$.])${name.replace(/\$/g, "\\$")}(?![\\w$])`).test(body);
+    assert.ok(!used,
+      `renderScrapedOpportunities still uses "${name}", which now lives in filteredScrapedObservations`);
+  }
+
+  // And everything destructured is actually returned, or it silently arrives undefined --
+  // which is worse than a ReferenceError, because the page renders and is simply wrong.
+  for (const name of destructured) {
+    assert.ok(returned.has(name), `"${name}" is destructured but filteredScrapedObservations never returns it`);
+  }
+  // The two that were lost, named, so this cannot regress quietly.
+  for (const name of ["drilldownKey", "observations", "filtered"]) {
+    assert.ok(returned.has(name) && destructured.has(name), `${name} must survive the split`);
+  }
+});

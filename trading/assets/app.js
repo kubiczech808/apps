@@ -12913,6 +12913,11 @@ function filteredScrapedObservations() {
   return {
     catalogue,
     filtered,
+    // The renderer needs these two as well: it reports a drill-down still loading, and
+    // distinguishes "nothing stored" from "nothing matched". Leaving them behind when this
+    // function was split out threw a ReferenceError and left the table blank.
+    drilldownKey,
+    observations,
     drilldown,
     selectedStatuses,
     taxonomyFilter,
@@ -12930,8 +12935,9 @@ function renderScrapedOpportunities() {
   syncScrapedTaxonomyFilterControl();
   syncScrapedShapeFilterControl();
   const {
-    catalogue, filtered, drilldown, selectedStatuses, taxonomyFilter, marketTypeFilter,
-    shapeFilter, probabilityFilter, maxProbabilityFilter, daysFilter, minNetYield, minLiquidity,
+    catalogue, filtered, drilldownKey, observations, drilldown, selectedStatuses, taxonomyFilter,
+    marketTypeFilter, shapeFilter, probabilityFilter, maxProbabilityFilter, daysFilter,
+    minNetYield, minLiquidity,
   } = filteredScrapedObservations();
   const scope = JSON.stringify({
     statuses: selectedStatuses,
