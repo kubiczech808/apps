@@ -1794,7 +1794,9 @@ test("dashboard: the overview above the selector states equity and risk against 
   // total is split into the two commitments it was hiding.
   // The split is what this pins; the ROI p.a. column that later joined the row between
   // Equity and the two commitments is free to sit there.
-  assert.match(overview, /<th>Portfolio<\/th><th>Equity<\/th>(?:<th[^>]*>[^<]*<\/th>)*?<th[^>]*>In positions<\/th><th[^>]*>In orders<\/th><th>Free<\/th>/);
+  // The ROI header holds a sort button now, so a column between Equity and In positions may
+  // contain markup of its own rather than bare text.
+  assert.match(overview, /<th>Portfolio<\/th><th>Equity<\/th>[\s\S]*?<th[^>]*>In positions<\/th><th[^>]*>In orders<\/th><th>Free<\/th>/);
   assert.match(overview, /equity: portfolio \? Number\(portfolio\.equityUsdc\) : null/);
   assert.match(overview, /portfolio\.positionRiskUsdc/);
   assert.match(overview, /orders: portfolio \? Number\(portfolio\.restingLimitOrderUsdc \|\| 0\) : null/);
@@ -4489,7 +4491,9 @@ test("overview ROI: realized P/L over what the closed trades cost", () => {
   // showing another. The old annualized helper is gone rather than left to be picked up.
   assert.match(APP, /const roi = portfolioRealizedRoiForMode\(mode\);\s*\n\s*return roi && Number\.isFinite\(roi\.roi\)/);
   assert.doesNotMatch(APP, /overviewAnnualizedRoi|portfolioAnnualizedRoiForMode/);
-  assert.match(APP, /<th title="Realized P\/L as a share of what the closed trades cost[^"]*">ROI<\/th>/);
+  // The header became a button when the column was made sortable, so the label moved inside
+  // it. The title still has to say what the number is, and the label still has to read ROI.
+  assert.match(APP, /<th title="Realized P\/L as a share of what the closed trades cost[^"]*"><div class="th-content"><button[^>]*data-overview-sort="roi">ROI/);
 });
 
 // Reported three times running: the shortlist shows candidates the execution then refuses.

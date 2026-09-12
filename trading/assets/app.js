@@ -110,6 +110,9 @@ const state = {
   portfolioOverview: null,
   portfolioOverviewAt: 0,
   portfolioOverviewPending: false,
+  // null is the default order -- switched on first, then by return. Set by clicking the
+  // ROI header, which ranks every portfolio by return across that grouping.
+  portfolioOverviewSort: null,
   // The optimisation report needs the wallet history to analyse the live portfolios, and
   // it is reachable from Settings without ever opening a live tab -- which is the only
   // other thing that loads it.
@@ -6955,8 +6958,32 @@ function portfolioRealizedRoiForMode(mode) {
     closedCount = own.closedCount;
   } else {
     const strategyId = paperStrategyIdFromMode(mode);
-    const trades = paperPortfolioTrades(state.botState?.paperPortfolios?.[strategyId])
-      .filter((trade) => isClosedTrade(trade));
+    const row = state.botState?.paperPortfolios?.[strategyId];
+    const trades = paperPortfolioTrades(row).filter((trade) => isClosedTrade(trade));
+    // The overview keeps every portfolio's summary and an EMPTY trade list, which is what
+    // makes switching portfolios cheap. So for every row but the selected one the sums
+    // below are over nothing, the column read "-", and the one value that did appear went
+    // back to "-" as soon as another portfolio was selected. A number that exists only
+    // while you are looking at that one portfolio is not something portfolios can be
+    // compared by.
+    //
+    // The server has the trades and already walks them to count the closed ones, so it
+    // sends the two halves of this. Used whenever the row carries no trades of its own;
+    // the selected row still sums the trades in hand, which is the fresher of the two
+    // between one bot pass and the next.
+    const summary = row?.historySummary;
+    if (!trades.length && summary && Number(summary.closedInvestedUsdc) > 0) {
+      const summaryInvested = amount(summary.closedInvestedUsdc);
+      const summaryCount = Number(summary.closedFilledCount) || 0;
+      return summaryCount > 0 && summaryInvested > 0
+        ? {
+          roi: amount(summary.closedRealizedPnlUsdc) / summaryInvested,
+          realized: amount(summary.closedRealizedPnlUsdc),
+          invested: summaryInvested,
+          closedCount: summaryCount,
+        }
+        : null;
+    }
     // Unfilled orders never bought anything, so they are neither profit nor capital spent.
     // Counting their reserved notional as invested would dilute the return of every
     // portfolio that rests bids.
@@ -7032,6 +7059,28 @@ function renderPortfolioOverview() {
       live: false,
     };
   });
+  // Ranked by return across every portfolio at once, when the reader has asked for it.
+  //
+  // The default order is deliberately not this: live portfolios that are switched ON come
+  // first, because that is what is being watched. Ranking by ROI has to cross that grouping
+  // or it is not a ranking -- comparing returns means comparing all of them, live and paper,
+  // running and stopped, in one list.
+  //
+  // A portfolio that has never closed a trade has no return to rank, so it sorts to the
+  // bottom in both directions rather than being treated as zero, which would place it above
+  // every portfolio that has actually lost money.
+  if (state.portfolioOverviewSort?.key === "roi") {
+    const order = new Map(rows.map((row, index) => [row.mode, index]));
+    const sign = state.portfolioOverviewSort.direction === "asc" ? -1 : 1;
+    rows.sort((left, right) => {
+      const leftRoi = Number.isFinite(left.roi?.roi) ? left.roi.roi : null;
+      const rightRoi = Number.isFinite(right.roi?.roi) ? right.roi.roi : null;
+      if (leftRoi == null && rightRoi == null) return order.get(left.mode) - order.get(right.mode);
+      if (leftRoi == null) return 1;
+      if (rightRoi == null) return -1;
+      return sign * (rightRoi - leftRoi) || order.get(left.mode) - order.get(right.mode);
+    });
+  }
   // Only worth saying when there is in fact more than one live portfolio on the account.
   const sharedWallet = rows.filter((row) => row.live).length > 1;
   els.portfolioOverview.hidden = false;
@@ -7039,7 +7088,7 @@ function renderPortfolioOverview() {
   els.portfolioOverview.innerHTML = `
     <table class="portfolio-summary">
       <thead>
-        <tr><th>Portfolio</th><th>Equity</th><th title="Realized P/L as a share of what the closed trades cost. Open positions are excluded from both halves, so this is what came back on money that has completed a round trip.">ROI</th><th title="Capital in filled positions: exposure that moves with the market.">In positions</th><th title="Capital reserved by resting orders that have not filled. Not exposure -- an unfilled order is discarded intact when the event ends.">In orders</th><th>Free</th></tr>
+        <tr><th>Portfolio</th><th>Equity</th><th title="Realized P/L as a share of what the closed trades cost. Open positions are excluded from both halves, so this is what came back on money that has completed a round trip. Click to rank every portfolio by it."><div class="th-content"><button class="sort-button${state.portfolioOverviewSort ? " active" : ""}" type="button" data-overview-sort="roi">ROI${state.portfolioOverviewSort ? sortDirectionIndicator(state.portfolioOverviewSort.direction) : ""}</button></div></th><th title="Capital in filled positions: exposure that moves with the market.">In positions</th><th title="Capital reserved by resting orders that have not filled. Not exposure -- an unfilled order is discarded intact when the event ends.">In orders</th><th>Free</th></tr>
       </thead>
       <tbody>
         ${rows.map((row) => `
@@ -16041,6 +16090,23 @@ els.calculationReport?.addEventListener("click", (event) => {
 // Delegated, because the tab row is rebuilt whenever a portfolio is created, renamed,
 // archived or restored. Handlers bound to the buttons themselves would only work until
 // the first of those.
+// Ranking the overview by return. Delegated for the same reason as the tab row: the table
+// is rebuilt on every render, so a handler bound to the header would survive one.
+//
+// Nothing is fetched. Every portfolio's return is already on its row -- the server sends
+// the two halves with the summary -- so the click only reorders what is on screen.
+document.addEventListener("click", (event) => {
+  const sortButton = event.target.closest("[data-overview-sort]");
+  if (!sortButton) return;
+  const current = state.portfolioOverviewSort;
+  // Highest first, then lowest, then back to the default order: on, then by return. A
+  // ranking you cannot leave is a ranking you have to reload the page to undo.
+  state.portfolioOverviewSort = current == null
+    ? { key: "roi", direction: "desc" }
+    : (current.direction === "desc" ? { key: "roi", direction: "asc" } : null);
+  renderPortfolioOverview();
+});
+
 document.addEventListener("click", (event) => {
   const button = event.target.closest("[data-mode-toggle]");
   if (!button) return;

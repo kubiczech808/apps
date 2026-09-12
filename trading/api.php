@@ -2584,6 +2584,30 @@ function portfolio_trade_timestamp(string $value): ?int
     return null;
 }
 
+// The browser's isUnfilledLimitOrder(), in PHP. An order that expired or was cancelled
+// without ever filling bought nothing; one that filled even partially did.
+function portfolio_trade_is_unfilled_limit_order(array $trade): bool
+{
+    $status = strtoupper((string) ($trade['status'] ?? ''));
+    if ($status !== 'LIMIT_ORDER_EXPIRED' && $status !== 'LIVE_LIMIT_ORDER_UNFILLED') {
+        return false;
+    }
+    if (($trade['partiallyFilled'] ?? null) === true || ($trade['everFilled'] ?? null) === true) {
+        return false;
+    }
+    return !(is_numeric($trade['filledSize'] ?? null) && (float) $trade['filledSize'] > 0.000001);
+}
+
+function portfolio_trade_amount(array $trade, array $keys): float
+{
+    foreach ($keys as $key) {
+        if (is_numeric($trade[$key] ?? null)) {
+            return (float) $trade[$key];
+        }
+    }
+    return 0.0;
+}
+
 function paper_portfolio_history_summary(array $portfolio): array
 {
     $trades = is_array($portfolio['trades'] ?? null) ? $portfolio['trades'] : [];
@@ -2592,6 +2616,18 @@ function paper_portfolio_history_summary(array $portfolio): array
     $resolved = 0;
     $firstOpenedAt = null;
     $firstOpenedTimestamp = null;
+    // The two halves of the overview's ROI, summed here because this is the only place that
+    // still has the trades. The overview row keeps the portfolio summary and an EMPTY trade
+    // list -- that is what makes switching portfolios cheap -- so the browser could compute
+    // a return only for whichever portfolio happened to be selected, and the column went
+    // back to "-" the moment it was not. A figure you cannot see next to the others is not
+    // something you can compare portfolios by.
+    //
+    // Walked in the same pass that already counts the closed trades, so the overview costs
+    // no more than it did.
+    $closedRealized = 0.0;
+    $closedInvested = 0.0;
+    $closedFilled = 0;
     foreach ($trades as $trade) {
         if (!is_array($trade)) {
             continue;
@@ -2606,6 +2642,14 @@ function paper_portfolio_history_summary(array $portfolio): array
             continue;
         }
         $closed++;
+        // An unfilled order bought nothing, so it is neither profit nor capital spent.
+        // Counting its reserved notional as invested would dilute the return of every
+        // portfolio that rests bids -- the same exclusion the browser makes.
+        if (!portfolio_trade_is_unfilled_limit_order($trade)) {
+            $closedFilled++;
+            $closedRealized += portfolio_trade_amount($trade, ['realizedPnlUsdc', 'pnlUsdc']);
+            $closedInvested += portfolio_trade_amount($trade, ['totalCostUsdc', 'stakeUsdc']);
+        }
         $result = archived_trade_prediction_result($trade);
         if ($result === null) {
             continue;
@@ -2622,6 +2666,13 @@ function paper_portfolio_history_summary(array $portfolio): array
         'resolvedCount' => $resolved,
         'accuracy' => $resolved > 0 ? $correct / $resolved : null,
         'firstOpenedAt' => $firstOpenedAt,
+        // Realized P/L over what the closed trades cost. Both halves describe the same set
+        // of trades -- money that completed a round trip, and what the round trip returned.
+        // Sent as the two numbers rather than the ratio so the row can still say what it is
+        // made of, which is what the column's tooltip shows.
+        'closedFilledCount' => $closedFilled,
+        'closedRealizedPnlUsdc' => round($closedRealized, 6),
+        'closedInvestedUsdc' => round($closedInvested, 6),
     ];
 }
 
