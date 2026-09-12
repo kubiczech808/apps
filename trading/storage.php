@@ -305,6 +305,43 @@ function trading_storage_trade_upsert(array $trade): void
 }
 
 /**
+ * The stored trades themselves, for a named set of keys.
+ *
+ * Separate from the key reader above because the two questions have very different costs.
+ * "Which trades are in here" is a handful of columns over every row; "give me these back"
+ * decodes a payload blob each, and only the rows a restore is actually going to put back
+ * are worth that. Chunked for the same reason: a 562-row IN clause with a MEDIUMBLOB
+ * behind every match is not a query this hosting should be asked to answer at once.
+ */
+function trading_storage_trade_payloads_for(string $account, string $portfolioId, array $keys): array
+{
+    $pdo = trading_storage_pdo();
+    if (!$pdo instanceof PDO || $keys === []) {
+        return [];
+    }
+    trading_storage_bootstrap($pdo);
+    $rows = [];
+    foreach (array_chunk(array_values($keys), 100) as $chunk) {
+        $placeholders = implode(',', array_fill(0, count($chunk), '?'));
+        $statement = $pdo->prepare(
+            'SELECT trade_key, payload FROM trading_trades
+             WHERE account = ? AND portfolio_id = ? AND trade_key IN (' . $placeholders . ')'
+        );
+        if ($statement === false) {
+            continue;
+        }
+        $statement->execute(array_merge([$account, $portfolioId], $chunk));
+        foreach ($statement->fetchAll() as $row) {
+            $decoded = trading_storage_unpack($row['payload'] ?? null);
+            if (is_array($decoded)) {
+                $rows[(string) ($row['trade_key'] ?? '')] = $decoded;
+            }
+        }
+    }
+    return $rows;
+}
+
+/**
  * The stored trade keys for one portfolio, with just enough of each row to describe it.
  *
  * Added to answer the question a restore has to answer first: does the database hold what

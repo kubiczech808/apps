@@ -629,6 +629,34 @@ function state_payload(
 }
 
 /**
+ * The path of one portfolio's published segment file, or null when it has none.
+ *
+ * Shared by the existence check and the restore so the two cannot disagree about which
+ * file they are talking about -- a restore that wrote to a different path than the one the
+ * preview measured would be the worst possible version of this.
+ */
+function published_portfolio_segment_path(string $portfolioId): ?string
+{
+    $files = state_file_paths();
+    $path = $files['paper'] ?? '';
+    if ($path === '' || !is_file($path)) {
+        return null;
+    }
+    $core = decode_state_file($path, false);
+    $manifest = is_array($core['stateSegments'] ?? null) ? $core['stateSegments'] : [];
+    if ($manifest === []) {
+        return null;
+    }
+    $file = (string) ($manifest['portfolio:' . $portfolioId]['file'] ?? '');
+    if (!preg_match('/^[A-Za-z0-9._-]+\.json$/', $file)) {
+        return null;
+    }
+    $segmentPath = dirname($path) . '/' . $file;
+
+    return is_file($segmentPath) ? $segmentPath : null;
+}
+
+/**
  * Whether this portfolio has a published segment file of its own.
  *
  * Asked separately from its trades because zero trades is ambiguous: a portfolio that holds
@@ -6530,6 +6558,120 @@ try {
         // One portfolio per call, deliberately: reading thirty-six published segments and
         // 6,447 stored rows in one request is exactly the shape of work that answers 500 on
         // a 128 MB host, and a preview that cannot run is worse than no preview.
+        // Put back what the published state lost, for ONE portfolio, by merging.
+        //
+        // Never by replacing. The published segment holds today's trades and the database
+        // holds the history; a replace would be right only for as long as the two sets are
+        // nested, and the whole reason this exists is that an operation which was right
+        // "for as long as" stopped being right at 08:54 on 2026-09-12. Merging by key is
+        // right regardless of which side is ahead.
+        //
+        // It refuses rather than guesses, in three places: an unknown portfolio, a segment
+        // that is not there, and any published trade the database does not hold. That last
+        // one is the important refusal -- it means this restore cannot be the thing that
+        // loses a trade, which is the only promise worth making here.
+        //
+        // Only the trades are written. equity, free capital, realized P/L and ROI are all
+        // derived from them by the bot on its next pass, so putting the trades back is the
+        // whole job and recomputing the numbers here would be a second opinion nobody asked
+        // for.
+        if ($operation === 'restore-portfolio') {
+            $portfolioId = trim((string) ($storageRequest['portfolio'] ?? ''));
+            if (!preg_match('/^[A-Za-z0-9_-]{1,64}$/', $portfolioId)) {
+                respond(['ok' => false, 'error' => 'A portfolio id is required.'], 400);
+            }
+            // Typed back, not a boolean. A true/false flag is one keystroke away from being
+            // set on the wrong portfolio, and this writes over live data.
+            if (trim((string) ($storageRequest['confirm'] ?? '')) !== $portfolioId) {
+                respond([
+                    'ok' => false,
+                    'error' => 'confirm must repeat the portfolio id exactly.',
+                ], 400);
+            }
+            $account = strtolower(trim((string) ($storageRequest['account'] ?? 'paper')));
+            if ($account !== 'paper') {
+                respond(['ok' => false, 'error' => 'Only paper portfolios are restored from here.'], 400);
+            }
+            $segmentPath = published_portfolio_segment_path($portfolioId);
+            if ($segmentPath === null) {
+                respond([
+                    'ok' => false,
+                    'error' => 'That portfolio has no published segment file, so there is nothing to merge into.',
+                ], 409);
+            }
+            $segment = decode_state_file($segmentPath, false);
+            if (!is_array($segment) || !is_array($segment['paperPortfolio'] ?? null)) {
+                respond(['ok' => false, 'error' => 'The published segment could not be read.'], 502);
+            }
+            $published = is_array($segment['paperPortfolio']['trades'] ?? null)
+                ? $segment['paperPortfolio']['trades']
+                : [];
+            $publishedKeys = [];
+            foreach ($published as $trade) {
+                if (is_array($trade)) {
+                    $publishedKeys[trading_storage_trade_key($trade + ['account' => $account, 'portfolioId' => $portfolioId])] = true;
+                }
+            }
+            $storedKeys = trading_storage_trade_keys_for($account, $portfolioId);
+            $notInDatabase = array_diff_key($publishedKeys, $storedKeys);
+            if ($notInDatabase !== []) {
+                respond([
+                    'ok' => false,
+                    'error' => 'Refusing to restore: the published state holds trades the database does not, so this'
+                        . ' portfolio has to be reconciled by hand rather than merged.',
+                    'publishedButNotStored' => count($notInDatabase),
+                ], 409);
+            }
+            $missing = array_diff_key($storedKeys, $publishedKeys);
+            if ($missing === []) {
+                respond([
+                    'ok' => true,
+                    'operation' => 'restore-portfolio',
+                    'portfolio' => $portfolioId,
+                    'restored' => 0,
+                    'tradesBefore' => count($published),
+                    'tradesAfter' => count($published),
+                    'note' => 'nothing to restore: the published state already holds every stored trade',
+                ]);
+            }
+            $recovered = trading_storage_trade_payloads_for($account, $portfolioId, array_keys($missing));
+            if (count($recovered) !== count($missing)) {
+                respond([
+                    'ok' => false,
+                    'error' => 'Refusing to restore: the database did not return every trade it reported holding.',
+                    'expected' => count($missing),
+                    'received' => count($recovered),
+                ], 502);
+            }
+            $merged = array_merge($published, array_values($recovered));
+            // Oldest first, the order the published lists are already in, so a restored
+            // history reads the same way as one that was never lost.
+            usort($merged, static function (array $left, array $right): int {
+                return strcmp((string) ($left['openedAt'] ?? ''), (string) ($right['openedAt'] ?? ''));
+            });
+            $segment['paperPortfolio']['trades'] = $merged;
+            $encoded = json_encode($segment, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+            if (!is_string($encoded)) {
+                respond(['ok' => false, 'error' => 'The merged segment could not be encoded.'], 500);
+            }
+            // Written beside the file and moved into place, so a failure halfway through
+            // leaves the original segment intact rather than a truncated one. The whole
+            // incident is an object lesson in what a half-written state costs.
+            $temporary = $segmentPath . '.restore-' . bin2hex(random_bytes(6));
+            if (file_put_contents($temporary, $encoded, LOCK_EX) === false || !rename($temporary, $segmentPath)) {
+                @unlink($temporary);
+                respond(['ok' => false, 'error' => 'The merged segment could not be written.'], 500);
+            }
+            respond([
+                'ok' => true,
+                'operation' => 'restore-portfolio',
+                'portfolio' => $portfolioId,
+                'restored' => count($recovered),
+                'tradesBefore' => count($published),
+                'tradesAfter' => count($merged),
+            ]);
+        }
+
         if ($operation === 'restore-preview') {
             $portfolioId = trim((string) ($storageRequest['portfolio'] ?? ''));
             if (!preg_match('/^[A-Za-z0-9_-]{1,64}$/', $portfolioId)) {

@@ -1,0 +1,47 @@
+name: Trading Restore Portfolio
+
+# THIS WRITES to the published state. Manual only, and it will not run unless the confirm
+# input repeats the portfolio input exactly -- a checkbox is one keystroke from being set on
+# the wrong portfolio, and this changes live data.
+#
+# It restores the paper trade history lost on 2026-09-12 from the database mirror, by
+# MERGING on the trade key: today's trades stay where they are and the history joins them.
+# Every portfolio is previewed first and skipped if it holds a published trade the database
+# does not have, so this operation cannot be the thing that loses a trade.
+#
+# Only trades are written. Equity, free capital, realized P/L and ROI are all derived from
+# them by the paper bot on its next pass.
+on:
+  workflow_dispatch:
+    inputs:
+      portfolio:
+        description: "Portfolio id to restore, or ALL for every paper portfolio"
+        required: true
+        type: string
+      confirm:
+        description: "Type the same value again to confirm the write"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+# One restore at a time, and never while another one is running.
+concurrency:
+  group: trading-restore-portfolio
+  cancel-in-progress: false
+
+jobs:
+  restore:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Merge the stored history back into the published state
+        env:
+          TRADING_HOST: https://www.osobnizkusenosti.cz/trading
+          TRADING_TRIGGER_KEY: ${{ secrets.POLYTRADING_DB_PASSWORD }}
+          RESTORE_PORTFOLIO: ${{ inputs.portfolio }}
+          RESTORE_CONFIRM: ${{ inputs.confirm }}
+        run: python3 trading/tools/restore-portfolio-runner.py
