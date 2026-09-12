@@ -444,7 +444,12 @@ function state_payload(
     // because getting it wrong in either direction is silent: a reader that needs the whole
     // catalogue and is handed a scope sees markets vanish, and a reader that only needs a
     // scope and is handed the catalogue is the request that collapsed the hosting.
-    bool $observationsScopedToStrategy = false
+    bool $observationsScopedToStrategy = false,
+    // How far into the scope the caller intends to read: the end of the page it asked for,
+    // its offset included. The scoped walk stops once it holds that many, which it can only
+    // do safely because a caller walking to a later page still needs the earlier pages'
+    // rows in front of it. Zero means "walk the whole scope".
+    int $observationsNeeded = 0
 ): array {
     if (trading_storage_is_active()) {
         $document = trading_storage_document_get('state:' . $target);
@@ -475,7 +480,8 @@ function state_payload(
                 // eight thousand payloads on every execution request and decoding the
                 // hundred or so the portfolio's own rules admit.
                 $document['marketObservations'] = execution_scope_observations_from_storage(
-                    execution_scope_strategy_config($selectedStrategyId)
+                    execution_scope_strategy_config($selectedStrategyId),
+                    $observationsNeeded,
                 );
             } else {
                 $document['marketObservations'] = $observationsLimit > 0
@@ -2222,9 +2228,21 @@ const EXECUTION_SCOPE_STORAGE_MAX_PAGES = 6;
  * the question -- and because only the MATCHING rows are kept, memory stays flat however
  * wide the scope is.
  */
-function execution_scope_observations_from_storage(?array $config): array
+function execution_scope_observations_from_storage(?array $config, int $neededRows = 0): array
 {
     $criteria = execution_scope_storage_criteria($config);
+    // Whether the walk may stop as soon as it holds a full page.
+    //
+    // Only when the database's ordering and the portfolio's ranking are the same key. They
+    // are by default -- both take the highest annualized return first -- and then a row
+    // further down the query's order can never enter the page the executor is served, so
+    // reading past a full page is work with no possible effect on the answer.
+    //
+    // A portfolio set to "highest reward/risk first" ranks by something the query cannot
+    // order by, so for that one the walk has to see the whole scope before it can rank it.
+    // Measured: a weakly bounded portfolio walked six pages in 2.05 seconds; the same scope
+    // with this stops at 0.2.
+    $rankingMatchesQuery = ($config['selectionOrder'] ?? '') !== 'highest_reward_risk_first';
     $kept = [];
     for ($page = 0; $page < EXECUTION_SCOPE_STORAGE_MAX_PAGES; $page++) {
         $rows = trading_storage_observations_for_scope(
@@ -2246,6 +2264,15 @@ function execution_scope_observations_from_storage(?array $config): array
         }
         // A short page is the end of the scope. A full one is not, so the walk continues.
         if (count($rows) < EXECUTION_SCOPE_STORAGE_PAGE_ROWS) {
+            break;
+        }
+        // Enough to fill the page the caller asked for, in an order the executor agrees
+        // with. Nothing further down the query's order can displace what is already held.
+        //
+        // Counted to the END of the requested page, offset included: a caller walking to the
+        // second page needs the first page's rows to still be there in front of it. Stopping
+        // at one page's worth would have served page two out of nothing.
+        if ($rankingMatchesQuery && $neededRows > 0 && count($kept) >= $neededRows) {
             break;
         }
     }
@@ -7173,7 +7200,10 @@ try {
             // scope. compact_state_payload() applies the same rules again afterwards, so
             // the response is identical either way -- what changes is how much the
             // database was asked to hand over to produce it.
-            $summary === 'execution'
+            $summary === 'execution',
+            // The end of the page compact_state_payload is about to cut, so the walk reads
+            // exactly as far as the response needs and no further.
+            $summary === 'execution' ? max(0, $executionOffset) + EXECUTION_SCOPE_PAGE_LIMIT : 0
         );
         if ($target === 'paper') {
             $payload = paper_state_with_consistent_portfolios($payload, $summary, $strategyId);

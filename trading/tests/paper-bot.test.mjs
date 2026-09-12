@@ -5594,7 +5594,10 @@ test("scraped counts: the UI reports the archive, not the page it was served", a
   // The scope is opt-in and named by the caller for the same reason: a reader handed a
   // scope it did not ask for sees markets vanish, and one handed the catalogue instead of
   // a scope is the request that collapsed the hosting.
-  assert.match(api, /bool \$observationsScopedToStrategy = false\n\): array \{/);
+  assert.match(api, /bool \$observationsScopedToStrategy = false,\n/);
+  // And how far into that scope the caller means to read, so the walk stops at the end of
+  // the page being cut rather than at the end of the catalogue.
+  assert.match(api, /int \$observationsNeeded = 0\n\): array \{/);
   // The label has to be counted on the same terms as the list, or it heads a list it does
   // not match and the page walk chases rows that are never sent.
   assert.match(api, /\$active = max\(0, \(int\) \(\$counts\['SCRAPED_FRESH'\] \?\? \$counts\['SCRAPED'\] \?\? 0\)\);/);

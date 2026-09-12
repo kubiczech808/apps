@@ -145,12 +145,64 @@ test("a scope that fits in one page makes one round trip", () => {
   assert.equal(result.kept, 40);
 });
 
+test("the walk stops once it holds the page asked for, and only when the ranking agrees", () => {
+  // Measured on production: a portfolio bounded only by a probability floor walked six
+  // pages in 2.05 seconds, to produce nineteen candidates for a page 1200 wide. Everything
+  // past a full page was work that could not change the answer -- the database orders by
+  // the same key the executor ranks by, so nothing further down can displace what is held.
+  const rows = Array.from({ length: 12000 }, (_, index) => market(index));
+
+  const early = runPhp(
+    `(function () use ($args) {
+        $kept = execution_scope_observations_from_storage(null, 1200);
+        return ['kept' => count($kept), 'pages' => count($GLOBALS['scopeCalls'])];
+     })()`,
+    {},
+    { rows },
+  );
+  assert.equal(early.pages, 1, "one page already holds more than the caller asked for");
+  assert.equal(early.kept, 2000);
+
+  // A caller reading the SECOND page needs the first page's rows still in front of it, so
+  // the walk counts to the end of the requested page rather than to its width.
+  const deep = runPhp(
+    `(function () use ($args) {
+        $kept = execution_scope_observations_from_storage(null, 1200 + 3000);
+        return ['kept' => count($kept), 'pages' => count($GLOBALS['scopeCalls'])];
+     })()`,
+    {},
+    { rows },
+  );
+  assert.equal(deep.pages, 3, `a deeper page needs a longer walk: ${JSON.stringify(deep)}`);
+  assert.ok(deep.kept >= 4200, "and enough rows to reach the end of that page");
+
+  // A portfolio ranked by reward/risk is ranked by something the query cannot order by, so
+  // for that one the walk has to see the whole scope before it can rank it. Stopping early
+  // there would hand the executor a page cut by the wrong key.
+  const rewardRisk = runPhp(
+    `(function () use ($args) {
+        $config = normalize_portfolio_config(['paper' => ['probe' => $args]])['paper']['probe'];
+        $kept = execution_scope_observations_from_storage($config, 1200);
+        return ['pages' => count($GLOBALS['scopeCalls']), 'order' => $config['selectionOrder'] ?? null];
+     })()`,
+    { ...CONFIG, selectionOrder: "highest_reward_risk_first" },
+    { rows },
+  );
+  assert.equal(rewardRisk.order, "highest_reward_risk_first", "the fixture must actually set that order");
+  assert.equal(rewardRisk.pages, 6,
+    "a ranking the query cannot express must be walked to the end of the scope");
+});
+
 test("only the execution summary asks for a scope", () => {
   // Every other view either wants the catalogue or a page of it, and neither is a scope.
   // Handing one of those a portfolio's scope would make markets disappear from it with no
   // error to notice.
-  assert.match(API, /\$summary === 'execution'\n\s*\);/,
+  assert.match(API, /\$summary === 'execution',\n/,
     "the state endpoint must pass the scope flag only for the execution summary");
+  // And how far the walk may read: the end of the page about to be cut, offset included.
+  // Counting only one page's worth would serve a caller's second page out of nothing.
+  assert.match(API, /\$summary === 'execution' \? max\(0, \$executionOffset\) \+ EXECUTION_SCOPE_PAGE_LIMIT : 0/,
+    "the walk must be told the end of the requested page, not just its width");
   const payloadAt = API.indexOf("function state_payload(");
   assert.ok(payloadAt > 0, "state_payload must be findable");
   const payload = API.slice(payloadAt, API.indexOf("\nfunction ", payloadAt + 1));
