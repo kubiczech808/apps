@@ -1,0 +1,32 @@
+name: Trading State Segment Inventory
+
+# READ-ONLY, manual only. Public GETs of the published JSON files. No writes, no secrets,
+# no Pi runner: contents: read and nothing else.
+#
+# Asked because every paper portfolio's trade history now starts within three seconds of
+# 2026-09-12T08:54:03Z. That is a reset, and the question this answers is what still holds
+# the trades from before it -- the published state is segmented, and a writer only
+# overwrites the segments it produced.
+on:
+  workflow_dispatch:
+    inputs:
+      cutoff:
+        description: "Trades opened before this timestamp count as surviving history"
+        required: false
+        default: "2026-09-12T08:54"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  inventory:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: What each published state file still holds
+        env:
+          TRADING_DATA_URL: https://osobnizkusenosti.cz/trading/data
+          RESET_CUTOFF: ${{ inputs.cutoff }}
+        run: python3 trading/tools/state-segment-inventory-probe.py
