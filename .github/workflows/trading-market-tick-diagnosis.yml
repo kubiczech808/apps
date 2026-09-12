@@ -1,0 +1,32 @@
+name: Trading Market Tick Diagnosis
+
+# READ-ONLY, manual only. Public Gamma GETs, no secrets, no orders.
+#
+# A logged tickSize of 0.01 cannot currently be told apart from a lookup that failed and
+# defaulted, and the certainty close fires exactly when a market is already decided -- which
+# is when a closed=false lookup stops finding it. This asks both halves of the list and says
+# which one answered, so "sold at 0.99" can be attributed to the market's real grid or to a
+# lookup that never found the market.
+on:
+  workflow_dispatch:
+    inputs:
+      token_ids:
+        description: "Space-separated Polymarket CLOB token ids"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: What tick Gamma declares
+        run: node trading/tools/market-tick-probe.mjs ${{ inputs.token_ids }}

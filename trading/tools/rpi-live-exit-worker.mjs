@@ -877,13 +877,32 @@ export function observedBookTick(book = {}) {
 const marketTickCache = new Map();
 const MARKET_TICK_CACHE_LIMIT = 4000;
 
+// Both halves of the market list, closed included.
+//
+// marketForToken asks with closed=false, which is right for the reversal that uses it and
+// wrong here: the certainty close fires exactly when an outcome is already decided, and
+// that is precisely when Gamma starts reporting the market closed. The lookup then returns
+// nothing, the tick reads as unknown, and the level falls back to the book -- which is the
+// failure this whole lookup was added to prevent, reappearing at the one moment it matters.
+async function marketForTokenIncludingClosed(tokenId) {
+  for (const closed of ["false", "true"]) {
+    const url = new URL(`${GAMMA_API}/markets`);
+    url.searchParams.append("clob_token_ids", String(tokenId));
+    url.searchParams.set("closed", closed);
+    const markets = await fetchJson(url, `Gamma market for token ${tokenId}`);
+    if (Array.isArray(markets) && markets[0]) return markets[0];
+  }
+  return null;
+}
+
 async function declaredMarketTick(tokenId) {
   const key = String(tokenId || "");
   if (!key) return null;
-  if (marketTickCache.has(key)) return marketTickCache.get(key);
+  const cached = marketTickCache.get(key);
+  if (cached != null) return cached;
   let tick = null;
   try {
-    const market = await marketForToken(key);
+    const market = await marketForTokenIncludingClosed(key);
     const declared = number(market?.orderPriceMinTickSize);
     if (declared != null && declared > 0) tick = declared;
   } catch {
@@ -891,8 +910,13 @@ async function declaredMarketTick(tokenId) {
     // started. It must not be remembered as a coarse tick -- that is the bug, cached.
     tick = null;
   }
-  if (marketTickCache.size >= MARKET_TICK_CACHE_LIMIT) marketTickCache.clear();
-  marketTickCache.set(key, tick);
+  // Only a real answer is remembered. Caching the failure was its own bug: one transient
+  // miss pinned a position to book-only inference for as long as the worker stayed up, and
+  // a position is watched for hours. An unknown tick is retried on the next pass instead.
+  if (tick != null) {
+    if (marketTickCache.size >= MARKET_TICK_CACHE_LIMIT) marketTickCache.clear();
+    marketTickCache.set(key, tick);
+  }
   return tick;
 }
 
@@ -2504,6 +2528,11 @@ async function checkOnce(context) {
     // The grid this market actually quotes on, from the exchange and the book together --
     // reading only the book sold a position at 0.99 whose market could quote 0.999.
     const marketTick = await effectiveMarketTick(plan.tokenId, book);
+    // Recorded separately, and null when the exchange did not answer. A logged tick of
+    // 0.01 could mean "this market quotes in cents" or "the lookup failed and something
+    // defaulted", and those call for opposite fixes -- a whole round trip was spent
+    // telling them apart by hand on a sale that had already happened.
+    const declaredTick = await declaredMarketTick(plan.tokenId);
     const reason = exitReason({
       bestBidPrice: currentBestBid,
       bestAskPrice: currentBestAsk,
@@ -2529,6 +2558,10 @@ async function checkOnce(context) {
       // from the log instead of re-derived. This one sold at 0.991 against a 0.999 setting
       // and there was no record of why.
       event.marketTick = marketTick;
+      // What each source said, so the next surprise names its own cause: null here means
+      // the exchange did not answer and the book was all there was.
+      event.declaredTick = declaredTick;
+      event.observedTick = observedBookTick(book);
     }
     if (MODE !== "live" || !CONFIRM_LIVE) {
       recordEvent(context.state, {

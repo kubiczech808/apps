@@ -1897,7 +1897,22 @@ test("certainty close: the grid is the finer of what the exchange declares and w
   assert.ok(!/tick = COARSEST_MARKET_TICK/.test(lookup) && !/tick = 0\.01/.test(lookup),
     "a lookup that failed must fall back to the book, not to a coarse tick");
   // Cached, because the watch loop runs every second and a tick does not change.
-  assert.match(lookup, /if \(marketTickCache\.has\(key\)\) return marketTickCache\.get\(key\);/);
+  assert.match(lookup, /const cached = marketTickCache\.get\(key\);\n\s+if \(cached != null\) return cached;/);
+  // But ONLY a real answer is cached. Caching the failure was its own bug: one transient
+  // miss pinned a position to book-only inference for as long as the worker stayed up, and
+  // a position is watched for hours, so the level never recovered.
+  assert.match(lookup, /if \(tick != null\) \{\n\s+if \(marketTickCache\.size >= MARKET_TICK_CACHE_LIMIT\) marketTickCache\.clear\(\);\n\s+marketTickCache\.set\(key, tick\);\n\s+\}/);
+  assert.ok(!/\n  marketTickCache\.set\(key, tick\);/.test(lookup),
+    "an unknown tick must be retried next pass, not remembered");
+
+  // And the lookup must include closed markets. The certainty close fires exactly when an
+  // outcome is already decided, which is precisely when Gamma starts reporting the market
+  // closed -- asking only for open ones returned nothing at the one moment it mattered and
+  // dropped the level straight back onto the book.
+  assert.match(lookup, /marketForTokenIncludingClosed\(key\)/);
+  const bothHalves = /async function marketForTokenIncludingClosed[\s\S]*?\n\}/.exec(source)[0];
+  assert.match(bothHalves, /for \(const closed of \["false", "true"\]\)/);
+  assert.match(bothHalves, /if \(Array\.isArray\(markets\) && markets\[0\]\) return markets\[0\];/);
 
   // And the trigger must use it rather than the book alone.
   assert.match(source, /const marketTick = await effectiveMarketTick\(plan\.tokenId, book\);/);
