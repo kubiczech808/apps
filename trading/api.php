@@ -6779,6 +6779,85 @@ try {
         ]);
     }
 
+    // Build one summary the way an ACTIVE database would, while reads still come from the
+    // JSON files. Read-only, and it flips nothing.
+    //
+    // The cutover answered 500 on the dashboard and the portfolio overview. Finding out why
+    // by switching reads on again would mean taking those two views down for as long as the
+    // measurement takes, and the whole discipline here has been to measure the database path
+    // before living on it. This runs the same two steps the active path runs -- read the
+    // state document out of the database, then compact it for that summary -- and reports
+    // how long it took, how much memory it needed, and what it threw.
+    if ($action === 'summary-build-probe') {
+        $summary = (string) ($_GET['summary'] ?? 'portfolio-overview');
+        if (!in_array($summary, ['dashboard', 'portfolio-overview', 'execution', 'scraped'], true)) {
+            respond(['ok' => false, 'error' => 'Unknown summary'], 400);
+        }
+        $strategyId = isset($_GET['strategy_id']) && preg_match('/^[A-Za-z0-9_-]{1,64}$/', (string) $_GET['strategy_id'])
+            ? (string) $_GET['strategy_id']
+            : null;
+        $startedAt = microtime(true);
+        $stages = [];
+        try {
+            $document = trading_storage_document_get('state:paper');
+            $stages['documentRead'] = [
+                'seconds' => round(microtime(true) - $startedAt, 3),
+                'memoryMb' => round(memory_get_usage(true) / 1048576, 1),
+                'present' => is_array($document),
+                // What the document actually carries decides the rest: the JSON path serves
+                // these summaries from a SEGMENTED state whose portfolio trades live in
+                // separate files it never opens, and if the stored document carries them
+                // inline instead then the compaction below walks every trade of every
+                // portfolio on a view that is meant to be the cheapest one there is.
+                'portfolios' => is_array($document['paperPortfolios'] ?? null) ? count($document['paperPortfolios']) : null,
+                'tradesInline' => is_array($document['paperPortfolios'] ?? null)
+                    ? array_sum(array_map(
+                        static fn ($row): int => is_array($row['trades'] ?? null) ? count($row['trades']) : 0,
+                        $document['paperPortfolios'],
+                    ))
+                    : null,
+                'hasSegments' => isset($document['stateSegments']),
+            ];
+            if (!is_array($document)) {
+                respond(['ok' => false, 'error' => 'No state document stored', 'stages' => $stages], 200);
+            }
+            $startedCompact = microtime(true);
+            $compact = compact_state_payload('paper', $document, $summary, $strategyId, 0, 'active');
+            $stages['compact'] = [
+                'seconds' => round(microtime(true) - $startedCompact, 3),
+                'memoryMb' => round(memory_get_usage(true) / 1048576, 1),
+                'bytes' => strlen((string) json_encode($compact)),
+                'portfolios' => is_array($compact['paperPortfolios'] ?? null) ? count($compact['paperPortfolios']) : null,
+                // The overview's ROI needs these, and they are built by reading JSON segment
+                // files the stored document does not name. Counting them here says whether
+                // the column survives the cutover or quietly empties.
+                'historySummaries' => is_array($compact['paperPortfolios'] ?? null)
+                    ? count(array_filter(
+                        $compact['paperPortfolios'],
+                        static fn ($row): bool => is_array($row['historySummary'] ?? null)
+                            && (int) ($row['historySummary']['closedTradeCount'] ?? 0) > 0,
+                    ))
+                    : null,
+            ];
+        } catch (Throwable $error) {
+            $stages['threw'] = [
+                'type' => get_class($error),
+                'reason' => trading_storage_safe_migration_error($error),
+                'where' => basename($error->getFile()) . ':' . $error->getLine(),
+            ];
+        }
+        respond([
+            'ok' => true,
+            'generatedAt' => gmdate('c'),
+            'summary' => $summary,
+            'storageActive' => trading_storage_is_active(),
+            'totalSeconds' => round(microtime(true) - $startedAt, 3),
+            'memoryPeakMb' => round(memory_get_peak_usage(true) / 1048576, 1),
+            'memoryLimit' => ini_get('memory_limit'),
+            'stages' => $stages,
+        ]);
+    }
+
     if ($action === 'scan-preferences') {
         if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $saved = save_scan_preferences(request_payload());

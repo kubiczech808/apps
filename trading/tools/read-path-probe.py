@@ -60,11 +60,43 @@ def probe(label: str, path: str) -> dict:
     return {"ok": True, "seconds": seconds, "bytes": len(body), "payload": payload}
 
 
+def build_probe(summary: str) -> None:
+    """What the ACTIVE database path does for one summary, while reads stay on JSON."""
+    try:
+        request = urllib.request.Request(
+            f"{HOST}/api.php?action=summary-build-probe&summary={summary}",
+            headers={"Accept": "application/json"},
+        )
+        with urllib.request.urlopen(request, timeout=90) as response:
+            payload = json.loads(response.read().decode("utf-8") or "{}")
+    except Exception as error:  # noqa: BLE001
+        print(f"   {summary:<20} FAILED -- {error}")
+        return
+    stages = payload.get("stages") or {}
+    read = stages.get("documentRead") or {}
+    compact = stages.get("compact") or {}
+    print(f"   {summary:<20} {payload.get('totalSeconds')}s total,"
+          f" peak {payload.get('memoryPeakMb')} MB of {payload.get('memoryLimit')}")
+    print(f"      document: {read.get('seconds')}s, {read.get('portfolios')} portfolios,"
+          f" {read.get('tradesInline')} trades inline, segments named: {read.get('hasSegments')}")
+    if compact:
+        print(f"      compact:  {compact.get('seconds')}s, {compact.get('bytes')} bytes,"
+              f" {compact.get('historySummaries')} portfolios with a usable history summary")
+    if stages.get("threw"):
+        print(f"      threw:    {stages['threw']}")
+
+
 def main() -> int:
     print(f"== every view the browser asks for, against {HOST}")
     results = {}
     for label, path in VIEWS:
         results[label] = probe(label, path)
+
+    # The two views the cutover broke, built the way the database would build them, without
+    # switching reads over to find out.
+    print("\n== what the database path would produce, measured without living on it")
+    for summary in ("portfolio-overview", "dashboard"):
+        build_probe(summary)
 
     status = results.get("storage status", {}).get("payload") or {}
     print("\n== the switch")
