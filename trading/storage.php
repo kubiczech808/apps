@@ -1536,17 +1536,23 @@ function trading_storage_observations_fetch(string $lifecycle, int $limit = 0, i
         return [];
     }
     trading_storage_bootstrap($pdo);
-    // The id tie-break is what makes the order total, and paging needs it: updated_at
-    // alone has thousands of ties on this table -- one scan writes a whole page inside a
-    // single transaction -- and the database is free to return tied rows in a different
-    // order for each page. A walk over a non-total order silently misses and repeats rows.
+    // The tie-break is what makes the order total, and paging needs it: updated_at alone has
+    // thousands of ties on this table -- one scan writes a whole page inside a single
+    // transaction -- and the database is free to return tied rows in a different order for
+    // each page. A walk over a non-total order silently misses and repeats rows.
+    //
+    // It was written as `id`, and this table has no id column: its key is observation_key.
+    // So every call threw "Unknown column 'id' in 'ORDER BY'" -- on the main read path, the
+    // one the cutover switches the dashboard and the bots onto. Nothing noticed because
+    // nothing calls it while reads come from JSON. Found by timing the read against the
+    // database before switching rather than after.
     //
     // freshOnly is what the CURRENT catalogue means once the database is serving. Nothing is
     // deleted -- the history stays and the archive views read all of it -- but a market last
     // seen eleven days ago is not part of the catalogue the bots choose candidates from.
     $sql = 'SELECT payload FROM trading_observations WHERE lifecycle = :lifecycle'
         . ($freshOnly ? ' AND updated_at >= :freshSince' : '')
-        . ' ORDER BY updated_at DESC, id DESC';
+        . ' ORDER BY updated_at DESC, observation_key DESC';
     if ($limit > 0) {
         $sql .= ' LIMIT ' . min(100000, $limit);
         // OFFSET is only legal after LIMIT, so an offset on its own would quietly serve

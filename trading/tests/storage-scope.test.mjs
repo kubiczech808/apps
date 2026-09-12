@@ -307,6 +307,49 @@ test("stored time and compared time are the same clock", () => {
   }
 });
 
+test("every column the observation queries name actually exists on the table", () => {
+  // Found in production, on the main read path, by timing the read against the database
+  // before switching to it: trading_storage_observations_fetch ordered by `id`, and this
+  // table has no id column -- its key is observation_key. Every call threw "Unknown column
+  // 'id' in 'ORDER BY'". A careful comment explained why the tie-break was needed, which is
+  // exactly why it read as correct: the reasoning was right and the column was imaginary.
+  //
+  // Nothing caught it because nothing calls that function while reads come from JSON, and
+  // no test can execute MySQL here. What a test CAN do is hold the queries against the
+  // schema they run on.
+  const create = STORAGE.slice(
+    STORAGE.indexOf("CREATE TABLE IF NOT EXISTS trading_observations"),
+    STORAGE.indexOf("ENGINE=InnoDB", STORAGE.indexOf("CREATE TABLE IF NOT EXISTS trading_observations")),
+  );
+  assert.ok(create.length > 0, "the observations table definition must be findable");
+  const columns = new Set(
+    [...create.matchAll(/^\s{12}([a-z_]+) [A-Z]/gm)].map((match) => match[1]),
+  );
+  assert.ok(columns.has("observation_key") && columns.has("updated_at") && columns.has("payload"),
+    `the column list did not parse: ${[...columns].join(", ")}`);
+  assert.ok(!columns.has("id"), "this table has no id column -- that is the whole point of this test");
+
+  // Every column named in an ORDER BY of a query against this table.
+  const queries = ["trading_storage_observations_for_scope", "trading_storage_observations_fetch"];
+  for (const name of queries) {
+    const start = STORAGE.indexOf(`function ${name}`);
+    assert.ok(start > 0, `${name} must be findable`);
+    const body = STORAGE.slice(start, STORAGE.indexOf("\n}", start));
+    for (const clause of body.matchAll(/ORDER BY ([^']+)/g)) {
+      for (const column of clause[1].split(",")) {
+        const named = column.trim().split(/\s+/)[0];
+        if (!named || !/^[a-z_]+$/.test(named)) continue;
+        assert.ok(columns.has(named),
+          `${name} orders by "${named}", which is not a column of trading_observations`);
+      }
+    }
+    // And the order has to be total, or paging repeats and misses rows. observation_key is
+    // the primary key, so naming it last is what makes it so.
+    assert.match(body, /ORDER BY [^']*observation_key/,
+      `${name} must break ties on the primary key`);
+  }
+});
+
 test("the upsert writes exactly these columns", () => {
   // The extraction is only worth testing if the write still goes through it.
   const upsert = STORAGE.slice(

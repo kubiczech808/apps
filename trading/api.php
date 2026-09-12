@@ -6803,23 +6803,29 @@ try {
         // no use at all for deciding whether the database can serve the request. These two
         // are the numbers the cutover turns on: the whole catalogue is what collapsed the
         // host at 58 seconds, and the scoped walk is what replaces it.
+        // Timed separately, each in its own try. Sharing one made the first failure stand in
+        // as the second's result -- and the first DID fail, on a column that does not exist,
+        // so the read that replaces it went unmeasured behind an error it never had.
+        $timeSqlRead = static function (callable $read, string $countKey): array {
+            $started = microtime(true);
+            try {
+                $rows = $read();
+                return [$countKey => count($rows), 'seconds' => round(microtime(true) - $started, 3)];
+            } catch (Throwable $error) {
+                return ['error' => trading_storage_safe_migration_error($error), 'seconds' => round(microtime(true) - $started, 3)];
+            }
+        };
         $sqlCatalogue = null;
         $sqlScoped = null;
         if (function_exists('trading_storage_observations_fetch')) {
-            try {
-                $startedSqlAll = microtime(true);
-                $sqlRows = trading_storage_observations_fetch('SCRAPED', 0, 0, true);
-                $sqlCatalogue = ['read' => count($sqlRows), 'seconds' => round(microtime(true) - $startedSqlAll, 3)];
-                unset($sqlRows);
-
-                $startedSqlScope = microtime(true);
-                $scopedRows = execution_scope_observations_from_storage($scopeConfig);
-                $sqlScoped = ['kept' => count($scopedRows), 'seconds' => round(microtime(true) - $startedSqlScope, 3)];
-                unset($scopedRows);
-            } catch (Throwable $error) {
-                $sqlCatalogue = $sqlCatalogue ?? ['error' => trading_storage_safe_migration_error($error)];
-                $sqlScoped = $sqlScoped ?? ['error' => trading_storage_safe_migration_error($error)];
-            }
+            $sqlCatalogue = $timeSqlRead(
+                static fn (): array => trading_storage_observations_fetch('SCRAPED', 0, 0, true),
+                'read',
+            );
+            $sqlScoped = $timeSqlRead(
+                static fn (): array => execution_scope_observations_from_storage($scopeConfig),
+                'kept',
+            );
         }
 
         $startedQuery = microtime(true);
