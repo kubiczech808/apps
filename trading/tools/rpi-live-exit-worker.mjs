@@ -914,24 +914,30 @@ export function __resetMarketTickBackoffForTests(tokenId) {
   marketTickRetryAt.delete(String(tokenId || ""));
 }
 
-// Both halves of the market list, closed included.
+// The grid the EXCHANGE enforces, asked of the exchange.
 //
-// marketForToken asks with closed=false, which is right for the reversal that uses it. Here
-// the worry was that a decided market -- which is exactly when this fires -- would have
-// dropped out of the open half. Measured on the two markets that actually sold early, that
-// is NOT what happened: both were still returned by closed=false, both declaring 0.001. So
-// this is robustness rather than the fix, and the fix is the backoff above; it is kept
-// because a market that does close between passes would otherwise lose its tick outright,
-// and one extra request only happens when the open half came back empty.
-async function marketForTokenIncludingClosed(tokenId) {
-  for (const closed of ["false", "true"]) {
-    const url = new URL(`${GAMMA_API}/markets`);
-    url.searchParams.append("clob_token_ids", String(tokenId));
-    url.searchParams.set("closed", closed);
-    const markets = await fetchJson(url, `Gamma market for token ${tokenId}`);
-    if (Array.isArray(markets) && markets[0]) return markets[0];
-  }
-  return null;
+// This replaces Gamma's orderPriceMinTickSize, and it replaces it because Gamma was
+// measured wrong in the direction that costs money. The fourth early sale recorded:
+//
+//   "Games Total: O/U 3.5"  bestBid 0.99  settlementCloseBid 0.999
+//   settlementCloseBidInForce 0.99  marketTick 0.01  declaredTick 0.01  observedTick 0.01
+//
+// declaredTick 0.01 means Gamma did not fail -- it answered, and it answered 0.01. Asked
+// again about the same token, the CLOB says minimum_tick_size 0.001, /clob-markets says
+// mts 0.001, the book is quoting 0.999 across 23 levels, and Gamma itself now says 0.001.
+// So that 0.01 was Gamma being momentarily coarse, and a momentary 0.01 is enough: it
+// arrives exactly when the market is at certainty, which is the one moment it is read.
+//
+// The same probe found /tick-size still answering for markets that have since resolved,
+// where Gamma returns nothing at all -- which is the case the closed=true half used to be
+// here for. One endpoint now covers both, and it is the one the exchange judges orders by.
+async function clobMinimumTickSize(tokenId) {
+  const payload = await fetchJson(
+    `${CLOB_HOST}/tick-size?token_id=${encodeURIComponent(String(tokenId))}`,
+    `CLOB tick size for token ${tokenId}`,
+  );
+  const tick = number(payload?.minimum_tick_size ?? payload?.minimumTickSize ?? payload);
+  return tick != null && tick > 0 ? tick : null;
 }
 
 async function declaredMarketTick(tokenId) {
@@ -944,9 +950,7 @@ async function declaredMarketTick(tokenId) {
   if (retryAt != null && Date.now() < retryAt) return null;
   let tick = null;
   try {
-    const market = await marketForTokenIncludingClosed(key);
-    const declared = number(market?.orderPriceMinTickSize);
-    if (declared != null && declared > 0) tick = declared;
+    tick = await clobMinimumTickSize(key);
   } catch {
     // A lookup that fails leaves the book as the only evidence, which is where this
     // started. It must not be remembered as a coarse tick -- that is the bug, cached.
@@ -1135,19 +1139,29 @@ async function lookupOrder(orderId) {
 // sit on the market's tick grid, and a neg-risk market must be declared as one. The executor
 // has always read both (see roundToTick and the tickSize/negRisk options it passes); this
 // worker sent a raw price and an empty options object.
-async function exchangeConstraintsForToken(tokenId) {
+export async function exchangeConstraintsForToken(tokenId) {
+  // The SAME grid the trigger decided on, from the same cached lookup.
+  //
+  // These were two different sources, and the log holds a position that paid for it:
+  // "Counter-Strike: ShindeN vs Fluxo W7M" triggered with marketTick 0.001 against a book
+  // quoting 0.999, and the order it placed went out tickSize 0.01 exitPrice 0.99. The
+  // decision and the order disagreed about what the market could quote, so waiting for
+  // 0.999 bought nothing -- the sell was rounded back down to 0.99 on the way out.
+  const tick = await declaredMarketTick(tokenId);
+  let negRisk;
   try {
+    // Gamma is still asked, but only for neg risk -- which is a property of the event and
+    // not a number that moves. Its tick reading is what sold three positions early.
     const market = await marketForToken(tokenId);
-    const tick = number(market?.orderPriceMinTickSize);
-    return {
-      tickSize: tick != null && tick > 0 ? tick : 0.01,
-      negRisk: typeof market?.negRisk === "boolean" ? market.negRisk : undefined,
-    };
+    if (typeof market?.negRisk === "boolean") negRisk = market.negRisk;
   } catch {
-    // A market lookup that fails must not stop the exit. 0.01 is the CLOB's ordinary tick
-    // and is a valid multiple of every finer one, so an order priced on it stays valid.
-    return { tickSize: 0.01, negRisk: undefined };
+    // Unknown neg risk is passed as unknown, so the CLOB client asks for itself. Turning it
+    // into a confident false is what deadlocked neg-risk exits in the executor.
   }
+  // 0.01 only when the exchange did not answer at all. It is a valid multiple of every
+  // finer grid, so an order priced on it is still accepted -- and a settlement close can no
+  // longer reach here with an unknown tick, because an unknown grid does not fire it.
+  return { tickSize: tick != null && tick > 0 ? tick : 0.01, negRisk };
 }
 
 export function roundToTick(value, tick, direction = "nearest") {
