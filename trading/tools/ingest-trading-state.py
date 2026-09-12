@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import time
 import urllib.error
 import urllib.request
 from datetime import datetime, timedelta, timezone
@@ -64,6 +65,34 @@ def post(url: str, key: str, payload: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(data, dict) or not data.get("ok"):
         raise RuntimeError("storage API rejected the ingest")
     return data
+
+
+# Every part that failed after its retry, so the step can say so instead of exiting 0 quietly.
+MIRROR_FAILURES: list[str] = []
+
+
+def try_post(url: str, key: str, payload: dict[str, Any], label: str) -> dict[str, Any]:
+    """One part of the mirror, whose failure must not cancel the parts after it.
+
+    Measured, not supposed: every scan and bot pass reported this step as a success while
+    the database went two hours without a write. The state document, the portfolios, the
+    events and the trades all went in one request, and the observation batches came after
+    it -- so a single oversized or slow request raised, unwound the whole function, and the
+    27 batches of catalogue that were the point of the mirror were never sent. The step then
+    exited 0, because the mirror is deliberately optional.
+
+    Each part is now sent and judged on its own, retried once for a transient failure, and
+    a part that still fails is recorded and reported rather than swallowed.
+    """
+    for attempt in range(2):
+        try:
+            return post(url, key, payload)
+        except (urllib.error.HTTPError, urllib.error.URLError, OSError, ValueError, RuntimeError) as error:
+            if attempt == 0:
+                time.sleep(3)
+                continue
+            MIRROR_FAILURES.append(f"{label}: {error}")
+    return {}
 
 
 def segment_paths(state_file: Path, state: dict[str, Any]) -> dict[str, Path]:
@@ -256,17 +285,16 @@ def ingest_paper(url: str, key: str, state_file: Path, state: dict[str, Any], ta
             events.extend(event_rows("portfolio-run-log", portfolio_id, [slim_run_log_row(row) for row in list_rows(portfolio.get("runLog"))]))
             trades.extend(trade_rows("paper", portfolio_id, list_rows(portfolio.get("trades"))))
 
-    # Trades go in their own batches so one large portfolio cannot push another out of the
-    # single request, and so a batch that fails does not take the state document with it.
-    post(url, key, {
-        "target": target,
-        "state": state,
-        "paperPortfolios": portfolio_states,
-        "events": events[:1000],
-        "trades": trades[:2000],
-    })
-    for start in range(2000, len(trades), 2000):
-        post(url, key, {"target": target, "trades": trades[start:start + 2000]})
+    # Four separate requests rather than one. They used to be combined, and the combined one
+    # is the largest the mirror sends: the whole state document, every portfolio, a thousand
+    # events and two thousand trades. When it started failing, it raised before the first
+    # observation batch and the catalogue -- the part the cutover depends on -- went unsent
+    # for hours while the step reported success.
+    try_post(url, key, {"target": target, "state": state}, "state document")
+    try_post(url, key, {"target": target, "paperPortfolios": portfolio_states}, "portfolios")
+    try_post(url, key, {"target": target, "events": events[:1000]}, "events")
+    for start in range(0, len(trades), 2000):
+        try_post(url, key, {"target": target, "trades": trades[start:start + 2000]}, f"trades {start}")
 
     imported = 0
     batches = 0
@@ -289,7 +317,11 @@ def ingest_paper(url: str, key: str, state_file: Path, state: dict[str, Any], ta
         if field == "resolvedMarketObservations":
             rows = recently_resolved(rows)
         for offset in range(0, len(rows), 300):
-            result = post(url, key, {"target": target, "observations": rows[offset:offset + 300]})
+            result = try_post(
+                url, key,
+                {"target": target, "observations": rows[offset:offset + 300]},
+                f"{field} {offset}",
+            )
             imported += int(((result.get("ingest") or {}).get("observations") or 0))
             batches += 1
     return imported, batches
@@ -333,18 +365,28 @@ def main() -> int:
             live_trades = trade_rows("live", "", list_rows(state.get("positions"))) \
                 + trade_rows("live", "", list_rows(state.get("closedTrades")))
             attributed = sum(1 for row in live_trades if str(row.get("portfolioId") or "").strip())
-            post(url, key, {
+            try_post(url, key, {"target": target, "state": state}, "state document")
+            try_post(url, key, {
                 "target": target,
-                "state": state,
                 "events": event_rows("state-run-log", target, [slim_run_log_row(row) for row in list_rows(state.get("runLog"))]),
-                "trades": live_trades[:2000],
-            })
-            for start in range(2000, len(live_trades), 2000):
-                post(url, key, {"target": target, "trades": live_trades[start:start + 2000]})
+            }, "events")
+            for start in range(0, len(live_trades), 2000):
+                try_post(url, key, {"target": target, "trades": live_trades[start:start + 2000]}, f"trades {start}")
             print(
                 f"Mirrored {target} state, {len(live_trades)} trade(s)"
                 f" ({attributed} with a portfolio, {len(live_trades) - attributed} still unattributed)"
             )
+        # A mirror that stops has no symptom of its own: reads still come from the JSON
+        # files, so nothing on the dashboard changes and the step goes on exiting 0. Say it
+        # here, where the step log is read, and name the parts.
+        if MIRROR_FAILURES:
+            print(
+                f"Trading SQL mirror INCOMPLETE: {len(MIRROR_FAILURES)} part(s) failed"
+                f" -- {'; '.join(MIRROR_FAILURES[:6])}",
+                file=sys.stderr,
+            )
+            print(f"::warning::Trading SQL mirror incomplete: {len(MIRROR_FAILURES)} part(s) failed")
+            return 1 if required else 0
         return 0
     except (OSError, ValueError, RuntimeError, urllib.error.URLError, urllib.error.HTTPError) as error:
         print(f"Trading SQL mirror failed: {error}", file=sys.stderr)
