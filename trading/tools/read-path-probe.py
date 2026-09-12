@@ -102,6 +102,11 @@ def build_probe(summary: str) -> None:
     if compact:
         print(f"      compact:  {compact.get('seconds')}s, {compact.get('bytes')} bytes,"
               f" {compact.get('historySummaries')} portfolios with a usable history summary")
+    history = stages.get("historyFromStorage") or {}
+    if history:
+        print(f"      history:  {history.get('seconds')}s from stored documents,"
+              f" {history.get('portfoliosWithHistory')} portfolios with a closed-trade history"
+              f" (this is what the ROI column reads)")
     if stages.get("threw"):
         print(f"      threw:    {stages['threw']}")
 

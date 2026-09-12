@@ -2630,12 +2630,24 @@ function compact_dashboard_paper_portfolio(array $portfolio, bool $includeTrades
  * needs the first trade timestamp for ROI, so each segment is read separately and
  * reduced to its small history summary before the next segment is opened.
  */
-function attach_paper_portfolio_history_summaries(array &$data): void
+function attach_paper_portfolio_history_summaries(array &$data, ?bool $fromStorage = null): void
 {
     if (!isset($data['paperPortfolios']) || !is_array($data['paperPortfolios']) || $data['paperPortfolios'] === []) {
         return;
     }
 
+    // Where a portfolio's trades are, which is not where its row is.
+    //
+    // The overview row carries the portfolio's balances and an EMPTY trade list -- that is
+    // what makes switching portfolios cheap -- so the summary has to be built from the full
+    // record, and the full record lives beside it: one JSON segment file per portfolio, or
+    // one stored document per portfolio once the database is serving.
+    //
+    // Measured on the database path before switching to it: with only the segment-file
+    // lookup, every one of the 36 portfolios came back with an empty summary, because the
+    // stored state document deliberately does not name segment files. Nothing errored. The
+    // overview's ROI column would simply have gone blank, and the accuracy with it.
+    $storageActive = $fromStorage ?? trading_storage_is_active();
     $corePath = state_file_paths()['paper'];
     foreach ($data['paperPortfolios'] as $id => &$portfolio) {
         if (!is_array($portfolio)) {
@@ -2643,15 +2655,23 @@ function attach_paper_portfolio_history_summaries(array &$data): void
         }
 
         $source = $portfolio;
-        $segmentPath = state_segment_path($data, $corePath, 'portfolio:' . (string) $id);
-        if ($segmentPath !== null) {
-            $segment = decode_state_file($segmentPath, false);
-            if (is_array($segment['paperPortfolio'] ?? null)) {
-                $source = $segment['paperPortfolio'];
+        if ($storageActive) {
+            $stored = trading_storage_document_get('paper-portfolio:' . (string) $id);
+            if (is_array($stored)) {
+                $source = $stored;
             }
-            unset($segment);
+        } else {
+            $segmentPath = state_segment_path($data, $corePath, 'portfolio:' . (string) $id);
+            if ($segmentPath !== null) {
+                $segment = decode_state_file($segmentPath, false);
+                if (is_array($segment['paperPortfolio'] ?? null)) {
+                    $source = $segment['paperPortfolio'];
+                }
+                unset($segment);
+            }
         }
         $portfolio['historySummary'] = paper_portfolio_history_summary($source);
+        unset($stored);
     }
     unset($portfolio);
 }
@@ -6851,6 +6871,24 @@ try {
                     ))
                     : null,
             ];
+
+            // The history summaries built the way an ACTIVE database builds them: from the
+            // stored per-portfolio documents rather than from JSON segment files the stored
+            // state does not name. This is where the overview's ROI and accuracy come from,
+            // and with reads still on JSON it is the only way to see whether they survive.
+            $startedHistory = microtime(true);
+            $storageView = $document;
+            attach_paper_portfolio_history_summaries($storageView, true);
+            $stages['historyFromStorage'] = [
+                'seconds' => round(microtime(true) - $startedHistory, 3),
+                'memoryMb' => round(memory_get_usage(true) / 1048576, 1),
+                'portfoliosWithHistory' => count(array_filter(
+                    is_array($storageView['paperPortfolios'] ?? null) ? $storageView['paperPortfolios'] : [],
+                    static fn ($row): bool => is_array($row['historySummary'] ?? null)
+                        && (int) ($row['historySummary']['closedTradeCount'] ?? 0) > 0,
+                )),
+            ];
+            unset($storageView);
         } catch (Throwable $error) {
             $stages['threw'] = [
                 'type' => get_class($error),
