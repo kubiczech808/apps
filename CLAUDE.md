@@ -49,6 +49,25 @@ přes rozbitou funkci, takže platí konkrétní pravidla, ne zásada:
 - `email-campaign/` je **jiný projekt**. Nepleť ho do trading zadání.
 - `.rpi-cmd*` patří do repozitáře *openclaw*, ne sem.
 
+## Čtení jde z MySQL (od 12. 9. 2026)
+
+Dashboard i boti čtou z databáze, ne z JSON souborů. Mirror zapisuje dál a JSON
+soubory se publikují dál — jsou záložní zdroj i vstup migrace.
+
+- **Vrátit zpět:** `trading-storage-migration.yml`, operation `deactivate`. Jeden krok,
+  účinkuje okamžitě.
+- **Ověřit:** `trading-read-path-check.yml` projde všechny pohledy, které načítá
+  prohlížeč, a vypíše stav, čas a velikost každého. Žádný nesmí selhat ani přesáhnout
+  ~5 s (dashboard dává requestům 10).
+- **Změřit bez přepnutí:** `api.php?action=summary-build-probe&summary=…` postaví
+  pohled tak, jak ho staví aktivní databáze, i když se čte z JSON. Takhle se našly
+  chyby, které se jinak projeví až výpadkem.
+- **Katalog je teď ~3× větší** (26 000 čerstvých trhů proti 8 000 v souboru). Limit
+  8 000 existoval kvůli velikosti jednoho JSON souboru; databáze ho nepotřebuje.
+
+Naměřeno při přepnutí: nejpomalejší pohled 3,0 s, exekuční shortlist 1,76 s, scoped
+dotaz proti čtení celého katalogu 9,3× rychlejší.
+
 ## Měření produkce
 
 Polymarket a `osobnizkusenosti.cz` jsou z kontejneru blokované egress proxy.
