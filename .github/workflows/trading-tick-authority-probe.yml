@@ -10,6 +10,12 @@ name: Trading Tick Authority Probe
 # settled by measurement rather than by a fourth guess.
 on:
   workflow_dispatch:
+    inputs:
+      tokens:
+        description: "Optional: name|tokenId|note per line, to ask about a sale that just happened"
+        required: false
+        default: ""
+        type: string
 
 permissions:
   contents: read
@@ -26,4 +32,6 @@ jobs:
 
       - name: Ask every tick source about the markets that sold early
         working-directory: trading
+        env:
+          PROBE_TOKENS: ${{ inputs.tokens }}
         run: node tools/tick-authority-probe.mjs

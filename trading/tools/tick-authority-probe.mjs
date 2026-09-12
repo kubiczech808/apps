@@ -20,8 +20,22 @@
 const CLOB = process.env.POLYMARKET_HOST || "https://clob.polymarket.com";
 const GAMMA = process.env.POLYMARKET_GAMMA_API || "https://gamma-api.polymarket.com";
 
+// Tokens to ask about. PROBE_TOKENS overrides the built-in list -- a sale that needs
+// checking today should not need a commit to be checked. Each entry is
+// "name|tokenId|history", pipe separated, and entries are separated by a newline or a
+// semicolon so a workflow input can carry several.
+const OVERRIDE = (process.env.PROBE_TOKENS || "")
+  .split(/[\n;]+/)
+  .map((line) => line.trim())
+  .filter(Boolean)
+  .map((line) => {
+    const [name, tokenId, history] = line.split("|").map((part) => (part || "").trim());
+    return [name || tokenId, tokenId, history || "asked for by hand"];
+  })
+  .filter(([, tokenId]) => tokenId);
+
 // Each of these is a real sale or refusal from the worker's retained event history.
-const TOKENS = [
+const BUILT_IN = [
   ["Games Total: O/U 3.5 (Over)", "40135636771341807086343266882804236111907598997089201361044713543663191056013", "sold 0.99, declared 0.01, observed 0.01"],
   ["Will Club Necaxa win on 2026-09-11? (No)", "101333938763946898041359407170227153168231812340400512047889772793009020179368", "sold 0.99, declared 0.01, observed 0.01"],
   ["Counter-Strike: NRG vs Liquid - Map 1 (NRG)", "49103086335843746943080464065606384548362481119622285970929490209234841502009", "sold 0.99, declared 0.01, observed 0.01"],
@@ -30,6 +44,7 @@ const TOKENS = [
   ["Spread: Boston College (-10.5) (Rutgers)", "13752732952183784887892240670011155093695859771911986081846556046532097836790", "FILLED 0.999, declared 0.01, observed 0.001"],
   ["Counter-Strike: ShindeN vs Fluxo W7M", "72245798338877459932125160509082456228346658574448978951203304392248546697997", "trigger tick 0.001 but the ORDER went out tick 0.01 px 0.99"],
 ];
+const TOKENS = OVERRIDE.length ? OVERRIDE : BUILT_IN;
 
 async function getJson(url, label) {
   const response = await fetch(url, { headers: { accept: "application/json" } });
