@@ -1773,7 +1773,10 @@ test("certainty close: the level is clamped to a price a book can actually quote
   // the same tick the trigger read -- with the tick itself beside them, because this sale
   // happened below its stored setting and nothing in the log said why.
   const source = readFileSync(new URL("../tools/rpi-live-exit-worker.mjs", import.meta.url), "utf8");
-  assert.match(source, /const marketTick = observedBookTick\(book\);/);
+  // The trigger reads the market's own grid rather than a global constant. It used to read
+  // the book alone; that missed a fine grid whenever the book was quoting round numbers, so
+  // it now takes the exchange's declared tick into account as well.
+  assert.match(source, /const marketTick = await effectiveMarketTick\(plan\.tokenId, book\);/);
   assert.match(source, /settlementCloseBid: plan\.settlementCloseBid,\n\s+tickSize: marketTick,/);
   assert.match(source, /event\.settlementCloseBidInForce = reachableSettlementCloseBid\(plan\.settlementCloseBid, marketTick\);/);
   assert.match(source, /event\.marketTick = marketTick;/);
@@ -1852,4 +1855,52 @@ test("settlement close: terminality earned by the defect is released, the exchan
   assert.match(source, /share count was missing\|shares are dust/);
   assert.match(source, /&& number\(plan\.shares\) != null && number\(plan\.shares\) >= DUST_SHARES/,
     "release it only once the plan can actually size an order, or it retries into the same refusal");
+});
+
+test("certainty close: the grid is the finer of what the exchange declares and what the book shows", async () => {
+  // Reported, and recorded in the worker's own event history:
+  //
+  //   "Coritiba FBC vs. CA Paranaense: O/U 1.5"  bestBid 0.99  ask null
+  //   settlementCloseBid 0.999  settlementCloseBidInForce 0.99  marketTick 0.01
+  //   ...and the order it then placed went out with tickSize 0.001
+  //
+  // Reading the book alone was not enough. Every visible price was a round cent, so the
+  // book read as a 0.01 grid and the setting was clamped to 0.99 -- while the exchange's
+  // own declared tick, sitting on the other side of the same event, said 0.001. The
+  // position was sold below a certainty it could have reached.
+  const source = readFileSync(new URL("../tools/rpi-live-exit-worker.mjs", import.meta.url), "utf8");
+
+  const roundCentBook = { bids: [{ price: "0.99", size: "100" }], asks: [] };
+  assert.equal(worker.observedBookTick(roundCentBook), 0.01,
+    "a book quoting only round cents cannot prove a finer grid on its own");
+
+  // Which is exactly why the declared tick has to be consulted too.
+  const fires = (bid, tickSize) => worker.exitReason({
+    bestBidPrice: bid, stopPrice: null, triggerPrice: null, settlementCloseBid: 0.999, tickSize,
+  });
+  assert.equal(fires(0.99, 0.001), null, "0.99 is not certainty on a market that can quote 0.999");
+  assert.equal(fires(0.99, 0.01), "settlement", "but it is certainty on a market that cannot");
+  assert.equal(fires(0.999, 0.001), "settlement");
+
+  // The finer of the two, in BOTH directions. Each source has been seen too coarse on its
+  // own and each failure loses money the same way: the book missed a fine grid here, and
+  // the worker's log also holds an exit priced "tick 0.01" against a book quoting 0.999.
+  const pick = /export async function effectiveMarketTick[\s\S]*?\n\}/.exec(source);
+  assert.ok(pick, "the combined tick rule must be findable");
+  assert.match(pick[0], /Math\.min\(declared, observed\)/);
+  assert.match(pick[0], /if \(declared == null\) return observed;/);
+
+  // A failed lookup must not be remembered as a coarse tick: that is this bug, cached, and
+  // it would keep selling early for as long as the worker stayed up.
+  const lookup = /async function declaredMarketTick[\s\S]*?\n\}/.exec(source)[0];
+  assert.match(lookup, /tick = null;/);
+  assert.ok(!/tick = COARSEST_MARKET_TICK/.test(lookup) && !/tick = 0\.01/.test(lookup),
+    "a lookup that failed must fall back to the book, not to a coarse tick");
+  // Cached, because the watch loop runs every second and a tick does not change.
+  assert.match(lookup, /if \(marketTickCache\.has\(key\)\) return marketTickCache\.get\(key\);/);
+
+  // And the trigger must use it rather than the book alone.
+  assert.match(source, /const marketTick = await effectiveMarketTick\(plan\.tokenId, book\);/);
+  assert.ok(!/const marketTick = observedBookTick\(book\);/.test(source),
+    "the trigger must not go back to reading only the book");
 });

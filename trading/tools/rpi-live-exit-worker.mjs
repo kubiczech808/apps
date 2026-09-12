@@ -863,6 +863,54 @@ export function observedBookTick(book = {}) {
   return MARKET_TICK_CANDIDATES[MARKET_TICK_CANDIDATES.length - 1];
 }
 
+// The market's declared tick, remembered per token.
+//
+// Reading the book alone was not enough, and a position paid for it within the hour:
+// "Coritiba FBC vs. CA Paranaense: O/U 1.5" quoted bid 0.99 with no ask, every visible
+// price a round cent, so the book read as a 0.01 grid and 0.999 was clamped to 0.99. The
+// market's real tick is 0.001 -- the order this very sale placed went out priced on it.
+// The evidence was in hand on the other side of the same event and the trigger never saw it.
+//
+// A tick is a property of the market, so it is fetched once per token and kept. The lookup
+// is a network call and the watch loop runs every second; a cache is what makes asking at
+// all affordable.
+const marketTickCache = new Map();
+const MARKET_TICK_CACHE_LIMIT = 4000;
+
+async function declaredMarketTick(tokenId) {
+  const key = String(tokenId || "");
+  if (!key) return null;
+  if (marketTickCache.has(key)) return marketTickCache.get(key);
+  let tick = null;
+  try {
+    const market = await marketForToken(key);
+    const declared = number(market?.orderPriceMinTickSize);
+    if (declared != null && declared > 0) tick = declared;
+  } catch {
+    // A lookup that fails leaves the book as the only evidence, which is where this
+    // started. It must not be remembered as a coarse tick -- that is the bug, cached.
+    tick = null;
+  }
+  if (marketTickCache.size >= MARKET_TICK_CACHE_LIMIT) marketTickCache.clear();
+  marketTickCache.set(key, tick);
+  return tick;
+}
+
+// The FINER of what the exchange declares and what the book demonstrates.
+//
+// Both can be too coarse on their own and each failure costs money in the same direction.
+// The book misses a fine grid whenever it happens to be quoting round numbers, which is
+// what sold Coritiba at 0.99. And the declared tick has been seen too coarse as well --
+// the worker's own log holds an exit priced "tick 0.01" against a book quoting 0.999.
+// Taking the finer of the two believes whichever one proves the market can quote closer to
+// certainty, and neither can drag the level down alone.
+export async function effectiveMarketTick(tokenId, book) {
+  const observed = observedBookTick(book);
+  const declared = await declaredMarketTick(tokenId);
+  if (declared == null) return observed;
+  return Math.min(declared, observed);
+}
+
 export function reachableSettlementCloseBid(closeBid, tickSize = COARSEST_MARKET_TICK) {
   const level = number(closeBid);
   if (level == null || !(level > 0)) return null;
@@ -2453,9 +2501,9 @@ async function checkOnce(context) {
       // price" without anyone having to re-derive it from the bid.
       crossing: crossing ? { recoveredFraction: crossing.recoveredFraction, gapped: crossing.gapped } : null,
     };
-    // Read from the book in hand, so the certainty close is measured against the grid this
-    // market actually quotes on rather than the coarsest one any market might use.
-    const marketTick = observedBookTick(book);
+    // The grid this market actually quotes on, from the exchange and the book together --
+    // reading only the book sold a position at 0.99 whose market could quote 0.999.
+    const marketTick = await effectiveMarketTick(plan.tokenId, book);
     const reason = exitReason({
       bestBidPrice: currentBestBid,
       bestAskPrice: currentBestAsk,
