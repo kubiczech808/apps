@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 import os
 import time
+import urllib.error
 import urllib.request
 
 HOST = os.environ.get("TRADING_HOST", "https://osobnizkusenosti.cz/trading").rstrip("/")
@@ -43,6 +44,21 @@ def probe(label: str, path: str) -> dict:
             body = response.read()
             seconds = time.time() - started
             payload = json.loads(body.decode("utf-8") or "{}")
+    except urllib.error.HTTPError as error:  # noqa: PERF203
+        seconds = time.time() - started
+        # The body is where the answer is. api.php turns a caught exception into a 502 with
+        # its message and a PHP fatal into a 500 with the file, the line and the peak memory;
+        # urllib raises on the status before anything reads either, which is how a cutover
+        # failure came to be nothing but a number.
+        detail = ""
+        try:
+            detail = error.read().decode("utf-8")[:600]
+        except OSError:
+            detail = ""
+        print(f"   {label:<20} FAILED after {seconds:6.2f}s -- HTTP {error.code}")
+        if detail:
+            print(f"      body: {detail}")
+        return {"ok": False, "seconds": seconds}
     except Exception as error:  # noqa: BLE001
         seconds = time.time() - started
         print(f"   {label:<20} FAILED after {seconds:6.2f}s -- {error}")

@@ -1,0 +1,82 @@
+name: Trading Read Path Window
+
+# Switch reads to the database, measure every view, switch them back -- in ONE job, so the
+# window cannot be left open by a forgotten second dispatch.
+#
+# Why this exists: the cutover answered 500 on the dashboard and the portfolio overview,
+# and rebuilding those two summaries through the database path OUTSIDE a live request does
+# not reproduce it -- 0.04 seconds, 34 MB of 512, no exception. So the fault is in something
+# only a live request with the switch on does, and the only way to read it is to be in that
+# state for a few seconds while something is watching.
+#
+# api.php now turns a PHP fatal into a JSON body with the file, the line and the peak memory,
+# which is what makes those few seconds worth anything at all.
+#
+# The deactivate step runs with if: always(), so a failed or cancelled measurement still
+# closes the window. Manual only, and it requires typing the confirmation.
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: "Type WINDOW to allow reads to be switched on and off again"
+        required: true
+        default: ""
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  window:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Refuse without the confirmation
+        run: |
+          if [ "${{ inputs.confirm }}" != "WINDOW" ]; then
+            echo "::error::Type WINDOW to run this. It switches production reads over for a few seconds."
+            exit 1
+          fi
+
+      - name: Switch reads to the database
+        env:
+          TRADING_TRIGGER_KEY: ${{ secrets.POLYTRADING_DB_PASSWORD }}
+        run: |
+          python3 - <<'PY'
+          import json, os, urllib.request
+          url = "https://www.osobnizkusenosti.cz/trading/api.php?action=storage-admin"
+          body = json.dumps({"operation": "activate"}).encode()
+          request = urllib.request.Request(url, data=body, method="POST", headers={
+              "Content-Type": "application/json",
+              "X-Trading-Trigger-Key": os.environ["TRADING_TRIGGER_KEY"],
+          })
+          with urllib.request.urlopen(request, timeout=60) as response:
+              print(response.read().decode()[:400])
+          PY
+
+      - name: Measure every view while it is on
+        env:
+          TRADING_HOST: https://osobnizkusenosti.cz/trading
+          STRATEGY_ID: highReward
+        run: python3 trading/tools/read-path-probe.py
+
+      # Always. A measurement that fails, times out or is cancelled must still hand the
+      # reads back -- leaving this on is the one outcome that is not allowed.
+      - name: Switch reads back to the JSON files
+        if: always()
+        env:
+          TRADING_TRIGGER_KEY: ${{ secrets.POLYTRADING_DB_PASSWORD }}
+        run: |
+          python3 - <<'PY'
+          import json, os, urllib.request
+          url = "https://www.osobnizkusenosti.cz/trading/api.php?action=storage-admin"
+          body = json.dumps({"operation": "deactivate"}).encode()
+          request = urllib.request.Request(url, data=body, method="POST", headers={
+              "Content-Type": "application/json",
+              "X-Trading-Trigger-Key": os.environ["TRADING_TRIGGER_KEY"],
+          })
+          with urllib.request.urlopen(request, timeout=60) as response:
+              print(response.read().decode()[:400])
+          PY
