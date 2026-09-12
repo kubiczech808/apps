@@ -6553,3 +6553,75 @@ test("catalogue overview: every count is the list it opens", () => {
   // The overview counts the rows the list shows, not a set of its own.
   assert.match(APP, /const \{ filtered \} = filteredScrapedObservations\(\);/);
 });
+
+test("scan log: New counts what joined the tradable catalogue, not what was fetched", () => {
+  // Reported from the log: "3 927 / 3 029" beside "catalogue +12". Thousands of markets are
+  // re-read every pass and almost none of them join the active set -- they are dropped for
+  // their tag, their horizon, or the 8000 cap. A column headed New that reports the fetch
+  // tells a reader the opposite of what happened, and the number in the column is the one
+  // they take away.
+  const counts = new Function("previousRows", "scannedKeysIn", "retainedRows", `
+    const marketObservationKey = (item) => item.key;
+    const isActive = (item) => String(item?.status || item?.selectionStatus || "").toUpperCase() !== "RESOLVED";
+    const previousActiveKeys = new Set(previousRows.filter(isActive).map(marketObservationKey));
+    const activeAfterRetention = retainedRows.filter(isActive);
+    const retainedActiveKeys = new Set(activeAfterRetention.map(marketObservationKey));
+    const scannedKeys = new Set(scannedKeysIn);
+    return {
+      newObservationCount: [...retainedActiveKeys].filter((key) => !previousActiveKeys.has(key)).length,
+      updatedObservationCount: [...retainedActiveKeys]
+        .filter((key) => previousActiveKeys.has(key) && scannedKeys.has(key)).length,
+      netObservationCount: activeAfterRetention.length - previousRows.filter(isActive).length,
+    };
+  `);
+
+  const active = (key) => ({ key, status: "SCRAPED" });
+  // Three markets were already held. The scan read five: the three again, plus two new --
+  // of which retention kept only one. Everything else it fetched never made the catalogue.
+  const previous = [active("a"), active("b"), active("c")];
+  const scanned = ["a", "b", "c", "d", "e", "f", "g", "h"];
+  const retained = [active("a"), active("b"), active("c"), active("d")];
+  const result = counts(previous, scanned, retained);
+
+  assert.equal(result.newObservationCount, 1, "only the market that actually joined counts as new");
+  assert.equal(result.updatedObservationCount, 3, "the ones re-read and still held count as updated");
+  assert.equal(result.netObservationCount, 1);
+
+  // A pass that fetches thousands and keeps none reports zero, which is the point.
+  const nothingKept = counts(previous, ["x", "y", "z"], previous);
+  assert.equal(nothingKept.newObservationCount, 0, "a fetch that joined nothing is not news");
+  assert.equal(nothingKept.updatedObservationCount, 0, "and it updated nothing either");
+
+  // A market that resolved out of the active set is not "updated": it is gone, and a
+  // portfolio can no longer trade it.
+  const oneResolved = counts(previous, ["a", "b", "c"], [active("a"), active("b"), { key: "c", status: "RESOLVED" }]);
+  assert.equal(oneResolved.updatedObservationCount, 2);
+  assert.equal(oneResolved.newObservationCount, 0);
+  assert.equal(oneResolved.netObservationCount, -1);
+
+  // The bot measures both AFTER retention -- before it, the numbers describe the fetch.
+  const merge = BOT.indexOf("state.marketObservations = retainMarketObservations(markLiveCatalogueProtection(");
+  assert.ok(merge > 0, "the retention pass must be findable");
+  assert.ok(BOT.indexOf("const newObservationCount = [...retainedActiveKeys]") > merge,
+    "new must be counted after retention, or it reports the fetch again");
+  assert.ok(BOT.indexOf("const updatedObservationCount = [...retainedActiveKeys]") > merge);
+
+  // The "before" side must be the ACTIVE set, not every stored row. previousKeys includes
+  // the resolved archive, and comparing against that would call a market new only if it had
+  // never been seen at all -- so a market that resolved and was re-listed would silently
+  // stop counting. The harness above builds its own set, so this claim has to be made
+  // against the bot's, or it is not tested at all.
+  const beforeSide = /const previousActiveKeys = new Set\(\(state\.marketObservations \|\| \[\]\)[\s\S]{0,320}?\);\n/.exec(BOT);
+  assert.ok(beforeSide, "the active-only previous set must be findable");
+  assert.match(beforeSide[0], /String\(item\?\.status \|\| item\?\.selectionStatus \|\| ""\)\.toUpperCase\(\) !== "RESOLVED"/,
+    "the previous side must exclude the resolved archive");
+
+  // What the scan saw is kept, under a name that says so rather than in the headline.
+  assert.match(BOT, /const scannedNewCount = observationKeys\.filter\(\(key\) => !previousKeys\.has\(key\)\)\.length;/);
+  assert.match(BOT, /\n        scannedNewCount,\n        scannedUpdatedCount,/);
+
+  // And the column's tooltip must describe the new meaning, not the retired one.
+  assert.ok(!/a market that resolved since it was last seen has moved to the archive, so re-reading it counts as new again/.test(APP),
+    "the tooltip explained the behaviour that was just removed");
+  assert.match(APP, /new is the markets that joined the active set/);
+});

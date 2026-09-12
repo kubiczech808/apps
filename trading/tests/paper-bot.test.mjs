@@ -10489,8 +10489,9 @@ test("scan log: a run reports what the catalogue did, not only what was new to t
   // populations. In production it published 74114 against 5000 for a net of -69114 every
   // run. Both sides must exclude resolved rows; the dedicated test below covers it.
   assert.match(source, /const activeObservationCountBefore = \(state\.marketObservations \|\| \[\]\)/);
-  assert.match(source, /const activeObservationCountAfter = \(state\.marketObservations \|\| \[\]\)/);
-  const afterMerge = source.indexOf("const activeObservationCountAfter");
+  assert.match(source, /const activeAfterRetention = \(state\.marketObservations \|\| \[\]\)/);
+  assert.match(source, /const activeObservationCountAfter = activeAfterRetention\.length;/);
+  const afterMerge = source.indexOf("const activeAfterRetention =");
   const merge = source.indexOf("state.marketObservations = retainMarketObservations(");
   assert.ok(merge >= 0 && afterMerge > merge,
     "the after count must be taken once the catalogue has actually been updated");
@@ -10541,9 +10542,11 @@ test("scan log: the before/after catalogue counters measure the same population"
   assert.doesNotMatch(before[0], /previousKeys\.size/,
     "previousKeys.size counts the archive too, which is what made the pair incomparable");
 
-  const after = /const activeObservationCountAfter = [\s\S]{0,240}?;\n/.exec(bot);
-  assert.ok(after, "the after counter must be findable");
+  const after = /const activeAfterRetention = [\s\S]{0,300}?;\n/.exec(bot);
+  assert.ok(after, "the retained active set must be findable");
   assert.match(after[0], resolvedTest, "after already excluded it, and must keep doing so");
+  assert.match(bot, /const activeObservationCountAfter = activeAfterRetention\.length;/,
+    "the after count is that same set, so the pair cannot drift apart again");
 
   // The published difference is only worth publishing while both sides agree.
   assert.match(bot, /netObservationCount: activeObservationCountAfter - activeObservationCountBefore,/);

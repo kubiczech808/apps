@@ -10795,14 +10795,19 @@ async function refreshMarketObservations(state) {
     // and esports markets that dominate the scan, most of what it re-reads has resolved in
     // between.
     //
-    // The count stays as it is -- the audit rows are built from the same comparison, and
-    // it does truthfully answer "was this row already in the working set". What it cannot
-    // answer is "did the catalogue grow", so that is measured directly and published
-    // beside it rather than left to be inferred from a number that is not it.
+    // Publishing that beside the headline was not enough: the log went on reporting four
+    // thousand "new" on a run that added twelve, and the number a reader takes from a
+    // column called New is the one in the column. So these keep the comparison the audit
+    // rows are built from, under names that say what they are -- what the SCAN saw -- and
+    // the headline counts are measured after retention, below, against the active set.
     const previousKeys = new Set((state.marketObservations || []).map(marketObservationKey).filter(Boolean));
+    const previousActiveKeys = new Set((state.marketObservations || [])
+      .filter((item) => String(item?.status || item?.selectionStatus || "").toUpperCase() !== "RESOLVED")
+      .map(marketObservationKey)
+      .filter(Boolean));
     const observationKeys = observations.map(marketObservationKey).filter(Boolean);
-    const newObservationCount = observationKeys.filter((key) => !previousKeys.has(key)).length;
-    const updatedObservationCount = observationKeys.filter((key) => previousKeys.has(key)).length;
+    const scannedNewCount = observationKeys.filter((key) => !previousKeys.has(key)).length;
+    const scannedUpdatedCount = observationKeys.filter((key) => previousKeys.has(key)).length;
     // Counted over the same population as activeObservationCountAfter -- non-resolved rows
     // only. This was previousKeys.size, which is every stored row INCLUDING the resolved
     // archive, so the pair was never comparable and their difference was nonsense.
@@ -10833,8 +10838,17 @@ async function refreshMarketObservations(state) {
     ));
     // Measured after the merge and the retention pass, so this is what the catalogue
     // really holds -- the one number that answers whether a run added anything.
-    const activeObservationCountAfter = (state.marketObservations || [])
-      .filter((item) => String(item?.status || item?.selectionStatus || "").toUpperCase() !== "RESOLVED").length;
+    const activeAfterRetention = (state.marketObservations || [])
+      .filter((item) => String(item?.status || item?.selectionStatus || "").toUpperCase() !== "RESOLVED");
+    const activeObservationCountAfter = activeAfterRetention.length;
+    // What the run actually did to the tradable catalogue, which is the only thing these
+    // two columns are read for. A market the scan re-read but retention then dropped -- for
+    // its tag, its horizon, or the 8000 cap -- produced no candidate and is in neither.
+    const retainedActiveKeys = new Set(activeAfterRetention.map(marketObservationKey).filter(Boolean));
+    const newObservationCount = [...retainedActiveKeys].filter((key) => !previousActiveKeys.has(key)).length;
+    const scannedKeys = new Set(observationKeys);
+    const updatedObservationCount = [...retainedActiveKeys]
+      .filter((key) => previousActiveKeys.has(key) && scannedKeys.has(key)).length;
     state.marketScan = {
       ...previousScan,
       scanCursors: savedCursors,
@@ -10915,8 +10929,15 @@ async function refreshMarketObservations(state) {
         retainedObservationCount: observations.length,
         newObservationCount,
         updatedObservationCount,
-        // What the working set held before and after this run. Their difference is the
-        // honest answer to "did this run add anything", which newObservationCount is not.
+        // What the scan read, before retention had its say. Kept because the audit rows are
+        // built from this comparison and the gap between the two pairs is the story of a
+        // run: how much was fetched against how much of it could be traded.
+        scannedNewCount,
+        scannedUpdatedCount,
+        // What the working set held before and after this run. Its difference is now the
+        // same story newObservationCount tells, net of what left: added minus resolved or
+        // evicted. Both are published because "twelve joined" and "the catalogue grew by
+        // four" are different facts and a reader wants the first.
         activeObservationCountBefore,
         activeObservationCountAfter,
         netObservationCount: activeObservationCountAfter - activeObservationCountBefore,
