@@ -437,7 +437,14 @@ function state_payload(
     // limit want opposite things: the execution summary feeds the bots their candidates and
     // must see the catalogue, while the refresh worker merges one quote into the complete set
     // and writes it back -- handing that one a filtered set would delete the rest on publish.
-    bool $freshObservationsOnly = false
+    bool $freshObservationsOnly = false,
+    // Ask the database for this portfolio's markets rather than for the catalogue.
+    //
+    // Opt-in, and named by the caller rather than inferred from the other arguments,
+    // because getting it wrong in either direction is silent: a reader that needs the whole
+    // catalogue and is handed a scope sees markets vanish, and a reader that only needs a
+    // scope and is handed the catalogue is the request that collapsed the hosting.
+    bool $observationsScopedToStrategy = false
 ): array {
     if (trading_storage_is_active()) {
         $document = trading_storage_document_get('state:' . $target);
@@ -462,9 +469,19 @@ function state_payload(
             // seen seven to eleven days ago, with nothing in between. Serving all of them
             // would have put eleven thousand week-old snapshots in front of the paper bots
             // as tradable candidates.
-            $document['marketObservations'] = $observationsLimit > 0
-                ? trading_storage_observations_fetch('SCRAPED', $observationsLimit, $observationsOffset, $freshObservationsOnly)
-                : trading_storage_observations_fetch('SCRAPED', 0, 0, $freshObservationsOnly);
+            if ($observationsScopedToStrategy) {
+                // The read this whole migration turns on. Asking for one portfolio's
+                // markets instead of the catalogue is the difference between decoding
+                // eight thousand payloads on every execution request and decoding the
+                // hundred or so the portfolio's own rules admit.
+                $document['marketObservations'] = execution_scope_observations_from_storage(
+                    execution_scope_strategy_config($selectedStrategyId)
+                );
+            } else {
+                $document['marketObservations'] = $observationsLimit > 0
+                    ? trading_storage_observations_fetch('SCRAPED', $observationsLimit, $observationsOffset, $freshObservationsOnly)
+                    : trading_storage_observations_fetch('SCRAPED', 0, 0, $freshObservationsOnly);
+            }
         }
         if (in_array('resolvedObservations', $segments, true)) {
             $document['marketObservations'] = array_merge(
@@ -2179,6 +2196,60 @@ function execution_scope_storage_criteria(?array $config): array
         $criteria['endBefore'] = gmdate('Y-m-d H:i:s', time() + (int) round(((float) $hours) * 3600));
     }
     return $criteria;
+}
+
+// How much of the scope one database round trip carries, and how far the walk may go.
+//
+// The ceiling exists so a portfolio that bounds nothing cannot turn one request into an
+// unbounded read: six pages is 12000 rows, more than the whole fresh catalogue has ever
+// held, so in practice the walk always ends because the scope ended.
+const EXECUTION_SCOPE_STORAGE_PAGE_ROWS = 2000;
+const EXECUTION_SCOPE_STORAGE_MAX_PAGES = 6;
+
+/**
+ * One portfolio's tradable markets, asked of the database in that portfolio's own shape.
+ *
+ * The whole point of serving reads from SQL. The alternative -- and what collapsed the host
+ * the first time this was switched on -- is decoding the entire active catalogue on every
+ * request and filtering it in PHP afterwards, which costs the same whether the portfolio
+ * wanted forty markets or eight thousand.
+ *
+ * Walked in pages rather than taken in one slice. A single LIMIT would be safe only while
+ * the query's ordering and the portfolio's ranking agree, and they do not always: the SQL
+ * orders by annualized return, while a portfolio set to "highest reward/risk first" ranks by
+ * something else entirely. Truncating by the wrong key drops markets the portfolio would
+ * have picked, and nothing downstream could tell. Walking to the end of the scope removes
+ * the question -- and because only the MATCHING rows are kept, memory stays flat however
+ * wide the scope is.
+ */
+function execution_scope_observations_from_storage(?array $config): array
+{
+    $criteria = execution_scope_storage_criteria($config);
+    $kept = [];
+    for ($page = 0; $page < EXECUTION_SCOPE_STORAGE_MAX_PAGES; $page++) {
+        $rows = trading_storage_observations_for_scope(
+            $criteria,
+            EXECUTION_SCOPE_STORAGE_PAGE_ROWS,
+            true,
+            $page * EXECUTION_SCOPE_STORAGE_PAGE_ROWS,
+        );
+        foreach ($rows as $item) {
+            if (!is_array($item)) {
+                continue;
+            }
+            $matches = $config === null
+                ? is_active_scraped_market_observation($item)
+                : execution_scope_matches_observation($item, $config);
+            if ($matches) {
+                $kept[] = $item;
+            }
+        }
+        // A short page is the end of the scope. A full one is not, so the walk continues.
+        if (count($rows) < EXECUTION_SCOPE_STORAGE_PAGE_ROWS) {
+            break;
+        }
+    }
+    return $kept;
 }
 
 function scoped_execution_observations(array $observations, ?string $strategyId, int $offset = 0): array
@@ -6726,6 +6797,31 @@ try {
         }));
         $catalogueSeconds = microtime(true) - $startedCatalogue;
 
+        // What the two reads cost AGAINST THE DATABASE, measured whether or not the switch
+        // is on. The comparison above reads whichever source is live, so while reads still
+        // come from JSON it compares a file against a query -- useful for correctness, and
+        // no use at all for deciding whether the database can serve the request. These two
+        // are the numbers the cutover turns on: the whole catalogue is what collapsed the
+        // host at 58 seconds, and the scoped walk is what replaces it.
+        $sqlCatalogue = null;
+        $sqlScoped = null;
+        if (function_exists('trading_storage_observations_fetch')) {
+            try {
+                $startedSqlAll = microtime(true);
+                $sqlRows = trading_storage_observations_fetch('SCRAPED', 0, 0, true);
+                $sqlCatalogue = ['read' => count($sqlRows), 'seconds' => round(microtime(true) - $startedSqlAll, 3)];
+                unset($sqlRows);
+
+                $startedSqlScope = microtime(true);
+                $scopedRows = execution_scope_observations_from_storage($scopeConfig);
+                $sqlScoped = ['kept' => count($scopedRows), 'seconds' => round(microtime(true) - $startedSqlScope, 3)];
+                unset($scopedRows);
+            } catch (Throwable $error) {
+                $sqlCatalogue = $sqlCatalogue ?? ['error' => trading_storage_safe_migration_error($error)];
+                $sqlScoped = $sqlScoped ?? ['error' => trading_storage_safe_migration_error($error)];
+            }
+        }
+
         $startedQuery = microtime(true);
         $queryLimit = 5000;
         $queryRows = trading_storage_observations_for_scope($criteria, $queryLimit);
@@ -6892,6 +6988,9 @@ try {
             'strategyId' => $strategyId,
             'storageActive' => trading_storage_is_active(),
             'mirrorLag' => $mirrorLag,
+            // Against the database, whichever source is currently serving reads.
+            'sqlCatalogue' => $sqlCatalogue,
+            'sqlScoped' => $sqlScoped,
             'criteria' => $criteria,
             'catalogue' => [
                 'read' => count($catalogueRows),
@@ -7052,7 +7151,14 @@ try {
             $strategyId,
             $observationsLimit,
             $observationsOffset,
-            $freshObservationsOnly
+            $freshObservationsOnly,
+            // The execution shortlist is the one view that is defined BY a portfolio's
+            // rules, so it is the one that can be asked for in those terms. Every other
+            // summary either wants the catalogue or wants a page of it, and neither is a
+            // scope. compact_state_payload() applies the same rules again afterwards, so
+            // the response is identical either way -- what changes is how much the
+            // database was asked to hand over to produce it.
+            $summary === 'execution'
         );
         if ($target === 'paper') {
             $payload = paper_state_with_consistent_portfolios($payload, $summary, $strategyId);

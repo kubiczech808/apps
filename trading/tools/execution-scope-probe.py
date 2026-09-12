@@ -70,6 +70,12 @@ def probe(strategy: str | None) -> None:
         print(f"      the query is {speedup:.1f}x faster and decodes {catalogue.get('read', 0) - query.get('read', 0)} fewer rows")
     print(f"      -> {verdict}")
     print(f"      criteria: {json.dumps(payload.get('criteria'), sort_keys=True)}")
+    sql_all = payload.get("sqlCatalogue") or {}
+    sql_scoped = payload.get("sqlScoped") or {}
+    if sql_all or sql_scoped:
+        print(f"      against SQL: whole catalogue {sql_all.get('read', sql_all.get('error'))} rows"
+              f" in {sql_all.get('seconds')}s  |  scoped walk {sql_scoped.get('kept', sql_scoped.get('error'))} kept"
+              f" in {sql_scoped.get('seconds')}s")
     lag = payload.get("mirrorLag")
     if lag:
         print(f"      mirror: {lag.get('sampled')} sampled, {lag.get('absentFromDatabase')} absent,"

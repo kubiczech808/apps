@@ -1484,7 +1484,7 @@ function trading_storage_observation_scope_diagnostics(array $observationKeys): 
     return $rows;
 }
 
-function trading_storage_observations_for_scope(array $criteria, int $limit = 400, bool $freshOnly = true): array
+function trading_storage_observations_for_scope(array $criteria, int $limit = 400, bool $freshOnly = true, int $offset = 0): array
 {
     $pdo = trading_storage_pdo();
     if (!$pdo instanceof PDO) {
@@ -1507,9 +1507,16 @@ function trading_storage_observations_for_scope(array $criteria, int $limit = 40
     // Ordered the way the executor ranks: the best return first, then the nearer resolution.
     // Taking the page BEFORE the ranking is what once served the executor an arbitrary slice
     // of storage order, so the order belongs in the query, not after it.
+    // The tie-break is what makes the order TOTAL, and paging needs that: annualized_return
+    // has thousands of ties -- every market with no return recorded shares NULL -- and the
+    // database is free to order tied rows differently on each page. A walk over a
+    // non-total order silently repeats some rows and misses others.
     $sql = 'SELECT payload FROM trading_observations WHERE ' . implode(' AND ', $where)
         . ' ORDER BY annualized_return DESC, end_at ASC, observation_key ASC'
-        . ' LIMIT ' . max(1, min(5000, $limit));
+        . ' LIMIT ' . max(1, min(5000, $limit))
+        // OFFSET is only legal after LIMIT, so an offset alone would quietly serve the
+        // scope again from row zero -- a walk that never advances.
+        . ($offset > 0 ? ' OFFSET ' . max(0, $offset) : '');
     $statement = $pdo->prepare($sql);
     $statement->execute($params);
     $rows = [];
