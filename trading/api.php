@@ -31,6 +31,38 @@ function respond(array $payload, int $status = 200): void
     exit;
 }
 
+// A fatal error, said out loud.
+//
+// The request dispatch catches Throwable and answers 502 with the message, which covers
+// almost everything -- but not the handful of failures PHP does not raise as exceptions:
+// exhausted memory, exceeded execution time, a stack overflow. Those end the process, and
+// the caller sees a bare 500 with an empty body.
+//
+// That is exactly what the read cutover hit. Two views out of seven answered 500 in less
+// than half a second and there was nothing to read but the status code, so the next step
+// was guesswork -- which is how the first cutover was diagnosed wrongly for a day.
+//
+// Nothing sensitive: the message is the PHP error text, and a path is a path on a host
+// whose document root is already public.
+register_shutdown_function(static function (): void {
+    $error = error_get_last();
+    if ($error === null || !in_array($error['type'] ?? 0, [E_ERROR, E_PARSE, E_CORE_ERROR, E_COMPILE_ERROR], true)) {
+        return;
+    }
+    if (!headers_sent()) {
+        http_response_code(500);
+        header('Content-Type: application/json');
+    }
+    echo json_encode([
+        'ok' => false,
+        'error' => 'Trading API stopped on a fatal error.',
+        'reason' => substr((string) ($error['message'] ?? ''), 0, 500),
+        'where' => basename((string) ($error['file'] ?? '')) . ':' . (int) ($error['line'] ?? 0),
+        'memoryPeakMb' => round(memory_get_peak_usage(true) / 1048576, 1),
+        'memoryLimit' => ini_get('memory_limit'),
+    ], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+});
+
 function app_config(): array
 {
     $config = [];
