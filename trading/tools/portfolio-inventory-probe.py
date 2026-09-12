@@ -82,6 +82,18 @@ else:
     if counts:
         print(f"   rows: {json.dumps(counts)[:400]}")
 
+# Display names live in the config, not in the state, so a row printed by id alone cannot
+# be matched against the table the user is actually looking at.
+config, seconds, error = get("api.php?action=portfolio-config")
+names = {}
+if error:
+    print(f"\n== portfolio config FAILED: {error}")
+else:
+    for key, entry in (((config or {}).get("config") or config or {}).get("paper") or {}).items():
+        if isinstance(entry, dict):
+            names[key] = str(entry.get("displayName") or entry.get("name") or "")
+    print(f"\n== portfolio config ({seconds:.2f}s)   named paper portfolios={len(names)}")
+
 overview, seconds, error = get("api.php?action=state&target=paper&summary=portfolio-overview")
 print("")
 print(f"== portfolio overview ({seconds:.2f}s)")
@@ -110,7 +122,7 @@ for key in sorted(portfolios):
     print(f"   {key:<26} {money(portfolio.get('equityUsdc'))} {money(portfolio.get('freeCapitalUsdc'))}"
           f" {money(positions)} {money(portfolio.get('restingLimitOrderUsdc'))}"
           f" {str(history.get('closedFilledCount', '-')):>7} {money(history.get('closedRealizedPnlUsdc'))}"
-          f"  {str(row.get('displayName') or '')[:40]}")
+          f"  {(names.get(key) or row.get('displayName') or '')[:40]}")
 
 # The history segment is a separate read from the state, so a portfolio can have a full
 # trade history and still publish a reset-looking state -- and vice versa. Print what the
@@ -119,7 +131,7 @@ for strategy in DEEP:
     print("")
     detail, seconds, error = get(
         f"api.php?action=state&target=paper&summary=dashboard&strategy_id={urllib.parse.quote(strategy)}")
-    print(f"== dashboard view for {strategy!r} ({seconds:.2f}s)")
+    print(f"== dashboard view for {strategy!r} {names.get(strategy, '')!r} ({seconds:.2f}s)")
     if error:
         print(f"   FAILED: {error}")
         continue
@@ -139,6 +151,13 @@ for strategy in DEEP:
         newest = max(trades, key=lambda item: str(item.get("openedAt") or ""))
         oldest = min(trades, key=lambda item: str(item.get("openedAt") or ""))
         print(f"   oldest openedAt={json.dumps(oldest.get('openedAt'))}  newest openedAt={json.dumps(newest.get('openedAt'))}")
+        # By month, because "wiped" usually means a gap rather than an empty list: a history
+        # that stops dead in July while the portfolio kept trading looks fine from a count.
+        months = {}
+        for trade in trades:
+            month = str(trade.get("openedAt") or "")[:7] or "unknown"
+            months[month] = months.get(month, 0) + 1
+        print(f"   by month: {json.dumps(dict(sorted(months.items())))}")
 
 print("")
 print("Read this as: 100.00 / 0.00 in every column AND no closed trades means the portfolio")
