@@ -4222,30 +4222,48 @@ function normalize_portfolio_config(array $input): array
 
 function load_portfolio_config(): array
 {
+    // The FILE first, whichever way the storage switch is set.
+    //
+    // This read the stored document while the database was serving, and nothing ever
+    // updated that document: the mirror sends state, portfolios, events, trades and
+    // observations, and the portfolio CONFIG was written once by the one-off JSON import
+    // and then frozen. So switching reads over showed the portfolio list as it stood at the
+    // moment of that import -- every portfolio created or renamed since was simply absent,
+    // which reads exactly like "my portfolios have been deleted". Nothing had been: the file
+    // was intact the whole time and is what this returns.
+    //
+    // It stays this way even after the cutover, because the argument for serving reads from
+    // the database does not apply here. That argument is about the 36000-row catalogue,
+    // which cannot be shipped whole on every request. The config is a few kilobytes, it is
+    // read once per request, and it is the one document where being out of date does not
+    // degrade anything -- it makes portfolios vanish.
+    $path = portfolio_config_path();
+    if (is_file($path)) {
+        $raw = file_get_contents($path);
+        $data = json_decode(is_string($raw) ? $raw : '', true);
+        if (is_array($data)) {
+            return normalize_portfolio_config($data);
+        }
+    }
+    // Only when there is no file at all: then the stored copy is the best record there is.
     if (trading_storage_is_active()) {
         $stored = trading_storage_document_get('portfolio-config');
         if (is_array($stored)) {
             return normalize_portfolio_config($stored);
         }
     }
-    $path = portfolio_config_path();
-    if (!is_file($path)) {
-        return default_portfolio_config();
-    }
-    $raw = file_get_contents($path);
-    $data = json_decode(is_string($raw) ? $raw : '', true);
-    return normalize_portfolio_config(is_array($data) ? $data : []);
+    return default_portfolio_config();
 }
 
 function save_portfolio_config(array $config): array
 {
-    if (trading_storage_is_active()) {
-        $before = load_portfolio_config();
-        $normalized = normalize_portfolio_config($config);
-        trading_storage_document_put('portfolio-config', 'portfolio-config', $normalized);
-        append_portfolio_config_history($before, $normalized);
-        return $normalized;
-    }
+    // The file is written either way, and the stored copy is written BESIDE it rather than
+    // instead of it.
+    //
+    // This used to write only the database while it was serving, so a portfolio saved in
+    // that window existed in one place and a portfolio saved outside it existed in the
+    // other, and the two drifted apart with nothing reconciling them. Switching reads back
+    // then looked like losing work. One writer, two destinations, no divergence to manage.
     $path = portfolio_config_path();
     $dir = dirname($path);
     if (!is_dir($dir) && !mkdir($dir, 0775, true) && !is_dir($dir)) {
@@ -4292,6 +4310,16 @@ function save_portfolio_config(array $config): array
         $encoded = json_encode($normalized, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
         if (!is_string($encoded) || file_put_contents($path, $encoded . "\n", LOCK_EX) === false) {
             respond(['ok' => false, 'error' => 'Unable to persist portfolio config'], 500);
+        }
+        // And the stored copy, beside the file rather than instead of it. A failure here is
+        // not a failed save: the file is already written and is what every reader reads.
+        // Letting it stop the request would turn a mirror problem into lost work.
+        if (trading_storage_is_active() && function_exists('trading_storage_document_put')) {
+            try {
+                trading_storage_document_put('portfolio-config', 'portfolio-config', $normalized);
+            } catch (Throwable) {
+                // Deliberately ignored -- see above.
+            }
         }
         append_portfolio_config_history($stored, $normalized);
         return $normalized;
