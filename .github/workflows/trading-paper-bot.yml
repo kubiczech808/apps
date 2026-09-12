@@ -144,13 +144,6 @@ jobs:
       PAPER_MARKET_SCAN_DIVERSITY_LIQUIDITY_USDC: "40000"
       PAPER_MARKET_SCAN_LIQUIDITY_MIN: "0"
       PAPER_MARKET_SCAN_MAX_DAYS: "7"
-      # How far ahead a market may resolve and still be kept in the active catalogue.
-      # 12 hours on the owner's instruction: the portfolios aim at events in play or
-      # starting inside that window, so anything further out is weight the catalogue, the
-      # scan and the database all carry for nothing. The bot bounds MAX_DAYS above by this,
-      # so the scan stops fetching what retention would discard on arrival. Markets already
-      # in play and markets with no end date are kept regardless. 0 turns the horizon off.
-      PAPER_MARKET_SCAN_RETENTION_HORIZON_HOURS: "12"
       PAPER_MARKET_SCAN_MIN_PROBABILITY: "0.5"
       PAPER_MARKET_SCAN_MIN_RESOLUTION_MINUTES: "0"
       PAPER_MAX_SPREAD: "0.08"

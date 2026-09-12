@@ -93,9 +93,7 @@ test("custom tag portfolio: execution uses the active Polymarket shortlist the d
 });
 
 test("execution snapshot: compact 1,200-row shortlist never truncates the stored catalogue", () => {
-  // Inside the retention horizon: this test is about the compact snapshot merge, and a
-  // fixture the catalogue would legitimately drop proves nothing about merging.
-  const future = new Date(Date.now() + 6 * 60 * 60 * 1000).toISOString();
+  const future = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
   const original = Array.from({ length: 1300 }, (_, index) => ({
     id: `catalogue-${index}`,
     status: "SCRAPED",
@@ -2560,9 +2558,7 @@ test("active catalogue: a current live candidate or open order is never evicted 
     tokenId: `ordinary-token-${index}`,
     status: "SCRAPED",
     marketProbability: 0.9,
-    // Spread across 11 hours, inside the retention horizon, so what bounds this set is
-    // the 5,000-row cap this test is about rather than the horizon.
-    endDate: new Date(now + (index + 1) * 8000).toISOString(),
+    endDate: new Date(now + (index + 1) * 60000).toISOString(),
     updatedAt: new Date(now + index).toISOString(),
   }));
   const protectedRow = {
@@ -2572,8 +2568,6 @@ test("active catalogue: a current live candidate or open order is never evicted 
     marketProbability: 0.745,
     volumeUsdc: 44000,
     daysToResolution: 1,
-    // 20 days out: outside the retention horizon as well as last in the cap's ordering, so
-    // this row is now carried by the protection alone. That is the point of the protection.
     endDate: new Date(now + 20 * 86400000).toISOString(),
     updatedAt: new Date(now - 1000).toISOString(),
     question: "LoL: BNK FEARX vs Dplus KIA (BO5) - LCK Playoffs",
@@ -6226,9 +6220,7 @@ test("live revalidation: the verdicts are written where the rows actually live",
 
   // The fact that makes merging into the core wrong, checked against the real splitter
   // rather than assumed: the fields the step needs are emptied out of paper-state.json.
-  // Inside the retention horizon, so the row survives long enough for the verdict to be
-  // written to it. Where the verdict lands is the subject here, not what is retained.
-  const future = new Date(Date.now() + 6 * 3600000).toISOString();
+  const future = new Date(Date.now() + 86400000).toISOString();
   const { core, segments } = bot.splitStateIntoSegments(bot.normalizeState({
     evaluations: [{ tokenId: "555", question: "Dead", status: "EVALUATED", marketProbability: 0.9, endDate: future }],
     marketObservations: [{ tokenId: "555", question: "Dead", status: "SCRAPED", marketProbability: 0.9, endDate: future }],
