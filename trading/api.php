@@ -7662,6 +7662,30 @@ try {
         // every market ever stored -- while the JSON files served them that bound was
         // implicit, because the published catalogue is itself a window.
         $freshObservationsOnly = in_array($summary, ['scraped', 'execution'], true);
+        // The read the paper bot rebuilds its state from, and the one that must never come
+        // back partial.
+        //
+        // This is the hole that emptied every paper portfolio on 2026-09-12. Served from the
+        // database, a state read carries `state:paper` -- which holds the portfolios and
+        // their parameters but NOT their trades, because each portfolio's trades are a
+        // document of their own and only the one named by strategy_id is merged in. The
+        // refresh read names none, so it came back with thirty-six portfolios, no trades and
+        // no segment manifest: a state that looks whole and is not. The bot accepted it,
+        // traded against free=100 on every portfolio, and published it back over the files.
+        //
+        // The bot now refuses such a payload, but refusing to SERVE it matters too: the
+        // dashboard renders the same emptiness, which is exactly the "my paper portfolios
+        // are wiped" this was first reported as. Until the database path can assemble every
+        // portfolio's trades within this hosting's memory, it does not answer this read.
+        if ($summary === 'refresh' && $target === 'paper' && trading_storage_is_active()) {
+            respond([
+                'ok' => false,
+                'error' => 'The database cannot serve the refresh read: it holds each portfolio\'s trades'
+                    . ' as a separate document and this read names no portfolio, so the state would come back'
+                    . ' complete in shape and empty of history. Serve this read from the published files.',
+                'reason' => 'storage-cannot-serve-refresh',
+            ], 503);
+        }
         $payload = state_payload(
             $target,
             state_segments_for_summary($summary, $scrapedScope),
