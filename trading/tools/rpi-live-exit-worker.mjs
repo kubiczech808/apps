@@ -895,6 +895,23 @@ export function observedBookTick(book = {}) {
 // all affordable.
 const marketTickCache = new Map();
 const MARKET_TICK_CACHE_LIMIT = 4000;
+// How long a tick answer may be believed.
+//
+// Measured, twice, after the source was already corrected: the certainty close sold at 0.99
+// again at 10:05 and 12:35 on 2026-09-12, on markets whose CLOB minimum_tick_size is 0.001,
+// with the order going out tickSize 0.01. The source was right and the CACHE was stale.
+//
+// Polymarket's tick is not a property of the market, it is a property of the PRICE: a market
+// trades on 0.01 through the middle of its range and on 0.001 near the ends. So the tick a
+// position is first looked up under -- at 0.60, at 0.75 -- is the coarse one, and caching it
+// for the life of the process means the close reads 0.01 at exactly the moment the market has
+// moved to 0.001. Every early sale is this: a number that was true when it was fetched and
+// false when it was used.
+//
+// A minute is short enough that a market crossing into the fine grid is re-read long before
+// a close can fire on the old answer, and long enough that a one-second watch loop asks once
+// a minute per position rather than sixty times.
+const MARKET_TICK_TTL_MS = 60000;
 // When a token whose lookup failed may be asked about again.
 //
 // Every watched token is looked up in the same pass the moment the worker starts, so a
@@ -912,6 +929,19 @@ const MARKET_TICK_RETRY_DELAY_MS = 20000;
 // -- and that is exactly what passed while three separate versions of this sold early.
 export function __resetMarketTickBackoffForTests(tokenId) {
   marketTickRetryAt.delete(String(tokenId || ""));
+}
+
+// Ages the cached answer for a token by a given number of milliseconds, so a test can stand
+// on either side of the TTL without waiting a minute.
+//
+// By an AGE rather than to zero. Expiring it outright proves the re-ask works and proves
+// nothing about the TTL being short enough to matter -- measured: with this forcing expiry,
+// setting the TTL to a full day broke no test at all. A stale-by-a-day tick is precisely the
+// bug, so the knob has to be exercised from both sides.
+export function __ageMarketTickCacheForTests(tokenId, ageMs) {
+  const key = String(tokenId || "");
+  const cached = marketTickCache.get(key);
+  if (cached != null) marketTickCache.set(key, { ...cached, at: Date.now() - Number(ageMs || 0) });
 }
 
 // The grid the EXCHANGE enforces, asked of the exchange.
@@ -944,7 +974,10 @@ async function declaredMarketTick(tokenId) {
   const key = String(tokenId || "");
   if (!key) return null;
   const cached = marketTickCache.get(key);
-  if (cached != null) return cached;
+  // Believed only while it is fresh. A tick that moves with the price cannot be remembered
+  // for the life of the process, which is what sold three positions a cent early after the
+  // source it comes from had already been corrected.
+  if (cached != null && Date.now() - cached.at < MARKET_TICK_TTL_MS) return cached.tick;
   // Still inside the backoff from a failed lookup: answer unknown without asking again.
   const retryAt = marketTickRetryAt.get(key);
   if (retryAt != null && Date.now() < retryAt) return null;
@@ -961,7 +994,7 @@ async function declaredMarketTick(tokenId) {
   // every pass would be a second one.
   if (tick != null) {
     if (marketTickCache.size >= MARKET_TICK_CACHE_LIMIT) marketTickCache.clear();
-    marketTickCache.set(key, tick);
+    marketTickCache.set(key, { tick, at: Date.now() });
     marketTickRetryAt.delete(key);
   } else {
     if (marketTickRetryAt.size >= MARKET_TICK_CACHE_LIMIT) marketTickRetryAt.clear();

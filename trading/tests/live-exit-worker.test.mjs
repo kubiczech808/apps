@@ -2162,3 +2162,80 @@ test("certainty close: the stop still outranks it, and a low setting is not cert
     }), null, `${bid} must not read as certainty`);
   }
 });
+
+test("certainty close: the grid is re-asked as the price moves, because it MOVES with the price", async () => {
+  // The fifth early sale, and the one that happened after the source had already been fixed.
+  //
+  // Measured on 2026-09-12: the close sold at 0.99 again at 10:05 and at 12:35, on markets
+  // whose CLOB minimum_tick_size is 0.001, with the order going out tickSize 0.01. The
+  // source was right by then. The CACHE was stale.
+  //
+  // Polymarket's tick is a property of the PRICE, not of the market: 0.01 through the middle
+  // of the range, 0.001 near the ends. A position first looked up at 0.60 is looked up on the
+  // coarse grid, and remembering that for the life of the process means the close reads 0.01
+  // at exactly the moment the market has moved to 0.001. A number that was true when it was
+  // fetched and false when it was used.
+  const original = globalThis.fetch;
+  let declared = 0.01;            // what the exchange says while the market is mid-range
+  const { fetchStub, calls } = exchangeStub({ tick: () => ({ minimum_tick_size: declared }) });
+  globalThis.fetch = fetchStub;
+  try {
+    const token = freshToken();
+    const midRangeBook = { bids: [{ price: "0.62", size: "100" }], asks: [{ price: "0.64", size: "100" }] };
+    assert.equal(await worker.effectiveMarketTick(token, midRangeBook), 0.01,
+      "mid-range the exchange really does quote in cents");
+
+    // The market runs to certainty and the exchange moves it onto the fine grid.
+    declared = 0.001;
+    // Aged past the TTL, not force-expired: force-expiring proves the re-ask works and
+    // proves nothing about the TTL being short enough to matter. Measured -- with an
+    // outright expiry here, setting the TTL to a full day broke no test at all, and a
+    // tick that is a day stale is exactly this bug.
+    worker.__ageMarketTickCacheForTests(token, 90000);
+    const asked = calls.length;
+    const tick = await worker.effectiveMarketTick(token, roundCentBook);
+    assert.ok(calls.length > asked, "the grid has to be asked about again, not remembered");
+    assert.equal(tick, 0.001, "and the new answer is the one that counts");
+
+    // Which is the whole point: 0.99 is no longer certainty on this market.
+    assert.equal(worker.exitReason({
+      bestBidPrice: 0.99, stopPrice: null, triggerPrice: null, settlementCloseBid: 0.999, tickSize: tick,
+    }), null, "the position must be held for 0.999");
+    assert.equal(worker.exitReason({
+      bestBidPrice: 0.999, stopPrice: null, triggerPrice: null, settlementCloseBid: 0.999, tickSize: tick,
+    }), "settlement");
+
+    // And the order is priced on the same fresh grid, not on the remembered one.
+    const constraints = await worker.exchangeConstraintsForToken(token);
+    assert.equal(constraints.tickSize, 0.001,
+      "an order priced on the stale grid rounds 0.999 back down to 0.99 on the way out");
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
+test("certainty close: a fresh answer is not re-asked on every pass of a one-second loop", async () => {
+  // The other half of the same decision. Re-asking is what makes the tick correct; re-asking
+  // every pass would be one request per position per second against a shared exchange.
+  const original = globalThis.fetch;
+  const { fetchStub, calls } = exchangeStub({ tick: { minimum_tick_size: 0.001 } });
+  globalThis.fetch = fetchStub;
+  try {
+    const token = freshToken();
+    assert.equal(await worker.effectiveMarketTick(token, roundCentBook), 0.001);
+    const afterFirst = calls.length;
+    for (let pass = 0; pass < 5; pass += 1) {
+      assert.equal(await worker.effectiveMarketTick(token, roundCentBook), 0.001);
+    }
+    assert.equal(calls.length, afterFirst, "a fresh tick is answered from memory");
+
+    // Ten seconds old is still fresh. Together with the ninety-second case above this pins
+    // the TTL from both sides: long enough not to hammer a one-second loop, short enough
+    // that a market crossing onto the fine grid is re-read before a close can fire.
+    worker.__ageMarketTickCacheForTests(token, 10000);
+    assert.equal(await worker.effectiveMarketTick(token, roundCentBook), 0.001);
+    assert.equal(calls.length, afterFirst, "a ten-second-old answer must not be re-asked");
+  } finally {
+    globalThis.fetch = original;
+  }
+});
