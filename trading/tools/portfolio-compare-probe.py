@@ -57,6 +57,33 @@ def portfolio_rows(config: dict) -> dict:
     return rows
 
 
+def renamed_from(wanted: str) -> str | None:
+    """Which portfolio USED to be called this.
+
+    A name that is not in the config today is usually not a wrong name -- it is a portfolio
+    that has since been renamed, and the trades it made are still its own. Every displayName
+    change is recorded, so the id can be recovered instead of guessed at from whichever
+    current name looks closest.
+    """
+    wanted_lower = wanted.strip().lower()
+    try:
+        records = get("api.php?action=portfolio-config-history").get("records") or []
+    except RuntimeError:
+        return None
+    for record in records:
+        for change in record.get("changes") or []:
+            fields = change.get("fields") or change.get("changed") or {}
+            values = list(fields.values()) if isinstance(fields, dict) else []
+            for value in values + [change.get("before"), change.get("after")]:
+                if isinstance(value, dict):
+                    for candidate in (value.get("from"), value.get("to"), value.get("displayName")):
+                        if isinstance(candidate, str) and candidate.strip().lower() == wanted_lower:
+                            return str(change.get("strategyId") or "")
+                elif isinstance(value, str) and value.strip().lower() == wanted_lower:
+                    return str(change.get("strategyId") or "")
+    return None
+
+
 def find_by_name(rows: dict, wanted: str) -> tuple[str, dict] | tuple[None, None]:
     wanted_lower = wanted.strip().lower()
     for key, row in rows.items():
@@ -67,6 +94,24 @@ def find_by_name(rows: dict, wanted: str) -> tuple[str, dict] | tuple[None, None
     for key, row in rows.items():
         if wanted_lower and wanted_lower in str(row.get("displayName") or "").lower():
             return key, row
+    # Then the name it USED to have. A renamed portfolio keeps its trades.
+    previous = renamed_from(wanted)
+    if previous:
+        for key, row in rows.items():
+            if key.split(":", 1)[1].replace("live-custom-", "") == previous:
+                print(f"   (\"{wanted}\" is now \"{row.get('displayName')}\" -- matched through the rename history)")
+                return key, row
+    # Finally the closest by words, so a near-miss names its candidate instead of failing.
+    words = {word for word in wanted_lower.replace("+", " ").split() if len(word) > 2}
+    best, best_score = None, 0
+    for key, row in rows.items():
+        name_words = {w for w in str(row.get("displayName") or "").lower().replace("+", " ").split() if len(w) > 2}
+        score = len(words & name_words)
+        if score > best_score:
+            best, best_score = (key, row), score
+    if best and best_score >= 2:
+        print(f"   (no portfolio is called \"{wanted}\"; closest by name is \"{best[1].get('displayName')}\")")
+        return best
     return None, None
 
 
