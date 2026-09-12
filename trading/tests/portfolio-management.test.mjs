@@ -6404,3 +6404,21 @@ test("scraped catalogue: a market quoted at 25% is stored as its 75% side", () =
   // can never reach a portfolio as a 25% candidate.
   assert.match(BOT, /if \(outcomeIndex < 0 \|\| probability == null \|\| probability < 0\.5 \|\| !tokenId\) return null;/);
 });
+
+test("dashboard tabs: unfilled limit orders sits last", () => {
+  const HTML = readFileSync(new URL("../index.html", import.meta.url), "utf8");
+  const list = /<div class="tab-list"[\s\S]*?<\/div>/.exec(HTML);
+  assert.ok(list, "the tab list must be findable");
+  const order = [...list[0].matchAll(/data-tab-target="([^"]+)"/g)].map((match) => match[1]);
+  assert.deepEqual(order, [
+    "daily-picks",
+    "closed-trades",
+    "portfolio-candidates",
+    "run-log",
+    "portfolio-history",
+    "unfilled-limit-orders",
+  ]);
+  // The panel keeps its own place in the document; only the button moved, and the first
+  // button must still be the one the page opens on.
+  assert.match(list[0], /<button class="tab-button active"[^>]*data-tab-target="daily-picks"/);
+});

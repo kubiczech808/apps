@@ -1896,26 +1896,169 @@ test("certainty close: the grid is the finer of what the exchange declares and w
   assert.match(lookup, /tick = null;/);
   assert.ok(!/tick = COARSEST_MARKET_TICK/.test(lookup) && !/tick = 0\.01/.test(lookup),
     "a lookup that failed must fall back to the book, not to a coarse tick");
-  // Cached, because the watch loop runs every second and a tick does not change.
-  assert.match(lookup, /const cached = marketTickCache\.get\(key\);\n\s+if \(cached != null\) return cached;/);
-  // But ONLY a real answer is cached. Caching the failure was its own bug: one transient
-  // miss pinned a position to book-only inference for as long as the worker stayed up, and
-  // a position is watched for hours, so the level never recovered.
-  assert.match(lookup, /if \(tick != null\) \{\n\s+if \(marketTickCache\.size >= MARKET_TICK_CACHE_LIMIT\) marketTickCache\.clear\(\);\n\s+marketTickCache\.set\(key, tick\);\n\s+\}/);
-  assert.ok(!/\n  marketTickCache\.set\(key, tick\);/.test(lookup),
-    "an unknown tick must be retried next pass, not remembered");
-
-  // And the lookup must include closed markets. The certainty close fires exactly when an
-  // outcome is already decided, which is precisely when Gamma starts reporting the market
-  // closed -- asking only for open ones returned nothing at the one moment it mattered and
-  // dropped the level straight back onto the book.
+  // The caching, the backoff, the closed half and the fallbacks are all driven for real
+  // against a stubbed exchange further down this file -- see "a failed lookup is retried,
+  // not remembered" and the tests beside it. Matching the source for them here is what gave
+  // three separate versions of this a clean run while they sold positions early, so the
+  // duplication is deliberately not repeated.
   assert.match(lookup, /marketForTokenIncludingClosed\(key\)/);
-  const bothHalves = /async function marketForTokenIncludingClosed[\s\S]*?\n\}/.exec(source)[0];
-  assert.match(bothHalves, /for \(const closed of \["false", "true"\]\)/);
-  assert.match(bothHalves, /if \(Array\.isArray\(markets\) && markets\[0\]\) return markets\[0\];/);
 
   // And the trigger must use it rather than the book alone.
   assert.match(source, /const marketTick = await effectiveMarketTick\(plan\.tokenId, book\);/);
   assert.ok(!/const marketTick = observedBookTick\(book\);/.test(source),
     "the trigger must not go back to reading only the book");
+});
+
+// ---------------------------------------------------------------------------
+// The certainty close, exercised rather than described.
+//
+// This bug shipped three times. Each fix was pinned by assertions that read the SOURCE and
+// confirmed it looked right -- and it did look right. What none of them exercised was the
+// code actually running: a Gamma lookup that fails, a cache that remembers the failure, a
+// book quoting round numbers. Those are where every one of the three faults lived.
+//
+// So these drive the real functions with a stubbed fetch and assert on what they decide.
+// ---------------------------------------------------------------------------
+
+function gammaStub(responses) {
+  const calls = [];
+  const fetchStub = async (url) => {
+    const href = String(url);
+    calls.push(href);
+    const reply = typeof responses === "function" ? responses(href, calls.length) : responses;
+    if (reply instanceof Error) throw reply;
+    if (reply?.status && reply.status >= 400) {
+      return { ok: false, status: reply.status, json: async () => ({}) };
+    }
+    return { ok: true, status: 200, json: async () => (reply?.body ?? reply ?? []) };
+  };
+  return { fetchStub, calls };
+}
+
+const roundCentBook = { bids: [{ price: "0.99", size: "100" }], asks: [] };
+let tokenSeed = 0;
+const freshToken = () => `test-token-${(tokenSeed += 1)}`;
+
+test("certainty close: a market quoting round cents is NOT sold at 0.99 when its tick is finer", async () => {
+  // The reported sale, end to end. The book shows only 0.99, so the book alone concludes a
+  // cent grid; Gamma declares 0.001. The position must be held for 0.999.
+  const original = globalThis.fetch;
+  const { fetchStub, calls } = gammaStub({ body: [{ orderPriceMinTickSize: 0.001 }] });
+  globalThis.fetch = fetchStub;
+  try {
+    const token = freshToken();
+    const tick = await worker.effectiveMarketTick(token, roundCentBook);
+    assert.equal(tick, 0.001, "the declared tick must win over a round-cent book");
+    assert.equal(worker.exitReason({
+      bestBidPrice: 0.99, stopPrice: null, triggerPrice: null, settlementCloseBid: 0.999, tickSize: tick,
+    }), null, "0.99 is not certainty on a market that can quote 0.999");
+    // And it does sell once the bid actually reaches the setting.
+    assert.equal(worker.exitReason({
+      bestBidPrice: 0.999, stopPrice: null, triggerPrice: null, settlementCloseBid: 0.999, tickSize: tick,
+    }), "settlement");
+    assert.ok(calls.length >= 1 && calls[0].includes("clob_token_ids"), "the tick is asked for by token");
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
+test("certainty close: a genuine cent market still sells at 0.99 rather than never selling", async () => {
+  // The fault the clamp was introduced for, which must not come back while fixing the other.
+  const original = globalThis.fetch;
+  const { fetchStub } = gammaStub({ body: [{ orderPriceMinTickSize: 0.01 }] });
+  globalThis.fetch = fetchStub;
+  try {
+    const tick = await worker.effectiveMarketTick(freshToken(), roundCentBook);
+    assert.equal(tick, 0.01);
+    assert.equal(worker.exitReason({
+      bestBidPrice: 0.99, stopPrice: null, triggerPrice: null, settlementCloseBid: 0.999, tickSize: tick,
+    }), "settlement", "0.999 is unreachable on a cent grid, so 0.99 has to be certainty there");
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
+test("certainty close: a failed lookup is retried, not remembered", async () => {
+  // The fault that actually sold the account's positions at 0.99. Every watched token is
+  // looked up in the same pass at startup, so one burst Gamma refuses fails all of them --
+  // and remembering that pinned the whole account to book-only inference until restart.
+  const original = globalThis.fetch;
+  let failing = true;
+  const { fetchStub, calls } = gammaStub(() => (failing
+    ? new Error("Gamma market for token: HTTP 429")
+    : { body: [{ orderPriceMinTickSize: 0.001 }] }));
+  globalThis.fetch = fetchStub;
+  try {
+    const token = freshToken();
+    // While Gamma refuses, the book is all there is -- and the book says cents.
+    assert.equal(await worker.effectiveMarketTick(token, roundCentBook), 0.01);
+    const afterFirst = calls.length;
+
+    // Inside the backoff it must not ask again: this runs every second, per position.
+    assert.equal(await worker.effectiveMarketTick(token, roundCentBook), 0.01);
+    assert.equal(calls.length, afterFirst, "a failed lookup must not be re-asked every pass");
+
+    // Once the backoff is over and Gamma answers, the real tick takes over -- WITHOUT a
+    // restart, which is the whole point.
+    failing = false;
+    worker.__resetMarketTickBackoffForTests(token);
+    assert.equal(await worker.effectiveMarketTick(token, roundCentBook), 0.001,
+      "the level must recover on its own once the exchange answers");
+    assert.ok(calls.length > afterFirst, "and it must actually ask again");
+
+    // A real answer is then kept, so the loop stops asking.
+    const afterSuccess = calls.length;
+    assert.equal(await worker.effectiveMarketTick(token, roundCentBook), 0.001);
+    assert.equal(calls.length, afterSuccess, "a known tick is not re-asked");
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
+test("certainty close: a market missing from the open half is still found", async () => {
+  const original = globalThis.fetch;
+  const { fetchStub, calls } = gammaStub((href) => (href.includes("closed=false")
+    ? { body: [] }
+    : { body: [{ orderPriceMinTickSize: 0.001 }] }));
+  globalThis.fetch = fetchStub;
+  try {
+    assert.equal(await worker.effectiveMarketTick(freshToken(), roundCentBook), 0.001,
+      "a market that has closed between passes must not lose its tick");
+    assert.ok(calls.some((href) => href.includes("closed=true")), "the closed half is consulted");
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
+test("certainty close: a tick the exchange does not declare falls back to the book", async () => {
+  const original = globalThis.fetch;
+  // No tick field at all, and a book that proves a finer grid than a cent.
+  const { fetchStub } = gammaStub({ body: [{ question: "no tick declared" }] });
+  globalThis.fetch = fetchStub;
+  try {
+    const fineBook = { bids: [{ price: "0.991", size: "10" }], asks: [] };
+    assert.equal(await worker.effectiveMarketTick(freshToken(), fineBook), 0.001,
+      "the book still proves what the exchange declined to say");
+    assert.equal(await worker.effectiveMarketTick(freshToken(), roundCentBook), 0.01,
+      "and with neither source proving anything finer, the safe cent grid stands");
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
+test("certainty close: the stop still outranks it, and a low setting is not certainty", async () => {
+  // Both can be true only in a market that fell and recovered; the stop is checked first.
+  assert.equal(worker.exitReason({
+    bestBidPrice: 0.99, stopPrice: 0.995, triggerPrice: 0.996, settlementCloseBid: 0.999, tickSize: 0.001,
+  }), "stop");
+  // Off sells nothing, however high the bid.
+  assert.equal(worker.exitReason({
+    bestBidPrice: 0.999, stopPrice: null, triggerPrice: null, settlementCloseBid: 0, tickSize: 0.001,
+  }), null);
+  // And a position a long way from decided is never read as certainty.
+  for (const bid of [0.5, 0.71, 0.9, 0.95]) {
+    assert.equal(worker.exitReason({
+      bestBidPrice: bid, stopPrice: null, triggerPrice: null, settlementCloseBid: 0.999, tickSize: 0.001,
+    }), null, `${bid} must not read as certainty`);
+  }
 });

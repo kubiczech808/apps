@@ -876,14 +876,34 @@ export function observedBookTick(book = {}) {
 // all affordable.
 const marketTickCache = new Map();
 const MARKET_TICK_CACHE_LIMIT = 4000;
+// When a token whose lookup failed may be asked about again.
+//
+// Every watched token is looked up in the same pass the moment the worker starts, so a
+// burst Gamma refuses fails all of them at once. Remembering that failure pinned the whole
+// account to book-only inference until the next restart -- which is what the 0.01 ticks in
+// its log turned out to be, on markets Gamma declares at 0.001. Retrying every pass instead
+// would ask again every second of a one-second loop, so a failure is held briefly and no
+// longer: short enough that the level recovers on its own within a minute.
+const marketTickRetryAt = new Map();
+const MARKET_TICK_RETRY_DELAY_MS = 20000;
+
+// Lets a test reach the far side of the backoff without waiting twenty seconds. Exported in
+// the same spirit as observedBookTick and exitReason beside it: this module's internals are
+// testable on purpose, because the alternative here was asserting on the shape of the source
+// -- and that is exactly what passed while three separate versions of this sold early.
+export function __resetMarketTickBackoffForTests(tokenId) {
+  marketTickRetryAt.delete(String(tokenId || ""));
+}
 
 // Both halves of the market list, closed included.
 //
-// marketForToken asks with closed=false, which is right for the reversal that uses it and
-// wrong here: the certainty close fires exactly when an outcome is already decided, and
-// that is precisely when Gamma starts reporting the market closed. The lookup then returns
-// nothing, the tick reads as unknown, and the level falls back to the book -- which is the
-// failure this whole lookup was added to prevent, reappearing at the one moment it matters.
+// marketForToken asks with closed=false, which is right for the reversal that uses it. Here
+// the worry was that a decided market -- which is exactly when this fires -- would have
+// dropped out of the open half. Measured on the two markets that actually sold early, that
+// is NOT what happened: both were still returned by closed=false, both declaring 0.001. So
+// this is robustness rather than the fix, and the fix is the backoff above; it is kept
+// because a market that does close between passes would otherwise lose its tick outright,
+// and one extra request only happens when the open half came back empty.
 async function marketForTokenIncludingClosed(tokenId) {
   for (const closed of ["false", "true"]) {
     const url = new URL(`${GAMMA_API}/markets`);
@@ -900,6 +920,9 @@ async function declaredMarketTick(tokenId) {
   if (!key) return null;
   const cached = marketTickCache.get(key);
   if (cached != null) return cached;
+  // Still inside the backoff from a failed lookup: answer unknown without asking again.
+  const retryAt = marketTickRetryAt.get(key);
+  if (retryAt != null && Date.now() < retryAt) return null;
   let tick = null;
   try {
     const market = await marketForTokenIncludingClosed(key);
@@ -910,12 +933,16 @@ async function declaredMarketTick(tokenId) {
     // started. It must not be remembered as a coarse tick -- that is the bug, cached.
     tick = null;
   }
-  // Only a real answer is remembered. Caching the failure was its own bug: one transient
-  // miss pinned a position to book-only inference for as long as the worker stayed up, and
-  // a position is watched for hours. An unknown tick is retried on the next pass instead.
+  // Only a real answer is remembered for good; a failure is held for the backoff above and
+  // then asked again. Remembering the failure permanently was its own bug, and retrying it
+  // every pass would be a second one.
   if (tick != null) {
     if (marketTickCache.size >= MARKET_TICK_CACHE_LIMIT) marketTickCache.clear();
     marketTickCache.set(key, tick);
+    marketTickRetryAt.delete(key);
+  } else {
+    if (marketTickRetryAt.size >= MARKET_TICK_CACHE_LIMIT) marketTickRetryAt.clear();
+    marketTickRetryAt.set(key, Date.now() + MARKET_TICK_RETRY_DELAY_MS);
   }
   return tick;
 }
