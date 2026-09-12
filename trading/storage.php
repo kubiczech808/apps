@@ -41,10 +41,34 @@ function trading_storage_pdo(): ?PDO
                 PDO::ATTR_EMULATE_PREPARES => false,
             ],
         );
+        // Every timestamp is WRITTEN in UTC by trading_storage_now(), and every NOW() in
+        // this file is compared against one. Without this the session keeps the server's
+        // own zone -- Europe/Prague, two hours ahead in summer -- so a row written this
+        // second reads as two hours old, and everything measured against NOW() is wrong by
+        // exactly the offset.
+        //
+        // Measured before the fix: 40 sampled rows, every one reporting age 122 minutes.
+        // Not a distribution -- one value, which is what a clock offset looks like and a
+        // real lag never does. It was read as "the mirror has not written for two hours".
+        // The mirror was writing the whole time.
+        $pdo->exec("SET time_zone = '+00:00'");
     } catch (Throwable) {
         $pdo = null;
     }
     return $pdo instanceof PDO ? $pdo : null;
+}
+
+/**
+ * The moment before which an observation is no longer part of the CURRENT catalogue.
+ *
+ * Computed in PHP, in UTC, and bound as a parameter rather than written as NOW() - INTERVAL.
+ * The session zone above makes those agree, but this is the one comparison the bots' whole
+ * candidate list hangs on: if it is ever wrong the catalogue silently empties, and no query
+ * should depend on two clocks agreeing when it can depend on one.
+ */
+function trading_storage_catalogue_fresh_since(): string
+{
+    return gmdate('Y-m-d H:i:s', time() - (trading_storage_catalogue_fresh_minutes() * 60));
 }
 
 function trading_storage_bootstrap(PDO $pdo): void
@@ -1470,7 +1494,8 @@ function trading_storage_observations_for_scope(array $criteria, int $limit = 40
     $where = ['lifecycle = :lifecycle'];
     $params = ['lifecycle' => 'SCRAPED'];
     if ($freshOnly) {
-        $where[] = 'updated_at >= (NOW(6) - INTERVAL ' . trading_storage_catalogue_fresh_minutes() . ' MINUTE)';
+        $where[] = 'updated_at >= :freshSince';
+        $params['freshSince'] = trading_storage_catalogue_fresh_since();
     }
     foreach (trading_storage_scope_clauses() as $name => $clause) {
         if (!$clause['applies']($criteria[$name] ?? null)) {
@@ -1513,9 +1538,7 @@ function trading_storage_observations_fetch(string $lifecycle, int $limit = 0, i
     // deleted -- the history stays and the archive views read all of it -- but a market last
     // seen eleven days ago is not part of the catalogue the bots choose candidates from.
     $sql = 'SELECT payload FROM trading_observations WHERE lifecycle = :lifecycle'
-        . ($freshOnly
-            ? ' AND updated_at >= (NOW(6) - INTERVAL ' . trading_storage_catalogue_fresh_minutes() . ' MINUTE)'
-            : '')
+        . ($freshOnly ? ' AND updated_at >= :freshSince' : '')
         . ' ORDER BY updated_at DESC, id DESC';
     if ($limit > 0) {
         $sql .= ' LIMIT ' . min(100000, $limit);
@@ -1526,7 +1549,11 @@ function trading_storage_observations_fetch(string $lifecycle, int $limit = 0, i
         }
     }
     $statement = $pdo->prepare($sql);
-    $statement->execute(['lifecycle' => $lifecycle]);
+    $bindings = ['lifecycle' => $lifecycle];
+    if ($freshOnly) {
+        $bindings['freshSince'] = trading_storage_catalogue_fresh_since();
+    }
+    $statement->execute($bindings);
     $rows = [];
     while (($payload = $statement->fetchColumn()) !== false) {
         $decoded = trading_storage_unpack($payload);

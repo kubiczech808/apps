@@ -232,7 +232,7 @@ test("the query is built from the same bounds the check uses", () => {
   // hand is a bound that no longer has a predicate beside it.
   const handWritten = [...forScope.matchAll(/\$where\[\] = '([^']+)'/g)].map((match) => match[1]);
   const bounds = handWritten.filter((clause) =>
-    !/^lifecycle = :lifecycle$/.test(clause) && !clause.startsWith("updated_at >= (NOW(6)"));
+    !/^lifecycle = :lifecycle$/.test(clause) && !/^updated_at >= :freshSince$/.test(clause));
   assert.deepEqual(bounds, [],
     `these clauses bypass the shared bounds table: ${JSON.stringify(bounds)}`);
 
@@ -266,6 +266,45 @@ test("stored columns read the same fields the rules read", () => {
 
   // Nothing to answer with is NULL, so no horizon clause can act on it.
   assert.equal(columns[3].endAt, null);
+});
+
+test("stored time and compared time are the same clock", () => {
+  // Measured on production: 40 sampled rows, every one reporting an age of exactly 122
+  // minutes. Not a distribution -- one value, which is what a clock offset looks like and
+  // what a real lag never does. trading_storage_now() writes UTC through gmdate() while
+  // MySQL's NOW() answered in the server's own zone, two hours ahead in summer, so a row
+  // written this second read as two hours old. It was diagnosed as "the mirror has not
+  // written for two hours". The mirror had been writing the whole time.
+  //
+  // Nothing broke then only because the catalogue window is three days wide and swallowed
+  // the offset. Tighten that window and the catalogue empties with no error at all.
+  const connect = STORAGE.slice(
+    STORAGE.indexOf("function trading_storage_pdo"),
+    STORAGE.indexOf("function trading_storage_bootstrap"),
+  );
+  assert.match(connect, /SET time_zone = '\+00:00'/,
+    "the session must be put on the same clock the rows are written in");
+
+  // And the comparison the whole candidate list hangs on does not depend on two clocks
+  // agreeing at all: the bound is computed in PHP, in UTC, and bound as a parameter.
+  const [freshSince, phpNow, freshMinutes] = evalPhp(
+    "[trading_storage_catalogue_fresh_since(), gmdate('Y-m-d H:i:s'), trading_storage_catalogue_fresh_minutes()]",
+    [],
+  );
+  const gap = (Date.parse(`${phpNow}Z`) - Date.parse(`${freshSince}Z`)) / 60000;
+  assert.ok(Math.abs(gap - freshMinutes) < 2,
+    `the window must open exactly ${freshMinutes} minutes back, opened ${gap}`);
+  assert.ok(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(freshSince),
+    `and in the column's own format: ${freshSince}`);
+
+  // No NOW() may decide what is current any more -- that is the clock that was wrong.
+  for (const name of ["trading_storage_observations_for_scope", "trading_storage_observations_fetch"]) {
+    const start = STORAGE.indexOf(`function ${name}`);
+    const body = STORAGE.slice(start, STORAGE.indexOf("\n}", start));
+    assert.doesNotMatch(body, /NOW\(6?\) - INTERVAL/,
+      `${name} must take its freshness bound from PHP, not from the database's clock`);
+    assert.match(body, /freshSince/, `${name} must bind the computed bound`);
+  }
 });
 
 test("the upsert writes exactly these columns", () => {
