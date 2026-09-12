@@ -305,6 +305,46 @@ function trading_storage_trade_upsert(array $trade): void
 }
 
 /**
+ * The stored trade keys for one portfolio, with just enough of each row to describe it.
+ *
+ * Added to answer the question a restore has to answer first: does the database hold what
+ * the published state lost, and does it also hold what the published state currently has?
+ * The second half is the dangerous one -- restoring from a source that is missing today's
+ * trades would trade one loss for another -- and it can only be checked key by key.
+ *
+ * The payload blob is deliberately not selected. 6,447 rows of it will not fit in 128 MB,
+ * and none of it is needed to compare two sets.
+ */
+function trading_storage_trade_keys_for(string $account, string $portfolioId): array
+{
+    $pdo = trading_storage_pdo();
+    if (!$pdo instanceof PDO) {
+        return [];
+    }
+    trading_storage_bootstrap($pdo);
+    $statement = $pdo->prepare(
+        'SELECT trade_key, status, token_id, round_trip, opened_at, closed_at
+         FROM trading_trades
+         WHERE account = :account AND portfolio_id = :portfolio'
+    );
+    if ($statement === false) {
+        return [];
+    }
+    $statement->execute([':account' => $account, ':portfolio' => $portfolioId]);
+    $rows = [];
+    foreach ($statement->fetchAll() as $row) {
+        $rows[(string) ($row['trade_key'] ?? '')] = [
+            'status' => (string) ($row['status'] ?? ''),
+            'tokenId' => (string) ($row['token_id'] ?? ''),
+            'roundTrip' => (int) ($row['round_trip'] ?? 1),
+            'openedAt' => $row['opened_at'] ?? null,
+            'closedAt' => $row['closed_at'] ?? null,
+        ];
+    }
+    return $rows;
+}
+
+/**
  * What is actually stored, per portfolio. Deliberately a count rather than the rows, so
  * "are the trades in the database" can be asked cheaply and often.
  */

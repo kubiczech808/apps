@@ -1,0 +1,36 @@
+name: Trading Restore Preview
+
+# READ-ONLY, manual only. Reads the published state and the database and compares them.
+# Writes nothing, restores nothing, changes no switch. The restore itself is a separate,
+# deliberate act and this exists so that act can be decided from numbers.
+#
+# Asked because the paper trade histories were lost on 2026-09-12 and the database mirror
+# turned out to still hold 6,447 of them. Before anything is put back, two things have to be
+# known per portfolio: how much comes back, and whether any trade the state has RIGHT NOW is
+# missing from the database -- because restoring over one of those would trade one loss for
+# another.
+on:
+  workflow_dispatch:
+    inputs:
+      account:
+        description: "Which account to preview (paper or live)"
+        required: false
+        default: "paper"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  preview:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: What a restore would do, per portfolio
+        env:
+          TRADING_HOST: https://www.osobnizkusenosti.cz/trading
+          TRADING_TRIGGER_KEY: ${{ secrets.POLYTRADING_DB_PASSWORD }}
+          RESTORE_ACCOUNT: ${{ inputs.account }}
+        run: python3 trading/tools/restore-preview-probe.py

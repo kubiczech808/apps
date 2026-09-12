@@ -628,6 +628,63 @@ function state_payload(
     return $data;
 }
 
+/**
+ * Whether this portfolio has a published segment file of its own.
+ *
+ * Asked separately from its trades because zero trades is ambiguous: a portfolio that holds
+ * nothing and a portfolio id that does not exist both read as zero, and a restore driver
+ * has to stop on the second one rather than quietly skip it.
+ */
+function published_portfolio_segment_exists(string $portfolioId): bool
+{
+    $files = state_file_paths();
+    $path = $files['paper'] ?? '';
+    if ($path === '' || !is_file($path)) {
+        return false;
+    }
+    $core = decode_state_file($path, false);
+    $manifest = is_array($core['stateSegments'] ?? null) ? $core['stateSegments'] : [];
+    if ($manifest === []) {
+        return isset($core['paperPortfolios'][$portfolioId]);
+    }
+    $file = (string) ($manifest['portfolio:' . $portfolioId]['file'] ?? '');
+    if (!preg_match('/^[A-Za-z0-9._-]+\.json$/', $file)) {
+        return false;
+    }
+    return is_file(dirname($path) . '/' . $file);
+}
+
+/**
+ * One portfolio's published trades, read from its own segment file.
+ *
+ * Deliberately not state_payload(): that assembles the whole state, and the point here is
+ * to touch one small file. The manifest is read from the core, which carries no collections
+ * of its own once segmentation exists.
+ */
+function published_portfolio_trades(string $portfolioId): array
+{
+    $files = state_file_paths();
+    $path = $files['paper'] ?? '';
+    if ($path === '' || !is_file($path)) {
+        return [];
+    }
+    $core = decode_state_file($path, false);
+    $manifest = is_array($core['stateSegments'] ?? null) ? $core['stateSegments'] : [];
+    // A pre-segmentation state carries the trades inline.
+    if ($manifest === []) {
+        $inline = $core['paperPortfolios'][$portfolioId]['trades'] ?? null;
+        return is_array($inline) ? $inline : [];
+    }
+    unset($core);
+    $file = (string) ($manifest['portfolio:' . $portfolioId]['file'] ?? '');
+    if (!preg_match('/^[A-Za-z0-9._-]+\.json$/', $file)) {
+        return [];
+    }
+    $segment = decode_state_file(dirname($path) . '/' . $file, false);
+    $trades = $segment['paperPortfolio']['trades'] ?? null;
+    return is_array($trades) ? $trades : [];
+}
+
 function trading_storage_state_document(array $state): array
 {
     // Observations live in their own indexed table. Segment descriptors only point to
@@ -6461,6 +6518,67 @@ try {
         // answer has to be cheap enough to ask before deciding whether a restore is even
         // possible. trading_storage_trade_summary has existed unused since the mirror was
         // built; this is the caller.
+        // Read-only. What a restore WOULD do to one portfolio, without doing any of it.
+        //
+        // Two numbers matter and only one of them is the obvious one. "How many trades come
+        // back" is the point of the restore; "how many of today's trades are NOT in the
+        // database" is what decides whether the restore is safe to perform at all, because
+        // overwriting a portfolio from a source that is missing them would trade one loss
+        // for another. Both are set differences over the real trade key, computed with the
+        // same function the mirror files rows under, so they cannot drift apart.
+        //
+        // One portfolio per call, deliberately: reading thirty-six published segments and
+        // 6,447 stored rows in one request is exactly the shape of work that answers 500 on
+        // a 128 MB host, and a preview that cannot run is worse than no preview.
+        if ($operation === 'restore-preview') {
+            $portfolioId = trim((string) ($storageRequest['portfolio'] ?? ''));
+            if (!preg_match('/^[A-Za-z0-9_-]{1,64}$/', $portfolioId)) {
+                respond(['ok' => false, 'error' => 'A portfolio id is required.'], 400);
+            }
+            $account = strtolower(trim((string) ($storageRequest['account'] ?? 'paper')));
+            if (!in_array($account, ['paper', 'live'], true)) {
+                respond(['ok' => false, 'error' => 'account must be paper or live.'], 400);
+            }
+            // Whether the portfolio has a published segment at all. Without this, "this
+            // portfolio holds nothing" and "you asked about a portfolio that is not there"
+            // are the same zero, and only one of them is a reason to stop.
+            $segmentFound = published_portfolio_segment_exists($portfolioId);
+            $published = published_portfolio_trades($portfolioId);
+            $publishedKeys = [];
+            foreach ($published as $trade) {
+                if (!is_array($trade)) {
+                    continue;
+                }
+                // Stamped the way the ingest stamps them, or the keys describe different
+                // trades than the rows they are being compared against.
+                $publishedKeys[trading_storage_trade_key($trade + ['account' => $account, 'portfolioId' => $portfolioId])]
+                    = (string) ($trade['openedAt'] ?? '');
+            }
+            $storedKeys = trading_storage_trade_keys_for($account, $portfolioId);
+            $wouldRestore = array_diff_key($storedKeys, $publishedKeys);
+            $notInDatabase = array_diff_key($publishedKeys, $storedKeys);
+            $openedAt = array_values(array_filter(array_map(
+                static fn (array $row): string => (string) ($row['openedAt'] ?? ''),
+                $wouldRestore,
+            )));
+            sort($openedAt);
+            respond([
+                'ok' => true,
+                'operation' => 'restore-preview',
+                'portfolio' => $portfolioId,
+                'account' => $account,
+                'segmentFound' => $segmentFound,
+                'publishedTrades' => count($publishedKeys),
+                'storedTrades' => count($storedKeys),
+                'wouldRestore' => count($wouldRestore),
+                // Anything here is a trade the restore would NOT be able to bring back, so
+                // a restore that overwrites rather than merges would lose it.
+                'publishedButNotStored' => count($notInDatabase),
+                'publishedButNotStoredOpenedAt' => array_values(array_slice($notInDatabase, 0, 10)),
+                'oldestRestored' => $openedAt[0] ?? null,
+                'newestRestored' => $openedAt[count($openedAt) - 1] ?? null,
+            ]);
+        }
         if ($operation === 'trade-summary') {
             respond([
                 'ok' => true,
