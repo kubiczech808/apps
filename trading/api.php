@@ -6661,6 +6661,12 @@ try {
         $catalogueKeys = array_values(array_filter(array_map($keyOf, $catalogueKept)));
         $queryKeys = array_values(array_filter(array_map($keyOf, $queryKept)));
         $missedByQuery = array_values(array_diff($catalogueKeys, $queryKeys));
+        // Everything the query returned, before the rules were applied to it. Without this a
+        // row the query DID return, and whose stored snapshot then failed a rule the file's
+        // snapshot passes, is indistinguishable from a row the bounds hid -- and those two
+        // have nothing to do with each other. One is a query to widen; the other is a mirror
+        // running behind, which no change to the bounds would fix.
+        $returnedKeys = array_flip(array_filter(array_map($keyOf, $queryRows)));
 
         // Which bound dropped it, named from the stored columns rather than inferred from
         // the outside. A count of misses says a cutover is unsafe; only this says what to
@@ -6694,7 +6700,13 @@ try {
                 }
                 $row = $stored[trading_storage_observation_key($item)] ?? null;
                 $why = [];
-                if ($row === null) {
+                if (isset($returnedKeys[$key])) {
+                    // The bounds are not the reason: the query handed this row back and the
+                    // rules then rejected the snapshot stored in it. The two stores hold
+                    // different snapshots of the same market, which is a question about the
+                    // mirror, not about the query.
+                    $why[] = 'the query RETURNED it -- the stored snapshot fails the rules the file\'s snapshot passes';
+                } elseif ($row === null) {
                     $why[] = 'the row is not in the database';
                 } else {
                     if ($row['lifecycle'] !== 'SCRAPED') {
@@ -6712,8 +6724,9 @@ try {
                     }
                 }
                 if ($why === []) {
-                    // In scope on every bound and still absent: the page stopped short.
-                    $why[] = 'in scope on every bound -- cut off by the row limit';
+                    $why[] = count($queryRows) >= $queryLimit
+                        ? 'in scope on every bound -- cut off by the row limit'
+                        : 'in scope on every bound, page not full -- unexplained';
                 }
                 $missedReasons[] = [
                     'key' => $key,
@@ -6731,11 +6744,73 @@ try {
             }
         }
 
+        // How far behind the file the mirror runs, on an unbiased sample.
+        //
+        // The missed rows above cannot answer this: they are the rows most likely to be
+        // stale, which is why they were missed. And this is now the question that decides
+        // the cutover, because a mirror that lags is a worse failure than a slow page --
+        // the bots would price an underway fixture off an hours-old snapshot and never
+        // know. The bounds being right is necessary; the snapshot being current is what
+        // makes serving reads from here honest.
+        $mirrorLag = null;
+        if (function_exists('trading_storage_observation_scope_diagnostics')) {
+            $sampled = array_slice($catalogueKept, 0, 40);
+            $keyed = [];
+            foreach ($sampled as $item) {
+                $keyed[trading_storage_observation_key($item)] = $item;
+            }
+            $storedAges = [];
+            try {
+                $storedAges = trading_storage_observation_scope_diagnostics(array_keys($keyed));
+            } catch (Throwable) {
+                $storedAges = [];
+            }
+            $lags = [];
+            $fileAges = [];
+            $absent = 0;
+            foreach ($keyed as $observationKey => $item) {
+                $row = $storedAges[$observationKey] ?? null;
+                if ($row === null) {
+                    $absent += 1;
+                    continue;
+                }
+                $observed = strtotime((string) ($item['observedAt'] ?? $item['updatedAt'] ?? ''));
+                if ($observed !== false) {
+                    $fileAge = (time() - $observed) / 60.0;
+                    $fileAges[] = round($fileAge, 1);
+                    if ($row['ageMinutes'] !== null) {
+                        $lags[] = round($row['ageMinutes'] - $fileAge, 1);
+                    }
+                }
+            }
+            $median = static function (array $values) {
+                if ($values === []) {
+                    return null;
+                }
+                sort($values);
+                return $values[intdiv(count($values), 2)];
+            };
+            $mirrorLag = [
+                'sampled' => count($keyed),
+                'absentFromDatabase' => $absent,
+                'fileAgeMinutesMedian' => $median($fileAges),
+                'databaseAgeMinutesMedian' => $median(array_map(
+                    static fn (array $row) => $row['ageMinutes'],
+                    array_filter($storedAges, static fn (array $row): bool => $row['ageMinutes'] !== null),
+                )),
+                // Positive means the database row is older than the file row: the mirror is
+                // behind by this many minutes.
+                'lagMinutesMedian' => $median($lags),
+                'lagMinutesWorst' => $lags === [] ? null : max($lags),
+            ];
+        }
+
         respond([
             'ok' => true,
             'generatedAt' => gmdate('c'),
             'strategyId' => $strategyId,
             'storageActive' => trading_storage_is_active(),
+            'mirrorLag' => $mirrorLag,
             'criteria' => $criteria,
             'catalogue' => [
                 'read' => count($catalogueRows),

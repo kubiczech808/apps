@@ -70,6 +70,12 @@ def probe(strategy: str | None) -> None:
         print(f"      the query is {speedup:.1f}x faster and decodes {catalogue.get('read', 0) - query.get('read', 0)} fewer rows")
     print(f"      -> {verdict}")
     print(f"      criteria: {json.dumps(payload.get('criteria'), sort_keys=True)}")
+    lag = payload.get("mirrorLag")
+    if lag:
+        print(f"      mirror: {lag.get('sampled')} sampled, {lag.get('absentFromDatabase')} absent,"
+              f" file median {lag.get('fileAgeMinutesMedian')} min old,"
+              f" database median {lag.get('databaseAgeMinutesMedian')} min old,"
+              f" lag median {lag.get('lagMinutesMedian')} min, worst {lag.get('lagMinutesWorst')} min")
     for reason in payload.get("missedReasons") or []:
         stored = reason.get("stored") or {}
         payload_values = reason.get("payload") or {}
