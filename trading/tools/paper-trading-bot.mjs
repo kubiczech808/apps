@@ -654,6 +654,11 @@ const COMPACT_ONLY = envBool("PAPER_COMPACT_ONLY", false);
 // Left off, a missing hosted state fails the run instead of silently republishing
 // a historical seed over the live portfolios.
 const ALLOW_SEED_BOOTSTRAP = envBool("PAPER_ALLOW_SEED_BOOTSTRAP", false);
+// The deliberate opt-out for the empty-state guard below, and the number of portfolios above
+// which "no trades anywhere" stops being a plausible account and starts being a failed read.
+// Two, not one: a brand new installation with a single portfolio and no trades is real.
+const ALLOW_EMPTY_STATE = envBool("PAPER_ALLOW_EMPTY_STATE", false);
+const EMPTY_STATE_PORTFOLIO_FLOOR = 2;
 const SCHEDULED_CADENCE = envBool("PAPER_SCHEDULED_CADENCE", false);
 const FULL_CADENCE_MINUTES = envNumber("PAPER_FULL_CADENCE_MINUTES", 55);
 // How soon after the last full pass a portfolio holding deployable capital may force the
@@ -1879,6 +1884,51 @@ function mergeExecutionObservationSnapshot(state, snapshot = []) {
   });
 }
 
+// Its own type, because the whole failure mode here is a refusal being caught by something
+// that then carries on. readState has two layers of fallback below and both catch broadly.
+class EmptyStateError extends Error {}
+
+// A state that says every portfolio is empty is not a state to trade from.
+//
+// This is what happened on 2026-09-12. Run #7078 read a state in which all 36 paper
+// portfolios existed with their correct names and parameters and NOT ONE held a trade, it
+// opened fresh positions against free=100 on every one of them, and it published that over
+// the hosting. Every history from before 08:54:03Z was gone from the published files
+// thirty seconds later; the mirror is the only reason it is recoverable at all.
+//
+// Every individual read path here is already fail-closed -- a 500 throws, an unreadable
+// segment throws, a 404 on a portfolio segment throws. What none of them cover is a read
+// that SUCCEEDS and comes back empty, because "empty" is a valid state for an account that
+// has never traded and an impossible one for an account with thirty-six portfolios.
+//
+// So the shape is checked rather than the transport: portfolios that exist, trades that do
+// not. A genuinely new installation has no portfolios yet and passes; a real one that has
+// somehow been emptied stops the run instead of publishing the emptiness.
+function refuseIfEveryPortfolioIsEmpty(state, source) {
+  const portfolios = state?.paperPortfolios;
+  if (!portfolios || typeof portfolios !== "object") return state;
+  const ids = Object.keys(portfolios);
+  // Judged on what the SERVER SENT, before normalizeState pads the set with the built-in
+  // defaults -- after that padding a brand new installation is indistinguishable from an
+  // emptied one, which is the difference this whole check turns on.
+  if (ids.length < EMPTY_STATE_PORTFOLIO_FLOOR) return state;
+  const trades = ids.reduce((sum, id) => {
+    const rows = portfolios[id]?.trades;
+    return sum + (Array.isArray(rows) ? rows.length : 0);
+  }, 0);
+  if (trades > 0) return state;
+  if (ALLOW_EMPTY_STATE) {
+    console.warn(`Read an empty state from ${source} with ${ids.length} portfolios; continuing because PAPER_ALLOW_EMPTY_STATE=true.`);
+    return state;
+  }
+  throw new EmptyStateError(
+    `Refusing to continue: the state read from ${source} has ${ids.length} paper portfolios and no trades at all. `
+    + "That is not a state this account can be in, so it is an incomplete read rather than an empty account -- "
+    + "publishing it would overwrite every history with nothing. "
+    + "Set PAPER_ALLOW_EMPTY_STATE=true only if the portfolios really have been reset on purpose.",
+  );
+}
+
 async function readState() {
   if (String(process.env.PAPER_RESET_STATE || "").toLowerCase() === "true") {
     return normalizeState({});
@@ -1892,18 +1942,25 @@ async function readState() {
   if (remoteStateUrl) {
     try {
       const core = await fetchJson(`${remoteStateUrl}${remoteStateUrl.includes("?") ? "&" : "?"}t=${Date.now()}`);
-      const remote = await readStateWithSegments(core);
+      const remote = refuseIfEveryPortfolioIsEmpty(await readStateWithSegments(core), "the published state");
       if (remote && typeof remote === "object" && (Array.isArray(remote.trades) || remote.paperPortfolios)) {
         const remoteState = normalizeState(remote);
         try {
           const merged = mergeStates(remoteState, normalizeState(await readLocalStateFile(OUTPUT_PATH)));
           return refreshActiveExecutionObservations(merged);
-        } catch {
+        } catch (error) {
+          // This catch exists for a missing or unreadable LOCAL file. An empty published
+          // state is not that, and must not be laundered into a successful read by it.
+          if (error instanceof EmptyStateError) throw error;
           return refreshActiveExecutionObservations(remoteState);
         }
       }
       remoteError = new Error("Remote state did not contain a trades array");
     } catch (error) {
+      // An empty published state is a refusal, not a transport failure: letting it become
+      // `remoteError` would send the run into the static fallback and, failing that, into a
+      // different error message about something that did not happen.
+      if (error instanceof EmptyStateError) throw error;
       remoteError = error;
     }
   }
@@ -1916,8 +1973,9 @@ async function readState() {
   if (remoteError && STATIC_STATE_URL) {
     try {
       const separator = STATIC_STATE_URL.includes("?") ? "&" : "?";
-      const remote = await readStateWithSegments(
-        await fetchJson(`${STATIC_STATE_URL}${separator}t=${Date.now()}`),
+      const remote = refuseIfEveryPortfolioIsEmpty(
+        await readStateWithSegments(await fetchJson(`${STATIC_STATE_URL}${separator}t=${Date.now()}`)),
+        "the static state file",
       );
       if (remote && typeof remote === "object" && (Array.isArray(remote.trades) || remote.paperPortfolios)) {
         console.warn(`Primary paper state endpoint failed (${remoteError.message}); recovering from static state file.`);
@@ -1925,6 +1983,7 @@ async function readState() {
       }
       remoteError = new Error("Static paper state did not contain a trades array");
     } catch (error) {
+      if (error instanceof EmptyStateError) throw error;
       remoteError = new Error(`Primary state failed and static recovery failed: ${remoteError.message}; ${error?.message || error}`);
     }
   }
@@ -13279,6 +13338,11 @@ if (invokedDirectly) {
 // Exported for tests only. These are the pure calculations behind the numbers the
 // dashboard shows, plus the guards that keep a stale snapshot out of production.
 export {
+  // The state read, exported so the guard that refuses an empty one can be driven rather
+  // than described. Every previous version of a data-loss protection here was asserted on
+  // by reading the source, and the source looked right while the histories went.
+  readState as readStateForTests,
+  refuseIfEveryPortfolioIsEmpty,
   EFFECTIVELY_CERTAIN_MARKET_PROBABILITY,
   // The two unknown-spread policies, exported so a test can assert against the policy in
   // force rather than hardcoding one of its two settings and going red when it is changed.
