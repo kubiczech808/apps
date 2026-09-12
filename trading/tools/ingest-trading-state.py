@@ -60,10 +60,23 @@ def post(url: str, key: str, payload: dict[str, Any]) -> dict[str, Any]:
             "X-Trading-Trigger-Key": key,
         },
     )
-    with urllib.request.urlopen(request, timeout=45) as response:
-        data = json.loads(response.read().decode("utf-8"))
+    try:
+        with urllib.request.urlopen(request, timeout=45) as response:
+            data = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as error:
+        # The endpoint answers a refusal with a reason in the body, and urllib turns the
+        # status into an exception before anything reads it. Two hours of silent mirror
+        # failure looked like "HTTP Error 503" for exactly this reason.
+        detail = ""
+        try:
+            body = json.loads(error.read().decode("utf-8") or "{}")
+            detail = str(body.get("reason") or body.get("error") or "")[:300]
+        except (ValueError, OSError):
+            detail = ""
+        raise RuntimeError(f"HTTP {error.code}{': ' + detail if detail else ''}") from error
     if not isinstance(data, dict) or not data.get("ok"):
-        raise RuntimeError("storage API rejected the ingest")
+        reason = str(data.get("reason") or data.get("error") or "")[:300] if isinstance(data, dict) else ""
+        raise RuntimeError(f"storage API rejected the ingest{': ' + reason if reason else ''}")
     return data
 
 
@@ -385,7 +398,13 @@ def main() -> int:
                 f" -- {'; '.join(MIRROR_FAILURES[:6])}",
                 file=sys.stderr,
             )
-            print(f"::warning::Trading SQL mirror incomplete: {len(MIRROR_FAILURES)} part(s) failed")
+            # The reason travels in the annotation, not only in the step log: a count alone
+            # says the mirror is broken without saying how, and the step log for a scan is
+            # thousands of lines that the API will not hand back.
+            print(
+                f"::warning::Trading SQL mirror incomplete: {len(MIRROR_FAILURES)} part(s) failed."
+                f" First: {MIRROR_FAILURES[0][:300]}"
+            )
             return 1 if required else 0
         return 0
     except (OSError, ValueError, RuntimeError, urllib.error.URLError, urllib.error.HTTPError) as error:

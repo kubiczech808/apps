@@ -6310,8 +6310,20 @@ try {
             respond(['ok' => true, 'ingest' => trading_storage_ingest(request_payload()), 'generatedAt' => gmdate('c')]);
         } catch (InvalidArgumentException $error) {
             respond(['ok' => false, 'error' => $error->getMessage()], 400);
-        } catch (Throwable) {
-            respond(['ok' => false, 'error' => 'Trading MySQL ingest failed.'], 503);
+        } catch (Throwable $error) {
+            // Say WHY, redacted the same way the migration health endpoint is.
+            //
+            // This answered "Trading MySQL ingest failed." to everything, so a mirror that
+            // had written nothing for two hours could report only that it had failed. The
+            // caller holds the trigger key, the message is stripped of anything
+            // credential-shaped and capped at 300 characters, and without it the next
+            // diagnosis is guesswork -- which is what the last two hours were.
+            respond([
+                'ok' => false,
+                'error' => 'Trading MySQL ingest failed.',
+                'reason' => trading_storage_safe_migration_error($error),
+                'reasonType' => get_class($error),
+            ], 503);
         }
     }
 

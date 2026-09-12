@@ -23,7 +23,7 @@ const SCRIPT = new URL("../tools/ingest-trading-state.py", import.meta.url).path
 
 // Runs main() with urllib.request.urlopen replaced, so every POST the script makes is
 // recorded and can be made to fail on demand. Returns what it sent and what it printed.
-function runMirror({ failOn = [], observations = 700, trades = 0 } = {}) {
+function runMirror({ failOn = [], observations = 700, trades = 0, failMode = "os" } = {}) {
   const directory = mkdtempSync(join(tmpdir(), "mirror-"));
   mkdirSync(join(directory, "data"), { recursive: true });
   const stateFile = join(directory, "data", "paper-state.json");
@@ -48,10 +48,11 @@ function runMirror({ failOn = [], observations = 700, trades = 0 } = {}) {
   // Everything the script says goes to stdout, its own stderr included: one stream to read,
   // and execFileSync hands back stdout on a clean exit but stderr only on a throw.
   writeFileSync(harness, `
-import json, sys, runpy, urllib.request
+import io, json, sys, runpy, urllib.error, urllib.request
 sys.stderr = sys.stdout
 sent = []
 FAIL_ON = json.loads(${JSON.stringify(JSON.stringify(failOn))})
+FAIL_MODE = ${JSON.stringify(failMode)}
 
 class Response:
     def __init__(self, body): self._body = body
@@ -65,6 +66,19 @@ def fake_urlopen(request, timeout=None):
     count = len(payload[part]) if isinstance(payload.get(part), list) else 1
     sent.append({"part": part, "count": count})
     if part in FAIL_ON:
+        if FAIL_MODE == "http":
+            # What the endpoint actually answers when the database refuses a write: a 503
+            # carrying a redacted reason. urllib turns the status into an exception before
+            # anything reads that body, which is how two hours of failure read as nothing
+            # more useful than "HTTP Error 503".
+            body = json.dumps({
+                "ok": False,
+                "error": "Trading MySQL ingest failed.",
+                "reason": "SQLSTATE[HY000] [1040] Too many connections",
+                "reasonType": "PDOException",
+            }).encode("utf-8")
+            raise urllib.error.HTTPError(
+                "https://example.invalid/x", 503, "Service Unavailable", {}, io.BytesIO(body))
         raise OSError("stubbed failure for " + part)
     return Response(json.dumps({"ok": True, "ingest": {"observations": count}}).encode("utf-8"))
 
@@ -135,6 +149,22 @@ test("mirror: the state document no longer rides with the portfolios, events and
   assert.equal(combined, 1, `the state document is sent once: ${JSON.stringify(parts)}`);
   assert.ok(parts.includes("paperPortfolios"), `portfolios are their own part: ${JSON.stringify(parts)}`);
   assert.ok(parts.includes("events"), `events are their own part: ${JSON.stringify(parts)}`);
+});
+
+test("mirror: a refusal reports the database's reason, not just its status code", () => {
+  // Measured on production before this existed: the step warned "20 part(s) failed" and
+  // that was the whole of it. The endpoint knew why and discarded it; urllib raised on the
+  // status before the body was read. Both ends now carry the reason through.
+  const refused = runMirror({ failOn: ["state"], failMode: "http" });
+  assert.match(refused.output, /Too many connections/,
+    `the database's own reason must reach the step log: ${refused.output}`);
+  assert.match(refused.output, /HTTP 503/,
+    "and the status, so a refusal is distinguishable from a timeout");
+  // In the annotation too, which is the part that can be read back without the step log.
+  assert.match(refused.output, /::warning::Trading SQL mirror incomplete: \d+ part\(s\) failed\. First: .*Too many connections/,
+    `the annotation must name the first reason: ${refused.output}`);
+  // And the rest of the mirror still went.
+  assert.equal(refused.sent.filter((entry) => entry.part === "observations").length, 3);
 });
 
 test("mirror: a retried part is only reported as failed when the retry also fails", () => {
