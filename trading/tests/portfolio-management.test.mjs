@@ -5987,7 +5987,7 @@ test("the catalogue keeps sport and esport, and never drops a market someone hol
 
   // Wired into retention, and the protection for held markets outranks it: a row backing an
   // open position must stay readable however the scope has narrowed since.
-  assert.match(BOT, /if \(!marketObservationInScannedScope\(item\) && item\?\.executionRetentionProtected !== true\) \{\n\s+continue;/);
+  assert.match(BOT, /if \(item\?\.executionRetentionProtected !== true\n\s+&& \(!marketObservationInScannedScope\(item\) \|\| !marketObservationWithinRetentionHorizon\(item\)\)\) \{\n\s+continue;/);
   // Resolved rows are untouched. That archive is the settled history every report is
   // measured against, and narrowing the scan is not a reason to rewrite the past.
   const retain = /function retainMarketObservations[\s\S]*?\n\}/.exec(BOT)[0];
@@ -6241,4 +6241,56 @@ test("tag policy form: slugs are chosen from the catalogue as removable chips, n
   assert.match(APP, /syncTagChipField\(els\.excludedTags, excludedTags\);/);
   assert.match(APP, /initTagChipField\(els\.includeOnlyTags,/);
   assert.match(APP, /initTagChipField\(els\.excludedTags,/);
+});
+
+test("the catalogue stops at the resolution horizon, but never drops what is in play", () => {
+  const source = /function marketObservationWithinRetentionHorizon[\s\S]*?\n\}/.exec(BOT);
+  assert.ok(source, "the horizon rule must be findable");
+  const within = (hours, item) => new Function("MARKET_SCAN_RETENTION_HORIZON_HOURS", "daysToEnd", "HOURS_PER_DAY", `
+    ${source[0]}
+    return marketObservationWithinRetentionHorizon;
+  `)(hours, (endDate) => {
+    const end = Date.parse(endDate || "");
+    return Number.isFinite(end) ? (end - Date.now()) / 86400000 : null;
+  }, 24)(item);
+
+  const inHours = (value) => ({ endDate: new Date(Date.now() + value * 3600000).toISOString() });
+
+  assert.equal(within(12, inHours(2)), true);
+  assert.equal(within(12, inHours(11.5)), true);
+  assert.equal(within(12, inHours(13)), false);
+  assert.equal(within(12, inHours(48)), false);
+
+  // A market whose end date has already passed is in play, which is the shape the
+  // portfolios prefer. Dropping it for being "outside the horizon" would delete exactly
+  // the events the horizon was introduced to concentrate on.
+  assert.equal(within(12, inHours(-1)), true);
+  assert.equal(within(12, inHours(-30)), true);
+
+  // Undated is unknown, not too far away. Stamping a placeholder over a missing value and
+  // then reading it as data has already nearly emptied this catalogue once.
+  assert.equal(within(12, {}), true);
+  assert.equal(within(12, { endDate: "not a date" }), true);
+
+  // 0 turns the horizon off rather than retaining nothing, so it can be lifted from
+  // configuration alone without a deploy.
+  assert.equal(within(0, inHours(500)), true);
+
+  // Wired into retention, and the protection for held markets covers it too: a portfolio
+  // holding a market that resolves further out must keep the row backing its position.
+  assert.match(BOT, /if \(item\?\.executionRetentionProtected !== true\n\s+&& \(!marketObservationInScannedScope\(item\) \|\| !marketObservationWithinRetentionHorizon\(item\)\)\) \{\n\s+continue;/);
+
+  // Resolved rows are untouched: that archive is the settled history every report is
+  // measured against, and a horizon on the live catalogue is not a reason to rewrite it.
+  const retain = /function retainMarketObservations[\s\S]*?\n\}/.exec(BOT)[0];
+  assert.ok(retain.indexOf("marketObservationWithinRetentionHorizon") < retain.indexOf("resolved.push(item)"),
+    "the horizon must sit on the active branch, before resolved rows are collected");
+
+  // And the scan must not fetch further ahead than it will keep, or every pass pages
+  // through days of markets purely to discard them -- which is the cost being removed.
+  // The scan window comes from a stored preference, so it cannot be assumed to have been
+  // lowered alongside the horizon; the bound has to be taken here.
+  assert.match(BOT, /const MARKET_SCAN_MAX_DAYS = MARKET_SCAN_RETENTION_HORIZON_HOURS > 0\n\s+\? Math\.min\(/);
+  assert.match(BOT, /MARKET_SCAN_RETENTION_HORIZON_HOURS \/ 24,/);
+  assert.match(BOT, /const MARKET_SCAN_RETENTION_HORIZON_HOURS = Math\.max\(0, envNumber\("PAPER_MARKET_SCAN_RETENTION_HORIZON_HOURS", 12\)\);/);
 });

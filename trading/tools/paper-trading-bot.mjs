@@ -349,10 +349,23 @@ const MARKET_SCAN_LIVE_WINDOW_HOURS = Math.max(1, envNumber("PAPER_MARKET_SCAN_L
 // A market whose end date has just passed can still be trading and is exactly the kind
 // the rotation rules care about, so the lower bound sits a little in the past.
 const MARKET_SCAN_END_DATE_GRACE_HOURS = Math.max(0, envNumber("PAPER_MARKET_SCAN_END_DATE_GRACE_HOURS", 6));
+// How far ahead a market may resolve and still be retained. 0 turns the horizon off.
+const MARKET_SCAN_RETENTION_HORIZON_HOURS = Math.max(0, envNumber("PAPER_MARKET_SCAN_RETENTION_HORIZON_HOURS", 12));
+
 const MARKET_SCAN_MAX_DAYS_RAW = envNumber("PAPER_MARKET_SCAN_MAX_DAYS", 7);
-const MARKET_SCAN_MAX_DAYS = Number.isFinite(MARKET_SCAN_MAX_DAYS_RAW) && MARKET_SCAN_MAX_DAYS_RAW >= 0
+const MARKET_SCAN_MAX_DAYS_CONFIGURED = Number.isFinite(MARKET_SCAN_MAX_DAYS_RAW) && MARKET_SCAN_MAX_DAYS_RAW >= 0
   ? Math.min(3650, MARKET_SCAN_MAX_DAYS_RAW)
   : null;
+// Never fetch further ahead than we are willing to keep. Without this the scan would page
+// through days of markets for retention to discard on arrival, which is the whole cost the
+// horizon exists to avoid -- and the scan window is set from a stored preference, so it
+// cannot be relied on to have been lowered alongside the horizon.
+const MARKET_SCAN_MAX_DAYS = MARKET_SCAN_RETENTION_HORIZON_HOURS > 0
+  ? Math.min(
+    MARKET_SCAN_MAX_DAYS_CONFIGURED ?? Number.POSITIVE_INFINITY,
+    MARKET_SCAN_RETENTION_HORIZON_HOURS / 24,
+  )
+  : MARKET_SCAN_MAX_DAYS_CONFIGURED;
 const MARKET_SCAN_PREFERRED_MAX_RESOLUTION_DAYS = envNumber("PAPER_MARKET_SCAN_PREFERRED_MAX_RESOLUTION_DAYS", envNumber("PAPER_MAX_RESOLUTION_DAYS", 7));
 // Keep a small operational buffer for fetching the quote and submitting an
 // order. A full hour would discard exactly the short-lived opportunities the
@@ -2885,6 +2898,30 @@ function marketObservationInScannedScope(item = {}) {
   return MARKET_SCAN_TAG_SCOPE.some((slug) => slugs.includes(slug));
 }
 
+// Whether a market resolves soon enough to be worth carrying in the active catalogue.
+//
+// Set on the owner's instruction, who accepted the trade-off explicitly: the portfolios aim
+// at events in play or starting within the horizon, so the rest is weight the catalogue,
+// the scan and the database all carry for nothing. It is a LOAD saving, not a way to find
+// more candidates -- measured on 8016 rows, everything resolved within 48 hours and the
+// 8000 cap was trimming only the last few dozen, so nothing is waiting for the freed room.
+//
+// Two rows are deliberately kept whatever the horizon says.
+//
+// A row with no readable end date. Unknown is not the same as too far away, and the same
+// mistake made through a stamped placeholder once already nearly deleted every market whose
+// metadata had not landed yet.
+//
+// A row whose end date has PASSED. Those are the in-play markets -- 29 of them at the time
+// of measuring -- and they are exactly what the portfolios prefer. Only markets more than
+// the horizon into the FUTURE are dropped.
+function marketObservationWithinRetentionHorizon(item = {}) {
+  if (!(MARKET_SCAN_RETENTION_HORIZON_HOURS > 0)) return true;
+  const days = daysToEnd(item?.endDate);
+  if (days == null || !Number.isFinite(days)) return true;
+  return days * HOURS_PER_DAY <= MARKET_SCAN_RETENTION_HORIZON_HOURS;
+}
+
 function retainMarketObservations(items = []) {
   const active = [];
   const resolved = [];
@@ -2893,8 +2930,11 @@ function retainMarketObservations(items = []) {
     if (status !== "RESOLVED") {
       // Out of scope, so it goes -- unless a portfolio is holding it. A market someone has
       // a position in must stay readable however the scope has narrowed since, or the row
-      // backing an open position disappears from under it.
-      if (!marketObservationInScannedScope(item) && item?.executionRetentionProtected !== true) {
+      // backing an open position disappears from under it. The horizon is bounded by the
+      // same protection, for the same reason: a held market must not vanish because it
+      // happens to resolve further out than the catalogue now keeps.
+      if (item?.executionRetentionProtected !== true
+        && (!marketObservationInScannedScope(item) || !marketObservationWithinRetentionHorizon(item))) {
         continue;
       }
       active.push(item);
