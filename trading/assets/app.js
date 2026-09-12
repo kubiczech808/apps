@@ -3927,6 +3927,36 @@ function closedTradePredictionResult(trade) {
     if (finalOutcomePrice >= 0.995) return true;
     if (finalOutcomePrice <= 0.005) return false;
   }
+
+  // A position sold at certainty was a correct pick, and counting it as "not graded" is
+  // what made this tile read 9.5%: the certainty close exists precisely to sell once the
+  // market has decided in our favour, so every one of those exits is a hit being thrown
+  // away while the losses it avoided are all still counted. The settlement print above
+  // stays authoritative -- a market that flipped after the sale is a miss, and only when
+  // Polymarket has published nothing does the exit bid speak for it.
+  const certaintyBid = certaintyCloseBid(trade);
+  if (certaintyBid != null && certaintyBid >= MARKET_DECIDED_EXIT_BID) return true;
+  return null;
+}
+
+// The bid at which the market is quoting an outcome as already decided.
+//
+// 0.9895 rather than 0.99 so that a 0.99 fill cannot be dropped by floating point, and
+// deliberately low enough to include the sales the certainty close made at 0.99 and 0.991
+// while it was clamping every market to the coarsest grid. Those were early exits caused by
+// a bug, but the pick was still right, and the history should say so.
+const MARKET_DECIDED_EXIT_BID = 0.9895;
+
+// What a position closed at certainty actually sold for, across both runtimes: the paper
+// bot records closeReason "certainty", and a live position learns exitReason "settlement"
+// from the exit worker. Anything else is not a certainty close and returns null.
+function certaintyCloseBid(trade) {
+  const reason = String(trade?.closeReason || trade?.exitReason || "").toLowerCase();
+  if (reason !== "certainty" && reason !== "settlement") return null;
+  for (const field of ["exitPrice", "currentPrice", "lastLiveBid", "closePrice"]) {
+    const value = numericOrNull(trade?.[field]);
+    if (value != null && value > 0) return value;
+  }
   return null;
 }
 

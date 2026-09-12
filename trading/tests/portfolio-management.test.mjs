@@ -1408,6 +1408,8 @@ test("capital rebase: the accuracy note names pre-reset trades separately from e
   const els = { portfolioAccuracy: { textContent: "", className: "" }, portfolioAccuracyNote: { textContent: "" } };
   const run = new Function("els", "probability", "pnlClass", `
     ${extractFunction(APP, "isClosedTrade")}
+    ${/const MARKET_DECIDED_EXIT_BID = [\d.]+;/.exec(APP)[0]}
+    ${extractFunction(APP, "certaintyCloseBid")}
     ${extractFunction(APP, "closedTradePredictionResult")}
     ${extractFunction(APP, "closedAccuracyStats")}
     ${extractFunction(APP, "renderClosedAccuracy")}
@@ -1431,6 +1433,8 @@ test("limit orders: an unfilled expiry is excluded from accuracy, a still-waitin
   const els = { portfolioAccuracy: { textContent: "", className: "" }, portfolioAccuracyNote: { textContent: "" } };
   const run = new Function("els", "probability", "pnlClass", `
     ${extractFunction(APP, "isClosedTrade")}
+    ${/const MARKET_DECIDED_EXIT_BID = [\d.]+;/.exec(APP)[0]}
+    ${extractFunction(APP, "certaintyCloseBid")}
     ${extractFunction(APP, "closedTradePredictionResult")}
     ${extractFunction(APP, "closedAccuracyStats")}
     ${extractFunction(APP, "renderClosedAccuracy")}
@@ -1830,6 +1834,8 @@ test("dashboard metrics: cards stay grouped by account value, P/L, then capital 
 test("closed accuracy: a redeemed position counts even when its original cost is unavailable", () => {
   const stats = new Function(`
     ${extractFunction(APP, "isClosedTrade")}
+    ${/const MARKET_DECIDED_EXIT_BID = [\d.]+;/.exec(APP)[0]}
+    ${extractFunction(APP, "certaintyCloseBid")}
     ${extractFunction(APP, "closedTradePredictionResult")}
     ${extractFunction(APP, "closedAccuracyStats")}
     return closedAccuracyStats;
@@ -6241,4 +6247,60 @@ test("tag policy form: slugs are chosen from the catalogue as removable chips, n
   assert.match(APP, /syncTagChipField\(els\.excludedTags, excludedTags\);/);
   assert.match(APP, /initTagChipField\(els\.includeOnlyTags,/);
   assert.match(APP, /initTagChipField\(els\.excludedTags,/);
+});
+
+test("resolved accuracy: a position sold at certainty is a hit, not an ungraded early exit", () => {
+  // Reported: the tile read 9.5% -- 10 of 105 resolved, 65 early exits excluded. The
+  // certainty close exists to sell once the market has decided in our favour, so those 65
+  // were mostly correct picks being discarded while every loss they avoided stayed counted.
+  // An accuracy that throws away the wins and keeps the losses is not an accuracy.
+  const grade = new Function(`
+    ${/const MARKET_DECIDED_EXIT_BID = [\d.]+;/.exec(APP)[0]}
+    ${extractFunction(APP, "numericOrNull")}
+    ${extractFunction(APP, "certaintyCloseBid")}
+    ${extractFunction(APP, "closedTradePredictionResult")}
+    return closedTradePredictionResult;
+  `)();
+
+  // The existing verdicts are untouched.
+  assert.equal(grade({ status: "WON" }), true);
+  assert.equal(grade({ status: "REDEEMED" }), true);
+  assert.equal(grade({ status: "STOP_LOSS" }), false);
+  assert.equal(grade({ status: "LOST" }), false);
+  assert.equal(grade({ status: "LIMIT_ORDER_EXPIRED" }), null);
+  // An ordinary sale with no settlement print is still ungraded: selling at 0.80 says
+  // something about execution, not about whether the pick was right.
+  assert.equal(grade({ status: "CLOSED", currentPrice: 0.8 }), null);
+
+  // A certainty close counts, in both runtimes' spellings.
+  assert.equal(grade({ status: "CLOSED", closeReason: "certainty", currentPrice: 0.999 }), true);
+  assert.equal(grade({ status: "CLOSED", exitReason: "settlement", exitPrice: 0.999 }), true);
+  // Including the ones the grid bug sold early at 0.99 and 0.991. The exit was wrong; the
+  // pick was not, and the history has to say so or the bug goes on costing accuracy after
+  // it has stopped costing money.
+  assert.equal(grade({ status: "CLOSED", closeReason: "certainty", currentPrice: 0.99 }), true);
+  assert.equal(grade({ status: "CLOSED", closeReason: "certainty", currentPrice: 0.991 }), true);
+  assert.equal(grade({ status: "CLOSED", exitReason: "settlement", exitPrice: 0.99 }), true);
+
+  // The settlement print still outranks the inference. A market that flipped after the sale
+  // was a miss, whatever the bid said at the time.
+  assert.equal(grade({
+    status: "CLOSED", closeReason: "certainty", currentPrice: 0.999, finalOutcomePrice: 0,
+  }), false);
+  assert.equal(grade({
+    status: "CLOSED", closeReason: "certainty", currentPrice: 0.999, finalOutcomePrice: 1,
+  }), true);
+
+  // And a "certainty" sale that was nowhere near certainty is not evidence of anything.
+  // The setting's floor is 0.5, so this is reachable by configuration, and grading it true
+  // would turn a coin flip into a recorded hit.
+  assert.equal(grade({ status: "CLOSED", closeReason: "certainty", currentPrice: 0.55 }), null);
+  assert.equal(grade({ status: "CLOSED", closeReason: "certainty", currentPrice: 0.9 }), null);
+
+  // Wired into the tile, so the note stops reporting those as excluded.
+  assert.match(APP, /const certaintyBid = certaintyCloseBid\(trade\);/);
+  assert.match(APP, /if \(certaintyBid != null && certaintyBid >= MARKET_DECIDED_EXIT_BID\) return true;/);
+  const stats = /function closedAccuracyStats[\s\S]*?\n\}/.exec(APP)[0];
+  assert.match(stats, /excluded: Math\.max\(0, rows\.length - total\)/,
+    "the excluded count must stay derived from what was graded, not tracked separately");
 });

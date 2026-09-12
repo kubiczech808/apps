@@ -5376,6 +5376,8 @@ test("dashboard accuracy: a stop loss counts as a loss; an unresolved sale stays
   const pick = (re) => re.exec(app)[0];
   const calculate = new Function("trades", `
     ${pick(/function isClosedTrade\([\s\S]*?\n\}/)}
+    ${pick(/const MARKET_DECIDED_EXIT_BID = [\d.]+;/)}
+    ${pick(/function certaintyCloseBid\([\s\S]*?\n\}/)}
     ${pick(/function closedTradePredictionResult\([\s\S]*?\n\}/)}
     ${pick(/function closedAccuracyStats\([\s\S]*?\n\}/)}
     return closedAccuracyStats(trades);
