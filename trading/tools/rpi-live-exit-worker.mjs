@@ -725,7 +725,26 @@ export function excludedRemoteTokens(payload = {}) {
 function settlementCloseBid(entry = null) {
   const bid = number(entry?.settlementCloseBid);
   if (bid == null || !(bid > 0)) return null;
+  // Only while the capital is the constraint. This close pays about a cent a share to have
+  // the stake hours early; when the account already holds enough cash to fund the next
+  // stake there is nothing to buy back, so the position is held and settles at 1.00.
+  if (canFundAnotherPosition(entry?.accountCashUsdc, entry?.stakeUsdc)) return null;
   return Math.max(0.5, Math.min(0.999, bid));
+}
+
+// Whether another position could be opened right now without selling anything.
+//
+// Asked of the ACCOUNT's cash rather than a per-portfolio figure, because live portfolios
+// all spend one balance -- which is what the API sends.
+//
+// An unknown cash figure, or a stake of zero, answers FALSE: not fundable, so the close is
+// never blocked by a number that simply did not arrive. This close has shipped broken three
+// times already; it must not be possible to silence it with an absent field.
+export function canFundAnotherPosition(cashUsdc, stakeUsdc) {
+  const cash = number(cashUsdc);
+  const stake = number(stakeUsdc);
+  if (cash == null || stake == null || !(stake > 0)) return false;
+  return cash + 0.000001 >= stake;
 }
 
 export function watchPlan(position, entry = null) {

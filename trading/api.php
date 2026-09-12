@@ -5017,7 +5017,7 @@ function custom_live_portfolio_is_known(?string $portfolioId, ?array $config = n
  * execution state, so it is enough to associate the token with its owning live
  * strategy after the order has actually been accepted by Polymarket.
  */
-function live_stop_loss_policy_config(array $config, string $portfolioId): ?array
+function live_stop_loss_policy_config(array $config, string $portfolioId, ?float $accountCashUsdc = null): ?array
 {
     $row = null;
     if ($portfolioId === 'live') {
@@ -5087,6 +5087,17 @@ function live_stop_loss_policy_config(array $config, string $portfolioId): ?arra
         // The bid at which the position is sold rather than held to settlement. 0 means the
         // portfolio does not take that shortcut.
         'settlementCloseBid' => $settlementCloseBid,
+        // What the settlement close is FOR, so the worker can tell whether it is needed.
+        // That close buys locked capital back a few hours early and pays a tick for it; a
+        // portfolio whose account already holds enough cash to fund the next stake has no
+        // capital to buy back, and holding to resolution takes 1.00 instead.
+        //
+        // The cash is the account's, not the portfolio's: live portfolios spend one balance,
+        // so "can another position be opened right now" is a question about that balance.
+        // Null when either figure is unknown, and the worker treats unknown as "not
+        // fundable" -- an absent number must never be what silences the close.
+        'accountCashUsdc' => $accountCashUsdc,
+        'stakeUsdc' => is_numeric($row['stakeUsdc'] ?? null) ? (float) $row['stakeUsdc'] : null,
         // The probability at which the position is sold regardless of what it cost. Unlike
         // the multiplier's floor this does not move with the entry, which is what stops a
         // cheap entry riding almost to zero before the equal-risk floor is reached.
@@ -5411,6 +5422,13 @@ function live_dip_entry_watch_payload(): array
 function live_stop_loss_policy_payload(): array
 {
     $config = load_portfolio_config();
+    // Read once, up here, because every policy below carries it: the account's spendable
+    // USDC is what decides whether a settlement close is buying back capital that is
+    // actually needed, and live portfolios all draw on the same balance.
+    $accountState = decode_state_file(state_file_paths()['live'] ?? '', false);
+    $accountCashUsdc = is_numeric($accountState['portfolio']['cashUsdc'] ?? null)
+        ? (float) $accountState['portfolio']['cashUsdc']
+        : null;
     $portfolioIds = ['live', 'live5050'];
     foreach ((array) ($config['livePortfolios'] ?? []) as $id => $row) {
         if (is_array($row)) {
@@ -5427,7 +5445,7 @@ function live_stop_loss_policy_payload(): array
     $ownedAt = [];
     $policyByPortfolio = [];
     foreach ($portfolioIds as $portfolioId) {
-        $policyByPortfolio[$portfolioId] = live_stop_loss_policy_config($config, $portfolioId);
+        $policyByPortfolio[$portfolioId] = live_stop_loss_policy_config($config, $portfolioId, $accountCashUsdc);
         $state = decode_state_file(live_execution_state_path_for_policy($portfolioId), false);
         if (!is_array($state)) {
             continue;
@@ -5487,7 +5505,7 @@ function live_stop_loss_policy_payload(): array
     // positions no attribution reached fall through to the default.
     $liveState = decode_state_file(state_file_paths()['live'] ?? '', false);
     $positions = is_array($liveState['positions'] ?? null) ? $liveState['positions'] : [];
-    $fallback = live_stop_loss_policy_config($config, 'live');
+    $fallback = live_stop_loss_policy_config($config, 'live', $accountCashUsdc);
     $adoptedFromPositions = 0;
     $unattributed = 0;
     foreach ($positions as $position) {

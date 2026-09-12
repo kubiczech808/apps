@@ -565,6 +565,44 @@ function normalizeSettlementCloseBid(value) {
   return Math.max(0.5, Math.min(0.999, Number(bid.toFixed(4))));
 }
 
+// Whether the portfolio could already open another position without selling anything.
+//
+// The certainty close exists to buy locked capital back. A market the book has decided still
+// takes hours to resolve on Polymarket and the stake is locked for every one of them, so
+// selling a tick below certainty pays about a cent a share to have that capital now. When
+// the portfolio is already holding enough free capital to fund its next stake there is
+// nothing to buy back: the cent is spent, the last tick is given up, and the position would
+// have settled at 1.00 on its own.
+//
+// Reads the same pair the pass-forward rule reads -- freeCapitalUsdc against maxStakeUsdc --
+// so "can fund another position" means one thing in this file, and it is the pair the run
+// digest already prints as free= and stake=.
+//
+// A missing figure, or a stake of zero, answers FALSE: not fundable, so the close is not
+// blocked. A gate that quietly disables the certainty close whenever a number is absent is
+// exactly the failure this close has already shipped three times.
+export function canFundAnotherPosition(freeUsdc, stakeUsdc) {
+  const free = Number(freeUsdc);
+  const stake = Number(stakeUsdc);
+  if (!Number.isFinite(free) || !Number.isFinite(stake) || !(stake > 0)) return false;
+  return free + 0.000001 >= stake;
+}
+
+// Whether this position is sold now rather than held to resolution.
+//
+// Its own function because of how this decision has gone before: sold at 99 instead of 99.9
+// three separate times, and each time a test that READ the source confirmed it looked right,
+// because it did look right. A rule that can be called can be driven with real numbers, and
+// that is the only kind of check this particular decision has earned.
+//
+// `fundable` is the pass's answer, compared to true rather than read as truthy: a missing
+// argument must mean "the capital is locked, close as configured", never "stay shut".
+export function certaintyCloseTriggered({ closeBid, bestBid, fundable } = {}) {
+  const bid = Number(bestBid);
+  if (closeBid == null || !Number.isFinite(bid) || !(bid >= closeBid)) return false;
+  return fundable !== true;
+}
+
 // Whether the resolution ceiling is a rule for THIS row, given the mode.
 //
 // Under "only" it is not a rule at all: that mode admits nothing by its horizon, so a
@@ -5066,9 +5104,13 @@ async function markWaitingLimitOrder(trade) {
   };
 }
 
-async function markOpenTrade(trade, strategy = null) {
+async function markOpenTrade(trade, strategy = null, funding = null) {
   if (trade.status === "LIMIT_ORDER_WAITING") return markWaitingLimitOrder(trade);
   if (!OPEN_STATUSES.has(trade.status)) return trade;
+  // Decided once for the whole pass in refreshTrades, not per position: whether the
+  // portfolio can fund another stake is a fact about the account, and asking it separately
+  // inside a fan-out would let two positions read two different answers.
+  const fundedWithoutSelling = funding?.canFundAnotherPosition === true;
   // The portfolio's CURRENT setting, not the one stamped when the position was opened:
   // turning this on is meant to apply to what is already held, which is where the capital
   // that would be freed actually is.
@@ -5389,7 +5431,11 @@ async function markOpenTrade(trade, strategy = null) {
       // The market is quoting this outcome as decided. Polymarket still takes hours to
       // resolve it, and the stake is locked for all of them, so the position is sold at the
       // bid instead: about a cent a share to get the capital back now.
-      if (closeBid != null && bestBid >= closeBid) {
+      //
+      // Only while that capital is actually the constraint. A portfolio already holding
+      // enough free capital for its next stake has nothing to buy back, so it holds this
+      // position to resolution and takes 1.00 instead of paying the tick.
+      if (certaintyCloseTriggered({ closeBid, bestBid, fundable: fundedWithoutSelling })) {
         const exitValue = netExitValueAtPrice({ shares: trade.shares, price: bestBid, feeRate: trade.feeRate, feesEnabled: trade.feesEnabled });
         const realizedPnl = Number((exitValue - cost).toFixed(4));
         return {
@@ -5682,10 +5728,27 @@ function recordStopLossReversalResult(trade, result) {
 }
 
 async function refreshTrades(trades, portfolioState = null, strategy = null) {
+  // Whether this portfolio could open another position right now, decided once for the
+  // whole pass. It gates the certainty close: that close buys locked capital back, and a
+  // portfolio with a free stake in hand has none to buy.
+  //
+  // Read from the published figures, which are the previous pass's -- refreshTrades runs
+  // before the portfolio row is rebuilt. That lag is in the safe direction both ways: a
+  // portfolio that has since freed capital sells one position it could have held, and one
+  // that has since spent it holds a position to resolution, which is 1.00 rather than a
+  // loss. Recomputing here from the trades in hand would use a different baseline than the
+  // dashboard and the pass-forward rule, and three definitions of "free" is worse than a
+  // ten-minute-old one.
+  const capitalState = {
+    canFundAnotherPosition: canFundAnotherPosition(
+      portfolioState?.portfolio?.freeCapitalUsdc,
+      portfolioState?.portfolio?.maxStakeUsdc,
+    ),
+  };
   // mapWithConcurrency returns input order, so this is the same array the sequential
   // loop built -- markOpenTrade reads the market and returns a new trade, and touches
   // nothing another trade can see.
-  const refreshed = await mapWithConcurrency(trades, (trade) => markOpenTrade(trade, strategy));
+  const refreshed = await mapWithConcurrency(trades, (trade) => markOpenTrade(trade, strategy, capitalState));
   // Funding is decided after the fan-out, not inside it: whether one fill fits depends on
   // every other fill on the same pass, which a per-trade worker cannot see.
   if (!portfolioState) return refreshed;

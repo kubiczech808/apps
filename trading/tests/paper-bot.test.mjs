@@ -10993,10 +10993,19 @@ test("close at certainty: a paper position is sold at the bid once the market ha
   // The portfolio's CURRENT setting decides, not the one stamped when the position opened:
   // turning this on is meant to free the capital that is already committed.
   assert.match(source, /const closeBid = normalizeSettlementCloseBid\(strategy\?\.settlementCloseBid \?\? trade\.settlementCloseBid\);/);
-  assert.match(source, /markOpenTrade\(trade, strategy\)/);
+  assert.match(source, /markOpenTrade\(trade, strategy, capitalState\)/);
 
   // Sold at the bid, and booked as a finished position.
-  assert.match(source, /if \(closeBid != null && bestBid >= closeBid\) \{/);
+  //
+  // The trigger moved into certaintyCloseTriggered() when the funding gate was added -- a
+  // rule that can be CALLED, because this decision has shipped wrong three times under
+  // tests that only read it. What it decides is driven with real bids in
+  // certainty-close-funding.test.mjs; what is checked here is that markOpenTrade still
+  // closes through it, and that the level itself has not moved.
+  assert.match(source, /if \(certaintyCloseTriggered\(\{ closeBid, bestBid, fundable: fundedWithoutSelling \}\)\) \{/);
+  assert.equal(bot.certaintyCloseTriggered({ closeBid: 0.999, bestBid: 0.999, fundable: false }), true);
+  assert.equal(bot.certaintyCloseTriggered({ closeBid: 0.999, bestBid: 0.99, fundable: false }), false,
+    "0.99 is not 0.999 -- the sale the owner reported three times");
   assert.match(source, /status: "CLOSED",\s*\n\s*closeReason: "certainty",/);
   // CLOSED rather than a status of its own, on purpose: every accounting path already
   // treats CLOSED as finished, and one list missed would leave a sold position counted as
