@@ -144,10 +144,30 @@ def trades_of(strategy_id: str, account: str) -> list[dict]:
         return [row for row in rows if isinstance(row, dict)] if isinstance(rows, list) else []
     payload = get("api.php?action=state&target=live&summary=dashboard")
     rows = (payload.get("closedTrades") or []) + (payload.get("positions") or [])
-    # A live row is stamped with the portfolio that ordered it, in one of two spellings.
     wanted = {strategy_id, f"live-custom-{strategy_id}"}
-    return [row for row in rows
-            if isinstance(row, dict) and str(row.get("portfolioId") or "") in wanted]
+
+    # Live rows are not reliably stamped with the portfolio that ordered them: on this
+    # account 281 of 416 carry no portfolio at all. Ownership is established from the run
+    # logs instead, and the exit-policy endpoint already does exactly that server-side --
+    # it is how the stop-loss worker knows whose rule to apply to which token. Reading the
+    # stamp alone reported a portfolio that had traded as having made no trades.
+    owner_of = {}
+    try:
+        policy = get("api.php?action=live-exit-policy")
+        for token, entry in (policy.get("policies") or {}).items():
+            if isinstance(entry, dict) and entry.get("portfolioId"):
+                owner_of[str(token)] = str(entry["portfolioId"])
+    except RuntimeError:
+        owner_of = {}
+
+    def owns(row: dict) -> bool:
+        stamped = str(row.get("portfolioId") or "")
+        if stamped:
+            return stamped in wanted
+        token = str(row.get("tokenId") or row.get("assetId") or "")
+        return bool(token) and owner_of.get(token, "") in wanted
+
+    return [row for row in rows if isinstance(row, dict) and owns(row)]
 
 
 CLOSED = {"WON", "LOST", "CLOSED", "REDEEMED", "SOLD", "RESOLVED", "STOP_LOSS", "STOP_GAP",
