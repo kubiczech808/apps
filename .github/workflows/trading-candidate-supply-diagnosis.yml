@@ -1,0 +1,33 @@
+name: Trading Candidate Supply Diagnosis
+
+# READ-ONLY, manual only. Public GETs against the published API, no secrets, no writes.
+#
+# Asked because portfolios often have few candidates and take what is there rather than the
+# best. The catalogue holds thousands of rows, so the shortage is not supply of rows -- it is
+# the filter chain, and this counts which rule is actually doing the cutting. It runs the
+# REAL chain imported from the bot rather than a reimplementation, because a replica would
+# answer a question about the replica.
+#
+# It also measures how stale the in-play quotes are, to test the claim that the movement is
+# in events already underway and that those want refreshing far more often.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Where candidates are lost, and how stale the in-play rows are
+        env:
+          TRADING_HOST: https://osobnizkusenosti.cz/trading
+          NODE_OPTIONS: --max-old-space-size=6144
+        run: node trading/tools/candidate-supply-probe.mjs
