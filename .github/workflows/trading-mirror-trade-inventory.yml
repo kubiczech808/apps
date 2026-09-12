@@ -1,0 +1,72 @@
+name: Trading Mirror Trade Inventory
+
+# READ-ONLY, manual only. One POST to storage-admin with the read-only 'trade-summary'
+# operation: counts and date ranges per portfolio, never rows, and nothing is written.
+#
+# Asked because the paper trade histories were lost. Every paper portfolio's trades in the
+# published state now begin within four seconds of 2026-09-12T08:54:03Z and the segment
+# files on the host were overwritten with that same state, so the mirror is the only place
+# a pre-existing row could still be: the ingest upserts by trade_key and deletes nothing.
+#
+# A portfolio whose first_opened_at predates the reset still has its history in the
+# database. One whose first_opened_at is 2026-09-12T08:54 does not, and no restore is
+# possible from here.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  inventory:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: What the mirror still holds, per portfolio
+        env:
+          TRADING_TRIGGER_KEY: ${{ secrets.POLYTRADING_DB_PASSWORD }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import urllib.error
+          import urllib.request
+
+          key = os.environ["TRADING_TRIGGER_KEY"]
+          url = "https://www.osobnizkusenosti.cz/trading/api.php?action=storage-admin"
+          request = urllib.request.Request(
+              url,
+              data=json.dumps({"operation": "trade-summary"}).encode("utf-8"),
+              method="POST",
+              headers={"Content-Type": "application/json", "X-Trading-Trigger-Key": key},
+          )
+          try:
+              with urllib.request.urlopen(request, timeout=120) as response:
+                  payload = json.loads(response.read().decode("utf-8"))
+          except urllib.error.HTTPError as error:
+              body = error.read().decode("utf-8")[:800]
+              print(f"HTTP {error.code}: {body}")
+              raise SystemExit(1)
+
+          rows = payload.get("trades") or []
+          if not payload.get("ok"):
+              print(f"refused: {json.dumps(payload)[:600]}")
+              raise SystemExit(1)
+
+          CUTOFF = "2026-09-12 08:54"
+          print(f"{'account':<8} {'portfolio':<24} {'total':>6} {'open':>5} {'closed':>7}"
+                f" {'realized':>10}  first_opened        last_updated")
+          survivors = 0
+          for row in sorted(rows, key=lambda item: (str(item.get('account')), str(item.get('portfolioId')))):
+              first = str(row.get("firstOpenedAt") or "")
+              older = bool(first) and first < CUTOFF
+              survivors += 1 if older else 0
+              flag = "  <-- PREDATES THE RESET" if older else ""
+              print(f"{str(row.get('account')):<8} {str(row.get('portfolioId'))[:24]:<24}"
+                    f" {row.get('total', 0):>6} {row.get('open', 0):>5} {row.get('closed', 0):>7}"
+                    f" {float(row.get('realized') or 0):>10.2f}  {first:<19} {str(row.get('lastUpdatedAt') or '')}{flag}")
+          print("")
+          print(f"portfolios whose stored history predates the reset: {survivors} of {len(rows)}")
+          PY

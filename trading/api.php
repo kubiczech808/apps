@@ -6451,6 +6451,23 @@ try {
             );
             respond(['ok' => true, 'operation' => 'archive-events', 'result' => $result]);
         }
+        // Read-only, and added the day the paper histories were lost. Every paper portfolio's
+        // trades now start within four seconds of 2026-09-12T08:54Z, the published segment
+        // files were overwritten with that same state, and the mirror is the only place a
+        // pre-existing row could still be sitting -- the ingest upserts by trade_key and
+        // deletes nothing, so a trade the published state forgot may still be here.
+        //
+        // Counts and ranges, never rows: the question is "is it still in there", and the
+        // answer has to be cheap enough to ask before deciding whether a restore is even
+        // possible. trading_storage_trade_summary has existed unused since the mirror was
+        // built; this is the caller.
+        if ($operation === 'trade-summary') {
+            respond([
+                'ok' => true,
+                'operation' => 'trade-summary',
+                'trades' => trading_storage_trade_summary(),
+            ]);
+        }
         if ($operation === 'archive-list') {
             respond(['ok' => true, 'operation' => 'archive-list', 'files' => trading_storage_archive_listing()]);
         }
