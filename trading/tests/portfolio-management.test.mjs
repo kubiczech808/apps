@@ -5969,6 +5969,17 @@ test("the catalogue keeps sport and esport, and never drops a market someone hol
   // widened again from configuration alone.
   assert.equal(inScope([], { polymarketTags: ["weather"] }), true);
 
+  // video-games is not a qualifying tag, on the owner's instruction. Measured: it appears on
+  // 0 of the 8016 retained rows, so this is already true -- pinned here so it stays true if
+  // the scope is ever widened, and so the reason is written down rather than inferred.
+  assert.equal(inScope(scope, { polymarketTags: ["video-games"] }), false);
+  assert.equal(inScope(scope, { polymarketTags: ["video-games", "mrbeast"] }), false);
+  // But a market carrying BOTH is kept: that shape is a League of Legends match, and the
+  // portfolios in use trade exactly those. Dropping it would starve leagueoflegends and
+  // counterstrike2 to enforce a tag the owner only meant as "not a category of its own".
+  assert.equal(inScope(scope, { polymarketTags: ["esports", "video-games"] }), true);
+  assert.equal(inScope(scope, { polymarketTags: ["sports", "video-games"] }), true);
+
   // It reads through rowTagSlugs, which consults every tag field the codebase uses. A row
   // whose tags live in the one field a reader forgot has cost this codebase real money
   // before -- portfolios refusing the very markets the server had selected for them.
