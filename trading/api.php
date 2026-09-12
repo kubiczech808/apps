@@ -2207,10 +2207,19 @@ function execution_scope_storage_criteria(?array $config): array
 // How much of the scope one database round trip carries, and how far the walk may go.
 //
 // The ceiling exists so a portfolio that bounds nothing cannot turn one request into an
-// unbounded read: six pages is 12000 rows, more than the whole fresh catalogue has ever
-// held, so in practice the walk always ends because the scope ended.
+// unbounded read. It has to sit ABOVE the fresh catalogue, or a portfolio ranked by
+// something the query cannot order by would be cut off mid-scope by the wrong key -- the
+// silent failure this whole path is built to avoid.
+//
+// Measured at the cutover: the database holds 37588 active markets, 25906 of them seen
+// within the window. That is three times what the JSON file carried, because the file's
+// 8000-row retention cap existed to keep ONE file small enough to send and the database has
+// no such reason. So the ceiling is a row budget with room above that figure rather than a
+// page count chosen when the catalogue was 8000 -- at six pages it would have stopped at
+// 12000 of 25906.
 const EXECUTION_SCOPE_STORAGE_PAGE_ROWS = 2000;
-const EXECUTION_SCOPE_STORAGE_MAX_PAGES = 6;
+// 20 pages of 2000 is a 40000-row budget, against 25906 in the window today.
+const EXECUTION_SCOPE_STORAGE_MAX_PAGES = 20;
 
 /**
  * One portfolio's tradable markets, asked of the database in that portfolio's own shape.

@@ -117,8 +117,10 @@ test("the scoped read walks to the end of the scope and keeps only what the rule
 
 test("a scope that never ends is still bounded", () => {
   // A portfolio that bounds nothing must not turn one request into an unbounded read. The
-  // ceiling is six pages; the stub has more rows than that, so the walk must stop.
-  const rows = Array.from({ length: 20000 }, (_, index) => market(index));
+  // ceiling has to sit ABOVE the fresh catalogue: the database holds 25906 markets inside
+  // the window, three times what the JSON file carried, and a ceiling below that would cut
+  // a reward/risk portfolio's scope off by the wrong key.
+  const rows = Array.from({ length: 50000 }, (_, index) => market(index));
   const result = runPhp(
     `(function () use ($args) {
         $kept = execution_scope_observations_from_storage(null);
@@ -127,8 +129,8 @@ test("a scope that never ends is still bounded", () => {
     {},
     { rows },
   );
-  assert.equal(result.pages, 6, "the walk stops at the ceiling rather than reading forever");
-  assert.equal(result.kept, 12000);
+  assert.equal(result.pages, 20, "the walk stops at the ceiling rather than reading forever");
+  assert.equal(result.kept, 40000, "and the ceiling clears the fresh catalogue with room over it");
 });
 
 test("a scope that fits in one page makes one round trip", () => {
@@ -183,14 +185,17 @@ test("the walk stops once it holds the page asked for, and only when the ranking
     `(function () use ($args) {
         $config = normalize_portfolio_config(['paper' => ['probe' => $args]])['paper']['probe'];
         $kept = execution_scope_observations_from_storage($config, 1200);
-        return ['pages' => count($GLOBALS['scopeCalls']), 'order' => $config['selectionOrder'] ?? null];
+        return ['pages' => count($GLOBALS['scopeCalls']), 'kept' => count($kept), 'order' => $config['selectionOrder'] ?? null];
      })()`,
     { ...CONFIG, selectionOrder: "highest_reward_risk_first" },
     { rows },
   );
   assert.equal(rewardRisk.order, "highest_reward_risk_first", "the fixture must actually set that order");
-  assert.equal(rewardRisk.pages, 6,
+  // The whole scope, not a page of it: six full pages of 2000, then one more that comes
+  // back empty and ends the walk. A full page never proves the scope ended.
+  assert.equal(rewardRisk.pages, 7,
     "a ranking the query cannot express must be walked to the end of the scope");
+  assert.equal(rewardRisk.kept, 12000, "and every row of that scope reaches the ranking");
 });
 
 test("only the execution summary asks for a scope", () => {
