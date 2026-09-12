@@ -1,0 +1,38 @@
+name: Trading Portfolio Compare
+
+# READ-ONLY, manual only. Public GETs against the published API, no writes.
+#
+# Asked: one portfolio did far worse than its twin over a handful of trades -- bad luck, a
+# fault, or the way it was set up? Those three produce the same P/L figure and are told
+# apart only by the trades themselves: the same markets or different ones, the same entry
+# prices or worse ones, the same exits or earlier ones.
+on:
+  workflow_dispatch:
+    inputs:
+      left:
+        description: "First portfolio (display name or id)"
+        required: true
+        default: "0809 55+ underway + SL"
+        type: string
+      right:
+        description: "Second portfolio (display name or id)"
+        required: true
+        default: "0809 55+ underway + SL live"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  compare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Rules first, then every trade
+        env:
+          TRADING_HOST: https://osobnizkusenosti.cz/trading
+          LEFT_PORTFOLIO: ${{ inputs.left }}
+          RIGHT_PORTFOLIO: ${{ inputs.right }}
+        run: python3 trading/tools/portfolio-compare-probe.py
