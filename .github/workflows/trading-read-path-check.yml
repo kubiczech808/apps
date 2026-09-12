@@ -1,0 +1,32 @@
+name: Trading Read Path Check
+
+# READ-ONLY, manual only. Public GETs against the published API, no writes, no switch.
+#
+# What the first cutover needed and did not have. That one was activated and rolled back
+# inside five minutes: the hosting answered storage-status in 58 seconds and reset the
+# connection on everything else, and nothing was watching the views themselves. This asks
+# every view the browser asks for and times each one.
+on:
+  workflow_dispatch:
+    inputs:
+      strategy_id:
+        description: "Portfolio to request the execution shortlist for"
+        required: false
+        default: "highReward"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Every view the browser asks for
+        env:
+          TRADING_HOST: https://osobnizkusenosti.cz/trading
+          STRATEGY_ID: ${{ inputs.strategy_id || 'highReward' }}
+        run: python3 trading/tools/read-path-probe.py
