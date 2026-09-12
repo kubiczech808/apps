@@ -146,11 +146,75 @@ async function main() {
       reasons.set(reason, (reasons.get(reason) || 0) + 1);
     }
     const top = [...reasons.entries()].sort((a, b) => b[1] - a[1]).slice(0, 4);
+    const pct = (value) => (value == null ? "-" : `${(Number(value) * 100).toFixed(0)}%`);
     console.log(`   ${id}`);
+    // The settings themselves, because a recommendation has to name the number to change
+    // and "the band is too narrow" is not actionable without knowing what it currently is.
+    console.log(`      band ${pct(strategy.minProbability)}-${pct(strategy.maxProbability)}`
+      + `  volume>=${Math.round(Number(strategy.minLiquidityUsdc) || 0)}`
+      + `  window ${Math.round(Number(strategy.maxResolutionHours) || 0)}h`
+      + `  live=${strategy.liveEventMode || "-"}`
+      + `  tags=${[...(strategy.includeOnlyMarketTags || [])].join("|") || "any"}`);
     console.log(`      eligible: ${eligible}   (of which underway: ${runningEligible})`);
     for (const [reason, count] of top) {
       console.log(`      ${String(count).padStart(6)}  ${reason}`);
     }
+  }
+
+  // ---- where the in-play markets actually sit ------------------------------------------
+  //
+  // The claim under test is that the movement, and so the opportunity, is in events already
+  // underway. The rows are there and they are fresh, so if a portfolio aimed at them still
+  // finds nothing, the band it is aiming with is pointed somewhere the markets are not.
+  // This says where they ARE, so a band can be chosen from the data rather than guessed.
+  console.log(`\n== where the ${running.length} underway markets are priced`);
+  const probabilityOf = (row) => {
+    const value = Number(row?.marketProbability ?? row?.marketPrice);
+    return Number.isFinite(value) && value > 0 && value < 1 ? value : null;
+  };
+  const buckets = new Map();
+  let unpriced = 0;
+  for (const row of running) {
+    const probability = probabilityOf(row);
+    if (probability == null) {
+      unpriced += 1;
+      continue;
+    }
+    const floor = Math.min(0.95, Math.floor(probability * 20) / 20);
+    buckets.set(floor, (buckets.get(floor) || 0) + 1);
+  }
+  for (const [floor, count] of [...buckets.entries()].sort((a, b) => a[0] - b[0])) {
+    const bar = "#".repeat(Math.min(60, Math.round(count / 3)));
+    console.log(`   ${(floor * 100).toFixed(0).padStart(3)}-${((floor + 0.05) * 100).toFixed(0).padStart(3)}%  ${String(count).padStart(4)}  ${bar}`);
+  }
+  if (unpriced) console.log(`   (${unpriced} underway rows carry no usable probability)`);
+
+  // ---- what a different band would actually buy ----------------------------------------
+  //
+  // Measured with the real chain and only the band swapped, so every other rule the
+  // portfolio has still applies. Guessing "a wider band gives more" is not the question --
+  // the question is how many MORE, once volume, spread, tags and the in-play rule have all
+  // had their say too.
+  const BANDS = [[0.5, 0.99], [0.55, 0.95], [0.6, 0.95], [0.6, 0.9], [0.65, 0.9], [0.7, 0.8], [0.7, 0.9], [0.8, 0.97]];
+  const sample = ids.filter((id) => {
+    const strategy = strategies[id];
+    return (strategy.liveEventMode === "only") || /underway|newportfolio5|moreProbable/i.test(id);
+  });
+  console.log(`\n== what changing ONLY the band would give these portfolios`);
+  console.log("   every other rule of theirs still applies\n");
+  for (const id of sample) {
+    const strategy = strategies[id];
+    const counts = BANDS.map(([lo, hi]) => {
+      const tuned = { ...strategy, minProbability: lo, maxProbability: hi };
+      let eligible = 0;
+      for (const row of rows) {
+        const result = bot.portfolioFilterResult(row, tuned);
+        if (!(Array.isArray(result?.reasons) ? result.reasons : []).length) eligible += 1;
+      }
+      return `${(lo * 100).toFixed(0)}-${(hi * 100).toFixed(0)}: ${eligible}`;
+    });
+    console.log(`   ${id}`);
+    console.log(`      ${counts.join("   ")}`);
   }
   return 0;
 }
