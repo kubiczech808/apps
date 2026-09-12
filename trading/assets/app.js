@@ -1616,9 +1616,13 @@ function dipEntryRuleFromConfig(config = {}) {
   // band. Reported as a fault rather than guessed at.
   const buyMax = dipEntryBound(config.maxProbability == null ? 0.99 : config.maxProbability, 0.99);
   return {
-    // A band typed the wrong way round is an ordering slip and is swapped. Bands in the
-    // wrong PLACE relative to each other are reported as a fault instead -- see below.
-    enabled: config.dipEntryEnabled === true,
+    // Read the way the server reads it, which is the fault behind "the copy came up with
+    // the dip rule unticked". This was `=== true`, and PHP's normalizer accepts true, the
+    // string "true", 1 and "1" -- so a config that carried the flag as anything but a real
+    // boolean displayed as OFF while every other parameter copied across correctly. The
+    // rule was on; the checkbox said it was not.
+    enabled: config.dipEntryEnabled === true || config.dipEntryEnabled === "true"
+      || config.dipEntryEnabled === 1 || config.dipEntryEnabled === "1",
     openMin: Math.min(openMin, openMax),
     openMax: Math.max(openMin, openMax),
     buyMin: Math.min(buyMin, buyMax),
@@ -7329,6 +7333,130 @@ function normalizeOptionalProbability(value) {
   return normalized >= 0.01 && normalized <= 1 ? normalized : null;
 }
 
+// Every numeric field the portfolio form submits, with what it means and what it accepts.
+//
+// One table, because the alternative is what it replaces: each field normalising itself on
+// the way out, so a value outside its range was quietly turned into a legal one and saved
+// as if it had been typed. Reported: 70 and 0 typed into the dip band came back as
+// 1 % - 70 %, and a field left empty filled itself in with 80 %. Nothing was wrong with the
+// clamps -- the mistake was using them on a person's input instead of telling them.
+//
+// `zeroOff` marks the settings where 0 means "switched off", so 0 is legal and everything
+// between 0 and the minimum is not. Saying that in the message is the point: a field that
+// refuses 30 without explaining that the range is 50-99.9 or 0 is no better than one that
+// silently rewrote it.
+function portfolioFormFields() {
+  const dipOn = els.dipEntryEnabled?.checked === true;
+  return [
+    { element: els.eligibilityThreshold, label: "Minimum probability", unit: "%", min: 1, max: 99 },
+    { element: els.maxEligibilityThreshold, label: "Maximum probability", unit: "%", min: 1, max: 99 },
+    { element: els.riskAllocation, label: "Stake", unit: "USDC", min: 0.01, max: 100000 },
+    { element: els.maxResolutionHours, label: "Maximum resolution horizon", unit: "h", min: 1, max: 8760 },
+    { element: els.stopLossProbabilityFloor, label: "Sell below probability", unit: "%", min: 1, max: 99, zeroOff: true },
+    // Required while the rule is switched on, and only then: an unticked dip rule has no
+    // band to be wrong about, and demanding one would block saving every other change.
+    { element: els.dipEntryOpenMin, label: "Dip entry opening band from", unit: "%", min: 1, max: 99, required: dipOn },
+    { element: els.dipEntryOpenMax, label: "Dip entry opening band to", unit: "%", min: 1, max: 99, required: dipOn },
+    { element: els.settlementCloseBid, label: "Close at certainty", unit: "%", min: 50, max: 99.9, zeroOff: true },
+    { element: els.minLiquidity, label: "Minimum liquidity", unit: "USDC", min: 0, max: 100000000 },
+    { element: els.minNetYield, label: "Minimum net profit", unit: "%", min: 0, max: 10000 },
+    { element: els.stopLossRiskMultiplier, label: "Stop loss", unit: "%", min: 1, max: 1000, zeroOff: true },
+    { element: els.fixedEntryPrice, label: "Fixed entry price", unit: "%", min: 1, max: 99, zeroOff: true },
+    { element: els.executionCronMinutes, label: "Cron interval", unit: "min", min: 1, max: 1440, zeroOff: true },
+  ].filter((field) => field.element);
+}
+
+function portfolioFieldRangeText(field) {
+  const range = `${formatFieldBound(field.min)} to ${formatFieldBound(field.max)} ${field.unit}`;
+  return field.zeroOff ? `${range}, or 0 to switch it off` : range;
+}
+
+function formatFieldBound(value) {
+  return Number.isInteger(value) ? String(value) : String(value);
+}
+
+// What is wrong with the form as it stands, field by field. An empty list means it saves.
+function portfolioFormFieldErrors() {
+  const errors = [];
+  const fields = portfolioFormFields();
+  for (const field of fields) {
+    const raw = String(field.element.value ?? "").trim();
+    if (raw === "") {
+      if (field.required) {
+        errors.push({
+          element: field.element,
+          message: `${field.label} is needed while the dip rule is on. Allowed: ${portfolioFieldRangeText(field)}.`,
+        });
+      }
+      continue;
+    }
+    // A comma is what a Czech keyboard produces for a decimal point, and reading it as
+    // "not a number" would refuse a value that is perfectly well expressed.
+    const numeric = Number(raw.replace(",", "."));
+    if (!Number.isFinite(numeric)) {
+      errors.push({
+        element: field.element,
+        message: `${field.label} must be a number. Allowed: ${portfolioFieldRangeText(field)}.`,
+      });
+      continue;
+    }
+    if (field.zeroOff && numeric === 0) continue;
+    if (numeric < field.min || numeric > field.max) {
+      errors.push({
+        element: field.element,
+        message: `${field.label} is ${raw}, which is outside what it accepts. Allowed: ${portfolioFieldRangeText(field)}.`,
+      });
+    }
+  }
+
+  // The two bands, as pairs. Typed the wrong way round they used to be swapped on the way
+  // to storage, which is how "70 and 0" became "1 % - 70 %": the 0 was clamped up to 1 and
+  // then the pair was reordered. Both halves were rewrites of what someone had typed.
+  const pair = (fromElement, toElement, fromLabel, toLabel) => {
+    if (!fromElement || !toElement) return;
+    const rawFrom = String(fromElement.value ?? "").trim();
+    const rawTo = String(toElement.value ?? "").trim();
+    // An empty half is not a band. Number("") is 0, so reading it as a number here reported
+    // a cleared field as "below the one above it" -- a complaint about a value nobody typed.
+    if (rawFrom === "" || rawTo === "") return;
+    const from = Number(rawFrom.replace(",", "."));
+    const to = Number(rawTo.replace(",", "."));
+    if (!Number.isFinite(from) || !Number.isFinite(to) || from <= to) return;
+    if (errors.some((error) => error.element === fromElement || error.element === toElement)) return;
+    errors.push({
+      element: toElement,
+      message: `${toLabel} is ${to}, below ${fromLabel} (${from}). The band has to read upwards.`,
+    });
+  };
+  pair(els.dipEntryOpenMin, els.dipEntryOpenMax, "the opening band from", "Dip entry opening band to");
+  pair(els.eligibilityThreshold, els.maxEligibilityThreshold, "the minimum probability", "Maximum probability");
+
+  return errors;
+}
+
+function clearPortfolioFieldErrors() {
+  for (const field of portfolioFormFields()) {
+    field.element.classList.remove("field-invalid");
+    field.element.removeAttribute("aria-invalid");
+  }
+  for (const note of document.querySelectorAll(".field-error")) note.remove();
+}
+
+function showPortfolioFieldErrors(errors) {
+  clearPortfolioFieldErrors();
+  for (const error of errors) {
+    error.element.classList.add("field-invalid");
+    error.element.setAttribute("aria-invalid", "true");
+    const note = document.createElement("p");
+    note.className = "field-error";
+    note.textContent = error.message;
+    // Beside the field it is about. A list of faults at the top of a long form makes the
+    // reader hunt for which control each one means.
+    error.element.insertAdjacentElement("afterend", note);
+  }
+  errors[0]?.element?.focus?.();
+}
+
 function parameterDraftFromControls(baseDraft = {}) {
   const draft = { ...baseDraft };
   const hasValue = (element) => element && !parameterDraftInputIsEmpty(element);
@@ -7433,6 +7561,22 @@ async function confirmParameterModal() {
   if (creating && requestedCreateType !== normalizePortfolioAccountType(state.parameterDraftCreateType)) {
     if (!switchCreatePortfolioType(requestedCreateType)) return;
   }
+  // Nothing is saved while a field says something the form cannot store. Before this, the
+  // save went ahead and the value was quietly corrected on the way -- which is the fault
+  // reported: a band typed as 70 and 0 was stored as 1 % - 70 %, and an empty field filled
+  // itself in with 80 %. The form has to say what is wrong, not decide what was meant.
+  const fieldErrors = portfolioFormFieldErrors();
+  if (fieldErrors.length) {
+    showPortfolioFieldErrors(fieldErrors);
+    setParameterModalStatus(
+      fieldErrors.length === 1
+        ? "One field needs fixing before this can be saved."
+        : `${fieldErrors.length} fields need fixing before this can be saved.`,
+      "error",
+    );
+    return;
+  }
+  clearPortfolioFieldErrors();
   state.parameterSavePending = true;
   const draftMode = state.parameterDraftMode || state.mode;
   // The modal's controls are the source of truth when Save is pressed. Some mobile
@@ -16623,6 +16767,24 @@ els.stopLossRiskMultiplier?.addEventListener("input", () => {
 // The dip-entry rule's five controls. One handler, because the four bounds and the switch
 // are one setting: any of them changing rewrites the same summary line and saves together.
 // This is the only wiring the feature has -- removing it removes the control.
+// A field stops being wrong the moment it is edited. Leaving the mark on while somebody
+// retypes the value reads as "still refused", and the message under it is about a value
+// that is no longer there.
+for (const element of [
+  els.eligibilityThreshold, els.maxEligibilityThreshold, els.riskAllocation,
+  els.maxResolutionHours, els.stopLossProbabilityFloor, els.dipEntryOpenMin,
+  els.dipEntryOpenMax, els.settlementCloseBid, els.minLiquidity, els.minNetYield,
+  els.stopLossRiskMultiplier, els.fixedEntryPrice, els.executionCronMinutes,
+]) {
+  element?.addEventListener("input", () => {
+    if (!element.classList.contains("field-invalid")) return;
+    element.classList.remove("field-invalid");
+    element.removeAttribute("aria-invalid");
+    element.nextElementSibling?.classList?.contains("field-error")
+      && element.nextElementSibling.remove();
+  });
+}
+
 function dipEntryControlChanged(persist) {
   const current = dipEntryRuleFromConfig(
     state.parameterDraftCreate ? (state.parameterDraft || {}) : portfolioConfigForMode(state.mode),

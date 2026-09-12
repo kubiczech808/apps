@@ -2185,6 +2185,21 @@ body.modal-open {
   color: var(--danger);
 }
 
+/* A field the form will not save, and why, beside the field itself. Before this the value
+   was corrected on the way to storage and saved as if it had been typed that way. */
+.field-invalid {
+  border-color: var(--danger) !important;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--danger) 28%, transparent);
+}
+
+.field-error {
+  margin: 6px 0 0;
+  color: var(--danger);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
 .parameter-confirm-button {
   min-height: 40px;
   padding: 0 16px;
