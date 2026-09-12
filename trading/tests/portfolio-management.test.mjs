@@ -5902,13 +5902,20 @@ test("a portfolio's scope narrows in SQL without ever narrowing more than its ru
   assert.equal(bare.minLiquidityUsdc, undefined);
   assert.equal(bare.endBefore, undefined);
 
-  // And the query itself: a market with no end date is KEPT, because unknown is not the same
-  // as too late, and the payload rules decide it properly. Excluding it in SQL would hide it
-  // with no way to see that it had been.
+  // And the bounds themselves: a market with no end date is KEPT, because unknown is not the
+  // same as too late, and the payload rules decide it properly. Excluding it in SQL would
+  // hide it with no way to see that it had been.
+  //
+  // The clauses moved out of the query builder into a table where each bound carries its SQL
+  // and the same test as a predicate, so that the superset property can be EXECUTED against
+  // real rows instead of read off the file -- that is storage-scope.test.mjs. What stays
+  // here is that the SQL still says this.
+  const clauses = /function trading_storage_scope_clauses[\s\S]*?\n\}/.exec(STORAGE);
+  assert.ok(clauses, "the bounds table must exist");
+  assert.match(clauses[0], /\(end_at IS NULL OR end_at <= :endBefore\)/);
+  assert.match(clauses[0], /\(volume_usdc IS NULL OR volume_usdc >= :minLiquidity\)/);
   const scope = /function trading_storage_observations_for_scope[\s\S]*?\n\}/.exec(STORAGE);
   assert.ok(scope, "the scoped query must exist");
-  assert.match(scope[0], /\(end_at IS NULL OR end_at <= :endBefore\)/);
-  assert.match(scope[0], /\(volume_usdc IS NULL OR volume_usdc >= :minLiquidity\)/);
   // Ranked in the query, not after it: taking a page before ranking is what once served the
   // executor an arbitrary slice of storage order.
   assert.match(scope[0], /ORDER BY annualized_return DESC, end_at ASC, observation_key ASC/);

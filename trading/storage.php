@@ -1155,6 +1155,74 @@ function trading_storage_number(array $item, array $keys): ?float
     return null;
 }
 
+/**
+ * When this market settles, read from the same two fields the horizon rule reads.
+ *
+ * end_at used to be filled from endDate, and endDate is not the settlement date: for a
+ * sports fixture the scanner substitutes the kickoff into it, and for a market with a long
+ * window it can sit days past the resolution the rule actually weighs. So a horizon clause
+ * built on that column disagreed with observation_hours_to_resolution() -- the rule kept a
+ * market, the clause dropped it, and the portfolio simply saw fewer candidates.
+ *
+ * The rule reads resolutionEndDate, and failing that the frozen daysToResolution. This
+ * anchors that day count to the scan rather than to the read, which can only make the stored
+ * moment EARLIER than the rule's, and earlier is the safe direction under an upper bound.
+ * When the rule can answer with neither, the column is NULL -- NULL is admitted, which is
+ * exactly what a rule that cannot apply its horizon does.
+ */
+function trading_storage_resolution_datetime(array $item): ?string
+{
+    $resolution = trading_storage_datetime($item['resolutionEndDate'] ?? null);
+    if ($resolution !== null) {
+        return $resolution;
+    }
+    $days = $item['daysToResolution'] ?? null;
+    if (is_numeric($days)) {
+        return gmdate('Y-m-d H:i:s', time() + (int) round(((float) $days) * 86400));
+    }
+    return null;
+}
+
+/**
+ * One observation as the columns the table stores it in.
+ *
+ * Extracted from the upsert so it can be executed on its own. These columns are the only
+ * thing a narrowed query can ask about -- the rules themselves live inside the payload --
+ * so whether a bound is safe depends entirely on whether the column means the same thing
+ * the rule means. That is a question a test can answer only if it can call this.
+ */
+function trading_storage_observation_columns(array $item): array
+{
+    $payload = trading_storage_encode($item);
+    $tags = $item['polymarketTags'] ?? $item['tags'] ?? $item['firstTags'] ?? [];
+    return [
+        'key' => trading_storage_observation_key($item),
+        'lifecycle' => trading_storage_lifecycle($item),
+        'sourceId' => isset($item['id']) ? (string) $item['id'] : null,
+        'tokenId' => isset($item['tokenId']) ? (string) $item['tokenId'] : (isset($item['firstTokenId']) ? (string) $item['firstTokenId'] : null),
+        'eventSlug' => isset($item['eventSlug']) ? (string) $item['eventSlug'] : null,
+        'marketSlug' => isset($item['slug']) ? (string) $item['slug'] : null,
+        'outcome' => isset($item['outcome']) ? (string) $item['outcome'] : (isset($item['firstOutcome']) ? (string) $item['firstOutcome'] : null),
+        'marketType' => isset($item['marketType']) ? (string) $item['marketType'] : null,
+        'endAt' => trading_storage_resolution_datetime($item),
+        'observedAt' => trading_storage_datetime($item['observedAt'] ?? $item['firstObservedAt'] ?? null),
+        'resolvedAt' => trading_storage_datetime($item['resolvedAt'] ?? $item['updatedAt'] ?? null),
+        'probability' => trading_storage_number($item, ['marketProbability', 'firstMarketProbability']),
+        'netYield' => trading_storage_number($item, ['netYield']),
+        'annualizedReturn' => trading_storage_number($item, ['marketAnnualizedReturn', 'potentialAnnualizedReturn', 'annualizedReturn']),
+        // Read in the order the liquidity RULE reads it, not in a richer order of its own.
+        // resolvedVolumeUsdc used to come first, so a market carrying both stored its
+        // resolved volume while execution_scope_matches_observation() weighed volumeUsdc --
+        // and a floor of 30000 then excluded rows that pass the floor.
+        'volume' => trading_storage_number($item, ['volumeUsdc', 'liquidity', 'resolvedVolumeUsdc', 'volume']),
+        'tags' => trading_storage_encode(is_array($tags) ? $tags : [$tags]),
+        'payload' => trading_storage_pack_encoded($payload),
+        'checksum' => hash('sha256', $payload),
+        'createdAt' => trading_storage_now(),
+        'updatedAt' => trading_storage_now(),
+    ];
+}
+
 function trading_storage_observations_upsert(array $items): int
 {
     $pdo = trading_storage_pdo();
@@ -1187,30 +1255,7 @@ function trading_storage_observations_upsert(array $items): int
             if (!is_array($item)) {
                 continue;
             }
-            $payload = trading_storage_encode($item);
-            $tags = $item['polymarketTags'] ?? $item['tags'] ?? $item['firstTags'] ?? [];
-            $statement->execute([
-                'key' => trading_storage_observation_key($item),
-                'lifecycle' => trading_storage_lifecycle($item),
-                'sourceId' => isset($item['id']) ? (string) $item['id'] : null,
-                'tokenId' => isset($item['tokenId']) ? (string) $item['tokenId'] : (isset($item['firstTokenId']) ? (string) $item['firstTokenId'] : null),
-                'eventSlug' => isset($item['eventSlug']) ? (string) $item['eventSlug'] : null,
-                'marketSlug' => isset($item['slug']) ? (string) $item['slug'] : null,
-                'outcome' => isset($item['outcome']) ? (string) $item['outcome'] : (isset($item['firstOutcome']) ? (string) $item['firstOutcome'] : null),
-                'marketType' => isset($item['marketType']) ? (string) $item['marketType'] : null,
-                'endAt' => trading_storage_datetime($item['endDate'] ?? null),
-                'observedAt' => trading_storage_datetime($item['observedAt'] ?? $item['firstObservedAt'] ?? null),
-                'resolvedAt' => trading_storage_datetime($item['resolvedAt'] ?? $item['updatedAt'] ?? null),
-                'probability' => trading_storage_number($item, ['marketProbability', 'firstMarketProbability']),
-                'netYield' => trading_storage_number($item, ['netYield']),
-                'annualizedReturn' => trading_storage_number($item, ['marketAnnualizedReturn', 'potentialAnnualizedReturn', 'annualizedReturn']),
-                'volume' => trading_storage_number($item, ['resolvedVolumeUsdc', 'volumeUsdc', 'volume', 'liquidity']),
-                'tags' => trading_storage_encode(is_array($tags) ? $tags : [$tags]),
-                'payload' => trading_storage_pack_encoded($payload),
-                'checksum' => hash('sha256', $payload),
-                'createdAt' => trading_storage_now(),
-                'updatedAt' => trading_storage_now(),
-            ]);
+            $statement->execute(trading_storage_observation_columns($item));
             $count += 1;
         }
         $pdo->commit();
@@ -1285,6 +1330,136 @@ function trading_storage_observation_freshness(): array
  *
  * Every bound is optional: a portfolio that does not set one gets no clause for it.
  */
+/**
+ * The bounds of a scoped read, declared once: the SQL clause and the same test in PHP.
+ *
+ * The contract this table exists to keep is that the query returns a SUPERSET of what
+ * execution_scope_matches_observation() keeps. A clause that is a hair too tight hides
+ * markets a portfolio would have traded and nothing downstream can tell -- no error, no
+ * empty page, just fewer candidates. So the clause cannot be checked by reading it.
+ *
+ * Writing the WHERE here and a copy of it in a test would only move the problem: the copy
+ * is what gets checked and the query is what runs. Instead each bound carries both forms,
+ * the query is built from `sql`, and the test drives `admits` over the very columns
+ * trading_storage_observation_columns() would store. One declaration, both readers.
+ */
+function trading_storage_scope_clauses(): array
+{
+    $numeric = static fn ($value): bool => is_numeric($value);
+    return [
+        'minProbability' => [
+            'sql' => 'market_probability >= :minProbability',
+            'param' => 'minProbability',
+            'applies' => $numeric,
+            'bind' => static fn ($value): float => (float) $value,
+            'admits' => static function (array $columns, $value): bool {
+                $stored = $columns['probability'] ?? null;
+                return $stored === null ? false : (float) $stored >= (float) $value;
+            },
+        ],
+        'maxProbability' => [
+            'sql' => 'market_probability <= :maxProbability',
+            'param' => 'maxProbability',
+            'applies' => $numeric,
+            'bind' => static fn ($value): float => (float) $value,
+            'admits' => static function (array $columns, $value): bool {
+                $stored = $columns['probability'] ?? null;
+                return $stored === null ? false : (float) $stored <= (float) $value;
+            },
+        ],
+        // A row with no end date is KEPT rather than excluded: a market whose resolution time
+        // is unknown is not the same as one that resolves too late, and the payload rules
+        // decide it properly. Excluding it here would hide it with no way to see that it had.
+        'endBefore' => [
+            'sql' => '(end_at IS NULL OR end_at <= :endBefore)',
+            'param' => 'endBefore',
+            'applies' => static fn ($value): bool => is_string($value) && $value !== '',
+            'bind' => static fn ($value): string => (string) $value,
+            'admits' => static function (array $columns, $value): bool {
+                $stored = $columns['endAt'] ?? null;
+                return $stored === null ? true : (string) $stored <= (string) $value;
+            },
+        ],
+        'minLiquidityUsdc' => [
+            'sql' => '(volume_usdc IS NULL OR volume_usdc >= :minLiquidity)',
+            'param' => 'minLiquidity',
+            'applies' => $numeric,
+            'bind' => static fn ($value): float => (float) $value,
+            'admits' => static function (array $columns, $value): bool {
+                $stored = $columns['volume'] ?? null;
+                return $stored === null ? true : (float) $stored >= (float) $value;
+            },
+        ],
+    ];
+}
+
+/**
+ * Would the scoped query return this row? Answered on the stored columns alone.
+ *
+ * The other half of the contract, for tests and for the probe: given the columns a row is
+ * written with and the criteria a portfolio compiles to, does every bound admit it. Nothing
+ * here consults the payload, because the query cannot either.
+ */
+function trading_storage_scope_admits(array $columns, array $criteria): bool
+{
+    foreach (trading_storage_scope_clauses() as $name => $clause) {
+        $value = $criteria[$name] ?? null;
+        if (!$clause['applies']($value)) {
+            continue;
+        }
+        if (!$clause['admits']($columns, $value)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/**
+ * The stored columns for named rows, so a miss can be explained instead of guessed at.
+ *
+ * When the scoped query drops a market the rules keep, the useful question is which bound
+ * did it -- the freshness window, the band, the horizon, the floor -- or whether the row
+ * reached the database at all. Guessing that from outside is how three wrong fixes for the
+ * certainty close got shipped, so this returns the values themselves.
+ *
+ * Looked up by primary key and capped: the ids come from a probe's own missed list, and
+ * token_id carries no index, so a lookup on it would scan the whole table.
+ */
+function trading_storage_observation_scope_diagnostics(array $observationKeys): array
+{
+    $pdo = trading_storage_pdo();
+    if (!$pdo instanceof PDO) {
+        return [];
+    }
+    $keys = array_values(array_unique(array_filter(
+        array_map(static fn ($value): string => (string) $value, $observationKeys),
+        static fn (string $value): bool => $value !== '',
+    )));
+    if ($keys === []) {
+        return [];
+    }
+    $keys = array_slice($keys, 0, 40);
+    trading_storage_bootstrap($pdo);
+    $statement = $pdo->prepare(
+        'SELECT observation_key, lifecycle, market_probability, end_at, volume_usdc,'
+        . ' TIMESTAMPDIFF(MINUTE, updated_at, NOW(6)) AS age_minutes'
+        . ' FROM trading_observations WHERE observation_key IN ('
+        . implode(',', array_fill(0, count($keys), '?')) . ')'
+    );
+    $statement->execute($keys);
+    $rows = [];
+    foreach ($statement->fetchAll(PDO::FETCH_ASSOC) ?: [] as $row) {
+        $rows[(string) ($row['observation_key'] ?? '')] = [
+            'lifecycle' => (string) ($row['lifecycle'] ?? ''),
+            'probability' => $row['market_probability'] === null ? null : (float) $row['market_probability'],
+            'endAt' => $row['end_at'] ?? null,
+            'volume' => $row['volume_usdc'] === null ? null : (float) $row['volume_usdc'],
+            'ageMinutes' => $row['age_minutes'] === null ? null : (int) $row['age_minutes'],
+        ];
+    }
+    return $rows;
+}
+
 function trading_storage_observations_for_scope(array $criteria, int $limit = 400, bool $freshOnly = true): array
 {
     $pdo = trading_storage_pdo();
@@ -1297,24 +1472,12 @@ function trading_storage_observations_for_scope(array $criteria, int $limit = 40
     if ($freshOnly) {
         $where[] = 'updated_at >= (NOW(6) - INTERVAL ' . trading_storage_catalogue_fresh_minutes() . ' MINUTE)';
     }
-    if (isset($criteria['minProbability']) && is_numeric($criteria['minProbability'])) {
-        $where[] = 'market_probability >= :minProbability';
-        $params['minProbability'] = (float) $criteria['minProbability'];
-    }
-    if (isset($criteria['maxProbability']) && is_numeric($criteria['maxProbability'])) {
-        $where[] = 'market_probability <= :maxProbability';
-        $params['maxProbability'] = (float) $criteria['maxProbability'];
-    }
-    // A row with no end date is KEPT rather than excluded: a market whose resolution time is
-    // unknown is not the same as one that resolves too late, and the payload rules decide it
-    // properly. Excluding it here would hide it with no way to see that it had been.
-    if (isset($criteria['endBefore']) && is_string($criteria['endBefore']) && $criteria['endBefore'] !== '') {
-        $where[] = '(end_at IS NULL OR end_at <= :endBefore)';
-        $params['endBefore'] = $criteria['endBefore'];
-    }
-    if (isset($criteria['minLiquidityUsdc']) && is_numeric($criteria['minLiquidityUsdc'])) {
-        $where[] = '(volume_usdc IS NULL OR volume_usdc >= :minLiquidity)';
-        $params['minLiquidity'] = (float) $criteria['minLiquidityUsdc'];
+    foreach (trading_storage_scope_clauses() as $name => $clause) {
+        if (!$clause['applies']($criteria[$name] ?? null)) {
+            continue;
+        }
+        $where[] = $clause['sql'];
+        $params[$clause['param']] = $clause['bind']($criteria[$name]);
     }
     // Ordered the way the executor ranks: the best return first, then the nearer resolution.
     // Taking the page BEFORE the ranking is what once served the executor an arbitrary slice

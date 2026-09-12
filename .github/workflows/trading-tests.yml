@@ -36,7 +36,17 @@ jobs:
           for file in trading/tools/*.mjs trading/assets/app.js; do
             node --check "$file"
           done
-          php -l trading/api.php || true
+          # This used to end in `|| true`, which made a PHP parse error pass the suite --
+          # the exact failure the suite exists to catch, silenced on the file that serves
+          # every request. php is preinstalled on the runner; if it ever is not, say so
+          # loudly rather than pretending the files were checked.
+          if command -v php >/dev/null 2>&1; then
+            php -l trading/api.php
+            php -l trading/storage.php
+          else
+            echo "::error::php is unavailable, api.php and storage.php were NOT parsed"
+            exit 1
+          fi
           python3 -c "import ast, sys; [ast.parse(open(f).read()) for f in sys.argv[1:]]" trading/tools/*.py
 
       - name: Run the suite

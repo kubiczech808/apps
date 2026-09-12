@@ -6646,7 +6646,8 @@ try {
         $catalogueSeconds = microtime(true) - $startedCatalogue;
 
         $startedQuery = microtime(true);
-        $queryRows = trading_storage_observations_for_scope($criteria, 5000);
+        $queryLimit = 5000;
+        $queryRows = trading_storage_observations_for_scope($criteria, $queryLimit);
         $queryKept = array_values(array_filter($queryRows, static function ($item) use ($scopeConfig): bool {
             return is_array($item) && ($scopeConfig === null
                 ? is_active_scraped_market_observation($item)
@@ -6660,6 +6661,75 @@ try {
         $catalogueKeys = array_values(array_filter(array_map($keyOf, $catalogueKept)));
         $queryKeys = array_values(array_filter(array_map($keyOf, $queryKept)));
         $missedByQuery = array_values(array_diff($catalogueKeys, $queryKeys));
+
+        // Which bound dropped it, named from the stored columns rather than inferred from
+        // the outside. A count of misses says a cutover is unsafe; only this says what to
+        // fix, and the difference between the two is a round of wrong guesses.
+        $missedReasons = [];
+        if ($missedByQuery !== [] && function_exists('trading_storage_observation_scope_diagnostics')) {
+            $sample = array_slice($missedByQuery, 0, 12);
+            $wanted = array_flip($sample);
+            $itemsByKey = [];
+            foreach ($catalogueKept as $item) {
+                $key = $keyOf($item);
+                if (isset($wanted[$key])) {
+                    $itemsByKey[$key] = $item;
+                }
+            }
+            $stored = [];
+            try {
+                $stored = trading_storage_observation_scope_diagnostics(array_map(
+                    static fn (array $item): string => trading_storage_observation_key($item),
+                    $itemsByKey,
+                ));
+            } catch (Throwable) {
+                $stored = [];
+            }
+            $freshMinutes = trading_storage_catalogue_fresh_minutes();
+            foreach ($sample as $key) {
+                $item = $itemsByKey[$key] ?? null;
+                if ($item === null) {
+                    $missedReasons[] = ['key' => $key, 'why' => ['no catalogue row for this key']];
+                    continue;
+                }
+                $row = $stored[trading_storage_observation_key($item)] ?? null;
+                $why = [];
+                if ($row === null) {
+                    $why[] = 'the row is not in the database';
+                } else {
+                    if ($row['lifecycle'] !== 'SCRAPED') {
+                        $why[] = 'stored as ' . $row['lifecycle'] . ', not SCRAPED';
+                    }
+                    if ($row['ageMinutes'] !== null && $row['ageMinutes'] > $freshMinutes) {
+                        $why[] = 'last written ' . $row['ageMinutes'] . ' minutes ago, outside the '
+                            . $freshMinutes . ' minute catalogue window';
+                    }
+                    foreach (trading_storage_scope_clauses() as $name => $clause) {
+                        $value = $criteria[$name] ?? null;
+                        if ($clause['applies']($value) && !$clause['admits']($row, $value)) {
+                            $why[] = $name . ' excludes it';
+                        }
+                    }
+                }
+                if ($why === []) {
+                    // In scope on every bound and still absent: the page stopped short.
+                    $why[] = 'in scope on every bound -- cut off by the row limit';
+                }
+                $missedReasons[] = [
+                    'key' => $key,
+                    'why' => $why,
+                    'stored' => $row,
+                    'payload' => [
+                        'marketProbability' => $item['marketProbability'] ?? null,
+                        'volumeUsdc' => $item['volumeUsdc'] ?? null,
+                        'liquidity' => $item['liquidity'] ?? null,
+                        'resolutionEndDate' => $item['resolutionEndDate'] ?? null,
+                        'endDate' => $item['endDate'] ?? null,
+                        'daysToResolution' => $item['daysToResolution'] ?? null,
+                    ],
+                ];
+            }
+        }
 
         respond([
             'ok' => true,
@@ -6676,11 +6746,17 @@ try {
                 'read' => count($queryRows),
                 'kept' => count($queryKept),
                 'seconds' => round($querySeconds, 3),
+                'limit' => $queryLimit,
+                // A page that came back full is a page that stopped, not a scope that ended.
+                // Without this the rows beyond it read as markets the bounds had hidden,
+                // which points every conclusion at the wrong thing.
+                'truncated' => count($queryRows) >= $queryLimit,
             ],
             // The number that decides it. Anything above zero means the bounds are tighter
             // than the rules and the query is hiding markets the portfolio would trade.
             'missedByQuery' => count($missedByQuery),
             'missedSample' => array_slice($missedByQuery, 0, 10),
+            'missedReasons' => $missedReasons,
             'extraFromQuery' => max(0, count($queryKeys) - (count($catalogueKeys) - count($missedByQuery))),
         ]);
     }

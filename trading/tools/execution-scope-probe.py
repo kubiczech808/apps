@@ -58,7 +58,8 @@ def probe(strategy: str | None) -> None:
     verdict = "SAFE" if missed == 0 else f"UNSAFE ({missed} hidden)"
     print(f"\n   {label}")
     print(f"      whole catalogue  read {catalogue.get('read'):>6}  kept {catalogue.get('kept'):>5}  {catalogue.get('seconds')}s")
-    print(f"      scoped query     read {query.get('read'):>6}  kept {query.get('kept'):>5}  {query.get('seconds')}s")
+    truncated = " (page full -- the scope did not end here)" if query.get("truncated") else ""
+    print(f"      scoped query     read {query.get('read'):>6}  kept {query.get('kept'):>5}  {query.get('seconds')}s{truncated}")
     speedup = None
     try:
         if float(query.get("seconds") or 0) > 0:
@@ -68,9 +69,18 @@ def probe(strategy: str | None) -> None:
     if speedup:
         print(f"      the query is {speedup:.1f}x faster and decodes {catalogue.get('read', 0) - query.get('read', 0)} fewer rows")
     print(f"      -> {verdict}")
-    if missed:
-        print(f"      hidden sample: {payload.get('missedSample')}")
     print(f"      criteria: {json.dumps(payload.get('criteria'), sort_keys=True)}")
+    for reason in payload.get("missedReasons") or []:
+        stored = reason.get("stored") or {}
+        payload_values = reason.get("payload") or {}
+        print(f"      missed {str(reason.get('key'))[:16]}...: {'; '.join(reason.get('why') or [])}")
+        print(f"         stored  probability={stored.get('probability')} endAt={stored.get('endAt')}"
+              f" volume={stored.get('volume')} ageMinutes={stored.get('ageMinutes')}")
+        print(f"         payload probability={payload_values.get('marketProbability')}"
+              f" volumeUsdc={payload_values.get('volumeUsdc')} liquidity={payload_values.get('liquidity')}"
+              f" resolutionEndDate={payload_values.get('resolutionEndDate')}"
+              f" endDate={payload_values.get('endDate')}"
+              f" daysToResolution={payload_values.get('daysToResolution')}")
 
 
 def main() -> int:
