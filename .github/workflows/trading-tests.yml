@@ -1,0 +1,43 @@
+name: Trading Tests
+
+# The suite, on every push that touches the code it covers.
+#
+# It used to run only when someone remembered to run it locally, which is the same as not
+# running it: a broken renderer and a stop that sold early both reached production with the
+# suite green on a machine that had not been asked. This asks, every time.
+#
+# It deliberately does NOT deploy anything and needs no secrets -- it reads the repository
+# and runs node --test, nothing else.
+on:
+  push:
+    paths:
+      - 'trading/**'
+      - '.github/workflows/trading-tests.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      # Syntax first, and on every runtime separately: a file that cannot parse fails the
+      # suite with one confusing error a long way from the cause.
+      - name: Parse every runtime
+        run: |
+          set -euo pipefail
+          for file in trading/tools/*.mjs trading/assets/app.js; do
+            node --check "$file"
+          done
+          php -l trading/api.php || true
+          python3 -c "import ast, sys; [ast.parse(open(f).read()) for f in sys.argv[1:]]" trading/tools/*.py
+
+      - name: Run the suite
+        run: node --test trading/tests/*.test.mjs

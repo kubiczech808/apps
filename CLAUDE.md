@@ -13,6 +13,36 @@ zdvojnásob"). Tam se neptej, jen jasně napiš, kterou variantu jsi použil a p
 
 Tohle platí pro celé prostředí Claude Code, ve všech projektech, ne jen tady.
 
+## Každou změnu musí hlídat test
+
+Bez výjimky. Ale „napsat test" nestačí — dvakrát po sobě prošla celá sada zelená
+přes rozbitou funkci, takže platí konkrétní pravidla, ne zásada:
+
+1. **Test musí kód spustit, ne popsat.** Tvrzení typu „ve zdrojáku je tenhle
+   řádek" chytí jen překlep. Certainty close se třikrát prodal za 99 % místo
+   99,9 % a pokaždé ho „hlídal" test, který četl zdroják a potvrdil, že vypadá
+   správně — on vypadal. Stejně tak `renderScrapedOpportunities` odkazoval na
+   proměnnou, která neexistovala, a sada byla zelená.
+   Síť podstrč (`globalThis.fetch`), DOM podstrč, a testuj **co funkce
+   rozhodne**. Na zdroják se odkazuj jen tam, kde se propojení spustit nedá.
+
+2. **Ke každé opravě bug přehraj jako bait control.** Vrať chybu, spusť testy a
+   ověř, že test **spadne**. Pokud projde, nemáš oporu v testu — máš díru
+   v testu a musíš opravit ten.
+
+3. **Bait, který neselhal, je nález.** Už se to stalo několikrát: křížek u tagu
+   mazal první štítek místo svého, kontrola per-fixture nálepek testovala tvar,
+   který se do dat nikdy nedostane, a test počítal svou vlastní množinu místo
+   té z kódu. Pokaždé to odhalil až bait, ne původní test.
+
+4. **Před pushem celá sada**, ne jen dotčený soubor:
+   `node --test trading/tests/*.test.mjs`. CI to pustí taky
+   (`trading-tests.yml`), ale to je záchranná síť, ne náhrada.
+
+5. **Starý test, který brání změně, se přepisuje, nemaže** — na nový tvar téhož
+   záměru. Smazat ho smíš jen tehdy, když byla odstraněna sama funkce, kterou
+   testoval, a v commitu to napiš.
+
 ## Rozsah práce
 
 - Trading dashboard a boti: `trading/`. Deploy jde přes `trading-deploy.yml`.
