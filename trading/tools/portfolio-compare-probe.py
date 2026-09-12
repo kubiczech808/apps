@@ -154,8 +154,14 @@ def trades_of(strategy_id: str, account: str) -> list[dict]:
     owner_of = {}
     try:
         policy = get("api.php?action=live-exit-policy")
-        for token, entry in (policy.get("policies") or {}).items():
-            if isinstance(entry, dict) and entry.get("portfolioId"):
+        policies = policy.get("policies")
+        # Keyed by token when the ids survive as strings, a plain list when they do not.
+        entries = policies.items() if isinstance(policies, dict) else [
+            (str((entry or {}).get("tokenId") or (entry or {}).get("assetId") or ""), entry)
+            for entry in (policies or []) if isinstance(entry, dict)
+        ]
+        for token, entry in entries:
+            if isinstance(entry, dict) and entry.get("portfolioId") and token:
                 owner_of[str(token)] = str(entry["portfolioId"])
     except RuntimeError:
         owner_of = {}
