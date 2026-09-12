@@ -41,22 +41,49 @@ def get(url: str):
 
 
 def trade_rows(document):
-    """Every trade in a document, wherever this shape happens to keep them."""
+    """Every trade in a document, found by shape rather than by path.
+
+    The first version of this looked for paperPortfolios[*].trades and reported trades=0 on
+    a 910 KB segment, which says more about the assumed shape than about the file. A trade
+    is recognised here by carrying an openedAt, wherever it happens to sit.
+    """
     found = []
-    portfolios = document.get("paperPortfolios")
-    if isinstance(portfolios, dict):
-        for key, row in portfolios.items():
-            if isinstance(row, dict) and isinstance(row.get("trades"), list):
-                found.extend((key, trade) for trade in row["trades"])
-    if isinstance(document.get("trades"), list):
-        found.extend(("(core)", trade) for trade in document["trades"])
+
+    def walk(node, path, depth=0):
+        if depth > 6:
+            return
+        if isinstance(node, dict):
+            if "openedAt" in node and ("status" in node or "tokenId" in node or "slug" in node):
+                found.append((path, node))
+                return
+            for key, value in node.items():
+                walk(value, f"{path}.{key}" if path else key, depth + 1)
+        elif isinstance(node, list):
+            for item in node[:20000]:
+                walk(item, path, depth + 1)
+
+    walk(document, "")
     return found
+
+
+def shape(document):
+    """Top-level keys with their sizes, so an empty-looking file explains itself."""
+    if not isinstance(document, dict):
+        return type(document).__name__
+    parts = []
+    for key in sorted(document):
+        value = document[key]
+        if isinstance(value, list):
+            parts.append(f"{key}[{len(value)}]")
+        elif isinstance(value, dict):
+            parts.append(f"{key}{{{len(value)}}}")
+    return " ".join(parts[:14])
 
 
 def describe(label: str, document, size: int):
     rows = trade_rows(document)
     if not rows:
-        print(f"   {label:<44} {size/1024:8.0f} KB  trades=0")
+        print(f"   {label:<44} {size/1024:8.0f} KB  trades=0   {shape(document)}")
         return 0
     opened = sorted(str(trade.get("openedAt") or "") for _, trade in rows)
     before = sum(1 for stamp in opened if stamp and stamp < CUTOFF)
