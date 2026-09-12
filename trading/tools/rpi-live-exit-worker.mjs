@@ -832,13 +832,46 @@ export function effectiveStopFloor({ stopPrice, probabilityFloor, entryPrice = n
 // now instead of hours later. A reachable setting is untouched: 0.95 still means 0.95.
 const COARSEST_MARKET_TICK = 0.01;
 
-export function reachableSettlementCloseBid(closeBid) {
-  const level = number(closeBid);
-  if (level == null || !(level > 0)) return null;
-  return Math.min(level, round(1 - COARSEST_MARKET_TICK, 6));
+// Candidate grids, coarsest first. The first that explains every quoted price is the answer:
+// a book is only ever quoted ON its market's grid, so the prices themselves are the evidence.
+const MARKET_TICK_CANDIDATES = [0.01, 0.001, 0.0001];
+
+// The grid this book demonstrates, read from the book rather than assumed.
+//
+// Reported: a position whose portfolio asked for 99.9 was sold at 99.1, forfeiting a win the
+// market had already decided. Cause: the clamp below applied the COARSEST tick to EVERY
+// market, so 0.999 became 0.99 everywhere -- including on markets quoting in tenths of a
+// cent, where 0.999 is perfectly reachable. The 0.991 bid is itself the proof: no 0.01 grid
+// can quote it. The old comment called this "a tenth of a cent early", which was simply
+// wrong -- on a 0.001 market it sells up to 0.9c a share below a certainty already reached.
+//
+// It never claims finer than the book has shown. A book quoting only round cents reads as a
+// 0.01 grid and the clamp still applies there, which is the case it was written for: 0.999
+// on a cent grid is unsatisfiable by construction and would otherwise never fire at all.
+export function observedBookTick(book = {}) {
+  const rows = [
+    ...(Array.isArray(book?.bids) ? book.bids : []),
+    ...(Array.isArray(book?.asks) ? book.asks : []),
+  ];
+  const prices = rows.map((row) => number(row?.price ?? row?.p)).filter((price) => price != null && price > 0);
+  if (!prices.length) return COARSEST_MARKET_TICK;
+  for (const tick of MARKET_TICK_CANDIDATES) {
+    // Compared with a tolerance, not by equality: 0.991 / 0.001 is 990.9999999999999, and an
+    // exact test would read every grid as the finest candidate.
+    if (prices.every((price) => Math.abs(price / tick - Math.round(price / tick)) < 1e-6)) return tick;
+  }
+  return MARKET_TICK_CANDIDATES[MARKET_TICK_CANDIDATES.length - 1];
 }
 
-export function exitReason({ bestBidPrice, bestAskPrice = null, stopPrice, triggerPrice, probabilityFloor = null, entryPrice = null, settlementCloseBid: closeBid } = {}) {
+export function reachableSettlementCloseBid(closeBid, tickSize = COARSEST_MARKET_TICK) {
+  const level = number(closeBid);
+  if (level == null || !(level > 0)) return null;
+  const tick = number(tickSize);
+  const grid = tick != null && tick > 0 ? tick : COARSEST_MARKET_TICK;
+  return Math.min(level, round(1 - grid, 6));
+}
+
+export function exitReason({ bestBidPrice, bestAskPrice = null, stopPrice, triggerPrice, probabilityFloor = null, entryPrice = null, settlementCloseBid: closeBid, tickSize = COARSEST_MARKET_TICK } = {}) {
   const floor = effectiveStopFloor({ stopPrice, probabilityFloor, entryPrice });
   if (floor != null) {
     // The pre-trigger buffer belongs to the level actually in force. Carrying the stored
@@ -849,7 +882,7 @@ export function exitReason({ bestBidPrice, bestAskPrice = null, stopPrice, trigg
     if (exitTrigger({ bestBidPrice, bestAskPrice, stopPrice: floor, triggerPrice: trigger })) return "stop";
   }
   const bid = number(bestBidPrice);
-  const reachable = reachableSettlementCloseBid(closeBid);
+  const reachable = reachableSettlementCloseBid(closeBid, tickSize);
   if (reachable != null && bid != null && bid >= reachable) return "settlement";
   return null;
 }
@@ -2420,6 +2453,9 @@ async function checkOnce(context) {
       // price" without anyone having to re-derive it from the bid.
       crossing: crossing ? { recoveredFraction: crossing.recoveredFraction, gapped: crossing.gapped } : null,
     };
+    // Read from the book in hand, so the certainty close is measured against the grid this
+    // market actually quotes on rather than the coarsest one any market might use.
+    const marketTick = observedBookTick(book);
     const reason = exitReason({
       bestBidPrice: currentBestBid,
       bestAskPrice: currentBestAsk,
@@ -2428,6 +2464,7 @@ async function checkOnce(context) {
       probabilityFloor: plan.probabilityFloor,
       entryPrice: plan.entryPrice,
       settlementCloseBid: plan.settlementCloseBid,
+      tickSize: marketTick,
     });
     // The level actually in force, which is what the sell is priced at and what the gap
     // tolerance is measured against. Using plan.stopPrice for either would price against a
@@ -2439,7 +2476,11 @@ async function checkOnce(context) {
       event.settlementCloseBid = plan.settlementCloseBid;
       // The level the trigger actually used, which is not the stored one on an ordinary
       // 0.01 market. Recorded separately so a log never reports a number no book could meet.
-      event.settlementCloseBidInForce = reachableSettlementCloseBid(plan.settlementCloseBid);
+      event.settlementCloseBidInForce = reachableSettlementCloseBid(plan.settlementCloseBid, marketTick);
+      // And the grid that decided it, so a sale below the stored setting can be explained
+      // from the log instead of re-derived. This one sold at 0.991 against a 0.999 setting
+      // and there was no record of why.
+      event.marketTick = marketTick;
     }
     if (MODE !== "live" || !CONFIRM_LIVE) {
       recordEvent(context.state, {

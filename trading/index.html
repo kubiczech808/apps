@@ -478,7 +478,7 @@
           <input type="checkbox" data-auto-rotate-positions>
           <strong data-auto-rotate-positions-label>On</strong>
         </label>
-        <label class="parameter-control" title="Sell a position once the market prices its outcome as decided, instead of waiting for Polymarket to resolve it - which routinely takes hours while the stake stays locked. 99 sells at a 99c bid, paying about a cent a share to get the capital back now. 0 waits for resolution, which is what every portfolio did before this existed. Most markets quote on a 1c grid, where the highest bid that can exist is 99c - so anything above 99 is applied as 99 rather than never firing.">
+        <label class="parameter-control" title="Sell a position once the market prices its outcome as decided, instead of waiting for Polymarket to resolve it - which routinely takes hours while the stake stays locked. 99 sells at a 99c bid, paying about a cent a share to get the capital back now. 0 waits for resolution, which is what every portfolio did before this existed. A setting finer than the market's own price grid is applied at the top of that grid rather than never firing: 99.9 means 99.9 on a market quoting tenths of a cent, and 99 on one quoting whole cents.">
           <span>Close at certainty</span>
           <input type="number" min="0" max="99.9" step="0.1" value="0" data-settlement-close-bid>
           <strong data-settlement-close-bid-label>Off</strong>

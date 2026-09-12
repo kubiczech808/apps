@@ -1700,9 +1700,21 @@ test("dip entry: arming it is deliberate, and a redeploy never changes it", () =
 // exist is 0.99. The rule was right, the wiring was right, and `bid >= 0.999` was
 // unsatisfiable by construction.
 test("certainty close: the level is clamped to a price a book can actually quote", () => {
-  // 0.999 on an ordinary market means the top of its grid, not an unreachable number.
+  // 0.999 on an ordinary CENT market means the top of its grid, not an unreachable number.
+  // The default stays the coarsest grid, so a caller without a book is never given a level
+  // no book could meet -- which is the failure this clamp was introduced for.
   assert.equal(worker.reachableSettlementCloseBid(0.999), 0.99);
   assert.equal(worker.reachableSettlementCloseBid(0.995), 0.99);
+
+  // But the grid belongs to the MARKET, not to every market at once. On one quoting tenths
+  // of a cent, 0.999 is reachable and must not be lowered: clamping it there sold a position
+  // at 0.991 against a 0.999 setting and gave up a win the market had already decided.
+  assert.equal(worker.reachableSettlementCloseBid(0.999, 0.001), 0.999);
+  assert.equal(worker.reachableSettlementCloseBid(0.9999, 0.0001), 0.9999);
+  assert.equal(worker.reachableSettlementCloseBid(0.999, 0.01), 0.99);
+  // A nonsense tick falls back to the coarsest grid rather than to no clamp at all.
+  assert.equal(worker.reachableSettlementCloseBid(0.999, 0), 0.99);
+  assert.equal(worker.reachableSettlementCloseBid(0.999, null), 0.99);
   // A reachable setting is untouched. This must not quietly lower every level.
   assert.equal(worker.reachableSettlementCloseBid(0.95), 0.95);
   assert.equal(worker.reachableSettlementCloseBid(0.5), 0.5);
@@ -1710,8 +1722,8 @@ test("certainty close: the level is clamped to a price a book can actually quote
   assert.equal(worker.reachableSettlementCloseBid(0), null);
   assert.equal(worker.reachableSettlementCloseBid(null), null);
 
-  const fires = (bid, closeBid) => worker.exitReason({
-    bestBidPrice: bid, bestAskPrice: null, stopPrice: null, triggerPrice: null, settlementCloseBid: closeBid,
+  const fires = (bid, closeBid, tickSize = undefined) => worker.exitReason({
+    bestBidPrice: bid, bestAskPrice: null, stopPrice: null, triggerPrice: null, settlementCloseBid: closeBid, tickSize,
   });
   // The reported case: a 0.01-grid market at the top of its book, with the setting at 0.999.
   assert.equal(fires(0.99, 0.999), "settlement", "0.99 is certainty on a 0.01 market");
@@ -1727,15 +1739,44 @@ test("certainty close: the level is clamped to a price a book can actually quote
   // Off sells nothing, however high the bid goes.
   assert.equal(fires(0.99, 0), null);
 
+  // The reported loss, as its own case. A 0.001-grid market bid at 0.991 with the setting at
+  // 0.999 must NOT sell: 0.991 is not certainty on a book that can quote 0.999.
+  assert.equal(fires(0.991, 0.999, 0.001), null,
+    "a bid below the setting on a grid that can reach the setting is not certainty");
+  assert.equal(fires(0.999, 0.999, 0.001), "settlement", "and at the setting it does sell");
+  // The grid the book proves, end to end: the same bid and setting, decided by the tick.
+  assert.equal(fires(0.99, 0.999, 0.01), "settlement", "0.99 is still certainty on a cent grid");
+
+  // The grid is read from the book, and a price no cent grid could quote proves a finer one.
+  const book = (prices) => ({ bids: prices.map((price) => ({ price: String(price), size: "100" })), asks: [] });
+  assert.equal(worker.observedBookTick(book([0.99, 0.98, 0.97])), 0.01);
+  // 0.29 and 0.57 are cent prices whose division by 0.01 is NOT exact in floating point
+  // (28.999999999999996, 56.99999999999999). An exact multiple test reads them as a finer
+  // grid than the market has, which would leave a 0.999 setting unreachable again -- the
+  // original fault. These are here because the first version of this test used only values
+  // that happened to divide cleanly, and passed with the tolerance removed.
+  assert.equal(worker.observedBookTick(book([0.57, 0.29, 0.07])), 0.01);
+  assert.equal(worker.observedBookTick(book([0.991, 0.99, 0.985])), 0.001);
+  assert.equal(worker.observedBookTick(book([0.9991, 0.99])), 0.0001);
+  // Never finer than the book has shown, and an unreadable book falls back to the coarsest
+  // grid -- the safe direction, where the close still fires.
+  assert.equal(worker.observedBookTick({}), 0.01);
+  assert.equal(worker.observedBookTick({ bids: [] }), 0.01);
+
   // The stop still outranks it: both can be true only in a market that moved from a loss
   // back to certainty, and the stop is checked first.
   assert.equal(worker.exitReason({
     bestBidPrice: 0.99, stopPrice: 0.995, triggerPrice: 0.996, settlementCloseBid: 0.999,
   }), "stop");
 
-  // And a log must never report a level the trigger did not use.
+  // And a log must never report a level the trigger did not use, so both are recorded from
+  // the same tick the trigger read -- with the tick itself beside them, because this sale
+  // happened below its stored setting and nothing in the log said why.
   const source = readFileSync(new URL("../tools/rpi-live-exit-worker.mjs", import.meta.url), "utf8");
-  assert.match(source, /event\.settlementCloseBidInForce = reachableSettlementCloseBid\(plan\.settlementCloseBid\);/);
+  assert.match(source, /const marketTick = observedBookTick\(book\);/);
+  assert.match(source, /settlementCloseBid: plan\.settlementCloseBid,\n\s+tickSize: marketTick,/);
+  assert.match(source, /event\.settlementCloseBidInForce = reachableSettlementCloseBid\(plan\.settlementCloseBid, marketTick\);/);
+  assert.match(source, /event\.marketTick = marketTick;/);
 });
 
 // Reported: a market reached 100%, sat at a 0.999 bid for over five minutes with the

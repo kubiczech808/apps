@@ -1648,10 +1648,15 @@ function configValueIsSet(value) {
   return value != null && value !== "";
 }
 
+// The setting spans every market the portfolio can hold, and they do not all quote on the
+// same grid, so the label cannot name one price. It used to claim anything above 99 became
+// 99 -- which was the worker's behaviour, and was the bug: a market quoting in tenths of a
+// cent CAN reach 99.9, and clamping it sold positions below a certainty already reached.
+// The level is now the top of whichever grid the market being sold actually quotes on.
 function settlementCloseBidLabelValue(bid) {
   if (bid == null || !(bid > 0)) return "Off";
   return bid > 0.99
-    ? `Sell at ${probability(0.99)} (${probability(bid)} is above the 1c grid)`
+    ? `Sell at ${probability(bid)}, or the highest bid the market's grid allows`
     : `Sell at ${probability(bid)}`;
 }
 
