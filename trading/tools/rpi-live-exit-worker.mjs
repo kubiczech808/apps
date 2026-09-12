@@ -977,19 +977,44 @@ async function declaredMarketTick(tokenId) {
 export async function effectiveMarketTick(tokenId, book) {
   const observed = observedBookTick(book);
   const declared = await declaredMarketTick(tokenId);
-  if (declared == null) return observed;
+  // An UNKNOWN declared tick is not a 0.01 tick, and this used to treat it as one by
+  // falling back to the book.
+  //
+  // That fallback is wrong exactly when it is used. The observed tick is read from the
+  // prices the book happens to be quoting, and a market approaching certainty quotes round
+  // cents -- 0.98, 0.99 -- so "observed" reports 0.01 precisely at the moment the position
+  // is about to be sold. The 0.999 the portfolio asked for was then lowered to 0.99 and the
+  // position went a full cent early. Coritiba, Fortaleza and Games Total O/U 3.5 are all
+  // this same path, each time through whatever made the declared lookup miss: a 404, a
+  // network blip, the retry backoff.
+  //
+  // Unknown now means unknown, and an unknown grid never lowers the level. If the market
+  // really is a 0.01 market the close simply does not fire and the position settles at
+  // 1.00, which is MORE than the 0.99 the fallback was taking. The only cost is time, and
+  // since the close only runs when the capital is actually needed, even that is bounded.
+  if (declared == null) return null;
   return Math.min(declared, observed);
 }
 
-export function reachableSettlementCloseBid(closeBid, tickSize = COARSEST_MARKET_TICK) {
+// The level the close can actually be reached at, or the level as configured when the grid
+// is not known.
+//
+// Lowering to the nearest reachable tick is what makes 0.999 fire at all on a market that
+// cannot quote it. But lowering on a GUESS is what sold three positions a cent early, so a
+// missing tick no longer reduces anything: selling early is a permanent loss, waiting is
+// only slower.
+export function reachableSettlementCloseBid(closeBid, tickSize = null) {
   const level = number(closeBid);
   if (level == null || !(level > 0)) return null;
   const tick = number(tickSize);
-  const grid = tick != null && tick > 0 ? tick : COARSEST_MARKET_TICK;
-  return Math.min(level, round(1 - grid, 6));
+  if (tick == null || !(tick > 0)) return level;
+  return Math.min(level, round(1 - tick, 6));
 }
 
-export function exitReason({ bestBidPrice, bestAskPrice = null, stopPrice, triggerPrice, probabilityFloor = null, entryPrice = null, settlementCloseBid: closeBid, tickSize = COARSEST_MARKET_TICK } = {}) {
+// tickSize defaults to null, not to the coarsest grid: a caller that does not know the tick
+// must not be treated as having measured a 0.01 one. That default is what made "no tick
+// here" and "this market trades in cents" the same thing at the only place it matters.
+export function exitReason({ bestBidPrice, bestAskPrice = null, stopPrice, triggerPrice, probabilityFloor = null, entryPrice = null, settlementCloseBid: closeBid, tickSize = null } = {}) {
   const floor = effectiveStopFloor({ stopPrice, probabilityFloor, entryPrice });
   if (floor != null) {
     // The pre-trigger buffer belongs to the level actually in force. Carrying the stored
@@ -2604,8 +2629,9 @@ async function checkOnce(context) {
       // from the log instead of re-derived. This one sold at 0.991 against a 0.999 setting
       // and there was no record of why.
       event.marketTick = marketTick;
-      // What each source said, so the next surprise names its own cause: null here means
-      // the exchange did not answer and the book was all there was.
+      // What each source said, so the next surprise names its own cause. A null declared
+      // tick now means the grid is unknown and the level was NOT lowered -- the book alone
+      // never sets it, because a market at certainty quotes round cents.
       event.declaredTick = declaredTick;
       event.observedTick = observedBookTick(book);
     }
@@ -2614,7 +2640,7 @@ async function checkOnce(context) {
         ...event,
         type: reason === "settlement" ? "SHADOW_SETTLEMENT_CLOSE" : "SHADOW_STOP_TRIGGERED",
         reason: reason === "settlement"
-          ? `the bid is ${currentBestBid} at or above the ${reachableSettlementCloseBid(plan.settlementCloseBid)} settlement close`
+          ? `the bid is ${currentBestBid} at or above the ${reachableSettlementCloseBid(plan.settlementCloseBid, marketTick)} settlement close`
             + ` (set to ${plan.settlementCloseBid}, capped at what the market's grid can quote);`
             + ` no SELL is allowed in shadow mode`
           : crossing?.gapped

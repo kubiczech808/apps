@@ -1700,21 +1700,26 @@ test("dip entry: arming it is deliberate, and a redeploy never changes it", () =
 // exist is 0.99. The rule was right, the wiring was right, and `bid >= 0.999` was
 // unsatisfiable by construction.
 test("certainty close: the level is clamped to a price a book can actually quote", () => {
-  // 0.999 on an ordinary CENT market means the top of its grid, not an unreachable number.
-  // The default stays the coarsest grid, so a caller without a book is never given a level
-  // no book could meet -- which is the failure this clamp was introduced for.
-  assert.equal(worker.reachableSettlementCloseBid(0.999), 0.99);
-  assert.equal(worker.reachableSettlementCloseBid(0.995), 0.99);
+  // 0.999 on a market that is KNOWN to trade in cents means the top of its grid, not an
+  // unreachable number. Known is the whole condition: the clamp only ever applies to a tick
+  // that was actually measured.
+  assert.equal(worker.reachableSettlementCloseBid(0.999, 0.01), 0.99);
+  assert.equal(worker.reachableSettlementCloseBid(0.995, 0.01), 0.99);
 
-  // But the grid belongs to the MARKET, not to every market at once. On one quoting tenths
-  // of a cent, 0.999 is reachable and must not be lowered: clamping it there sold a position
-  // at 0.991 against a 0.999 setting and gave up a win the market had already decided.
+  // The grid belongs to the MARKET, not to every market at once. On one quoting tenths of a
+  // cent, 0.999 is reachable and must not be lowered: clamping it there sold a position at
+  // 0.991 against a 0.999 setting and gave up a win the market had already decided.
   assert.equal(worker.reachableSettlementCloseBid(0.999, 0.001), 0.999);
   assert.equal(worker.reachableSettlementCloseBid(0.9999, 0.0001), 0.9999);
-  assert.equal(worker.reachableSettlementCloseBid(0.999, 0.01), 0.99);
-  // A nonsense tick falls back to the coarsest grid rather than to no clamp at all.
-  assert.equal(worker.reachableSettlementCloseBid(0.999, 0), 0.99);
-  assert.equal(worker.reachableSettlementCloseBid(0.999, null), 0.99);
+
+  // An UNKNOWN grid lowers nothing. This used to default to the coarsest grid, and a
+  // default is not a measurement: it turned "we could not read the tick" into "this market
+  // trades in cents" at the one moment that costs money, and sold three positions a cent
+  // early. Selling early is permanent; holding is only slower, and settles at 1.00.
+  assert.equal(worker.reachableSettlementCloseBid(0.999), 0.999);
+  assert.equal(worker.reachableSettlementCloseBid(0.999, null), 0.999);
+  assert.equal(worker.reachableSettlementCloseBid(0.999, 0), 0.999);
+  assert.equal(worker.reachableSettlementCloseBid(0.999, "nonsense"), 0.999);
   // A reachable setting is untouched. This must not quietly lower every level.
   assert.equal(worker.reachableSettlementCloseBid(0.95), 0.95);
   assert.equal(worker.reachableSettlementCloseBid(0.5), 0.5);
@@ -1725,10 +1730,15 @@ test("certainty close: the level is clamped to a price a book can actually quote
   const fires = (bid, closeBid, tickSize = undefined) => worker.exitReason({
     bestBidPrice: bid, bestAskPrice: null, stopPrice: null, triggerPrice: null, settlementCloseBid: closeBid, tickSize,
   });
-  // The reported case: a 0.01-grid market at the top of its book, with the setting at 0.999.
-  assert.equal(fires(0.99, 0.999), "settlement", "0.99 is certainty on a 0.01 market");
+  // A 0.01-grid market at the top of its book, with the setting at 0.999 -- and the tick
+  // MEASURED rather than assumed.
+  assert.equal(fires(0.99, 0.999, 0.01), "settlement", "0.99 is certainty on a known 0.01 market");
   // One tick below the top is not certainty, and must not sell.
-  assert.equal(fires(0.98, 0.999), null);
+  assert.equal(fires(0.98, 0.999, 0.01), null);
+  // The reported sale, four times over: with no tick measured, 0.99 must NOT sell against a
+  // 0.999 setting. "Games Total: O/U 3.5" went at 99 cents on exactly this.
+  assert.equal(fires(0.99, 0.999), null, "an unmeasured tick must never sell a cent early");
+  assert.equal(fires(0.999, 0.999), "settlement", "and the configured level still fires");
   // A position still a long way out is untouched -- the account had these at 0.69 to 0.90,
   // and selling one of those as though it were decided would be far worse than not selling.
   assert.equal(fires(0.9, 0.999), null, "90% is not certainty and must never read as it");
@@ -1870,8 +1880,9 @@ test("certainty close: the grid is the finer of what the exchange declares and w
   // position was sold below a certainty it could have reached.
   const source = readFileSync(new URL("../tools/rpi-live-exit-worker.mjs", import.meta.url), "utf8");
 
-  const roundCentBook = { bids: [{ price: "0.99", size: "100" }], asks: [] };
-  assert.equal(worker.observedBookTick(roundCentBook), 0.01,
+  const centBook = { bids: [{ price: "0.99", size: "100" }], asks: [] };
+  const fineBook = { bids: [{ price: "0.999", size: "100" }], asks: [] };
+  assert.equal(worker.observedBookTick(centBook), 0.01,
     "a book quoting only round cents cannot prove a finer grid on its own");
 
   // Which is exactly why the declared tick has to be consulted too.
@@ -1882,20 +1893,37 @@ test("certainty close: the grid is the finer of what the exchange declares and w
   assert.equal(fires(0.99, 0.01), "settlement", "but it is certainty on a market that cannot");
   assert.equal(fires(0.999, 0.001), "settlement");
 
-  // The finer of the two, in BOTH directions. Each source has been seen too coarse on its
-  // own and each failure loses money the same way: the book missed a fine grid here, and
-  // the worker's log also holds an exit priced "tick 0.01" against a book quoting 0.999.
-  const pick = /export async function effectiveMarketTick[\s\S]*?\n\}/.exec(source);
-  assert.ok(pick, "the combined tick rule must be findable");
-  assert.match(pick[0], /Math\.min\(declared, observed\)/);
-  assert.match(pick[0], /if \(declared == null\) return observed;/);
+  // The finer of the two, in BOTH directions, driven for real. Each source has been seen
+  // too coarse on its own and each failure loses money the same way: the book missed a fine
+  // grid on Coritiba, and the worker's log also holds an exit priced "tick 0.01" against a
+  // book quoting 0.999.
+  const original = globalThis.fetch;
+  try {
+    globalThis.fetch = gammaStub({ body: [{ orderPriceMinTickSize: 0.001 }] }).fetchStub;
+    assert.equal(await worker.effectiveMarketTick("grid-declared-finer", centBook), 0.001,
+      "a declared 0.001 must win over a book that happens to be quoting round cents");
+
+    globalThis.fetch = gammaStub({ body: [{ orderPriceMinTickSize: 0.01 }] }).fetchStub;
+    assert.equal(await worker.effectiveMarketTick("grid-book-finer", fineBook), 0.001,
+      "and a book quoting 0.999 must win over a declared cent grid");
+
+    // Unknown stays UNKNOWN. This is the fourth sale -- "Games Total: O/U 3.5", sold at 99c:
+    // the declared lookup missed, the book was quoting round cents precisely BECAUSE the
+    // market was already at certainty, and 0.999 was lowered to 0.99 on that guess. The
+    // book alone can never lower the level again.
+    globalThis.fetch = gammaStub({ body: [] }).fetchStub;
+    assert.equal(await worker.effectiveMarketTick("grid-unknown", centBook), null,
+      "a declared tick that could not be read must not be answered with the book's");
+  } finally {
+    globalThis.fetch = original;
+  }
 
   // A failed lookup must not be remembered as a coarse tick: that is this bug, cached, and
   // it would keep selling early for as long as the worker stayed up.
   const lookup = /async function declaredMarketTick[\s\S]*?\n\}/.exec(source)[0];
   assert.match(lookup, /tick = null;/);
   assert.ok(!/tick = COARSEST_MARKET_TICK/.test(lookup) && !/tick = 0\.01/.test(lookup),
-    "a lookup that failed must fall back to the book, not to a coarse tick");
+    "a lookup that failed must answer unknown, not a coarse tick");
   // The caching, the backoff, the closed half and the fallbacks are all driven for real
   // against a stubbed exchange further down this file -- see "a failed lookup is retried,
   // not remembered" and the tests beside it. Matching the source for them here is what gave
@@ -1905,6 +1933,12 @@ test("certainty close: the grid is the finer of what the exchange declares and w
 
   // And the trigger must use it rather than the book alone.
   assert.match(source, /const marketTick = await effectiveMarketTick\(plan\.tokenId, book\);/);
+  // Every level the worker quotes -- the one it sells at and the one it writes into the
+  // log -- is the same level. A reachableSettlementCloseBid() called without the grid
+  // reports the stored setting, so the shadow log claimed a close at 0.999 while the live
+  // path sold at 0.99, and the two disagreed in the record for three of these sales.
+  assert.ok(!/reachableSettlementCloseBid\(plan\.settlementCloseBid\)/.test(source),
+    "the level must never be computed without the market's grid");
   assert.ok(!/const marketTick = observedBookTick\(book\);/.test(source),
     "the trigger must not go back to reading only the book");
 });
@@ -1990,13 +2024,22 @@ test("certainty close: a failed lookup is retried, not remembered", async () => 
   globalThis.fetch = fetchStub;
   try {
     const token = freshToken();
-    // While Gamma refuses, the book is all there is -- and the book says cents.
-    assert.equal(await worker.effectiveMarketTick(token, roundCentBook), 0.01);
+    // While Gamma refuses, the grid is unknown -- and unknown is NOT the book's cents. The
+    // book reads 0.01 here only because the market is already at certainty, so falling back
+    // to it lowered 0.999 to 0.99 at exactly the moment that costs a cent a share.
+    assert.equal(await worker.effectiveMarketTick(token, roundCentBook), null);
     const afterFirst = calls.length;
 
     // Inside the backoff it must not ask again: this runs every second, per position.
-    assert.equal(await worker.effectiveMarketTick(token, roundCentBook), 0.01);
+    assert.equal(await worker.effectiveMarketTick(token, roundCentBook), null);
     assert.equal(calls.length, afterFirst, "a failed lookup must not be re-asked every pass");
+
+    // And with the grid unknown the close does not fire at 0.99 at all: the position rides
+    // to settlement at 1.00, which is worth more than the sale this used to make. Waiting
+    // is slower; selling early is gone for good.
+    assert.equal(worker.exitReason({
+      bestBidPrice: 0.99, stopPrice: null, triggerPrice: null, settlementCloseBid: 0.999, tickSize: null,
+    }), null, "an unknown grid must never lower the certainty level");
 
     // Once the backoff is over and Gamma answers, the real tick takes over -- WITHOUT a
     // restart, which is the whole point.
@@ -2030,17 +2073,30 @@ test("certainty close: a market missing from the open half is still found", asyn
   }
 });
 
-test("certainty close: a tick the exchange does not declare falls back to the book", async () => {
+test("certainty close: a tick the exchange does not declare is UNKNOWN, not a cent", async () => {
+  // This test used to assert the opposite, and the opposite is the bug. With no declared
+  // tick it fell back to the book -- and the book, on a market approaching certainty, is
+  // quoting round cents, so the fallback reported 0.01 at exactly the moment the position
+  // was about to be sold. A 0.999 setting was lowered to 0.99 and the position went a cent
+  // early: Coritiba, Fortaleza, and "Games Total: O/U 3.5" at 99 cents.
+  //
+  // Unknown is now unknown. Nothing is lowered, the close does not fire, and the position
+  // settles at 1.00 -- which is more than the 0.99 the fallback was taking.
   const original = globalThis.fetch;
-  // No tick field at all, and a book that proves a finer grid than a cent.
   const { fetchStub } = gammaStub({ body: [{ question: "no tick declared" }] });
   globalThis.fetch = fetchStub;
   try {
     const fineBook = { bids: [{ price: "0.991", size: "10" }], asks: [] };
-    assert.equal(await worker.effectiveMarketTick(freshToken(), fineBook), 0.001,
-      "the book still proves what the exchange declined to say");
-    assert.equal(await worker.effectiveMarketTick(freshToken(), roundCentBook), 0.01,
-      "and with neither source proving anything finer, the safe cent grid stands");
+    assert.equal(await worker.effectiveMarketTick(freshToken(), fineBook), null,
+      "a book cannot stand in for a tick the exchange did not declare");
+    assert.equal(await worker.effectiveMarketTick(freshToken(), roundCentBook), null,
+      "and a round-cent book least of all -- that is the shape every early sale had");
+
+    // What that means where it matters: the level is not reduced, so 0.99 does not sell.
+    assert.equal(worker.reachableSettlementCloseBid(0.999, null), 0.999);
+    assert.equal(worker.exitReason({
+      bestBidPrice: 0.99, stopPrice: null, triggerPrice: null, settlementCloseBid: 0.999, tickSize: null,
+    }), null, "the reported sale must not happen");
   } finally {
     globalThis.fetch = original;
   }
