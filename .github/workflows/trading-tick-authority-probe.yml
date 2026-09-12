@@ -1,0 +1,29 @@
+name: Trading Tick Authority Probe
+
+# READ-ONLY, manual only. Public GETs against Polymarket's public APIs. No secrets, no
+# runner on the Pi, no state file, no writes of any kind: contents: read and nothing else.
+#
+# Asked because the certainty close sold at 0.99 a fourth time and the worker's event log
+# contradicts the fix committed for it. The worker reads the market's grid from Gamma; the
+# order executor reads it from the CLOB; and the log holds fills at 0.999 on markets Gamma
+# calls 0.01. This prints every source for the tokens that actually sold, so the grid is
+# settled by measurement rather than by a fourth guess.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Ask every tick source about the markets that sold early
+        working-directory: trading
+        run: node tools/tick-authority-probe.mjs
