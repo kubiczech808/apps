@@ -75,6 +75,7 @@ const state = {
   scrapedTaxonomyRowsPending: "",
   scrapedTaxonomyRowsError: "",
   scrapedMarketTypeFilter: "all",
+  scrapedShapeFilter: "all",
   // Keep explicit deep-link filters authoritative during asynchronous catalogue loads.
   scrapedRouteFilter: null,
   // The scraped catalogue has its own multi-select status filter. `evaluationStatus`
@@ -211,6 +212,7 @@ const SCRAPED_PROBABILITY_QUERY_PARAM = "probability";
 const SCRAPED_MAX_PROBABILITY_QUERY_PARAM = "maxProbability";
 const SCRAPED_MAX_DAYS_QUERY_PARAM = "maxDays";
 const SCRAPED_MARKET_TYPE_QUERY_PARAM = "marketType";
+const SCRAPED_SHAPE_QUERY_PARAM = "shape";
 const RISK_ALLOCATION_STORAGE_KEY = "tradingStakeUsdc";
 const LEGACY_RISK_ALLOCATION_STORAGE_KEY = "tradingRiskAllocationFraction";
 const LIMIT_ORDERS_STORAGE_KEY = "tradingUseLimitOrders";
@@ -321,6 +323,8 @@ const els = {
   evaluationLiquidityFilter: document.querySelector("[data-evaluation-liquidity-filter]"),
   scrapedTaxonomyFilter: document.querySelector("[data-scraped-taxonomy-filter]"),
   scrapedMarketTypeFilter: document.querySelector("[data-scraped-market-type-filter]"),
+  scrapedShapeFilter: document.querySelector("[data-scraped-shape-filter]"),
+  scrapedOverview: document.querySelector("[data-scraped-overview]"),
   scrapedStatusOptions: document.querySelectorAll("[data-scraped-status]"),
   scrapedStatusLabels: document.querySelectorAll("[data-scraped-status-label]"),
   portfolioName: document.querySelector("[data-portfolio-name]"),
@@ -2511,11 +2515,11 @@ function portfolioTabRoutePath(tab = "daily-picks") {
 
 function opportunityRoutePath(view = DEFAULT_OPPORTUNITY_VIEW) {
   const normalized = normalizeOpportunityView(view);
-  return normalized === "scan-log"
-    ? "/trading/opportunities/scraped/scan-log/"
-    // The table's own segment. `/opportunities/scraped/` is the page and lands on the log,
-    // so a link meant for the table has to say table or it would open the log instead.
-    : "/trading/opportunities/scraped/table/";
+  if (normalized === "scan-log") return "/trading/opportunities/scraped/scan-log/";
+  if (normalized === "overview") return "/trading/opportunities/scraped/overview/";
+  // The table's own segment. `/opportunities/scraped/` is the page and lands on the log,
+  // so a link meant for the table has to say table or it would open the log instead.
+  return "/trading/opportunities/scraped/table/";
 }
 
 function normalizeScrapedTaxonomyKind(value) {
@@ -2561,6 +2565,12 @@ function scrapedStatusesAreExplicitInRoute(search = window.location.search) {
   return new URLSearchParams(search || "").has(SCRAPED_STATUS_QUERY_PARAM);
 }
 
+// The seven shapes a portfolio excludes by, as a filter value. "all" is no filter.
+function normalizeScrapedShape(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  return Object.prototype.hasOwnProperty.call(MARKET_SHAPE_LABELS, normalized) ? normalized : "all";
+}
+
 function normalizeScrapedMarketType(value) {
   const normalized = String(value || "").trim().toLowerCase();
   return ["all", "binary", "multi"].includes(normalized) ? normalized : "all";
@@ -2582,9 +2592,12 @@ function scrapedRuleFiltersFromRoute(search = window.location.search) {
     daysFilter: daysRaw == null ? null : normalizeEvaluationDaysFilter(daysRaw),
     marketType: normalizeScrapedMarketType(params.get(SCRAPED_MARKET_TYPE_QUERY_PARAM)),
     marketTypeExplicit,
+    shape: normalizeScrapedShape(params.get(SCRAPED_SHAPE_QUERY_PARAM)),
+    shapeExplicit: params.has(SCRAPED_SHAPE_QUERY_PARAM),
     hasRuleFilters: params.has(SCRAPED_PROBABILITY_QUERY_PARAM)
       || params.has(SCRAPED_MAX_PROBABILITY_QUERY_PARAM)
       || params.has(SCRAPED_MAX_DAYS_QUERY_PARAM)
+      || params.has(SCRAPED_SHAPE_QUERY_PARAM)
       || marketTypeExplicit,
   };
 }
@@ -2621,6 +2634,8 @@ function scrapedTaxonomyOpportunityPath(filter = state.scrapedTaxonomyFilter, op
     if (daysFilter != null) query.set(SCRAPED_MAX_DAYS_QUERY_PARAM, String(daysFilter));
     if (marketType !== "all") query.set(SCRAPED_MARKET_TYPE_QUERY_PARAM, marketType);
   }
+  const shape = normalizeScrapedShape(options.shape);
+  if (shape !== "all") query.set(SCRAPED_SHAPE_QUERY_PARAM, shape);
   if (![...query.keys()].length) return opportunityRoutePath("scraped");
   return `${opportunityRoutePath("scraped")}?${query.toString()}`;
 }
@@ -2679,6 +2694,15 @@ function currentRouteState() {
       settingsSection: "evaluation-log",
       evaluationStatus: "EVALUATED",
       opportunityView: "scan-log",
+    };
+  }
+  if (/(?:^|\/)opportunities\/scraped\/overview\/$/.test(path)) {
+    return {
+      page: "opportunities",
+      tab: "settings-runs",
+      settingsSection: "evaluation-log",
+      evaluationStatus: "EVALUATED",
+      opportunityView: "overview",
     };
   }
   const tableRoute = /(?:^|\/)opportunities\/scraped\/table\/$/.test(path);
@@ -2824,7 +2848,9 @@ function setEvaluationStatus(status) {
 // scraping log now, and the two needed telling apart: without it the Scraped button would
 // route to the very path that defaults to the log, and bounce straight back to it.
 function normalizeOpportunityView(view) {
-  return view === "scan-log" ? "scan-log" : "scraped";
+  if (view === "scan-log") return "scan-log";
+  if (view === "overview") return "overview";
+  return "scraped";
 }
 
 // What a visit carrying no view of its own gets. The log is what a visit to this page is
@@ -2841,7 +2867,9 @@ function opportunityViewForBarePath() {
 
 function syncOpportunityPageHeading() {
   const title = state.page === "opportunities"
-    ? (state.opportunityView === "scraped" ? "Scraped opportunities" : state.opportunityView === "scan-log" ? "Scraping log" : "Evaluated opportunities")
+    ? (state.opportunityView === "scraped" ? "Scraped opportunities"
+      : state.opportunityView === "scan-log" ? "Scraping log"
+        : state.opportunityView === "overview" ? "Catalogue overview" : "Evaluated opportunities")
     : "Automation settings";
   if (els.settingsPageTitle) els.settingsPageTitle.textContent = title;
   if (els.opportunityPanelTitle) els.opportunityPanelTitle.textContent = title;
@@ -2850,11 +2878,12 @@ function syncOpportunityPageHeading() {
 function syncOpportunityViewControls() {
   const scraped = state.opportunityView === "scraped";
   const scanLog = state.opportunityView === "scan-log";
+  const overview = state.opportunityView === "overview";
   els.opportunityViewButtons.forEach((button) => {
     button.classList.toggle("active", button.dataset.opportunityView === state.opportunityView);
   });
   els.evaluationOnlyControls.forEach((element) => {
-    element.hidden = scraped || scanLog;
+    element.hidden = scraped || scanLog || overview;
   });
   els.scrapedOnlyControls.forEach((element) => {
     element.hidden = !scraped;
@@ -2864,13 +2893,13 @@ function syncOpportunityViewControls() {
     element.hidden = !scanLog;
   });
   els.opportunityFilterControls.forEach((element) => {
-    element.hidden = scanLog;
+    element.hidden = scanLog || overview;
   });
   // Days left, net yield and liquidity all describe whether a market can be traded
   // now. When the multi-select contains only settled rows, they can only ever
   // empty the list, so hide them instead of letting a leftover value silently do so.
   els.tradabilityFilterControls.forEach((element) => {
-    element.hidden = scanLog || tradabilityFiltersAreIrrelevant();
+    element.hidden = scanLog || overview || tradabilityFiltersAreIrrelevant();
   });
   const scrapedCounts = scraped ? scrapedOpportunityStatusCounts() : null;
   els.scrapedStatusLabels.forEach((label) => {
@@ -2885,6 +2914,7 @@ function syncOpportunityViewControls() {
   renderScrapedScanControls();
   syncScrapedTaxonomyFilterControl();
   syncScrapedMarketTypeFilterControl();
+  syncScrapedShapeFilterControl();
 }
 
 function normalizedScrapedScanTag(value) {
@@ -3036,6 +3066,11 @@ function taxonomyFilterDisplayLabel(kind, label) {
   return scrapedScanTagLabel(label);
 }
 
+function syncScrapedShapeFilterControl() {
+  if (!els.scrapedShapeFilter) return;
+  els.scrapedShapeFilter.value = normalizeScrapedShape(state.scrapedShapeFilter);
+}
+
 function syncScrapedTaxonomyFilterControl() {
   if (!els.scrapedTaxonomyFilter) return;
   const options = scrapedTaxonomyFilterOptions();
@@ -3089,7 +3124,14 @@ function applyScrapedTaxonomyRouteFilter(filter, statuses = ["SCRAPED"], ruleFil
     daysFilter: ruleFilters?.hasRuleFilters ? ruleFilters.daysFilter : null,
     marketType: ruleFilters?.hasRuleFilters ? normalizeScrapedMarketType(ruleFilters.marketType) : "all",
     marketTypeExplicit: Boolean(ruleFilters?.marketTypeExplicit),
+    shape: ruleFilters?.hasRuleFilters ? normalizeScrapedShape(ruleFilters.shape) : "all",
+    shapeExplicit: Boolean(ruleFilters?.shapeExplicit),
   };
+  // Mirrored into the control as well, so the Shape select shows what the link asked for
+  // rather than leaving the list narrowed by something the page does not admit to.
+  state.scrapedShapeFilter = ruleFilters?.shapeExplicit
+    ? normalizeScrapedShape(ruleFilters.shape)
+    : "all";
   setScrapedStatuses(normalizedStatuses, { render: false });
   if (ruleFilters?.hasRuleFilters) {
     state.evaluationProbabilityFilter = ruleFilters.probabilityFilter ?? 0;
@@ -3180,7 +3222,7 @@ function setOpportunityView(view, { syncRoute = false, replace = false } = {}) {
   syncOpportunityPageHeading();
   syncOpportunityViewControls();
   renderBotEvaluations();
-  if (state.opportunityView === "scraped" || state.opportunityView === "scan-log") ensureScrapedMarketState();
+  if (state.opportunityView === "scraped" || state.opportunityView === "scan-log" || state.opportunityView === "overview") ensureScrapedMarketState();
   if (state.opportunityView === "scan-log") loadScrapeRunHistory({ reset: true });
   if (syncRoute && state.page === "opportunities") {
     const targetPath = state.opportunityView === "scraped"
@@ -3206,7 +3248,7 @@ function activatePage(page, { replace = false, preserveSearch = false } = {}) {
     setEvaluationStatus("EVALUATED");
     activateTab("settings-runs");
     ensureFullBotState();
-    if (state.opportunityView === "scraped" || state.opportunityView === "scan-log") ensureScrapedMarketState();
+    if (state.opportunityView === "scraped" || state.opportunityView === "scan-log" || state.opportunityView === "overview") ensureScrapedMarketState();
   } else if (nextPage === "settings") {
     setSettingsSection("calculations");
     activateTab("settings-runs");
@@ -8800,7 +8842,7 @@ async function ensureScrapedMarketState(options = {}) {
   if ((!options.force && scrapedMarketStateIsLoaded() && state.scrapedMarketStateSummary === summary && matchingExecutionScope) || state.scrapedMarketStateBusy) return;
   state.scrapedMarketStateBusy = true;
   state.scrapedMarketStateError = "";
-  if ((state.opportunityView === "scraped" || state.opportunityView === "scan-log") && els.botEvaluations) {
+  if ((state.opportunityView === "scraped" || state.opportunityView === "scan-log" || state.opportunityView === "overview") && els.botEvaluations) {
     els.botEvaluations.innerHTML = '<div class="empty">Loading scraped Polymarket opportunities...</div>';
   }
   try {
@@ -8830,7 +8872,7 @@ async function ensureScrapedMarketState(options = {}) {
         await loadResolvedScrapedPages(options);
       }
     }
-    if (state.opportunityView === "scraped" || state.opportunityView === "scan-log") renderBotEvaluations();
+    if (state.opportunityView === "scraped" || state.opportunityView === "scan-log" || state.opportunityView === "overview") renderBotEvaluations();
     if (isLiveMode() && state.liveState) {
       // Open CLOB orders only expose a token ID. Re-render after scraped market
       // metadata arrives so the table can resolve its human market title.
@@ -8841,7 +8883,7 @@ async function ensureScrapedMarketState(options = {}) {
   } catch (error) {
     state.scrapedMarketStateError = error?.message || "Scraped Polymarket data could not be loaded.";
     rememberStateFetchError("paper", error);
-    if ((state.opportunityView === "scraped" || state.opportunityView === "scan-log") && els.botEvaluations) {
+    if ((state.opportunityView === "scraped" || state.opportunityView === "scan-log" || state.opportunityView === "overview") && els.botEvaluations) {
       els.botEvaluations.innerHTML = `<div class="empty">${escapeHtml(error.message || "Scraped opportunities are not available yet.")}</div>`;
     }
     if (shouldRenderCandidateBotState()) renderPortfolioCandidates();
@@ -9775,7 +9817,7 @@ async function triggerScrapedOpportunityRefresh(item) {
 
   state.scrapedRefreshKeys.add(key);
   state.scrapedRefreshErrors.delete(key);
-  if (state.page === "opportunities" && (state.opportunityView === "scraped" || state.opportunityView === "scan-log")) renderBotEvaluations();
+  if (state.page === "opportunities" && (state.opportunityView === "scraped" || state.opportunityView === "scan-log" || state.opportunityView === "overview")) renderBotEvaluations();
 
   const startedAt = new Date().toISOString();
   try {
@@ -9800,7 +9842,7 @@ async function triggerScrapedOpportunityRefresh(item) {
     state.scrapedRefreshErrors.set(key, error?.message || "Could not refresh this Polymarket market.");
   } finally {
     state.scrapedRefreshKeys.delete(key);
-    if (state.page === "opportunities" && (state.opportunityView === "scraped" || state.opportunityView === "scan-log")) renderBotEvaluations();
+    if (state.page === "opportunities" && (state.opportunityView === "scraped" || state.opportunityView === "scan-log" || state.opportunityView === "overview")) renderBotEvaluations();
   }
 }
 
@@ -12788,8 +12830,14 @@ function showMoreScrapedOpportunities() {
   return true;
 }
 
-function renderScrapedOpportunities() {
-  syncScrapedTaxonomyFilterControl();
+// The rows the scraped list is showing, as one function.
+//
+// Pulled out so the overview can count with the SAME predicate instead of a second one
+// written to resemble it. The overview's whole promise is that a row claiming 42 opens a
+// list of 42, and two copies of a filter chain this long -- statuses, taxonomy, shape,
+// market type, entry price, days, net yield, volume, plus a drill-down that deliberately
+// skips half of them -- would disagree on the first change to either.
+function filteredScrapedObservations() {
   const catalogue = scrapedMarketObservations();
   const drilldownRequest = scrapedTaxonomyDrilldownRequest();
   const drilldownKey = scrapedTaxonomyDrilldownKey(drilldownRequest);
@@ -12814,6 +12862,7 @@ function renderScrapedOpportunities() {
   // A route filter is also created for ordinary status/taxonomy routes. It must not
   // override a market-type value selected in the live UI unless the URL explicitly
   // carried marketType (for example a link from the parameter report).
+  const shapeFilter = normalizeScrapedShape(routeFilter?.shapeExplicit ? routeFilter.shape : state.scrapedShapeFilter);
   const marketTypeFilter = routeFilter?.marketTypeExplicit
     ? normalizeScrapedMarketType(routeFilter.marketType)
     : normalizeScrapedMarketType(state.scrapedMarketTypeFilter);
@@ -12828,6 +12877,9 @@ function renderScrapedOpportunities() {
     // narrowing, so they still apply.
     if (!drilldown && !scrapedTaxonomyFilterMatches(item, taxonomyFilter)) return false;
     if (marketTypeFilter !== "all" && scrapedMarketType(item) !== marketTypeFilter) return false;
+    // Market shape, the same seven a portfolio excludes by. The overview links here on
+    // one, so this must narrow exactly the way the overview counted.
+    if (shapeFilter !== "all" && candidateMarketShape(item) !== shapeFilter) return false;
     // Filtered on the price the statistics count this row at, not on today's quote.
     // These links come from the performance tables, and a count that does not match the
     // rows behind it is the report disagreeing with its own evidence. A resolved row is
@@ -12858,6 +12910,29 @@ function renderScrapedOpportunities() {
     const volume = scrapedTradedVolumeUsdc(item);
     return minLiquidity <= 0 || (Number.isFinite(volume) && volume >= minLiquidity);
   });
+  return {
+    catalogue,
+    filtered,
+    drilldown,
+    selectedStatuses,
+    taxonomyFilter,
+    marketTypeFilter,
+    shapeFilter,
+    probabilityFilter,
+    maxProbabilityFilter,
+    daysFilter,
+    minNetYield,
+    minLiquidity,
+  };
+}
+
+function renderScrapedOpportunities() {
+  syncScrapedTaxonomyFilterControl();
+  syncScrapedShapeFilterControl();
+  const {
+    catalogue, filtered, drilldown, selectedStatuses, taxonomyFilter, marketTypeFilter,
+    shapeFilter, probabilityFilter, maxProbabilityFilter, daysFilter, minNetYield, minLiquidity,
+  } = filteredScrapedObservations();
   const scope = JSON.stringify({
     statuses: selectedStatuses,
     taxonomy: taxonomyFilter,
@@ -12867,6 +12942,7 @@ function renderScrapedOpportunities() {
     minNetYield,
     minLiquidity,
     marketTypeFilter,
+    shapeFilter,
     sort: state.scrapedSort,
   });
   const visibleLimit = scrapedVisibleCount(scope);
@@ -13245,6 +13321,74 @@ function renderScrapeRunLog() {
   `;
 }
 
+// What the catalogue holds, by tag and by market shape.
+//
+// Counted from filteredScrapedObservations() -- the SAME rows the Scraped list shows under
+// the same filters -- because the promise of this table is that a cell reading 42 opens a
+// list of 42. A second count written to resemble the first would have drifted the moment
+// either changed.
+//
+// Tags overlap: a market carries several, so the tag rows deliberately add up to more than
+// the total. The header says so rather than leaving a reader to find it the hard way.
+function scrapedOverviewRows(observations) {
+  const shapes = Object.keys(MARKET_SHAPE_LABELS);
+  const blank = () => Object.fromEntries(shapes.map((shape) => [shape, 0]));
+  const byTag = new Map();
+  const totals = { total: 0, ...blank() };
+
+  for (const item of observations) {
+    const shape = candidateMarketShape(item);
+    totals.total += 1;
+    if (Object.hasOwn(totals, shape)) totals[shape] += 1;
+    // The same set the taxonomy filter tests against, so counting here and filtering there
+    // cannot disagree: the filter asks `values.has(label)`, and this counts each value.
+    const values = taxonomyValuesFromRecord(item, "tag");
+    const labels = values.size ? [...values] : ["untagged"];
+    for (const label of labels) {
+      if (!byTag.has(label)) byTag.set(label, { label, total: 0, ...blank() });
+      const row = byTag.get(label);
+      row.total += 1;
+      if (Object.hasOwn(row, shape)) row[shape] += 1;
+    }
+  }
+  const rows = [...byTag.values()].sort((a, b) => b.total - a.total || a.label.localeCompare(b.label));
+  return { rows, totals, shapes };
+}
+
+function renderScrapedOverview() {
+  if (!els.botEvaluations) return;
+  const { filtered } = filteredScrapedObservations();
+  const { rows, totals, shapes } = scrapedOverviewRows(filtered);
+  const linkFor = (label, shape) => scrapedTaxonomyOpportunityPath(
+    label === "untagged" ? { kind: "tag", label: "untagged" } : { kind: "tag", label },
+    { statuses: normalizeScrapedStatuses(state.scrapedStatuses), shape },
+  );
+  const cell = (label, shape, count) => (count > 0
+    ? `<a class="scraped-overview-count" href="${escapeHtml(linkFor(label, shape))}" data-overview-link>${formatInteger(count) || count}</a>`
+    : '<span class="scraped-overview-zero">-</span>');
+
+  const header = `<tr><th>Tag</th><th>All</th>${shapes
+    .map((shape) => `<th>${escapeHtml(marketShapeLabel(shape))}</th>`).join("")}</tr>`;
+  const totalRow = `<tr class="scraped-overview-totals"><th>All tags</th>`
+    + `<td><a href="${escapeHtml(scrapedTaxonomyOpportunityPath(null, { statuses: normalizeScrapedStatuses(state.scrapedStatuses) }))}" data-overview-link>${formatInteger(totals.total) || totals.total}</a></td>`
+    + shapes.map((shape) => `<td>${totals[shape]
+      ? `<a href="${escapeHtml(scrapedTaxonomyOpportunityPath(null, { statuses: normalizeScrapedStatuses(state.scrapedStatuses), shape }))}" data-overview-link>${formatInteger(totals[shape]) || totals[shape]}</a>`
+      : '<span class="scraped-overview-zero">-</span>'}</td>`).join("")
+    + `</tr>`;
+  const body = rows.map((row) => `<tr>`
+    + `<th><a href="${escapeHtml(linkFor(row.label, "all"))}" data-overview-link>${escapeHtml(row.label)}</a></th>`
+    + `<td>${cell(row.label, "all", row.total)}</td>`
+    + shapes.map((shape) => `<td>${cell(row.label, shape, row[shape])}</td>`).join("")
+    + `</tr>`).join("");
+
+  els.botEvaluations.innerHTML = rows.length
+    ? `<div class="scraped-overview-note">${formatInteger(totals.total) || totals.total} markets, under the filters currently set on the Scraped tab.`
+      + ` A market carries several tags, so the tag rows add up to more than that.`
+      + ` Every number is a link and opens the list it counted.</div>`
+      + `<div class="ledger-scroll"><table class="scraped-overview"><thead>${header}${totalRow}</thead><tbody>${body}</tbody></table></div>`
+    : '<p class="empty">Nothing scraped under the filters currently set on the Scraped tab.</p>';
+}
+
 function renderBotEvaluations() {
   syncOpportunityViewControls();
   if (state.opportunityView === "scan-log") {
@@ -13253,6 +13397,10 @@ function renderBotEvaluations() {
   }
   if (state.opportunityView === "scraped") {
     renderScrapedOpportunities();
+    return;
+  }
+  if (state.opportunityView === "overview") {
+    renderScrapedOverview();
     return;
   }
   const evaluations = Array.isArray(state.botState?.evaluations) ? state.botState.evaluations : [];
@@ -16081,6 +16229,20 @@ els.scrapedTaxonomyFilter?.addEventListener("change", async () => {
     if (currentPath !== targetPath) {
       window.history.pushState({ page: "opportunities", opportunityView: "scraped" }, "", targetPath);
     }
+  }
+});
+
+els.scrapedShapeFilter?.addEventListener("change", () => {
+  state.scrapedRouteFilter = null;
+  state.scrapedShapeFilter = normalizeScrapedShape(els.scrapedShapeFilter.value);
+  syncScrapedShapeFilterControl();
+  renderBotEvaluations();
+  if (state.page === "opportunities" && state.opportunityView === "scraped") {
+    const query = new URLSearchParams(window.location.search);
+    if (state.scrapedShapeFilter === "all") query.delete(SCRAPED_SHAPE_QUERY_PARAM);
+    else query.set(SCRAPED_SHAPE_QUERY_PARAM, state.scrapedShapeFilter);
+    const targetPath = `${opportunityRoutePath("scraped")}${query.toString() ? `?${query.toString()}` : ""}`;
+    window.history.replaceState({}, "", targetPath);
   }
 });
 

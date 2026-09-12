@@ -255,6 +255,7 @@
                 <div class="segmented opportunity-view-toggle" data-opportunity-view-toggle>
                   <button class="segment-button active" type="button" data-opportunity-view="scraped">Scraped</button>
                   <button class="segment-button" type="button" data-opportunity-view="scan-log">Scraping log</button>
+                  <button class="segment-button" type="button" data-opportunity-view="overview">Overview</button>
                 </div>
                 <!-- On the Scraping log tab, beside the log the scan writes: one button, no
                      choices. The tag select and the table's own display filters used to
@@ -300,6 +301,21 @@
                       <option value="all">All markets</option>
                       <option value="binary">Yes / No</option>
                       <option value="multi">Multi-outcome</option>
+                    </select>
+                  </label>
+                  <!-- The same seven shapes a portfolio excludes by, so the Overview can
+                       link here on one and the list narrows the way the count was made. -->
+                  <label class="threshold-control scraped-market-type-control" data-scraped-only data-opportunity-filter title="Filter scraped opportunities by market shape - the same seven a portfolio excludes by in its settings.">
+                    <span>Shape</span>
+                    <select data-scraped-shape-filter aria-label="Filter scraped opportunities by market shape">
+                      <option value="all">All shapes</option>
+                      <option value="over-under">Over/Under</option>
+                      <option value="spread">Spread</option>
+                      <option value="exact-score">Exact score</option>
+                      <option value="draw">Draw</option>
+                      <option value="in-event-leg">In-event leg</option>
+                      <option value="both-teams">Both teams to score</option>
+                      <option value="outright">Outright</option>
                     </select>
                   </label>
                   <fieldset class="scraped-status-control" data-scraped-only data-opportunity-filter>

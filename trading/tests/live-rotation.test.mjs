@@ -4075,12 +4075,14 @@ test("opportunities page: the active choice is obvious and the filters belong to
     const rule = new RegExp(`\\${selector} \\{\\n  display: inline-flex;`);
     assert.match(css, rule, `${selector} sets its own display, which is why the global rule is needed`);
   }
-  assert.match(app, /els\.opportunityFilterControls\.forEach\(\(element\) => \{\n\s+element\.hidden = scanLog;/);
+  assert.match(app, /els\.opportunityFilterControls\.forEach\(\(element\) => \{\n\s+element\.hidden = scanLog \|\| overview;/);
 
   // The evaluated view is retired -- nothing produces AI verdicts any more -- so the tab
   // is gone and any stored route or old link resolves to the scraped list, not a blank.
   assert.doesNotMatch(html, /data-opportunity-view="evaluated"/);
-  assert.match(app, /function normalizeOpportunityView\(view\) \{\n  return view === "scan-log" \? "scan-log" : "scraped";/);
+  // Anything that is not one of the three named views resolves to the scraped list, so a
+  // stored route or an old link still lands somewhere rather than on a blank page.
+  assert.match(app, /function normalizeOpportunityView\(view\) \{\n  if \(view === "scan-log"\) return "scan-log";\n  if \(view === "overview"\) return "overview";\n  return "scraped";/);
   // And a visit that names no view at all lands on the scraping log, which is where the
   // manual scan lives -- unless it carries filters, which only the table can honour.
   assert.match(app, /const DEFAULT_OPPORTUNITY_VIEW = "scan-log";/);

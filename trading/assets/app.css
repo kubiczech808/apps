@@ -1131,6 +1131,47 @@ button:disabled {
   min-width: 1310px;
 }
 
+/* Eight narrow columns -- a tag and seven counts. Wide enough that the shape headings do
+   not wrap to three lines each on a phone, narrow enough not to make a tablet scroll. */
+.ledger .scraped-overview {
+  min-width: 780px;
+}
+
+.scraped-overview-note {
+  margin: 0 0 10px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 750;
+}
+
+/* The counts are links, and they have to look like the numbers they are rather than a wall
+   of underlined blue -- but still read as clickable, since the whole table is a way in. */
+.scraped-overview-count,
+.scraped-overview th a,
+.scraped-overview td a {
+  color: inherit;
+  font-weight: 850;
+  text-decoration: none;
+  border-bottom: 1px dotted var(--line);
+}
+
+.scraped-overview-count:hover,
+.scraped-overview th a:hover,
+.scraped-overview td a:hover {
+  color: var(--accent-dark);
+  border-bottom-color: var(--accent-dark);
+}
+
+.scraped-overview-zero {
+  color: var(--muted);
+}
+
+.scraped-overview-totals th,
+.scraped-overview-totals td {
+  font-weight: 900;
+  border-bottom: 2px solid var(--line);
+}
+
 /* Settings history is four short columns -- a timestamp, a parameter name and two values.
    The blanket `.ledger table { min-width: 1280px }` below is sized for the wide trade
    tables, and applying it here made a phone scroll a full screen sideways to read four

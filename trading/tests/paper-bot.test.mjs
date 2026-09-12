@@ -2247,7 +2247,7 @@ test("resolved observations: the scraped view surfaces them without a days filte
   // No tradability filter may apply to a resolved row, and all of them are hidden there.
   assert.match(app, /if \(scrapedObservationStatus\(item\) === "RESOLVED"\) return true;/);
   assert.match(app, /function tradabilityFiltersAreIrrelevant/);
-  assert.match(app, /element\.hidden = scanLog \|\| tradabilityFiltersAreIrrelevant\(\);/);
+  assert.match(app, /element\.hidden = scanLog \|\| overview \|\| tradabilityFiltersAreIrrelevant\(\);/);
   // The markup must mark every one of them, or a leftover value silently empties the tab.
   const marked = (await readFile(new URL("../index.html", import.meta.url), "utf8"))
     .split("\n").filter((line) => line.includes("data-tradability-filter"));
@@ -7916,7 +7916,10 @@ test("tag performance: the list behind a statistic is the set the statistic coun
   assert.equal(statsEntry(rows[6]), null, "a row with no live quote is counted by neither side");
 
   // And the list applies both of those rules where it filters, not only where it displays.
-  const render = functionSource(app, "renderScrapedOpportunities");
+  // The filter chain moved into filteredScrapedObservations when the Overview began
+  // counting with it -- the point being that both use one predicate, so this claim is
+  // now made where that predicate lives.
+  const render = functionSource(app, "filteredScrapedObservations");
   assert.match(render, /const filterProbability = Number\(isResolved \? scrapedEntryProbability\(item\) : scrapedDisplayProbability\(item\)\);/);
   assert.match(render, /if \(isResolved && scrapedEntryProbability\(item\) == null\) return false;/);
   // A settled row shows the number it was filtered on, so the column cannot contradict

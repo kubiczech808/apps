@@ -6469,3 +6469,87 @@ test("opportunities page: a plain visit lands on the scraping log, and the table
   assert.equal(resolve(buildPath("scraped")), "scraped", "the table link must round-trip");
   assert.equal(resolve(buildPath("scan-log")), "scan-log", "and so must the log link");
 });
+
+test("catalogue overview: every count is the list it opens", () => {
+  // The promise of this table is that a cell reading 42 opens a list of 42. That only holds
+  // while the counting and the filtering are one predicate, so this drives BOTH against the
+  // same rows: it counts with scrapedOverviewRows, then applies the scraped list's own tag
+  // and shape tests to the same set and checks the two agree.
+  const harness = new Function("rows", `
+    ${/const MARKET_SHAPE_LABELS = \{[\s\S]*?\n\};/.exec(APP)[0]}
+    ${extractFunction(APP, "candidateIsOverUnderMarket")}
+    ${/const CANDIDATE_MARKET_SHAPE_PATTERNS = \[[\s\S]*?\n\];/.exec(APP)[0]}
+    ${extractFunction(APP, "candidateMarketShape")}
+    ${extractFunction(APP, "normalizeScrapedShape")}
+    ${extractFunction(APP, "scrapedOverviewRows")}
+    // The taxonomy set the real filter tests against, stubbed to the field these fixtures
+    // carry -- the filter asks values.has(label), and the overview counts each value.
+    function taxonomyValuesFromRecord(item) {
+      return new Set(Array.isArray(item.polymarketTags) ? item.polymarketTags : []);
+    }
+    const overview = scrapedOverviewRows(rows);
+    // The scraped list's own narrowing, for one tag and one shape.
+    const listed = (label, shape) => rows.filter((item) => {
+      const values = taxonomyValuesFromRecord(item);
+      const matchesTag = label === "untagged" ? values.size === 0 : values.has(label);
+      if (!matchesTag) return false;
+      const wanted = normalizeScrapedShape(shape);
+      return wanted === "all" || candidateMarketShape(item) === wanted;
+    }).length;
+    return { overview, listed };
+  `);
+
+  const market = (question, tags) => ({ question, polymarketTags: tags });
+  const rows = [
+    market("Will Arsenal win?", ["sports", "soccer"]),
+    market("Arsenal vs Spurs: O/U 2.5", ["sports", "soccer"]),
+    market("Spread: Arsenal (-1.5)", ["sports", "soccer"]),
+    market("Exact Score: Arsenal 2 - 1 Spurs?", ["sports"]),
+    market("Will the match end in a draw?", ["sports"]),
+    market("LoL: T1 vs GEN - Map 2 Winner", ["esports", "league-of-legends"]),
+    market("Both teams to score?", ["sports", "soccer"]),
+    market("Who wins the league?", []),
+  ];
+  const { overview, listed } = harness(rows);
+
+  // Totals count each market once, however many tags it carries.
+  assert.equal(overview.totals.total, rows.length);
+  assert.equal(overview.shapes.reduce((sum, shape) => sum + overview.totals[shape], 0), rows.length,
+    "every market lands in exactly one shape");
+
+  // And each cell equals the list it links to -- the claim the whole table rests on.
+  for (const row of overview.rows) {
+    assert.equal(row.total, listed(row.label, "all"),
+      `the ${row.label} row claims ${row.total}; its list has ${listed(row.label, "all")}`);
+    for (const shape of overview.shapes) {
+      assert.equal(row[shape], listed(row.label, shape),
+        `${row.label} x ${shape} claims ${row[shape]}; its list has ${listed(row.label, shape)}`);
+    }
+  }
+
+  // Tags overlap, so the rows deliberately add up to more than the total -- and the table
+  // says so in words rather than leaving a reader to discover it by adding the column up.
+  const tagged = overview.rows.reduce((sum, row) => sum + row.total, 0);
+  assert.ok(tagged > overview.totals.total, "this fixture must actually exercise the overlap");
+  assert.match(APP, /A market carries several tags, so the tag rows add up to more than that\./);
+
+  // A market with no tags is counted, not dropped: it is still in the catalogue, and a
+  // total that excluded it would disagree with the Scraped tab's own headline.
+  const untagged = overview.rows.find((row) => row.label === "untagged");
+  assert.ok(untagged && untagged.total === 1, "untagged markets must have a row of their own");
+
+  // The shapes offered are exactly the seven a portfolio excludes by, so the overview and
+  // the portfolio settings are describing the same thing.
+  const HTML = readFileSync(new URL("../index.html", import.meta.url), "utf8");
+  const excluded = [...HTML.matchAll(/data-exclude-market-shape="([^"]+)"/g)].map((match) => match[1]);
+  assert.deepEqual([...overview.shapes].sort(), [...excluded].sort(),
+    "the overview's columns must be the portfolio's own exclusion vocabulary");
+
+  // The link carries the shape, or the list would open showing every shape for that tag.
+  assert.match(APP, /const shape = normalizeScrapedShape\(options\.shape\);/);
+  assert.match(APP, /if \(shape !== "all"\) query\.set\(SCRAPED_SHAPE_QUERY_PARAM, shape\);/);
+  // ...and the list must actually apply it on arrival.
+  assert.match(APP, /if \(shapeFilter !== "all" && candidateMarketShape\(item\) !== shapeFilter\) return false;/);
+  // The overview counts the rows the list shows, not a set of its own.
+  assert.match(APP, /const \{ filtered \} = filteredScrapedObservations\(\);/);
+});
