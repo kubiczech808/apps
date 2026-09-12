@@ -79,6 +79,10 @@ def build_probe(summary: str) -> None:
           f" peak {payload.get('memoryPeakMb')} MB of {payload.get('memoryLimit')}")
     print(f"      document: {read.get('seconds')}s, {read.get('portfolios')} portfolios,"
           f" {read.get('tradesInline')} trades inline, segments named: {read.get('hasSegments')}")
+    consistent = stages.get("consistentPortfolios") or {}
+    if consistent:
+        print(f"      fill-in:  {consistent.get('seconds')}s, {consistent.get('portfolios')} portfolios,"
+              f" {consistent.get('memoryMb')} MB")
     if compact:
         print(f"      compact:  {compact.get('seconds')}s, {compact.get('bytes')} bytes,"
               f" {compact.get('historySummaries')} portfolios with a usable history summary")

@@ -6821,6 +6821,18 @@ try {
             if (!is_array($document)) {
                 respond(['ok' => false, 'error' => 'No state document stored', 'stages' => $stages], 200);
             }
+            // The step between the read and the compaction, and the only one the first
+            // version of this probe skipped: it fills in portfolios the state has not
+            // caught up with yet, and it is the last place left that the live path runs
+            // and this did not.
+            $startedConsistent = microtime(true);
+            $document = paper_state_with_consistent_portfolios($document, $summary, $strategyId);
+            $stages['consistentPortfolios'] = [
+                'seconds' => round(microtime(true) - $startedConsistent, 3),
+                'memoryMb' => round(memory_get_usage(true) / 1048576, 1),
+                'portfolios' => is_array($document['paperPortfolios'] ?? null) ? count($document['paperPortfolios']) : null,
+            ];
+
             $startedCompact = microtime(true);
             $compact = compact_state_payload('paper', $document, $summary, $strategyId, 0, 'active');
             $stages['compact'] = [
