@@ -486,3 +486,74 @@ test("scraped volume filter: the column, the filter and the sort read one number
       `the Volume column and the Volume filter disagreed about ${JSON.stringify(row)}`);
   }
 });
+
+// Reported with two screenshots of the same filter, taken seconds apart:
+//
+//   Catalogue overview   ESPORTS   1 370
+//   Scraped, TAG=Esports           250 OF 287 SHOWN
+//
+// Both numbers were right about different populations -- the overview counts catalogue
+// rows, the list holds the ones a portfolio can actually enter -- and nothing on either
+// screen said so, while the overview promised "every number is a link and opens the list it
+// counted". The endpoint now reports carryingTag and an itemised breakdown of the rest, and
+// this is the note that has to put it in front of the reader.
+test("taxonomy gap note: the list says how many markets it left out, and why", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const app = await readFile(new URL("../assets/app.js", import.meta.url), "utf8");
+  const harness = `
+    ${extractFunction(app, "scrapedTaxonomyGapNote", "app.js")}
+    ${extractFunction(app, "formatInteger", "app.js")}
+    ${extractFunction(app, "escapeHtml", "app.js")}
+    function probability(value) { return (Number(value) * 100).toFixed(1) + "%"; }
+    return { scrapedTaxonomyGapNote };
+  `;
+  const app_ = new Function(harness)();
+
+  // The reported case, with a breakdown in the shape the endpoint sends.
+  const note = app_.scrapedTaxonomyGapNote({
+    matched: 287,
+    carryingTag: 1370,
+    maxTradableSpread: 0.05,
+    skipped: {
+      noLiveQuote: 812,
+      outsideProbabilityBand: 0,
+      noRecordedSpread: 41,
+      spreadWiderThanCeiling: 230,
+      otherStatus: 0,
+    },
+  });
+  // Both numbers, so the two screens can be reconciled without leaving the page.
+  // \s rather than a literal space: formatInteger groups thousands with a non-breaking
+  // space, which is right on screen and invisible in a failing assertion.
+  assert.match(note, /1\s370 markets carry this tag/);
+  assert.match(note, /287 of them can be entered/);
+  assert.match(note, /The other 1\s083/);
+  // And each reason, because they call for different work: a quote nobody recorded is a gap
+  // in what the scan saves, a book wider than the ceiling is a market with no counterparty.
+  assert.match(note, /812 never carried a live quote/);
+  assert.match(note, /230 quote a book wider than the 5\.0% ceiling/);
+  assert.match(note, /41 have no recorded spread/);
+  // A reason with a zero is left out rather than printed as "0 sit outside" -- a list of
+  // zeroes buries the two counts that matter.
+  assert.doesNotMatch(note, /0 sit outside/);
+  assert.doesNotMatch(note, /0 are in the other status/);
+
+  // Nothing to explain, nothing said. A note on every list would be noise, and a note
+  // claiming a gap of zero would be wrong.
+  assert.equal(app_.scrapedTaxonomyGapNote({ matched: 287, carryingTag: 287, skipped: {} }), "");
+  // And an older response that carries no breakdown at all must stay silent rather than
+  // render a sentence with blanks in it. The second case is the one that matters: a
+  // breakdown WITHOUT carryingTag would otherwise render "NaN markets carry this tag",
+  // and the empty-reasons guard hides that, so it is pinned separately.
+  assert.equal(app_.scrapedTaxonomyGapNote({ matched: 287 }), "");
+  assert.equal(app_.scrapedTaxonomyGapNote({ matched: 287, skipped: { noLiveQuote: 5 } }), "",
+    "a breakdown with no total must not render a sentence counting NaN markets");
+  assert.equal(app_.scrapedTaxonomyGapNote(null), "");
+
+  // The overview must no longer promise what it cannot keep. Its counts are the catalogue's.
+  assert.doesNotMatch(app, /Every number is a link and opens the list it counted/,
+    "the overview's own promise was the other half of this report");
+  assert.match(app, /These are CATALOGUE counts/);
+  // And the note has to be rendered above the table, or it is written and never read.
+  assert.match(app, /\$\{scrapedTaxonomyGapNote\(drilldown\)\}/);
+});

@@ -216,6 +216,59 @@ async function main() {
     console.log(`   ${id}`);
     console.log(`      ${counts.join("   ")}`);
   }
+
+  // ---- the two numbers on the Scraped tab --------------------------------------------
+  //
+  // Reported with two screenshots: the catalogue overview says Esports 1,370 and the list
+  // that number links to holds 287. They count different populations -- the catalogue, and
+  // the rows a portfolio could actually enter -- and the difference is the honest answer to
+  // "are we missing tradable opportunities". Asked per tag, because the fix differs: a
+  // market that never carried a quote is a gap in what the scan SAVES, and one quoting a
+  // book wider than the ceiling has no counterparty and never will.
+  const tagCounts = new Map();
+  for (const row of rows) {
+    const labels = Array.isArray(row?.firstPolymarketTags) && row.firstPolymarketTags.length
+      ? row.firstPolymarketTags
+      : (Array.isArray(row?.polymarketTags) ? row.polymarketTags : []);
+    for (const raw of labels) {
+      const label = String(typeof raw === "object" ? (raw?.slug || raw?.label || raw?.name || "") : raw)
+        .trim().toLowerCase();
+      if (!label || label.length > 60) continue;
+      tagCounts.set(label, (tagCounts.get(label) || 0) + 1);
+    }
+  }
+  const wanted = (process.env.PROBE_TAGS || "").split(",").map((tag) => tag.trim().toLowerCase()).filter(Boolean);
+  const tags = wanted.length
+    ? wanted
+    : [...tagCounts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 10).map(([label]) => label);
+  console.log(`\n== per tag: in the catalogue vs actually enterable`);
+  console.log("   asked of the endpoint the dashboard's tag list uses, so these are the two");
+  console.log("   numbers a reader sees on screen, with the difference itemised\n");
+  console.log("   tag                       catalogue  enterable   no quote  no spread  too wide   status");
+  for (const tag of tags) {
+    let payload = null;
+    try {
+      payload = await get(`api.php?action=taxonomy-observations&kind=tag&value=${encodeURIComponent(tag)}`
+        + `&statuses=SCRAPED&probability=0&limit=1`);
+    } catch (error) {
+      console.log(`   ${tag.padEnd(24)} could not be read: ${error.message}`);
+      continue;
+    }
+    if (payload?.carryingTag === undefined) {
+      console.log(`   ${tag.padEnd(24)} the hosting is running an api.php without the breakdown yet`);
+      continue;
+    }
+    const skipped = payload.skipped || {};
+    const cell = (value) => String(value ?? 0).padStart(9);
+    console.log(`   ${tag.padEnd(24)} ${cell(payload.carryingTag)}  ${cell(payload.matched)}`
+      + `  ${cell(skipped.noLiveQuote)}  ${cell(skipped.noRecordedSpread)}`
+      + `  ${cell(skipped.spreadWiderThanCeiling)}  ${cell(skipped.otherStatus)}`);
+  }
+  console.log("\n   no quote  -> the row never carried a live price. Nothing can evaluate it, and");
+  console.log("               it is a gap in what the scan saves rather than a market to skip.");
+  console.log("   too wide  -> there is no counterparty at a tradable distance. Collecting more");
+  console.log("               data will not change it; only a wider ceiling would, and that");
+  console.log("               buys fills at prices the portfolio did not agree to.");
   return 0;
 }
 

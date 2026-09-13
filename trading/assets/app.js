@@ -3004,6 +3004,12 @@ async function loadScrapedTaxonomyRows() {
       rows: Array.isArray(payload.marketObservations) ? payload.marketObservations : [],
       matched: Number(payload.matched) || 0,
       truncated: payload.truncated === true,
+      // Every row carrying the label, and what removed the ones that are not listed. The
+      // overview counts the first number and this list holds the second, and for Esports
+      // they were 1,370 and 287 with nothing anywhere saying why.
+      carryingTag: Number(payload.carryingTag) || 0,
+      skipped: payload.skipped && typeof payload.skipped === "object" ? payload.skipped : null,
+      maxTradableSpread: Number(payload.maxTradableSpread) || null,
     };
   } catch (error) {
     if (state.scrapedTaxonomyRowsPending !== key) return;
@@ -13203,6 +13209,7 @@ function renderScrapedOpportunities() {
   }
 
   els.botEvaluations.innerHTML = `
+    ${scrapedTaxonomyGapNote(drilldown)}
     <div class="ledger-scroll" tabindex="0" aria-label="Scrollable scraped opportunities table">
       <table class="ledger-wide-table">
         <thead>
@@ -13549,6 +13556,41 @@ function scrapedOverviewRows(observations) {
   return { rows, totals, shapes };
 }
 
+// Why this list is shorter than the number that opened it.
+//
+// Reported with two screenshots of the same filter: the catalogue overview says Esports
+// 1,370 and this list holds 287. Both are right. The overview counts markets in the
+// catalogue; this list holds the ones a portfolio could actually enter -- priced, inside the
+// probability band, with a book tight enough to fill against. Neither view said so, and the
+// overview promised "every number is a link and opens the list it counted".
+//
+// The gap is the answer to the question it was opened with, so it is stated rather than
+// hidden: a thousand markets nobody can trade is a finding, and WHICH reason removed them
+// decides what to do about it. A spread nobody recorded is a gap in what the scan saves; a
+// spread wider than the ceiling is a market with no counterparty, and no amount of
+// collecting will change that one.
+function scrapedTaxonomyGapNote(drilldown) {
+  const carrying = Number(drilldown?.carryingTag);
+  const matched = Number(drilldown?.matched);
+  if (!drilldown || !Number.isFinite(carrying) || !Number.isFinite(matched) || carrying <= matched) return "";
+  const skipped = drilldown.skipped || {};
+  const ceiling = drilldown.maxTradableSpread;
+  const reasons = [
+    [Number(skipped.noLiveQuote) || 0, "never carried a live quote, so nothing can price them"],
+    [Number(skipped.outsideProbabilityBand) || 0, "sit outside the probability filter set above"],
+    [Number(skipped.noRecordedSpread) || 0, "have no recorded spread"],
+    [Number(skipped.spreadWiderThanCeiling) || 0,
+      `quote a book wider than the ${ceiling ? probability(ceiling) : "tradable"} ceiling, so an order has nothing to fill against`],
+    [Number(skipped.otherStatus) || 0, "are in the other status -- resolved or open -- than the one selected"],
+  ].filter(([count]) => count > 0);
+  if (!reasons.length) return "";
+  return `<div class="scraped-overview-note">`
+    + `${formatInteger(carrying) || carrying} markets carry this tag; ${formatInteger(matched) || matched}`
+    + ` of them can be entered. The other ${formatInteger(carrying - matched) || (carrying - matched)}: `
+    + reasons.map(([count, text]) => `${formatInteger(count) || count} ${escapeHtml(text)}`).join("; ")
+    + `.</div>`;
+}
+
 function renderScrapedOverview() {
   if (!els.botEvaluations) return;
   const { filtered } = filteredScrapedObservations();
@@ -13578,7 +13620,8 @@ function renderScrapedOverview() {
   els.botEvaluations.innerHTML = rows.length
     ? `<div class="scraped-overview-note">${formatInteger(totals.total) || totals.total} markets, under the filters currently set on the Scraped tab.`
       + ` A market carries several tags, so the tag rows add up to more than that.`
-      + ` Every number is a link and opens the list it counted.</div>`
+      + ` These are CATALOGUE counts: opening one lists only the markets a portfolio could`
+      + ` actually enter, which is fewer, and that list says how many were left out and why.</div>`
       + `<div class="ledger-scroll"><table class="scraped-overview"><thead>${header}${totalRow}</thead><tbody>${body}</tbody></table></div>`
     : '<p class="empty">Nothing scraped under the filters currently set on the Scraped tab.</p>';
 }

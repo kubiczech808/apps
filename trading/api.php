@@ -7860,6 +7860,15 @@ try {
         $matchedResolved = 0;
         $matchedOpen = 0;
         $scanned = 0;
+        // How many rows carry this label at all, and what happened to the ones that are not
+        // in the list. Without these the endpoint can only say "287", which is true and
+        // useless beside an overview saying 1,370.
+        $carryingTag = 0;
+        $skippedNoQuote = 0;
+        $skippedProbabilityBand = 0;
+        $skippedNoSpread = 0;
+        $skippedWideSpread = 0;
+        $skippedStatus = 0;
         $rows = [];
         // An unlabelled bucket cannot be pre-filtered, but a named one can: a row whose
         // raw text never mentions the label cannot carry it, and skipping the decode for
@@ -7882,11 +7891,34 @@ try {
             &$matchedResolved,
             &$matchedOpen,
             &$rows,
-            &$scanned
+            &$scanned,
+            &$carryingTag,
+            &$skippedNoQuote,
+            &$skippedProbabilityBand,
+            &$skippedNoSpread,
+            &$skippedWideSpread,
+            &$skippedStatus
         ): bool {
             if ($wantsEmpty) {
                 $scanned += 1;
             }
+            // The taxonomy is asked FIRST now, and only the order changed: every gate below
+            // refuses exactly what it refused before. Asking it first is what lets the
+            // refusals be counted per tag, which is the whole point.
+            //
+            // Reported with two screenshots of the same filter: the catalogue overview says
+            // Esports 1,370 and the list that number links to holds 287. Both were right
+            // about different populations -- the overview counts catalogue rows, this
+            // endpoint counts rows the simulation can actually price -- and nothing said so,
+            // while the overview promised "every number is a link and opens the list it
+            // counted". The gap is not noise to be hidden: 1,083 Esports markets that no
+            // portfolio can enter is the answer to "are we missing opportunities", so it is
+            // measured and published rather than reconciled away.
+            $labels = simulation_taxonomy_labels($item, $firstField, $currentField);
+            if ($wantsEmpty ? $labels !== [] : !in_array($value, $labels, true)) {
+                return true;
+            }
+            $carryingTag += 1;
             $entry = simulation_entry_probability($item);
             // The simulation cannot price a row that never carried a live quote, so it
             // counts none of them; listing them would again outnumber the statistic.
@@ -7895,7 +7927,12 @@ try {
             // list is opened from a statistics row and must hold exactly what that row
             // counted -- an inclusive bound here would show one extra market for every
             // entry sitting on the round number the band ends at.
-            if ($entry === null || $entry < $minProbability || ($maxProbability !== null && $entry >= $maxProbability)) {
+            if ($entry === null) {
+                $skippedNoQuote += 1;
+                return true;
+            }
+            if ($entry < $minProbability || ($maxProbability !== null && $entry >= $maxProbability)) {
+                $skippedProbabilityBand += 1;
                 return true;
             }
             // A row with no saved spread is out of the sample, matching the statistics'
@@ -7904,15 +7941,20 @@ try {
             // exactly what the row counted, and a list disagreeing with the number it was
             // opened from is the complaint this endpoint exists to answer.
             if (!observation_spread_is_tradable($item)) {
-                return true;
-            }
-            $labels = simulation_taxonomy_labels($item, $firstField, $currentField);
-            if ($wantsEmpty ? $labels !== [] : !in_array($value, $labels, true)) {
+                // Told apart, because they need opposite fixes: a spread nobody recorded is
+                // a gap in what the scan saves, and a spread wider than the ceiling is a
+                // market that genuinely has no counterparty.
+                if (observation_spread($item) === null) {
+                    $skippedNoSpread += 1;
+                } else {
+                    $skippedWideSpread += 1;
+                }
                 return true;
             }
             $outcome = simulation_outcome($item);
             $isResolved = $outcome !== null;
             if ($isResolved ? !$wantsResolved : !($wantsOpen && simulation_row_is_open($item))) {
+                $skippedStatus += 1;
                 return true;
             }
             $matched += 1;
@@ -7953,6 +7995,18 @@ try {
             'returned' => count($rows),
             'truncated' => $matched > count($rows),
             'scanned' => $scanned,
+            // Every row carrying the label, and where the others went. carryingTag is the
+            // number the catalogue overview shows; matched is the number this list holds;
+            // the skipped block is the difference, itemised, and it sums exactly.
+            'carryingTag' => $carryingTag,
+            'skipped' => [
+                'noLiveQuote' => $skippedNoQuote,
+                'outsideProbabilityBand' => $skippedProbabilityBand,
+                'noRecordedSpread' => $skippedNoSpread,
+                'spreadWiderThanCeiling' => $skippedWideSpread,
+                'otherStatus' => $skippedStatus,
+            ],
+            'maxTradableSpread' => MAX_TRADABLE_SPREAD,
             'marketDetailsMode' => 'compact',
         ]);
     }

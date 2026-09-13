@@ -10404,7 +10404,15 @@ test("spread: the browser, the bot and api.php apply one rule", async () => {
   // required to match it.
   const statisticsAdmitsUnknown = /PAPER_COUNT_UNKNOWN_SPREAD", (true|false)\)/.exec(botSource);
   assert.ok(statisticsAdmitsUnknown, "the statistics must state their unknown-spread policy");
-  const drilldown = /\/\/ [^\n]*\n(?:\s+\/\/[^\n]*\n)*\s+if \(!observation_spread_is_tradable\(\$item(, true)?\)\) \{\n\s+return true;/.exec(api);
+  // Sliced to the taxonomy endpoint rather than pattern-matched across the whole file. The
+  // regex used to require `return true;` on the very next line, so counting WHY a row was
+  // dropped -- which changed nothing about whether it was dropped -- broke a test about the
+  // policy. The policy is the subject; the shape of the lines under it is not.
+  const taxonomyStart = api.indexOf("if ($action === 'taxonomy-observations')");
+  assert.ok(taxonomyStart > 0, "the drill-down endpoint must be findable");
+  const taxonomyEnd = api.indexOf("if ($action === 'scan-audit')", taxonomyStart);
+  const taxonomySource = api.slice(taxonomyStart, taxonomyEnd > taxonomyStart ? taxonomyEnd : undefined);
+  const drilldown = /if \(!observation_spread_is_tradable\(\$item(, true)?\)\)/.exec(taxonomySource);
   assert.ok(drilldown, "the drill-down list must apply the gate");
   assert.equal(Boolean(drilldown[1]), statisticsAdmitsUnknown[1] === "true",
     `the drill-down admits unknown spreads ${Boolean(drilldown[1])} while the statistics say ${statisticsAdmitsUnknown[1]}`);
