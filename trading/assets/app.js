@@ -9029,11 +9029,34 @@ async function loadResolvedScrapedPages(options = {}, seen = null) {
   }
 }
 
+// Which views actually need the whole catalogue in the browser.
+//
+// Reported as ERR_CONNECTION_CLOSED on a phone. Measured from a datacentre runner the same
+// minute: every request the dashboard makes answers OK in under three seconds. Nothing is
+// broken on the server -- the first load simply walks the entire catalogue. At 8,091 active
+// rows that is seven pages of about 3 MB, plus two more of the resolved archive: roughly 27
+// MB, pulled in the background on EVERY load, whichever tab is open.
+//
+// It was being fetched so that open-order rows could turn a token id into a market name.
+// That is a narrow need and it does not justify the catalogue: a page is fetched, the walk
+// is not, and the rest arrives when a view that lists markets is actually opened.
+function scrapedCatalogueViewNeedsEveryPage(view) {
+  return view === "scraped" || view === "scan-log" || view === "overview";
+}
+
+function scrapedWalkIsDeferred({ firstPageOnly = false, opportunityView = "" } = {}) {
+  return firstPageOnly === true && !scrapedCatalogueViewNeedsEveryPage(opportunityView);
+}
+
 async function ensureScrapedMarketState(options = {}) {
   const summary = options.summary || (shouldRenderCandidateBotState() ? "execution" : "scraped");
   const executionStrategyId = summary === "execution" ? executionScopeStrategyIdForMode(state.mode) : "";
   const matchingExecutionScope = summary !== "execution" || state.scrapedMarketStateStrategyId === executionStrategyId;
-  if ((!options.force && scrapedMarketStateIsLoaded() && state.scrapedMarketStateSummary === summary && matchingExecutionScope) || state.scrapedMarketStateBusy) return;
+  // A catalogue loaded as one page is not a loaded catalogue for a view that lists markets,
+  // so "already loaded" has to know which of the two it holds.
+  const needsEveryPage = scrapedCatalogueViewNeedsEveryPage(state.opportunityView);
+  const partialWouldDo = !(needsEveryPage && state.scrapedMarketStatePartial === true);
+  if ((!options.force && scrapedMarketStateIsLoaded() && state.scrapedMarketStateSummary === summary && matchingExecutionScope && partialWouldDo) || state.scrapedMarketStateBusy) return;
   state.scrapedMarketStateBusy = true;
   state.scrapedMarketStateError = "";
   if ((state.opportunityView === "scraped" || state.opportunityView === "scan-log" || state.opportunityView === "overview") && els.botEvaluations) {
@@ -9060,10 +9083,18 @@ async function ensureScrapedMarketState(options = {}) {
     // is a second list now, not a passenger on the first response, so an active catalogue
     // that happens to fit in one page must not mean the Resolved tab stays empty.
     if (summary === "scraped") {
-      if (scrapedState?.scrapedScopeTruncated === true) {
-        await walkRemainingScrapedPages(scrapedState, options);
+      if (scrapedWalkIsDeferred({ firstPageOnly: options.firstPageOnly, opportunityView: state.opportunityView })) {
+        // One page, and a mark saying so. Opening the Scraped, Overview or Scraping-log tab
+        // calls this again and the mark is what stops the early return from serving a
+        // catalogue that holds 1,200 of 8,091 rows.
+        state.scrapedMarketStatePartial = true;
       } else {
-        await loadResolvedScrapedPages(options);
+        state.scrapedMarketStatePartial = false;
+        if (scrapedState?.scrapedScopeTruncated === true) {
+          await walkRemainingScrapedPages(scrapedState, options);
+        } else {
+          await loadResolvedScrapedPages(options);
+        }
       }
     }
     if (state.opportunityView === "scraped" || state.opportunityView === "scan-log" || state.opportunityView === "overview") renderBotEvaluations();
@@ -10091,10 +10122,12 @@ async function loadLiveState(options = {}) {
     loadDispatchFailures(executionMode);
     const liveState = liveResult.value;
     renderLiveState(liveState);
-    // CLOB open orders expose only token/condition IDs. Load the shared scraped
-    // catalog in the background so opened-order rows can show their market,
-    // outcome and resolution metadata instead of an incomplete placeholder.
-    ensureScrapedMarketState(options);
+    // CLOB open orders expose only token/condition IDs, so one page of the catalogue is
+    // loaded here to turn those into market names. ONE page: walking all seven of them plus
+    // the resolved archive is about 27 MB, it was happening on every load whichever tab was
+    // open, and on a phone it is what closed the connection before the app had rendered.
+    // The rest is fetched when a view that lists markets is opened.
+    ensureScrapedMarketState({ ...options, firstPageOnly: true });
     ensureCandidateBotState();
     ensureFullBotState(options);
     if (!options.skipAutoLiveSync) {

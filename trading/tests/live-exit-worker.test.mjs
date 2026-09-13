@@ -2414,3 +2414,38 @@ test("exit prices: a price already on the grid is never floored to the tick belo
   // Which is what it means downstream: a stop configured at 0.29 posts at 0.29.
   assert.equal(worker.protectedExitPrice({ stopPrice: 0.29, bestBidPrice: 0.3, tickSize: 0.01 }), 0.29);
 });
+
+// Stated as a requirement, in these words: "v pasmu 0,99-0,998 se pri parametru close at
+// certainity = 99.9 nesmi nic stat."
+//
+// It is the answer to the one question left open by the forfeit rule -- whether a bid
+// between 0.99 and 0.998 may ever be taken against a 0.999 setting -- and the answer is no,
+// at every price in that band, by both of the two independent gates. Swept rather than
+// sampled, because every early sale in this log was one specific price inside it.
+test("certainty close: at a 0.999 setting nothing happens between 0.99 and 0.998", () => {
+  for (let tenths = 990; tenths <= 998; tenths += 1) {
+    const bid = Number((tenths / 1000).toFixed(3));
+    // The trigger: the level is the configured one, so a bid below it is not certainty.
+    assert.equal(
+      worker.exitReason({
+        bestBidPrice: bid, bestAskPrice: null, stopPrice: null, triggerPrice: null,
+        settlementCloseBid: 0.999, shares: 7,
+      }),
+      null,
+      `${bid} is below the 0.999 that was configured and must not sell`,
+    );
+    // And the order, independently: even if something upstream decided to sell, the price
+    // may not be under the level. Two gates, because one of them has failed before.
+    assert.equal(
+      worker.protectedExitPrice({ stopPrice: null, bestBidPrice: bid, tickSize: 0.001, minPrice: 0.999 }),
+      null,
+      `an order at ${bid} against a 0.999 close must not be priced at all`,
+    );
+  }
+  // The top of the band is where it starts working, and that boundary is the whole point.
+  assert.equal(worker.exitReason({
+    bestBidPrice: 0.999, bestAskPrice: null, stopPrice: null, triggerPrice: null,
+    settlementCloseBid: 0.999, shares: 7,
+  }), "settlement");
+  assert.equal(worker.protectedExitPrice({ stopPrice: null, bestBidPrice: 0.999, tickSize: 0.001, minPrice: 0.999 }), 0.999);
+});
