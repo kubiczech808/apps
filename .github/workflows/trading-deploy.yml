@@ -196,6 +196,27 @@ jobs:
                   # newest entries live in the state file, so what a deploy destroyed
                   # was every run older than that cap, for every portfolio at once.
                   "portfolio-run-log",
+                  # The dips the RPi worker recorded, and the fourth time this list has
+                  # destroyed the state it was written to protect. The worker sees a
+                  # collapsed favourite within a second and records it here; the paper bot
+                  # reads it on the hour. Every deploy in between emptied the file, so three
+                  # dip portfolios watched 26 markets each, recorded real dips at 03:40, and
+                  # had nothing to open at 04:07. Reported as "two of my dip portfolios
+                  # cannot catch any trade".
+                  "dip-entry-hits.json",
+                  # Why a live position was sold, keyed by token. The dashboard's closed
+                  # positions read it to say a stop loss fired -- which is exactly the thing
+                  # that was once reported missing, and this is why it would go missing
+                  # again: every deploy deleted the record.
+                  "live-exit-records.json",
+                  # What the executor has already claimed, so two runs cannot enter the same
+                  # market twice. Deleting it does not lose history, it removes a guard.
+                  "live-entry-claims.json",
+                  # Why a run never started. A deploy that deletes the evidence of dispatch
+                  # failures makes them unreportable after the fact.
+                  "dispatch-failures",
+                  # The transient sync request flag. Nothing here is a build artifact.
+                  ".live-sync-request.json",
               }
               if name in keep:
                   return True

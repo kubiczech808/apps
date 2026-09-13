@@ -49,6 +49,11 @@ test("dip run log: the three causes of an empty pool are three different sentenc
   assert.equal(quiet.recordedHits, 0);
   assert.equal(quiet.hitsAcrossPortfolios, 0);
   assert.match(quiet.reason, /LIVE_DIP_ENTRY_MODE/);
+  // All three causes, not the likeliest one. Measured on the account: the watcher WAS armed
+  // and recording, and the deploy was deleting the file it wrote to -- so a sentence that
+  // blamed the switch alone would have sent the reader to the Pi for nothing.
+  assert.match(quiet.reason, /lost between being written and being read/);
+  assert.match(quiet.reason, /no watched favourite has fallen yet/);
   assert.match(quiet.reason, /never the catalogue/,
     "the candidates-list misreading is the reported one and has to be answered in the log");
 

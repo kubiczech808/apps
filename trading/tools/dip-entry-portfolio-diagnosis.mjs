@@ -173,9 +173,12 @@ async function main() {
   console.log("\n== 5. what the answer means");
   console.log("   NOT WATCHED -> the reason is printed above it, and it is a configuration");
   console.log("   fault the portfolio cannot trade its way out of: fix the range or the band.");
-  console.log("   WATCHED with plans but 0 hits -> the watch is right and either the worker");
-  console.log("   is not running (LIVE_DIP_ENTRY_MODE=off disarms it and is the default on a");
-  console.log("   fresh install) or no watched favourite has fallen into the band yet.");
+  console.log("   WATCHED with plans but 0 hits -> the watch is right, and there are three");
+  console.log("   reasons this can happen: the worker is not armed (LIVE_DIP_ENTRY_MODE=off");
+  console.log("   is the default), nothing has fallen into the band yet, or the record was");
+  console.log("   lost after being written. The last one is real: deploying the site used to");
+  console.log("   delete data/dip-entry-hits.json, so check the worker's own event history");
+  console.log("   for DIP_ENTRY_PAPER_RECORDED before concluding the watcher is off.");
   console.log("   WATCHED, hits recorded, still no trade -> the hit rows are being refused by");
   console.log("   an ordinary portfolio filter: liquidity, net yield, tags, market shape.");
   console.log("   And the candidates list is NOT this pool -- a collapsed favourite is not in");

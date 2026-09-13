@@ -119,8 +119,13 @@ test("dip diagnosis: it separates a misconfigured portfolio from a quiet one", a
     assert.match(line("paper-dipquiet"), /WATCHED/);
     assert.match(output, /paper-dipquiet\s+0 hit\(s\)  <- nothing to open a position from/,
       `an armed portfolio with no hits must say so in section 4: ${output}`);
-    assert.match(output, /LIVE_DIP_ENTRY_MODE=off disarms it/,
+    assert.match(output, /LIVE_DIP_ENTRY_MODE=off/,
       "an armed portfolio with no hits has to point at the worker, not at the config");
+    // And not ONLY at the worker. Measured on the account: the watcher was armed and
+    // recording, and deploying the site was deleting the file it wrote to, so a conclusion
+    // that named the switch alone was wrong in the one case this tool was written for.
+    assert.match(output, /lost after being written/);
+    assert.match(output, /DIP_ENTRY_PAPER_RECORDED before concluding the watcher is off/);
 
     // A prepared plan the payload itself blocked is shown with its reason -- otherwise a
     // portfolio with plans and no hits looks identical to one the worker never polled.

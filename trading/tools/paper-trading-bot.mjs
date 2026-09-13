@@ -8378,8 +8378,14 @@ export function dipEntryRunDiagnostics(strategy, passedFilters = 0, hits = DIP_E
           + ` (${acrossAll} dip(s) recorded for other portfolios, so the watcher is running)`
         // The one that looks identical to bad luck and is not: nothing recorded for ANY
         // portfolio means the watcher is not feeding this pipeline at all.
-        : "the dip watcher has recorded nothing for any portfolio, so either it is not armed"
-          + " on the Pi (LIVE_DIP_ENTRY_MODE) or no watched favourite has fallen yet."
+        // Three possibilities, and this pass cannot tell them apart -- so it names all
+        // three rather than the most likely one. Measured once already: the watcher WAS
+        // armed and recording, and every deploy of the site was deleting the file it wrote
+        // to, so a sentence blaming the switch would have sent someone to the Pi for
+        // nothing.
+        : "nothing is readable for any portfolio, so either the watcher is not armed on the"
+          + " Pi (LIVE_DIP_ENTRY_MODE), or no watched favourite has fallen yet, or what it"
+          + " recorded was lost between being written and being read."
           + " A dip portfolio's candidates are these recordings, never the catalogue";
   return {
     fault: rule.fault || null,
