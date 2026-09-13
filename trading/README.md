@@ -310,3 +310,54 @@ Use a dedicated wallet with a small balance, for example 5-20 USDC.
 2. Confirm it returns `signed-dry-run`.
 3. Run a tiny order with `live_confirm=true`, conservative price, and size small enough to stay below `MAX_ORDER_FRACTION`.
 4. Verify the order appears in Polymarket and can be cancelled.
+
+## Stav k 2026-09-13, a co zbývá
+
+Zapsáno na příští týden, protože relace končí na limitu tokenů. Čísla jsou měřená,
+ne odhadnutá; u každého je řečeno čím.
+
+### Naměřený stav
+
+| co | hodnota | zdroj |
+|---|---|---|
+| aktivní katalog | 8 091 řádků | dashboard-response-probe, 04:49 |
+| archiv vyřešených | 2 216 | totéž |
+| Esports v katalogu / vstupitelné | 1 370 / 287 | overview vs taxonomy-observations |
+| paper trades v MySQL | 6 447 | trade-summary |
+| dip hity zaznamenané workerem | 4 za 03:40-03:44 | event log workeru na Pi |
+| odezva webu z datacentra | 8 z 8 requestů OK, < 3 s | dashboard-response-probe |
+| první načtení aplikace | ~27 MB (7 stránek + archiv) | totéž, a příčina ERR_CONNECTION_CLOSED |
+
+### Hotovo a nasazeno
+
+- **Close na jistotě je striktní.** Úroveň z parametru portfolia se nikde nesnižuje ani
+  podle mřížky trhu; objednávka nesmí být naceněna pod ni. V pásmu 0,99-0,998 se při
+  nastavení 0,999 nestane nic - přišpendleno testem přes celé pásmo, obě brány zvlášť.
+  Default `settlementCloseBid` je 0,999 na všech šesti šablonách.
+- **`roundToTick` zaokrouhloval cenu, která už na mřížce byla, o tick dolů** (0,29 -> 0,28).
+  Opraveno tolerancí, proměřeno přes všech 100 centů.
+- **Deploy mazal runtime stav.** `clean_data_dir` maže v `data/` vše mimo seznam výjimek a
+  chyběly v něm `dip-entry-hits.json`, `live-exit-records.json`, `live-entry-claims.json`,
+  `dispatch-failures/`, `.live-sync-request.json`. Seznam teď hlídá test, který si cesty
+  odvodí z api.php a pustí skutečnou funkci z workflow.
+- **První načtení netáhne celý katalog.** Jedna stránka na pozadí, zbytek až při otevření
+  záložky, která trhy vypisuje.
+- **Dip a tag diagnostiky říkají příčinu**, ne jen počet.
+
+### Co zbývá, v pořadí
+
+1. **MySQL není hotové.** Databáze je aktivní, zrcadlí obchody, dokumenty a události a
+   obsluhuje část čtení dashboardu. Zdrojem pravdy pro paper stav a katalog jsou ale pořád
+   publikované JSON soubory a bot si stav staví z nich. Dokončení = umět obsloužit
+   `summary=refresh` z databáze, tedy složit obchody všech portfolií v paměti hostingu.
+   To byl původní blokátor a je to hlavní kus práce. Do té doby platí pojistka v api.php,
+   která ten read z databáze odmítá (jinak se paper portfolia vymažou - stalo se).
+2. **Odpárovat historické paper obchody od portfolií.** Zadání: obchody ať v MySQL zůstanou
+   pro statistiky, ale ať nezaplevelí restartovaná portfolia. POZOR: dnes nic ty řádky
+   nečte, takže zaplevelit zatím nemají co - má to smysl dělat až s bodem 1, ne dřív.
+   `trade_key` je sha256(account, owner, token, roundTrip), takže změna vlastníka mění klíč;
+   bezpečnější je příznak v payloadu než překlíčování.
+3. **Dip portfolia** - hity už deploy nemaže, takže ověřit, že se z nich otevírají pozice.
+4. **Kandidáti**: 1 083 z 1 370 Esports trhů je nevstupitelných. Rozpad podle příčiny je
+   teď v seznamu i v candidate-supply sondě; největší páka bude nejspíš "nikdy nenesl
+   živou kotaci", což je mezera v tom, co scan ukládá.
