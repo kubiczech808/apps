@@ -14058,6 +14058,14 @@ function tradeBatchDetail(batch) {
     lines.push(`Certainty close: ${certaintyClose.armed ? "armed" : "held"}`
       + ` - ${certaintyClose.reason || `${certaintyClose.executableCandidates} candidate(s)`}`);
   }
+  // And, for a dip portfolio, which of the three causes emptied its pool. The pool is the
+  // dips the RPi worker recorded, never the catalogue, so "no candidate" here means
+  // something quite different from what it means on an ordinary portfolio.
+  const dipEntry = batch.dipEntry || null;
+  if (dipEntry && dipEntry.reason) {
+    lines.push(`Dip entry: ${dipEntry.recordedHits} recorded for this portfolio`
+      + `, ${dipEntry.hitsAcrossPortfolios} across all - ${dipEntry.reason}`);
+  }
   if (selected) {
     lines.push(
       "",

@@ -8348,6 +8348,48 @@ export function dipEntryCandidateRows(strategy, hits = DIP_ENTRY_HITS) {
     .filter((row) => row && row.tokenId);
 }
 
+// Why a dip portfolio in particular found nothing, in the words a person reads.
+//
+// Reported with three of these in paper, two never opening anything: the run log said "no
+// candidate passed this portfolio's current rules" whichever of the causes applied, and the
+// reader went to the candidates list -- which is not this portfolio's pool at all. A
+// collapsed favourite is not in the catalogue: the scan keeps only the leading outcome above
+// 0.50, so at 35% the row does not exist. The pool is the hits the RPi worker recorded, and
+// nothing else.
+//
+// Three causes, and they need three different actions, so they get three different
+// sentences. Measured on the account when this was written: three portfolios watched with
+// 26 prepared plans each and zero hits on record for any portfolio at all.
+export function dipEntryRunDiagnostics(strategy, passedFilters = 0, hits = DIP_ENTRY_HITS) {
+  const rule = dipEntryRuleState(strategy);
+  if (!rule.enabled) return null;
+  const recorded = dipEntryCandidateRows(strategy, hits).length;
+  const acrossAll = Array.isArray(hits) ? hits.length : 0;
+  const reason = rule.fault
+    // A fault means the portfolio trades NOTHING -- it is not in the watch list either, so
+    // no hit can ever arrive. Naming it here is the difference between a setting to change
+    // and a wait to sit through.
+    ? `the dip rule is not applied because ${rule.fault}, so this portfolio buys nothing at all`
+      + ` until its probability maximum is below its opening band`
+    : recorded > 0
+      ? `${recorded} recorded dip(s) for this portfolio, ${passedFilters} of which passed its other filters`
+      : acrossAll > 0
+        ? "no favourite this portfolio watches has fallen into its buy band yet"
+          + ` (${acrossAll} dip(s) recorded for other portfolios, so the watcher is running)`
+        // The one that looks identical to bad luck and is not: nothing recorded for ANY
+        // portfolio means the watcher is not feeding this pipeline at all.
+        : "the dip watcher has recorded nothing for any portfolio, so either it is not armed"
+          + " on the Pi (LIVE_DIP_ENTRY_MODE) or no watched favourite has fallen yet."
+          + " A dip portfolio's candidates are these recordings, never the catalogue";
+  return {
+    fault: rule.fault || null,
+    recordedHits: recorded,
+    hitsAcrossPortfolios: acrossAll,
+    passedFilters,
+    reason,
+  };
+}
+
 function sortEligibleForStrategy(eligible, strategy = PAPER_STRATEGIES.conservative) {
   // A dip portfolio's candidates are the dips the worker RECORDED, not the catalogue. The
   // catalogue cannot hold them: a collapsed favourite drops out of it entirely, and the
@@ -8902,7 +8944,7 @@ async function revalidateStoredExecutionShortlist(shortlist, learningProfile, st
   return raw.map(normalizeEvaluationRisk);
 }
 
-function buildTradeBatchLog({ portfolioState, strategy, evaluations = [], eligible, rankedEligible, action, reason, available, stake, selected = null, skippedForRisk = 0, insufficientCapital = false, rotationReview = null, diversificationDiagnostics = null, prevalidationFilter = null }) {
+export function buildTradeBatchLog({ portfolioState, strategy, evaluations = [], eligible, rankedEligible, action, reason, available, stake, selected = null, skippedForRisk = 0, insufficientCapital = false, rotationReview = null, diversificationDiagnostics = null, prevalidationFilter = null, dipEntryHits = DIP_ENTRY_HITS }) {
   const evaluated = Array.isArray(eligible) ? eligible : [];
   const ranked = Array.isArray(rankedEligible) ? rankedEligible : evaluated;
   const blocked = ranked.filter((item) => item.selectionStatus === "RISK_BLOCKED" || item.riskBlockedReason);
@@ -8922,11 +8964,20 @@ function buildTradeBatchLog({ portfolioState, strategy, evaluations = [], eligib
   // at 1.00. The count is this pass's own, so a reader can see why a close was held without
   // reconstructing the shortlist.
   const executableCandidates = ranked.length;
+  // And why a DIP portfolio in particular found nothing, which the sentence below cannot
+  // say on its own. Reported with three of them in paper, two never opening anything: the
+  // run log said "no candidate passed this portfolio's current rules" for all three causes,
+  // and the reader was looking at the candidates list -- which is not this pool at all.
+  const dipEntry = dipEntryRunDiagnostics(strategy, executableCandidates, dipEntryHits);
   return {
     id: `trade-batch-${strategy.id}-${nowIso()}`,
     runAt: nowIso(),
     strategyId: strategy.id,
     strategyLabel: strategy.label,
+    dipEntry,
+    // Printed verbatim by the dashboard, ahead of its own wording. Only when there is
+    // something specific to say: a generic sentence is better than a wrong specific one.
+    humanReason: dipEntry && action === "SKIP" ? `No order placed: ${dipEntry.reason}` : undefined,
     certaintyClose: {
       executableCandidates,
       // Whether a decided position may be sold early after this pass. False here does not
