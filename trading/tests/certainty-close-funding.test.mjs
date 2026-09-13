@@ -6,6 +6,11 @@ import test from "node:test";
 import { readFileSync } from "node:fs";
 
 import { canFundAnotherPosition as workerCanFund, watchPlan } from "../tools/rpi-live-exit-worker.mjs";
+// Imported rather than lifted out by regex. The bot guards its own entry point
+// (invokedDirectly), so importing it runs nothing, and the rules below are then the file's
+// actual exports instead of a copy evaluated out of context -- which is what broke when the
+// forfeit rule was added beside them and the lifted copy could no longer see it.
+import { certaintyCloseTriggered, certaintyCloseIsWorthTaking } from "../tools/paper-trading-bot.mjs";
 
 const BOT = readFileSync(new URL("../tools/paper-trading-bot.mjs", import.meta.url), "utf8");
 const API = readFileSync(new URL("../api.php", import.meta.url), "utf8");
@@ -95,9 +100,7 @@ test("the paper bot asks the question once per pass, not once per position", () 
 });
 
 test("the paper bot's certainty close fires on locked capital and holds on spare capital", () => {
-  const source = /export function certaintyCloseTriggered[\s\S]*?\n\}/.exec(BOT);
-  assert.ok(source, "the certainty close decision must be findable");
-  const triggered = new Function(`${source[0].replace("export ", "")}; return certaintyCloseTriggered;`)();
+  const triggered = certaintyCloseTriggered;
 
   // At the configured bid with the capital locked: sell, which is the behaviour that was
   // wrong three times and must not regress while a funding gate is added above it.
@@ -146,4 +149,52 @@ test("the API sends the worker both figures the rule needs", () => {
     (payload[0].match(/live_stop_loss_policy_config\(\$config, [^)]*\$accountCashUsdc\)/g) || []).length,
     2,
     "every policy lookup must carry the cash figure, the fallback included");
+});
+
+test("the paper certainty close will not hand back part of a match already won", () => {
+  // Reported from the dashboard, three closed winners side by side, with what each gave
+  // back against the win it had already earned:
+  //
+  //   LOS vs FURIA          WIN +$1.85   P/L +$1.83    0.02 back   0.29%
+  //   Map Handicap 1WIN     WIN +$1.94   P/L +$1.86    0.08 back   1.16%
+  //   HULIGANI vs Klim      WIN +$1.58   P/L +$1.57    0.01 back   0.15%
+  //
+  // "Je to skoda proste na vyhranem zapase prijit o cast vyhry." The third was worth making;
+  // the first two were not.
+  assert.equal(certaintyCloseIsWorthTaking({ bestBid: 0.9986, closeBid: 0.999 }), true, "0.14%, the one worth making");
+  assert.equal(certaintyCloseIsWorthTaking({ bestBid: 0.997, closeBid: 0.999 }), false, "0.3%, LOS");
+  assert.equal(certaintyCloseIsWorthTaking({ bestBid: 0.988, closeBid: 0.999 }), false, "1.2%, 1WIN");
+  // The line itself, inclusive, and the price either side of it.
+  assert.equal(certaintyCloseIsWorthTaking({ bestBid: 0.998, closeBid: 0.999 }), true);
+  assert.equal(certaintyCloseIsWorthTaking({ bestBid: 0.9979, closeBid: 0.999 }), false);
+
+  // Driven through the decision the bot actually takes, with the capital locked so the
+  // funding gate is not what is being measured here.
+  const fires = (bid, closeBid = 0.999) => certaintyCloseTriggered({ closeBid, bestBid: bid, fundable: false });
+  assert.equal(fires(0.999), true);
+  // Two gates, and they are not the same gate. The SETTING says when the owner wants out;
+  // the forfeit rule says whether taking that bid is worth it. At a 0.999 setting the
+  // setting binds first, so 0.998 does not close -- it never reached the level asked for.
+  assert.equal(fires(0.998), false, "below its own setting, whatever the forfeit would be");
+
+  // Where the forfeit rule earns its place is a certainty setting the market cannot quote
+  // exactly: 0.99 is such a setting, and a bid AT it hands back 1% of a won match. This is
+  // the shape of every sale that was reported -- a 0.999 setting clamped down to the top of
+  // a cent grid and taken there.
+  assert.equal(fires(0.99, 0.99), false, "reaching a 0.99 setting is not a reason to hand back 1%");
+  assert.equal(fires(0.998, 0.99), true, "at 0.2% it is worth taking");
+
+  // A fraction, not a fixed sum: the same prices decide the same way whatever the stake, so
+  // a portfolio that moves from $5 to $50 keeps exactly this protection rather than losing
+  // it silently.
+  assert.equal(certaintyCloseIsWorthTaking({ bestBid: 0.999, closeBid: 0.999 }), true);
+
+  // And a setting below certainty is left alone: 0.95 is a price someone named for their
+  // capital, not a slice of a won match, and it is not this rule's business.
+  assert.equal(certaintyCloseIsWorthTaking({ bestBid: 0.95, closeBid: 0.95 }), true);
+  assert.equal(fires(0.95, 0.95), true, "a deliberate haircut still closes");
+  assert.equal(fires(0.94, 0.95), false, "and below its own setting it does not");
+
+  // A bid nobody has is not a bid at certainty, at any setting.
+  assert.equal(certaintyCloseIsWorthTaking({ bestBid: null, closeBid: 0.999 }), false);
 });

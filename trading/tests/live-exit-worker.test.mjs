@@ -556,7 +556,9 @@ test("worker errors: an outage is counted once per episode, not once per second"
 test("settlement close: a decided market is sold at the bid rather than held to resolution", () => {
   const position = { tokenId: "1", shares: 6.9, totalCostUsdc: 4.92, netGainIfWinUsdc: 2.01, feeRate: 0, feesEnabled: false };
 
-  const reason = (bid, plan) => worker.exitReason({ bestBidPrice: bid, ...plan });
+  // The position's size travels with every call, because what a close forfeits is measured
+  // in USDC and a price on its own cannot say how much that is.
+  const reason = (bid, plan) => worker.exitReason({ bestBidPrice: bid, shares: position.shares, ...plan });
 
   // A portfolio that only wants this must still be WATCHED. Requiring a stop in watchPlan
   // is what would have left it out of the watch list entirely -- the books below are read
@@ -584,14 +586,32 @@ test("settlement close: a decided market is sold at the bid rather than held to 
   assert.equal(reason(0.12, { stopPrice: 0.13, triggerPrice: 0.132, settlementCloseBid: null }), "stop");
   assert.equal(reason(0.5, { stopPrice: 0.13, triggerPrice: 0.132, settlementCloseBid: null }), null);
 
-  // And the settlement close fires on its own, with no stop configured at all.
-  assert.equal(reason(0.99, { stopPrice: null, triggerPrice: null, settlementCloseBid: 0.99 }), "settlement");
-  assert.equal(reason(0.995, { stopPrice: null, triggerPrice: null, settlementCloseBid: 0.99 }), "settlement");
+  // And the settlement close fires on its own, with no stop configured at all -- but only
+  // where taking the bid gives up next to nothing. 6.9 shares at 0.99 hands back 6.9 cents
+  // of a match already won, which is the thing this whole rule exists to stop; at 0.999 it
+  // is seven tenths of a cent, and that is a fair price for the capital back now.
+  assert.equal(reason(0.999, { stopPrice: null, triggerPrice: null, settlementCloseBid: 0.99 }), "settlement");
+  assert.equal(reason(0.99, { stopPrice: null, triggerPrice: null, settlementCloseBid: 0.99 }), null,
+    "a hundredth of the position handed back is not a close, it is a donation");
+  assert.equal(reason(0.998, { stopPrice: null, triggerPrice: null, settlementCloseBid: 0.99 }), "settlement",
+    "0.2% is the line, and it is inclusive");
   assert.equal(reason(0.98, { stopPrice: null, triggerPrice: null, settlementCloseBid: 0.99 }), null);
 
   // A market with no bid at all is not a decided market.
   assert.equal(reason(0, { stopPrice: null, triggerPrice: null, settlementCloseBid: 0.99 }), null);
   assert.equal(reason(null, { stopPrice: null, triggerPrice: null, settlementCloseBid: 0.99 }), null);
+
+  // And the rule does not care how big the position is, which is the point of expressing it
+  // as a fraction: the same bid decides the same way at seven shares and at seventy, so a
+  // stake that grows does not quietly switch the protection off.
+  for (const size of [null, 0.5, 7, 70, 700]) {
+    assert.equal(worker.exitReason({
+      bestBidPrice: 0.999, stopPrice: null, triggerPrice: null, settlementCloseBid: 0.99, shares: size,
+    }), "settlement", `0.999 is worth taking at any size, including ${size}`);
+    assert.equal(worker.exitReason({
+      bestBidPrice: 0.99, stopPrice: null, triggerPrice: null, settlementCloseBid: 0.99, shares: size,
+    }), null, `0.99 against a certainty setting is worth taking at no size, including ${size}`);
+  }
 
   // Both can be true only in a market that went from a loss to certainty within one pass.
   // The stop is the more urgent of the two, so it wins.
@@ -1226,8 +1246,9 @@ test("two stop floors, and the price meets the higher one first", async () => {
   assert.equal(worker.exitReason({ ...book, probabilityFloor: 0.49 }), "stop",
     "with the floor it sells, which is the whole point");
 
-  // The settlement close still outranks nothing and is unaffected.
-  assert.equal(worker.exitReason({ bestBidPrice: 0.999, stopPrice: null, probabilityFloor: 0.49, settlementCloseBid: 0.99 }),
+  // The settlement close still outranks nothing and is unaffected -- given a size, which it
+  // needs now that what a close forfeits is measured in USDC rather than in ticks.
+  assert.equal(worker.exitReason({ bestBidPrice: 0.999, stopPrice: null, probabilityFloor: 0.49, settlementCloseBid: 0.99, shares: 7 }),
     "settlement");
 
   const source = readFileSync(new URL("../tools/rpi-live-exit-worker.mjs", import.meta.url), "utf8");
@@ -1727,13 +1748,18 @@ test("certainty close: the level is clamped to a price a book can actually quote
   assert.equal(worker.reachableSettlementCloseBid(0), null);
   assert.equal(worker.reachableSettlementCloseBid(null), null);
 
-  const fires = (bid, closeBid, tickSize = undefined) => worker.exitReason({
-    bestBidPrice: bid, bestAskPrice: null, stopPrice: null, triggerPrice: null, settlementCloseBid: closeBid, tickSize,
+  const fires = (bid, closeBid, tickSize = undefined, shares = 7) => worker.exitReason({
+    bestBidPrice: bid, bestAskPrice: null, stopPrice: null, triggerPrice: null, settlementCloseBid: closeBid,
+    tickSize, shares,
   });
-  // A 0.01-grid market at the top of its book, with the setting at 0.999 -- and the tick
-  // MEASURED rather than assumed.
-  assert.equal(fires(0.99, 0.999, 0.01), "settlement", "0.99 is certainty on a known 0.01 market");
-  // One tick below the top is not certainty, and must not sell.
+  // A 0.01-grid market at the top of its book, with the setting at 0.999 and the tick
+  // MEASURED rather than assumed. The clamp still says 0.99 is the top of that grid -- and
+  // the close still does not fire there, because seven shares at 0.99 hand back seven cents
+  // of a match already won. Asked for with three such sales on the table: +$1.85 won and
+  // +$1.83 realised, +$1.94 and +$1.86, +$1.58 and +$1.57.
+  assert.equal(fires(0.99, 0.999, 0.01), null,
+    "the top of a cent grid is reachable and still hands back a hundredth of a won match");
+  // One tick below the top is further from certainty still.
   assert.equal(fires(0.98, 0.999, 0.01), null);
   // The reported sale, four times over: with no tick measured, 0.99 must NOT sell against a
   // 0.999 setting. "Games Total: O/U 3.5" went at 99 cents on exactly this.
@@ -1743,9 +1769,12 @@ test("certainty close: the level is clamped to a price a book can actually quote
   // and selling one of those as though it were decided would be far worse than not selling.
   assert.equal(fires(0.9, 0.999), null, "90% is not certainty and must never read as it");
   assert.equal(fires(0.71, 0.999), null);
-  // A lower setting keeps meaning exactly what it says.
-  assert.equal(fires(0.95, 0.95), "settlement");
-  assert.equal(fires(0.94, 0.95), null);
+  // A lower setting keeps meaning exactly what it says, and the forfeit rule does not touch
+  // it. A portfolio asking to be let out at 0.95 is not handing back part of a won match;
+  // it is buying its capital back at a price it named. That decision belongs to whoever
+  // configured the portfolio.
+  assert.equal(fires(0.95, 0.95), "settlement", "a deliberate haircut is still honoured");
+  assert.equal(fires(0.94, 0.95), null, "and below the setting it is not reached at all");
   // Off sells nothing, however high the bid goes.
   assert.equal(fires(0.99, 0), null);
 
@@ -1754,8 +1783,10 @@ test("certainty close: the level is clamped to a price a book can actually quote
   assert.equal(fires(0.991, 0.999, 0.001), null,
     "a bid below the setting on a grid that can reach the setting is not certainty");
   assert.equal(fires(0.999, 0.999, 0.001), "settlement", "and at the setting it does sell");
-  // The grid the book proves, end to end: the same bid and setting, decided by the tick.
-  assert.equal(fires(0.99, 0.999, 0.01), "settlement", "0.99 is still certainty on a cent grid");
+  // The grid the book proves, end to end: the same bid and setting, decided by the tick --
+  // and then by what taking it costs. On a cent grid 0.99 IS the reachable level, and seven
+  // shares there still hand back seven cents of a won match, so it holds.
+  assert.equal(fires(0.99, 0.999, 0.01), null, "reachable is not the same as worth taking");
 
   // The grid is read from the book, and a price no cent grid could quote proves a finer one.
   const book = (prices) => ({ bids: prices.map((price) => ({ price: String(price), size: "100" })), asks: [] });
@@ -1888,9 +1919,16 @@ test("certainty close: the grid is the finer of what the exchange declares and w
   // Which is exactly why the declared tick has to be consulted too.
   const fires = (bid, tickSize) => worker.exitReason({
     bestBidPrice: bid, stopPrice: null, triggerPrice: null, settlementCloseBid: 0.999, tickSize,
+    // Seven shares: at 0.999 that forfeits 0.007 USDC, inside the cent this close may give
+    // up. The rule is in USDC now, so a price on its own no longer decides anything.
+    shares: 7,
   });
   assert.equal(fires(0.99, 0.001), null, "0.99 is not certainty on a market that can quote 0.999");
-  assert.equal(fires(0.99, 0.01), "settlement", "but it is certainty on a market that cannot");
+  // A market that cannot quote 0.999 reaches its own top at 0.99 -- and seven shares there
+  // hand back seven cents of a won match, so the close holds instead. Small enough and it
+  // is worth taking again.
+  assert.equal(fires(0.99, 0.01), null,
+    "a market that cannot quote 0.999 simply does not get closed at certainty any more");
   assert.equal(fires(0.999, 0.001), "settlement");
 
   // The finer of the two, in BOTH directions, driven for real. Each source has been seen
@@ -2011,11 +2049,11 @@ test("certainty close: a market quoting round cents is NOT sold at 0.99 when its
     const tick = await worker.effectiveMarketTick(token, roundCentBook);
     assert.equal(tick, 0.001, "the exchange's own grid must win over Gamma and over a round-cent book");
     assert.equal(worker.exitReason({
-      bestBidPrice: 0.99, stopPrice: null, triggerPrice: null, settlementCloseBid: 0.999, tickSize: tick,
+      bestBidPrice: 0.99, stopPrice: null, triggerPrice: null, settlementCloseBid: 0.999, tickSize: tick, shares: 7,
     }), null, "0.99 is not certainty on a market that can quote 0.999");
     // And it does sell once the bid actually reaches the setting.
     assert.equal(worker.exitReason({
-      bestBidPrice: 0.999, stopPrice: null, triggerPrice: null, settlementCloseBid: 0.999, tickSize: tick,
+      bestBidPrice: 0.999, stopPrice: null, triggerPrice: null, settlementCloseBid: 0.999, tickSize: tick, shares: 7,
     }), "settlement");
     assert.ok(calls.length >= 1 && calls[0].includes("tick-size") && calls[0].includes(token),
       `the grid is asked of the exchange, by token: ${JSON.stringify(calls)}`);
@@ -2042,8 +2080,8 @@ test("certainty close: a genuine cent market still sells at 0.99 rather than nev
     const tick = await worker.effectiveMarketTick(freshToken(), roundCentBook);
     assert.equal(tick, 0.01);
     assert.equal(worker.exitReason({
-      bestBidPrice: 0.99, stopPrice: null, triggerPrice: null, settlementCloseBid: 0.999, tickSize: tick,
-    }), "settlement", "0.999 is unreachable on a cent grid, so 0.99 has to be certainty there");
+      bestBidPrice: 0.99, stopPrice: null, triggerPrice: null, settlementCloseBid: 0.999, tickSize: tick, shares: 7,
+    }), null, "a cent market simply holds to redemption now: 0.99 hands back 1% of a won match");
   } finally {
     globalThis.fetch = original;
   }
@@ -2149,7 +2187,7 @@ test("certainty close: a tick the exchange does not declare is UNKNOWN, not a ce
 test("certainty close: the stop still outranks it, and a low setting is not certainty", async () => {
   // Both can be true only in a market that fell and recovered; the stop is checked first.
   assert.equal(worker.exitReason({
-    bestBidPrice: 0.99, stopPrice: 0.995, triggerPrice: 0.996, settlementCloseBid: 0.999, tickSize: 0.001,
+    bestBidPrice: 0.99, stopPrice: 0.995, triggerPrice: 0.996, settlementCloseBid: 0.999, tickSize: 0.001, shares: 7,
   }), "stop");
   // Off sells nothing, however high the bid.
   assert.equal(worker.exitReason({
@@ -2158,7 +2196,7 @@ test("certainty close: the stop still outranks it, and a low setting is not cert
   // And a position a long way from decided is never read as certainty.
   for (const bid of [0.5, 0.71, 0.9, 0.95]) {
     assert.equal(worker.exitReason({
-      bestBidPrice: bid, stopPrice: null, triggerPrice: null, settlementCloseBid: 0.999, tickSize: 0.001,
+      bestBidPrice: bid, stopPrice: null, triggerPrice: null, settlementCloseBid: 0.999, tickSize: 0.001, shares: 7,
     }), null, `${bid} must not read as certainty`);
   }
 });
@@ -2202,7 +2240,7 @@ test("certainty close: the grid is re-asked as the price moves, because it MOVES
       bestBidPrice: 0.99, stopPrice: null, triggerPrice: null, settlementCloseBid: 0.999, tickSize: tick,
     }), null, "the position must be held for 0.999");
     assert.equal(worker.exitReason({
-      bestBidPrice: 0.999, stopPrice: null, triggerPrice: null, settlementCloseBid: 0.999, tickSize: tick,
+      bestBidPrice: 0.999, stopPrice: null, triggerPrice: null, settlementCloseBid: 0.999, tickSize: tick, shares: 7,
     }), "settlement");
 
     // And the order is priced on the same fresh grid, not on the remembered one.
@@ -2238,4 +2276,50 @@ test("certainty close: a fresh answer is not re-asked on every pass of a one-sec
   } finally {
     globalThis.fetch = original;
   }
+});
+
+test("certainty close: the forfeit is a fraction of the position, so the stake may grow", () => {
+  // Reported with three closed winners on the dashboard, and the rule is read straight off
+  // them -- what each handed back against the win it had already earned:
+  //
+  //   LOS vs FURIA          WIN +$1.85   P/L +$1.83    0.02 given back   0.29%
+  //   Map Handicap 1WIN     WIN +$1.94   P/L +$1.86    0.08 given back   1.16%
+  //   HULIGANI vs Klim      WIN +$1.58   P/L +$1.57    0.01 given back   0.15%
+  //
+  // The third was worth taking and the first two were not. 0.2% is the line between them,
+  // and it is a line that means the same thing at a $5 stake and a $50 one -- which is the
+  // whole reason it is a fraction and not a cent.
+  const worth = (bid, level = 0.999) =>
+    worker.certaintyCloseIsWorthTaking({ bestBidPrice: bid, settlementCloseBid: level });
+
+  assert.equal(worth(0.9986), true, "0.14% -- the sale that was worth making");
+  assert.equal(worth(0.997), false, "0.3% -- LOS, two cents of a won match");
+  assert.equal(worth(0.988), false, "1.2% -- 1WIN, eight cents");
+  // The boundary itself, inclusive, and the two prices either side of it.
+  assert.equal(worth(0.998), true);
+  assert.equal(worth(0.9979), false);
+  assert.equal(worth(0.999), true);
+
+  // A fraction, so the same prices decide the same way however large the position is. An
+  // absolute cent would have quietly switched this protection off as the stake grew.
+  for (const shares of [1, 7, 70, 700]) {
+    assert.equal(worker.exitReason({
+      bestBidPrice: 0.999, stopPrice: null, triggerPrice: null, settlementCloseBid: 0.999, tickSize: 0.001, shares,
+    }), "settlement", `0.999 stays worth taking at ${shares} shares`);
+    assert.equal(worker.exitReason({
+      bestBidPrice: 0.99, stopPrice: null, triggerPrice: null, settlementCloseBid: 0.999, tickSize: 0.01, shares,
+    }), null, `0.99 stays not worth taking at ${shares} shares`);
+  }
+
+  // The USDC figure is still reported, because that is what a person reads off a trade --
+  // it just is not what the decision turns on.
+  assert.equal(worker.certaintyCloseSacrificeUsdc({ bestBidPrice: 0.99, shares: 6.9 }), 0.069);
+  assert.equal(worker.certaintyCloseSacrificeUsdc({ bestBidPrice: 0.999, shares: 6.9 }), 0.0069);
+  assert.equal(worker.certaintyCloseSacrificeUsdc({ bestBidPrice: 0.999, shares: null }), null);
+
+  // And a setting below certainty is left alone entirely: that is a stated price for the
+  // capital, not a slice of a match already won.
+  assert.equal(worth(0.95, 0.95), true);
+  assert.equal(worth(0.9, 0.9), true);
+  assert.equal(worth(0.99, 0.99), false, "0.99 is a certainty setting, and 1% is too much to hand back");
 });

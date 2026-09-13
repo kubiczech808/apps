@@ -1048,10 +1048,54 @@ export function reachableSettlementCloseBid(closeBid, tickSize = null) {
   return Math.min(level, round(1 - tick, 6));
 }
 
+// The most this close may give up against simply waiting for the market to redeem at 1.00.
+//
+// Asked for, with three closed winners on the table: WIN +$1.85 / P&L +$1.83, WIN +$1.94 /
+// P&L +$1.86, WIN +$1.58 / P&L +$1.57. Two cents, eight cents, one cent handed back on
+// matches that had already been won. The cent is the one that was worth taking.
+//
+// A FRACTION of the position rather than a fixed sum, chosen so the rule means the same
+// thing at a $5 stake and at a $50 one. And a fraction of the position turns out to be a
+// fraction of a share's redemption value, so this collapses to something much plainer than
+// it sounds: take the bid only at 0.998 or better. Against the three sales above it lands
+// exactly -- 0.14% taken, 0.29% and 1.16% refused.
+//
+// Not in ticks, which is what three previous fixes argued about. A tick is a property of the
+// market and says nothing about what a POSITION forfeits; none of those fixes could have
+// stopped this, because the grid was never the quantity that mattered.
+const MAX_CERTAINTY_CLOSE_SACRIFICE_FRACTION = Math.max(0, number(process.env.LIVE_EXIT_MAX_CLOSE_SACRIFICE_FRACTION, 0.002));
+
+// Above this, a close setting is asking to be let out AT CERTAINTY, and the forfeit rule
+// applies. Below it the setting is a deliberate haircut -- "0.95 is enough, give me the
+// capital back" -- and belongs to whoever configured the portfolio, not to this rule.
+const CERTAINTY_CLOSE_LEVEL = 0.99;
+
+// What selling this position now forfeits against holding it to redemption, in USDC.
+// Reported rather than compared: the decision is made on the fraction, but the fraction is
+// not what anyone reads off a closed trade.
+export function certaintyCloseSacrificeUsdc({ bestBidPrice, shares } = {}) {
+  const bid = number(bestBidPrice);
+  const size = number(shares);
+  if (bid == null || size == null || !(size > 0)) return null;
+  return round(Math.max(0, (1 - bid) * size), 6);
+}
+
+// Whether taking this bid gives up little enough to be worth it.
+//
+// Only for a setting at certainty. A portfolio that asked to be let out at 0.95 is not
+// giving up part of a won match, it is buying its capital back at a stated price.
+export function certaintyCloseIsWorthTaking({ bestBidPrice, settlementCloseBid } = {}) {
+  const level = number(settlementCloseBid);
+  if (level == null || level < CERTAINTY_CLOSE_LEVEL) return true;
+  const bid = number(bestBidPrice);
+  if (bid == null) return false;
+  return round(1 - bid, 6) <= MAX_CERTAINTY_CLOSE_SACRIFICE_FRACTION;
+}
+
 // tickSize defaults to null, not to the coarsest grid: a caller that does not know the tick
 // must not be treated as having measured a 0.01 one. That default is what made "no tick
 // here" and "this market trades in cents" the same thing at the only place it matters.
-export function exitReason({ bestBidPrice, bestAskPrice = null, stopPrice, triggerPrice, probabilityFloor = null, entryPrice = null, settlementCloseBid: closeBid, tickSize = null } = {}) {
+export function exitReason({ bestBidPrice, bestAskPrice = null, stopPrice, triggerPrice, probabilityFloor = null, entryPrice = null, settlementCloseBid: closeBid, tickSize = null, shares = null } = {}) {
   const floor = effectiveStopFloor({ stopPrice, probabilityFloor, entryPrice });
   if (floor != null) {
     // The pre-trigger buffer belongs to the level actually in force. Carrying the stored
@@ -1063,7 +1107,13 @@ export function exitReason({ bestBidPrice, bestAskPrice = null, stopPrice, trigg
   }
   const bid = number(bestBidPrice);
   const reachable = reachableSettlementCloseBid(closeBid, tickSize);
-  if (reachable != null && bid != null && bid >= reachable) return "settlement";
+  if (reachable != null && bid != null && bid >= reachable) {
+    // The bid is at certainty. What it costs to take it is a separate question, and the one
+    // that decides this: a market that has been decided is worth 1.00, and selling it for
+    // meaningfully less hands back part of a win already earned.
+    if (!certaintyCloseIsWorthTaking({ bestBidPrice: bid, settlementCloseBid: closeBid })) return null;
+    return "settlement";
+  }
   return null;
 }
 
@@ -2660,6 +2710,9 @@ async function checkOnce(context) {
       entryPrice: plan.entryPrice,
       settlementCloseBid: plan.settlementCloseBid,
       tickSize: marketTick,
+      // The position's size, because what this close gives up is measured in USDC and a
+      // price alone cannot say how much that is.
+      shares: plan.shares,
     });
     // The level actually in force, which is what the sell is priced at and what the gap
     // tolerance is measured against. Using plan.stopPrice for either would price against a
@@ -2676,6 +2729,11 @@ async function checkOnce(context) {
       // from the log instead of re-derived. This one sold at 0.991 against a 0.999 setting
       // and there was no record of why.
       event.marketTick = marketTick;
+      // What taking this bid forfeited against redemption at 1.00. The number the rule is
+      // written in, recorded so a sale can be judged without re-deriving it from the fill.
+      event.closeSacrificeUsdc = certaintyCloseSacrificeUsdc({ bestBidPrice: currentBestBid, shares: plan.shares });
+      event.closeSacrificeFraction = currentBestBid == null ? null : round(1 - currentBestBid, 6);
+      event.maxCloseSacrificeFraction = MAX_CERTAINTY_CLOSE_SACRIFICE_FRACTION;
       // What each source said, so the next surprise names its own cause. A null declared
       // tick now means the grid is unknown and the level was NOT lowered -- the book alone
       // never sets it, because a market at certainty quotes round cents.

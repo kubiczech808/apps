@@ -600,7 +600,36 @@ export function canFundAnotherPosition(freeUsdc, stakeUsdc) {
 export function certaintyCloseTriggered({ closeBid, bestBid, fundable } = {}) {
   const bid = Number(bestBid);
   if (closeBid == null || !Number.isFinite(bid) || !(bid >= closeBid)) return false;
+  if (!certaintyCloseIsWorthTaking({ bestBid: bid, closeBid })) return false;
   return fundable !== true;
+}
+
+// The most a close at certainty may hand back, as a fraction of the position.
+//
+// Reported from the dashboard, three closed winners side by side -- what each gave up
+// against the win it had already earned:
+//
+//   LOS vs FURIA          WIN +$1.85   P/L +$1.83    0.02 back   0.29%
+//   Map Handicap 1WIN     WIN +$1.94   P/L +$1.86    0.08 back   1.16%
+//   HULIGANI vs Klim      WIN +$1.58   P/L +$1.57    0.01 back   0.15%
+//
+// The third was worth making and the first two were not, and 0.2% is the line between them.
+// A fraction rather than a fixed sum so the rule means the same at a $5 stake and a $50 one;
+// and since a share redeems at 1.00, a fraction of the position is just a distance from 1.00
+// -- so this says, plainly, take the bid at 0.998 or better.
+const MAX_CERTAINTY_CLOSE_SACRIFICE_FRACTION = Math.max(0, envNumber("PAPER_MAX_CLOSE_SACRIFICE_FRACTION", 0.002) ?? 0.002);
+
+// Above this a close setting is asking to be let out AT CERTAINTY, and the rule applies.
+// Below it the setting is a deliberate haircut -- "0.95 is enough, give me the capital back"
+// -- which belongs to whoever configured the portfolio rather than to this rule.
+const CERTAINTY_CLOSE_LEVEL = 0.99;
+
+export function certaintyCloseIsWorthTaking({ bestBid, closeBid } = {}) {
+  const level = Number(closeBid);
+  if (!Number.isFinite(level) || level < CERTAINTY_CLOSE_LEVEL) return true;
+  const bid = Number(bestBid);
+  if (!Number.isFinite(bid)) return false;
+  return Number((1 - bid).toFixed(6)) <= MAX_CERTAINTY_CLOSE_SACRIFICE_FRACTION;
 }
 
 // Whether the resolution ceiling is a rule for THIS row, given the mode.

@@ -5468,24 +5468,32 @@ test("equity chart: the curve opens one day before the first change, not at the 
     return portfolioEquityHistory;
   `)();
 
-  const day = (date) => Date.parse(`2026-09-${date}T12:00:00Z`);
-  // The reported shape: opened on the 4th, first settlement on the 9th, read on the 12th.
+  // Dated relative to now, not to a calendar. This test pinned "2026-09-12" as today and
+  // passed for exactly one day; the morning after, its last-point assertion failed against
+  // 2026-09-13 -- which says nothing about the chart and everything about the fixture. The
+  // function under test deliberately stamps its final point with the real clock, so a test
+  // of it cannot hold a date still.
+  const DAY = 86400000;
+  const at = (daysAgo, hour) => new Date(Date.now() - daysAgo * DAY).toISOString().slice(0, 11)
+    + String(hour).padStart(2, "0") + ":00:00.000Z";
+  const day = (daysAgo) => Date.parse(at(daysAgo, 12));
+  // The reported shape: opened eight days ago, first settlement three days ago, read today.
   const trades = [
-    { status: "WON", openedAt: "2026-09-04T09:00:00Z", resolvedAt: "2026-09-09T18:00:00Z", realizedPnlUsdc: 4 },
-    { status: "LOST", openedAt: "2026-09-09T10:00:00Z", resolvedAt: "2026-09-11T18:00:00Z", realizedPnlUsdc: -2 },
+    { status: "WON", openedAt: at(8, 9), resolvedAt: at(3, 18), realizedPnlUsdc: 4 },
+    { status: "LOST", openedAt: at(3, 10), resolvedAt: at(1, 18), realizedPnlUsdc: -2 },
   ];
-  const history = build(trades, 152, 0, "2026-09-12T12:00:00Z", 150, 2);
+  const history = build(trades, 152, 0, new Date().toISOString(), 150, 2);
   assert.ok(history, "a portfolio five days old must still be charted");
   const startedAt = history.points[0].timestamp;
-  assert.equal(startedAt, Date.parse("2026-09-09T18:00:00Z") - 86400000,
-    "the curve must open exactly one day before the first settlement, not on the 4th when the trade was opened");
-  assert.ok(startedAt > day("04"), "and therefore well after the first trade was opened");
+  assert.equal(startedAt, Date.parse(at(3, 18)) - DAY,
+    "the curve must open exactly one day before the first settlement, not when the trade was opened");
+  assert.ok(startedAt > day(8), "and therefore well after the first trade was opened");
   assert.equal(history.points[0].value, 150, "and it opens at the original value");
   // The portfolio's own age is what decides whether to draw a chart AT ALL. Measuring that
   // from the new start would hide the chart of a portfolio whose first trade settled
   // yesterday, which is a different question from where the curve begins.
-  assert.equal(build([{ status: "WON", openedAt: "2026-09-11T09:00:00Z", resolvedAt: "2026-09-11T18:00:00Z", realizedPnlUsdc: 1 }],
-    151, 0, "2026-09-12T12:00:00Z", 150, 1), null,
+  assert.equal(build([{ status: "WON", openedAt: at(1, 9), resolvedAt: at(1, 18), realizedPnlUsdc: 1 }],
+    151, 0, new Date().toISOString(), 150, 1), null,
     "a portfolio younger than three days is still not charted");
 
   // At most one point per day, whichever series is drawn. Reported on the rebuilt one, where
@@ -5495,7 +5503,8 @@ test("equity chart: the curve opens one day before the first change, not at the 
   assert.equal(new Set(days).size, days.length, `a day may appear once: ${days.join(", ")}`);
   // And the last point is today, carrying the equity that was passed in -- the same figure
   // as the tile above the chart.
-  assert.equal(dayOf(history.points.at(-1)), "2026-09-12");
+  assert.equal(dayOf(history.points.at(-1)), new Date().toISOString().slice(0, 10),
+    "the last point is today, by the clock the function actually reads");
   assert.equal(history.points.at(-1).value, 152);
 
   // A measured daily series is a reading per day and is taken whenever one exists.
