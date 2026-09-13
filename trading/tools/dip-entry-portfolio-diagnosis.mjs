@@ -101,11 +101,85 @@ async function main() {
     }
   }
 
-  console.log("\n== 3. what the answer means");
-  console.log("   Bought inside the OPENING band -> the portfolio is an ordinary favourites");
-  console.log("   portfolio: its own probability range is what the bot filters on, and the");
-  console.log("   buy band is not consulted. Bought inside the BUY band -> the rule is live.");
-  console.log("   Anything else -> neither, and the gate is missing from the bot entirely.");
+  // Reported next: three dip portfolios in paper, two of which never open anything, with
+  // the entry parameters lowered a long way and markets visible in the candidates list.
+  //
+  // The candidates list is not where a dip portfolio's candidates come from, and that is the
+  // first thing to establish. A dip portfolio's pool is the hits the RPi worker RECORDED --
+  // the catalogue cannot hold a collapsed favourite at all, because the scan keeps only the
+  // leading outcome above 0.50 -- so a portfolio with no hits has no pool, however full the
+  // catalogue looks. Three things have to be true before a hit can exist, and each one fails
+  // silently into the same run-log sentence: the portfolio has to be IN the watch list, the
+  // worker has to be RUNNING, and the price has to actually REACH the band.
+  console.log("\n== 3. is the portfolio in the watch list the worker polls");
+  const watch = await fetchJson(`${HOST}/api.php?action=dip-entry-watch`, "dip watch");
+  const watched = new Set(watch?.portfolios || []);
+  const plansBy = new Map();
+  for (const plan of watch?.plans || []) {
+    const key = String(plan.portfolioId || "");
+    if (!plansBy.has(key)) plansBy.set(key, []);
+    plansBy.get(key).push(plan);
+  }
+  console.log(`   generated ${watch?.generatedAt || "-"}`
+    + `   portfolios watching ${watched.size}   plans prepared ${(watch?.plans || []).length}`);
+  for (const [id, row] of carriers) {
+    const key = `paper-${id}`;
+    const plans = plansBy.get(key) || [];
+    const blocked = plans.filter((plan) => String(plan.blockedReason || "")).length;
+    console.log(`   ${key.padEnd(26)} ${watched.has(key) ? "WATCHED" : "NOT WATCHED"}`
+      + `   plans ${String(plans.length).padStart(3)}   of those blocked ${blocked}`);
+    // The gates the payload applies, recomputed here so an absence has a reason beside it
+    // rather than being reported as a bare "no".
+    if (!watched.has(key)) {
+      const buyMax = num(row.maxProbability);
+      const openMin = num(row.dipEntryOpenMin);
+      const reasons = [];
+      if (row.dipEntryEnabled !== true) reasons.push("the rule is off on this portfolio");
+      if (row.archived === true) reasons.push("the portfolio is archived");
+      if (row.automationEnabled === false) reasons.push("automation is switched off");
+      if (buyMax == null) reasons.push("it has no probability MAXIMUM, and an open-ended range necessarily overlaps the opening band");
+      else if (openMin != null && buyMax >= openMin) {
+        reasons.push(`its range reaches into the opening band (max ${pct(buyMax)} >= opening min ${pct(openMin)}),`
+          + ` so the rule would fire on a market that never fell`);
+      }
+      for (const reason of reasons.length ? reasons : ["no gate in the payload explains this -- read the endpoint directly"]) {
+        console.log(`      -> ${reason}`);
+      }
+    }
+    for (const plan of plans.filter((one) => String(one.blockedReason || "")).slice(0, 5)) {
+      console.log(`      blocked: ${plan.blockedReason}   "${String(plan.question || "").slice(0, 48)}"`);
+    }
+  }
+
+  console.log("\n== 4. what the worker has actually recorded");
+  const hitsPayload = await fetchJson(`${HOST}/api.php?action=dip-entry-hits`, "dip hits");
+  const hits = Array.isArray(hitsPayload?.hits) ? hitsPayload.hits : [];
+  console.log(`   ${hits.length} hit(s) on record`);
+  const byPortfolio = new Map();
+  for (const hit of hits) {
+    const key = String(hit.portfolioId || "(none)");
+    if (!byPortfolio.has(key)) byPortfolio.set(key, []);
+    byPortfolio.get(key).push(hit);
+  }
+  for (const [key, rows] of [...byPortfolio.entries()].sort()) {
+    const newest = rows.map((row) => String(row.at || "")).sort().pop() || "-";
+    console.log(`   ${key.padEnd(26)} ${String(rows.length).padStart(3)} hit(s)   newest ${newest}`);
+  }
+  for (const [id] of carriers) {
+    const key = `paper-${id}`;
+    if (!byPortfolio.has(key)) console.log(`   ${key.padEnd(26)}   0 hit(s)  <- nothing to open a position from`);
+  }
+
+  console.log("\n== 5. what the answer means");
+  console.log("   NOT WATCHED -> the reason is printed above it, and it is a configuration");
+  console.log("   fault the portfolio cannot trade its way out of: fix the range or the band.");
+  console.log("   WATCHED with plans but 0 hits -> the watch is right and either the worker");
+  console.log("   is not running (LIVE_DIP_ENTRY_MODE=off disarms it and is the default on a");
+  console.log("   fresh install) or no watched favourite has fallen into the band yet.");
+  console.log("   WATCHED, hits recorded, still no trade -> the hit rows are being refused by");
+  console.log("   an ordinary portfolio filter: liquidity, net yield, tags, market shape.");
+  console.log("   And the candidates list is NOT this pool -- a collapsed favourite is not in");
+  console.log("   the catalogue at all, so seeing markets there says nothing about this rule.");
 }
 
 main().catch((error) => {

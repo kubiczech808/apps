@@ -29,7 +29,7 @@ jobs:
         with:
           node-version: "20"
 
-      - name: Compare what the rule is configured as against what was bought
+      - name: Ask why a dip portfolio is not trading, from config through watch to hits
         working-directory: trading
         env:
           DIP_PORTFOLIO: ${{ inputs.portfolio }}
