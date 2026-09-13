@@ -1033,19 +1033,23 @@ export async function effectiveMarketTick(tokenId, book) {
   return Math.min(declared, observed);
 }
 
-// The level the close can actually be reached at, or the level as configured when the grid
-// is not known.
+// The level the close fires at: the one configured on the portfolio, and nothing else.
 //
-// Lowering to the nearest reachable tick is what makes 0.999 fire at all on a market that
-// cannot quote it. But lowering on a GUESS is what sold three positions a cent early, so a
-// missing tick no longer reduces anything: selling early is a permanent loss, waiting is
-// only slower.
-export function reachableSettlementCloseBid(closeBid, tickSize = null) {
+// There used to be a second level here -- the configured one "lowered to what the market's
+// grid can quote" -- and every early sale in this log came out of it. 0.999 became 0.99 and
+// the position was sold a full cent under the level someone set.
+//
+// 0.99 is not 0.999. A level is a number a person chose, not a suggestion to be rounded
+// toward whatever the grid happens to offer, and a market that cannot quote the level
+// simply does not close: the position redeems at 1.00, which is more than any lowering
+// would ever have taken. Selling early is a permanent loss; waiting is only slower.
+//
+// So the trigger asks one question, `bid >= level`, and the bid is itself a price on the
+// market's real grid -- which means a bid at or above the level is already proof the grid
+// can reach it. No tick is consulted to decide this any more, and none can lower it.
+export function settlementCloseLevel(closeBid) {
   const level = number(closeBid);
-  if (level == null || !(level > 0)) return null;
-  const tick = number(tickSize);
-  if (tick == null || !(tick > 0)) return level;
-  return Math.min(level, round(1 - tick, 6));
+  return level != null && level > 0 ? level : null;
 }
 
 // The most this close may give up against simply waiting for the market to redeem at 1.00.
@@ -1092,10 +1096,11 @@ export function certaintyCloseIsWorthTaking({ bestBidPrice, settlementCloseBid }
   return round(1 - bid, 6) <= MAX_CERTAINTY_CLOSE_SACRIFICE_FRACTION;
 }
 
-// tickSize defaults to null, not to the coarsest grid: a caller that does not know the tick
-// must not be treated as having measured a 0.01 one. That default is what made "no tick
-// here" and "this market trades in cents" the same thing at the only place it matters.
-export function exitReason({ bestBidPrice, bestAskPrice = null, stopPrice, triggerPrice, probabilityFloor = null, entryPrice = null, settlementCloseBid: closeBid, tickSize = null, shares = null } = {}) {
+// No tickSize parameter, deliberately. It used to be here, and what it did was lower the
+// close level toward the market's grid -- which is the whole history of this bug. Nothing
+// about the market's grid may move the level a person configured, so this function is not
+// given the grid to move it with.
+export function exitReason({ bestBidPrice, bestAskPrice = null, stopPrice, triggerPrice, probabilityFloor = null, entryPrice = null, settlementCloseBid: closeBid, shares = null } = {}) {
   const floor = effectiveStopFloor({ stopPrice, probabilityFloor, entryPrice });
   if (floor != null) {
     // The pre-trigger buffer belongs to the level actually in force. Carrying the stored
@@ -1106,8 +1111,8 @@ export function exitReason({ bestBidPrice, bestAskPrice = null, stopPrice, trigg
     if (exitTrigger({ bestBidPrice, bestAskPrice, stopPrice: floor, triggerPrice: trigger })) return "stop";
   }
   const bid = number(bestBidPrice);
-  const reachable = reachableSettlementCloseBid(closeBid, tickSize);
-  if (reachable != null && bid != null && bid >= reachable) {
+  const level = settlementCloseLevel(closeBid);
+  if (level != null && bid != null && bid >= level) {
     // The bid is at certainty. What it costs to take it is a separate question, and the one
     // that decides this: a market that has been decided is worth 1.00, and selling it for
     // meaningfully less hands back part of a win already earned.
@@ -1254,7 +1259,16 @@ export function roundToTick(value, tick, direction = "nearest") {
   const scale = Math.round(1 / step);
   if (!Number.isFinite(scale) || scale <= 0) return price;
   const raw = price * scale;
-  const rounded = direction === "down" ? Math.floor(raw) : direction === "up" ? Math.ceil(raw) : Math.round(raw);
+  // Binary floating point puts 0.29 * 100 at 28.999999999999996, so a bare floor turns a
+  // price that is exactly on the grid into the tick below it: 0.29 was priced at 0.28, and
+  // this is the same "sold a cent under the level that was set" as the close bug, reached
+  // by arithmetic instead of by rules. The tolerance is a millionth of a tick -- far too
+  // small to move a price that genuinely sits between two ticks, and more than enough to
+  // absorb the representation error of one multiplication.
+  const epsilon = 1e-6;
+  const rounded = direction === "down"
+    ? Math.floor(raw + epsilon)
+    : direction === "up" ? Math.ceil(raw - epsilon) : Math.round(raw);
   return Number((rounded / scale).toFixed(String(step).split(".")[1]?.length || 4));
 }
 
@@ -1274,7 +1288,7 @@ export function roundToTick(value, tick, direction = "nearest") {
 // insists on its floor after the market has gapped past it does not cap the loss, it just
 // stops selling -- and the position keeps falling. Selling into the gap is what the paper
 // model already books as FILLED_AFTER_GAP, so this is also what makes the two agree.
-export function protectedExitPrice({ stopPrice, bestBidPrice, tickSize = 0.01 } = {}) {
+export function protectedExitPrice({ stopPrice, bestBidPrice, tickSize = 0.01, minPrice = null } = {}) {
   const floor = roundToTick(stopPrice, tickSize, "down");
   const bid = number(bestBidPrice);
   // No floor at all is the settlement close: nothing is being protected, the point is to
@@ -1283,7 +1297,21 @@ export function protectedExitPrice({ stopPrice, bestBidPrice, tickSize = 0.01 } 
   if (floor == null) {
     if (bid == null || !(bid > 0)) return null;
     const atBid = roundToTick(bid, tickSize, "down");
-    return atBid != null && atBid > 0 ? atBid : null;
+    if (atBid == null || !(atBid > 0)) return null;
+    // The configured close level, as a hard floor on the ORDER.
+    //
+    // The trigger already refuses to fire below it, but the trigger and the order read the
+    // grid from different places -- the trigger from the book in front of it, the order
+    // from what the exchange declares for the token -- and when those disagree the order
+    // is the one that moves money. A 0.999 bid priced on a declared 0.01 grid rounds to
+    // 0.99, and a SELL at 0.99 authorises a sale at 0.99. That is recorded in this log
+    // already: trigger tick 0.001, order out at 0.99.
+    //
+    // So no order is priced below the level. Unsellable here means the position is held
+    // and redeems at 1.00, which is above anything this branch could have posted.
+    const level = number(minPrice);
+    if (level != null && atBid < level) return null;
+    return atBid;
   }
   // Below the floor the book has gapped; sell where the buyers actually are.
   if (bid != null && bid > 0 && bid < floor) {
@@ -1592,13 +1620,27 @@ export function stopGapIsTooWide({ bestBidPrice, stopPrice, tolerance = STOP_GAP
 async function submitProtectedExit(plan, { bestBidPrice = null } = {}) {
   const { client, Side, OrderType } = await authenticatedClient();
   const constraints = await exchangeConstraintsForToken(plan.tokenId);
+  // A settlement close -- no stop floor -- may not be priced below the level the portfolio
+  // configured. A stop has no such floor: it is already selling into a fall, and the point
+  // there is to leave at all.
+  const closeLevel = plan.stopPrice == null ? settlementCloseLevel(plan.settlementCloseBid) : null;
   const price = protectedExitPrice({
     stopPrice: plan.stopPrice,
     bestBidPrice,
     tickSize: constraints.tickSize,
+    minPrice: closeLevel,
   });
   if (price == null || !(price > 0)) {
-    return { success: false, error: "no valid exit price on this market's tick grid" };
+    const bid = number(bestBidPrice);
+    return {
+      success: false,
+      error: closeLevel != null && bid != null && bid >= closeLevel
+        ? `the exchange quotes this market in ${constraints.tickSize} steps, so a SELL cannot be`
+          + ` priced at the ${closeLevel} close this portfolio is set to -- the best it could carry`
+          + ` is ${roundToTick(bid, constraints.tickSize, "down")}, which is below the level.`
+          + ` The position is held and redeems at 1.00 instead`
+        : "no valid exit price on this market's tick grid",
+    };
   }
   const options = { tickSize: String(constraints.tickSize) };
   // Only when it is actually known. Turning "unknown" into a confident false is what
@@ -2709,7 +2751,6 @@ async function checkOnce(context) {
       probabilityFloor: plan.probabilityFloor,
       entryPrice: plan.entryPrice,
       settlementCloseBid: plan.settlementCloseBid,
-      tickSize: marketTick,
       // The position's size, because what this close gives up is measured in USDC and a
       // price alone cannot say how much that is.
       shares: plan.shares,
@@ -2722,12 +2763,13 @@ async function checkOnce(context) {
     event.reasonKind = reason;
     if (reason === "settlement") {
       event.settlementCloseBid = plan.settlementCloseBid;
-      // The level the trigger actually used, which is not the stored one on an ordinary
-      // 0.01 market. Recorded separately so a log never reports a number no book could meet.
-      event.settlementCloseBidInForce = reachableSettlementCloseBid(plan.settlementCloseBid, marketTick);
-      // And the grid that decided it, so a sale below the stored setting can be explained
-      // from the log instead of re-derived. This one sold at 0.991 against a 0.999 setting
-      // and there was no record of why.
+      // The level in force IS the configured level now -- there is no second, lowered one
+      // for a log to have to distinguish. Kept as a field so a reader comparing an old
+      // event with a new one sees the two numbers agree rather than the field vanish.
+      event.settlementCloseBidInForce = plan.settlementCloseBid;
+      // The grid, recorded but no longer deciding anything. It stays in the event because a
+      // fill below the level would now be the exchange's doing rather than ours, and that
+      // is the first number anyone would want when asking how.
       event.marketTick = marketTick;
       // What taking this bid forfeited against redemption at 1.00. The number the rule is
       // written in, recorded so a sale can be judged without re-deriving it from the fill.
@@ -2745,9 +2787,8 @@ async function checkOnce(context) {
         ...event,
         type: reason === "settlement" ? "SHADOW_SETTLEMENT_CLOSE" : "SHADOW_STOP_TRIGGERED",
         reason: reason === "settlement"
-          ? `the bid is ${currentBestBid} at or above the ${reachableSettlementCloseBid(plan.settlementCloseBid, marketTick)} settlement close`
-            + ` (set to ${plan.settlementCloseBid}, capped at what the market's grid can quote);`
-            + ` no SELL is allowed in shadow mode`
+          ? `the bid is ${currentBestBid} at or above the ${plan.settlementCloseBid} settlement close`
+            + ` this portfolio is set to; no SELL is allowed in shadow mode`
           : crossing?.gapped
             ? `the book is already at ${(crossing.recoveredFraction * 100).toFixed(0)}% of the stop, so this sells a residue rather than capping the loss; no SELL is allowed in shadow mode`
             : "price reached the stop; no SELL is allowed in shadow mode",

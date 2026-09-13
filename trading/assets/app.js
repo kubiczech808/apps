@@ -1646,27 +1646,22 @@ function dipEntryRuleSummaryValue(rule) {
   return fault ? `Not applied - ${fault}` : `On: ${bands}, events under way only`;
 }
 
-// Reported: the certainty close never fired. The setting was stored and the positions were
-// watched -- but most markets quote on a 1c grid, where the highest bid that can exist is
-// 99c, so a level above it was unsatisfiable by construction. The worker clamps the trigger
-// to what a book can quote (reachableSettlementCloseBid), and the label says so rather than
-// promising a price no market will ever show.
 // Whether the config carries a value at all, as opposed to carrying one that normalizes
 // away. Both are rendered "Off", but only one of them may put a digit in the input box.
 function configValueIsSet(value) {
   return value != null && value !== "";
 }
 
-// The setting spans every market the portfolio can hold, and they do not all quote on the
-// same grid, so the label cannot name one price. It used to claim anything above 99 became
-// 99 -- which was the worker's behaviour, and was the bug: a market quoting in tenths of a
-// cent CAN reach 99.9, and clamping it sold positions below a certainty already reached.
-// The level is now the top of whichever grid the market being sold actually quotes on.
+// The label names the level and nothing else, because the level is now all there is.
+//
+// It used to read "or the highest bid the market's grid allows", and that was an honest
+// description of what the worker did: it lowered the level toward whatever the market could
+// quote. That lowering is what sold won positions at 0.99 against a 0.999 setting, and it
+// is gone. A market that cannot quote the level simply does not close -- the position holds
+// and redeems at 1.00 -- so there is no second price left to qualify the first with.
 function settlementCloseBidLabelValue(bid) {
   if (bid == null || !(bid > 0)) return "Off";
-  return bid > 0.99
-    ? `Sell at ${probability(bid)}, or the highest bid the market's grid allows`
-    : `Sell at ${probability(bid)}`;
+  return `Sell at ${probability(bid)} or better, never below`;
 }
 
 // One reader for the probability floor's label, because the typing preview and the saved

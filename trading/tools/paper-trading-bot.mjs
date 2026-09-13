@@ -559,6 +559,11 @@ function configLiveEventMode(row = {}) {
 // Bounded the way the API bounds it: below 0.5 this would not be a settlement shortcut but
 // simply selling, and at 1.0 nothing would ever trigger because a resolved market is no
 // longer quoted.
+// The default close level, matching api.php's DEFAULT_SETTLEMENT_CLOSE_BID. 0.999 and
+// 0.999 exactly: the level a portfolio carries is the level it sells at, and a market that
+// cannot quote it holds to resolution and takes 1.00 rather than being sold a cent under.
+const DEFAULT_SETTLEMENT_CLOSE_BID = 0.999;
+
 function normalizeSettlementCloseBid(value) {
   const bid = Number(value);
   if (!Number.isFinite(bid) || bid <= 0) return null;
@@ -872,7 +877,7 @@ const PAPER_STRATEGIES = {
     maxResolutionHours: envMaxResolutionHours("PAPER_CONSERVATIVE"),
     maxResolutionDays: envMaxResolutionHours("PAPER_CONSERVATIVE") / HOURS_PER_DAY,
     liveEventMode: envLiveEventMode("PAPER_CONSERVATIVE"),
-    settlementCloseBid: normalizeSettlementCloseBid(envNumber("PAPER_CONSERVATIVE_SETTLEMENT_CLOSE_BID", null)),
+    settlementCloseBid: normalizeSettlementCloseBid(envNumber("PAPER_CONSERVATIVE_SETTLEMENT_CLOSE_BID", DEFAULT_SETTLEMENT_CLOSE_BID)),
     minLiquidityUsdc: envNumber("PAPER_CONSERVATIVE_MIN_LIQUIDITY_USDC", null),
     minNetYield: envNumber("PAPER_CONSERVATIVE_MIN_NET_YIELD", 0),
     executionTrigger: normalizeExecutionTrigger(process.env.PAPER_CONSERVATIVE_EXECUTION_TRIGGER),
@@ -913,7 +918,7 @@ const PAPER_STRATEGIES = {
     maxResolutionHours: envMaxResolutionHours("PAPER_HIGH_REWARD"),
     maxResolutionDays: envMaxResolutionHours("PAPER_HIGH_REWARD") / HOURS_PER_DAY,
     liveEventMode: envLiveEventMode("PAPER_HIGH_REWARD"),
-    settlementCloseBid: normalizeSettlementCloseBid(envNumber("PAPER_HIGH_REWARD_SETTLEMENT_CLOSE_BID", null)),
+    settlementCloseBid: normalizeSettlementCloseBid(envNumber("PAPER_HIGH_REWARD_SETTLEMENT_CLOSE_BID", DEFAULT_SETTLEMENT_CLOSE_BID)),
     minLiquidityUsdc: envNumber("PAPER_HIGH_REWARD_MIN_LIQUIDITY_USDC", null),
     minNetYield: envNumber("PAPER_HIGH_REWARD_MIN_NET_YIELD", 0),
     executionTrigger: normalizeExecutionTrigger(process.env.PAPER_HIGH_REWARD_EXECUTION_TRIGGER),
@@ -952,7 +957,7 @@ const PAPER_STRATEGIES = {
     maxResolutionHours: envMaxResolutionHours("PAPER_MORE_PROBABLE"),
     maxResolutionDays: envMaxResolutionHours("PAPER_MORE_PROBABLE") / HOURS_PER_DAY,
     liveEventMode: envLiveEventMode("PAPER_MORE_PROBABLE"),
-    settlementCloseBid: normalizeSettlementCloseBid(envNumber("PAPER_MORE_PROBABLE_SETTLEMENT_CLOSE_BID", null)),
+    settlementCloseBid: normalizeSettlementCloseBid(envNumber("PAPER_MORE_PROBABLE_SETTLEMENT_CLOSE_BID", DEFAULT_SETTLEMENT_CLOSE_BID)),
     minLiquidityUsdc: envNumber("PAPER_MORE_PROBABLE_MIN_LIQUIDITY_USDC", MORE_PROBABLE_MIN_LIQUIDITY_USDC),
     minNetYield: envNumber("PAPER_MORE_PROBABLE_MIN_NET_YIELD", 0),
     executionTrigger: normalizeExecutionTrigger(process.env.PAPER_MORE_PROBABLE_EXECUTION_TRIGGER),
@@ -991,7 +996,7 @@ const PAPER_STRATEGIES = {
     maxResolutionHours: envMaxResolutionHours("PAPER_EQUAL"),
     maxResolutionDays: envMaxResolutionHours("PAPER_EQUAL") / HOURS_PER_DAY,
     liveEventMode: envLiveEventMode("PAPER_EQUAL"),
-    settlementCloseBid: normalizeSettlementCloseBid(envNumber("PAPER_EQUAL_SETTLEMENT_CLOSE_BID", null)),
+    settlementCloseBid: normalizeSettlementCloseBid(envNumber("PAPER_EQUAL_SETTLEMENT_CLOSE_BID", DEFAULT_SETTLEMENT_CLOSE_BID)),
     // This is traded volume, despite the legacy internal property name. Equal
     // depends on a usable secondary market for its synthetic protective exit.
     minLiquidityUsdc: envNumber("PAPER_EQUAL_MIN_LIQUIDITY_USDC", 20000),

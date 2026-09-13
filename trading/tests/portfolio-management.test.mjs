@@ -3231,14 +3231,18 @@ test("live stop loss: with no default policy an unattributed position is reporte
     mkdirSync(join(directory, "data"), { recursive: true });
     writeFileSync(definitions, API.slice(0, cut) + "\n");
 
-    // The main live portfolio has no stop loss. Applying one anyway would exit a position
-    // at a cap the operator never set, so the position stays unwatched -- and the payload
-    // says so rather than leaving the gap silent.
+    // The main live portfolio has no stop loss, and it must not acquire one: exiting a
+    // position at a cap the operator never set is the thing this test exists to prevent.
+    //
+    // It DOES now acquire a certainty close, because 0.999 is the default and this row
+    // never said otherwise. Those are different promises -- one caps a loss at a level
+    // somebody has to choose, the other takes a win the market has already decided -- so
+    // the position is watched, and watched without a stop.
     writeFileSync(join(directory, "data", "portfolio-config.json"), JSON.stringify({
       live: { displayName: "Live", stopLossRiskMultiplier: 0 },
     }));
     writeFileSync(join(directory, "data", "live-state.json"), JSON.stringify({
-      positions: [{ tokenId: "unwatched-token", question: "No policy covers this" }],
+      positions: [{ tokenId: "unwatched-token", question: "Only the default close covers this" }],
     }));
 
     const payload = JSON.parse(execFileSync("php", ["-r",
@@ -3246,11 +3250,27 @@ test("live stop loss: with no default policy an unattributed position is reporte
       + ` echo json_encode(live_stop_loss_policy_payload());`,
     ], { encoding: "utf8", cwd: directory }));
 
-    assert.deepEqual(payload.policies, []);
-    assert.equal(payload.defaultPolicy, null);
+    assert.equal(payload.policies.length, 1);
+    assert.equal(payload.policies[0].settlementCloseBid, 0.999);
+    assert.equal(payload.policies[0].stopLossRiskMultiplier, 0,
+      "no stop may be invented for a portfolio that set none");
+    assert.equal(payload.policies[0].stopLossEnabled, false);
     assert.equal(payload.positionsWithoutRunLogAttribution, 1);
-    assert.equal(payload.positionsAdoptedFromAccount, 0);
-    assert.equal(payload.positionsLeftUnwatched, 1,
+    assert.equal(payload.positionsLeftUnwatched, 0);
+
+    // And the original case, kept: say off explicitly and the position really is unwatched,
+    // with the gap counted rather than left silent.
+    writeFileSync(join(directory, "data", "portfolio-config.json"), JSON.stringify({
+      live: { displayName: "Live", stopLossRiskMultiplier: 0, settlementCloseBid: 0 },
+    }));
+    const declined = JSON.parse(execFileSync("php", ["-r",
+      `chdir('${directory}'); require '${definitions}';`
+      + ` echo json_encode(live_stop_loss_policy_payload());`,
+    ], { encoding: "utf8", cwd: directory }));
+    assert.deepEqual(declined.policies, []);
+    assert.equal(declined.defaultPolicy, null);
+    assert.equal(declined.positionsAdoptedFromAccount, 0);
+    assert.equal(declined.positionsLeftUnwatched, 1,
       "an uncovered position must be counted, so the gap is visible");
   } finally {
     rmSync(directory, { recursive: true, force: true });
@@ -4196,12 +4216,14 @@ test("dashboard: a page opening on a paper tab still reaches the top live portfo
 // Asked for: a position whose outcome is already decided still waits hours for Polymarket
 // to resolve it, with the stake locked the whole time. Selling one tick below certainty
 // pays about a cent a share to get that capital back now.
-test("close at certainty: the threshold is stored per portfolio, and off is the default", () => {
+test("close at certainty: the threshold is stored per portfolio, and 0.999 is the default", () => {
   const saved = normalizeConfig({
     paper: {
       early: { displayName: "Early", settlementCloseBid: 0.99 },
       finer: { displayName: "Finer", settlementCloseBid: 0.999 },
       waits: { displayName: "Waits" },
+      // Off is a value someone posts, and it has to survive the default. These two rows are
+      // the whole point of the pair: absent means "take the default", 0 means "I said no".
       off: { displayName: "Off", settlementCloseBid: 0 },
       // Nonsense is off, never a default: a portfolio must not start selling early because
       // a bad value was posted.
@@ -4214,7 +4236,17 @@ test("close at certainty: the threshold is stored per portfolio, and off is the 
   });
   assert.equal(saved.paper.early.settlementCloseBid, 0.99);
   assert.equal(saved.paper.finer.settlementCloseBid, 0.999);
-  assert.equal(saved.paper.waits.settlementCloseBid, 0, "a portfolio that never set it waits for resolution");
+  // Asked for: "u me na 99.9 a to taky nastav defaultne". A portfolio that never set the
+  // field gets the level rather than nothing, because holding a decided position to
+  // resolution locks the stake for hours and leaving at 0.999 costs a tenth of a cent a
+  // share. The four built-in paper strategies and both live templates carry it too.
+  assert.equal(saved.paper.waits.settlementCloseBid, 0.999,
+    "a portfolio that never set it now closes at the default level");
+  assert.match(API, /const DEFAULT_SETTLEMENT_CLOSE_BID = 0\.999;/);
+  assert.equal((API.match(/'settlementCloseBid' => DEFAULT_SETTLEMENT_CLOSE_BID,/g) || []).length, 6,
+    "every template carries it, or a portfolio's default depends on which one it came from");
+  // And an explicit 0 still means off. A default that overrides a stated choice is worse
+  // than no default at all.
   assert.equal(saved.paper.off.settlementCloseBid, 0);
   assert.equal(saved.paper.junk.settlementCloseBid, 0);
   assert.equal(saved.paper.tooLow.settlementCloseBid, 0.5);

@@ -3172,6 +3172,15 @@ function compact_state_payload(string $target, array $data, string $summary, ?st
     return $compact;
 }
 
+// The bid at which a decided position is sold rather than held to resolution.
+//
+// 0.999 by default, and 0.999 exactly. A market the book has settled still takes hours to
+// resolve on Polymarket and the stake is locked for every one of them, so leaving at the
+// last quotable price buys that capital back for a tenth of a cent a share. Anything
+// coarser is not a cheaper version of this rule, it is handing back part of a won match --
+// which is why nothing anywhere lowers this level toward a market's grid any more.
+const DEFAULT_SETTLEMENT_CLOSE_BID = 0.999;
+
 function default_portfolio_config(): array
 {
     return [
@@ -3195,6 +3204,7 @@ function default_portfolio_config(): array
                 'requireMostProbableOutcome' => false,
                 'probabilitySource' => 'ai',
                 'autoRotatePositions' => true,
+                'settlementCloseBid' => DEFAULT_SETTLEMENT_CLOSE_BID,
                 // Off by default: Conservative never had a protective stop, and turning
                 // this on is what makes Equal's mechanism apply here too.
                 'stopLossEnabled' => false,
@@ -3221,6 +3231,7 @@ function default_portfolio_config(): array
                 'requireMostProbableOutcome' => false,
                 'probabilitySource' => 'ai',
                 'autoRotatePositions' => true,
+                'settlementCloseBid' => DEFAULT_SETTLEMENT_CLOSE_BID,
                 'stopLossEnabled' => false,
                 'stopLossRiskMultiplier' => 0.0,
                 'reverseOnStopLoss' => false,
@@ -3245,6 +3256,7 @@ function default_portfolio_config(): array
                 'requireMostProbableOutcome' => true,
                 'probabilitySource' => 'ai',
                 'autoRotatePositions' => true,
+                'settlementCloseBid' => DEFAULT_SETTLEMENT_CLOSE_BID,
                 'stopLossEnabled' => false,
                 'stopLossRiskMultiplier' => 0.0,
                 'reverseOnStopLoss' => false,
@@ -3276,6 +3288,7 @@ function default_portfolio_config(): array
                 // Equal remains conservative by default, but the same On/Off control
                 // can explicitly enable its paper rotation review.
                 'autoRotatePositions' => false,
+                'settlementCloseBid' => DEFAULT_SETTLEMENT_CLOSE_BID,
                 // The mechanism this portfolio is named for. It is now a parameter any
                 // paper portfolio may turn on, but Equal is where it ships enabled.
                 'stopLossEnabled' => true,
@@ -3304,6 +3317,7 @@ function default_portfolio_config(): array
             'requireMostProbableOutcome' => false,
             'probabilitySource' => 'ai',
             'autoRotatePositions' => true,
+            'settlementCloseBid' => DEFAULT_SETTLEMENT_CLOSE_BID,
             'stopLossEnabled' => false,
             'stopLossRiskMultiplier' => 0.0,
             'reverseOnStopLoss' => false,
@@ -3338,6 +3352,7 @@ function default_portfolio_config(): array
             'probabilitySource' => 'polymarket',
             'automationEnabled' => false,
             'autoRotatePositions' => false,
+            'settlementCloseBid' => DEFAULT_SETTLEMENT_CLOSE_BID,
             'stopLossEnabled' => false,
             'stopLossRiskMultiplier' => 0.0,
             'reverseOnStopLoss' => false,
