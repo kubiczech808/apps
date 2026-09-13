@@ -597,10 +597,20 @@ export function canFundAnotherPosition(freeUsdc, stakeUsdc) {
 //
 // `fundable` is the pass's answer, compared to true rather than read as truthy: a missing
 // argument must mean "the capital is locked, close as configured", never "stay shut".
-export function certaintyCloseTriggered({ closeBid, bestBid, fundable } = {}) {
+export function certaintyCloseTriggered({ closeBid, bestBid, fundable, hasTradableCandidate } = {}) {
   const bid = Number(bestBid);
   if (closeBid == null || !Number.isFinite(bid) || !(bid >= closeBid)) return false;
   if (!certaintyCloseIsWorthTaking({ bestBid: bid, closeBid })) return false;
+  // Freeing capital is only worth a forfeit if there is something to spend it on.
+  //
+  // Asked for: as well as "is the stake in hand", ask "is there a candidate to trade". A
+  // pass that found nothing to buy gains nothing from selling a decided position early --
+  // the capital comes back and sits there, and the position would have settled at 1.00.
+  //
+  // FALSE is the only answer that holds the close. Unknown leaves it armed, for the same
+  // reason the funding gate does: a close that any absent field can silence is the failure
+  // this one has already shipped three times.
+  if (hasTradableCandidate === false) return false;
   return fundable !== true;
 }
 
@@ -5523,7 +5533,12 @@ async function markOpenTrade(trade, strategy = null, funding = null) {
       // Only while that capital is actually the constraint. A portfolio already holding
       // enough free capital for its next stake has nothing to buy back, so it holds this
       // position to resolution and takes 1.00 instead of paying the tick.
-      if (certaintyCloseTriggered({ closeBid, bestBid, fundable: fundedWithoutSelling })) {
+      if (certaintyCloseTriggered({
+    closeBid,
+    bestBid,
+    fundable: fundedWithoutSelling,
+    hasTradableCandidate: funding?.hasTradableCandidate,
+  })) {
         const exitValue = netExitValueAtPrice({ shares: trade.shares, price: bestBid, feeRate: trade.feeRate, feesEnabled: trade.feesEnabled });
         const realizedPnl = Number((exitValue - cost).toFixed(4));
         return {
@@ -5815,6 +5830,21 @@ function recordStopLossReversalResult(trade, result) {
   };
 }
 
+// Did the last execution pass find anything this portfolio would have bought?
+//
+// Read from what execution recorded, not recomputed: eligibleCount is the number of
+// candidates that passed this portfolio's own filters, and a pass that skipped for want of
+// capital still counts the candidates it could not afford -- which is the case that matters
+// most here, because that is exactly when the certainty close is supposed to act.
+//
+// Null when there is no record yet. Null is not false: a portfolio whose first pass has not
+// run must not have its close silenced by the absence of a number.
+function lastExecutionHadTradableCandidate(portfolioState) {
+  const count = Number(portfolioState?.lastDecision?.eligibleCount);
+  if (!Number.isFinite(count)) return null;
+  return count > 0;
+}
+
 async function refreshTrades(trades, portfolioState = null, strategy = null) {
   // Whether this portfolio could open another position right now, decided once for the
   // whole pass. It gates the certainty close: that close buys locked capital back, and a
@@ -5832,6 +5862,10 @@ async function refreshTrades(trades, portfolioState = null, strategy = null) {
       portfolioState?.portfolio?.freeCapitalUsdc,
       portfolioState?.portfolio?.maxStakeUsdc,
     ),
+    // Whether the last execution had anything it would have bought. Same source and the
+    // same lag as the capital figure above -- it is what execution decided and recorded,
+    // rather than a second opinion formed here from different inputs.
+    hasTradableCandidate: lastExecutionHadTradableCandidate(portfolioState),
   };
   // mapWithConcurrency returns input order, so this is the same array the sequential
   // loop built -- markOpenTrade reads the market and returns a new trade, and touches
@@ -8874,11 +8908,30 @@ function buildTradeBatchLog({ portfolioState, strategy, evaluations = [], eligib
       selectionDecision: candidateSelectionDecision({ candidate: item, portfolioState, selected, action, reason }),
     }))
     .filter(Boolean);
+  // What this pass decided about the certainty close, stated here because this IS the
+  // execution log and the decision is execution's to make.
+  //
+  // Asked for: as well as "is the stake in hand", ask "is there a candidate to trade" --
+  // and if there is not, do not close. Selling a decided position early buys capital back;
+  // capital with nothing to buy is worth less than the position, which would have settled
+  // at 1.00. The count is this pass's own, so a reader can see why a close was held without
+  // reconstructing the shortlist.
+  const executableCandidates = ranked.length;
   return {
     id: `trade-batch-${strategy.id}-${nowIso()}`,
     runAt: nowIso(),
     strategyId: strategy.id,
     strategyLabel: strategy.label,
+    certaintyClose: {
+      executableCandidates,
+      // Whether a decided position may be sold early after this pass. False here does not
+      // mean the close is off -- it means there is nothing this portfolio would do with the
+      // capital, so holding to resolution is worth more than the forfeit.
+      armed: executableCandidates > 0,
+      reason: executableCandidates > 0
+        ? `${executableCandidates} candidate(s) this portfolio would buy, so freeing capital is worth a forfeit`
+        : "no candidate this portfolio would buy, so a decided position is held to resolution instead",
+    },
     selectionMetric: strategy.selectionMetric,
     action,
     reason,
@@ -8894,7 +8947,6 @@ function buildTradeBatchLog({ portfolioState, strategy, evaluations = [], eligib
       maxResolutionDays: strategyMaxResolutionHours(strategy) / HOURS_PER_DAY,
       liveEventMode: configLiveEventMode(strategy),
       settlementCloseBid: normalizeSettlementCloseBid(strategy?.settlementCloseBid),
-    settlementCloseBid: normalizeSettlementCloseBid(strategy?.settlementCloseBid),
       minLiquidityUsdc: strategy.minLiquidityUsdc ?? null,
       minNetYield: Math.max(0, Number(strategy.minNetYield) || 0),
       selectionOrder: strategy.selectionOrder,

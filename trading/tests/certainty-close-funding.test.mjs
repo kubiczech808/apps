@@ -128,7 +128,7 @@ test("the paper bot's certainty close fires on locked capital and holds on spare
   assert.ok(mark, "markOpenTrade must be findable");
   assert.match(mark[0], /const fundedWithoutSelling = funding\?\.canFundAnotherPosition === true;/,
     "the pass's answer must be read, and read strictly");
-  assert.match(mark[0], /if \(certaintyCloseTriggered\(\{ closeBid, bestBid, fundable: fundedWithoutSelling \}\)\) \{/,
+  assert.match(mark[0], /if \(certaintyCloseTriggered\(\{\s*\n\s*closeBid,\s*\n\s*bestBid,\s*\n\s*fundable: fundedWithoutSelling,\s*\n\s*hasTradableCandidate: funding\?\.hasTradableCandidate,\s*\n\s*\}\)\) \{/,
     "markOpenTrade must close through the rule the test above drives");
 });
 
@@ -197,4 +197,63 @@ test("the paper certainty close will not hand back part of a match already won",
 
   // A bid nobody has is not a bid at certainty, at any setting.
   assert.equal(certaintyCloseIsWorthTaking({ bestBid: null, closeBid: 0.999 }), false);
+});
+
+test("the certainty close is held when there is nothing to spend the capital on", () => {
+  // Asked for: as well as "do we have the stake in cash", ask "is there a candidate to
+  // trade" -- and if there is not, do not close. Selling a decided position early buys the
+  // capital back; capital with nothing to buy is worth less than the position, which would
+  // have settled at 1.00.
+  const fires = (hasTradableCandidate) => certaintyCloseTriggered({
+    closeBid: 0.999, bestBid: 0.999, fundable: false, hasTradableCandidate,
+  });
+
+  assert.equal(fires(true), true, "capital locked and something to buy: close");
+  assert.equal(fires(false), false, "capital locked and nothing to buy: hold to resolution");
+
+  // Unknown leaves it armed, exactly as the funding gate does. A close that any absent
+  // field can silence is the failure this one has already shipped three times, and the
+  // forfeit rule above means an unnecessary close now costs at most 0.2%.
+  assert.equal(fires(undefined), true);
+  assert.equal(fires(null), true);
+
+  // It is the last gate, not the first: a bid below the setting is still not a close, and
+  // a forfeit above the line is still not a close, whatever the shortlist looked like.
+  assert.equal(certaintyCloseTriggered({ closeBid: 0.999, bestBid: 0.99, fundable: false, hasTradableCandidate: true }), false);
+  assert.equal(certaintyCloseTriggered({ closeBid: 0.99, bestBid: 0.99, fundable: false, hasTradableCandidate: true }), false);
+  // And spare capital still holds the position regardless of the shortlist.
+  assert.equal(certaintyCloseTriggered({ closeBid: 0.999, bestBid: 0.999, fundable: true, hasTradableCandidate: true }), false);
+});
+
+test("execution decides the candidate question and the run log says so", () => {
+  // The user asked for this to happen within execution and to be logged in the execution
+  // log, so the decision is recorded where the shortlist was actually built -- not
+  // reconstructed afterwards from a trade that did or did not close.
+  const batch = /function buildTradeBatchLog[\s\S]*?\n\}/.exec(BOT);
+  assert.ok(batch, "the execution log builder must be findable");
+  assert.match(batch[0], /certaintyClose: \{/, "the execution log carries the close decision");
+  assert.match(batch[0], /executableCandidates,/);
+  assert.match(batch[0], /armed: executableCandidates > 0,/);
+  // With a reason in words, because a bare zero in a log is a number, not an explanation.
+  assert.match(batch[0], /no candidate this portfolio would buy/);
+
+  // And the gate the pass actually reads comes from what execution recorded, rather than
+  // being recomputed from different inputs a pass later.
+  const gate = /function lastExecutionHadTradableCandidate[\s\S]*?\n\}/.exec(BOT);
+  assert.ok(gate, "the gate must be findable");
+  assert.match(gate[0], /portfolioState\?\.lastDecision\?\.eligibleCount/);
+  // Null, not false, when nothing has run yet: a portfolio on its first pass must not have
+  // its close silenced by the absence of a number.
+  assert.match(gate[0], /if \(!Number\.isFinite\(count\)\) return null;/);
+
+  const refresh = /async function refreshTrades[\s\S]*?hasTradableCandidate: lastExecutionHadTradableCandidate\(portfolioState\)/.exec(BOT);
+  assert.ok(refresh, "refreshTrades must decide it once per pass, beside the capital answer");
+
+  // The duplicate settlementCloseBid key that used to sit in the execution log's settings
+  // block is gone: two keys of the same name in one object literal is one key and a
+  // question about which line is dead.
+  const settings = /settings: \{[\s\S]*?\n    \},/.exec(batch[0]);
+  assert.ok(settings, "the settings block must be findable");
+  assert.equal((settings[0].match(/settlementCloseBid:/g) || []).length, 1,
+    "settlementCloseBid appears once");
 });

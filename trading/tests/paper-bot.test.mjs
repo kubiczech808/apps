@@ -11009,7 +11009,7 @@ test("close at certainty: a paper position is sold at the bid once the market ha
   // tests that only read it. What it decides is driven with real bids in
   // certainty-close-funding.test.mjs; what is checked here is that markOpenTrade still
   // closes through it, and that the level itself has not moved.
-  assert.match(source, /if \(certaintyCloseTriggered\(\{ closeBid, bestBid, fundable: fundedWithoutSelling \}\)\) \{/);
+  assert.match(source, /if \(certaintyCloseTriggered\(\{\s*\n\s*closeBid,\s*\n\s*bestBid,\s*\n\s*fundable: fundedWithoutSelling,\s*\n\s*hasTradableCandidate: funding\?\.hasTradableCandidate,\s*\n\s*\}\)\) \{/);
   assert.equal(bot.certaintyCloseTriggered({ closeBid: 0.999, bestBid: 0.999, fundable: false }), true);
   assert.equal(bot.certaintyCloseTriggered({ closeBid: 0.999, bestBid: 0.99, fundable: false }), false,
     "0.99 is not 0.999 -- the sale the owner reported three times");
