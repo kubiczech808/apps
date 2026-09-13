@@ -14055,6 +14055,14 @@ function tradeBatchDetail(batch) {
   if (explanation && normalizeDetailText(explanation) !== normalizeDetailText(primaryReason)) {
     lines.push(`Note: ${explanation}`);
   }
+  // What this pass decided about selling a decided position early, stated in the execution
+  // log because that is where the decision is made. Without this the rule is only in the
+  // data: a held close would look exactly like a close that never came up.
+  const certaintyClose = batch.certaintyClose || null;
+  if (certaintyClose && Number.isFinite(Number(certaintyClose.executableCandidates))) {
+    lines.push(`Certainty close: ${certaintyClose.armed ? "armed" : "held"}`
+      + ` - ${certaintyClose.reason || `${certaintyClose.executableCandidates} candidate(s)`}`);
+  }
   if (selected) {
     lines.push(
       "",

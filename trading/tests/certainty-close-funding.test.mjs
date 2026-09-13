@@ -257,3 +257,18 @@ test("execution decides the candidate question and the run log says so", () => {
   assert.equal((settings[0].match(/settlementCloseBid:/g) || []).length, 1,
     "settlementCloseBid appears once");
 });
+
+test("the execution log shows the close decision, not just carries it", () => {
+  // Logged in the data is not logged to a reader. This section renders a fixed set of
+  // fields, so a new one is invisible until it is rendered -- and a held close would then
+  // look exactly like a close that never came up.
+  const APP = readFileSync(new URL("../assets/app.js", import.meta.url), "utf8");
+  const render = /const certaintyClose = batch\.certaintyClose[\s\S]*?\n  \}/.exec(APP);
+  assert.ok(render, "the execution log must render the close decision");
+  assert.match(render[0], /Certainty close: \$\{certaintyClose\.armed \? "armed" : "held"\}/);
+  // The reason in words travels with it, because "0" on its own explains nothing.
+  assert.match(render[0], /certaintyClose\.reason/);
+  // And a batch written before this existed must not print a half-line: older runs simply
+  // do not show the row.
+  assert.match(render[0], /Number\.isFinite\(Number\(certaintyClose\.executableCandidates\)\)/);
+});
