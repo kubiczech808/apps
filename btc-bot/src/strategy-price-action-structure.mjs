@@ -1,14 +1,18 @@
 import { aggregate, HOUR_MS } from './candles.mjs'
-import { buildZones, marketStructure } from './priceaction.mjs'
+import { buildZones, candleSignal, marketStructure } from './priceaction.mjs'
 
 export const PRICE_ACTION_STRUCTURE_ID = 'price-action-structure-v1'
-export const PRICE_ACTION_MATRIX_SCHEMA = 3
+export const PRICE_ACTION_MATRIX_SCHEMA = 4
 
 export const DEFAULT_PRICE_ACTION_STRUCTURE = {
   trendLookback: 2,
   minCandles: 40,
-  refreshMinutes: 60,
+  refreshMinutes: 15,
   zoneMaxAgeCandles: 400,
+  pullbackPct: 50,
+  minRewardRisk: 2,
+  riskPct: 1,
+  stopBufferPct: 0.02,
 }
 
 export const PRICE_ACTION_ASSETS = [
@@ -27,6 +31,12 @@ export const PRICE_ACTION_TIMEFRAMES = [
   { id: '4h', label: '4H', hours: 4 },
   { id: '1d', label: '1D', hours: 24 },
 ]
+
+const LOWER_TIMEFRAME = {
+  '1d': '4h',
+  '4h': '1h',
+  '1h': null,
+}
 
 const csvCell = (value) => String(value ?? '').trim()
 
@@ -217,6 +227,17 @@ const zoneDistancePct = (zone, price) => {
   return ((price / edge) - 1) * 100
 }
 
+const candleSummary = (candle) =>
+  candle
+    ? {
+        time: candle.time,
+        open: candle.open,
+        high: candle.high,
+        low: candle.low,
+        close: candle.close,
+      }
+    : null
+
 const zoneSummary = (zone, candles, price) => ({
   type: zone.type,
   low: zone.low,
@@ -242,15 +263,227 @@ export const activeSupplyDemandZones = (candles, { lookback = 2, maxAgeCandles =
   const unfilled = zones.filter((zone) => !zone.filledByOwnTimeframeClose)
   const latest = (type, pool = unfilled) =>
     pool.filter((zone) => zone.type === type).sort((a, b) => (b.lastIndex ?? 0) - (a.lastIndex ?? 0))[0] ?? null
+  const byType = (type, pool = unfilled) =>
+    pool.filter((zone) => zone.type === type).sort((a, b) => (b.lastIndex ?? 0) - (a.lastIndex ?? 0))
 
   return {
     demand: latest('demand'),
     supply: latest('supply'),
     latestValidDemand: latest('demand', zones),
     latestValidSupply: latest('supply', zones),
+    unfilledDemand: byType('demand'),
+    unfilledSupply: byType('supply'),
     unfilledCount: unfilled.length,
     validCount: zones.length,
     rule: 'Zóna je invalidovaná jen close průrazem na vlastním timeframe; dotek/filled na nižším timeframe ji neruší.',
+  }
+}
+
+const zoneHitByCandle = (zone, candle) =>
+  Boolean(zone && candle && candle.low <= zone.high && candle.high >= zone.low)
+
+const statusFromGate = (passed, neutral = false) => (neutral ? 'neutral' : passed ? 'met' : 'unmet')
+
+const gate = (id, label, passed, detail = null, neutral = false) => ({
+  id,
+  label,
+  status: statusFromGate(passed, neutral),
+  passed: neutral ? null : Boolean(passed),
+  detail,
+})
+
+const sideFromTrend = (trend) => {
+  if (trend === 'up') return 'long'
+  if (trend === 'down') return 'short'
+  return null
+}
+
+const nearestOpposingZone = ({ side, zones, entry }) => {
+  if (side !== 'long' && side !== 'short') return null
+  const pool = side === 'long' ? zones?.unfilledSupply ?? [] : zones?.unfilledDemand ?? []
+  const candidates =
+    side === 'long'
+      ? pool.filter((zone) => zone.low > entry).sort((a, b) => a.low - b.low)
+      : pool.filter((zone) => zone.high < entry).sort((a, b) => b.high - a.high)
+  return candidates[0] ?? null
+}
+
+const structuralTarget = ({ side, structure }) =>
+  side === 'long'
+    ? structure?.high?.current?.price ?? null
+    : side === 'short'
+      ? structure?.low?.current?.price ?? null
+      : null
+
+const pullbackLevel = ({ side, structure, pullbackPct }) => {
+  if (side !== 'long' && side !== 'short') return null
+  const high = structure?.high?.current?.price
+  const low = structure?.low?.current?.price
+  if (!Number.isFinite(high) || !Number.isFinite(low) || high <= low) return null
+  const ratio = Math.min(Math.max(Number(pullbackPct) || 50, 0), 100) / 100
+  return side === 'long'
+    ? high - (high - low) * ratio
+    : low + (high - low) * ratio
+}
+
+const pullbackSatisfied = ({ side, latest, level }) => {
+  if (!latest || !Number.isFinite(level)) return false
+  return side === 'long' ? latest.low <= level : latest.high >= level
+}
+
+const stopBuffer = ({ zone, price, stopBufferPct }) => {
+  const zoneHeight = zone ? Math.max(0, zone.high - zone.low) : 0
+  const priceBuffer = Number.isFinite(price) ? Math.abs(price) * ((Number(stopBufferPct) || 0.02) / 100) : 0
+  return Math.max(priceBuffer, zoneHeight * 0.05)
+}
+
+const candleRefinement = ({ side, signal }) => {
+  signal ??= { bullish: null, bearish: null, patterns: [] }
+  const pattern = side === 'long' ? signal.bullish : signal.bearish
+  const counterPattern = side === 'long' ? signal.bearish : signal.bullish
+  return {
+    status: pattern ? 'met' : counterPattern ? 'unmet' : 'neutral',
+    pattern: pattern ?? counterPattern ?? null,
+    note: pattern
+      ? 'nižší vstup lze zpřesnit podle aktuální potvrzující svíčky'
+      : counterPattern
+        ? 'poslední svíčka je proti zamýšlenému směru'
+        : 'bez jasné svíčkové konfirmace na tomto timeframe',
+  }
+}
+
+export const evaluateTradeProfile = ({
+  item,
+  lowerItem = null,
+  lowerTimeframeId = null,
+  settings = DEFAULT_PRICE_ACTION_STRUCTURE,
+} = {}) => {
+  const side = sideFromTrend(item?.trend)
+  const latest = item?.lastCandle
+  const price = item?.price
+  const zones = item?.zones
+  const zone = side === 'long' ? zones?.demand : side === 'short' ? zones?.supply : null
+  const fallbackZone = side === 'long' ? zones?.latestValidDemand : side === 'short' ? zones?.latestValidSupply : null
+  const activeZone = zone ?? fallbackZone
+  const zoneHit = zoneHitByCandle(activeZone, latest)
+  const entry = Number.isFinite(price)
+    ? price
+    : activeZone
+      ? side === 'long'
+        ? activeZone.high
+        : activeZone.low
+      : null
+  const pullback = pullbackLevel({ side, structure: item?.structure, pullbackPct: settings.pullbackPct })
+  const pulledBack = pullbackSatisfied({ side, latest, level: pullback })
+  const buffer = stopBuffer({ zone: activeZone, price: entry, stopBufferPct: settings.stopBufferPct })
+  const stop =
+    side === 'long' && activeZone
+      ? activeZone.low - buffer
+      : side === 'short' && activeZone
+        ? activeZone.high + buffer
+        : null
+  const tp1 = structuralTarget({ side, structure: item?.structure })
+  const tp2Zone = Number.isFinite(entry) ? nearestOpposingZone({ side, zones, entry }) : null
+  const tp2 =
+    side === 'long' && tp2Zone
+      ? tp2Zone.low
+      : side === 'short' && tp2Zone
+        ? tp2Zone.high
+        : null
+  const weightedTarget = Number.isFinite(tp1) && Number.isFinite(tp2) ? (tp1 + tp2) / 2 : null
+  const risk =
+    side === 'long' && Number.isFinite(entry) && Number.isFinite(stop)
+      ? entry - stop
+      : side === 'short' && Number.isFinite(entry) && Number.isFinite(stop)
+        ? stop - entry
+        : null
+  const reward =
+    side === 'long' && Number.isFinite(entry) && Number.isFinite(weightedTarget)
+      ? weightedTarget - entry
+      : side === 'short' && Number.isFinite(entry) && Number.isFinite(weightedTarget)
+        ? entry - weightedTarget
+        : null
+  const rewardRisk = Number.isFinite(risk) && risk > 0 && Number.isFinite(reward) ? reward / risk : null
+  const minRewardRisk = Number(settings.minRewardRisk) || 2
+  const riskPct = Number(settings.riskPct) || 1
+  const refinement = side ? candleRefinement({ side, signal: item?.candleSignal }) : null
+
+  const invalidatingTrend =
+    side === 'long'
+      ? lowerItem?.trend === 'down' || lowerItem?.event === 'CHoCH_DOWN'
+      : side === 'short'
+        ? lowerItem?.trend === 'up' || lowerItem?.event === 'CHoCH_UP'
+        : false
+  const closeTrigger =
+    side === 'long'
+      ? lowerItem?.structure?.low?.current?.price ?? null
+      : side === 'short'
+        ? lowerItem?.structure?.high?.current?.price ?? null
+        : null
+
+  const gates = [
+    gate('trend', 'struktura má směr', Boolean(side), item?.reason ?? null),
+    gate('zone', 'cena je ve správné S/D zóně', Boolean(activeZone && zoneHit), activeZone ? `${activeZone.type} ${activeZone.low}–${activeZone.high}` : null),
+    gate('unfilled-zone', 'zóna není vyplněná close na vlastním TF', Boolean(zone), zone ? 'nevyplněná' : fallbackZone ? 'jen poslední platná vyplněná zóna' : null),
+    gate('pullback', `${settings.pullbackPct ?? 50}% pullback`, pulledBack, Number.isFinite(pullback) ? String(pullback) : null),
+    gate('rr', `R/R alespoň ${minRewardRisk}:1`, Number.isFinite(rewardRisk) && rewardRisk >= minRewardRisk, Number.isFinite(rewardRisk) ? rewardRisk.toFixed(2) : null),
+  ]
+  const ready = gates.every((itemGate) => itemGate.passed !== false)
+  const status = ready ? 'ready' : side ? 'watch' : 'neutral'
+
+  const output = {
+    status,
+    side,
+    riskPct,
+    minRewardRisk,
+    pullbackPct: settings.pullbackPct ?? 50,
+    zone: activeZone,
+    zoneHit,
+    entry,
+    pullbackLevel: pullback,
+    stop,
+    stopBuffer: buffer,
+    tp1,
+    tp1Rule: side === 'long' ? '1/2 na posledním HH' : side === 'short' ? '1/2 na posledním LL' : null,
+    tp2,
+    tp2Zone,
+    tp2Rule: side === 'long' ? '1/2 na poslední nevybranou supply zónu' : side === 'short' ? '1/2 na poslední nevybranou demand zónu' : null,
+    weightedTarget,
+    risk,
+    reward,
+    rewardRisk,
+    gates,
+    refinement,
+    invalidation: {
+      lowerTimeframeId,
+      status: lowerItem ? (invalidatingTrend ? 'unmet' : 'met') : 'neutral',
+      invalidatingTrend,
+      lowerTrend: lowerItem?.trend ?? null,
+      lowerEvent: lowerItem?.event ?? null,
+      closeTrigger,
+      rule: lowerItem
+        ? side === 'long'
+          ? 'Při změně struktury na menším TF zavírat při návratu na poslední HL.'
+          : side === 'short'
+            ? 'Při změně struktury na menším TF zavírat při návratu na poslední LH.'
+            : 'Bez směru trendu není co invalidovat.'
+        : '1H nemá nižší timeframe ve scanneru; invalidace se řeší na stejném TF.',
+    },
+  }
+  return output
+}
+
+const attachTradeProfiles = (trends, settings) => {
+  for (const timeframe of PRICE_ACTION_TIMEFRAMES) {
+    const item = trends[timeframe.id]
+    if (!item) continue
+    const lowerTimeframeId = LOWER_TIMEFRAME[timeframe.id]
+    item.tradeProfile = evaluateTradeProfile({
+      item,
+      lowerItem: lowerTimeframeId ? trends[lowerTimeframeId] : null,
+      lowerTimeframeId,
+      settings,
+    })
   }
 }
 
@@ -301,6 +534,8 @@ export const classifyStructure = (candles, { lookback = 2, minCandles = 40, zone
       price: candles?.at?.(-1)?.close ?? null,
       asOf: candles?.at?.(-1)?.time ?? null,
       candles: candles?.length ?? 0,
+      lastCandle: candleSummary(candles?.at?.(-1)),
+      candleSignal: null,
       zones: null,
     }
   }
@@ -338,6 +573,8 @@ export const classifyStructure = (candles, { lookback = 2, minCandles = 40, zone
     price: latest?.close ?? null,
     asOf: latest?.time ?? null,
     candles: candles.length,
+    lastCandle: candleSummary(latest),
+    candleSignal: candleSignal(candles),
     lastHigh: structure.lastHigh?.price ?? null,
     lastLow: structure.lastLow?.price ?? null,
     structure: {
@@ -374,6 +611,13 @@ const isFresh = (matrix, now, refreshMinutes) => {
   return Number.isFinite(generated) && now - generated < refreshMinutes * 60_000
 }
 
+const effectiveRefreshMinutes = (value) => {
+  const parsed = Number(value)
+  if (parsed === 0) return 0
+  if (!Number.isFinite(parsed) || parsed < 0) return DEFAULT_PRICE_ACTION_STRUCTURE.refreshMinutes
+  return Math.min(parsed, DEFAULT_PRICE_ACTION_STRUCTURE.refreshMinutes)
+}
+
 export const buildPriceActionMatrix = async ({
   btcHourly = [],
   previous = null,
@@ -383,7 +627,8 @@ export const buildPriceActionMatrix = async ({
   logger = console,
 } = {}) => {
   const merged = { ...DEFAULT_PRICE_ACTION_STRUCTURE, ...(settings ?? {}) }
-  if (previous && isFresh(previous, now, merged.refreshMinutes)) return previous
+  const refreshMinutes = effectiveRefreshMinutes(merged.refreshMinutes)
+  if (previous && isFresh(previous, now, refreshMinutes)) return previous
 
   const rows = []
   for (const asset of PRICE_ACTION_ASSETS) {
@@ -400,6 +645,7 @@ export const buildPriceActionMatrix = async ({
         zoneMaxAgeCandles: merged.zoneMaxAgeCandles,
       })
     }
+    attachTradeProfiles(trends, merged)
     rows.push({
       symbol: asset.symbol,
       name: asset.name,
@@ -414,7 +660,7 @@ export const buildPriceActionMatrix = async ({
     strategyId: PRICE_ACTION_STRUCTURE_ID,
     schemaVersion: PRICE_ACTION_MATRIX_SCHEMA,
     generatedAt: new Date(now).toISOString(),
-    refreshMinutes: merged.refreshMinutes,
+    refreshMinutes,
     assets: rows,
     timeframes: PRICE_ACTION_TIMEFRAMES.map(({ id, label }) => ({ id, label })),
   }
@@ -422,8 +668,8 @@ export const buildPriceActionMatrix = async ({
 
 export const evaluateEntry = () => ({
   action: 'none',
-  reason: 'Price action structure is scan-only until its entry and exit rules are selected by backtest.',
+  reason: 'Price action structure publishes periodic trade profiles; automatic order execution is still disabled until the profile is backtested and explicitly selected.',
   context: null,
 })
 
-export const manageOpen = () => ({ action: 'hold', reason: 'scan-only strategy does not manage live positions' })
+export const manageOpen = () => ({ action: 'hold', reason: 'price-action profile does not manage live positions until execution is enabled' })

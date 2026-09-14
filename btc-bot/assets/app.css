@@ -516,6 +516,69 @@ tbody tr:hover { background: var(--series-1-soft); }
   color: var(--text-muted);
   font-size: 12px;
 }
+.trade-profile {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--grid);
+}
+.trade-profile-head,
+.trade-invalidation {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+.trade-profile-head p {
+  margin: 3px 0 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+.trade-gates {
+  margin-top: 9px;
+}
+.trade-metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(118px, 1fr));
+  gap: 8px;
+  margin-top: 10px;
+}
+.trade-metric {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 9px;
+  background: var(--page);
+  min-width: 0;
+}
+.trade-metric span,
+.trade-metric em {
+  display: block;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-style: normal;
+}
+.trade-metric strong {
+  display: block;
+  margin-top: 2px;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+.trade-note {
+  margin: 8px 0 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+.trade-note-unmet {
+  color: var(--critical-text);
+}
+.trade-note-met {
+  color: var(--good-text);
+}
+.trade-invalidation {
+  margin-top: 9px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
 .swing-pill {
   display: inline-flex;
   align-items: center;

@@ -207,13 +207,13 @@ const STRATEGY_CANDIDATES = [
     status: 'nová',
     statusKind: 'neutral',
     name: 'PA-1 Price Action Structure',
-    thesis: 'Scan-only strategie pro čtení struktury trhu napříč BTCUSD a hlavními měnovými páry. První krok je trendový kontext na 1H, 4H a 1D; vstupy budeme vybírat až po backtestu pravidel.',
-    rules: ['BTCUSD + FX majors', '1H / 4H / 1D', 'swing struktura', 'HH/HL = up', 'LH/LL = down', 'ostatní = flat'],
+    thesis: 'Periodický price-action scanner pro BTCUSD a hlavní měnové páry. Čte vyšší swing strukturu, supply/demand zóny a pro každý timeframe skládá obchodní profil s 50% pullbackem, SL, TP a invalidací přes nižší timeframe.',
+    rules: ['BTCUSD + FX majors', '1H / 4H / 1D', 'HH/HL = up', 'LH/LL = down', 'S/D zóna', '50% pullback', 'R/R ≥ 2:1', 'risk 1 % účtu'],
     backtest: {
       status: 'neutral',
       label: 'čeká na backtest',
-      result: 'scan-only',
-      detail: 'Tato vrstva zatím neobchoduje. Publikuje strukturu trhu, aby šlo následně měřit price-action vstupy na více aktivech a timeframech.',
+      result: 'profile-only',
+      detail: 'Tato vrstva zatím sama neposílá ordery. Publikuje pravidlový trade profil, aby šlo následně měřit a ladit vstupy na více aktivech a timeframech.',
     },
     command:
       'node tools/backtest.mjs --strategy price-action-structure --asset EURUSD --timeframe 4h',
@@ -321,6 +321,67 @@ const renderZonesDetail = (zones) => {
   ])
 }
 
+const tradeStatusFact = (profile) => {
+  const status = profile?.status === 'ready' ? 'met' : profile?.status === 'watch' ? 'neutral' : 'neutral'
+  const label = profile?.status === 'ready' ? 'setup ready' : profile?.status === 'watch' ? 'čeká' : 'bez setupu'
+  return decisionFact(label, status)
+}
+
+const tradeMetric = (label, value, sub = null) =>
+  el('div', { className: 'trade-metric' }, [
+    el('span', { text: label }),
+    el('strong', { text: value }),
+    sub ? el('em', { text: sub }) : null,
+  ])
+
+const renderTradeProfile = (profile) => {
+  if (!profile) return null
+  const side = profile.side === 'long' ? 'long' : profile.side === 'short' ? 'short' : '–'
+  const rr = Number.isFinite(profile.rewardRisk) ? `${nf(2).format(profile.rewardRisk)}:1` : '–'
+  const invalidation = profile.invalidation ?? {}
+  return el('div', { className: 'trade-profile' }, [
+    el('div', { className: 'trade-profile-head' }, [
+      el('div', {}, [
+        el('strong', { text: 'Periodický trade profil' }),
+        el('p', { text: `Risk ${pct(profile.riskPct, 1)} účtu · vstup jen od ${profile.pullbackPct ?? 50}% pullbacku a pouze v S/D zóně` }),
+      ]),
+      decisionFactElement(tradeStatusFact(profile)),
+    ]),
+    el('div', { className: 'decision-facts trade-gates' }, profile.gates?.map((item) =>
+      decisionFactElement(decisionFact(item.label, item.status, item.detail))
+    ) ?? []),
+    el('div', { className: 'trade-metrics' }, [
+      tradeMetric('Směr', side),
+      tradeMetric('Entry', quotePrice(profile.entry), profile.zoneHit ? 'cena hitla zónu' : 'čeká na hit zóny'),
+      tradeMetric('SL', quotePrice(profile.stop), Number.isFinite(profile.stopBuffer) ? `buffer ${quotePrice(profile.stopBuffer)}` : null),
+      tradeMetric('TP1', quotePrice(profile.tp1), profile.tp1Rule),
+      tradeMetric('TP2', quotePrice(profile.tp2), profile.tp2Rule),
+      tradeMetric('R/R', rr, `minimum ${profile.minRewardRisk ?? 2}:1`),
+    ]),
+    profile.zone
+      ? el('p', { className: 'trade-note', text: `Pracovní zóna: ${profile.zone.type} ${zoneRange(profile.zone)}` })
+      : el('p', { className: 'trade-note', text: 'Bez platné pracovní supply/demand zóny.' }),
+    profile.refinement
+      ? el('p', {
+          className: `trade-note trade-note-${profile.refinement.status}`,
+          text: `Svíčkové zpřesnění: ${profile.refinement.pattern || 'bez patternu'} · ${profile.refinement.note}`,
+        })
+      : null,
+    el('div', { className: 'trade-invalidation' }, [
+      decisionFactElement(decisionFact(
+        invalidation.invalidatingTrend ? 'nižší TF mění strukturu' : 'invalidace OK',
+        invalidation.status,
+        invalidation.rule
+      )),
+      el('span', {
+        text: `${invalidation.lowerTimeframeId ? invalidation.lowerTimeframeId.toUpperCase() : 'bez nižšího TF'} · trend ${invalidation.lowerTrend || '–'}${
+          Number.isFinite(invalidation.closeTrigger) ? ` · trigger ${quotePrice(invalidation.closeTrigger)}` : ''
+        }`,
+      }),
+    ]),
+  ])
+}
+
 const renderStructureDetail = ({ matrix, columns }) => {
   const selected =
     matrix.assets
@@ -350,6 +411,7 @@ const renderStructureDetail = ({ matrix, columns }) => {
       legCard('Swing lows', structure.low, 'Zatím nejsou dva potvrzené swing lows.'),
     ]),
     renderZonesDetail(item.zones),
+    renderTradeProfile(item.tradeProfile),
     el('div', { className: 'structure-meta-line' }, [
       el('span', { text: `${item.candles ?? 0} svíček` }),
       el('span', { text: `${structure.swingCount ?? 0} potvrzených swingů` }),

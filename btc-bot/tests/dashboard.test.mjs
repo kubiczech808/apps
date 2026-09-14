@@ -101,6 +101,10 @@ test('strategy tab renders the price-action structure matrix', () => {
   assert.match(js, /Swing highs/)
   assert.match(js, /Swing lows/)
   assert.match(js, /Supply \/ demand zóny/)
+  assert.match(js, /Periodický trade profil/)
+  assert.match(js, /renderTradeProfile/)
+  assert.match(js, /R\/R/)
+  assert.match(js, /nižší TF mění strukturu/)
   assert.match(js, /zoneCard/)
   assert.match(js, /Poslední potvrzené swingy/)
   assert.match(js, /Asset/)
@@ -111,6 +115,7 @@ test('strategy tab renders the price-action structure matrix', () => {
   assert.match(css, /pa-trend-button/)
   assert.match(css, /structure-detail/)
   assert.match(css, /zone-detail/)
+  assert.match(css, /trade-profile/)
 })
 
 test('settings edit the selected strategy stop rather than a stale R\/R gate', () => {

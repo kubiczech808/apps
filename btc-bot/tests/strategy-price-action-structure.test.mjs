@@ -5,6 +5,7 @@ import {
   activeSupplyDemandZones,
   buildPriceActionMatrix,
   classifyStructure,
+  evaluateTradeProfile,
   fetchStooqCandles,
   PRICE_ACTION_ASSETS,
   PRICE_ACTION_MATRIX_SCHEMA,
@@ -132,6 +133,88 @@ test('supply and demand zones stay valid unless their own timeframe closes throu
   assert.equal(invalidated.latestValidDemand, null)
 })
 
+test('trade profile requires S/D zone hit, 50 percent pullback and at least 2R', () => {
+  const item = {
+    trend: 'up',
+    reason: 'HH + HL',
+    event: null,
+    price: 103,
+    lastCandle: candle(START, 106, 107, 102, 103),
+    candleSignal: { bullish: 'bullish_rejection', bearish: null, patterns: ['bullish_rejection'] },
+    structure: {
+      high: { current: { price: 120 } },
+      low: { current: { price: 100 } },
+    },
+    zones: {
+      demand: { type: 'demand', low: 100, high: 105 },
+      supply: null,
+      latestValidDemand: { type: 'demand', low: 100, high: 105 },
+      latestValidSupply: null,
+      unfilledDemand: [{ type: 'demand', low: 100, high: 105 }],
+      unfilledSupply: [{ type: 'supply', low: 140, high: 145 }],
+    },
+  }
+
+  const profile = evaluateTradeProfile({
+    item,
+    lowerItem: { trend: 'up', event: null, structure: { low: { current: { price: 101 } } } },
+    lowerTimeframeId: '1h',
+    settings: { pullbackPct: 50, minRewardRisk: 2, riskPct: 1, stopBufferPct: 0.02 },
+  })
+
+  assert.equal(profile.status, 'ready')
+  assert.equal(profile.side, 'long')
+  assert.equal(profile.riskPct, 1)
+  assert.equal(profile.zoneHit, true)
+  assert.ok(profile.rewardRisk >= 2)
+  assert.equal(profile.tp1, 120)
+  assert.equal(profile.tp2, 140)
+  assert.equal(profile.invalidation.invalidatingTrend, false)
+  assert.equal(profile.refinement.status, 'met')
+
+  const withoutHit = evaluateTradeProfile({
+    item: {
+      ...item,
+      lastCandle: candle(START + HOUR, 115, 116, 114, 115),
+      price: 115,
+    },
+    settings: { pullbackPct: 50, minRewardRisk: 2, riskPct: 1, stopBufferPct: 0.02 },
+  })
+  assert.equal(withoutHit.status, 'watch')
+  assert.equal(withoutHit.gates.find((entry) => entry.id === 'zone').status, 'unmet')
+})
+
+test('trade profile marks lower-timeframe structure change as invalidation context', () => {
+  const item = {
+    trend: 'up',
+    reason: 'HH + HL',
+    price: 103,
+    lastCandle: candle(START, 106, 107, 102, 103),
+    candleSignal: null,
+    structure: {
+      high: { current: { price: 120 } },
+      low: { current: { price: 100 } },
+    },
+    zones: {
+      demand: { type: 'demand', low: 100, high: 105 },
+      unfilledSupply: [{ type: 'supply', low: 140, high: 145 }],
+    },
+  }
+  const profile = evaluateTradeProfile({
+    item,
+    lowerItem: {
+      trend: 'down',
+      event: 'CHoCH_DOWN',
+      structure: { low: { current: { price: 101.5 } } },
+    },
+    lowerTimeframeId: '1h',
+    settings: { pullbackPct: 50, minRewardRisk: 2, riskPct: 1, stopBufferPct: 0.02 },
+  })
+  assert.equal(profile.invalidation.status, 'unmet')
+  assert.equal(profile.invalidation.invalidatingTrend, true)
+  assert.equal(profile.invalidation.closeTrigger, 101.5)
+})
+
 test('price-action matrix covers BTCUSD and major FX pairs on 1H, 4H and 1D', async () => {
   const btcHourly = Array.from({ length: 240 }, (_, index) =>
     candle(START + index * HOUR, 100 + index * 0.2, 101 + index * 0.2, 99 + index * 0.2, 100.5 + index * 0.2)
@@ -176,6 +259,7 @@ test('price-action matrix covers BTCUSD and major FX pairs on 1H, 4H and 1D', as
     assert.deepEqual(Object.keys(asset.trends), ['1h', '4h', '1d'])
   }
   assert.ok(matrix.assets[0].trends['4h'].zones)
+  assert.ok(matrix.assets[0].trends['4h'].tradeProfile)
 })
 
 test('fresh price-action matrix is reused instead of refetching every bot pass', async () => {
@@ -200,6 +284,59 @@ test('fresh price-action matrix is reused instead of refetching every bot pass',
     },
   })
   assert.equal(matrix, previous)
+})
+
+test('stored hourly price-action refresh is capped so entry profiles are checked every 15 minutes', async () => {
+  const previous = {
+    schemaVersion: PRICE_ACTION_MATRIX_SCHEMA,
+    generatedAt: new Date(START).toISOString(),
+    assets: PRICE_ACTION_ASSETS.map((asset) => ({
+      symbol: asset.symbol,
+      trends: {
+        '1h': { structure: {} },
+        '4h': { structure: {} },
+        '1d': { structure: {} },
+      },
+    })),
+  }
+  const btcHourly = Array.from({ length: 240 }, (_, index) =>
+    candle(START + index * HOUR, 100 + index * 0.2, 101 + index * 0.2, 99 + index * 0.2, 100.5 + index * 0.2)
+  )
+  const fetchImpl = async () => ({
+    ok: true,
+    json: async () => ({
+      chart: {
+        result: [
+          {
+            timestamp: Array.from({ length: 240 }, (_, index) => Math.round((START + index * HOUR) / 1000)),
+            indicators: {
+              quote: [
+                {
+                  open: Array.from({ length: 240 }, (_, index) => 1 + index * 0.001),
+                  high: Array.from({ length: 240 }, (_, index) => 1.01 + index * 0.001),
+                  low: Array.from({ length: 240 }, (_, index) => 0.99 + index * 0.001),
+                  close: Array.from({ length: 240 }, (_, index) => 1.005 + index * 0.001),
+                  volume: Array.from({ length: 240 }, () => 0),
+                },
+              ],
+            },
+          },
+        ],
+      },
+    }),
+    text: async () => 'Exceeded',
+  })
+
+  const matrix = await buildPriceActionMatrix({
+    btcHourly,
+    previous,
+    now: START + 20 * 60_000,
+    settings: { refreshMinutes: 60, minCandles: 20 },
+    fetchImpl,
+    logger: { warn() {} },
+  })
+  assert.notEqual(matrix, previous)
+  assert.equal(matrix.refreshMinutes, 15)
 })
 
 test('a fresh but schema-old matrix is rebuilt so the UI can show pivot details', async () => {
