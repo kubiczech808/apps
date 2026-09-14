@@ -255,7 +255,8 @@ const trendFactButton = ({ asset, column, item }) => {
 const pivotText = (pivot) => {
   if (!pivot) return '–'
   const label = pivot.label ? `${pivot.label} ` : ''
-  return `${label}${quotePrice(pivot.price)} · ${when(pivot.time)}`
+  const close = Number.isFinite(pivot.close) ? ` / close ${quotePrice(pivot.close)}` : ''
+  return `${label}knot ${quotePrice(pivot.price)}${close} · ${when(pivot.time)}`
 }
 
 const legCard = (title, leg, emptyText) =>
@@ -271,7 +272,9 @@ const legCard = (title, leg, emptyText) =>
     leg
       ? el('span', {
           className: 'structure-meta',
-          text: `${leg.label}${Number.isFinite(leg.changePct) ? ` · ${signedPct(leg.changePct).text}` : ''}`,
+          text: `${leg.label} podle close ${quotePrice(leg.confirmationClose)} vůči knotu ${quotePrice(leg.referencePrice)}${
+            Number.isFinite(leg.changePct) ? ` · knot ${signedPct(leg.changePct).text}` : ''
+          }`,
         })
       : null,
   ])

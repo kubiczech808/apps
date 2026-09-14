@@ -2,6 +2,7 @@ import { aggregate, HOUR_MS } from './candles.mjs'
 import { marketStructure } from './priceaction.mjs'
 
 export const PRICE_ACTION_STRUCTURE_ID = 'price-action-structure-v1'
+export const PRICE_ACTION_MATRIX_SCHEMA = 2
 
 export const DEFAULT_PRICE_ACTION_STRUCTURE = {
   trendLookback: 2,
@@ -157,19 +158,39 @@ const pivotSummary = (swing, label = null) =>
         kind: swing.kind,
         label,
         price: swing.price,
+        close: swing.candle?.close ?? null,
         time: swing.time,
         candleIndex: swing.index,
       }
     : null
 
-const structureLeg = ({ previous, current, higherLabel, lowerLabel }) => {
+const structureLeg = ({ previous, current, higherLabel, lowerLabel, breaksByClose }) => {
   if (!previous || !current) return null
+  const confirmedBreak = breaksByClose(current, previous)
+  const label = confirmedBreak ? higherLabel : lowerLabel
   return {
     previous: pivotSummary(previous),
-    current: pivotSummary(current, current.price > previous.price ? higherLabel : lowerLabel),
-    label: current.price > previous.price ? higherLabel : lowerLabel,
+    current: pivotSummary(current, label),
+    label,
+    confirmedBreak,
+    referencePrice: previous.price,
+    confirmationClose: current.candle?.close ?? null,
     changePct: previous.price ? ((current.price / previous.price) - 1) * 100 : null,
   }
+}
+
+const closeBreaksHigh = (current, previous) => current.candle?.close > previous.price
+const closeBreaksLow = (current, previous) => current.candle?.close < previous.price
+
+const structureEvent = ({ trend, latest, latestIndex, highLeg, lowLeg }) => {
+  if (!latest) return null
+  const lastHigh = highLeg?.current
+  const lastLow = lowLeg?.current
+  const highBreak = lastHigh && latestIndex > lastHigh.candleIndex && latest.close > lastHigh.price
+  const lowBreak = lastLow && latestIndex > lastLow.candleIndex && latest.close < lastLow.price
+  if (highBreak) return trend === 'down' ? 'CHoCH_UP' : 'BOS_UP'
+  if (lowBreak) return trend === 'up' ? 'CHoCH_DOWN' : 'BOS_DOWN'
+  return null
 }
 
 const fetchFxCandles = async ({ asset, timeframeId, fetchImpl, now, logger }) => {
@@ -223,38 +244,34 @@ export const classifyStructure = (candles, { lookback = 2, minCandles = 40 } = {
   }
   const structure = marketStructure(candles, { lookback })
   const latest = candles.at(-1)
-  const trend = structure.bias === 'range' ? 'flat' : structure.bias
-  const status = trend === 'up' ? 'met' : trend === 'down' ? 'unmet' : 'neutral'
-  const highText =
-    structure.previousHigh && structure.lastHigh
-      ? structure.lastHigh.price > structure.previousHigh.price
-        ? 'HH'
-        : 'LH'
-      : null
-  const lowText =
-    structure.previousLow && structure.lastLow
-      ? structure.lastLow.price > structure.previousLow.price
-        ? 'HL'
-        : 'LL'
-      : null
 
   const highLeg = structureLeg({
     previous: structure.previousHigh,
     current: structure.lastHigh,
     higherLabel: 'HH',
     lowerLabel: 'LH',
+    breaksByClose: closeBreaksHigh,
   })
   const lowLeg = structureLeg({
     previous: structure.previousLow,
     current: structure.lastLow,
     higherLabel: 'HL',
     lowerLabel: 'LL',
+    breaksByClose: (current, previous) => !closeBreaksLow(current, previous),
   })
+  const highText = highLeg?.label ?? null
+  const lowText = lowLeg?.label ?? null
+  let trend = 'flat'
+  if (highText === 'HH' && lowText === 'HL') trend = 'up'
+  else if (highText === 'LH' && lowText === 'LL') trend = 'down'
+  const status = trend === 'up' ? 'met' : trend === 'down' ? 'unmet' : 'neutral'
+  const latestIndex = candles.length - 1
+  const event = structureEvent({ trend, latest, latestIndex, highLeg, lowLeg })
 
   return {
     trend,
     status,
-    event: structure.event,
+    event,
     reason: [highText, lowText].filter(Boolean).join(' + ') || 'bez potvrzených pivotů',
     price: latest?.close ?? null,
     asOf: latest?.time ?? null,
@@ -284,7 +301,7 @@ const timeframeCandles = async ({ asset, timeframe, btcHourly, fetchImpl, now, l
 }
 
 const hasStructureDetails = (matrix) =>
-  Boolean(matrix?.assets?.every((asset) =>
+  Boolean(matrix?.schemaVersion === PRICE_ACTION_MATRIX_SCHEMA && matrix?.assets?.every((asset) =>
     PRICE_ACTION_TIMEFRAMES.every((timeframe) => asset.trends?.[timeframe.id]?.structure)
   ))
 
@@ -331,6 +348,7 @@ export const buildPriceActionMatrix = async ({
 
   return {
     strategyId: PRICE_ACTION_STRUCTURE_ID,
+    schemaVersion: PRICE_ACTION_MATRIX_SCHEMA,
     generatedAt: new Date(now).toISOString(),
     refreshMinutes: merged.refreshMinutes,
     assets: rows,

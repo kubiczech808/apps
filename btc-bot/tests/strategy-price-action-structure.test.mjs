@@ -6,6 +6,7 @@ import {
   classifyStructure,
   fetchStooqCandles,
   PRICE_ACTION_ASSETS,
+  PRICE_ACTION_MATRIX_SCHEMA,
 } from '../src/strategy-price-action-structure.mjs'
 import { candle, HOUR, START, zigzag } from './helpers.mjs'
 
@@ -51,6 +52,48 @@ test('Stooq CSV parser accepts daily and intraday historical rows through the fe
   assert.equal(candles.length, 2)
   assert.equal(candles[0].open, 1.1)
   assert.equal(candles[1].close, 1.12)
+})
+
+test('structure labels require candle closes beyond previous swing wicks', () => {
+  const wickOnlyHighBreak = [
+    candle(START, 95, 100, 92, 96),
+    candle(START + 1 * HOUR, 96, 110, 94, 108),
+    candle(START + 2 * HOUR, 108, 105, 96, 100),
+    candle(START + 3 * HOUR, 100, 102, 90, 94),
+    candle(START + 4 * HOUR, 94, 108, 95, 106),
+    candle(START + 5 * HOUR, 106, 112, 101, 109),
+    candle(START + 6 * HOUR, 109, 107, 98, 101),
+    candle(START + 7 * HOUR, 101, 103, 93, 96),
+    candle(START + 8 * HOUR, 96, 104, 95, 102),
+  ]
+  const highSweep = classifyStructure(wickOnlyHighBreak, { lookback: 1, minCandles: 8 })
+  assert.equal(highSweep.structure.high.previous.price, 110)
+  assert.equal(highSweep.structure.high.current.price, 112)
+  assert.equal(highSweep.structure.high.current.close, 109)
+  assert.equal(highSweep.structure.high.label, 'LH')
+  assert.equal(highSweep.structure.low.label, 'HL')
+  assert.equal(highSweep.trend, 'flat')
+
+  const closeConfirmedHighBreak = wickOnlyHighBreak.map((item, index) =>
+    index === 5 ? { ...item, close: 111 } : item
+  )
+  const highBreak = classifyStructure(closeConfirmedHighBreak, { lookback: 1, minCandles: 8 })
+  assert.equal(highBreak.structure.high.label, 'HH')
+
+  const wickOnlyLowBreak = wickOnlyHighBreak.map((item, index) =>
+    index === 7 ? { ...item, low: 88, close: 91 } : item
+  )
+  const lowSweep = classifyStructure(wickOnlyLowBreak, { lookback: 1, minCandles: 8 })
+  assert.equal(lowSweep.structure.low.previous.price, 90)
+  assert.equal(lowSweep.structure.low.current.price, 88)
+  assert.equal(lowSweep.structure.low.current.close, 91)
+  assert.equal(lowSweep.structure.low.label, 'HL')
+
+  const closeConfirmedLowBreak = wickOnlyHighBreak.map((item, index) =>
+    index === 7 ? { ...item, low: 88, close: 89 } : item
+  )
+  const lowBreak = classifyStructure(closeConfirmedLowBreak, { lookback: 1, minCandles: 8 })
+  assert.equal(lowBreak.structure.low.label, 'LL')
 })
 
 test('price-action matrix covers BTCUSD and major FX pairs on 1H, 4H and 1D', async () => {
@@ -100,6 +143,7 @@ test('price-action matrix covers BTCUSD and major FX pairs on 1H, 4H and 1D', as
 
 test('fresh price-action matrix is reused instead of refetching every bot pass', async () => {
   const previous = {
+    schemaVersion: PRICE_ACTION_MATRIX_SCHEMA,
     generatedAt: new Date(START).toISOString(),
     assets: PRICE_ACTION_ASSETS.map((asset) => ({
       symbol: asset.symbol,
