@@ -1,8 +1,10 @@
 import * as momentum from './strategy-momentum.mjs'
 import * as priceAction from './strategy.mjs'
+import * as priceActionStructure from './strategy-price-action-structure.mjs'
 
 export const LEGACY_PRICE_ACTION_ID = 'price-action-v0'
 export const ACTIVE_STRATEGY_ID = 'momentum-breakout-v1'
+export const PRICE_ACTION_STRUCTURE_ID = priceActionStructure.PRICE_ACTION_STRUCTURE_ID
 
 export const STRATEGIES = {
   [LEGACY_PRICE_ACTION_ID]: {
@@ -22,6 +24,13 @@ export const STRATEGIES = {
       stopAtr: 1,
       allowShorts: false,
     },
+  },
+  [PRICE_ACTION_STRUCTURE_ID]: {
+    id: PRICE_ACTION_STRUCTURE_ID,
+    name: 'Price Action Structure',
+    module: priceActionStructure,
+    timeframes: { htfHours: 4, ltfHours: 1 },
+    settings: { ...priceActionStructure.DEFAULT_PRICE_ACTION_STRUCTURE },
   },
 }
 

@@ -196,7 +196,37 @@ const STRATEGY_CANDIDATES = [
     command:
       'node tools/backtest.mjs --strategy momentum --years 5 --source binance --set strategy.stopAtr=1,strategy.allowShorts=false,risk.market=futures,risk.riskPct=2',
   },
+  {
+    status: 'nová',
+    statusKind: 'neutral',
+    name: 'PA-1 Price Action Structure',
+    thesis: 'Scan-only strategie pro čtení struktury trhu napříč BTCUSD a hlavními měnovými páry. První krok je trendový kontext na 1H, 4H a 1D; vstupy budeme vybírat až po backtestu pravidel.',
+    rules: ['BTCUSD + FX majors', '1H / 4H / 1D', 'swing struktura', 'HH/HL = up', 'LH/LL = down', 'ostatní = flat'],
+    backtest: {
+      status: 'neutral',
+      label: 'čeká na backtest',
+      result: 'scan-only',
+      detail: 'Tato vrstva zatím neobchoduje. Publikuje strukturu trhu, aby šlo následně měřit price-action vstupy na více aktivech a timeframech.',
+    },
+    command:
+      'node tools/backtest.mjs --strategy price-action-structure --asset EURUSD --timeframe 4h',
+  },
 ]
+
+const PRICE_ACTION_TREND_LABELS = {
+  up: 'up',
+  down: 'down',
+  flat: 'flat',
+}
+
+const trendFact = (trend, item = {}) => {
+  const status = trend === 'up' ? 'met' : trend === 'down' ? 'unmet' : 'neutral'
+  const label = PRICE_ACTION_TREND_LABELS[trend] || 'flat'
+  const details = [item.reason, item.event, Number.isFinite(item.price) ? `cena ${price(item.price)}` : null]
+    .filter(Boolean)
+    .join(' · ')
+  return decisionFact(label, status, details || null)
+}
 
 // ── api ───────────────────────────────────────────────────────────────────
 
@@ -724,8 +754,10 @@ const renderRuns = () => {
 const renderStrategyLab = () => {
   const rules = $('strategy-rules')
   const candidates = $('strategy-candidates')
+  const priceAction = $('strategy-price-action')
   rules.replaceChildren()
   candidates.replaceChildren()
+  priceAction.replaceChildren()
 
   for (const rule of STRATEGY_RULEBOOK) {
     const status = rule.status()
@@ -771,6 +803,60 @@ const renderStrategyLab = () => {
       ])
     )
   }
+
+  const matrix = state?.priceActionMatrix
+  if (!matrix?.assets?.length) {
+    priceAction.append(
+      el('p', {
+        className: 'empty',
+        text: state?.priceActionMatrixError
+          ? `Price action scanner zatím nemá data: ${state.priceActionMatrixError}`
+          : 'Price action scanner zatím čeká na první běh s daty.',
+      })
+    )
+    return
+  }
+
+  const columns = matrix.timeframes?.length ? matrix.timeframes : [
+    { id: '1h', label: '1H' },
+    { id: '4h', label: '4H' },
+    { id: '1d', label: '1D' },
+  ]
+  const table = el('table', { className: 'pa-matrix-table' }, [
+    el('thead', {}, [
+      el('tr', {}, [
+        el('th', { text: 'Asset' }),
+        ...columns.map((column) => el('th', { text: column.label })),
+        el('th', { text: 'Zdroj' }),
+        el('th', { text: 'Aktualizace' }),
+      ]),
+    ]),
+    el('tbody'),
+  ])
+  const body = table.querySelector('tbody')
+  for (const asset of matrix.assets) {
+    body.append(
+      el('tr', {}, [
+        el('td', {}, [
+          el('strong', { text: asset.symbol }),
+          el('span', { className: 'asset-name', text: asset.name ? ` ${asset.name}` : '' }),
+        ]),
+        ...columns.map((column) => {
+          const item = asset.trends?.[column.id] ?? { trend: 'flat', reason: 'bez dat' }
+          return el('td', {}, [decisionFactElement(trendFact(item.trend, item))])
+        }),
+        el('td', { text: asset.source || '–' }),
+        el('td', { text: when(matrix.generatedAt) }),
+      ])
+    )
+  }
+
+  priceAction.append(
+    el('div', { className: 'table-scroll' }, [table]),
+    state?.priceActionMatrixError
+      ? el('p', { className: 'scanner-warning', text: `Poslední chyba scanneru: ${state.priceActionMatrixError}` })
+      : null
+  )
 }
 
 const renderSettings = () => {

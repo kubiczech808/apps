@@ -291,6 +291,8 @@ tbody tr:hover { background: var(--series-1-soft); }
 .decision-reason { color: var(--text-secondary); }
 .decision-facts { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
 .fact {
+  display: inline-flex;
+  align-items: center;
   font-size: 12px;
   padding: 3px 9px;
   border-radius: 999px;
@@ -389,6 +391,37 @@ tbody tr:hover { background: var(--series-1-soft); }
   white-space: normal;
   overflow-wrap: anywhere;
   font-size: 12px;
+}
+.strategy-section {
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+.strategy-section h2 {
+  margin-bottom: 10px;
+}
+.pa-matrix-table th,
+.pa-matrix-table td {
+  text-align: center;
+}
+.pa-matrix-table th:first-child,
+.pa-matrix-table td:first-child {
+  text-align: left;
+  min-width: 210px;
+}
+.pa-matrix-table .fact {
+  justify-content: center;
+  min-width: 54px;
+}
+.asset-name {
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 400;
+}
+.scanner-warning {
+  margin: 10px 0 0;
+  color: var(--critical-text);
+  font-size: 13px;
 }
 
 @media (max-width: 760px) {

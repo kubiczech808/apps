@@ -85,8 +85,22 @@ test('strategy tab shows the selected leveraged momentum strategy', () => {
   assert.match(js, /TF-2L Leveraged momentum/)
   assert.match(js, /5y \+ skutečný funding/)
   assert.match(js, /risk\.market=futures,risk\.riskPct=2/)
+  assert.match(js, /PA-1 Price Action Structure/)
+  assert.match(js, /BTCUSD \+ FX majors/)
   assert.doesNotMatch(js, /JF-1 HTF swing S\/D/)
   assert.doesNotMatch(js, /TF-X Stop-only convex breakout/)
+})
+
+test('strategy tab renders the price-action structure matrix', () => {
+  assert.ok(html.includes('id="strategy-price-action"'), 'strategy tab must contain the price-action matrix host')
+  assert.match(js, /renderStrategyLab/)
+  assert.match(js, /priceActionMatrix/)
+  assert.match(js, /PRICE_ACTION_TREND_LABELS/)
+  assert.match(js, /Asset/)
+  assert.match(js, /1H/)
+  assert.match(js, /4H/)
+  assert.match(js, /1D/)
+  assert.match(css, /pa-matrix-table/)
 })
 
 test('settings edit the selected strategy stop rather than a stale R\/R gate', () => {

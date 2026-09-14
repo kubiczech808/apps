@@ -21,6 +21,7 @@ import { fetchFundingSettlements } from './funding.mjs'
 import { atr, lastDefined, marketStructure } from './priceaction.mjs'
 import { planPosition, SATS_PER_BTC } from './risk.mjs'
 import { LEGACY_PRICE_ACTION_ID, strategyConfig } from './strategy-registry.mjs'
+import { buildPriceActionMatrix } from './strategy-price-action-structure.mjs'
 import {
   capClosed,
   computeStats,
@@ -409,6 +410,21 @@ export const runPass = async ({
       candleSource: market.source,
       candleFailures: market.failures,
       asOf: isoNow(market.ltf.at(-1)?.time ?? now),
+    }
+
+    try {
+      state.priceActionMatrix = await buildPriceActionMatrix({
+        btcHourly: market.hourly,
+        previous: state.priceActionMatrix,
+        fetchImpl,
+        now,
+        settings: settings.priceActionStructure,
+        logger,
+      })
+      state.priceActionMatrixError = null
+    } catch (error) {
+      state.priceActionMatrixError = error.message
+      logger.warn(`Price action matrix failed: ${error.message}`)
     }
 
     let decision = activeStrategy.module.evaluateEntry({

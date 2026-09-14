@@ -8,6 +8,7 @@
 
 import { DEFAULT_RISK_SETTINGS } from './risk.mjs'
 import { ACTIVE_STRATEGY_ID, strategyConfig } from './strategy-registry.mjs'
+import { DEFAULT_PRICE_ACTION_STRUCTURE } from './strategy-price-action-structure.mjs'
 
 export const STATE_VERSION = 1
 export const MAX_RUNS = 200
@@ -48,6 +49,7 @@ export const DEFAULT_SETTINGS = {
     maxNotionalPct: 300,
   },
   strategy: { ...activeStrategy.settings },
+  priceActionStructure: { ...DEFAULT_PRICE_ACTION_STRUCTURE },
 }
 
 export const emptyState = (overrides = {}) => ({
@@ -60,6 +62,8 @@ export const emptyState = (overrides = {}) => ({
   market: { price: null, bias: null, atrPct: null, candleSource: null, asOf: null },
   positions: { running: [], orders: [], closed: [] },
   lastDecision: null,
+  priceActionMatrix: null,
+  priceActionMatrixError: null,
   heartbeats: {},
   runs: [],
   equityHistory: [],
@@ -176,6 +180,10 @@ export const mergeSettings = (stored = {}) => {
     timeframes: { ...selected.timeframes, ...(migratingLegacy ? {} : stored.timeframes ?? {}) },
     risk: { ...selectedDefaults.risk, ...(migratingLegacy ? {} : stored.risk ?? {}) },
     strategy: { ...selected.settings, ...(migratingLegacy ? {} : stored.strategy ?? {}) },
+    priceActionStructure: {
+      ...DEFAULT_PRICE_ACTION_STRUCTURE,
+      ...(migratingLegacy ? {} : stored.priceActionStructure ?? {}),
+    },
   }
 }
 
