@@ -499,6 +499,23 @@ tbody tr:hover { background: var(--series-1-soft); }
 .recent-swings {
   margin-top: 10px;
 }
+.zone-detail {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--grid);
+}
+.zone-detail > strong {
+  display: block;
+  font-size: 12px;
+}
+.zone-leg {
+  background: var(--surface-1);
+}
+.zone-rule {
+  margin: 8px 0 0;
+  color: var(--text-muted);
+  font-size: 12px;
+}
 .swing-pill {
   display: inline-flex;
   align-items: center;

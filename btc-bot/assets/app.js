@@ -279,6 +279,48 @@ const legCard = (title, leg, emptyText) =>
       : null,
   ])
 
+const zoneRange = (zone) => (zone ? `${quotePrice(zone.low)} – ${quotePrice(zone.high)}` : '–')
+
+const zoneCard = (title, primary, fallback, emptyText) => {
+  const zone = primary ?? fallback
+  const fallbackUsed = !primary && fallback
+  return el('div', { className: 'structure-leg zone-leg' }, [
+    el('strong', { text: title }),
+    zone
+      ? el('div', { className: 'structure-leg-flow' }, [
+          el('span', { text: zoneRange(zone) }),
+          Number.isFinite(zone.distancePct)
+            ? el('span', { className: 'structure-meta', text: `vzdál. ${signedPct(zone.distancePct).text}` })
+            : null,
+        ])
+      : el('p', { text: emptyText }),
+    zone
+      ? el('span', {
+          className: 'structure-meta',
+          text: [
+            fallbackUsed ? 'poslední platná, už vyplněná close na tomto TF' : 'poslední nevyplněná',
+            `touches ${zone.touches ?? 1}`,
+            zone.swept ? 'sweep' : null,
+            zone.imbalance ? 'imbalance' : null,
+            zone.lastTime ? when(zone.lastTime) : null,
+          ].filter(Boolean).join(' · '),
+        })
+      : null,
+  ])
+}
+
+const renderZonesDetail = (zones) => {
+  if (!zones) return null
+  return el('div', { className: 'zone-detail' }, [
+    el('strong', { text: 'Supply / demand zóny' }),
+    el('div', { className: 'structure-legs' }, [
+      zoneCard('Demand', zones.demand, zones.latestValidDemand, 'Žádná platná demand zóna na tomto timeframe.'),
+      zoneCard('Supply', zones.supply, zones.latestValidSupply, 'Žádná platná supply zóna na tomto timeframe.'),
+    ]),
+    el('p', { className: 'zone-rule', text: zones.rule || 'Zóna se invaliduje jen na vlastním timeframe.' }),
+  ])
+}
+
 const renderStructureDetail = ({ matrix, columns }) => {
   const selected =
     matrix.assets
@@ -307,6 +349,7 @@ const renderStructureDetail = ({ matrix, columns }) => {
       legCard('Swing highs', structure.high, 'Zatím nejsou dva potvrzené swing highs.'),
       legCard('Swing lows', structure.low, 'Zatím nejsou dva potvrzené swing lows.'),
     ]),
+    renderZonesDetail(item.zones),
     el('div', { className: 'structure-meta-line' }, [
       el('span', { text: `${item.candles ?? 0} svíček` }),
       el('span', { text: `${structure.swingCount ?? 0} potvrzených swingů` }),

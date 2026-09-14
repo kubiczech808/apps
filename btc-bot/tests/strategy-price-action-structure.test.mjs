@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import {
+  activeSupplyDemandZones,
   buildPriceActionMatrix,
   classifyStructure,
   fetchStooqCandles,
@@ -96,6 +97,41 @@ test('structure labels require candle closes beyond previous swing wicks', () =>
   assert.equal(lowBreak.structure.low.label, 'LL')
 })
 
+test('supply and demand zones stay valid unless their own timeframe closes through them', () => {
+  const candles = [
+    candle(START, 110, 112, 108, 111),
+    candle(START + 1 * HOUR, 111, 121, 110, 120),
+    candle(START + 2 * HOUR, 120, 119, 104, 106),
+    candle(START + 3 * HOUR, 106, 107, 99, 101),
+    candle(START + 4 * HOUR, 101, 115, 100, 114),
+    candle(START + 5 * HOUR, 114, 113, 105, 107),
+    candle(START + 6 * HOUR, 107, 118, 106, 117),
+    candle(START + 7 * HOUR, 117, 116, 109, 112),
+    // Trades back into the demand wick range but closes above the zone.
+    // This is the higher-timeframe equivalent of a lower-timeframe fill:
+    // informative, but not an invalidation and not a same-TF close fill.
+    candle(START + 8 * HOUR, 112, 114, 100, 111),
+    candle(START + 9 * HOUR, 111, 115, 110, 114),
+  ]
+
+  const zones = activeSupplyDemandZones(candles, { lookback: 1, maxAgeCandles: 100 })
+  assert.ok(zones.demand, 'expected a demand zone')
+  assert.ok(zones.supply, 'expected a supply zone')
+  assert.equal(zones.demand.invalidatedByOwnTimeframeClose, false)
+  assert.equal(zones.demand.filledByOwnTimeframeClose, false)
+  assert.equal(zones.demand.low, 99)
+  assert.equal(zones.supply.invalidatedByOwnTimeframeClose, false)
+  assert.match(zones.rule, /vlastním timeframe/)
+
+  const invalidated = activeSupplyDemandZones([
+    ...candles,
+    candle(START + 10 * HOUR, 114, 116, 97, 98),
+    candle(START + 11 * HOUR, 98, 108, 96, 106),
+  ], { lookback: 1, maxAgeCandles: 100 })
+  assert.equal(invalidated.demand, null)
+  assert.equal(invalidated.latestValidDemand, null)
+})
+
 test('price-action matrix covers BTCUSD and major FX pairs on 1H, 4H and 1D', async () => {
   const btcHourly = Array.from({ length: 240 }, (_, index) =>
     candle(START + index * HOUR, 100 + index * 0.2, 101 + index * 0.2, 99 + index * 0.2, 100.5 + index * 0.2)
@@ -139,6 +175,7 @@ test('price-action matrix covers BTCUSD and major FX pairs on 1H, 4H and 1D', as
   for (const asset of matrix.assets) {
     assert.deepEqual(Object.keys(asset.trends), ['1h', '4h', '1d'])
   }
+  assert.ok(matrix.assets[0].trends['4h'].zones)
 })
 
 test('fresh price-action matrix is reused instead of refetching every bot pass', async () => {

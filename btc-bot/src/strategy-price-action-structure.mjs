@@ -1,13 +1,14 @@
 import { aggregate, HOUR_MS } from './candles.mjs'
-import { marketStructure } from './priceaction.mjs'
+import { buildZones, marketStructure } from './priceaction.mjs'
 
 export const PRICE_ACTION_STRUCTURE_ID = 'price-action-structure-v1'
-export const PRICE_ACTION_MATRIX_SCHEMA = 2
+export const PRICE_ACTION_MATRIX_SCHEMA = 3
 
 export const DEFAULT_PRICE_ACTION_STRUCTURE = {
   trendLookback: 2,
   minCandles: 40,
   refreshMinutes: 60,
+  zoneMaxAgeCandles: 400,
 }
 
 export const PRICE_ACTION_ASSETS = [
@@ -193,6 +194,66 @@ const structureEvent = ({ trend, latest, latestIndex, highLeg, lowLeg }) => {
   return null
 }
 
+const laterCandles = (candles, zone) => candles.slice((zone.lastIndex ?? zone.firstIndex ?? 0) + 1)
+
+const zoneInvalidated = (zone, candles) => {
+  const later = laterCandles(candles, zone)
+  return zone.type === 'demand'
+    ? later.some((candle) => candle.close < zone.low)
+    : later.some((candle) => candle.close > zone.high)
+}
+
+const zoneFilledByOwnTimeframeClose = (zone, candles) => {
+  const later = laterCandles(candles, zone)
+  return zone.type === 'demand'
+    ? later.some((candle) => candle.close <= zone.high)
+    : later.some((candle) => candle.close >= zone.low)
+}
+
+const zoneDistancePct = (zone, price) => {
+  if (!Number.isFinite(price) || !(price > 0)) return null
+  if (price >= zone.low && price <= zone.high) return 0
+  const edge = price < zone.low ? zone.low : zone.high
+  return ((price / edge) - 1) * 100
+}
+
+const zoneSummary = (zone, candles, price) => ({
+  type: zone.type,
+  low: zone.low,
+  high: zone.high,
+  touches: zone.touches,
+  swept: zone.swept,
+  imbalance: zone.imbalance,
+  firstTime: candles[zone.firstIndex]?.time ?? null,
+  lastTime: zone.lastTime ?? candles[zone.lastIndex]?.time ?? null,
+  firstIndex: zone.firstIndex,
+  lastIndex: zone.lastIndex,
+  filledByOwnTimeframeClose: zoneFilledByOwnTimeframeClose(zone, candles),
+  invalidatedByOwnTimeframeClose: zoneInvalidated(zone, candles),
+  distancePct: zoneDistancePct(zone, price),
+})
+
+export const activeSupplyDemandZones = (candles, { lookback = 2, maxAgeCandles = 400 } = {}) => {
+  const price = candles.at(-1)?.close ?? null
+  const zones = buildZones(candles, { lookback, maxAgeCandles })
+    .map((zone) => zoneSummary(zone, candles, price))
+    .filter((zone) => !zone.invalidatedByOwnTimeframeClose)
+
+  const unfilled = zones.filter((zone) => !zone.filledByOwnTimeframeClose)
+  const latest = (type, pool = unfilled) =>
+    pool.filter((zone) => zone.type === type).sort((a, b) => (b.lastIndex ?? 0) - (a.lastIndex ?? 0))[0] ?? null
+
+  return {
+    demand: latest('demand'),
+    supply: latest('supply'),
+    latestValidDemand: latest('demand', zones),
+    latestValidSupply: latest('supply', zones),
+    unfilledCount: unfilled.length,
+    validCount: zones.length,
+    rule: 'Zóna je invalidovaná jen close průrazem na vlastním timeframe; dotek/filled na nižším timeframe ji neruší.',
+  }
+}
+
 const fetchFxCandles = async ({ asset, timeframeId, fetchImpl, now, logger }) => {
   const daily = timeframeId === '1d'
   const attempts = [
@@ -230,7 +291,7 @@ const fetchFxCandles = async ({ asset, timeframeId, fetchImpl, now, logger }) =>
   return { source: null, candles: [], failures }
 }
 
-export const classifyStructure = (candles, { lookback = 2, minCandles = 40 } = {}) => {
+export const classifyStructure = (candles, { lookback = 2, minCandles = 40, zoneMaxAgeCandles = 400 } = {}) => {
   if (!Array.isArray(candles) || candles.length < minCandles) {
     return {
       trend: 'flat',
@@ -240,6 +301,7 @@ export const classifyStructure = (candles, { lookback = 2, minCandles = 40 } = {
       price: candles?.at?.(-1)?.close ?? null,
       asOf: candles?.at?.(-1)?.time ?? null,
       candles: candles?.length ?? 0,
+      zones: null,
     }
   }
   const structure = marketStructure(candles, { lookback })
@@ -285,6 +347,7 @@ export const classifyStructure = (candles, { lookback = 2, minCandles = 40 } = {
       low: lowLeg,
       recentSwings: structure.swings.slice(-8).map((swing) => pivotSummary(swing)),
     },
+    zones: activeSupplyDemandZones(candles, { lookback, maxAgeCandles: zoneMaxAgeCandles }),
   }
 }
 
@@ -334,6 +397,7 @@ export const buildPriceActionMatrix = async ({
       trends[timeframe.id] = classifyStructure(result.candles, {
         lookback: merged.trendLookback,
         minCandles: merged.minCandles,
+        zoneMaxAgeCandles: merged.zoneMaxAgeCandles,
       })
     }
     rows.push({
