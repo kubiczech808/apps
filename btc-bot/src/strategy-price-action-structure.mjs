@@ -283,7 +283,13 @@ const timeframeCandles = async ({ asset, timeframe, btcHourly, fetchImpl, now, l
   return fetchFxCandles({ asset, timeframeId: timeframe.id, fetchImpl, now, logger })
 }
 
+const hasStructureDetails = (matrix) =>
+  Boolean(matrix?.assets?.every((asset) =>
+    PRICE_ACTION_TIMEFRAMES.every((timeframe) => asset.trends?.[timeframe.id]?.structure)
+  ))
+
 const isFresh = (matrix, now, refreshMinutes) => {
+  if (!hasStructureDetails(matrix)) return false
   const generated = Date.parse(matrix?.generatedAt ?? '')
   return Number.isFinite(generated) && now - generated < refreshMinutes * 60_000
 }

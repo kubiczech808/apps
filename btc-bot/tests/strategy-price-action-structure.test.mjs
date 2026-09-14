@@ -99,7 +99,17 @@ test('price-action matrix covers BTCUSD and major FX pairs on 1H, 4H and 1D', as
 })
 
 test('fresh price-action matrix is reused instead of refetching every bot pass', async () => {
-  const previous = { generatedAt: new Date(START).toISOString(), assets: [{ symbol: 'BTCUSD' }] }
+  const previous = {
+    generatedAt: new Date(START).toISOString(),
+    assets: PRICE_ACTION_ASSETS.map((asset) => ({
+      symbol: asset.symbol,
+      trends: {
+        '1h': { structure: {} },
+        '4h': { structure: {} },
+        '1d': { structure: {} },
+      },
+    })),
+  }
   const matrix = await buildPriceActionMatrix({
     previous,
     now: START + 10 * 60_000,
@@ -109,4 +119,46 @@ test('fresh price-action matrix is reused instead of refetching every bot pass',
     },
   })
   assert.equal(matrix, previous)
+})
+
+test('a fresh but schema-old matrix is rebuilt so the UI can show pivot details', async () => {
+  const previous = { generatedAt: new Date(START).toISOString(), assets: [{ symbol: 'BTCUSD', trends: { '4h': { trend: 'up' } } }] }
+  const btcHourly = Array.from({ length: 240 }, (_, index) =>
+    candle(START + index * HOUR, 100 + index * 0.2, 101 + index * 0.2, 99 + index * 0.2, 100.5 + index * 0.2)
+  )
+  const fetchImpl = async () => ({
+    ok: true,
+    json: async () => ({
+      chart: {
+        result: [
+          {
+            timestamp: Array.from({ length: 240 }, (_, index) => Math.round((START + index * HOUR) / 1000)),
+            indicators: {
+              quote: [
+                {
+                  open: Array.from({ length: 240 }, (_, index) => 1 + index * 0.001),
+                  high: Array.from({ length: 240 }, (_, index) => 1.01 + index * 0.001),
+                  low: Array.from({ length: 240 }, (_, index) => 0.99 + index * 0.001),
+                  close: Array.from({ length: 240 }, (_, index) => 1.005 + index * 0.001),
+                  volume: Array.from({ length: 240 }, () => 0),
+                },
+              ],
+            },
+          },
+        ],
+      },
+    }),
+    text: async () => 'Exceeded',
+  })
+
+  const matrix = await buildPriceActionMatrix({
+    btcHourly,
+    previous,
+    fetchImpl,
+    now: START + 10 * 60_000,
+    settings: { refreshMinutes: 60, minCandles: 20 },
+    logger: { warn() {} },
+  })
+  assert.notEqual(matrix, previous)
+  assert.ok(matrix.assets[0].trends['4h'].structure)
 })
