@@ -21,6 +21,7 @@ const $ = (id) => document.getElementById(id)
 let state = null
 let keyIsPublic = false
 let refreshTimer = null
+let priceActionSelection = null
 
 // ── formatting ────────────────────────────────────────────────────────────
 
@@ -30,6 +31,12 @@ const sats = (value) => (Number.isFinite(value) ? `${nf(0).format(Math.round(val
 const usd = (value) => (Number.isFinite(value) ? `$${nf(0).format(Math.round(value))}` : '–')
 const price = (value) => (Number.isFinite(value) ? nf(0).format(Math.round(value)) : '–')
 const pct = (value, digits = 1) => (Number.isFinite(value) ? `${nf(digits).format(value)} %` : '–')
+const quotePrice = (value) => {
+  if (!Number.isFinite(value)) return '–'
+  const abs = Math.abs(value)
+  const digits = abs >= 1000 ? 0 : abs >= 100 ? 2 : abs >= 10 ? 3 : 5
+  return nf(digits).format(value)
+}
 
 const signedPct = (value, digits = 2) => {
   if (!Number.isFinite(value)) return { text: '–', className: '' }
@@ -222,10 +229,99 @@ const PRICE_ACTION_TREND_LABELS = {
 const trendFact = (trend, item = {}) => {
   const status = trend === 'up' ? 'met' : trend === 'down' ? 'unmet' : 'neutral'
   const label = PRICE_ACTION_TREND_LABELS[trend] || 'flat'
-  const details = [item.reason, item.event, Number.isFinite(item.price) ? `cena ${price(item.price)}` : null]
+  const details = [item.reason, item.event, Number.isFinite(item.price) ? `cena ${quotePrice(item.price)}` : null]
     .filter(Boolean)
     .join(' · ')
   return decisionFact(label, status, details || null)
+}
+
+const trendFactButton = ({ asset, column, item }) => {
+  const fact = trendFact(item.trend, item)
+  const button = el('button', {
+    type: 'button',
+    className: `fact fact-${fact.status} pa-trend-button`,
+    title: fact.title,
+    text: fact.text,
+  })
+  const selected = priceActionSelection?.symbol === asset.symbol && priceActionSelection?.timeframeId === column.id
+  button.setAttribute('aria-pressed', String(selected))
+  button.onclick = () => {
+    priceActionSelection = { symbol: asset.symbol, timeframeId: column.id }
+    renderStrategyLab()
+  }
+  return button
+}
+
+const pivotText = (pivot) => {
+  if (!pivot) return '–'
+  const label = pivot.label ? `${pivot.label} ` : ''
+  return `${label}${quotePrice(pivot.price)} · ${when(pivot.time)}`
+}
+
+const legCard = (title, leg, emptyText) =>
+  el('div', { className: 'structure-leg' }, [
+    el('strong', { text: title }),
+    leg
+      ? el('div', { className: 'structure-leg-flow' }, [
+          el('span', { text: pivotText(leg.previous) }),
+          el('span', { className: 'structure-arrow', text: '→' }),
+          el('span', { text: pivotText(leg.current) }),
+        ])
+      : el('p', { text: emptyText }),
+    leg
+      ? el('span', {
+          className: 'structure-meta',
+          text: `${leg.label}${Number.isFinite(leg.changePct) ? ` · ${signedPct(leg.changePct).text}` : ''}`,
+        })
+      : null,
+  ])
+
+const renderStructureDetail = ({ matrix, columns }) => {
+  const selected =
+    matrix.assets
+      .flatMap((asset) => columns.map((column) => ({ asset, column, item: asset.trends?.[column.id] })))
+      .find((entry) =>
+        priceActionSelection
+          ? entry.asset.symbol === priceActionSelection.symbol && entry.column.id === priceActionSelection.timeframeId
+          : entry.column.id === '4h'
+      ) ?? null
+  if (!selected?.item) return null
+
+  const { asset, column, item } = selected
+  priceActionSelection ??= { symbol: asset.symbol, timeframeId: column.id }
+  const structure = item.structure ?? {}
+  const recent = structure.recentSwings ?? []
+
+  return el('div', { className: 'structure-detail' }, [
+    el('div', { className: 'structure-detail-head' }, [
+      el('div', {}, [
+        el('strong', { text: `${asset.symbol} · ${column.label}` }),
+        el('p', { text: `${PRICE_ACTION_TREND_LABELS[item.trend] || 'flat'} · ${item.reason || 'bez důvodu'}${item.event ? ` · ${item.event}` : ''}` }),
+      ]),
+      decisionFactElement(trendFact(item.trend, item)),
+    ]),
+    el('div', { className: 'structure-legs' }, [
+      legCard('Swing highs', structure.high, 'Zatím nejsou dva potvrzené swing highs.'),
+      legCard('Swing lows', structure.low, 'Zatím nejsou dva potvrzené swing lows.'),
+    ]),
+    el('div', { className: 'structure-meta-line' }, [
+      el('span', { text: `${item.candles ?? 0} svíček` }),
+      el('span', { text: `${structure.swingCount ?? 0} potvrzených swingů` }),
+      el('span', { text: `lookback ${structure.lookback ?? '–'}` }),
+      Number.isFinite(item.price) ? el('span', { text: `close ${quotePrice(item.price)}` }) : null,
+    ]),
+    recent.length
+      ? el('div', { className: 'recent-swings' }, [
+          el('strong', { text: 'Poslední potvrzené swingy' }),
+          el('div', { className: 'recent-swing-list' }, recent.map((swing) =>
+            el('span', {
+              className: `swing-pill swing-${swing.kind}`,
+              text: `${swing.kind === 'high' ? 'H' : 'L'} ${quotePrice(swing.price)} · ${when(swing.time)}`,
+            })
+          )),
+        ])
+      : null,
+  ])
 }
 
 // ── api ───────────────────────────────────────────────────────────────────
@@ -843,7 +939,7 @@ const renderStrategyLab = () => {
         ]),
         ...columns.map((column) => {
           const item = asset.trends?.[column.id] ?? { trend: 'flat', reason: 'bez dat' }
-          return el('td', {}, [decisionFactElement(trendFact(item.trend, item))])
+          return el('td', {}, [trendFactButton({ asset, column, item })])
         }),
         el('td', { text: asset.source || '–' }),
         el('td', { text: when(matrix.generatedAt) }),
@@ -853,6 +949,7 @@ const renderStrategyLab = () => {
 
   priceAction.append(
     el('div', { className: 'table-scroll' }, [table]),
+    renderStructureDetail({ matrix, columns }),
     state?.priceActionMatrixError
       ? el('p', { className: 'scanner-warning', text: `Poslední chyba scanneru: ${state.priceActionMatrixError}` })
       : null

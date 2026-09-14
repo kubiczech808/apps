@@ -96,11 +96,18 @@ test('strategy tab renders the price-action structure matrix', () => {
   assert.match(js, /renderStrategyLab/)
   assert.match(js, /priceActionMatrix/)
   assert.match(js, /PRICE_ACTION_TREND_LABELS/)
+  assert.match(js, /trendFactButton/)
+  assert.match(js, /renderStructureDetail/)
+  assert.match(js, /Swing highs/)
+  assert.match(js, /Swing lows/)
+  assert.match(js, /Poslední potvrzené swingy/)
   assert.match(js, /Asset/)
   assert.match(js, /1H/)
   assert.match(js, /4H/)
   assert.match(js, /1D/)
   assert.match(css, /pa-matrix-table/)
+  assert.match(css, /pa-trend-button/)
+  assert.match(css, /structure-detail/)
 })
 
 test('settings edit the selected strategy stop rather than a stale R\/R gate', () => {

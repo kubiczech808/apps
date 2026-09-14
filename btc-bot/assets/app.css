@@ -413,10 +413,108 @@ tbody tr:hover { background: var(--series-1-soft); }
   justify-content: center;
   min-width: 54px;
 }
+.pa-trend-button {
+  min-height: 26px;
+  font-weight: 650;
+}
+.pa-trend-button:hover,
+.pa-trend-button[aria-pressed="true"] {
+  border-color: var(--text-primary);
+}
 .asset-name {
   color: var(--text-muted);
   font-size: 12px;
   font-weight: 400;
+}
+.structure-detail {
+  margin-top: 12px;
+  border-top: 1px solid var(--grid);
+  padding-top: 12px;
+}
+.structure-detail-head,
+.structure-legs,
+.structure-meta-line,
+.recent-swing-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.structure-detail-head {
+  justify-content: space-between;
+  align-items: flex-start;
+}
+.structure-detail-head p {
+  margin: 3px 0 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+.structure-legs {
+  margin-top: 10px;
+}
+.structure-leg {
+  flex: 1 1 260px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 9px 10px;
+  background: var(--page);
+}
+.structure-leg strong,
+.recent-swings strong {
+  display: block;
+  margin-bottom: 5px;
+  font-size: 12px;
+}
+.structure-leg p {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+.structure-leg-flow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+.structure-arrow,
+.structure-meta {
+  color: var(--text-muted);
+}
+.structure-meta {
+  display: inline-block;
+  margin-top: 5px;
+  font-size: 12px;
+}
+.structure-meta-line {
+  margin-top: 9px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+.structure-meta-line span:not(:last-child)::after {
+  content: "·";
+  margin-left: 8px;
+}
+.recent-swings {
+  margin-top: 10px;
+}
+.swing-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text-secondary);
+  background: var(--surface-1);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.swing-high {
+  border-color: rgba(208, 59, 59, 0.22);
+}
+.swing-low {
+  border-color: rgba(12, 163, 12, 0.22);
 }
 .scanner-warning {
   margin: 10px 0 0;

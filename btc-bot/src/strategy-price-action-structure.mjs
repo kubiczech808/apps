@@ -151,6 +151,27 @@ export const fetchYahooCandles = async ({
   return out.sort((a, b) => a.time - b.time)
 }
 
+const pivotSummary = (swing, label = null) =>
+  swing
+    ? {
+        kind: swing.kind,
+        label,
+        price: swing.price,
+        time: swing.time,
+        candleIndex: swing.index,
+      }
+    : null
+
+const structureLeg = ({ previous, current, higherLabel, lowerLabel }) => {
+  if (!previous || !current) return null
+  return {
+    previous: pivotSummary(previous),
+    current: pivotSummary(current, current.price > previous.price ? higherLabel : lowerLabel),
+    label: current.price > previous.price ? higherLabel : lowerLabel,
+    changePct: previous.price ? ((current.price / previous.price) - 1) * 100 : null,
+  }
+}
+
 const fetchFxCandles = async ({ asset, timeframeId, fetchImpl, now, logger }) => {
   const daily = timeframeId === '1d'
   const attempts = [
@@ -217,6 +238,19 @@ export const classifyStructure = (candles, { lookback = 2, minCandles = 40 } = {
         : 'LL'
       : null
 
+  const highLeg = structureLeg({
+    previous: structure.previousHigh,
+    current: structure.lastHigh,
+    higherLabel: 'HH',
+    lowerLabel: 'LH',
+  })
+  const lowLeg = structureLeg({
+    previous: structure.previousLow,
+    current: structure.lastLow,
+    higherLabel: 'HL',
+    lowerLabel: 'LL',
+  })
+
   return {
     trend,
     status,
@@ -227,6 +261,13 @@ export const classifyStructure = (candles, { lookback = 2, minCandles = 40 } = {
     candles: candles.length,
     lastHigh: structure.lastHigh?.price ?? null,
     lastLow: structure.lastLow?.price ?? null,
+    structure: {
+      lookback,
+      swingCount: structure.swings.length,
+      high: highLeg,
+      low: lowLeg,
+      recentSwings: structure.swings.slice(-8).map((swing) => pivotSummary(swing)),
+    },
   }
 }
 
