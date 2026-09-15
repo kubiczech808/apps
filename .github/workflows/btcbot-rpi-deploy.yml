@@ -71,7 +71,7 @@ jobs:
           set -euxo pipefail
           config=/home/openclaw2/.config/btc-bot.env
           # Keep every existing credential and operator value. Only this data
-          # requirement changed: the daily strategy needs 140 complete days.
+          # requirement changed: 1D price action now reads 400 calendar days.
           sudo env CONFIG_PATH="$config" python3 - <<'PY'
           import os
           import pwd
@@ -115,6 +115,9 @@ jobs:
           const fs = require('node:fs')
           const path = '/home/openclaw2/.local/state/btc-bot/bot-state.json'
           const state = JSON.parse(fs.readFileSync(path, 'utf8'))
+          const btcDaily = state.priceActionMatrix?.assets
+            ?.find((asset) => asset.symbol === 'BTCUSD')
+            ?.trends?.['1d']
           const summary = {
             updatedAt: state.updatedAt,
             status: state.status,
@@ -125,9 +128,18 @@ jobs:
             stopAtr: state.settings?.strategy?.stopAtr,
             lastAction: state.runs?.[0]?.action,
             lastError: state.runs?.[0]?.error,
+            priceActionSchema: state.priceActionMatrix?.schemaVersion,
+            btcDailyCandles: btcDaily?.candles,
+            btcDailyHistoryDays: btcDaily?.structure?.historyDays,
+            btcDailyPivotLookback: btcDaily?.structure?.lookback,
           }
           console.log(summary)
           if (summary.strategyId !== 'momentum-breakout-v1') throw new Error('new strategy was not activated')
           if (summary.riskPct !== 2 || summary.stopAtr !== 1) throw new Error('selected risk settings are not active')
           if (summary.status === 'error' || summary.lastError) throw new Error(`first pass failed: ${summary.lastError}`)
+          if (summary.priceActionSchema !== 5) throw new Error('price-action matrix was not rebuilt')
+          if (summary.btcDailyHistoryDays !== 400 || summary.btcDailyPivotLookback !== 30) {
+            throw new Error('BTCUSD 1D does not use the scaled structure profile')
+          }
+          if (!(summary.btcDailyCandles >= 160)) throw new Error('BTCUSD 1D history is too short')
           NODE
