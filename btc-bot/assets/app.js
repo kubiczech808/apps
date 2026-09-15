@@ -1476,12 +1476,12 @@ const renderOpen = () => {
 
 const renderPriceActionOpen = (body) => {
   setPanelTitle('panel-open-title', 'Otevřené price-action obchody')
-  setTableHead('panel-open', ['Asset', 'TF', 'Směr', 'Entry', 'SL', 'TP', 'P/L', 'Stav struktury'])
+  setTableHead('panel-open', ['Otevřeno', 'Asset', 'TF', 'Směr', 'Entry', 'SL', 'TP', 'P/L', 'Stav struktury'])
   $('flatten').hidden = false
   const rows = (state?.positions?.running || []).filter((position) => position.strategyId === 'price-action-structure-v1')
   body.replaceChildren()
   if (!rows.length) {
-    body.append(emptyRow(8, 'Žádný otevřený price-action trade.'))
+    body.append(emptyRow(9, 'Žádný otevřený price-action trade.'))
     return
   }
   for (const position of rows) {
@@ -1489,8 +1489,9 @@ const renderPriceActionOpen = (body) => {
     const pl = signedSats(position.plSats)
     body.append(
       el('tr', {}, [
-        el('td', { text: position.assetSymbol || position.asset || 'BTCUSD' }),
-        el('td', { text: (position.timeframeId || position.timeframe || '4h').toUpperCase() }),
+        el('td', { text: when(position.openedAt ?? position.createdAt) }),
+        el('td', { text: position.assetSymbol || position.asset || '–' }),
+        el('td', { text: position.timeframeId || position.timeframe ? (position.timeframeId || position.timeframe).toUpperCase() : '–' }),
         sideCell(position.side),
         el('td', { text: quotePrice(position.entry) }),
         el('td', { text: quotePrice(position.stopLoss) }),
@@ -1536,25 +1537,30 @@ const renderOrders = () => {
 }
 
 const renderPriceActionOrders = (body) => {
-  setPanelTitle('panel-orders-title', 'Čekající price-action profily')
-  setTableHead('panel-orders', ['Asset', 'Směr', 'Cena', 'Zóna', 'Pullback', 'R/R', 'Chybí'])
-  const rows = sortedPriceActionProfiles().filter((entry) => entry.profile.status === 'watch')
+  setPanelTitle('panel-orders-title', 'Čekající price-action objednávky')
+  setTableHead('panel-orders', ['Zadáno', 'Asset', 'TF', 'Typ', 'Směr', 'Velikost', 'Cena', 'Stop loss', 'Take profit', 'Marže', ''])
+  const rows = state?.positions?.orders || []
   body.replaceChildren()
   if (!rows.length) {
-    body.append(emptyRow(7, 'Žádné čekající price-action profily se směrem.'))
+    body.append(emptyRow(11, 'Žádné čekající objednávky.'))
     return
   }
-  for (const entry of rows) {
-    const profile = entry.profile
+  for (const order of rows) {
+    const cancel = el('button', { type: 'button', text: 'Zrušit' })
+    cancel.onclick = () => queueCommand('cancel', order.id)
     body.append(
       el('tr', {}, [
-        profileAssetCell(entry),
-        sideCell(profile.side),
-        el('td', { text: quotePrice(entry.item?.price) }),
-        el('td', { text: profile.zone ? zoneRange(profile.zone) : '–' }),
-        el('td', { text: Number.isFinite(profile.pullbackLevel) ? quotePrice(profile.pullbackLevel) : '–' }),
-        el('td', { text: Number.isFinite(profile.rewardRisk) ? `${nf(2).format(profile.rewardRisk)}:1` : '–' }),
-        el('td', { className: 'reason', text: missingProfileGates(profile) }),
+        el('td', { text: when(order.createdAt ?? order.placedAt) }),
+        el('td', { text: order.assetSymbol || order.asset || '–' }),
+        el('td', { text: order.timeframeId || order.timeframe ? (order.timeframeId || order.timeframe).toUpperCase() : '–' }),
+        el('td', { text: order.type === 'limit' ? 'limit' : 'market' }),
+        sideCell(order.side),
+        el('td', { text: order.quantityUsd ? `${nf(0).format(order.quantityUsd)} USD` : '–' }),
+        el('td', { text: quotePrice(order.quotePrice ?? order.entry) }),
+        el('td', { text: quotePrice(order.stopLoss) }),
+        el('td', { text: quotePrice(order.takeProfit) }),
+        el('td', { text: sats(order.marginSats) }),
+        el('td', {}, [cancel]),
       ])
     )
   }
@@ -1612,7 +1618,7 @@ const renderPriceActionClosed = (body) => {
     body.append(
       el('tr', {}, [
         el('td', { text: when(trade.closedAt) }),
-        el('td', { text: trade.assetSymbol || trade.asset || 'BTCUSD' }),
+        el('td', { text: trade.assetSymbol || trade.asset || '–' }),
         sideCell(trade.side),
         el('td', { text: quotePrice(trade.entry) }),
         el('td', { text: quotePrice(trade.exitPrice) }),
