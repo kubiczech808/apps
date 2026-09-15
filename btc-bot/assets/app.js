@@ -2304,6 +2304,14 @@ const backtestSummaryMetric = (label, value) => el('div', { className: 'backtest
   el('strong', { text: value }),
 ])
 
+const backtestPeriodLabel = (periodId) => ({
+  current: 'Aktuální',
+  1: '1 rok',
+  3: '3 roky',
+  5: '5 let',
+  10: '10 let',
+}[periodId] ?? `${periodId} let`)
+
 const renderPriceActionBacktests = (host) => {
   const document = state?.backtests ?? {}
   const run = document.run ?? null
@@ -2344,12 +2352,11 @@ const renderPriceActionBacktests = (host) => {
   const button = controls.querySelector('#run-backtests')
   button.onclick = requestBacktests
   const periodTabs = el('div', { className: 'tabs backtest-period-tabs', role: 'tablist', 'aria-label': 'Období backtestu' }, availablePeriods.map((periodId) => {
-    const label = periodId === 'current' ? 'Aktuální' : `${periodId} roky`
     const periodButton = el('button', {
       type: 'button',
       role: 'tab',
       'aria-selected': String(periodId === selectedPeriodId),
-      text: label,
+      text: backtestPeriodLabel(periodId),
     })
     periodButton.onclick = () => {
       setBacktestPeriod(periodId)
@@ -2379,7 +2386,7 @@ const renderPriceActionBacktests = (host) => {
     : []
   host.append(el('section', { className: 'backtest-portfolio-summary' }, [
     el('div', { className: 'backtest-portfolio-head' }, [
-      el('h3', { text: `Portfolio PA-1 · ${selectedPeriodId === 'current' ? 'aktuální' : `${selectedPeriodId} roky`}` }),
+      el('h3', { text: `Portfolio PA-1 · ${selectedPeriodId === 'current' ? 'aktuální' : backtestPeriodLabel(selectedPeriodId)}` }),
       el('span', { text: portfolio?.from && portfolio?.to ? backtestPeriod(portfolio) : 'Období není k dispozici' }),
     ]),
     el('div', { className: 'backtest-summary-metrics' }, portfolioMetrics),
