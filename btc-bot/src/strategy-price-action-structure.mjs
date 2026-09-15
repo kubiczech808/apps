@@ -2,7 +2,7 @@ import { aggregate, HOUR_MS } from './candles.mjs'
 import { buildZones, candleSignal, marketStructure } from './priceaction.mjs'
 
 export const PRICE_ACTION_STRUCTURE_ID = 'price-action-structure-v1'
-export const PRICE_ACTION_MATRIX_SCHEMA = 6
+export const PRICE_ACTION_MATRIX_SCHEMA = 7
 
 export const DEFAULT_PRICE_ACTION_STRUCTURE = {
   zoneLookback: 2,
@@ -350,7 +350,7 @@ export const activeSupplyDemandZones = (candles, { lookback = 2, maxAgeCandles =
   const byType = (type, pool = unfilled) =>
     pool.filter((zone) => zone.type === type).sort((a, b) => (b.lastIndex ?? 0) - (a.lastIndex ?? 0))
   const nearby = (type) =>
-    byType(type).sort((a, b) => Math.abs(a.distancePct ?? Infinity) - Math.abs(b.distancePct ?? Infinity))
+    byType(type, zones).sort((a, b) => Math.abs(a.distancePct ?? Infinity) - Math.abs(b.distancePct ?? Infinity))
 
   return {
     demand: latest('demand'),

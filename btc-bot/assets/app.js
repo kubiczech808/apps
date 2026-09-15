@@ -384,7 +384,9 @@ const zoneListElement = (item, profile, type) => {
     const status = selected ? (profile?.zoneHit ? 'met' : gate?.status ?? 'unmet') : 'neutral'
     const title = selected
       ? gate?.detail ?? 'Pracovní vstupní supply/demand zóna.'
-      : 'Platná nevyplněná zóna v okolí aktuální ceny.'
+      : zone.filledByOwnTimeframeClose
+        ? 'Platná zóna v okolí aktuální ceny, ale close na vlastním timeframe ji už vyplnil.'
+        : 'Platná nevyplněná zóna v okolí aktuální ceny.'
     return el('div', { className: 'pa-zone-item' }, [
       decisionFactElement(decisionFact(zoneRange(zone), status, title)),
       el('span', { className: 'pa-zone-times', text: `3 svíčky: ${zoneDefiningTimes(zone)}` }),
@@ -573,7 +575,7 @@ const zoneCard = (title, zones, emptyText) => el('div', { className: 'structure-
           el('span', {
             className: 'structure-meta',
             text: [
-              'nevyplněná',
+              zone.filledByOwnTimeframeClose ? 'vyplněná close na vlastním TF' : 'nevyplněná',
               `touches ${zone.touches ?? 1}`,
               zone.swept ? 'sweep' : null,
               zone.imbalance ? 'imbalance' : null,
