@@ -305,6 +305,16 @@ switch ($action) {
         if (($backtests['strategyId'] ?? '') !== 'price-action-structure-v1') {
             fail(400, 'Backtest report must identify the active PA-1 strategy.');
         }
+        // A detached worker may finish after a newer run has already started.
+        // Never let that older result replace the newer report on the dashboard.
+        $existing = readJsonFile(BACKTEST_FILE, null);
+        $incomingAt = isset($backtests['generatedAt']) ? strtotime((string) $backtests['generatedAt']) : false;
+        $existingAt = is_array($existing) && isset($existing['generatedAt'])
+            ? strtotime((string) $existing['generatedAt'])
+            : false;
+        if ($incomingAt !== false && $existingAt !== false && $incomingAt < $existingAt) {
+            fail(409, 'Backtest report is older than the currently published run.');
+        }
         writeJsonFile(BACKTEST_FILE, $backtests);
         ok(['generatedAt' => $backtests['generatedAt'] ?? null]);
     }
