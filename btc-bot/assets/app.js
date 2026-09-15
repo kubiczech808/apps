@@ -1251,6 +1251,85 @@ const renderAssetChart = () => {
     )
   }
 
+  // These are the same external pivots that classifyStructure exposes. Keep
+  // them visually separate from the candles so a user can audit whether the
+  // algorithm followed the main wave rather than an internal reaction.
+  const xForTime = (time) => {
+    if (!Number.isFinite(time) || !candles.length) return null
+    if (time <= candles[0].time) return ASSET_CHART.padLeft
+    if (time >= candles.at(-1).time) return ASSET_CHART.width - ASSET_CHART.padRight
+    const rightIndex = candles.findIndex((candle) => candle.time >= time)
+    if (rightIndex <= 0) return x(0)
+    const leftIndex = rightIndex - 1
+    const left = candles[leftIndex]
+    const right = candles[rightIndex]
+    const fraction = (time - left.time) / Math.max(1, right.time - left.time)
+    return x(leftIndex) + (x(rightIndex) - x(leftIndex)) * fraction
+  }
+
+  const structure = item?.structure
+  const trend = item?.trend === 'up' || item?.trend === 'down' ? item.trend : 'flat'
+  const structureLegs = [
+    { kind: 'high', leg: structure?.high },
+    { kind: 'low', leg: structure?.low },
+  ]
+
+  if (trend === 'flat') {
+    for (const { kind, leg } of structureLegs) {
+      const pivot = leg?.current ?? leg?.previous
+      if (!Number.isFinite(pivot?.price)) continue
+      const yy = y(pivot.price)
+      const label = kind === 'high' ? 'H flat' : 'L flat'
+      svg.append(
+        el('line', {
+          className: 'asset-structure-line asset-structure-flat',
+          x1: ASSET_CHART.padLeft,
+          x2: ASSET_CHART.width - ASSET_CHART.padRight,
+          y1: yy,
+          y2: yy,
+        }),
+        el('text', {
+          className: 'asset-structure-label asset-structure-label-flat',
+          x: ASSET_CHART.padLeft + 6,
+          y: yy - 6,
+          text: `${label} ${quotePrice(pivot.price)}`,
+        })
+      )
+    }
+  } else {
+    for (const { kind, leg } of structureLegs) {
+      const previous = leg?.previous
+      const current = leg?.current
+      const x1 = xForTime(previous?.time)
+      const x2 = xForTime(current?.time)
+      if (!Number.isFinite(previous?.price) || !Number.isFinite(current?.price) || x1 === null || x2 === null) continue
+      const label = current.label || (kind === 'high' ? 'H' : 'L')
+      const labelAtEnd = x2 > ASSET_CHART.width - ASSET_CHART.padRight - 72
+      svg.append(
+        el('line', {
+          className: `asset-structure-line asset-structure-${trend}`,
+          x1,
+          x2,
+          y1: y(previous.price),
+          y2: y(current.price),
+        }),
+        el('circle', {
+          className: `asset-structure-marker asset-structure-${trend}`,
+          cx: x2,
+          cy: y(current.price),
+          r: 3,
+        }),
+        el('text', {
+          className: `asset-structure-label asset-structure-label-${trend}`,
+          'text-anchor': labelAtEnd ? 'end' : 'start',
+          x: labelAtEnd ? x2 - 6 : x2 + 6,
+          y: y(current.price) - 6,
+          text: `${label} ${quotePrice(current.price)}`,
+        })
+      )
+    }
+  }
+
   const currentPrice = item?.price ?? allCandles.at(-1)?.close
   if (!viewingHistory && Number.isFinite(currentPrice)) {
     const currentY = y(currentPrice)
