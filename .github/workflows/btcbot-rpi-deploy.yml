@@ -134,7 +134,10 @@ jobs:
             systemctl --user)
 
           "${user_systemctl[@]}" daemon-reload
-          "${user_systemctl[@]}" reset-failed btc-bot.service
+          # reset-failed may return 1 when there was no failed state to clear;
+          # the actual service start and the hosted heartbeat checks below are
+          # the authoritative health checks.
+          "${user_systemctl[@]}" reset-failed btc-bot.service || true
           "${user_systemctl[@]}" enable --now btc-bot.timer
           "${user_systemctl[@]}" restart btc-bot.timer
           "${user_systemctl[@]}" restart btc-bot.service
