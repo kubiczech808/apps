@@ -24,6 +24,7 @@ let keyIsPublic = false
 let refreshTimer = null
 let priceActionSelection = null
 let priceActionDecisionTimeframe = '4h'
+let selectedAssetChart = { symbol: null, timeframeId: '4h' }
 let selectedStrategyPanel = 'structure'
 let selectedStrategyView = 'price-action'
 
@@ -477,6 +478,21 @@ const priceActionDecisionCell = (entry, column) =>
       : [decisionFactElement(priceActionDecisionFact(entry, column))]
   )
 
+const assetTickerButton = (symbol, timeframeId = priceActionDecisionTimeframe) => {
+  const button = el('button', {
+    type: 'button',
+    className: 'asset-ticker',
+    text: symbol,
+    title: 'Zobrazit cenový graf assetu',
+  })
+  button.onclick = () => {
+    selectedAssetChart = { symbol, timeframeId }
+    renderAssetChart()
+    $('asset-chart-card')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }
+  return button
+}
+
 const renderPriceActionDecisionTabs = (columns) => {
   const selected = columns.some((column) => column.id === priceActionDecisionTimeframe)
     ? priceActionDecisionTimeframe
@@ -492,7 +508,9 @@ const renderPriceActionDecisionTabs = (columns) => {
     })
     button.onclick = () => {
       priceActionDecisionTimeframe = column.id
+      selectedAssetChart = { symbol: selectedAssetChart.symbol, timeframeId: column.id }
       renderDecision()
+      renderAssetChart()
     }
     return button
   }))
@@ -515,8 +533,7 @@ const renderPriceActionDecisionTable = (matrix, columns) => {
     const entry = { asset, column: timeframe, item, profile: item?.tradeProfile ?? null }
     body.append(el('tr', {}, [
       el('td', {}, [
-        el('strong', { text: asset.symbol }),
-        el('span', { className: 'asset-name', text: asset.name ? ` ${asset.name}` : '' }),
+        assetTickerButton(asset.symbol, timeframe.id),
       ]),
       ...PRICE_ACTION_DECISION_COLUMNS.map((column) => priceActionDecisionCell(entry, column)),
     ]))
@@ -953,6 +970,181 @@ const renderTiles = () => {
   renderPortfolioTiles(box)
 }
 
+// ── charts ────────────────────────────────────────────────────────────────
+
+const ASSET_CHART = {
+  width: 1120,
+  height: 460,
+  padLeft: 12,
+  padRight: 156,
+  padTop: 18,
+  padBottom: 30,
+}
+
+const assetChartColumns = () => state?.priceActionMatrix?.timeframes?.length
+  ? state.priceActionMatrix.timeframes
+  : [{ id: '1h', label: '1H' }, { id: '4h', label: '4H' }, { id: '1d', label: '1D' }]
+
+const assetChartSelection = () => {
+  const matrix = state?.priceActionMatrix
+  const columns = assetChartColumns()
+  const asset = matrix?.assets?.find((candidate) => candidate.symbol === selectedAssetChart.symbol) ?? matrix?.assets?.[0]
+  const timeframeId = columns.some((column) => column.id === selectedAssetChart.timeframeId)
+    ? selectedAssetChart.timeframeId
+    : columns.find((column) => column.id === '4h')?.id ?? columns[0]?.id
+  return { asset, timeframeId, column: columns.find((column) => column.id === timeframeId) ?? columns[0] }
+}
+
+const chartZones = (item, type) => {
+  const key = type === 'demand' ? 'nearbyDemand' : 'nearbySupply'
+  const nearby = item?.zones?.[key]
+  const fallback = item?.zones?.[type]
+  return (nearby?.length ? nearby : fallback ? [fallback] : [])
+    .filter((zone) => !zone.filledByOwnTimeframeClose)
+    .filter((zone) => zone && Number.isFinite(zone.low) && Number.isFinite(zone.high))
+    .slice(0, 3)
+}
+
+const renderAssetChart = () => {
+  const card = $('asset-chart-card')
+  const svg = $('asset-chart-svg')
+  const meta = $('asset-chart-meta')
+  const title = $('asset-chart-title')
+  const tabs = $('asset-chart-timeframes')
+  if (!card || !svg || !tabs) return
+  svg.replaceChildren()
+  tabs.replaceChildren()
+
+  if (currentStrategyView().id !== 'price-action') {
+    card.hidden = true
+    return
+  }
+
+  const matrix = state?.priceActionMatrix
+  const { asset, timeframeId, column } = assetChartSelection()
+  if (!asset) {
+    card.hidden = true
+    return
+  }
+  selectedAssetChart = { symbol: asset.symbol, timeframeId }
+  card.hidden = false
+  title.textContent = `${asset.symbol} · ${column?.label || timeframeId.toUpperCase()}`
+
+  for (const chartColumn of assetChartColumns()) {
+    const button = el('button', {
+      type: 'button',
+      className: 'asset-chart-tab',
+      role: 'tab',
+      'aria-selected': String(chartColumn.id === timeframeId),
+      text: chartColumn.label,
+    })
+    button.onclick = () => {
+      selectedAssetChart = { symbol: asset.symbol, timeframeId: chartColumn.id }
+      renderAssetChart()
+    }
+    tabs.append(button)
+  }
+
+  const item = asset.trends?.[timeframeId]
+  const candles = (item?.chartCandles ?? []).filter((candle) =>
+    [candle?.open, candle?.high, candle?.low, candle?.close].every(Number.isFinite)
+  )
+  if (!candles.length) {
+    meta.textContent = 'Pro tento asset a timeframe zatím nejsou publikované svíčky.'
+    svg.append(el('text', { className: 'asset-axis-label', x: 18, y: 32, text: 'čeká na data' }))
+    return
+  }
+
+  const zones = [
+    ...chartZones(item, 'demand').map((zone, index) => ({ ...zone, kind: 'demand', index })),
+    ...chartZones(item, 'supply').map((zone, index) => ({ ...zone, kind: 'supply', index })),
+  ]
+  const rawMin = Math.min(...candles.map((candle) => candle.low), ...zones.map((zone) => zone.low))
+  const rawMax = Math.max(...candles.map((candle) => candle.high), ...zones.map((zone) => zone.high))
+  const padding = (rawMax - rawMin || Math.max(1, Math.abs(rawMax) * 0.01)) * 0.08
+  const minPrice = Math.max(0, rawMin - padding)
+  const maxPrice = rawMax + padding
+  const plotWidth = ASSET_CHART.width - ASSET_CHART.padLeft - ASSET_CHART.padRight
+  const plotHeight = ASSET_CHART.height - ASSET_CHART.padTop - ASSET_CHART.padBottom
+  const x = (index) => ASSET_CHART.padLeft + (index / Math.max(1, candles.length - 1)) * plotWidth
+  const y = (value) => ASSET_CHART.padTop + ((maxPrice - value) / (maxPrice - minPrice)) * plotHeight
+  const candleWidth = Math.max(2, Math.min(12, (plotWidth / candles.length) * 0.62))
+
+  svg.setAttribute('viewBox', `0 0 ${ASSET_CHART.width} ${ASSET_CHART.height}`)
+  svg.setAttribute('preserveAspectRatio', 'none')
+
+  for (let step = 0; step <= 4; step += 1) {
+    const value = minPrice + ((maxPrice - minPrice) * step) / 4
+    const yy = y(value)
+    svg.append(
+      el('line', { className: 'asset-gridline', x1: ASSET_CHART.padLeft, x2: ASSET_CHART.width - ASSET_CHART.padRight, y1: yy, y2: yy }),
+      el('text', { className: 'asset-axis-label', x: ASSET_CHART.width - ASSET_CHART.padRight + 8, y: yy + 4, text: quotePrice(value) })
+    )
+  }
+
+  for (const zone of zones) {
+    const top = y(zone.high)
+    const bottom = y(zone.low)
+    svg.append(el('rect', {
+      className: `asset-zone-${zone.kind}`,
+      x: ASSET_CHART.padLeft,
+      y: Math.min(top, bottom),
+      width: plotWidth,
+      height: Math.max(2, Math.abs(bottom - top)),
+      rx: 2,
+    }))
+  }
+
+  for (const [index, candle] of candles.entries()) {
+    const xx = x(index)
+    const openY = y(candle.open)
+    const closeY = y(candle.close)
+    const highY = y(candle.high)
+    const lowY = y(candle.low)
+    const candleClass = candle.close >= candle.open ? 'asset-candle-up' : 'asset-candle-down'
+    svg.append(
+      el('line', { className: `asset-candle-wick ${candleClass}`, x1: xx, x2: xx, y1: highY, y2: lowY }),
+      el('rect', {
+        className: candleClass,
+        x: xx - candleWidth / 2,
+        y: Math.min(openY, closeY),
+        width: candleWidth,
+        height: Math.max(1.5, Math.abs(closeY - openY)),
+      })
+    )
+  }
+
+  const currentPrice = item?.price ?? candles.at(-1)?.close
+  if (Number.isFinite(currentPrice)) {
+    const currentY = y(currentPrice)
+    svg.append(
+      el('line', { className: 'asset-current-line', x1: ASSET_CHART.padLeft, x2: ASSET_CHART.width - ASSET_CHART.padRight, y1: currentY, y2: currentY }),
+      el('text', { className: 'asset-current-label', x: ASSET_CHART.width - ASSET_CHART.padRight + 8, y: currentY - 5, text: `close ${quotePrice(currentPrice)}` })
+    )
+  }
+
+  // Put zone labels in a separate right-hand lane and enforce a minimum gap so
+  // overlapping ranges remain readable even when several zones cluster.
+  const labelY = []
+  for (const zone of zones.sort((left, right) => y((left.low + left.high) / 2) - y((right.low + right.high) / 2))) {
+    const desired = y((zone.low + zone.high) / 2)
+    const previous = labelY.at(-1)
+    const placed = Math.min(ASSET_CHART.height - ASSET_CHART.padBottom - 4, Math.max(ASSET_CHART.padTop + 12, previous === undefined ? desired : previous + 22))
+    labelY.push(placed)
+    const prefix = zone.kind === 'demand' ? 'D' : 'S'
+    svg.append(el('text', {
+      className: `asset-zone-label asset-zone-label-${zone.kind}`,
+      x: ASSET_CHART.width - ASSET_CHART.padRight + 8,
+      y: placed,
+      text: `${prefix}${zone.index + 1} ${quotePrice(zone.low)}–${quotePrice(zone.high)}`,
+    }))
+  }
+
+  const first = candles[0]
+  const last = candles.at(-1)
+  meta.textContent = `${PRICE_ACTION_TREND_LABELS[item?.trend] || 'flat'} · close ${quotePrice(currentPrice)} · ${when(first.time)} až ${when(last.time)}`
+}
+
 // ── equity chart ──────────────────────────────────────────────────────────
 
 const CHART = { width: 900, height: 190, padLeft: 62, padRight: 12, padTop: 12, padBottom: 24 }
@@ -1244,7 +1436,7 @@ const missingProfileGates = (profile) =>
 
 const profileAssetCell = (entry) =>
   el('td', {}, [
-    el('strong', { text: entry.asset.symbol }),
+    assetTickerButton(entry.asset.symbol, entry.column.id),
     el('span', { className: 'asset-name', text: ` ${entry.column.label}` }),
   ])
 
@@ -1548,8 +1740,7 @@ const renderPriceActionBacktests = (host) => {
     body.append(
       el('tr', {}, [
         el('td', {}, [
-          el('strong', { text: asset.symbol }),
-          el('span', { className: 'asset-name', text: asset.name ? ` ${asset.name}` : '' }),
+          assetTickerButton(asset.symbol, priceActionDecisionTimeframe),
         ]),
         ...columns.map((column) =>
           el('td', {}, [decisionFactElement(backtestStatus(priceActionBacktestResult(asset, column.id)))])
@@ -1645,7 +1836,7 @@ const renderFilledZonesLog = (host) => {
   const body = table.querySelector('tbody')
   for (const { asset, column, type, zone } of rows.sort((left, right) => (right.zone.filledAt ?? 0) - (left.zone.filledAt ?? 0))) {
     body.append(el('tr', {}, [
-      el('td', {}, [el('strong', { text: asset.symbol }), el('span', { className: 'asset-name', text: asset.name ? ` ${asset.name}` : '' })]),
+      el('td', {}, [assetTickerButton(asset.symbol, column.id)]),
       el('td', { text: column.label }),
       el('td', { text: type === 'demand' ? 'Demand' : 'Supply' }),
       el('td', {}, [zoneRangeTrigger({ zone, timeframeId: column.id, title: 'Kliknutím zobrazit definiční svíčky zóny.' })]),
@@ -1801,8 +1992,7 @@ const renderStrategyLab = () => {
     body.append(
       el('tr', {}, [
         el('td', {}, [
-          el('strong', { text: asset.symbol }),
-          el('span', { className: 'asset-name', text: asset.name ? ` ${asset.name}` : '' }),
+          assetTickerButton(asset.symbol, priceActionDecisionTimeframe),
         ]),
         ...columns.map((column) => {
           const item = asset.trends?.[column.id] ?? { trend: 'flat', reason: 'bez dat' }
@@ -1930,6 +2120,7 @@ const renderAll = () => {
   renderNotices()
   renderTiles()
   renderDecision()
+  renderAssetChart()
   renderChart()
   renderOpen()
   renderOrders()

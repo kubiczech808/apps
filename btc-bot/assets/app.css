@@ -203,6 +203,61 @@ button.primary { color: #fff; background: var(--series-1); border-color: transpa
 .chart .tick { fill: var(--text-muted); font-size: 11px; font-variant-numeric: tabular-nums; }
 .chart .crosshair { stroke: var(--axis); stroke-width: 1; stroke-dasharray: 3 3; }
 .chart .cursor { fill: var(--series-1); stroke: var(--surface-1); stroke-width: 2; }
+.collapsible-chart { padding: 0 0 10px; }
+.collapsible-chart summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 16px 10px;
+  cursor: pointer;
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 600;
+  list-style: none;
+}
+.collapsible-chart summary::-webkit-details-marker { display: none; }
+.collapsible-chart summary::after { content: '+'; color: var(--text-muted); font-size: 18px; line-height: 1; }
+.collapsible-chart[open] summary::after { content: '−'; }
+.summary-hint { margin-left: auto; color: var(--text-muted); font-size: 11px; font-weight: 400; }
+.collapsible-chart[open] .summary-hint { display: none; }
+.collapsible-chart[open] .chart { padding: 0 16px; }
+.asset-chart-card { scroll-margin-top: 16px; }
+.asset-chart-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  margin-bottom: 10px;
+}
+.asset-chart-head h2 { margin-bottom: 2px; color: var(--text-primary); font-size: 16px; }
+.asset-chart-head p { margin: 0; color: var(--text-muted); font-size: 12px; }
+.asset-chart-timeframes { display: flex; gap: 4px; flex-wrap: wrap; justify-content: flex-end; }
+.asset-chart-tab { min-width: 48px; padding: 5px 9px; border-radius: 999px; color: var(--text-secondary); }
+.asset-chart-tab[aria-selected="true"] { background: var(--text-primary); color: var(--page); border-color: transparent; }
+.asset-price-chart svg { height: 420px; }
+.asset-price-chart .asset-gridline { stroke: var(--grid); stroke-width: 1; }
+.asset-price-chart .asset-axis-label { fill: var(--text-muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+.asset-price-chart .asset-candle-wick { stroke-width: 1; }
+.asset-price-chart .asset-candle-up { fill: var(--good-text); stroke: var(--good-text); }
+.asset-price-chart .asset-candle-down { fill: var(--critical); stroke: var(--critical); }
+.asset-price-chart .asset-zone-demand { fill: var(--good); fill-opacity: 0.13; stroke: var(--good-text); stroke-opacity: 0.58; }
+.asset-price-chart .asset-zone-supply { fill: var(--critical); fill-opacity: 0.12; stroke: var(--critical-text); stroke-opacity: 0.58; }
+.asset-price-chart .asset-zone-label { font-size: 11px; font-weight: 650; font-variant-numeric: tabular-nums; }
+.asset-price-chart .asset-zone-label-demand { fill: var(--good-text); }
+.asset-price-chart .asset-zone-label-supply { fill: var(--critical-text); }
+.asset-price-chart .asset-current-line { stroke: var(--series-1); stroke-width: 1; stroke-dasharray: 4 3; }
+.asset-price-chart .asset-current-label { fill: var(--series-1); font-size: 11px; font-weight: 650; }
+.asset-ticker {
+  padding: 0;
+  border: 0;
+  border-bottom: 1px dashed var(--axis);
+  border-radius: 0;
+  background: transparent;
+  color: var(--text-primary);
+  font-weight: 650;
+}
+.asset-ticker:hover { border-color: var(--series-1); color: var(--series-1); }
 
 .tooltip {
   position: absolute;
@@ -247,6 +302,12 @@ tbody tr:hover { background: var(--series-1-soft); }
 .side-short { color: var(--critical); font-weight: 600; }
 .empty { padding: 24px 10px; color: var(--text-muted); text-align: center; }
 .reason { white-space: normal; color: var(--text-secondary); max-width: 460px; }
+
+@media (max-width: 700px) {
+  .asset-chart-head { display: block; }
+  .asset-chart-timeframes { justify-content: flex-start; margin-top: 10px; }
+  .asset-price-chart svg { height: 340px; }
+}
 
 /* ── settings ───────────────────────────────────────────────────────────── */
 

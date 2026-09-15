@@ -341,6 +341,7 @@ test('price-action matrix covers BTCUSD and major FX pairs on 1H, 4H and 1D', as
   assert.equal(matrix.assets[0].trends['4h'].structure.historyDays, 180)
   assert.ok(matrix.assets[0].trends['4h'].zones)
   assert.ok(matrix.assets[0].trends['4h'].tradeProfile)
+  assert.ok(matrix.assets[0].trends['4h'].chartCandles.length <= 160)
 })
 
 test('fresh price-action matrix is reused instead of refetching every bot pass', async () => {
@@ -350,9 +351,9 @@ test('fresh price-action matrix is reused instead of refetching every bot pass',
     assets: PRICE_ACTION_ASSETS.map((asset) => ({
       symbol: asset.symbol,
       trends: {
-        '1h': { structure: {} },
-        '4h': { structure: {} },
-        '1d': { structure: {} },
+        '1h': { structure: {}, chartCandles: [] },
+        '4h': { structure: {}, chartCandles: [] },
+        '1d': { structure: {}, chartCandles: [] },
       },
     })),
   }
@@ -374,9 +375,9 @@ test('stored hourly price-action refresh is capped so entry profiles are checked
     assets: PRICE_ACTION_ASSETS.map((asset) => ({
       symbol: asset.symbol,
       trends: {
-        '1h': { structure: {} },
-        '4h': { structure: {} },
-        '1d': { structure: {} },
+        '1h': { structure: {}, chartCandles: [] },
+        '4h': { structure: {}, chartCandles: [] },
+        '1d': { structure: {}, chartCandles: [] },
       },
     })),
   }

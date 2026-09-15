@@ -42,16 +42,30 @@
 
   <section class="tiles" id="tiles"></section>
 
+  <details class="card collapsible-chart" id="equity-panel">
+    <summary><span id="equity-title">Vývoj kapitálu (sats)</span><span class="summary-hint">zobrazit graf</span></summary>
+    <div class="chart" id="equity-chart">
+      <svg id="equity-svg" role="img" aria-label="Vývoj kapitálu účtu v sats"></svg>
+      <div class="tooltip" id="equity-tooltip" hidden></div>
+    </div>
+  </details>
+
   <section class="card" id="decision-card" hidden>
     <h2>Co bot právě vidí</h2>
     <div id="decision"></div>
   </section>
 
-  <section class="card">
-    <h2 id="equity-title">Vývoj kapitálu (sats)</h2>
-    <div class="chart" id="equity-chart">
-      <svg id="equity-svg" role="img" aria-label="Vývoj kapitálu účtu v sats"></svg>
-      <div class="tooltip" id="equity-tooltip" hidden></div>
+  <section class="card asset-chart-card" id="asset-chart-card" hidden>
+    <div class="asset-chart-head">
+      <div>
+        <h2 id="asset-chart-title">Asset</h2>
+        <p id="asset-chart-meta">Vyber asset v přehledu.</p>
+      </div>
+      <div class="asset-chart-timeframes" id="asset-chart-timeframes" role="tablist" aria-label="Timeframe grafu assetu"></div>
+    </div>
+    <div class="chart asset-price-chart" id="asset-price-chart">
+      <svg id="asset-chart-svg" role="img" aria-label="Cenový graf assetu se supply a demand zónami"></svg>
+      <div class="tooltip" id="asset-chart-tooltip" hidden></div>
     </div>
   </section>
 

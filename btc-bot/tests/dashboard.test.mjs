@@ -168,6 +168,20 @@ test('strategy switching lives in the header and redraws dashboard context', () 
   assert.match(css, /zone-range-trigger/)
 })
 
+test('asset tickers open a timeframe price chart with supply and demand zones', () => {
+  assert.ok(html.includes('id="asset-chart-card"'), 'dashboard must contain the asset chart below the decision table')
+  assert.ok(html.includes('id="asset-chart-svg"'), 'dashboard must contain the asset chart surface')
+  assert.ok(html.includes('id="equity-panel"'), 'equity chart must live in a collapsible panel')
+  assert.match(js, /assetTickerButton/)
+  assert.match(js, /renderAssetChart/)
+  assert.match(js, /chartCandles/)
+  assert.match(css, /collapsible-chart/)
+  assert.match(css, /asset-price-chart/)
+  assert.match(css, /asset-ticker/)
+  assert.match(css, /asset-zone-demand/)
+  assert.match(css, /asset-zone-supply/)
+})
+
 test('backtests tab prepares a timeframe matrix for tuned strategies', () => {
   assert.ok(html.includes('data-tab="backtests"'), 'dashboard must expose the backtests tab')
   assert.ok(html.includes('id="panel-backtests"'), 'backtests tab must have a panel')

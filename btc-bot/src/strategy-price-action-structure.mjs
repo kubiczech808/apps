@@ -2,7 +2,8 @@ import { aggregate, HOUR_MS } from './candles.mjs'
 import { buildZones, candleSignal, marketStructure } from './priceaction.mjs'
 
 export const PRICE_ACTION_STRUCTURE_ID = 'price-action-structure-v1'
-export const PRICE_ACTION_MATRIX_SCHEMA = 8
+export const PRICE_ACTION_MATRIX_SCHEMA = 9
+export const PRICE_ACTION_CHART_CANDLE_LIMIT = 160
 
 export const DEFAULT_PRICE_ACTION_STRUCTURE = {
   zoneLookback: 2,
@@ -697,6 +698,7 @@ export const classifyStructure = (
       candles: candles?.length ?? 0,
       lastCandle: candleSummary(candles?.at?.(-1)),
       candleSignal: null,
+      chartCandles: (candles ?? []).slice(-PRICE_ACTION_CHART_CANDLE_LIMIT).map(candleSummary),
       zones: null,
     }
   }
@@ -747,6 +749,7 @@ export const classifyStructure = (
     candles: candles.length,
     lastCandle: candleSummary(latest),
     candleSignal: candleSignal(candles),
+    chartCandles: candles.slice(-PRICE_ACTION_CHART_CANDLE_LIMIT).map(candleSummary),
     lastHigh: structure.lastHigh?.price ?? null,
     lastLow: structure.lastLow?.price ?? null,
     structure: {
@@ -787,7 +790,7 @@ const timeframeCandles = async ({ asset, timeframe, btcHourly, fetchImpl, now, l
 
 const hasStructureDetails = (matrix) =>
   Boolean(matrix?.schemaVersion === PRICE_ACTION_MATRIX_SCHEMA && matrix?.assets?.every((asset) =>
-    PRICE_ACTION_TIMEFRAMES.every((timeframe) => asset.trends?.[timeframe.id]?.structure)
+    PRICE_ACTION_TIMEFRAMES.every((timeframe) => asset.trends?.[timeframe.id]?.structure && Array.isArray(asset.trends?.[timeframe.id]?.chartCandles))
   ))
 
 const isFresh = (matrix, now, refreshMinutes) => {
