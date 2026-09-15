@@ -176,6 +176,9 @@ export const buildZones = (candles, { lookback = 2, tolerance, maxAgeCandles = 4
           high: zone.high,
           direction: swing.kind === 'low' ? 'bullish' : 'bearish',
         }),
+        definingIndexes: [swing.index - 1, swing.index, swing.index + 1].filter(
+          (index) => index >= 0 && index < candles.length
+        ),
       }
     })
 
@@ -204,6 +207,7 @@ export const buildZones = (candles, { lookback = 2, tolerance, maxAgeCandles = 4
       firstIndex: item.swing.index,
       lastIndex: item.swing.index,
       lastTime: item.swing.time,
+      definingIndexes: item.definingIndexes,
     })
   }
 

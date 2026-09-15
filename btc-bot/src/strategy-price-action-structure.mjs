@@ -2,7 +2,7 @@ import { aggregate, HOUR_MS } from './candles.mjs'
 import { buildZones, candleSignal, marketStructure } from './priceaction.mjs'
 
 export const PRICE_ACTION_STRUCTURE_ID = 'price-action-structure-v1'
-export const PRICE_ACTION_MATRIX_SCHEMA = 5
+export const PRICE_ACTION_MATRIX_SCHEMA = 6
 
 export const DEFAULT_PRICE_ACTION_STRUCTURE = {
   zoneLookback: 2,
@@ -314,6 +314,11 @@ const candleSummary = (candle) =>
       }
     : null
 
+const definingCandleSummary = (index, candles) => {
+  const summary = candleSummary(candles[index])
+  return summary ? { index, ...summary } : null
+}
+
 const zoneSummary = (zone, candles, price) => ({
   type: zone.type,
   low: zone.low,
@@ -325,6 +330,9 @@ const zoneSummary = (zone, candles, price) => ({
   lastTime: zone.lastTime ?? candles[zone.lastIndex]?.time ?? null,
   firstIndex: zone.firstIndex,
   lastIndex: zone.lastIndex,
+  definingCandles: (zone.definingIndexes ?? [])
+    .map((index) => definingCandleSummary(index, candles))
+    .filter(Boolean),
   filledByOwnTimeframeClose: zoneFilledByOwnTimeframeClose(zone, candles),
   invalidatedByOwnTimeframeClose: zoneInvalidated(zone, candles),
   distancePct: zoneDistancePct(zone, price),
@@ -341,6 +349,8 @@ export const activeSupplyDemandZones = (candles, { lookback = 2, maxAgeCandles =
     pool.filter((zone) => zone.type === type).sort((a, b) => (b.lastIndex ?? 0) - (a.lastIndex ?? 0))[0] ?? null
   const byType = (type, pool = unfilled) =>
     pool.filter((zone) => zone.type === type).sort((a, b) => (b.lastIndex ?? 0) - (a.lastIndex ?? 0))
+  const nearby = (type) =>
+    byType(type).sort((a, b) => Math.abs(a.distancePct ?? Infinity) - Math.abs(b.distancePct ?? Infinity))
 
   return {
     demand: latest('demand'),
@@ -349,6 +359,8 @@ export const activeSupplyDemandZones = (candles, { lookback = 2, maxAgeCandles =
     latestValidSupply: latest('supply', zones),
     unfilledDemand: byType('demand'),
     unfilledSupply: byType('supply'),
+    nearbyDemand: nearby('demand'),
+    nearbySupply: nearby('supply'),
     unfilledCount: unfilled.length,
     validCount: zones.length,
     rule: 'Zóna je invalidovaná jen close průrazem na vlastním timeframe; dotek/filled na nižším timeframe ji neruší.',

@@ -174,6 +174,13 @@ test('supply and demand zones stay valid unless their own timeframe closes throu
   const zones = activeSupplyDemandZones(candles, { lookback: 1, maxAgeCandles: 100 })
   assert.ok(zones.demand, 'expected a demand zone')
   assert.ok(zones.supply, 'expected a supply zone')
+  assert.ok(zones.nearbyDemand.length >= 1, 'expected nearby demand zones')
+  assert.ok(zones.nearbySupply.length >= 1, 'expected nearby supply zones')
+  assert.equal(zones.demand.definingCandles.length, 3, 'a zone should expose its three defining candles')
+  assert.deepEqual(
+    zones.demand.definingCandles.map((candleItem) => candleItem.time),
+    [START + 2 * HOUR, START + 3 * HOUR, START + 4 * HOUR]
+  )
   assert.equal(zones.demand.invalidatedByOwnTimeframeClose, false)
   assert.equal(zones.demand.filledByOwnTimeframeClose, false)
   assert.equal(zones.demand.low, 99)

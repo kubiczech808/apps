@@ -359,20 +359,37 @@ const PRICE_ACTION_DECISION_COLUMNS = [
 
 const profileGate = (profile, id) => profile?.gates?.find((item) => item.id === id) ?? null
 
-const zoneValue = (zone, prefix) => (zone ? `${prefix} ${zoneRange(zone)}` : 'není')
+const zoneList = (item, type) => {
+  const key = type === 'demand' ? 'Demand' : 'Supply'
+  const nearby = item?.zones?.[`nearby${key}`]
+  if (nearby?.length) return nearby
+  const unfilled = item?.zones?.[`unfilled${key}`]
+  if (unfilled?.length) return unfilled
+  const fallback = item?.zones?.[type] ?? item?.zones?.[`latestValid${key}`]
+  return fallback ? [fallback] : []
+}
 
-const zoneFact = (item, profile, type) => {
+const sameZone = (left, right) => Boolean(left && right && left.low === right.low && left.high === right.high)
+
+const zoneDefiningTimes = (zone) =>
+  (zone?.definingCandles ?? []).map((candle) => when(candle.time)).join(' · ') || 'časové razítko není k dispozici'
+
+const zoneListElement = (item, profile, type) => {
+  const zones = zoneList(item, type)
   const active = profile?.side === 'long' ? 'demand' : profile?.side === 'short' ? 'supply' : null
-  const profileZone = active === type ? profile?.zone : active && profile?.tp2Zone
-  const zone = profileZone ?? item?.zones?.[type] ?? item?.zones?.[`latestValid${type === 'demand' ? 'Demand' : 'Supply'}`]
-  if (!active) return decisionFact(zoneValue(zone, type === 'demand' ? 'D' : 'S'), 'neutral', 'Bez směru struktury není zóna vstupní branou.')
-  if (active !== type) return decisionFact(zoneValue(zone, type === 'demand' ? 'D' : 'S'), 'neutral', 'Nejbližší protější nevyplněná zóna je zobrazena jako orientační TP2 cíl.')
   const gate = profileGate(profile, 'zone')
-  return decisionFact(
-    zoneValue(zone, type === 'demand' ? 'D' : 'S'),
-    gate?.status ?? (zone ? 'unmet' : 'unmet'),
-    gate?.detail ?? 'Pro vstup musí cena zasáhnout správnou nevyplněnou supply/demand zónu.'
-  )
+  if (!zones.length) return [decisionFactElement(decisionFact('není', 'neutral', 'Na tomto timeframe není platná zóna.'))]
+  return zones.map((zone) => {
+    const selected = active === type && sameZone(zone, profile?.zone)
+    const status = selected ? (profile?.zoneHit ? 'met' : gate?.status ?? 'unmet') : 'neutral'
+    const title = selected
+      ? gate?.detail ?? 'Pracovní vstupní supply/demand zóna.'
+      : 'Platná nevyplněná zóna v okolí aktuální ceny.'
+    return el('div', { className: 'pa-zone-item' }, [
+      decisionFactElement(decisionFact(zoneRange(zone), status, title)),
+      el('span', { className: 'pa-zone-times', text: `3 svíčky: ${zoneDefiningTimes(zone)}` }),
+    ])
+  })
 }
 
 const priceFact = (value, label, title = null) =>
@@ -391,9 +408,9 @@ const priceActionDecisionFact = (entry, column) => {
     case 'price':
       return priceFact(item?.price, 'close', 'Aktuální close poslední svíčky na tomto timeframe.')
     case 'demand':
-      return zoneFact(item, profile, 'demand')
+      return null
     case 'supply':
-      return zoneFact(item, profile, 'supply')
+      return null
     case 'pullback': {
       const gate = profileGate(profile, 'pullback')
       const level = profile?.pullbackLevel
@@ -435,9 +452,11 @@ const priceActionDecisionFact = (entry, column) => {
 }
 
 const priceActionDecisionCell = (entry, column) =>
-  el('td', { className: `pa-decision-cell pa-decision-cell-${column.id}` }, [
-    decisionFactElement(priceActionDecisionFact(entry, column)),
-  ])
+  el('td', { className: `pa-decision-cell pa-decision-cell-${column.id}` },
+    column.id === 'demand' || column.id === 'supply'
+      ? zoneListElement(entry.item, entry.profile, column.id)
+      : [decisionFactElement(priceActionDecisionFact(entry, column))]
+  )
 
 const renderPriceActionDecisionTabs = (columns) => {
   const selected = columns.some((column) => column.id === priceActionDecisionTimeframe)
@@ -541,32 +560,33 @@ const legCard = (title, leg, emptyText) =>
 
 const zoneRange = (zone) => (zone ? `${quotePrice(zone.low)} – ${quotePrice(zone.high)}` : '–')
 
-const zoneCard = (title, primary, fallback, emptyText) => {
-  const zone = primary ?? fallback
-  const fallbackUsed = !primary && fallback
-  return el('div', { className: 'structure-leg zone-leg' }, [
+const zoneCard = (title, zones, emptyText) => el('div', { className: 'structure-leg zone-leg' }, [
     el('strong', { text: title }),
-    zone
-      ? el('div', { className: 'structure-leg-flow' }, [
-          el('span', { text: zoneRange(zone) }),
-          Number.isFinite(zone.distancePct)
-            ? el('span', { className: 'structure-meta', text: `vzdál. ${signedPct(zone.distancePct).text}` })
-            : null,
-        ])
+    zones?.length
+      ? el('div', { className: 'zone-list' }, zones.map((zone, index) => el('div', { className: 'zone-item' }, [
+          el('div', { className: 'structure-leg-flow' }, [
+            el('span', { text: `${index + 1}. ${zoneRange(zone)}` }),
+            Number.isFinite(zone.distancePct)
+              ? el('span', { className: 'structure-meta', text: `vzdál. ${signedPct(zone.distancePct).text}` })
+              : null,
+          ]),
+          el('span', {
+            className: 'structure-meta',
+            text: [
+              'nevyplněná',
+              `touches ${zone.touches ?? 1}`,
+              zone.swept ? 'sweep' : null,
+              zone.imbalance ? 'imbalance' : null,
+            ].filter(Boolean).join(' · '),
+          }),
+          el('span', { className: 'zone-candle-times', text: `3 definující svíčky: ${zoneDefiningTimes(zone)}` }),
+        ])))
       : el('p', { text: emptyText }),
-    zone
-      ? el('span', {
-          className: 'structure-meta',
-          text: [
-            fallbackUsed ? 'poslední platná, už vyplněná close na tomto TF' : 'poslední nevyplněná',
-            `touches ${zone.touches ?? 1}`,
-            zone.swept ? 'sweep' : null,
-            zone.imbalance ? 'imbalance' : null,
-            zone.lastTime ? when(zone.lastTime) : null,
-          ].filter(Boolean).join(' · '),
-        })
-      : null,
   ])
+
+const zonesForDetail = (zones, type) => {
+  const list = zoneList({ zones }, type)
+  return list
 }
 
 const renderZonesDetail = (zones) => {
@@ -574,8 +594,8 @@ const renderZonesDetail = (zones) => {
   return el('div', { className: 'zone-detail' }, [
     el('strong', { text: 'Supply / demand zóny' }),
     el('div', { className: 'structure-legs' }, [
-      zoneCard('Demand', zones.demand, zones.latestValidDemand, 'Žádná platná demand zóna na tomto timeframe.'),
-      zoneCard('Supply', zones.supply, zones.latestValidSupply, 'Žádná platná supply zóna na tomto timeframe.'),
+      zoneCard('Demand', zonesForDetail(zones, 'demand'), 'Žádná platná demand zóna na tomto timeframe.'),
+      zoneCard('Supply', zonesForDetail(zones, 'supply'), 'Žádná platná supply zóna na tomto timeframe.'),
     ]),
     el('p', { className: 'zone-rule', text: zones.rule || 'Zóna se invaliduje jen na vlastním timeframe.' }),
   ])
