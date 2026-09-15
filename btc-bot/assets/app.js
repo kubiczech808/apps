@@ -376,7 +376,24 @@ const zoneList = (item, type, { includeFilled = false } = {}) => {
   return fallback && (!fallback.filledByOwnTimeframeClose || includeFilled) ? [fallback] : []
 }
 
-const sameZone = (left, right) => Boolean(left && right && left.low === right.low && left.high === right.high)
+const sameZone = (left, right) => {
+  if (!left || !right || left.type !== right.type) return false
+  const scale = Math.max(1, Math.abs(left.low), Math.abs(left.high), Math.abs(right.low), Math.abs(right.high))
+  const tolerance = scale * 1e-9
+  return Math.abs(left.low - right.low) <= tolerance && Math.abs(left.high - right.high) <= tolerance
+}
+
+const zoneCandidateFor = (candidates, zone) => {
+  const exact = candidates.find((entry) => sameZone(entry.zone, zone))
+  if (exact) return exact
+  return candidates
+    .filter((entry) => entry.zone?.type === zone?.type && entry.zone?.low <= zone?.high && entry.zone?.high >= zone?.low)
+    .sort((left, right) => {
+      const leftDistance = Math.abs((left.zone.low ?? 0) - (zone.low ?? 0)) + Math.abs((left.zone.high ?? 0) - (zone.high ?? 0))
+      const rightDistance = Math.abs((right.zone.low ?? 0) - (zone.low ?? 0)) + Math.abs((right.zone.high ?? 0) - (zone.high ?? 0))
+      return leftDistance - rightDistance
+    })[0] ?? null
+}
 
 const zoneDefiningTimes = (zone, timeframeId) =>
   (zone?.definingCandles ?? [])
@@ -635,7 +652,7 @@ const zoneCard = (title, zones, emptyText, timeframeId, candidates = []) => el('
     zones?.length
       ? el('div', { className: 'zone-list' }, zones.map((zone, index) => el('div', { className: 'zone-item' }, [
           (() => {
-            const candidate = candidates.find((entry) => sameZone(entry.zone, zone))
+            const candidate = zoneCandidateFor(candidates, zone)
             return el('div', { className: 'structure-leg-flow' }, [
               el('span', { className: 'zone-index', text: `${index + 1}.` }),
               zoneRangeTrigger({
