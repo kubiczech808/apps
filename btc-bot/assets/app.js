@@ -54,6 +54,13 @@ const when = (value) => {
   return date.toLocaleString('cs-CZ', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
 }
 
+const dateOnly = (value) => {
+  if (!value) return '–'
+  const date = typeof value === 'number' ? new Date(value) : new Date(String(value))
+  if (Number.isNaN(date.getTime())) return '–'
+  return date.toLocaleDateString('cs-CZ', { day: '2-digit', month: '2-digit' })
+}
+
 const calendarDate = (value) => {
   if (!value) return '–'
   const date = typeof value === 'number' ? new Date(value) : new Date(String(value))
@@ -371,10 +378,31 @@ const zoneList = (item, type) => {
 
 const sameZone = (left, right) => Boolean(left && right && left.low === right.low && left.high === right.high)
 
-const zoneDefiningTimes = (zone) =>
-  (zone?.definingCandles ?? []).map((candle) => when(candle.time)).join(' · ') || 'časové razítko není k dispozici'
+const zoneDefiningTimes = (zone, timeframeId) =>
+  (zone?.definingCandles ?? [])
+    .map((candle) => timeframeId === '1d' ? dateOnly(candle.time) : when(candle.time))
+    .join('\n') || 'datum není k dispozici'
 
-const zoneListElement = (item, profile, type) => {
+const zoneRangeTrigger = ({ zone, status = 'neutral', title = null, timeframeId }) => {
+  const button = el('button', {
+    type: 'button',
+    className: `fact fact-${status} zone-range-trigger`,
+    text: zoneRange(zone),
+    title: title ?? 'Kliknutím zobrazit definiční svíčky zóny.',
+    'aria-expanded': 'false',
+  })
+  const popup = el('div', { className: 'zone-date-popover', role: 'tooltip', hidden: true }, [
+    el('span', { className: 'zone-date-values', text: zoneDefiningTimes(zone, timeframeId) }),
+  ])
+  button.onclick = () => {
+    const open = popup.hidden
+    popup.hidden = !open
+    button.setAttribute('aria-expanded', String(open))
+  }
+  return el('div', { className: 'zone-range-control' }, [button, popup])
+}
+
+const zoneListElement = (item, profile, type, timeframeId) => {
   const zones = zoneList(item, type)
   const active = profile?.side === 'long' ? 'demand' : profile?.side === 'short' ? 'supply' : null
   const gate = profileGate(profile, 'zone')
@@ -388,8 +416,7 @@ const zoneListElement = (item, profile, type) => {
         ? 'Platná zóna v okolí aktuální ceny, ale close na vlastním timeframe ji už vyplnil.'
         : 'Platná nevyplněná zóna v okolí aktuální ceny.'
     return el('div', { className: 'pa-zone-item' }, [
-      decisionFactElement(decisionFact(zoneRange(zone), status, title)),
-      el('span', { className: 'pa-zone-times', text: `3 svíčky: ${zoneDefiningTimes(zone)}` }),
+      zoneRangeTrigger({ zone, status, title, timeframeId }),
     ])
   })
 }
@@ -454,9 +481,9 @@ const priceActionDecisionFact = (entry, column) => {
 }
 
 const priceActionDecisionCell = (entry, column) =>
-  el('td', { className: `pa-decision-cell pa-decision-cell-${column.id}` },
+    el('td', { className: `pa-decision-cell pa-decision-cell-${column.id}` },
     column.id === 'demand' || column.id === 'supply'
-      ? zoneListElement(entry.item, entry.profile, column.id)
+      ? zoneListElement(entry.item, entry.profile, column.id, entry.column.id)
       : [decisionFactElement(priceActionDecisionFact(entry, column))]
   )
 
@@ -562,12 +589,13 @@ const legCard = (title, leg, emptyText) =>
 
 const zoneRange = (zone) => (zone ? `${quotePrice(zone.low)} – ${quotePrice(zone.high)}` : '–')
 
-const zoneCard = (title, zones, emptyText) => el('div', { className: 'structure-leg zone-leg' }, [
+const zoneCard = (title, zones, emptyText, timeframeId) => el('div', { className: 'structure-leg zone-leg' }, [
     el('strong', { text: title }),
     zones?.length
       ? el('div', { className: 'zone-list' }, zones.map((zone, index) => el('div', { className: 'zone-item' }, [
           el('div', { className: 'structure-leg-flow' }, [
-            el('span', { text: `${index + 1}. ${zoneRange(zone)}` }),
+            el('span', { className: 'zone-index', text: `${index + 1}.` }),
+            zoneRangeTrigger({ zone, timeframeId, title: 'Kliknutím zobrazit definiční svíčky zóny.' }),
             Number.isFinite(zone.distancePct)
               ? el('span', { className: 'structure-meta', text: `vzdál. ${signedPct(zone.distancePct).text}` })
               : null,
@@ -581,7 +609,6 @@ const zoneCard = (title, zones, emptyText) => el('div', { className: 'structure-
               zone.imbalance ? 'imbalance' : null,
             ].filter(Boolean).join(' · '),
           }),
-          el('span', { className: 'zone-candle-times', text: `3 definující svíčky: ${zoneDefiningTimes(zone)}` }),
         ])))
       : el('p', { text: emptyText }),
   ])
@@ -591,13 +618,13 @@ const zonesForDetail = (zones, type) => {
   return list
 }
 
-const renderZonesDetail = (zones) => {
+const renderZonesDetail = (zones, timeframeId) => {
   if (!zones) return null
   return el('div', { className: 'zone-detail' }, [
     el('strong', { text: 'Supply / demand zóny' }),
     el('div', { className: 'structure-legs' }, [
-      zoneCard('Demand', zonesForDetail(zones, 'demand'), 'Žádná platná demand zóna na tomto timeframe.'),
-      zoneCard('Supply', zonesForDetail(zones, 'supply'), 'Žádná platná supply zóna na tomto timeframe.'),
+      zoneCard('Demand', zonesForDetail(zones, 'demand'), 'Žádná platná demand zóna na tomto timeframe.', timeframeId),
+      zoneCard('Supply', zonesForDetail(zones, 'supply'), 'Žádná platná supply zóna na tomto timeframe.', timeframeId),
     ]),
     el('p', { className: 'zone-rule', text: zones.rule || 'Zóna se invaliduje jen na vlastním timeframe.' }),
   ])
@@ -695,7 +722,7 @@ const renderStructureDetail = ({ matrix, columns }) => {
       legCard('Swing highs', structure.high, 'Zatím nejsou dva potvrzené swing highs.'),
       legCard('Swing lows', structure.low, 'Zatím nejsou dva potvrzené swing lows.'),
     ]),
-    renderZonesDetail(item.zones),
+    renderZonesDetail(item.zones, column.id),
     renderTradeProfile(item.tradeProfile),
     el('div', { className: 'structure-meta-line' }, [
       el('span', { text: `${item.candles ?? 0} svíček` }),

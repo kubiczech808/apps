@@ -365,16 +365,39 @@ tbody tr:hover { background: var(--series-1-soft); }
   min-width: 180px;
 }
 .pa-zone-item {
+  position: relative;
   display: grid;
   gap: 2px;
   justify-items: center;
 }
-.pa-zone-times,
-.zone-candle-times {
-  color: var(--text-muted);
-  font-size: 10px;
-  line-height: 1.25;
-  white-space: normal;
+.zone-range-control {
+  position: relative;
+  display: inline-flex;
+}
+.zone-range-trigger {
+  cursor: pointer;
+  font: inherit;
+}
+.zone-date-popover {
+  position: absolute;
+  top: calc(100% + 5px);
+  left: 50%;
+  z-index: 5;
+  min-width: 112px;
+  padding: 7px 9px;
+  transform: translateX(-50%);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-1);
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.16);
+  color: var(--text-primary);
+  font-size: 11px;
+  line-height: 1.45;
+  text-align: left;
+  white-space: pre-line;
+}
+.zone-date-values {
+  display: block;
 }
 .zone-list {
   display: grid;
