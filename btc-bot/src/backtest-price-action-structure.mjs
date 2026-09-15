@@ -131,6 +131,7 @@ export const runPriceActionStructureBacktest = ({
   let directionalProfiles = 0
   let readyProfiles = 0
   let zoneHits = 0
+  let positionClosedThisCandle = false
 
   const recordExit = (reason, exitPrice, at) => {
     if (!position) return
@@ -155,6 +156,7 @@ export const runPriceActionStructureBacktest = ({
       holdDays: (at - position.openedAt) / (24 * HOUR_MS),
     })
     position = null
+    positionClosedThisCandle = true
   }
 
   const takePartial = (fraction, exitPrice, at) => {
@@ -170,6 +172,7 @@ export const runPriceActionStructureBacktest = ({
   const markEquity = (close) => cash + (position ? position.notional * position.remaining * closeValue(position, close) : 0)
 
   for (let index = 0; index < ordered.length; index += 1) {
+    positionClosedThisCandle = false
     const candle = ordered[index]
     const candleEnd = candle.time + timeframeHours * HOUR_MS
     // A limit order can be waiting before this candle opens. Build its profile
@@ -230,7 +233,9 @@ export const runPriceActionStructureBacktest = ({
     }
 
     equityCurve.push({ at: candleEnd, equity: markEquity(candle.close) })
-    if (position || tradeProfile.status !== 'ready' || lastAcceptedCandle === profiledItem.asOf) continue
+    // A position that just exited has already consumed this candle. Do not
+    // re-enter from the same OHLC range after its stop or invalidation.
+    if (positionClosedThisCandle || position || tradeProfile.status !== 'ready' || lastAcceptedCandle === profiledItem.asOf) continue
 
     const trade = tradeProfile
     const entry = Number(trade.entry)
