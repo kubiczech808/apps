@@ -1075,13 +1075,23 @@ export const buildPriceActionMatrix = async ({
   const refreshMinutes = effectiveRefreshMinutes(merged.refreshMinutes)
   if (previous && isFresh(previous, now, refreshMinutes)) return previous
 
+  // Fetch the independent asset/timeframe inputs together. The old nested
+  // loop waited for every FX source before starting the next one, so a cold
+  // schema refresh could hold the runner lease until systemd killed it.
+  const fetchedAssets = await Promise.all(PRICE_ACTION_ASSETS.map(async (asset) => ({
+    asset,
+    results: await Promise.all(PRICE_ACTION_TIMEFRAMES.map((timeframe) =>
+      timeframeCandles({ asset, timeframe, btcHourly, fetchImpl, now, logger })
+    )),
+  })))
+
   const rows = []
-  for (const asset of PRICE_ACTION_ASSETS) {
+  for (const { asset, results } of fetchedAssets) {
     const trends = {}
     const sources = new Set()
     const failures = []
-    for (const timeframe of PRICE_ACTION_TIMEFRAMES) {
-      const result = await timeframeCandles({ asset, timeframe, btcHourly, fetchImpl, now, logger })
+    for (const [index, timeframe] of PRICE_ACTION_TIMEFRAMES.entries()) {
+      const result = results[index]
       const profile = PRICE_ACTION_STRUCTURE_PROFILES[timeframe.id]
       const analysisCandles = candlesInHistory(result.candles, profile.historyDays)
       const chartCandleLimit = PRICE_ACTION_CHART_CANDLE_LIMITS[timeframe.id]
