@@ -2,7 +2,7 @@ import { aggregate, HOUR_MS } from './candles.mjs'
 import { buildZones, candleSignal, marketStructure } from './priceaction.mjs'
 
 export const PRICE_ACTION_STRUCTURE_ID = 'price-action-structure-v1'
-export const PRICE_ACTION_MATRIX_SCHEMA = 10
+export const PRICE_ACTION_MATRIX_SCHEMA = 11
 export const PRICE_ACTION_CHART_CANDLE_LIMIT = 160
 
 export const DEFAULT_PRICE_ACTION_STRUCTURE = {
