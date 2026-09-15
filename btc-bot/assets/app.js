@@ -17,7 +17,7 @@ const REFRESH_MS = 30_000
 const SATS_PER_BTC = 1e8
 const DECISION_SIGNAL_STATES = new Set(['met', 'unmet', 'neutral'])
 const SVG_NS = 'http://www.w3.org/2000/svg'
-const SVG_TAGS = new Set(['circle', 'line', 'path', 'rect', 'svg', 'text'])
+const SVG_TAGS = new Set(['circle', 'g', 'line', 'path', 'rect', 'svg', 'text'])
 
 const $ = (id) => document.getElementById(id)
 
@@ -1046,6 +1046,16 @@ const ASSET_CHART = {
   padBottom: 30,
 }
 
+const clamp = (value, low, high) => Math.max(low, Math.min(high, value))
+
+const niceStep = (value) => {
+  if (!(value > 0) || !Number.isFinite(value)) return 1
+  const magnitude = 10 ** Math.floor(Math.log10(value))
+  const fraction = value / magnitude
+  const rounded = fraction <= 1 ? 1 : fraction <= 2 ? 2 : fraction <= 2.5 ? 2.5 : fraction <= 5 ? 5 : 10
+  return rounded * magnitude
+}
+
 const assetChartColumns = () => state?.priceActionMatrix?.timeframes?.length
   ? state.priceActionMatrix.timeframes
   : [{ id: '1h', label: '1H' }, { id: '4h', label: '4H' }, { id: '1d', label: '1D' }]
@@ -1080,6 +1090,8 @@ const chartTimeLabel = (value, timeframeId) => {
 const renderAssetChart = () => {
   const card = $('asset-chart-card')
   const svg = $('asset-chart-svg')
+  const chartContainer = $('asset-price-chart')
+  const tooltip = $('asset-chart-tooltip')
   const meta = $('asset-chart-meta')
   const title = $('asset-chart-title')
   const tabs = $('asset-chart-timeframes')
@@ -1087,6 +1099,11 @@ const renderAssetChart = () => {
   if (!card || !svg || !tabs || !zoneDetails) return
   svg.replaceChildren()
   svg.onwheel = null
+  svg.onpointermove = null
+  svg.onpointerdown = null
+  svg.onpointerup = null
+  svg.onpointerleave = null
+  if (tooltip) tooltip.hidden = true
   tabs.replaceChildren()
   zoneDetails.replaceChildren()
 
@@ -1171,8 +1188,13 @@ const renderAssetChart = () => {
   const rawMin = Math.min(...candles.map((candle) => candle.low), ...zones.map((zone) => zone.low), ...riskPrices, ...displayPrice)
   const rawMax = Math.max(...candles.map((candle) => candle.high), ...zones.map((zone) => zone.high), ...riskPrices, ...displayPrice)
   const padding = (rawMax - rawMin || Math.max(1, Math.abs(rawMax) * 0.01)) * 0.08
-  const minPrice = Math.max(0, rawMin - padding)
-  const maxPrice = rawMax + padding
+  const yStep = niceStep((rawMax - rawMin + padding * 2) / 6)
+  const minPrice = Math.max(0, Math.floor((rawMin - padding) / yStep) * yStep)
+  const maxPrice = Math.ceil((rawMax + padding) / yStep) * yStep
+  const yTicks = []
+  for (let value = minPrice; value <= maxPrice + yStep * 0.001; value += yStep) {
+    yTicks.push(Number(value.toPrecision(14)))
+  }
   const plotWidth = ASSET_CHART.width - ASSET_CHART.padLeft - ASSET_CHART.padRight
   const plotHeight = ASSET_CHART.height - ASSET_CHART.padTop - ASSET_CHART.padBottom
   const x = (index) => ASSET_CHART.padLeft + (index / Math.max(1, candles.length - 1)) * plotWidth
@@ -1182,8 +1204,7 @@ const renderAssetChart = () => {
   svg.setAttribute('viewBox', `0 0 ${ASSET_CHART.width} ${ASSET_CHART.height}`)
   svg.setAttribute('preserveAspectRatio', 'none')
 
-  for (let step = 0; step <= 4; step += 1) {
-    const value = minPrice + ((maxPrice - minPrice) * step) / 4
+  for (const value of yTicks) {
     const yy = y(value)
     svg.append(
       el('line', { className: 'asset-gridline', x1: ASSET_CHART.padLeft, x2: ASSET_CHART.width - ASSET_CHART.padRight, y1: yy, y2: yy }),
@@ -1374,6 +1395,92 @@ const renderAssetChart = () => {
   const first = candles[0]
   const last = candles.at(-1)
   meta.textContent = `${PRICE_ACTION_TREND_LABELS[item?.trend] || 'flat'} · ${assetPriceLabel(asset.symbol, currentPrice)} · ${when(first.time)} až ${when(last.time)}${viewingHistory ? ' · historie' : ''}`
+
+  const crosshairVertical = el('line', { className: 'asset-crosshair-line', x1: 0, x2: 0, y1: ASSET_CHART.padTop, y2: axisY })
+  const crosshairHorizontal = el('line', { className: 'asset-crosshair-line', x1: ASSET_CHART.padLeft, x2: ASSET_CHART.width - ASSET_CHART.padRight, y1: 0, y2: 0 })
+  const crosshairPoint = el('circle', { className: 'asset-crosshair-point', cx: 0, cy: 0, r: 3.5 })
+  const priceTag = el('g', { className: 'asset-crosshair-tag' }, [
+    el('rect', { className: 'asset-crosshair-tag-bg', x: 0, y: 0, width: 0, height: 20, rx: 3 }),
+    el('text', { className: 'asset-crosshair-tag-text', x: 0, y: 0, text: '' }),
+  ])
+  const timeTag = el('g', { className: 'asset-crosshair-tag' }, [
+    el('rect', { className: 'asset-crosshair-tag-bg', x: 0, y: 0, width: 0, height: 20, rx: 3 }),
+    el('text', { className: 'asset-crosshair-tag-text', x: 0, y: 0, text: '' }),
+  ])
+  const crosshairNodes = [crosshairVertical, crosshairHorizontal, crosshairPoint, priceTag, timeTag]
+  for (const node of crosshairNodes) node.style.display = 'none'
+  svg.append(...crosshairNodes)
+
+  const showCrosshair = (event) => {
+    const box = svg.getBoundingClientRect()
+    if (!(box.width > 0 && box.height > 0)) return
+    const svgX = clamp(((event.clientX - box.left) / box.width) * ASSET_CHART.width, ASSET_CHART.padLeft, ASSET_CHART.width - ASSET_CHART.padRight)
+    const svgY = clamp(((event.clientY - box.top) / box.height) * ASSET_CHART.height, ASSET_CHART.padTop, axisY)
+    const index = Math.round(((svgX - ASSET_CHART.padLeft) / plotWidth) * (candles.length - 1))
+    const candle = candles[clamp(index, 0, candles.length - 1)]
+    const snappedX = x(clamp(index, 0, candles.length - 1))
+    const value = maxPrice - ((svgY - ASSET_CHART.padTop) / plotHeight) * (maxPrice - minPrice)
+    const priceText = assetPriceLabel(asset.symbol, value)
+    const timeText = chartTimeLabel(candle.time, timeframeId)
+    const priceWidth = Math.max(66, priceText.length * 7 + 12)
+    const timeWidth = Math.max(76, timeText.length * 6.5 + 12)
+    const priceY = clamp(svgY - 10, ASSET_CHART.padTop, axisY - 20)
+    const timeX = clamp(snappedX - timeWidth / 2, ASSET_CHART.padLeft, ASSET_CHART.width - ASSET_CHART.padRight - timeWidth)
+
+    crosshairVertical.setAttribute('x1', snappedX)
+    crosshairVertical.setAttribute('x2', snappedX)
+    crosshairHorizontal.setAttribute('y1', svgY)
+    crosshairHorizontal.setAttribute('y2', svgY)
+    crosshairPoint.setAttribute('cx', snappedX)
+    crosshairPoint.setAttribute('cy', svgY)
+    const priceRect = priceTag.querySelector('rect')
+    const priceLabel = priceTag.querySelector('text')
+    priceRect.setAttribute('x', ASSET_CHART.width - ASSET_CHART.padRight + 4)
+    priceRect.setAttribute('y', priceY)
+    priceRect.setAttribute('width', priceWidth)
+    priceLabel.setAttribute('x', ASSET_CHART.width - ASSET_CHART.padRight + 10)
+    priceLabel.setAttribute('y', priceY + 14)
+    priceLabel.textContent = priceText
+    const timeRect = timeTag.querySelector('rect')
+    const timeLabel = timeTag.querySelector('text')
+    timeRect.setAttribute('x', timeX)
+    timeRect.setAttribute('y', axisY + 6)
+    timeRect.setAttribute('width', timeWidth)
+    timeLabel.setAttribute('x', timeX + timeWidth / 2)
+    timeLabel.setAttribute('y', axisY + 20)
+    timeLabel.textContent = timeText
+    for (const node of crosshairNodes) node.style.display = ''
+
+    if (tooltip && chartContainer) {
+      tooltip.hidden = false
+      tooltip.replaceChildren(
+        el('div', { text: timeText }),
+        el('div', {}, [el('b', { text: priceText })])
+      )
+      tooltip.style.left = `${(snappedX / ASSET_CHART.width) * box.width}px`
+      tooltip.style.top = `${(svgY / ASSET_CHART.height) * box.height - 10}px`
+    }
+  }
+  const hideCrosshair = () => {
+    for (const node of crosshairNodes) node.style.display = 'none'
+    if (tooltip) tooltip.hidden = true
+  }
+  let touchActive = false
+  svg.onpointerdown = (event) => {
+    touchActive = event.pointerType !== 'mouse'
+    svg.setPointerCapture?.(event.pointerId)
+    showCrosshair(event)
+  }
+  svg.onpointermove = (event) => {
+    if (event.pointerType === 'mouse' || touchActive) showCrosshair(event)
+  }
+  svg.onpointerup = (event) => {
+    touchActive = false
+    svg.releasePointerCapture?.(event.pointerId)
+  }
+  svg.onpointerleave = (event) => {
+    if (event.pointerType === 'mouse') hideCrosshair()
+  }
 }
 
 // ── equity chart ──────────────────────────────────────────────────────────

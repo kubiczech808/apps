@@ -236,7 +236,7 @@ button.primary { color: #fff; background: var(--series-1); border-color: transpa
 .asset-chart-tab { min-width: 48px; padding: 5px 9px; border-radius: 999px; color: var(--text-secondary); }
 .asset-chart-tab[aria-selected="true"] { background: var(--text-primary); color: var(--page); border-color: transparent; }
 .asset-price-chart svg { height: 420px; }
-#asset-chart-svg { overscroll-behavior: contain; cursor: zoom-in; }
+#asset-chart-svg { overscroll-behavior: contain; cursor: crosshair; touch-action: pan-y; }
 .asset-price-chart .asset-gridline { stroke: var(--grid); stroke-width: 1; }
 .asset-price-chart .asset-axis-label { fill: var(--text-muted); font-size: 11px; font-variant-numeric: tabular-nums; }
 .asset-price-chart .asset-candle-wick { stroke-width: 1; }
@@ -267,6 +267,10 @@ button.primary { color: #fff; background: var(--series-1); border-color: transpa
 .asset-price-chart .asset-time-axis { stroke: var(--axis); stroke-width: 1; }
 .asset-price-chart .asset-time-tick { stroke: var(--axis); stroke-width: 1; }
 .asset-price-chart .asset-time-label { fill: var(--text-muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+.asset-price-chart .asset-crosshair-line { stroke: var(--text-primary); stroke-width: 1; stroke-dasharray: 4 3; opacity: 0.72; pointer-events: none; }
+.asset-price-chart .asset-crosshair-point { fill: var(--page); stroke: var(--text-primary); stroke-width: 1.5; pointer-events: none; }
+.asset-price-chart .asset-crosshair-tag-bg { fill: var(--text-primary); opacity: 0.96; }
+.asset-price-chart .asset-crosshair-tag-text { fill: var(--page); font-size: 11px; font-weight: 700; font-variant-numeric: tabular-nums; pointer-events: none; }
 .asset-ticker {
   padding: 0;
   border: 0;
