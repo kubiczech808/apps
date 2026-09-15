@@ -28,7 +28,7 @@ let keyIsPublic = false
 let refreshTimer = null
 let priceActionDecisionTimeframe = '4h'
 let selectedAssetChart = { symbol: null, timeframeId: '4h' }
-let assetChartVisibleCandleCount = 60
+let assetChartVisibleCandleCount = 240
 let assetChartYScale = { key: null, min: null, max: null }
 let assetChartYDrag = null
 let selectedChartZone = null
@@ -59,7 +59,7 @@ const assetPriceLabel = (symbol, value) => Number.isFinite(value) ? `${quotePric
 const assetCurrentPrice = (asset) => {
   for (const timeframeId of ['1h', '4h', '1d']) {
     const value = asset?.trends?.[timeframeId]?.price
-    if (Number.isFinite(value)) return value
+    if (Number.isFinite(value) && value > 0) return value
   }
   return null
 }
@@ -668,7 +668,7 @@ const assetTickerButton = (symbol, timeframeId = priceActionDecisionTimeframe) =
   })
   button.onclick = () => {
     selectedAssetChart = { symbol, timeframeId }
-    assetChartVisibleCandleCount = 60
+    assetChartVisibleCandleCount = defaultAssetChartVisibleCandleCount(timeframeId)
     assetChartYScale = { key: null, min: null, max: null }
     assetChartYDrag = null
     selectedChartZone = null
@@ -694,7 +694,7 @@ const renderPriceActionDecisionTabs = (columns) => {
     button.onclick = () => {
       priceActionDecisionTimeframe = column.id
       selectedAssetChart = { symbol: selectedAssetChart.symbol, timeframeId: column.id }
-      assetChartVisibleCandleCount = 60
+      assetChartVisibleCandleCount = defaultAssetChartVisibleCandleCount(column.id)
       assetChartYScale = { key: null, min: null, max: null }
       assetChartYDrag = null
       selectedChartZone = null
@@ -1092,6 +1092,15 @@ const ASSET_CHART = {
   padBottom: 30,
 }
 
+const ASSET_CHART_DEFAULT_VISIBLE_CANDLES = {
+  '1h': 240,
+  '4h': 360,
+  '1d': 240,
+}
+
+const defaultAssetChartVisibleCandleCount = (timeframeId) =>
+  ASSET_CHART_DEFAULT_VISIBLE_CANDLES[timeframeId] ?? 240
+
 const clamp = (value, low, high) => Math.max(low, Math.min(high, value))
 
 const niceStep = (value) => {
@@ -1122,7 +1131,7 @@ const chartZones = (item, type) => {
   const fallback = item?.zones?.[type]
   return (nearby?.length ? nearby : fallback ? [fallback] : [])
     .filter((zone) => !zone.filledByOwnTimeframeClose)
-    .filter((zone) => zone && Number.isFinite(zone.low) && Number.isFinite(zone.high))
+    .filter((zone) => zone && Number.isFinite(zone.low) && Number.isFinite(zone.high) && zone.low > 0 && zone.high > 0 && zone.high >= zone.low)
 }
 
 const chartTimeLabel = (value, timeframeId) => {
@@ -1185,7 +1194,7 @@ const renderAssetChart = () => {
     })
     button.onclick = () => {
       selectedAssetChart = { symbol: asset.symbol, timeframeId: chartColumn.id }
-      assetChartVisibleCandleCount = 60
+      assetChartVisibleCandleCount = defaultAssetChartVisibleCandleCount(chartColumn.id)
       assetChartYScale = { key: null, min: null, max: null }
       assetChartYDrag = null
       selectedChartZone = null
@@ -1196,7 +1205,7 @@ const renderAssetChart = () => {
 
   const item = asset.trends?.[timeframeId]
   const allCandles = (item?.chartCandles ?? []).filter((candle) =>
-    [candle?.open, candle?.high, candle?.low, candle?.close].every(Number.isFinite)
+    [candle?.open, candle?.high, candle?.low, candle?.close].every((value) => Number.isFinite(value) && value > 0)
   )
   if (!allCandles.length) {
     if (historyControl) historyControl.hidden = true
@@ -1205,8 +1214,9 @@ const renderAssetChart = () => {
     return
   }
 
-  // Keep the initial chart compact. Wheel zoom then reveals older candles while
-  // the newest candle stays anchored to the right edge of the chart.
+  // Start with enough structural context to make the main wave readable.
+  // Wheel zoom and the range control can still narrow the view while the
+  // newest candle stays anchored to the right edge of the chart.
   const minVisibleCandleCount = Math.min(allCandles.length, 60)
   assetChartVisibleCandleCount = Math.max(minVisibleCandleCount, Math.min(assetChartVisibleCandleCount, allCandles.length))
   const candles = allCandles.slice(-assetChartVisibleCandleCount)
@@ -1250,12 +1260,12 @@ const renderAssetChart = () => {
     { key: 'tp1', label: 'TP1', value: profile?.tp1, className: 'asset-tp-line' },
     { key: 'tp2', label: 'TP2', value: profile?.tp2, className: 'asset-tp-line' },
     { key: 'sl', label: 'SL', value: profile?.stop, className: 'asset-sl-line' },
-  ].filter((level) => Number.isFinite(level.value))
+  ].filter((level) => Number.isFinite(level.value) && level.value > 0)
   const riskPrices = riskLevels.map((level) => level.value)
   const currentPrice = assetCurrentPrice(asset) ?? allCandles.at(-1)?.close
   const displayPrice = Number.isFinite(currentPrice) ? [currentPrice] : []
-  const rawMin = Math.min(...candles.map((candle) => candle.low), ...zones.map((zone) => zone.low), ...riskPrices, ...displayPrice)
-  const rawMax = Math.max(...candles.map((candle) => candle.high), ...zones.map((zone) => zone.high), ...riskPrices, ...displayPrice)
+  const rawMin = Math.min(...candles.map((candle) => candle.low), ...zones.map((zone) => zone.low).filter((value) => value > 0), ...riskPrices, ...displayPrice)
+  const rawMax = Math.max(...candles.map((candle) => candle.high), ...zones.map((zone) => zone.high).filter((value) => value > 0), ...riskPrices, ...displayPrice)
   const padding = (rawMax - rawMin || Math.max(1, Math.abs(rawMax) * 0.01)) * 0.08
   const baseStep = niceStep((rawMax - rawMin + padding * 2) / 6)
   const baseMinPrice = Math.max(0, Math.floor((rawMin - padding) / baseStep) * baseStep)
@@ -1380,7 +1390,7 @@ const renderAssetChart = () => {
     // parallel diagonals; the audit line must follow HH -> HL -> HH (or the
     // corresponding downtrend sequence) in chronological order.
     const swingNodes = (structure?.recentSwings ?? [])
-      .filter((swing) => swing?.kind && Number.isFinite(swing.price) && Number.isFinite(swing.time))
+      .filter((swing) => swing?.kind && Number.isFinite(swing.price) && swing.price > 0 && Number.isFinite(swing.time))
       .filter((swing) => swing.time >= candles[0].time && swing.time <= candles.at(-1).time)
       .sort((left, right) => left.time - right.time)
       .map((swing, index, all) => {

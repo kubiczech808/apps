@@ -2,7 +2,7 @@ import { aggregate, HOUR_MS } from './candles.mjs'
 import { buildZones, candleSignal, marketStructure } from './priceaction.mjs'
 
 export const PRICE_ACTION_STRUCTURE_ID = 'price-action-structure-v1'
-export const PRICE_ACTION_MATRIX_SCHEMA = 14
+export const PRICE_ACTION_MATRIX_SCHEMA = 15
 export const PRICE_ACTION_CHART_CANDLE_LIMITS = {
   '1h': 8760,
   '4h': 2190,
@@ -90,7 +90,7 @@ const parseStooqCsv = (csv) => {
     const high = numberOrNull(cells[highIndex])
     const low = numberOrNull(cells[lowIndex])
     const close = numberOrNull(cells[closeIndex])
-    if (!Number.isFinite(parsedTime) || open === null || high === null || low === null || close === null) continue
+    if (!Number.isFinite(parsedTime) || [open, high, low, close].some((value) => value === null || value <= 0)) continue
     out.push({
       time: parsedTime,
       open,
