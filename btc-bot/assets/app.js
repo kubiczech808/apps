@@ -23,6 +23,7 @@ let state = null
 let keyIsPublic = false
 let refreshTimer = null
 let priceActionSelection = null
+let priceActionDecisionTimeframe = '4h'
 let selectedStrategyView = 'price-action'
 
 // ── formatting ────────────────────────────────────────────────────────────
@@ -340,6 +341,148 @@ const priceActionSummary = () => {
   const invalidated = profiles.filter((entry) => entry.profile.invalidation?.invalidatingTrend)
   const directional = profiles.filter((entry) => entry.profile.side)
   return { profiles, ready, watch, invalidated, directional }
+}
+
+const PRICE_ACTION_DECISION_COLUMNS = [
+  { id: 'structure', label: 'Struktura' },
+  { id: 'price', label: 'Cena' },
+  { id: 'demand', label: 'Demand' },
+  { id: 'supply', label: 'Supply' },
+  { id: 'pullback', label: '50% pullback' },
+  { id: 'entry', label: 'Entry' },
+  { id: 'stop', label: 'SL' },
+  { id: 'tp1', label: 'TP1' },
+  { id: 'tp2', label: 'TP2' },
+  { id: 'rr', label: 'R/R' },
+  { id: 'invalidation', label: 'Invalidace' },
+]
+
+const profileGate = (profile, id) => profile?.gates?.find((item) => item.id === id) ?? null
+
+const zoneValue = (zone, prefix) => (zone ? `${prefix} ${zoneRange(zone)}` : 'není')
+
+const zoneFact = (item, profile, type) => {
+  const zone = item?.zones?.[type] ?? item?.zones?.[`latestValid${type === 'demand' ? 'Demand' : 'Supply'}`]
+  const active = profile?.side === 'long' ? 'demand' : profile?.side === 'short' ? 'supply' : null
+  if (!active) return decisionFact(zoneValue(zone, type === 'demand' ? 'D' : 'S'), 'neutral', 'Bez směru struktury není zóna vstupní branou.')
+  if (active !== type) return decisionFact(zoneValue(zone, type === 'demand' ? 'D' : 'S'), 'neutral', 'Protější zóna je zobrazena jako orientační cíl.')
+  const gate = profileGate(profile, 'zone')
+  return decisionFact(
+    zoneValue(zone, type === 'demand' ? 'D' : 'S'),
+    gate?.status ?? (zone ? 'unmet' : 'unmet'),
+    gate?.detail ?? 'Pro vstup musí cena zasáhnout správnou nevyplněnou supply/demand zónu.'
+  )
+}
+
+const priceFact = (value, label, title = null) =>
+  decisionFact(Number.isFinite(value) ? `${label} ${quotePrice(value)}` : '–', 'neutral', title)
+
+const priceActionDecisionFact = (entry, column) => {
+  const { item, profile } = entry
+  if (!item && !profile) return decisionFact('čeká', 'neutral', 'Pro tento asset a timeframe zatím nejsou data.')
+
+  switch (column.id) {
+    case 'structure': {
+      const trend = PRICE_ACTION_TREND_LABELS[item?.trend] || 'flat'
+      const status = item?.trend === 'up' || item?.trend === 'down' ? 'met' : 'neutral'
+      return decisionFact(trend, status, [item?.reason, item?.event].filter(Boolean).join(' · ') || null)
+    }
+    case 'price':
+      return priceFact(item?.price, 'close', 'Aktuální close poslední svíčky na tomto timeframe.')
+    case 'demand':
+      return zoneFact(item, profile, 'demand')
+    case 'supply':
+      return zoneFact(item, profile, 'supply')
+    case 'pullback': {
+      const gate = profileGate(profile, 'pullback')
+      const level = profile?.pullbackLevel
+      return decisionFact(
+        Number.isFinite(level) ? `${profile.pullbackPct ?? 50}% @ ${quotePrice(level)}` : '–',
+        gate?.status ?? 'neutral',
+        gate?.detail ?? 'Vstup se čeká od definované úrovně pullbacku.'
+      )
+    }
+    case 'entry':
+      return priceFact(profile?.entry, 'entry', profile?.zoneHit ? 'Cena zasáhla pracovní zónu.' : 'Pracovní entry; čeká se na zásah správné zóny.')
+    case 'stop':
+      return priceFact(profile?.stop, 'SL', Number.isFinite(profile?.stopBuffer) ? `Za hranicí zóny, buffer ${quotePrice(profile.stopBuffer)}.` : 'Stop podle hranice pracovní zóny.')
+    case 'tp1':
+      return priceFact(profile?.tp1, 'TP1', profile?.tp1Rule ?? null)
+    case 'tp2':
+      return priceFact(profile?.tp2, 'TP2', profile?.tp2Rule ?? null)
+    case 'rr': {
+      const gate = profileGate(profile, 'rr')
+      return decisionFact(
+        Number.isFinite(profile?.rewardRisk) ? `${nf(2).format(profile.rewardRisk)}:1` : '–',
+        gate?.status ?? 'neutral',
+        gate?.detail ?? `Minimum je ${profile?.minRewardRisk ?? 2}:1.`
+      )
+    }
+    case 'invalidation': {
+      const invalidation = profile?.invalidation ?? {}
+      const label = invalidation.invalidatingTrend
+        ? `změna ${invalidation.lowerTrend || 'struktury'}`
+        : invalidation.status === 'met'
+          ? 'OK'
+          : 'čeká'
+      const trigger = Number.isFinite(invalidation.closeTrigger) ? ` · ${quotePrice(invalidation.closeTrigger)}` : ''
+      return decisionFact(`${label}${trigger}`, invalidation.status ?? 'neutral', invalidation.rule ?? null)
+    }
+    default:
+      return decisionFact('–', 'neutral')
+  }
+}
+
+const priceActionDecisionCell = (entry, column) =>
+  el('td', { className: `pa-decision-cell pa-decision-cell-${column.id}` }, [
+    decisionFactElement(priceActionDecisionFact(entry, column)),
+  ])
+
+const renderPriceActionDecisionTabs = (columns) => {
+  const selected = columns.some((column) => column.id === priceActionDecisionTimeframe)
+    ? priceActionDecisionTimeframe
+    : columns.find((column) => column.id === '4h')?.id ?? columns[0]?.id
+  priceActionDecisionTimeframe = selected
+  return el('div', { className: 'pa-decision-tabs', role: 'tablist', 'aria-label': 'Timeframe price-action rozhodnutí' }, columns.map((column) => {
+    const button = el('button', {
+      type: 'button',
+      className: 'pa-decision-tab',
+      role: 'tab',
+      'aria-selected': String(column.id === selected),
+      text: column.label,
+    })
+    button.onclick = () => {
+      priceActionDecisionTimeframe = column.id
+      renderDecision()
+    }
+    return button
+  }))
+}
+
+const renderPriceActionDecisionTable = (matrix, columns) => {
+  const timeframe = columns.find((column) => column.id === priceActionDecisionTimeframe) ?? columns[0]
+  const table = el('table', { className: 'pa-decision-table' }, [
+    el('thead', {}, [
+      el('tr', {}, [
+        el('th', { text: 'Asset' }),
+        ...PRICE_ACTION_DECISION_COLUMNS.map((column) => el('th', { text: column.label })),
+      ]),
+    ]),
+    el('tbody'),
+  ])
+  const body = table.querySelector('tbody')
+  for (const asset of matrix.assets) {
+    const item = asset.trends?.[timeframe.id] ?? null
+    const entry = { asset, column: timeframe, item, profile: item?.tradeProfile ?? null }
+    body.append(el('tr', {}, [
+      el('td', {}, [
+        el('strong', { text: asset.symbol }),
+        el('span', { className: 'asset-name', text: asset.name ? ` ${asset.name}` : '' }),
+      ]),
+      ...PRICE_ACTION_DECISION_COLUMNS.map((column) => priceActionDecisionCell(entry, column)),
+    ]))
+  }
+  return el('div', { className: 'table-scroll pa-decision-scroll' }, [table])
 }
 
 const trendFact = (trend, item = {}) => {
@@ -938,27 +1081,24 @@ const renderPriceActionDecision = (card, box) => {
     ? `${lead.asset.symbol} ${lead.column.label} · ${profile.side || 'flat'} · ${lead.item?.reason || 'bez důvodu'}`
     : 'bez price-action profilu'
 
+  const columns = matrix.timeframes?.length ? matrix.timeframes : [
+    { id: '1h', label: '1H' },
+    { id: '4h', label: '4H' },
+    { id: '1d', label: '1D' },
+  ]
+
   box.append(
     el('div', { className: 'decision-line' }, [
       el('span', { className: 'decision-verdict', text: verdict }),
       el('span', { className: 'decision-reason', text: reason }),
-    ])
+    ]),
+    el('div', { className: 'pa-decision-meta' }, [
+      el('span', { text: `scan ${ago(matrix.generatedAt)}` }),
+      el('span', { text: `${summary.profiles.length} profilů · ${summary.ready.length} ready · ${summary.invalidated.length} invalidací` }),
+    ]),
+    renderPriceActionDecisionTabs(columns),
+    renderPriceActionDecisionTable(matrix, columns),
   )
-
-  const gates = profile?.gates ?? []
-  const facts = [
-    decisionFact(`scan ${ago(matrix.generatedAt)}`, 'neutral', `schema ${matrix.schemaVersion ?? '–'}`),
-    decisionFact(`${summary.profiles.length} profilů`, 'neutral'),
-    decisionFact(`${summary.ready.length} ready`, summary.ready.length ? 'met' : 'neutral'),
-    decisionFact(`${summary.invalidated.length} invalidací`, summary.invalidated.length ? 'unmet' : 'met'),
-    Number.isFinite(profile?.entry) ? decisionFact(`entry ${quotePrice(profile.entry)}`, profile.zoneHit ? 'met' : 'neutral') : null,
-    Number.isFinite(profile?.rewardRisk)
-      ? decisionFact(`R/R ${nf(2).format(profile.rewardRisk)}:1`, profile.rewardRisk >= (profile.minRewardRisk ?? 2) ? 'met' : 'unmet')
-      : null,
-    ...gates.map((item) => decisionFact(item.label, item.status, item.detail)),
-  ].filter(Boolean)
-
-  if (facts.length) box.append(el('div', { className: 'decision-facts' }, facts.map(decisionFactElement)))
 }
 
 const renderChart = () => {

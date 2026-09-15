@@ -308,6 +308,57 @@ tbody tr:hover { background: var(--series-1-soft); }
 .decision-verdict { font-size: 15px; font-weight: 600; }
 .decision-reason { color: var(--text-secondary); }
 .decision-facts { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.pa-decision-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  margin-top: 5px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+.pa-decision-tabs {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+  margin: 14px 0 10px;
+}
+.pa-decision-tab {
+  min-width: 54px;
+  border-radius: 999px;
+  color: var(--text-secondary);
+}
+.pa-decision-tab[aria-selected="true"] {
+  background: var(--text-primary);
+  color: var(--page);
+  border-color: transparent;
+}
+.pa-decision-scroll { margin: 0 -2px; }
+.pa-decision-table { min-width: 1160px; }
+.pa-decision-table th,
+.pa-decision-table td {
+  text-align: center;
+  vertical-align: middle;
+}
+.pa-decision-table th:first-child,
+.pa-decision-table td:first-child {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  min-width: 150px;
+  text-align: left;
+  background: var(--surface-1);
+}
+.pa-decision-table th:first-child { z-index: 2; }
+.pa-decision-table .fact {
+  justify-content: center;
+  min-width: 72px;
+  max-width: 158px;
+  white-space: normal;
+  line-height: 1.25;
+  text-align: center;
+}
+.pa-decision-cell-structure .fact { min-width: 90px; }
+.pa-decision-cell-invalidation .fact { min-width: 108px; }
 .fact {
   display: inline-flex;
   align-items: center;
