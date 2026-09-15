@@ -522,6 +522,30 @@ tbody tr:hover { background: var(--series-1-soft); }
 .strategy-section h2 {
   margin-bottom: 10px;
 }
+.strategy-subtabs {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+.strategy-subtabs button {
+  border-radius: 999px;
+  color: var(--text-secondary);
+}
+.strategy-subtabs button[aria-selected="true"] {
+  background: var(--text-primary);
+  color: var(--page);
+  border-color: transparent;
+}
+.filled-zones-table th,
+.filled-zones-table td {
+  text-align: center;
+}
+.filled-zones-table th:first-child,
+.filled-zones-table td:first-child {
+  text-align: left;
+  min-width: 150px;
+}
 .pa-matrix-table th,
 .pa-matrix-table td {
   text-align: center;

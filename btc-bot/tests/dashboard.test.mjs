@@ -93,7 +93,10 @@ test('strategy tab shows the selected leveraged momentum strategy', () => {
 
 test('strategy tab renders the price-action structure matrix', () => {
   assert.ok(html.includes('id="strategy-price-action"'), 'strategy tab must contain the price-action matrix host')
+  assert.ok(html.includes('data-strategy-panel="filled-zones"'), 'strategy tab must expose the filled-zone log')
+  assert.ok(html.includes('id="strategy-filled-zones"'), 'strategy tab must contain the filled-zone log host')
   assert.match(js, /renderStrategyLab/)
+  assert.match(js, /renderFilledZonesLog/)
   assert.match(js, /priceActionMatrix/)
   assert.match(js, /PRICE_ACTION_TREND_LABELS/)
   assert.match(js, /trendFactButton/)
@@ -139,6 +142,7 @@ test('strategy switching lives in the header and redraws dashboard context', () 
   assert.match(js, /zoneRangeTrigger/)
   assert.match(js, /dateOnly/)
   assert.match(js, /timeframeId === '1d'/)
+  assert.match(js, /filledAt/)
   assert.match(js, /renderPriceActionOpen/)
   assert.match(js, /renderPriceActionOrders/)
   assert.match(js, /renderPriceActionClosed/)

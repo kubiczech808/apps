@@ -2,7 +2,7 @@ import { aggregate, HOUR_MS } from './candles.mjs'
 import { buildZones, candleSignal, marketStructure } from './priceaction.mjs'
 
 export const PRICE_ACTION_STRUCTURE_ID = 'price-action-structure-v1'
-export const PRICE_ACTION_MATRIX_SCHEMA = 7
+export const PRICE_ACTION_MATRIX_SCHEMA = 8
 
 export const DEFAULT_PRICE_ACTION_STRUCTURE = {
   zoneLookback: 2,
@@ -296,6 +296,13 @@ const zoneFilledByOwnTimeframeClose = (zone, candles) => {
     : later.some((candle) => candle.close >= zone.low)
 }
 
+const zoneFilledAtOwnTimeframeClose = (zone, candles) => {
+  const later = laterCandles(candles, zone)
+  return (zone.type === 'demand'
+    ? later.find((candle) => candle.close <= zone.high)
+    : later.find((candle) => candle.close >= zone.low))?.time ?? null
+}
+
 const zoneDistancePct = (zone, price) => {
   if (!Number.isFinite(price) || !(price > 0)) return null
   if (price >= zone.low && price <= zone.high) return 0
@@ -334,6 +341,7 @@ const zoneSummary = (zone, candles, price) => ({
     .map((index) => definingCandleSummary(index, candles))
     .filter(Boolean),
   filledByOwnTimeframeClose: zoneFilledByOwnTimeframeClose(zone, candles),
+  filledAt: zoneFilledAtOwnTimeframeClose(zone, candles),
   invalidatedByOwnTimeframeClose: zoneInvalidated(zone, candles),
   distancePct: zoneDistancePct(zone, price),
 })

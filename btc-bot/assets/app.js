@@ -24,6 +24,7 @@ let keyIsPublic = false
 let refreshTimer = null
 let priceActionSelection = null
 let priceActionDecisionTimeframe = '4h'
+let selectedStrategyPanel = 'structure'
 let selectedStrategyView = 'price-action'
 
 // ── formatting ────────────────────────────────────────────────────────────
@@ -366,14 +367,16 @@ const PRICE_ACTION_DECISION_COLUMNS = [
 
 const profileGate = (profile, id) => profile?.gates?.find((item) => item.id === id) ?? null
 
-const zoneList = (item, type) => {
+const zoneList = (item, type, { includeFilled = false } = {}) => {
   const key = type === 'demand' ? 'Demand' : 'Supply'
   const nearby = item?.zones?.[`nearby${key}`]
-  if (nearby?.length) return nearby
+  const nearbyUnfilled = nearby?.filter((zone) => !zone.filledByOwnTimeframeClose) ?? []
+  if (includeFilled && nearby?.length) return nearby
+  if (nearbyUnfilled.length) return nearbyUnfilled
   const unfilled = item?.zones?.[`unfilled${key}`]
   if (unfilled?.length) return unfilled
   const fallback = item?.zones?.[type] ?? item?.zones?.[`latestValid${key}`]
-  return fallback ? [fallback] : []
+  return fallback && (!fallback.filledByOwnTimeframeClose || includeFilled) ? [fallback] : []
 }
 
 const sameZone = (left, right) => Boolean(left && right && left.low === right.low && left.high === right.high)
@@ -409,7 +412,7 @@ const zoneListElement = (item, profile, type, timeframeId) => {
   if (!zones.length) return [decisionFactElement(decisionFact('není', 'neutral', 'Na tomto timeframe není platná zóna.'))]
   return zones.map((zone) => {
     const selected = active === type && sameZone(zone, profile?.zone)
-    const status = selected ? (profile?.zoneHit ? 'met' : gate?.status ?? 'unmet') : 'neutral'
+    const status = selected && profile?.zoneHit ? 'met' : 'neutral'
     const title = selected
       ? gate?.detail ?? 'Pracovní vstupní supply/demand zóna.'
       : zone.filledByOwnTimeframeClose
@@ -1627,14 +1630,74 @@ const renderBacktests = () => {
   else renderMomentumBacktests(host)
 }
 
+const renderFilledZonesLog = (host) => {
+  host.replaceChildren()
+  if (currentStrategyView().id !== 'price-action') {
+    host.append(el('p', { className: 'empty', text: 'Log vyplněných zón patří ke strategii PA-1 Price Action Structure.' }))
+    return
+  }
+
+  const matrix = state?.priceActionMatrix
+  const columns = matrix?.timeframes?.length ? matrix.timeframes : [
+    { id: '1h', label: '1H' },
+    { id: '4h', label: '4H' },
+    { id: '1d', label: '1D' },
+  ]
+  const rows = []
+  for (const asset of matrix?.assets ?? []) {
+    for (const column of columns) {
+      const item = asset.trends?.[column.id]
+      for (const type of ['demand', 'supply']) {
+        for (const zone of zoneList(item, type, { includeFilled: true }).filter((candidate) => candidate.filledByOwnTimeframeClose)) {
+          rows.push({ asset, column, type, zone })
+        }
+      }
+    }
+  }
+
+  if (!rows.length) {
+    host.append(el('p', { className: 'empty', text: 'Zatím nebyla vyplněna žádná zóna na vlastním timeframe.' }))
+    return
+  }
+
+  const table = el('table', { className: 'filled-zones-table' }, [
+    el('thead', {}, [el('tr', {}, [
+      el('th', { text: 'Asset' }),
+      el('th', { text: 'Timeframe' }),
+      el('th', { text: 'Typ' }),
+      el('th', { text: 'Range' }),
+      el('th', { text: 'Vyplněno' }),
+    ])]),
+    el('tbody'),
+  ])
+  const body = table.querySelector('tbody')
+  for (const { asset, column, type, zone } of rows.sort((left, right) => (right.zone.filledAt ?? 0) - (left.zone.filledAt ?? 0))) {
+    body.append(el('tr', {}, [
+      el('td', {}, [el('strong', { text: asset.symbol }), el('span', { className: 'asset-name', text: asset.name ? ` ${asset.name}` : '' })]),
+      el('td', { text: column.label }),
+      el('td', { text: type === 'demand' ? 'Demand' : 'Supply' }),
+      el('td', {}, [zoneRangeTrigger({ zone, timeframeId: column.id, title: 'Kliknutím zobrazit definiční svíčky zóny.' })]),
+      el('td', { text: column.id === '1d' ? dateOnly(zone.filledAt) : when(zone.filledAt) }),
+    ]))
+  }
+  host.append(el('div', { className: 'table-scroll' }, [table]))
+}
+
 const renderStrategyLab = () => {
   const rules = $('strategy-rules')
   const candidates = $('strategy-candidates')
   const priceAction = $('strategy-price-action')
+  const filledZones = $('strategy-filled-zones')
   const view = currentStrategyView()
   rules.replaceChildren()
   candidates.replaceChildren()
   priceAction.replaceChildren()
+  filledZones.replaceChildren()
+  $('strategy-panel-structure').hidden = selectedStrategyPanel !== 'structure'
+  $('strategy-panel-filled-zones').hidden = selectedStrategyPanel !== 'filled-zones'
+  for (const button of document.querySelectorAll('.strategy-subtabs button')) {
+    button.setAttribute('aria-selected', String(button.dataset.strategyPanel === selectedStrategyPanel))
+  }
 
   const rulebook = view.id === 'price-action' ? PRICE_ACTION_RULEBOOK : STRATEGY_RULEBOOK
   for (const rule of rulebook) {
@@ -1693,6 +1756,7 @@ const renderStrategyLab = () => {
           : 'Price action scanner zatím čeká na první běh s daty.',
       })
     )
+    renderFilledZonesLog(filledZones)
     return
   }
 
@@ -1737,6 +1801,7 @@ const renderStrategyLab = () => {
       ? el('p', { className: 'scanner-warning', text: `Poslední chyba scanneru: ${state.priceActionMatrixError}` })
       : null
   )
+  renderFilledZonesLog(filledZones)
 }
 
 const renderSettings = () => {
@@ -1931,6 +1996,13 @@ document.addEventListener('DOMContentLoaded', () => {
         other.setAttribute('aria-selected', String(selected))
         $(`panel-${other.dataset.tab}`).hidden = !selected
       }
+    })
+  }
+
+  for (const button of document.querySelectorAll('.strategy-subtabs button')) {
+    button.addEventListener('click', () => {
+      selectedStrategyPanel = button.dataset.strategyPanel || 'structure'
+      renderStrategyLab()
     })
   }
 

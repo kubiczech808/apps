@@ -183,9 +183,18 @@ test('supply and demand zones stay valid unless their own timeframe closes throu
   )
   assert.equal(zones.demand.invalidatedByOwnTimeframeClose, false)
   assert.equal(zones.demand.filledByOwnTimeframeClose, false)
+  assert.equal(zones.demand.filledAt, null)
   assert.equal(zones.demand.low, 99)
   assert.equal(zones.supply.invalidatedByOwnTimeframeClose, false)
   assert.match(zones.rule, /vlastním timeframe/)
+
+  const filled = activeSupplyDemandZones([
+    ...candles,
+    candle(START + 10 * HOUR, 114, 115, 100, 103),
+  ], { lookback: 1, maxAgeCandles: 100 })
+  assert.equal(filled.demand, null, 'a same-timeframe filled zone must leave the entry overview')
+  assert.equal(filled.latestValidDemand.filledByOwnTimeframeClose, true)
+  assert.equal(filled.latestValidDemand.filledAt, START + 10 * HOUR)
 
   const invalidated = activeSupplyDemandZones([
     ...candles,
