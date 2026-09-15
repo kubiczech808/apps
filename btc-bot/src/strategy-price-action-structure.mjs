@@ -2,7 +2,7 @@ import { aggregate, HOUR_MS } from './candles.mjs'
 import { buildZones, candleSignal, marketStructure } from './priceaction.mjs'
 
 export const PRICE_ACTION_STRUCTURE_ID = 'price-action-structure-v1'
-export const PRICE_ACTION_MATRIX_SCHEMA = 9
+export const PRICE_ACTION_MATRIX_SCHEMA = 10
 export const PRICE_ACTION_CHART_CANDLE_LIMIT = 160
 
 export const DEFAULT_PRICE_ACTION_STRUCTURE = {
@@ -432,6 +432,108 @@ const structureInvalidationLevel = ({ side, structure }) =>
       ? structure?.high?.current?.price ?? null
       : null
 
+const candidateZones = (zones, side) => {
+  const type = side === 'long' ? 'demand' : side === 'short' ? 'supply' : null
+  if (!type) return []
+  const key = type === 'demand' ? 'nearbyDemand' : 'nearbySupply'
+  const fallbackKey = type === 'demand' ? 'unfilledDemand' : 'unfilledSupply'
+  const latestKey = type === 'demand' ? 'latestValidDemand' : 'latestValidSupply'
+  const seen = new Set()
+  return [
+    ...(zones?.[key] ?? []),
+    ...(zones?.[fallbackKey] ?? []),
+    ...(zones?.[type] ? [zones[type]] : []),
+    ...(zones?.[latestKey] ? [zones[latestKey]] : []),
+  ]
+    .filter((zone) => zone && !zone.filledByOwnTimeframeClose && !zone.invalidatedByOwnTimeframeClose)
+    .filter((zone) => {
+      const identity = `${zone.low}:${zone.high}:${zone.firstTime ?? zone.firstIndex ?? ''}`
+      if (seen.has(identity)) return false
+      seen.add(identity)
+      return true
+    })
+}
+
+const rewardRiskFor = ({ side, entry, stop, target }) => {
+  if (!Number.isFinite(entry) || !Number.isFinite(stop) || !Number.isFinite(target)) return null
+  const risk = side === 'long' ? entry - stop : stop - entry
+  const reward = side === 'long' ? target - entry : entry - target
+  return risk > 0 && reward > 0 ? reward / risk : null
+}
+
+const zoneEntryCandidate = ({ item, side, zone, pullback, invalidationLevel, settings }) => {
+  const directionEligible = sideFromTrend(item?.trend) === side
+  const rangeLow = Number.isFinite(pullback) && Number.isFinite(invalidationLevel)
+    ? Math.min(pullback, invalidationLevel)
+    : null
+  const rangeHigh = Number.isFinite(pullback) && Number.isFinite(invalidationLevel)
+    ? Math.max(pullback, invalidationLevel)
+    : null
+  const entryLow = Number.isFinite(rangeLow) ? Math.max(zone.low, rangeLow) : null
+  const entryHigh = Number.isFinite(rangeHigh) ? Math.min(zone.high, rangeHigh) : null
+  const pullbackEligible = Number.isFinite(entryLow) && Number.isFinite(entryHigh) && entryLow <= entryHigh
+  const entryAtZoneHit = side === 'long' ? zone.high : zone.low
+  const buffer = stopBuffer({ zone, price: entryAtZoneHit, stopBufferPct: settings.stopBufferPct })
+  const stop = side === 'long' ? zone.low - buffer : zone.high + buffer
+  const entryAtPullback = pullbackEligible
+    ? side === 'long' ? entryHigh : entryLow
+    : null
+  const tp1 = structuralTarget({ side, structure: item?.structure })
+  const tp2Zone = Number.isFinite(entryAtPullback)
+    ? nearestOpposingZone({ side, zones: item?.zones, entry: entryAtPullback })
+    : null
+  const tp2 = side === 'long' ? tp2Zone?.low ?? null : tp2Zone?.high ?? null
+  const weightedTarget = Number.isFinite(tp1) && Number.isFinite(tp2) ? (tp1 + tp2) / 2 : null
+  const minRewardRisk = Number(settings.minRewardRisk) || 2
+  const rrAtZoneHit = rewardRiskFor({ side, entry: entryAtZoneHit, stop, target: weightedTarget })
+  const rrAtPullback = rewardRiskFor({ side, entry: entryAtPullback, stop, target: weightedTarget })
+  const threshold = Number.isFinite(stop) && Number.isFinite(weightedTarget)
+    ? (weightedTarget + minRewardRisk * stop) / (minRewardRisk + 1)
+    : null
+  const entryForMinRR = Number.isFinite(entryAtPullback) && Number.isFinite(rrAtPullback) && rrAtPullback >= minRewardRisk
+    ? entryAtPullback
+    : Number.isFinite(threshold) && pullbackEligible && threshold >= entryLow && threshold <= entryHigh
+      ? threshold
+      : null
+  const rewardRisk = rewardRiskFor({ side, entry: entryForMinRR, stop, target: weightedTarget })
+  const rrEligible = Number.isFinite(rewardRisk) && rewardRisk >= minRewardRisk
+  const zoneHit = zoneHitByCandle(zone, item?.lastCandle)
+  const reasons = []
+  if (!directionEligible) reasons.push('opačný směr oproti aktuální struktuře')
+  if (!pullbackEligible) reasons.push('mimo 50% pullback pásmo nebo za hranicí invalidace')
+  if (!rrEligible) {
+    reasons.push(
+      Number.isFinite(rrAtPullback)
+        ? `R/R ${rrAtPullback.toFixed(2)}:1; v zóně nelze dosáhnout ${minRewardRisk}:1`
+        : 'R/R nelze spočítat z dostupných TP'
+    )
+  }
+  if (pullbackEligible && rrEligible) reasons.push(zoneHit ? 'cena už zónu hitla' : 'čeká na hit zóny')
+  return {
+    type: zone.type,
+    side,
+    zone,
+    directionEligible,
+    pullbackEligible,
+    rrEligible,
+    eligible: directionEligible && pullbackEligible && rrEligible,
+    zoneHit,
+    entryAtZoneHit,
+    entryRange: pullbackEligible ? { low: entryLow, high: entryHigh } : null,
+    entryForMinRR,
+    invalidationLevel,
+    stop,
+    tp1,
+    tp2,
+    tp2Zone,
+    weightedTarget,
+    rrAtZoneHit,
+    rewardRisk,
+    minRewardRisk,
+    reason: reasons.join(' · '),
+  }
+}
+
 const pullbackSatisfied = ({ side, latest, level }) => {
   if (!latest || !Number.isFinite(level)) return false
   return side === 'long' ? latest.low <= level : latest.high >= level
@@ -469,8 +571,27 @@ export const evaluateTradeProfile = ({
   const price = item?.price
   const zones = item?.zones
   const zone = side === 'long' ? zones?.demand : side === 'short' ? zones?.supply : null
+  const pullback = pullbackLevel({ side, structure: item?.structure, pullbackPct: settings.pullbackPct })
+  const invalidationLevel = structureInvalidationLevel({ side, structure: item?.structure })
+  const pullbackRange = Number.isFinite(pullback) && Number.isFinite(invalidationLevel)
+    ? { from: pullback, to: invalidationLevel }
+    : null
+  const zoneCandidates = ['long', 'short'].flatMap((candidateSide) =>
+    candidateZones(zones, candidateSide).map((zone) => zoneEntryCandidate({
+      item,
+      side: candidateSide,
+      zone,
+      pullback,
+      invalidationLevel,
+      settings,
+    }))
+  )
   const fallbackZone = side === 'long' ? zones?.latestValidDemand : side === 'short' ? zones?.latestValidSupply : null
-  const activeZone = zone ?? fallbackZone
+  const activeZone =
+    zoneCandidates.find((candidate) => candidate.directionEligible && candidate.eligible)?.zone ??
+    zoneCandidates.find((candidate) => candidate.directionEligible && candidate.pullbackEligible)?.zone ??
+    (side === 'long' ? zones?.demand : side === 'short' ? zones?.supply : null) ??
+    fallbackZone
   const zoneHit = zoneHitByCandle(activeZone, latest)
   const entry = Number.isFinite(price)
     ? price
@@ -479,11 +600,6 @@ export const evaluateTradeProfile = ({
         ? activeZone.high
         : activeZone.low
       : null
-  const pullback = pullbackLevel({ side, structure: item?.structure, pullbackPct: settings.pullbackPct })
-  const invalidationLevel = structureInvalidationLevel({ side, structure: item?.structure })
-  const pullbackRange = Number.isFinite(pullback) && Number.isFinite(invalidationLevel)
-    ? { from: pullback, to: invalidationLevel }
-    : null
   const pulledBack = pullbackSatisfied({ side, latest, level: pullback })
   const buffer = stopBuffer({ zone: activeZone, price: entry, stopBufferPct: settings.stopBufferPct })
   const stop =
@@ -540,6 +656,7 @@ export const evaluateTradeProfile = ({
     pullbackLevel: pullback,
     invalidationLevel,
     pullbackRange,
+    zoneCandidates,
     stop,
     stopBuffer: buffer,
     tp1,
@@ -805,7 +922,10 @@ const timeframeCandles = async ({ asset, timeframe, btcHourly, fetchImpl, now, l
 
 const hasStructureDetails = (matrix) =>
   Boolean(matrix?.schemaVersion === PRICE_ACTION_MATRIX_SCHEMA && matrix?.assets?.every((asset) =>
-    PRICE_ACTION_TIMEFRAMES.every((timeframe) => asset.trends?.[timeframe.id]?.structure && Array.isArray(asset.trends?.[timeframe.id]?.chartCandles))
+    PRICE_ACTION_TIMEFRAMES.every((timeframe) => {
+      const item = asset.trends?.[timeframe.id]
+      return item?.structure && Array.isArray(item?.chartCandles) && Array.isArray(item?.tradeProfile?.zoneCandidates)
+    })
   ))
 
 const isFresh = (matrix, now, refreshMinutes) => {

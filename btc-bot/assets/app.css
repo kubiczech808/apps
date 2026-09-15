@@ -462,7 +462,19 @@ tbody tr:hover { background: var(--series-1-soft); }
   line-height: 1.45;
   text-align: left;
   white-space: pre-line;
+  max-width: min(360px, calc(100vw - 40px));
 }
+.zone-candidate-details {
+  display: grid;
+  gap: 3px;
+  margin-top: 7px;
+  padding-top: 7px;
+  border-top: 1px solid var(--grid);
+  white-space: normal;
+}
+.zone-candidate-details strong { color: var(--text-primary); }
+.zone-candidate-details span { display: block; }
+.zone-candidate-reason { color: var(--text-secondary); }
 .zone-date-values {
   display: block;
 }
@@ -728,6 +740,27 @@ tbody tr:hover { background: var(--series-1-soft); }
 .zone-leg {
   background: var(--surface-1);
 }
+.asset-zone-details {
+  margin-top: 16px;
+  border-top: 1px solid var(--grid);
+  padding-top: 14px;
+}
+.asset-zone-details h3 {
+  margin: 0;
+  font-size: 15px;
+}
+.asset-zone-details-intro {
+  margin: 4px 0 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+.asset-zone-detail-columns {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 10px;
+}
+.asset-zone-detail-columns > .zone-leg { flex: 1 1 320px; }
 .zone-rule {
   margin: 8px 0 0;
   color: var(--text-muted);

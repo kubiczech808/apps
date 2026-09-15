@@ -383,7 +383,24 @@ const zoneDefiningTimes = (zone, timeframeId) =>
     .map((candle) => timeframeId === '1d' ? dateOnly(candle.time) : when(candle.time))
     .join('\n') || 'datum není k dispozici'
 
-const zoneRangeTrigger = ({ zone, status = 'neutral', title = null, timeframeId }) => {
+const zoneCandidateDetails = (candidate) => {
+  if (!candidate) return null
+  const rr = (value) => Number.isFinite(value) ? `${nf(2).format(value)}:1` : '–'
+  const entryRange = candidate.entryRange
+    ? `${quotePrice(candidate.entryRange.low)} – ${quotePrice(candidate.entryRange.high)}`
+    : '–'
+  return el('div', { className: 'zone-candidate-details' }, [
+    el('strong', { text: candidate.eligible ? 'Vhodná pro aktuální vstup' : 'Vyřazena z aktuálního vstupu' }),
+    el('span', { text: `Vstup při hitu kraje: ${quotePrice(candidate.entryAtZoneHit)}` }),
+    el('span', { text: `Přípustný vstup v pullback pásmu: ${entryRange}` }),
+    el('span', { text: `Vstup pro min. R/R: ${quotePrice(candidate.entryForMinRR)}` }),
+    el('span', { text: `SL ${quotePrice(candidate.stop)} · TP1 ${quotePrice(candidate.tp1)} · TP2 ${quotePrice(candidate.tp2)}` }),
+    el('span', { text: `R/R při hitu ${rr(candidate.rrAtZoneHit)} · při vstupu ${rr(candidate.rewardRisk)} · minimum ${rr(candidate.minRewardRisk)}` }),
+    candidate.reason ? el('span', { className: 'zone-candidate-reason', text: candidate.reason }) : null,
+  ])
+}
+
+const zoneRangeTrigger = ({ zone, status = 'neutral', title = null, timeframeId, candidate = null, showCandidateDetails = false }) => {
   const button = el('button', {
     type: 'button',
     className: `fact fact-${status} zone-range-trigger`,
@@ -393,6 +410,7 @@ const zoneRangeTrigger = ({ zone, status = 'neutral', title = null, timeframeId 
   })
   const popup = el('div', { className: 'zone-date-popover', role: 'tooltip', hidden: true }, [
     el('span', { className: 'zone-date-values', text: zoneDefiningTimes(zone, timeframeId) }),
+    showCandidateDetails ? zoneCandidateDetails(candidate) : null,
   ])
   button.onclick = () => {
     const open = popup.hidden
@@ -403,20 +421,15 @@ const zoneRangeTrigger = ({ zone, status = 'neutral', title = null, timeframeId 
 }
 
 const zoneListElement = (item, profile, type, timeframeId) => {
-  const zones = zoneList(item, type)
   const active = profile?.side === 'long' ? 'demand' : profile?.side === 'short' ? 'supply' : null
-  const gate = profileGate(profile, 'zone')
-  if (!zones.length) return [decisionFactElement(decisionFact('není', 'neutral', 'Na tomto timeframe není platná zóna.'))]
-  return zones.map((zone) => {
-    const selected = active === type && sameZone(zone, profile?.zone)
-    const status = selected && profile?.zoneHit ? 'met' : 'neutral'
-    const title = selected
-      ? gate?.detail ?? 'Pracovní vstupní supply/demand zóna.'
-      : zone.filledByOwnTimeframeClose
-        ? 'Platná zóna v okolí aktuální ceny, ale close na vlastním timeframe ji už vyplnil.'
-        : 'Platná nevyplněná zóna v okolí aktuální ceny.'
+  if (active !== type) return [decisionFactElement(decisionFact('–', 'neutral', 'Pro aktuální strukturu není tato strana vstupní zónou.'))]
+  const candidates = (profile?.zoneCandidates ?? []).filter((candidate) => candidate.type === type && candidate.eligible)
+  if (!candidates.length) return [decisionFactElement(decisionFact('–', 'neutral', 'Žádná zóna současně nesplňuje pullback a minimální R/R.'))]
+  return candidates.map((candidate) => {
+    const zone = candidate.zone
+    const status = candidate.zoneHit ? 'met' : 'neutral'
     return el('div', { className: 'pa-zone-item' }, [
-      zoneRangeTrigger({ zone, status, title, timeframeId }),
+      zoneRangeTrigger({ zone, status, title: candidate.zoneHit ? 'Cena už zónu hitla.' : 'Validní zóna, čeká se na hit ceny.', timeframeId }),
     ])
   })
 }
@@ -617,17 +630,27 @@ const legCard = (title, leg, emptyText) =>
 
 const zoneRange = (zone) => (zone ? `${quotePrice(zone.low)} – ${quotePrice(zone.high)}` : '–')
 
-const zoneCard = (title, zones, emptyText, timeframeId) => el('div', { className: 'structure-leg zone-leg' }, [
+const zoneCard = (title, zones, emptyText, timeframeId, candidates = []) => el('div', { className: 'structure-leg zone-leg' }, [
     el('strong', { text: title }),
     zones?.length
       ? el('div', { className: 'zone-list' }, zones.map((zone, index) => el('div', { className: 'zone-item' }, [
-          el('div', { className: 'structure-leg-flow' }, [
-            el('span', { className: 'zone-index', text: `${index + 1}.` }),
-            zoneRangeTrigger({ zone, timeframeId, title: 'Kliknutím zobrazit definiční svíčky zóny.' }),
-            Number.isFinite(zone.distancePct)
-              ? el('span', { className: 'structure-meta', text: `vzdál. ${signedPct(zone.distancePct).text}` })
-              : null,
-          ]),
+          (() => {
+            const candidate = candidates.find((entry) => sameZone(entry.zone, zone))
+            return el('div', { className: 'structure-leg-flow' }, [
+              el('span', { className: 'zone-index', text: `${index + 1}.` }),
+              zoneRangeTrigger({
+                zone,
+                timeframeId,
+                candidate,
+                status: candidate?.eligible ? (candidate.zoneHit ? 'met' : 'neutral') : 'neutral',
+                title: candidate?.eligible ? 'Kliknutím zobrazit vstupní parametry.' : 'Kliknutím zobrazit důvod vyřazení a vstupní parametry.',
+                showCandidateDetails: true,
+              }),
+              Number.isFinite(zone.distancePct)
+                ? el('span', { className: 'structure-meta', text: `vzdál. ${signedPct(zone.distancePct).text}` })
+                : null,
+            ])
+          })(),
           el('span', {
             className: 'structure-meta',
             text: [
@@ -646,16 +669,32 @@ const zonesForDetail = (zones, type) => {
   return list
 }
 
-const renderZonesDetail = (zones, timeframeId) => {
+const renderZonesDetail = (zones, timeframeId, candidates = []) => {
   if (!zones) return null
   return el('div', { className: 'zone-detail' }, [
     el('strong', { text: 'Supply / demand zóny' }),
     el('div', { className: 'structure-legs' }, [
-      zoneCard('Demand', zonesForDetail(zones, 'demand'), 'Žádná platná demand zóna na tomto timeframe.', timeframeId),
-      zoneCard('Supply', zonesForDetail(zones, 'supply'), 'Žádná platná supply zóna na tomto timeframe.', timeframeId),
+      zoneCard('Demand', zonesForDetail(zones, 'demand'), 'Žádná platná demand zóna na tomto timeframe.', timeframeId, candidates),
+      zoneCard('Supply', zonesForDetail(zones, 'supply'), 'Žádná platná supply zóna na tomto timeframe.', timeframeId, candidates),
     ]),
     el('p', { className: 'zone-rule', text: zones.rule || 'Zóna se invaliduje jen na vlastním timeframe.' }),
   ])
+}
+
+const renderAssetZoneDetails = (host, asset, item, timeframeId) => {
+  host.replaceChildren()
+  if (!item?.zones) return
+  const candidates = item.tradeProfile?.zoneCandidates ?? []
+  host.append(
+    el('div', { className: 'asset-zone-details' }, [
+      el('h3', { text: `${asset.symbol} · všechny dostupné zóny pro ${timeframeId.toUpperCase()}` }),
+      el('p', { className: 'asset-zone-details-intro', text: 'V přehledu vstupu zůstávají jen zóny v pullback pásmu s dosažitelným minimálním R/R. Zde jsou i zóny, které byly vyřazeny.' }),
+      el('div', { className: 'asset-zone-detail-columns' }, [
+        zoneCard('Demand', zonesForDetail(item.zones, 'demand'), 'Žádná dostupná demand zóna.', timeframeId, candidates),
+        zoneCard('Supply', zonesForDetail(item.zones, 'supply'), 'Žádná dostupná supply zóna.', timeframeId, candidates),
+      ]),
+    ])
+  )
 }
 
 const tradeStatusFact = (profile) => {
@@ -737,7 +776,7 @@ const renderStructureDetail = ({ matrix, columns }) => {
       legCard('Swing highs', structure.high, 'Zatím nejsou dva potvrzené swing highs.'),
       legCard('Swing lows', structure.low, 'Zatím nejsou dva potvrzené swing lows.'),
     ]),
-    renderZonesDetail(item.zones, column.id),
+    renderZonesDetail(item.zones, column.id, item.tradeProfile?.zoneCandidates ?? []),
     renderTradeProfile(item.tradeProfile),
     el('div', { className: 'structure-meta-line' }, [
       el('span', { text: `${item.candles ?? 0} svíček` }),
@@ -1023,7 +1062,6 @@ const chartZones = (item, type) => {
   return (nearby?.length ? nearby : fallback ? [fallback] : [])
     .filter((zone) => !zone.filledByOwnTimeframeClose)
     .filter((zone) => zone && Number.isFinite(zone.low) && Number.isFinite(zone.high))
-    .slice(0, 3)
 }
 
 const renderAssetChart = () => {
@@ -1032,9 +1070,11 @@ const renderAssetChart = () => {
   const meta = $('asset-chart-meta')
   const title = $('asset-chart-title')
   const tabs = $('asset-chart-timeframes')
-  if (!card || !svg || !tabs) return
+  const zoneDetails = $('asset-zone-details')
+  if (!card || !svg || !tabs || !zoneDetails) return
   svg.replaceChildren()
   tabs.replaceChildren()
+  zoneDetails.replaceChildren()
 
   if (currentStrategyView().id !== 'price-action') {
     card.hidden = true
@@ -1050,6 +1090,7 @@ const renderAssetChart = () => {
   selectedAssetChart = { symbol: asset.symbol, timeframeId }
   card.hidden = false
   title.textContent = `${asset.symbol} · ${column?.label || timeframeId.toUpperCase()}`
+  renderAssetZoneDetails(zoneDetails, asset, asset.trends?.[timeframeId], timeframeId)
 
   for (const chartColumn of assetChartColumns()) {
     const button = el('button', {

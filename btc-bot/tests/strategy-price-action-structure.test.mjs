@@ -241,6 +241,10 @@ test('trade profile requires S/D zone hit, 50 percent pullback and at least 2R',
   assert.equal(profile.zoneHit, true)
   assert.ok(profile.rewardRisk >= 2)
   assert.deepEqual(profile.pullbackRange, { from: 110, to: 100 })
+  const demandCandidate = profile.zoneCandidates.find((candidate) => candidate.type === 'demand')
+  assert.equal(demandCandidate.eligible, true)
+  assert.deepEqual(demandCandidate.entryRange, { low: 100, high: 105 })
+  assert.equal(demandCandidate.entryForMinRR, 105)
   assert.equal(profile.tp1, 120)
   assert.equal(profile.tp2, 140)
   assert.equal('invalidation' in profile, false)
@@ -256,6 +260,29 @@ test('trade profile requires S/D zone hit, 50 percent pullback and at least 2R',
   })
   assert.equal(withoutHit.status, 'watch')
   assert.equal(withoutHit.gates.find((entry) => entry.id === 'zone').status, 'unmet')
+})
+
+test('a deeper entry inside the zone can rescue reward/risk', () => {
+  const item = {
+    trend: 'up',
+    price: 115,
+    lastCandle: candle(START, 116, 117, 114, 115),
+    structure: {
+      high: { current: { price: 120 } },
+      low: { current: { price: 100 } },
+    },
+    zones: {
+      nearbyDemand: [{ type: 'demand', low: 100, high: 105 }],
+      nearbySupply: [{ type: 'supply', low: 140, high: 145 }],
+      unfilledDemand: [{ type: 'demand', low: 100, high: 105 }],
+      unfilledSupply: [{ type: 'supply', low: 140, high: 145 }],
+    },
+  }
+  const profile = evaluateTradeProfile({ item, settings: { pullbackPct: 50, minRewardRisk: 6, stopBufferPct: 0.02 } })
+  const candidate = profile.zoneCandidates.find((entry) => entry.type === 'demand')
+  assert.equal(candidate.eligible, true)
+  assert.ok(candidate.entryForMinRR < candidate.entryAtZoneHit)
+  assert.ok(candidate.rewardRisk >= 6)
 })
 
 test('open-position review detects lower-timeframe invalidation and recalculates the plan', () => {
@@ -352,9 +379,9 @@ test('fresh price-action matrix is reused instead of refetching every bot pass',
     assets: PRICE_ACTION_ASSETS.map((asset) => ({
       symbol: asset.symbol,
       trends: {
-        '1h': { structure: {}, chartCandles: [] },
-        '4h': { structure: {}, chartCandles: [] },
-        '1d': { structure: {}, chartCandles: [] },
+        '1h': { structure: {}, chartCandles: [], tradeProfile: { zoneCandidates: [] } },
+        '4h': { structure: {}, chartCandles: [], tradeProfile: { zoneCandidates: [] } },
+        '1d': { structure: {}, chartCandles: [], tradeProfile: { zoneCandidates: [] } },
       },
     })),
   }
@@ -376,9 +403,9 @@ test('stored hourly price-action refresh is capped so entry profiles are checked
     assets: PRICE_ACTION_ASSETS.map((asset) => ({
       symbol: asset.symbol,
       trends: {
-        '1h': { structure: {}, chartCandles: [] },
-        '4h': { structure: {}, chartCandles: [] },
-        '1d': { structure: {}, chartCandles: [] },
+        '1h': { structure: {}, chartCandles: [], tradeProfile: { zoneCandidates: [] } },
+        '4h': { structure: {}, chartCandles: [], tradeProfile: { zoneCandidates: [] } },
+        '1d': { structure: {}, chartCandles: [], tradeProfile: { zoneCandidates: [] } },
       },
     })),
   }
