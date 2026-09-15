@@ -528,7 +528,7 @@ const zoneEntryCandidate = ({ item, side, zone, pullback, invalidationLevel, set
   const threshold = Number.isFinite(stop) && Number.isFinite(weightedTarget)
     ? (weightedTarget + minRewardRisk * stop) / (minRewardRisk + 1)
     : null
-  const entryForMinRR = Number.isFinite(refinedEntry) && Number.isFinite(rrAtPullback) && rrAtPullback >= minRewardRisk
+  const entryForMinRR = pullbackEligible && Number.isFinite(refinedEntry) && Number.isFinite(rrAtPullback) && rrAtPullback >= minRewardRisk
     ? refinedEntry
     : Number.isFinite(threshold) && pullbackEligible && threshold >= entryLow && threshold <= entryHigh
       ? threshold
@@ -617,7 +617,6 @@ export const evaluateTradeProfile = ({
 } = {}) => {
   const side = sideFromTrend(item?.trend)
   const latest = item?.lastCandle
-  const price = item?.price
   const zones = item?.zones
 
   // Flat is a structure-building state, never an entry state. In particular,
@@ -696,12 +695,13 @@ export const evaluateTradeProfile = ({
     (side === 'long' ? zones?.demand : side === 'short' ? zones?.supply : null) ??
     fallbackZone
   const zoneHit = zoneHitByCandle(activeZone, latest)
-  const plannedEntry = activeCandidate?.entryForMinRR ?? activeCandidate?.entryAtZoneHit ?? (
-    activeZone
-      ? side === 'long' ? activeZone.high : activeZone.low
-      : null
+  // A planned entry is meaningful only when the selected zone overlaps the
+  // structural pullback range. Keep the zone edge available for diagnostics,
+  // but never publish it as an entry when the whole zone is outside that range.
+  const plannedEntry = activeCandidate?.entryForMinRR ?? (
+    activeCandidate?.pullbackEligible ? activeCandidate.entryAtZoneHit : null
   )
-  const entry = Number.isFinite(plannedEntry) ? plannedEntry : Number.isFinite(price) ? price : null
+  const entry = Number.isFinite(plannedEntry) ? plannedEntry : null
   const pulledBack = pullbackSatisfied({ side, latest, level: pullback })
   const buffer = activeCandidate?.stopBuffer ?? stopBuffer({
     zone: activeZone,

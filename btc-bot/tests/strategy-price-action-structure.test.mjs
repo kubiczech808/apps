@@ -405,6 +405,33 @@ test('zone hit entry is constrained to the pullback overlap', () => {
   assert.equal(profile.entry, 120)
 })
 
+test('entry is not published when the selected zone is outside the pullback range', () => {
+  const item = {
+    trend: 'up',
+    price: 78145,
+    lastCandle: candle(START, 78100, 78150, 78000, 78145),
+    structure: {
+      high: { current: { price: 79924 } },
+      low: { current: { price: 75906 } },
+    },
+    zones: {
+      nearbyDemand: [{ type: 'demand', low: 78000, high: 78542 }],
+      unfilledDemand: [{ type: 'demand', low: 78000, high: 78542 }],
+      unfilledSupply: [{ type: 'supply', low: 81000, high: 81500 }],
+    },
+  }
+  const profile = evaluateTradeProfile({ item, settings: { pullbackPct: 50, minRewardRisk: 2 } })
+  const candidate = profile.zoneCandidates.find((entry) => entry.type === 'demand')
+  const rangeLow = Math.min(profile.pullbackRange.from, profile.pullbackRange.to)
+  const rangeHigh = Math.max(profile.pullbackRange.from, profile.pullbackRange.to)
+
+  assert.deepEqual(profile.pullbackRange, { from: 77915, to: 75906 })
+  assert.equal(candidate.pullbackEligible, false)
+  assert.equal(candidate.entryAtZoneHit, 78542, 'zone edge remains available for diagnostics')
+  assert.equal(profile.entry, null)
+  assert.ok(profile.entry === null || (profile.entry >= rangeLow && profile.entry <= rangeHigh))
+})
+
 test('open-position review detects lower-timeframe invalidation and recalculates the plan', () => {
   const item = {
     trend: 'up',
