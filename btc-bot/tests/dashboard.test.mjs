@@ -197,6 +197,7 @@ test('asset tickers open a timeframe price chart with supply and demand zones', 
   assert.match(js, /renderAssetChart/)
   assert.match(js, /renderAssetZoneDetails/)
   assert.match(js, /zoneCandidateDetails/)
+  assert.match(js, /zoneCandidateFor/)
   assert.match(js, /Vstup pro min\. R\/R/)
   assert.match(js, /chartCandles/)
   assert.match(css, /collapsible-chart/)
