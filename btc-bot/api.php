@@ -28,6 +28,7 @@ header('X-Content-Type-Options: nosniff');
 const DATA_DIR = __DIR__ . '/data';
 const STATE_FILE = DATA_DIR . '/bot-state.json';
 const SETTINGS_FILE = DATA_DIR . '/settings.json';
+const BACKTEST_FILE = DATA_DIR . '/backtests.json';
 const LEASE_FILE = DATA_DIR . '/lease.json';
 const COMMANDS_FILE = DATA_DIR . '/commands.json';
 const MAX_BODY_BYTES = 4 * 1024 * 1024;
@@ -169,11 +170,17 @@ switch ($action) {
     case 'state': {
         $state = readJsonFile(STATE_FILE, null);
         $settings = readJsonFile(SETTINGS_FILE, null);
+        $backtests = readJsonFile(BACKTEST_FILE, null);
         if (is_array($state) && is_array($settings)) {
             // The settings file is the authority. A runner publishes the
             // settings it ran with, and echoing those back would silently undo
             // an edit made from the dashboard between two passes.
             $state['settings'] = $settings;
+        }
+        if (is_array($state) && is_array($backtests)) {
+            // Backtest summaries are versioned research artefacts published
+            // with the app, not mutable bot runtime state.
+            $state['backtests'] = $backtests;
         }
         ok([
             'state' => $state,

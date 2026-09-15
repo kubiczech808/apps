@@ -762,16 +762,41 @@ const renderZonesDetail = (zones, timeframeId, candidates = []) => {
 
 const renderAssetZoneDetails = (host, asset, item, timeframeId) => {
   host.replaceChildren()
-  if (!item?.zones) return
+  if (!item) return
   const candidates = item.tradeProfile?.zoneCandidates ?? []
-  host.append(
-    el('div', { className: 'asset-zone-details' }, [
+  const backtest = priceActionBacktestResult(asset, timeframeId)
+  const backtestPf = Number.isFinite(Number(backtest?.profitFactor)) ? nf(2).format(Number(backtest.profitFactor)) : 'n/a'
+  const backtestDd = Number.isFinite(Number(backtest?.maxDrawdownPct)) ? `${nf(1).format(Number(backtest.maxDrawdownPct))} %` : 'n/a'
+  const backtestBlock = backtest
+    ? el('div', { className: 'asset-backtest-detail' }, [
+        el('h3', { text: `Backtest PA-1 · ${timeframeId.toUpperCase()}` }),
+        el('div', { className: 'asset-backtest-metrics' }, [
+          el('div', { className: 'trade-metric' }, [el('span', { text: 'Výsledek' }), el('strong', { text: Number.isFinite(Number(backtest.cagrPct)) ? `${nf(1).format(Number(backtest.cagrPct))} % p.a.` : 'n/a' })]),
+          el('div', { className: 'trade-metric' }, [el('span', { text: 'Celkem' }), el('strong', { text: Number.isFinite(Number(backtest.returnPct)) ? `${nf(1).format(Number(backtest.returnPct))} %` : 'n/a' })]),
+          el('div', { className: 'trade-metric' }, [el('span', { text: 'Obchody' }), el('strong', { text: Number.isFinite(Number(backtest.trades)) ? String(backtest.trades) : 'n/a' }), el('em', { text: Number.isFinite(Number(backtest.winRate)) ? `win ${nf(1).format(Number(backtest.winRate))} %` : '' })]),
+          el('div', { className: 'trade-metric' }, [el('span', { text: 'PF / DD' }), el('strong', { text: `${backtestPf} / ${backtestDd}` })]),
+        ]),
+        el('p', { className: 'asset-backtest-period', text: `Období ${calendarDate(backtest.from)} → ${calendarDate(backtest.to)} · ${backtest.candles ?? 0} svíček · ${backtest.readyProfiles ?? 0} ready profilů` }),
+        el('p', { className: 'asset-backtest-source', text: `${backtest.dataSource || 'zdroj neuveden'}${backtest.model ? ` · ${backtest.model}` : ''}` }),
+      ])
+    : el('div', { className: 'asset-backtest-detail' }, [
+        el('h3', { text: `Backtest PA-1 · ${timeframeId.toUpperCase()}` }),
+        el('p', { className: 'asset-backtest-period', text: 'Výsledek zatím není publikovaný.' }),
+      ])
+  const details = [backtestBlock]
+  if (item.zones) {
+    details.unshift(
       el('h3', { text: `${asset.symbol} · všechny dostupné zóny pro ${timeframeId.toUpperCase()}` }),
       el('p', { className: 'asset-zone-details-intro', text: 'V přehledu vstupu zůstávají jen zóny v pullback pásmu s dosažitelným minimálním R/R. Zde jsou i zóny, které byly vyřazeny.' }),
       el('div', { className: 'asset-zone-detail-columns' }, [
         zoneCard('Demand', zonesForDetail(item.zones, 'demand'), 'Žádná dostupná demand zóna.', timeframeId, candidates),
         zoneCard('Supply', zonesForDetail(item.zones, 'supply'), 'Žádná dostupná supply zóna.', timeframeId, candidates),
-      ]),
+      ])
+    )
+  }
+  host.append(
+    el('div', { className: 'asset-zone-details' }, [
+      ...details,
     ])
   )
 }
@@ -2073,7 +2098,7 @@ const renderPriceActionBacktests = (host) => {
         ...columns.map((column) =>
           el('td', {}, [decisionFactElement(backtestStatus(priceActionBacktestResult(asset, column.id)))])
         ),
-        el('td', { className: 'reason', text: 'připraveno pro výsledky po doladění strategie' }),
+        el('td', { className: 'reason', text: 'kliknutím na asset zobrazíte období a metodiku' }),
       ])
     )
   }
@@ -2081,7 +2106,7 @@ const renderPriceActionBacktests = (host) => {
   host.append(
     el('p', {
       className: 'zone-rule',
-      text: 'Výsledky budou po backtestu ukládané po assetu a timeframe; tabulka už drží stejné členění jako struktura trhu.',
+      text: 'Výsledky jsou uložené po assetu a timeframe; detail assetu obsahuje období, zdroj dat a metodiku.',
     }),
     el('div', { className: 'table-scroll' }, [table])
   )

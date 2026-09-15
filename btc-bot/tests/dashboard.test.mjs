@@ -220,6 +220,8 @@ test('asset tickers open a timeframe price chart with supply and demand zones', 
   assert.match(js, /assetPriceLabel\(asset\.symbol, assetCurrentPrice\(asset\)\)/)
   assert.match(js, /renderAssetChart/)
   assert.match(js, /renderAssetZoneDetails/)
+  assert.match(js, /asset-backtest-detail/)
+  assert.match(js, /ready profilů/)
   assert.match(js, /zoneCandidateDetails/)
   assert.match(js, /zoneCandidateFor/)
   assert.match(js, /title\.toLowerCase\(\), index/)
@@ -250,6 +252,7 @@ test('asset tickers open a timeframe price chart with supply and demand zones', 
   assert.match(css, /asset-time-label/)
   assert.match(css, /overscroll-behavior: contain/)
   assert.match(css, /asset-zone-details/)
+  assert.match(css, /asset-backtest-detail/)
   assert.match(css, /zone-candidate-details/)
   assert.match(css, /asset-ticker/)
   assert.match(css, /asset-zone-demand/)
@@ -271,7 +274,7 @@ test('backtests tab prepares a timeframe matrix for tuned strategies', () => {
   assert.match(js, /backtestStatus/)
   assert.match(js, /priceActionBacktestResult/)
   assert.match(js, /Backtesty: Price Action/)
-  assert.match(js, /připraveno pro výsledky po doladění strategie/)
+  assert.match(js, /detail assetu obsahuje období, zdroj dat a metodiku/)
   assert.match(css, /backtest-matrix-table/)
 })
 
@@ -287,4 +290,11 @@ test('the first migrated publish persists the strategy-versioned settings', () =
   assert.match(api, /!isset\(\$existingSettings\['strategyId'\]\)/)
   assert.match(api, /isset\(\$publishedSettings\['strategyId'\]\)/)
   assert.match(api, /writeJsonFile\(SETTINGS_FILE, \$publishedSettings\)/)
+})
+
+test('the API overlays published PA-1 backtest summaries onto the dashboard state', () => {
+  assert.match(api, /const BACKTEST_FILE = DATA_DIR \. '\/backtests\.json'/)
+  assert.match(api, /\$backtests = readJsonFile\(BACKTEST_FILE, null\)/)
+  assert.match(api, /\$state\['backtests'\] = \$backtests/)
+  assert.match(js, /detail assetu obsahuje období, zdroj dat a metodiku/)
 })

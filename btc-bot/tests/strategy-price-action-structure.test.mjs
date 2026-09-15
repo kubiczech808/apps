@@ -6,6 +6,7 @@ import {
   buildPriceActionMatrix,
   classifyStructure,
   evaluateTradeProfile,
+  fetchYahooCandles,
   fetchStooqCandles,
   PRICE_ACTION_ASSETS,
   PRICE_ACTION_MATRIX_SCHEMA,
@@ -88,6 +89,30 @@ test('Stooq CSV parser accepts daily and intraday historical rows through the fe
   assert.equal(candles.length, 2)
   assert.equal(candles[0].open, 1.1)
   assert.equal(candles[1].close, 1.12)
+})
+
+test('Yahoo candle wrapper drops zero-valued FX gap rows', async () => {
+  const fetchImpl = async () => ({
+    ok: true,
+    json: async () => ({
+      chart: {
+        result: [{
+          timestamp: [START / 1000, (START + HOUR) / 1000],
+          indicators: { quote: [{
+            open: [0, 1.10],
+            high: [0, 1.12],
+            low: [0, 1.09],
+            close: [0, 1.11],
+            volume: [0, 0],
+          }] },
+        }],
+      },
+    }),
+  })
+
+  const candles = await fetchYahooCandles({ symbol: 'EURUSD=X', fetchImpl })
+  assert.equal(candles.length, 1)
+  assert.equal(candles[0].close, 1.11)
 })
 
 test('structure labels require candle closes beyond previous swing wicks', () => {

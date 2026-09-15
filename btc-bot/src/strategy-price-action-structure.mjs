@@ -163,7 +163,10 @@ export const fetchYahooCandles = async ({
     const high = numberOrNull(quote.high?.[index])
     const low = numberOrNull(quote.low?.[index])
     const close = numberOrNull(quote.close?.[index])
-    if (open === null || high === null || low === null || close === null) continue
+    // Yahoo leaves some FX bars as literal zeroes when a market-data gap is
+    // present. They are not candles and would create impossible entries,
+    // stops and enormous artificial returns in a backtest.
+    if ([open, high, low, close].some((value) => value === null || value <= 0)) continue
     out.push({
       time: Number(timestamps[index]) * 1000,
       open,
