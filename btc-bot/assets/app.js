@@ -12,7 +12,7 @@
 'use strict'
 
 const KEY_STORAGE = 'btc-bot-key'
-const STRATEGY_VIEW_STORAGE = 'btc-bot-strategy-view'
+const STRATEGY_VIEW_STORAGE = 'btc-bot-strategy-view-v2'
 const REFRESH_MS = 30_000
 const SATS_PER_BTC = 1e8
 const DECISION_SIGNAL_STATES = new Set(['met', 'unmet', 'neutral'])
@@ -23,7 +23,7 @@ let state = null
 let keyIsPublic = false
 let refreshTimer = null
 let priceActionSelection = null
-let selectedStrategyView = 'momentum'
+let selectedStrategyView = 'price-action'
 
 // ── formatting ────────────────────────────────────────────────────────────
 
@@ -583,14 +583,14 @@ const setKey = (value) => {
 
 const getStrategyView = () => {
   try {
-    return localStorage.getItem(STRATEGY_VIEW_STORAGE) || 'momentum'
+    return localStorage.getItem(STRATEGY_VIEW_STORAGE) || 'price-action'
   } catch {
-    return 'momentum'
+    return 'price-action'
   }
 }
 
 const setStrategyView = (value) => {
-  selectedStrategyView = STRATEGY_VIEWS[value] ? value : 'momentum'
+  selectedStrategyView = STRATEGY_VIEWS[value] ? value : 'price-action'
   try {
     localStorage.setItem(STRATEGY_VIEW_STORAGE, selectedStrategyView)
   } catch {

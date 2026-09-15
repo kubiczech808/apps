@@ -121,6 +121,8 @@ test('strategy tab renders the price-action structure matrix', () => {
 test('strategy switching lives in the header and redraws dashboard context', () => {
   assert.ok(html.includes('id="strategy-view"'), 'header must contain the strategy switcher')
   assert.match(js, /STRATEGY_VIEW_STORAGE/)
+  assert.match(js, /selectedStrategyView = 'price-action'/)
+  assert.match(js, /\|\| 'price-action'/)
   assert.match(js, /STRATEGY_VIEWS/)
   assert.match(js, /currentStrategyView/)
   assert.match(js, /renderPriceActionTiles/)
