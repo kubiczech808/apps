@@ -43,6 +43,9 @@ const quotePrice = (value) => {
   return nf(digits).format(value)
 }
 
+const quoteCurrency = (symbol) => symbol?.startsWith('USD') ? symbol.slice(3) : 'USD'
+const assetPriceLabel = (symbol, value) => Number.isFinite(value) ? `${quotePrice(value)} ${quoteCurrency(symbol)}` : '–'
+
 const signedPct = (value, digits = 2) => {
   if (!Number.isFinite(value)) return { text: '–', className: '' }
   const text = `${value > 0 ? '+' : value < 0 ? '−' : ''}${nf(digits).format(Math.abs(value))} %`
@@ -453,8 +456,8 @@ const zoneListElement = (item, profile, type, timeframeId) => {
   })
 }
 
-const priceFact = (value, label, title = null, status = 'neutral') =>
-  decisionFact(Number.isFinite(value) ? `${label} ${quotePrice(value)}` : '–', status, title)
+const priceFact = (value, title = null, status = 'neutral') =>
+  decisionFact(Number.isFinite(value) ? quotePrice(value) : '–', status, title)
 
 const passedOrWaiting = (gate) => gate?.status === 'met' ? 'met' : 'neutral'
 
@@ -489,7 +492,7 @@ const priceActionDecisionFact = (entry, column) => {
       const gate = profileGate(profile, 'pullback')
       const range = pullbackRange(entry)
       return decisionFact(
-        range ? `${profile.pullbackPct ?? 50}% ${quotePrice(range.from)} → ${quotePrice(range.to)}` : '–',
+        range ? `${quotePrice(range.from)} → ${quotePrice(range.to)}` : '–',
         passedOrWaiting(gate),
         gate?.detail ?? 'Vstup se čeká v pásmu od 50% pullbacku po invalidaci struktury.'
       )
@@ -497,16 +500,15 @@ const priceActionDecisionFact = (entry, column) => {
     case 'entry':
       return priceFact(
         profile?.entry,
-        'entry',
         profile?.zoneHit ? 'Cena zasáhla pracovní zónu.' : 'Pracovní entry; čeká se na zásah správné zóny.',
         profile?.zoneHit ? 'met' : 'neutral'
       )
     case 'stop':
-      return priceFact(profile?.stop, 'SL', Number.isFinite(profile?.stopBuffer) ? `Za hranicí zóny, buffer ${quotePrice(profile.stopBuffer)}.` : 'Stop podle hranice pracovní zóny.')
+      return priceFact(profile?.stop, Number.isFinite(profile?.stopBuffer) ? `Za hranicí zóny, buffer ${quotePrice(profile.stopBuffer)}.` : 'Stop podle hranice pracovní zóny.')
     case 'tp1':
-      return priceFact(profile?.tp1, 'TP1', profile?.tp1Rule ?? null)
+      return priceFact(profile?.tp1, profile?.tp1Rule ?? null)
     case 'tp2':
-      return priceFact(profile?.tp2, 'TP2', profile?.tp2Rule ?? null)
+      return priceFact(profile?.tp2, profile?.tp2Rule ?? null)
     case 'rr': {
       const gate = profileGate(profile, 'rr')
       return decisionFact(
@@ -585,7 +587,7 @@ const renderPriceActionDecisionTable = (matrix, columns) => {
         assetTickerButton(asset.symbol, timeframe.id),
         el('span', {
           className: 'asset-decision-price',
-          text: Number.isFinite(item?.price) ? `close ${quotePrice(item.price)}` : 'close –',
+          text: assetPriceLabel(asset.symbol, item?.price),
         }),
       ]),
       ...PRICE_ACTION_DECISION_COLUMNS.map((column) => priceActionDecisionCell(entry, column)),
@@ -806,7 +808,7 @@ const renderStructureDetail = ({ matrix, columns }) => {
       structure.historyDays ? el('span', { text: `horizont ${structure.historyDays} dní` }) : null,
       el('span', { text: `hlavní pivot ±${structure.lookback ?? '–'} svíček` }),
       el('span', { text: `zóny ±${structure.zoneLookback ?? '–'} svíčky` }),
-      Number.isFinite(item.price) ? el('span', { text: `close ${quotePrice(item.price)}` }) : null,
+      Number.isFinite(item.price) ? el('span', { text: assetPriceLabel(asset.symbol, item.price) }) : null,
     ]),
     structure.contextHigh && structure.contextLow
       ? el('p', {
@@ -1200,7 +1202,7 @@ const renderAssetChart = () => {
     const currentY = y(currentPrice)
     svg.append(
       el('line', { className: 'asset-current-line', x1: ASSET_CHART.padLeft, x2: ASSET_CHART.width - ASSET_CHART.padRight, y1: currentY, y2: currentY }),
-      el('text', { className: 'asset-current-label', x: ASSET_CHART.width - ASSET_CHART.padRight + 8, y: currentY - 5, text: `close ${quotePrice(currentPrice)}` })
+      el('text', { className: 'asset-current-label', x: ASSET_CHART.width - ASSET_CHART.padRight + 8, y: currentY - 5, text: assetPriceLabel(asset.symbol, currentPrice) })
     )
   }
 
@@ -1223,7 +1225,7 @@ const renderAssetChart = () => {
 
   const first = candles[0]
   const last = candles.at(-1)
-  meta.textContent = `${PRICE_ACTION_TREND_LABELS[item?.trend] || 'flat'} · close ${quotePrice(currentPrice)} · ${when(first.time)} až ${when(last.time)}`
+  meta.textContent = `${PRICE_ACTION_TREND_LABELS[item?.trend] || 'flat'} · ${assetPriceLabel(asset.symbol, currentPrice)} · ${when(first.time)} až ${when(last.time)}`
 }
 
 // ── equity chart ──────────────────────────────────────────────────────────
