@@ -146,7 +146,16 @@ jobs:
           "${user_systemctl[@]}" reset-failed btc-bot.service || true
           "${user_systemctl[@]}" enable --now btc-bot.timer
           "${user_systemctl[@]}" restart btc-bot.timer
-          "${user_systemctl[@]}" restart btc-bot.service
+          if ! "${user_systemctl[@]}" restart btc-bot.service; then
+            echo "systemd oneshot failed; running one foreground verification pass so the new build can publish its state."
+            sudo -u openclaw2 -H bash -lc '
+              set -a
+              . "$HOME/.config/btc-bot.env"
+              set +a
+              cd "$HOME/.local/lib/btc-bot"
+              node tools/run-bot.mjs
+            '
+          fi
           "${user_systemctl[@]}" --no-pager --full status btc-bot.timer
           "${user_systemctl[@]}" list-timers --all btc-bot.timer
 
