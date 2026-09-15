@@ -3,7 +3,8 @@
 // Intraday FX history is limited by the public Yahoo endpoint; every published
 // row keeps its actual period instead of presenting a longer requested window.
 
-import { writeFile } from 'node:fs/promises'
+import { mkdir, writeFile } from 'node:fs/promises'
+import { dirname } from 'node:path'
 import { aggregate, fetchBinanceCandles } from '../src/candles.mjs'
 import {
   DEFAULT_PRICE_ACTION_STRUCTURE,
@@ -196,6 +197,7 @@ try {
   result.portfolio = defaultPeriod?.portfolio ?? null
 
   result.run = { status: 'complete', requestedAt: result.generatedAt, completedAt: new Date().toISOString() }
+  await mkdir(dirname(output), { recursive: true })
   await writeFile(output, `${JSON.stringify(result, null, 2)}\n`, 'utf8')
   await saveReport(result)
   console.log(`Wrote ${output}${store ? ' and published it' : ''}`)
