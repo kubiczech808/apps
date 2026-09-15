@@ -145,7 +145,6 @@ jobs:
           # the authoritative health checks.
           "${user_systemctl[@]}" reset-failed btc-bot.service || true
           "${user_systemctl[@]}" enable --now btc-bot.timer
-          "${user_systemctl[@]}" restart btc-bot.timer
           if ! "${user_systemctl[@]}" restart btc-bot.service; then
             echo "systemd oneshot failed; running one foreground verification pass so the new build can publish its state."
             sudo -u openclaw2 -H bash -lc '
