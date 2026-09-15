@@ -2,7 +2,7 @@ import { aggregate, HOUR_MS } from './candles.mjs'
 import { buildZones, candleSignal, marketStructure } from './priceaction.mjs'
 
 export const PRICE_ACTION_STRUCTURE_ID = 'price-action-structure-v1'
-export const PRICE_ACTION_MATRIX_SCHEMA = 11
+export const PRICE_ACTION_MATRIX_SCHEMA = 12
 export const PRICE_ACTION_CHART_CANDLE_LIMIT = 160
 
 export const DEFAULT_PRICE_ACTION_STRUCTURE = {
@@ -612,6 +612,54 @@ export const evaluateTradeProfile = ({
   const latest = item?.lastCandle
   const price = item?.price
   const zones = item?.zones
+
+  // Flat is a structure-building state, never an entry state. In particular,
+  // do not fall back to the current close here: that would look like a valid
+  // planned entry in the dashboard even though no directional setup exists.
+  if (!side) {
+    const reason = item?.reason || 'flat struktura; čeká se na potvrzení HH + HL nebo LH + LL'
+    const riskPct = Number(settings.riskPct) || 1
+    const minRewardRisk = Number(settings.minRewardRisk) || 2
+    return {
+      status: 'neutral',
+      mode: 'formation',
+      formationState: 'forming',
+      reason,
+      side: null,
+      riskPct,
+      minRewardRisk,
+      pullbackPct: settings.pullbackPct ?? 50,
+      zone: null,
+      zoneHit: false,
+      entry: null,
+      pullbackLevel: null,
+      invalidationLevel: null,
+      pullbackRange: null,
+      zoneCandidates: [],
+      activeCandidate: null,
+      stop: null,
+      stopBuffer: null,
+      entryAtZoneHit: null,
+      refinedEntry: null,
+      entryForMinRR: null,
+      entrySource: null,
+      entryRefinement: null,
+      tp1: null,
+      tp1Rule: null,
+      tp2: null,
+      tp2Zone: null,
+      tp2Rule: null,
+      weightedTarget: null,
+      risk: null,
+      reward: null,
+      rewardRisk: null,
+      gates: [
+        gate('trend', 'struktura má směr', false, reason, true),
+      ],
+      refinement: null,
+    }
+  }
+
   const zone = side === 'long' ? zones?.demand : side === 'short' ? zones?.supply : null
   const pullback = pullbackLevel({ side, structure: item?.structure, pullbackPct: settings.pullbackPct })
   const invalidationLevel = structureInvalidationLevel({ side, structure: item?.structure })
@@ -743,6 +791,8 @@ const oppositeTrend = (side) => side === 'long' ? 'down' : side === 'short' ? 'u
 
 const profileSnapshot = (profile) => ({
   status: profile?.status ?? null,
+  mode: profile?.mode ?? null,
+  reason: profile?.reason ?? null,
   side: profile?.side ?? null,
   zone: profile?.zone ? { type: profile.zone.type, low: profile.zone.low, high: profile.zone.high } : null,
   entry: profile?.entry ?? null,

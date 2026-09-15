@@ -41,6 +41,37 @@ test('price-action structure classifies trend from confirmed swings', () => {
   assert.equal(flat.status, 'neutral')
 })
 
+test('flat structure is formation-only and never publishes a planned entry', () => {
+  const profile = evaluateTradeProfile({
+    item: {
+      trend: 'flat',
+      reason: 'LH + HL',
+      price: 103,
+      structure: {
+        high: { current: { price: 120 } },
+        low: { current: { price: 100 } },
+      },
+      zones: {
+        demand: { type: 'demand', low: 100, high: 105 },
+        supply: { type: 'supply', low: 140, high: 145 },
+      },
+    },
+    settings: { pullbackPct: 50, minRewardRisk: 2, riskPct: 1 },
+  })
+
+  assert.equal(profile.mode, 'formation')
+  assert.equal(profile.formationState, 'forming')
+  assert.equal(profile.side, null)
+  assert.equal(profile.entry, null)
+  assert.equal(profile.stop, null)
+  assert.equal(profile.tp1, null)
+  assert.equal(profile.tp2, null)
+  assert.equal(profile.rewardRisk, null)
+  assert.equal(profile.zone, null)
+  assert.deepEqual(profile.zoneCandidates, [])
+  assert.equal(profile.gates[0].status, 'neutral')
+})
+
 test('Stooq CSV parser accepts daily and intraday historical rows through the fetch wrapper', async () => {
   const csv = [
     'Date,Time,Open,High,Low,Close,Volume',

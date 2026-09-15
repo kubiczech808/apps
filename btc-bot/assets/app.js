@@ -450,7 +450,12 @@ const zoneRangeTrigger = ({ zone, status = 'neutral', title = null, timeframeId,
 
 const zoneListElement = (profile, timeframeId) => {
   const active = profile?.side === 'long' ? 'demand' : profile?.side === 'short' ? 'supply' : null
-  if (!active) return [decisionFactElement(decisionFact('–', 'neutral', 'Bez směru struktury není vstupní zóna určena.'))]
+  if (!active) {
+    const title = profile?.mode === 'formation'
+      ? 'Struktura je flat; nejdříve čekáme na vytvoření směru.'
+      : 'Bez směru struktury není vstupní zóna určena.'
+    return [decisionFactElement(decisionFact('–', 'neutral', title))]
+  }
   const candidates = (profile?.zoneCandidates ?? []).filter((candidate) => candidate.type === active && candidate.eligible)
   if (!candidates.length) return [decisionFactElement(decisionFact('–', 'neutral', 'Žádná zóna současně nesplňuje pullback a minimální R/R.'))]
   return candidates.map((candidate) => {
@@ -466,6 +471,8 @@ const priceFact = (value, title = null, status = 'neutral') =>
   decisionFact(Number.isFinite(value) ? quotePrice(value) : '–', status, title)
 
 const passedOrWaiting = (gate) => gate?.status === 'met' ? 'met' : 'neutral'
+
+const formationTitle = 'Struktura je flat; nevstupujeme a čekáme na potvrzení HH + HL nebo LH + LL.'
 
 const pullbackRange = (entry) => {
   const profile = entry?.profile
@@ -493,6 +500,7 @@ const priceActionDecisionFact = (entry, column) => {
     case 'zones':
       return null
     case 'pullback': {
+      if (profile?.mode === 'formation') return decisionFact('tvorba struktury', 'neutral', formationTitle)
       const gate = profileGate(profile, 'pullback')
       const range = pullbackRange(entry)
       return decisionFact(
@@ -502,18 +510,23 @@ const priceActionDecisionFact = (entry, column) => {
       )
     }
     case 'entry':
+      if (profile?.mode === 'formation') return priceFact(null, formationTitle)
       return priceFact(
         profile?.entry,
         profile?.zoneHit ? 'Cena zasáhla pracovní zónu.' : 'Pracovní entry; čeká se na zásah správné zóny.',
         profile?.zoneHit ? 'met' : 'neutral'
       )
     case 'stop':
+      if (profile?.mode === 'formation') return priceFact(null, formationTitle)
       return priceFact(profile?.stop, Number.isFinite(profile?.stopBuffer) ? `Za hranicí zóny, buffer ${quotePrice(profile.stopBuffer)}.` : 'Stop podle hranice pracovní zóny.')
     case 'tp1':
+      if (profile?.mode === 'formation') return priceFact(null, formationTitle)
       return priceFact(profile?.tp1, profile?.tp1Rule ?? null)
     case 'tp2':
+      if (profile?.mode === 'formation') return priceFact(null, formationTitle)
       return priceFact(profile?.tp2, profile?.tp2Rule ?? null)
     case 'rr': {
+      if (profile?.mode === 'formation') return decisionFact('–', 'neutral', formationTitle)
       const gate = profileGate(profile, 'rr')
       return decisionFact(
         Number.isFinite(profile?.rewardRisk) ? `${nf(2).format(profile.rewardRisk)}:1` : '–',
@@ -737,6 +750,18 @@ const tradeMetric = (label, value, sub = null) =>
 
 const renderTradeProfile = (profile) => {
   if (!profile) return null
+  if (profile.mode === 'formation') {
+    return el('div', { className: 'trade-profile' }, [
+      el('div', { className: 'trade-profile-head' }, [
+        el('div', {}, [
+          el('strong', { text: 'Tvorba struktury' }),
+          el('p', { text: 'Flat struktura nemá obchodní směr ani vstupní plán.' }),
+        ]),
+        decisionFactElement(decisionFact('čeká', 'neutral', profile.reason || formationTitle)),
+      ]),
+      el('p', { className: 'trade-note', text: 'Entry, SL, TP a R/R se objeví až po potvrzení hlavní struktury jako up nebo down.' }),
+    ])
+  }
   const side = profile.side === 'long' ? 'long' : profile.side === 'short' ? 'short' : '–'
   const rr = Number.isFinite(profile.rewardRisk) ? `${nf(2).format(profile.rewardRisk)}:1` : '–'
   return el('div', { className: 'trade-profile' }, [
