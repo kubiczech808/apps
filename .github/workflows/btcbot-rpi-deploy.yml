@@ -134,10 +134,12 @@ jobs:
             systemctl --user)
 
           "${user_systemctl[@]}" daemon-reload
+          "${user_systemctl[@]}" reset-failed btc-bot.service
           "${user_systemctl[@]}" enable --now btc-bot.timer
           "${user_systemctl[@]}" restart btc-bot.timer
           "${user_systemctl[@]}" restart btc-bot.service
           "${user_systemctl[@]}" --no-pager --full status btc-bot.timer
+          "${user_systemctl[@]}" list-timers --all btc-bot.timer
 
           sudo -u openclaw2 -H node - <<'NODE'
           const fs = require('node:fs')
@@ -170,4 +172,51 @@ jobs:
             throw new Error('BTCUSD 1D does not use the scaled structure profile')
           }
           if (!(summary.btcDailyCandles >= 160)) throw new Error('BTCUSD 1D history is too short')
+          NODE
+
+          # A fresh local cache is not enough: the dashboard reads the hosted
+          # document. Verify this pass published there, then verify that the
+          # timer produces a second heartbeat on its own one minute later.
+          sudo -u openclaw2 -H node - <<'NODE'
+          const fs = require('node:fs')
+
+          const env = Object.fromEntries(
+            fs.readFileSync('/home/openclaw2/.config/btc-bot.env', 'utf8')
+              .split(/\r?\n/)
+              .filter((line) => line && !line.startsWith('#'))
+              .map((line) => {
+                const separator = line.indexOf('=')
+                return [line.slice(0, separator), line.slice(separator + 1)]
+              })
+          )
+          const apiUrl = env.BOT_API_URL
+          const apiKey = env.BOT_API_KEY
+          if (!apiUrl || !apiKey) throw new Error('Runner API credentials are missing')
+
+          const hostedHeartbeat = async (after = 0) => {
+            const response = await fetch(`${apiUrl}?action=state`, {
+              headers: { Accept: 'application/json', 'X-Bot-Key': apiKey },
+            })
+            if (!response.ok) throw new Error(`Hosted state returned HTTP ${response.status}`)
+            const payload = await response.json()
+            const updatedAt = Date.parse(payload.state?.updatedAt)
+            const ageMs = Date.now() - updatedAt
+            const savedBy = payload.state?.savedBy
+            console.log({ hostedUpdatedAt: payload.state?.updatedAt, savedBy, ageSeconds: Math.round(ageMs / 1000) })
+            if (!Number.isFinite(updatedAt) || ageMs > 120_000) {
+              throw new Error('Hosted dashboard state was not refreshed by the Pi')
+            }
+            if (savedBy !== 'rpi') throw new Error(`Expected Pi heartbeat, got ${savedBy ?? 'none'}`)
+            if (updatedAt <= after) throw new Error('Timer did not produce a newer hosted heartbeat')
+            return updatedAt
+          }
+
+          ;(async () => {
+            const first = await hostedHeartbeat()
+            await new Promise((resolve) => setTimeout(resolve, 75_000))
+            await hostedHeartbeat(first)
+          })().catch((error) => {
+            console.error(error.stack ?? error.message)
+            process.exitCode = 1
+          })
           NODE

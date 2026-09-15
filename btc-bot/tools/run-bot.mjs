@@ -17,7 +17,7 @@ const store = createStateStore({
 })
 
 try {
-  const { run, saved } = await runPass({ store })
+  const { state, run, saved } = await runPass({ store })
   const parts = [
     `runner=${run.runner}`,
     `mode=${run.mode ?? 'n/a'}`,
