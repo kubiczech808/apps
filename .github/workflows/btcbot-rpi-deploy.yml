@@ -125,7 +125,7 @@ jobs:
             strategyId: state.settings?.strategyId,
             portfolioName: state.settings?.portfolioName,
             riskPct: state.settings?.risk?.riskPct,
-            stopAtr: state.settings?.strategy?.stopAtr,
+            priceActionRefresh: state.settings?.priceActionStructure?.refreshMinutes,
             lastAction: state.runs?.[0]?.action,
             lastError: state.runs?.[0]?.error,
             priceActionSchema: state.priceActionMatrix?.schemaVersion,
@@ -134,8 +134,8 @@ jobs:
             btcDailyPivotLookback: btcDaily?.structure?.lookback,
           }
           console.log(summary)
-          if (summary.strategyId !== 'momentum-breakout-v1') throw new Error('new strategy was not activated')
-          if (summary.riskPct !== 2 || summary.stopAtr !== 1) throw new Error('selected risk settings are not active')
+          if (summary.strategyId !== 'price-action-structure-v1') throw new Error('PA-1 was not activated')
+          if (summary.riskPct !== 1 || summary.priceActionRefresh !== 15) throw new Error('PA-1 settings are not active')
           if (summary.status === 'error' || summary.lastError) throw new Error(`first pass failed: ${summary.lastError}`)
           if (summary.priceActionSchema !== 5) throw new Error('price-action matrix was not rebuilt')
           if (summary.btcDailyHistoryDays !== 400 || summary.btcDailyPivotLookback !== 30) {

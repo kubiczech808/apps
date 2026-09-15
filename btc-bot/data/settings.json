@@ -1,17 +1,17 @@
 {
   "enabled": true,
   "mode": "paper",
-  "strategyId": "momentum-breakout-v1",
-  "strategyActivatedAt": "2026-09-11T06:04:00.000Z",
-  "portfolioName": "BTC Leveraged Momentum",
+  "strategyId": "price-action-structure-v1",
+  "strategyActivatedAt": "2026-09-15T05:15:00.000Z",
+  "portfolioName": "PA-1 Price Action Structure",
   "startingCapitalUsd": 100,
   "maxOpenPositions": 1,
   "maxTradesPerDay": 1,
   "cooldownMinutesAfterLoss": 0,
-  "timeframes": { "htfHours": 24, "ltfHours": 1 },
+  "timeframes": { "htfHours": 4, "ltfHours": 1 },
   "risk": {
     "market": "futures",
-    "riskPct": 2.0,
+    "riskPct": 1.0,
     "maxLeverage": 10,
     "liquidationSafety": 2.0,
     "maxNotionalPct": 300,
@@ -20,13 +20,23 @@
     "feeRate": 0.0006
   },
   "strategy": {
-    "entryLookbackDays": 20,
-    "exitLookbackDays": 10,
-    "regimeMaDays": 100,
-    "stopAtr": 1.0,
-    "atrDays": 20,
-    "takeProfitR": 15,
-    "allowShorts": false,
-    "minCandles": 140
+    "zoneLookback": 2,
+    "minCandles": 40,
+    "refreshMinutes": 15,
+    "zoneMaxAgeCandles": 400,
+    "pullbackPct": 50,
+    "minRewardRisk": 2,
+    "riskPct": 1,
+    "stopBufferPct": 0.02
+  },
+  "priceActionStructure": {
+    "zoneLookback": 2,
+    "minCandles": 40,
+    "refreshMinutes": 15,
+    "zoneMaxAgeCandles": 400,
+    "pullbackPct": 50,
+    "minRewardRisk": 2,
+    "riskPct": 1,
+    "stopBufferPct": 0.02
   }
 }
