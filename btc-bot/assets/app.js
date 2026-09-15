@@ -366,9 +366,6 @@ const PRICE_ACTION_DECISION_COLUMNS = [
   { id: 'zones', label: 'Demand / Supply' },
   { id: 'pullback', label: '50% pullback' },
   { id: 'entry', label: 'Entry' },
-  { id: 'stop', label: 'SL' },
-  { id: 'tp1', label: 'TP1' },
-  { id: 'tp2', label: 'TP2' },
   { id: 'rr', label: 'R/R' },
 ]
 
@@ -471,6 +468,34 @@ const zoneListElement = (profile, timeframeId) => {
 const priceFact = (value, title = null, status = 'neutral') =>
   decisionFact(Number.isFinite(value) ? quotePrice(value) : '–', status, title)
 
+const riskRewardDetails = (entry) => {
+  const { profile } = entry
+  const fact = priceActionDecisionFact(entry, { id: 'rr' })
+  if (!profile || profile.mode === 'formation') return decisionFactElement(fact)
+
+  const button = el('button', {
+    type: 'button',
+    className: `fact fact-${fact.status} rr-details-trigger`,
+    text: fact.text,
+    title: 'Kliknutím zobrazit SL a TP použité pro výpočet R/R.',
+    'aria-expanded': 'false',
+  })
+  const popup = el('div', { className: 'rr-details-popover', role: 'tooltip', hidden: true }, [
+    el('strong', { text: 'Parametry výpočtu R/R' }),
+    el('span', { text: `Entry ${quotePrice(profile.entry)}` }),
+    el('span', { className: 'rr-detail-sl', text: `SL ${quotePrice(profile.stop)}` }),
+    el('span', { className: 'rr-detail-tp', text: `TP1 ${quotePrice(profile.tp1)}` }),
+    el('span', { className: 'rr-detail-tp', text: `TP2 ${quotePrice(profile.tp2)}` }),
+    el('span', { text: `Minimum ${profile.minRewardRisk ?? 2}:1` }),
+  ])
+  button.onclick = () => {
+    const open = popup.hidden
+    popup.hidden = !open
+    button.setAttribute('aria-expanded', String(open))
+  }
+  return el('div', { className: 'rr-details-control' }, [button, popup])
+}
+
 const passedOrWaiting = (gate) => gate?.status === 'met' ? 'met' : 'neutral'
 
 const formationTitle = 'Struktura je flat; nevstupujeme a čekáme na potvrzení HH + HL nebo LH + LL.'
@@ -544,6 +569,8 @@ const priceActionDecisionCell = (entry, column) =>
     el('td', { className: `pa-decision-cell pa-decision-cell-${column.id}` },
     column.id === 'zones'
       ? zoneListElement(entry.profile, entry.column.id)
+      : column.id === 'rr'
+        ? [riskRewardDetails(entry)]
       : [decisionFactElement(priceActionDecisionFact(entry, column))]
   )
 
@@ -1196,8 +1223,17 @@ const renderAssetChart = () => {
     ...chartZones(item, 'demand').map((zone, index) => ({ ...zone, kind: 'demand', index })),
     ...chartZones(item, 'supply').map((zone, index) => ({ ...zone, kind: 'supply', index })),
   ]
-  const rawMin = Math.min(...candles.map((candle) => candle.low), ...zones.map((zone) => zone.low))
-  const rawMax = Math.max(...candles.map((candle) => candle.high), ...zones.map((zone) => zone.high))
+  const profile = item?.tradeProfile
+  const riskLevels = viewingHistory
+    ? []
+    : [
+        { key: 'tp1', label: 'TP1', value: profile?.tp1, className: 'asset-tp-line' },
+        { key: 'tp2', label: 'TP2', value: profile?.tp2, className: 'asset-tp-line' },
+        { key: 'sl', label: 'SL', value: profile?.stop, className: 'asset-sl-line' },
+      ].filter((level) => Number.isFinite(level.value))
+  const riskPrices = riskLevels.map((level) => level.value)
+  const rawMin = Math.min(...candles.map((candle) => candle.low), ...zones.map((zone) => zone.low), ...riskPrices)
+  const rawMax = Math.max(...candles.map((candle) => candle.high), ...zones.map((zone) => zone.high), ...riskPrices)
   const padding = (rawMax - rawMin || Math.max(1, Math.abs(rawMax) * 0.01)) * 0.08
   const minPrice = Math.max(0, rawMin - padding)
   const maxPrice = rawMax + padding
@@ -1328,6 +1364,25 @@ const renderAssetChart = () => {
         })
       )
     }
+  }
+
+  for (const level of riskLevels) {
+    const yy = y(level.value)
+    svg.append(
+      el('line', {
+        className: `asset-risk-line ${level.className}`,
+        x1: ASSET_CHART.padLeft,
+        x2: ASSET_CHART.width - ASSET_CHART.padRight,
+        y1: yy,
+        y2: yy,
+      }),
+      el('text', {
+        className: `asset-risk-label ${level.className}`,
+        x: ASSET_CHART.padLeft + 7,
+        y: yy - 6,
+        text: `${level.label} ${quotePrice(level.value)}`,
+      })
+    )
   }
 
   const currentPrice = item?.price ?? allCandles.at(-1)?.close
