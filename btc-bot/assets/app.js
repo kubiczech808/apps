@@ -383,17 +383,18 @@ const sameZone = (left, right) => {
   return Math.abs(left.low - right.low) <= tolerance && Math.abs(left.high - right.high) <= tolerance
 }
 
-const zoneCandidateFor = (candidates, zone, index = 0) => {
-  const exact = candidates.find((entry) => sameZone(entry.zone, zone))
+const zoneCandidateFor = (candidates, zone, type, index = 0) => {
+  const typed = candidates.filter((entry) => entry.type === type)
+  const exact = typed.find((entry) => sameZone(entry.zone, zone))
   if (exact) return exact
-  const overlapping = candidates
-    .filter((entry) => entry.zone?.type === zone?.type && entry.zone?.low <= zone?.high && entry.zone?.high >= zone?.low)
+  const overlapping = typed
+    .filter((entry) => entry.zone?.low <= zone?.high && entry.zone?.high >= zone?.low)
     .sort((left, right) => {
       const leftDistance = Math.abs((left.zone.low ?? 0) - (zone.low ?? 0)) + Math.abs((left.zone.high ?? 0) - (zone.high ?? 0))
       const rightDistance = Math.abs((right.zone.low ?? 0) - (zone.low ?? 0)) + Math.abs((right.zone.high ?? 0) - (zone.high ?? 0))
       return leftDistance - rightDistance
     })
-  return overlapping[0] ?? candidates.filter((entry) => entry.type === zone?.type)[index] ?? null
+  return overlapping[0] ?? typed[index] ?? null
 }
 
 const zoneDefiningTimes = (zone, timeframeId) =>
@@ -653,7 +654,7 @@ const zoneCard = (title, zones, emptyText, timeframeId, candidates = []) => el('
     zones?.length
       ? el('div', { className: 'zone-list' }, zones.map((zone, index) => el('div', { className: 'zone-item' }, [
           (() => {
-            const candidate = zoneCandidateFor(candidates, zone, index)
+            const candidate = zoneCandidateFor(candidates, zone, title.toLowerCase(), index)
             return el('div', { className: 'structure-leg-flow' }, [
               el('span', { className: 'zone-index', text: `${index + 1}.` }),
               zoneRangeTrigger({
