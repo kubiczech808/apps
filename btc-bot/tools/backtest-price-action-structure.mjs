@@ -10,7 +10,10 @@ import {
   fetchYahooCandles,
   PRICE_ACTION_ASSETS,
 } from '../src/strategy-price-action-structure.mjs'
-import { runPriceActionStructureBacktest } from '../src/backtest-price-action-structure.mjs'
+import {
+  aggregatePriceActionBacktests,
+  runPriceActionStructureBacktest,
+} from '../src/backtest-price-action-structure.mjs'
 import { createStateStore } from '../src/store.mjs'
 
 const args = new Map()
@@ -122,6 +125,13 @@ try {
       console.log(`${asset.symbol} ${entry.label}: ${report.cagrPct?.toFixed(2) ?? 'n/a'}% p.a., ${report.trades} trades, DD ${report.maxDrawdownPct?.toFixed(2) ?? 'n/a'}%, ready ${report.readyProfiles ?? 0}, zones hit ${report.zoneHits ?? 0}, ${report.from ?? 'n/a'} -> ${report.to ?? 'n/a'}`)
     }
   }
+
+  result.portfolio = aggregatePriceActionBacktests({
+    assets: result.assets,
+    startingCapital: result.assumptions.startingCapital,
+    riskPct: result.assumptions.riskPct,
+  })
+  console.log(`Portfolio: ${result.portfolio.cagrPct?.toFixed(2) ?? 'n/a'}% p.a., ${result.portfolio.trades} trades, DD ${result.portfolio.maxDrawdownPct?.toFixed(2) ?? 'n/a'}%, overlap skipped ${result.portfolio.overlapSkipped}`)
 
   result.run = { status: 'complete', requestedAt: result.generatedAt, completedAt: new Date().toISOString() }
   await writeFile(output, `${JSON.stringify(result, null, 2)}\n`, 'utf8')

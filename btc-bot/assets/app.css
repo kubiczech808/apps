@@ -715,6 +715,40 @@ tbody tr:hover { background: var(--series-1-soft); }
 .backtest-controls p { margin: 0; }
 .backtests-status { color: var(--text-secondary); }
 .backtest-assumptions { margin-top: 4px !important; color: var(--text-muted); font-size: 12px; }
+.backtest-portfolio-summary {
+  margin-bottom: 16px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-1);
+}
+.backtest-portfolio-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+.backtest-portfolio-head h3 { margin: 0; font-size: 15px; }
+.backtest-portfolio-head span,
+.backtest-portfolio-note { color: var(--text-muted); font-size: 12px; }
+.backtest-summary-metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+  gap: 8px;
+  margin-top: 10px;
+}
+.backtest-summary-metric {
+  min-width: 0;
+  padding: 7px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--page);
+}
+.backtest-summary-metric span,
+.backtest-summary-metric strong { display: block; }
+.backtest-summary-metric span { color: var(--text-muted); font-size: 11px; }
+.backtest-summary-metric strong { margin-top: 2px; font-variant-numeric: tabular-nums; }
+.backtest-portfolio-note { margin: 10px 0 0; }
 .backtest-results-table th,
 .backtest-results-table td { white-space: nowrap; text-align: right; }
 .backtest-results-table th:first-child,
@@ -726,9 +760,15 @@ tbody tr:hover { background: var(--series-1-soft); }
 .backtest-results-table th:last-child,
 .backtest-results-table td:last-child { text-align: left; }
 .backtest-results-table td:last-child { min-width: 230px; white-space: normal; }
+.backtest-selection-row { cursor: pointer; }
+.backtest-selection-row.backtest-included { background: var(--warning-soft); }
+.backtest-selection-row.backtest-excluded { background: color-mix(in srgb, var(--surface-1) 72%, var(--grid)); opacity: 0.7; }
+.backtest-selection-row:hover,
+.backtest-selection-row:focus-visible { background: var(--series-1-soft); outline: none; }
 @media (max-width: 640px) {
   .backtest-controls { align-items: stretch; flex-direction: column; }
   .backtest-controls button { width: 100%; }
+  .backtest-portfolio-head { align-items: flex-start; flex-direction: column; gap: 2px; }
 }
 .pa-trend-button {
   min-height: 26px;

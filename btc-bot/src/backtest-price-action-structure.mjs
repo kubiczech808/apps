@@ -46,6 +46,12 @@ const annualised = (start, end, from, to) => {
   return ((end / start) ** (365.25 / days) - 1) * 100
 }
 
+const timestamp = (value) => {
+  if (Number.isFinite(Number(value))) return Number(value)
+  const parsed = Date.parse(String(value ?? ''))
+  return Number.isFinite(parsed) ? parsed : null
+}
+
 const emptyReport = ({ asset, timeframeId, candles, reason, dataSource }) => ({
   asset,
   timeframeId,
@@ -118,6 +124,8 @@ export const runPriceActionStructureBacktest = ({
       entry: position.entry,
       exitPrice,
       pl: position.realized,
+      riskAmount: position.riskAmount,
+      rMultiple: position.riskAmount > 0 ? position.realized / position.riskAmount : null,
       exitReason: reason,
       holdDays: (at - position.openedAt) / (24 * HOUR_MS),
     })
@@ -210,6 +218,7 @@ export const runPriceActionStructureBacktest = ({
       tp1,
       tp2,
       notional,
+      riskAmount: notional * riskDistance,
       remaining: 1,
       tp1Taken: false,
       realized: -openingFee,
@@ -258,6 +267,118 @@ export const runPriceActionStructureBacktest = ({
     cagrPct,
     maxDrawdownPct: maxDrawdown * 100,
     averageHoldDays: trades.length ? trades.reduce((sum, trade) => sum + trade.holdDays, 0) / trades.length : null,
+    // Kept separate from `trades`, which is the existing numeric dashboard
+    // metric. These compact records are enough to build a cross-asset,
+    // cross-timeframe portfolio without publishing candle data again.
+    tradeLog: trades.map(({ side, openedAt, closedAt, rMultiple, exitReason, holdDays }) => ({
+      side,
+      openedAt,
+      closedAt,
+      rMultiple,
+      exitReason,
+      holdDays,
+    })),
     model: `PA-1 · risk ${Number(riskPct) || 1}% · fee ${((Number(feeRate) || 0) * 100).toFixed(2)}%/strana · TP1/TP2 50/50`,
+  }
+}
+
+/**
+ * Combine independently backtested PA-1 rows into one account curve.
+ *
+ * A row's R-multiple is independent of its original $100 simulation. The
+ * portfolio therefore sizes every accepted trade at `riskPct` of the current
+ * combined equity. Trades on different assets may overlap; trades on the same
+ * asset may not, because that would silently stack the same directional risk.
+ */
+export const aggregatePriceActionBacktests = ({
+  assets = {},
+  selected = {},
+  startingCapital = 100,
+  riskPct = 1,
+} = {}) => {
+  const rows = Object.entries(assets ?? {}).flatMap(([asset, timeframes]) =>
+    Object.entries(timeframes ?? {}).map(([timeframeId, result]) => ({ asset, timeframeId, result }))
+  )
+  const isSelected = ({ asset, timeframeId }) => selected?.[asset]?.[timeframeId] !== false
+  const selectedRows = rows.filter(isSelected)
+  const allTrades = selectedRows.flatMap(({ asset, timeframeId, result }) =>
+    (Array.isArray(result?.tradeLog) ? result.tradeLog : [])
+      .map((trade, order) => ({ ...trade, asset, timeframeId, order }))
+      .filter((trade) => timestamp(trade.openedAt) !== null && timestamp(trade.closedAt) !== null)
+  ).sort((left, right) =>
+    timestamp(left.openedAt) - timestamp(right.openedAt)
+      || timestamp(left.closedAt) - timestamp(right.closedAt)
+      || left.asset.localeCompare(right.asset)
+      || left.timeframeId.localeCompare(right.timeframeId)
+      || left.order - right.order
+  )
+
+  const lastClosedByAsset = new Map()
+  const acceptedTrades = []
+  let overlapSkipped = 0
+  for (const trade of allTrades) {
+    const openedAt = timestamp(trade.openedAt)
+    const closedAt = timestamp(trade.closedAt)
+    const lastClosed = lastClosedByAsset.get(trade.asset)
+    if (lastClosed !== undefined && openedAt < lastClosed) {
+      overlapSkipped += 1
+      continue
+    }
+    lastClosedByAsset.set(trade.asset, closedAt)
+    acceptedTrades.push(trade)
+  }
+
+  const initial = Number(startingCapital) > 0 ? Number(startingCapital) : 100
+  const risk = Number(riskPct) > 0 ? Number(riskPct) : 1
+  let equity = initial
+  let peak = equity
+  let maxDrawdown = 0
+  let wins = 0
+  let losses = 0
+  let grossWins = 0
+  let grossLosses = 0
+  let holdTotal = 0
+  for (const trade of acceptedTrades) {
+    const multiple = Number(trade.rMultiple)
+    if (!Number.isFinite(multiple)) continue
+    const pl = equity * risk / 100 * multiple
+    equity += pl
+    if (pl > 0) { wins += 1; grossWins += pl }
+    if (pl < 0) { losses += 1; grossLosses += Math.abs(pl) }
+    holdTotal += Number(trade.holdDays) || 0
+    peak = Math.max(peak, equity)
+    if (peak > 0) maxDrawdown = Math.max(maxDrawdown, (peak - equity) / peak)
+  }
+
+  const periods = selectedRows
+    .flatMap(({ result }) => [timestamp(result?.from), timestamp(result?.to)])
+    .filter((value) => value !== null)
+  const from = periods.length ? Math.min(...periods) : null
+  const to = periods.length ? Math.max(...periods) : null
+  const returnPct = ((equity / initial) - 1) * 100
+  const cagrPct = from !== null && to !== null ? annualised(initial, equity, from, to) : null
+  const trades = acceptedTrades.filter((trade) => Number.isFinite(Number(trade.rMultiple))).length
+  const statusKind = Number.isFinite(cagrPct) && cagrPct >= 20 && maxDrawdown * 100 <= 20 ? 'met' : 'neutral'
+
+  return {
+    status: selectedRows.length ? 'complete' : 'empty-selection',
+    statusKind,
+    from: from === null ? null : new Date(from).toISOString(),
+    to: to === null ? null : new Date(to).toISOString(),
+    startingCapital: initial,
+    finalCapital: equity,
+    riskPct: risk,
+    selectedRows: selectedRows.length,
+    totalRows: rows.length,
+    trades,
+    wins,
+    losses,
+    winRate: trades ? (wins / trades) * 100 : null,
+    profitFactor: grossLosses > 0 ? grossWins / grossLosses : null,
+    returnPct,
+    cagrPct,
+    maxDrawdownPct: maxDrawdown * 100,
+    averageHoldDays: trades ? holdTotal / trades : null,
+    overlapSkipped,
   }
 }

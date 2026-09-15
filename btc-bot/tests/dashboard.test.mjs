@@ -279,11 +279,17 @@ test('backtests tab prepares a timeframe matrix for tuned strategies', () => {
   assert.match(js, /Win rate/)
   assert.match(js, /Prům\. držení/)
   assert.match(js, /backtestPeriod/)
+  assert.match(js, /aggregateBacktestRows/)
+  assert.match(js, /BACKTEST_SELECTION_STORAGE/)
+  assert.match(js, /backtest-selection-row/)
+  assert.match(js, /tradeLog/)
   assert.match(js, /requestBacktests/)
   assert.match(js, /command: 'run-backtests'/)
   assert.doesNotMatch(js, /kliknutím na asset zobrazíte období a metodiku/)
   assert.match(css, /backtest-matrix-table/)
   assert.match(css, /backtest-results-table/)
+  assert.match(css, /backtest-included/)
+  assert.match(css, /backtest-excluded/)
 })
 
 test('settings edit the selected strategy stop rather than a stale R\/R gate', () => {

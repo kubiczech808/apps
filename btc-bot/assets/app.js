@@ -13,6 +13,7 @@
 
 const KEY_STORAGE = 'btc-bot-key'
 const STRATEGY_VIEW_STORAGE = 'btc-bot-strategy-view-v2'
+const BACKTEST_SELECTION_STORAGE = 'btc-bot-backtest-selection-v1'
 const REFRESH_MS = 30_000
 const SATS_PER_BTC = 1e8
 const DECISION_SIGNAL_STATES = new Set(['met', 'unmet', 'neutral'])
@@ -856,6 +857,23 @@ const setStrategyView = (value) => {
     localStorage.setItem(STRATEGY_VIEW_STORAGE, selectedStrategyView)
   } catch {
     /* private browsing: selection simply does not persist */
+  }
+}
+
+const getBacktestSelection = () => {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(BACKTEST_SELECTION_STORAGE) || '{}')
+    return parsed && typeof parsed === 'object' ? parsed : {}
+  } catch {
+    return {}
+  }
+}
+
+const setBacktestSelection = (selection) => {
+  try {
+    localStorage.setItem(BACKTEST_SELECTION_STORAGE, JSON.stringify(selection))
+  } catch {
+    /* private browsing: the selection simply does not persist */
   }
 }
 
@@ -2172,6 +2190,101 @@ const requestBacktests = async () => {
   }
 }
 
+const backtestRowKey = (symbol, timeframeId) => `${symbol}:${timeframeId}`
+
+const backtestTimestamp = (value) => {
+  if (Number.isFinite(Number(value))) return Number(value)
+  const parsed = Date.parse(String(value ?? ''))
+  return Number.isFinite(parsed) ? parsed : null
+}
+
+const aggregateBacktestRows = (rows, selection, fallback = null) => {
+  const canRecompute = rows.some(({ result }) => Array.isArray(result?.tradeLog))
+  if (!canRecompute) return fallback
+
+  const selectedRows = rows.filter(({ symbol, timeframeId }) => selection[backtestRowKey(symbol, timeframeId)] !== false)
+  const candidates = selectedRows.flatMap(({ symbol, timeframeId, result }) =>
+    (Array.isArray(result?.tradeLog) ? result.tradeLog : [])
+      .map((trade, order) => ({ ...trade, asset: symbol, timeframeId, order }))
+      .filter((trade) => backtestTimestamp(trade.openedAt) !== null && backtestTimestamp(trade.closedAt) !== null)
+  ).sort((left, right) =>
+    backtestTimestamp(left.openedAt) - backtestTimestamp(right.openedAt)
+      || backtestTimestamp(left.closedAt) - backtestTimestamp(right.closedAt)
+      || left.asset.localeCompare(right.asset)
+      || left.timeframeId.localeCompare(right.timeframeId)
+      || left.order - right.order
+  )
+
+  const lastClosedByAsset = new Map()
+  const trades = []
+  let overlapSkipped = 0
+  for (const trade of candidates) {
+    const openedAt = backtestTimestamp(trade.openedAt)
+    const closedAt = backtestTimestamp(trade.closedAt)
+    if (lastClosedByAsset.has(trade.asset) && openedAt < lastClosedByAsset.get(trade.asset)) {
+      overlapSkipped += 1
+      continue
+    }
+    lastClosedByAsset.set(trade.asset, closedAt)
+    if (Number.isFinite(Number(trade.rMultiple))) trades.push(trade)
+  }
+
+  const initial = Number(state?.backtests?.assumptions?.startingCapital) > 0
+    ? Number(state.backtests.assumptions.startingCapital)
+    : 100
+  const risk = Number(state?.backtests?.assumptions?.riskPct) > 0
+    ? Number(state.backtests.assumptions.riskPct)
+    : 1
+  let equity = initial
+  let peak = equity
+  let maxDrawdown = 0
+  let wins = 0
+  let losses = 0
+  let grossWins = 0
+  let grossLosses = 0
+  let holdTotal = 0
+  for (const trade of trades) {
+    const pl = equity * risk / 100 * Number(trade.rMultiple)
+    equity += pl
+    if (pl > 0) { wins += 1; grossWins += pl }
+    if (pl < 0) { losses += 1; grossLosses += Math.abs(pl) }
+    holdTotal += Number(trade.holdDays) || 0
+    peak = Math.max(peak, equity)
+    if (peak > 0) maxDrawdown = Math.max(maxDrawdown, (peak - equity) / peak)
+  }
+  const periods = selectedRows
+    .flatMap(({ result }) => [backtestTimestamp(result?.from), backtestTimestamp(result?.to)])
+    .filter((value) => value !== null)
+  const from = periods.length ? Math.min(...periods) : null
+  const to = periods.length ? Math.max(...periods) : null
+  const days = from !== null && to !== null ? Math.max(1 / 365.25, (to - from) / 86400000) : null
+  const cagrPct = days === null ? null : ((equity / initial) ** (365.25 / days) - 1) * 100
+  return {
+    status: selectedRows.length ? 'complete' : 'empty-selection',
+    from: from === null ? null : new Date(from).toISOString(),
+    to: to === null ? null : new Date(to).toISOString(),
+    startingCapital: initial,
+    finalCapital: equity,
+    selectedRows: selectedRows.length,
+    totalRows: rows.length,
+    trades: trades.length,
+    wins,
+    losses,
+    winRate: trades.length ? (wins / trades.length) * 100 : null,
+    profitFactor: grossLosses > 0 ? grossWins / grossLosses : null,
+    returnPct: ((equity / initial) - 1) * 100,
+    cagrPct,
+    maxDrawdownPct: maxDrawdown * 100,
+    averageHoldDays: trades.length ? holdTotal / trades.length : null,
+    overlapSkipped,
+  }
+}
+
+const backtestSummaryMetric = (label, value) => el('div', { className: 'backtest-summary-metric' }, [
+  el('span', { text: label }),
+  el('strong', { text: value }),
+])
+
 const renderPriceActionBacktests = (host) => {
   const document = state?.backtests ?? {}
   const run = document.run ?? null
@@ -2212,6 +2325,28 @@ const renderPriceActionBacktests = (host) => {
     return
   }
 
+  const selection = getBacktestSelection()
+  const portfolio = aggregateBacktestRows(rows, selection, document.portfolio)
+  const portfolioMetrics = portfolio
+    ? [
+        backtestSummaryMetric('p.a.', backtestValue(portfolio.cagrPct, 1, ' %')),
+        backtestSummaryMetric('Celkem', backtestValue(portfolio.returnPct, 1, ' %')),
+        backtestSummaryMetric('Kapitál', backtestValue(portfolio.finalCapital, 2, ' USD')),
+        backtestSummaryMetric('Obchody', Number.isFinite(Number(portfolio.trades)) ? String(portfolio.trades) : '–'),
+        backtestSummaryMetric('Win rate', backtestValue(portfolio.winRate, 1, ' %')),
+        backtestSummaryMetric('Max. DD', backtestValue(portfolio.maxDrawdownPct, 1, ' %')),
+        backtestSummaryMetric('Překryvy', Number.isFinite(Number(portfolio.overlapSkipped)) ? String(portfolio.overlapSkipped) : '–'),
+      ]
+    : []
+  host.append(el('section', { className: 'backtest-portfolio-summary' }, [
+    el('div', { className: 'backtest-portfolio-head' }, [
+      el('h3', { text: 'Portfolio PA-1' }),
+      el('span', { text: portfolio?.from && portfolio?.to ? backtestPeriod(portfolio) : 'Období není k dispozici' }),
+    ]),
+    el('div', { className: 'backtest-summary-metrics' }, portfolioMetrics),
+    el('p', { className: 'backtest-portfolio-note', text: `${portfolio?.selectedRows ?? 0} / ${portfolio?.totalRows ?? rows.length} řádků v souhrnu · překrývající se obchody na stejném assetu jsou započteny pouze jednou.` }),
+  ]))
+
   const table = el('table', { className: 'backtest-matrix-table backtest-results-table' }, [
     el('thead', {}, [
       el('tr', {}, [
@@ -2232,20 +2367,40 @@ const renderPriceActionBacktests = (host) => {
   ])
   const body = table.querySelector('tbody')
   for (const { symbol, timeframeId, result } of rows) {
+    const key = backtestRowKey(symbol, timeframeId)
+    const included = selection[key] !== false
+    const row = el('tr', {
+      className: `backtest-selection-row ${included ? 'backtest-included' : 'backtest-excluded'}`,
+      'aria-selected': String(included),
+      tabindex: '0',
+      title: included ? 'Kliknutím vyřadit z portfoliového souhrnu' : 'Kliknutím zahrnout do portfoliového souhrnu',
+    }, [
+      el('td', { text: symbol }),
+      el('td', { text: timeframeId.toUpperCase() }),
+      el('td', { text: backtestPeriod(result) }),
+      el('td', { text: Number.isFinite(Number(result.trades)) ? String(result.trades) : '–' }),
+      el('td', { text: backtestValue(result.winRate, 1, ' %') }),
+      el('td', { text: backtestValue(result.returnPct, 1, ' %') }),
+      el('td', { text: backtestValue(result.cagrPct, 1, ' %') }),
+      el('td', { text: backtestValue(result.profitFactor, 2) }),
+      el('td', { text: backtestValue(result.maxDrawdownPct, 1, ' %') }),
+      el('td', { text: backtestValue(result.averageHoldDays, 1, ' d') }),
+      el('td', { className: 'reason', text: result.dataSource || '–' }),
+    ])
+    const toggle = () => {
+      selection[key] = !included
+      setBacktestSelection(selection)
+      renderBacktests()
+    }
+    row.onclick = toggle
+    row.onkeydown = (event) => {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault()
+        toggle()
+      }
+    }
     body.append(
-      el('tr', {}, [
-        el('td', { text: symbol }),
-        el('td', { text: timeframeId.toUpperCase() }),
-        el('td', { text: backtestPeriod(result) }),
-        el('td', { text: Number.isFinite(Number(result.trades)) ? String(result.trades) : '–' }),
-        el('td', { text: backtestValue(result.winRate, 1, ' %') }),
-        el('td', { text: backtestValue(result.returnPct, 1, ' %') }),
-        el('td', { text: backtestValue(result.cagrPct, 1, ' %') }),
-        el('td', { text: backtestValue(result.profitFactor, 2) }),
-        el('td', { text: backtestValue(result.maxDrawdownPct, 1, ' %') }),
-        el('td', { text: backtestValue(result.averageHoldDays, 1, ' d') }),
-        el('td', { className: 'reason', text: result.dataSource || '–' }),
-      ])
+      row
     )
   }
 
