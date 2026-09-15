@@ -362,8 +362,7 @@ const priceActionSummary = () => {
 
 const PRICE_ACTION_DECISION_COLUMNS = [
   { id: 'structure', label: 'Struktura' },
-  { id: 'demand', label: 'Demand' },
-  { id: 'supply', label: 'Supply' },
+  { id: 'zones', label: 'Demand / Supply' },
   { id: 'pullback', label: '50% pullback' },
   { id: 'entry', label: 'Entry' },
   { id: 'stop', label: 'SL' },
@@ -449,10 +448,10 @@ const zoneRangeTrigger = ({ zone, status = 'neutral', title = null, timeframeId,
   return el('div', { className: 'zone-range-control' }, [button, popup])
 }
 
-const zoneListElement = (item, profile, type, timeframeId) => {
+const zoneListElement = (profile, timeframeId) => {
   const active = profile?.side === 'long' ? 'demand' : profile?.side === 'short' ? 'supply' : null
-  if (active !== type) return [decisionFactElement(decisionFact('–', 'neutral', 'Pro aktuální strukturu není tato strana vstupní zónou.'))]
-  const candidates = (profile?.zoneCandidates ?? []).filter((candidate) => candidate.type === type && candidate.eligible)
+  if (!active) return [decisionFactElement(decisionFact('–', 'neutral', 'Bez směru struktury není vstupní zóna určena.'))]
+  const candidates = (profile?.zoneCandidates ?? []).filter((candidate) => candidate.type === active && candidate.eligible)
   if (!candidates.length) return [decisionFactElement(decisionFact('–', 'neutral', 'Žádná zóna současně nesplňuje pullback a minimální R/R.'))]
   return candidates.map((candidate) => {
     const zone = candidate.zone
@@ -491,9 +490,7 @@ const priceActionDecisionFact = (entry, column) => {
       const status = item?.trend === 'up' || item?.trend === 'down' ? 'met' : 'neutral'
       return decisionFact(trend, status, [item?.reason, item?.event].filter(Boolean).join(' · ') || null)
     }
-    case 'demand':
-      return null
-    case 'supply':
+    case 'zones':
       return null
     case 'pullback': {
       const gate = profileGate(profile, 'pullback')
@@ -531,8 +528,8 @@ const priceActionDecisionFact = (entry, column) => {
 
 const priceActionDecisionCell = (entry, column) =>
     el('td', { className: `pa-decision-cell pa-decision-cell-${column.id}` },
-    column.id === 'demand' || column.id === 'supply'
-      ? zoneListElement(entry.item, entry.profile, column.id, entry.column.id)
+    column.id === 'zones'
+      ? zoneListElement(entry.profile, entry.column.id)
       : [decisionFactElement(priceActionDecisionFact(entry, column))]
   )
 
