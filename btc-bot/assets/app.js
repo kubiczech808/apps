@@ -1314,20 +1314,9 @@ const renderAssetChart = () => {
     return
   }
 
-  const structurePivotTimes = [
-    item?.structure?.high?.previous?.time,
-    item?.structure?.high?.current?.time,
-    item?.structure?.low?.previous?.time,
-    item?.structure?.low?.current?.time,
-  ].filter(Number.isFinite)
-  const oldestStructureTime = structurePivotTimes.length ? Math.min(...structurePivotTimes) : null
-  const oldestStructureIndex = Number.isFinite(oldestStructureTime)
-    ? allCandles.findIndex((candle) => candle.time >= oldestStructureTime)
-    : -1
-  const structureVisibleCandleCount = oldestStructureIndex >= 0
-    ? allCandles.length - oldestStructureIndex
-    : 30
-  const minVisibleCandleCount = Math.min(allCandles.length, Math.max(30, structureVisibleCandleCount))
+  // Keep the initial chart compact. Wheel zoom then reveals older candles while
+  // the newest candle stays anchored to the right edge of the chart.
+  const minVisibleCandleCount = Math.min(allCandles.length, 60)
   assetChartVisibleCandleCount = Math.max(minVisibleCandleCount, Math.min(assetChartVisibleCandleCount, allCandles.length))
   const candles = allCandles.slice(-assetChartVisibleCandleCount)
   const viewingHistory = assetChartVisibleCandleCount > 60
