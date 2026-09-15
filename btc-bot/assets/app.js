@@ -1323,6 +1323,114 @@ const renderPriceActionRuns = (body) => {
   }
 }
 
+const backtestStatus = (result) => {
+  if (!result) return decisionFact('čeká', 'neutral', 'Výsledek doplníme po doladění a spuštění backtestu.')
+  const cagr = Number(result.cagrPct ?? result.annualReturnPct)
+  const drawdown = Number(result.maxDrawdownPct)
+  const trades = Number(result.trades)
+  const label = Number.isFinite(cagr)
+    ? `${pct(cagr, 1)} p.a.`
+    : result.label || result.status || 'hotovo'
+  const status =
+    result.statusKind ??
+    result.status ??
+    (Number.isFinite(cagr) && cagr >= 20 && (!Number.isFinite(drawdown) || drawdown <= 20) ? 'met' : 'neutral')
+  const title = [
+    Number.isFinite(trades) ? `${trades} obchodů` : null,
+    Number.isFinite(drawdown) ? `DD ${pct(drawdown, 1)}` : null,
+    Number.isFinite(result.profitFactor) ? `PF ${nf(2).format(result.profitFactor)}` : null,
+    result.detail,
+  ].filter(Boolean).join(' · ')
+  return decisionFact(label, status, title || null)
+}
+
+const priceActionBacktestResult = (asset, timeframeId) =>
+  state?.backtests?.priceAction?.[asset.symbol]?.[timeframeId] ??
+  state?.backtests?.['price-action']?.[asset.symbol]?.[timeframeId] ??
+  null
+
+const renderPriceActionBacktests = (host) => {
+  const matrix = state?.priceActionMatrix
+  const assets = matrix?.assets?.length ? matrix.assets : []
+  const columns = matrix?.timeframes?.length ? matrix.timeframes : [
+    { id: '1h', label: '1H' },
+    { id: '4h', label: '4H' },
+    { id: '1d', label: '1D' },
+  ]
+  if (!assets.length) {
+    host.append(el('p', { className: 'empty', text: 'Backtestovací matice čeká na první price-action scan s assety.' }))
+    return
+  }
+
+  const table = el('table', { className: 'pa-matrix-table backtest-matrix-table' }, [
+    el('thead', {}, [
+      el('tr', {}, [
+        el('th', { text: 'Asset' }),
+        ...columns.map((column) => el('th', { text: column.label })),
+        el('th', { text: 'Poznámka' }),
+      ]),
+    ]),
+    el('tbody'),
+  ])
+  const body = table.querySelector('tbody')
+  for (const asset of assets) {
+    body.append(
+      el('tr', {}, [
+        el('td', {}, [
+          el('strong', { text: asset.symbol }),
+          el('span', { className: 'asset-name', text: asset.name ? ` ${asset.name}` : '' }),
+        ]),
+        ...columns.map((column) =>
+          el('td', {}, [decisionFactElement(backtestStatus(priceActionBacktestResult(asset, column.id)))])
+        ),
+        el('td', { className: 'reason', text: 'připraveno pro výsledky po doladění strategie' }),
+      ])
+    )
+  }
+
+  host.append(
+    el('p', {
+      className: 'zone-rule',
+      text: 'Výsledky budou po backtestu ukládané po assetu a timeframe; tabulka už drží stejné členění jako struktura trhu.',
+    }),
+    el('div', { className: 'table-scroll' }, [table])
+  )
+}
+
+const renderMomentumBacktests = (host) => {
+  const strategy = STRATEGY_CANDIDATES.find((item) => item.name === STRATEGY_VIEWS.momentum.strategyName)
+  const table = el('table', { className: 'backtest-matrix-table' }, [
+    el('thead', {}, [
+      el('tr', {}, [
+        el('th', { text: 'Strategie' }),
+        el('th', { text: 'Timeframe' }),
+        el('th', { text: 'Výsledek' }),
+        el('th', { text: 'Detail' }),
+      ]),
+    ]),
+    el('tbody', {}, [
+      el('tr', {}, [
+        el('td', { text: strategy?.name ?? 'TF-2L Leveraged momentum' }),
+        el('td', { text: '1D signál / 1H exekuce' }),
+        el('td', {}, [decisionFactElement(decisionFact(strategy?.backtest?.result ?? 'čeká', strategy?.backtest?.status ?? 'neutral'))]),
+        el('td', { className: 'reason', text: strategy?.backtest?.detail ?? 'Backtest zatím není publikovaný.' }),
+      ]),
+    ]),
+  ])
+  host.append(el('div', { className: 'table-scroll' }, [table]))
+}
+
+const renderBacktests = () => {
+  const host = $('strategy-backtests')
+  const title = $('panel-backtests-title')
+  if (!host) return
+  const view = currentStrategyView()
+  host.replaceChildren()
+  if (title) title.textContent = view.id === 'price-action' ? 'Backtesty: Price Action' : 'Backtesty: Momentum'
+  if (view.id === 'price-action') renderPriceActionBacktests(host)
+  else renderMomentumBacktests(host)
+}
+
 const renderStrategyLab = () => {
   const rules = $('strategy-rules')
   const candidates = $('strategy-candidates')
@@ -1546,6 +1654,7 @@ const renderAll = () => {
   renderClosed()
   renderRuns()
   renderStrategyLab()
+  renderBacktests()
   renderSettings()
 }
 

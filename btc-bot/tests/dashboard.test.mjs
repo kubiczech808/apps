@@ -136,6 +136,19 @@ test('strategy switching lives in the header and redraws dashboard context', () 
   assert.match(css, /strategy-switch/)
 })
 
+test('backtests tab prepares a timeframe matrix for tuned strategies', () => {
+  assert.ok(html.includes('data-tab="backtests"'), 'dashboard must expose the backtests tab')
+  assert.ok(html.includes('id="panel-backtests"'), 'backtests tab must have a panel')
+  assert.ok(html.includes('id="strategy-backtests"'), 'backtests panel must contain a render host')
+  assert.match(js, /renderBacktests/)
+  assert.match(js, /renderPriceActionBacktests/)
+  assert.match(js, /backtestStatus/)
+  assert.match(js, /priceActionBacktestResult/)
+  assert.match(js, /Backtesty: Price Action/)
+  assert.match(js, /připraveno pro výsledky po doladění strategie/)
+  assert.match(css, /backtest-matrix-table/)
+})
+
 test('settings edit the selected strategy stop rather than a stale R\/R gate', () => {
   assert.ok(html.includes('id="set-stop-atr"'))
   assert.ok(!html.includes('id="set-min-rr"'))

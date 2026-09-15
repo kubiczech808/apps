@@ -431,6 +431,10 @@ tbody tr:hover { background: var(--series-1-soft); }
   justify-content: center;
   min-width: 54px;
 }
+.backtest-matrix-table .fact {
+  justify-content: center;
+  min-width: 86px;
+}
 .pa-trend-button {
   min-height: 26px;
   font-weight: 650;
