@@ -133,6 +133,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # The self-hosted Actions session is non-interactive. Linger keeps
+          # openclaw2's user systemd manager and D-Bus available after reboot.
+          sudo loginctl enable-linger openclaw2
           uid="$(id -u openclaw2)"
           user_systemctl=(sudo -u openclaw2 -H env \
             XDG_RUNTIME_DIR="/run/user/$uid" \
