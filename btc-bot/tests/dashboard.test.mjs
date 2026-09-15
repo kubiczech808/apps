@@ -118,6 +118,24 @@ test('strategy tab renders the price-action structure matrix', () => {
   assert.match(css, /trade-profile/)
 })
 
+test('strategy switching lives in the header and redraws dashboard context', () => {
+  assert.ok(html.includes('id="strategy-view"'), 'header must contain the strategy switcher')
+  assert.match(js, /STRATEGY_VIEW_STORAGE/)
+  assert.match(js, /STRATEGY_VIEWS/)
+  assert.match(js, /currentStrategyView/)
+  assert.match(js, /renderPriceActionTiles/)
+  assert.match(js, /renderPriceActionDecision/)
+  assert.match(js, /renderPriceActionOpen/)
+  assert.match(js, /renderPriceActionOrders/)
+  assert.match(js, /renderPriceActionClosed/)
+  assert.match(js, /renderPriceActionRuns/)
+  assert.match(js, /Kapitál strategie/)
+  assert.match(js, /Aktivní price-action setupy/)
+  assert.match(js, /Čekající price-action profily/)
+  assert.match(js, /Invalidované price-action profily/)
+  assert.match(css, /strategy-switch/)
+})
+
 test('settings edit the selected strategy stop rather than a stale R\/R gate', () => {
   assert.ok(html.includes('id="set-stop-atr"'))
   assert.ok(!html.includes('id="set-min-rr"'))

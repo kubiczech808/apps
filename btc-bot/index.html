@@ -29,6 +29,10 @@
     <span class="dot" id="status-dot" title="stav"></span>
     <h1 id="portfolio-name">BTC Leveraged Momentum</h1>
     <span class="badge" id="mode-badge">–</span>
+    <label class="strategy-switch" for="strategy-view">
+      <span>Strategie</span>
+      <select id="strategy-view"></select>
+    </label>
     <span class="spacer"></span>
     <span class="badge" id="last-run">–</span>
     <button id="refresh" type="button">Obnovit</button>
@@ -44,7 +48,7 @@
   </section>
 
   <section class="card">
-    <h2>Vývoj kapitálu (sats)</h2>
+    <h2 id="equity-title">Vývoj kapitálu (sats)</h2>
     <div class="chart" id="equity-chart">
       <svg id="equity-svg" role="img" aria-label="Vývoj kapitálu účtu v sats"></svg>
       <div class="tooltip" id="equity-tooltip" hidden></div>
@@ -61,6 +65,7 @@
   </div>
 
   <section class="card" id="panel-open">
+    <h2 id="panel-open-title">Otevřené pozice</h2>
     <div class="table-scroll"><table>
       <thead><tr>
         <th>Otevřeno</th><th>Směr</th><th>Velikost</th><th>Vstup</th>
@@ -73,6 +78,7 @@
   </section>
 
   <section class="card" id="panel-orders" hidden>
+    <h2 id="panel-orders-title">Objednávky</h2>
     <div class="table-scroll"><table>
       <thead><tr>
         <th>Zadáno</th><th>Typ</th><th>Směr</th><th>Velikost</th><th>Cena</th>
@@ -83,6 +89,7 @@
   </section>
 
   <section class="card" id="panel-closed" hidden>
+    <h2 id="panel-closed-title">Zavřené pozice</h2>
     <div class="table-scroll"><table>
       <thead><tr>
         <th>Zavřeno</th><th>Směr</th><th>Velikost</th><th>Vstup</th><th>Výstup</th>
@@ -93,6 +100,7 @@
   </section>
 
   <section class="card" id="panel-runs" hidden>
+    <h2 id="panel-runs-title">Běhy</h2>
     <div class="table-scroll"><table>
       <thead><tr><th>Čas</th><th>Runner</th><th>Režim</th><th>Akce</th><th>Trvání</th><th>Důvod</th></tr></thead>
       <tbody id="tbody-runs"></tbody>

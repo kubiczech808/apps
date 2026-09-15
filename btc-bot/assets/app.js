@@ -12,6 +12,7 @@
 'use strict'
 
 const KEY_STORAGE = 'btc-bot-key'
+const STRATEGY_VIEW_STORAGE = 'btc-bot-strategy-view'
 const REFRESH_MS = 30_000
 const SATS_PER_BTC = 1e8
 const DECISION_SIGNAL_STATES = new Set(['met', 'unmet', 'neutral'])
@@ -22,6 +23,7 @@ let state = null
 let keyIsPublic = false
 let refreshTimer = null
 let priceActionSelection = null
+let selectedStrategyView = 'momentum'
 
 // ── formatting ────────────────────────────────────────────────────────────
 
@@ -187,6 +189,53 @@ const STRATEGY_RULEBOOK = [
   },
 ]
 
+const PRICE_ACTION_RULEBOOK = [
+  {
+    title: 'Struktura vede směr obchodu',
+    text: 'Long vzniká jen z HH/HL, short jen z LH/LL; flat struktura zůstává bez setupu.',
+    status: () => {
+      const count = priceActionSummary().directional.length
+      return fact(count ? 'met' : 'neutral', `${count} směrových profilů`)
+    },
+  },
+  {
+    title: 'Vstup pouze ve správné supply/demand zóně',
+    text: 'Stačí hit ceny do zóny; close uvnitř není podmínka. Zóna se invaliduje jen close průrazem na vlastním timeframe.',
+    status: () => {
+      const hit = priceActionProfiles().filter((entry) => entry.profile.zoneHit).length
+      return fact(hit ? 'met' : 'neutral', `${hit} hitů zóny`)
+    },
+  },
+  {
+    title: 'Pullback nejdříve od 50 % hlavní vlny',
+    text: 'Setup nehoní cenu u extrému. Čeká na návrat alespoň do poloviny poslední strukturální vlny.',
+    status: () => {
+      const passed = priceActionProfiles().filter((entry) =>
+        entry.profile.gates?.some((gateItem) => gateItem.id === 'pullback' && gateItem.status === 'met')
+      ).length
+      return fact(passed ? 'met' : 'neutral', `${passed} pullbacků`)
+    },
+  },
+  {
+    title: 'Cíle a stop musí dát nejméně 2R',
+    text: 'TP1 leží na posledním HH/LL, TP2 na nejbližší nevybrané opačné S/D zóně; risk je 1 % účtu.',
+    status: () => {
+      const passed = priceActionProfiles().filter((entry) =>
+        entry.profile.gates?.some((gateItem) => gateItem.id === 'rr' && gateItem.status === 'met')
+      ).length
+      return fact(passed ? 'met' : 'neutral', `${passed} profilů >= 2R`)
+    },
+  },
+  {
+    title: 'Nižší timeframe hlídá invalidaci',
+    text: 'Když menší timeframe změní strukturu proti obchodu, profil ukáže zavírací trigger na posledním HL/LH.',
+    status: () => {
+      const invalidated = priceActionSummary().invalidated.length
+      return fact(invalidated ? 'unmet' : 'met', invalidated ? `${invalidated} invalidací` : 'bez invalidace')
+    },
+  },
+]
+
 const STRATEGY_CANDIDATES = [
   {
     status: 'aktivní',
@@ -220,10 +269,70 @@ const STRATEGY_CANDIDATES = [
   },
 ]
 
+const STRATEGY_VIEWS = {
+  momentum: {
+    id: 'momentum',
+    label: 'TF-2L Momentum',
+    title: 'BTC Leveraged Momentum',
+    strategyName: 'TF-2L Leveraged momentum',
+  },
+  'price-action': {
+    id: 'price-action',
+    label: 'PA-1 Price Action',
+    title: 'PA-1 Price Action Structure',
+    strategyName: 'PA-1 Price Action Structure',
+  },
+}
+
+const currentStrategyView = () => STRATEGY_VIEWS[selectedStrategyView] ?? STRATEGY_VIEWS.momentum
+
 const PRICE_ACTION_TREND_LABELS = {
   up: 'up',
   down: 'down',
   flat: 'flat',
+}
+
+const priceActionProfiles = () => {
+  const matrix = state?.priceActionMatrix
+  const columns = matrix?.timeframes?.length ? matrix.timeframes : [
+    { id: '1h', label: '1H' },
+    { id: '4h', label: '4H' },
+    { id: '1d', label: '1D' },
+  ]
+  return (matrix?.assets ?? [])
+    .flatMap((asset) => columns.map((column) => {
+      const item = asset.trends?.[column.id] ?? null
+      return {
+        asset,
+        column,
+        item,
+        profile: item?.tradeProfile ?? null,
+      }
+    }))
+    .filter((entry) => entry.profile)
+}
+
+const profileRank = (entry) => {
+  if (entry.profile.status === 'ready') return 0
+  if (entry.profile.invalidation?.invalidatingTrend) return 1
+  if (entry.profile.status === 'watch') return 2
+  return 3
+}
+
+const sortedPriceActionProfiles = () =>
+  [...priceActionProfiles()].sort((a, b) =>
+    profileRank(a) - profileRank(b) ||
+    a.asset.symbol.localeCompare(b.asset.symbol) ||
+    a.column.id.localeCompare(b.column.id)
+  )
+
+const priceActionSummary = () => {
+  const profiles = priceActionProfiles()
+  const ready = profiles.filter((entry) => entry.profile.status === 'ready')
+  const watch = profiles.filter((entry) => entry.profile.status === 'watch')
+  const invalidated = profiles.filter((entry) => entry.profile.invalidation?.invalidatingTrend)
+  const directional = profiles.filter((entry) => entry.profile.side)
+  return { profiles, ready, watch, invalidated, directional }
 }
 
 const trendFact = (trend, item = {}) => {
@@ -451,6 +560,23 @@ const setKey = (value) => {
   }
 }
 
+const getStrategyView = () => {
+  try {
+    return localStorage.getItem(STRATEGY_VIEW_STORAGE) || 'momentum'
+  } catch {
+    return 'momentum'
+  }
+}
+
+const setStrategyView = (value) => {
+  selectedStrategyView = STRATEGY_VIEWS[value] ? value : 'momentum'
+  try {
+    localStorage.setItem(STRATEGY_VIEW_STORAGE, selectedStrategyView)
+  } catch {
+    /* private browsing: selection simply does not persist */
+  }
+}
+
 const api = async (action, { method = 'GET', body, key = getKey() } = {}) => {
   const response = await fetch(`api.php?action=${action}&t=${Date.now()}`, {
     method,
@@ -574,6 +700,10 @@ const renderTiles = () => {
   const box = $('tiles')
   box.replaceChildren()
   if (!state) return
+  if (currentStrategyView().id === 'price-action') {
+    renderPriceActionTiles(box)
+    return
+  }
 
   const account = state.account || {}
   const stats = state.stats || {}
@@ -625,6 +755,28 @@ const renderTiles = () => {
   )
 }
 
+const renderPriceActionTiles = (box) => {
+  const matrix = state?.priceActionMatrix
+  const summary = priceActionSummary()
+  const riskPct = summary.profiles.find((entry) => Number.isFinite(entry.profile.riskPct))?.profile.riskPct ?? 1
+  const rr = summary.profiles.find((entry) => Number.isFinite(entry.profile.minRewardRisk))?.profile.minRewardRisk ?? 2
+  const assets = matrix?.assets?.length ?? 0
+  const timeframes = matrix?.timeframes?.length ?? 3
+
+  box.append(
+    tile('Kapitál strategie', 'profile-only', 'exekuce orderů je zatím vypnutá'),
+    tile('Sledované trhy', `${assets} assetů`, `${assets * timeframes} profilů na 1H / 4H / 1D`),
+    tile('Ready setupy', String(summary.ready.length), 'splněná zóna, pullback i R/R', summary.ready.length ? 'pos' : ''),
+    tile('Čekající profily', String(summary.watch.length), 'mají směr, ale chybí některá brána'),
+    tile('Invalidace', String(summary.invalidated.length), 'nižší timeframe změnil strukturu', summary.invalidated.length ? 'neg' : ''),
+    tile(
+      'Kontrola',
+      matrix?.generatedAt ? ago(matrix.generatedAt) : 'čeká',
+      matrix?.refreshMinutes ? `perioda ${matrix.refreshMinutes} min · risk ${pct(riskPct, 1)} · R/R ${rr}:1` : 'čeká na první běh'
+    )
+  )
+}
+
 // ── equity chart ──────────────────────────────────────────────────────────
 
 const CHART = { width: 900, height: 190, padLeft: 62, padRight: 12, padTop: 12, padBottom: 24 }
@@ -641,6 +793,10 @@ const CHART = { width: 900, height: 190, padLeft: 62, padRight: 12, padTop: 12, 
 const renderDecision = () => {
   const card = $('decision-card')
   const box = $('decision')
+  if (currentStrategyView().id === 'price-action') {
+    renderPriceActionDecision(card, box)
+    return
+  }
   const decision = state?.lastDecision
   if (!decision) {
     card.hidden = true
@@ -735,11 +891,71 @@ const renderDecision = () => {
   }
 }
 
+const renderPriceActionDecision = (card, box) => {
+  const matrix = state?.priceActionMatrix
+  card.hidden = false
+  box.replaceChildren()
+  if (!matrix?.assets?.length) {
+    box.append(
+      el('div', { className: 'decision-line' }, [
+        el('span', { className: 'decision-verdict', text: 'Čeká na první price-action scan' }),
+        el('span', { className: 'decision-reason', text: state?.priceActionMatrixError || '' }),
+      ])
+    )
+    return
+  }
+
+  const summary = priceActionSummary()
+  const lead = summary.ready[0] ?? summary.invalidated[0] ?? summary.watch[0] ?? sortedPriceActionProfiles()[0]
+  const profile = lead?.profile
+  const verdict = summary.ready.length
+    ? `${summary.ready.length} ready setup${summary.ready.length === 1 ? '' : 'ů'}`
+    : summary.invalidated.length
+      ? `${summary.invalidated.length} profil${summary.invalidated.length === 1 ? '' : 'ů'} s invalidací`
+      : 'Čeká na validní vstup'
+  const reason = lead
+    ? `${lead.asset.symbol} ${lead.column.label} · ${profile.side || 'flat'} · ${lead.item?.reason || 'bez důvodu'}`
+    : 'bez price-action profilu'
+
+  box.append(
+    el('div', { className: 'decision-line' }, [
+      el('span', { className: 'decision-verdict', text: verdict }),
+      el('span', { className: 'decision-reason', text: reason }),
+    ])
+  )
+
+  const gates = profile?.gates ?? []
+  const facts = [
+    decisionFact(`scan ${ago(matrix.generatedAt)}`, 'neutral', `schema ${matrix.schemaVersion ?? '–'}`),
+    decisionFact(`${summary.profiles.length} profilů`, 'neutral'),
+    decisionFact(`${summary.ready.length} ready`, summary.ready.length ? 'met' : 'neutral'),
+    decisionFact(`${summary.invalidated.length} invalidací`, summary.invalidated.length ? 'unmet' : 'met'),
+    Number.isFinite(profile?.entry) ? decisionFact(`entry ${quotePrice(profile.entry)}`, profile.zoneHit ? 'met' : 'neutral') : null,
+    Number.isFinite(profile?.rewardRisk)
+      ? decisionFact(`R/R ${nf(2).format(profile.rewardRisk)}:1`, profile.rewardRisk >= (profile.minRewardRisk ?? 2) ? 'met' : 'unmet')
+      : null,
+    ...gates.map((item) => decisionFact(item.label, item.status, item.detail)),
+  ].filter(Boolean)
+
+  if (facts.length) box.append(el('div', { className: 'decision-facts' }, facts.map(decisionFactElement)))
+}
+
 const renderChart = () => {
   const svg = $('equity-svg')
   const tooltip = $('equity-tooltip')
   svg.replaceChildren()
   tooltip.hidden = true
+  if (currentStrategyView().id === 'price-action') {
+    svg.append(
+      el('text', {
+        x: 12,
+        y: 40,
+        className: 'tick',
+        text: 'PA-1 je zatím profile-only strategie bez vlastního kapitálu a equity křivky; po zapnutí exekuce se bude měřit odděleně.',
+      })
+    )
+    return
+  }
 
   const points = (state?.equityHistory || []).filter((point) => Number.isFinite(point.equitySats))
   if (points.length < 2) {
@@ -830,16 +1046,46 @@ const renderChart = () => {
 const sideCell = (side) =>
   el('td', {}, [
     el('span', {
-      className: side === 'long' ? 'side-long' : 'side-short',
-      text: side === 'long' ? 'LONG' : 'SHORT',
+      className: side === 'long' ? 'side-long' : side === 'short' ? 'side-short' : '',
+      text: side === 'long' ? 'LONG' : side === 'short' ? 'SHORT' : '–',
     }),
   ])
 
 const emptyRow = (columns, message) =>
   el('tr', {}, [el('td', { colspan: String(columns), className: 'empty', text: message })])
 
+const setPanelTitle = (id, text) => {
+  const node = $(id)
+  if (node) node.textContent = text
+}
+
+const setTableHead = (panelId, labels) => {
+  const row = $(panelId)?.querySelector('thead tr')
+  if (!row) return
+  row.replaceChildren(...labels.map((label) => el('th', { text: label })))
+}
+
+const missingProfileGates = (profile) =>
+  (profile?.gates ?? [])
+    .filter((item) => item.status === 'unmet')
+    .map((item) => item.label)
+    .join(', ') || 'čeká'
+
+const profileAssetCell = (entry) =>
+  el('td', {}, [
+    el('strong', { text: entry.asset.symbol }),
+    el('span', { className: 'asset-name', text: ` ${entry.column.label}` }),
+  ])
+
 const renderOpen = () => {
   const body = $('tbody-open')
+  if (currentStrategyView().id === 'price-action') {
+    renderPriceActionOpen(body)
+    return
+  }
+  setPanelTitle('panel-open-title', 'Otevřené pozice')
+  setTableHead('panel-open', ['Otevřeno', 'Směr', 'Velikost', 'Vstup', 'Stop loss', 'Take profit', 'Páka', 'Likvidace', 'Marže', 'P/L'])
+  $('flatten').hidden = false
   const rows = state?.positions?.running || []
   body.replaceChildren()
   if (!rows.length) {
@@ -865,8 +1111,41 @@ const renderOpen = () => {
   }
 }
 
+const renderPriceActionOpen = (body) => {
+  setPanelTitle('panel-open-title', 'Aktivní price-action setupy')
+  setTableHead('panel-open', ['Asset', 'Směr', 'Entry', 'SL', 'TP1', 'TP2', 'R/R', 'Invalidace'])
+  $('flatten').hidden = true
+  const rows = sortedPriceActionProfiles().filter((entry) => entry.profile.status === 'ready')
+  body.replaceChildren()
+  if (!rows.length) {
+    body.append(emptyRow(8, 'Žádný price-action setup teď nesplňuje všechny vstupní brány.'))
+    return
+  }
+  for (const entry of rows) {
+    const profile = entry.profile
+    body.append(
+      el('tr', {}, [
+        profileAssetCell(entry),
+        sideCell(profile.side),
+        el('td', { text: quotePrice(profile.entry) }),
+        el('td', { text: quotePrice(profile.stop) }),
+        el('td', { text: quotePrice(profile.tp1) }),
+        el('td', { text: quotePrice(profile.tp2) }),
+        el('td', { text: Number.isFinite(profile.rewardRisk) ? `${nf(2).format(profile.rewardRisk)}:1` : '–' }),
+        el('td', { text: profile.invalidation?.invalidatingTrend ? 'změna struktury' : 'OK' }),
+      ])
+    )
+  }
+}
+
 const renderOrders = () => {
   const body = $('tbody-orders')
+  if (currentStrategyView().id === 'price-action') {
+    renderPriceActionOrders(body)
+    return
+  }
+  setPanelTitle('panel-orders-title', 'Objednávky')
+  setTableHead('panel-orders', ['Zadáno', 'Typ', 'Směr', 'Velikost', 'Cena', 'Stop loss', 'Take profit', 'Marže', ''])
   const rows = state?.positions?.orders || []
   body.replaceChildren()
   if (!rows.length) {
@@ -892,6 +1171,31 @@ const renderOrders = () => {
   }
 }
 
+const renderPriceActionOrders = (body) => {
+  setPanelTitle('panel-orders-title', 'Čekající price-action profily')
+  setTableHead('panel-orders', ['Asset', 'Směr', 'Cena', 'Zóna', 'Pullback', 'R/R', 'Chybí'])
+  const rows = sortedPriceActionProfiles().filter((entry) => entry.profile.status === 'watch')
+  body.replaceChildren()
+  if (!rows.length) {
+    body.append(emptyRow(7, 'Žádné čekající price-action profily se směrem.'))
+    return
+  }
+  for (const entry of rows) {
+    const profile = entry.profile
+    body.append(
+      el('tr', {}, [
+        profileAssetCell(entry),
+        sideCell(profile.side),
+        el('td', { text: quotePrice(entry.item?.price) }),
+        el('td', { text: profile.zone ? zoneRange(profile.zone) : '–' }),
+        el('td', { text: Number.isFinite(profile.pullbackLevel) ? quotePrice(profile.pullbackLevel) : '–' }),
+        el('td', { text: Number.isFinite(profile.rewardRisk) ? `${nf(2).format(profile.rewardRisk)}:1` : '–' }),
+        el('td', { className: 'reason', text: missingProfileGates(profile) }),
+      ])
+    )
+  }
+}
+
 const EXIT_REASONS = {
   stop_loss: 'stop loss',
   take_profit: 'take profit',
@@ -900,6 +1204,12 @@ const EXIT_REASONS = {
 
 const renderClosed = () => {
   const body = $('tbody-closed')
+  if (currentStrategyView().id === 'price-action') {
+    renderPriceActionClosed(body)
+    return
+  }
+  setPanelTitle('panel-closed-title', 'Zavřené pozice')
+  setTableHead('panel-closed', ['Zavřeno', 'Směr', 'Velikost', 'Vstup', 'Výstup', 'Důvod', 'Poplatky', 'P/L'])
   const rows = [...(state?.positions?.closed || [])].sort((a, b) => (b.closedAt ?? 0) - (a.closedAt ?? 0))
   body.replaceChildren()
   if (!rows.length) {
@@ -924,6 +1234,31 @@ const renderClosed = () => {
   }
 }
 
+const renderPriceActionClosed = (body) => {
+  setPanelTitle('panel-closed-title', 'Invalidované price-action profily')
+  setTableHead('panel-closed', ['Asset', 'Směr', 'Nižší TF', 'Trend', 'Trigger', 'Pravidlo'])
+  const rows = sortedPriceActionProfiles().filter((entry) => entry.profile.invalidation?.invalidatingTrend)
+  body.replaceChildren()
+  if (!rows.length) {
+    body.append(emptyRow(6, 'Žádný sledovaný profil teď není invalidovaný změnou struktury na nižším timeframe.'))
+    return
+  }
+  for (const entry of rows) {
+    const profile = entry.profile
+    const invalidation = profile.invalidation ?? {}
+    body.append(
+      el('tr', {}, [
+        profileAssetCell(entry),
+        sideCell(profile.side),
+        el('td', { text: invalidation.lowerTimeframeId?.toUpperCase?.() || '–' }),
+        el('td', { text: invalidation.lowerTrend || '–' }),
+        el('td', { text: quotePrice(invalidation.closeTrigger) }),
+        el('td', { className: 'reason', text: invalidation.rule || '–' }),
+      ])
+    )
+  }
+}
+
 const ACTIONS = {
   opened: 'otevřel pozici',
   managed: 'upravil pozici',
@@ -935,6 +1270,12 @@ const ACTIONS = {
 
 const renderRuns = () => {
   const body = $('tbody-runs')
+  if (currentStrategyView().id === 'price-action') {
+    renderPriceActionRuns(body)
+    return
+  }
+  setPanelTitle('panel-runs-title', 'Běhy')
+  setTableHead('panel-runs', ['Čas', 'Runner', 'Režim', 'Akce', 'Trvání', 'Důvod'])
   const rows = state?.runs || []
   body.replaceChildren()
   if (!rows.length) {
@@ -955,15 +1296,44 @@ const renderRuns = () => {
   }
 }
 
+const renderPriceActionRuns = (body) => {
+  setPanelTitle('panel-runs-title', 'Běhy price-action scanneru')
+  setTableHead('panel-runs', ['Čas', 'Asset', 'Zdroj', 'Status', 'Timeframes', 'Poznámka'])
+  const matrix = state?.priceActionMatrix
+  const rows = matrix?.assets ?? []
+  body.replaceChildren()
+  if (!rows.length) {
+    body.append(emptyRow(6, state?.priceActionMatrixError || 'Price-action scanner zatím nemá publikovanou matici.'))
+    return
+  }
+  for (const asset of rows) {
+    const trends = Object.values(asset.trends ?? {})
+    const ready = trends.filter((item) => item.tradeProfile?.status === 'ready').length
+    const invalidated = trends.filter((item) => item.tradeProfile?.invalidation?.invalidatingTrend).length
+    body.append(
+      el('tr', {}, [
+        el('td', { text: when(matrix.generatedAt) }),
+        el('td', { text: asset.symbol }),
+        el('td', { text: asset.source || '–' }),
+        el('td', { text: ready ? `${ready} ready` : invalidated ? `${invalidated} invalidace` : 'čeká' }),
+        el('td', { text: Object.keys(asset.trends ?? {}).map((item) => item.toUpperCase()).join(' / ') || '–' }),
+        el('td', { className: 'reason', text: (asset.failures ?? []).join('; ') || `refresh ${matrix.refreshMinutes ?? '–'} min` }),
+      ])
+    )
+  }
+}
+
 const renderStrategyLab = () => {
   const rules = $('strategy-rules')
   const candidates = $('strategy-candidates')
   const priceAction = $('strategy-price-action')
+  const view = currentStrategyView()
   rules.replaceChildren()
   candidates.replaceChildren()
   priceAction.replaceChildren()
 
-  for (const rule of STRATEGY_RULEBOOK) {
+  const rulebook = view.id === 'price-action' ? PRICE_ACTION_RULEBOOK : STRATEGY_RULEBOOK
+  for (const rule of rulebook) {
     const status = rule.status()
     rules.append(
       el('div', { className: 'rule-row' }, [
@@ -976,7 +1346,8 @@ const renderStrategyLab = () => {
     )
   }
 
-  if (STRATEGY_CANDIDATES.length === 0) {
+  const candidatesForView = STRATEGY_CANDIDATES.filter((strategy) => strategy.name === view.strategyName)
+  if (candidatesForView.length === 0) {
     candidates.append(
       el('p', {
         className: 'empty',
@@ -985,7 +1356,7 @@ const renderStrategyLab = () => {
     )
   }
 
-  for (const strategy of STRATEGY_CANDIDATES) {
+  for (const strategy of candidatesForView) {
     candidates.append(
       el('div', { className: 'strategy-card' }, [
         el('div', { className: 'strategy-card-head' }, [
@@ -1136,12 +1507,24 @@ const saveSettings = async () => {
 // ── shell ─────────────────────────────────────────────────────────────────
 
 const renderHeader = () => {
+  const view = currentStrategyView()
+  const switcher = $('strategy-view')
+  if (switcher && switcher.options.length === 0) {
+    switcher.replaceChildren(...Object.values(STRATEGY_VIEWS).map((item) =>
+      el('option', { value: item.id, text: item.label })
+    ))
+  }
+  if (switcher) switcher.value = view.id
+
   const badge = $('mode-badge')
   const mode = state?.mode || state?.settings?.mode || '–'
   badge.textContent = { testnet: 'TESTNET', testnet4: 'TESTNET', mainnet: 'OSTRÝ PROVOZ', paper: 'PAPER' }[mode] || mode
   badge.className = `badge mode-${mode === 'testnet4' ? 'testnet' : mode}`
 
-  $('portfolio-name').textContent = state?.settings?.portfolioName || 'BTC Leveraged Momentum'
+  $('portfolio-name').textContent = view.id === 'momentum'
+    ? state?.settings?.portfolioName || view.title
+    : view.title
+  $('equity-title').textContent = view.id === 'momentum' ? 'Vývoj kapitálu (sats)' : 'Kapitál strategie'
 
   const dot = $('status-dot')
   const updated = state?.updatedAt ? Date.parse(state.updatedAt) : NaN
@@ -1221,6 +1604,8 @@ const start = async () => {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
+  setStrategyView(getStrategyView())
+
   $('gate-form').addEventListener('submit', async (event) => {
     event.preventDefault()
     const candidate = $('gate-key').value.trim()
@@ -1245,6 +1630,10 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   $('refresh').addEventListener('click', () => load().catch((error) => setStatus(error.message, 'neg')))
+  $('strategy-view').addEventListener('change', (event) => {
+    setStrategyView(event.target.value)
+    renderAll()
+  })
   $('flatten').addEventListener('click', () => queueCommand('flatten'))
   $('save-settings').addEventListener('click', saveSettings)
   $('forget-key').addEventListener('click', () => {

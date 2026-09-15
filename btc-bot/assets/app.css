@@ -107,6 +107,24 @@ body {
 .top h1 { font-size: 18px; margin: 0; font-weight: 650; letter-spacing: -0.01em; }
 .top .spacer { flex: 1 1 auto; }
 
+.strategy-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+}
+.strategy-switch select {
+  max-width: 210px;
+  font: inherit;
+  color: var(--text-primary);
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 5px 8px;
+}
+
 .badge {
   display: inline-flex;
   align-items: center;
