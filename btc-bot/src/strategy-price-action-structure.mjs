@@ -695,12 +695,10 @@ export const evaluateTradeProfile = ({
     (side === 'long' ? zones?.demand : side === 'short' ? zones?.supply : null) ??
     fallbackZone
   const zoneHit = zoneHitByCandle(activeZone, latest)
-  // A planned entry is meaningful only when the selected zone overlaps the
-  // structural pullback range. Keep the zone edge available for diagnostics,
-  // but never publish it as an entry when the whole zone is outside that range.
-  const plannedEntry = activeCandidate?.entryForMinRR ?? (
-    activeCandidate?.pullbackEligible ? activeCandidate.entryAtZoneHit : null
-  )
+  // A planned entry is meaningful only when the candidate passes the complete
+  // pullback and minimum-R/R gates. Keep raw zone-edge values on the candidate
+  // for diagnostics, but never publish them as a trade entry by themselves.
+  const plannedEntry = activeCandidate?.entryForMinRR ?? null
   const entry = Number.isFinite(plannedEntry) ? plannedEntry : null
   const pulledBack = pullbackSatisfied({ side, latest, level: pullback })
   const buffer = activeCandidate?.stopBuffer ?? stopBuffer({

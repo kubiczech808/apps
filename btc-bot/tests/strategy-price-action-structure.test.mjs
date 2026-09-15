@@ -432,6 +432,34 @@ test('entry is not published when the selected zone is outside the pullback rang
   assert.ok(profile.entry === null || (profile.entry >= rangeLow && profile.entry <= rangeHigh))
 })
 
+test('a profile below minimum R/R is never a valid setup or planned entry', () => {
+  const item = {
+    trend: 'up',
+    price: 104,
+    lastCandle: candle(START, 105, 106, 103, 104),
+    structure: {
+      high: { current: { price: 110 } },
+      low: { current: { price: 100 } },
+    },
+    zones: {
+      nearbyDemand: [{ type: 'demand', low: 100, high: 105 }],
+      unfilledDemand: [{ type: 'demand', low: 100, high: 105 }],
+      unfilledSupply: [{ type: 'supply', low: 105.5, high: 106 }],
+    },
+  }
+  const profile = evaluateTradeProfile({ item, settings: { pullbackPct: 50, minRewardRisk: 2, stopBufferPct: 10 } })
+  const candidate = profile.zoneCandidates.find((entry) => entry.type === 'demand')
+
+  assert.ok(candidate.rrAtZoneHit < 2)
+  assert.equal(candidate.rrEligible, false)
+  assert.equal(candidate.eligible, false)
+  assert.equal(candidate.entryForMinRR, null)
+  assert.equal(profile.status, 'watch')
+  assert.equal(profile.gates.find((entry) => entry.id === 'rr').status, 'unmet')
+  assert.equal(profile.entry, null)
+  assert.equal(profile.rewardRisk, null)
+})
+
 test('open-position review detects lower-timeframe invalidation and recalculates the plan', () => {
   const item = {
     trend: 'up',
