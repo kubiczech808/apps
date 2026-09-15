@@ -217,6 +217,7 @@ test('asset tickers open a timeframe price chart with supply and demand zones', 
   assert.match(js, /H flat/)
   assert.match(js, /current\.label/)
   assert.match(js, /assetChartVisibleCandleCount/)
+  assert.match(js, /const ASSET_CHART_HISTORY_STEP = 120/)
   assert.match(js, /candles = allCandles\.slice\(-assetChartVisibleCandleCount\)/)
   assert.match(js, /const minVisibleCandleCount = Math\.min\(allCandles\.length, 60\)/)
   assert.match(js, /const niceStep = \(value\) =>/)

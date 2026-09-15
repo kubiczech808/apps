@@ -29,6 +29,7 @@ let selectedAssetChart = { symbol: null, timeframeId: '4h' }
 let assetChartVisibleCandleCount = 60
 let selectedStrategyPanel = 'filled-zones'
 let selectedStrategyView = 'price-action'
+const ASSET_CHART_HISTORY_STEP = 120
 
 // ── formatting ────────────────────────────────────────────────────────────
 
@@ -1161,7 +1162,7 @@ const renderAssetChart = () => {
     event.preventDefault()
     const delta = event.deltaY || event.deltaX
     if (!delta) return
-    const step = Math.max(1, Math.round(Math.abs(delta) / 80)) * 12
+    const step = Math.max(1, Math.round(Math.abs(delta) / 80)) * ASSET_CHART_HISTORY_STEP
     const direction = delta > 0 ? 1 : -1
     const nextVisibleCount = Math.max(
       minVisibleCandleCount,
