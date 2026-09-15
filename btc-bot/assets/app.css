@@ -422,7 +422,9 @@ tbody tr:hover { background: var(--series-1-soft); }
   position: sticky;
   left: 0;
   z-index: 1;
-  min-width: 150px;
+  width: 112px;
+  min-width: 112px;
+  max-width: 112px;
   text-align: left;
   background: var(--surface-1);
 }
@@ -436,6 +438,8 @@ tbody tr:hover { background: var(--series-1-soft); }
   text-align: center;
 }
 .pa-decision-cell-structure .fact { min-width: 90px; }
+.pa-decision-cell-pullback { min-width: 145px; }
+.pa-decision-cell-pullback .fact { min-width: 135px; max-width: none; white-space: nowrap; }
 .pa-zone-list {
   display: flex;
   align-items: center;
