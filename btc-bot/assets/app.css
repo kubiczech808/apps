@@ -358,7 +358,6 @@ tbody tr:hover { background: var(--series-1-soft); }
   text-align: center;
 }
 .pa-decision-cell-structure .fact { min-width: 90px; }
-.pa-decision-cell-invalidation .fact { min-width: 108px; }
 .pa-zone-list {
   display: grid;
   gap: 5px;
@@ -671,8 +670,7 @@ tbody tr:hover { background: var(--series-1-soft); }
   padding-top: 10px;
   border-top: 1px solid var(--grid);
 }
-.trade-profile-head,
-.trade-invalidation {
+.trade-profile-head {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
@@ -723,11 +721,6 @@ tbody tr:hover { background: var(--series-1-soft); }
 }
 .trade-note-met {
   color: var(--good-text);
-}
-.trade-invalidation {
-  margin-top: 9px;
-  color: var(--text-muted);
-  font-size: 12px;
 }
 .swing-pill {
   display: inline-flex;

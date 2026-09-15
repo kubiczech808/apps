@@ -21,7 +21,11 @@ import { fetchFundingSettlements } from './funding.mjs'
 import { atr, lastDefined, marketStructure } from './priceaction.mjs'
 import { planPosition, SATS_PER_BTC } from './risk.mjs'
 import { LEGACY_PRICE_ACTION_ID, strategyConfig } from './strategy-registry.mjs'
-import { buildPriceActionMatrix } from './strategy-price-action-structure.mjs'
+import {
+  PRICE_ACTION_STRUCTURE_ID,
+  buildPriceActionMatrix,
+  reviewOpenPositionInMatrix,
+} from './strategy-price-action-structure.mjs'
 import {
   capClosed,
   computeStats,
@@ -29,6 +33,7 @@ import {
   lastLossAt,
   mergeSettings,
   recordEquity,
+  recordPriceActionEvent,
   recordRun,
   tradesToday,
 } from './state.mjs'
@@ -416,15 +421,60 @@ export const runPass = async ({
     }
 
     try {
+      const previousPriceActionMatrix = state.priceActionMatrix
       state.priceActionMatrix = await buildPriceActionMatrix({
         btcHourly: market.hourly,
-        previous: state.priceActionMatrix,
+        previous: previousPriceActionMatrix,
         fetchImpl,
         now,
         settings: settings.priceActionStructure,
         logger,
       })
       state.priceActionMatrixError = null
+
+      // PA invalidation belongs to an already-open PA trade. Entry profiles
+      // are recalculated from the current matrix and never carry this status.
+      for (const position of running.filter((candidate) => candidate.strategyId === PRICE_ACTION_STRUCTURE_ID)) {
+        const review = reviewOpenPositionInMatrix({
+          position,
+          matrix: state.priceActionMatrix,
+          settings: settings.priceActionStructure,
+        })
+        if (!review.invalidated) continue
+        const fingerprint = [
+          position.id,
+          position.side,
+          review.symbol,
+          review.timeframeId,
+          review.item?.trend,
+          review.item?.event,
+          review.lowerItem?.trend,
+          review.lowerItem?.event,
+          review.revisedProfile?.side,
+          review.revisedProfile?.zone?.type,
+          review.revisedProfile?.zone?.low,
+          review.revisedProfile?.zone?.high,
+          review.revisedProfile?.stop,
+          review.revisedProfile?.tp1,
+          review.revisedProfile?.tp2,
+        ].join('|')
+        recordPriceActionEvent(state, {
+          at: isoNow(now),
+          type: 'open_position_invalidation',
+          positionId: position.id,
+          asset: review.symbol,
+          timeframeId: review.timeframeId,
+          invalidatingTimeframeId: review.invalidatingTimeframeId,
+          side: position.side,
+          currentTrend: review.item?.trend ?? null,
+          lowerTrend: review.lowerItem?.trend ?? null,
+          closeTrigger: review.closeTrigger,
+          reason: review.reason,
+          currentProfile: review.currentProfile,
+          revisedProfile: review.revisedProfile,
+          fingerprint,
+        })
+      }
     } catch (error) {
       state.priceActionMatrixError = error.message
       logger.warn(`Price action matrix failed: ${error.message}`)

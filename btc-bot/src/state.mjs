@@ -14,6 +14,7 @@ export const STATE_VERSION = 1
 export const MAX_RUNS = 200
 export const MAX_EQUITY_POINTS = 2000
 export const MAX_CLOSED_TRADES = 500
+export const MAX_PRICE_ACTION_EVENTS = 200
 
 export const STRATEGY_ACTIVATED_AT = '2026-09-11T06:04:00.000Z'
 
@@ -64,6 +65,7 @@ export const emptyState = (overrides = {}) => ({
   lastDecision: null,
   priceActionMatrix: null,
   priceActionMatrixError: null,
+  priceActionEvents: [],
   heartbeats: {},
   runs: [],
   equityHistory: [],
@@ -139,6 +141,13 @@ export const computeStats = (closedTrades, { startEquitySats = null } = {}) => {
 export const recordRun = (state, run) => {
   state.runs = [{ ...run }, ...(state.runs ?? [])].slice(0, MAX_RUNS)
   return state
+}
+
+export const recordPriceActionEvent = (state, event) => {
+  const events = state.priceActionEvents ?? []
+  if (event?.fingerprint && events[0]?.fingerprint === event.fingerprint) return false
+  state.priceActionEvents = [{ ...event }, ...events].slice(0, MAX_PRICE_ACTION_EVENTS)
+  return true
 }
 
 // Every 15 minutes rather than every hour. The bot passes once a minute, so an

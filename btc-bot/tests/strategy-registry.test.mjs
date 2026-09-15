@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { DEFAULT_SETTINGS, mergeSettings } from '../src/state.mjs'
+import { DEFAULT_SETTINGS, emptyState, mergeSettings, recordPriceActionEvent } from '../src/state.mjs'
 import { ACTIVE_STRATEGY_ID, LEGACY_PRICE_ACTION_ID, strategyConfig } from '../src/strategy-registry.mjs'
 
 test('selected production strategy is the leveraged long-only momentum model', () => {
@@ -49,4 +49,13 @@ test('an explicitly versioned legacy strategy remains reproducible', () => {
   assert.equal(merged.strategyId, LEGACY_PRICE_ACTION_ID)
   assert.deepEqual(merged.timeframes, legacy.timeframes)
   assert.equal(merged.strategy.requireSweep, false)
+})
+
+test('price-action invalidation events are logged once per structural change', () => {
+  const state = emptyState()
+  const event = { fingerprint: 'PA-1|long|4h|1h|down', reason: 'structure changed' }
+  assert.equal(recordPriceActionEvent(state, event), true)
+  assert.equal(recordPriceActionEvent(state, event), false)
+  assert.equal(state.priceActionEvents.length, 1)
+  assert.equal(state.priceActionEvents[0].reason, 'structure changed')
 })

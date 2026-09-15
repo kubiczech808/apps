@@ -504,19 +504,6 @@ export const evaluateTradeProfile = ({
   const riskPct = Number(settings.riskPct) || 1
   const refinement = side ? candleRefinement({ side, signal: item?.candleSignal }) : null
 
-  const invalidatingTrend =
-    side === 'long'
-      ? lowerItem?.trend === 'down' || lowerItem?.event === 'CHoCH_DOWN'
-      : side === 'short'
-        ? lowerItem?.trend === 'up' || lowerItem?.event === 'CHoCH_UP'
-        : false
-  const closeTrigger =
-    side === 'long'
-      ? lowerItem?.structure?.low?.current?.price ?? null
-      : side === 'short'
-        ? lowerItem?.structure?.high?.current?.price ?? null
-        : null
-
   const gates = [
     gate('trend', 'struktura má směr', Boolean(side), item?.reason ?? null),
     gate('zone', 'cena je ve správné S/D zóně', Boolean(activeZone && zoneHit), activeZone ? `${activeZone.type} ${activeZone.low}–${activeZone.high}` : null),
@@ -550,23 +537,98 @@ export const evaluateTradeProfile = ({
     rewardRisk,
     gates,
     refinement,
-    invalidation: {
-      lowerTimeframeId,
-      status: lowerItem ? (invalidatingTrend ? 'unmet' : 'met') : 'neutral',
-      invalidatingTrend,
-      lowerTrend: lowerItem?.trend ?? null,
-      lowerEvent: lowerItem?.event ?? null,
-      closeTrigger,
-      rule: lowerItem
-        ? side === 'long'
-          ? 'Při změně struktury na menším TF zavírat při návratu na poslední HL.'
-          : side === 'short'
-            ? 'Při změně struktury na menším TF zavírat při návratu na poslední LH.'
-            : 'Bez směru trendu není co invalidovat.'
-        : '1H nemá nižší timeframe ve scanneru; invalidace se řeší na stejném TF.',
-    },
   }
   return output
+}
+
+const oppositeTrend = (side) => side === 'long' ? 'down' : side === 'short' ? 'up' : null
+
+const profileSnapshot = (profile) => ({
+  status: profile?.status ?? null,
+  side: profile?.side ?? null,
+  zone: profile?.zone ? { type: profile.zone.type, low: profile.zone.low, high: profile.zone.high } : null,
+  entry: profile?.entry ?? null,
+  stop: profile?.stop ?? null,
+  tp1: profile?.tp1 ?? null,
+  tp2: profile?.tp2 ?? null,
+  rewardRisk: profile?.rewardRisk ?? null,
+})
+
+/**
+ * Open-position review is intentionally separate from entry screening. An
+ * entry profile is allowed to change with the market; invalidation only exists
+ * when a position with a known side is already open.
+ */
+export const reviewOpenPosition = ({
+  position,
+  item,
+  lowerItem = null,
+  lowerTimeframeId = null,
+  settings = DEFAULT_PRICE_ACTION_STRUCTURE,
+} = {}) => {
+  const currentProfile = evaluateTradeProfile({ item, settings })
+  const opposite = oppositeTrend(position?.side)
+  const ownTimeframeInvalidated = Boolean(position?.side && (
+    item?.trend === opposite ||
+    item?.event === (opposite === 'down' ? 'CHoCH_DOWN' : 'CHoCH_UP')
+  ))
+  const lowerEventInvalidated = Boolean(position?.side && lowerItem?.event === (opposite === 'down' ? 'CHoCH_DOWN' : 'CHoCH_UP'))
+  const lowerTimeframeInvalidated = Boolean(position?.side && (lowerItem?.trend === opposite || lowerEventInvalidated))
+  const invalidated = ownTimeframeInvalidated || lowerTimeframeInvalidated
+  const revisedItem = lowerTimeframeInvalidated && lowerItem?.trend !== 'flat'
+    ? lowerEventInvalidated ? { ...lowerItem, trend: opposite } : lowerItem
+    : item
+  const revisedProfile = evaluateTradeProfile({ item: revisedItem, settings })
+  const invalidatingTimeframeId = ownTimeframeInvalidated ? (position.timeframeId ?? position.timeframe ?? null) : lowerTimeframeId
+  const closeTrigger = position?.side === 'long'
+    ? lowerItem?.structure?.low?.current?.price ?? item?.structure?.low?.current?.price ?? null
+    : position?.side === 'short'
+      ? lowerItem?.structure?.high?.current?.price ?? item?.structure?.high?.current?.price ?? null
+      : null
+
+  return {
+    invalidated,
+    ownTimeframeInvalidated,
+    lowerTimeframeInvalidated,
+    invalidatingTimeframeId,
+    lowerTimeframeId,
+    closeTrigger,
+    reason: ownTimeframeInvalidated
+      ? `struktura ${item?.trend || 'flat'} na ${invalidatingTimeframeId || 'pracovním TF'} je proti otevřenému ${position.side}`
+      : lowerTimeframeInvalidated
+        ? `struktura ${lowerItem.trend} na ${lowerTimeframeId || 'nižším TF'} je proti otevřenému ${position.side}`
+        : null,
+    currentProfile: profileSnapshot(currentProfile),
+    revisedProfile: profileSnapshot(revisedProfile),
+    currentProfileObject: currentProfile,
+    revisedProfileObject: revisedProfile,
+  }
+}
+
+export const reviewOpenPositionInMatrix = ({
+  position,
+  matrix,
+  settings = DEFAULT_PRICE_ACTION_STRUCTURE,
+} = {}) => {
+  const symbol = position?.assetSymbol ?? position?.asset ?? 'BTCUSD'
+  const timeframeId = position?.timeframeId ?? position?.timeframe ?? '4h'
+  const asset = matrix?.assets?.find((candidate) => candidate.symbol === symbol)
+  const item = asset?.trends?.[timeframeId] ?? null
+  if (!item) return { invalidated: false, symbol, timeframeId, reason: 'pro pozici nebyla nalezena struktura assetu a timeframe' }
+  const lowerTimeframeId = LOWER_TIMEFRAME[timeframeId]
+  return {
+    symbol,
+    timeframeId,
+    item,
+    lowerItem: lowerTimeframeId ? asset.trends?.[lowerTimeframeId] ?? null : null,
+    ...reviewOpenPosition({
+      position,
+      item,
+      lowerItem: lowerTimeframeId ? asset.trends?.[lowerTimeframeId] ?? null : null,
+      lowerTimeframeId,
+      settings,
+    }),
+  }
 }
 
 const attachTradeProfiles = (trends, settings) => {
@@ -801,4 +863,4 @@ export const evaluateEntry = () => ({
   context: null,
 })
 
-export const manageOpen = () => ({ action: 'hold', reason: 'price-action profile does not manage live positions until execution is enabled' })
+export const manageOpen = () => ({ action: 'hold', reason: 'price-action profile review is recorded separately from entry screening' })

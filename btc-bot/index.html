@@ -123,6 +123,7 @@
       <div class="strategy-subtabs" role="tablist" aria-label="Price action přehled">
         <button type="button" role="tab" data-strategy-panel="structure" aria-selected="true">Struktura trhu</button>
         <button type="button" role="tab" data-strategy-panel="filled-zones" aria-selected="false">Vyplněné zóny</button>
+        <button type="button" role="tab" data-strategy-panel="trade-events" aria-selected="false">Změny u otevřených trade</button>
       </div>
       <div id="strategy-panel-structure">
         <h2>Price action: struktura trhu</h2>
@@ -131,6 +132,10 @@
       <div id="strategy-panel-filled-zones" hidden>
         <h2>Log vyplněných zón</h2>
         <div id="strategy-filled-zones"></div>
+      </div>
+      <div id="strategy-panel-trade-events" hidden>
+        <h2>Log invalidací otevřených trade</h2>
+        <div id="strategy-trade-events"></div>
       </div>
     </div>
   </section>

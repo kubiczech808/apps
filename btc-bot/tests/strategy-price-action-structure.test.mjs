@@ -10,6 +10,7 @@ import {
   PRICE_ACTION_ASSETS,
   PRICE_ACTION_MATRIX_SCHEMA,
   PRICE_ACTION_STRUCTURE_PROFILES,
+  reviewOpenPosition,
 } from '../src/strategy-price-action-structure.mjs'
 import { candle, HOUR, START, zigzag } from './helpers.mjs'
 
@@ -241,7 +242,7 @@ test('trade profile requires S/D zone hit, 50 percent pullback and at least 2R',
   assert.ok(profile.rewardRisk >= 2)
   assert.equal(profile.tp1, 120)
   assert.equal(profile.tp2, 140)
-  assert.equal(profile.invalidation.invalidatingTrend, false)
+  assert.equal('invalidation' in profile, false)
   assert.equal(profile.refinement.status, 'met')
 
   const withoutHit = evaluateTradeProfile({
@@ -256,7 +257,7 @@ test('trade profile requires S/D zone hit, 50 percent pullback and at least 2R',
   assert.equal(withoutHit.gates.find((entry) => entry.id === 'zone').status, 'unmet')
 })
 
-test('trade profile marks lower-timeframe structure change as invalidation context', () => {
+test('open-position review detects lower-timeframe invalidation and recalculates the plan', () => {
   const item = {
     trend: 'up',
     reason: 'HH + HL',
@@ -272,7 +273,8 @@ test('trade profile marks lower-timeframe structure change as invalidation conte
       unfilledSupply: [{ type: 'supply', low: 140, high: 145 }],
     },
   }
-  const profile = evaluateTradeProfile({
+  const review = reviewOpenPosition({
+    position: { id: 'PA-1', side: 'long', timeframeId: '4h' },
     item,
     lowerItem: {
       trend: 'down',
@@ -282,9 +284,12 @@ test('trade profile marks lower-timeframe structure change as invalidation conte
     lowerTimeframeId: '1h',
     settings: { pullbackPct: 50, minRewardRisk: 2, riskPct: 1, stopBufferPct: 0.02 },
   })
-  assert.equal(profile.invalidation.status, 'unmet')
-  assert.equal(profile.invalidation.invalidatingTrend, true)
-  assert.equal(profile.invalidation.closeTrigger, 101.5)
+  assert.equal(review.invalidated, true)
+  assert.equal(review.lowerTimeframeInvalidated, true)
+  assert.equal(review.invalidatingTimeframeId, '1h')
+  assert.equal(review.closeTrigger, 101.5)
+  assert.equal(review.currentProfile.side, 'long')
+  assert.equal(review.revisedProfile.side, 'short')
 })
 
 test('price-action matrix covers BTCUSD and major FX pairs on 1H, 4H and 1D', async () => {
