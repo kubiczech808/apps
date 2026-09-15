@@ -15,15 +15,37 @@ const TIMEFRAME_HOURS = { '1h': 1, '4h': 4, '1d': 24 }
 
 const finite = (value) => Number.isFinite(Number(value))
 
+const lowerBound = (candles, time) => {
+  let low = 0
+  let high = candles.length
+  while (low < high) {
+    const middle = Math.floor((low + high) / 2)
+    if (candles[middle].time < time) low = middle + 1
+    else high = middle
+  }
+  return low
+}
+
+const upperBound = (candles, time) => {
+  let low = 0
+  let high = candles.length
+  while (low < high) {
+    const middle = Math.floor((low + high) / 2)
+    if (candles[middle].time <= time) low = middle + 1
+    else high = middle
+  }
+  return low
+}
+
 const sliceHistory = (candles, historyDays) => {
   const latest = candles.at(-1)?.time
   if (!finite(latest) || !(historyDays > 0)) return candles
   const cutoff = latest - historyDays * 24 * HOUR_MS
-  return candles.filter((candle) => candle.time >= cutoff)
+  return candles.slice(lowerBound(candles, cutoff))
 }
 
 const candleWindowAt = (candles, throughTime, durationHours) =>
-  candles.filter((candle) => candle.time + durationHours * HOUR_MS <= throughTime)
+  candles.slice(0, upperBound(candles, throughTime - durationHours * HOUR_MS))
 
 const structureAt = ({ candles, timeframeId, throughTime }) => {
   const profile = PRICE_ACTION_STRUCTURE_PROFILES[timeframeId]
