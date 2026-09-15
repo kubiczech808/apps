@@ -423,6 +423,15 @@ const pullbackLevel = ({ side, structure, pullbackPct }) => {
     : low + (high - low) * ratio
 }
 
+// An uptrend is invalidated below its last HL; a downtrend above its last LH.
+// Those are the same confirmed structural pivots used by the trend classifier.
+const structureInvalidationLevel = ({ side, structure }) =>
+  side === 'long'
+    ? structure?.low?.current?.price ?? null
+    : side === 'short'
+      ? structure?.high?.current?.price ?? null
+      : null
+
 const pullbackSatisfied = ({ side, latest, level }) => {
   if (!latest || !Number.isFinite(level)) return false
   return side === 'long' ? latest.low <= level : latest.high >= level
@@ -471,6 +480,10 @@ export const evaluateTradeProfile = ({
         : activeZone.low
       : null
   const pullback = pullbackLevel({ side, structure: item?.structure, pullbackPct: settings.pullbackPct })
+  const invalidationLevel = structureInvalidationLevel({ side, structure: item?.structure })
+  const pullbackRange = Number.isFinite(pullback) && Number.isFinite(invalidationLevel)
+    ? { from: pullback, to: invalidationLevel }
+    : null
   const pulledBack = pullbackSatisfied({ side, latest, level: pullback })
   const buffer = stopBuffer({ zone: activeZone, price: entry, stopBufferPct: settings.stopBufferPct })
   const stop =
@@ -525,6 +538,8 @@ export const evaluateTradeProfile = ({
     zoneHit,
     entry,
     pullbackLevel: pullback,
+    invalidationLevel,
+    pullbackRange,
     stop,
     stopBuffer: buffer,
     tp1,

@@ -426,6 +426,19 @@ const priceFact = (value, label, title = null, status = 'neutral') =>
 
 const passedOrWaiting = (gate) => gate?.status === 'met' ? 'met' : 'neutral'
 
+const pullbackRange = (entry) => {
+  const profile = entry?.profile
+  const from = profile?.pullbackRange?.from ?? profile?.pullbackLevel
+  const to = profile?.pullbackRange?.to ?? profile?.invalidationLevel ?? (
+    profile?.side === 'long'
+      ? entry?.item?.structure?.low?.current?.price
+      : profile?.side === 'short'
+        ? entry?.item?.structure?.high?.current?.price
+        : null
+  )
+  return Number.isFinite(from) && Number.isFinite(to) ? { from, to } : null
+}
+
 const priceActionDecisionFact = (entry, column) => {
   const { item, profile } = entry
   if (!item && !profile) return decisionFact('čeká', 'neutral', 'Pro tento asset a timeframe zatím nejsou data.')
@@ -442,11 +455,11 @@ const priceActionDecisionFact = (entry, column) => {
       return null
     case 'pullback': {
       const gate = profileGate(profile, 'pullback')
-      const level = profile?.pullbackLevel
+      const range = pullbackRange(entry)
       return decisionFact(
-        Number.isFinite(level) ? `${profile.pullbackPct ?? 50}% @ ${quotePrice(level)}` : '–',
+        range ? `${profile.pullbackPct ?? 50}% ${quotePrice(range.from)} → ${quotePrice(range.to)}` : '–',
         passedOrWaiting(gate),
-        gate?.detail ?? 'Vstup se čeká od definované úrovně pullbacku.'
+        gate?.detail ?? 'Vstup se čeká v pásmu od 50% pullbacku po invalidaci struktury.'
       )
     }
     case 'entry':

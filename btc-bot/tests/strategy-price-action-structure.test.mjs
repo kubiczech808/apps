@@ -240,6 +240,7 @@ test('trade profile requires S/D zone hit, 50 percent pullback and at least 2R',
   assert.equal(profile.riskPct, 1)
   assert.equal(profile.zoneHit, true)
   assert.ok(profile.rewardRisk >= 2)
+  assert.deepEqual(profile.pullbackRange, { from: 110, to: 100 })
   assert.equal(profile.tp1, 120)
   assert.equal(profile.tp2, 140)
   assert.equal('invalidation' in profile, false)
