@@ -49,6 +49,17 @@ const quotePrice = (value) => {
 const quoteCurrency = (symbol) => symbol?.startsWith('USD') ? symbol.slice(3) : 'USD'
 const assetPriceLabel = (symbol, value) => Number.isFinite(value) ? `${quotePrice(value)} ${quoteCurrency(symbol)}` : '–'
 
+// The displayed asset price must not change merely because the user switches
+// between 1H, 4H and 1D. Strategy calculations still use each timeframe's own
+// last closed candle, while the dashboard uses one shared, freshest close.
+const assetCurrentPrice = (asset) => {
+  for (const timeframeId of ['1h', '4h', '1d']) {
+    const value = asset?.trends?.[timeframeId]?.price
+    if (Number.isFinite(value)) return value
+  }
+  return null
+}
+
 const signedPct = (value, digits = 2) => {
   if (!Number.isFinite(value)) return { text: '–', className: '' }
   const text = `${value > 0 ? '+' : value < 0 ? '−' : ''}${nf(digits).format(Math.abs(value))} %`
@@ -634,7 +645,7 @@ const renderPriceActionDecisionTable = (matrix, columns) => {
         assetTickerButton(asset.symbol, timeframe.id),
         el('span', {
           className: 'asset-decision-price',
-          text: assetPriceLabel(asset.symbol, item?.price),
+          text: assetPriceLabel(asset.symbol, assetCurrentPrice(asset)),
         }),
       ]),
       ...PRICE_ACTION_DECISION_COLUMNS.map((column) => priceActionDecisionCell(entry, column)),
@@ -1252,8 +1263,10 @@ const renderAssetChart = () => {
     { key: 'sl', label: 'SL', value: profile?.stop, className: 'asset-sl-line' },
   ].filter((level) => Number.isFinite(level.value))
   const riskPrices = riskLevels.map((level) => level.value)
-  const rawMin = Math.min(...candles.map((candle) => candle.low), ...zones.map((zone) => zone.low), ...riskPrices)
-  const rawMax = Math.max(...candles.map((candle) => candle.high), ...zones.map((zone) => zone.high), ...riskPrices)
+  const currentPrice = assetCurrentPrice(asset) ?? allCandles.at(-1)?.close
+  const displayPrice = Number.isFinite(currentPrice) ? [currentPrice] : []
+  const rawMin = Math.min(...candles.map((candle) => candle.low), ...zones.map((zone) => zone.low), ...riskPrices, ...displayPrice)
+  const rawMax = Math.max(...candles.map((candle) => candle.high), ...zones.map((zone) => zone.high), ...riskPrices, ...displayPrice)
   const padding = (rawMax - rawMin || Math.max(1, Math.abs(rawMax) * 0.01)) * 0.08
   const minPrice = Math.max(0, rawMin - padding)
   const maxPrice = rawMax + padding
@@ -1405,7 +1418,6 @@ const renderAssetChart = () => {
     )
   }
 
-  const currentPrice = item?.price ?? allCandles.at(-1)?.close
   if (Number.isFinite(currentPrice)) {
     const currentY = y(currentPrice)
     svg.append(
