@@ -27,6 +27,7 @@ let refreshTimer = null
 let priceActionSelection = null
 let priceActionDecisionTimeframe = '4h'
 let selectedAssetChart = { symbol: null, timeframeId: '4h' }
+let assetChartHistoryOffset = 0
 let selectedStrategyPanel = 'structure'
 let selectedStrategyView = 'price-action'
 
@@ -555,6 +556,7 @@ const assetTickerButton = (symbol, timeframeId = priceActionDecisionTimeframe) =
   })
   button.onclick = () => {
     selectedAssetChart = { symbol, timeframeId }
+    assetChartHistoryOffset = 0
     renderAssetChart()
     $('asset-chart-card')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
   }
@@ -577,6 +579,7 @@ const renderPriceActionDecisionTabs = (columns) => {
     button.onclick = () => {
       priceActionDecisionTimeframe = column.id
       selectedAssetChart = { symbol: selectedAssetChart.symbol, timeframeId: column.id }
+      assetChartHistoryOffset = 0
       renderDecision()
       renderAssetChart()
     }
@@ -1123,6 +1126,7 @@ const renderAssetChart = () => {
   const zoneDetails = $('asset-zone-details')
   if (!card || !svg || !tabs || !zoneDetails) return
   svg.replaceChildren()
+  svg.onwheel = null
   tabs.replaceChildren()
   zoneDetails.replaceChildren()
 
@@ -1152,19 +1156,40 @@ const renderAssetChart = () => {
     })
     button.onclick = () => {
       selectedAssetChart = { symbol: asset.symbol, timeframeId: chartColumn.id }
+      assetChartHistoryOffset = 0
       renderAssetChart()
     }
     tabs.append(button)
   }
 
   const item = asset.trends?.[timeframeId]
-  const candles = (item?.chartCandles ?? []).filter((candle) =>
+  const allCandles = (item?.chartCandles ?? []).filter((candle) =>
     [candle?.open, candle?.high, candle?.low, candle?.close].every(Number.isFinite)
   )
-  if (!candles.length) {
+  if (!allCandles.length) {
     meta.textContent = 'Pro tento asset a timeframe zatím nejsou publikované svíčky.'
     svg.append(el('text', { className: 'asset-axis-label', x: 18, y: 32, text: 'čeká na data' }))
     return
+  }
+
+  const visibleCandleCount = Math.min(60, allCandles.length)
+  const maxHistoryOffset = Math.max(0, allCandles.length - visibleCandleCount)
+  assetChartHistoryOffset = Math.min(assetChartHistoryOffset, maxHistoryOffset)
+  const visibleEnd = allCandles.length - assetChartHistoryOffset
+  const candles = allCandles.slice(Math.max(0, visibleEnd - visibleCandleCount), visibleEnd)
+  const viewingHistory = assetChartHistoryOffset > 0
+
+  svg.onwheel = (event) => {
+    if (maxHistoryOffset === 0) return
+    event.preventDefault()
+    const delta = event.deltaY || event.deltaX
+    if (!delta) return
+    const step = Math.max(1, Math.round(Math.abs(delta) / 80)) * 4
+    const direction = delta > 0 ? 1 : -1
+    const nextOffset = Math.max(0, Math.min(maxHistoryOffset, assetChartHistoryOffset + direction * step))
+    if (nextOffset === assetChartHistoryOffset) return
+    assetChartHistoryOffset = nextOffset
+    renderAssetChart()
   }
 
   const zones = [
@@ -1226,8 +1251,8 @@ const renderAssetChart = () => {
     )
   }
 
-  const currentPrice = item?.price ?? candles.at(-1)?.close
-  if (Number.isFinite(currentPrice)) {
+  const currentPrice = item?.price ?? allCandles.at(-1)?.close
+  if (!viewingHistory && Number.isFinite(currentPrice)) {
     const currentY = y(currentPrice)
     svg.append(
       el('line', { className: 'asset-current-line', x1: ASSET_CHART.padLeft, x2: ASSET_CHART.width - ASSET_CHART.padRight, y1: currentY, y2: currentY }),
@@ -1254,7 +1279,7 @@ const renderAssetChart = () => {
 
   const first = candles[0]
   const last = candles.at(-1)
-  meta.textContent = `${PRICE_ACTION_TREND_LABELS[item?.trend] || 'flat'} · ${assetPriceLabel(asset.symbol, currentPrice)} · ${when(first.time)} až ${when(last.time)}`
+  meta.textContent = `${PRICE_ACTION_TREND_LABELS[item?.trend] || 'flat'} · ${assetPriceLabel(asset.symbol, currentPrice)} · ${when(first.time)} až ${when(last.time)}${viewingHistory ? ' · historie' : ''}`
 }
 
 // ── equity chart ──────────────────────────────────────────────────────────

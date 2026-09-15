@@ -236,6 +236,7 @@ button.primary { color: #fff; background: var(--series-1); border-color: transpa
 .asset-chart-tab { min-width: 48px; padding: 5px 9px; border-radius: 999px; color: var(--text-secondary); }
 .asset-chart-tab[aria-selected="true"] { background: var(--text-primary); color: var(--page); border-color: transparent; }
 .asset-price-chart svg { height: 420px; }
+#asset-chart-svg { overscroll-behavior: contain; cursor: ns-resize; }
 .asset-price-chart .asset-gridline { stroke: var(--grid); stroke-width: 1; }
 .asset-price-chart .asset-axis-label { fill: var(--text-muted); font-size: 11px; font-variant-numeric: tabular-nums; }
 .asset-price-chart .asset-candle-wick { stroke-width: 1; }
