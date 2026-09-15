@@ -1138,12 +1138,16 @@ const renderAssetChart = () => {
   const svg = $('asset-chart-svg')
   const chartContainer = $('asset-price-chart')
   const tooltip = $('asset-chart-tooltip')
+  const historyControl = $('asset-chart-history')
+  const historyRange = $('asset-chart-history-range')
+  const historyValue = $('asset-chart-history-value')
   const meta = $('asset-chart-meta')
   const title = $('asset-chart-title')
   const tabs = $('asset-chart-timeframes')
   const zoneDetails = $('asset-zone-details')
   if (!card || !svg || !tabs || !zoneDetails) return
   svg.replaceChildren()
+  if (chartContainer) chartContainer.onwheel = null
   svg.onwheel = null
   svg.onpointermove = null
   svg.onpointerdown = null
@@ -1155,6 +1159,7 @@ const renderAssetChart = () => {
 
   if (currentStrategyView().id !== 'price-action') {
     card.hidden = true
+    if (historyControl) historyControl.hidden = true
     return
   }
 
@@ -1162,6 +1167,7 @@ const renderAssetChart = () => {
   const { asset, timeframeId, column } = assetChartSelection()
   if (!asset) {
     card.hidden = true
+    if (historyControl) historyControl.hidden = true
     return
   }
   selectedAssetChart = { symbol: asset.symbol, timeframeId }
@@ -1193,6 +1199,7 @@ const renderAssetChart = () => {
     [candle?.open, candle?.high, candle?.low, candle?.close].every(Number.isFinite)
   )
   if (!allCandles.length) {
+    if (historyControl) historyControl.hidden = true
     meta.textContent = 'Pro tento asset a timeframe zatím nejsou publikované svíčky.'
     svg.append(el('text', { className: 'asset-axis-label', x: 18, y: 32, text: 'čeká na data' }))
     return
@@ -1205,12 +1212,24 @@ const renderAssetChart = () => {
   const candles = allCandles.slice(-assetChartVisibleCandleCount)
   const viewingHistory = assetChartVisibleCandleCount > 60
 
-  svg.onwheel = (event) => {
+  if (historyControl && historyRange && historyValue) {
+    historyControl.hidden = allCandles.length <= minVisibleCandleCount
+    historyRange.min = String(minVisibleCandleCount)
+    historyRange.max = String(allCandles.length)
+    historyRange.value = String(assetChartVisibleCandleCount)
+    historyValue.textContent = `${assetChartVisibleCandleCount} svíček`
+    historyRange.oninput = () => {
+      assetChartVisibleCandleCount = clamp(Number(historyRange.value), minVisibleCandleCount, allCandles.length)
+      renderAssetChart()
+    }
+  }
+
+  const zoomHistory = (event) => {
     if (allCandles.length <= minVisibleCandleCount) return
     event.preventDefault()
     const delta = event.deltaY || event.deltaX
     if (!delta) return
-    const step = Math.max(1, Math.round(Math.abs(delta) / 80)) * 12
+    const step = Math.max(1, Math.round(Math.abs(delta) / 80)) * 4
     const direction = delta > 0 ? 1 : -1
     const nextVisibleCount = Math.max(
       minVisibleCandleCount,
@@ -1220,6 +1239,7 @@ const renderAssetChart = () => {
     assetChartVisibleCandleCount = nextVisibleCount
     renderAssetChart()
   }
+  if (chartContainer) chartContainer.onwheel = zoomHistory
 
   const zones = [
     ...chartZones(item, 'demand').map((zone, index) => ({ ...zone, kind: 'demand', index, id: `demand:${zone.low}:${zone.high}:${zone.firstTime ?? zone.firstIndex ?? index}` })),
@@ -1313,8 +1333,9 @@ const renderAssetChart = () => {
   // algorithm followed the main wave rather than an internal reaction.
   const xForTime = (time) => {
     if (!Number.isFinite(time) || !candles.length) return null
-    if (time <= candles[0].time) return ASSET_CHART.padLeft
-    if (time >= candles.at(-1).time) return ASSET_CHART.width - ASSET_CHART.padRight
+    if (time < candles[0].time || time > candles.at(-1).time) return null
+    if (time === candles[0].time) return ASSET_CHART.padLeft
+    if (time === candles.at(-1).time) return ASSET_CHART.width - ASSET_CHART.padRight
     const rightIndex = candles.findIndex((candle) => candle.time >= time)
     if (rightIndex <= 0) return x(0)
     const leftIndex = rightIndex - 1
@@ -1360,6 +1381,7 @@ const renderAssetChart = () => {
     // corresponding downtrend sequence) in chronological order.
     const swingNodes = (structure?.recentSwings ?? [])
       .filter((swing) => swing?.kind && Number.isFinite(swing.price) && Number.isFinite(swing.time))
+      .filter((swing) => swing.time >= candles[0].time && swing.time <= candles.at(-1).time)
       .sort((left, right) => left.time - right.time)
       .map((swing, index, all) => {
         const previousSameKind = [...all.slice(0, index)].reverse().find((candidate) => candidate.kind === swing.kind)
