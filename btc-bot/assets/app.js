@@ -16,6 +16,8 @@ const STRATEGY_VIEW_STORAGE = 'btc-bot-strategy-view-v2'
 const REFRESH_MS = 30_000
 const SATS_PER_BTC = 1e8
 const DECISION_SIGNAL_STATES = new Set(['met', 'unmet', 'neutral'])
+const SVG_NS = 'http://www.w3.org/2000/svg'
+const SVG_TAGS = new Set(['circle', 'line', 'path', 'rect', 'svg', 'text'])
 
 const $ = (id) => document.getElementById(id)
 
@@ -93,9 +95,14 @@ const signedSats = (value) => {
 }
 
 const el = (tag, attributes = {}, children = []) => {
-  const node = document.createElement(tag)
+  const node = SVG_TAGS.has(tag)
+    ? document.createElementNS(SVG_NS, tag)
+    : document.createElement(tag)
   for (const [name, value] of Object.entries(attributes)) {
-    if (name === 'className') node.className = value
+    if (name === 'className') {
+      if (node.namespaceURI === SVG_NS) node.setAttribute('class', value)
+      else node.className = value
+    }
     else if (name === 'text') node.textContent = value
     else if (value !== null && value !== undefined) node.setAttribute(name, value)
   }
