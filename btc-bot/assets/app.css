@@ -248,9 +248,9 @@ button.primary { color: #fff; background: var(--series-1); border-color: transpa
 .asset-price-chart .asset-zone-label-demand { fill: var(--good-text); }
 .asset-price-chart .asset-zone-label-supply { fill: var(--critical-text); }
 .asset-price-chart .asset-structure-line { fill: none; stroke-width: 2; stroke-linecap: round; opacity: 0.92; }
-.asset-price-chart .asset-structure-up { stroke: var(--good-text); }
-.asset-price-chart .asset-structure-down { stroke: var(--critical-text); }
-.asset-price-chart .asset-structure-flat { stroke: var(--warning-text); stroke-dasharray: 6 4; }
+.asset-price-chart .asset-structure-up { stroke: #ffffff; }
+.asset-price-chart .asset-structure-down { stroke: #ffffff; }
+.asset-price-chart .asset-structure-flat { stroke: #ffffff; stroke-dasharray: 6 4; }
 .asset-price-chart .asset-structure-marker { stroke-width: 1.5; }
 .asset-price-chart .asset-structure-label { font-size: 12px; font-weight: 750; paint-order: stroke; stroke: var(--surface-1); stroke-width: 3px; stroke-linejoin: round; }
 .asset-price-chart .asset-structure-label-up { fill: var(--good-text); }

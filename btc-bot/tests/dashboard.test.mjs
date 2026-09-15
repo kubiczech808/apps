@@ -239,6 +239,8 @@ test('asset tickers open a timeframe price chart with supply and demand zones', 
   assert.match(css, /collapsible-chart/)
   assert.match(css, /asset-price-chart/)
   assert.match(css, /asset-structure-line/)
+  assert.match(css, /asset-structure-up \{ stroke: #ffffff; \}/)
+  assert.match(css, /asset-structure-down \{ stroke: #ffffff; \}/)
   assert.match(css, /asset-structure-flat/)
   assert.match(css, /asset-time-label/)
   assert.match(css, /overscroll-behavior: contain/)
