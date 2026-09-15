@@ -461,7 +461,25 @@ const rewardRiskFor = ({ side, entry, stop, target }) => {
   return risk > 0 && reward > 0 ? reward / risk : null
 }
 
-const zoneEntryCandidate = ({ item, side, zone, pullback, invalidationLevel, settings }) => {
+const lowerTimeframeZoneRefinement = ({ side, zone, lowerItem, entryLow, entryHigh }) => {
+  if (!lowerItem?.zones || !Number.isFinite(entryLow) || !Number.isFinite(entryHigh)) return null
+  const type = side === 'long' ? 'demand' : side === 'short' ? 'supply' : null
+  if (!type) return null
+
+  const refinements = candidateZones(lowerItem.zones, side)
+    .filter((lowerZone) => lowerZone.type === type)
+    .filter((lowerZone) => lowerZone.low >= zone.low && lowerZone.high <= zone.high)
+    .map((lowerZone) => ({
+      zone: lowerZone,
+      entry: side === 'long' ? lowerZone.high : lowerZone.low,
+    }))
+    .filter(({ entry }) => entry >= entryLow && entry <= entryHigh)
+    .sort((left, right) => (right.zone.lastIndex ?? 0) - (left.zone.lastIndex ?? 0))
+
+  return refinements[0] ?? null
+}
+
+const zoneEntryCandidate = ({ item, side, zone, pullback, invalidationLevel, settings, lowerItem, lowerTimeframeId }) => {
   const directionEligible = sideFromTrend(item?.trend) === side
   const rangeLow = Number.isFinite(pullback) && Number.isFinite(invalidationLevel)
     ? Math.min(pullback, invalidationLevel)
@@ -472,26 +490,39 @@ const zoneEntryCandidate = ({ item, side, zone, pullback, invalidationLevel, set
   const entryLow = Number.isFinite(rangeLow) ? Math.max(zone.low, rangeLow) : null
   const entryHigh = Number.isFinite(rangeHigh) ? Math.min(zone.high, rangeHigh) : null
   const pullbackEligible = Number.isFinite(entryLow) && Number.isFinite(entryHigh) && entryLow <= entryHigh
-  const entryAtZoneHit = side === 'long' ? zone.high : zone.low
+  const zoneEdgeEntry = side === 'long' ? zone.high : zone.low
+  // When the zone overlaps the structural pullback only partially, the first
+  // tradable hit is the edge of that overlap, not a price beyond the pullback.
+  const entryAtZoneHit = pullbackEligible
+    ? side === 'long' ? entryHigh : entryLow
+    : zoneEdgeEntry
   const buffer = stopBuffer({ zone, price: entryAtZoneHit, stopBufferPct: settings.stopBufferPct })
   const stop = side === 'long' ? zone.low - buffer : zone.high + buffer
   const entryAtPullback = pullbackEligible
     ? side === 'long' ? entryHigh : entryLow
     : null
+  const lowerRefinement = lowerTimeframeZoneRefinement({
+    side,
+    zone,
+    lowerItem,
+    entryLow,
+    entryHigh,
+  })
+  const refinedEntry = lowerRefinement?.entry ?? entryAtZoneHit
   const tp1 = structuralTarget({ side, structure: item?.structure })
-  const tp2Zone = Number.isFinite(entryAtPullback)
-    ? nearestOpposingZone({ side, zones: item?.zones, entry: entryAtPullback })
+  const tp2Zone = Number.isFinite(refinedEntry)
+    ? nearestOpposingZone({ side, zones: item?.zones, entry: refinedEntry })
     : null
   const tp2 = side === 'long' ? tp2Zone?.low ?? null : tp2Zone?.high ?? null
   const weightedTarget = Number.isFinite(tp1) && Number.isFinite(tp2) ? (tp1 + tp2) / 2 : null
   const minRewardRisk = Number(settings.minRewardRisk) || 2
   const rrAtZoneHit = rewardRiskFor({ side, entry: entryAtZoneHit, stop, target: weightedTarget })
-  const rrAtPullback = rewardRiskFor({ side, entry: entryAtPullback, stop, target: weightedTarget })
+  const rrAtPullback = rewardRiskFor({ side, entry: refinedEntry, stop, target: weightedTarget })
   const threshold = Number.isFinite(stop) && Number.isFinite(weightedTarget)
     ? (weightedTarget + minRewardRisk * stop) / (minRewardRisk + 1)
     : null
-  const entryForMinRR = Number.isFinite(entryAtPullback) && Number.isFinite(rrAtPullback) && rrAtPullback >= minRewardRisk
-    ? entryAtPullback
+  const entryForMinRR = Number.isFinite(refinedEntry) && Number.isFinite(rrAtPullback) && rrAtPullback >= minRewardRisk
+    ? refinedEntry
     : Number.isFinite(threshold) && pullbackEligible && threshold >= entryLow && threshold <= entryHigh
       ? threshold
       : null
@@ -509,6 +540,11 @@ const zoneEntryCandidate = ({ item, side, zone, pullback, invalidationLevel, set
     )
   }
   if (pullbackEligible && rrEligible) reasons.push(zoneHit ? 'cena už zónu hitla' : 'čeká na hit zóny')
+  const entrySource = Number.isFinite(entryForMinRR)
+    ? lowerRefinement
+      ? entryForMinRR === refinedEntry ? 'lower-timeframe-zone' : 'min-rr'
+      : entryForMinRR === entryAtZoneHit ? 'zone-edge' : 'min-rr'
+    : null
   return {
     type: zone.type,
     side,
@@ -518,10 +554,16 @@ const zoneEntryCandidate = ({ item, side, zone, pullback, invalidationLevel, set
     rrEligible,
     eligible: directionEligible && pullbackEligible && rrEligible,
     zoneHit,
+    zoneEdgeEntry,
     entryAtZoneHit,
     entryRange: pullbackEligible ? { low: entryLow, high: entryHigh } : null,
+    lowerTimeframeId: lowerRefinement ? lowerTimeframeId : null,
+    lowerTimeframeZone: lowerRefinement?.zone ?? null,
+    refinedEntry: lowerRefinement?.entry ?? null,
     entryForMinRR,
+    entrySource,
     invalidationLevel,
+    stopBuffer: buffer,
     stop,
     tp1,
     tp2,
@@ -584,38 +626,49 @@ export const evaluateTradeProfile = ({
       pullback,
       invalidationLevel,
       settings,
+      lowerItem,
+      lowerTimeframeId,
     }))
   )
   const fallbackZone = side === 'long' ? zones?.latestValidDemand : side === 'short' ? zones?.latestValidSupply : null
+  const activeCandidate =
+    zoneCandidates.find((candidate) => candidate.directionEligible && candidate.eligible) ??
+    zoneCandidates.find((candidate) => candidate.directionEligible && candidate.pullbackEligible) ??
+    zoneCandidates.find((candidate) => candidate.directionEligible) ??
+    null
   const activeZone =
-    zoneCandidates.find((candidate) => candidate.directionEligible && candidate.eligible)?.zone ??
-    zoneCandidates.find((candidate) => candidate.directionEligible && candidate.pullbackEligible)?.zone ??
+    activeCandidate?.zone ??
     (side === 'long' ? zones?.demand : side === 'short' ? zones?.supply : null) ??
     fallbackZone
   const zoneHit = zoneHitByCandle(activeZone, latest)
-  const entry = Number.isFinite(price)
-    ? price
-    : activeZone
-      ? side === 'long'
-        ? activeZone.high
-        : activeZone.low
+  const plannedEntry = activeCandidate?.entryForMinRR ?? activeCandidate?.entryAtZoneHit ?? (
+    activeZone
+      ? side === 'long' ? activeZone.high : activeZone.low
       : null
+  )
+  const entry = Number.isFinite(plannedEntry) ? plannedEntry : Number.isFinite(price) ? price : null
   const pulledBack = pullbackSatisfied({ side, latest, level: pullback })
-  const buffer = stopBuffer({ zone: activeZone, price: entry, stopBufferPct: settings.stopBufferPct })
-  const stop =
+  const buffer = activeCandidate?.stopBuffer ?? stopBuffer({
+    zone: activeZone,
+    price: activeCandidate?.entryAtZoneHit ?? entry,
+    stopBufferPct: settings.stopBufferPct,
+  })
+  const stop = activeCandidate?.stop ?? (
     side === 'long' && activeZone
       ? activeZone.low - buffer
       : side === 'short' && activeZone
         ? activeZone.high + buffer
         : null
-  const tp1 = structuralTarget({ side, structure: item?.structure })
-  const tp2Zone = Number.isFinite(entry) ? nearestOpposingZone({ side, zones, entry }) : null
-  const tp2 =
+  )
+  const tp1 = activeCandidate?.tp1 ?? structuralTarget({ side, structure: item?.structure })
+  const tp2Zone = activeCandidate?.tp2Zone ?? (Number.isFinite(entry) ? nearestOpposingZone({ side, zones, entry }) : null)
+  const tp2 = activeCandidate?.tp2 ?? (
     side === 'long' && tp2Zone
       ? tp2Zone.low
       : side === 'short' && tp2Zone
         ? tp2Zone.high
         : null
+  )
   const weightedTarget = Number.isFinite(tp1) && Number.isFinite(tp2) ? (tp1 + tp2) / 2 : null
   const risk =
     side === 'long' && Number.isFinite(entry) && Number.isFinite(stop)
@@ -657,8 +710,20 @@ export const evaluateTradeProfile = ({
     invalidationLevel,
     pullbackRange,
     zoneCandidates,
+    activeCandidate,
     stop,
     stopBuffer: buffer,
+    entryAtZoneHit: activeCandidate?.entryAtZoneHit ?? null,
+    refinedEntry: activeCandidate?.refinedEntry ?? null,
+    entryForMinRR: activeCandidate?.entryForMinRR ?? null,
+    entrySource: activeCandidate?.entrySource ?? null,
+    entryRefinement: activeCandidate?.lowerTimeframeZone
+      ? {
+          timeframeId: activeCandidate.lowerTimeframeId,
+          zone: activeCandidate.lowerTimeframeZone,
+          entry: activeCandidate.refinedEntry,
+        }
+      : null,
     tp1,
     tp1Rule: side === 'long' ? '1/2 na posledním HH' : side === 'short' ? '1/2 na posledním LL' : null,
     tp2,

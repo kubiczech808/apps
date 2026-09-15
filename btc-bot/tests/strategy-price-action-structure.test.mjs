@@ -240,6 +240,9 @@ test('trade profile requires S/D zone hit, 50 percent pullback and at least 2R',
   assert.equal(profile.riskPct, 1)
   assert.equal(profile.zoneHit, true)
   assert.ok(profile.rewardRisk >= 2)
+  assert.equal(profile.entry, 105, 'planned entry must be the zone edge, not the current close')
+  assert.equal(profile.entryAtZoneHit, 105)
+  assert.equal(profile.entrySource, 'zone-edge')
   assert.deepEqual(profile.pullbackRange, { from: 110, to: 100 })
   const demandCandidate = profile.zoneCandidates.find((candidate) => candidate.type === 'demand')
   assert.equal(demandCandidate.eligible, true)
@@ -283,6 +286,66 @@ test('a deeper entry inside the zone can rescue reward/risk', () => {
   assert.equal(candidate.eligible, true)
   assert.ok(candidate.entryForMinRR < candidate.entryAtZoneHit)
   assert.ok(candidate.rewardRisk >= 6)
+  assert.equal(profile.entry, candidate.entryForMinRR, 'profile entry must use the R/R-adjusted level')
+  assert.equal(profile.entrySource, 'min-rr')
+})
+
+test('a lower-timeframe demand zone refines the entry inside the parent zone', () => {
+  const item = {
+    trend: 'up',
+    price: 118,
+    lastCandle: candle(START, 119, 120, 117, 118),
+    structure: {
+      high: { current: { price: 140 } },
+      low: { current: { price: 100 } },
+    },
+    zones: {
+      nearbyDemand: [{ type: 'demand', low: 100, high: 110, lastIndex: 10 }],
+      unfilledDemand: [{ type: 'demand', low: 100, high: 110, lastIndex: 10 }],
+      unfilledSupply: [{ type: 'supply', low: 160, high: 165 }],
+    },
+  }
+  const profile = evaluateTradeProfile({
+    item,
+    lowerItem: {
+      trend: 'down',
+      zones: {
+        nearbyDemand: [{ type: 'demand', low: 103, high: 106, lastIndex: 20 }],
+        unfilledDemand: [{ type: 'demand', low: 103, high: 106, lastIndex: 20 }],
+      },
+    },
+    lowerTimeframeId: '1h',
+    settings: { pullbackPct: 50, minRewardRisk: 2, stopBufferPct: 0.02 },
+  })
+  const candidate = profile.zoneCandidates.find((entry) => entry.type === 'demand')
+  assert.equal(candidate.entryAtZoneHit, 110)
+  assert.equal(candidate.refinedEntry, 106)
+  assert.equal(candidate.lowerTimeframeId, '1h')
+  assert.equal(candidate.entrySource, 'lower-timeframe-zone')
+  assert.equal(profile.entry, 106)
+  assert.equal(profile.entryRefinement.entry, 106)
+})
+
+test('zone hit entry is constrained to the pullback overlap', () => {
+  const item = {
+    trend: 'up',
+    price: 130,
+    lastCandle: candle(START, 131, 132, 129, 130),
+    structure: {
+      high: { current: { price: 140 } },
+      low: { current: { price: 100 } },
+    },
+    zones: {
+      nearbyDemand: [{ type: 'demand', low: 105, high: 125 }],
+      unfilledDemand: [{ type: 'demand', low: 105, high: 125 }],
+      unfilledSupply: [{ type: 'supply', low: 160, high: 165 }],
+    },
+  }
+  const profile = evaluateTradeProfile({ item, settings: { pullbackPct: 50, minRewardRisk: 1.5 } })
+  const candidate = profile.zoneCandidates.find((entry) => entry.type === 'demand')
+  assert.deepEqual(candidate.entryRange, { low: 105, high: 120 })
+  assert.equal(candidate.entryAtZoneHit, 120)
+  assert.equal(profile.entry, 120)
 })
 
 test('open-position review detects lower-timeframe invalidation and recalculates the plan', () => {
