@@ -861,15 +861,7 @@ const capitalBenchmark = ({ account, market, stats }) => {
   }
 }
 
-const renderTiles = () => {
-  const box = $('tiles')
-  box.replaceChildren()
-  if (!state) return
-  if (currentStrategyView().id === 'price-action') {
-    renderPriceActionTiles(box)
-    return
-  }
-
+const renderPortfolioTiles = (box) => {
   const account = state.account || {}
   const stats = state.stats || {}
   const market = state.market || {}
@@ -921,25 +913,18 @@ const renderTiles = () => {
 }
 
 const renderPriceActionTiles = (box) => {
-  const matrix = state?.priceActionMatrix
-  const summary = priceActionSummary()
-  const riskPct = summary.profiles.find((entry) => Number.isFinite(entry.profile.riskPct))?.profile.riskPct ?? 1
-  const rr = summary.profiles.find((entry) => Number.isFinite(entry.profile.minRewardRisk))?.profile.minRewardRisk ?? 2
-  const assets = matrix?.assets?.length ?? 0
-  const timeframes = matrix?.timeframes?.length ?? 3
+  renderPortfolioTiles(box)
+}
 
-  box.append(
-    tile('Kapitál strategie', 'profile-only', 'exekuce orderů je zatím vypnutá'),
-    tile('Sledované trhy', `${assets} assetů`, `${assets * timeframes} profilů na 1H / 4H / 1D`),
-    tile('Ready setupy', String(summary.ready.length), 'splněná zóna, pullback i R/R', summary.ready.length ? 'pos' : ''),
-    tile('Čekající profily', String(summary.watch.length), 'mají směr, ale chybí některá brána'),
-    tile('Invalidace', String(summary.invalidated.length), 'nižší timeframe změnil strukturu', summary.invalidated.length ? 'neg' : ''),
-    tile(
-      'Kontrola',
-      matrix?.generatedAt ? ago(matrix.generatedAt) : 'čeká',
-      matrix?.refreshMinutes ? `perioda ${matrix.refreshMinutes} min · risk ${pct(riskPct, 1)} · R/R ${rr}:1` : 'čeká na první běh'
-    )
-  )
+const renderTiles = () => {
+  const box = $('tiles')
+  box.replaceChildren()
+  if (!state) return
+  if (currentStrategyView().id === 'price-action') {
+    renderPriceActionTiles(box)
+    return
+  }
+  renderPortfolioTiles(box)
 }
 
 // ── equity chart ──────────────────────────────────────────────────────────
