@@ -427,15 +427,16 @@ tbody tr:hover { background: var(--series-1-soft); }
 }
 .pa-decision-cell-structure .fact { min-width: 90px; }
 .pa-zone-list {
-  display: grid;
+  display: flex;
+  align-items: center;
   gap: 5px;
   min-width: 180px;
+  white-space: nowrap;
 }
 .pa-zone-item {
   position: relative;
-  display: grid;
-  gap: 2px;
-  justify-items: center;
+  display: inline-flex;
+  align-items: center;
 }
 .zone-range-control {
   position: relative;
