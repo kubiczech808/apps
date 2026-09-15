@@ -258,6 +258,13 @@ button.primary { color: #fff; background: var(--series-1); border-color: transpa
   font-weight: 650;
 }
 .asset-ticker:hover { border-color: var(--series-1); color: var(--series-1); }
+.asset-decision-price {
+  display: block;
+  margin-top: 3px;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
 
 .tooltip {
   position: absolute;
@@ -394,7 +401,7 @@ tbody tr:hover { background: var(--series-1-soft); }
   border-color: transparent;
 }
 .pa-decision-scroll { margin: 0 -2px; }
-.pa-decision-table { min-width: 1160px; }
+.pa-decision-table { min-width: 1080px; }
 .pa-decision-table th,
 .pa-decision-table td {
   text-align: center;

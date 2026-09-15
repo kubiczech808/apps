@@ -352,7 +352,6 @@ const priceActionSummary = () => {
 
 const PRICE_ACTION_DECISION_COLUMNS = [
   { id: 'structure', label: 'Struktura' },
-  { id: 'price', label: 'Cena' },
   { id: 'demand', label: 'Demand' },
   { id: 'supply', label: 'Supply' },
   { id: 'pullback', label: '50% pullback' },
@@ -422,8 +421,10 @@ const zoneListElement = (item, profile, type, timeframeId) => {
   })
 }
 
-const priceFact = (value, label, title = null) =>
-  decisionFact(Number.isFinite(value) ? `${label} ${quotePrice(value)}` : '–', 'neutral', title)
+const priceFact = (value, label, title = null, status = 'neutral') =>
+  decisionFact(Number.isFinite(value) ? `${label} ${quotePrice(value)}` : '–', status, title)
+
+const passedOrWaiting = (gate) => gate?.status === 'met' ? 'met' : 'neutral'
 
 const priceActionDecisionFact = (entry, column) => {
   const { item, profile } = entry
@@ -435,8 +436,6 @@ const priceActionDecisionFact = (entry, column) => {
       const status = item?.trend === 'up' || item?.trend === 'down' ? 'met' : 'neutral'
       return decisionFact(trend, status, [item?.reason, item?.event].filter(Boolean).join(' · ') || null)
     }
-    case 'price':
-      return priceFact(item?.price, 'close', 'Aktuální close poslední svíčky na tomto timeframe.')
     case 'demand':
       return null
     case 'supply':
@@ -446,12 +445,17 @@ const priceActionDecisionFact = (entry, column) => {
       const level = profile?.pullbackLevel
       return decisionFact(
         Number.isFinite(level) ? `${profile.pullbackPct ?? 50}% @ ${quotePrice(level)}` : '–',
-        gate?.status ?? 'neutral',
+        passedOrWaiting(gate),
         gate?.detail ?? 'Vstup se čeká od definované úrovně pullbacku.'
       )
     }
     case 'entry':
-      return priceFact(profile?.entry, 'entry', profile?.zoneHit ? 'Cena zasáhla pracovní zónu.' : 'Pracovní entry; čeká se na zásah správné zóny.')
+      return priceFact(
+        profile?.entry,
+        'entry',
+        profile?.zoneHit ? 'Cena zasáhla pracovní zónu.' : 'Pracovní entry; čeká se na zásah správné zóny.',
+        profile?.zoneHit ? 'met' : 'neutral'
+      )
     case 'stop':
       return priceFact(profile?.stop, 'SL', Number.isFinite(profile?.stopBuffer) ? `Za hranicí zóny, buffer ${quotePrice(profile.stopBuffer)}.` : 'Stop podle hranice pracovní zóny.')
     case 'tp1':
@@ -462,7 +466,7 @@ const priceActionDecisionFact = (entry, column) => {
       const gate = profileGate(profile, 'rr')
       return decisionFact(
         Number.isFinite(profile?.rewardRisk) ? `${nf(2).format(profile.rewardRisk)}:1` : '–',
-        gate?.status ?? 'neutral',
+        passedOrWaiting(gate),
         gate?.detail ?? `Minimum je ${profile?.minRewardRisk ?? 2}:1.`
       )
     }
@@ -534,6 +538,10 @@ const renderPriceActionDecisionTable = (matrix, columns) => {
     body.append(el('tr', {}, [
       el('td', {}, [
         assetTickerButton(asset.symbol, timeframe.id),
+        el('span', {
+          className: 'asset-decision-price',
+          text: Number.isFinite(item?.price) ? `close ${quotePrice(item.price)}` : 'close –',
+        }),
       ]),
       ...PRICE_ACTION_DECISION_COLUMNS.map((column) => priceActionDecisionCell(entry, column)),
     ]))
