@@ -165,7 +165,7 @@ jobs:
           if (summary.strategyId !== 'price-action-structure-v1') throw new Error('PA-1 was not activated')
           if (summary.riskPct !== 1 || summary.priceActionRefresh !== 15) throw new Error('PA-1 settings are not active')
           if (summary.status === 'error' || summary.lastError) throw new Error(`first pass failed: ${summary.lastError}`)
-          if (summary.priceActionSchema !== 12) throw new Error('price-action matrix was not rebuilt')
+          if (summary.priceActionSchema !== 13) throw new Error('price-action matrix was not rebuilt')
           if (summary.btcDailyHistoryDays !== 400 || summary.btcDailyPivotLookback !== 30) {
             throw new Error('BTCUSD 1D does not use the scaled structure profile')
           }

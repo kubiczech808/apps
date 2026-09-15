@@ -27,7 +27,7 @@ let refreshTimer = null
 let priceActionSelection = null
 let priceActionDecisionTimeframe = '4h'
 let selectedAssetChart = { symbol: null, timeframeId: '4h' }
-let assetChartHistoryOffset = 0
+let assetChartVisibleCandleCount = 60
 let selectedStrategyPanel = 'structure'
 let selectedStrategyView = 'price-action'
 
@@ -583,7 +583,7 @@ const assetTickerButton = (symbol, timeframeId = priceActionDecisionTimeframe) =
   })
   button.onclick = () => {
     selectedAssetChart = { symbol, timeframeId }
-    assetChartHistoryOffset = 0
+    assetChartVisibleCandleCount = 60
     renderAssetChart()
     $('asset-chart-card')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
   }
@@ -606,7 +606,7 @@ const renderPriceActionDecisionTabs = (columns) => {
     button.onclick = () => {
       priceActionDecisionTimeframe = column.id
       selectedAssetChart = { symbol: selectedAssetChart.symbol, timeframeId: column.id }
-      assetChartHistoryOffset = 0
+      assetChartVisibleCandleCount = 60
       renderDecision()
       renderAssetChart()
     }
@@ -1144,6 +1144,14 @@ const chartZones = (item, type) => {
     .filter((zone) => zone && Number.isFinite(zone.low) && Number.isFinite(zone.high))
 }
 
+const chartTimeLabel = (value, timeframeId) => {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return '–'
+  return timeframeId === '1d'
+    ? date.toLocaleDateString('cs-CZ', { day: '2-digit', month: '2-digit', year: '2-digit' })
+    : date.toLocaleString('cs-CZ', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false })
+}
+
 const renderAssetChart = () => {
   const card = $('asset-chart-card')
   const svg = $('asset-chart-svg')
@@ -1183,7 +1191,7 @@ const renderAssetChart = () => {
     })
     button.onclick = () => {
       selectedAssetChart = { symbol: asset.symbol, timeframeId: chartColumn.id }
-      assetChartHistoryOffset = 0
+      assetChartVisibleCandleCount = 60
       renderAssetChart()
     }
     tabs.append(button)
@@ -1199,23 +1207,24 @@ const renderAssetChart = () => {
     return
   }
 
-  const visibleCandleCount = Math.min(60, allCandles.length)
-  const maxHistoryOffset = Math.max(0, allCandles.length - visibleCandleCount)
-  assetChartHistoryOffset = Math.min(assetChartHistoryOffset, maxHistoryOffset)
-  const visibleEnd = allCandles.length - assetChartHistoryOffset
-  const candles = allCandles.slice(Math.max(0, visibleEnd - visibleCandleCount), visibleEnd)
-  const viewingHistory = assetChartHistoryOffset > 0
+  const minVisibleCandleCount = Math.min(30, allCandles.length)
+  assetChartVisibleCandleCount = Math.max(minVisibleCandleCount, Math.min(assetChartVisibleCandleCount, allCandles.length))
+  const candles = allCandles.slice(-assetChartVisibleCandleCount)
+  const viewingHistory = assetChartVisibleCandleCount > 60
 
   svg.onwheel = (event) => {
-    if (maxHistoryOffset === 0) return
+    if (allCandles.length <= minVisibleCandleCount) return
     event.preventDefault()
     const delta = event.deltaY || event.deltaX
     if (!delta) return
-    const step = Math.max(1, Math.round(Math.abs(delta) / 80)) * 4
+    const step = Math.max(1, Math.round(Math.abs(delta) / 80)) * 12
     const direction = delta > 0 ? 1 : -1
-    const nextOffset = Math.max(0, Math.min(maxHistoryOffset, assetChartHistoryOffset + direction * step))
-    if (nextOffset === assetChartHistoryOffset) return
-    assetChartHistoryOffset = nextOffset
+    const nextVisibleCount = Math.max(
+      minVisibleCandleCount,
+      Math.min(allCandles.length, assetChartVisibleCandleCount + direction * step)
+    )
+    if (nextVisibleCount === assetChartVisibleCandleCount) return
+    assetChartVisibleCandleCount = nextVisibleCount
     renderAssetChart()
   }
 
@@ -1224,13 +1233,11 @@ const renderAssetChart = () => {
     ...chartZones(item, 'supply').map((zone, index) => ({ ...zone, kind: 'supply', index })),
   ]
   const profile = item?.tradeProfile
-  const riskLevels = viewingHistory
-    ? []
-    : [
-        { key: 'tp1', label: 'TP1', value: profile?.tp1, className: 'asset-tp-line' },
-        { key: 'tp2', label: 'TP2', value: profile?.tp2, className: 'asset-tp-line' },
-        { key: 'sl', label: 'SL', value: profile?.stop, className: 'asset-sl-line' },
-      ].filter((level) => Number.isFinite(level.value))
+  const riskLevels = [
+    { key: 'tp1', label: 'TP1', value: profile?.tp1, className: 'asset-tp-line' },
+    { key: 'tp2', label: 'TP2', value: profile?.tp2, className: 'asset-tp-line' },
+    { key: 'sl', label: 'SL', value: profile?.stop, className: 'asset-sl-line' },
+  ].filter((level) => Number.isFinite(level.value))
   const riskPrices = riskLevels.map((level) => level.value)
   const rawMin = Math.min(...candles.map((candle) => candle.low), ...zones.map((zone) => zone.low), ...riskPrices)
   const rawMax = Math.max(...candles.map((candle) => candle.high), ...zones.map((zone) => zone.high), ...riskPrices)
@@ -1386,11 +1393,36 @@ const renderAssetChart = () => {
   }
 
   const currentPrice = item?.price ?? allCandles.at(-1)?.close
-  if (!viewingHistory && Number.isFinite(currentPrice)) {
+  if (Number.isFinite(currentPrice)) {
     const currentY = y(currentPrice)
     svg.append(
       el('line', { className: 'asset-current-line', x1: ASSET_CHART.padLeft, x2: ASSET_CHART.width - ASSET_CHART.padRight, y1: currentY, y2: currentY }),
       el('text', { className: 'asset-current-label', x: ASSET_CHART.width - ASSET_CHART.padRight + 8, y: currentY - 5, text: assetPriceLabel(asset.symbol, currentPrice) })
+    )
+  }
+
+  const axisY = ASSET_CHART.height - ASSET_CHART.padBottom
+  const timeTickCount = Math.min(6, candles.length)
+  svg.append(el('line', {
+    className: 'asset-time-axis',
+    x1: ASSET_CHART.padLeft,
+    x2: ASSET_CHART.width - ASSET_CHART.padRight,
+    y1: axisY,
+    y2: axisY,
+  }))
+  for (let tick = 0; tick < timeTickCount; tick += 1) {
+    const index = timeTickCount === 1 ? 0 : Math.round((tick / (timeTickCount - 1)) * (candles.length - 1))
+    const xx = x(index)
+    const anchor = tick === 0 ? 'start' : tick === timeTickCount - 1 ? 'end' : 'middle'
+    svg.append(
+      el('line', { className: 'asset-time-tick', x1: xx, x2: xx, y1: axisY, y2: axisY + 5 }),
+      el('text', {
+        className: 'asset-time-label',
+        'text-anchor': anchor,
+        x: xx,
+        y: ASSET_CHART.height - 6,
+        text: chartTimeLabel(candles[index].time, timeframeId),
+      })
     )
   }
 

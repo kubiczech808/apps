@@ -2,8 +2,12 @@ import { aggregate, HOUR_MS } from './candles.mjs'
 import { buildZones, candleSignal, marketStructure } from './priceaction.mjs'
 
 export const PRICE_ACTION_STRUCTURE_ID = 'price-action-structure-v1'
-export const PRICE_ACTION_MATRIX_SCHEMA = 12
-export const PRICE_ACTION_CHART_CANDLE_LIMIT = 160
+export const PRICE_ACTION_MATRIX_SCHEMA = 13
+export const PRICE_ACTION_CHART_CANDLE_LIMITS = {
+  '1h': 8760,
+  '4h': 2190,
+  '1d': 400,
+}
 
 export const DEFAULT_PRICE_ACTION_STRUCTURE = {
   zoneLookback: 2,
@@ -901,7 +905,7 @@ const fetchFxCandles = async ({ asset, timeframeId, fetchImpl, now, logger }) =>
       candles: await fetchStooqCandles({
         symbol: asset.stooqSymbol,
         interval: daily ? 'd' : '60',
-        lookbackDays: daily ? 900 : 220,
+        lookbackDays: daily ? 900 : 380,
         fetchImpl,
         now,
       }),
@@ -911,7 +915,7 @@ const fetchFxCandles = async ({ asset, timeframeId, fetchImpl, now, logger }) =>
       candles: await fetchYahooCandles({
         symbol: asset.yahooSymbol,
         interval: daily ? '1d' : '1h',
-        range: daily ? '3y' : '180d',
+        range: daily ? '3y' : '1y',
         fetchImpl,
       }),
     }),
@@ -932,8 +936,9 @@ const fetchFxCandles = async ({ asset, timeframeId, fetchImpl, now, logger }) =>
 
 export const classifyStructure = (
   candles,
-  { lookback = 2, zoneLookback = 2, minCandles = 40, zoneMaxAgeCandles = 400, historyDays = null } = {}
+  { lookback = 2, zoneLookback = 2, minCandles = 40, zoneMaxAgeCandles = 400, historyDays = null, chartCandles = null } = {}
 ) => {
+  const chartSource = chartCandles ?? candles
   if (!Array.isArray(candles) || candles.length < minCandles) {
     return {
       trend: 'flat',
@@ -945,7 +950,7 @@ export const classifyStructure = (
       candles: candles?.length ?? 0,
       lastCandle: candleSummary(candles?.at?.(-1)),
       candleSignal: null,
-      chartCandles: (candles ?? []).slice(-PRICE_ACTION_CHART_CANDLE_LIMIT).map(candleSummary),
+      chartCandles: (chartSource ?? []).map(candleSummary),
       zones: null,
     }
   }
@@ -996,7 +1001,7 @@ export const classifyStructure = (
     candles: candles.length,
     lastCandle: candleSummary(latest),
     candleSignal: candleSignal(candles),
-    chartCandles: candles.slice(-PRICE_ACTION_CHART_CANDLE_LIMIT).map(candleSummary),
+    chartCandles: chartSource.map(candleSummary),
     lastHigh: structure.lastHigh?.price ?? null,
     lastLow: structure.lastLow?.price ?? null,
     structure: {
@@ -1077,6 +1082,8 @@ export const buildPriceActionMatrix = async ({
       const result = await timeframeCandles({ asset, timeframe, btcHourly, fetchImpl, now, logger })
       const profile = PRICE_ACTION_STRUCTURE_PROFILES[timeframe.id]
       const analysisCandles = candlesInHistory(result.candles, profile.historyDays)
+      const chartCandleLimit = PRICE_ACTION_CHART_CANDLE_LIMITS[timeframe.id]
+      const chartCandles = result.candles.slice(-chartCandleLimit)
       if (result.source) sources.add(result.source)
       for (const failure of result.failures ?? []) failures.push(`${timeframe.label}: ${failure}`)
       trends[timeframe.id] = classifyStructure(analysisCandles, {
@@ -1087,6 +1094,7 @@ export const buildPriceActionMatrix = async ({
           : profile.minCandles,
         zoneMaxAgeCandles: merged.zoneMaxAgeCandles,
         historyDays: profile.historyDays,
+        chartCandles,
       })
     }
     attachTradeProfiles(trends, merged)

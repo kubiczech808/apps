@@ -264,6 +264,9 @@ button.primary { color: #fff; background: var(--series-1); border-color: transpa
 .asset-price-chart .asset-risk-label.asset-sl-line { fill: var(--critical-text); }
 .asset-price-chart .asset-current-line { stroke: var(--series-1); stroke-width: 1; stroke-dasharray: 4 3; }
 .asset-price-chart .asset-current-label { fill: var(--series-1); font-size: 11px; font-weight: 650; }
+.asset-price-chart .asset-time-axis { stroke: var(--axis); stroke-width: 1; }
+.asset-price-chart .asset-time-tick { stroke: var(--axis); stroke-width: 1; }
+.asset-price-chart .asset-time-label { fill: var(--text-muted); font-size: 11px; font-variant-numeric: tabular-nums; }
 .asset-ticker {
   padding: 0;
   border: 0;

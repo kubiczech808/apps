@@ -9,6 +9,7 @@ import {
   fetchStooqCandles,
   PRICE_ACTION_ASSETS,
   PRICE_ACTION_MATRIX_SCHEMA,
+  PRICE_ACTION_CHART_CANDLE_LIMITS,
   PRICE_ACTION_STRUCTURE_PROFILES,
   reviewOpenPosition,
 } from '../src/strategy-price-action-structure.mjs'
@@ -463,7 +464,7 @@ test('price-action matrix covers BTCUSD and major FX pairs on 1H, 4H and 1D', as
   assert.equal(matrix.assets[0].trends['4h'].structure.historyDays, 180)
   assert.ok(matrix.assets[0].trends['4h'].zones)
   assert.ok(matrix.assets[0].trends['4h'].tradeProfile)
-  assert.ok(matrix.assets[0].trends['4h'].chartCandles.length <= 160)
+  assert.ok(matrix.assets[0].trends['4h'].chartCandles.length <= PRICE_ACTION_CHART_CANDLE_LIMITS['4h'])
 })
 
 test('fresh price-action matrix is reused instead of refetching every bot pass', async () => {
