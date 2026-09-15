@@ -74,7 +74,7 @@ jobs:
       - name: Run one pass
         env:
           BOT_RUNNER: actions
-          BOT_API_URL: ${{ vars.BTC_BOT_URL || 'https://www.btc-dca.com/bot/api.php' }}
+          BOT_API_URL: ${{ vars.BTC_BOT_URL || 'https://btc-dca.com/bot/api.php' }}
           # BOT_API_KEY comes from the step above; naming it here from a secret
           # that may not exist would overwrite it with an empty string.
           # Shorter than the schedule interval: a lease this runner takes must

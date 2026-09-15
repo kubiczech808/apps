@@ -95,6 +95,34 @@ jobs:
           os.chmod(path, 0o600)
           PY
 
+      - name: Point the primary runner at the canonical dashboard host
+        shell: bash
+        run: |
+          set -euxo pipefail
+          config=/home/openclaw2/.config/btc-bot.env
+          sudo env CONFIG_PATH="$config" python3 - <<'PY'
+          import os
+          import pwd
+          from pathlib import Path
+
+          path = Path(os.environ["CONFIG_PATH"])
+          lines = path.read_text(encoding="utf-8").splitlines()
+          updated = []
+          found = False
+          for line in lines:
+              if line.startswith("BOT_API_URL="):
+                  updated.append("BOT_API_URL=https://btc-dca.com/bot/api.php")
+                  found = True
+              else:
+                  updated.append(line)
+          if not found:
+              updated.append("BOT_API_URL=https://btc-dca.com/bot/api.php")
+          path.write_text("\n".join(updated) + "\n", encoding="utf-8")
+          account = pwd.getpwnam("openclaw2")
+          os.chown(path, account.pw_uid, account.pw_gid)
+          os.chmod(path, 0o600)
+          PY
+
       - name: Restart timer and run one verified pass
         shell: bash
         run: |

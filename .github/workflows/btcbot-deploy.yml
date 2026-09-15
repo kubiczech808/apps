@@ -348,7 +348,7 @@ jobs:
 
       - name: Smoke-test the deployed endpoint
         env:
-          BOT_URL: ${{ vars.BTC_BOT_URL || 'https://www.btc-dca.com/bot/api.php' }}
+          BOT_URL: ${{ vars.BTC_BOT_URL || 'https://btc-dca.com/bot/api.php' }}
         run: |
           python3 - <<'PY'
           import json, os, sys, urllib.error, urllib.request
@@ -398,7 +398,7 @@ jobs:
         # scheduled tick.
         env:
           BOT_RUNNER: deploy
-          BOT_API_URL: ${{ vars.BTC_BOT_URL || 'https://www.btc-dca.com/bot/api.php' }}
+          BOT_API_URL: ${{ vars.BTC_BOT_URL || 'https://btc-dca.com/bot/api.php' }}
           # BOT_API_KEY is already in the environment from "Resolve the
           # dashboard key" — naming it here again from a secret that may not
           # exist would overwrite it with an empty string.

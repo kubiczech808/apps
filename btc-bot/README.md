@@ -1,7 +1,7 @@
 # BTC leveraged momentum bot
 
 Selective BTC trend following on [LN Markets](https://lnmarkets.com) futures,
-with a dashboard at **https://www.btc-dca.com/bot/**. The selected portfolio is
+with a dashboard at **https://btc-dca.com/bot/**. The selected portfolio is
 `momentum-breakout-v1`; rejected price-action strategies remain available only
 as reproducible research modules.
 
@@ -186,7 +186,7 @@ systemctl --user enable --now btc-bot.timer
 
 ## Using the dashboard
 
-`https://www.btc-dca.com/bot/` asks for the dashboard key once and keeps it in
+`https://btc-dca.com/bot/` asks for the dashboard key once and keeps it in
 that browser. Nothing is readable without it — the state names the balance and
 the open positions. See **The dashboard key** above for how to work out what
 yours is.
