@@ -2,7 +2,7 @@ import { aggregate, HOUR_MS } from './candles.mjs'
 import { buildZones, candleSignal, marketStructure } from './priceaction.mjs'
 
 export const PRICE_ACTION_STRUCTURE_ID = 'price-action-structure-v1'
-export const PRICE_ACTION_MATRIX_SCHEMA = 13
+export const PRICE_ACTION_MATRIX_SCHEMA = 14
 export const PRICE_ACTION_CHART_CANDLE_LIMITS = {
   '1h': 8760,
   '4h': 2190,
@@ -24,9 +24,9 @@ export const DEFAULT_PRICE_ACTION_STRUCTURE = {
 // Structure needs the external swings visible on the chart; zones still need
 // the smaller reactions from which an entry can actually be refined.
 export const PRICE_ACTION_STRUCTURE_PROFILES = {
-  '1h': { historyDays: 60, pivotLookback: 48, minCandles: 500 },
-  '4h': { historyDays: 180, pivotLookback: 42, minCandles: 250 },
-  '1d': { historyDays: 400, pivotLookback: 30, minCandles: 160 },
+  '1h': { historyDays: 60, pivotLookback: 48, minCandles: 500, zoneMaxAgeCandles: 1440 },
+  '4h': { historyDays: 180, pivotLookback: 42, minCandles: 250, zoneMaxAgeCandles: 1080 },
+  '1d': { historyDays: 400, pivotLookback: 30, minCandles: 160, zoneMaxAgeCandles: 400 },
 }
 
 export const PRICE_ACTION_ASSETS = [
@@ -1008,6 +1008,7 @@ export const classifyStructure = (
     structure: {
       lookback,
       zoneLookback,
+      zoneMaxAgeCandles,
       historyDays,
       from: candles[0]?.time ?? null,
       to: latest?.time ?? null,
@@ -1085,6 +1086,15 @@ export const buildPriceActionMatrix = async ({
       const analysisCandles = candlesInHistory(result.candles, profile.historyDays)
       const chartCandleLimit = PRICE_ACTION_CHART_CANDLE_LIMITS[timeframe.id]
       const chartCandles = result.candles.slice(-chartCandleLimit)
+      // A zone must remain visible for the full structural context of its own
+      // timeframe. The former universal 400-candle window dropped valid 4H
+      // levels after roughly 67 days while the trend still used 180 days.
+      const requestedZoneMaxAgeCandles = Number(merged.zoneMaxAgeCandles)
+      const zoneMaxAgeCandles = Number.isFinite(requestedZoneMaxAgeCandles)
+        && requestedZoneMaxAgeCandles > 0
+        && requestedZoneMaxAgeCandles !== DEFAULT_PRICE_ACTION_STRUCTURE.zoneMaxAgeCandles
+        ? requestedZoneMaxAgeCandles
+        : profile.zoneMaxAgeCandles
       if (result.source) sources.add(result.source)
       for (const failure of result.failures ?? []) failures.push(`${timeframe.label}: ${failure}`)
       trends[timeframe.id] = classifyStructure(analysisCandles, {
@@ -1093,7 +1103,7 @@ export const buildPriceActionMatrix = async ({
         minCandles: Number(merged.minCandles) !== DEFAULT_PRICE_ACTION_STRUCTURE.minCandles
           ? Number(merged.minCandles)
           : profile.minCandles,
-        zoneMaxAgeCandles: merged.zoneMaxAgeCandles,
+        zoneMaxAgeCandles,
         historyDays: profile.historyDays,
         chartCandles,
       })

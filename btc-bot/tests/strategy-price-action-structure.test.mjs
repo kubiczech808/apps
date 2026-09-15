@@ -203,9 +203,9 @@ test('mixed local pivots do not erase the established external trend', () => {
 
 test('structure horizons and pivot widths scale with timeframe', () => {
   assert.deepEqual(PRICE_ACTION_STRUCTURE_PROFILES, {
-    '1h': { historyDays: 60, pivotLookback: 48, minCandles: 500 },
-    '4h': { historyDays: 180, pivotLookback: 42, minCandles: 250 },
-    '1d': { historyDays: 400, pivotLookback: 30, minCandles: 160 },
+    '1h': { historyDays: 60, pivotLookback: 48, minCandles: 500, zoneMaxAgeCandles: 1440 },
+    '4h': { historyDays: 180, pivotLookback: 42, minCandles: 250, zoneMaxAgeCandles: 1080 },
+    '1d': { historyDays: 400, pivotLookback: 30, minCandles: 160, zoneMaxAgeCandles: 400 },
   })
   assert.ok(PRICE_ACTION_STRUCTURE_PROFILES['1d'].historyDays > 365)
   assert.ok(PRICE_ACTION_STRUCTURE_PROFILES['4h'].historyDays >= 180)
@@ -543,6 +543,7 @@ test('price-action matrix covers BTCUSD and major FX pairs on 1H, 4H and 1D', as
   assert.equal(matrix.assets[0].trends['1h'].structure.historyDays, 60)
   assert.equal(matrix.assets[0].trends['4h'].structure.lookback, 42)
   assert.equal(matrix.assets[0].trends['4h'].structure.historyDays, 180)
+  assert.equal(matrix.assets[0].trends['4h'].structure.zoneMaxAgeCandles, 1080)
   assert.ok(matrix.assets[0].trends['4h'].zones)
   assert.ok(matrix.assets[0].trends['4h'].tradeProfile)
   assert.ok(matrix.assets[0].trends['4h'].chartCandles.length <= PRICE_ACTION_CHART_CANDLE_LIMITS['4h'])
