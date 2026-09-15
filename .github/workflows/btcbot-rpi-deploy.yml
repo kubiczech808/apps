@@ -123,6 +123,44 @@ jobs:
           os.chmod(path, 0o600)
           PY
 
+      - name: Synchronize the public paper dashboard key when applicable
+        shell: bash
+        run: |
+          set -euxo pipefail
+          config=/home/openclaw2/.config/btc-bot.env
+          sudo env CONFIG_PATH="$config" python3 - <<'PY'
+          import json
+          import os
+          import pwd
+          import urllib.request
+          from pathlib import Path
+
+          api_url = "https://btc-dca.com/bot/api.php?action=health"
+          with urllib.request.urlopen(api_url, timeout=15) as response:
+              health = json.load(response)
+          if not health.get("keyIsPublic"):
+              print("Dashboard uses a private key; preserving Pi BOT_API_KEY.")
+              raise SystemExit(0)
+
+          path = Path(os.environ["CONFIG_PATH"])
+          lines = path.read_text(encoding="utf-8").splitlines()
+          updated = []
+          found = False
+          for line in lines:
+              if line.startswith("BOT_API_KEY="):
+                  updated.append("BOT_API_KEY=ahoj1234567890")
+                  found = True
+              else:
+                  updated.append(line)
+          if not found:
+              updated.append("BOT_API_KEY=ahoj1234567890")
+          path.write_text("\n".join(updated) + "\n", encoding="utf-8")
+          account = pwd.getpwnam("openclaw2")
+          os.chown(path, account.pw_uid, account.pw_gid)
+          os.chmod(path, 0o600)
+          print("Synchronized Pi with the public paper dashboard key.")
+          PY
+
       - name: Restart timer and run one verified pass
         shell: bash
         run: |

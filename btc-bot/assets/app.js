@@ -27,9 +27,11 @@ let refreshTimer = null
 let priceActionDecisionTimeframe = '4h'
 let selectedAssetChart = { symbol: null, timeframeId: '4h' }
 let assetChartVisibleCandleCount = 60
+let assetChartYScale = { key: null, min: null, max: null }
+let assetChartYDrag = null
+let selectedChartZone = null
 let selectedStrategyPanel = 'filled-zones'
 let selectedStrategyView = 'price-action'
-const ASSET_CHART_HISTORY_STEP = 120
 
 // ── formatting ────────────────────────────────────────────────────────────
 
@@ -601,7 +603,7 @@ const priceActionDecisionFact = (entry, column) => {
   switch (column.id) {
     case 'structure': {
       const trend = PRICE_ACTION_TREND_LABELS[item?.trend] || 'flat'
-      const status = item?.trend === 'up' || item?.trend === 'down' ? 'met' : 'neutral'
+      const status = item?.trend === 'up' ? 'met' : item?.trend === 'down' ? 'unmet' : 'neutral'
       return decisionFact(trend, status, [item?.reason, item?.event].filter(Boolean).join(' · ') || null)
     }
     case 'zones':
@@ -665,6 +667,9 @@ const assetTickerButton = (symbol, timeframeId = priceActionDecisionTimeframe) =
   button.onclick = () => {
     selectedAssetChart = { symbol, timeframeId }
     assetChartVisibleCandleCount = 60
+    assetChartYScale = { key: null, min: null, max: null }
+    assetChartYDrag = null
+    selectedChartZone = null
     renderAssetChart()
     $('asset-chart-card')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
   }
@@ -688,6 +693,9 @@ const renderPriceActionDecisionTabs = (columns) => {
       priceActionDecisionTimeframe = column.id
       selectedAssetChart = { symbol: selectedAssetChart.symbol, timeframeId: column.id }
       assetChartVisibleCandleCount = 60
+      assetChartYScale = { key: null, min: null, max: null }
+      assetChartYDrag = null
+      selectedChartZone = null
       renderDecision()
       renderAssetChart()
     }
@@ -1135,6 +1143,9 @@ const renderAssetChart = () => {
     button.onclick = () => {
       selectedAssetChart = { symbol: asset.symbol, timeframeId: chartColumn.id }
       assetChartVisibleCandleCount = 60
+      assetChartYScale = { key: null, min: null, max: null }
+      assetChartYDrag = null
+      selectedChartZone = null
       renderAssetChart()
     }
     tabs.append(button)
@@ -1162,7 +1173,7 @@ const renderAssetChart = () => {
     event.preventDefault()
     const delta = event.deltaY || event.deltaX
     if (!delta) return
-    const step = Math.max(1, Math.round(Math.abs(delta) / 80)) * ASSET_CHART_HISTORY_STEP
+    const step = Math.max(1, Math.round(Math.abs(delta) / 80)) * 12
     const direction = delta > 0 ? 1 : -1
     const nextVisibleCount = Math.max(
       minVisibleCandleCount,
@@ -1174,8 +1185,8 @@ const renderAssetChart = () => {
   }
 
   const zones = [
-    ...chartZones(item, 'demand').map((zone, index) => ({ ...zone, kind: 'demand', index })),
-    ...chartZones(item, 'supply').map((zone, index) => ({ ...zone, kind: 'supply', index })),
+    ...chartZones(item, 'demand').map((zone, index) => ({ ...zone, kind: 'demand', index, id: `demand:${zone.low}:${zone.high}:${zone.firstTime ?? zone.firstIndex ?? index}` })),
+    ...chartZones(item, 'supply').map((zone, index) => ({ ...zone, kind: 'supply', index, id: `supply:${zone.low}:${zone.high}:${zone.firstTime ?? zone.firstIndex ?? index}` })),
   ]
   const profile = displayedTradeProfile(item?.tradeProfile)
   const riskLevels = [
@@ -1189,11 +1200,19 @@ const renderAssetChart = () => {
   const rawMin = Math.min(...candles.map((candle) => candle.low), ...zones.map((zone) => zone.low), ...riskPrices, ...displayPrice)
   const rawMax = Math.max(...candles.map((candle) => candle.high), ...zones.map((zone) => zone.high), ...riskPrices, ...displayPrice)
   const padding = (rawMax - rawMin || Math.max(1, Math.abs(rawMax) * 0.01)) * 0.08
-  const yStep = niceStep((rawMax - rawMin + padding * 2) / 6)
-  const minPrice = Math.max(0, Math.floor((rawMin - padding) / yStep) * yStep)
-  const maxPrice = Math.ceil((rawMax + padding) / yStep) * yStep
+  const baseStep = niceStep((rawMax - rawMin + padding * 2) / 6)
+  const baseMinPrice = Math.max(0, Math.floor((rawMin - padding) / baseStep) * baseStep)
+  const baseMaxPrice = Math.ceil((rawMax + padding) / baseStep) * baseStep
+  const chartKey = `${asset.symbol}:${timeframeId}`
+  if (assetChartYScale.key !== chartKey || !(assetChartYScale.max > assetChartYScale.min)) {
+    assetChartYScale = { key: chartKey, min: baseMinPrice, max: baseMaxPrice }
+  }
+  const minPrice = Math.max(0, assetChartYScale.min)
+  const maxPrice = Math.max(minPrice + Math.max(baseStep, 1e-9), assetChartYScale.max)
+  const yStep = niceStep((maxPrice - minPrice) / 6)
   const yTicks = []
-  for (let value = minPrice; value <= maxPrice + yStep * 0.001; value += yStep) {
+  const firstTick = Math.ceil(minPrice / yStep) * yStep
+  for (let value = firstTick; value <= maxPrice + yStep * 0.001; value += yStep) {
     yTicks.push(Number(value.toPrecision(14)))
   }
   const plotWidth = ASSET_CHART.width - ASSET_CHART.padLeft - ASSET_CHART.padRight
@@ -1216,14 +1235,21 @@ const renderAssetChart = () => {
   for (const zone of zones) {
     const top = y(zone.high)
     const bottom = y(zone.low)
-    svg.append(el('rect', {
-      className: `asset-zone-${zone.kind}`,
+    const zoneRect = el('rect', {
+      className: `asset-zone-${zone.kind} asset-zone-clickable`,
       x: ASSET_CHART.padLeft,
       y: Math.min(top, bottom),
       width: plotWidth,
       height: Math.max(2, Math.abs(bottom - top)),
       rx: 2,
-    }))
+      'data-zone-id': zone.id,
+    })
+    zoneRect.onpointerup = (event) => {
+      event.stopPropagation()
+      selectedChartZone = selectedChartZone === zone.id ? null : zone.id
+      renderAssetChart()
+    }
+    svg.append(zoneRect)
   }
 
   for (const [index, candle] of candles.entries()) {
@@ -1291,34 +1317,44 @@ const renderAssetChart = () => {
       )
     }
   } else {
-    for (const { kind, leg } of structureLegs) {
-      const previous = leg?.previous
-      const current = leg?.current
-      const x1 = xForTime(previous?.time)
-      const x2 = xForTime(current?.time)
-      if (!Number.isFinite(previous?.price) || !Number.isFinite(current?.price) || x1 === null || x2 === null) continue
-      const label = current.label || (kind === 'high' ? 'H' : 'L')
-      const labelAtEnd = x2 > ASSET_CHART.width - ASSET_CHART.padRight - 72
+    // A trend is an alternating sequence of external pivots. Drawing the
+    // latest high leg and low leg independently creates two misleading,
+    // parallel diagonals; the audit line must follow HH -> HL -> HH (or the
+    // corresponding downtrend sequence) in chronological order.
+    const swingNodes = (structure?.recentSwings ?? [])
+      .filter((swing) => swing?.kind && Number.isFinite(swing.price) && Number.isFinite(swing.time))
+      .sort((left, right) => left.time - right.time)
+      .map((swing, index, all) => {
+        const previousSameKind = [...all.slice(0, index)].reverse().find((candidate) => candidate.kind === swing.kind)
+        const label = swing.label || (previousSameKind
+          ? swing.kind === 'high'
+            ? (swing.close > previousSameKind.price ? 'HH' : 'LH')
+            : (swing.close < previousSameKind.price ? 'LL' : 'HL')
+          : swing.kind === 'high' ? 'H' : 'L')
+        return { ...swing, label, x: xForTime(swing.time) }
+      })
+      .filter((swing) => swing.x !== null)
+    if (swingNodes.length >= 2) {
+      svg.append(el('path', {
+        className: `asset-structure-line asset-structure-${trend}`,
+        d: swingNodes.map((swing, index) => `${index === 0 ? 'M' : 'L'} ${swing.x} ${y(swing.price)}`).join(' '),
+      }))
+    }
+    for (const swing of swingNodes) {
+      const labelAtEnd = swing.x > ASSET_CHART.width - ASSET_CHART.padRight - 72
       svg.append(
-        el('line', {
-          className: `asset-structure-line asset-structure-${trend}`,
-          x1,
-          x2,
-          y1: y(previous.price),
-          y2: y(current.price),
-        }),
         el('circle', {
           className: `asset-structure-marker asset-structure-${trend}`,
-          cx: x2,
-          cy: y(current.price),
+          cx: swing.x,
+          cy: y(swing.price),
           r: 3,
         }),
         el('text', {
           className: `asset-structure-label asset-structure-label-${trend}`,
           'text-anchor': labelAtEnd ? 'end' : 'start',
-          x: labelAtEnd ? x2 - 6 : x2 + 6,
-          y: y(current.price) - 6,
-          text: `${label} ${quotePrice(current.price)}`,
+          x: labelAtEnd ? swing.x - 6 : swing.x + 6,
+          y: y(swing.price) - 6,
+          text: `${swing.label} ${quotePrice(swing.price)}`,
         })
       )
     }
@@ -1376,10 +1412,33 @@ const renderAssetChart = () => {
     )
   }
 
-  // Put zone labels in a separate right-hand lane and enforce a minimum gap so
-  // overlapping ranges remain readable even when several zones cluster.
+  const yAxisHitArea = el('rect', {
+    className: 'asset-y-axis-hitarea',
+    x: ASSET_CHART.width - ASSET_CHART.padRight,
+    y: ASSET_CHART.padTop,
+    width: ASSET_CHART.padRight,
+    height: plotHeight,
+    'aria-label': 'Svislé měřítko ceny; tažením nahoru nebo dolů přiblížit či oddálit osu Y',
+  })
+  yAxisHitArea.onpointerdown = (event) => {
+    event.stopPropagation()
+    event.preventDefault()
+    assetChartYDrag = {
+      key: chartKey,
+      startY: event.clientY,
+      startMin: minPrice,
+      startMax: maxPrice,
+    }
+    svg.setPointerCapture?.(event.pointerId)
+  }
+  svg.append(yAxisHitArea)
+
+  // Zone labels stay hidden until the user selects a zone. This keeps the
+  // price axis readable when several supply/demand ranges overlap.
   const labelY = []
-  for (const zone of zones.sort((left, right) => y((left.low + left.high) / 2) - y((right.low + right.high) / 2))) {
+  for (const zone of zones
+    .filter((candidate) => candidate.id === selectedChartZone)
+    .sort((left, right) => y((left.low + left.high) / 2) - y((right.low + right.high) / 2))) {
     const desired = y((zone.low + zone.high) / 2)
     const previous = labelY.at(-1)
     const placed = Math.min(ASSET_CHART.height - ASSET_CHART.padBottom - 4, Math.max(ASSET_CHART.padTop + 12, previous === undefined ? desired : previous + 22))
@@ -1391,6 +1450,24 @@ const renderAssetChart = () => {
       y: placed,
       text: `${prefix}${zone.index + 1} ${quotePrice(zone.low)}–${quotePrice(zone.high)}`,
     }))
+  }
+  for (const zone of zones) {
+    const top = y(zone.high)
+    const bottom = y(zone.low)
+    const hitArea = el('rect', {
+      className: 'asset-zone-hit-area',
+      x: ASSET_CHART.padLeft,
+      y: Math.min(top, bottom),
+      width: plotWidth,
+      height: Math.max(6, Math.abs(bottom - top)),
+      'data-zone-id': zone.id,
+    })
+    hitArea.onpointerup = (event) => {
+      event.stopPropagation()
+      selectedChartZone = selectedChartZone === zone.id ? null : zone.id
+      renderAssetChart()
+    }
+    svg.append(hitArea)
   }
 
   const first = candles[0]
@@ -1473,9 +1550,28 @@ const renderAssetChart = () => {
     showCrosshair(event)
   }
   svg.onpointermove = (event) => {
+    if (assetChartYDrag?.key === chartKey) {
+      const delta = event.clientY - assetChartYDrag.startY
+      const startSpan = assetChartYDrag.startMax - assetChartYDrag.startMin
+      const scaleFactor = Math.exp((delta / Math.max(1, plotHeight)) * 2)
+      const span = clamp(
+        startSpan * scaleFactor,
+        Math.max(baseStep, 1e-9),
+        Math.max(baseMaxPrice - baseMinPrice, baseStep) * 20
+      )
+      const center = (assetChartYDrag.startMin + assetChartYDrag.startMax) / 2
+      assetChartYScale = {
+        key: chartKey,
+        min: Math.max(0, center - span / 2),
+        max: center + span / 2,
+      }
+      renderAssetChart()
+      return
+    }
     if (event.pointerType === 'mouse' || touchActive) showCrosshair(event)
   }
   svg.onpointerup = (event) => {
+    if (assetChartYDrag?.key === chartKey) assetChartYDrag = null
     touchActive = false
     svg.releasePointerCapture?.(event.pointerId)
   }
@@ -1635,6 +1731,7 @@ const renderPriceActionDecision = (card, box) => {
     ]),
     el('div', { className: 'pa-decision-meta' }, [
       el('span', { text: `scan ${ago(matrix.generatedAt)}` }),
+      el('span', { text: state?.priceActionEntryCheck?.at ? `kontrola entry ${ago(state.priceActionEntryCheck.at)}` : 'kontrola entry čeká' }),
       el('span', { text: `${summary.profiles.length} profilů · ${summary.ready.length} ready · ${summary.watch.length} čeká` }),
     ]),
     renderPriceActionDecisionTabs(columns),

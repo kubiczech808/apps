@@ -435,6 +435,13 @@ export const runPass = async ({
         logger,
       })
       state.priceActionMatrixError = null
+      state.priceActionEntryCheck = {
+        at: isoNow(now),
+        matrixGeneratedAt: state.priceActionMatrix?.generatedAt ?? null,
+        refreshed: state.priceActionMatrix !== previousPriceActionMatrix,
+        refreshMinutes: state.settings.priceActionStructure?.refreshMinutes ?? 15,
+        status: 'ok',
+      }
 
       // PA invalidation belongs to an already-open PA trade. Entry profiles
       // are recalculated from the current matrix and never carry this status.
@@ -481,6 +488,14 @@ export const runPass = async ({
       }
     } catch (error) {
       state.priceActionMatrixError = error.message
+      state.priceActionEntryCheck = {
+        at: isoNow(now),
+        matrixGeneratedAt: state.priceActionMatrix?.generatedAt ?? null,
+        refreshed: false,
+        refreshMinutes: state.settings.priceActionStructure?.refreshMinutes ?? 15,
+        status: 'error',
+        error: error.message,
+      }
       logger.warn(`Price action matrix failed: ${error.message}`)
     }
 

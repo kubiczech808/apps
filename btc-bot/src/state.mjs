@@ -65,6 +65,7 @@ export const emptyState = (overrides = {}) => ({
   lastDecision: null,
   priceActionMatrix: null,
   priceActionMatrixError: null,
+  priceActionEntryCheck: null,
   priceActionEvents: [],
   heartbeats: {},
   runs: [],
