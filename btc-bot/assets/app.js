@@ -362,10 +362,11 @@ const profileGate = (profile, id) => profile?.gates?.find((item) => item.id === 
 const zoneValue = (zone, prefix) => (zone ? `${prefix} ${zoneRange(zone)}` : 'není')
 
 const zoneFact = (item, profile, type) => {
-  const zone = item?.zones?.[type] ?? item?.zones?.[`latestValid${type === 'demand' ? 'Demand' : 'Supply'}`]
   const active = profile?.side === 'long' ? 'demand' : profile?.side === 'short' ? 'supply' : null
+  const profileZone = active === type ? profile?.zone : active && profile?.tp2Zone
+  const zone = profileZone ?? item?.zones?.[type] ?? item?.zones?.[`latestValid${type === 'demand' ? 'Demand' : 'Supply'}`]
   if (!active) return decisionFact(zoneValue(zone, type === 'demand' ? 'D' : 'S'), 'neutral', 'Bez směru struktury není zóna vstupní branou.')
-  if (active !== type) return decisionFact(zoneValue(zone, type === 'demand' ? 'D' : 'S'), 'neutral', 'Protější zóna je zobrazena jako orientační cíl.')
+  if (active !== type) return decisionFact(zoneValue(zone, type === 'demand' ? 'D' : 'S'), 'neutral', 'Nejbližší protější nevyplněná zóna je zobrazena jako orientační TP2 cíl.')
   const gate = profileGate(profile, 'zone')
   return decisionFact(
     zoneValue(zone, type === 'demand' ? 'D' : 'S'),
