@@ -476,11 +476,80 @@ const zoneListElement = (profile, timeframeId) => {
   })
 }
 
+const samePrice = (left, right) => {
+  if (!Number.isFinite(left) || !Number.isFinite(right)) return false
+  const scale = Math.max(1, Math.abs(left), Math.abs(right))
+  return Math.abs(left - right) <= scale * 1e-9
+}
+
+// The dashboard receives persisted state from runners that may be upgraded
+// independently. Do not display a legacy entry unless the current profile can
+// prove it came from one of its eligible supply/demand candidates.
+const displayedEntryCandidate = (profile) => {
+  const entry = profile?.entry
+  if (!Number.isFinite(entry)) return null
+  return (profile?.zoneCandidates ?? []).find((candidate) =>
+    candidate?.eligible &&
+    Number.isFinite(candidate.entryForMinRR) &&
+    samePrice(candidate.entryForMinRR, entry)
+  ) ?? null
+}
+
+const displayedTradeProfile = (profile) => {
+  if (!profile || profile.mode === 'formation') return profile
+  const candidate = displayedEntryCandidate(profile)
+  if (candidate) {
+    return {
+      ...profile,
+      zone: candidate.zone,
+      zoneHit: candidate.zoneHit,
+      entry: candidate.entryForMinRR,
+      stop: candidate.stop,
+      stopBuffer: candidate.stopBuffer,
+      tp1: candidate.tp1,
+      tp2: candidate.tp2,
+      tp2Zone: candidate.tp2Zone,
+      weightedTarget: candidate.weightedTarget,
+      rewardRisk: candidate.rewardRisk,
+    }
+  }
+
+  return {
+    ...profile,
+    status: profile.side ? 'watch' : 'neutral',
+    zone: null,
+    zoneHit: false,
+    entry: null,
+    stop: null,
+    stopBuffer: null,
+    tp1: null,
+    tp2: null,
+    tp2Zone: null,
+    weightedTarget: null,
+    risk: null,
+    reward: null,
+    rewardRisk: null,
+    entrySource: null,
+    gates: (profile.gates ?? []).map((gateItem) =>
+      gateItem.id === 'zone' || gateItem.id === 'rr'
+        ? {
+            ...gateItem,
+            status: 'unmet',
+            passed: false,
+            detail: gateItem.id === 'zone'
+              ? 'bez validní supply/demand zóny pro vstup'
+              : `bez validního entry nelze splnit minimum ${profile.minRewardRisk ?? 2}:1`,
+          }
+        : gateItem
+    ),
+  }
+}
+
 const priceFact = (value, title = null, status = 'neutral') =>
   decisionFact(Number.isFinite(value) ? quotePrice(value) : '–', status, title)
 
 const riskRewardDetails = (entry) => {
-  const { profile } = entry
+  const profile = displayedTradeProfile(entry.profile)
   const fact = priceActionDecisionFact(entry, { id: 'rr' })
   if (!profile || profile.mode === 'formation') return decisionFactElement(fact)
 
@@ -525,7 +594,8 @@ const pullbackRange = (entry) => {
 }
 
 const priceActionDecisionFact = (entry, column) => {
-  const { item, profile } = entry
+  const { item } = entry
+  const profile = displayedTradeProfile(entry.profile)
   if (!item && !profile) return decisionFact('čeká', 'neutral', 'Pro tento asset a timeframe zatím nejsou data.')
 
   switch (column.id) {
@@ -815,6 +885,7 @@ const tradeMetric = (label, value, sub = null) =>
   ])
 
 const renderTradeProfile = (profile) => {
+  profile = displayedTradeProfile(profile)
   if (!profile) return null
   if (profile.mode === 'formation') {
     return el('div', { className: 'trade-profile' }, [
@@ -1281,7 +1352,7 @@ const renderAssetChart = () => {
     ...chartZones(item, 'demand').map((zone, index) => ({ ...zone, kind: 'demand', index })),
     ...chartZones(item, 'supply').map((zone, index) => ({ ...zone, kind: 'supply', index })),
   ]
-  const profile = item?.tradeProfile
+  const profile = displayedTradeProfile(item?.tradeProfile)
   const riskLevels = [
     { key: 'tp1', label: 'TP1', value: profile?.tp1, className: 'asset-tp-line' },
     { key: 'tp2', label: 'TP2', value: profile?.tp2, className: 'asset-tp-line' },

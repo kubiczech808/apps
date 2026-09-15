@@ -454,6 +454,7 @@ test('a profile below minimum R/R is never a valid setup or planned entry', () =
   assert.equal(candidate.rrEligible, false)
   assert.equal(candidate.eligible, false)
   assert.equal(candidate.entryForMinRR, null)
+  assert.equal(profile.activeCandidate.eligible, false)
   assert.equal(profile.status, 'watch')
   assert.equal(profile.gates.find((entry) => entry.id === 'rr').status, 'unmet')
   assert.equal(profile.entry, null)

@@ -696,9 +696,9 @@ export const evaluateTradeProfile = ({
     fallbackZone
   const zoneHit = zoneHitByCandle(activeZone, latest)
   // A planned entry is meaningful only when the candidate passes the complete
-  // pullback and minimum-R/R gates. Keep raw zone-edge values on the candidate
-  // for diagnostics, but never publish them as a trade entry by themselves.
-  const plannedEntry = activeCandidate?.entryForMinRR ?? null
+  // direction, pullback and minimum-R/R gates. Keep raw zone-edge values on
+  // the candidate for diagnostics, but never publish them as a trade entry.
+  const plannedEntry = activeCandidate?.eligible ? activeCandidate.entryForMinRR : null
   const entry = Number.isFinite(plannedEntry) ? plannedEntry : null
   const pulledBack = pullbackSatisfied({ side, latest, level: pullback })
   const buffer = activeCandidate?.stopBuffer ?? stopBuffer({
