@@ -31,7 +31,10 @@ const SETTINGS_FILE = DATA_DIR . '/settings.json';
 const BACKTEST_FILE = DATA_DIR . '/backtests.json';
 const LEASE_FILE = DATA_DIR . '/lease.json';
 const COMMANDS_FILE = DATA_DIR . '/commands.json';
-const MAX_BODY_BYTES = 4 * 1024 * 1024;
+// The dashboard publishes the full chart history for all assets and
+// timeframes so the browser can reveal up to one year without another API
+// round-trip. Keep a bounded body limit, but above the largest paper snapshot.
+const MAX_BODY_BYTES = 16 * 1024 * 1024;
 
 function fail(int $status, string $message): void
 {
