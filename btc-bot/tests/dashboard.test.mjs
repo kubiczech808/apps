@@ -215,6 +215,12 @@ test('asset tickers open a timeframe price chart with supply and demand zones', 
   assert.match(css, /asset-zone-supply/)
 })
 
+test('charts create SVG graphics in the SVG namespace and use strategy history when available', () => {
+  assert.match(js, /document\.createElementNS\(SVG_NS, tag\)/)
+  assert.match(js, /const strategyHistory = state\?\.strategyEquityHistory\?\.\[view\.id\]/)
+  assert.match(js, /Array\.isArray\(strategyHistory\) \? strategyHistory : state\?\.equityHistory/)
+})
+
 test('backtests tab prepares a timeframe matrix for tuned strategies', () => {
   assert.ok(html.includes('data-tab="backtests"'), 'dashboard must expose the backtests tab')
   assert.ok(html.includes('id="panel-backtests"'), 'backtests tab must have a panel')

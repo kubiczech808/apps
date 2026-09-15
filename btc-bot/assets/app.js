@@ -1398,26 +1398,20 @@ const renderChart = () => {
   const tooltip = $('equity-tooltip')
   svg.replaceChildren()
   tooltip.hidden = true
-  if (currentStrategyView().id === 'price-action') {
-    svg.append(
-      el('text', {
-        x: 12,
-        y: 40,
-        className: 'tick',
-        text: 'PA-1 je zatím profile-only strategie bez vlastního kapitálu a equity křivky; po zapnutí exekuce se bude měřit odděleně.',
-      })
-    )
-    return
-  }
 
-  const points = (state?.equityHistory || []).filter((point) => Number.isFinite(point.equitySats))
+  const view = currentStrategyView()
+  const strategyHistory = state?.strategyEquityHistory?.[view.id]
+  const points = (Array.isArray(strategyHistory) ? strategyHistory : state?.equityHistory || [])
+    .filter((point) => Number.isFinite(point.equitySats))
   if (points.length < 2) {
     svg.append(
       el('text', {
         x: 12,
         y: 40,
         className: 'tick',
-        text: `Zatím ${points.length === 1 ? 'jeden bod' : 'žádný bod'} — kapitál se vzorkuje po 15 minutách, graf naskočí do půl hodiny.`,
+        text: view.id === 'price-action'
+          ? 'PA-1 zatím nemá dva body vlastní equity historie; po zapnutí exekuce se bude měřit odděleně.'
+          : `Zatím ${points.length === 1 ? 'jeden bod' : 'žádný bod'} — kapitál se vzorkuje po 15 minutách, graf naskočí do půl hodiny.`,
       })
     )
     return
