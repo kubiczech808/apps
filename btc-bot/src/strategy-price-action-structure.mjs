@@ -738,7 +738,9 @@ export const evaluateTradeProfile = ({
   const rewardRisk = Number.isFinite(risk) && risk > 0 && Number.isFinite(reward) ? reward / risk : null
   const minRewardRisk = Number(settings.minRewardRisk) || 2
   const riskPct = Number(settings.riskPct) || 1
-  const refinement = side ? candleRefinement({ side, signal: item?.candleSignal }) : null
+  const signalItem = lowerTimeframeId && lowerItem?.candleSignal ? lowerItem : item
+  const refinement = side ? candleRefinement({ side, signal: signalItem?.candleSignal }) : null
+  const requireCandleSignal = settings.requireCandleSignal === true
 
   const gates = [
     gate('trend', 'struktura má směr', Boolean(side), item?.reason ?? null),
@@ -746,6 +748,7 @@ export const evaluateTradeProfile = ({
     gate('unfilled-zone', 'zóna není vyplněná close na vlastním TF', Boolean(zone), zone ? 'nevyplněná' : fallbackZone ? 'jen poslední platná vyplněná zóna' : null),
     gate('pullback', `${settings.pullbackPct ?? 50}% pullback`, pulledBack, Number.isFinite(pullback) ? String(pullback) : null),
     gate('rr', `R/R alespoň ${minRewardRisk}:1`, Number.isFinite(rewardRisk) && rewardRisk >= minRewardRisk, Number.isFinite(rewardRisk) ? rewardRisk.toFixed(2) : null),
+    gate('candle', 'potvrzení svíčkou', refinement?.status === 'met', refinement?.note ?? null, !requireCandleSignal),
   ]
   const ready = gates.every((itemGate) => itemGate.passed !== false)
   const status = ready ? 'ready' : side ? 'watch' : 'neutral'
@@ -755,6 +758,7 @@ export const evaluateTradeProfile = ({
     side,
     riskPct,
     minRewardRisk,
+    requireCandleSignal,
     pullbackPct: settings.pullbackPct ?? 50,
     zone: activeZone,
     zoneHit,

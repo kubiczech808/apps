@@ -322,6 +322,35 @@ test('trade profile requires S/D zone hit, 50 percent pullback and at least 2R',
   assert.equal(withoutHit.gates.find((entry) => entry.id === 'zone').status, 'unmet')
 })
 
+test('optional candle confirmation can filter a zone hit without changing the default', () => {
+  const item = {
+    trend: 'up',
+    lastCandle: candle(START, 106, 107, 102, 103),
+    candleSignal: null,
+    structure: {
+      high: { current: { price: 120 } },
+      low: { current: { price: 100 } },
+    },
+    zones: {
+      demand: { type: 'demand', low: 100, high: 105 },
+      supply: { type: 'supply', low: 140, high: 145 },
+      nearbyDemand: [{ type: 'demand', low: 100, high: 105 }],
+      unfilledDemand: [{ type: 'demand', low: 100, high: 105 }],
+      unfilledSupply: [{ type: 'supply', low: 140, high: 145 }],
+    },
+  }
+
+  const defaultProfile = evaluateTradeProfile({ item, settings: { pullbackPct: 50, minRewardRisk: 2 } })
+  const confirmedProfile = evaluateTradeProfile({
+    item,
+    settings: { pullbackPct: 50, minRewardRisk: 2, requireCandleSignal: true },
+  })
+
+  assert.equal(defaultProfile.status, 'ready')
+  assert.equal(confirmedProfile.status, 'watch')
+  assert.equal(confirmedProfile.gates.find((entry) => entry.id === 'candle').status, 'unmet')
+})
+
 test('a deeper entry inside the zone can rescue reward/risk', () => {
   const item = {
     trend: 'up',

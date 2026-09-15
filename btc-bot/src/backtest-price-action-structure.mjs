@@ -55,7 +55,7 @@ const structureAt = ({ candles, timeframeId, throughTime }) => {
     lookback: profile.pivotLookback,
     zoneLookback: 2,
     minCandles: profile.minCandles,
-    zoneMaxAgeCandles: 400,
+    zoneMaxAgeCandles: profile.zoneMaxAgeCandles,
     historyDays: profile.historyDays,
   })
 }
@@ -112,7 +112,10 @@ export const runPriceActionStructureBacktest = ({
     return emptyReport({ asset, timeframeId, candles: [], dataSource, reason: 'neznámý timeframe nebo chybějící data' })
   }
 
-  const ordered = candles.filter((candle) => [candle.time, candle.open, candle.high, candle.low, candle.close].every(finite))
+  const ordered = candles.filter((candle) =>
+    Number.isFinite(Number(candle.time)) &&
+    [candle.open, candle.high, candle.low, candle.close].every((value) => finite(value) && Number(value) > 0)
+  )
     .sort((a, b) => a.time - b.time)
   const minimum = Math.max(profile.minCandles, profile.pivotLookback * 2 + 5)
   if (ordered.length <= minimum) {
@@ -169,13 +172,25 @@ export const runPriceActionStructureBacktest = ({
   for (let index = 0; index < ordered.length; index += 1) {
     const candle = ordered[index]
     const candleEnd = candle.time + timeframeHours * HOUR_MS
-    const item = structureAt({ candles: ordered, timeframeId, throughTime: candleEnd })
+    // A limit order can be waiting before this candle opens. Build its profile
+    // from data available before the candle, then let the candle's high/low
+    // decide whether the already-defined entry was filled. Using candleEnd for
+    // the entry profile would read this candle's close before entering inside
+    // its range, which is look-ahead bias.
+    const item = structureAt({ candles: ordered, timeframeId, throughTime: candle.time })
     const lowerTimeframeId = LOWER_TIMEFRAME[timeframeId]
     const lowerItem = lowerTimeframeId && lowerCandles.length
+      ? structureAt({ candles: lowerCandles, timeframeId: lowerTimeframeId, throughTime: candle.time })
+      : null
+    const lowerClosedItem = lowerTimeframeId && lowerCandles.length
       ? structureAt({ candles: lowerCandles, timeframeId: lowerTimeframeId, throughTime: candleEnd })
       : null
+    const closedItem = structureAt({ candles: ordered, timeframeId, throughTime: candleEnd })
     const tradeProfile = evaluateTradeProfile({
-      item,
+      // Zone hit and pullback are range conditions. Applying the current
+      // candle only to lastCandle preserves the prepared structure/zones and
+      // permits a valid intrabar fill without using its closing direction.
+      item: { ...item, lastCandle: { ...item.lastCandle, ...candle } },
       lowerItem,
       lowerTimeframeId,
       settings,
@@ -203,8 +218,13 @@ export const runPriceActionStructureBacktest = ({
           const tp2Hit = position.side === 'long' ? candle.high >= position.tp2 : candle.low <= position.tp2
           if (tp2Hit) recordExit('take_profit', position.tp2, candleEnd)
         }
-        if (position && item.trend && item.trend !== position.trend) {
-          recordExit('structure_invalidation', candle.close, candleEnd)
+        if (position) {
+          const invalidationTrend = position.side === 'long' ? 'down' : 'up'
+          const ownStructureInvalidated = closedItem.trend === invalidationTrend || closedItem.event === `CHoCH_${invalidationTrend.toUpperCase()}`
+          const lowerStructureInvalidated = lowerClosedItem?.trend === invalidationTrend || lowerClosedItem?.event === `CHoCH_${invalidationTrend.toUpperCase()}`
+          if (ownStructureInvalidated || lowerStructureInvalidated) {
+            recordExit('structure_invalidation', candle.close, candleEnd)
+          }
         }
       }
     }
@@ -228,7 +248,10 @@ export const runPriceActionStructureBacktest = ({
     const equity = markEquity(candle.close)
     const riskCapital = equity * (Number(riskPct) || 1) / 100
     const maxNotionalPct = Number(settings.maxNotionalPct) || 300
-    const notional = Math.min(riskCapital / riskDistance, equity * maxNotionalPct / 100)
+    // Both sides of a completed trade pay a fee. Include them in the risk
+    // budget so a tight stop cannot turn fees into several nominal R units.
+    const roundTripRiskDistance = riskDistance + 2 * feeRate
+    const notional = Math.min(riskCapital / roundTripRiskDistance, equity * maxNotionalPct / 100)
     if (!(notional > 0)) continue
     const openingFee = notional * feeRate
     cash -= openingFee
@@ -240,7 +263,7 @@ export const runPriceActionStructureBacktest = ({
       tp1,
       tp2,
       notional,
-      riskAmount: notional * riskDistance,
+      riskAmount: notional * roundTripRiskDistance,
       remaining: 1,
       tp1Taken: false,
       realized: -openingFee,
