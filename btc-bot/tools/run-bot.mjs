@@ -33,19 +33,20 @@ try {
     entry.command === 'run-backtests' && entry.outcome === 'backtest_started'
   )
   if (runBacktests) {
+    // Backtests scan years of candles and must not occupy the minute-level
+    // heartbeat service. The worker publishes its own running/complete/failed
+    // status, so it can safely outlive this short pass.
     const child = spawn(process.execPath, ['tools/backtest-price-action-structure.mjs', '--publish'], {
       cwd: process.cwd(),
       env: {
         ...process.env,
         BOT_BACKTEST_SETTINGS: JSON.stringify(state.settings ?? {}),
       },
-      stdio: 'inherit',
+      detached: true,
+      stdio: 'ignore',
     })
-    const code = await new Promise((resolve, reject) => {
-      child.once('error', reject)
-      child.once('exit', (exitCode) => resolve(exitCode ?? 1))
-    })
-    if (code !== 0) throw new Error(`Price-action backtest worker failed with exit code ${code}`)
+    child.unref()
+    console.log(`backtest-worker=started pid=${child.pid ?? 'n/a'}`)
   }
 } catch (error) {
   console.error(`Bot pass could not be recorded at all: ${error.stack ?? error.message}`)

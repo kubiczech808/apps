@@ -12,6 +12,9 @@ ExecStart=/usr/bin/env node tools/run-bot.mjs
 # stale-state threshold: a wedged market/API request must not prevent the next
 # scheduled heartbeat for half an hour.
 TimeoutStartSec=180
+# A queued research backtest is started as a detached child and publishes its
+# own status. Do not kill that child when this short heartbeat pass exits.
+KillMode=process
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
