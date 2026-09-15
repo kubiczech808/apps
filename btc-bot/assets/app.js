@@ -708,7 +708,7 @@ const renderAssetZoneDetails = (host, asset, item, timeframeId) => {
     el('div', { className: 'asset-zone-details' }, [
       el('h3', { text: `${asset.symbol} · všechny dostupné zóny pro ${timeframeId.toUpperCase()}` }),
       el('p', { className: 'asset-zone-details-intro', text: 'V přehledu vstupu zůstávají jen zóny v pullback pásmu s dosažitelným minimálním R/R. Zde jsou i zóny, které byly vyřazeny.' }),
-      el('div', { className: 'asset-zone-detail-columns' }, [
+      el('div', { className: 'asset-zone-detail-columns', 'data-candidate-count': String(candidates.length) }, [
         zoneCard('Demand', zonesForDetail(item.zones, 'demand'), 'Žádná dostupná demand zóna.', timeframeId, candidates),
         zoneCard('Supply', zonesForDetail(item.zones, 'supply'), 'Žádná dostupná supply zóna.', timeframeId, candidates),
       ]),
