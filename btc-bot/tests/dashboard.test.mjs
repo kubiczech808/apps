@@ -73,6 +73,11 @@ test('capital tile separates USD benchmark from sats trading result', () => {
   assert.match(js, /BTC.*obchody.*v sats/s)
 })
 
+test('price labels use at most three decimal places', () => {
+  assert.match(js, /const digits = abs >= 1000 \? 0 : abs >= 100 \? 2 : 3/)
+  assert.doesNotMatch(js, /abs >= 10 \? 3 : 5/)
+})
+
 test('strategy tab shows the selected leveraged momentum strategy', () => {
   assert.ok(html.includes('data-tab="strategy"'), 'dashboard must expose the strategy tab')
   assert.ok(html.includes('id="panel-strategy"'), 'strategy tab must have a panel')

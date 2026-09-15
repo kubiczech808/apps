@@ -38,7 +38,7 @@ const pct = (value, digits = 1) => (Number.isFinite(value) ? `${nf(digits).forma
 const quotePrice = (value) => {
   if (!Number.isFinite(value)) return '–'
   const abs = Math.abs(value)
-  const digits = abs >= 1000 ? 0 : abs >= 100 ? 2 : abs >= 10 ? 3 : 5
+  const digits = abs >= 1000 ? 0 : abs >= 100 ? 2 : 3
   return nf(digits).format(value)
 }
 
