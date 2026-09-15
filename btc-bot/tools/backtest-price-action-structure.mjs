@@ -151,9 +151,9 @@ try {
       const fourHourly = sliceYears(candles.fourHourly, yearsBack)
       const daily = sliceYears(candles.daily, yearsBack)
       const series = {
-        '1h': { candles: hourly, lowerCandles: [], label: '1H' },
-        '4h': { candles: fourHourly, lowerCandles: hourly, label: '4H' },
-        '1d': { candles: daily, lowerCandles: fourHourly, label: '1D' },
+        '1h': { candles: hourly, lowerCandles: [], higherCandles: fourHourly, label: '1H' },
+        '4h': { candles: fourHourly, lowerCandles: hourly, higherCandles: daily, label: '4H' },
+        '1d': { candles: daily, lowerCandles: fourHourly, higherCandles: [], label: '1D' },
       }
       period.assets[asset.symbol] = {}
       for (const [timeframeId, entry] of Object.entries(series)) {
@@ -162,6 +162,7 @@ try {
           timeframeId,
           candles: entry.candles,
           lowerCandles: entry.lowerCandles,
+          higherCandles: entry.higherCandles,
           dataSource: source.source,
           startingCapital: result.assumptions.startingCapital,
           riskPct,

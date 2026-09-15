@@ -52,6 +52,12 @@ const LOWER_TIMEFRAME = {
   '1h': null,
 }
 
+const HIGHER_TIMEFRAME = {
+  '1h': '4h',
+  '4h': '1d',
+  '1d': null,
+}
+
 const csvCell = (value) => String(value ?? '').trim()
 
 const numberOrNull = (value) => {
@@ -613,6 +619,8 @@ export const evaluateTradeProfile = ({
   item,
   lowerItem = null,
   lowerTimeframeId = null,
+  higherItem = null,
+  higherTimeframeId = null,
   settings = DEFAULT_PRICE_ACTION_STRUCTURE,
 } = {}) => {
   const side = sideFromTrend(item?.trend)
@@ -741,6 +749,8 @@ export const evaluateTradeProfile = ({
   const signalItem = lowerTimeframeId && lowerItem?.candleSignal ? lowerItem : item
   const refinement = side ? candleRefinement({ side, signal: signalItem?.candleSignal }) : null
   const requireCandleSignal = settings.requireCandleSignal === true
+  const requireHigherTimeframeAlignment = settings.requireHigherTimeframeAlignment === true
+  const higherTimeframeAligned = !higherItem || higherItem.trend === item?.trend
 
   const gates = [
     gate('trend', 'struktura má směr', Boolean(side), item?.reason ?? null),
@@ -749,6 +759,13 @@ export const evaluateTradeProfile = ({
     gate('pullback', `${settings.pullbackPct ?? 50}% pullback`, pulledBack, Number.isFinite(pullback) ? String(pullback) : null),
     gate('rr', `R/R alespoň ${minRewardRisk}:1`, Number.isFinite(rewardRisk) && rewardRisk >= minRewardRisk, Number.isFinite(rewardRisk) ? rewardRisk.toFixed(2) : null),
     gate('candle', 'potvrzení svíčkou', refinement?.status === 'met', refinement?.note ?? null, !requireCandleSignal),
+    gate(
+      'higher-trend',
+      `vyšší timeframe ${higherTimeframeId ?? 'kontext'} je ve stejném směru`,
+      higherTimeframeAligned,
+      higherItem?.trend ?? null,
+      !requireHigherTimeframeAlignment || !higherItem
+    ),
   ]
   const ready = gates.every((itemGate) => itemGate.passed !== false)
   const status = ready ? 'ready' : side ? 'watch' : 'neutral'
@@ -759,6 +776,7 @@ export const evaluateTradeProfile = ({
     riskPct,
     minRewardRisk,
     requireCandleSignal,
+    requireHigherTimeframeAlignment,
     pullbackPct: settings.pullbackPct ?? 50,
     zone: activeZone,
     zoneHit,
@@ -893,10 +911,13 @@ const attachTradeProfiles = (trends, settings) => {
     const item = trends[timeframe.id]
     if (!item) continue
     const lowerTimeframeId = LOWER_TIMEFRAME[timeframe.id]
+    const higherTimeframeId = HIGHER_TIMEFRAME[timeframe.id]
     item.tradeProfile = evaluateTradeProfile({
       item,
       lowerItem: lowerTimeframeId ? trends[lowerTimeframeId] : null,
       lowerTimeframeId,
+      higherItem: higherTimeframeId ? trends[higherTimeframeId] : null,
+      higherTimeframeId,
       settings,
     })
   }

@@ -351,6 +351,41 @@ test('optional candle confirmation can filter a zone hit without changing the de
   assert.equal(confirmedProfile.gates.find((entry) => entry.id === 'candle').status, 'unmet')
 })
 
+test('optional higher-timeframe alignment filters an opposing trend without changing the default', () => {
+  const item = {
+    trend: 'up',
+    lastCandle: candle(START, 106, 107, 102, 103),
+    structure: {
+      high: { current: { price: 120 } },
+      low: { current: { price: 100 } },
+    },
+    zones: {
+      nearbyDemand: [{ type: 'demand', low: 100, high: 105 }],
+      nearbySupply: [{ type: 'supply', low: 140, high: 145 }],
+      unfilledDemand: [{ type: 'demand', low: 100, high: 105 }],
+      unfilledSupply: [{ type: 'supply', low: 140, high: 145 }],
+    },
+  }
+  const higherItem = { trend: 'down' }
+
+  const defaultProfile = evaluateTradeProfile({
+    item,
+    higherItem,
+    higherTimeframeId: '4h',
+    settings: { pullbackPct: 50, minRewardRisk: 2 },
+  })
+  const alignedProfile = evaluateTradeProfile({
+    item,
+    higherItem,
+    higherTimeframeId: '4h',
+    settings: { pullbackPct: 50, minRewardRisk: 2, requireHigherTimeframeAlignment: true },
+  })
+
+  assert.equal(defaultProfile.gates.find((entry) => entry.id === 'higher-trend').status, 'neutral')
+  assert.equal(alignedProfile.status, 'watch')
+  assert.equal(alignedProfile.gates.find((entry) => entry.id === 'higher-trend').status, 'unmet')
+})
+
 test('a deeper entry inside the zone can rescue reward/risk', () => {
   const item = {
     trend: 'up',

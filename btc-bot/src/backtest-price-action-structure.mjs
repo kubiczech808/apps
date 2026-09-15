@@ -11,6 +11,7 @@ import {
 } from './strategy-price-action-structure.mjs'
 
 const LOWER_TIMEFRAME = { '1h': null, '4h': '1h', '1d': '4h' }
+const HIGHER_TIMEFRAME = { '1h': '4h', '4h': '1d', '1d': null }
 const TIMEFRAME_HOURS = { '1h': 1, '4h': 4, '1d': 24 }
 
 const finite = (value) => Number.isFinite(Number(value))
@@ -100,6 +101,7 @@ export const runPriceActionStructureBacktest = ({
   timeframeId,
   candles = [],
   lowerCandles = [],
+  higherCandles = [],
   dataSource = null,
   startingCapital = 100,
   riskPct = 1,
@@ -185,6 +187,10 @@ export const runPriceActionStructureBacktest = ({
     const lowerItem = lowerTimeframeId && lowerCandles.length
       ? structureAt({ candles: lowerCandles, timeframeId: lowerTimeframeId, throughTime: candle.time })
       : null
+    const higherTimeframeId = HIGHER_TIMEFRAME[timeframeId]
+    const higherItem = higherTimeframeId && higherCandles.length
+      ? structureAt({ candles: higherCandles, timeframeId: higherTimeframeId, throughTime: candle.time })
+      : null
     const lowerClosedItem = lowerTimeframeId && lowerCandles.length
       ? structureAt({ candles: lowerCandles, timeframeId: lowerTimeframeId, throughTime: candleEnd })
       : null
@@ -196,6 +202,8 @@ export const runPriceActionStructureBacktest = ({
       item: { ...item, lastCandle: { ...item.lastCandle, ...candle } },
       lowerItem,
       lowerTimeframeId,
+      higherItem,
+      higherTimeframeId,
       settings,
     })
     const profiledItem = { ...item, tradeProfile }
