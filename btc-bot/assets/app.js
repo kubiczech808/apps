@@ -14,6 +14,7 @@
 const KEY_STORAGE = 'btc-bot-key'
 const STRATEGY_VIEW_STORAGE = 'btc-bot-strategy-view-v2'
 const BACKTEST_SELECTION_STORAGE = 'btc-bot-backtest-selection-v1'
+const BACKTEST_PERIOD_STORAGE = 'btc-bot-backtest-period-v1'
 const REFRESH_MS = 30_000
 const SATS_PER_BTC = 1e8
 const DECISION_SIGNAL_STATES = new Set(['met', 'unmet', 'neutral'])
@@ -874,6 +875,24 @@ const setBacktestSelection = (selection) => {
     localStorage.setItem(BACKTEST_SELECTION_STORAGE, JSON.stringify(selection))
   } catch {
     /* private browsing: the selection simply does not persist */
+  }
+}
+
+const getBacktestPeriod = (available) => {
+  try {
+    const stored = localStorage.getItem(BACKTEST_PERIOD_STORAGE)
+    if (stored && available.includes(stored)) return stored
+  } catch {
+    /* private browsing: use the newest available period */
+  }
+  return available.at(-1) ?? 'current'
+}
+
+const setBacktestPeriod = (value) => {
+  try {
+    localStorage.setItem(BACKTEST_PERIOD_STORAGE, value)
+  } catch {
+    /* private browsing: the period simply does not persist */
   }
 }
 
@@ -2177,7 +2196,7 @@ const requestBacktests = async () => {
   const button = $('run-backtests')
   const status = $('backtests-status')
   if (button) button.disabled = true
-  if (status) status.textContent = 'Backtesty byly zařazeny. Aktuální runner je spustí nad právě nasazenou verzí PA-1.'
+  if (status) status.textContent = 'Backtest všech assetů a období byl zařazen. Běží na serveru i po zavření prohlížeče.'
   try {
     await api('command', { method: 'POST', body: { command: 'run-backtests' } })
     if (status) status.className = 'backtests-status pos'
@@ -2190,7 +2209,7 @@ const requestBacktests = async () => {
   }
 }
 
-const backtestRowKey = (symbol, timeframeId) => `${symbol}:${timeframeId}`
+const backtestRowKey = (periodId, symbol, timeframeId) => `${periodId}:${symbol}:${timeframeId}`
 
 const backtestTimestamp = (value) => {
   if (Number.isFinite(Number(value))) return Number(value)
@@ -2202,7 +2221,7 @@ const aggregateBacktestRows = (rows, selection, fallback = null) => {
   const canRecompute = rows.some(({ result }) => Array.isArray(result?.tradeLog))
   if (!canRecompute) return fallback
 
-  const selectedRows = rows.filter(({ symbol, timeframeId }) => selection[backtestRowKey(symbol, timeframeId)] !== false)
+  const selectedRows = rows.filter(({ periodId, symbol, timeframeId }) => selection[backtestRowKey(periodId, symbol, timeframeId)] !== false)
   const candidates = selectedRows.flatMap(({ symbol, timeframeId, result }) =>
     (Array.isArray(result?.tradeLog) ? result.tradeLog : [])
       .map((trade, order) => ({ ...trade, asset: symbol, timeframeId, order }))
@@ -2288,8 +2307,14 @@ const backtestSummaryMetric = (label, value) => el('div', { className: 'backtest
 const renderPriceActionBacktests = (host) => {
   const document = state?.backtests ?? {}
   const run = document.run ?? null
-  const rows = Object.entries(document.assets ?? {}).flatMap(([symbol, timeframes]) =>
-    Object.entries(timeframes ?? {}).map(([timeframeId, result]) => ({ symbol, timeframeId, result }))
+  const periodReports = Object.entries(document.periods ?? {})
+    .filter(([, report]) => report && typeof report === 'object')
+    .sort(([left], [right]) => Number(left) - Number(right))
+  const availablePeriods = periodReports.length ? periodReports.map(([periodId]) => periodId) : ['current']
+  const selectedPeriodId = getBacktestPeriod(availablePeriods)
+  const selectedPeriod = periodReports.find(([periodId]) => periodId === selectedPeriodId)?.[1] ?? document
+  const rows = Object.entries(selectedPeriod.assets ?? {}).flatMap(([symbol, timeframes]) =>
+    Object.entries(timeframes ?? {}).map(([timeframeId, result]) => ({ periodId: selectedPeriodId, symbol, timeframeId, result }))
   )
   const statusText = run?.status === 'running'
     ? `Probíhá nový běh od ${when(run.startedAt ?? run.requestedAt)}. Dosavadní výsledky zůstávají zobrazené do publikování nového reportu.`
@@ -2312,13 +2337,27 @@ const renderPriceActionBacktests = (host) => {
       id: 'run-backtests',
       type: 'button',
       className: 'primary',
-      text: run?.status === 'running' ? 'Backtesty probíhají' : 'Spustit backtesty',
+      text: run?.status === 'running' ? 'Backtesty probíhají' : 'Spustit vše',
       disabled: run?.status === 'running' ? 'disabled' : null,
     }),
   ])
   const button = controls.querySelector('#run-backtests')
   button.onclick = requestBacktests
-  host.append(controls)
+  const periodTabs = el('div', { className: 'tabs backtest-period-tabs', role: 'tablist', 'aria-label': 'Období backtestu' }, availablePeriods.map((periodId) => {
+    const label = periodId === 'current' ? 'Aktuální' : `${periodId} roky`
+    const periodButton = el('button', {
+      type: 'button',
+      role: 'tab',
+      'aria-selected': String(periodId === selectedPeriodId),
+      text: label,
+    })
+    periodButton.onclick = () => {
+      setBacktestPeriod(periodId)
+      renderBacktests()
+    }
+    return periodButton
+  }))
+  host.append(controls, periodTabs)
 
   if (!rows.length) {
     host.append(el('p', { className: 'empty', text: 'Výsledky se objeví po dokončení prvního běhu.' }))
@@ -2326,7 +2365,7 @@ const renderPriceActionBacktests = (host) => {
   }
 
   const selection = getBacktestSelection()
-  const portfolio = aggregateBacktestRows(rows, selection, document.portfolio)
+  const portfolio = aggregateBacktestRows(rows, selection, selectedPeriod.portfolio)
   const portfolioMetrics = portfolio
     ? [
         backtestSummaryMetric('p.a.', backtestValue(portfolio.cagrPct, 1, ' %')),
@@ -2340,7 +2379,7 @@ const renderPriceActionBacktests = (host) => {
     : []
   host.append(el('section', { className: 'backtest-portfolio-summary' }, [
     el('div', { className: 'backtest-portfolio-head' }, [
-      el('h3', { text: 'Portfolio PA-1' }),
+      el('h3', { text: `Portfolio PA-1 · ${selectedPeriodId === 'current' ? 'aktuální' : `${selectedPeriodId} roky`}` }),
       el('span', { text: portfolio?.from && portfolio?.to ? backtestPeriod(portfolio) : 'Období není k dispozici' }),
     ]),
     el('div', { className: 'backtest-summary-metrics' }, portfolioMetrics),
@@ -2367,7 +2406,7 @@ const renderPriceActionBacktests = (host) => {
   ])
   const body = table.querySelector('tbody')
   for (const { symbol, timeframeId, result } of rows) {
-    const key = backtestRowKey(symbol, timeframeId)
+    const key = backtestRowKey(selectedPeriodId, symbol, timeframeId)
     const included = selection[key] !== false
     const row = el('tr', {
       className: `backtest-selection-row ${included ? 'backtest-included' : 'backtest-excluded'}`,

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Build the published PA-1 research summary for the dashboard.
-// Intraday FX history is limited by the public Yahoo endpoint; the output
-// keeps the actual period per row instead of presenting it as four years.
+// Intraday FX history is limited by the public Yahoo endpoint; every published
+// row keeps its actual period instead of presenting a longer requested window.
 
 import { writeFile } from 'node:fs/promises'
 import { aggregate, fetchBinanceCandles } from '../src/candles.mjs'
@@ -26,7 +26,8 @@ for (let index = 2; index < process.argv.length; index += 1) {
   if (value && !value.startsWith('--')) index += 1
 }
 
-const years = Number(args.get('years') ?? 4)
+const years = Number(args.get('years') ?? 10)
+const periodYears = [1, 3, 5, 10].filter((value) => value <= years)
 const output = String(args.get('output') ?? 'data/backtests.json')
 const now = Date.now()
 const publish = args.get('publish') === true
@@ -49,7 +50,7 @@ const maxNotionalPct = Number(riskSettings.maxNotionalPct ?? 300)
 
 const fetchFx = async (asset) => {
   const hourly = await fetchYahooCandles({ symbol: asset.yahooSymbol, interval: '1h', range: '2y' })
-  const daily = await fetchYahooCandles({ symbol: asset.yahooSymbol, interval: '1d', range: '5y' })
+  const daily = await fetchYahooCandles({ symbol: asset.yahooSymbol, interval: '1d', range: `${Math.max(5, Math.min(years, 10))}y` })
   return { hourly, fourHourly: aggregate(hourly, 4), daily }
 }
 
@@ -63,14 +64,29 @@ const sources = PRICE_ACTION_ASSETS.map((asset) => ({
   fetch: asset.symbol === 'BTCUSD' ? fetchBtc : () => fetchFx(asset),
   source: asset.symbol === 'BTCUSD'
     ? 'Binance BTCUSDT 1H; higher timeframes aggregated UTC'
-    : `Yahoo Finance ${asset.yahooSymbol}; 1H/4H up to 2Y, 1D up to 5Y`,
+    : `Yahoo Finance ${asset.yahooSymbol}; 1H/4H up to 2Y, 1D up to ${Math.max(5, Math.min(years, 10))}Y`,
 }))
+
+const sliceYears = (candles, yearsBack) => {
+  const latest = candles.at(-1)?.time
+  if (!Number.isFinite(Number(latest))) return candles
+  const cutoff = latest - yearsBack * 365.25 * 24 * 60 * 60 * 1000
+  let low = 0
+  let high = candles.length
+  while (low < high) {
+    const middle = Math.floor((low + high) / 2)
+    if (candles[middle].time < cutoff) low = middle + 1
+    else high = middle
+  }
+  return candles.slice(low)
+}
 
 const result = {
   strategyId: 'price-action-structure-v1',
   strategyLabel: 'PA-1 Price Action Structure',
   generatedAt: new Date(now).toISOString(),
   requestedYears: years,
+  periodsRequested: periodYears,
   assumptions: {
     startingCapital: 100,
     riskPct,
@@ -81,6 +97,7 @@ const result = {
   },
   settings: priceActionSettings,
   assets: {},
+  periods: {},
 }
 
 const store = publish
@@ -100,38 +117,63 @@ try {
     })
   }
 
+  const fetched = []
   for (const source of sources) {
-    const { asset } = source
-    const candles = await source.fetch()
-  const series = {
-    '1h': { candles: candles.hourly, lowerCandles: [], label: '1H' },
-    '4h': { candles: candles.fourHourly, lowerCandles: candles.hourly, label: '4H' },
-    '1d': { candles: candles.daily, lowerCandles: candles.fourHourly, label: '1D' },
+    fetched.push({ source, candles: await source.fetch() })
   }
-    result.assets[asset.symbol] = {}
-  for (const [timeframeId, entry] of Object.entries(series)) {
-    const report = runPriceActionStructureBacktest({
-      asset: asset.symbol,
-      timeframeId,
-      candles: entry.candles,
-      lowerCandles: entry.lowerCandles,
-      dataSource: source.source,
+
+  for (const yearsBack of periodYears) {
+    const period = { requestedYears: yearsBack, assets: {} }
+    for (const { source, candles } of fetched) {
+      const { asset } = source
+      const hourly = sliceYears(candles.hourly, yearsBack)
+      const fourHourly = sliceYears(candles.fourHourly, yearsBack)
+      const daily = sliceYears(candles.daily, yearsBack)
+      const series = {
+        '1h': { candles: hourly, lowerCandles: [], label: '1H' },
+        '4h': { candles: fourHourly, lowerCandles: hourly, label: '4H' },
+        '1d': { candles: daily, lowerCandles: fourHourly, label: '1D' },
+      }
+      period.assets[asset.symbol] = {}
+      for (const [timeframeId, entry] of Object.entries(series)) {
+        const report = runPriceActionStructureBacktest({
+          asset: asset.symbol,
+          timeframeId,
+          candles: entry.candles,
+          lowerCandles: entry.lowerCandles,
+          dataSource: source.source,
+          startingCapital: result.assumptions.startingCapital,
+          riskPct,
+          feeRate,
+          settings: { ...priceActionSettings, maxNotionalPct },
+        })
+        period.assets[asset.symbol][timeframeId] = { ...report, label: entry.label }
+        console.log(`${yearsBack}Y ${asset.symbol} ${entry.label}: ${report.cagrPct?.toFixed(2) ?? 'n/a'}% p.a., ${report.trades} trades, DD ${report.maxDrawdownPct?.toFixed(2) ?? 'n/a'}%, ready ${report.readyProfiles ?? 0}, zones hit ${report.zoneHits ?? 0}, ${report.from ?? 'n/a'} -> ${report.to ?? 'n/a'}`)
+      }
+    }
+    period.portfolio = aggregatePriceActionBacktests({
+      assets: period.assets,
       startingCapital: result.assumptions.startingCapital,
-      riskPct,
-      feeRate,
-      settings: { ...priceActionSettings, maxNotionalPct },
+      riskPct: result.assumptions.riskPct,
     })
-      result.assets[asset.symbol][timeframeId] = { ...report, label: entry.label }
-      console.log(`${asset.symbol} ${entry.label}: ${report.cagrPct?.toFixed(2) ?? 'n/a'}% p.a., ${report.trades} trades, DD ${report.maxDrawdownPct?.toFixed(2) ?? 'n/a'}%, ready ${report.readyProfiles ?? 0}, zones hit ${report.zoneHits ?? 0}, ${report.from ?? 'n/a'} -> ${report.to ?? 'n/a'}`)
+    result.periods[String(yearsBack)] = period
+    console.log(`Portfolio ${yearsBack}Y: ${period.portfolio.cagrPct?.toFixed(2) ?? 'n/a'}% p.a., ${period.portfolio.trades} trades, DD ${period.portfolio.maxDrawdownPct?.toFixed(2) ?? 'n/a'}%, overlap skipped ${period.portfolio.overlapSkipped}`)
+    if (store) {
+      await store.saveBacktests({
+        ...result,
+        run: {
+          status: 'running',
+          requestedAt: result.generatedAt,
+          startedAt: result.generatedAt,
+          completedPeriods: periodYears.slice(0, periodYears.indexOf(yearsBack) + 1),
+        },
+      })
     }
   }
 
-  result.portfolio = aggregatePriceActionBacktests({
-    assets: result.assets,
-    startingCapital: result.assumptions.startingCapital,
-    riskPct: result.assumptions.riskPct,
-  })
-  console.log(`Portfolio: ${result.portfolio.cagrPct?.toFixed(2) ?? 'n/a'}% p.a., ${result.portfolio.trades} trades, DD ${result.portfolio.maxDrawdownPct?.toFixed(2) ?? 'n/a'}%, overlap skipped ${result.portfolio.overlapSkipped}`)
+  const defaultPeriod = result.periods[String(Math.max(...periodYears))]
+  result.assets = defaultPeriod?.assets ?? {}
+  result.portfolio = defaultPeriod?.portfolio ?? null
 
   result.run = { status: 'complete', requestedAt: result.generatedAt, completedAt: new Date().toISOString() }
   await writeFile(output, `${JSON.stringify(result, null, 2)}\n`, 'utf8')

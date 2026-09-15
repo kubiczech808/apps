@@ -749,6 +749,7 @@ tbody tr:hover { background: var(--series-1-soft); }
 .backtest-summary-metric span { color: var(--text-muted); font-size: 11px; }
 .backtest-summary-metric strong { margin-top: 2px; font-variant-numeric: tabular-nums; }
 .backtest-portfolio-note { margin: 10px 0 0; }
+.backtest-period-tabs { margin: 0 0 14px; }
 .backtest-results-table th,
 .backtest-results-table td { white-space: nowrap; text-align: right; }
 .backtest-results-table th:first-child,
