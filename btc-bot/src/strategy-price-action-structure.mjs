@@ -2,10 +2,10 @@ import { aggregate, HOUR_MS } from './candles.mjs'
 import { buildZones, candleSignal, marketStructure } from './priceaction.mjs'
 
 export const PRICE_ACTION_STRUCTURE_ID = 'price-action-structure-v1'
-export const PRICE_ACTION_MATRIX_SCHEMA = 4
+export const PRICE_ACTION_MATRIX_SCHEMA = 5
 
 export const DEFAULT_PRICE_ACTION_STRUCTURE = {
-  trendLookback: 2,
+  zoneLookback: 2,
   minCandles: 40,
   refreshMinutes: 15,
   zoneMaxAgeCandles: 400,
@@ -13,6 +13,15 @@ export const DEFAULT_PRICE_ACTION_STRUCTURE = {
   minRewardRisk: 2,
   riskPct: 1,
   stopBufferPct: 0.02,
+}
+
+// Main structure and execution zones deliberately use different resolutions.
+// Structure needs the external swings visible on the chart; zones still need
+// the smaller reactions from which an entry can actually be refined.
+export const PRICE_ACTION_STRUCTURE_PROFILES = {
+  '1h': { historyDays: 60, pivotLookback: 48, minCandles: 500 },
+  '4h': { historyDays: 180, pivotLookback: 42, minCandles: 250 },
+  '1d': { historyDays: 400, pivotLookback: 30, minCandles: 160 },
 }
 
 export const PRICE_ACTION_ASSETS = [
@@ -193,15 +202,82 @@ const structureLeg = ({ previous, current, higherLabel, lowerLabel, breaksByClos
 const closeBreaksHigh = (current, previous) => current.candle?.close > previous.price
 const closeBreaksLow = (current, previous) => current.candle?.close < previous.price
 
-const structureEvent = ({ trend, latest, latestIndex, highLeg, lowLeg }) => {
-  if (!latest) return null
-  const lastHigh = highLeg?.current
-  const lastLow = lowLeg?.current
-  const highBreak = lastHigh && latestIndex > lastHigh.candleIndex && latest.close > lastHigh.price
-  const lowBreak = lastLow && latestIndex > lastLow.candleIndex && latest.close < lastLow.price
-  if (highBreak) return trend === 'down' ? 'CHoCH_UP' : 'BOS_UP'
-  if (lowBreak) return trend === 'up' ? 'CHoCH_DOWN' : 'BOS_DOWN'
-  return null
+const persistentStructureTrend = (candles, swings, lookback) => {
+  const confirmations = new Map()
+  for (const swing of swings) {
+    const confirmedAt = swing.index + lookback
+    confirmations.set(confirmedAt, [...(confirmations.get(confirmedAt) ?? []), swing])
+  }
+
+  const highs = []
+  const lows = []
+  let trend = 'flat'
+  let latestEvent = null
+
+  for (let index = 0; index < candles.length; index += 1) {
+    for (const swing of confirmations.get(index) ?? []) {
+      if (swing.kind === 'high') highs.push(swing)
+      else lows.push(swing)
+    }
+
+    const lastHigh = highs.at(-1)
+    const previousHigh = highs.at(-2)
+    const lastLow = lows.at(-1)
+    const previousLow = lows.at(-2)
+    const current = candles[index]
+    const previous = candles[index - 1]
+
+    if (trend === 'flat' && lastHigh && previousHigh && lastLow && previousLow) {
+      const highLabel = closeBreaksHigh(lastHigh, previousHigh) ? 'HH' : 'LH'
+      const lowLabel = closeBreaksLow(lastLow, previousLow) ? 'LL' : 'HL'
+      if (highLabel === 'HH' && lowLabel === 'HL') trend = 'up'
+      else if (highLabel === 'LH' && lowLabel === 'LL') trend = 'down'
+    }
+
+    const crossedAbove = lastHigh && current.close > lastHigh.price && previous?.close <= lastHigh.price
+    const crossedBelow = lastLow && current.close < lastLow.price && previous?.close >= lastLow.price
+    if (trend === 'up' && crossedBelow) {
+      latestEvent = {
+        type: 'CHoCH_DOWN',
+        direction: 'down',
+        fromTrend: 'up',
+        index,
+        time: current.time,
+        close: current.close,
+        referencePrice: lastLow.price,
+        referenceTime: lastLow.time,
+      }
+      trend = 'down'
+    } else if (trend === 'down' && crossedAbove) {
+      latestEvent = {
+        type: 'CHoCH_UP',
+        direction: 'up',
+        fromTrend: 'down',
+        index,
+        time: current.time,
+        close: current.close,
+        referencePrice: lastHigh.price,
+        referenceTime: lastHigh.time,
+      }
+      trend = 'up'
+    } else if (trend === 'up' && crossedAbove) {
+      latestEvent = {
+        type: 'BOS_UP', direction: 'up', fromTrend: 'up', index, time: current.time,
+        close: current.close, referencePrice: lastHigh.price, referenceTime: lastHigh.time,
+      }
+    } else if (trend === 'down' && crossedBelow) {
+      latestEvent = {
+        type: 'BOS_DOWN', direction: 'down', fromTrend: 'down', index, time: current.time,
+        close: current.close, referencePrice: lastLow.price, referenceTime: lastLow.time,
+      }
+    }
+  }
+
+  const recentCutoff = candles.length - 1 - lookback
+  return {
+    trend,
+    event: latestEvent?.index >= recentCutoff ? latestEvent : null,
+  }
 }
 
 const laterCandles = (candles, zone) => candles.slice((zone.lastIndex ?? zone.firstIndex ?? 0) + 1)
@@ -524,7 +600,10 @@ const fetchFxCandles = async ({ asset, timeframeId, fetchImpl, now, logger }) =>
   return { source: null, candles: [], failures }
 }
 
-export const classifyStructure = (candles, { lookback = 2, minCandles = 40, zoneMaxAgeCandles = 400 } = {}) => {
+export const classifyStructure = (
+  candles,
+  { lookback = 2, zoneLookback = 2, minCandles = 40, zoneMaxAgeCandles = 400, historyDays = null } = {}
+) => {
   if (!Array.isArray(candles) || candles.length < minCandles) {
     return {
       trend: 'flat',
@@ -558,18 +637,29 @@ export const classifyStructure = (candles, { lookback = 2, minCandles = 40, zone
   })
   const highText = highLeg?.label ?? null
   const lowText = lowLeg?.label ?? null
-  let trend = 'flat'
-  if (highText === 'HH' && lowText === 'HL') trend = 'up'
-  else if (highText === 'LH' && lowText === 'LL') trend = 'down'
+  const localTrend = highText === 'HH' && lowText === 'HL'
+    ? 'up'
+    : highText === 'LH' && lowText === 'LL' ? 'down' : 'flat'
+  const persistent = persistentStructureTrend(candles, structure.swings, lookback)
+  const trend = persistent.trend
+  const structureBreak = persistent.event
+  const establishedTrend = structureBreak?.type.startsWith('CHoCH') ? structureBreak.fromTrend : trend
   const status = trend === 'up' ? 'met' : trend === 'down' ? 'unmet' : 'neutral'
-  const latestIndex = candles.length - 1
-  const event = structureEvent({ trend, latest, latestIndex, highLeg, lowLeg })
+  const contextHigh = candles.reduce((best, candle) => !best || candle.high > best.high ? candle : best, null)
+  const contextLow = candles.reduce((best, candle) => !best || candle.low < best.low ? candle : best, null)
+  const reason = structureBreak?.type.startsWith('CHoCH')
+    ? `${structureBreak.type} close ${structureBreak.close} přes hlavní úroveň ${structureBreak.referencePrice}; předchozí ${[highText, lowText].filter(Boolean).join(' + ')}`
+    : trend !== 'flat' && localTrend !== trend
+      ? `hlavní struktura drží ${trend}; poslední pivoty ${[highText, lowText].filter(Boolean).join(' + ')} obrat nepotvrdily`
+      : [highText, lowText].filter(Boolean).join(' + ') || 'bez potvrzených pivotů'
 
   return {
     trend,
+    establishedTrend,
     status,
-    event,
-    reason: [highText, lowText].filter(Boolean).join(' + ') || 'bez potvrzených pivotů',
+    event: structureBreak?.type ?? null,
+    eventDetail: structureBreak,
+    reason,
     price: latest?.close ?? null,
     asOf: latest?.time ?? null,
     candles: candles.length,
@@ -579,13 +669,26 @@ export const classifyStructure = (candles, { lookback = 2, minCandles = 40, zone
     lastLow: structure.lastLow?.price ?? null,
     structure: {
       lookback,
+      zoneLookback,
+      historyDays,
+      from: candles[0]?.time ?? null,
+      to: latest?.time ?? null,
+      contextHigh: contextHigh ? { price: contextHigh.high, time: contextHigh.time } : null,
+      contextLow: contextLow ? { price: contextLow.low, time: contextLow.time } : null,
       swingCount: structure.swings.length,
       high: highLeg,
       low: lowLeg,
       recentSwings: structure.swings.slice(-8).map((swing) => pivotSummary(swing)),
     },
-    zones: activeSupplyDemandZones(candles, { lookback, maxAgeCandles: zoneMaxAgeCandles }),
+    zones: activeSupplyDemandZones(candles, { lookback: zoneLookback, maxAgeCandles: zoneMaxAgeCandles }),
   }
+}
+
+const candlesInHistory = (candles, historyDays) => {
+  const latestTime = candles.at(-1)?.time
+  if (!Number.isFinite(latestTime) || !(historyDays > 0)) return candles
+  const cutoff = latestTime - historyDays * 24 * HOUR_MS
+  return candles.filter((candle) => candle.time >= cutoff)
 }
 
 const timeframeCandles = async ({ asset, timeframe, btcHourly, fetchImpl, now, logger }) => {
@@ -637,12 +740,18 @@ export const buildPriceActionMatrix = async ({
     const failures = []
     for (const timeframe of PRICE_ACTION_TIMEFRAMES) {
       const result = await timeframeCandles({ asset, timeframe, btcHourly, fetchImpl, now, logger })
+      const profile = PRICE_ACTION_STRUCTURE_PROFILES[timeframe.id]
+      const analysisCandles = candlesInHistory(result.candles, profile.historyDays)
       if (result.source) sources.add(result.source)
       for (const failure of result.failures ?? []) failures.push(`${timeframe.label}: ${failure}`)
-      trends[timeframe.id] = classifyStructure(result.candles, {
-        lookback: merged.trendLookback,
-        minCandles: merged.minCandles,
+      trends[timeframe.id] = classifyStructure(analysisCandles, {
+        lookback: profile.pivotLookback,
+        zoneLookback: merged.zoneLookback,
+        minCandles: Number(merged.minCandles) !== DEFAULT_PRICE_ACTION_STRUCTURE.minCandles
+          ? Number(merged.minCandles)
+          : profile.minCandles,
         zoneMaxAgeCandles: merged.zoneMaxAgeCandles,
+        historyDays: profile.historyDays,
       })
     }
     attachTradeProfiles(trends, merged)

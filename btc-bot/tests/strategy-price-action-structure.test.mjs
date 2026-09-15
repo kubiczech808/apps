@@ -9,6 +9,7 @@ import {
   fetchStooqCandles,
   PRICE_ACTION_ASSETS,
   PRICE_ACTION_MATRIX_SCHEMA,
+  PRICE_ACTION_STRUCTURE_PROFILES,
 } from '../src/strategy-price-action-structure.mjs'
 import { candle, HOUR, START, zigzag } from './helpers.mjs'
 
@@ -96,6 +97,61 @@ test('structure labels require candle closes beyond previous swing wicks', () =>
   )
   const lowBreak = classifyStructure(closeConfirmedLowBreak, { lookback: 1, minCandles: 8 })
   assert.equal(lowBreak.structure.low.label, 'LL')
+})
+
+test('a recent close through a major counter-swing changes the established trend', () => {
+  const established = zigzag([100, 120, 112, 140, 130, 160], { steps: 8 })
+  const before = classifyStructure(established, { lookback: 2, minCandles: 20 })
+  assert.equal(before.trend, 'up')
+
+  const wickSweep = [
+    ...established,
+    candle(established.at(-1).time + HOUR, 155, 156, before.structure.low.current.price - 2, before.structure.low.current.price + 1),
+  ]
+  const afterWick = classifyStructure(wickSweep, { lookback: 2, minCandles: 20 })
+  assert.equal(afterWick.trend, 'up')
+  assert.notEqual(afterWick.event, 'CHoCH_DOWN')
+
+  const broken = [
+    ...wickSweep,
+    candle(wickSweep.at(-1).time + HOUR, 131, 133, 120, before.structure.low.current.price - 1),
+  ]
+  const after = classifyStructure(broken, { lookback: 2, minCandles: 20 })
+  assert.equal(after.establishedTrend, 'up')
+  assert.equal(after.trend, 'down')
+  assert.equal(after.event, 'CHoCH_DOWN')
+  assert.equal(after.eventDetail.referencePrice, before.structure.low.current.price)
+})
+
+test('mixed local pivots do not erase the established external trend', () => {
+  const upWithPullback = classifyStructure(
+    zigzag([100, 120, 110, 140, 125, 135, 130, 134], { steps: 8 }),
+    { lookback: 2, minCandles: 20 }
+  )
+  assert.equal(upWithPullback.structure.high.label, 'LH')
+  assert.equal(upWithPullback.structure.low.label, 'HL')
+  assert.equal(upWithPullback.trend, 'up')
+  assert.match(upWithPullback.reason, /obrat nepotvrdily/)
+
+  const downWithBounce = classifyStructure(
+    zigzag([160, 130, 150, 110, 140, 120, 135, 122], { steps: 8 }),
+    { lookback: 2, minCandles: 20 }
+  )
+  assert.equal(downWithBounce.structure.high.label, 'LH')
+  assert.equal(downWithBounce.structure.low.label, 'HL')
+  assert.equal(downWithBounce.trend, 'down')
+  assert.match(downWithBounce.reason, /obrat nepotvrdily/)
+})
+
+test('structure horizons and pivot widths scale with timeframe', () => {
+  assert.deepEqual(PRICE_ACTION_STRUCTURE_PROFILES, {
+    '1h': { historyDays: 60, pivotLookback: 48, minCandles: 500 },
+    '4h': { historyDays: 180, pivotLookback: 42, minCandles: 250 },
+    '1d': { historyDays: 400, pivotLookback: 30, minCandles: 160 },
+  })
+  assert.ok(PRICE_ACTION_STRUCTURE_PROFILES['1d'].historyDays > 365)
+  assert.ok(PRICE_ACTION_STRUCTURE_PROFILES['4h'].historyDays >= 180)
+  assert.ok(PRICE_ACTION_STRUCTURE_PROFILES['1h'].historyDays >= 30)
 })
 
 test('supply and demand zones stay valid unless their own timeframe closes through them', () => {
@@ -258,6 +314,10 @@ test('price-action matrix covers BTCUSD and major FX pairs on 1H, 4H and 1D', as
   for (const asset of matrix.assets) {
     assert.deepEqual(Object.keys(asset.trends), ['1h', '4h', '1d'])
   }
+  assert.equal(matrix.assets[0].trends['1h'].structure.lookback, 48)
+  assert.equal(matrix.assets[0].trends['1h'].structure.historyDays, 60)
+  assert.equal(matrix.assets[0].trends['4h'].structure.lookback, 42)
+  assert.equal(matrix.assets[0].trends['4h'].structure.historyDays, 180)
   assert.ok(matrix.assets[0].trends['4h'].zones)
   assert.ok(matrix.assets[0].trends['4h'].tradeProfile)
 })

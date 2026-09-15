@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { reconcileBrackets, roundStop, roundTarget, runPass, strategyIdForPosition } from '../src/bot.mjs'
+import { readConfig, reconcileBrackets, roundStop, roundTarget, runPass, strategyIdForPosition } from '../src/bot.mjs'
 import { LEGACY_PRICE_ACTION_ID } from '../src/strategy-registry.mjs'
 import { appendCandle, zigzag } from './helpers.mjs'
 
@@ -127,6 +127,10 @@ const noQualityFilters = (state = {}) => ({
   paper: { balanceSats: 0, trades: [], nextId: 1, lastFundingAt: null },
 })
 const nowAfter = (candles) => candles.at(-1).time + HOUR + 60_000
+
+test('default BTC history covers the 400-day daily structure window', () => {
+  assert.equal(readConfig({}).candleLimit, 10000)
+})
 
 test('a pass opens exactly one position, with a stop loss and a take profit', async () => {
   const candles = marketCandles()

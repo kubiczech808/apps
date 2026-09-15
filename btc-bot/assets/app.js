@@ -53,6 +53,13 @@ const when = (value) => {
   return date.toLocaleString('cs-CZ', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
 }
 
+const calendarDate = (value) => {
+  if (!value) return '–'
+  const date = typeof value === 'number' ? new Date(value) : new Date(String(value))
+  if (Number.isNaN(date.getTime())) return '–'
+  return date.toLocaleDateString('cs-CZ', { day: '2-digit', month: '2-digit', year: 'numeric' })
+}
+
 const ago = (value) => {
   if (!value) return 'nikdy'
   const then = typeof value === 'number' ? value : Date.parse(value)
@@ -506,12 +513,15 @@ const renderStructureDetail = ({ matrix, columns }) => {
   priceActionSelection ??= { symbol: asset.symbol, timeframeId: column.id }
   const structure = item.structure ?? {}
   const recent = structure.recentSwings ?? []
+  const trendShift = item.establishedTrend && item.establishedTrend !== item.trend
+    ? ` · změna z ${PRICE_ACTION_TREND_LABELS[item.establishedTrend] || item.establishedTrend}`
+    : ''
 
   return el('div', { className: 'structure-detail' }, [
     el('div', { className: 'structure-detail-head' }, [
       el('div', {}, [
         el('strong', { text: `${asset.symbol} · ${column.label}` }),
-        el('p', { text: `${PRICE_ACTION_TREND_LABELS[item.trend] || 'flat'} · ${item.reason || 'bez důvodu'}${item.event ? ` · ${item.event}` : ''}` }),
+        el('p', { text: `${PRICE_ACTION_TREND_LABELS[item.trend] || 'flat'}${trendShift} · ${item.reason || 'bez důvodu'}` }),
       ]),
       decisionFactElement(trendFact(item.trend, item)),
     ]),
@@ -524,12 +534,23 @@ const renderStructureDetail = ({ matrix, columns }) => {
     el('div', { className: 'structure-meta-line' }, [
       el('span', { text: `${item.candles ?? 0} svíček` }),
       el('span', { text: `${structure.swingCount ?? 0} potvrzených swingů` }),
-      el('span', { text: `lookback ${structure.lookback ?? '–'}` }),
+      Number.isFinite(structure.from) && Number.isFinite(structure.to)
+        ? el('span', { text: `období ${calendarDate(structure.from)} → ${calendarDate(structure.to)}` })
+        : null,
+      structure.historyDays ? el('span', { text: `horizont ${structure.historyDays} dní` }) : null,
+      el('span', { text: `hlavní pivot ±${structure.lookback ?? '–'} svíček` }),
+      el('span', { text: `zóny ±${structure.zoneLookback ?? '–'} svíčky` }),
       Number.isFinite(item.price) ? el('span', { text: `close ${quotePrice(item.price)}` }) : null,
     ]),
+    structure.contextHigh && structure.contextLow
+      ? el('p', {
+          className: 'zone-rule',
+          text: `Rozsah období: high ${quotePrice(structure.contextHigh.price)} (${calendarDate(structure.contextHigh.time)}) · low ${quotePrice(structure.contextLow.price)} (${calendarDate(structure.contextLow.time)})`,
+        })
+      : null,
     recent.length
       ? el('div', { className: 'recent-swings' }, [
-          el('strong', { text: 'Poslední potvrzené swingy' }),
+          el('strong', { text: 'Poslední potvrzené swingy · hlavní' }),
           el('div', { className: 'recent-swing-list' }, recent.map((swing) =>
             el('span', {
               className: `swing-pill swing-${swing.kind}`,

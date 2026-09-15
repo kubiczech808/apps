@@ -43,7 +43,10 @@ export const readConfig = (env = process.env) => ({
   runner: env.BOT_RUNNER || 'manual',
   leaseTtlMs: Number(env.BOT_LEASE_TTL_MS || 90_000),
   modeOverride: env.BOT_MODE || '',
-  candleLimit: Number(env.BOT_CANDLE_LIMIT || 3600),
+  // A 400-day 1D structure needs the underlying hourly history. The former
+  // 3600-hour default exposed only 150 daily candles and could not see the
+  // preceding macro swing or a yearly high.
+  candleLimit: Number(env.BOT_CANDLE_LIMIT || 10000),
   // Which LN Markets network to read the chart from when the bot itself is not
   // connected to one (paper mode). Mainnet, because that is the market being
   // simulated.
