@@ -697,6 +697,31 @@ tbody tr:hover { background: var(--series-1-soft); }
   justify-content: center;
   min-width: 86px;
 }
+.backtest-controls {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  margin-bottom: 14px;
+}
+.backtest-controls p { margin: 0; }
+.backtests-status { color: var(--text-secondary); }
+.backtest-assumptions { margin-top: 4px !important; color: var(--text-muted); font-size: 12px; }
+.backtest-results-table th,
+.backtest-results-table td { white-space: nowrap; text-align: right; }
+.backtest-results-table th:first-child,
+.backtest-results-table td:first-child,
+.backtest-results-table th:nth-child(2),
+.backtest-results-table td:nth-child(2),
+.backtest-results-table th:nth-child(3),
+.backtest-results-table td:nth-child(3),
+.backtest-results-table th:last-child,
+.backtest-results-table td:last-child { text-align: left; }
+.backtest-results-table td:last-child { min-width: 230px; white-space: normal; }
+@media (max-width: 640px) {
+  .backtest-controls { align-items: stretch; flex-direction: column; }
+  .backtest-controls button { width: 100%; }
+}
 .pa-trend-button {
   min-height: 26px;
   font-weight: 650;

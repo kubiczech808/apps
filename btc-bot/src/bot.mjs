@@ -196,6 +196,10 @@ export const applyCommands = async ({ executor, commands, positions, logger, dry
       } else if (command === 'run-now') {
         // The pass this command arrived in IS the run it asked for.
         results.push({ ...entry, outcome: 'ran' })
+      } else if (command === 'run-backtests') {
+        // The wrapper starts the research worker after this pass has safely
+        // published and cleared the command queue.
+        results.push({ ...entry, outcome: 'backtest_started' })
       } else {
         results.push({ ...entry, outcome: 'ignored' })
       }

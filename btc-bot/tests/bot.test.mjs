@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { readConfig, reconcileBrackets, roundStop, roundTarget, runPass, strategyIdForPosition } from '../src/bot.mjs'
+import { applyCommands, readConfig, reconcileBrackets, roundStop, roundTarget, runPass, strategyIdForPosition } from '../src/bot.mjs'
 import { LEGACY_PRICE_ACTION_ID } from '../src/strategy-registry.mjs'
 import { appendCandle, zigzag } from './helpers.mjs'
 
@@ -127,6 +127,25 @@ const noQualityFilters = (state = {}) => ({
   paper: { balanceSats: 0, trades: [], nextId: 1, lastFundingAt: null },
 })
 const nowAfter = (candles) => candles.at(-1).time + HOUR + 60_000
+
+test('a queued backtest starts research without touching an exchange order', async () => {
+  const actions = []
+  const executor = {
+    closePosition: async (id) => actions.push(['close', id]),
+    cancelOrder: async (id) => actions.push(['cancel', id]),
+  }
+
+  const results = await applyCommands({
+    executor,
+    commands: [{ command: 'run-backtests', id: null }],
+    positions: [{ id: 'open-position' }],
+    logger: console,
+    dryRun: false,
+  })
+
+  assert.deepEqual(results.map((entry) => entry.outcome), ['backtest_started'])
+  assert.deepEqual(actions, [])
+})
 
 test('default BTC history covers the 400-day daily structure window', () => {
   assert.equal(readConfig({}).candleLimit, 10000)

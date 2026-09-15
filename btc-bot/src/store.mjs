@@ -104,6 +104,11 @@ export const createStateStore = ({
       return results
     },
 
+    saveBacktests: async (backtests) => {
+      if (!baseUrl) throw new Error('no BOT_API_URL configured')
+      return call('backtests', { method: 'POST', body: JSON.stringify(backtests) })
+    },
+
     /**
      * Claim the right to act for `ttlMs`.
      *

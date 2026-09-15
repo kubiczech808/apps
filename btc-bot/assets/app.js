@@ -1939,44 +1939,107 @@ const backtestStatus = (result) => {
 }
 
 const priceActionBacktestResult = (asset, timeframeId) =>
+  state?.backtests?.assets?.[asset.symbol]?.[timeframeId] ??
   state?.backtests?.priceAction?.[asset.symbol]?.[timeframeId] ??
   state?.backtests?.['price-action']?.[asset.symbol]?.[timeframeId] ??
   null
 
+const backtestValue = (value, digits = 1, suffix = '') =>
+  Number.isFinite(Number(value)) ? `${nf(digits).format(Number(value))}${suffix}` : '–'
+
+const backtestPeriod = (result) =>
+  result?.from && result?.to ? `${calendarDate(result.from)} – ${calendarDate(result.to)}` : '–'
+
+const requestBacktests = async () => {
+  const button = $('run-backtests')
+  const status = $('backtests-status')
+  if (button) button.disabled = true
+  if (status) status.textContent = 'Backtesty byly zařazeny. Aktuální runner je spustí nad právě nasazenou verzí PA-1.'
+  try {
+    await api('command', { method: 'POST', body: { command: 'run-backtests' } })
+    if (status) status.className = 'backtests-status pos'
+  } catch (error) {
+    if (button) button.disabled = false
+    if (status) {
+      status.className = 'backtests-status neg'
+      status.textContent = `Backtesty se nepodařilo zařadit: ${error.message}`
+    }
+  }
+}
+
 const renderPriceActionBacktests = (host) => {
-  const matrix = state?.priceActionMatrix
-  const assets = matrix?.assets?.length ? matrix.assets : []
-  const columns = matrix?.timeframes?.length ? matrix.timeframes : [
-    { id: '1h', label: '1H' },
-    { id: '4h', label: '4H' },
-    { id: '1d', label: '1D' },
-  ]
-  if (!assets.length) {
-    host.append(el('p', { className: 'empty', text: 'Backtestovací matice čeká na první price-action scan s assety.' }))
+  const document = state?.backtests ?? {}
+  const run = document.run ?? null
+  const rows = Object.entries(document.assets ?? {}).flatMap(([symbol, timeframes]) =>
+    Object.entries(timeframes ?? {}).map(([timeframeId, result]) => ({ symbol, timeframeId, result }))
+  )
+  const statusText = run?.status === 'running'
+    ? `Probíhá nový běh od ${when(run.startedAt ?? run.requestedAt)}. Dosavadní výsledky zůstávají zobrazené do publikování nového reportu.`
+    : run?.status === 'failed'
+      ? `Poslední běh selhal: ${run.error || 'bez podrobnosti'}`
+      : document.generatedAt
+        ? `Poslední dokončený běh: ${when(document.generatedAt)} · PA-1 používá právě nasazená pravidla a nastavení.`
+        : 'Zatím není publikovaný žádný backtest PA-1.'
+  const controls = el('div', { className: 'backtest-controls' }, [
+    el('div', {}, [
+      el('p', { id: 'backtests-status', className: `backtests-status${run?.status === 'failed' ? ' neg' : ''}`, text: statusText }),
+      document.assumptions
+        ? el('p', {
+            className: 'backtest-assumptions',
+            text: `Risk ${backtestValue(document.assumptions.riskPct, 1, ' %')} · poplatek ${backtestValue(Number(document.assumptions.feeRate) * 100, 2, ' %/strana')} · kapitál ${backtestValue(document.assumptions.startingCapital, 0, ' USD')}`,
+          })
+        : null,
+    ]),
+    el('button', {
+      id: 'run-backtests',
+      type: 'button',
+      className: 'primary',
+      text: run?.status === 'running' ? 'Backtesty probíhají' : 'Spustit backtesty',
+      disabled: run?.status === 'running' ? 'disabled' : null,
+    }),
+  ])
+  const button = controls.querySelector('#run-backtests')
+  button.onclick = requestBacktests
+  host.append(controls)
+
+  if (!rows.length) {
+    host.append(el('p', { className: 'empty', text: 'Výsledky se objeví po dokončení prvního běhu.' }))
     return
   }
 
-  const table = el('table', { className: 'pa-matrix-table backtest-matrix-table' }, [
+  const table = el('table', { className: 'backtest-matrix-table backtest-results-table' }, [
     el('thead', {}, [
       el('tr', {}, [
         el('th', { text: 'Asset' }),
-        ...columns.map((column) => el('th', { text: column.label })),
-        el('th', { text: 'Poznámka' }),
+        el('th', { text: 'TF' }),
+        el('th', { text: 'Období' }),
+        el('th', { text: 'Obchody' }),
+        el('th', { text: 'Win rate' }),
+        el('th', { text: 'Celkem' }),
+        el('th', { text: 'p.a.' }),
+        el('th', { text: 'PF' }),
+        el('th', { text: 'Max. DD' }),
+        el('th', { text: 'Prům. držení' }),
+        el('th', { text: 'Zdroj' }),
       ]),
     ]),
     el('tbody'),
   ])
   const body = table.querySelector('tbody')
-  for (const asset of assets) {
+  for (const { symbol, timeframeId, result } of rows) {
     body.append(
       el('tr', {}, [
-        el('td', {}, [
-          assetTickerButton(asset.symbol, priceActionDecisionTimeframe),
-        ]),
-        ...columns.map((column) =>
-          el('td', {}, [decisionFactElement(backtestStatus(priceActionBacktestResult(asset, column.id)))])
-        ),
-        el('td', { className: 'reason', text: 'kliknutím na asset zobrazíte období a metodiku' }),
+        el('td', { text: symbol }),
+        el('td', { text: timeframeId.toUpperCase() }),
+        el('td', { text: backtestPeriod(result) }),
+        el('td', { text: Number.isFinite(Number(result.trades)) ? String(result.trades) : '–' }),
+        el('td', { text: backtestValue(result.winRate, 1, ' %') }),
+        el('td', { text: backtestValue(result.returnPct, 1, ' %') }),
+        el('td', { text: backtestValue(result.cagrPct, 1, ' %') }),
+        el('td', { text: backtestValue(result.profitFactor, 2) }),
+        el('td', { text: backtestValue(result.maxDrawdownPct, 1, ' %') }),
+        el('td', { text: backtestValue(result.averageHoldDays, 1, ' d') }),
+        el('td', { className: 'reason', text: result.dataSource || '–' }),
       ])
     )
   }
@@ -1984,7 +2047,7 @@ const renderPriceActionBacktests = (host) => {
   host.append(
     el('p', {
       className: 'zone-rule',
-      text: 'Výsledky jsou uložené po assetu a timeframe; detail assetu obsahuje období, zdroj dat a metodiku.',
+      text: 'Každý řádek uvádí skutečně dostupné období zdroje. Intradenní FX data jsou omezená dostupností Yahoo Finance; denní řady mají delší historii.',
     }),
     el('div', { className: 'table-scroll' }, [table])
   )

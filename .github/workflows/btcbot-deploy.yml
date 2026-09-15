@@ -285,8 +285,7 @@ jobs:
           # history to a deploy that cleaned that directory; this one does not
           # clean it at all.
           files = ["index.html", "api.php", "config.php", ".htaccess", "assets/app.js", "assets/app.css"]
-          seed = ["data/settings.json"]
-          published_research = ["data/backtests.json"]
+          seed = ["data/settings.json", "data/backtests.json"]
 
           def connect():
               last = None
@@ -341,12 +340,6 @@ jobs:
                       ftp.storbinary(f"STOR {path.name}", handle)
                   print(f"seeded {relative}")
 
-              for relative in published_research:
-                  path = Path(relative)
-                  enter(ftp, target + list(path.parts[:-1]))
-                  with path.open("rb") as handle:
-                      ftp.storbinary(f"STOR {path.name}", handle)
-                  print(f"uploaded research {relative}")
           finally:
               try:
                   ftp.quit()

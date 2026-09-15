@@ -8,6 +8,7 @@
 
 import { createStateStore } from '../src/store.mjs'
 import { runPass } from '../src/bot.mjs'
+import { spawn } from 'node:child_process'
 
 const store = createStateStore({
   baseUrl: process.env.BOT_API_URL || '',
@@ -27,6 +28,25 @@ try {
   console.log(parts.join(' '))
   if (run.reason) console.log(`  ${run.reason}`)
   if (run.error) console.error(`  error: ${run.error}`)
+
+  const runBacktests = run.commands?.some((entry) =>
+    entry.command === 'run-backtests' && entry.outcome === 'backtest_started'
+  )
+  if (runBacktests) {
+    const child = spawn(process.execPath, ['tools/backtest-price-action-structure.mjs', '--publish'], {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        BOT_BACKTEST_SETTINGS: JSON.stringify(state.settings ?? {}),
+      },
+      stdio: 'inherit',
+    })
+    const code = await new Promise((resolve, reject) => {
+      child.once('error', reject)
+      child.once('exit', (exitCode) => resolve(exitCode ?? 1))
+    })
+    if (code !== 0) throw new Error(`Price-action backtest worker failed with exit code ${code}`)
+  }
 } catch (error) {
   console.error(`Bot pass could not be recorded at all: ${error.stack ?? error.message}`)
   process.exitCode = 1

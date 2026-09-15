@@ -276,7 +276,7 @@ switch ($action) {
         requirePost();
         $body = requestBody();
         $name = (string) ($body['command'] ?? '');
-        $allowed = ['close', 'cancel', 'flatten', 'run-now'];
+        $allowed = ['close', 'cancel', 'flatten', 'run-now', 'run-backtests'];
         if (!in_array($name, $allowed, true)) {
             fail(400, 'Unknown command. Allowed: ' . implode(', ', $allowed));
         }
@@ -294,6 +294,16 @@ switch ($action) {
         ];
         writeJsonFile(COMMANDS_FILE, $queue);
         ok(['queued' => count($queue)]);
+    }
+
+    case 'backtests': {
+        requirePost();
+        $backtests = requestBody();
+        if (($backtests['strategyId'] ?? '') !== 'price-action-structure-v1') {
+            fail(400, 'Backtest report must identify the active PA-1 strategy.');
+        }
+        writeJsonFile(BACKTEST_FILE, $backtests);
+        ok(['generatedAt' => $backtests['generatedAt'] ?? null]);
     }
 
     default:
