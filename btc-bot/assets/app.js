@@ -24,11 +24,10 @@ const $ = (id) => document.getElementById(id)
 let state = null
 let keyIsPublic = false
 let refreshTimer = null
-let priceActionSelection = null
 let priceActionDecisionTimeframe = '4h'
 let selectedAssetChart = { symbol: null, timeframeId: '4h' }
 let assetChartVisibleCandleCount = 60
-let selectedStrategyPanel = 'structure'
+let selectedStrategyPanel = 'filled-zones'
 let selectedStrategyView = 'price-action'
 
 // ── formatting ────────────────────────────────────────────────────────────
@@ -733,50 +732,6 @@ const trendFact = (trend, item = {}) => {
   return decisionFact(label, status, details || null)
 }
 
-const trendFactButton = ({ asset, column, item }) => {
-  const fact = trendFact(item.trend, item)
-  const button = el('button', {
-    type: 'button',
-    className: `fact fact-${fact.status} pa-trend-button`,
-    title: fact.title,
-    text: fact.text,
-  })
-  const selected = priceActionSelection?.symbol === asset.symbol && priceActionSelection?.timeframeId === column.id
-  button.setAttribute('aria-pressed', String(selected))
-  button.onclick = () => {
-    priceActionSelection = { symbol: asset.symbol, timeframeId: column.id }
-    renderStrategyLab()
-  }
-  return button
-}
-
-const pivotText = (pivot) => {
-  if (!pivot) return '–'
-  const label = pivot.label ? `${pivot.label} ` : ''
-  const close = Number.isFinite(pivot.close) ? ` / close ${quotePrice(pivot.close)}` : ''
-  return `${label}knot ${quotePrice(pivot.price)}${close} · ${when(pivot.time)}`
-}
-
-const legCard = (title, leg, emptyText) =>
-  el('div', { className: 'structure-leg' }, [
-    el('strong', { text: title }),
-    leg
-      ? el('div', { className: 'structure-leg-flow' }, [
-          el('span', { text: pivotText(leg.previous) }),
-          el('span', { className: 'structure-arrow', text: '→' }),
-          el('span', { text: pivotText(leg.current) }),
-        ])
-      : el('p', { text: emptyText }),
-    leg
-      ? el('span', {
-          className: 'structure-meta',
-          text: `${leg.label} podle close ${quotePrice(leg.confirmationClose)} vůči knotu ${quotePrice(leg.referencePrice)}${
-            Number.isFinite(leg.changePct) ? ` · knot ${signedPct(leg.changePct).text}` : ''
-          }`,
-        })
-      : null,
-  ])
-
 const zoneRange = (zone) => (zone ? `${quotePrice(zone.low)} – ${quotePrice(zone.high)}` : '–')
 
 const zoneCard = (title, zones, emptyText, timeframeId, candidates = []) => el('div', { className: 'structure-leg zone-leg' }, [
@@ -818,18 +773,6 @@ const zonesForDetail = (zones, type) => {
   return list
 }
 
-const renderZonesDetail = (zones, timeframeId, candidates = []) => {
-  if (!zones) return null
-  return el('div', { className: 'zone-detail' }, [
-    el('strong', { text: 'Supply / demand zóny' }),
-    el('div', { className: 'structure-legs' }, [
-      zoneCard('Demand', zonesForDetail(zones, 'demand'), 'Žádná platná demand zóna na tomto timeframe.', timeframeId, candidates),
-      zoneCard('Supply', zonesForDetail(zones, 'supply'), 'Žádná platná supply zóna na tomto timeframe.', timeframeId, candidates),
-    ]),
-    el('p', { className: 'zone-rule', text: zones.rule || 'Zóna se invaliduje jen na vlastním timeframe.' }),
-  ])
-}
-
 const renderAssetZoneDetails = (host, asset, item, timeframeId) => {
   host.replaceChildren()
   if (!item) return
@@ -869,131 +812,6 @@ const renderAssetZoneDetails = (host, asset, item, timeframeId) => {
       ...details,
     ])
   )
-}
-
-const tradeStatusFact = (profile) => {
-  const status = profile?.status === 'ready' ? 'met' : profile?.status === 'watch' ? 'neutral' : 'neutral'
-  const label = profile?.status === 'ready' ? 'setup ready' : profile?.status === 'watch' ? 'čeká' : 'bez setupu'
-  return decisionFact(label, status)
-}
-
-const tradeMetric = (label, value, sub = null) =>
-  el('div', { className: 'trade-metric' }, [
-    el('span', { text: label }),
-    el('strong', { text: value }),
-    sub ? el('em', { text: sub }) : null,
-  ])
-
-const renderTradeProfile = (profile) => {
-  profile = displayedTradeProfile(profile)
-  if (!profile) return null
-  if (profile.mode === 'formation') {
-    return el('div', { className: 'trade-profile' }, [
-      el('div', { className: 'trade-profile-head' }, [
-        el('div', {}, [
-          el('strong', { text: 'Tvorba struktury' }),
-          el('p', { text: 'Flat struktura nemá obchodní směr ani vstupní plán.' }),
-        ]),
-        decisionFactElement(decisionFact('čeká', 'neutral', profile.reason || formationTitle)),
-      ]),
-      el('p', { className: 'trade-note', text: 'Entry, SL, TP a R/R se objeví až po potvrzení hlavní struktury jako up nebo down.' }),
-    ])
-  }
-  const side = profile.side === 'long' ? 'long' : profile.side === 'short' ? 'short' : '–'
-  const rr = Number.isFinite(profile.rewardRisk) ? `${nf(2).format(profile.rewardRisk)}:1` : '–'
-  return el('div', { className: 'trade-profile' }, [
-    el('div', { className: 'trade-profile-head' }, [
-      el('div', {}, [
-        el('strong', { text: 'Periodický trade profil' }),
-        el('p', { text: `Risk ${pct(profile.riskPct, 1)} účtu · vstup jen od ${profile.pullbackPct ?? 50}% pullbacku a pouze v S/D zóně` }),
-      ]),
-      decisionFactElement(tradeStatusFact(profile)),
-    ]),
-    el('div', { className: 'decision-facts trade-gates' }, profile.gates?.map((item) =>
-      decisionFactElement(decisionFact(item.label, item.status, item.detail))
-    ) ?? []),
-    el('div', { className: 'trade-metrics' }, [
-      tradeMetric('Směr', side),
-      tradeMetric('Entry', quotePrice(profile.entry), profile.zoneHit ? 'cena hitla zónu' : 'čeká na hit zóny'),
-      tradeMetric('SL', quotePrice(profile.stop), Number.isFinite(profile.stopBuffer) ? `buffer ${quotePrice(profile.stopBuffer)}` : null),
-      tradeMetric('TP1', quotePrice(profile.tp1), profile.tp1Rule),
-      tradeMetric('TP2', quotePrice(profile.tp2), profile.tp2Rule),
-      tradeMetric('R/R', rr, `minimum ${profile.minRewardRisk ?? 2}:1`),
-    ]),
-    profile.zone
-      ? el('p', { className: 'trade-note', text: `Pracovní zóna: ${profile.zone.type} ${zoneRange(profile.zone)}` })
-      : el('p', { className: 'trade-note', text: 'Bez platné pracovní supply/demand zóny.' }),
-    profile.refinement
-      ? el('p', {
-          className: `trade-note trade-note-${profile.refinement.status}`,
-          text: `Svíčkové zpřesnění: ${profile.refinement.pattern || 'bez patternu'} · ${profile.refinement.note}`,
-        })
-      : null,
-  ])
-}
-
-const renderStructureDetail = ({ matrix, columns }) => {
-  const selected =
-    matrix.assets
-      .flatMap((asset) => columns.map((column) => ({ asset, column, item: asset.trends?.[column.id] })))
-      .find((entry) =>
-        priceActionSelection
-          ? entry.asset.symbol === priceActionSelection.symbol && entry.column.id === priceActionSelection.timeframeId
-          : entry.column.id === '4h'
-      ) ?? null
-  if (!selected?.item) return null
-
-  const { asset, column, item } = selected
-  priceActionSelection ??= { symbol: asset.symbol, timeframeId: column.id }
-  const structure = item.structure ?? {}
-  const recent = structure.recentSwings ?? []
-  const trendShift = item.establishedTrend && item.establishedTrend !== item.trend
-    ? ` · změna z ${PRICE_ACTION_TREND_LABELS[item.establishedTrend] || item.establishedTrend}`
-    : ''
-
-  return el('div', { className: 'structure-detail' }, [
-    el('div', { className: 'structure-detail-head' }, [
-      el('div', {}, [
-        el('strong', { text: `${asset.symbol} · ${column.label}` }),
-        el('p', { text: `${PRICE_ACTION_TREND_LABELS[item.trend] || 'flat'}${trendShift} · ${item.reason || 'bez důvodu'}` }),
-      ]),
-      decisionFactElement(trendFact(item.trend, item)),
-    ]),
-    el('div', { className: 'structure-legs' }, [
-      legCard('Swing highs', structure.high, 'Zatím nejsou dva potvrzené swing highs.'),
-      legCard('Swing lows', structure.low, 'Zatím nejsou dva potvrzené swing lows.'),
-    ]),
-    renderZonesDetail(item.zones, column.id, item.tradeProfile?.zoneCandidates ?? []),
-    renderTradeProfile(item.tradeProfile),
-    el('div', { className: 'structure-meta-line' }, [
-      el('span', { text: `${item.candles ?? 0} svíček` }),
-      el('span', { text: `${structure.swingCount ?? 0} potvrzených swingů` }),
-      Number.isFinite(structure.from) && Number.isFinite(structure.to)
-        ? el('span', { text: `období ${calendarDate(structure.from)} → ${calendarDate(structure.to)}` })
-        : null,
-      structure.historyDays ? el('span', { text: `horizont ${structure.historyDays} dní` }) : null,
-      el('span', { text: `hlavní pivot ±${structure.lookback ?? '–'} svíček` }),
-      el('span', { text: `zóny ±${structure.zoneLookback ?? '–'} svíčky` }),
-      Number.isFinite(item.price) ? el('span', { text: assetPriceLabel(asset.symbol, item.price) }) : null,
-    ]),
-    structure.contextHigh && structure.contextLow
-      ? el('p', {
-          className: 'zone-rule',
-          text: `Rozsah období: high ${quotePrice(structure.contextHigh.price)} (${calendarDate(structure.contextHigh.time)}) · low ${quotePrice(structure.contextLow.price)} (${calendarDate(structure.contextLow.time)})`,
-        })
-      : null,
-    recent.length
-      ? el('div', { className: 'recent-swings' }, [
-          el('strong', { text: 'Poslední potvrzené swingy · hlavní' }),
-          el('div', { className: 'recent-swing-list' }, recent.map((swing) =>
-            el('span', {
-              className: `swing-pill swing-${swing.kind}`,
-              text: `${swing.kind === 'high' ? 'H' : 'L'} ${quotePrice(swing.price)} · ${when(swing.time)}`,
-            })
-          )),
-        ])
-      : null,
-  ])
 }
 
 // ── api ───────────────────────────────────────────────────────────────────
@@ -2306,16 +2124,13 @@ const renderPriceActionEvents = (host) => {
 const renderStrategyLab = () => {
   const rules = $('strategy-rules')
   const candidates = $('strategy-candidates')
-  const priceAction = $('strategy-price-action')
   const filledZones = $('strategy-filled-zones')
   const tradeEvents = $('strategy-trade-events')
   const view = currentStrategyView()
   rules.replaceChildren()
   candidates.replaceChildren()
-  priceAction.replaceChildren()
   filledZones.replaceChildren()
   tradeEvents.replaceChildren()
-  $('strategy-panel-structure').hidden = selectedStrategyPanel !== 'structure'
   $('strategy-panel-filled-zones').hidden = selectedStrategyPanel !== 'filled-zones'
   $('strategy-panel-trade-events').hidden = selectedStrategyPanel !== 'trade-events'
   for (const button of document.querySelectorAll('.strategy-subtabs button')) {
@@ -2369,61 +2184,6 @@ const renderStrategyLab = () => {
     )
   }
 
-  const matrix = state?.priceActionMatrix
-  if (!matrix?.assets?.length) {
-    priceAction.append(
-      el('p', {
-        className: 'empty',
-        text: state?.priceActionMatrixError
-          ? `Price action scanner zatím nemá data: ${state.priceActionMatrixError}`
-          : 'Price action scanner zatím čeká na první běh s daty.',
-      })
-    )
-    renderFilledZonesLog(filledZones)
-    renderPriceActionEvents(tradeEvents)
-    return
-  }
-
-  const columns = matrix.timeframes?.length ? matrix.timeframes : [
-    { id: '1h', label: '1H' },
-    { id: '4h', label: '4H' },
-    { id: '1d', label: '1D' },
-  ]
-  const table = el('table', { className: 'pa-matrix-table' }, [
-    el('thead', {}, [
-      el('tr', {}, [
-        el('th', { text: 'Asset' }),
-        ...columns.map((column) => el('th', { text: column.label })),
-        el('th', { text: 'Zdroj' }),
-        el('th', { text: 'Aktualizace' }),
-      ]),
-    ]),
-    el('tbody'),
-  ])
-  const body = table.querySelector('tbody')
-  for (const asset of matrix.assets) {
-    body.append(
-      el('tr', {}, [
-        el('td', {}, [
-          assetTickerButton(asset.symbol, priceActionDecisionTimeframe),
-        ]),
-        ...columns.map((column) => {
-          const item = asset.trends?.[column.id] ?? { trend: 'flat', reason: 'bez dat' }
-          return el('td', {}, [trendFactButton({ asset, column, item })])
-        }),
-        el('td', { text: asset.source || '–' }),
-        el('td', { text: when(matrix.generatedAt) }),
-      ])
-    )
-  }
-
-  priceAction.append(
-    el('div', { className: 'table-scroll' }, [table]),
-    renderStructureDetail({ matrix, columns }),
-    state?.priceActionMatrixError
-      ? el('p', { className: 'scanner-warning', text: `Poslední chyba scanneru: ${state.priceActionMatrixError}` })
-      : null
-  )
   renderFilledZonesLog(filledZones)
   renderPriceActionEvents(tradeEvents)
 }
@@ -2626,7 +2386,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   for (const button of document.querySelectorAll('.strategy-subtabs button')) {
     button.addEventListener('click', () => {
-      selectedStrategyPanel = button.dataset.strategyPanel || 'structure'
+      selectedStrategyPanel = button.dataset.strategyPanel || 'filled-zones'
       renderStrategyLab()
     })
   }
