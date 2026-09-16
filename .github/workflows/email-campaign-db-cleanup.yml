@@ -90,15 +90,12 @@ jobs:
           ))
           cleanup = report.get("cleanup") or {}
           if cleanup:
-              print("ke smazani: crawl log %s (vodoznak %s, rez %s)" % (
+              print("ke smazani: crawl log %s (rez %s)" % (
                   cleanup.get("scraping_items_prunable", "?"),
-                  cleanup.get("scraping_items_watermark", "?"),
                   (cleanup.get("scraping_items_cutoff") or "")[:10],
               ))
-              print("            surova data importu %s z %s radku s raw (vodoznak %s / max id %s, dost starych importu %s, bez finished_at %s)" % (
-                  cleanup.get("import_raw_prunable", "?"),
-                  cleanup.get("import_items_with_raw", "?"),
-                  cleanup.get("import_raw_watermark", "?"),
+              print("            detail importu %s (max id %s, dost starych importu %s, bez finished_at %s)" % (
+                  cleanup.get("import_items_prunable", "?"),
                   cleanup.get("import_items_max_id", "?"),
                   cleanup.get("import_runs_old_enough", "?"),
                   cleanup.get("import_runs_without_finished_at", "?"),

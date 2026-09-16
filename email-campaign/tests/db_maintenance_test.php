@@ -19,7 +19,7 @@ function extractFn(string $src, string $name): string
     $end = strrpos($body, '}');
     return $end === false ? $body : substr($body, 0, $end + 1);
 }
-foreach (['DB_SCRAPING_ITEM_RETENTION_DAYS', 'DB_IMPORT_RAW_RETENTION_DAYS', 'DB_AI_RESEARCH_LOG_KEEP_ROWS', 'DB_CLEANUP_BATCH_ROWS'] as $const) {
+foreach (['DB_SCRAPING_ITEM_RETENTION_DAYS', 'DB_IMPORT_ITEM_RETENTION_DAYS', 'DB_AI_RESEARCH_LOG_KEEP_ROWS', 'DB_CLEANUP_BATCH_ROWS'] as $const) {
     preg_match('/const ' . $const . ' = (\d+);/', $src, $m);
     assert(isset($m[1]), 'konstanta chybi: ' . $const);
     eval('const ' . $const . ' = ' . $m[1] . ';');
@@ -40,10 +40,10 @@ function recentNoEmailScrapingCacheDays(string $source): int
     return ['dasoertliche_de' => 30, 'dastelefonbuch_de' => 21][$source] ?? 14;
 }
 foreach (['protectedContactOwnerEmails', 'databaseCleanupTables', 'formatBytesHuman',
-          'scrapingItemRetentionCutoff', 'scrapingItemPruneWatermark', 'scrapingItemPruneItemCondition',
+          'scrapingItemRetentionCutoff', 'scrapingItemPruneItemCondition',
           'scrapingJobsWithPrunableItems', 'countPrunableScrapingItems', 'pruneScrapingJobItems',
-          'importItemRawWatermark', 'importItemRawRetentionCutoff', 'importRunsWithPrunableRaw',
-          'countPrunableImportItemRaw', 'pruneImportItemRawData', 'countPrunableAiResearchLogs', 'pruneAiResearchLogs',
+          'importRunItemRetentionCutoff', 'importRunsWithPrunableItems',
+          'countPrunableImportRunItems', 'pruneImportRunItems', 'countPrunableAiResearchLogs', 'pruneAiResearchLogs',
           'countExpiredAppSessions', 'pruneExpiredAppSessions', 'countAiResearchRunsWithCache',
           'stripAiResearchRunCaches', 'databaseCleanupEstimate', 'runDatabaseCleanupBatch',
           'quoteDatabaseIdentifier', 'resetAiResearchData', 'countRecipientsForOwnerEmail',
@@ -58,7 +58,7 @@ function freshDb(): PDO
     $db->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
     $db->exec('CREATE TABLE scraping_jobs (id INTEGER PRIMARY KEY AUTOINCREMENT, status TEXT DEFAULT "finished",
         discovered_count INTEGER DEFAULT 0, list_id INTEGER DEFAULT 1, source TEXT DEFAULT "firmy_cz",
-        updated_at TEXT DEFAULT "", finished_at TEXT DEFAULT "")');
+        updated_at TEXT DEFAULT "", finished_at TEXT DEFAULT "", details_archived_at TEXT DEFAULT "")');
     $db->exec('CREATE TABLE scraping_job_items (id INTEGER PRIMARY KEY AUTOINCREMENT, job_id INTEGER,
         url TEXT DEFAULT "", status TEXT DEFAULT "queued", email TEXT DEFAULT "",
         created_at TEXT DEFAULT "", processed_at TEXT DEFAULT "")');
@@ -68,8 +68,8 @@ function freshDb(): PDO
         plan_json TEXT DEFAULT "{}")');
     $db->exec('CREATE TABLE ai_research_contacts (id INTEGER PRIMARY KEY AUTOINCREMENT, run_id INTEGER)');
     $db->exec('CREATE TABLE app_sessions (id TEXT PRIMARY KEY, data BLOB, updated_at INTEGER, expires_at INTEGER)');
-    $db->exec('CREATE TABLE import_runs (id INTEGER PRIMARY KEY AUTOINCREMENT, finished_at TEXT DEFAULT "",
-        created_at TEXT DEFAULT "")');
+    $db->exec('CREATE TABLE import_runs (id INTEGER PRIMARY KEY AUTOINCREMENT, status TEXT DEFAULT "finished", scraping_job_id INTEGER DEFAULT 0, finished_at TEXT DEFAULT "",
+        created_at TEXT DEFAULT "", updated_at TEXT DEFAULT "", details_archived_at TEXT DEFAULT "")');
     $db->exec('CREATE TABLE import_run_items (id INTEGER PRIMARY KEY AUTOINCREMENT, import_run_id INTEGER,
         result TEXT DEFAULT "inserted", reason TEXT DEFAULT "", email TEXT DEFAULT "", raw_data TEXT DEFAULT "",
         row_num INTEGER DEFAULT 0)');
@@ -100,7 +100,7 @@ assert(countPrunableScrapingItems($db) === 3, 'cely crawl log stareho behu jde p
 assert(pruneScrapingJobItems($db, 100) === 3, 'a smaze se');
 assert((int)$db->query('SELECT COUNT(*) FROM scraping_job_items')->fetchColumn() === 0, 'tabulka je prazdna');
 // A uklid se k uz uklizenemu behu nevraci porad dokola.
-assert(scrapingJobsWithPrunableItems($db, 10, 0) === [], 'uklizeny beh uz uklid nezdrzuje');
+assert(scrapingJobsWithPrunableItems($db, 10) === [], 'uklizeny beh uz uklid nezdrzuje');
 
 echo "\n== 1b. nedavno dokonceny beh si crawl log nechava ==\n";
 $db = freshDb();
@@ -109,14 +109,10 @@ addItem($db, 1, 'skipped', '', $fresh);
 printf("  ke smazani: %d z 1\n", countPrunableScrapingItems($db));
 assert(countPrunableScrapingItems($db) === 0, 'cache URL bez e-mailu musi zustat funkcni');
 
-echo "\n== 2. retencni okno je nad cache URL bez e-mailu ==\n";
-$maxCache = 0;
-foreach (['firmy_cz', 'dasoertliche_de', 'dastelefonbuch_de'] as $source) {
-    $maxCache = max($maxCache, recentNoEmailScrapingCacheDays($source));
-}
-printf("  okno %d dnu, nejdelsi cache %d dnu\n", DB_SCRAPING_ITEM_RETENTION_DAYS, $maxCache);
-assert(DB_SCRAPING_ITEM_RETENTION_DAYS > $maxCache,
-    'kratsi okno by nutilo scraper chodit na stejne URL znovu, tedy platit misto requesty');
+echo "\n== 2. retence detailu je 14 dni ==\n";
+printf("  scraping %d dnu, import %d dnu\n", DB_SCRAPING_ITEM_RETENTION_DAYS, DB_IMPORT_ITEM_RETENTION_DAYS);
+assert(DB_SCRAPING_ITEM_RETENTION_DAYS === 14 && DB_IMPORT_ITEM_RETENTION_DAYS === 14,
+    'provozni detail obou nejvetsich tabulek se drzi prave 14 dni');
 
 echo "\n== 3. bezici beh a jeho fronta se uklidu nedotknou ==\n";
 $db = freshDb();
@@ -126,20 +122,16 @@ addItem($db, 1, 'skipped', '', $old);
 printf("  ke smazani u beziciho behu: %d\n", countPrunableScrapingItems($db));
 assert(countPrunableScrapingItems($db) === 0, 'aktivni prace se mazat nesmi');
 
-echo "\n== 4. uspesny radek se nemaze, dokud z nej backfill nedopsal zdroj ==\n";
+echo "\n== 4. vsechny detailni radky stareho behu se mazu, kontakt zustava mimo log ==\n";
 $db = freshDb();
 $db->prepare('INSERT INTO scraping_jobs (status, finished_at) VALUES ("finished", ?)')->execute([$old]);
 $done = addItem($db, 1, 'inserted', 'kontakt@firma.cz', $old);
 $later = addItem($db, 1, 'inserted', 'druhy@firma.cz', $old);
-$SETTINGS = ['recipient_source_backfill_scraping_item_id' => (string)$done];
-printf("  vodoznak backfillu #%d -> ke smazani %d z 2\n", $done, countPrunableScrapingItems($db));
-assert(countPrunableScrapingItems($db) === 1, 'jen radek, ktery backfill uz zpracoval');
-assert(pruneScrapingJobItems($db, 100) === 1, 'a smaze se prave on');
-$SETTINGS = [];
+printf("  ke smazani %d z 2\n", countPrunableScrapingItems($db));
+assert(countPrunableScrapingItems($db) === 2, 'uspesny radek je uz jen detail logu');
+assert(pruneScrapingJobItems($db, 100) === 2, 'a smaze se cely stary log');
 
-echo "\n== 4b. surova kopie radku u starych importu se vyprazdni, vysledek zustava ==\n";
-// import_run_items je druha nejvetsi tabulka: kazdy nascrapovany kontakt se loguje i
-// jako radek importu s celou surovou radkou. Ta kopie uz nic nerozhoduje.
+echo "\n== 4b. detailni radky stareho importu se smazou, souhrn zustane ==\n";
 $db = freshDb();
 $db->prepare('INSERT INTO import_runs (finished_at, created_at) VALUES (?, ?)')->execute([$old, $old]);
 $db->prepare('INSERT INTO import_runs (finished_at, created_at) VALUES (?, ?)')->execute([$fresh, $fresh]);
@@ -147,20 +139,15 @@ $itemIns = $db->prepare('INSERT INTO import_run_items (import_run_id, result, re
 $itemIns->execute([1, 'skipped', 'bez e-mailu', '', '["Firma s.r.o.","https://firma.cz"]']);
 $itemIns->execute([1, 'inserted', '', 'kontakt@firma.cz', '["Firma s.r.o.","kontakt@firma.cz"]']);
 $itemIns->execute([2, 'skipped', 'bez e-mailu', '', '["Nova firma"]']);
-// Vodoznak backfillu jeste nedosel k uspesnemu radku, takze ten musi zustat cely.
-$SETTINGS = ['recipient_source_backfill_import_item_id' => '0'];
-printf("  k vyprazdneni: %d ze 3\n", countPrunableImportItemRaw($db));
-assert(countPrunableImportItemRaw($db) === 1, 'jen radek stareho importu, ktery backfill nepotrebuje');
-assert(pruneImportItemRawData($db, 100) === 1, 'a vyprazdni se');
-$rows = $db->query('SELECT id, result, reason, raw_data FROM import_run_items ORDER BY id')->fetchAll(PDO::FETCH_ASSOC);
-assert($rows[0]['raw_data'] === '' && $rows[0]['result'] === 'skipped' && $rows[0]['reason'] === 'bez e-mailu',
-    'vysledek a duvod radku zustavaji, mizi jen surova kopie');
-assert($rows[1]['raw_data'] !== '', 'uspesny radek pred vodoznakem se nedotkne');
-assert($rows[2]['raw_data'] !== '', 'nedavny import se nedotkne');
-// Po posunu vodoznaku uz smi jit i uspesny radek.
-$SETTINGS = ['recipient_source_backfill_import_item_id' => '2'];
-assert(countPrunableImportItemRaw($db) === 1, 'za vodoznakem uz smi i uspesny radek');
-$SETTINGS = [];
+printf("  ke smazani: %d ze 3\n", countPrunableImportRunItems($db));
+assert(countPrunableImportRunItems($db) === 2, 'cely detail stareho importu je technicky log');
+assert(pruneImportRunItems($db, 100) === 2, 'a smaze se');
+assert((int)$db->query('SELECT COUNT(*) FROM import_run_items WHERE import_run_id=1')->fetchColumn() === 0,
+    'u stareho importu nezustanou radkove detaily');
+assert((int)$db->query('SELECT COUNT(*) FROM import_run_items WHERE import_run_id=2')->fetchColumn() === 1,
+    'nedavny import se nedotkne');
+assert((string)$db->query('SELECT details_archived_at FROM import_runs WHERE id=1')->fetchColumn() !== '',
+    'souhrn importu nese informaci o archivaci detailu');
 
 echo "\n== 4c. vek importu se bere i z created_at, kdyz finished_at chybi ==\n";
 // Produkce: 446 073 radku drzelo surova data, ale ke smazani bylo 0, protoze zaznam
@@ -170,16 +157,16 @@ $db = freshDb();
 $db->prepare('INSERT INTO import_runs (finished_at, created_at) VALUES ("", ?)')->execute([$old]);
 $itemIns = $db->prepare('INSERT INTO import_run_items (import_run_id, result, email, raw_data) VALUES (?,?,?,?)');
 $itemIns->execute([1, 'skipped', '', '["Firma"]']);
-printf("  import bez finished_at, stary 90 dnu -> ke smazani %d\n", countPrunableImportItemRaw($db));
-assert(countPrunableImportItemRaw($db) === 1, 'stary import bez finished_at se musi uklidit taky');
-$rawSrc = extractFn($src, 'importRunsWithPrunableRaw');
-assert(str_contains($rawSrc, 'ELSE ir.created_at END'), 'vek musi mit zalozni sloupec');
+printf("  import bez finished_at, stary 90 dnu -> ke smazani %d\n", countPrunableImportRunItems($db));
+assert(countPrunableImportRunItems($db) === 1, 'stary import bez finished_at se musi uklidit taky');
+$rawSrc = extractFn($src, 'importRunsWithPrunableItems');
+assert(str_contains($rawSrc, 'finished_at="" AND ir.created_at'), 'vek musi mit zalozni sloupec');
 // Nedavny import bez finished_at se ale nedotkne.
 $db = freshDb();
 $db->prepare('INSERT INTO import_runs (finished_at, created_at) VALUES ("", ?)')->execute([$fresh]);
 $db->prepare('INSERT INTO import_run_items (import_run_id, result, email, raw_data) VALUES (?,?,?,?)')
    ->execute([1, 'skipped', '', '["Firma"]']);
-assert(countPrunableImportItemRaw($db) === 0, 'nedavny import zustava cely');
+assert(countPrunableImportRunItems($db) === 0, 'nedavny import zustava cely');
 
 echo "\n== 5. provozni log se drzi na poslednich " . DB_AI_RESEARCH_LOG_KEEP_ROWS . " radcich ==\n";
 $db = freshDb();

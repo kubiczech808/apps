@@ -25,16 +25,14 @@ const AI_RESEARCH_MAX_STEPS_PER_TICK = 12;
 // discovery na jeden beh zaradi az tisice URL a kazdy dalsi beh stejneho kontejneru
 // si je zaradi znovu pod svym job_id. Radek crawl logu ale nese jen "tato URL byla
 // otevrena s timto vysledkem" - kontakty z nej uz jsou v recipients.
-// Okno musi zustat nad nejdelsi cache "URL bez e-mailu" (recentNoEmailScrapingCacheDays
-// je nejvys 30 dnu), jinak by uklid platil usetrene misto novymi requesty do katalogu.
-const DB_SCRAPING_ITEM_RETENTION_DAYS = 45;
+// Detailni crawl log je pouze provozni historie: ulozene kontakty zustavaji v
+// recipients. Po 14 dnech uz nema hodnotu drzet kazde dalsi nalezeni stejne URL.
+const DB_SCRAPING_ITEM_RETENTION_DAYS = 14;
+// Stejne dlouho se drzi radkove detaily importu. Souhrn importu, jeho pocty a
+// vlozene/aktualizovane kontakty zustavaji zachovane.
+const DB_IMPORT_ITEM_RETENTION_DAYS = 14;
 // Kolik radku provozniho logu automatiky se drzi.
 const DB_AI_RESEARCH_LOG_KEEP_ROWS = 500;
-// Kolik dnu se u dokoncenych importu drzi surovy radek zdroje (import_run_items.raw_data).
-// Kazdy nascrapovany kontakt se loguje i jako radek importu vcetne cele surove radky,
-// takze je to druha nejvetsi tabulka v databazi. Vysledek radku (co se s nim stalo a
-// proc) zustava; zahazuje se jen ta surova kopie.
-const DB_IMPORT_RAW_RETENTION_DAYS = 30;
 // Strop jedne davky mazani, aby request nikdy nespadl na case hostingu.
 const DB_CLEANUP_BATCH_ROWS = 2000;
 // Kolik pokusu o dokonceni dostane jeden beh, nez ho automatika trvale uzavre. Dokud
@@ -1406,7 +1404,7 @@ if (isset($_GET['cron'])) {
         try {
             $report = databaseStorageReport($pdo);
             // Bez tohoto se u tabulky, ktera se neuklidi, nepozna, jestli uz nic ke
-            // smazani neni, nebo to jen drzi vodoznak backfillu a retencni okno.
+            // smazani neni, nebo jen jeste nespadla do retencniho okna.
             $report['cleanup'] = databaseCleanupDiagnostics($pdo);
             echo json_encode($report, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . "\n";
         } catch (Throwable $e) {
@@ -12644,10 +12642,7 @@ function databaseSizeSummary(PDO $pdo): array
 }
 
 /**
- * Hranice, za kterou se radek crawl logu uz nedrzi. Musi zustat nad nejdelsi cache
- * "tuhle URL jsme nedavno otevreli a e-mail tam nebyl" (recentNoEmailScrapingCacheDays),
- * jinak by uklid poslal scraper na stejne URL znovu a usetrene misto by zaplatil
- * requesty do katalogu.
+ * Hranice, za kterou se radek crawl logu uz nedrzi.
  */
 function scrapingItemRetentionCutoff(): string
 {
@@ -12662,28 +12657,17 @@ function scrapingItemRetentionCutoff(): string
  * nez retencnim oknem, jeho crawl log uz nikdo nepotrebuje. Pres index na job_id je
  * to par dotazu misto pruchodu milionem radku, takze to snese i cron na hostingu.
  *
- * Trojita pojistka:
- *  - jen behy, ktere uz skoncily (aktivni frontu prace se uklid nesmi dotknout),
- *  - jen behy dokoncene pred vic nez retencnim oknem, ktere je nad cache URL bez
- *    e-mailu, takze uklid nenuti scraper chodit na stejne URL znovu,
- *  - uspesne radky (email + inserted/updated) jen do vodoznaku backfillu zdroju,
- *    protoze ten jimi jeste dopisuje zdroj ke kontaktum v recipients.
+ * Dotyka se jen ukoncenych behu po retencnim oknu. Aktivni frontu nikdy nema
+ * sanci ovlivnit; kontakt a jeho zdroj zustavaji v recipients.
  */
-function scrapingItemPruneWatermark(PDO $pdo): int
-{
-    $settings = loadSettings($pdo);
-    return max(0, (int)($settings['recipient_source_backfill_scraping_item_id'] ?? 0));
-}
-
 /**
  * Podminka pro radky jednoho dokonceneho behu, ktere smi uklid smazat.
  */
-function scrapingItemPruneItemCondition(int $jobId, int $watermark): array
+function scrapingItemPruneItemCondition(int $jobId): array
 {
     return [
-        'sql' => ' FROM scraping_job_items WHERE job_id=?'
-            . ' AND (email="" OR status NOT IN ("inserted", "updated") OR id<=?)',
-        'params' => [$jobId, $watermark],
+        'sql' => ' FROM scraping_job_items WHERE job_id=?',
+        'params' => [$jobId],
     ];
 }
 
@@ -12691,7 +12675,7 @@ function scrapingItemPruneItemCondition(int $jobId, int $watermark): array
  * Behy, jejichz crawl log je na smazani. Bez EXISTS by se uklid porad vracel ke
  * stejnym uz uklizenym behum a nikdy by se nedostal dal.
  */
-function scrapingJobsWithPrunableItems(PDO $pdo, int $jobLimit, int $watermark): array
+function scrapingJobsWithPrunableItems(PDO $pdo, int $jobLimit): array
 {
     $stmt = $pdo->prepare('
         SELECT j.id
@@ -12699,14 +12683,10 @@ function scrapingJobsWithPrunableItems(PDO $pdo, int $jobLimit, int $watermark):
         WHERE j.status IN ("finished", "failed", "cancelled")
           AND j.finished_at<>""
           AND j.finished_at<?
-          AND EXISTS (
-              SELECT 1 FROM scraping_job_items i
-              WHERE i.job_id=j.id
-                AND (i.email="" OR i.status NOT IN ("inserted", "updated") OR i.id<=?)
-          )
+          AND EXISTS (SELECT 1 FROM scraping_job_items i WHERE i.job_id=j.id)
         ORDER BY j.id ASC
         LIMIT ' . max(1, $jobLimit));
-    $stmt->execute([scrapingItemRetentionCutoff(), $watermark]);
+    $stmt->execute([scrapingItemRetentionCutoff()]);
     return array_map('intval', $stmt->fetchAll(PDO::FETCH_COLUMN));
 }
 
@@ -12720,10 +12700,9 @@ function countPrunableScrapingItems(PDO $pdo, int $jobLimit = 25): int
         return 0;
     }
     try {
-        $watermark = scrapingItemPruneWatermark($pdo);
         $total = 0;
-        foreach (scrapingJobsWithPrunableItems($pdo, $jobLimit, $watermark) as $jobId) {
-            $condition = scrapingItemPruneItemCondition($jobId, $watermark);
+        foreach (scrapingJobsWithPrunableItems($pdo, $jobLimit) as $jobId) {
+            $condition = scrapingItemPruneItemCondition($jobId);
             $stmt = $pdo->prepare('SELECT COUNT(*)' . $condition['sql']);
             $stmt->execute($condition['params']);
             $total += (int)$stmt->fetchColumn();
@@ -12745,13 +12724,12 @@ function pruneScrapingJobItems(PDO $pdo, int $limit = DB_CLEANUP_BATCH_ROWS): in
         return 0;
     }
     try {
-        $watermark = scrapingItemPruneWatermark($pdo);
         $deleted = 0;
-        foreach (scrapingJobsWithPrunableItems($pdo, 10, $watermark) as $jobId) {
+        foreach (scrapingJobsWithPrunableItems($pdo, 10) as $jobId) {
             if ($deleted >= $limit) {
                 break;
             }
-            $condition = scrapingItemPruneItemCondition($jobId, $watermark);
+            $condition = scrapingItemPruneItemCondition($jobId);
             $stmt = $pdo->prepare('SELECT id' . $condition['sql'] . ' ORDER BY id ASC LIMIT ' . (int)($limit - $deleted));
             $stmt->execute($condition['params']);
             $ids = array_map('intval', $stmt->fetchAll(PDO::FETCH_COLUMN));
@@ -12760,6 +12738,15 @@ function pruneScrapingJobItems(PDO $pdo, int $limit = DB_CLEANUP_BATCH_ROWS): in
             }
             $pdo->exec('DELETE FROM scraping_job_items WHERE id IN (' . implode(',', $ids) . ')');
             $deleted += count($ids);
+            $remaining = $pdo->prepare('SELECT COUNT(*) FROM scraping_job_items WHERE job_id=?');
+            $remaining->execute([$jobId]);
+            if ((int)$remaining->fetchColumn() === 0) {
+                $now = date('c');
+                $pdo->prepare('UPDATE scraping_jobs SET details_archived_at=?, updated_at=? WHERE id=?')
+                    ->execute([$now, $now, $jobId]);
+                $pdo->prepare('UPDATE import_runs SET details_archived_at=?, updated_at=? WHERE scraping_job_id=? AND details_archived_at=""')
+                    ->execute([$now, $now, $jobId]);
+            }
         }
         return $deleted;
     } catch (Throwable $e) {
@@ -12769,101 +12756,83 @@ function pruneScrapingJobItems(PDO $pdo, int $limit = DB_CLEANUP_BATCH_ROWS): in
 }
 
 /**
- * Vodoznak backfillu zdroju pro importy. Backfill jeste z raw_data cte zdrojovou URL
- * ke kontaktum, takze uspesny radek se smi vyprazdnit teprve az za nim.
- */
-function importItemRawWatermark(PDO $pdo): int
+function importRunItemRetentionCutoff(): string
 {
-    $settings = loadSettings($pdo);
-    return max(0, (int)($settings['recipient_source_backfill_import_item_id'] ?? 0));
-}
-
-function importItemRawRetentionCutoff(): string
-{
-    return date('c', time() - (DB_IMPORT_RAW_RETENTION_DAYS * 86400));
+    return date('c', time() - (DB_IMPORT_ITEM_RETENTION_DAYS * 86400));
 }
 
 /**
- * Importy, u kterych je surova kopie radku uz jen zatez. Zpracovava se po importech
- * (pres index na import_run_id), ne pres celou tabulku.
+ * Importni detail je auditni log, nikoli zdroj kontaktu. Po retenci se maze cely
+ * radek - vysledny souhrn importu a samotne kontakty zustavaji zachovane.
  */
-function importRunsWithPrunableRaw(PDO $pdo, int $runLimit, int $watermark): array
+function importRunsWithPrunableItems(PDO $pdo, int $runLimit): array
 {
-    // Vek se bere z finished_at, a kdyz chybi, z created_at: zaznam importu zalozeny
-    // scrapingem (logScrapingImportRun) finished_at nenastavuje vubec, takze podminka
-    // jen na finished_at nechytila skoro zadny z tech ctyr set tisic radku.
     $stmt = $pdo->prepare('
         SELECT ir.id
         FROM import_runs ir
-        WHERE CASE WHEN ir.finished_at<>"" THEN ir.finished_at ELSE ir.created_at END<?
-          AND EXISTS (
-              SELECT 1 FROM import_run_items iri
-              WHERE iri.import_run_id=ir.id
-                AND iri.raw_data<>""
-                AND (iri.email="" OR iri.result NOT IN ("inserted", "updated") OR iri.id<=?)
-          )
+        WHERE ir.status NOT IN ("queued", "running")
+          AND ir.details_archived_at=""
+          AND ((ir.finished_at<>"" AND ir.finished_at<?) OR (ir.finished_at="" AND ir.created_at<?))
+          AND EXISTS (SELECT 1 FROM import_run_items iri WHERE iri.import_run_id=ir.id)
         ORDER BY ir.id ASC
         LIMIT ' . max(1, $runLimit));
-    $stmt->execute([importItemRawRetentionCutoff(), $watermark]);
+    $cutoff = importRunItemRetentionCutoff();
+    $stmt->execute([$cutoff, $cutoff]);
     return array_map('intval', $stmt->fetchAll(PDO::FETCH_COLUMN));
 }
 
-function countPrunableImportItemRaw(PDO $pdo, int $runLimit = 25): int
+function countPrunableImportRunItems(PDO $pdo, int $runLimit = 25): int
 {
     if (!tableExists($pdo, 'import_run_items') || !tableExists($pdo, 'import_runs')) {
         return 0;
     }
     try {
-        $watermark = importItemRawWatermark($pdo);
         $total = 0;
-        foreach (importRunsWithPrunableRaw($pdo, $runLimit, $watermark) as $runId) {
-            $stmt = $pdo->prepare('
-                SELECT COUNT(*) FROM import_run_items
-                WHERE import_run_id=? AND raw_data<>""
-                  AND (email="" OR result NOT IN ("inserted", "updated") OR id<=?)');
-            $stmt->execute([$runId, $watermark]);
+        foreach (importRunsWithPrunableItems($pdo, $runLimit) as $runId) {
+            $stmt = $pdo->prepare('SELECT COUNT(*) FROM import_run_items WHERE import_run_id=?');
+            $stmt->execute([$runId]);
             $total += (int)$stmt->fetchColumn();
         }
         return $total;
     } catch (Throwable $e) {
-        error_log('Prunable import raw count failed: ' . $e->getMessage());
+        error_log('Prunable import item count failed: ' . $e->getMessage());
         return 0;
     }
 }
 
 /**
- * Vyprazdni surovou kopii radku u starych importu. Radek zustava - vysledek, duvod,
- * e-mail i cislo radky jsou dal k dispozici; mizi jen ta cela surova radka, ktera u
- * nascrapovanych kontaktu jen zdvojuje to, co uz je v kontaktech a v crawl logu.
+ * Smaze detailni radky ukoncenych importu po retencnim oknu. Ma se per-import
+ * index, aby ani velka historie neblokovala aplikaci.
  */
-function pruneImportItemRawData(PDO $pdo, int $limit = DB_CLEANUP_BATCH_ROWS): int
+function pruneImportRunItems(PDO $pdo, int $limit = DB_CLEANUP_BATCH_ROWS): int
 {
     if ($limit < 1 || !tableExists($pdo, 'import_run_items') || !tableExists($pdo, 'import_runs')) {
         return 0;
     }
     try {
-        $watermark = importItemRawWatermark($pdo);
-        $cleared = 0;
-        foreach (importRunsWithPrunableRaw($pdo, 10, $watermark) as $runId) {
-            if ($cleared >= $limit) {
+        $deleted = 0;
+        foreach (importRunsWithPrunableItems($pdo, 10) as $runId) {
+            if ($deleted >= $limit) {
                 break;
             }
-            $stmt = $pdo->prepare('
-                SELECT id FROM import_run_items
-                WHERE import_run_id=? AND raw_data<>""
-                  AND (email="" OR result NOT IN ("inserted", "updated") OR id<=?)
-                ORDER BY id ASC LIMIT ' . (int)($limit - $cleared));
-            $stmt->execute([$runId, $watermark]);
+            $stmt = $pdo->prepare('SELECT id FROM import_run_items WHERE import_run_id=? ORDER BY id ASC LIMIT ' . (int)($limit - $deleted));
+            $stmt->execute([$runId]);
             $ids = array_map('intval', $stmt->fetchAll(PDO::FETCH_COLUMN));
             if (!$ids) {
                 continue;
             }
-            $pdo->exec('UPDATE import_run_items SET raw_data="" WHERE id IN (' . implode(',', $ids) . ')');
-            $cleared += count($ids);
+            $pdo->exec('DELETE FROM import_run_items WHERE id IN (' . implode(',', $ids) . ')');
+            $deleted += count($ids);
+            $remaining = $pdo->prepare('SELECT COUNT(*) FROM import_run_items WHERE import_run_id=?');
+            $remaining->execute([$runId]);
+            if ((int)$remaining->fetchColumn() === 0) {
+                $pdo->prepare('UPDATE import_runs SET details_archived_at=?, updated_at=? WHERE id=?')
+                    ->execute([date('c'), date('c'), $runId]);
+            }
         }
-        return $cleared;
+        return $deleted;
     } catch (Throwable $e) {
-        error_log('Import raw prune failed: ' . $e->getMessage());
+        error_log('Import item prune failed: ' . $e->getMessage());
         return 0;
     }
 }
@@ -13014,10 +12983,10 @@ function databaseCleanupEstimate(PDO $pdo): array
             'rows' => countPrunableScrapingItems($pdo),
         ],
         [
-            'key' => 'import_raw',
-            'label' => 'Surova kopie radku u importu dokoncenych pred vic nez ' . DB_IMPORT_RAW_RETENTION_DAYS . ' dny',
-            'detail' => 'Kazdy nascrapovany kontakt se loguje i jako radek importu s celou surovou radkou. Vysledek radku zustava, mizi jen ta kopie.',
-            'rows' => countPrunableImportItemRaw($pdo),
+            'key' => 'import_items',
+            'label' => 'Detailni radky importu starsi ' . DB_IMPORT_ITEM_RETENTION_DAYS . ' dni',
+            'detail' => 'Souhrn importu a ulozene kontakty zustavaji. Mizi jen radkova provozni historie.',
+            'rows' => countPrunableImportRunItems($pdo),
         ],
         [
             'key' => 'ai_research_logs',
@@ -13057,9 +13026,9 @@ function runDatabaseCleanupBatch(PDO $pdo, int $budgetSeconds = 20, int $batchRo
         $done[] = 'crawl log: ' . $items . ' radku';
     }
     if (time() < $deadline) {
-        $raw = pruneImportItemRawData($pdo, $batchRows);
-        if ($raw > 0) {
-            $done[] = 'surova data importu: ' . $raw . ' radku';
+        $items = pruneImportRunItems($pdo, $batchRows);
+        if ($items > 0) {
+            $done[] = 'detail importu: ' . $items . ' radku';
         }
     }
     if (time() < $deadline) {
@@ -13161,18 +13130,15 @@ function optimizeDatabaseTables(PDO $pdo, int $budgetSeconds = 25, string $onlyT
  */
 /**
  * Proc uklid u jednotlivych tabulek nemaze. Bez tohoto se z velikosti nepozna, jestli
- * uz nic ke smazani neni, nebo to jen drzi vodoznak backfillu a retencni okno - a to
- * je presne rozdil mezi "hotovo" a "ceka".
+ * uz nic ke smazani neni, nebo zaznamy jeste nespadly do retencniho okna.
  */
 function databaseCleanupDiagnostics(PDO $pdo): array
 {
     $diagnostics = [
         'scraping_items_prunable' => countPrunableScrapingItems($pdo),
-        'scraping_items_watermark' => scrapingItemPruneWatermark($pdo),
         'scraping_items_cutoff' => scrapingItemRetentionCutoff(),
-        'import_raw_prunable' => countPrunableImportItemRaw($pdo),
-        'import_raw_watermark' => importItemRawWatermark($pdo),
-        'import_raw_cutoff' => importItemRawRetentionCutoff(),
+        'import_items_prunable' => countPrunableImportRunItems($pdo),
+        'import_items_cutoff' => importRunItemRetentionCutoff(),
         'ai_research_logs_prunable' => countPrunableAiResearchLogs($pdo),
         'expired_sessions' => countExpiredAppSessions($pdo),
     ];
@@ -13182,8 +13148,9 @@ function databaseCleanupDiagnostics(PDO $pdo): array
         $diagnostics['import_items_with_raw'] = (int)$pdo->query('SELECT COUNT(*) FROM import_run_items WHERE raw_data<>""')->fetchColumn();
         $diagnostics['import_runs_old_enough'] = (int)$pdo->query('
             SELECT COUNT(*) FROM import_runs
-            WHERE CASE WHEN finished_at<>"" THEN finished_at ELSE created_at END<"'
-            . importItemRawRetentionCutoff() . '"')->fetchColumn();
+            WHERE status NOT IN ("queued", "running")
+              AND ((finished_at<>"" AND finished_at<"' . importRunItemRetentionCutoff() . '")
+                   OR (finished_at="" AND created_at<"' . importRunItemRetentionCutoff() . '"))')->fetchColumn();
         $diagnostics['import_runs_without_finished_at'] = (int)$pdo->query('SELECT COUNT(*) FROM import_runs WHERE finished_at=""')->fetchColumn();
     } catch (Throwable $e) {
         $diagnostics['error'] = $e->getMessage();
@@ -16992,10 +16959,16 @@ function runDatabaseStorageMaintenance(PDO $pdo): string
         if ($state === '') {
             $state = 'url_hash_backfill';
         }
-        if ($state === 'completed' && (string)($settings['database_storage_retention_version'] ?? '') !== '2026-09-v1') {
-            $state = 'link_scraping_import_history';
+        // Verze v2 zavadi jednotnou 14denni retenci obou nejvetsich provoznich
+        // tabulek. Ma prednost pred starsi kompresi, aby se pri prekrocene kvote
+        // nejdriv uvolnilo co nejvic radku.
+        if ((string)($settings['database_storage_retention_version'] ?? '') !== '2026-09-v2'
+            && !in_array($state, ['purge_old_scraping_details', 'purge_old_import_details'], true)) {
+            $state = 'purge_old_scraping_details';
             setSettingRaw($pdo, 'database_storage_maintenance_state', $state);
-            setSettingRaw($pdo, 'database_storage_retention_version', '2026-09-v1');
+        }
+        if ((string)($settings['database_storage_retention_version'] ?? '') !== '2026-09-v2') {
+            setSettingRaw($pdo, 'database_storage_retention_version', '2026-09-v2');
         }
 
         if ($state === 'url_hash_backfill') {
@@ -17116,6 +17089,10 @@ function runDatabaseStorageMaintenance(PDO $pdo): string
 
         if ($state === 'purge_old_scraping_details') {
             return purgeExpiredScrapingDetails($pdo, $settings);
+        }
+
+        if ($state === 'purge_old_import_details') {
+            return purgeExpiredImportDetails($pdo, $settings);
         }
 
         if ($state === 'purge_old_ai_research_logs') {
@@ -17253,7 +17230,7 @@ function compressImportHistoryRawData(PDO $pdo, array $settings): string
 
 function purgeExpiredScrapingDetails(PDO $pdo, array $settings): string
 {
-    $retentionDays = 90;
+    $retentionDays = DB_SCRAPING_ITEM_RETENTION_DAYS;
     $cutoff = date('c', time() - ($retentionDays * 86400));
     $jobId = max(0, (int)($settings['database_storage_purge_job_id'] ?? 0));
     if ($jobId === 0) {
@@ -17269,7 +17246,7 @@ function purgeExpiredScrapingDetails(PDO $pdo, array $settings): string
         $job->execute([$cutoff]);
         $jobId = (int)$job->fetchColumn();
         if ($jobId === 0) {
-            setSettingRaw($pdo, 'database_storage_maintenance_state', 'purge_old_ai_research_logs');
+            setSettingRaw($pdo, 'database_storage_maintenance_state', 'purge_old_import_details');
             return 'Udrzba uloziste: detailni scrapingy starsi nez ' . $retentionDays . ' dni jsou vycistene.';
         }
         setSettingRaw($pdo, 'database_storage_purge_job_id', (string)$jobId);
@@ -17279,10 +17256,49 @@ function purgeExpiredScrapingDetails(PDO $pdo, array $settings): string
     $remaining = $pdo->prepare('SELECT COUNT(*) FROM scraping_job_items WHERE job_id=?');
     $remaining->execute([$jobId]);
     if ((int)$remaining->fetchColumn() === 0) {
-        $pdo->prepare('UPDATE scraping_jobs SET details_archived_at=?, updated_at=? WHERE id=?')->execute([date('c'), date('c'), $jobId]);
+        $now = date('c');
+        $pdo->prepare('UPDATE scraping_jobs SET details_archived_at=?, updated_at=? WHERE id=?')->execute([$now, $now, $jobId]);
+        $pdo->prepare('UPDATE import_runs SET details_archived_at=?, updated_at=? WHERE scraping_job_id=? AND details_archived_at=""')
+            ->execute([$now, $now, $jobId]);
         setSettingRaw($pdo, 'database_storage_purge_job_id', '0');
     }
     return 'Udrzba uloziste: odstraneno ' . $delete->rowCount() . ' technickych detailu stareho scrapingu.';
+}
+
+function purgeExpiredImportDetails(PDO $pdo, array $settings): string
+{
+    $retentionDays = DB_IMPORT_ITEM_RETENTION_DAYS;
+    $cutoff = importRunItemRetentionCutoff();
+    $runId = max(0, (int)($settings['database_storage_purge_import_run_id'] ?? 0));
+    if ($runId === 0) {
+        $run = $pdo->prepare('
+            SELECT id
+            FROM import_runs
+            WHERE status NOT IN ("queued", "running")
+              AND details_archived_at=""
+              AND ((finished_at<>"" AND finished_at<?) OR (finished_at="" AND created_at<?))
+              AND EXISTS (SELECT 1 FROM import_run_items i WHERE i.import_run_id=import_runs.id)
+            ORDER BY id ASC
+            LIMIT 1
+        ');
+        $run->execute([$cutoff, $cutoff]);
+        $runId = (int)$run->fetchColumn();
+        if ($runId === 0) {
+            setSettingRaw($pdo, 'database_storage_maintenance_state', 'purge_old_ai_research_logs');
+            return 'Udrzba uloziste: detailni importy starsi nez ' . $retentionDays . ' dni jsou vycistene.';
+        }
+        setSettingRaw($pdo, 'database_storage_purge_import_run_id', (string)$runId);
+    }
+    $delete = $pdo->prepare('DELETE FROM import_run_items WHERE import_run_id=? LIMIT 5000');
+    $delete->execute([$runId]);
+    $remaining = $pdo->prepare('SELECT COUNT(*) FROM import_run_items WHERE import_run_id=?');
+    $remaining->execute([$runId]);
+    if ((int)$remaining->fetchColumn() === 0) {
+        $pdo->prepare('UPDATE import_runs SET details_archived_at=?, updated_at=? WHERE id=?')
+            ->execute([date('c'), date('c'), $runId]);
+        setSettingRaw($pdo, 'database_storage_purge_import_run_id', '0');
+    }
+    return 'Udrzba uloziste: odstraneno ' . $delete->rowCount() . ' technickych detailu stareho importu.';
 }
 
 function purgeExpiredAiResearchLogs(PDO $pdo): string
@@ -17296,7 +17312,7 @@ function purgeExpiredAiResearchLogs(PDO $pdo): string
     $delete->execute([$cutoff]);
     if ($delete->rowCount() === 0) {
         setSettingRaw($pdo, 'database_storage_maintenance_state', 'retention_complete');
-        setSettingRaw($pdo, 'database_storage_maintenance_status', 'Kompakce dokončena: kontakty, souhrny a aktivni data zustaly zachovany; stare technicke detaily maji retenci 90 dni.');
+        setSettingRaw($pdo, 'database_storage_maintenance_status', 'Kompakce dokončena: kontakty, souhrny a aktivni data zustaly zachovany; stare technicke detaily maji retenci 14 dni.');
         return 'Udrzba uloziste: retence AI research logu je hotova.';
     }
     return 'Udrzba uloziste: odstraneno ' . $delete->rowCount() . ' starych technickych AI logu.';
@@ -21776,7 +21792,7 @@ function renderApp(PDO $pdo, ?array $flash): void
         <div class="note">
             <?= h(importRunMessage($selectedImport)) ?>
             <?php if (!$selectedImportItems): ?>
-                <?php if ((int)($selectedImport['scraping_job_id'] ?? 0) > 0): ?>Detailni radky tohoto stareho scrapingu uz jsou po retenci archivovane; souhrn behu a ulozene kontakty zustaly zachovane.<?php else: ?>Pro tento import zatim nejsou ulozene radkove detaily.<?php endif; ?>
+                <?php if ((string)($selectedImport['details_archived_at'] ?? '') !== ''): ?>Detailni radky tohoto behu uz byly po 14 dnech archivovane; souhrn behu a ulozene kontakty zustaly zachovane.<?php elseif ((int)($selectedImport['scraping_job_id'] ?? 0) > 0): ?>Detailni radky tohoto stareho scrapingu uz jsou po retenci archivovane; souhrn behu a ulozene kontakty zustaly zachovane.<?php else: ?>Pro tento import zatim nejsou ulozene radkove detaily.<?php endif; ?>
             <?php endif; ?>
         </div>
         <?php $importGroups = importItemGroups($selectedImportItems); ?>

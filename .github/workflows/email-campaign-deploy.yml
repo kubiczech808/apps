@@ -133,6 +133,9 @@ jobs:
           php -v
           find email-campaign -name '*.php' -print0 | xargs -0 -n1 php -l
 
+      - name: Verify database retention safety
+        run: php email-campaign/tests/db_maintenance_test.php
+
       - name: Upload to hosting
         uses: SamKirkland/FTP-Deploy-Action@v4.3.5
         with:
