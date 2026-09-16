@@ -171,6 +171,8 @@ def main() -> None:
     ]
     REPORT.parent.mkdir(parents=True, exist_ok=True)
     REPORT.write_text("\n".join(report) + "\n", encoding="utf-8")
+    if index_html:
+        Path(".github/inspection/btcdca-homepage-index.html").write_text(index_html, encoding="utf-8")
 
 
 if __name__ == "__main__":
