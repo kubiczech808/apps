@@ -31,6 +31,10 @@ const SETTINGS_FILE = DATA_DIR . '/settings.json';
 const BACKTEST_FILE = DATA_DIR . '/backtests.json';
 const LEASE_FILE = DATA_DIR . '/lease.json';
 const COMMANDS_FILE = DATA_DIR . '/commands.json';
+// A retired runner must not be able to overwrite a newer PA-1 interpretation.
+// This is also a guard against two machines configured with the same lease
+// owner: the lease cannot distinguish them, but the published contract can.
+const MIN_PRICE_ACTION_MATRIX_SCHEMA = 17;
 // The dashboard publishes the full chart history for all assets and
 // timeframes so the browser can reveal up to one year without another API
 // round-trip. Keep a bounded body limit, but above the largest paper snapshot.
@@ -198,6 +202,14 @@ switch ($action) {
         $state = requestBody();
         if (!isset($state['version'])) {
             fail(400, 'State document is missing its version.');
+        }
+        $strategyId = (string) ($state['settings']['strategyId'] ?? '');
+        $priceActionSchema = $state['priceActionMatrix']['schemaVersion'] ?? null;
+        if (
+            $strategyId === 'price-action-structure-v1'
+            && (!is_numeric($priceActionSchema) || (int) $priceActionSchema < MIN_PRICE_ACTION_MATRIX_SCHEMA)
+        ) {
+            fail(409, 'Runner uses an obsolete price-action matrix schema.');
         }
         writeJsonFile(STATE_FILE, $state);
 
