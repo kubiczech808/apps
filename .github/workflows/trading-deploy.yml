@@ -189,11 +189,12 @@ jobs:
                   "scrape-scan-preferences.json",
                   "redeem-alert-ledger.json",
                   "market-scan-history",
-                  # Retained database rows are first moved into gzipped files. These are
-                  # runtime data, not deploy artifacts: removing them on the next deploy
-                  # would turn a reversible archive into silent data loss.
-                  "event-archive",
+                  # Observation snapshots previously moved out of MySQL. Keep them until
+                  # the one-time recovery has restored every row into the database.
                   "observation-archive",
+                  # Run-log archives predate the observation-retention mistake and are
+                  # also runtime history rather than deploy artifacts.
+                  "event-archive",
                   # Every portfolio's archived run-log history, one directory per
                   # portfolio. It was missing here, so each deploy of the site deleted
                   # the whole tree -- the same mistake this list has now made three
@@ -392,23 +393,46 @@ jobs:
               raise
           PY
 
-  retain-observation-mirror:
-    # The storage endpoint above is uploaded by deploy first. Running retention here makes
-    # the urgent first cleanup deterministic; the dedicated daily workflow below keeps the
-    # mirror bounded afterwards.
+  restore-archived-observations:
+    # Recovery for the observation retention that briefly removed historical rows.
+    # The endpoint only INSERT IGNOREs missing keys, so current importer writes win.
     needs: deploy
     runs-on: ubuntu-latest
     timeout-minutes: 50
     env:
       STORAGE_URL: https://www.osobnizkusenosti.cz/trading/api.php?action=storage-admin
-      STATUS_URL: https://www.osobnizkusenosti.cz/trading/api.php?action=storage-status
       TRADING_TRIGGER_KEY: ${{ secrets.POLYTRADING_DB_PASSWORD }}
-      SCRAPED_RETENTION_DAYS: "3"
-      RESOLVED_RETENTION_DAYS: "1"
-      MIGRATE_PAGE_LIMIT: "200"
-      MIGRATE_PAUSE_SECONDS: "2"
-      MIGRATE_BUDGET_MINUTES: "35"
     steps:
-      - uses: actions/checkout@v4
-      - name: Archive obsolete observation snapshots and reclaim database pages
-        run: python3 trading/tools/storage-migrate.py --operation archive-observations
+      - name: Restore archived observation snapshots into MySQL
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import time
+          import urllib.request
+
+          url = os.environ["STORAGE_URL"]
+          key = os.environ["TRADING_TRIGGER_KEY"]
+          totals = {"scanned": 0, "restored": 0, "alreadyPresent": 0}
+          for _ in range(10000):
+              request = urllib.request.Request(
+                  url,
+                  data=json.dumps({"operation": "restore-observation-archives", "limit": 250}).encode("utf-8"),
+                  method="POST",
+                  headers={"Content-Type": "application/json", "X-Trading-Trigger-Key": key},
+              )
+              with urllib.request.urlopen(request, timeout=90) as response:
+                  payload = json.loads(response.read().decode("utf-8"))
+              if not payload.get("ok"):
+                  raise RuntimeError(payload.get("error") or "Observation archive recovery failed")
+              result = payload.get("result") or {}
+              for field in totals:
+                  totals[field] += int(result.get(field) or 0)
+              print(f"scanned={totals['scanned']} restored={totals['restored']} alreadyPresent={totals['alreadyPresent']}")
+              if result.get("done"):
+                  print("::notice title=Trading observation recovery complete::" + json.dumps(totals))
+                  break
+              time.sleep(1)
+          else:
+              raise RuntimeError("Observation archive recovery did not finish within its safety limit")
+          PY

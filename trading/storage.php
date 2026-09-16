@@ -822,6 +822,100 @@ function trading_storage_archive_listing(): array
     return $files;
 }
 
+/**
+ * Restore snapshots moved out of MySQL by the retired observation-retention job.
+ *
+ * The archive is append-only and may contain duplicate lines after an interrupted old
+ * retention pass. INSERT IGNORE therefore restores only missing keys and deliberately
+ * leaves any newer row written by the active MySQL importer untouched.
+ */
+function trading_storage_restore_observation_archives(PDO $pdo, int $limit = 250): array
+{
+    trading_storage_bootstrap($pdo);
+    $limit = max(1, min(500, $limit));
+    $root = __DIR__ . '/data/observation-archive';
+    $files = glob($root . '/*/*.ndjson.gz') ?: [];
+    sort($files, SORT_STRING);
+    if ($files === []) {
+        return ['scanned' => 0, 'restored' => 0, 'alreadyPresent' => 0, 'done' => true];
+    }
+    if (trading_storage_meta_get('observation-archive-restored-at') !== null) {
+        return ['scanned' => 0, 'restored' => 0, 'alreadyPresent' => 0, 'done' => true];
+    }
+
+    $cursor = json_decode((string) (trading_storage_meta_get('observation-archive-restore-cursor') ?? ''), true);
+    $fileIndex = is_array($cursor) ? max(0, (int) ($cursor['fileIndex'] ?? 0)) : 0;
+    $lineOffset = is_array($cursor) ? max(0, (int) ($cursor['lineOffset'] ?? 0)) : 0;
+    if ($fileIndex >= count($files)) {
+        return ['scanned' => 0, 'restored' => 0, 'alreadyPresent' => 0, 'done' => true];
+    }
+
+    $insert = $pdo->prepare(
+        'INSERT IGNORE INTO trading_observations (
+           observation_key, lifecycle, source_id, token_id, event_slug, market_slug, outcome_label, market_type,
+           end_at, observed_at, resolved_at, market_probability, net_yield, annualized_return, volume_usdc,
+           tags_json, payload, payload_checksum, created_at, updated_at
+         ) VALUES (
+           :key, :lifecycle, :sourceId, :tokenId, :eventSlug, :marketSlug, :outcome, :marketType,
+           :endAt, :observedAt, :resolvedAt, :probability, :netYield, :annualizedReturn, :volume,
+           :tags, :payload, :checksum, :createdAt, :updatedAt
+         )'
+    );
+    $scanned = $restored = $alreadyPresent = 0;
+    $done = true;
+    for (; $fileIndex < count($files); $fileIndex++, $lineOffset = 0) {
+        $handle = gzopen($files[$fileIndex], 'rb');
+        if ($handle === false) {
+            throw new RuntimeException('Could not read the observation archive ' . basename($files[$fileIndex]));
+        }
+        $lineNumber = 0;
+        while ($lineNumber < $lineOffset && gzgets($handle) !== false) {
+            $lineNumber++;
+        }
+        while (($line = gzgets($handle)) !== false) {
+            $lineNumber++;
+            $scanned++;
+            $row = json_decode(trim($line), true);
+            $payload = is_array($row) && is_array($row['payload'] ?? null) ? $row['payload'] : null;
+            $key = is_array($row) ? trim((string) ($row['observationKey'] ?? '')) : '';
+            $lifecycle = strtoupper(is_array($row) ? (string) ($row['lifecycle'] ?? '') : '');
+            $updatedAt = is_array($row) ? trim((string) ($row['updatedAt'] ?? '')) : '';
+            if (is_array($payload) && $key !== '' && in_array($lifecycle, ['SCRAPED', 'RESOLVED'], true)
+                && strtotime($updatedAt) !== false) {
+                $columns = trading_storage_observation_columns($payload);
+                // Archive metadata is the source of truth for the row identity and age.
+                $columns['key'] = $key;
+                $columns['lifecycle'] = $lifecycle;
+                $columns['createdAt'] = $updatedAt;
+                $columns['updatedAt'] = $updatedAt;
+                $insert->execute($columns);
+                if ($insert->rowCount() > 0) {
+                    $restored++;
+                } else {
+                    $alreadyPresent++;
+                }
+            }
+            if ($scanned >= $limit) {
+                $done = false;
+                break;
+            }
+        }
+        gzclose($handle);
+        if (!$done) {
+            trading_storage_meta_put('observation-archive-restore-cursor', json_encode([
+                'fileIndex' => $fileIndex,
+                'lineOffset' => $lineNumber,
+            ], JSON_UNESCAPED_SLASHES));
+            break;
+        }
+    }
+    if ($done) {
+        trading_storage_meta_put('observation-archive-restore-cursor', '');
+        trading_storage_meta_put('observation-archive-restored-at', gmdate('c'));
+    }
+    return compact('scanned', 'restored', 'alreadyPresent', 'done');
+}
+
 function trading_storage_archive_events(PDO $pdo, int $days = 7, int $limit = 500): array
 {
     trading_storage_bootstrap($pdo);
@@ -895,120 +989,6 @@ function trading_storage_archive_events(PDO $pdo, int $days = 7, int $limit = 50
     return [
         'cutoff' => $cutoff,
         'archived' => $archived,
-        'deleted' => $deleted,
-        'files' => array_values(array_unique($files)),
-        'done' => count($rows) < $limit,
-    ];
-}
-
-/**
- * Archive snapshots MySQL does not serve before removing them from its working mirror.
- *
- * Published JSON state remains the active reader while the SQL migration is inactive. The
- * mirror therefore must retain the current catalogue, not every historical scan forever.
- * Each archived row is written to gzip first; a delete then additionally checks the stored
- * timestamp and lifecycle, so a concurrent ingest cannot make a newly refreshed market
- * disappear merely because an earlier snapshot was eligible for retention.
- */
-function trading_storage_archive_observations(
-    PDO $pdo,
-    int $scrapedDays = 3,
-    int $resolvedDays = 1,
-    int $limit = 500,
-): array {
-    trading_storage_bootstrap($pdo);
-    if (trading_storage_is_active()) {
-        throw new RuntimeException('Observation retention is refused while MySQL is the active read source.');
-    }
-    $scrapedDays = max(1, min(30, $scrapedDays));
-    $resolvedDays = max(1, min(30, $resolvedDays));
-    $limit = max(1, min(1000, $limit));
-    $scrapedCutoff = gmdate('Y-m-d H:i:s', time() - $scrapedDays * 86400);
-    $resolvedCutoff = gmdate('Y-m-d H:i:s', time() - $resolvedDays * 86400);
-    $select = $pdo->prepare(
-        'SELECT observation_key, lifecycle, updated_at, payload
-         FROM trading_observations
-         WHERE (lifecycle = :scrapedLifecycle AND updated_at < :scrapedCutoff)
-            OR (lifecycle = :resolvedLifecycle AND updated_at < :resolvedCutoff)
-         ORDER BY updated_at ASC, observation_key ASC LIMIT ' . $limit
-    );
-    $select->execute([
-        'scrapedLifecycle' => 'SCRAPED',
-        'scrapedCutoff' => $scrapedCutoff,
-        'resolvedLifecycle' => 'RESOLVED',
-        'resolvedCutoff' => $resolvedCutoff,
-    ]);
-    $rows = $select->fetchAll();
-    if ($rows === []) {
-        return [
-            'scrapedCutoff' => $scrapedCutoff,
-            'resolvedCutoff' => $resolvedCutoff,
-            'archived' => 0,
-            'deleted' => 0,
-            'files' => [],
-            'done' => true,
-        ];
-    }
-
-    $root = __DIR__ . '/data/observation-archive';
-    $handles = [];
-    $files = [];
-    $archivedRows = [];
-    foreach ($rows as $row) {
-        $payload = trading_storage_unpack($row['payload'] ?? null);
-        if (!is_array($payload)) {
-            continue;
-        }
-        $lifecycle = strtoupper((string) ($row['lifecycle'] ?? ''));
-        $updatedAt = (string) ($row['updated_at'] ?? '');
-        $key = (string) ($row['observation_key'] ?? '');
-        if (!in_array($lifecycle, ['SCRAPED', 'RESOLVED'], true) || $updatedAt === '' || $key === '') {
-            continue;
-        }
-        $day = substr($updatedAt, 0, 10);
-        if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $day)) {
-            continue;
-        }
-        $name = $root . '/' . strtolower($lifecycle) . '/' . $day . '.ndjson.gz';
-        if (!isset($handles[$name])) {
-            if (!is_dir(dirname($name)) && !mkdir(dirname($name), 0775, true) && !is_dir(dirname($name))) {
-                throw new RuntimeException('Could not create the observation archive directory.');
-            }
-            $handle = gzopen($name, 'ab9');
-            if ($handle === false) {
-                throw new RuntimeException('Could not open the observation archive ' . basename($name));
-            }
-            $handles[$name] = $handle;
-            $files[] = str_replace($root . '/', '', $name);
-        }
-        $line = json_encode([
-            'observationKey' => $key,
-            'lifecycle' => $lifecycle,
-            'updatedAt' => $updatedAt,
-            'payload' => $payload,
-        ], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
-        if (!is_string($line) || gzwrite($handles[$name], $line . "\n") === false) {
-            continue;
-        }
-        $archivedRows[] = ['key' => $key, 'lifecycle' => $lifecycle, 'updatedAt' => $updatedAt];
-    }
-    foreach ($handles as $handle) {
-        gzclose($handle);
-    }
-
-    $deleted = 0;
-    $delete = $pdo->prepare(
-        'DELETE FROM trading_observations
-         WHERE observation_key = :key AND lifecycle = :lifecycle AND updated_at = :updatedAt'
-    );
-    foreach ($archivedRows as $row) {
-        $delete->execute($row);
-        $deleted += $delete->rowCount();
-    }
-    return [
-        'scrapedCutoff' => $scrapedCutoff,
-        'resolvedCutoff' => $resolvedCutoff,
-        'archived' => count($archivedRows),
         'deleted' => $deleted,
         'files' => array_values(array_unique($files)),
         'done' => count($rows) < $limit,
