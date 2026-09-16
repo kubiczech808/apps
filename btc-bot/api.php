@@ -33,6 +33,7 @@ const LEASE_FILE = DATA_DIR . '/lease.json';
 const COMMANDS_FILE = DATA_DIR . '/commands.json';
 const PRIMARY_RUNNER = 'rpi-primary-v2';
 const RETIRED_RUNNERS = ['rpi'];
+const PRIMARY_RUNNER_MARKER = DATA_DIR . '/primary-runner-v2.json';
 // A retired runner must not be able to overwrite a newer PA-1 interpretation.
 // This is also a guard against two machines configured with the same lease
 // owner: the lease cannot distinguish them, but the published contract can.
@@ -246,7 +247,10 @@ switch ($action) {
         if ($owner === '') {
             fail(400, 'A lease needs an owner.');
         }
-        if (in_array($owner, RETIRED_RUNNERS, true)) {
+        // Keep the old identity available during a queued deploy, but retire it
+        // permanently as soon as the replacement has successfully appeared.
+        // Its obsolete PA matrix is rejected by publish during this handover.
+        if (in_array($owner, RETIRED_RUNNERS, true) && is_readable(PRIMARY_RUNNER_MARKER)) {
             ok([
                 'granted' => false,
                 'owner' => PRIMARY_RUNNER,
@@ -257,6 +261,9 @@ switch ($action) {
         $ttl = max(10000, min($ttl, 900000));
 
         $now = (int) round(microtime(true) * 1000);
+        if ($owner === PRIMARY_RUNNER) {
+            writeJsonFile(PRIMARY_RUNNER_MARKER, ['owner' => $owner, 'activatedAt' => $now]);
+        }
         $current = readJsonFile(LEASE_FILE, null);
         $currentOwner = (string) ($current['owner'] ?? '');
         $heldBySomeoneElse = is_array($current)

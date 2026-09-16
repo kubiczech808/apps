@@ -321,7 +321,10 @@ test('the API refuses stale PA-1 runners before they overwrite current structure
 test('the API retires the duplicate legacy Pi lease identity', () => {
   assert.match(api, /const PRIMARY_RUNNER = 'rpi-primary-v2'/)
   assert.match(api, /const RETIRED_RUNNERS = \['rpi'\]/)
-  assert.match(api, /in_array\(\$owner, RETIRED_RUNNERS, true\)/)
+  assert.match(api, /const PRIMARY_RUNNER_MARKER = DATA_DIR \. '\/primary-runner-v2\.json'/)
+  assert.match(api, /in_array\(\$owner, RETIRED_RUNNERS, true\) && is_readable\(PRIMARY_RUNNER_MARKER\)/)
+  assert.match(api, /\$owner === PRIMARY_RUNNER/)
+  assert.match(api, /writeJsonFile\(PRIMARY_RUNNER_MARKER/)
   assert.match(api, /'reason' => 'runner identity retired'/)
   assert.match(api, /!in_array\(\$currentOwner, RETIRED_RUNNERS, true\)/)
 })
