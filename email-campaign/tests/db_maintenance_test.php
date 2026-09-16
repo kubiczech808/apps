@@ -23,7 +23,7 @@ function extractFn(string $src, string $name): string
     $end = strrpos($body, '}');
     return $end === false ? $body : substr($body, 0, $end + 1);
 }
-foreach (['DB_SCRAPING_ITEM_RETENTION_DAYS', 'DB_IMPORT_ITEM_RETENTION_DAYS', 'DB_AI_RESEARCH_LOG_KEEP_ROWS', 'DB_CLEANUP_BATCH_ROWS'] as $const) {
+foreach (['DB_SCRAPING_ITEM_RETENTION_DAYS', 'DB_IMPORT_ITEM_RETENTION_DAYS', 'DB_AI_RESEARCH_LOG_KEEP_ROWS', 'DB_CLEANUP_BATCH_ROWS', 'DB_STORAGE_RECLAIM_ROW_THRESHOLD'] as $const) {
     preg_match('/const ' . $const . ' = (\d+);/', $src, $m);
     assert(isset($m[1]), 'konstanta chybi: ' . $const);
     eval('const ' . $const . ' = ' . $m[1] . ';');
@@ -31,7 +31,9 @@ foreach (['DB_SCRAPING_ITEM_RETENTION_DAYS', 'DB_IMPORT_ITEM_RETENTION_DAYS', 'D
 const AI_RESEARCH_ALLOWED_EMAIL = 'admin@example.cz';
 $SETTINGS = [];
 function loadSettings(PDO $pdo): array { global $SETTINGS; return $SETTINGS; }
+function loadSettingsForUser(PDO $pdo, int $userId): array { global $SETTINGS; return $SETTINGS; }
 function setSetting(PDO $pdo, string $key, string $value): void { global $SETTINGS; $SETTINGS[$key] = $value; }
+function setSettingRaw(PDO $pdo, string $key, string $value): void { global $SETTINGS; $SETTINGS[$key] = $value; }
 function isMysql(PDO $pdo): bool { return false; }
 function tableExists(PDO $pdo, string $table): bool
 {
@@ -49,7 +51,7 @@ foreach (['protectedContactOwnerEmails', 'databaseCleanupTables', 'formatBytesHu
           'importRunItemRetentionCutoff', 'importRunsWithPrunableItems',
           'countPrunableImportRunItems', 'pruneImportRunItems', 'countPrunableAiResearchLogs', 'pruneAiResearchLogs',
           'countExpiredAppSessions', 'pruneExpiredAppSessions', 'countAiResearchRunsWithCache',
-          'stripAiResearchRunCaches', 'databaseCleanupEstimate', 'runDatabaseCleanupBatch',
+          'stripAiResearchRunCaches', 'databaseCleanupEstimate', 'markDatabaseStorageReclaimNeeded', 'runDatabaseCleanupBatch',
           'quoteDatabaseIdentifier', 'resetAiResearchData', 'countRecipientsForOwnerEmail',
           'databaseCleanupInvariant', 'databaseCleanupInvariantDiff', 'runGuardedDatabaseCleanup',
           'scrapingDiscoveryBuffer', 'scrapingDiscoveryBufferForJob'] as $fn) {

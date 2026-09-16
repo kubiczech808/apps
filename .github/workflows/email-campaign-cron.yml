@@ -48,20 +48,69 @@ jobs:
             cat /tmp/email-campaign-cron-body.txt
             test "$http_code" -ge 200 -a "$http_code" -lt 400
           }
+          call_reclaim() {
+            phase="$1"
+            reclaim_code=$(curl --show-error --silent --max-time 180 --output /tmp/email-campaign-reclaim-body.txt --write-out "%{http_code}" "https://www.osobnizkusenosti.cz/email-campaign/?cron=${TOKEN}&db_reclaim=1" || echo "000")
+            echo "Reclaim (${phase}) HTTP ${reclaim_code}"
+            cat /tmp/email-campaign-reclaim-body.txt || true
+            # Reclaim je doplnkova udrzba. Pri docasnem limitu hostingu se zopakuje
+            # dalsim tikem, ale nesmi oznacit hlavni cron (kampane/importy/scraping)
+            # jako neuspesny.
+            if [ "$reclaim_code" -lt 200 ] || [ "$reclaim_code" -ge 300 ]; then
+              echo "::warning::Uvolneni mista vratilo HTTP ${reclaim_code}; bude zopakovano dalsim tikem."
+            fi
+          }
+          cleanup_pending() {
+            report_code=$(curl --show-error --silent --max-time 60 --output /tmp/email-campaign-storage.json --write-out "%{http_code}" "https://www.osobnizkusenosti.cz/email-campaign/?cron=${TOKEN}&storage_report=1" || echo "000")
+            if [ "$report_code" -lt 200 ] || [ "$report_code" -ge 300 ]; then
+              echo "::warning::Stav uloziste nelze nacist (HTTP ${report_code})."
+              return 1
+            fi
+            python3 - <<'PY'
+          import json
+          import sys
+
+          with open('/tmp/email-campaign-storage.json', encoding='utf-8') as handle:
+              cleanup = (json.load(handle).get('cleanup') or {})
+          pending = int(cleanup.get('scraping_items_prunable') or 0) + int(cleanup.get('import_items_prunable') or 0)
+          print('Detailnich radku cekajicich na retenci:', pending)
+          raise SystemExit(0 if pending > 0 else 1)
+          PY
+          }
+          run_cleanup_burst() {
+            if ! cleanup_pending; then
+              echo "Retencni fronta je prazdna."
+              return
+            fi
+            # Jedno volani ma vlastni 100s strop a transakcni kontrolu, aby hosting
+            # request neukoncil a aby nikdy nemohlo ubyvat ze skutecnych dat.
+            for burst in 1 2; do
+              echo "Automaticky burst retence ${burst}/2"
+              cleanup_code=$(curl --show-error --silent --max-time 170 --output /tmp/email-campaign-cleanup-body.txt --write-out "%{http_code}" "https://www.osobnizkusenosti.cz/email-campaign/?cron=${TOKEN}&db_cleanup=1&rounds=20&batch=10000" || echo "000")
+              echo "Cleanup HTTP ${cleanup_code}"
+              cat /tmp/email-campaign-cleanup-body.txt || true
+              if grep -q "VRACEN ZPET" /tmp/email-campaign-cleanup-body.txt; then
+                echo "::error::Automaticky uklid byl vracen zpet ochranou dat."
+                exit 1
+              fi
+              if [ "$cleanup_code" != "200" ]; then
+                echo "::warning::Automaticky uklid vratil HTTP ${cleanup_code}; pokracuji dalsim tikem."
+                return
+              fi
+              if ! cleanup_pending; then
+                echo "Retencni fronta je prazdna."
+                return
+              fi
+            done
+          }
+          # Udrzba nejdriv zklidni import/scraping, pak normalni cron muze bezpecne
+          # preskocit jen tyto workery. Kampane a IMAP se pritom provadi dal.
+          call_reclaim "priprava"
           # Rozesilka, IMAP, importy a scraping.
           # AI research automatika je na zadost zastavena - jeji cron trigger je pryc,
           # takze se odsud uz nevola.
           call_cron
-
-          # Po jednorazovem hromadnem mazani vrati InnoDB fyzicke misto hostingu az
-          # OPTIMIZE TABLE. Endpoint sam pocka na prazdnou retencni frontu i konec
-          # aktivnich behu a pak prestavi maximalne jednu tabulku na tik.
-          reclaim_code=$(curl --show-error --silent --max-time 180 --output /tmp/email-campaign-reclaim-body.txt --write-out "%{http_code}" "https://www.osobnizkusenosti.cz/email-campaign/?cron=${TOKEN}&db_reclaim=1")
-          echo "Reclaim HTTP ${reclaim_code}"
-          cat /tmp/email-campaign-reclaim-body.txt
-          # Reclaim je doplnkova udrzba. Pri docasnem limitu hostingu se zopakuje
-          # dalsim tikem, ale nesmi oznacit hlavni cron (kampane/importy/scraping)
-          # jako neuspesny.
-          if [ "$reclaim_code" -lt 200 ] || [ "$reclaim_code" -ge 300 ]; then
-            echo "::warning::Jednorazove uvolneni mista vratilo HTTP ${reclaim_code}; bude zopakovano dalsim tikem."
-          fi
+          run_cleanup_burst
+          # Po prazdne retencni fronte se provede jeden krok fyzicke kompaktace.
+          # Nasledujici tik dokonci dalsi velkou tabulku; nikdy neni nutne nic klikat.
+          call_reclaim "po retenci"

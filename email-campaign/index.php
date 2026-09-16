@@ -35,6 +35,9 @@ const DB_IMPORT_ITEM_RETENTION_DAYS = 14;
 const DB_AI_RESEARCH_LOG_KEEP_ROWS = 500;
 // Strop jedne davky mazani, aby request nikdy nespadl na case hostingu.
 const DB_CLEANUP_BATCH_ROWS = 2000;
+// Fyzicka prestavba tabulek je draha. Spusti se sama po odstraneni dostatecne velke
+// davky technickych detailu; tim se prostor nevraci po kazdem malem dennim mazani.
+const DB_STORAGE_RECLAIM_ROW_THRESHOLD = 10000;
 // Kolik pokusu o dokonceni dostane jeden beh, nez ho automatika trvale uzavre. Dokud
 // beh neni dotazeny, nezaklada se novy seed - proto musi mit konec, jinak by jeden
 // nedotazitelny subjekt zastavil celou frontu.
@@ -13058,14 +13061,17 @@ function runDatabaseCleanupBatch(PDO $pdo, int $budgetSeconds = 20, int $batchRo
     // transakce nikdy nebyla tak velka, ze ji hosting nedokonci.
     $batchRows = max(100, min(20000, $batchRows));
     $done = [];
+    $reclaimRows = 0;
     $items = pruneScrapingJobItems($pdo, $batchRows);
     if ($items > 0) {
         $done[] = 'crawl log: ' . $items . ' radku';
+        $reclaimRows += $items;
     }
     if (time() < $deadline) {
         $items = pruneImportRunItems($pdo, $batchRows);
         if ($items > 0) {
             $done[] = 'detail importu: ' . $items . ' radku';
+            $reclaimRows += $items;
         }
     }
     if (time() < $deadline) {
@@ -13089,8 +13095,25 @@ function runDatabaseCleanupBatch(PDO $pdo, int $budgetSeconds = 20, int $batchRo
     if (!$done) {
         return 'Uklid databaze: nic ke smazani.';
     }
+    if ($reclaimRows > 0) {
+        markDatabaseStorageReclaimNeeded($pdo, $reclaimRows);
+    }
     return 'Uklid databaze: ' . implode(', ', $done)
         . '. Misto se hostingu vrati az po uvolneni (OPTIMIZE) v Konfiguraci.';
+}
+
+/**
+ * Pocita odstranene detailni radky mezi dvema fyzickymi prestavbami tabulek. Zapis
+ * je soucasti stejne transakce jako mazani, takze se pri ochrannem rollbacku nezvysi.
+ */
+function markDatabaseStorageReclaimNeeded(PDO $pdo, int $rows): void
+{
+    if ($rows < 1 || !isMysql($pdo)) {
+        return;
+    }
+    $settings = loadSettingsForUser($pdo, 0);
+    $current = max(0, (int)($settings['database_storage_reclaim_deleted_rows'] ?? 0));
+    setSettingRaw($pdo, 'database_storage_reclaim_deleted_rows', (string)min(PHP_INT_MAX, $current + $rows));
 }
 
 /**
@@ -13178,6 +13201,28 @@ function runDatabaseStorageReclaim(PDO $pdo): string
         setSettingRaw($pdo, 'database_storage_reclaim_last_run_at', $now);
         $version = (string)($settings['database_storage_reclaim_version'] ?? '');
         $state = (string)($settings['database_storage_reclaim_state'] ?? '');
+        $deletedRows = max(0, (int)($settings['database_storage_reclaim_deleted_rows'] ?? 0));
+        $diagnostics = databaseCleanupDiagnostics($pdo);
+        $pendingDetailRows = (int)($diagnostics['scraping_items_prunable'] ?? 0)
+            + (int)($diagnostics['import_items_prunable'] ?? 0);
+        $needsPeriodicReclaim = $deletedRows >= DB_STORAGE_RECLAIM_ROW_THRESHOLD
+            || $pendingDetailRows >= DB_STORAGE_RECLAIM_ROW_THRESHOLD;
+        // Prvni uvolneni bylo jednorazove, ale retence pak dale maze stare logy
+        // kazdy den. Po vetsim souctu mazani se proto cyklus sam znovu pripravi;
+        // admin uz nema nic rucne spoustet ani odklikavat.
+        if ($version === '2026-09-v2' && $state === 'complete' && $needsPeriodicReclaim) {
+            $before = databaseSizeSummary($pdo);
+            $state = 'import_run_items';
+            $version = '2026-09-v2';
+            setSettingRaw($pdo, 'database_storage_reclaim_state', $state);
+            setSettingRaw($pdo, 'database_storage_reclaim_version', $version);
+            setSettingRaw($pdo, 'database_storage_reclaim_started_at', $now);
+            setSettingRaw($pdo, 'database_storage_reclaim_completed_at', '');
+            setSettingRaw($pdo, 'database_storage_reclaim_before_bytes', (string)databaseQuotaBytes($before));
+            setSettingRaw($pdo, 'database_storage_reclaim_after_bytes', (string)databaseQuotaBytes($before));
+            setSettingRaw($pdo, 'database_storage_reclaim_saved_bytes', '0');
+            setSettingRaw($pdo, 'database_storage_reclaim_status', 'Pravidelna kompaktace pripravena po smazani ' . $deletedRows . ' technickych detailu.');
+        }
         if ((string)($settings['database_storage_reclaim_started_at'] ?? '') === '') {
             $before = databaseSizeSummary($pdo);
             setSettingRaw($pdo, 'database_storage_reclaim_started_at', $now);
@@ -13199,7 +13244,6 @@ function runDatabaseStorageReclaim(PDO $pdo): string
             setSettingRaw($pdo, 'database_storage_reclaim_status', $message);
             return $message;
         }
-        $diagnostics = databaseCleanupDiagnostics($pdo);
         if ((int)($diagnostics['scraping_items_prunable'] ?? 0) > 0 || (int)($diagnostics['import_items_prunable'] ?? 0) > 0) {
             $message = 'Ceka na dokonceni 14denni retence detailu logu.';
             setSettingRaw($pdo, 'database_storage_reclaim_status', $message);
@@ -13226,13 +13270,13 @@ function runDatabaseStorageReclaim(PDO $pdo): string
             throw new RuntimeException('Tabulka ' . $table . ' nebyla nalezena.');
         }
 
-        if ((int)$tableInfo['free_bytes'] > 0) {
+        if ((int)$tableInfo['free_bytes'] > 0 || $needsPeriodicReclaim) {
             $statement = $pdo->query('OPTIMIZE TABLE ' . quoteDatabaseIdentifier($table));
             if ($statement !== false) {
                 $statement->fetchAll(PDO::FETCH_ASSOC);
                 $statement->closeCursor();
             }
-            $message = 'Jednorazove uvolneni: prestavena ' . $table . ' (predem volno ' . formatBytesHuman((int)$tableInfo['free_bytes']) . ').';
+            $message = 'Automaticke uvolneni: prestavena ' . $table . ' (predem volno ' . formatBytesHuman((int)$tableInfo['free_bytes']) . ').';
         } else {
             $message = 'Jednorazove uvolneni: ' . $table . ' uz nedrzi meritelne volne misto.';
         }
@@ -13247,6 +13291,7 @@ function runDatabaseStorageReclaim(PDO $pdo): string
         if ($next[$state] === 'complete') {
             setSettingRaw($pdo, 'database_storage_reclaim_quiesce', '0');
             setSettingRaw($pdo, 'database_storage_reclaim_completed_at', $now);
+            setSettingRaw($pdo, 'database_storage_reclaim_deleted_rows', '0');
         }
         return $message;
     } finally {
@@ -17469,6 +17514,10 @@ function purgeExpiredScrapingDetails(PDO $pdo, array $settings): string
     }
     $delete = $pdo->prepare('DELETE FROM scraping_job_items WHERE job_id=? LIMIT 5000');
     $delete->execute([$jobId]);
+    $deletedRows = $delete->rowCount();
+    if ($deletedRows > 0) {
+        markDatabaseStorageReclaimNeeded($pdo, $deletedRows);
+    }
     $remaining = $pdo->prepare('SELECT COUNT(*) FROM scraping_job_items WHERE job_id=?');
     $remaining->execute([$jobId]);
     if ((int)$remaining->fetchColumn() === 0) {
@@ -17478,7 +17527,7 @@ function purgeExpiredScrapingDetails(PDO $pdo, array $settings): string
             ->execute([$now, $now, $jobId]);
         setSettingRaw($pdo, 'database_storage_purge_job_id', '0');
     }
-    return 'Udrzba uloziste: odstraneno ' . $delete->rowCount() . ' technickych detailu stareho scrapingu.';
+    return 'Udrzba uloziste: odstraneno ' . $deletedRows . ' technickych detailu stareho scrapingu.';
 }
 
 function purgeExpiredImportDetails(PDO $pdo, array $settings): string
@@ -17507,6 +17556,10 @@ function purgeExpiredImportDetails(PDO $pdo, array $settings): string
     }
     $delete = $pdo->prepare('DELETE FROM import_run_items WHERE import_run_id=? LIMIT 5000');
     $delete->execute([$runId]);
+    $deletedRows = $delete->rowCount();
+    if ($deletedRows > 0) {
+        markDatabaseStorageReclaimNeeded($pdo, $deletedRows);
+    }
     $remaining = $pdo->prepare('SELECT COUNT(*) FROM import_run_items WHERE import_run_id=?');
     $remaining->execute([$runId]);
     if ((int)$remaining->fetchColumn() === 0) {
@@ -17514,7 +17567,7 @@ function purgeExpiredImportDetails(PDO $pdo, array $settings): string
             ->execute([date('c'), date('c'), $runId]);
         setSettingRaw($pdo, 'database_storage_purge_import_run_id', '0');
     }
-    return 'Udrzba uloziste: odstraneno ' . $delete->rowCount() . ' technickych detailu stareho importu.';
+    return 'Udrzba uloziste: odstraneno ' . $deletedRows . ' technickych detailu stareho importu.';
 }
 
 function purgeExpiredAiResearchLogs(PDO $pdo): string
@@ -23412,12 +23465,7 @@ function renderApp(PDO $pdo, ?array $flash): void
             <?php endforeach; ?>
         </ul>
         <div class="actions-row">
-            <form method="post" class="inline">
-                <button type="submit" name="action" value="run_database_cleanup" class="secondary" title="Smaže jednu dávku provozního a crawl logu. Kontakty zůstávají.">Uklidit dávku (<?= h(number_format(min($dbCleanableRows, DB_CLEANUP_BATCH_ROWS), 0, ',', ' ')) ?> řádků)</button>
-            </form>
-            <form method="post" class="inline">
-                <button type="submit" name="action" value="optimize_database_tables" class="secondary" title="Přestaví tabulky, aby se volné místo vrátilo hostingu. Trvá déle.">Uvolnit místo hostingu (OPTIMIZE)</button>
-            </form>
+            <p class="muted">Úklid i fyzické uvolnění místa provádí automaticky cron. Pracuje po kontrolovaných dávkách a po větším objemu mazání tabulky sám zkompaktuje.</p>
             <button type="button" class="secondary" data-dialog-open="reset-ai-research-dialog">Vynulovat AI research data</button>
         </div>
     </section>
