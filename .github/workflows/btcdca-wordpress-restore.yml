@@ -1,0 +1,188 @@
+name: Restore BTC-DCA WordPress
+
+on:
+  workflow_dispatch:
+    inputs:
+      backup_run_id:
+        description: "Run ID containing btcdca-wordpress-recovery-<run ID>"
+        required: true
+        type: string
+      operation:
+        description: "dry-run validates a recovery artifact; restore writes it back to hosting"
+        required: true
+        default: dry-run
+        type: choice
+        options:
+          - dry-run
+          - restore
+      confirmation:
+        description: "For restore, enter exactly RESTORE_WORDPRESS"
+        required: false
+        type: string
+
+concurrency:
+  group: btcdca-wordpress-retirement
+  cancel-in-progress: false
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  restore-wordpress:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      BTCDCA_FTP_LOGIN: ${{ secrets.BTCDCA_FTP_LOGIN }}
+      BTCDCA_FTP_PASSWORD: ${{ secrets.BTCDCA_FTP_PASSWORD }}
+      BTCDCA_DB: ${{ secrets.BTCDCA_DB }}
+      BTCDCA_DB_USER: ${{ secrets.BTCDCA_DB_USER }}
+      BTCDCA_DB_PASSWORD: ${{ secrets.BTCDCA_DB_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate database restore helper syntax
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import base64
+          import json
+          from pathlib import Path
+
+          config = {'token': 'test', 'db_name': 'test', 'db_user': 'test', 'db_password': 'test'}
+          template = Path('scripts/btcdca_wordpress_database_helper.php.template').read_text(encoding='utf-8')
+          encoded = base64.b64encode(json.dumps(config).encode('utf-8')).decode('ascii')
+          Path('temporary-wordpress-database-helper.php').write_text(
+              template.replace('__CONFIG_BASE64__', encoded), encoding='utf-8'
+          )
+          PY
+          php -l temporary-wordpress-database-helper.php
+
+      - name: Validate recovery secrets
+        run: |
+          set -euo pipefail
+          for name in BTCDCA_FTP_LOGIN BTCDCA_FTP_PASSWORD BTCDCA_DB BTCDCA_DB_USER BTCDCA_DB_PASSWORD; do
+            test -n "${!name}"
+          done
+
+      - name: Download the selected WordPress recovery artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: btcdca-wordpress-recovery-${{ inputs.backup_run_id }}
+          path: backup
+          run-id: ${{ inputs.backup_run_id }}
+          repository: ${{ github.repository }}
+          github-token: ${{ github.token }}
+
+      - name: Validate recovery artifact
+        run: |
+          set -euo pipefail
+          test -d backup/wordpress-files/wp-admin
+          test -d backup/wordpress-files/wp-includes
+          test -d backup/wordpress-files/wp-content
+          test -f backup/wordpress-root/wp-config.php
+          test -f backup/wordpress-root/index.php
+          test -f backup/btcdca-wordpress.sql.gz
+          gzip -t backup/btcdca-wordpress.sql.gz
+          python3 - <<'PY'
+          import gzip
+          import re
+          from pathlib import Path
+
+          sql = gzip.decompress(Path('backup/btcdca-wordpress.sql.gz').read_bytes()).decode('utf-8')
+          assert sql.startswith('-- BTC-DCA WordPress backup\n')
+          tables = re.findall(r'(?:DROP TABLE IF EXISTS|CREATE TABLE|INSERT INTO)\\s+`([^`]+)`', sql, re.I)
+          assert tables and all(re.fullmatch(r'wp_dca_[A-Za-z0-9_]+', table) for table in tables)
+          print(f'Validated {len(set(tables))} WordPress tables and {len(tables)} SQL operations.')
+          PY
+          printf 'Artifact %s passed file and SQL validation.\n' '${{ inputs.backup_run_id }}' > recovery-validation.txt
+
+      - name: Upload recovery validation report
+        uses: actions/upload-artifact@v4
+        with:
+          name: btcdca-wordpress-recovery-validation-${{ github.run_id }}
+          path: recovery-validation.txt
+          retention-days: 90
+          compression-level: 0
+
+      - name: Require explicit restoration confirmation
+        if: inputs.operation == 'restore'
+        run: |
+          set -euo pipefail
+          test '${{ inputs.confirmation }}' = 'RESTORE_WORDPRESS'
+
+      - name: Install FTP restore client
+        if: inputs.operation == 'restore'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y lftp
+
+      - name: Generate and upload temporary database restore endpoint
+        if: inputs.operation == 'restore'
+        run: |
+          set -euo pipefail
+          echo "BTCDCA_DB_HELPER_TOKEN=$(openssl rand -hex 32)" >> "$GITHUB_ENV"
+          python3 - <<'PY'
+          import base64
+          import json
+          import os
+          from pathlib import Path
+
+          config = {
+              'token': os.environ['BTCDCA_DB_HELPER_TOKEN'],
+              'db_name': os.environ['BTCDCA_DB'],
+              'db_user': os.environ['BTCDCA_DB_USER'],
+              'db_password': os.environ['BTCDCA_DB_PASSWORD'],
+          }
+          template = Path('scripts/btcdca_wordpress_database_helper.php.template').read_text(encoding='utf-8')
+          encoded = base64.b64encode(json.dumps(config).encode('utf-8')).decode('ascii')
+          Path('temporary-wordpress-database-helper.php').write_text(
+              template.replace('__CONFIG_BASE64__', encoded), encoding='utf-8'
+          )
+          PY
+          php -l temporary-wordpress-database-helper.php
+          BTCDCA_TEMP_FILE_MODE=upload \
+          BTCDCA_TEMP_FILE_LOCAL=temporary-wordpress-database-helper.php \
+          BTCDCA_TEMP_FILE_REMOTE=www/btcdca-wordpress-database-helper.php \
+          python3 scripts/manage_btcdca_temporary_file.py
+
+      - name: Restore only WordPress database tables
+        if: inputs.operation == 'restore'
+        run: |
+          set -euo pipefail
+          curl --fail --show-error --silent --retry 2 \
+            -H "X-BTCDCA-Token: ${BTCDCA_DB_HELPER_TOKEN}" \
+            -H 'Content-Type: application/gzip' \
+            --data-binary @backup/btcdca-wordpress.sql.gz \
+            "https://www.btc-dca.com/btcdca-wordpress-database-helper.php?action=restore&confirm=RESTORE_WORDPRESS" \
+            --output restored-wordpress-tables.json
+          grep -Fq 'wp_dca_' restored-wordpress-tables.json
+
+      - name: Restore WordPress files
+        if: inputs.operation == 'restore'
+        run: |
+          set -euo pipefail
+          lftp -u "$BTCDCA_FTP_LOGIN","$BTCDCA_FTP_PASSWORD" "ftp://ftp.btc-dca.com" <<'LFTP'
+          set cmd:fail-exit true
+          set ftp:ssl-allow false
+          set ftp:ssl-force false
+          mirror --reverse --verbose backup/wordpress-files/wp-admin /www/wp-admin
+          mirror --reverse --verbose backup/wordpress-files/wp-includes /www/wp-includes
+          mirror --reverse --verbose backup/wordpress-files/wp-content /www/wp-content
+          mirror --reverse --verbose backup/wordpress-root /www
+          bye
+          LFTP
+
+      - name: Verify restored WordPress endpoint
+        if: inputs.operation == 'restore'
+        run: |
+          set -euo pipefail
+          test "$(curl --silent --output /dev/null --write-out '%{http_code}' https://www.btc-dca.com/wp-login.php)" != '404'
+          curl --fail --show-error --silent https://www.btc-dca.com/ | grep -Eqi '<html|<!doctype'
+
+      - name: Remove temporary database endpoint
+        if: always() && inputs.operation == 'restore'
+        run: |
+          BTCDCA_TEMP_FILE_MODE=delete \
+          BTCDCA_TEMP_FILE_REMOTE=www/btcdca-wordpress-database-helper.php \
+          python3 scripts/manage_btcdca_temporary_file.py

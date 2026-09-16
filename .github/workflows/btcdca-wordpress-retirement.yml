@@ -12,13 +12,18 @@ on:
   workflow_dispatch:
     inputs:
       operation:
-        description: "stage uploads only the static guides; retire also backs up and removes WordPress"
+        description: "stage uploads guides; snapshot creates a recovery artifact; retire removes WordPress using a validated snapshot"
         required: true
         default: stage
         type: choice
         options:
           - stage
+          - snapshot
           - retire
+      backup_run_id:
+        description: "Required for retire: run ID of the validated WordPress snapshot"
+        required: false
+        type: string
       confirmation:
         description: "For retire, enter exactly RETIRE_WORDPRESS"
         required: false
@@ -29,6 +34,7 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
+  actions: read
   contents: read
 
 jobs:
@@ -88,21 +94,22 @@ jobs:
         run: |
           set -euo pipefail
           test '${{ inputs.confirmation }}' = 'RETIRE_WORDPRESS'
+          test -n '${{ inputs.backup_run_id }}'
 
-      - name: Require a clean Learn Center link audit before retirement
-        if: inputs.operation == 'retire'
+      - name: Require a clean Learn Center link audit before snapshot or retirement
+        if: inputs.operation == 'snapshot' || inputs.operation == 'retire'
         run: |
           set -euo pipefail
           grep -Fq 'No Learn Center references found' .github/inspection/btcdca-learn-link-audit.md
 
       - name: Install FTP backup client
-        if: inputs.operation == 'retire'
+        if: inputs.operation == 'snapshot' || inputs.operation == 'retire'
         run: |
           sudo apt-get update
           sudo apt-get install -y lftp
 
       - name: Back up all WordPress files before removal
-        if: inputs.operation == 'retire'
+        if: inputs.operation == 'snapshot'
         run: |
           set -euo pipefail
           mkdir -p backup/wordpress-files backup/wordpress-root
@@ -131,7 +138,7 @@ jobs:
           test -f backup/wordpress-root/index.php
 
       - name: Generate and upload temporary database backup endpoint
-        if: inputs.operation == 'retire'
+        if: inputs.operation == 'snapshot' || inputs.operation == 'retire'
         run: |
           set -euo pipefail
           echo "BTCDCA_DB_HELPER_TOKEN=$(openssl rand -hex 32)" >> "$GITHUB_ENV"
@@ -160,7 +167,7 @@ jobs:
           python3 scripts/manage_btcdca_temporary_file.py
 
       - name: Export WordPress database tables
-        if: inputs.operation == 'retire'
+        if: inputs.operation == 'snapshot'
         run: |
           set -euo pipefail
           curl --fail --show-error --silent --retry 3 \
@@ -171,7 +178,7 @@ jobs:
           test "$(gzip -dc backup/btcdca-wordpress.sql.gz | grep -c '^CREATE TABLE `wp_dca_')" -gt 0
 
       - name: Upload WordPress recovery backup
-        if: inputs.operation == 'retire'
+        if: inputs.operation == 'snapshot'
         uses: actions/upload-artifact@v4
         with:
           name: btcdca-wordpress-recovery-${{ github.run_id }}
@@ -179,6 +186,39 @@ jobs:
           if-no-files-found: error
           retention-days: 90
           compression-level: 0
+
+      - name: Download the validated WordPress recovery backup
+        if: inputs.operation == 'retire'
+        uses: actions/download-artifact@v4
+        with:
+          name: btcdca-wordpress-recovery-${{ inputs.backup_run_id }}
+          path: backup
+          run-id: ${{ inputs.backup_run_id }}
+          repository: ${{ github.repository }}
+          github-token: ${{ github.token }}
+
+      - name: Validate the recovery artifact before retirement
+        if: inputs.operation == 'snapshot' || inputs.operation == 'retire'
+        run: |
+          set -euo pipefail
+          test -d backup/wordpress-files/wp-admin
+          test -d backup/wordpress-files/wp-includes
+          test -d backup/wordpress-files/wp-content
+          test -f backup/wordpress-root/wp-config.php
+          test -f backup/wordpress-root/index.php
+          test -f backup/btcdca-wordpress.sql.gz
+          gzip -t backup/btcdca-wordpress.sql.gz
+          python3 - <<'PY'
+          import gzip
+          import re
+          from pathlib import Path
+
+          sql = gzip.decompress(Path('backup/btcdca-wordpress.sql.gz').read_bytes()).decode('utf-8')
+          assert sql.startswith('-- BTC-DCA WordPress backup\n')
+          tables = re.findall(r'(?:DROP TABLE IF EXISTS|CREATE TABLE|INSERT INTO)\s+`([^`]+)`', sql, re.I)
+          assert tables and all(re.fullmatch(r'wp_dca_[A-Za-z0-9_]+', table) for table in tables)
+          print(f'Validated {len(set(tables))} WordPress tables and {len(tables)} SQL operations.')
+          PY
 
       - name: Remove only WordPress database tables
         if: inputs.operation == 'retire'
@@ -239,7 +279,7 @@ jobs:
           curl --fail --show-error --silent https://www.btc-dca.com/app/ | grep -Eqi '<html|<!doctype'
 
       - name: Remove temporary database endpoint
-        if: always() && inputs.operation == 'retire'
+        if: always() && (inputs.operation == 'snapshot' || inputs.operation == 'retire')
         run: |
           BTCDCA_TEMP_FILE_MODE=delete \
           BTCDCA_TEMP_FILE_REMOTE=www/btcdca-wordpress-database-helper.php \

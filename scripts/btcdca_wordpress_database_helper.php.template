@@ -80,5 +80,73 @@ if ($action === 'drop' && ($_GET['confirm'] ?? '') === 'RETIRE_WORDPRESS') {
     exit;
 }
 
+if ($action === 'restore' && ($_GET['confirm'] ?? '') === 'RESTORE_WORDPRESS') {
+    $compressed = file_get_contents('php://input');
+    if ($compressed === false || $compressed === '' || strlen($compressed) > 100 * 1024 * 1024) {
+        http_response_code(400);
+        exit('Missing or oversized WordPress database backup.');
+    }
+    $sql = gzdecode($compressed);
+    if ($sql === false || !str_starts_with($sql, "-- BTC-DCA WordPress backup\n")) {
+        http_response_code(400);
+        exit('Invalid WordPress database backup.');
+    }
+
+    preg_match_all('/(?:DROP TABLE IF EXISTS|CREATE TABLE|INSERT INTO)\\s+`([^`]+)`/i', $sql, $matches);
+    if ($matches[1] === []) {
+        http_response_code(400);
+        exit('WordPress database backup contains no tables.');
+    }
+    foreach (array_unique($matches[1]) as $table) {
+        if (!preg_match('/^wp_dca_[A-Za-z0-9_]+$/', $table)) {
+            http_response_code(400);
+            exit('WordPress database backup references an unexpected table.');
+        }
+    }
+
+    // The export deliberately contains one INSERT per row. Execute each statement
+    // separately, so a large WordPress post cannot exceed MySQL's packet limit.
+    $statement = '';
+    $quote = null;
+    $escaped = false;
+    $executed = 0;
+    for ($offset = 0, $length = strlen($sql); $offset < $length; $offset++) {
+        $character = $sql[$offset];
+        $statement .= $character;
+        if ($quote !== null) {
+            if ($escaped) {
+                $escaped = false;
+            } elseif ($character === '\\') {
+                $escaped = true;
+            } elseif ($character === $quote) {
+                $quote = null;
+            }
+            continue;
+        }
+        if ($character === "'" || $character === '"' || $character === '`') {
+            $quote = $character;
+            continue;
+        }
+        if ($character !== ';') {
+            continue;
+        }
+        $query = trim($statement);
+        $statement = '';
+        if ($query !== '' && !str_starts_with($query, '--')) {
+            if (!$database->query($query)) {
+                throw new RuntimeException('Could not restore WordPress database tables: ' . $database->error);
+            }
+            $executed++;
+        }
+    }
+    if (trim($statement) !== '' || $quote !== null || $executed === 0) {
+        throw new RuntimeException('WordPress database backup could not be parsed safely.');
+    }
+
+    header('Content-Type: application/json');
+    echo json_encode(['restored' => wordpress_tables($database)], JSON_THROW_ON_ERROR);
+    exit;
+}
+
 header('Content-Type: application/json');
 echo json_encode(['tables' => wordpress_tables($database)], JSON_THROW_ON_ERROR);
