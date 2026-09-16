@@ -1,0 +1,40 @@
+name: Preview BTC-DCA Learn Link Cleanup
+
+on:
+  push:
+    branches:
+      - codex/btcdca-wordpress-retirement-release
+    paths:
+      - '.github/workflows/btcdca-learn-link-cleanup.yml'
+      - 'scripts/cleanup_btcdca_learn_links.py'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  preview:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      BTCDCA_FTP_LOGIN: ${{ secrets.BTCDCA_FTP_LOGIN }}
+      BTCDCA_FTP_PASSWORD: ${{ secrets.BTCDCA_FTP_PASSWORD }}
+      BTCDCA_LEARN_LINK_MODE: preview
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build read-only cleanup preview
+        run: |
+          set -euo pipefail
+          python3 scripts/cleanup_btcdca_learn_links.py
+          test -f .github/inspection/btcdca-learn-link-cleanup-preview.md
+
+      - name: Upload cleanup preview and original files
+        uses: actions/upload-artifact@v4
+        with:
+          name: btcdca-learn-link-cleanup-preview-${{ github.run_id }}
+          path: |
+            .github/inspection/btcdca-learn-link-cleanup-preview.md
+            btcdca-learn-link-cleanup/original
+          if-no-files-found: error
+          retention-days: 90
