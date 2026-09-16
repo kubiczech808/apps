@@ -3,7 +3,7 @@ import { ceilPrice, floorPrice, normalizeCandlePrices, roundPrice } from './pric
 import { buildZones, candleSignal, marketStructure } from './priceaction.mjs'
 
 export const PRICE_ACTION_STRUCTURE_ID = 'price-action-structure-v1'
-export const PRICE_ACTION_MATRIX_SCHEMA = 16
+export const PRICE_ACTION_MATRIX_SCHEMA = 17
 export const PRICE_ACTION_CHART_CANDLE_LIMITS = {
   '1h': 8760,
   '4h': 2190,
@@ -216,6 +216,15 @@ const structureLeg = ({ previous, current, higherLabel, lowerLabel, breaksByClos
 
 const closeBreaksHigh = (current, previous) => current.candle?.close > previous.price
 const closeBreaksLow = (current, previous) => current.candle?.close < previous.price
+
+// The wide timeframe profile supplies the multi-month context requested by the
+// dashboard. Using that same radius for the live edge delays a 4H pivot by a
+// full week, however, and can leave the current range labelled from a month-old
+// HH/HL pair. Read current structure at half that radius while retaining the
+// wide structure below as context. Small test/research radii stay unchanged.
+const activeStructureLookback = (lookback) => lookback > 4
+  ? Math.max(2, Math.floor(lookback / 2))
+  : lookback
 
 const persistentStructureTrend = (candles, swings, lookback) => {
   const confirmations = new Map()
@@ -1023,7 +1032,11 @@ export const classifyStructure = (
       zones: null,
     }
   }
-  const structure = marketStructure(normalizedCandles, { lookback })
+  const contextStructure = marketStructure(normalizedCandles, { lookback })
+  const activeLookback = activeStructureLookback(lookback)
+  const structure = activeLookback === lookback
+    ? contextStructure
+    : marketStructure(normalizedCandles, { lookback: activeLookback })
   const latest = normalizedCandles.at(-1)
 
   const highLeg = structureLeg({
@@ -1045,22 +1058,24 @@ export const classifyStructure = (
   const localTrend = highText === 'HH' && lowText === 'HL'
     ? 'up'
     : highText === 'LH' && lowText === 'LL' ? 'down' : 'flat'
-  const persistent = persistentStructureTrend(normalizedCandles, structure.swings, lookback)
+  const persistent = persistentStructureTrend(normalizedCandles, structure.swings, activeLookback)
   const structureBreak = persistent.event
-  const trend = structureBreak?.type === 'CHoCH_DOWN'
-    ? 'down'
-    : structureBreak?.type === 'CHoCH_UP'
-      ? 'up'
-      : localTrend
-  const establishedTrend = structureBreak?.type.startsWith('CHoCH') ? structureBreak.fromTrend : trend
+  // CHoCH invalidates the old trend; it does not by itself complete the
+  // opposite sequence. Stay flat until the alternating pivots confirm both
+  // sides of the new structure (LH+LL or HH+HL).
+  const changingDirection = structureBreak?.type === 'CHoCH_DOWN' && localTrend !== 'down'
+    || structureBreak?.type === 'CHoCH_UP' && localTrend !== 'up'
+  const trend = changingDirection ? 'flat' : localTrend
+  const establishedTrend = structureBreak?.type.startsWith('CHoCH')
+    ? structureBreak.fromTrend
+    : persistent.trend
   const status = trend === 'up' ? 'met' : trend === 'down' ? 'unmet' : 'neutral'
   const contextHigh = normalizedCandles.reduce((best, candle) => !best || candle.high > best.high ? candle : best, null)
   const contextLow = normalizedCandles.reduce((best, candle) => !best || candle.low < best.low ? candle : best, null)
+  const labels = [highText, lowText].filter(Boolean).join(' + ')
   const reason = structureBreak?.type.startsWith('CHoCH')
-    ? `${structureBreak.type} close ${structureBreak.close} přes hlavní úroveň ${structureBreak.referencePrice}; předchozí ${[highText, lowText].filter(Boolean).join(' + ')}`
-    : trend !== 'flat' && localTrend !== trend
-      ? `hlavní struktura drží ${trend}; poslední pivoty ${[highText, lowText].filter(Boolean).join(' + ')} obrat nepotvrdily`
-      : [highText, lowText].filter(Boolean).join(' + ') || 'bez potvrzených pivotů'
+    ? `${structureBreak.type} close ${structureBreak.close} přes hlavní úroveň ${structureBreak.referencePrice}; nový směr zatím ${trend === 'flat' ? 'není potvrzen' : `potvrzen jako ${trend}`} (${labels || 'bez kompletní sekvence'})`
+    : labels || 'bez potvrzených pivotů'
 
   return {
     trend,
@@ -1079,6 +1094,7 @@ export const classifyStructure = (
     lastLow: structure.lastLow?.price ?? null,
     structure: {
       lookback,
+      activeLookback,
       zoneLookback,
       zoneMaxAgeCandles,
       historyDays,
@@ -1087,9 +1103,11 @@ export const classifyStructure = (
       contextHigh: contextHigh ? { price: contextHigh.high, time: contextHigh.time } : null,
       contextLow: contextLow ? { price: contextLow.low, time: contextLow.time } : null,
       swingCount: structure.swings.length,
+      contextSwingCount: contextStructure.swings.length,
       high: highLeg,
       low: lowLeg,
       recentSwings: structure.swings.slice(-8).map((swing) => pivotSummary(swing)),
+      contextRecentSwings: contextStructure.swings.slice(-8).map((swing) => pivotSummary(swing)),
     },
     zones: includeZones
       ? activeSupplyDemandZones(normalizedCandles, { lookback: zoneLookback, maxAgeCandles: zoneMaxAgeCandles })

@@ -161,8 +161,9 @@ jobs:
           "${user_systemctl[@]}" --no-pager --full status btc-bot.timer
           "${user_systemctl[@]}" list-timers --all btc-bot.timer
 
-          sudo -u openclaw2 -H node - <<'NODE'
-          const fs = require('node:fs')
+          sudo -u openclaw2 -H node --input-type=module - <<'NODE'
+          import fs from 'node:fs'
+          import { PRICE_ACTION_MATRIX_SCHEMA } from '/home/openclaw2/.local/lib/btc-bot/src/strategy-price-action-structure.mjs'
           const path = '/home/openclaw2/.local/state/btc-bot/bot-state.json'
           const state = JSON.parse(fs.readFileSync(path, 'utf8'))
           const btcDaily = state.priceActionMatrix?.assets
@@ -187,7 +188,7 @@ jobs:
           if (summary.strategyId !== 'price-action-structure-v1') throw new Error('PA-1 was not activated')
           if (summary.riskPct !== 1 || summary.priceActionRefresh !== 15) throw new Error('PA-1 settings are not active')
           if (summary.status === 'error' || summary.lastError) throw new Error(`first pass failed: ${summary.lastError}`)
-          if (summary.priceActionSchema !== 15) throw new Error('price-action matrix was not rebuilt')
+          if (summary.priceActionSchema !== PRICE_ACTION_MATRIX_SCHEMA) throw new Error('price-action matrix was not rebuilt')
           if (summary.btcDailyHistoryDays !== 400 || summary.btcDailyPivotLookback !== 30) {
             throw new Error('BTCUSD 1D does not use the scaled structure profile')
           }

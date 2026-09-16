@@ -176,9 +176,10 @@ test('a recent close through a major counter-swing changes the established trend
   ]
   const after = classifyStructure(broken, { lookback: 2, minCandles: 20 })
   assert.equal(after.establishedTrend, 'up')
-  assert.equal(after.trend, 'down')
+  assert.equal(after.trend, 'flat')
   assert.equal(after.event, 'CHoCH_DOWN')
   assert.equal(after.eventDetail.referencePrice, before.structure.low.current.price)
+  assert.match(after.reason, /nový směr zatím není potvrzen/)
 })
 
 test('mixed recent pivots are flat until a complete directional sequence forms', () => {
@@ -197,6 +198,23 @@ test('mixed recent pivots are flat until a complete directional sequence forms',
   assert.equal(downWithBounce.structure.high.label, 'LH')
   assert.equal(downWithBounce.structure.low.label, 'HL')
   assert.equal(downWithBounce.trend, 'flat')
+})
+
+test('wide timeframe context uses a more responsive structural edge', () => {
+  const rangeAfterExpansion = classifyStructure(
+    zigzag([60, 67, 62, 65, 62.5, 81.5, 76, 82, 76.5, 79.5, 77], { steps: 24 }),
+    { lookback: 42, minCandles: 20, includeZones: false, includeChartCandles: false }
+  )
+
+  assert.equal(rangeAfterExpansion.structure.lookback, 42)
+  assert.equal(rangeAfterExpansion.structure.activeLookback, 21)
+  assert.ok(rangeAfterExpansion.structure.swingCount > rangeAfterExpansion.structure.contextSwingCount)
+  assert.equal(rangeAfterExpansion.structure.high.label, 'LH')
+  assert.equal(rangeAfterExpansion.structure.low.label, 'HL')
+  assert.equal(rangeAfterExpansion.trend, 'flat')
+  assert.ok(rangeAfterExpansion.structure.recentSwings.every((swing, index, all) =>
+    index === 0 || swing.kind !== all[index - 1].kind
+  ))
 })
 
 test('structure horizons and pivot widths scale with timeframe', () => {
@@ -716,8 +734,10 @@ test('price-action matrix covers BTCUSD and major FX pairs on 1H, 4H and 1D', as
     assert.deepEqual(Object.keys(asset.trends), ['1h', '4h', '1d'])
   }
   assert.equal(matrix.assets[0].trends['1h'].structure.lookback, 48)
+  assert.equal(matrix.assets[0].trends['1h'].structure.activeLookback, 24)
   assert.equal(matrix.assets[0].trends['1h'].structure.historyDays, 60)
   assert.equal(matrix.assets[0].trends['4h'].structure.lookback, 42)
+  assert.equal(matrix.assets[0].trends['4h'].structure.activeLookback, 21)
   assert.equal(matrix.assets[0].trends['4h'].structure.historyDays, 180)
   assert.equal(matrix.assets[0].trends['4h'].structure.zoneMaxAgeCandles, 1080)
   assert.ok(matrix.assets[0].trends['4h'].zones)
