@@ -64,7 +64,7 @@ on:
         default: "5"
         type: string
 concurrency:
-  group: trading-paper-bot
+  group: trading-hosting-write-${{ github.ref }}
   cancel-in-progress: false
 
 permissions:
@@ -411,6 +411,8 @@ jobs:
           # JSON remains authoritative until the database has caught up and is
           # explicitly activated. The mirror therefore cannot interrupt a trade run.
           TRADING_STORAGE_INGEST_REQUIRED: "false"
+          # Market Scan owns catalogue writes; this pass still mirrors portfolio and trade updates.
+          TRADING_STORAGE_INGEST_OBSERVATIONS: "false"
           # The mirror was gated behind this flag and NOTHING ever set it, so every one of
           # these steps has printed "Trading SQL mirror is disabled pending storage
           # verification" and written nothing. Measured on the database: last ingest

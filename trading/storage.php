@@ -1435,13 +1435,24 @@ function trading_storage_observations_upsert(array $items): int
            :endAt, :observedAt, :resolvedAt, :probability, :netYield, :annualizedReturn, :volume,
            :tags, :payload, :checksum, :createdAt, :updatedAt
          ) ON DUPLICATE KEY UPDATE
-           lifecycle = VALUES(lifecycle), source_id = VALUES(source_id), token_id = VALUES(token_id),
-           event_slug = VALUES(event_slug), market_slug = VALUES(market_slug), outcome_label = VALUES(outcome_label),
-           market_type = VALUES(market_type), end_at = VALUES(end_at), observed_at = VALUES(observed_at),
-           resolved_at = VALUES(resolved_at), market_probability = VALUES(market_probability),
-           net_yield = VALUES(net_yield), annualized_return = VALUES(annualized_return), volume_usdc = VALUES(volume_usdc),
-           tags_json = VALUES(tags_json), payload = VALUES(payload), payload_checksum = VALUES(payload_checksum),
-           updated_at = VALUES(updated_at)'
+           lifecycle = IF(payload_checksum = VALUES(payload_checksum), lifecycle, VALUES(lifecycle)),
+           source_id = IF(payload_checksum = VALUES(payload_checksum), source_id, VALUES(source_id)),
+           token_id = IF(payload_checksum = VALUES(payload_checksum), token_id, VALUES(token_id)),
+           event_slug = IF(payload_checksum = VALUES(payload_checksum), event_slug, VALUES(event_slug)),
+           market_slug = IF(payload_checksum = VALUES(payload_checksum), market_slug, VALUES(market_slug)),
+           outcome_label = IF(payload_checksum = VALUES(payload_checksum), outcome_label, VALUES(outcome_label)),
+           market_type = IF(payload_checksum = VALUES(payload_checksum), market_type, VALUES(market_type)),
+           end_at = IF(payload_checksum = VALUES(payload_checksum), end_at, VALUES(end_at)),
+           observed_at = IF(payload_checksum = VALUES(payload_checksum), observed_at, VALUES(observed_at)),
+           resolved_at = IF(payload_checksum = VALUES(payload_checksum), resolved_at, VALUES(resolved_at)),
+           market_probability = IF(payload_checksum = VALUES(payload_checksum), market_probability, VALUES(market_probability)),
+           net_yield = IF(payload_checksum = VALUES(payload_checksum), net_yield, VALUES(net_yield)),
+           annualized_return = IF(payload_checksum = VALUES(payload_checksum), annualized_return, VALUES(annualized_return)),
+           volume_usdc = IF(payload_checksum = VALUES(payload_checksum), volume_usdc, VALUES(volume_usdc)),
+           tags_json = IF(payload_checksum = VALUES(payload_checksum), tags_json, VALUES(tags_json)),
+           payload = IF(payload_checksum = VALUES(payload_checksum), payload, VALUES(payload)),
+           updated_at = IF(payload_checksum = VALUES(payload_checksum), updated_at, VALUES(updated_at)),
+           payload_checksum = IF(payload_checksum = VALUES(payload_checksum), payload_checksum, VALUES(payload_checksum))'
     );
     $count = 0;
     $pdo->beginTransaction();

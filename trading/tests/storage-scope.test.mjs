@@ -372,6 +372,8 @@ test("the upsert writes exactly these columns", () => {
   assert.ok(placeholders.length > 0, "the INSERT still binds named placeholders");
   assert.deepEqual(placeholders.sort(), bound.sort(),
     "every placeholder in the INSERT must be bound by the column extraction, and vice versa");
+  assert.match(upsert, /IF\(payload_checksum = VALUES\(payload_checksum\), updated_at, VALUES\(updated_at\)\)/,
+    "an unchanged observation must not become a fresh database write");
 });
 
 test("archived observation recovery restores only missing keys", () => {

@@ -100,9 +100,9 @@ on:
     - cron: '13 * * * *'
 
 concurrency:
-  # Every live portfolio uses the same funded Polymarket proxy wallet. Keep
-  # entry decisions serialized across all live strategy workflows.
-  group: trading-live-wallet-${{ github.ref }}
+  # Every live portfolio uses the same funded wallet and the same constrained hosting.
+  # Keep execution, state publication and MySQL writes out of parallel workflows.
+  group: trading-hosting-write-${{ github.ref }}
   cancel-in-progress: false
 
 permissions:

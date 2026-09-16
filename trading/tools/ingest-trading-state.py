@@ -312,16 +312,20 @@ def ingest_paper(url: str, key: str, state_file: Path, state: dict[str, Any], ta
     imported = 0
     batches = 0
     sources: list[tuple[Path, str]] = []
-    active_path = segments.get("observations")
-    resolved_path = segments.get("resolvedObservations")
-    if active_path is not None:
-        sources.append((active_path, "marketObservations"))
-    elif isinstance(state.get("marketObservations"), list):
-        sources.append((state_file, "marketObservations"))
-    if resolved_path is not None:
-        sources.append((resolved_path, "resolvedMarketObservations"))
-    elif isinstance(state.get("resolvedMarketObservations"), list):
-        sources.append((state_file, "resolvedMarketObservations"))
+    if env_bool("TRADING_STORAGE_INGEST_OBSERVATIONS", True):
+        active_path = segments.get("observations")
+        resolved_path = segments.get("resolvedObservations")
+        if active_path is not None:
+            sources.append((active_path, "marketObservations"))
+        elif isinstance(state.get("marketObservations"), list):
+            sources.append((state_file, "marketObservations"))
+        if resolved_path is not None:
+            sources.append((resolved_path, "resolvedMarketObservations"))
+        elif isinstance(state.get("resolvedMarketObservations"), list):
+            sources.append((state_file, "resolvedMarketObservations"))
+    else:
+        print("Observation catalogue mirror skipped: Trading Market Scan is its sole writer")
+    pause_seconds = max(0.0, float(os.environ.get("TRADING_STORAGE_INGEST_PAUSE_SECONDS") or 0))
     for source, field in sources:
         try:
             rows = list_rows(json.loads(source.read_text(encoding="utf-8")).get(field))
@@ -337,6 +341,8 @@ def ingest_paper(url: str, key: str, state_file: Path, state: dict[str, Any], ta
             )
             imported += int(((result.get("ingest") or {}).get("observations") or 0))
             batches += 1
+            if pause_seconds and offset + 300 < len(rows):
+                time.sleep(pause_seconds)
     return imported, batches
 
 

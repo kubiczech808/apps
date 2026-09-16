@@ -15,8 +15,8 @@ on:
     - cron: '5,35 * * * *'
 
 concurrency:
-  group: trading-live-account-${{ github.ref }}
-  cancel-in-progress: true
+  group: trading-hosting-write-${{ github.ref }}
+  cancel-in-progress: false
 
 permissions:
   contents: read

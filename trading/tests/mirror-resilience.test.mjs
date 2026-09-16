@@ -176,3 +176,11 @@ test("mirror: a retried part is only reported as failed when the retry also fail
   assert.equal(failed.sent.filter((entry) => entry.part === "events").length, 2);
   assert.equal(failed.sent.filter((entry) => entry.part === "observations").length, 3);
 });
+
+test("mirror: a paper execution pass can leave catalogue writes to the scan", () => {
+  const source = readFileSync(SCRIPT, "utf8");
+  assert.match(source, /TRADING_STORAGE_INGEST_OBSERVATIONS/,
+    "the executor needs to skip a catalogue that the scan already mirrored");
+  assert.match(source, /TRADING_STORAGE_INGEST_PAUSE_SECONDS/,
+    "large observation batches need a configurable pause on shared hosting");
+});
