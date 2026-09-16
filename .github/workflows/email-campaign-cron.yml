@@ -59,4 +59,9 @@ jobs:
           reclaim_code=$(curl --show-error --silent --max-time 180 --output /tmp/email-campaign-reclaim-body.txt --write-out "%{http_code}" "https://www.osobnizkusenosti.cz/email-campaign/?cron=${TOKEN}&db_reclaim=1")
           echo "Reclaim HTTP ${reclaim_code}"
           cat /tmp/email-campaign-reclaim-body.txt
-          test "$reclaim_code" -ge 200 -a "$reclaim_code" -lt 300
+          # Reclaim je doplnkova udrzba. Pri docasnem limitu hostingu se zopakuje
+          # dalsim tikem, ale nesmi oznacit hlavni cron (kampane/importy/scraping)
+          # jako neuspesny.
+          if [ "$reclaim_code" -lt 200 ] || [ "$reclaim_code" -ge 300 ]; then
+            echo "::warning::Jednorazove uvolneni mista vratilo HTTP ${reclaim_code}; bude zopakovano dalsim tikem."
+          fi
