@@ -66,10 +66,7 @@ jobs:
         run: |
           set -euo pipefail
           python3 scripts/audit_btcdca_learn_links.py
-          if ! grep -Fq 'No Learn Center references found' .github/inspection/btcdca-learn-link-audit.md; then
-            echo 'Stale Learn Center links were found. Review the artifact and remove them before retiring WordPress.'
-            exit 1
-          fi
+          cat .github/inspection/btcdca-learn-link-audit.md
 
       - name: Stage and verify the preserved static guides
         run: |
@@ -91,6 +88,12 @@ jobs:
         run: |
           set -euo pipefail
           test '${{ inputs.confirmation }}' = 'RETIRE_WORDPRESS'
+
+      - name: Require a clean Learn Center link audit before retirement
+        if: inputs.operation == 'retire'
+        run: |
+          set -euo pipefail
+          grep -Fq 'No Learn Center references found' .github/inspection/btcdca-learn-link-audit.md
 
       - name: Install FTP backup client
         if: inputs.operation == 'retire'
