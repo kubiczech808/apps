@@ -3166,6 +3166,34 @@ td a {
   text-align: right;
   white-space: nowrap;
 }
+.storage-status {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  margin: 14px 0 18px;
+}
+.storage-status-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid #dbe8e3;
+  border-radius: 6px;
+  background: #f7faf8;
+}
+.storage-status-card strong {
+  font-size: 14px;
+}
+.storage-status-card small {
+  color: #52635c;
+  line-height: 1.4;
+}
+.storage-status-value {
+  font-size: 18px;
+  font-weight: 700;
+  color: #123f36;
+}
 .db-cleanup-list {
   list-style: none;
   margin: 0 0 14px;
@@ -3196,6 +3224,9 @@ td a {
    znamenaly 1608 px sirokou tabulku, ve ktere neni videt nic. Tyto pravidla musi byt
    az za desktopovymi (a stejne specificka), jinak je desktopova sada prebije. */
 @media (max-width: 760px) {
+  .storage-status {
+    grid-template-columns: 1fr;
+  }
   .view-research .research-table,
   .research-log-table {
     min-width: 0;

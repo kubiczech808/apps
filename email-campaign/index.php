@@ -12664,6 +12664,16 @@ function databaseSizeSummary(PDO $pdo): array
 }
 
 /**
+ * Jednotny ukazatel prostoru, ktery muze zabirat databaze v hostingove kvote.
+ * U InnoDB se pocita i DATA_FREE, protoze jde o prostor uvolneny uvnitr tabulky,
+ * ktery hosting casto stale zapocitava, dokud neprobehne OPTIMIZE TABLE.
+ */
+function databaseQuotaBytes(array $summary): int
+{
+    return max(0, (int)($summary['total_bytes'] ?? 0) + (int)($summary['free_bytes'] ?? 0));
+}
+
+/**
  * Hranice, za kterou se radek crawl logu uz nedrzi.
  */
 function scrapingItemRetentionCutoff(): string
@@ -13037,6 +13047,9 @@ function databaseCleanupEstimate(PDO $pdo): array
  */
 function runDatabaseCleanupBatch(PDO $pdo, int $budgetSeconds = 20, int $batchRows = DB_CLEANUP_BATCH_ROWS): string
 {
+    if (isMysql($pdo)) {
+        setSettingRaw($pdo, 'database_storage_cleanup_last_run_at', date('c'));
+    }
     $deadline = time() + max(3, $budgetSeconds);
     // Prubezny cron jede po malych davkach. Dohnani nahromadene historie ale takhle
     // trva dny, takze rucni spusteni smi davku zvetsit - se stropem, aby jedna
@@ -13159,10 +13172,20 @@ function runDatabaseStorageReclaim(PDO $pdo): string
     }
     try {
         $settings = loadSettings($pdo);
+        $now = date('c');
+        setSettingRaw($pdo, 'database_storage_reclaim_last_run_at', $now);
         $version = (string)($settings['database_storage_reclaim_version'] ?? '');
         $state = (string)($settings['database_storage_reclaim_state'] ?? '');
+        if ((string)($settings['database_storage_reclaim_started_at'] ?? '') === '') {
+            $before = databaseSizeSummary($pdo);
+            setSettingRaw($pdo, 'database_storage_reclaim_started_at', $now);
+            setSettingRaw($pdo, 'database_storage_reclaim_before_bytes', (string)databaseQuotaBytes($before));
+            setSettingRaw($pdo, 'database_storage_reclaim_after_bytes', (string)databaseQuotaBytes($before));
+            setSettingRaw($pdo, 'database_storage_reclaim_saved_bytes', '0');
+        }
         if ($version === '2026-09-v2' && $state === 'complete') {
             setSettingRaw($pdo, 'database_storage_reclaim_quiesce', '0');
+            setSettingRaw($pdo, 'database_storage_reclaim_completed_at', (string)($settings['database_storage_reclaim_completed_at'] ?? $now) ?: $now);
             return 'Jednorazove uvolneni mista uz bylo dokonceno.';
         }
         // Udrzba musi mit klidne tabulky: necekame, az se nekonecny scraping sam
@@ -13170,11 +13193,15 @@ function runDatabaseStorageReclaim(PDO $pdo): string
         if ((string)($settings['database_storage_reclaim_quiesce'] ?? '') !== '1') {
             $cancelled = pauseJobsForStorageReclaim($pdo);
             setSettingRaw($pdo, 'database_storage_reclaim_quiesce', '1');
-            return 'Pozastaveno pro udrzbu: scraping ' . $cancelled['scraping'] . ', import ' . $cancelled['imports'] . '.';
+            $message = 'Pozastaveno pro udrzbu: scraping ' . $cancelled['scraping'] . ', import ' . $cancelled['imports'] . '.';
+            setSettingRaw($pdo, 'database_storage_reclaim_status', $message);
+            return $message;
         }
         $diagnostics = databaseCleanupDiagnostics($pdo);
         if ((int)($diagnostics['scraping_items_prunable'] ?? 0) > 0 || (int)($diagnostics['import_items_prunable'] ?? 0) > 0) {
-            return 'Ceka na dokonceni 14denni retence detailu logu.';
+            $message = 'Ceka na dokonceni 14denni retence detailu logu.';
+            setSettingRaw($pdo, 'database_storage_reclaim_status', $message);
+            return $message;
         }
         if ($version !== '2026-09-v2' || $state === '') {
             $state = 'import_run_items';
@@ -13207,10 +13234,17 @@ function runDatabaseStorageReclaim(PDO $pdo): string
         } else {
             $message = 'Jednorazove uvolneni: ' . $table . ' uz nedrzi meritelne volne misto.';
         }
+        $after = databaseSizeSummary($pdo);
+        $afterBytes = databaseQuotaBytes($after);
+        $beforeBytes = (int)($settings['database_storage_reclaim_before_bytes'] ?? 0);
+        $savedBytes = $beforeBytes > 0 ? max(0, $beforeBytes - $afterBytes) : 0;
         setSettingRaw($pdo, 'database_storage_reclaim_state', $next[$state]);
         setSettingRaw($pdo, 'database_storage_reclaim_status', $message);
+        setSettingRaw($pdo, 'database_storage_reclaim_after_bytes', (string)$afterBytes);
+        setSettingRaw($pdo, 'database_storage_reclaim_saved_bytes', (string)$savedBytes);
         if ($next[$state] === 'complete') {
             setSettingRaw($pdo, 'database_storage_reclaim_quiesce', '0');
+            setSettingRaw($pdo, 'database_storage_reclaim_completed_at', $now);
         }
         return $message;
     } finally {
@@ -13220,6 +13254,56 @@ function runDatabaseStorageReclaim(PDO $pdo): string
             // Zamek se uvolni i pri ukonceni requestu.
         }
     }
+}
+
+/**
+ * Stav udrzby pro administraci. Cte globalni provozni nastaveni i kdyz je admin
+ * prihlaseny jako konkretni uzivatel; jinak by se globalni cron stav v jeho pohledu
+ * ztratil kvuli izolaci uzivatelskych nastaveni.
+ */
+function databaseStorageMaintenanceStatus(PDO $pdo): array
+{
+    $settings = loadSettingsForUser($pdo, 0);
+    $cleanup = databaseCleanupDiagnostics($pdo);
+    $summary = databaseSizeSummary($pdo);
+    $currentBytes = databaseQuotaBytes($summary);
+    $beforeBytes = max(0, (int)($settings['database_storage_reclaim_before_bytes'] ?? 0));
+    $afterBytes = max(0, (int)($settings['database_storage_reclaim_after_bytes'] ?? 0));
+    $savedBytes = max(0, (int)($settings['database_storage_reclaim_saved_bytes'] ?? 0));
+    if ($beforeBytes > 0) {
+        // Aktualni mereni je autoritativni i zachyti pripadne dalsi OPTIMIZE kroky.
+        $afterBytes = $currentBytes;
+        $savedBytes = max($savedBytes, $beforeBytes - $afterBytes);
+    }
+    $reclaimState = trim((string)($settings['database_storage_reclaim_state'] ?? ''));
+    $retentionState = trim((string)($settings['database_storage_maintenance_state'] ?? ''));
+    $reclaimComplete = $reclaimState === 'complete';
+    $retentionComplete = in_array($retentionState, ['retention_complete', 'completed'], true);
+    $pendingRows = (int)($cleanup['scraping_items_prunable'] ?? 0)
+        + (int)($cleanup['import_items_prunable'] ?? 0)
+        + (int)($cleanup['ai_research_logs_prunable'] ?? 0)
+        + (int)($cleanup['expired_sessions'] ?? 0);
+    return [
+        'is_mysql' => isMysql($pdo),
+        'current_bytes' => $currentBytes,
+        'before_bytes' => $beforeBytes,
+        'after_bytes' => $afterBytes,
+        'saved_bytes' => $savedBytes,
+        'pending_rows' => max(0, $pendingRows),
+        'scraping_items_prunable' => (int)($cleanup['scraping_items_prunable'] ?? 0),
+        'import_items_prunable' => (int)($cleanup['import_items_prunable'] ?? 0),
+        'reclaim_state' => $reclaimState,
+        'reclaim_status' => trim((string)($settings['database_storage_reclaim_status'] ?? '')),
+        'reclaim_started_at' => trim((string)($settings['database_storage_reclaim_started_at'] ?? '')),
+        'reclaim_completed_at' => trim((string)($settings['database_storage_reclaim_completed_at'] ?? '')),
+        'reclaim_last_run_at' => trim((string)($settings['database_storage_reclaim_last_run_at'] ?? '')),
+        'retention_state' => $retentionState,
+        'retention_status' => trim((string)($settings['database_storage_maintenance_status'] ?? '')),
+        'retention_last_run_at' => trim((string)($settings['database_storage_maintenance_last_run_at'] ?? '')),
+        'cleanup_last_run_at' => trim((string)($settings['database_storage_cleanup_last_run_at'] ?? '')),
+        'reclaim_complete' => $reclaimComplete,
+        'retention_complete' => $retentionComplete,
+    ];
 }
 
 /**
@@ -17071,6 +17155,8 @@ function runDatabaseStorageMaintenance(PDO $pdo): string
     if (!isMysql($pdo) || !tableExists($pdo, 'scraping_job_items')) {
         return 'Udrzba uloziste: neni potreba.';
     }
+
+    setSettingRaw($pdo, 'database_storage_maintenance_last_run_at', date('c'));
 
     try {
         $locked = (int)$pdo->query("SELECT GET_LOCK('email_campaign_storage_maintenance', 0)")->fetchColumn();
@@ -23247,6 +23333,11 @@ function renderApp(PDO $pdo, ?array $flash): void
         foreach ($dbCleanup as $dbTask) {
             $dbCleanableRows += (int)$dbTask['rows'];
         }
+        $dbStorage = databaseStorageMaintenanceStatus($pdo);
+        $reclaimLabel = !$dbStorage['is_mysql']
+            ? 'Nedostupné: aplikace není připojená k MySQL'
+            : ($dbStorage['reclaim_complete'] ? 'Dokončeno' : ($dbStorage['reclaim_started_at'] !== '' ? 'Probíhá' : 'Čeká na první krok'));
+        $reclaimBadgeClass = !$dbStorage['is_mysql'] ? 'warning' : ($dbStorage['reclaim_complete'] ? 'success' : 'info');
     ?>
     <section class="panel">
         <div class="section-header">
@@ -23261,6 +23352,30 @@ function renderApp(PDO $pdo, ?array $flash): void
             <span>Indexy: <strong><?= h(formatBytesHuman((int)$dbSummary['index_bytes'])) ?></strong></span>
             <span>Volné místo v souborech: <strong><?= h(formatBytesHuman((int)$dbSummary['free_bytes'])) ?></strong></span>
             <span>Celkem proti kvótě: <strong><?= h(formatBytesHuman((int)$dbSummary['total_bytes'] + (int)$dbSummary['free_bytes'])) ?></strong></span>
+        </div>
+        <div class="storage-status" aria-live="polite">
+            <div class="storage-status-card">
+                <span class="badge success">Aktivní</span>
+                <strong>Pravidelný úklid</strong>
+                <small>Probíhá automaticky v malých dávkách při každém cronu. Kontakty, kampaně, účty a databáze kontaktů se nemažou.</small>
+                <?php if ($dbStorage['cleanup_last_run_at'] !== ''): ?><small class="muted">Poslední dávka: <?= h(formatDateTime($dbStorage['cleanup_last_run_at'])) ?></small><?php endif; ?>
+            </div>
+            <div class="storage-status-card">
+                <span class="badge <?= h($reclaimBadgeClass) ?>"><?= h($reclaimLabel) ?></span>
+                <strong>Uvolnění místa hostingu</strong>
+                <small><?= h($dbStorage['reclaim_status'] ?: 'Po odstranění starých detailů proběhne postupná kompakce tabulek.') ?></small>
+                <?php if ($dbStorage['reclaim_completed_at'] !== ''): ?><small class="muted">Dokončeno: <?= h(formatDateTime($dbStorage['reclaim_completed_at'])) ?></small><?php elseif ($dbStorage['reclaim_last_run_at'] !== ''): ?><small class="muted">Poslední krok: <?= h(formatDateTime($dbStorage['reclaim_last_run_at'])) ?></small><?php endif; ?>
+            </div>
+            <div class="storage-status-card">
+                <strong>Uvolněno</strong>
+                <span class="storage-status-value"><?= $dbStorage['before_bytes'] > 0 ? h(formatBytesHuman($dbStorage['saved_bytes'])) : 'zatím se měří' ?></span>
+                <small><?= $dbStorage['before_bytes'] > 0 ? 'Rozdíl proti velikosti při zahájení této optimalizace.' : 'Hodnota se uloží při prvním kroku fyzické kompaktace.' ?></small>
+            </div>
+            <div class="storage-status-card">
+                <strong>Čeká na úklid</strong>
+                <span class="storage-status-value"><?= h(number_format((int)$dbStorage['pending_rows'], 0, ',', ' ')) ?> řádků</span>
+                <small><?= h((int)$dbStorage['scraping_items_prunable']) ?> crawl detailů, <?= h((int)$dbStorage['import_items_prunable']) ?> detailů importů čeká na 14denní retenci.</small>
+            </div>
         </div>
         <?php if (!$dbSummary['tables']): ?>
             <p class="note">Velikosti tabulek umí přečíst jen MySQL (information_schema).</p>
