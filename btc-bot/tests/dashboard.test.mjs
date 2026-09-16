@@ -318,6 +318,14 @@ test('the API refuses stale PA-1 runners before they overwrite current structure
   assert.match(api, /fail\(409, 'Runner uses an obsolete price-action matrix schema\.'\)/)
 })
 
+test('the API retires the duplicate legacy Pi lease identity', () => {
+  assert.match(api, /const PRIMARY_RUNNER = 'rpi-primary-v2'/)
+  assert.match(api, /const RETIRED_RUNNERS = \['rpi'\]/)
+  assert.match(api, /in_array\(\$owner, RETIRED_RUNNERS, true\)/)
+  assert.match(api, /'reason' => 'runner identity retired'/)
+  assert.match(api, /!in_array\(\$currentOwner, RETIRED_RUNNERS, true\)/)
+})
+
 test('the API overlays published PA-1 backtest summaries onto the dashboard state', () => {
   assert.match(api, /const BACKTEST_FILE = DATA_DIR \. '\/backtests\.json'/)
   assert.match(api, /\$backtests = readJsonFile\(BACKTEST_FILE, null\)/)

@@ -31,6 +31,8 @@ const SETTINGS_FILE = DATA_DIR . '/settings.json';
 const BACKTEST_FILE = DATA_DIR . '/backtests.json';
 const LEASE_FILE = DATA_DIR . '/lease.json';
 const COMMANDS_FILE = DATA_DIR . '/commands.json';
+const PRIMARY_RUNNER = 'rpi-primary-v2';
+const RETIRED_RUNNERS = ['rpi'];
 // A retired runner must not be able to overwrite a newer PA-1 interpretation.
 // This is also a guard against two machines configured with the same lease
 // owner: the lease cannot distinguish them, but the published contract can.
@@ -244,12 +246,22 @@ switch ($action) {
         if ($owner === '') {
             fail(400, 'A lease needs an owner.');
         }
+        if (in_array($owner, RETIRED_RUNNERS, true)) {
+            ok([
+                'granted' => false,
+                'owner' => PRIMARY_RUNNER,
+                'expiresAt' => 0,
+                'reason' => 'runner identity retired',
+            ]);
+        }
         $ttl = max(10000, min($ttl, 900000));
 
         $now = (int) round(microtime(true) * 1000);
         $current = readJsonFile(LEASE_FILE, null);
+        $currentOwner = (string) ($current['owner'] ?? '');
         $heldBySomeoneElse = is_array($current)
-            && ($current['owner'] ?? '') !== $owner
+            && $currentOwner !== $owner
+            && !in_array($currentOwner, RETIRED_RUNNERS, true)
             && (int) ($current['expiresAt'] ?? 0) > $now;
 
         if ($heldBySomeoneElse) {

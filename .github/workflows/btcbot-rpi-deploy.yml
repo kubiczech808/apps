@@ -110,19 +110,25 @@ jobs:
           path = Path(os.environ["CONFIG_PATH"])
           lines = path.read_text(encoding="utf-8").splitlines()
           updated = []
-          found = False
+          found_url = False
+          found_runner = False
           for line in lines:
               if line.startswith("BOT_API_URL="):
                   updated.append("BOT_API_URL=https://btc-dca.com/bot/api.php")
-                  found = True
+                  found_url = True
               elif line.startswith("BOT_API_KEY="):
                   updated.append("BOT_API_KEY=ahoj1234567890")
+              elif line.startswith("BOT_RUNNER="):
+                  updated.append("BOT_RUNNER=rpi-primary-v2")
+                  found_runner = True
               else:
                   updated.append(line)
-          if not found:
+          if not found_url:
               updated.append("BOT_API_URL=https://btc-dca.com/bot/api.php")
           if not any(line.startswith("BOT_API_KEY=") for line in updated):
               updated.append("BOT_API_KEY=ahoj1234567890")
+          if not found_runner:
+              updated.append("BOT_RUNNER=rpi-primary-v2")
           path.write_text("\n".join(updated) + "\n", encoding="utf-8")
           account = pwd.getpwnam("openclaw2")
           os.chown(path, account.pw_uid, account.pw_gid)
@@ -227,7 +233,7 @@ jobs:
             if (!Number.isFinite(updatedAt) || ageMs > 120_000) {
               throw new Error('Hosted dashboard state was not refreshed by the Pi')
             }
-            if (savedBy !== 'rpi') throw new Error(`Expected Pi heartbeat, got ${savedBy ?? 'none'}`)
+            if (savedBy !== 'rpi-primary-v2') throw new Error(`Expected primary Pi heartbeat, got ${savedBy ?? 'none'}`)
             if (updatedAt <= after) throw new Error('Timer did not produce a newer hosted heartbeat')
             return updatedAt
           }
