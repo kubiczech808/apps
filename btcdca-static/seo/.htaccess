@@ -1,0 +1,19 @@
+Options -Indexes
+DirectoryIndex index.html
+RewriteEngine On
+
+# Keep public BTC-DCA and app URLs extensionless without WordPress.
+RewriteCond %{THE_REQUEST} \s/+((?:login-user|signup-user|dca-calculator|forgot-password|reset-code|new-password|password-changed|user-otp|logout-user|btcdca-google-login|btcdca-google-callback|btcdca-google-token-login))\.php[?\s] [NC]
+RewriteRule ^ /%1 [R=301,L,NE]
+RewriteCond %{THE_REQUEST} \s/+app/([^?\s]+)\.php[?\s] [NC]
+RewriteRule ^ /app/%1 [R=301,L,NE]
+RewriteRule ^app/overview/?$ /app/overview.php [L,QSA]
+RewriteRule ^app/([^/.]+)/?$ /app/$1.php [L,QSA]
+RewriteCond %{REQUEST_FILENAME}.php -f
+RewriteRule ^(login-user|signup-user|dca-calculator|forgot-password|reset-code|new-password|password-changed|user-otp|logout-user|btcdca-google-login|btcdca-google-callback|btcdca-google-token-login)/?$ $1.php [L,QSA]
+
+# Preserve the legacy API guide URL with a canonical replacement.
+RewriteRule ^how-to-set-up-api-key\.php$ /btc-dca-coinmate-how-to-set-up-api-key/ [R=301,L,NE]
+
+# Retired WordPress section and its generated articles are intentionally gone.
+RewriteRule ^learn-center(?:/.*)?$ - [R=410,L]

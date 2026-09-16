@@ -1,0 +1,84 @@
+<?php
+declare(strict_types=1);
+
+// Generated only inside GitHub Actions, uploaded temporarily, then deleted.
+$config = json_decode(base64_decode('__CONFIG_BASE64__', true), true, 512, JSON_THROW_ON_ERROR);
+
+if (!hash_equals($config['token'], (string) ($_SERVER['HTTP_X_BTCDCA_TOKEN'] ?? ''))) {
+    http_response_code(403);
+    exit('Forbidden');
+}
+
+$database = new mysqli('localhost', $config['db_user'], $config['db_password'], $config['db_name']);
+if ($database->connect_errno) {
+    http_response_code(500);
+    exit('Database connection failed');
+}
+$database->set_charset('utf8mb4');
+
+function wordpress_tables(mysqli $database): array {
+    $prefix = 'wp_dca_';
+    $result = $database->query("SHOW TABLES LIKE 'wp\\_dca\\_%'");
+    $tables = [];
+    while ($row = $result->fetch_row()) {
+        $table = (string) $row[0];
+        if (!str_starts_with($table, $prefix) || !preg_match('/^wp_dca_[A-Za-z0-9_]+$/', $table)) {
+            throw new RuntimeException('Unexpected table name returned by MySQL.');
+        }
+        $tables[] = $table;
+    }
+    sort($tables, SORT_STRING);
+    return $tables;
+}
+
+function identifier(string $value): string {
+    return '`' . str_replace('`', '``', $value) . '`';
+}
+
+function sql_value(mysqli $database, mixed $value): string {
+    if ($value === null) {
+        return 'NULL';
+    }
+    return "'" . $database->real_escape_string((string) $value) . "'";
+}
+
+$action = (string) ($_GET['action'] ?? '');
+if ($action === 'export') {
+    header('Content-Type: application/gzip');
+    header('Content-Disposition: attachment; filename="btcdca-wordpress.sql.gz"');
+    $output = gzopen('php://output', 'wb9');
+    gzwrite($output, "-- BTC-DCA WordPress backup\nSET NAMES utf8mb4;\nSET FOREIGN_KEY_CHECKS=0;\n\n");
+    foreach (wordpress_tables($database) as $table) {
+        $create = $database->query('SHOW CREATE TABLE ' . identifier($table))->fetch_row();
+        gzwrite($output, 'DROP TABLE IF EXISTS ' . identifier($table) . ";\n" . $create[1] . ";\n");
+        $result = $database->query('SELECT * FROM ' . identifier($table), MYSQLI_USE_RESULT);
+        $fields = [];
+        while ($field = $result->fetch_field()) {
+            $fields[] = identifier($field->name);
+        }
+        while ($row = $result->fetch_row()) {
+            $values = array_map(fn ($value) => sql_value($database, $value), $row);
+            gzwrite($output, 'INSERT INTO ' . identifier($table) . ' (' . implode(', ', $fields) . ') VALUES (' . implode(', ', $values) . ");\n");
+        }
+        $result->free();
+        gzwrite($output, "\n");
+    }
+    gzwrite($output, "SET FOREIGN_KEY_CHECKS=1;\n");
+    gzclose($output);
+    exit;
+}
+
+if ($action === 'drop' && ($_GET['confirm'] ?? '') === 'RETIRE_WORDPRESS') {
+    $tables = wordpress_tables($database);
+    foreach ($tables as $table) {
+        if (!$database->query('DROP TABLE ' . identifier($table))) {
+            throw new RuntimeException('Could not drop ' . $table);
+        }
+    }
+    header('Content-Type: application/json');
+    echo json_encode(['dropped' => $tables], JSON_THROW_ON_ERROR);
+    exit;
+}
+
+header('Content-Type: application/json');
+echo json_encode(['tables' => wordpress_tables($database)], JSON_THROW_ON_ERROR);

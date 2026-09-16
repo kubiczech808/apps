@@ -1,0 +1,234 @@
+name: Retire BTC-DCA WordPress
+
+on:
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: "stage uploads only the static guides; retire also backs up and removes WordPress"
+        required: true
+        default: stage
+        type: choice
+        options:
+          - stage
+          - retire
+      confirmation:
+        description: "For retire, enter exactly RETIRE_WORDPRESS"
+        required: false
+        type: string
+
+concurrency:
+  group: btcdca-wordpress-retirement
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  retire-wordpress:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      BTCDCA_FTP_LOGIN: ${{ secrets.BTCDCA_FTP_LOGIN }}
+      BTCDCA_FTP_PASSWORD: ${{ secrets.BTCDCA_FTP_PASSWORD }}
+      BTCDCA_DB: ${{ secrets.BTCDCA_DB }}
+      BTCDCA_DB_USER: ${{ secrets.BTCDCA_DB_USER }}
+      BTCDCA_DB_PASSWORD: ${{ secrets.BTCDCA_DB_PASSWORD }}
+      GITHUB_SHA: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate deployment secrets
+        run: |
+          set -euo pipefail
+          for name in BTCDCA_FTP_LOGIN BTCDCA_FTP_PASSWORD BTCDCA_DB BTCDCA_DB_USER BTCDCA_DB_PASSWORD; do
+            if [ -z "${!name}" ]; then
+              echo "$name is required."
+              exit 1
+            fi
+          done
+
+      - name: Build and validate the static homepage
+        run: |
+          set -euo pipefail
+          node scripts/build_btcdca_static_homepage.mjs
+          test -f btcdca-static/homepage/index.html
+          ! grep -Eqi '<\?php|learn center|latest from the blog|wp-content|wordpress' btcdca-static/homepage/index.html
+          grep -Fq 'BTC DCA static homepage' btcdca-static/homepage/index.html
+
+      - name: Audit existing account and application links
+        run: |
+          set -euo pipefail
+          python3 scripts/audit_btcdca_learn_links.py
+          if ! grep -Fq 'No Learn Center references found' .github/inspection/btcdca-learn-link-audit.md; then
+            echo 'Stale Learn Center links were found. Review the artifact and remove them before retiring WordPress.'
+            exit 1
+          fi
+
+      - name: Stage and verify the preserved static guides
+        run: |
+          set -euo pipefail
+          python3 scripts/stage_btcdca_static_guides.py
+
+      - name: Upload stage and link-audit reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: btcdca-static-stage-${{ github.run_id }}
+          path: |
+            .github/inspection/btcdca-static-stage-report.md
+            .github/inspection/btcdca-learn-link-audit.md
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Require explicit retirement confirmation
+        if: inputs.operation == 'retire'
+        run: |
+          set -euo pipefail
+          test '${{ inputs.confirmation }}' = 'RETIRE_WORDPRESS'
+
+      - name: Install FTP backup client
+        if: inputs.operation == 'retire'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y lftp
+
+      - name: Back up all WordPress files before removal
+        if: inputs.operation == 'retire'
+        run: |
+          set -euo pipefail
+          mkdir -p backup/wordpress-files backup/wordpress-root
+          lftp -u "$BTCDCA_FTP_LOGIN","$BTCDCA_FTP_PASSWORD" "ftp://ftp.btc-dca.com" <<'LFTP'
+          set cmd:fail-exit true
+          set ftp:ssl-force false
+          set net:max-retries 2
+          mirror --verbose /www/wp-admin backup/wordpress-files/wp-admin
+          mirror --verbose /www/wp-includes backup/wordpress-files/wp-includes
+          mirror --verbose /www/wp-content backup/wordpress-files/wp-content
+          mget -O backup/wordpress-root /www/wp-*.php
+          get -O backup/wordpress-root /www/index.php
+          get -O backup/wordpress-root /www/index.html
+          get -O backup/wordpress-root /www/.htaccess
+          get -O backup/wordpress-root /www/robots.txt
+          get -O backup/wordpress-root /www/sitemap.xml
+          get -O backup/wordpress-root /www/license.txt
+          get -O backup/wordpress-root /www/readme.html
+          bye
+          LFTP
+          test -d backup/wordpress-files/wp-admin
+          test -d backup/wordpress-files/wp-includes
+          test -d backup/wordpress-files/wp-content
+          test -f backup/wordpress-root/wp-config.php
+          test -f backup/wordpress-root/index.php
+
+      - name: Generate and upload temporary database backup endpoint
+        if: inputs.operation == 'retire'
+        run: |
+          set -euo pipefail
+          echo "BTCDCA_DB_HELPER_TOKEN=$(openssl rand -hex 32)" >> "$GITHUB_ENV"
+          python3 - <<'PY'
+          import base64
+          import json
+          import os
+          from pathlib import Path
+
+          config = {
+              'token': os.environ['BTCDCA_DB_HELPER_TOKEN'],
+              'db_name': os.environ['BTCDCA_DB'],
+              'db_user': os.environ['BTCDCA_DB_USER'],
+              'db_password': os.environ['BTCDCA_DB_PASSWORD'],
+          }
+          template = Path('scripts/btcdca_wordpress_database_helper.php.template').read_text(encoding='utf-8')
+          encoded = base64.b64encode(json.dumps(config).encode('utf-8')).decode('ascii')
+          Path('temporary-wordpress-database-helper.php').write_text(
+              template.replace('__CONFIG_BASE64__', encoded), encoding='utf-8'
+          )
+          PY
+          php -l temporary-wordpress-database-helper.php
+          BTCDCA_TEMP_FILE_MODE=upload \
+          BTCDCA_TEMP_FILE_LOCAL=temporary-wordpress-database-helper.php \
+          BTCDCA_TEMP_FILE_REMOTE=www/btcdca-wordpress-database-helper.php \
+          python3 scripts/manage_btcdca_temporary_file.py
+
+      - name: Export WordPress database tables
+        if: inputs.operation == 'retire'
+        run: |
+          set -euo pipefail
+          curl --fail --show-error --silent --retry 3 \
+            -H "X-BTCDCA-Token: ${BTCDCA_DB_HELPER_TOKEN}" \
+            "https://www.btc-dca.com/btcdca-wordpress-database-helper.php?action=export" \
+            --output backup/btcdca-wordpress.sql.gz
+          gzip -t backup/btcdca-wordpress.sql.gz
+          test "$(gzip -dc backup/btcdca-wordpress.sql.gz | grep -c '^CREATE TABLE `wp_dca_')" -gt 0
+
+      - name: Upload WordPress recovery backup
+        if: inputs.operation == 'retire'
+        uses: actions/upload-artifact@v4
+        with:
+          name: btcdca-wordpress-recovery-${{ github.run_id }}
+          path: backup
+          if-no-files-found: error
+          retention-days: 90
+          compression-level: 0
+
+      - name: Remove only WordPress database tables
+        if: inputs.operation == 'retire'
+        run: |
+          set -euo pipefail
+          curl --fail --show-error --silent --retry 2 \
+            -H "X-BTCDCA-Token: ${BTCDCA_DB_HELPER_TOKEN}" \
+            "https://www.btc-dca.com/btcdca-wordpress-database-helper.php?action=drop&confirm=RETIRE_WORDPRESS" \
+            --output dropped-wordpress-tables.json
+          grep -Fq 'wp_dca_' dropped-wordpress-tables.json
+
+      - name: Activate static homepage and static SEO files
+        if: inputs.operation == 'retire'
+        run: |
+          set -euo pipefail
+          python3 scripts/activate_btcdca_static_homepage.py
+
+      - name: Remove WordPress files after backups and static activation
+        if: inputs.operation == 'retire'
+        run: |
+          set -euo pipefail
+          lftp -u "$BTCDCA_FTP_LOGIN","$BTCDCA_FTP_PASSWORD" "ftp://ftp.btc-dca.com" <<'LFTP'
+          set cmd:fail-exit true
+          set ftp:ssl-force false
+          rm -r /www/wp-admin
+          rm -r /www/wp-includes
+          rm -r /www/wp-content
+          rm /www/index.php
+          rm /www/wp-activate.php
+          rm /www/wp-blog-header.php
+          rm /www/wp-comments-post.php
+          rm /www/wp-config-sample.php
+          rm /www/wp-config.php
+          rm /www/wp-cron.php
+          rm /www/wp-links-opml.php
+          rm /www/wp-load.php
+          rm /www/wp-login.php
+          rm /www/wp-mail.php
+          rm /www/wp-settings.php
+          rm /www/wp-signup.php
+          rm /www/wp-trackback.php
+          rm /www/xmlrpc.php
+          rm /www/license.txt
+          rm /www/readme.html
+          bye
+          LFTP
+
+      - name: Verify public static site and retired Learn Center
+        if: inputs.operation == 'retire'
+        run: |
+          set -euo pipefail
+          curl --fail --show-error --silent https://www.btc-dca.com/ | grep -Fq 'BTC DCA static homepage'
+          for slug in btc-dca-binance-how-to-set-up-api-key btc-dca-coinmate-how-to-set-up-api-key btc-dca-okx-how-to-set-up-api-key; do
+            curl --fail --show-error --silent "https://www.btc-dca.com/${slug}/" | grep -Fq '/assets/img/guides/guide.css'
+          done
+          test "$(curl --silent --output /dev/null --write-out '%{http_code}' https://www.btc-dca.com/learn-center/)" = '410'
+          curl --fail --show-error --silent https://www.btc-dca.com/app/ | grep -Eqi '<html|<!doctype'
+
+      - name: Remove temporary database endpoint
+        if: always() && inputs.operation == 'retire'
+        run: |
+          BTCDCA_TEMP_FILE_MODE=delete \
+          BTCDCA_TEMP_FILE_REMOTE=www/btcdca-wordpress-database-helper.php \
+          python3 scripts/manage_btcdca_temporary_file.py
