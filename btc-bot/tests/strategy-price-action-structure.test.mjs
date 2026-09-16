@@ -322,6 +322,50 @@ test('trade profile requires S/D zone hit, 50 percent pullback and at least 2R',
   assert.equal(withoutHit.gates.find((entry) => entry.id === 'zone').status, 'unmet')
 })
 
+test('TP2 uses the nearest opposing zone beyond TP1, not merely beyond entry', () => {
+  const longProfile = evaluateTradeProfile({
+    item: {
+      trend: 'up',
+      price: 103,
+      lastCandle: candle(START, 106, 107, 102, 103),
+      structure: { high: { current: { price: 120 } }, low: { current: { price: 100 } } },
+      zones: {
+        demand: { type: 'demand', low: 100, high: 105 },
+        unfilledDemand: [{ type: 'demand', low: 100, high: 105 }],
+        unfilledSupply: [
+          { type: 'supply', low: 112, high: 114 },
+          { type: 'supply', low: 140, high: 142 },
+        ],
+      },
+    },
+    settings: { pullbackPct: 50, minRewardRisk: 2, stopBufferPct: 0.02 },
+  })
+  assert.equal(longProfile.tp1, 120)
+  assert.equal(longProfile.tp2, 140)
+  assert.ok(longProfile.tp2 > longProfile.tp1)
+
+  const shortProfile = evaluateTradeProfile({
+    item: {
+      trend: 'down',
+      price: 117,
+      lastCandle: candle(START, 114, 118, 113, 117),
+      structure: { high: { current: { price: 120 } }, low: { current: { price: 100 } } },
+      zones: {
+        supply: { type: 'supply', low: 115, high: 120 },
+        unfilledSupply: [{ type: 'supply', low: 115, high: 120 }],
+        unfilledDemand: [
+          { type: 'demand', low: 108, high: 110 },
+          { type: 'demand', low: 80, high: 85 },
+        ],
+      },
+    },
+    settings: { pullbackPct: 50, minRewardRisk: 2, stopBufferPct: 0.02 },
+  })
+  assert.equal(shortProfile.tp1, 100)
+  assert.equal(shortProfile.tp2, 85)
+  assert.ok(shortProfile.tp2 < shortProfile.tp1)
+})
+
 test('price-action profiles use four-decimal levels throughout the R/R calculation', () => {
   const profile = evaluateTradeProfile({
     item: {

@@ -409,13 +409,18 @@ const sideFromTrend = (trend) => {
   return null
 }
 
-const nearestOpposingZone = ({ side, zones, entry }) => {
+// TP2 realizes only beyond TP1. A closer opposing zone may still be useful
+// context, but cannot replace the second half of the planned exit.
+const nearestOpposingZone = ({ side, zones, entry, tp1 = null }) => {
   if (side !== 'long' && side !== 'short') return null
   const pool = side === 'long' ? zones?.unfilledSupply ?? [] : zones?.unfilledDemand ?? []
+  const targetBoundary = Number.isFinite(tp1)
+    ? side === 'long' ? Math.max(entry, tp1) : Math.min(entry, tp1)
+    : entry
   const candidates =
     side === 'long'
-      ? pool.filter((zone) => zone.low > entry).sort((a, b) => a.low - b.low)
-      : pool.filter((zone) => zone.high < entry).sort((a, b) => b.high - a.high)
+      ? pool.filter((zone) => zone.low > targetBoundary).sort((a, b) => a.low - b.low)
+      : pool.filter((zone) => zone.high < targetBoundary).sort((a, b) => b.high - a.high)
   return candidates[0] ?? null
 }
 
@@ -532,7 +537,7 @@ const zoneEntryCandidate = ({ item, side, zone, pullback, invalidationLevel, set
   const refinedEntry = lowerRefinement?.entry ?? entryAtZoneHit
   const tp1 = structuralTarget({ side, structure: item?.structure })
   const tp2Zone = Number.isFinite(refinedEntry)
-    ? nearestOpposingZone({ side, zones: item?.zones, entry: refinedEntry })
+    ? nearestOpposingZone({ side, zones: item?.zones, entry: refinedEntry, tp1 })
     : null
   const tp2 = side === 'long' ? roundPrice(tp2Zone?.low ?? null) : roundPrice(tp2Zone?.high ?? null)
   const weightedTarget = Number.isFinite(tp1) && Number.isFinite(tp2) ? roundPrice((tp1 + tp2) / 2) : null
@@ -732,7 +737,9 @@ export const evaluateTradeProfile = ({
         : null
   )
   const tp1 = activeCandidate?.tp1 ?? structuralTarget({ side, structure: item?.structure })
-  const tp2Zone = activeCandidate?.tp2Zone ?? (Number.isFinite(entry) ? nearestOpposingZone({ side, zones, entry }) : null)
+  const tp2Zone = activeCandidate?.tp2Zone ?? (
+    Number.isFinite(entry) ? nearestOpposingZone({ side, zones, entry, tp1 }) : null
+  )
   const tp2 = activeCandidate?.tp2 ?? (
     side === 'long' && tp2Zone
       ? tp2Zone.low

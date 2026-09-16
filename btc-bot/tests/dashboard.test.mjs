@@ -73,9 +73,10 @@ test('capital tile separates USD benchmark from sats trading result', () => {
   assert.match(js, /BTC.*obchody.*v sats/s)
 })
 
-test('asset price labels always use four decimal places', () => {
-  assert.match(js, /const price = \(value\) => \(Number\.isFinite\(value\) \? nf\(4\)\.format\(value\)/)
-  assert.match(js, /const quotePrice = \(value\) => \{[\s\S]*return nf\(4\)\.format\(value\)/)
+test('asset price labels use adaptive decimal places by price magnitude', () => {
+  assert.match(js, /const price = \(value\) => \(Number\.isFinite\(value\) \? nf\(priceFractionDigits\(value\)\)\.format\(value\)/)
+  assert.match(js, /const priceFractionDigits = \(value\) => \{[\s\S]*if \(magnitude < 1\) return 4[\s\S]*if \(magnitude < 10\) return 3[\s\S]*if \(magnitude < 100\) return 2[\s\S]*if \(magnitude < 1_000\) return 1[\s\S]*return 0/)
+  assert.match(js, /const quotePrice = \(value\) => \{[\s\S]*return nf\(priceFractionDigits\(value\)\)\.format\(value\)/)
 })
 
 test('strategy tab shows the selected leveraged momentum strategy', () => {
