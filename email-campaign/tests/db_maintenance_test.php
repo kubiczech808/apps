@@ -12,6 +12,8 @@ $appFile = __DIR__ . '/../index.php';
 $src = file_get_contents($appFile);
 assert(str_contains($src, "*/\nfunction importRunItemRetentionCutoff()"),
     'importRunItemRetentionCutoff musi byt skutecna deklarace mimo blokovy komentar');
+assert(!str_contains($src, 'h((int)$dbStorage'),
+    'HTML helper h prijima text; cisla ve storage panelu se musi nejdriv formatovat');
 function extractFn(string $src, string $name): string
 {
     $pos = strpos($src, "\nfunction " . $name . "(");

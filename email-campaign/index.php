@@ -23376,7 +23376,7 @@ function renderApp(PDO $pdo, ?array $flash): void
             <div class="storage-status-card">
                 <strong>Čeká na úklid</strong>
                 <span class="storage-status-value"><?= h(number_format((int)$dbStorage['pending_rows'], 0, ',', ' ')) ?> řádků</span>
-                <small><?= h((int)$dbStorage['scraping_items_prunable']) ?> crawl detailů, <?= h((int)$dbStorage['import_items_prunable']) ?> detailů importů čeká na 14denní retenci.</small>
+                <small><?= h(number_format((int)$dbStorage['scraping_items_prunable'], 0, ',', ' ')) ?> crawl detailů, <?= h(number_format((int)$dbStorage['import_items_prunable'], 0, ',', ' ')) ?> detailů importů čeká na 14denní retenci.</small>
             </div>
         </div>
         <?php if (!$dbSummary['tables']): ?>
