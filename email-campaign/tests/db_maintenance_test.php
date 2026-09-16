@@ -364,4 +364,27 @@ printf("  format: %s, %s, %s\n", formatBytesHuman(838 * 1024 * 1024), formatByte
 assert(formatBytesHuman(0) === '0 B', 'nula se vypise cistě');
 assert(str_contains(formatBytesHuman(838 * 1024 * 1024), 'MB'), '838 MB se vypise v MB');
 
+echo "\n== 13. kompaktace musi byt merena, ne jen oznacena jako hotova ==\n";
+$reclaimSrc = extractFn($src, 'runDatabaseStorageReclaim');
+assert(str_contains($src, "const DB_STORAGE_RECLAIM_TABLES = ['import_run_items', 'scraping_job_items'];"),
+    'kompaktace smi cilit jen na dva technicke logy');
+assert(str_contains($reclaimSrc, "'2026-09-v3'"), 'nova verze musi vynutit overene mereni i po starem hotovo');
+assert(str_contains($reclaimSrc, 'beforeTableBytes') && str_contains($reclaimSrc, 'afterTableBytes'),
+    'tabulka se meri pred i po OPTIMIZE');
+assert(str_contains($reclaimSrc, "OPTIMIZE TABLE ' . quoteDatabaseIdentifier(\$table)"),
+    'OPTIMIZE se nevynecha jen proto, ze MariaDB zrovna hlasi DATA_FREE=0');
+assert(str_contains($reclaimSrc, 'database_storage_reclaim_measurements'),
+    'vysledek kazde tabulky se musi ulozit');
+assert(str_contains($reclaimSrc, 'not_released'),
+    'nulova uspora nesmi byt vydavana za uspech');
+$reportSrc = extractFn($src, 'databaseStorageReport');
+assert(str_contains($reportSrc, 'engine_profile') && str_contains($reportSrc, 'measurements'),
+    'cron musi videt rezim InnoDB i merene vysledky');
+$cronWorkflow = file_get_contents(__DIR__ . '/../../.github/workflows/email-campaign-cron.yml');
+assert($cronWorkflow !== false && str_contains($cronWorkflow, 'verify_storage_reclaim'),
+    'cron musi stav po kompaktaci overit');
+assert(str_contains($cronWorkflow, 'Kompaktace neskončila ověřeným stavem complete'),
+    'nedokoncena kompaktace musi workflow oznacit jako chybu');
+echo "  ok\n";
+
 echo "\nVSE OK\n";

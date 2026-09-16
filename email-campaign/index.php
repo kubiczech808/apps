@@ -38,6 +38,10 @@ const DB_CLEANUP_BATCH_ROWS = 2000;
 // Fyzicka prestavba tabulek je draha. Spusti se sama po odstraneni dostatecne velke
 // davky technickych detailu; tim se prostor nevraci po kazdem malem dennim mazani.
 const DB_STORAGE_RECLAIM_ROW_THRESHOLD = 10000;
+// I kdyz MariaDB po DELETE neukaze DATA_FREE, muze prestavba techto dvou tabulek
+// vratit fyzicky soubor hostingu. Proto se prvni/periodicka kompaktace vzdy opravdu
+// pokusi o OPTIMIZE a vysledek zmeri pred i po - nikdy jen neprohlasi "hotovo".
+const DB_STORAGE_RECLAIM_TABLES = ['import_run_items', 'scraping_job_items'];
 // Kolik pokusu o dokonceni dostane jeden beh, nez ho automatika trvale uzavre. Dokud
 // beh neni dotazeny, nezaklada se novy seed - proto musi mit konec, jinak by jeden
 // nedotazitelny subjekt zastavil celou frontu.
@@ -12677,6 +12681,60 @@ function databaseQuotaBytes(array $summary): int
 }
 
 /**
+ * Metrika jedne tabulky ve stejnem vyznamu jako soucet proti hostingove kvote.
+ */
+function databaseTableQuotaBytes(array $table): int
+{
+    return max(0, (int)($table['total_bytes'] ?? 0) + (int)($table['free_bytes'] ?? 0));
+}
+
+function databaseTableSizeByName(PDO $pdo, string $tableName): ?array
+{
+    foreach (databaseTableSizes($pdo) as $table) {
+        if ((string)$table['name'] === $tableName) {
+            return $table;
+        }
+    }
+    return null;
+}
+
+/**
+ * DATA_FREE neni na kazdem hostingu synonymem mista, ktere lze fyzicky vratit.
+ * Tento maly profil je proto soucasti reportu: odlisuje problem aplikace od
+ * sdileneho InnoDB tablespace, ktery bez zasahu hostingu zmensit nelze.
+ */
+function databaseStorageEngineProfile(PDO $pdo): array
+{
+    $profile = ['driver' => '', 'innodb_file_per_table' => '', 'version' => ''];
+    try {
+        $profile['driver'] = (string)$pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
+        if ($profile['driver'] !== 'mysql') {
+            return $profile;
+        }
+        $row = $pdo->query("SHOW VARIABLES LIKE 'innodb_file_per_table'")->fetch(PDO::FETCH_ASSOC);
+        $profile['innodb_file_per_table'] = strtolower(trim((string)($row['Value'] ?? $row['VALUE'] ?? '')));
+        $profile['version'] = (string)$pdo->query('SELECT VERSION()')->fetchColumn();
+    } catch (Throwable $e) {
+        $profile['error'] = $e->getMessage();
+    }
+    return $profile;
+}
+
+function databaseStorageReclaimMeasurements(array $settings): array
+{
+    $raw = trim((string)($settings['database_storage_reclaim_measurements'] ?? ''));
+    if ($raw === '') {
+        return [];
+    }
+    try {
+        $decoded = json_decode($raw, true, 32, JSON_THROW_ON_ERROR);
+        return is_array($decoded) ? $decoded : [];
+    } catch (Throwable $e) {
+        return [];
+    }
+}
+
+/**
  * Hranice, za kterou se radek crawl logu uz nedrzi.
  */
 function scrapingItemRetentionCutoff(): string
@@ -13207,13 +13265,29 @@ function runDatabaseStorageReclaim(PDO $pdo): string
             + (int)($diagnostics['import_items_prunable'] ?? 0);
         $needsPeriodicReclaim = $deletedRows >= DB_STORAGE_RECLAIM_ROW_THRESHOLD
             || $pendingDetailRows >= DB_STORAGE_RECLAIM_ROW_THRESHOLD;
+        // v3 nema prijimat stare "hotovo": predchozi verze neukladala meritelny
+        // vysledek kazde tabulky, proto musi jednou projit cely cyklus znovu.
+        if ($version !== '2026-09-v3') {
+            $before = databaseSizeSummary($pdo);
+            $version = '2026-09-v3';
+            $state = 'import_run_items';
+            setSettingRaw($pdo, 'database_storage_reclaim_version', $version);
+            setSettingRaw($pdo, 'database_storage_reclaim_state', $state);
+            setSettingRaw($pdo, 'database_storage_reclaim_started_at', $now);
+            setSettingRaw($pdo, 'database_storage_reclaim_completed_at', '');
+            setSettingRaw($pdo, 'database_storage_reclaim_before_bytes', (string)databaseQuotaBytes($before));
+            setSettingRaw($pdo, 'database_storage_reclaim_after_bytes', (string)databaseQuotaBytes($before));
+            setSettingRaw($pdo, 'database_storage_reclaim_saved_bytes', '0');
+            setSettingRaw($pdo, 'database_storage_reclaim_measurements', '{}');
+            setSettingRaw($pdo, 'database_storage_reclaim_status', 'Nova overena kompaktace v3 pripravena: zmeri kazdou cilovou tabulku pred i po.');
+        }
         // Prvni uvolneni bylo jednorazove, ale retence pak dale maze stare logy
         // kazdy den. Po vetsim souctu mazani se proto cyklus sam znovu pripravi;
         // admin uz nema nic rucne spoustet ani odklikavat.
-        if ($version === '2026-09-v2' && $state === 'complete' && $needsPeriodicReclaim) {
+        if ($version === '2026-09-v3' && $state === 'complete' && $needsPeriodicReclaim) {
             $before = databaseSizeSummary($pdo);
             $state = 'import_run_items';
-            $version = '2026-09-v2';
+            $version = '2026-09-v3';
             setSettingRaw($pdo, 'database_storage_reclaim_state', $state);
             setSettingRaw($pdo, 'database_storage_reclaim_version', $version);
             setSettingRaw($pdo, 'database_storage_reclaim_started_at', $now);
@@ -13230,7 +13304,7 @@ function runDatabaseStorageReclaim(PDO $pdo): string
             setSettingRaw($pdo, 'database_storage_reclaim_after_bytes', (string)databaseQuotaBytes($before));
             setSettingRaw($pdo, 'database_storage_reclaim_saved_bytes', '0');
         }
-        if ($version === '2026-09-v2' && $state === 'complete') {
+        if ($version === '2026-09-v3' && $state === 'complete') {
             setSettingRaw($pdo, 'database_storage_reclaim_quiesce', '0');
             setSettingRaw($pdo, 'database_storage_reclaim_completed_at', (string)($settings['database_storage_reclaim_completed_at'] ?? $now) ?: $now);
             return 'Jednorazove uvolneni mista uz bylo dokonceno.';
@@ -13249,39 +13323,78 @@ function runDatabaseStorageReclaim(PDO $pdo): string
             setSettingRaw($pdo, 'database_storage_reclaim_status', $message);
             return $message;
         }
-        if ($version !== '2026-09-v2' || $state === '') {
+        if ($version !== '2026-09-v3' || $state === '') {
             $state = 'import_run_items';
-            setSettingRaw($pdo, 'database_storage_reclaim_version', '2026-09-v2');
+            setSettingRaw($pdo, 'database_storage_reclaim_version', '2026-09-v3');
             setSettingRaw($pdo, 'database_storage_reclaim_state', $state);
         }
-        $next = ['import_run_items' => 'scraping_job_items', 'scraping_job_items' => 'complete'];
+        $next = [];
+        foreach (DB_STORAGE_RECLAIM_TABLES as $index => $reclaimTable) {
+            $next[$reclaimTable] = DB_STORAGE_RECLAIM_TABLES[$index + 1] ?? 'complete';
+        }
         if (!isset($next[$state])) {
             throw new RuntimeException('Neznamy stav jednorazoveho uvolneni mista.');
         }
         $table = $state;
-        $tableInfo = null;
-        foreach (databaseTableSizes($pdo) as $candidate) {
-            if ((string)$candidate['name'] === $table) {
-                $tableInfo = $candidate;
-                break;
-            }
-        }
+        $tableInfo = databaseTableSizeByName($pdo, $table);
         if ($tableInfo === null) {
             throw new RuntimeException('Tabulka ' . $table . ' nebyla nalezena.');
         }
 
-        if ((int)$tableInfo['free_bytes'] > 0 || $needsPeriodicReclaim) {
+        $beforeTableBytes = databaseTableQuotaBytes($tableInfo);
+        $beforeFreeBytes = (int)$tableInfo['free_bytes'];
+        // Nevynechavat OPTIMIZE jen proto, ze INFORMATION_SCHEMA zrovna hlasi nulu.
+        // Prave to byl slepy bod: po velkem DELETE muze MariaDB drzet nafouknuty
+        // soubor, aniz by DATA_FREE dalo pouzitelny signal. Jednou za retencni cyklus
+        // se proto oba logy fyzicky prestavi a hodnoty se hned zmeri.
+        try {
             $statement = $pdo->query('OPTIMIZE TABLE ' . quoteDatabaseIdentifier($table));
             if ($statement !== false) {
                 $statement->fetchAll(PDO::FETCH_ASSOC);
                 $statement->closeCursor();
             }
-            $message = 'Automaticke uvolneni: prestavena ' . $table . ' (predem volno ' . formatBytesHuman((int)$tableInfo['free_bytes']) . ').';
-        } else {
-            $message = 'Jednorazove uvolneni: ' . $table . ' uz nedrzi meritelne volne misto.';
+        } catch (Throwable $e) {
+            // Neoznacovat to jako dokoncenou optimalizaci. Cron dostane 503 a dalsi
+            // beh to zkusí znovu; do statusu zustane konkretni duvod.
+            $message = 'Kompaktace ' . $table . ' selhala: ' . $e->getMessage();
+            setSettingRaw($pdo, 'database_storage_reclaim_status', $message);
+            throw new RuntimeException($message, 0, $e);
         }
         $after = databaseSizeSummary($pdo);
         $afterBytes = databaseQuotaBytes($after);
+        $afterTable = databaseTableSizeByName($pdo, $table);
+        if ($afterTable === null) {
+            throw new RuntimeException('Po kompaktaci nelze precist tabulku ' . $table . '.');
+        }
+        $afterTableBytes = databaseTableQuotaBytes($afterTable);
+        $savedTableBytes = max(0, $beforeTableBytes - $afterTableBytes);
+        $freeReleasedBytes = max(0, $beforeFreeBytes - (int)$afterTable['free_bytes']);
+        $outcome = $savedTableBytes > 0
+            ? 'released'
+            : ($beforeFreeBytes > 0 ? 'not_released' : 'no_measurable_fragmentation');
+        $measurements = databaseStorageReclaimMeasurements($settings);
+        $measurements[$table] = [
+            'measured_at' => $now,
+            'before_bytes' => $beforeTableBytes,
+            'after_bytes' => $afterTableBytes,
+            'saved_bytes' => $savedTableBytes,
+            'before_free_bytes' => $beforeFreeBytes,
+            'after_free_bytes' => (int)$afterTable['free_bytes'],
+            'free_released_bytes' => $freeReleasedBytes,
+            'outcome' => $outcome,
+        ];
+        setSettingRaw($pdo, 'database_storage_reclaim_measurements', json_encode($measurements, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+        if ($outcome === 'released') {
+            $message = 'Kompaktace ' . $table . ' overena: ' . formatBytesHuman($beforeTableBytes)
+                . ' -> ' . formatBytesHuman($afterTableBytes) . ', uvolneno ' . formatBytesHuman($savedTableBytes) . '.';
+        } elseif ($outcome === 'not_released') {
+            $message = 'Kompaktace ' . $table . ' probehla, ale MySQL hlaseny prostor neklesl ('
+                . formatBytesHuman($beforeTableBytes) . ' -> ' . formatBytesHuman($afterTableBytes)
+                . '). Nelze tvrdit, ze hosting misto vratil; stav je ulozen pro diagnostiku InnoDB.';
+        } else {
+            $message = 'Kompaktace ' . $table . ' overena: pred ni nebylo meritelne volne misto; '
+                . 'alokace zustala ' . formatBytesHuman($afterTableBytes) . '.';
+        }
         $beforeBytes = (int)($settings['database_storage_reclaim_before_bytes'] ?? 0);
         $savedBytes = $beforeBytes > 0 ? max(0, $beforeBytes - $afterBytes) : 0;
         setSettingRaw($pdo, 'database_storage_reclaim_state', $next[$state]);
@@ -13323,6 +13436,9 @@ function databaseStorageMaintenanceStatus(PDO $pdo): array
         $savedBytes = max($savedBytes, $beforeBytes - $afterBytes);
     }
     $reclaimState = trim((string)($settings['database_storage_reclaim_state'] ?? ''));
+    $reclaimMeasurements = databaseStorageReclaimMeasurements($settings);
+    $unreleasedMeasurements = array_filter($reclaimMeasurements, static fn($measurement): bool => is_array($measurement)
+        && (string)($measurement['outcome'] ?? '') === 'not_released');
     $retentionState = trim((string)($settings['database_storage_maintenance_state'] ?? ''));
     $reclaimComplete = $reclaimState === 'complete';
     $retentionComplete = in_array($retentionState, ['retention_complete', 'completed'], true);
@@ -13341,6 +13457,9 @@ function databaseStorageMaintenanceStatus(PDO $pdo): array
         'import_items_prunable' => (int)($cleanup['import_items_prunable'] ?? 0),
         'reclaim_state' => $reclaimState,
         'reclaim_status' => trim((string)($settings['database_storage_reclaim_status'] ?? '')),
+        'reclaim_measurements' => $reclaimMeasurements,
+        'reclaim_has_unreleased_fragmentation' => $unreleasedMeasurements !== [],
+        'engine_profile' => databaseStorageEngineProfile($pdo),
         'reclaim_started_at' => trim((string)($settings['database_storage_reclaim_started_at'] ?? '')),
         'reclaim_completed_at' => trim((string)($settings['database_storage_reclaim_completed_at'] ?? '')),
         'reclaim_last_run_at' => trim((string)($settings['database_storage_reclaim_last_run_at'] ?? '')),
@@ -17171,6 +17290,7 @@ function databaseStorageReport(PDO $pdo): array
             'free_bytes' => $free,
         ];
     }
+    $settings = loadSettingsForUser($pdo, 0);
     return [
         'generated_at' => date('c'),
         'allocated_bytes' => $totalBytes,
@@ -17178,6 +17298,15 @@ function databaseStorageReport(PDO $pdo): array
         'index_bytes' => $indexBytes,
         'free_bytes' => $freeBytes,
         'tables' => $tables,
+        'engine_profile' => databaseStorageEngineProfile($pdo),
+        'maintenance' => [
+            'reclaim_state' => trim((string)($settings['database_storage_reclaim_state'] ?? '')),
+            'reclaim_status' => trim((string)($settings['database_storage_reclaim_status'] ?? '')),
+            'reclaim_quiesce' => trim((string)($settings['database_storage_reclaim_quiesce'] ?? '')),
+            'reclaim_last_run_at' => trim((string)($settings['database_storage_reclaim_last_run_at'] ?? '')),
+            'reclaim_completed_at' => trim((string)($settings['database_storage_reclaim_completed_at'] ?? '')),
+            'measurements' => databaseStorageReclaimMeasurements($settings),
+        ],
     ];
 }
 
@@ -23391,14 +23520,16 @@ function renderApp(PDO $pdo, ?array $flash): void
         $dbStorage = databaseStorageMaintenanceStatus($pdo);
         $reclaimLabel = !$dbStorage['is_mysql']
             ? 'Nedostupné: aplikace není připojená k MySQL'
-            : ($dbStorage['reclaim_complete'] ? 'Dokončeno' : ($dbStorage['reclaim_started_at'] !== '' ? 'Probíhá' : 'Čeká na první krok'));
-        $reclaimBadgeClass = !$dbStorage['is_mysql'] ? 'warning' : ($dbStorage['reclaim_complete'] ? 'success' : 'info');
+            : ($dbStorage['reclaim_has_unreleased_fragmentation'] ? 'Bez potvrzené úspory'
+                : ($dbStorage['reclaim_complete'] ? 'Ověřeno' : ($dbStorage['reclaim_started_at'] !== '' ? 'Probíhá' : 'Čeká na první krok')));
+        $reclaimBadgeClass = !$dbStorage['is_mysql'] || $dbStorage['reclaim_has_unreleased_fragmentation']
+            ? 'warning' : ($dbStorage['reclaim_complete'] ? 'success' : 'info');
     ?>
     <section class="panel">
         <div class="section-header">
             <div>
                 <h2>Databáze a úklid</h2>
-                <p>Velikost jednotlivých tabulek přímo z databáze. Kvótu hostingu vyčerpává součet dat a indexů <strong>plus volné místo</strong> – to je místo, které už je po mazání uvnitř souboru tabulky prázdné, ale hosting ho pořád počítá. Proto samotné mazání velikost databáze nesníží; vrátí ji až přestavba tabulky (OPTIMIZE) druhým tlačítkem.</p>
+                <p>Velikost jednotlivých tabulek přímo z databáze. Kvótu hostingu vyčerpává součet dat a indexů <strong>plus volné místo</strong> – to je místo, které už je po mazání uvnitř souboru tabulky prázdné, ale hosting ho pořád počítá. Proto samotné mazání velikost databáze nesníží; automatická kompakce pak u každé cílové tabulky změří skutečný stav před i po přestavbě.</p>
                 <p class="muted">Úklid maže jen provozní a crawl log: záznamy „tato URL byla otevřena s tímto výsledkem“ a historii tiků cronu. <strong>Kontakty, databáze kontaktů, kampaně ani účty se nemažou</strong> – nascrapované kontakty žijí v databázích kontaktů, ne v crawl logu. Malá dávka úklidu běží sama při každém cronu, takže databáze dál neroste bez omezení.</p>
             </div>
         </div>
@@ -23420,6 +23551,7 @@ function renderApp(PDO $pdo, ?array $flash): void
                 <strong>Uvolnění místa hostingu</strong>
                 <small><?= h($dbStorage['reclaim_status'] ?: 'Po odstranění starých detailů proběhne postupná kompakce tabulek.') ?></small>
                 <?php if ($dbStorage['reclaim_completed_at'] !== ''): ?><small class="muted">Dokončeno: <?= h(formatDateTime($dbStorage['reclaim_completed_at'])) ?></small><?php elseif ($dbStorage['reclaim_last_run_at'] !== ''): ?><small class="muted">Poslední krok: <?= h(formatDateTime($dbStorage['reclaim_last_run_at'])) ?></small><?php endif; ?>
+                <?php if ($dbStorage['reclaim_has_unreleased_fragmentation']): ?><small class="muted">Kompaktace nepřinesla měřitelný pokles; v reportu je uveden režim InnoDB a stav konkrétní tabulky.</small><?php endif; ?>
             </div>
             <div class="storage-status-card">
                 <strong>Uvolněno</strong>
