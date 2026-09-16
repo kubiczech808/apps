@@ -141,7 +141,8 @@ jobs:
         if: inputs.operation == 'snapshot' || inputs.operation == 'retire'
         run: |
           set -euo pipefail
-          echo "BTCDCA_DB_HELPER_TOKEN=$(openssl rand -hex 32)" >> "$GITHUB_ENV"
+          export BTCDCA_DB_HELPER_TOKEN="$(openssl rand -hex 32)"
+          echo "BTCDCA_DB_HELPER_TOKEN=$BTCDCA_DB_HELPER_TOKEN" >> "$GITHUB_ENV"
           python3 - <<'PY'
           import base64
           import json
