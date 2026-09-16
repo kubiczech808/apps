@@ -12788,6 +12788,8 @@ function pruneScrapingJobItems(PDO $pdo, int $limit = DB_CLEANUP_BATCH_ROWS): in
 }
 
 /**
+ * Hranice, za kterou se detailní řádek importu už nedrží.
+ */
 function importRunItemRetentionCutoff(): string
 {
     return date('c', time() - (DB_IMPORT_ITEM_RETENTION_DAYS * 86400));
