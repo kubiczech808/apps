@@ -16,15 +16,51 @@ FTP values describe only the directory boundary; recursive counting is intention
 
 MySQL server reachable: `ERROR: ERROR 2002 (HY000): Can't connect to local MySQL server through socket '/var/run/mysqld/mysqld.sock' (2)`.
 
-WordPress table prefix was not found in `wp-config.php`; do not delete database tables until this is resolved.
+WordPress table prefix found in `wp-config.php`: `wp_dca_`.
 
 ```text
 ERROR: ERROR 2002 (HY000): Can't connect to local MySQL server through socket '/var/run/mysqld/mysqld.sock' (2)
 ```
 
-### Homepage source matches
+### Homepage index.html source matches
 
-File not available over FTP.
+No relevant text found.
+
+### WordPress index.php source matches
+
+Lines 3-5:
+```
+ * Front to the WordPress application. This file doesn't do anything, but loads
+ * wp-blog-header.php which does and tells WordPress to load the theme.
+ *
+```
+
+Lines 4-6:
+```
+ * wp-blog-header.php which does and tells WordPress to load the theme.
+ *
+ * @package WordPress
+```
+
+Lines 6-8:
+```
+ * @package WordPress
+ */
+
+```
+
+Lines 10-12:
+```
+ * Tells WordPress to load the WordPress theme and output it.
+ *
+ * @var bool
+```
+
+Lines 16-17:
+```
+/** Loads the WordPress Environment and Template */
+require __DIR__ . '/wp-blog-header.php';
+```
 
 ### Immediate `www` directory entries
 
@@ -81,11 +117,54 @@ file forgot-password.php (10039 bytes)
 
 ### Root .htaccess matches
 
-File not available over FTP.
+Lines 15-17:
+```
+# Serve extensionless BTC-DCA app PHP pages internally before WordPress fallback.
+RewriteRule ^app/overview/?$ /app/overview.php [L,QSA]
+RewriteRule ^app/([^/.]+)/?$ /app/$1.php [L,QSA]
+```
+
+Lines 25-27:
+```
+# BEGIN WordPress
+# The directives (lines) between "BEGIN WordPress" and "END WordPress" are
+# dynamically generated, and should only be modified via WordPress filters.
+```
+
+Lines 26-28:
+```
+# The directives (lines) between "BEGIN WordPress" and "END WordPress" are
+# dynamically generated, and should only be modified via WordPress filters.
+# Any changes to the directives between these markers will be overwritten.
+```
+
+Lines 27-29:
+```
+# dynamically generated, and should only be modified via WordPress filters.
+# Any changes to the directives between these markers will be overwritten.
+<IfModule mod_rewrite.c>
+```
+
+Lines 39-39:
+```
+# END WordPress
+```
 
 ### robots.txt matches
 
-File not available over FTP.
+Lines 2-4:
+```
+Disallow: /learn-center/wp-admin/
+Allow: /learn-center/wp-admin/admin-ajax.php
+
+```
+
+Lines 3-5:
+```
+Allow: /learn-center/wp-admin/admin-ajax.php
+
+# START YOAST BLOCK
+```
 
 ## Required removal contract
 
