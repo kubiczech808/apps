@@ -60,32 +60,18 @@ def list_current(ftp: ftplib.FTP) -> list[tuple[str, bool, int | None]]:
         return result
 
 
-def count_tree(ftp: ftplib.FTP, root: str, limit: int = 250_000) -> tuple[int, int, int, list[str]]:
-    pending = [root]
-    files = directories = bytes_seen = 0
-    errors: list[str] = []
-    while pending:
-        current = pending.pop()
-        if files + directories >= limit:
-            errors.append(f"Stopped at safety limit of {limit:,} entries.")
-            break
-        if not cwd_path(ftp, current):
-            errors.append(f"Not accessible: {current}")
-            continue
-        try:
-            entries = list_current(ftp)
-        except ftplib.all_errors as exc:
-            errors.append(f"Could not list {current}: {exc}")
-            continue
-        for name, is_dir, size in entries:
-            child = f"{current.rstrip('/')}/{name}"
-            if is_dir:
-                directories += 1
-                pending.append(child)
-            else:
-                files += 1
-                bytes_seen += size or 0
-    return files, directories, bytes_seen, errors
+def describe_directory(ftp: ftplib.FTP, path: str) -> tuple[int, int, int, list[str]]:
+    """Report only the directory boundary; deep traversal is too slow on this FTP server."""
+    if not cwd_path(ftp, path):
+        return 0, 0, 0, [f"Not accessible: {path}"]
+    try:
+        entries = list_current(ftp)
+    except ftplib.all_errors as exc:
+        return 0, 0, 0, [f"Could not list {path}: {exc}"]
+    files = sum(1 for _name, is_dir, _size in entries if not is_dir)
+    directories = sum(1 for _name, is_dir, _size in entries if is_dir)
+    bytes_seen = sum(size or 0 for _name, is_dir, size in entries if not is_dir)
+    return files, directories, bytes_seen, []
 
 
 def download_optional(ftp: ftplib.FTP, remote: str) -> str | None:
@@ -126,7 +112,7 @@ def main() -> None:
     ftp = connect_ftp()
     try:
         targets = ("www/wp-admin", "www/wp-includes", "www/wp-content", "www/learn-center")
-        inventory = {target: count_tree(ftp, target) for target in targets}
+        inventory = {target: describe_directory(ftp, target) for target in targets}
         index = download_optional(ftp, "www/index.php")
         htaccess = download_optional(ftp, "www/.htaccess")
         robots = download_optional(ftp, "www/robots.txt")
@@ -147,6 +133,7 @@ def main() -> None:
         "# BTC-DCA WordPress retirement preflight",
         "",
         "Read-only production inventory. No files or database records were changed.",
+        "FTP values describe only the directory boundary; recursive counting is intentionally avoided because it can stall on this hosting server.",
         "",
         "## FTP inventory",
         "",

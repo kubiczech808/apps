@@ -9,6 +9,10 @@ on:
       - '.github/workflows/btcdca-wordpress-preflight.yml'
   workflow_dispatch:
 
+concurrency:
+  group: btcdca-wordpress-retirement-preflight
+  cancel-in-progress: true
+
 permissions:
   contents: write
 
