@@ -6551,6 +6551,19 @@ try {
             );
             respond(['ok' => true, 'operation' => 'archive-events', 'result' => $result]);
         }
+        // The JSON segments remain the active reader. MySQL is a compact working mirror,
+        // so snapshots outside the current catalogue are gzip-archived and removed here
+        // before the database quota becomes an outage. The storage function refuses this
+        // operation if a future cutover makes MySQL the active read source.
+        if ($operation === 'archive-observations') {
+            $result = trading_storage_archive_observations(
+                $pdo,
+                (int) ($storageRequest['scrapedDays'] ?? 3),
+                (int) ($storageRequest['resolvedDays'] ?? 1),
+                (int) ($storageRequest['limit'] ?? 500),
+            );
+            respond(['ok' => true, 'operation' => 'archive-observations', 'result' => $result]);
+        }
         // Read-only, and added the day the paper histories were lost. Every paper portfolio's
         // trades now start within four seconds of 2026-09-12T08:54Z, the published segment
         // files were overwritten with that same state, and the mirror is the only place a

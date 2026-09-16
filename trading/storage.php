@@ -901,6 +901,120 @@ function trading_storage_archive_events(PDO $pdo, int $days = 7, int $limit = 50
     ];
 }
 
+/**
+ * Archive snapshots MySQL does not serve before removing them from its working mirror.
+ *
+ * Published JSON state remains the active reader while the SQL migration is inactive. The
+ * mirror therefore must retain the current catalogue, not every historical scan forever.
+ * Each archived row is written to gzip first; a delete then additionally checks the stored
+ * timestamp and lifecycle, so a concurrent ingest cannot make a newly refreshed market
+ * disappear merely because an earlier snapshot was eligible for retention.
+ */
+function trading_storage_archive_observations(
+    PDO $pdo,
+    int $scrapedDays = 3,
+    int $resolvedDays = 1,
+    int $limit = 500,
+): array {
+    trading_storage_bootstrap($pdo);
+    if (trading_storage_is_active()) {
+        throw new RuntimeException('Observation retention is refused while MySQL is the active read source.');
+    }
+    $scrapedDays = max(1, min(30, $scrapedDays));
+    $resolvedDays = max(1, min(30, $resolvedDays));
+    $limit = max(1, min(1000, $limit));
+    $scrapedCutoff = gmdate('Y-m-d H:i:s', time() - $scrapedDays * 86400);
+    $resolvedCutoff = gmdate('Y-m-d H:i:s', time() - $resolvedDays * 86400);
+    $select = $pdo->prepare(
+        'SELECT observation_key, lifecycle, updated_at, payload
+         FROM trading_observations
+         WHERE (lifecycle = :scrapedLifecycle AND updated_at < :scrapedCutoff)
+            OR (lifecycle = :resolvedLifecycle AND updated_at < :resolvedCutoff)
+         ORDER BY updated_at ASC, observation_key ASC LIMIT ' . $limit
+    );
+    $select->execute([
+        'scrapedLifecycle' => 'SCRAPED',
+        'scrapedCutoff' => $scrapedCutoff,
+        'resolvedLifecycle' => 'RESOLVED',
+        'resolvedCutoff' => $resolvedCutoff,
+    ]);
+    $rows = $select->fetchAll();
+    if ($rows === []) {
+        return [
+            'scrapedCutoff' => $scrapedCutoff,
+            'resolvedCutoff' => $resolvedCutoff,
+            'archived' => 0,
+            'deleted' => 0,
+            'files' => [],
+            'done' => true,
+        ];
+    }
+
+    $root = __DIR__ . '/data/observation-archive';
+    $handles = [];
+    $files = [];
+    $archivedRows = [];
+    foreach ($rows as $row) {
+        $payload = trading_storage_unpack($row['payload'] ?? null);
+        if (!is_array($payload)) {
+            continue;
+        }
+        $lifecycle = strtoupper((string) ($row['lifecycle'] ?? ''));
+        $updatedAt = (string) ($row['updated_at'] ?? '');
+        $key = (string) ($row['observation_key'] ?? '');
+        if (!in_array($lifecycle, ['SCRAPED', 'RESOLVED'], true) || $updatedAt === '' || $key === '') {
+            continue;
+        }
+        $day = substr($updatedAt, 0, 10);
+        if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $day)) {
+            continue;
+        }
+        $name = $root . '/' . strtolower($lifecycle) . '/' . $day . '.ndjson.gz';
+        if (!isset($handles[$name])) {
+            if (!is_dir(dirname($name)) && !mkdir(dirname($name), 0775, true) && !is_dir(dirname($name))) {
+                throw new RuntimeException('Could not create the observation archive directory.');
+            }
+            $handle = gzopen($name, 'ab9');
+            if ($handle === false) {
+                throw new RuntimeException('Could not open the observation archive ' . basename($name));
+            }
+            $handles[$name] = $handle;
+            $files[] = str_replace($root . '/', '', $name);
+        }
+        $line = json_encode([
+            'observationKey' => $key,
+            'lifecycle' => $lifecycle,
+            'updatedAt' => $updatedAt,
+            'payload' => $payload,
+        ], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+        if (!is_string($line) || gzwrite($handles[$name], $line . "\n") === false) {
+            continue;
+        }
+        $archivedRows[] = ['key' => $key, 'lifecycle' => $lifecycle, 'updatedAt' => $updatedAt];
+    }
+    foreach ($handles as $handle) {
+        gzclose($handle);
+    }
+
+    $deleted = 0;
+    $delete = $pdo->prepare(
+        'DELETE FROM trading_observations
+         WHERE observation_key = :key AND lifecycle = :lifecycle AND updated_at = :updatedAt'
+    );
+    foreach ($archivedRows as $row) {
+        $delete->execute($row);
+        $deleted += $delete->rowCount();
+    }
+    return [
+        'scrapedCutoff' => $scrapedCutoff,
+        'resolvedCutoff' => $resolvedCutoff,
+        'archived' => count($archivedRows),
+        'deleted' => $deleted,
+        'files' => array_values(array_unique($files)),
+        'done' => count($rows) < $limit,
+    ];
+}
+
 function trading_storage_rebuild_compacted_table(PDO $pdo, string $table): array
 {
     trading_storage_bootstrap($pdo);

@@ -236,12 +236,63 @@ def archive_events(url: str, key: str) -> int:
     return 0
 
 
+def archive_observations(url: str, key: str) -> int:
+    """Keep MySQL as a bounded working mirror while JSON remains the active source.
+
+    The API writes every selected snapshot into a gzip archive before deleting it. It also
+    verifies the row has not changed since selection, so an ingest running at the same time
+    wins over retention. Rebuilding at the end is what returns InnoDB's released pages to
+    the hosting quota instead of merely marking them reusable inside the table.
+    """
+    status_url = os.environ.get("STATUS_URL", "").strip()
+    scraped_days = int(os.environ.get("SCRAPED_RETENTION_DAYS") or 3)
+    resolved_days = int(os.environ.get("RESOLVED_RETENTION_DAYS") or 1)
+    before = trading_size_bytes(status_url) if status_url else None
+    print("== archiving obsolete observation snapshots"
+          f" (SCRAPED older than {scraped_days}d; RESOLVED older than {resolved_days}d;"
+          f" trading tables at {'unknown' if before is None else str(round(before / 1048576)) + ' MB'})")
+    deadline = time.monotonic() + BUDGET_MINUTES * 60
+    archived = deleted = 0
+    files: set[str] = set()
+    for batch in range(10000):
+        if time.monotonic() > deadline:
+            print("\n== paused on the time budget; dispatch archive-observations again to continue")
+            break
+        result = post(url, key, {
+            "operation": "archive-observations",
+            "scrapedDays": scraped_days,
+            "resolvedDays": resolved_days,
+            "limit": PAGE_LIMIT,
+        }).get("result", {})
+        archived += int(result.get("archived") or 0)
+        deleted += int(result.get("deleted") or 0)
+        files.update(result.get("files") or [])
+        if batch % 10 == 0 or result.get("done"):
+            print(f"   archived {archived}, deleted {deleted}; "
+                  f"cutoffs scraped {result.get('scrapedCutoff')} / resolved {result.get('resolvedCutoff')}")
+        if result.get("done"):
+            print("   no obsolete snapshots are left in the working mirror")
+            break
+        time.sleep(PAUSE_SECONDS)
+
+    print(f"\narchived {archived} snapshots into {len(files)} gzip file(s), deleted {deleted} from MySQL")
+    for name in sorted(files):
+        print(f"   {name}")
+    if deleted:
+        print("== rebuilding trading_observations to return freed pages to the hosting quota")
+        post(url, key, {"operation": "rebuild-table", "table": "trading_observations"})
+    after = trading_size_bytes(status_url) if status_url else None
+    if before is not None and after is not None:
+        print(f"trading tables {round(before / 1048576)} MB -> {round(after / 1048576)} MB")
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--operation",
         default="migrate",
-        choices=["migrate", "activate", "deactivate", "status", "slim-events", "archive-events"],
+        choices=["migrate", "activate", "deactivate", "status", "slim-events", "archive-events", "archive-observations"],
     )
     args = parser.parse_args()
 
@@ -261,6 +312,9 @@ def main() -> int:
 
     if args.operation == "archive-events":
         return archive_events(url, key)
+
+    if args.operation == "archive-observations":
+        return archive_observations(url, key)
 
     phases = ["documents", "scraped", "resolved", "events", "finalize"]
     resume_phase = os.environ.get("MIGRATE_PHASE", "").strip()

@@ -189,6 +189,11 @@ jobs:
                   "scrape-scan-preferences.json",
                   "redeem-alert-ledger.json",
                   "market-scan-history",
+                  # Retained database rows are first moved into gzipped files. These are
+                  # runtime data, not deploy artifacts: removing them on the next deploy
+                  # would turn a reversible archive into silent data loss.
+                  "event-archive",
+                  "observation-archive",
                   # Every portfolio's archived run-log history, one directory per
                   # portfolio. It was missing here, so each deploy of the site deleted
                   # the whole tree -- the same mistake this list has now made three
@@ -386,3 +391,24 @@ jobs:
               print(f"::error title=Trading MySQL bootstrap::{str(error)[:300]}")
               raise
           PY
+
+  retain-observation-mirror:
+    # The storage endpoint above is uploaded by deploy first. Running retention here makes
+    # the urgent first cleanup deterministic; the dedicated daily workflow below keeps the
+    # mirror bounded afterwards.
+    needs: deploy
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    env:
+      STORAGE_URL: https://www.osobnizkusenosti.cz/trading/api.php?action=storage-admin
+      STATUS_URL: https://www.osobnizkusenosti.cz/trading/api.php?action=storage-status
+      TRADING_TRIGGER_KEY: ${{ secrets.POLYTRADING_DB_PASSWORD }}
+      SCRAPED_RETENTION_DAYS: "3"
+      RESOLVED_RETENTION_DAYS: "1"
+      MIGRATE_PAGE_LIMIT: "200"
+      MIGRATE_PAUSE_SECONDS: "2"
+      MIGRATE_BUDGET_MINUTES: "35"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Archive obsolete observation snapshots and reclaim database pages
+        run: python3 trading/tools/storage-migrate.py --operation archive-observations

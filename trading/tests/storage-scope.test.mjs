@@ -373,3 +373,22 @@ test("the upsert writes exactly these columns", () => {
   assert.deepEqual(placeholders.sort(), bound.sort(),
     "every placeholder in the INSERT must be bound by the column extraction, and vice versa");
 });
+
+test("observation retention archives before deleting and refuses an active SQL reader", () => {
+  const start = STORAGE.indexOf("function trading_storage_archive_observations");
+  const end = STORAGE.indexOf("function trading_storage_rebuild_compacted_table", start);
+  const archive = STORAGE.slice(start, end);
+  assert.ok(archive.length > 0, "the observation retention operation must exist");
+  assert.match(archive, /if \(trading_storage_is_active\(\)\)/,
+    "retention must refuse to mutate the database after an SQL read-path cutover");
+  assert.match(archive, /gzwrite\(/,
+    "an observation must be written into the gzip archive");
+  assert.match(archive, /DELETE FROM trading_observations/,
+    "only archived observations may then leave the working mirror");
+  assert.ok(archive.indexOf("gzwrite(") < archive.indexOf("DELETE FROM trading_observations"),
+    "the archive write must happen before the delete statement exists in the execution path");
+  assert.match(archive, /lifecycle = :lifecycle AND updated_at = :updatedAt/,
+    "a concurrently refreshed row must not be deleted by a stale retention selection");
+  assert.match(API, /operation === 'archive-observations'/,
+    "the authenticated storage admin endpoint must expose the retention operation");
+});
