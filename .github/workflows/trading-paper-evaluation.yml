@@ -13,7 +13,9 @@ on:
         type: string
 
 concurrency:
-  group: trading-paper-bot
+  # This uploads paper state and mirrors it to the shared hosting/database.
+  # Keep it behind the same lock as every other Trading writer.
+  group: trading-hosting-write-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
@@ -140,6 +142,9 @@ jobs:
           TRADING_STORAGE_INGEST_TARGET: paper
           TRADING_STORAGE_STATE_FILE: trading/data/paper-state.json
           TRADING_STORAGE_INGEST_REQUIRED: "false"
+          # Market Scan owns catalogue writes; focused evaluation only changes
+          # portfolio, trade, and run-log state.
+          TRADING_STORAGE_INGEST_OBSERVATIONS: "false"
           # The mirror was gated behind this flag and NOTHING ever set it, so every one of
           # these steps has printed "Trading SQL mirror is disabled pending storage
           # verification" and written nothing. Measured on the database: last ingest

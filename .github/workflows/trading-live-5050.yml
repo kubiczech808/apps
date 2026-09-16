@@ -44,10 +44,11 @@ on:
     # on its own saved cadence, and a second scheduled entry delivered nothing extra.
     - cron: '37 * * * *'
 
-# The state files are separate, but every live strategy shares one funded wallet.
-# Serialize the entry decision with the regular live workflow as well.
+# The state files are separate, but every live strategy shares one funded wallet
+# and one constrained hosting account. Serialize every state-writing run with the
+# regular live workflow, scans and account syncs.
 concurrency:
-  group: trading-live-wallet-${{ github.ref }}
+  group: trading-hosting-write-${{ github.ref }}
   cancel-in-progress: false
 
 permissions:

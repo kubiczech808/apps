@@ -2715,6 +2715,8 @@ test("state segments: every state-writing workflow publishes them", async () => 
     const workflow = await readFile(new URL(`../../.github/workflows/${name}.yml`, import.meta.url), "utf8");
     assert.match(workflow, /run: python3 trading\/tools\/publish-paper-state\.py/,
       `${name} must publish through the shared script`);
+    assert.match(workflow, /group: trading-hosting-write-\$\{\{ github\.ref \}\}/,
+      `${name} must serialize its hosting writes with every other Trading writer`);
     assert.ok(!/STOR paper-state\.json/.test(workflow),
       `${name} must not upload the core state inline`);
     const suffix = workflow.match(/PAPER_UPLOAD_SUFFIX: (\S+)/)?.[1];
@@ -4548,7 +4550,7 @@ test("market scan: a run evicted from the queue is retaken, not reported as an e
   // moment a third is queued. So the scan lost its place in the queue; nothing failed
   // and nothing was scanned.
   for (const [label, workflow] of [["scan", scan], ["paper bot", bot2]]) {
-    assert.match(workflow, /group: trading-paper-bot/, `${label} must stay serialized against the other`);
+    assert.match(workflow, /group: trading-hosting-write-\$\{\{ github\.ref \}\}/, `${label} must stay serialized against the other`);
     assert.match(workflow, /cancel-in-progress: false/, `${label} must not cancel a run that is mid-write`);
   }
 
@@ -6762,8 +6764,8 @@ test("scheduled scan: a scheduled pass stays small and does not fan out", async 
   assert.match(source, /if \(MARKET_SCAN_HOURLY_INTERVAL_MINUTES <= 0\) return null;/);
 
   // Both scanners still write one paper-state.json, so they must stay serialized.
-  assert.match(scan, /group: trading-paper-bot/);
-  assert.match(bot, /group: trading-paper-bot/);
+  assert.match(scan, /group: trading-hosting-write-\$\{\{ github\.ref \}\}/);
+  assert.match(bot, /group: trading-hosting-write-\$\{\{ github\.ref \}\}/);
 });
 
 // Reported: a resting limit order at 52% -- the price 5050 was set to -- was listed under
