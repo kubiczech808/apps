@@ -1,4 +1,5 @@
 import { aggregate, HOUR_MS } from './candles.mjs'
+import { ceilPrice, floorPrice, normalizeCandlePrices, roundPrice } from './price.mjs'
 import { buildZones, candleSignal, marketStructure } from './priceaction.mjs'
 
 export const PRICE_ACTION_STRUCTURE_ID = 'price-action-structure-v1'
@@ -99,10 +100,10 @@ const parseStooqCsv = (csv) => {
     if (!Number.isFinite(parsedTime) || [open, high, low, close].some((value) => value === null || value <= 0)) continue
     out.push({
       time: parsedTime,
-      open,
-      high,
-      low,
-      close,
+      open: roundPrice(open),
+      high: roundPrice(high),
+      low: roundPrice(low),
+      close: roundPrice(close),
       volume: numberOrNull(cells[volumeIndex]) ?? 0,
     })
   }
@@ -175,10 +176,10 @@ export const fetchYahooCandles = async ({
     if ([open, high, low, close].some((value) => value === null || value <= 0)) continue
     out.push({
       time: Number(timestamps[index]) * 1000,
-      open,
-      high,
-      low,
-      close,
+      open: roundPrice(open),
+      high: roundPrice(high),
+      low: roundPrice(low),
+      close: roundPrice(close),
       volume: numberOrNull(quote.volume?.[index]) ?? 0,
     })
   }
@@ -420,9 +421,9 @@ const nearestOpposingZone = ({ side, zones, entry }) => {
 
 const structuralTarget = ({ side, structure }) =>
   side === 'long'
-    ? structure?.high?.current?.price ?? null
+    ? roundPrice(structure?.high?.current?.price ?? null)
     : side === 'short'
-      ? structure?.low?.current?.price ?? null
+      ? roundPrice(structure?.low?.current?.price ?? null)
       : null
 
 const pullbackLevel = ({ side, structure, pullbackPct }) => {
@@ -431,18 +432,18 @@ const pullbackLevel = ({ side, structure, pullbackPct }) => {
   const low = structure?.low?.current?.price
   if (!Number.isFinite(high) || !Number.isFinite(low) || high <= low) return null
   const ratio = Math.min(Math.max(Number(pullbackPct) || 50, 0), 100) / 100
-  return side === 'long'
+  return roundPrice(side === 'long'
     ? high - (high - low) * ratio
-    : low + (high - low) * ratio
+    : low + (high - low) * ratio)
 }
 
 // An uptrend is invalidated below its last HL; a downtrend above its last LH.
 // Those are the same confirmed structural pivots used by the trend classifier.
 const structureInvalidationLevel = ({ side, structure }) =>
   side === 'long'
-    ? structure?.low?.current?.price ?? null
+    ? roundPrice(structure?.low?.current?.price ?? null)
     : side === 'short'
-      ? structure?.high?.current?.price ?? null
+      ? roundPrice(structure?.high?.current?.price ?? null)
       : null
 
 const candidateZones = (zones, side) => {
@@ -484,7 +485,7 @@ const lowerTimeframeZoneRefinement = ({ side, zone, lowerItem, entryLow, entryHi
     .filter((lowerZone) => lowerZone.low >= zone.low && lowerZone.high <= zone.high)
     .map((lowerZone) => ({
       zone: lowerZone,
-      entry: side === 'long' ? lowerZone.high : lowerZone.low,
+      entry: roundPrice(side === 'long' ? lowerZone.high : lowerZone.low),
     }))
     .filter(({ entry }) => entry >= entryLow && entry <= entryHigh)
     .sort((left, right) => (right.zone.lastIndex ?? 0) - (left.zone.lastIndex ?? 0))
@@ -493,6 +494,11 @@ const lowerTimeframeZoneRefinement = ({ side, zone, lowerItem, entryLow, entryHi
 }
 
 const zoneEntryCandidate = ({ item, side, zone, pullback, invalidationLevel, settings, lowerItem, lowerTimeframeId }) => {
+  const normalizedZone = {
+    ...zone,
+    low: roundPrice(zone.low),
+    high: roundPrice(zone.high),
+  }
   const directionEligible = sideFromTrend(item?.trend) === side
   const rangeLow = Number.isFinite(pullback) && Number.isFinite(invalidationLevel)
     ? Math.min(pullback, invalidationLevel)
@@ -500,23 +506,25 @@ const zoneEntryCandidate = ({ item, side, zone, pullback, invalidationLevel, set
   const rangeHigh = Number.isFinite(pullback) && Number.isFinite(invalidationLevel)
     ? Math.max(pullback, invalidationLevel)
     : null
-  const entryLow = Number.isFinite(rangeLow) ? Math.max(zone.low, rangeLow) : null
-  const entryHigh = Number.isFinite(rangeHigh) ? Math.min(zone.high, rangeHigh) : null
+  const entryLow = Number.isFinite(rangeLow) ? roundPrice(Math.max(normalizedZone.low, rangeLow)) : null
+  const entryHigh = Number.isFinite(rangeHigh) ? roundPrice(Math.min(normalizedZone.high, rangeHigh)) : null
   const pullbackEligible = Number.isFinite(entryLow) && Number.isFinite(entryHigh) && entryLow <= entryHigh
-  const zoneEdgeEntry = side === 'long' ? zone.high : zone.low
+  const zoneEdgeEntry = side === 'long' ? normalizedZone.high : normalizedZone.low
   // When the zone overlaps the structural pullback only partially, the first
   // tradable hit is the edge of that overlap, not a price beyond the pullback.
   const entryAtZoneHit = pullbackEligible
     ? side === 'long' ? entryHigh : entryLow
     : zoneEdgeEntry
-  const buffer = stopBuffer({ zone, price: entryAtZoneHit, stopBufferPct: settings.stopBufferPct })
-  const stop = side === 'long' ? zone.low - buffer : zone.high + buffer
+  const buffer = roundPrice(stopBuffer({ zone: normalizedZone, price: entryAtZoneHit, stopBufferPct: settings.stopBufferPct }))
+  const stop = side === 'long'
+    ? floorPrice(normalizedZone.low - buffer)
+    : ceilPrice(normalizedZone.high + buffer)
   const entryAtPullback = pullbackEligible
     ? side === 'long' ? entryHigh : entryLow
     : null
   const lowerRefinement = lowerTimeframeZoneRefinement({
     side,
-    zone,
+    zone: normalizedZone,
     lowerItem,
     entryLow,
     entryHigh,
@@ -526,13 +534,15 @@ const zoneEntryCandidate = ({ item, side, zone, pullback, invalidationLevel, set
   const tp2Zone = Number.isFinite(refinedEntry)
     ? nearestOpposingZone({ side, zones: item?.zones, entry: refinedEntry })
     : null
-  const tp2 = side === 'long' ? tp2Zone?.low ?? null : tp2Zone?.high ?? null
-  const weightedTarget = Number.isFinite(tp1) && Number.isFinite(tp2) ? (tp1 + tp2) / 2 : null
+  const tp2 = side === 'long' ? roundPrice(tp2Zone?.low ?? null) : roundPrice(tp2Zone?.high ?? null)
+  const weightedTarget = Number.isFinite(tp1) && Number.isFinite(tp2) ? roundPrice((tp1 + tp2) / 2) : null
   const minRewardRisk = Number(settings.minRewardRisk) || 2
   const rrAtZoneHit = rewardRiskFor({ side, entry: entryAtZoneHit, stop, target: weightedTarget })
   const rrAtPullback = rewardRiskFor({ side, entry: refinedEntry, stop, target: weightedTarget })
   const threshold = Number.isFinite(stop) && Number.isFinite(weightedTarget)
-    ? (weightedTarget + minRewardRisk * stop) / (minRewardRisk + 1)
+    ? (side === 'long'
+      ? floorPrice((weightedTarget + minRewardRisk * stop) / (minRewardRisk + 1))
+      : ceilPrice((weightedTarget + minRewardRisk * stop) / (minRewardRisk + 1)))
     : null
   const entryForMinRR = pullbackEligible && Number.isFinite(refinedEntry) && Number.isFinite(rrAtPullback) && rrAtPullback >= minRewardRisk
     ? refinedEntry
@@ -541,7 +551,7 @@ const zoneEntryCandidate = ({ item, side, zone, pullback, invalidationLevel, set
       : null
   const rewardRisk = rewardRiskFor({ side, entry: entryForMinRR, stop, target: weightedTarget })
   const rrEligible = Number.isFinite(rewardRisk) && rewardRisk >= minRewardRisk
-  const zoneHit = zoneHitByCandle(zone, item?.lastCandle)
+  const zoneHit = zoneHitByCandle(normalizedZone, item?.lastCandle)
   const reasons = []
   if (!directionEligible) reasons.push('opačný směr oproti aktuální struktuře')
   if (!pullbackEligible) reasons.push('mimo 50% pullback pásmo nebo za hranicí invalidace')
@@ -561,7 +571,7 @@ const zoneEntryCandidate = ({ item, side, zone, pullback, invalidationLevel, set
   return {
     type: zone.type,
     side,
-    zone,
+    zone: normalizedZone,
     directionEligible,
     pullbackEligible,
     rrEligible,
@@ -964,24 +974,25 @@ export const classifyStructure = (
   candles,
   { lookback = 2, zoneLookback = 2, minCandles = 40, zoneMaxAgeCandles = 400, historyDays = null, chartCandles = null } = {}
 ) => {
-  const chartSource = chartCandles ?? candles
-  if (!Array.isArray(candles) || candles.length < minCandles) {
+  const normalizedCandles = Array.isArray(candles) ? candles.map(normalizeCandlePrices) : candles
+  const chartSource = Array.isArray(chartCandles ?? candles) ? (chartCandles ?? candles).map(normalizeCandlePrices) : []
+  if (!Array.isArray(normalizedCandles) || normalizedCandles.length < minCandles) {
     return {
       trend: 'flat',
       status: 'neutral',
       event: null,
       reason: `málo svíček (${candles?.length ?? 0}/${minCandles})`,
-      price: candles?.at?.(-1)?.close ?? null,
-      asOf: candles?.at?.(-1)?.time ?? null,
-      candles: candles?.length ?? 0,
-      lastCandle: candleSummary(candles?.at?.(-1)),
+      price: normalizedCandles?.at?.(-1)?.close ?? null,
+      asOf: normalizedCandles?.at?.(-1)?.time ?? null,
+      candles: normalizedCandles?.length ?? 0,
+      lastCandle: candleSummary(normalizedCandles?.at?.(-1)),
       candleSignal: null,
       chartCandles: (chartSource ?? []).map(candleSummary),
       zones: null,
     }
   }
-  const structure = marketStructure(candles, { lookback })
-  const latest = candles.at(-1)
+  const structure = marketStructure(normalizedCandles, { lookback })
+  const latest = normalizedCandles.at(-1)
 
   const highLeg = structureLeg({
     previous: structure.previousHigh,
@@ -1002,13 +1013,13 @@ export const classifyStructure = (
   const localTrend = highText === 'HH' && lowText === 'HL'
     ? 'up'
     : highText === 'LH' && lowText === 'LL' ? 'down' : 'flat'
-  const persistent = persistentStructureTrend(candles, structure.swings, lookback)
+  const persistent = persistentStructureTrend(normalizedCandles, structure.swings, lookback)
   const trend = persistent.trend
   const structureBreak = persistent.event
   const establishedTrend = structureBreak?.type.startsWith('CHoCH') ? structureBreak.fromTrend : trend
   const status = trend === 'up' ? 'met' : trend === 'down' ? 'unmet' : 'neutral'
-  const contextHigh = candles.reduce((best, candle) => !best || candle.high > best.high ? candle : best, null)
-  const contextLow = candles.reduce((best, candle) => !best || candle.low < best.low ? candle : best, null)
+  const contextHigh = normalizedCandles.reduce((best, candle) => !best || candle.high > best.high ? candle : best, null)
+  const contextLow = normalizedCandles.reduce((best, candle) => !best || candle.low < best.low ? candle : best, null)
   const reason = structureBreak?.type.startsWith('CHoCH')
     ? `${structureBreak.type} close ${structureBreak.close} přes hlavní úroveň ${structureBreak.referencePrice}; předchozí ${[highText, lowText].filter(Boolean).join(' + ')}`
     : trend !== 'flat' && localTrend !== trend
@@ -1024,9 +1035,9 @@ export const classifyStructure = (
     reason,
     price: latest?.close ?? null,
     asOf: latest?.time ?? null,
-    candles: candles.length,
+    candles: normalizedCandles.length,
     lastCandle: candleSummary(latest),
-    candleSignal: candleSignal(candles),
+    candleSignal: candleSignal(normalizedCandles),
     chartCandles: chartSource.map(candleSummary),
     lastHigh: structure.lastHigh?.price ?? null,
     lastLow: structure.lastLow?.price ?? null,
@@ -1035,7 +1046,7 @@ export const classifyStructure = (
       zoneLookback,
       zoneMaxAgeCandles,
       historyDays,
-      from: candles[0]?.time ?? null,
+      from: normalizedCandles[0]?.time ?? null,
       to: latest?.time ?? null,
       contextHigh: contextHigh ? { price: contextHigh.high, time: contextHigh.time } : null,
       contextLow: contextLow ? { price: contextLow.low, time: contextLow.time } : null,
@@ -1044,7 +1055,7 @@ export const classifyStructure = (
       low: lowLeg,
       recentSwings: structure.swings.slice(-8).map((swing) => pivotSummary(swing)),
     },
-    zones: activeSupplyDemandZones(candles, { lookback: zoneLookback, maxAgeCandles: zoneMaxAgeCandles }),
+    zones: activeSupplyDemandZones(normalizedCandles, { lookback: zoneLookback, maxAgeCandles: zoneMaxAgeCandles }),
   }
 }
 

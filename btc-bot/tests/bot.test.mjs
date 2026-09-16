@@ -387,11 +387,11 @@ test('a position that cannot be bracketed is closed rather than left running', a
   assert.deepEqual(closed, ['U2'])
 })
 
-test('prices round in the direction that cannot enlarge the risk', () => {
-  assert.equal(roundStop('long', 98_000.4), 98_001)
-  assert.equal(roundStop('short', 102_000.6), 102_000)
-  assert.equal(roundTarget('long', 110_000.9), 110_000)
-  assert.equal(roundTarget('short', 90_000.1), 90_001)
+test('prices retain four decimals and round in the direction that cannot enlarge risk', () => {
+  assert.equal(roundStop('long', 98_000.40003), 98_000.4)
+  assert.equal(roundStop('short', 102_000.60003), 102_000.6001)
+  assert.equal(roundTarget('long', 110_000.90009), 110_000.9001)
+  assert.equal(roundTarget('short', 90_000.10001), 90_000.1)
 })
 
 test('mainnet is refused while the dashboard key is one published in the repo', async () => {

@@ -16,6 +16,8 @@
 // beyond the stop by a safety factor; the stop is the risk decision, and
 // leverage is only the arithmetic that follows from it.
 
+import { ceilPrice, floorPrice, roundPrice } from './price.mjs'
+
 export const SATS_PER_BTC = 1e8
 
 export const pnlSats = ({ side, entry, exit, quantityUsd }) => {
@@ -127,6 +129,9 @@ export const DEFAULT_RISK_SETTINGS = {
  */
 export const planPosition = ({ side, entry, stop, takeProfit, equitySats, settings = {} }) => {
   const config = { ...DEFAULT_RISK_SETTINGS, ...settings }
+  entry = roundPrice(entry)
+  stop = side === 'long' ? floorPrice(stop) : ceilPrice(stop)
+  takeProfit = side === 'long' ? floorPrice(takeProfit) : ceilPrice(takeProfit)
 
   if (!(entry > 0) || !(stop > 0) || !(takeProfit > 0)) {
     return { ok: false, reason: 'entry, stop and take profit must all be positive prices' }
@@ -218,7 +223,7 @@ export const planPosition = ({ side, entry, stop, takeProfit, equitySats, settin
     rr: rewardSats / actualRiskSats,
     rrNetOfFees: (rewardSats - feeSats) / (actualRiskSats + feeSats),
     stopDistancePct: distancePct,
-    liquidation: liquidationPrice({ side, entry, leverage }),
+    liquidation: roundPrice(liquidationPrice({ side, entry, leverage })),
     notionalCapped,
   }
 }

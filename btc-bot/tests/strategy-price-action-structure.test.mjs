@@ -322,6 +322,38 @@ test('trade profile requires S/D zone hit, 50 percent pullback and at least 2R',
   assert.equal(withoutHit.gates.find((entry) => entry.id === 'zone').status, 'unmet')
 })
 
+test('price-action profiles use four-decimal levels throughout the R/R calculation', () => {
+  const profile = evaluateTradeProfile({
+    item: {
+      trend: 'up',
+      price: 1.119876,
+      lastCandle: candle(START, 1.121234, 1.122345, 1.109876, 1.119876),
+      structure: {
+        high: { current: { price: 1.150089 } },
+        low: { current: { price: 1.100011 } },
+      },
+      zones: {
+        demand: { type: 'demand', low: 1.105123, high: 1.110987 },
+        nearbyDemand: [{ type: 'demand', low: 1.105123, high: 1.110987 }],
+        unfilledDemand: [{ type: 'demand', low: 1.105123, high: 1.110987 }],
+        unfilledSupply: [{ type: 'supply', low: 1.160123, high: 1.165432 }],
+      },
+    },
+    settings: { pullbackPct: 50, minRewardRisk: 2, stopBufferPct: 0.02 },
+  })
+
+  const candidate = profile.zoneCandidates.find((entry) => entry.type === 'demand')
+  const prices = [
+    candidate.zone.low, candidate.zone.high, candidate.entryAtZoneHit,
+    candidate.entryForMinRR, candidate.stop, candidate.tp1, candidate.tp2,
+    candidate.weightedTarget, profile.entry, profile.stop, profile.tp1, profile.tp2,
+  ].filter(Number.isFinite)
+  for (const value of prices) {
+    assert.ok(Math.abs(value * 10_000 - Math.round(value * 10_000)) < 1e-8, `${value} must be a four-decimal price`)
+  }
+  assert.ok(candidate.rewardRisk >= 2, 'the rounded levels must still satisfy the minimum R/R')
+})
+
 test('optional candle confirmation can filter a zone hit without changing the default', () => {
   const item = {
     trend: 'up',

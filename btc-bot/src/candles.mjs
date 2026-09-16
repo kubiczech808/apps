@@ -16,6 +16,8 @@
 // `aggregate()` so that a source without a native 4h interval is still usable
 // and so the bucket boundaries are identical whichever source answered.
 
+import { normalizeCandlePrices } from './price.mjs'
+
 export const HOUR_MS = 3600_000
 
 const num = (value) => {
@@ -128,7 +130,7 @@ export const fetchBinanceCandles = async ({
 
   const usable = [...collected.values()].sort(byTimeAscending)
   if (usable.length === 0) throw new Error('Binance returned no candles')
-  return usable.slice(-limit)
+  return usable.slice(-limit).map(normalizeCandlePrices)
 }
 
 /**
@@ -224,7 +226,7 @@ export const fetchLnMarketsCandles = async ({
 
   const usable = [...collected.values()].sort(byTimeAscending)
   if (usable.length === 0) throw new Error('LN Markets returned no candles')
-  return usable.slice(-limit)
+  return usable.slice(-limit).map(normalizeCandlePrices)
 }
 
 /**
@@ -274,7 +276,7 @@ export const fetchCandles = async ({
   const payload = await response.json()
   const candles = spec.parse(payload).sort(byTimeAscending)
   if (candles.length === 0) throw new Error(`${spec.label} returned no candles`)
-  return candles.slice(-limit)
+  return candles.slice(-limit).map(normalizeCandlePrices)
 }
 
 export const fetchCandlesWithFallback = async ({
@@ -299,7 +301,7 @@ export const fetchCandlesWithFallback = async ({
  * hours. Incomplete trailing buckets are dropped unless asked for.
  */
 export const aggregate = (candles, factor, { includePartial = false } = {}) => {
-  if (factor <= 1) return [...candles]
+  if (factor <= 1) return candles.map(normalizeCandlePrices)
   const bucketMs = HOUR_MS * factor
   const buckets = new Map()
 
@@ -328,5 +330,5 @@ export const aggregate = (candles, factor, { includePartial = false } = {}) => {
   return [...buckets.values()]
     .sort(byTimeAscending)
     .filter((bucket) => includePartial || bucket.parts === factor)
-    .map(({ parts, ...bucket }) => bucket)
+    .map(({ parts, ...bucket }) => normalizeCandlePrices(bucket))
 }

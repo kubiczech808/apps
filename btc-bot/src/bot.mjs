@@ -20,6 +20,7 @@ import { createPaperExecutor } from './executor-paper.mjs'
 import { fetchFundingSettlements } from './funding.mjs'
 import { atr, lastDefined, marketStructure } from './priceaction.mjs'
 import { planPosition, SATS_PER_BTC } from './risk.mjs'
+import { ceilPrice, floorPrice, roundPrice } from './price.mjs'
 import { LEGACY_PRICE_ACTION_ID, strategyConfig } from './strategy-registry.mjs'
 import {
   PRICE_ACTION_STRUCTURE_ID,
@@ -38,8 +39,8 @@ import {
   tradesToday,
 } from './state.mjs'
 
-export const roundStop = (side, price) => (side === 'long' ? Math.ceil(price) : Math.floor(price))
-export const roundTarget = (side, price) => (side === 'long' ? Math.floor(price) : Math.ceil(price))
+export const roundStop = (side, price) => (side === 'long' ? floorPrice(price) : ceilPrice(price))
+export const roundTarget = (side, price) => (side === 'long' ? ceilPrice(price) : floorPrice(price))
 
 export const readConfig = (env = process.env) => ({
   apiUrl: env.BOT_API_URL || '',
@@ -524,7 +525,7 @@ export const runPass = async ({
 
     let plan = null
     if (decision.action === 'open' && gates.length === 0) {
-      const entry = Math.round(decision.entry)
+      const entry = roundPrice(decision.entry)
       const stop = roundStop(decision.side, decision.stop)
       const takeProfit = roundTarget(decision.side, decision.takeProfit)
       plan = planPosition({

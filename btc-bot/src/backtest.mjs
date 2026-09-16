@@ -25,6 +25,7 @@ import * as priceActionStrategy from './strategy.mjs'
 import { LEGACY_PRICE_ACTION_ID } from './strategy-registry.mjs'
 import { computeStats, DEFAULT_SETTINGS, mergeSettings } from './state.mjs'
 import { roundStop, roundTarget } from './bot.mjs'
+import { roundPrice } from './price.mjs'
 
 const lowerBoundTime = (candles, time) => {
   let low = 0
@@ -192,7 +193,7 @@ export const runBacktest = async ({
       continue
     }
 
-    const entry = Math.round(decision.entry)
+    const entry = roundPrice(decision.entry)
     const stop = roundStop(decision.side, decision.stop)
     const takeProfit = roundTarget(decision.side, decision.takeProfit)
     const plan = planPosition({

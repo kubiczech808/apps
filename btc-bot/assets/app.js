@@ -41,13 +41,11 @@ const nf = (digits) => new Intl.NumberFormat('cs-CZ', { minimumFractionDigits: d
 
 const sats = (value) => (Number.isFinite(value) ? `${nf(0).format(Math.round(value))} sats` : '–')
 const usd = (value) => (Number.isFinite(value) ? `$${nf(0).format(Math.round(value))}` : '–')
-const price = (value) => (Number.isFinite(value) ? nf(0).format(Math.round(value)) : '–')
+const price = (value) => (Number.isFinite(value) ? nf(4).format(value) : '–')
 const pct = (value, digits = 1) => (Number.isFinite(value) ? `${nf(digits).format(value)} %` : '–')
 const quotePrice = (value) => {
   if (!Number.isFinite(value)) return '–'
-  const abs = Math.abs(value)
-  const digits = abs >= 1000 ? 0 : abs >= 100 ? 2 : 3
-  return nf(digits).format(value)
+  return nf(4).format(value)
 }
 
 const quoteCurrency = (symbol) => symbol?.startsWith('USD') ? symbol.slice(3) : 'USD'
