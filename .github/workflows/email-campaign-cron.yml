@@ -111,6 +111,9 @@ jobs:
           # takze se odsud uz nevola.
           call_cron
           run_cleanup_burst
-          # Po prazdne retencni fronte se provede jeden krok fyzicke kompaktace.
-          # Nasledujici tik dokonci dalsi velkou tabulku; nikdy neni nutne nic klikat.
+          # Jedna upravarska akce musi dotahnout oba velke logy sama. GitHub schedule
+          # negarantuje presny dalsi petiminutovy tik, proto nesmime nechat druhou
+          # tabulku jen cekat s desitkami MB volneho mista uvnitr InnoDB souboru.
           call_reclaim "po retenci"
+          call_reclaim "druha tabulka"
+          call_reclaim "dokonceni"
