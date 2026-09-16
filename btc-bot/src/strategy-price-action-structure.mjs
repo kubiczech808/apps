@@ -521,9 +521,17 @@ const zoneEntryCandidate = ({ item, side, zone, pullback, invalidationLevel, set
     ? side === 'long' ? entryHigh : entryLow
     : zoneEdgeEntry
   const buffer = roundPrice(stopBuffer({ zone: normalizedZone, price: entryAtZoneHit, stopBufferPct: settings.stopBufferPct }))
+  // A valid demand/supply idea fails when either its zone or its external
+  // structure fails. Place the stop beyond the farther of those two anchors,
+  // rather than letting a swing stop sit inside the source zone (or vice versa).
+  const stopAnchor = Number.isFinite(invalidationLevel)
+    ? side === 'long'
+      ? Math.min(normalizedZone.low, invalidationLevel)
+      : Math.max(normalizedZone.high, invalidationLevel)
+    : side === 'long' ? normalizedZone.low : normalizedZone.high
   const stop = side === 'long'
-    ? floorPrice(normalizedZone.low - buffer)
-    : ceilPrice(normalizedZone.high + buffer)
+    ? floorPrice(stopAnchor - buffer)
+    : ceilPrice(stopAnchor + buffer)
   const entryAtPullback = pullbackEligible
     ? side === 'long' ? entryHigh : entryLow
     : null
@@ -591,6 +599,7 @@ const zoneEntryCandidate = ({ item, side, zone, pullback, invalidationLevel, set
     entryForMinRR,
     entrySource,
     invalidationLevel,
+    stopAnchor,
     stopBuffer: buffer,
     stop,
     tp1,
@@ -731,9 +740,9 @@ export const evaluateTradeProfile = ({
   })
   const stop = activeCandidate?.stop ?? (
     side === 'long' && activeZone
-      ? activeZone.low - buffer
+      ? Math.min(activeZone.low, invalidationLevel ?? activeZone.low) - buffer
       : side === 'short' && activeZone
-        ? activeZone.high + buffer
+        ? Math.max(activeZone.high, invalidationLevel ?? activeZone.high) + buffer
         : null
   )
   const tp1 = activeCandidate?.tp1 ?? structuralTarget({ side, structure: item?.structure })
@@ -804,6 +813,11 @@ export const evaluateTradeProfile = ({
     zoneCandidates,
     activeCandidate,
     stop,
+    stopAnchor: activeCandidate?.stopAnchor ?? (
+      side === 'long' && activeZone ? Math.min(activeZone.low, invalidationLevel ?? activeZone.low)
+        : side === 'short' && activeZone ? Math.max(activeZone.high, invalidationLevel ?? activeZone.high)
+          : null
+    ),
     stopBuffer: buffer,
     entryAtZoneHit: activeCandidate?.entryAtZoneHit ?? null,
     refinedEntry: activeCandidate?.refinedEntry ?? null,

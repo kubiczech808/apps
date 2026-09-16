@@ -366,6 +366,42 @@ test('TP2 uses the nearest opposing zone beyond TP1, not merely beyond entry', (
   assert.ok(shortProfile.tp2 < shortProfile.tp1)
 })
 
+test('stop sits beyond both the entry zone and the external structural pivot', () => {
+  const longProfile = evaluateTradeProfile({
+    item: {
+      trend: 'up',
+      price: 103,
+      lastCandle: candle(START, 106, 107, 102, 103),
+      structure: { high: { current: { price: 120 } }, low: { current: { price: 98 } } },
+      zones: {
+        demand: { type: 'demand', low: 100, high: 105 },
+        unfilledDemand: [{ type: 'demand', low: 100, high: 105 }],
+        unfilledSupply: [{ type: 'supply', low: 140, high: 142 }],
+      },
+    },
+    settings: { pullbackPct: 50, minRewardRisk: 2, stopBufferPct: 0.02 },
+  })
+  assert.equal(longProfile.stopAnchor, 98)
+  assert.ok(longProfile.stop < 98)
+
+  const shortProfile = evaluateTradeProfile({
+    item: {
+      trend: 'down',
+      price: 117,
+      lastCandle: candle(START, 114, 118, 113, 117),
+      structure: { high: { current: { price: 125 } }, low: { current: { price: 100 } } },
+      zones: {
+        supply: { type: 'supply', low: 115, high: 120 },
+        unfilledSupply: [{ type: 'supply', low: 115, high: 120 }],
+        unfilledDemand: [{ type: 'demand', low: 80, high: 85 }],
+      },
+    },
+    settings: { pullbackPct: 50, minRewardRisk: 2, stopBufferPct: 0.02 },
+  })
+  assert.equal(shortProfile.stopAnchor, 125)
+  assert.ok(shortProfile.stop > 125)
+})
+
 test('price-action profiles use four-decimal levels throughout the R/R calculation', () => {
   const profile = evaluateTradeProfile({
     item: {
@@ -538,7 +574,9 @@ test('zone hit entry is constrained to the pullback overlap', () => {
       unfilledSupply: [{ type: 'supply', low: 160, high: 165 }],
     },
   }
-  const profile = evaluateTradeProfile({ item, settings: { pullbackPct: 50, minRewardRisk: 1.5 } })
+  // The wider structural stop leaves this synthetic case at roughly 1.5R;
+  // this test isolates pullback clipping rather than the strategy's 2R gate.
+  const profile = evaluateTradeProfile({ item, settings: { pullbackPct: 50, minRewardRisk: 1.4 } })
   const candidate = profile.zoneCandidates.find((entry) => entry.type === 'demand')
   assert.deepEqual(candidate.entryRange, { low: 105, high: 120 })
   assert.equal(candidate.entryAtZoneHit, 120)
