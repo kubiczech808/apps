@@ -76,6 +76,13 @@ jobs:
           import os
           import sys
 
+          summary_path = os.environ.get('GITHUB_STEP_SUMMARY', '')
+          def emit(line):
+              print(line)
+              if summary_path:
+                  with open(summary_path, 'a', encoding='utf-8') as summary:
+                      summary.write(line + '\n')
+
           with open('/tmp/email-campaign-storage-after.json', encoding='utf-8') as handle:
               report = json.load(handle)
           maintenance = report.get('maintenance') or {}
@@ -85,18 +92,18 @@ jobs:
           def size(value):
               return f"{(int(value or 0) / mib):.1f} MB"
 
-          print('=== Ověřený stav úložiště po údržbě ===')
-          print('alokováno:', size(report.get('allocated_bytes')), '| volné v tabulkách:', size(report.get('free_bytes')))
-          print('stav kompaktace:', maintenance.get('reclaim_state') or '-', '| karanténa workerů:', maintenance.get('reclaim_quiesce') or '0')
+          emit('### Ověřený stav úložiště po údržbě')
+          emit('alokováno: ' + size(report.get('allocated_bytes')) + ' | volné v tabulkách: ' + size(report.get('free_bytes')))
+          emit('stav kompaktace: ' + (maintenance.get('reclaim_state') or '-') + ' | karanténa workerů: ' + (str(maintenance.get('reclaim_quiesce') or '0')))
           profile = report.get('engine_profile') or {}
-          print('InnoDB file_per_table:', profile.get('innodb_file_per_table') or 'nezjištěno', '| server:', profile.get('version') or 'nezjištěno')
+          emit('InnoDB file_per_table: ' + (profile.get('innodb_file_per_table') or 'nezjištěno') + ' | server: ' + (profile.get('version') or 'nezjištěno'))
           for name in ('import_run_items', 'scraping_job_items'):
               measurement = measurements.get(name) or {}
               if measurement:
-                  print(f"{name}: {size(measurement.get('before_bytes'))} -> {size(measurement.get('after_bytes'))}; "
-                        f"uvolněno {size(measurement.get('saved_bytes'))}; výsledek {measurement.get('outcome')}")
+                  emit(f"{name}: {size(measurement.get('before_bytes'))} -> {size(measurement.get('after_bytes'))}; "
+                       f"uvolněno {size(measurement.get('saved_bytes'))}; výsledek {measurement.get('outcome')}")
               else:
-                  print(f"{name}: chybí měření")
+                  emit(f"{name}: chybí měření")
           pending = int(cleanup.get('scraping_items_prunable') or 0) + int(cleanup.get('import_items_prunable') or 0)
           if pending:
               print(f"::error::Po údržbě zůstává alespoň {pending} detailních logů čekajících na retenci.")

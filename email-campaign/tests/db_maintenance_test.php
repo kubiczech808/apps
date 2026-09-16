@@ -389,6 +389,8 @@ assert(str_contains($cronWorkflow, 'for burst in $(seq 1 8)') && str_contains($c
     'velky retencni backlog musi cron dotahnout vice omezenymi davkami');
 assert(str_contains($cronWorkflow, 'Retencni fronta se nevyprazdnila ani po 8 omezenych burstech'),
     'nedotazena retence nesmi skoncit jako uspesna udrzba');
+assert(str_contains($cronWorkflow, 'GITHUB_STEP_SUMMARY') && str_contains($cronWorkflow, 'Ověřený stav úložiště po údržbě'),
+    'mereni fyzicke kompaktace musi byt citelne i mimo nedostupny surovy log workflow');
 echo "  ok\n";
 
 echo "\nVSE OK\n";
