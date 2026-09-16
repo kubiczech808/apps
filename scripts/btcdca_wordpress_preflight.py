@@ -120,6 +120,7 @@ def main() -> None:
         root_entries = list_current(ftp) if cwd_path(ftp, "www") else []
         index_php = download_optional(ftp, "www/index.php")
         index_html = download_optional(ftp, "www/index.html")
+        homepage_template = download_optional(ftp, "www/wp-content/themes/neve/btcdca-homepage-template.php")
         htaccess = download_optional(ftp, "www/.htaccess")
         robots = download_optional(ftp, "www/robots.txt")
         wp_config = download_optional(ftp, "www/wp-config.php")
@@ -173,6 +174,8 @@ def main() -> None:
     REPORT.write_text("\n".join(report) + "\n", encoding="utf-8")
     if index_html:
         Path(".github/inspection/btcdca-homepage-index.html").write_text(index_html, encoding="utf-8")
+    if homepage_template:
+        Path(".github/inspection/btcdca-homepage-template.php").write_text(homepage_template, encoding="utf-8")
 
 
 if __name__ == "__main__":
