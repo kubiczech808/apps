@@ -1,0 +1,110 @@
+name: Inspect BTC-DCA WordPress Database
+
+on:
+  push:
+    branches:
+      - codex/btcdca-wordpress-retirement
+    paths:
+      - '.github/workflows/btcdca-wordpress-db-inspect.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  inspect-wordpress-database:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Generate, run, and remove local database inspector
+        env:
+          BTCDCA_DB: ${{ secrets.BTCDCA_DB }}
+          BTCDCA_DB_USER: ${{ secrets.BTCDCA_DB_USER }}
+          BTCDCA_DB_PASSWORD: ${{ secrets.BTCDCA_DB_PASSWORD }}
+          BTCDCA_FTP_LOGIN: ${{ secrets.BTCDCA_FTP_LOGIN }}
+          BTCDCA_FTP_PASSWORD: ${{ secrets.BTCDCA_FTP_PASSWORD }}
+        run: |
+          set -euo pipefail
+          INSPECT_TOKEN="$(openssl rand -hex 32)"
+          export INSPECT_TOKEN
+          mkdir -p .github/inspection .migration-tmp
+          trap 'python3 - <<"PY"
+          import ftplib, os
+          for host in ("ftp.btc-dca.com", "neuron.blueboard.cz"):
+              try:
+                  with ftplib.FTP(host, timeout=30) as ftp:
+                      ftp.login(os.environ["BTCDCA_FTP_LOGIN"], os.environ["BTCDCA_FTP_PASSWORD"])
+                      ftp.delete("www/btcdca-wordpress-db-inspect.php")
+                      break
+              except Exception:
+                  pass
+          PY' EXIT
+          python3 - <<'PY'
+          import ftplib
+          import os
+          from pathlib import Path
+
+          token = os.environ["INSPECT_TOKEN"]
+          db = os.environ["BTCDCA_DB"]
+          user = os.environ["BTCDCA_DB_USER"]
+          password = os.environ["BTCDCA_DB_PASSWORD"]
+          php = f'''<?php
+          declare(strict_types=1);
+          header('Content-Type: application/json; charset=utf-8');
+          $expected = {token!r};
+          if (!hash_equals($expected, (string)($_GET['token'] ?? ''))) {{ http_response_code(403); echo '{{"error":"forbidden"}}'; exit; }}
+          mysqli_report(MYSQLI_REPORT_ERROR | MYSQLI_REPORT_STRICT);
+          try {{
+              $db = new mysqli('localhost', {user!r}, {password!r}, {db!r});
+              $db->set_charset('utf8mb4');
+              $rows = $db->query('SHOW TABLE STATUS')->fetch_all(MYSQLI_ASSOC);
+              $names = array_column($rows, 'Name');
+              $prefixes = [];
+              foreach ($names as $name) {{
+                  if (str_ends_with($name, 'options')) {{
+                      $prefix = substr($name, 0, -7);
+                      if (in_array($prefix . 'posts', $names, true) && in_array($prefix . 'postmeta', $names, true) && in_array($prefix . 'users', $names, true)) $prefixes[] = $prefix;
+                  }}
+              }}
+              $tables = array_map(static fn($row) => ['name' => $row['Name'], 'rows' => (int)$row['Rows'], 'data_bytes' => (int)$row['Data_length'], 'index_bytes' => (int)$row['Index_length']], $rows);
+              echo json_encode(['wordpress_prefixes' => array_values(array_unique($prefixes)), 'tables' => $tables], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
+          }} catch (Throwable $error) {{ http_response_code(500); echo json_encode(['error' => 'database inspection failed']); }}
+          '''
+          Path('.migration-tmp/btcdca-wordpress-db-inspect.php').write_text(php, encoding='utf-8')
+          for host in ('ftp.btc-dca.com', 'neuron.blueboard.cz'):
+              try:
+                  with ftplib.FTP(host, timeout=30) as ftp:
+                      ftp.login(os.environ['BTCDCA_FTP_LOGIN'], os.environ['BTCDCA_FTP_PASSWORD'])
+                      with open('.migration-tmp/btcdca-wordpress-db-inspect.php', 'rb') as handle:
+                          ftp.storbinary('STOR www/btcdca-wordpress-db-inspect.php', handle)
+                      break
+              except Exception:
+                  continue
+          else:
+              raise SystemExit('Could not upload database inspector')
+          PY
+          curl --fail --silent --show-error --retry 3 "https://www.btc-dca.com/btcdca-wordpress-db-inspect.php?token=${INSPECT_TOKEN}" > .migration-tmp/db.json
+          node - <<'NODE'
+          const fs = require('fs');
+          const report = JSON.parse(fs.readFileSync('.migration-tmp/db.json', 'utf8'));
+          if (!Array.isArray(report.wordpress_prefixes) || !Array.isArray(report.tables)) throw new Error('Unexpected database inspector response');
+          const lines = ['# BTC-DCA WordPress database inventory', '', 'Read-only database report. The temporary inspector was removed after use.', '', `Detected WordPress prefixes: ${report.wordpress_prefixes.length ? report.wordpress_prefixes.map(x => `\`${x}\``).join(', ') : '**none**'}.`, '', '| Table | Rows | Data bytes | Index bytes |', '| --- | ---: | ---: | ---: |'];
+          for (const table of report.tables.sort((a,b) => (b.data_bytes+b.index_bytes)-(a.data_bytes+a.index_bytes))) lines.push(`| \`${table.name}\` | ${table.rows.toLocaleString('en-US')} | ${table.data_bytes.toLocaleString('en-US')} | ${table.index_bytes.toLocaleString('en-US')} |`);
+          fs.writeFileSync('.github/inspection/btcdca-wordpress-db-report.md', `${lines.join('\n')}\n`);
+          NODE
+
+      - name: Commit sanitized database report
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .github/inspection/btcdca-wordpress-db-report.md
+          if git diff --cached --quiet; then
+            echo "No report changes."
+            exit 0
+          fi
+          git commit -m "Update BTC-DCA WordPress database inventory"
+          git pull --rebase origin "$GITHUB_REF_NAME"
+          git push

@@ -113,7 +113,8 @@ def main() -> None:
     try:
         targets = ("www/wp-admin", "www/wp-includes", "www/wp-content", "www/learn-center")
         inventory = {target: describe_directory(ftp, target) for target in targets}
-        index = download_optional(ftp, "www/index.php")
+        root_entries = list_current(ftp) if cwd_path(ftp, "www") else []
+        index = download_optional(ftp, "www/index.php") or download_optional(ftp, "www/index.html")
         htaccess = download_optional(ftp, "www/.htaccess")
         robots = download_optional(ftp, "www/robots.txt")
         wp_config = download_optional(ftp, "www/wp-config.php")
@@ -151,6 +152,9 @@ def main() -> None:
         report += ["WordPress table prefix was not found in `wp-config.php`; do not delete database tables until this is resolved.", ""]
     report += ["```text", table_rows or "No tables returned.", "```", ""]
     report += source_snippets(index, "Homepage source matches")
+    report += ["### Immediate `www` directory entries", "", "```text"]
+    report += [f"{'dir ' if is_dir else 'file'} {name} ({size if size is not None else '?'} bytes)" for name, is_dir, size in root_entries]
+    report += ["```", ""]
     report += source_snippets(htaccess, "Root .htaccess matches")
     report += source_snippets(robots, "robots.txt matches")
     report += [
