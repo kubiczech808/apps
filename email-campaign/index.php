@@ -1494,8 +1494,14 @@ if (isset($_GET['cron'])) {
     }
     echo sendBatch($pdo, $config);
     echo "\n" . syncImapReplies($pdo, $config);
-    echo "\n" . runCronImports($pdo);
-    echo "\n" . runCronScraping($pdo);
+    $storageReclaimQuiesced = (string)(loadSettings($pdo)['database_storage_reclaim_quiesce'] ?? '') === '1';
+    if ($storageReclaimQuiesced) {
+        echo "\nImport: pozastaven po dobu jednorazove udrzby uloziste.";
+        echo "\nScraping: pozastaven po dobu jednorazove udrzby uloziste.";
+    } else {
+        echo "\n" . runCronImports($pdo);
+        echo "\n" . runCronScraping($pdo);
+    }
     // AI research ma vlastni endpoint (?ai_research=1), ktery vola stejny cron workflow.
     // Volani i odsud by trojnasobilo pocet pokusu a palilo Gemini kvotu nadarmo.
     // Odhad dosahu ale zadny Gemini pozadavek nestoji, takze se pocita tady.
@@ -13153,28 +13159,28 @@ function runDatabaseStorageReclaim(PDO $pdo): string
     }
     try {
         $settings = loadSettings($pdo);
+        $version = (string)($settings['database_storage_reclaim_version'] ?? '');
+        $state = (string)($settings['database_storage_reclaim_state'] ?? '');
+        if ($version === '2026-09-v2' && $state === 'complete') {
+            setSettingRaw($pdo, 'database_storage_reclaim_quiesce', '0');
+            return 'Jednorazove uvolneni mista uz bylo dokonceno.';
+        }
+        // Udrzba musi mit klidne tabulky: necekame, az se nekonecny scraping sam
+        // dobehne. Jiz ulozene kontakty ani souhrny se tim nemeni.
+        if ((string)($settings['database_storage_reclaim_quiesce'] ?? '') !== '1') {
+            $cancelled = pauseJobsForStorageReclaim($pdo);
+            setSettingRaw($pdo, 'database_storage_reclaim_quiesce', '1');
+            return 'Pozastaveno pro udrzbu: scraping ' . $cancelled['scraping'] . ', import ' . $cancelled['imports'] . '.';
+        }
         $diagnostics = databaseCleanupDiagnostics($pdo);
         if ((int)($diagnostics['scraping_items_prunable'] ?? 0) > 0 || (int)($diagnostics['import_items_prunable'] ?? 0) > 0) {
             return 'Ceka na dokonceni 14denni retence detailu logu.';
         }
-
-        $runningScraping = (int)$pdo->query('SELECT COUNT(*) FROM scraping_jobs WHERE status="running"')->fetchColumn();
-        $runningImports = (int)$pdo->query('SELECT COUNT(*) FROM import_runs WHERE status="running"')->fetchColumn();
-        if ($runningScraping > 0 || $runningImports > 0) {
-            return 'Ceka na dokonceni aktivnich behu pred prestavbou tabulek.';
-        }
-
-        $version = (string)($settings['database_storage_reclaim_version'] ?? '');
-        $state = (string)($settings['database_storage_reclaim_state'] ?? '');
         if ($version !== '2026-09-v2' || $state === '') {
             $state = 'import_run_items';
             setSettingRaw($pdo, 'database_storage_reclaim_version', '2026-09-v2');
             setSettingRaw($pdo, 'database_storage_reclaim_state', $state);
         }
-        if ($state === 'complete') {
-            return 'Jednorazove uvolneni mista uz bylo dokonceno.';
-        }
-
         $next = ['import_run_items' => 'scraping_job_items', 'scraping_job_items' => 'complete'];
         if (!isset($next[$state])) {
             throw new RuntimeException('Neznamy stav jednorazoveho uvolneni mista.');
@@ -13203,6 +13209,9 @@ function runDatabaseStorageReclaim(PDO $pdo): string
         }
         setSettingRaw($pdo, 'database_storage_reclaim_state', $next[$state]);
         setSettingRaw($pdo, 'database_storage_reclaim_status', $message);
+        if ($next[$state] === 'complete') {
+            setSettingRaw($pdo, 'database_storage_reclaim_quiesce', '0');
+        }
         return $message;
     } finally {
         try {
@@ -13211,6 +13220,33 @@ function runDatabaseStorageReclaim(PDO $pdo): string
             // Zamek se uvolni i pri ukonceni requestu.
         }
     }
+}
+
+/**
+ * Ukonci pouze praci na pozadi. Kontakty uz vlozene pred prerusenim, jejich databaze
+ * i agregovane pocty behu zustavaji beze zmeny; importni soubor a fronta se uz znovu
+ * nezacnou zpracovavat behem jednorazove udrzby.
+ */
+function pauseJobsForStorageReclaim(PDO $pdo): array
+{
+    $now = date('c');
+    $scraping = $pdo->query('SELECT id FROM scraping_jobs WHERE status IN ("queued", "running") ORDER BY id ASC')->fetchAll(PDO::FETCH_COLUMN);
+    $cancelledScraping = 0;
+    foreach (array_map('intval', $scraping) as $jobId) {
+        cancelScrapingJob($pdo, $jobId);
+        $cancelledScraping++;
+    }
+
+    $imports = $pdo->prepare('
+        UPDATE import_runs
+        SET status="failed",
+            last_message="Preruseno jednorazovou udrzbou uloziste. Jiz vlozene a aktualizovane kontakty zustaly ulozene.",
+            finished_at=CASE WHEN finished_at="" THEN ? ELSE finished_at END,
+            updated_at=?
+        WHERE status IN ("queued", "running")
+    ');
+    $imports->execute([$now, $now]);
+    return ['scraping' => $cancelledScraping, 'imports' => $imports->rowCount()];
 }
 
 /**
