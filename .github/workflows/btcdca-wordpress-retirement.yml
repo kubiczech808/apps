@@ -108,6 +108,7 @@ jobs:
           mkdir -p backup/wordpress-files backup/wordpress-root
           lftp -u "$BTCDCA_FTP_LOGIN","$BTCDCA_FTP_PASSWORD" "ftp://ftp.btc-dca.com" <<'LFTP'
           set cmd:fail-exit true
+          set ftp:ssl-allow false
           set ftp:ssl-force false
           set net:max-retries 2
           mirror --verbose /www/wp-admin backup/wordpress-files/wp-admin
@@ -201,6 +202,7 @@ jobs:
           set -euo pipefail
           lftp -u "$BTCDCA_FTP_LOGIN","$BTCDCA_FTP_PASSWORD" "ftp://ftp.btc-dca.com" <<'LFTP'
           set cmd:fail-exit true
+          set ftp:ssl-allow false
           set ftp:ssl-force false
           rm -r /www/wp-admin
           rm -r /www/wp-includes
