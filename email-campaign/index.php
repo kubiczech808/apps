@@ -13526,8 +13526,40 @@ function importDetailRow(int $rowNumber, string $result, string $reason, string 
         'subject_name' => $subjectName,
         'website' => $website,
         'address' => $address,
-        'raw_data' => json_encode(array_values($raw), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?: '[]',
+        'raw_data' => compactImportRawData($raw),
     ];
+}
+
+function compactImportRawData(array $raw): string
+{
+    $json = json_encode(array_values($raw), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?: '[]';
+    return compactImportRawJson($json);
+}
+
+function compactImportRawJson(string $json): string
+{
+    if (!function_exists('gzencode') || strlen($json) < 96) {
+        return $json;
+    }
+    $compressed = @gzencode($json, 6);
+    if ($compressed === false) {
+        return $json;
+    }
+    $encoded = 'gz:' . base64_encode($compressed);
+    return strlen($encoded) < strlen($json) ? $encoded : $json;
+}
+
+function expandImportRawData(string $raw): string
+{
+    if (!str_starts_with($raw, 'gz:') || !function_exists('gzdecode')) {
+        return $raw;
+    }
+    $decoded = base64_decode(substr($raw, 3), true);
+    if ($decoded === false) {
+        return '';
+    }
+    $json = @gzdecode($decoded);
+    return $json === false ? '' : $json;
 }
 
 function contactSourceFromImportRun(array $run): string
@@ -16766,24 +16798,30 @@ function scrapingJobLogMessage(array $job): string
 
 function logScrapingImportRun(PDO $pdo, array $job): void
 {
-    $fileName = 'scraping: ' . scrapingSourceLabel((string)$job['source']) . ' / ' . $job['keyword'];
-    $locationLabel = scrapingContainerLocationLabel($job);
-    if ($locationLabel !== 'bez omezeni') {
-        $fileName .= ' / ' . $locationLabel;
-    }
-    $stmt = $pdo->prepare('INSERT INTO import_runs (owner_user_id, list_id, list_name, file_name, inserted_count, updated_count, skipped_count, total_rows, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)');
+    $fileName = scrapingImportRunFileName($job);
+    $stmt = $pdo->prepare('INSERT INTO import_runs (owner_user_id, list_id, list_name, file_name, scraping_job_id, inserted_count, updated_count, skipped_count, total_rows, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
     $stmt->execute([
         (int)($job['owner_user_id'] ?? 0),
         (int)$job['list_id'],
         contactListName($pdo, (int)$job['list_id'], (int)($job['owner_user_id'] ?? 0)),
         $fileName,
+        (int)$job['id'],
         (int)$job['inserted_count'],
         (int)$job['updated_count'],
         (int)$job['skipped_count'],
         (int)$job['processed_count'],
         date('c'),
     ]);
-    saveScrapingImportDetails($pdo, (int)$pdo->lastInsertId(), (int)$job['id']);
+}
+
+function scrapingImportRunFileName(array $job): string
+{
+    $fileName = 'scraping: ' . scrapingSourceLabel((string)$job['source']) . ' / ' . $job['keyword'];
+    $locationLabel = scrapingContainerLocationLabel($job);
+    if ($locationLabel !== 'bez omezeni') {
+        $fileName .= ' / ' . $locationLabel;
+    }
+    return $fileName;
 }
 
 function saveScrapingImportDetails(PDO $pdo, int $importRunId, int $jobId): void
@@ -16954,6 +16992,11 @@ function runDatabaseStorageMaintenance(PDO $pdo): string
         if ($state === '') {
             $state = 'url_hash_backfill';
         }
+        if ($state === 'completed' && (string)($settings['database_storage_retention_version'] ?? '') !== '2026-09-v1') {
+            $state = 'link_scraping_import_history';
+            setSettingRaw($pdo, 'database_storage_maintenance_state', $state);
+            setSettingRaw($pdo, 'database_storage_retention_version', '2026-09-v1');
+        }
 
         if ($state === 'url_hash_backfill') {
             $cursor = max(0, (int)($settings['database_storage_url_hash_cursor'] ?? 0));
@@ -17051,9 +17094,42 @@ function runDatabaseStorageMaintenance(PDO $pdo): string
                 setSettingRaw($pdo, 'database_storage_maintenance_status', 'AI research: odstraneno ' . (int)$cleanup . ' duplicitnich kopii spolecneho vzoru.');
                 return 'Udrzba uloziste: odstranenych duplicitnich AI vzoru: ' . (int)$cleanup . '.';
             }
-            setSettingRaw($pdo, 'database_storage_maintenance_state', 'completed');
-            setSettingRaw($pdo, 'database_storage_maintenance_status', 'Kompaktni indexy URL scrapingu jsou aktivni; auditni data a zdrojove URL zustaly zachovany.');
-            return 'Udrzba uloziste: optimalizace indexu a duplicitnich AI vzoru je hotova.';
+            setSettingRaw($pdo, 'database_storage_maintenance_state', 'link_scraping_import_history');
+            setSettingRaw($pdo, 'database_storage_retention_version', '2026-09-v1');
+            return 'Udrzba uloziste: indexy a AI vzory jsou hotove, zacinam odstranet duplicity historie scrapingu.';
+        }
+
+        if ($state === 'link_scraping_import_history') {
+            $messages = [];
+            for ($attempt = 0; $attempt < 5; $attempt++) {
+                $messages[] = compactDuplicatedScrapingImportHistory($pdo, loadSettings($pdo));
+                if ((string)(loadSettings($pdo)['database_storage_maintenance_state'] ?? '') !== 'link_scraping_import_history') {
+                    break;
+                }
+            }
+            return implode(' ', $messages);
+        }
+
+        if ($state === 'compress_import_raw_data') {
+            return compressImportHistoryRawData($pdo, $settings);
+        }
+
+        if ($state === 'purge_old_scraping_details') {
+            return purgeExpiredScrapingDetails($pdo, $settings);
+        }
+
+        if ($state === 'purge_old_ai_research_logs') {
+            return purgeExpiredAiResearchLogs($pdo);
+        }
+
+        if ($state === 'retention_complete') {
+            $today = date('Y-m-d');
+            if ((string)($settings['database_storage_retention_last_started'] ?? '') !== $today) {
+                setSettingRaw($pdo, 'database_storage_retention_last_started', $today);
+                setSettingRaw($pdo, 'database_storage_maintenance_state', 'purge_old_scraping_details');
+                return 'Udrzba uloziste: spoustim denni retenci starych detailu.';
+            }
+            return 'Udrzba uloziste: kompakce a retence jsou hotove.';
         }
 
         return 'Udrzba uloziste: optimalizace indexu je hotova.';
@@ -17067,6 +17143,163 @@ function runDatabaseStorageMaintenance(PDO $pdo): string
             // Connection lock zmizi take automaticky pri ukonceni requestu.
         }
     }
+}
+
+function compactDuplicatedScrapingImportHistory(PDO $pdo, array $settings): string
+{
+    $cursor = max(0, (int)($settings['database_storage_scraping_import_cursor'] ?? 0));
+    $runs = $pdo->prepare('
+        SELECT *
+        FROM import_runs
+        WHERE id>? AND scraping_job_id=0 AND file_name LIKE "scraping:%"
+        ORDER BY id ASC
+        LIMIT 1
+    ');
+    $runs->execute([$cursor]);
+    $run = $runs->fetch(PDO::FETCH_ASSOC);
+    if (!$run) {
+        setSettingRaw($pdo, 'database_storage_maintenance_state', 'compress_import_raw_data');
+        return 'Udrzba uloziste: duplicity historie scrapingu jsou zkontrolovane, komprimuji puvodni importni radky.';
+    }
+
+    setSettingRaw($pdo, 'database_storage_scraping_import_cursor', (string)(int)$run['id']);
+    $jobs = $pdo->prepare('
+        SELECT *
+        FROM scraping_jobs
+        WHERE owner_user_id=? AND list_id=?
+          AND inserted_count=? AND updated_count=? AND skipped_count=? AND processed_count=?
+          AND status IN ("finished", "failed", "cancelled")
+        ORDER BY id DESC
+        LIMIT 80
+    ');
+    $jobs->execute([
+        (int)$run['owner_user_id'],
+        (int)$run['list_id'],
+        (int)$run['inserted_count'],
+        (int)$run['updated_count'],
+        (int)$run['skipped_count'],
+        (int)$run['total_rows'],
+    ]);
+    $candidates = [];
+    $runTime = strtotime((string)$run['created_at']) ?: 0;
+    foreach ($jobs->fetchAll(PDO::FETCH_ASSOC) as $job) {
+        if (!hash_equals((string)$run['file_name'], scrapingImportRunFileName($job))) {
+            continue;
+        }
+        $jobTime = strtotime((string)($job['finished_at'] ?: $job['updated_at'] ?: $job['created_at'])) ?: 0;
+        if ($runTime > 0 && $jobTime > 0 && abs($runTime - $jobTime) > 900) {
+            continue;
+        }
+        $candidates[] = $job;
+    }
+    if (count($candidates) !== 1) {
+        return 'Udrzba uloziste: import #' . (int)$run['id'] . ' nema jednoznacnou puvodni scraping davku; historie zustava zachovana.';
+    }
+
+    $job = $candidates[0];
+    $itemCount = $pdo->prepare('SELECT COUNT(*) FROM import_run_items WHERE import_run_id=?');
+    $itemCount->execute([(int)$run['id']]);
+    $jobCount = $pdo->prepare('SELECT COUNT(*) FROM scraping_job_items WHERE job_id=? AND status!="queued"');
+    $jobCount->execute([(int)$job['id']]);
+    if ((int)$itemCount->fetchColumn() !== (int)$jobCount->fetchColumn()) {
+        return 'Udrzba uloziste: import #' . (int)$run['id'] . ' ma odlisny pocet detailu; historie zustava zachovana.';
+    }
+
+    $pdo->beginTransaction();
+    try {
+        $pdo->prepare('UPDATE import_runs SET scraping_job_id=?, updated_at=? WHERE id=? AND scraping_job_id=0')
+            ->execute([(int)$job['id'], date('c'), (int)$run['id']]);
+        $delete = $pdo->prepare('DELETE FROM import_run_items WHERE import_run_id=?');
+        $delete->execute([(int)$run['id']]);
+        $pdo->commit();
+    } catch (Throwable $e) {
+        if ($pdo->inTransaction()) {
+            $pdo->rollBack();
+        }
+        throw $e;
+    }
+    setSettingRaw($pdo, 'database_storage_maintenance_status', 'Historie importu #' . (int)$run['id'] . ' cte primarni scraping job #' . (int)$job['id'] . '; odstraneno duplicitnich radku: ' . $delete->rowCount() . '.');
+    return 'Udrzba uloziste: odstraneno ' . $delete->rowCount() . ' duplicitnich detailu importu #' . (int)$run['id'] . '.';
+}
+
+function compressImportHistoryRawData(PDO $pdo, array $settings): string
+{
+    $cursor = max(0, (int)($settings['database_storage_raw_data_cursor'] ?? 0));
+    $stmt = $pdo->prepare('SELECT id, raw_data FROM import_run_items WHERE id>? ORDER BY id ASC LIMIT 500');
+    $stmt->execute([$cursor]);
+    $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    if (!$rows) {
+        setSettingRaw($pdo, 'database_storage_maintenance_state', 'purge_old_scraping_details');
+        return 'Udrzba uloziste: historie importu je zkomprimovana, spoustim retenci starych detailu scrapingu.';
+    }
+    $update = $pdo->prepare('UPDATE import_run_items SET raw_data=? WHERE id=?');
+    $changed = 0;
+    $lastId = $cursor;
+    foreach ($rows as $row) {
+        $lastId = max($lastId, (int)$row['id']);
+        $raw = (string)$row['raw_data'];
+        if ($raw === '' || str_starts_with($raw, 'gz:')) {
+            continue;
+        }
+        $packed = compactImportRawJson($raw);
+        if ($packed !== $raw) {
+            $update->execute([$packed, (int)$row['id']]);
+            $changed++;
+        }
+    }
+    setSettingRaw($pdo, 'database_storage_raw_data_cursor', (string)$lastId);
+    return 'Udrzba uloziste: zkomprimovano ' . $changed . ' importnich radku.';
+}
+
+function purgeExpiredScrapingDetails(PDO $pdo, array $settings): string
+{
+    $retentionDays = 90;
+    $cutoff = date('c', time() - ($retentionDays * 86400));
+    $jobId = max(0, (int)($settings['database_storage_purge_job_id'] ?? 0));
+    if ($jobId === 0) {
+        $job = $pdo->prepare('
+            SELECT id
+            FROM scraping_jobs
+            WHERE status IN ("finished", "failed", "cancelled")
+              AND finished_at<>"" AND finished_at<?
+              AND details_archived_at=""
+            ORDER BY finished_at ASC, id ASC
+            LIMIT 1
+        ');
+        $job->execute([$cutoff]);
+        $jobId = (int)$job->fetchColumn();
+        if ($jobId === 0) {
+            setSettingRaw($pdo, 'database_storage_maintenance_state', 'purge_old_ai_research_logs');
+            return 'Udrzba uloziste: detailni scrapingy starsi nez ' . $retentionDays . ' dni jsou vycistene.';
+        }
+        setSettingRaw($pdo, 'database_storage_purge_job_id', (string)$jobId);
+    }
+    $delete = $pdo->prepare('DELETE FROM scraping_job_items WHERE job_id=? LIMIT 5000');
+    $delete->execute([$jobId]);
+    $remaining = $pdo->prepare('SELECT COUNT(*) FROM scraping_job_items WHERE job_id=?');
+    $remaining->execute([$jobId]);
+    if ((int)$remaining->fetchColumn() === 0) {
+        $pdo->prepare('UPDATE scraping_jobs SET details_archived_at=?, updated_at=? WHERE id=?')->execute([date('c'), date('c'), $jobId]);
+        setSettingRaw($pdo, 'database_storage_purge_job_id', '0');
+    }
+    return 'Udrzba uloziste: odstraneno ' . $delete->rowCount() . ' technickych detailu stareho scrapingu.';
+}
+
+function purgeExpiredAiResearchLogs(PDO $pdo): string
+{
+    if (!tableExists($pdo, 'ai_research_logs')) {
+        setSettingRaw($pdo, 'database_storage_maintenance_state', 'retention_complete');
+        return 'Udrzba uloziste: retence je hotova.';
+    }
+    $cutoff = date('c', time() - (90 * 86400));
+    $delete = $pdo->prepare('DELETE FROM ai_research_logs WHERE created_at<? AND status NOT IN ("running", "planned") LIMIT 1000');
+    $delete->execute([$cutoff]);
+    if ($delete->rowCount() === 0) {
+        setSettingRaw($pdo, 'database_storage_maintenance_state', 'retention_complete');
+        setSettingRaw($pdo, 'database_storage_maintenance_status', 'Kompakce dokončena: kontakty, souhrny a aktivni data zustaly zachovany; stare technicke detaily maji retenci 90 dni.');
+        return 'Udrzba uloziste: retence AI research logu je hotova.';
+    }
+    return 'Udrzba uloziste: odstraneno ' . $delete->rowCount() . ' starych technickych AI logu.';
 }
 
 function headerIndex(array $headers, array $names)
@@ -21542,7 +21775,9 @@ function renderApp(PDO $pdo, ?array $flash): void
         </div>
         <div class="note">
             <?= h(importRunMessage($selectedImport)) ?>
-            <?php if (!$selectedImportItems): ?>Pro tento import zatim nejsou ulozene radkove detaily.<?php endif; ?>
+            <?php if (!$selectedImportItems): ?>
+                <?php if ((int)($selectedImport['scraping_job_id'] ?? 0) > 0): ?>Detailni radky tohoto stareho scrapingu uz jsou po retenci archivovane; souhrn behu a ulozene kontakty zustaly zachovane.<?php else: ?>Pro tento import zatim nejsou ulozene radkove detaily.<?php endif; ?>
+            <?php endif; ?>
         </div>
         <?php $importGroups = importItemGroups($selectedImportItems); ?>
         <div class="scraping-result-grid">
@@ -23333,6 +23568,37 @@ function findImportRun(PDO $pdo, int $id): ?array
 
 function importRunItems(PDO $pdo, int $id): array
 {
+    $run = $pdo->prepare('SELECT scraping_job_id FROM import_runs WHERE id=? LIMIT 1');
+    $run->execute([$id]);
+    $scrapingJobId = (int)$run->fetchColumn();
+    if ($scrapingJobId > 0) {
+        $stmt = $pdo->prepare('
+            SELECT id, status, email, subject_name, website, address, message, url, processed_at
+            FROM scraping_job_items
+            WHERE job_id=? AND status!="queued"
+            ORDER BY id ASC
+        ');
+        $stmt->execute([$scrapingJobId]);
+        $items = [];
+        $rowNum = 0;
+        foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+            $rowNum++;
+            $result = in_array((string)$row['status'], ['inserted', 'updated'], true) ? (string)$row['status'] : 'skipped';
+            $items[] = [
+                'id' => (int)$row['id'],
+                'row_num' => $rowNum,
+                'result' => $result,
+                'reason' => (string)($row['message'] ?: ($result === 'skipped' ? 'Kontakt nebyl vlozen.' : 'Kontakt ulozen.')),
+                'email' => (string)$row['email'],
+                'subject_name' => (string)$row['subject_name'],
+                'website' => (string)$row['website'],
+                'address' => (string)$row['address'],
+                'raw_data' => compactImportRawData([(string)$row['url']]),
+                'created_at' => (string)$row['processed_at'],
+            ];
+        }
+        return $items;
+    }
     $stmt = $pdo->prepare('
         SELECT *
         FROM import_run_items
@@ -23386,7 +23652,7 @@ function importItemGroups(array $items): array
 
 function importItemSourceUrl(array $item): string
 {
-    $raw = json_decode((string)($item['raw_data'] ?? ''), true);
+    $raw = json_decode(expandImportRawData((string)($item['raw_data'] ?? '')), true);
     if (!is_array($raw)) {
         return '';
     }

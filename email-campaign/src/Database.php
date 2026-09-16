@@ -72,6 +72,7 @@ final class Database
         $this->safeMigrationStep(fn() => $this->ensureColumn('campaign_send_runs', 'next_send_after', $this->textColumn("''")), 'campaign_send_runs.next_send_after');
         $this->safeMigrationStep(fn() => $this->ensureColumn('import_runs', 'status', $this->textColumn("'finished'")), 'import_runs.status');
         $this->safeMigrationStep(fn() => $this->ensureColumn('import_runs', 'storage_path', $this->textColumn("''")), 'import_runs.storage_path');
+        $this->safeMigrationStep(fn() => $this->ensureColumn('import_runs', 'scraping_job_id', 'INTEGER NOT NULL DEFAULT 0'), 'import_runs.scraping_job_id');
         $this->safeMigrationStep(fn() => $this->ensureColumn('import_runs', 'processed_rows', 'INTEGER NOT NULL DEFAULT 0'), 'import_runs.processed_rows');
         $this->safeMigrationStep(fn() => $this->ensureColumn('import_runs', 'last_message', $this->textColumn("''")), 'import_runs.last_message');
         $this->safeMigrationStep(fn() => $this->ensureColumn('import_runs', 'updated_at', $this->textColumn("''")), 'import_runs.updated_at');
@@ -82,6 +83,7 @@ final class Database
         $this->safeMigrationStep(fn() => $this->ensureColumn('scraping_jobs', 'discovery_done', 'INTEGER NOT NULL DEFAULT 0'), 'scraping_jobs.discovery_done');
         $this->safeMigrationStep(fn() => $this->ensureColumn('scraping_jobs', 'location_scope', $this->textColumn("'cela_cr'")), 'scraping_jobs.location_scope');
         $this->safeMigrationStep(fn() => $this->ensureColumn('scraping_jobs', 'target_location', $this->textColumn("''")), 'scraping_jobs.target_location');
+        $this->safeMigrationStep(fn() => $this->ensureColumn('scraping_jobs', 'details_archived_at', $this->textColumn("''")), 'scraping_jobs.details_archived_at');
         $this->safeMigrationStep(fn() => $this->ensureColumn('scraping_containers', 'schedule_enabled', 'INTEGER NOT NULL DEFAULT 0'), 'scraping_containers.schedule_enabled');
         $this->safeMigrationStep(fn() => $this->ensureColumn('scraping_containers', 'schedule_time', $this->textColumn("'09:00'")), 'scraping_containers.schedule_time');
         $this->safeMigrationStep(fn() => $this->ensureColumn('scraping_containers', 'schedule_frequency', $this->textColumn("'daily'")), 'scraping_containers.schedule_frequency');
@@ -175,11 +177,13 @@ final class Database
                 total_rows INT NOT NULL DEFAULT 0,
                 status VARCHAR(40) NOT NULL DEFAULT 'finished',
                 storage_path VARCHAR(500) NOT NULL DEFAULT '',
+                scraping_job_id INT NOT NULL DEFAULT 0,
                 processed_rows INT NOT NULL DEFAULT 0,
                 last_message VARCHAR(500) NOT NULL DEFAULT '',
                 created_at VARCHAR(40) NOT NULL,
                 updated_at VARCHAR(40) NOT NULL DEFAULT '',
-                finished_at VARCHAR(40) NOT NULL DEFAULT ''
+                finished_at VARCHAR(40) NOT NULL DEFAULT '',
+                INDEX import_runs_scraping_job_idx (scraping_job_id)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
             "CREATE TABLE IF NOT EXISTS import_run_items (
                 id INT AUTO_INCREMENT PRIMARY KEY,
@@ -308,7 +312,8 @@ final class Database
                 created_at VARCHAR(40) NOT NULL,
                 started_at VARCHAR(40) NOT NULL DEFAULT '',
                 updated_at VARCHAR(40) NOT NULL,
-                finished_at VARCHAR(40) NOT NULL DEFAULT ''
+                finished_at VARCHAR(40) NOT NULL DEFAULT '',
+                details_archived_at VARCHAR(40) NOT NULL DEFAULT ''
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
             "CREATE TABLE IF NOT EXISTS scraping_job_items (
                 id INT AUTO_INCREMENT PRIMARY KEY,
@@ -659,6 +664,7 @@ final class Database
     private function ensureOperationalIndexes(): void
     {
         $this->ensureMysqlIndex('recipients', 'recipients_list_source_url_idx', 'CREATE INDEX recipients_list_source_url_idx ON recipients (list_id, source_url(191))');
+        $this->ensureMysqlIndex('import_runs', 'import_runs_scraping_job_idx', 'CREATE INDEX import_runs_scraping_job_idx ON import_runs (scraping_job_id)');
         $this->ensureMysqlIndex('scraping_jobs', 'scraping_jobs_list_source_idx', 'CREATE INDEX scraping_jobs_list_source_idx ON scraping_jobs (list_id, source, id)');
     }
 
