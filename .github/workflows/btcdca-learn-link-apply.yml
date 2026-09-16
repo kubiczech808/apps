@@ -1,0 +1,65 @@
+name: Apply BTC-DCA Learn Link Cleanup
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: "Enter exactly APPLY_LEARN_LINK_CLEANUP to update the 12 audited app files"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      BTCDCA_FTP_LOGIN: ${{ secrets.BTCDCA_FTP_LOGIN }}
+      BTCDCA_FTP_PASSWORD: ${{ secrets.BTCDCA_FTP_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Require explicit cleanup confirmation
+        run: |
+          set -euo pipefail
+          test '${{ inputs.confirmation }}' = 'APPLY_LEARN_LINK_CLEANUP'
+
+      - name: Create cleanup preview and recovery copy
+        env:
+          BTCDCA_LEARN_LINK_MODE: preview
+        run: |
+          set -euo pipefail
+          python3 scripts/cleanup_btcdca_learn_links.py
+
+      - name: Upload original files and preview before applying changes
+        uses: actions/upload-artifact@v4
+        with:
+          name: btcdca-learn-link-recovery-${{ github.run_id }}
+          path: |
+            btcdca-learn-link-cleanup/original
+            .github/inspection/btcdca-learn-link-cleanup-preview.md
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Apply the audited cleanup
+        env:
+          BTCDCA_LEARN_LINK_MODE: apply
+        run: |
+          set -euo pipefail
+          python3 scripts/cleanup_btcdca_learn_links.py
+
+      - name: Verify that no stale Learn Center link remains
+        run: |
+          set -euo pipefail
+          python3 scripts/audit_btcdca_learn_links.py
+          grep -Fq 'No Learn Center references found' .github/inspection/btcdca-learn-link-audit.md
+
+      - name: Upload post-apply audit
+        uses: actions/upload-artifact@v4
+        with:
+          name: btcdca-learn-link-post-apply-${{ github.run_id }}
+          path: .github/inspection/btcdca-learn-link-audit.md
+          if-no-files-found: error
+          retention-days: 90
