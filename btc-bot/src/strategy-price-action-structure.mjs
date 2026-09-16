@@ -993,10 +993,20 @@ const fetchFxCandles = async ({ asset, timeframeId, fetchImpl, now, logger }) =>
 
 export const classifyStructure = (
   candles,
-  { lookback = 2, zoneLookback = 2, minCandles = 40, zoneMaxAgeCandles = 400, historyDays = null, chartCandles = null } = {}
+  {
+    lookback = 2,
+    zoneLookback = 2,
+    minCandles = 40,
+    zoneMaxAgeCandles = 400,
+    historyDays = null,
+    chartCandles = null,
+    includeChartCandles = true,
+  } = {}
 ) => {
   const normalizedCandles = Array.isArray(candles) ? candles.map(normalizeCandlePrices) : candles
-  const chartSource = Array.isArray(chartCandles ?? candles) ? (chartCandles ?? candles).map(normalizeCandlePrices) : []
+  const chartSource = includeChartCandles && Array.isArray(chartCandles ?? candles)
+    ? (chartCandles ?? candles).map(normalizeCandlePrices)
+    : []
   if (!Array.isArray(normalizedCandles) || normalizedCandles.length < minCandles) {
     return {
       trend: 'flat',

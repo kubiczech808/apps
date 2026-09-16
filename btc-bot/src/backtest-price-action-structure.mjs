@@ -58,7 +58,25 @@ const structureAt = ({ candles, timeframeId, throughTime }) => {
     minCandles: profile.minCandles,
     zoneMaxAgeCandles: profile.zoneMaxAgeCandles,
     historyDays: profile.historyDays,
+    // The backtest evaluates rules, not a chart. Avoid creating thousands of
+    // unused candle summaries for every historical step.
+    includeChartCandles: false,
   })
+}
+
+const cachedStructureReader = ({ candles, timeframeId, maxEntries = 8 }) => {
+  const cache = new Map()
+  return (throughTime) => {
+    const key = Number(throughTime)
+    if (!cache.has(key)) {
+      cache.set(key, structureAt({ candles, timeframeId, throughTime: key }))
+      // These snapshots include zones and pivots. Retain only the small rolling
+      // overlap between adjacent timeframe reads; retaining the whole history
+      // turns a long backtest into an unbounded memory cache.
+      if (cache.size > maxEntries) cache.delete(cache.keys().next().value)
+    }
+    return cache.get(key)
+  }
 }
 
 const closeValue = (position, price) =>
@@ -134,6 +152,15 @@ export const runPriceActionStructureBacktest = ({
   let readyProfiles = 0
   let zoneHits = 0
   let positionClosedThisCandle = false
+  const ownStructureAt = cachedStructureReader({ candles: ordered, timeframeId })
+  const lowerTimeframeId = LOWER_TIMEFRAME[timeframeId]
+  const higherTimeframeId = HIGHER_TIMEFRAME[timeframeId]
+  const lowerStructureAt = lowerTimeframeId && lowerCandles.length
+    ? cachedStructureReader({ candles: lowerCandles, timeframeId: lowerTimeframeId })
+    : null
+  const higherStructureAt = higherTimeframeId && higherCandles.length
+    ? cachedStructureReader({ candles: higherCandles, timeframeId: higherTimeframeId })
+    : null
 
   const recordExit = (reason, exitPrice, at) => {
     if (!position) return
@@ -182,19 +209,17 @@ export const runPriceActionStructureBacktest = ({
     // decide whether the already-defined entry was filled. Using candleEnd for
     // the entry profile would read this candle's close before entering inside
     // its range, which is look-ahead bias.
-    const item = structureAt({ candles: ordered, timeframeId, throughTime: candle.time })
-    const lowerTimeframeId = LOWER_TIMEFRAME[timeframeId]
-    const lowerItem = lowerTimeframeId && lowerCandles.length
-      ? structureAt({ candles: lowerCandles, timeframeId: lowerTimeframeId, throughTime: candle.time })
+    const item = ownStructureAt(candle.time)
+    const lowerItem = lowerStructureAt
+      ? lowerStructureAt(candle.time)
       : null
-    const higherTimeframeId = HIGHER_TIMEFRAME[timeframeId]
-    const higherItem = higherTimeframeId && higherCandles.length
-      ? structureAt({ candles: higherCandles, timeframeId: higherTimeframeId, throughTime: candle.time })
+    const higherItem = higherStructureAt
+      ? higherStructureAt(candle.time)
       : null
-    const lowerClosedItem = lowerTimeframeId && lowerCandles.length
-      ? structureAt({ candles: lowerCandles, timeframeId: lowerTimeframeId, throughTime: candleEnd })
+    const lowerClosedItem = lowerStructureAt
+      ? lowerStructureAt(candleEnd)
       : null
-    const closedItem = structureAt({ candles: ordered, timeframeId, throughTime: candleEnd })
+    const closedItem = ownStructureAt(candleEnd)
     const tradeProfile = evaluateTradeProfile({
       // Zone hit and pullback are range conditions. Applying the current
       // candle only to lastCandle preserves the prepared structure/zones and
