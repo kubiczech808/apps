@@ -84,6 +84,25 @@ export const findSwings = (candles, lookback = 2) => {
   return swings
 }
 
+// Market structure is a zigzag, not two independent lists of highs and lows.
+// If the fractal detector emits two pivots of the same kind before an opposite
+// turn is confirmed, retain only the more extreme pivot of that unfinished leg.
+export const alternatingSwings = (swings = []) => {
+  const out = []
+  for (const swing of swings) {
+    const previous = out.at(-1)
+    if (!previous || previous.kind !== swing.kind) {
+      out.push(swing)
+      continue
+    }
+    const moreExtreme = swing.kind === 'high'
+      ? swing.price > previous.price
+      : swing.price < previous.price
+    if (moreExtreme) out[out.length - 1] = swing
+  }
+  return out
+}
+
 /**
  * Read trend and the most recent structural break.
  *
@@ -91,7 +110,7 @@ export const findSwings = (candles, lookback = 2) => {
  * trend from a range that happens to have a taller top.
  */
 export const marketStructure = (candles, { lookback = 2 } = {}) => {
-  const swings = findSwings(candles, lookback)
+  const swings = alternatingSwings(findSwings(candles, lookback))
   const highs = swings.filter((swing) => swing.kind === 'high')
   const lows = swings.filter((swing) => swing.kind === 'low')
 

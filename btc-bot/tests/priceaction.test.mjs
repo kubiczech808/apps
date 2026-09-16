@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
+  alternatingSwings,
   atr,
   buildZones,
   fairValueGaps,
@@ -29,6 +30,21 @@ test('a swing needs confirmation on both sides, so the last candles can never be
   const swings = findSwings(candles, 2)
   assert.ok(swings.length > 0)
   assert.ok(swings.every((swing) => swing.index <= candles.length - 3))
+})
+
+test('structure swings alternate and keep only the extreme of an unfinished leg', () => {
+  const sequence = alternatingSwings([
+    { kind: 'low', price: 100, index: 1 },
+    { kind: 'low', price: 95, index: 2 },
+    { kind: 'high', price: 120, index: 3 },
+    { kind: 'high', price: 125, index: 4 },
+    { kind: 'low', price: 110, index: 5 },
+  ])
+  assert.deepEqual(sequence.map(({ kind, price }) => ({ kind, price })), [
+    { kind: 'low', price: 95 },
+    { kind: 'high', price: 125 },
+    { kind: 'low', price: 110 },
+  ])
 })
 
 test('higher highs with higher lows read as an uptrend, the mirror as a downtrend', () => {

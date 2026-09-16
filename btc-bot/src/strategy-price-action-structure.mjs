@@ -3,7 +3,7 @@ import { ceilPrice, floorPrice, normalizeCandlePrices, roundPrice } from './pric
 import { buildZones, candleSignal, marketStructure } from './priceaction.mjs'
 
 export const PRICE_ACTION_STRUCTURE_ID = 'price-action-structure-v1'
-export const PRICE_ACTION_MATRIX_SCHEMA = 15
+export const PRICE_ACTION_MATRIX_SCHEMA = 16
 export const PRICE_ACTION_CHART_CANDLE_LIMITS = {
   '1h': 8760,
   '4h': 2190,
@@ -1046,8 +1046,12 @@ export const classifyStructure = (
     ? 'up'
     : highText === 'LH' && lowText === 'LL' ? 'down' : 'flat'
   const persistent = persistentStructureTrend(normalizedCandles, structure.swings, lookback)
-  const trend = persistent.trend
   const structureBreak = persistent.event
+  const trend = structureBreak?.type === 'CHoCH_DOWN'
+    ? 'down'
+    : structureBreak?.type === 'CHoCH_UP'
+      ? 'up'
+      : localTrend
   const establishedTrend = structureBreak?.type.startsWith('CHoCH') ? structureBreak.fromTrend : trend
   const status = trend === 'up' ? 'met' : trend === 'down' ? 'unmet' : 'neutral'
   const contextHigh = normalizedCandles.reduce((best, candle) => !best || candle.high > best.high ? candle : best, null)

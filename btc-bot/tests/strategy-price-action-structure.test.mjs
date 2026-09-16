@@ -181,15 +181,14 @@ test('a recent close through a major counter-swing changes the established trend
   assert.equal(after.eventDetail.referencePrice, before.structure.low.current.price)
 })
 
-test('mixed local pivots do not erase the established external trend', () => {
+test('mixed recent pivots are flat until a complete directional sequence forms', () => {
   const upWithPullback = classifyStructure(
     zigzag([100, 120, 110, 140, 125, 135, 130, 134], { steps: 8 }),
     { lookback: 2, minCandles: 20 }
   )
   assert.equal(upWithPullback.structure.high.label, 'LH')
   assert.equal(upWithPullback.structure.low.label, 'HL')
-  assert.equal(upWithPullback.trend, 'up')
-  assert.match(upWithPullback.reason, /obrat nepotvrdily/)
+  assert.equal(upWithPullback.trend, 'flat')
 
   const downWithBounce = classifyStructure(
     zigzag([160, 130, 150, 110, 140, 120, 135, 122], { steps: 8 }),
@@ -197,8 +196,7 @@ test('mixed local pivots do not erase the established external trend', () => {
   )
   assert.equal(downWithBounce.structure.high.label, 'LH')
   assert.equal(downWithBounce.structure.low.label, 'HL')
-  assert.equal(downWithBounce.trend, 'down')
-  assert.match(downWithBounce.reason, /obrat nepotvrdily/)
+  assert.equal(downWithBounce.trend, 'flat')
 })
 
 test('structure horizons and pivot widths scale with timeframe', () => {
