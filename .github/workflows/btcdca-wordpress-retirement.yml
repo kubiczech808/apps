@@ -1,6 +1,14 @@
 name: Retire BTC-DCA WordPress
 
 on:
+  push:
+    branches:
+      - codex/btcdca-wordpress-retirement-release
+    paths:
+      - '.github/workflows/btcdca-wordpress-retirement.yml'
+      - 'btcdca-static/**'
+      - 'scripts/audit_btcdca_learn_links.py'
+      - 'scripts/stage_btcdca_static_guides.py'
   workflow_dispatch:
     inputs:
       operation:
