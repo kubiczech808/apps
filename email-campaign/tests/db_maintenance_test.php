@@ -385,6 +385,10 @@ assert($cronWorkflow !== false && str_contains($cronWorkflow, 'verify_storage_re
     'cron musi stav po kompaktaci overit');
 assert(str_contains($cronWorkflow, 'Kompaktace neskončila ověřeným stavem complete'),
     'nedokoncena kompaktace musi workflow oznacit jako chybu');
+assert(str_contains($cronWorkflow, 'for burst in $(seq 1 8)') && str_contains($cronWorkflow, 'rounds=12&batch=20000'),
+    'velky retencni backlog musi cron dotahnout vice omezenymi davkami');
+assert(str_contains($cronWorkflow, 'Retencni fronta se nevyprazdnila ani po 8 omezenych burstech'),
+    'nedotazena retence nesmi skoncit jako uspesna udrzba');
 echo "  ok\n";
 
 echo "\nVSE OK\n";

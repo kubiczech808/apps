@@ -130,13 +130,15 @@ jobs:
           run_cleanup_burst() {
             if ! cleanup_pending; then
               echo "Retencni fronta je prazdna."
-              return
+              return 0
             fi
             # Jedno volani ma vlastni 100s strop a transakcni kontrolu, aby hosting
-            # request neukoncil a aby nikdy nemohlo ubyvat ze skutecnych dat.
-            for burst in 1 2; do
-              echo "Automaticky burst retence ${burst}/2"
-              cleanup_code=$(curl --show-error --silent --max-time 170 --output /tmp/email-campaign-cleanup-body.txt --write-out "%{http_code}" "https://www.osobnizkusenosti.cz/email-campaign/?cron=${TOKEN}&db_cleanup=1&rounds=20&batch=10000" || echo "000")
+            # request neukoncil a aby nikdy nemohlo ubyvat ze skutecnych dat. Velky
+            # historicky backlog vsak nemuze po dvou tichech zustat viset: dotahne
+            # ho az 8 omezenych requestu (max. 20 000 detailu v jedne transakci).
+            for burst in $(seq 1 8); do
+              echo "Automaticky burst retence ${burst}/8"
+              cleanup_code=$(curl --show-error --silent --max-time 170 --output /tmp/email-campaign-cleanup-body.txt --write-out "%{http_code}" "https://www.osobnizkusenosti.cz/email-campaign/?cron=${TOKEN}&db_cleanup=1&rounds=12&batch=20000" || echo "000")
               echo "Cleanup HTTP ${cleanup_code}"
               cat /tmp/email-campaign-cleanup-body.txt || true
               if grep -q "VRACEN ZPET" /tmp/email-campaign-cleanup-body.txt; then
@@ -144,14 +146,16 @@ jobs:
                 exit 1
               fi
               if [ "$cleanup_code" != "200" ]; then
-                echo "::warning::Automaticky uklid vratil HTTP ${cleanup_code}; pokracuji dalsim tikem."
-                return
+                echo "::error::Automaticky uklid vratil HTTP ${cleanup_code}."
+                return 1
               fi
               if ! cleanup_pending; then
                 echo "Retencni fronta je prazdna."
-                return
+                return 0
               fi
             done
+            echo "::error::Retencni fronta se nevyprazdnila ani po 8 omezenych burstech."
+            return 1
           }
           # Udrzba nejdriv zklidni import/scraping, pak normalni cron muze bezpecne
           # preskocit jen tyto workery. Kampane a IMAP se pritom provadi dal.
