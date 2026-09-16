@@ -48,7 +48,7 @@ const sliceHistory = (candles, historyDays) => {
 const candleWindowAt = (candles, throughTime, durationHours) =>
   candles.slice(0, upperBound(candles, throughTime - durationHours * HOUR_MS))
 
-const structureAt = ({ candles, timeframeId, throughTime }) => {
+const structureAt = ({ candles, timeframeId, throughTime, includeZones = true }) => {
   const profile = PRICE_ACTION_STRUCTURE_PROFILES[timeframeId]
   const available = candleWindowAt(candles, throughTime, TIMEFRAME_HOURS[timeframeId])
   const history = sliceHistory(available, profile.historyDays)
@@ -61,15 +61,16 @@ const structureAt = ({ candles, timeframeId, throughTime }) => {
     // The backtest evaluates rules, not a chart. Avoid creating thousands of
     // unused candle summaries for every historical step.
     includeChartCandles: false,
+    includeZones,
   })
 }
 
-const cachedStructureReader = ({ candles, timeframeId, maxEntries = 8 }) => {
+const cachedStructureReader = ({ candles, timeframeId, includeZones = true, maxEntries = 8 }) => {
   const cache = new Map()
   return (throughTime) => {
     const key = Number(throughTime)
     if (!cache.has(key)) {
-      cache.set(key, structureAt({ candles, timeframeId, throughTime: key }))
+      cache.set(key, structureAt({ candles, timeframeId, throughTime: key, includeZones }))
       // These snapshots include zones and pivots. Retain only the small rolling
       // overlap between adjacent timeframe reads; retaining the whole history
       // turns a long backtest into an unbounded memory cache.
@@ -77,6 +78,18 @@ const cachedStructureReader = ({ candles, timeframeId, maxEntries = 8 }) => {
     }
     return cache.get(key)
   }
+}
+
+const canReachPullback = ({ item, candle, pullbackPct = 50 }) => {
+  const side = item?.trend === 'up' ? 'long' : item?.trend === 'down' ? 'short' : null
+  const high = item?.structure?.high?.current?.price
+  const low = item?.structure?.low?.current?.price
+  if (!side || !Number.isFinite(high) || !Number.isFinite(low) || high <= low || !candle) return false
+  const ratio = Math.min(Math.max(Number(pullbackPct) || 50, 0), 100) / 100
+  const pullback = side === 'long' ? high - (high - low) * ratio : low + (high - low) * ratio
+  return side === 'long'
+    ? candle.low <= pullback && candle.high >= low
+    : candle.high >= pullback && candle.low <= high
 }
 
 const closeValue = (position, price) =>
@@ -152,14 +165,18 @@ export const runPriceActionStructureBacktest = ({
   let readyProfiles = 0
   let zoneHits = 0
   let positionClosedThisCandle = false
-  const ownStructureAt = cachedStructureReader({ candles: ordered, timeframeId })
+  const ownStructureAt = cachedStructureReader({ candles: ordered, timeframeId, includeZones: false })
+  const ownStructureWithZonesAt = cachedStructureReader({ candles: ordered, timeframeId, includeZones: true, maxEntries: 3 })
   const lowerTimeframeId = LOWER_TIMEFRAME[timeframeId]
   const higherTimeframeId = HIGHER_TIMEFRAME[timeframeId]
   const lowerStructureAt = lowerTimeframeId && lowerCandles.length
-    ? cachedStructureReader({ candles: lowerCandles, timeframeId: lowerTimeframeId })
+    ? cachedStructureReader({ candles: lowerCandles, timeframeId: lowerTimeframeId, includeZones: false })
+    : null
+  const lowerStructureWithZonesAt = lowerTimeframeId && lowerCandles.length
+    ? cachedStructureReader({ candles: lowerCandles, timeframeId: lowerTimeframeId, includeZones: true, maxEntries: 3 })
     : null
   const higherStructureAt = higherTimeframeId && higherCandles.length
-    ? cachedStructureReader({ candles: higherCandles, timeframeId: higherTimeframeId })
+    ? cachedStructureReader({ candles: higherCandles, timeframeId: higherTimeframeId, includeZones: false })
     : null
 
   const recordExit = (reason, exitPrice, at) => {
@@ -209,10 +226,16 @@ export const runPriceActionStructureBacktest = ({
     // decide whether the already-defined entry was filled. Using candleEnd for
     // the entry profile would read this candle's close before entering inside
     // its range, which is look-ahead bias.
-    const item = ownStructureAt(candle.time)
-    const lowerItem = lowerStructureAt
+    const basicItem = ownStructureAt(candle.time)
+    const item = canReachPullback({ item: basicItem, candle, pullbackPct: settings.pullbackPct })
+      ? ownStructureWithZonesAt(candle.time)
+      : basicItem
+    const lowerBasicItem = lowerStructureAt
       ? lowerStructureAt(candle.time)
       : null
+    const lowerItem = item.zones && lowerStructureWithZonesAt
+      ? lowerStructureWithZonesAt(candle.time)
+      : lowerBasicItem
     const higherItem = higherStructureAt
       ? higherStructureAt(candle.time)
       : null

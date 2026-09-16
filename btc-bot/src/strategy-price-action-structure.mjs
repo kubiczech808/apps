@@ -1001,6 +1001,7 @@ export const classifyStructure = (
     historyDays = null,
     chartCandles = null,
     includeChartCandles = true,
+    includeZones = true,
   } = {}
 ) => {
   const normalizedCandles = Array.isArray(candles) ? candles.map(normalizeCandlePrices) : candles
@@ -1086,7 +1087,9 @@ export const classifyStructure = (
       low: lowLeg,
       recentSwings: structure.swings.slice(-8).map((swing) => pivotSummary(swing)),
     },
-    zones: activeSupplyDemandZones(normalizedCandles, { lookback: zoneLookback, maxAgeCandles: zoneMaxAgeCandles }),
+    zones: includeZones
+      ? activeSupplyDemandZones(normalizedCandles, { lookback: zoneLookback, maxAgeCandles: zoneMaxAgeCandles })
+      : null,
   }
 }
 
