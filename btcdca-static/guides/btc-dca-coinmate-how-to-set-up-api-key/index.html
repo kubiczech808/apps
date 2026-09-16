@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>BTC DCA &amp; Coinmate: How to set up an API key</title>
+  <meta name="description" content="Step-by-step instructions for connecting your Coinmate API key to BTC DCA for automated Bitcoin purchases, sales, and withdrawals.">
+  <link rel="canonical" href="https://www.btc-dca.com/btc-dca-coinmate-how-to-set-up-api-key/">
+  <meta property="og:type" content="article">
+  <meta property="og:title" content="BTC DCA &amp; Coinmate: How to set up an API key">
+  <meta property="og:description" content="Connect Coinmate securely to BTC DCA using an API key.">
+  <meta property="og:url" content="https://www.btc-dca.com/btc-dca-coinmate-how-to-set-up-api-key/">
+  <meta name="twitter:card" content="summary">
+  <link rel="stylesheet" href="/assets/img/guides/guide.css">
+  <script type="application/ld+json">{"@context":"https://schema.org","@type":"HowTo","name":"BTC DCA & Coinmate: How to set up an API key","description":"Connect a Coinmate API key to BTC DCA.","step":[{"@type":"HowToStep","name":"Sign in to Coinmate"},{"@type":"HowToStep","name":"Create an API key"},{"@type":"HowToStep","name":"Add the key in BTC DCA setup"},{"@type":"HowToStep","name":"Test connectivity"}]}</script>
+</head>
+<body>
+  <header class="site-header"><div class="header-inner"><a class="brand" href="/"><span class="brand-mark">B</span>BTC DCA</a><nav class="main-nav" aria-label="Primary"><a href="/dca-calculator">Calculator</a><a href="/#dca">DCA</a><a href="/#how-it-works">How it works</a><a href="/#faq">FAQ</a><a class="login" href="/login-user">Login</a></nav></div></header>
+  <main>
+    <section class="hero"><div class="page"><p class="breadcrumb"><a href="/">Home</a> / Coinmate API setup</p><p class="eyebrow">Exchange setup guide</p><h1>BTC DCA &amp; Coinmate: How to set up an API key</h1><p class="lede">Connect Coinmate to BTC DCA securely so your recurring Bitcoin purchases, sales, and withdrawals can run automatically.</p></div></section>
+    <div class="page layout"><aside class="toc" aria-label="On this page"><strong>On this page</strong><a href="#sign-in">Sign in</a><a href="#api-menu">Open API menu</a><a href="#api-key">Set up API key</a><a href="#authenticate">Authenticate</a><a href="#connect">Connect BTC DCA</a><a href="#test">Test connection</a></aside>
+      <article class="article"><p>Before you start, <a href="https://coinmate.io/" rel="noopener noreferrer">create a Coinmate account</a> if you do not already have one.</p>
+        <h2 id="sign-in">Sign in or sign up</h2><p>Sign in to your Coinmate account. New users can register directly with Coinmate.</p>
+        <h2 id="api-menu">Open the API menu</h2><p>Open the account menu in the top-right corner of Coinmate and choose <a href="https://coinmate.io/api" rel="noopener noreferrer">API</a>.</p><figure><img src="/assets/img/guides/coinmate-1.jpg" alt="Coinmate API menu"><figcaption>Open the Coinmate API section.</figcaption></figure>
+        <h2 id="api-key">Set up an API key</h2><p>Create a new API key and configure it as follows:</p><ul><li>Enable account information, trading, and withdrawals if you plan to use those BTC DCA features.</li><li>For withdrawal security, enable withdrawals only to template addresses and add approved addresses in Coinmate.</li><li>Give the key a recognizable label.</li><li>Restrict access to the BTC DCA server IP address: <strong>2001:1528:240::1f</strong>.</li></ul><figure><img src="/assets/img/guides/coinmate-template-withdrawal.jpg" alt="Coinmate withdrawal template option"><figcaption>Use approved withdrawal addresses for safer automation.</figcaption></figure>
+        <h2 id="authenticate">Authenticate</h2><p>Save the API key and complete the two-factor authentication challenge in your authenticator app.</p><figure><img src="/assets/img/guides/coinmate-3.jpg" alt="Coinmate two-factor authentication"><figcaption>Confirm the request with two-factor authentication.</figcaption></figure><p>Your public API key, private API key, and client ID are now available.</p><figure><img src="/assets/img/guides/coinmate-4.jpg" alt="Copy Coinmate API key details"><figcaption>Copy each credential carefully.</figcaption></figure>
+        <h2 id="connect">Connect Coinmate to BTC DCA</h2><p><a href="/login-user">Log in to BTC DCA</a>, open <a href="/app/setup">Setup</a>, select Coinmate, and enter the public API key, private API key, and client ID in their matching fields. Save the connection.</p><figure><img src="/assets/img/guides/coinmate-5.jpg" alt="BTC DCA setup screen"><figcaption>Enter the API credentials in BTC DCA Setup.</figcaption></figure>
+        <h2 id="test">Test connectivity</h2><p>Select <strong>Test connection</strong>. A successful result confirms that BTC DCA can communicate with your Coinmate account.</p><figure><img src="/assets/img/guides/bitpanda-7.jpg" alt="BTC DCA connection test"><figcaption>Test the connection before creating automated orders.</figcaption></figure><p class="note">Never share your private API key. Restrict it by IP address and use withdrawal address allowlisting whenever the exchange supports it.</p>
+        <section class="guide-links"><h2>Other setup guides</h2><ul><li><a href="/btc-dca-binance-how-to-set-up-api-key/">Set up Binance</a></li><li><a href="/btc-dca-okx-how-to-set-up-api-key/">Set up OKX</a></li></ul></section>
+      </article>
+    </div>
+  </main>
+  <footer class="site-footer"><div class="footer-inner"><strong>BTC DCA</strong><p>Automate your Bitcoin dollar-cost averaging strategy. Your exchange account, your funds, your keys.</p><div class="footer-links"><a href="/btc-dca-binance-how-to-set-up-api-key/">Binance setup</a><a href="/btc-dca-coinmate-how-to-set-up-api-key/">Coinmate setup</a><a href="/btc-dca-okx-how-to-set-up-api-key/">OKX setup</a><a href="mailto:info@btc-dca.com">Contact</a></div><span>&copy; 2026 BTC DCA</span></div></footer>
+</body></html>
