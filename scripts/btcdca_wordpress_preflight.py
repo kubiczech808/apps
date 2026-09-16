@@ -6,6 +6,7 @@ import ftplib
 import os
 import re
 import subprocess
+from posixpath import dirname, basename
 from pathlib import Path
 from typing import Iterable
 
@@ -77,7 +78,10 @@ def describe_directory(ftp: ftplib.FTP, path: str) -> tuple[int, int, int, list[
 def download_optional(ftp: ftplib.FTP, remote: str) -> str | None:
     chunks: list[bytes] = []
     try:
-        ftp.retrbinary(f"RETR {remote}", chunks.append)
+        parent, name = dirname(remote), basename(remote)
+        if not cwd_path(ftp, parent):
+            return None
+        ftp.retrbinary(f"RETR {name}", chunks.append)
     except ftplib.all_errors:
         return None
     return b"".join(chunks).decode("utf-8", "replace")
@@ -114,7 +118,8 @@ def main() -> None:
         targets = ("www/wp-admin", "www/wp-includes", "www/wp-content", "www/learn-center")
         inventory = {target: describe_directory(ftp, target) for target in targets}
         root_entries = list_current(ftp) if cwd_path(ftp, "www") else []
-        index = download_optional(ftp, "www/index.php") or download_optional(ftp, "www/index.html")
+        index_php = download_optional(ftp, "www/index.php")
+        index_html = download_optional(ftp, "www/index.html")
         htaccess = download_optional(ftp, "www/.htaccess")
         robots = download_optional(ftp, "www/robots.txt")
         wp_config = download_optional(ftp, "www/wp-config.php")
@@ -151,7 +156,8 @@ def main() -> None:
     else:
         report += ["WordPress table prefix was not found in `wp-config.php`; do not delete database tables until this is resolved.", ""]
     report += ["```text", table_rows or "No tables returned.", "```", ""]
-    report += source_snippets(index, "Homepage source matches")
+    report += source_snippets(index_html, "Homepage index.html source matches")
+    report += source_snippets(index_php, "WordPress index.php source matches")
     report += ["### Immediate `www` directory entries", "", "```text"]
     report += [f"{'dir ' if is_dir else 'file'} {name} ({size if size is not None else '?'} bytes)" for name, is_dir, size in root_entries]
     report += ["```", ""]
