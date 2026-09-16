@@ -1454,6 +1454,22 @@ if (isset($_GET['cron'])) {
         }
         exit;
     }
+    if (isset($_GET['db_reclaim'])) {
+        // Tento endpoint vola jen cron z GitHub Actions. Sam nejdriv overi, ze
+        // retencni fronta je prazdna a nikde nebezi import ani scraping.
+        @set_time_limit(170);
+        try {
+            $result = runDatabaseStorageReclaim($pdo);
+            if (str_starts_with($result, 'Ceka na ')) {
+                http_response_code(202);
+            }
+            echo $result . "\n";
+        } catch (Throwable $e) {
+            http_response_code(503);
+            echo 'Jednorazove uvolneni mista selhalo: ' . $e->getMessage() . "\n";
+        }
+        exit;
+    }
     if (isset($_GET['ai_research'])) {
         aiResearchLoadProviderState($pdo);
         $hop = max(1, (int)($_GET['hop'] ?? 1));
@@ -13119,6 +13135,82 @@ function optimizeDatabaseTables(PDO $pdo, int $budgetSeconds = 25, string $onlyT
         . ' prestavbou tabulek: ' . implode(', ', $optimized)
         . ($skipped > 0 ? '. Dalsich ' . $skipped . ' tabulek na dalsi volani (casovy strop requestu).' : '.')
         . ($failed ? ' Neuspesne: ' . implode('; ', $failed) . '.' : '');
+}
+
+/**
+ * Jednorazove fyzicke vraceni mista po prechodu na 14denni retenci. DELETE u
+ * InnoDB uvolni misto jen uvnitr souboru tabulky; OPTIMIZE ho vrati hostingu az
+ * pri prestavbe. Bezi po jedne tabulce a jen tehdy, kdy retence uz nema co mazat.
+ */
+function runDatabaseStorageReclaim(PDO $pdo): string
+{
+    if (!isMysql($pdo)) {
+        return 'Jednorazove uvolneni mista: jen pro MySQL.';
+    }
+    $locked = (int)$pdo->query("SELECT GET_LOCK('email_campaign_storage_reclaim', 0)")->fetchColumn();
+    if ($locked !== 1) {
+        return 'Ceka na dokonceni jineho kroku uvolneni mista.';
+    }
+    try {
+        $settings = loadSettings($pdo);
+        $diagnostics = databaseCleanupDiagnostics($pdo);
+        if ((int)($diagnostics['scraping_items_prunable'] ?? 0) > 0 || (int)($diagnostics['import_items_prunable'] ?? 0) > 0) {
+            return 'Ceka na dokonceni 14denni retence detailu logu.';
+        }
+
+        $runningScraping = (int)$pdo->query('SELECT COUNT(*) FROM scraping_jobs WHERE status="running"')->fetchColumn();
+        $runningImports = (int)$pdo->query('SELECT COUNT(*) FROM import_runs WHERE status="running"')->fetchColumn();
+        if ($runningScraping > 0 || $runningImports > 0) {
+            return 'Ceka na dokonceni aktivnich behu pred prestavbou tabulek.';
+        }
+
+        $version = (string)($settings['database_storage_reclaim_version'] ?? '');
+        $state = (string)($settings['database_storage_reclaim_state'] ?? '');
+        if ($version !== '2026-09-v2' || $state === '') {
+            $state = 'import_run_items';
+            setSettingRaw($pdo, 'database_storage_reclaim_version', '2026-09-v2');
+            setSettingRaw($pdo, 'database_storage_reclaim_state', $state);
+        }
+        if ($state === 'complete') {
+            return 'Jednorazove uvolneni mista uz bylo dokonceno.';
+        }
+
+        $next = ['import_run_items' => 'scraping_job_items', 'scraping_job_items' => 'complete'];
+        if (!isset($next[$state])) {
+            throw new RuntimeException('Neznamy stav jednorazoveho uvolneni mista.');
+        }
+        $table = $state;
+        $tableInfo = null;
+        foreach (databaseTableSizes($pdo) as $candidate) {
+            if ((string)$candidate['name'] === $table) {
+                $tableInfo = $candidate;
+                break;
+            }
+        }
+        if ($tableInfo === null) {
+            throw new RuntimeException('Tabulka ' . $table . ' nebyla nalezena.');
+        }
+
+        if ((int)$tableInfo['free_bytes'] > 0) {
+            $statement = $pdo->query('OPTIMIZE TABLE ' . quoteDatabaseIdentifier($table));
+            if ($statement !== false) {
+                $statement->fetchAll(PDO::FETCH_ASSOC);
+                $statement->closeCursor();
+            }
+            $message = 'Jednorazove uvolneni: prestavena ' . $table . ' (predem volno ' . formatBytesHuman((int)$tableInfo['free_bytes']) . ').';
+        } else {
+            $message = 'Jednorazove uvolneni: ' . $table . ' uz nedrzi meritelne volne misto.';
+        }
+        setSettingRaw($pdo, 'database_storage_reclaim_state', $next[$state]);
+        setSettingRaw($pdo, 'database_storage_reclaim_status', $message);
+        return $message;
+    } finally {
+        try {
+            $pdo->query("SELECT RELEASE_LOCK('email_campaign_storage_reclaim')");
+        } catch (Throwable $e) {
+            // Zamek se uvolni i pri ukonceni requestu.
+        }
+    }
 }
 
 /**

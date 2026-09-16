@@ -52,3 +52,11 @@ jobs:
           # AI research automatika je na zadost zastavena - jeji cron trigger je pryc,
           # takze se odsud uz nevola.
           call_cron
+
+          # Po jednorazovem hromadnem mazani vrati InnoDB fyzicke misto hostingu az
+          # OPTIMIZE TABLE. Endpoint sam pocka na prazdnou retencni frontu i konec
+          # aktivnich behu a pak prestavi maximalne jednu tabulku na tik.
+          reclaim_code=$(curl --show-error --silent --max-time 180 --output /tmp/email-campaign-reclaim-body.txt --write-out "%{http_code}" "https://www.osobnizkusenosti.cz/email-campaign/?cron=${TOKEN}&db_reclaim=1")
+          echo "Reclaim HTTP ${reclaim_code}"
+          cat /tmp/email-campaign-reclaim-body.txt
+          test "$reclaim_code" -ge 200 -a "$reclaim_code" -lt 300
