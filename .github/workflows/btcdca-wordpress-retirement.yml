@@ -108,34 +108,11 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y lftp
 
-      - name: Back up all WordPress files before removal
+      - name: Prepare WordPress recovery workspace
         if: inputs.operation == 'snapshot'
         run: |
           set -euo pipefail
           mkdir -p backup/wordpress-files backup/wordpress-root
-          lftp -u "$BTCDCA_FTP_LOGIN","$BTCDCA_FTP_PASSWORD" "ftp://ftp.btc-dca.com" <<'LFTP'
-          set cmd:fail-exit true
-          set ftp:ssl-allow false
-          set ftp:ssl-force false
-          set net:max-retries 2
-          mirror --verbose /www/wp-admin backup/wordpress-files/wp-admin
-          mirror --verbose /www/wp-includes backup/wordpress-files/wp-includes
-          mirror --verbose /www/wp-content backup/wordpress-files/wp-content
-          mget -O backup/wordpress-root /www/wp-*.php
-          get -O backup/wordpress-root /www/index.php
-          get -O backup/wordpress-root /www/index.html
-          get -O backup/wordpress-root /www/.htaccess
-          get -O backup/wordpress-root /www/robots.txt
-          get -O backup/wordpress-root /www/sitemap.xml
-          get -O backup/wordpress-root /www/license.txt
-          get -O backup/wordpress-root /www/readme.html
-          bye
-          LFTP
-          test -d backup/wordpress-files/wp-admin
-          test -d backup/wordpress-files/wp-includes
-          test -d backup/wordpress-files/wp-content
-          test -f backup/wordpress-root/wp-config.php
-          test -f backup/wordpress-root/index.php
 
       - name: Generate and upload temporary database backup endpoint
         if: inputs.operation == 'snapshot' || inputs.operation == 'retire'
@@ -167,16 +144,56 @@ jobs:
           BTCDCA_TEMP_FILE_REMOTE=www/btcdca-wordpress-database-helper.php \
           python3 scripts/manage_btcdca_temporary_file.py
 
-      - name: Export WordPress database tables
+      - name: Export and validate WordPress database before the file backup
         if: inputs.operation == 'snapshot'
         run: |
           set -euo pipefail
-          curl --fail --show-error --silent --retry 3 \
+          status=0
+          curl --fail-with-body --show-error --silent --retry 0 \
             -H "X-BTCDCA-Token: ${BTCDCA_DB_HELPER_TOKEN}" \
             "https://www.btc-dca.com/btcdca-wordpress-database-helper.php?action=export" \
-            --output backup/btcdca-wordpress.sql.gz
+            --output backup/btcdca-wordpress.sql.gz || status=$?
+          if [ "$status" -ne 0 ]; then
+            echo "Database export endpoint returned an error:"
+            python3 - <<'PY'
+            from pathlib import Path
+
+            response = Path('backup/btcdca-wordpress.sql.gz')
+            if response.exists():
+                print(response.read_bytes()[:4096].decode('utf-8', 'backslashreplace'))
+            PY
+            exit "$status"
+          fi
           gzip -t backup/btcdca-wordpress.sql.gz
           test "$(gzip -dc backup/btcdca-wordpress.sql.gz | grep -c '^CREATE TABLE `wp_dca_')" -gt 0
+
+      - name: Back up all WordPress files after database export succeeds
+        if: inputs.operation == 'snapshot'
+        run: |
+          set -euo pipefail
+          lftp -u "$BTCDCA_FTP_LOGIN","$BTCDCA_FTP_PASSWORD" "ftp://ftp.btc-dca.com" <<'LFTP'
+          set cmd:fail-exit true
+          set ftp:ssl-allow false
+          set ftp:ssl-force false
+          set net:max-retries 2
+          mirror --verbose /www/wp-admin backup/wordpress-files/wp-admin
+          mirror --verbose /www/wp-includes backup/wordpress-files/wp-includes
+          mirror --verbose /www/wp-content backup/wordpress-files/wp-content
+          mget -O backup/wordpress-root /www/wp-*.php
+          get -O backup/wordpress-root /www/index.php
+          get -O backup/wordpress-root /www/index.html
+          get -O backup/wordpress-root /www/.htaccess
+          get -O backup/wordpress-root /www/robots.txt
+          get -O backup/wordpress-root /www/sitemap.xml
+          get -O backup/wordpress-root /www/license.txt
+          get -O backup/wordpress-root /www/readme.html
+          bye
+          LFTP
+          test -d backup/wordpress-files/wp-admin
+          test -d backup/wordpress-files/wp-includes
+          test -d backup/wordpress-files/wp-content
+          test -f backup/wordpress-root/wp-config.php
+          test -f backup/wordpress-root/index.php
 
       - name: Upload WordPress recovery backup
         if: inputs.operation == 'snapshot'
