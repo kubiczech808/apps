@@ -1,5 +1,5 @@
 Options -Indexes
-DirectoryIndex index.html
+DirectoryIndex index.html index.php
 RewriteEngine On
 
 # Keep public BTC-DCA and app URLs extensionless without WordPress.
