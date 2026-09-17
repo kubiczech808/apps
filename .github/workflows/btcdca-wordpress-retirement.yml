@@ -335,17 +335,7 @@ jobs:
         if: inputs.operation == 'isolate' || inputs.operation == 'purge'
         run: |
           set -euo pipefail
-          verify_dir="$(mktemp -d)"
-          public_user_agent='BTC-DCA static migration verifier'
-          curl --user-agent "$public_user_agent" --fail --show-error --silent https://www.btc-dca.com/ --output "$verify_dir/homepage.html"
-          grep -Fq 'BTC DCA static homepage' "$verify_dir/homepage.html"
-          for slug in btc-dca-binance-how-to-set-up-api-key btc-dca-coinmate-how-to-set-up-api-key btc-dca-okx-how-to-set-up-api-key; do
-            curl --user-agent "$public_user_agent" --fail --show-error --silent "https://www.btc-dca.com/${slug}/" --output "$verify_dir/${slug}.html"
-            grep -Fq '/assets/img/guides/guide.css' "$verify_dir/${slug}.html"
-          done
-          test "$(curl --user-agent "$public_user_agent" --silent --output /dev/null --write-out '%{http_code}' https://www.btc-dca.com/learn-center/)" = '410'
-          curl --user-agent "$public_user_agent" --fail --show-error --silent https://www.btc-dca.com/app/ --output "$verify_dir/app.html"
-          grep -Eqi '<html|<!doctype' "$verify_dir/app.html"
+          python3 scripts/verify_btcdca_static_public.py
 
       - name: Automatically roll back an incomplete isolation
         if: failure() && inputs.operation == 'isolate'
