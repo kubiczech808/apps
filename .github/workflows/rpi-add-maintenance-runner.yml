@@ -13,10 +13,9 @@ name: RPi Add Self-Hosted Runner
 # agents, which is free: no GitHub charge, no new hardware, just another process on the Pi
 # that idles until a job arrives.
 #
-# The new agent carries an extra `maintenance` label as well as the standard three, so:
-#   - maintenance jobs ask for `maintenance` and can only land on the new agent
-#   - trading jobs ask for the standard labels and can use EITHER agent
-# which means trading gains a second slot and can never again be stuck behind a deploy.
+# The new agent receives an explicit role label (`maintenance` or `trader`) as well as the
+# standard three. Workflows must request that role label; otherwise a generic workflow could
+# consume the Trader slot by accident.
 #
 # WHAT THIS FILE GOT WRONG ONCE, AND WHY IT IS WRITTEN THIS WAY NOW
 #
@@ -59,9 +58,9 @@ concurrency:
 
 jobs:
   add-runner:
-    # Has to run ON the Pi: it installs a service there. It asks for the plain labels
-    # because the maintenance agent it is about to create does not exist yet.
-    runs-on: [self-hosted, Linux, ARM64]
+    # Has to run ON the Pi: it installs a service there. The existing runner is deliberately
+    # labelled maintenance, so registration can never consume the future Trader slot.
+    runs-on: [self-hosted, Linux, ARM64, maintenance]
     timeout-minutes: 20
     env:
       # NOT RUNNER_NAME: that name belongs to the runner executing this job and cannot be
