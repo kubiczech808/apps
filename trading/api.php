@@ -2729,7 +2729,7 @@ function compact_dashboard_paper_portfolio(array $portfolio, bool $includeTrades
     }
     $compact['historySummary'] = is_array($portfolio['historySummary'] ?? null)
         ? $portfolio['historySummary']
-        : paper_portfolio_history_summary($portfolio);
+        : paper_portfolio_history_summary($portfolio, (string) ($portfolio['capitalAdjustmentAt'] ?? ''));
     $compact['trades'] = [];
     $compact['runLog'] = [];
     return $compact;
@@ -2780,7 +2780,13 @@ function attach_paper_portfolio_history_summaries(array &$data, ?bool $fromStora
                 unset($segment);
             }
         }
-        $portfolio['historySummary'] = paper_portfolio_history_summary($source);
+        // The boundary can be on either record: the row carries it, and so does the full
+        // segment the trades come from. Reading both means a reset is honoured whichever
+        // half of the state was written most recently.
+        $portfolio['historySummary'] = paper_portfolio_history_summary(
+            $source,
+            (string) ($source['capitalAdjustmentAt'] ?? $portfolio['capitalAdjustmentAt'] ?? ''),
+        );
         unset($stored);
     }
     unset($portfolio);
@@ -2877,9 +2883,30 @@ function portfolio_trade_amount(array $trade, array $keys): float
     return 0.0;
 }
 
-function paper_portfolio_history_summary(array $portfolio): array
+/**
+ * A portfolio's history, optionally bounded to what happened SINCE a capital reset.
+ *
+ * Reported after resetting every paper portfolio to 100 USDC: "asi se u portfolii
+ * nevynulovalo roi?" -- correct. The balance reset and the portfolio row's P/L reset,
+ * because the browser reads the *SinceAdjustment* figures when capitalAdjustmentAt is set.
+ * The overview's ROI and accuracy are computed HERE instead, over every trade the portfolio
+ * has ever held, and this function had never heard of the boundary. So the two screens
+ * disagreed with each other, which is worse than either answer alone.
+ *
+ * $since is passed explicitly rather than read from the portfolio, because the archive
+ * cards call this too and an archived snapshot describes a whole life: bounding those would
+ * rewrite history rather than restart it.
+ *
+ * The rule is the browser's own -- a trade counts when it RESOLVED at or after the boundary
+ * -- so the overview and the detail view answer with the same set. A position opened before
+ * the reset and closed after it therefore counts, which is deliberate: it is a result the
+ * restarted portfolio actually produced, and the equity it was rebased to already had that
+ * position's open P/L recorded against it.
+ */
+function paper_portfolio_history_summary(array $portfolio, ?string $since = null): array
 {
     $trades = is_array($portfolio['trades'] ?? null) ? $portfolio['trades'] : [];
+    $boundary = $since === null || $since === '' ? null : portfolio_trade_timestamp($since);
     $closed = 0;
     $correct = 0;
     $resolved = 0;
@@ -2897,18 +2924,44 @@ function paper_portfolio_history_summary(array $portfolio): array
     $closedRealized = 0.0;
     $closedInvested = 0.0;
     $closedFilled = 0;
+    // The same three over the whole life, kept beside the bounded ones so a reset hides
+    // nothing: "nechame si je pro souhrne statistiky" was the whole condition of the reset.
+    $lifetimeClosed = 0;
+    $lifetimeRealized = 0.0;
+    $lifetimeInvested = 0.0;
     foreach ($trades as $trade) {
         if (!is_array($trade)) {
             continue;
         }
         $openedAt = (string) ($trade['openedAt'] ?? $trade['date'] ?? $trade['createdAt'] ?? '');
         $openedTimestamp = portfolio_trade_timestamp($openedAt);
+        // Bounded too: this timestamp is what the return is annualised over, so leaving it
+        // at the account's first ever trade would divide a week of results by six months.
+        if ($boundary !== null && ($openedTimestamp === null || $openedTimestamp < $boundary)) {
+            $openedTimestamp = null;
+        }
         if ($openedTimestamp !== null && ($firstOpenedTimestamp === null || $openedTimestamp < $firstOpenedTimestamp)) {
             $firstOpenedAt = $openedAt;
             $firstOpenedTimestamp = $openedTimestamp;
         }
         if (!archived_trade_is_closed($trade)) {
             continue;
+        }
+        $lifetimeClosed++;
+        if (!portfolio_trade_is_unfilled_limit_order($trade)) {
+            $lifetimeRealized += portfolio_trade_amount($trade, ['realizedPnlUsdc', 'pnlUsdc']);
+            $lifetimeInvested += portfolio_trade_amount($trade, ['totalCostUsdc', 'stakeUsdc']);
+        }
+        // Everything below describes the portfolio as it is running NOW. Before the
+        // boundary it belongs to the account's history, which the lifetime figures above
+        // keep -- nothing is lost, it simply stops being this portfolio's score.
+        if ($boundary !== null) {
+            $closedAt = portfolio_trade_timestamp((string) (
+                $trade['resolvedAt'] ?? $trade['closedAt'] ?? $trade['date'] ?? ''
+            ));
+            if ($closedAt === null || $closedAt < $boundary) {
+                continue;
+            }
         }
         $closed++;
         // An unfilled order bought nothing, so it is neither profit nor capital spent.
@@ -2942,6 +2995,12 @@ function paper_portfolio_history_summary(array $portfolio): array
         'closedFilledCount' => $closedFilled,
         'closedRealizedPnlUsdc' => round($closedRealized, 6),
         'closedInvestedUsdc' => round($closedInvested, 6),
+        // What the figures above are bounded by, so a reader can tell a portfolio that has
+        // traded little from one that was restarted yesterday.
+        'sinceAdjustmentAt' => $boundary === null ? null : $since,
+        'lifetimeClosedTradeCount' => $lifetimeClosed,
+        'lifetimeClosedRealizedPnlUsdc' => round($lifetimeRealized, 6),
+        'lifetimeClosedInvestedUsdc' => round($lifetimeInvested, 6),
     ];
 }
 
