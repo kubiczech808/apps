@@ -7735,6 +7735,156 @@ try {
     // Written by the RPi worker only. Trigger-key protected like every other write from it:
     // a public endpoint that appends to a list the paper bot trades from would let anyone
     // put a position in a portfolio.
+    // A live execution run's revalidation verdicts, merged into the catalogue HERE rather
+    // than shipped as files.
+    //
+    // Measured on a live execution run: 101 seconds end to end, of which the trading
+    // decision and the order were 5. The single largest step was 39 seconds spent in
+    // persist-live-revalidation.py, which pulls the evaluations and observations segments
+    // down over FTP, patches a handful of rows, and pushes the whole thing back. The
+    // observations segment is the 8,000-row catalogue and is measured in megabytes; the
+    // verdicts that change it are a few hundred bytes.
+    //
+    // So the verdicts travel and the catalogue stays put. The merge below is a port of that
+    // script's, rule for rule, because the two must not drift: a row this closes out is a
+    // row the shortlist stops paying a live fetch to reject.
+    if ($action === 'live-revalidation-merge') {
+        if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+            respond(['ok' => false, 'error' => 'POST is required'], 405);
+        }
+        require_trading_trigger_key();
+        $payload = json_decode((string) file_get_contents('php://input'), true);
+        $updates = is_array($payload['updates'] ?? null) ? $payload['updates'] : [];
+        $updates = array_values(array_filter($updates, static function ($update): bool {
+            return is_array($update) && trim((string) ($update['tokenId'] ?? '')) !== '';
+        }));
+        if ($updates === []) {
+            respond(['ok' => true, 'merged' => 0, 'note' => 'no revalidated candidates to merge']);
+        }
+        $byToken = [];
+        foreach ($updates as $update) {
+            $byToken[(string) $update['tokenId']] = $update;
+        }
+
+        $corePath = state_file_paths()['paper'];
+        $core = decode_state_file($corePath, false);
+        if (!is_array($core)) {
+            respond(['ok' => false, 'error' => 'The paper state could not be read.'], 502);
+        }
+
+        // The same two places the script wrote to. A row can be in either, and a token that
+        // is in both has to be updated in both or the two disagree about the same market.
+        $targets = [
+            ['segment' => 'evaluations', 'field' => 'evaluations'],
+            ['segment' => 'observations', 'field' => 'marketObservations'],
+        ];
+        // The economics the executor re-measured. Copied only when the update carries them,
+        // so a verdict about one field never blanks another.
+        $carried = [
+            'marketPrice', 'marketProbability', 'annualizedReturn', 'expectedValueUsdc',
+            'daysToResolution', 'liquidity', 'netGainIfWinUsdc', 'totalCostUsdc',
+            'orderPrice', 'orderSize', 'orderNotionalUsdc', 'minOrderSize', 'spread', 'feeRate',
+        ];
+
+        $merged = 0;
+        $closedOut = [];
+        $written = [];
+        // Both fields can live in the SAME file -- a state written before segmentation
+        // carries them in the core itself -- so each document is loaded once, both fields are
+        // merged into that one copy, and it is written once at the end. Merging them into two
+        // separate copies and writing each in turn means the second write carries the first
+        // field unmerged, which silently discards half the verdicts. Measured while writing
+        // the test for this: the evaluations merge reported success and was then overwritten.
+        $documents = [];
+        $dirty = [];
+        foreach ($targets as $target) {
+            $path = state_segment_path($core, $corePath, $target['segment']) ?? $corePath;
+            if (!array_key_exists($path, $documents)) {
+                $documents[$path] = $path === $corePath ? $core : decode_state_file($path, false);
+            }
+            $document = $documents[$path];
+            if (!is_array($document) || !is_array($document[$target['field']] ?? null)) {
+                continue;
+            }
+            $rows = $document[$target['field']];
+            $count = 0;
+            foreach ($rows as $index => $item) {
+                if (!is_array($item)) {
+                    continue;
+                }
+                $tokenId = (string) ($item['tokenId'] ?? $item['clobTokenId'] ?? '');
+                if ($tokenId === '' || !isset($byToken[$tokenId])) {
+                    continue;
+                }
+                $update = $byToken[$tokenId];
+                // A verdict older than the one already stored is not news. Runs overlap,
+                // and the newer answer has to win whichever order they arrive in.
+                $existing = is_array($item['executionRevalidation'] ?? null) ? $item['executionRevalidation'] : [];
+                if ((string) ($existing['checkedAt'] ?? '') > (string) ($update['checkedAt'] ?? '')) {
+                    continue;
+                }
+                $item['executionRevalidation'] = $update;
+                foreach ($carried as $field) {
+                    if (array_key_exists($field, $update)) {
+                        $item[$field] = $update[$field];
+                    }
+                }
+                // A market Gamma no longer lists, or one that stopped accepting orders,
+                // cannot come back. Closing the stored row out is what removes it from the
+                // candidate list for good; otherwise the prefilter keeps shortlisting it and
+                // every run pays for a live fetch just to reject it again.
+                if (($update['marketGone'] ?? false) === true) {
+                    $item['status'] = 'CLOSED';
+                    $item['selectionStatus'] = 'CLOSED';
+                    $item['marketClosed'] = true;
+                    $item['acceptingOrders'] = false;
+                    // Two different ends look identical once the row reads CLOSED: a market
+                    // Gamma dropped, and an event that has finished but is not settled yet.
+                    // The second is still expecting a result, so it says so.
+                    if (($update['awaitingResolution'] ?? false) === true) {
+                        $item['awaitingResolution'] = true;
+                        $item['closedReason'] = 'finished, awaiting Polymarket resolution';
+                    }
+                    $closedOut[$tokenId] = true;
+                }
+                $item['updatedAt'] = (string) ($update['checkedAt'] ?? gmdate('c'));
+                $rows[$index] = $item;
+                $count += 1;
+            }
+            if ($count === 0) {
+                continue;
+            }
+            $document[$target['field']] = $rows;
+            $documents[$path] = $document;
+            $dirty[$path] = true;
+            $merged += $count;
+            $written[] = $target['segment'];
+        }
+
+        foreach (array_keys($dirty) as $path) {
+            $encoded = json_encode($documents[$path], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+            if (!is_string($encoded)) {
+                respond(['ok' => false, 'error' => 'A revalidated segment could not be encoded.'], 500);
+            }
+            // Written beside the file and moved into place: a failure halfway through must
+            // leave the catalogue intact rather than truncated.
+            $temporary = $path . '.revalidation-' . bin2hex(random_bytes(6));
+            if (file_put_contents($temporary, $encoded, LOCK_EX) === false || !rename($temporary, $path)) {
+                @unlink($temporary);
+                respond(['ok' => false, 'error' => 'A revalidated segment could not be written.'], 500);
+            }
+        }
+
+        respond([
+            'ok' => true,
+            'merged' => $merged,
+            'updates' => count($byToken),
+            'segments' => $written,
+            'closedOut' => array_keys($closedOut),
+            'at' => gmdate('c'),
+        ]);
+    }
+
     if ($action === 'dip-entry-record') {
         require_trading_trigger_key();
         $payload = json_decode((string) file_get_contents('php://input'), true);
