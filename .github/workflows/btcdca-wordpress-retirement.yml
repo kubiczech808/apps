@@ -12,16 +12,21 @@ on:
   workflow_dispatch:
     inputs:
       operation:
-        description: "stage uploads guides; snapshot creates a recovery artifact; retire removes WordPress using a validated snapshot"
+        description: "stage uploads guides; snapshot creates recovery; preview activates static site without deletion; retire removes WordPress after preview"
         required: true
         default: stage
         type: choice
         options:
           - stage
           - snapshot
+          - preview
           - retire
       backup_run_id:
-        description: "Required for retire: run ID of the validated WordPress snapshot"
+        description: "Required for preview or retire: run ID of the validated WordPress snapshot"
+        required: false
+        type: string
+      preview_run_id:
+        description: "Required for retire: successful preview run ID that you have validated"
         required: false
         type: string
       confirmation:
@@ -95,15 +100,22 @@ jobs:
           set -euo pipefail
           test '${{ inputs.confirmation }}' = 'RETIRE_WORDPRESS'
           test -n '${{ inputs.backup_run_id }}'
+          test -n '${{ inputs.preview_run_id }}'
 
-      - name: Require a clean Learn Center link audit before snapshot or retirement
-        if: inputs.operation == 'snapshot' || inputs.operation == 'retire'
+      - name: Require a validated recovery snapshot before static preview
+        if: inputs.operation == 'preview'
+        run: |
+          set -euo pipefail
+          test -n '${{ inputs.backup_run_id }}'
+
+      - name: Require a clean Learn Center link audit before snapshot, preview, or retirement
+        if: inputs.operation == 'snapshot' || inputs.operation == 'preview' || inputs.operation == 'retire'
         run: |
           set -euo pipefail
           grep -Fq 'No Learn Center references found' .github/inspection/btcdca-learn-link-audit.md
 
-      - name: Install FTP backup client
-        if: inputs.operation == 'snapshot' || inputs.operation == 'retire'
+      - name: Install FTP deletion client
+        if: inputs.operation == 'retire'
         run: |
           sudo apt-get update
           sudo apt-get install -y lftp
@@ -234,7 +246,7 @@ jobs:
           compression-level: 0
 
       - name: Download the validated WordPress recovery backup
-        if: inputs.operation == 'retire'
+        if: inputs.operation == 'preview' || inputs.operation == 'retire'
         uses: actions/download-artifact@v4
         with:
           name: btcdca-wordpress-recovery-${{ inputs.backup_run_id }}
@@ -243,8 +255,8 @@ jobs:
           repository: ${{ github.repository }}
           github-token: ${{ github.token }}
 
-      - name: Validate the recovery artifact before retirement
-        if: inputs.operation == 'snapshot' || inputs.operation == 'retire'
+      - name: Validate the recovery artifact before preview or retirement
+        if: inputs.operation == 'snapshot' || inputs.operation == 'preview' || inputs.operation == 'retire'
         run: |
           set -euo pipefail
           test -f backup/btcdca-wordpress-files.zip
@@ -270,6 +282,23 @@ jobs:
           print(f'Validated {len(set(tables))} WordPress tables and {len(tables)} SQL operations.')
           PY
 
+      - name: Download the successful static preview proof
+        if: inputs.operation == 'retire'
+        uses: actions/download-artifact@v4
+        with:
+          name: btcdca-static-preview-${{ inputs.preview_run_id }}
+          path: static-preview
+          run-id: ${{ inputs.preview_run_id }}
+          repository: ${{ github.repository }}
+          github-token: ${{ github.token }}
+
+      - name: Require static preview to match the recovery snapshot
+        if: inputs.operation == 'retire'
+        run: |
+          set -euo pipefail
+          test -f static-preview/static-preview.txt
+          grep -Fxq 'snapshot_run_id=${{ inputs.backup_run_id }}' static-preview/static-preview.txt
+
       - name: Remove only WordPress database tables
         if: inputs.operation == 'retire'
         run: |
@@ -281,7 +310,7 @@ jobs:
           grep -Fq 'wp_dca_' dropped-wordpress-tables.json
 
       - name: Activate static homepage and static SEO files
-        if: inputs.operation == 'retire'
+        if: inputs.operation == 'preview' || inputs.operation == 'retire'
         run: |
           set -euo pipefail
           python3 scripts/activate_btcdca_static_homepage.py
@@ -318,7 +347,7 @@ jobs:
           LFTP
 
       - name: Verify public static site and retired Learn Center
-        if: inputs.operation == 'retire'
+        if: inputs.operation == 'preview' || inputs.operation == 'retire'
         run: |
           set -euo pipefail
           curl --fail --show-error --silent https://www.btc-dca.com/ | grep -Fq 'BTC DCA static homepage'
@@ -327,6 +356,22 @@ jobs:
           done
           test "$(curl --silent --output /dev/null --write-out '%{http_code}' https://www.btc-dca.com/learn-center/)" = '410'
           curl --fail --show-error --silent https://www.btc-dca.com/app/ | grep -Eqi '<html|<!doctype'
+
+      - name: Publish static preview proof
+        if: inputs.operation == 'preview'
+        run: |
+          set -euo pipefail
+          printf 'snapshot_run_id=%s\npreview_run_id=%s\n' '${{ inputs.backup_run_id }}' '${{ github.run_id }}' > static-preview.txt
+
+      - name: Upload static preview proof
+        if: inputs.operation == 'preview'
+        uses: actions/upload-artifact@v4
+        with:
+          name: btcdca-static-preview-${{ github.run_id }}
+          path: static-preview.txt
+          if-no-files-found: error
+          retention-days: 90
+          compression-level: 0
 
       - name: Remove temporary database endpoint
         if: always() && (inputs.operation == 'snapshot' || inputs.operation == 'retire')
