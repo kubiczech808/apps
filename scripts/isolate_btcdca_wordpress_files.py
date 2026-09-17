@@ -55,7 +55,9 @@ def listing(ftp: ftplib.FTP) -> set[str]:
 
 def file_exists(ftp: ftplib.FTP, name: str) -> bool:
     try:
-        return ftp.size(name) is not None
+        # This FTP service rejects SIZE for PHP files, while NLST supports a
+        # direct filename query and also finds dotfiles such as .htaccess.
+        return bool(ftp.nlst(name))
     except ftplib.error_perm as exc:
         if str(exc).startswith("550"):
             return False
