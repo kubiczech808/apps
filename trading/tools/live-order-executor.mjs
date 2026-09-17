@@ -154,6 +154,13 @@ const SIGNATURE_TYPE = Number(process.env.POLYMARKET_SIGNATURE_TYPE || 1);
 const DEFAULT_FUNDER = "0x3252de913d9323667f21f4d88fa1f996fc282293";
 const FUNDER_ADDRESS = process.env.POLYMARKET_FUNDER_ADDRESS || process.env.POLYMARKET_ADDRESS || DEFAULT_FUNDER;
 const EXECUTION_STATE_PATH = process.env.LIVE_EXECUTION_STATE_PATH || "";
+// Did this run change anything at the exchange? Measured on run 35264749578: three account
+// snapshots cost 32 of that job's 46 seconds, and two of them ran after a pass that had
+// submitted and cancelled nothing -- refetching the balance and the open orders to find
+// them exactly as the snapshot taken 30 seconds earlier had already recorded them. The flag
+// is set in the two functions that send an account-changing request, so it cannot miss a
+// path: every submission goes through submitOrder and every cancel through cancelOrder.
+let accountMutated = false;
 const IDLE_CASH_MAX_USDC = Number(process.env.LIVE_IDLE_CASH_MAX_USDC || 5);
 const IDLE_CASH_GRACE_HOURS = Number(process.env.LIVE_IDLE_CASH_GRACE_HOURS || 24);
 const SKIP_SCHEDULED_EXECUTION = String(process.env.LIVE_SKIP_SCHEDULED_EXECUTION || "").toLowerCase() === "true";
@@ -3913,6 +3920,8 @@ async function emitDecision(payload) {
     // entry could not be matched to, so the newest run rendered twice. The identity is
     // stamped here rather than at each call site, which is what let it be forgotten.
     ...(payload.batchLog ? { batchLog: { ...payload.batchLog, id: mergedEntry.id, runAt: mergedEntry.runAt } } : {}),
+    // Whether the account is worth refetching after this run. See executionTouchedAccount.
+    accountMutated,
     runLog: nextRunLog,
     // Which tokens THIS portfolio ordered, kept past the run log's horizon. Written from the
     // merged entry so a rotation's sell and buy legs are both recorded, and seeded from the
@@ -4044,6 +4053,8 @@ async function submitOrder(order) {
   const funderAddress = order.funderAddress || FUNDER_ADDRESS;
   const signatureType = number(order.signatureType, SIGNATURE_TYPE);
   if (!privateKey || !funderAddress) throw new Error("POLYMARKET_PRIVATE_KEY and POLYMARKET_FUNDER_ADDRESS are required");
+  // Past this line an order is posted for real, whichever of the paths below is taken.
+  accountMutated = true;
   const { client, Side, OrderType } = await authenticatedClobClient({ privateKey, funderAddress, signatureType });
   // Only pass what is actually known. The CLOB is authoritative for both of these
   // and the client resolves them per token when the option is absent
@@ -4265,6 +4276,9 @@ async function cancelOrder(order, tradingConfig = {}) {
   if (DRY_RUN || !hasFlag("confirm-live")) {
     return { status: "dry_run_cancel", orderID: orderId, success: true };
   }
+  // A cancel changes the account exactly as a submission does: the order leaves the book
+  // and the cash it reserved comes back.
+  accountMutated = true;
   const { client } = await authenticatedClobClient({
     funderAddress: tradingConfig.funderAddress || FUNDER_ADDRESS,
     signatureType: number(tradingConfig.signatureType, SIGNATURE_TYPE),
@@ -6425,7 +6439,28 @@ if (invokedDirectly) {
 }
 
 // Exported for tests only.
+/**
+ * Does the account snapshot need refetching after this run?
+ *
+ * The run begins by fetching a fresh snapshot, so unless the run itself submitted or
+ * cancelled something, the snapshot it already holds is the newest information there is and
+ * the two refreshes after it cost ~21 seconds to learn nothing. Measured on run
+ * 35264749578: 32 of 46 seconds were spent on three snapshots of an account that a SKIP
+ * pass had not touched.
+ *
+ * A state with no flag at all is treated as "refresh": an execution state written by an
+ * older build, or one no run produced because the executor died before emitting, says
+ * nothing about what it did, and the safe reading of silence is the behaviour that was
+ * there before this existed.
+ */
+function executionTouchedAccount(state) {
+  if (!state || typeof state !== "object") return true;
+  if (typeof state.accountMutated !== "boolean") return true;
+  return state.accountMutated;
+}
+
 export {
+  executionTouchedAccount,
   successfulOrderResponse,
   // Exported so the durable ownership ledger is measured on the real merge rather than a
   // restatement of it: the dedupe key and the two exclusions are the whole correctness.

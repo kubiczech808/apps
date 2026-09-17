@@ -270,6 +270,7 @@ jobs:
         run: node tools/restore-live-execution-history.mjs
 
       - name: Rest the fixed-entry bids
+        id: execute
         working-directory: trading
         env:
           POLYMARKET_DRY_RUN: ${{ (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && (inputs.live_confirm == true || inputs.live_confirm == 'true'))) && 'false' || 'true' }}
@@ -277,8 +278,29 @@ jobs:
           LIVE_EXECUTION_STATE_URL: data/live-5050-execution-state.json
         run: npm run live:execute -- --confirm-live
 
-      - name: Refresh live account snapshot
+      # Same as the live workflow: an account snapshot costs about ten seconds on the Pi
+      # runner, and a pass that rested no bid and cancelled nothing has already taken the
+      # freshest snapshot there is. A run that did not finish cleanly is always refetched,
+      # because a state file written before the run says nothing about what the run did.
+      - name: Check whether this pass touched the exchange
+        id: touched
         if: always()
+        working-directory: trading
+        run: |
+          node -e '
+            const fs = require("fs");
+            import("./tools/live-order-executor.mjs").then(({ executionTouchedAccount }) => {
+              const path = process.env.LIVE_EXECUTION_STATE_PATH;
+              const state = path && fs.existsSync(path) ? JSON.parse(fs.readFileSync(path, "utf8")) : null;
+              const touched = executionTouchedAccount(state);
+              console.log(touched ? "The run submitted or cancelled an order; the account is refetched."
+                : "Nothing reached the exchange; the snapshot this run already took is the newest there is.");
+              fs.appendFileSync(process.env.GITHUB_OUTPUT, `touched=${touched}\n`);
+            });
+          '
+
+      - name: Refresh live account snapshot
+        if: always() && (steps.touched.outputs.touched != 'false' || steps.execute.outcome != 'success')
         working-directory: trading
         run: npm run live:account
 

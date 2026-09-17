@@ -2418,6 +2418,10 @@ test("5050 run log: the executor publishes the batchLog its own log entry is key
     // supply the same module-level slot the real run writes to. These tests are about the
     // batchLog key, so nothing was restored.
     "culledOrderRestoreForRun",
+    // Likewise the flag that says whether this pass changed anything at the exchange: the
+    // lifted copy cannot see the module-level slot the real run sets in submitOrder and
+    // cancelOrder, and emitDecision publishes it.
+    "accountMutated",
     `${emit}\nreturn emitDecision;`,
   );
   const emitDecision = build(
@@ -2436,6 +2440,7 @@ test("5050 run log: the executor publishes the batchLog its own log entry is key
     () => ".",
     { log() {} },
     null,
+    false,
   );
 
   // The 5050 payload, exactly as it is built: a batchLog with no id of its own.
@@ -2454,6 +2459,10 @@ test("5050 run log: the executor publishes the batchLog its own log entry is key
   // Everything the row renders from must survive the stamping.
   assert.equal(written.batchLog.strategyId, "live-5050");
   assert.equal(written.batchLog.action, "SKIP");
+  // And what the workflow reads to decide whether to refetch the account is published with
+  // it. This pass submitted nothing and the state has to say so rather than stay silent --
+  // silence is read as "refresh", which costs the ten seconds this is meant to save.
+  assert.equal(written.accountMutated, false);
 });
 
 test("5050 run log: a state with no batchLog is left as one", async () => {
@@ -2469,17 +2478,25 @@ test("5050 run log: a state with no batchLog is left as one", async () => {
     // supply the same module-level slot the real run writes to. These tests are about the
     // batchLog key, so nothing was restored.
     "culledOrderRestoreForRun",
+    // Likewise the flag that says whether this pass changed anything at the exchange: the
+    // lifted copy cannot see the module-level slot the real run sets in submitOrder and
+    // cancelOrder, and emitDecision publishes it.
+    "accountMutated",
     `${emit}\nreturn emitDecision;`,
   );
   const emitDecision = build(
     { runLog: [] }, (batchLog) => batchLog, () => null, false, (rows) => rows, () => [], (output) => output,
     "state.json", async () => {}, async (_path, body) => { written = JSON.parse(body); }, () => ".", { log() {} },
+    null, true,
   );
 
   // Some emits carry no batchLog, and the dashboard builds a richer row from settings
   // and account for those. Inventing one here would send them down the wrong branch.
   await emitDecision({ generatedAt: "2026-08-08T14:20:00.100Z", action: "AUTOMATION_DISABLED", reason: "off" });
   assert.equal(written.batchLog, undefined, "no batchLog must be conjured for a state that has none");
+  // This sandbox was handed a mutated account, and the state must carry that verdict through
+  // a path that publishes almost nothing else -- it is the one the workflow still reads.
+  assert.equal(written.accountMutated, true);
 });
 
 // Reported: the 5050 workflow took far too long. Measured on the runner, the executor

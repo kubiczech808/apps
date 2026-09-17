@@ -323,6 +323,7 @@ jobs:
         run: node tools/restore-live-execution-history.mjs
 
       - name: Verify current market and maybe submit live order
+        id: execute
         working-directory: trading
         env:
           # The dry-run switch used to read `inputs.live_confirm` on its own, and it failed
@@ -347,12 +348,39 @@ jobs:
         run: |
           LIVE_STATE_URL=data/live-state.json LIVE_EXECUTION_STATE_URL="$LIVE_EXECUTION_STATE_PATH" npm run live:execute -- --confirm-live
 
-      - name: Refresh live account snapshot after execution
+      # Three account snapshots cost 32 of this job's 46 seconds, measured on run
+      # 35264749578, and two of them ran after a pass that had submitted and cancelled
+      # nothing -- refetching the balance and the open orders to find them exactly as the
+      # snapshot taken 30 seconds earlier had already recorded them. The run's own state
+      # says which it was, and a state that says nothing is treated as "refresh".
+      - name: Check whether this pass touched the exchange
+        id: touched
         if: always()
+        working-directory: trading
+        run: |
+          node -e '
+            const fs = require("fs");
+            import("./tools/live-order-executor.mjs").then(({ executionTouchedAccount }) => {
+              const path = process.env.LIVE_EXECUTION_STATE_PATH;
+              const state = path && fs.existsSync(path) ? JSON.parse(fs.readFileSync(path, "utf8")) : null;
+              const touched = executionTouchedAccount(state);
+              console.log(touched ? "The run submitted or cancelled an order; the account is refetched."
+                : "Nothing reached the exchange; the snapshot this run already took is the newest there is.");
+              fs.appendFileSync(process.env.GITHUB_OUTPUT, `touched=${touched}\n`);
+            });
+          '
+
+      # The executor's own report, plus its exit status: a run that died between submitting
+      # an order and writing its state says nothing about what it did, and the state file
+      # still holds the previous run's answer. An execution that did not finish cleanly is
+      # therefore always refetched.
+      - name: Refresh live account snapshot after execution
+        if: always() && (steps.touched.outputs.touched != 'false' || steps.execute.outcome != 'success')
         working-directory: trading
         run: npm run live:account
 
       - name: Complete filled rotation immediately
+        id: rotation
         if: always()
         working-directory: trading
         env:
@@ -363,13 +391,16 @@ jobs:
         run: |
           if node -e 'const fs = require("fs"); const path = process.env.LIVE_EXECUTION_STATE_PATH; const state = fs.existsSync(path) ? JSON.parse(fs.readFileSync(path, "utf8")) : {}; process.exit(state.action === "ROTATION_EXIT_SUBMITTED" ? 0 : 1)'; then
             echo "Rotation exit accepted. Revalidating the synced account for an immediate replacement order."
+            echo "replaced=true" >> "$GITHUB_OUTPUT"
             LIVE_STATE_URL=data/live-state.json LIVE_EXECUTION_STATE_URL="$LIVE_EXECUTION_STATE_PATH" npm run live:execute -- --confirm-live
           else
             echo "No accepted live rotation exit in this run; immediate replacement is not needed."
           fi
 
+      # Only after a replacement was actually placed. On every other pass the step above
+      # runs no order and this refetches a snapshot nothing has changed since.
       - name: Refresh live account snapshot after rotation check
-        if: always()
+        if: always() && steps.rotation.outputs.replaced == 'true'
         working-directory: trading
         run: npm run live:account
 
