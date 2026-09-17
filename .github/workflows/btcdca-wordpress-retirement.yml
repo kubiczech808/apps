@@ -152,16 +152,13 @@ jobs:
           curl --fail-with-body --show-error --silent --retry 0 \
             -H "X-BTCDCA-Token: ${BTCDCA_DB_HELPER_TOKEN}" \
             "https://www.btc-dca.com/btcdca-wordpress-database-helper.php?action=export" \
-            --output backup/btcdca-wordpress.sql.gz || status=$?
+          --output backup/btcdca-wordpress.sql.gz || status=$?
           if [ "$status" -ne 0 ]; then
             echo "Database export endpoint returned an error:"
-            python3 - <<'PY'
-            from pathlib import Path
-
-            response = Path('backup/btcdca-wordpress.sql.gz')
-            if response.exists():
-                print(response.read_bytes()[:4096].decode('utf-8', 'backslashreplace'))
-            PY
+            if [ -f backup/btcdca-wordpress.sql.gz ]; then
+              LC_ALL=C tr -cd '\11\12\15\40-\176' < backup/btcdca-wordpress.sql.gz | head -c 4096
+              printf '\n'
+            fi
             exit "$status"
           fi
           gzip -t backup/btcdca-wordpress.sql.gz
