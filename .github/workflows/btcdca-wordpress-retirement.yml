@@ -7,16 +7,18 @@ on:
     paths:
       - '.github/workflows/btcdca-wordpress-retirement.yml'
       - 'btcdca-static/**'
+      - 'scripts/audit_btcdca_app_runtime.py'
       - 'scripts/audit_btcdca_learn_links.py'
       - 'scripts/stage_btcdca_static_guides.py'
   workflow_dispatch:
     inputs:
       operation:
-        description: "stage uploads guides; snapshot archives recovery; isolate is reversible; rollback restores WordPress; purge deletes confirmed isolated data"
+        description: "preflight is read-only; stage uploads guides; snapshot archives recovery; isolate is reversible; rollback restores WordPress; purge deletes confirmed isolated data"
         required: true
         default: stage
         type: choice
         options:
+          - preflight
           - stage
           - snapshot
           - isolate
@@ -82,11 +84,13 @@ jobs:
           cat .github/inspection/btcdca-learn-link-audit.md
 
       - name: Stage and verify the preserved static guides
+        if: inputs.operation != 'preflight'
         run: |
           set -euo pipefail
           python3 scripts/stage_btcdca_static_guides.py
 
       - name: Upload stage and link-audit reports
+        if: inputs.operation != 'preflight'
         uses: actions/upload-artifact@v4
         with:
           name: btcdca-static-stage-${{ github.run_id }}
@@ -307,6 +311,10 @@ jobs:
           set -euo pipefail
           test -f isolation-proof/isolation-proof.txt
           grep -Fxq 'snapshot_run_id=${{ inputs.backup_run_id }}' isolation-proof/isolation-proof.txt
+
+      - name: Require account and app entry points independent of WordPress
+        if: inputs.operation == 'isolate' || inputs.operation == 'preflight'
+        run: python3 scripts/audit_btcdca_app_runtime.py
 
       - name: Move WordPress files into the reversible isolation directory
         if: inputs.operation == 'isolate'
