@@ -249,7 +249,7 @@ const PRICE_ACTION_RULEBOOK = [
   },
   {
     title: 'Vstup pouze ve správné supply/demand zóně',
-    text: 'Stačí hit ceny do zóny; close uvnitř není podmínka. Zóna se invaliduje jen close průrazem na vlastním timeframe.',
+    text: 'Zóna musí být base impulsního breakoutu, který vytvořil 3svíčkový FVG. Stačí hit ceny; invaliduje ji jen close průraz na vlastním timeframe.',
     status: () => {
       const hit = priceActionProfiles().filter((entry) => entry.profile.zoneHit).length
       return fact(hit ? 'met' : 'neutral', `${hit} hitů zóny`)
@@ -308,10 +308,10 @@ const STRATEGY_CANDIDATES = [
     thesis: 'Periodický price-action scanner pro BTCUSD a hlavní měnové páry. Čte vyšší swing strukturu, supply/demand zóny a pro každý timeframe skládá čerstvý obchodní profil s 50% pullbackem, SL a TP. Invalidaci vyhodnocuje až u otevřeného obchodu.',
     rules: ['BTCUSD + FX majors', '1H / 4H / 1D', 'HH/HL = up', 'LH/LL = down', 'S/D zóna', '50% pullback', 'R/R ≥ 2:1', 'risk 1 % účtu'],
     backtest: {
-      status: 'neutral',
-      label: 'čeká na backtest',
-      result: 'profile-only',
-      detail: 'Tato vrstva zatím sama neposílá ordery. Publikuje pravidlový trade profil, aby šlo následně měřit a ladit vstupy na více aktivech a timeframech.',
+      status: 'met',
+      label: 'paper exekuce aktivní',
+      result: 'paper',
+      detail: 'Ready profil otevře paper pozici s 1% riskem. Na jednom assetu se překrývající timeframe neotevřou současně.',
     },
     command:
       'node tools/backtest.mjs --strategy price-action-structure --asset EURUSD --timeframe 4h',
@@ -635,7 +635,7 @@ const priceActionDecisionFact = (entry, column) => {
       )
     case 'stop':
       if (profile?.mode === 'formation') return priceFact(null, formationTitle)
-      return priceFact(profile?.stop, Number.isFinite(profile?.stopBuffer) ? `Za hranicí zóny, buffer ${quotePrice(profile.stopBuffer)}.` : 'Stop podle hranice pracovní zóny.')
+      return priceFact(profile?.stop, Number.isFinite(profile?.stopBuffer) ? `Za vzdálenější hranicí struktury nebo zóny, buffer ${quotePrice(profile.stopBuffer)}.` : 'Stop za strukturální invalidací.')
     case 'tp1':
       if (profile?.mode === 'formation') return priceFact(null, formationTitle)
       return priceFact(profile?.tp1, profile?.tp1Rule ?? null)
@@ -1036,6 +1036,7 @@ const renderPortfolioTiles = (box) => {
 
   const openRisk = running.reduce((sum, position) => {
     if (!Number.isFinite(position.entry) || !Number.isFinite(position.stopLoss)) return sum
+    if (position.pricingModel === 'linear-usd') return sum + (Number(position.plan?.riskSats) || 0)
     const perUsd = Math.abs(1 / position.stopLoss - 1 / position.entry)
     return sum + (position.quantityUsd || 0) * SATS_PER_BTC * perUsd
   }, 0)

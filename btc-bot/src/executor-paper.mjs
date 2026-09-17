@@ -13,6 +13,9 @@
 import { carryForSettlement } from './funding.mjs'
 import { pnlSats, SATS_PER_BTC } from './risk.mjs'
 
+const HOUR_MS = 60 * 60_000
+const TIMEFRAME_HOURS = { '1h': 1, '4h': 4, '1d': 24 }
+
 export const createPaperExecutor = ({
   store,
   feeRate = 0.0006,
@@ -40,6 +43,57 @@ export const createPaperExecutor = ({
     trade.plSats = Math.round(gross - trade.openingFeeSats - closingFee - carry)
   }
 
+  const linearGrossSats = (trade, price, quantityUsd = trade.remainingQuantityUsd ?? trade.quantityUsd) => {
+    const direction = trade.side === 'long' ? 1 : -1
+    return quantityUsd * ((price - trade.entry) / trade.entry) * direction * trade.quoteSatsPerUsd
+  }
+
+  const linearFeeSats = (trade, quantityUsd) => Math.ceil(quantityUsd * feeRate * trade.quoteSatsPerUsd)
+
+  const markLinearTrade = (trade, price) => {
+    const quantity = trade.remainingQuantityUsd ?? trade.quantityUsd
+    const closingFee = linearFeeSats(trade, quantity)
+    trade.markPrice = price
+    trade.unrealizedPlSats = Math.round(linearGrossSats(trade, price, quantity) - closingFee)
+    trade.plSats = Math.round(
+      -(trade.openingFeeSats ?? 0) + (trade.realizedPlSats ?? 0) + trade.unrealizedPlSats
+    )
+  }
+
+  const settleLinear = (trade, exitPrice, exitReason, at) => {
+    const quantity = trade.remainingQuantityUsd ?? trade.quantityUsd
+    const closingFee = linearFeeSats(trade, quantity)
+    const gross = linearGrossSats(trade, exitPrice, quantity)
+    trade.realizedPlSats = Math.round((trade.realizedPlSats ?? 0) + gross - closingFee)
+    trade.closingFeeSats = (trade.closingFeeSats ?? 0) + closingFee
+    store.balanceSats += trade.marginSats + Math.round(gross - closingFee)
+    trade.marginSats = 0
+    trade.remainingQuantityUsd = 0
+    trade.unrealizedPlSats = 0
+    trade.status = 'closed'
+    trade.exitPrice = exitPrice
+    trade.markPrice = exitPrice
+    trade.plSats = Math.round(-(trade.openingFeeSats ?? 0) + trade.realizedPlSats)
+    trade.closedAt = at
+    trade.exitReason = exitReason
+  }
+
+  const takeLinearTp1 = (trade, at) => {
+    if (trade.tp1Taken || !(trade.tp1 > 0)) return
+    const quantity = Math.min(trade.remainingQuantityUsd, trade.quantityUsd / 2)
+    const fraction = quantity / trade.quantityUsd
+    const releasedMargin = Math.min(trade.marginSats, Math.round(trade.initialMarginSats * fraction))
+    const closingFee = linearFeeSats(trade, quantity)
+    const gross = linearGrossSats(trade, trade.tp1, quantity)
+    store.balanceSats += releasedMargin + Math.round(gross - closingFee)
+    trade.marginSats -= releasedMargin
+    trade.remainingQuantityUsd -= quantity
+    trade.realizedPlSats = Math.round((trade.realizedPlSats ?? 0) + gross - closingFee)
+    trade.closingFeeSats = (trade.closingFeeSats ?? 0) + closingFee
+    trade.tp1Taken = true
+    trade.tp1TakenAt = at
+  }
+
   /**
    * Charge every funding settlement up to `timeMs` against the positions that
    * were open when it happened.
@@ -49,6 +103,7 @@ export const createPaperExecutor = ({
       if (settlement.time <= (store.lastFundingAt ?? Number.NEGATIVE_INFINITY)) continue
       if (settlement.time > timeMs) break
       for (const trade of running()) {
+        if (trade.pricingModel === 'linear-usd') continue
         if ((trade.openedAt ?? 0) > settlement.time) continue
         trade.carryFeesSats =
           (trade.carryFeesSats ?? 0) +
@@ -106,8 +161,9 @@ export const createPaperExecutor = ({
       // display, so add each one back before applying the adjustment here or
       // the fee would be counted twice in equity.
       const unrealizedSats = running().reduce(
-        (sum, trade) =>
-          sum + (Number.isFinite(trade.plSats) ? trade.plSats + (trade.openingFeeSats ?? 0) : 0),
+        (sum, trade) => sum + (trade.pricingModel === 'linear-usd'
+          ? (trade.unrealizedPlSats ?? 0)
+          : (Number.isFinite(trade.plSats) ? trade.plSats + (trade.openingFeeSats ?? 0) : 0)),
         0
       )
       return {
@@ -131,7 +187,13 @@ export const createPaperExecutor = ({
       if (plan.marginSats > store.balanceSats) {
         throw new Error(`margin ${plan.marginSats} sats exceeds paper balance ${store.balanceSats} sats`)
       }
-      const openingFee = feeFor(plan.quantityUsd, plan.entry)
+      const linear = plan.pricingModel === 'linear-usd'
+      const openingFee = linear
+        ? Math.ceil(plan.quantityUsd * feeRate * plan.quoteSatsPerUsd)
+        : feeFor(plan.quantityUsd, plan.entry)
+      if (plan.marginSats + openingFee > store.balanceSats) {
+        throw new Error(`margin and fee ${plan.marginSats + openingFee} sats exceed paper balance ${store.balanceSats} sats`)
+      }
       const trade = {
         id: `paper-${store.nextId++}`,
         side: plan.side,
@@ -154,6 +216,23 @@ export const createPaperExecutor = ({
         createdAt: now(),
         closedAt: null,
         source: 'paper',
+        ...(linear ? {
+          pricingModel: 'linear-usd',
+          assetSymbol: plan.assetSymbol,
+          timeframeId: plan.timeframeId,
+          strategyId: plan.strategyId,
+          signalKey: plan.signalKey,
+          signalCandleTime: plan.signalCandleTime ?? null,
+          quoteSatsPerUsd: plan.quoteSatsPerUsd,
+          initialMarginSats: plan.marginSats,
+          remainingQuantityUsd: plan.quantityUsd,
+          realizedPlSats: 0,
+          unrealizedPlSats: 0,
+          tp1: plan.tp1,
+          tp2: plan.tp2 ?? plan.takeProfit,
+          tp1Taken: false,
+          lastMarkedCandleTime: plan.signalCandleTime ?? null,
+        } : {}),
       }
       store.balanceSats -= trade.marginSats + openingFee
       store.trades.push(trade)
@@ -171,7 +250,11 @@ export const createPaperExecutor = ({
     closePosition: async (id, price) => {
       const trade = store.trades.find((candidate) => candidate.id === id)
       if (!trade) throw new Error(`unknown paper trade ${id}`)
-      settle(trade, price ?? trade.stopLoss, 'manual', now())
+      if (trade.pricingModel === 'linear-usd') {
+        settleLinear(trade, price ?? trade.markPrice ?? trade.entry, 'manual', now())
+      } else {
+        settle(trade, price ?? trade.stopLoss, 'manual', now())
+      }
       return trade
     },
 
@@ -192,6 +275,7 @@ export const createPaperExecutor = ({
         // that closes it, not after.
         chargeCarryUpTo(candle.time)
         for (const trade of running()) {
+          if (trade.pricingModel === 'linear-usd') continue
           if (trade.openedAt && candle.time < trade.openedAt) continue
           const hitStop =
             trade.side === 'long' ? candle.low <= trade.stopLoss : candle.high >= trade.stopLoss
@@ -206,6 +290,41 @@ export const createPaperExecutor = ({
           } else {
             markTrade(trade, candle.close)
           }
+        }
+      }
+      return settled
+    },
+
+    markPriceActionPositions: (matrix) => {
+      const settled = []
+      for (const trade of running().filter((candidate) => candidate.pricingModel === 'linear-usd')) {
+        const asset = matrix?.assets?.find((candidate) => candidate.symbol === trade.assetSymbol)
+        const item = asset?.trends?.[trade.timeframeId]
+        const candles = item?.chartCandles ?? []
+        const candleDuration = (TIMEFRAME_HOURS[trade.timeframeId] ?? 1) * HOUR_MS
+        for (const candle of candles) {
+          if (Number.isFinite(trade.lastMarkedCandleTime) && candle.time <= trade.lastMarkedCandleTime) continue
+          trade.lastMarkedCandleTime = candle.time
+          const closedAt = candle.time + candleDuration
+          const hitStop = trade.side === 'long' ? candle.low <= trade.stopLoss : candle.high >= trade.stopLoss
+          if (hitStop) {
+            settleLinear(trade, trade.stopLoss, 'stop_loss', closedAt)
+            settled.push(trade)
+            break
+          }
+          const hitTp1 = !trade.tp1Taken && (trade.side === 'long'
+            ? candle.high >= trade.tp1
+            : candle.low <= trade.tp1)
+          if (hitTp1) takeLinearTp1(trade, closedAt)
+          const hitTp2 = trade.side === 'long'
+            ? candle.high >= trade.tp2
+            : candle.low <= trade.tp2
+          if (hitTp2) {
+            settleLinear(trade, trade.tp2, 'take_profit', closedAt)
+            settled.push(trade)
+            break
+          }
+          markLinearTrade(trade, candle.close)
         }
       }
       return settled

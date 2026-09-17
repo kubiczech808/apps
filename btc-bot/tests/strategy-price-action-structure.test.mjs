@@ -230,19 +230,21 @@ test('structure horizons and pivot widths scale with timeframe', () => {
 
 test('supply and demand zones stay valid unless their own timeframe closes through them', () => {
   const candles = [
-    candle(START, 110, 112, 108, 111),
-    candle(START + 1 * HOUR, 111, 121, 110, 120),
-    candle(START + 2 * HOUR, 120, 119, 104, 106),
-    candle(START + 3 * HOUR, 106, 107, 99, 101),
-    candle(START + 4 * HOUR, 101, 115, 100, 114),
-    candle(START + 5 * HOUR, 114, 113, 105, 107),
-    candle(START + 6 * HOUR, 107, 118, 106, 117),
-    candle(START + 7 * HOUR, 117, 116, 109, 112),
-    // Trades back into the demand wick range but closes above the zone.
+    // Demand base + bullish displacement + bullish FVG confirmation.
+    candle(START, 100, 101, 98, 99),
+    candle(START + 1 * HOUR, 99, 111, 99, 110),
+    candle(START + 2 * HOUR, 109, 113, 105, 112),
+    // Supply base + bearish displacement + bearish FVG confirmation.
+    candle(START + 3 * HOUR, 112, 115, 111, 114),
+    candle(START + 4 * HOUR, 114, 114.5, 101, 102),
+    candle(START + 5 * HOUR, 103, 108, 100, 101),
+    candle(START + 6 * HOUR, 101, 111, 100, 110),
+    candle(START + 7 * HOUR, 110, 112, 106, 111),
+    // Trades back into the demand base but closes above the zone.
     // This is the higher-timeframe equivalent of a lower-timeframe fill:
     // informative, but not an invalidation and not a same-TF close fill.
-    candle(START + 8 * HOUR, 112, 114, 100, 111),
-    candle(START + 9 * HOUR, 111, 115, 110, 114),
+    candle(START + 8 * HOUR, 111, 112, 99, 110),
+    candle(START + 9 * HOUR, 110, 111, 104, 108),
   ]
 
   const zones = activeSupplyDemandZones(candles, { lookback: 1, maxAgeCandles: 100 })
@@ -251,20 +253,19 @@ test('supply and demand zones stay valid unless their own timeframe closes throu
   assert.ok(zones.nearbyDemand.length >= 1, 'expected nearby demand zones')
   assert.ok(zones.nearbySupply.length >= 1, 'expected nearby supply zones')
   assert.equal(zones.demand.definingCandles.length, 3, 'a zone should expose its three defining candles')
-  assert.deepEqual(
-    zones.demand.definingCandles.map((candleItem) => candleItem.time),
-    [START + 2 * HOUR, START + 3 * HOUR, START + 4 * HOUR]
-  )
+  assert.deepEqual(zones.demand.definingCandles.map((item) => item.time), [START, START + HOUR, START + 2 * HOUR])
+  assert.equal(zones.demand.baseCandles[0].time, START)
+  assert.equal(zones.demand.fvg.direction, 'bullish')
   assert.equal(zones.demand.invalidatedByOwnTimeframeClose, false)
   assert.equal(zones.demand.filledByOwnTimeframeClose, false)
   assert.equal(zones.demand.filledAt, null)
-  assert.equal(zones.demand.low, 99)
+  assert.equal(zones.demand.low, 98)
   assert.equal(zones.supply.invalidatedByOwnTimeframeClose, false)
   assert.match(zones.rule, /vlastním timeframe/)
 
   const filled = activeSupplyDemandZones([
     ...candles,
-    candle(START + 10 * HOUR, 114, 115, 100, 103),
+    candle(START + 10 * HOUR, 108, 109, 99, 100),
   ], { lookback: 1, maxAgeCandles: 100 })
   assert.equal(filled.demand, null, 'a same-timeframe filled zone must leave the entry overview')
   assert.equal(filled.latestValidDemand.filledByOwnTimeframeClose, true)
@@ -272,8 +273,8 @@ test('supply and demand zones stay valid unless their own timeframe closes throu
 
   const invalidated = activeSupplyDemandZones([
     ...candles,
-    candle(START + 10 * HOUR, 114, 116, 97, 98),
-    candle(START + 11 * HOUR, 98, 108, 96, 106),
+    candle(START + 10 * HOUR, 108, 109, 96, 97),
+    candle(START + 11 * HOUR, 97, 108, 96, 106),
   ], { lookback: 1, maxAgeCandles: 100 })
   assert.equal(invalidated.demand, null)
   assert.equal(invalidated.latestValidDemand, null)

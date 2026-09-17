@@ -8,6 +8,50 @@ import { candle, HOUR, START } from './helpers.mjs'
 
 const silent = { info() {}, warn() {}, error() {} }
 
+test('paper executor marks an FX trade on its own candles and takes TP1 before TP2', async () => {
+  const store = { balanceSats: 1_000_000, trades: [], nextId: 1 }
+  const executor = createPaperExecutor({ store, feeRate: 0.0006, now: () => START + 10 * HOUR })
+  const trade = await executor.openPosition({
+    pricingModel: 'linear-usd',
+    strategyId: 'price-action-structure-v1',
+    assetSymbol: 'AUDUSD',
+    timeframeId: '4h',
+    signalKey: 'aud-setup',
+    signalCandleTime: START,
+    side: 'long',
+    entry: 0.71,
+    stop: 0.70,
+    takeProfit: 0.74,
+    tp1: 0.72,
+    tp2: 0.74,
+    quantityUsd: 100,
+    marginSats: 25_000,
+    leverage: 4,
+    liquidation: 0.5325,
+    quoteSatsPerUsd: 1250,
+  })
+  executor.markPriceActionPositions({
+    assets: [{ symbol: 'AUDUSD', trends: { '4h': { chartCandles: [
+      candle(START, 0.71, 0.715, 0.708, 0.712),
+      candle(START + 4 * HOUR, 0.712, 0.725, 0.711, 0.721),
+    ] } } }],
+  })
+  assert.equal(trade.status, 'running')
+  assert.equal(trade.tp1Taken, true)
+  assert.equal(trade.remainingQuantityUsd, 50)
+  assert.ok(trade.marginSats < trade.initialMarginSats)
+
+  executor.markPriceActionPositions({
+    assets: [{ symbol: 'AUDUSD', trends: { '4h': { chartCandles: [
+      candle(START + 8 * HOUR, 0.721, 0.742, 0.720, 0.74),
+    ] } } }],
+  })
+  assert.equal(trade.status, 'closed')
+  assert.equal(trade.exitReason, 'take_profit')
+  assert.ok(trade.plSats > 0)
+  assert.ok(store.balanceSats > 1_000_000)
+})
+
 const stubClient = (overrides = {}) => ({
   network: 'testnet4',
   getAccount: async () => ({ balance: 100_000, username: 'tester' }),

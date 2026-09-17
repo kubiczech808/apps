@@ -19,7 +19,7 @@ import { createLnMarketsExecutor } from './executor-lnm.mjs'
 import { createPaperExecutor } from './executor-paper.mjs'
 import { fetchFundingSettlements } from './funding.mjs'
 import { atr, lastDefined, marketStructure } from './priceaction.mjs'
-import { planPosition, SATS_PER_BTC } from './risk.mjs'
+import { planLinearPosition, planPosition, SATS_PER_BTC } from './risk.mjs'
 import { ceilPrice, floorPrice, roundPrice } from './price.mjs'
 import { LEGACY_PRICE_ACTION_ID, strategyConfig } from './strategy-registry.mjs'
 import {
@@ -41,6 +41,110 @@ import {
 
 export const roundStop = (side, price) => (side === 'long' ? floorPrice(price) : ceilPrice(price))
 export const roundTarget = (side, price) => (side === 'long' ? ceilPrice(price) : floorPrice(price))
+
+const PRICE_ACTION_TIMEFRAME_PRIORITY = { '1h': 1, '4h': 2, '1d': 3 }
+
+export const executeReadyPriceActionProfiles = async ({
+  executor,
+  matrix,
+  trades = [],
+  equitySats,
+  btcPrice,
+  settings,
+  dryRun = false,
+} = {}) => {
+  if (!matrix?.assets || !settings?.enabled) return []
+  const existingSignals = new Set(trades.map((trade) => trade.signalKey).filter(Boolean))
+  const openAssets = new Set(
+    trades
+      .filter((trade) => trade.status === 'running' && trade.strategyId === PRICE_ACTION_STRUCTURE_ID)
+      .map((trade) => trade.assetSymbol)
+      .filter(Boolean)
+  )
+  const outcomes = []
+
+  for (const asset of matrix.assets) {
+    if (openAssets.has(asset.symbol)) continue
+    const candidates = Object.entries(asset.trends ?? {})
+      .map(([timeframeId, item]) => ({ timeframeId, item, profile: item?.tradeProfile }))
+      .filter(({ profile }) => profile?.status === 'ready')
+      .filter(({ profile }) => [profile.entry, profile.stop, profile.tp1, profile.tp2, profile.weightedTarget].every(Number.isFinite))
+      .sort((left, right) =>
+        (PRICE_ACTION_TIMEFRAME_PRIORITY[left.timeframeId] ?? 99) - (PRICE_ACTION_TIMEFRAME_PRIORITY[right.timeframeId] ?? 99)
+      )
+    const candidate = candidates[0]
+    if (!candidate) continue
+
+    const { timeframeId, item, profile } = candidate
+    const zoneIdentity = profile.zone?.firstTime ?? profile.zone?.lastTime ?? profile.zone?.firstIndex ?? 'zone'
+    const signalKey = [PRICE_ACTION_STRUCTURE_ID, asset.symbol, timeframeId, profile.side, zoneIdentity, profile.entry].join(':')
+    if (existingSignals.has(signalKey)) continue
+
+    const plan = planLinearPosition({
+      side: profile.side,
+      entry: profile.entry,
+      stop: profile.stop,
+      takeProfit: profile.weightedTarget,
+      equitySats,
+      btcPrice,
+      settings: {
+        ...(settings.risk ?? {}),
+        riskPct: Number(profile.riskPct) || Number(settings.priceActionStructure?.riskPct) || 1,
+      },
+    })
+    if (!plan.ok) {
+      outcomes.push({ assetSymbol: asset.symbol, timeframeId, action: 'rejected', reason: plan.reason })
+      continue
+    }
+    const minRewardRisk = Number(profile.minRewardRisk) || 2
+    if (!(profile.rewardRisk >= minRewardRisk)) {
+      outcomes.push({ assetSymbol: asset.symbol, timeframeId, action: 'rejected', reason: `R/R ${profile.rewardRisk} is below ${minRewardRisk}:1` })
+      continue
+    }
+
+    const order = {
+      ...plan,
+      takeProfit: profile.tp2,
+      tp1: profile.tp1,
+      tp2: profile.tp2,
+      assetSymbol: asset.symbol,
+      timeframeId,
+      strategyId: PRICE_ACTION_STRUCTURE_ID,
+      signalKey,
+      signalCandleTime: item.asOf ?? null,
+    }
+    if (dryRun) {
+      outcomes.push({ assetSymbol: asset.symbol, timeframeId, action: 'would_open', plan: order })
+      continue
+    }
+    let opened
+    try {
+      opened = await executor.openPosition(order)
+    } catch (error) {
+      outcomes.push({ assetSymbol: asset.symbol, timeframeId, action: 'rejected', reason: error.message })
+      continue
+    }
+    Object.assign(opened, {
+      assetSymbol: asset.symbol,
+      timeframeId,
+      strategyId: PRICE_ACTION_STRUCTURE_ID,
+      signalKey,
+      signalCandleTime: item.asOf ?? null,
+      tp1: profile.tp1,
+      tp2: profile.tp2,
+      plan: {
+        reason: `${profile.side} ${item.reason ?? ''}`.trim(),
+        rr: profile.rewardRisk,
+        riskSats: plan.riskSats,
+      },
+    })
+    trades.push(opened)
+    existingSignals.add(signalKey)
+    openAssets.add(asset.symbol)
+    outcomes.push({ assetSymbol: asset.symbol, timeframeId, action: 'opened', position: opened })
+  }
+  return outcomes
+}
 
 export const readConfig = (env = process.env) => ({
   apiUrl: env.BOT_API_URL || '',
@@ -354,7 +458,7 @@ export const runPass = async ({
       executor.mark(market.ltf)
     }
 
-    const [account, trades] = await Promise.all([executor.getAccount(), executor.listTrades()])
+    let [account, trades] = await Promise.all([executor.getAccount(), executor.listTrades()])
     state.account = account
 
     const commandResults = await applyCommands({
@@ -408,9 +512,9 @@ export const runPass = async ({
     }
 
     const changed = managed.length > 0 || commandResults.length > 0
-    const refreshed = changed && executor.live ? await executor.listTrades() : trades
-    const running = refreshed.running
-    const closed = capClosed(refreshed.closed)
+    let refreshed = changed && executor.live ? await executor.listTrades() : trades
+    let running = refreshed.running
+    let closed = capClosed(refreshed.closed)
 
     const structure = marketStructure(market.htf, { lookback: settings.strategy.htfLookback })
     const ltfAtr = lastDefined(atr(market.ltf, 14))
@@ -425,6 +529,7 @@ export const runPass = async ({
       asOf: isoNow(market.ltf.at(-1)?.time ?? now),
     }
 
+    let priceActionExecutions = []
     try {
       const previousPriceActionMatrix = state.priceActionMatrix
       state.priceActionMatrix = await buildPriceActionMatrix({
@@ -442,6 +547,18 @@ export const runPass = async ({
         refreshed: state.priceActionMatrix !== previousPriceActionMatrix,
         refreshMinutes: state.settings.priceActionStructure?.refreshMinutes ?? 15,
         status: 'ok',
+      }
+
+      // PA positions use their own asset/timeframe candles. Never walk an FX
+      // position through BTCUSD just because both share the paper account.
+      if (!executor.live && typeof executor.markPriceActionPositions === 'function') {
+        executor.markPriceActionPositions(state.priceActionMatrix)
+        refreshed = await executor.listTrades()
+        trades = refreshed
+        running = refreshed.running
+        closed = capClosed(refreshed.closed)
+        account = await executor.getAccount()
+        state.account = account
       }
 
       // PA invalidation belongs to an already-open PA trade. Entry profiles
@@ -487,6 +604,28 @@ export const runPass = async ({
           fingerprint,
         })
       }
+
+
+      if (mode === 'paper') {
+        priceActionExecutions = await executeReadyPriceActionProfiles({
+          executor,
+          matrix: state.priceActionMatrix,
+          trades: [...running, ...(refreshed.open ?? []), ...closed],
+          equitySats: account.equitySats,
+          btcPrice: price,
+          settings,
+          dryRun: config.dryRun,
+        })
+        for (const outcome of priceActionExecutions) {
+          if (outcome.action === 'opened' && !running.some((position) => position.id === outcome.position.id)) {
+            running.push(outcome.position)
+          }
+        }
+        if (priceActionExecutions.some((outcome) => outcome.action === 'opened')) {
+          account = await executor.getAccount()
+          state.account = account
+        }
+      }
     } catch (error) {
       state.priceActionMatrixError = error.message
       state.priceActionEntryCheck = {
@@ -498,8 +637,7 @@ export const runPass = async ({
         error: error.message,
       }
       logger.warn(`Price action matrix failed: ${error.message}`)
-    }
-
+      }
     let decision = activeStrategy.module.evaluateEntry({
       htfCandles: market.htf,
       ltfCandles: market.ltf,
@@ -561,8 +699,17 @@ export const runPass = async ({
         logger.info(`Opened ${run.reason}`)
       }
     } else {
-      run.action = managed.length || bracketActions.length || commandResults.length ? 'managed' : 'none'
-      run.reason = gates.length ? gates.join('; ') : decision.reason
+      const paOpened = priceActionExecutions.filter((outcome) => outcome.action === 'opened')
+      const paRejected = priceActionExecutions.filter((outcome) => outcome.action === 'rejected')
+      if (paOpened.length) {
+        run.action = 'opened'
+        run.reason = paOpened.map((outcome) => `${outcome.assetSymbol} ${outcome.timeframeId.toUpperCase()}`).join(', ')
+      } else {
+        run.action = managed.length || bracketActions.length || commandResults.length ? 'managed' : 'none'
+        run.reason = paRejected.length
+          ? paRejected.map((outcome) => `${outcome.assetSymbol} ${outcome.timeframeId.toUpperCase()}: ${outcome.reason}`).join('; ')
+          : gates.length ? gates.join('; ') : decision.reason
+      }
     }
 
     state.positions = { running, orders: refreshed.open, closed }
@@ -589,6 +736,7 @@ export const runPass = async ({
     state.status = settings.enabled ? 'running' : 'paused'
     run.managed = managed
     run.brackets = bracketActions
+    run.priceActionExecutions = priceActionExecutions
     recordEquity(state, account.equitySats, now)
   } catch (error) {
     run.action = 'error'

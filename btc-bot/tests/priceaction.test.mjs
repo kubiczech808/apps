@@ -3,7 +3,7 @@ import test from 'node:test'
 import {
   alternatingSwings,
   atr,
-  buildZones,
+  buildFvgSupplyDemandZones,
   fairValueGaps,
   sweptPreviousSwing,
   candleSignal,
@@ -67,12 +67,32 @@ test('a close through the last swing low of an uptrend is a change of character'
   assert.equal(marketStructure(candles).event, 'CHoCH_DOWN')
 })
 
-test('repeated turns at one price merge into a single zone with a touch count', () => {
-  const candles = zigzag([120, 100, 118, 100.5, 119, 100.2, 130], { steps: 6 })
-  const demand = buildZones(candles).filter((zone) => zone.type === 'demand')
-  const nearHundred = demand.filter((zone) => zone.low < 103)
-  assert.equal(nearHundred.length, 1, 'three turns at ~100 should be one zone')
-  assert.ok(nearHundred[0].touches >= 2, `expected repeat touches, got ${nearHundred[0].touches}`)
+test('ordinary turns without an impulsive three-candle FVG are not supply/demand zones', () => {
+  const candles = [
+    candle(START, 105, 106, 99, 100),
+    candle(START + HOUR, 100, 106, 99, 105),
+    candle(START + 2 * HOUR, 105, 106, 100, 101),
+    candle(START + 3 * HOUR, 101, 106, 100, 105),
+    candle(START + 4 * HOUR, 105, 106, 99, 100),
+  ]
+  assert.deepEqual(buildFvgSupplyDemandZones(candles), [])
+})
+
+test('a zone is the base of displacement that creates the three-candle FVG', () => {
+  const candles = [
+    candle(START, 100, 101, 98, 99),
+    candle(START + HOUR, 99, 111, 99, 110),
+    candle(START + 2 * HOUR, 109, 113, 105, 112),
+  ]
+  const [zone] = buildFvgSupplyDemandZones(candles)
+  assert.equal(zone.type, 'demand')
+  assert.deepEqual({ low: zone.low, high: zone.high }, { low: 98, high: 100 })
+  assert.deepEqual(zone.baseIndexes, [0])
+  assert.deepEqual(zone.definingIndexes, [0, 1, 2])
+  assert.deepEqual(
+    { direction: zone.fvg.direction, low: zone.fvg.low, high: zone.fvg.high },
+    { direction: 'bullish', low: 101, high: 105 }
+  )
 })
 
 test('a bullish engulfing needs the body to cover the previous one', () => {
@@ -172,12 +192,18 @@ test('a gap price has traded back through is marked filled', () => {
   assert.equal(gap.filled, true)
 })
 
-test('zones carry whether they swept liquidity and whether an imbalance sits at them', () => {
-  const candles = zigzag([120, 100, 118, 100.5, 119, 100.2, 130], { steps: 6 })
-  const zones = buildZones(candles)
+test('every published zone carries its originating FVG instead of a nearby-gap flag', () => {
+  const candles = [
+    candle(START, 100, 101, 98, 99),
+    candle(START + HOUR, 99, 111, 99, 110),
+    candle(START + 2 * HOUR, 109, 113, 105, 112),
+  ]
+  const zones = buildFvgSupplyDemandZones(candles)
   assert.ok(zones.length > 0)
   for (const zone of zones) {
-    assert.equal(typeof zone.swept, 'boolean', 'every zone states whether it took the liquidity')
-    assert.equal(typeof zone.imbalance, 'boolean', 'every zone states whether it has an imbalance')
+    assert.equal(zone.imbalance, true)
+    assert.ok(zone.fvg)
+    assert.equal(zone.fvg.direction, zone.type === 'demand' ? 'bullish' : 'bearish')
+    assert.equal(zone.definingIndexes.length, 3)
   }
 })

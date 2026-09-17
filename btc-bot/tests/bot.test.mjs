@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { applyCommands, readConfig, reconcileBrackets, roundStop, roundTarget, runPass, strategyIdForPosition } from '../src/bot.mjs'
+import { applyCommands, executeReadyPriceActionProfiles, readConfig, reconcileBrackets, roundStop, roundTarget, runPass, strategyIdForPosition } from '../src/bot.mjs'
 import { LEGACY_PRICE_ACTION_ID } from '../src/strategy-registry.mjs'
-import { appendCandle, zigzag } from './helpers.mjs'
+import { appendCandle, START, zigzag } from './helpers.mjs'
 
 const HOUR = 3600_000
 
@@ -127,6 +127,54 @@ const noQualityFilters = (state = {}) => ({
   paper: { balanceSats: 0, trades: [], nextId: 1, lastFundingAt: null },
 })
 const nowAfter = (candles) => candles.at(-1).time + HOUR + 60_000
+
+test('ready PA profiles open one paper trade per asset and never duplicate the signal', async () => {
+  const calls = []
+  const executor = {
+    openPosition: async (plan) => {
+      calls.push(plan)
+      return { id: `PA-${calls.length}`, status: 'running', side: plan.side, entry: plan.entry }
+    },
+  }
+  const profile = {
+    status: 'ready', side: 'long', entry: 0.7131, stop: 0.7060,
+    tp1: 0.7202, tp2: 0.7344, weightedTarget: 0.7273,
+    rewardRisk: 2, minRewardRisk: 2, riskPct: 1,
+    zone: { firstTime: START },
+  }
+  const matrix = {
+    assets: [{
+      symbol: 'AUDUSD',
+      trends: {
+        '1h': { asOf: START + HOUR, reason: 'HH + HL', tradeProfile: profile },
+        '4h': { asOf: START + 4 * HOUR, reason: 'HH + HL', tradeProfile: { ...profile, entry: 0.7140 } },
+      },
+    }],
+  }
+  const settings = {
+    enabled: true,
+    risk: { market: 'futures', riskPct: 1, feeRate: 0.0006, minMarginSats: 1 },
+    priceActionStructure: { riskPct: 1 },
+  }
+  const first = await executeReadyPriceActionProfiles({
+    executor, matrix, trades: [], equitySats: 1_000_000, btcPrice: 80_000, settings,
+  })
+  assert.equal(calls.length, 1)
+  assert.equal(calls[0].assetSymbol, 'AUDUSD')
+  assert.equal(calls[0].timeframeId, '1h')
+  assert.equal(first[0].action, 'opened')
+
+  const second = await executeReadyPriceActionProfiles({
+    executor,
+    matrix,
+    trades: [{ ...first[0].position, status: 'running' }],
+    equitySats: 1_000_000,
+    btcPrice: 80_000,
+    settings,
+  })
+  assert.equal(second.length, 0)
+  assert.equal(calls.length, 1)
+})
 
 test('a queued backtest starts research without touching an exchange order', async () => {
   const actions = []

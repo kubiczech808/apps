@@ -227,3 +227,93 @@ export const planPosition = ({ side, entry, stop, takeProfit, equitySats, settin
     notionalCapped,
   }
 }
+
+/**
+ * Size a linear USD-quoted paper trade (FX or spot-style crypto CFD).
+ *
+ * The production account is still reported in sats, so the BTC/USD mark at
+ * entry fixes the conversion for this simulated trade. This must not use the
+ * inverse-contract formula above: applying 1/price P/L to EURUSD is the exact
+ * category error that previously prevented multi-asset paper execution.
+ */
+export const planLinearPosition = ({
+  side,
+  entry,
+  stop,
+  takeProfit,
+  equitySats,
+  btcPrice,
+  settings = {},
+}) => {
+  const config = { ...DEFAULT_RISK_SETTINGS, ...settings }
+  entry = roundPrice(entry)
+  stop = side === 'long' ? floorPrice(stop) : ceilPrice(stop)
+  takeProfit = side === 'long' ? floorPrice(takeProfit) : ceilPrice(takeProfit)
+  if (!(entry > 0) || !(stop > 0) || !(takeProfit > 0) || !(btcPrice > 0) || !(equitySats > 0)) {
+    return { ok: false, reason: 'linear paper trade needs positive prices, BTC conversion and equity' }
+  }
+  if (side === 'long' && !(stop < entry && takeProfit > entry)) {
+    return { ok: false, reason: 'linear long needs stop below and take profit above entry' }
+  }
+  if (side === 'short' && !(stop > entry && takeProfit < entry)) {
+    return { ok: false, reason: 'linear short needs stop above and take profit below entry' }
+  }
+
+  const stopFraction = Math.abs(entry - stop) / entry
+  const rewardFraction = Math.abs(takeProfit - entry) / entry
+  if (!(stopFraction > 0) || !(rewardFraction > 0)) {
+    return { ok: false, reason: 'linear stop or reward distance is zero' }
+  }
+  const quoteSatsPerUsd = SATS_PER_BTC / btcPrice
+  const riskSats = equitySats * (config.riskPct / 100)
+  const roundTripRiskPerUsd = (stopFraction + config.feeRate * 2) * quoteSatsPerUsd
+  let quantityUsd = riskSats / roundTripRiskPerUsd
+  const maxNotionalUsd = (equitySats / quoteSatsPerUsd) * (config.maxNotionalPct / 100)
+  let notionalCapped = false
+  if (quantityUsd > maxNotionalUsd) {
+    quantityUsd = maxNotionalUsd
+    notionalCapped = true
+  }
+  quantityUsd = Math.floor(quantityUsd * 100) / 100
+  if (quantityUsd < config.minQuantityUsd) {
+    return { ok: false, reason: `position would be ${quantityUsd} USD, below the ${config.minQuantityUsd} USD minimum` }
+  }
+
+  const spot = config.market === 'spot'
+  const leverageCeiling = spot ? 1 : 1 / (stopFraction * config.liquidationSafety)
+  const leverage = spot ? 1 : Math.max(1, Math.min(config.maxLeverage, Math.floor(leverageCeiling)))
+  const marginSats = Math.ceil((quantityUsd / leverage) * quoteSatsPerUsd)
+  if (marginSats < config.minMarginSats) {
+    return { ok: false, reason: `margin ${marginSats} sats is below the ${config.minMarginSats} sats minimum` }
+  }
+  if (marginSats > equitySats) {
+    return { ok: false, reason: `margin ${marginSats} sats exceeds ${Math.floor(equitySats)} sats of equity` }
+  }
+
+  const actualRiskSats = quantityUsd * stopFraction * quoteSatsPerUsd
+  const rewardSats = quantityUsd * rewardFraction * quoteSatsPerUsd
+  const feeSats = quantityUsd * config.feeRate * 2 * quoteSatsPerUsd
+  return {
+    ok: true,
+    pricingModel: 'linear-usd',
+    market: config.market,
+    side,
+    entry,
+    stop,
+    takeProfit,
+    quantityUsd,
+    leverage,
+    marginSats,
+    riskSats: actualRiskSats + feeSats,
+    rewardSats,
+    feeSats,
+    rr: rewardSats / actualRiskSats,
+    rrNetOfFees: (rewardSats - feeSats) / (actualRiskSats + feeSats),
+    stopDistancePct: stopFraction,
+    liquidation: roundPrice(side === 'long'
+      ? entry * (1 - 1 / leverage)
+      : entry * (1 + 1 / leverage)),
+    quoteSatsPerUsd,
+    notionalCapped,
+  }
+}

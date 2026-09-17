@@ -1,9 +1,9 @@
 import { aggregate, HOUR_MS } from './candles.mjs'
 import { ceilPrice, floorPrice, normalizeCandlePrices, roundPrice } from './price.mjs'
-import { buildZones, candleSignal, marketStructure } from './priceaction.mjs'
+import { buildFvgSupplyDemandZones, candleSignal, marketStructure } from './priceaction.mjs'
 
 export const PRICE_ACTION_STRUCTURE_ID = 'price-action-structure-v1'
-export const PRICE_ACTION_MATRIX_SCHEMA = 17
+export const PRICE_ACTION_MATRIX_SCHEMA = 18
 export const PRICE_ACTION_CHART_CANDLE_LIMITS = {
   '1h': 8760,
   '4h': 2190,
@@ -357,6 +357,15 @@ const zoneSummary = (zone, candles, price) => ({
   touches: zone.touches,
   swept: zone.swept,
   imbalance: zone.imbalance,
+  baseCandles: (zone.baseIndexes ?? [])
+    .map((index) => definingCandleSummary(index, candles))
+    .filter(Boolean),
+  fvg: zone.fvg ? {
+    ...zone.fvg,
+    definingCandles: (zone.definingIndexes ?? [])
+      .map((index) => definingCandleSummary(index, candles))
+      .filter(Boolean),
+  } : null,
   firstTime: candles[zone.firstIndex]?.time ?? null,
   lastTime: zone.lastTime ?? candles[zone.lastIndex]?.time ?? null,
   firstIndex: zone.firstIndex,
@@ -372,7 +381,7 @@ const zoneSummary = (zone, candles, price) => ({
 
 export const activeSupplyDemandZones = (candles, { lookback = 2, maxAgeCandles = 400 } = {}) => {
   const price = candles.at(-1)?.close ?? null
-  const zones = buildZones(candles, { lookback, maxAgeCandles })
+  const zones = buildFvgSupplyDemandZones(candles, { lookback, maxAgeCandles })
     .map((zone) => zoneSummary(zone, candles, price))
     .filter((zone) => !zone.invalidatedByOwnTimeframeClose)
 
@@ -395,7 +404,7 @@ export const activeSupplyDemandZones = (candles, { lookback = 2, maxAgeCandles =
     nearbySupply: nearby('supply'),
     unfilledCount: unfilled.length,
     validCount: zones.length,
-    rule: 'Zóna je invalidovaná jen close průrazem na vlastním timeframe; dotek/filled na nižším timeframe ji neruší.',
+    rule: 'Zóna vzniká jen jako base impulsního breakoutu s 3svíčkovým FVG. Invaliduje ji close průraz na vlastním timeframe; dotek na nižším timeframe ji neruší.',
   }
 }
 
@@ -1233,7 +1242,7 @@ export const buildPriceActionMatrix = async ({
 
 export const evaluateEntry = () => ({
   action: 'none',
-  reason: 'Price action structure publishes periodic trade profiles; automatic order execution is still disabled until the profile is backtested and explicitly selected.',
+  reason: 'Price action matrix entries are executed by the multi-asset paper portfolio after all asset/timeframe profiles are evaluated.',
   context: null,
 })
 

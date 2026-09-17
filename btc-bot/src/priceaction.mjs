@@ -15,8 +15,8 @@
 //              direction of the trend — continuation.
 //   CHoCH      change of character: a close beyond the last counter-swing —
 //              the first evidence the trend is failing.
-//   zone       a price band where swings clustered, i.e. where the market has
-//              repeatedly turned. Demand below, supply above.
+//   zone       the base immediately before an impulsive departure that leaves
+//              a three-candle fair value gap. Demand below, supply above.
 
 export const body = (candle) => Math.abs(candle.close - candle.open)
 export const range = (candle) => candle.high - candle.low
@@ -145,16 +145,96 @@ export const marketStructure = (candles, { lookback = 2 } = {}) => {
   return { bias, event, swings, highs, lows, lastHigh, previousHigh, lastLow, previousLow }
 }
 
+/**
+ * Supply/demand is the origin of displacement, not every swing pivot.
+ *
+ * The sequence required here is:
+ *   base -> directional displacement -> three-candle FVG confirmation.
+ * The FVG's middle candle is the displacement candle. Its first candle, or the
+ * nearest opposite/indecision candle immediately behind it, is the base. This
+ * keeps an unrelated gap elsewhere in the chart from blessing an ordinary
+ * swing as a zone.
+ */
+export const buildFvgSupplyDemandZones = (candles, {
+  maxAgeCandles = 400,
+  minGapAtr = 0.1,
+  minDisplacementAtr = 0.8,
+  maxBaseCandles = 3,
+} = {}) => {
+  const atrSeries = atr(candles, 14)
+  const reference = lastDefined(atrSeries) ?? (candles.at(-1)?.close ?? 0) * 0.005
+  const oldestIndex = Math.max(0, candles.length - maxAgeCandles)
+  const gaps = fairValueGaps(candles, { atrValue: reference, minSizeAtr: minGapAtr })
+  const zones = []
+
+  for (const gap of gaps) {
+    const displacementIndex = gap.index
+    const displacement = candles[displacementIndex]
+    const localAtr = atrSeries[displacementIndex] ?? reference
+    const directional = gap.direction === 'bullish' ? isBullish(displacement) : isBearish(displacement)
+    const bodyShare = range(displacement) > 0 ? body(displacement) / range(displacement) : 0
+    if (!directional || body(displacement) < localAtr * minDisplacementAtr || bodyShare < 0.5) continue
+
+    const firstFvgIndex = displacementIndex - 1
+    const searchStart = Math.max(oldestIndex, firstFvgIndex - Math.max(1, maxBaseCandles) + 1)
+    let baseIndex = null
+    for (let index = firstFvgIndex; index >= searchStart; index -= 1) {
+      const candidate = candles[index]
+      const opposite = gap.direction === 'bullish' ? !isBullish(candidate) : !isBearish(candidate)
+      const candidateBodyShare = range(candidate) > 0 ? body(candidate) / range(candidate) : 0
+      const indecision = candidateBodyShare <= 0.45
+      const compact = range(candidate) <= localAtr * 0.75 || range(candidate) <= range(displacement) * 0.5
+      if (opposite || indecision || compact) {
+        baseIndex = index
+        break
+      }
+    }
+    if (baseIndex === null) continue
+    const base = candles[baseIndex]
+    const brokeBase = gap.direction === 'bullish'
+      ? displacement.close > base.high
+      : displacement.close < base.low
+    if (!brokeBase || baseIndex < oldestIndex) continue
+
+    const type = gap.direction === 'bullish' ? 'demand' : 'supply'
+    const low = type === 'demand' ? base.low : Math.min(base.open, base.close)
+    const high = type === 'demand' ? Math.max(base.open, base.close) : base.high
+    if (!(high > low)) continue
+
+    const confirmationIndex = gap.confirmationIndex ?? displacementIndex + 1
+    const later = candles.slice(confirmationIndex + 1)
+    zones.push({
+      type,
+      low,
+      high,
+      touches: later.filter((candle) => candle.low <= high && candle.high >= low).length,
+      swept: false,
+      imbalance: true,
+      firstIndex: baseIndex,
+      lastIndex: confirmationIndex,
+      lastTime: candles[confirmationIndex]?.time ?? displacement.time,
+      baseIndexes: [baseIndex],
+      definingIndexes: gap.definingIndexes,
+      fvg: {
+        direction: gap.direction,
+        low: gap.low,
+        high: gap.high,
+        index: displacementIndex,
+        firstIndex: gap.firstIndex,
+        confirmationIndex,
+        filled: gap.filled,
+      },
+    })
+  }
+
+  return zones.sort((a, b) => a.low - b.low || a.lastIndex - b.lastIndex)
+}
+
 const overlaps = (a, b) => a.low <= b.high && b.low <= a.high
 
 /**
- * Cluster swing pivots into supply/demand bands.
- *
- * A single pivot is a level; a level the market has turned at more than once is
- * a zone, and the touch count is what separates the two. The band is taken from
- * the pivot candle's body-to-wick extreme rather than from the pivot price
- * alone: an order sitting exactly on the tick of an old low fills on noise,
- * whereas the band is where the reaction actually happened.
+ * Legacy clustered swing zones used only by the reproducible BTC v0 strategy.
+ * PA-1 deliberately uses `buildFvgSupplyDemandZones` instead.
  */
 export const buildZones = (candles, { lookback = 2, tolerance, maxAgeCandles = 400 } = {}) => {
   const swings = findSwings(candles, lookback)
@@ -162,11 +242,8 @@ export const buildZones = (candles, { lookback = 2, tolerance, maxAgeCandles = 4
   const reference = lastDefined(atrSeries) ?? (candles.at(-1)?.close ?? 0) * 0.005
   const band = tolerance ?? reference * 0.75
   const oldestIndex = Math.max(0, candles.length - maxAgeCandles)
-
   const gaps = fairValueGaps(candles, { atrValue: reference, minSizeAtr: 0.1 })
 
-  // Each pivot is judged against the previous pivot of the same kind, so the
-  // sweep test needs the whole ordered list rather than a candle window.
   const previousSameKind = new Map()
   let lastLow = null
   let lastHigh = null
@@ -183,10 +260,9 @@ export const buildZones = (candles, { lookback = 2, tolerance, maxAgeCandles = 4
       const bodyLow = Math.min(candle.open, candle.close)
       const bodyHigh = Math.max(candle.open, candle.close)
       const swept = sweptPreviousSwing(swing, previousSameKind.get(swing))
-      const zone =
-        swing.kind === 'low'
-          ? { type: 'demand', low: candle.low, high: Math.max(bodyLow, candle.low + band * 0.5), swing }
-          : { type: 'supply', low: Math.min(bodyHigh, candle.high - band * 0.5), high: candle.high, swing }
+      const zone = swing.kind === 'low'
+        ? { type: 'demand', low: candle.low, high: Math.max(bodyLow, candle.low + band * 0.5), swing }
+        : { type: 'supply', low: Math.min(bodyHigh, candle.high - band * 0.5), high: candle.high, swing }
       return {
         ...zone,
         swept,
@@ -210,8 +286,6 @@ export const buildZones = (candles, { lookback = 2, tolerance, maxAgeCandles = 4
       match.touches += 1
       match.lastIndex = Math.max(match.lastIndex, item.swing.index)
       match.lastTime = Math.max(match.lastTime, item.swing.time)
-      // A merged zone is as good as its best constituent: one qualifying turn
-      // is enough to say the liquidity was taken or the move was imbalanced.
       match.swept = match.swept || item.swept
       match.imbalance = match.imbalance || item.imbalance
       continue
@@ -229,7 +303,6 @@ export const buildZones = (candles, { lookback = 2, tolerance, maxAgeCandles = 4
       definingIndexes: item.definingIndexes,
     })
   }
-
   return zones.sort((a, b) => a.low - b.low)
 }
 
@@ -353,9 +426,25 @@ export const fairValueGaps = (candles, { minSizeAtr = 0, atrValue } = {}) => {
     const after = candles[index + 1]
 
     if (after.low > before.high && after.low - before.high > floor) {
-      gaps.push({ index, direction: 'bullish', low: before.high, high: after.low })
+      gaps.push({
+        index,
+        firstIndex: index - 1,
+        confirmationIndex: index + 1,
+        definingIndexes: [index - 1, index, index + 1],
+        direction: 'bullish',
+        low: before.high,
+        high: after.low,
+      })
     } else if (before.low > after.high && before.low - after.high > floor) {
-      gaps.push({ index, direction: 'bearish', low: after.high, high: before.low })
+      gaps.push({
+        index,
+        firstIndex: index - 1,
+        confirmationIndex: index + 1,
+        definingIndexes: [index - 1, index, index + 1],
+        direction: 'bearish',
+        low: after.high,
+        high: before.low,
+      })
     }
   }
 

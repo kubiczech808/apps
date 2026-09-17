@@ -1,8 +1,25 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { liquidationPrice, planPosition, pnlSats, SATS_PER_BTC } from '../src/risk.mjs'
+import { liquidationPrice, planLinearPosition, planPosition, pnlSats, SATS_PER_BTC } from '../src/risk.mjs'
 
 const EQUITY = 100_000 // sats, roughly 100 USD at 100k BTC
+
+test('linear FX paper sizing risks one percent without using inverse BTC math', () => {
+  const plan = planLinearPosition({
+    side: 'long',
+    entry: 0.7131,
+    stop: 0.7060,
+    takeProfit: 0.7273,
+    equitySats: 1_000_000,
+    btcPrice: 80_000,
+    settings: { market: 'futures', riskPct: 1, feeRate: 0.0006, minMarginSats: 1 },
+  })
+  assert.equal(plan.ok, true)
+  assert.equal(plan.pricingModel, 'linear-usd')
+  assert.ok(plan.riskSats <= 10_100)
+  assert.ok(plan.riskSats >= 9_800)
+  assert.ok(plan.rr >= 1.9)
+})
 
 test('inverse PnL has the right sign on both sides', () => {
   assert.ok(pnlSats({ side: 'long', entry: 100_000, exit: 110_000, quantityUsd: 100 }) > 0)
