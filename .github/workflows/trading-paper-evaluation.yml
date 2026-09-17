@@ -15,7 +15,7 @@ on:
 concurrency:
   # This uploads paper state and mirrors it to the shared hosting/database.
   # Keep it behind the same lock as every other Trading writer.
-  group: trading-hosting-write-${{ github.ref }}
+  group: trading-hosting-write-2-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:

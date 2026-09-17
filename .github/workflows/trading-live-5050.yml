@@ -48,7 +48,7 @@ on:
 # and one constrained hosting account. Serialize every state-writing run with the
 # regular live workflow, scans and account syncs.
 concurrency:
-  group: trading-hosting-write-${{ github.ref }}
+  group: trading-hosting-write-2-${{ github.ref }}
   cancel-in-progress: false
 
 permissions:

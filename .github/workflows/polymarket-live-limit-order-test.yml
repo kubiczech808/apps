@@ -102,7 +102,7 @@ on:
 concurrency:
   # Every live portfolio uses the same funded wallet and the same constrained hosting.
   # Keep execution, state publication and MySQL writes out of parallel workflows.
-  group: trading-hosting-write-${{ github.ref }}
+  group: trading-hosting-write-2-${{ github.ref }}
   cancel-in-progress: false
 
 permissions:

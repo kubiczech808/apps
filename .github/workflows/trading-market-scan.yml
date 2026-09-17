@@ -48,7 +48,19 @@ permissions:
 concurrency:
   # Every state publication and MySQL ingest shares one constrained hosting account.
   # Serialising these jobs avoids concurrent FTP writes and PHP/MySQL batch storms.
-  group: trading-hosting-write-${{ github.ref }}
+  #
+  # The "-2-" is a deliberate rename, not decoration. A Trading Live Account run dispatched
+  # on 2026-09-13 sat in this group as `queued` for four days without ever being scheduled,
+  # and GitHub refuses to cancel it: "Cannot cancel a workflow run that has not been queued
+  # yet." A group allows one running plus one pending, so that zombie held the pending slot
+  # permanently -- and every run that arrived while another was executing was cancelled
+  # instead of waiting. Measured over the last 30 scans: 11 cancelled, 37%, six in a row
+  # between 13:24 and 13:56, which is what "the scraping stops sometimes" was.
+  #
+  # Renaming the group moves every trading writer into a fresh one together, which is why
+  # all six files change in the same commit: splitting them would put concurrent FTP writes
+  # back, which is the thing the group exists to prevent.
+  group: trading-hosting-write-2-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:

@@ -5250,8 +5250,8 @@ test("live entry protection serializes workflows and preserves pending bids", as
   assert.match(executorSource, /status: "duplicate_guard"/);
   assert.match(executorSource, /const orderManagement = \{ action: "NONE", reviews: \[\] \};/);
   assert.match(executorSource, /marketResolved === true/);
-  assert.match(primaryWorkflow, /group: trading-hosting-write-\$\{\{ github\.ref \}\}/);
-  assert.match(fixedWorkflow, /group: trading-hosting-write-\$\{\{ github\.ref \}\}/);
+  assert.match(primaryWorkflow, /group: trading-hosting-write[\w-]*-\$\{\{ github\.ref \}\}/);
+  assert.match(fixedWorkflow, /group: trading-hosting-write[\w-]*-\$\{\{ github\.ref \}\}/);
 });
 
 test("closed history: a later account sync enriches a row without moving its original close", () => {

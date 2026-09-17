@@ -104,3 +104,53 @@ test("deploy: the shape rules still cover the files that are not named literally
   assert.equal(verdicts["old-build-artifact.js"], false);
   assert.equal(verdicts["index.html.bak"], false);
 });
+
+// Every trading workflow that writes to the hosting has to sit in ONE concurrency group.
+//
+// The group exists because one constrained hosting account cannot take concurrent FTP
+// writes or MySQL batch storms, so two writers in different groups is the fault it was
+// built to prevent -- and that is exactly the fault a careless rename introduces, silently,
+// because nothing fails: both runs simply proceed.
+//
+// It was renamed once, deliberately: a Trading Live Account run dispatched on 2026-09-13
+// sat in the old group as `queued` for four days without being scheduled, and GitHub
+// refuses to cancel such a run. A group allows one running plus one pending, so it held the
+// pending slot permanently and every run arriving while another executed was cancelled --
+// 11 of the last 30 scans, six of them consecutively. Renaming moved every writer out
+// together. This test is what stops the next rename moving only some of them.
+test("hosting writes: every trading writer shares exactly one concurrency group", async () => {
+  const { readdir, readFile } = await import("node:fs/promises");
+  const directory = new URL("../../.github/workflows/", import.meta.url);
+  const names = (await readdir(directory)).filter((name) => name.endsWith(".yml"));
+
+  const groups = new Map();
+  for (const name of names) {
+    const source = await readFile(new URL(name, directory), "utf8");
+    const match = /group:\s*(trading-hosting-write[^\n]*)/.exec(source);
+    if (!match) continue;
+    const group = match[1].trim();
+    if (!groups.has(group)) groups.set(group, []);
+    groups.get(group).push(name);
+  }
+
+  assert.ok(groups.size > 0, "the hosting-write group must exist somewhere");
+  assert.equal(groups.size, 1,
+    `every writer must share one group, found: ${JSON.stringify([...groups.entries()], null, 1)}`);
+
+  const [[group, files]] = [...groups.entries()];
+  assert.match(group, /\$\{\{ github\.ref \}\}/,
+    "and it must be keyed by ref, or two branches serialise against each other");
+  // The six that write: the scan, both paper workflows, both live executors, and the
+  // account sync. A new writer added without joining them is the thing this catches.
+  assert.ok(files.length >= 6, `expected every writer in the group, got ${files.join(", ")}`);
+  for (const expected of [
+    "trading-market-scan.yml",
+    "trading-paper-bot.yml",
+    "trading-paper-evaluation.yml",
+    "trading-live-account.yml",
+    "trading-live-5050.yml",
+    "polymarket-live-limit-order-test.yml",
+  ]) {
+    assert.ok(files.includes(expected), `${expected} writes to the hosting and must be in the group`);
+  }
+});
