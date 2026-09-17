@@ -218,7 +218,7 @@ test('asset tickers open a timeframe price chart with supply and demand zones', 
   assert.match(js, /asset-structure-line asset-structure-\$\{trend\}/)
   assert.match(js, /asset-structure-line/)
   assert.match(js, /H flat/)
-  assert.match(js, /swing\.close > previousSameKind\.price/)
+  assert.match(js, /const label = swing\.label \|\| \(swing\.kind === 'high' \? 'H' : 'L'\)/)
   assert.match(js, /assetChartVisibleCandleCount/)
   assert.match(js, /candles = allCandles\.slice\(-assetChartVisibleCandleCount\)/)
   assert.match(js, /const minVisibleCandleCount = Math\.min\(allCandles\.length, 60\)/)
@@ -312,7 +312,7 @@ test('the first migrated publish persists the strategy-versioned settings', () =
 })
 
 test('the API refuses stale PA-1 runners before they overwrite current structure', () => {
-  assert.match(api, /const MIN_PRICE_ACTION_MATRIX_SCHEMA = 20/)
+  assert.match(api, /const MIN_PRICE_ACTION_MATRIX_SCHEMA = 21/)
   assert.match(api, /\$strategyId === 'price-action-structure-v1'/)
   assert.match(api, /\(int\) \$priceActionSchema < MIN_PRICE_ACTION_MATRIX_SCHEMA/)
   assert.match(api, /fail\(409, 'Runner uses an obsolete price-action matrix schema\.'\)/)

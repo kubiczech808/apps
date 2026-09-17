@@ -176,13 +176,22 @@ test('a recent close through a major counter-swing changes the established trend
   ]
   const after = classifyStructure(broken, { lookback: 2, minCandles: 20 })
   assert.equal(after.establishedTrend, 'up')
-  assert.equal(after.trend, 'flat')
+  assert.equal(after.trend, 'down')
+  assert.equal(after.structureConfirmed, false)
   assert.equal(after.event, 'CHoCH_DOWN')
   assert.equal(after.eventDetail.referencePrice, before.structure.low.current.price)
-  assert.match(after.reason, /nový směr zatím není potvrzen/)
+  assert.match(after.reason, /bias je down/)
+  const profile = evaluateTradeProfile({
+    item: after,
+    settings: { pullbackPct: 50, minRewardRisk: 2, riskPct: 1 },
+  })
+  assert.equal(profile.mode, 'formation')
+  assert.equal(profile.formationState, 'awaiting-confirmation')
+  assert.equal(profile.side, null)
+  assert.equal(profile.gates.find((gate) => gate.id === 'structure-confirmed').status, 'unmet')
 })
 
-test('mixed recent pivots are flat until a complete directional sequence forms', () => {
+test('mixed confirmed pivots are flat until a complete directional sequence forms', () => {
   const upWithPullback = classifyStructure(
     zigzag([100, 120, 110, 140, 125, 135, 130, 134], { steps: 8 }),
     { lookback: 2, minCandles: 20 }
@@ -198,6 +207,20 @@ test('mixed recent pivots are flat until a complete directional sequence forms',
   assert.equal(downWithBounce.structure.high.label, 'LH')
   assert.equal(downWithBounce.structure.low.label, 'HL')
   assert.equal(downWithBounce.trend, 'flat')
+  assert.equal(downWithBounce.establishedTrend, 'down')
+  assert.ok(downWithBounce.structure.recentSwings.every((swing) => swing.label))
+})
+
+test('an unconfirmed bounce from a new lower low keeps the established downtrend', () => {
+  const established = zigzag([160, 130, 150, 110, 140, 100], { steps: 8 })
+  const oneBounce = [
+    ...established,
+    candle(established.at(-1).time + HOUR, 100, 109, 99, 108),
+  ]
+  const result = classifyStructure(oneBounce, { lookback: 2, minCandles: 20 })
+  assert.equal(result.trend, 'down')
+  assert.equal(result.establishedTrend, 'down')
+  assert.equal(result.structure.protectedHigh.label, 'LH')
 })
 
 test('wide timeframe context uses a more responsive structural edge', () => {
@@ -207,7 +230,7 @@ test('wide timeframe context uses a more responsive structural edge', () => {
   )
 
   assert.equal(rangeAfterExpansion.structure.lookback, 42)
-  assert.equal(rangeAfterExpansion.structure.activeLookback, 21)
+  assert.equal(rangeAfterExpansion.structure.activeLookback, 11)
   assert.ok(rangeAfterExpansion.structure.swingCount > rangeAfterExpansion.structure.contextSwingCount)
   assert.equal(rangeAfterExpansion.structure.high.label, 'LH')
   assert.equal(rangeAfterExpansion.structure.low.label, 'HL')
@@ -735,10 +758,10 @@ test('price-action matrix covers BTCUSD and major FX pairs on 1H, 4H and 1D', as
     assert.deepEqual(Object.keys(asset.trends), ['1h', '4h', '1d'])
   }
   assert.equal(matrix.assets[0].trends['1h'].structure.lookback, 48)
-  assert.equal(matrix.assets[0].trends['1h'].structure.activeLookback, 24)
+  assert.equal(matrix.assets[0].trends['1h'].structure.activeLookback, 12)
   assert.equal(matrix.assets[0].trends['1h'].structure.historyDays, 60)
   assert.equal(matrix.assets[0].trends['4h'].structure.lookback, 42)
-  assert.equal(matrix.assets[0].trends['4h'].structure.activeLookback, 21)
+  assert.equal(matrix.assets[0].trends['4h'].structure.activeLookback, 11)
   assert.equal(matrix.assets[0].trends['4h'].structure.historyDays, 180)
   assert.equal(matrix.assets[0].trends['4h'].structure.zoneMaxAgeCandles, 1080)
   assert.ok(matrix.assets[0].trends['4h'].zones)

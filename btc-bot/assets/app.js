@@ -1400,13 +1400,8 @@ const renderAssetChart = () => {
       .filter((swing) => swing?.kind && Number.isFinite(swing.price) && swing.price > 0 && Number.isFinite(swing.time))
       .filter((swing) => swing.time >= candles[0].time && swing.time <= candles.at(-1).time)
       .sort((left, right) => left.time - right.time)
-      .map((swing, index, all) => {
-        const previousSameKind = [...all.slice(0, index)].reverse().find((candidate) => candidate.kind === swing.kind)
-        const label = swing.label || (previousSameKind
-          ? swing.kind === 'high'
-            ? (swing.close > previousSameKind.price ? 'HH' : 'LH')
-            : (swing.close < previousSameKind.price ? 'LL' : 'HL')
-          : swing.kind === 'high' ? 'H' : 'L')
+      .map((swing) => {
+        const label = swing.label || (swing.kind === 'high' ? 'H' : 'L')
         return { ...swing, label, x: xForTime(swing.time) }
       })
       .filter((swing) => swing.x !== null)

@@ -3,7 +3,7 @@ import { ceilPrice, floorPrice, normalizeCandlePrices, roundPrice } from './pric
 import { buildFvgSupplyDemandZones, candleSignal, marketStructure } from './priceaction.mjs'
 
 export const PRICE_ACTION_STRUCTURE_ID = 'price-action-structure-v1'
-export const PRICE_ACTION_MATRIX_SCHEMA = 20
+export const PRICE_ACTION_MATRIX_SCHEMA = 21
 export const PRICE_ACTION_CHART_CANDLE_LIMITS = {
   '1h': 8760,
   '4h': 2190,
@@ -217,16 +217,40 @@ const structureLeg = ({ previous, current, higherLabel, lowerLabel, breaksByClos
 const closeBreaksHigh = (current, previous) => current.candle?.close > previous.price
 const closeBreaksLow = (current, previous) => current.candle?.close < previous.price
 
+// These labels belong to the structural zigzag itself. The chart must never
+// re-derive them from a truncated set of visible pivots: doing so turned a
+// continuing downtrend into a flat/up line whenever its first reference high
+// scrolled out of the browser's small recent-swing window.
+const labelStructureSwings = (swings = []) => {
+  const labels = new Map()
+  let previousHigh = null
+  let previousLow = null
+  for (const swing of swings) {
+    const previous = swing.kind === 'high' ? previousHigh : previousLow
+    const label = !previous
+      ? swing.kind === 'high' ? 'H' : 'L'
+      : swing.kind === 'high'
+        ? closeBreaksHigh(swing, previous) ? 'HH' : 'LH'
+        : closeBreaksLow(swing, previous) ? 'LL' : 'HL'
+    labels.set(swing.index, label)
+    if (swing.kind === 'high') previousHigh = swing
+    else previousLow = swing
+  }
+  return labels
+}
+
 // The wide timeframe profile supplies the multi-month context requested by the
 // dashboard. Using that same radius for the live edge delays a 4H pivot by a
-// full week, however, and can leave the current range labelled from a month-old
-// HH/HL pair. Read current structure at half that radius while retaining the
-// wide structure below as context. Small test/research radii stay unchanged.
+// full week and a 1D pivot by half a month, which hides the current impulse
+// after a major high/low. Read the live edge at one quarter of that radius,
+// while retaining the wide structure below as context. The state machine then
+// filters out a merely unfinished internal reaction.
 const activeStructureLookback = (lookback) => lookback > 4
-  ? Math.max(2, Math.floor(lookback / 2))
+  ? Math.max(2, Math.ceil(lookback / 4))
   : lookback
 
 const persistentStructureTrend = (candles, swings, lookback) => {
+  const labels = labelStructureSwings(swings)
   const confirmations = new Map()
   for (const swing of swings) {
     const confirmedAt = swing.index + lookback
@@ -236,10 +260,17 @@ const persistentStructureTrend = (candles, swings, lookback) => {
   const highs = []
   const lows = []
   let trend = 'flat'
+  let establishedTrend = 'flat'
+  let pendingDirection = null
+  let pendingFromBreak = false
+  let pendingBreakIndex = null
+  let protectedHigh = null
+  let protectedLow = null
   let latestEvent = null
 
   for (let index = 0; index < candles.length; index += 1) {
-    for (const swing of confirmations.get(index) ?? []) {
+    const confirmedNow = confirmations.get(index) ?? []
+    for (const swing of confirmedNow) {
       if (swing.kind === 'high') highs.push(swing)
       else lows.push(swing)
     }
@@ -250,17 +281,74 @@ const persistentStructureTrend = (candles, swings, lookback) => {
     const previousLow = lows.at(-2)
     const current = candles[index]
     const previous = candles[index - 1]
+    const highLabel = lastHigh ? labels.get(lastHigh.index) : null
+    const lowLabel = lastLow ? labels.get(lastLow.index) : null
 
     if (trend === 'flat' && lastHigh && previousHigh && lastLow && previousLow) {
-      const highLabel = closeBreaksHigh(lastHigh, previousHigh) ? 'HH' : 'LH'
-      const lowLabel = closeBreaksLow(lastLow, previousLow) ? 'LL' : 'HL'
-      if (highLabel === 'HH' && lowLabel === 'HL') trend = 'up'
-      else if (highLabel === 'LH' && lowLabel === 'LL') trend = 'down'
+      const upSequence = highLabel === 'HH' && lowLabel === 'HL'
+      const downSequence = highLabel === 'LH' && lowLabel === 'LL'
+      const advancedSinceBreak = !pendingFromBreak || [lastHigh, lastLow]
+        .some((swing) => swing?.index > (pendingBreakIndex ?? Number.POSITIVE_INFINITY))
+      // A genuine close through the protected level commits the pending
+      // reversal: only its opposite HH+HL/LH+LL sequence can confirm it. A
+      // failed counter-pivot without such a break may instead return to the
+      // previously established direction when that original sequence resumes.
+      const nextTrend = pendingDirection === 'down' && downSequence
+        ? 'down'
+        : pendingDirection === 'up' && upSequence
+          ? 'up'
+          : !pendingFromBreak && establishedTrend === 'up' && upSequence
+            ? 'up'
+          : !pendingFromBreak && establishedTrend === 'down' && downSequence
+              ? 'down'
+              : pendingFromBreak && advancedSinceBreak && upSequence
+                ? 'up'
+                : pendingFromBreak && advancedSinceBreak && downSequence
+                  ? 'down'
+              : !pendingDirection && upSequence
+                ? 'up'
+                : !pendingDirection && downSequence
+                  ? 'down'
+                  : null
+      if (nextTrend) {
+        trend = nextTrend
+        establishedTrend = trend
+        pendingDirection = null
+        pendingFromBreak = false
+        pendingBreakIndex = null
+        protectedHigh = trend === 'down' ? lastHigh : null
+        protectedLow = trend === 'up' ? lastLow : null
+      }
     }
+
+    // A completed counter-pivot is a genuine loss of directional flow, but a
+    // fresh, still-unconfirmed bounce is not. This makes a downtrend remain
+    // down while price merely rebounds from a newly printed LL, then moves to
+    // flat only when that rebound has earned enough right-hand candles to be
+    // a real HL. The mirrored rule applies to a completed LH in an uptrend.
+    const confirmedCounterPivot = trend === 'up'
+      ? confirmedNow.some((swing) => swing.kind === 'high' && labels.get(swing.index) === 'LH')
+      : trend === 'down'
+        ? confirmedNow.some((swing) => swing.kind === 'low' && labels.get(swing.index) === 'HL')
+        : false
+    if (confirmedCounterPivot) {
+      pendingDirection = trend === 'up' ? 'down' : 'up'
+      pendingFromBreak = false
+      pendingBreakIndex = null
+      trend = 'flat'
+    }
+
+    // The protected counter-swing is the only level that can invalidate an
+    // established direction. Newer internal pivots may be useful for a later
+    // entry refinement, but they must not relabel the whole market structure.
+    if (trend === 'up' && lowLabel === 'HL') protectedLow = lastLow
+    if (trend === 'down' && highLabel === 'LH') protectedHigh = lastHigh
 
     const crossedAbove = lastHigh && current.close > lastHigh.price && previous?.close <= lastHigh.price
     const crossedBelow = lastLow && current.close < lastLow.price && previous?.close >= lastLow.price
-    if (trend === 'up' && crossedBelow) {
+    const invalidatedUp = protectedLow && current.close < protectedLow.price && previous?.close >= protectedLow.price
+    const invalidatedDown = protectedHigh && current.close > protectedHigh.price && previous?.close <= protectedHigh.price
+    if (trend === 'up' && invalidatedUp) {
       latestEvent = {
         type: 'CHoCH_DOWN',
         direction: 'down',
@@ -268,11 +356,14 @@ const persistentStructureTrend = (candles, swings, lookback) => {
         index,
         time: current.time,
         close: current.close,
-        referencePrice: lastLow.price,
-        referenceTime: lastLow.time,
+        referencePrice: protectedLow.price,
+        referenceTime: protectedLow.time,
       }
-      trend = 'down'
-    } else if (trend === 'down' && crossedAbove) {
+      trend = 'flat'
+      pendingDirection = 'down'
+      pendingFromBreak = true
+      pendingBreakIndex = index
+    } else if (trend === 'down' && invalidatedDown) {
       latestEvent = {
         type: 'CHoCH_UP',
         direction: 'up',
@@ -280,10 +371,13 @@ const persistentStructureTrend = (candles, swings, lookback) => {
         index,
         time: current.time,
         close: current.close,
-        referencePrice: lastHigh.price,
-        referenceTime: lastHigh.time,
+        referencePrice: protectedHigh.price,
+        referenceTime: protectedHigh.time,
       }
-      trend = 'up'
+      trend = 'flat'
+      pendingDirection = 'up'
+      pendingFromBreak = true
+      pendingBreakIndex = index
     } else if (trend === 'up' && crossedAbove) {
       latestEvent = {
         type: 'BOS_UP', direction: 'up', fromTrend: 'up', index, time: current.time,
@@ -300,7 +394,13 @@ const persistentStructureTrend = (candles, swings, lookback) => {
   const recentCutoff = candles.length - 1 - lookback
   return {
     trend,
+    establishedTrend,
     event: latestEvent?.index >= recentCutoff ? latestEvent : null,
+    protectedHigh,
+    protectedLow,
+    labels,
+    pendingDirection,
+    pendingFromBreak,
   }
 }
 
@@ -716,6 +816,55 @@ export const evaluateTradeProfile = ({
     }
   }
 
+  // A CHoCH makes the directional bias visible immediately, but it is not a
+  // trade authorization. Require the new LH+LL / HH+HL wave to complete
+  // before exposing an entry, stop and target to the paper executor.
+  if (item?.structureConfirmed === false) {
+    const reason = item?.reason || 'nový strukturální směr čeká na potvrzení'
+    const riskPct = Number(settings.riskPct) || 1
+    const minRewardRisk = Number(settings.minRewardRisk) || 2
+    return {
+      status: 'neutral',
+      mode: 'formation',
+      formationState: 'awaiting-confirmation',
+      reason,
+      side: null,
+      pendingSide: side,
+      riskPct,
+      minRewardRisk,
+      pullbackPct: settings.pullbackPct ?? 50,
+      zone: null,
+      zoneHit: false,
+      entry: null,
+      pullbackLevel: null,
+      invalidationLevel: null,
+      pullbackRange: null,
+      zoneCandidates: [],
+      activeCandidate: null,
+      stop: null,
+      stopBuffer: null,
+      entryAtZoneHit: null,
+      refinedEntry: null,
+      entryForMinRR: null,
+      entrySource: null,
+      entryRefinement: null,
+      tp1: null,
+      tp1Rule: null,
+      tp2: null,
+      tp2Zone: null,
+      tp2Rule: null,
+      weightedTarget: null,
+      risk: null,
+      reward: null,
+      rewardRisk: null,
+      gates: [
+        gate('trend', 'struktura má směr', true, `bias ${side}`),
+        gate('structure-confirmed', 'nová vlna je potvrzena', false, reason),
+      ],
+      refinement: null,
+    }
+  }
+
   const zone = side === 'long' ? zones?.demand : side === 'short' ? zones?.supply : null
   const pullback = pullbackLevel({ side, structure: item?.structure, pullbackPct: settings.pullbackPct })
   const invalidationLevel = structureInvalidationLevel({ side, structure: item?.structure })
@@ -1069,26 +1218,40 @@ export const classifyStructure = (
     : highText === 'LH' && lowText === 'LL' ? 'down' : 'flat'
   const persistent = persistentStructureTrend(normalizedCandles, structure.swings, activeLookback)
   const structureBreak = persistent.event
-  // CHoCH invalidates the old trend; it does not by itself complete the
-  // opposite sequence. Stay flat until the alternating pivots confirm both
-  // sides of the new structure (LH+LL or HH+HL).
-  const changingDirection = structureBreak?.type === 'CHoCH_DOWN' && localTrend !== 'down'
-    || structureBreak?.type === 'CHoCH_UP' && localTrend !== 'up'
-  const trend = changingDirection ? 'flat' : localTrend
-  const establishedTrend = structureBreak?.type.startsWith('CHoCH')
-    ? structureBreak.fromTrend
-    : persistent.trend
+  // A confirmed direction is stateful. A fresh pullback does not relabel the
+  // market until its counter-pivot is confirmed; a close through the protected
+  // LH/HL is the explicit change-of-character event. The old code discarded
+  // that state on every incomplete local wave.
+  // A close through the protected pivot immediately changes the directional
+  // bias shown to the operator (red/green in the matrix), but an entry stays
+  // blocked until its LH+LL or HH+HL sequence is confirmed below.
+  const breakDirection = structureBreak?.type === 'CHoCH_DOWN'
+    ? 'down'
+    : structureBreak?.type === 'CHoCH_UP'
+      ? 'up'
+      : null
+  // A complete current LH+LL / HH+HL sequence is sufficient to resolve an
+  // older pending transition. Only an incomplete mixed pair relies solely on
+  // the persistent state, which is what keeps internal reactions from
+  // overwriting the established direction.
+  const trend = breakDirection ?? (persistent.trend !== 'flat' ? persistent.trend : localTrend)
+  const establishedTrend = persistent.establishedTrend
+  const structureConfirmed = !breakDirection && trend !== 'flat'
   const status = trend === 'up' ? 'met' : trend === 'down' ? 'unmet' : 'neutral'
   const contextHigh = normalizedCandles.reduce((best, candle) => !best || candle.high > best.high ? candle : best, null)
   const contextLow = normalizedCandles.reduce((best, candle) => !best || candle.low < best.low ? candle : best, null)
   const labels = [highText, lowText].filter(Boolean).join(' + ')
+  const protectedPivot = trend === 'up' ? persistent.protectedLow : trend === 'down' ? persistent.protectedHigh : null
   const reason = structureBreak?.type.startsWith('CHoCH')
-    ? `${structureBreak.type} close ${structureBreak.close} přes hlavní úroveň ${structureBreak.referencePrice}; nový směr zatím ${trend === 'flat' ? 'není potvrzen' : `potvrzen jako ${trend}`} (${labels || 'bez kompletní sekvence'})`
-    : labels || 'bez potvrzených pivotů'
+    ? `${structureBreak.type} close ${structureBreak.close} přes hlavní úroveň ${structureBreak.referencePrice}; bias je ${trend}, čeká se na ${trend === 'down' ? 'LH + LL' : 'HH + HL'} (${labels || 'bez kompletní sekvence'})`
+    : trend !== 'flat' && labels !== (trend === 'up' ? 'HH + HL' : 'LH + LL')
+      ? `${trend} pokračuje; změna až po close přes chráněný ${trend === 'up' ? 'HL' : 'LH'} ${protectedPivot?.price ?? '—'} (${labels || 'čeká se na další pivot'})`
+      : labels || 'bez potvrzených pivotů'
 
   return {
     trend,
     establishedTrend,
+    structureConfirmed,
     status,
     event: structureBreak?.type ?? null,
     eventDetail: structureBreak,
@@ -1115,7 +1278,10 @@ export const classifyStructure = (
       contextSwingCount: contextStructure.swings.length,
       high: highLeg,
       low: lowLeg,
-      recentSwings: structure.swings.slice(-8).map((swing) => pivotSummary(swing)),
+      protectedHigh: pivotSummary(persistent.protectedHigh, persistent.protectedHigh ? persistent.labels.get(persistent.protectedHigh.index) : null),
+      protectedLow: pivotSummary(persistent.protectedLow, persistent.protectedLow ? persistent.labels.get(persistent.protectedLow.index) : null),
+      confirmed: structureConfirmed,
+      recentSwings: structure.swings.slice(-8).map((swing) => pivotSummary(swing, persistent.labels.get(swing.index))),
       contextRecentSwings: contextStructure.swings.slice(-8).map((swing) => pivotSummary(swing)),
     },
     zones: includeZones
