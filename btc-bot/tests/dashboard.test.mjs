@@ -215,6 +215,8 @@ test('asset tickers open a timeframe price chart with supply and demand zones', 
   assert.match(js, /const xForTime = \(time\) =>/)
   assert.match(js, /structure\?\.high/)
   assert.match(js, /structure\?\.recentSwings/)
+  assert.match(js, /const developingSwing = structure\?\.developingSwing/)
+  assert.match(js, /replacesCandleIndex/)
   assert.match(js, /const structurePivots = new Map\(\)/)
   assert.match(js, /leg\?\.current \? \{ \.\.\.leg\.current, kind, label: leg\.label \} : null/)
   assert.match(js, /asset-structure-pullback/)
@@ -318,7 +320,7 @@ test('the first migrated publish persists the strategy-versioned settings', () =
 })
 
 test('the API refuses stale PA-1 runners before they overwrite current structure', () => {
-  assert.match(api, /const MIN_PRICE_ACTION_MATRIX_SCHEMA = 21/)
+  assert.match(api, /const MIN_PRICE_ACTION_MATRIX_SCHEMA = 22/)
   assert.match(api, /\$strategyId === 'price-action-structure-v1'/)
   assert.match(api, /\(int\) \$priceActionSchema < MIN_PRICE_ACTION_MATRIX_SCHEMA/)
   assert.match(api, /fail\(409, 'Runner uses an obsolete price-action matrix schema\.'\)/)

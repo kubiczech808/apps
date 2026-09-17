@@ -38,7 +38,7 @@ const PRIMARY_RUNNER_MARKER = DATA_DIR . '/primary-runner-v2.json';
 // A retired runner must not be able to overwrite a newer PA-1 interpretation.
 // This is also a guard against two machines configured with the same lease
 // owner: the lease cannot distinguish them, but the published contract can.
-const MIN_PRICE_ACTION_MATRIX_SCHEMA = 21;
+const MIN_PRICE_ACTION_MATRIX_SCHEMA = 22;
 // The dashboard publishes the full chart history for all assets and
 // timeframes so the browser can reveal up to one year without another API
 // round-trip. Keep a bounded body limit, but above the largest paper snapshot.

@@ -223,6 +223,24 @@ test('an unconfirmed bounce from a new lower low keeps the established downtrend
   assert.equal(result.structure.protectedHigh.label, 'LH')
 })
 
+test('a closed break publishes the live terminal low before the pivot is confirmed', () => {
+  const established = zigzag([160, 130, 150, 110, 140, 120], { steps: 8 })
+  const before = classifyStructure(established, { lookback: 2, minCandles: 20 })
+  assert.ok(before.structure.low.current.price < 120)
+
+  const broken = [
+    ...established,
+    candle(established.at(-1).time + HOUR, 120, 122, 104, 106),
+  ]
+  const result = classifyStructure(broken, { lookback: 2, minCandles: 20 })
+
+  assert.equal(result.structure.developingSwing.kind, 'low')
+  assert.equal(result.structure.developingSwing.label, 'LL')
+  assert.equal(result.structure.developingSwing.price, 104)
+  assert.equal(result.structure.developingSwing.confirmed, false)
+  assert.equal(result.structure.developingSwing.replacesCandleIndex, result.structure.low.current.candleIndex)
+})
+
 test('wide timeframe context uses a more responsive structural edge', () => {
   const rangeAfterExpansion = classifyStructure(
     zigzag([60, 67, 62, 65, 62.5, 81.5, 76, 82, 76.5, 79.5, 77], { steps: 24 }),

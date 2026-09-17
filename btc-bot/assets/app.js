@@ -1377,10 +1377,13 @@ const renderAssetChart = () => {
   // and low must nevertheless be part of the audit line, otherwise the chart
   // can appear to stop before the actual bottom/top which drives the strategy.
   const structurePivots = new Map()
+  const developingSwing = structure?.developingSwing
   for (const swing of [
     ...(structure?.recentSwings ?? []),
     ...structureLegs.map(({ kind, leg }) => leg?.current ? { ...leg.current, kind, label: leg.label } : null),
+    developingSwing,
   ].filter(Boolean)) {
+    if (swing?.kind === developingSwing?.kind && swing?.candleIndex === developingSwing?.replacesCandleIndex) continue
     if (!swing?.kind || !Number.isFinite(swing.price) || !(swing.price > 0) || !Number.isFinite(swing.time)) continue
     const key = `${swing.kind}:${swing.candleIndex ?? swing.time}`
     const previous = structurePivots.get(key)

@@ -3,7 +3,7 @@ import { ceilPrice, floorPrice, normalizeCandlePrices, roundPrice } from './pric
 import { buildFvgSupplyDemandZones, candleSignal, marketStructure } from './priceaction.mjs'
 
 export const PRICE_ACTION_STRUCTURE_ID = 'price-action-structure-v1'
-export const PRICE_ACTION_MATRIX_SCHEMA = 21
+export const PRICE_ACTION_MATRIX_SCHEMA = 22
 export const PRICE_ACTION_CHART_CANDLE_LIMITS = {
   '1h': 8760,
   '4h': 2190,
@@ -216,6 +216,44 @@ const structureLeg = ({ previous, current, higherLabel, lowerLabel, breaksByClos
 
 const closeBreaksHigh = (current, previous) => current.candle?.close > previous.price
 const closeBreaksLow = (current, previous) => current.candle?.close < previous.price
+
+// Fractal pivots need candles on their right, which intentionally makes them
+// late. A closed break of the latest high/low still needs to reach the chart
+// immediately, so expose its live terminal extreme separately from the
+// confirmed structure used for trading decisions.
+const developingStructureSwing = (candles, structure) => {
+  const latest = candles.at(-1)
+  if (!latest) return null
+  const terminalExtreme = (kind, afterIndex) => candles
+    .slice(Math.max(0, afterIndex + 1))
+    .reduce((best, candle, offset) => {
+      const price = kind === 'low' ? candle.low : candle.high
+      if (!best || (kind === 'low' ? price < best.price : price > best.price)) {
+        return { kind, price, candle, index: Math.max(0, afterIndex + 1) + offset, time: candle.time }
+      }
+      return best
+    }, null)
+
+  if (structure.lastLow && latest.close < structure.lastLow.price) {
+    const extreme = terminalExtreme('low', structure.lastLow.index)
+    return extreme ? {
+      ...pivotSummary(extreme, 'LL'),
+      confirmed: false,
+      replacesCandleIndex: structure.lastLow.index,
+      breakTime: latest.time,
+    } : null
+  }
+  if (structure.lastHigh && latest.close > structure.lastHigh.price) {
+    const extreme = terminalExtreme('high', structure.lastHigh.index)
+    return extreme ? {
+      ...pivotSummary(extreme, 'HH'),
+      confirmed: false,
+      replacesCandleIndex: structure.lastHigh.index,
+      breakTime: latest.time,
+    } : null
+  }
+  return null
+}
 
 // These labels belong to the structural zigzag itself. The chart must never
 // re-derive them from a truncated set of visible pivots: doing so turned a
@@ -1196,6 +1234,7 @@ export const classifyStructure = (
     ? contextStructure
     : marketStructure(normalizedCandles, { lookback: activeLookback })
   const latest = normalizedCandles.at(-1)
+  const developingSwing = developingStructureSwing(normalizedCandles, structure)
 
   const highLeg = structureLeg({
     previous: structure.previousHigh,
@@ -1280,6 +1319,7 @@ export const classifyStructure = (
       low: lowLeg,
       protectedHigh: pivotSummary(persistent.protectedHigh, persistent.protectedHigh ? persistent.labels.get(persistent.protectedHigh.index) : null),
       protectedLow: pivotSummary(persistent.protectedLow, persistent.protectedLow ? persistent.labels.get(persistent.protectedLow.index) : null),
+      developingSwing,
       confirmed: structureConfirmed,
       recentSwings: structure.swings.slice(-8).map((swing) => pivotSummary(swing, persistent.labels.get(swing.index))),
       contextRecentSwings: contextStructure.swings.slice(-8).map((swing) => pivotSummary(swing)),
