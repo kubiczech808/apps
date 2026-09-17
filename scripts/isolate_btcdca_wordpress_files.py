@@ -15,6 +15,7 @@ LOGIN = os.environ["BTCDCA_FTP_LOGIN"]
 PASSWORD = os.environ["BTCDCA_FTP_PASSWORD"]
 MODE = os.environ["BTCDCA_WORDPRESS_FILE_MODE"]
 BACKUP_DIRECTORY = ".btcdca-wordpress-isolation"
+RETRY_STAGING_DIRECTORY = f"{BACKUP_DIRECTORY}.retry-staging"
 MANIFEST = f"{BACKUP_DIRECTORY}/manifest.json"
 STATIC_REPLACEMENTS = ("index.html", ".htaccess", "robots.txt", "sitemap.xml")
 WORDPRESS_ROOT_FILES = (
@@ -53,6 +54,15 @@ def listing(ftp: ftplib.FTP) -> set[str]:
     return {PurePosixPath(name).name for name in ftp.nlst()}
 
 
+def directory_listing(ftp: ftplib.FTP, directory: str) -> set[str]:
+    try:
+        return {PurePosixPath(name).name for name in ftp.nlst(directory)}
+    except ftplib.error_perm as exc:
+        if str(exc).startswith("550"):
+            return set()
+        raise
+
+
 def file_exists(ftp: ftplib.FTP, name: str) -> bool:
     try:
         # This FTP service rejects SIZE for PHP files, while NLST supports a
@@ -64,10 +74,46 @@ def file_exists(ftp: ftplib.FTP, name: str) -> bool:
         raise
 
 
+def create_isolation_directory(ftp: ftplib.FTP, root_names: set[str]) -> bool:
+    """Create a fresh isolation directory, preserving a prior rollback preview."""
+    if BACKUP_DIRECTORY not in root_names:
+        ftp.mkd(BACKUP_DIRECTORY)
+        return False
+
+    previous_entries = directory_listing(ftp, BACKUP_DIRECTORY)
+    expected_entries = {"manifest.json", "static-preview"}
+    wordpress_entries = {
+        name
+        for name in previous_entries
+        if name in {"wp-admin", "wp-includes", "wp-content", "index.php"}
+        or re.fullmatch(r"wp-[A-Za-z0-9-]+\.php", name)
+    }
+    if not expected_entries.issubset(previous_entries) or wordpress_entries:
+        raise RuntimeError(
+            "WordPress isolation directory is not a completed rollback state; "
+            "run rollback or inspect it before retrying."
+        )
+    if RETRY_STAGING_DIRECTORY in root_names:
+        raise RuntimeError("A previous WordPress isolation retry is still being staged.")
+
+    # Keep the prior static preview and manifest inside the next isolation so
+    # a retry never deletes data that was created for the rollback path.
+    ftp.rename(BACKUP_DIRECTORY, RETRY_STAGING_DIRECTORY)
+    try:
+        ftp.mkd(BACKUP_DIRECTORY)
+        ftp.rename(RETRY_STAGING_DIRECTORY, f"{BACKUP_DIRECTORY}/previous-rollback")
+    except Exception:
+        try:
+            ftp.rmd(BACKUP_DIRECTORY)
+            ftp.rename(RETRY_STAGING_DIRECTORY, BACKUP_DIRECTORY)
+        except ftplib.all_errors:
+            pass
+        raise
+    return True
+
+
 def isolate(ftp: ftplib.FTP) -> None:
     names = listing(ftp)
-    if BACKUP_DIRECTORY in names:
-        raise RuntimeError("WordPress isolation directory already exists.")
 
     required_directories = {"wp-admin", "wp-includes", "wp-content"}
     missing = required_directories - names
@@ -84,7 +130,7 @@ def isolate(ftp: ftplib.FTP) -> None:
     moved = ["wp-admin", "wp-includes", "wp-content", *wordpress_root]
     moved.extend(name for name in OPTIONAL_ROOT_FILES if file_exists(ftp, name) and name not in moved)
 
-    ftp.mkd(BACKUP_DIRECTORY)
+    archived_previous_rollback = create_isolation_directory(ftp, names)
     completed: list[str] = []
     try:
         for name in moved:
@@ -107,6 +153,13 @@ def isolate(ftp: ftplib.FTP) -> None:
             ftp.rmd(BACKUP_DIRECTORY)
         except ftplib.all_errors:
             pass
+        if archived_previous_rollback:
+            try:
+                ftp.rename(f"{BACKUP_DIRECTORY}/previous-rollback", RETRY_STAGING_DIRECTORY)
+                ftp.rmd(BACKUP_DIRECTORY)
+                ftp.rename(RETRY_STAGING_DIRECTORY, BACKUP_DIRECTORY)
+            except ftplib.all_errors:
+                pass
         raise
 
 
