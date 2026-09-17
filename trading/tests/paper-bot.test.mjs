@@ -6711,11 +6711,23 @@ test("scan scope: esports takes four slots of six, and the others come round hou
       `ticks ${tick} and ${tick + 1} are both quiet, so esports would go 20+ minutes cold`);
   }
 
-  // Frequency is a share of the ticks, not the tick length. Scans serialise behind the
+  // Frequency is a share of the SCANS, not the tick length. Scans serialise behind the
   // trading-paper-bot concurrency group and the ten-minute spacing exists so a whole
-  // scan-plus-execution cycle can publish first; lowering the interval would queue them
+  // scan-plus-execution cycle can publish first; scanning more often would queue them
   // behind that lock instead of running them sooner.
-  assert.match(pacer, /default: "10"/, "the tick stays at ten minutes");
+  //
+  // This used to be written as "the tick stays at ten minutes", and it blocked the change
+  // that gave the live portfolios a candidate check between scans. The invariant it was
+  // defending is the SCAN's spacing, not the tick's, so that is what it now says: the tick
+  // may be shortened freely as long as the scan cadence is derived from it and stays at
+  // ten minutes. tests/pacer-live-cadence runs the pacer's own arithmetic to prove it does.
+  assert.match(pacer, /scan_every=\$\(\( 10 \/ minutes \)\)/,
+    "the scan's spacing must be derived from the tick, not equal to it");
+  assert.match(pacer, /if \[ \$\(\( tick % scan_every \)\) -ne 0 \]/,
+    "and the ticks in between must not scan");
+  // The rotation counts scans. Counting ticks would leave two of the six scopes unscanned
+  // forever at any tick shorter than the scan cadence.
+  assert.match(pacer, /tick=\$\(\( tick \/ scan_every \)\)/);
 
   // And the scan has to accept them as dispatch inputs, or the rotation is decoration.
   for (const input of ["market_scan_tag", "market_scan_liquidity_min", "market_scan_max_days"]) {

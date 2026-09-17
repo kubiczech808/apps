@@ -18,9 +18,9 @@ on:
   workflow_dispatch:
     inputs:
       interval_minutes:
-        description: "Minutes to wait before each scan (1-50)"
+        description: "Minutes between ticks (1-50). The scan keeps its own ~10 minute cadence; the ticks in between check the live portfolios."
         required: false
-        default: "10"
+        default: "3"
       tick:
         description: "Cycle counter, carried between links of the chain"
         required: false
@@ -53,12 +53,16 @@ jobs:
     # occupying the concurrency group until GitHub's six-hour ceiling.
     timeout-minutes: 60
     steps:
+      # For the live-only ticks below, which wake the executors through the scan's own
+      # planner rather than a second copy of it.
+      - uses: actions/checkout@v4
+
       - name: Wait for the next tick
         env:
-          INTERVAL: ${{ inputs.interval_minutes || '10' }}
+          INTERVAL: ${{ inputs.interval_minutes || '3' }}
         run: |
           # Clamped so a bad input cannot spin the loop hot or park it past the timeout.
-          minutes=$(printf '%.0f' "${INTERVAL:-10}" 2>/dev/null || echo 10)
+          minutes=$(printf '%.0f' "${INTERVAL:-3}" 2>/dev/null || echo 3)
           if [ "$minutes" -lt 1 ] 2>/dev/null; then minutes=1; fi
           if [ "$minutes" -gt 50 ] 2>/dev/null; then minutes=50; fi
           echo "minutes=$minutes" >> "$GITHUB_ENV"
@@ -95,10 +99,30 @@ jobs:
           # sooner -- the fault the ten-minute slot was chosen to end -- while raising
           # esports' share of the ticks buys the same freshness for nothing.
           #
-          # At the ten-minute default: esports every ~15 minutes on average against every 30
-          # before, with no gap longer than 20. Laid out 0..5 as broad, esports, esports,
+          # At a ten-minute scan cadence: esports every ~15 minutes on average against every
+          # 30 before, with no gap longer than 20. Laid out 0..5 as broad, esports, esports,
           # sports, esports, esports, so the two quiet slots do not fall next to each other.
+          #
+          # The tick is now shorter than the scan's cadence, because the live portfolios
+          # were asked to check their candidates more often than once per scrape. The
+          # paragraph above is the reason the scan did NOT simply follow: it would queue
+          # behind the write lock rather than run sooner. So the scan runs on every Nth tick
+          # -- keeping the ten-minute spacing whatever the tick length -- and the ticks in
+          # between wake only the live executors, which is the step below.
           tick=$(printf '%.0f' "${TICK:-0}" 2>/dev/null || echo 0)
+          scan_every=$(( 10 / minutes ))
+          if [ "$scan_every" -lt 1 ]; then scan_every=1; fi
+          echo "scan_every=$scan_every" >> "$GITHUB_ENV"
+          if [ $(( tick % scan_every )) -ne 0 ]; then
+            echo "scanned=false" >> "$GITHUB_ENV"
+            echo "Tick ${tick}: the scan runs every ${scan_every} ticks. This tick checks the live portfolios only."
+            exit 0
+          fi
+          echo "scanned=true" >> "$GITHUB_ENV"
+          # The scope rotation counts SCANS, not ticks. Left counting ticks it would skip
+          # whole scopes -- at three ticks per scan only every third slot would ever be
+          # reached, so two of the six would never come round at all.
+          tick=$(( tick / scan_every ))
           case $(( tick % 6 )) in
             3) tag=sports;  liquidity=40000; days=2 ;;
             0) tag="";      liquidity=0;     days=7 ;;
@@ -117,6 +141,26 @@ jobs:
           else
             echo "::warning::market scan dispatch failed; the chain continues"
           fi
+
+      # The ticks between scans. Asked for: "chtel bych zaroven, aby u live portfolia
+      # dochazelo ke kontrole dostupnych kandidatu casteji nez s kazdym scrapingem."
+      #
+      # It wakes the live executors through the scan's own planner rather than a second copy
+      # of the rules, so a portfolio that is archived, has automation off, or is not
+      # configured for automatic execution is left alone here exactly as it is after a scan.
+      # A duplicated copy of those rules is how 5050 came to be dispatched by nothing at all.
+      #
+      # Only on the ticks that did NOT scan: a scan wakes them itself when it publishes, and
+      # dispatching them here as well would run two live passes against the same wallet.
+      - name: Check the live portfolios between scans
+        if: env.scanned == 'false'
+        env:
+          GITHUB_TOKEN: ${{ secrets.POLY_TRADING_GITHUB_TOKEN || github.token }}
+          GITHUB_REF_NAME: ${{ github.ref_name }}
+        # Never fatal: a tick that cannot dispatch must still hand the chain on, or one bad
+        # minute stops the clock until the resurrection cron notices hours later.
+        continue-on-error: true
+        run: node trading/tools/dispatch-after-scan.mjs --live-only
 
       # The evaluation report reads the whole resolved archive and opens nothing, so it
       # does not belong on every tick. It had its own hourly cron and was delivered twice a
@@ -157,7 +201,7 @@ jobs:
           REPOSITORY: ${{ github.repository }}
           REF: ${{ github.ref_name }}
           TICK: ${{ inputs.tick || '0' }}
-          INTERVAL: ${{ inputs.interval_minutes || '10' }}
+          INTERVAL: ${{ inputs.interval_minutes || '3' }}
         run: |
           # The off switch. Set the repository variable TRADING_PACER_ENABLED to "false"
           # and the chain stops at the next tick, without editing or reverting anything.

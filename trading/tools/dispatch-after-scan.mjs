@@ -25,7 +25,15 @@ async function readJson(url, options = {}) {
 
 // Which workflows a finished scrape should wake, given the saved portfolio config.
 // Kept separate from the dispatching so the decision can be checked without a network.
-export function plannedDispatches(config = {}) {
+//
+// `liveOnly` is for the ticks between scans. Asked for: the live portfolios should check
+// their candidates more often than once per scrape. The scan cannot simply run more often
+// -- every writer shares one concurrency slot, so a shorter interval queues scans behind
+// the lock instead of running them sooner, which is the fault the ten-minute spacing was
+// chosen to end. So the pacer ticks faster, the scan keeps its own cadence, and the ticks
+// in between wake only the live executors, through this same planner: a second copy of the
+// "which portfolios are awake" rules is how 5050 ended up never being dispatched at all.
+export function plannedDispatches(config = {}, { liveOnly = false } = {}) {
   const paper = config.paper || {};
   const live = config.live || {};
   // 5050 was missing here entirely, so however its execution trigger was set it was
@@ -109,13 +117,16 @@ export function plannedDispatches(config = {}) {
       },
     });
   }
-  return planned;
+  // Everything except the paper bot, rather than a list of the live workflows: a live
+  // workflow added later is then included without anyone having to remember this line.
+  return liveOnly ? planned.filter((entry) => entry.workflow !== "trading-paper-bot.yml") : planned;
 }
 
 async function main() {
   const repository = process.env.GITHUB_REPOSITORY;
   const token = process.env.GITHUB_TOKEN;
   const ref = process.env.GITHUB_REF_NAME || "main";
+  const liveOnly = process.argv.includes("--live-only");
   if (!repository || !token) {
     throw new Error("GITHUB_REPOSITORY and GITHUB_TOKEN are required to dispatch post-scrape execution.");
   }
@@ -123,10 +134,12 @@ async function main() {
   const configPayload = await readJson(configUrl, {
     headers: { "User-Agent": "trading-post-scrape-dispatch/1.0" },
   });
-  const planned = plannedDispatches(configPayload.config || {});
+  const planned = plannedDispatches(configPayload.config || {}, { liveOnly });
 
   if (!planned.length) {
-    console.log("No portfolio is configured for execution after scraping; no execution workflow dispatched.");
+    console.log(liveOnly
+      ? "No live portfolio is configured for automatic execution; nothing dispatched on this tick."
+      : "No portfolio is configured for execution after scraping; no execution workflow dispatched.");
     return;
   }
 
@@ -151,7 +164,10 @@ async function main() {
     console.warn(`Post-scrape dispatch finished with ${failures.length} warning(s); market scan data remains published.`);
   }
 
-  await ensurePacerIsRunning({ repository, token, ref });
+  // Not on a live-only tick: the caller there IS the pacer, so the watchdog would be asking
+  // whether the run it is executing inside exists -- and its answer is "restart", which the
+  // pacer's own concurrency group would satisfy by cancelling that very run.
+  if (!liveOnly) await ensurePacerIsRunning({ repository, token, ref });
 }
 
 // Whether the clock still has a link in flight. A pacer spends nearly its whole life
@@ -186,7 +202,9 @@ async function ensurePacerIsRunning({ repository, token, ref }) {
     await readJson(`https://api.github.com/repos/${repository}/actions/workflows/${workflow}/dispatches`, {
       method: "POST",
       headers: { ...apiHeaders(token), "Content-Type": "application/json" },
-      body: JSON.stringify({ ref, inputs: { interval_minutes: "10", tick: "0" } }),
+      // The tick length, not the scan cadence: the pacer scans every Nth tick. Restarting
+      // it with the old ten would silently put the live checks back to once per scrape.
+      body: JSON.stringify({ ref, inputs: { interval_minutes: "3", tick: "0" } }),
     });
     console.log("The pacer had stopped; restarted it. The scan cadence resumes from here.");
   } catch (error) {
