@@ -335,12 +335,16 @@ jobs:
         if: inputs.operation == 'isolate' || inputs.operation == 'purge'
         run: |
           set -euo pipefail
-          curl --fail --show-error --silent https://www.btc-dca.com/ | grep -Fq 'BTC DCA static homepage'
+          verify_dir="$(mktemp -d)"
+          curl --fail --show-error --silent https://www.btc-dca.com/ --output "$verify_dir/homepage.html"
+          grep -Fq 'BTC DCA static homepage' "$verify_dir/homepage.html"
           for slug in btc-dca-binance-how-to-set-up-api-key btc-dca-coinmate-how-to-set-up-api-key btc-dca-okx-how-to-set-up-api-key; do
-            curl --fail --show-error --silent "https://www.btc-dca.com/${slug}/" | grep -Fq '/assets/img/guides/guide.css'
+            curl --fail --show-error --silent "https://www.btc-dca.com/${slug}/" --output "$verify_dir/${slug}.html"
+            grep -Fq '/assets/img/guides/guide.css' "$verify_dir/${slug}.html"
           done
           test "$(curl --silent --output /dev/null --write-out '%{http_code}' https://www.btc-dca.com/learn-center/)" = '410'
-          curl --fail --show-error --silent https://www.btc-dca.com/app/ | grep -Eqi '<html|<!doctype'
+          curl --fail --show-error --silent https://www.btc-dca.com/app/ --output "$verify_dir/app.html"
+          grep -Eqi '<html|<!doctype' "$verify_dir/app.html"
 
       - name: Automatically roll back an incomplete isolation
         if: failure() && inputs.operation == 'isolate'
