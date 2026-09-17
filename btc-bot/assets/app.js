@@ -1291,9 +1291,14 @@ const renderAssetChart = () => {
   }
   const plotWidth = ASSET_CHART.width - ASSET_CHART.padLeft - ASSET_CHART.padRight
   const plotHeight = ASSET_CHART.height - ASSET_CHART.padTop - ASSET_CHART.padBottom
-  const x = (index) => ASSET_CHART.padLeft + (index / Math.max(1, candles.length - 1)) * plotWidth
+  // Leave two candle slots clear after the newest bar. Besides making the
+  // current candle legible, this gives an unfinished swing somewhere to end.
+  const rightCandlePadding = Math.max(8, Math.min(48, (plotWidth * 2) / Math.max(2, candles.length - 1)))
+  const candlePlotWidth = plotWidth - rightCandlePadding
+  const candlePlotRight = ASSET_CHART.padLeft + candlePlotWidth
+  const x = (index) => ASSET_CHART.padLeft + (index / Math.max(1, candles.length - 1)) * candlePlotWidth
   const y = (value) => ASSET_CHART.padTop + ((maxPrice - value) / (maxPrice - minPrice)) * plotHeight
-  const candleWidth = Math.max(2, Math.min(12, (plotWidth / candles.length) * 0.62))
+  const candleWidth = Math.max(2, Math.min(12, (candlePlotWidth / candles.length) * 0.62))
 
   svg.setAttribute('viewBox', `0 0 ${ASSET_CHART.width} ${ASSET_CHART.height}`)
   svg.setAttribute('preserveAspectRatio', 'none')
@@ -1352,7 +1357,7 @@ const renderAssetChart = () => {
     if (!Number.isFinite(time) || !candles.length) return null
     if (time < candles[0].time || time > candles.at(-1).time) return null
     if (time === candles[0].time) return ASSET_CHART.padLeft
-    if (time === candles.at(-1).time) return ASSET_CHART.width - ASSET_CHART.padRight
+    if (time === candles.at(-1).time) return candlePlotRight
     const rightIndex = candles.findIndex((candle) => candle.time >= time)
     if (rightIndex <= 0) return x(0)
     const leftIndex = rightIndex - 1
@@ -1368,6 +1373,29 @@ const renderAssetChart = () => {
     { kind: 'high', leg: structure?.high },
     { kind: 'low', leg: structure?.low },
   ]
+  // recentSwings is deliberately capped for payload size. The current high
+  // and low must nevertheless be part of the audit line, otherwise the chart
+  // can appear to stop before the actual bottom/top which drives the strategy.
+  const structurePivots = new Map()
+  for (const swing of [
+    ...(structure?.recentSwings ?? []),
+    ...structureLegs.map(({ kind, leg }) => leg?.current ? { ...leg.current, kind, label: leg.label } : null),
+  ].filter(Boolean)) {
+    if (!swing?.kind || !Number.isFinite(swing.price) || !(swing.price > 0) || !Number.isFinite(swing.time)) continue
+    const key = `${swing.kind}:${swing.candleIndex ?? swing.time}`
+    const previous = structurePivots.get(key)
+    structurePivots.set(key, { ...previous, ...swing, label: swing.label ?? previous?.label })
+  }
+  const swingNodes = [...structurePivots.values()]
+    .filter((swing) => swing.time >= candles[0].time && swing.time <= candles.at(-1).time)
+    .sort((left, right) => left.time - right.time)
+    .map((swing) => {
+      const label = swing.label || (swing.kind === 'high' ? 'H' : 'L')
+      return { ...swing, label, x: xForTime(swing.time) }
+    })
+    .filter((swing) => swing.x !== null)
+  const latestHigh = swingNodes.filter((swing) => swing.kind === 'high').at(-1)
+  const latestLow = swingNodes.filter((swing) => swing.kind === 'low').at(-1)
 
   if (trend === 'flat') {
     for (const { kind, leg } of structureLegs) {
@@ -1396,15 +1424,6 @@ const renderAssetChart = () => {
     // latest high leg and low leg independently creates two misleading,
     // parallel diagonals; the audit line must follow HH -> HL -> HH (or the
     // corresponding downtrend sequence) in chronological order.
-    const swingNodes = (structure?.recentSwings ?? [])
-      .filter((swing) => swing?.kind && Number.isFinite(swing.price) && swing.price > 0 && Number.isFinite(swing.time))
-      .filter((swing) => swing.time >= candles[0].time && swing.time <= candles.at(-1).time)
-      .sort((left, right) => left.time - right.time)
-      .map((swing) => {
-        const label = swing.label || (swing.kind === 'high' ? 'H' : 'L')
-        return { ...swing, label, x: xForTime(swing.time) }
-      })
-      .filter((swing) => swing.x !== null)
     if (swingNodes.length >= 2) {
       svg.append(el('path', {
         className: `asset-structure-line asset-structure-${trend}`,
@@ -1429,6 +1448,30 @@ const renderAssetChart = () => {
         })
       )
     }
+  }
+
+  // The current structure range is the reference for the entry pullback.
+  // Keep this subtle, but visible: it shows exactly where the 50% line falls
+  // between the high and low that the white zigzag identifies.
+  if (latestHigh && latestLow && latestHigh.price > latestLow.price) {
+    const pullback = (latestHigh.price + latestLow.price) / 2
+    const startX = Math.min(latestHigh.x, latestLow.x)
+    const pullbackY = y(pullback)
+    svg.append(
+      el('line', {
+        className: 'asset-structure-pullback',
+        x1: startX,
+        x2: candlePlotRight,
+        y1: pullbackY,
+        y2: pullbackY,
+      }),
+      el('text', {
+        className: 'asset-structure-pullback-label',
+        x: startX + 5,
+        y: pullbackY - 5,
+        text: '50 %',
+      })
+    )
   }
 
   for (const level of riskLevels) {
@@ -1563,9 +1606,9 @@ const renderAssetChart = () => {
   const showCrosshair = (event) => {
     const box = svg.getBoundingClientRect()
     if (!(box.width > 0 && box.height > 0)) return
-    const svgX = clamp(((event.clientX - box.left) / box.width) * ASSET_CHART.width, ASSET_CHART.padLeft, ASSET_CHART.width - ASSET_CHART.padRight)
+    const svgX = clamp(((event.clientX - box.left) / box.width) * ASSET_CHART.width, ASSET_CHART.padLeft, candlePlotRight)
     const svgY = clamp(((event.clientY - box.top) / box.height) * ASSET_CHART.height, ASSET_CHART.padTop, axisY)
-    const index = Math.round(((svgX - ASSET_CHART.padLeft) / plotWidth) * (candles.length - 1))
+    const index = Math.round(((svgX - ASSET_CHART.padLeft) / candlePlotWidth) * (candles.length - 1))
     const candle = candles[clamp(index, 0, candles.length - 1)]
     const snappedX = x(clamp(index, 0, candles.length - 1))
     const value = maxPrice - ((svgY - ASSET_CHART.padTop) / plotHeight) * (maxPrice - minPrice)

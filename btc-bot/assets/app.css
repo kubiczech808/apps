@@ -258,6 +258,8 @@ button.primary { color: #fff; background: var(--series-1); border-color: transpa
 .asset-price-chart .asset-structure-up { stroke: #ffffff; }
 .asset-price-chart .asset-structure-down { stroke: #ffffff; }
 .asset-price-chart .asset-structure-flat { stroke: #ffffff; stroke-dasharray: 6 4; }
+.asset-price-chart .asset-structure-pullback { stroke: #ffffff; stroke-width: 1; stroke-dasharray: 4 4; opacity: 0.7; pointer-events: none; }
+.asset-price-chart .asset-structure-pullback-label { fill: var(--text-muted); font-size: 10px; font-weight: 650; paint-order: stroke; stroke: var(--surface-1); stroke-width: 3px; stroke-linejoin: round; pointer-events: none; }
 .asset-price-chart .asset-structure-marker { stroke-width: 1.5; }
 .asset-price-chart .asset-structure-label { font-size: 12px; font-weight: 750; paint-order: stroke; stroke: var(--surface-1); stroke-width: 3px; stroke-linejoin: round; }
 .asset-price-chart .asset-structure-label-up { fill: var(--good-text); }
