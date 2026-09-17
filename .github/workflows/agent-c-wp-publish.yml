@@ -26,7 +26,7 @@ concurrency:
 
 jobs:
   publish:
-    runs-on: self-hosted
+    runs-on: [self-hosted, Linux, ARM64, maintenance]
     timeout-minutes: 45
     env:
       WP_SITE_URL: https://www.btc-dca.com

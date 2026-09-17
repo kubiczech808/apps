@@ -21,7 +21,7 @@ permissions:
 
 jobs:
   inventory:
-    runs-on: [self-hosted, Linux, ARM64]
+    runs-on: [self-hosted, Linux, ARM64, maintenance]
     timeout-minutes: 10
     steps:
       - name: What is on disk and what is registered

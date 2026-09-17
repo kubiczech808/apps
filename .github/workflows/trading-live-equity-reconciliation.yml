@@ -14,7 +14,7 @@ permissions:
 
 jobs:
   reconcile:
-    runs-on: [self-hosted, Linux, ARM64]
+    runs-on: [self-hosted, Linux, ARM64, maintenance]
     env:
       POLYMARKET_HOST: https://clob.polymarket.com
       POLYMARKET_CHAIN_ID: "137"

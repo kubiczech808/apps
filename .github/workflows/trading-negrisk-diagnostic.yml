@@ -16,7 +16,7 @@ permissions:
 
 jobs:
   negrisk-diagnostic:
-    runs-on: [self-hosted, Linux, ARM64]
+    runs-on: [self-hosted, Linux, ARM64, maintenance]
     env:
       POLYMARKET_HOST: https://clob.polymarket.com
       LIVE_STATE_URL: https://osobnizkusenosti.cz/trading/api.php?action=state&target=live

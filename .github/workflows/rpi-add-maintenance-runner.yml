@@ -1,4 +1,4 @@
-name: RPi Add Maintenance Runner
+name: RPi Add Self-Hosted Runner
 
 # Adds a SECOND GitHub Actions runner agent to the Pi, so maintenance jobs stop blocking
 # trading ones. Manual only, and it never touches the runner that already exists.
@@ -44,6 +44,11 @@ on:
         required: false
         default: actions-runner-apps-maintenance
         type: string
+      runner_label:
+        description: "Additional label assigned to the new runner"
+        required: false
+        default: maintenance
+        type: string
 
 permissions:
   contents: read
@@ -63,6 +68,7 @@ jobs:
       # overridden here. Using it once cost the Pi eighty minutes of taking no jobs.
       NEW_RUNNER_NAME: ${{ inputs.runner_name || 'pi5-apps-maintenance' }}
       WORK_DIR: ${{ inputs.work_dir || 'actions-runner-apps-maintenance' }}
+      RUNNER_LABEL: ${{ inputs.runner_label || 'maintenance' }}
       REPO: ${{ github.repository }}
       # Registering a runner needs administration rights, which GITHUB_TOKEN does not have.
       # If this secret lacks them the step below says so in one line rather than failing
@@ -80,6 +86,13 @@ jobs:
             echo "Refused: the new agent has no name."
             exit 1
           fi
+          case "${RUNNER_LABEL}" in
+            maintenance|trader) ;;
+            *)
+              echo "Refused: runner_label must be maintenance or trader."
+              exit 1
+              ;;
+          esac
           if [ "${NEW_RUNNER_NAME}" = "${RUNNER_NAME:-}" ]; then
             echo "Refused: that is the name of the agent running this job."
             echo "Registering it would take over the existing registration instead of adding one,"
@@ -144,7 +157,7 @@ jobs:
             --url "https://github.com/${REPO}" \
             --token "$token" \
             --name "${NEW_RUNNER_NAME}" \
-            --labels "self-hosted,Linux,ARM64,maintenance" \
+            --labels "self-hosted,Linux,ARM64,${RUNNER_LABEL}" \
             --work _work \
             --unattended
           rm -f /tmp/reg-token.json
@@ -186,8 +199,8 @@ jobs:
           unit="actions.runner.${slug}.${NEW_RUNNER_NAME}.service"
           if [ "$(systemctl is-active "${unit}" 2>/dev/null)" = "active" ]; then
             echo "The maintenance agent is installed AND running (${unit})."
-            echo "Trading jobs ask for [self-hosted, Linux, ARM64] and can now use either agent;"
-            echo "maintenance jobs ask for the extra maintenance label and stay on the new one."
+            echo "The new agent carries the requested label: ${RUNNER_LABEL}."
+            echo "Workflows must request that label explicitly to stay isolated."
           else
             echo "The maintenance agent is NOT running (${unit} is not active)."
             echo "The Pi still has one usable slot. Do NOT repoint any workflow at the"

@@ -37,7 +37,7 @@ permissions:
 
 jobs:
   status:
-    runs-on: [self-hosted, Linux, ARM64]
+    runs-on: [self-hosted, Linux, ARM64, maintenance]
     env:
       LOG_LINES: ${{ inputs.log_lines || '120' }}
       MARKET_FILTER: ${{ inputs.market_filter || 'bernet|dodig' }}
