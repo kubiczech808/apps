@@ -373,15 +373,15 @@ jobs:
         working-directory: trading
         run: npm run live:account
 
+      # Shared with the 5050 portfolio. It was a heredoc here and absent there, so a
+      # market 5050 found gone was never closed out of its candidate list.
+      #
+      # This was the most expensive step in the whole run -- 39 of 101 seconds, measured on
+      # run 35262648170 -- because it pulled both catalogue segments down over FTP to patch
+      # a handful of rows and pushed them back. It now POSTs the verdicts and the server
+      # merges them, so no FTP credentials are needed here any more.
       - name: Persist current live market verification into evaluation state
         if: always()
-        env:
-          HOSTING_FTP_SERVER: ${{ secrets.HOSTING_FTP_SERVER }}
-          HOSTING_FTP_USERNAME: ${{ secrets.HOSTING_FTP_USERNAME }}
-          HOSTING_FTP_PASSWORD: ${{ secrets.HOSTING_FTP_PASSWORD }}
-          TRADING_FTP_DIR: /www/trading/data
-        # Shared with the 5050 portfolio. It was a heredoc here and absent there, so a
-        # market 5050 found gone was never closed out of its candidate list.
         run: LIVE_EXECUTION_STATE_FILE="trading/${LIVE_EXECUTION_STATE_PATH}" python3 trading/tools/persist-live-revalidation.py
 
       # Reads the hosted state, not the local copy the executor just wrote. The upload

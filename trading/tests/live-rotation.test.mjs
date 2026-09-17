@@ -1254,15 +1254,38 @@ test("live revalidation: a market Gamma no longer lists is closed out, not re-fe
   }], null);
   assert.equal(pool.candidates.length, 0, "a closed-out row must never reach revalidation again");
 
-  // And something must actually write that status back, or the loop never closes. That
-  // merge is a shared script now: it was a heredoc in the live workflow and absent from
-  // 5050 entirely, so a market 5050 found gone stayed READY in its candidate list.
+  // And something must actually write that status back, or the loop never closes. The merge
+  // used to be a heredoc in the live workflow and absent from 5050 entirely, so a market
+  // 5050 found gone stayed READY in its candidate list; it is api.php's now, because
+  // shipping the catalogue over FTP to patch it cost 39 of a 101-second run.
+  //
+  // So the verdict THIS executor just produced is put through THAT endpoint, for real. The
+  // two halves are written in different languages and can only agree by accident if each is
+  // checked on its own -- this is the assertion that fails if the flag is ever renamed on
+  // one side.
+  const { merge } = await import("./live-revalidation-merge-harness.mjs");
+  const { payload, evaluations, observations } = merge({
+    updates: [gone],
+    evaluations: [{ tokenId: "111", question: "Dota 2: PlayTime vs Yakult Brothers - Game 2 Winner", status: "EVALUATED" }],
+    observations: [{ tokenId: "111", question: "Dota 2: PlayTime vs Yakult Brothers - Game 2 Winner", status: "SCRAPED" }],
+  });
+  assert.equal(payload.ok, true, `the merge must run: ${JSON.stringify(payload).slice(0, 300)}`);
+  assert.deepEqual(payload.closedOut, ["111"], "the executor's marketGone flag must close the row out");
+  for (const rows of [evaluations, observations]) {
+    assert.equal(rows[0].status, "CLOSED");
+    assert.equal(rows[0].acceptingOrders, false);
+    assert.equal(rows[0].marketClosed, true);
+  }
+  // And the closed-out row is exactly what the prefilter above drops with no network call:
+  // that is the loop closing.
+  assert.equal(executor.prepareLiveCandidatePool([{
+    ...evaluations[0], aiProbability: 0.97, annualizedReturn: 2.1, expectedValueUsdc: 0.5,
+    netYield: 0.1, liquidity: 84775, daysToResolution: 0.18,
+  }], null).candidates.length, 0, "the row the merge wrote must never be revalidated again");
+
   const { readFile } = await import("node:fs/promises");
-  const persist = await readFile(new URL("../tools/persist-live-revalidation.py", import.meta.url), "utf8");
-  assert.match(persist, /if update\.get\("marketGone"\):/);
-  assert.match(persist, /item\["status"\] = "CLOSED"/);
-  assert.match(persist, /item\["acceptingOrders"\] = False/);
-  // And both live portfolios must run it, or one of them keeps re-fetching dead markets.
+  // And both live portfolios must run the persist step, or one of them keeps re-fetching
+  // dead markets.
   for (const file of ["polymarket-live-limit-order-test", "trading-live-5050"]) {
     const workflow = await readFile(new URL(`../../.github/workflows/${file}.yml`, import.meta.url), "utf8");
     // The state file it writes is per-portfolio now, so it is named on the command line
@@ -2839,10 +2862,13 @@ test("5050: what a pass learns about a candidate is published, not discarded", a
   assert.equal((executor.match(/revalidationUpdates: checked/g) || []).length, 2,
     "both live portfolios publish their verdicts");
 
-  // A market this pass found gone is what the persist script keys its close-out off.
+  // And the persist step has to read exactly what that emit publishes. It no longer merges
+  // anything itself -- the catalogue stopped travelling when the merge moved into api.php --
+  // so what it owns is reading the run's verdicts and getting them to the endpoint. Both
+  // halves are executed in tests/persist-live-revalidation and tests/live-revalidation-merge.
   const persist = await readFile(new URL("../tools/persist-live-revalidation.py", import.meta.url), "utf8");
   assert.match(persist, /updates = \[item for item in execution\.get\("revalidationUpdates", \[\]\) if item\.get\("tokenId"\)\]/);
-  assert.match(persist, /if update\.get\("marketGone"\):/);
+  assert.match(persist, /json\.dumps\(\{"updates": updates\}/);
 
   // Each portfolio persists its own state file, not the other's. The path is a variable
   // now, because a created live portfolio supplies its own; what must not drift is the
@@ -3324,10 +3350,7 @@ test("live candidates: one portfolio's rejection is not the other's", () => {
 
 test("live candidates: the verdict says which portfolio made it", async () => {
   const { readFile } = await import("node:fs/promises");
-  const [executor, persist] = await Promise.all([
-    readFile(new URL("../tools/live-order-executor.mjs", import.meta.url), "utf8"),
-    readFile(new URL("../tools/persist-live-revalidation.py", import.meta.url), "utf8"),
-  ]);
+  const executor = await readFile(new URL("../tools/live-order-executor.mjs", import.meta.url), "utf8");
 
   // Stamped where the verdict is built, so both live workflows carry it without either
   // needing to know it is sharing rows with the other.
@@ -3336,8 +3359,19 @@ test("live candidates: the verdict says which portfolio made it", async () => {
   // flag alone would file every created portfolio's verdicts under "live".
   assert.match(executor, /const LIVE_PORTFOLIO_ID = process\.env\.LIVE_PORTFOLIO_ID \|\| \(FIXED_ENTRY_STRATEGY \? "live-5050" : "live"\);/);
   assert.match(executor, /portfolio: LIVE_PORTFOLIO_ID,/);
-  // The persist step copies the verdict wholesale, so the stamp reaches the stored row.
-  assert.match(persist, /item\["executionRevalidation"\] = update/);
+
+  // And the stamp has to survive the merge, which is api.php's now. Run for real: a verdict
+  // stamped for one portfolio is stored stamped, or the dashboard cannot tell whose verdict
+  // it is looking at and files every created portfolio's under "live".
+  const { merge } = await import("./live-revalidation-merge-harness.mjs");
+  const { evaluations } = merge({
+    updates: [{ tokenId: "777", checkedAt: "2026-08-09T12:30:00Z", portfolio: "live-5050", status: "REJECTED" }],
+    evaluations: [{ tokenId: "777", question: "Whose verdict is this", status: "EVALUATED" }],
+    observations: [],
+  });
+  assert.equal(evaluations[0].executionRevalidation.portfolio, "live-5050");
+  assert.equal(evaluations[0].executionRevalidation.status, "REJECTED",
+    "the verdict is stored whole, not reduced to the fields the merge happens to know about");
 
   // Why only the live portfolio emptied out: 5050's branch returns before the rule that
   // acts on a verdict, so it never saw the contamination it was causing.

@@ -6222,12 +6222,21 @@ test("live closed trades: resting orders are still attributed by price and run l
 // into sibling segment files, the core keeps exactly those fields as empty arrays -- so
 // every run merged into nothing, wrote nothing, and the dead markets were shortlisted,
 // re-fetched and re-rejected again on the next pass.
+//
+// Rewritten when the merge moved server-side. It used to assert the shape of the Python
+// script's FTP round trip, which no longer exists: the verdicts are POSTed and api.php does
+// the merge, because pulling the megabyte catalogue down and pushing it back cost 39 of the
+// 101 seconds a live execution took. What the test is FOR survives that move unchanged --
+// the verdicts have to reach the files the rows are actually in -- so it now checks the
+// joint the two halves meet at, by running both: the bot's real splitter produces the state,
+// and api.php's real path resolver is asked where the rows went. Greps on either side could
+// both pass while they disagreed about the file name.
 test("live revalidation: the verdicts are written where the rows actually live", async () => {
   const { readFile } = await import("node:fs/promises");
-  // The merge is a shared script now: it was a heredoc in the live workflow and absent
-  // from 5050, so a market that portfolio found gone stayed READY in its candidate list
-  // and was re-fetched and re-rejected by every pass after it.
-  const persist = await readFile(new URL("../tools/persist-live-revalidation.py", import.meta.url), "utf8");
+  const { execFileSync } = await import("node:child_process");
+  const { mkdirSync, mkdtempSync, rmSync, writeFileSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
 
   // The fact that makes merging into the core wrong, checked against the real splitter
   // rather than assumed: the fields the step needs are emptied out of paper-state.json.
@@ -6240,27 +6249,43 @@ test("live revalidation: the verdicts are written where the rows actually live",
   assert.deepEqual(core.marketObservations, [], "nor any observations");
   assert.equal(segments.evaluations.evaluations.length, 1, "the rows are in the segment file");
   assert.equal(segments.observations.marketObservations.length, 1);
-  assert.equal(core.stateSegments.evaluations.file, "paper-state.evaluations.json");
-  assert.equal(core.stateSegments.observations.file, "paper-state.observations.json");
 
-  // So the step has to follow the manifest to those files, and write them back.
-  assert.match(persist, /core = read_json\("paper-state\.json"\)/);
-  assert.match(persist, /manifest = core\.get\("stateSegments"\)/);
-  assert.match(persist, /for segment, field in \(\("evaluations", "evaluations"\), \("observations", "marketObservations"\)\):/);
-  assert.match(persist, /documents\[name\] = read_json\(name\)/);
-  assert.match(persist, /count = merge_revalidation\(documents\[name\]\.get\(field\), /);
-  assert.match(persist, /for name in sorted\(changed\):\n\s+write_json\(name, documents\[name\]\)/);
-  // A state written before segmentation still has its rows inline; that path must remain.
-  assert.match(persist, /if not re\.fullmatch\(r"\[A-Za-z0-9\._-\]\+\\\.json", name\):\n\s+name = "paper-state\.json"/);
-  // And the old whole-core rewrite must be gone, or it would clobber the manifest shell.
-  assert.ok(!/merged_evaluations = merge_revalidation\(state\.get\("evaluations"\)/.test(persist));
-  assert.ok(!/json\.dumps\(state, ensure_ascii=False, indent=2\)/.test(persist),
-    "the observations segment is megabytes; it must not be written indented");
+  // Lay that state out exactly as the upload does, then ask api.php itself where each
+  // segment is. A resolver that answered null would merge into the core's empty arrays --
+  // the original bug, which wrote nothing and said nothing.
+  const api = await readFile(new URL("../api.php", import.meta.url), "utf8");
+  const directory = mkdtempSync(join(tmpdir(), "revalidation-target-"));
+  try {
+    mkdirSync(join(directory, "data"), { recursive: true });
+    writeFileSync(join(directory, "data", "paper-state.json"), JSON.stringify(core));
+    for (const [segment, body] of Object.entries(segments)) {
+      writeFileSync(join(directory, "data", core.stateSegments[segment].file), JSON.stringify(body));
+    }
+    const definitions = join(directory, "definitions.php");
+    writeFileSync(definitions, api.slice(0, api.indexOf("\ntry {")) + "\n");
+    const resolved = JSON.parse(execFileSync("php", ["-r",
+      `chdir('${directory}'); require '${definitions}';`
+      + " $core = json_decode(file_get_contents('data/paper-state.json'), true);"
+      + " $paths = [];"
+      + " foreach (['evaluations', 'observations'] as $segment) {"
+      + "   $path = state_segment_path($core, __DIR__ . '/data/paper-state.json', $segment);"
+      + "   $paths[$segment] = $path === null ? null : basename($path);"
+      + " }"
+      + " echo json_encode($paths);",
+    ], { encoding: "utf8", cwd: directory }));
+    assert.deepEqual(resolved, {
+      evaluations: "paper-state.evaluations.json",
+      observations: "paper-state.observations.json",
+    }, "the merge must follow the manifest to the files the rows are in");
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
 
-  // A market Gamma dropped is closed out, which is what removes it from the candidates:
-  // api.php's active-observation test rejects exactly this status.
-  assert.match(persist, /if update\.get\("marketGone"\):/);
-  assert.match(persist, /item\["status"\] = "CLOSED"/);
+  // The observations segment is megabytes; indenting it would inflate the file for nothing.
+  const endpoint = api.slice(api.indexOf("if ($action === 'live-revalidation-merge') {"));
+  assert.doesNotMatch(endpoint.slice(0, endpoint.indexOf("\n    if ($action === 'dip-entry-record')")),
+    /JSON_PRETTY_PRINT/);
+
   // Both live portfolios must run it; one of them not doing so is the reported bug.
   for (const file of ["polymarket-live-limit-order-test", "trading-live-5050"]) {
     const workflow = await readFile(new URL(`../../.github/workflows/${file}.yml`, import.meta.url), "utf8");
@@ -6270,7 +6295,9 @@ test("live revalidation: the verdicts are written where the rows actually live",
       `${file} must persist its verdicts`);
   }
 
-  const api = await readFile(new URL("../api.php", import.meta.url), "utf8");
+  // A market Gamma dropped is closed out, which is what removes it from the candidates:
+  // api.php's active-observation test rejects exactly this status. The close-out itself is
+  // executed in tests/live-revalidation-merge.test.mjs.
   assert.match(api, /in_array\(\$status, \['RESOLVED', 'CLOSED', 'EXPIRED', 'FINALIZED', 'SETTLED'\], true\)/);
 });
 

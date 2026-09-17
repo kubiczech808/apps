@@ -288,11 +288,10 @@ jobs:
       # every pass after it -- three candidates, one order, two still waiting.
       - name: Persist current 5050 market verification into evaluation state
         if: always()
+        # The verdicts are POSTed and the server merges them; the catalogue itself never
+        # moves. It used to travel both ways over FTP, which cost 39 of the 101 seconds a
+        # live execution took.
         env:
-          HOSTING_FTP_SERVER: ${{ secrets.HOSTING_FTP_SERVER }}
-          HOSTING_FTP_USERNAME: ${{ secrets.HOSTING_FTP_USERNAME }}
-          HOSTING_FTP_PASSWORD: ${{ secrets.HOSTING_FTP_PASSWORD }}
-          TRADING_FTP_DIR: /www/trading/data
           LIVE_EXECUTION_STATE_FILE: trading/data/live-5050-execution-state.json
         run: python3 trading/tools/persist-live-revalidation.py
 

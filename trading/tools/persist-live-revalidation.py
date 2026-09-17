@@ -7,15 +7,28 @@ in its candidate list and was re-fetched and re-rejected on every pass. Duplicat
 heredoc would have meant fixing bugs in it twice, which had already happened once: the
 catalogue moved into sibling segment files and the merge kept writing to the core.
 
+It used to do the merge here, which meant pulling both catalogue segments down over FTP,
+patching a handful of rows, and pushing the whole thing back. Measured on live execution
+run 35262648170 -- 101 seconds end to end -- that was 39 seconds, more than a third of the
+run and more than seven times the 5 seconds the decision and the order submission took
+together. The observations segment is the 8,091-row catalogue and is measured in megabytes;
+the verdicts that change it are a few hundred bytes.
+
+So the verdicts travel and the catalogue stays put: they are POSTed to
+action=live-revalidation-merge, which holds the merge rules now. Sending the same verdicts
+twice is harmless -- a stored verdict newer than the one arriving wins -- so a failed
+attempt is simply retried.
+
 Environment:
-  LIVE_EXECUTION_STATE_FILE  the run's execution state, read for revalidationUpdates
-  HOSTING_FTP_SERVER / _USERNAME / _PASSWORD, TRADING_FTP_DIR
+  LIVE_EXECUTION_STATE_FILE      the run's execution state, read for revalidationUpdates
+  TRADING_TRIGGER_KEY            the server-side key the merge endpoint requires
+  LIVE_REVALIDATION_MERGE_URL    optional override of the endpoint
 """
-import ftplib
-import io
 import json
 import os
-import re
+import time
+import urllib.error
+import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -30,117 +43,63 @@ if not updates:
     print("No candidates were revalidated; paper evaluation state is unchanged.")
     raise SystemExit(0)
 
-target = os.environ["TRADING_FTP_DIR"].strip("/")
-def enter_dir(ftp, parts):
+url = os.environ.get("LIVE_REVALIDATION_MERGE_URL") or (
+    "https://osobnizkusenosti.cz/trading/api.php?action=live-revalidation-merge"
+)
+key = os.environ.get("TRADING_TRIGGER_KEY", "")
+if not key:
+    # Failing here rather than sending an unauthenticated request: the endpoint would
+    # refuse it anyway, and the difference between "not configured" and "rejected" is the
+    # whole diagnosis.
+    raise SystemExit("TRADING_TRIGGER_KEY is not configured; the revalidation merge cannot be authenticated.")
+
+body = json.dumps({"updates": updates}, ensure_ascii=False).encode("utf-8")
+print(f"Sending {len(updates)} live revalidation verdicts to the merge endpoint ({len(body)} bytes).")
+
+
+def merge_once():
+    request = urllib.request.Request(
+        url,
+        data=body,
+        method="POST",
+        headers={"Content-Type": "application/json", "X-Trading-Trigger-Key": key},
+    )
     try:
-        ftp.cwd("/")
-    except ftplib.all_errors:
-        pass
-    for part in parts:
-        if not part:
-            continue
-        ftp.cwd(part)
-
-with ftplib.FTP(os.environ["HOSTING_FTP_SERVER"], timeout=30) as ftp:
-    ftp.login(os.environ["HOSTING_FTP_USERNAME"], os.environ["HOSTING_FTP_PASSWORD"])
-    enter_dir(ftp, target.split("/"))
-
-    def read_json(name):
-        buffer = io.BytesIO()
-        ftp.retrbinary(f"RETR {name}", buffer.write)
-        return json.loads(buffer.getvalue().decode("utf-8"))
-
-    def write_json(name, payload):
-        body = (json.dumps(payload, ensure_ascii=False) + "\n").encode("utf-8")
-        temporary = name + ".live-revalidation-uploading"
-        ftp.storbinary(f"STOR {temporary}", io.BytesIO(body))
+        with urllib.request.urlopen(request, timeout=60) as response:
+            return json.loads(response.read().decode("utf-8")), None
+    except urllib.error.HTTPError as error:
         try:
-            ftp.rename(temporary, name)
-        except ftplib.all_errors:
-            ftp.delete(name)
-            ftp.rename(temporary, name)
+            payload = json.loads(error.read().decode("utf-8"))
+        except Exception:
+            payload = {}
+        return payload, f"HTTP {error.code}: {payload.get('error') or 'no detail'}"
+    except Exception as error:  # noqa: BLE001 -- transport, DNS, timeout
+        return {}, str(error)
 
-    # The catalogue moved out of paper-state.json into sibling segment files,
-    # and the core keeps those fields as empty arrays. Merging into the core
-    # was therefore merging into nothing on every run: no verdict was ever
-    # persisted, so a market Gamma had already dropped kept being shortlisted,
-    # re-fetched and re-rejected, and never left the candidate list. Follow the
-    # manifest to the files that actually hold the rows.
-    core = read_json("paper-state.json")
-    manifest = core.get("stateSegments") if isinstance(core.get("stateSegments"), dict) else {}
-    documents = {"paper-state.json": core}
-    plan = []
-    for segment, field in (("evaluations", "evaluations"), ("observations", "marketObservations")):
-        entry = manifest.get(segment) if isinstance(manifest.get(segment), dict) else None
-        name = str(entry.get("file") or "") if entry else ""
-        # The manifest is generated data that still arrives as file content, so
-        # the name is constrained to a plain sibling file. A state written
-        # before segmentation carries the rows in the core itself.
-        if not re.fullmatch(r"[A-Za-z0-9._-]+\.json", name):
-            name = "paper-state.json"
-        if name not in documents:
-            documents[name] = read_json(name)
-        plan.append((name, field))
 
-    closed_out = []
-    def merge_revalidation(rows, label):
-        if not isinstance(rows, list):
-            return 0
-        by_token = {str(item.get("tokenId")): item for item in rows if isinstance(item, dict) and item.get("tokenId")}
-        merged = 0
-        for update in updates:
-            item = by_token.get(str(update["tokenId"]))
-            if not item:
-                continue
-            existing = item.get("executionRevalidation") if isinstance(item.get("executionRevalidation"), dict) else {}
-            if existing.get("checkedAt", "") > update.get("checkedAt", ""):
-                continue
-            item["executionRevalidation"] = update
-            # The source record stays scraped/evaluated; this is the current
-            # execution verdict for the portfolio shortlist.
-            for field in ("marketPrice", "marketProbability", "annualizedReturn", "expectedValueUsdc", "daysToResolution", "liquidity", "netGainIfWinUsdc", "totalCostUsdc", "orderPrice", "orderSize", "orderNotionalUsdc", "minOrderSize", "spread", "feeRate"):
-                if field in update:
-                    item[field] = update[field]
-            # A market Gamma no longer lists, or one that stopped accepting
-            # orders, cannot come back. Closing the stored row out is what
-            # removes it from the candidate list for good; otherwise the
-            # prefilter keeps shortlisting it and every run pays for a live
-            # fetch just to reject it again.
-            if update.get("marketGone"):
-                item["status"] = "CLOSED"
-                item["selectionStatus"] = "CLOSED"
-                item["marketClosed"] = True
-                item["acceptingOrders"] = False
-                # Two different ends look identical once the row reads CLOSED: a
-                # market Gamma dropped, and an event that has finished but has not
-                # been settled yet. The second is still expecting a result, so it
-                # says so -- otherwise a row that left the candidate list on the day
-                # of its own match cannot be told apart from one that was delisted,
-                # and the reason is lost along with it.
-                if update.get("awaitingResolution"):
-                    item["awaitingResolution"] = True
-                    item["closedReason"] = "finished, awaiting Polymarket resolution"
-                closed_out.append(str(update["tokenId"]))
-            item["updatedAt"] = update["checkedAt"]
-            merged += 1
-        print(f"Merged {merged} live revalidation updates into {label}.")
-        return merged
+payload = {}
+failure = None
+# Re-sending is safe, so a hiccup on a constrained shared host is retried rather than
+# losing a run's verdicts -- every unpersisted verdict is a candidate the next pass pays a
+# live fetch to reject again.
+for attempt in range(3):
+    if attempt:
+        time.sleep(2 ** attempt)
+    payload, failure = merge_once()
+    if failure is None and payload.get("ok"):
+        break
+    print(f"Revalidation merge attempt {attempt + 1} failed: {failure or payload.get('error') or 'no detail'}")
 
-    merged = 0
-    changed = set()
-    for name, field in plan:
-        count = merge_revalidation(documents[name].get(field), f"{name} -> {field}")
-        merged += count
-        if count:
-            changed.add(name)
-    if closed_out:
-        print(f"Closed out {len(set(closed_out))} rows whose market no longer exists: {sorted(set(closed_out))}")
-    if not merged:
-        print("Revalidated tokens were no longer present in remote evaluation or scraped market state.")
-        raise SystemExit(0)
+if failure is not None or not payload.get("ok"):
+    raise SystemExit(f"Revalidation merge failed: {failure or payload.get('error') or 'no detail'}")
 
-    # Written compactly, the way the bot writes them: the observations segment
-    # is measured in megabytes and indenting it would inflate it for nothing.
-    for name in sorted(changed):
-        write_json(name, documents[name])
-    print(f"Persisted {merged} live revalidation updates into {', '.join(sorted(changed))} at {datetime.now(timezone.utc).isoformat()}")
+merged = int(payload.get("merged") or 0)
+segments = payload.get("segments") or []
+closed_out = payload.get("closedOut") or []
+if closed_out:
+    print(f"Closed out {len(closed_out)} rows whose market no longer exists: {sorted(closed_out)}")
+if not merged:
+    print("Revalidated tokens were no longer present in remote evaluation or scraped market state.")
+    raise SystemExit(0)
+print(f"Persisted {merged} live revalidation updates into {', '.join(segments) or 'the catalogue'}"
+      f" at {datetime.now(timezone.utc).isoformat()}")

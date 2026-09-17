@@ -7880,7 +7880,11 @@ try {
             'merged' => $merged,
             'updates' => count($byToken),
             'segments' => $written,
-            'closedOut' => array_keys($closedOut),
+            // Cast back: PHP turns a numeric string into an integer array key, so a short
+            // token id would come back as a number and a 77-digit one as a string. Token
+            // ids are strings everywhere else, and a type that varies with the value is a
+            // comparison that works until the day it does not.
+            'closedOut' => array_values(array_map('strval', array_keys($closedOut))),
             'at' => gmdate('c'),
         ]);
     }
