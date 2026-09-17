@@ -4931,7 +4931,25 @@ function shouldCheckEqualStopBeforePending({ equalRiskProtection = false, awaiti
 // Measured on 80-90 sl: "Exact Score: CA Platense 0 - 1 CD Riestra?" entered at 0.9600 with
 // a 0.8998 floor and a 0.35 USDC risk target, lastLiveBid never recorded, settled at 0, and
 // booked the full 5.01 USDC -- fourteen times the loss the floor was there to cap.
-function settlementStopFill({
+// What a stop WOULD have returned on a position that settled at zero without the bot ever
+// seeing it cross -- reported, and deliberately not booked.
+//
+// This used to book it. A protected position that settled at zero was recorded as having
+// FILLED at its floor, reasoning that the price passed through the floor on the way down and
+// a sell resting there is taken out by the crossing. That models a resting limit order.
+//
+// The live system has no resting exit order. The RPi worker polls, and when it sees the bid
+// at the trigger it submits a fill-or-kill, which it also refuses on a gapped or
+// counterparty-less book. So the fill this function invented had no live counterpart, and
+// the branch fired in exactly the case the bot could NOT see: the last look was ABOVE the
+// floor, so the crossing was never observed.
+//
+// Measured across the account before the change: 536 closed paper trades were booked this
+// way, worth $2,149.56 of P&L with nothing behind it. Two portfolios had 100% of their
+// closed trades booked at their floor. Asked for plainly -- "oprav paper portfolio uctovani
+// tak at to odpovida realite" -- so the position now books what it actually returned, which
+// is nothing, and the floor is kept beside it as the counterfactual it always was.
+function settlementStopCounterfactual({
   plan,
   lastLiveMark,
   entryPrice,
@@ -4956,18 +4974,24 @@ function settlementStopFill({
   if (!isQuote(mark) || !(mark > floor)) return null;
   const exitValueUsdc = netExitValueAtPrice({ shares: size, price: floor, feeRate, feesEnabled });
   if (!Number.isFinite(exitValueUsdc)) return null;
-  const realizedPnlUsdc = Number((exitValueUsdc - cost).toFixed(4));
+  // What the floor WOULD have returned. Reported, never booked: see the note on this
+  // function. The position's actual result is the settlement, and the caller books that.
+  const counterfactualPnlUsdc = Number((exitValueUsdc - cost).toFixed(4));
   return {
-    fillPrice: floor,
+    floorPrice: floor,
     lastLiveMark: Number(mark.toFixed(4)),
     // Which of the two proved the position sat above the floor, so the note it produces
     // does not claim a quote that was never taken.
     markSource: isQuote(observed) ? "last-live-bid" : "entry-price",
-    exitValueUsdc: Number(exitValueUsdc.toFixed(4)),
-    realizedPnlUsdc,
+    counterfactualExitValueUsdc: Number(exitValueUsdc.toFixed(4)),
+    counterfactualPnlUsdc,
+    // What the settlement really cost, which is the whole position.
+    realizedPnlUsdc: Number((-cost).toFixed(4)),
     riskTargetUsdc: plan.riskTargetUsdc,
     stopLossRiskMultiplier: plan.stopLossRiskMultiplier ?? null,
-    capBreachUsdc: Number(Math.max(0, -realizedPnlUsdc - Number(plan.riskTargetUsdc || 0)).toFixed(5)),
+    // How far past the risk target the real loss went. It used to be measured against the
+    // floor fill, where it was almost always zero by construction.
+    capBreachUsdc: Number(Math.max(0, cost - Number(plan.riskTargetUsdc || 0)).toFixed(5)),
   };
 }
 
@@ -5320,13 +5344,20 @@ async function markOpenTrade(trade, strategy = null, funding = null) {
     const won = resolvedPrice >= 0.999;
     const lost = resolvedPrice <= 0.001;
     if (won || lost) {
-      // A protected position that settles at zero crossed its floor to get there: the floor
-      // sits below the entry by construction and the price ended below the floor, so it
-      // passed through, and a sell resting at the floor is taken out by that crossing. The
-      // settlement was being booked before the floor was ever consulted, so a market that
-      // closed between two polls took the whole stake and left the stop reading ARMED.
+      // A protected position that settled at zero WITHOUT the bot ever seeing it cross.
+      //
+      // This used to book a fill at the floor, and that was the single largest difference
+      // between a paper portfolio's result and its live twin's: $2,149.56 across the
+      // account, 100% of the closed trades in two portfolios. Nothing rests in the book
+      // live, so nothing was taken out by the crossing, and the crossing itself was never
+      // observed -- this branch fires precisely when the last look was ABOVE the floor.
+      //
+      // So the settlement is booked, which is what the position actually returned, and the
+      // floor travels with it as the counterfactual: what a stop would have saved, on a row
+      // that now says plainly it never fired. That number is worth keeping -- it is the
+      // measure of what the hourly cadence costs -- it is just not money.
       const settlementStop = lost
-        ? settlementStopFill({
+        ? settlementStopCounterfactual({
           plan: stopPlanWithFloor(),
           lastLiveMark: trade.lastLiveBid ?? trade.currentPrice,
           // The mark that is always known: a position was bought above its own floor.
@@ -5340,31 +5371,37 @@ async function markOpenTrade(trade, strategy = null, funding = null) {
       if (settlementStop) {
         return {
           ...base,
-          status: "STOP_LOSS",
+          // LOST, not STOP_LOSS. Nothing sold this position, and a row labelled as a
+          // protective exit is a row that claims a sale happened.
+          status: "LOST",
           closedAt: checkedAt,
           resolvedAt: market.closedTime || checkedAt,
           finalOutcomePrice: Number(resolvedPrice.toFixed(4)),
-          currentPrice: settlementStop.fillPrice,
+          currentPrice: Number(resolvedPrice.toFixed(4)),
           observedBidAtStop: settlementStop.lastLiveMark,
-          currentValueUsdc: settlementStop.exitValueUsdc,
+          currentValueUsdc: 0,
           unrealizedPnlUsdc: 0,
           unrealizedPnlPct: 0,
           realizedPnlUsdc: settlementStop.realizedPnlUsdc,
           realizedPnlPct: pnlPercent(settlementStop.realizedPnlUsdc, cost),
-          stopLossStatus: "FILLED_AT_FLOOR",
-          stopLossTriggeredAt: checkedAt,
-          stopLossPrice: settlementStop.fillPrice,
+          // The stop was armed and never fired, which is a fourth thing from FILLED,
+          // DECLINED_GAPPED and ARMED, and the row has to be able to say so.
+          stopLossStatus: "NEVER_FILLED",
+          stopLossPrice: settlementStop.floorPrice,
+          // Kept beside the real result: what the floor would have returned had anyone been
+          // buying there when it crossed. This is the cost of an hourly cadence, measured.
+          stopLossCounterfactualPnlUsdc: settlementStop.counterfactualPnlUsdc,
+          stopLossCounterfactualExitValueUsdc: settlementStop.counterfactualExitValueUsdc,
           riskTargetUsdc: settlementStop.riskTargetUsdc,
           stopLossRiskMultiplier: settlementStop.stopLossRiskMultiplier ?? trade.stopLossRiskMultiplier ?? null,
           stopLossCapBreachUsdc: settlementStop.capBreachUsdc,
-          statusNote: settlementStop.markSource === "entry-price"
-            ? `Equal stop filled at its ${settlementStop.fillPrice.toFixed(4)} floor: no live quote was`
-              + ` recorded before the market closed, but the position was bought at`
-              + ` ${settlementStop.lastLiveMark.toFixed(4)} -- above its own floor by construction --`
-              + ` and settled at ${resolvedPrice}, so it traded through the resting exit on the way down.`
-            : `Equal stop filled at its ${settlementStop.fillPrice.toFixed(4)} floor: the market was`
-              + ` quoted at ${settlementStop.lastLiveMark.toFixed(4)} at the last look and settled at`
-              + ` ${resolvedPrice}, so it traded through the resting exit before resolving.`,
+          statusNote: `Settled at ${resolvedPrice} and the ${settlementStop.floorPrice.toFixed(4)} stop never`
+            + ` fired: the market was last quoted at ${settlementStop.lastLiveMark.toFixed(4)}`
+            + `${settlementStop.markSource === "entry-price" ? " (its entry price, no live quote was recorded)" : ""}`
+            + ` and closed before the next check, so nothing sold it. Holding to a stop that`
+            + ` is never reached between polls costs the whole position:`
+            + ` ${settlementStop.realizedPnlUsdc.toFixed(2)} against the`
+            + ` ${settlementStop.counterfactualPnlUsdc.toFixed(2)} a fill at the floor would have returned.`,
         };
       }
       const realizedPnl = won ? Number((Number(trade.shares || 0) - cost).toFixed(4)) : Number((-cost).toFixed(4));
@@ -13619,7 +13656,7 @@ export {
   candidateSpreadIsTradable,
   // Whether a resting stop would have been filled by the crossing a losing settlement
   // proves, for the one case the live check never reached: the market closed.
-  settlementStopFill,
+  settlementStopCounterfactual,
   // Capital that really is in a position, and the check that a fill can be funded out of it.
   positionRisk,
   fundLimitOrderFills,

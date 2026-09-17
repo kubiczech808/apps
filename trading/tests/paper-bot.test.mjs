@@ -9187,9 +9187,17 @@ test("market type: the browser classifies exactly as the bot does", () => {
 // carried a trigger time. markOpenTrade returned the settlement before it ever consulted
 // the floor, so any position whose market closed between two polls skipped the stop.
 
-test("stop loss: a losing settlement fills the stop the crossing would have taken out", () => {
+test("stop loss: a losing settlement reports the floor it never filled at", () => {
+  // This test used to assert the opposite, and the opposite was the bug. It booked the
+  // floor as a FILL, on a position nobody sold, because the reasoning was that a sell
+  // resting at the floor is taken out by the crossing. Nothing rests in the book live, and
+  // this branch fires exactly when the crossing was never seen -- the last mark is ABOVE
+  // the floor. Measured across the account: $2,149.56 of P&L with nothing behind it.
+  //
+  // The counterfactual is still computed, and still useful: it is the measure of what the
+  // hourly cadence costs. It is simply not money.
   const plan = { protectable: true, requiresStop: true, stopPrice: 0.425, riskTargetUsdc: 2.24, stopLossRiskMultiplier: 1 };
-  const fill = bot.settlementStopFill({
+  const report = bot.settlementStopCounterfactual({
     plan,
     lastLiveMark: 0.62,
     shares: 6.4935,
@@ -9197,37 +9205,43 @@ test("stop loss: a losing settlement fills the stop the crossing would have take
     feesEnabled: false,
     totalCostUsdc: 5,
   });
-  assert.ok(fill, "a mark above the floor is a crossing on the way to zero");
-  assert.equal(fill.fillPrice, 0.425, "filled at the floor, never at the settlement print");
-  // 6.4935 shares sold at 0.425 returns 2.76, against a 5.00 cost.
-  assert.ok(Math.abs(fill.realizedPnlUsdc + 2.24) < 0.01,
-    `the loss must land on the planned target, got ${fill.realizedPnlUsdc}`);
-  // The floor above is hand-rounded to four places; production bisects until the exit value
-  // is at or above the boundary. A sub-cent overshoot here therefore belongs to the fixture,
-  // and what has to hold is that a fill at the floor does not breach the cap.
-  assert.ok(fill.capBreachUsdc < 0.01,
-    `a fill at the floor must not breach the cap, got ${fill.capBreachUsdc}`);
+  assert.ok(report, "a mark above the floor is a position the bot never saw cross");
+  assert.equal(report.floorPrice, 0.425, "the floor is reported, and reported as the floor");
+  assert.equal(report.fillPrice, undefined, "there is no fill price, because there was no fill");
+
+  // The real result: the whole position, because nothing sold it.
+  assert.equal(report.realizedPnlUsdc, -5);
+  // And what a fill at the floor would have returned, kept beside it. 6.4935 shares at
+  // 0.425 returns 2.76 against a 5.00 cost.
+  assert.ok(Math.abs(report.counterfactualPnlUsdc + 2.24) < 0.01,
+    `the counterfactual must land on the planned target, got ${report.counterfactualPnlUsdc}`);
+
+  // The cap breach is now measured against what was actually lost. It used to be measured
+  // against the invented fill, where it was zero by construction -- a risk cap that could
+  // never report being breached is not a risk cap.
+  assert.ok(report.capBreachUsdc > 2.7,
+    `losing the stake blows a 2.24 risk target, got ${report.capBreachUsdc}`);
 });
 
 test("stop loss: a settlement print cannot pass for the last quote", () => {
   const plan = { protectable: true, requiresStop: true, stopPrice: 0.425, riskTargetUsdc: 2.24 };
   const args = { plan, shares: 6.4935, feeRate: 0, feesEnabled: false, totalCostUsdc: 5 };
   // 0 is exactly what the closing write leaves on currentPrice, and it is not a quote.
-  assert.equal(bot.settlementStopFill({ ...args, lastLiveMark: 0 }), null);
-  assert.equal(bot.settlementStopFill({ ...args, lastLiveMark: 1 }), null);
-  assert.equal(bot.settlementStopFill({ ...args, lastLiveMark: null }), null);
+  assert.equal(bot.settlementStopCounterfactual({ ...args, lastLiveMark: 0 }), null);
+  assert.equal(bot.settlementStopCounterfactual({ ...args, lastLiveMark: 1 }), null);
+  assert.equal(bot.settlementStopCounterfactual({ ...args, lastLiveMark: null }), null);
   // Already through the floor when last seen: a genuine gap, and the full loss stands.
-  assert.equal(bot.settlementStopFill({ ...args, lastLiveMark: 0.30 }), null);
+  assert.equal(bot.settlementStopCounterfactual({ ...args, lastLiveMark: 0.30 }), null);
   // No protection, or a plan that never needed a stop.
-  assert.equal(bot.settlementStopFill({ ...args, plan: null, lastLiveMark: 0.62 }), null);
-  assert.equal(bot.settlementStopFill({
+  assert.equal(bot.settlementStopCounterfactual({ ...args, plan: null, lastLiveMark: 0.62 }), null);
+  assert.equal(bot.settlementStopCounterfactual({
     ...args,
     plan: { protectable: true, requiresStop: false, stopPrice: null },
     lastLiveMark: 0.62,
   }), null);
 });
 
-test("stop loss: a market that closes between two polls no longer skips the floor", async () => {
+test("stop loss: a market that closes between two polls says the stop never fired", async () => {
   const { bot: scoped, restore } = await scopedBot("settlement-stop", {});
   const stub = stubFetch((url) => {
     if (url.includes("gamma-api.polymarket.com/markets")) {
@@ -9272,16 +9286,25 @@ test("stop loss: a market that closes between two polls no longer skips the floo
     };
     const marked = await scoped.markOpenTrade(protectedTrade);
 
-    assert.equal(marked.status, "STOP_LOSS",
-      `a protected loser must exit at its floor, got ${marked.status}: ${marked.statusNote}`);
-    assert.equal(marked.stopLossStatus, "FILLED_AT_FLOOR");
-    assert.ok(marked.stopLossTriggeredAt, "the stop has to record when it ran");
-    assert.ok(marked.realizedPnlUsdc > -5,
-      `the whole stake must no longer be lost, got ${marked.realizedPnlUsdc}`);
-    // The floor for a 0.77 entry with an equal-risk cap is well above zero, so the loss is
-    // a fraction of the stake rather than all of it.
-    assert.ok(marked.realizedPnlUsdc < 0, "it is still a loss");
+    // LOST, not STOP_LOSS: nothing sold this position. The original complaint was that such
+    // a row sat in LOST with the stop still reading ARMED, which said nothing at all -- the
+    // fix for that is a status that describes what happened, not a fill that did not.
+    assert.equal(marked.status, "LOST",
+      `nothing sold this position, got ${marked.status}: ${marked.statusNote}`);
+    assert.equal(marked.stopLossStatus, "NEVER_FILLED",
+      "ARMED was the uninformative status this test was written against; a fill is not the cure");
+    assert.equal(marked.realizedPnlUsdc, -5,
+      "the whole stake really was lost, and the balance has to show that");
+    // What the floor would have returned, kept beside it. This is the number worth having --
+    // the cost of an hourly cadence -- and the reason to keep computing the floor at all.
+    assert.ok(marked.stopLossCounterfactualPnlUsdc > -5,
+      `the floor would have saved something, got ${marked.stopLossCounterfactualPnlUsdc}`);
+    assert.ok(marked.stopLossCounterfactualPnlUsdc < 0, "it would still have been a loss");
+    assert.ok(marked.stopLossCapBreachUsdc > 0,
+      "losing the stake breaches the risk target, and the row must say by how much");
     assert.equal(marked.observedBidAtStop, 0.62, "the mark the decision was made on is kept");
+    assert.match(marked.statusNote, /never\n?\s*fired/,
+      `the note has to say the stop did not fire: ${marked.statusNote}`);
 
     // The same market, with no protection configured, still books the plain settlement.
     const unprotected = await scoped.markOpenTrade({
@@ -9289,8 +9312,12 @@ test("stop loss: a market that closes between two polls no longer skips the floo
       id: "t2",
       equalRiskProtection: false,
     });
-    assert.equal(unprotected.status, "LOST", "an unprotected position has no floor to fill at");
+    // An unprotected position books the same loss -- which is the point: the two used to
+    // differ by the invented fill, and now they differ only in what the row can explain.
+    assert.equal(unprotected.status, "LOST", "an unprotected position has no floor at all");
     assert.equal(unprotected.realizedPnlUsdc, -5);
+    assert.equal(unprotected.stopLossStatus ?? null, null,
+      "and no stop status, because there was no stop");
   } finally {
     stub.restore();
     restore();
@@ -10865,18 +10892,23 @@ test("paper state segments: a dropped download is retried before the run gives u
 // cap. Its lastLiveBid was never recorded, and currentPrice had already been overwritten by
 // the settlement print of 0, so the settlement stop had no usable mark and declined to fill.
 //
-// The entry price is the mark that is always known. A position is bought above its own
-// floor by construction -- the floor is derived from the entry -- so the entry is itself an
-// observation of the position sitting above the floor, and a sell resting there existed
-// from that moment. A settlement at zero proves the price travelled through it.
-test("paper stop: a settled loser still fills its floor when no live quote was recorded", async () => {
+// The entry price is the mark that is always known. A position is bought above its own floor
+// by construction, so the entry is itself an observation of the position sitting above the
+// floor -- which is what makes this a position the bot never saw cross.
+//
+// What it is NOT is evidence that anyone was buying at the floor when it did cross. That
+// step was the error: "a sell resting there existed from that moment" describes a resting
+// limit order, and the live system has none. So the position now books the settlement, and
+// the floor is reported as the counterfactual -- which is exactly the number this report
+// wanted to see, fourteen times the risk target, just no longer added to the balance.
+test("paper stop: a settled loser reports the floor it was never sold at", async () => {
   const { readFile } = await import("node:fs/promises");
   const source = await readFile(new URL("../tools/paper-trading-bot.mjs", import.meta.url), "utf8");
 
   const api = new Function(`
     ${functionSource(source, "netExitValueAtPrice")}
-    ${functionSource(source, "settlementStopFill")}
-    return { settlementStopFill };
+    ${functionSource(source, "settlementStopCounterfactual")}
+    return { settlementStopCounterfactual };
   `)();
 
   // The reported position, to the number.
@@ -10884,7 +10916,7 @@ test("paper stop: a settled loser still fills its floor when no live quote was r
   const shares = 5.2188;
   const cost = 5.01;
 
-  const noQuote = api.settlementStopFill({
+  const noQuote = api.settlementStopCounterfactual({
     plan,
     lastLiveMark: 0,          // the settlement print, which is not a quote
     entryPrice: 0.96,
@@ -10893,16 +10925,21 @@ test("paper stop: a settled loser still fills its floor when no live quote was r
     feesEnabled: false,
     totalCostUsdc: cost,
   });
-  assert.ok(noQuote, "a protected loser with no recorded quote must still fill its floor");
+  assert.ok(noQuote, "a protected loser with no recorded quote is still one this can describe");
   assert.equal(noQuote.markSource, "entry-price", "and must say which mark proved it");
-  assert.equal(noQuote.fillPrice, 0.8998);
-  // The whole point: the loss is capped near the risk target instead of taking the stake.
-  assert.ok(noQuote.realizedPnlUsdc > -1, `loss must be capped, got ${noQuote.realizedPnlUsdc}`);
-  assert.ok(Math.abs(noQuote.realizedPnlUsdc) < cost / 2,
-    "the capped loss must be nothing like the full 5.01 USDC that was booked");
+  assert.equal(noQuote.floorPrice, 0.8998);
+  // The real result: the whole position. Nothing sold it, and the report says so rather
+  // than capping a loss that was never capped.
+  assert.equal(noQuote.realizedPnlUsdc, -5.01);
+  // And the counterfactual, which is what the original report was really about: a fill at
+  // the floor would have lost about the risk target instead of the stake. That gap is the
+  // finding -- it is now stated instead of being quietly added to the balance.
+  assert.ok(noQuote.counterfactualPnlUsdc > -1,
+    `the floor would have capped it, got ${noQuote.counterfactualPnlUsdc}`);
+  assert.ok(Math.abs(noQuote.counterfactualPnlUsdc) < cost / 2);
 
   // A real quote still wins over the entry, and is still reported as the real quote.
-  const withQuote = api.settlementStopFill({
+  const withQuote = api.settlementStopCounterfactual({
     plan, lastLiveMark: 0.93, entryPrice: 0.96, shares, feeRate: 0, feesEnabled: false, totalCostUsdc: cost,
   });
   assert.equal(withQuote.markSource, "last-live-bid");
@@ -10910,21 +10947,21 @@ test("paper stop: a settled loser still fills its floor when no live quote was r
 
   // The genuine gap is untouched: a position observed BELOW its floor was never fillable
   // there, and that full loss still stands. The entry must not be used to paper over it.
-  const gapped = api.settlementStopFill({
+  const gapped = api.settlementStopCounterfactual({
     plan, lastLiveMark: 0.5, entryPrice: 0.96, shares, feeRate: 0, feesEnabled: false, totalCostUsdc: cost,
   });
   assert.equal(gapped, null, "an observed quote below the floor is a real gap, not a fill");
 
   // And a settlement print of 1 is no more a quote than 0 is.
-  const settledHigh = api.settlementStopFill({
+  const settledHigh = api.settlementStopCounterfactual({
     plan, lastLiveMark: 1, entryPrice: 0.96, shares, feeRate: 0, feesEnabled: false, totalCostUsdc: cost,
   });
   assert.equal(settledHigh.markSource, "entry-price");
   // An entry at or below its own floor cannot prove anything, so nothing is invented.
-  assert.equal(api.settlementStopFill({
+  assert.equal(api.settlementStopCounterfactual({
     plan, lastLiveMark: 0, entryPrice: 0.5, shares, feeRate: 0, feesEnabled: false, totalCostUsdc: cost,
   }), null);
-  assert.equal(api.settlementStopFill({
+  assert.equal(api.settlementStopCounterfactual({
     plan, lastLiveMark: 0, entryPrice: null, shares, feeRate: 0, feesEnabled: false, totalCostUsdc: cost,
   }), null);
 });
