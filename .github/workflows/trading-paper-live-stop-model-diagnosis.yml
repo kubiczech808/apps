@@ -1,0 +1,36 @@
+name: Trading Paper vs Live Stop Model Diagnosis
+
+# READ-ONLY, manual only. Public GETs against the hosting's own API. No secrets, no runner on
+# the Pi, no writes of any kind: contents: read and nothing else.
+#
+# Asked because three paper portfolios have fantastic results and their live copies lose
+# money. Paper books a losing protected position at its stop FLOOR, modelling a resting sell
+# order; live has no resting order at all. This measures how much of each paper portfolio's
+# result comes from that assumption, so the two can be compared on the same terms.
+on:
+  workflow_dispatch:
+    inputs:
+      portfolios:
+        description: "Optional: comma-separated names or ids to focus on, e.g. 55-70,underway"
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Measure what the resting-stop assumption is worth per portfolio
+        working-directory: trading
+        env:
+          PROBE_PORTFOLIOS: ${{ inputs.portfolios }}
+        run: node tools/paper-live-stop-model-probe.mjs
