@@ -166,7 +166,6 @@ export const buildFvgSupplyDemandZones = (candles, {
   const oldestIndex = Math.max(0, candles.length - maxAgeCandles)
   const gaps = fairValueGaps(candles, { atrValue: reference, minSizeAtr: minGapAtr })
   const zones = []
-  const claimedBases = new Set()
 
   for (const gap of gaps) {
     const displacementIndex = gap.index
@@ -202,14 +201,32 @@ export const buildFvgSupplyDemandZones = (candles, {
     const high = type === 'demand' ? Math.max(base.open, base.close) : base.high
     if (!(high > low)) continue
 
-    // One displacement can leave several consecutive FVGs behind it. They all
-    // validate the same origin, but they do not turn that base into multiple
-    // supply/demand zones. Keep the first confirmation nearest to the base.
-    const baseKey = `${type}:${baseIndex}`
-    if (claimedBases.has(baseKey)) continue
-    claimedBases.add(baseKey)
-
     const confirmationIndex = gap.confirmationIndex ?? displacementIndex + 1
+    const continuation = zones.find((zone) => (
+      zone.type === type
+      && zone.low <= high
+      && low <= zone.high
+      && baseIndex <= zone.lastIndex + 1
+      && confirmationIndex >= zone.firstIndex - 1
+    ))
+    if (continuation) {
+      // A multi-candle base can produce consecutive overlapping FVG triples.
+      // That is one origin with continuing displacement, not a stack of
+      // duplicate zones. A later revisit at the same price remains separate
+      // because its candle windows no longer touch.
+      continuation.low = Math.min(continuation.low, low)
+      continuation.high = Math.max(continuation.high, high)
+      continuation.firstIndex = Math.min(continuation.firstIndex, baseIndex)
+      continuation.lastIndex = Math.max(continuation.lastIndex, confirmationIndex)
+      continuation.lastTime = candles[continuation.lastIndex]?.time ?? continuation.lastTime
+      continuation.baseIndexes = [...new Set([...continuation.baseIndexes, baseIndex])].sort((a, b) => a - b)
+      continuation.touches = candles
+        .slice(continuation.lastIndex + 1)
+        .filter((candle) => candle.low <= continuation.high && candle.high >= continuation.low)
+        .length
+      continue
+    }
+
     const later = candles.slice(confirmationIndex + 1)
     zones.push({
       type,
