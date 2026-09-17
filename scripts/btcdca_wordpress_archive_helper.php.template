@@ -1,0 +1,136 @@
+<?php
+declare(strict_types=1);
+
+// Generated only inside GitHub Actions, uploaded temporarily, then deleted.
+$config = json_decode(base64_decode('__CONFIG_BASE64__', true), true, 512, JSON_THROW_ON_ERROR);
+
+if (!hash_equals($config['token'], (string) ($_SERVER['HTTP_X_BTCDCA_TOKEN'] ?? ''))) {
+    http_response_code(403);
+    exit('Forbidden');
+}
+
+function archive_failure(Throwable $error): never {
+    http_response_code(500);
+    header('Content-Type: text/plain; charset=utf-8');
+    exit('WordPress archive helper error: ' . $error->getMessage());
+}
+
+function archive_path(array $config): string {
+    return rtrim(sys_get_temp_dir(), DIRECTORY_SEPARATOR)
+        . DIRECTORY_SEPARATOR
+        . 'btcdca-wordpress-' . hash('sha256', $config['token']) . '.zip';
+}
+
+function add_file(ZipArchive $archive, string $source, string $entry): void {
+    if (!is_file($source) || is_link($source) || !$archive->addFile($source, $entry)) {
+        throw new RuntimeException('Could not add expected WordPress file to the recovery archive.');
+    }
+}
+
+function add_tree(ZipArchive $archive, string $sourceRoot, string $entryRoot): int {
+    if (!is_dir($sourceRoot) || is_link($sourceRoot)) {
+        throw new RuntimeException('Expected WordPress directory is unavailable.');
+    }
+
+    $count = 0;
+    $iterator = new RecursiveIteratorIterator(
+        new RecursiveDirectoryIterator($sourceRoot, FilesystemIterator::SKIP_DOTS),
+        RecursiveIteratorIterator::LEAVES_ONLY
+    );
+    foreach ($iterator as $file) {
+        if (!$file instanceof SplFileInfo || !$file->isFile() || $file->isLink()) {
+            throw new RuntimeException('Unexpected WordPress filesystem entry.');
+        }
+        $path = $file->getPathname();
+        $relative = substr($path, strlen($sourceRoot) + 1);
+        add_file($archive, $path, $entryRoot . '/' . str_replace(DIRECTORY_SEPARATOR, '/', $relative));
+        $count++;
+    }
+    return $count;
+}
+
+function create_archive(array $config): array {
+    if (!class_exists('ZipArchive')) {
+        throw new RuntimeException('ZipArchive is not available on this hosting plan.');
+    }
+
+    $root = __DIR__;
+    $path = archive_path($config);
+    @unlink($path);
+    $archive = new ZipArchive();
+    if ($archive->open($path, ZipArchive::CREATE | ZipArchive::OVERWRITE) !== true) {
+        throw new RuntimeException('Could not create the WordPress recovery archive.');
+    }
+
+    try {
+        $files = 0;
+        foreach (['wp-admin', 'wp-includes', 'wp-content'] as $directory) {
+            $files += add_tree($archive, $root . DIRECTORY_SEPARATOR . $directory, 'wordpress-files/' . $directory);
+        }
+
+        $rootFiles = array_merge(
+            glob($root . DIRECTORY_SEPARATOR . 'wp-*.php') ?: [],
+            array_map(fn (string $file): string => $root . DIRECTORY_SEPARATOR . $file, [
+                'index.php', 'index.html', '.htaccess', 'robots.txt', 'sitemap.xml', 'license.txt', 'readme.html',
+            ])
+        );
+        $rootFiles = array_values(array_unique($rootFiles));
+        sort($rootFiles, SORT_STRING);
+        foreach ($rootFiles as $source) {
+            if (is_file($source)) {
+                add_file($archive, $source, 'wordpress-root/' . basename($source));
+                $files++;
+            }
+        }
+        if ($archive->locateName('wordpress-root/wp-config.php') === false || $archive->locateName('wordpress-root/index.php') === false) {
+            throw new RuntimeException('Recovery archive is missing required WordPress root files.');
+        }
+        if (!$archive->close()) {
+            throw new RuntimeException('Could not finish the WordPress recovery archive.');
+        }
+        if (!is_file($path) || filesize($path) === 0) {
+            throw new RuntimeException('WordPress recovery archive is empty.');
+        }
+        return ['files' => $files, 'bytes' => filesize($path), 'sha256' => hash_file('sha256', $path)];
+    } catch (Throwable $error) {
+        $archive->close();
+        @unlink($path);
+        throw $error;
+    }
+}
+
+try {
+    $action = (string) ($_GET['action'] ?? '');
+    if ($action === 'create') {
+        header('Content-Type: application/json');
+        echo json_encode(create_archive($config), JSON_THROW_ON_ERROR);
+        exit;
+    }
+
+    $path = archive_path($config);
+    if ($action === 'download') {
+        if (!is_file($path) || filesize($path) === 0) {
+            http_response_code(404);
+            exit('WordPress recovery archive is unavailable.');
+        }
+        header('Content-Type: application/zip');
+        header('Content-Disposition: attachment; filename="btcdca-wordpress-files.zip"');
+        header('Content-Length: ' . (string) filesize($path));
+        readfile($path);
+        exit;
+    }
+
+    if ($action === 'delete') {
+        if (is_file($path) && !unlink($path)) {
+            throw new RuntimeException('Could not remove the temporary WordPress recovery archive.');
+        }
+        header('Content-Type: application/json');
+        echo '{"deleted":true}';
+        exit;
+    }
+
+    http_response_code(400);
+    exit('Unknown archive action.');
+} catch (Throwable $error) {
+    archive_failure($error);
+}

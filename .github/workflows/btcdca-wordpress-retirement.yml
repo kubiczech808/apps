@@ -112,7 +112,7 @@ jobs:
         if: inputs.operation == 'snapshot'
         run: |
           set -euo pipefail
-          mkdir -p backup/wordpress-files backup/wordpress-root
+          mkdir -p backup
 
       - name: Generate and upload temporary database backup endpoint
         if: inputs.operation == 'snapshot' || inputs.operation == 'retire'
@@ -144,6 +144,31 @@ jobs:
           BTCDCA_TEMP_FILE_REMOTE=www/btcdca-wordpress-database-helper.php \
           python3 scripts/manage_btcdca_temporary_file.py
 
+      - name: Generate and upload temporary WordPress archive endpoint
+        if: inputs.operation == 'snapshot'
+        run: |
+          set -euo pipefail
+          export BTCDCA_ARCHIVE_HELPER_TOKEN="$(openssl rand -hex 32)"
+          echo "BTCDCA_ARCHIVE_HELPER_TOKEN=$BTCDCA_ARCHIVE_HELPER_TOKEN" >> "$GITHUB_ENV"
+          python3 - <<'PY'
+          import base64
+          import json
+          import os
+          from pathlib import Path
+
+          config = {'token': os.environ['BTCDCA_ARCHIVE_HELPER_TOKEN']}
+          template = Path('scripts/btcdca_wordpress_archive_helper.php.template').read_text(encoding='utf-8')
+          encoded = base64.b64encode(json.dumps(config).encode('utf-8')).decode('ascii')
+          Path('temporary-wordpress-archive-helper.php').write_text(
+              template.replace('__CONFIG_BASE64__', encoded), encoding='utf-8'
+          )
+          PY
+          php -l temporary-wordpress-archive-helper.php
+          BTCDCA_TEMP_FILE_MODE=upload \
+          BTCDCA_TEMP_FILE_LOCAL=temporary-wordpress-archive-helper.php \
+          BTCDCA_TEMP_FILE_REMOTE=www/btcdca-wordpress-archive-helper.php \
+          python3 scripts/manage_btcdca_temporary_file.py
+
       - name: Export and validate WordPress database before the file backup
         if: inputs.operation == 'snapshot'
         run: |
@@ -164,33 +189,39 @@ jobs:
           gzip -t backup/btcdca-wordpress.sql.gz
           test "$(gzip -dc backup/btcdca-wordpress.sql.gz | grep -c '^CREATE TABLE `wp_dca_')" -gt 0
 
-      - name: Back up all WordPress files after database export succeeds
+      - name: Archive and download WordPress files after database export succeeds
         if: inputs.operation == 'snapshot'
         run: |
           set -euo pipefail
-          lftp -u "$BTCDCA_FTP_LOGIN","$BTCDCA_FTP_PASSWORD" "ftp://ftp.btc-dca.com" <<'LFTP'
-          set cmd:fail-exit true
-          set ftp:ssl-allow false
-          set ftp:ssl-force false
-          set net:max-retries 2
-          mirror --verbose /www/wp-admin backup/wordpress-files/wp-admin
-          mirror --verbose /www/wp-includes backup/wordpress-files/wp-includes
-          mirror --verbose /www/wp-content backup/wordpress-files/wp-content
-          mget -O backup/wordpress-root /www/wp-*.php
-          get -O backup/wordpress-root /www/index.php
-          get -O backup/wordpress-root /www/index.html
-          get -O backup/wordpress-root /www/.htaccess
-          get -O backup/wordpress-root /www/robots.txt
-          get -O backup/wordpress-root /www/sitemap.xml
-          get -O backup/wordpress-root /www/license.txt
-          get -O backup/wordpress-root /www/readme.html
-          bye
-          LFTP
-          test -d backup/wordpress-files/wp-admin
-          test -d backup/wordpress-files/wp-includes
-          test -d backup/wordpress-files/wp-content
-          test -f backup/wordpress-root/wp-config.php
-          test -f backup/wordpress-root/index.php
+          curl --fail --show-error --silent --retry 0 \
+            -H "X-BTCDCA-Token: ${BTCDCA_ARCHIVE_HELPER_TOKEN}" \
+            "https://www.btc-dca.com/btcdca-wordpress-archive-helper.php?action=create" \
+            --output backup/btcdca-wordpress-files.manifest.json
+          curl --fail --show-error --silent --retry 0 \
+            -H "X-BTCDCA-Token: ${BTCDCA_ARCHIVE_HELPER_TOKEN}" \
+            "https://www.btc-dca.com/btcdca-wordpress-archive-helper.php?action=download" \
+            --output backup/btcdca-wordpress-files.zip
+          python3 - <<'PY'
+          import hashlib
+          import json
+          from pathlib import Path
+          from zipfile import ZipFile
+
+          manifest = json.loads(Path('backup/btcdca-wordpress-files.manifest.json').read_text())
+          assert manifest['files'] > 0 and manifest['bytes'] > 0 and manifest['sha256']
+          digest = hashlib.sha256()
+          with Path('backup/btcdca-wordpress-files.zip').open('rb') as source:
+              for chunk in iter(lambda: source.read(1024 * 1024), b''):
+                  digest.update(chunk)
+          assert digest.hexdigest() == manifest['sha256']
+          with ZipFile('backup/btcdca-wordpress-files.zip') as archive:
+              assert archive.testzip() is None
+              names = set(archive.namelist())
+              assert 'wordpress-root/wp-config.php' in names
+              assert 'wordpress-root/index.php' in names
+              for directory in ('wp-admin/', 'wp-includes/', 'wp-content/'):
+                  assert any(name.startswith('wordpress-files/' + directory) for name in names)
+          PY
 
       - name: Upload WordPress recovery backup
         if: inputs.operation == 'snapshot'
@@ -216,18 +247,22 @@ jobs:
         if: inputs.operation == 'snapshot' || inputs.operation == 'retire'
         run: |
           set -euo pipefail
-          test -d backup/wordpress-files/wp-admin
-          test -d backup/wordpress-files/wp-includes
-          test -d backup/wordpress-files/wp-content
-          test -f backup/wordpress-root/wp-config.php
-          test -f backup/wordpress-root/index.php
+          test -f backup/btcdca-wordpress-files.zip
           test -f backup/btcdca-wordpress.sql.gz
           gzip -t backup/btcdca-wordpress.sql.gz
           python3 - <<'PY'
           import gzip
           import re
           from pathlib import Path
+          from zipfile import ZipFile
 
+          with ZipFile('backup/btcdca-wordpress-files.zip') as archive:
+              assert archive.testzip() is None
+              names = set(archive.namelist())
+              assert 'wordpress-root/wp-config.php' in names
+              assert 'wordpress-root/index.php' in names
+              for directory in ('wp-admin/', 'wp-includes/', 'wp-content/'):
+                  assert any(name.startswith('wordpress-files/' + directory) for name in names)
           sql = gzip.decompress(Path('backup/btcdca-wordpress.sql.gz').read_bytes()).decode('utf-8')
           assert sql.startswith('-- BTC-DCA WordPress backup\n')
           tables = re.findall(r'(?:DROP TABLE IF EXISTS|CREATE TABLE|INSERT INTO)\s+`([^`]+)`', sql, re.I)
@@ -298,4 +333,18 @@ jobs:
         run: |
           BTCDCA_TEMP_FILE_MODE=delete \
           BTCDCA_TEMP_FILE_REMOTE=www/btcdca-wordpress-database-helper.php \
+          python3 scripts/manage_btcdca_temporary_file.py
+
+      - name: Remove temporary WordPress archive endpoint and archive
+        if: always() && inputs.operation == 'snapshot'
+        run: |
+          set -euo pipefail
+          if [ -n "${BTCDCA_ARCHIVE_HELPER_TOKEN:-}" ]; then
+            curl --fail --show-error --silent --retry 1 \
+              -H "X-BTCDCA-Token: ${BTCDCA_ARCHIVE_HELPER_TOKEN}" \
+              "https://www.btc-dca.com/btcdca-wordpress-archive-helper.php?action=delete" \
+              --output /dev/null || true
+          fi
+          BTCDCA_TEMP_FILE_MODE=delete \
+          BTCDCA_TEMP_FILE_REMOTE=www/btcdca-wordpress-archive-helper.php \
           python3 scripts/manage_btcdca_temporary_file.py

@@ -77,18 +77,22 @@ jobs:
       - name: Validate recovery artifact
         run: |
           set -euo pipefail
-          test -d backup/wordpress-files/wp-admin
-          test -d backup/wordpress-files/wp-includes
-          test -d backup/wordpress-files/wp-content
-          test -f backup/wordpress-root/wp-config.php
-          test -f backup/wordpress-root/index.php
+          test -f backup/btcdca-wordpress-files.zip
           test -f backup/btcdca-wordpress.sql.gz
           gzip -t backup/btcdca-wordpress.sql.gz
           python3 - <<'PY'
           import gzip
           import re
           from pathlib import Path
+          from zipfile import ZipFile
 
+          with ZipFile('backup/btcdca-wordpress-files.zip') as archive:
+              assert archive.testzip() is None
+              names = set(archive.namelist())
+              assert 'wordpress-root/wp-config.php' in names
+              assert 'wordpress-root/index.php' in names
+              for directory in ('wp-admin/', 'wp-includes/', 'wp-content/'):
+                  assert any(name.startswith('wordpress-files/' + directory) for name in names)
           sql = gzip.decompress(Path('backup/btcdca-wordpress.sql.gz').read_bytes()).decode('utf-8')
           assert sql.startswith('-- BTC-DCA WordPress backup\n')
           tables = re.findall(r'(?:DROP TABLE IF EXISTS|CREATE TABLE|INSERT INTO)\\s+`([^`]+)`', sql, re.I)
@@ -116,6 +120,26 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y lftp
+
+      - name: Safely unpack WordPress files for restoration
+        if: inputs.operation == 'restore'
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path, PurePosixPath
+          from zipfile import ZipFile
+
+          allowed = ('wordpress-files/', 'wordpress-root/')
+          destination = Path('backup')
+          with ZipFile(destination / 'btcdca-wordpress-files.zip') as archive:
+              for item in archive.infolist():
+                  name = PurePosixPath(item.filename)
+                  assert not name.is_absolute() and '..' not in name.parts
+                  assert item.filename.startswith(allowed)
+                  file_type = (item.external_attr >> 16) & 0o170000
+                  assert file_type != 0o120000
+              archive.extractall(destination)
+          PY
 
       - name: Generate and upload temporary database restore endpoint
         if: inputs.operation == 'restore'
