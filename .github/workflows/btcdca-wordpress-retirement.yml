@@ -260,7 +260,6 @@ jobs:
         if: inputs.operation == 'snapshot' || inputs.operation == 'isolate' || inputs.operation == 'purge'
         run: |
           set -euo pipefail
-          test -f backup/btcdca-wordpress-files.zip
           test -f backup/btcdca-wordpress.sql.gz
           gzip -t backup/btcdca-wordpress.sql.gz
           python3 - <<'PY'
@@ -269,13 +268,21 @@ jobs:
           from pathlib import Path
           from zipfile import ZipFile
 
-          with ZipFile('backup/btcdca-wordpress-files.zip') as archive:
-              assert archive.testzip() is None
-              names = set(archive.namelist())
-              assert 'wordpress-root/wp-config.php' in names
-              assert 'wordpress-root/index.php' in names
-              for directory in ('wp-admin/', 'wp-includes/', 'wp-content/'):
-                  assert any(name.startswith('wordpress-files/' + directory) for name in names)
+          archive_path = Path('backup/btcdca-wordpress-files.zip')
+          if archive_path.is_file():
+              with ZipFile(archive_path) as archive:
+                  assert archive.testzip() is None
+                  names = set(archive.namelist())
+                  assert 'wordpress-root/wp-config.php' in names
+                  assert 'wordpress-root/index.php' in names
+                  for directory in ('wp-admin/', 'wp-includes/', 'wp-content/'):
+                      assert any(name.startswith('wordpress-files/' + directory) for name in names)
+          else:
+              assert Path('backup/wordpress-files/wp-admin').is_dir()
+              assert Path('backup/wordpress-files/wp-includes').is_dir()
+              assert Path('backup/wordpress-files/wp-content').is_dir()
+              assert Path('backup/wordpress-root/wp-config.php').is_file()
+              assert Path('backup/wordpress-root/index.php').is_file()
           sql = gzip.decompress(Path('backup/btcdca-wordpress.sql.gz').read_bytes()).decode('utf-8')
           assert sql.startswith('-- BTC-DCA WordPress backup\n')
           tables = re.findall(r'(?:DROP TABLE IF EXISTS|CREATE TABLE|INSERT INTO)\s+`([^`]+)`', sql, re.I)
