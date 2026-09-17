@@ -1,0 +1,24 @@
+name: Trading Revalidation Merge Probe
+
+# Manual only. Nothing is written: every call the probe makes is one of the endpoint's own
+# no-op paths -- an empty update list, and a verdict for a token id that cannot exist.
+#
+# A live execution's persist step began failing after the merge moved server-side, and the
+# line naming the reason sits in the middle of a job log that cannot be fetched from here.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Ask the merge endpoint what it answers
+        env:
+          TRADING_TRIGGER_KEY: ${{ secrets.POLYTRADING_DB_PASSWORD }}
+        run: python3 trading/tools/revalidation-merge-probe.py
