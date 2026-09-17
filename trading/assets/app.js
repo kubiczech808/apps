@@ -5491,7 +5491,7 @@ function equityChartTooltipDate(timestamp) {
 // Each day yields three readings, all real: the day's mean (the running sum over the
 // number of syncs that day), and the day's low and high. None of the three is derivable
 // from settlements, because equity moves within a day whether or not anything settled.
-function equityHistoryFromDailySamples(rows, now) {
+function equityHistoryFromDailySamples(rows, now, since = null) {
   const days = (Array.isArray(rows) ? rows : [])
     .map((row) => {
       const timestamp = Date.parse(`${String(row?.day || "")}T12:00:00Z`);
@@ -5503,7 +5503,10 @@ function equityHistoryFromDailySamples(rows, now) {
       if (sum == null || low == null || high == null) return null;
       return { timestamp, value: sum / samples, low, high, samples };
     })
-    .filter((row) => row != null && row.timestamp <= now)
+    // A reset portfolio is charted on what it has done SINCE, the same boundary the tiles
+    // above the chart already switch to. A recorded day from before the reset belongs to a
+    // different balance entirely and would draw the old account beside the new number.
+    .filter((row) => row != null && row.timestamp <= now && (since == null || row.timestamp >= since))
     .sort((left, right) => left.timestamp - right.timestamp);
   if (days.length < 2) return null;
 
@@ -5520,7 +5523,7 @@ function equityHistoryFromDailySamples(rows, now) {
 // The state has transaction-level P/L rather than periodic account snapshots. Rebuild a
 // compact realized-equity path from settled trades without publishing a second,
 // ever-growing history file.
-function portfolioEquityHistory(trades, equity, openPnl, generatedAt = "", originalValue = null, realizedPnl = null, equityHistory = null) {
+function portfolioEquityHistory(trades, equity, openPnl, generatedAt = "", originalValue = null, realizedPnl = null, equityHistory = null, since = null, sinceEquity = null) {
   const timelineTrades = Array.isArray(trades) ? trades : [];
   const openedAt = timelineTrades
     .map((trade) => chartTimestamp(trade.openedAt || trade.date))
@@ -5529,6 +5532,16 @@ function portfolioEquityHistory(trades, equity, openPnl, generatedAt = "", origi
   const hasConfiguredOriginalValue = Number.isFinite(configuredOriginalValue) && configuredOriginalValue > 0;
   if (!openedAt.length || (!Number.isFinite(equity) && !hasConfiguredOriginalValue)) return null;
 
+  // Where a reset portfolio's chart begins.
+  //
+  // Reported right after every paper portfolio was rebased to 100 USDC: "i graf by se mel u
+  // tech paper portfolii vynulovat." The tiles above the chart already switch to their
+  // *SinceAdjustment* figures when this is set; the curve did not, so a line climbing from
+  // an old balance sat directly under a headline that had been restarted.
+  const resetAt = chartTimestamp(since);
+  const resetEquity = Number(sinceEquity);
+  const hasReset = resetAt != null;
+
   const firstOpenedAt = Math.min(...openedAt);
   // A state file can be a few minutes old while the dashboard is open. The final point
   // is always "today", not the timestamp of that older snapshot.
@@ -5536,12 +5549,17 @@ function portfolioEquityHistory(trades, equity, openPnl, generatedAt = "", origi
   // The gate is about the PORTFOLIO's age -- has it been running long enough to be worth
   // charting -- so it stays measured from the first trade even though the curve below starts
   // later. Moving it would hide the chart of a portfolio whose first trade settled yesterday.
-  if (Math.max(0, (now - firstOpenedAt) / 86400000) < 3) return null;
+  //
+  // A reset portfolio has already passed it: the question the gate asks is whether this is a
+  // real portfolio with a history, and one that was rebased plainly is. Applying it to the
+  // restart instead would blank the chart for three days every time the account is reset,
+  // which is the opposite of what resetting it was for.
+  if (!hasReset && Math.max(0, (now - firstOpenedAt) / 86400000) < 3) return null;
 
   // Prefer the recorded series whenever there is one. It is what the account actually
   // reported day by day, so it needs no reconciliation and it carries the intraday low
   // and high that the reconstruction below cannot produce at all.
-  const measured = equityHistoryFromDailySamples(equityHistory, now);
+  const measured = equityHistoryFromDailySamples(equityHistory, now, resetAt);
   if (measured) {
     return {
       points: measured.points,
@@ -5561,7 +5579,10 @@ function portfolioEquityHistory(trades, equity, openPnl, generatedAt = "", origi
       timestamp: chartTimestamp(tradeClosedAt(trade)),
       pnl: Number(trade.realizedPnlUsdc ?? trade.pnlUsdc),
     }))
-    .filter((event) => event.timestamp != null && event.timestamp <= now && Number.isFinite(event.pnl));
+    // Settlements from before a reset belong to the balance the reset replaced. Counting
+    // them would redraw the old account under the new headline.
+    .filter((event) => event.timestamp != null && event.timestamp <= now && Number.isFinite(event.pnl)
+      && (resetAt == null || event.timestamp >= resetAt));
   const settledPnl = settledEvents.reduce((sum, event) => sum + event.pnl, 0);
   const currentOpenPnl = Number.isFinite(openPnl) ? openPnl : 0;
   // The chart deliberately excludes unrealized P/L. Its final point is therefore the
@@ -5572,9 +5593,14 @@ function portfolioEquityHistory(trades, equity, openPnl, generatedAt = "", origi
   // scopes made the chart invent capital (for example 190 USD on a 148 USD portfolio).
   // A configured original value is the sole baseline in that case; its final point is
   // the same baseline plus this portfolio's realised ledger only.
-  const openingEquity = hasConfiguredOriginalValue
-    ? configuredOriginalValue
-    : realizedEquity - settledPnl;
+  // A reset portfolio opens at the balance it was rebased to. Back-calculating it from
+  // today's equity minus this pass's settlements would land on the same number only while
+  // nothing has settled since, and would drift away from it the moment something does.
+  const openingEquity = hasReset && Number.isFinite(resetEquity)
+    ? resetEquity
+    : hasConfiguredOriginalValue
+      ? configuredOriginalValue
+      : realizedEquity - settledPnl;
   const authoritativeRealizedPnl = Number(realizedPnl);
   const hasAuthoritativeRealizedPnl = hasConfiguredOriginalValue
     && Number.isFinite(authoritativeRealizedPnl);
@@ -5595,9 +5621,13 @@ function portfolioEquityHistory(trades, equity, openPnl, generatedAt = "", origi
   const firstChangeAt = chartEvents.length
     ? Math.min(...chartEvents.map((event) => event.timestamp))
     : null;
-  const chartStart = firstChangeAt == null
-    ? firstOpenedAt
-    : Math.max(firstOpenedAt, firstChangeAt - 86400000);
+  const chartStart = hasReset
+    // The reset itself is the portfolio's first moment now, so the curve starts there and
+    // at the balance it was given -- not one day before whatever settled first.
+    ? resetAt
+    : firstChangeAt == null
+      ? firstOpenedAt
+      : Math.max(firstOpenedAt, firstChangeAt - 86400000);
   const scale = equityChartScale(chartStart, now);
   const finalRealizedEquity = hasAuthoritativeRealizedPnl
     ? openingEquity + authoritativeRealizedPnl
@@ -5652,9 +5682,9 @@ function portfolioEquityHistory(trades, equity, openPnl, generatedAt = "", origi
   };
 }
 
-function renderPortfolioEquityChart({ trades = [], equity, openPnl = 0, generatedAt = "", originalValue = null, realizedPnl = null, equityHistory = null } = {}) {
+function renderPortfolioEquityChart({ trades = [], equity, openPnl = 0, generatedAt = "", originalValue = null, realizedPnl = null, equityHistory = null, since = null, sinceEquity = null } = {}) {
   if (!els.portfolioEquityChart) return;
-  const history = portfolioEquityHistory(trades, equity, openPnl, generatedAt, originalValue, realizedPnl, equityHistory);
+  const history = portfolioEquityHistory(trades, equity, openPnl, generatedAt, originalValue, realizedPnl, equityHistory, since, sinceEquity);
   if (!history || history.points.length < 2) {
     els.portfolioEquityChart.hidden = true;
     els.portfolioEquityChart.innerHTML = "";
@@ -11796,6 +11826,10 @@ function renderBotState(botState) {
     equity: Number(portfolio.equityUsdc ?? portfolio.initialUsdc ?? 100),
     openPnl: Number(portfolio.openPnlUsdc || 0),
     generatedAt: botState.generatedAt,
+    // The same boundary every tile above the chart already reads, so the curve and the
+    // numbers beside it describe one portfolio rather than two.
+    since: capitalAdjustmentAt,
+    sinceEquity: portfolio.capitalAdjustmentEquityUsdc ?? portfolioState.capitalAdjustmentEquityUsdc ?? null,
   });
 
   if (els.portfolioRules) {

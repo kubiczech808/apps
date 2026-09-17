@@ -2819,6 +2819,10 @@ function compact_dashboard_paper_portfolio(array $portfolio, bool $includeTrades
         'portfolio',
         'lastTradeDate',
         'capitalAdjustmentAt',
+        // The balance the reset rebased to. The equity chart opens at it: back-calculating
+        // the opening point from today's equity minus what has settled since lands on the
+        // same number only while nothing has settled, and drifts away the moment one does.
+        'capitalAdjustmentEquityUsdc',
         'archived',
     ];
     // The overview needs the balances of every portfolio, not each portfolio's

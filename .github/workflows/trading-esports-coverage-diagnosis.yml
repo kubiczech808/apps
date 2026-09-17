@@ -1,0 +1,40 @@
+name: Trading Esports Coverage Diagnosis
+
+# READ-ONLY, manual only. Public GETs against the published catalogue and Gamma. No secrets,
+# no writes, no orders.
+#
+# Asked: esports events must offer more than one market each, candidates usually show only
+# one, and a way is wanted to exclude single-map bets the way sports shapes can be excluded.
+# All three need the same measurement first.
+on:
+  workflow_dispatch:
+    inputs:
+      events:
+        description: "How many events to check against Gamma"
+        required: false
+        default: "8"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install trading dependencies
+        working-directory: trading
+        run: npm ci --omit=dev || npm install --omit=dev
+
+      - name: Measure esports market coverage
+        working-directory: trading
+        env:
+          TRADING_HOST: https://osobnizkusenosti.cz/trading
+          PROBE_EVENTS: ${{ inputs.events || '8' }}
+        run: node tools/esports-market-coverage-probe.mjs

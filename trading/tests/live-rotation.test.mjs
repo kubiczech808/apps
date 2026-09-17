@@ -470,7 +470,10 @@ test("equity history: the chart prefers the measured series and says which one i
   const app = readFileSync(new URL("../assets/app.js", import.meta.url), "utf8");
   const css = readFileSync(new URL("../assets/app.css", import.meta.url), "utf8");
 
-  assert.match(app, /const measured = equityHistoryFromDailySamples\(equityHistory, now\);/);
+  // The recorded series is preferred whenever there is one, and it is now bounded by the
+  // reset: a portfolio rebased to 100 USDC must not have the days before the reset drawn
+  // under a headline that was restarted. tests/portfolio-equity-chart-reset drives that.
+  assert.match(app, /const measured = equityHistoryFromDailySamples\(equityHistory, now, resetAt\);/);
   assert.match(app, /source: "account-daily"/);
   assert.match(app, /source: "settlement-ledger"/);
   // The wallet-wide series must not be handed to a portfolio that owns only its own
