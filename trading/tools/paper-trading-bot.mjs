@@ -759,6 +759,17 @@ const PAPER_RESTORE_PORTFOLIO = envBool("PAPER_RESTORE_PORTFOLIO", false);
 // One-off capital rebase: a portfolio's true equity stays exactly what its trades
 // compute, but its displayed baseline gets a manual top-up. No UI surfaces this either.
 const PAPER_ADJUST_CAPITAL = envBool("PAPER_ADJUST_CAPITAL", false);
+// The same rebase, over every paper portfolio at once.
+//
+// Asked for: "vsechna paper portfolia vynuluj na 100 usd a odpoj dodavadni trades.
+// nechame si je pro souhrne statistiky." The one-at-a-time switch would have meant
+// thirty-odd dispatches, each a chance to miss one and leave the account half reset --
+// and a half-reset account is worse than an unreset one, because nothing on screen says
+// which half it is.
+//
+// Deliberately a separate switch rather than "PAPER_STRATEGY_ID is empty means all": an
+// absent variable must never be the thing that decides to rewrite every portfolio.
+const PAPER_ADJUST_CAPITAL_ALL = envBool("PAPER_ADJUST_CAPITAL_ALL", false);
 const PAPER_TARGET_EQUITY_USDC = envNumber("PAPER_TARGET_EQUITY_USDC", 100);
 // One-off backfill for a rebase that happened before capitalAdjustmentAt existed to
 // record it: stamps only the moment the "since rebase" stats should start counting from,
@@ -13089,6 +13100,59 @@ async function run() {
       equityUsdc: state.paperPortfolios[PAPER_STRATEGY_ID].portfolio.equityUsdc,
       runLog: state.paperPortfolios[PAPER_STRATEGY_ID].runLog.length,
     }, null, 2));
+    return;
+  }
+  if (PAPER_ADJUST_CAPITAL_ALL) {
+    // Every portfolio the state actually holds, not the strategy table: a portfolio that
+    // was archived or renamed still has trades and still shows a balance, and leaving it
+    // out is exactly the half-reset this mode exists to avoid.
+    if (!Object.keys(state.paperPortfolios || {}).length) {
+      throw new Error("PAPER_ADJUST_CAPITAL_ALL found no paper portfolios in the state.");
+    }
+    const results = [];
+    const failures = [];
+    const done = new Set();
+    // Re-read the keys after every pass, because a rebase ADDS portfolios: normalising one
+    // fills in the built-in strategies and the legacy aliases beside it. Measured in the
+    // test that was written for this mode -- a single snapshot of the keys left the newly
+    // materialised portfolios unrebased, which is the half-reset this mode exists to
+    // prevent, hidden behind a run that reported success.
+    //
+    // Bounded by construction: a pass only ever adds portfolios from a fixed table, so the
+    // set converges. The cap is a backstop against a future table that does not.
+    for (let pass = 0; pass < 8; pass += 1) {
+      const pending = Object.keys(state.paperPortfolios || {}).filter((id) => !done.has(id));
+      if (!pending.length) break;
+      for (const id of pending) {
+        done.add(id);
+        try {
+          results.push({ strategyId: id, ...adjustPaperPortfolioCapital(state, id, PAPER_TARGET_EQUITY_USDC) });
+        } catch (error) {
+          // One portfolio the strategy table cannot resolve must not abandon the rest
+          // half-written. It is recorded and the run continues.
+          failures.push({ strategyId: id, error: error?.message || String(error) });
+        }
+      }
+    }
+    const unrebased = Object.keys(state.paperPortfolios || {})
+      .filter((id) => !state.paperPortfolios[id]?.capitalAdjustmentAt);
+    if (unrebased.length) {
+      failures.push(...unrebased.map((id) => ({ strategyId: id, error: "still carries no reset marker" })));
+    }
+    state.generatedAt = nowIso();
+    state.aiUsage = aiUsageSnapshot(state);
+    await writeState(state);
+    console.log(JSON.stringify({
+      action: "PAPER_PORTFOLIOS_CAPITAL_ADJUSTED",
+      targetEquityUsdc: PAPER_TARGET_EQUITY_USDC,
+      adjusted: results.length,
+      failed: failures.length,
+      results,
+      failures,
+    }, null, 2));
+    if (failures.length) {
+      throw new Error(`${failures.length} portfolio(s) could not be rebased; see the failures above.`);
+    }
     return;
   }
   if (PAPER_ADJUST_CAPITAL) {

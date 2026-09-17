@@ -29,6 +29,7 @@ on:
           - reset
           - restore
           - adjust_capital
+          - adjust_capital_all
           - set_capital_adjustment_at
           - refresh
           - report
@@ -181,6 +182,10 @@ jobs:
       # One-off capital rebase: equity stays exactly what the trades compute, only the
       # baseline it is measured from is topped up. No UI surfaces this either.
       PAPER_ADJUST_CAPITAL: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'adjust_capital' && 'true' || 'false' }}
+      # Every paper portfolio rebased to paper_target_equity_usdc in one run. Dispatch only:
+      # a scheduled run must never be able to reset the account, so this is spelled out
+      # against the event as well as the mode.
+      PAPER_ADJUST_CAPITAL_ALL: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'adjust_capital_all' && 'true' || 'false' }}
       PAPER_TARGET_EQUITY_USDC: ${{ github.event_name == 'workflow_dispatch' && inputs.paper_target_equity_usdc || '100' }}
       # One-off backfill for a rebase dispatched before capitalAdjustmentAt existed. No UI
       # surfaces this either.
