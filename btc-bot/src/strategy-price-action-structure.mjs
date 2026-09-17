@@ -222,8 +222,6 @@ const closeBreaksLow = (current, previous) => current.candle?.close < previous.p
 // immediately, so expose its live terminal extreme separately from the
 // confirmed structure used for trading decisions.
 const developingStructureSwing = (candles, structure) => {
-  const latest = candles.at(-1)
-  if (!latest) return null
   const terminalExtreme = (kind, afterIndex) => candles
     .slice(Math.max(0, afterIndex + 1))
     .reduce((best, candle, offset) => {
@@ -234,22 +232,25 @@ const developingStructureSwing = (candles, structure) => {
       return best
     }, null)
 
-  if (structure.lastLow && latest.close < structure.lastLow.price) {
+  const laterThan = (pivot) => candles.slice(Math.max(0, pivot.index + 1))
+  // Keep the live LL/HH after a rebound. Looking at only the newest close
+  // made a genuine close break disappear as soon as the next candle retraced.
+  if (structure.lastLow && laterThan(structure.lastLow).some((candle) => candle.close < structure.lastLow.price)) {
     const extreme = terminalExtreme('low', structure.lastLow.index)
     return extreme ? {
       ...pivotSummary(extreme, 'LL'),
       confirmed: false,
       replacesCandleIndex: structure.lastLow.index,
-      breakTime: latest.time,
+      breakTime: laterThan(structure.lastLow).find((candle) => candle.close < structure.lastLow.price)?.time ?? null,
     } : null
   }
-  if (structure.lastHigh && latest.close > structure.lastHigh.price) {
+  if (structure.lastHigh && laterThan(structure.lastHigh).some((candle) => candle.close > structure.lastHigh.price)) {
     const extreme = terminalExtreme('high', structure.lastHigh.index)
     return extreme ? {
       ...pivotSummary(extreme, 'HH'),
       confirmed: false,
       replacesCandleIndex: structure.lastHigh.index,
-      breakTime: latest.time,
+      breakTime: laterThan(structure.lastHigh).find((candle) => candle.close > structure.lastHigh.price)?.time ?? null,
     } : null
   }
   return null
@@ -454,15 +455,15 @@ const zoneInvalidated = (zone, candles) => {
 const zoneFilledByOwnTimeframeClose = (zone, candles) => {
   const later = laterCandles(candles, zone)
   return zone.type === 'demand'
-    ? later.some((candle) => candle.close <= zone.high)
-    : later.some((candle) => candle.close >= zone.low)
+    ? later.some((candle) => candle.close <= zone.low)
+    : later.some((candle) => candle.close >= zone.high)
 }
 
 const zoneFilledAtOwnTimeframeClose = (zone, candles) => {
   const later = laterCandles(candles, zone)
   return (zone.type === 'demand'
-    ? later.find((candle) => candle.close <= zone.high)
-    : later.find((candle) => candle.close >= zone.low))?.time ?? null
+    ? later.find((candle) => candle.close <= zone.low)
+    : later.find((candle) => candle.close >= zone.high))?.time ?? null
 }
 
 const zoneDistancePct = (zone, price) => {

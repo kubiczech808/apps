@@ -1299,6 +1299,19 @@ const renderAssetChart = () => {
   const x = (index) => ASSET_CHART.padLeft + (index / Math.max(1, candles.length - 1)) * candlePlotWidth
   const y = (value) => ASSET_CHART.padTop + ((maxPrice - value) / (maxPrice - minPrice)) * plotHeight
   const candleWidth = Math.max(2, Math.min(12, (candlePlotWidth / candles.length) * 0.62))
+  const xForTime = (time) => {
+    if (!Number.isFinite(time) || !candles.length) return null
+    if (time < candles[0].time || time > candles.at(-1).time) return null
+    if (time === candles[0].time) return ASSET_CHART.padLeft
+    if (time === candles.at(-1).time) return candlePlotRight
+    const rightIndex = candles.findIndex((candle) => candle.time >= time)
+    if (rightIndex <= 0) return x(0)
+    const leftIndex = rightIndex - 1
+    const left = candles[leftIndex]
+    const right = candles[rightIndex]
+    const fraction = (time - left.time) / Math.max(1, right.time - left.time)
+    return x(leftIndex) + (x(rightIndex) - x(leftIndex)) * fraction
+  }
 
   svg.setAttribute('viewBox', `0 0 ${ASSET_CHART.width} ${ASSET_CHART.height}`)
   svg.setAttribute('preserveAspectRatio', 'none')
@@ -1314,11 +1327,12 @@ const renderAssetChart = () => {
   for (const zone of zones) {
     const top = y(zone.high)
     const bottom = y(zone.low)
+    const zoneStartX = xForTime(zone.fvg?.definingCandles?.[0]?.time ?? zone.firstTime) ?? ASSET_CHART.padLeft
     const zoneRect = el('rect', {
       className: `asset-zone-${zone.kind} asset-zone-clickable`,
-      x: ASSET_CHART.padLeft,
+      x: zoneStartX,
       y: Math.min(top, bottom),
-      width: plotWidth,
+      width: Math.max(1, candlePlotRight - zoneStartX),
       height: Math.max(2, Math.abs(bottom - top)),
       rx: 2,
       'data-zone-id': zone.id,
@@ -1353,20 +1367,6 @@ const renderAssetChart = () => {
   // These are the same external pivots that classifyStructure exposes. Keep
   // them visually separate from the candles so a user can audit whether the
   // algorithm followed the main wave rather than an internal reaction.
-  const xForTime = (time) => {
-    if (!Number.isFinite(time) || !candles.length) return null
-    if (time < candles[0].time || time > candles.at(-1).time) return null
-    if (time === candles[0].time) return ASSET_CHART.padLeft
-    if (time === candles.at(-1).time) return candlePlotRight
-    const rightIndex = candles.findIndex((candle) => candle.time >= time)
-    if (rightIndex <= 0) return x(0)
-    const leftIndex = rightIndex - 1
-    const left = candles[leftIndex]
-    const right = candles[rightIndex]
-    const fraction = (time - left.time) / Math.max(1, right.time - left.time)
-    return x(leftIndex) + (x(rightIndex) - x(leftIndex)) * fraction
-  }
-
   const structure = item?.structure
   const trend = item?.trend === 'up' || item?.trend === 'down' ? item.trend : 'flat'
   const structureLegs = [
@@ -1571,11 +1571,12 @@ const renderAssetChart = () => {
   for (const zone of zones) {
     const top = y(zone.high)
     const bottom = y(zone.low)
+    const zoneStartX = xForTime(zone.fvg?.definingCandles?.[0]?.time ?? zone.firstTime) ?? ASSET_CHART.padLeft
     const hitArea = el('rect', {
       className: 'asset-zone-hit-area',
-      x: ASSET_CHART.padLeft,
+      x: zoneStartX,
       y: Math.min(top, bottom),
-      width: plotWidth,
+      width: Math.max(1, candlePlotRight - zoneStartX),
       height: Math.max(6, Math.abs(bottom - top)),
       'data-zone-id': zone.id,
     })

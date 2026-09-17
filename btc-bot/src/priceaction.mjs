@@ -146,7 +146,9 @@ export const marketStructure = (candles, { lookback = 2 } = {}) => {
 }
 
 /**
- * Supply/demand is the origin of displacement, not every swing pivot.
+ * Supply/demand is the FVG created by a qualifying displacement, not every
+ * swing pivot. The base validates the origin of that displacement; it is not
+ * itself the price range offered for an entry.
  *
  * The sequence required here is:
  *   base -> directional displacement -> three-candle FVG confirmation.
@@ -197,8 +199,10 @@ export const buildFvgSupplyDemandZones = (candles, {
     if (!brokeBase || baseIndex < oldestIndex) continue
 
     const type = gap.direction === 'bullish' ? 'demand' : 'supply'
-    const low = type === 'demand' ? base.low : Math.min(base.open, base.close)
-    const high = type === 'demand' ? Math.max(base.open, base.close) : base.high
+    // The zone is the untraded three-candle imbalance. Keeping the base only
+    // as provenance prevents an ordinary gap from becoming a trade zone.
+    const low = gap.low
+    const high = gap.high
     if (!(high > low)) continue
 
     const confirmationIndex = gap.confirmationIndex ?? displacementIndex + 1
@@ -235,7 +239,7 @@ export const buildFvgSupplyDemandZones = (candles, {
       touches: later.filter((candle) => candle.low <= high && candle.high >= low).length,
       swept: false,
       imbalance: true,
-      firstIndex: baseIndex,
+      firstIndex: gap.firstIndex,
       lastIndex: confirmationIndex,
       lastTime: candles[confirmationIndex]?.time ?? displacement.time,
       baseIndexes: [baseIndex],

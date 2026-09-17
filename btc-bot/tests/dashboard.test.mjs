@@ -213,6 +213,7 @@ test('asset tickers open a timeframe price chart with supply and demand zones', 
   assert.match(js, /Vstup pro min\. R\/R/)
   assert.match(js, /chartCandles/)
   assert.match(js, /const xForTime = \(time\) =>/)
+  assert.match(js, /const zoneStartX = xForTime\(zone\.fvg\?\.definingCandles\?\.\[0\]\?\.time \?\? zone\.firstTime\)/)
   assert.match(js, /structure\?\.high/)
   assert.match(js, /structure\?\.recentSwings/)
   assert.match(js, /const developingSwing = structure\?\.developingSwing/)

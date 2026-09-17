@@ -278,10 +278,10 @@ test('supply and demand zones stay valid unless their own timeframe closes throu
     // Supply base + bearish displacement + bearish FVG confirmation.
     candle(START + 3 * HOUR, 112, 115, 111, 114),
     candle(START + 4 * HOUR, 114, 114.5, 101, 102),
-    candle(START + 5 * HOUR, 103, 108, 100, 101),
+    candle(START + 5 * HOUR, 103, 108, 100, 102),
     candle(START + 6 * HOUR, 101, 111, 100, 110),
-    candle(START + 7 * HOUR, 110, 112, 106, 111),
-    // Trades back into the demand base but closes above the zone.
+    candle(START + 7 * HOUR, 110, 112, 106, 110),
+    // Trades back into the demand FVG but closes above the zone.
     // This is the higher-timeframe equivalent of a lower-timeframe fill:
     // informative, but not an invalidation and not a same-TF close fill.
     candle(START + 8 * HOUR, 111, 112, 99, 110),
@@ -300,13 +300,13 @@ test('supply and demand zones stay valid unless their own timeframe closes throu
   assert.equal(zones.demand.invalidatedByOwnTimeframeClose, false)
   assert.equal(zones.demand.filledByOwnTimeframeClose, false)
   assert.equal(zones.demand.filledAt, null)
-  assert.equal(zones.demand.low, 98)
+  assert.equal(zones.demand.low, 101)
   assert.equal(zones.supply.invalidatedByOwnTimeframeClose, false)
   assert.match(zones.rule, /vlastním timeframe/)
 
   const filled = activeSupplyDemandZones([
     ...candles,
-    candle(START + 10 * HOUR, 108, 109, 99, 100),
+    candle(START + 10 * HOUR, 108, 109, 99, 101),
   ], { lookback: 1, maxAgeCandles: 100 })
   assert.equal(filled.demand, null, 'a same-timeframe filled zone must leave the entry overview')
   assert.equal(filled.latestValidDemand.filledByOwnTimeframeClose, true)

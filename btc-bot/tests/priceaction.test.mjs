@@ -78,7 +78,7 @@ test('ordinary turns without an impulsive three-candle FVG are not supply/demand
   assert.deepEqual(buildFvgSupplyDemandZones(candles), [])
 })
 
-test('a zone is the base of displacement that creates the three-candle FVG', () => {
+test('a zone is the three-candle FVG from a qualified displacement base', () => {
   const candles = [
     candle(START, 100, 101, 98, 99),
     candle(START + HOUR, 99, 111, 99, 110),
@@ -86,7 +86,7 @@ test('a zone is the base of displacement that creates the three-candle FVG', () 
   ]
   const [zone] = buildFvgSupplyDemandZones(candles)
   assert.equal(zone.type, 'demand')
-  assert.deepEqual({ low: zone.low, high: zone.high }, { low: 98, high: 100 })
+  assert.deepEqual({ low: zone.low, high: zone.high }, { low: 101, high: 105 })
   assert.deepEqual(zone.baseIndexes, [0])
   assert.deepEqual(zone.definingIndexes, [0, 1, 2])
   assert.deepEqual(
@@ -208,7 +208,7 @@ test('every published zone carries its originating FVG instead of a nearby-gap f
   }
 })
 
-test('consecutive FVGs from one displacement base create one zone', () => {
+test('consecutive FVGs from one displacement base keep their own price gaps', () => {
   const candles = [
     candle(START, 100, 101, 98, 99),
     candle(START + HOUR, 99, 110, 99, 109),
@@ -218,9 +218,12 @@ test('consecutive FVGs from one displacement base create one zone', () => {
 
   assert.equal(fairValueGaps(candles).length, 2)
   const zones = buildFvgSupplyDemandZones(candles)
-  assert.equal(zones.length, 1)
-  assert.equal(zones[0].type, 'demand')
-  assert.equal(zones[0].firstIndex, 0)
-  assert.deepEqual([zones[0].low, zones[0].high], [98, 100])
-  assert.equal(zones[0].fvg.index, 1, 'keep the first FVG that confirms the base')
+  assert.equal(zones.length, 2)
+  assert.deepEqual(
+    zones.map((zone) => ({ type: zone.type, firstIndex: zone.firstIndex, low: zone.low, high: zone.high, fvgIndex: zone.fvg.index })),
+    [
+      { type: 'demand', firstIndex: 0, low: 101, high: 108, fvgIndex: 1 },
+      { type: 'demand', firstIndex: 1, low: 110, high: 117, fvgIndex: 2 },
+    ]
+  )
 })
