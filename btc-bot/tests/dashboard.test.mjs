@@ -318,6 +318,12 @@ test('the API refuses stale PA-1 runners before they overwrite current structure
   assert.match(api, /fail\(409, 'Runner uses an obsolete price-action matrix schema\.'\)/)
 })
 
+test('the API refuses obsolete runners before they can renew the lease', () => {
+  assert.match(api, /\$priceActionSchema = \$body\['priceActionSchema'\] \?\? null/)
+  assert.match(api, /!is_numeric\(\$priceActionSchema\) \|\| \(int\) \$priceActionSchema < MIN_PRICE_ACTION_MATRIX_SCHEMA/)
+  assert.match(api, /fail\(409, 'Runner uses an obsolete price-action matrix schema\.'\)/)
+})
+
 test('the API retires the duplicate legacy Pi lease identity', () => {
   assert.match(api, /const PRIMARY_RUNNER = 'rpi-primary-v2'/)
   assert.match(api, /const RETIRED_RUNNERS = \['rpi'\]/)

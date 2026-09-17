@@ -116,9 +116,12 @@ export const createStateStore = ({
      * could read the same "no position" state and open two. The hosting holds
      * the lease so the loser finds out before it trades, not after.
      */
-    claimLease: async ({ owner, ttlMs }) => {
+    claimLease: async ({ owner, ttlMs, priceActionSchema }) => {
       if (!baseUrl) return { granted: true, owner, reason: 'no hosting configured' }
-      return call('lease', { method: 'POST', body: JSON.stringify({ owner, ttlMs }) })
+      return call('lease', {
+        method: 'POST',
+        body: JSON.stringify({ owner, ttlMs, priceActionSchema }),
+      })
     },
   }
 }

@@ -244,8 +244,15 @@ switch ($action) {
         $body = requestBody();
         $owner = (string) ($body['owner'] ?? '');
         $ttl = (int) ($body['ttlMs'] ?? 90000);
+        $priceActionSchema = $body['priceActionSchema'] ?? null;
         if ($owner === '') {
             fail(400, 'A lease needs an owner.');
+        }
+        // Reject an obsolete runner before it can reserve the right to work.
+        // Checking only at publish time creates a deadlock: the old process
+        // keeps renewing the lease but every state it computes is discarded.
+        if (!is_numeric($priceActionSchema) || (int) $priceActionSchema < MIN_PRICE_ACTION_MATRIX_SCHEMA) {
+            fail(409, 'Runner uses an obsolete price-action matrix schema.');
         }
         // Keep the old identity available during a queued deploy, but retire it
         // permanently as soon as the replacement has successfully appeared.

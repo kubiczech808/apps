@@ -23,6 +23,7 @@ import { planLinearPosition, planPosition, SATS_PER_BTC } from './risk.mjs'
 import { ceilPrice, floorPrice, roundPrice } from './price.mjs'
 import { LEGACY_PRICE_ACTION_ID, strategyConfig } from './strategy-registry.mjs'
 import {
+  PRICE_ACTION_MATRIX_SCHEMA,
   PRICE_ACTION_STRUCTURE_ID,
   buildPriceActionMatrix,
   reviewOpenPositionInMatrix,
@@ -384,7 +385,11 @@ export const runPass = async ({
   state.heartbeats = { ...(state.heartbeats ?? {}), [config.runner]: isoNow(now) }
 
   try {
-    const lease = await store.claimLease({ owner: config.runner, ttlMs: config.leaseTtlMs })
+    const lease = await store.claimLease({
+      owner: config.runner,
+      ttlMs: config.leaseTtlMs,
+      priceActionSchema: PRICE_ACTION_MATRIX_SCHEMA,
+    })
     if (!lease?.granted) {
       run.action = 'skipped'
       run.reason = `another runner holds the lease (${lease?.owner ?? 'unknown'})`
