@@ -9601,8 +9601,16 @@ test("limit orders: the refresh hands the portfolio to the funding check", () =>
   // prefix rather than the exact call, which stop-loss reversal is free to extend further.
   assert.match(source, /refreshTrades\(\s*portfolioState\.trades,\s*portfolioState,/,
     "the funding check needs the portfolio the trades belong to");
-  assert.match(source, /const funding = fundLimitOrderFills\(trades, refreshed, portfolioState\);/,
+  // It runs after the fan-out, where every fill on the pass is visible at once -- and now
+  // after the certainty hold-back too, because a certainty close is where the capital a
+  // fill needs comes from, so funding has to see the close that actually happened rather
+  // than the several the fan-out proposed. The rows it is handed are that result.
+  assert.match(source, /const funding = fundLimitOrderFills\(trades, certainty\.trades, portfolioState\);/,
     "and it runs after the fan-out, where every fill on the pass is visible at once");
+  const order = ["const refreshed = await mapWithConcurrency(", "const certainty = holdExtraCertaintyCloses(", "const funding = fundLimitOrderFills("]
+    .map((line) => source.indexOf(line));
+  assert.ok(order.every((index) => index > 0) && order[0] < order[1] && order[1] < order[2],
+    "fan out, then decide which single position closed, then fund the fills");
 });
 
 // Nothing produces cancelledForCapital any more -- a fill short of capital defers instead

@@ -593,6 +593,85 @@ export function canFundAnotherPosition(freeUsdc, stakeUsdc) {
   return free + 0.000001 >= stake;
 }
 
+// At most one certainty close per pass.
+//
+// Reported: "stava se, ze probehne zpracovani certainty, resp. uzavreni pozic na urovni
+// 99.9 kdyz je cash mensi nez stake. to je spravne, ale staci kdyz se v tu chvili za jeden
+// beh zavre pouze 1 z pozic, pri spusteni teto logiky se nyni zavrou hned vsechny."
+//
+// And they do, necessarily. The gate each position reads is "can the portfolio fund another
+// stake" -- one fact about the ACCOUNT, decided once for the whole pass -- so when the
+// answer is no, it is no for every position at once and every decided position sells. The
+// close is meant to buy back enough capital for the next stake, and one position usually is
+// enough; the rest are sold a tick below 1.00 for nothing.
+//
+// It cannot be fixed inside the per-position worker. Those run in a fan-out and none of
+// them can see the others, which is the same reason fundLimitOrderFills is decided out here
+// rather than in there. So the pass closes the one that hands back the most capital -- one
+// close, the most capital freed, which is what the close is for -- and holds the rest, with
+// their refreshed marks kept so the dashboard does not show a stale price for a cycle.
+//
+// Ties are broken by the smaller forfeit and then by id, so the choice is the same every
+// time it is computed rather than an artefact of which market answered first.
+export function holdExtraCertaintyCloses(marked = [], originals = []) {
+  const rows = Array.isArray(marked) ? marked : [];
+  const previous = new Map((Array.isArray(originals) ? originals : []).map((row) => [row?.id, row]));
+  const closedNow = rows
+    .map((trade, index) => ({ trade, index }))
+    .filter(({ trade }) => trade?.closeReason === "certainty" && trade?.certaintyClosedAt
+      // Only positions this pass closed. One closed on an earlier pass is already booked.
+      && OPEN_STATUSES.has(String(previous.get(trade.id)?.status || "")));
+  if (closedNow.length <= 1) return { trades: rows, closed: closedNow[0]?.trade?.id ?? null, held: [] };
+
+  const freed = ({ trade }) => Number(trade.currentValueUsdc) || 0;
+  const forfeit = ({ trade }) => 1 - (Number(trade.currentPrice) || 0);
+  const ranked = [...closedNow].sort((a, b) =>
+    freed(b) - freed(a) || forfeit(a) - forfeit(b) || String(a.trade.id).localeCompare(String(b.trade.id)));
+
+  const trades = [...rows];
+  const held = [];
+  for (const entry of ranked.slice(1)) {
+    trades[entry.index] = holdCertaintyClose(entry.trade, previous.get(entry.trade.id));
+    held.push(entry.trade.id);
+  }
+  return { trades, closed: ranked[0].trade.id, held };
+}
+
+// One held position: the close is undone, the refreshed market marks are kept.
+//
+// Pure, and built from the closed row rather than from a second market read: the price this
+// pass saw is already on it, so re-deriving the open marks costs nothing and cannot
+// disagree with what the close was decided on.
+export function holdCertaintyClose(closed = {}, original = null) {
+  const price = Number(closed.currentPrice);
+  const cost = totalCost(closed);
+  const shares = Number(closed.shares);
+  const value = Number.isFinite(price) && Number.isFinite(shares)
+    ? Number((price * shares).toFixed(4))
+    : Number(closed.currentValueUsdc) || 0;
+  const unrealized = Number((value - cost).toFixed(4));
+  const held = {
+    ...closed,
+    // Back to whatever it was before the close. Not a literal "OPEN": a position can be
+    // PENDING_RESOLUTION or a filled limit order, and inventing OPEN for those would move
+    // them backwards through their own lifecycle.
+    status: String(original?.status || "OPEN"),
+    currentValueUsdc: value,
+    unrealizedPnlUsdc: unrealized,
+    unrealizedPnlPct: pnlPercent(unrealized, cost),
+    statusNote: `At or above this portfolio's certainty threshold, but another decided position`
+      + ` was sold on this pass instead. Held; it is reconsidered on the next one.`,
+  };
+  // The close is undone, so nothing may be left claiming it happened.
+  delete held.closeReason;
+  delete held.certaintyClosedAt;
+  delete held.closedAt;
+  delete held.resolvedAt;
+  delete held.realizedPnlUsdc;
+  delete held.realizedPnlPct;
+  return held;
+}
+
 // Whether this position is sold now rather than held to resolution.
 //
 // Its own function because of how this decision has gone before: sold at 99 instead of 99.9
@@ -5602,6 +5681,11 @@ async function markOpenTrade(trade, strategy = null, funding = null) {
           // position counted as open forever. What kind of close it was is a field.
           status: "CLOSED",
           closeReason: "certainty",
+          // Stamped so the pass can tell ITS OWN certainty closes from ones booked on an
+          // earlier pass. Without it a portfolio that closed one yesterday would look like
+          // it was closing two today, and the one-per-pass rule would hold a position back
+          // for no reason at all.
+          certaintyClosedAt: checkedAt,
           closedAt: checkedAt,
           resolvedAt: checkedAt,
           currentPrice: Number(bestBid.toFixed(4)),
@@ -5924,10 +6008,20 @@ async function refreshTrades(trades, portfolioState = null, strategy = null) {
   // loop built -- markOpenTrade reads the market and returns a new trade, and touches
   // nothing another trade can see.
   const refreshed = await mapWithConcurrency(trades, (trade) => markOpenTrade(trade, strategy, capitalState));
+  // At most one certainty close per pass, decided here for the same reason funding is: the
+  // gate every position reads is one fact about the account, so when it says "no capital"
+  // it says so to all of them at once and every decided position sells a tick below 1.00.
+  // Before funding, because a close is where the capital a fill needs comes from.
+  const certainty = holdExtraCertaintyCloses(refreshed, trades);
+  if (certainty.held.length) {
+    console.log(`${portfolioState?.id || strategy?.id || "portfolio"}: certainty close sold 1 position`
+      + ` (${certainty.closed}) and held ${certainty.held.length} other decided position(s)`
+      + ` for a later pass.`);
+  }
   // Funding is decided after the fan-out, not inside it: whether one fill fits depends on
   // every other fill on the same pass, which a per-trade worker cannot see.
-  if (!portfolioState) return refreshed;
-  const funding = fundLimitOrderFills(trades, refreshed, portfolioState);
+  if (!portfolioState) return certainty.trades;
+  const funding = fundLimitOrderFills(trades, certainty.trades, portfolioState);
   if (funding.deferred) {
     console.warn(`${portfolioState.id}: a resting order reached its fill price with no capital to`
       + ` fund the position; left ${funding.deferred} order(s) resting for a later pass`

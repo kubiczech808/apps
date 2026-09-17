@@ -1549,6 +1549,111 @@ function stream_json_array_members(string $path, string $field, callable $onRow,
 }
 
 /**
+ * Replace whole substrings in a file without ever holding the file in memory.
+ *
+ * Written for the live revalidation merge, which changes a handful of rows in a catalogue
+ * that does not fit in the host's memory limit: the first version of that endpoint decoded
+ * the segment and production answered "Allowed memory size of 536870912 bytes exhausted".
+ *
+ * Each key is the exact text of one top-level member of a JSON array, taken from
+ * stream_json_array_members, so it carries that row's token id. Each value is
+ * ['to' => new text, 'times' => how many occurrences to replace] -- a count, because a state
+ * written before segmentation holds the same market in evaluations AND in marketObservations
+ * byte for byte, and replacing only the first left the two fields disagreeing.
+ *
+ * The file is rewritten beside itself and moved into place, so a failure halfway through
+ * leaves the catalogue intact rather than truncated. The sliding window keeps one read chunk
+ * plus the longest needle, so a needle straddling a chunk boundary is still found.
+ */
+function splice_file_substrings(string $path, array $replacements): bool
+{
+    if ($replacements === []) {
+        return true;
+    }
+    $longest = 0;
+    foreach ($replacements as $needle => $ignored) {
+        $longest = max($longest, strlen((string) $needle));
+    }
+
+    $source = @fopen($path, 'rb');
+    if ($source === false) {
+        return false;
+    }
+    $temporary = $path . '.revalidation-' . bin2hex(random_bytes(6));
+    $target = @fopen($temporary, 'wb');
+    if ($target === false) {
+        fclose($source);
+
+        return false;
+    }
+
+    $buffer = '';
+    $pending = $replacements;
+    $ok = true;
+    while (true) {
+        $chunk = fread($source, 1 << 19);
+        $eof = ($chunk === false || $chunk === '');
+        if (!$eof) {
+            $buffer .= $chunk;
+        }
+        foreach ($pending as $needle => $entry) {
+            $needle = (string) $needle;
+            $to = (string) $entry['to'];
+            $offset = 0;
+            while ($pending[$needle]['times'] > 0) {
+                $at = strpos($buffer, $needle, $offset);
+                if ($at === false) {
+                    break;
+                }
+                $buffer = substr_replace($buffer, $to, $at, strlen($needle));
+                // Past the text just written, so a replacement that happens to contain the
+                // needle -- an update that changed nothing -- cannot be found again forever.
+                $offset = $at + strlen($to);
+                $pending[$needle]['times'] -= 1;
+            }
+            if ($pending[$needle]['times'] <= 0) {
+                unset($pending[$needle]);
+            }
+        }
+        if ($eof) {
+            if (fwrite($target, $buffer) === false) {
+                $ok = false;
+            }
+            break;
+        }
+        // Everything but the tail is settled: no needle can start in it and still be found
+        // later, because a needle is at most $longest bytes.
+        $keep = $longest;
+        if (strlen($buffer) > $keep) {
+            $flush = substr($buffer, 0, strlen($buffer) - $keep);
+            if (fwrite($target, $flush) === false) {
+                $ok = false;
+                break;
+            }
+            $buffer = substr($buffer, strlen($buffer) - $keep);
+        }
+    }
+    fclose($source);
+    fclose($target);
+
+    // A member that was never found means the file changed under us, and a half-applied
+    // merge is worse than none: the run is reported as failed and the catalogue is left
+    // exactly as it was.
+    if (!$ok || $pending !== []) {
+        @unlink($temporary);
+
+        return false;
+    }
+    if (!rename($temporary, $path)) {
+        @unlink($temporary);
+
+        return false;
+    }
+
+    return true;
+}
+
+/**
  * The entry price the performance tables simulate, ported from the bot's
  * scrapedSimulationProbability(). A settled book prints 0 or 1, so a row is priced by
  * the first genuinely live quote it ever carried.
@@ -7789,39 +7894,58 @@ try {
         $merged = 0;
         $closedOut = [];
         $written = [];
+        // The catalogue is NEVER decoded whole. Measured in production, by a probe, after
+        // this endpoint's first version did exactly that: HTTP 500, "Allowed memory size of
+        // 536870912 bytes exhausted", api.php:342 -- which is the json_decode inside
+        // decode_state_file. The observations segment is the whole scraped catalogue and the
+        // two segments together do not fit in the host's 512 MB, and they grow.
+        //
+        // So each segment is streamed one member at a time, the handful of rows that carry a
+        // revalidated token are patched, and the file is rewritten by splicing those members'
+        // exact bytes. Peak memory is one member plus one read chunk, whatever the catalogue
+        // becomes. This is the same reason stream_json_array_members exists at all.
+        //
         // Both fields can live in the SAME file -- a state written before segmentation
-        // carries them in the core itself -- so each document is loaded once, both fields are
-        // merged into that one copy, and it is written once at the end. Merging them into two
-        // separate copies and writing each in turn means the second write carries the first
-        // field unmerged, which silently discards half the verdicts. Measured while writing
-        // the test for this: the evaluations merge reported success and was then overwritten.
-        $documents = [];
-        $dirty = [];
+        // carries them in the core itself -- so the splices are collected per FILE and
+        // applied once. Rewriting the same file twice in a row would discard the first pass.
+        $spliceByPath = [];
+        $segmentsByPath = [];
         foreach ($targets as $target) {
             $path = state_segment_path($core, $corePath, $target['segment']) ?? $corePath;
-            if (!array_key_exists($path, $documents)) {
-                $documents[$path] = $path === $corePath ? $core : decode_state_file($path, false);
-            }
-            $document = $documents[$path];
-            if (!is_array($document) || !is_array($document[$target['field']] ?? null)) {
-                continue;
-            }
-            $rows = $document[$target['field']];
             $count = 0;
-            foreach ($rows as $index => $item) {
-                if (!is_array($item)) {
-                    continue;
+            // The raw text of the member currently being offered. stream_json_array_members
+            // calls $accepts and then $onRow for the same member, in that order, so this is
+            // that member's bytes -- and those bytes are what the rewrite splices on.
+            $currentRaw = null;
+            $accepts = static function (string $raw) use (&$currentRaw, $byToken): bool {
+                // A cheap substring test over the member's text, so the ~8,000 rows that
+                // cannot match are never decoded. A row that merely mentions the id is
+                // decoded and then rejected below on its real tokenId.
+                foreach ($byToken as $tokenId => $ignored) {
+                    if (strpos($raw, (string) $tokenId) !== false) {
+                        $currentRaw = $raw;
+
+                        return true;
+                    }
                 }
+
+                return false;
+            };
+            $onRow = function (array $item) use (
+                &$currentRaw, &$count, &$closedOut, &$spliceByPath, $byToken, $carried, $path
+            ): bool {
+                $raw = $currentRaw;
+                $currentRaw = null;
                 $tokenId = (string) ($item['tokenId'] ?? $item['clobTokenId'] ?? '');
-                if ($tokenId === '' || !isset($byToken[$tokenId])) {
-                    continue;
+                if ($raw === null || $tokenId === '' || !isset($byToken[$tokenId])) {
+                    return true;
                 }
                 $update = $byToken[$tokenId];
                 // A verdict older than the one already stored is not news. Runs overlap,
                 // and the newer answer has to win whichever order they arrive in.
                 $existing = is_array($item['executionRevalidation'] ?? null) ? $item['executionRevalidation'] : [];
                 if ((string) ($existing['checkedAt'] ?? '') > (string) ($update['checkedAt'] ?? '')) {
-                    continue;
+                    return true;
                 }
                 $item['executionRevalidation'] = $update;
                 foreach ($carried as $field) {
@@ -7848,30 +7972,43 @@ try {
                     $closedOut[$tokenId] = true;
                 }
                 $item['updatedAt'] = (string) ($update['checkedAt'] ?? gmdate('c'));
-                $rows[$index] = $item;
+                $encoded = json_encode($item, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+                if (!is_string($encoded)) {
+                    return true;
+                }
+                // Keyed by the member's own bytes. A row can appear TWICE in one file -- a
+                // state written before segmentation carries the same market in evaluations
+                // and in marketObservations, byte for byte -- so the number of occurrences
+                // is counted rather than assumed to be one. Measured: without the count the
+                // endpoint reported merging two and patched one, silently, and the two
+                // fields then disagreed about the same market.
+                if (isset($spliceByPath[$path][$raw])) {
+                    $spliceByPath[$path][$raw]['times'] += 1;
+                } else {
+                    $spliceByPath[$path][$raw] = ['to' => $encoded, 'times' => 1];
+                }
                 $count += 1;
+
+                return true;
+            };
+            if (!stream_json_array_members($path, $target['field'], $onRow, $accepts)) {
+                continue;
             }
             if ($count === 0) {
                 continue;
             }
-            $document[$target['field']] = $rows;
-            $documents[$path] = $document;
-            $dirty[$path] = true;
             $merged += $count;
             $written[] = $target['segment'];
+            $segmentsByPath[$path][] = $target['segment'];
         }
 
-        foreach (array_keys($dirty) as $path) {
-            $encoded = json_encode($documents[$path], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
-            if (!is_string($encoded)) {
-                respond(['ok' => false, 'error' => 'A revalidated segment could not be encoded.'], 500);
-            }
-            // Written beside the file and moved into place: a failure halfway through must
-            // leave the catalogue intact rather than truncated.
-            $temporary = $path . '.revalidation-' . bin2hex(random_bytes(6));
-            if (file_put_contents($temporary, $encoded, LOCK_EX) === false || !rename($temporary, $path)) {
-                @unlink($temporary);
-                respond(['ok' => false, 'error' => 'A revalidated segment could not be written.'], 500);
+        foreach ($spliceByPath as $path => $replacements) {
+            if (!splice_file_substrings($path, $replacements)) {
+                respond([
+                    'ok' => false,
+                    'error' => 'A revalidated segment could not be written.',
+                    'segments' => $segmentsByPath[$path] ?? [],
+                ], 500);
             }
         }
 
