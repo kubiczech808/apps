@@ -43,12 +43,13 @@ const bybitStub = (candles) => async (url) => {
 }
 
 const fakeStore = (initial = null) => {
-  const box = { saved: null, lease: { granted: true, owner: 'test' } }
+  const box = { saved: null, saveOptions: null, lease: { granted: true, owner: 'test' } }
   return {
     box,
     load: async () => ({ state: initial, origin: initial ? 'hosting' : 'none' }),
-    save: async (state) => {
+    save: async (state, options) => {
       box.saved = state
+      box.saveOptions = options
       return { local: false, hosting: true, error: null }
     },
     claimLease: async () => box.lease,
@@ -311,6 +312,26 @@ test('a pass that loses the lease does nothing and says who holds it', async () 
   assert.equal(run.action, 'skipped')
   assert.match(run.reason, /rpi/)
   assert.equal(executor.calls.length, 0)
+  assert.equal(store.box.saveOptions.localOnly, true)
+})
+
+test('a lease protocol error is kept local instead of overwriting hosting state', async () => {
+  const candles = marketCandles()
+  const store = fakeStore()
+  store.claimLease = async () => { throw new Error('obsolete lease protocol') }
+
+  const { run } = await runPass({
+    env: baseEnv,
+    fetchImpl: bybitStub(candles),
+    store,
+    logger: { info() {}, warn() {}, error() {} },
+    now: nowAfter(candles),
+    makeExecutor: fakeExecutor().factory,
+  })
+
+  assert.equal(run.action, 'error')
+  assert.match(run.error, /obsolete lease protocol/)
+  assert.equal(store.box.saveOptions.localOnly, true)
 })
 
 test('paper futures refuses to run without funding history', async () => {

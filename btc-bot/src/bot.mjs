@@ -384,6 +384,7 @@ export const runPass = async ({
 
   state.heartbeats = { ...(state.heartbeats ?? {}), [config.runner]: isoNow(now) }
 
+  let leaseAcquired = false
   try {
     const lease = await store.claimLease({
       owner: config.runner,
@@ -398,6 +399,7 @@ export const runPass = async ({
       const saved = await store.save(state, { localOnly: true })
       return { state, run, saved }
     }
+    leaseAcquired = true
 
     const requestedMode = config.modeOverride || settings.mode
     let fundingSettlements = []
@@ -754,7 +756,9 @@ export const runPass = async ({
   recordRun(state, run)
   state.updatedAt = isoNow(now)
   state.savedBy = config.runner
-  const saved = await store.save(state)
+  // A runner that could not even acquire a lease may keep a local diagnostic,
+  // but it must never publish over the runner that owns the current state.
+  const saved = await store.save(state, { localOnly: !leaseAcquired })
   if (saved.error) logger.warn(`State was not published to hosting: ${saved.error}`)
 
   return { state, run, saved }

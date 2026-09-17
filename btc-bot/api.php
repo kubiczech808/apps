@@ -30,6 +30,7 @@ const STATE_FILE = DATA_DIR . '/bot-state.json';
 const SETTINGS_FILE = DATA_DIR . '/settings.json';
 const BACKTEST_FILE = DATA_DIR . '/backtests.json';
 const LEASE_FILE = DATA_DIR . '/lease.json';
+const RUNNER_CAPABILITIES_FILE = DATA_DIR . '/runner-capabilities.json';
 const COMMANDS_FILE = DATA_DIR . '/commands.json';
 const PRIMARY_RUNNER = 'rpi-primary-v2';
 const RETIRED_RUNNERS = ['rpi'];
@@ -214,6 +215,18 @@ switch ($action) {
         ) {
             fail(409, 'Runner uses an obsolete price-action matrix schema.');
         }
+        $publisher = (string) ($state['savedBy'] ?? '');
+        $capabilities = readJsonFile(RUNNER_CAPABILITIES_FILE, []);
+        $publisherSchema = is_array($capabilities)
+            ? ($capabilities[$publisher]['priceActionSchema'] ?? null)
+            : null;
+        if (
+            $publisher === ''
+            || !is_numeric($publisherSchema)
+            || (int) $publisherSchema < MIN_PRICE_ACTION_MATRIX_SCHEMA
+        ) {
+            fail(409, 'Runner has not acquired a lease with the current protocol.');
+        }
         writeJsonFile(STATE_FILE, $state);
 
         // Runtime settings survive deploys. The runner owns strategy-version
@@ -248,12 +261,26 @@ switch ($action) {
         if ($owner === '') {
             fail(400, 'A lease needs an owner.');
         }
+        $capabilities = readJsonFile(RUNNER_CAPABILITIES_FILE, []);
+        if (!is_array($capabilities)) {
+            $capabilities = [];
+        }
         // Reject an obsolete runner before it can reserve the right to work.
         // Checking only at publish time creates a deadlock: the old process
         // keeps renewing the lease but every state it computes is discarded.
         if (!is_numeric($priceActionSchema) || (int) $priceActionSchema < MIN_PRICE_ACTION_MATRIX_SCHEMA) {
+            $capabilities[$owner] = [
+                'priceActionSchema' => 0,
+                'checkedAt' => gmdate('c'),
+            ];
+            writeJsonFile(RUNNER_CAPABILITIES_FILE, $capabilities);
             fail(409, 'Runner uses an obsolete price-action matrix schema.');
         }
+        $capabilities[$owner] = [
+            'priceActionSchema' => (int) $priceActionSchema,
+            'checkedAt' => gmdate('c'),
+        ];
+        writeJsonFile(RUNNER_CAPABILITIES_FILE, $capabilities);
         // Keep the old identity available during a queued deploy, but retire it
         // permanently as soon as the replacement has successfully appeared.
         // Its obsolete PA matrix is rejected by publish during this handover.
