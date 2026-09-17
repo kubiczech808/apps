@@ -2215,6 +2215,31 @@ function execution_scope_matches_observation(array $item, array $config): bool
     if ($liveEventMode === 'only' && !$running) {
         return false;
     }
+    // The dip rule, which this shortlist did not know about at all.
+    //
+    // Reported with a screenshot of five candidates marked "READY for next paper execution"
+    // beside a run log saying "no candidate passed this portfolio's current rules", for
+    // every dip portfolio. Both were telling the truth about their own rules: this endpoint
+    // shortlisted every catalogue row inside the portfolio's 30-56% range, and the bot
+    // applies a rule this one had never heard of -- the market must have OPENED in the
+    // 70-80% band, which is what makes it a dip rather than an ordinary cheap outcome.
+    //
+    // A dip portfolio's range is its BUY band, so without this gate the screen promises
+    // every market that happens to be cheap. Same rule, same fields, same refusal as the
+    // bot's: no recorded opening price means the premise is unverified, and an unverified
+    // premise is not one.
+    $dipRule = normalize_dip_entry_rule($config, []);
+    if ($dipRule['dipEntryEnabled']) {
+        if (!$running) {
+            return false;
+        }
+        $opened = is_numeric($item['firstMarketProbability'] ?? null)
+            ? (float) $item['firstMarketProbability']
+            : null;
+        if ($opened === null || $opened < $dipRule['dipEntryOpenMin'] || $opened > $dipRule['dipEntryOpenMax']) {
+            return false;
+        }
+    }
     $minimumLiquidity = normalize_optional_money_value($config['minLiquidityUsdc'] ?? null);
     $liquidity = is_numeric($item['volumeUsdc'] ?? null)
         ? (float) $item['volumeUsdc']

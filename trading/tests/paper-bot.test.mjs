@@ -11423,12 +11423,52 @@ test("dip entry on paper: recorded dips are the candidate pool, and only for tho
   const { readFile } = await import("node:fs/promises");
   const bot = await readFile(new URL("../tools/paper-trading-bot.mjs", import.meta.url), "utf8");
 
-  // The pool swap, which is the whole mechanism. A dip portfolio must NOT fall back to the
-  // catalogue: the catalogue cannot hold a collapsed favourite, so falling back would mean
-  // trading ordinary markets, which is the failure this rule was reported for.
-  assert.match(bot, /const pool = dipEntryRuleState\(strategy\)\.enabled \? dipEntryCandidateRows\(strategy\) : eligible;/);
+  // The pool, which is the whole mechanism. It used to be the recordings ALONE, on the
+  // reasoning that the catalogue cannot hold a collapsed favourite -- true below 0.50,
+  // where retention keeps only the leading outcome, and false for every buy band reaching
+  // above it. A portfolio buying 30-56% had a third of its band in the catalogue and was
+  // discarding it, which is how five candidates sat on screen marked READY while the run
+  // log said none passed.
+  assert.match(bot, /const pool = dipEntryRuleState\(strategy\)\.enabled\n\s+\? mergeDipEntryPool\(dipEntryCandidateRows\(strategy\), eligible\)\n\s+: eligible;/);
   // Every other portfolio is untouched.
   assert.match(bot, /const strategyRows = strategyEligibleCandidates\(pool, strategy\);/);
+
+  // The hazard the old assertion existed to prevent, kept and now enforced by behaviour
+  // rather than by the absence of a fallback: merging the catalogue must NOT let a dip
+  // portfolio trade an ordinary market. The premise is checked per row, so a cheap outcome
+  // that was never a favourite is still refused however it reached the pool.
+  const module = await import("../tools/paper-trading-bot.mjs");
+  const price = 0.53;
+  const shares = 5 / price;
+  const catalogueRow = {
+    tokenId: "cat-1", question: "Ordinary market", outcome: "Yes", status: "ELIGIBLE",
+    selectionStatus: "ELIGIBLE", marketProbability: price, marketPrice: price, aiProbability: price,
+    bestBid: price, bestAsk: price, spread: 0, volumeUsdc: 5000, liquidity: 5000,
+    eventStarted: true, marketClosed: false, acceptingOrders: true,
+    endDate: new Date(Date.now() + 3600000).toISOString(),
+    resolutionEndDate: new Date(Date.now() + 3600000).toISOString(), daysToResolution: 1 / 24,
+    stakeUsdc: 5, shares, executableShares: shares, totalCostUsdc: 5,
+    netGainIfWinUsdc: shares - 5, netYield: (shares - 5) / 5, riskReward: (shares - 5) / 5,
+    expectedValueUsdc: shares * price - 5, marketExpectedValueUsdc: shares * price - 5,
+    annualizedReturn: 50, potentialAnnualizedReturn: 50, marketAnnualizedReturn: 50,
+    feeRate: 0, feesEnabled: false,
+  };
+  const dipStrategy = {
+    id: "dip", label: "dip", selectionOrder: "highest_ev_pa_first", selectionMetric: "expectedValueUsdc",
+    stakeUsdc: 5, probabilitySource: "market", marketType: "all", minNetYield: 0,
+    minProbability: 0.3, maxProbability: 0.56, liveEventMode: "only",
+    dipEntryEnabled: true, dipEntryOpenMin: 0.7, dipEntryOpenMax: 0.8,
+  };
+  assert.equal(
+    module.sortEligibleForStrategy([{ ...catalogueRow, firstMarketProbability: 0.45 }], dipStrategy).length,
+    0,
+    "a market that never fell must stay out of a dip portfolio, catalogue or not",
+  );
+  assert.equal(
+    module.sortEligibleForStrategy([{ ...catalogueRow, firstMarketProbability: 0.76 }], dipStrategy).length,
+    1,
+    "and one that did fall must get in",
+  );
 
   // The rows a hit becomes, from the real module rather than a sandboxed copy of it.
   const hits = [

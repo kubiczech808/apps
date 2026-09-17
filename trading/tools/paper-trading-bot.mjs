@@ -8396,13 +8396,47 @@ export function dipEntryRunDiagnostics(strategy, passedFilters = 0, hits = DIP_E
   };
 }
 
-function sortEligibleForStrategy(eligible, strategy = PAPER_STRATEGIES.conservative) {
-  // A dip portfolio's candidates are the dips the worker RECORDED, not the catalogue. The
-  // catalogue cannot hold them: a collapsed favourite drops out of it entirely, and the
-  // portfolio's own range is where it buys, which is below everything the catalogue keeps.
-  // Every filter below still applies to these rows -- the range, the tags, the shape, the
-  // liquidity and the rule's own opening-band check.
-  const pool = dipEntryRuleState(strategy).enabled ? dipEntryCandidateRows(strategy) : eligible;
+// The recordings and the catalogue, in that order, with one row per token.
+//
+// Order matters: a token the worker recorded carries the price the dip actually reached,
+// and the catalogue's row for the same market carries whatever it was quoted at when the
+// scan last saw it. Both describe the same opportunity; only one of them is the price this
+// rule exists to buy at.
+export function mergeDipEntryPool(recorded = [], catalogue = []) {
+  const rows = [];
+  const seen = new Set();
+  for (const row of [...(Array.isArray(recorded) ? recorded : []), ...(Array.isArray(catalogue) ? catalogue : [])]) {
+    const key = String(row?.tokenId || row?.clobTokenId || row?.assetId || row?.id || "");
+    // A row with no token at all is kept rather than dropped: it cannot collide with
+    // anything, and silently discarding candidates is the fault this whole change is about.
+    if (key && seen.has(key)) continue;
+    if (key) seen.add(key);
+    rows.push(row);
+  }
+  return rows;
+}
+
+export function sortEligibleForStrategy(eligible, strategy = PAPER_STRATEGIES.conservative) {
+  // A dip portfolio draws from BOTH the dips the worker recorded and the catalogue.
+  //
+  // It used to take the recordings alone, on the reasoning that a collapsed favourite drops
+  // out of the catalogue entirely. That is true below 0.50 -- the scan keeps only the
+  // leading outcome above it -- and false for every buy band that reaches higher. A
+  // portfolio buying 30-56% has a third of its band inside the catalogue, and those rows
+  // were being thrown away: reported with five of them on screen, marked READY, while the
+  // run log said no candidate passed.
+  //
+  // Merging costs nothing in safety, because the dip premise is not enforced by WHERE the
+  // row came from. strategyEligibleCandidates below asks every row in the pool for a
+  // recorded opening price inside the opening band and for a fixture already under way, and
+  // a catalogue row that answers both IS a collapsed favourite, however it arrived.
+  //
+  // The recordings still lead: they carry the price the dip actually reached, which is the
+  // one the position should open at, and the catalogue row for the same token carries a
+  // later quote. Deduplicated by token, recordings first.
+  const pool = dipEntryRuleState(strategy).enabled
+    ? mergeDipEntryPool(dipEntryCandidateRows(strategy), eligible)
+    : eligible;
   const strategyRows = strategyEligibleCandidates(pool, strategy);
   const rows = strategyRows;
   if (strategy.selectionOrder === "highest_reward_risk_first") {
