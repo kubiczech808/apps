@@ -44,6 +44,54 @@ function sql_value(mysqli $database, mixed $value): string {
     return "'" . $database->real_escape_string((string) $value) . "'";
 }
 
+function isolated_wordpress_tables(mysqli $database): array {
+    $prefix = 'btcdca_isolated_wp_';
+    $result = $database->query("SHOW TABLES LIKE 'btcdca\\_isolated\\_wp\\_%'");
+    $tables = [];
+    while ($row = $result->fetch_row()) {
+        $table = (string) $row[0];
+        if (!str_starts_with($table, $prefix) || !preg_match('/^btcdca_isolated_wp_[A-Za-z0-9_]+$/', $table)) {
+            throw new RuntimeException('Unexpected isolated WordPress table name returned by MySQL.');
+        }
+        $tables[] = $table;
+    }
+    sort($tables, SORT_STRING);
+    return $tables;
+}
+
+function isolated_table_name(string $table): string {
+    $name = 'btcdca_isolated_wp_' . substr($table, strlen('wp_dca_'));
+    if (strlen($name) > 64 || !preg_match('/^btcdca_isolated_wp_[A-Za-z0-9_]+$/', $name)) {
+        throw new RuntimeException('WordPress table name cannot be isolated safely.');
+    }
+    return $name;
+}
+
+function active_table_name(string $table): string {
+    $name = 'wp_dca_' . substr($table, strlen('btcdca_isolated_wp_'));
+    if (strlen($name) > 64 || !preg_match('/^wp_dca_[A-Za-z0-9_]+$/', $name)) {
+        throw new RuntimeException('Isolated WordPress table name cannot be restored safely.');
+    }
+    return $name;
+}
+
+function rename_tables(mysqli $database, array $tables, callable $target): array {
+    if ($tables === []) {
+        throw new RuntimeException('No WordPress tables are available for this operation.');
+    }
+    $renames = [];
+    foreach ($tables as $table) {
+        $destination = $target($table);
+        $existing = $database->query('SHOW TABLES LIKE ' . sql_value($database, $destination));
+        if ($existing->num_rows !== 0) {
+            throw new RuntimeException('Destination WordPress table already exists.');
+        }
+        $renames[] = identifier($table) . ' TO ' . identifier($destination);
+    }
+    $database->query('RENAME TABLE ' . implode(', ', $renames));
+    return array_map(fn (string $table): array => ['from' => $table, 'to' => $target($table)], $tables);
+}
+
 function write_gzip($output, string $contents): void {
     if (gzwrite($output, $contents) === false) {
         throw new RuntimeException('Could not write the WordPress database backup.');
@@ -115,15 +163,30 @@ try {
         exit;
     }
 
-    if ($action === 'drop' && ($_GET['confirm'] ?? '') === 'RETIRE_WORDPRESS') {
-        $tables = wordpress_tables($database);
+    if ($action === 'isolate' && ($_GET['confirm'] ?? '') === 'ISOLATE_WORDPRESS') {
+        header('Content-Type: application/json');
+        echo json_encode(['renamed' => rename_tables($database, wordpress_tables($database), 'isolated_table_name')], JSON_THROW_ON_ERROR);
+        exit;
+    }
+
+    if ($action === 'rollback' && ($_GET['confirm'] ?? '') === 'ROLLBACK_WORDPRESS') {
+        header('Content-Type: application/json');
+        echo json_encode(['restored' => rename_tables($database, isolated_wordpress_tables($database), 'active_table_name')], JSON_THROW_ON_ERROR);
+        exit;
+    }
+
+    if ($action === 'purge' && ($_GET['confirm'] ?? '') === 'PURGE_WORDPRESS') {
+        $tables = isolated_wordpress_tables($database);
+        if ($tables === []) {
+            throw new RuntimeException('No isolated WordPress tables are available for purging.');
+        }
         foreach ($tables as $table) {
             if (!$database->query('DROP TABLE ' . identifier($table))) {
                 throw new RuntimeException('Could not drop ' . $table);
             }
         }
         header('Content-Type: application/json');
-        echo json_encode(['dropped' => $tables], JSON_THROW_ON_ERROR);
+        echo json_encode(['purged' => $tables], JSON_THROW_ON_ERROR);
         exit;
     }
 

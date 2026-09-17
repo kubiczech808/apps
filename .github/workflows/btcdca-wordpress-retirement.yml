@@ -12,25 +12,26 @@ on:
   workflow_dispatch:
     inputs:
       operation:
-        description: "stage uploads guides; snapshot creates recovery; preview activates static site without deletion; retire removes WordPress after preview"
+        description: "stage uploads guides; snapshot archives recovery; isolate is reversible; rollback restores WordPress; purge deletes confirmed isolated data"
         required: true
         default: stage
         type: choice
         options:
           - stage
           - snapshot
-          - preview
-          - retire
+          - isolate
+          - rollback
+          - purge
       backup_run_id:
-        description: "Required for preview or retire: run ID of the validated WordPress snapshot"
+        description: "Required for isolate or purge: run ID of the validated WordPress snapshot"
         required: false
         type: string
-      preview_run_id:
-        description: "Required for retire: successful preview run ID that you have validated"
+      isolation_run_id:
+        description: "Required for purge: successful isolation run ID that you have validated"
         required: false
         type: string
       confirmation:
-        description: "For retire, enter exactly RETIRE_WORDPRESS"
+        description: "For purge, enter exactly PURGE_WORDPRESS"
         required: false
         type: string
 
@@ -94,28 +95,28 @@ jobs:
           if-no-files-found: error
           retention-days: 90
 
-      - name: Require explicit retirement confirmation
-        if: inputs.operation == 'retire'
+      - name: Require explicit purge confirmation
+        if: inputs.operation == 'purge'
         run: |
           set -euo pipefail
-          test '${{ inputs.confirmation }}' = 'RETIRE_WORDPRESS'
+          test '${{ inputs.confirmation }}' = 'PURGE_WORDPRESS'
           test -n '${{ inputs.backup_run_id }}'
-          test -n '${{ inputs.preview_run_id }}'
+          test -n '${{ inputs.isolation_run_id }}'
 
-      - name: Require a validated recovery snapshot before static preview
-        if: inputs.operation == 'preview'
+      - name: Require a validated recovery snapshot before isolation
+        if: inputs.operation == 'isolate'
         run: |
           set -euo pipefail
           test -n '${{ inputs.backup_run_id }}'
 
-      - name: Require a clean Learn Center link audit before snapshot, preview, or retirement
-        if: inputs.operation == 'snapshot' || inputs.operation == 'preview' || inputs.operation == 'retire'
+      - name: Require a clean Learn Center link audit before snapshot, isolation, or purge
+        if: inputs.operation == 'snapshot' || inputs.operation == 'isolate' || inputs.operation == 'purge'
         run: |
           set -euo pipefail
           grep -Fq 'No Learn Center references found' .github/inspection/btcdca-learn-link-audit.md
 
-      - name: Install FTP deletion client
-        if: inputs.operation == 'retire'
+      - name: Install FTP client for isolation, rollback, or purge
+        if: inputs.operation == 'isolate' || inputs.operation == 'rollback' || inputs.operation == 'purge'
         run: |
           sudo apt-get update
           sudo apt-get install -y lftp
@@ -127,7 +128,7 @@ jobs:
           mkdir -p backup
 
       - name: Generate and upload temporary database backup endpoint
-        if: inputs.operation == 'snapshot' || inputs.operation == 'retire'
+        if: inputs.operation == 'snapshot' || inputs.operation == 'isolate' || inputs.operation == 'rollback' || inputs.operation == 'purge'
         run: |
           set -euo pipefail
           export BTCDCA_DB_HELPER_TOKEN="$(openssl rand -hex 32)"
@@ -246,7 +247,7 @@ jobs:
           compression-level: 0
 
       - name: Download the validated WordPress recovery backup
-        if: inputs.operation == 'preview' || inputs.operation == 'retire'
+        if: inputs.operation == 'isolate' || inputs.operation == 'purge'
         uses: actions/download-artifact@v4
         with:
           name: btcdca-wordpress-recovery-${{ inputs.backup_run_id }}
@@ -255,8 +256,8 @@ jobs:
           repository: ${{ github.repository }}
           github-token: ${{ github.token }}
 
-      - name: Validate the recovery artifact before preview or retirement
-        if: inputs.operation == 'snapshot' || inputs.operation == 'preview' || inputs.operation == 'retire'
+      - name: Validate the recovery artifact before isolation or purge
+        if: inputs.operation == 'snapshot' || inputs.operation == 'isolate' || inputs.operation == 'purge'
         run: |
           set -euo pipefail
           test -f backup/btcdca-wordpress-files.zip
@@ -282,72 +283,49 @@ jobs:
           print(f'Validated {len(set(tables))} WordPress tables and {len(tables)} SQL operations.')
           PY
 
-      - name: Download the successful static preview proof
-        if: inputs.operation == 'retire'
+      - name: Download the successful isolation proof
+        if: inputs.operation == 'purge'
         uses: actions/download-artifact@v4
         with:
-          name: btcdca-static-preview-${{ inputs.preview_run_id }}
-          path: static-preview
-          run-id: ${{ inputs.preview_run_id }}
+          name: btcdca-wordpress-isolation-${{ inputs.isolation_run_id }}
+          path: isolation-proof
+          run-id: ${{ inputs.isolation_run_id }}
           repository: ${{ github.repository }}
           github-token: ${{ github.token }}
 
-      - name: Require static preview to match the recovery snapshot
-        if: inputs.operation == 'retire'
+      - name: Require isolation proof to match the recovery snapshot
+        if: inputs.operation == 'purge'
         run: |
           set -euo pipefail
-          test -f static-preview/static-preview.txt
-          grep -Fxq 'snapshot_run_id=${{ inputs.backup_run_id }}' static-preview/static-preview.txt
+          test -f isolation-proof/isolation-proof.txt
+          grep -Fxq 'snapshot_run_id=${{ inputs.backup_run_id }}' isolation-proof/isolation-proof.txt
 
-      - name: Remove only WordPress database tables
-        if: inputs.operation == 'retire'
+      - name: Move WordPress files into the reversible isolation directory
+        if: inputs.operation == 'isolate'
         run: |
           set -euo pipefail
-          curl --fail --show-error --silent --retry 2 \
+          BTCDCA_WORDPRESS_FILE_MODE=isolate python3 scripts/isolate_btcdca_wordpress_files.py
+          echo 'BTCDCA_WORDPRESS_FILES_ISOLATED=1' >> "$GITHUB_ENV"
+
+      - name: Rename only WordPress database tables to the isolation prefix
+        if: inputs.operation == 'isolate'
+        run: |
+          set -euo pipefail
+          curl --fail --show-error --silent --retry 0 \
             -H "X-BTCDCA-Token: ${BTCDCA_DB_HELPER_TOKEN}" \
-            "https://www.btc-dca.com/btcdca-wordpress-database-helper.php?action=drop&confirm=RETIRE_WORDPRESS" \
-            --output dropped-wordpress-tables.json
-          grep -Fq 'wp_dca_' dropped-wordpress-tables.json
+            "https://www.btc-dca.com/btcdca-wordpress-database-helper.php?action=isolate&confirm=ISOLATE_WORDPRESS" \
+            --output isolated-wordpress-tables.json
+          grep -Fq 'btcdca_isolated_wp_' isolated-wordpress-tables.json
+          echo 'BTCDCA_WORDPRESS_DATABASE_ISOLATED=1' >> "$GITHUB_ENV"
 
       - name: Activate static homepage and static SEO files
-        if: inputs.operation == 'preview' || inputs.operation == 'retire'
+        if: inputs.operation == 'isolate'
         run: |
           set -euo pipefail
           python3 scripts/activate_btcdca_static_homepage.py
 
-      - name: Remove WordPress files after backups and static activation
-        if: inputs.operation == 'retire'
-        run: |
-          set -euo pipefail
-          lftp -u "$BTCDCA_FTP_LOGIN","$BTCDCA_FTP_PASSWORD" "ftp://ftp.btc-dca.com" <<'LFTP'
-          set cmd:fail-exit true
-          set ftp:ssl-allow false
-          set ftp:ssl-force false
-          rm -r /www/wp-admin
-          rm -r /www/wp-includes
-          rm -r /www/wp-content
-          rm /www/index.php
-          rm /www/wp-activate.php
-          rm /www/wp-blog-header.php
-          rm /www/wp-comments-post.php
-          rm /www/wp-config-sample.php
-          rm /www/wp-config.php
-          rm /www/wp-cron.php
-          rm /www/wp-links-opml.php
-          rm /www/wp-load.php
-          rm /www/wp-login.php
-          rm /www/wp-mail.php
-          rm /www/wp-settings.php
-          rm /www/wp-signup.php
-          rm /www/wp-trackback.php
-          rm /www/xmlrpc.php
-          rm /www/license.txt
-          rm /www/readme.html
-          bye
-          LFTP
-
-      - name: Verify public static site and retired Learn Center
-        if: inputs.operation == 'preview' || inputs.operation == 'retire'
+      - name: Verify public static site and isolated Learn Center
+        if: inputs.operation == 'isolate' || inputs.operation == 'purge'
         run: |
           set -euo pipefail
           curl --fail --show-error --silent https://www.btc-dca.com/ | grep -Fq 'BTC DCA static homepage'
@@ -357,24 +335,85 @@ jobs:
           test "$(curl --silent --output /dev/null --write-out '%{http_code}' https://www.btc-dca.com/learn-center/)" = '410'
           curl --fail --show-error --silent https://www.btc-dca.com/app/ | grep -Eqi '<html|<!doctype'
 
-      - name: Publish static preview proof
-        if: inputs.operation == 'preview'
+      - name: Automatically roll back an incomplete isolation
+        if: failure() && inputs.operation == 'isolate'
+        run: |
+          set -uo pipefail
+          status=0
+          if [ "${BTCDCA_WORDPRESS_DATABASE_ISOLATED:-}" = '1' ]; then
+            curl --fail --show-error --silent --retry 0 \
+              -H "X-BTCDCA-Token: ${BTCDCA_DB_HELPER_TOKEN}" \
+              "https://www.btc-dca.com/btcdca-wordpress-database-helper.php?action=rollback&confirm=ROLLBACK_WORDPRESS" \
+              --output rollback-wordpress-tables.json || status=1
+          fi
+          if [ "${BTCDCA_WORDPRESS_FILES_ISOLATED:-}" = '1' ]; then
+            BTCDCA_WORDPRESS_FILE_MODE=rollback python3 scripts/isolate_btcdca_wordpress_files.py || status=1
+          fi
+          exit "$status"
+
+      - name: Publish verified isolation proof
+        if: inputs.operation == 'isolate'
         run: |
           set -euo pipefail
-          printf 'snapshot_run_id=%s\npreview_run_id=%s\n' '${{ inputs.backup_run_id }}' '${{ github.run_id }}' > static-preview.txt
+          printf 'snapshot_run_id=%s\nisolation_run_id=%s\n' '${{ inputs.backup_run_id }}' '${{ github.run_id }}' > isolation-proof.txt
 
-      - name: Upload static preview proof
-        if: inputs.operation == 'preview'
+      - name: Upload verified isolation proof
+        if: inputs.operation == 'isolate'
         uses: actions/upload-artifact@v4
         with:
-          name: btcdca-static-preview-${{ github.run_id }}
-          path: static-preview.txt
+          name: btcdca-wordpress-isolation-${{ github.run_id }}
+          path: isolation-proof.txt
           if-no-files-found: error
           retention-days: 90
           compression-level: 0
 
+      - name: Restore isolated WordPress database tables
+        if: inputs.operation == 'rollback'
+        run: |
+          set -euo pipefail
+          curl --fail --show-error --silent --retry 0 \
+            -H "X-BTCDCA-Token: ${BTCDCA_DB_HELPER_TOKEN}" \
+            "https://www.btc-dca.com/btcdca-wordpress-database-helper.php?action=rollback&confirm=ROLLBACK_WORDPRESS" \
+            --output restored-wordpress-tables.json
+          grep -Fq 'wp_dca_' restored-wordpress-tables.json
+
+      - name: Restore WordPress files from the isolation directory
+        if: inputs.operation == 'rollback'
+        run: |
+          set -euo pipefail
+          BTCDCA_WORDPRESS_FILE_MODE=rollback python3 scripts/isolate_btcdca_wordpress_files.py
+
+      - name: Verify restored WordPress site
+        if: inputs.operation == 'rollback'
+        run: |
+          set -euo pipefail
+          test "$(curl --silent --output /dev/null --write-out '%{http_code}' https://www.btc-dca.com/wp-login.php)" != '404'
+          curl --fail --show-error --silent https://www.btc-dca.com/ | grep -Eqi '<html|<!doctype'
+
+      - name: Purge only isolated WordPress database tables
+        if: inputs.operation == 'purge'
+        run: |
+          set -euo pipefail
+          curl --fail --show-error --silent --retry 2 \
+            -H "X-BTCDCA-Token: ${BTCDCA_DB_HELPER_TOKEN}" \
+            "https://www.btc-dca.com/btcdca-wordpress-database-helper.php?action=purge&confirm=PURGE_WORDPRESS" \
+            --output purged-wordpress-tables.json
+          grep -Fq 'btcdca_isolated_wp_' purged-wordpress-tables.json
+
+      - name: Purge only the confirmed WordPress isolation directory
+        if: inputs.operation == 'purge'
+        run: |
+          set -euo pipefail
+          lftp -u "$BTCDCA_FTP_LOGIN","$BTCDCA_FTP_PASSWORD" "ftp://ftp.btc-dca.com" <<'LFTP'
+          set cmd:fail-exit true
+          set ftp:ssl-allow false
+          set ftp:ssl-force false
+          rm -r /www/.btcdca-wordpress-isolation
+          bye
+          LFTP
+
       - name: Remove temporary database endpoint
-        if: always() && (inputs.operation == 'snapshot' || inputs.operation == 'retire')
+        if: always() && (inputs.operation == 'snapshot' || inputs.operation == 'isolate' || inputs.operation == 'rollback' || inputs.operation == 'purge')
         run: |
           BTCDCA_TEMP_FILE_MODE=delete \
           BTCDCA_TEMP_FILE_REMOTE=www/btcdca-wordpress-database-helper.php \
