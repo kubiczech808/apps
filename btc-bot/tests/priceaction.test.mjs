@@ -207,3 +207,20 @@ test('every published zone carries its originating FVG instead of a nearby-gap f
     assert.equal(zone.definingIndexes.length, 3)
   }
 })
+
+test('consecutive FVGs from one displacement base create one zone', () => {
+  const candles = [
+    candle(START, 100, 101, 98, 99),
+    candle(START + HOUR, 99, 110, 99, 109),
+    candle(START + 2 * HOUR, 109, 120, 108, 119),
+    candle(START + 3 * HOUR, 118, 122, 117, 121),
+  ]
+
+  assert.equal(fairValueGaps(candles).length, 2)
+  const zones = buildFvgSupplyDemandZones(candles)
+  assert.equal(zones.length, 1)
+  assert.equal(zones[0].type, 'demand')
+  assert.equal(zones[0].firstIndex, 0)
+  assert.deepEqual([zones[0].low, zones[0].high], [98, 100])
+  assert.equal(zones[0].fvg.index, 1, 'keep the first FVG that confirms the base')
+})

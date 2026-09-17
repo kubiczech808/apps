@@ -17,12 +17,12 @@ test('lease requests identify the price-action schema before reserving work', as
     },
   })
 
-  await store.claimLease({ owner: 'actions', ttlMs: 90_000, priceActionSchema: 18 })
+  await store.claimLease({ owner: 'actions', ttlMs: 90_000, priceActionSchema: 19 })
 
   assert.equal(request.url, 'https://example.test/api.php?action=lease')
   assert.deepEqual(JSON.parse(request.options.body), {
     owner: 'actions',
     ttlMs: 90_000,
-    priceActionSchema: 18,
+    priceActionSchema: 19,
   })
 })

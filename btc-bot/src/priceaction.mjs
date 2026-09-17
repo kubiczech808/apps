@@ -166,6 +166,7 @@ export const buildFvgSupplyDemandZones = (candles, {
   const oldestIndex = Math.max(0, candles.length - maxAgeCandles)
   const gaps = fairValueGaps(candles, { atrValue: reference, minSizeAtr: minGapAtr })
   const zones = []
+  const claimedBases = new Set()
 
   for (const gap of gaps) {
     const displacementIndex = gap.index
@@ -200,6 +201,13 @@ export const buildFvgSupplyDemandZones = (candles, {
     const low = type === 'demand' ? base.low : Math.min(base.open, base.close)
     const high = type === 'demand' ? Math.max(base.open, base.close) : base.high
     if (!(high > low)) continue
+
+    // One displacement can leave several consecutive FVGs behind it. They all
+    // validate the same origin, but they do not turn that base into multiple
+    // supply/demand zones. Keep the first confirmation nearest to the base.
+    const baseKey = `${type}:${baseIndex}`
+    if (claimedBases.has(baseKey)) continue
+    claimedBases.add(baseKey)
 
     const confirmationIndex = gap.confirmationIndex ?? displacementIndex + 1
     const later = candles.slice(confirmationIndex + 1)
