@@ -3789,3 +3789,19 @@ body.modal-open {
 .portfolio-rules-head > .automation-toggle {
   margin-right: auto;
 }
+
+/* The scan's own limits, beside the button that runs it. Stacked rather than one long
+   line: four short facts read at a glance, and a phone shows them without scrolling. */
+.scraped-scan-scope {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--muted, #6b7280);
+  max-width: 44ch;
+}
+
+.scraped-scan-scope-line {
+  white-space: normal;
+}

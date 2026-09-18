@@ -308,6 +308,7 @@ const els = {
   scrapedScanTag: document.querySelector("[data-scraped-scan-tag]"),
   scrapedScanButton: document.querySelector("[data-scraped-scan]"),
   scrapedScanStatus: document.querySelector("[data-scraped-scan-status]"),
+  scrapedScanScope: document.querySelector("[data-scraped-scan-scope]"),
   settingsSectionButtons: document.querySelectorAll("[data-settings-section]"),
   settingsPanels: document.querySelectorAll("[data-settings-panel]"),
   calculationSourceButtons: document.querySelectorAll("[data-calculation-source]"),
@@ -3191,7 +3192,29 @@ function renderScrapedScanControls() {
     els.scrapedScanStatus.textContent = state.scrapedScanStatus || (state.scrapedScanBusy ? "Scanning..." : "");
     els.scrapedScanStatus.className = `scraped-scan-status${state.scrapedScanStatus?.startsWith("Error") ? " error" : ""}`;
   }
+  if (els.scrapedScanScope) {
+    els.scrapedScanScope.innerHTML = SCAN_SCOPE_LINES
+      .map((line) => `<span class="scraped-scan-scope-line">${escapeHtml(line)}</span>`).join("");
+  }
 }
+
+// What is actually asked for, on both paths, and what is kept afterwards.
+//
+// Reported: "myslim, ze tam mas nejake omezeni v pravidelnem i tom ondemand (tlacitkem)
+// scrapingu popr. v retenci aktivnich dat. prosim vypis mi ho nekde u tlacitka - strucne a
+// jasne ve stylu tags=esports, sports, politics + volume >= 100 + ..."
+//
+// Every number here is a value a workflow sends or an environment variable it sets, and not
+// one of them is visible from the browser: the scan's scope lives in
+// .github/workflows/trading-market-scan.yml and the rotation's in trading-pacer.yml. So it
+// is written here and tied to those files by a test that reads them, rather than left as a
+// caption that slowly stops being true -- which is the only failure mode a caption has.
+const SCAN_SCOPE_LINES = [
+  "button: tags=sports, esports · no liquidity floor · ends ≤ 24 h",
+  "scheduled: tags=esports, sports 5/6 passes · liquidity ≥ $40k · ends ≤ 2 d",
+  "scheduled: every 6th pass untagged · no floor · ends ≤ 7 d",
+  "retention: 8 000 active rows · anything outside sports/esports is dropped",
+];
 
 function normalizeMinimumNetYield(value) {
   const numeric = Number(value);
