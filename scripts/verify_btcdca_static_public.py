@@ -17,7 +17,7 @@ GUIDES = (
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
-    def redirect_request(self, request, response, newurl, code, msg, headers, fp):
+    def redirect_request(self, request, response, code, msg, headers, newurl):
         return None
 
 
