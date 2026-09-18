@@ -148,11 +148,28 @@ async function main() {
     .map((trade) => String(trade?.tokenId || "")));
   const everTokens = new Set(trades.map((trade) => String(trade?.tokenId || "")));
 
+  // The gate this probe used to leave out, and it is the one that decided the answer.
+  // liveEventMode "only" means the portfolio trades nothing but running fixtures --
+  // paper-trading-bot.mjs rejects a row outright when the event has not kicked off. Left
+  // unapplied, this probe reported rows as "WOULD BE READY" that the bot would certainly
+  // refuse, which is the probe lying rather than the bot misbehaving.
+  const liveEventMode = String(match.config?.liveEventMode ?? "ignore").toLowerCase();
+  // The same question the bot asks, and the same inability to answer it: a hit that carries
+  // no kickoff is counted apart rather than guessed either way.
+  const running = (hit) => {
+    const kickoff = Date.parse(String(hit?.eventStartTime || ""));
+    if (Number.isFinite(kickoff)) return kickoff <= now;
+    if (typeof hit?.eventStarted === "boolean") return hit.eventStarted;
+    return null;
+  };
+
   let unpriced = 0;
   let held = 0;
   let traded = 0;
   let outsideBand = 0;
   let ended = 0;
+  let notRunning = 0;
+  let startUnknown = 0;
   let ready = 0;
   const readyRows = [];
   const now = Date.now();
@@ -168,6 +185,11 @@ async function main() {
       outsideBand += 1;
       continue;
     }
+    if (liveEventMode === "only") {
+      const live = running(hit);
+      if (live === null) { startUnknown += 1; continue; }
+      if (!live) { notRunning += 1; continue; }
+    }
     ready += 1;
     readyRows.push(hit);
   }
@@ -178,7 +200,16 @@ async function main() {
   console.log(`   ... already traded once            ${traded}`);
   console.log(`   ... market already ended           ${ended}`);
   console.log(`   ... dip price outside the buy band ${outsideBand}`);
+  if (liveEventMode === "only") {
+    console.log(`   ... fixture has not kicked off     ${notRunning}`);
+    console.log(`   ... no kickoff recorded at all     ${startUnknown}`);
+  }
   console.log(`   ... WOULD BE READY                 ${ready}`);
+  console.log(`\n   liveEventMode: ${JSON.stringify(liveEventMode)}`
+    + (liveEventMode === "only"
+      ? "  -- this portfolio trades running fixtures only, so a dip is actionable"
+        + "\n   only during the match. Outside that window the bot refuses it whatever else passes."
+      : ""));
 
   // Volume is printed because it is the strongest remaining suspect and it is invisible
   // everywhere else. dipEntryCandidateRows turns a hit that recorded no volume into a row
