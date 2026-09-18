@@ -1,0 +1,46 @@
+name: Trading Pacer Watchdog
+
+# Restarts the pacer chain when it dies, from outside the pacer.
+#
+# On 18.9. at 09:23 the chain's hand-off answered "422 Cannot trigger a 'workflow_dispatch' on
+# a disabled workflow" five times and stopped. Automatic execution and scraping were dead for
+# four hours; the scan log's newest entry was 11:16 and the owner found it, not the pipeline.
+#
+# The pacer already carries an hourly cron described in its own header as "the resurrection
+# path: if the chain ever dies -- a cancelled run, a failed dispatch, an expired token, a
+# runner outage -- a schedule delivered at 2% still restarts it". It could not work here,
+# because a disabled workflow does not run its own schedule either. A loop cannot resurrect
+# itself from inside itself, which is the whole reason this file is a different file.
+#
+# Cron on this repository is delivered at roughly 2%, so this is not a timely alarm -- it is
+# the floor under a chain that would otherwise stay dead until someone noticed. It runs on
+# every deploy as well, which is the trigger that actually fires.
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "*/17 * * * *"
+
+permissions:
+  actions: write
+  contents: read
+
+concurrency:
+  group: trading-pacer-watchdog
+  cancel-in-progress: false
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Restart the pacer if the chain is dead
+        env:
+          # The pacer's own token where it exists, so the dispatch carries the same identity
+          # the chain uses; github.token cannot start a workflow_dispatch on some setups.
+          GH_TOKEN: ${{ secrets.POLY_TRADING_GITHUB_TOKEN || github.token }}
+          REPOSITORY: ${{ github.repository }}
+          REF: ${{ github.ref_name }}
+        run: python3 trading/tools/pacer-watchdog.py
