@@ -118,12 +118,46 @@ async function main() {
   const row = { displayName: `${match.name} (${live ? "live" : "paper"}, ${id})` };
   let trades = [];
   if (live) {
-    // A live portfolio's trades are attributed on the live state rather than stored under
-    // a paper portfolio, so they are read from there and filtered to this portfolio.
+    // A live portfolio's trades are attributed on the live state rather than stored under a
+    // paper portfolio. Three named paths were guessed at and all three came back empty, so
+    // the response is SEARCHED instead: every array anywhere in it whose members look like
+    // trades. Guessing a shape that is never printed is how the last two runs each cost a
+    // dispatch and returned "0 trades" with nothing to act on.
     const state = await get("api.php?action=state&target=live");
-    const all = state?.trades || state?.state?.trades || state?.liveState?.trades || [];
-    trades = all.filter((trade) => !trade?.portfolioId || String(trade.portfolioId) === id
-      || String(trade.strategyId || "") === id);
+    const found = [];
+    const seen = new Set();
+    const walk = (node, path) => {
+      if (!node || typeof node !== "object" || seen.has(node) || path.length > 6) return;
+      seen.add(node);
+      if (Array.isArray(node)) {
+        const looksLikeTrades = node.length > 0 && node.every((item) => item && typeof item === "object"
+          && (item.openedAt != null || item.status != null) && (item.tokenId != null || item.marketId != null
+            || item.question != null));
+        if (looksLikeTrades) found.push({ path: path.join("."), rows: node });
+        for (const item of node.slice(0, 40)) walk(item, [...path, "[]"]);
+        return;
+      }
+      for (const [key, value] of Object.entries(node)) walk(value, [...path, key]);
+    };
+    walk(state, []);
+    const all = found.flatMap((entry) => entry.rows);
+    console.log(`   live state trade arrays: ${found.map((entry) => `${entry.path}(${entry.rows.length})`).join(", ") || "none"}`);
+    // What the rows are actually attributed to, printed whatever the filter then does with
+    // them -- this is the mapping the filter depends on and it has never been looked at.
+    const byPortfolio = new Map();
+    for (const trade of all) {
+      const key = String(trade.portfolioId ?? trade.strategyId ?? "(none)");
+      byPortfolio.set(key, (byPortfolio.get(key) || 0) + 1);
+    }
+    console.log(`   attributed to: ${[...byPortfolio].map(([key, count]) => `${key}=${count}`).join(", ") || "nothing"}`);
+    // Accept the bare config id and the prefixed forms the live state may store it under.
+    const aliases = new Set([id, `live-${id}`, `live-custom-${id}`, `custom-${id}`]);
+    trades = all.filter((trade) => aliases.has(String(trade.portfolioId ?? ""))
+      || aliases.has(String(trade.strategyId ?? "")));
+    if (!trades.length && all.length) {
+      console.log(`   nothing matched ${[...aliases].join(" / ")} -- reporting ALL live trades instead\n`);
+      trades = all;
+    }
   } else {
     const state = await get(`api.php?action=state&target=paper&summary=dashboard&strategy_id=${encodeURIComponent(id)}`);
     trades = ((state?.paperPortfolios || state?.state?.paperPortfolios || {})[id] || {}).trades || [];
