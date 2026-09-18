@@ -205,6 +205,12 @@ async function main() {
     }
     console.log(`\n   live trades found: ${trades.length}; attributed to `
       + [...attribution].map(([key, count]) => `${key}=${count}`).join(", "));
+    // Every row came back with no portfolioId, so the numbers below are the whole live
+    // account rather than this portfolio. Printing the fields a trade actually carries is
+    // how that gets fixed rather than re-guessed -- and it is task 21's question too.
+    if (trades.length && !attribution.has(match.id)) {
+      console.log(`   fields on a live trade: ${Object.keys(trades[0]).join(", ")}`);
+    }
     if (mine.length) {
       trades = mine;
     } else {
@@ -252,8 +258,15 @@ async function main() {
   //    is a claim about candidates, and candidates are recorded per run.
   console.log("\n== what each run saw (candidates, per day)");
   try {
-    const log = await get(`api.php?action=portfolio-run-log&strategy_id=${encodeURIComponent(match.id)}`);
-    const runs = log?.runs || log?.records || log?.entries || [];
+    // `records` is the key the endpoint actually uses. The first version looked for `runs`
+    // and reported "no run log rows", which cost a dispatch -- so the shape is now PRINTED
+    // rather than guessed, and stays printed.
+    const log = await get(`api.php?action=portfolio-run-log&strategy_id=${encodeURIComponent(match.id)}&page_size=500`);
+    const runs = log?.records || log?.runs || log?.entries || [];
+    console.log(`   ${runs.length} run-log rows of ${log?.total ?? "?"} (page size ${log?.pageSize ?? "?"})`);
+    if (runs.length) {
+      console.log(`   fields on a row: ${Object.keys(runs[0]).join(", ")}`);
+    }
     const byDay = new Map();
     for (const run of runs) {
       const date = day(run.runAt || run.at);
