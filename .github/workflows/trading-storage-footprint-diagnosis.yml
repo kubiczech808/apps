@@ -1,0 +1,30 @@
+name: Trading Storage Footprint Diagnosis
+
+# READ-ONLY, manual only. Every call is a status, a schema listing or a preview; nothing is
+# written, compacted, rebuilt or dropped.
+#
+# Asked: "jedeme uz plne z MySQL? predpokladam, ze to ze budeme schopni opatrne zahodit json
+# soubory zrychli cteni i zapis." and "nase mysql databaze nema tolik dat, ale jeji velikost
+# je neumerne vysoka a hrozi problemy s uctovanim na hostingu ... nemame tam miliony zaznamu,
+# takze myslim, ze je spis chyba v datech nez v mnozstvi."
+#
+# Both are measurements, not decisions, and the second bounds the first: whether the JSON
+# files can be dropped depends on what the database costs once it is the only copy.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Measure the storage footprint
+        env:
+          TRADING_HOST: https://osobnizkusenosti.cz/trading
+          TRADING_TRIGGER_KEY: ${{ secrets.POLYTRADING_DB_PASSWORD }}
+        run: python3 trading/tools/storage-footprint-probe.py

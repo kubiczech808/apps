@@ -7071,6 +7071,17 @@ try {
             trading_storage_meta_put('storage-active', '0');
             respond(['ok' => true, 'operation' => 'deactivate', 'active' => false]);
         }
+        // Read-only. Where the hosting quota actually goes, table by table, across the whole
+        // schema rather than the four tables this application owns. The quota is charged on
+        // the schema, so a diagnosis that can only see Trading tables cannot tell "we are
+        // the problem" from "we are a tenant of something that is".
+        if ($operation === 'schema-footprint') {
+            respond([
+                'ok' => true,
+                'operation' => 'schema-footprint',
+                'footprint' => trading_storage_schema_footprint($pdo),
+            ]);
+        }
         if ($operation === 'status') {
             respond([
                 'ok' => true,

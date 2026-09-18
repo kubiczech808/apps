@@ -525,6 +525,80 @@ function trading_storage_table_stats(PDO $pdo): array
 }
 
 /**
+ * Every table in the schema, largest first -- not only the four Trading ones.
+ *
+ * Read-only: one SELECT against information_schema, no row of any table is touched.
+ *
+ * Asked, with the hosting quota at 1785 MB of 2000: "nase mysql databaze nema tolik dat, ale
+ * jeji velikost je neumerne vysoka ... nemame tam miliony zaznamu, takze myslim, ze je spis
+ * chyba v datech nez v mnozstvi."
+ *
+ * trading_storage_table_stats answers that for the Trading tables and nothing else, so with
+ * it alone a schema shared with another application reads as "Trading is small, the quota is
+ * full" and the search stops with no suspect. The quota is charged on the whole schema, so
+ * the whole schema is what has to be listed before anything is blamed.
+ *
+ * freeBytes is reported beside the data because the two have opposite remedies: bytes held
+ * by rows are removed by deleting or compacting rows, bytes held as free space are already
+ * unused and come back only from rebuilding the table.
+ */
+function trading_storage_schema_footprint(PDO $pdo): array
+{
+    $statement = $pdo->query(
+        'SELECT table_name, engine, table_rows, data_length, index_length, data_free
+         FROM information_schema.TABLES
+         WHERE table_schema = DATABASE()
+         ORDER BY (data_length + index_length + data_free) DESC'
+    );
+    $tables = [];
+    $totals = ['rows' => 0, 'dataBytes' => 0, 'indexBytes' => 0, 'freeBytes' => 0];
+    foreach ($statement->fetchAll() as $row) {
+        $name = (string) ($row['table_name'] ?? '');
+        if ($name === '') {
+            continue;
+        }
+        $entry = [
+            'table' => $name,
+            'engine' => (string) ($row['engine'] ?? ''),
+            'rows' => (int) ($row['table_rows'] ?? 0),
+            'dataBytes' => (int) ($row['data_length'] ?? 0),
+            'indexBytes' => (int) ($row['index_length'] ?? 0),
+            'freeBytes' => (int) ($row['data_free'] ?? 0),
+            // What this table costs the quota, which is the only number the hosting cares
+            // about. Free space is inside the tablespace and is charged for like any other.
+            'totalBytes' => (int) ($row['data_length'] ?? 0)
+                + (int) ($row['index_length'] ?? 0)
+                + (int) ($row['data_free'] ?? 0),
+            // Named here rather than inferred by every caller: a Trading table is one this
+            // application created, and everything else in the schema belongs to something
+            // else and must not be touched from here.
+            'trading' => str_starts_with($name, 'trading_'),
+        ];
+        $tables[] = $entry;
+        $totals['rows'] += $entry['rows'];
+        $totals['dataBytes'] += $entry['dataBytes'];
+        $totals['indexBytes'] += $entry['indexBytes'];
+        $totals['freeBytes'] += $entry['freeBytes'];
+    }
+    $totals['totalBytes'] = $totals['dataBytes'] + $totals['indexBytes'] + $totals['freeBytes'];
+    $tradingTotals = ['rows' => 0, 'dataBytes' => 0, 'indexBytes' => 0, 'freeBytes' => 0, 'totalBytes' => 0];
+    foreach ($tables as $entry) {
+        if ($entry['trading'] !== true) {
+            continue;
+        }
+        foreach (['rows', 'dataBytes', 'indexBytes', 'freeBytes', 'totalBytes'] as $field) {
+            $tradingTotals[$field] += $entry[$field];
+        }
+    }
+    return [
+        'tables' => $tables,
+        'totals' => $totals,
+        'tradingTotals' => $tradingTotals,
+        'tableCount' => count($tables),
+    ];
+}
+
+/**
  * Rebuild only the Trading tables when they are provably empty. This releases
  * InnoDB pages reserved by the first oversized import without ever discarding
  * retained records from a non-empty table.
