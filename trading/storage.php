@@ -1682,25 +1682,35 @@ function trading_storage_resolved_stats_replace(PDO $pdo, array $cells, array $a
     $pdo->beginTransaction();
     try {
         $pdo->exec('DELETE FROM trading_resolved_stats');
-        $insert = $pdo->prepare(
-            'INSERT INTO trading_resolved_stats
-               (cell_key, scope, probability, tag, shape, horizon, trades, wins, staked_usdc, pnl_usdc, updated_at)
-             VALUES (:key, :scope, :probability, :tag, :shape, :horizon, :trades, :wins, :staked, :pnl, :updatedAt)'
-        );
-        foreach ($rows as [$scope, $probability, $tag, $shape, $horizon, $value]) {
-            $insert->execute([
-                'key' => hash('sha256', $scope . "\x1f" . $probability . "\x1f" . $tag . "\x1f" . $shape . "\x1f" . $horizon),
-                'scope' => $scope,
-                'probability' => $probability,
-                'tag' => $tag,
-                'shape' => $shape,
-                'horizon' => $horizon,
-                'trades' => (int) ($value[0] ?? 0),
-                'wins' => (int) ($value[1] ?? 0),
-                'staked' => (float) ($value[2] ?? 0),
-                'pnl' => (float) ($value[3] ?? 0),
-                'updatedAt' => $now,
-            ]);
+        // In batches, not one statement per cell. There are tens of thousands of cells, and
+        // a round trip each is minutes of a request that a shared host will cut short --
+        // which rolls the transaction back and leaves the fold never finishing, forever.
+        $batchSize = 200;
+        $statements = [];
+        foreach (array_chunk($rows, $batchSize) as $chunk) {
+            $count = count($chunk);
+            if (!isset($statements[$count])) {
+                $statements[$count] = $pdo->prepare(
+                    'INSERT INTO trading_resolved_stats
+                       (cell_key, scope, probability, tag, shape, horizon, trades, wins, staked_usdc, pnl_usdc, updated_at)
+                     VALUES ' . implode(', ', array_fill(0, $count, '(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'))
+                );
+            }
+            $bindings = [];
+            foreach ($chunk as [$scope, $probability, $tag, $shape, $horizon, $value]) {
+                $bindings[] = hash('sha256', $scope . "\x1f" . $probability . "\x1f" . $tag . "\x1f" . $shape . "\x1f" . $horizon);
+                $bindings[] = $scope;
+                $bindings[] = $probability;
+                $bindings[] = $tag;
+                $bindings[] = $shape;
+                $bindings[] = $horizon;
+                $bindings[] = (int) ($value[0] ?? 0);
+                $bindings[] = (int) ($value[1] ?? 0);
+                $bindings[] = (float) ($value[2] ?? 0);
+                $bindings[] = (float) ($value[3] ?? 0);
+                $bindings[] = $now;
+            }
+            $statements[$count]->execute($bindings);
         }
         trading_storage_meta_put('resolved-stats-folded-at', $now);
         trading_storage_meta_put('resolved-stats-fold', (string) json_encode([

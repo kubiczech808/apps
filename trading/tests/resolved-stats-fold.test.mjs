@@ -72,7 +72,15 @@ function trading_storage_now(): string { return '2026-09-18 11:00:00.000000'; }
 // so a store that forgot its transaction or its DELETE shows up as rows that should be gone.
 class StubStatement {
     public function __construct(private StubPdo $pdo, private string $sql) {}
-    public function execute(array $params = []): bool { $this->pdo->record($this->sql, $params); return true; }
+    public function execute(array $params = []): bool {
+        // Logged here, not in prepare(): a prepared statement reused across batches is one
+        // prepare and many executes, and it is the executes that cost the round trips. The
+        // first version of this only logged query() and exec(), so the batching assertion
+        // counted zero statements and passed however the insert was written.
+        $this->pdo->log[] = $this->sql;
+        $this->pdo->record($this->sql, $params);
+        return true;
+    }
     public function fetchAll(): array { return array_values($this->pdo->rows); }
     public function fetch() { return false; }
     public function fetchColumn() { return false; }
@@ -94,12 +102,37 @@ class StubPdo {
     public function query(string $sql) { $this->log[] = $sql; return new StubStatement($this, $sql); }
     public function prepare(string $sql) { return new StubStatement($this, $sql); }
     public function record(string $sql, array $params): void {
-        if (str_contains($sql, 'INSERT INTO trading_resolved_stats')) {
-            $this->rows[$params['key']] = [
-                'scope' => $params['scope'], 'probability' => $params['probability'],
-                'tag' => $params['tag'], 'shape' => $params['shape'], 'horizon' => $params['horizon'],
-                'trades' => $params['trades'], 'wins' => $params['wins'],
-                'staked_usdc' => $params['staked'], 'pnl_usdc' => $params['pnl'],
+        if (!str_contains($sql, 'INSERT INTO trading_resolved_stats')) {
+            return;
+        }
+        // Positional, in batches of eleven columns -- so this also fails loudly if the column
+        // list and the placeholder list ever stop agreeing.
+        $values = array_values($params);
+        // The placeholder groups in the SQL must account for exactly the bindings handed over.
+        // Without this the stub happily swallowed an insert whose column list and placeholder
+        // list disagreed -- which real MySQL rejects and the test did not.
+        $groups = substr_count($sql, '(?,');
+        if ($groups < 1) {
+            throw new RuntimeException('no placeholder groups in: ' . $sql);
+        }
+        $perRow = count($values) / $groups;
+        if (abs($perRow - 11) > 0.0001) {
+            throw new RuntimeException(
+                'each row must bind 11 columns, got ' . $perRow . ' across ' . $groups . ' group(s)'
+            );
+        }
+        $placeholders = substr_count(substr($sql, strpos($sql, 'VALUES')), '?');
+        if ($placeholders !== count($values)) {
+            throw new RuntimeException(
+                'the SQL has ' . $placeholders . ' placeholders for ' . count($values) . ' bindings'
+            );
+        }
+        foreach (array_chunk($values, 11) as $row) {
+            $this->rows[$row[0]] = [
+                'scope' => $row[1], 'probability' => $row[2],
+                'tag' => $row[3], 'shape' => $row[4], 'horizon' => $row[5],
+                'trades' => $row[6], 'wins' => $row[7],
+                'staked_usdc' => $row[8], 'pnl_usdc' => $row[9],
             ];
         }
     }
@@ -242,6 +275,26 @@ test("BAIT: the stored numbers are the numbers, not rounded on the way through",
   const cell = result.loaded.cells[0];
   assert.match(cell, /,4\.09090909/, `the payout must survive to six places at least: ${cell}`);
   assert.deepEqual(result.loaded.cells, result.accumulated.cells);
+});
+
+test("the cells go in batches, not one round trip each", () => {
+  // Tens of thousands of cells at a statement apiece is minutes of a request that a shared
+  // host cuts short -- which rolls the transaction back and leaves the fold never finishing.
+  // 450 cells must not be 450 statements.
+  const rows = [];
+  for (let index = 0; index < 900; index += 1) {
+    rows.push(settled({ firstMarketProbability: 0.5 + (index % 45) / 100, horizon: `h${index % 10}`,
+      shape: `s${index % 3}`, firstPolymarketTags: [`tag${index % 7}`] }));
+  }
+  const result = run(rows);
+  assert.equal(result.ok, true, result.error || "");
+  const inserts = result.log.filter((sql) => sql.includes("INSERT INTO trading_resolved_stats"));
+  assert.ok(result.rowCount > 300, `the fixture must produce many cells: ${result.rowCount}`);
+  assert.ok(inserts.length <= Math.ceil(result.rowCount / 200) + 1,
+    `${result.rowCount} cells must not cost ${inserts.length} statements`);
+  // And batching must not lose or duplicate a cell.
+  assert.deepEqual(result.loaded.cells, result.accumulated.cells);
+  assert.deepEqual(result.loaded.anyTag, result.accumulated.anyTag);
 });
 
 test("the endpoint prefers the stored fold and falls back rather than failing", () => {
