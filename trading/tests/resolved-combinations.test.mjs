@@ -196,11 +196,18 @@ test("a row the simulation cannot price is counted as such, not as a loss", () =
   // sets a live portfolio by.
   const noQuote = { ...row(0.8, true), firstMarketProbability: null, marketProbability: null, marketPrice: null };
   const voided = { ...row(0.8, true), finalOutcomePrice: 0.5 };
-  const wideSpread = { ...row(0.8, true), spread: 0.9 };
-  const payload = combinations([row(0.8, true), noQuote, voided, wideSpread]);
-  assert.equal(payload.scannedRows, 4);
-  assert.equal(payload.pricedRows, 1, "only the one that can be priced");
-  assert.equal(find(payload.best, { tag: "*", shape: "*", horizon: "*", probability: 80 }).trades, 1);
+  // Wide AT ENTRY: nobody could have got a fill, so it is not a trade we would have made.
+  const wideAtEntry = { ...row(0.8, true), firstSpread: 0.9 };
+  // Tight at entry and wide NOW. This one used to be excluded and must not be: the current
+  // book on a resolved row is the book after the result was effectively known, and judging
+  // by it kept winners and dropped losers -- valorant read 100.0% over 36 trades where the
+  // archive holds 65 wins and 21 losses over 86. The fixture was changed from `spread` to
+  // `firstSpread` above for the same reason: it was asserting the bias.
+  const wideOnlyAfterwards = { ...row(0.8, true), firstSpread: 0.01, spread: 0.9 };
+  const payload = combinations([row(0.8, true), noQuote, voided, wideAtEntry, wideOnlyAfterwards]);
+  assert.equal(payload.scannedRows, 5);
+  assert.equal(payload.pricedRows, 2, "the priceable one, and the one only its outcome made look untradable");
+  assert.equal(find(payload.best, { tag: "*", shape: "*", horizon: "*", probability: 80 }).trades, 2);
 });
 
 test("the Setup finder is a settings tab, and it loads when it is opened", () => {

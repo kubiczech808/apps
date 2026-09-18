@@ -2045,6 +2045,48 @@ function observation_spread(array $item): ?float
 }
 
 /**
+ * The spread as it stood WHEN WE FIRST SAW THE MARKET, and never the current one.
+ *
+ * observation_spread() prefers the live fields and falls back to the first-observation ones,
+ * which is right for a shortlist: what matters for a trade you are about to place is the book
+ * in front of you now. It is exactly wrong for a historical simulation, and the error it
+ * causes is not small.
+ *
+ * Reported: the Setup finder showed valorant at 100.0% accuracy over 36 trades, from an
+ * owner who had held losing valorant positions. Measured against the resolved archive, the
+ * tag holds 98 rows of which 86 settle cleanly: 65 wins and 21 losses, 75.6%. The finder saw
+ * 36 of those 86 and every one was a win.
+ *
+ * The filter that removed the other 50 was the spread test, reading the LAST recorded book.
+ * On a resolved market that book is the one after the result was effectively known -- a
+ * market heading to zero has a collapsing, wide book, a market heading to one stays tight --
+ * so testing tradability on it keeps winners and drops losers. The simulation was asking
+ * "would this have been tradable?" and answering with evidence from after the outcome.
+ *
+ * So the historical path uses the entry book and does NOT fall back to the current one:
+ * falling back is what reintroduces the bias. A row that recorded no book at entry is
+ * admitted rather than dropped -- most of the archive predates spread collection, and
+ * excluding those rows silently shrinks the population by a rule they never had a chance to
+ * meet.
+ */
+function observation_entry_spread(array $item): ?float
+{
+    if (is_numeric($item['firstSpread'] ?? null)) {
+        return abs((float) $item['firstSpread']);
+    }
+    if (is_numeric($item['firstBestAsk'] ?? null) && is_numeric($item['firstBestBid'] ?? null)) {
+        return abs((float) $item['firstBestAsk'] - (float) $item['firstBestBid']);
+    }
+    return null;
+}
+
+function observation_entry_spread_is_tradable(array $item): bool
+{
+    $spread = observation_entry_spread($item);
+    return $spread === null ? true : $spread <= MAX_TRADABLE_SPREAD;
+}
+
+/**
  * Was there a counterparty close enough to trade against? Measured on the 600 newest open
  * markets: the median spread is 90 points and 87% of them are wider than 10 points with no
  * 24h volume at all.
@@ -8212,9 +8254,13 @@ try {
             if ($entry === null || $outcome === null) {
                 return true;
             }
-            // The same spread policy the performance tables use, so a number here and a
-            // number there describe the same population.
-            if (!observation_spread_is_tradable($item)) {
+            // The spread AT ENTRY, not the current one. This used to call
+            // observation_spread_is_tradable, which prefers the live book and therefore, on
+            // a resolved row, judged tradability by the book as it stood after the result
+            // was effectively known. That kept winners and dropped losers: valorant read
+            // 100.0% over 36 trades where the archive holds 65 wins and 21 losses over 86.
+            // See observation_entry_spread.
+            if (!observation_entry_spread_is_tradable($item)) {
                 return true;
             }
             $priced += 1;
