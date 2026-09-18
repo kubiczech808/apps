@@ -135,3 +135,58 @@ test("the pass applies the rule before it decides funding", async () => {
   // the rule would silently not apply to it.
   assert.match(source, /if \(!portfolioState\) return certainty\.trades;/);
 });
+
+test("the burst that was reported, driven through the rule", () => {
+  // Not a constructed fixture. These are the nine positions underwaycopy closed at
+  // 2026-09-15T19:11:40 -- read back off production by the certainty burst probe, with their
+  // real marks -- and they are the largest burst on record. Every one went at 0.9990, so the
+  // portfolio paid a tick on nine positions to buy back capital that one would have covered.
+  //
+  // They carry no certaintyClosedAt on production because they predate the stamp; here they
+  // are given one, because the rule reads the row the pass just built in memory and that row
+  // always has it. What is real is the prices, the values and the count.
+  const burst = [
+    ["cs-forze-upgrade", 6.17],
+    ["lol-mcon-senshi", 8.32],
+    ["rayo-espanyol", 8.92],
+    ["tiberias-jerusalem", 9.08],
+    ["masry-ittihad", 8.61],
+    ["grasshopper-sion", 9.08],
+    ["brage-sandvikens", 8.32],
+    ["al-ain", 8.47],
+    ["riga-spread", 8.61],
+  ].map(([id, value]) => ({
+    ...closed(id, { price: 0.999, shares: Number((value / 0.999).toFixed(4)), cost: value - 0.5 }),
+    currentValueUsdc: value,
+  }));
+  const originals = burst.map((trade) => ({ id: trade.id, status: "OPEN" }));
+
+  const result = bot.holdExtraCertaintyCloses(burst, originals);
+
+  const stillClosed = result.trades.filter((trade) => trade.closeReason === "certainty");
+  assert.equal(stillClosed.length, 1,
+    `nine decided positions must leave one close, not ${stillClosed.length}`);
+  assert.equal(result.held.length, 8, "and eight held for a later pass");
+
+  // The one kept is the one that hands back the most capital, which is what the close is for.
+  // 9.08 twice, so the tie goes to the smaller forfeit and then to the id -- the same answer
+  // every time it is computed, rather than whichever market answered first.
+  assert.equal(result.closed, "grasshopper-sion");
+  assert.equal(stillClosed[0].currentValueUsdc, 9.08);
+
+  // What the portfolio would have paid without the rule, stated so the number is on record:
+  // nine positions forfeiting a tick each instead of one.
+  const forfeited = burst.reduce((sum, trade) => sum + (1 - trade.currentPrice) * trade.shares, 0);
+  const kept = (1 - 0.999) * stillClosed[0].shares;
+  assert.ok(forfeited > kept * 8,
+    `the rule must be worth something: ${forfeited.toFixed(4)} paid vs ${kept.toFixed(4)}`);
+
+  // And the eight held rows are held, not half-closed: nothing may still claim a close.
+  for (const trade of result.trades.filter((row) => result.held.includes(row.id))) {
+    assert.equal(trade.status, "OPEN");
+    assert.equal(trade.closeReason, undefined);
+    assert.equal(trade.certaintyClosedAt, undefined);
+    assert.equal(trade.realizedPnlUsdc, undefined);
+    assert.equal(trade.currentPrice, 0.999, "the refreshed mark is kept, so no stale price shows");
+  }
+});
