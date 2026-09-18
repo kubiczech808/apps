@@ -27,30 +27,50 @@ block = f"""
       return;
     }}
 
-    var url = '/php/getTicker.php';
-    var applyRate = function (result) {{
+    var legacyUrl = '/php/getTicker.php';
+    var applyPrice = function (price) {{
+      var numericPrice = Number(price);
+      if (Number.isFinite(numericPrice) && numericPrice > 0) {{
+        ticker.textContent = '$' + Math.round(numericPrice).toLocaleString('en-US');
+        return true;
+      }}
+      return false;
+    }};
+    var applyLegacyRate = function (result) {{
       if (result && Number(result.status) === 1 && result.rate) {{
         ticker.innerHTML = result.rate;
       }}
     }};
 
-    if (window.jQuery && window.jQuery.ajax) {{
-      window.jQuery.ajax({{
-        type: 'GET',
-        url: url,
-        dataType: 'json',
-        cache: false,
-        success: applyRate
-      }});
+    var loadLegacyRate = function () {{
+      if (!window.fetch) {{
+        return;
+      }}
+      window.fetch(legacyUrl, {{ cache: 'no-store' }})
+        .then(function (response) {{ return response.json(); }})
+        .then(applyLegacyRate)
+        .catch(function () {{}});
+    }};
+
+    if (!window.fetch) {{
+      loadLegacyRate();
       return;
     }}
 
-    if (window.fetch) {{
-      window.fetch(url, {{ cache: 'no-store' }})
-        .then(function (response) {{ return response.json(); }})
-        .then(applyRate)
-        .catch(function () {{}});
-    }}
+    // Keep the app ticker on the same live BTC/USD source as the landing page.
+    window.fetch('https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=1d&limit=2', {{ cache: 'no-store' }})
+      .then(function (response) {{
+        if (!response.ok) {{
+          throw new Error('Binance ticker request failed');
+        }}
+        return response.json();
+      }})
+      .then(function (candles) {{
+        if (!Array.isArray(candles) || !candles.length || !applyPrice(candles[candles.length - 1][4])) {{
+          throw new Error('Binance ticker response was invalid');
+        }}
+      }})
+      .catch(loadLegacyRate);
   }}
 
   if (document.readyState === 'loading') {{

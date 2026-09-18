@@ -105,6 +105,7 @@ html = html.replace(
 html = html.replace('action="login-user.php"', 'action="login-user"')
 html = html.replace('action="btcdca-google-token-login.php"', 'action="btcdca-google-token-login"')
 html = html.replace('href="signup-user.php"', 'href="signup-user"')
+html = html.replace('href="forgot-password.php"', 'href="/forgot-password/"')
 html = html.replace('href="dca-calculator.php"', 'href="dca-calculator"')
 html = html.replace('href="btcdca-google-login.php?flow=login"', 'href="btcdca-google-login?flow=login"')
 html = html.replace('href="btcdca-google-login.php"', 'href="btcdca-google-login"')

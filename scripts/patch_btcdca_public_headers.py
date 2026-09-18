@@ -106,6 +106,14 @@ def patch_html(html: str) -> tuple[str, int]:
         html,
         flags=re.IGNORECASE,
     )
+    # Keep canonical metadata and public links on the extensionless routes too.
+    for old, new in {
+        "https://www.btc-dca.com/dca-calculator.php": "https://www.btc-dca.com/dca-calculator/",
+        "https://www.btc-dca.com/login-user.php": "https://www.btc-dca.com/login-user/",
+        "https://www.btc-dca.com/signup-user.php": "https://www.btc-dca.com/signup-user/",
+        "https://www.btc-dca.com/crypto-exchanges/": "https://www.btc-dca.com/#exchanges",
+    }.items():
+        html = html.replace(old, new)
     if STYLE_START not in html:
         if "</style>" not in html:
             raise RuntimeError("Public PHP page has no style block.")
