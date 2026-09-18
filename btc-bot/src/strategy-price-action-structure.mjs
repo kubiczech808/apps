@@ -3,7 +3,7 @@ import { ceilPrice, floorPrice, normalizeCandlePrices, roundPrice } from './pric
 import { buildFvgSupplyDemandZones, candleSignal, marketStructure } from './priceaction.mjs'
 
 export const PRICE_ACTION_STRUCTURE_ID = 'price-action-structure-v1'
-export const PRICE_ACTION_MATRIX_SCHEMA = 29
+export const PRICE_ACTION_MATRIX_SCHEMA = 30
 export const PRICE_ACTION_CHART_CANDLE_LIMITS = {
   '1h': 8760,
   '4h': 2190,
@@ -1183,6 +1183,110 @@ const attachTradeProfiles = (trends, settings) => {
   }
 }
 
+const latestCounterSwingInChart = ({ item, trend, activeRange }) => {
+  const anchor = trend === 'down' ? activeRange?.low : activeRange?.high
+  const kind = trend === 'down' ? 'high' : 'low'
+  if (!anchor || !Number.isFinite(anchor.time)) return null
+  const candles = (item?.chartCandles ?? []).filter((candle) => candle.time > anchor.time)
+  const extreme = candles.reduce((best, candle, index) => {
+    const price = kind === 'high' ? candle.high : candle.low
+    if (!best || (kind === 'high' ? price > best.price : price < best.price)) {
+      return { kind, price, close: candle.close, time: candle.time, candleIndex: index }
+    }
+    return best
+  }, null)
+  if (!extreme) return null
+  const reference = trend === 'down' ? activeRange.high?.price : activeRange.low?.price
+  if (!Number.isFinite(reference) || (trend === 'down' ? extreme.price >= reference : extreme.price <= reference)) return null
+  return {
+    ...extreme,
+    label: trend === 'down' ? 'LH' : 'HL',
+    confirmed: false,
+    developing: true,
+    inheritedFromTimeframe: '4h',
+  }
+}
+
+// The 1H chart is an execution lens inside the active 4H swing, not an
+// independent trend engine. A local rebound remains an LH/HL until its close
+// breaks the 4H protected end of the wave. Without this anchor, USDJPY's
+// 152.9 -> 157.x rebound was falsely shown as a new 1H uptrend even though it
+// had not exceeded the 4H LH near 160.4.
+export const alignOneHourStructureToFourHour = (trends) => {
+  const item = trends?.['1h']
+  const higher = trends?.['4h']
+  const trend = higher?.trend
+  const activeRange = higher?.structure?.activeRange
+  const high = activeRange?.high
+  const low = activeRange?.low
+  const close = item?.lastCandle?.close
+  if (
+    !item ||
+    !higher?.structureConfirmed ||
+    (trend !== 'up' && trend !== 'down') ||
+    !Number.isFinite(high?.price) ||
+    !Number.isFinite(low?.price) ||
+    !Number.isFinite(close) ||
+    high.price <= low.price
+  ) return item
+
+  // A close through the parent swing is a genuine 1H break. In that case the
+  // 1H classifier may lead; otherwise it inherits the still-active 4H wave.
+  const breaksParent = trend === 'down' ? close > high.price : close < low.price
+  if (breaksParent) return item
+
+  const inheritedRange = {
+    high: { ...high, kind: 'high', label: trend === 'down' ? 'LH' : 'HH' },
+    low: { ...low, kind: 'low', label: trend === 'down' ? 'LL' : 'HL' },
+    source: '4h-active-spine',
+    inheritedFromTimeframe: '4h',
+  }
+  const developingCounter = latestCounterSwingInChart({ item, trend, activeRange: inheritedRange })
+  const highLeg = {
+    previous: item.structure?.high?.previous ?? null,
+    current: inheritedRange.high,
+    label: inheritedRange.high.label,
+    confirmedBreak: trend === 'up',
+    referencePrice: item.structure?.high?.previous?.price ?? null,
+    confirmationClose: inheritedRange.high.close ?? null,
+    changePct: null,
+  }
+  const lowLeg = {
+    previous: item.structure?.low?.previous ?? null,
+    current: inheritedRange.low,
+    label: inheritedRange.low.label,
+    confirmedBreak: trend === 'down',
+    referencePrice: item.structure?.low?.previous?.price ?? null,
+    confirmationClose: inheritedRange.low.close ?? null,
+    changePct: null,
+  }
+  const recentSwings = [inheritedRange.high, inheritedRange.low]
+    .sort((left, right) => left.time - right.time)
+
+  item.trend = trend
+  item.establishedTrend = trend
+  item.structureConfirmed = true
+  item.status = trend === 'up' ? 'met' : 'unmet'
+  item.event = null
+  item.eventDetail = null
+  item.reason = `${trend} podle aktivní 4H vlny ${inheritedRange.high.label} + ${inheritedRange.low.label}; 1H protipohyb zůstává ${trend === 'down' ? 'LH' : 'HL'} do close přes ${trend === 'down' ? 'LH' : 'HL'} ${trend === 'down' ? high.price : low.price}`
+  item.lastHigh = inheritedRange.high.price
+  item.lastLow = inheritedRange.low.price
+  item.structure = {
+    ...item.structure,
+    high: highLeg,
+    low: lowLeg,
+    activeRange: inheritedRange,
+    protectedHigh: trend === 'down' ? inheritedRange.high : item.structure?.protectedHigh ?? null,
+    protectedLow: trend === 'up' ? inheritedRange.low : item.structure?.protectedLow ?? null,
+    developingCounterSwing: developingCounter,
+    recentSwings,
+    confirmed: true,
+    inheritedFromTimeframe: '4h',
+  }
+  return item
+}
+
 const fetchFxCandles = async ({ asset, timeframeId, fetchImpl, now, logger }) => {
   const daily = timeframeId === '1d'
   const attempts = [
@@ -1516,6 +1620,7 @@ export const buildPriceActionMatrix = async ({
         chartCandles,
       })
     }
+    alignOneHourStructureToFourHour(trends)
     attachTradeProfiles(trends, merged)
     rows.push({
       symbol: asset.symbol,

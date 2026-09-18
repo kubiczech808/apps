@@ -3,6 +3,7 @@ import test from 'node:test'
 
 import {
   activeSupplyDemandZones,
+  alignOneHourStructureToFourHour,
   buildPriceActionMatrix,
   classifyStructure,
   evaluateTradeProfile,
@@ -301,6 +302,38 @@ test('major LH and LL override short internal USDJPY-like reactions', () => {
   assert.ok(result.structure.activeRange.low.price > 152 && result.structure.activeRange.low.price < 153)
   assert.equal(result.structure.developingCounterSwing.label, 'LH')
   assert.ok(result.structure.developingCounterSwing.price > 156 && result.structure.developingCounterSwing.price < 157)
+})
+
+test('1H rebound inherits its active 4H down wave until it closes above the parent LH', () => {
+  const fourHour = classifyStructure(
+    zigzag([164, 155.2, 160.4, 152.9, 157.7], { steps: 12 }),
+    { lookback: 2, minCandles: 20, includeZones: false, includeChartCandles: false }
+  )
+  fourHour.trend = 'down'
+  fourHour.structureConfirmed = true
+  fourHour.structure.activeRange = {
+    high: { kind: 'high', label: 'LH', price: 160.4, close: 160, time: START, candleIndex: 0 },
+    low: { kind: 'low', label: 'LL', price: 152.9, close: 153.2, time: START + 10 * HOUR, candleIndex: 10 },
+    source: 'active-edge',
+  }
+  const hourly = classifyStructure(
+    zigzag([152.9, 155.4, 154.8, 157.7], { steps: 10 }),
+    { lookback: 2, minCandles: 20, includeZones: false }
+  )
+  assert.notEqual(hourly.trend, 'down')
+
+  const trends = { '1h': hourly, '4h': fourHour }
+  alignOneHourStructureToFourHour(trends)
+
+  assert.equal(hourly.trend, 'down')
+  assert.equal(hourly.structureConfirmed, true)
+  assert.equal(hourly.structure.activeRange.source, '4h-active-spine')
+  assert.equal(hourly.structure.high.current.label, 'LH')
+  assert.equal(hourly.structure.high.current.price, 160.4)
+  assert.equal(hourly.structure.low.current.label, 'LL')
+  assert.equal(hourly.structure.low.current.price, 152.9)
+  assert.equal(hourly.structure.developingCounterSwing.label, 'LH')
+  assert.ok(hourly.structure.developingCounterSwing.price > 157 && hourly.structure.developingCounterSwing.price < 160.4)
 })
 
 test('a delayed 4H spine uses its current LH to LL wave for pullback levels', () => {
