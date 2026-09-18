@@ -67,6 +67,13 @@ jobs:
           result = payload.get("result") or {}
           print(f"scanned={result.get('scanned')} priced={result.get('priced')}"
                 f" cells={result.get('cells')} foldedAt={result.get('foldedAt')}")
+          # Per source, because a single total cannot say which file was short. The first fold
+          # read 14,536 rows against 90,795 settled observations in the database.
+          for source in result.get("sources") or []:
+              print(f"  {source.get('field'):<28} {source.get('file')}"
+                    f" exists={source.get('exists')} read={source.get('read')}"
+                    f" bytes={int(source.get('bytes') or 0) / 1048576:,.1f}MB"
+                    f" rows={source.get('rows')}")
           print(f"::notice title=Resolved statistics folded::"
                 f"{result.get('priced')} settled row(s) into {result.get('cells')} cell(s)")
           PY

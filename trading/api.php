@@ -1491,11 +1491,32 @@ function resolved_stats_accumulate(array $sources, float $stake = 5.0): array
 
         return true;
     };
+    // Counted per source, not just in total. The first fold on production read 14,536 rows
+    // while the database holds 90,795 settled observations -- a sixfold gap that a single
+    // total cannot explain and cannot even locate. Which file supplied how many rows is the
+    // difference between "the archive is smaller than expected" and "one of the two sources
+    // was never read".
+    $breakdown = [];
     foreach ($sources as [$path, $field]) {
-        stream_json_array_members($path, $field, $onRow);
+        $before = $scanned;
+        $read = stream_json_array_members($path, $field, $onRow);
+        $breakdown[] = [
+            'field' => $field,
+            'file' => basename($path),
+            'exists' => is_file($path),
+            'bytes' => is_file($path) ? (int) filesize($path) : 0,
+            'read' => $read,
+            'rows' => $scanned - $before,
+        ];
     }
 
-    return ['cells' => $cells, 'anyTag' => $anyTag, 'scanned' => $scanned, 'priced' => $priced];
+    return [
+        'cells' => $cells,
+        'anyTag' => $anyTag,
+        'scanned' => $scanned,
+        'priced' => $priced,
+        'sources' => $breakdown,
+    ];
 }
 
 function stream_json_array_members(string $path, string $field, callable $onRow, ?callable $accepts = null): bool
@@ -7338,6 +7359,7 @@ try {
                 'result' => $result + [
                     'scanned' => (int) $accumulated['scanned'],
                     'priced' => (int) $accumulated['priced'],
+                    'sources' => $accumulated['sources'] ?? [],
                 ],
             ]);
         }

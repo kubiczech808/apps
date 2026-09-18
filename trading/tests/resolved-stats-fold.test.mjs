@@ -49,10 +49,18 @@ function writeArchive(path, rows) {
   writeFileSync(path, parts.join(""));
 }
 
-function run(rows, { skipStore = false } = {}) {
+function run(rows, { skipStore = false, allowEmpty = false, activeRows = null } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "resolved-stats-"));
   const archive = join(dir, "archive.json");
   writeArchive(archive, rows);
+  // Production streams two files -- the active catalogue and the settled archive -- and with
+  // only one of them in the fixture a per-source count is indistinguishable from the running
+  // total. The second source exists so that difference can fail.
+  let active = null;
+  if (activeRows) {
+    active = join(dir, "active.json");
+    writeFileSync(active, JSON.stringify({ marketObservations: activeRows }));
+  }
 
   const script = join(dir, "run.php");
   writeFileSync(script, `<?php
@@ -175,11 +183,14 @@ $GLOBALS['meta'] = [];
 
 ${PIECES}
 
-$sources = [[${JSON.stringify(archive)}, 'resolvedMarketObservations']];
+$sources = json_decode(${JSON.stringify(JSON.stringify([[null, "marketObservations"]]))}, true);
+$sources = [];
+${active ? `$sources[] = [${JSON.stringify(active)}, 'marketObservations'];` : ''}
+$sources[] = [${JSON.stringify(archive)}, 'resolvedMarketObservations'];
 $accumulated = resolved_stats_accumulate($sources);
 $pdo = new StubPdo();
 $GLOBALS['pdo'] = $pdo;
-${skipStore ? "" : `$stored = trading_storage_resolved_stats_replace($pdo, $accumulated['cells'], $accumulated['anyTag'],
+${skipStore || allowEmpty ? "" : `$stored = trading_storage_resolved_stats_replace($pdo, $accumulated['cells'], $accumulated['anyTag'],
     ['scanned' => $accumulated['scanned'], 'priced' => $accumulated['priced']]);`}
 $loaded = trading_storage_resolved_stats_load($pdo);
 
@@ -199,6 +210,7 @@ echo json_encode([
     'loaded' => $loaded === null ? null : ['cells' => $flatten($loaded['cells']), 'anyTag' => $flatten($loaded['anyTag']),
                       'scanned' => $loaded['scanned'], 'priced' => $loaded['priced'], 'foldedAt' => $loaded['foldedAt']],
     'rowCount' => count($pdo->rows),
+    'sources' => $accumulated['sources'] ?? null,
     'log' => $pdo->log,
 ]);
 `);
@@ -354,6 +366,42 @@ test("the endpoint prefers the stored fold and falls back rather than failing", 
     "and stream the archive only when there is nothing stored");
   assert.match(block, /catch \(Throwable/, "a storage fault must not take the page down");
   assert.match(block, /'stored'/, "and the response must say which path answered");
+});
+
+test("the fold counts each source separately", () => {
+  // The first production fold read 14,536 rows while the database holds 90,795 settled
+  // observations. A single total cannot say whether the archive is simply smaller than
+  // expected or whether one of the two files was never read at all, and those call for
+  // opposite responses. The accumulator has two sources; it must account for both.
+  const result = run([settled({}), settled({ finalOutcomePrice: 0 })], {
+    activeRows: [settled({}), settled({}), settled({})],
+  });
+  assert.equal(result.ok, true, result.error || "");
+  const sources = result.sources;
+  assert.equal(sources.length, 2, "two sources in, two sources reported");
+  assert.deepEqual(sources.map((entry) => entry.field),
+    ["marketObservations", "resolvedMarketObservations"]);
+  // 3 then 2, not 3 then 5. A breakdown that reports the running total is a breakdown that
+  // cannot tell a short file from a long one.
+  assert.deepEqual(sources.map((entry) => entry.rows), [3, 2],
+    "each row count must be its own, not the running total");
+  assert.equal(result.accumulated.scanned, 5, "and the total is still the total");
+  for (const entry of sources) {
+    assert.equal(entry.exists, true);
+    assert.equal(entry.read, true, "a file that streamed must say so");
+    assert.ok(entry.bytes > 0, "and its size must be reported, so an empty file is visible");
+  }
+});
+
+test("BAIT: a source that supplied nothing is still reported", () => {
+  // The case worth finding: a file that is missing, or present and empty, must appear with
+  // rows=0 rather than vanish from the breakdown. Otherwise "one source was never read" looks
+  // exactly like "there was only ever one source".
+  const result = run([], { allowEmpty: true });
+  const sources = result.sources || [];
+  assert.equal(sources.length, 1, `a source with no rows must still be listed: ${JSON.stringify(sources)}`);
+  assert.equal(sources[0].rows, 0);
+  assert.equal(sources[0].exists, true, "and whether the file was there at all must be stated");
 });
 
 test("the fold refuses to store an empty result over a good one", () => {
