@@ -85,21 +85,38 @@ async function main() {
   console.log(`Resolution at entry, ${new Date().toISOString()}`);
   console.log("Read-only: nothing is written and no credentials are used.\n");
 
-  const state = await get("api.php?action=state&target=paper&summary=dashboard");
-  const portfolios = state?.paperPortfolios || state?.state?.paperPortfolios || {};
-  const entry = Object.entries(portfolios).find(([id, row]) =>
-    String(row?.displayName || id).toLowerCase().includes(PORTFOLIO.toLowerCase())
-    || id.toLowerCase().includes(PORTFOLIO.toLowerCase()));
-  if (!entry) {
-    console.log(`No portfolio matching "${PORTFOLIO}". Available: `
-      + Object.entries(portfolios).map(([id, row]) => row?.displayName || id).join(", "));
+  // A portfolio can be paper or live, and the names differ from the ids: the first run of
+  // this probe looked only at paperPortfolios and reported no match for "70-80 esports",
+  // which is a LIVE portfolio stored under live-custom-underway. The saved config is what
+  // maps a name to an id, so the search starts there and then looks in both states.
+  const want = PORTFOLIO.toLowerCase();
+  const config = await get("api.php?action=portfolio-config").catch(() => null);
+  const named = [];
+  for (const [id, entry] of Object.entries(config?.config?.livePortfolios || {})) {
+    named.push({ id, name: String(entry?.displayName || id), live: true });
+  }
+  for (const [id, entry] of Object.entries(config?.config?.paper || {})) {
+    named.push({ id, name: String(entry?.displayName || id), live: false });
+  }
+  const match = named.find((entry) => entry.name.toLowerCase().includes(want) || entry.id.toLowerCase().includes(want));
+  if (!match) {
+    console.log(`No portfolio matching "${PORTFOLIO}". Configured portfolios:`);
+    for (const entry of named) console.log(`   ${entry.live ? "live " : "paper"}  ${entry.id.padEnd(28)} ${entry.name}`);
     return 0;
   }
-  const [id, row] = entry;
-  let trades = Array.isArray(row.trades) ? row.trades : [];
-  if (!trades.length) {
-    const detail = await get(`api.php?action=state&target=paper&summary=dashboard&strategy_id=${encodeURIComponent(id)}`);
-    trades = ((detail?.paperPortfolios || detail?.state?.paperPortfolios || {})[id] || {}).trades || [];
+  const { id, live } = match;
+  const row = { displayName: `${match.name} (${live ? "live" : "paper"}, ${id})` };
+  let trades = [];
+  if (live) {
+    // A live portfolio's trades are attributed on the live state rather than stored under
+    // a paper portfolio, so they are read from there and filtered to this portfolio.
+    const state = await get("api.php?action=state&target=live");
+    const all = state?.trades || state?.state?.trades || state?.liveState?.trades || [];
+    trades = all.filter((trade) => !trade?.portfolioId || String(trade.portfolioId) === id
+      || String(trade.strategyId || "") === id);
+  } else {
+    const state = await get(`api.php?action=state&target=paper&summary=dashboard&strategy_id=${encodeURIComponent(id)}`);
+    trades = ((state?.paperPortfolios || state?.state?.paperPortfolios || {})[id] || {}).trades || [];
   }
   const closed = trades.filter((trade) => String(trade.status || "").toUpperCase() !== "OPEN"
     && String(trade.status || "").toUpperCase() !== "LIMIT_ORDER_WAITING"
