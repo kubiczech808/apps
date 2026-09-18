@@ -88,13 +88,13 @@ jobs:
           cat .github/inspection/btcdca-learn-link-audit.md
 
       - name: Stage and verify the preserved static guides
-        if: inputs.operation != 'preflight'
+        if: inputs.operation != 'preflight' && inputs.operation != 'rollback'
         run: |
           set -euo pipefail
           python3 scripts/stage_btcdca_static_guides.py
 
       - name: Upload stage and link-audit reports
-        if: inputs.operation != 'preflight'
+        if: inputs.operation != 'preflight' && inputs.operation != 'rollback'
         uses: actions/upload-artifact@v4
         with:
           name: btcdca-static-stage-${{ github.run_id }}
