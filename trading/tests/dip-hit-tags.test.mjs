@@ -169,3 +169,13 @@ test("dipEntryCandidateRows is still the only builder, and reads the hit", () =>
   // Guard against the fix drifting into a second code path that the tests do not run.
   assert.match(SOURCE, /export function dipEntryCandidateRows\(strategy, hits = DIP_ENTRY_HITS\)/);
 });
+
+test("the probe reports whether the watch plans carry tags at all", () => {
+  // The only link of the four that can be observed live without waiting for a fresh dip:
+  // the watch payload is a public read. If the plans carry tags, the endpoint half of the
+  // fix is proven on the host rather than only in this suite.
+  const probe = readFileSync(new URL("../tools/dip-shortlist-probe.mjs", import.meta.url), "utf8");
+  assert.match(probe, /carrying the market's tags/);
+  assert.match(probe, /Array\.isArray\(plan\?\.tags\) && plan\.tags\.length > 0/,
+    "an empty array must count as untagged, not as tagged");
+});

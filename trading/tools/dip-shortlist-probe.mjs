@@ -155,6 +155,16 @@ async function main() {
   console.log(`   ... already past their resolution date: ${plansEnded}`
     + ` (${plans.length ? ((plansEnded / plans.length) * 100).toFixed(0) : "0"}%)`);
   console.log(`   ... carrying no resolution date at all: ${plansUndated}`);
+  // Whether the plans carry the market's tags, which is the first of the four links that had
+  // to be fixed and the only one observable without waiting for a fresh dip. A plan without
+  // tags produces a hit without tags, which produces a candidate row a tag-filtered portfolio
+  // must refuse -- 270 recorded dips a day went that way.
+  const plansTagged = plans.filter((plan) => Array.isArray(plan?.tags) && plan.tags.length > 0).length;
+  console.log(`   ... carrying the market's tags: ${plansTagged} of ${plans.length}`);
+  if (plans.length && !plansTagged) {
+    console.log("   NO plan carries tags. Every dip recorded from this watch will be refused");
+    console.log("   by any portfolio with includeOnlyMarketTags, which all of them have.");
+  }
   if (plansEnded > plans.length / 2) {
     console.log("   The watch is mostly finished markets. live_dip_entry_watch_payload() admits");
     console.log("   anything whose kickoff has passed and never asks whether it is over.");
