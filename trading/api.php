@@ -7184,6 +7184,15 @@ try {
         // Read-only. What the database already holds for each recent market, so the mirror
         // can skip the rows that have not materially changed. See
         // trading_storage_observation_fingerprints.
+        // Read-only. Every index on the Trading tables and which of them another already
+        // covers. See trading_storage_index_inventory.
+        if ($operation === 'index-inventory') {
+            respond([
+                'ok' => true,
+                'operation' => 'index-inventory',
+                'indexes' => trading_storage_index_inventory($pdo),
+            ]);
+        }
         // Read-only. What an observation row is made of, field by field, and what it
         // would weigh holding only what anything reads. See
         // trading_storage_observation_payload_anatomy.

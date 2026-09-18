@@ -248,3 +248,28 @@ else:
         print(f"   Fields nothing in the runtime even NAMES are {share * 100:.0f}% of a decoded row.")
         print("   That is a FLOOR on what could be dropped, not a target: a field being named is")
         print("   not proof it is read, so each candidate still has to be checked at its call site.")
+
+# 5. The indexes. Unlike the payload -- where every field turned out to be read somewhere --
+#    index redundancy is provable from the column lists: an index whose columns are a
+#    leftmost prefix of another's can serve no query the wider one cannot.
+print("\n== indexes on the Trading tables")
+report = admin("index-inventory")
+indexes = report.get("indexes") or []
+if not indexes:
+    print(f"   could not read: {json.dumps(report)[:400]}")
+else:
+    print("   table                    index                                    cols  cardinality  covered by")
+    for row in indexes:
+        covered = row.get("coveredBy")
+        print(f"   {str(row.get('table'))[:22]:<25}{str(row.get('index'))[:38]:<40}"
+              f"{len(row.get('columns') or []):>5}{int(row.get('cardinality') or 0):>13}"
+              f"   {covered or ('UNIQUE' if row.get('unique') else '-')}")
+    for row in indexes:
+        if row.get("coveredBy"):
+            print(f"\n   {row['table']}.{row['index']} ({', '.join(row.get('columns') or [])})")
+            print(f"   is a leftmost prefix of {row['coveredBy']}. Every query it can serve, the wider")
+            print("   index serves too, so dropping it changes no plan -- that is a property of B-tree")
+            print("   indexing, not a judgement about this application.")
+    redundant = [row for row in indexes if row.get("coveredBy")]
+    if not redundant:
+        print("\n   No index is a prefix of another. Index size is not recoverable this way.")

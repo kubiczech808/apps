@@ -762,6 +762,76 @@ function trading_storage_compact_empty_tables(PDO $pdo): array
 }
 
 /**
+ * Every index on the Trading tables, its columns in order, and which of them another index
+ * already covers.
+ *
+ * Read-only: one SELECT against information_schema.STATISTICS. No index is created, dropped
+ * or altered here.
+ *
+ * trading_observations carries 92 MB of secondary index against 518 MB of data, and unlike
+ * the payload -- where the measurement found that every field is read somewhere -- index
+ * redundancy is PROVABLE from the column lists alone. An index whose columns are a leftmost
+ * prefix of another index's columns can serve no query the wider one cannot, so dropping it
+ * changes no plan. That is a property of B-tree indexing, not a judgement about this
+ * application, which is what makes it safe to state without reading a single query.
+ *
+ * Stated as a candidate rather than an instruction even so. A UNIQUE index is never reported
+ * as redundant however its columns look: it enforces a constraint, and the wider index does
+ * not.
+ */
+function trading_storage_index_inventory(PDO $pdo): array
+{
+    trading_storage_bootstrap($pdo);
+    $statement = $pdo->query(
+        'SELECT TABLE_NAME, INDEX_NAME, NON_UNIQUE, SEQ_IN_INDEX, COLUMN_NAME, CARDINALITY
+         FROM information_schema.STATISTICS
+         WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME LIKE "trading\\_%"
+         ORDER BY TABLE_NAME, INDEX_NAME, SEQ_IN_INDEX'
+    );
+    $indexes = [];
+    foreach ($statement->fetchAll() as $row) {
+        $table = (string) ($row['TABLE_NAME'] ?? '');
+        $name = (string) ($row['INDEX_NAME'] ?? '');
+        if ($table === '' || $name === '') {
+            continue;
+        }
+        $key = $table . "\x1f" . $name;
+        if (!isset($indexes[$key])) {
+            $indexes[$key] = [
+                'table' => $table,
+                'index' => $name,
+                'unique' => (int) ($row['NON_UNIQUE'] ?? 1) === 0,
+                'columns' => [],
+                'cardinality' => (int) ($row['CARDINALITY'] ?? 0),
+            ];
+        }
+        $indexes[$key]['columns'][] = (string) ($row['COLUMN_NAME'] ?? '');
+    }
+
+    // A leftmost prefix of another index on the same table, and neither unique.
+    $list = array_values($indexes);
+    foreach ($list as $position => $entry) {
+        $list[$position]['coveredBy'] = null;
+        if ($entry['unique']) {
+            continue;
+        }
+        foreach ($list as $other) {
+            if ($other['table'] !== $entry['table'] || $other['index'] === $entry['index']) {
+                continue;
+            }
+            if (count($other['columns']) <= count($entry['columns'])) {
+                continue;
+            }
+            if (array_slice($other['columns'], 0, count($entry['columns'])) === $entry['columns']) {
+                $list[$position]['coveredBy'] = $other['index'];
+                break;
+            }
+        }
+    }
+    return $list;
+}
+
+/**
  * What an observation row is actually made OF, field by field, and what it would weigh if it
  * kept only what anything reads.
  *
