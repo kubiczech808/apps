@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import urllib.error
+import urllib.parse
 import urllib.request
 
 
@@ -13,6 +14,31 @@ GUIDES = (
     "btc-dca-coinmate-how-to-set-up-api-key",
     "btc-dca-okx-how-to-set-up-api-key",
 )
+
+
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, request, response, newurl, code, msg, headers, fp):
+        return None
+
+
+def trace(path: str) -> None:
+    opener = urllib.request.build_opener(NoRedirect)
+    current = f"{BASE_URL}{path}"
+    for _ in range(8):
+        request = urllib.request.Request(current, headers={"User-Agent": USER_AGENT})
+        try:
+            with opener.open(request, timeout=30) as response:  # nosec B310 - fixed public domain
+                status = response.status
+                location = response.headers.get("Location")
+                response.read(160)
+        except urllib.error.HTTPError as exc:
+            status = exc.code
+            location = exc.headers.get("Location")
+            exc.read(160)
+        print(f"TRACE {path}: HTTP {status} {current} -> {location or '-'}")
+        if not location or status < 300 or status >= 400:
+            return
+        current = urllib.parse.urljoin(current, location)
 
 
 def fetch(path: str) -> tuple[int, str]:
@@ -30,12 +56,17 @@ def fetch(path: str) -> tuple[int, str]:
 def require_page(path: str, expected_status: int, marker: str | None = None) -> None:
     status, page = fetch(path)
     if status != expected_status:
-        raise RuntimeError(f"{path} returned HTTP {status}; expected HTTP {expected_status}.")
+        raise RuntimeError(
+            f"{path} returned HTTP {status}; expected HTTP {expected_status}; "
+            f"final body starts with {page[:160].replace(chr(10), ' ')}"
+        )
     if marker is not None and marker not in page:
         raise RuntimeError(f"{path} returned HTTP {status} without its expected content marker.")
 
 
 def main() -> None:
+    for path in ("/app/", "/app/index.php", "/login-user.php"):
+        trace(path)
     require_page("/", 200, "BTC DCA static homepage")
     for slug in GUIDES:
         require_page(f"/{slug}/", 200, "/assets/img/guides/guide.css")
