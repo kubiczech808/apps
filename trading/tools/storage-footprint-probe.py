@@ -145,11 +145,19 @@ RUNTIME = [
 ]
 
 
+# Resolved against THIS FILE, never against the working directory. The workflow runs
+# `python3 trading/tools/storage-footprint-probe.py` from the repository root, so opening
+# "api.php" found nothing -- and the probe then reported that 97% of every row is named
+# nowhere, listing tokenId, question and slug among the unused. A path assumption produced a
+# confident falsehood, which is the same failure as the hand-written list it replaced.
+TRADING_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
 def runtime_sources():
     sources = {}
     for name in RUNTIME:
         try:
-            with open(name, "r", encoding="utf-8", errors="replace") as handle:
+            with open(os.path.join(TRADING_DIR, name), "r", encoding="utf-8", errors="replace") as handle:
                 sources[name] = handle.read()
         except OSError:
             continue
@@ -157,7 +165,9 @@ def runtime_sources():
 
 
 SOURCES = runtime_sources()
-print(f"   reading {len(SOURCES)} runtime file(s) to decide what is read: {', '.join(SOURCES)}")
+print(f"   runtime files read from {TRADING_DIR}: {len(SOURCES)} of {len(RUNTIME)}")
+if SOURCES:
+    print(f"   {', '.join(SOURCES)}")
 
 
 def mentions(field):
@@ -182,6 +192,15 @@ else:
     print(f"   decoded per row         : "
           f"{int((anatomy.get('decodedBytes') or 0) / max(1, sampled)):,} bytes")
     print(f"   distinct fields seen    : {len(fields)}")
+
+    if not SOURCES:
+        # Nothing to grep means nothing is known. Reporting "unused" here is how the last
+        # run announced that tokenId is read by nobody.
+        print("\n   CANNOT DECIDE what is read: no runtime file could be opened.")
+        print("   Field sizes below are still valid; the used/unused split is not computed.")
+        for row in fields[:20]:
+            print(f"   {str(row.get('field'))[:28]:<30}{int(row.get('bytesPerRow') or 0):>10} bytes/row")
+        raise SystemExit(0)
 
     unread = [row for row in fields if not mentions(str(row.get("field")))]
     read = [row for row in fields if mentions(str(row.get("field")))]
