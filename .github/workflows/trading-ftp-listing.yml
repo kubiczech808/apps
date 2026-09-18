@@ -10,6 +10,12 @@ name: Trading FTP Listing
 # possible through the API, so the answer has to come back as the job's own summary.
 on:
   workflow_dispatch:
+    inputs:
+      directory:
+        description: "Directory to list (default: the published data directory)"
+        required: false
+        default: "/www/trading/data"
+        type: string
 
 permissions:
   contents: read
@@ -25,7 +31,7 @@ jobs:
           HOSTING_FTP_SERVER: ${{ secrets.HOSTING_FTP_SERVER }}
           HOSTING_FTP_USERNAME: ${{ secrets.HOSTING_FTP_USERNAME }}
           HOSTING_FTP_PASSWORD: ${{ secrets.HOSTING_FTP_PASSWORD }}
-          TRADING_FTP_DIR: /www/trading/data
+          TRADING_FTP_DIR: ${{ inputs.directory || '/www/trading/data' }}
         run: |
           python3 - <<'PY'
           import ftplib
