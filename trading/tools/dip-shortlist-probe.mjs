@@ -145,6 +145,37 @@ async function main() {
   console.log(`   filed under "${prefixed}": ${byPortfolio.get(prefixed) || 0}`);
   console.log(`   filed under the bare "${match.id}": ${byPortfolio.get(match.id) || 0}`);
 
+  // WHEN the last one arrived, which is the question every count above leaves open. A
+  // portfolio with 186 recorded dips and nothing ready looks identical whether the worker
+  // recorded one a minute ago or stopped recording days ago -- and those are completely
+  // different faults. Each hit carries 'at' (record_dip_entry_hit, api.php), so this was one
+  // sort away and was simply never printed.
+  const age = (value) => {
+    const when = Date.parse(String(value ?? ""));
+    return Number.isFinite(when) ? (Date.now() - when) / 3600000 : null;
+  };
+  const dated = rows.map((hit) => ({ hit, hours: age(hit?.at) })).filter((row) => row.hours !== null);
+  dated.sort((left, right) => left.hours - right.hours);
+  if (!dated.length) {
+    console.log("   none of the hits carry a timestamp, so their age cannot be read");
+  } else {
+    const newest = dated[0];
+    console.log(`   newest hit anywhere: ${String(newest.hit.at).slice(0, 16)}`
+      + ` (${newest.hours.toFixed(1)} h ago, ${newest.hit.portfolioId})`);
+    for (const window of [1, 6, 24]) {
+      console.log(`   ... recorded in the last ${String(window).padStart(2)} h: `
+        + `${dated.filter((row) => row.hours <= window).length}`);
+    }
+    const mineDated = dated.filter((row) => String(row.hit?.portfolioId ?? "") === prefixed);
+    console.log(`   newest for this portfolio: ${mineDated.length
+      ? `${String(mineDated[0].hit.at).slice(0, 16)} (${mineDated[0].hours.toFixed(1)} h ago)` : "never"}`);
+    if (newest.hours > 6) {
+      console.log("   NOTHING has been recorded for hours. The gates below cannot explain that --");
+      console.log("   they filter hits that already exist. This points at the RPi worker, which");
+      console.log("   polls the watched books every second and is what writes a hit at all.");
+    }
+  }
+
   const mine = rows.filter((hit) => String(hit?.portfolioId ?? "") === prefixed);
   if (!mine.length) {
     console.log("\n   NONE of the recorded dips are filed under this portfolio's id.");
