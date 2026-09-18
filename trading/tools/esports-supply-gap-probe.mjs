@@ -177,8 +177,20 @@ async function main() {
       console.log(`   Gamma has ${inBand.length} tradable esports markets in the band; we hold ${heldInBand.length}.`);
       console.log(`   US: ${lost} market(s) exist that our catalogue does not carry.`);
       const wouldSurvive = inBand.filter((row) => liquidityOf(row) >= 40000).length;
-      console.log(`   Of the ${inBand.length}, only ${wouldSurvive} clear the scan's $40 000 liquidity floor,`);
-      console.log(`   which accounts for ${inBand.length - wouldSurvive} of the ${lost} missing.`);
+      console.log(`   Of the ${inBand.length}, only ${wouldSurvive} clear the scan's $40 000 liquidity floor.`);
+      // Stated as a share of what exists, not as a share of what is missing. The two sets are
+      // not nested -- every sixth scheduled pass runs untagged with no floor, so we hold some
+      // rows the floor would have dropped -- and subtracting one from the other produced
+      // "accounts for 142 of the 129 missing", a sentence whose own arithmetic is impossible.
+      console.log(`   So the floor alone removes ${inBand.length - wouldSurvive} of the ${inBand.length} tradable markets`);
+      console.log(`   (${((1 - wouldSurvive / Math.max(1, inBand.length)) * 100).toFixed(0)}%) before any portfolio rule is applied.`);
+      // Volume and liquidity are different things and the floor measures the one esports is
+      // worst at. A market can trade heavily on a thin resting book.
+      const heavyButThin = inBand.filter((row) => volumeOf(row) >= 5000 && liquidityOf(row) < 40000);
+      if (heavyButThin.length) {
+        console.log(`   ${heavyButThin.length} of them traded $5 000+ in 24 h on a book under $40 000 --`);
+        console.log("   actively traded markets dropped by a floor that measures resting depth.");
+      }
     }
 
     // Named, so the next step is checking a market rather than trusting a count.
