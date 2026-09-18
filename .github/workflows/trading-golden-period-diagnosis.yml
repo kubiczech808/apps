@@ -1,0 +1,36 @@
+name: Trading Golden Period Diagnosis
+
+# READ-ONLY, manual only. Public GETs against the published state and the portfolio's own
+# history. No secrets, no writes, no orders.
+#
+# Asked: why "70-80 esports" grew capital so fast around 10.-12.9. and does not now, when
+# the settings look essentially the same. The cadence half is already measured from the
+# Actions API and does not explain it, so this measures the trades.
+on:
+  workflow_dispatch:
+    inputs:
+      portfolio:
+        description: "Portfolio name or id"
+        required: false
+        default: "70-80 esports"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Compare the good days with the last few
+        working-directory: trading
+        env:
+          TRADING_HOST: https://osobnizkusenosti.cz/trading
+          PROBE_PORTFOLIO: ${{ inputs.portfolio || '70-80 esports' }}
+        run: node tools/golden-period-probe.mjs
