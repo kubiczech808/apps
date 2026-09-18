@@ -1035,14 +1035,31 @@ const capitalBenchmark = ({ account, market, stats }) => {
   }
 }
 
-const renderPortfolioTiles = (box) => {
+const realizedStatsForTrades = (trades) => {
+  const settled = trades.filter((trade) => Number.isFinite(trade.plSats))
+  const wins = settled.filter((trade) => trade.plSats > 0)
+  const losses = settled.filter((trade) => trade.plSats < 0)
+  return {
+    trades: settled.length,
+    wins: wins.length,
+    losses: losses.length,
+    netPnlSats: settled.reduce((sum, trade) => sum + trade.plSats, 0),
+    winRate: settled.length ? (wins.length / settled.length) * 100 : null,
+  }
+}
+
+const renderPortfolioTiles = (box, { strategyId = null } = {}) => {
   const account = state.account || {}
-  const stats = state.stats || {}
+  const accountStats = state.stats || {}
   const market = state.market || {}
-  const running = state.positions?.running || []
+  const running = (state.positions?.running || []).filter((position) => !strategyId || position.strategyId === strategyId)
+  const closed = (state.positions?.closed || []).filter((trade) => !strategyId || trade.strategyId === strategyId)
+  const stats = strategyId ? realizedStatsForTrades(closed) : accountStats
 
   const btcPrice = market.price
-  const benchmark = capitalBenchmark({ account, market, stats })
+  // Account value remains account-wide; only the trading statistics below are
+  // scoped to the strategy currently being viewed.
+  const benchmark = capitalBenchmark({ account, market, stats: accountStats })
   const equityUsd = benchmark.equityUsd
   const usdReturn = signedPct(benchmark.usdReturnPct)
   const btcReturn = signedPct(benchmark.btcReturnPct)
@@ -1074,7 +1091,7 @@ const renderPortfolioTiles = (box) => {
     ),
     tile('Nerealizované P/L', signedSats(openPl).text, 'otevřené pozice', signedSats(openPl).className),
     tile(
-      'Realizované P/L',
+      strategyId ? 'Realizované P/L PA-1' : 'Realizované P/L',
       signedSats(stats.netPnlSats).text,
       `${stats.trades || 0} obchodů, úspěšnost ${pct(stats.winRate)}`,
       signedSats(stats.netPnlSats).className
@@ -1088,7 +1105,7 @@ const renderPortfolioTiles = (box) => {
 }
 
 const renderPriceActionTiles = (box) => {
-  renderPortfolioTiles(box)
+  renderPortfolioTiles(box, { strategyId: 'price-action-structure-v1' })
 }
 
 const renderTiles = () => {
