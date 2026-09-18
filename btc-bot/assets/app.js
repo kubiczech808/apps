@@ -1436,20 +1436,16 @@ const renderAssetChart = () => {
     { kind: 'high', leg: structure?.high },
     { kind: 'low', leg: structure?.low },
   ]
-  // recentSwings is deliberately capped for payload size. The current high
-  // and low must nevertheless be part of the audit line, otherwise the chart
-  // can appear to stop before the actual bottom/top which drives the strategy.
+  // chartPivots is prepared by the strategy as one chronological, alternating
+  // audit line. Older matrices fall back to recentSwings until their next scan.
   const structurePivots = new Map()
   const developingSwing = structure?.developingSwing
   const developingCounter = timeframeId === '1h' ? structure?.developingCounterSwing : null
   for (const swing of [
-    ...(structure?.recentSwings ?? []),
-    ...structureLegs.map(({ kind, leg }) => leg?.current ? { ...leg.current, kind, label: leg.label } : null),
-    // The active range is the one major LH -> LL / HL -> HH wave after the
-    // broad spine. Do not draw all edge pivots: they include internal turns.
-    activeRange?.high,
-    activeRange?.low,
-    developingSwing,
+    ...(structure?.chartPivots ?? structure?.recentSwings ?? []),
+    // Matrices saved before chartPivots existed still need their live terminal
+    // point, but never merge independent legs/ranges into parallel diagonals.
+    ...(structure?.chartPivots ? [] : [developingSwing]),
     developingCounter,
   ].filter(Boolean)) {
     if (swing?.kind === developingSwing?.kind && swing?.candleIndex === developingSwing?.replacesCandleIndex) continue
@@ -1473,15 +1469,25 @@ const renderAssetChart = () => {
       swing.candleIndex === pivot.candleIndex || (swing.time === pivot.time && swing.kind === pivot.kind)
     ).at(-1) ?? { ...pivot, x: xForTime(pivot.time) }
     : null
-  const latestHigh = nodeForRangePivot(rangeHigh) ?? swingNodes.filter((swing) => swing.kind === 'high').at(-1)
-  const latestLow = nodeForRangePivot(rangeLow) ?? swingNodes.filter((swing) => swing.kind === 'low').at(-1)
+  const latestHigh = (developingSwing?.kind === 'high' ? { ...developingSwing, x: xForTime(developingSwing.time) } : null)
+    ?? nodeForRangePivot(rangeHigh)
+    ?? swingNodes.filter((swing) => swing.kind === 'high').at(-1)
+  const latestLow = (developingSwing?.kind === 'low' ? { ...developingSwing, x: xForTime(developingSwing.time) } : null)
+    ?? nodeForRangePivot(rangeLow)
+    ?? swingNodes.filter((swing) => swing.kind === 'low').at(-1)
 
   if (trend === 'flat') {
-    for (const { kind, leg } of structureLegs) {
-      const pivot = leg?.current ?? leg?.previous
+    const flatBounds = structureLegs
+      .map(({ leg }) => leg?.current ?? leg?.previous)
+      .filter((pivot) => Number.isFinite(pivot?.price))
+      .sort((left, right) => right.price - left.price)
+    for (const [index, pivot] of flatBounds.entries()) {
       if (!Number.isFinite(pivot?.price)) continue
       const yy = y(pivot.price)
-      const label = kind === 'high' ? 'H flat' : 'L flat'
+      // A flat range is priced top-to-bottom. Its last typed pivots can be
+      // chronologically inverted (a high below a later low), but must never
+      // be drawn as a high below a low.
+      const label = index === 0 ? 'H flat' : 'L flat'
       svg.append(
         el('line', {
           className: 'asset-structure-line asset-structure-flat',

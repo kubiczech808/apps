@@ -75,6 +75,40 @@ test('flat structure is formation-only and never publishes a planned entry', () 
   assert.equal(profile.gates[0].status, 'neutral')
 })
 
+test('a close below a stalled uptrend publishes a non-executable down bias and an alternating chart line', () => {
+  const range = zigzag([100, 120, 110, 140, 125, 135, 130, 134], { steps: 8 })
+  const broken = [
+    ...range,
+    candle(range.at(-1).time + HOUR, 134, 135, 100, 105),
+  ]
+  const result = classifyStructure(broken, {
+    lookback: 2,
+    minCandles: 20,
+    includeZones: false,
+    includeChartCandles: false,
+  })
+
+  assert.equal(result.trend, 'down')
+  assert.equal(result.event, 'CHoCH_DOWN')
+  assert.equal(result.structureConfirmed, false)
+  assert.match(result.reason, /čeká se na LH \+ LL/)
+  const pivots = result.structure.chartPivots
+  assert.equal(pivots.at(-1).kind, 'low')
+  assert.equal(pivots.at(-1).label, 'LL')
+  assert.equal(pivots.at(-1).price, 100)
+  assert.ok(pivots.every((pivot, index) => index === 0
+    || (pivot.time > pivots[index - 1].time && pivot.kind !== pivots[index - 1].kind)))
+  assert.ok(!pivots.some((pivot) => pivot.candleIndex === result.structure.low.current.candleIndex))
+
+  const profile = evaluateTradeProfile({
+    item: result,
+    settings: { pullbackPct: 50, minRewardRisk: 2, riskPct: 1 },
+  })
+  assert.equal(profile.mode, 'formation')
+  assert.equal(profile.formationState, 'awaiting-confirmation')
+  assert.equal(profile.side, null)
+})
+
 test('Stooq CSV parser accepts daily and intraday historical rows through the fetch wrapper', async () => {
   const csv = [
     'Date,Time,Open,High,Low,Close,Volume',

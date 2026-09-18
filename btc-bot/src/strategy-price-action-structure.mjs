@@ -305,6 +305,40 @@ const labelStructureSwings = (swings = []) => {
   return labels
 }
 
+// This is the exact pivot sequence consumed by the chart. Keep it in the
+// strategy layer, rather than asking the browser to merge legs and ranges:
+// a live LL/HH replaces the pivot it broke and the resulting line must stay
+// chronological and alternating even before that terminal pivot is confirmed.
+const chartStructurePivots = (swings, labels, developingSwing) => {
+  const replaces = developingSwing?.replacesCandleIndex
+  const pivots = swings
+    .slice(-8)
+    .map((swing) => pivotSummary(swing, labels.get(swing.index)))
+    .filter((pivot) => !(developingSwing
+      && pivot.kind === developingSwing.kind
+      && pivot.candleIndex === replaces))
+
+  if (developingSwing) pivots.push(developingSwing)
+
+  return pivots
+    .filter((pivot) => pivot?.kind && Number.isFinite(pivot.price) && Number.isFinite(pivot.time))
+    .sort((left, right) => left.time - right.time)
+    .reduce((line, pivot) => {
+      const previous = line.at(-1)
+      if (!previous || previous.kind !== pivot.kind) {
+        line.push(pivot)
+        return line
+      }
+      // A same-kind terminal can only refine the unfinished leg. Preserve the
+      // more extreme point, while preferring the explicit live pivot on a tie.
+      const moreExtreme = pivot.kind === 'high'
+        ? pivot.price >= previous.price
+        : pivot.price <= previous.price
+      if (moreExtreme) line[line.length - 1] = pivot
+      return line
+    }, [])
+}
+
 // The wide timeframe profile supplies the multi-month structural spine used
 // for every HH, HL, LH, LL and trading decision. Its confirmation delay is
 // intentional: it prevents a short internal reaction such as USDJPY 159.8 ->
@@ -413,7 +447,37 @@ const persistentStructureTrend = (candles, swings, lookback) => {
     const crossedBelow = lastLow && current.close < lastLow.price && previous?.close >= lastLow.price
     const invalidatedUp = protectedLow && current.close < protectedLow.price && previous?.close >= protectedLow.price
     const invalidatedDown = protectedHigh && current.close > protectedHigh.price && previous?.close <= protectedHigh.price
-    if (trend === 'up' && invalidatedUp) {
+    // A market which has not completed HH+HL or LH+LL is still a range, but a
+    // close outside both recent structural boundaries is meaningful. Publish
+    // its directional bias immediately for the audit chart; do not confirm a
+    // trade until a subsequent directional pivot pair exists.
+    const flatRangeHigh = lastHigh && lastLow ? Math.max(lastHigh.price, lastLow.price) : null
+    const flatRangeLow = lastHigh && lastLow ? Math.min(lastHigh.price, lastLow.price) : null
+    const brokeFlatRangeUp = trend === 'flat' && establishedTrend !== 'flat'
+      && (!pendingDirection || pendingDirection === 'up') && flatRangeHigh
+      && current.close > flatRangeHigh && previous?.close <= flatRangeHigh
+    const brokeFlatRangeDown = trend === 'flat' && establishedTrend !== 'flat'
+      && (!pendingDirection || pendingDirection === 'down') && flatRangeLow
+      && current.close < flatRangeLow && previous?.close >= flatRangeLow
+    if (brokeFlatRangeDown) {
+      latestEvent = {
+        type: pendingDirection === 'down' ? 'CHoCH_DOWN' : 'RANGE_BREAK_DOWN', direction: 'down', fromTrend: establishedTrend, index, time: current.time,
+        close: current.close, referencePrice: flatRangeLow, referenceTime: lastLow.time,
+      }
+      trend = 'down'
+      pendingDirection = 'down'
+      pendingFromBreak = true
+      pendingBreakIndex = index
+    } else if (brokeFlatRangeUp) {
+      latestEvent = {
+        type: pendingDirection === 'up' ? 'CHoCH_UP' : 'RANGE_BREAK_UP', direction: 'up', fromTrend: establishedTrend, index, time: current.time,
+        close: current.close, referencePrice: flatRangeHigh, referenceTime: lastHigh.time,
+      }
+      trend = 'up'
+      pendingDirection = 'up'
+      pendingFromBreak = true
+      pendingBreakIndex = index
+    } else if (trend === 'up' && invalidatedUp) {
       latestEvent = {
         type: 'CHoCH_DOWN',
         direction: 'down',
@@ -1420,9 +1484,9 @@ export const classifyStructure = (
   // A close through the protected pivot immediately changes the directional
   // bias shown to the operator (red/green in the matrix), but an entry stays
   // blocked until its LH+LL or HH+HL sequence is confirmed below.
-  const breakDirection = structureBreak?.type === 'CHoCH_DOWN'
+  const breakDirection = ['CHoCH_DOWN', 'RANGE_BREAK_DOWN'].includes(structureBreak?.type)
     ? 'down'
-    : structureBreak?.type === 'CHoCH_UP'
+    : ['CHoCH_UP', 'RANGE_BREAK_UP'].includes(structureBreak?.type)
       ? 'up'
       : null
   // A complete current LH+LL / HH+HL sequence is sufficient to resolve an
@@ -1487,6 +1551,8 @@ export const classifyStructure = (
   const protectedPivot = trend === 'up' ? persistent.protectedLow : trend === 'down' ? persistent.protectedHigh : null
   const reason = structureBreak?.type.startsWith('CHoCH')
     ? `${structureBreak.type} close ${structureBreak.close} přes hlavní úroveň ${structureBreak.referencePrice}; bias je ${trend}, čeká se na ${trend === 'down' ? 'LH + LL' : 'HH + HL'} (${labels || 'bez kompletní sekvence'})`
+    : structureBreak?.type.startsWith('RANGE_BREAK')
+      ? `${structureBreak.type} close ${structureBreak.close} přes hranici range ${structureBreak.referencePrice}; bias je ${trend}, čeká se na ${trend === 'down' ? 'LH + LL' : 'HH + HL'} (${labels || 'bez kompletní sekvence'})`
     : trend !== 'flat' && labels !== (trend === 'up' ? 'HH + HL' : 'LH + LL')
       ? `${trend} pokračuje; změna až po close přes chráněný ${trend === 'up' ? 'HL' : 'LH'} ${protectedPivot?.price ?? '—'} (${labels || 'čeká se na další pivot'})`
       : labels || 'bez potvrzených pivotů'
@@ -1529,6 +1595,7 @@ export const classifyStructure = (
       developingCounterSwing: developingCounter,
       confirmed: structureConfirmed,
       recentSwings: structure.swings.slice(-8).map((swing) => pivotSummary(swing, persistent.labels.get(swing.index))),
+      chartPivots: chartStructurePivots(structure.swings, persistent.labels, developingSwing),
       contextRecentSwings: contextStructure.swings.slice(-8).map((swing) => pivotSummary(swing)),
     },
     zones: includeZones
