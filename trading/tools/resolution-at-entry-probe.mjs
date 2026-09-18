@@ -90,18 +90,28 @@ async function main() {
   // which is a LIVE portfolio stored under live-custom-underway. The saved config is what
   // maps a name to an id, so the search starts there and then looks in both states.
   const want = PORTFOLIO.toLowerCase();
-  const config = await get("api.php?action=portfolio-config").catch(() => null);
+  // No .catch(() => null) here. The previous run printed "No portfolio matching" followed by
+  // an EMPTY list, which is not a result -- a config that fetched and holds nothing and a
+  // fetch that failed are different problems, and swallowing the reason made them
+  // indistinguishable. A probe whose failure mode is silence costs a whole dispatch.
+  const config = await get("api.php?action=portfolio-config");
+  const body = config?.config || {};
   const named = [];
-  for (const [id, entry] of Object.entries(config?.config?.livePortfolios || {})) {
-    named.push({ id, name: String(entry?.displayName || id), live: true });
+  for (const [id, entry] of Object.entries(body.livePortfolios || {})) {
+    named.push({ id, name: String(entry?.displayName || entry?.label || id), live: true });
   }
-  for (const [id, entry] of Object.entries(config?.config?.paper || {})) {
-    named.push({ id, name: String(entry?.displayName || id), live: false });
+  for (const [id, entry] of Object.entries(body.paper || {})) {
+    named.push({ id, name: String(entry?.displayName || entry?.label || id), live: false });
   }
   const match = named.find((entry) => entry.name.toLowerCase().includes(want) || entry.id.toLowerCase().includes(want));
   if (!match) {
     console.log(`No portfolio matching "${PORTFOLIO}". Configured portfolios:`);
     for (const entry of named) console.log(`   ${entry.live ? "live " : "paper"}  ${entry.id.padEnd(28)} ${entry.name}`);
+    if (!named.length) {
+      // Say what DID come back, so the next step is reading a shape rather than guessing one.
+      console.log(`   (none -- portfolio-config returned keys: ${Object.keys(config || {}).join(", ") || "nothing"};`
+        + ` config keys: ${Object.keys(body).join(", ") || "nothing"})`);
+    }
     return 0;
   }
   const { id, live } = match;
