@@ -1741,6 +1741,52 @@ function simulation_taxonomy_labels(array $item, string $firstField, string $cur
 }
 
 /**
+ * How long before settlement a row could have been entered, as a band.
+ *
+ * Reported on the portfolio trade analysis: "Resolution at entry" showed <= 1 day as
+ * almost every trade, because the trade's own daysToResolution is recomputed on every mark
+ * and on a closed position holds the horizon at the LAST mark rather than at entry. A
+ * catalogue row is not marked, so its dates are the ones it was scraped with: the gap
+ * between when it was first seen and when it was due is a real horizon.
+ *
+ * Negative means the row was first seen after its stated end date -- a fixture already
+ * under way -- which is its own band rather than being folded into the shortest one.
+ */
+function resolved_horizon_band(array $item): string
+{
+    $due = null;
+    foreach (['resolutionEndDate', 'endDate'] as $field) {
+        $parsed = strtotime((string) ($item[$field] ?? ''));
+        if ($parsed !== false && $parsed > 0) {
+            $due = $parsed;
+            break;
+        }
+    }
+    $seen = null;
+    foreach (['firstObservedAt', 'firstEvaluatedAt', 'observedAt', 'evaluatedAt'] as $field) {
+        $parsed = strtotime((string) ($item[$field] ?? ''));
+        if ($parsed !== false && $parsed > 0) {
+            $seen = $parsed;
+            break;
+        }
+    }
+    if ($due === null || $seen === null) {
+        return 'unknown';
+    }
+    $hours = ($due - $seen) / 3600;
+    if ($hours <= 0) {
+        return 'under way';
+    }
+    foreach ([3, 6, 12, 24, 48] as $edge) {
+        if ($hours <= $edge) {
+            return '<= ' . $edge . ' h';
+        }
+    }
+
+    return '> 48 h';
+}
+
+/**
  * The "Open now" population of the performance tables: an unsettled row that can
  * still actually be opened, not merely one that is waiting for settlement.
  */
@@ -8035,6 +8081,210 @@ try {
             // comparison that works until the day it does not.
             'closedOut' => array_values(array_map('strval', array_keys($closedOut))),
             'at' => gmdate('c'),
+        ]);
+    }
+
+    // Which SETUP would have made money, measured over every resolved market rather than
+    // over one portfolio's trades.
+    //
+    // Asked for: "potrebuji vyuzit resolved data a vytvorit souhrne statistiky. nikoliv jen
+    // na urovni portfolii ale dohromady z resolved udalosti. statistiky by mi meli pomoct
+    // odhalit idealni setup portfolia popr. kombinace vice portfolii. napriklad
+    // nejvydelecnejsi kombinaci probability threshold, jake tagy included only, jake typy
+    // obchodu napriklad excluded ... a vycislit nominalne i procentualne, jak bych na tom
+    // byl, kdybych sel do kazdeho obchodu v dane kombinaci. a ty kombinace chci vlastne
+    // vsechny."
+    //
+    // The archive is 26,000 rows and does not fit in memory, so it is STREAMED once into a
+    // small cell map -- one cell per (probability, tag, shape, horizon) -- and every
+    // combination is then summed from those cells. Enumerating combinations by re-reading
+    // the archive would be one pass per combination and there are tens of thousands.
+    //
+    // A combination here is what a PORTFOLIO can actually be set to: a probability
+    // THRESHOLD rather than a band ("staci mi jedno cele cislo jako vstup y probability"),
+    // one included tag or any, one market shape or any, one horizon band or any. It answers
+    // "if I had taken every trade in this combination, where would I be" -- nominally and as
+    // a return on what was staked.
+    if ($action === 'resolved-combinations') {
+        $minTrades = max(1, min(5000, (int) ($_GET['min_trades'] ?? 30)));
+        $limit = max(1, min(400, (int) ($_GET['limit'] ?? 120)));
+        $stake = 5.0;
+
+        $corePath = state_file_paths()['paper'];
+        $core = decode_state_file($corePath, false);
+        $manifest = is_array($core['stateSegments'] ?? null) ? $core['stateSegments'] : [];
+        $sources = [];
+        foreach ([['observations', 'marketObservations'], ['resolvedObservations', 'resolvedMarketObservations']] as [$segment, $field]) {
+            $path = state_segment_path(['stateSegments' => $manifest], $corePath, $segment);
+            if ($path !== null) {
+                $sources[] = [$path, $field];
+            }
+        }
+        if ($sources === []) {
+            $sources = [[$corePath, 'marketObservations'], [$corePath, 'resolvedMarketObservations']];
+        }
+
+        // [trades, wins, staked, pnl] per cell. Everything below is summed out of this.
+        //
+        // Two maps, not one. A row carrying two tags is two cells, which is right for a
+        // portfolio that includes either -- but summing those cells for "any tag" would
+        // count the row twice. So the any-tag totals are accumulated separately, once per
+        // row. Shape and horizon are single-valued, so summing across them is exact.
+        $cells = [];
+        $anyTag = [];
+        $scanned = 0;
+        $priced = 0;
+        $onRow = static function (array $item) use (&$cells, &$anyTag, &$scanned, &$priced, $stake): bool {
+            $scanned += 1;
+            $entry = simulation_entry_probability($item);
+            // Deliberately NOT simulation_outcome(): that helper reads any final price in
+            // [0,1] and calls anything from 0.5 up a win, so a VOIDED market -- Polymarket
+            // pays 0.50 a share -- is counted as a winner. The portfolio-analysis-outcomes
+            // endpoint already refuses exactly that, on the grounds that a non-binary final
+            // price "is not a settlement of this selected outcome and must not be invented
+            // as either a win or a loss", and this page is read to set a live portfolio's
+            // parameters, so it takes the stricter of the two rules.
+            $finalPrice = $item['finalOutcomePrice'] ?? null;
+            $outcome = null;
+            if (is_numeric($finalPrice)) {
+                $finalPrice = (float) $finalPrice;
+                if ($finalPrice <= 0.005) {
+                    $outcome = 0;
+                } elseif ($finalPrice >= 0.995) {
+                    $outcome = 1;
+                }
+            }
+            if ($entry === null || $outcome === null) {
+                return true;
+            }
+            // The same spread policy the performance tables use, so a number here and a
+            // number there describe the same population.
+            if (!observation_spread_is_tradable($item)) {
+                return true;
+            }
+            $priced += 1;
+            // Bought at the entry probability and settled at 0 or 1. Gross of fees, which is
+            // the same basis the performance tables report on.
+            $pnl = $outcome === 1 ? $stake * ((1.0 / $entry) - 1.0) : -$stake;
+            $probability = (int) floor($entry * 100);
+            $shape = observation_market_shape($item);
+            $horizon = resolved_horizon_band($item);
+            $tags = simulation_taxonomy_labels($item, 'firstPolymarketTags', 'polymarketTags');
+            if ($tags === []) {
+                $tags = ['(untagged)'];
+            }
+            foreach ($tags as $tag) {
+                $key = $probability . "\x1f" . $tag . "\x1f" . $shape . "\x1f" . $horizon;
+                if (!isset($cells[$key])) {
+                    $cells[$key] = [0, 0, 0.0, 0.0];
+                }
+                $cells[$key][0] += 1;
+                $cells[$key][1] += $outcome;
+                $cells[$key][2] += $stake;
+                $cells[$key][3] += $pnl;
+            }
+            $anyKey = $probability . "\x1f" . $shape . "\x1f" . $horizon;
+            if (!isset($anyTag[$anyKey])) {
+                $anyTag[$anyKey] = [0, 0, 0.0, 0.0];
+            }
+            $anyTag[$anyKey][0] += 1;
+            $anyTag[$anyKey][1] += $outcome;
+            $anyTag[$anyKey][2] += $stake;
+            $anyTag[$anyKey][3] += $pnl;
+
+            return true;
+        };
+        foreach ($sources as [$path, $field]) {
+            stream_json_array_members($path, $field, $onRow);
+        }
+
+        // Every combination, by suffix sum rather than by re-scanning.
+        //
+        // The probability dimension is a THRESHOLD -- ">= p" -- so for one group of cells
+        // the answer at every threshold is the running total taken from the highest
+        // probability downwards. Enumerating instead, one pass over the cells per
+        // combination, is tens of thousands of passes over thousands of cells, which is the
+        // shape of a request that times out on a shared host rather than one that is slow.
+        //
+        // The four masks are the ways a portfolio can leave a dimension unset: any tag, any
+        // shape, any horizon, or a specific one of each. Each mask collapses the cells into
+        // its own groups first, so the sum is done once per group instead of once per row
+        // of the answer.
+        $rows = [];
+        $emit = static function (array $group, array $facets) use (&$rows, $minTrades): void {
+            krsort($group, SORT_NUMERIC);
+            $trades = 0;
+            $wins = 0;
+            $staked = 0.0;
+            $pnl = 0.0;
+            foreach ($group as $probability => $cell) {
+                $trades += $cell[0];
+                $wins += $cell[1];
+                $staked += $cell[2];
+                $pnl += $cell[3];
+                if ($trades < $minTrades) {
+                    continue;
+                }
+                $rows[] = $facets + [
+                    'probability' => (int) $probability,
+                    'trades' => $trades,
+                    'wins' => $wins,
+                    'accuracy' => round($wins / $trades, 4),
+                    'stakedUsdc' => round($staked, 2),
+                    'pnlUsdc' => round($pnl, 2),
+                    'returnPct' => $staked > 0 ? round(($pnl / $staked) * 100, 2) : null,
+                ];
+            }
+        };
+
+        foreach ([true, false] as $anyTagMask) {
+            foreach ([true, false] as $anyShape) {
+                foreach ([true, false] as $anyHorizon) {
+                    $groups = [];
+                    $source = $anyTagMask ? $anyTag : $cells;
+                    foreach ($source as $key => $cell) {
+                        $parts = explode("\x1f", $key);
+                        $probability = (int) $parts[0];
+                        $tag = $anyTagMask ? '*' : $parts[1];
+                        $shape = $anyShape ? '*' : ($anyTagMask ? $parts[1] : $parts[2]);
+                        $horizon = $anyHorizon ? '*' : ($anyTagMask ? $parts[2] : $parts[3]);
+                        $groupKey = $tag . "\x1f" . $shape . "\x1f" . $horizon;
+                        if (!isset($groups[$groupKey][$probability])) {
+                            $groups[$groupKey][$probability] = [0, 0, 0.0, 0.0];
+                        }
+                        $groups[$groupKey][$probability][0] += $cell[0];
+                        $groups[$groupKey][$probability][1] += $cell[1];
+                        $groups[$groupKey][$probability][2] += $cell[2];
+                        $groups[$groupKey][$probability][3] += $cell[3];
+                    }
+                    foreach ($groups as $groupKey => $group) {
+                        [$tag, $shape, $horizon] = explode("\x1f", $groupKey);
+                        $emit($group, ['tag' => $tag, 'shape' => $shape, 'horizon' => $horizon]);
+                    }
+                }
+            }
+        }
+
+        // Ranked by RETURN, because a combination that stakes ten times as much will always
+        // win on nominal profit and says nothing about the setup. The nominal figure travels
+        // with every row, which is the other half of what was asked for.
+        usort($rows, static function (array $left, array $right): int {
+            return ($right['returnPct'] ?? -999) <=> ($left['returnPct'] ?? -999);
+        });
+        $best = array_slice($rows, 0, $limit);
+        $worst = array_slice(array_reverse($rows), 0, $limit);
+
+        respond([
+            'ok' => true,
+            'scannedRows' => $scanned,
+            'pricedRows' => $priced,
+            'cells' => count($cells),
+            'combinations' => count($rows),
+            'minTrades' => $minTrades,
+            'stakeUsdc' => $stake,
+            'best' => $best,
+            'worst' => $worst,
+            'generatedAt' => gmdate('c'),
         ]);
     }
 

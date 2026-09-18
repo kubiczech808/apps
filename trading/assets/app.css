@@ -3827,3 +3827,29 @@ body.modal-open {
 .scraped-scan-scope-line {
   white-space: normal;
 }
+
+/* The Setup finder: a control row above the two ranked tables. */
+.setup-finder-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.setup-finder-status {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.setup-finder-note {
+  margin: 0 0 10px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+/* Narrower than the trade ledgers: nine short columns, none of them a market question. */
+.setup-finder-ledger table {
+  min-width: 720px;
+}

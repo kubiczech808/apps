@@ -1,6 +1,9 @@
 const state = {
   mode: "paper-conservative",
   page: "portfolios",
+  // The Setup finder's answer, loaded when its tab is opened rather than with the page.
+  setupFinder: null,
+  setupFinderBusy: false,
   botState: null,
   liveState: null,
   evaluationSort: {
@@ -311,6 +314,10 @@ const els = {
   scrapedScanScope: document.querySelector("[data-scraped-scan-scope]"),
   settingsSectionButtons: document.querySelectorAll("[data-settings-section]"),
   settingsPanels: document.querySelectorAll("[data-settings-panel]"),
+  setupFinderReport: document.querySelector("[data-setup-finder-report]"),
+  setupFinderMinTrades: document.querySelector("[data-setup-finder-min-trades]"),
+  setupFinderRun: document.querySelector("[data-setup-finder-run]"),
+  setupFinderStatus: document.querySelector("[data-setup-finder-status]"),
   calculationSourceButtons: document.querySelectorAll("[data-calculation-source]"),
   calculationMarketButtons: document.querySelectorAll("[data-calculation-market]"),
   calculationOpenButtons: document.querySelectorAll("[data-calculation-open]"),
@@ -2805,6 +2812,99 @@ function setSettingsSection(section) {
     panel.hidden = panel.dataset.settingsPanel !== state.settingsSection;
   });
   if (state.settingsSection === "portfolio-optimization") renderPortfolioOptimizationReport();
+  // Loaded when the tab is opened rather than with the page: it streams the whole resolved
+  // archive server-side, so it is not work every visit to settings should pay for.
+  if (state.settingsSection === "setup-finder" && !state.setupFinder) loadSetupFinder();
+}
+
+// Which SETUP would have made money, over every resolved market rather than over one
+// portfolio's trades.
+//
+// Asked for: "statistiky by mi meli pomoct odhalit idealni setup portfolia popr. kombinace
+// vice portfolii ... a vycislit nominalne i procentualne, jak bych na tom byl, kdybych sel
+// do kazdeho obchodu v dane kombinaci."
+//
+// The combinations are computed server-side, in one streamed pass over the archive: it is
+// 26,000 rows and does not fit in a browser response, let alone in the memory the host has.
+async function loadSetupFinder() {
+  if (state.setupFinderBusy) return;
+  state.setupFinderBusy = true;
+  const minTrades = Math.max(1, Number(els.setupFinderMinTrades?.value) || 30);
+  if (els.setupFinderStatus) els.setupFinderStatus.textContent = "Reading the resolved archive...";
+  renderSetupFinder();
+  try {
+    state.setupFinder = await fetchApiJson(`api.php?action=resolved-combinations&min_trades=${minTrades}&limit=120`);
+    if (els.setupFinderStatus) els.setupFinderStatus.textContent = "";
+  } catch (error) {
+    state.setupFinder = null;
+    if (els.setupFinderStatus) els.setupFinderStatus.textContent = `Error: ${error?.message || error}`;
+  } finally {
+    state.setupFinderBusy = false;
+    renderSetupFinder();
+  }
+}
+
+function setupFinderTable(title, rows, note) {
+  if (!rows?.length) return "";
+  return `
+    <div class="system-status-card">
+      <div class="system-status-head"><div><p class="eyebrow">Setup finder</p><h3>${escapeHtml(title)}</h3></div></div>
+      <p class="setup-finder-note">${escapeHtml(note)}</p>
+      <div class="ledger setup-finder-ledger">
+        <table>
+          <thead>
+            <tr>
+              <th>Probability</th><th>Tag</th><th>Shape</th><th>Horizon</th>
+              <th>Trades</th><th>Accuracy</th><th>Staked</th><th>P/L</th><th>Return</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${rows.map((row) => `
+              <tr>
+                <td data-label="Probability">&ge; ${escapeHtml(String(row.probability))}%</td>
+                <td data-label="Tag">${escapeHtml(row.tag === "*" ? "any" : row.tag)}</td>
+                <td data-label="Shape">${escapeHtml(row.shape === "*" ? "any" : marketShapeLabel(row.shape))}</td>
+                <td data-label="Horizon">${escapeHtml(row.horizon === "*" ? "any" : row.horizon)}</td>
+                <td data-label="Trades">${formatInteger(row.trades)}</td>
+                <td data-label="Accuracy">${row.accuracy == null ? "-" : percent(row.accuracy)}</td>
+                <td data-label="Staked">${money(Number(row.stakedUsdc))}</td>
+                <td data-label="P/L" class="${pnlClass(Number(row.pnlUsdc))}">${signedMoney(Number(row.pnlUsdc))}</td>
+                <td data-label="Return" class="${pnlClass(Number(row.returnPct))}">${row.returnPct == null ? "-" : `${row.returnPct > 0 ? "+" : ""}${row.returnPct.toFixed(1)}%`}</td>
+              </tr>
+            `).join("")}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  `;
+}
+
+function renderSetupFinder() {
+  if (!els.setupFinderReport) return;
+  const data = state.setupFinder;
+  if (!data?.ok) {
+    els.setupFinderReport.innerHTML = state.setupFinderBusy
+      ? `<p class="setup-finder-note">Reading the resolved archive...</p>`
+      : "";
+    return;
+  }
+  els.setupFinderReport.innerHTML = `
+    <div class="system-status-card">
+      <div class="system-status-head"><div><p class="eyebrow">Sample</p><h3>What this is measured on</h3></div></div>
+      <p class="setup-finder-note">
+        ${formatInteger(data.pricedRows)} resolved markets of ${formatInteger(data.scannedRows)} stored could be
+        priced -- the rest never carried a live quote, settled between 0 and 1, or had no tradable spread.
+        ${formatInteger(data.combinations)} combinations with at least ${formatInteger(data.minTrades)} trades.
+        Every row answers: if ${money(Number(data.stakeUsdc))} had been staked on every market matching it,
+        bought at the price it first quoted and settled at 0 or 1, this is what it would have returned.
+        Gross of fees.
+      </p>
+    </div>
+    ${setupFinderTable("Best combinations", data.best,
+      "Ranked by return, not by nominal profit: a combination that stakes ten times as much always wins on profit and says nothing about the setup.")}
+    ${setupFinderTable("Worst combinations", data.worst,
+      "The actionable half: what to exclude.")}
+  `;
 }
 
 function setEvaluationStatus(status) {
@@ -17404,3 +17504,10 @@ window.setInterval(() => {
   if (!isLiveMode()) return;
   requestLiveAccountSync({ quiet: true, minSeconds: LIVE_SYNC_REQUEST_MS / 1000 });
 }, LIVE_SYNC_REQUEST_MS);
+
+els.setupFinderRun?.addEventListener("click", () => {
+  // Recomputed rather than refiltered in the browser: the minimum-trades cap decides which
+  // combinations exist at all, and the archive that answers it is server-side.
+  state.setupFinder = null;
+  loadSetupFinder();
+});
