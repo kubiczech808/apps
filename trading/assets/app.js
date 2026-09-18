@@ -11882,15 +11882,25 @@ function renderBotState(botState) {
   els.portfolioRealized.textContent = signedMoney(realizedPnlDisplay);
   els.portfolioRealized.className = pnlClass(realizedPnlDisplay);
   els.portfolioRealizedPct.textContent = signedPercent(realizedPnlDisplayPct);
-  // Closed positions itself (below) always lists every trade -- only the accuracy stat
-  // stops counting ones closed before the rebase.
-  const accuracyTrades = capitalAdjustmentAt
+  // Everything about this portfolio is bounded by the rebase now, the LIST included.
+  //
+  // Reported: "stale vidim stare closed trades naparovane na paper portfolia, kde jsme si
+  // rekli, ze udelame restart na startovnich 100 USD. data zachovej pro souhrne statistiky,
+  // ale oddel je od portfolii." The accuracy stat already stopped counting them and the ROI
+  // already stopped summing them; the list still showed them, so a portfolio restarted an
+  // hour ago read as a hundred trades deep.
+  //
+  // Nothing is deleted. The trades stay in the state -- that was the condition the reset was
+  // asked for on, "nechame si je pro souhrne statistiky" -- and the Setup finder reads the
+  // resolved archive rather than these lists, so it is unaffected either way.
+  const closedSinceReset = capitalAdjustmentAt
     ? closedTrades.filter((trade) => {
-        const resolvedTime = Date.parse(trade.resolvedAt || "");
+        const resolvedTime = Date.parse(trade.resolvedAt || trade.closedAt || "");
         return Number.isFinite(resolvedTime) && resolvedTime >= Date.parse(capitalAdjustmentAt);
       })
     : closedTrades;
-  renderClosedAccuracy(accuracyTrades, closedTrades.length - accuracyTrades.length);
+  const closedBeforeReset = closedTrades.length - closedSinceReset.length;
+  renderClosedAccuracy(closedSinceReset, closedBeforeReset);
   els.portfolioOpenPl.textContent = signedMoney(openPnl);
   els.portfolioOpenPl.className = pnlClass(openPnl);
   els.portfolioOpenPlPct.textContent = signedPercent(openPnlPct);
@@ -11932,11 +11942,14 @@ function renderBotState(botState) {
     showStatus: false,
   });
   if (els.closedSummary) {
-    const closedPnl = closedTrades.reduce((sum, trade) => sum + Number(trade.realizedPnlUsdc || 0), 0);
-    els.closedSummary.textContent = `${closedTrades.length} closed / ${signedMoney(closedPnl)}`;
+    const closedPnl = closedSinceReset.reduce((sum, trade) => sum + Number(trade.realizedPnlUsdc || 0), 0);
+    // The earlier trades are named rather than silently missing: a count that dropped from
+    // 120 to 3 with no explanation is a bug report, and they are still in the data.
+    els.closedSummary.textContent = `${closedSinceReset.length} closed / ${signedMoney(closedPnl)}`
+      + (closedBeforeReset ? ` · ${closedBeforeReset} before the reset, kept for statistics` : "");
   }
   if (els.closedTrades) {
-    els.closedTrades.innerHTML = renderTradeRows(closedTrades, "Zatim zadne ukoncene paper obchody.", {
+    els.closedTrades.innerHTML = renderTradeRows(closedSinceReset, "Zatim zadne ukoncene paper obchody.", {
       tableKey: "closed",
       showStatus: true,
     });

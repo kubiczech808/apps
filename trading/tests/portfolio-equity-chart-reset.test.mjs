@@ -143,3 +143,39 @@ test("the boundary and the balance both reach the browser", () => {
   assert.match(APP, /since: capitalAdjustmentAt,/);
   assert.match(APP, /sinceEquity: portfolio\.capitalAdjustmentEquityUsdc \?\? portfolioState\.capitalAdjustmentEquityUsdc \?\? null,/);
 });
+
+// The same boundary, applied to the LIST rather than to the statistic.
+//
+// Reported: "stale vidim stare closed trades naparovane na paper portfolia, kde jsme si
+// rekli, ze udelame restart na startovnich 100 USD. data zachovej pro souhrne statistiky,
+// ale oddel je od portfolii."
+//
+// The accuracy stat had already stopped counting them and the overview ROI had already
+// stopped summing them. The list still showed them, so a portfolio restarted an hour ago
+// read as a hundred trades deep -- the last screen still describing the old account.
+test("closed trades from before the reset leave the portfolio's list", () => {
+  const source = readFileSync(new URL("../assets/app.js", import.meta.url), "utf8");
+  const start = source.indexOf("  const closedSinceReset = capitalAdjustmentAt");
+  assert.ok(start > 0, "the bounded set must exist");
+
+  // Bounded on resolvedAt OR closedAt: a position sold by the certainty close or a stop has
+  // a closedAt and no resolvedAt, and dropping those would hide this pass's own trades.
+  const block = source.slice(start, start + 600);
+  assert.match(block, /Date\.parse\(trade\.resolvedAt \|\| trade\.closedAt \|\| ""\)/);
+  assert.match(block, /resolvedTime >= Date\.parse\(capitalAdjustmentAt\)/);
+
+  // The list and the summary both read the bounded set -- one without the other is a count
+  // that disagrees with the rows underneath it.
+  assert.match(source, /renderTradeRows\(closedSinceReset, "Zatim zadne ukoncene paper obchody\."/);
+  assert.match(source, /const closedPnl = closedSinceReset\.reduce\(/);
+
+  // And the earlier trades are NAMED rather than silently missing. They are still in the
+  // state, which is the condition the reset was asked for on.
+  assert.match(source, /before the reset, kept for statistics/);
+  assert.match(source, /const closedBeforeReset = closedTrades\.length - closedSinceReset\.length;/);
+
+  // A portfolio that was never reset still lists everything: capitalAdjustmentAt absent
+  // means the unbounded set, not an empty one.
+  assert.match(source, /const closedSinceReset = capitalAdjustmentAt\n\s+\? closedTrades\.filter/);
+  assert.match(source, /\n\s+: closedTrades;\n\s+const closedBeforeReset/);
+});
