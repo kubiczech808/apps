@@ -1,0 +1,36 @@
+name: Trading Esports Supply Gap Diagnosis
+
+# READ-ONLY, manual only. Public GETs against Gamma and our own published catalogue. No
+# secrets, no writes, no orders.
+#
+# Settles one question with two possible answers: the candidate pool for "70-80 esports"
+# fell from 27 unique markets per pass on 12.9. to 7 on 17.9., and a third of the account
+# now sits in cash. Either fewer esports matches are running (nothing we change helps), or
+# the markets exist and our scope is losing them.
+on:
+  workflow_dispatch:
+    inputs:
+      horizon_hours:
+        description: "Resolution horizon in hours"
+        required: false
+        default: "24"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Compare what exists with what we keep
+        working-directory: trading
+        env:
+          TRADING_HOST: https://osobnizkusenosti.cz/trading
+          PROBE_HORIZON_HOURS: ${{ inputs.horizon_hours || '24' }}
+        run: node tools/esports-supply-gap-probe.mjs
