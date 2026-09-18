@@ -325,3 +325,45 @@ test("the fold refuses to store an empty result over a good one", () => {
   assert.ok(block.indexOf("priced") < block.indexOf("trading_storage_resolved_stats_replace"),
     "and check before it writes, not after");
 });
+
+test("BAIT: every function the storage-admin operations call is declared at the top level", () => {
+  // How the first fold failed on production, with all eleven tests above passing:
+  //
+  //   HTTP 502 {"ok":false,"error":"Call to undefined function resolved_stats_accumulate()"}
+  //
+  // PHP hoists top-level function declarations at compile time, so they can be called from
+  // anywhere in the file. A declaration nested inside a conditional block is NOT hoisted --
+  // it exists only once execution reaches it, and the storage-admin handler runs and responds
+  // hundreds of lines earlier. The accumulator had been placed beside the endpoint that used
+  // to hold it, which is inside such a block.
+  //
+  // The offline tests could not see it: they lift a function's text and execute it standalone,
+  // so where it sits in the file is exactly the one thing they cannot check. This does.
+  const adminStart = API.indexOf("$operation === 'refresh-resolved-stats'");
+  assert.ok(adminStart > 0, "the fold operation must be findable");
+  const admin = API.slice(adminStart, API.indexOf("if ($operation === 'row-density')", adminStart));
+
+  // Every function this file declares, and whether its declaration starts in column 0.
+  const declarations = new Map();
+  // [ \t] rather than \s: \s matches a newline, so \s* would swallow blank lines before a
+  // column-zero declaration and report it as indented.
+  for (const match of API.matchAll(/^([ \t]*)function (\w+)\s*\(/gm)) {
+    const [, indent, name] = match;
+    // A name declared both ways is still reachable; only a name declared ONLY indented is not.
+    declarations.set(name, (declarations.get(name) ?? true) && indent.length === 0);
+  }
+  assert.ok(declarations.size > 50, `the file's functions must have been found: ${declarations.size}`);
+
+  const called = new Set();
+  for (const match of admin.matchAll(/(?<![>$:\w])([a-z_]\w*)\s*\(/g)) {
+    if (declarations.has(match[1])) called.add(match[1]);
+  }
+  assert.ok(called.has("resolved_stats_accumulate"),
+    `the operation must be seen calling the accumulator: ${[...called].join(", ")}`);
+
+  for (const name of called) {
+    assert.equal(declarations.get(name), true,
+      `${name}() is called by the fold operation but declared inside a block, so PHP does not `
+      + "hoist it and the call fails at runtime with 'undefined function'");
+  }
+});
