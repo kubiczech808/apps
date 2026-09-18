@@ -138,10 +138,25 @@ async function main() {
   console.log(`   ... dip price outside the buy band ${outsideBand}`);
   console.log(`   ... WOULD BE READY                 ${ready}`);
 
+  // Volume is printed because it is the strongest remaining suspect and it is invisible
+  // everywhere else. dipEntryCandidateRows turns a hit that recorded no volume into a row
+  // with volumeUsdc = 0, and the worker stores null whenever its plan had none -- so a dip
+  // can be recorded, look ready on every other gate, and then fail a liquidity floor it
+  // never had a number for.
+  const floor = num(match.config?.minLiquidityUsdc);
+  console.log(`\n   portfolio liquidity floor: ${floor == null ? "none set (the bot default applies)" : `$${floor}`}`);
   for (const hit of readyRows.slice(0, 10)) {
-    console.log(`      ${String(hit.question || hit.slug || "?").slice(0, 60).padEnd(60)}`
+    const volume = num(hit.volumeUsdc);
+    console.log(`      ${String(hit.question || hit.slug || "?").slice(0, 52).padEnd(52)}`
       + ` at ${(num(hit.price) * 100).toFixed(1)}%  opened ${hit.openProbability != null ? `${(num(hit.openProbability) * 100).toFixed(0)}%` : "?"}`
-      + `  ends ${String(hit.endDate || "?").slice(0, 16)}`);
+      + `  ends ${String(hit.endDate || "?").slice(0, 16)}`
+      + `  vol ${volume == null ? "NOT RECORDED -> becomes 0" : `$${volume.toFixed(0)}`}`);
+  }
+  const noVolume = readyRows.filter((hit) => num(hit.volumeUsdc) == null).length;
+  if (noVolume) {
+    console.log(`\n   ${noVolume} of ${readyRows.length} ready dip(s) recorded NO volume. The candidate row is`);
+    console.log("   built with volumeUsdc = 0 for those, so every liquidity floor rejects them --");
+    console.log("   a dip that was caught correctly and can never be traded.");
   }
   if (!ready) {
     console.log("\n   Nothing is ready, and the line above says which gate consumed them. If it is");
