@@ -298,7 +298,7 @@ test('major LH and LL override short internal USDJPY-like reactions', () => {
 test('structure horizons and pivot widths scale with timeframe', () => {
   assert.deepEqual(PRICE_ACTION_STRUCTURE_PROFILES, {
     '1h': { historyDays: 60, pivotLookback: 48, minCandles: 500, zoneMaxAgeCandles: 1440 },
-    '4h': { historyDays: 180, pivotLookback: 42, minCandles: 250, zoneMaxAgeCandles: 1080 },
+    '4h': { historyDays: 180, pivotLookback: 96, minCandles: 250, zoneMaxAgeCandles: 1080 },
     '1d': { historyDays: 400, pivotLookback: 30, minCandles: 160, zoneMaxAgeCandles: 400 },
   })
   assert.ok(PRICE_ACTION_STRUCTURE_PROFILES['1d'].historyDays > 365)
@@ -877,8 +877,8 @@ test('price-action matrix covers BTCUSD and major FX pairs on 1H, 4H and 1D', as
   assert.equal(matrix.assets[0].trends['1h'].structure.lookback, 48)
   assert.equal(matrix.assets[0].trends['1h'].structure.activeLookback, 12)
   assert.equal(matrix.assets[0].trends['1h'].structure.historyDays, 60)
-  assert.equal(matrix.assets[0].trends['4h'].structure.lookback, 42)
-  assert.equal(matrix.assets[0].trends['4h'].structure.activeLookback, 11)
+  assert.equal(matrix.assets[0].trends['4h'].structure.lookback, 96)
+  assert.equal(matrix.assets[0].trends['4h'].structure.activeLookback, 24)
   assert.equal(matrix.assets[0].trends['4h'].structure.historyDays, 180)
   assert.equal(matrix.assets[0].trends['4h'].structure.zoneMaxAgeCandles, 1080)
   assert.ok(matrix.assets[0].trends['4h'].zones)

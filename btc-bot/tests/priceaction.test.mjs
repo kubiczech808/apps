@@ -139,6 +139,13 @@ test('4h buckets align to the UTC clock and drop the incomplete tail', () => {
   assert.equal(fourHour[0].close, hourly[3].close)
   assert.equal(fourHour[0].high, Math.max(...hourly.slice(0, 4).map((c) => c.high)))
   assert.equal(fourHour[0].low, Math.min(...hourly.slice(0, 4).map((c) => c.low)))
+
+  const chartFourHour = aggregate(hourly, 4, { includePartial: true })
+  assert.deepEqual(
+    chartFourHour.map((bucket) => new Date(bucket.time).getUTCHours()),
+    [0, 4, 8]
+  )
+  assert.equal(chartFourHour.at(-1).close, hourly.at(-1).close)
 })
 
 test('a candle that has not closed yet is dropped', () => {

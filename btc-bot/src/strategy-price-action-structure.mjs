@@ -3,7 +3,7 @@ import { ceilPrice, floorPrice, normalizeCandlePrices, roundPrice } from './pric
 import { buildFvgSupplyDemandZones, candleSignal, marketStructure } from './priceaction.mjs'
 
 export const PRICE_ACTION_STRUCTURE_ID = 'price-action-structure-v1'
-export const PRICE_ACTION_MATRIX_SCHEMA = 23
+export const PRICE_ACTION_MATRIX_SCHEMA = 24
 export const PRICE_ACTION_CHART_CANDLE_LIMITS = {
   '1h': 8760,
   '4h': 2190,
@@ -26,7 +26,7 @@ export const DEFAULT_PRICE_ACTION_STRUCTURE = {
 // the smaller reactions from which an entry can actually be refined.
 export const PRICE_ACTION_STRUCTURE_PROFILES = {
   '1h': { historyDays: 60, pivotLookback: 48, minCandles: 500, zoneMaxAgeCandles: 1440 },
-  '4h': { historyDays: 180, pivotLookback: 42, minCandles: 250, zoneMaxAgeCandles: 1080 },
+  '4h': { historyDays: 180, pivotLookback: 96, minCandles: 250, zoneMaxAgeCandles: 1080 },
   '1d': { historyDays: 400, pivotLookback: 30, minCandles: 160, zoneMaxAgeCandles: 400 },
 }
 
@@ -1377,12 +1377,24 @@ const candlesInHistory = (candles, historyDays) => {
 
 const timeframeCandles = async ({ asset, timeframe, btcHourly, fetchImpl, now, logger }) => {
   if (asset.symbol === 'BTCUSD') {
-    const candles = timeframe.id === '1d' ? aggregate(btcHourly, 24) : aggregate(btcHourly, timeframe.hours)
-    return { source: 'bot-market', candles }
+    const factor = timeframe.id === '1d' ? 24 : timeframe.hours
+    return {
+      source: 'bot-market',
+      candles: aggregate(btcHourly, factor),
+      // Trading decisions only see closed buckets. The chart gets the same
+      // current bucket with its latest closed hourly price, so its right edge
+      // stays aligned with the dashboard's shared current-price line.
+      chartCandles: aggregate(btcHourly, factor, { includePartial: true }),
+    }
   }
   if (timeframe.id === '4h') {
     const { source, candles, failures } = await fetchFxCandles({ asset, timeframeId: '1h', fetchImpl, now, logger })
-    return { source, candles: aggregate(candles, 4), failures }
+    return {
+      source,
+      candles: aggregate(candles, 4),
+      chartCandles: aggregate(candles, 4, { includePartial: true }),
+      failures,
+    }
   }
   return fetchFxCandles({ asset, timeframeId: timeframe.id, fetchImpl, now, logger })
 }
@@ -1440,7 +1452,7 @@ export const buildPriceActionMatrix = async ({
       const profile = PRICE_ACTION_STRUCTURE_PROFILES[timeframe.id]
       const analysisCandles = candlesInHistory(result.candles, profile.historyDays)
       const chartCandleLimit = PRICE_ACTION_CHART_CANDLE_LIMITS[timeframe.id]
-      const chartCandles = result.candles.slice(-chartCandleLimit)
+      const chartCandles = (result.chartCandles ?? result.candles).slice(-chartCandleLimit)
       // A zone must remain visible for the full structural context of its own
       // timeframe. The former universal 400-candle window dropped valid 4H
       // levels after roughly 67 days while the trend still used 180 days.
