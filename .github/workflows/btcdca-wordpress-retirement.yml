@@ -75,7 +75,7 @@ jobs:
           test -f btcdca-static/homepage/index.html
           ! grep -Eqi '<\?php|learn center|latest from the blog|wp-content|wordpress' btcdca-static/homepage/index.html
           grep -Fq 'BTC DCA static homepage' btcdca-static/homepage/index.html
-          grep -Fq 'RewriteRule ^app/?$ /login-user.php [R=302,L,NE]' btcdca-static/seo/.htaccess
+          grep -Fq 'RewriteRule ^app/?$ /app/index.php [R=302,L,NE]' btcdca-static/seo/.htaccess
 
       - name: Audit existing account and application links
         run: |
