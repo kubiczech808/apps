@@ -146,7 +146,22 @@ def main() -> None:
         try:
             for destination, candidates in MEDIA.items():
                 local = temporary_root / destination
-                copied_media[destination] = download_any(ftp, candidates, local)
+                try:
+                    copied_media[destination] = download_any(ftp, candidates, local)
+                except RuntimeError:
+                    # After WordPress isolation the original upload may no longer
+                    # be reachable, but a previous successful stage already
+                    # preserved the exact guide media under this static path.
+                    existing = f"www/assets/img/guides/{destination}"
+                    try:
+                        with local.open("wb") as handle:
+                            ftp.retrbinary(f"RETR {existing}", handle.write)
+                    except ftplib.all_errors as exc:
+                        raise RuntimeError(
+                            f"Required guide media is unavailable: {', '.join(candidates)}; "
+                            f"static fallback {existing} is also unavailable."
+                        ) from exc
+                    copied_media[destination] = existing
                 upload(ftp, local, f"www/assets/img/guides/{destination}")
 
             stage_brand_logo(ftp, temporary_root)
