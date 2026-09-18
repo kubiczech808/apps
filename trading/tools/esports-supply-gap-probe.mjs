@@ -57,18 +57,35 @@ function marketProbabilities(market) {
 
 const endsAt = (row) => Date.parse(row.endDate || row.endDateIso || row.gameStartTime || "");
 
+// EVENTS, not markets, and the markets taken from inside them.
+//
+// The first version asked /markets?tag_slug=esports and got 1200 rows -- exactly the page
+// cap -- of which none ended within 24 hours, while our own catalogue held 107 esports
+// markets that did. /markets does not filter on tag_slug, so that query was the whole
+// unfiltered market list, ordered in a way that put nothing relevant in the first 1200.
+// The tag lives on the event, which is also where the rest of this codebase reads it.
 async function gammaEsports() {
-  // Paged, because one page is 100 and a busy esports day is more than that. Closed markets
-  // are excluded at the source: a market that already resolved is not supply.
-  const rows = [];
-  for (let offset = 0; offset < 1200; offset += 100) {
-    const page = await json(`${GAMMA}/markets?closed=false&archived=false&limit=100&offset=${offset}`
-      + `&tag_slug=esports&order=endDate&ascending=true`);
-    if (!Array.isArray(page) || !page.length) break;
-    rows.push(...page);
-    if (page.length < 100) break;
+  const markets = [];
+  let cappedOut = true;
+  for (let offset = 0; offset < 1500; offset += 100) {
+    const page = await json(`${GAMMA}/events?closed=false&archived=false&limit=100&offset=${offset}`
+      + `&tag_slug=esports`);
+    if (!Array.isArray(page) || !page.length) {
+      cappedOut = false;
+      break;
+    }
+    for (const event of page) {
+      for (const market of (Array.isArray(event.markets) ? event.markets : [])) {
+        // The event carries the end date on a fixture; the market may not.
+        markets.push({ ...market, endDate: market.endDate || event.endDate, eventSlug: event.slug });
+      }
+    }
+    if (page.length < 100) {
+      cappedOut = false;
+      break;
+    }
   }
-  return rows;
+  return { markets, cappedOut };
 }
 
 async function main() {
@@ -80,9 +97,12 @@ async function main() {
 
   // 1. What the world has.
   let gamma = [];
+  let cappedOut = false;
+  let gammaFailed = null;
   try {
-    gamma = await gammaEsports();
+    ({ markets: gamma, cappedOut } = await gammaEsports());
   } catch (error) {
+    gammaFailed = error.message;
     console.log(`Gamma unreachable: ${error.message}`);
   }
   const open = gamma.filter((row) => row.closed !== true && row.active !== false);
@@ -99,7 +119,7 @@ async function main() {
   const liquidityOf = (row) => num(row.liquidityNum) ?? num(row.liquidity) ?? 0;
 
   console.log("== what Polymarket has right now (esports)");
-  console.log(`   open esports markets                  ${open.length}`);
+  console.log(`   open esports markets                  ${open.length}${cappedOut ? "  (PAGE CAP HIT -- undercounted)" : ""}`);
   console.log(`   ... ending within ${String(HORIZON_HOURS).padStart(2)} h                 ${soon.length}`);
   console.log(`   ... and priced inside the band        ${inBand.length}`);
   console.log(`   ... and 24h volume >= $100            ${inBand.filter((row) => volumeOf(row) >= 100).length}`);
@@ -136,7 +156,17 @@ async function main() {
 
     // The comparison, stated rather than left to be done by eye.
     console.log("\n== the verdict");
-    if (!inBand.length && !heldInBand.length) {
+    // A measurement that contradicts itself is not a finding. The first run of this probe
+    // announced "THE WORLD: the shortage is in the supply" off a Gamma query that had
+    // returned zero markets ending within 24 hours while our own catalogue held 107 that
+    // did -- a broken query stated as a confident conclusion, which is worse than no answer.
+    if (gammaFailed) {
+      console.log(`   INCONCLUSIVE: Gamma could not be read (${gammaFailed}).`);
+    } else if (soon.length < held.length) {
+      console.log(`   INCONCLUSIVE: Gamma reports ${soon.length} esports market(s) ending within`);
+      console.log(`   ${HORIZON_HOURS} h while our own catalogue holds ${held.length}. We cannot hold more than`);
+      console.log("   exists, so the Gamma query is wrong and no conclusion may be drawn from it.");
+    } else if (!inBand.length && !heldInBand.length) {
       console.log("   Neither Gamma nor our catalogue has esports markets in this band and horizon.");
       console.log("   THE WORLD: there is nothing to trade right now. No setting we change helps.");
     } else if (heldInBand.length >= inBand.length * 0.8) {
