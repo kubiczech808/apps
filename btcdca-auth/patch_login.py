@@ -34,21 +34,12 @@ google_block = """    <?php
             google.accounts.id.initialize({
               client_id: <?= json_encode($btcdcaGoogleClientId, JSON_UNESCAPED_SLASHES); ?>,
               callback: function (response) {
-                if (!response || !response.credential) {
-                  return;
-                }
+                if (!response || !response.credential) return;
                 document.getElementById('btcdca-google-login-credential').value = response.credential;
                 document.getElementById('btcdca-google-login-form').submit();
               }
             });
-            google.accounts.id.renderButton(document.getElementById('btcdca-google-login-button'), {
-              theme: 'outline',
-              size: 'large',
-              type: 'standard',
-              text: 'continue_with',
-              shape: 'rectangular',
-              width: 360
-            });
+            google.accounts.id.renderButton(document.getElementById('btcdca-google-login-button'), { theme: 'outline', size: 'large', type: 'standard', text: 'continue_with', shape: 'rectangular', width: 360 });
           }
           window.addEventListener('load', renderGoogleButton);
         }());
@@ -93,18 +84,15 @@ if "btcdca-google-token-login" not in html:
         raise SystemExit("Could not find login form in login-user.php")
     html = html.replace(marker, block + "    " + marker, 1)
 
-html = html.replace(
-    'Don\'t have an account? <a href="https://www.btc-dca.com/dca-calculator.php">Start with the Calculator →</a>',
-    'Don\'t have an account? <a href="/signup-user/">Create a free account →</a>',
-)
-html = html.replace(
-    'Don\'t have an account? <a href="dca-calculator.php">Start with the Calculator →</a>',
-    'Don\'t have an account? <a href="/signup-user/">Create a free account →</a>',
-)
+html = html.replace('Don\'t have an account? <a href="https://www.btc-dca.com/dca-calculator.php">Start with the Calculator →</a>', 'Don\'t have an account? <a href="/signup-user/">Create a free account →</a>')
+html = html.replace('Don\'t have an account? <a href="dca-calculator.php">Start with the Calculator →</a>', 'Don\'t have an account? <a href="/signup-user/">Create a free account →</a>')
 
 html = html.replace('action="login-user.php"', 'action="/login-user/"')
+html = html.replace('action="login-user"', 'action="/login-user/"')
 html = html.replace('action="btcdca-google-token-login.php"', 'action="/btcdca-google-token-login/"')
+html = html.replace('action="btcdca-google-token-login"', 'action="/btcdca-google-token-login/"')
 html = html.replace('href="signup-user.php"', 'href="/signup-user/"')
+html = html.replace('href="signup-user"', 'href="/signup-user/"')
 html = html.replace('href="forgot-password.php"', 'href="/forgot-password/"')
 html = html.replace('href="dca-calculator.php"', 'href="/dca-calculator/"')
 html = html.replace('href="btcdca-google-login.php?flow=login"', 'href="/btcdca-google-login/?flow=login"')
