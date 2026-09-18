@@ -346,6 +346,18 @@ jobs:
             const armed = String(state.mode || "") === "live";
             console.log(`\n   ${armed ? "ARMED" : "SHADOW"}: the running worker reports mode=${state.mode || "(none)"}`
               + `${armed ? "" : " -- a reached stop is logged and NOTHING is sold"}`);
+
+            // Last, deliberately. The dip block sits two hundred lines up behind a page of
+            // events, so reading it back through the Actions log API meant pulling seventy
+            // lines of settlement history every time -- and in practice it went unread, which
+            // is how "no dip recorded for nine hours" stayed unexplained. The one number that
+            // separates "the watch went stale on the Pi" from "no favourite actually fell"
+            // belongs where a short tail always reaches it.
+            const dipNow = Array.isArray(state.dipEntryWatch) ? state.dipEntryWatch : [];
+            const dipTagged = dipNow.filter((plan) => Array.isArray(plan.tags) && plan.tags.length > 0).length;
+            console.log(`   DIP WATCH: ${dipNow.length} plan(s) followed right now, `
+              + `${dipTagged} carrying tags, mode ${state.dipEntryMode || "(off)"}, `
+              + `error ${text(state.dipEntryError)}`);
           ' "$state" "$MARKET_FILTER"
 
       - name: Report the journal

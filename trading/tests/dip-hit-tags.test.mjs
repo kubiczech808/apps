@@ -179,3 +179,19 @@ test("the probe reports whether the watch plans carry tags at all", () => {
   assert.match(probe, /Array\.isArray\(plan\?\.tags\) && plan\.tags\.length > 0/,
     "an empty array must count as untagged, not as tagged");
 });
+
+test("the worker's own dip watch size is reported where a short read reaches it", () => {
+  // This cost real time tonight. The dip block sits two hundred lines up in the status
+  // output, behind a page of settlement events, so pulling it back through the Actions log
+  // API meant fetching seventy lines of history every time -- and it went unread. The one
+  // number that separates "the watch went stale on the Pi" from "no favourite actually
+  // fell" has to be at the end, where a ten-line tail finds it.
+  const status = readFileSync(
+    new URL("../../.github/workflows/trading-rpi-live-exit-worker-status.yml", import.meta.url), "utf8");
+  assert.match(status, /DIP WATCH: \$\{dipNow\.length\} plan\(s\) followed right now/);
+  const summary = status.slice(0, status.indexOf("- name: Report the journal"));
+  assert.ok(summary.lastIndexOf("DIP WATCH") > summary.lastIndexOf("ARMED"),
+    "it must come last in the state summary, not before the event list");
+  assert.match(status, /\$\{dipTagged\} carrying tags/,
+    "and say how many carry tags, which is the fix's own evidence on the Pi");
+});
