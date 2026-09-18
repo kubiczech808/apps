@@ -73,7 +73,11 @@ async function main() {
   // run, which is the authoritative answer to "why did nothing pass" -- reading it beats a
   // fourth theory.
   try {
-    const log = await json(`api.php?action=portfolio-run-log&strategy_id=${encodeURIComponent(match.id)}&page_size=40`);
+    // 300 rather than 40. The bot runs about every five minutes, so forty rows reach back
+    // barely three hours -- and the dips this is trying to explain were recorded at 11:37.
+    // A window that stops short of the event reports "no eligible runs" for a day in which
+    // there were some, which is the most confident kind of wrong answer.
+    const log = await json(`api.php?action=portfolio-run-log&strategy_id=${encodeURIComponent(match.id)}&page_size=300`);
     const records = Array.isArray(log?.records) ? log.records : [];
     console.log(`\n== the bot's own run log (${records.length} of ${log?.total ?? "?"} rows)`);
     if (records.length) {
@@ -94,6 +98,30 @@ async function main() {
       // The shape is printed rather than the absence reported, so the next run reads a
       // field name instead of trying another one.
       console.log(`   no skip reasons on these rows; newest row: ${JSON.stringify(records[0]).slice(0, 500)}`);
+    }
+
+    // Did a run EVER find something, and when. The worker's journal shows six dips recorded
+    // at 11:26-11:37 on 2026-09-18, and no position was opened from any of them -- which the
+    // gate counts above cannot explain, because they are applied to hits as they stand NOW,
+    // hours later, when every one of those matches has ended. What decides is what the bot
+    // saw at the time, and the run log is the only record of that.
+    const eligible = records.filter((row) => num(row?.eligibleCount) > 0);
+    const acted = records.filter((row) => String(row?.action ?? "") !== "SKIP");
+    const evaluated = records.map((row) => num(row?.evaluatedCount) ?? 0);
+    console.log(`   runs retained: ${records.length}`
+      + `, evaluated per run: ${evaluated.length ? `${Math.min(...evaluated)}-${Math.max(...evaluated)}` : "?"}`);
+    console.log(`   runs with eligibleCount > 0: ${eligible.length}`
+      + `${eligible.length ? ` (newest ${String(eligible[0].runAt).slice(0, 16)})` : ""}`);
+    console.log(`   runs that did anything but SKIP: ${acted.length}`
+      + `${acted.length ? ` (newest ${String(acted[0].runAt).slice(0, 16)} ${acted[0].action})` : ""}`);
+    if (records.length) {
+      console.log(`   oldest retained run: ${String(records[records.length - 1].runAt).slice(0, 16)}`
+        + `, newest: ${String(records[0].runAt).slice(0, 16)}`);
+    }
+    if (records.length && !eligible.length) {
+      console.log("   Not one retained run found a single eligible candidate. If dips WERE");
+      console.log("   recorded inside this window, the loss is between the recorded hit and");
+      console.log("   strategyEligibleCandidates -- not in the shortlist the gates below count.");
     }
   } catch (error) {
     console.log(`\n== the bot's own run log: could not read (${String(error.message).slice(0, 200)})`);
