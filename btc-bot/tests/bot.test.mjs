@@ -225,6 +225,27 @@ test('a complete PA setup places a bracketed limit order before its entry is hit
   assert.deepEqual(calls.at(-1), ['cancel', 'pending-1'])
 })
 
+test('a pending PA order may carry TP1 alone and leave the remainder to structure', async () => {
+  const calls = []
+  const executor = { placeOrder: async (order) => { calls.push(order); return { ...order, id: 'pending-tp1', status: 'open' } } }
+  const profile = {
+    status: 'watch', mode: 'screening', side: 'short', zoneHit: false,
+    entry: 159.711, stop: 160.426, tp1: 152.881, tp2: null, weightedTarget: 152.881,
+    rewardRisk: 2.5, minRewardRisk: 2, riskPct: 1, zone: { firstTime: START },
+    gates: [{ id: 'trend', passed: true }, { id: 'zone', passed: false }, { id: 'pullback', passed: false }, { id: 'rr', passed: true }],
+  }
+  const placed = await placePendingPriceActionOrders({
+    executor,
+    matrix: { assets: [{ symbol: 'USDJPY', trends: { '1h': { asOf: START, tradeProfile: profile } } }] },
+    trades: [], equitySats: 1_000_000, btcPrice: 80_000,
+    settings: { enabled: true, risk: { market: 'futures', riskPct: 1, feeRate: 0.0006, minMarginSats: 1 }, priceActionStructure: { riskPct: 1 } },
+  })
+
+  assert.equal(placed[0].action, 'placed')
+  assert.equal(calls[0].takeProfit, 152.881)
+  assert.equal(calls[0].tp2, null)
+})
+
 test('price-action invalidation closes a position and retires pre-protocol paper trades', async () => {
   const calls = []
   const executor = {

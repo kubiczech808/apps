@@ -116,6 +116,12 @@ const signedSats = (value) => {
   return { text, className: rounded > 0 ? 'pos' : rounded < 0 ? 'neg' : '' }
 }
 
+const signedUsd = (value) => {
+  if (!Number.isFinite(value)) return { text: '–', className: '' }
+  const text = `${value > 0 ? '+' : value < 0 ? '−' : ''}$${nf(2).format(Math.abs(value))}`
+  return { text, className: value > 0 ? 'pos' : value < 0 ? 'neg' : '' }
+}
+
 const el = (tag, attributes = {}, children = []) => {
   const node = SVG_TAGS.has(tag)
     ? document.createElementNS(SVG_NS, tag)
@@ -1154,9 +1160,22 @@ const chartZones = (item, type) => {
       .map((candidate) => candidate.zone)
     : []
   const targetZone = profile?.tp2Zone?.type === type ? [profile.tp2Zone] : []
+  const activePositionZones = (state?.positions?.running ?? [])
+    .filter((position) =>
+      position.strategyId === 'price-action-structure-v1' &&
+      position.assetSymbol === selectedAssetChart.symbol &&
+      position.timeframeId === selectedAssetChart.timeframeId
+    )
+    .map((position) => {
+      if (position.entryZone?.type === type) return { ...position.entryZone, activePositionZone: true }
+      const zonePool = type === 'demand' ? item?.zones?.unfilledDemand : item?.zones?.unfilledSupply
+      const matchingZone = (zonePool ?? []).find((zone) => position.entry >= zone.low && position.entry <= zone.high)
+      return matchingZone ? { ...matchingZone, activePositionZone: true } : null
+    })
   const seen = new Set()
-  return [...plannedEntries, ...targetZone]
-    .filter((zone) => zone && !zone.filledByOwnTimeframeClose && !zone.invalidatedByOwnTimeframeClose && !Number.isFinite(zone.firstTouchAt))
+  return [...plannedEntries, ...targetZone, ...activePositionZones]
+    .filter((zone) => zone && (zone.activePositionZone ||
+      (!zone.filledByOwnTimeframeClose && !zone.invalidatedByOwnTimeframeClose && !Number.isFinite(zone.firstTouchAt))))
     .filter((zone) => Number.isFinite(zone.low) && Number.isFinite(zone.high) && zone.low > 0 && zone.high > 0 && zone.high >= zone.low)
     .filter((zone) => {
       const key = `${zone.type}:${zone.low}:${zone.high}:${zone.firstTime ?? zone.firstIndex ?? ''}`
@@ -2062,28 +2081,93 @@ const renderOpen = () => {
   }
 }
 
+const priceActionPositionItem = (position) => {
+  const asset = state?.priceActionMatrix?.assets?.find((candidate) => candidate.symbol === position.assetSymbol)
+  return asset?.trends?.[position.timeframeId] ?? null
+}
+
+const priceActionPositionPrice = (position) => {
+  const asset = state?.priceActionMatrix?.assets?.find((candidate) => candidate.symbol === position.assetSymbol)
+  return assetCurrentPrice(asset) ?? priceActionPositionItem(position)?.price ?? position.markPrice ?? null
+}
+
+const priceActionUsdPnl = (position, target, quantityUsd) => {
+  if (![position?.entry, target, quantityUsd].every(Number.isFinite)) return null
+  const direction = position.side === 'long' ? 1 : -1
+  return quantityUsd * ((target - position.entry) / position.entry) * direction
+}
+
+const priceActionLevelCell = ({ label, position, target, quantityUsd, completed = false }) => {
+  if (!Number.isFinite(target)) return el('td', { text: '–' })
+  const movePct = ((target - position.entry) / position.entry) * (position.side === 'long' ? 100 : -100)
+  const result = signedUsd(priceActionUsdPnl(position, target, quantityUsd))
+  return el('td', {}, [
+    el('div', { className: 'pa-level-price', text: `${label} ${quotePrice(target)}` }),
+    completed
+      ? el('div', { className: 'pa-level-detail', text: 'splněno · 50 %' })
+      : el('div', { className: `pa-level-detail ${result.className}`, text: `${signedPct(movePct).text} · ${result.text}` }),
+  ])
+}
+
+const priceActionTargetsCell = (position) => {
+  const total = position.quantityUsd
+  const remaining = position.remainingQuantityUsd ?? total
+  const half = Number.isFinite(total) ? total / 2 : null
+  const tp1 = position.tp1 ?? position.takeProfit
+  const tp2 = Number.isFinite(position.tp2) ? position.tp2 : null
+  const contents = []
+  if (Number.isFinite(tp1)) {
+    const tp1Pnl = signedUsd(priceActionUsdPnl(position, tp1, position.tp1Taken ? half : Math.min(remaining, half)))
+    const tp1Move = ((tp1 - position.entry) / position.entry) * (position.side === 'long' ? 100 : -100)
+    contents.push(el('div', { className: 'pa-level-price', text: `TP1 ${quotePrice(tp1)} · 50 %` }))
+    contents.push(el('div', {
+      className: `pa-level-detail ${tp1Pnl.className}`,
+      text: position.tp1Taken ? 'splněno' : `${signedPct(tp1Move).text} · ${tp1Pnl.text}`,
+    }))
+  }
+  if (Number.isFinite(tp2)) {
+    const tp2Pnl = signedUsd(priceActionUsdPnl(position, tp2, remaining - (position.tp1Taken ? 0 : half)))
+    const tp2Move = ((tp2 - position.entry) / position.entry) * (position.side === 'long' ? 100 : -100)
+    contents.push(el('div', { className: 'pa-level-price', text: `TP2 ${quotePrice(tp2)} · 50 %` }))
+    contents.push(el('div', { className: `pa-level-detail ${tp2Pnl.className}`, text: `${signedPct(tp2Move).text} · ${tp2Pnl.text}` }))
+  } else {
+    contents.push(el('div', { className: 'pa-level-detail', text: 'zbytek: struktura / SL' }))
+  }
+  return el('td', {}, contents)
+}
+
 const renderPriceActionOpen = (body) => {
   setPanelTitle('panel-open-title', 'Otevřené price-action obchody')
-  setTableHead('panel-open', ['Otevřeno', 'Asset', 'TF', 'Směr', 'Entry', 'SL', 'TP', 'P/L'])
+  setTableHead('panel-open', ['Otevřeno', 'Asset', 'TF', 'Směr', 'Objem', 'Entry', 'Aktuální cena', 'SL', 'TP1 / TP2', 'P/L'])
   $('flatten').hidden = false
   const rows = (state?.positions?.running || []).filter((position) => position.strategyId === 'price-action-structure-v1')
   body.replaceChildren()
   if (!rows.length) {
-    body.append(emptyRow(8, 'Žádný otevřený price-action trade.'))
+    body.append(emptyRow(10, 'Žádný otevřený price-action trade.'))
     return
   }
   for (const position of rows) {
     const pl = signedSats(position.plSats)
+    const plUsd = signedUsd(Number.isFinite(position.plSats) && Number.isFinite(state?.market?.price)
+      ? (position.plSats / SATS_PER_BTC) * state.market.price
+      : null)
+    const total = position.quantityUsd
+    const remaining = position.remainingQuantityUsd ?? total
     body.append(
       el('tr', {}, [
         el('td', { text: when(position.openedAt ?? position.createdAt) }),
         el('td', { text: position.assetSymbol || position.asset || '–' }),
         el('td', { text: position.timeframeId || position.timeframe ? (position.timeframeId || position.timeframe).toUpperCase() : '–' }),
         sideCell(position.side),
+        el('td', { text: Number.isFinite(total) ? `${nf(0).format(total)} USD${remaining < total ? ` · zbývá ${nf(0).format(remaining)}` : ''}` : '–' }),
         el('td', { text: quotePrice(position.entry) }),
-        el('td', { text: quotePrice(position.stopLoss) }),
-        el('td', { text: quotePrice(position.takeProfit) }),
-        el('td', { className: pl.className, text: pl.text }),
+        el('td', { text: quotePrice(priceActionPositionPrice(position)) }),
+        priceActionLevelCell({ label: 'SL', position, target: position.stopLoss, quantityUsd: remaining }),
+        priceActionTargetsCell(position),
+        el('td', { className: pl.className }, [
+          el('div', { text: pl.text }),
+          el('div', { className: `pa-level-detail ${plUsd.className}`, text: plUsd.text }),
+        ]),
       ])
     )
   }
@@ -2104,12 +2188,13 @@ const renderOrders = () => {
     return
   }
   for (const order of rows) {
-    const cancel = el('button', { type: 'button', text: 'Zrušit' })
-    cancel.onclick = () => queueCommand('cancel', order.id)
+    const partialTakeProfit = order.orderRole === 'take-profit'
+    const cancel = partialTakeProfit ? null : el('button', { type: 'button', text: 'Zrušit' })
+    if (cancel) cancel.onclick = () => queueCommand('cancel', order.id)
     body.append(
       el('tr', {}, [
         el('td', { text: when(order.createdAt) }),
-        el('td', { text: order.type === 'limit' ? 'limit' : 'market' }),
+        el('td', { text: partialTakeProfit ? 'TP1 · 50 %' : order.type === 'limit' ? 'limit' : 'market' }),
         sideCell(order.side),
         el('td', { text: order.quantityUsd ? `${nf(0).format(order.quantityUsd)} USD` : '–' }),
         el('td', { text: price(order.entry) }),
@@ -2143,10 +2228,10 @@ const renderPriceActionOrders = (body) => {
         sideCell(order.side),
         el('td', { text: order.quantityUsd ? `${nf(0).format(order.quantityUsd)} USD` : '–' }),
         el('td', { text: quotePrice(order.quotePrice ?? order.entry) }),
-        el('td', { text: quotePrice(order.stopLoss) }),
-        el('td', { text: `${quotePrice(order.tp1)} / ${quotePrice(order.tp2 ?? order.takeProfit)}` }),
-        el('td', { text: sats(order.marginSats) }),
-        el('td', {}, [cancel]),
+        el('td', { text: partialTakeProfit ? '–' : quotePrice(order.stopLoss) }),
+        el('td', { text: partialTakeProfit ? `TP1 ${quotePrice(order.entry)} · 50 %` : `${quotePrice(order.tp1)} / ${Number.isFinite(order.tp2) ? quotePrice(order.tp2) : 'struktura'}` }),
+        el('td', { text: partialTakeProfit ? '–' : sats(order.marginSats) }),
+        el('td', { text: partialTakeProfit ? '–' : null }, cancel ? [cancel] : []),
       ])
     )
   }

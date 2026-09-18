@@ -52,6 +52,54 @@ test('paper executor marks an FX trade on its own candles and takes TP1 before T
   assert.ok(store.balanceSats > 1_000_000)
 })
 
+test('a PA position can take TP1 only and leave its second half open for structure management', async () => {
+  const store = { balanceSats: 1_000_000, trades: [], nextId: 1 }
+  const executor = createPaperExecutor({ store, feeRate: 0.0006, now: () => START })
+  const trade = await executor.openPosition({
+    pricingModel: 'linear-usd', strategyId: 'price-action-structure-v1', assetSymbol: 'USDJPY', timeframeId: '1h',
+    signalKey: 'jpy-tp1-only', signalCandleTime: START, side: 'short', entry: 159.711, stop: 160.426,
+    takeProfit: 152.881, tp1: 152.881, tp2: null, quantityUsd: 100, marginSats: 25_000,
+    leverage: 4, liquidation: 199.63875, quoteSatsPerUsd: 500,
+  })
+
+  executor.markPriceActionPositions({
+    assets: [{ symbol: 'USDJPY', trends: { '1h': { chartCandles: [
+      candle(START + HOUR, 159, 159.1, 152.8, 153),
+      candle(START + 2 * HOUR, 153, 154, 152.5, 153.5),
+    ] } } }],
+  })
+
+  assert.equal(trade.tp1Taken, true)
+  assert.equal(trade.tp2, null)
+  assert.equal(trade.remainingQuantityUsd, 50)
+  assert.equal(trade.status, 'running')
+})
+
+test('a live PA position exposes its first take-profit as a half-size paper order', async () => {
+  const store = { balanceSats: 1_000_000, trades: [], nextId: 1 }
+  const executor = createPaperExecutor({ store, feeRate: 0.0006, now: () => START })
+  const trade = await executor.openPosition({
+    pricingModel: 'linear-usd', strategyId: 'price-action-structure-v1', assetSymbol: 'AUDUSD', timeframeId: '4h',
+    signalKey: 'aud-visible-tp1', signalCandleTime: START, side: 'long', entry: 0.71, stop: 0.70,
+    takeProfit: 0.74, tp1: 0.72, tp2: 0.74, quantityUsd: 100, marginSats: 25_000,
+    leverage: 4, liquidation: 0.5325, quoteSatsPerUsd: 1250,
+  })
+
+  let listed = await executor.listTrades()
+  const tpOrder = listed.open.find((order) => order.parentTradeId === trade.id && order.orderRole === 'take-profit')
+  assert.equal(tpOrder.quotePrice, 0.72)
+  assert.equal(tpOrder.quantityUsd, 50)
+
+  executor.markPriceActionPositions({
+    assets: [{ symbol: 'AUDUSD', trends: { '4h': { chartCandles: [
+      candle(START + 4 * HOUR, 0.71, 0.721, 0.708, 0.72),
+    ] } } }],
+  })
+
+  listed = await executor.listTrades()
+  assert.equal(listed.open.some((order) => order.parentTradeId === trade.id && order.orderRole === 'take-profit'), false)
+})
+
 test('a paper PA limit order keeps capital free until entry, then becomes a protected position', async () => {
   const store = { balanceSats: 1_000_000, trades: [], nextId: 1 }
   const executor = createPaperExecutor({ store, feeRate: 0.0006, now: () => START })

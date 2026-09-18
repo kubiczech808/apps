@@ -551,6 +551,59 @@ test('TP2 uses the nearest opposing zone beyond TP1, not merely beyond entry', (
   assert.ok(shortProfile.tp2 < shortProfile.tp1)
 })
 
+test('a setup can use TP1 alone when no opposing FVG lies beyond the structural target', () => {
+  const profile = evaluateTradeProfile({
+    item: {
+      trend: 'down',
+      price: 117,
+      lastCandle: candle(START, 114, 118, 113, 117),
+      structure: { high: { current: { price: 120 } }, low: { current: { price: 100 } } },
+      zones: {
+        supply: { type: 'supply', low: 115, high: 120 },
+        unfilledSupply: [{ type: 'supply', low: 115, high: 120 }],
+        // This demand FVG is before TP1, so it cannot be TP2 for the short.
+        unfilledDemand: [{ type: 'demand', low: 108, high: 110 }],
+      },
+    },
+    settings: { pullbackPct: 50, minRewardRisk: 2, stopBufferPct: 0.02 },
+  })
+
+  assert.equal(profile.tp1, 100)
+  assert.equal(profile.tp2, null)
+  assert.equal(profile.weightedTarget, 100, 'R/R falls back to the executable first target')
+  assert.ok(profile.rewardRisk >= 2)
+  assert.equal(profile.entry, 115)
+  assert.equal(profile.status, 'ready')
+})
+
+test('an inherited completed 4H leg can arm a 1H pullback setup', () => {
+  const profile = evaluateTradeProfile({
+    item: {
+      trend: 'down',
+      structureConfirmed: false,
+      price: 117,
+      lastCandle: candle(START, 114, 118, 113, 117),
+      structure: {
+        activeRange: {
+          source: '4h-active-spine',
+          high: { label: 'LH', price: 120 },
+          low: { label: 'LL', price: 100 },
+        },
+      },
+      zones: {
+        supply: { type: 'supply', low: 115, high: 120 },
+        unfilledSupply: [{ type: 'supply', low: 115, high: 120 }],
+        unfilledDemand: [{ type: 'demand', low: 80, high: 85 }],
+      },
+    },
+    settings: { pullbackPct: 50, minRewardRisk: 2, stopBufferPct: 0.02 },
+  })
+
+  assert.equal(profile.mode, 'screening')
+  assert.equal(profile.side, 'short')
+  assert.equal(profile.status, 'ready')
+})
+
 test('a fresh CHoCH publishes a non-executable supply or demand plan for audit', () => {
   const profile = evaluateTradeProfile({
     item: {

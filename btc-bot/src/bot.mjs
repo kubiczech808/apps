@@ -56,7 +56,7 @@ const priceActionSignalKey = ({ assetSymbol, timeframeId, profile }) => {
 // true, otherwise the first touch would consume the FVG without a valid setup.
 const isPendingPriceActionOrderProfile = (profile) => {
   if (profile?.status !== 'watch' || profile?.mode !== 'screening' || !profile.side || profile.zoneHit) return false
-  if (![profile.entry, profile.stop, profile.tp1, profile.tp2, profile.weightedTarget].every(Number.isFinite)) return false
+  if (![profile.entry, profile.stop, profile.tp1, profile.weightedTarget].every(Number.isFinite)) return false
   return (profile.gates ?? [])
     .filter((gate) => !['zone', 'pullback'].includes(gate.id))
     .every((gate) => gate.passed !== false)
@@ -85,9 +85,10 @@ const priceActionOrderPlan = ({ assetSymbol, timeframeId, item, profile, equityS
     order: {
       ...plan,
       type: 'limit',
-      takeProfit: profile.tp2,
+      takeProfit: profile.tp2 ?? profile.tp1,
       tp1: profile.tp1,
       tp2: profile.tp2,
+      entryZone: profile.zone ? { ...profile.zone } : null,
       assetSymbol,
       timeframeId,
       strategyId: PRICE_ACTION_STRUCTURE_ID,
@@ -170,7 +171,7 @@ export const executeReadyPriceActionProfiles = async ({
     const candidates = Object.entries(asset.trends ?? {})
       .map(([timeframeId, item]) => ({ timeframeId, item, profile: item?.tradeProfile }))
       .filter(({ profile }) => profile?.status === 'ready')
-      .filter(({ profile }) => [profile.entry, profile.stop, profile.tp1, profile.tp2, profile.weightedTarget].every(Number.isFinite))
+      .filter(({ profile }) => [profile.entry, profile.stop, profile.tp1, profile.weightedTarget].every(Number.isFinite))
       .sort((left, right) =>
         (PRICE_ACTION_TIMEFRAME_PRIORITY[left.timeframeId] ?? 99) - (PRICE_ACTION_TIMEFRAME_PRIORITY[right.timeframeId] ?? 99)
       )
@@ -215,6 +216,7 @@ export const executeReadyPriceActionProfiles = async ({
       signalCandleTime: item.asOf ?? null,
       tp1: profile.tp1,
       tp2: profile.tp2,
+      entryZone: profile.zone ? { ...profile.zone } : null,
       plan: {
         reason: `${profile.side} ${item.reason ?? ''}`.trim(),
         rr: profile.rewardRisk,
@@ -292,7 +294,9 @@ export const placePendingPriceActionOrders = async ({
 
 export const reconcilePendingPriceActionOrders = async ({ executor, orders = [], matrix, dryRun = false } = {}) => {
   const outcomes = []
-  for (const order of orders.filter((candidate) => candidate.strategyId === PRICE_ACTION_STRUCTURE_ID)) {
+  for (const order of orders.filter((candidate) =>
+    candidate.strategyId === PRICE_ACTION_STRUCTURE_ID && candidate.orderRole !== 'take-profit'
+  )) {
     const asset = matrix?.assets?.find((candidate) => candidate.symbol === order.assetSymbol)
     const item = asset?.trends?.[order.timeframeId]
     const profile = item?.tradeProfile

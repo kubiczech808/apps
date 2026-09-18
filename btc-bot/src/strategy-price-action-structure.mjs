@@ -743,7 +743,13 @@ const zoneEntryCandidate = ({ item, side, zone, pullback, invalidationLevel, set
     ? nearestOpposingZone({ side, zones: item?.zones, entry: refinedEntry, tp1 })
     : null
   const tp2 = side === 'long' ? roundPrice(tp2Zone?.low ?? null) : roundPrice(tp2Zone?.high ?? null)
-  const weightedTarget = Number.isFinite(tp1) && Number.isFinite(tp2) ? roundPrice((tp1 + tp2) / 2) : null
+  // A distant opposing FVG is optional. When it does not exist beyond TP1,
+  // the setup may still take half at the structural target; the other half is
+  // then managed by structure and its protective stop rather than inventing a
+  // second target inside the active wave.
+  const weightedTarget = Number.isFinite(tp1)
+    ? Number.isFinite(tp2) ? roundPrice((tp1 + tp2) / 2) : tp1
+    : null
   const minRewardRisk = Number(settings.minRewardRisk) || 2
   const rrAtZoneHit = rewardRiskFor({ side, entry: entryAtZoneHit, stop, target: weightedTarget })
   const rrAtPullback = rewardRiskFor({ side, entry: refinedEntry, stop, target: weightedTarget })
@@ -845,7 +851,18 @@ export const evaluateTradeProfile = ({
   const side = sideFromTrend(item?.trend)
   const latest = item?.lastCandle
   const zones = item?.zones
-  const awaitingConfirmation = item?.structureConfirmed === false
+  const activeRange = item?.structure?.activeRange
+  const hasCompletedDirectionalRange = side === 'long'
+    ? activeRange?.high?.label === 'HH' && activeRange?.low?.label === 'HL'
+    : side === 'short'
+      ? activeRange?.high?.label === 'LH' && activeRange?.low?.label === 'LL'
+      : false
+  // A 1H profile may inherit an already completed directional 4H leg and arm
+  // its pullback FVG. A locally fresh CHoCH still waits for its own confirmed
+  // structure so that a single break never becomes an executable setup.
+  const hasInheritedCompletedDirectionalRange =
+    activeRange?.source === '4h-active-spine' && hasCompletedDirectionalRange
+  const awaitingConfirmation = item?.structureConfirmed === false && !hasInheritedCompletedDirectionalRange
 
   // Flat is a structure-building state, never an entry state. In particular,
   // do not fall back to the current close here: that would look like a valid
@@ -979,7 +996,9 @@ export const evaluateTradeProfile = ({
         ? tp2Zone.high
         : null
   )
-  const weightedTarget = Number.isFinite(tp1) && Number.isFinite(tp2) ? (tp1 + tp2) / 2 : null
+  const weightedTarget = Number.isFinite(tp1)
+    ? Number.isFinite(tp2) ? (tp1 + tp2) / 2 : tp1
+    : null
   const risk =
     side === 'long' && Number.isFinite(entry) && Number.isFinite(stop)
       ? entry - stop
@@ -1063,7 +1082,9 @@ export const evaluateTradeProfile = ({
     tp1Rule: side === 'long' ? '1/2 na posledním HH' : side === 'short' ? '1/2 na posledním LL' : null,
     tp2,
     tp2Zone,
-    tp2Rule: side === 'long' ? '1/2 na poslední nevybranou supply zónu' : side === 'short' ? '1/2 na poslední nevybranou demand zónu' : null,
+    tp2Rule: Number.isFinite(tp2)
+      ? side === 'long' ? '1/2 na poslední nevybranou supply zónu' : '1/2 na poslední nevybranou demand zónu'
+      : 'druhou polovinu řídí struktura a SL',
     weightedTarget,
     risk,
     reward,

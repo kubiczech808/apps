@@ -195,11 +195,36 @@ export const createPaperExecutor = ({
       }
     },
 
-    listTrades: async () => ({
-      running: running(),
-      open: store.trades.filter((trade) => trade.status === 'open'),
-      closed: store.trades.filter((trade) => trade.status === 'closed'),
-    }),
+    listTrades: async () => {
+      const takeProfitOrders = running()
+        .filter((trade) => trade.pricingModel === 'linear-usd' && !trade.tp1Taken && Number.isFinite(trade.tp1))
+        .map((trade) => ({
+          id: `${trade.id}:tp1`,
+          parentTradeId: trade.id,
+          orderRole: 'take-profit',
+          type: 'limit',
+          status: 'open',
+          side: trade.side === 'long' ? 'short' : 'long',
+          quantityUsd: Math.min(trade.remainingQuantityUsd ?? trade.quantityUsd, trade.quantityUsd / 2),
+          quotePrice: trade.tp1,
+          entry: trade.tp1,
+          takeProfit: trade.tp1,
+          tp1: trade.tp1,
+          tp2: trade.tp2 ?? null,
+          createdAt: trade.openedAt ?? trade.createdAt,
+          assetSymbol: trade.assetSymbol,
+          timeframeId: trade.timeframeId,
+          strategyId: trade.strategyId,
+          source: 'paper',
+        }))
+      return {
+        running: running(),
+        // TP1 is represented as a separate protective paper limit so the
+        // dashboard exposes the same 50% exit the marker will execute.
+        open: [...store.trades.filter((trade) => trade.status === 'open'), ...takeProfitOrders],
+        closed: store.trades.filter((trade) => trade.status === 'closed'),
+      }
+    },
 
     openPosition: async (plan) => {
       if (!(plan.stop > 0) || !(plan.takeProfit > 0)) {
@@ -251,7 +276,8 @@ export const createPaperExecutor = ({
           realizedPlSats: 0,
           unrealizedPlSats: 0,
           tp1: plan.tp1,
-          tp2: plan.tp2 ?? plan.takeProfit,
+          tp2: Number.isFinite(plan.tp2) ? plan.tp2 : null,
+          entryZone: plan.entryZone ?? null,
           tp1Taken: false,
           lastMarkedCandleTime: plan.signalCandleTime ?? null,
         } : {}),
@@ -267,7 +293,7 @@ export const createPaperExecutor = ({
     placeOrder: async (plan) => {
       if (plan.type !== 'limit') throw new Error('paper pending order must be a limit order')
       if (!(plan.entry > 0) || !(plan.stop > 0) || !(plan.takeProfit > 0)) {
-        throw new Error('refusing to place a limit order without entry and both protective brackets')
+        throw new Error('refusing to place a limit order without entry, stop loss and first take profit')
       }
       if (plan.pricingModel !== 'linear-usd') {
         throw new Error('paper pending orders currently support price-action linear contracts only')
@@ -286,7 +312,8 @@ export const createPaperExecutor = ({
         initialStop: plan.stop,
         takeProfit: plan.takeProfit,
         tp1: plan.tp1,
-        tp2: plan.tp2 ?? plan.takeProfit,
+        tp2: Number.isFinite(plan.tp2) ? plan.tp2 : null,
+        entryZone: plan.entryZone ?? null,
         exitPrice: null,
         plSats: null,
         openingFeeSats: null,
@@ -394,9 +421,9 @@ export const createPaperExecutor = ({
             ? candle.high >= trade.tp1
             : candle.low <= trade.tp1)
           if (hitTp1) takeLinearTp1(trade, closedAt)
-          const hitTp2 = trade.side === 'long'
+          const hitTp2 = Number.isFinite(trade.tp2) && (trade.side === 'long'
             ? candle.high >= trade.tp2
-            : candle.low <= trade.tp2
+            : candle.low <= trade.tp2)
           if (hitTp2) {
             settleLinear(trade, trade.tp2, 'take_profit', closedAt)
             settled.push(trade)
