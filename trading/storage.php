@@ -865,9 +865,22 @@ function trading_storage_row_density(PDO $pdo): array
 {
     trading_storage_bootstrap($pdo);
 
-    // A freshly rebuilt InnoDB B-tree leaf is filled to 15/16 of the page; everything after
-    // that is the cost of living. Quoted here once so the estimate below has a stated basis.
-    $rebuiltFill = 15 / 16;
+    // What a rebuilt table actually achieves on this server, measured rather than assumed.
+    //
+    // The documented figure is 15/16 -- InnoDB fills a leaf page to 93.75% when it builds the
+    // B-tree in primary-key order. Two rebuilds were run and only one of them matched:
+    //
+    //   trading_documents  6.52 MB of content ->  6.5 MB on disk  (53 rows of ~123 kB each,
+    //                                                              which live in overflow
+    //                                                              pages and pack exactly)
+    //   trading_trades    26.69 MB of content -> 34.7 MB on disk  (10,039 ordinary rows in
+    //                                                              the clustered index: 77%)
+    //
+    // The row-shaped case is the one that matters here, and 77% is what it reached. Taking the
+    // measured figure rather than the documented one makes every estimate below slightly
+    // pessimistic, which is the right direction: this number is what decides whether a rebuild
+    // is allowed to start against a shared quota.
+    $rebuiltFill = 0.77;
 
     $columns = $pdo->query(
         'SELECT TABLE_NAME, COLUMN_NAME, DATA_TYPE, IS_NULLABLE, NUMERIC_PRECISION, NUMERIC_SCALE,
@@ -989,6 +1002,7 @@ function trading_storage_row_density(PDO $pdo): array
 
         $size = $sizeByTable[$table] ?? [];
         $dataBytes = (int) ($size['DATA_LENGTH'] ?? 0);
+        $indexBytes = (int) ($size['INDEX_LENGTH'] ?? 0);
         $freeBytes = (int) ($size['DATA_FREE'] ?? 0);
         $logicalBytes = $variable + ($rows * ($fixedBytes + $recordOverhead));
         // COUNT(*) is exact where TABLE_ROWS is an estimate, so the exact number is the one
@@ -1001,6 +1015,11 @@ function trading_storage_row_density(PDO $pdo): array
             'table' => $table,
             'rows' => $rows,
             'dataBytes' => $dataBytes,
+            // Carried because a rebuild writes the secondary indexes again too. The estimate
+            // below covers the clustered index only, so anything sizing a rebuild has to add
+            // this -- leaving it out is what made the first estimate too small in the safe
+            // direction's favour.
+            'indexBytes' => $indexBytes,
             'freeBytes' => $freeBytes,
             'logicalBytes' => $logicalBytes,
             'fixedBytesPerRow' => $fixedBytes,

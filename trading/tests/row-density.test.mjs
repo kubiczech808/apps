@@ -199,23 +199,39 @@ test("a half-empty table is reported as half empty, and the reclaim follows the 
 
   // What a rebuild would leave, and what that returns. The free extents are added on top
   // because they sit outside DATA_LENGTH and come back from the same operation.
-  assert.equal(table.estimatedRebuiltBytes, Math.round(table.logicalBytes / (15 / 16)));
+  //
+  // The fill factor was 15/16 here until two rebuilds were actually run. trading_documents,
+  // whose 53 rows are ~123 kB each and live in overflow pages, packed exactly; trading_trades,
+  // 10,039 ordinary rows in a clustered index, reached 77% -- 26.69 MB of content landing on
+  // 34.7 MB of disk. The row-shaped case is the one this estimates, so the measured figure
+  // replaced the documented one. It makes every estimate slightly pessimistic, which is the
+  // direction that matters: this number decides whether a rebuild may start against a quota
+  // shared with other databases.
+  assert.equal(result.report.rebuiltFill, 0.77,
+    "the fill factor must be the measured one, not the documented 15/16");
+  assert.equal(table.estimatedRebuiltBytes, Math.round(table.logicalBytes / result.report.rebuiltFill));
   assert.equal(table.estimatedReclaimBytes,
     548_000_000 - table.estimatedRebuiltBytes + 5_242_880);
-  assert.ok(table.estimatedReclaimBytes > 240_000_000,
+  assert.ok(table.estimatedReclaimBytes > 150_000_000,
     `a 2x table must promise a real reclaim: ${table.estimatedReclaimBytes}`);
 });
 
 test("BAIT: a densely packed table must promise nothing", () => {
   // The bait for the arithmetic running backwards. If the ratio or the subtraction were
-  // inverted, a table already packed tight would be reported as reclaimable -- and a rebuild
-  // would be run on production for nothing. Content here is 1,485 bytes/row against 1,584
-  // charged, which is what a freshly rebuilt table looks like.
-  const result = productionRun({ dataBytes: Math.round(1485 * ROWS / (15 / 16)), freeBytes: 0 });
+  // inverted, a table already packed tight would be reported as reclaimable and a rebuild
+  // would be run on production for nothing.
+  //
+  // Note what "packed tight" is worth in this ratio. A freshly rebuilt table does not read as
+  // 1.00x: at the measured 77% fill it reads as 1.30x, because 23% of every page is the space
+  // InnoDB leaves for rows to grow into. So 1.55x on trading_observations is not "half the
+  // table is empty" -- it is 1.55/1.30 = 1.19x worse than the best a rebuild can do, and the
+  // reclaim figure is the only honest reading of it.
+  const result = productionRun({ dataBytes: Math.round(1485 * ROWS / 0.77), freeBytes: 0 });
   const table = result.report.tables[0];
-  assert.ok(table.overheadRatio < 1.1, `already dense: ${table.overheadRatio}`);
+  assert.ok(table.overheadRatio > 1.25 && table.overheadRatio < 1.35,
+    `a rebuilt table sits at 1/0.77, not at 1.0: ${table.overheadRatio}`);
   assert.equal(table.estimatedReclaimBytes, 0,
-    "a table with no slack must promise no reclaim");
+    "and a table already at that density must promise no reclaim");
 });
 
 test("BAIT: content the columns do carry must not be sold as empty space", () => {
@@ -225,8 +241,10 @@ test("BAIT: content the columns do carry must not be sold as empty space", () =>
   const table = result.report.tables[0];
   assert.ok(table.overheadRatio < 1.07,
     `content-heavy rows must not read as slack: ${table.overheadRatio}`);
-  assert.ok(table.estimatedReclaimBytes < 40_000_000,
-    `and must not promise a large reclaim: ${table.estimatedReclaimBytes}`);
+  // Only the free extents, which a rebuild does return -- and nothing from the pages, because
+  // there is nothing in them to return.
+  assert.equal(table.estimatedReclaimBytes, 5_242_880,
+    `no page slack may be promised: ${table.estimatedReclaimBytes}`);
 });
 
 test("an empty table divides by nothing and reports nothing", () => {
@@ -244,6 +262,14 @@ test("an empty table divides by nothing and reports nothing", () => {
   assert.equal(table.physicalBytesPerRow, 0);
   assert.equal(table.overheadRatio, null, "no rows means no ratio, not a ratio of zero");
   assert.equal(table.estimatedReclaimBytes, 0);
+});
+
+test("the secondary indexes are carried through", () => {
+  // A rebuild writes them again too, and whatever sizes the rebuild has to add them to the
+  // clustered index. Leaving this out under-estimated trading_trades' copy by a third.
+  const result = productionRun();
+  assert.equal(result.report.tables[0].indexBytes, 97_000_000,
+    "the index size must reach the caller, not be dropped on the floor");
 });
 
 test("every Trading table is measured, largest first", () => {

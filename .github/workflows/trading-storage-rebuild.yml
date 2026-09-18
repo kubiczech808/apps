@@ -33,6 +33,16 @@ on:
         required: true
         type: boolean
         default: false
+      hosting_used_mb:
+        description: MB currently used on the hosting, across ALL its databases (read from the panel).
+        required: true
+        type: string
+        default: "1844"
+      hosting_quota_mb:
+        description: The hosting's total MB.
+        required: true
+        type: string
+        default: "2000"
 
 jobs:
   rebuild:
@@ -46,6 +56,18 @@ jobs:
       cancel-in-progress: false
     steps:
       - uses: actions/checkout@v4
+
+      # Before anything is touched. The quota is shared with databases this job cannot see, so
+      # the room a rebuild may take is what the panel reports free, not what the schema's own
+      # size suggests. A refusal here costs a dispatch; running out of room at 01:11 costs
+      # whatever else was writing at the time.
+      - name: Check there is room for a second copy
+        env:
+          TRADING_TRIGGER_KEY: ${{ secrets.POLYTRADING_DB_PASSWORD }}
+          TABLE: ${{ inputs.table }}
+          HOSTING_USED_MB: ${{ inputs.hosting_used_mb }}
+          HOSTING_QUOTA_MB: ${{ inputs.hosting_quota_mb }}
+        run: python3 trading/tools/rebuild-guard.py
 
       - name: Repack the table
         env:
