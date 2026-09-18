@@ -868,19 +868,29 @@ function trading_storage_row_density(PDO $pdo): array
     // What a rebuilt table actually achieves on this server, measured rather than assumed.
     //
     // The documented figure is 15/16 -- InnoDB fills a leaf page to 93.75% when it builds the
-    // B-tree in primary-key order. Two rebuilds were run and only one of them matched:
+    // B-tree in primary-key order. Three tables were rebuilt and none of them reached it:
     //
-    //   trading_documents  6.52 MB of content ->  6.5 MB on disk  (53 rows of ~123 kB each,
-    //                                                              which live in overflow
-    //                                                              pages and pack exactly)
-    //   trading_trades    26.69 MB of content -> 34.7 MB on disk  (10,039 ordinary rows in
-    //                                                              the clustered index: 77%)
+    //   trading_documents   6.52 MB of content ->  6.5 MB on disk  (53 rows of ~123 kB each,
+    //                                                               in overflow pages, which
+    //                                                               pack exactly)
+    //   trading_trades     26.69 MB of content -> 34.7 MB on disk  (77%)
+    //   trading_event_log  48.30 MB of content -> 69.8 MB on disk  (69%, and it was ALREADY
+    //                                                               at that density: the
+    //                                                               rebuild moved its data
+    //                                                               by 0.1 MB)
     //
-    // The row-shaped case is the one that matters here, and 77% is what it reached. Taking the
-    // measured figure rather than the documented one makes every estimate below slightly
-    // pessimistic, which is the right direction: this number is what decides whether a rebuild
-    // is allowed to start against a shared quota.
-    $rebuiltFill = 0.77;
+    // 0.69 is the worst of them, and the worst is the one to plan with. It makes every reclaim
+    // figure smaller and every space-needed figure larger -- conservative in both directions,
+    // which is what a number that decides whether to touch a shared production quota should be.
+    //
+    // Checked back against the three: it predicts 6 MB for the event log (5.1 returned), 9 MB
+    // for trades (14.5 returned) and 14 MB for documents (16.5 returned). It under-promises,
+    // never over.
+    //
+    // It also changes what the ratio means. A well-packed table reads as 1/0.69 = 1.45x, not
+    // 1.00x. trading_event_log at 1.45x was not fragmented at all, and the 24 MB predicted for
+    // it from 15/16 was never there.
+    $rebuiltFill = 0.69;
 
     $columns = $pdo->query(
         'SELECT TABLE_NAME, COLUMN_NAME, DATA_TYPE, IS_NULLABLE, NUMERIC_PRECISION, NUMERIC_SCALE,

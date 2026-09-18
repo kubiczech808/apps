@@ -200,19 +200,18 @@ test("a half-empty table is reported as half empty, and the reclaim follows the 
   // What a rebuild would leave, and what that returns. The free extents are added on top
   // because they sit outside DATA_LENGTH and come back from the same operation.
   //
-  // The fill factor was 15/16 here until two rebuilds were actually run. trading_documents,
-  // whose 53 rows are ~123 kB each and live in overflow pages, packed exactly; trading_trades,
-  // 10,039 ordinary rows in a clustered index, reached 77% -- 26.69 MB of content landing on
-  // 34.7 MB of disk. The row-shaped case is the one this estimates, so the measured figure
-  // replaced the documented one. It makes every estimate slightly pessimistic, which is the
-  // direction that matters: this number decides whether a rebuild may start against a quota
-  // shared with other databases.
-  assert.equal(result.report.rebuiltFill, 0.77,
-    "the fill factor must be the measured one, not the documented 15/16");
+  // The fill factor was 15/16 here until three rebuilds were actually run, and none of them
+  // reached it: documents packed exactly (overflow pages), trades reached 77%, and the event
+  // log 69% -- where it already was, so its rebuild moved 0.1 MB of data and returned only the
+  // 5 MB of free extents against a predicted 24 MB. The worst of the three is what the estimate
+  // now uses, because it decides whether a rebuild may start against a shared quota, and
+  // under-promising costs a dispatch while over-promising costs the disk.
+  assert.equal(result.report.rebuiltFill, 0.69,
+    "the fill factor must be the worst measured one, not the documented 15/16");
   assert.equal(table.estimatedRebuiltBytes, Math.round(table.logicalBytes / result.report.rebuiltFill));
   assert.equal(table.estimatedReclaimBytes,
     548_000_000 - table.estimatedRebuiltBytes + 5_242_880);
-  assert.ok(table.estimatedReclaimBytes > 150_000_000,
+  assert.ok(table.estimatedReclaimBytes > 90_000_000,
     `a 2x table must promise a real reclaim: ${table.estimatedReclaimBytes}`);
 });
 
@@ -221,15 +220,15 @@ test("BAIT: a densely packed table must promise nothing", () => {
   // inverted, a table already packed tight would be reported as reclaimable and a rebuild
   // would be run on production for nothing.
   //
-  // Note what "packed tight" is worth in this ratio. A freshly rebuilt table does not read as
-  // 1.00x: at the measured 77% fill it reads as 1.30x, because 23% of every page is the space
-  // InnoDB leaves for rows to grow into. So 1.55x on trading_observations is not "half the
-  // table is empty" -- it is 1.55/1.30 = 1.19x worse than the best a rebuild can do, and the
-  // reclaim figure is the only honest reading of it.
-  const result = productionRun({ dataBytes: Math.round(1485 * ROWS / 0.77), freeBytes: 0 });
+  // Note what "packed tight" is worth in this ratio. A well-packed table does not read as
+  // 1.00x: at the measured 69% fill it reads as 1.45x. trading_event_log measured exactly
+  // 1.45x and its rebuild moved 0.1 MB, which is the proof. So 1.55x on trading_observations
+  // is not "half the table is empty" -- it is 1.07x off the best a rebuild can reach, and the
+  // reclaim figure is the only honest reading of the ratio.
+  const result = productionRun({ dataBytes: Math.round(1485 * ROWS / 0.69), freeBytes: 0 });
   const table = result.report.tables[0];
-  assert.ok(table.overheadRatio > 1.25 && table.overheadRatio < 1.35,
-    `a rebuilt table sits at 1/0.77, not at 1.0: ${table.overheadRatio}`);
+  assert.ok(table.overheadRatio > 1.40 && table.overheadRatio < 1.50,
+    `a rebuilt table sits at 1/0.69, not at 1.0: ${table.overheadRatio}`);
   assert.equal(table.estimatedReclaimBytes, 0,
     "and a table already at that density must promise no reclaim");
 });
