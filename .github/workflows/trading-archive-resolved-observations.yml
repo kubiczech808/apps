@@ -1,0 +1,176 @@
+name: Archive Resolved Observations
+
+# Moves settled observations out of MySQL into gzipped NDJSON files beside the app, in bounded
+# batches, and deletes each batch only after reading it back off the disk.
+#
+# Why. trading_observations holds 226,262 rows, 90,795 of them settled, and the hosting reports
+# 1,844 MB of a 2,000 MB quota SHARED with other databases. The table cannot be repacked --
+# a rebuild needs room for a second copy, 375-530 MB against 156-177 MB free -- so the only
+# reduction available is removing rows, and the settled ones are the only rows nothing live
+# reads. Checked rather than assumed: the single read of lifecycle RESOLVED sits inside an
+# `if (trading_storage_is_active())` branch and that flag is off; the executor reads SCRAPED
+# and the dashboard reads the published files.
+#
+# The statistics keep every one of these rows. The nightly fold streams the archive alongside
+# the table (Fold Resolved Statistics), so what leaves MySQL does not leave the Setup finder.
+# That is why this workflow verifies the fold still sees the same number of settlements after
+# a run and stops if it does not.
+#
+# An earlier attempt at exactly this was added and reverted the same day, because the read path
+# still needed the rows. The difference now is that the read path was moved first.
+
+on:
+  workflow_dispatch:
+    inputs:
+      batches:
+        description: "How many batches to run in this job"
+        required: false
+        default: "5"
+      limit:
+        description: "Rows per batch"
+        required: false
+        default: "2000"
+      keep_days:
+        description: "Leave settled rows updated within this many days in place (0 = archive all)"
+        required: false
+        default: "0"
+
+jobs:
+  archive:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    concurrency:
+      # Never two at once: both would select the same oldest rows.
+      group: trading-archive-resolved-observations
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Archive settled observations, verifying before each delete
+        env:
+          TRADING_TRIGGER_KEY: ${{ secrets.POLYTRADING_DB_PASSWORD }}
+          BATCHES: ${{ github.event.inputs.batches || '5' }}
+          LIMIT: ${{ github.event.inputs.limit || '2000' }}
+          KEEP_DAYS: ${{ github.event.inputs.keep_days || '0' }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import urllib.error
+          import urllib.request
+
+          key = os.environ["TRADING_TRIGGER_KEY"]
+          url = "https://www.osobnizkusenosti.cz/trading/api.php?action=storage-admin"
+          batches = max(1, min(40, int(os.environ.get("BATCHES") or 5)))
+          limit = max(50, min(20000, int(os.environ.get("LIMIT") or 2000)))
+          keep_days = max(0, int(os.environ.get("KEEP_DAYS") or 0))
+
+
+          def call(payload, timeout=900):
+              request = urllib.request.Request(
+                  url,
+                  data=json.dumps(payload).encode("utf-8"),
+                  method="POST",
+                  headers={"Content-Type": "application/json", "X-Trading-Trigger-Key": key},
+              )
+              try:
+                  with urllib.request.urlopen(request, timeout=timeout) as response:
+                      return json.loads(response.read().decode("utf-8"))
+              except urllib.error.HTTPError as error:
+                  body = error.read().decode("utf-8", "replace")[:600]
+                  raise SystemExit(f"HTTP {error.code} from {payload.get('operation')}: {body}")
+
+
+          def settled_rows():
+              """How many settled rows the table still holds, from the storage diagnostics."""
+              status = call({"operation": "status"}, timeout=120)
+              storage = status.get("storage") or {}
+              for table in (storage.get("tables") or []):
+                  if table.get("name") == "trading_observations":
+                      return table
+              return {}
+
+
+          print("Before:", json.dumps(settled_rows())[:400])
+          print()
+
+          archived = deleted = 0
+          done = False
+          for index in range(batches):
+              batch = call({
+                  "operation": "archive-resolved-observations",
+                  "limit": limit,
+                  "keepDays": keep_days,
+              })
+              if not batch.get("ok"):
+                  raise SystemExit(f"batch {index + 1} refused: {batch.get('error')}")
+              result = batch.get("batch") or {}
+              archived += int(result.get("archived") or 0)
+              deleted += int(result.get("deleted") or 0)
+              print(
+                  f"batch {index + 1}: archived {result.get('archived')}, "
+                  f"verified {result.get('verified')}, deleted {result.get('deleted')}, "
+                  f"remaining {result.get('remaining')}, "
+                  f"{(result.get('bytes') or 0) / 1048576:.1f} MB -> {result.get('file')}"
+              )
+              # Written and deleted must agree. They can only differ if the archiver changed
+              # under this workflow, and a run that deletes more than it wrote is the one
+              # failure mode worth stopping the whole job for.
+              if int(result.get("deleted") or 0) > int(result.get("verified") or 0):
+                  raise SystemExit(
+                      "STOP: this batch deleted more rows than it verified in the archive."
+                  )
+              if result.get("done"):
+                  done = True
+                  print("nothing left to archive under these bounds")
+                  break
+
+          print()
+          print(f"archived {archived} row(s), deleted {deleted}, done={done}")
+          print("After:", json.dumps(settled_rows())[:400])
+          PY
+
+      - name: Check the statistics still see the settlements that were moved out
+        if: ${{ always() }}
+        env:
+          TRADING_TRIGGER_KEY: ${{ secrets.POLYTRADING_DB_PASSWORD }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import urllib.error
+          import urllib.request
+
+          # The whole risk of this workflow in one number. The fold rebuilds the statistics
+          # from scratch, so if it cannot read the archive back, the first successful batch
+          # shrinks the Setup finder -- silently, to a smaller number that still renders.
+          #
+          # 77,553 priced settlements was the count with every row still in MySQL. After
+          # archiving it must not fall.
+          key = os.environ["TRADING_TRIGGER_KEY"]
+          request = urllib.request.Request(
+              "https://www.osobnizkusenosti.cz/trading/api.php?action=storage-admin",
+              data=json.dumps({"operation": "refresh-resolved-stats"}).encode("utf-8"),
+              method="POST",
+              headers={"Content-Type": "application/json", "X-Trading-Trigger-Key": key},
+          )
+          try:
+              with urllib.request.urlopen(request, timeout=1800) as response:
+                  payload = json.loads(response.read().decode("utf-8"))
+          except urllib.error.HTTPError as error:
+              raise SystemExit(f"HTTP {error.code}: {error.read().decode('utf-8', 'replace')[:600]}")
+
+          result = payload.get("result") or {}
+          scanned = int(result.get("scanned") or 0)
+          priced = int(result.get("priced") or 0)
+          print(f"the fold now reads {scanned} settled observation(s), {priced} of them priced")
+          print("cells:", result.get("cells"), " any-tag rows:", result.get("anyTag"))
+          for source in (result.get("sources") or []):
+              print("  source:", json.dumps(source)[:300])
+
+          if priced < 70000:
+              raise SystemExit(
+                  f"STOP: only {priced} priced settlements reached the fold, against 77,553 "
+                  "before any archiving. The archive is not being read back."
+              )
+          PY

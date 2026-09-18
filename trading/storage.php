@@ -1746,6 +1746,41 @@ function trading_storage_resolved_observations_stream(PDO $pdo, callable $onRow,
  * The format is the one trading_storage_restore_observation_archives() already reads, so the
  * restore path exists before the first row leaves.
  */
+/**
+ * How many RESTORABLE rows an archive file actually holds, read back off the disk.
+ *
+ * This is the number the archiver deletes on the strength of, so it counts what the restore
+ * would be able to rebuild rather than what the file appears to contain: a line is a row only
+ * if it parses, names an observation, and carries a payload. A gzip stream truncated by a
+ * full disk still closes without complaint, and the tail it lost is precisely the part that
+ * no longer parses -- so counting is the check.
+ *
+ * Its own function because the guard is the whole safety of the operation and had to be
+ * executable by a test on a deliberately damaged file. Reopening is part of the check, not a
+ * detail of it: a file that cannot be reopened has zero restorable rows.
+ */
+function trading_storage_count_archived_rows(string $path): int
+{
+    $handle = gzopen($path, 'rb');
+    if ($handle === false) {
+        return 0;
+    }
+    $rows = 0;
+    // No length argument, deliberately. gzgets() then reads to the newline however long the
+    // line is; give it one and it splits a long payload into fragments that each fail to
+    // parse, which would read as a truncated archive on exactly the largest observations.
+    while (($line = gzgets($handle)) !== false) {
+        $decoded = json_decode(trim($line), true);
+        if (is_array($decoded)
+            && (string) ($decoded['observationKey'] ?? '') !== ''
+            && is_array($decoded['payload'] ?? null)) {
+            $rows++;
+        }
+    }
+    gzclose($handle);
+    return $rows;
+}
+
 function trading_storage_archive_resolved_observations(PDO $pdo, int $limit = 2000, int $keepDays = 0): array
 {
     trading_storage_bootstrap($pdo);
@@ -1814,18 +1849,7 @@ function trading_storage_archive_resolved_observations(PDO $pdo, int $limit = 20
     // Read back and count before deleting anything. A gzip stream that was truncated by a
     // full disk still closes without error, and the rows it was supposed to hold would then
     // be deleted on the strength of a file that cannot be read.
-    $verified = 0;
-    $check = gzopen($path, 'rb');
-    if ($check === false) {
-        throw new RuntimeException('The archive file could not be reopened; no rows were deleted.');
-    }
-    while (($line = gzgets($check)) !== false) {
-        $decoded = json_decode(trim($line), true);
-        if (is_array($decoded) && ($decoded['observationKey'] ?? '') !== '' && is_array($decoded['payload'] ?? null)) {
-            $verified++;
-        }
-    }
-    gzclose($check);
+    $verified = trading_storage_count_archived_rows($path);
     if ($verified !== $written) {
         throw new RuntimeException(
             'The archive holds ' . $verified . ' of ' . $written . ' rows; nothing was deleted.'
@@ -1858,6 +1882,45 @@ function trading_storage_archive_resolved_observations(PDO $pdo, int $limit = 20
         'remaining' => $remaining,
         'done' => count($rows) < $limit,
     ];
+}
+
+/**
+ * Every settled observation held in the archive files, one at a time.
+ *
+ * This is what makes deletion safe. The fold rebuilds the statistics from scratch on every
+ * run, so the moment a settled row leaves MySQL the next fold would replace 77,553 priced
+ * settlements with whatever is left -- silently, and with a smaller number that still looks
+ * like a working page. Reading the archives back means the rows can go and the statistics
+ * stay whole.
+ *
+ * Streamed line by line, never held: the archive is the whole settled history and the point
+ * of moving it out of the database was that it does not fit anywhere comfortably.
+ */
+function trading_storage_stream_archived_observations(callable $onRow): int
+{
+    $root = __DIR__ . '/data/observation-archive';
+    $files = glob($root . '/*/*.ndjson.gz') ?: [];
+    sort($files, SORT_STRING);
+    $seen = 0;
+    foreach ($files as $file) {
+        $handle = gzopen($file, 'rb');
+        if ($handle === false) {
+            // Named rather than skipped in silence: a file that cannot be opened is settled
+            // history the statistics are now missing, and nothing else would say so.
+            throw new RuntimeException('Could not read the observation archive ' . basename($file));
+        }
+        while (($line = gzgets($handle)) !== false) {
+            $decoded = json_decode(trim($line), true);
+            $payload = is_array($decoded) ? ($decoded['payload'] ?? null) : null;
+            if (!is_array($payload)) {
+                continue;
+            }
+            $seen++;
+            $onRow($payload);
+        }
+        gzclose($handle);
+    }
+    return $seen;
 }
 
 function trading_storage_resolved_stats_tags(PDO $pdo, int $limit = 2000): array

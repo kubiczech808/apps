@@ -461,46 +461,18 @@ jobs:
               raise
           PY
 
-  restore-archived-observations:
-    # Recovery for the observation retention that briefly removed historical rows.
-    # The endpoint only INSERT IGNOREs missing keys, so current importer writes win.
-    needs: deploy
-    runs-on: ubuntu-latest
-    timeout-minutes: 50
-    env:
-      STORAGE_URL: https://www.osobnizkusenosti.cz/trading/api.php?action=storage-admin
-      TRADING_TRIGGER_KEY: ${{ secrets.POLYTRADING_DB_PASSWORD }}
-    steps:
-      - name: Restore archived observation snapshots into MySQL
-        run: |
-          python3 - <<'PY'
-          import json
-          import os
-          import time
-          import urllib.request
+  # The one-time recovery that used to run here has been removed, and removing it was
+  # required before settled observations could be archived on purpose.
+  #
+  # It existed for a retention job that deleted historical rows before the read path was
+  # ready, and it restored them from data/observation-archive. Its "already done" flag is
+  # only written when the walk actually finishes -- an EMPTY archive directory returns
+  # done without recording anything. The directory on the host is empty, so the flag was
+  # never set, and the moment Archive Resolved Observations wrote its first file this job
+  # would have read it back into MySQL on the next deploy. The reduction would have undone
+  # itself, on a schedule, with both copies reporting success.
+  #
+  # The restore itself is still there and still works: storage-admin's
+  # restore-observation-archives, run deliberately. That is the way back, and it should not
+  # also be something a deploy does on its own.
 
-          url = os.environ["STORAGE_URL"]
-          key = os.environ["TRADING_TRIGGER_KEY"]
-          totals = {"scanned": 0, "restored": 0, "alreadyPresent": 0}
-          for _ in range(10000):
-              request = urllib.request.Request(
-                  url,
-                  data=json.dumps({"operation": "restore-observation-archives", "limit": 250}).encode("utf-8"),
-                  method="POST",
-                  headers={"Content-Type": "application/json", "X-Trading-Trigger-Key": key},
-              )
-              with urllib.request.urlopen(request, timeout=90) as response:
-                  payload = json.loads(response.read().decode("utf-8"))
-              if not payload.get("ok"):
-                  raise RuntimeError(payload.get("error") or "Observation archive recovery failed")
-              result = payload.get("result") or {}
-              for field in totals:
-                  totals[field] += int(result.get(field) or 0)
-              print(f"scanned={totals['scanned']} restored={totals['restored']} alreadyPresent={totals['alreadyPresent']}")
-              if result.get("done"):
-                  print("::notice title=Trading observation recovery complete::" + json.dumps(totals))
-                  break
-              time.sleep(1)
-          else:
-              raise RuntimeError("Observation archive recovery did not finish within its safety limit")
-          PY

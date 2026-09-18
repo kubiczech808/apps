@@ -7410,7 +7410,18 @@ try {
             $accumulated = resolved_stats_accumulate(
                 $sources,
                 5.0,
-                static fn (callable $onRow): int => trading_storage_resolved_observations_stream($pdo, $onRow),
+                static function (callable $onRow) use ($pdo): int {
+                    // The database AND the archive files. Once a settled row is moved out,
+                    // the database no longer has it -- and a fold that rebuilds from scratch
+                    // would quietly replace 77,553 priced settlements with whatever remained.
+                    // Rows seen twice are summed once, by token, so overlap is harmless.
+                    $fromDatabase = trading_storage_resolved_observations_stream($pdo, $onRow);
+                    $fromArchive = function_exists('trading_storage_stream_archived_observations')
+                        ? trading_storage_stream_archived_observations($onRow)
+                        : 0;
+                    $GLOBALS['trading_fold_archive_rows'] = $fromArchive;
+                    return $fromDatabase + $fromArchive;
+                },
             );
             if (($accumulated['priced'] ?? 0) <= 0) {
                 // Replacing the stored cells with nothing would turn the Setup finder blank
@@ -7444,6 +7455,33 @@ try {
                 'operation' => 'row-density',
                 'density' => trading_storage_row_density($pdo),
             ]);
+        }
+        // Moves settled observations out of MySQL into gzipped NDJSON, one bounded batch at a
+        // time. The statistics keep reading them: the fold streams the archive alongside the
+        // table, so what leaves the database does not leave the Setup finder.
+        //
+        // One batch per call, deliberately. The caller repeats until done=true, so a hosting
+        // timeout costs one batch rather than a half-finished delete -- and each batch is
+        // written, closed, re-read and counted before a single row is removed. See
+        // trading_storage_archive_resolved_observations.
+        if ($operation === 'archive-resolved-observations') {
+            @set_time_limit(0);
+            @ignore_user_abort(true);
+            // The fold has to be able to read back what this removes, or the first successful
+            // batch quietly shrinks the statistics. Checked here rather than assumed, because
+            // the two functions ship in the same file and the check costs nothing.
+            if (!function_exists('trading_storage_stream_archived_observations')) {
+                respond([
+                    'ok' => false,
+                    'error' => 'The deployed storage.php cannot read archives back; nothing was archived.',
+                ], 409);
+            }
+            $result = trading_storage_archive_resolved_observations(
+                $pdo,
+                (int) ($storageRequest['limit'] ?? 2000),
+                (int) ($storageRequest['keepDays'] ?? 0),
+            );
+            respond(['ok' => true, 'operation' => 'archive-resolved-observations', 'batch' => $result]);
         }
         // Read-only. What an observation row is made of, field by field, and what it
         // would weigh holding only what anything reads. See
