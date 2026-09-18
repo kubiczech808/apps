@@ -1,5 +1,6 @@
 from pathlib import Path
 
+
 source = Path("server-current/signup-user.php")
 target = Path("deploy-root/www/signup-user.php")
 html = source.read_text(encoding="utf-8", errors="replace")
@@ -67,8 +68,7 @@ block = """    <?php if (!empty($_SESSION['btcdca_google_error'])): ?>
 if ".google-oauth-wrap" not in html:
     if "</style>" not in html:
         raise SystemExit("Could not find </style> in signup-user.php")
-    html = html.replace("</style>", css + "
-  </style>", 1)
+    html = html.replace("</style>", css + "\n  </style>", 1)
 
 if "btcdca-google-token-login" not in html:
     replaced = False
@@ -102,7 +102,7 @@ html = html.replace(
     '<div class="step"><span class="step-num">2</span><span>Portfolio</span></div>',
 )
 html = html.replace(
-    '<h1 class="auth-title">You're almost there</h1>',
+    '<h1 class="auth-title">You\'re almost there</h1>',
     '<h1 class="auth-title">Create your account</h1>',
 )
 html = html.replace(
