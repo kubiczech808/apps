@@ -336,6 +336,26 @@ test('1H rebound inherits its active 4H down wave until it closes above the pare
   assert.ok(hourly.structure.developingCounterSwing.price > 157 && hourly.structure.developingCounterSwing.price < 160.4)
 })
 
+test('a fresh 4H down break keeps the 1H chart directional but non-executable', () => {
+  const hourly = classifyStructure(zigzag([152.9, 157.7], { steps: 16 }), {
+    lookback: 2, minCandles: 20, includeZones: false,
+  })
+  const fourHour = {
+    trend: 'down',
+    structureConfirmed: false,
+    structure: {
+      activeRange: {
+        high: { kind: 'high', label: 'LH', price: 160.4, time: START, candleIndex: 0 },
+        low: { kind: 'low', label: 'LL', price: 152.9, time: START + 8 * HOUR, candleIndex: 8 },
+      },
+    },
+  }
+  alignOneHourStructureToFourHour({ '1h': hourly, '4h': fourHour })
+  assert.equal(hourly.trend, 'down')
+  assert.equal(hourly.structureConfirmed, false)
+  assert.equal(hourly.structure.confirmed, false)
+})
+
 test('a delayed 4H spine uses its current LH to LL wave for pullback levels', () => {
   const points = [145, 150, 147, 155, 150, 164, 155.2, 159.8, 158, 160.4, 152.9, 156.5]
   const legSteps = [100, 100, 100, 100, 100, 50, 8, 8, 50, 50, 50]

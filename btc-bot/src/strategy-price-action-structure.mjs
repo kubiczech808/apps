@@ -3,7 +3,7 @@ import { ceilPrice, floorPrice, normalizeCandlePrices, roundPrice } from './pric
 import { buildFvgSupplyDemandZones, candleSignal, marketStructure } from './priceaction.mjs'
 
 export const PRICE_ACTION_STRUCTURE_ID = 'price-action-structure-v1'
-export const PRICE_ACTION_MATRIX_SCHEMA = 30
+export const PRICE_ACTION_MATRIX_SCHEMA = 31
 export const PRICE_ACTION_CHART_CANDLE_LIMITS = {
   '1h': 8760,
   '4h': 2190,
@@ -1222,7 +1222,6 @@ export const alignOneHourStructureToFourHour = (trends) => {
   const close = item?.lastCandle?.close
   if (
     !item ||
-    !higher?.structureConfirmed ||
     (trend !== 'up' && trend !== 'down') ||
     !Number.isFinite(high?.price) ||
     !Number.isFinite(low?.price) ||
@@ -1265,7 +1264,11 @@ export const alignOneHourStructureToFourHour = (trends) => {
 
   item.trend = trend
   item.establishedTrend = trend
-  item.structureConfirmed = true
+  // A just-broken 4H structure still supplies the correct directional spine
+  // to the 1H chart, but must remain non-executable until its own wave has
+  // completed. The visual direction and the execution permission are thus
+  // intentionally separate here.
+  item.structureConfirmed = higher.structureConfirmed !== false
   item.status = trend === 'up' ? 'met' : 'unmet'
   item.event = null
   item.eventDetail = null
@@ -1281,7 +1284,7 @@ export const alignOneHourStructureToFourHour = (trends) => {
     protectedLow: trend === 'up' ? inheritedRange.low : item.structure?.protectedLow ?? null,
     developingCounterSwing: developingCounter,
     recentSwings,
-    confirmed: true,
+    confirmed: item.structureConfirmed,
     inheritedFromTimeframe: '4h',
   }
   return item
