@@ -7296,6 +7296,12 @@ try {
         // archive, a full replace of the statistics table, and the only write it makes.
         // See trading_storage_resolved_stats_replace.
         if ($operation === 'refresh-resolved-stats') {
+            // Streaming hundreds of megabytes of archive and writing tens of thousands of
+            // cells is minutes, not seconds, and the default limit is written for a page view.
+            // Cut short, this leaves the stored cells as they were -- correct, but a fold that
+            // can never finish is a fold that never happens.
+            @set_time_limit(0);
+            @ignore_user_abort(true);
             $corePath = state_file_paths()['paper'];
             $core = decode_state_file($corePath, false);
             $manifest = is_array($core['stateSegments'] ?? null) ? $core['stateSegments'] : [];

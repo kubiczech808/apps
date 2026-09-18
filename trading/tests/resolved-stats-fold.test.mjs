@@ -362,6 +362,10 @@ test("the fold refuses to store an empty result over a good one", () => {
   const operation = API.slice(API.indexOf("$operation === 'refresh-resolved-stats'"));
   const block = operation.slice(0, operation.indexOf("respond([\n                'ok' => true"));
   assert.match(block, /\['priced'\] \?\? 0\) <= 0/, "it must check that something was priced");
+  // And it must be allowed the time. Streaming the archive and writing the cells is minutes;
+  // the default limit is written for a page view, and a fold that is always cut short is a
+  // fold that never happens.
+  assert.match(block, /set_time_limit\(0\)/, "the fold must lift the execution limit");
   assert.ok(block.indexOf("priced") < block.indexOf("trading_storage_resolved_stats_replace"),
     "and check before it writes, not after");
 });
