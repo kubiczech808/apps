@@ -12,7 +12,7 @@ RewriteRule ^ /app/%1 [R=301,L,NE]
 RewriteRule ^app/?$ /app/index.php [R=302,L,NE]
 RewriteRule ^app/overview/?$ /app/overview.php [L,QSA]
 RewriteRule ^app/([^/.]+)/?$ /app/$1.php [L,QSA]
-RewriteRule ^(login-user|signup-user|dca-calculator|forgot-password|reset-code|new-password|password-changed|user-otp|logout-user|btcdca-google-login|btcdca-google-callback|btcdca-google-token-login)/?$ $1.php [L,QSA]
+RewriteRule ^(login-user|signup-user|dca-calculator|forgot-password|reset-code|new-password|password-changed|user-otp|logout-user|btcdca-google-login|btcdca-google-callback|btcdca-google-token-login)/?$ /$1.php [L,QSA]
 
 # Preserve the legacy API guide URL with a canonical replacement.
 RewriteRule ^how-to-set-up-api-key\.php$ /btc-dca-coinmate-how-to-set-up-api-key/ [R=301,L,NE]
