@@ -51,7 +51,10 @@ READS = [
     ("scan preferences", "api.php?action=scan-preferences"),
     ("scan history", "api.php?action=scan-history&page=1"),
     ("setup finder", "api.php?action=resolved-combinations&min_trades=25"),
-    ("taxonomy", "api.php?action=taxonomy-observations&target=paper"),
+    # taxonomy-observations needs a taxonomy value; without one BOTH paths answer 400 and the
+    # probe reported a blocker that is its own missing parameter. Named here so the next
+    # reader does not have to rediscover that.
+    ("taxonomy", "api.php?action=taxonomy-observations&target=paper&taxonomy=tag"),
 ]
 
 
@@ -164,3 +167,37 @@ if warnings:
     print("\nDifferences and costs worth deciding on before flipping:")
     for name, why in warnings:
         print(f"   {name}: {why}")
+
+# The blocker above is one thing wearing two faces: the database serves no per-portfolio
+# segment manifest, so the bot's rebuild read is refused AND the dashboard's segment list
+# comes back empty. Lifting it means assembling every portfolio's trades in one response,
+# and whether that is even possible on this host is a number rather than an opinion.
+print("\n== can the database assemble the read that blocks the cutover")
+body = json.dumps({"operation": "refresh-assembly-cost"}).encode("utf-8")
+request = urllib.request.Request(
+    f"{HOST}/api.php?action=storage-admin", data=body, method="POST",
+    headers={"Content-Type": "application/json", "X-Trading-Trigger-Key": KEY})
+try:
+    with urllib.request.urlopen(request, timeout=180) as response:
+        assembly = json.loads(response.read().decode("utf-8")).get("assembly") or {}
+except urllib.error.HTTPError as error:
+    assembly = {"error": error.read().decode("utf-8", "replace")[:300]}
+except Exception as error:
+    assembly = {"error": str(error)[:200]}
+
+if assembly.get("error"):
+    print(f"   could not measure: {assembly['error']}")
+elif not assembly:
+    print("   no answer")
+else:
+    mb = lambda value: f"{(int(value or 0) / 1048576):.1f} MB"
+    print(f"   stored portfolio documents : {assembly.get('documentsLoaded')} of {assembly.get('documentsFound')}")
+    if assembly.get("documentsMissing"):
+        print(f"   NEVER MIRRORED            : {', '.join(assembly['documentsMissing'][:8])}")
+    print(f"   trades in them             : {assembly.get('trades')}")
+    largest = assembly.get("largestPortfolio") or {}
+    print(f"   largest portfolio          : {largest.get('key')} ({largest.get('trades')} trades)")
+    print(f"   assembled response would be: {mb(assembly.get('assembledBytes'))}")
+    print(f"   peak while assembling      : {mb(assembly.get('peakBytes'))} of {assembly.get('memoryLimit')}")
+    print(f"   headroom left              : {mb(assembly.get('headroomBytes'))}")
+    print(f"   VERDICT                    : {'fits comfortably' if assembly.get('fits') else 'DOES NOT FIT'}")
