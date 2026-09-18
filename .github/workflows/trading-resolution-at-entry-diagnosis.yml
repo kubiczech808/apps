@@ -1,0 +1,34 @@
+name: Trading Resolution At Entry Diagnosis
+
+# READ-ONLY, manual only. Public GETs against the published state. No secrets, no writes.
+#
+# Reported on "70-80 esports": the "Resolution at entry" table shows <= 1 day as heavily
+# loss-making and as nearly every trade, with the rest "Not recorded" -- so it cannot be
+# told whether those were opened after the stated end date or more than a day ahead.
+on:
+  workflow_dispatch:
+    inputs:
+      portfolio:
+        description: "Portfolio name or id to measure"
+        required: false
+        default: "70-80 esports"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Measure the horizon at entry
+        working-directory: trading
+        env:
+          TRADING_HOST: https://osobnizkusenosti.cz/trading
+          PROBE_PORTFOLIO: ${{ inputs.portfolio || '70-80 esports' }}
+        run: node tools/resolution-at-entry-probe.mjs
