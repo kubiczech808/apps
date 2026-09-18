@@ -108,13 +108,20 @@ jobs:
                       "?action=resolved-combinations&min_trades=30&limit=400")
           with urllib.request.urlopen(rows_url, timeout=300) as response:
               body = json.loads(response.read().decode("utf-8"))
-          rows = body.get("rows") or []
+          # "combinations", not "rows". The first version read a key that does not exist and
+          # reported zero -- which is precisely what printing the response's own keys is for,
+          # and it caught it on the first run.
+          rows = body.get("combinations") or []
           # The response's own keys, because the first version of this printed "0 combinations
           # with at least 200 trades / 0 of them at 0% or 100%" and read as a clean bill of
           # health. It was a clean bill of health issued over an empty list -- the same
           # failure that once produced "No portfolio matching" from a response nobody had
           # looked inside. An empty read must look like a broken check, not like good news.
           print(f"\nresponse keys: {', '.join(sorted(body.keys()))}")
+          for label in ("best", "worst"):
+              entry = body.get(label)
+              if isinstance(entry, dict):
+                  print(f"{label}: {json.dumps(entry)[:220]}")
           print(f"{len(rows)} combination(s) with at least 30 trades")
           if not rows:
               print("::warning title=Believability check saw nothing::"
