@@ -92,11 +92,38 @@ class StubPdo {
     public bool $inTransaction = false;
     public array $log = [];
     public function beginTransaction(): bool { $this->inTransaction = true; $this->log[] = 'BEGIN'; return true; }
-    public function commit(): bool { $this->inTransaction = false; $this->log[] = 'COMMIT'; return true; }
-    public function rollBack(): bool { $this->inTransaction = false; $this->log[] = 'ROLLBACK'; return true; }
+    // PDO throws on a commit or rollback with nothing open, and that matters here: the first
+    // fold on production reported "There is no active transaction" from the ROLLBACK, which
+    // had replaced the real fault with a message about the cleanup.
+    public function commit(): bool {
+        if (!$this->inTransaction) { throw new PDOException('There is no active transaction'); }
+        $this->inTransaction = false; $this->log[] = 'COMMIT'; return true;
+    }
+    public function rollBack(): bool {
+        if (!$this->inTransaction) { throw new PDOException('There is no active transaction'); }
+        $this->inTransaction = false; $this->log[] = 'ROLLBACK'; return true;
+    }
+    public function inTransaction(): bool { return $this->inTransaction; }
     public function exec(string $sql) {
         $this->log[] = $sql;
         if (str_contains($sql, 'DELETE FROM trading_resolved_stats')) { $this->rows = []; }
+        // MySQL implicitly commits an open transaction when it sees DDL. Without this the
+        // stub happily ran a "transaction" that the real server had already closed, which is
+        // exactly the failure that reached production: trading_storage_meta_put() bootstraps,
+        // the bootstrap issues CREATE TABLE IF NOT EXISTS, and the commit that followed had
+        // nothing left to commit.
+        // Written without a single backslash, on purpose. This file builds PHP inside a
+        // JavaScript template literal, and a template literal eats unknown escapes: a regex
+        // spelled /^\s*(CREATE|...)/ in the source arrives at PHP as /^s*(CREATE|...)/ and
+        // matches nothing. It did exactly that here, so the implicit-commit check silently
+        // never ran and the bait it was written for passed.
+        $head = strtoupper(ltrim($sql));
+        foreach (['CREATE ', 'ALTER ', 'DROP ', 'TRUNCATE ', 'RENAME '] as $verb) {
+            if (str_starts_with($head, $verb) && $this->inTransaction) {
+                $this->inTransaction = false;
+                $this->log[] = 'IMPLICIT COMMIT';
+            }
+        }
         return 0;
     }
     public function query(string $sql) { $this->log[] = $sql; return new StubStatement($this, $sql); }
@@ -138,7 +165,11 @@ class StubPdo {
     }
 }
 
-function trading_storage_meta_put(string $key, string $value): void { $GLOBALS['meta'][$key] = $value; }
+function trading_storage_meta_put(string $key, string $value): void {
+    // Like the real one: it bootstraps the schema first, and the bootstrap is DDL.
+    $GLOBALS['pdo']->exec('CREATE TABLE IF NOT EXISTS trading_storage_meta (meta_key CHAR(64))');
+    $GLOBALS['meta'][$key] = $value;
+}
 function trading_storage_meta_get(string $key): ?string { return $GLOBALS['meta'][$key] ?? null; }
 $GLOBALS['meta'] = [];
 
@@ -147,6 +178,7 @@ ${PIECES}
 $sources = [[${JSON.stringify(archive)}, 'resolvedMarketObservations']];
 $accumulated = resolved_stats_accumulate($sources);
 $pdo = new StubPdo();
+$GLOBALS['pdo'] = $pdo;
 ${skipStore ? "" : `$stored = trading_storage_resolved_stats_replace($pdo, $accumulated['cells'], $accumulated['anyTag'],
     ['scanned' => $accumulated['scanned'], 'priced' => $accumulated['priced']]);`}
 $loaded = trading_storage_resolved_stats_load($pdo);
@@ -246,6 +278,14 @@ test("the replace is all-or-nothing and clears what was there", () => {
     "yesterday's cells must go, or the table accumulates two archives at once");
   assert.ok(log.indexOf("BEGIN") < log.indexOf("DELETE FROM trading_resolved_stats"),
     "and the delete must be inside the transaction, not before it");
+  // Nothing inside the transaction may issue DDL. MySQL commits implicitly when it sees any,
+  // which ends the transaction underneath and turns the commit into an error about the
+  // commit rather than about whatever went wrong.
+  const begin = result.log.indexOf("BEGIN");
+  const commit = result.log.indexOf("COMMIT");
+  assert.ok(commit > begin, `the transaction must reach its commit: ${result.log.join(" | ")}`);
+  assert.ok(!result.log.slice(begin, commit).includes("IMPLICIT COMMIT"),
+    `no DDL may run inside the transaction: ${result.log.slice(begin, commit).join(" | ")}`);
 });
 
 test("BAIT: a tag cell and an any-tag cell must not collide", () => {

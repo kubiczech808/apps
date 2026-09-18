@@ -1712,18 +1712,33 @@ function trading_storage_resolved_stats_replace(PDO $pdo, array $cells, array $a
             }
             $statements[$count]->execute($bindings);
         }
-        trading_storage_meta_put('resolved-stats-folded-at', $now);
-        trading_storage_meta_put('resolved-stats-fold', (string) json_encode([
-            'cells' => count($rows),
-            'scanned' => (int) ($meta['scanned'] ?? 0),
-            'priced' => (int) ($meta['priced'] ?? 0),
-            'foldedAt' => $now,
-        ], JSON_UNESCAPED_SLASHES));
         $pdo->commit();
     } catch (Throwable $throwable) {
-        $pdo->rollBack();
+        // Guarded, because a rollBack on a transaction that is already gone throws "There is
+        // no active transaction" -- and that replaces whatever actually went wrong with a
+        // message about the cleanup. It is how the first fold on production reported its
+        // failure, and the report was about the handler, not the fault.
+        if ($pdo->inTransaction()) {
+            $pdo->rollBack();
+        }
         throw $throwable;
     }
+
+    // AFTER the commit, deliberately. trading_storage_meta_put() bootstraps the schema, and
+    // CREATE TABLE IF NOT EXISTS is DDL -- which MySQL implicitly commits, ending the
+    // transaction underneath this function. Called from inside, it silently committed the
+    // cells and then made commit() itself fail.
+    //
+    // Losing the marker after a good commit is the safe way round: the loader returns null
+    // without it, and the page falls back to streaming the archive rather than serving cells
+    // it cannot date.
+    trading_storage_meta_put('resolved-stats-folded-at', $now);
+    trading_storage_meta_put('resolved-stats-fold', (string) json_encode([
+        'cells' => count($rows),
+        'scanned' => (int) ($meta['scanned'] ?? 0),
+        'priced' => (int) ($meta['priced'] ?? 0),
+        'foldedAt' => $now,
+    ], JSON_UNESCAPED_SLASHES));
 
     return ['cells' => count($rows), 'foldedAt' => $now];
 }
