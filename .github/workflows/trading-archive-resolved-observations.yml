@@ -20,6 +20,16 @@ name: Archive Resolved Observations
 # still needed the rows. The difference now is that the read path was moved first.
 
 on:
+  schedule:
+    # 00:41 UTC, half an hour before Fold Resolved Statistics at 01:11, so the settlements
+    # this moves out are already in the archive when the fold reads it. The owner asked for
+    # the rows "ktere budou teprve do datove strukture pribyvat" as well as the ones already
+    # there, and a one-off bulk run only handles the second half: roughly 4,500 fresh
+    # settlements were waiting on the day this was written, and they arrive every day.
+    #
+    # GitHub delivers a small fraction of scheduled runs, so this is best effort. Missing a
+    # night costs nothing: the next run takes the backlog, oldest first.
+    - cron: "41 0 * * *"
   workflow_dispatch:
     inputs:
       batches:
@@ -47,6 +57,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Archive settled observations, verifying before each delete
+        id: archive
         env:
           TRADING_TRIGGER_KEY: ${{ secrets.POLYTRADING_DB_PASSWORD }}
           BATCHES: ${{ github.event.inputs.batches || '5' }}
@@ -153,10 +164,17 @@ jobs:
               f"database {before['databaseMB']} MB -> {after['databaseMB']} MB, "
               f"observations {before['observationsMB']} MB -> {after['observationsMB']} MB"
           )
+
+          # So the fold check below can be skipped on a night when nothing settled. Re-folding
+          # tens of thousands of cells to prove that zero rows moved is work for nothing.
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as handle:
+              handle.write(f"archived={archived}\n")
           PY
 
       - name: Check the statistics still see the settlements that were moved out
-        if: ${{ always() }}
+        # On failure too: a run that died midway may still have moved rows, and that is
+        # exactly when the statistics need checking. Skipped only when nothing was archived.
+        if: ${{ always() && steps.archive.outputs.archived != '0' }}
         env:
           TRADING_TRIGGER_KEY: ${{ secrets.POLYTRADING_DB_PASSWORD }}
         run: |

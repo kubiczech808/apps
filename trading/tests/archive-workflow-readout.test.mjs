@@ -163,3 +163,36 @@ test("the fold check refuses a run that lost settlements", () => {
   assert.match(check, /result\.get\("priced"\)/,
     "read from the response's own keys -- 'rows' and 'combinations' were both wrong before");
 });
+
+test("the nightly run exists, and its fold check cannot be skipped after a delete", () => {
+  // "a tech, ktere budou teprve do datove strukture pribyvat" -- a one-off bulk run only
+  // handles the rows that are already there. Around 4,500 fresh settlements were waiting on
+  // the day this was written, and more arrive every day.
+  const on = WORKFLOW.slice(0, WORKFLOW.indexOf("\njobs:"));
+  assert.match(on, /cron: "41 0 \* \* \*"/, "the archive runs nightly");
+  assert.ok(WORKFLOW.indexOf('cron: "41 0') > 0, "and before the 01:11 fold, so the archive is ready for it");
+
+  // The gate exists so a night with nothing to archive does not re-fold tens of thousands of
+  // cells for nothing. It must still fire when rows DID move, including when the run failed
+  // partway -- that is precisely when the statistics need checking.
+  const check = WORKFLOW.slice(WORKFLOW.indexOf("Check the statistics still see"));
+  const condition = check.slice(0, check.indexOf("run:"));
+  assert.match(condition, /always\(\)/, "a failed run may still have moved rows");
+  assert.match(condition, /steps\.archive\.outputs\.archived != '0'/);
+  assert.ok(!/archived == '0'/.test(condition), "the sense of the test must not be inverted");
+  // And the count it reads has to actually be written.
+  assert.match(WORKFLOW, /handle\.write\(f"archived=\{archived\}\\n"\)/,
+    "the step must publish what it archived, or the gate reads an empty string forever");
+});
+
+test("BAIT: a gate that skips the check after archiving is a fault, not a saving", () => {
+  // The dangerous inversion. If the condition were ever written so that a run which moved
+  // 20,000 rows skipped the fold check, the one guarantee this whole design rests on --
+  // that the statistics can still read what left MySQL -- would go unverified, quietly.
+  const check = WORKFLOW.slice(WORKFLOW.indexOf("Check the statistics still see"));
+  const condition = check.slice(0, check.indexOf("run:"));
+  const skipsWhenArchived = /outputs\.archived == '0'/.test(condition)
+    || /outputs\.archived != ''/.test(condition) === false && /archived == /.test(condition);
+  assert.equal(skipsWhenArchived, false,
+    `the check must run whenever rows moved: ${condition.trim()}`);
+});
