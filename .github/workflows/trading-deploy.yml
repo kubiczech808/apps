@@ -104,7 +104,9 @@ jobs:
         run: |
           python3 - <<'PY'
           import ftplib
+          import importlib.util
           import os
+          import pathlib
           from pathlib import Path
 
           server = os.environ["HOSTING_FTP_SERVER"]
@@ -129,6 +131,14 @@ jobs:
                       except ftplib.error_perm:
                           pass
                       ftp.cwd(part)
+
+          # Loaded from the repository rather than restated inline, so the test and the
+          # deploy run the same decision.
+          _cleanup_spec = importlib.util.spec_from_file_location(
+              "deploy_cleanup", pathlib.Path("trading/tools/deploy-cleanup.py"))
+          _cleanup = importlib.util.module_from_spec(_cleanup_spec)
+          _cleanup_spec.loader.exec_module(_cleanup)
+          stale_entries = _cleanup.stale_entries
 
           def list_names(ftp):
               try:
@@ -319,12 +329,23 @@ jobs:
                       ftp.rename(staged, path.name)
 
               enter_dir(ftp, target_parts)
-              for name in list_names(ftp):
-                  if name == "data":
-                      clean_data_dir(ftp)
-                      continue
-              if name not in deploy_roots:
+              published = list_names(ftp)
+              if "data" in published:
+                  clean_data_dir(ftp)
+              # The removal decision lives in trading/tools/deploy-cleanup.py so it can be
+              # executed by a test. It used to sit here as an `if` at the loop's own
+              # indentation -- outside the loop -- so it ran exactly once, against whichever
+              # name the server listed last: every other stale directory was never cleaned,
+              # the one that was deleted was chosen by directory order, and an empty listing
+              # left the name unbound and killed the deploy with a NameError.
+              verdict = stale_entries(published, deploy_roots)
+              if verdict["refuse"]:
+                  print(f"::warning title=Deploy cleanup refused::{verdict['refuse']}")
+              for name in verdict["remove"]:
+                  print(f"removing stale published entry: {name}")
                   remove_tree(ftp, name)
+              for name in verdict.get("skipped") or []:
+                  print(f"left alone, not a plain entry: {name!r}")
           PY
 
       - name: Check dedicated Trading MySQL storage
