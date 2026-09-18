@@ -72,6 +72,8 @@ def main() -> None:
         require_page(f"/{slug}/", 200, "/assets/img/guides/guide.css")
     require_page("/learn-center/", 410)
     require_page("/app/", 200, "<html")
+    require_page("/login-user", 200, "<html")
+    require_page("/signup-user", 200, "<html")
     print("Public static site, preserved guides, retired Learn Center, and app verified.")
 
 
