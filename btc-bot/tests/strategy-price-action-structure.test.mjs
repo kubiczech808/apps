@@ -1097,6 +1097,7 @@ test('price-action matrix covers BTCUSD and major FX pairs on 1H, 4H and 1D', as
   assert.equal(matrix.assets[0].trends['4h'].structure.zoneMaxAgeCandles, 1080)
   assert.ok(matrix.assets[0].trends['4h'].zones)
   assert.ok(matrix.assets[0].trends['4h'].tradeProfile)
+  assert.ok(Array.isArray(matrix.assets[0].trends['4h'].structure.chartPivots))
   assert.ok(matrix.assets[0].trends['4h'].chartCandles.length <= PRICE_ACTION_CHART_CANDLE_LIMITS['4h'])
 })
 
@@ -1107,9 +1108,9 @@ test('fresh price-action matrix is reused instead of refetching every bot pass',
     assets: PRICE_ACTION_ASSETS.map((asset) => ({
       symbol: asset.symbol,
       trends: {
-        '1h': { structure: {}, chartCandles: [], tradeProfile: { zoneCandidates: [] } },
-        '4h': { structure: {}, chartCandles: [], tradeProfile: { zoneCandidates: [] } },
-        '1d': { structure: {}, chartCandles: [], tradeProfile: { zoneCandidates: [] } },
+        '1h': { structure: { chartPivots: [] }, chartCandles: [], tradeProfile: { zoneCandidates: [] } },
+        '4h': { structure: { chartPivots: [] }, chartCandles: [], tradeProfile: { zoneCandidates: [] } },
+        '1d': { structure: { chartPivots: [] }, chartCandles: [], tradeProfile: { zoneCandidates: [] } },
       },
     })),
   }
@@ -1131,9 +1132,9 @@ test('stored hourly price-action refresh is capped so entry profiles are checked
     assets: PRICE_ACTION_ASSETS.map((asset) => ({
       symbol: asset.symbol,
       trends: {
-        '1h': { structure: {}, chartCandles: [], tradeProfile: { zoneCandidates: [] } },
-        '4h': { structure: {}, chartCandles: [], tradeProfile: { zoneCandidates: [] } },
-        '1d': { structure: {}, chartCandles: [], tradeProfile: { zoneCandidates: [] } },
+        '1h': { structure: { chartPivots: [] }, chartCandles: [], tradeProfile: { zoneCandidates: [] } },
+        '4h': { structure: { chartPivots: [] }, chartCandles: [], tradeProfile: { zoneCandidates: [] } },
+        '1d': { structure: { chartPivots: [] }, chartCandles: [], tradeProfile: { zoneCandidates: [] } },
       },
     })),
   }

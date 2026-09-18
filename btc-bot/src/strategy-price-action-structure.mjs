@@ -3,7 +3,7 @@ import { ceilPrice, floorPrice, normalizeCandlePrices, roundPrice } from './pric
 import { buildFvgSupplyDemandZones, candleSignal, marketStructure } from './priceaction.mjs'
 
 export const PRICE_ACTION_STRUCTURE_ID = 'price-action-structure-v1'
-export const PRICE_ACTION_MATRIX_SCHEMA = 31
+export const PRICE_ACTION_MATRIX_SCHEMA = 32
 export const PRICE_ACTION_CHART_CANDLE_LIMITS = {
   '1h': 8760,
   '4h': 2190,
@@ -1639,7 +1639,10 @@ const hasStructureDetails = (matrix) =>
   Boolean(matrix?.schemaVersion === PRICE_ACTION_MATRIX_SCHEMA && matrix?.assets?.every((asset) =>
     PRICE_ACTION_TIMEFRAMES.every((timeframe) => {
       const item = asset.trends?.[timeframe.id]
-      return item?.structure && Array.isArray(item?.chartCandles) && Array.isArray(item?.tradeProfile?.zoneCandidates)
+      return item?.structure
+        && Array.isArray(item?.structure?.chartPivots)
+        && Array.isArray(item?.chartCandles)
+        && Array.isArray(item?.tradeProfile?.zoneCandidates)
     })
   ))
 
