@@ -60,7 +60,23 @@ concurrency:
   # Renaming the group moves every trading writer into a fresh one together, which is why
   # all six files change in the same commit: splitting them would put concurrent FTP writes
   # back, which is the thing the group exists to prevent.
-  group: trading-hosting-write-2-${{ github.ref }}
+  # Split from one shared lock along the files these workflows actually write.
+  #
+  # Measured, and it is why paper portfolios stopped trading: 90 of the last 100 paper bot
+  # runs were CANCELLED, over days. A group allows one running plus one pending, and the
+  # scan dispatches the paper bot AND both live executors within the same second -- so the
+  # live dispatches, arriving last, took the pending slot and cancelled the paper bot every
+  # time. Spacing them inside the scan cannot help: the scan holds the lock while it waits,
+  # so nothing it dispatched could start anyway.
+  #
+  # The lock exists because one constrained hosting account cannot take concurrent writes to
+  # the same file. That is the real boundary, and it runs between paper and live: the scan,
+  # the paper bot and the paper evaluation all write paper-state*, while the live executors
+  # and the account sync write live-*state*. Nothing is written by both sides.
+  #
+  # The cost, stated: two FTP sessions can now be open at once, one per side, where before
+  # there was one. That is the price of the paper portfolios running at all.
+  group: trading-hosting-write-paper-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
