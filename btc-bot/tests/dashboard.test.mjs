@@ -199,6 +199,13 @@ test('all position tables use real lifecycle timestamps and no sample trades', (
   assert.doesNotMatch(js, /sortedPriceActionProfiles\(\)\.filter\(\(entry\) => entry\.profile\.status === 'watch'\)/)
 })
 
+test('price-action take-profit orders render as a protected half-position, not a cancellable entry', () => {
+  const priceActionOrders = js.slice(js.indexOf('const renderPriceActionOrders'), js.indexOf('const EXIT_REASONS'))
+  assert.match(priceActionOrders, /for \(const order of rows\) \{\r?\n    const partialTakeProfit = order\.orderRole === 'take-profit'/)
+  assert.match(priceActionOrders, /const cancel = partialTakeProfit \? null : el\('button', \{ type: 'button', text: 'Zrušit' \}\)/)
+  assert.match(priceActionOrders, /partialTakeProfit \? `TP1 \$\{quotePrice\(order\.entry\)\} · 50 %`/)
+})
+
 test('asset tickers open a timeframe price chart with supply and demand zones', () => {
   assert.ok(html.includes('id="asset-chart-card"'), 'dashboard must contain the asset chart below the decision table')
   assert.ok(html.includes('id="asset-chart-svg"'), 'dashboard must contain the asset chart surface')

@@ -2240,8 +2240,9 @@ const renderPriceActionOrders = (body) => {
     return
   }
   for (const order of rows) {
-    const cancel = el('button', { type: 'button', text: 'Zrušit' })
-    cancel.onclick = () => queueCommand('cancel', order.id)
+    const partialTakeProfit = order.orderRole === 'take-profit'
+    const cancel = partialTakeProfit ? null : el('button', { type: 'button', text: 'Zrušit' })
+    if (cancel) cancel.onclick = () => queueCommand('cancel', order.id)
     body.append(
       el('tr', {}, [
         el('td', { text: when(order.createdAt ?? order.placedAt) }),
