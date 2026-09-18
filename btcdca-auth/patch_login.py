@@ -18,7 +18,7 @@ google_block = """    <?php
       $btcdcaGoogleClientId = is_array($btcdcaGoogleConfig) ? (string)($btcdcaGoogleConfig['google_client_id'] ?? '') : '';
     ?>
     <?php if ($btcdcaGoogleClientId !== ''): ?>
-      <form id="btcdca-google-login-form" action="btcdca-google-token-login" method="post" style="display:none;">
+      <form id="btcdca-google-login-form" action="/btcdca-google-token-login/" method="post" style="display:none;">
         <input type="hidden" name="flow" value="login">
         <input type="hidden" name="credential" id="btcdca-google-login-credential">
       </form>
@@ -54,7 +54,7 @@ google_block = """    <?php
         }());
       </script>
     <?php else: ?>
-      <a class="google-oauth-btn" href="btcdca-google-login">Continue with Google</a>
+      <a class="google-oauth-btn" href="/btcdca-google-login/">Continue with Google</a>
     <?php endif; ?>
 """
 
@@ -95,22 +95,22 @@ if "btcdca-google-token-login" not in html:
 
 html = html.replace(
     'Don\'t have an account? <a href="https://www.btc-dca.com/dca-calculator.php">Start with the Calculator →</a>',
-    'Don\'t have an account? <a href="signup-user.php">Create a free account →</a>',
+    'Don\'t have an account? <a href="/signup-user/">Create a free account →</a>',
 )
 html = html.replace(
     'Don\'t have an account? <a href="dca-calculator.php">Start with the Calculator →</a>',
-    'Don\'t have an account? <a href="signup-user.php">Create a free account →</a>',
+    'Don\'t have an account? <a href="/signup-user/">Create a free account →</a>',
 )
 
-html = html.replace('action="login-user.php"', 'action="login-user"')
-html = html.replace('action="btcdca-google-token-login.php"', 'action="btcdca-google-token-login"')
-html = html.replace('href="signup-user.php"', 'href="signup-user"')
+html = html.replace('action="login-user.php"', 'action="/login-user/"')
+html = html.replace('action="btcdca-google-token-login.php"', 'action="/btcdca-google-token-login/"')
+html = html.replace('href="signup-user.php"', 'href="/signup-user/"')
 html = html.replace('href="forgot-password.php"', 'href="/forgot-password/"')
-html = html.replace('href="dca-calculator.php"', 'href="dca-calculator"')
-html = html.replace('href="btcdca-google-login.php?flow=login"', 'href="btcdca-google-login?flow=login"')
-html = html.replace('href="btcdca-google-login.php"', 'href="btcdca-google-login"')
-html = html.replace('href="https://www.btc-dca.com/login-user.php"', 'href="https://www.btc-dca.com/login-user"')
-html = html.replace('href="https://www.btc-dca.com/signup-user.php"', 'href="https://www.btc-dca.com/signup-user"')
-html = html.replace('href="https://www.btc-dca.com/dca-calculator.php"', 'href="https://www.btc-dca.com/dca-calculator"')
+html = html.replace('href="dca-calculator.php"', 'href="/dca-calculator/"')
+html = html.replace('href="btcdca-google-login.php?flow=login"', 'href="/btcdca-google-login/?flow=login"')
+html = html.replace('href="btcdca-google-login.php"', 'href="/btcdca-google-login/"')
+html = html.replace('href="https://www.btc-dca.com/login-user.php"', 'href="https://www.btc-dca.com/login-user/"')
+html = html.replace('href="https://www.btc-dca.com/signup-user.php"', 'href="https://www.btc-dca.com/signup-user/"')
+html = html.replace('href="https://www.btc-dca.com/dca-calculator.php"', 'href="https://www.btc-dca.com/dca-calculator/"')
 
 target.write_text(html, encoding="utf-8")
