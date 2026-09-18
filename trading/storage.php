@@ -784,22 +784,25 @@ function trading_storage_compact_empty_tables(PDO $pdo): array
  * that is accidentally all one market type would answer a different question than the one
  * asked.
  */
-function trading_storage_observation_payload_anatomy(PDO $pdo, int $sampleLimit = 200): array
+function trading_storage_observation_payload_anatomy(PDO $pdo, int $sampleLimit = 200, array $keep = []): array
 {
     trading_storage_bootstrap($pdo);
     $sampleLimit = max(10, min(1000, $sampleLimit));
     $half = (int) max(5, floor($sampleLimit / 2));
 
-    // The fields anything actually reads. Everything else in a row is carried and never
-    // consulted, which is the claim this function exists to test.
-    $keep = [
-        'tokenId', 'firstTokenId', 'eventSlug', 'slug', 'outcome', 'firstOutcome',
-        'firstMarketProbability', 'marketProbability', 'finalOutcomePrice',
-        'firstPolymarketTags', 'polymarketTags',
-        'endDate', 'resolutionEndDate', 'firstObservedAt', 'observedAt', 'resolvedAt',
-        'firstSpread', 'firstBestAsk', 'firstBestBid',
-        'volumeUsdc', 'status', 'question', 'id',
-    ];
+    // Which fields are READ is decided by the caller, from evidence, not here from memory.
+    //
+    // The first version of this function carried a hand-written list of "what the statistics
+    // read" and labelled everything outside it unread. That produced a headline -- 69% of
+    // every row is carried and never consulted, 426 MB recoverable -- which was simply
+    // false: riskGroupLabels is rendered in the risk column, marketDataUpdatedAt is the
+    // "Scraped" column, scheduledEventDate is where the bot derives the horizon,
+    // binaryYesTokenId decides whether a market is binary, and marketId is what blocks a
+    // second position in the same live market. Slimming on that list would have broken the
+    // dashboard and the bot.
+    //
+    // So the list now comes from grepping the runtime files, and an empty list means this
+    // reports sizes and claims nothing about what is safe to drop.
     $keepSet = array_fill_keys($keep, true);
 
     $rows = [];
@@ -850,7 +853,7 @@ function trading_storage_observation_payload_anatomy(PDO $pdo, int $sampleLimit 
 
     uasort($fields, static fn (array $left, array $right): int => $right['bytes'] <=> $left['bytes']);
     $ranked = [];
-    foreach (array_slice($fields, 0, 30, true) as $field => $stats) {
+    foreach ($fields as $field => $stats) {
         $ranked[] = [
             'field' => $field,
             'rows' => $stats['rows'],
@@ -872,6 +875,7 @@ function trading_storage_observation_payload_anatomy(PDO $pdo, int $sampleLimit 
         'keptShare' => $decodedBytes > 0 ? round($keptBytes / $decodedBytes, 4) : null,
         'fields' => $ranked,
         'readFields' => $keep,
+        'keepListSupplied' => $keep !== [],
     ];
 }
 

@@ -7194,6 +7194,11 @@ try {
                 'anatomy' => trading_storage_observation_payload_anatomy(
                     $pdo,
                     (int) ($storageRequest['sample'] ?? 200),
+                    // Supplied by the caller, which greps the runtime files for each field.
+                    // A guessed list is what made the first measurement wrong.
+                    is_array($storageRequest['keep'] ?? null)
+                        ? array_values(array_filter(array_map('strval', $storageRequest['keep'])))
+                        : [],
                 ),
             ]);
         }

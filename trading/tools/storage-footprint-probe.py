@@ -122,34 +122,110 @@ if not body:
 else:
     print(f"   {json.dumps(body, indent=2)[:2000]}")
 
-# 4. What a row is made OF. The size question is not "how many rows" -- 224 000 is not
-#    millions -- it is 2.8 kB each, and that has never been opened.
+# 4. What a row is made OF, and which of it anything reads.
+#
+#    The first version of this asked the server which fields were read, and the server
+#    answered from a list I had written from memory. It was wrong -- riskGroupLabels is
+#    rendered in the risk column, marketDataUpdatedAt is the "Scraped" column,
+#    scheduledEventDate is where the horizon comes from, binaryYesTokenId decides whether a
+#    market is binary, marketId blocks a second position in the same live market -- and it
+#    produced a confident "69% is never consulted, 426 MB recoverable" that would have broken
+#    the dashboard and the bot if anyone had acted on it.
+#
+#    So the question is answered where the evidence is. This runs inside the repository
+#    checkout, so for every field the sample contains it greps the files that actually run --
+#    api.php, storage.php, the browser app, and each bot -- and a field counts as read when
+#    something other than the line that WRITES it mentions it.
 print("\n== what an observation row is made of")
+
+RUNTIME = [
+    "api.php", "storage.php", "assets/app.js",
+    "tools/paper-trading-bot.mjs", "tools/live-order-executor.mjs",
+    "tools/rpi-live-exit-worker.mjs", "tools/live-account-sync.mjs",
+]
+
+
+def runtime_sources():
+    sources = {}
+    for name in RUNTIME:
+        try:
+            with open(name, "r", encoding="utf-8", errors="replace") as handle:
+                sources[name] = handle.read()
+        except OSError:
+            continue
+    return sources
+
+
+SOURCES = runtime_sources()
+print(f"   reading {len(SOURCES)} runtime file(s) to decide what is read: {', '.join(SOURCES)}")
+
+
+def mentions(field):
+    """Files that name this field, and how many times."""
+    hits = {}
+    for name, text in SOURCES.items():
+        count = text.count(field)
+        if count:
+            hits[name] = count
+    return hits
+
+
 report = admin("payload-anatomy", {"sample": 200})
 anatomy = report.get("anatomy") or {}
 if not anatomy:
     print(f"   could not read: {json.dumps(report)[:400]}")
 else:
     sampled = int(anatomy.get("sampledRows") or 0)
+    fields = anatomy.get("fields") or []
     print(f"   sampled {sampled} row(s) from both ends of the archive")
-    print(f"   stored (packed) per row   : {int(anatomy.get('storedBytesPerRow') or 0):,} bytes")
-    print(f"   decoded per row           : "
+    print(f"   stored (packed) per row : {int(anatomy.get('storedBytesPerRow') or 0):,} bytes")
+    print(f"   decoded per row         : "
           f"{int((anatomy.get('decodedBytes') or 0) / max(1, sampled)):,} bytes")
-    print(f"   if it held only what is read: {int(anatomy.get('keptBytesPerRow') or 0):,} bytes"
-          f"  ({(anatomy.get('keptShare') or 0) * 100:.0f}% of the decoded row)")
-    print("\n   field                          rows    bytes/row   read?")
-    for row in (anatomy.get("fields") or [])[:18]:
-        print(f"   {str(row.get('field'))[:28]:<30}{int(row.get('rows') or 0):>5}"
-              f"{int(row.get('bytesPerRow') or 0):>12}   {'yes' if row.get('read') else 'NO'}")
+    print(f"   distinct fields seen    : {len(fields)}")
 
-    # The projection, stated in the units the hosting bills in.
-    share = anatomy.get("keptShare")
-    if share:
-        observations_mb = None
+    unread = [row for row in fields if not mentions(str(row.get("field")))]
+    read = [row for row in fields if mentions(str(row.get("field")))]
+    unread_bytes = sum(int(row.get("bytesPerRow") or 0) for row in unread)
+    read_bytes = sum(int(row.get("bytesPerRow") or 0) for row in read)
+
+    print("\n   the twenty largest fields, and where they are used")
+    print("   field                          bytes/row   used by")
+    for row in fields[:20]:
+        field = str(row.get("field"))
+        where = mentions(field)
+        used = ", ".join(f"{name.split('/')[-1]}x{count}" for name, count in list(where.items())[:3])
+        print(f"   {field[:28]:<30}{int(row.get('bytesPerRow') or 0):>10}   {used or 'NOTHING'}")
+
+    print(f"\n   bytes/row named somewhere in the runtime : {read_bytes:,}")
+    print(f"   bytes/row named NOWHERE                 : {unread_bytes:,}")
+    if unread:
+        print("   fields nothing mentions:")
+        for row in sorted(unread, key=lambda entry: -int(entry.get("bytesPerRow") or 0))[:15]:
+            print(f"      {str(row.get('field'))[:34]:<36}{int(row.get('bytesPerRow') or 0):>8} bytes/row")
+
+    # Stated carefully. A grep proves a field is NAMED, not that dropping it is safe -- a
+    # field may be written and never read back, and only reading the call site tells them
+    # apart. What this bounds is the opposite direction: a field nothing names at all cannot
+    # be being read, so that total is a floor on what is removable, not a target.
+    observations_mb = None
+    for row in (footprint.get("tables") or []):
+        if row.get("table") == "trading_observations":
+            observations_mb = int(row.get("totalBytes") or 0) / 1048576
+    decoded_per_row = (anatomy.get("decodedBytes") or 0) / max(1, sampled)
+    if observations_mb and decoded_per_row:
+        share = unread_bytes / decoded_per_row
+        stored_per_row = int(anatomy.get("storedBytesPerRow") or 0)
+        observation_rows = 0
         for row in (footprint.get("tables") or []):
             if row.get("table") == "trading_observations":
-                observations_mb = int(row.get("totalBytes") or 0) / 1048576
-        if observations_mb:
-            print(f"\n   trading_observations is {observations_mb:.0f} MB. Holding only the read")
-            print(f"   fields would put it near {observations_mb * share:.0f} MB -- a saving of about")
-            print(f"   {observations_mb * (1 - share):.0f} MB, without deleting a single row.")
+                observation_rows = int(row.get("rows") or 0)
+        payload_mb = stored_per_row * observation_rows / 1048576 if observation_rows else None
+        print(f"\n   trading_observations is {observations_mb:.0f} MB in total.")
+        if payload_mb:
+            print(f"   The packed payload accounts for about {payload_mb:.0f} MB of that"
+                  f" ({payload_mb / observations_mb * 100:.0f}%);")
+            print("   the rest is the structured columns, tags_json and the indexes -- which payload")
+            print("   slimming does not touch, so the table can never shrink below that remainder.")
+        print(f"   Fields nothing in the runtime even NAMES are {share * 100:.0f}% of a decoded row.")
+        print("   That is a FLOOR on what could be dropped, not a target: a field being named is")
+        print("   not proof it is read, so each candidate still has to be checked at its call site.")
