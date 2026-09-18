@@ -588,20 +588,23 @@ function state_payload(
         if (!preg_match('/^[A-Za-z0-9._-]+\.json$/', $file)) {
             continue;
         }
-        $segment = decode_state_file(dirname($path) . '/' . $file, false);
+        $segmentPath = dirname($path) . '/' . $file;
+        // The resolved archive is STREAMED and capped rather than decoded whole. It is tens
+        // of thousands of rows and json_decode on it is what makes this endpoint answer 500
+        // -- the 3000-row bound downstream is applied to the response, long after the read
+        // that runs out of memory. Every other segment stays a plain decode: they are
+        // bounded collections and reading them whole is what the manifest is for.
+        if (in_array('resolvedMarketObservations', $known[$name], true)) {
+            $active = is_array($data['marketObservations'] ?? null) ? $data['marketObservations'] : [];
+            $data['marketObservations'] = array_merge($active, load_resolved_segment_rows($segmentPath));
+            continue;
+        }
+        $segment = decode_state_file($segmentPath, false);
         if (!is_array($segment)) {
             continue;
         }
         foreach ($known[$name] as $field) {
             if (!array_key_exists($field, $segment) || $segment[$field] === null) {
-                continue;
-            }
-            if ($field === 'resolvedMarketObservations') {
-                // Appended, not assigned: the active catalogue may already be loaded
-                // and the views downstream expect one combined marketObservations list.
-                $active = is_array($data['marketObservations'] ?? null) ? $data['marketObservations'] : [];
-                $resolved = is_array($segment[$field]) ? $segment[$field] : [];
-                $data['marketObservations'] = array_merge($active, $resolved);
                 continue;
             }
             $data[$field] = $segment[$field];
@@ -1547,6 +1550,46 @@ function stream_json_array_members(string $path, string $field, callable $onRow,
 
     return true;
 }
+
+/**
+ * The newest slice of a resolved-observation segment, read WITHOUT decoding the whole file.
+ *
+ * Measured on production: action=state with segments=resolvedObservations, and with
+ * segments=resolvedRecent, both answer HTTP 500 from the published files while the same
+ * request answers 200 from the database. The cutover readiness run found it from one side
+ * and the Setup finder audit from the other, which is how it was noticed at all -- nothing
+ * reports it, the dashboard views that read these simply come back empty.
+ *
+ * The cause is where the bound sits. A downstream slice already trims the resolved list to
+ * 3000 rows before it is served, but that runs AFTER decode_state_file() has json_decoded
+ * the entire archive into memory -- and the archive is now tens of thousands of rows. The
+ * limit was applied to the response and never to the read.
+ *
+ * So the read is bounded too. The segment is written newest-first, so the first rows off the
+ * stream are the ones the slice would have kept; the cap sits above the downstream limit so
+ * that slice still decides what is served and this only stops the file from being loaded
+ * whole.
+ */
+const RESOLVED_SEGMENT_STREAM_LIMIT = 4000;
+
+function load_resolved_segment_rows(string $path, int $limit = RESOLVED_SEGMENT_STREAM_LIMIT): array
+{
+    $rows = [];
+    $taken = 0;
+    stream_json_array_members(
+        $path,
+        'resolvedMarketObservations',
+        static function (array $item) use (&$rows, &$taken, $limit): bool {
+            $rows[] = $item;
+            $taken += 1;
+            // false stops the stream, which is the whole point: the rest of the file is
+            // never read and never decoded.
+            return $taken < $limit;
+        },
+    );
+    return $rows;
+}
+
 
 /**
  * Replace whole substrings in a file without ever holding the file in memory.
