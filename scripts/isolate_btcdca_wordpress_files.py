@@ -48,7 +48,7 @@ WORDPRESS_ROOT_FILES = (
     "wp-trackback.php",
     "xmlrpc.php",
 )
-OPTIONAL_ROOT_FILES = ("index.php", "license.txt", "readme.html", *STATIC_REPLACEMENTS)
+OPTIONAL_ROOT_FILES = ("index.php", "license.txt", "readme.html", "index.html", ".htaccess", "robots.txt", "sitemap.xml")
 
 
 def connect() -> ftplib.FTP:
@@ -84,6 +84,11 @@ def file_exists(ftp: ftplib.FTP, name: str) -> bool:
         return bool(ftp.nlst(name))
     except ftplib.error_perm as exc:
         if str(exc).startswith("550"):
+            return False
+        raise
+    except ftplib.error_temp as exc:
+        # This host reports a missing directory queried through NLST as 450.
+        if str(exc).startswith("450"):
             return False
         raise
 
@@ -143,6 +148,9 @@ def isolate(ftp: ftplib.FTP) -> None:
     wordpress_root = sorted(wordpress_root)
     moved = ["wp-admin", "wp-includes", "wp-content", *wordpress_root]
     moved.extend(name for name in OPTIONAL_ROOT_FILES if file_exists(ftp, name) and name not in moved)
+    # Route wrappers are directories.  Check the root listing directly because
+    # NLST on a missing directory returns a transient 450 on this FTP service.
+    moved.extend(name for name in STATIC_ROUTE_DIRECTORIES if name in names and name not in moved)
 
     archived_previous_rollback = create_isolation_directory(ftp, names)
     completed: list[str] = []
