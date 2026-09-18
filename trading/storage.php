@@ -1726,6 +1726,140 @@ function trading_storage_resolved_observations_stream(PDO $pdo, callable $onRow,
  * Only the 'tag' scope. The 'any' rows carry an empty tag by construction and would list as a
  * blank option.
  */
+/**
+ * Moves settled observations out of MySQL into compressed files, oldest first.
+ *
+ * Asked for: "pokracuj v redukci ... soustred se jen na redukci stavajicich resolved dat a
+ * tech, ktere budou teprve do datove struktury pribyvat" -- and separately, earlier,
+ * "resenim zestihleni muze byt i archivace, bude-li mozne data pro souhrne statistiky cist".
+ *
+ * Safe to run against the live pipeline, and that is checked rather than assumed: the only
+ * read of lifecycle RESOLVED from this table is inside a trading_storage_is_active() branch,
+ * and that flag is off -- the executor reads SCRAPED, the dashboard reads the published
+ * files. Nothing the live portfolio touches comes through here.
+ *
+ * The order inside a batch is the whole design. The file is written and CLOSED and then read
+ * back and counted before a single row is deleted, so a failure anywhere leaves the rows in
+ * the database and at worst an unreferenced archive file. Losing the archive after deleting
+ * would be unrecoverable; the other way costs a wasted file.
+ *
+ * The format is the one trading_storage_restore_observation_archives() already reads, so the
+ * restore path exists before the first row leaves.
+ */
+function trading_storage_archive_resolved_observations(PDO $pdo, int $limit = 2000, int $keepDays = 0): array
+{
+    trading_storage_bootstrap($pdo);
+    $limit = max(50, min(20000, $limit));
+    $root = __DIR__ . '/data/observation-archive';
+    if (!is_dir($root) && !@mkdir($root, 0775, true) && !is_dir($root)) {
+        throw new RuntimeException('Could not create the observation archive directory.');
+    }
+
+    // Oldest first, so a run that is cut short has still moved the rows least likely to be
+    // wanted. keepDays leaves a recent tail in place for anything that reads back a window.
+    $sql = 'SELECT observation_key, lifecycle, payload, updated_at
+            FROM trading_observations
+            WHERE lifecycle = :lifecycle';
+    $params = ['lifecycle' => 'RESOLVED'];
+    if ($keepDays > 0) {
+        $sql .= ' AND updated_at < (UTC_TIMESTAMP() - INTERVAL :keepDays DAY)';
+        $params['keepDays'] = $keepDays;
+    }
+    $sql .= ' ORDER BY updated_at ASC LIMIT ' . $limit;
+    $statement = $pdo->prepare($sql);
+    $statement->execute($params);
+    $rows = $statement->fetchAll();
+    if ($rows === []) {
+        return ['archived' => 0, 'deleted' => 0, 'file' => null, 'done' => true, 'remaining' => 0];
+    }
+
+    $bucket = substr((string) ($rows[0]['updated_at'] ?? gmdate('Y-m-d')), 0, 7);
+    if (!preg_match('/^\d{4}-\d{2}$/', $bucket)) {
+        $bucket = gmdate('Y-m');
+    }
+    $dir = $root . '/' . $bucket;
+    if (!is_dir($dir) && !@mkdir($dir, 0775, true) && !is_dir($dir)) {
+        throw new RuntimeException('Could not create the archive bucket ' . $bucket);
+    }
+    $path = $dir . '/' . gmdate('Ymd-His') . '-' . substr(bin2hex(random_bytes(4)), 0, 8) . '.ndjson.gz';
+
+    $handle = gzopen($path, 'wb9');
+    if ($handle === false) {
+        throw new RuntimeException('Could not open the archive file for writing.');
+    }
+    $keys = [];
+    $written = 0;
+    foreach ($rows as $row) {
+        $key = (string) ($row['observation_key'] ?? '');
+        $payload = trading_storage_unpack($row['payload'] ?? null);
+        if ($key === '' || !is_array($payload)) {
+            // Left in the database rather than written as a row the restore cannot rebuild.
+            continue;
+        }
+        $line = json_encode([
+            'observationKey' => $key,
+            'lifecycle' => (string) ($row['lifecycle'] ?? 'RESOLVED'),
+            'updatedAt' => (string) ($row['updated_at'] ?? ''),
+            'payload' => $payload,
+        ], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+        if (!is_string($line)) {
+            continue;
+        }
+        gzwrite($handle, $line . "\n");
+        $keys[] = $key;
+        $written++;
+    }
+    gzclose($handle);
+
+    // Read back and count before deleting anything. A gzip stream that was truncated by a
+    // full disk still closes without error, and the rows it was supposed to hold would then
+    // be deleted on the strength of a file that cannot be read.
+    $verified = 0;
+    $check = gzopen($path, 'rb');
+    if ($check === false) {
+        throw new RuntimeException('The archive file could not be reopened; no rows were deleted.');
+    }
+    while (($line = gzgets($check)) !== false) {
+        $decoded = json_decode(trim($line), true);
+        if (is_array($decoded) && ($decoded['observationKey'] ?? '') !== '' && is_array($decoded['payload'] ?? null)) {
+            $verified++;
+        }
+    }
+    gzclose($check);
+    if ($verified !== $written) {
+        throw new RuntimeException(
+            'The archive holds ' . $verified . ' of ' . $written . ' rows; nothing was deleted.'
+        );
+    }
+
+    $deleted = 0;
+    if ($keys !== []) {
+        foreach (array_chunk($keys, 500) as $chunk) {
+            $delete = $pdo->prepare(
+                'DELETE FROM trading_observations
+                 WHERE lifecycle = "RESOLVED" AND observation_key IN ('
+                . implode(', ', array_fill(0, count($chunk), '?')) . ')'
+            );
+            $delete->execute($chunk);
+            $deleted += $delete->rowCount();
+        }
+    }
+
+    $remaining = (int) $pdo->query(
+        'SELECT COUNT(*) FROM trading_observations WHERE lifecycle = "RESOLVED"'
+    )->fetchColumn();
+
+    return [
+        'archived' => $written,
+        'verified' => $verified,
+        'deleted' => $deleted,
+        'file' => str_replace(__DIR__ . '/', '', $path),
+        'bytes' => (int) (@filesize($path) ?: 0),
+        'remaining' => $remaining,
+        'done' => count($rows) < $limit,
+    ];
+}
+
 function trading_storage_resolved_stats_tags(PDO $pdo, int $limit = 2000): array
 {
     trading_storage_bootstrap($pdo);

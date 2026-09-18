@@ -105,6 +105,7 @@ async function main() {
   ]);
 
   console.log("\n== what is being watched");
+  const now = Date.now();
   const plans = Array.isArray(watch?.watch) ? watch.watch : (Array.isArray(watch?.plans) ? watch.plans : []);
   if (watch?.error) console.log(`   could not read: ${watch.error}`);
   const byWatchPortfolio = new Map();
@@ -113,6 +114,23 @@ async function main() {
     byWatchPortfolio.set(key, (byWatchPortfolio.get(key) || 0) + 1);
   }
   console.log(`   ${plans.length} plan(s): ${[...byWatchPortfolio].map(([k, v]) => `${k}=${v}`).join(", ") || "none"}`);
+  // The number this probe was missing. The watch admits a market on one test -- has its
+  // kickoff passed -- and applies NO upper bound, so a fixture that finished days ago still
+  // reads as running until it is marked RESOLVED. Its price then decays towards 0 or 1 as the
+  // result becomes known, which is indistinguishable from a dip. If this count is high, the
+  // rule is catching settlements rather than collapses.
+  const plansEnded = plans.filter((plan) => {
+    const end = Date.parse(String(plan?.endDate || ""));
+    return Number.isFinite(end) && end <= now;
+  }).length;
+  const plansUndated = plans.filter((plan) => !Number.isFinite(Date.parse(String(plan?.endDate || "")))).length;
+  console.log(`   ... already past their resolution date: ${plansEnded}`
+    + ` (${plans.length ? ((plansEnded / plans.length) * 100).toFixed(0) : "0"}%)`);
+  console.log(`   ... carrying no resolution date at all: ${plansUndated}`);
+  if (plansEnded > plans.length / 2) {
+    console.log("   The watch is mostly finished markets. live_dip_entry_watch_payload() admits");
+    console.log("   anything whose kickoff has passed and never asks whether it is over.");
+  }
 
   console.log("\n== the recorded dips");
   const rows = Array.isArray(hits?.hits) ? hits.hits : [];
@@ -172,7 +190,6 @@ async function main() {
   let startUnknown = 0;
   let ready = 0;
   const readyRows = [];
-  const now = Date.now();
   for (const hit of mine) {
     const price = num(hit?.price);
     if (price === null || price <= 0 || price >= 1) { unpriced += 1; continue; }
