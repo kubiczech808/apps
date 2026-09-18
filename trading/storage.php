@@ -114,7 +114,6 @@ function trading_storage_bootstrap(PDO $pdo): void
             created_at DATETIME(6) NOT NULL,
             updated_at DATETIME(6) NOT NULL,
             KEY trading_observations_lifecycle_end (lifecycle, end_at),
-            KEY trading_observations_lifecycle_updated (lifecycle, updated_at),
             -- The shape a portfolio actually asks in: the current catalogue, inside a
             -- probability band, resolving before a horizon. Without it every portfolio scan
             -- reads the whole lifecycle and filters afterwards, which is the cost that made
@@ -455,6 +454,12 @@ function trading_storage_optimize_schema(PDO $pdo): void
         'trading_observations' => [
             'trading_observations_lifecycle_probability',
             'trading_observations_lifecycle_return',
+            // Retired 2026-09-18. Its columns (lifecycle, updated_at) are an exact leftmost
+            // prefix of trading_observations_scope (lifecycle, updated_at, market_probability,
+            // end_at), so every query it could serve the wider index serves as well. That is a
+            // property of B-tree indexing, not a judgement about this application, and the
+            // index inventory found it by comparing column lists rather than by guessing.
+            'trading_observations_lifecycle_updated',
             'trading_observations_token',
             'trading_observations_event',
             'trading_observations_updated',
@@ -474,7 +479,6 @@ function trading_storage_optimize_schema(PDO $pdo): void
     // CREATE TABLE IF NOT EXISTS never touches a table that already exists, so an index
     // added to the schema above reaches production only by being added here as well.
     foreach ([
-        'trading_observations_lifecycle_updated' => '(`lifecycle`, `updated_at`)',
         // The shape a portfolio actually asks in: the current catalogue, inside a probability
         // band, resolving before a horizon. Without it every portfolio scan reads the whole
         // lifecycle and filters afterwards -- the cost that made serving reads from here
