@@ -92,7 +92,9 @@ test("the workflow skips only the two snapshots that follow a run that did nothi
     "an absent output must fall on the refreshing side");
 
   const afterRotation = step("Refresh live account snapshot after rotation check");
-  assert.match(afterRotation, /if: always\(\) && steps\.rotation\.outputs\.replaced == 'true'/);
+  // Two gates, and the rotation switch is the outer one -- see "a pass does only what this
+  // portfolio has switched on" below for why it is there at all.
+  assert.match(afterRotation, /steps\.rotation\.outputs\.replaced == 'true'/);
   // Here the opposite default is right: this one exists solely to record a replacement
   // order, and the rotation step announces that it placed one.
   const rotation = step("Complete filled rotation immediately");
@@ -127,4 +129,32 @@ test("5050 pays the same cost and gets the same treatment", () => {
   // And its own execution step has to be identifiable, or the outcome check names nothing.
   const executeStep = fixed.slice(fixed.indexOf("- name: Rest the fixed-entry bids"));
   assert.match(executeStep.slice(0, executeStep.indexOf("\n      - name:")), /id: execute/);
+});
+
+test("a pass does only what this portfolio has switched on", () => {
+  // Asked for, after reading the step timings: "rotaci nemam zapnutou snad pro zadne
+  // portfolio, tu z toho muzes vyloucit jednuchou podminkou (mozna se k ni nekdy vratim,
+  // ale zatim se neosvedcila, takze logiku nechavam, jen to nepouzivam)."
+  //
+  // So the rotation steps are gated on the portfolio's OWN switch rather than deleted. The
+  // logic stays; turning autoRotatePositions back on in the parameter form brings it back
+  // with no workflow edit, which is what "mozna se k ni nekdy vratim" needs.
+  const step = (name) => {
+    const start = WORKFLOW.indexOf(`- name: ${name}`);
+    assert.ok(start > 0, `${name} must exist`);
+    return WORKFLOW.slice(start, WORKFLOW.indexOf("\n      - name:", start + 1));
+  };
+  assert.match(step("Complete filled rotation immediately"),
+    /if: always\(\) && env\.LIVE_AUTO_ROTATE != 'false'/);
+  assert.match(step("Refresh live account snapshot after rotation check"),
+    /env\.LIVE_AUTO_ROTATE != 'false'/);
+  // The switch has to reach the environment from the portfolio, or the gate above is a
+  // constant: "Load portfolio config" writes it from autoRotatePositions.
+  assert.match(WORKFLOW, /"LIVE_AUTO_ROTATE": str\(bool\(live\.get\("autoRotatePositions", True\)\)\)\.lower\(\)/);
+
+  // The MySQL mirror is skipped on a pass that changed nothing. A run that decided nothing
+  // has the same rows to mirror as the run before it, and at a three-minute cadence that is
+  // two seconds spent every pass to write what is already there.
+  assert.match(step("Mirror live execution to Trading MySQL"),
+    /if: always\(\) && \(steps\.touched\.outputs\.touched != 'false' \|\| steps\.execute\.outcome != 'success'\)/);
 });

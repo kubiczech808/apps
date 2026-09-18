@@ -379,9 +379,17 @@ jobs:
         working-directory: trading
         run: npm run live:account
 
+      # Skipped outright when the portfolio has rotation switched off, which is every
+      # portfolio today: "rotaci nemam zapnutou snad pro zadne portfolio, tu z toho muzes
+      # vyloucit jednuchou podminkou (mozna se k ni nekdy vratim ... takze logiku nechavam,
+      # jen to nepouzivam)". The logic stays; it simply does not run.
+      #
+      # LIVE_AUTO_ROTATE is written into the environment by "Load portfolio config" from the
+      # portfolio's own autoRotatePositions, so turning rotation back on in the parameter
+      # form is all it takes to bring this back -- no workflow edit.
       - name: Complete filled rotation immediately
         id: rotation
-        if: always()
+        if: always() && env.LIVE_AUTO_ROTATE != 'false'
         working-directory: trading
         env:
           POLYMARKET_DRY_RUN: ${{ ((github.event_name == 'workflow_dispatch' && (inputs.live_confirm == true || inputs.live_confirm == 'true')) || github.event_name == 'schedule' || (github.event_name == 'push' && contains(github.event.head_commit.message, '[live-limit-order-test]'))) && 'false' || 'true' }}
@@ -400,7 +408,7 @@ jobs:
       # Only after a replacement was actually placed. On every other pass the step above
       # runs no order and this refetches a snapshot nothing has changed since.
       - name: Refresh live account snapshot after rotation check
-        if: always() && steps.rotation.outputs.replaced == 'true'
+        if: always() && env.LIVE_AUTO_ROTATE != 'false' && steps.rotation.outputs.replaced == 'true'
         working-directory: trading
         run: npm run live:account
 
@@ -444,8 +452,12 @@ jobs:
           PUBLISH_REQUIRED: live-state.json
         run: PUBLISH_FILES="${LIVE_EXECUTION_PUBLISH_FILE},trading/data/live-state.json>live-state.json" python3 trading/tools/publish-execution-state.py
 
+      # Only when the pass actually changed something. A run that decided nothing has the
+      # same rows to mirror as the run before it, and mirroring them again is two seconds
+      # spent on every pass to write what is already there -- which matters once the pass
+      # runs every three minutes rather than every ten.
       - name: Mirror live execution to Trading MySQL
-        if: always()
+        if: always() && (steps.touched.outputs.touched != 'false' || steps.execute.outcome != 'success')
         env:
           TRADING_STORAGE_INGEST_URL: https://www.osobnizkusenosti.cz/trading/api.php?action=storage-ingest
           TRADING_TRIGGER_KEY: ${{ secrets.POLYTRADING_DB_PASSWORD }}
