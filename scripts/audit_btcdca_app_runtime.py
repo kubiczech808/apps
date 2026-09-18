@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ftplib
 import os
+import re
 
 
 HOSTS = tuple(
@@ -19,6 +20,7 @@ WORDPRESS_RUNTIME_MARKERS = (
     "wp-includes/",
     "wp-content/",
 )
+WORDPRESS_TABLE_PATTERN = re.compile(r"wp_dca_[a-z0-9_]+", re.IGNORECASE)
 
 
 def connect() -> ftplib.FTP:
@@ -50,12 +52,17 @@ def main() -> None:
             matches = [marker for marker in WORDPRESS_RUNTIME_MARKERS if marker in contents]
             if matches:
                 findings.append(f"{path}: {', '.join(matches)}")
+            tables = sorted(set(WORDPRESS_TABLE_PATTERN.findall(contents)))
+            if tables:
+                findings.append(f"{path}: database tables {', '.join(tables)}")
+            elif "wp_dca_" in contents:
+                findings.append(f"{path}: WordPress database prefix wp_dca_")
         if findings:
             raise RuntimeError(
-                "BTC-DCA account/app entry points still reference the WordPress runtime: "
+                "BTC-DCA account/app entry points still reference WordPress files or tables: "
                 + "; ".join(findings)
             )
-        print("BTC-DCA account and app entry points are independent of WordPress runtime files.")
+        print("BTC-DCA account and app entry points are independent of WordPress files and tables.")
     finally:
         ftp.quit()
 
