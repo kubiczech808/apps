@@ -151,6 +151,7 @@ def main() -> None:
 
             stage_brand_logo(ftp, temporary_root)
             upload(ftp, STATIC / "guides" / "assets" / "guide.css", "www/assets/img/guides/guide.css")
+            upload(ftp, STATIC / "seo" / ".htaccess", "www/.htaccess")
             for slug in GUIDES:
                 upload(ftp, STATIC / "guides" / slug / "index.html", f"www/{slug}/index.html")
 
