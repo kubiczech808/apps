@@ -3,7 +3,7 @@ import { ceilPrice, floorPrice, normalizeCandlePrices, roundPrice } from './pric
 import { buildFvgSupplyDemandZones, candleSignal, marketStructure } from './priceaction.mjs'
 
 export const PRICE_ACTION_STRUCTURE_ID = 'price-action-structure-v1'
-export const PRICE_ACTION_MATRIX_SCHEMA = 27
+export const PRICE_ACTION_MATRIX_SCHEMA = 28
 export const PRICE_ACTION_CHART_CANDLE_LIMITS = {
   '1h': 8760,
   '4h': 2190,
@@ -25,7 +25,10 @@ export const DEFAULT_PRICE_ACTION_STRUCTURE = {
 // Structure needs the external swings visible on the chart; zones still need
 // the smaller reactions from which an entry can actually be refined.
 export const PRICE_ACTION_STRUCTURE_PROFILES = {
-  '1h': { historyDays: 60, pivotLookback: 48, minCandles: 500, zoneMaxAgeCandles: 1440 },
+  // The 1H chart is an execution lens, not another multi-month macro view.
+  // Two recent 4H legs fit into roughly two weeks, which keeps an old internal
+  // pivot from being mistaken for the current LH/HL.
+  '1h': { historyDays: 14, pivotLookback: 18, minCandles: 180, zoneMaxAgeCandles: 336 },
   '4h': { historyDays: 180, pivotLookback: 96, minCandles: 250, zoneMaxAgeCandles: 1080 },
   '1d': { historyDays: 400, pivotLookback: 30, minCandles: 160, zoneMaxAgeCandles: 400 },
 }
@@ -254,6 +257,29 @@ const developingStructureSwing = (candles, structure) => {
     } : null
   }
   return null
+}
+
+// After a confirmed LL/HH the last unfinished counter-leg is useful for the
+// 1H audit chart. It is deliberately marked LH/HL, never HH/LL: without a
+// fresh break it cannot alter the established trend or authorize a trade.
+const developingCounterSwing = (candles, { trend, activeRange }) => {
+  const anchor = trend === 'down' ? activeRange?.low : trend === 'up' ? activeRange?.high : null
+  if (!anchor || !Number.isFinite(anchor.candleIndex)) return null
+  const kind = trend === 'down' ? 'high' : 'low'
+  const later = candles.slice(anchor.candleIndex + 1)
+  const extreme = later.reduce((best, candle, offset) => {
+    const price = kind === 'high' ? candle.high : candle.low
+    if (!best || (kind === 'high' ? price > best.price : price < best.price)) {
+      return { kind, price, candle, index: anchor.candleIndex + offset + 1, time: candle.time }
+    }
+    return best
+  }, null)
+  if (!extreme) return null
+  return {
+    ...pivotSummary(extreme, trend === 'down' ? 'LH' : 'HL'),
+    confirmed: false,
+    developing: true,
+  }
 }
 
 // These labels belong to the structural zigzag itself. The chart must never
@@ -587,7 +613,9 @@ const nearestOpposingZone = ({ side, zones, entry, tp1 = null }) => {
     side === 'long'
       ? pool.filter((zone) => zone.low > targetBoundary).sort((a, b) => a.low - b.low)
       : pool.filter((zone) => zone.high < targetBoundary).sort((a, b) => b.high - a.high)
-  return candidates[0] ?? null
+  // TP2 has to be an untouched opposing FVG beyond TP1. A zone already hit
+  // on this timeframe has been consumed; it must not remain a projected exit.
+  return candidates.find((zone) => !Number.isFinite(zone.firstTouchAt)) ?? null
 }
 
 const structuralTarget = ({ side, structure }) =>
@@ -816,6 +844,7 @@ export const evaluateTradeProfile = ({
   const side = sideFromTrend(item?.trend)
   const latest = item?.lastCandle
   const zones = item?.zones
+  const awaitingConfirmation = item?.structureConfirmed === false
 
   // Flat is a structure-building state, never an entry state. In particular,
   // do not fall back to the current close here: that would look like a valid
@@ -859,55 +888,6 @@ export const evaluateTradeProfile = ({
       rewardRisk: null,
       gates: [
         gate('trend', 'struktura má směr', false, reason, true),
-      ],
-      refinement: null,
-    }
-  }
-
-  // A CHoCH makes the directional bias visible immediately, but it is not a
-  // trade authorization. Require the new LH+LL / HH+HL wave to complete
-  // before exposing an entry, stop and target to the paper executor.
-  if (item?.structureConfirmed === false) {
-    const reason = item?.reason || 'nový strukturální směr čeká na potvrzení'
-    const riskPct = Number(settings.riskPct) || 1
-    const minRewardRisk = Number(settings.minRewardRisk) || 2
-    return {
-      status: 'neutral',
-      mode: 'formation',
-      formationState: 'awaiting-confirmation',
-      reason,
-      side: null,
-      pendingSide: side,
-      riskPct,
-      minRewardRisk,
-      pullbackPct: settings.pullbackPct ?? 50,
-      zone: null,
-      zoneHit: false,
-      entry: null,
-      pullbackLevel: null,
-      invalidationLevel: null,
-      pullbackRange: null,
-      zoneCandidates: [],
-      activeCandidate: null,
-      stop: null,
-      stopBuffer: null,
-      entryAtZoneHit: null,
-      refinedEntry: null,
-      entryForMinRR: null,
-      entrySource: null,
-      entryRefinement: null,
-      tp1: null,
-      tp1Rule: null,
-      tp2: null,
-      tp2Zone: null,
-      tp2Rule: null,
-      weightedTarget: null,
-      risk: null,
-      reward: null,
-      rewardRisk: null,
-      gates: [
-        gate('trend', 'struktura má směr', true, `bias ${side}`),
-        gate('structure-confirmed', 'nová vlna je potvrzena', false, reason),
       ],
       refinement: null,
     }
@@ -1019,6 +999,9 @@ export const evaluateTradeProfile = ({
 
   const gates = [
     gate('trend', 'struktura má směr', Boolean(side), item?.reason ?? null),
+    ...(awaitingConfirmation
+      ? [gate('structure-confirmed', 'nová vlna je potvrzena', false, item?.reason || 'nový strukturální směr čeká na potvrzení')]
+      : []),
     gate('zone', 'cena je ve správné S/D zóně', Boolean(activeZone && zoneHit), activeZone ? `${activeZone.type} ${activeZone.low}–${activeZone.high}` : null),
     gate('unfilled-zone', 'zóna není vyplněná ani spotřebovaná', Boolean(activeZone), activeZone ? 'nevyplněná' : consumedCandidate ? 'dotčena před kompletním setupem' : zone ? 'není použitelná pro vstup' : null),
     gate('pullback', `${settings.pullbackPct ?? 50}% pullback`, pulledBack, Number.isFinite(pullback) ? String(pullback) : null),
@@ -1032,12 +1015,18 @@ export const evaluateTradeProfile = ({
       !requireHigherTimeframeAlignment || !higherItem
     ),
   ]
-  const ready = gates.every((itemGate) => itemGate.passed !== false)
-  const status = ready ? 'ready' : side ? 'watch' : 'neutral'
+  const ready = !awaitingConfirmation && gates.every((itemGate) => itemGate.passed !== false)
+  const status = awaitingConfirmation ? 'neutral' : ready ? 'ready' : side ? 'watch' : 'neutral'
 
   const output = {
     status,
-    side,
+    mode: awaitingConfirmation ? 'formation' : 'screening',
+    formationState: awaitingConfirmation ? 'awaiting-confirmation' : null,
+    pendingSide: awaitingConfirmation ? side : null,
+    // Keep side null during formation so no caller can mistake the plan for
+    // an executable signal. directionalSide is solely an audit/UI hint.
+    side: awaitingConfirmation ? null : side,
+    directionalSide: side,
     riskPct,
     minRewardRisk,
     requireCandleSignal,
@@ -1361,6 +1350,7 @@ export const classifyStructure = (
         low: lowLeg?.current ?? null,
         source: 'context',
       }
+  const developingCounter = developingCounterSwing(normalizedCandles, { trend, activeRange })
   const status = trend === 'up' ? 'met' : trend === 'down' ? 'unmet' : 'neutral'
   const contextHigh = normalizedCandles.reduce((best, candle) => !best || candle.high > best.high ? candle : best, null)
   const contextLow = normalizedCandles.reduce((best, candle) => !best || candle.low < best.low ? candle : best, null)
@@ -1407,6 +1397,7 @@ export const classifyStructure = (
       protectedHigh: pivotSummary(persistent.protectedHigh, persistent.protectedHigh ? persistent.labels.get(persistent.protectedHigh.index) : null),
       protectedLow: pivotSummary(persistent.protectedLow, persistent.protectedLow ? persistent.labels.get(persistent.protectedLow.index) : null),
       developingSwing,
+      developingCounterSwing: developingCounter,
       confirmed: structureConfirmed,
       recentSwings: structure.swings.slice(-8).map((swing) => pivotSummary(swing, persistent.labels.get(swing.index))),
       contextRecentSwings: contextStructure.swings.slice(-8).map((swing) => pivotSummary(swing)),

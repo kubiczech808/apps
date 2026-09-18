@@ -188,6 +188,8 @@ test('a recent close through a major counter-swing changes the established trend
   assert.equal(profile.mode, 'formation')
   assert.equal(profile.formationState, 'awaiting-confirmation')
   assert.equal(profile.side, null)
+  assert.equal(profile.pendingSide, 'short')
+  assert.equal(profile.directionalSide, 'short')
   assert.equal(profile.gates.find((gate) => gate.id === 'structure-confirmed').status, 'unmet')
 })
 
@@ -297,6 +299,8 @@ test('major LH and LL override short internal USDJPY-like reactions', () => {
   assert.equal(result.structure.activeRange.low.label, 'LL')
   assert.ok(result.structure.activeRange.high.price > 160 && result.structure.activeRange.high.price < 161)
   assert.ok(result.structure.activeRange.low.price > 152 && result.structure.activeRange.low.price < 153)
+  assert.equal(result.structure.developingCounterSwing.label, 'LH')
+  assert.ok(result.structure.developingCounterSwing.price > 156 && result.structure.developingCounterSwing.price < 157)
 })
 
 test('a delayed 4H spine uses its current LH to LL wave for pullback levels', () => {
@@ -330,13 +334,13 @@ test('a delayed 4H spine uses its current LH to LL wave for pullback levels', ()
 
 test('structure horizons and pivot widths scale with timeframe', () => {
   assert.deepEqual(PRICE_ACTION_STRUCTURE_PROFILES, {
-    '1h': { historyDays: 60, pivotLookback: 48, minCandles: 500, zoneMaxAgeCandles: 1440 },
+    '1h': { historyDays: 14, pivotLookback: 18, minCandles: 180, zoneMaxAgeCandles: 336 },
     '4h': { historyDays: 180, pivotLookback: 96, minCandles: 250, zoneMaxAgeCandles: 1080 },
     '1d': { historyDays: 400, pivotLookback: 30, minCandles: 160, zoneMaxAgeCandles: 400 },
   })
   assert.ok(PRICE_ACTION_STRUCTURE_PROFILES['1d'].historyDays > 365)
   assert.ok(PRICE_ACTION_STRUCTURE_PROFILES['4h'].historyDays >= 180)
-  assert.ok(PRICE_ACTION_STRUCTURE_PROFILES['1h'].historyDays >= 30)
+  assert.ok(PRICE_ACTION_STRUCTURE_PROFILES['1h'].historyDays <= 14)
 })
 
 test('supply and demand zones stay valid unless their own timeframe closes through them', () => {
@@ -482,7 +486,7 @@ test('TP2 uses the nearest opposing zone beyond TP1, not merely beyond entry', (
         supply: { type: 'supply', low: 115, high: 120 },
         unfilledSupply: [{ type: 'supply', low: 115, high: 120 }],
         unfilledDemand: [
-          { type: 'demand', low: 108, high: 110 },
+          { type: 'demand', low: 108, high: 110, firstTouchAt: START + HOUR },
           { type: 'demand', low: 80, high: 85 },
         ],
       },
@@ -492,6 +496,43 @@ test('TP2 uses the nearest opposing zone beyond TP1, not merely beyond entry', (
   assert.equal(shortProfile.tp1, 100)
   assert.equal(shortProfile.tp2, 85)
   assert.ok(shortProfile.tp2 < shortProfile.tp1)
+})
+
+test('a fresh CHoCH publishes a non-executable supply or demand plan for audit', () => {
+  const profile = evaluateTradeProfile({
+    item: {
+      trend: 'down',
+      structureConfirmed: false,
+      reason: 'CHoCH_DOWN; čeká se na LH + LL',
+      price: 117,
+      lastCandle: candle(START, 114, 118, 113, 117),
+      structure: {
+        activeRange: {
+          high: { price: 120 },
+          low: { price: 100 },
+        },
+      },
+      zones: {
+        supply: { type: 'supply', low: 115, high: 120 },
+        unfilledSupply: [{ type: 'supply', low: 115, high: 120 }],
+        unfilledDemand: [{ type: 'demand', low: 80, high: 85 }],
+      },
+    },
+    settings: { pullbackPct: 50, minRewardRisk: 2, stopBufferPct: 0.02 },
+  })
+
+  assert.equal(profile.mode, 'formation')
+  assert.equal(profile.side, null, 'formation must not authorize the executor')
+  assert.equal(profile.pendingSide, 'short')
+  assert.deepEqual(profile.pullbackRange, { from: 110, to: 120 })
+  assert.ok(profile.zoneCandidates.some((candidate) => candidate.type === 'supply' && candidate.eligible))
+  assert.equal(profile.entry, 115)
+  assert.ok(profile.stop > 120)
+  assert.equal(profile.tp1, 100)
+  assert.equal(profile.tp2, 85)
+  assert.ok(profile.rewardRisk >= 2)
+  assert.equal(profile.status, 'neutral')
+  assert.equal(profile.gates.find((gate) => gate.id === 'structure-confirmed').status, 'unmet')
 })
 
 test('stop sits beyond both the entry zone and the external structural pivot', () => {
@@ -907,9 +948,9 @@ test('price-action matrix covers BTCUSD and major FX pairs on 1H, 4H and 1D', as
   for (const asset of matrix.assets) {
     assert.deepEqual(Object.keys(asset.trends), ['1h', '4h', '1d'])
   }
-  assert.equal(matrix.assets[0].trends['1h'].structure.lookback, 48)
-  assert.equal(matrix.assets[0].trends['1h'].structure.activeLookback, 12)
-  assert.equal(matrix.assets[0].trends['1h'].structure.historyDays, 60)
+  assert.equal(matrix.assets[0].trends['1h'].structure.lookback, 18)
+  assert.equal(matrix.assets[0].trends['1h'].structure.activeLookback, 5)
+  assert.equal(matrix.assets[0].trends['1h'].structure.historyDays, 14)
   assert.equal(matrix.assets[0].trends['4h'].structure.lookback, 96)
   assert.equal(matrix.assets[0].trends['4h'].structure.activeLookback, 24)
   assert.equal(matrix.assets[0].trends['4h'].structure.historyDays, 180)

@@ -468,7 +468,8 @@ const zoneRangeTrigger = ({ zone, status = 'neutral', title = null, timeframeId,
 }
 
 const zoneListElement = (profile, timeframeId) => {
-  const active = profile?.side === 'long' ? 'demand' : profile?.side === 'short' ? 'supply' : null
+  const side = profile?.side ?? profile?.pendingSide ?? profile?.directionalSide ?? null
+  const active = side === 'long' ? 'demand' : side === 'short' ? 'supply' : null
   if (!active) {
     const title = profile?.mode === 'formation'
       ? 'Struktura je flat; nejdříve čekáme na vytvoření směru.'
@@ -506,7 +507,10 @@ const displayedEntryCandidate = (profile) => {
 }
 
 const displayedTradeProfile = (profile) => {
-  if (!profile || profile.mode === 'formation') return profile
+  if (!profile) return profile
+  // A pending CHoCH remains non-executable, but it still carries an audit
+  // plan. Do not erase its pullback, FVG, SL and target values.
+  if (profile.mode === 'formation') return profile
   const candidate = displayedEntryCandidate(profile)
   if (candidate) {
     return {
@@ -561,7 +565,7 @@ const priceFact = (value, title = null, status = 'neutral') =>
 const riskRewardDetails = (entry) => {
   const profile = displayedTradeProfile(entry.profile)
   const fact = priceActionDecisionFact(entry, { id: 'rr' })
-  if (!profile || profile.mode === 'formation') return decisionFactElement(fact)
+  if (!profile || !Number.isFinite(profile.entry) || !Number.isFinite(profile.stop)) return decisionFactElement(fact)
 
   const button = el('button', {
     type: 'button',
@@ -589,14 +593,18 @@ const riskRewardDetails = (entry) => {
 const passedOrWaiting = (gate) => gate?.status === 'met' ? 'met' : 'neutral'
 
 const formationTitle = 'Struktura je flat; nevstupujeme a čekáme na potvrzení HH + HL nebo LH + LL.'
+const pendingFormationTitle = 'Směr po CHoCH se ještě potvrzuje; hodnoty jsou pouze plán, ne autorizace vstupu.'
+
+const profileSide = (profile) => profile?.side ?? profile?.pendingSide ?? profile?.directionalSide ?? null
+const hasDirectionalPlan = (profile) => profile?.mode === 'formation' && Boolean(profileSide(profile))
 
 const pullbackRange = (entry) => {
   const profile = entry?.profile
   const from = profile?.pullbackRange?.from ?? profile?.pullbackLevel
   const to = profile?.pullbackRange?.to ?? profile?.invalidationLevel ?? (
-    profile?.side === 'long'
+    profileSide(profile) === 'long'
       ? entry?.item?.structure?.low?.current?.price
-      : profile?.side === 'short'
+      : profileSide(profile) === 'short'
         ? entry?.item?.structure?.high?.current?.price
         : null
   )
@@ -617,7 +625,7 @@ const priceActionDecisionFact = (entry, column) => {
     case 'zones':
       return null
     case 'pullback': {
-      if (profile?.mode === 'formation') return decisionFact('tvorba struktury', 'neutral', formationTitle)
+      if (profile?.mode === 'formation' && !hasDirectionalPlan(profile)) return decisionFact('tvorba struktury', 'neutral', formationTitle)
       const gate = profileGate(profile, 'pullback')
       const range = pullbackRange(entry)
       return decisionFact(
@@ -627,28 +635,28 @@ const priceActionDecisionFact = (entry, column) => {
       )
     }
     case 'entry':
-      if (profile?.mode === 'formation') return priceFact(null, formationTitle)
+      if (profile?.mode === 'formation' && !hasDirectionalPlan(profile)) return priceFact(null, formationTitle)
       return priceFact(
         profile?.entry,
-        profile?.zoneHit ? 'Cena zasáhla pracovní zónu.' : 'Pracovní entry; čeká se na zásah správné zóny.',
+        profile?.mode === 'formation' ? pendingFormationTitle : profile?.zoneHit ? 'Cena zasáhla pracovní zónu.' : 'Pracovní entry; čeká se na zásah správné zóny.',
         profile?.zoneHit ? 'met' : 'neutral'
       )
     case 'stop':
-      if (profile?.mode === 'formation') return priceFact(null, formationTitle)
-      return priceFact(profile?.stop, Number.isFinite(profile?.stopBuffer) ? `Za vzdálenější hranicí struktury nebo zóny, buffer ${quotePrice(profile.stopBuffer)}.` : 'Stop za strukturální invalidací.')
+      if (profile?.mode === 'formation' && !hasDirectionalPlan(profile)) return priceFact(null, formationTitle)
+      return priceFact(profile?.stop, profile?.mode === 'formation' ? pendingFormationTitle : Number.isFinite(profile?.stopBuffer) ? `Za vzdálenější hranicí struktury nebo zóny, buffer ${quotePrice(profile.stopBuffer)}.` : 'Stop za strukturální invalidací.')
     case 'tp1':
-      if (profile?.mode === 'formation') return priceFact(null, formationTitle)
+      if (profile?.mode === 'formation' && !hasDirectionalPlan(profile)) return priceFact(null, formationTitle)
       return priceFact(profile?.tp1, profile?.tp1Rule ?? null)
     case 'tp2':
-      if (profile?.mode === 'formation') return priceFact(null, formationTitle)
+      if (profile?.mode === 'formation' && !hasDirectionalPlan(profile)) return priceFact(null, formationTitle)
       return priceFact(profile?.tp2, profile?.tp2Rule ?? null)
     case 'rr': {
-      if (profile?.mode === 'formation') return decisionFact('–', 'neutral', formationTitle)
+      if (profile?.mode === 'formation' && !hasDirectionalPlan(profile)) return decisionFact('–', 'neutral', formationTitle)
       const gate = profileGate(profile, 'rr')
       return decisionFact(
         Number.isFinite(profile?.rewardRisk) ? `${nf(2).format(profile.rewardRisk)}:1` : '–',
         passedOrWaiting(gate),
-        gate?.detail ?? `Minimum je ${profile?.minRewardRisk ?? 2}:1.`
+        profile?.mode === 'formation' ? pendingFormationTitle : gate?.detail ?? `Minimum je ${profile?.minRewardRisk ?? 2}:1.`
       )
     }
     default:
@@ -1102,7 +1110,9 @@ const ASSET_CHART = {
 const ASSET_CHART_DEFAULT_VISIBLE_CANDLES = {
   '1h': 240,
   '4h': 360,
-  '1d': 240,
+  // Daily bodies stay visibly candle-shaped on first open; history remains
+  // available through the range control and wheel zoom.
+  '1d': 120,
 }
 
 const defaultAssetChartVisibleCandleCount = (timeframeId) =>
@@ -1133,12 +1143,25 @@ const assetChartSelection = () => {
 }
 
 const chartZones = (item, type) => {
-  const key = type === 'demand' ? 'nearbyDemand' : 'nearbySupply'
-  const nearby = item?.zones?.[key]
-  const fallback = item?.zones?.[type]
-  return (nearby?.length ? nearby : fallback ? [fallback] : [])
-    .filter((zone) => !zone.filledByOwnTimeframeClose)
-    .filter((zone) => zone && Number.isFinite(zone.low) && Number.isFinite(zone.high) && zone.low > 0 && zone.high > 0 && zone.high >= zone.low)
+  const profile = item?.tradeProfile
+  const side = profileSide(profile)
+  const entryType = side === 'long' ? 'demand' : side === 'short' ? 'supply' : null
+  const plannedEntries = entryType === type
+    ? (profile?.zoneCandidates ?? [])
+      .filter((candidate) => candidate.type === type && candidate.pullbackEligible && !candidate.invalidatedByPrematureTouch)
+      .map((candidate) => candidate.zone)
+    : []
+  const targetZone = profile?.tp2Zone?.type === type ? [profile.tp2Zone] : []
+  const seen = new Set()
+  return [...plannedEntries, ...targetZone]
+    .filter((zone) => zone && !zone.filledByOwnTimeframeClose && !zone.invalidatedByOwnTimeframeClose && !Number.isFinite(zone.firstTouchAt))
+    .filter((zone) => Number.isFinite(zone.low) && Number.isFinite(zone.high) && zone.low > 0 && zone.high > 0 && zone.high >= zone.low)
+    .filter((zone) => {
+      const key = `${zone.type}:${zone.low}:${zone.high}:${zone.firstTime ?? zone.firstIndex ?? ''}`
+      if (seen.has(key)) return false
+      seen.add(key)
+      return true
+    })
 }
 
 const chartTimeLabel = (value, timeframeId) => {
@@ -1224,7 +1247,7 @@ const renderAssetChart = () => {
   // Start with enough structural context to make the main wave readable.
   // Wheel zoom and the range control can still narrow the view while the
   // newest candle stays anchored to the right edge of the chart.
-  const minVisibleCandleCount = Math.min(allCandles.length, 60)
+  const minVisibleCandleCount = Math.min(allCandles.length, timeframeId === '1d' ? 30 : 60)
   assetChartVisibleCandleCount = Math.max(minVisibleCandleCount, Math.min(assetChartVisibleCandleCount, allCandles.length))
   const candles = allCandles.slice(-assetChartVisibleCandleCount)
   const viewingHistory = assetChartVisibleCandleCount > 60
@@ -1298,7 +1321,8 @@ const renderAssetChart = () => {
   const candlePlotRight = ASSET_CHART.padLeft + candlePlotWidth
   const x = (index) => ASSET_CHART.padLeft + (index / Math.max(1, candles.length - 1)) * candlePlotWidth
   const y = (value) => ASSET_CHART.padTop + ((maxPrice - value) / (maxPrice - minPrice)) * plotHeight
-  const candleWidth = Math.max(2, Math.min(12, (candlePlotWidth / candles.length) * 0.62))
+  const candleSpacing = candlePlotWidth / Math.max(1, candles.length - 1)
+  const candleWidth = Math.max(timeframeId === '1d' ? 3 : 2, Math.min(12, candleSpacing * (timeframeId === '1d' ? 0.74 : 0.62)))
   const xForTime = (time) => {
     if (!Number.isFinite(time) || !candles.length) return null
     if (time < candles[0].time || time > candles.at(-1).time) return null
@@ -1379,6 +1403,7 @@ const renderAssetChart = () => {
   // can appear to stop before the actual bottom/top which drives the strategy.
   const structurePivots = new Map()
   const developingSwing = structure?.developingSwing
+  const developingCounter = timeframeId === '1h' ? structure?.developingCounterSwing : null
   for (const swing of [
     ...(structure?.recentSwings ?? []),
     ...structureLegs.map(({ kind, leg }) => leg?.current ? { ...leg.current, kind, label: leg.label } : null),
@@ -1387,6 +1412,7 @@ const renderAssetChart = () => {
     activeRange?.high,
     activeRange?.low,
     developingSwing,
+    developingCounter,
   ].filter(Boolean)) {
     if (swing?.kind === developingSwing?.kind && swing?.candleIndex === developingSwing?.replacesCandleIndex) continue
     if (!swing?.kind || !Number.isFinite(swing.price) || !(swing.price > 0) || !Number.isFinite(swing.time)) continue

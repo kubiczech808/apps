@@ -219,6 +219,7 @@ test('asset tickers open a timeframe price chart with supply and demand zones', 
   assert.match(js, /structure\?\.recentSwings/)
   assert.match(js, /structure\?\.activeRange/)
   assert.match(js, /const developingSwing = structure\?\.developingSwing/)
+  assert.match(js, /const developingCounter = timeframeId === '1h' \? structure\?\.developingCounterSwing : null/)
   assert.match(js, /replacesCandleIndex/)
   assert.match(js, /const structurePivots = new Map\(\)/)
   assert.match(js, /leg\?\.current \? \{ \.\.\.leg\.current, kind, label: leg\.label \} : null/)
@@ -231,7 +232,7 @@ test('asset tickers open a timeframe price chart with supply and demand zones', 
   assert.match(js, /const label = swing\.label \|\| \(swing\.kind === 'high' \? 'H' : 'L'\)/)
   assert.match(js, /assetChartVisibleCandleCount/)
   assert.match(js, /candles = allCandles\.slice\(-assetChartVisibleCandleCount\)/)
-  assert.match(js, /const minVisibleCandleCount = Math\.min\(allCandles\.length, 60\)/)
+  assert.match(js, /const minVisibleCandleCount = Math\.min\(allCandles\.length, timeframeId === '1d' \? 30 : 60\)/)
   assert.match(js, /const niceStep = \(value\) =>/)
   assert.match(js, /const yStep = niceStep/)
   assert.match(js, /const yTicks = \[\]/)
@@ -274,6 +275,7 @@ test('asset tickers open a timeframe price chart with supply and demand zones', 
   assert.match(css, /asset-ticker/)
   assert.match(css, /asset-zone-demand/)
   assert.match(css, /asset-zone-supply/)
+  assert.match(js, /candidate\.pullbackEligible && !candidate\.invalidatedByPrematureTouch/)
 })
 
 test('charts create SVG graphics in the SVG namespace and use strategy history when available', () => {
@@ -323,7 +325,7 @@ test('the first migrated publish persists the strategy-versioned settings', () =
 })
 
 test('the API refuses stale PA-1 runners before they overwrite current structure', () => {
-  assert.match(api, /const MIN_PRICE_ACTION_MATRIX_SCHEMA = 27/)
+  assert.match(api, /const MIN_PRICE_ACTION_MATRIX_SCHEMA = 28/)
   assert.match(api, /\$strategyId === 'price-action-structure-v1'/)
   assert.match(api, /\(int\) \$priceActionSchema < MIN_PRICE_ACTION_MATRIX_SCHEMA/)
   assert.match(api, /fail\(409, 'Runner uses an obsolete price-action matrix schema\.'\)/)
