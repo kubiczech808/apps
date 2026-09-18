@@ -257,19 +257,66 @@ jobs:
               relative_parts = path.relative_to(local_dir).as_posix().split("/")
               deploy_roots.add(relative_parts[0])
 
-          with ftplib.FTP(server, timeout=30) as ftp:
+          with ftplib.FTP(server, timeout=120) as ftp:
               ftp.login(username, password)
               target_parts = target.split("/")
               enter_dir(ftp, target_parts)
 
               # Upload first, clean second. If hosting rejects STOR because of
               # quota, the currently deployed app remains intact.
+              #
+              # And every file goes up under a TEMPORARY name, is checked for length, and is
+              # only then renamed over the live one.
+              #
+              # STOR straight onto the live path is what took the whole site down on
+              # 2026-09-18. A transfer that stalls -- 30 second timeout, shared host, files
+              # that grow every day -- leaves the live PHP truncated, and it STAYS truncated
+              # until someone deploys again. The site answered
+              # "syntax error, unexpected string content, expecting ]" at storage.php:283
+              # on every request, for a storage.php that is valid in git and passes php -l.
+              #
+              # It was visible hours earlier and I read it as a race: one probe caught
+              # "Unclosed '{' on line 949" mid-deploy and recovered, so I recorded it as a
+              # few seconds of exposure. It was not a window. It was a file left broken.
+              #
+              # Rename is the fix rather than a longer timeout, because a longer timeout
+              # makes truncation rarer without making it impossible. A rename is a directory
+              # operation: a request sees the old complete file or the new complete one.
+              # The size check is what turns a short transfer into a failed deploy instead
+              # of a corrupted site -- the guarantee is not "usually fine", it is that a file
+              # nobody verified never becomes the live one.
               for path in deploy_files:
                   relative = path.relative_to(local_dir).as_posix()
                   remote_parts = target_parts + relative.split("/")[:-1]
                   enter_dir(ftp, remote_parts)
+                  expected = path.stat().st_size
+                  staged = f".deploy-{path.name}"
                   with path.open("rb") as handle:
-                      ftp.storbinary(f"STOR {path.name}", handle)
+                      ftp.storbinary(f"STOR {staged}", handle)
+                  try:
+                      uploaded = ftp.size(staged)
+                  except ftplib.all_errors:
+                      uploaded = None
+                  if uploaded is not None and uploaded != expected:
+                      try:
+                          ftp.delete(staged)
+                      except ftplib.all_errors:
+                          pass
+                      raise SystemExit(
+                          f"{relative}: uploaded {uploaded} bytes of {expected}. "
+                          "Refusing to publish a truncated file; the live copy is untouched."
+                      )
+                  try:
+                      ftp.rename(staged, path.name)
+                  except ftplib.all_errors:
+                      # Some servers refuse RNTO onto an existing path. Deleting first leaves
+                      # a sub-second window where the file is absent, which serves a 404 --
+                      # recoverable, and far better than serving a half-parsed PHP file.
+                      try:
+                          ftp.delete(path.name)
+                      except ftplib.all_errors:
+                          pass
+                      ftp.rename(staged, path.name)
 
               enter_dir(ftp, target_parts)
               for name in list_names(ftp):
