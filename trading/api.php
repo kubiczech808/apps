@@ -2563,6 +2563,43 @@ function observation_hours_to_resolution(array $item): ?float
     return is_numeric($days) ? (float) $days * 24.0 : null;
 }
 
+/**
+ * Whether a market is inside the window the dip rule exists to trade: after kick-off and
+ * before settlement.
+ *
+ * The lower bound was always there. The upper bound was not, and its absence is what the dip
+ * portfolios were starving on. observation_event_is_running() asks one question -- "has the
+ * kickoff passed" -- and Polymarket may take days to mark a finished fixture RESOLVED, so a
+ * match that ended on Tuesday still reads as running on Friday. Its price decays towards 0
+ * or 1 as the result becomes known, and that decay is indistinguishable from the collapse
+ * this rule buys.
+ *
+ * Measured on the live host, 2026-09-18, before this bound existed: 2070 of 2127 watched
+ * plans (97%) were already past their resolution date, and 141 of one portfolio's 143
+ * recorded dips were refused at fire time as "market already ended". Every one of those
+ * tokens also rode the worker's one-second /books request -- the same request the live stop
+ * loss reads its prices from.
+ *
+ * Read from resolutionEndDate and from nothing else. For a sports fixture the bot substitutes
+ * the KICKOFF into endDate, so a bound written against that field would reject every match
+ * the rule exists to trade; and daysToResolution is frozen at scan time, so a row scanned on
+ * the morning of the match reads as 0 days for as long as it is stored. When no resolution
+ * date is recorded the market is admitted -- a missing date is not evidence that a fixture is
+ * over.
+ */
+function dip_watch_market_is_live(array $item, ?int $now = null): bool
+{
+    $now = $now ?? time();
+    if (!observation_event_is_running($item)) {
+        return false;
+    }
+    $resolution = strtotime((string) ($item['resolutionEndDate'] ?? ''));
+    if ($resolution !== false && $resolution <= $now) {
+        return false;
+    }
+    return true;
+}
+
 function execution_scope_matches_observation(array $item, array $config): bool
 {
     if (!is_active_scraped_market_observation($item)) {
@@ -6130,10 +6167,12 @@ function live_dip_entry_watch_payload(): array
         if (!is_array($item)) {
             continue;
         }
-        // Underway only, and the rule says so rather than the portfolio's resolution
-        // filter: before kick-off a collapsed price is not a collapse, it is a different
-        // market.
-        if (!observation_event_is_running($item)) {
+        // Under way only -- and still under way. The rule says so itself rather than
+        // borrowing the portfolio's resolution filter: before kick-off a collapsed price is
+        // not a collapse but a different market, and after settlement it is not a collapse
+        // but the result arriving. dip_watch_market_is_live() carries the measurement that
+        // says why the second half of that sentence had to be written down.
+        if (!dip_watch_market_is_live($item)) {
             continue;
         }
         $opened = null;
