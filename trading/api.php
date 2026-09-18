@@ -7096,6 +7096,15 @@ try {
         // schema rather than the four tables this application owns. The quota is charged on
         // the schema, so a diagnosis that can only see Trading tables cannot tell "we are
         // the problem" from "we are a tenant of something that is".
+        // Read-only. Whether the database can assemble the one read that blocks the cutover,
+        // inside this hosting's memory. See trading_storage_refresh_assembly_cost.
+        if ($operation === 'refresh-assembly-cost') {
+            respond([
+                'ok' => true,
+                'operation' => 'refresh-assembly-cost',
+                'assembly' => trading_storage_refresh_assembly_cost($pdo),
+            ]);
+        }
         if ($operation === 'schema-footprint') {
             respond([
                 'ok' => true,

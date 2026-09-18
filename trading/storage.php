@@ -525,6 +525,93 @@ function trading_storage_table_stats(PDO $pdo): array
 }
 
 /**
+ * Can the database assemble every paper portfolio's trades inside this hosting's memory?
+ *
+ * Read-only: it loads each stored portfolio document, counts what is in it, and releases it
+ * again. Nothing is written and nothing is returned but the counts.
+ *
+ * This is the one measurement the cutover turns on. The paper bot rebuilds its whole state
+ * from summary=refresh, and served from the database that read answers with `state:paper` --
+ * the portfolios and their parameters, with each portfolio's trades sitting in a document of
+ * its own that the read names none of. On 2026-09-12 it came back with thirty-six portfolios
+ * and no trades, the bot accepted it and published it back over the files, and every paper
+ * history was lost. api.php refuses that read from the database now, and the refusal states
+ * what would lift it: "until the database path can assemble every portfolio's trades within
+ * this hosting's memory".
+ *
+ * That is a number, not an opinion, and this returns it. Documents are loaded ONE AT A TIME
+ * and released, which is how the real assembly would have to work, so the peak here is the
+ * peak that read would pay -- not the cost of holding all of them at once.
+ */
+function trading_storage_refresh_assembly_cost(PDO $pdo): array
+{
+    trading_storage_bootstrap($pdo);
+    $baseline = memory_get_usage(true);
+    $statement = $pdo->query(
+        "SELECT document_key FROM trading_documents WHERE document_key LIKE 'paper-portfolio:%' ORDER BY document_key"
+    );
+    $keys = [];
+    foreach ($statement->fetchAll() as $row) {
+        $key = (string) ($row['document_key'] ?? '');
+        if ($key !== '') {
+            $keys[] = $key;
+        }
+    }
+    $documents = 0;
+    $trades = 0;
+    $decodedBytes = 0;
+    $largest = ['key' => null, 'trades' => 0];
+    $missing = [];
+    foreach ($keys as $key) {
+        $document = trading_storage_document_get($key);
+        if (!is_array($document)) {
+            $missing[] = $key;
+            continue;
+        }
+        $documents++;
+        // The shape the state read merges: the portfolio sits under paperPortfolio, or is
+        // the document itself on the older writes.
+        $portfolio = is_array($document['paperPortfolio'] ?? null) ? $document['paperPortfolio'] : $document;
+        $count = is_array($portfolio['trades'] ?? null) ? count($portfolio['trades']) : 0;
+        $trades += $count;
+        if ($count > $largest['trades']) {
+            $largest = ['key' => $key, 'trades' => $count];
+        }
+        // What the assembled response would weigh, measured on the DECODED document rather
+        // than on the stored blob: the blob is compressed and the response is not.
+        $decodedBytes += strlen((string) json_encode($portfolio));
+        unset($document, $portfolio);
+    }
+    $limit = (string) ini_get('memory_limit');
+    $limitBytes = 0;
+    if (preg_match('/^(\d+)([KMG]?)$/i', trim($limit), $match)) {
+        $limitBytes = (int) $match[1] * match (strtoupper($match[2])) {
+            'G' => 1073741824, 'M' => 1048576, 'K' => 1024, default => 1,
+        };
+    }
+    $peak = memory_get_peak_usage(true);
+    return [
+        'documentsFound' => count($keys),
+        'documentsLoaded' => $documents,
+        'documentsMissing' => $missing,
+        'trades' => $trades,
+        'largestPortfolio' => $largest,
+        // What one assembled refresh response would weigh, uncompressed.
+        'assembledBytes' => $decodedBytes,
+        'baselineBytes' => $baseline,
+        'peakBytes' => $peak,
+        'memoryLimit' => $limit,
+        'memoryLimitBytes' => $limitBytes,
+        // The judgement, stated here rather than left to whoever reads the numbers. The
+        // response has to be BUILT as well as streamed, so the assembled payload has to fit
+        // beside the peak -- and a measurement that only just fits is not a pass, because
+        // this host serves other requests at the same time.
+        'headroomBytes' => $limitBytes > 0 ? $limitBytes - ($peak + $decodedBytes) : null,
+        'fits' => $limitBytes > 0 && ($peak + $decodedBytes) < (int) ($limitBytes * 0.6),
+    ];
+}
+
+/**
  * Every table in the schema, largest first -- not only the four Trading ones.
  *
  * Read-only: one SELECT against information_schema, no row of any table is touched.
