@@ -3,7 +3,7 @@ import { ceilPrice, floorPrice, normalizeCandlePrices, roundPrice } from './pric
 import { buildFvgSupplyDemandZones, candleSignal, marketStructure } from './priceaction.mjs'
 
 export const PRICE_ACTION_STRUCTURE_ID = 'price-action-structure-v1'
-export const PRICE_ACTION_MATRIX_SCHEMA = 32
+export const PRICE_ACTION_MATRIX_SCHEMA = 33
 export const PRICE_ACTION_CHART_CANDLE_LIMITS = {
   '1h': 8760,
   '4h': 2190,
@@ -453,10 +453,15 @@ const persistentStructureTrend = (candles, swings, lookback) => {
     // trade until a subsequent directional pivot pair exists.
     const flatRangeHigh = lastHigh && lastLow ? Math.max(lastHigh.price, lastLow.price) : null
     const flatRangeLow = lastHigh && lastLow ? Math.min(lastHigh.price, lastLow.price) : null
-    const brokeFlatRangeUp = trend === 'flat' && establishedTrend !== 'flat'
+    // Do not require an earlier confirmed trend here. A mature sideways range
+    // can break directly into a new directional leg; two confirmed highs and
+    // two confirmed lows prevent the first ordinary pullback of new history
+    // from being mistaken for such a breakout.
+    const hasCompleteFlatRange = highs.length >= 2 && lows.length >= 2
+    const brokeFlatRangeUp = trend === 'flat' && hasCompleteFlatRange
       && (!pendingDirection || pendingDirection === 'up') && flatRangeHigh
       && current.close > flatRangeHigh && previous?.close <= flatRangeHigh
-    const brokeFlatRangeDown = trend === 'flat' && establishedTrend !== 'flat'
+    const brokeFlatRangeDown = trend === 'flat' && hasCompleteFlatRange
       && (!pendingDirection || pendingDirection === 'down') && flatRangeLow
       && current.close < flatRangeLow && previous?.close >= flatRangeLow
     if (brokeFlatRangeDown) {

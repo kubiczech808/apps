@@ -75,11 +75,11 @@ test('flat structure is formation-only and never publishes a planned entry', () 
   assert.equal(profile.gates[0].status, 'neutral')
 })
 
-test('a close below a stalled uptrend publishes a non-executable down bias and an alternating chart line', () => {
-  const range = zigzag([100, 120, 110, 140, 125, 135, 130, 134], { steps: 8 })
+test('a close below a mature flat range publishes a non-executable down bias and an alternating chart line', () => {
+  const range = zigzag([100, 120, 110, 118, 111, 117], { steps: 8 })
   const broken = [
     ...range,
-    candle(range.at(-1).time + HOUR, 134, 135, 100, 105),
+    candle(range.at(-1).time + HOUR, 117, 118, 100, 105),
   ]
   const result = classifyStructure(broken, {
     lookback: 2,
@@ -89,7 +89,7 @@ test('a close below a stalled uptrend publishes a non-executable down bias and a
   })
 
   assert.equal(result.trend, 'down')
-  assert.equal(result.event, 'CHoCH_DOWN')
+  assert.equal(result.event, 'RANGE_BREAK_DOWN')
   assert.equal(result.structureConfirmed, false)
   assert.match(result.reason, /čeká se na LH \+ LL/)
   const pivots = result.structure.chartPivots
