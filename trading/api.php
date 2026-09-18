@@ -8450,9 +8450,15 @@ function resolved_stats_accumulate(array $sources, float $stake = 5.0): array
         // "nothing ever settled".
         $accumulated = null;
         $statsSource = 'archive';
-        if (function_exists('trading_storage_resolved_stats_load') && trading_storage_is_active()) {
+        // Deliberately NOT gated on trading_storage_is_active(). That flag says whether the
+        // observation MIRROR serves reads, and it is off -- but this table is not the mirror.
+        // It is a purpose-built reduction that only the fold writes, so it is readable as soon
+        // as a connection exists. Gating it on the cutover flag was a mistake that would have
+        // left the fold running nightly and changing nothing at all, silently.
+        $statsPdo = function_exists('trading_storage_resolved_stats_load') ? trading_storage_pdo() : null;
+        if ($statsPdo instanceof PDO) {
             try {
-                $stored = trading_storage_resolved_stats_load(trading_storage_pdo());
+                $stored = trading_storage_resolved_stats_load($statsPdo);
                 if (is_array($stored)) {
                     $accumulated = $stored;
                     $statsSource = 'stored';

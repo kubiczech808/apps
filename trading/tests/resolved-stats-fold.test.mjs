@@ -299,8 +299,17 @@ test("the cells go in batches, not one round trip each", () => {
 
 test("the endpoint prefers the stored fold and falls back rather than failing", () => {
   const endpoint = API.slice(API.indexOf("if ($action === 'resolved-combinations')"));
-  const block = endpoint.slice(0, endpoint.indexOf("// Every combination, by suffix sum"));
+  const withComments = endpoint.slice(0, endpoint.indexOf("// Every combination, by suffix sum"));
+  // Comments here explain what the code must NOT do, so a check for absence has to read the
+  // code alone -- otherwise the prose warning against a call counts as the call.
+  const block = withComments.split("\n").filter((line) => !line.trim().startsWith("//")).join("\n");
   assert.match(block, /trading_storage_resolved_stats_load/, "it must try the table");
+  // And must not be gated on the cutover flag. That flag says whether the observation MIRROR
+  // serves reads, and it is off; this table is not the mirror. Gating on it would leave the
+  // nightly fold running and changing nothing, with no symptom anywhere.
+  assert.doesNotMatch(block, /trading_storage_is_active\(\)/,
+    "the statistics table is not the observation mirror and must not wait for its flag");
+  assert.match(block, /\$statsPdo instanceof PDO/, "a connection is the only precondition");
   assert.match(block, /\$accumulated === null[\s\S]*resolved_stats_accumulate/,
     "and stream the archive only when there is nothing stored");
   assert.match(block, /catch \(Throwable/, "a storage fault must not take the page down");
