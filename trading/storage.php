@@ -525,6 +525,57 @@ function trading_storage_table_stats(PDO $pdo): array
 }
 
 /**
+ * What the database already knows about each stored market, in four numbers.
+ *
+ * Read-only: one SELECT of five columns, no payload is decoded and nothing is written.
+ *
+ * This exists to stop the mirror re-sending a catalogue that has not changed. Measured on a
+ * market scan of 18.9.: the whole job took 204 seconds, of which the scan itself was 37 and
+ * the MySQL mirror was 90 -- 27 POSTs of 300 observations each, roughly 16 MB uploaded, on
+ * every pass, ten minutes apart, for a catalogue that mostly stands still.
+ *
+ * It re-sends because the PAYLOAD always differs: every row carries its own observedAt, and
+ * that ticks on every scrape even when the price, the volume and the end date are exactly
+ * what they were. So the payload checksum is useless for this question and the material
+ * fields have to be compared instead, which is what these four are.
+ *
+ * They come from COLUMNS rather than from the payload deliberately. The caller compares its
+ * own values against these with a tolerance, so neither side has to reproduce the other's
+ * JSON encoding -- an encoding mismatch would silently mark everything as changed and put
+ * the whole cost straight back while appearing to work.
+ */
+function trading_storage_observation_fingerprints(PDO $pdo, int $days = 7, int $limit = 20000): array
+{
+    trading_storage_bootstrap($pdo);
+    $days = max(1, min(90, $days));
+    $limit = max(1, min(50000, $limit));
+    $statement = $pdo->prepare(
+        'SELECT observation_key, lifecycle, market_probability, volume_usdc, end_at
+         FROM trading_observations
+         WHERE updated_at >= (UTC_TIMESTAMP() - INTERVAL :days DAY)
+         ORDER BY updated_at DESC
+         LIMIT ' . $limit
+    );
+    $statement->execute(['days' => $days]);
+    $fingerprints = [];
+    foreach ($statement->fetchAll() as $row) {
+        $key = (string) ($row['observation_key'] ?? '');
+        if ($key === '') {
+            continue;
+        }
+        $fingerprints[$key] = [
+            // Ordered so the caller reads them positionally and the response stays small:
+            // a named object per row would roughly triple it at eight thousand rows.
+            $row['market_probability'] === null ? null : (float) $row['market_probability'],
+            $row['volume_usdc'] === null ? null : (float) $row['volume_usdc'],
+            $row['end_at'] === null ? null : (string) $row['end_at'],
+            (string) ($row['lifecycle'] ?? ''),
+        ];
+    }
+    return $fingerprints;
+}
+
+/**
  * Can the database assemble every paper portfolio's trades inside this hosting's memory?
  *
  * Read-only: it loads each stored portfolio document, counts what is in it, and releases it

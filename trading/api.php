@@ -7096,6 +7096,20 @@ try {
         // schema rather than the four tables this application owns. The quota is charged on
         // the schema, so a diagnosis that can only see Trading tables cannot tell "we are
         // the problem" from "we are a tenant of something that is".
+        // Read-only. What the database already holds for each recent market, so the mirror
+        // can skip the rows that have not materially changed. See
+        // trading_storage_observation_fingerprints.
+        if ($operation === 'observation-fingerprints') {
+            respond([
+                'ok' => true,
+                'operation' => 'observation-fingerprints',
+                'fingerprints' => trading_storage_observation_fingerprints(
+                    $pdo,
+                    (int) ($storageRequest['days'] ?? 7),
+                    (int) ($storageRequest['limit'] ?? 20000),
+                ),
+            ]);
+        }
         // Read-only. Whether the database can assemble the one read that blocks the cutover,
         // inside this hosting's memory. See trading_storage_refresh_assembly_cost.
         if ($operation === 'refresh-assembly-cost') {

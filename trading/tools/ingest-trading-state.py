@@ -13,6 +13,7 @@ TRADING_STORAGE_INGEST_REQUIRED=true so a failed mirror stops the run instead.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import sys
@@ -45,6 +46,132 @@ def env_bool(name: str, default: bool = False) -> bool:
     if not raw:
         return default
     return raw in {"1", "true", "yes", "on"}
+
+
+# ---------------------------------------------------------------------------
+# Skipping the rows the database already has, materially unchanged.
+#
+# Measured on a market scan of 18.9.: 204 seconds of job, of which the scan itself was 37 and
+# this mirror was 90 -- 27 POSTs of 300 observations, roughly 16 MB uploaded, every ten
+# minutes, for a catalogue that mostly stands still.
+#
+# It re-sent everything because the PAYLOAD always differs: each row carries its own
+# observedAt and that ticks on every scrape even when nothing about the market moved. So the
+# comparison is made on the four fields that decide whether a row is worth storing again,
+# with a tolerance, rather than on bytes.
+#
+# The tolerances are deliberately not zero. A market whose probability moved by a
+# ten-thousandth or whose volume moved by a dollar is the same market for every purpose this
+# database serves, and storing that costs a write, a row version and quota.
+
+PROBABILITY_TOLERANCE = 0.001   # 0.1 percentage point
+VOLUME_RELATIVE_TOLERANCE = 0.01  # 1 per cent
+VOLUME_ABSOLUTE_TOLERANCE = 50.0  # ... or fifty dollars, whichever is larger
+
+
+def _number(value: Any) -> float | None:
+    try:
+        if value is None or value == "":
+            return None
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _coalesce(row: dict[str, Any], *fields: str, default: Any = "") -> Any:
+    """PHP's ?? chain, not Python's or.
+
+    They differ on exactly one value and it is a value this data has: ?? falls through only
+    on null, `or` falls through on anything falsy. A row carrying tokenId="" alongside a
+    populated firstTokenId is therefore keyed on "" by storage.php and on the firstTokenId by
+    a naive port -- so every such row misses its fingerprint, looks new, and is uploaded
+    again. That is not a crash, it is a silent loss of the whole saving, and it is what the
+    key comparison test caught in the first version of this file.
+    """
+    for field in fields:
+        value = row.get(field)
+        if value is not None:
+            return value
+    return default
+
+
+def _observation_key(row: dict[str, Any]) -> str:
+    """The same key storage.php files the row under, computed the same way."""
+    for field in ("id", "observationId"):
+        value = row.get(field)
+        if isinstance(value, (str, int, float, bool)) and str(value) != "":
+            return hashlib.sha256(("id:" + str(value)).encode("utf-8")).hexdigest()
+    parts = [
+        str(_coalesce(row, "tokenId", "firstTokenId")),
+        str(_coalesce(row, "eventSlug", "slug")),
+        str(_coalesce(row, "outcome", "firstOutcome")),
+    ]
+    return hashlib.sha256("\x1f".join(parts).encode("utf-8")).hexdigest()
+
+
+def _lifecycle(row: dict[str, Any]) -> str:
+    status = str(_coalesce(row, "status", "selectionStatus", default="SCRAPED")).upper()
+    return "RESOLVED" if status in {"RESOLVED", "CLOSED", "EXPIRED", "FINALIZED", "SETTLED"} else "SCRAPED"
+
+
+def _end_at(row: dict[str, Any]) -> str | None:
+    for field in ("resolutionEndDate", "endDate", "resolvedAt"):
+        value = row.get(field)
+        if isinstance(value, str) and len(value) >= 10:
+            # Compared to the DATETIME the database stores, so only the calendar part and the
+            # time of day matter -- not the timezone spelling the feed happened to use.
+            return value.replace("T", " ")[:19]
+    return None
+
+
+def observation_is_unchanged(row: dict[str, Any], stored: list[Any] | None) -> bool:
+    if not stored or len(stored) < 4:
+        return False
+    probability, volume, end_at, lifecycle = stored[0], stored[1], stored[2], stored[3]
+    if _lifecycle(row) != str(lifecycle or ""):
+        return False
+
+    mine = _number(_coalesce(row, "marketProbability", "firstMarketProbability", default=None))
+    theirs = _number(probability)
+    if (mine is None) != (theirs is None):
+        return False
+    if mine is not None and abs(mine - theirs) > PROBABILITY_TOLERANCE:
+        return False
+
+    my_volume = None
+    for field in ("volumeUsdc", "liquidity", "resolvedVolumeUsdc", "volume"):
+        my_volume = _number(row.get(field))
+        if my_volume is not None:
+            break
+    their_volume = _number(volume)
+    if (my_volume is None) != (their_volume is None):
+        return False
+    if my_volume is not None:
+        allowed = max(VOLUME_ABSOLUTE_TOLERANCE, abs(their_volume) * VOLUME_RELATIVE_TOLERANCE)
+        if abs(my_volume - their_volume) > allowed:
+            return False
+
+    my_end = _end_at(row)
+    their_end = (str(end_at)[:19] if end_at else None)
+    # A market whose end date moved is a market whose horizon changed, and every portfolio
+    # rule reads that, so it is never treated as unchanged.
+    if (my_end or "") != (their_end or ""):
+        return False
+    return True
+
+
+def fetch_fingerprints(url: str, key: str, days: int = 7) -> dict[str, list[Any]]:
+    """What the database already holds. Failure here is not fatal: it means send everything."""
+    admin_url = url.replace("action=storage-ingest", "action=storage-admin")
+    if "action=storage-admin" not in admin_url:
+        return {}
+    try:
+        result = post(admin_url, key, {"operation": "observation-fingerprints", "days": days})
+    except Exception as error:  # noqa: BLE001 - any failure degrades to the old behaviour
+        print(f"::warning::Could not read observation fingerprints ({error}); mirroring everything.")
+        return {}
+    fingerprints = result.get("fingerprints")
+    return fingerprints if isinstance(fingerprints, dict) else {}
 
 
 def post(url: str, key: str, payload: dict[str, Any]) -> dict[str, Any]:
@@ -326,6 +453,14 @@ def ingest_paper(url: str, key: str, state_file: Path, state: dict[str, Any], ta
     else:
         print("Observation catalogue mirror skipped: Trading Market Scan is its sole writer")
     pause_seconds = max(0.0, float(os.environ.get("TRADING_STORAGE_INGEST_PAUSE_SECONDS") or 0))
+    # What the database already holds, asked once, so the rows that have not moved are never
+    # uploaded. Set TRADING_STORAGE_INGEST_FULL=1 to send everything regardless -- the escape
+    # hatch for a suspected divergence, and what a first mirror into an empty table does
+    # anyway, since it finds no fingerprints.
+    fingerprints: dict[str, list[Any]] = {}
+    if sources and not env_bool("TRADING_STORAGE_INGEST_FULL", False):
+        fingerprints = fetch_fingerprints(url, key)
+    skipped = 0
     for source, field in sources:
         try:
             rows = list_rows(json.loads(source.read_text(encoding="utf-8")).get(field))
@@ -333,6 +468,14 @@ def ingest_paper(url: str, key: str, state_file: Path, state: dict[str, Any], ta
             raise RuntimeError(f"could not read observation segment {source.name}: {error}") from error
         if field == "resolvedMarketObservations":
             rows = recently_resolved(rows)
+        if fingerprints:
+            kept = []
+            for row in rows:
+                if isinstance(row, dict) and observation_is_unchanged(row, fingerprints.get(_observation_key(row))):
+                    skipped += 1
+                    continue
+                kept.append(row)
+            rows = kept
         for offset in range(0, len(rows), 300):
             result = try_post(
                 url, key,
@@ -343,6 +486,8 @@ def ingest_paper(url: str, key: str, state_file: Path, state: dict[str, Any], ta
             batches += 1
             if pause_seconds and offset + 300 < len(rows):
                 time.sleep(pause_seconds)
+    if skipped:
+        print(f"Skipped {skipped} observation(s) the database already holds unchanged")
     return imported, batches
 
 
