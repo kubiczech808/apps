@@ -5866,7 +5866,16 @@ function candidateRenderer(state) {
     }
     throw new Error(`unbalanced ${name}`);
   };
-  const body = [pick("candidateVisibleCount"), pick("renderPortfolioCandidateRows")].join("\n\n");
+  // The sortable headers are lifted rather than left to the auto-stub below. Stubbed they
+  // return "", which deletes whole columns from the rendered table -- and a column-order
+  // test against a table missing its sortable columns checks nothing. That is exactly what
+  // happened when click-to-sort was added.
+  const body = [
+    pick("candidateVisibleCount"),
+    pick("candidateSortChoice"),
+    pick("candidateSortHeader"),
+    pick("renderPortfolioCandidateRows"),
+  ].join("\n\n");
   const pageSize = Number(/const CANDIDATE_PAGE_SIZE = (\d+);/.exec(app)[1]);
   const stub = () => "";
   const deps = {
@@ -5947,7 +5956,7 @@ test("execution candidates: the list extends itself on scroll and by button", as
 
   // Endless scrolling, as asked for -- plus the button, because a scroll listener is
   // no use to anyone driving the table from the keyboard.
-  assert.match(app, /els\.portfolioCandidates\?\.addEventListener\("click", \(event\) => \{\r?\n  if \(!event\.target\.closest\("\[data-candidates-load-more\]"\)\) return;/);
+  assert.match(app, /els\.portfolioCandidates\?\.addEventListener\("click", \(event\) => \{[\s\S]{0,600}?if \(!event\.target\.closest\("\[data-candidates-load-more\]"\)\) return;/);
   // `scroll` does not bubble, so a panel-level listener has to capture.
   assert.match(app, /els\.portfolioCandidates\?\.addEventListener\("scroll", \(event\) => \{[\s\S]*?\}, true\);/);
   assert.match(app, /showMoreCandidates\(\);/);
@@ -7389,7 +7398,8 @@ test("execution candidates: Win and Days left lead, precheck follows the market"
 
   for (const mode of ["live", "paper-conservative"]) {
     const html = renderer.render(rows, mode, null);
-    const headers = [...html.matchAll(/<th>([^<]*)<\/th>/g)].map((match) => match[1].trim());
+    const headers = [...html.matchAll(/<th[^>]*>([^<]*)<\/th>/g)]
+      .map((match) => match[1].trim().replace(/[\u2191\u2193]$/, "").trim());
     const cells = [...html.matchAll(/<td data-label="([^"]*)"/g)].map((match) => match[1].trim());
 
     assert.deepEqual(headers.slice(0, 4), ["Win", "Days left", "Market", "Precheck"], `${mode} order`);
@@ -7424,7 +7434,8 @@ test("execution candidates: the last column names when the record was added or u
   const renderer = candidateRenderer({ candidateVisibleCount: 80, candidateVisibleMode: "live" });
   const rows = [{ tokenId: "1", question: "A market", outcome: "Yes" }];
   const html = renderer.render(rows, "live", null);
-  const headers = [...html.matchAll(/<th>([^<]*)<\/th>/g)].map((match) => match[1].trim());
+  const headers = [...html.matchAll(/<th[^>]*>([^<]*)<\/th>/g)]
+      .map((match) => match[1].trim().replace(/[\u2191\u2193]$/, "").trim());
   const cells = [...html.matchAll(/<td data-label="([^"]*)"/g)].map((match) => match[1].trim());
 
   assert.equal(headers[headers.length - 1], "Added / updated", "it must be the last column, not inserted before Analysis");
@@ -11508,14 +11519,14 @@ test("paper bot: the shape ids are declared before the code that reads them at l
 // the portfolio's own selection order, so those lists were ordered by a ratio that has no
 // column in that table -- the rows looked shuffled because the number they were sorted on
 // was not on screen at all.
-test("execution candidates: the list is ordered by Potential p.a. on every portfolio", async () => {
+test("execution candidates: the list is ordered the way the executor picks", async () => {
   const { readFile } = await import("node:fs/promises");
   const app = await readFile(new URL("../assets/app.js", import.meta.url), "utf8");
   const body = ["sortPortfolioCandidates", "portfolioCandidateSortValue"]
     .map((name) => functionSource(app, name)).join("\n\n");
   const sortFor = (selectionOrder) => new Function(
     "state", "portfolioConfigForMode", "normalizeSelectionOrder", "portfolioAnnualizedReturn",
-    "portfolioExpectedValue", "evaluationRiskReward", "evaluationDaysLeft",
+    "portfolioExpectedValue", "evaluationRiskReward", "evaluationDaysLeft", "candidateSortChoice",
     `${body}\nreturn sortPortfolioCandidates;`,
   )(
     { mode: "live" },
@@ -11525,6 +11536,8 @@ test("execution candidates: the list is ordered by Potential p.a. on every portf
     (item) => item.ev,
     (item) => item.rr,
     (item) => item.days,
+    // No column sorted by hand, so this reads the execution order.
+    () => null,
   );
 
   // Deliberately in conflict: the best yield is the worst ratio and the other way round.
@@ -11533,27 +11546,34 @@ test("execution candidates: the list is ordered by Potential p.a. on every portf
     { id: "best-pa", pa: 1.9, rr: 1.1, ev: 0.4, days: 2 },
     { id: "best-rr", pa: 0.2, rr: 9, ev: 2, days: 9 },
   ];
+  // Rewritten, not removed. This used to assert that BOTH portfolios read down by yield,
+  // which was the deliberate behaviour at the time: ordering by Priority while the ratio had
+  // no column made the rows look shuffled, because they were sorted on a number that was not
+  // on screen. The column was added, and the ordering was then asked for back --
+  // "serad prilezitosti ... podle toho, jak se budou exekuovat ... a nastaveni priority".
+  // What the test is FOR is unchanged: the list must read down in the order the executor
+  // picks. Only which order that is has changed.
   const ids = (selectionOrder) => sortFor(selectionOrder)(rows, "live").map((row) => row.id);
   assert.deepEqual(ids("highest_ev_pa_first"), ["best-pa", "mid", "best-rr"]);
-  assert.deepEqual(ids("highest_reward_risk_first"), ["best-pa", "mid", "best-rr"],
-    "a Reward/risk portfolio reads down by yield too; the ratio is only a tie-break");
+  assert.deepEqual(ids("highest_reward_risk_first"), ["best-rr", "mid", "best-pa"],
+    "a Reward/risk portfolio reads down by the ratio it picks by");
 
-  // And the ratio still decides between equal yields, so the order the executor picks in
-  // is preserved wherever the yield cannot separate two rows.
+  // The metric the portfolio does NOT pick by is the first tie-break, so a reader can see
+  // why two rows with the same priority fell the way they did.
   const tied = [
     { id: "low-rr", pa: 1, rr: 1.2, ev: 5, days: 1 },
     { id: "high-rr", pa: 1, rr: 7, ev: 0.1, days: 8 },
   ];
   assert.deepEqual(sortFor("highest_reward_risk_first")(tied, "live").map((row) => row.id),
     ["high-rr", "low-rr"]);
-  // Without that priority the tie falls to the nearer resolution, as it always did.
+  // On a yield portfolio the yields tie, so the ratio breaks it before the dates do.
   assert.deepEqual(sortFor("highest_ev_pa_first")(tied, "live").map((row) => row.id),
-    ["low-rr", "high-rr"]);
+    ["high-rr", "low-rr"]);
 
   // A list ordered by a metric it does not show is the bug. When reward/risk is the
   // portfolio's priority, the ratio gets a column of its own.
   assert.match(app, /const showRiskReward = normalizeSelectionOrder\(config\.selectionOrder\) === "highest_reward_risk_first";/);
-  assert.match(app, /\$\{showRiskReward \? "<th>R\/R<\/th>" : ""\}/);
+  assert.match(app, /\$\{showRiskReward \? candidateSortHeader\("R\/R", "riskReward", mode\) : ""\}/);
   assert.match(app, /\$\{showRiskReward \? `<td data-label="R\/R">\$\{evaluationRiskRewardCell\(item\)\}<\/td>` : ""\}/);
 });
 

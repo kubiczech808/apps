@@ -11219,24 +11219,94 @@ function portfolioCandidateSortValue(item, key, mode = state.mode) {
   return 0;
 }
 
-// Asked for: the candidate list reads down by Potential p.a. The primary key used to be
-// the portfolio's own trade priority, so a Reward/risk portfolio ordered its list by a
-// metric that has no column in this table -- the rows looked shuffled because the number
-// they were sorted on was not on screen. Yield is the primary key on every portfolio now,
-// and a Reward/risk portfolio keeps its priority as the first tie-break AND gains the R/R
-// column, so the order the executor will actually pick in is still readable.
+// Which column the reader sorted by, if any. Kept per portfolio: the columns differ between
+// them -- R/R only appears on a Reward/risk portfolio -- so carrying a choice across would
+// leave a list sorted by a column that is not on screen, which is the exact complaint that
+// made this table stop sorting by Priority in the first place.
+function candidateSortChoice(mode = state.mode) {
+  const chosen = state.candidateSort;
+  if (!chosen || !chosen.key) return null;
+  if (normalizeMode(chosen.mode) !== normalizeMode(mode)) return null;
+  return chosen;
+}
+
+// Clicking a header sorts by it, descending first because every metric here reads
+// "more is better". Clicking the same one again flips it, and a third click clears the
+// choice and hands the list back to the execution order.
+function toggleCandidateSort(key, mode = state.mode) {
+  const current = candidateSortChoice(mode);
+  if (!current || current.key !== key) {
+    state.candidateSort = { key, direction: "desc", mode: normalizeMode(mode) };
+  } else if (current.direction === "desc") {
+    state.candidateSort = { key, direction: "asc", mode: normalizeMode(mode) };
+  } else {
+    state.candidateSort = null;
+  }
+  // Back to the top: a re-sorted list read from wherever the reader happened to be
+  // scrolled is a different list with no visible explanation.
+  state.candidateVisibleCount = CANDIDATE_PAGE_SIZE;
+  renderPortfolioCandidates();
+}
+
+// A sortable header. The key is what portfolioCandidateSortValue() understands; anything
+// else is left as a plain column, because a header that looks clickable and sorts by
+// nothing is worse than one that does not.
+function candidateSortHeader(label, key, mode = state.mode) {
+  const chosen = candidateSortChoice(mode);
+  const active = chosen && chosen.key === key;
+  const arrow = active ? (chosen.direction === "asc" ? " \u2191" : " \u2193") : "";
+  return `<th class="candidate-sortable${active ? " is-sorted" : ""}"`
+    + ` data-candidate-sort="${escapeHtml(key)}" role="button" tabindex="0"`
+    + ` aria-sort="${active ? (chosen.direction === "asc" ? "ascending" : "descending") : "none"}"`
+    + ` title="Sort by ${escapeHtml(label)}">${escapeHtml(label)}${arrow}</th>`;
+}
+
+// The order the executor will actually pick in, top first.
+//
+// This has now been both ways round, and the reason is worth keeping. The primary key used
+// to be the portfolio's own trade priority; it was changed to yield because a Reward/risk
+// portfolio was ordering by a metric that had no column in the table, so the rows looked
+// shuffled -- sorted on a number that was not on screen. The R/R column was added at the
+// same time, which removed that objection, and the list was then ordered by something the
+// executor does not read down in.
+//
+// Asked for now: "serad prilezitosti v execution candidates shora podle toho, jak se budou
+// exekuovat pri stavajicich parametrech a nastaveni priority v portfoliu". So the primary
+// key is the portfolio's Priority again -- the same metric observationPriorityScore() ranks
+// by in the bot, reward/risk or yield -- and the other metric is the first tie-break, so a
+// reader can still see why two rows fell the way they did. Both columns are on screen.
 function sortPortfolioCandidates(rows = [], mode = state.mode) {
   const config = portfolioConfigForMode(mode);
   const prioritizesRiskReward = normalizeSelectionOrder(config.selectionOrder) === "highest_reward_risk_first";
+  // The metric the portfolio picks by, and the one it does not. Named rather than branched
+  // inside the comparator so the two orderings cannot drift apart.
+  const priorityKey = prioritizesRiskReward ? "riskReward" : "annualizedReturn";
+  const secondaryKey = prioritizesRiskReward ? "annualizedReturn" : "riskReward";
+  // A column the reader clicked wins over the execution order. Sorting by hand is for
+  // looking, and the caption says which one is showing.
+  const chosen = candidateSortChoice(mode);
+  if (chosen) {
+    const direction = chosen.direction === "asc" ? 1 : -1;
+    const byColumn = [...rows].sort((a, b) => {
+      const aValue = portfolioCandidateSortValue(a, chosen.key, mode);
+      const bValue = portfolioCandidateSortValue(b, chosen.key, mode);
+      if (aValue !== bValue) return (aValue - bValue) * direction;
+      return (Date.parse(b.evaluatedAt || "") || 0) - (Date.parse(a.evaluatedAt || "") || 0);
+    });
+    // The risk-blocked rows still sink. They are not executable in any order, so leaving
+    // them interleaved would put an untradable row at the top of a hand-sorted list.
+    return [
+      ...byColumn.filter((item) => !item.portfolioRiskBlockReason),
+      ...byColumn.filter((item) => item.portfolioRiskBlockReason),
+    ];
+  }
   const sorted = [...rows].sort((a, b) => {
-    const aPrimary = portfolioCandidateSortValue(a, "annualizedReturn", mode);
-    const bPrimary = portfolioCandidateSortValue(b, "annualizedReturn", mode);
+    const aPrimary = portfolioCandidateSortValue(a, priorityKey, mode);
+    const bPrimary = portfolioCandidateSortValue(b, priorityKey, mode);
     if (bPrimary !== aPrimary) return bPrimary - aPrimary;
-    if (prioritizesRiskReward) {
-      const aRatio = portfolioCandidateSortValue(a, "riskReward", mode);
-      const bRatio = portfolioCandidateSortValue(b, "riskReward", mode);
-      if (bRatio !== aRatio) return bRatio - aRatio;
-    }
+    const aSecondary = portfolioCandidateSortValue(a, secondaryKey, mode);
+    const bSecondary = portfolioCandidateSortValue(b, secondaryKey, mode);
+    if (bSecondary !== aSecondary) return bSecondary - aSecondary;
     const aDays = portfolioCandidateSortValue(a, "days", mode);
     const bDays = portfolioCandidateSortValue(b, "days", mode);
     if (Number.isFinite(aDays) && Number.isFinite(bDays) && aDays !== bDays) return aDays - bDays;
@@ -11390,9 +11460,9 @@ function renderPortfolioCandidateRows(rows = [], mode = state.mode, diagnostics 
   // flag above still gates which columns appear, but it can no longer be false.
   const probabilityLabel = "Mkt prob.";
   const returnMetric = portfolioReturnMetricLabel(config);
-  // The list is ordered by yield on every portfolio. A portfolio that picks by reward/risk
-  // therefore trades in an order this table no longer reads down in, so the ratio it picks
-  // by gets a column rather than being left to be guessed at.
+  // The list reads down in the order the executor picks, so a Reward/risk portfolio needs
+  // the ratio it picks by on screen -- otherwise the rows are sorted by a number that is
+  // not in the table, which is what made this ordering get reverted once already.
   const showRiskReward = normalizeSelectionOrder(config.selectionOrder) === "highest_reward_risk_first";
   return `
     <div class="ledger-scroll candidate-ledger-scroll" tabindex="0" aria-label="Execution candidates table">
@@ -11400,22 +11470,22 @@ function renderPortfolioCandidateRows(rows = [], mode = state.mode, diagnostics 
       <thead>
         <tr>
           <th>Win</th>
-          <th>Days left</th>
+          ${candidateSortHeader("Days left", "days", mode)}
           <th>Market</th>
           <th>Precheck</th>
           ${useLiveMarketColumnOrder ? `
-            <th>${returnMetric}</th>
-            ${showRiskReward ? "<th>R/R</th>" : ""}
+            ${candidateSortHeader(returnMetric, "annualizedReturn", mode)}
+            ${showRiskReward ? candidateSortHeader("R/R", "riskReward", mode) : ""}
             <th>Volume</th>
-            <th>${probabilityLabel}</th>
+            ${candidateSortHeader(probabilityLabel, "aiProbability", mode)}
             <th>End date</th>
           ` : `
             <th>End date</th>
-            <th>${probabilityLabel}</th>
+            ${candidateSortHeader(probabilityLabel, "aiProbability", mode)}
             ${usesPolymarketPotential ? "" : "<th>Mkt entry</th>"}
-            <th>${returnMetric}</th>
-            ${showRiskReward ? "<th>R/R</th>" : ""}
-            ${usesPolymarketPotential ? "" : "<th>EV</th>"}
+            ${candidateSortHeader(returnMetric, "annualizedReturn", mode)}
+            ${showRiskReward ? candidateSortHeader("R/R", "riskReward", mode) : ""}
+            ${usesPolymarketPotential ? "" : candidateSortHeader("EV", "expectedValue", mode)}
             <th>Volume</th>
           `}
           <th>Analysis</th>
@@ -16549,9 +16619,27 @@ document.addEventListener("click", (event) => {
 });
 
 els.portfolioCandidates?.addEventListener("click", (event) => {
+  // Delegated on the panel rather than bound to the headers: the table is replaced on
+  // every render, so a listener on a th would be gone after the first sort.
+  const header = event.target.closest("[data-candidate-sort]");
+  if (header) {
+    event.preventDefault();
+    toggleCandidateSort(header.getAttribute("data-candidate-sort"));
+    return;
+  }
   if (!event.target.closest("[data-candidates-load-more]")) return;
   event.preventDefault();
   showMoreCandidates();
+});
+
+// The same by keyboard. The headers carry role="button" and a tab stop, and a control that
+// announces itself as a button and then does nothing on Enter is worse than a plain header.
+els.portfolioCandidates?.addEventListener("keydown", (event) => {
+  if (event.key !== "Enter" && event.key !== " ") return;
+  const header = event.target.closest?.("[data-candidate-sort]");
+  if (!header) return;
+  event.preventDefault();
+  toggleCandidateSort(header.getAttribute("data-candidate-sort"));
 });
 
 // `scroll` does not bubble, so it is caught in the capture phase on the panel. That

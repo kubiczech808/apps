@@ -3853,3 +3853,22 @@ body.modal-open {
 .setup-finder-ledger table {
   min-width: 720px;
 }
+
+/* Sortable execution-candidate headers.
+   The cursor and the hover are the only affordance a table header gets, so without them a
+   clickable column is indistinguishable from one that is not -- and half of these are not,
+   because only the metrics portfolioCandidateSortValue() understands can be sorted. */
+.execution-candidates-table th.candidate-sortable {
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+
+.execution-candidates-table th.candidate-sortable:hover,
+.execution-candidates-table th.candidate-sortable:focus-visible {
+  text-decoration: underline;
+}
+
+.execution-candidates-table th.candidate-sortable.is-sorted {
+  font-weight: 700;
+}
