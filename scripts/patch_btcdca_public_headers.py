@@ -87,7 +87,9 @@ def patch_html(html: str) -> tuple[str, int]:
         r'(<header\s+class=["\']site-header["\'][\s\S]*?<nav(?:\s[^>]*)?>)[\s\S]*?(</nav>)',
         re.IGNORECASE,
     )
-    html, nav_replacements = header_pattern.subn(lambda match: match.group(1).split("<nav", 1)[0] + NAV + match.group(2), html, count=1)
+    # Keep the surrounding header and replace the complete original nav once.
+    # NAV already contains its closing tag, so do not append the old closing tag.
+    html, nav_replacements = header_pattern.subn(lambda match: match.group(1).split("<nav", 1)[0] + NAV, html, count=1)
     html = re.sub(r'(?<=src=["\'])assets/img/BDCA_white\.png', "/assets/img/BDCA_white.png", html)
     html = re.sub(
         r'<a\b[^>]*href=["\'][^"\']*btc-dca-(?:binance|coinmate|okx)-how-to-set-up-api-key/[^"\']*["\'][^>]*>\s*API setup guides\s*</a>',
