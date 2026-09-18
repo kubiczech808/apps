@@ -1,0 +1,35 @@
+name: Trading Setup Finder Audit
+
+# READ-ONLY, manual only. Public GETs against the published state. No secrets, no writes.
+#
+# Reported with a screenshot: the Setup finder shows 100.0% accuracy for valorant over 36
+# trades and for japan-j-league over 50, and the owner has held losing valorant positions.
+# A 100% column is a broken measurement, not a good result; this tells apart the three ways
+# this endpoint can produce one.
+on:
+  workflow_dispatch:
+    inputs:
+      tags:
+        description: "Comma-separated tags to audit in full"
+        required: false
+        default: "valorant,japan-j-league,argcopa"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Audit the setup finder against the rows it counts
+        working-directory: trading
+        env:
+          TRADING_HOST: https://osobnizkusenosti.cz/trading
+          PROBE_TAGS: ${{ inputs.tags || 'valorant,japan-j-league,argcopa' }}
+        run: node tools/setup-finder-audit-probe.mjs
