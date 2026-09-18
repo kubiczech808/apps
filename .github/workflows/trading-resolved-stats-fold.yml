@@ -1,0 +1,94 @@
+name: Fold Resolved Statistics
+
+# Reduces the settled archive to the cells the Setup finder is a running total over, and stores
+# them in trading_resolved_stats.
+#
+# Why it exists. trading_observations holds 226,262 rows, 90,795 of them settled, and the
+# hosting reports 1,844 MB of a 2,000 MB quota shared with other databases -- so the table
+# cannot even be repacked, let alone keep growing. The settled rows are read to answer one
+# page. Once these cells answer it instead, those rows have no reader left and can expire.
+#
+# The order matters and has been got wrong before: archiving observations out of MySQL was
+# added and reverted the same day, because the read path still needed the rows. Nothing is
+# deleted here. This only makes deletion possible later.
+#
+# Read-only against the archive; the single write is a transactional replace of the statistics
+# table. A fold that priced no rows is refused rather than stored, because an empty table
+# served to the page reads as "nothing ever settled".
+
+on:
+  workflow_dispatch:
+  schedule:
+    # 01:11 UTC, the quiet window. GitHub delivers a small fraction of scheduled runs, so this
+    # is a best effort and the dispatch button is the reliable path.
+    - cron: "11 1 * * *"
+
+jobs:
+  fold:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    concurrency:
+      group: trading-resolved-stats-fold
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fold the settled archive into its own table
+        env:
+          TRADING_TRIGGER_KEY: ${{ secrets.POLYTRADING_DB_PASSWORD }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import urllib.error
+          import urllib.request
+
+          key = os.environ["TRADING_TRIGGER_KEY"]
+          url = "https://www.osobnizkusenosti.cz/trading/api.php?action=storage-admin"
+
+          request = urllib.request.Request(
+              url,
+              data=json.dumps({"operation": "refresh-resolved-stats"}).encode("utf-8"),
+              method="POST",
+              headers={"Content-Type": "application/json", "X-Trading-Trigger-Key": key},
+          )
+          try:
+              # Streaming the archive and writing tens of thousands of cells is minutes of
+              # work, not seconds. Giving up early would leave the replace half-applied from
+              # this side's point of view while the transaction carried on.
+              with urllib.request.urlopen(request, timeout=900) as response:
+                  payload = json.loads(response.read().decode("utf-8"))
+          except urllib.error.HTTPError as error:
+              body = error.read().decode("utf-8", "replace")
+              raise SystemExit(f"::error title=Fold failed::HTTP {error.code}: {body[:400]}")
+          if not payload.get("ok"):
+              raise SystemExit(f"::error title=Fold failed::{str(payload.get('error'))[:400]}")
+
+          result = payload.get("result") or {}
+          print(f"scanned={result.get('scanned')} priced={result.get('priced')}"
+                f" cells={result.get('cells')} foldedAt={result.get('foldedAt')}")
+          print(f"::notice title=Resolved statistics folded::"
+                f"{result.get('priced')} settled row(s) into {result.get('cells')} cell(s)")
+          PY
+
+      - name: Confirm the page now answers from the table
+        env:
+          TRADING_TRIGGER_KEY: ${{ secrets.POLYTRADING_DB_PASSWORD }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import urllib.request
+
+          # The fold is only worth anything if the page reads it. This asks the page and prints
+          # which path answered -- 'stored' is the state in which the settled observations have
+          # no reader left, and 'archive' means the fold ran and changed nothing.
+          url = ("https://www.osobnizkusenosti.cz/trading/api.php"
+                 "?action=resolved-combinations&min_trades=30&limit=1")
+          with urllib.request.urlopen(url, timeout=300) as response:
+              payload = json.loads(response.read().decode("utf-8"))
+          source = payload.get("statsSource")
+          print(f"statsSource={source} foldedAt={payload.get('foldedAt')}"
+                f" scannedRows={payload.get('scannedRows')} pricedRows={payload.get('pricedRows')}")
+          if source != "stored":
+              print(f"::warning title=Page still reads the archive::statsSource={source}")
+          PY

@@ -133,6 +133,30 @@ function trading_storage_bootstrap(PDO $pdo): void
             KEY trading_event_log_portfolio_time (portfolio_id, occurred_at)
         ) ENGINE=InnoDB ROW_FORMAT=DYNAMIC DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci'
     );
+    // The settled archive, already summed. Every combination the Setup finder shows is a
+    // running total over these cells, so once they are stored nothing has to read a resolved
+    // observation to answer the page -- which is what has to be true before those rows can be
+    // allowed to expire. 226,262 rows of archive reduce to a few tens of thousands of cells.
+    //
+    // scope separates the two maps the reduction keeps: 'tag' cells are counted once per tag a
+    // row carries, 'any' cells once per row. Summing the tag cells to get an any-tag total
+    // would count a two-tag row twice, which is why they cannot share a row here either.
+    $pdo->exec(
+        'CREATE TABLE IF NOT EXISTS trading_resolved_stats (
+            cell_key CHAR(64) NOT NULL PRIMARY KEY,
+            scope VARCHAR(8) NOT NULL,
+            probability SMALLINT NOT NULL,
+            tag VARCHAR(191) NOT NULL,
+            shape VARCHAR(32) NOT NULL,
+            horizon VARCHAR(32) NOT NULL,
+            trades INT UNSIGNED NOT NULL,
+            wins INT UNSIGNED NOT NULL,
+            staked_usdc DECIMAL(24,6) NOT NULL,
+            pnl_usdc DECIMAL(24,6) NOT NULL,
+            updated_at DATETIME(6) NOT NULL,
+            KEY trading_resolved_stats_scope (scope, probability)
+        ) ENGINE=InnoDB ROW_FORMAT=DYNAMIC DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci'
+    );
     // Trades as their own queryable rows, which is what statistics and reposting need and
     // what a state document cannot give. That document is one compressed object replaced
     // wholesale on every sync, so a trade cannot be looked up, counted per portfolio, or
@@ -1617,6 +1641,130 @@ function trading_storage_archive_events(PDO $pdo, int $days = 7, int $limit = 50
         'deleted' => $deleted,
         'files' => array_values(array_unique($files)),
         'done' => count($rows) < $limit,
+    ];
+}
+
+/**
+ * Replaces the stored resolved-statistics cells with a freshly computed set.
+ *
+ * All or nothing, in one transaction. A fold that half-finishes and leaves the table holding
+ * some of yesterday's cells and some of today's would report numbers that were never true of
+ * any archive, and nothing downstream could tell.
+ *
+ * The cells arrive exactly as resolved_stats_accumulate() built them: keys joined by \x1f,
+ * values [trades, wins, staked, pnl]. They are stored split into columns so the read can
+ * filter without decoding, and the key is hashed because a tag plus a shape plus a horizon
+ * does not fit a usable primary key otherwise.
+ */
+function trading_storage_resolved_stats_replace(PDO $pdo, array $cells, array $anyTag, array $meta = []): array
+{
+    trading_storage_bootstrap($pdo);
+    $now = trading_storage_now();
+
+    $rows = [];
+    foreach ($cells as $key => $value) {
+        $parts = explode("\x1f", (string) $key);
+        if (count($parts) !== 4) {
+            continue;
+        }
+        $rows[] = ['tag', (int) $parts[0], $parts[1], $parts[2], $parts[3], $value];
+    }
+    foreach ($anyTag as $key => $value) {
+        $parts = explode("\x1f", (string) $key);
+        if (count($parts) !== 3) {
+            continue;
+        }
+        // The empty tag is what "any tag" means here, and it is why scope has to exist: an
+        // any-tag cell and a cell for a market with no tags would otherwise be the same row.
+        $rows[] = ['any', (int) $parts[0], '', $parts[1], $parts[2], $value];
+    }
+
+    $pdo->beginTransaction();
+    try {
+        $pdo->exec('DELETE FROM trading_resolved_stats');
+        $insert = $pdo->prepare(
+            'INSERT INTO trading_resolved_stats
+               (cell_key, scope, probability, tag, shape, horizon, trades, wins, staked_usdc, pnl_usdc, updated_at)
+             VALUES (:key, :scope, :probability, :tag, :shape, :horizon, :trades, :wins, :staked, :pnl, :updatedAt)'
+        );
+        foreach ($rows as [$scope, $probability, $tag, $shape, $horizon, $value]) {
+            $insert->execute([
+                'key' => hash('sha256', $scope . "\x1f" . $probability . "\x1f" . $tag . "\x1f" . $shape . "\x1f" . $horizon),
+                'scope' => $scope,
+                'probability' => $probability,
+                'tag' => $tag,
+                'shape' => $shape,
+                'horizon' => $horizon,
+                'trades' => (int) ($value[0] ?? 0),
+                'wins' => (int) ($value[1] ?? 0),
+                'staked' => (float) ($value[2] ?? 0),
+                'pnl' => (float) ($value[3] ?? 0),
+                'updatedAt' => $now,
+            ]);
+        }
+        trading_storage_meta_put('resolved-stats-folded-at', $now);
+        trading_storage_meta_put('resolved-stats-fold', (string) json_encode([
+            'cells' => count($rows),
+            'scanned' => (int) ($meta['scanned'] ?? 0),
+            'priced' => (int) ($meta['priced'] ?? 0),
+            'foldedAt' => $now,
+        ], JSON_UNESCAPED_SLASHES));
+        $pdo->commit();
+    } catch (Throwable $throwable) {
+        $pdo->rollBack();
+        throw $throwable;
+    }
+
+    return ['cells' => count($rows), 'foldedAt' => $now];
+}
+
+/**
+ * The stored cells, in the shape resolved_stats_accumulate() returns them.
+ *
+ * Returns null when the fold has never run, so a caller can fall back to streaming the archive
+ * rather than serving an empty page that looks like "no trades ever settled".
+ */
+function trading_storage_resolved_stats_load(PDO $pdo): ?array
+{
+    trading_storage_bootstrap($pdo);
+    $foldedAt = trading_storage_meta_get('resolved-stats-folded-at');
+    if ($foldedAt === null) {
+        return null;
+    }
+    $statement = $pdo->query(
+        'SELECT scope, probability, tag, shape, horizon, trades, wins, staked_usdc, pnl_usdc
+         FROM trading_resolved_stats'
+    );
+    $cells = [];
+    $anyTag = [];
+    foreach ($statement->fetchAll() as $row) {
+        $value = [
+            (int) ($row['trades'] ?? 0),
+            (int) ($row['wins'] ?? 0),
+            (float) ($row['staked_usdc'] ?? 0),
+            (float) ($row['pnl_usdc'] ?? 0),
+        ];
+        $probability = (int) ($row['probability'] ?? 0);
+        $shape = (string) ($row['shape'] ?? '');
+        $horizon = (string) ($row['horizon'] ?? '');
+        if ((string) ($row['scope'] ?? '') === 'any') {
+            $anyTag[$probability . "\x1f" . $shape . "\x1f" . $horizon] = $value;
+            continue;
+        }
+        $cells[$probability . "\x1f" . (string) ($row['tag'] ?? '') . "\x1f" . $shape . "\x1f" . $horizon] = $value;
+    }
+    if ($cells === [] && $anyTag === []) {
+        // A fold that ran and stored nothing is indistinguishable from one that never ran,
+        // and serving "no trades ever settled" from it would be a silent wrong answer.
+        return null;
+    }
+    $fold = json_decode((string) (trading_storage_meta_get('resolved-stats-fold') ?? ''), true);
+    return [
+        'cells' => $cells,
+        'anyTag' => $anyTag,
+        'scanned' => is_array($fold) ? (int) ($fold['scanned'] ?? 0) : 0,
+        'priced' => is_array($fold) ? (int) ($fold['priced'] ?? 0) : 0,
+        'foldedAt' => (string) $foldedAt,
     ];
 }
 

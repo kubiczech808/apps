@@ -129,12 +129,25 @@ test("the entry rule never falls back to the current book", () => {
 });
 
 test("the Setup finder uses the entry rule, and the live shortlist still uses the other", () => {
-  const finder = API.slice(API.indexOf("if ($action === 'resolved-combinations') {"));
-  const body = finder.slice(0, finder.indexOf("\n    if ($action ==="));
+  // The reduction moved out of the endpoint and into resolved_stats_accumulate, so the
+  // nightly fold and the request path compute the same numbers from the same code. The
+  // guarantee this test exists for is unchanged and now has to be checked where the code
+  // lives -- anchoring it to a position in the file was what broke, not the rule.
+  const accumulator = API.slice(API.indexOf("function resolved_stats_accumulate(array $sources"));
+  const body = accumulator.slice(0, accumulator.indexOf("\n}\n"));
   assert.match(body, /observation_entry_spread_is_tradable\(\$item\)/,
     "the historical simulation judges on the entry book");
   assert.doesNotMatch(body, /observation_spread_is_tradable\(/,
     "and never on the current one");
+
+  // And the page still goes through it, so the guarantee reaches what the user reads. Both
+  // paths do: the stored cells were folded by this same function.
+  const finder = API.slice(API.indexOf("if ($action === 'resolved-combinations') {"));
+  const endpoint = finder.slice(0, finder.indexOf("\n    if ($action ==="));
+  assert.match(endpoint, /resolved_stats_accumulate\(\$sources, \$stake\)/,
+    "the endpoint must reduce through the shared accumulator");
+  assert.doesNotMatch(endpoint, /observation_spread_is_tradable\(/,
+    "and must not reintroduce the live rule on its own");
 
   // The live rule is untouched: it is right where it is used, and changing it would have
   // loosened the shortlist that places real orders.

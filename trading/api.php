@@ -7196,6 +7196,49 @@ try {
         // Read-only. How much of each table is content and how much is empty space inside
         // its pages -- the one thing information_schema cannot report on its own. See
         // trading_storage_row_density.
+        // Folds the resolved archive into trading_resolved_stats. Read-only against the
+        // archive, a full replace of the statistics table, and the only write it makes.
+        // See trading_storage_resolved_stats_replace.
+        if ($operation === 'refresh-resolved-stats') {
+            $corePath = state_file_paths()['paper'];
+            $core = decode_state_file($corePath, false);
+            $manifest = is_array($core['stateSegments'] ?? null) ? $core['stateSegments'] : [];
+            $sources = [];
+            foreach ([['observations', 'marketObservations'], ['resolvedObservations', 'resolvedMarketObservations']] as [$segment, $field]) {
+                $segmentPath = state_segment_path(['stateSegments' => $manifest], $corePath, $segment);
+                if ($segmentPath !== null) {
+                    $sources[] = [$segmentPath, $field];
+                }
+            }
+            if ($sources === []) {
+                $sources = [[$corePath, 'marketObservations'], [$corePath, 'resolvedMarketObservations']];
+            }
+            $accumulated = resolved_stats_accumulate($sources);
+            if (($accumulated['priced'] ?? 0) <= 0) {
+                // Replacing the stored cells with nothing would turn the Setup finder blank
+                // and look like a settled archive with no settlements in it. A fold that
+                // priced no rows is a broken read, not an empty archive.
+                respond([
+                    'ok' => false,
+                    'error' => 'The fold priced no rows; the stored statistics were left alone.',
+                    'scanned' => (int) ($accumulated['scanned'] ?? 0),
+                ], 409);
+            }
+            $result = trading_storage_resolved_stats_replace(
+                $pdo,
+                $accumulated['cells'],
+                $accumulated['anyTag'],
+                ['scanned' => $accumulated['scanned'], 'priced' => $accumulated['priced']],
+            );
+            respond([
+                'ok' => true,
+                'operation' => 'refresh-resolved-stats',
+                'result' => $result + [
+                    'scanned' => (int) $accumulated['scanned'],
+                    'priced' => (int) $accumulated['priced'],
+                ],
+            ]);
+        }
         if ($operation === 'row-density') {
             respond([
                 'ok' => true,
@@ -8282,6 +8325,102 @@ try {
     // one included tag or any, one market shape or any, one horizon band or any. It answers
     // "if I had taken every trade in this combination, where would I be" -- nominally and as
     // a return on what was staked.
+/**
+ * Reduces the resolved archive to the cells every combination is summed out of.
+ *
+ * Lifted out of the resolved-combinations endpoint so that the nightly fold and the request
+ * path compute the same numbers from the same code. Two callers, one definition of what a
+ * settled trade was worth -- if this ever drifts, the stored statistics and the live ones
+ * disagree and nothing says which is right.
+ *
+ * $sources is a list of [path, field] pairs, streamed rather than decoded whole: the archive
+ * is hundreds of megabytes and reading it into memory is what answered 500.
+ *
+ * @return array{cells: array, anyTag: array, scanned: int, priced: int}
+ */
+function resolved_stats_accumulate(array $sources, float $stake = 5.0): array
+{
+    // [trades, wins, staked, pnl] per cell. Everything below is summed out of this.
+    //
+    // Two maps, not one. A row carrying two tags is two cells, which is right for a
+    // portfolio that includes either -- but summing those cells for "any tag" would
+    // count the row twice. So the any-tag totals are accumulated separately, once per
+    // row. Shape and horizon are single-valued, so summing across them is exact.
+    $cells = [];
+    $anyTag = [];
+    $scanned = 0;
+    $priced = 0;
+    $onRow = static function (array $item) use (&$cells, &$anyTag, &$scanned, &$priced, $stake): bool {
+        $scanned += 1;
+        $entry = simulation_entry_probability($item);
+        // Deliberately NOT simulation_outcome(): that helper reads any final price in
+        // [0,1] and calls anything from 0.5 up a win, so a VOIDED market -- Polymarket
+        // pays 0.50 a share -- is counted as a winner. The portfolio-analysis-outcomes
+        // endpoint already refuses exactly that, on the grounds that a non-binary final
+        // price "is not a settlement of this selected outcome and must not be invented
+        // as either a win or a loss", and this page is read to set a live portfolio's
+        // parameters, so it takes the stricter of the two rules.
+        $finalPrice = $item['finalOutcomePrice'] ?? null;
+        $outcome = null;
+        if (is_numeric($finalPrice)) {
+            $finalPrice = (float) $finalPrice;
+            if ($finalPrice <= 0.005) {
+                $outcome = 0;
+            } elseif ($finalPrice >= 0.995) {
+                $outcome = 1;
+            }
+        }
+        if ($entry === null || $outcome === null) {
+            return true;
+        }
+        // The spread AT ENTRY, not the current one. This used to call
+        // observation_spread_is_tradable, which prefers the live book and therefore, on
+        // a resolved row, judged tradability by the book as it stood after the result
+        // was effectively known. That kept winners and dropped losers: valorant read
+        // 100.0% over 36 trades where the archive holds 65 wins and 21 losses over 86.
+        // See observation_entry_spread.
+        if (!observation_entry_spread_is_tradable($item)) {
+            return true;
+        }
+        $priced += 1;
+        // Bought at the entry probability and settled at 0 or 1. Gross of fees, which is
+        // the same basis the performance tables report on.
+        $pnl = $outcome === 1 ? $stake * ((1.0 / $entry) - 1.0) : -$stake;
+        $probability = (int) floor($entry * 100);
+        $shape = observation_market_shape($item);
+        $horizon = resolved_horizon_band($item);
+        $tags = simulation_taxonomy_labels($item, 'firstPolymarketTags', 'polymarketTags');
+        if ($tags === []) {
+            $tags = ['(untagged)'];
+        }
+        foreach ($tags as $tag) {
+            $key = $probability . "\x1f" . $tag . "\x1f" . $shape . "\x1f" . $horizon;
+            if (!isset($cells[$key])) {
+                $cells[$key] = [0, 0, 0.0, 0.0];
+            }
+            $cells[$key][0] += 1;
+            $cells[$key][1] += $outcome;
+            $cells[$key][2] += $stake;
+            $cells[$key][3] += $pnl;
+        }
+        $anyKey = $probability . "\x1f" . $shape . "\x1f" . $horizon;
+        if (!isset($anyTag[$anyKey])) {
+            $anyTag[$anyKey] = [0, 0, 0.0, 0.0];
+        }
+        $anyTag[$anyKey][0] += 1;
+        $anyTag[$anyKey][1] += $outcome;
+        $anyTag[$anyKey][2] += $stake;
+        $anyTag[$anyKey][3] += $pnl;
+
+        return true;
+    };
+    foreach ($sources as [$path, $field]) {
+        stream_json_array_members($path, $field, $onRow);
+    }
+
+    return ['cells' => $cells, 'anyTag' => $anyTag, 'scanned' => $scanned, 'priced' => $priced];
+}
+
     if ($action === 'resolved-combinations') {
         $minTrades = max(1, min(5000, (int) ($_GET['min_trades'] ?? 30)));
         $limit = max(1, min(400, (int) ($_GET['limit'] ?? 120)));
@@ -8301,83 +8440,36 @@ try {
             $sources = [[$corePath, 'marketObservations'], [$corePath, 'resolvedMarketObservations']];
         }
 
-        // [trades, wins, staked, pnl] per cell. Everything below is summed out of this.
+        // The stored fold first, the archive only if there is no fold.
         //
-        // Two maps, not one. A row carrying two tags is two cells, which is right for a
-        // portfolio that includes either -- but summing those cells for "any tag" would
-        // count the row twice. So the any-tag totals are accumulated separately, once per
-        // row. Shape and horizon are single-valued, so summing across them is exact.
-        $cells = [];
-        $anyTag = [];
-        $scanned = 0;
-        $priced = 0;
-        $onRow = static function (array $item) use (&$cells, &$anyTag, &$scanned, &$priced, $stake): bool {
-            $scanned += 1;
-            $entry = simulation_entry_probability($item);
-            // Deliberately NOT simulation_outcome(): that helper reads any final price in
-            // [0,1] and calls anything from 0.5 up a win, so a VOIDED market -- Polymarket
-            // pays 0.50 a share -- is counted as a winner. The portfolio-analysis-outcomes
-            // endpoint already refuses exactly that, on the grounds that a non-binary final
-            // price "is not a settlement of this selected outcome and must not be invented
-            // as either a win or a loss", and this page is read to set a live portfolio's
-            // parameters, so it takes the stricter of the two rules.
-            $finalPrice = $item['finalOutcomePrice'] ?? null;
-            $outcome = null;
-            if (is_numeric($finalPrice)) {
-                $finalPrice = (float) $finalPrice;
-                if ($finalPrice <= 0.005) {
-                    $outcome = 0;
-                } elseif ($finalPrice >= 0.995) {
-                    $outcome = 1;
+        // This is the whole point of the table: answering this page without reading a single
+        // resolved observation is what makes those rows expendable, and they are 90,795 of the
+        // 226,262 in trading_observations. Falling back rather than failing keeps the page
+        // working on a database where the nightly job has not run yet -- and the loader
+        // returns null, not an empty set, precisely so that an unrun fold cannot be served as
+        // "nothing ever settled".
+        $accumulated = null;
+        $statsSource = 'archive';
+        if (function_exists('trading_storage_resolved_stats_load') && trading_storage_is_active()) {
+            try {
+                $stored = trading_storage_resolved_stats_load(trading_storage_pdo());
+                if (is_array($stored)) {
+                    $accumulated = $stored;
+                    $statsSource = 'stored';
                 }
+            } catch (Throwable $throwable) {
+                // The archive still answers, so a storage fault degrades the page's freshness
+                // rather than the page.
+                $accumulated = null;
             }
-            if ($entry === null || $outcome === null) {
-                return true;
-            }
-            // The spread AT ENTRY, not the current one. This used to call
-            // observation_spread_is_tradable, which prefers the live book and therefore, on
-            // a resolved row, judged tradability by the book as it stood after the result
-            // was effectively known. That kept winners and dropped losers: valorant read
-            // 100.0% over 36 trades where the archive holds 65 wins and 21 losses over 86.
-            // See observation_entry_spread.
-            if (!observation_entry_spread_is_tradable($item)) {
-                return true;
-            }
-            $priced += 1;
-            // Bought at the entry probability and settled at 0 or 1. Gross of fees, which is
-            // the same basis the performance tables report on.
-            $pnl = $outcome === 1 ? $stake * ((1.0 / $entry) - 1.0) : -$stake;
-            $probability = (int) floor($entry * 100);
-            $shape = observation_market_shape($item);
-            $horizon = resolved_horizon_band($item);
-            $tags = simulation_taxonomy_labels($item, 'firstPolymarketTags', 'polymarketTags');
-            if ($tags === []) {
-                $tags = ['(untagged)'];
-            }
-            foreach ($tags as $tag) {
-                $key = $probability . "\x1f" . $tag . "\x1f" . $shape . "\x1f" . $horizon;
-                if (!isset($cells[$key])) {
-                    $cells[$key] = [0, 0, 0.0, 0.0];
-                }
-                $cells[$key][0] += 1;
-                $cells[$key][1] += $outcome;
-                $cells[$key][2] += $stake;
-                $cells[$key][3] += $pnl;
-            }
-            $anyKey = $probability . "\x1f" . $shape . "\x1f" . $horizon;
-            if (!isset($anyTag[$anyKey])) {
-                $anyTag[$anyKey] = [0, 0, 0.0, 0.0];
-            }
-            $anyTag[$anyKey][0] += 1;
-            $anyTag[$anyKey][1] += $outcome;
-            $anyTag[$anyKey][2] += $stake;
-            $anyTag[$anyKey][3] += $pnl;
-
-            return true;
-        };
-        foreach ($sources as [$path, $field]) {
-            stream_json_array_members($path, $field, $onRow);
         }
+        if ($accumulated === null) {
+            $accumulated = resolved_stats_accumulate($sources, $stake);
+        }
+        $cells = $accumulated['cells'];
+        $anyTag = $accumulated['anyTag'];
+        $scanned = $accumulated['scanned'];
+        $priced = $accumulated['priced'];
 
         // Every combination, by suffix sum rather than by re-scanning.
         //
@@ -8459,6 +8551,10 @@ try {
             'ok' => true,
             'scannedRows' => $scanned,
             'pricedRows' => $priced,
+            // Which of the two paths answered. Read from the page it feeds: once this says
+            // 'stored', the resolved observations have no reader left here.
+            'statsSource' => $statsSource,
+            'foldedAt' => $accumulated['foldedAt'] ?? null,
             'cells' => count($cells),
             'combinations' => count($rows),
             'minTrades' => $minTrades,
