@@ -241,7 +241,7 @@ test('a closed break publishes the live terminal low before the pivot is confirm
   assert.equal(result.structure.developingSwing.replacesCandleIndex, result.structure.low.current.candleIndex)
 })
 
-test('wide timeframe context uses a more responsive structural edge', () => {
+test('wide timeframe keeps its structural spine while exposing a responsive edge', () => {
   const rangeAfterExpansion = classifyStructure(
     zigzag([60, 67, 62, 65, 62.5, 81.5, 76, 82, 76.5, 79.5, 77], { steps: 24 }),
     { lookback: 42, minCandles: 20, includeZones: false, includeChartCandles: false }
@@ -249,13 +249,50 @@ test('wide timeframe context uses a more responsive structural edge', () => {
 
   assert.equal(rangeAfterExpansion.structure.lookback, 42)
   assert.equal(rangeAfterExpansion.structure.activeLookback, 11)
-  assert.ok(rangeAfterExpansion.structure.swingCount > rangeAfterExpansion.structure.contextSwingCount)
-  assert.equal(rangeAfterExpansion.structure.high.label, 'LH')
+  assert.equal(rangeAfterExpansion.structure.swingCount, rangeAfterExpansion.structure.contextSwingCount)
+  assert.ok(rangeAfterExpansion.structure.edgeSwingCount > rangeAfterExpansion.structure.swingCount)
+  assert.equal(rangeAfterExpansion.structure.high, null)
   assert.equal(rangeAfterExpansion.structure.low.label, 'HL')
   assert.equal(rangeAfterExpansion.trend, 'flat')
   assert.ok(rangeAfterExpansion.structure.recentSwings.every((swing, index, all) =>
     index === 0 || swing.kind !== all[index - 1].kind
   ))
+})
+
+test('major LH and LL override short internal USDJPY-like reactions', () => {
+  // The 159.8 -> 158 reaction is intentionally shorter than the 42-candle
+  // structural radius. It must not turn the later 160.4 into an HH: the
+  // relevant comparison is the preceding major 164 high, then the break to
+  // the new 152.9 low confirms the down structure.
+  const points = [161.3, 164, 155.2, 159.8, 158, 160.4, 152.9, 156.5]
+  const legSteps = [50, 50, 8, 8, 50, 50, 50]
+  const candles = []
+  let time = START
+  for (let leg = 0; leg < legSteps.length; leg += 1) {
+    const step = (points[leg + 1] - points[leg]) / legSteps[leg]
+    for (let index = 0; index < legSteps[leg]; index += 1) {
+      const open = points[leg] + step * index
+      const close = points[leg] + step * (index + 1)
+      const wick = Math.abs(step) * 0.25
+      candles.push(candle(time, open, Math.max(open, close) + wick, Math.min(open, close) - wick, close))
+      time += HOUR
+    }
+  }
+
+  const result = classifyStructure(candles, {
+    lookback: 42,
+    minCandles: 100,
+    includeZones: false,
+    includeChartCandles: false,
+  })
+
+  assert.equal(result.trend, 'down')
+  assert.equal(result.structureConfirmed, true)
+  assert.equal(result.structure.high.label, 'LH')
+  assert.equal(result.structure.low.label, 'LL')
+  assert.ok(result.structure.high.current.price > 160 && result.structure.high.current.price < 161)
+  assert.ok(result.structure.low.current.price > 152 && result.structure.low.current.price < 153)
+  assert.equal(result.structure.recentSwings.length, 4)
 })
 
 test('structure horizons and pivot widths scale with timeframe', () => {
@@ -519,6 +556,68 @@ test('optional candle confirmation can filter a zone hit without changing the de
   assert.equal(defaultProfile.status, 'ready')
   assert.equal(confirmedProfile.status, 'watch')
   assert.equal(confirmedProfile.gates.find((entry) => entry.id === 'candle').status, 'unmet')
+  assert.equal(confirmedProfile.zone, null)
+  assert.equal(confirmedProfile.zoneCandidates[0].invalidatedByPrematureTouch, true)
+})
+
+test('a partial own-timeframe FVG touch consumes a zone before a complete setup', () => {
+  const item = {
+    trend: 'up',
+    // The wick only enters the upper 0.5 of the 100-105 demand FVG. It does
+    // not traverse the full gap, which is the exact case that must still
+    // invalidate the unused entry idea.
+    lastCandle: candle(START + HOUR, 106, 107, 104.5, 106),
+    candleSignal: null,
+    structure: {
+      high: { current: { price: 120 } },
+      low: { current: { price: 100 } },
+    },
+    zones: {
+      nearbyDemand: [{ type: 'demand', low: 100, high: 105 }],
+      unfilledDemand: [{ type: 'demand', low: 100, high: 105 }],
+      unfilledSupply: [{ type: 'supply', low: 140, high: 145 }],
+    },
+  }
+
+  const profile = evaluateTradeProfile({
+    item,
+    settings: { pullbackPct: 50, minRewardRisk: 2, requireCandleSignal: true },
+  })
+  const candidate = profile.zoneCandidates.find((entry) => entry.type === 'demand')
+
+  assert.equal(candidate.zoneHit, true)
+  assert.equal(candidate.baseEligible, true)
+  assert.equal(candidate.invalidatedByPrematureTouch, true)
+  assert.equal(candidate.eligible, false)
+  assert.match(candidate.reason, /dotčena před kompletním vstupním setupem/)
+  assert.equal(profile.zone, null)
+  assert.equal(profile.entry, null)
+  assert.equal(profile.gates.find((entry) => entry.id === 'unfilled-zone').status, 'unmet')
+})
+
+test('an earlier own-timeframe touch keeps a zone consumed after price leaves it', () => {
+  const item = {
+    trend: 'up',
+    lastCandle: candle(START + HOUR, 110, 111, 109, 110),
+    candleSignal: { bullish: 'bullish_rejection', bearish: null, patterns: ['bullish_rejection'] },
+    structure: {
+      high: { current: { price: 120 } },
+      low: { current: { price: 100 } },
+    },
+    zones: {
+      nearbyDemand: [{ type: 'demand', low: 100, high: 105, lastTouchAt: START }],
+      unfilledDemand: [{ type: 'demand', low: 100, high: 105, lastTouchAt: START }],
+      unfilledSupply: [{ type: 'supply', low: 140, high: 145 }],
+    },
+  }
+
+  const profile = evaluateTradeProfile({ item, settings: { pullbackPct: 50, minRewardRisk: 2 } })
+  const candidate = profile.zoneCandidates.find((entry) => entry.type === 'demand')
+
+  assert.equal(candidate.zoneHit, false)
+  assert.equal(candidate.invalidatedByPrematureTouch, true)
+  assert.equal(profile.zone, null)
+  assert.equal(profile.entry, null)
 })
 
 test('optional higher-timeframe alignment filters an opposing trend without changing the default', () => {
@@ -690,7 +789,7 @@ test('a profile below minimum R/R is never a valid setup or planned entry', () =
   assert.equal(candidate.rrEligible, false)
   assert.equal(candidate.eligible, false)
   assert.equal(candidate.entryForMinRR, null)
-  assert.equal(profile.activeCandidate.eligible, false)
+  assert.equal(profile.activeCandidate, null)
   assert.equal(profile.status, 'watch')
   assert.equal(profile.gates.find((entry) => entry.id === 'rr').status, 'unmet')
   assert.equal(profile.entry, null)

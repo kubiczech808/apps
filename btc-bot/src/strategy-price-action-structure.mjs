@@ -3,7 +3,7 @@ import { ceilPrice, floorPrice, normalizeCandlePrices, roundPrice } from './pric
 import { buildFvgSupplyDemandZones, candleSignal, marketStructure } from './priceaction.mjs'
 
 export const PRICE_ACTION_STRUCTURE_ID = 'price-action-structure-v1'
-export const PRICE_ACTION_MATRIX_SCHEMA = 22
+export const PRICE_ACTION_MATRIX_SCHEMA = 23
 export const PRICE_ACTION_CHART_CANDLE_LIMITS = {
   '1h': 8760,
   '4h': 2190,
@@ -278,12 +278,11 @@ const labelStructureSwings = (swings = []) => {
   return labels
 }
 
-// The wide timeframe profile supplies the multi-month context requested by the
-// dashboard. Using that same radius for the live edge delays a 4H pivot by a
-// full week and a 1D pivot by half a month, which hides the current impulse
-// after a major high/low. Read the live edge at one quarter of that radius,
-// while retaining the wide structure below as context. The state machine then
-// filters out a merely unfinished internal reaction.
+// The wide timeframe profile supplies the multi-month structural spine used
+// for every HH, HL, LH, LL and trading decision. Its confirmation delay is
+// intentional: it prevents a short internal reaction such as USDJPY 159.8 ->
+// 158 from replacing the preceding major high. Read a narrower live edge only
+// to draw the still-unconfirmed terminal high/low at the right of the chart.
 const activeStructureLookback = (lookback) => lookback > 4
   ? Math.max(2, Math.ceil(lookback / 4))
   : lookback
@@ -445,6 +444,12 @@ const persistentStructureTrend = (candles, swings, lookback) => {
 
 const laterCandles = (candles, zone) => candles.slice((zone.lastIndex ?? zone.firstIndex ?? 0) + 1)
 
+const zoneHitByCandle = (zone, candle) =>
+  Boolean(zone && candle && candle.low <= zone.high && candle.high >= zone.low)
+
+const zoneTouchCandles = (zone, candles) =>
+  laterCandles(candles, zone).filter((candle) => zoneHitByCandle(zone, candle))
+
 const zoneInvalidated = (zone, candles) => {
   const later = laterCandles(candles, zone)
   return zone.type === 'demand'
@@ -489,34 +494,41 @@ const definingCandleSummary = (index, candles) => {
   return summary ? { index, ...summary } : null
 }
 
-const zoneSummary = (zone, candles, price) => ({
-  type: zone.type,
-  low: zone.low,
-  high: zone.high,
-  touches: zone.touches,
-  swept: zone.swept,
-  imbalance: zone.imbalance,
-  baseCandles: (zone.baseIndexes ?? [])
-    .map((index) => definingCandleSummary(index, candles))
-    .filter(Boolean),
-  fvg: zone.fvg ? {
-    ...zone.fvg,
+const zoneSummary = (zone, candles, price) => {
+  const touchCandles = zoneTouchCandles(zone, candles)
+  return {
+    type: zone.type,
+    low: zone.low,
+    high: zone.high,
+    // A touch means any overlap with the FVG range on this timeframe. It does
+    // not require a close through, or a fill of, the entire gap.
+    touches: touchCandles.length,
+    firstTouchAt: touchCandles[0]?.time ?? null,
+    lastTouchAt: touchCandles.at(-1)?.time ?? null,
+    swept: zone.swept,
+    imbalance: zone.imbalance,
+    baseCandles: (zone.baseIndexes ?? [])
+      .map((index) => definingCandleSummary(index, candles))
+      .filter(Boolean),
+    fvg: zone.fvg ? {
+      ...zone.fvg,
+      definingCandles: (zone.definingIndexes ?? [])
+        .map((index) => definingCandleSummary(index, candles))
+        .filter(Boolean),
+    } : null,
+    firstTime: candles[zone.firstIndex]?.time ?? null,
+    lastTime: zone.lastTime ?? candles[zone.lastIndex]?.time ?? null,
+    firstIndex: zone.firstIndex,
+    lastIndex: zone.lastIndex,
     definingCandles: (zone.definingIndexes ?? [])
       .map((index) => definingCandleSummary(index, candles))
       .filter(Boolean),
-  } : null,
-  firstTime: candles[zone.firstIndex]?.time ?? null,
-  lastTime: zone.lastTime ?? candles[zone.lastIndex]?.time ?? null,
-  firstIndex: zone.firstIndex,
-  lastIndex: zone.lastIndex,
-  definingCandles: (zone.definingIndexes ?? [])
-    .map((index) => definingCandleSummary(index, candles))
-    .filter(Boolean),
-  filledByOwnTimeframeClose: zoneFilledByOwnTimeframeClose(zone, candles),
-  filledAt: zoneFilledAtOwnTimeframeClose(zone, candles),
-  invalidatedByOwnTimeframeClose: zoneInvalidated(zone, candles),
-  distancePct: zoneDistancePct(zone, price),
-})
+    filledByOwnTimeframeClose: zoneFilledByOwnTimeframeClose(zone, candles),
+    filledAt: zoneFilledAtOwnTimeframeClose(zone, candles),
+    invalidatedByOwnTimeframeClose: zoneInvalidated(zone, candles),
+    distancePct: zoneDistancePct(zone, price),
+  }
+}
 
 export const activeSupplyDemandZones = (candles, { lookback = 2, maxAgeCandles = 400 } = {}) => {
   const price = candles.at(-1)?.close ?? null
@@ -543,12 +555,9 @@ export const activeSupplyDemandZones = (candles, { lookback = 2, maxAgeCandles =
     nearbySupply: nearby('supply'),
     unfilledCount: unfilled.length,
     validCount: zones.length,
-    rule: 'Zóna vzniká jen jako base impulsního breakoutu s 3svíčkovým FVG. Invaliduje ji close průraz na vlastním timeframe; dotek na nižším timeframe ji neruší.',
+    rule: 'Zóna vzniká jen jako base impulsního breakoutu s 3svíčkovým FVG. Close průraz ji vyplní na vlastním timeframe; vstupní plán ji spotřebuje už prvním dotekem, pokud tehdy není kompletní setup. Dotek na nižším timeframe ji neruší.',
   }
 }
-
-const zoneHitByCandle = (zone, candle) =>
-  Boolean(zone && candle && candle.low <= zone.high && candle.high >= zone.low)
 
 const statusFromGate = (passed, neutral = false) => (neutral ? 'neutral' : passed ? 'met' : 'unmet')
 
@@ -910,7 +919,7 @@ export const evaluateTradeProfile = ({
   const pullbackRange = Number.isFinite(pullback) && Number.isFinite(invalidationLevel)
     ? { from: pullback, to: invalidationLevel }
     : null
-  const zoneCandidates = ['long', 'short'].flatMap((candidateSide) =>
+  const rawZoneCandidates = ['long', 'short'].flatMap((candidateSide) =>
     candidateZones(zones, candidateSide).map((zone) => zoneEntryCandidate({
       item,
       side: candidateSide,
@@ -922,16 +931,43 @@ export const evaluateTradeProfile = ({
       lowerTimeframeId,
     }))
   )
-  const fallbackZone = side === 'long' ? zones?.latestValidDemand : side === 'short' ? zones?.latestValidSupply : null
+  const signalItem = lowerTimeframeId && lowerItem?.candleSignal ? lowerItem : item
+  const requireCandleSignal = settings.requireCandleSignal === true
+  const requireHigherTimeframeAlignment = settings.requireHigherTimeframeAlignment === true
+  const candidateEntryReady = (candidate) => {
+    const refinement = candleRefinement({ side: candidate.side, signal: signalItem?.candleSignal })
+    const higherTimeframeAligned = !higherItem || higherItem.trend === (candidate.side === 'long' ? 'up' : 'down')
+    return candidate.eligible &&
+      (!requireCandleSignal || refinement.status === 'met') &&
+      (!requireHigherTimeframeAlignment || !higherItem || higherTimeframeAligned)
+  }
+  const zoneCandidates = rawZoneCandidates.map((candidate) => {
+    const touchedEarlier = Number.isFinite(candidate.zone.lastTouchAt) &&
+      (!Number.isFinite(latest?.time) || candidate.zone.lastTouchAt < latest.time)
+    // A partial overlap consumes the FVG when it arrives before the complete
+    // setup. This only reads candles from the zone's own timeframe; a lower-TF
+    // touch therefore cannot invalidate a higher-TF zone.
+    const invalidatedByPrematureTouch = touchedEarlier ||
+      (candidate.zoneHit && !candidateEntryReady(candidate))
+    const reason = invalidatedByPrematureTouch
+      ? [candidate.reason, 'zóna byla dotčena před kompletním vstupním setupem'].filter(Boolean).join(' · ')
+      : candidate.reason
+    return {
+      ...candidate,
+      baseEligible: candidate.eligible,
+      invalidatedByPrematureTouch,
+      eligible: candidate.eligible && !invalidatedByPrematureTouch,
+      reason,
+    }
+  })
+  const usableCandidates = zoneCandidates.filter((candidate) => !candidate.invalidatedByPrematureTouch)
+  const consumedCandidate = zoneCandidates.find((candidate) => candidate.directionEligible && candidate.invalidatedByPrematureTouch) ?? null
   const activeCandidate =
-    zoneCandidates.find((candidate) => candidate.directionEligible && candidate.eligible) ??
-    zoneCandidates.find((candidate) => candidate.directionEligible && candidate.pullbackEligible) ??
-    zoneCandidates.find((candidate) => candidate.directionEligible) ??
+    usableCandidates.find((candidate) => candidate.directionEligible && candidate.eligible) ??
+    usableCandidates.find((candidate) => candidate.directionEligible && candidate.pullbackEligible) ??
+    usableCandidates.find((candidate) => candidate.directionEligible) ??
     null
-  const activeZone =
-    activeCandidate?.zone ??
-    (side === 'long' ? zones?.demand : side === 'short' ? zones?.supply : null) ??
-    fallbackZone
+  const activeZone = activeCandidate?.zone ?? null
   const zoneHit = zoneHitByCandle(activeZone, latest)
   // A planned entry is meaningful only when the candidate passes the complete
   // direction, pullback and minimum-R/R gates. Keep raw zone-edge values on
@@ -978,16 +1014,13 @@ export const evaluateTradeProfile = ({
   const rewardRisk = Number.isFinite(risk) && risk > 0 && Number.isFinite(reward) ? reward / risk : null
   const minRewardRisk = Number(settings.minRewardRisk) || 2
   const riskPct = Number(settings.riskPct) || 1
-  const signalItem = lowerTimeframeId && lowerItem?.candleSignal ? lowerItem : item
   const refinement = side ? candleRefinement({ side, signal: signalItem?.candleSignal }) : null
-  const requireCandleSignal = settings.requireCandleSignal === true
-  const requireHigherTimeframeAlignment = settings.requireHigherTimeframeAlignment === true
   const higherTimeframeAligned = !higherItem || higherItem.trend === item?.trend
 
   const gates = [
     gate('trend', 'struktura má směr', Boolean(side), item?.reason ?? null),
     gate('zone', 'cena je ve správné S/D zóně', Boolean(activeZone && zoneHit), activeZone ? `${activeZone.type} ${activeZone.low}–${activeZone.high}` : null),
-    gate('unfilled-zone', 'zóna není vyplněná close na vlastním TF', Boolean(zone), zone ? 'nevyplněná' : fallbackZone ? 'jen poslední platná vyplněná zóna' : null),
+    gate('unfilled-zone', 'zóna není vyplněná ani spotřebovaná', Boolean(activeZone), activeZone ? 'nevyplněná' : consumedCandidate ? 'dotčena před kompletním setupem' : zone ? 'není použitelná pro vstup' : null),
     gate('pullback', `${settings.pullbackPct ?? 50}% pullback`, pulledBack, Number.isFinite(pullback) ? String(pullback) : null),
     gate('rr', `R/R alespoň ${minRewardRisk}:1`, Number.isFinite(rewardRisk) && rewardRisk >= minRewardRisk, Number.isFinite(rewardRisk) ? rewardRisk.toFixed(2) : null),
     gate('candle', 'potvrzení svíčkou', refinement?.status === 'met', refinement?.note ?? null, !requireCandleSignal),
@@ -1231,11 +1264,14 @@ export const classifyStructure = (
   }
   const contextStructure = marketStructure(normalizedCandles, { lookback })
   const activeLookback = activeStructureLookback(lookback)
-  const structure = activeLookback === lookback
+  const edgeStructure = activeLookback === lookback
     ? contextStructure
     : marketStructure(normalizedCandles, { lookback: activeLookback })
+  // Never use the responsive edge to relabel the primary trend. It is only a
+  // provisional visual terminal; the wide context remains the decision spine.
+  const structure = contextStructure
   const latest = normalizedCandles.at(-1)
-  const developingSwing = developingStructureSwing(normalizedCandles, structure)
+  const developingSwing = developingStructureSwing(normalizedCandles, edgeStructure)
 
   const highLeg = structureLeg({
     previous: structure.previousHigh,
@@ -1256,7 +1292,7 @@ export const classifyStructure = (
   const localTrend = highText === 'HH' && lowText === 'HL'
     ? 'up'
     : highText === 'LH' && lowText === 'LL' ? 'down' : 'flat'
-  const persistent = persistentStructureTrend(normalizedCandles, structure.swings, activeLookback)
+  const persistent = persistentStructureTrend(normalizedCandles, structure.swings, lookback)
   const structureBreak = persistent.event
   // A confirmed direction is stateful. A fresh pullback does not relabel the
   // market until its counter-pivot is confirmed; a close through the protected
@@ -1315,6 +1351,7 @@ export const classifyStructure = (
       contextHigh: contextHigh ? { price: contextHigh.high, time: contextHigh.time } : null,
       contextLow: contextLow ? { price: contextLow.low, time: contextLow.time } : null,
       swingCount: structure.swings.length,
+      edgeSwingCount: edgeStructure.swings.length,
       contextSwingCount: contextStructure.swings.length,
       high: highLeg,
       low: lowLeg,
