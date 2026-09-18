@@ -832,6 +832,198 @@ function trading_storage_index_inventory(PDO $pdo): array
 }
 
 /**
+ * How much of a table is content and how much is empty space inside its pages.
+ *
+ * This is the question the earlier measurements could not answer. The footprint says
+ * trading_observations costs 2,720 bytes of data per row; the payload anatomy says the packed
+ * payload is 1,061 of them. The gap is 1,659 bytes per row that no field accounts for, and
+ * there are only two explanations: the structured columns really are that big, or the rows
+ * are sitting in half-empty pages.
+ *
+ * information_schema cannot tell them apart. DATA_FREE counts only whole extents that belong
+ * to no page at all -- it reported 4%, which is why fragmentation looked ruled out. Space
+ * wasted INSIDE a page is invisible to it, and after months of random inserts and updates that
+ * is where InnoDB space goes.
+ *
+ * So this adds up what the columns actually weigh, from the declared types rather than from
+ * LENGTH() on everything (LENGTH() of a DATETIME is the 19 characters of its text form, not
+ * the 5 bytes it occupies -- measuring it that way would invent content that is not there),
+ * and compares that with what the table is charged for. The ratio is the answer:
+ *
+ *   near 1.0  -> the table is full of content and only deleting rows can shrink it
+ *   near 2.0  -> half of what the hosting charges for is empty space a rebuild would return
+ *
+ * Read-only. It reads information_schema and runs one aggregate per table. Nothing is
+ * written, no table is altered, and the reclaim figure is an estimate offered for a decision,
+ * not an action taken.
+ */
+function trading_storage_row_density(PDO $pdo): array
+{
+    trading_storage_bootstrap($pdo);
+
+    // A freshly rebuilt InnoDB B-tree leaf is filled to 15/16 of the page; everything after
+    // that is the cost of living. Quoted here once so the estimate below has a stated basis.
+    $rebuiltFill = 15 / 16;
+
+    $columns = $pdo->query(
+        'SELECT TABLE_NAME, COLUMN_NAME, DATA_TYPE, IS_NULLABLE, NUMERIC_PRECISION, NUMERIC_SCALE,
+                DATETIME_PRECISION, CHARACTER_OCTET_LENGTH
+         FROM information_schema.COLUMNS
+         WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME LIKE "trading\\_%"
+         ORDER BY TABLE_NAME, ORDINAL_POSITION'
+    )->fetchAll();
+
+    $byTable = [];
+    foreach ($columns as $column) {
+        $table = (string) ($column['TABLE_NAME'] ?? '');
+        if ($table === '') {
+            continue;
+        }
+        $byTable[$table][] = $column;
+    }
+
+    $sizes = $pdo->query(
+        'SELECT TABLE_NAME, TABLE_ROWS, DATA_LENGTH, INDEX_LENGTH, DATA_FREE
+         FROM information_schema.TABLES
+         WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME LIKE "trading\\_%"'
+    )->fetchAll();
+    $sizeByTable = [];
+    foreach ($sizes as $row) {
+        $sizeByTable[(string) ($row['TABLE_NAME'] ?? '')] = $row;
+    }
+
+    $report = [];
+    foreach ($byTable as $table => $definitions) {
+        $terms = [];
+        $nullable = 0;
+        $fixedBytes = 0;
+        foreach ($definitions as $definition) {
+            $name = (string) ($definition['COLUMN_NAME'] ?? '');
+            $type = strtolower((string) ($definition['DATA_TYPE'] ?? ''));
+            if ($name === '') {
+                continue;
+            }
+            if (strtoupper((string) ($definition['IS_NULLABLE'] ?? '')) === 'YES') {
+                $nullable++;
+            }
+            $quoted = '`' . str_replace('`', '``', $name) . '`';
+            switch ($type) {
+                case 'char':
+                case 'varchar':
+                case 'text':
+                case 'tinytext':
+                case 'mediumtext':
+                case 'longtext':
+                case 'blob':
+                case 'tinyblob':
+                case 'mediumblob':
+                case 'longblob':
+                case 'varbinary':
+                case 'binary':
+                case 'json':
+                    // The only types whose size varies per row, so the only ones worth a scan.
+                    // The declared maximum says nothing: a VARCHAR(191) holding a 12-character
+                    // slug costs 13 bytes, not 191.
+                    $prefix = in_array($type, ['tinytext', 'tinyblob'], true) ? 1
+                        : (in_array($type, ['mediumtext', 'mediumblob'], true) ? 3
+                            : (in_array($type, ['longtext', 'longblob', 'json'], true) ? 4
+                                : ((int) ($definition['CHARACTER_OCTET_LENGTH'] ?? 0) > 255 ? 2 : 1)));
+                    $terms[] = 'COALESCE(LENGTH(' . $quoted . '), 0) + ' . $prefix;
+                    break;
+                case 'datetime':
+                    // 5 bytes, plus one per two digits of fractional precision.
+                    $fixedBytes += 5 + (int) ceil(((int) ($definition['DATETIME_PRECISION'] ?? 0)) / 2);
+                    break;
+                case 'timestamp':
+                    $fixedBytes += 4 + (int) ceil(((int) ($definition['DATETIME_PRECISION'] ?? 0)) / 2);
+                    break;
+                case 'date':
+                    $fixedBytes += 3;
+                    break;
+                case 'time':
+                    $fixedBytes += 3 + (int) ceil(((int) ($definition['DATETIME_PRECISION'] ?? 0)) / 2);
+                    break;
+                case 'decimal':
+                    // Four bytes per nine digits, integer part and fraction counted separately.
+                    $scale = (int) ($definition['NUMERIC_SCALE'] ?? 0);
+                    $whole = max(0, (int) ($definition['NUMERIC_PRECISION'] ?? 0) - $scale);
+                    foreach ([$whole, $scale] as $digits) {
+                        $fixedBytes += intdiv($digits, 9) * 4;
+                        $fixedBytes += [0, 1, 1, 2, 2, 3, 3, 4, 4, 4][$digits % 9];
+                    }
+                    break;
+                case 'tinyint': $fixedBytes += 1; break;
+                case 'smallint': $fixedBytes += 2; break;
+                case 'mediumint': $fixedBytes += 3; break;
+                case 'int': $fixedBytes += 4; break;
+                case 'bigint': $fixedBytes += 8; break;
+                case 'float': $fixedBytes += 4; break;
+                case 'double': $fixedBytes += 8; break;
+                default:
+                    // An unrecognised type is measured rather than guessed at, and named so the
+                    // reader knows the arithmetic did not silently skip a column.
+                    $terms[] = 'COALESCE(LENGTH(' . $quoted . '), 0)';
+                    break;
+            }
+        }
+
+        // InnoDB's per-record cost: a 5-byte header, a 6-byte transaction id, a 7-byte roll
+        // pointer and the NULL bitmap.
+        $recordOverhead = 5 + 6 + 7 + (int) ceil($nullable / 8);
+
+        $variable = 0;
+        $rows = 0;
+        if ($terms !== []) {
+            $statement = $pdo->query(
+                'SELECT COUNT(*) AS c, COALESCE(SUM(' . implode(' + ', $terms) . '), 0) AS b '
+                . 'FROM `' . str_replace('`', '``', $table) . '`'
+            );
+            $measured = $statement->fetch() ?: [];
+            $rows = (int) ($measured['c'] ?? 0);
+            $variable = (int) ($measured['b'] ?? 0);
+        }
+
+        $size = $sizeByTable[$table] ?? [];
+        $dataBytes = (int) ($size['DATA_LENGTH'] ?? 0);
+        $freeBytes = (int) ($size['DATA_FREE'] ?? 0);
+        $logicalBytes = $variable + ($rows * ($fixedBytes + $recordOverhead));
+        // COUNT(*) is exact where TABLE_ROWS is an estimate, so the exact number is the one
+        // the per-row figures are divided by.
+        $physicalPerRow = $rows > 0 ? $dataBytes / $rows : 0.0;
+        $logicalPerRow = $rows > 0 ? $logicalBytes / $rows : 0.0;
+        $rebuiltBytes = $logicalBytes > 0 ? (int) round($logicalBytes / $rebuiltFill) : 0;
+
+        $report[] = [
+            'table' => $table,
+            'rows' => $rows,
+            'dataBytes' => $dataBytes,
+            'freeBytes' => $freeBytes,
+            'logicalBytes' => $logicalBytes,
+            'fixedBytesPerRow' => $fixedBytes,
+            'recordOverheadPerRow' => $recordOverhead,
+            'logicalBytesPerRow' => round($logicalPerRow, 1),
+            'physicalBytesPerRow' => round($physicalPerRow, 1),
+            // Above 1.0 means the table is charged for more than it holds. It cannot fall
+            // below 1.0 unless the arithmetic above is wrong, which is worth knowing too.
+            'overheadRatio' => $logicalBytes > 0 ? round($dataBytes / $logicalBytes, 3) : null,
+            'estimatedRebuiltBytes' => $rebuiltBytes,
+            // Free extents come back from a rebuild as well, so they are part of the same
+            // answer -- but never counted twice: they are already outside DATA_LENGTH.
+            'estimatedReclaimBytes' => $rebuiltBytes > 0
+                ? max(0, $dataBytes - $rebuiltBytes) + $freeBytes
+                : 0,
+        ];
+    }
+
+    usort($report, static fn (array $left, array $right) => $right['dataBytes'] <=> $left['dataBytes']);
+    return [
+        'tables' => $report,
+        'rebuiltFill' => round($rebuiltFill, 4),
+        'totalReclaimBytes' => array_sum(array_column($report, 'estimatedReclaimBytes')),
+    ];
+}
+
+/**
  * What an observation row is actually made OF, field by field, and what it would weigh if it
  * kept only what anything reads.
  *

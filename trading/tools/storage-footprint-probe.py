@@ -273,3 +273,39 @@ else:
     redundant = [row for row in indexes if row.get("coveredBy")]
     if not redundant:
         print("\n   No index is a prefix of another. Index size is not recoverable this way.")
+
+# 6. Content versus empty space. Everything above measures what the rows HOLD; none of it can
+#    say how much of what the hosting charges for is actually holding anything. DATA_FREE, the
+#    only fragmentation figure information_schema has, counts whole free extents and is blind
+#    to slack inside a page -- which is where an InnoDB table that has been inserted into and
+#    updated for months puts it. This adds up the declared size of every column and compares it
+#    with the charge.
+print("\n== content versus empty space")
+report = admin("row-density")
+density = report.get("density") or {}
+tables = density.get("tables") or []
+if not tables:
+    print(f"   could not read: {json.dumps(report)[:400]}")
+else:
+    print("   table                       rows    content/row   charged/row   ratio   rebuild returns")
+    for row in tables:
+        ratio = row.get("overheadRatio")
+        reclaim = int(row.get("estimatedReclaimBytes") or 0)
+        print(f"   {str(row.get('table'))[:24]:<26}{int(row.get('rows') or 0):>8}"
+              f"{float(row.get('logicalBytesPerRow') or 0):>14,.0f}"
+              f"{float(row.get('physicalBytesPerRow') or 0):>14,.0f}"
+              f"{(f'{ratio:.2f}x' if ratio else '-'):>8}"
+              f"{reclaim / 1048576:>15,.1f} MB")
+    total = int(density.get("totalReclaimBytes") or 0)
+    print(f"\n   A rebuild of the Trading tables would return about {total / 1048576:,.0f} MB.")
+    print("   That is arithmetic, not a promise: it assumes a rebuilt B-tree leaf fills to")
+    print(f"   {float(density.get('rebuiltFill') or 0) * 100:.1f}% of a page, which is what InnoDB does when it builds one.")
+    worst = max(tables, key=lambda row: int(row.get("estimatedReclaimBytes") or 0))
+    ratio = worst.get("overheadRatio")
+    if ratio and ratio >= 1.4:
+        print(f"\n   {worst['table']} is charged {ratio:.2f}x what its columns hold. The space is")
+        print("   inside its pages, so no amount of deleting rows returns it -- only a rebuild does,")
+        print("   and rebuilding needs room for a second copy of the table while it runs.")
+    elif ratio:
+        print(f"\n   {worst['table']} is charged {ratio:.2f}x what its columns hold, which is close to")
+        print("   what a healthy table looks like. The size is content: only fewer rows make it smaller.")

@@ -7193,6 +7193,16 @@ try {
                 'indexes' => trading_storage_index_inventory($pdo),
             ]);
         }
+        // Read-only. How much of each table is content and how much is empty space inside
+        // its pages -- the one thing information_schema cannot report on its own. See
+        // trading_storage_row_density.
+        if ($operation === 'row-density') {
+            respond([
+                'ok' => true,
+                'operation' => 'row-density',
+                'density' => trading_storage_row_density($pdo),
+            ]);
+        }
         // Read-only. What an observation row is made of, field by field, and what it
         // would weigh holding only what anything reads. See
         // trading_storage_observation_payload_anatomy.
