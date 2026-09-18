@@ -33,6 +33,11 @@ on:
         required: true
         type: boolean
         default: false
+      measure_only:
+        description: Run the room check and stop. Nothing is rebuilt; this only prints the arithmetic.
+        required: false
+        type: boolean
+        default: false
       hosting_used_mb:
         description: MB currently used on the hosting, across ALL its databases (read from the panel).
         required: true
@@ -46,7 +51,11 @@ on:
 
 jobs:
   rebuild:
-    if: inputs.confirm_rebuild == true
+    # Either confirm the rebuild, or ask only for the measurement. The guard step runs in both
+    # cases and is read-only; the repack step is what measure_only holds back. Written this way
+    # because the numbers that decide a rebuild change every time rows are archived, and having
+    # to arm a destructive dispatch to read them is how a guard stops being consulted.
+    if: inputs.confirm_rebuild == true || inputs.measure_only == true
     runs-on: ubuntu-latest
     timeout-minutes: 30
     # The pipeline keeps writing while this runs, which InnoDB allows. It must not collide with
@@ -70,6 +79,7 @@ jobs:
         run: python3 trading/tools/rebuild-guard.py
 
       - name: Repack the table
+        if: inputs.confirm_rebuild == true && inputs.measure_only != true
         env:
           TRADING_TRIGGER_KEY: ${{ secrets.POLYTRADING_DB_PASSWORD }}
           TABLE: ${{ inputs.table }}

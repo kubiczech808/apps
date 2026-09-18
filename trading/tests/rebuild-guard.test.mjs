@@ -15,6 +15,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 const GUARD = fileURLToPath(new URL("../tools/rebuild-guard.py", import.meta.url));
@@ -139,4 +140,27 @@ test("the workflow actually runs the guard before the rebuild", () => {
   assert.ok(guardAt < rebuildAt, "the guard must come first");
   assert.match(workflow, /HOSTING_USED_MB/, "and be told what the hosting reports");
   assert.match(workflow, /HOSTING_QUOTA_MB/);
+});
+
+test("BAIT: measure-only must never let the repack run", () => {
+  // The room check changes every time rows are archived, so reading it must not require
+  // arming a destructive dispatch -- that is how a guard stops being consulted. But the mode
+  // that makes it cheap to read is also the mode that must never rebuild anything.
+  const workflow = readFileSync(
+    new URL("../../.github/workflows/trading-storage-rebuild.yml", import.meta.url), "utf8");
+  const job = workflow.slice(workflow.indexOf("  rebuild:"));
+  assert.match(job, /if: inputs\.confirm_rebuild == true \|\| inputs\.measure_only == true/,
+    "the job runs for a measurement as well as for a rebuild");
+
+  const repack = job.slice(job.indexOf("- name: Repack the table"));
+  const condition = repack.slice(0, repack.indexOf("run:"));
+  assert.match(condition, /inputs\.confirm_rebuild == true/,
+    "the repack still needs the explicit confirmation");
+  assert.match(condition, /inputs\.measure_only != true/,
+    "and measure-only must hold it back, or the safe mode rebuilds the table");
+
+  // The guard itself must stay unconditional: a rebuild that skips the room check is the
+  // thing this whole file exists to prevent.
+  const guard = job.slice(job.indexOf("- name: Check there is room"), job.indexOf("- name: Repack the table"));
+  assert.ok(!/\n        if:/.test(guard), `the room check must never be conditional: ${guard}`);
 });
