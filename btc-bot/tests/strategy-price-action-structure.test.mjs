@@ -293,6 +293,11 @@ test('major LH and LL override short internal USDJPY-like reactions', () => {
   assert.ok(result.structure.high.current.price > 160 && result.structure.high.current.price < 161)
   assert.ok(result.structure.low.current.price > 152 && result.structure.low.current.price < 153)
   assert.equal(result.structure.recentSwings.length, 4)
+  assert.equal(result.structure.activeRange.source, 'active-edge')
+  assert.equal(result.structure.activeRange.high.label, 'LH')
+  assert.equal(result.structure.activeRange.low.label, 'LL')
+  assert.ok(result.structure.activeRange.high.price > 160 && result.structure.activeRange.high.price < 161)
+  assert.ok(result.structure.activeRange.low.price > 152 && result.structure.activeRange.low.price < 153)
 })
 
 test('structure horizons and pivot widths scale with timeframe', () => {

@@ -3,7 +3,7 @@ import { ceilPrice, floorPrice, normalizeCandlePrices, roundPrice } from './pric
 import { buildFvgSupplyDemandZones, candleSignal, marketStructure } from './priceaction.mjs'
 
 export const PRICE_ACTION_STRUCTURE_ID = 'price-action-structure-v1'
-export const PRICE_ACTION_MATRIX_SCHEMA = 24
+export const PRICE_ACTION_MATRIX_SCHEMA = 25
 export const PRICE_ACTION_CHART_CANDLE_LIMITS = {
   '1h': 8760,
   '4h': 2190,
@@ -592,15 +592,15 @@ const nearestOpposingZone = ({ side, zones, entry, tp1 = null }) => {
 
 const structuralTarget = ({ side, structure }) =>
   side === 'long'
-    ? roundPrice(structure?.high?.current?.price ?? null)
+    ? roundPrice(structure?.activeRange?.high?.price ?? structure?.high?.current?.price ?? null)
     : side === 'short'
-      ? roundPrice(structure?.low?.current?.price ?? null)
+      ? roundPrice(structure?.activeRange?.low?.price ?? structure?.low?.current?.price ?? null)
       : null
 
 const pullbackLevel = ({ side, structure, pullbackPct }) => {
   if (side !== 'long' && side !== 'short') return null
-  const high = structure?.high?.current?.price
-  const low = structure?.low?.current?.price
+  const high = structure?.activeRange?.high?.price ?? structure?.high?.current?.price
+  const low = structure?.activeRange?.low?.price ?? structure?.low?.current?.price
   if (!Number.isFinite(high) || !Number.isFinite(low) || high <= low) return null
   const ratio = Math.min(Math.max(Number(pullbackPct) || 50, 0), 100) / 100
   return roundPrice(side === 'long'
@@ -612,9 +612,9 @@ const pullbackLevel = ({ side, structure, pullbackPct }) => {
 // Those are the same confirmed structural pivots used by the trend classifier.
 const structureInvalidationLevel = ({ side, structure }) =>
   side === 'long'
-    ? roundPrice(structure?.low?.current?.price ?? null)
+    ? roundPrice(structure?.activeRange?.low?.price ?? structure?.low?.current?.price ?? null)
     : side === 'short'
-      ? roundPrice(structure?.high?.current?.price ?? null)
+      ? roundPrice(structure?.activeRange?.high?.price ?? structure?.high?.current?.price ?? null)
       : null
 
 const candidateZones = (zones, side) => {
@@ -1287,6 +1287,21 @@ export const classifyStructure = (
     lowerLabel: 'LL',
     breaksByClose: (current, previous) => !closeBreaksLow(current, previous),
   })
+  const edgeLabels = labelStructureSwings(edgeStructure.swings)
+  const edgeHighLeg = structureLeg({
+    previous: edgeStructure.previousHigh,
+    current: edgeStructure.lastHigh,
+    higherLabel: 'HH',
+    lowerLabel: 'LH',
+    breaksByClose: closeBreaksHigh,
+  })
+  const edgeLowLeg = structureLeg({
+    previous: edgeStructure.previousLow,
+    current: edgeStructure.lastLow,
+    higherLabel: 'HL',
+    lowerLabel: 'LL',
+    breaksByClose: (current, previous) => !closeBreaksLow(current, previous),
+  })
   const highText = highLeg?.label ?? null
   const lowText = lowLeg?.label ?? null
   const localTrend = highText === 'HH' && lowText === 'HL'
@@ -1313,6 +1328,24 @@ export const classifyStructure = (
   const trend = breakDirection ?? (persistent.trend !== 'flat' ? persistent.trend : localTrend)
   const establishedTrend = persistent.establishedTrend
   const structureConfirmed = !breakDirection && trend !== 'flat'
+  const edgeHigh = pivotSummary(edgeStructure.lastHigh, edgeLabels.get(edgeStructure.lastHigh?.index) ?? edgeHighLeg?.label)
+  const edgeLow = pivotSummary(edgeStructure.lastLow, edgeLabels.get(edgeStructure.lastLow?.index) ?? edgeLowLeg?.label)
+  const edgeFormsActiveWave = trend === 'down'
+    ? edgeHigh?.label === 'LH' && edgeLow?.label === 'LL' && edgeHigh.time < edgeLow.time
+    : trend === 'up'
+      ? edgeHigh?.label === 'HH' && edgeLow?.label === 'HL' && edgeLow.time < edgeHigh.time
+      : false
+  // The broad spine decides the trend. Once its live edge has completed the
+  // corresponding LH -> LL / HL -> HH wave, that edge becomes the active
+  // swing range for pullback, stop, target and the chart's terminal zigzag.
+  // This keeps the chart and the executable price levels on the same wave.
+  const activeRange = edgeFormsActiveWave
+    ? { high: edgeHigh, low: edgeLow, source: 'active-edge' }
+    : {
+        high: highLeg?.current ?? null,
+        low: lowLeg?.current ?? null,
+        source: 'context',
+      }
   const status = trend === 'up' ? 'met' : trend === 'down' ? 'unmet' : 'neutral'
   const contextHigh = normalizedCandles.reduce((best, candle) => !best || candle.high > best.high ? candle : best, null)
   const contextLow = normalizedCandles.reduce((best, candle) => !best || candle.low < best.low ? candle : best, null)
@@ -1355,11 +1388,13 @@ export const classifyStructure = (
       contextSwingCount: contextStructure.swings.length,
       high: highLeg,
       low: lowLeg,
+      activeRange,
       protectedHigh: pivotSummary(persistent.protectedHigh, persistent.protectedHigh ? persistent.labels.get(persistent.protectedHigh.index) : null),
       protectedLow: pivotSummary(persistent.protectedLow, persistent.protectedLow ? persistent.labels.get(persistent.protectedLow.index) : null),
       developingSwing,
       confirmed: structureConfirmed,
       recentSwings: structure.swings.slice(-8).map((swing) => pivotSummary(swing, persistent.labels.get(swing.index))),
+      activeRecentSwings: edgeStructure.swings.slice(-8).map((swing) => pivotSummary(swing, edgeLabels.get(swing.index))),
       contextRecentSwings: contextStructure.swings.slice(-8).map((swing) => pivotSummary(swing)),
     },
     zones: includeZones

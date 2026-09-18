@@ -1380,6 +1380,10 @@ const renderAssetChart = () => {
   const developingSwing = structure?.developingSwing
   for (const swing of [
     ...(structure?.recentSwings ?? []),
+    // The active edge completes the latest executable wave. It is more recent
+    // than the broad structural spine, so include it to reach the current LL
+    // or HH instead of leaving the zigzag stranded at its old pivot.
+    ...(structure?.activeRecentSwings ?? []),
     ...structureLegs.map(({ kind, leg }) => leg?.current ? { ...leg.current, kind, label: leg.label } : null),
     developingSwing,
   ].filter(Boolean)) {
@@ -1397,8 +1401,15 @@ const renderAssetChart = () => {
       return { ...swing, label, x: xForTime(swing.time) }
     })
     .filter((swing) => swing.x !== null)
-  const latestHigh = swingNodes.filter((swing) => swing.kind === 'high').at(-1)
-  const latestLow = swingNodes.filter((swing) => swing.kind === 'low').at(-1)
+  const rangeHigh = structure?.activeRange?.high
+  const rangeLow = structure?.activeRange?.low
+  const nodeForRangePivot = (pivot) => Number.isFinite(pivot?.price)
+    ? swingNodes.filter((swing) =>
+      swing.candleIndex === pivot.candleIndex || (swing.time === pivot.time && swing.kind === pivot.kind)
+    ).at(-1) ?? { ...pivot, x: xForTime(pivot.time) }
+    : null
+  const latestHigh = nodeForRangePivot(rangeHigh) ?? swingNodes.filter((swing) => swing.kind === 'high').at(-1)
+  const latestLow = nodeForRangePivot(rangeLow) ?? swingNodes.filter((swing) => swing.kind === 'low').at(-1)
 
   if (trend === 'flat') {
     for (const { kind, leg } of structureLegs) {
