@@ -94,6 +94,27 @@ export const createPaperExecutor = ({
     trade.tp1TakenAt = at
   }
 
+  const activateLinearLimitOrder = (order, at) => {
+    const openingFee = linearFeeSats(order, order.quantityUsd)
+    if (order.marginSats + openingFee > store.balanceSats) {
+      order.status = 'cancelled'
+      order.cancelledAt = at
+      order.cancelReason = `margin and fee ${order.marginSats + openingFee} sats exceed paper balance ${store.balanceSats} sats at entry`
+      return { activated: false, reason: order.cancelReason }
+    }
+    order.status = 'running'
+    order.openedAt = at
+    order.openingFeeSats = openingFee
+    order.initialStop = order.stopLoss
+    order.initialMarginSats = order.marginSats
+    order.remainingQuantityUsd = order.quantityUsd
+    order.realizedPlSats = 0
+    order.unrealizedPlSats = 0
+    order.tp1Taken = false
+    store.balanceSats -= order.marginSats + openingFee
+    return { activated: true }
+  }
+
   /**
    * Charge every funding settlement up to `timeMs` against the positions that
    * were open when it happened.
@@ -240,6 +261,62 @@ export const createPaperExecutor = ({
       return trade
     },
 
+    // PA-1 knows its entry, structural stop and both targets before price
+    // returns to the FVG. Keep that instruction as a paper limit order instead
+    // of pretending it is already an open market position.
+    placeOrder: async (plan) => {
+      if (plan.type !== 'limit') throw new Error('paper pending order must be a limit order')
+      if (!(plan.entry > 0) || !(plan.stop > 0) || !(plan.takeProfit > 0)) {
+        throw new Error('refusing to place a limit order without entry and both protective brackets')
+      }
+      if (plan.pricingModel !== 'linear-usd') {
+        throw new Error('paper pending orders currently support price-action linear contracts only')
+      }
+      const order = {
+        id: `paper-${store.nextId++}`,
+        side: plan.side,
+        type: 'limit',
+        status: 'open',
+        quantityUsd: plan.quantityUsd,
+        marginSats: plan.marginSats,
+        leverage: plan.leverage,
+        entry: plan.entry,
+        liquidation: plan.liquidation,
+        stopLoss: plan.stop,
+        initialStop: plan.stop,
+        takeProfit: plan.takeProfit,
+        tp1: plan.tp1,
+        tp2: plan.tp2 ?? plan.takeProfit,
+        exitPrice: null,
+        plSats: null,
+        openingFeeSats: null,
+        closingFeeSats: null,
+        carryFeesSats: 0,
+        createdAt: now(),
+        openedAt: null,
+        closedAt: null,
+        source: 'paper',
+        pricingModel: 'linear-usd',
+        assetSymbol: plan.assetSymbol,
+        timeframeId: plan.timeframeId,
+        strategyId: plan.strategyId,
+        priceActionProtocol: plan.priceActionProtocol,
+        signalKey: plan.signalKey,
+        signalCandleTime: plan.signalCandleTime ?? null,
+        quoteSatsPerUsd: plan.quoteSatsPerUsd,
+        initialMarginSats: plan.marginSats,
+        remainingQuantityUsd: plan.quantityUsd,
+        realizedPlSats: 0,
+        unrealizedPlSats: 0,
+        tp1Taken: false,
+        lastOrderCheckedCandleTime: plan.signalCandleTime ?? null,
+        lastMarkedCandleTime: null,
+        plan: plan.plan ?? null,
+      }
+      store.trades.push(order)
+      return order
+    },
+
     updateStops: async (id, { stopLoss, takeProfit } = {}) => {
       const trade = store.trades.find((candidate) => candidate.id === id)
       if (!trade) throw new Error(`unknown paper trade ${id}`)
@@ -329,6 +406,35 @@ export const createPaperExecutor = ({
         }
       }
       return settled
+    },
+
+    markPriceActionOrders: (matrix) => {
+      const outcomes = []
+      for (const order of store.trades.filter((candidate) => candidate.status === 'open' && candidate.pricingModel === 'linear-usd')) {
+        const asset = matrix?.assets?.find((candidate) => candidate.symbol === order.assetSymbol)
+        const item = asset?.trends?.[order.timeframeId]
+        const candles = item?.chartCandles ?? []
+        const candleDuration = (TIMEFRAME_HOURS[order.timeframeId] ?? 1) * HOUR_MS
+        for (const candle of candles) {
+          if (Number.isFinite(order.lastOrderCheckedCandleTime) && candle.time <= order.lastOrderCheckedCandleTime) continue
+          order.lastOrderCheckedCandleTime = candle.time
+          const hitEntry = order.side === 'long' ? candle.low <= order.entry : candle.high >= order.entry
+          if (!hitEntry) continue
+          const at = candle.time + candleDuration
+          const result = activateLinearLimitOrder(order, at)
+          if (result.activated) {
+            // Let the normal position marker inspect this same candle for an
+            // immediate protective exit. It resolves an unknowable OHLC order
+            // conservatively because its stop check precedes target checks.
+            order.lastMarkedCandleTime = candle.time - 1
+            outcomes.push({ order, action: 'filled', at })
+          } else {
+            outcomes.push({ order, action: 'cancelled', reason: result.reason, at })
+          }
+          break
+        }
+      }
+      return outcomes
     },
   }
 }

@@ -2124,7 +2124,7 @@ const renderOrders = () => {
 
 const renderPriceActionOrders = (body) => {
   setPanelTitle('panel-orders-title', 'Čekající price-action objednávky')
-  setTableHead('panel-orders', ['Zadáno', 'Asset', 'TF', 'Typ', 'Směr', 'Velikost', 'Cena', 'Stop loss', 'Take profit', 'Marže', ''])
+  setTableHead('panel-orders', ['Zadáno', 'Asset', 'TF', 'Typ', 'Směr', 'Velikost', 'Cena', 'Stop loss', 'TP1 / TP2', 'Marže', ''])
   const rows = state?.positions?.orders || []
   body.replaceChildren()
   if (!rows.length) {
@@ -2144,7 +2144,7 @@ const renderPriceActionOrders = (body) => {
         el('td', { text: order.quantityUsd ? `${nf(0).format(order.quantityUsd)} USD` : '–' }),
         el('td', { text: quotePrice(order.quotePrice ?? order.entry) }),
         el('td', { text: quotePrice(order.stopLoss) }),
-        el('td', { text: quotePrice(order.takeProfit) }),
+        el('td', { text: `${quotePrice(order.tp1)} / ${quotePrice(order.tp2 ?? order.takeProfit)}` }),
         el('td', { text: sats(order.marginSats) }),
         el('td', {}, [cancel]),
       ])

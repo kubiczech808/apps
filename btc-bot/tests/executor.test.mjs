@@ -52,6 +52,32 @@ test('paper executor marks an FX trade on its own candles and takes TP1 before T
   assert.ok(store.balanceSats > 1_000_000)
 })
 
+test('a paper PA limit order keeps capital free until entry, then becomes a protected position', async () => {
+  const store = { balanceSats: 1_000_000, trades: [], nextId: 1 }
+  const executor = createPaperExecutor({ store, feeRate: 0.0006, now: () => START })
+  const order = await executor.placeOrder({
+    type: 'limit', pricingModel: 'linear-usd', strategyId: 'price-action-structure-v1',
+    assetSymbol: 'AUDUSD', timeframeId: '1h', signalKey: 'aud-pending', signalCandleTime: START,
+    side: 'long', entry: 0.71, stop: 0.70, takeProfit: 0.74, tp1: 0.72, tp2: 0.74,
+    quantityUsd: 100, marginSats: 25_000, leverage: 4, liquidation: 0.5325, quoteSatsPerUsd: 1250,
+  })
+  assert.equal(order.status, 'open')
+  assert.equal(store.balanceSats, 1_000_000)
+
+  executor.markPriceActionOrders({
+    assets: [{ symbol: 'AUDUSD', trends: { '1h': { chartCandles: [
+      candle(START + HOUR, 0.72, 0.725, 0.715, 0.72),
+      candle(START + 2 * HOUR, 0.72, 0.713, 0.709, 0.711),
+    ] } } }],
+  })
+  assert.equal(order.status, 'running')
+  assert.equal(order.type, 'limit')
+  assert.equal(order.stopLoss, 0.70)
+  assert.equal(order.tp1, 0.72)
+  assert.equal(order.tp2, 0.74)
+  assert.ok(store.balanceSats < 1_000_000)
+})
+
 const stubClient = (overrides = {}) => ({
   network: 'testnet4',
   getAccount: async () => ({ balance: 100_000, username: 'tester' }),

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { applyCommands, executeReadyPriceActionProfiles, PRICE_ACTION_POSITION_PROTOCOL, readConfig, reconcileBrackets, reconcilePriceActionInvalidations, roundStop, roundTarget, runPass, strategyIdForPosition } from '../src/bot.mjs'
+import { applyCommands, executeReadyPriceActionProfiles, placePendingPriceActionOrders, PRICE_ACTION_POSITION_PROTOCOL, readConfig, reconcileBrackets, reconcilePendingPriceActionOrders, reconcilePriceActionInvalidations, roundStop, roundTarget, runPass, strategyIdForPosition } from '../src/bot.mjs'
 import { LEGACY_PRICE_ACTION_ID, PRICE_ACTION_STRUCTURE_ID } from '../src/strategy-registry.mjs'
 import { appendCandle, START, zigzag } from './helpers.mjs'
 
@@ -175,6 +175,54 @@ test('ready PA profiles open one paper trade per asset and never duplicate the s
   })
   assert.equal(second.length, 0)
   assert.equal(calls.length, 1)
+})
+
+test('a complete PA setup places a bracketed limit order before its entry is hit, then cancels it on invalidation', async () => {
+  const calls = []
+  const executor = {
+    placeOrder: async (order) => {
+      calls.push(['place', order])
+      return { ...order, id: 'pending-1', status: 'open', stopLoss: order.stop }
+    },
+    cancelOrder: async (id) => calls.push(['cancel', id]),
+  }
+  const profile = {
+    status: 'watch', mode: 'screening', side: 'short', zoneHit: false,
+    entry: 160.4, stop: 161.1, tp1: 152.9, tp2: 150.8, weightedTarget: 151.85,
+    rewardRisk: 2.4, minRewardRisk: 2, riskPct: 1,
+    zone: { firstTime: START },
+    gates: [
+      { id: 'trend', passed: true },
+      { id: 'zone', passed: false },
+      { id: 'pullback', passed: false },
+      { id: 'unfilled-zone', passed: true },
+      { id: 'rr', passed: true },
+      { id: 'candle', passed: true },
+    ],
+  }
+  const matrix = { assets: [{ symbol: 'USDJPY', trends: { '4h': { asOf: START, reason: 'LH + LL', tradeProfile: profile } } }] }
+  const settings = {
+    enabled: true,
+    risk: { market: 'futures', riskPct: 1, feeRate: 0.0006, minMarginSats: 1 },
+    priceActionStructure: { riskPct: 1 },
+  }
+  const placed = await placePendingPriceActionOrders({
+    executor, matrix, trades: [], equitySats: 1_000_000, btcPrice: 80_000, settings,
+  })
+  assert.equal(placed[0].action, 'placed')
+  assert.equal(calls[0][1].type, 'limit')
+  assert.equal(calls[0][1].stop, 161.1)
+  assert.equal(calls[0][1].tp1, 152.9)
+  assert.equal(calls[0][1].tp2, 150.8)
+
+  const invalidated = { ...profile, status: 'neutral', zoneHit: true }
+  const cancelled = await reconcilePendingPriceActionOrders({
+    executor,
+    orders: [placed[0].order],
+    matrix: { assets: [{ symbol: 'USDJPY', trends: { '4h': { tradeProfile: invalidated } } }] },
+  })
+  assert.equal(cancelled[0].action, 'cancelled')
+  assert.deepEqual(calls.at(-1), ['cancel', 'pending-1'])
 })
 
 test('price-action invalidation closes a position and retires pre-protocol paper trades', async () => {
