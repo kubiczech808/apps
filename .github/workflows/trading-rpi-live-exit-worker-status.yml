@@ -354,10 +354,15 @@ jobs:
             // separates "the watch went stale on the Pi" from "no favourite actually fell"
             // belongs where a short tail always reaches it.
             const dipNow = Array.isArray(state.dipEntryWatch) ? state.dipEntryWatch : [];
+            // "tags" absent from every row means this worker predates the field, NOT that no
+            // plan has tags. Reported as "not recorded" rather than as zero, because the two
+            // look identical and the difference decides whether anything is wrong. Stated
+            // plainly after reading a zero here as evidence and being wrong about it.
+            const dipRecordsTags = dipNow.some((plan) => plan.tags !== undefined);
             const dipTagged = dipNow.filter((plan) => Array.isArray(plan.tags) && plan.tags.length > 0).length;
             console.log(`   DIP WATCH: ${dipNow.length} plan(s) followed right now, `
-              + `${dipTagged} carrying tags, mode ${state.dipEntryMode || "(off)"}, `
-              + `error ${text(state.dipEntryError)}`);
+              + `tags ${dipRecordsTags ? `${dipTagged} of ${dipNow.length}` : "NOT RECORDED by this worker build"}, `
+              + `mode ${state.dipEntryMode || "(off)"}, error ${text(state.dipEntryError)}`);
           ' "$state" "$MARKET_FILTER"
 
       - name: Report the journal

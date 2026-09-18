@@ -3043,6 +3043,14 @@ async function checkOnce(context) {
         buyMax: plan.buyMax,
         stakeUsdc: plan.stakeUsdc,
         blockedReason: plan.blockedReason || null,
+        // The market's tags, so the state file can answer whether the watch this worker is
+        // actually following carries them. Without this field a status read reports zero
+        // tagged plans on a perfectly healthy watch: it cannot tell "no plan has tags" from
+        // "this projection never had the field". A number that cannot tell absence from zero
+        // is worse than no number, and this one was read as evidence once already.
+        //
+        // null, not [], when the plan has none -- so the two stay distinguishable downstream.
+        tags: Array.isArray(plan.tags) ? plan.tags : null,
         settled: context.state.dipEntries?.[dipEntryPlanKey(plan)]?.reason || null,
       }));
     try {

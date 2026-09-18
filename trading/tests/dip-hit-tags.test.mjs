@@ -192,6 +192,28 @@ test("the worker's own dip watch size is reported where a short read reaches it"
   const summary = status.slice(0, status.indexOf("- name: Report the journal"));
   assert.ok(summary.lastIndexOf("DIP WATCH") > summary.lastIndexOf("ARMED"),
     "it must come last in the state summary, not before the event list");
-  assert.match(status, /\$\{dipTagged\} carrying tags/,
+  assert.match(status, /dipTagged\} of \$\{dipNow\.length\}/,
     "and say how many carry tags, which is the fix's own evidence on the Pi");
+});
+
+test("BAIT: a watch projection without the field must not read as zero tagged plans", () => {
+  // The mistake, made and reported within one message of warning about exactly this class of
+  // mistake. state.dipEntryWatch is a PROJECTION of named fields, and it did not include
+  // tags -- so the status line printed "0 carrying tags" for a healthy watch, and that zero
+  // was read as evidence that the plans had gone stale. It was evidence of nothing.
+  //
+  // Two halves to the fix, and both are checked here: the worker records the field, and the
+  // reader refuses to call its absence zero.
+  const worker = readFileSync(new URL("../tools/rpi-live-exit-worker.mjs", import.meta.url), "utf8");
+  const projection = worker.slice(worker.indexOf("context.state.dipEntryWatch = ["));
+  const body = projection.slice(0, projection.indexOf("}));"));
+  assert.match(body, /tags: Array\.isArray\(plan\.tags\) \? plan\.tags : null/,
+    "the projection must carry tags, or the number downstream means nothing");
+
+  const status = readFileSync(
+    new URL("../../.github/workflows/trading-rpi-live-exit-worker-status.yml", import.meta.url), "utf8");
+  assert.match(status, /plan\.tags !== undefined/,
+    "the reader must detect a worker build that does not record the field");
+  assert.match(status, /NOT RECORDED by this worker build/,
+    "and say so, instead of printing a zero that looks like a finding");
 });
