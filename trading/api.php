@@ -1415,8 +1415,9 @@ function state_segment_path(array $data, string $corePath, string $segment): ?st
  *
  * @return array{cells: array, anyTag: array, scanned: int, priced: int}
  */
-function resolved_stats_accumulate(array $sources, float $stake = 5.0): array
+function resolved_stats_accumulate(array $sources, float $stake = 5.0, ?callable $extra = null): array
 {
+    $breakdownExtra = null;
     // [trades, wins, staked, pnl] per cell. Everything below is summed out of this.
     //
     // Two maps, not one. A row carrying two tags is two cells, which is right for a
@@ -1427,7 +1428,19 @@ function resolved_stats_accumulate(array $sources, float $stake = 5.0): array
     $anyTag = [];
     $scanned = 0;
     $priced = 0;
-    $onRow = static function (array $item) use (&$cells, &$anyTag, &$scanned, &$priced, $stake): bool {
+    // Seen once, summed once. The database and the published file overlap -- the file's
+    // settled rows are a subset of the mirror's -- so reading both without this would count
+    // 6,533 settlements twice and quietly inflate every accuracy the page shows. It also
+    // covers a duplicate inside a single file, which nothing else would notice.
+    $seen = [];
+    $onRow = static function (array $item) use (&$cells, &$anyTag, &$scanned, &$priced, &$seen, $stake): bool {
+        $identity = (string) ($item['tokenId'] ?? $item['id'] ?? $item['marketKey'] ?? '');
+        if ($identity !== '') {
+            if (isset($seen[$identity])) {
+                return true;
+            }
+            $seen[$identity] = true;
+        }
         $scanned += 1;
         $entry = simulation_entry_probability($item);
         // Deliberately NOT simulation_outcome(): that helper reads any final price in
@@ -1491,6 +1504,14 @@ function resolved_stats_accumulate(array $sources, float $stake = 5.0): array
 
         return true;
     };
+    // Rows that did not come from a file. The database holds 90,795 settled observations
+    // where the published archive file holds 6,533, and a reduction that can only read files
+    // can only ever summarise the smaller number.
+    if (is_callable($extra)) {
+        $extraRows = $extra($onRow);
+        $breakdownExtra = ['field' => 'storedResolved', 'file' => '(database)', 'exists' => true,
+            'bytes' => 0, 'read' => true, 'rows' => (int) $extraRows];
+    }
     // Counted per source, not just in total. The first fold on production read 14,536 rows
     // while the database holds 90,795 settled observations -- a sixfold gap that a single
     // total cannot explain and cannot even locate. Which file supplied how many rows is the
@@ -1510,6 +1531,9 @@ function resolved_stats_accumulate(array $sources, float $stake = 5.0): array
         ];
     }
 
+    if ($breakdownExtra !== null) {
+        array_unshift($breakdown, $breakdownExtra);
+    }
     return [
         'cells' => $cells,
         'anyTag' => $anyTag,
@@ -7336,7 +7360,19 @@ try {
             if ($sources === []) {
                 $sources = [[$corePath, 'marketObservations'], [$corePath, 'resolvedMarketObservations']];
             }
-            $accumulated = resolved_stats_accumulate($sources);
+            // The database first, because it is the only complete record of what settled:
+            // it holds 90,795 settled observations against the published file's 6,533, and
+            // nothing else has the other 84,000 -- the file is a by-product of the capped live
+            // catalogue and the retired retention job's archive directory is empty.
+            //
+            // The files are still read afterwards. They carry rows the mirror may not have
+            // caught, and a row seen twice is a row summed twice, which is why the stream
+            // hands over decoded payloads and the file pass is kept for what it adds.
+            $accumulated = resolved_stats_accumulate(
+                $sources,
+                5.0,
+                static fn (callable $onRow): int => trading_storage_resolved_observations_stream($pdo, $onRow),
+            );
             if (($accumulated['priced'] ?? 0) <= 0) {
                 // Replacing the stored cells with nothing would turn the Setup finder blank
                 // and look like a settled archive with no settlements in it. A fold that

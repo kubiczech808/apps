@@ -33,7 +33,7 @@ function lift(source, signature) {
 
 const PIECES = [
   lift(API, "function stream_json_array_members(string $path, string $field, callable $onRow, ?callable $accepts = null): bool"),
-  lift(API, "function resolved_stats_accumulate(array $sources, float $stake = 5.0): array"),
+  lift(API, "function resolved_stats_accumulate(array $sources, float $stake = 5.0, ?callable $extra = null): array"),
   lift(STORAGE, "function trading_storage_resolved_stats_replace(PDO $pdo, array $cells, array $anyTag, array $meta = []): array"),
   lift(STORAGE, "function trading_storage_resolved_stats_load(PDO $pdo): ?array"),
 ].join("\n");
@@ -402,6 +402,23 @@ test("BAIT: a source that supplied nothing is still reported", () => {
   assert.equal(sources.length, 1, `a source with no rows must still be listed: ${JSON.stringify(sources)}`);
   assert.equal(sources[0].rows, 0);
   assert.equal(sources[0].exists, true, "and whether the file was there at all must be stated");
+});
+
+test("BAIT: a settlement present in two sources is summed once", () => {
+  // The database holds 90,795 settled observations and the published file 6,533, and the
+  // file's rows are a subset of the mirror's. Reading both without an identity check counts
+  // those 6,533 settlements twice -- which does not fail, does not error, and quietly inflates
+  // every accuracy figure the Setup finder shows.
+  const shared = settled({ tokenId: "same-token" });
+  const both = run([shared], { activeRows: [shared] });
+  assert.equal(both.ok, true, both.error || "");
+  assert.equal(both.accumulated.scanned, 1, "the same token in two files is one settlement");
+  assert.equal(both.accumulated.priced, 1);
+
+  // And two genuinely different markets are still two.
+  const distinct = run([settled({ tokenId: "a" })], { activeRows: [settled({ tokenId: "b" })] });
+  assert.equal(distinct.accumulated.scanned, 2);
+  assert.equal(distinct.accumulated.priced, 2);
 });
 
 test("the fold refuses to store an empty result over a good one", () => {

@@ -1656,6 +1656,60 @@ function trading_storage_archive_events(PDO $pdo, int $days = 7, int $limit = 50
  * filter without decoding, and the key is hashed because a tag plus a shape plus a horizon
  * does not fit a usable primary key otherwise.
  */
+/**
+ * Every settled observation the database holds, one at a time.
+ *
+ * Measured, and the reason this exists: the published archive FILE holds 6,533 settled
+ * observations in 19.6 MB, while this table holds 90,795. The file is a by-product of the live
+ * catalogue, which is capped -- so the Setup finder has been summarising seven per cent of the
+ * settled history and calling it the archive. "Divam se na data v Setup finder, neverim jim."
+ *
+ * It also means this table is the ONLY complete record of what settled. Nothing else has the
+ * other 84,000: the file is capped, and the observation-archive directory the retired
+ * retention job wrote is empty. Deleting these rows to reclaim space would destroy them, which
+ * is the opposite of what the plan assumed when the files looked like the archive.
+ *
+ * Paged by primary key rather than by LIMIT/OFFSET: rows arrive while this runs, and an OFFSET
+ * walk over a moving table skips and repeats. The key is a hash, so the order is arbitrary --
+ * which is fine, because the caller is summing and a sum does not care.
+ */
+function trading_storage_resolved_observations_stream(PDO $pdo, callable $onRow, int $batch = 500): int
+{
+    trading_storage_bootstrap($pdo);
+    $batch = max(50, min(2000, $batch));
+    $statement = $pdo->prepare(
+        'SELECT observation_key, payload FROM trading_observations
+         WHERE lifecycle = :lifecycle AND observation_key > :after
+         ORDER BY observation_key ASC LIMIT ' . $batch
+    );
+    $after = '';
+    $seen = 0;
+    while (true) {
+        $statement->execute(['lifecycle' => 'RESOLVED', 'after' => $after]);
+        $rows = $statement->fetchAll();
+        if ($rows === []) {
+            break;
+        }
+        foreach ($rows as $row) {
+            $after = (string) ($row['observation_key'] ?? '');
+            $decoded = trading_storage_unpack($row['payload'] ?? null);
+            if (!is_array($decoded)) {
+                // Counted as seen so the caller's total matches the table, and skipped rather
+                // than guessed at: a payload that will not decode is a row to investigate, not
+                // a settlement to invent.
+                $seen++;
+                continue;
+            }
+            $seen++;
+            $onRow($decoded);
+        }
+        if (count($rows) < $batch) {
+            break;
+        }
+    }
+    return $seen;
+}
+
 function trading_storage_resolved_stats_replace(PDO $pdo, array $cells, array $anyTag, array $meta = []): array
 {
     trading_storage_bootstrap($pdo);
