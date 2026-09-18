@@ -56,6 +56,48 @@ async function main() {
   };
   console.log("== the rule as configured");
   console.log(`   ${JSON.stringify(rule)}`);
+  // Every gate strategyEligibleCandidates consults, printed rather than guessed at. Three
+  // theories have already been checked and eliminated -- the portfolioId spelling, the
+  // under-way flag, the volume floor -- and each cost a dispatch. The settings that decide
+  // the remaining gates are right here and cost nothing.
+  console.log("   gates that can still reject a dip row:");
+  for (const field of ["minProbability", "maxProbability", "maxResolutionDays", "minLiquidityUsdc",
+    "excludedMarketShapes", "excludeOverUnderMarkets", "includeOnlyMarketTags", "excludedMarketTags",
+    "liveEventMode", "equalRiskProtection", "marketType", "automationEnabled", "archived"]) {
+    if (match.config?.[field] !== undefined) {
+      console.log(`      ${field.padEnd(24)} ${JSON.stringify(match.config[field])}`);
+    }
+  }
+
+  // And what the bot itself said it did. It records a reason per skipped candidate on every
+  // run, which is the authoritative answer to "why did nothing pass" -- reading it beats a
+  // fourth theory.
+  try {
+    const log = await json(`api.php?action=portfolio-run-log&strategy_id=${encodeURIComponent(match.id)}&page_size=40`);
+    const records = Array.isArray(log?.records) ? log.records : [];
+    console.log(`\n== the bot's own run log (${records.length} of ${log?.total ?? "?"} rows)`);
+    if (records.length) {
+      console.log(`   fields: ${Object.keys(records[0]).join(", ")}`);
+    }
+    const reasons = new Map();
+    for (const record of records.slice(0, 20)) {
+      for (const entry of record.skipReasons || record.reasons || record.rejections || []) {
+        const key = String(entry?.reason ?? entry?.label ?? entry ?? "");
+        const count = num(entry?.count) ?? 1;
+        if (key) reasons.set(key, (reasons.get(key) || 0) + count);
+      }
+    }
+    for (const [reason, count] of [...reasons].sort((left, right) => right[1] - left[1]).slice(0, 12)) {
+      console.log(`   ${String(count).padStart(5)}x  ${reason.slice(0, 110)}`);
+    }
+    if (!reasons.size && records.length) {
+      // The shape is printed rather than the absence reported, so the next run reads a
+      // field name instead of trying another one.
+      console.log(`   no skip reasons on these rows; newest row: ${JSON.stringify(records[0]).slice(0, 500)}`);
+    }
+  } catch (error) {
+    console.log(`\n== the bot's own run log: could not read (${String(error.message).slice(0, 200)})`);
+  }
 
   const [watch, hits] = await Promise.all([
     json(`api.php?action=dip-entry-watch&t=${Date.now()}`).catch((error) => ({ error: error.message })),
