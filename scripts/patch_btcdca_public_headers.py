@@ -90,6 +90,15 @@ def patch_html(html: str) -> tuple[str, int]:
     # Keep the surrounding header and replace the complete original nav once.
     # NAV already contains its closing tag, so do not append the old closing tag.
     html, nav_replacements = header_pattern.subn(lambda match: match.group(1).split("<nav", 1)[0] + NAV, html, count=1)
+    # Normalize files already touched by an earlier deployment. This only removes
+    # an immediately duplicated closing tag belonging to the managed public nav.
+    html = re.sub(
+        r'(<nav\s+class=["\']btcdca-public-nav["\'][\s\S]*?</nav>)\s*</nav>',
+        r'\1',
+        html,
+        count=1,
+        flags=re.IGNORECASE,
+    )
     html = re.sub(r'(?<=src=["\'])assets/img/BDCA_white\.png', "/assets/img/BDCA_white.png", html)
     html = re.sub(
         r'<a\b[^>]*href=["\'][^"\']*btc-dca-(?:binance|coinmate|okx)-how-to-set-up-api-key/[^"\']*["\'][^>]*>\s*API setup guides\s*</a>',
