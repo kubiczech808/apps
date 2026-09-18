@@ -761,6 +761,120 @@ function trading_storage_compact_empty_tables(PDO $pdo): array
     return trading_storage_table_stats($pdo);
 }
 
+/**
+ * What an observation row is actually made OF, field by field, and what it would weigh if it
+ * kept only what anything reads.
+ *
+ * Read-only: it samples payloads, decodes them in memory and writes nothing.
+ *
+ * Reported, with the database at 815 MB and still climbing: "velikost databaze je prilis
+ * velika a stale dale narusta velkou rychlosti". Already measured and already ruled out:
+ * fragmentation (4% free), compression (the payloads are packed, a re-pack saves nothing),
+ * and sheer row count (224 000 rows is not millions). What is left is the size of a row --
+ * 2.8 kB of it -- and that has never been looked inside.
+ *
+ * So this opens it. Per top-level field: how many sampled rows carry it and how many bytes
+ * it costs across them, ranked. Beside that, the size of the same rows projected onto the
+ * fields the statistics actually read -- the entry quote, the settlement, the tags, the
+ * dates, the entry book, the volume and the identifiers. The difference between those two
+ * numbers is what slimming would return, stated before anything is changed.
+ *
+ * Sampled from BOTH ends of the key space rather than the first N rows. The first N share a
+ * key prefix, which on a hash key means an arbitrary but CORRELATED slice -- and a sample
+ * that is accidentally all one market type would answer a different question than the one
+ * asked.
+ */
+function trading_storage_observation_payload_anatomy(PDO $pdo, int $sampleLimit = 200): array
+{
+    trading_storage_bootstrap($pdo);
+    $sampleLimit = max(10, min(1000, $sampleLimit));
+    $half = (int) max(5, floor($sampleLimit / 2));
+
+    // The fields anything actually reads. Everything else in a row is carried and never
+    // consulted, which is the claim this function exists to test.
+    $keep = [
+        'tokenId', 'firstTokenId', 'eventSlug', 'slug', 'outcome', 'firstOutcome',
+        'firstMarketProbability', 'marketProbability', 'finalOutcomePrice',
+        'firstPolymarketTags', 'polymarketTags',
+        'endDate', 'resolutionEndDate', 'firstObservedAt', 'observedAt', 'resolvedAt',
+        'firstSpread', 'firstBestAsk', 'firstBestBid',
+        'volumeUsdc', 'status', 'question', 'id',
+    ];
+    $keepSet = array_fill_keys($keep, true);
+
+    $rows = [];
+    foreach ([
+        'SELECT payload FROM trading_observations WHERE lifecycle = ? ORDER BY updated_at DESC LIMIT ' . $half,
+        'SELECT payload FROM trading_observations WHERE lifecycle = ? ORDER BY updated_at ASC LIMIT ' . $half,
+    ] as $sql) {
+        foreach (['SCRAPED', 'RESOLVED'] as $lifecycle) {
+            $statement = $pdo->prepare($sql);
+            $statement->execute([$lifecycle]);
+            while (($payload = $statement->fetchColumn()) !== false) {
+                if (is_string($payload)) {
+                    $rows[] = $payload;
+                }
+            }
+        }
+    }
+
+    $fields = [];
+    $sampled = 0;
+    $storedBytes = 0;
+    $decodedBytes = 0;
+    $keptBytes = 0;
+    foreach ($rows as $payload) {
+        $storedBytes += strlen($payload);
+        $decoded = trading_storage_unpack($payload);
+        if (!is_array($decoded)) {
+            continue;
+        }
+        $sampled++;
+        $decodedBytes += strlen((string) json_encode($decoded));
+        $projection = [];
+        foreach ($decoded as $field => $value) {
+            // The cost of a field is its key plus its encoded value, which is what removing
+            // it would actually return.
+            $cost = strlen((string) $field) + 3 + strlen((string) json_encode($value));
+            if (!isset($fields[$field])) {
+                $fields[$field] = ['rows' => 0, 'bytes' => 0];
+            }
+            $fields[$field]['rows'] += 1;
+            $fields[$field]['bytes'] += $cost;
+            if (isset($keepSet[$field])) {
+                $projection[$field] = $value;
+            }
+        }
+        $keptBytes += strlen((string) json_encode($projection));
+    }
+
+    uasort($fields, static fn (array $left, array $right): int => $right['bytes'] <=> $left['bytes']);
+    $ranked = [];
+    foreach (array_slice($fields, 0, 30, true) as $field => $stats) {
+        $ranked[] = [
+            'field' => $field,
+            'rows' => $stats['rows'],
+            'bytes' => $stats['bytes'],
+            'bytesPerRow' => $sampled > 0 ? (int) round($stats['bytes'] / $sampled) : 0,
+            'read' => isset($keepSet[$field]),
+        ];
+    }
+
+    return [
+        'sampledRows' => $sampled,
+        'storedBytes' => $storedBytes,
+        'decodedBytes' => $decodedBytes,
+        'keptBytes' => $keptBytes,
+        'storedBytesPerRow' => $sampled > 0 ? (int) round($storedBytes / $sampled) : 0,
+        'keptBytesPerRow' => $sampled > 0 ? (int) round($keptBytes / $sampled) : 0,
+        // What the packed row would weigh if it held only the read fields, which is the
+        // number the table's size scales with -- the stored column is packed, not raw.
+        'keptShare' => $decodedBytes > 0 ? round($keptBytes / $decodedBytes, 4) : null,
+        'fields' => $ranked,
+        'readFields' => $keep,
+    ];
+}
+
 function trading_storage_compression_preview(PDO $pdo, int $sampleLimit = 160): array
 {
     trading_storage_bootstrap($pdo);

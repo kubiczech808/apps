@@ -7184,6 +7184,19 @@ try {
         // Read-only. What the database already holds for each recent market, so the mirror
         // can skip the rows that have not materially changed. See
         // trading_storage_observation_fingerprints.
+        // Read-only. What an observation row is made of, field by field, and what it
+        // would weigh holding only what anything reads. See
+        // trading_storage_observation_payload_anatomy.
+        if ($operation === 'payload-anatomy') {
+            respond([
+                'ok' => true,
+                'operation' => 'payload-anatomy',
+                'anatomy' => trading_storage_observation_payload_anatomy(
+                    $pdo,
+                    (int) ($storageRequest['sample'] ?? 200),
+                ),
+            ]);
+        }
         if ($operation === 'observation-fingerprints') {
             respond([
                 'ok' => true,

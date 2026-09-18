@@ -121,3 +121,35 @@ if not body:
     print(f"   no preview available: {json.dumps(preview)[:300]}")
 else:
     print(f"   {json.dumps(body, indent=2)[:2000]}")
+
+# 4. What a row is made OF. The size question is not "how many rows" -- 224 000 is not
+#    millions -- it is 2.8 kB each, and that has never been opened.
+print("\n== what an observation row is made of")
+report = admin("payload-anatomy", {"sample": 200})
+anatomy = report.get("anatomy") or {}
+if not anatomy:
+    print(f"   could not read: {json.dumps(report)[:400]}")
+else:
+    sampled = int(anatomy.get("sampledRows") or 0)
+    print(f"   sampled {sampled} row(s) from both ends of the archive")
+    print(f"   stored (packed) per row   : {int(anatomy.get('storedBytesPerRow') or 0):,} bytes")
+    print(f"   decoded per row           : "
+          f"{int((anatomy.get('decodedBytes') or 0) / max(1, sampled)):,} bytes")
+    print(f"   if it held only what is read: {int(anatomy.get('keptBytesPerRow') or 0):,} bytes"
+          f"  ({(anatomy.get('keptShare') or 0) * 100:.0f}% of the decoded row)")
+    print("\n   field                          rows    bytes/row   read?")
+    for row in (anatomy.get("fields") or [])[:18]:
+        print(f"   {str(row.get('field'))[:28]:<30}{int(row.get('rows') or 0):>5}"
+              f"{int(row.get('bytesPerRow') or 0):>12}   {'yes' if row.get('read') else 'NO'}")
+
+    # The projection, stated in the units the hosting bills in.
+    share = anatomy.get("keptShare")
+    if share:
+        observations_mb = None
+        for row in (footprint.get("tables") or []):
+            if row.get("table") == "trading_observations":
+                observations_mb = int(row.get("totalBytes") or 0) / 1048576
+        if observations_mb:
+            print(f"\n   trading_observations is {observations_mb:.0f} MB. Holding only the read")
+            print(f"   fields would put it near {observations_mb * share:.0f} MB -- a saving of about")
+            print(f"   {observations_mb * (1 - share):.0f} MB, without deleting a single row.")
