@@ -87,22 +87,39 @@ async function main() {
   // The rows themselves. The resolved archive is what the endpoint streams, so this reads
   // the same segment rather than a summary of it.
   console.log("\n== the resolved rows the finder counts");
-  const state = await json(`api.php?action=state&target=paper&summary=scraped&t=${Date.now()}`);
-  const manifest = state?.stateSegments || {};
-  let rows = Array.isArray(state?.resolvedMarketObservations) ? state.resolvedMarketObservations : [];
-  if (!rows.length && manifest.resolvedObservations?.file) {
+  // The resolved archive arrives MERGED INTO marketObservations, not under a field of its
+  // own: api.php's segment handler appends the resolved rows to that array. The first
+  // version asked summary=scraped and looked for resolvedMarketObservations, got neither,
+  // and reported "0 resolved rows" over a healthy endpoint -- a probe reading the wrong
+  // door and calling the room empty.
+  let rows = [];
+  let usedPath = null;
+  for (const path of [
+    `api.php?action=state&target=paper&segments=resolvedObservations&t=${Date.now()}`,
+    `api.php?action=state&target=paper&segments=resolvedRecent&t=${Date.now()}`,
+  ]) {
     try {
-      const segment = await json(`data/${manifest.resolvedObservations.file}`);
-      rows = Array.isArray(segment?.resolvedMarketObservations) ? segment.resolvedMarketObservations : [];
+      const payload = await json(path);
+      const merged = [
+        ...(Array.isArray(payload?.resolvedMarketObservations) ? payload.resolvedMarketObservations : []),
+        ...(Array.isArray(payload?.marketObservations) ? payload.marketObservations : []),
+      ];
+      const resolved = merged.filter((row) => row
+        && (String(row.status || row.selectionStatus || "").toUpperCase() === "RESOLVED"
+          || row.finalOutcomePrice !== undefined));
+      console.log(`   ${path.split("segments=")[1].split("&")[0]}: ${merged.length} row(s), `
+        + `${resolved.length} resolved`);
+      if (resolved.length > rows.length) {
+        rows = resolved;
+        usedPath = path;
+      }
     } catch (error) {
-      console.log(`   could not read the resolved segment: ${error.message}`);
+      console.log(`   ${path.slice(0, 70)}: ${error.message.slice(0, 90)}`);
     }
   }
-  console.log(`   ${rows.length} resolved row(s) readable`
-    + `${rows.length ? "" : " -- the audit below has nothing to work with"}`);
+  console.log(`   using ${usedPath ? usedPath.split("segments=")[1].split("&")[0] : "nothing"}: ${rows.length} resolved row(s)`);
   if (!rows.length) {
-    console.log(`   (state keys: ${Object.keys(state || {}).slice(0, 14).join(", ")})`);
-    console.log(`   (segments: ${Object.keys(manifest).join(", ")})`);
+    console.log("   nothing to audit");
     return;
   }
 
