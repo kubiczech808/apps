@@ -94,30 +94,67 @@ async function main() {
   // door and calling the room empty.
   let rows = [];
   let usedPath = null;
-  for (const path of [
-    `api.php?action=state&target=paper&segments=resolvedObservations&t=${Date.now()}`,
-    `api.php?action=state&target=paper&segments=resolvedRecent&t=${Date.now()}`,
-  ]) {
-    try {
-      const payload = await json(path);
-      const merged = [
-        ...(Array.isArray(payload?.resolvedMarketObservations) ? payload.resolvedMarketObservations : []),
-        ...(Array.isArray(payload?.marketObservations) ? payload.marketObservations : []),
-      ];
-      const resolved = merged.filter((row) => row
-        && (String(row.status || row.selectionStatus || "").toUpperCase() === "RESOLVED"
-          || row.finalOutcomePrice !== undefined));
-      console.log(`   ${path.split("segments=")[1].split("&")[0]}: ${merged.length} row(s), `
-        + `${resolved.length} resolved`);
-      if (resolved.length > rows.length) {
-        rows = resolved;
-        usedPath = path;
+
+  // The segment files FIRST, fetched as static files exactly as the paper bot fetches them.
+  // Going through PHP for the catalogue is what the bot deliberately avoids, and on this
+  // hosting both segment endpoints currently answer 500 -- so a probe that only knew the
+  // endpoint reported "nothing to audit" twice over an archive that is sitting right there.
+  try {
+    const core = await json(`api.php?action=state&target=paper&summary=dashboard&t=${Date.now()}`);
+    const manifest = core?.stateSegments || {};
+    console.log(`   manifest names ${Object.keys(manifest).length} segment(s)`);
+    for (const name of ["resolvedObservations", "resolvedRecent", "observations"]) {
+      const file = manifest?.[name]?.file;
+      if (!file) continue;
+      try {
+        const segment = await json(`data/${file}?t=${Date.now()}`);
+        const merged = [
+          ...(Array.isArray(segment?.resolvedMarketObservations) ? segment.resolvedMarketObservations : []),
+          ...(Array.isArray(segment?.marketObservations) ? segment.marketObservations : []),
+        ];
+        const resolved = merged.filter((row) => row
+          && (String(row.status || row.selectionStatus || "").toUpperCase() === "RESOLVED"
+            || row.finalOutcomePrice !== undefined));
+        console.log(`   data/${file}: ${merged.length} row(s), ${resolved.length} resolved`);
+        if (resolved.length > rows.length) {
+          rows = resolved;
+          usedPath = `data/${file}`;
+        }
+      } catch (error) {
+        console.log(`   data/${file}: ${String(error.message).slice(0, 160)}`);
       }
-    } catch (error) {
-      console.log(`   ${path.slice(0, 70)}: ${error.message.slice(0, 90)}`);
+    }
+  } catch (error) {
+    console.log(`   could not read the manifest: ${String(error.message).slice(0, 200)}`);
+  }
+
+  // The endpoints, still tried, because their failure is itself worth reporting: the
+  // dashboard reads them and they are answering 500 on the file path while the database
+  // path answers 200 for the same request.
+  if (!rows.length) {
+    for (const path of [
+      `api.php?action=state&target=paper&segments=resolvedObservations&t=${Date.now()}`,
+      `api.php?action=state&target=paper&segments=resolvedRecent&t=${Date.now()}`,
+    ]) {
+      try {
+        const payload = await json(path);
+        const merged = [
+          ...(Array.isArray(payload?.resolvedMarketObservations) ? payload.resolvedMarketObservations : []),
+          ...(Array.isArray(payload?.marketObservations) ? payload.marketObservations : []),
+        ];
+        const resolved = merged.filter((row) => row
+          && (String(row.status || row.selectionStatus || "").toUpperCase() === "RESOLVED"
+            || row.finalOutcomePrice !== undefined));
+        console.log(`   ${path.split("segments=")[1].split("&")[0]}: ${merged.length} row(s), ${resolved.length} resolved`);
+        if (resolved.length > rows.length) { rows = resolved; usedPath = path; }
+      } catch (error) {
+        // Printed in full, not truncated to 90 characters: the reason a 500 gives is the
+        // finding, and the last run cut it off exactly where it started to say something.
+        console.log(`   ${path.split("segments=")[1].split("&")[0]} FAILED: ${String(error.message).slice(0, 500)}`);
+      }
     }
   }
-  console.log(`   using ${usedPath ? usedPath.split("segments=")[1].split("&")[0] : "nothing"}: ${rows.length} resolved row(s)`);
+  console.log(`   using ${usedPath || "nothing"}: ${rows.length} resolved row(s)`);
   if (!rows.length) {
     console.log("   nothing to audit");
     return;
