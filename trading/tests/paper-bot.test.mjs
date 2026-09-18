@@ -3863,7 +3863,15 @@ test("Polymarket probability threshold uses the executable CLOB entry, not a sta
   assert.ok(result.reasons.some((reason) => reason.includes("Polymarket probability 59.0% below 75.0%")));
 });
 
-test("portfolio market type: Yes/No and multichoice use the same three-value filter as statistics", async () => {
+// Rewritten when market type stopped judging candidates: "odeber z logiky i z UI posouzeni
+// parametru Market type - napriklad All markets, Min net profit". What this test defended
+// was that ONE classification was used everywhere -- the portfolio filter and the statistics
+// had disagreed about the same market, which is what the three-value field was introduced to
+// end. The setting is still stored and the statistics still classify, so that property is
+// still checked; what is checked instead of the filter is that the filter is GONE from every
+// side at once. Half a removal is the same fault under a new name: the shortlist offering
+// what execution then rejects.
+test("portfolio market type: it no longer judges a candidate, on any side", async () => {
   const binaryStrategy = {
     ...bot.PAPER_STRATEGIES.conservative,
     probabilitySource: "polymarket",
@@ -3893,11 +3901,17 @@ test("portfolio market type: Yes/No and multichoice use the same three-value fil
   assert.equal(bot.portfolioFilterResult(candidate, binaryStrategy).eligible, true);
   assert.equal(bot.strategyEligibleCandidates([candidate], binaryStrategy).length, 1);
 
+  // A binary market against a portfolio configured for multi-outcome: this used to be
+  // rejected, and must now be accepted, with no reason mentioning market type at all.
   const multichoiceStrategy = { ...binaryStrategy, marketType: "multi", requireMostProbableOutcome: true };
   const mismatch = bot.portfolioFilterResult(candidate, multichoiceStrategy);
-  assert.equal(mismatch.eligible, false);
-  assert.ok(mismatch.reasons.some((reason) => reason.includes("does not match portfolio market type multi")));
-  assert.deepEqual(bot.strategyEligibleCandidates([candidate], multichoiceStrategy), []);
+  assert.equal(mismatch.eligible, true, "market type must no longer reject anything");
+  assert.ok(!mismatch.reasons.some((reason) => /market type/i.test(reason)),
+    `no reason may name a rule that is not applied: ${JSON.stringify(mismatch.reasons)}`);
+  assert.equal(bot.strategyEligibleCandidates([candidate], multichoiceStrategy).length, 1);
+
+  // But the classification itself stays, because the statistics group by it.
+  assert.equal(bot.reportMarketType(candidate), "binary");
 
   const [html, app, paperWorkflow, liveWorkflow, fixedWorkflow, executor] = await Promise.all([
     import("node:fs/promises").then(({ readFile }) => readFile(new URL("../index.html", import.meta.url), "utf8")),
@@ -3907,15 +3921,19 @@ test("portfolio market type: Yes/No and multichoice use the same three-value fil
     import("node:fs/promises").then(({ readFile }) => readFile(new URL("../../.github/workflows/trading-live-5050.yml", import.meta.url), "utf8")),
     import("node:fs/promises").then(({ readFile }) => readFile(new URL("../tools/live-order-executor.mjs", import.meta.url), "utf8")),
   ]);
-  assert.match(html, /data-portfolio-market-type/);
+  // The control is gone from the form, and with it the row on the card.
+  assert.ok(!html.includes("data-portfolio-market-type"),
+    "the market type control must be gone from the parameter form");
+  assert.ok(!html.includes("data-min-net-yield"),
+    "and so must the minimum net profit control");
   // The standalone Over/Under checkbox is gone: it duplicated one of the seven shapes in
   // the group directly below it. Over/Under is now that group's first option.
   assert.ok(!html.includes("data-exclude-over-under-markets"),
     "the standalone Over/Under switch must not come back beside the shape it duplicates");
   assert.match(html, /data-exclude-market-shape="over-under"/);
-  assert.match(html, /<option value="binary">Yes\/No<\/option>/);
   assert.ok(!html.includes("Only multichoice events"));
-  assert.match(app, /market type .* does not match/i);
+  assert.ok(!/market type .* does not match/i.test(app),
+    "the browser must not offer a rejection reason for a rule it does not apply");
   assert.match(paperWorkflow, /_MARKET_TYPE/);
   assert.match(paperWorkflow, /_EXCLUDE_OVER_UNDER_MARKETS/);
   assert.match(liveWorkflow, /"LIVE_MARKET_TYPE": live\.get\("marketType"\)/);
@@ -3928,7 +3946,17 @@ test("portfolio market type: Yes/No and multichoice use the same three-value fil
   // control away without this would have removed the only live shape filter there was.
   assert.match(liveWorkflow, /"LIVE_EXCLUDED_MARKET_SHAPES"/);
   assert.match(fixedWorkflow, /"LIVE_EXCLUDED_MARKET_SHAPES"/);
-  assert.match(functionSource(executor, "prefilterLiveCandidate"), /PORTFOLIO_MARKET_TYPE !== "all"/);
+  assert.ok(!/PORTFOLIO_MARKET_TYPE !== "all"/.test(functionSource(executor, "prefilterLiveCandidate")),
+    "the live shortlist must not filter on market type either");
+  // And neither may the revalidation that runs after it. Removing one and not the other is
+  // how a shortlist comes to offer what execution then refuses.
+  // Matched on the rejection sites themselves rather than on the phrase: the phrase also
+  // appears in a comment recording the fault that made this classifier agree with the other
+  // two in the first place, and that history is worth more than a tidier regex.
+  assert.ok(!/rejectReasons: \[`current market type/.test(executor),
+    "the revalidation must not refuse a re-checked market on its type");
+  assert.ok(!/reasons\.push\(`market type/.test(executor),
+    "and the shortlist must not offer it as a reason");
   // One gate for every shape, and it is the shape gate: reading the legacy flag here again
   // is what made the same restriction two switches that could disagree.
   assert.match(functionSource(executor, "prefilterLiveCandidate"), /excludedMarketShape\(item\)/);
@@ -4731,8 +4759,10 @@ test("5050: the order price is a portfolio setting, not only a dispatch input", 
   assert.match(app, /els\.fixedEntryRows\?\.forEach\(\(row\) => row\.toggleAttribute\("hidden", !isFixedEntryMode\(mode\)\)\)/);
   // Terse now -- the value is the price, and what it means is the row's name. What this
   // defends is that 5050's card states its configured entry price at all.
-  assert.match(app, /\["Order price", isFixedEntryMode\(\)\n\s+\? percent\(normalizeFixedEntryPrice\(config\.fixedEntryPrice\)\)/,
-    "the rules card must state it");
+  // The rules card no longer states it -- "odeber pouze z UI ale nech funkcni ... Order
+  // price" -- so what must remain true is that the configured price still reaches the bid.
+  assert.ok(!/\["Order price",/.test(app), "the card must not carry a row for it any more");
+  assert.match(app, /normalizeFixedEntryPrice\(/, "and the setting is still normalised and saved");
 
   // The saved value has to actually govern the run, or the dashboard and the bids
   // would disagree. A dispatch input overrides it for one run and is blank by

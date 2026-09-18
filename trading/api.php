@@ -2359,14 +2359,10 @@ function execution_scope_matches_observation(array $item, array $config): bool
     if (!observation_spread_is_tradable($item, true)) {
         return false;
     }
-    $minimumYield = normalize_net_yield_value($config['minNetYield'] ?? null, 0.0);
-    if (is_numeric($item['netYield'] ?? null) && (float) $item['netYield'] < $minimumYield) {
-        return false;
-    }
-    $marketType = normalize_portfolio_market_type_value($config['marketType'] ?? null, false);
-    if ($marketType !== 'all' && observation_market_type($item) !== $marketType) {
-        return false;
-    }
+    // Market type and the net-profit floor no longer judge a candidate. Asked for: "odeber
+    // z logiky i z UI posouzeni parametru Market type - napriklad All markets, Min net
+    // profit". Both stay in the stored config, so an archived portfolio still reads back the
+    // rules it was traded under, and neither is applied here or shown on the card.
     // One gate for every shape, over-under included. excludeOverUnderMarkets used to be
     // checked separately right above the shape list, duplicating exactly one of the seven
     // shapes, so the same restriction had two switches that could disagree.
@@ -4212,7 +4208,11 @@ function normalize_strategy_config(array $input, array $defaults): array
     // locked for all of it. Selling one tick below pays about a cent a share to get it back
     // now. 0 means off, matching stopLossRiskMultiplier's idiom.
     $settlementCloseBid = normalize_settlement_close_bid_value(
-        $input['settlementCloseBid'] ?? ($defaults['settlementCloseBid'] ?? null)
+        // Same rule as the row path: absent falls back to the default, an explicit value
+        // (including 0, meaning off) is honoured.
+        array_key_exists('settlementCloseBid', $input)
+            ? $input['settlementCloseBid']
+            : ($defaults['settlementCloseBid'] ?? DEFAULT_SETTLEMENT_CLOSE_BID)
     );
     $minProbability = normalize_probability_value($input['minProbability'] ?? null, (float) $defaults['minProbability']);
     $maxProbability = normalize_optional_probability_value($input['maxProbability'] ?? ($defaults['maxProbability'] ?? null));
@@ -5595,7 +5595,15 @@ function live_stop_loss_policy_config(array $config, string $portfolioId, ?float
     // Two independent reasons to watch a position, and either one is enough. Requiring a
     // stop loss here would mean a portfolio that only wants its settled positions closed
     // early was never watched at all -- the worker only ever looks at what this names.
-    $settlementCloseBid = normalize_settlement_close_bid_value($row['settlementCloseBid'] ?? null);
+    // Absent means the default, not off. Asked for: "nastav close at certainity na 99.9 by
+    // default" -- and it already WAS the default in every config template, but a row that
+    // simply has no such key fell through to 0 here, which reads as off. A portfolio created
+    // without touching the setting therefore shipped with it disabled while the default said
+    // 99.9%. An explicit 0 still means off, which is the distinction ?? cannot make on its
+    // own once the normaliser has turned both into the same number.
+    $settlementCloseBid = array_key_exists('settlementCloseBid', $row)
+        ? normalize_settlement_close_bid_value($row['settlementCloseBid'])
+        : DEFAULT_SETTLEMENT_CLOSE_BID;
     $probabilityFloor = normalize_stop_loss_probability_floor_value($row['stopLossProbabilityFloor'] ?? null);
     // A third independent reason to watch a position. A portfolio that sets only this one
     // still has a stop, and requiring one of the other two here would leave it unwatched --

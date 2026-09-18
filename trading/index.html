@@ -484,11 +484,6 @@
           <strong data-min-liquidity-label>none</strong>
         </label>
         <label class="parameter-control">
-          <span>Minimum net profit after fees</span>
-          <input type="number" min="0" max="1000" step="0.1" value="0.0" data-min-net-yield>
-          <strong data-min-net-yield-label>0.0%</strong>
-        </label>
-        <label class="parameter-control">
           <span>Execution trigger</span>
           <select data-execution-trigger>
             <option value="cron">Scheduled cron</option>
@@ -586,16 +581,7 @@
           </select>
           <strong data-execution-cron-minutes-label>1 hour</strong>
         </label>
-        <label class="parameter-control">
-          <span>Market type</span>
-          <select data-portfolio-market-type>
-            <option value="all">All markets</option>
-            <option value="binary">Yes/No</option>
-            <option value="multi">Multi-outcome</option>
-          </select>
-          <strong data-portfolio-market-type-label>All markets</strong>
-        </label>
-        <div class="market-shape-filter" title="A market's SHAPE is how its price moves: whether it can walk down to a stop loss or only jump straight past it. An over/under, a draw at halftime, an exact score, a set or map leg all sit near the entry price while the event runs and go to 0 the instant it ends, so a stop cannot protect a position there at any multiplier or floor. Excluding a shape removes it from candidates before it can arm a stop that structurally cannot reach it. This is a different question from Market type above, which is how many outcomes the market has: an over/under is Yes/No AND a jump, while a two-team match is Yes/No AND a walk. Nothing is excluded by default -- on measured results these shapes are worth excluding when the portfolio relies on a stop loss, and worth keeping when it does not.">
+        <div class="market-shape-filter" title="A market's SHAPE is how its price moves: whether it can walk down to a stop loss or only jump straight past it. An over/under, a draw at halftime, an exact score, a set or map leg all sit near the entry price while the event runs and go to 0 the instant it ends, so a stop cannot protect a position there at any multiplier or floor. Excluding a shape removes it from candidates before it can arm a stop that structurally cannot reach it. Nothing is excluded by default -- on measured results these shapes are worth excluding when the portfolio relies on a stop loss, and worth keeping when it does not.">
           <span class="market-shape-filter-label">Exclude market shapes</span>
           <div class="market-shape-filter-options">
             <label class="parameter-control order-mode-toggle market-shape-option">

@@ -4912,8 +4912,9 @@ function observationMatchesActiveLiveConfig(item, config) {
   if (liveEventMode === "only" && !running) return false;
   const minimumVolume = Number(config?.minLiquidityUsdc);
   if (Number.isFinite(minimumVolume) && minimumVolume > 0 && rowVolumeUsdc(item) < minimumVolume) return false;
-  const marketType = normalizePortfolioMarketType(config?.marketType, config?.requireMostProbableOutcome === true);
-  if (marketType !== "all" && reportMarketType(item) !== marketType) return false;
+  // Market type no longer judges a candidate: "odeber z logiky i z UI posouzeni parametru
+  // Market type - napriklad All markets, Min net profit". The setting is still stored, so an
+  // archived portfolio reads back the rules it was traded under; it is simply not applied.
   // One gate for every shape, over-under included -- it was checked separately on the line
   // above, duplicating one of the seven.
   if (marketShapeExclusionSet(config?.excludedMarketShapes, config?.excludeOverUnderMarkets === true)
@@ -7993,15 +7994,10 @@ function strategyEligibleCandidates(eligible, strategy) {
     if (!candidateSpreadIsTradable(item)) return false;
     const minLiquidityUsdc = Number(strategy.minLiquidityUsdc);
     if (Number.isFinite(minLiquidityUsdc) && rowVolumeUsdc(item) < minLiquidityUsdc) return false;
-    const minimumNetYield = Math.max(0, Number(strategy.minNetYield) || 0);
-    const candidateNetYield = netYieldAfterFees(item, strategy);
-    if (!Number.isFinite(candidateNetYield) || candidateNetYield < minimumNetYield) return false;
-    // Classified from the row, never read off item.marketType. A stored label was written
-    // by whichever rule was live when the row was scraped, and the statistics always
-    // recompute -- preferring the stored one is how a portfolio filter and the statistics
-    // came to disagree about the same market.
-    const marketType = reportMarketType(item);
-    if (requiredMarketType !== "all" && marketType !== requiredMarketType) return false;
+    // Market type and the net-profit floor no longer judge a candidate. Asked for: "odeber
+    // z logiky i z UI posouzeni parametru Market type - napriklad All markets, Min net
+    // profit". Both settings stay in the stored config so archived portfolios still read
+    // back the rules they were traded under, and neither is applied or shown any more.
     // Folded here rather than trusting the normalizer to have done it. These filters are
     // called with raw strategy objects too -- a stored row, a test fixture, a portfolio
     // saved before the merge -- and reading a pre-built Set that may not exist is how a
@@ -8341,13 +8337,9 @@ function portfolioFilterResult(item, strategy) {
       ? "no bid/ask spread has been recorded for this market yet"
       : `bid/ask spread ${(spread * 100).toFixed(1)} points exceeds ${(MAX_TRADABLE_SPREAD * 100).toFixed(1)}`);
   }
-  const candidateNetYield = netYieldAfterFees(item, strategy);
-  if (!Number.isFinite(candidateNetYield) || candidateNetYield < minNetYield) {
-    reasons.push(`net profit ${Number.isFinite(candidateNetYield) ? `${(candidateNetYield * 100).toFixed(1)}%` : "-"} below ${(minNetYield * 100).toFixed(1)}% after fees`);
-  }
-  if (requiredMarketType !== "all" && marketType !== requiredMarketType) {
-    reasons.push(`market type ${marketType || "-"} does not match portfolio market type ${requiredMarketType}`);
-  }
+  // Neither the net-profit floor nor the market type rejects a candidate any more, so
+  // neither produces a reason. A reason for a rule that is not applied is worse than no
+  // reason: it names a rejection that did not happen.
   {
     // Folded here for the same reason as the shortlist filter above: a raw strategy may
     // carry only the retired excludeOverUnderMarkets flag and no Set at all.

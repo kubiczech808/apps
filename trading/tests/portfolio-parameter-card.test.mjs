@@ -22,6 +22,7 @@
 
 import assert from "node:assert/strict";
 import test from "node:test";
+import { readFileSync } from "node:fs";
 import { buildRows, APP, extractFunction, constant, API } from "./portfolio-parameter-card-harness.mjs";
 
 const CONFIG = {
@@ -53,12 +54,13 @@ const valueOf = (rows, label) => rows.find(([name]) => name === label)?.[1];
 
 test("every parameter has a row, whether it is set or not", () => {
   // The set, named, so adding a setting to the form and forgetting the card fails here.
+  // In the order the parameter FORM asks for them: the card and the form are read one
+  // after the other, and two different orders make that a search every time.
   const expected = [
-    "Probability", "Stake", "Resolution", "Market type", "Excluded shapes",
-    "Included tags", "Excluded tags", "Dip entry", "Priority", "Volume",
-    "Min net profit", "Stop loss", "Stop floor", "Reverse after stop",
-    "Close at certainty", "Rotation", "Order mode", "Execution", "Automation",
-    "Excluded markets",
+    "Probability", "Stake", "Resolution", "Priority", "Volume", "Execution",
+    "Rotation", "Close at certainty", "Dip entry", "Stop floor", "Stop loss",
+    "Reverse after stop", "Included tags", "Excluded tags", "Excluded shapes",
+    "Order mode",
   ];
   assert.deepEqual(rowsFor().map(([label]) => label), expected);
 
@@ -68,7 +70,7 @@ test("every parameter has a row, whether it is set or not", () => {
   const off = rowsFor({
     excludedMarketShapes: [], includeOnlyMarketTags: [], excludedMarketTags: [],
     stopLossRiskMultiplier: 0, stopLossProbabilityFloor: null, reverseOnStopLoss: false,
-    settlementCloseBid: null, minLiquidityUsdc: null, excludedCandidateTokenIds: [],
+    settlementCloseBid: null, minLiquidityUsdc: null,
   });
   assert.deepEqual(off.map(([label]) => label), expected);
   assert.equal(valueOf(off, "Stop floor"), "off");
@@ -83,7 +85,6 @@ test("a value is the number, not a sentence about it", () => {
   assert.equal(valueOf(rows, "Probability"), "70.0%–80.0%");
   assert.equal(valueOf(rows, "Stake"), "$5");
   assert.equal(valueOf(rows, "Resolution"), "≤ 19 h + under way");
-  assert.equal(valueOf(rows, "Min net profit"), "1.0%");
   assert.equal(valueOf(rows, "Volume"), "$1,000");
   assert.equal(valueOf(rows, "Stop loss"), "175.0%");
   assert.equal(valueOf(rows, "Stop floor"), "60.0%");
@@ -92,8 +93,6 @@ test("a value is the number, not a sentence about it", () => {
   assert.equal(valueOf(rows, "Rotation"), "off");
   assert.equal(valueOf(rows, "Order mode"), "limit");
   assert.equal(valueOf(rows, "Priority"), "reward/risk");
-  assert.equal(valueOf(rows, "Automation"), "on");
-  assert.equal(valueOf(rows, "Excluded markets"), "2");
 
   // The general rule, so a new row cannot arrive as a paragraph: no value is a sentence.
   for (const [label, value] of rows) {
@@ -146,11 +145,12 @@ test("both cards are built by the one list", () => {
   for (const [name, body] of [["paper", paper], ["live", live]]) {
     assert.match(body, /portfolioParameterRows\(config, \{/, `the ${name} card must use the shared list`);
   }
-  // Only live: several live portfolios share one wallet, so correlated exposure is a
-  // system switch, and the order price comes from the book rather than from a setting.
-  assert.match(live, /\["Order price",/);
-  assert.match(live, /\["Cross-live risk",/);
-  assert.doesNotMatch(paper, /\["Cross-live risk",/);
+  // The one row still only on the live card: 5050's tag filter, which is the only thing
+  // there that says which markets that portfolio will look at at all. The order price and
+  // cross-live risk were taken off by request and are checked in "the settings taken off
+  // the card still work".
+  assert.match(live, /\["Tag filter",/);
+  assert.doesNotMatch(paper, /\["Tag filter",/);
 });
 
 test("the card covers what the server stores", () => {
@@ -158,12 +158,23 @@ test("the card covers what the server stores", () => {
   // portfolio config by api.php, and each has to be visible somewhere on the card -- that is
   // what "vsechny polozky" means, checked against the server rather than against a list
   // maintained here.
+  // Two groups are deliberately absent from this list, for two different reasons.
+  //
+  // marketType and minNetYield no longer JUDGE anything: "odeber z logiky i z UI posouzeni
+  // parametru Market type - napriklad All markets, Min net profit". Both are still
+  // normalised into the stored config so an archived portfolio reads back the rules it was
+  // traded under, but neither filters and neither has a row.
+  //
+  // automationEnabled and excludedCandidateTokenIds still work exactly as before and are
+  // simply not shown: "odeber pouze z UI ale nech funkcni - automation, Cross-live risk,
+  // Order price, Excluded markets". The test below asserts they are still APPLIED, which is
+  // what "nech funkcni" means and what a bare removal from this list would stop checking.
   const settings = [
     "minProbability", "maxProbability", "stakeUsdc", "maxResolutionHours", "settlementCloseBid",
     "stopLossProbabilityFloor", "liveEventMode", "selectionOrder", "minLiquidityUsdc",
-    "minNetYield", "executionTrigger", "executionCronMinutes", "automationEnabled",
-    "autoRotatePositions", "useLimitOrders", "marketType", "excludedMarketShapes",
-    "excludedCandidateTokenIds", "includeOnlyMarketTags", "excludedMarketTags",
+    "executionTrigger", "executionCronMinutes",
+    "autoRotatePositions", "useLimitOrders", "excludedMarketShapes",
+    "includeOnlyMarketTags", "excludedMarketTags",
   ];
   for (const setting of settings) {
     assert.match(API, new RegExp(`'${setting}' =>`), `${setting} must be a stored setting`);
@@ -180,7 +191,6 @@ test("the card covers what the server stores", () => {
       autoRotatePositions: "automaticRotationIsEnabled",
       excludedMarketShapes: "configExcludedMarketShapes",
       stakeUsdc: "normalizeRiskAllocation",
-      minNetYield: "normalizeMinimumNetYield",
       settlementCloseBid: "normalizeSettlementCloseBid",
       stopLossProbabilityFloor: "normalizeStopLossProbabilityFloor",
       minProbability: "normalizeEligibilityThreshold",
@@ -190,11 +200,76 @@ test("the card covers what the server stores", () => {
       executionTrigger: "normalizeExecutionTrigger",
       includeOnlyMarketTags: "normalizeMarketTagList",
       excludedMarketTags: "excludedTags",
-      marketType: "portfolioMarketTypeLabel",
-      excludedCandidateTokenIds: "excludedTokens",
       useLimitOrders: "useLimitOrders",
-      automationEnabled: "automationEnabled",
     }[setting] || setting;
     assert.match(builder, new RegExp(named), `${setting} has no row on the parameter card`);
   }
+});
+
+test("the settings taken off the card still work", () => {
+  // "odeber pouze z UI ale nech funkcni". A setting that stops being shown and quietly
+  // stops being applied is the same bug as one that is shown and ignored, so each of the
+  // four is checked where it is enforced rather than where it used to be displayed.
+  const bot = readFileSync(new URL("../tools/paper-trading-bot.mjs", import.meta.url), "utf8");
+  const executor = readFileSync(new URL("../tools/live-order-executor.mjs", import.meta.url), "utf8");
+
+  // Automation: an automatic run still does nothing while the switch is off.
+  assert.match(API, /'automationEnabled' => \(bool\)/);
+  assert.match(executor, /AUTOMATION_DISABLED/);
+
+  // The per-market exclusion list still drops a token from the shortlist.
+  assert.match(executor, /EXCLUDED_CANDIDATE_TOKEN_IDS\.has\(tokenId\)/);
+  assert.match(API, /'excludedCandidateTokenIds' =>/);
+
+  // 5050 still bids at its configured price, and the live portfolio still takes the book.
+  assert.match(executor, /FIXED_ENTRY_PRICE/);
+
+  // And correlated exposure across the live portfolios is still blocked.
+  assert.match(executor, /CROSS_PORTFOLIO_RISK_DIVERSIFICATION/);
+
+  // None of the four is on the card.
+  const labels = buildRows(CONFIG, { mode: "paper-x" }).map(([label]) => label);
+  for (const gone of ["Automation", "Excluded markets", "Order price", "Cross-live risk"]) {
+    assert.ok(!labels.includes(gone), `${gone} must not be on the card`);
+  }
+  const live = extractFunction(APP, "livePortfolioRuleRows");
+  assert.ok(!live.includes('["Order price"'), "nor on the live card");
+  assert.ok(!live.includes('["Cross-live risk"'));
+});
+
+test("the card is ordered the way the form is", () => {
+  // Checked against the form itself rather than against a list kept here, so moving a
+  // field in index.html and not moving the row fails.
+  const html = readFileSync(new URL("../index.html", import.meta.url), "utf8");
+  // Which form control each card row corresponds to. A row with no control is one the
+  // form cannot change, and there are none of those left on the card.
+  const controlFor = {
+    Probability: "data-eligibility-threshold",
+    Stake: "data-risk-allocation",
+    Resolution: "data-live-event-mode",
+    Priority: "data-selection-order",
+    Volume: "data-min-liquidity",
+    Execution: "data-execution-trigger",
+    Rotation: "data-auto-rotate-positions",
+    "Close at certainty": "data-settlement-close-bid",
+    "Dip entry": "data-dip-entry-group",
+    "Stop floor": "data-stop-loss-probability-floor",
+    "Stop loss": "data-stop-loss-risk-multiplier",
+    "Reverse after stop": "data-stop-loss-reverse-on-trigger",
+    "Included tags": "data-include-only-tags",
+    "Excluded tags": "data-excluded-tags",
+    "Excluded shapes": "data-exclude-market-shape",
+    "Order mode": "data-limit-orders",
+  };
+  const labels = buildRows(CONFIG, { mode: "paper-x" }).map(([label]) => label);
+  const positions = labels.map((label) => {
+    const control = controlFor[label];
+    assert.ok(control, `${label} has no form control named for it`);
+    const at = html.indexOf(control);
+    assert.ok(at > 0, `${control} must exist in the parameter form`);
+    return { label, at };
+  });
+  const sorted = [...positions].sort((left, right) => left.at - right.at).map((row) => row.label);
+  assert.deepEqual(labels, sorted,
+    `the card's order must match the form's, which reads: ${sorted.join(", ")}`);
 });

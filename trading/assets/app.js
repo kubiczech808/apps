@@ -363,8 +363,6 @@ const els = {
   selectionOrderLabel: document.querySelector("[data-selection-order-label]"),
   minLiquidity: document.querySelector("[data-min-liquidity]"),
   minLiquidityLabel: document.querySelector("[data-min-liquidity-label]"),
-  minNetYield: document.querySelector("[data-min-net-yield]"),
-  minNetYieldLabel: document.querySelector("[data-min-net-yield-label]"),
   executionTrigger: document.querySelector("[data-execution-trigger]"),
   executionTriggerLabel: document.querySelector("[data-execution-trigger-label]"),
   autoRotatePositions: document.querySelector("[data-auto-rotate-positions]"),
@@ -386,8 +384,6 @@ const els = {
   excludedTags: document.querySelector("[data-excluded-tags]"),
   excludedTagsLabel: document.querySelector("[data-excluded-tags-label]"),
   excludedTagsRow: document.querySelector("[data-excluded-tags-row]"),
-  portfolioMarketType: document.querySelector("[data-portfolio-market-type]"),
-  portfolioMarketTypeLabel: document.querySelector("[data-portfolio-market-type-label]"),
   marketShapeCheckboxes: document.querySelectorAll("[data-exclude-market-shape]"),
   crossLiveRisk: document.querySelector("[data-cross-live-risk]"),
   capitalStatus: document.querySelector("[data-capital-status]"),
@@ -6465,8 +6461,6 @@ function syncPortfolioParameterControls(configOverride = null, options = {}) {
   if (els.selectionOrderLabel) els.selectionOrderLabel.textContent = selectionOrderLabel(order, config);
   if (els.minLiquidity) els.minLiquidity.value = liquidity == null ? "" : String(liquidity);
   if (els.minLiquidityLabel) els.minLiquidityLabel.textContent = liquidity == null ? "none" : money(liquidity);
-  if (els.minNetYield) els.minNetYield.value = (minNetYield * 100).toFixed(1);
-  if (els.minNetYieldLabel) els.minNetYieldLabel.textContent = percent(minNetYield);
   const trigger = normalizeExecutionTrigger(config.executionTrigger);
   const effectiveTrigger = trigger;
   if (els.executionTrigger) {
@@ -6520,9 +6514,6 @@ function syncPortfolioParameterControls(configOverride = null, options = {}) {
   const excludedTags = normalizeMarketTagList(config.excludedMarketTags);
   syncTagChipField(els.excludedTags, excludedTags);
   if (els.excludedTagsLabel) els.excludedTagsLabel.textContent = excludedTags.length ? excludedTags.join(", ") : "none";
-  const marketType = normalizePortfolioMarketType(config.marketType, config.requireMostProbableOutcome);
-  if (els.portfolioMarketType) els.portfolioMarketType.value = marketType;
-  if (els.portfolioMarketTypeLabel) els.portfolioMarketTypeLabel.textContent = portfolioMarketTypeLabel(marketType);
   if (els.marketShapeCheckboxes) {
     // configExcludedMarketShapes, not the raw field: a portfolio saved before the merge
     // carries its Over/Under restriction in the retired boolean, and rendering the group
@@ -7388,7 +7379,6 @@ function portfolioFormFields() {
     { element: els.dipEntryOpenMax, label: "Dip entry opening band to", unit: "%", min: 1, max: 99, required: dipOn },
     { element: els.settlementCloseBid, label: "Close at certainty", unit: "%", min: 50, max: 99.9, zeroOff: true },
     { element: els.minLiquidity, label: "Minimum liquidity", unit: "USDC", min: 0, max: 100000000 },
-    { element: els.minNetYield, label: "Minimum net profit", unit: "%", min: 0, max: 10000 },
     { element: els.stopLossRiskMultiplier, label: "Stop loss", unit: "%", min: 1, max: 1000, zeroOff: true },
     { element: els.fixedEntryPrice, label: "Fixed entry price", unit: "%", min: 1, max: 99, zeroOff: true },
     { element: els.executionCronMinutes, label: "Cron interval", unit: "min", min: 1, max: 1440, zeroOff: true },
@@ -7543,7 +7533,6 @@ function parameterDraftFromControls(baseDraft = {}) {
   }
   if (els.selectionOrder) draft.selectionOrder = normalizeSelectionOrder(els.selectionOrder.value);
   if (els.minLiquidity) draft.minLiquidityUsdc = normalizeOptionalMoney(els.minLiquidity.value);
-  if (hasValue(els.minNetYield)) draft.minNetYield = normalizeMinimumNetYield(numberValue(els.minNetYield) / 100);
   if (els.executionTrigger) draft.executionTrigger = normalizeExecutionTrigger(els.executionTrigger.value);
   if (els.executionCronMinutes) draft.executionCronMinutes = normalizeExecutionCronMinutes(els.executionCronMinutes.value);
   if (els.autoRotatePositions) draft.autoRotatePositions = Boolean(els.autoRotatePositions.checked);
@@ -7557,11 +7546,6 @@ function parameterDraftFromControls(baseDraft = {}) {
   if (els.fixedEntryTags) draft.allowedMarketTags = normalizeMarketTagList(els.fixedEntryTags.value);
   if (els.includeOnlyTags) draft.includeOnlyMarketTags = normalizeMarketTagList(els.includeOnlyTags.value);
   if (els.excludedTags) draft.excludedMarketTags = normalizeMarketTagList(els.excludedTags.value);
-  if (els.portfolioMarketType) {
-    const marketType = normalizePortfolioMarketType(els.portfolioMarketType.value);
-    draft.marketType = marketType;
-    draft.requireMostProbableOutcome = marketType === "multi";
-  }
   if (els.marketShapeCheckboxes?.length) {
     draft.excludedMarketShapes = [...els.marketShapeCheckboxes]
       .filter((checkbox) => checkbox.checked)
@@ -10314,20 +10298,40 @@ function portfolioParameterRows(config = {}, { mode = null, portfolio = {}, live
   const includeOnly = normalizeMarketTagList(config.includeOnlyMarketTags);
   const excludedTags = normalizeMarketTagList(config.excludedMarketTags);
   const shapes = configExcludedMarketShapes(config);
-  const excludedTokens = Array.isArray(config.excludedCandidateTokenIds) ? config.excludedCandidateTokenIds.length : 0;
   const lower = normalizeEligibilityThreshold(config.minProbability) ?? thresholdFallback ?? 0;
   const upper = normalizeOptionalProbability(config.maxProbability);
   const eventMode = configLiveEventMode(config);
   const horizon = formatHorizonHours(live ? resolutionHoursForMode(mode) : resolutionHoursForMode(mode));
   const stake = normalizeRiskAllocation(config.stakeUsdc) ?? DEFAULT_RISK_ALLOCATION;
 
+  // In the order the parameter FORM asks for them. Asked for: "zaroven se u prehledu
+  // parametru postarej o to, at poradi zaznamu odpovida poradi ve formulari." The card and
+  // the form are read one after the other -- open the card, press edit, change a value --
+  // and two different orders make that a search every time.
   const rows = [
     ["Probability", upper == null ? `≥ ${percent(lower)}` : `${percent(lower)}–${percent(upper)}`],
     ["Stake", money(stake, 0)],
     ["Resolution", eventMode === "only"
       ? "under way only"
       : eventMode === "include" ? `≤ ${horizon} + under way` : `≤ ${horizon}`],
-    ["Market type", portfolioMarketTypeLabel(config.marketType)],
+    ["Priority", config.selectionOrder === "highest_reward_risk_first" ? "reward/risk" : "net yield"],
+    ["Volume", minLiquidity == null ? TERSE_NONE : money(minLiquidity, 0)],
+    ["Execution", normalizeExecutionTrigger(config.executionTrigger) === "cron"
+      ? `every ${executionCronMinutesLabel(config.executionCronMinutes)}`
+      : "after each scrape"],
+    ["Rotation", automaticRotationIsEnabled(config) ? "on" : "off"],
+    ["Close at certainty", closeBid == null ? "off" : probability(closeBid)],
+    // The entry band is the parameter; where the market opened is the rule's own condition
+    // and is the same on every dip portfolio in practice.
+    ["Dip entry", dip.enabled
+      ? (dipEntryRuleFault(dip) ? `not applied — ${dipEntryRuleFault(dip)}`
+        : `${percent(dip.buyMin)}–${percent(dip.buyMax)}`)
+      : "off"],
+    ["Stop floor", floor == null ? "off" : probability(floor)],
+    ["Stop loss", stopMultiplier > 0 ? percent(stopMultiplier) : "off"],
+    ["Reverse after stop", stopLossReverseIsEnabled(config) ? money(5, 0) : "off"],
+    ["Included tags", includeOnly.length ? includeOnly.join(", ") : TERSE_NONE],
+    ["Excluded tags", excludedTags.length ? excludedTags.join(", ") : TERSE_NONE],
     // Every shape excluded is a portfolio that can never take a candidate, and it fails
     // silently. The card says so rather than listing seven labels.
     ["Excluded shapes", shapes.length === 0
@@ -10335,28 +10339,12 @@ function portfolioParameterRows(config = {}, { mode = null, portfolio = {}, live
       : (Object.keys(MARKET_SHAPE_LABELS).every((shape) => shapes.includes(shape))
         ? "all — cannot trade"
         : shapes.map(marketShapeLabel).join(", "))],
-    ["Included tags", includeOnly.length ? includeOnly.join(", ") : TERSE_NONE],
-    ["Excluded tags", excludedTags.length ? excludedTags.join(", ") : TERSE_NONE],
-    // The entry band is the parameter; where the market opened is the rule's own condition
-    // and is the same on every dip portfolio in practice.
-    ["Dip entry", dip.enabled
-      ? (dipEntryRuleFault(dip) ? `not applied — ${dipEntryRuleFault(dip)}`
-        : `${percent(dip.buyMin)}–${percent(dip.buyMax)}`)
-      : "off"],
-    ["Priority", config.selectionOrder === "highest_reward_risk_first" ? "reward/risk" : "net yield"],
-    ["Volume", minLiquidity == null ? TERSE_NONE : money(minLiquidity, 0)],
-    ["Min net profit", percent(normalizeMinimumNetYield(config.minNetYield))],
-    ["Stop loss", stopMultiplier > 0 ? percent(stopMultiplier) : "off"],
-    ["Stop floor", floor == null ? "off" : probability(floor)],
-    ["Reverse after stop", stopLossReverseIsEnabled(config) ? money(5, 0) : "off"],
-    ["Close at certainty", closeBid == null ? "off" : probability(closeBid)],
-    ["Rotation", automaticRotationIsEnabled(config) ? "on" : "off"],
     ["Order mode", config.useLimitOrders ? "limit" : "market"],
-    ["Execution", normalizeExecutionTrigger(config.executionTrigger) === "cron"
-      ? `every ${executionCronMinutesLabel(config.executionCronMinutes)}`
-      : "after each scrape"],
-    ["Automation", config.automationEnabled === false ? "off" : "on"],
-    ["Excluded markets", excludedTokens ? `${excludedTokens}` : TERSE_NONE],
+    // Automation and the per-market exclusion list are deliberately NOT rows. Asked for:
+    // "odeber pouze z UI ale nech funkcni - automation, Cross-live risk, Order price,
+    // Excluded markets (nevidim ho v nastaveni parametru - asi zbytecne tady, mame uz
+    // exclude tags i exclude shapes)". Both still work; the exclusion list in particular
+    // overlaps the tag and shape exclusions that are already on the card.
   ];
   return rows;
 }
@@ -10389,18 +10377,16 @@ function livePortfolioRuleRows() {
     live: true,
     thresholdFallback: currentEligibilityThreshold(),
   });
-  // Both portfolios state their order price. 5050's is a setting; the live portfolio's is
-  // taken from the book, and saying so is what stops the row's absence reading as a
-  // parameter that failed to display -- which is how it was reported.
-  rows.push(["Order price", isFixedEntryMode()
-    ? percent(normalizeFixedEntryPrice(config.fixedEntryPrice))
-    : (config.useLimitOrders === true ? "book — best bid" : "book — market ask")]);
+  // The order price and cross-live risk are deliberately NOT rows: "odeber pouze z UI ale
+  // nech funkcni - automation, Cross-live risk, Order price, Excluded markets". Both still
+  // work -- 5050 still bids at its configured price, the live portfolio still takes the
+  // book, and correlated exposure is still blocked -- neither is on the card.
+  //
+  // 5050's tag filter stays, because it is the only thing on this card that says which
+  // markets that portfolio will look at at all.
   if (isFixedEntryMode()) {
     rows.push(["Tag filter", normalizeMarketTagList(config.allowedMarketTags).join(", ") || TERSE_NONE]);
   }
-  // A live-only setting: several live portfolios share one wallet, so correlated exposure
-  // is a system switch rather than a portfolio one.
-  rows.push(["Cross-live risk", systemConfig().crossLivePortfolioRiskDiversification !== false ? "blocked" : "allowed"]);
   return rows;
 }
 
@@ -10989,10 +10975,8 @@ function portfolioCandidateFilterReasons(item, mode = state.mode) {
   if (minLiquidity != null && liquidity < minLiquidity) {
     reasons.push(`volume ${money(liquidity)} below ${money(minLiquidity)}`);
   }
-  const requiredMarketType = normalizePortfolioMarketType(config.marketType, config.requireMostProbableOutcome);
-  if (requiredMarketType !== "all" && candidateMarketType(item) !== requiredMarketType) {
-    reasons.push(`market type ${portfolioMarketTypeLabel(candidateMarketType(item))} does not match ${portfolioMarketTypeLabel(requiredMarketType)}`);
-  }
+  // Market type no longer judges a candidate, so the browser offers no reason for it
+  // either: a reason naming a rule that is not applied is worse than no reason at all.
   // One gate for every shape, over-under included -- it used to be checked separately
   // immediately above, duplicating one of the seven.
   const excludedShapes = new Set(configExcludedMarketShapes(config));
@@ -16730,22 +16714,6 @@ els.minLiquidity?.addEventListener("input", () => {
   rerenderCurrentDashboard();
 });
 
-els.minNetYield?.addEventListener("input", () => {
-  if (parameterDraftInputIsEmpty(els.minNetYield)) {
-    if (els.minNetYieldLabel) els.minNetYieldLabel.textContent = "-";
-    return;
-  }
-  const value = normalizeMinimumNetYield(Number(els.minNetYield.value) / 100);
-  if (parameterDraftActive()) {
-    state.parameterDraft = { ...state.parameterDraft, minNetYield: value };
-    if (els.minNetYieldLabel) els.minNetYieldLabel.textContent = percent(value);
-    return;
-  }
-  updatePortfolioConfigForMode(state.mode, { minNetYield: value });
-  savePortfolioConfigSoon();
-  syncPortfolioParameterControls();
-  rerenderCurrentDashboard();
-});
 
 els.executionTrigger?.addEventListener("change", () => {
   const value = normalizeExecutionTrigger(els.executionTrigger.value);
@@ -16802,16 +16770,6 @@ document.addEventListener("click", (event) => {
   // Only on the way ON. Switching a portfolio off takes no position and needs no warning.
   if (value && !confirmAutomationEnable(state.mode)) return;
   updatePortfolioConfigForMode(state.mode, { automationEnabled: value });
-  savePortfolioConfigSoon();
-  syncPortfolioParameterControls();
-  rerenderCurrentDashboard();
-});
-
-els.portfolioMarketType?.addEventListener("change", () => {
-  const marketType = normalizePortfolioMarketType(els.portfolioMarketType.value);
-  const updates = { marketType, requireMostProbableOutcome: marketType === "multi" };
-  if (updateParameterDraft(updates)) return;
-  updatePortfolioConfigForMode(state.mode, updates);
   savePortfolioConfigSoon();
   syncPortfolioParameterControls();
   rerenderCurrentDashboard();
@@ -16891,7 +16849,7 @@ els.stopLossRiskMultiplier?.addEventListener("input", () => {
 for (const element of [
   els.eligibilityThreshold, els.maxEligibilityThreshold, els.riskAllocation,
   els.maxResolutionHours, els.stopLossProbabilityFloor, els.dipEntryOpenMin,
-  els.dipEntryOpenMax, els.settlementCloseBid, els.minLiquidity, els.minNetYield,
+  els.dipEntryOpenMax, els.settlementCloseBid, els.minLiquidity,
   els.stopLossRiskMultiplier, els.fixedEntryPrice, els.executionCronMinutes,
 ]) {
   element?.addEventListener("input", () => {

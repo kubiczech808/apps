@@ -1229,9 +1229,7 @@ function prefilterLiveCandidate(item) {
 
   if (!tokenId) reasons.push("missing token id");
   const marketType = candidateMarketType(item);
-  if (PORTFOLIO_MARKET_TYPE !== "all" && marketType !== PORTFOLIO_MARKET_TYPE) {
-    reasons.push(`market type ${marketType} does not match live portfolio market type ${PORTFOLIO_MARKET_TYPE}`);
-  }
+  // Market type no longer judges a candidate, so it produces no rejection reason either.
   const excludedShape = excludedMarketShape(item);
   if (excludedShape) {
     reasons.push(`${excludedShape} market shape is excluded by this live portfolio`);
@@ -1276,9 +1274,7 @@ function prefilterLiveCandidate(item) {
     reasons.push(`${probabilitySourceLabel()} net return ${(returnYield * 100).toFixed(1)}% is non-profitable after fees`);
   }
   const candidateNetYield = netYieldAfterFees(item);
-  if (candidateNetYield == null || candidateNetYield < MIN_NET_YIELD) {
-    reasons.push(`net profit ${candidateNetYield == null ? "-" : `${(candidateNetYield * 100).toFixed(1)}%`} below ${(MIN_NET_YIELD * 100).toFixed(1)}% after fees`);
-  }
+  // The net-profit floor no longer judges a candidate, here or anywhere else.
   const candidateVolume = candidateVolumeUsdc(item);
   if (candidateVolume < MIN_VOLUME_24H) {
     reasons.push(`volume ${candidateVolume.toFixed(2)} USDC below live minimum ${MIN_VOLUME_24H.toFixed(2)} USDC`);
@@ -2891,7 +2887,9 @@ function scoreEconomics({ probability, qualificationProbability, returnYield, ne
     && edge >= OPPORTUNITY_MIN_EDGE
     && returnYield > 0;
   const returnOk = Number.isFinite(returnYield) && returnYield > 0;
-  const netYieldOk = Number.isFinite(netYield) && netYield >= MIN_NET_YIELD;
+  // The net-profit floor no longer judges a candidate. `returnOk` still requires the trade
+  // to be profitable after fees at all -- that is a different question from a configured
+  // minimum, and removing the minimum is not the same as accepting a losing trade.
   const spreadOk = spread != null && spread <= MAX_SPREAD;
   // `minLiquidityUsdc` is a portfolio liquidity floor.  24h volume is useful
   // context but must not substitute for executable order-book liquidity.
@@ -2899,14 +2897,13 @@ function scoreEconomics({ probability, qualificationProbability, returnYield, ne
   const candidateVolume = candidateVolumeUsdc({ volumeUsdc, volume24hr, liquidity });
   const liquidityOk = candidateVolume >= MIN_VOLUME_24H;
   return {
-    eligible: probabilityOk && returnOk && netYieldOk && spreadOk && liquidityOk,
+    eligible: probabilityOk && returnOk && spreadOk && liquidityOk,
     thesisType: probabilityOk ? "HIGH_CONFIDENCE" : (opportunityOk ? "EDGE_OPPORTUNITY_BELOW_LIVE_THRESHOLD" : "REJECTED"),
     rejectReasons: [
       probabilityOk ? null : (qualificationProbability < MIN_PROBABILITY
         ? `${probabilitySourceLabel()} ${(qualificationProbability * 100).toFixed(1)}% below live threshold ${(MIN_PROBABILITY * 100).toFixed(1)}%`
         : `${probabilitySourceLabel()} ${(qualificationProbability * 100).toFixed(1)}% above live maximum ${(MAX_PROBABILITY * 100).toFixed(1)}%`),
       returnOk ? null : `${probabilitySourceLabel()} net return is non-profitable after fees`,
-      netYieldOk ? null : `net profit ${Number.isFinite(netYield) ? `${(netYield * 100).toFixed(1)}%` : "-"} below ${(MIN_NET_YIELD * 100).toFixed(1)}% after fees`,
       spreadOk ? null : `spread ${spread == null ? "n/a" : (spread * 100).toFixed(1) + " pts"} too wide`,
       liquidityOk ? null : `volume ${candidateVolume.toFixed(2)} USDC below live minimum ${MIN_VOLUME_24H.toFixed(2)} USDC`,
     ].filter(Boolean),
@@ -3314,17 +3311,9 @@ async function revalidateEvaluation(
     eventSlug: marketEventSlug(market) || evaluation.eventSlug,
     outcome: outcomes[tokenIndex] || evaluation.outcome,
   });
-  if (PORTFOLIO_MARKET_TYPE !== "all" && marketType !== PORTFOLIO_MARKET_TYPE) {
-    return {
-      candidate: evaluation,
-      eligible: false,
-      status: "REJECTED",
-      rejectReasons: [`current market type ${marketType} does not match live portfolio market type ${PORTFOLIO_MARKET_TYPE}`],
-      currentPrice: price,
-      marketProbability,
-      minOrderSize,
-    };
-  }
+  // Market type no longer judges a re-checked market either. Leaving this gate here while
+  // the shortlist stopped applying it would reject at execution what the list had offered,
+  // which is the one failure this desk keeps meeting: the two sides filtering differently.
   // Re-checked against the FRESH market rather than the stored candidate, the same reason
   // the market type above is: the question and the outcome are what classify the shape, and
   // a revalidation exists precisely because the stored copy can be stale.

@@ -1335,24 +1335,37 @@ button:disabled {
   stroke-linejoin: round;
 }
 
+/* Two columns of parameters on a desktop, one on a phone. Asked for: "dej cele view
+   prehledu parametru portfolia do dvousloupcove struktury pro desktop".
+   auto-fit with a minimum rather than a fixed `1fr 1fr`, so a narrow desktop window falls
+   back to one column on its own instead of at a breakpoint that has to be guessed. */
 .portfolio-rule-list {
   display: grid;
-  gap: 8px;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 8px 22px;
   margin-top: 12px;
 }
 
+/* The value first, its label small underneath -- the same shape the opened and closed
+   trades use on a phone, now on both views of this card: "pro obe view (mobile i desktop)
+   dej prehled do formatovani stejneho stylu jako mame na mobilu u closed a open trades".
+   The label used to sit in a fixed left column beside the value, which spent most of the
+   width on words that repeat in every row and squeezed the value into what was left. */
 .portfolio-rule-row {
   display: grid;
-  grid-template-columns: minmax(160px, 0.35fr) minmax(0, 1fr);
-  gap: 12px;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 1px;
+  align-content: start;
   padding-top: 8px;
   border-top: 1px solid var(--line);
 }
 
 .portfolio-rule-row span {
+  order: 2;
   color: var(--muted);
-  font-size: 12px;
-  font-weight: 800;
+  font-size: 11px;
+  font-weight: 850;
+  line-height: 1.25;
   text-transform: uppercase;
 }
 
@@ -3274,9 +3287,11 @@ body.modal-open {
     grid-column: auto;
   }
 
-  .portfolio-rule-row {
-    grid-template-columns: 1fr;
-    gap: 4px;
+  /* One column of parameters on a phone. The row itself already reads value-then-label,
+     so nothing else changes between the two views. */
+  .portfolio-rule-list {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 8px;
   }
 
   .calculation-filter-group {
@@ -3615,18 +3630,26 @@ body.modal-open {
     background: #ffffff;
   }
 
+  /* The same shape the opened and closed trades use on a phone: value first, its label
+     small underneath, one column. Asked for: "tento styl rozlozeni na mobilu pouzij i pro
+     tabulku candidates, kde je stale stare formatovani."
+     This table kept the older layout, with the label in a fixed left column -- which on a
+     narrow card spends most of the width on words that repeat in every row. */
   .candidate-ledger-scroll .execution-candidates-table td {
     display: grid;
-    grid-template-columns: minmax(76px, 0.82fr) minmax(0, 1fr);
-    gap: 6px;
-    align-items: start;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 1px;
+    align-content: start;
     min-width: 0;
     padding: 0;
     border-bottom: 0;
   }
 
+  /* order:2 puts the label after the cell's content whatever that content is, because the
+     anonymous items holding it all default to order 0. */
   .candidate-ledger-scroll .execution-candidates-table td::before {
     content: attr(data-label);
+    order: 2;
     color: var(--muted);
     font-size: 11px;
     font-weight: 850;
@@ -3646,7 +3669,6 @@ body.modal-open {
   .candidate-ledger-scroll .execution-candidates-table td[data-label="Precheck"] {
     order: -1;
     grid-column: 1 / -1;
-    grid-template-columns: minmax(76px, 0.3fr) minmax(0, 1fr);
     padding-bottom: 8px;
     border-bottom: 1px solid var(--line);
   }

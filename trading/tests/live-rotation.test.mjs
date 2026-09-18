@@ -1670,11 +1670,17 @@ test("live candidates: with no riskGroupKeys stored, the cheap filter defers to 
   assert.equal(executor.earlyRiskBlockReason(noKeys, []), null, "no held positions means nothing to collide with either");
 });
 
-test("live candidates: volume and net-profit reject reasons collapse into one bucket each, not one per value", () => {
-  // Both reason strings carry a per-candidate number (a USDC amount, a percentage).
-  // Left ungrouped, every distinct value became its own bucket -- for the volume floor
-  // specifically this turned one homogeneous rejection reason into thousands of
-  // one-off entries in production, which was most of a run's console/log output.
+test("live candidates: the volume reject reason collapses into one bucket, not one per value", () => {
+  // The reason string carries a per-candidate number (a USDC amount). Left ungrouped,
+  // every distinct value became its own bucket -- this turned one homogeneous rejection
+  // reason into thousands of one-off entries in production, which was most of a run's
+  // console/log output.
+  //
+  // It used to cover the net-profit floor too. That floor no longer judges a candidate --
+  // "odeber z logiky i z UI posouzeni parametru ... Min net profit" -- so there is no such
+  // reason to group, and the half of this test that checked it now checks its ABSENCE
+  // instead: a bucket for a rule that is not applied would be a rejection that never
+  // happened.
   //
   // The floor is measured on traded volume now, so rows below it are reported as
   // "volume ... below live minimum"; the old liquidity wording groups to the same bucket
@@ -1690,9 +1696,10 @@ test("live candidates: volume and net-profit reject reasons collapse into one bu
     daysToResolution: 0.3,
     status: "EVALUATED",
   };
-  // Default thresholds with no env override (see MIN_VOLUME_24H/MIN_NET_YIELD in the
-  // source): volume must be below 100, net yield below 0. These rows carry no volume
-  // field, so the stored liquidity is the fallback the accessor uses.
+  // Default threshold with no env override (see MIN_VOLUME_24H in the source): volume must
+  // be below 100. These rows carry no volume field, so the stored liquidity is the fallback
+  // the accessor uses. The low-yield rows stay in the fixture deliberately -- they are what
+  // proves the floor is gone rather than merely unreached.
   const rows = [
     ...Array.from({ length: 5 }, (_, i) => ({
       ...eligibleFields, tokenId: `low-liquidity-${i}`, question: `Q${i}`, liquidity: 1 + i,
@@ -1709,8 +1716,23 @@ test("live candidates: volume and net-profit reject reasons collapse into one bu
   assert.equal(counts[volumeKeys[0]], 5);
   assert.ok(!Object.keys(counts).some((key) => /^liquidity/i.test(key)),
     "the old wording must group into the volume bucket, not sit beside it");
-  assert.equal(yieldKeys.length, 1, `expected one grouped net-profit bucket, got ${JSON.stringify(yieldKeys)}`);
-  assert.equal(counts[yieldKeys[0]], 4);
+  assert.equal(yieldKeys.length, 0,
+    `the net-profit floor no longer rejects anything, so it must produce no bucket: ${JSON.stringify(yieldKeys)}`);
+  // And the verdict itself, not only its reasons. Added because a bait did NOT fail:
+  // putting the floor back into `eligible` without putting its reason back broke nothing,
+  // since the default floor is zero and nothing in a fixture can sit below it. The floor
+  // only bites when the environment sets one, which an imported module reads at load, so
+  // this is asserted on the verdict expression instead -- precise, and about the one line
+  // that decides.
+  const verdict = /eligible: ([^,]+),/.exec(
+    readFileSync(new URL("../tools/live-order-executor.mjs", import.meta.url), "utf8"))[1];
+  assert.ok(!/netYield|MIN_NET_YIELD/i.test(verdict),
+    `the eligibility verdict must not consult a net-profit floor: ${verdict}`);
+  // And those four rows are not rejected at all by that rule: a negative net yield is still
+  // refused, but by `returnOk` -- the trade has to be profitable after fees at all, which is
+  // a different question from a configured minimum.
+  assert.ok(Object.keys(counts).some((key) => /non-profitable after fees/i.test(key)),
+    `a losing trade is still refused, on its own grounds: ${JSON.stringify(Object.keys(counts))}`);
 });
 
 test("live run log: revalidatedCandidates does not get stored 160 times over", () => {
@@ -3557,32 +3579,35 @@ test("closed trades: the retired AI probability column is gone, not merely hidde
   assert.ok(!/sortableHeader\("aiProbability"/.test(app));
 });
 
-test("portfolio parameters: both live portfolios state their order price", async () => {
-  // Reported: the order price parameter is not shown in the portfolio parameters overview.
-  // On 5050 it always was; the live portfolio's card simply had no such row, because its
-  // price is not a setting. An absent row is indistinguishable from one that failed to
-  // render, so it says where the price comes from instead of saying nothing.
-  //
-  // This used to hand-build a sandbox of twenty stubs for livePortfolioRuleRows. Both cards
-  // are one shared list now, so the sandbox is the shared harness and only the rows the
-  // LIVE card adds are asserted here -- the rest are covered where the list is.
+// Was "both live portfolios state their order price". The row was added because an absent
+// row is indistinguishable from one that failed to render -- and it has now been taken off
+// again, deliberately: "odeber pouze z UI ale nech funkcni - automation, Cross-live risk,
+// Order price, Excluded markets". So what this defends is the other half of that sentence:
+// the price still decides what is bid, on both live portfolios, with no row anywhere.
+test("portfolio parameters: the order price still decides the bid, with no row for it", async () => {
   const { buildRows, APP, extractFunction } = await import("./portfolio-parameter-card-harness.mjs");
+  const executor = readFileSync(new URL("../tools/live-order-executor.mjs", import.meta.url), "utf8");
   const live = extractFunction(APP, "livePortfolioRuleRows");
 
-  // 5050 states its configured price; the live portfolio names the side of the book it
-  // takes, because there is no configured price to state.
-  assert.match(live, /\? percent\(normalizeFixedEntryPrice\(config\.fixedEntryPrice\)\)/);
-  assert.match(live, /config\.useLimitOrders === true \? "book — best bid" : "book — market ask"/);
-  // The tag filter stays 5050's alone -- only the order price row became universal.
-  assert.match(live, /if \(isFixedEntryMode\(\)\) \{\n\s+rows\.push\(\["Tag filter",/);
-  // And cross-live risk is live-only: several live portfolios share one wallet, so
-  // correlated exposure is a system switch rather than a portfolio one.
-  assert.match(live, /\["Cross-live risk",/);
+  // 5050 bids every qualifying candidate at its configured price; the live portfolio takes
+  // the book. Both paths still exist in the executor.
+  assert.match(executor, /FIXED_ENTRY_PRICE/);
+  assert.match(executor, /FIXED_ENTRY_STRATEGY/);
 
-  // The shared rows are there too, so the live card is a superset rather than its own list.
-  const shared = buildRows({ useLimitOrders: true }, { mode: "live", live: true }).map(([label]) => label);
-  for (const label of ["Probability", "Stake", "Stop loss", "Order mode", "Automation"]) {
-    assert.ok(shared.includes(label), `${label} must be on the live card too`);
+  // And neither card carries a row for it any more.
+  assert.ok(!live.includes('["Order price"'), "the live card must not show the order price");
+  assert.ok(!live.includes('["Cross-live risk"'), "nor cross-live risk");
+  const labels = buildRows({ useLimitOrders: true }, { mode: "live", live: true }).map(([label]) => label);
+  assert.ok(!labels.includes("Order price"));
+  assert.ok(!labels.includes("Cross-live risk"));
+
+  // 5050's tag filter stays: it is the only row that says which markets it looks at.
+  assert.match(live, /if \(isFixedEntryMode\(\)\) \{\n\s+rows\.push\(\["Tag filter",/);
+
+  // The shared rows are all still there, so the live card is a superset rather than its
+  // own list.
+  for (const label of ["Probability", "Stake", "Stop loss", "Order mode", "Execution"]) {
+    assert.ok(labels.includes(label), `${label} must be on the live card too`);
   }
 });
 
