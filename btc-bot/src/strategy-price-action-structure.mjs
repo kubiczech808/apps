@@ -3,7 +3,7 @@ import { ceilPrice, floorPrice, normalizeCandlePrices, roundPrice } from './pric
 import { buildFvgSupplyDemandZones, candleSignal, marketStructure } from './priceaction.mjs'
 
 export const PRICE_ACTION_STRUCTURE_ID = 'price-action-structure-v1'
-export const PRICE_ACTION_MATRIX_SCHEMA = 28
+export const PRICE_ACTION_MATRIX_SCHEMA = 29
 export const PRICE_ACTION_CHART_CANDLE_LIMITS = {
   '1h': 8760,
   '4h': 2190,
@@ -26,9 +26,10 @@ export const DEFAULT_PRICE_ACTION_STRUCTURE = {
 // the smaller reactions from which an entry can actually be refined.
 export const PRICE_ACTION_STRUCTURE_PROFILES = {
   // The 1H chart is an execution lens, not another multi-month macro view.
-  // Two recent 4H legs fit into roughly two weeks, which keeps an old internal
-  // pivot from being mistaken for the current LH/HL.
-  '1h': { historyDays: 14, pivotLookback: 18, minCandles: 180, zoneMaxAgeCandles: 336 },
+  // Keep enough context for the currently active 4H leg (about a month), while
+  // the small pivot radius still makes the 1H line responsive. A 14-day cut
+  // can otherwise remove the active 4H HH/LH before the 1H rebound finishes.
+  '1h': { historyDays: 30, pivotLookback: 18, minCandles: 300, zoneMaxAgeCandles: 720 },
   '4h': { historyDays: 180, pivotLookback: 96, minCandles: 250, zoneMaxAgeCandles: 1080 },
   '1d': { historyDays: 400, pivotLookback: 30, minCandles: 160, zoneMaxAgeCandles: 400 },
 }

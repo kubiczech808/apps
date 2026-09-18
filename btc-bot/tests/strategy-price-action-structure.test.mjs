@@ -334,13 +334,13 @@ test('a delayed 4H spine uses its current LH to LL wave for pullback levels', ()
 
 test('structure horizons and pivot widths scale with timeframe', () => {
   assert.deepEqual(PRICE_ACTION_STRUCTURE_PROFILES, {
-    '1h': { historyDays: 14, pivotLookback: 18, minCandles: 180, zoneMaxAgeCandles: 336 },
+    '1h': { historyDays: 30, pivotLookback: 18, minCandles: 300, zoneMaxAgeCandles: 720 },
     '4h': { historyDays: 180, pivotLookback: 96, minCandles: 250, zoneMaxAgeCandles: 1080 },
     '1d': { historyDays: 400, pivotLookback: 30, minCandles: 160, zoneMaxAgeCandles: 400 },
   })
   assert.ok(PRICE_ACTION_STRUCTURE_PROFILES['1d'].historyDays > 365)
   assert.ok(PRICE_ACTION_STRUCTURE_PROFILES['4h'].historyDays >= 180)
-  assert.ok(PRICE_ACTION_STRUCTURE_PROFILES['1h'].historyDays <= 14)
+  assert.ok(PRICE_ACTION_STRUCTURE_PROFILES['1h'].historyDays <= 30)
 })
 
 test('supply and demand zones stay valid unless their own timeframe closes through them', () => {
@@ -950,7 +950,7 @@ test('price-action matrix covers BTCUSD and major FX pairs on 1H, 4H and 1D', as
   }
   assert.equal(matrix.assets[0].trends['1h'].structure.lookback, 18)
   assert.equal(matrix.assets[0].trends['1h'].structure.activeLookback, 5)
-  assert.equal(matrix.assets[0].trends['1h'].structure.historyDays, 14)
+  assert.equal(matrix.assets[0].trends['1h'].structure.historyDays, 30)
   assert.equal(matrix.assets[0].trends['4h'].structure.lookback, 96)
   assert.equal(matrix.assets[0].trends['4h'].structure.activeLookback, 24)
   assert.equal(matrix.assets[0].trends['4h'].structure.historyDays, 180)
