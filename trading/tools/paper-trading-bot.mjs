@@ -264,6 +264,25 @@ const MARKET_SCAN_EVENT_BATCH_LIMIT = Math.max(1, Math.min(500, envNumber("PAPER
 // in api.php, walked by walkRemainingScrapedPages in the browser), and the database is asked
 // for one page at a time so the decode is bounded too.
 const MARKET_OBSERVATION_RETAIN_LIMIT = Math.max(500, envNumber("PAPER_MARKET_OBSERVATION_RETAIN_LIMIT", 8000));
+// How many markets each portfolio keeps for itself, whatever the global cap does.
+//
+// Reported: "nerozumim tomu, proc musime mit takoveto uzke hrdlo, ktere mi pak zabranuje
+// pridat nove nalezene esports udalosti. vidim, ze z posledniho behu pribyla do katalogu
+// snad jen 1 ... jestli by neslo aby proste melo kazde portfolio zvlast pro sebe tento
+// predvyber - nemelo by se pak stat, ze jednomu portfoliu budou vyhladovet pocet
+// prilezitosti a nebude vyuzite."
+//
+// The cap alone starves by construction. Retention sorted every active row by soonest end
+// date and kept the first 8000, so the catalogue filled with whatever ends next -- and
+// sports has far more markets than esports. Once the esports scan was widened to a
+// seven-day window, a freshly found esports event three days out sorted BELOW every sports
+// market ending tomorrow and was cut before any portfolio saw it.
+//
+// A reservation fixes that where a bigger cap does not: it is not more room, it is room
+// that cannot be taken. Each portfolio's own rules choose its rows and its own Priority
+// setting ranks them, so a narrow portfolio keeps the few markets it can trade rather than
+// competing for space against a broad one. Zero disables it.
+const OBSERVATION_RESERVE_PER_PORTFOLIO = Math.max(0, envNumber("PAPER_OBSERVATION_RESERVE_PER_PORTFOLIO", 150));
 // Resolved observations are published in their own segment file, so retaining more
 // of them no longer costs the active catalogue anything and no longer inflates the
 // requests that never read them. The old 1000 cap is why the resolved count stopped
@@ -3116,7 +3135,60 @@ function marketObservationInScannedScope(item = {}) {
   return MARKET_SCAN_TAG_SCOPE.some((slug) => slugs.includes(slug));
 }
 
-function retainMarketObservations(items = []) {
+// The rows each portfolio would actually look at, ranked the way that portfolio ranks them.
+//
+// "Priority" in the parameter form is selectionOrder, and it takes two values: reward/risk
+// or EV p.a. Both are read off the row, so this costs no network and no economics rebuild.
+function observationPriorityScore(item, config) {
+  const value = String(config?.selectionOrder) === "highest_reward_risk_first"
+    ? rewardRiskRatio(item)
+    : Number(item?.potentialAnnualizedReturn ?? item?.marketAnnualizedReturn ?? item?.annualizedReturn);
+  // A row whose metric cannot be computed sorts last rather than first. Treating it as zero
+  // would put every unpriced market ahead of a genuinely poor one.
+  return Number.isFinite(value) ? value : Number.NEGATIVE_INFINITY;
+}
+
+function reserveObservationsPerPortfolio(items = [], configs = [], perPortfolio = 0) {
+  const reserved = new Set();
+  if (!perPortfolio || !Array.isArray(configs) || !configs.length) return reserved;
+
+  // Sorted ONCE per distinct Priority setting rather than once per portfolio. There are two
+  // possible values and there are dozens of portfolios, so this is the difference between
+  // two sorts and forty, and between walking the whole catalogue per portfolio and stopping
+  // as soon as a portfolio has its quota.
+  const orders = new Map();
+  for (const config of configs) {
+    const order = String(config?.selectionOrder) === "highest_reward_risk_first"
+      ? "highest_reward_risk_first"
+      : "highest_ev_pa_first";
+    if (!orders.has(order)) {
+      orders.set(order, [...items].sort((left, right) =>
+        observationPriorityScore(right, { selectionOrder: order })
+        - observationPriorityScore(left, { selectionOrder: order })));
+    }
+  }
+
+  for (const config of configs) {
+    const order = String(config?.selectionOrder) === "highest_reward_risk_first"
+      ? "highest_reward_risk_first"
+      : "highest_ev_pa_first";
+    const ranked = orders.get(order) || [];
+    let taken = 0;
+    for (const item of ranked) {
+      if (taken >= perPortfolio) break;
+      // The same superset filter live retention already used, now applied per portfolio
+      // rather than as one all-or-nothing protection. It is deliberately looser than the
+      // execution path: this decides what stays readable, not what gets bought.
+      if (!observationMatchesActiveLiveConfig(item, config)) continue;
+      const key = marketObservationKey(item);
+      if (key) reserved.add(key);
+      taken += 1;
+    }
+  }
+  return reserved;
+}
+
+function retainMarketObservations(items = [], { reservedKeys = null } = {}) {
   const active = [];
   const resolved = [];
   for (const item of Array.isArray(items) ? items : []) {
@@ -3159,7 +3231,21 @@ function retainMarketObservations(items = []) {
   // function before a scan starts; losing the protection there would recreate the same
   // eviction on every read. The scan recomputes the marker from current live settings
   // and CLOB open orders, so it cannot become a permanent archive flag.
-  const retainedActive = active.sort(compareActive).slice(0, MARKET_OBSERVATION_RETAIN_LIMIT);
+  // Each portfolio's reserved rows come first and are not counted against the cap the way
+  // an ordinary row is: they are the rows without which that portfolio has nothing to trade,
+  // and the cap exists to bound a response, not to ration opportunity between portfolios.
+  active.sort(compareActive);
+  const reserved = reservedKeys instanceof Set && reservedKeys.size
+    ? active.filter((item) => reservedKeys.has(marketObservationKey(item)))
+    : [];
+  const reservedSet = new Set(reserved.map(marketObservationKey).filter(Boolean));
+  const remaining = reservedSet.size
+    ? active.filter((item) => !reservedSet.has(marketObservationKey(item)))
+    : active;
+  const retainedActive = [
+    ...reserved,
+    ...remaining.slice(0, Math.max(0, MARKET_OBSERVATION_RETAIN_LIMIT - reserved.length)),
+  ];
   const retainedKeys = new Set(retainedActive.map(marketObservationKey).filter(Boolean));
   const protectedActive = active.filter((item) => item?.executionRetentionProtected === true
     && !retainedKeys.has(marketObservationKey(item)));
@@ -11265,10 +11351,25 @@ async function refreshMarketObservations(state) {
 
     const mergedObservations = mergeMarketObservationLists(observations, state.marketObservations || [])
       .map(normalizeMarketObservationEconomics);
-    state.marketObservations = retainMarketObservations(markLiveCatalogueProtection(
-      mergedObservations,
-      liveCatalogueProtection,
-    ));
+    const protectedObservations = markLiveCatalogueProtection(mergedObservations, liveCatalogueProtection);
+    // Every portfolio that could trade, live and paper alike, reserves its own rows before
+    // the global cap is applied to what is left. Archived portfolios are excluded: an
+    // archived portfolio is a finished record, and reserving catalogue space for one would
+    // take opportunity from a portfolio that is actually running.
+    const reservingConfigs = [
+      ...(liveCatalogueProtection?.configs || []),
+      ...Object.values(PAPER_STRATEGIES).filter((strategy) => !paperStrategyIsArchived(strategy)),
+    ];
+    const reservedKeys = reserveObservationsPerPortfolio(
+      protectedObservations,
+      reservingConfigs,
+      OBSERVATION_RESERVE_PER_PORTFOLIO,
+    );
+    state.marketObservations = retainMarketObservations(protectedObservations, { reservedKeys });
+    if (reservedKeys.size) {
+      console.log(`Catalogue retention: ${reservedKeys.size} row(s) reserved across `
+        + `${reservingConfigs.length} portfolio(s) at ${OBSERVATION_RESERVE_PER_PORTFOLIO} each.`);
+    }
     // Measured after the merge and the retention pass, so this is what the catalogue
     // really holds -- the one number that answers whether a run added anything.
     const activeAfterRetention = (state.marketObservations || [])

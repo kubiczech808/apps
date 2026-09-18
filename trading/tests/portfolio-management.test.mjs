@@ -6661,8 +6661,15 @@ test("scan log: New counts what joined the tradable catalogue, not what was fetc
   assert.equal(oneResolved.netObservationCount, -1);
 
   // The bot measures both AFTER retention -- before it, the numbers describe the fetch.
-  const merge = BOT.indexOf("state.marketObservations = retainMarketObservations(markLiveCatalogueProtection(");
+  // Anchored on the assignment rather than on the exact call it used to wrap. The retention
+  // pass gained a per-portfolio reservation between it and markLiveCatalogueProtection, and
+  // what this test defends is WHERE the counting happens -- after retention, not after the
+  // fetch -- which the assignment marks just as well.
+  const merge = BOT.indexOf("state.marketObservations = retainMarketObservations(");
   assert.ok(merge > 0, "the retention pass must be findable");
+  assert.ok(BOT.indexOf("markLiveCatalogueProtection(") > 0
+    && BOT.indexOf("markLiveCatalogueProtection(") < merge,
+    "live protection is still applied to what retention then bounds");
   assert.ok(BOT.indexOf("const newObservationCount = [...retainedActiveKeys]") > merge,
     "new must be counted after retention, or it reports the fetch again");
   assert.ok(BOT.indexOf("const updatedObservationCount = [...retainedActiveKeys]") > merge);

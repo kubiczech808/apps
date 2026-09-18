@@ -2525,7 +2525,13 @@ test("state segments: resolved history retains every measurable trade and purges
   // The ordinary active working set stays bounded, while a row tied to an enabled live
   // portfolio or a still-live order survives the cap. Without that exception the scan
   // could remove a market that the account was already waiting to buy.
-  assert.match(source, /const retainedActive = active\.sort\(compareActive\)\.slice\(0, MARKET_OBSERVATION_RETAIN_LIMIT\);/);
+  // The active set stays bounded by the cap, which is what this defends. It used to assert
+  // the exact line `active.sort(compareActive).slice(0, LIMIT)`, and that blocked giving each
+  // portfolio a reserved share -- so it now checks the bound rather than the spelling: the
+  // sort, the cap, and the fact that what is kept beyond it is named rather than unlimited.
+  assert.match(source, /active\.sort\(compareActive\);/);
+  assert.match(source, /MARKET_OBSERVATION_RETAIN_LIMIT - reserved\.length/,
+    "the cap still binds; the reservation spends it rather than escaping it");
   assert.match(source, /item\?\.executionRetentionProtected === true/);
   assert.match(source, /\.\.\.protectedActive,/);
   assert.match(source, /loadLiveCatalogueProtection\(\)/);
