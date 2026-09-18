@@ -151,3 +151,21 @@ test("the fall the rule buys is judged on price, not on the clock", () => {
     assert.ok(!body.includes(foreign), `${foreign} is the portfolio's business, not this bound's`);
   }
 });
+
+test("BAIT: the bound's clock reaches the kickoff test too", () => {
+  // This suite went green at 18:00 and red at 21:20 on unchanged code. The fixtures are
+  // written relative to a fixed NOW, but observation_event_is_running() read the wall clock,
+  // so "this fixture has not kicked off" quietly became false as the evening went on.
+  //
+  // A test that depends on when it runs is not a test. The moment is now threaded all the
+  // way down, and this checks it stays that way.
+  const start = API.indexOf("function dip_watch_market_is_live(");
+  const body = API.slice(start, API.indexOf("\n}\n", start));
+  assert.match(body, /observation_event_is_running\(\$item, \$now\)/,
+    "the injected moment must reach the kickoff test, not just the resolution bound");
+
+  // And a kickoff two hours after the fixed moment is in the future whatever the wall clock
+  // says -- which is the assertion that used to rot.
+  assert.equal(admits({ eventStartTime: at(2), resolutionEndDate: at(6) }), false);
+  assert.equal(admits({ eventStartTime: at(48), resolutionEndDate: at(52) }), false);
+});

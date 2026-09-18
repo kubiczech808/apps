@@ -2539,11 +2539,16 @@ function execution_scope_observation_tags(array $item): array
 // from a boolean written when the row was last scanned. "Has it started" is true of a
 // moment, not of a row, and a row scanned before kickoff stored false for the whole window
 // an in-play portfolio exists to trade.
-function observation_event_is_running(array $item): bool
+// $now is optional and defaults to the wall clock, which is what every caller on the live
+// path wants. It exists so a test can fix the moment: without it, a case asserting "this
+// fixture has not kicked off yet" passes in the afternoon and fails in the evening, because
+// the fixture's kickoff is written relative to a constant and the comparison is not. That
+// happened -- the suite went green at 18:00 and red at 21:20 on the same code.
+function observation_event_is_running(array $item, ?int $now = null): bool
 {
     $kickoff = strtotime((string) ($item['eventStartTime'] ?? ''));
     if ($kickoff !== false) {
-        return $kickoff <= time();
+        return $kickoff <= ($now ?? time());
     }
     return ($item['eventStarted'] ?? null) === true;
 }
@@ -2590,7 +2595,7 @@ function observation_hours_to_resolution(array $item): ?float
 function dip_watch_market_is_live(array $item, ?int $now = null): bool
 {
     $now = $now ?? time();
-    if (!observation_event_is_running($item)) {
+    if (!observation_event_is_running($item, $now)) {
         return false;
     }
     $resolution = strtotime((string) ($item['resolutionEndDate'] ?? ''));
@@ -6249,6 +6254,16 @@ function live_dip_entry_watch_payload(): array
                     ? (float) $item['volumeUsdc']
                     : (is_numeric($item['liquidity'] ?? null) ? (float) $item['liquidity'] : null),
                 'endDate' => (string) ($item['resolutionEndDate'] ?? $item['endDate'] ?? ''),
+                // The market's tags, carried because the paper bot rebuilds a candidate row
+                // out of the recorded hit and has nothing else to read them from. By the time
+                // the bot runs, the collapsed favourite is out of the catalogue entirely.
+                //
+                // Leaving them off is what emptied the dip portfolios. Measured 2026-09-18:
+                // 270 dips recorded in 24 hours, and across 200 runs spanning three days
+                // exactly ONE found a single eligible candidate. A dip portfolio is configured
+                // with includeOnlyMarketTags ["sports","esports"], and that filter refuses a
+                // row whose tag set is empty -- which every rebuilt dip row was.
+                'tags' => execution_scope_observation_tags($item),
                 'negRisk' => ($item['negRisk'] ?? null) === true,
                 // Empty means clear to fire. Published rather than filtered out, so the
                 // worker's log can say why a watched market was not bought.
@@ -6495,6 +6510,10 @@ function record_dip_entry_hit(array $input): array
         'openProbability' => is_numeric($input['openProbability'] ?? null) ? round((float) $input['openProbability'], 4) : null,
         'volumeUsdc' => is_numeric($input['volumeUsdc'] ?? null) ? (float) $input['volumeUsdc'] : null,
         'endDate' => (string) ($input['endDate'] ?? ''),
+        // Normalized through the same helper the scope filter uses, so what is stored is
+        // already in the form the bot's tag comparison expects rather than whatever shape
+        // the worker happened to forward.
+        'tags' => execution_scope_observation_tags(['tags' => $input['tags'] ?? []]),
         'at' => gmdate('c'),
     ];
     if (count($hits) > DIP_ENTRY_HIT_LIMIT) {

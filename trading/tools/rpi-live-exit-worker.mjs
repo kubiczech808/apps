@@ -2355,6 +2355,11 @@ async function recordDipEntryHit(plan, price) {
         openProbability: plan.openProbability ?? null,
         volumeUsdc: plan.volumeUsdc ?? null,
         endDate: plan.endDate || "",
+        // Forwarded, never invented here. The paper bot rebuilds its candidate row out of the
+        // recorded hit, and by then the collapsed favourite has left the catalogue -- so a hit
+        // without tags becomes a row that a tag-filtered portfolio must refuse. That is what
+        // sent 270 recorded dips a day to nothing.
+        tags: Array.isArray(plan.tags) ? plan.tags : [],
       }),
       signal: controller.signal,
     });

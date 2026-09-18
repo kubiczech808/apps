@@ -233,6 +233,35 @@ async function main() {
   const liveEventMode = String(match.config?.liveEventMode ?? "ignore").toLowerCase();
   // The same question the bot asks, and the same inability to answer it: a hit that carries
   // no kickoff is counted apart rather than guessed either way.
+  // The portfolio's tag lists, applied exactly as observationMatchesActiveLiveConfig applies
+  // them: an include list demands at least one match, an exclude list forbids any.
+  const slugify = (value) => String(value ?? "").trim().toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "");
+  const tagSet = (list) => new Set((Array.isArray(list) ? list : []).map(slugify).filter(Boolean));
+  const includeTags = tagSet(match.config?.includeOnlyMarketTags || match.config?.allowedMarketTags);
+  const excludeTags = tagSet(match.config?.excludedMarketTags);
+  const hitTags = (hit) => {
+    const out = new Set();
+    for (const field of ["polymarketTags", "tags", "firstPolymarketTags", "firstTags",
+      "polymarketCategories", "firstPolymarketCategories"]) {
+      for (const raw of (Array.isArray(hit?.[field]) ? hit[field] : [])) {
+        const tag = slugify(raw && typeof raw === "object" ? (raw.slug || raw.label || raw.name || "") : raw);
+        if (tag) out.add(tag);
+      }
+    }
+    for (const field of ["riskCategory", "category", "firstCategory"]) {
+      const tag = slugify(hit?.[field]);
+      if (tag) out.add(tag);
+    }
+    return out;
+  };
+  const tagsAdmit = (hit) => {
+    const tags = hitTags(hit);
+    if (excludeTags.size && [...excludeTags].some((tag) => tags.has(tag))) return false;
+    if (includeTags.size && ![...includeTags].some((tag) => tags.has(tag))) return false;
+    return true;
+  };
+
   const running = (hit) => {
     const kickoff = Date.parse(String(hit?.eventStartTime || ""));
     if (Number.isFinite(kickoff)) return kickoff <= now;
@@ -247,6 +276,7 @@ async function main() {
   let ended = 0;
   let notRunning = 0;
   let startUnknown = 0;
+  let outsideTags = 0;
   let ready = 0;
   const readyRows = [];
   for (const hit of mine) {
@@ -266,6 +296,11 @@ async function main() {
       if (live === null) { startUnknown += 1; continue; }
       if (!live) { notRunning += 1; continue; }
     }
+    // The gate this mirror was missing, and it was the one deciding the answer. A portfolio
+    // with includeOnlyMarketTags refuses a row whose tag set is empty, and a rebuilt dip row
+    // carried no tags at all -- so 270 recorded dips a day were refused here while this probe
+    // reported innocent gates three times running. A mirror missing a rule is worse than none.
+    if (!tagsAdmit(hit)) { outsideTags += 1; continue; }
     ready += 1;
     readyRows.push(hit);
   }
@@ -280,6 +315,7 @@ async function main() {
     console.log(`   ... fixture has not kicked off     ${notRunning}`);
     console.log(`   ... no kickoff recorded at all     ${startUnknown}`);
   }
+  console.log(`   ... tags the portfolio refuses     ${outsideTags}`);
   console.log(`   ... WOULD BE READY                 ${ready}`);
   console.log(`\n   liveEventMode: ${JSON.stringify(liveEventMode)}`
     + (liveEventMode === "only"

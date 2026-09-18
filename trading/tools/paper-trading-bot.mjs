@@ -8560,6 +8560,21 @@ export function dipEntryCandidateRows(strategy, hits = DIP_ENTRY_HITS) {
         resolutionEndDate: endDate,
         // The worker only ever watches fixtures already under way, and the gate asks again.
         eventStarted: true,
+        // The market's tags, and the reason this row exists at all had nothing to do with
+        // the economics above it.
+        //
+        // observationMatchesActiveLiveConfig refuses a row whose tag set is empty whenever
+        // the portfolio names an include list, and every dip portfolio names one --
+        // ["sports","esports"]. This row was built without a single tag field, so the filter
+        // had nothing to match and refused all of them. Measured on the account 2026-09-18:
+        // 270 dips recorded in 24 hours, and across 200 runs spanning three days exactly ONE
+        // found any eligible candidate. The hits were never the problem.
+        //
+        // Written to polymarketTags because that is the first field rowTagSlugs reads. Older
+        // hits carry no tags and stay refused, which is correct: their fixtures are over.
+        polymarketTags: Array.isArray(hit.tags)
+          ? hit.tags.map((tag) => String(tag)).filter(Boolean)
+          : [],
         observedAt: String(hit.at || ""),
         firstObservedAt: String(hit.at || ""),
         dipEntryHit: true,
