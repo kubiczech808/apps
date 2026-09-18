@@ -108,37 +108,38 @@ jobs:
                       "?action=resolved-combinations&min_trades=30&limit=400")
           with urllib.request.urlopen(rows_url, timeout=300) as response:
               body = json.loads(response.read().decode("utf-8"))
-          # "combinations", not "rows". The first version read a key that does not exist and
-          # reported zero -- which is precisely what printing the response's own keys is for,
-          # and it caught it on the first run.
-          rows = body.get("combinations") or []
-          # The response's own keys, because the first version of this printed "0 combinations
-          # with at least 200 trades / 0 of them at 0% or 100%" and read as a clean bill of
-          # health. It was a clean bill of health issued over an empty list -- the same
-          # failure that once produced "No portfolio matching" from a response nobody had
-          # looked inside. An empty read must look like a broken check, not like good news.
+
+          # Read from the endpoint's own response shape rather than from memory. Two guesses
+          # have already been wrong here: "rows", which does not exist, and "combinations",
+          # which is a COUNT. The arrays are "best" and "worst", ranked by return. Printing
+          # the keys is what caught both, so it stays.
           print(f"\nresponse keys: {', '.join(sorted(body.keys()))}")
-          for label in ("best", "worst"):
-              entry = body.get(label)
-              if isinstance(entry, dict):
-                  print(f"{label}: {json.dumps(entry)[:220]}")
-          print(f"{len(rows)} combination(s) with at least 30 trades")
-          if not rows:
+          total = body.get("combinations")
+          best = body.get("best") or []
+          worst = body.get("worst") or []
+          print(f"{total} combination(s) at min_trades={body.get('minTrades')},"
+                f" {len(best)} returned as best and {len(worst)} as worst")
+          if not isinstance(total, int) or not best:
               print("::warning title=Believability check saw nothing::"
-                    "the combinations list came back empty, so nothing was checked")
+                    "the combinations came back empty or in an unexpected shape,"
+                    " so nothing was checked")
           else:
-              large = [row for row in rows if (row.get("trades") or 0) >= 200]
-              perfect = [row for row in large if row.get("accuracy") in (0.0, 1.0)]
-              print(f"{len(large)} of them have at least 200 trades,"
-                    f" {len(perfect)} sitting at exactly 0% or 100%")
-              for row in sorted(rows, key=lambda r: -(r.get("trades") or 0))[:10]:
-                  print(f"  {str(row.get('tag') or '(any)')[:22]:<24}"
-                        f" p>={row.get('probability')}%"
-                        f" {str(row.get('shape') or '(any)')[:10]:<12}"
-                        f" {str(row.get('horizon') or '(any)')[:8]:<10}"
-                        f" {row.get('trades'):>6} trades"
-                        f" {float(row.get('accuracy') or 0) * 100:>6.1f}%"
-                        f" {float(row.get('returnPct') or 0):>7.1f}% return")
+              # A row at exactly 0% or 100% over a large sample is the signature of the
+              # look-ahead fault behind "neverim jim": valorant read 100% over 36 trades
+              # where the archive holds 65 wins and 21 losses, because the spread test judged
+              # settled rows on the post-outcome book.
+              perfect = [row for row in best + worst
+                         if (row.get("trades") or 0) >= 200 and row.get("accuracy") in (0.0, 1.0)]
+              print(f"{len(perfect)} combination(s) over 200 trades sit at exactly 0% or 100%")
+              for label, rows in (("best", best[:6]), ("worst", worst[:4])):
+                  for row in rows:
+                      print(f"  {label:<6} {str(row.get('tag') or '(any)')[:20]:<22}"
+                            f" p>={row.get('probability')}%"
+                            f" {str(row.get('shape') or '(any)')[:9]:<11}"
+                            f" {str(row.get('horizon') or '(any)')[:8]:<10}"
+                            f" {row.get('trades'):>6} trades"
+                            f" {float(row.get('accuracy') or 0) * 100:>6.1f}%"
+                            f" {float(row.get('returnPct') or 0):>8.1f}% return")
               if perfect:
                   print("::warning title=Perfect rows present::"
                         + f"{len(perfect)} combination(s) over 200 trades read as 0% or 100%")
