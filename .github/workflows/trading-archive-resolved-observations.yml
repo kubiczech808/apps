@@ -85,10 +85,19 @@ jobs:
               """What the database weighs and what the observations table still holds."""
               status = call({"operation": "status"}, timeout=180)
               storage = status.get("storage") or {}
-              observations = {}
-              for table in (storage.get("tradingTables") or []):
-                  if table.get("name") == "trading_observations":
-                      observations = table
+              # tradingTables is a MAP keyed by table name, not a list of rows. Reading it as
+              # a list is the third time a check in this repo has been written against keys
+              # the endpoint does not send, so the shape is printed when it is not what this
+              # expects rather than left to raise or, worse, to report a comfortable zero.
+              tables = storage.get("tradingTables")
+              if not isinstance(tables, dict):
+                  print("unexpected tradingTables shape:", type(tables).__name__,
+                        json.dumps(tables)[:300])
+                  tables = {}
+              observations = tables.get("trading_observations")
+              if not isinstance(observations, dict):
+                  print("no trading_observations entry; keys were:", sorted(tables))
+                  observations = {}
               return {
                   "databaseMB": round((storage.get("databaseSizeBytes") or 0) / 1048576, 1),
                   "tradingMB": round((storage.get("tradingSizeBytes") or 0) / 1048576, 1),
