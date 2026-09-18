@@ -10,6 +10,7 @@ on:
       - 'scripts/audit_btcdca_app_runtime.py'
       - 'scripts/audit_btcdca_learn_links.py'
       - 'scripts/stage_btcdca_static_guides.py'
+      - 'scripts/patch_btcdca_public_headers.py'
   workflow_dispatch:
     inputs:
       operation:
@@ -92,6 +93,12 @@ jobs:
         run: |
           set -euo pipefail
           python3 scripts/stage_btcdca_static_guides.py
+
+      - name: Normalize public headers and preserve extensionless form actions
+        if: inputs.operation != 'preflight' && inputs.operation != 'rollback'
+        run: |
+          set -euo pipefail
+          python3 scripts/patch_btcdca_public_headers.py
 
       - name: Upload stage and link-audit reports
         if: inputs.operation != 'preflight' && inputs.operation != 'rollback'

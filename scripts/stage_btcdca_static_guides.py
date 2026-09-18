@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import ftplib
+import base64
 import hashlib
 import json
 import os
+import re
 import tempfile
 import urllib.request
 from pathlib import Path
@@ -111,7 +113,18 @@ def upload(ftp: ftplib.FTP, local: Path, remote: str) -> None:
         with local.open("rb") as handle:
             ftp.storbinary(f"STOR {name}", handle)
     finally:
-        ftp.cwd(original)
+            ftp.cwd(original)
+
+
+def stage_brand_logo(ftp: ftplib.FTP, temporary_root: Path) -> None:
+    homepage = (STATIC / "homepage" / "index.html").read_text(encoding="utf-8")
+    match = re.search(r'data:image/png;base64,([^"\']+)', homepage)
+    if not match:
+        raise RuntimeError("The homepage does not contain the canonical BTC-DCA logo asset.")
+    logo = temporary_root / "BDCA_white.png"
+    logo.write_bytes(base64.b64decode(match.group(1)))
+    upload(ftp, logo, "www/assets/img/BDCA_white.png")
+    upload(ftp, logo, "www/assets/img/logo.png")
 
 
 def public_text(url: str) -> tuple[int, str]:
@@ -136,6 +149,7 @@ def main() -> None:
                 copied_media[destination] = download_any(ftp, candidates, local)
                 upload(ftp, local, f"www/assets/img/guides/{destination}")
 
+            stage_brand_logo(ftp, temporary_root)
             upload(ftp, STATIC / "guides" / "assets" / "guide.css", "www/assets/img/guides/guide.css")
             for slug in GUIDES:
                 upload(ftp, STATIC / "guides" / slug / "index.html", f"www/{slug}/index.html")
@@ -157,6 +171,9 @@ def main() -> None:
         if status != 200 or title not in page or "/assets/img/guides/guide.css" not in page:
             raise RuntimeError(f"Public guide verification failed for /{slug}/ (HTTP {status}).")
         verified.append(slug)
+    logo_status, _ = public_text("https://www.btc-dca.com/assets/img/BDCA_white.png")
+    if logo_status != 200:
+        raise RuntimeError("Public BTC-DCA logo verification failed.")
 
     report = [
         "# BTC-DCA static guide staging report",

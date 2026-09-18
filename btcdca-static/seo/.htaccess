@@ -10,6 +10,9 @@ RewriteRule ^ /app/%1 [R=301,L,NE]
 RewriteRule ^app/?$ /app/index.php [R=302,L,NE]
 RewriteRule ^app/overview/?$ /app/overview.php [L,QSA]
 RewriteRule ^app/([^/.]+)/?$ /app/$1.php [L,QSA]
+# Root auth forms use relative actions.  Resolve nested submissions back to the
+# corresponding extensionless route instead of /login-user/login-user.
+RewriteRule ^(?:login-user|signup-user|forgot-password|reset-code|new-password|password-changed|user-otp|logout-user|dca-calculator)/(login-user|signup-user|forgot-password|reset-code|new-password|password-changed|user-otp|logout-user|dca-calculator|btcdca-google-login|btcdca-google-callback|btcdca-google-token-login)(?:\.php)?/?$ /$1/index.php [L,QSA]
 # Root account routes are physical directories with index.php wrappers.  Do not
 # rewrite them here: DirectoryIndex must be allowed to execute the wrapper.
 
