@@ -1121,19 +1121,6 @@ function configExcludedMarketShapes(config) {
   return shapes;
 }
 
-function excludedMarketShapesSummaryValue(config) {
-  const shapes = configExcludedMarketShapes(config);
-  if (!shapes.length) return null;
-  // Every shape excluded is a portfolio that can never take a candidate. It is recoverable
-  // by unticking a box, but it fails SILENTLY -- no orders, no rejections worth reading, no
-  // hint on the card -- so the summary says it outright rather than listing seven shapes and
-  // leaving the reader to notice that is all of them.
-  if (Object.keys(MARKET_SHAPE_LABELS).every((shape) => shapes.includes(shape))) {
-    return "every shape - this portfolio cannot trade anything";
-  }
-  return shapes.map(marketShapeLabel).join(", ");
-}
-
 // The AI probability pipeline was retired, so every portfolio scores on the
 // Polymarket outcome probability regardless of what an older config stored.
 function normalizeProbabilitySource() {
@@ -2021,18 +2008,6 @@ function normalizeSettlementCloseBid(value) {
 
 function liveEventModeLabel(value) {
   return LIVE_EVENT_MODE_LABELS[normalizeLiveEventMode(value) || "ignore"];
-}
-
-// One row for both questions the filter asks, because they are read together: how far out
-// a market may resolve, and what that means for a fixture already under way.
-function resolutionRuleValue(maxResolutionHours, config = {}) {
-  const mode = configLiveEventMode(config);
-  // Stated without a ceiling, because under this mode there is none: nothing is admitted
-  // by its horizon. Printing one would describe a rule the run does not apply.
-  if (mode === "only") return "Only events under way";
-  const ceiling = `Max ${formatHorizonHours(maxResolutionHours)}`;
-  if (mode === "include") return `${ceiling}, events under way always included`;
-  return ceiling;
 }
 
 // Hours until the market's own RESOLUTION date, not its endDate. For a sports fixture those
@@ -10284,76 +10259,99 @@ function paperPortfolioTrades(portfolioState) {
     }));
 }
 
-function stakeSizingRuleValue(mode, portfolio = {}) {
-  const normalizedMode = normalizeMode(mode);
-  const config = portfolioConfigForMode(normalizedMode);
-  const stake = normalizeRiskAllocation(config.stakeUsdc) ?? DEFAULT_RISK_ALLOCATION;
-  return `${money(stake)} fixed per trade`;
-}
+// The parameter card, as one list for every portfolio type.
+//
+// Asked for: "zkontroluj, ze ma prehled parametru portfolia vsechny polozky a values jsou
+// maximalne strucne. napr. probability staci rozmezi %, dip entry staci rozmezi pro entry,
+// certainity staci hodnota, apod."
+//
+// Both halves of that are changes of policy, not of wording:
+//
+//   * EVERY parameter has a row now. Several used to be hidden when they were off, on the
+//     grounds that a column of "Off" is noise. That was true while a value was a sentence;
+//     with a one-word value it is not, and a parameter that vanishes when unset cannot be
+//     checked -- the reader cannot tell "not set" from "not supported", which is how the
+//     probability floor came to be settable in the modal and absent from the card.
+//   * a value is the NUMBER, not a description of it. "Sold once the bid reaches 99.9%,
+//     without waiting for resolution" becomes "99.9%". What the parameter means belongs to
+//     its name, which is already there, and repeating it in every row is what made the card
+//     too long to read at a glance.
+//
+// One builder for paper and live, because these were two near-identical lists that had
+// already drifted: the paper card showed the order mode and the live card showed cross-live
+// risk, and neither showed the probability floor.
+const TERSE_NONE = "—";
 
-function probabilityRangeRuleValue(config = {}, fallback = null) {
-  const lower = normalizeEligibilityThreshold(config.minProbability) ?? fallback ?? 0;
+function portfolioParameterRows(config = {}, { mode = null, portfolio = {}, live = false, thresholdFallback = null } = {}) {
+  const dip = dipEntryRuleFromConfig(config);
+  const floor = normalizeStopLossProbabilityFloor(config.stopLossProbabilityFloor);
+  const closeBid = normalizeSettlementCloseBid(config.settlementCloseBid);
+  const stopMultiplier = stopLossRiskMultiplier(config);
+  const minLiquidity = normalizeOptionalMoney(config.minLiquidityUsdc);
+  const includeOnly = normalizeMarketTagList(config.includeOnlyMarketTags);
+  const excludedTags = normalizeMarketTagList(config.excludedMarketTags);
+  const shapes = configExcludedMarketShapes(config);
+  const excludedTokens = Array.isArray(config.excludedCandidateTokenIds) ? config.excludedCandidateTokenIds.length : 0;
+  const lower = normalizeEligibilityThreshold(config.minProbability) ?? thresholdFallback ?? 0;
   const upper = normalizeOptionalProbability(config.maxProbability);
-  const source = probabilitySourceLabel(config.probabilitySource);
-  return upper == null ? `${source} >= ${percent(lower)}` : `${source} ${percent(lower)}-${percent(upper)}`;
+  const eventMode = configLiveEventMode(config);
+  const horizon = formatHorizonHours(live ? resolutionHoursForMode(mode) : resolutionHoursForMode(mode));
+  const stake = normalizeRiskAllocation(config.stakeUsdc) ?? DEFAULT_RISK_ALLOCATION;
+
+  const rows = [
+    ["Probability", upper == null ? `≥ ${percent(lower)}` : `${percent(lower)}–${percent(upper)}`],
+    ["Stake", money(stake, 0)],
+    ["Resolution", eventMode === "only"
+      ? "under way only"
+      : eventMode === "include" ? `≤ ${horizon} + under way` : `≤ ${horizon}`],
+    ["Market type", portfolioMarketTypeLabel(config.marketType)],
+    // Every shape excluded is a portfolio that can never take a candidate, and it fails
+    // silently. The card says so rather than listing seven labels.
+    ["Excluded shapes", shapes.length === 0
+      ? TERSE_NONE
+      : (Object.keys(MARKET_SHAPE_LABELS).every((shape) => shapes.includes(shape))
+        ? "all — cannot trade"
+        : shapes.map(marketShapeLabel).join(", "))],
+    ["Included tags", includeOnly.length ? includeOnly.join(", ") : TERSE_NONE],
+    ["Excluded tags", excludedTags.length ? excludedTags.join(", ") : TERSE_NONE],
+    // The entry band is the parameter; where the market opened is the rule's own condition
+    // and is the same on every dip portfolio in practice.
+    ["Dip entry", dip.enabled
+      ? (dipEntryRuleFault(dip) ? `not applied — ${dipEntryRuleFault(dip)}`
+        : `${percent(dip.buyMin)}–${percent(dip.buyMax)}`)
+      : "off"],
+    ["Priority", config.selectionOrder === "highest_reward_risk_first" ? "reward/risk" : "net yield"],
+    ["Volume", minLiquidity == null ? TERSE_NONE : money(minLiquidity, 0)],
+    ["Min net profit", percent(normalizeMinimumNetYield(config.minNetYield))],
+    ["Stop loss", stopMultiplier > 0 ? percent(stopMultiplier) : "off"],
+    ["Stop floor", floor == null ? "off" : probability(floor)],
+    ["Reverse after stop", stopLossReverseIsEnabled(config) ? money(5, 0) : "off"],
+    ["Close at certainty", closeBid == null ? "off" : probability(closeBid)],
+    ["Rotation", automaticRotationIsEnabled(config) ? "on" : "off"],
+    ["Order mode", config.useLimitOrders ? "limit" : "market"],
+    ["Execution", normalizeExecutionTrigger(config.executionTrigger) === "cron"
+      ? `every ${executionCronMinutesLabel(config.executionCronMinutes)}`
+      : "after each scrape"],
+    ["Automation", config.automationEnabled === false ? "off" : "on"],
+    ["Excluded markets", excludedTokens ? `${excludedTokens}` : TERSE_NONE],
+  ];
+  return rows;
 }
 
 function portfolioRuleRows(portfolio = {}) {
   const mode = portfolio.id ? paperModeFromStrategyId(portfolio.id) : state.mode;
   const config = portfolioConfigForMode(mode);
-  const threshold = thresholdForMode(mode);
-  const maxResolutionHours = resolutionHoursForMode(mode);
-  const minLiquidityUsdc = Number(config.minLiquidityUsdc);
-  const minNetYield = normalizeMinimumNetYield(config.minNetYield);
-  const priority = config.selectionOrder === "highest_reward_risk_first"
-    ? "Highest reward/risk, then net yield"
-    : "Highest net yield, then net gain";
-  const resolution = resolutionRuleValue(maxResolutionHours, config);
-  const rows = [
-    ["Probability threshold", probabilityRangeRuleValue(config, threshold)],
-    ["Stake sizing", stakeSizingRuleValue(mode, portfolio)],
-    ["Resolution filter", resolution],
-    ["Trade priority", priority],
-    ["Market type", portfolioMarketTypeLabel(config.marketType)],
-    ...(excludedMarketShapesSummaryValue(config) != null ? [["Excluded market shapes", excludedMarketShapesSummaryValue(config)]] : []),
-    // Listed only when it is on, because it is off on every portfolio by default and a row
-    // reading "Off" on all of them is noise on the card that has to fit on a phone.
-    ...(dipEntryRuleFromConfig(config).enabled ? [["Dip entry", dipEntryRuleSummaryValue(dipEntryRuleFromConfig(config))]] : []),
-    ["Execution trigger", normalizeExecutionTrigger(config.executionTrigger) === "cron"
-      ? `${executionTriggerLabel(config.executionTrigger)} · ${executionCronMinutesLabel(config.executionCronMinutes)}`
-      : executionTriggerLabel(config.executionTrigger)],
-  ];
-  if (Number.isFinite(minLiquidityUsdc)) rows.push(["Volume filter", `>= ${money(minLiquidityUsdc)}`]);
-  rows.push(["Minimum net profit", `>= ${percent(minNetYield)} after fees`]);
-  rows.push(["Rotation", automaticRotationIsEnabled(config) ? "On" : "Off"]);
-  // Any paper portfolio can turn this on now; Equal is only where it ships enabled.
-  rows.push(["Stop loss", stopLossRiskLabel(config)]);
-  rows.push(["Reverse after stop loss", stopLossReverseIsEnabled(config) ? "On: $5 opposite outcome" : "Off"]);
-  // The parameter modal already saves this for paper portfolios (the checkbox has no
-  // paper-only hide), but this card never showed it -- reading like the setting was
-  // live-only, when it is only this row that was missing.
-  rows.push(["Order mode", config.useLimitOrders ? "Limit orders" : "Market orders"]);
+  const rows = portfolioParameterRows(config, {
+    mode,
+    portfolio,
+    thresholdFallback: thresholdForMode(mode),
+  });
   // A resting order holds capital without being a position, so it does not block the next
   // one. Stating the amount is what makes the free-capital figure and the size of the next
-  // order add up for anyone reading both.
+  // order add up for anyone reading both. Only when there is one: this is a live balance
+  // rather than a setting, and zero of it says nothing.
   const resting = Number(selectedPaperPortfolio(state.botState || {})?.portfolio?.restingLimitOrderUsdc || 0);
-  if (config.useLimitOrders && resting > 0) {
-    rows.push(["Resting orders", `${money(resting)} held by unfilled orders, not counted against a new one`]);
-  }
-  // Only when something is actually excluded: a row reading "none" on every portfolio
-  // that never touched the setting is noise in a list meant to be read at a glance.
-  const closeBid = normalizeSettlementCloseBid(config.settlementCloseBid);
-  // Only when it is on. A row reading "Off" on every portfolio that never touched the
-  // setting is noise in a list meant to be read at a glance.
-  if (closeBid != null) {
-    rows.push(["Close at certainty", `Sold once the bid reaches ${probability(closeBid)}, without waiting for resolution`]);
-  }
-  const includeOnlyTags = normalizeMarketTagList(config.includeOnlyMarketTags);
-  const excludedTags = normalizeMarketTagList(config.excludedMarketTags);
-  // Both, not one or the other: a portfolio can include sport and still exclude tennis, and
-  // hiding the exclusions behind a whitelist is how they came to look inert.
-  if (includeOnlyTags.length) rows.push(["Included tags", includeOnlyTags.join(", ")]);
-  if (excludedTags.length) rows.push(["Excluded tags", excludedTags.join(", ")]);
+  if (config.useLimitOrders && resting > 0) rows.push(["Resting orders", money(resting)]);
   return rows;
 }
 
@@ -10362,49 +10360,25 @@ function livePortfolioRuleRows() {
   // the open tab is actually steered by.
   const mode = isLiveMode() ? state.mode : "live";
   const config = portfolioConfigForMode(mode);
-  const useLimitOrders = config.useLimitOrders === true;
-  const maxResolutionHours = resolutionHoursForMode(mode);
-  const minLiquidityUsdc = normalizeOptionalMoney(config.minLiquidityUsdc);
-  const minNetYield = normalizeMinimumNetYield(config.minNetYield);
-  const includeOnlyTags = normalizeMarketTagList(config.includeOnlyMarketTags);
-  const excludedTags = normalizeMarketTagList(config.excludedMarketTags);
-  const priority = config.selectionOrder === "highest_reward_risk_first"
-    ? "Highest reward/risk, then net yield"
-    : "Highest net yield, then net gain";
-  return [
-    ["Probability threshold", probabilityRangeRuleValue(config, currentEligibilityThreshold())],
-    ["Stake sizing", stakeSizingRuleValue(mode, state.liveState?.portfolio)],
-    ["Resolution filter", resolutionRuleValue(maxResolutionHours, config)],
-    ["Trade priority", priority],
-    ["Market type", portfolioMarketTypeLabel(config.marketType)],
-    ...(excludedMarketShapesSummaryValue(config) != null ? [["Excluded market shapes", excludedMarketShapesSummaryValue(config)]] : []),
-    // Listed only when it is on, because it is off on every portfolio by default and a row
-    // reading "Off" on all of them is noise on the card that has to fit on a phone.
-    ...(dipEntryRuleFromConfig(config).enabled ? [["Dip entry", dipEntryRuleSummaryValue(dipEntryRuleFromConfig(config))]] : []),
-    ["Execution trigger", normalizeExecutionTrigger(config.executionTrigger) === "cron"
-      ? `${executionTriggerLabel(config.executionTrigger)} · ${executionCronMinutesLabel(config.executionCronMinutes)}`
-      : executionTriggerLabel(config.executionTrigger)],
-    // Both portfolios state their order price. 5050's is a setting; the live portfolio's
-    // is taken from the book, and saying so is what stops the row's absence reading as a
-    // parameter that failed to display -- which is how it was reported.
-    ["Order price", isFixedEntryMode()
-      ? `every qualifying candidate is bid at ${percent(normalizeFixedEntryPrice(config.fixedEntryPrice))}`
-      : (useLimitOrders
-        ? "taken from the book: rested at the best bid, not a configured price"
-        : "taken from the book: bought at the market ask, not a configured price")],
-    ...(isFixedEntryMode() ? [
-      ["Tag filter", normalizeMarketTagList(config.allowedMarketTags).join(", ") || "every tag"],
-    ] : []),
-    // Shown only when set, for the same reason as on the paper dashboards.
-    ...(includeOnlyTags.length ? [["Included tags", includeOnlyTags.join(", ")]] : (excludedTags.length ? [["Excluded tags", excludedTags.join(", ")]] : [])),
-    ["Volume filter", minLiquidityUsdc == null ? "none" : `>= ${money(minLiquidityUsdc)}`],
-    ["Minimum net profit", `>= ${percent(minNetYield)} after fees`],
-    ["Rotation", automaticRotationIsEnabled(config) ? "On" : "Off"],
-    ["Stop loss", stopLossRiskLabel(config)],
-    ["Reverse after stop loss", stopLossReverseIsEnabled(config) ? "On: $5 opposite outcome" : "Off"],
-    ["Order mode", useLimitOrders ? "Limit orders" : "Market orders"],
-    ["Cross-live risk", systemConfig().crossLivePortfolioRiskDiversification !== false ? "Block correlated exposure" : "Allow correlated exposure"],
-  ];
+  const rows = portfolioParameterRows(config, {
+    mode,
+    portfolio: state.liveState?.portfolio,
+    live: true,
+    thresholdFallback: currentEligibilityThreshold(),
+  });
+  // Both portfolios state their order price. 5050's is a setting; the live portfolio's is
+  // taken from the book, and saying so is what stops the row's absence reading as a
+  // parameter that failed to display -- which is how it was reported.
+  rows.push(["Order price", isFixedEntryMode()
+    ? percent(normalizeFixedEntryPrice(config.fixedEntryPrice))
+    : (config.useLimitOrders === true ? "book — best bid" : "book — market ask")]);
+  if (isFixedEntryMode()) {
+    rows.push(["Tag filter", normalizeMarketTagList(config.allowedMarketTags).join(", ") || TERSE_NONE]);
+  }
+  // A live-only setting: several live portfolios share one wallet, so correlated exposure
+  // is a system switch rather than a portfolio one.
+  rows.push(["Cross-live risk", systemConfig().crossLivePortfolioRiskDiversification !== false ? "blocked" : "allowed"]);
+  return rows;
 }
 
 function evaluationUpdateMs(item) {

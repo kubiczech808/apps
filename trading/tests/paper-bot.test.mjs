@@ -1947,10 +1947,13 @@ test("stake sizing: the summary row, the control and the executor use a fixed US
 
   // The setting used to be a percentage of a moving equity base. It is now a fixed
   // nominal cap, so the displayed rule must not read equity or open P/L at all.
-  const rule = app.slice(app.indexOf("function stakeSizingRuleValue"));
+  // The row is part of the shared parameter list now; stakeSizingRuleValue was left with
+  // no callers and is gone. What it defended is unchanged: the displayed stake is the saved
+  // nominal one and is not recomputed from a moving equity base.
+  const rule = app.slice(app.indexOf("function portfolioParameterRows"));
   const body = rule.slice(0, rule.indexOf("\nfunction "));
   assert.match(body, /const stake = normalizeRiskAllocation\(config\.stakeUsdc\) \?\? DEFAULT_RISK_ALLOCATION;/);
-  assert.match(body, /return `\$\{money\(stake\)\} fixed per trade`;/);
+  assert.match(body, /\["Stake", money\(stake, 0\)\],/);
   assert.ok(!/equity|openPnl|sizingBase|nominalStake/.test(body),
     "the rule row must not compute the stake from portfolio equity anymore");
 
@@ -4314,7 +4317,7 @@ test("market metric: the app filters and shows traded volume, not order-book liq
   assert.doesNotMatch(app, /scrapedSortableHeader\("riskReward", "R\/R"\)/);
   assert.doesNotMatch(app, /scrapedSortableHeader\("volume24hr", "24h volume"\)/);
   assert.doesNotMatch(app, /scrapedSortableHeader\("outcomeCount", "Outcomes"\)/);
-  assert.match(app, /\["Volume filter",/);
+  assert.match(app, /\["Volume", minLiquidity == null \? TERSE_NONE : money\(minLiquidity, 0\)\],/);
   assert.match(html, /<span>Probability &gt;=<\/span>/);
   assert.match(html, /<span>Days left max &lt;=<\/span>/);
   assert.match(html, /<span>Net yield min &gt;=<\/span>/);
@@ -4726,7 +4729,10 @@ test("5050: the order price is a portfolio setting, not only a dispatch input", 
   // the panel is synced for a portfolio other than the open tab, and the row then followed
   // the tab rather than the portfolio being edited.
   assert.match(app, /els\.fixedEntryRows\?\.forEach\(\(row\) => row\.toggleAttribute\("hidden", !isFixedEntryMode\(mode\)\)\)/);
-  assert.match(app, /every qualifying candidate is bid at/, "the rules card must state it");
+  // Terse now -- the value is the price, and what it means is the row's name. What this
+  // defends is that 5050's card states its configured entry price at all.
+  assert.match(app, /\["Order price", isFixedEntryMode\(\)\n\s+\? percent\(normalizeFixedEntryPrice\(config\.fixedEntryPrice\)\)/,
+    "the rules card must state it");
 
   // The saved value has to actually govern the run, or the dashboard and the bids
   // would disagree. A dispatch input overrides it for one run and is blank by
@@ -11310,7 +11316,8 @@ test("excludedMarketShapes: the setting is wired end to end, not only in the bot
   // Which makes "exclude everything" reachable, and that portfolio can never take a
   // candidate. It is recoverable by unticking a box but it fails SILENTLY, so the summary
   // has to say so rather than list seven shapes and leave the reader to count them.
-  assert.match(app, /every shape - this portfolio cannot trade anything/);
+  assert.match(app, /"all — cannot trade"/,
+    "a portfolio that has excluded every shape must be told it can trade nothing")
   assert.match(css, /\.market-shape-filter\s*\{/);
 
   // Populated on open, read back on save, and saved immediately on change -- the same three
@@ -11332,7 +11339,9 @@ test("excludedMarketShapes: the setting is wired end to end, not only in the bot
   assert.match(app, /config\?\.excludeOverUnderMarkets === true && !shapes\.includes\("over-under"\)/);
   // The settings summary and the change-history reader both name it, or a saved exclusion
   // is invisible everywhere a reader would look for it.
-  assert.match(app, /excludedMarketShapesSummaryValue\(config\)/);
+  // The summary moved into the shared parameter list, and excludedMarketShapesSummaryValue
+  // was left with no callers, so it is gone rather than kept alive by this assertion.
+  assert.match(app, /\["Excluded shapes", shapes\.length === 0/);
   assert.match(app, /excludedMarketShapes: "Excluded market shapes",/);
   // And the retired field is NOT tracked separately any more: it is derived, so one change
   // would otherwise write two history rows saying the same thing.

@@ -1570,13 +1570,15 @@ test("live run in progress: the source is what this browser started, never a gue
 // (no data-model gap -- see the live mirror at index.html:429-432, unconditional), only
 // this card's row was missing.
 test("paper portfolio rules: 'Order mode' is shown, mirroring the live card", () => {
-  const paper = extractFunction(APP, "portfolioRuleRows");
-  assert.match(paper, /rows\.push\(\["Order mode", config\.useLimitOrders \? "Limit orders" : "Market orders"\]\);/);
-  // The live card's own row must still exist, and it now reads the same saved setting the
-  // paper card does rather than the checkbox's current position.
-  const live = extractFunction(APP, "livePortfolioRuleRows");
-  assert.match(live, /const useLimitOrders = config\.useLimitOrders === true;/);
-  assert.match(live, /\["Order mode", useLimitOrders \? "Limit orders" : "Market orders"\],/);
+  // Both cards are built by one list now, so the row exists for both by construction --
+  // which is what this was defending. It reads the SAVED setting rather than the checkbox's
+  // current position, and tests/portfolio-parameter-card runs it against a real config.
+  const rows = extractFunction(APP, "portfolioParameterRows");
+  assert.match(rows, /\["Order mode", config\.useLimitOrders \? "limit" : "market"\],/);
+  for (const card of ["portfolioRuleRows", "livePortfolioRuleRows"]) {
+    assert.match(extractFunction(APP, card), /portfolioParameterRows\(config, \{/,
+      `the ${card} card must be built by the shared list`);
+  }
 });
 
 // Reported missing later, alongside the day-cap logic it describes
@@ -1585,28 +1587,31 @@ test("paper portfolio rules: 'Order mode' is shown, mirroring the live card", ()
 // market had ended. The two questions are independent -- this row states a portfolio's
 // configured ceiling, not the market's live status -- so the row belongs on both cards
 // regardless of that change.
-test("portfolio rules: the resolution ceiling is shown on both the paper and live cards", () => {
-  const paper = extractFunction(APP, "portfolioRuleRows");
-  assert.match(paper, /const maxResolutionHours = resolutionHoursForMode\(mode\);/);
-  assert.match(paper, /\["Resolution filter", resolution\],/);
-  assert.match(paper, /const resolution = resolutionRuleValue\(maxResolutionHours, config\);/);
+test("portfolio rules: the resolution ceiling is shown on both the paper and live cards", async () => {
+  // The row is on the one shared list, so it is on both cards by construction. It states
+  // the configured ceiling, in hours, and what the portfolio does about fixtures already
+  // under way -- which changes what the ceiling means.
+  const rows = extractFunction(APP, "portfolioParameterRows");
+  assert.match(rows, /\["Resolution", eventMode === "only"/);
+  assert.match(rows, /resolutionHoursForMode\(mode\)/);
   // The ceiling is stored in hours, so a 6-hour one has to reach the card as six hours.
   // Rendering it back through whole days would round it to "1 d" -- the exact loss of
   // precision the unit switch was made to end. And the card has to say what the portfolio
   // does about fixtures already under way, since that changes what the ceiling means.
-  const rule = new Function("formatHorizonHours", "configLiveEventMode", `
-    ${extractFunction(APP, "resolutionRuleValue")}
-    return resolutionRuleValue;
-  `)((hours) => `${hours} h`, (config) => config?.liveEventMode || "ignore");
-  assert.equal(rule(6, {}), "Max 6 h");
-  assert.equal(rule(6, { liveEventMode: "include" }), "Max 6 h, events under way always included");
+  //
+  // resolutionRuleValue used to hold that logic and was driven here. The row is part of the
+  // shared list now and that function was left with no callers, so it is gone and this
+  // drives the list instead -- a test that keeps a dead formatter alive is worse than none,
+  // because it passes while the card shows something else entirely.
+  const { resolutionRowFor } = await import("./portfolio-parameter-card-harness.mjs");
+  assert.equal(resolutionRowFor({}, 6), "≤ 6 h");
+  assert.equal(resolutionRowFor({ liveEventMode: "include" }, 6), "≤ 6 h + under way");
   // No ceiling is stated under "only", because none is applied: that mode admits nothing
   // by its horizon, and the parameter form hides the input for the same reason.
-  assert.equal(rule(6, { liveEventMode: "only" }), "Only events under way");
+  assert.equal(resolutionRowFor({ liveEventMode: "only" }, 6), "under way only");
 
-  const live = extractFunction(APP, "livePortfolioRuleRows");
-  assert.match(live, /const maxResolutionHours = resolutionHoursForMode\(mode\);/);
-  assert.match(live, /\["Resolution filter", resolutionRuleValue\(maxResolutionHours, config\)\]/);
+  // And it is on both cards, because both are built by that one list.
+  assert.match(extractFunction(APP, "livePortfolioRuleRows"), /portfolioParameterRows\(config, \{/);
 });
 
 // The read-only summary row above states the current value; this is the form that
@@ -1921,11 +1926,12 @@ test("dashboard: a live portfolio's tab is marked, not merely named", () => {
 test("rotation: the retired hardcoded label for Equal cannot come back", () => {
   assert.ok(!/Disabled for this proof of concept/.test(APP),
     "Equal's Rotation row must stay driven by autoRotatePositions, not a fixed string");
-  const rows = extractFunction(APP, "portfolioRuleRows");
+  const rows = extractFunction(APP, "portfolioParameterRows");
   // Exactly one Rotation row: a stale hardcoded one alongside the real one is the
   // exact shape of the regression, whether or not the stale copy also renders "old
   // value" text.
-  assert.equal((rows.match(/rows\.push\(\["Rotation",/g) || []).length, 1);
+  assert.equal((rows.match(/\["Rotation",/g) || []).length, 1);
+  assert.match(rows, /\["Rotation", automaticRotationIsEnabled\(config\) \? "on" : "off"\],/);
 });
 
 // Asked for explicitly: the Equal portfolio's synthetic stop "now works great" and
@@ -2005,15 +2011,18 @@ test("stop loss: the parameter modal offers it for paper and live portfolios", (
 });
 
 test("stop loss: the rules card shows it for every paper portfolio, not only Equal", () => {
-  const rows = extractFunction(APP, "portfolioRuleRows");
+  const rows = extractFunction(APP, "portfolioParameterRows");
   assert.ok(!/if \(portfolio\.id === "equal"\)/.test(rows),
     "the row must not be conditional on which portfolio this is");
-  assert.match(rows, /rows\.push\(\["Stop loss", stopLossRiskLabel\(config\)\]\);/);
+  assert.match(rows, /\["Stop loss", stopMultiplier > 0 \? percent\(stopMultiplier\) : "off"\],/);
+  // And the floor beside it, which the modal has always saved and the card never showed.
+  assert.match(rows, /\["Stop floor", floor == null \? "off" : probability\(floor\)\],/);
 });
 
 test("stop loss: the live rules card shows the configured stop loss risk", () => {
-  const rows = extractFunction(APP, "livePortfolioRuleRows");
-  assert.match(rows, /\["Stop loss", stopLossRiskLabel\(config\)\]/);
+  // One list builds both cards, so the live card carries the same row.
+  assert.match(extractFunction(APP, "livePortfolioRuleRows"), /portfolioParameterRows\(config, \{/);
+  assert.match(extractFunction(APP, "portfolioParameterRows"), /\["Stop loss",/);
 });
 
 // Asked for: live portfolios lead the dashboard, with the same equity ordering inside

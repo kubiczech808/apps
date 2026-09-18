@@ -3557,95 +3557,33 @@ test("closed trades: the retired AI probability column is gone, not merely hidde
   assert.ok(!/sortableHeader\("aiProbability"/.test(app));
 });
 
-test("portfolio parameters: both live portfolios state their order price", () => {
-  // Reported: the order price parameter is not shown in the portfolio parameters
-  // overview. On 5050 it always was -- verified by running the real row builder -- but
-  // the live portfolio's card simply had no such row, because its price is not a setting.
-  // An absent row is indistinguishable from one that failed to render, so it now says
-  // where the price comes from instead of saying nothing.
-  const app = readFileSync(new URL("../assets/app.js", import.meta.url), "utf8");
-  const rowsFor = (fixedEntry, limitOrders) => new Function(
-    "state", "isFixedEntryMode", "portfolioConfigForMode", "resolutionHoursForMode",
-    "formatHorizonHours", "resolutionRuleValue",
-    "normalizeOptionalMoney", "normalizeMinimumNetYield", "normalizeMarketTagList",
-    "portfolioReturnMetricLabel", "probabilitySourceLabel", "currentEligibilityThreshold",
-    "stakeSizingRuleValue", "normalizeExecutionTrigger", "executionTriggerLabel",
-    "executionCronMinutesLabel", "normalizeFixedEntryPrice", "percent", "money",
-    "currentLimitOrders", "systemConfig",
-    // The row builder gained a market-type row, so its two helpers come across as the
-    // real thing rather than as stubs -- they are pure, and a stub here would only prove
-    // the harness agrees with itself.
-    `${functionSource(app, "normalizePortfolioMarketType")}\n${functionSource(app, "portfolioMarketTypeLabel")}\n`
-    + `${functionSource(app, "automaticRotationIsEnabled")}\n`
-    // The probability row states a range now that a portfolio can carry a maximum as well
-    // as a minimum, so its three pure helpers come across for the same reason as above.
-    // The rule rows now ask whether the open mode is a live portfolio, which a created one
-    // also is, so the classification cluster comes across too.
-    + `${/const LIVE_MODES = new Set\(\[[^\]]*\]\);/.exec(app)[0]}\n`
-    + `${/const CUSTOM_PAPER_STRATEGY_ID = [^\n]+/.exec(app)[0]}\n`
-    + `${functionSource(app, "normalizeMode")}\n`
-    + `${functionSource(app, "customLivePortfolioIdFromMode")}\n`
-    + `${functionSource(app, "isLivePortfolioMode")}\n`
-    + `${functionSource(app, "isLiveMode")}\n`
-    + `${functionSource(app, "normalizeEligibilityThreshold")}\n`
-    + `${functionSource(app, "normalizeOptionalProbability")}\n`
-    + `${functionSource(app, "probabilityRangeRuleValue")}\n`
-    // And the stop-loss row, whose label reads the risk multiplier. Pure again, so the
-    // real pair comes across rather than a stub agreeing with the harness.
-    // The rules card lists the dip-entry rule when it is on, so its three pure helpers come
-    // across as the real thing rather than as stubs that would agree with the harness.
-    + `${/const DIP_ENTRY_RULE_DEFAULTS = [^\n]+/.exec(app)[0]}\n`
-    + `${functionSource(app, "dipEntryBound")}\n`
-    + `${functionSource(app, "dipEntryRuleFromConfig")}\n`
-    + `${functionSource(app, "dipEntryRuleFault")}\n`
-    + `${functionSource(app, "dipEntryRuleSummaryValue")}\n`
-    + `${functionSource(app, "normalizeStopLossRiskMultiplier")}\n`
-    + `${functionSource(app, "stopLossRiskMultiplier")}\n`
-    + `${functionSource(app, "stopLossRiskLabel")}\n`
-    // Stop-loss reversal support later added its own row, gated by these two pure
-    // predicates -- come across for the same reason as the pair above.
-    + `${functionSource(app, "stopLossIsEnabled")}\n`
-    + `${functionSource(app, "stopLossReverseIsEnabled")}\n`
-    // The rows also state which market shapes are excluded, a stop loss cannot protect
-    // any setting from. Comes across as the real thing for the same reason as the pairs
-    // above -- pure, so a stub here would only prove the harness agrees with itself.
-    + `${/const MARKET_SHAPE_LABELS = \{[\s\S]*?\n\};/.exec(app)[0]}\n`
-    + `${functionSource(app, "marketShapeLabel")}\n`
-    // configExcludedMarketShapes is what folds the retired excludeOverUnderMarkets
-    // boolean into the list, so the summary reads the same merged set the filters do.
-    + `${functionSource(app, "configExcludedMarketShapes")}\n`
-    + `${functionSource(app, "excludedMarketShapesSummaryValue")}\n`
-    + `${functionSource(app, "livePortfolioRuleRows")}\nreturn livePortfolioRuleRows;`,
-  )(
-    { liveState: { portfolio: {} } },
-    () => fixedEntry,
-    // The order mode is read off the open tab's saved config rather than the checkbox, so
-    // it belongs on the config the row builder is handed.
-    () => ({
-      fixedEntryPrice: 0.65,
-      allowedMarketTags: ["sports"],
-      excludedMarketTags: [],
-      useLimitOrders: limitOrders,
-    }),
-    // The horizon is a number of HOURS now, so the stub hands back 720 -- the same
-    // 30-day ceiling this fixture always meant -- and the real formatter renders it.
-    () => 720, (hours) => `${hours / 24} d`, (hours) => `Max ${hours / 24} d`,
-    (value) => value, (value) => value || 0, (value) => (Array.isArray(value) ? value : []),
-    () => "Potential p.a.", () => "Polymarket probability", () => 0.93, () => "stake",
-    (value) => value, () => "After each scraping batch", () => "x", (value) => Number(value),
-    (value) => `${(value * 100).toFixed(1)}%`, (value) => `$${value}`, () => limitOrders, () => ({}),
-  )();
-  const orderPrice = (fixedEntry, limitOrders) => (rowsFor(fixedEntry, limitOrders)
-    .find(([label]) => label === "Order price") || [])[1];
+test("portfolio parameters: both live portfolios state their order price", async () => {
+  // Reported: the order price parameter is not shown in the portfolio parameters overview.
+  // On 5050 it always was; the live portfolio's card simply had no such row, because its
+  // price is not a setting. An absent row is indistinguishable from one that failed to
+  // render, so it says where the price comes from instead of saying nothing.
+  //
+  // This used to hand-build a sandbox of twenty stubs for livePortfolioRuleRows. Both cards
+  // are one shared list now, so the sandbox is the shared harness and only the rows the
+  // LIVE card adds are asserted here -- the rest are covered where the list is.
+  const { buildRows, APP, extractFunction } = await import("./portfolio-parameter-card-harness.mjs");
+  const live = extractFunction(APP, "livePortfolioRuleRows");
 
-  assert.equal(orderPrice(true, true), "every qualifying candidate is bid at 65.0%");
-  // The live portfolio prices off the book, and which side depends on the order mode.
-  assert.match(orderPrice(false, true), /^taken from the book: rested at the best bid/);
-  assert.match(orderPrice(false, false), /^taken from the book: bought at the market ask/);
-
+  // 5050 states its configured price; the live portfolio names the side of the book it
+  // takes, because there is no configured price to state.
+  assert.match(live, /\? percent\(normalizeFixedEntryPrice\(config\.fixedEntryPrice\)\)/);
+  assert.match(live, /config\.useLimitOrders === true \? "book — best bid" : "book — market ask"/);
   // The tag filter stays 5050's alone -- only the order price row became universal.
-  assert.ok(rowsFor(true, true).some(([label]) => label === "Tag filter"));
-  assert.ok(!rowsFor(false, true).some(([label]) => label === "Tag filter"));
+  assert.match(live, /if \(isFixedEntryMode\(\)\) \{\n\s+rows\.push\(\["Tag filter",/);
+  // And cross-live risk is live-only: several live portfolios share one wallet, so
+  // correlated exposure is a system switch rather than a portfolio one.
+  assert.match(live, /\["Cross-live risk",/);
+
+  // The shared rows are there too, so the live card is a superset rather than its own list.
+  const shared = buildRows({ useLimitOrders: true }, { mode: "live", live: true }).map(([label]) => label);
+  for (const label of ["Probability", "Stake", "Stop loss", "Order mode", "Automation"]) {
+    assert.ok(shared.includes(label), `${label} must be on the live card too`);
+  }
 });
 
 test("portfolio switch: the open portfolio is unmistakable", async () => {
