@@ -1282,8 +1282,31 @@ function trading_storage_meta_put(string $key, string $value): void
     $statement->execute(['key' => $key, 'value' => $value, 'now' => trading_storage_now()]);
 }
 
+/**
+ * Serve THIS request from the database without switching anything on for anyone else.
+ *
+ * The cutover cannot be talked into being safe; it has to be measured, and until now the
+ * only way to measure the database read path on real data was to flip the switch for every
+ * visitor at once. That is the wrong order: the last attempt at serving reads from here
+ * collapsed the host on the catalogue decode, and "flip it and watch" means the watching
+ * happens on the user's dashboard.
+ *
+ * So one request at a time can be told to read from the database, and nothing about the
+ * stored state changes. The caller must hold the trigger key and the request must be a GET,
+ * which is what keeps it a measurement: every write path that consults this function is
+ * reached only by a POST, so a preview can read the database but can never make it the
+ * target of a write.
+ */
+function trading_storage_preview_reads(bool $enable): void
+{
+    $GLOBALS['trading_storage_preview_reads'] = $enable;
+}
+
 function trading_storage_is_active(): bool
 {
+    if (($GLOBALS['trading_storage_preview_reads'] ?? false) === true) {
+        return true;
+    }
     return trading_storage_meta_get('storage-active') === '1';
 }
 

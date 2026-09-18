@@ -1,0 +1,27 @@
+name: Trading Storage Cutover Readiness
+
+# READ-ONLY, manual only. Every request is a GET; the database path is reached through
+# storage_preview=1, which serves one request from MySQL and leaves the stored switch alone.
+# Nothing is written and no switch is flipped.
+#
+# Asked for: "dokonci prechod na mysql databazi." This is the measurement that has to come
+# first -- the last attempt to serve reads from MySQL ran the host out of memory, and one
+# read the paper bot depends on is refused from the database to this day.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compare every read, both ways
+        env:
+          TRADING_HOST: https://osobnizkusenosti.cz/trading
+          TRADING_TRIGGER_KEY: ${{ secrets.POLYTRADING_DB_PASSWORD }}
+        run: python3 trading/tools/storage-cutover-readiness.py

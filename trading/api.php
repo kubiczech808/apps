@@ -6676,6 +6676,27 @@ function live_entry_claim_request(array $payload): array
 try {
     $action = $_GET['action'] ?? 'markets';
 
+    // Serve THIS request from the database, for measuring the cutover before making it.
+    //
+    // Asked for: "dokonci prechod na mysql databazi." The switch that does it is one meta
+    // row, and flipping it is not the hard part -- the hard part is that the last attempt
+    // to serve reads from here ran the host out of its 512 MB on the catalogue decode, and
+    // a switch that changes what every visitor sees is a bad instrument for finding that
+    // out. This reads the database on one request, for a caller holding the trigger key,
+    // and leaves the stored switch exactly where it was.
+    //
+    // GET only, and that is a real constraint rather than tidiness: every WRITE that
+    // consults trading_storage_is_active() sits behind a POST, so a preview can read from
+    // the database but can never redirect a write into it.
+    if (
+        ($_GET['storage_preview'] ?? '') === '1'
+        && $_SERVER['REQUEST_METHOD'] === 'GET'
+        && function_exists('trading_storage_preview_reads')
+    ) {
+        require_trading_trigger_key();
+        trading_storage_preview_reads(true);
+    }
+
     if ($action === 'live-exit-record') {
         if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
             respond(['ok' => false, 'error' => 'POST is required'], 405);
