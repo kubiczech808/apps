@@ -1594,7 +1594,22 @@ function trading_storage_archive_events(PDO $pdo, int $days = 7, int $limit = 50
 function trading_storage_rebuild_compacted_table(PDO $pdo, string $table): array
 {
     trading_storage_bootstrap($pdo);
-    [$table] = trading_storage_compaction_table($table);
+    // Rebuilding is not payload compaction and must not borrow its whitelist: every Trading
+    // table can be repacked, only three of them have a payload column to rewrite. It stays a
+    // whitelist, because the name is interpolated into DDL.
+    if (!in_array($table, [
+        'trading_observations',
+        'trading_event_log',
+        'trading_trades',
+        'trading_documents',
+        'trading_storage_meta',
+    ], true)) {
+        throw new InvalidArgumentException('Unknown Trading storage table.');
+    }
+    // OPTIMIZE TABLE on InnoDB is ALTER TABLE ... FORCE: the B-tree is built again from the
+    // rows, so pages come back at their fill factor instead of wherever months of inserts and
+    // updates left them. It needs room for a second copy while it runs, and if it is cut short
+    // InnoDB rolls it back and the original table stands -- the work is lost, the data is not.
     $pdo->query('OPTIMIZE TABLE `' . $table . '`')->fetchAll();
     return trading_storage_table_stats($pdo);
 }

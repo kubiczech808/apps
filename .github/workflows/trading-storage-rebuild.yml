@@ -1,0 +1,115 @@
+name: Rebuild Trading MySQL Tables
+
+# Repacks one Trading table at a time so the empty space inside its pages comes back.
+#
+# Measured before this existed: the Trading schema is charged 2,422 bytes per observation row
+# while the columns hold 1,558 -- a ratio of 1.55x, and similar on every other table. That gap
+# is not rows and not payload; it is slack inside pages, which DATA_FREE cannot see and which
+# no amount of deleting rows returns. Only a rebuild does.
+#
+# What it costs while it runs, stated here because the operator is the one who decides:
+#   * a second copy of the table exists until it finishes -- trading_observations is the
+#     largest at roughly 640 MB, against a 2000 MB quota
+#   * it is IO-heavy for the duration; reads and writes continue, more slowly
+#   * if it is cut short, InnoDB rolls it back. The work is lost, the data is not.
+#
+# One table per run, on purpose: the peak is then one table's worth, not the schema's.
+
+on:
+  workflow_dispatch:
+    inputs:
+      table:
+        description: Which table to repack.
+        required: true
+        type: choice
+        options:
+          - trading_observations
+          - trading_event_log
+          - trading_trades
+          - trading_documents
+        default: trading_trades
+      confirm_rebuild:
+        description: Rebuild the table. Nothing is deleted; the rows are written again in a denser layout.
+        required: true
+        type: boolean
+        default: false
+
+jobs:
+  rebuild:
+    if: inputs.confirm_rebuild == true
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # The pipeline keeps writing while this runs, which InnoDB allows. It must not collide with
+    # another storage job, though -- two rebuilds at once would need two spare copies.
+    concurrency:
+      group: trading-storage-rebuild
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Repack the table
+        env:
+          TRADING_TRIGGER_KEY: ${{ secrets.POLYTRADING_DB_PASSWORD }}
+          TABLE: ${{ inputs.table }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import urllib.error
+          import urllib.request
+
+          key = os.environ["TRADING_TRIGGER_KEY"]
+          table = os.environ["TABLE"]
+          url = "https://www.osobnizkusenosti.cz/trading/api.php?action=storage-admin"
+
+          def call(operation, timeout=90, **params):
+              request = urllib.request.Request(
+                  url,
+                  data=json.dumps({"operation": operation, **params}).encode("utf-8"),
+                  method="POST",
+                  headers={"Content-Type": "application/json", "X-Trading-Trigger-Key": key},
+              )
+              try:
+                  with urllib.request.urlopen(request, timeout=timeout) as response:
+                      payload = json.loads(response.read().decode("utf-8"))
+              except urllib.error.HTTPError as error:
+                  body = error.read().decode("utf-8", "replace")
+                  raise RuntimeError(f"HTTP {error.code}: {body[:400]}") from error
+              if not payload.get("ok"):
+                  raise RuntimeError(str(payload.get("error") or f"{operation} failed")[:400])
+              return payload
+
+          def footprint():
+              rows = call("schema-footprint")["footprint"]["tables"]
+              return {row["table"]: row for row in rows}
+
+          mb = lambda value: f"{value / 1048576:,.1f} MB"
+
+          before = footprint()
+          if table not in before:
+              raise SystemExit(f"{table} is not in the schema: {sorted(before)}")
+          start = before[table]
+          print(f"{table} before: {mb(start['dataBytes'])} data, {mb(start['indexBytes'])} index,"
+                f" {mb(start['freeBytes'])} free, {start['rows']:,} rows (estimate)")
+
+          # A rebuild of a large table can outlast the default socket timeout while MySQL is
+          # still working. Waiting is correct; giving up here would leave the rebuild running
+          # with nobody reading the result.
+          call("rebuild-table", timeout=1500, table=table)
+
+          after = footprint()[table]
+          print(f"{table} after:  {mb(after['dataBytes'])} data, {mb(after['indexBytes'])} index,"
+                f" {mb(after['freeBytes'])} free")
+
+          saved = start["totalBytes"] - after["totalBytes"]
+          print(f"\nReturned: {mb(saved)}")
+          schema_before = sum(row["totalBytes"] for row in before.values())
+          schema_after = sum(row["totalBytes"] for row in footprint().values())
+          print(f"Schema:   {mb(schema_before)} -> {mb(schema_after)}")
+          if saved <= 0:
+              # Worth saying out loud rather than reading as success: a table that gives nothing
+              # back was already dense, and the estimate that sent us here was wrong.
+              print(f"::warning title=Rebuild returned nothing::{table} was already packed tight")
+          else:
+              print(f"::notice title=Trading table rebuilt::{table} returned {mb(saved)}")
+          PY
