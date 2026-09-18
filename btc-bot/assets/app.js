@@ -1108,7 +1108,9 @@ const ASSET_CHART = {
 }
 
 const ASSET_CHART_DEFAULT_VISIBLE_CANDLES = {
-  '1h': 240,
+  // Keep enough 1H history to show the parent 4H swing that defines the
+  // current 1H bias, rather than beginning the chart at its child swing.
+  '1h': 480,
   '4h': 360,
   // Daily bodies stay visibly candle-shaped on first open; history remains
   // available through the range control and wheel zoom.
