@@ -3,7 +3,7 @@ import { ceilPrice, floorPrice, normalizeCandlePrices, roundPrice } from './pric
 import { buildFvgSupplyDemandZones, candleSignal, marketStructure } from './priceaction.mjs'
 
 export const PRICE_ACTION_STRUCTURE_ID = 'price-action-structure-v1'
-export const PRICE_ACTION_MATRIX_SCHEMA = 26
+export const PRICE_ACTION_MATRIX_SCHEMA = 27
 export const PRICE_ACTION_CHART_CANDLE_LIMITS = {
   '1h': 8760,
   '4h': 2190,
@@ -1288,20 +1288,6 @@ export const classifyStructure = (
     breaksByClose: (current, previous) => !closeBreaksLow(current, previous),
   })
   const edgeLabels = labelStructureSwings(edgeStructure.swings)
-  const edgeHighLeg = structureLeg({
-    previous: edgeStructure.previousHigh,
-    current: edgeStructure.lastHigh,
-    higherLabel: 'HH',
-    lowerLabel: 'LH',
-    breaksByClose: closeBreaksHigh,
-  })
-  const edgeLowLeg = structureLeg({
-    previous: edgeStructure.previousLow,
-    current: edgeStructure.lastLow,
-    higherLabel: 'HL',
-    lowerLabel: 'LL',
-    breaksByClose: (current, previous) => !closeBreaksLow(current, previous),
-  })
   const highText = highLeg?.label ?? null
   const lowText = lowLeg?.label ?? null
   const localTrend = highText === 'HH' && lowText === 'HL'
@@ -1328,24 +1314,37 @@ export const classifyStructure = (
   const trend = breakDirection ?? (persistent.trend !== 'flat' ? persistent.trend : localTrend)
   const establishedTrend = persistent.establishedTrend
   const structureConfirmed = !breakDirection && trend !== 'flat'
-  const edgeHigh = pivotSummary(edgeStructure.lastHigh, edgeLabels.get(edgeStructure.lastHigh?.index) ?? edgeHighLeg?.label)
-  const edgeLow = pivotSummary(edgeStructure.lastLow, edgeLabels.get(edgeStructure.lastLow?.index) ?? edgeLowLeg?.label)
   const contextRangeHigh = highLeg?.current ?? null
   const contextRangeLow = lowLeg?.current ?? null
+  const edgePivots = [
+    ...edgeStructure.swings.map((swing) => pivotSummary(swing, edgeLabels.get(swing.index))),
+    developingSwing,
+  ].filter(Boolean)
+  const pivotClose = (pivot) => pivot?.close ?? pivot?.price
+  const latestDownLow = contextRangeLow && contextRangeHigh
+    ? edgePivots
+      .filter((pivot) => pivot.kind === 'low' && pivot.time > contextRangeLow.time && pivotClose(pivot) < contextRangeLow.price)
+      .reduce((best, pivot) => !best || pivot.price < best.price ? pivot : best, null)
+    : null
+  const latestDownHigh = latestDownLow && contextRangeHigh
+    ? edgePivots
+      .filter((pivot) => pivot.kind === 'high' && pivot.time > contextRangeLow.time && pivot.time < latestDownLow.time && pivotClose(pivot) < contextRangeHigh.price)
+      .reduce((best, pivot) => !best || pivot.price > best.price ? pivot : best, null)
+    : null
+  const latestUpHigh = contextRangeHigh && contextRangeLow
+    ? edgePivots
+      .filter((pivot) => pivot.kind === 'high' && pivot.time > contextRangeHigh.time && pivotClose(pivot) > contextRangeHigh.price)
+      .reduce((best, pivot) => !best || pivot.price > best.price ? pivot : best, null)
+    : null
+  const latestUpLow = latestUpHigh && contextRangeLow
+    ? edgePivots
+      .filter((pivot) => pivot.kind === 'low' && pivot.time > contextRangeHigh.time && pivot.time < latestUpHigh.time && pivotClose(pivot) > contextRangeLow.price)
+      .reduce((best, pivot) => !best || pivot.price < best.price ? pivot : best, null)
+    : null
   const edgeFormsActiveWave = trend === 'down'
-    ? Boolean(
-      edgeHigh && edgeLow && contextRangeHigh && contextRangeLow &&
-      edgeHigh.time > contextRangeLow.time && edgeHigh.time < edgeLow.time &&
-      (edgeHigh.close ?? edgeHigh.price) < contextRangeHigh.price &&
-      (edgeLow.close ?? edgeLow.price) < contextRangeLow.price
-    )
+    ? Boolean(latestDownHigh && latestDownLow)
     : trend === 'up'
-      ? Boolean(
-        edgeHigh && edgeLow && contextRangeHigh && contextRangeLow &&
-        edgeLow.time > contextRangeHigh.time && edgeLow.time < edgeHigh.time &&
-        (edgeLow.close ?? edgeLow.price) > contextRangeLow.price &&
-        (edgeHigh.close ?? edgeHigh.price) > contextRangeHigh.price
-      )
+      ? Boolean(latestUpHigh && latestUpLow)
       : false
   // The broad spine decides the trend. Once its live edge has completed the
   // corresponding LH -> LL / HL -> HH wave, that edge becomes the active
@@ -1353,8 +1352,8 @@ export const classifyStructure = (
   // This keeps the chart and the executable price levels on the same wave.
   const activeRange = edgeFormsActiveWave
     ? {
-        high: { ...edgeHigh, label: trend === 'down' ? 'LH' : 'HH' },
-        low: { ...edgeLow, label: trend === 'down' ? 'LL' : 'HL' },
+        high: { ...(trend === 'down' ? latestDownHigh : latestUpHigh), label: trend === 'down' ? 'LH' : 'HH' },
+        low: { ...(trend === 'down' ? latestDownLow : latestUpLow), label: trend === 'down' ? 'LL' : 'HL' },
         source: 'active-edge',
       }
     : {
