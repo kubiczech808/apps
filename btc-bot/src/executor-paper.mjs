@@ -221,6 +221,7 @@ export const createPaperExecutor = ({
           assetSymbol: plan.assetSymbol,
           timeframeId: plan.timeframeId,
           strategyId: plan.strategyId,
+          priceActionProtocol: plan.priceActionProtocol,
           signalKey: plan.signalKey,
           signalCandleTime: plan.signalCandleTime ?? null,
           quoteSatsPerUsd: plan.quoteSatsPerUsd,

@@ -44,6 +44,50 @@ export const roundStop = (side, price) => (side === 'long' ? floorPrice(price) :
 export const roundTarget = (side, price) => (side === 'long' ? ceilPrice(price) : floorPrice(price))
 
 const PRICE_ACTION_TIMEFRAME_PRIORITY = { '1h': 1, '4h': 2, '1d': 3 }
+export const PRICE_ACTION_POSITION_PROTOCOL = 1
+
+const priceActionExitPrice = ({ position, review }) => {
+  const candidates = review?.invalidated
+    ? [review.closeTrigger, review.lowerItem?.lastCandle?.close, review.item?.lastCandle?.close]
+    : [review?.lowerItem?.lastCandle?.close, review?.item?.lastCandle?.close]
+  return candidates.find(Number.isFinite) ?? position.markPrice ?? position.entry
+}
+
+/**
+ * A confirmed structure reversal is an exit, not a passive dashboard badge.
+ * The protocol marker retires paper positions opened before that behaviour
+ * existed, so they cannot be mistaken for current PA-1 signals.
+ */
+export const reconcilePriceActionInvalidations = async ({
+  executor,
+  positions = [],
+  matrix,
+  settings,
+  dryRun = false,
+} = {}) => {
+  const outcomes = []
+  for (const position of positions.filter((candidate) => candidate.strategyId === PRICE_ACTION_STRUCTURE_ID)) {
+    const review = reviewOpenPositionInMatrix({ position, matrix, settings })
+    const legacy = position.priceActionProtocol !== PRICE_ACTION_POSITION_PROTOCOL
+    if (!review.invalidated && !legacy) continue
+
+    const reason = review.invalidated
+      ? review.reason
+      : 'pozice byla otevřena před zavedením aktuálního PA-1 protokolu řízení struktury'
+    const exitPrice = priceActionExitPrice({ position, review })
+    if (dryRun) {
+      outcomes.push({ position, review, legacy, reason, exitPrice, action: 'would_close' })
+      continue
+    }
+    try {
+      await executor.closePosition(position.id, exitPrice)
+      outcomes.push({ position, review, legacy, reason, exitPrice, action: 'closed' })
+    } catch (error) {
+      outcomes.push({ position, review, legacy, reason, exitPrice, action: 'close_failed', error: error.message })
+    }
+  }
+  return outcomes
+}
 
 export const executeReadyPriceActionProfiles = async ({
   executor,
@@ -111,6 +155,7 @@ export const executeReadyPriceActionProfiles = async ({
       assetSymbol: asset.symbol,
       timeframeId,
       strategyId: PRICE_ACTION_STRUCTURE_ID,
+      priceActionProtocol: PRICE_ACTION_POSITION_PROTOCOL,
       signalKey,
       signalCandleTime: item.asOf ?? null,
     }
@@ -129,6 +174,7 @@ export const executeReadyPriceActionProfiles = async ({
       assetSymbol: asset.symbol,
       timeframeId,
       strategyId: PRICE_ACTION_STRUCTURE_ID,
+      priceActionProtocol: PRICE_ACTION_POSITION_PROTOCOL,
       signalKey,
       signalCandleTime: item.asOf ?? null,
       tp1: profile.tp1,
@@ -568,15 +614,15 @@ export const runPass = async ({
         state.account = account
       }
 
-      // PA invalidation belongs to an already-open PA trade. Entry profiles
-      // are recalculated from the current matrix and never carry this status.
-      for (const position of running.filter((candidate) => candidate.strategyId === PRICE_ACTION_STRUCTURE_ID)) {
-        const review = reviewOpenPositionInMatrix({
-          position,
-          matrix: state.priceActionMatrix,
-          settings: settings.priceActionStructure,
-        })
-        if (!review.invalidated) continue
+      const invalidationActions = await reconcilePriceActionInvalidations({
+        executor,
+        positions: running,
+        matrix: state.priceActionMatrix,
+        settings: settings.priceActionStructure,
+        dryRun: config.dryRun,
+      })
+      for (const action of invalidationActions) {
+        const { position, review, legacy, reason, exitPrice } = action
         const fingerprint = [
           position.id,
           position.side,
@@ -586,17 +632,25 @@ export const runPass = async ({
           review.item?.event,
           review.lowerItem?.trend,
           review.lowerItem?.event,
-          review.revisedProfile?.side,
-          review.revisedProfile?.zone?.type,
-          review.revisedProfile?.zone?.low,
-          review.revisedProfile?.zone?.high,
-          review.revisedProfile?.stop,
-          review.revisedProfile?.tp1,
-          review.revisedProfile?.tp2,
+          action.action,
+          exitPrice,
         ].join('|')
+        if (action.action === 'close_failed') {
+          recordPriceActionEvent(state, {
+            at: isoNow(now),
+            type: 'open_position_invalidation_close_failed',
+            positionId: position.id,
+            asset: review.symbol,
+            timeframeId: review.timeframeId,
+            side: position.side,
+            reason,
+            fingerprint,
+          })
+          continue
+        }
         recordPriceActionEvent(state, {
           at: isoNow(now),
-          type: 'open_position_invalidation',
+          type: action.action === 'would_close' ? 'open_position_invalidation_pending' : 'open_position_closed_on_invalidation',
           positionId: position.id,
           asset: review.symbol,
           timeframeId: review.timeframeId,
@@ -605,11 +659,22 @@ export const runPass = async ({
           currentTrend: review.item?.trend ?? null,
           lowerTrend: review.lowerItem?.trend ?? null,
           closeTrigger: review.closeTrigger,
-          reason: review.reason,
+          exitPrice,
+          legacy,
+          reason,
           currentProfile: review.currentProfile,
           revisedProfile: review.revisedProfile,
           fingerprint,
         })
+      }
+
+      if (invalidationActions.some((action) => action.action === 'closed')) {
+        refreshed = await executor.listTrades()
+        trades = refreshed
+        running = refreshed.running
+        closed = capClosed(refreshed.closed)
+        account = await executor.getAccount()
+        state.account = account
       }
 
 

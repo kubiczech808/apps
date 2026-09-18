@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { applyCommands, executeReadyPriceActionProfiles, readConfig, reconcileBrackets, roundStop, roundTarget, runPass, strategyIdForPosition } from '../src/bot.mjs'
-import { LEGACY_PRICE_ACTION_ID } from '../src/strategy-registry.mjs'
+import { applyCommands, executeReadyPriceActionProfiles, PRICE_ACTION_POSITION_PROTOCOL, readConfig, reconcileBrackets, reconcilePriceActionInvalidations, roundStop, roundTarget, runPass, strategyIdForPosition } from '../src/bot.mjs'
+import { LEGACY_PRICE_ACTION_ID, PRICE_ACTION_STRUCTURE_ID } from '../src/strategy-registry.mjs'
 import { appendCandle, START, zigzag } from './helpers.mjs'
 
 const HOUR = 3600_000
@@ -175,6 +175,46 @@ test('ready PA profiles open one paper trade per asset and never duplicate the s
   })
   assert.equal(second.length, 0)
   assert.equal(calls.length, 1)
+})
+
+test('price-action invalidation closes a position and retires pre-protocol paper trades', async () => {
+  const calls = []
+  const executor = {
+    closePosition: async (id, price) => calls.push([id, price]),
+  }
+  const matrix = {
+    assets: [
+      {
+        symbol: 'LEGACY',
+        trends: {
+          '1h': { trend: 'flat', lastCandle: { close: 10 } },
+        },
+      },
+      {
+        symbol: 'CURRENT',
+        trends: {
+          '1h': {
+            trend: 'down', event: 'CHoCH_DOWN', structureConfirmed: false,
+            lastCandle: { close: 0.7 }, structure: { low: { current: { price: 0.69 } } },
+          },
+        },
+      },
+    ],
+  }
+  const outcomes = await reconcilePriceActionInvalidations({
+    executor,
+    positions: [
+      { id: 'legacy', strategyId: PRICE_ACTION_STRUCTURE_ID, side: 'long', assetSymbol: 'LEGACY', timeframeId: '1h', entry: 10 },
+      { id: 'invalidated', strategyId: PRICE_ACTION_STRUCTURE_ID, priceActionProtocol: PRICE_ACTION_POSITION_PROTOCOL, side: 'long', assetSymbol: 'CURRENT', timeframeId: '1h', entry: 0.72 },
+    ],
+    matrix,
+    settings: { pullbackPct: 50, minRewardRisk: 2, riskPct: 1 },
+  })
+
+  assert.deepEqual(calls, [['legacy', 10], ['invalidated', 0.69]])
+  assert.deepEqual(outcomes.map((outcome) => outcome.action), ['closed', 'closed'])
+  assert.equal(outcomes[0].legacy, true)
+  assert.equal(outcomes[1].review.invalidated, true)
 })
 
 test('a queued backtest starts research without touching an exchange order', async () => {

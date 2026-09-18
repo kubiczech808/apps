@@ -2024,16 +2024,15 @@ const renderOpen = () => {
 
 const renderPriceActionOpen = (body) => {
   setPanelTitle('panel-open-title', 'Otevřené price-action obchody')
-  setTableHead('panel-open', ['Otevřeno', 'Asset', 'TF', 'Směr', 'Entry', 'SL', 'TP', 'P/L', 'Stav struktury'])
+  setTableHead('panel-open', ['Otevřeno', 'Asset', 'TF', 'Směr', 'Entry', 'SL', 'TP', 'P/L'])
   $('flatten').hidden = false
   const rows = (state?.positions?.running || []).filter((position) => position.strategyId === 'price-action-structure-v1')
   body.replaceChildren()
   if (!rows.length) {
-    body.append(emptyRow(9, 'Žádný otevřený price-action trade.'))
+    body.append(emptyRow(8, 'Žádný otevřený price-action trade.'))
     return
   }
   for (const position of rows) {
-    const event = (state?.priceActionEvents || []).find((candidate) => candidate.positionId === position.id)
     const pl = signedSats(position.plSats)
     body.append(
       el('tr', {}, [
@@ -2045,7 +2044,6 @@ const renderPriceActionOpen = (body) => {
         el('td', { text: quotePrice(position.stopLoss) }),
         el('td', { text: quotePrice(position.takeProfit) }),
         el('td', { className: pl.className, text: pl.text }),
-        el('td', { className: event ? 'neg' : 'pos', text: event ? 'invalidace zapsána' : 'struktura drží' }),
       ])
     )
   }
