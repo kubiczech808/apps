@@ -1369,6 +1369,7 @@ const renderAssetChart = () => {
   // algorithm followed the main wave rather than an internal reaction.
   const structure = item?.structure
   const trend = item?.trend === 'up' || item?.trend === 'down' ? item.trend : 'flat'
+  const activeRange = structure?.activeRange
   const structureLegs = [
     { kind: 'high', leg: structure?.high },
     { kind: 'low', leg: structure?.low },
@@ -1380,11 +1381,11 @@ const renderAssetChart = () => {
   const developingSwing = structure?.developingSwing
   for (const swing of [
     ...(structure?.recentSwings ?? []),
-    // The active edge completes the latest executable wave. It is more recent
-    // than the broad structural spine, so include it to reach the current LL
-    // or HH instead of leaving the zigzag stranded at its old pivot.
-    ...(structure?.activeRecentSwings ?? []),
     ...structureLegs.map(({ kind, leg }) => leg?.current ? { ...leg.current, kind, label: leg.label } : null),
+    // The active range is the one major LH -> LL / HL -> HH wave after the
+    // broad spine. Do not draw all edge pivots: they include internal turns.
+    activeRange?.high,
+    activeRange?.low,
     developingSwing,
   ].filter(Boolean)) {
     if (swing?.kind === developingSwing?.kind && swing?.candleIndex === developingSwing?.replacesCandleIndex) continue
@@ -1401,8 +1402,8 @@ const renderAssetChart = () => {
       return { ...swing, label, x: xForTime(swing.time) }
     })
     .filter((swing) => swing.x !== null)
-  const rangeHigh = structure?.activeRange?.high
-  const rangeLow = structure?.activeRange?.low
+  const rangeHigh = activeRange?.high
+  const rangeLow = activeRange?.low
   const nodeForRangePivot = (pivot) => Number.isFinite(pivot?.price)
     ? swingNodes.filter((swing) =>
       swing.candleIndex === pivot.candleIndex || (swing.time === pivot.time && swing.kind === pivot.kind)

@@ -1330,17 +1330,33 @@ export const classifyStructure = (
   const structureConfirmed = !breakDirection && trend !== 'flat'
   const edgeHigh = pivotSummary(edgeStructure.lastHigh, edgeLabels.get(edgeStructure.lastHigh?.index) ?? edgeHighLeg?.label)
   const edgeLow = pivotSummary(edgeStructure.lastLow, edgeLabels.get(edgeStructure.lastLow?.index) ?? edgeLowLeg?.label)
+  const contextRangeHigh = highLeg?.current ?? null
+  const contextRangeLow = lowLeg?.current ?? null
   const edgeFormsActiveWave = trend === 'down'
-    ? edgeHigh?.label === 'LH' && edgeLow?.label === 'LL' && edgeHigh.time < edgeLow.time
+    ? Boolean(
+      edgeHigh && edgeLow && contextRangeHigh && contextRangeLow &&
+      edgeHigh.time > contextRangeLow.time && edgeHigh.time < edgeLow.time &&
+      (edgeHigh.close ?? edgeHigh.price) < contextRangeHigh.price &&
+      (edgeLow.close ?? edgeLow.price) < contextRangeLow.price
+    )
     : trend === 'up'
-      ? edgeHigh?.label === 'HH' && edgeLow?.label === 'HL' && edgeLow.time < edgeHigh.time
+      ? Boolean(
+        edgeHigh && edgeLow && contextRangeHigh && contextRangeLow &&
+        edgeLow.time > contextRangeHigh.time && edgeLow.time < edgeHigh.time &&
+        (edgeLow.close ?? edgeLow.price) > contextRangeLow.price &&
+        (edgeHigh.close ?? edgeHigh.price) > contextRangeHigh.price
+      )
       : false
   // The broad spine decides the trend. Once its live edge has completed the
   // corresponding LH -> LL / HL -> HH wave, that edge becomes the active
   // swing range for pullback, stop, target and the chart's terminal zigzag.
   // This keeps the chart and the executable price levels on the same wave.
   const activeRange = edgeFormsActiveWave
-    ? { high: edgeHigh, low: edgeLow, source: 'active-edge' }
+    ? {
+        high: { ...edgeHigh, label: trend === 'down' ? 'LH' : 'HH' },
+        low: { ...edgeLow, label: trend === 'down' ? 'LL' : 'HL' },
+        source: 'active-edge',
+      }
     : {
         high: highLeg?.current ?? null,
         low: lowLeg?.current ?? null,
@@ -1394,7 +1410,6 @@ export const classifyStructure = (
       developingSwing,
       confirmed: structureConfirmed,
       recentSwings: structure.swings.slice(-8).map((swing) => pivotSummary(swing, persistent.labels.get(swing.index))),
-      activeRecentSwings: edgeStructure.swings.slice(-8).map((swing) => pivotSummary(swing, edgeLabels.get(swing.index))),
       contextRecentSwings: contextStructure.swings.slice(-8).map((swing) => pivotSummary(swing)),
     },
     zones: includeZones

@@ -293,6 +293,34 @@ test('major LH and LL override short internal USDJPY-like reactions', () => {
   assert.ok(result.structure.high.current.price > 160 && result.structure.high.current.price < 161)
   assert.ok(result.structure.low.current.price > 152 && result.structure.low.current.price < 153)
   assert.equal(result.structure.recentSwings.length, 4)
+  assert.equal(result.structure.activeRange.high.label, 'LH')
+  assert.equal(result.structure.activeRange.low.label, 'LL')
+  assert.ok(result.structure.activeRange.high.price > 160 && result.structure.activeRange.high.price < 161)
+  assert.ok(result.structure.activeRange.low.price > 152 && result.structure.activeRange.low.price < 153)
+})
+
+test('a delayed 4H spine uses its current LH to LL wave for pullback levels', () => {
+  const points = [145, 150, 147, 155, 150, 164, 155.2, 159.8, 158, 160.4, 152.9, 156.5]
+  const legSteps = [100, 100, 100, 100, 100, 50, 8, 8, 50, 50, 50]
+  const candles = []
+  let time = START
+  for (let leg = 0; leg < legSteps.length; leg += 1) {
+    const step = (points[leg + 1] - points[leg]) / legSteps[leg]
+    for (let index = 0; index < legSteps[leg]; index += 1) {
+      const open = points[leg] + step * index
+      const close = points[leg] + step * (index + 1)
+      candles.push(candle(time, open, Math.max(open, close) + Math.abs(step) * 0.25, Math.min(open, close) - Math.abs(step) * 0.25, close))
+      time += HOUR
+    }
+  }
+
+  const result = classifyStructure(candles, {
+    lookback: 96,
+    minCandles: 100,
+    includeZones: false,
+    includeChartCandles: false,
+  })
+  assert.equal(result.trend, 'down')
   assert.equal(result.structure.activeRange.source, 'active-edge')
   assert.equal(result.structure.activeRange.high.label, 'LH')
   assert.equal(result.structure.activeRange.low.label, 'LL')
