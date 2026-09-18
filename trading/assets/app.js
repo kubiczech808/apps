@@ -77,6 +77,10 @@ const state = {
   scrapedTaxonomyRowsKey: "",
   scrapedTaxonomyRowsPending: "",
   scrapedTaxonomyRowsError: "",
+  // Every tag the settled history knows, loaded once so the filter can offer what its own
+  // query can already answer.
+  resolvedTagOptions: null,
+  resolvedTagOptionsPending: false,
   scrapedMarketTypeFilter: "all",
   scrapedShapeFilter: "all",
   // Keep explicit deep-link filters authoritative during asynchronous catalogue loads.
@@ -3117,6 +3121,28 @@ function scrapedTaxonomyFilterFromValue(value) {
   return normalizedScrapedTaxonomyFilter({ kind, label: labelParts.join(":") });
 }
 
+// Loaded once and kept. The list is a few hundred short strings and it only changes when
+// the nightly fold runs, so re-fetching it per render would cost a request to say the same
+// thing. A failure leaves the options as they were rather than emptying them.
+async function loadResolvedTagOptions() {
+  if (state.resolvedTagOptions || state.resolvedTagOptionsPending) return;
+  state.resolvedTagOptionsPending = true;
+  try {
+    const payload = await fetchApiJson("api.php?action=resolved-tags");
+    state.resolvedTagOptions = Array.isArray(payload?.tags) ? payload.tags : [];
+    // Said out loud rather than left as an empty filter: "stored" means the fold has run and
+    // these are every settled tag, anything else means the list is only what was loaded.
+    if (payload?.source !== "stored") {
+      console.warn(`resolved tag options unavailable (source=${payload?.source}); the filter`
+        + " lists only the tags in the loaded catalogue");
+    }
+  } catch (error) {
+    state.resolvedTagOptions = [];
+  } finally {
+    state.resolvedTagOptionsPending = false;
+  }
+}
+
 function scrapedTaxonomyFilterOptions() {
   const options = { category: new Set(), tag: new Set() };
   const report = state.botState?.latestCalculationReport
@@ -3131,6 +3157,15 @@ function scrapedTaxonomyFilterOptions() {
     for (const kind of ["category", "tag"]) {
       for (const label of taxonomyValuesFromRecord(item, kind)) options[kind].add(label);
     }
+  }
+  // And every tag the settled history knows, which the two sources above cannot reach.
+  // Reported: "japan-j-league nemuzu najit ve filrech tagu ve scraped udalosti". The options
+  // were built from the catalogue the browser happens to hold -- capped -- plus the report's
+  // own table, while the query BEHIND the filter reads the full archive. A tag could be
+  // perfectly answerable and still not offerable.
+  for (const entry of state.resolvedTagOptions || []) {
+    const label = normalizeScrapedTaxonomyLabel(entry?.tag);
+    if (label && !PER_FIXTURE_TAXONOMY_LABEL.test(label)) options.tag.add(label);
   }
   const selected = normalizedScrapedTaxonomyFilter();
   if (selected) options[selected.kind].add(selected.label);
@@ -3153,6 +3188,15 @@ function syncScrapedShapeFilterControl() {
 
 function syncScrapedTaxonomyFilterControl() {
   if (!els.scrapedTaxonomyFilter) return;
+  // Fire and forget: the first render asks, and the render that follows the answer picks it
+  // up. Awaiting here would hold the whole filter row on one request.
+  //
+  // Re-rendered only on the transition from "not loaded" to "loaded". Re-rendering on every
+  // call would recurse forever, because the loader returns immediately once it has an answer
+  // and its .then would fire again on each pass.
+  if (state.resolvedTagOptions === null && !state.resolvedTagOptionsPending) {
+    loadResolvedTagOptions().then(() => syncScrapedTaxonomyFilterControl());
+  }
   const options = scrapedTaxonomyFilterOptions();
   const selected = scrapedTaxonomyFilterValue();
   const group = (kind, label) => options[kind].length ? `

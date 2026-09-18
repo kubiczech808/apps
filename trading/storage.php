@@ -1710,6 +1710,45 @@ function trading_storage_resolved_observations_stream(PDO $pdo, callable $onRow,
     return $seen;
 }
 
+/**
+ * Every tag the settled history knows, with how many trades it accounts for.
+ *
+ * Reported: "japan-j-league nemuzu najit ve filrech tagu ve scraped udalosti". The filter's
+ * options are built from the catalogue the browser happens to be holding, which is capped,
+ * plus the calculation report's own table -- while the query BEHIND the filter reads the full
+ * archive. So a tag can be perfectly answerable and still not be offerable, which is the
+ * shape of that complaint.
+ *
+ * This reads the folded statistics instead: one row per cell, already aggregated, so the
+ * whole settled history costs a grouped scan of a few tens of thousands of short rows rather
+ * than a walk over 90,795 payloads.
+ *
+ * Only the 'tag' scope. The 'any' rows carry an empty tag by construction and would list as a
+ * blank option.
+ */
+function trading_storage_resolved_stats_tags(PDO $pdo, int $limit = 2000): array
+{
+    trading_storage_bootstrap($pdo);
+    $limit = max(1, min(5000, $limit));
+    $statement = $pdo->query(
+        'SELECT tag, SUM(trades) AS trades
+         FROM trading_resolved_stats
+         WHERE scope = "tag" AND tag <> ""
+         GROUP BY tag
+         ORDER BY trades DESC
+         LIMIT ' . $limit
+    );
+    $rows = [];
+    foreach ($statement->fetchAll() as $row) {
+        $tag = trim((string) ($row['tag'] ?? ''));
+        if ($tag === '') {
+            continue;
+        }
+        $rows[] = ['tag' => $tag, 'trades' => (int) ($row['trades'] ?? 0)];
+    }
+    return $rows;
+}
+
 function trading_storage_resolved_stats_replace(PDO $pdo, array $cells, array $anyTag, array $meta = []): array
 {
     trading_storage_bootstrap($pdo);

@@ -8784,6 +8784,33 @@ try {
     // which is how a tag could report 937 resolved trades and its own link list 12. This
     // reads the archive itself, applying the very predicates the tables count with, so
     // the list and the statistic are the same set by construction.
+    // Every tag the settled history knows, so the filter can OFFER what its own query can
+    // already answer. Public and read-only: it lists labels and counts, nothing about a
+    // market or a position.
+    if ($action === 'resolved-tags') {
+        $tags = [];
+        $source = 'none';
+        try {
+            $pdo = trading_storage_pdo();
+            if ($pdo instanceof PDO) {
+                $tags = trading_storage_resolved_stats_tags($pdo);
+                $source = 'stored';
+            }
+        } catch (Throwable $throwable) {
+            // The filter still works from the catalogue it already had, so a storage fault
+            // narrows the options rather than breaking the page.
+            $tags = [];
+            $source = 'unavailable';
+        }
+        respond([
+            'ok' => true,
+            'source' => $source,
+            'count' => count($tags),
+            'tags' => $tags,
+            'generatedAt' => gmdate('c'),
+        ]);
+    }
+
     if ($action === 'taxonomy-observations') {
         $kind = strtolower(trim((string) ($_GET['kind'] ?? 'tag')));
         if (!in_array($kind, ['tag', 'category'], true)) {
