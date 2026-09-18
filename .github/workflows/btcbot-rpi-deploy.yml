@@ -220,7 +220,7 @@ jobs:
           const apiKey = env.BOT_API_KEY
           if (!apiUrl || !apiKey) throw new Error('Runner API credentials are missing')
 
-          const hostedHeartbeat = async (after = 0) => {
+          const hostedHeartbeat = async ({ after = 0, requireFresh = true } = {}) => {
             const response = await fetch(`${apiUrl}?action=state`, {
               headers: { Accept: 'application/json', 'X-Bot-Key': apiKey },
             })
@@ -230,7 +230,7 @@ jobs:
             const ageMs = Date.now() - updatedAt
             const savedBy = payload.state?.savedBy
             console.log({ hostedUpdatedAt: payload.state?.updatedAt, savedBy, ageSeconds: Math.round(ageMs / 1000) })
-            if (!Number.isFinite(updatedAt) || ageMs > 120_000) {
+            if (!Number.isFinite(updatedAt) || (requireFresh && ageMs > 120_000)) {
               throw new Error('Hosted dashboard state was not refreshed by the Pi')
             }
             if (savedBy !== 'rpi-primary-v2') throw new Error(`Expected primary Pi heartbeat, got ${savedBy ?? 'none'}`)
@@ -240,8 +240,22 @@ jobs:
 
           ;(async () => {
             const first = await hostedHeartbeat()
-            await new Promise((resolve) => setTimeout(resolve, 75_000))
-            await hostedHeartbeat(first)
+            // A matrix rebuild can take longer than the nominal one-minute
+            // timer cadence. Poll for three minutes instead of sampling once
+            // at a race-prone point immediately after a scheduled trigger.
+            const deadline = Date.now() + 180_000
+            let lastError = null
+            while (Date.now() < deadline) {
+              await new Promise((resolve) => setTimeout(resolve, 10_000))
+              try {
+                await hostedHeartbeat({ after: first, requireFresh: false })
+                return
+              } catch (error) {
+                lastError = error
+                if (!String(error.message).includes('Timer did not produce a newer hosted heartbeat')) throw error
+              }
+            }
+            throw lastError ?? new Error('Timer did not produce a newer hosted heartbeat')
           })().catch((error) => {
             console.error(error.stack ?? error.message)
             process.exitCode = 1
