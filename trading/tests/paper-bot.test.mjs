@@ -6720,12 +6720,29 @@ test("scan scope: esports takes four slots of six, and the others come round hou
   }
   assert.match(rotation[1], /tag=""/, "one slot stays untagged or the broad cursor never advances");
 
-  // The tag slots keep the short-horizon, liquid-market focus they were given, and the
-  // broad slot keeps the seven-day unfiltered catalogue. Sending the tag without them
-  // would scan sports over the broad window and quietly change what the slot means.
-  assert.match(rotation[1], /tag=sports; +liquidity=40000; days=2/);
-  assert.match(rotation[1], /tag=esports; liquidity=40000; days=2/);
-  assert.match(rotation[1], /tag=""; +liquidity=0; +days=7/);
+  // Every arm sets the tag, the floor AND the horizon explicitly. That is the invariant:
+  // sending a tag without them would leave the slot inheriting whatever the previous one
+  // meant -- scanning sports over the broad window, say -- and quietly change what a slot is.
+  //
+  // This used to require esports at liquidity=40000 and days=2, which blocked the change
+  // that gave it back its supply. Measured 18.9.: Gamma had 145 tradable esports markets in
+  // the live portfolio's 70-80% band ending within 24 hours, and THREE cleared $40 000 of
+  // event liquidity -- the floor was removing 98% of the tag the live money trades, and the
+  // executor was down to 7 candidates a pass from 27 on 12.9. So esports now scans with no
+  // floor over the full window, on the owner's instruction, and what is checked here is that
+  // each arm still states its own three values rather than that they hold particular numbers.
+  const arms = [...rotation[1].matchAll(/tag=(""|\w+);\s+liquidity=(\d+);\s+days=(\d+)/g)]
+    .map(([, tag, liquidity, days]) => ({ tag: tag === '""' ? "" : tag, liquidity: Number(liquidity), days: Number(days) }));
+  assert.equal(arms.length, 3, "all three arms must state tag, liquidity and horizon");
+
+  const armFor = (tag) => arms.find((arm) => arm.tag === tag);
+  // Sports keeps its floor and its short window: it is not the tag that ran out of markets,
+  // and loosening it here would be a change nobody measured or asked for.
+  assert.deepEqual(armFor("sports"), { tag: "sports", liquidity: 40000, days: 2 });
+  assert.deepEqual(armFor(""), { tag: "", liquidity: 0, days: 7 });
+  // Esports: no floor, full window. Deliberate, and stated so a future reader sees a
+  // decision rather than an oversight.
+  assert.deepEqual(armFor("esports"), { tag: "esports", liquidity: 0, days: 7 });
 
   // The shares, worked out over one whole cycle rather than read off the case arms: esports
   // must be the DEFAULT arm, so a slot nobody claimed goes to it rather than to the broad

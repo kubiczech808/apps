@@ -57,24 +57,41 @@ test("the button's own limits are what the button actually sends", () => {
 test("the scheduled limits are the rotation's own", () => {
   // The pacer sends a liquidity floor and a horizon with each tagged slot.
   const rotation = /case \$\(\( tick % 6 \)\) in([\s\S]*?)esac/.exec(PACER)[1];
-  const sports = /tag=sports; +liquidity=(\d+); +days=(\d+)/.exec(rotation);
-  const esports = /tag=esports; liquidity=(\d+); days=(\d+)/.exec(rotation);
-  const broad = /tag=""; +liquidity=(\d+); +days=(\d+)/.exec(rotation);
+  const sports = /tag=sports;\s+liquidity=(\d+);\s+days=(\d+)/.exec(rotation);
+  const esports = /tag=esports;\s+liquidity=(\d+);\s+days=(\d+)/.exec(rotation);
+  const broad = /tag="";\s+liquidity=(\d+);\s+days=(\d+)/.exec(rotation);
   assert.ok(sports && esports && broad, "all three scopes must be readable from the pacer");
-  assert.equal(sports[1], esports[1], "both tagged scopes share one floor, as the caption says");
-  assert.equal(sports[2], esports[2]);
 
-  const tagged = CAPTION.split("\n").find((entry) => entry.includes("tags=esports, sports"));
-  assert.ok(tagged, "the caption must have a line for the tagged passes");
-  // $40k, 2 d, and 5 of 6 -- each read out of the rotation rather than restated.
-  assert.ok(tagged.includes(`$${Number(esports[1]) / 1000}k`),
-    `the floor is ${esports[1]}, and the caption says: ${tagged}`);
-  assert.ok(tagged.includes(`≤ ${esports[2]} d`), `the horizon is ${esports[2]} days: ${tagged}`);
-  const taggedSlots = (rotation.match(/tag=(sports|esports)/g) || []).length
-    + (/\*\) tag=esports/.test(rotation) ? 3 : 0);
-  assert.ok(tagged.includes("5/6") || tagged.includes("5 of 6"),
-    `the rotation gives the tagged scopes five slots of six; the caption says: ${tagged}`);
-  assert.equal(taggedSlots, 5, "and if that share ever changes, this is where it shows");
+  // The two tagged scopes no longer share a floor, and this test used to REQUIRE that they
+  // did -- assert.equal(sports[1], esports[1]). What it was defending is that the caption
+  // tells the truth about the rotation, and that still holds; only the assumption that one
+  // line could describe both scopes has gone. So each scope is now checked against its own
+  // line. Esports scans with no floor on the owner's instruction after the supply was
+  // measured: 145 tradable markets in the live band, 3 of them over $40 000.
+  const esportsLine = CAPTION.split("\n").find((entry) => entry.includes("tag=esports"));
+  assert.ok(esportsLine, "the caption must have a line for the esports passes");
+  if (Number(esports[1]) === 0) {
+    assert.match(esportsLine, /no liquidity floor/, `the esports floor is 0: ${esportsLine}`);
+  } else {
+    assert.ok(esportsLine.includes(`$${Number(esports[1]) / 1000}k`),
+      `the esports floor is ${esports[1]}: ${esportsLine}`);
+  }
+  assert.ok(esportsLine.includes(`\u2264 ${esports[2]} d`), `the esports horizon is ${esports[2]} days: ${esportsLine}`);
+
+  const sportsLine = CAPTION.split("\n").find((entry) => entry.includes("tag=sports"));
+  assert.ok(sportsLine, "and one for sports, which kept its floor");
+  assert.ok(sportsLine.includes(`$${Number(sports[1]) / 1000}k`),
+    `the sports floor is ${sports[1]}: ${sportsLine}`);
+  assert.ok(sportsLine.includes(`\u2264 ${sports[2]} d`), `the sports horizon is ${sports[2]} days: ${sportsLine}`);
+
+  // The share of the ticks each tag gets, read out of the rotation rather than restated.
+  // esports takes the default arm, which is 6 minus the two named cases.
+  const namedSlots = (rotation.match(/^\s*\d+\)/gm) || []).length;
+  const esportsSlots = 6 - namedSlots;
+  assert.equal(esportsSlots, 4, "esports takes four slots of six");
+  assert.ok(esportsLine.includes(`${esportsSlots}/6`),
+    `esports gets ${esportsSlots} of 6 slots; the caption says: ${esportsLine}`);
+  assert.ok(sportsLine.includes("1/6"), `sports gets one slot; the caption says: ${sportsLine}`);
 
   const untagged = CAPTION.split("\n").find((entry) => entry.includes("6th pass untagged"));
   assert.ok(untagged.includes(`≤ ${broad[2]} d`), `the broad horizon is ${broad[2]} days: ${untagged}`);

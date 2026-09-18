@@ -123,10 +123,32 @@ jobs:
           # whole scopes -- at three ticks per scan only every third slot would ever be
           # reached, so two of the six would never come round at all.
           tick=$(( tick / scan_every ))
+          # Esports scans with NO liquidity floor and the full seven-day horizon, on the
+          # owner's instruction after the supply was measured.
+          #
+          # Measured 18.9.: Gamma had 145 tradable esports markets inside the live
+          # portfolio's 70-80% band ending within 24 hours. THREE of them cleared $40 000 of
+          # event liquidity. The floor alone was removing 98% of the supply before any
+          # portfolio rule applied, and the executor was left seeing 7 unique candidates a
+          # pass against 27 on 12.9., with a third of the account sitting in cash because
+          # there was nothing it was allowed to buy.
+          #
+          # The floor measures the wrong thing for this tag. Liquidity is resting book depth;
+          # esports books are thin and the trading happens anyway. Black Phoenix vs Lavked
+          # showed $123 458 of 24h volume against $11 102 of liquidity, and was dropped.
+          #
+          # Nothing downstream is loosened: the executor still demands its own $100 of 24h
+          # volume and a valid current entry price, so a market with no counterparty is still
+          # rejected -- at the point of trading, which is where that belongs, rather than at
+          # the point of looking. Sports keeps its floor; it is not the tag that ran out.
+          #
+          # The cost is real and was accepted knowingly: more rows scraped and retained,
+          # against a database already at 777 MB of which 79% is observations. The retention
+          # cap stays at 8000, so esports now competes with sports for those slots.
           case $(( tick % 6 )) in
             3) tag=sports;  liquidity=40000; days=2 ;;
             0) tag="";      liquidity=0;     days=7 ;;
-            *) tag=esports; liquidity=40000; days=2 ;;
+            *) tag=esports; liquidity=0;     days=7 ;;
           esac
           echo "Tick ${tick}: scanning ${tag:-the broad catalogue}."
           # A transient failure here must not stop the clock: the chain is handed on either

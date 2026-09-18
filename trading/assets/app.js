@@ -3307,7 +3307,8 @@ function renderScrapedScanControls() {
 // caption that slowly stops being true -- which is the only failure mode a caption has.
 const SCAN_SCOPE_LINES = [
   "button: tags=sports, esports · no liquidity floor · ends ≤ 24 h",
-  "scheduled: tags=esports, sports 5/6 passes · liquidity ≥ $40k · ends ≤ 2 d",
+  "scheduled: tag=esports 4/6 passes · no liquidity floor · ends ≤ 7 d",
+  "scheduled: tag=sports 1/6 pass · liquidity ≥ $40k · ends ≤ 2 d",
   "scheduled: every 6th pass untagged · no floor · ends ≤ 7 d",
   "retention: 8 000 active rows · anything outside sports/esports is dropped",
 ];
