@@ -1,0 +1,43 @@
+name: Trading Certainty Burst Diagnosis
+
+# Read-only diagnostic, manual only. Public GETs against the published state. No secrets, no
+# writes, no orders.
+#
+# Reported: "zase se uvolnil kapital pres close at certainity u vice nez jedne prilezitosti na
+# 99.9 v jeden moment. tzn. tvoje oprava neni nasazena nebo nefunguje".
+#
+# The source says otherwise on both counts, and the source is exactly what has been wrong
+# before. This reads the closed trades instead and groups the certainty closes by when they
+# landed, so the three possible answers separate:
+#
+#   same portfolio, one window   -> the guard is not working
+#   one per portfolio, one pass  -> the guard works per portfolio, and the rule has to be global
+#   same portfolio, passes apart -> the guard works; consecutive passes look like one moment
+
+on:
+  workflow_dispatch:
+    inputs:
+      pass_window_ms:
+        description: How close two closes must be to count as one pass, in milliseconds.
+        required: false
+        type: string
+        default: "180000"
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Group every certainty close by the pass it landed in
+        env:
+          TRADING_HOST: https://osobnizkusenosti.cz/trading
+          PROBE_PASS_WINDOW_MS: ${{ inputs.pass_window_ms }}
+        run: node trading/tools/certainty-burst-probe.mjs
