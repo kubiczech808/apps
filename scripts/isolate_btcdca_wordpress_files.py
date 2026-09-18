@@ -17,7 +17,21 @@ MODE = os.environ["BTCDCA_WORDPRESS_FILE_MODE"]
 BACKUP_DIRECTORY = ".btcdca-wordpress-isolation"
 RETRY_STAGING_DIRECTORY = f"{BACKUP_DIRECTORY}.retry-staging"
 MANIFEST = f"{BACKUP_DIRECTORY}/manifest.json"
-STATIC_REPLACEMENTS = ("index.html", ".htaccess", "robots.txt", "sitemap.xml")
+STATIC_ROUTE_DIRECTORIES = (
+    "login-user",
+    "signup-user",
+    "dca-calculator",
+    "forgot-password",
+    "reset-code",
+    "new-password",
+    "password-changed",
+    "user-otp",
+    "logout-user",
+    "btcdca-google-login",
+    "btcdca-google-callback",
+    "btcdca-google-token-login",
+)
+STATIC_REPLACEMENTS = ("index.html", ".htaccess", "robots.txt", "sitemap.xml", *STATIC_ROUTE_DIRECTORIES)
 WORDPRESS_ROOT_FILES = (
     "wp-activate.php",
     "wp-blog-header.php",

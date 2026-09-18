@@ -17,6 +17,20 @@ FILES = {
     ROOT / "btcdca-static" / "seo" / "robots.txt": "www/robots.txt",
     ROOT / "btcdca-static" / "seo" / "sitemap.xml": "www/sitemap.xml",
 }
+ROUTE_NAMES = (
+    "login-user",
+    "signup-user",
+    "dca-calculator",
+    "forgot-password",
+    "reset-code",
+    "new-password",
+    "password-changed",
+    "user-otp",
+    "logout-user",
+    "btcdca-google-login",
+    "btcdca-google-callback",
+    "btcdca-google-token-login",
+)
 
 
 def connect() -> ftplib.FTP:
@@ -42,12 +56,32 @@ def upload(ftp: ftplib.FTP, local: Path, remote: str) -> None:
         ftp.cwd(original)
 
 
+def upload_route_wrapper(ftp: ftplib.FTP, route: str) -> None:
+    original = ftp.pwd()
+    try:
+        ftp.cwd("www")
+        try:
+            ftp.mkd(route)
+        except ftplib.error_perm as exc:
+            if not str(exc).startswith("550"):
+                raise
+        ftp.cwd(route)
+        local = ROOT / "btcdca-static" / "routes" / route / "index.php"
+        with local.open('rb') as handle:
+            ftp.storbinary('STOR index.php', handle)
+    finally:
+        ftp.cwd(original)
+
+
 def main() -> None:
     ftp = connect()
     try:
         for local, remote in FILES.items():
             upload(ftp, local, remote)
             print(f'Uploaded {remote}')
+        for route in ROUTE_NAMES:
+            upload_route_wrapper(ftp, route)
+            print(f'Uploaded www/{route}/index.php')
     finally:
         ftp.quit()
 

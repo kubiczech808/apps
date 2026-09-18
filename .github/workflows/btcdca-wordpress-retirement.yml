@@ -76,6 +76,10 @@ jobs:
           ! grep -Eqi '<\?php|learn center|latest from the blog|wp-content|wordpress' btcdca-static/homepage/index.html
           grep -Fq 'BTC DCA static homepage' btcdca-static/homepage/index.html
           grep -Fq 'RewriteRule ^app/?$ /app/index.php [R=302,L,NE]' btcdca-static/seo/.htaccess
+          for route in login-user signup-user dca-calculator forgot-password reset-code new-password password-changed user-otp logout-user btcdca-google-login btcdca-google-callback btcdca-google-token-login; do
+            test -f "btcdca-static/routes/$route/index.php"
+          done
+          find btcdca-static/routes -name '*.php' -print0 | xargs -0 -n1 php -l
 
       - name: Audit existing account and application links
         run: |

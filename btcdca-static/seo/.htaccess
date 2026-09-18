@@ -1,4 +1,4 @@
-Options -Indexes
+Options -Indexes -MultiViews
 DirectoryIndex index.html index.php
 RewriteEngine On
 
