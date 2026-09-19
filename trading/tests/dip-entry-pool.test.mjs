@@ -220,3 +220,66 @@ test("dip pool: the real selection admits a catalogue row that opened in the ban
   assert.equal(bot.sortEligibleForStrategy([{ ...row, firstMarketProbability: 0.42 }], strategy).length, 0);
   assert.equal(bot.sortEligibleForStrategy([{ ...row, firstMarketProbability: null }], strategy).length, 0);
 });
+
+// Measured on paper-dip70 and paper-dip70live, 2026-09-19, with the record-side guard
+// already deployed:
+//
+//   token 1359914012738562...  "Counter-Strike: 3DMAX vs M80 - Map 2 Winner"
+//      WON   opened 16:36:08  entry 54.0%  mark 100.0%  pnl +4.26
+//      OPEN  opened 18:29:50  entry 54.0%  mark  54.0%  pnl  0.00
+//
+// The market RESOLVED and the same token was bought again two hours later. Reported as
+// "stejny trh se opakuje v kazdem poslednim execution behu. je jak v otevrenych pozicich,
+// tak i v zavrenych."
+//
+// The guard inside dipEntryCandidateRows could not stop it: mergeDipEntryPool adds ordinary
+// CATALOGUE rows to a dip portfolio's pool and those never pass through that builder. So
+// the rule has to sit on the pool, after the merge, where both halves are in one list.
+test("a dip portfolio never rebuys a market it has already traded, catalogue row or recorded hit", async () => {
+  const bot = await import("../tools/paper-trading-bot.mjs");
+  const price = 0.54;
+  const shares = 5 / price;
+  const row = (tokenId) => ({
+    tokenId, question: `market ${tokenId}`, outcome: "Yes",
+    status: "ELIGIBLE", selectionStatus: "ELIGIBLE",
+    marketProbability: price, marketPrice: price, aiProbability: price,
+    bestBid: price, bestAsk: price, spread: 0, volumeUsdc: 5000, liquidity: 5000,
+    // The premise the dip gate checks, so these rows are admissible on every other ground
+    // and the traded-token rule is the only thing that can refuse them.
+    firstMarketProbability: 0.78, eventStarted: true,
+    marketClosed: false, acceptingOrders: true,
+    endDate: new Date(Date.now() + 3600000).toISOString(),
+    resolutionEndDate: new Date(Date.now() + 3600000).toISOString(), daysToResolution: 1 / 24,
+    stakeUsdc: 5, shares, executableShares: shares, totalCostUsdc: 5,
+    netGainIfWinUsdc: shares - 5, netYield: (shares - 5) / 5, riskReward: (shares - 5) / 5,
+    expectedValueUsdc: shares * price - 5, marketExpectedValueUsdc: shares * price - 5,
+    annualizedReturn: 50, potentialAnnualizedReturn: 50, marketAnnualizedReturn: 50,
+    feeRate: 0, feesEnabled: false,
+  });
+  const dip = {
+    id: "dip70", label: "dip", selectionOrder: "highest_ev_pa_first",
+    selectionMetric: "expectedValueUsdc", stakeUsdc: 5, probabilitySource: "market",
+    marketType: "all", minNetYield: 0, minProbability: 0.3, maxProbability: 0.56,
+    liveEventMode: "only", dipEntryEnabled: true, dipEntryOpenMin: 0.7, dipEntryOpenMax: 0.99,
+  };
+  const catalogue = [row("already-won"), row("never-traded")];
+
+  // Without the memory both get through, which is what makes the assertion below mean
+  // something rather than passing on an empty pool.
+  assert.equal(bot.sortEligibleForStrategy(catalogue, dip).length, 2);
+
+  // The token whose position RESOLVED is the reported case: alreadyOpen() lets it back the
+  // moment the trade leaves OPEN, and WON is exactly that.
+  const traded = bot.tradedTokenIdSet({
+    trades: [{ tokenId: "already-won", status: "WON", realizedPnlUsdc: 4.26 }],
+  });
+  const rows = bot.sortEligibleForStrategy(catalogue, dip, traded);
+  assert.deepEqual(rows.map((item) => item.tokenId), ["never-traded"],
+    "a resolved market must not come back through the catalogue half of the pool");
+
+  // And an ordinary portfolio is untouched: re-entering a market it once held is rotation
+  // working as intended, not a defect, so the rule is the dip rule's alone.
+  const plain = { ...dip, dipEntryEnabled: false };
+  assert.equal(bot.sortEligibleForStrategy(catalogue, plain, traded).length, 2,
+    "only a dip portfolio has one-position-per-market-ever");
+});

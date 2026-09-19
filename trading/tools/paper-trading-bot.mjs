@@ -5019,32 +5019,46 @@ async function fetchMarketByTokenIdUncached(tokenId) {
 // Bounded to rows that have no slug AND have never been checked, which is at most the
 // handful opened in this pass and normally none at all. A Gamma gap leaves the row for the
 // next pass to repair rather than failing the publish.
-async function fillMissingTradeAddresses(state) {
+async function markNewlyOpenedTrades(state) {
   const pending = [];
   for (const portfolioState of Object.values(state?.paperPortfolios || {})) {
-    for (const trade of (Array.isArray(portfolioState?.trades) ? portfolioState.trades : [])) {
-      if (!trade || trade.lastCheckedAt) continue;
-      if (String(trade.slug || trade.eventSlug || "").trim()) continue;
-      if (!String(trade.tokenId || "").trim()) continue;
-      pending.push(trade);
-    }
+    const trades = Array.isArray(portfolioState?.trades) ? portfolioState.trades : [];
+    trades.forEach((trade, index) => {
+      if (!trade || trade.lastCheckedAt) return;
+      if (!String(trade.tokenId || "").trim()) return;
+      if (!OPEN_STATUSES.has(trade.status)) return;
+      pending.push({ trades, index, trade });
+    });
   }
   if (!pending.length) return 0;
-  let filled = 0;
-  await mapWithConcurrency(pending, async (trade) => {
-    let market = null;
-    try {
-      market = await fetchMarketByTokenId(trade.tokenId);
-    } catch {
-      return;
+  let marked = 0;
+  await mapWithConcurrency(pending, async (entry) => {
+    const trade = entry.trade;
+    // The address first, because markOpenTrade starts from the slug and returns early on
+    // MARKET_NOT_FOUND -- above the mark, the P/L and the resolution date. A row rebuilt
+    // from a dip record may have no slug of its own; its token is the one identifier every
+    // row always carries.
+    if (!String(trade.slug || trade.eventSlug || "").trim()) {
+      try {
+        const market = await fetchMarketByTokenId(trade.tokenId);
+        if (market) {
+          trade.slug = market.slug || trade.slug || "";
+          trade.eventSlug = marketEventSlug(market) || trade.eventSlug || "";
+        }
+      } catch { /* a Gamma gap leaves this row for the next pass rather than failing the publish */ }
     }
-    if (!market) return;
-    trade.slug = market.slug || trade.slug || "";
-    trade.eventSlug = marketEventSlug(market) || trade.eventSlug || "";
-    filled += 1;
+    try {
+      // markOpenTrade, the SAME function the ordinary refresh uses, rather than a second
+      // copy of the arithmetic: "proc proste nevyuzivas principu fungovani, ktere funguji u
+      // jinych portfolii". It returns the updated row rather than mutating, exactly as
+      // refreshTrades consumes it, so the row is replaced in place.
+      const updated = await markOpenTrade(trade);
+      if (updated && updated !== trade) entry.trades[entry.index] = updated;
+      marked += 1;
+    } catch { /* same */ }
   });
-  if (filled) console.log(`addressed ${filled} newly opened position(s) that had no slug of their own`);
-  return filled;
+  if (marked) console.log(`marked ${marked} newly opened position(s) before publishing`);
+  return marked;
 }
 
 async function fetchMarketByTokenId(tokenId) {
@@ -8897,9 +8911,32 @@ export function sortEligibleForStrategy(eligible, strategy = PAPER_STRATEGIES.co
   // The recordings still lead: they carry the price the dip actually reached, which is the
   // one the position should open at, and the catalogue row for the same token carries a
   // later quote. Deduplicated by token, recordings first.
-  const pool = dipEntryRuleState(strategy).enabled
+  const dipEnabled = dipEntryRuleState(strategy).enabled;
+  let pool = dipEnabled
     ? mergeDipEntryPool(dipEntryCandidateRows(strategy, DIP_ENTRY_HITS, tradedTokenIds), eligible)
     : eligible;
+  // One position per market, ever, for a dip portfolio -- applied to the WHOLE pool rather
+  // than to the recorded half of it.
+  //
+  // Measured on paper-dip70 and paper-dip70live, 2026-09-19, with the record-side guard
+  // already deployed:
+  //
+  //   token 1359914012738562...  "Counter-Strike: 3DMAX vs M80 - Map 2 Winner"
+  //      WON   opened 16:36:08  entry 54.0%  mark 100.0%  pnl +4.26
+  //      OPEN  opened 18:29:50  entry 54.0%  mark  54.0%  pnl  0.00
+  //
+  // The market RESOLVED and was bought again two hours later. No stop loss, no exit reason
+  // -- it simply came back. The guard inside dipEntryCandidateRows could not stop it,
+  // because mergeDipEntryPool adds ordinary catalogue rows to this pool and those never go
+  // through that builder; and alreadyOpen() lets a token back the moment its position
+  // leaves OPEN, which resolving is. So the same fixture reopened on every run.
+  //
+  // Here rather than in findFirstOpenCandidate: only a dip portfolio has this rule. An
+  // ordinary portfolio re-entering a market it once held is rotation working as intended.
+  if (dipEnabled && tradedTokenIds?.size) {
+    pool = pool.filter((row) => !tradedTokenIds.has(
+      String(row?.tokenId || row?.clobTokenId || row?.assetId || "").trim()));
+  }
   const strategyRows = strategyEligibleCandidates(pool, strategy);
   const rows = strategyRows;
   if (strategy.selectionOrder === "highest_reward_risk_first") {
@@ -13410,7 +13447,7 @@ async function executeManualPaperRunFromStoredCandidates(state, strategiesForRun
     eligible.push(...revalidated.filter((item) => String(item.status || "").toUpperCase() === "ELIGIBLE"));
   }
 
-  await timed("fillMissingTradeAddresses", () => fillMissingTradeAddresses(state));
+  await timed("markNewlyOpenedTrades", () => markNewlyOpenedTrades(state));
   state.generatedAt = nowIso();
   updatePortfolio(state);
   const mergedEvaluations = await refreshStoredEvaluationResolutionStatuses(expirePastEvaluations(mergeEvaluationLists(evaluations, state.evaluations)));
@@ -14008,7 +14045,7 @@ async function run() {
         return maybeOpenScheduledTrade(portfolioState, rankedEligible, strategy, strategyExecutionRows, { diversificationDiagnostics });
       });
 
-  await timed("fillMissingTradeAddresses", () => fillMissingTradeAddresses(state));
+  await timed("markNewlyOpenedTrades", () => markNewlyOpenedTrades(state));
   state.generatedAt = nowIso();
   updatePortfolio(state);
   const mergedEvaluations = await refreshStoredEvaluationResolutionStatuses(expirePastEvaluations(mergeEvaluationLists(evaluations, state.evaluations)));
@@ -14122,7 +14159,7 @@ export {
   markOpenTrade,
   markWaitingLimitOrder,
   fetchMarketByTokenId,
-  fillMissingTradeAddresses,
+  markNewlyOpenedTrades,
   limitOrderEventEnded,
   refreshUnfilledLimitOrderOutcomes,
   unfilledLimitOrderNeedsOutcome,

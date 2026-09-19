@@ -11595,7 +11595,12 @@ test("dip entry on paper: recorded dips are the candidate pool, and only for tho
   // above it. A portfolio buying 30-56% had a third of its band in the catalogue and was
   // discarding it, which is how five candidates sat on screen marked READY while the run
   // log said none passed.
-  assert.match(bot, /const pool = dipEntryRuleState\(strategy\)\.enabled\n\s+\? mergeDipEntryPool\(dipEntryCandidateRows\(strategy, DIP_ENTRY_HITS, tradedTokenIds\), eligible\)\n\s+: eligible;/);
+  assert.match(bot, /let pool = dipEnabled\n\s+\? mergeDipEntryPool\(dipEntryCandidateRows\(strategy, DIP_ENTRY_HITS, tradedTokenIds\), eligible\)\n\s+: eligible;/);
+  // And the traded-token rule sits AFTER the merge, on the whole pool. Before it did,
+  // a catalogue row for a market this portfolio had already traded went straight through --
+  // measured as the same resolved token reopening two hours after it won. The behaviour is
+  // executed in tests/dip-entry-pool; this is what proves the two halves meet here.
+  assert.match(bot, /if \(dipEnabled && tradedTokenIds\?\.size\) \{\n\s+pool = pool\.filter\(/);
   // Every other portfolio is untouched.
   assert.match(bot, /const strategyRows = strategyEligibleCandidates\(pool, strategy\);/);
   // And the tokens this portfolio has already traded reach that call from the one gate every

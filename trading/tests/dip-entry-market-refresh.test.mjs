@@ -271,31 +271,53 @@ test("a position opened this pass is addressed before it is published", async ()
     },
   };
   await withStubbedFetch(marketAndBookHandler({ token: `${TOKEN}0005` }),
-    () => bot.fillMissingTradeAddresses(state));
+    () => bot.markNewlyOpenedTrades(state));
   const [row] = state.paperPortfolios.dip70.trades;
   assert.equal(row.slug, "dota2-cs-playti-2026-09-19-game1");
   assert.equal(row.eventSlug, "dota2-cs-playti-2026-09-19", "the event slug is what the link needs");
 });
 
-test("BAIT: an already-refreshed row is never re-addressed, whatever it carries", async () => {
-  // The bound that keeps this free: a row that has been checked is the refresh's business,
-  // and asking Gamma again for every position on every pass would multiply the bot's load
-  // across the whole book.
+test("BAIT: an already-refreshed row is never touched again, but a slug is no longer an exemption", async () => {
+  // The bound that keeps this cheap still holds and is what this defends: a row that has
+  // been CHECKED is the ordinary refresh's business, and re-asking for every position on
+  // every pass would multiply the bot's load across the whole book. A row with no token
+  // cannot be looked up, and a finished row has nothing left to mark.
   let calls = 0;
   const state = {
     paperPortfolios: {
       dip70: {
         trades: [
           { id: "checked", status: "OPEN", tokenId: `${TOKEN}0006`, slug: "", lastCheckedAt: "2026-09-19T11:58:47Z" },
-          { id: "addressed", status: "OPEN", tokenId: `${TOKEN}0007`, slug: "already-has-one" },
           { id: "tokenless", status: "OPEN", tokenId: "", slug: "" },
+          { id: "done", status: "WON", tokenId: `${TOKEN}0009`, slug: "" },
         ],
       },
     },
   };
-  await withStubbedFetch(() => { calls += 1; return []; }, () => bot.fillMissingTradeAddresses(state));
-  assert.equal(calls, 0, "none of these three qualify, so nothing may be asked for");
-  assert.equal(state.paperPortfolios.dip70.trades[1].slug, "already-has-one");
+  await withStubbedFetch(() => { calls += 1; return []; }, () => bot.markNewlyOpenedTrades(state));
+  assert.equal(calls, 0, "a checked, a tokenless and a finished row are all none of this function's business");
+
+  // What CHANGED, and it is the defect this rewrite exists for. Carrying a slug used to
+  // exempt a row from this step entirely -- so a dip position born WITH an address (which
+  // they now are, since the hit carries one) was skipped here and published with mark =
+  // entry and P/L 0.00 until the next pass. Measured 2026-09-19 on paper-dip70:
+  // "entry 54.0% mark 54.0% p/l 0.00 ... lastCheckedAt (never refreshed)".
+  // Reported: "ani pozice v opened positions neukazuji dobre aktualni p/l".
+  const newborn = {
+    paperPortfolios: {
+      dip70: {
+        trades: [{
+          id: "has-slug", status: "OPEN", tokenId: `${TOKEN}0005`,
+          slug: "dota2-cs-playti-2026-09-19-game1", eventSlug: "dota2-cs-playti-2026-09-19",
+          entryPrice: 0.54, shares: 9.26, stakeUsdc: 5, totalCostUsdc: 5,
+        }],
+      },
+    },
+  };
+  await withStubbedFetch(marketAndBookHandler({ token: `${TOKEN}0005` }),
+    () => bot.markNewlyOpenedTrades(newborn));
+  const row = newborn.paperPortfolios.dip70.trades[0];
+  assert.ok(row.lastCheckedAt, "a newborn that already has its address must still be marked");
 });
 
 test("BAIT: a Gamma gap leaves the row for the next pass instead of failing the publish", async () => {
@@ -303,7 +325,7 @@ test("BAIT: a Gamma gap leaves the row for the next pass instead of failing the 
     paperPortfolios: { dip70: { trades: [{ id: "n", status: "OPEN", tokenId: `${TOKEN}0008`, slug: "" }] } },
   };
   await withStubbedFetch(() => { throw new Error("Gamma is down"); },
-    () => bot.fillMissingTradeAddresses(state));
+    () => bot.markNewlyOpenedTrades(state));
   assert.equal(state.paperPortfolios.dip70.trades[0].slug, "", "nothing invented, nothing thrown");
 });
 
@@ -313,9 +335,9 @@ test("BAIT: the pass actually calls the addressing before it publishes", async (
   // would leave exactly half the passes shipping a blind newest row.
   const { readFileSync } = await import("node:fs");
   const source = readFileSync(new URL("../tools/paper-trading-bot.mjs", import.meta.url), "utf8");
-  const calls = source.split("await timed(\"fillMissingTradeAddresses\"").length - 1;
+  const calls = source.split("await timed(\"markNewlyOpenedTrades\"").length - 1;
   assert.equal(calls, 2, "both publish paths must address newly opened positions");
-  for (const part of source.split("await timed(\"fillMissingTradeAddresses\"").slice(1)) {
+  for (const part of source.split("await timed(\"markNewlyOpenedTrades\"").slice(1)) {
     assert.match(part.slice(0, 200), /updatePortfolio\(state\)/,
       "it must run BEFORE the portfolio row is rebuilt and published, not after");
   }
