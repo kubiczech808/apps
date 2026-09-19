@@ -233,7 +233,7 @@ test('asset tickers open a timeframe price chart with supply and demand zones', 
   assert.match(js, /structure\?\.chartPivots/)
   assert.match(js, /structure\?\.activeRange/)
   assert.match(js, /const developingSwing = structure\?\.developingSwing/)
-  assert.match(js, /const developingCounter = timeframeId === '1h' \? structure\?\.developingCounterSwing : null/)
+  assert.match(js, /const developingCounter = structure\?\.developingCounterSwing/)
   assert.match(js, /replacesCandleIndex/)
   assert.match(js, /const structurePivots = new Map\(\)/)
   assert.match(js, /one chronological, alternating/)

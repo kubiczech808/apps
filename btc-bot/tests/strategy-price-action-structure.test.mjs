@@ -417,6 +417,17 @@ test('a delayed 4H spine uses its current LH to LL wave for pullback levels', ()
   assert.equal(result.structure.activeRange.low.label, 'LL')
   assert.ok(result.structure.activeRange.high.price > 160 && result.structure.activeRange.high.price < 161)
   assert.ok(result.structure.activeRange.low.price > 152 && result.structure.activeRange.low.price < 153)
+
+  // The chart is an audit surface: the active edge used for pullback and
+  // risk calculations must be the visible terminal leg, not a disconnected
+  // older spine that ends before the current wave.
+  const chartPivots = result.structure.chartPivots
+  assert.ok(chartPivots.some((pivot) => pivot.candleIndex === result.structure.activeRange.high.candleIndex && pivot.label === 'LH'))
+  assert.ok(chartPivots.some((pivot) => pivot.candleIndex === result.structure.activeRange.low.candleIndex && pivot.label === 'LL'))
+  assert.ok(chartPivots.some((pivot) => pivot.candleIndex === result.structure.developingCounterSwing.candleIndex && pivot.label === 'LH'))
+  assert.ok(chartPivots.every((pivot, index) => index === 0 || (
+    pivot.time > chartPivots[index - 1].time && pivot.kind !== chartPivots[index - 1].kind
+  )))
 })
 
 test('structure horizons and pivot widths scale with timeframe', () => {

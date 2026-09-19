@@ -3,7 +3,7 @@ import { ceilPrice, floorPrice, normalizeCandlePrices, roundPrice } from './pric
 import { buildFvgSupplyDemandZones, candleSignal, marketStructure } from './priceaction.mjs'
 
 export const PRICE_ACTION_STRUCTURE_ID = 'price-action-structure-v1'
-export const PRICE_ACTION_MATRIX_SCHEMA = 33
+export const PRICE_ACTION_MATRIX_SCHEMA = 34
 export const PRICE_ACTION_CHART_CANDLE_LIMITS = {
   '1h': 8760,
   '4h': 2190,
@@ -306,24 +306,39 @@ const labelStructureSwings = (swings = []) => {
 }
 
 // This is the exact pivot sequence consumed by the chart. Keep it in the
-// strategy layer, rather than asking the browser to merge legs and ranges:
-// a live LL/HH replaces the pivot it broke and the resulting line must stay
-// chronological and alternating even before that terminal pivot is confirmed.
-const chartStructurePivots = (swings, labels, developingSwing) => {
-  const replaces = developingSwing?.replacesCandleIndex
-  const pivots = swings
-    .slice(-8)
-    .map((swing) => pivotSummary(swing, labels.get(swing.index)))
-    .filter((pivot) => !(developingSwing
-      && pivot.kind === developingSwing.kind
-      && pivot.candleIndex === replaces))
-
-  if (developingSwing) pivots.push(developingSwing)
+// strategy layer, rather than asking the browser to merge legs and ranges.
+// The slow structural spine establishes the trend, while activeRange adds its
+// responsive terminal HH/LH or HL/LL. Without that bridge an uptrend could be
+// correctly classified from the active range but its white audit line stop at
+// an older pivot several weeks earlier.
+const chartStructurePivots = ({ swings, labels, activeRange, trend, developingSwing, developingCounter }) => {
+  const activePivots = [activeRange?.high, activeRange?.low].filter(Boolean)
+  const continuation = trend === 'up'
+    ? developingSwing?.kind === 'high' ? developingSwing : developingCounter
+    : trend === 'down'
+      ? developingSwing?.kind === 'low' ? developingSwing : developingCounter
+      : developingSwing
+  const replaces = continuation?.replacesCandleIndex
+  const pivots = [
+    ...swings.slice(-8).map((swing) => pivotSummary(swing, labels.get(swing.index))),
+    ...activePivots,
+    continuation,
+  ].filter((pivot) => !(continuation
+    && pivot !== continuation
+    && pivot.kind === continuation.kind
+    && pivot.candleIndex === replaces))
 
   return pivots
     .filter((pivot) => pivot?.kind && Number.isFinite(pivot.price) && Number.isFinite(pivot.time))
     .sort((left, right) => left.time - right.time)
     .reduce((line, pivot) => {
+      const atSamePivot = line.findIndex((previous) => previous.candleIndex === pivot.candleIndex)
+      if (atSamePivot >= 0) {
+        // activeRange carries the definitive HH/LH/HL/LL label for a pivot
+        // that may also exist in the wider spine.
+        line[atSamePivot] = { ...line[atSamePivot], ...pivot, label: pivot.label ?? line[atSamePivot].label }
+        return line
+      }
       const previous = line.at(-1)
       if (!previous || previous.kind !== pivot.kind) {
         line.push(pivot)
@@ -1600,7 +1615,14 @@ export const classifyStructure = (
       developingCounterSwing: developingCounter,
       confirmed: structureConfirmed,
       recentSwings: structure.swings.slice(-8).map((swing) => pivotSummary(swing, persistent.labels.get(swing.index))),
-      chartPivots: chartStructurePivots(structure.swings, persistent.labels, developingSwing),
+      chartPivots: chartStructurePivots({
+        swings: structure.swings,
+        labels: persistent.labels,
+        activeRange,
+        trend,
+        developingSwing,
+        developingCounter,
+      }),
       contextRecentSwings: contextStructure.swings.slice(-8).map((swing) => pivotSummary(swing)),
     },
     zones: includeZones

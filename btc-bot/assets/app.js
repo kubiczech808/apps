@@ -1440,7 +1440,7 @@ const renderAssetChart = () => {
   // audit line. Older matrices fall back to recentSwings until their next scan.
   const structurePivots = new Map()
   const developingSwing = structure?.developingSwing
-  const developingCounter = timeframeId === '1h' ? structure?.developingCounterSwing : null
+  const developingCounter = structure?.developingCounterSwing
   for (const swing of [
     ...(structure?.chartPivots ?? structure?.recentSwings ?? []),
     // Matrices saved before chartPivots existed still need their live terminal
