@@ -76,6 +76,34 @@ async function main() {
     console.log("");
   }
 
+  // The worker stamps a portfolioId on this record AT THE MOMENT IT DECIDES TO SELL --
+  // whatever entry.portfolioId its exit plan carried right then, whether that came from the
+  // token's true owner or from defaultPolicy after the owner's run log had rotated out. This
+  // is the one place that answers "which portfolio did the worker THINK it was protecting",
+  // for a position that has since closed and left every other collection above.
+  try {
+    const records = await fetchJson(`${HOST}/data/live-exit-records.json?t=${Date.now()}`);
+    // Keyed by tokenId on disk (live_exit_record_request, api.php: "$records[$tokenId] =
+    // $record" then "json_encode(['records' => $records])") -- an OBJECT, not an array. The
+    // dip-entry-record and archive-workflow readouts have both cost real time to a check
+    // written against the wrong shape; read the actual encoding rather than assume a list.
+    const stored = records?.records;
+    const rows = Array.isArray(stored) ? stored : (stored && typeof stored === "object" ? Object.values(stored) : []);
+    const hits = rows.filter((row) => matches({ question: row?.question, outcome: row?.outcome }));
+    console.log(`== live-exit-records.json: ${rows.length} row(s), ${hits.length} matching`);
+    for (const row of hits) {
+      console.log(`   "${String(row?.question || "").slice(0, 70)}" (${row?.outcome || "-"})`);
+      console.log(`      at ${row?.at || "-"}   reason ${row?.reason || "-"}`
+        + `   portfolioId ${text(row?.portfolioId)}   orderId ${text(row?.orderId)}`);
+      console.log(`      exitPrice ${text(row?.exitPrice)}   stopPrice ${text(row?.stopPrice)}`
+        + `   bestBid ${text(row?.bestBid)}   bestAsk ${text(row?.bestAsk)}   shares ${text(row?.shares)}`);
+    }
+    if (!hits.length) console.log("   (none)");
+    console.log("");
+  } catch (error) {
+    console.log(`== live-exit-records.json: !! ${error.message}\n`);
+  }
+
   // The state is built from the account's trade history, one page of it. If the account has
   // outgrown that page the row was never seen, which is a different fault from a row that
   // was seen and mis-attributed -- so ask the source directly.
