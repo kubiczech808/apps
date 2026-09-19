@@ -59,6 +59,60 @@ async function main() {
     console.log("\n!! no open position matched -- widen DUPLICATE_SEARCH, or the position has since closed");
   }
 
+  // Reported: "limit objednavky uz zdvojene obcas cekaji na vyporadani ... u market
+  // objednavek jsem si toho zatim nikdy nevsiml."
+  //
+  // Two bids RESTING on one token is the state that proves two separate orders were
+  // placed, before any fill can blur it -- and "limit only, never market" is the
+  // discriminator, because only a resting order can be culled off the book and restored.
+  // A market (FAK) order never rests, so it never enters that path at all.
+  const openOrders = Array.isArray(live.openOrders) ? live.openOrders : [];
+  const buyOrders = openOrders.filter((row) => !String(row?.side || "").toUpperCase().includes("SELL"));
+  const byToken = new Map();
+  for (const row of buyOrders) {
+    const key = String(row?.tokenId || row?.assetId || "").trim();
+    if (!key) continue;
+    if (!byToken.has(key)) byToken.set(key, []);
+    byToken.get(key).push(row);
+  }
+  const doubled = [...byToken.entries()].filter(([, rows]) => rows.length > 1);
+  console.log(`\n== resting BUY orders: ${buyOrders.length} on ${byToken.size} token(s), ${doubled.length} token(s) carrying MORE THAN ONE`);
+  for (const [token, rows] of doubled) {
+    console.log(`   token ${token.slice(0, 24)}...  "${String(rows[0]?.question || "").slice(0, 52)}"`);
+    for (const row of rows) {
+      console.log(`      id ${String(row?.id || row?.orderId || "-").slice(0, 20)}   price ${text(row?.price ?? row?.limitPrice)}`
+        + `   size ${text(row?.originalSize ?? row?.size)}   remaining ${text(row?.remainingSize)}   created ${text(row?.createdAt)}`);
+    }
+    // Same price AND same size means a re-placement of one order rather than two
+    // independent decisions -- the executor sizes to a stake, and a second decision at a
+    // later moment would almost never land on the identical share count.
+    const signature = new Set(rows.map((row) => `${text(row?.price ?? row?.limitPrice)}@${text(row?.originalSize ?? row?.size)}`));
+    console.log(`      -> ${signature.size === 1 ? "IDENTICAL price and size: a re-placement of the same order" : "different price/size: two independent sizings"}`);
+  }
+  if (!doubled.length) console.log("   (none resting twice right now -- the doubling may already have filled)");
+
+  // The restore path is the one BUY that never passes the entry-claim guard:
+  // restoreCulledOrders -> restoreOpenOrder -> submitOrder, with no claim taken. Its input
+  // is this list, so a row here whose token is ALSO resting right now is the exact
+  // precondition for placing a second identical bid.
+  const unfilled = Array.isArray(live.unfilledLimitOrders) ? live.unfilledLimitOrders : [];
+  const restorable = unfilled.filter((row) => String(row?.status || "").toUpperCase() === "LIVE_LIMIT_ORDER_UNFILLED");
+  const restingTokens = new Set(buyOrders.map((row) => String(row?.tokenId || row?.assetId || "").trim()).filter(Boolean));
+  const heldTokens = new Set(positions.map((row) => String(row?.tokenId || row?.assetId || "").trim()).filter(Boolean));
+  const contradicted = restorable.filter((row) => {
+    const token = String(row?.tokenId || row?.assetId || "").trim();
+    return token && (restingTokens.has(token) || heldTokens.has(token));
+  });
+  console.log(`\n== the restore queue (what "vanished" and may be put back)`);
+  console.log(`   ${restorable.length} row(s) marked LIVE_LIMIT_ORDER_UNFILLED`);
+  console.log(`   ${contradicted.length} of them name a token the account is resting or holding RIGHT NOW`);
+  for (const row of contradicted.slice(0, 10)) {
+    const token = String(row?.tokenId || row?.assetId || "").trim();
+    console.log(`      "${String(row?.question || "").slice(0, 52)}"  price ${text(row?.price ?? row?.limitPrice)}`
+      + `  size ${text(row?.remainingSize ?? row?.releasedSize)}  left the book ${text(row?.closedAt ?? row?.detectedAt)}`
+      + `  ${restingTokens.has(token) ? "STILL RESTING" : "NOW HELD"}`);
+  }
+
   console.log("\n== live-entry-claims.json for this token");
   let claimedByPortfolio = null;
   try {
@@ -153,15 +207,33 @@ async function main() {
         hitsForPortfolio.push({ at: run.generatedAt || run.runAt, action: run.action, side: row.side, price: row.orderPrice, size: row.orderSize, claimed: run.entryClaim?.claimed, claimReason: run.entryClaim?.reason });
       }
     }
-    console.log(`   ${portfolio.mode}${portfolio.label ? ` (${portfolio.label})` : ""}: ${hitsForPortfolio.length} matching run-log entr(y/ies)`);
+    // Every restore this portfolio performed, whatever token -- not only the searched
+    // market. This is the unguarded BUY: restoreCulledOrders takes no entry claim, so a
+    // restore leaves no trace in live-entry-claims.json and is invisible to every check
+    // that reads it. The run log is the only place it is recorded at all.
+    const restores = [];
+    for (const run of runs) {
+      for (const entry of (Array.isArray(run.restoredCulledOrders) ? run.restoredCulledOrders : [])) {
+        restores.push({ at: run.generatedAt || run.runAt, ...entry });
+      }
+    }
+    console.log(`   ${portfolio.mode}${portfolio.label ? ` (${portfolio.label})` : ""}:`
+      + ` ${hitsForPortfolio.length} matching run-log entr(y/ies), ${restores.length} culled-order restore(s) on record`);
     for (const hit of hitsForPortfolio.slice(0, 10)) {
       console.log(`      ${String(hit.at || "").slice(0, 19)} ${String(hit.action || "").padEnd(14)} side ${hit.side} price ${text(hit.price)} size ${text(hit.size)}`
         + `   claimed ${text(hit.claimed)}${hit.claimReason ? `   reason "${hit.claimReason}"` : ""}`);
     }
+    for (const restore of restores.slice(0, 10)) {
+      console.log(`      RESTORE ${String(restore.at || "").slice(0, 19)}  accepted ${text(restore.accepted)}`
+        + `  price ${text(restore.price)}  size ${text(restore.size)}`
+        + `  left the book ${String(restore.leftBookAt || "-").slice(0, 19)}`
+        + `  "${String(restore.question || "").slice(0, 44)}"`);
+    }
   }
-  console.log("\n   Two different portfolios both showing a SUBMITTED entry for the same token means the");
-  console.log("   guard let both claims through; one portfolio showing it twice means either the guard");
-  console.log("   was bypassed on a retry, or the same run submitted the same candidate twice.");
+  console.log("\n   A restore re-places the ORIGINAL price and size and takes no entry claim, so if the");
+  console.log("   order it is replacing was never really gone, the result is two identical resting bids");
+  console.log("   that a single taker sweep fills in one transaction -- limit orders only, because a");
+  console.log("   market order never rests and so can never be culled or restored.");
 }
 
 main().catch((error) => {
