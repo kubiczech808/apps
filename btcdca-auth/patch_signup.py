@@ -65,6 +65,38 @@ block = """    <?php if (!empty($_SESSION['btcdca_google_error'])): ?>
     <div class="divider">or</div>
 """
 
+password_message_fix = """
+<script id="btcdca-password-requirements-fix">
+(function () {
+  var rules = [
+    'Use at least 8 characters.',
+    'Include an uppercase letter.',
+    'Include a lowercase letter.',
+    'Include a number.',
+    'Include a special character.'
+  ];
+
+  document.querySelectorAll('.alert-danger').forEach(function (alert) {
+    if (alert.textContent.indexOf('Use at least 8 characters in length') === -1) {
+      return;
+    }
+
+    var title = document.createElement('strong');
+    title.textContent = 'Choose a stronger password:';
+    var list = document.createElement('ul');
+    list.style.margin = '8px 0 0 18px';
+    list.style.padding = '0';
+    rules.forEach(function (rule) {
+      var item = document.createElement('li');
+      item.textContent = rule;
+      list.appendChild(item);
+    });
+    alert.replaceChildren(title, list);
+  });
+}());
+</script>
+"""
+
 if ".google-oauth-wrap" not in html:
     if "</style>" not in html:
         raise SystemExit("Could not find </style> in signup-user.php")
@@ -113,6 +145,22 @@ html = html.replace(
     'Create Account &amp; Activate Plan →',
     'Create Account →',
 )
+
+html = html.replace(
+    'pattern="(?=.*\\d)(?=.*[a-z])(?=.*[A-Z]).{8,}"',
+    'pattern="(?=.*\\d)(?=.*[a-z])(?=.*[A-Z])(?=.*[^A-Za-z0-9]).{8,}"',
+)
+html = html.replace(
+    'placeholder="Min 8 chars, uppercase, number"',
+    'placeholder="Min 8 chars, upper/lowercase, number, special char"',
+)
+html = html.replace(
+    'title="Must contain at least one number, one uppercase and lowercase letter, and at least 8 characters"',
+    'title="Use at least 8 characters, including uppercase, lowercase, a number, and a special character"',
+)
+
+if 'btcdca-password-requirements-fix' not in html and '</body>' in html:
+    html = html.replace('</body>', password_message_fix + '\n</body>', 1)
 
 html = html.replace('action="signup-user.php"', 'action="/signup-user/"')
 html = html.replace('action="signup-user"', 'action="/signup-user/"')
