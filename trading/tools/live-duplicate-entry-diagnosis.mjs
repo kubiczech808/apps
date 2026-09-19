@@ -60,6 +60,7 @@ async function main() {
   }
 
   console.log("\n== live-entry-claims.json for this token");
+  let claimedByPortfolio = null;
   try {
     const claims = await fetchJson(`${HOST}/data/live-entry-claims.json?t=${Date.now()}`);
     const rows = claims?.claims && typeof claims.claims === "object" ? claims.claims : {};
@@ -68,9 +69,27 @@ async function main() {
       const key = `BUY:${tokenId}`;
       const claim = rows[key];
       console.log(`   ${key.slice(0, 40)}...   ${claim ? JSON.stringify(claim) : "(no claim on file -- released, expired, or never claimed through the guard)"}`);
+      if (claim?.portfolioId) claimedByPortfolio = String(claim.portfolioId);
     }
   } catch (error) {
     console.log(`   !! ${error.message}`);
+  }
+
+  // What a SINGLE order for this portfolio should have cost -- so a fill/position total of
+  // roughly double that number is measured against the portfolio's own setting, not assumed.
+  if (claimedByPortfolio) {
+    try {
+      const configPayload = await fetchJson(`${HOST}/api.php?action=portfolio-config&t=${Date.now()}`);
+      const config = configPayload?.config || configPayload || {};
+      const id = claimedByPortfolio.replace(/^live-custom-/, "");
+      const portfolio = claimedByPortfolio === "live" ? config?.live
+        : claimedByPortfolio === "live5050" ? config?.live5050
+        : config?.livePortfolios?.[id];
+      console.log(`\n== ${claimedByPortfolio}'s own configured stake`);
+      console.log(`   stakeUsdc ${text(portfolio?.stakeUsdc)}   displayName ${text(portfolio?.displayName)}`);
+    } catch (error) {
+      console.log(`   !! ${error.message}`);
+    }
   }
 
   console.log("\n== the account's own trade history for this token (data-api, up to 500 rows)");
@@ -89,6 +108,16 @@ async function main() {
           console.log(`      ${new Date(ts).toISOString()}   side ${fill?.side}   price ${fill?.price}   size ${fill?.size}`
             + `   tx ${String(fill?.transactionHash || "").slice(0, 14)}...   gap ${gap}`);
           previousTs = ts;
+        }
+        // The full row, every field data-api actually sends -- an order id, maker/taker
+        // role, anything that tells apart "one order, two matched legs" (completely
+        // ordinary exchange behaviour, no bug) from "two separate orders that happened to
+        // settle together" (which is the thing worth chasing). Guessing the field name
+        // instead of printing everything is the mistake that has already cost real time
+        // in this file more than once.
+        if (fills.length > 1) {
+          console.log(`      full rows, for a field that tells the two fills apart:`);
+          for (const fill of fills) console.log(`         ${JSON.stringify(fill)}`);
         }
       }
     } catch (error) {
