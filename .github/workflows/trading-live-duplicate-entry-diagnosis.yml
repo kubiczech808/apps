@@ -1,0 +1,37 @@
+name: Trading Live Duplicate Entry Diagnosis
+
+# Read-only diagnostic, manual only. Reported directly off the Polymarket app: two identical
+# BUY lines for the same market, the account now holding double the intended size.
+#
+# Reads the account's own trade history, the live entry guard's claim file and every live
+# portfolio's run log for the token in question, so a double order from one portfolio can be
+# told apart from two different portfolios independently buying the same market.
+#
+# Places no orders, cancels nothing, writes nothing, needs no secrets.
+on:
+  workflow_dispatch:
+    inputs:
+      search:
+        description: "Semicolon-separated text to look for in the market name"
+        required: false
+        default: "conventus;playtime"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Find how this token ended up bought twice
+        working-directory: trading
+        env:
+          DUPLICATE_SEARCH: ${{ inputs.search || 'conventus;playtime' }}
+        run: node tools/live-duplicate-entry-diagnosis.mjs
