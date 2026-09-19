@@ -1662,16 +1662,63 @@ function vanishedOpenOrders(previousState, openOrders = [], positions = [], sync
 // audit history in its own right, but it must never be made into a closed trade or P/L.
 // Persist it outside `releasedOrderCapital`: that field is a one-sync trigger, whereas
 // this ledger is the durable list rendered in the portfolio tab.
-function unfilledLimitOrderHistory(previousState, releasedOrderCapital = {}) {
+function unfilledLimitOrderHistory(previousState, releasedOrderCapital = {}, account = {}) {
   const previous = Array.isArray(previousState?.unfilledLimitOrders)
     ? previousState.unfilledLimitOrders.filter((item) => item && typeof item === "object")
     : [];
   const records = new Map();
   const keyFor = (order = {}) => String(order.id || order.orderId || order.orderID || "").trim()
     || `${String(order.tokenId || order.assetId || "").trim()}:${String(order.createdAt || order.openedAt || "").trim()}`;
+
+  // This ledger was append-only: a row written once was carried forward by every later
+  // sync, for ever, with nothing able to take it back. That is what turned a single bad
+  // read into a permanent claim -- measured on the account, 2026-09-18, twenty-three rows
+  // stood recorded as having left the book unfilled while the account was still resting or
+  // already holding NINE of their tokens, and no amount of correct syncing afterwards could
+  // retire one of them.
+  //
+  // A row says one specific thing: THIS order left the book WITHOUT becoming anything. The
+  // account can contradict that directly, and when it does the row is simply wrong:
+  //
+  //   the exchange still names the order, by its own id -- then it never left; or
+  //   the account holds that outcome -- then something was bought there, and a row claiming
+  //   the capital came back untouched cannot also be true.
+  //
+  // The second is the weaker of the two: a later order on a token held from an earlier fill
+  // would be retired with it. That costs an audit row and nothing else -- a held token is
+  // already refused by culledOrdersToRestore and contributes no restorable capital -- and
+  // it is the trade this makes knowingly, because a false row does cause action and a
+  // missing one does not.
+  const namedOrderIds = new Set((Array.isArray(account.openOrdersAll) ? account.openOrdersAll : [])
+    .flatMap((order) => [order?.id, order?.orderId, order?.orderID])
+    .map((id) => String(id || "").trim())
+    .filter(Boolean));
+  const heldTokens = new Set((Array.isArray(account.positions) ? account.positions : [])
+    .filter((position) => number(position?.shares ?? position?.size, 0) > 0.000001)
+    .map((position) => String(position?.tokenId || position?.assetId || "").trim())
+    .filter(Boolean));
+  const retired = [];
   for (const order of previous) {
     const key = keyFor(order);
-    if (key) records.set(key, order);
+    if (!key) continue;
+    const orderId = String(order.id || order.orderId || order.orderID || "").trim();
+    const tokenId = String(order.tokenId || order.assetId || "").trim();
+    const contradiction = orderId && namedOrderIds.has(orderId)
+      ? "the exchange still names this order, so it never left the book"
+      : (tokenId && heldTokens.has(tokenId)
+        ? "the account holds this outcome, so this order did not leave without filling"
+        : "");
+    if (contradiction) {
+      retired.push({ key, tokenId, question: order.question || "", reason: contradiction });
+      continue;
+    }
+    records.set(key, order);
+  }
+  if (retired.length) {
+    console.log(`retired ${retired.length} unfilled-limit-order row(s) the account contradicts`);
+    for (const row of retired.slice(0, 10)) {
+      console.log(`   "${String(row.question).slice(0, 60)}": ${row.reason}`);
+    }
   }
   for (const vanished of (Array.isArray(releasedOrderCapital?.vanished) ? releasedOrderCapital.vanished : [])) {
     if (vanished.partiallyFilled || number(vanished.filledSize, 0) > 0.000001) continue;
@@ -2870,7 +2917,12 @@ async function main() {
     Array.isArray(balanceAllowance?.openOrdersAll) ? balanceAllowance.openOrdersAll : null,
   );
   const unfilledLimitOrders = await refreshUnfilledLimitOrderOutcomes(
-    unfilledLimitOrderHistory(previousLiveState, releasedOrderCapital),
+    unfilledLimitOrderHistory(previousLiveState, releasedOrderCapital, {
+      // What the account says right now, so a row it contradicts can be retired instead of
+      // being carried forward for ever by an append-only ledger.
+      openOrdersAll: Array.isArray(balanceAllowance?.openOrdersAll) ? balanceAllowance.openOrdersAll : [],
+      positions: reconciledPositions,
+    }),
     generatedAt,
   );
   const cashUsdc = number(balanceAllowance?.collateral?.balanceUsdc);
