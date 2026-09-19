@@ -11595,9 +11595,12 @@ test("dip entry on paper: recorded dips are the candidate pool, and only for tho
   // above it. A portfolio buying 30-56% had a third of its band in the catalogue and was
   // discarding it, which is how five candidates sat on screen marked READY while the run
   // log said none passed.
-  assert.match(bot, /const pool = dipEntryRuleState\(strategy\)\.enabled\n\s+\? mergeDipEntryPool\(dipEntryCandidateRows\(strategy\), eligible\)\n\s+: eligible;/);
+  assert.match(bot, /const pool = dipEntryRuleState\(strategy\)\.enabled\n\s+\? mergeDipEntryPool\(dipEntryCandidateRows\(strategy, DIP_ENTRY_HITS, tradedTokenIds\), eligible\)\n\s+: eligible;/);
   // Every other portfolio is untouched.
   assert.match(bot, /const strategyRows = strategyEligibleCandidates\(pool, strategy\);/);
+  // And the tokens this portfolio has already traded reach that call from the one gate every
+  // open path goes through, rather than from whichever caller happened to remember them.
+  assert.match(bot, /const executableEligible = sortEligibleForStrategy\(eligible, strategy, tradedTokenIdSet\(portfolioState\)\);/);
 
   // The hazard the old assertion existed to prevent, kept and now enforced by behaviour
   // rather than by the absence of a fallback: merging the catalogue must NOT let a dip
@@ -11637,13 +11640,35 @@ test("dip entry on paper: recorded dips are the candidate pool, and only for tho
   );
 
   // The rows a hit becomes, from the real module rather than a sandboxed copy of it.
+  // `at` is relative, not the fixed 2026-09-11 it used to be. A hit is only openable for a
+  // couple of hours, so a hard-coded date made this pass on the day it was written and
+  // silently describe a dead record ever after.
+  const justNow = new Date(Date.now() - 4 * 60000).toISOString();
   const hits = [
-    { portfolioId: "paper-dip", tokenId: "aaa", price: 0.35, openProbability: 0.78, question: "INOX vs Black Phoenix", endDate: "2026-09-11T22:00:00Z", at: "2026-09-11T20:27:00Z" },
-    { portfolioId: "paper-other", tokenId: "bbb", price: 0.33, openProbability: 0.75 },
-    { portfolioId: "paper-dip", tokenId: "ccc", price: 0, openProbability: 0.75 },
+    { portfolioId: "paper-dip", tokenId: "aaa", price: 0.35, openProbability: 0.78, question: "INOX vs Black Phoenix", endDate: "2026-09-11T22:00:00Z", at: justNow },
+    { portfolioId: "paper-other", tokenId: "bbb", price: 0.33, openProbability: 0.75, at: justNow },
+    { portfolioId: "paper-dip", tokenId: "ccc", price: 0, openProbability: 0.75, at: justNow },
   ];
-  const rows = (await import("../tools/paper-trading-bot.mjs")).dipEntryCandidateRows({ id: "dip", stakeUsdc: 5 }, hits);
+  const rows = module.dipEntryCandidateRows({ id: "dip", stakeUsdc: 5 }, hits);
   assert.equal(rows.length, 1, "another portfolio's hit and an unusable price are both dropped");
+
+  // The two gates that stop a spent record being traded again. Reported: "neustale dokola se
+  // tvori jedna pozice, ktera uz na polymarketu dobehla" -- the same finished market opened
+  // on every run for as long as the 48-hour record lived.
+  const aged = [{ ...hits[0], at: new Date(Date.now() - 20 * 3600000).toISOString() }];
+  assert.equal(module.dipEntryCandidateRows({ id: "dip", stakeUsdc: 5 }, aged).length, 0,
+    "a hit past the tradable age is not a candidate, whatever its record still claims");
+  const spent = module.dipEntryCandidateRows({ id: "dip", stakeUsdc: 5 }, hits, new Set(["aaa"]));
+  assert.equal(spent.length, 0, "a hit this portfolio has already traded is spent, open or closed");
+
+  // The set is built from ALL trades, not the open ones. Reading only the open ones is the
+  // defect itself: a dip position closes when its market resolves, and the block lifted with
+  // it while the record stayed.
+  const traded = module.tradedTokenIdSet({
+    trades: [{ tokenId: "aaa", status: "CLOSED" }, { tokenId: "zzz", status: "OPEN" }],
+  });
+  assert.ok(traded.has("aaa"), "a closed position still proves its hit was spent");
+  assert.ok(traded.has("zzz"));
   const [row] = rows;
   // The price is the one the WORKER saw. That is the entire point: by the time this bot
   // runs the trough is over, and entering at the current price would be a different trade.

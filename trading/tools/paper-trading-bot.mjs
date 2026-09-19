@@ -171,6 +171,23 @@ const LIVE_CATALOGUE_REHYDRATE_LIMIT = Math.max(1, Math.min(40,
 const DIP_ENTRY_HITS_URL = process.env.PAPER_DIP_ENTRY_HITS_URL
   || derivedTradingApiUrl(REMOTE_STATE_URL, "dip-entry-hits");
 let DIP_ENTRY_HITS = [];
+// How long a recorded dip stays TRADABLE, which is not how long it stays on record.
+//
+// The store keeps a hit for 48 hours (DIP_ENTRY_HIT_TTL_SECONDS in api.php) so it can be
+// read back and diagnosed. That is far too long to open a position from, and treating the
+// two as the same number is what produced the fault this bounds: "neustale dokola se tvori
+// jedna pozice, ktera uz na polymarketu dobehla".
+//
+// The record cannot answer "is the fixture still on" by itself. Its endDate is not the end
+// of the match -- Gamma routinely sets endDate to the KICKOFF for a live market, which
+// marketEventStarted() above depends on -- so a hit for a fixture in play usually carries an
+// endDate already in the past. Filtering on it would refuse every hit the rule exists to
+// catch. What the record does know exactly is WHEN it was taken, so the bound is its age.
+//
+// Two hours: the bot runs hourly, so a legitimate hit is still tradable on the next run and
+// the one after, while a fixture that finished yesterday is inert within one cycle rather
+// than reopenable for two days. Tunable without a deploy.
+const DIP_ENTRY_HIT_TRADABLE_MS = Math.max(60, envNumber("PAPER_DIP_ENTRY_TRADABLE_MINUTES", 120)) * 60000;
 // The PHP summary endpoint is preferred because it is small and validated by
 // the app. The static file is a recovery path for a state that is temporarily
 // too large for PHP to parse during a migration.
@@ -8620,13 +8637,30 @@ async function loadDipEntryHits() {
 // the trough is over by the time this bot runs. bestAsk and bestBid are set to it so the
 // spread gate sees a tradable quote rather than refusing a row it has no book for -- the
 // worker read a real book at that moment, which is the evidence the gate wants.
-export function dipEntryCandidateRows(strategy, hits = DIP_ENTRY_HITS) {
+export function dipEntryCandidateRows(strategy, hits = DIP_ENTRY_HITS, tradedTokenIds = null) {
   const prefix = `paper-${strategy.id}`;
+  const freshEnough = Date.now() - DIP_ENTRY_HIT_TRADABLE_MS;
   return (Array.isArray(hits) ? hits : [])
     .filter((hit) => hit && String(hit.portfolioId || "") === prefix)
     .map((hit) => {
       const price = Number(hit.price);
       if (!Number.isFinite(price) || price <= 0 || price >= 1) return null;
+      // A hit is an entry for a short while and a record for two days; see
+      // DIP_ENTRY_HIT_TRADABLE_MS. Without this the row below asserts a market that is open,
+      // active, accepting orders and under way -- for 48 hours, whatever happened to the
+      // fixture -- because every one of those fields is a constant it has no way to check.
+      const at = Date.parse(String(hit.at || ""));
+      if (!Number.isFinite(at) || at < freshEnough) return null;
+      // One hit, at most one position, ever.
+      //
+      // alreadyOpen() blocks a token only while a trade on it is OPEN. A dip position closes
+      // when its market resolves, the block lifts, the hit is still on record -- and the next
+      // run opens the same finished market again, and the run after that, for as long as the
+      // record lives. That is the loop reported as "neustale dokola se tvori jedna pozice,
+      // ktera uz na polymarketu dobehla". The freshness bound above shortens it; this ends
+      // it, because a closed position is exactly the evidence that this hit was spent.
+      const tokenId = String(hit.tokenId || "");
+      if (tradedTokenIds && tokenId && tradedTokenIds.has(tokenId)) return null;
       const endDate = String(hit.endDate || "");
       // The economics, computed exactly as preferredMarketObservation does for a scraped
       // row. Without them the row is refused by three separate filters -- "missing EV p.a.",
@@ -8643,7 +8677,7 @@ export function dipEntryCandidateRows(strategy, hits = DIP_ENTRY_HITS) {
       const days = daysToEnd(endDate);
       const expectedValue = (shares * price) - totalCost;
       return {
-        tokenId: String(hit.tokenId || ""),
+        tokenId,
         conditionId: String(hit.conditionId || ""),
         question: String(hit.question || ""),
         outcome: String(hit.outcome || ""),
@@ -8685,6 +8719,13 @@ export function dipEntryCandidateRows(strategy, hits = DIP_ENTRY_HITS) {
         feeType: fees.feeType,
         feeRate: fees.feeRate,
         daysToResolution: days,
+        // True BECAUSE of the freshness bound above, not on the record's word. These four
+        // fields are exactly what the closed-market filter in strategyEligibleCandidates
+        // reads (status, marketClosed, marketActive, acceptingOrders) and what
+        // rowEventIsRunning falls back to (eventStarted), so as unconditional constants they
+        // made that filter unable to refuse a dip row however long ago the fixture ended.
+        // They are only honest for a hit taken minutes ago, which is now the only kind that
+        // reaches here.
         marketClosed: false,
         marketActive: true,
         acceptingOrders: true,
@@ -8735,6 +8776,13 @@ export function dipEntryRunDiagnostics(strategy, passedFilters = 0, hits = DIP_E
   if (!rule.enabled) return null;
   const recorded = dipEntryCandidateRows(strategy, hits).length;
   const acrossAll = Array.isArray(hits) ? hits.length : 0;
+  // Every hit on record for THIS portfolio, before the tradable-age bound. Without it the
+  // sentence below reports a portfolio with 181 recorded dips, all of them hours old, as one
+  // whose watched favourites have never fallen -- which sends the reader to the watcher
+  // instead of to the clock. The two are different situations and read identically once the
+  // bound is applied, so the count before it has to be kept.
+  const mine = (Array.isArray(hits) ? hits : [])
+    .filter((hit) => hit && String(hit.portfolioId || "") === `paper-${strategy.id}`).length;
   const reason = rule.fault
     // A fault means the portfolio trades NOTHING -- it is not in the watch list either, so
     // no hit can ever arrive. Naming it here is the difference between a setting to change
@@ -8743,6 +8791,12 @@ export function dipEntryRunDiagnostics(strategy, passedFilters = 0, hits = DIP_E
       + ` until its probability maximum is below its opening band`
     : recorded > 0
       ? `${recorded} recorded dip(s) for this portfolio, ${passedFilters} of which passed its other filters`
+      // Recorded, but none of them still openable: every one is either older than the
+      // tradable window or already spent on a position. The watcher is doing its job and the
+      // rule simply has nothing live right now, which is a wait rather than a fault.
+      : mine > 0
+        ? `${mine} dip(s) recorded for this portfolio, none of them still open to trade:`
+          + " each is either past the tradable age or has already been traded once"
       : acrossAll > 0
         ? "no favourite this portfolio watches has fallen into its buy band yet"
           + ` (${acrossAll} dip(s) recorded for other portfolios, so the watcher is running)`
@@ -8814,7 +8868,18 @@ export function mergeDipEntryPool(recorded = [], catalogue = []) {
   return rows;
 }
 
-export function sortEligibleForStrategy(eligible, strategy = PAPER_STRATEGIES.conservative) {
+// Every token this portfolio has ever opened a position on, closed ones included.
+//
+// Deliberately not openTrades(): a dip hit is spent the moment it produces a position, and a
+// CLOSED position is the proof it was spent. Reading only the open ones is what let a
+// resolved market be reopened from the same record on the next run.
+export function tradedTokenIdSet(portfolioState = {}) {
+  return new Set((Array.isArray(portfolioState?.trades) ? portfolioState.trades : [])
+    .map((trade) => String(trade?.tokenId || ""))
+    .filter(Boolean));
+}
+
+export function sortEligibleForStrategy(eligible, strategy = PAPER_STRATEGIES.conservative, tradedTokenIds = null) {
   // A dip portfolio draws from BOTH the dips the worker recorded and the catalogue.
   //
   // It used to take the recordings alone, on the reasoning that a collapsed favourite drops
@@ -8833,7 +8898,7 @@ export function sortEligibleForStrategy(eligible, strategy = PAPER_STRATEGIES.co
   // one the position should open at, and the catalogue row for the same token carries a
   // later quote. Deduplicated by token, recordings first.
   const pool = dipEntryRuleState(strategy).enabled
-    ? mergeDipEntryPool(dipEntryCandidateRows(strategy), eligible)
+    ? mergeDipEntryPool(dipEntryCandidateRows(strategy, DIP_ENTRY_HITS, tradedTokenIds), eligible)
     : eligible;
   const strategyRows = strategyEligibleCandidates(pool, strategy);
   const rows = strategyRows;
@@ -9707,7 +9772,11 @@ function maybeOpenScheduledTrade(portfolioState, eligible, strategy = PAPER_STRA
   // Do not trust a shortlist merely because it was filtered earlier in the pass.
   // A quote can change between shortlist construction and order creation; this is
   // the final gate used for both ordinary entries and rotations.
-  const executableEligible = sortEligibleForStrategy(eligible, strategy);
+  //
+  // The portfolio's own traded tokens are handed down here rather than at the earlier,
+  // cheaper rankings on purpose: this is the gate every open path goes through, so a spent
+  // dip hit cannot slip in via a caller that forgot to pass them.
+  const executableEligible = sortEligibleForStrategy(eligible, strategy, tradedTokenIdSet(portfolioState));
   const realizedPnl = portfolioState.trades.reduce((sum, trade) => sum + Number(trade.realizedPnlUsdc || 0), 0);
   // Mirrors updatePaperPortfolio()'s baseline: a portfolio carrying a manual capital
   // adjustment must size its next trade off the same equity the dashboard shows, or it

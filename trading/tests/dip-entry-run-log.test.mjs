@@ -37,9 +37,14 @@ const DIP = {
   maxProbability: 0.45,
 };
 
-const hit = (portfolioId) => ({
+// `at` is the moment the worker recorded the dip, and it decides whether the hit is still
+// openable at all -- a hit is an entry for a couple of hours and a record for two days. These
+// fixtures carried no `at` when the bound did not exist, which made every one of them
+// permanently tradable; they are dated now so each case tests what it says it tests.
+const minutesAgo = (minutes) => new Date(Date.now() - minutes * 60000).toISOString();
+const hit = (portfolioId, at = minutesAgo(3)) => ({
   portfolioId, tokenId: `${portfolioId}-1`, price: 0.38, openProbability: 0.74,
-  question: "Team A vs Team B", outcome: "Team A", endDate: "2026-09-14T00:00:00Z",
+  question: "Team A vs Team B", outcome: "Team A", endDate: "2026-09-14T00:00:00Z", at,
 });
 
 test("dip run log: the three causes of an empty pool are three different sentences", () => {
@@ -69,10 +74,29 @@ test("dip run log: the three causes of an empty pool are three different sentenc
 
   // 3. RECORDED FOR THIS ONE AND FILTERED OUT. The pool was fed and the portfolio's other
   //    rules refused it, which is the only one of the three that is about the filters.
-  const filtered = bot.dipEntryRunDiagnostics(DIP, 0, [hit("paper-dip70"), hit("paper-dip70"), hit("paper-other")]);
+  const second = { ...hit("paper-dip70"), tokenId: "paper-dip70-2" };
+  const filtered = bot.dipEntryRunDiagnostics(DIP, 0, [hit("paper-dip70"), second, hit("paper-other")]);
   assert.equal(filtered.recordedHits, 2, "hits are matched by `paper-<id>` and nothing else");
   assert.equal(filtered.hitsAcrossPortfolios, 3);
   assert.match(filtered.reason, /2 recorded dip\(s\) for this portfolio, 0 of which passed its other filters/);
+
+  // 3b. RECORDED FOR THIS ONE AND ALL OF IT TOO OLD TO OPEN. Reported as "neustale dokola se
+  //     tvori jedna pozice, ktera uz na polymarketu dobehla": the hits stay on record for 48
+  //     hours, and every one of them used to present as a market that was open, active,
+  //     accepting orders and under way for the whole of it. This is a wait, not a fault, and
+  //     above all it is not case 2 -- the watcher found 181 dips for this portfolio, they are
+  //     simply hours old, and saying "no favourite has fallen yet" would send the reader to
+  //     the Pi to debug a watcher that is working.
+  const stale = bot.dipEntryRunDiagnostics(DIP, 0, [
+    hit("paper-dip70", minutesAgo(600)),
+    { ...hit("paper-dip70", minutesAgo(900)), tokenId: "paper-dip70-2" },
+  ]);
+  assert.equal(stale.recordedHits, 0, "a hit older than the tradable window is not openable");
+  assert.match(stale.reason, /2 dip\(s\) recorded for this portfolio, none of them still open to trade/);
+  assert.match(stale.reason, /past the tradable age or has already been traded once/);
+  assert.doesNotMatch(stale.reason, /has fallen into its buy band yet/,
+    "recorded-but-stale is not the same situation as nothing recorded, and must not read like it");
+  assert.doesNotMatch(stale.reason, /LIVE_DIP_ENTRY_MODE/);
 
   // 4. A CONFIGURATION FAULT. The portfolio is not even in the watch list, so no hit can
   //    ever arrive -- and no amount of waiting changes it. This is the one the run log must

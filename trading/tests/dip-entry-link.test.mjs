@@ -175,5 +175,10 @@ test("BAIT: a plan with no eventSlug is forwarded as an empty string, matching h
 });
 
 test("dipEntryCandidateRows is still the only builder, so the fix cannot drift into a second copy", () => {
-  assert.match(BOT_SOURCE, /export function dipEntryCandidateRows\(strategy, hits = DIP_ENTRY_HITS\)/);
+  // The third parameter is the tokens this portfolio has already traded, so a hit that has
+  // already produced a position cannot be rebuilt into a candidate. Written to accept it
+  // while still failing on a SECOND builder, which is what this guards.
+  assert.match(BOT_SOURCE, /export function dipEntryCandidateRows\(strategy, hits = DIP_ENTRY_HITS(?:, tradedTokenIds = null)?\)/);
+  assert.equal(BOT_SOURCE.match(/function dipEntryCandidateRows\(/g)?.length, 1,
+    "one builder, or the tests run one copy and production runs another");
 });
