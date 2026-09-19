@@ -57,20 +57,37 @@ block = f"""
       return;
     }}
 
-    // Keep the app ticker on the same live BTC/USD source as the landing page.
-    window.fetch('https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=1d&limit=2', {{ cache: 'no-store' }})
+    var loadCoinGeckoRate = function () {{
+      window.fetch('https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd', {{ cache: 'no-store' }})
+        .then(function (response) {{
+          if (!response.ok) {{
+            throw new Error('CoinGecko ticker request failed');
+          }}
+          return response.json();
+        }})
+        .then(function (result) {{
+          if (!result || !result.bitcoin || !applyPrice(result.bitcoin.usd)) {{
+            throw new Error('CoinGecko ticker response was invalid');
+          }}
+        }})
+        .catch(loadLegacyRate);
+    }};
+
+    // Use the same live Binance market source as the landing page, with a
+    // CoinGecko fallback when a browser or network blocks Binance.
+    window.fetch('https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT', {{ cache: 'no-store' }})
       .then(function (response) {{
         if (!response.ok) {{
           throw new Error('Binance ticker request failed');
         }}
         return response.json();
       }})
-      .then(function (candles) {{
-        if (!Array.isArray(candles) || !candles.length || !applyPrice(candles[candles.length - 1][4])) {{
+      .then(function (result) {{
+        if (!result || !applyPrice(result.price)) {{
           throw new Error('Binance ticker response was invalid');
         }}
       }})
-      .catch(loadLegacyRate);
+      .catch(loadCoinGeckoRate);
   }}
 
   if (document.readyState === 'loading') {{

@@ -72,6 +72,7 @@ jobs:
           cp btcdca-auth/btcdca-google-callback.php deploy-root/www/btcdca-google-callback.php
           cp btcdca-auth/btcdca-google-token-login.php deploy-root/www/btcdca-google-token-login.php
           cp btcdca-auth/google-index.php deploy-root/www/app/auth/google/index.php
+          cp btcdca-auth/getTicker.php deploy-root/www/php/getTicker.php
 
       - name: Lint generated PHP
         run: |
