@@ -65,12 +65,24 @@ async function main() {
     const multiplier = num(row.stopLossRiskMultiplier);
     const legacy = row.stopLossEnabled === true;
     const effective = multiplier != null ? multiplier : (legacy ? 1 : 0);
+    // The multiplier is not the only stop. A flat probability floor fires independently of
+    // it (effectiveStopFloor takes the higher of the two), and a settlement close bid is
+    // ALSO enough by itself for live_stop_loss_policy_config() to return non-null -- which
+    // matters because that field defaults to 0.999 server-side whenever the row omits the
+    // key entirely. A portfolio the operator believes has "no stop loss" can still have an
+    // active policy from either of these, and still be excluded from the payload's true
+    // owner if the run log that ordered it has since rotated out.
+    const floor = num(row.stopLossProbabilityFloor);
+    const closeBid = row.settlementCloseBid === undefined
+      ? "(unset -> server defaults to 0.999)"
+      : String(num(row.settlementCloseBid));
+    const anyStop = effective > 0 || (floor != null && floor > 0);
     console.log(`   ${id.padEnd(26)} name ${String(row.displayName || "-").padEnd(16)}`
       + ` archived ${String(row.archived === true).padEnd(5)}`
       + ` stopLossRiskMultiplier ${String(multiplier ?? "(unset)").padEnd(8)}`
-      + ` stopLossEnabled ${String(legacy).padEnd(5)}`
-      + ` -> effective ${effective}`
-      + `${effective > 0 ? "" : "   NO POLICY: live_stop_loss_policy_config returns null"}`);
+      + ` stopLossProbabilityFloor ${String(floor ?? "(unset)").padEnd(8)}`
+      + ` settlementCloseBid ${closeBid}`
+      + `${anyStop ? "" : "   NO STOP LOSS: neither multiplier nor probability floor is set"}`);
   }
 
   console.log("\n== 2. what the worker's policy payload actually covers");
@@ -81,7 +93,26 @@ async function main() {
   console.log(`   policies           ${policies.length} token(s)`);
   console.log(`   defaultPolicy      ${payload?.defaultPolicy
     ? `portfolio ${payload.defaultPolicy.portfolioId}, multiplier ${payload.defaultPolicy.stopLossRiskMultiplier}`
+      + `, probabilityFloor ${payload.defaultPolicy.stopLossProbabilityFloor}`
+      + `, settlementCloseBid ${payload.defaultPolicy.settlementCloseBid}`
     : "(none) -- unlabelled positions are unprotected"}`);
+  // The mechanism this file was written to test for, made visible rather than inferred.
+  // A position whose OWN portfolio ordered it keeps that portfolio's policy only while the
+  // run log that ordered it is still retained (live_stop_loss_policy_payload, api.php). Once
+  // it rotates out, the position becomes unattributed and -- unless the server has already
+  // filed it under `excluded` for its true owner -- silently adopts defaultPolicy instead:
+  // a different portfolio's stop loss applied to a position that portfolio never opened.
+  console.log(`   openPositions                    ${payload?.openPositions ?? "(none)"}`);
+  console.log(`   positionsWithoutRunLogAttribution ${payload?.positionsWithoutRunLogAttribution ?? "(none)"}`);
+  console.log(`   positionsAdoptedFromAccount      ${payload?.positionsAdoptedFromAccount ?? "(none)"}`
+    + `  <- these are watched under defaultPolicy's settings, not their own portfolio's`);
+  console.log(`   positionsLeftUnwatched           ${payload?.positionsLeftUnwatched ?? "(none)"}`);
+  console.log(`   positionsExcludedByOwner         ${payload?.positionsExcludedByOwner ?? "(none)"}`);
+  const excluded = Array.isArray(payload?.excluded) ? payload.excluded : [];
+  for (const row of excluded.slice(0, 20)) {
+    console.log(`      excluded: token ${String(row.tokenId || "").slice(0, 20)}...`
+      + ` portfolio ${row.portfolioId}  reason: ${row.reason}`);
+  }
 
   console.log("\n== 3. open positions against that coverage");
   const live = await fetchJson(`${HOST}/api.php?action=state&target=live&t=${Date.now()}`)
@@ -105,15 +136,20 @@ async function main() {
   }
 
   console.log("\n== 4. the reported market, wherever it appears");
+  // live.trades.closed, not live.closedTrades -- the latter does not exist on this payload
+  // and silently returned nothing for every market this section was asked about before.
+  const closed = Array.isArray(live?.trades?.closed) ? live.trades.closed : [];
   const rows = [
     ...positions.map((row) => ["position", row]),
-    ...(Array.isArray(live.closedTrades) ? live.closedTrades : []).map((row) => ["closed", row]),
+    ...closed.map((row) => ["closed", row]),
   ].filter(([, row]) => FOCUS.some((needle) => `${row?.question || ""} ${row?.outcome || ""}`.toLowerCase().includes(needle)));
   for (const [where, row] of rows) {
     const tokenId = String(row.tokenId || row.assetId || "").trim();
     const cost = num(row.totalCostUsdc ?? row.stakeUsdc);
     const reward = num(row.netGainIfWinUsdc);
     console.log(`\n   [${where}] "${String(row.question || "").slice(0, 58)}" (${row.outcome || "-"})`);
+    console.log(`      portfolioId ${row.portfolioId || "(not recorded on this row)"}`
+      + `   exitReason ${row.exitReason || "(none)"}`);
     console.log(`      status ${row.status || "-"}   realised P/L ${num(row.realizedPnlUsdc) ?? "-"}`
       + `   finalOutcomePrice ${num(row.finalOutcomePrice) ?? "-"}`);
     console.log(`      stopLossStatus ${row.stopLossStatus || "(none)"}`
