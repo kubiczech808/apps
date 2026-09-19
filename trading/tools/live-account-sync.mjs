@@ -1537,25 +1537,67 @@ function positionSharesByToken(positions = []) {
 // position AND frees the unfilled rest. Comparing the position's shares before and
 // after tells the two apart, so a full fill (nothing freed) stays quiet while a partial
 // one is reported for exactly the remainder.
-function vanishedOpenOrders(previousState, openOrders = [], positions = [], sync = null, generatedAt = new Date().toISOString()) {
+function vanishedOpenOrders(previousState, openOrders = [], positions = [], sync = null, generatedAt = new Date().toISOString(), allOrders = null) {
   // getOpenOrders() failing leaves the list empty while the sync still reports OK, so
   // without this guard a transient CLOB error would look like every order vanishing at
   // once and would dispatch a run against a portfolio that never actually changed.
   const ordersUnavailable = (Array.isArray(sync?.warnings) ? sync.warnings : [])
     .some((warning) => String(warning || "").startsWith("open-orders"));
   const previousOrders = Array.isArray(previousState?.openOrders) ? previousState.openOrders : [];
+  const previousMissing = previousState?.openOrderMissingSince && typeof previousState.openOrderMissingSince === "object"
+    ? previousState.openOrderMissingSince
+    : {};
   if (ordersUnavailable || !previousOrders.length) {
-    return { vanished: [], freedCapitalUsdc: 0, ordersUnavailable, checked: previousOrders.length };
+    return {
+      vanished: [],
+      freedCapitalUsdc: 0,
+      ordersUnavailable,
+      checked: previousOrders.length,
+      // Carried unchanged: a read that never happened is not evidence that anything left.
+      missingSince: previousMissing,
+      provisionallyMissing: [],
+    };
   }
 
   const liveKeys = new Set(openOrders.flatMap(openOrderIdentityKeys));
+  // Every key the exchange mentioned at all, whatever status it gave it. An order in here
+  // but not in liveKeys is one that cannot be rested against any more -- matched and
+  // settling, or reported without a remaining size -- and calling that "left the book
+  // unfilled" is the opposite of what happened: it is becoming a position.
+  const knownKeys = Array.isArray(allOrders) && allOrders.length
+    ? new Set(allOrders.flatMap(openOrderIdentityKeys))
+    : liveKeys;
   const sharesBefore = positionSharesByToken(previousState?.positions);
   const sharesNow = positionSharesByToken(positions);
 
   const vanished = [];
+  const missingSince = {};
+  const provisionallyMissing = [];
   for (const order of previousOrders) {
     const keys = openOrderIdentityKeys(order);
     if (!keys.length || keys.some((key) => liveKeys.has(key))) continue;
+    // Still named by the exchange, just not as something restable. Its capital is going
+    // into a position, not back to cash.
+    if (keys.some((key) => knownKeys.has(key))) continue;
+    // Absent -- but one absence is not a departure. Measured on the account, 2026-09-18:
+    // 23 rows stood recorded as LIVE_LIMIT_ORDER_UNFILLED while the account was still
+    // resting or already holding NINE of their tokens, several of them stamped with the
+    // same millisecond, which is a short read rather than nine unrelated markets dropping
+    // a bid at one instant. Each of those frees capital the account never got back and
+    // clears the way for the executor to re-enter the same market: a second identical bid,
+    // and when both fill, the doubled position that was reported.
+    //
+    // So a departure now needs corroboration from a SECOND read. This is deliberately not
+    // a duration -- an order missing for an hour of failed reads is no more gone than one
+    // missing for a minute -- it is a second independent observation, which is the evidence
+    // a transient gap cannot produce and a real departure always will.
+    const missingKey = keys[0];
+    if (!previousMissing[missingKey]) {
+      missingSince[missingKey] = generatedAt;
+      provisionallyMissing.push({ key: missingKey, tokenId: order.tokenId || order.assetId || null, question: order.question || "", firstMissedAt: generatedAt });
+      continue;
+    }
+    missingSince[missingKey] = previousMissing[missingKey];
 
     const token = String(order.tokenId || order.assetId || "").trim();
     const lockedSize = number(order.remainingSize ?? order.originalSize, 0);
@@ -1608,6 +1650,10 @@ function vanishedOpenOrders(previousState, openOrders = [], positions = [], sync
     freedCapitalUsdc: Number(freedCapitalUsdc.toFixed(6)),
     ordersUnavailable,
     checked: previousOrders.length,
+    // Only the orders still missing at the end of this pass. An order that came back drops
+    // out of the map by not being re-added, so its next absence starts counting again.
+    missingSince,
+    provisionallyMissing,
   };
 }
 
@@ -2485,10 +2531,19 @@ async function loadClobBalanceAllowance(sync, options = {}) {
   });
   const collateral = await client.getBalanceAllowance(params);
   let openOrders = [];
+  // Every order the exchange returned, before isActiveOpenOrder drops the ones that can no
+  // longer rest. Kept because "not restable" and "gone" are different facts, and only the
+  // first is what that filter tests: an order reported as MATCHED is being settled into a
+  // position, and one whose remainingSize the response happens to omit reads as zero. Both
+  // are dropped from `openOrders` -- correctly, they cannot be rested against -- but
+  // treating either as an order that LEFT THE BOOK UNFILLED frees capital that is actually
+  // being spent and invites a second, identical bid on the same market.
+  let openOrdersAll = [];
   if (typeof client.getOpenOrders === "function") {
     try {
       const orders = await client.getOpenOrders();
-      openOrders = Array.isArray(orders) ? orders.map(normalizeOpenOrder).filter(isActiveOpenOrder) : [];
+      openOrdersAll = Array.isArray(orders) ? orders.map(normalizeOpenOrder) : [];
+      openOrders = openOrdersAll.filter(isActiveOpenOrder);
     } catch (error) {
       sync.warnings.push(`open-orders: ${error?.message || String(error)}`);
     }
@@ -2503,6 +2558,7 @@ async function loadClobBalanceAllowance(sync, options = {}) {
   return {
     status: "OK",
     message: "CLOB collateral balance and allowance loaded",
+    openOrdersAll,
     signerAddress: context.account.address.toLowerCase(),
     signatureType,
     funderAddress,
@@ -2809,6 +2865,9 @@ async function main() {
     reconciledPositions,
     sync,
     generatedAt,
+    // Unfiltered, so an order the exchange still names -- matched and settling, or returned
+    // without a remaining size -- is never mistaken for one that left the book unfilled.
+    Array.isArray(balanceAllowance?.openOrdersAll) ? balanceAllowance.openOrdersAll : null,
   );
   const unfilledLimitOrders = await refreshUnfilledLimitOrderOutcomes(
     unfilledLimitOrderHistory(previousLiveState, releasedOrderCapital),
@@ -3008,6 +3067,9 @@ async function main() {
     balanceAllowance,
     openOrders,
     releasedOrderCapital,
+    // Which orders are absent from ONE read so far. A departure is only acted on once a
+    // second read agrees, so this is what carries that first observation to the next sync.
+    openOrderMissingSince: releasedOrderCapital.missingSince || {},
     // Why an execution run may be worth dispatching even though no order left the book:
     // cash arrived and there are bids waiting to go back on.
     restorableCapital,

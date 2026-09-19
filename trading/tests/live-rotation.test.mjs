@@ -959,13 +959,25 @@ test("live portfolio: the deposited baseline is configured, never inferred from 
   }
 });
 
+// A departure is only acted on once a SECOND read agrees, so a fixture that means "this
+// order really is gone" has to carry the first read's observation. These tests are about
+// what counts as released capital once an order has left, which is unchanged; without this
+// they would be testing the corroboration rule by accident and reporting it as a fault in
+// the accounting.
+const alreadyMissedOnce = (state, at = "2026-08-05T13:00:00Z") => ({
+  ...state,
+  openOrderMissingSince: Object.fromEntries(
+    (state.openOrders || []).map((order) => [order.id, at]),
+  ),
+});
+
 test("released capital: an order that leaves the book without filling triggers a run", async () => {
   const sync = await import("../tools/live-account-sync.mjs");
   const order = (id, tokenId, size) => ({
     id, tokenId, assetId: tokenId, question: `Q-${id}`, outcome: "No",
     price: 0.9, remainingSize: size, notionalUsdc: Number((size * 0.9).toFixed(4)),
   });
-  const previousState = { openOrders: [order("a", "111", 5.68), order("b", "222", 5)] };
+  const previousState = alreadyMissedOnce({ openOrders: [order("a", "111", 5.68), order("b", "222", 5)] });
 
   // "b" is still on the book, "a" is gone and never became a position: its locked
   // capital is back as cash and would otherwise sit idle until the next cron run.
@@ -979,7 +991,7 @@ test("released capital: an order that leaves the book without filling triggers a
   // An older stored row may carry only the notional, with no size/price to apportion.
   // Dropping its release would be worse than crediting all of it.
   const legacyOnly = sync.vanishedOpenOrders(
-    { openOrders: [{ id: "c", tokenId: "333", assetId: "333", notionalUsdc: 4.87 }] },
+    alreadyMissedOnce({ openOrders: [{ id: "c", tokenId: "333", assetId: "333", notionalUsdc: 4.87 }] }),
     [], [], null, "2026-08-05T14:00:00Z",
   );
   assert.equal(legacyOnly.vanished.length, 1, "a legacy row must still be detected");
@@ -994,7 +1006,7 @@ test("released capital: how much came back decides, not whether a position exist
   };
   const at = "2026-08-05T14:00:00Z";
   const released = (previousState, positions) => sync.vanishedOpenOrders(previousState, [], positions, null, at);
-  const noPosition = { openOrders: [order] };
+  const noPosition = alreadyMissedOnce({ openOrders: [order] });
 
   // Fully filled: the whole locked size became shares, so nothing returned to cash.
   assert.equal(released(noPosition, [{ tokenId: "111", shares: 5.68 }]).vanished.length, 0,
@@ -1014,7 +1026,7 @@ test("released capital: how much came back decides, not whether a position exist
   // Shares are compared before/after, so a position that already existed on this token
   // is not mistaken for this order's fill. Judging by existence alone got this wrong,
   // and it is the live portfolio's normal shape -- orders and positions on one event.
-  const hadPosition = { openOrders: [order], positions: [{ tokenId: "111", shares: 3 }] };
+  const hadPosition = alreadyMissedOnce({ openOrders: [order], positions: [{ tokenId: "111", shares: 3 }] });
   assert.equal(released(hadPosition, [{ tokenId: "111", shares: 3 }]).vanished.length, 1,
     "an unchanged pre-existing position means this order filled nothing");
   assert.equal(released(hadPosition, [{ tokenId: "111", shares: 8.68 }]).vanished.length, 0,
@@ -1026,9 +1038,9 @@ test("released capital: how much came back decides, not whether a position exist
 
 test("released capital: a failed open-orders fetch never looks like a mass cancellation", async () => {
   const sync = await import("../tools/live-account-sync.mjs");
-  const previousState = {
+  const previousState = alreadyMissedOnce({
     openOrders: [{ id: "a", tokenId: "111", assetId: "111", price: 0.9, remainingSize: 5.68, notionalUsdc: 5.112 }],
-  };
+  });
 
   // getOpenOrders() throwing leaves the list empty while the sync still reports OK, so
   // without this guard one transient CLOB error would look like every order vanishing
@@ -1055,6 +1067,76 @@ test("released capital: a failed open-orders fetch never looks like a mass cance
 
   // A first-ever run has no previous orders and must stay silent.
   assert.equal(sync.vanishedOpenOrders(null, [], [], null, "2026-08-05T14:00:00Z").vanished.length, 0);
+});
+
+test("released capital: one absent read is not a departure, a second one is", async () => {
+  // Reported: "limit objednavky uz zdvojene obcas cekaji na vyporadani. u market
+  // objednavek jsem si toho zatim nikdy nevsiml."
+  //
+  // Measured on the account, 2026-09-18: 23 rows stood recorded as
+  // LIVE_LIMIT_ORDER_UNFILLED while the account was STILL RESTING OR ALREADY HOLDING nine
+  // of their tokens -- several stamped with the same millisecond, which is one short read
+  // rather than nine unrelated markets dropping a bid at the same instant. Each false
+  // departure frees capital that never came back and leaves the market looking untouched,
+  // so the executor re-enters it: a second identical bid, and a doubled position when both
+  // fill. Only limit orders can be caught this way, because only a resting order is ever
+  // read back at all.
+  const sync = await import("../tools/live-account-sync.mjs");
+  const order = { id: "a", tokenId: "111", assetId: "111", price: 0.9, remainingSize: 5.68, notionalUsdc: 5.112 };
+
+  const first = sync.vanishedOpenOrders({ openOrders: [order] }, [], [], null, "2026-08-05T14:00:00Z");
+  assert.equal(first.vanished.length, 0, "one read that does not mention it is not evidence it left");
+  assert.equal(first.provisionallyMissing.length, 1, "but the observation is kept");
+  assert.equal(first.missingSince.a, "2026-08-05T14:00:00Z");
+
+  // The next sync, still absent: now two independent reads agree.
+  const second = sync.vanishedOpenOrders(
+    { openOrders: [order], openOrderMissingSince: first.missingSince },
+    [], [], null, "2026-08-05T14:30:00Z",
+  );
+  assert.equal(second.vanished.length, 1, "a real departure is confirmed on the second read, not delayed forever");
+  assert.equal(second.freedCapitalUsdc, 5.112);
+
+  // BAIT: it came back. The count must reset, or a single flicker would still retire the
+  // order on some later absence hours away.
+  const returned = sync.vanishedOpenOrders(
+    { openOrders: [order], openOrderMissingSince: first.missingSince },
+    [order], [], null, "2026-08-05T14:30:00Z",
+  );
+  assert.equal(returned.vanished.length, 0);
+  assert.equal(returned.missingSince.a, undefined, "an order that is back must not stay half-retired");
+});
+
+test("released capital: an order the exchange still names has not left the book unfilled", async () => {
+  // isActiveOpenOrder drops what cannot be rested against -- MATCHED, or a row whose
+  // remainingSize the response omits and which therefore reads as zero. That is right for
+  // the resting book and wrong as a test of departure: a MATCHED order is BECOMING a
+  // position, and calling it "left the book without filling" releases capital that is
+  // being spent and invites a second bid on a market the account is already buying.
+  const sync = await import("../tools/live-account-sync.mjs");
+  const order = { id: "a", tokenId: "111", assetId: "111", price: 0.9, remainingSize: 5.68, notionalUsdc: 5.112 };
+
+  const matched = sync.vanishedOpenOrders(
+    { openOrders: [order], openOrderMissingSince: { a: "2026-08-05T13:00:00Z" } },
+    // Absent from the restable list...
+    [],
+    [],
+    null,
+    "2026-08-05T14:00:00Z",
+    // ...but still named by the exchange, mid-settlement.
+    [{ ...order, status: "MATCHED", remainingSize: 0 }],
+  );
+  assert.equal(matched.vanished.length, 0,
+    "a matched order is a position arriving, not capital coming back");
+  assert.equal(matched.freedCapitalUsdc, 0);
+
+  // BAIT: genuinely absent from the exchange's own answer, and already missed once --
+  // that still has to be reported, or nothing would ever be released.
+  const gone = sync.vanishedOpenOrders(
+    { openOrders: [order], openOrderMissingSince: { a: "2026-08-05T13:00:00Z" } },
+    [], [], null, "2026-08-05T14:00:00Z", [],
+  );
+  assert.equal(gone.vanished.length, 1, "an order in no list at all, twice over, has left");
 });
 
 test("released capital: the account sync dispatches the execution workflow", async () => {
