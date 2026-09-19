@@ -257,7 +257,7 @@ button.primary { color: #fff; background: var(--series-1); border-color: transpa
 .asset-price-chart .asset-zone-label { font-size: 11px; font-weight: 650; font-variant-numeric: tabular-nums; }
 .asset-price-chart .asset-zone-label-demand { fill: var(--good-text); }
 .asset-price-chart .asset-zone-label-supply { fill: var(--critical-text); }
-.asset-price-chart .asset-structure-line { fill: none; stroke-width: 2; stroke-linecap: round; opacity: 0.92; filter: drop-shadow(0 0 1px rgba(0, 0, 0, 0.85)); }
+.asset-price-chart .asset-structure-line { fill: none; stroke-width: 1.25; stroke-linecap: round; opacity: 0.88; filter: drop-shadow(0 0 1px rgba(0, 0, 0, 0.85)); }
 .asset-price-chart .asset-structure-up { stroke: #ffffff; }
 .asset-price-chart .asset-structure-down { stroke: #ffffff; }
 .asset-price-chart .asset-structure-flat { stroke: #ffffff; stroke-dasharray: 6 4; }
