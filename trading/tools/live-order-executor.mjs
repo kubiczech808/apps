@@ -4793,9 +4793,19 @@ async function restoreOpenOrder(review, tradingConfig = {}) {
     signatureType: tradingConfig.signatureType,
   };
   try {
-    return DRY_RUN || !hasFlag("confirm-live")
-      ? { status: "dry_run_restore", success: true }
-      : await submitOrder(order);
+    if (DRY_RUN || !hasFlag("confirm-live")) return { status: "dry_run_restore", success: true };
+    // Through the entry guard, like every other BUY. This was the one purchase in the
+    // executor that went straight to submitOrder, so it took no claim, left no trace in
+    // live-entry-claims.json, and was never asked the question the guard exists to ask:
+    // does the account already hold this outcome, or already rest a buy on it.
+    //
+    // culledOrdersToRestore checks both of those itself, against the last published state,
+    // so in the ordinary case this changes nothing -- which is the point. It is a second
+    // lock on a door that already has one, and the only BUY that was missing it. When the
+    // two disagree the guard reads the account rather than a snapshot, and a refusal costs
+    // a bid that is not re-rested, where the other direction costs a duplicate position.
+    const submission = await submitLiveEntryWithMakerPrecisionRecovery(order);
+    return submission.response;
   } catch (error) {
     return { status: "restore_exception", error: error?.message || String(error) };
   }
