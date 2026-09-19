@@ -8518,6 +8518,11 @@ export function dipEntryCandidateRows(strategy, hits = DIP_ENTRY_HITS) {
         question: String(hit.question || ""),
         outcome: String(hit.outcome || ""),
         slug: String(hit.slug || ""),
+        // Without this the frontend's polymarketUrl() has nothing to build a link from --
+        // it reads eventSlug first, then slug, then gives up on the bare Polymarket
+        // homepage, which looks exactly like a fake or already-resolved market to whoever
+        // clicks it. Measured 2026-09-19: 500/500 recorded hits had neither field.
+        eventSlug: String(hit.eventSlug || ""),
         // The worker read a real book at this price, which is the evidence every gate below
         // wants: a quote that existed, with no spread to refuse.
         status: "ELIGIBLE",

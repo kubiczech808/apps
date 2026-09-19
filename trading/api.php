@@ -6294,6 +6294,16 @@ function live_dip_entry_watch_payload(): array
                     ? (float) $item['volumeUsdc']
                     : (is_numeric($item['liquidity'] ?? null) ? (float) $item['liquidity'] : null),
                 'endDate' => (string) ($item['resolutionEndDate'] ?? $item['endDate'] ?? ''),
+                // Carried for the same reason as the tags below, and measured missing for the
+                // same reason: 500/500 recorded hits had neither field, because this array
+                // never read them off $item even though the observation carries both (slug
+                // from the scan, eventSlug already resolved through marketEventSlug()). Every
+                // dip position opened from a hit fell back to the bare Polymarket homepage --
+                // "nejde se vubec prokliknout na eventy... ty eventy se zdaji byt fake" -- not
+                // because the market was fake, but because nothing ever carried its address
+                // this far.
+                'slug' => (string) ($item['slug'] ?? ''),
+                'eventSlug' => (string) ($item['eventSlug'] ?? ''),
                 // The market's tags, carried because the paper bot rebuilds a candidate row
                 // out of the recorded hit and has nothing else to read them from. By the time
                 // the bot runs, the collapsed favourite is out of the catalogue entirely.
@@ -6556,6 +6566,7 @@ function record_dip_entry_hit(array $input): array
         'question' => (string) ($input['question'] ?? ''),
         'outcome' => (string) ($input['outcome'] ?? ''),
         'slug' => (string) ($input['slug'] ?? ''),
+        'eventSlug' => (string) ($input['eventSlug'] ?? ''),
         // The price the dip actually reached, which is what the simulated entry pays. The
         // whole value of recording this is that it is not the price an hour later.
         'price' => round($price, 6),

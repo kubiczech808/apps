@@ -2332,7 +2332,7 @@ const DIP_ENTRY_RECORD_URL = process.env.LIVE_DIP_ENTRY_RECORD_URL
 //
 // Nothing is signed and no money moves, so this path runs whatever the live switches say --
 // a paper test that needed the live keys armed would not be a paper test.
-async function recordDipEntryHit(plan, price) {
+export async function recordDipEntryHit(plan, price) {
   if (!TRADING_TRIGGER_KEY) return { ok: false, error: "dip entry record key is not configured" };
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 12000);
@@ -2351,6 +2351,7 @@ async function recordDipEntryHit(plan, price) {
         question: plan.question || "",
         outcome: plan.outcome || "",
         slug: plan.slug || "",
+        eventSlug: plan.eventSlug || "",
         price,
         openProbability: plan.openProbability ?? null,
         volumeUsdc: plan.volumeUsdc ?? null,
