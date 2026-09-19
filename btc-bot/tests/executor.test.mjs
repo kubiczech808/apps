@@ -75,6 +75,20 @@ test('a PA position can take TP1 only and leave its second half open for structu
   assert.equal(trade.status, 'running')
 })
 
+test('paper executor rejects a duplicate TP2 and leaves the second half to structure', async () => {
+  const store = { balanceSats: 1_000_000, trades: [], nextId: 1 }
+  const executor = createPaperExecutor({ store, feeRate: 0.0006, now: () => START })
+  const trade = await executor.openPosition({
+    pricingModel: 'linear-usd', strategyId: 'price-action-structure-v1', assetSymbol: 'AUDUSD', timeframeId: '1h',
+    signalKey: 'aud-no-duplicate-tp2', signalCandleTime: START, side: 'short', entry: 0.7124, stop: 0.7145,
+    takeProfit: 0.7080, tp1: 0.7080, tp2: 0.7080, quantityUsd: 100, marginSats: 25_000,
+    leverage: 4, liquidation: 0.8905, quoteSatsPerUsd: 1250,
+  })
+
+  assert.equal(trade.tp1, 0.7080)
+  assert.equal(trade.tp2, null)
+})
+
 test('a live PA position exposes its first take-profit as a half-size paper order', async () => {
   const store = { balanceSats: 1_000_000, trades: [], nextId: 1 }
   const executor = createPaperExecutor({ store, feeRate: 0.0006, now: () => START })

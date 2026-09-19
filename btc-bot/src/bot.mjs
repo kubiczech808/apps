@@ -62,6 +62,13 @@ const isPendingPriceActionOrderProfile = (profile) => {
     .every((gate) => gate.passed !== false)
 }
 
+const validPriceActionTp2 = ({ side, tp1, tp2 }) => {
+  if (!Number.isFinite(tp1) || !Number.isFinite(tp2)) return null
+  if (side === 'long' && tp2 > tp1) return tp2
+  if (side === 'short' && tp2 < tp1) return tp2
+  return null
+}
+
 const priceActionOrderPlan = ({ assetSymbol, timeframeId, item, profile, equitySats, btcPrice, settings }) => {
   const plan = planLinearPosition({
     side: profile.side,
@@ -80,14 +87,15 @@ const priceActionOrderPlan = ({ assetSymbol, timeframeId, item, profile, equityS
   if (!(profile.rewardRisk >= minRewardRisk)) {
     return { ok: false, reason: `R/R ${profile.rewardRisk} is below ${minRewardRisk}:1` }
   }
+  const tp2 = validPriceActionTp2(profile)
   return {
     ok: true,
     order: {
       ...plan,
       type: 'limit',
-      takeProfit: profile.tp2 ?? profile.tp1,
+      takeProfit: tp2 ?? profile.tp1,
       tp1: profile.tp1,
-      tp2: profile.tp2,
+      tp2,
       entryZone: profile.zone ? { ...profile.zone } : null,
       assetSymbol,
       timeframeId,
@@ -215,7 +223,7 @@ export const executeReadyPriceActionProfiles = async ({
       signalKey,
       signalCandleTime: item.asOf ?? null,
       tp1: profile.tp1,
-      tp2: profile.tp2,
+      tp2: order.tp2,
       entryZone: profile.zone ? { ...profile.zone } : null,
       plan: {
         reason: `${profile.side} ${item.reason ?? ''}`.trim(),

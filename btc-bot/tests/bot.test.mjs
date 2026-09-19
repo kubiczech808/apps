@@ -246,6 +246,27 @@ test('a pending PA order may carry TP1 alone and leave the remainder to structur
   assert.equal(calls[0].tp2, null)
 })
 
+test('a duplicate or closer PA TP2 is discarded before an order reaches the executor', async () => {
+  const calls = []
+  const executor = { placeOrder: async (order) => { calls.push(order); return { ...order, id: 'pending-no-duplicate', status: 'open' } } }
+  const profile = {
+    status: 'watch', mode: 'screening', side: 'short', zoneHit: false,
+    entry: 0.7124, stop: 0.7145, tp1: 0.7080, tp2: 0.7080, weightedTarget: 0.7080,
+    rewardRisk: 2.1, minRewardRisk: 2, riskPct: 1, zone: { firstTime: START },
+    gates: [{ id: 'trend', passed: true }, { id: 'zone', passed: false }, { id: 'pullback', passed: false }, { id: 'rr', passed: true }],
+  }
+  const placed = await placePendingPriceActionOrders({
+    executor,
+    matrix: { assets: [{ symbol: 'AUDUSD', trends: { '1h': { asOf: START, tradeProfile: profile } } }] },
+    trades: [], equitySats: 1_000_000, btcPrice: 80_000,
+    settings: { enabled: true, risk: { market: 'futures', riskPct: 1, feeRate: 0.0006, minMarginSats: 1 }, priceActionStructure: { riskPct: 1 } },
+  })
+
+  assert.equal(placed[0].action, 'placed')
+  assert.equal(calls[0].takeProfit, 0.7080, 'TP1 remains the first protective exit')
+  assert.equal(calls[0].tp2, null, 'TP2 must sit strictly beyond TP1')
+})
+
 test('price-action invalidation closes a position and retires pre-protocol paper trades', async () => {
   const calls = []
   const executor = {

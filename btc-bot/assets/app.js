@@ -2226,7 +2226,8 @@ const priceActionTargetsCell = (position) => {
     contents.push(el('div', { className: 'pa-level-price', text: `TP2 ${quotePrice(tp2)} · 50 %` }))
     contents.push(el('div', { className: `pa-level-detail ${tp2Pnl.className}`, text: `${signedPct(tp2Move).text} · ${tp2Pnl.text}` }))
   } else {
-    contents.push(el('div', { className: 'pa-level-detail', text: 'zbytek: struktura / SL' }))
+    const zoneType = position.side === 'short' ? 'demand' : 'supply'
+    contents.push(el('div', { className: 'pa-level-detail', text: `TP2: bez platné ${zoneType} zóny za TP1 · struktura / SL` }))
   }
   return el('td', {}, contents)
 }

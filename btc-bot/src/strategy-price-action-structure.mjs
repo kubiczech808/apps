@@ -708,6 +708,17 @@ const nearestOpposingZone = ({ side, zones, entry, tp1 = null }) => {
   return candidates.find((zone) => !Number.isFinite(zone.firstTouchAt)) ?? null
 }
 
+// A second target is meaningful only if it realizes beyond the structural
+// target. Round before comparing so the value persisted for the dashboard
+// cannot collapse back onto TP1 at the instrument's display precision.
+const validSecondTarget = ({ side, tp1, tp2 }) => {
+  if (!Number.isFinite(tp1) || !Number.isFinite(tp2)) return null
+  const target = roundPrice(tp2)
+  if (side === 'long' && target > tp1) return target
+  if (side === 'short' && target < tp1) return target
+  return null
+}
+
 const structuralTarget = ({ side, structure }) =>
   side === 'long'
     ? roundPrice(structure?.activeRange?.high?.price ?? structure?.high?.current?.price ?? null)
@@ -828,10 +839,15 @@ const zoneEntryCandidate = ({ item, side, zone, pullback, invalidationLevel, set
   })
   const refinedEntry = lowerRefinement?.entry ?? entryAtZoneHit
   const tp1 = structuralTarget({ side, structure: item?.structure })
-  const tp2Zone = Number.isFinite(refinedEntry)
+  const candidateTp2Zone = Number.isFinite(refinedEntry)
     ? nearestOpposingZone({ side, zones: item?.zones, entry: refinedEntry, tp1 })
     : null
-  const tp2 = side === 'long' ? roundPrice(tp2Zone?.low ?? null) : roundPrice(tp2Zone?.high ?? null)
+  const tp2 = validSecondTarget({
+    side,
+    tp1,
+    tp2: side === 'long' ? candidateTp2Zone?.low : candidateTp2Zone?.high,
+  })
+  const tp2Zone = Number.isFinite(tp2) ? candidateTp2Zone : null
   // A distant opposing FVG is optional. When it does not exist beyond TP1,
   // the setup may still take half at the structural target; the other half is
   // then managed by structure and its protective stop rather than inventing a
@@ -1075,16 +1091,21 @@ export const evaluateTradeProfile = ({
         : null
   )
   const tp1 = activeCandidate?.tp1 ?? structuralTarget({ side, structure: item?.structure })
-  const tp2Zone = activeCandidate?.tp2Zone ?? (
+  const candidateTp2Zone = activeCandidate?.tp2Zone ?? (
     Number.isFinite(entry) ? nearestOpposingZone({ side, zones, entry, tp1 }) : null
   )
-  const tp2 = activeCandidate?.tp2 ?? (
-    side === 'long' && tp2Zone
-      ? tp2Zone.low
-      : side === 'short' && tp2Zone
-        ? tp2Zone.high
-        : null
-  )
+  const tp2 = validSecondTarget({
+    side,
+    tp1,
+    tp2: activeCandidate?.tp2 ?? (
+      side === 'long' && candidateTp2Zone
+        ? candidateTp2Zone.low
+        : side === 'short' && candidateTp2Zone
+          ? candidateTp2Zone.high
+          : null
+    ),
+  })
+  const tp2Zone = Number.isFinite(tp2) ? candidateTp2Zone : null
   const weightedTarget = Number.isFinite(tp1)
     ? Number.isFinite(tp2) ? (tp1 + tp2) / 2 : tp1
     : null

@@ -31,6 +31,13 @@ export const createPaperExecutor = ({
 
   const running = () => store.trades.filter((trade) => trade.status === 'running')
 
+  const validLinearTp2 = (plan) => {
+    if (!Number.isFinite(plan?.tp1) || !Number.isFinite(plan?.tp2)) return null
+    if (plan.side === 'long' && plan.tp2 > plan.tp1) return plan.tp2
+    if (plan.side === 'short' && plan.tp2 < plan.tp1) return plan.tp2
+    return null
+  }
+
   const feeFor = (quantityUsd, price) => Math.ceil(((quantityUsd * SATS_PER_BTC) / price) * feeRate)
 
   const markTrade = (trade, price) => {
@@ -234,6 +241,7 @@ export const createPaperExecutor = ({
         throw new Error(`margin ${plan.marginSats} sats exceeds paper balance ${store.balanceSats} sats`)
       }
       const linear = plan.pricingModel === 'linear-usd'
+      const linearTp2 = linear ? validLinearTp2(plan) : null
       const openingFee = linear
         ? Math.ceil(plan.quantityUsd * feeRate * plan.quoteSatsPerUsd)
         : feeFor(plan.quantityUsd, plan.entry)
@@ -276,7 +284,7 @@ export const createPaperExecutor = ({
           realizedPlSats: 0,
           unrealizedPlSats: 0,
           tp1: plan.tp1,
-          tp2: Number.isFinite(plan.tp2) ? plan.tp2 : null,
+          tp2: linearTp2,
           entryZone: plan.entryZone ?? null,
           tp1Taken: false,
           lastMarkedCandleTime: plan.signalCandleTime ?? null,
@@ -298,6 +306,7 @@ export const createPaperExecutor = ({
       if (plan.pricingModel !== 'linear-usd') {
         throw new Error('paper pending orders currently support price-action linear contracts only')
       }
+      const linearTp2 = validLinearTp2(plan)
       const order = {
         id: `paper-${store.nextId++}`,
         side: plan.side,
@@ -312,7 +321,7 @@ export const createPaperExecutor = ({
         initialStop: plan.stop,
         takeProfit: plan.takeProfit,
         tp1: plan.tp1,
-        tp2: Number.isFinite(plan.tp2) ? plan.tp2 : null,
+        tp2: linearTp2,
         entryZone: plan.entryZone ?? null,
         exitPrice: null,
         plSats: null,
