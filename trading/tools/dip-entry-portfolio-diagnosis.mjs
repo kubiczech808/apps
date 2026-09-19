@@ -69,10 +69,24 @@ async function main() {
   if (!carriers.length) console.log("   no paper portfolio carries the rule");
 
   console.log("\n== 2. what those portfolios actually bought");
-  const state = await fetchJson(`${HOST}/api.php?action=state&target=paper&summary=dashboard`, "paper state");
-  const portfolios = state?.state?.paperPortfolios || state?.paperPortfolios || {};
+  // Asked for BY PORTFOLIO. The dashboard summary carries the portfolios and their
+  // parameters but not their trades -- each portfolio's trades are a document of their own
+  // and only the one named by strategy_id is merged in (state_payload, api.php). Reading
+  // the summary alone reported "0 trade(s)" for every portfolio on the account, which
+  // looks exactly like a portfolio that has never traded and is nothing of the kind.
   for (const [id, row] of carriers) {
-    const held = portfolios[id] || {};
+    let held = {};
+    try {
+      const state = await fetchJson(
+        `${HOST}/api.php?action=state&target=paper&summary=dashboard&strategy_id=${encodeURIComponent(id)}`,
+        `paper state ${id}`,
+      );
+      const portfolios = state?.state?.paperPortfolios || state?.paperPortfolios || {};
+      held = portfolios[id] || {};
+    } catch (error) {
+      console.log(`\n   ${id}: !! ${error.message}`);
+      continue;
+    }
     const trades = [
       ...(Array.isArray(held.trades) ? held.trades : []),
       ...(Array.isArray(held.openTrades) ? held.openTrades : []),
@@ -80,7 +94,7 @@ async function main() {
     ];
     console.log(`\n   ${id} "${String(row.displayName || id)}": ${trades.length} trade(s)`);
     if (!trades.length) {
-      console.log("      (no trade rows in the dashboard summary for this portfolio)");
+      console.log("      (this portfolio's own document carries no trade rows)");
       continue;
     }
     console.log("      bought   opened   under way  market");
