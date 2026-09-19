@@ -24,6 +24,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { readFileSync } from "node:fs";
 import { buildRows, APP, extractFunction, constant, API } from "./portfolio-parameter-card-harness.mjs";
+import { dipEntrySignal } from "../tools/dip-entry-rule.mjs";
 
 const CONFIG = {
   minProbability: 0.7,
@@ -106,18 +107,76 @@ test("probability with no ceiling reads as a floor, not a fake range", () => {
   assert.equal(valueOf(rowsFor({ maxProbability: null }), "Probability"), "≥ 70.0%");
 });
 
-test("dip entry states the band it buys in", () => {
-  // "dip entry staci rozmezi pro entry". Where the market OPENED is the rule's condition and
-  // is the same on every dip portfolio; the band it BUYS in is the parameter being tuned.
-  // The portfolio's own probability range has to sit inside the dip's buy band, or the
-  // rule is refused as configured -- a dip portfolio still filtering for 70-80% would fire
-  // without a collapse. The card reports that refusal rather than a band it is not applying.
-  const rows = rowsFor({
-    minProbability: 0.3, maxProbability: 0.56,
-    dipEntryEnabled: true, dipEntryOpenMin: 0.7, dipEntryOpenMax: 1,
-    dipEntryBuyMin: 0.3, dipEntryBuyMax: 0.56,
-  });
-  assert.equal(valueOf(rows, "Dip entry"), "30.0%–56.0%");
+// The portfolio in production: buys at 30-56%, on markets that opened at 70-99%.
+const DIP_CONFIG = {
+  minProbability: 0.3, maxProbability: 0.56,
+  dipEntryEnabled: true, dipEntryOpenMin: 0.7, dipEntryOpenMax: 0.99,
+};
+
+test("dip entry states the OPENING band, which is the half the probability row cannot", () => {
+  // Rewritten, not deleted. It previously asserted "30.0%–56.0%" -- the buy band -- on the
+  // grounds that "dip entry staci rozmezi pro entry" and that where a market opened "is the
+  // same on every dip portfolio". Both halves of that were wrong in practice:
+  //
+  //   * the buy band IS the portfolio's probability range, so printing it reprinted the row
+  //     directly above, and the card carried one number twice;
+  //   * the opening band is not the same everywhere -- the code default is 70-80 and this
+  //     portfolio is set to 70-99 -- and it is the ONLY dip number the form sets, so it was
+  //     the one setting on the form that appeared nowhere on the card.
+  //
+  // Reported: "tohle nastaveni neodpovida tomu co se nastavuje ve formulari. v nem je to
+  // spravne. mj. chybi to ze puvodni pravdepodobnost ma byt 70-99."
+  const rows = rowsFor(DIP_CONFIG);
+  assert.equal(valueOf(rows, "Dip entry"), "opened 70.0%–99.0%");
+
+  // The bait the old assertion could not be: the two rows must not be the same number. Any
+  // return to printing buyMin/buyMax passes the line above only if the bands coincide, and
+  // fails here whether they do or not.
+  assert.notEqual(valueOf(rows, "Dip entry"), valueOf(rows, "Probability"),
+    "the dip row must not reprint the probability range above it");
+  assert.equal(valueOf(rows, "Probability"), "30.0%–56.0%");
+
+  // And it still tracks the config rather than a constant: a different opening band prints
+  // differently, so a hard-coded "70.0%–99.0%" would fail.
+  assert.equal(valueOf(rowsFor({ ...DIP_CONFIG, dipEntryOpenMax: 0.85 }), "Dip entry"),
+    "opened 70.0%–85.0%");
+});
+
+test("the band the card prints is the band the rule actually gates on", () => {
+  // "zkontroluj behem opravy, ze logika to zohlednuje." A card that states a band nothing
+  // enforces is the same defect in the other direction, so the printed numbers are read back
+  // out of the row and fed to the rule -- the real one, executed, from the reference module
+  // the four runtimes are held against.
+  const printed = valueOf(rowsFor(DIP_CONFIG), "Dip entry");
+  const band = printed.match(/^opened (\d+(?:\.\d+)?)%–(\d+(?:\.\d+)?)%$/);
+  assert.ok(band, `the dip row must state a readable opening band: ${printed}`);
+  const [openMin, openMax] = [Number(band[1]) / 100, Number(band[2]) / 100];
+
+  const rule = {
+    enabled: true, openMin, openMax,
+    buyMin: DIP_CONFIG.minProbability, buyMax: DIP_CONFIG.maxProbability,
+  };
+  const underway = (openProbability) => ({ eventRunning: true, openProbability, probability: 0.35 });
+
+  // Inside the printed band: admitted. Outside either edge: refused, and the refusal names
+  // the same band the card does. Before the fix the card printed 30.0%-56.0%, and a market
+  // that opened at 40% -- inside what the card claimed -- is refused by the rule, so this
+  // pair disagreed.
+  assert.equal(dipEntrySignal(underway(0.78), rule).admit, true, "inside the band must be admitted");
+  assert.equal(dipEntrySignal(underway(openMin - 0.01), rule).admit, false, "below the band must be refused");
+  assert.equal(dipEntrySignal(underway(openMax + 0.005), rule).admit, false, "above the band must be refused");
+  assert.match(dipEntrySignal(underway(0.4), rule).reason, /70%-99% opening band/);
+
+  // The three deployed copies of that gate read the same two config keys. They cannot import
+  // the module -- each is deployed alone -- so this is what holds them to it.
+  const bot = readFileSync(new URL("../tools/paper-trading-bot.mjs", import.meta.url), "utf8");
+  assert.match(bot, /opened < Number\(strategy\.dipEntryOpenMin\) \|\| opened > Number\(strategy\.dipEntryOpenMax\)/);
+  // api.php twice: the execution catalogue's own filter, and the minute-resolution watch
+  // list that feeds it.
+  assert.equal(
+    API.match(/\$opened [<>=][^;]*\$(?:dipRule|rule)\['dipEntryOpenMin'\]/g)?.length, 2,
+    "both PHP gates must still read the opening band",
+  );
 });
 
 test("the resolution row changes with the mode, and states no ceiling where none applies", () => {

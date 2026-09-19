@@ -10466,11 +10466,16 @@ function portfolioParameterRows(config = {}, { mode = null, portfolio = {}, live
       : "after each scrape"],
     ["Rotation", automaticRotationIsEnabled(config) ? "on" : "off"],
     ["Close at certainty", closeBid == null ? "off" : probability(closeBid)],
-    // The entry band is the parameter; where the market opened is the rule's own condition
-    // and is the same on every dip portfolio in practice.
+    // The OPENING band, which is the only half of the rule the form sets and the card can
+    // show. Reported: the card did not match the form -- it printed the buy band, which is
+    // the Probability row directly above it, so a portfolio set to "opened 70-99%, buy at
+    // 30-56%" showed 30.0%-56.0% twice and the 70-99 nowhere. The buy band IS the
+    // probability range (there is no second pair of numbers); the opening band is the half
+    // the range cannot express, and it is not "the same on every dip portfolio" -- the
+    // default is 70-80 and the portfolio in production is set to 70-99.
     ["Dip entry", dip.enabled
       ? (dipEntryRuleFault(dip) ? `not applied — ${dipEntryRuleFault(dip)}`
-        : `${percent(dip.buyMin)}–${percent(dip.buyMax)}`)
+        : `opened ${percent(dip.openMin)}–${percent(dip.openMax)}`)
       : "off"],
     ["Stop floor", floor == null ? "off" : probability(floor)],
     ["Stop loss", stopMultiplier > 0 ? percent(stopMultiplier) : "off"],
