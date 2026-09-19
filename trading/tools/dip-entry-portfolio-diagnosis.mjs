@@ -170,7 +170,31 @@ async function main() {
     if (!byPortfolio.has(key)) console.log(`   ${key.padEnd(26)}   0 hit(s)  <- nothing to open a position from`);
   }
 
-  console.log("\n== 5. what the answer means");
+  // Reported separately: a dip portfolio's open positions cannot be clicked through to
+  // Polymarket at all -- app.js's polymarketUrl() reads item.eventSlug, then item.slug, and
+  // falls back to the bare homepage if neither is a usable slug. A hit missing both is a
+  // position that will do exactly that for as long as it stays open.
+  console.log("\n== 5. can these hits ever be linked back to Polymarket");
+  const withSlug = hits.filter((hit) => String(hit.slug || "").trim());
+  const withEventSlug = hits.filter((hit) => String(hit.eventSlug || "").trim());
+  console.log(`   ${withSlug.length}/${hits.length} hit(s) carry a non-empty slug`
+    + `   ${withEventSlug.length}/${hits.length} carry a non-empty eventSlug`);
+  if (hits.length && !withSlug.length && !withEventSlug.length) {
+    console.log("   -> NONE of them do. Every position opened from a hit falls back to");
+    console.log("      https://polymarket.com/ (the bare homepage), which is indistinguishable");
+    console.log("      from a fake or already-resolved market to whoever clicks it.");
+  }
+  for (const hit of hits.slice(0, 5)) {
+    console.log(`      slug ${JSON.stringify(hit.slug ?? null)}  eventSlug ${JSON.stringify(hit.eventSlug ?? null)}`
+      + `  "${String(hit.question || "").slice(0, 48)}"`);
+  }
+  const samplePlan = (watch?.plans || [])[0] || null;
+  console.log(`   a live dip-entry PLAN carries these keys: ${samplePlan ? Object.keys(samplePlan).join(", ") : "(no plans prepared right now)"}`);
+  if (samplePlan && !("slug" in samplePlan) && !("eventSlug" in samplePlan)) {
+    console.log("   -> the plan itself has neither key, so no hit recorded from it ever could.");
+  }
+
+  console.log("\n== 6. what the answer means");
   console.log("   NOT WATCHED -> the reason is printed above it, and it is a configuration");
   console.log("   fault the portfolio cannot trade its way out of: fix the range or the band.");
   console.log("   WATCHED with plans but 0 hits -> the watch is right, and there are three");
