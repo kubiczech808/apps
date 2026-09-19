@@ -140,6 +140,12 @@ async function main() {
       // a url stored as ".../event/" with an empty slug WINS over a slug that is now
       // correct, and lands on a dead page. Reported as still unclickable after the slug
       // was repaired, so the stored url is the thing to look at rather than the slug.
+      // Opened when, and refreshed when. A row with no slug that has never been checked is
+      // a newborn waiting for its first pass; one that HAS been checked and still has no
+      // slug means the repair itself is not working, and those need different fixes.
+      console.log(`            openedAt ${String(trade.openedAt || trade.date || "-").slice(0, 19)}`
+        + `   lastCheckedAt ${String(trade.lastCheckedAt || "(never refreshed)").slice(0, 19)}`
+        + `   tokenId ${String(trade.tokenId || "-").slice(0, 16)}...`);
       const stored = String(trade.url || trade.marketUrl || "").trim();
       const slug = String(trade.eventSlug || trade.slug || "").trim();
       const wouldOpen = /^https:\/\/polymarket\.com\//i.test(stored)
