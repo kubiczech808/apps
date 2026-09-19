@@ -235,11 +235,14 @@ button.primary { color: #fff; background: var(--series-1); border-color: transpa
 .asset-chart-timeframes { display: flex; gap: 4px; flex-wrap: wrap; justify-content: flex-end; }
 .asset-chart-tab { min-width: 48px; padding: 5px 9px; border-radius: 999px; color: var(--text-secondary); }
 .asset-chart-tab[aria-selected="true"] { background: var(--text-primary); color: var(--page); border-color: transparent; }
-.asset-price-chart svg { height: 420px; }
+.asset-price-chart { overflow: hidden; isolation: isolate; }
+.asset-price-chart svg { display: block; height: 420px; max-width: 100%; overflow: hidden; }
 .asset-chart-history { display: grid; grid-template-columns: auto minmax(120px, 1fr) auto; align-items: center; gap: 10px; margin: 8px 0 2px; color: var(--text-muted); font-size: 11px; }
 .asset-chart-history input { width: 100%; min-width: 0; accent-color: var(--series-1); }
 .asset-chart-history output { min-width: 76px; text-align: right; font-variant-numeric: tabular-nums; }
 #asset-chart-svg { overscroll-behavior: contain; cursor: crosshair; touch-action: pan-y; }
+#asset-chart-svg.asset-chart-pan-enabled { cursor: grab; touch-action: none; }
+#asset-chart-svg.asset-chart-pan-enabled:active { cursor: grabbing; }
 .asset-price-chart .asset-y-axis-hitarea { fill: transparent; cursor: ns-resize; touch-action: none; }
 .asset-price-chart .asset-zone-clickable,
 .asset-price-chart .asset-zone-hit-area { cursor: pointer; }

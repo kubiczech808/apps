@@ -29,8 +29,10 @@ let refreshTimer = null
 let priceActionDecisionTimeframe = '4h'
 let selectedAssetChart = { symbol: null, timeframeId: '4h' }
 let assetChartVisibleCandleCount = 240
+let assetChartHistoryOffset = 0
 let assetChartYScale = { key: null, min: null, max: null }
 let assetChartYDrag = null
+let assetChartPan = { key: null, enabled: false, active: null }
 let selectedChartZone = null
 let selectedStrategyPanel = 'filled-zones'
 let selectedStrategyView = 'price-action'
@@ -688,9 +690,7 @@ const assetTickerButton = (symbol, timeframeId = priceActionDecisionTimeframe) =
   })
   button.onclick = () => {
     selectedAssetChart = { symbol, timeframeId }
-    assetChartVisibleCandleCount = defaultAssetChartVisibleCandleCount(timeframeId)
-    assetChartYScale = { key: null, min: null, max: null }
-    assetChartYDrag = null
+    resetAssetChartViewport(timeframeId)
     selectedChartZone = null
     renderAssetChart()
     $('asset-chart-card')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
@@ -714,9 +714,7 @@ const renderPriceActionDecisionTabs = (columns) => {
     button.onclick = () => {
       priceActionDecisionTimeframe = column.id
       selectedAssetChart = { symbol: selectedAssetChart.symbol, timeframeId: column.id }
-      assetChartVisibleCandleCount = defaultAssetChartVisibleCandleCount(column.id)
-      assetChartYScale = { key: null, min: null, max: null }
-      assetChartYDrag = null
+      resetAssetChartViewport(column.id)
       selectedChartZone = null
       renderDecision()
       renderAssetChart()
@@ -1145,6 +1143,14 @@ const defaultAssetChartVisibleCandleCount = (timeframeId) =>
 
 const clamp = (value, low, high) => Math.max(low, Math.min(high, value))
 
+const resetAssetChartViewport = (timeframeId) => {
+  assetChartVisibleCandleCount = defaultAssetChartVisibleCandleCount(timeframeId)
+  assetChartHistoryOffset = 0
+  assetChartYScale = { key: null, min: null, max: null }
+  assetChartYDrag = null
+  assetChartPan = { key: null, enabled: false, active: null }
+}
+
 const niceStep = (value) => {
   if (!(value > 0) || !Number.isFinite(value)) return 1
   const magnitude = 10 ** Math.floor(Math.log10(value))
@@ -1230,6 +1236,8 @@ const renderAssetChart = () => {
   svg.onpointerdown = null
   svg.onpointerup = null
   svg.onpointerleave = null
+  svg.ondblclick = null
+  svg.onpointercancel = null
   if (tooltip) tooltip.hidden = true
   tabs.replaceChildren()
   zoneDetails.replaceChildren()
@@ -1262,9 +1270,7 @@ const renderAssetChart = () => {
     })
     button.onclick = () => {
       selectedAssetChart = { symbol: asset.symbol, timeframeId: chartColumn.id }
-      assetChartVisibleCandleCount = defaultAssetChartVisibleCandleCount(chartColumn.id)
-      assetChartYScale = { key: null, min: null, max: null }
-      assetChartYDrag = null
+      resetAssetChartViewport(chartColumn.id)
       selectedChartZone = null
       renderAssetChart()
     }
@@ -1287,8 +1293,11 @@ const renderAssetChart = () => {
   // newest candle stays anchored to the right edge of the chart.
   const minVisibleCandleCount = Math.min(allCandles.length, timeframeId === '1d' ? 30 : 60)
   assetChartVisibleCandleCount = Math.max(minVisibleCandleCount, Math.min(assetChartVisibleCandleCount, allCandles.length))
-  const candles = allCandles.slice(-assetChartVisibleCandleCount)
-  const viewingHistory = assetChartVisibleCandleCount > 60
+  const maxHistoryOffset = Math.max(0, allCandles.length - assetChartVisibleCandleCount)
+  assetChartHistoryOffset = clamp(assetChartHistoryOffset, 0, maxHistoryOffset)
+  const candleEnd = allCandles.length - assetChartHistoryOffset
+  const candles = allCandles.slice(candleEnd - assetChartVisibleCandleCount, candleEnd)
+  const viewingHistory = assetChartVisibleCandleCount > 60 || assetChartHistoryOffset > 0
 
   if (historyControl && historyRange && historyValue) {
     historyControl.hidden = allCandles.length <= minVisibleCandleCount
@@ -1298,6 +1307,7 @@ const renderAssetChart = () => {
     historyValue.textContent = `${assetChartVisibleCandleCount} svíček`
     historyRange.oninput = () => {
       assetChartVisibleCandleCount = clamp(Number(historyRange.value), minVisibleCandleCount, allCandles.length)
+      assetChartHistoryOffset = clamp(assetChartHistoryOffset, 0, Math.max(0, allCandles.length - assetChartVisibleCandleCount))
       renderAssetChart()
     }
   }
@@ -1315,6 +1325,7 @@ const renderAssetChart = () => {
     )
     if (nextVisibleCount === assetChartVisibleCandleCount) return
     assetChartVisibleCandleCount = nextVisibleCount
+    assetChartHistoryOffset = clamp(assetChartHistoryOffset, 0, Math.max(0, allCandles.length - assetChartVisibleCandleCount))
     renderAssetChart()
   }
   if (chartContainer) chartContainer.onwheel = zoomHistory
@@ -1339,6 +1350,7 @@ const renderAssetChart = () => {
   const baseMinPrice = Math.max(0, Math.floor((rawMin - padding) / baseStep) * baseStep)
   const baseMaxPrice = Math.ceil((rawMax + padding) / baseStep) * baseStep
   const chartKey = `${asset.symbol}:${timeframeId}`
+  if (assetChartPan.key !== chartKey) assetChartPan = { key: chartKey, enabled: false, active: null }
   if (assetChartYScale.key !== chartKey || !(assetChartYScale.max > assetChartYScale.min)) {
     assetChartYScale = { key: chartKey, min: baseMinPrice, max: baseMaxPrice }
   }
@@ -1377,6 +1389,7 @@ const renderAssetChart = () => {
 
   svg.setAttribute('viewBox', `0 0 ${ASSET_CHART.width} ${ASSET_CHART.height}`)
   svg.setAttribute('preserveAspectRatio', 'none')
+  svg.setAttribute('overflow', 'hidden')
 
   for (const value of yTicks) {
     const yy = y(value)
@@ -1744,7 +1757,43 @@ const renderAssetChart = () => {
     if (tooltip) tooltip.hidden = true
   }
   let touchActive = false
+  const panEnabled = () => assetChartPan.key === chartKey && assetChartPan.enabled
+  const isPlotEvent = (event) => {
+    const box = svg.getBoundingClientRect()
+    const svgX = ((event.clientX - box.left) / Math.max(1, box.width)) * ASSET_CHART.width
+    const svgY = ((event.clientY - box.top) / Math.max(1, box.height)) * ASSET_CHART.height
+    return svgX >= ASSET_CHART.padLeft && svgX <= candlePlotRight && svgY >= ASSET_CHART.padTop && svgY <= axisY
+  }
+  svg.ondblclick = (event) => {
+    if (!isPlotEvent(event)) return
+    event.preventDefault()
+    assetChartPan = { key: chartKey, enabled: !panEnabled(), active: null }
+    svg.classList.toggle('asset-chart-pan-enabled', assetChartPan.enabled)
+    hideCrosshair()
+  }
+  svg.classList.toggle('asset-chart-pan-enabled', panEnabled())
   svg.onpointerdown = (event) => {
+    if (panEnabled() && isPlotEvent(event)) {
+      event.preventDefault()
+      const box = svg.getBoundingClientRect()
+      assetChartPan = {
+        key: chartKey,
+        enabled: true,
+        active: {
+          pointerId: event.pointerId,
+          startX: event.clientX,
+          startY: event.clientY,
+          chartWidth: box.width,
+          chartHeight: box.height,
+          startHistoryOffset: assetChartHistoryOffset,
+          startMin: minPrice,
+          startMax: maxPrice,
+        },
+      }
+      svg.setPointerCapture?.(event.pointerId)
+      hideCrosshair()
+      return
+    }
     touchActive = event.pointerType !== 'mouse'
     svg.setPointerCapture?.(event.pointerId)
     showCrosshair(event)
@@ -1768,12 +1817,35 @@ const renderAssetChart = () => {
       renderAssetChart()
       return
     }
+    if (assetChartPan.active?.pointerId === event.pointerId) {
+      const pan = assetChartPan.active
+      const horizontalMove = (event.clientX - pan.startX) / Math.max(1, pan.chartWidth)
+      const verticalMove = (event.clientY - pan.startY) / Math.max(1, pan.chartHeight)
+      const nextHistoryOffset = clamp(
+        Math.round(pan.startHistoryOffset - horizontalMove * assetChartVisibleCandleCount),
+        0,
+        maxHistoryOffset
+      )
+      const span = pan.startMax - pan.startMin
+      const priceShift = verticalMove * span
+      const nextMin = Math.max(0, pan.startMin - priceShift)
+      assetChartHistoryOffset = nextHistoryOffset
+      assetChartYScale = { key: chartKey, min: nextMin, max: nextMin + span }
+      renderAssetChart()
+      return
+    }
     if (event.pointerType === 'mouse' || touchActive) showCrosshair(event)
   }
   svg.onpointerup = (event) => {
     if (assetChartYDrag?.key === chartKey) assetChartYDrag = null
+    if (assetChartPan.active?.pointerId === event.pointerId) assetChartPan.active = null
     touchActive = false
     svg.releasePointerCapture?.(event.pointerId)
+  }
+  svg.onpointercancel = () => {
+    if (assetChartYDrag?.key === chartKey) assetChartYDrag = null
+    if (assetChartPan.key === chartKey) assetChartPan.active = null
+    touchActive = false
   }
   svg.onpointerleave = (event) => {
     if (event.pointerType === 'mouse') hideCrosshair()
