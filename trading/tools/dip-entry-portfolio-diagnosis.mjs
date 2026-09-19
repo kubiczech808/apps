@@ -114,6 +114,49 @@ async function main() {
       console.log(`         ${bucket.padEnd(10)} ${count}`);
     }
 
+    // Reported: "stejny trh se opakuje v kazdem poslednim execution behu. je jak v
+    // otevrenych pozicich, tak i v zavrenych. realne uz dobehl a mel by byt vyhodnocen nebo
+    // cekat na vyhodnoceni."
+    //
+    // One token appearing on more than one trade row IS the repeat, and the rows say which
+    // route produced it. Two are possible and they need different fixes:
+    //
+    //   * the recorded dip. A stored hit rebuilt into a candidate again after its position
+    //     closed. Bounded now by the tradable age and by the traded-token set.
+    //   * the catalogue. mergeDipEntryPool adds ordinary scraped rows to a dip portfolio's
+    //     pool, and NEITHER bound touches those. rowEventIsRunning asks only whether the
+    //     KICKOFF has passed, so a fixture that finished hours ago still answers "under way"
+    //     -- and while Polymarket has not resolved the market yet it is still listed, still
+    //     accepting orders, and still inside the buy band it collapsed into.
+    //
+    // So this prints, per repeated token, every row in order with its status, its exit
+    // reason and its mark. A repeat whose earlier row closed on a stop loss and whose later
+    // row opened minutes afterwards is the catalogue route; a repeat with no exit reason at
+    // all is the record route.
+    const byToken = new Map();
+    for (const trade of trades) {
+      const key = String(trade.tokenId || "").trim();
+      if (!key) continue;
+      if (!byToken.has(key)) byToken.set(key, []);
+      byToken.get(key).push(trade);
+    }
+    const repeats = [...byToken.entries()].filter(([, rows]) => rows.length > 1);
+    console.log(`      ${byToken.size} distinct token(s) across those trades, ${repeats.length} traded more than once`);
+    for (const [token, rows] of repeats.slice(0, 4)) {
+      const ordered = [...rows].sort((a, b) =>
+        Date.parse(a.openedAt || a.date || 0) - Date.parse(b.openedAt || b.date || 0));
+      console.log(`         token ${token.slice(0, 18)}...  "${String(ordered[0].question || "").slice(0, 46)}"`);
+      for (const trade of ordered) {
+        console.log(`            ${String(trade.status || "-").padEnd(16)}`
+          + ` opened ${String(trade.openedAt || trade.date || "-").slice(0, 19)}`
+          + ` closed ${String(trade.closedAt || trade.exitAt || "-").slice(0, 19)}`
+          + ` entry ${pct(num(trade.entryPrice))} mark ${pct(num(trade.currentPrice))}`
+          + ` pnl ${num(trade.realizedPnlUsdc ?? trade.unrealizedPnlUsdc) == null ? "-" : num(trade.realizedPnlUsdc ?? trade.unrealizedPnlUsdc).toFixed(2)}`);
+        const why = String(trade.exitReason || trade.closeReason || trade.stopLossReason || trade.note || "").trim();
+        if (why) console.log(`               why: ${why.slice(0, 110)}`);
+      }
+    }
+
     // Reported: "jejich resolution je '-', p/l je u vsech 0.0". All three of those are the
     // same failure -- markOpenTrade() stops at MARKET_NOT_FOUND when the row has no slug,
     // and the mark, the P/L, the end date and the event slug are all written below that
