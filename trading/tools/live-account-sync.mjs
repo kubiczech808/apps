@@ -39,6 +39,9 @@ const TRADE_TAKER_ONLY = String(process.env.LIVE_TRADE_TAKER_ONLY || "false") ==
 const SIGNATURE_TYPE = Number(process.env.POLYMARKET_SIGNATURE_TYPE || 1);
 const OPEN_ORDER_FALLBACK_HORIZON_MS = 24 * 60 * 60 * 1000;
 const UNFILLED_LIMIT_OUTCOME_REFRESH_LIMIT = 16;
+// The same bound, for the same reason, applied to a second collection. See
+// refreshClosedTradeOutcomes.
+const CLOSED_TRADE_OUTCOME_REFRESH_LIMIT = 16;
 let ACCOUNT_ADDRESS = CONFIGURED_ACCOUNT_ADDRESS;
 let ACTIVE_FUNDER_ADDRESS = CONFIGURED_FUNDER_ADDRESS;
 let ACTIVE_SIGNATURE_TYPE = SIGNATURE_TYPE;
@@ -2271,6 +2274,61 @@ async function refreshUnfilledLimitOrderOutcomes(orders = [], generatedAt = new 
   return result;
 }
 
+// "pro vsechny eventy, bez ohledu na to zda byly zavreny stop lossem - pro statistiku."
+//
+// A position closed by SELLING -- a stop loss, the certainty close, a manual close, a stop
+// that declined and was later sold anyway -- never learns the market's eventual result from
+// Polymarket's own trade history: we are not holding the token when it resolves, so there is
+// no redemption event to read a price from. Only a trade actually REDEEMED (held to
+// settlement) already carries finalOutcomePrice for free, straight out of that event.
+//
+// This is the same question refreshUnfilledLimitOrderOutcomes already asks Gamma for a bid
+// that never filled, pointed at a second collection: every closed trade, whatever closed it.
+// Reported: "ten zapas je vyhranny (kdyby nedoslo k prodeji pozice)" -- ShindeN vs Turma do
+// Pagode, sold by a stop loss its own portfolio never configured, and there was no record
+// anywhere of whether the match the position was in was actually won or lost. That is a gap
+// in every exit's statistics, not only a stop loss's.
+//
+// No end-date gate, unlike the unfilled-order queue: a closed trade already means we no
+// longer hold the token, so asking Gamma is never premature -- at worst the market is not yet
+// closed and this costs one wasted lookup, stamped and revisited after the rest of the queue.
+async function refreshClosedTradeOutcomes(trades = [], generatedAt = new Date().toISOString()) {
+  const result = [...trades];
+  const pending = result
+    .map((trade, index) => ({ trade, index }))
+    .filter(({ trade }) => optionalNumber(trade?.finalOutcomePrice) == null)
+    .sort((a, b) => (Date.parse(a.trade.outcomeLastCheckedAt || "") || 0) - (Date.parse(b.trade.outcomeLastCheckedAt || "") || 0))
+    .slice(0, CLOSED_TRADE_OUTCOME_REFRESH_LIMIT);
+
+  await Promise.all(pending.map(async ({ trade, index }) => {
+    const tokenId = String(trade?.tokenId || trade?.assetId || "").trim();
+    // Same rule as the unfilled-order queue: a row with no token id can never be looked up,
+    // and stamping it is what stops it from occupying a batch slot on every single pass.
+    if (!tokenId) {
+      result[index] = { ...trade, outcomeLastCheckedAt: generatedAt };
+      return;
+    }
+    try {
+      const market = await gammaMarketForOpenOrder(tokenId);
+      const tokenIds = parseArrayField(market.clobTokenIds).map(String);
+      const outcomeIndex = tokenIds.indexOf(tokenId);
+      const outcomePrices = parseArrayField(market.outcomePrices).map((value) => optionalNumber(value));
+      const finalOutcomePrice = market.closed === true ? (outcomePrices[outcomeIndex] ?? null) : null;
+      result[index] = {
+        ...trade,
+        finalOutcomePrice: optionalNumber(finalOutcomePrice) ?? optionalNumber(trade.finalOutcomePrice),
+        outcomeLastCheckedAt: generatedAt,
+      };
+    } catch {
+      // A temporary Gamma gap must not erase the trade or turn an unknown result into a
+      // loss, so no price is written; the stamp still moves it to the back of the queue so
+      // one unreachable market cannot block every other one behind it.
+      result[index] = { ...trade, outcomeLastCheckedAt: generatedAt };
+    }
+  }));
+  return result;
+}
+
 // Kept long enough to cover more than a year of daily buckets, which is what the chart's
 // month scale spans. One bucket a day, so this is a few tens of kilobytes at worst --
 // unlike a per-sync series, which at a sync every half hour would grow by ~17,500 rows a
@@ -2705,13 +2763,20 @@ async function main() {
   // preserves -- and stamped on both halves, because an open position becomes a closed trade
   // and the portfolio must not change when it does.
   const ownership = await liveOrderOwnership();
-  const closedTrades = stampPortfolioOwnership(
-    mergeClosedTradeHistory(
-      [...historyClosedTrades, ...resolvedPositionRows],
-      previousLiveState,
-      generatedAt,
+  // Enriched with the eventual market result right here, before anything downstream reads
+  // this array -- reconciliation, the portfolio summary, the redeem-pending filter, the
+  // dashboard's own closed list -- so every consumer sees the same finalOutcomePrice rather
+  // than a JSON file that quietly grows the field between syncs.
+  const closedTrades = await refreshClosedTradeOutcomes(
+    stampPortfolioOwnership(
+      mergeClosedTradeHistory(
+        [...historyClosedTrades, ...resolvedPositionRows],
+        previousLiveState,
+        generatedAt,
+      ),
+      ownership,
     ),
-    ownership,
+    generatedAt,
   );
   const openOrders = await enrichOpenOrdersWithMarketMetadata(
     Array.isArray(balanceAllowance?.openOrders) ? balanceAllowance.openOrders : [],
@@ -3030,6 +3095,7 @@ export {
   vanishedOpenOrders,
   unfilledLimitOrderHistory,
   refreshUnfilledLimitOrderOutcomes,
+  refreshClosedTradeOutcomes,
   positionHasRedeemableValue,
   // Exported for the same reason: the day-bucket correction has to be measured against the
   // real helper chain (correctedEndDate, openOrderMarketDates), not a restatement of it.
