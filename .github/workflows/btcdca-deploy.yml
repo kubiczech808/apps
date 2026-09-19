@@ -54,7 +54,7 @@ jobs:
           BTCDCA_FTP_MODE: prepare
         run: |
           set -euo pipefail
-          mkdir -p server-current deploy-root/www deploy-root/www/app/auth/google
+          mkdir -p server-current deploy-root/www deploy-root/www/php deploy-root/www/app/auth/google
 
           python3 btcdca-auth/ftp_transfer.py
 
