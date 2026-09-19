@@ -226,8 +226,13 @@ test("a recorded dip with no slug borrows the market's address from the catalogu
   // The birth gap, closed where the two sources already meet. The slug belongs to the
   // MARKET, so the favourite side -- the one above 0.50 that the catalogue keeps -- carries
   // the same one, and matching on conditionId costs nothing.
+  // The two sides name the market under DIFFERENT keys, which is the whole subtlety and
+  // the thing a fixture using one name on both sides would never catch: a recorded dip
+  // carries conditionId (dipEntryCandidateRows), while a catalogue row carries the same
+  // value as marketId (String(market.conditionId || market.id)). Pairing only on
+  // conditionId would be a silent no-op in production while passing a friendlier test.
   const recorded = [{ tokenId: "collapsed-side", conditionId: "0xmarket", slug: "", question: "Q" }];
-  const catalogue = [{ tokenId: "favourite-side", conditionId: "0xmarket", slug: "atp-simakin-heck-2026-09-18", eventSlug: "atp-simakin-heck-2026-09-18" }];
+  const catalogue = [{ tokenId: "favourite-side", marketId: "0xmarket", slug: "atp-simakin-heck-2026-09-18", eventSlug: "atp-simakin-heck-2026-09-18" }];
   const [row] = bot.mergeDipEntryPool(recorded, catalogue);
   assert.equal(row.tokenId, "collapsed-side", "the recording still leads -- it has the price the dip reached");
   assert.equal(row.slug, "atp-simakin-heck-2026-09-18");
