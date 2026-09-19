@@ -165,6 +165,54 @@ test("BAIT: an unknown token still reports MARKET_NOT_FOUND rather than inventin
   assert.equal(result.unrealizedPnlUsdc, 0);
 });
 
+test("a position waiting for settlement reports a real P/L, not a carried-forward zero", async () => {
+  // "p/l se musi zobrazovat dle realu stejne jako u jinych otevrenych pozic. tady by uz
+  // nemel byt zadny rozdil v tom jak to funguje u jinych portfolii."
+  //
+  // Once the fixture is over, the book read is skipped and the row goes straight to
+  // PENDING_RESOLUTION -- which used to carry the previous P/L forward and nothing else.
+  // For a portfolio that had been marked all along that reads as correct; for a dip row,
+  // which never got a mark at all, it carried a zero forward for ever with no book read
+  // left to rescue it. The outcome price is known here, and the shares are held, so the
+  // value is knowable and so is the P/L.
+  const ended = new Date(Date.now() - 2 * 3600 * 1000).toISOString();
+  const settled = { ...GAMMA_MARKET, endDate: ended, outcomePrices: JSON.stringify(["1", "0"]) };
+  const { result } = await withStubbedFetch(
+    marketAndBookHandler({ token: `${TOKEN}0003`, market: settled }),
+    () => bot.markOpenTrade(dipTrade({
+      tokenId: `${TOKEN}0003`,
+      shares: 8.33,
+      stakeUsdc: 5,
+      totalCostUsdc: 5,
+      unrealizedPnlUsdc: 0,
+    })),
+  );
+  assert.equal(result.status, "PENDING_RESOLUTION");
+  assert.equal(result.currentPrice, 1, "the settlement print is the price it is worth");
+  assert.equal(result.currentValueUsdc, 8.33, "8.33 shares at 1.00");
+  assert.equal(result.unrealizedPnlUsdc, 3.33, "8.33 less the 5.00 it cost -- not the zero it arrived with");
+});
+
+test("BAIT: a pending row with no price to value it against keeps what it had", async () => {
+  // The rule must not invent a number. With no settlement print and no mark, there is
+  // nothing to compute from, and the previous figure is the best answer available.
+  const ended = new Date(Date.now() - 2 * 3600 * 1000).toISOString();
+  const priceless = { ...GAMMA_MARKET, endDate: ended, outcomePrices: JSON.stringify([]) };
+  const { result } = await withStubbedFetch(
+    marketAndBookHandler({ token: `${TOKEN}0004`, market: priceless }),
+    () => bot.markOpenTrade(dipTrade({
+      tokenId: `${TOKEN}0004`,
+      shares: 8.33,
+      totalCostUsdc: 5,
+      currentPrice: null,
+      currentValueUsdc: null,
+      unrealizedPnlUsdc: -1.25,
+    })),
+  );
+  assert.equal(result.status, "PENDING_RESOLUTION");
+  assert.equal(result.unrealizedPnlUsdc, -1.25, "nothing to value it with, so nothing is invented");
+});
+
 test("a waiting limit order with no slug also gets its resolution date", async () => {
   const waiting = dipTrade({ status: "LIMIT_ORDER_WAITING", limitPrice: 0.6, orderPrice: 0.6 });
   const { result } = await withStubbedFetch(marketAndBookHandler(), () => bot.markWaitingLimitOrder(waiting));

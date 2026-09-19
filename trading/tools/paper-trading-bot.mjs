@@ -5662,19 +5662,50 @@ async function markOpenTrade(trade, strategy = null, funding = null) {
     };
   }
 
-  const pendingResolutionResult = (current = {}) => ({
+  const pendingResolutionResult = (current = {}) => {
+    const price = current.currentPrice
+      ?? (Number.isFinite(resolvedPrice) ? Number(resolvedPrice.toFixed(4)) : trade.currentPrice ?? null);
+    // A position waiting for settlement still has a value: the outcome price is known and
+    // the shares are held, so its P/L is that value less what it cost.
+    //
+    // Carrying the previous figure forward was the whole of this before, and it reads as
+    // correct only while every position has been marked all along. A row that never got a
+    // mark carries nothing forward -- so it reported 0.00, for ever, with no book read left
+    // to rescue it, which is exactly what every dip position did:
+    // "p/l se musi zobrazovat dle realu stejne jako u jinych otevrenych pozic."
+    // Number(null) is 0 and Number("") is 0, and both are finite -- so a missing price read
+    // through Number() alone values the position at zero and books the whole stake as a
+    // loss. A missing value has to stay missing.
+    const finiteOrNull = (value) => {
+      if (value == null || value === "") return null;
+      const numeric = Number(value);
+      return Number.isFinite(numeric) ? numeric : null;
+    };
+    const priceNumber = finiteOrNull(price);
+    const sharesNumber = finiteOrNull(trade.shares);
+    const markedValue = priceNumber != null && sharesNumber != null
+      ? Number((sharesNumber * priceNumber).toFixed(4))
+      : null;
+    const value = current.currentValueUsdc ?? markedValue ?? trade.currentValueUsdc ?? null;
+    const pnl = current.unrealizedPnlUsdc
+      ?? (value == null ? null : Number((value - cost).toFixed(4)))
+      ?? trade.unrealizedPnlUsdc
+      ?? 0;
+    return {
       ...base,
       status: "PENDING_RESOLUTION",
       finalOutcomePrice: Number.isFinite(resolvedPrice) ? Number(resolvedPrice.toFixed(4)) : null,
-      currentPrice: current.currentPrice ?? (Number.isFinite(resolvedPrice) ? Number(resolvedPrice.toFixed(4)) : trade.currentPrice ?? null),
+      currentPrice: price,
       // Only a figure that came off a book updates this. currentPrice above may be the
       // settlement print, and a stop must never be decided against one.
       lastLiveBid: current.lastLiveBid ?? trade.lastLiveBid ?? null,
-      currentValueUsdc: current.currentValueUsdc ?? trade.currentValueUsdc ?? null,
-      unrealizedPnlUsdc: current.unrealizedPnlUsdc ?? trade.unrealizedPnlUsdc ?? 0,
-      unrealizedPnlPct: current.unrealizedPnlPct ?? trade.unrealizedPnlPct ?? 0,
+      currentValueUsdc: value,
+      unrealizedPnlUsdc: pnl,
+      unrealizedPnlPct: current.unrealizedPnlPct
+        ?? (value == null ? (trade.unrealizedPnlPct ?? 0) : pnlPercent(pnl, cost)),
       statusNote: current.statusNote || "Event end date has passed; waiting for Polymarket resolution.",
-    });
+    };
+  };
 
   // A sports kickoff and Gamma's estimated end date are not an exchange close.
   // Equal must still inspect a live book at that point: it is the only chance to

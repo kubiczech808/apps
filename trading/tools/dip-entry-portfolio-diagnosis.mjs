@@ -135,6 +135,17 @@ async function main() {
         + `  p/l ${num(trade.unrealizedPnlUsdc) == null ? "-" : num(trade.unrealizedPnlUsdc).toFixed(2)}`
         + `  daysLeft ${num(trade.daysToResolution) == null ? "-" : num(trade.daysToResolution).toFixed(2)}`
         + `  status ${trade.status || "-"}`);
+      // What the dashboard's link would actually resolve to. polymarketUrl() in app.js
+      // reads item.url FIRST and accepts anything beginning with the Polymarket host -- so
+      // a url stored as ".../event/" with an empty slug WINS over a slug that is now
+      // correct, and lands on a dead page. Reported as still unclickable after the slug
+      // was repaired, so the stored url is the thing to look at rather than the slug.
+      const stored = String(trade.url || trade.marketUrl || "").trim();
+      const slug = String(trade.eventSlug || trade.slug || "").trim();
+      const wouldOpen = /^https:\/\/polymarket\.com\//i.test(stored)
+        ? `${stored}   (from the STORED url)`
+        : (/^[a-z0-9-]+$/i.test(slug) ? `https://polymarket.com/event/${slug}   (from the slug)` : "https://polymarket.com/   (nothing usable)");
+      console.log(`            stored url ${JSON.stringify(trade.url ?? null)}  -> clicking opens ${wouldOpen}`);
     }
   }
 
