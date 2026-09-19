@@ -4960,6 +4960,47 @@ async function fetchMarketBySlug(slug) {
   }
 }
 
+const marketByTokenCache = new Map();
+
+// The same lookup keyed on the token, for a row that has no usable slug.
+//
+// "stale se na eventy na polymarketu nemohu prokliknout, jejich resolution je '-', p/l je
+// u vsech 0.0". One cause, three symptoms. A dip-entry trade is rebuilt from a recorded
+// hit, and until the fix in this same change none of those hits carried a slug -- so
+// fetchMarketBySlug("") returns null, refreshTrade stops at MARKET_NOT_FOUND, and
+// everything below that line is never reached: no mark, so P/L stays 0.00 forever; no
+// endDate, so the resolution column stays "-"; no eventSlug, so the link falls back to the
+// Polymarket homepage. The position cannot even notice its own market resolving.
+//
+// The token id is always on the row, so it is the identifier to fall back to. Markets are
+// queried by clob_token_ids the same way live-account-sync.mjs already does, closed=true
+// included, because a market that has settled since must still be found.
+async function fetchMarketByTokenIdUncached(tokenId) {
+  for (const closed of ["false", "true"]) {
+    const url = new URL("https://gamma-api.polymarket.com/markets");
+    url.searchParams.set("clob_token_ids", tokenId);
+    url.searchParams.set("closed", closed);
+    const markets = await fetchJson(url);
+    if (Array.isArray(markets) && markets[0]) return markets[0];
+  }
+  return null;
+}
+
+async function fetchMarketByTokenId(tokenId) {
+  if (!tokenId) return null;
+  const key = String(tokenId);
+  const cached = marketByTokenCache.get(key);
+  if (cached) return cached;
+  const pending = fetchMarketByTokenIdUncached(key);
+  marketByTokenCache.set(key, pending);
+  try {
+    return await pending;
+  } catch (error) {
+    marketByTokenCache.delete(key);
+    throw error;
+  }
+}
+
 function activeLivePortfolioConfigs(payload = {}) {
   const config = payload?.config && typeof payload.config === "object" ? payload.config : payload;
   const rows = [config?.live, config?.live5050, ...Object.values(config?.livePortfolios || {})];
@@ -5278,6 +5319,9 @@ async function markWaitingLimitOrder(trade) {
   let market = null;
   try {
     market = await fetchMarketBySlug(trade.slug);
+    // Same fallback as refreshTrade: a waiting order whose row carries no slug still has
+    // its token, and without a market it would sit here with no resolution date either.
+    if (!market) market = await fetchMarketByTokenId(trade.tokenId);
   } catch (error) {
     return { ...trade, statusNote: `Market refresh failed: ${error.message}`, lastCheckedAt: checkedAt };
   }
@@ -5298,6 +5342,8 @@ async function markWaitingLimitOrder(trade) {
   const base = {
     ...trade,
     question: market.question || trade.question,
+    slug: market.slug || trade.slug || "",
+    eventSlug: marketEventSlug(market) || trade.eventSlug || "",
     endDate,
     scheduledEventDate: dateContext.scheduledEventDate,
     resolutionEndDate: dateContext.resolutionEndDate,
@@ -5426,6 +5472,11 @@ async function markOpenTrade(trade, strategy = null, funding = null) {
 
   try {
     market = await fetchMarketBySlug(trade.slug);
+    // A row with no usable slug is not a row with no market: the token identifies it just
+    // as well, and everything this function does below depends on getting one. See
+    // fetchMarketByTokenId -- for a dip-entry position this is the difference between a
+    // live mark and a P/L frozen at 0.00 with "-" where its resolution date should be.
+    if (!market) market = await fetchMarketByTokenId(trade.tokenId);
   } catch (error) {
     return {
       ...trade,
@@ -5455,6 +5506,10 @@ async function markOpenTrade(trade, strategy = null, funding = null) {
   const base = {
     ...trade,
     question: market.question || trade.question,
+    // Written back, so a row that arrived without one is repaired permanently rather than
+    // needing the token lookup again on every pass -- and so the dashboard's link, which
+    // reads eventSlug then slug, has something to point at from here on.
+    slug: market.slug || trade.slug || "",
     eventSlug,
     endDate,
     scheduledEventDate: dateContext.scheduledEventDate,
@@ -13892,6 +13947,7 @@ export {
   maybeOpenScheduledTrade,
   markOpenTrade,
   markWaitingLimitOrder,
+  fetchMarketByTokenId,
   limitOrderEventEnded,
   refreshUnfilledLimitOrderOutcomes,
   unfilledLimitOrderNeedsOutcome,
