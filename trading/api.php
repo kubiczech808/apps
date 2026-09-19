@@ -6058,6 +6058,46 @@ function live_execution_record_token_ids(array $record): array
 }
 
 /**
+ * Which tokens this portfolio's execution state durably claims, past the run log's horizon.
+ *
+ * live-order-executor.mjs already builds exactly this -- "orderOwnership: ... Which tokens
+ * THIS portfolio ordered, kept past the run log's horizon" -- capped at 4,000 entries against
+ * the run log's 160, specifically so ownership survives longer than the log that first
+ * recorded it. It has been uploaded on every run since that comment was written. This
+ * function is the other half that was never written: nothing server-side ever read it.
+ *
+ * Without it, live_stop_loss_policy_payload() could only attribute a position for as long as
+ * the run that placed it was still one of the last ~160 -- roughly a day at the executor's
+ * own cadence, and far less than that for a portfolio also busy with rotations or dips sharing
+ * the same log. A position still open after its entry ages out becomes "unattributed" and
+ * silently adopts the base Live portfolio's stop instead of staying under -- or correctly
+ * excluded from -- its own.
+ *
+ * Measured on the account, 2026-09-18: "Counter-Strike: ShindeN vs Turma do Pagode", bought by
+ * "70-80 esports" (live-custom-underway, stopLossRiskMultiplier 0, stopLossProbabilityFloor 0
+ * -- no stop configured at all) at 14:38, sold by the worker at 23:48 citing reasonKind "stop"
+ * under portfolioId "live" (the base portfolio's own 1.5x / 0.49 floor) for a 1.52 USDC loss on
+ * a match that (per the account holder) went on to resolve in the held outcome's favour. Two
+ * sibling positions from the same tournament, opened closer to their own settlement and so
+ * still inside the run log's window when they closed, show the correct owner.
+ */
+function live_execution_state_order_ownership_token_ids(array $state): array
+{
+    $ids = [];
+    foreach ((array) ($state['orderOwnership'] ?? []) as $row) {
+        if (!is_array($row)) {
+            continue;
+        }
+        $tokenId = trim((string) ($row['tokenId'] ?? ''));
+        if ($tokenId === '') {
+            continue;
+        }
+        $ids[$tokenId] = (string) ($row['at'] ?? '');
+    }
+    return $ids;
+}
+
+/**
  * Ready-to-fire dip-entry plans, one per portfolio and token.
  *
  * The dip-entry rule buys a favourite that has collapsed inside a fixture already under
@@ -6330,6 +6370,18 @@ function live_stop_loss_policy_payload(): array
                 $ownerOf[$tokenId] = $portfolioId;
                 $ownedAt[$tokenId] = $updatedAt;
             }
+        }
+        // The durable record, consulted alongside the run log rather than only when it is
+        // gone: the two describe the same fact -- this portfolio's order for this token --
+        // and the "newest wins" comparison below already prefers whichever is more recent
+        // regardless of source, so a portfolio that traded the same token again more
+        // recently still wins through its fresher run log entry.
+        foreach (live_execution_state_order_ownership_token_ids($state) as $tokenId => $updatedAt) {
+            if (isset($ownerOf[$tokenId]) && strcmp((string) ($ownedAt[$tokenId] ?? ''), $updatedAt) > 0) {
+                continue;
+            }
+            $ownerOf[$tokenId] = $portfolioId;
+            $ownedAt[$tokenId] = $updatedAt;
         }
     }
 
