@@ -4986,6 +4986,50 @@ async function fetchMarketByTokenIdUncached(tokenId) {
   return null;
 }
 
+// A position must not be published before it knows its own market.
+//
+// refreshTrades runs BEFORE the open step, so a trade opened on this pass is published with
+// whatever it was born with and is not marked until the NEXT pass. Every other portfolio's
+// position is born with a slug straight from the catalogue, so that gap is invisible there;
+// a dip position is rebuilt from a recorded hit and can arrive with nothing. And the newest
+// row is the one at the top of the list, so the blind one is exactly the one a reader
+// clicks: "treba napriklad se nejde prokliknout na tu 1. udalost na polymarketu".
+//
+// Measured on the account, 2026-09-19: every dip row that had been through a refresh
+// carried its slug, a real mark and a real P/L (-0.11, +5.41); the single row that had not
+// -- opened 11:58:49, lastCheckedAt never -- carried none of them.
+//
+// Bounded to rows that have no slug AND have never been checked, which is at most the
+// handful opened in this pass and normally none at all. A Gamma gap leaves the row for the
+// next pass to repair rather than failing the publish.
+async function fillMissingTradeAddresses(state) {
+  const pending = [];
+  for (const portfolioState of Object.values(state?.paperPortfolios || {})) {
+    for (const trade of (Array.isArray(portfolioState?.trades) ? portfolioState.trades : [])) {
+      if (!trade || trade.lastCheckedAt) continue;
+      if (String(trade.slug || trade.eventSlug || "").trim()) continue;
+      if (!String(trade.tokenId || "").trim()) continue;
+      pending.push(trade);
+    }
+  }
+  if (!pending.length) return 0;
+  let filled = 0;
+  await mapWithConcurrency(pending, async (trade) => {
+    let market = null;
+    try {
+      market = await fetchMarketByTokenId(trade.tokenId);
+    } catch {
+      return;
+    }
+    if (!market) return;
+    trade.slug = market.slug || trade.slug || "";
+    trade.eventSlug = marketEventSlug(market) || trade.eventSlug || "";
+    filled += 1;
+  });
+  if (filled) console.log(`addressed ${filled} newly opened position(s) that had no slug of their own`);
+  return filled;
+}
+
 async function fetchMarketByTokenId(tokenId) {
   if (!tokenId) return null;
   const key = String(tokenId);
@@ -13297,6 +13341,7 @@ async function executeManualPaperRunFromStoredCandidates(state, strategiesForRun
     eligible.push(...revalidated.filter((item) => String(item.status || "").toUpperCase() === "ELIGIBLE"));
   }
 
+  await timed("fillMissingTradeAddresses", () => fillMissingTradeAddresses(state));
   state.generatedAt = nowIso();
   updatePortfolio(state);
   const mergedEvaluations = await refreshStoredEvaluationResolutionStatuses(expirePastEvaluations(mergeEvaluationLists(evaluations, state.evaluations)));
@@ -13894,6 +13939,7 @@ async function run() {
         return maybeOpenScheduledTrade(portfolioState, rankedEligible, strategy, strategyExecutionRows, { diversificationDiagnostics });
       });
 
+  await timed("fillMissingTradeAddresses", () => fillMissingTradeAddresses(state));
   state.generatedAt = nowIso();
   updatePortfolio(state);
   const mergedEvaluations = await refreshStoredEvaluationResolutionStatuses(expirePastEvaluations(mergeEvaluationLists(evaluations, state.evaluations)));
@@ -14007,6 +14053,7 @@ export {
   markOpenTrade,
   markWaitingLimitOrder,
   fetchMarketByTokenId,
+  fillMissingTradeAddresses,
   limitOrderEventEnded,
   refreshUnfilledLimitOrderOutcomes,
   unfilledLimitOrderNeedsOutcome,
