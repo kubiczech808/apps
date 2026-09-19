@@ -99,6 +99,29 @@ async function main() {
     for (const [bucket, count] of [...buckets.entries()].sort()) {
       console.log(`         ${bucket.padEnd(10)} ${count}`);
     }
+
+    // Reported: "jejich resolution je '-', p/l je u vsech 0.0". All three of those are the
+    // same failure -- markOpenTrade() stops at MARKET_NOT_FOUND when the row has no slug,
+    // and the mark, the P/L, the end date and the event slug are all written below that
+    // line. So the repair is visible as a row that has a slug AND a mark away from its
+    // entry AND a resolution date, not as any one of them alone.
+    const open = trades.filter((trade) => !["CLOSED", "WON", "LOST", "REDEEMED"].includes(String(trade.status || "").toUpperCase()));
+    const missingSlug = open.filter((trade) => !String(trade.slug || trade.eventSlug || "").trim());
+    const notMarked = open.filter((trade) => num(trade.currentPrice) == null
+      || num(trade.currentPrice) === num(trade.entryPrice));
+    const noResolution = open.filter((trade) => num(trade.daysToResolution) == null);
+    const notFound = open.filter((trade) => String(trade.status || "").toUpperCase() === "MARKET_NOT_FOUND"
+      || String(trade.marketUrlStatus || "") === "not_found");
+    console.log(`      of ${open.length} open row(s): ${missingSlug.length} with no slug,`
+      + ` ${notMarked.length} never marked off the entry price, ${noResolution.length} with no resolution date,`
+      + ` ${notFound.length} reporting MARKET_NOT_FOUND`);
+    for (const trade of open.slice(0, 6)) {
+      console.log(`         slug ${JSON.stringify(trade.slug || "")}  event ${JSON.stringify(trade.eventSlug || "")}`
+        + `  entry ${pct(num(trade.entryPrice))} mark ${pct(num(trade.currentPrice))}`
+        + `  p/l ${num(trade.unrealizedPnlUsdc) == null ? "-" : num(trade.unrealizedPnlUsdc).toFixed(2)}`
+        + `  daysLeft ${num(trade.daysToResolution) == null ? "-" : num(trade.daysToResolution).toFixed(2)}`
+        + `  status ${trade.status || "-"}`);
+    }
   }
 
   // Reported next: three dip portfolios in paper, two of which never open anything, with
