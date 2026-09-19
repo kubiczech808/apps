@@ -221,3 +221,32 @@ test("a waiting limit order with no slug also gets its resolution date", async (
     `a resting order must know when its market ends: ${JSON.stringify({ daysToResolution: result.daysToResolution })}`);
   assert.equal(result.slug, "dota2-cs-playti-2026-09-19-game1");
 });
+
+test("a recorded dip with no slug borrows the market's address from the catalogue", async () => {
+  // The birth gap, closed where the two sources already meet. The slug belongs to the
+  // MARKET, so the favourite side -- the one above 0.50 that the catalogue keeps -- carries
+  // the same one, and matching on conditionId costs nothing.
+  const recorded = [{ tokenId: "collapsed-side", conditionId: "0xmarket", slug: "", question: "Q" }];
+  const catalogue = [{ tokenId: "favourite-side", conditionId: "0xmarket", slug: "atp-simakin-heck-2026-09-18", eventSlug: "atp-simakin-heck-2026-09-18" }];
+  const [row] = bot.mergeDipEntryPool(recorded, catalogue);
+  assert.equal(row.tokenId, "collapsed-side", "the recording still leads -- it has the price the dip reached");
+  assert.equal(row.slug, "atp-simakin-heck-2026-09-18");
+  assert.equal(row.eventSlug, "atp-simakin-heck-2026-09-18");
+});
+
+test("BAIT: a recorded dip that already has a slug keeps its own", async () => {
+  const recorded = [{ tokenId: "t", conditionId: "0xmarket", slug: "its-own-slug", eventSlug: "its-own-event" }];
+  const catalogue = [{ tokenId: "other", conditionId: "0xmarket", slug: "someone-elses", eventSlug: "someone-elses" }];
+  const [row] = bot.mergeDipEntryPool(recorded, catalogue);
+  assert.equal(row.slug, "its-own-slug", "a row that knows its address must not have it overwritten");
+  assert.equal(row.eventSlug, "its-own-event");
+});
+
+test("BAIT: no catalogue row for that market leaves the recording exactly as it was", async () => {
+  // Nothing may be invented: a dip whose market is genuinely absent from the catalogue is
+  // still opened, and repaired from its token on the first refresh instead.
+  const recorded = [{ tokenId: "t", conditionId: "0xmarket", slug: "", question: "Q" }];
+  const [row] = bot.mergeDipEntryPool(recorded, [{ tokenId: "x", conditionId: "0xdifferent", slug: "unrelated" }]);
+  assert.equal(row.slug, "");
+  assert.equal(row.question, "Q", "and the row itself is untouched");
+});

@@ -8729,9 +8729,37 @@ export function dipEntryRunDiagnostics(strategy, passedFilters = 0, hits = DIP_E
 // scan last saw it. Both describe the same opportunity; only one of them is the price this
 // rule exists to buy at.
 export function mergeDipEntryPool(recorded = [], catalogue = []) {
+  // The address of the market, borrowed from the catalogue for a recording that has none.
+  //
+  // A recorded dip carries whatever the hit carried, and every hit written before the slug
+  // was threaded through the watch chain carried nothing -- so a position opened from one
+  // is born with no slug: no link, no mark, no P/L, until its first refresh repairs it from
+  // the token. Every other portfolio's position is born with a slug straight from the
+  // catalogue and is never in that state, and that difference is the whole complaint:
+  // "tady by uz nemel byt zadny rozdil v tom jak to funguje u jinych portfolii."
+  //
+  // The slug belongs to the MARKET, not the outcome, so the other side of the same market
+  // carries it -- and that side is the favourite, above 0.50, which is exactly what the
+  // catalogue keeps. Matching on the market rather than the token is what makes this free:
+  // no lookup, no call, just the row already in hand.
+  const addressByMarket = new Map();
+  for (const row of (Array.isArray(catalogue) ? catalogue : [])) {
+    const market = String(row?.conditionId || row?.marketId || "").trim();
+    const slug = String(row?.slug || "").trim();
+    const eventSlug = String(row?.eventSlug || "").trim();
+    if (!market || (!slug && !eventSlug) || addressByMarket.has(market)) continue;
+    addressByMarket.set(market, { slug, eventSlug });
+  }
+  const addressed = (row) => {
+    if (String(row?.slug || row?.eventSlug || "").trim()) return row;
+    const market = String(row?.conditionId || row?.marketId || "").trim();
+    const address = market ? addressByMarket.get(market) : null;
+    return address ? { ...row, slug: row.slug || address.slug, eventSlug: row.eventSlug || address.eventSlug } : row;
+  };
+
   const rows = [];
   const seen = new Set();
-  for (const row of [...(Array.isArray(recorded) ? recorded : []), ...(Array.isArray(catalogue) ? catalogue : [])]) {
+  for (const row of [...(Array.isArray(recorded) ? recorded : []).map(addressed), ...(Array.isArray(catalogue) ? catalogue : [])]) {
     const key = String(row?.tokenId || row?.clobTokenId || row?.assetId || row?.id || "");
     // A row with no token at all is kept rather than dropped: it cannot collide with
     // anything, and silently discarding candidates is the fault this whole change is about.
