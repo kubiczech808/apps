@@ -103,6 +103,37 @@ export const alternatingSwings = (swings = []) => {
   return out
 }
 
+// A wick beyond an established swing is a liquidity sweep, not a new
+// structural vertex. The reference level remains the earlier swing wick, but
+// the candidate candle must close beyond it before it can replace that swing.
+// Keeping this filter after the fractal detector preserves wick prices for
+// chart geometry without allowing a wick-only extension into HH/LL/LH/HL.
+export const closeConfirmedStructuralSwings = (candles, lookback = 2) => {
+  const candidates = alternatingSwings(findSwings(candles, lookback))
+  const accepted = []
+  let previousHigh = null
+  let previousLow = null
+
+  for (const swing of candidates) {
+    const previous = swing.kind === 'high' ? previousHigh : previousLow
+    const extendsPrevious = previous && (swing.kind === 'high'
+      ? swing.price > previous.price
+      : swing.price < previous.price)
+    const closesBeyondPrevious = !previous || (swing.kind === 'high'
+      ? swing.candle.close > previous.price
+      : swing.candle.close < previous.price)
+
+    if (extendsPrevious && !closesBeyondPrevious) continue
+    accepted.push(swing)
+    if (swing.kind === 'high') previousHigh = swing
+    else previousLow = swing
+  }
+
+  // Removing a wick-only sweep can join two same-kind legs. They are one
+  // unfinished leg, so retain only its true extreme before trend evaluation.
+  return alternatingSwings(accepted)
+}
+
 /**
  * Read trend and the most recent structural break.
  *
@@ -110,7 +141,7 @@ export const alternatingSwings = (swings = []) => {
  * trend from a range that happens to have a taller top.
  */
 export const marketStructure = (candles, { lookback = 2 } = {}) => {
-  const swings = alternatingSwings(findSwings(candles, lookback))
+  const swings = closeConfirmedStructuralSwings(candles, lookback)
   const highs = swings.filter((swing) => swing.kind === 'high')
   const lows = swings.filter((swing) => swing.kind === 'low')
 

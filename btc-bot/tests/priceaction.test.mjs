@@ -7,6 +7,7 @@ import {
   fairValueGaps,
   sweptPreviousSwing,
   candleSignal,
+  closeConfirmedStructuralSwings,
   findSwings,
   lastDefined,
   marketStructure,
@@ -45,6 +46,24 @@ test('structure swings alternate and keep only the extreme of an unfinished leg'
     { kind: 'high', price: 125 },
     { kind: 'low', price: 110 },
   ])
+})
+
+test('a wick-only extension cannot replace the previous structural swing', () => {
+  const candles = [
+    candle(START, 95, 100, 92, 96),
+    candle(START + HOUR, 96, 110, 94, 108),
+    candle(START + 2 * HOUR, 108, 105, 96, 100),
+    candle(START + 3 * HOUR, 100, 102, 90, 94),
+    candle(START + 4 * HOUR, 94, 108, 95, 106),
+    candle(START + 5 * HOUR, 106, 112, 101, 109),
+    candle(START + 6 * HOUR, 109, 107, 98, 101),
+  ]
+  const wickSweep = closeConfirmedStructuralSwings(candles, 1)
+  assert.ok(!wickSweep.some((swing) => swing.kind === 'high' && swing.price === 112))
+
+  const closedBreak = candles.map((item, index) => index === 5 ? { ...item, close: 111 } : item)
+  const confirmed = closeConfirmedStructuralSwings(closedBreak, 1)
+  assert.ok(confirmed.some((swing) => swing.kind === 'high' && swing.price === 112))
 })
 
 test('higher highs with higher lows read as an uptrend, the mirror as a downtrend', () => {

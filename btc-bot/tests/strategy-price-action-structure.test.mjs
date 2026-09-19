@@ -150,7 +150,7 @@ test('Yahoo candle wrapper drops zero-valued FX gap rows', async () => {
   assert.equal(candles[0].close, 1.11)
 })
 
-test('structure labels require candle closes beyond previous swing wicks', () => {
+test('wick-only extensions are not structural pivots until their candle closes beyond the prior wick', () => {
   const wickOnlyHighBreak = [
     candle(START, 95, 100, 92, 96),
     candle(START + 1 * HOUR, 96, 110, 94, 108),
@@ -163,33 +163,29 @@ test('structure labels require candle closes beyond previous swing wicks', () =>
     candle(START + 8 * HOUR, 96, 104, 95, 102),
   ]
   const highSweep = classifyStructure(wickOnlyHighBreak, { lookback: 1, minCandles: 8 })
-  assert.equal(highSweep.structure.high.previous.price, 110)
-  assert.equal(highSweep.structure.high.current.price, 112)
-  assert.equal(highSweep.structure.high.current.close, 109)
-  assert.equal(highSweep.structure.high.label, 'LH')
-  assert.equal(highSweep.structure.low.label, 'HL')
+  assert.ok(!highSweep.structure.recentSwings.some((swing) => swing.kind === 'high' && swing.price === 112))
+  assert.ok(!highSweep.structure.chartPivots.some((swing) => swing.kind === 'high' && swing.price === 112))
   assert.equal(highSweep.trend, 'flat')
 
   const closeConfirmedHighBreak = wickOnlyHighBreak.map((item, index) =>
     index === 5 ? { ...item, close: 111 } : item
   )
   const highBreak = classifyStructure(closeConfirmedHighBreak, { lookback: 1, minCandles: 8 })
+  assert.equal(highBreak.structure.high.current.price, 112)
   assert.equal(highBreak.structure.high.label, 'HH')
 
   const wickOnlyLowBreak = wickOnlyHighBreak.map((item, index) =>
     index === 7 ? { ...item, low: 88, close: 91 } : item
   )
   const lowSweep = classifyStructure(wickOnlyLowBreak, { lookback: 1, minCandles: 8 })
-  assert.equal(lowSweep.structure.low.previous.price, 90)
-  assert.equal(lowSweep.structure.low.current.price, 88)
-  assert.equal(lowSweep.structure.low.current.close, 91)
-  assert.equal(lowSweep.structure.low.label, 'HL')
+  assert.ok(!lowSweep.structure.recentSwings.some((swing) => swing.kind === 'low' && swing.price === 88))
+  assert.ok(!lowSweep.structure.chartPivots.some((swing) => swing.kind === 'low' && swing.price === 88))
 
   const closeConfirmedLowBreak = wickOnlyHighBreak.map((item, index) =>
     index === 7 ? { ...item, low: 88, close: 89 } : item
   )
   const lowBreak = classifyStructure(closeConfirmedLowBreak, { lookback: 1, minCandles: 8 })
-  assert.equal(lowBreak.structure.low.label, 'LL')
+  assert.ok(lowBreak.structure.recentSwings.some((swing) => swing.kind === 'low' && swing.price === 88))
 })
 
 test('a recent close through a major counter-swing changes the established trend', () => {

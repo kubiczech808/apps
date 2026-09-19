@@ -3,7 +3,7 @@ import { ceilPrice, floorPrice, normalizeCandlePrices, roundPrice } from './pric
 import { buildFvgSupplyDemandZones, candleSignal, marketStructure } from './priceaction.mjs'
 
 export const PRICE_ACTION_STRUCTURE_ID = 'price-action-structure-v1'
-export const PRICE_ACTION_MATRIX_SCHEMA = 34
+export const PRICE_ACTION_MATRIX_SCHEMA = 35
 export const PRICE_ACTION_CHART_CANDLE_LIMITS = {
   '1h': 8760,
   '4h': 2190,
@@ -265,6 +265,7 @@ const developingStructureSwing = (candles, structure) => {
 // fresh break it cannot alter the established trend or authorize a trade.
 const developingCounterSwing = (candles, { trend, activeRange }) => {
   const anchor = trend === 'down' ? activeRange?.low : trend === 'up' ? activeRange?.high : null
+  const protectedCounter = trend === 'down' ? activeRange?.high : trend === 'up' ? activeRange?.low : null
   if (!anchor || !Number.isFinite(anchor.candleIndex)) return null
   const kind = trend === 'down' ? 'high' : 'low'
   const later = candles.slice(anchor.candleIndex + 1)
@@ -276,6 +277,10 @@ const developingCounterSwing = (candles, { trend, activeRange }) => {
     return best
   }, null)
   if (!extreme) return null
+  const wickOnlyBreak = protectedCounter && (trend === 'down'
+    ? extreme.price > protectedCounter.price && extreme.candle.close <= protectedCounter.price
+    : extreme.price < protectedCounter.price && extreme.candle.close >= protectedCounter.price)
+  if (wickOnlyBreak) return null
   return {
     ...pivotSummary(extreme, trend === 'down' ? 'LH' : 'HL'),
     confirmed: false,
