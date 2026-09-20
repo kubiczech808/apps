@@ -3,7 +3,7 @@ import { ceilPrice, floorPrice, normalizeCandlePrices, roundPrice } from './pric
 import { buildFvgSupplyDemandZones, candleSignal, marketStructure } from './priceaction.mjs'
 
 export const PRICE_ACTION_STRUCTURE_ID = 'price-action-structure-v1'
-export const PRICE_ACTION_MATRIX_SCHEMA = 36
+export const PRICE_ACTION_MATRIX_SCHEMA = 37
 export const PRICE_ACTION_CHART_CANDLE_LIMITS = {
   '1h': 8760,
   '4h': 2190,
@@ -1427,7 +1427,7 @@ export const alignOneHourStructureToFourHour = (trends) => {
   return item
 }
 
-const fetchFxCandles = async ({ asset, timeframeId, fetchImpl, now, logger }) => {
+export const fetchFxCandles = async ({ asset, timeframeId, requiredHistoryDays = 0, fetchImpl, now, logger }) => {
   const daily = timeframeId === '1d'
   const attempts = [
     async () => ({
@@ -1455,6 +1455,18 @@ const fetchFxCandles = async ({ asset, timeframeId, fetchImpl, now, logger }) =>
   for (const attempt of attempts) {
     try {
       const result = await attempt()
+      const first = result.candles.at(0)?.time
+      const last = result.candles.at(-1)?.time
+      // FX markets close on weekends, so a few calendar days may be absent.
+      // Anything shorter than the requested zone horizon less that allowance
+      // is still an incomplete source, not usable price-action history.
+      const minimumSpanMs = Math.max(0, Number(requiredHistoryDays) - 4) * 24 * HOUR_MS
+      if (!Number.isFinite(first) || !Number.isFinite(last) || last - first < minimumSpanMs) {
+        const spanDays = Number.isFinite(first) && Number.isFinite(last)
+          ? Math.floor((last - first) / (24 * HOUR_MS))
+          : 0
+        throw new Error(`${result.source} returned only ${spanDays} calendar days; need ${requiredHistoryDays}`)
+      }
       return { ...result, failures }
     } catch (error) {
       failures.push(error.message)
@@ -1693,7 +1705,14 @@ const timeframeCandles = async ({ asset, timeframe, btcHourly, fetchImpl, now, l
     }
   }
   if (timeframe.id === '4h') {
-    const { source, candles, failures } = await fetchFxCandles({ asset, timeframeId: '1h', fetchImpl, now, logger })
+    const { source, candles, failures } = await fetchFxCandles({
+      asset,
+      timeframeId: '1h',
+      requiredHistoryDays: PRICE_ACTION_STRUCTURE_PROFILES[timeframe.id].zoneHistoryDays,
+      fetchImpl,
+      now,
+      logger,
+    })
     return {
       source,
       candles: aggregate(candles, 4),
@@ -1701,7 +1720,14 @@ const timeframeCandles = async ({ asset, timeframe, btcHourly, fetchImpl, now, l
       failures,
     }
   }
-  return fetchFxCandles({ asset, timeframeId: timeframe.id, fetchImpl, now, logger })
+  return fetchFxCandles({
+    asset,
+    timeframeId: timeframe.id,
+    requiredHistoryDays: PRICE_ACTION_STRUCTURE_PROFILES[timeframe.id].zoneHistoryDays,
+    fetchImpl,
+    now,
+    logger,
+  })
 }
 
 const hasStructureDetails = (matrix) =>

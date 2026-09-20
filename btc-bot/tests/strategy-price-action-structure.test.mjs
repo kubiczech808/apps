@@ -7,6 +7,7 @@ import {
   buildPriceActionMatrix,
   classifyStructure,
   evaluateTradeProfile,
+  fetchFxCandles,
   fetchYahooCandles,
   fetchStooqCandles,
   PRICE_ACTION_ASSETS,
@@ -148,6 +149,50 @@ test('Yahoo candle wrapper drops zero-valued FX gap rows', async () => {
   const candles = await fetchYahooCandles({ symbol: 'EURUSD=X', fetchImpl })
   assert.equal(candles.length, 1)
   assert.equal(candles[0].close, 1.11)
+})
+
+test('a short Stooq intraday response falls through to Yahoo for the full zone horizon', async () => {
+  const now = Date.UTC(2026, 8, 20)
+  const fetchImpl = async (url) => {
+    if (String(url).includes('stooq.com')) {
+      return {
+        ok: true,
+        text: async () => [
+          'Date,Time,Open,High,Low,Close,Volume',
+          '2026-09-19,10:00:00,0.7100,0.7110,0.7090,0.7105,0',
+          '2026-09-19,11:00:00,0.7105,0.7115,0.7095,0.7110,0',
+        ].join('\n'),
+      }
+    }
+    return {
+      ok: true,
+      json: async () => ({
+        chart: {
+          result: [{
+            timestamp: [Math.round((now - 121 * 24 * HOUR) / 1000), Math.round(now / 1000)],
+            indicators: {
+              quote: [{
+                open: [0.7, 0.71], high: [0.71, 0.72], low: [0.69, 0.7], close: [0.705, 0.715], volume: [0, 0],
+              }],
+            },
+          }],
+        },
+      }),
+    }
+  }
+
+  const result = await fetchFxCandles({
+    asset: PRICE_ACTION_ASSETS.find((asset) => asset.symbol === 'AUDUSD'),
+    timeframeId: '1h',
+    requiredHistoryDays: 120,
+    fetchImpl,
+    now,
+    logger: { warn() {} },
+  })
+
+  assert.equal(result.source, 'yahoo')
+  assert.equal(result.candles.length, 2)
+  assert.match(result.failures[0], /stooq returned only 0 calendar days; need 120/)
 })
 
 test('wick-only extensions are not structural pivots until their candle closes beyond the prior wick', () => {
