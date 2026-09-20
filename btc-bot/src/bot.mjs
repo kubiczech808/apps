@@ -381,6 +381,7 @@ export const readConfig = (env = process.env) => ({
   // Do not publish a partial hourly series as if it could support the 1D PA-1
   // window. Tests can set this to zero when deliberately using tiny fixtures.
   minCandleHistory: Number(env.BOT_MIN_CANDLE_HISTORY || MIN_PRICE_ACTION_HOURLY_CANDLES),
+  twelveDataApiKey: env.TWELVE_DATA_API_KEY || '',
   // Which LN Markets network to read the chart from when the bot itself is not
   // connected to one (paper mode). Mainnet, because that is the market being
   // simulated.
@@ -775,6 +776,8 @@ export const runPass = async ({
         fetchImpl,
         now,
         settings: settings.priceActionStructure,
+        twelveDataApiKey: config.twelveDataApiKey,
+        externalTrendEnabled: true,
         logger,
       })
       state.priceActionMatrixError = null

@@ -467,7 +467,14 @@ tbody tr:hover { background: var(--series-1-soft); }
   line-height: 1.25;
   text-align: center;
 }
-.pa-decision-cell-structure .fact { min-width: 90px; }
+.pa-decision-cell-structure .fact { min-width: 82px; }
+.structure-reference-facts {
+  display: inline-flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 4px;
+  max-width: 182px;
+}
 .pa-decision-cell-pullback { min-width: 145px; }
 .pa-decision-cell-pullback .fact { min-width: 135px; max-width: none; white-space: nowrap; }
 .pa-zone-list {

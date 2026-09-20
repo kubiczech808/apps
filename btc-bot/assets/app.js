@@ -391,7 +391,7 @@ const priceActionSummary = () => {
 }
 
 const PRICE_ACTION_DECISION_COLUMNS = [
-  { id: 'structure', label: 'Struktura' },
+  { id: 'structure', label: 'Struktura / reference' },
   { id: 'zones', label: 'Demand / Supply' },
   { id: 'pullback', label: '50% pullback' },
   { id: 'entry', label: 'Entry' },
@@ -672,12 +672,34 @@ const priceActionDecisionFact = (entry, column) => {
   }
 }
 
+const structureReferenceFacts = (entry) => {
+  const item = entry?.item ?? {}
+  const internalTrend = PRICE_ACTION_TREND_LABELS[item.trend] || 'flat'
+  const internalStatus = item.trend === 'up' ? 'met' : item.trend === 'down' ? 'unmet' : 'neutral'
+  const external = item.externalTrend
+  const externalTrend = PRICE_ACTION_TREND_LABELS[external?.trend] || '–'
+  const externalStatus = external?.trend === 'up' ? 'met' : external?.trend === 'down' ? 'unmet' : 'neutral'
+  const externalTitle = external
+    ? `${external.source} · ${external.method}. ${external.reason || 'Bez detailu.'}`
+    : 'Externí referenční trend zatím nebyl načten.'
+  return el('div', { className: 'structure-reference-facts' }, [
+    decisionFactElement(decisionFact(
+      `náš ${internalTrend}`,
+      internalStatus,
+      [item.reason, item.event].filter(Boolean).join(' · ') || 'PA-1 swing struktura.'
+    )),
+    decisionFactElement(decisionFact(`ext. ${externalTrend}`, externalStatus, externalTitle)),
+  ])
+}
+
 const priceActionDecisionCell = (entry, column) =>
     el('td', { className: `pa-decision-cell pa-decision-cell-${column.id}` },
     column.id === 'zones'
       ? zoneListElement(entry.profile, entry.column.id)
       : column.id === 'rr'
         ? [riskRewardDetails(entry)]
+      : column.id === 'structure'
+        ? [structureReferenceFacts(entry)]
       : [decisionFactElement(priceActionDecisionFact(entry, column))]
   )
 

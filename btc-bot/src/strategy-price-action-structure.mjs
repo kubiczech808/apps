@@ -1,9 +1,10 @@
 import { aggregate, HOUR_MS } from './candles.mjs'
 import { ceilPrice, floorPrice, normalizeCandlePrices, roundPrice } from './price.mjs'
+import { buildExternalTrendReference } from './external-trends.mjs'
 import { buildFvgSupplyDemandZones, candleSignal, marketStructure } from './priceaction.mjs'
 
 export const PRICE_ACTION_STRUCTURE_ID = 'price-action-structure-v1'
-export const PRICE_ACTION_MATRIX_SCHEMA = 37
+export const PRICE_ACTION_MATRIX_SCHEMA = 38
 export const PRICE_ACTION_CHART_CANDLE_LIMITS = {
   '1h': 8760,
   '4h': 2190,
@@ -42,13 +43,13 @@ export const MIN_PRICE_ACTION_HOURLY_CANDLES =
 
 export const PRICE_ACTION_ASSETS = [
   { symbol: 'BTCUSD', name: 'Bitcoin / US Dollar', group: 'crypto', binanceSymbol: 'BTCUSDT', yahooSymbol: 'BTC-USD' },
-  { symbol: 'EURUSD', name: 'Euro / US Dollar', group: 'fx', stooqSymbol: 'eurusd', yahooSymbol: 'EURUSD=X' },
-  { symbol: 'GBPUSD', name: 'British Pound / US Dollar', group: 'fx', stooqSymbol: 'gbpusd', yahooSymbol: 'GBPUSD=X' },
-  { symbol: 'USDJPY', name: 'US Dollar / Japanese Yen', group: 'fx', stooqSymbol: 'usdjpy', yahooSymbol: 'JPY=X' },
-  { symbol: 'USDCHF', name: 'US Dollar / Swiss Franc', group: 'fx', stooqSymbol: 'usdchf', yahooSymbol: 'CHF=X' },
-  { symbol: 'USDCAD', name: 'US Dollar / Canadian Dollar', group: 'fx', stooqSymbol: 'usdcad', yahooSymbol: 'CAD=X' },
-  { symbol: 'AUDUSD', name: 'Australian Dollar / US Dollar', group: 'fx', stooqSymbol: 'audusd', yahooSymbol: 'AUDUSD=X' },
-  { symbol: 'NZDUSD', name: 'New Zealand Dollar / US Dollar', group: 'fx', stooqSymbol: 'nzdusd', yahooSymbol: 'NZDUSD=X' },
+  { symbol: 'EURUSD', name: 'Euro / US Dollar', group: 'fx', stooqSymbol: 'eurusd', yahooSymbol: 'EURUSD=X', twelveSymbol: 'EUR/USD' },
+  { symbol: 'GBPUSD', name: 'British Pound / US Dollar', group: 'fx', stooqSymbol: 'gbpusd', yahooSymbol: 'GBPUSD=X', twelveSymbol: 'GBP/USD' },
+  { symbol: 'USDJPY', name: 'US Dollar / Japanese Yen', group: 'fx', stooqSymbol: 'usdjpy', yahooSymbol: 'JPY=X', twelveSymbol: 'USD/JPY' },
+  { symbol: 'USDCHF', name: 'US Dollar / Swiss Franc', group: 'fx', stooqSymbol: 'usdchf', yahooSymbol: 'CHF=X', twelveSymbol: 'USD/CHF' },
+  { symbol: 'USDCAD', name: 'US Dollar / Canadian Dollar', group: 'fx', stooqSymbol: 'usdcad', yahooSymbol: 'CAD=X', twelveSymbol: 'USD/CAD' },
+  { symbol: 'AUDUSD', name: 'Australian Dollar / US Dollar', group: 'fx', stooqSymbol: 'audusd', yahooSymbol: 'AUDUSD=X', twelveSymbol: 'AUD/USD' },
+  { symbol: 'NZDUSD', name: 'New Zealand Dollar / US Dollar', group: 'fx', stooqSymbol: 'nzdusd', yahooSymbol: 'NZDUSD=X', twelveSymbol: 'NZD/USD' },
 ]
 
 export const PRICE_ACTION_TIMEFRAMES = [
@@ -1760,6 +1761,8 @@ export const buildPriceActionMatrix = async ({
   fetchImpl = globalThis.fetch,
   now = Date.now(),
   settings = DEFAULT_PRICE_ACTION_STRUCTURE,
+  twelveDataApiKey = '',
+  externalTrendEnabled = false,
   logger = console,
 } = {}) => {
   const merged = { ...DEFAULT_PRICE_ACTION_STRUCTURE, ...(settings ?? {}) }
@@ -1775,6 +1778,19 @@ export const buildPriceActionMatrix = async ({
       timeframeCandles({ asset, timeframe, btcHourly, fetchImpl, now, logger })
     )),
   })))
+
+  const externalTrendHour = Math.floor(now / (60 * 60_000))
+  const externalTrends = !externalTrendEnabled
+    ? null
+    : previous?.externalTrends?.hourBucket === externalTrendHour
+      ? previous.externalTrends
+      : await buildExternalTrendReference({
+          assets: PRICE_ACTION_ASSETS,
+          apiKey: twelveDataApiKey,
+          fetchImpl,
+          now,
+          logger,
+        })
 
   const rows = []
   for (const { asset, results } of fetchedAssets) {
@@ -1811,6 +1827,7 @@ export const buildPriceActionMatrix = async ({
         zoneCandles,
         chartCandles,
       })
+      trends[timeframe.id].externalTrend = externalTrends?.assets?.[asset.symbol]?.[timeframe.id] ?? null
     }
     alignOneHourStructureToFourHour(trends)
     attachTradeProfiles(trends, merged)
@@ -1829,6 +1846,7 @@ export const buildPriceActionMatrix = async ({
     schemaVersion: PRICE_ACTION_MATRIX_SCHEMA,
     generatedAt: new Date(now).toISOString(),
     refreshMinutes,
+    externalTrends,
     assets: rows,
     timeframes: PRICE_ACTION_TIMEFRAMES.map(({ id, label }) => ({ id, label })),
   }

@@ -117,6 +117,7 @@ can drift from the LN Markets index.
 | `LNM_API_SECRET` | " |
 | `LNM_API_PASSPHRASE` | " |
 | `BTC_BOT_KEY` | Overrides the committed dashboard key — **required before mainnet**. |
+| `TWELVE_DATA_API_KEY` | Optional Twelve Data key for the FX external-trend reference. It remains on the runner and is never published to the dashboard. |
 
 Create the LN Markets key at **lnmarkets.com → Settings → API** with permission
 to read the account and to create and close positions. There is no test network

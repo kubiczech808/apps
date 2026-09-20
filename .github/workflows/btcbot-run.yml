@@ -85,4 +85,5 @@ jobs:
           LNM_API_SECRET: ${{ secrets.LNM_API_SECRET }}
           LNM_API_PASSPHRASE: ${{ secrets.LNM_API_PASSPHRASE }}
           LNM_API_NETWORK: ${{ vars.LNM_API_NETWORK || 'testnet4' }}
+          TWELVE_DATA_API_KEY: ${{ secrets.TWELVE_DATA_API_KEY }}
         run: node tools/run-bot.mjs

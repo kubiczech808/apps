@@ -141,6 +141,37 @@ jobs:
           os.chmod(path, 0o600)
           PY
 
+      - name: Bridge Twelve Data key to the primary runner
+        # Keep an existing local key when the repository secret has not been
+        # added yet. This prevents an unrelated deploy from disabling FX
+        # reference trends after an operator configured them once.
+        env:
+          TWELVE_DATA_API_KEY: ${{ secrets.TWELVE_DATA_API_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          config=/home/openclaw2/.config/btc-bot.env
+          sudo env CONFIG_PATH="$config" TWELVE_DATA_API_KEY="$TWELVE_DATA_API_KEY" python3 - <<'PY'
+          import os
+          import pwd
+          from pathlib import Path
+
+          key = os.environ.get("TWELVE_DATA_API_KEY", "").strip()
+          if not key:
+              print("TWELVE_DATA_API_KEY is not set; keeping current runner configuration.")
+              raise SystemExit(0)
+
+          path = Path(os.environ["CONFIG_PATH"])
+          lines = path.read_text(encoding="utf-8").splitlines()
+          updated = [line for line in lines if not line.startswith("TWELVE_DATA_API_KEY=")]
+          updated.append(f"TWELVE_DATA_API_KEY={key}")
+          path.write_text("\n".join(updated) + "\n", encoding="utf-8")
+          account = pwd.getpwnam("openclaw2")
+          os.chown(path, account.pw_uid, account.pw_gid)
+          os.chmod(path, 0o600)
+          print("Twelve Data key configured for the primary runner.")
+          PY
+
       - name: Restart timer and run one verified pass
         shell: bash
         run: |
