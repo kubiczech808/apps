@@ -156,7 +156,14 @@ test("the band the card prints is the band the rule actually gates on", () => {
     enabled: true, openMin, openMax,
     buyMin: DIP_CONFIG.minProbability, buyMax: DIP_CONFIG.maxProbability,
   };
-  const underway = (openProbability) => ({ eventRunning: true, openProbability, probability: 0.35 });
+  // Seen before kickoff, which is what makes openProbability an OPENING price. The rule now
+  // refuses a quote first taken mid-fixture, because that is a mid-game price wearing the
+  // name of an opening one -- so the fixture has to say which kind it is.
+  const underway = (openProbability) => ({
+    eventRunning: true, openProbability, probability: 0.35,
+    firstObservedAt: new Date(Date.now() - 6 * 3600000).toISOString(),
+    eventStartTime: new Date(Date.now() - 3600000).toISOString(),
+  });
 
   // Inside the printed band: admitted. Outside either edge: refused, and the refusal names
   // the same band the card does. Before the fix the card printed 30.0%-56.0%, and a market

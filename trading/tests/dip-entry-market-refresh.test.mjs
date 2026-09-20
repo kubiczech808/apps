@@ -54,11 +54,17 @@ const TOKEN = "81280220723492411217926832302716507805858486134217234885939562449
 const OPPOSITE = "83033393998203881216957612527391029081067916028759126771395003345052050286588";
 // Far enough out that the position is neither awaiting resolution nor closed.
 const END_DATE = new Date(Date.now() + 3 * 24 * 3600 * 1000).toISOString();
+// The fixture's own day, relative. marketDateContext infers a fixture's scheduled date from
+// the DATE IN THE SLUG and prefers it over endDate, so a hard-coded "2026-09-19" turned these
+// tests into a time bomb: they passed on the day they were written and reported
+// daysToResolution -0.19 the following morning. The suite has now grown this same fault
+// three times, so it is generated here rather than typed.
+const SLUG_DAY = new Date(Date.now() + 2 * 3600 * 1000).toISOString().slice(0, 10);
 
 const GAMMA_MARKET = {
   question: "Dota 2: Conventus Stellarum vs PlayTime - Game 1 Winner",
-  slug: "dota2-cs-playti-2026-09-19-game1",
-  events: [{ slug: "dota2-cs-playti-2026-09-19" }],
+  slug: `dota2-cs-playti-${SLUG_DAY}-game1`,
+  events: [{ slug: `dota2-cs-playti-${SLUG_DAY}` }],
   clobTokenIds: JSON.stringify([TOKEN, OPPOSITE]),
   outcomes: JSON.stringify(["Conventus Stellarum", "PlayTime"]),
   outcomePrices: JSON.stringify(["0.8", "0.2"]),
@@ -71,7 +77,7 @@ const GAMMA_MARKET = {
 // A dip position exactly as dipEntryCandidateRows built it before the fix: everything
 // present except the one field the whole refresh keys on.
 const dipTrade = (overrides = {}) => ({
-  id: "paper-dip70-2026-09-19-conventus",
+  id: `paper-dip70-${SLUG_DAY}-conventus`,
   strategyId: "dip70",
   status: "OPEN",
   tokenId: TOKEN,
@@ -118,9 +124,9 @@ test("a dip position with no slug is refreshed by its token: mark, P/L and resol
 
 test("the refreshed row keeps the slug it was given, so the repair is permanent", async () => {
   const { result } = await withStubbedFetch(marketAndBookHandler(), () => bot.markOpenTrade(dipTrade()));
-  assert.equal(result.slug, "dota2-cs-playti-2026-09-19-game1",
+  assert.equal(result.slug, `dota2-cs-playti-${SLUG_DAY}-game1`,
     "written back, or every future pass pays for the token lookup again");
-  assert.equal(result.eventSlug, "dota2-cs-playti-2026-09-19",
+  assert.equal(result.eventSlug, `dota2-cs-playti-${SLUG_DAY}`,
     "and the EVENT slug is what the dashboard's link needs for a grouped market");
 });
 
@@ -149,9 +155,9 @@ test("BAIT: a trade that HAS a slug never pays for the token lookup", async () =
   // every pass would multiply the bot's own load across the whole book.
   const { urls } = await withStubbedFetch((url) => {
     if (url.hostname === "clob.polymarket.com") return { bids: [{ price: "0.8", size: "500" }], asks: [] };
-    if (url.searchParams.get("slug") === "dota2-cs-playti-2026-09-19-game1") return [GAMMA_MARKET];
+    if (url.searchParams.get("slug") === `dota2-cs-playti-${SLUG_DAY}-game1`) return [GAMMA_MARKET];
     return [];
-  }, () => bot.markOpenTrade(dipTrade({ slug: "dota2-cs-playti-2026-09-19-game1" })));
+  }, () => bot.markOpenTrade(dipTrade({ slug: `dota2-cs-playti-${SLUG_DAY}-game1` })));
   assert.ok(!urls.some((url) => url.searchParams.get("clob_token_ids")),
     `the slug answered, so nothing may ask by token: ${urls.map(String).join(" ")}`);
 });
@@ -219,7 +225,7 @@ test("a waiting limit order with no slug also gets its resolution date", async (
   assert.notEqual(result.status, "MARKET_NOT_FOUND");
   assert.ok(Number(result.daysToResolution) > 0,
     `a resting order must know when its market ends: ${JSON.stringify({ daysToResolution: result.daysToResolution })}`);
-  assert.equal(result.slug, "dota2-cs-playti-2026-09-19-game1");
+  assert.equal(result.slug, `dota2-cs-playti-${SLUG_DAY}-game1`);
 });
 
 test("a recorded dip with no slug borrows the market's address from the catalogue", async () => {
@@ -273,8 +279,8 @@ test("a position opened this pass is addressed before it is published", async ()
   await withStubbedFetch(marketAndBookHandler({ token: `${TOKEN}0005` }),
     () => bot.markNewlyOpenedTrades(state));
   const [row] = state.paperPortfolios.dip70.trades;
-  assert.equal(row.slug, "dota2-cs-playti-2026-09-19-game1");
-  assert.equal(row.eventSlug, "dota2-cs-playti-2026-09-19", "the event slug is what the link needs");
+  assert.equal(row.slug, `dota2-cs-playti-${SLUG_DAY}-game1`);
+  assert.equal(row.eventSlug, `dota2-cs-playti-${SLUG_DAY}`, "the event slug is what the link needs");
 });
 
 test("BAIT: an already-refreshed row is never touched again, but a slug is no longer an exemption", async () => {
@@ -308,7 +314,7 @@ test("BAIT: an already-refreshed row is never touched again, but a slug is no lo
       dip70: {
         trades: [{
           id: "has-slug", status: "OPEN", tokenId: `${TOKEN}0005`,
-          slug: "dota2-cs-playti-2026-09-19-game1", eventSlug: "dota2-cs-playti-2026-09-19",
+          slug: `dota2-cs-playti-${SLUG_DAY}-game1`, eventSlug: `dota2-cs-playti-${SLUG_DAY}`,
           entryPrice: 0.54, shares: 9.26, stakeUsdc: 5, totalCostUsdc: 5,
         }],
       },

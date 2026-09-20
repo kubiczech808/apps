@@ -5349,7 +5349,14 @@ test("dip entry: one rule, and every copy of it agrees", async () => {
 
   // The reference implementation, on the reported case: INOX opened at 78%, lost a map,
   // traded at 35% and went on to win.
-  const inox = { openProbability: 0.78, probability: 0.35, eventRunning: true };
+  // Seen six hours before kickoff, which is what makes 0.78 an OPENING price. The rule now
+  // refuses a quote first taken after the fixture began -- that is a mid-game price wearing
+  // the name of an opening one -- so the fixture has to say which kind it is.
+  const inox = {
+    openProbability: 0.78, probability: 0.35, eventRunning: true,
+    firstObservedAt: new Date(Date.now() - 6 * 3600000).toISOString(),
+    eventStartTime: new Date(Date.now() - 3600000).toISOString(),
+  };
   const on = { enabled: true, openMin: 0.7, openMax: 0.8, buyMin: 0.3, buyMax: 0.4 };
   assert.equal(rule.dipEntrySignal(inox, on).admit, true);
 
@@ -5359,6 +5366,11 @@ test("dip entry: one rule, and every copy of it agrees", async () => {
     "a market that was never the favourite has not collapsed, it is just cheap");
   assert.match(rule.dipEntrySignal({ ...inox, probability: 0.62 }, on).reason,
     /at 62%, outside the 30%-40% entry band/);
+  // The reported defect: the same 78% number, first seen AFTER kickoff, is not an opening
+  // price and must be refused however well it fits the band.
+  assert.match(rule.dipEntrySignal({
+    ...inox, firstObservedAt: new Date(Date.now() - 1800000).toISOString(),
+  }, on).reason, /first seen after the fixture began/);
   assert.match(rule.dipEntrySignal({ ...inox, openProbability: null }, on).reason,
     /no opening probability on record/,
     "an unverified premise is not a premise: no opening price means no entry");

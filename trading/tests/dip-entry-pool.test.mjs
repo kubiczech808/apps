@@ -95,12 +95,29 @@ function collapsed(overrides = {}) {
     spread: 0.02,
     volumeUsdc: 5000,
     eventStarted: true,
+    // A collapsed favourite was, by definition, seen BEFORE the fixture began -- that is
+    // what makes 0.76 an OPENING price rather than a mid-game one. The fixture carried
+    // neither time while nothing read them, so it stood for a row the rule must now refuse.
+    // Both relative, so this cannot rot into a fixed date the way two resolution dates in
+    // this suite already have.
+    firstObservedAt: new Date(Date.now() - 6 * 3600000).toISOString(),
+    eventStartTime: new Date(Date.now() - 3600000).toISOString(),
     marketClosed: false,
     acceptingOrders: true,
     resolutionEndDate: new Date(Date.now() + 3600000).toISOString(),
     ...overrides,
   };
 }
+
+// The reported defect, as a fixture: same numbers, but the row was first met AFTER kickoff,
+// so its "opening" price is a mid-game one. Reported 2026-09-20 with a Marlins-Padres market
+// that traded 50/50 for a week and was recorded as "opened at 75%" because the scan first
+// saw it at 6-6 in extra innings.
+const metMidGame = (overrides = {}) => collapsed({
+  firstObservedAt: new Date(Date.now() - 1800000).toISOString(),
+  eventStartTime: new Date(Date.now() - 3600000).toISOString(),
+  ...overrides,
+});
 
 test("dip shortlist: the screen stops promising markets that never fell", () => {
   // The row the rule is for: opened at 76%, now quoted at 53%, fixture under way.
@@ -112,6 +129,15 @@ test("dip shortlist: the screen stops promising markets that never fell", () => 
   // every cheap outcome qualified.
   assert.equal(shortlists(collapsed({ firstMarketProbability: 0.42 }), DIP_CONFIG), false,
     "an outcome that opened at 42% never fell and is not a dip");
+
+  // The reported one, and the reason this whole check exists: the number is inside the band
+  // and still means nothing, because it was not an opening price.
+  assert.equal(shortlists(metMidGame(), DIP_CONFIG), false,
+    "a 76% quote first taken after kickoff is a mid-game price, not an opening one");
+  // Neither time known is also a refusal. The premise rests entirely on this one fact, and
+  // an unverified premise is not one.
+  assert.equal(shortlists(collapsed({ firstObservedAt: null, eventStartTime: null }), DIP_CONFIG), false,
+    "with no first-seen time and no kickoff the premise cannot be checked at all");
   assert.equal(shortlists(collapsed({ firstMarketProbability: 0.95 }), DIP_CONFIG), false,
     "and one that opened above the band is not the fall this rule describes");
 
@@ -120,7 +146,13 @@ test("dip shortlist: the screen stops promising markets that never fell", () => 
   assert.equal(shortlists(collapsed({ firstMarketProbability: null }), DIP_CONFIG), false);
 
   // Before kick-off a low price is not a collapse, it is a different market.
-  assert.equal(shortlists(collapsed({ eventStarted: false, resolutionEndDate: new Date(Date.now() + 86400000 * 2).toISOString() }), DIP_CONFIG), false);
+  // The kickoff has to move with it: eventStartTime is what decides "under way", and leaving
+  // it in the past while setting eventStarted false describes two different fixtures.
+  assert.equal(shortlists(collapsed({
+    eventStarted: false,
+    eventStartTime: new Date(Date.now() + 3600000).toISOString(),
+    resolutionEndDate: new Date(Date.now() + 86400000 * 2).toISOString(),
+  }), DIP_CONFIG), false);
 
   // And an ordinary portfolio is untouched by any of this: the same row, no dip rule, is
   // judged on its range alone.
@@ -178,6 +210,11 @@ test("dip pool: the real selection admits a catalogue row that opened in the ban
     volumeUsdc: 5000,
     liquidity: 5000,
     eventStarted: true,
+    // Seen before kickoff, which is what makes 0.76 an OPENING price. Without these two the
+    // row is refused now, and rightly: a 76% quote first taken mid-fixture is a mid-game
+    // price, which is the defect these times were added to catch.
+    firstObservedAt: new Date(Date.now() - 6 * 3600000).toISOString(),
+    eventStartTime: new Date(Date.now() - 3600000).toISOString(),
     marketClosed: false,
     acceptingOrders: true,
     endDate: new Date(Date.now() + 3600000).toISOString(),
@@ -219,6 +256,34 @@ test("dip pool: the real selection admits a catalogue row that opened in the ban
   // was right to refuse -- it was never a favourite, it was always cheap.
   assert.equal(bot.sortEligibleForStrategy([{ ...row, firstMarketProbability: 0.42 }], strategy).length, 0);
   assert.equal(bot.sortEligibleForStrategy([{ ...row, firstMarketProbability: null }], strategy).length, 0);
+
+  // THE BOT'S OWN GATE, on a mid-game price. Added because deleting this check from
+  // strategyEligibleCandidates broke nothing: the PHP shortlist and the reference rule each
+  // had a test and the one layer that actually opens paper positions had none. A bait that
+  // does not fail is a finding.
+  //
+  // Reported 2026-09-20 with two screenshots. A Marlins-Padres market traded 50/50 for a
+  // week; at 6-6 in extra innings the Padres side was momentarily 75%, the scan met it
+  // there, and that became "where this market opened". It never was the favourite.
+  // "DIP ENTRY je range kde se trh musi nachazet na zacatku."
+  const midGame = {
+    ...row,
+    firstObservedAt: new Date(Date.now() - 1800000).toISOString(),
+    eventStartTime: new Date(Date.now() - 3600000).toISOString(),
+  };
+  assert.deepEqual(bot.portfolioFilterResult(midGame, strategy).reasons, [],
+    "nothing else refuses it either, so the zero below is this check and no other");
+  assert.equal(bot.sortEligibleForStrategy([midGame], strategy).length, 0,
+    "a 76% quote first taken after kickoff is a mid-game price, not an opening one");
+
+  // Unknowable is also a refusal: the whole rule rests on this one fact.
+  assert.equal(bot.sortEligibleForStrategy([{ ...row, firstObservedAt: null }], strategy).length, 0);
+  assert.equal(bot.sortEligibleForStrategy([{ ...row, eventStartTime: null }], strategy).length, 0);
+
+  // And an ordinary portfolio inherits none of it.
+  const plain = { ...strategy, dipEntryEnabled: false, minProbability: 0.3, maxProbability: 0.56 };
+  assert.equal(bot.sortEligibleForStrategy([midGame], plain).length, 1,
+    "only a dip portfolio asks where the market opened");
 });
 
 // Measured on paper-dip70 and paper-dip70live, 2026-09-19, with the record-side guard
@@ -247,6 +312,8 @@ test("a dip portfolio never rebuys a market it has already traded, catalogue row
     // The premise the dip gate checks, so these rows are admissible on every other ground
     // and the traded-token rule is the only thing that can refuse them.
     firstMarketProbability: 0.78, eventStarted: true,
+    firstObservedAt: new Date(Date.now() - 6 * 3600000).toISOString(),
+    eventStartTime: new Date(Date.now() - 3600000).toISOString(),
     marketClosed: false, acceptingOrders: true,
     endDate: new Date(Date.now() + 3600000).toISOString(),
     resolutionEndDate: new Date(Date.now() + 3600000).toISOString(), daysToResolution: 1 / 24,

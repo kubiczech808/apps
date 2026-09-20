@@ -143,6 +143,29 @@ function numericOrNull(value) {
 // which for an underway portfolio is its pre-match price -- the scrape finds a fixture well
 // before it starts. A market with no opening price on record is refused rather than assumed:
 // the whole premise is that it was a favourite, and an unverified premise is not one.
+// Can this row's opening price be believed at all?
+//
+// `firstMarketProbability` does NOT mean "where the market opened". It means "what this row
+// was quoted at the first time the scan stored it", and firstObservationMetadata() fills it
+// from the CURRENT price when the row carries none of its own. For a fixture the scan first
+// meets while it is already being played, that is a mid-game price.
+//
+// Reported with two screenshots, 2026-09-20. A Marlins-Padres market sat at 50/50 for a
+// week; at 6-6 in extra innings the Padres side was momentarily 75%. The scan met it there,
+// wrote "opened at 75%", the side fell into the 30-56% band, and the rule bought it as a
+// collapsed favourite. It never was the favourite. Same shape on a UFC market that traded
+// flat at 50% from Sep 13 until the fight.
+//
+// So the premise is only verifiable from a quote taken BEFORE the fixture began. No kickoff
+// on the row and no first-seen time are both refusals rather than assumptions: the whole
+// rule rests on this one fact, and an unverified premise is not one.
+export function dipEntryOpeningIsVerifiable(observation) {
+  const firstSeen = Date.parse(observation?.firstObservedAt || observation?.observedAt || "");
+  const kickoff = Date.parse(observation?.eventStartTime || observation?.scheduledEventDate || "");
+  if (!Number.isFinite(firstSeen) || !Number.isFinite(kickoff)) return false;
+  return firstSeen < kickoff;
+}
+
 export function dipEntrySignal(observation, rule) {
   const normalized = normalizeDipEntryRule(rule);
   if (!normalized.enabled) return { admit: true, reason: "" };
@@ -159,6 +182,14 @@ export function dipEntrySignal(observation, rule) {
   const opened = numericOrNull(observation?.openProbability);
   if (opened == null) {
     return { admit: false, reason: "dip entry: no opening probability on record, so the collapse cannot be verified" };
+  }
+  // Asked before the band, because a price taken mid-fixture is not an opening price at all
+  // and comparing it to the band would be comparing the wrong number.
+  if (!dipEntryOpeningIsVerifiable(observation)) {
+    return {
+      admit: false,
+      reason: "dip entry: the market was first seen after the fixture began, so this is a mid-game price rather than an opening one",
+    };
   }
   if (opened < normalized.openMin || opened > normalized.openMax) {
     return {
@@ -210,6 +241,10 @@ export function dipEntryWatchlist(observations, rule) {
   return (Array.isArray(observations) ? observations : []).filter((item) => {
     const opened = numericOrNull(item?.openProbability ?? item?.firstMarketProbability);
     if (opened == null) return false;
+    // The same question the signal asks, asked here too: shortlisting a market on a price
+    // taken mid-fixture puts it on the watch list under a premise that was never true, and
+    // every hit recorded from that watch inherits the mistake.
+    if (!dipEntryOpeningIsVerifiable(item)) return false;
     if (opened < normalized.openMin || opened > normalized.openMax) return false;
     // Already above the opening band, or already below the entry band, and the trough this
     // rule waits for is not ahead of it any more.

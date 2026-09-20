@@ -2352,6 +2352,10 @@ export async function recordDipEntryHit(plan, price) {
         outcome: plan.outcome || "",
         slug: plan.slug || "",
         eventSlug: plan.eventSlug || "",
+      // The premise the watch verified: this row was first quoted before kickoff. The dip
+      // itself is recorded mid-fixture, so the bot cannot re-derive it from this moment.
+      firstObservedAt: plan.firstObservedAt || "",
+      eventStartTime: plan.eventStartTime || "",
         price,
         openProbability: plan.openProbability ?? null,
         volumeUsdc: plan.volumeUsdc ?? null,

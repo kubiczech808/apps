@@ -11619,6 +11619,11 @@ test("dip entry on paper: recorded dips are the candidate pool, and only for tho
     selectionStatus: "ELIGIBLE", marketProbability: price, marketPrice: price, aiProbability: price,
     bestBid: price, bestAsk: price, spread: 0, volumeUsdc: 5000, liquidity: 5000,
     eventStarted: true, marketClosed: false, acceptingOrders: true,
+    // Seen before kickoff, which is what makes firstMarketProbability an OPENING price. The
+    // rule refuses a quote first taken mid-fixture: that is a mid-game price wearing the
+    // name of an opening one, and it is the defect these two times were added to catch.
+    firstObservedAt: new Date(Date.now() - 6 * 3600000).toISOString(),
+    eventStartTime: new Date(Date.now() - 3600000).toISOString(),
     endDate: new Date(Date.now() + 3600000).toISOString(),
     resolutionEndDate: new Date(Date.now() + 3600000).toISOString(), daysToResolution: 1 / 24,
     stakeUsdc: 5, shares, executableShares: shares, totalCostUsdc: 5,
@@ -11735,6 +11740,12 @@ test("dip entry on paper: a recorded dip survives the portfolio filter it has to
     portfolioId: "paper-dip", tokenId: "aaa", price: 0.35, openProbability: 0.78,
     question: "INOX vs Black Phoenix", outcome: "INOX", volumeUsdc: 117240,
     endDate: new Date(Date.now() + 3 * 3600000).toISOString(), at: new Date().toISOString(),
+    // What the watch verified before this market was ever shortlisted: first quoted six
+    // hours before kickoff, so 0.78 is an opening price. The dip itself is recorded
+    // mid-fixture -- `at` is during the match -- which is why the evidence has to travel
+    // with the hit rather than be re-derived from it.
+    firstObservedAt: new Date(Date.now() - 6 * 3600000).toISOString(),
+    eventStartTime: new Date(Date.now() - 3600000).toISOString(),
   };
   const rows = bot.dipEntryCandidateRows(strategy, [hit]);
   assert.equal(rows.length, 1);

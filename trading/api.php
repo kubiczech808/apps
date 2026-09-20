@@ -2655,6 +2655,15 @@ function execution_scope_matches_observation(array $item, array $config): bool
         $opened = is_numeric($item['firstMarketProbability'] ?? null)
             ? (float) $item['firstMarketProbability']
             : null;
+        // And it has to BE an opening price. firstMarketProbability means "what this row was
+        // quoted the first time the scan stored it", filled from the CURRENT price when the
+        // row carries none of its own -- so for a fixture the scan first meets already in
+        // play it is a mid-game price. Reported with a market that traded 50/50 for a week
+        // and was recorded as "opened at 75%" because the scan met it at 6-6 in extra
+        // innings. Only a quote taken before kickoff can answer this.
+        if (!dip_entry_opening_is_verifiable($item)) {
+            return false;
+        }
         if ($opened === null || $opened < $dipRule['dipEntryOpenMin'] || $opened > $dipRule['dipEntryOpenMax']) {
             return false;
         }
@@ -4135,6 +4144,23 @@ function normalize_probability_value(mixed $value, float $fallback): float
  *
  * @return array{dipEntryEnabled: bool, dipEntryOpenMin: float, dipEntryOpenMax: float}
  */
+/**
+ * Whether this row's opening price can be believed: was it quoted BEFORE the fixture began?
+ *
+ * The bot's copy of this is in strategyEligibleCandidates and the reference is
+ * dipEntryOpeningIsVerifiable() in tools/dip-entry-rule.mjs. All three must agree, because
+ * a market shortlisted here becomes a recorded hit the bot opens a position from.
+ */
+function dip_entry_opening_is_verifiable(array $item): bool
+{
+    $firstSeen = strtotime((string) ($item['firstObservedAt'] ?? $item['observedAt'] ?? ''));
+    $kickoff = strtotime((string) ($item['eventStartTime'] ?? $item['scheduledEventDate'] ?? ''));
+    if ($firstSeen === false || $kickoff === false) {
+        return false;
+    }
+    return $firstSeen < $kickoff;
+}
+
 function normalize_dip_entry_rule(array $input, array $defaults): array
 {
     $bound = static function (string $key, float $fallback) use ($input, $defaults): float {
@@ -6220,14 +6246,21 @@ function live_dip_entry_watch_payload(): array
         if (!dip_watch_market_is_live($item)) {
             continue;
         }
-        $opened = null;
-        foreach (['firstMarketProbability', 'marketProbability', 'marketPrice'] as $field) {
-            if (is_numeric($item[$field] ?? null)) {
-                $opened = (float) $item[$field];
-                break;
-            }
-        }
+        // firstMarketProbability ONLY. marketProbability and marketPrice used to stand in for
+        // it here, which made "where the market opened" mean "what it costs right now" for
+        // every row that carried no first quote -- so a market currently inside the opening
+        // band was shortlisted as a favourite whatever its history. Falling back to the
+        // present to answer a question about the past cannot be right, and a row with no
+        // first quote is simply not a candidate for this rule.
+        $opened = is_numeric($item['firstMarketProbability'] ?? null)
+            ? (float) $item['firstMarketProbability']
+            : null;
         if ($opened === null) {
+            continue;
+        }
+        // And the quote has to predate the fixture, or it is a mid-game price wearing the
+        // name of an opening one. See dip_entry_opening_is_verifiable().
+        if (!dip_entry_opening_is_verifiable($item)) {
             continue;
         }
         $tokenId = trim((string) ($item['tokenId'] ?? $item['clobTokenIds'][0] ?? ''));
@@ -6304,6 +6337,13 @@ function live_dip_entry_watch_payload(): array
                 // this far.
                 'slug' => (string) ($item['slug'] ?? ''),
                 'eventSlug' => (string) ($item['eventSlug'] ?? ''),
+                // The evidence THIS payload just verified: the row was first quoted before
+                // kickoff, which is what makes its opening probability an opening one. A hit
+                // is recorded mid-fixture by definition, so without carrying these the bot
+                // would have to re-verify the premise from the moment of the dip -- which is
+                // exactly the mid-game price the rule must refuse.
+                'firstObservedAt' => (string) ($item['firstObservedAt'] ?? $item['observedAt'] ?? ''),
+                'eventStartTime' => (string) ($item['eventStartTime'] ?? $item['scheduledEventDate'] ?? ''),
                 // The market's tags, carried because the paper bot rebuilds a candidate row
                 // out of the recorded hit and has nothing else to read them from. By the time
                 // the bot runs, the collapsed favourite is out of the catalogue entirely.
@@ -6567,6 +6607,9 @@ function record_dip_entry_hit(array $input): array
         'outcome' => (string) ($input['outcome'] ?? ''),
         'slug' => (string) ($input['slug'] ?? ''),
         'eventSlug' => (string) ($input['eventSlug'] ?? ''),
+        // Carried from the watch plan, which verified the opening price predates kickoff.
+        'firstObservedAt' => (string) ($input['firstObservedAt'] ?? ''),
+        'eventStartTime' => (string) ($input['eventStartTime'] ?? ''),
         // The price the dip actually reached, which is what the simulated entry pays. The
         // whole value of recording this is that it is not the price an hour later.
         'price' => round($price, 6),

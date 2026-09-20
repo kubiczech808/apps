@@ -8232,6 +8232,21 @@ function strategyEligibleCandidates(eligible, strategy) {
       // No opening price on record leaves the premise unverified, and an unverified premise
       // is not one. Refused rather than assumed.
       if (opened == null) return false;
+      // And the price has to BE an opening price. firstMarketProbability means "what this
+      // row was quoted at the first time the scan stored it" -- firstObservationMetadata
+      // fills it from the CURRENT price when the row has none -- so for a fixture the scan
+      // first meets already in play it is a mid-game price.
+      //
+      // Reported 2026-09-20 with two screenshots: a Marlins-Padres market flat at 50/50 for
+      // a week, met by the scan at 6-6 when the Padres side was momentarily 75%, recorded as
+      // "opened at 75%", then bought as a collapsed favourite when it fell. It never was the
+      // favourite. "DIP ENTRY je range kde se trh musi nachazet na zacatku."
+      //
+      // A quote taken before kickoff is the only one that can answer this, so no kickoff and
+      // no first-seen time are refusals rather than guesses.
+      const firstSeenAt = Date.parse(String(item?.firstObservedAt || item?.observedAt || ""));
+      const kickoffAt = Date.parse(String(item?.eventStartTime || item?.scheduledEventDate || ""));
+      if (!Number.isFinite(firstSeenAt) || !Number.isFinite(kickoffAt) || firstSeenAt >= kickoffAt) return false;
       if (opened < Number(strategy.dipEntryOpenMin) || opened > Number(strategy.dipEntryOpenMax)) return false;
     }
     // The same test the statistics apply, for the same reason: an order sent into a book
@@ -8766,7 +8781,13 @@ export function dipEntryCandidateRows(strategy, hits = DIP_ENTRY_HITS, tradedTok
           ? hit.tags.map((tag) => String(tag)).filter(Boolean)
           : [],
         observedAt: String(hit.at || ""),
-        firstObservedAt: String(hit.at || ""),
+        // NOT hit.at. A dip is recorded mid-fixture by definition, so using the moment of
+        // the dip as "when this row was first seen" would make every recorded hit look like
+        // a market first met in play -- and the opening-price check would refuse the very
+        // rows the rule exists to open. These two come from the watch plan, which verified
+        // the opening price predates kickoff before shortlisting the market at all.
+        firstObservedAt: String(hit.firstObservedAt || ""),
+        eventStartTime: String(hit.eventStartTime || ""),
         dipEntryHit: true,
       };
     })
