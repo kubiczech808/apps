@@ -3,7 +3,7 @@ import { ceilPrice, floorPrice, normalizeCandlePrices, roundPrice } from './pric
 import { buildFvgSupplyDemandZones, candleSignal, marketStructure } from './priceaction.mjs'
 
 export const PRICE_ACTION_STRUCTURE_ID = 'price-action-structure-v1'
-export const PRICE_ACTION_MATRIX_SCHEMA = 35
+export const PRICE_ACTION_MATRIX_SCHEMA = 36
 export const PRICE_ACTION_CHART_CANDLE_LIMITS = {
   '1h': 8760,
   '4h': 2190,
@@ -29,9 +29,9 @@ export const PRICE_ACTION_STRUCTURE_PROFILES = {
   // Keep enough context for the currently active 4H leg (about a month), while
   // the small pivot radius still makes the 1H line responsive. A 14-day cut
   // can otherwise remove the active 4H HH/LH before the 1H rebound finishes.
-  '1h': { historyDays: 30, pivotLookback: 18, minCandles: 300, zoneMaxAgeCandles: 720 },
-  '4h': { historyDays: 180, pivotLookback: 96, minCandles: 250, zoneMaxAgeCandles: 1080 },
-  '1d': { historyDays: 400, pivotLookback: 30, minCandles: 160, zoneMaxAgeCandles: 400 },
+  '1h': { historyDays: 30, zoneHistoryDays: 120, pivotLookback: 18, minCandles: 300, zoneMaxAgeCandles: 2880 },
+  '4h': { historyDays: 180, zoneHistoryDays: 365, pivotLookback: 96, minCandles: 250, zoneMaxAgeCandles: 2190 },
+  '1d': { historyDays: 400, zoneHistoryDays: 730, pivotLookback: 30, minCandles: 160, zoneMaxAgeCandles: 730 },
 }
 
 export const PRICE_ACTION_ASSETS = [
@@ -1466,12 +1466,20 @@ export const classifyStructure = (
     minCandles = 40,
     zoneMaxAgeCandles = 400,
     historyDays = null,
+    zoneHistoryDays = null,
+    zoneCandles = null,
     chartCandles = null,
     includeChartCandles = true,
     includeZones = true,
   } = {}
 ) => {
   const normalizedCandles = Array.isArray(candles) ? candles.map(normalizeCandlePrices) : candles
+  // The structure horizon remains short enough to describe the active wave.
+  // Exit targets may legitimately be older untouched FVGs, so they use their
+  // own longer history instead of disappearing with the entry/structure view.
+  const normalizedZoneCandles = Array.isArray(zoneCandles ?? candles)
+    ? (zoneCandles ?? candles).map(normalizeCandlePrices)
+    : []
   const chartSource = includeChartCandles && Array.isArray(chartCandles ?? candles)
     ? (chartCandles ?? candles).map(normalizeCandlePrices)
     : []
@@ -1625,6 +1633,8 @@ export const classifyStructure = (
       zoneLookback,
       zoneMaxAgeCandles,
       historyDays,
+      zoneHistoryDays,
+      zoneCandles: normalizedZoneCandles.length,
       from: normalizedCandles[0]?.time ?? null,
       to: latest?.time ?? null,
       contextHigh: contextHigh ? { price: contextHigh.high, time: contextHigh.time } : null,
@@ -1652,7 +1662,7 @@ export const classifyStructure = (
       contextRecentSwings: contextStructure.swings.slice(-8).map((swing) => pivotSummary(swing)),
     },
     zones: includeZones
-      ? activeSupplyDemandZones(normalizedCandles, { lookback: zoneLookback, maxAgeCandles: zoneMaxAgeCandles })
+      ? activeSupplyDemandZones(normalizedZoneCandles, { lookback: zoneLookback, maxAgeCandles: zoneMaxAgeCandles })
       : null,
   }
 }
@@ -1743,11 +1753,12 @@ export const buildPriceActionMatrix = async ({
       const result = results[index]
       const profile = PRICE_ACTION_STRUCTURE_PROFILES[timeframe.id]
       const analysisCandles = candlesInHistory(result.candles, profile.historyDays)
+      const zoneCandles = candlesInHistory(result.candles, profile.zoneHistoryDays)
       const chartCandleLimit = PRICE_ACTION_CHART_CANDLE_LIMITS[timeframe.id]
       const chartCandles = (result.chartCandles ?? result.candles).slice(-chartCandleLimit)
-      // A zone must remain visible for the full structural context of its own
-      // timeframe. The former universal 400-candle window dropped valid 4H
-      // levels after roughly 67 days while the trend still used 180 days.
+      // An untouched FVG can remain a valid TP level long after the active
+      // structure/entry horizon moved on. Its target history is therefore
+      // independent from the shorter trend horizon for the same timeframe.
       const requestedZoneMaxAgeCandles = Number(merged.zoneMaxAgeCandles)
       const zoneMaxAgeCandles = Number.isFinite(requestedZoneMaxAgeCandles)
         && requestedZoneMaxAgeCandles > 0
@@ -1764,6 +1775,8 @@ export const buildPriceActionMatrix = async ({
           : profile.minCandles,
         zoneMaxAgeCandles,
         historyDays: profile.historyDays,
+        zoneHistoryDays: profile.zoneHistoryDays,
+        zoneCandles,
         chartCandles,
       })
     }

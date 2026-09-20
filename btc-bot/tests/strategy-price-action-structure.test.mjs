@@ -428,13 +428,37 @@ test('a delayed 4H spine uses its current LH to LL wave for pullback levels', ()
 
 test('structure horizons and pivot widths scale with timeframe', () => {
   assert.deepEqual(PRICE_ACTION_STRUCTURE_PROFILES, {
-    '1h': { historyDays: 30, pivotLookback: 18, minCandles: 300, zoneMaxAgeCandles: 720 },
-    '4h': { historyDays: 180, pivotLookback: 96, minCandles: 250, zoneMaxAgeCandles: 1080 },
-    '1d': { historyDays: 400, pivotLookback: 30, minCandles: 160, zoneMaxAgeCandles: 400 },
+    '1h': { historyDays: 30, zoneHistoryDays: 120, pivotLookback: 18, minCandles: 300, zoneMaxAgeCandles: 2880 },
+    '4h': { historyDays: 180, zoneHistoryDays: 365, pivotLookback: 96, minCandles: 250, zoneMaxAgeCandles: 2190 },
+    '1d': { historyDays: 400, zoneHistoryDays: 730, pivotLookback: 30, minCandles: 160, zoneMaxAgeCandles: 730 },
   })
   assert.ok(PRICE_ACTION_STRUCTURE_PROFILES['1d'].historyDays > 365)
   assert.ok(PRICE_ACTION_STRUCTURE_PROFILES['4h'].historyDays >= 180)
   assert.ok(PRICE_ACTION_STRUCTURE_PROFILES['1h'].historyDays <= 30)
+  assert.ok(PRICE_ACTION_STRUCTURE_PROFILES['1h'].zoneHistoryDays > PRICE_ACTION_STRUCTURE_PROFILES['1h'].historyDays)
+})
+
+test('older untouched FVGs remain available as exit targets without widening the structure horizon', () => {
+  const allCandles = [
+    // A bullish displacement creates a demand FVG at 101-105.
+    candle(START, 100, 101, 98, 99),
+    candle(START + HOUR, 99, 111, 99, 110),
+    candle(START + 2 * HOUR, 109, 113, 105, 112),
+  ]
+  for (let index = 3; index < 900; index += 1) {
+    allCandles.push(candle(START + index * HOUR, 120, 121, 119, 120))
+  }
+  const analysisCandles = allCandles.slice(-300)
+  const result = classifyStructure(analysisCandles, {
+    lookback: 18,
+    minCandles: 100,
+    zoneCandles: allCandles,
+    zoneMaxAgeCandles: 1200,
+  })
+
+  assert.equal(result.candles, 300, 'the active trend still uses its short horizon')
+  assert.equal(result.structure.zoneCandles, 900)
+  assert.ok(result.zones.unfilledDemand.some((zone) => zone.low === 101 && zone.high === 105))
 })
 
 test('supply and demand zones stay valid unless their own timeframe closes through them', () => {
@@ -1098,10 +1122,12 @@ test('price-action matrix covers BTCUSD and major FX pairs on 1H, 4H and 1D', as
   assert.equal(matrix.assets[0].trends['1h'].structure.lookback, 18)
   assert.equal(matrix.assets[0].trends['1h'].structure.activeLookback, 5)
   assert.equal(matrix.assets[0].trends['1h'].structure.historyDays, 30)
+  assert.equal(matrix.assets[0].trends['1h'].structure.zoneHistoryDays, 120)
   assert.equal(matrix.assets[0].trends['4h'].structure.lookback, 96)
   assert.equal(matrix.assets[0].trends['4h'].structure.activeLookback, 24)
   assert.equal(matrix.assets[0].trends['4h'].structure.historyDays, 180)
-  assert.equal(matrix.assets[0].trends['4h'].structure.zoneMaxAgeCandles, 1080)
+  assert.equal(matrix.assets[0].trends['4h'].structure.zoneHistoryDays, 365)
+  assert.equal(matrix.assets[0].trends['4h'].structure.zoneMaxAgeCandles, 2190)
   assert.ok(matrix.assets[0].trends['4h'].zones)
   assert.ok(matrix.assets[0].trends['4h'].tradeProfile)
   assert.ok(Array.isArray(matrix.assets[0].trends['4h'].structure.chartPivots))
