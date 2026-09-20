@@ -60,6 +60,7 @@ jobs:
 
           python3 btcdca-auth/patch_login.py
           python3 btcdca-auth/patch_signup.py
+          python3 btcdca-auth/patch_calculator.py
           python3 btcdca-auth/patch_auth_redirects.py
           python3 btcdca-auth/patch_app_index.py
           python3 btcdca-auth/patch_custom_css.py
@@ -73,6 +74,9 @@ jobs:
           cp btcdca-auth/btcdca-google-token-login.php deploy-root/www/btcdca-google-token-login.php
           cp btcdca-auth/google-index.php deploy-root/www/app/auth/google/index.php
           cp btcdca-auth/getTicker.php deploy-root/www/php/getTicker.php
+
+      - name: Test calculator Google registration patch
+        run: python3 btcdca-auth/test_patch_calculator.py
 
       - name: Lint generated PHP
         run: |
