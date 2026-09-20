@@ -361,6 +361,21 @@ export const createPaperExecutor = ({
       return [trade]
     },
 
+    // A target discovered from a longer FVG history may be added to an
+    // already-open PA-1 paper position. The bot performs the signal match;
+    // this boundary still protects the store from a duplicate or closer TP2.
+    setPriceActionTp2: async (id, tp2) => {
+      const trade = store.trades.find((candidate) => candidate.id === id)
+      if (!trade) throw new Error(`unknown paper trade ${id}`)
+      if (trade.status !== 'running' || trade.pricingModel !== 'linear-usd') return null
+      if (Number.isFinite(trade.tp2)) return null
+      const validTp2 = validLinearTp2({ side: trade.side, tp1: trade.tp1, tp2 })
+      if (!Number.isFinite(validTp2)) return null
+      trade.tp2 = validTp2
+      trade.takeProfit = validTp2
+      return trade
+    },
+
     closePosition: async (id, price) => {
       const trade = store.trades.find((candidate) => candidate.id === id)
       if (!trade) throw new Error(`unknown paper trade ${id}`)

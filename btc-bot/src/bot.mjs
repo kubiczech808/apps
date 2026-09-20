@@ -70,6 +70,44 @@ const validPriceActionTp2 = ({ side, tp1, tp2 }) => {
   return null
 }
 
+// Do not rewrite an open trade merely because the current chart has a new
+// target. A missing TP2 can be backfilled only when the live profile still
+// describes the same direction and first target as the original instruction.
+export const reconcileMissingPriceActionTargets = async ({
+  executor,
+  positions = [],
+  matrix,
+  dryRun = false,
+} = {}) => {
+  if (typeof executor?.setPriceActionTp2 !== 'function') return []
+  const outcomes = []
+  for (const position of positions.filter((candidate) =>
+    candidate.strategyId === PRICE_ACTION_STRUCTURE_ID &&
+    candidate.pricingModel === 'linear-usd' &&
+    Number.isFinite(candidate.tp1) &&
+    !Number.isFinite(candidate.tp2)
+  )) {
+    const asset = matrix?.assets?.find((candidate) => candidate.symbol === position.assetSymbol)
+    const item = asset?.trends?.[position.timeframeId]
+    const profile = item?.tradeProfile
+    const tp2 = validPriceActionTp2(profile ?? {})
+    const sameInstruction = profile?.side === position.side &&
+      roundPrice(profile?.tp1) === roundPrice(position.tp1)
+    if (!sameInstruction || !Number.isFinite(tp2)) continue
+    if (dryRun) {
+      outcomes.push({ position, profile, tp2, action: 'would_backfill' })
+      continue
+    }
+    try {
+      const updated = await executor.setPriceActionTp2(position.id, tp2)
+      if (updated) outcomes.push({ position: updated, profile, tp2, action: 'backfilled' })
+    } catch (error) {
+      outcomes.push({ position, profile, tp2, action: 'backfill_failed', error: error.message })
+    }
+  }
+  return outcomes
+}
+
 const priceActionOrderPlan = ({ assetSymbol, timeframeId, item, profile, equitySats, btcPrice, settings }) => {
   const plan = planLinearPosition({
     side: profile.side,
@@ -746,6 +784,35 @@ export const runPass = async ({
         refreshed: state.priceActionMatrix !== previousPriceActionMatrix,
         refreshMinutes: state.settings.priceActionStructure?.refreshMinutes ?? 15,
         status: 'ok',
+      }
+
+      const targetBackfills = await reconcileMissingPriceActionTargets({
+        executor,
+        positions: running,
+        matrix: state.priceActionMatrix,
+        dryRun: config.dryRun,
+      })
+      for (const action of targetBackfills) {
+        recordPriceActionEvent(state, {
+          at: isoNow(now),
+          type: action.action === 'backfilled'
+            ? 'open_position_tp2_backfilled'
+            : 'open_position_tp2_backfill_failed',
+          positionId: action.position.id,
+          asset: action.position.assetSymbol,
+          timeframeId: action.position.timeframeId,
+          side: action.position.side,
+          tp1: action.position.tp1,
+          tp2: action.tp2,
+          reason: action.error ?? 'nalezená nevyplněná FVG zóna za TP1',
+          fingerprint: [action.position.id, action.action, action.position.tp1, action.tp2].join('|'),
+        })
+      }
+      if (targetBackfills.some((action) => action.action === 'backfilled')) {
+        refreshed = await executor.listTrades()
+        trades = refreshed
+        running = refreshed.running
+        closed = capClosed(refreshed.closed)
       }
 
       let pendingOrderActions = []

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { applyCommands, executeReadyPriceActionProfiles, placePendingPriceActionOrders, PRICE_ACTION_POSITION_PROTOCOL, readConfig, reconcileBrackets, reconcilePendingPriceActionOrders, reconcilePriceActionInvalidations, roundStop, roundTarget, runPass, strategyIdForPosition } from '../src/bot.mjs'
+import { applyCommands, executeReadyPriceActionProfiles, placePendingPriceActionOrders, PRICE_ACTION_POSITION_PROTOCOL, readConfig, reconcileBrackets, reconcileMissingPriceActionTargets, reconcilePendingPriceActionOrders, reconcilePriceActionInvalidations, roundStop, roundTarget, runPass, strategyIdForPosition } from '../src/bot.mjs'
 import { LEGACY_PRICE_ACTION_ID, PRICE_ACTION_STRUCTURE_ID } from '../src/strategy-registry.mjs'
 import { appendCandle, START, zigzag } from './helpers.mjs'
 
@@ -265,6 +265,31 @@ test('a duplicate or closer PA TP2 is discarded before an order reaches the exec
   assert.equal(placed[0].action, 'placed')
   assert.equal(calls[0].takeProfit, 0.7080, 'TP1 remains the first protective exit')
   assert.equal(calls[0].tp2, null, 'TP2 must sit strictly beyond TP1')
+})
+
+test('a missing PA TP2 is backfilled only when the current profile matches the open instruction', async () => {
+  const calls = []
+  const executor = {
+    setPriceActionTp2: async (id, tp2) => {
+      calls.push([id, tp2])
+      return { id, assetSymbol: 'AUDUSD', timeframeId: '1h', side: 'short', tp1: 0.7080, tp2 }
+    },
+  }
+  const position = {
+    id: 'aud-running', strategyId: PRICE_ACTION_STRUCTURE_ID, pricingModel: 'linear-usd',
+    assetSymbol: 'AUDUSD', timeframeId: '1h', side: 'short', tp1: 0.7080, tp2: null,
+  }
+  const matchingProfile = { side: 'short', tp1: 0.7080, tp2: 0.7012 }
+  const matrix = { assets: [{ symbol: 'AUDUSD', trends: { '1h': { tradeProfile: matchingProfile } } }] }
+
+  const backfilled = await reconcileMissingPriceActionTargets({ executor, positions: [position], matrix })
+  assert.deepEqual(calls, [['aud-running', 0.7012]])
+  assert.equal(backfilled[0].action, 'backfilled')
+
+  calls.length = 0
+  const changed = { assets: [{ symbol: 'AUDUSD', trends: { '1h': { tradeProfile: { ...matchingProfile, tp1: 0.7079 } } } }] }
+  assert.deepEqual(await reconcileMissingPriceActionTargets({ executor, positions: [position], matrix: changed }), [])
+  assert.deepEqual(calls, [], 'a changed TP1 is a different setup and must not rewrite the position')
 })
 
 test('price-action invalidation closes a position and retires pre-protocol paper trades', async () => {

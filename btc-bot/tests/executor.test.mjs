@@ -89,6 +89,23 @@ test('paper executor rejects a duplicate TP2 and leaves the second half to struc
   assert.equal(trade.tp2, null)
 })
 
+test('paper executor may add a valid distant TP2 to an open PA position', async () => {
+  const store = { balanceSats: 1_000_000, trades: [], nextId: 1 }
+  const executor = createPaperExecutor({ store, feeRate: 0.0006, now: () => START })
+  const trade = await executor.openPosition({
+    pricingModel: 'linear-usd', strategyId: 'price-action-structure-v1', assetSymbol: 'AUDUSD', timeframeId: '1h',
+    signalKey: 'aud-backfill-tp2', signalCandleTime: START, side: 'short', entry: 0.7124, stop: 0.7145,
+    takeProfit: 0.7080, tp1: 0.7080, tp2: null, quantityUsd: 100, marginSats: 25_000,
+    leverage: 4, liquidation: 0.8905, quoteSatsPerUsd: 1250,
+  })
+
+  const updated = await executor.setPriceActionTp2(trade.id, 0.7012)
+  assert.equal(updated.tp2, 0.7012)
+  assert.equal(updated.takeProfit, 0.7012)
+  assert.equal(await executor.setPriceActionTp2(trade.id, 0.7090), null, 'a nearer target must be refused')
+  assert.equal(trade.tp2, 0.7012)
+})
+
 test('a live PA position exposes its first take-profit as a half-size paper order', async () => {
   const store = { balanceSats: 1_000_000, trades: [], nextId: 1 }
   const executor = createPaperExecutor({ store, feeRate: 0.0006, now: () => START })
