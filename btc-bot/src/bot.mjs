@@ -23,6 +23,7 @@ import { planLinearPosition, planPosition, SATS_PER_BTC } from './risk.mjs'
 import { ceilPrice, floorPrice, roundPrice } from './price.mjs'
 import { LEGACY_PRICE_ACTION_ID, strategyConfig } from './strategy-registry.mjs'
 import {
+  MIN_PRICE_ACTION_HOURLY_CANDLES,
   PRICE_ACTION_MATRIX_SCHEMA,
   PRICE_ACTION_STRUCTURE_ID,
   buildPriceActionMatrix,
@@ -339,6 +340,9 @@ export const readConfig = (env = process.env) => ({
   // 3600-hour default exposed only 150 daily candles and could not see the
   // preceding macro swing or a yearly high.
   candleLimit: Number(env.BOT_CANDLE_LIMIT || 10000),
+  // Do not publish a partial hourly series as if it could support the 1D PA-1
+  // window. Tests can set this to zero when deliberately using tiny fixtures.
+  minCandleHistory: Number(env.BOT_MIN_CANDLE_HISTORY || MIN_PRICE_ACTION_HOURLY_CANDLES),
   // Which LN Markets network to read the chart from when the bot itself is not
   // connected to one (paper mode). Mainnet, because that is the market being
   // simulated.
@@ -352,13 +356,14 @@ const isoNow = (ms) => new Date(ms).toISOString()
  * Fetch the two timeframes the strategy reads, from one hourly series so the
  * 4h buckets cannot disagree with the 1h ones they are built from.
  */
-export const loadMarket = async ({ settings, candleLimit, fetchImpl, now, client }) => {
+export const loadMarket = async ({ settings, candleLimit, minCandleHistory = 1, fetchImpl, now, client }) => {
   // LN Markets' own candles are only offered when there is a client to fetch
   // them with; in paper mode there is none, and listing the source anyway would
   // spend a guaranteed failure on every pass.
   const { source, candles, failures } = await fetchCandlesWithFallback({
     order: DEFAULT_SOURCE_ORDER,
     limit: candleLimit,
+    minCandles: minCandleHistory,
     fetchImpl,
     client,
   })
@@ -625,6 +630,7 @@ export const runPass = async ({
     const market = await loadMarket({
       settings,
       candleLimit: config.candleLimit,
+      minCandleHistory: config.minCandleHistory,
       fetchImpl,
       now,
       client: createLnMarketsClient({

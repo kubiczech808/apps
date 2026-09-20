@@ -34,6 +34,12 @@ export const PRICE_ACTION_STRUCTURE_PROFILES = {
   '1d': { historyDays: 400, zoneHistoryDays: 730, pivotLookback: 30, minCandles: 160, zoneMaxAgeCandles: 730 },
 }
 
+// The live BTC series is hourly. Reserve two full days above the largest
+// structure window so discarding a forming candle or an incomplete UTC bucket
+// cannot silently reduce the 1D analysis below its 400 completed candles.
+export const MIN_PRICE_ACTION_HOURLY_CANDLES =
+  (Math.max(...Object.values(PRICE_ACTION_STRUCTURE_PROFILES).map((profile) => profile.historyDays)) + 2) * 24
+
 export const PRICE_ACTION_ASSETS = [
   { symbol: 'BTCUSD', name: 'Bitcoin / US Dollar', group: 'crypto', binanceSymbol: 'BTCUSDT', yahooSymbol: 'BTC-USD' },
   { symbol: 'EURUSD', name: 'Euro / US Dollar', group: 'fx', stooqSymbol: 'eurusd', yahooSymbol: 'EURUSD=X' },

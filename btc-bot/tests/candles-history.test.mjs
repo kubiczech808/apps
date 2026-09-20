@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { fetchBinanceCandles, fetchCandles } from '../src/candles.mjs'
+import { fetchBinanceCandles, fetchCandles, fetchCandlesWithFallback } from '../src/candles.mjs'
 
 const row = (time, close = 100) => [
   time,
@@ -51,4 +51,32 @@ test('fetchCandles uses Binance pagination above one exchange page', async () =>
 
   assert.equal(calls, 2)
   assert.equal(candles.length, 1001)
+})
+
+test('a partial primary source falls through to a complete fallback', async () => {
+  const client = {
+    getCandles: async () => ({
+      data: [
+        { time: 1_000_000, open: 1, high: 2, low: 0.5, close: 1.5, volume: 1 },
+      ],
+      nextCursor: null,
+    }),
+  }
+  const fetchImpl = async () => ({
+    ok: true,
+    status: 200,
+    json: async () => [row(2_000_000), row(5_600_000)],
+  })
+
+  const result = await fetchCandlesWithFallback({
+    order: ['lnmarkets', 'binance'],
+    limit: 2,
+    minCandles: 2,
+    client,
+    fetchImpl,
+  })
+
+  assert.equal(result.source, 'binance')
+  assert.equal(result.candles.length, 2)
+  assert.match(result.failures[0], /lnmarkets returned 1 candles; need at least 2/)
 })

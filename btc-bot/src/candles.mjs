@@ -281,12 +281,16 @@ export const fetchCandles = async ({
 
 export const fetchCandlesWithFallback = async ({
   order = DEFAULT_SOURCE_ORDER,
+  minCandles = 1,
   ...options
 } = {}) => {
   const failures = []
   for (const source of order) {
     try {
       const candles = await fetchCandles({ source, ...options })
+      if (candles.length < minCandles) {
+        throw new Error(`${source} returned ${candles.length} candles; need at least ${minCandles}`)
+      }
       return { source, candles, failures }
     } catch (error) {
       failures.push(`${source}: ${error.message}`)

@@ -107,7 +107,7 @@ const fakeExecutor = ({ equitySats = 200_000, running = [], closed = [], orders 
   }
 }
 
-const baseEnv = { BOT_RUNNER: 'test', BOT_CANDLE_LIMIT: '900' }
+const baseEnv = { BOT_RUNNER: 'test', BOT_CANDLE_LIMIT: '900', BOT_MIN_CANDLE_HISTORY: '0' }
 
 // Same reason as in strategy.test.mjs: the synthetic market has no swept
 // liquidity and no imbalance, and these tests are about the pass, not the
@@ -328,6 +328,7 @@ test('a queued backtest starts research without touching an exchange order', asy
 
 test('default BTC history covers the 400-day daily structure window', () => {
   assert.equal(readConfig({}).candleLimit, 10000)
+  assert.equal(readConfig({}).minCandleHistory, 9648)
 })
 
 test('a pass opens exactly one position, with a stop loss and a take profit', async () => {

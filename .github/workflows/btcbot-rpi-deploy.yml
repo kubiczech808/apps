@@ -81,14 +81,20 @@ jobs:
           lines = path.read_text(encoding="utf-8").splitlines()
           updated = []
           found = False
+          found_minimum = False
           for line in lines:
               if line.startswith("BOT_CANDLE_LIMIT="):
                   updated.append("BOT_CANDLE_LIMIT=10000")
                   found = True
+              elif line.startswith("BOT_MIN_CANDLE_HISTORY="):
+                  updated.append("BOT_MIN_CANDLE_HISTORY=9648")
+                  found_minimum = True
               else:
                   updated.append(line)
           if not found:
               updated.append("BOT_CANDLE_LIMIT=10000")
+          if not found_minimum:
+              updated.append("BOT_MIN_CANDLE_HISTORY=9648")
           path.write_text("\n".join(updated) + "\n", encoding="utf-8")
           account = pwd.getpwnam("openclaw2")
           os.chown(path, account.pw_uid, account.pw_gid)
