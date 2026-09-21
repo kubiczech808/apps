@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { classifyExternalPivotPath, classifyExternalTrend, fetchTwelveDataFxHourly, fetchTwelveDataFxPivots } from '../src/external-trends.mjs'
+import { classifyExternalPivotPath, classifyExternalTrend, confirmedExternalPivotPath, fetchTwelveDataFxHourly, fetchTwelveDataFxPivots } from '../src/external-trends.mjs'
 import { HOUR, START } from './helpers.mjs'
 
 const values = (start, count, step = 0.001) => Array.from({ length: count }, (_, index) => {
@@ -86,4 +86,19 @@ test('external pivot path distinguishes a down sequence from an internal rebound
   ])
   assert.equal(down.trend, 'down')
   assert.deepEqual(down.pivots.map((pivot) => pivot.label), ['H', 'L', 'LH', 'LL'])
+})
+
+test('Twelve Data OHLC produces a confirmed independent pivot path without the premium indicator', () => {
+  const candles = Array.from({ length: 60 }, (_, index) => ({
+    time: START + index * HOUR,
+    open: 1,
+    close: 1,
+    high: index === 10 ? 1.2 : index === 30 ? 1.3 : 1.05,
+    low: index === 20 ? 0.8 : index === 40 ? 0.85 : 0.95,
+    volume: 0,
+  }))
+  const path = confirmedExternalPivotPath({ candles, timeframeId: '1h', now: START + 70 * HOUR })
+
+  assert.equal(path.trend, 'up')
+  assert.deepEqual(path.pivots.map((pivot) => pivot.label), ['H', 'L', 'HH', 'HL'])
 })

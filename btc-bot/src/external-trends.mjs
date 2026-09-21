@@ -10,7 +10,7 @@ import { normalizeCandlePrices, roundPrice } from './price.mjs'
 
 export const EXTERNAL_TREND_METHOD = 'EMA 20/50 + zavírací cena'
 export const EXTERNAL_TREND_HOURLY_LIMIT = 5000
-export const EXTERNAL_PIVOT_METHOD = 'Pivot Points High/Low'
+export const EXTERNAL_PIVOT_METHOD = 'Potvrzené 10-svíčkové pivoty z externího OHLC'
 export const EXTERNAL_PIVOT_PERIOD = 10
 export const EXTERNAL_PIVOT_OUTPUTSIZE = 2000
 
@@ -239,7 +239,7 @@ const forTimeframe = (hourly, timeframeId, now) => {
   return aggregate(closedHourly, timeframeId === '4h' ? 4 : 24)
 }
 
-export const binancePivotPath = ({ candles = [], timeframeId = '1h', now = Date.now() } = {}) => {
+export const confirmedExternalPivotPath = ({ candles = [], timeframeId = '1h', now = Date.now() } = {}) => {
   const spec = EXTERNAL_PIVOT_INTERVALS[timeframeId]
   if (!spec) return { trend: 'flat', pivots: [] }
   const completed = forTimeframe(candles, timeframeId, now)
@@ -259,6 +259,11 @@ export const binancePivotPath = ({ candles = [], timeframeId = '1h', now = Date.
   return classifyExternalPivotPath(candidates)
 }
 
+// Kept as an explicit BTC alias for callers and saved state from the first
+// external-reference release. FX now uses this same independent confirmation
+// over Twelve Data OHLC, avoiding their Pro-only pivot indicator endpoint.
+export const binancePivotPath = confirmedExternalPivotPath
+
 const pivotBucket = (timeframeId, now) => Math.floor(now / EXTERNAL_PIVOT_INTERVALS[timeframeId].ms)
 
 const pivotReference = ({ trend, pivots, source, timeframeId, asOf = null }) => ({
@@ -271,7 +276,7 @@ const pivotReference = ({ trend, pivots, source, timeframeId, asOf = null }) => 
   asOf: asOf ?? pivots.at(-1)?.time ?? null,
 })
 
-const buildExternalPivotReferences = async ({ assets, apiKey, btcHourly, previous = null, fetchImpl, now, logger }) => {
+const buildExternalPivotReferences = async ({ assets, hourly = {}, previous = null, now }) => {
   const result = { assets: {}, failures: [], buckets: {} }
   for (const asset of assets) result.assets[asset.symbol] = {}
   for (const timeframeId of Object.keys(EXTERNAL_PIVOT_INTERVALS)) {
@@ -282,25 +287,17 @@ const buildExternalPivotReferences = async ({ assets, apiKey, btcHourly, previou
       for (const asset of assets) result.assets[asset.symbol][timeframeId] = cached.assets?.[asset.symbol]?.[timeframeId] ?? null
       continue
     }
-    let fx = {}
-    if (apiKey) {
-      try {
-        fx = await fetchTwelveDataFxPivots({ assets, apiKey, timeframeId, fetchImpl })
-      } catch (error) {
-        result.failures.push(`Twelve Data pivots ${timeframeId}: ${error.message}`)
-        logger?.warn?.(`External FX pivots failed for ${timeframeId}: ${error.message}`)
-      }
-    } else {
-      result.failures.push(`Twelve Data pivots ${timeframeId}: TWELVE_DATA_API_KEY není nastaven`)
-    }
     for (const asset of assets) {
       if (asset.group === 'fx') {
-        const path = fx[asset.symbol]
+        const candles = hourly[asset.symbol]
+        const path = candles?.length
+          ? confirmedExternalPivotPath({ candles, timeframeId, now })
+          : null
         result.assets[asset.symbol][timeframeId] = path
           ? pivotReference({ ...path, source: 'Twelve Data', timeframeId })
           : null
-      } else if (asset.symbol === 'BTCUSD' && btcHourly?.length) {
-        const path = binancePivotPath({ candles: btcHourly, timeframeId, now })
+      } else if (asset.symbol === 'BTCUSD' && hourly.BTCUSD?.length) {
+        const path = confirmedExternalPivotPath({ candles: hourly.BTCUSD, timeframeId, now })
         result.assets[asset.symbol][timeframeId] = pivotReference({ ...path, source: 'Binance BTCUSDT', timeframeId })
       }
     }
@@ -346,12 +343,9 @@ export const buildExternalTrendReference = async ({
 
   const pivots = await buildExternalPivotReferences({
     assets,
-    apiKey,
-    btcHourly: hourly.BTCUSD,
+    hourly,
     previous,
-    fetchImpl,
     now,
-    logger,
   })
 
   const rows = {}
