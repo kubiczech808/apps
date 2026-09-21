@@ -37,7 +37,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p runtime-source/app
-          lftp -e "set cmd:fail-exit yes; set net:max-retries 1; set net:timeout 20; open -u \"$BTCDCA_FTP_LOGIN\",\"$BTCDCA_FTP_PASSWORD\" ftp.btc-dca.com; mirror --verbose --exclude-glob assets --exclude-glob vendor --exclude-glob node_modules www/app runtime-source/app; get -o runtime-source/dca-calculator.php www/dca-calculator.php; get -o runtime-source/getTicker.php www/php/getTicker.php; bye"
+          lftp -e "set cmd:fail-exit yes; set net:max-retries 1; set net:timeout 20; set ftp:ssl-force false; set ftp:ssl-protect-data false; open -u \"$BTCDCA_FTP_LOGIN\",\"$BTCDCA_FTP_PASSWORD\" ftp.btc-dca.com; mirror --verbose --exclude-glob assets --exclude-glob vendor --exclude-glob node_modules www/app runtime-source/app; get -o runtime-source/dca-calculator.php www/dca-calculator.php; get -o runtime-source/getTicker.php www/php/getTicker.php; bye"
 
       - name: Analyze retention and calculator dependencies
         run: python3 scripts/audit_retention_dependencies.py
