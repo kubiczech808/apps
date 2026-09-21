@@ -25,12 +25,26 @@ def source_files() -> list[Path]:
     )
 
 
-def matches(path: Path, pattern: re.Pattern[str]) -> list[int]:
+def matches(path: Path, pattern: re.Pattern[str]) -> list[tuple[int, str]]:
     try:
         contents = path.read_text(encoding="utf-8", errors="replace")
     except OSError as exc:
         raise RuntimeError(f"Could not read {path}: {exc}") from exc
-    return [number for number, line in enumerate(contents.splitlines(), 1) if pattern.search(line)]
+    return [
+        (number, line.strip())
+        for number, line in enumerate(contents.splitlines(), 1)
+        if pattern.search(line)
+    ]
+
+
+def safe_excerpt(line: str) -> str:
+    compact = re.sub(r"\s+", " ", line)
+    compact = re.sub(
+        r"(?i)((?:password|secret|api[_-]?key)\s*(?:=|:|=>)\s*['\"])[^'\"]+",
+        r"\1[REDACTED]",
+        compact,
+    )
+    return compact[:240] + (" ..." if len(compact) > 240 else "")
 
 
 def main() -> None:
@@ -49,15 +63,16 @@ def main() -> None:
     ]
     for label, pattern in TERMS.items():
         findings = [(path.relative_to(ROOT), matches(path, pattern)) for path in files]
-        findings = [(path, line_numbers) for path, line_numbers in findings if line_numbers]
+        findings = [(path, references) for path, references in findings if references]
         lines.extend([f"## {label}", ""])
         if not findings:
             lines.append("No runtime reference was found in the downloaded source.")
         else:
-            for path, line_numbers in findings:
-                displayed = ", ".join(str(number) for number in line_numbers[:20])
-                suffix = " ..." if len(line_numbers) > 20 else ""
-                lines.append(f"- `{path}`: lines {displayed}{suffix}")
+            for path, references in findings:
+                for number, source_line in references[:40]:
+                    lines.append(f"- `{path}:{number}`: `{safe_excerpt(source_line)}`")
+                if len(references) > 40:
+                    lines.append(f"- `{path}`: {len(references) - 40} further references omitted")
         lines.append("")
 
     REPORT.write_text("\n".join(lines), encoding="utf-8")
