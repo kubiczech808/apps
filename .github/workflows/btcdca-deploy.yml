@@ -78,6 +78,9 @@ jobs:
       - name: Test calculator Google registration patch
         run: python3 btcdca-auth/test_patch_calculator.py
 
+      - name: Test absolute post-auth redirects
+        run: python3 btcdca-auth/test_patch_auth_redirects.py
+
       - name: Lint generated PHP
         run: |
           php -v

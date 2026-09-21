@@ -11,6 +11,10 @@ block = f"""{START}
 <IfModule mod_rewrite.c>
 RewriteEngine On
 
+# Repair historical relative post-auth redirects before canonical URL handling.
+RewriteCond %{{REQUEST_METHOD}} ^(?:GET|HEAD)$
+RewriteRule ^(?:login-user|signup-user)/(app/.*)$ /$1 [R=302,L,NE]
+
 # Canonical public BTC-DCA PHP pages without the .php suffix.
 RewriteCond %{{REQUEST_METHOD}} ^(?:GET|HEAD)$
 RewriteCond %{{THE_REQUEST}} \\s/+((?:login-user|signup-user|dca-calculator|btcdca-google-login|btcdca-google-callback|btcdca-google-token-login))\\.php[?\\s] [NC]

@@ -19,6 +19,7 @@ TARGETS = (
 # A relative redirect is resolved against /login-user/ or /signup-user/, which
 # produces /login-user/app/overview.php instead of the application route.
 RELATIVE_APP_ROUTE = re.compile(r"(?<![/A-Za-z0-9_.-])app/overview(?:\.php)?")
+NESTED_APP_ROUTE = re.compile(r"/(?:login-user|signup-user)/(app/overview(?:\.php)?)", re.IGNORECASE)
 
 
 for source in TARGETS:
@@ -26,6 +27,7 @@ for source in TARGETS:
         continue
     html = source.read_text(encoding="utf-8", errors="replace")
     patched = RELATIVE_APP_ROUTE.sub("/app/overview.php", html)
+    patched = NESTED_APP_ROUTE.sub(r"/\1", patched)
     if patched != html:
         source.write_text(patched, encoding="utf-8")
         print(f"Normalized post-auth application redirect in {source}")
