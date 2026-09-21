@@ -212,6 +212,20 @@ jobs:
           const btcDaily = state.priceActionMatrix?.assets
             ?.find((asset) => asset.symbol === 'BTCUSD')
             ?.trends?.['1d']
+          const externalPivotSummary = (symbol, timeframeId) => {
+            const reference = state.priceActionMatrix?.assets
+              ?.find((asset) => asset.symbol === symbol)
+              ?.trends?.[timeframeId]
+              ?.externalPivots
+            return reference
+              ? {
+                  count: reference.pivots?.length ?? 0,
+                  source: reference.source,
+                  method: reference.method,
+                  timeframe: reference.timeframeId,
+                }
+              : null
+          }
           const summary = {
             updatedAt: state.updatedAt,
             status: state.status,
@@ -226,6 +240,9 @@ jobs:
             btcDailyCandles: btcDaily?.candles,
             btcDailyHistoryDays: btcDaily?.structure?.historyDays,
             btcDailyPivotLookback: btcDaily?.structure?.lookback,
+            eurUsdFourHourExternalPivots: externalPivotSummary('EURUSD', '4h'),
+            btcUsdFourHourExternalPivots: externalPivotSummary('BTCUSD', '4h'),
+            externalTrendFailures: state.priceActionMatrix?.externalTrends?.failures ?? [],
           }
           console.log(summary)
           if (summary.strategyId !== 'price-action-structure-v1') throw new Error('PA-1 was not activated')
