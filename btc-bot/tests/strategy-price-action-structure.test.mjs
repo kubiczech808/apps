@@ -6,6 +6,7 @@ import {
   alignOneHourStructureToFourHour,
   applyExternalTrendConfirmation,
   buildPriceActionMatrix,
+  canReuseExternalTrendReference,
   classifyStructure,
   evaluateTradeProfile,
   fetchFxCandles,
@@ -96,6 +97,17 @@ test('external trend confirms the PA side and fails closed for opposite, flat, o
     assert.equal(blocked.status, 'watch')
     assert.equal(blocked.gates.find((gate) => gate.id === 'external-trend').passed, false)
   }
+})
+
+test('an available Twelve Data key immediately replaces a cached missing-key result', () => {
+  const previous = {
+    hourBucket: 100,
+    failures: ['Twelve Data: TWELVE_DATA_API_KEY není nastaven'],
+  }
+
+  assert.equal(canReuseExternalTrendReference({ previous, hourBucket: 100, apiKey: 'new-key' }), false)
+  assert.equal(canReuseExternalTrendReference({ previous, hourBucket: 100, apiKey: '' }), true)
+  assert.equal(canReuseExternalTrendReference({ previous, hourBucket: 101, apiKey: 'new-key' }), false)
 })
 
 test('a close below a mature flat range publishes a non-executable down bias and an alternating chart line', () => {
