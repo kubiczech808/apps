@@ -110,6 +110,9 @@ test('an available Twelve Data key immediately replaces a cached missing-key res
   assert.equal(canReuseExternalTrendReference({ previous, hourBucket: 100, apiKey: 'new-key' }), false)
   assert.equal(canReuseExternalTrendReference({ previous, hourBucket: 100, apiKey: '' }), true)
   assert.equal(canReuseExternalTrendReference({ previous, hourBucket: 101, apiKey: 'new-key' }), false)
+
+  const rateLimited = { hourBucket: 100, failures: ['Twelve Data: Twelve Data HTTP 429'] }
+  assert.equal(canReuseExternalTrendReference({ previous: rateLimited, hourBucket: 100, apiKey: 'new-key' }), false)
 })
 
 test('a fresh matrix does not mask an FX key that has just become available', () => {

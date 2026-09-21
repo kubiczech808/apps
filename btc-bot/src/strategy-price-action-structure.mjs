@@ -64,7 +64,10 @@ export const PRICE_ACTION_TIMEFRAMES = [
 export const canReuseExternalTrendReference = ({ previous, hourBucket, apiKey }) => {
   if (previous?.hourBucket !== hourBucket) return false
   if (!apiKey) return true
-  return !previous.failures?.some((failure) => String(failure).includes('TWELVE_DATA_API_KEY není nastaven'))
+  return !previous.failures?.some((failure) => {
+    const message = String(failure)
+    return message.includes('TWELVE_DATA_API_KEY není nastaven') || message.includes('Twelve Data HTTP 429')
+  })
 }
 
 const LOWER_TIMEFRAME = {
