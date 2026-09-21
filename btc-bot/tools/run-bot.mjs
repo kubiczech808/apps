@@ -8,16 +8,19 @@
 
 import { createStateStore } from '../src/store.mjs'
 import { runPass } from '../src/bot.mjs'
+import { readRunnerEnvironment } from '../src/runner-env.mjs'
 import { spawn } from 'node:child_process'
 
+const env = readRunnerEnvironment()
+
 const store = createStateStore({
-  baseUrl: process.env.BOT_API_URL || '',
-  key: process.env.BOT_API_KEY || '',
-  localPath: process.env.BOT_STATE_FILE || '',
+  baseUrl: env.BOT_API_URL || '',
+  key: env.BOT_API_KEY || '',
+  localPath: env.BOT_STATE_FILE || '',
 })
 
 try {
-  const { state, run, saved } = await runPass({ store })
+  const { state, run, saved } = await runPass({ store, env })
   const parts = [
     `runner=${run.runner}`,
     `mode=${run.mode ?? 'n/a'}`,
@@ -39,7 +42,7 @@ try {
     const child = spawn(process.execPath, ['tools/backtest-price-action-structure.mjs', '--publish'], {
       cwd: process.cwd(),
       env: {
-        ...process.env,
+        ...env,
         BOT_BACKTEST_SETTINGS: JSON.stringify(state.settings ?? {}),
       },
       detached: true,
