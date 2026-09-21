@@ -674,21 +674,22 @@ const priceActionDecisionFact = (entry, column) => {
 
 const structureReferenceFacts = (entry) => {
   const item = entry?.item ?? {}
+  const externalGate = profileGate(entry?.profile, 'external-trend')
   const internalTrend = PRICE_ACTION_TREND_LABELS[item.trend] || 'flat'
   const internalStatus = item.trend === 'up' ? 'met' : item.trend === 'down' ? 'unmet' : 'neutral'
   const external = item.externalTrend
   const externalTrend = PRICE_ACTION_TREND_LABELS[external?.trend] || '–'
   const externalStatus = external?.trend === 'up' ? 'met' : external?.trend === 'down' ? 'unmet' : 'neutral'
   const externalTitle = external
-    ? `${external.source} · ${external.method}. ${external.reason || 'Bez detailu.'}`
+    ? [external.source, external.method, external.reason, externalGate?.detail].filter(Boolean).join(' · ')
     : 'Externí referenční trend zatím nebyl načten.'
   return el('div', { className: 'structure-reference-facts' }, [
     decisionFactElement(decisionFact(
-      `náš ${internalTrend}`,
+      internalTrend,
       internalStatus,
       [item.reason, item.event].filter(Boolean).join(' · ') || 'PA-1 swing struktura.'
     )),
-    decisionFactElement(decisionFact(`ext. ${externalTrend}`, externalStatus, externalTitle)),
+    decisionFactElement(decisionFact(externalTrend, externalStatus, externalTitle)),
   ])
 }
 

@@ -49,7 +49,16 @@ export const PRICE_ACTION_POSITION_PROTOCOL = 1
 
 const priceActionSignalKey = ({ assetSymbol, timeframeId, profile }) => {
   const zoneIdentity = profile.zone?.firstTime ?? profile.zone?.lastTime ?? profile.zone?.firstIndex ?? 'zone'
-  return [PRICE_ACTION_STRUCTURE_ID, assetSymbol, timeframeId, profile.side, zoneIdentity, profile.entry].join(':')
+  const externalTrend = profile.externalTrend?.trend ?? 'unavailable'
+  return [PRICE_ACTION_STRUCTURE_ID, assetSymbol, timeframeId, profile.side, zoneIdentity, profile.entry, externalTrend].join(':')
+}
+
+const externalTrendConfirmsProfile = (profile) => {
+  const gate = (profile?.gates ?? []).find((candidate) => candidate.id === 'external-trend')
+  // Profiles created before the external confirmation protocol are retained
+  // only for backwards-compatible test fixtures. Every live matrix profile is
+  // enriched by applyExternalTrendConfirmation before it reaches this module.
+  return !gate || gate.passed === true
 }
 
 // A limit order may wait for the two gates that only become true at its own
@@ -218,6 +227,7 @@ export const executeReadyPriceActionProfiles = async ({
     const candidates = Object.entries(asset.trends ?? {})
       .map(([timeframeId, item]) => ({ timeframeId, item, profile: item?.tradeProfile }))
       .filter(({ profile }) => profile?.status === 'ready')
+      .filter(({ profile }) => externalTrendConfirmsProfile(profile))
       .filter(({ profile }) => [profile.entry, profile.stop, profile.tp1, profile.weightedTarget].every(Number.isFinite))
       .sort((left, right) =>
         (PRICE_ACTION_TIMEFRAME_PRIORITY[left.timeframeId] ?? 99) - (PRICE_ACTION_TIMEFRAME_PRIORITY[right.timeframeId] ?? 99)
@@ -350,7 +360,10 @@ export const reconcilePendingPriceActionOrders = async ({ executor, orders = [],
     const stillValid = isPendingPriceActionOrderProfile(profile) &&
       priceActionSignalKey({ assetSymbol: order.assetSymbol, timeframeId: order.timeframeId, profile }) === order.signalKey
     if (stillValid) continue
-    const reason = profile?.zoneHit
+    const externalGate = (profile?.gates ?? []).find((gate) => gate.id === 'external-trend')
+    const reason = externalGate?.passed === false
+      ? externalGate.detail || 'externí trend už nepotvrzuje připravený vstup'
+      : profile?.zoneHit
       ? 'cena dotkla zóny dříve, než došla na připravený entry'
       : 'setup se změnil nebo byl invalidován strukturou'
     if (dryRun) {

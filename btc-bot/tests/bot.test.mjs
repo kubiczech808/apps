@@ -177,6 +177,29 @@ test('ready PA profiles open one paper trade per asset and never duplicate the s
   assert.equal(calls.length, 1)
 })
 
+test('an opposing external trend blocks an otherwise ready PA entry', async () => {
+  const calls = []
+  const executor = { openPosition: async (plan) => calls.push(plan) }
+  const profile = {
+    status: 'ready', side: 'long', entry: 0.7131, stop: 0.7060,
+    tp1: 0.7202, weightedTarget: 0.7202, rewardRisk: 2, minRewardRisk: 2, riskPct: 1,
+    zone: { firstTime: START },
+    externalTrend: { trend: 'down', source: 'Twelve Data' },
+    gates: [{ id: 'external-trend', passed: false, detail: 'externí down je proti long' }],
+  }
+  const result = await executeReadyPriceActionProfiles({
+    executor,
+    matrix: { assets: [{ symbol: 'AUDUSD', trends: { '1h': { tradeProfile: profile } } }] },
+    trades: [],
+    equitySats: 1_000_000,
+    btcPrice: 80_000,
+    settings: { enabled: true, risk: { market: 'futures', riskPct: 1, feeRate: 0.0006, minMarginSats: 1 }, priceActionStructure: { riskPct: 1 } },
+  })
+
+  assert.deepEqual(result, [])
+  assert.equal(calls.length, 0)
+})
+
 test('a complete PA setup places a bracketed limit order before its entry is hit, then cancels it on invalidation', async () => {
   const calls = []
   const executor = {

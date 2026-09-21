@@ -4,7 +4,7 @@ import { buildExternalTrendReference } from './external-trends.mjs'
 import { buildFvgSupplyDemandZones, candleSignal, marketStructure } from './priceaction.mjs'
 
 export const PRICE_ACTION_STRUCTURE_ID = 'price-action-structure-v1'
-export const PRICE_ACTION_MATRIX_SCHEMA = 38
+export const PRICE_ACTION_MATRIX_SCHEMA = 39
 export const PRICE_ACTION_CHART_CANDLE_LIMITS = {
   '1h': 8760,
   '4h': 2190,
@@ -1212,6 +1212,36 @@ export const evaluateTradeProfile = ({
   return output
 }
 
+// The independent feed is a confirmation, never a replacement for the PA-1
+// structure. A missing or sideways reference fails closed for new entries:
+// preserving capital is preferable to treating an unavailable confirmation as
+// agreement. Existing positions are reviewed only by their own PA structure.
+export const applyExternalTrendConfirmation = ({ profile, externalTrend = null } = {}) => {
+  if (!profile) return profile
+  const expectedTrend = profile.side === 'long' ? 'up' : profile.side === 'short' ? 'down' : null
+  const observedTrend = externalTrend?.trend ?? null
+  const passed = Boolean(expectedTrend && observedTrend === expectedTrend)
+  const detail = !expectedTrend
+    ? 'PA-1 zatím nemá potvrzený směr pro vstup'
+    : !observedTrend
+      ? 'externí reference není dostupná; nový vstup se neautorizuje'
+      : observedTrend === 'flat'
+        ? 'externí reference je flat; nový vstup se neautorizuje'
+        : passed
+          ? `externí ${observedTrend} potvrzuje ${profile.side}`
+          : `externí ${observedTrend} je proti ${profile.side}; nový vstup se neautorizuje`
+  const externalGate = gate('external-trend', 'externí trend potvrzuje směr', passed, detail)
+  const gates = [...(profile.gates ?? []).filter((item) => item.id !== externalGate.id), externalGate]
+  return {
+    ...profile,
+    externalTrend,
+    gates,
+    // A technically ready zone remains visible for audit, but becomes a watch
+    // state until the independent feed agrees with its directional side.
+    status: profile.status === 'ready' && !passed ? 'watch' : profile.status,
+  }
+}
+
 const oppositeTrend = (side) => side === 'long' ? 'down' : side === 'short' ? 'up' : null
 
 const profileSnapshot = (profile) => ({
@@ -1310,13 +1340,17 @@ const attachTradeProfiles = (trends, settings) => {
     if (!item) continue
     const lowerTimeframeId = LOWER_TIMEFRAME[timeframe.id]
     const higherTimeframeId = HIGHER_TIMEFRAME[timeframe.id]
-    item.tradeProfile = evaluateTradeProfile({
+    const profile = evaluateTradeProfile({
       item,
       lowerItem: lowerTimeframeId ? trends[lowerTimeframeId] : null,
       lowerTimeframeId,
       higherItem: higherTimeframeId ? trends[higherTimeframeId] : null,
       higherTimeframeId,
       settings,
+    })
+    item.tradeProfile = applyExternalTrendConfirmation({
+      profile,
+      externalTrend: item.externalTrend,
     })
   }
 }

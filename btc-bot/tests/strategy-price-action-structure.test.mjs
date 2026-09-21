@@ -4,6 +4,7 @@ import test from 'node:test'
 import {
   activeSupplyDemandZones,
   alignOneHourStructureToFourHour,
+  applyExternalTrendConfirmation,
   buildPriceActionMatrix,
   classifyStructure,
   evaluateTradeProfile,
@@ -74,6 +75,27 @@ test('flat structure is formation-only and never publishes a planned entry', () 
   assert.equal(profile.zone, null)
   assert.deepEqual(profile.zoneCandidates, [])
   assert.equal(profile.gates[0].status, 'neutral')
+})
+
+test('external trend confirms the PA side and fails closed for opposite, flat, or unavailable data', () => {
+  const readyLong = {
+    status: 'ready',
+    mode: 'screening',
+    side: 'long',
+    gates: [{ id: 'trend', passed: true }],
+  }
+  const confirmed = applyExternalTrendConfirmation({
+    profile: readyLong,
+    externalTrend: { trend: 'up', source: 'Twelve Data' },
+  })
+  assert.equal(confirmed.status, 'ready')
+  assert.equal(confirmed.gates.find((gate) => gate.id === 'external-trend').passed, true)
+
+  for (const externalTrend of [{ trend: 'down' }, { trend: 'flat' }, null]) {
+    const blocked = applyExternalTrendConfirmation({ profile: readyLong, externalTrend })
+    assert.equal(blocked.status, 'watch')
+    assert.equal(blocked.gates.find((gate) => gate.id === 'external-trend').passed, false)
+  }
 })
 
 test('a close below a mature flat range publishes a non-executable down bias and an alternating chart line', () => {
