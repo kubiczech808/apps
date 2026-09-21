@@ -1,0 +1,51 @@
+name: Audit BTC-DCA Retention Dependencies
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: btcdca-retention-dependency-audit
+  cancel-in-progress: false
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      BTCDCA_FTP_LOGIN: ${{ secrets.BTCDCA_FTP_LOGIN }}
+      BTCDCA_FTP_PASSWORD: ${{ secrets.BTCDCA_FTP_PASSWORD }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate audit prerequisites
+        run: |
+          set -euo pipefail
+          for name in BTCDCA_FTP_LOGIN BTCDCA_FTP_PASSWORD; do
+            test -n "${!name}" || { echo "$name is required."; exit 1; }
+          done
+
+      - name: Install read-only FTP client
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y lftp
+
+      - name: Download application source without modifying hosting
+        run: |
+          set -euo pipefail
+          mkdir -p runtime-source/app
+          lftp -e "set cmd:fail-exit yes; set net:max-retries 1; set net:timeout 20; open -u \"$BTCDCA_FTP_LOGIN\",\"$BTCDCA_FTP_PASSWORD\" ftp.btc-dca.com; mirror --verbose --exclude-glob assets --exclude-glob vendor --exclude-glob node_modules www/app runtime-source/app; get -o runtime-source/dca-calculator.php www/dca-calculator.php; get -o runtime-source/getTicker.php www/php/getTicker.php; bye"
+
+      - name: Analyze retention and calculator dependencies
+        run: python3 scripts/audit_retention_dependencies.py
+
+      - name: Upload dependency report
+        uses: actions/upload-artifact@v4
+        with:
+          name: btcdca-retention-dependency-audit-${{ github.run_id }}
+          path: btcdca-retention-dependency-audit.md
+          retention-days: 90
+          if-no-files-found: error
