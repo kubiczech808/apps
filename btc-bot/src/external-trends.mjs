@@ -12,6 +12,7 @@ export const EXTERNAL_TREND_METHOD = 'EMA 20/50 + zavírací cena'
 export const EXTERNAL_TREND_HOURLY_LIMIT = 5000
 export const EXTERNAL_PIVOT_METHOD = 'Potvrzené 10-svíčkové pivoty z externího OHLC'
 export const EXTERNAL_PIVOT_PERIOD = 10
+export const EXTERNAL_PIVOT_FALLBACK_PERIOD = 5
 export const EXTERNAL_PIVOT_OUTPUTSIZE = 2000
 
 const EXTERNAL_PIVOT_INTERVALS = {
@@ -239,14 +240,11 @@ const forTimeframe = (hourly, timeframeId, now) => {
   return aggregate(closedHourly, timeframeId === '4h' ? 4 : 24)
 }
 
-export const confirmedExternalPivotPath = ({ candles = [], timeframeId = '1h', now = Date.now() } = {}) => {
-  const spec = EXTERNAL_PIVOT_INTERVALS[timeframeId]
-  if (!spec) return { trend: 'flat', pivots: [] }
-  const completed = forTimeframe(candles, timeframeId, now)
+const confirmedPivotCandidates = (candles, period) => {
   const candidates = []
-  for (let index = EXTERNAL_PIVOT_PERIOD; index < completed.length - EXTERNAL_PIVOT_PERIOD; index += 1) {
-    const window = completed.slice(index - EXTERNAL_PIVOT_PERIOD, index + EXTERNAL_PIVOT_PERIOD + 1)
-    const candle = completed[index]
+  for (let index = period; index < candles.length - period; index += 1) {
+    const window = candles.slice(index - period, index + period + 1)
+    const candle = candles[index]
     const maxHigh = Math.max(...window.map((item) => item.high))
     const minLow = Math.min(...window.map((item) => item.low))
     if (candle.high === maxHigh && window.filter((item) => item.high === maxHigh).length === 1) {
@@ -256,7 +254,22 @@ export const confirmedExternalPivotPath = ({ candles = [], timeframeId = '1h', n
       candidates.push({ kind: 'low', price: candle.low, close: candle.close, time: candle.time })
     }
   }
-  return classifyExternalPivotPath(candidates)
+  return candidates
+}
+
+export const confirmedExternalPivotPath = ({ candles = [], timeframeId = '1h', now = Date.now() } = {}) => {
+  const spec = EXTERNAL_PIVOT_INTERVALS[timeframeId]
+  if (!spec) return { trend: 'flat', pivots: [], timePeriod: EXTERNAL_PIVOT_PERIOD }
+  const completed = forTimeframe(candles, timeframeId, now)
+  let timePeriod = EXTERNAL_PIVOT_PERIOD
+  let candidates = confirmedPivotCandidates(completed, timePeriod)
+  // The external line is only an audit aid. A broad 10-candle confirmation is
+  // preferred, but an empty path is not useful to audit a live source at all.
+  if (candidates.length < 2) {
+    timePeriod = EXTERNAL_PIVOT_FALLBACK_PERIOD
+    candidates = confirmedPivotCandidates(completed, timePeriod)
+  }
+  return { ...classifyExternalPivotPath(candidates), timePeriod }
 }
 
 // Kept as an explicit BTC alias for callers and saved state from the first
@@ -270,12 +283,12 @@ export const canReuseExternalPivotBucket = ({ previous, assets = [], timeframeId
   previous?.pivots?.buckets?.[timeframeId] === bucket &&
   assets.every((asset) => previous.pivots.assets?.[asset.symbol]?.[timeframeId] != null)
 
-const pivotReference = ({ trend, pivots, source, timeframeId, asOf = null }) => ({
+const pivotReference = ({ trend, pivots, source, timeframeId, asOf = null, timePeriod = EXTERNAL_PIVOT_PERIOD }) => ({
   trend,
   pivots,
   source,
   method: EXTERNAL_PIVOT_METHOD,
-  timePeriod: EXTERNAL_PIVOT_PERIOD,
+  timePeriod,
   timeframeId,
   asOf: asOf ?? pivots.at(-1)?.time ?? null,
 })

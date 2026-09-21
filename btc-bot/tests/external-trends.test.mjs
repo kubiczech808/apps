@@ -101,6 +101,22 @@ test('Twelve Data OHLC produces a confirmed independent pivot path without the p
 
   assert.equal(path.trend, 'up')
   assert.deepEqual(path.pivots.map((pivot) => pivot.label), ['H', 'L', 'HH', 'HL'])
+  assert.equal(path.timePeriod, 10)
+})
+
+test('external pivot audit falls back to a narrower confirmed window when the broad path is empty', () => {
+  const candles = Array.from({ length: 30 }, (_, index) => ({
+    time: START + index * HOUR,
+    open: 1,
+    close: 1,
+    high: index === 6 ? 1.2 : 1.05,
+    low: index === 13 ? 0.8 : 0.95,
+    volume: 0,
+  }))
+  const path = confirmedExternalPivotPath({ candles, timeframeId: '1h', now: START + 40 * HOUR })
+
+  assert.equal(path.timePeriod, 5)
+  assert.deepEqual(path.pivots.map((pivot) => pivot.kind), ['high', 'low'])
 })
 
 test('a missing external pivot result is not kept as a valid cache entry', () => {
