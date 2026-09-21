@@ -1,0 +1,88 @@
+name: Audit BTC-DCA Retention Cleanup
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: btcdca-retention-cleanup
+  cancel-in-progress: false
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      BTCDCA_DB: ${{ secrets.BTCDCA_DB }}
+      BTCDCA_DB_USER: ${{ secrets.BTCDCA_DB_USER }}
+      BTCDCA_DB_PASSWORD: ${{ secrets.BTCDCA_DB_PASSWORD }}
+      BTCDCA_FTP_LOGIN: ${{ secrets.BTCDCA_FTP_LOGIN }}
+      BTCDCA_FTP_PASSWORD: ${{ secrets.BTCDCA_FTP_PASSWORD }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate audit prerequisites
+        run: |
+          set -euo pipefail
+          for name in BTCDCA_DB BTCDCA_DB_USER BTCDCA_DB_PASSWORD BTCDCA_FTP_LOGIN BTCDCA_FTP_PASSWORD; do
+            test -n "${!name}" || { echo "$name is required."; exit 1; }
+          done
+
+      - name: Generate authenticated local database audit helper
+        run: |
+          set -euo pipefail
+          export BTCDCA_RETENTION_TOKEN="$(openssl rand -hex 32)"
+          echo "BTCDCA_RETENTION_TOKEN=$BTCDCA_RETENTION_TOKEN" >> "$GITHUB_ENV"
+          python3 - <<'PY'
+          import base64
+          import json
+          import os
+          from pathlib import Path
+
+          config = {
+              'token': os.environ['BTCDCA_RETENTION_TOKEN'],
+              'db_name': os.environ['BTCDCA_DB'],
+              'db_user': os.environ['BTCDCA_DB_USER'],
+              'db_password': os.environ['BTCDCA_DB_PASSWORD'],
+          }
+          template = Path('scripts/btcdca_retention_helper.php.template').read_text(encoding='utf-8')
+          encoded = base64.b64encode(json.dumps(config).encode('utf-8')).decode('ascii')
+          Path('temporary-btcdca-retention-helper.php').write_text(
+              template.replace('__CONFIG_BASE64__', encoded), encoding='utf-8'
+          )
+          PY
+          php -l temporary-btcdca-retention-helper.php
+
+      - name: Upload temporary read-only audit helper
+        env:
+          BTCDCA_TEMP_FILE_MODE: upload
+          BTCDCA_TEMP_FILE_LOCAL: temporary-btcdca-retention-helper.php
+          BTCDCA_TEMP_FILE_REMOTE: www/btcdca-retention-helper.php
+        run: python3 scripts/manage_btcdca_temporary_file.py
+
+      - name: Read retention schema and row-age audit
+        run: |
+          set -euo pipefail
+          curl --fail-with-body --show-error --silent --retry 0 \
+            -H "X-BTCDCA-Token: ${BTCDCA_RETENTION_TOKEN}" \
+            "https://www.btc-dca.com/btcdca-retention-helper.php?action=audit" \
+            --output btcdca-retention-audit.json
+          python3 -m json.tool btcdca-retention-audit.json
+
+      - name: Upload retention audit report
+        uses: actions/upload-artifact@v4
+        with:
+          name: btcdca-retention-audit-${{ github.run_id }}
+          path: btcdca-retention-audit.json
+          retention-days: 90
+          if-no-files-found: error
+
+      - name: Remove temporary audit helper
+        if: always()
+        env:
+          BTCDCA_TEMP_FILE_MODE: delete
+          BTCDCA_TEMP_FILE_REMOTE: www/btcdca-retention-helper.php
+        run: python3 scripts/manage_btcdca_temporary_file.py

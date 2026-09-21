@@ -1,0 +1,93 @@
+<?php
+declare(strict_types=1);
+
+// Generated inside GitHub Actions, uploaded only for one authenticated request,
+// then removed by the workflow's always() cleanup step.
+$config = json_decode(base64_decode('__CONFIG_BASE64__', true), true, 512, JSON_THROW_ON_ERROR);
+
+if (!hash_equals($config['token'], (string) ($_SERVER['HTTP_X_BTCDCA_TOKEN'] ?? ''))) {
+    http_response_code(403);
+    exit('Forbidden');
+}
+
+mysqli_report(MYSQLI_REPORT_ERROR | MYSQLI_REPORT_STRICT);
+
+function identifier(string $value): string {
+    if (!preg_match('/^[A-Za-z0-9_]+$/', $value)) {
+        throw new RuntimeException('Unexpected SQL identifier.');
+    }
+    return '`' . $value . '`';
+}
+
+function table_columns(mysqli $database, string $table): array {
+    $result = $database->query('SHOW COLUMNS FROM ' . identifier($table));
+    $columns = [];
+    while ($row = $result->fetch_assoc()) {
+        $columns[$row['Field']] = [
+            'type' => $row['Type'],
+            'key' => $row['Key'],
+        ];
+    }
+    return $columns;
+}
+
+function choose_column(array $columns, array $candidates): ?string {
+    foreach ($candidates as $candidate) {
+        if (isset($columns[$candidate])) {
+            return $candidate;
+        }
+    }
+    return null;
+}
+
+function table_summary(mysqli $database, string $table): array {
+    $columns = table_columns($database, $table);
+    $timestamp = choose_column($columns, ['created', 'created_at', 'event_at', 'event_date', 'timestamp', 'date']);
+    $primary = null;
+    foreach ($columns as $name => $column) {
+        if ($column['key'] === 'PRI') {
+            $primary = $name;
+            break;
+        }
+    }
+    $summary = [
+        'table' => $table,
+        'columns' => $columns,
+        'timestamp_column' => $timestamp,
+        'primary_key' => $primary,
+        'rows' => (int) $database->query('SELECT COUNT(*) AS rows_count FROM ' . identifier($table))->fetch_assoc()['rows_count'],
+    ];
+    if ($timestamp !== null) {
+        $time = identifier($timestamp);
+        $range = $database->query("SELECT MIN($time) AS oldest, MAX($time) AS newest, SUM($time < DATE_SUB(NOW(), INTERVAL 30 DAY)) AS older_than_30_days FROM " . identifier($table))->fetch_assoc();
+        $summary += [
+            'oldest' => $range['oldest'],
+            'newest' => $range['newest'],
+            'older_than_30_days' => (int) $range['older_than_30_days'],
+        ];
+    }
+    return $summary;
+}
+
+try {
+    $database = new mysqli('localhost', $config['db_user'], $config['db_password'], $config['db_name']);
+    $database->set_charset('utf8mb4');
+    $action = (string) ($_GET['action'] ?? 'audit');
+    if ($action !== 'audit') {
+        throw new RuntimeException('Only the read-only audit action is enabled.');
+    }
+
+    $summaries = [];
+    foreach (['logs', 'user_events'] as $table) {
+        $exists = $database->query("SHOW TABLES LIKE '$table'");
+        $summaries[] = $exists->num_rows === 1
+            ? table_summary($database, $table)
+            : ['table' => $table, 'missing' => true];
+    }
+    header('Content-Type: application/json; charset=utf-8');
+    echo json_encode(['action' => 'audit', 'tables' => $summaries], JSON_PRETTY_PRINT | JSON_THROW_ON_ERROR);
+} catch (Throwable $error) {
+    http_response_code(500);
+    header('Content-Type: text/plain; charset=utf-8');
+    exit('Retention audit error: ' . $error->getMessage());
+}
