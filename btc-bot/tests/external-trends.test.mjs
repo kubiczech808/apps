@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { classifyExternalTrend, fetchTwelveDataFxHourly } from '../src/external-trends.mjs'
+import { classifyExternalPivotPath, classifyExternalTrend, fetchTwelveDataFxHourly, fetchTwelveDataFxPivots } from '../src/external-trends.mjs'
 import { HOUR, START } from './helpers.mjs'
 
 const values = (start, count, step = 0.001) => Array.from({ length: count }, (_, index) => {
@@ -50,4 +50,40 @@ test('external trend is a separate EMA regime rather than the PA swing label', (
   assert.equal(classifyExternalTrend(up).trend, 'up')
   assert.equal(classifyExternalTrend(down).trend, 'down')
   assert.match(classifyExternalTrend(up).method, /EMA 20\/50/)
+})
+
+test('Twelve Data pivot points form an independent, labelled external path', async () => {
+  let requested
+  const series = [
+    { datetime: '2026-01-01 00:00:00', high: '1.1010', low: '1.1000', close: '1.1005', pivot_point_l: '1' },
+    { datetime: '2026-01-01 04:00:00', high: '1.1100', low: '1.1030', close: '1.1080', pivot_point_h: '1' },
+    { datetime: '2026-01-01 08:00:00', high: '1.1080', low: '1.1050', close: '1.1060', pivot_point_l: '1' },
+    { datetime: '2026-01-01 12:00:00', high: '1.1150', low: '1.1080', close: '1.1130', pivot_point_h: '1' },
+  ].reverse()
+  const paths = await fetchTwelveDataFxPivots({
+    assets: [{ symbol: 'EURUSD', group: 'fx', twelveSymbol: 'EUR/USD' }],
+    apiKey: 'test-key',
+    timeframeId: '4h',
+    fetchImpl: async (url) => {
+      requested = new URL(url)
+      return { ok: true, json: async () => ({ values: series }) }
+    },
+  })
+
+  assert.equal(requested.pathname, '/pivot_points_hl')
+  assert.equal(requested.searchParams.get('interval'), '4h')
+  assert.equal(requested.searchParams.get('include_ohlc'), 'true')
+  assert.equal(paths.EURUSD.trend, 'up')
+  assert.deepEqual(paths.EURUSD.pivots.map((pivot) => pivot.label), ['L', 'H', 'HL', 'HH'])
+})
+
+test('external pivot path distinguishes a down sequence from an internal rebound', () => {
+  const down = classifyExternalPivotPath([
+    { kind: 'high', price: 120, time: START },
+    { kind: 'low', price: 100, time: START + HOUR },
+    { kind: 'high', price: 115, time: START + 2 * HOUR },
+    { kind: 'low', price: 95, time: START + 3 * HOUR },
+  ])
+  assert.equal(down.trend, 'down')
+  assert.deepEqual(down.pivots.map((pivot) => pivot.label), ['H', 'L', 'LH', 'LL'])
 })

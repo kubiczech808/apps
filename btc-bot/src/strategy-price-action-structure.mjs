@@ -4,7 +4,7 @@ import { buildExternalTrendReference } from './external-trends.mjs'
 import { buildFvgSupplyDemandZones, candleSignal, marketStructure } from './priceaction.mjs'
 
 export const PRICE_ACTION_STRUCTURE_ID = 'price-action-structure-v1'
-export const PRICE_ACTION_MATRIX_SCHEMA = 39
+export const PRICE_ACTION_MATRIX_SCHEMA = 40
 export const PRICE_ACTION_CHART_CANDLE_LIMITS = {
   '1h': 8760,
   '4h': 2190,
@@ -1824,6 +1824,7 @@ export const buildPriceActionMatrix = async ({
           fetchImpl,
           now,
           logger,
+          previous: previous?.externalTrends ?? null,
         })
 
   const rows = []
@@ -1862,6 +1863,7 @@ export const buildPriceActionMatrix = async ({
         chartCandles,
       })
       trends[timeframe.id].externalTrend = externalTrends?.assets?.[asset.symbol]?.[timeframe.id] ?? null
+      trends[timeframe.id].externalPivots = externalTrends?.pivots?.assets?.[asset.symbol]?.[timeframe.id] ?? null
     }
     alignOneHourStructureToFourHour(trends)
     attachTradeProfiles(trends, merged)

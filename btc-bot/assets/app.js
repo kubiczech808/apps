@@ -1571,6 +1571,42 @@ const renderAssetChart = () => {
     }
   }
 
+  // An independent pivot path is an audit layer, not a second interpretation
+  // of the PA-1 structure. It remains deliberately quiet: the source and
+  // exact pivot details appear on hover rather than competing with HH/HL text.
+  const externalPivotReference = item?.externalPivots
+  const externalPivotNodes = (externalPivotReference?.pivots ?? [])
+    .filter((pivot) => Number.isFinite(pivot?.price) && Number.isFinite(pivot?.time))
+    .filter((pivot) => pivot.time >= candles[0].time && pivot.time <= candles.at(-1).time)
+    .map((pivot) => ({ ...pivot, x: xForTime(pivot.time) }))
+    .filter((pivot) => pivot.x !== null)
+  if (externalPivotNodes.length >= 2) {
+    const sourceLabel = [
+      externalPivotReference.source,
+      externalPivotReference.method,
+      `perioda ${externalPivotReference.timePeriod}`,
+      `${externalPivotReference.timeframeId?.toUpperCase() ?? timeframeId.toUpperCase()}`,
+    ].filter(Boolean).join(' · ')
+    const path = el('path', {
+      className: 'asset-external-pivot-line',
+      d: externalPivotNodes.map((pivot, index) => `${index === 0 ? 'M' : 'L'} ${pivot.x} ${y(pivot.price)}`).join(' '),
+    })
+    path.append(el('title', { text: `${sourceLabel}; externí pivotová struktura` }))
+    svg.append(path)
+    for (const pivot of externalPivotNodes) {
+      const marker = el('circle', {
+        className: 'asset-external-pivot-marker',
+        cx: pivot.x,
+        cy: y(pivot.price),
+        r: 2.35,
+      })
+      marker.append(el('title', {
+        text: `${sourceLabel}; ${pivot.label ?? (pivot.kind === 'high' ? 'H' : 'L')} ${quotePrice(pivot.price)}`,
+      }))
+      svg.append(marker)
+    }
+  }
+
   // The current structure range is the reference for the entry pullback.
   // Keep this subtle, but visible: it shows exactly where the 50% line falls
   // between the high and low that the white zigzag identifies.
