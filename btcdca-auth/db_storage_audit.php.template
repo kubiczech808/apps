@@ -1,0 +1,66 @@
+<?php
+declare(strict_types=1);
+
+// Generated only inside GitHub Actions. This endpoint is read-only and is
+// removed by the workflow immediately after the audit.
+$config = json_decode(base64_decode('__CONFIG_BASE64__', true), true, 512, JSON_THROW_ON_ERROR);
+
+if (!hash_equals($config['token'], (string) ($_SERVER['HTTP_X_BTCDCA_TOKEN'] ?? ''))) {
+    http_response_code(403);
+    exit('Forbidden');
+}
+
+mysqli_report(MYSQLI_REPORT_ERROR | MYSQLI_REPORT_STRICT);
+try {
+    $database = new mysqli('localhost', $config['db_user'], $config['db_password'], $config['db_name']);
+    $database->set_charset('utf8mb4');
+
+    $tableResult = $database->query("\n        SELECT TABLE_NAME, ENGINE, TABLE_ROWS, DATA_LENGTH, INDEX_LENGTH, DATA_FREE,\n               (DATA_LENGTH + INDEX_LENGTH) AS ALLOCATED_BYTES\n        FROM INFORMATION_SCHEMA.TABLES\n        WHERE TABLE_SCHEMA = DATABASE()\n        ORDER BY ALLOCATED_BYTES DESC, TABLE_NAME ASC\n    ");
+    $tables = [];
+    while ($row = $tableResult->fetch_assoc()) {
+        $tables[] = [
+            'name' => (string) $row['TABLE_NAME'],
+            'engine' => (string) ($row['ENGINE'] ?? ''),
+            'estimated_rows' => (int) ($row['TABLE_ROWS'] ?? 0),
+            'data_bytes' => (int) ($row['DATA_LENGTH'] ?? 0),
+            'index_bytes' => (int) ($row['INDEX_LENGTH'] ?? 0),
+            'free_bytes' => (int) ($row['DATA_FREE'] ?? 0),
+            'allocated_bytes' => (int) ($row['ALLOCATED_BYTES'] ?? 0),
+        ];
+    }
+
+    $largeColumnResult = $database->query("\n        SELECT TABLE_NAME, COLUMN_NAME, DATA_TYPE, CHARACTER_MAXIMUM_LENGTH\n        FROM INFORMATION_SCHEMA.COLUMNS\n        WHERE TABLE_SCHEMA = DATABASE()\n          AND DATA_TYPE IN ('tinyblob', 'blob', 'mediumblob', 'longblob', 'tinytext', 'text', 'mediumtext', 'longtext', 'json')\n        ORDER BY TABLE_NAME, ORDINAL_POSITION\n    ");
+    $largeColumns = [];
+    while ($row = $largeColumnResult->fetch_assoc()) {
+        $largeColumns[] = [
+            'table' => (string) $row['TABLE_NAME'],
+            'column' => (string) $row['COLUMN_NAME'],
+            'type' => (string) $row['DATA_TYPE'],
+            'max_length' => $row['CHARACTER_MAXIMUM_LENGTH'] === null ? null : (int) $row['CHARACTER_MAXIMUM_LENGTH'],
+        ];
+    }
+
+    $wordpress = [];
+    $isolatedWordpress = [];
+    foreach ($tables as $table) {
+        if (preg_match('/^wp_dca_[A-Za-z0-9_]+$/', $table['name'])) {
+            $wordpress[] = $table['name'];
+        }
+        if (preg_match('/^btcdca_isolated_wp_[A-Za-z0-9_]+$/', $table['name'])) {
+            $isolatedWordpress[] = $table['name'];
+        }
+    }
+
+    header('Content-Type: application/json; charset=utf-8');
+    echo json_encode([
+        'database' => (string) $config['db_name'],
+        'tables' => $tables,
+        'large_columns' => $largeColumns,
+        'wordpress_tables' => $wordpress,
+        'isolated_wordpress_tables' => $isolatedWordpress,
+    ], JSON_THROW_ON_ERROR);
+} catch (Throwable $error) {
+    http_response_code(500);
+    header('Content-Type: text/plain; charset=utf-8');
+    exit('Database audit failed: ' . $error->getMessage());
+}
