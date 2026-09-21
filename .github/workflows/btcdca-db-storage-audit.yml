@@ -2,6 +2,17 @@ name: Audit BTC-DCA Database Storage
 
 on:
   workflow_dispatch:
+    inputs:
+      database_host:
+        description: "Public database host to try; no hosting files are uploaded"
+        required: false
+        default: neuron.blueboard.cz
+        type: string
+      database_port:
+        description: "MySQL TCP port"
+        required: false
+        default: "3306"
+        type: string
 
 permissions:
   contents: read
@@ -18,9 +29,8 @@ jobs:
       BTCDCA_DB: ${{ secrets.BTCDCA_DB }}
       BTCDCA_DB_USER: ${{ secrets.BTCDCA_DB_USER }}
       BTCDCA_DB_PASSWORD: ${{ secrets.BTCDCA_DB_PASSWORD }}
-      BTCDCA_FTP_LOGIN: ${{ secrets.BTCDCA_FTP_LOGIN }}
-      BTCDCA_FTP_PASSWORD: ${{ secrets.BTCDCA_FTP_PASSWORD }}
-      BTCDCA_AUDIT_TOKEN: ${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}
+      REQUESTED_DB_HOST: ${{ inputs.database_host }}
+      REQUESTED_DB_PORT: ${{ inputs.database_port }}
 
     steps:
       - uses: actions/checkout@v4
@@ -28,109 +38,104 @@ jobs:
       - name: Validate audit prerequisites
         run: |
           set -euo pipefail
-          for name in BTCDCA_DB BTCDCA_DB_USER BTCDCA_DB_PASSWORD BTCDCA_FTP_LOGIN BTCDCA_FTP_PASSWORD; do
+          for name in BTCDCA_DB BTCDCA_DB_USER BTCDCA_DB_PASSWORD REQUESTED_DB_HOST REQUESTED_DB_PORT; do
             test -n "${!name}" || { echo "$name is required."; exit 1; }
           done
+          [[ "$REQUESTED_DB_PORT" =~ ^[0-9]{1,5}$ ]] || { echo "Database port must be numeric."; exit 1; }
 
-      - name: Generate and upload the read-only storage endpoint
+      - name: Install MySQL client
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y default-mysql-client
+
+      - name: Connect directly to the database without modifying hosting files
         run: |
           set -euo pipefail
-          export BTCDCA_AUDIT_TOKEN="$(openssl rand -hex 32)"
-          echo "BTCDCA_AUDIT_TOKEN=$BTCDCA_AUDIT_TOKEN" >> "$GITHUB_ENV"
+          candidates=("$REQUESTED_DB_HOST" "neuron.blueboard.cz" "ftp.btc-dca.com" "217.11.249.141")
+          seen='|'
+          for host in "${candidates[@]}"; do
+            [ -n "$host" ] || continue
+            case "$seen" in *"|$host|"*) continue ;; esac
+            seen="${seen}${host}|"
+            echo "Trying direct MySQL connection to $host:$REQUESTED_DB_PORT"
+            if MYSQL_PWD="$BTCDCA_DB_PASSWORD" mysql \
+              --batch --raw --skip-column-names --connect-timeout=12 \
+              --host="$host" --port="$REQUESTED_DB_PORT" --user="$BTCDCA_DB_USER" "$BTCDCA_DB" \
+              --execute='SELECT 1' > /dev/null 2> db-connection-error.log; then
+              echo "BTCDCA_CONNECTED_DB_HOST=$host" >> "$GITHUB_ENV"
+              exit 0
+            fi
+          done
+          echo "No direct MySQL connection was accepted. The hosting may limit this database user to LOCALHOST."
+          exit 1
+
+      - name: Read table allocation metadata
+        run: |
+          set -euo pipefail
+          export MYSQL_PWD="$BTCDCA_DB_PASSWORD"
+          mysql --batch --raw --skip-column-names \
+            --host="$BTCDCA_CONNECTED_DB_HOST" --port="$REQUESTED_DB_PORT" --user="$BTCDCA_DB_USER" "$BTCDCA_DB" \
+            --execute="SELECT TABLE_NAME, COALESCE(ENGINE,''), COALESCE(TABLE_ROWS,0), COALESCE(DATA_LENGTH,0), COALESCE(INDEX_LENGTH,0), COALESCE(DATA_FREE,0), COALESCE(DATA_LENGTH,0)+COALESCE(INDEX_LENGTH,0) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA=DATABASE() ORDER BY 7 DESC, 1 ASC" \
+            > tables.tsv
+          mysql --batch --raw --skip-column-names \
+            --host="$BTCDCA_CONNECTED_DB_HOST" --port="$REQUESTED_DB_PORT" --user="$BTCDCA_DB_USER" "$BTCDCA_DB" \
+            --execute="SELECT TABLE_NAME, COLUMN_NAME, DATA_TYPE, COALESCE(CHARACTER_MAXIMUM_LENGTH,'') FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND DATA_TYPE IN ('tinyblob','blob','mediumblob','longblob','tinytext','text','mediumtext','longtext','json') ORDER BY TABLE_NAME, ORDINAL_POSITION" \
+            > large-columns.tsv
           python3 - <<'PY'
-          import base64
-          import json
           import os
           from pathlib import Path
 
-          config = {
-              'token': os.environ['BTCDCA_AUDIT_TOKEN'],
-              'db_name': os.environ['BTCDCA_DB'],
-              'db_user': os.environ['BTCDCA_DB_USER'],
-              'db_password': os.environ['BTCDCA_DB_PASSWORD'],
-          }
-          template = Path('btcdca-auth/db_storage_audit.php.template').read_text(encoding='utf-8')
-          encoded = base64.b64encode(json.dumps(config).encode('utf-8')).decode('ascii')
-          Path('btcdca-db-storage-audit.php').write_text(template.replace('__CONFIG_BASE64__', encoded), encoding='utf-8')
-          PY
-          php -l btcdca-db-storage-audit.php
-          python3 - <<'PY'
-          import ftplib
-          import os
+          def rows(path, columns):
+              values = []
+              for line in Path(path).read_text(encoding='utf-8').splitlines():
+                  fields = line.split('\t')
+                  if len(fields) != columns:
+                      raise RuntimeError(f'Unexpected row in {path}: {line!r}')
+                  values.append(fields)
+              return values
 
-          hosts = ('ftp.btc-dca.com', 'neuron.blueboard.cz')
-          last_error = None
-          for host in hosts:
-              try:
-                  ftp = ftplib.FTP(host, timeout=45)
-                  ftp.login(os.environ['BTCDCA_FTP_LOGIN'], os.environ['BTCDCA_FTP_PASSWORD'])
-                  break
-              except Exception as exc:
-                  last_error = exc
-          else:
-              raise SystemExit(f'Could not connect to FTP: {last_error}')
-          try:
-              ftp.cwd('www')
-              with open('btcdca-db-storage-audit.php', 'rb') as source:
-                  ftp.storbinary('STOR btcdca-db-storage-audit.php', source)
-          finally:
-              ftp.quit()
-          PY
-
-      - name: Read database allocation metadata
-        run: |
-          set -euo pipefail
-          curl --fail --show-error --silent --max-time 60 \
-            -H "X-BTCDCA-Token: $BTCDCA_AUDIT_TOKEN" \
-            https://www.btc-dca.com/btcdca-db-storage-audit.php \
-            --output db-storage-audit.json
-          python3 - <<'PY'
-          import json
-          from pathlib import Path
-
-          payload = json.loads(Path('db-storage-audit.json').read_text(encoding='utf-8'))
-          tables = payload['tables']
-          total = sum(table['allocated_bytes'] for table in tables)
+          tables = rows('tables.tsv', 7)
+          columns = rows('large-columns.tsv', 4)
+          total = sum(int(row[6]) for row in tables)
           fmt = lambda value: f'{value / 1024 / 1024:.2f} MB'
+          wordpress = [row[0] for row in tables if row[0].startswith('wp_dca_')]
+          isolated = [row[0] for row in tables if row[0].startswith('btcdca_isolated_wp_')]
           report = [
               '# BTC-DCA Database Storage Audit',
               '',
-              'Read-only audit from INFORMATION_SCHEMA. No data, indexes, or table definitions were modified.',
+              'Direct, read-only MySQL audit. No PHP endpoint or hosting file was uploaded.',
               '',
               '## Summary',
               '',
-              f"- Database: `{payload['database']}`",
+              f"- Connected host: `{os.environ['BTCDCA_CONNECTED_DB_HOST']}`",
               f'- Tables: {len(tables)}',
               f'- Allocated table space: {fmt(total)}',
-              f"- Active WordPress tables (`wp_dca_*`): {len(payload['wordpress_tables'])}",
-              f"- Isolated WordPress tables (`btcdca_isolated_wp_*`): {len(payload['isolated_wordpress_tables'])}",
+              f'- Active WordPress tables (`wp_dca_*`): {len(wordpress)}',
+              f'- Isolated WordPress tables (`btcdca_isolated_wp_*`): {len(isolated)}',
               '',
               '## Tables By Allocated Size',
               '',
               '| Table | Engine | Estimated rows | Data | Indexes | Free | Allocated | Share |',
               '| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |',
           ]
-          for table in tables:
-              allocated = table['allocated_bytes']
-              share = (allocated / total * 100) if total else 0
+          for name, engine, count, data, indexes, free, allocated in tables:
+              allocated_int = int(allocated)
+              share = allocated_int / total * 100 if total else 0
               report.append(
-                  f"| `{table['name']}` | {table['engine'] or '-'} | {table['estimated_rows']:,} | "
-                  f"{fmt(table['data_bytes'])} | {fmt(table['index_bytes'])} | {fmt(table['free_bytes'])} | "
-                  f"{fmt(allocated)} | {share:.1f}% |"
+                  f'| `{name}` | {engine or "-"} | {int(count):,} | {fmt(int(data))} | '
+                  f'{fmt(int(indexes))} | {fmt(int(free))} | {fmt(allocated_int)} | {share:.1f}% |'
               )
           report.extend(['', '## Large-Value Columns', ''])
-          if payload['large_columns']:
+          if columns:
               report.extend(['| Table | Column | Type | Maximum length |', '| --- | --- | --- | ---: |'])
-              for column in payload['large_columns']:
-                  length = '-' if column['max_length'] is None else f"{column['max_length']:,}"
-                  report.append(f"| `{column['table']}` | `{column['column']}` | {column['type']} | {length} |")
+              for table, column, data_type, maximum in columns:
+                  report.append(f'| `{table}` | `{column}` | {data_type} | {maximum or "-"} |')
           else:
               report.append('No text, blob, or JSON columns were reported.')
           report.extend(['', '## WordPress Verification', ''])
-          if payload['wordpress_tables'] or payload['isolated_wordpress_tables']:
-              report.append('WordPress-prefixed tables remain and must be investigated before claiming the retirement is complete.')
-              for name in payload['wordpress_tables'] + payload['isolated_wordpress_tables']:
-                  report.append(f'- `{name}`')
+          if wordpress or isolated:
+              report.append('WordPress-prefixed tables still exist:')
+              report.extend(f'- `{name}`' for name in wordpress + isolated)
           else:
               report.append('No active or isolated WordPress table prefixes remain.')
           Path('btcdca-db-storage-audit.md').write_text('\n'.join(report) + '\n', encoding='utf-8')
@@ -138,40 +143,13 @@ jobs:
           PY
 
       - name: Upload database storage report
+        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: btcdca-db-storage-audit-${{ github.run_id }}
           path: |
-            db-storage-audit.json
+            tables.tsv
+            large-columns.tsv
             btcdca-db-storage-audit.md
           retention-days: 90
           if-no-files-found: error
-
-      - name: Remove temporary storage endpoint
-        if: always()
-        run: |
-          python3 - <<'PY'
-          import ftplib
-          import os
-
-          hosts = ('ftp.btc-dca.com', 'neuron.blueboard.cz')
-          last_error = None
-          for host in hosts:
-              try:
-                  ftp = ftplib.FTP(host, timeout=45)
-                  ftp.login(os.environ['BTCDCA_FTP_LOGIN'], os.environ['BTCDCA_FTP_PASSWORD'])
-                  break
-              except Exception as exc:
-                  last_error = exc
-          else:
-              raise SystemExit(f'Could not connect to FTP for cleanup: {last_error}')
-          try:
-              ftp.delete('www/btcdca-db-storage-audit.php')
-              print('Deleted temporary storage audit endpoint.')
-          except ftplib.error_perm as exc:
-              if not str(exc).startswith('550'):
-                  raise
-              print('Temporary storage audit endpoint was already absent.')
-          finally:
-              ftp.quit()
-          PY
