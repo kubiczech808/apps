@@ -1,7 +1,20 @@
-name: Audit BTC-DCA Retention Cleanup
+name: BTC-DCA Retention Cleanup
 
 on:
   workflow_dispatch:
+    inputs:
+      operation:
+        description: "audit reads only; prune removes old logs and user events"
+        required: true
+        default: audit
+        type: choice
+        options:
+          - audit
+          - prune
+      confirmation:
+        description: "For prune, enter exactly PRUNE_30_DAYS"
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -20,6 +33,8 @@ jobs:
       BTCDCA_DB_PASSWORD: ${{ secrets.BTCDCA_DB_PASSWORD }}
       BTCDCA_FTP_LOGIN: ${{ secrets.BTCDCA_FTP_LOGIN }}
       BTCDCA_FTP_PASSWORD: ${{ secrets.BTCDCA_FTP_PASSWORD }}
+      RETENTION_OPERATION: ${{ inputs.operation }}
+      RETENTION_CONFIRMATION: ${{ inputs.confirmation }}
 
     steps:
       - uses: actions/checkout@v4
@@ -63,20 +78,25 @@ jobs:
           BTCDCA_TEMP_FILE_REMOTE: www/btcdca-retention-helper.php
         run: python3 scripts/manage_btcdca_temporary_file.py
 
-      - name: Read retention schema and row-age audit
+      - name: Audit or prune retained data
         run: |
           set -euo pipefail
+          action='audit'
+          if [ "$RETENTION_OPERATION" = 'prune' ]; then
+            test "$RETENTION_CONFIRMATION" = 'PRUNE_30_DAYS'
+            action='prune&confirm=PRUNE_30_DAYS'
+          fi
           curl --fail-with-body --show-error --silent --retry 0 \
             -H "X-BTCDCA-Token: ${BTCDCA_RETENTION_TOKEN}" \
-            "https://www.btc-dca.com/btcdca-retention-helper.php?action=audit" \
-            --output btcdca-retention-audit.json
-          python3 -m json.tool btcdca-retention-audit.json
+            "https://www.btc-dca.com/btcdca-retention-helper.php?action=${action}" \
+            --output btcdca-retention-result.json
+          python3 -m json.tool btcdca-retention-result.json
 
-      - name: Upload retention audit report
+      - name: Upload retention result
         uses: actions/upload-artifact@v4
         with:
-          name: btcdca-retention-audit-${{ github.run_id }}
-          path: btcdca-retention-audit.json
+          name: btcdca-retention-result-${{ github.run_id }}
+          path: btcdca-retention-result.json
           retention-days: 90
           if-no-files-found: error
 

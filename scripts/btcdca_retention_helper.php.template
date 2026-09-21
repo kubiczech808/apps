@@ -69,14 +69,52 @@ function table_summary(mysqli $database, string $table): array {
     return $summary;
 }
 
+function delete_in_batches(mysqli $database, string $table, string $timestamp): int {
+    $total = 0;
+    do {
+        $database->query(
+            'DELETE FROM ' . identifier($table) .
+            ' WHERE ' . identifier($timestamp) . ' < DATE_SUB(NOW(), INTERVAL 30 DAY) LIMIT 5000'
+        );
+        $deleted = $database->affected_rows;
+        $total += $deleted;
+    } while ($deleted === 5000);
+    return $total;
+}
+
+function prune_user_events(mysqli $database, string $timestamp, string $primary): int {
+    $userColumn = 'user_id';
+    $users = $database->query('SELECT DISTINCT ' . identifier($userColumn) . ' AS user_id FROM `user_events`');
+    $total = 0;
+    while ($user = $users->fetch_assoc()) {
+        $userId = (int) $user['user_id'];
+        $latest = $database->query(
+            'SELECT ' . identifier($primary) . ' AS event_id FROM `user_events`' .
+            ' WHERE ' . identifier($userColumn) . ' = ' . $userId .
+            ' ORDER BY ' . identifier($timestamp) . ' DESC, ' . identifier($primary) . ' DESC LIMIT 25'
+        );
+        $protected = [];
+        while ($row = $latest->fetch_assoc()) {
+            $protected[] = (int) $row['event_id'];
+        }
+        $keep = $protected === [] ? '0' : implode(',', $protected);
+        do {
+            $database->query(
+                'DELETE FROM `user_events` WHERE ' . identifier($userColumn) . ' = ' . $userId .
+                ' AND ' . identifier($timestamp) . ' < DATE_SUB(NOW(), INTERVAL 30 DAY)' .
+                ' AND ' . identifier($primary) . ' NOT IN (' . $keep . ') LIMIT 5000'
+            );
+            $deleted = $database->affected_rows;
+            $total += $deleted;
+        } while ($deleted === 5000);
+    }
+    return $total;
+}
+
 try {
     $database = new mysqli('localhost', $config['db_user'], $config['db_password'], $config['db_name']);
     $database->set_charset('utf8mb4');
     $action = (string) ($_GET['action'] ?? 'audit');
-    if ($action !== 'audit') {
-        throw new RuntimeException('Only the read-only audit action is enabled.');
-    }
-
     $summaries = [];
     foreach (['logs', 'user_events'] as $table) {
         $exists = $database->query("SHOW TABLES LIKE '$table'");
@@ -84,8 +122,34 @@ try {
             ? table_summary($database, $table)
             : ['table' => $table, 'missing' => true];
     }
+    if ($action === 'audit') {
+        header('Content-Type: application/json; charset=utf-8');
+        echo json_encode(['action' => 'audit', 'tables' => $summaries], JSON_PRETTY_PRINT | JSON_THROW_ON_ERROR);
+        exit;
+    }
+
+    if ($action !== 'prune' || ($_GET['confirm'] ?? '') !== 'PRUNE_30_DAYS') {
+        throw new RuntimeException('Invalid retention action.');
+    }
+    $logs = $summaries[0];
+    $events = $summaries[1];
+    if (($logs['timestamp_column'] ?? null) !== 'created' || ($events['timestamp_column'] ?? null) !== 'created') {
+        throw new RuntimeException('Expected retention timestamp columns are unavailable.');
+    }
+    if (($events['primary_key'] ?? null) !== 'event_id' || !isset($events['columns']['user_id'])) {
+        throw new RuntimeException('Expected user event identity columns are unavailable.');
+    }
+    $deleted = [
+        'logs' => delete_in_batches($database, 'logs', 'created'),
+        'user_events' => prune_user_events($database, 'created', 'event_id'),
+    ];
     header('Content-Type: application/json; charset=utf-8');
-    echo json_encode(['action' => 'audit', 'tables' => $summaries], JSON_PRETTY_PRINT | JSON_THROW_ON_ERROR);
+    echo json_encode([
+        'action' => 'prune',
+        'retention_days' => 30,
+        'user_events_kept_per_user' => 25,
+        'deleted' => $deleted,
+    ], JSON_PRETTY_PRINT | JSON_THROW_ON_ERROR);
 } catch (Throwable $error) {
     http_response_code(500);
     header('Content-Type: text/plain; charset=utf-8');
