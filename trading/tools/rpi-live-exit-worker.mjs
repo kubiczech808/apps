@@ -3033,8 +3033,11 @@ async function checkOnce(context) {
   // entry is committing more of it; if one pass can only do one of the two, the protection
   // goes first. The books are the ones already read above, so this costs no round trip and
   // reacts on the same one-second beat the stop does.
+  // Persist this even when entries are explicitly paused. The deployment check must be
+  // able to distinguish an intentional `off` mode from a worker that has not loaded its
+  // new EnvironmentFile yet.
+  context.state.dipEntryMode = DIP_ENTRY_MODE;
   if (DIP_ENTRY_MODE !== "off") {
-    context.state.dipEntryMode = DIP_ENTRY_MODE;
     context.state.dipEntryWatchUrl = DIP_ENTRY_WATCH_URL;
     context.state.dipEntryError = context.dipWatchError || null;
     // What is being followed and what each entry would pay, so a pass that bought nothing

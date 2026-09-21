@@ -239,10 +239,14 @@ jobs:
           state="$HOME/.local/state/trading/live-exit-worker-state.json"
           expected="$(sed -n 's/^LIVE_EXIT_MODE=//p' "$HOME/.config/trading-live-exit-worker.env" | tail -n 1)"
           expected="${expected:-shadow}"
+          expected_dip="$(sed -n 's/^LIVE_DIP_ENTRY_MODE=//p' "$HOME/.config/trading-live-exit-worker.env" | tail -n 1)"
+          expected_dip="${expected_dip:-portfolio}"
           running=""
+          running_dip=""
           for _attempt in $(seq 1 20); do
             if [ -f "$state" ] && [ "$(stat -c %Y "$state")" -ge "$restarted_at" ]; then
               running="$(sed -n 's/.*"mode": *"\([a-z]*\)".*/\1/p' "$state" | head -n 1)"
+              running_dip="$(sed -n 's/.*"dipEntryMode": *"\([a-z]*\)".*/\1/p' "$state" | head -n 1)"
               [ -n "$running" ] && break
             fi
             sleep 3
@@ -250,12 +254,18 @@ jobs:
           echo ""
           echo "configured mode: ${expected}"
           echo "worker reports:  ${running:-(no cycle written since the restart)}"
+          echo "configured dip mode: ${expected_dip}"
+          echo "worker dip mode:     ${running_dip:-(not reported yet)}"
           if [ -z "$running" ]; then
             echo "   The worker has not completed a cycle yet, so its mode is unverified."
             exit 0
           fi
           if [ "$running" != "$expected" ]; then
             echo "   The worker is still running in ${running} after being configured for ${expected}."
+            exit 1
+          fi
+          if [ "$running_dip" != "$expected_dip" ]; then
+            echo "   The worker is still running dip entries in ${running_dip:-(no mode)} after being configured for ${expected_dip}."
             exit 1
           fi
           echo "   Confirmed: the running process is in ${running}."

@@ -1721,6 +1721,10 @@ test("dip entry: source deploys use portfolio automation and manual pauses persi
   assert.match(workflow, /DIP ENTRY ARMED: a collapsed favourite in the buy band may be BOUGHT/);
   assert.match(workflow, /LIVE_DIP_ENTRY_MODE=\$\{dip_entry_mode\}/);
   assert.match(workflow, /LIVE_DIP_ENTRY_WATCH_URL=https:\/\/osobnizkusenosti\.cz\/trading\/api\.php\?action=dip-entry-watch/);
+  assert.match(workflow, /expected_dip="\$\(sed -n 's\/\^LIVE_DIP_ENTRY_MODE=\/\/p'/,
+    "the deployment must verify the dip mode reported by the restarted worker, not only write it");
+  assert.match(workflow, /"dipEntryMode": \*"\\\(\[a-z\]\*\\\)"/,
+    "the worker's persisted state is the source of truth for the running dip mode");
 });
 
 // Reported: positions the market prices as decided are not sold automatically and have to be
