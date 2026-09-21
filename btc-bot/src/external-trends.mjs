@@ -266,6 +266,10 @@ export const binancePivotPath = confirmedExternalPivotPath
 
 const pivotBucket = (timeframeId, now) => Math.floor(now / EXTERNAL_PIVOT_INTERVALS[timeframeId].ms)
 
+export const canReuseExternalPivotBucket = ({ previous, assets = [], timeframeId, bucket }) =>
+  previous?.pivots?.buckets?.[timeframeId] === bucket &&
+  assets.every((asset) => previous.pivots.assets?.[asset.symbol]?.[timeframeId] != null)
+
 const pivotReference = ({ trend, pivots, source, timeframeId, asOf = null }) => ({
   trend,
   pivots,
@@ -281,7 +285,9 @@ const buildExternalPivotReferences = async ({ assets, hourly = {}, previous = nu
   for (const asset of assets) result.assets[asset.symbol] = {}
   for (const timeframeId of Object.keys(EXTERNAL_PIVOT_INTERVALS)) {
     const bucket = pivotBucket(timeframeId, now)
-    const cached = previous?.pivots?.buckets?.[timeframeId] === bucket ? previous.pivots : null
+    const cached = canReuseExternalPivotBucket({ previous, assets, timeframeId, bucket })
+      ? previous.pivots
+      : null
     result.buckets[timeframeId] = bucket
     if (cached?.assets) {
       for (const asset of assets) result.assets[asset.symbol][timeframeId] = cached.assets?.[asset.symbol]?.[timeframeId] ?? null

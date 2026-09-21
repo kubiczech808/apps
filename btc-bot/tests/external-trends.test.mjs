@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { classifyExternalPivotPath, classifyExternalTrend, confirmedExternalPivotPath, fetchTwelveDataFxHourly, fetchTwelveDataFxPivots } from '../src/external-trends.mjs'
+import { canReuseExternalPivotBucket, classifyExternalPivotPath, classifyExternalTrend, confirmedExternalPivotPath, fetchTwelveDataFxHourly, fetchTwelveDataFxPivots } from '../src/external-trends.mjs'
 import { HOUR, START } from './helpers.mjs'
 
 const values = (start, count, step = 0.001) => Array.from({ length: count }, (_, index) => {
@@ -101,4 +101,17 @@ test('Twelve Data OHLC produces a confirmed independent pivot path without the p
 
   assert.equal(path.trend, 'up')
   assert.deepEqual(path.pivots.map((pivot) => pivot.label), ['H', 'L', 'HH', 'HL'])
+})
+
+test('a missing external pivot result is not kept as a valid cache entry', () => {
+  const assets = [{ symbol: 'EURUSD' }]
+  const previous = {
+    pivots: {
+      buckets: { '4h': 5 },
+      assets: { EURUSD: { '4h': null } },
+    },
+  }
+  assert.equal(canReuseExternalPivotBucket({ previous, assets, timeframeId: '4h', bucket: 5 }), false)
+  previous.pivots.assets.EURUSD['4h'] = { trend: 'flat', pivots: [] }
+  assert.equal(canReuseExternalPivotBucket({ previous, assets, timeframeId: '4h', bucket: 5 }), true)
 })
