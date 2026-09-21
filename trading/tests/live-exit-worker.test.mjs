@@ -1551,10 +1551,11 @@ test("a probability floor at or above the entry does not become the active stop"
 test("dip entry: the fast path decides only what cannot be prepared in advance", () => {
   const source = readFileSync(new URL("../tools/rpi-live-exit-worker.mjs", import.meta.url), "utf8");
 
-  // Armed deliberately or not at all. A deployed file must not start buying.
-  assert.match(source, /const DIP_ENTRY_MODE = String\(process\.env\.LIVE_DIP_ENTRY_MODE \|\| "off"\)/);
-  assert.match(source, /if \(DIP_ENTRY_MODE !== "live" \|\| MODE !== "live" \|\| !CONFIRM_LIVE\) \{/,
-    "live buying needs the worker's own live mode and its confirmation as well as this one");
+  // Portfolio mode is the ordinary path: an enabled live dip portfolio can trade without a
+  // second hidden switch. A worker still cannot buy unless its own live mode is confirmed.
+  assert.match(source, /const DIP_ENTRY_MODE = String\(process\.env\.LIVE_DIP_ENTRY_MODE \|\| "portfolio"\)/);
+  assert.match(source, /if \(!\["live", "portfolio"\]\.includes\(DIP_ENTRY_MODE\) \|\| MODE !== "live" \|\| !CONFIRM_LIVE\) \{/,
+    "live buying needs the worker's confirmed live mode even in portfolio-driven dip mode");
   // Shadow records the whole decision instead, which is how the rule gets measured first.
   assert.match(source, /type: "DIP_ENTRY_SHADOW"/);
 
@@ -1669,6 +1670,14 @@ test("dip entry: it fires once, needs cash, and honours what was prepared", asyn
   assert.deepEqual(submitted, []);
   assert.equal(shadow.state.history[0].type, "DIP_ENTRY_SHADOW");
   assert.equal(shadow.state.history[0].ask, 0.35, "and it records the price it would have paid");
+
+  // Normal operation is portfolio-driven: the API only publishes an enabled, non-archived
+  // live dip portfolio, so it must not need a second hidden worker-wide live switch.
+  submitted.length = 0;
+  const portfolioDriven = context();
+  await build({ dipMode: "portfolio" })(portfolioDriven, books, "2026-09-10T20:27:00Z");
+  assert.deepEqual(submitted.map((row) => row.tokenId), ["aaa"]);
+  assert.equal(portfolioDriven.state.history[0].type, "DIP_ENTRY_SUBMITTED");
 });
 
 test("dip entry: the order never pays above the band, and never without cash", () => {
@@ -1694,19 +1703,19 @@ test("dip entry: the order never pays above the band, and never without cash", (
   assert.match(source, /postOrder\(signed, OrderType\.FAK, false\)[\s\S]{0,200}?postOrder\(signed, OrderType\.FOK, false\)/);
 });
 
-// The same trap the three exit switches were fixed for: dispatching this workflow to ship a
-// code change must not arm or disarm anything as a side effect. A redeploy with no inputs
-// once turned an armed stop loss into 147 shadow events.
-test("dip entry: arming it is deliberate, and a redeploy never changes it", () => {
+// A portfolio's own automation setting is the authority for dip entries. Deploys migrate
+// old worker-wide `off` settings to the portfolio-driven mode, while manual dispatch keeps
+// an explicit off or shadow pause intact.
+test("dip entry: source deploys use portfolio automation and manual pauses persist", () => {
   const workflow = readFileSync(new URL("../../.github/workflows/trading-rpi-live-exit-worker.yml", import.meta.url), "utf8");
   assert.match(workflow, /dip_entry_mode:[\s\S]*?default: keep/,
     "keep must be the default, or shipping a fix rearms the rule");
-  assert.match(workflow, /options: \[keep, "off", shadow, live\]/);
-  assert.match(workflow, /dip_entry_mode="\$\(keep_or_existing LIVE_DIP_ENTRY_MODE "\$\{LIVE_DIP_ENTRY_MODE:-\}"\)"/,
-    "an absent input has to fall back to what the EnvironmentFile already says");
-  assert.match(workflow, /dip_entry_mode="\$\{dip_entry_mode:-off\}"/, "and a first install is off");
-  assert.match(workflow, /case "\$dip_entry_mode" in off\|shadow\|live\) ;; \*\) dip_entry_mode=off ;; esac/,
-    "an unrecognised value must fall back to off, never to live");
+  assert.match(workflow, /options: \[keep, "off", shadow, portfolio, live\]/);
+  assert.match(workflow, /if \[ "\$\{GITHUB_EVENT_NAME:-\}" = "push" \]; then\s+dip_entry_mode="portfolio"/,
+    "a source deployment must migrate the worker to portfolio-driven dip automation");
+  assert.match(workflow, /dip_entry_mode="\$\{dip_entry_mode:-portfolio\}"/, "and a first install follows enabled portfolios");
+  assert.match(workflow, /case "\$dip_entry_mode" in off\|shadow\|portfolio\|live\) ;; \*\) dip_entry_mode=portfolio ;; esac/,
+    "an unrecognised value must use the safe portfolio-controlled mode");
   // The install says out loud what it just armed, because that is how the disarmed stop
   // loss went unnoticed for 147 events.
   assert.match(workflow, /DIP ENTRY ARMED: a collapsed favourite in the buy band may be BOUGHT/);

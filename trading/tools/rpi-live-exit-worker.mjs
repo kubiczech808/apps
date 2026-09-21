@@ -2311,9 +2311,12 @@ function recordWorkerError(state, error, at) {
 // the way in and kept until they expire.
 const DIP_ENTRY_WATCH_URL = process.env.LIVE_DIP_ENTRY_WATCH_URL
   || "https://osobnizkusenosti.cz/trading/api.php?action=dip-entry-watch";
-// Off unless deliberately armed, exactly like LIVE_EXIT_MODE. An experiment must not start
-// buying because a file was deployed.
-const DIP_ENTRY_MODE = String(process.env.LIVE_DIP_ENTRY_MODE || "off").trim().toLowerCase();
+// `portfolio` is the normal mode: the portfolio's own automation switch is the authority
+// for whether a dip entry may be considered. Older deployments had a second, hidden
+// worker-wide `off` switch, so a portfolio could be visibly active yet never receive a
+// watch plan. Keep `off` and `shadow` for an explicit operational pause, but do not make
+// a newly activated dip portfolio depend on that legacy switch.
+const DIP_ENTRY_MODE = String(process.env.LIVE_DIP_ENTRY_MODE || "portfolio").trim().toLowerCase();
 // How long a watch entry survives after the catalogue stops listing it. A fixture runs for
 // an hour or two, and the entry has to outlive the collapse that removes the row.
 const DIP_ENTRY_TTL_MS = clampInteger(process.env.LIVE_DIP_ENTRY_TTL_MS, 4 * 3600 * 1000, 600000, 24 * 3600 * 1000);
@@ -2497,7 +2500,7 @@ async function fireDipEntries(context, books, now) {
       if (recorded.ok) entered[key] = { terminal: true, at: now, reason: "recorded for paper" };
       continue;
     }
-    if (DIP_ENTRY_MODE !== "live" || MODE !== "live" || !CONFIRM_LIVE) {
+    if (!["live", "portfolio"].includes(DIP_ENTRY_MODE) || MODE !== "live" || !CONFIRM_LIVE) {
       // Shadow: the whole decision is recorded, at the price it would have paid, and
       // nothing is sent. This is how the rule gets measured before it is trusted.
       recordEvent(context.state, { ...event, type: "DIP_ENTRY_SHADOW" });
