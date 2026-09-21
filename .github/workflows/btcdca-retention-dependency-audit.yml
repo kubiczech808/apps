@@ -28,16 +28,43 @@ jobs:
             test -n "${!name}" || { echo "$name is required."; exit 1; }
           done
 
-      - name: Install read-only FTP client
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y lftp
-
       - name: Download application source without modifying hosting
         run: |
           set -euo pipefail
-          mkdir -p runtime-source/app
-          lftp -e "set cmd:fail-exit yes; set net:max-retries 1; set net:timeout 20; set ftp:ssl-force false; set ftp:ssl-protect-data false; open -u \"$BTCDCA_FTP_LOGIN\",\"$BTCDCA_FTP_PASSWORD\" ftp.btc-dca.com; mirror --verbose --exclude-glob assets --exclude-glob vendor --exclude-glob node_modules www/app runtime-source/app; get -o runtime-source/dca-calculator.php www/dca-calculator.php; get -o runtime-source/getTicker.php www/php/getTicker.php; bye"
+          python3 - <<'PY'
+          import ftplib
+          import os
+          from pathlib import Path, PurePosixPath
+
+          ftp = ftplib.FTP('ftp.btc-dca.com', timeout=30)
+          ftp.login(os.environ['BTCDCA_FTP_LOGIN'], os.environ['BTCDCA_FTP_PASSWORD'])
+          allowed = {'.php', '.js', '.sql'}
+          skipped = {'assets', 'vendor', 'node_modules', '.git'}
+
+          def download(remote, local):
+              local.parent.mkdir(parents=True, exist_ok=True)
+              with local.open('wb') as output:
+                  ftp.retrbinary(f'RETR {remote}', output.write)
+
+          def mirror_source(remote, local):
+              for name, facts in ftp.mlsd(remote):
+                  if name in {'.', '..'}:
+                      continue
+                  source = str(PurePosixPath(remote) / name)
+                  destination = local / name
+                  if facts.get('type') == 'dir':
+                      if name not in skipped:
+                          mirror_source(source, destination)
+                  elif Path(name).suffix.lower() in allowed:
+                      download(source, destination)
+
+          try:
+              mirror_source('www/app', Path('runtime-source/app'))
+              download('www/dca-calculator.php', Path('runtime-source/dca-calculator.php'))
+              download('www/php/getTicker.php', Path('runtime-source/getTicker.php'))
+          finally:
+              ftp.quit()
+          PY
 
       - name: Analyze retention and calculator dependencies
         run: python3 scripts/audit_retention_dependencies.py
