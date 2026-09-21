@@ -6,6 +6,7 @@ import {
   alignOneHourStructureToFourHour,
   applyExternalTrendConfirmation,
   buildPriceActionMatrix,
+  canReusePriceActionMatrix,
   canReuseExternalTrendReference,
   classifyStructure,
   evaluateTradeProfile,
@@ -16,6 +17,7 @@ import {
   PRICE_ACTION_MATRIX_SCHEMA,
   PRICE_ACTION_CHART_CANDLE_LIMITS,
   PRICE_ACTION_STRUCTURE_PROFILES,
+  PRICE_ACTION_TIMEFRAMES,
   reviewOpenPosition,
 } from '../src/strategy-price-action-structure.mjs'
 import { candle, HOUR, START, zigzag } from './helpers.mjs'
@@ -108,6 +110,31 @@ test('an available Twelve Data key immediately replaces a cached missing-key res
   assert.equal(canReuseExternalTrendReference({ previous, hourBucket: 100, apiKey: 'new-key' }), false)
   assert.equal(canReuseExternalTrendReference({ previous, hourBucket: 100, apiKey: '' }), true)
   assert.equal(canReuseExternalTrendReference({ previous, hourBucket: 101, apiKey: 'new-key' }), false)
+})
+
+test('a fresh matrix does not mask an FX key that has just become available', () => {
+  const matrix = {
+    schemaVersion: PRICE_ACTION_MATRIX_SCHEMA,
+    generatedAt: new Date(START).toISOString(),
+    externalTrends: {
+      hourBucket: Math.floor(START / HOUR),
+      failures: ['Twelve Data: TWELVE_DATA_API_KEY není nastaven'],
+    },
+    assets: PRICE_ACTION_ASSETS.map((asset) => ({
+      ...asset,
+      trends: Object.fromEntries(PRICE_ACTION_TIMEFRAMES.map((timeframe) => [timeframe.id, {
+        structure: {}, chartCandles: [], tradeProfile: { zoneCandidates: [] },
+      }])),
+    })),
+  }
+
+  assert.equal(canReusePriceActionMatrix({
+    matrix,
+    now: START + 60_000,
+    refreshMinutes: 15,
+    externalTrendEnabled: true,
+    twelveDataApiKey: 'new-key',
+  }), false)
 })
 
 test('a close below a mature flat range publishes a non-executable down bias and an alternating chart line', () => {

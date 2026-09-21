@@ -1791,6 +1791,22 @@ const isFresh = (matrix, now, refreshMinutes) => {
   return Number.isFinite(generated) && now - generated < refreshMinutes * 60_000
 }
 
+export const canReusePriceActionMatrix = ({
+  matrix,
+  now,
+  refreshMinutes,
+  externalTrendEnabled,
+  twelveDataApiKey,
+}) => {
+  if (!isFresh(matrix, now, refreshMinutes)) return false
+  if (!externalTrendEnabled) return true
+  return canReuseExternalTrendReference({
+    previous: matrix.externalTrends,
+    hourBucket: Math.floor(now / (60 * 60_000)),
+    apiKey: twelveDataApiKey,
+  })
+}
+
 const effectiveRefreshMinutes = (value) => {
   const parsed = Number(value)
   if (parsed === 0) return 0
@@ -1810,7 +1826,13 @@ export const buildPriceActionMatrix = async ({
 } = {}) => {
   const merged = { ...DEFAULT_PRICE_ACTION_STRUCTURE, ...(settings ?? {}) }
   const refreshMinutes = effectiveRefreshMinutes(merged.refreshMinutes)
-  if (previous && isFresh(previous, now, refreshMinutes)) return previous
+  if (previous && canReusePriceActionMatrix({
+    matrix: previous,
+    now,
+    refreshMinutes,
+    externalTrendEnabled,
+    twelveDataApiKey,
+  })) return previous
 
   // Fetch the independent asset/timeframe inputs together. The old nested
   // loop waited for every FX source before starting the next one, so a cold
