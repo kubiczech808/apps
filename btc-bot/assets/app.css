@@ -260,6 +260,10 @@ button.primary { color: #fff; background: var(--series-1); border-color: transpa
 .asset-price-chart .asset-structure-line { fill: none; stroke-width: 1.25; stroke-linecap: round; opacity: 0.88; filter: drop-shadow(0 0 1px rgba(0, 0, 0, 0.85)); }
 .asset-price-chart .asset-structure-up { stroke: #ffffff; }
 .asset-price-chart .asset-structure-down { stroke: #ffffff; }
+.asset-price-chart .asset-structure-alternative-up,
+.asset-price-chart .asset-structure-alternative-down { stroke-width: 1.8; stroke-dasharray: 2 5; stroke-linecap: round; opacity: 0.9; }
+.asset-price-chart .asset-structure-alternative-up { stroke: var(--good-text); }
+.asset-price-chart .asset-structure-alternative-down { stroke: var(--critical-text); }
 .asset-price-chart .asset-structure-flat { stroke: #ffffff; stroke-dasharray: 6 4; }
 .asset-price-chart .asset-structure-pullback { stroke: #ffffff; stroke-width: 1; stroke-dasharray: 4 4; opacity: 0.7; pointer-events: none; }
 .asset-price-chart .asset-structure-pullback-label { fill: var(--text-muted); font-size: 10px; font-weight: 650; paint-order: stroke; stroke: var(--surface-1); stroke-width: 3px; stroke-linejoin: round; pointer-events: none; }

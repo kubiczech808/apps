@@ -1516,6 +1516,11 @@ const renderAssetChart = () => {
       return { ...swing, label, x: xForTime(swing.time) }
     })
     .filter((swing) => swing.x !== null)
+  const alternatingTrendNodes = (structure?.alternatingTrendPivots ?? [])
+    .filter((swing) => swing.time >= candles[0].time && swing.time <= candles.at(-1).time)
+    .sort((left, right) => left.time - right.time)
+    .map((swing) => ({ ...swing, x: xForTime(swing.time) }))
+    .filter((swing) => swing.x !== null)
   const rangeHigh = activeRange?.high
   const rangeLow = activeRange?.low
   const nodeForRangePivot = (pivot) => Number.isFinite(pivot?.price)
@@ -1567,6 +1572,15 @@ const renderAssetChart = () => {
       svg.append(el('path', {
         className: `asset-structure-line asset-structure-${trend}`,
         d: swingNodes.map((swing, index) => `${index === 0 ? 'M' : 'L'} ${swing.x} ${y(swing.price)}`).join(' '),
+      }))
+    }
+    // The dotted audit path is intentionally stricter than the main white
+    // structure line: it starts at the newest API pivot and stops at the
+    // first break in the requested HH/HL or LL/LH alternation.
+    if (alternatingTrendNodes.length >= 2) {
+      svg.append(el('path', {
+        className: `asset-structure-line asset-structure-alternative-${trend}`,
+        d: alternatingTrendNodes.map((swing, index) => `${index === 0 ? 'M' : 'L'} ${swing.x} ${y(swing.price)}`).join(' '),
       }))
     }
     for (const swing of swingNodes) {

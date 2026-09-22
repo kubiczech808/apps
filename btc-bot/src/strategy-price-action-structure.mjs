@@ -381,6 +381,39 @@ const chartStructurePivots = ({ swings, labels, activeRange, trend, developingSw
     }, [])
 }
 
+// A second, deliberately strict audit path for the dashboard. The API has
+// already decided whether the active direction is up or down; this helper
+// only answers which of the published pivots still form an alternating wave
+// when read from the newest point backwards. Once the next expected label is
+// missing, the path stops instead of jumping over an invalidating pivot.
+export const alternatingTrendPivots = ({ pivots = [], trend } = {}) => {
+  const expectedLabels = trend === 'up' ? new Set(['HH', 'HL']) : trend === 'down' ? new Set(['LL', 'LH']) : new Set()
+  const nextLabel = { HH: 'HL', HL: 'HH', LL: 'LH', LH: 'LL' }
+  if (expectedLabels.size === 0) return []
+
+  const candidates = pivots.filter((pivot) =>
+    pivot && typeof pivot.label === 'string' && Number.isFinite(pivot.price) && Number.isFinite(pivot.time)
+  )
+  const reversePath = []
+  let expected = null
+  for (let index = candidates.length - 1; index >= 0; index -= 1) {
+    const pivot = candidates[index]
+    if (reversePath.length === 0) {
+      // An unlabeled initial H/L or a pivot from the opposite direction is
+      // not a usable first point. Once a path has started, however, every
+      // labeled pivot is checked and can terminate it.
+      if (!expectedLabels.has(pivot.label)) continue
+      reversePath.push(pivot)
+      expected = nextLabel[pivot.label]
+      continue
+    }
+    if (pivot.label !== expected) break
+    reversePath.push(pivot)
+    expected = nextLabel[pivot.label]
+  }
+  return reversePath.reverse()
+}
+
 // The wide timeframe profile supplies the multi-month structural spine used
 // for every HH, HL, LH, LL and trading decision. Its confirmation delay is
 // intentional: it prevents a short internal reaction such as USDJPY 159.8 ->
@@ -1678,6 +1711,14 @@ export const classifyStructure = (
   const contextHigh = normalizedCandles.reduce((best, candle) => !best || candle.high > best.high ? candle : best, null)
   const contextLow = normalizedCandles.reduce((best, candle) => !best || candle.low < best.low ? candle : best, null)
   const labels = [highText, lowText].filter(Boolean).join(' + ')
+  const chartPivots = chartStructurePivots({
+    swings: structure.swings,
+    labels: persistent.labels,
+    activeRange,
+    trend,
+    developingSwing,
+    developingCounter,
+  })
   const protectedPivot = trend === 'up' ? persistent.protectedLow : trend === 'down' ? persistent.protectedHigh : null
   const reason = structureBreak?.type.startsWith('CHoCH')
     ? `${structureBreak.type} close ${structureBreak.close} přes hlavní úroveň ${structureBreak.referencePrice}; bias je ${trend}, čeká se na ${trend === 'down' ? 'LH + LL' : 'HH + HL'} (${labels || 'bez kompletní sekvence'})`
@@ -1727,14 +1768,8 @@ export const classifyStructure = (
       developingCounterSwing: developingCounter,
       confirmed: structureConfirmed,
       recentSwings: structure.swings.slice(-8).map((swing) => pivotSummary(swing, persistent.labels.get(swing.index))),
-      chartPivots: chartStructurePivots({
-        swings: structure.swings,
-        labels: persistent.labels,
-        activeRange,
-        trend,
-        developingSwing,
-        developingCounter,
-      }),
+      chartPivots,
+      alternatingTrendPivots: alternatingTrendPivots({ pivots: chartPivots, trend }),
       contextRecentSwings: contextStructure.swings.slice(-8).map((swing) => pivotSummary(swing)),
     },
     zones: includeZones

@@ -4,6 +4,7 @@ import test from 'node:test'
 import {
   activeSupplyDemandZones,
   alignOneHourStructureToFourHour,
+  alternatingTrendPivots,
   applyExternalTrendConfirmation,
   buildPriceActionMatrix,
   canReusePriceActionMatrix,
@@ -47,6 +48,34 @@ test('price-action structure classifies trend from confirmed swings', () => {
   const flat = classifyStructure(zigzag([100, 110, 100, 110, 100, 110], { steps: 8 }), { minCandles: 20 })
   assert.equal(flat.trend, 'flat')
   assert.equal(flat.status, 'neutral')
+})
+
+test('alternative trend pivots walk backward only through the requested alternating labels', () => {
+  const pivots = [
+    { label: 'HL', kind: 'low', price: 150, time: 1 },
+    { label: 'LH', kind: 'high', price: 140, time: 2 },
+    { label: 'LL', kind: 'low', price: 130, time: 3 },
+    { label: 'LH', kind: 'high', price: 120, time: 4 },
+    { label: 'LL', kind: 'low', price: 100, time: 5 },
+  ]
+
+  assert.deepEqual(
+    alternatingTrendPivots({ pivots, trend: 'down' }).map((pivot) => pivot.label),
+    ['LH', 'LL', 'LH', 'LL']
+  )
+  assert.deepEqual(
+    alternatingTrendPivots({
+      pivots: [
+        { label: 'HH', kind: 'high', price: 120, time: 1 },
+        { label: 'HL', kind: 'low', price: 110, time: 2 },
+        { label: 'HH', kind: 'high', price: 140, time: 3 },
+        { label: 'LH', kind: 'high', price: 135, time: 4 },
+      ],
+      trend: 'up',
+    }).map((pivot) => pivot.label),
+    ['HH', 'HL', 'HH']
+  )
+  assert.deepEqual(alternatingTrendPivots({ pivots, trend: 'flat' }), [])
 })
 
 test('flat structure is formation-only and never publishes a planned entry', () => {
