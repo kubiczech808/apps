@@ -6965,13 +6965,16 @@ function createPortfolioDraftForType(type, strategyId, prefill = {}, displayName
 function switchCreatePortfolioType(type) {
   if (!state.parameterDraftCreate) return false;
   const accountType = normalizePortfolioAccountType(type);
-  state.parameterDraftCreateType = accountType;
   const label = normalizePortfolioName(els.portfolioName?.value || state.parameterDraft?.displayName, accountType === "live" ? "Live" : "New portfolio");
   const strategyId = accountType === "live" ? newLivePortfolioId(label) : newPaperPortfolioId(label);
   if (!strategyId) {
-    setExecutionStatus("no room for another portfolio", "error");
-    return;
+    const message = "Unable to create a valid portfolio id";
+    if (els.portfolioAccountType) els.portfolioAccountType.value = normalizePortfolioAccountType(state.parameterDraftCreateType);
+    setExecutionStatus(message, "error");
+    setParameterModalStatus(message, "error");
+    return false;
   }
+  state.parameterDraftCreateType = accountType;
   state.parameterDraftCreate = strategyId;
   const next = createPortfolioDraftForType(
     accountType,
@@ -7031,9 +7034,7 @@ function openCreatePortfolioModal(prefill = {}, trigger = null, accountType = "p
   const label = normalizePortfolioName(prefill.displayName, "") || (type === "live" ? "Live" : "New portfolio");
   const strategyId = type === "live" ? newLivePortfolioId(label) : newPaperPortfolioId(label);
   if (!strategyId) {
-    // Same reason as the limit above: this fires with the modal closed, so the status line
-    // may not be on screen to carry it.
-    reportBlockedCreate("no room for another portfolio id; archive one to make room");
+    reportBlockedCreate("Unable to create a valid portfolio id");
     return;
   }
   state.parameterDraftCreateType = type;
