@@ -67,6 +67,8 @@ function run(rows, { skipStore = false, allowEmpty = false, activeRows = null } 
 // The helpers the accumulator leans on, kept deliberately simple and explicit so the test is
 // reading the accumulator's arithmetic rather than theirs.
 function simulation_entry_probability(array $item) { return $item['firstMarketProbability'] ?? null; }
+function resolved_stats_entry_is_not_after_due(array $item): bool { return ($item['afterDue'] ?? false) !== true; }
+function resolved_stats_entry_fee_usdc(array $item, float $entry, float $stake): float { return (float) ($item['fee'] ?? 0); }
 function observation_entry_spread_is_tradable(array $item): bool { return ($item['tradable'] ?? true) === true; }
 function observation_market_shape(array $item): string { return (string) ($item['shape'] ?? 'binary'); }
 function resolved_horizon_band(array $item): string { return (string) ($item['horizon'] ?? '0-2d'); }

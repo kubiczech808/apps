@@ -2947,7 +2947,7 @@ function setupFinderTable(title, rows, note) {
           <thead>
             <tr>
               <th>Probability</th><th>Tag</th><th>Shape</th><th>Horizon</th>
-              <th>Trades</th><th>Accuracy</th><th>Staked</th><th>P/L</th><th>Return</th>
+              <th>W / L</th><th>Accuracy</th><th>Capital</th><th>Net P/L</th><th>Return</th>
             </tr>
           </thead>
           <tbody>
@@ -2957,10 +2957,10 @@ function setupFinderTable(title, rows, note) {
                 <td data-label="Tag">${escapeHtml(row.tag === "*" ? "any" : row.tag)}</td>
                 <td data-label="Shape">${escapeHtml(row.shape === "*" ? "any" : marketShapeLabel(row.shape))}</td>
                 <td data-label="Horizon">${escapeHtml(row.horizon === "*" ? "any" : row.horizon)}</td>
-                <td data-label="Trades">${formatInteger(row.trades)}</td>
+                <td data-label="W / L">${formatInteger(row.wins)} / ${formatInteger(Math.max(0, Number(row.trades) - Number(row.wins)))}</td>
                 <td data-label="Accuracy">${row.accuracy == null ? "-" : percent(row.accuracy)}</td>
-                <td data-label="Staked">${money(Number(row.stakedUsdc))}</td>
-                <td data-label="P/L" class="${pnlClass(Number(row.pnlUsdc))}">${signedMoney(Number(row.pnlUsdc))}</td>
+                <td data-label="Capital">${money(Number(row.stakedUsdc))}</td>
+                <td data-label="Net P/L" class="${pnlClass(Number(row.pnlUsdc))}">${signedMoney(Number(row.pnlUsdc))}</td>
                 <td data-label="Return" class="${pnlClass(Number(row.returnPct))}">${row.returnPct == null ? "-" : `${row.returnPct > 0 ? "+" : ""}${row.returnPct.toFixed(1)}%`}</td>
               </tr>
             `).join("")}
@@ -2986,14 +2986,15 @@ function renderSetupFinder() {
       <p class="setup-finder-note">
         ${formatInteger(data.pricedRows)} resolved markets of ${formatInteger(data.scannedRows)} stored could be
         priced -- the rest never carried a live quote, settled between 0 and 1, or had no tradable spread.
+        ${Number(data.afterDueRejected || 0) > 0 ? `${formatInteger(data.afterDueRejected)} rows first recorded after their stated resolution were excluded rather than presented as in-play setups. ` : ""}
         ${formatInteger(data.combinations)} combinations with at least ${formatInteger(data.minTrades)} trades.
         Every row answers: if ${money(Number(data.stakeUsdc))} had been staked on every market matching it,
         bought at the price it first quoted and settled at 0 or 1, this is what it would have returned.
-        Gross of fees.
+        Recorded entry taker fees are included.
       </p>
     </div>
     ${setupFinderTable("Best combinations", data.best,
-      "Ranked by return, not by nominal profit: a combination that stakes ten times as much always wins on profit and says nothing about the setup.")}
+      "Ranked by net return after entry fees, not nominal profit. Identical samples are shown only once, using the least restrictive configuration.")}
     ${setupFinderTable("Worst combinations", data.worst,
       "The actionable half: what to exclude.")}
   `;

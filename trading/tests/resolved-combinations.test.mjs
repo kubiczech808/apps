@@ -24,7 +24,7 @@ const STAKE = 5;
 
 // A resolved row as the archive stores it. The entry price is what the simulation buys at,
 // and finalOutcomePrice is how it settled.
-const row = (entry, won, { tags = ["esports"], question = "A vs B", firstObservedAt = "2026-09-10T00:00:00.000Z", endDate = "2026-09-10T12:00:00.000Z" } = {}) => ({
+const row = (entry, won, { tags = ["esports"], question = "A vs B", firstObservedAt = "2026-09-10T00:00:00.000Z", endDate = "2026-09-10T12:00:00.000Z", feeRate = null } = {}) => ({
   tokenId: `${entry}-${won ? "w" : "l"}-${Math.random().toString(36).slice(2, 9)}`,
   question,
   status: "RESOLVED",
@@ -34,6 +34,7 @@ const row = (entry, won, { tags = ["esports"], question = "A vs B", firstObserve
   firstPolymarketTags: tags,
   firstObservedAt,
   endDate,
+  ...(feeRate == null ? {} : { feeRate }),
 });
 
 function combinations(rows, query = "min_trades=1") {
@@ -140,7 +141,7 @@ test("a row with several tags is one trade under 'any tag', not two", () => {
   }
 });
 
-test("the horizon band is measured from when the row was first seen", () => {
+test("rows first recorded after their stated resolution are not proposed as historical setups", () => {
   // The portfolio trade analysis could not answer this: a trade's own daysToResolution is
   // recomputed on every mark, so on a closed position it holds the horizon at the LAST mark
   // and everything lands in "<= 1 day". A catalogue row is not marked, so the gap between
@@ -154,9 +155,19 @@ test("the horizon band is measured from when the row was first seen", () => {
     .map((entry) => entry.horizon);
   assert.ok(bands.includes("<= 3 h"), `two hours ahead: ${bands.join(", ")}`);
   assert.ok(bands.includes("<= 12 h"), `twelve hours ahead: ${bands.join(", ")}`);
-  // An hour AFTER the stated end date: the fixture was already under way, which is its own
-  // band rather than being folded into the shortest one.
-  assert.ok(bands.includes("under way"), `opened after the end date: ${bands.join(", ")}`);
+  assert.ok(!bands.includes("under way"), `an after-due row must not become an in-play setup: ${bands.join(", ")}`);
+  assert.equal(payload.afterDueRejected, 1);
+});
+
+test("recorded entry fees are included in the Setup finder P/L", () => {
+  const payload = combinations([
+    row(0.5, true, { feeRate: 0.02 }),
+    row(0.5, false, { feeRate: 0.02 }),
+  ]);
+  const all = find(payload.best, { tag: "*", shape: "*", horizon: "*", probability: 50 });
+  // $5 at 50c buys 10 shares; its $0.05 fee makes the win +$4.95 and the loss -$5.05.
+  assert.equal(all.stakedUsdc, 10.1);
+  assert.equal(all.pnlUsdc, -0.1);
 });
 
 test("a combination too small to mean anything is not offered", () => {
@@ -238,5 +249,5 @@ test("the page states what it is measured on", () => {
   const app = readFileSync(new URL("../assets/app.js", import.meta.url), "utf8");
   assert.match(app, /resolved markets of \$\{formatInteger\(data\.scannedRows\)\} stored could be/);
   assert.match(app, /never carried a live quote, settled between 0 and 1, or had no tradable spread/);
-  assert.match(app, /Gross of fees/, "the basis has to be stated, not assumed");
+  assert.match(app, /Recorded entry taker fees are included/, "the basis has to be stated, not assumed");
 });

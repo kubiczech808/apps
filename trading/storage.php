@@ -2027,6 +2027,7 @@ function trading_storage_resolved_stats_replace(PDO $pdo, array $cells, array $a
         'cells' => count($rows),
         'scanned' => (int) ($meta['scanned'] ?? 0),
         'priced' => (int) ($meta['priced'] ?? 0),
+        'afterDueRejected' => (int) ($meta['afterDueRejected'] ?? 0),
         'foldedAt' => $now,
     ], JSON_UNESCAPED_SLASHES));
 
@@ -2079,6 +2080,7 @@ function trading_storage_resolved_stats_load(PDO $pdo): ?array
         'anyTag' => $anyTag,
         'scanned' => is_array($fold) ? (int) ($fold['scanned'] ?? 0) : 0,
         'priced' => is_array($fold) ? (int) ($fold['priced'] ?? 0) : 0,
+        'afterDueRejected' => is_array($fold) ? (int) ($fold['afterDueRejected'] ?? 0) : 0,
         'foldedAt' => (string) $foldedAt,
     ];
 }

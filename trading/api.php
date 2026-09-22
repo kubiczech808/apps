@@ -1424,12 +1424,13 @@ function resolved_stats_accumulate(array $sources, float $stake = 5.0, ?callable
     $anyTag = [];
     $scanned = 0;
     $priced = 0;
+    $afterDueRejected = 0;
     // Seen once, summed once. The database and the published file overlap -- the file's
     // settled rows are a subset of the mirror's -- so reading both without this would count
     // 6,533 settlements twice and quietly inflate every accuracy the page shows. It also
     // covers a duplicate inside a single file, which nothing else would notice.
     $seen = [];
-    $onRow = static function (array $item) use (&$cells, &$anyTag, &$scanned, &$priced, &$seen, $stake): bool {
+    $onRow = static function (array $item) use (&$cells, &$anyTag, &$scanned, &$priced, &$afterDueRejected, &$seen, $stake): bool {
         $identity = (string) ($item['tokenId'] ?? $item['id'] ?? $item['marketKey'] ?? '');
         if ($identity !== '') {
             if (isset($seen[$identity])) {
@@ -1459,6 +1460,10 @@ function resolved_stats_accumulate(array $sources, float $stake = 5.0, ?callable
         if ($entry === null || $outcome === null) {
             return true;
         }
+        if (!resolved_stats_entry_is_not_after_due($item)) {
+            $afterDueRejected += 1;
+            return true;
+        }
         // The spread AT ENTRY, not the current one. This used to call
         // observation_spread_is_tradable, which prefers the live book and therefore, on
         // a resolved row, judged tradability by the book as it stood after the result
@@ -1469,9 +1474,12 @@ function resolved_stats_accumulate(array $sources, float $stake = 5.0, ?callable
             return true;
         }
         $priced += 1;
-        // Bought at the entry probability and settled at 0 or 1. Gross of fees, which is
-        // the same basis the performance tables report on.
-        $pnl = $outcome === 1 ? $stake * ((1.0 / $entry) - 1.0) : -$stake;
+        // Bought at the entry probability and settled at 0 or 1, including the taker fee
+        // captured with the discovery quote. A missing historical fee remains zero rather
+        // than inventing a charge which was never recorded.
+        $fee = resolved_stats_entry_fee_usdc($item, $entry, $stake);
+        $totalCost = $stake + $fee;
+        $pnl = $outcome === 1 ? ($stake / $entry) - $totalCost : -$totalCost;
         $probability = (int) floor($entry * 100);
         $shape = observation_market_shape($item);
         $horizon = resolved_horizon_band($item);
@@ -1486,7 +1494,7 @@ function resolved_stats_accumulate(array $sources, float $stake = 5.0, ?callable
             }
             $cells[$key][0] += 1;
             $cells[$key][1] += $outcome;
-            $cells[$key][2] += $stake;
+            $cells[$key][2] += $totalCost;
             $cells[$key][3] += $pnl;
         }
         $anyKey = $probability . "\x1f" . $shape . "\x1f" . $horizon;
@@ -1495,7 +1503,7 @@ function resolved_stats_accumulate(array $sources, float $stake = 5.0, ?callable
         }
         $anyTag[$anyKey][0] += 1;
         $anyTag[$anyKey][1] += $outcome;
-        $anyTag[$anyKey][2] += $stake;
+        $anyTag[$anyKey][2] += $totalCost;
         $anyTag[$anyKey][3] += $pnl;
 
         return true;
@@ -1535,6 +1543,7 @@ function resolved_stats_accumulate(array $sources, float $stake = 5.0, ?callable
         'anyTag' => $anyTag,
         'scanned' => $scanned,
         'priced' => $priced,
+        'afterDueRejected' => $afterDueRejected,
         'sources' => $breakdown,
     ];
 }
@@ -1852,6 +1861,56 @@ function simulation_entry_probability(array $item): ?float
     }
 
     return null;
+}
+
+/**
+ * A settled row can only teach the Setup finder about an entry which was still
+ * possible when we first recorded it. Some old catalogue rows were first stored
+ * after Polymarket's own stated resolution time and nevertheless retained a
+ * non-final quote. Treating those as an "under way" portfolio is hindsight, not
+ * a configuration that could have been run.
+ */
+function resolved_stats_entry_is_not_after_due(array $item): bool
+{
+    $seen = null;
+    foreach (['firstObservedAt', 'firstEvaluatedAt', 'observedAt', 'evaluatedAt'] as $field) {
+        $parsed = strtotime((string) ($item[$field] ?? ''));
+        if ($parsed !== false && $parsed > 0) {
+            $seen = $parsed;
+            break;
+        }
+    }
+    if ($seen === null) {
+        return true;
+    }
+    foreach (['resolutionEndDate', 'endDate'] as $field) {
+        $due = strtotime((string) ($item[$field] ?? ''));
+        if ($due !== false && $due > 0) {
+            return $due > $seen;
+        }
+    }
+
+    return true;
+}
+
+/**
+ * The fixed $5 stake is the notional bought at entry. Polymarket's taker fee is
+ * charged on that fill, so historical cost and both the win and loss P/L need to
+ * include it before a live configuration can be compared to paper trading.
+ */
+function resolved_stats_entry_fee_usdc(array $item, float $entry, float $stake): float
+{
+    $rawRate = $item['firstFeeRate'] ?? $item['feeRate'] ?? null;
+    if (!is_numeric($rawRate)) {
+        return 0.0;
+    }
+    $rate = max(0.0, (float) $rawRate);
+    if ($rate <= 0.0 || ($item['feesEnabled'] ?? null) === false) {
+        return 0.0;
+    }
+
+    // shares * rate * price * (1 - price), with shares = stake / price.
+    return $stake * $rate * (1.0 - $entry);
 }
 
 /**
@@ -7654,7 +7713,11 @@ try {
                 $pdo,
                 $accumulated['cells'],
                 $accumulated['anyTag'],
-                ['scanned' => $accumulated['scanned'], 'priced' => $accumulated['priced']],
+                [
+                    'scanned' => $accumulated['scanned'],
+                    'priced' => $accumulated['priced'],
+                    'afterDueRejected' => $accumulated['afterDueRejected'] ?? 0,
+                ],
             );
             respond([
                 'ok' => true,
@@ -8912,9 +8975,29 @@ try {
             }
         }
 
-        // Ranked by RETURN, because a combination that stakes ten times as much will always
-        // win on nominal profit and says nothing about the setup. The nominal figure travels
-        // with every row, which is the other half of what was asked for.
+        // A tag and a shape can describe exactly the same sample (for example a tag whose
+        // every market happens to be outright). The more restrictive duplicate adds no rule
+        // and used to crowd out genuinely different setups, so retain the simplest member.
+        $unique = [];
+        foreach ($rows as $row) {
+            $signature = implode("\x1f", [
+                $row['probability'], $row['trades'], $row['wins'],
+                number_format((float) $row['stakedUsdc'], 6, '.', ''),
+                number_format((float) $row['pnlUsdc'], 6, '.', ''),
+            ]);
+            $specificity = ($row['tag'] !== '*' ? 1 : 0)
+                + ($row['shape'] !== '*' ? 1 : 0)
+                + ($row['horizon'] !== '*' ? 1 : 0);
+            if (!isset($unique[$signature]) || $specificity < $unique[$signature]['specificity']) {
+                $unique[$signature] = ['specificity' => $specificity, 'row' => $row];
+            }
+        }
+        $rows = array_values(array_map(static fn (array $entry): array => $entry['row'], $unique));
+
+        // Ranked by NET RETURN after recorded entry fees, because a combination that stakes
+        // ten times as much will always win on nominal profit and says nothing about the
+        // setup. The nominal figure travels with every row, which is the other half of what
+        // was asked for.
         usort($rows, static function (array $left, array $right): int {
             return ($right['returnPct'] ?? -999) <=> ($left['returnPct'] ?? -999);
         });
@@ -8925,6 +9008,7 @@ try {
             'ok' => true,
             'scannedRows' => $scanned,
             'pricedRows' => $priced,
+            'afterDueRejected' => (int) ($accumulated['afterDueRejected'] ?? 0),
             // Which of the two paths answered. Read from the page it feeds: once this says
             // 'stored', the resolved observations have no reader left here.
             'statsSource' => $statsSource,
