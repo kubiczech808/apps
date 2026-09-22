@@ -700,7 +700,10 @@ function paperStrategyIds({ includeArchived = false } = {}) {
   const custom = Object.keys(paper)
     .filter((id) => !BUILT_IN_PAPER_STRATEGY_IDS.includes(id) && CUSTOM_PAPER_STRATEGY_ID.test(id))
     .sort((left, right) => left.localeCompare(right));
-  return [...BUILT_IN_PAPER_STRATEGY_IDS, ...custom]
+  // The saved config is authoritative. Do not render a shipped id merely because
+  // the UI knows its historical default; that resurrected portfolios which were removed
+  // from the persisted config.
+  return [...BUILT_IN_PAPER_STRATEGY_IDS.filter((id) => Object.prototype.hasOwnProperty.call(paper, id)), ...custom]
     .filter((id) => includeArchived || paper[id]?.archived !== true);
 }
 
