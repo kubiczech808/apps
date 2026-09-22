@@ -28,7 +28,7 @@ with tempfile.TemporaryDirectory() as temp:
     patch_runtime.main()
     overview = (patch_runtime.TARGET / "app/overview.php").read_text(encoding="utf-8")
     assert patch_runtime.MARKER in overview
-    assert "BTC_CZK" not in overview
+    assert "SELECT * FROM exchange_rates" not in overview
     for relative in ("app/php/get_live_price.php", "app/php/get_ticker.php"):
         patched = (patch_runtime.TARGET / relative).read_text(encoding="utf-8")
         assert "INSERT INTO exchange_rates" not in patched
