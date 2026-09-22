@@ -681,6 +681,31 @@ test('trade profile requires S/D zone hit, 50 percent pullback and at least 2R',
   assert.equal(withoutHit.gates.find((entry) => entry.id === 'zone').status, 'unmet')
 })
 
+test('a historical wick through 50 percent does not keep the pullback gate green after price recovers', () => {
+  const profile = evaluateTradeProfile({
+    item: {
+      trend: 'up',
+      price: 115,
+      lastCandle: candle(START, 109, 116, 99, 115),
+      candleSignal: { bullish: 'bullish_rejection', bearish: null, patterns: ['bullish_rejection'] },
+      structure: {
+        high: { current: { price: 120 } },
+        low: { current: { price: 100 } },
+      },
+      zones: {
+        demand: { type: 'demand', low: 100, high: 105 },
+        unfilledDemand: [{ type: 'demand', low: 100, high: 105 }],
+        unfilledSupply: [{ type: 'supply', low: 140, high: 145 }],
+      },
+    },
+    settings: { pullbackPct: 50, minRewardRisk: 2, stopBufferPct: 0.02 },
+  })
+
+  assert.equal(profile.pullbackRange.from, 110)
+  assert.equal(profile.gates.find((gate) => gate.id === 'pullback').status, 'unmet')
+  assert.equal(profile.status, 'watch')
+})
+
 test('TP2 uses the nearest opposing zone beyond TP1, not merely beyond entry', () => {
   const longProfile = evaluateTradeProfile({
     item: {

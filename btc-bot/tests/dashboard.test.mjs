@@ -64,13 +64,16 @@ test('decision facts carry signal-state classes', () => {
   assert.match(js, /plan\?\.leverage/)
 })
 
-test('capital tile separates USD benchmark from sats trading result', () => {
+test('capital and P/L are presented in USD while sats remain internal accounting units', () => {
   assert.match(js, /const signedPct/)
   assert.match(js, /const capitalBenchmark/)
   assert.match(js, /startingCapitalUsd/)
   assert.match(js, /firstPositiveEquitySats/)
   assert.match(js, /tile\(\s*'Výkon od startu'/, 'dashboard must render a start benchmark tile')
-  assert.match(js, /BTC.*obchody.*v sats/s)
+  assert.match(js, /const usdFromSats/)
+  assert.match(js, /tile\('Kapitál', usd\(equityUsd\)/)
+  assert.match(js, /positionPnlCell/)
+  assert.doesNotMatch(js, /signedSats/)
 })
 
 test('asset price labels use adaptive decimal places by price magnitude', () => {
@@ -248,6 +251,8 @@ test('asset tickers open a timeframe price chart with supply and demand zones', 
   assert.match(js, /const candlePlotRight =/)
   assert.match(js, /asset-structure-line asset-structure-\$\{trend\}/)
   assert.match(js, /asset-structure-line/)
+  assert.doesNotMatch(js, /asset-external-pivot/)
+  assert.doesNotMatch(css, /asset-external-pivot/)
   assert.match(js, /H flat/)
   assert.match(js, /const label = swing\.label \|\| \(swing\.kind === 'high' \? 'H' : 'L'\)/)
   assert.match(js, /assetChartVisibleCandleCount/)

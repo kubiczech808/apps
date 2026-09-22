@@ -376,13 +376,13 @@ export const createPaperExecutor = ({
       return trade
     },
 
-    closePosition: async (id, price) => {
+    closePosition: async (id, price, exitReason = 'manual') => {
       const trade = store.trades.find((candidate) => candidate.id === id)
       if (!trade) throw new Error(`unknown paper trade ${id}`)
       if (trade.pricingModel === 'linear-usd') {
-        settleLinear(trade, price ?? trade.markPrice ?? trade.entry, 'manual', now())
+        settleLinear(trade, price ?? trade.markPrice ?? trade.entry, exitReason, now())
       } else {
-        settle(trade, price ?? trade.stopLoss, 'manual', now())
+        settle(trade, price ?? trade.stopLoss, exitReason, now())
       }
       return trade
     },

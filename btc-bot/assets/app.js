@@ -41,8 +41,7 @@ let selectedStrategyView = 'price-action'
 
 const nf = (digits) => new Intl.NumberFormat('cs-CZ', { minimumFractionDigits: digits, maximumFractionDigits: digits })
 
-const sats = (value) => (Number.isFinite(value) ? `${nf(0).format(Math.round(value))} sats` : '–')
-const usd = (value) => (Number.isFinite(value) ? `$${nf(0).format(Math.round(value))}` : '–')
+const usd = (value, digits = 2) => (Number.isFinite(value) ? `$${nf(digits).format(value)}` : '–')
 const priceFractionDigits = (value) => {
   const magnitude = Math.abs(Number(value))
   if (magnitude < 1) return 4
@@ -110,19 +109,40 @@ const ago = (value) => {
   return `před ${Math.round(minutes / 60)} h`
 }
 
-/** P/L always carries its sign, so the colour is never the only signal. */
-const signedSats = (value) => {
-  if (!Number.isFinite(value)) return { text: '–', className: '' }
-  const rounded = Math.round(value)
-  const text = `${rounded > 0 ? '+' : rounded < 0 ? '−' : ''}${nf(0).format(Math.abs(rounded))} sats`
-  return { text, className: rounded > 0 ? 'pos' : rounded < 0 ? 'neg' : '' }
-}
-
 const signedUsd = (value) => {
   if (!Number.isFinite(value)) return { text: '–', className: '' }
   const text = `${value > 0 ? '+' : value < 0 ? '−' : ''}$${nf(2).format(Math.abs(value))}`
   return { text, className: value > 0 ? 'pos' : value < 0 ? 'neg' : '' }
 }
+
+const usdFromSats = (value, quoteSatsPerUsd = null) => {
+  if (!Number.isFinite(value)) return null
+  if (Number.isFinite(quoteSatsPerUsd) && quoteSatsPerUsd > 0) return value / quoteSatsPerUsd
+  const btcPrice = state?.market?.price
+  return Number.isFinite(btcPrice) && btcPrice > 0 ? (value / SATS_PER_BTC) * btcPrice : null
+}
+
+const positionPnlUsd = (position) => usdFromSats(position?.plSats, position?.quoteSatsPerUsd)
+const positionPnlPercent = (position) => {
+  const pnl = positionPnlUsd(position)
+  return Number.isFinite(pnl) && Number.isFinite(position?.quantityUsd) && position.quantityUsd > 0
+    ? (pnl / position.quantityUsd) * 100
+    : null
+}
+
+const positionPnlCell = (position) => {
+  const pnl = signedUsd(positionPnlUsd(position))
+  const returnPct = signedPct(positionPnlPercent(position))
+  return el('td', { className: pnl.className }, [
+    el('div', { text: pnl.text }),
+    el('div', { className: `pa-level-detail ${returnPct.className}`, text: returnPct.text }),
+  ])
+}
+
+const satFeesUsd = (position) => usdFromSats(
+  (position?.openingFeeSats || 0) + (position?.closingFeeSats || 0) + (position?.carryFeesSats || 0),
+  position?.quoteSatsPerUsd
+)
 
 const el = (tag, attributes = {}, children = []) => {
   const node = SVG_TAGS.has(tag)
@@ -192,7 +212,7 @@ const STRATEGY_RULEBOOK = [
   },
   {
     title: 'Velikost pozice vychází ze stopu',
-    text: 'Množství kontraktů se dopočítá tak, aby zásah počátečního stopu stál nejvýše 2 % účtu v sats.',
+    text: 'Množství kontraktů se dopočítá tak, aby zásah počátečního stopu stál nejvýše 2 % hodnoty účtu.',
     status: () => {
       const plan = state?.lastDecision?.plan
       if (!plan) return fact('neutral', 'počítá se při signálu')
@@ -303,7 +323,7 @@ const STRATEGY_CANDIDATES = [
     backtest: {
       status: 'met',
       label: '5y + skutečný funding',
-      result: '+7,1 % p.a. v sats',
+      result: '+7,1 % p.a.',
       detail: '30 obchodů, PF 2,00, hodinový max DD 15,6 %. Poslední 3 roky +11,5 % p.a.; medián držení 12,7 dne, 90. percentil 40,3 dne.',
     },
     command:
@@ -967,13 +987,13 @@ const renderNotices = () => {
   const settings = state.settings || {}
 
   if (state.mode === 'mainnet') {
-    notices.push(['bad', 'Ostrý provoz: obchody se otevírají za skutečné sats.'])
+    notices.push(['bad', 'Ostrý provoz: obchody se otevírají za skutečný kapitál.'])
   }
   if (keyIsPublic) {
     notices.push([
       '',
       'Přístupový klíč je veřejně v repozitáři, takže ostrý provoz je zamčený. ' +
-        'Pro obchodování za skutečné sats nastav secret BTC_BOT_KEY a nasaď znovu.',
+        'Pro ostré obchodování nastav secret BTC_BOT_KEY a nasaď znovu.',
     ])
   }
   if (state.modeRefusal) {
@@ -1083,8 +1103,6 @@ const renderPortfolioTiles = (box, { strategyId = null } = {}) => {
   const benchmark = capitalBenchmark({ account, market, stats: accountStats })
   const equityUsd = benchmark.equityUsd
   const usdReturn = signedPct(benchmark.usdReturnPct)
-  const btcReturn = signedPct(benchmark.btcReturnPct)
-  const satsReturn = signedPct(benchmark.satsReturnPct)
 
   const openRisk = running.reduce((sum, position) => {
     if (!Number.isFinite(position.entry) || !Number.isFinite(position.stopLoss)) return sum
@@ -1098,24 +1116,24 @@ const renderPortfolioTiles = (box, { strategyId = null } = {}) => {
   const biasLabel = { up: 'vzestupný', down: 'sestupný', range: 'do strany' }[market.bias] || '–'
 
   box.append(
-    tile('Kapitál', sats(account.equitySats), equityUsd === null ? '–' : `≈ ${usd(equityUsd)}`),
+    tile('Kapitál', usd(equityUsd), 'aktuální hodnota účtu'),
     tile(
       'Výkon od startu',
-      Number.isFinite(benchmark.usdReturnPct) ? `USD ${usdReturn.text}` : '–',
-      `BTC ${btcReturn.text} · obchody ${satsReturn.text} v sats`,
+      Number.isFinite(benchmark.usdReturnPct) ? usdReturn.text : '–',
+      `${stats.trades || 0} obchodů`,
       usdReturn.className
     ),
     tile(
       'Otevřené riziko',
-      running.length ? sats(openRisk) : '0 sats',
+      running.length ? usd(usdFromSats(openRisk)) : '$0,00',
       `${running.length} ${running.length === 1 ? 'pozice' : 'pozic'} v trhu`
     ),
-    tile('Nerealizované P/L', signedSats(openPl).text, 'otevřené pozice', signedSats(openPl).className),
+    tile('Nerealizované P/L', signedUsd(usdFromSats(openPl)).text, 'otevřené pozice', signedUsd(usdFromSats(openPl)).className),
     tile(
       strategyId ? 'Realizované P/L PA-1' : 'Realizované P/L',
-      signedSats(stats.netPnlSats).text,
+      signedUsd(usdFromSats(stats.netPnlSats)).text,
       `${stats.trades || 0} obchodů, úspěšnost ${pct(stats.winRate)}`,
-      signedSats(stats.netPnlSats).className
+      signedUsd(usdFromSats(stats.netPnlSats)).className
     ),
     tile(
       'BTC',
@@ -1568,42 +1586,6 @@ const renderAssetChart = () => {
           text: `${swing.label} ${quotePrice(swing.price)}`,
         })
       )
-    }
-  }
-
-  // An independent pivot path is an audit layer, not a second interpretation
-  // of the PA-1 structure. It remains deliberately quiet: the source and
-  // exact pivot details appear on hover rather than competing with HH/HL text.
-  const externalPivotReference = item?.externalPivots
-  const externalPivotNodes = (externalPivotReference?.pivots ?? [])
-    .filter((pivot) => Number.isFinite(pivot?.price) && Number.isFinite(pivot?.time))
-    .filter((pivot) => pivot.time >= candles[0].time && pivot.time <= candles.at(-1).time)
-    .map((pivot) => ({ ...pivot, x: xForTime(pivot.time) }))
-    .filter((pivot) => pivot.x !== null)
-  if (externalPivotNodes.length >= 2) {
-    const sourceLabel = [
-      externalPivotReference.source,
-      externalPivotReference.method,
-      `perioda ${externalPivotReference.timePeriod}`,
-      `${externalPivotReference.timeframeId?.toUpperCase() ?? timeframeId.toUpperCase()}`,
-    ].filter(Boolean).join(' · ')
-    const path = el('path', {
-      className: 'asset-external-pivot-line',
-      d: externalPivotNodes.map((pivot, index) => `${index === 0 ? 'M' : 'L'} ${pivot.x} ${y(pivot.price)}`).join(' '),
-    })
-    path.append(el('title', { text: `${sourceLabel}; externí pivotová struktura` }))
-    svg.append(path)
-    for (const pivot of externalPivotNodes) {
-      const marker = el('circle', {
-        className: 'asset-external-pivot-marker',
-        cx: pivot.x,
-        cy: y(pivot.price),
-        r: 2.35,
-      })
-      marker.append(el('title', {
-        text: `${sourceLabel}; ${pivot.label ?? (pivot.kind === 'high' ? 'H' : 'L')} ${quotePrice(pivot.price)}`,
-      }))
-      svg.append(marker)
     }
   }
 
@@ -2098,7 +2080,9 @@ const renderChart = () => {
   svg.setAttribute('viewBox', `0 0 ${width} ${height}`)
   svg.setAttribute('preserveAspectRatio', 'none')
 
-  const values = points.map((point) => point.equitySats)
+  const usdValue = (point) => usdFromSats(point.equitySats, point.quoteSatsPerUsd)
+  const values = points.map(usdValue).filter(Number.isFinite)
+  if (values.length !== points.length) return
   const times = points.map((point) => point.at)
   const minValue = Math.min(...values)
   const maxValue = Math.max(...values)
@@ -2114,10 +2098,10 @@ const renderChart = () => {
     const value = low + ((high - low) * step) / 3
     const yy = y(value)
     svg.append(el('line', { class: 'gridline', x1: padLeft, x2: width - padRight, y1: yy, y2: yy }))
-    svg.append(el('text', { class: 'tick', x: padLeft - 8, y: yy + 4, 'text-anchor': 'end', text: nf(0).format(Math.round(value)) }))
+    svg.append(el('text', { class: 'tick', x: padLeft - 8, y: yy + 4, 'text-anchor': 'end', text: usd(value) }))
   }
 
-  const line = points.map((point, index) => `${index === 0 ? 'M' : 'L'}${x(index)},${y(point.equitySats)}`).join('')
+  const line = points.map((point, index) => `${index === 0 ? 'M' : 'L'}${x(index)},${y(usdValue(point))}`).join('')
   svg.append(el('path', { class: 'area', d: `${line}L${x(points.length - 1)},${y(low)}L${x(0)},${y(low)}Z` }))
   svg.append(el('path', { class: 'series', d: line }))
   svg.append(el('line', { class: 'baseline', x1: padLeft, x2: width - padRight, y1: y(low), y2: y(low) }))
@@ -2146,15 +2130,15 @@ const renderChart = () => {
     crosshair.setAttribute('x1', x(index))
     crosshair.setAttribute('x2', x(index))
     cursor.setAttribute('cx', x(index))
-    cursor.setAttribute('cy', y(point.equitySats))
+    cursor.setAttribute('cy', y(usdValue(point)))
 
     tooltip.hidden = false
     tooltip.replaceChildren(
       el('div', { text: when(point.at) }),
-      el('div', {}, [el('b', { text: sats(point.equitySats) })])
+      el('div', {}, [el('b', { text: usd(usdValue(point)) })])
     )
     tooltip.style.left = `${(x(index) / width) * box.width}px`
-    tooltip.style.top = `${(y(point.equitySats) / height) * box.height - 10}px`
+    tooltip.style.top = `${(y(usdValue(point)) / height) * box.height - 10}px`
   }
   const onLeave = () => {
     crosshair.style.display = 'none'
@@ -2217,7 +2201,6 @@ const renderOpen = () => {
     return
   }
   for (const position of rows) {
-    const pl = signedSats(position.plSats)
     body.append(
       el('tr', {}, [
         el('td', { text: when(position.openedAt) }),
@@ -2228,8 +2211,8 @@ const renderOpen = () => {
         el('td', { text: price(position.takeProfit) }),
         el('td', { text: position.leverage ? `${position.leverage}×` : '–' }),
         el('td', { text: price(position.liquidation) }),
-        el('td', { text: sats(position.marginSats) }),
-        el('td', { className: pl.className, text: pl.text }),
+        el('td', { text: usd(usdFromSats(position.marginSats, position.quoteSatsPerUsd)) }),
+        positionPnlCell(position),
       ])
     )
   }
@@ -2302,10 +2285,6 @@ const renderPriceActionOpen = (body) => {
     return
   }
   for (const position of rows) {
-    const pl = signedSats(position.plSats)
-    const plUsd = signedUsd(Number.isFinite(position.plSats) && Number.isFinite(state?.market?.price)
-      ? (position.plSats / SATS_PER_BTC) * state.market.price
-      : null)
     const total = position.quantityUsd
     const remaining = position.remainingQuantityUsd ?? total
     body.append(
@@ -2319,10 +2298,7 @@ const renderPriceActionOpen = (body) => {
         el('td', { text: quotePrice(priceActionPositionPrice(position)) }),
         priceActionLevelCell({ label: 'SL', position, target: position.stopLoss, quantityUsd: remaining }),
         priceActionTargetsCell(position),
-        el('td', { className: pl.className }, [
-          el('div', { text: pl.text }),
-          el('div', { className: `pa-level-detail ${plUsd.className}`, text: plUsd.text }),
-        ]),
+        positionPnlCell(position),
       ])
     )
   }
@@ -2355,7 +2331,7 @@ const renderOrders = () => {
         el('td', { text: price(order.entry) }),
         el('td', { text: price(order.stopLoss) }),
         el('td', { text: price(order.takeProfit) }),
-        el('td', { text: sats(order.marginSats) }),
+        el('td', { text: usd(usdFromSats(order.marginSats, order.quoteSatsPerUsd)) }),
         el('td', {}, [cancel]),
       ])
     )
@@ -2386,7 +2362,7 @@ const renderPriceActionOrders = (body) => {
         el('td', { text: quotePrice(order.quotePrice ?? order.entry) }),
         el('td', { text: partialTakeProfit ? '–' : quotePrice(order.stopLoss) }),
         el('td', { text: partialTakeProfit ? `TP1 ${quotePrice(order.entry)} · 50 %` : `${quotePrice(order.tp1)} / ${Number.isFinite(order.tp2) ? quotePrice(order.tp2) : 'struktura'}` }),
-        el('td', { text: partialTakeProfit ? '–' : sats(order.marginSats) }),
+        el('td', { text: partialTakeProfit ? '–' : usd(usdFromSats(order.marginSats, order.quoteSatsPerUsd)) }),
         el('td', { text: partialTakeProfit ? '–' : null }, cancel ? [cancel] : []),
       ])
     )
@@ -2394,9 +2370,38 @@ const renderPriceActionOrders = (body) => {
 }
 
 const EXIT_REASONS = {
-  stop_loss: 'stop loss',
-  take_profit: 'take profit',
-  manual: 'ručně / strategií',
+  stop_loss: {
+    label: 'Stop-loss',
+    detail: 'Cena dosáhla ochranného stop-lossu.',
+  },
+  take_profit: {
+    label: 'Take-profit',
+    detail: 'Cena dosáhla cílového take-profitu.',
+  },
+  structure_invalidation: {
+    label: 'Invalidace struktury',
+    detail: 'PA-1 potvrdila změnu struktury proti otevřené pozici a obchod uzavřela.',
+  },
+  strategy_exit: {
+    label: 'Výstup strategií',
+    detail: 'Řídicí pravidlo strategie uzavřelo pozici mimo SL a TP.',
+  },
+  unprotected_position: {
+    label: 'Ochranné uzavření',
+    detail: 'Pozice neměla platný stop-loss nebo take-profit, proto byla preventivně uzavřena.',
+  },
+  manual: {
+    label: 'Ruční uzavření',
+    detail: 'Zavřeno operátorem přes dashboard mimo SL a TP. Starší záznamy mohou tímto důvodem označovat i dřívější zásah strategie.',
+  },
+}
+
+const exitReasonCell = (reason) => {
+  const item = EXIT_REASONS[reason] ?? { label: 'Neuvedeno', detail: 'Zdroj obchodu důvod uzavření neposkytl.' }
+  return el('td', { className: 'reason', title: item.detail }, [
+    el('div', { text: item.label }),
+    el('div', { className: 'pa-level-detail', text: item.detail }),
+  ])
 }
 
 const renderClosed = () => {
@@ -2406,26 +2411,25 @@ const renderClosed = () => {
     return
   }
   setPanelTitle('panel-closed-title', 'Zavřené pozice')
-  setTableHead('panel-closed', ['Zavřeno', 'Směr', 'Velikost', 'Vstup', 'Výstup', 'Důvod', 'Poplatky', 'P/L'])
+  setTableHead('panel-closed', ['Otevřeno', 'Zavřeno', 'Směr', 'Objem', 'Vstup', 'Výstup', 'Důvod', 'Poplatky', 'P/L'])
   const rows = [...(state?.positions?.closed || [])].sort((a, b) => (b.closedAt ?? 0) - (a.closedAt ?? 0))
   body.replaceChildren()
   if (!rows.length) {
-    body.append(emptyRow(8, 'Zatím žádný uzavřený obchod.'))
+    body.append(emptyRow(9, 'Zatím žádný uzavřený obchod.'))
     return
   }
   for (const trade of rows) {
-    const pl = signedSats(trade.plSats)
-    const fees = (trade.openingFeeSats || 0) + (trade.closingFeeSats || 0) + (trade.carryFeesSats || 0)
     body.append(
       el('tr', {}, [
+        el('td', { text: when(trade.openedAt ?? trade.createdAt) }),
         el('td', { text: when(trade.closedAt) }),
         sideCell(trade.side),
         el('td', { text: trade.quantityUsd ? `${nf(0).format(trade.quantityUsd)} USD` : '–' }),
         el('td', { text: price(trade.entry) }),
         el('td', { text: price(trade.exitPrice) }),
-        el('td', { text: EXIT_REASONS[trade.exitReason] || '–' }),
-        el('td', { text: fees ? sats(fees) : '–' }),
-        el('td', { className: pl.className, text: pl.text }),
+        exitReasonCell(trade.exitReason),
+        el('td', { text: usd(satFeesUsd(trade)) }),
+        positionPnlCell(trade),
       ])
     )
   }
@@ -2433,24 +2437,27 @@ const renderClosed = () => {
 
 const renderPriceActionClosed = (body) => {
   setPanelTitle('panel-closed-title', 'Zavřené price-action obchody')
-  setTableHead('panel-closed', ['Zavřeno', 'Asset', 'Směr', 'Entry', 'Výstup', 'Důvod', 'P/L'])
+  setTableHead('panel-closed', ['Otevřeno', 'Zavřeno', 'Asset', 'TF', 'Směr', 'Objem', 'Entry', 'Výstup', 'Důvod', 'Poplatky', 'P/L'])
   const rows = (state?.positions?.closed || []).filter((trade) => trade.strategyId === 'price-action-structure-v1')
   body.replaceChildren()
   if (!rows.length) {
-    body.append(emptyRow(7, 'Zatím žádný uzavřený price-action obchod.'))
+    body.append(emptyRow(11, 'Zatím žádný uzavřený price-action obchod.'))
     return
   }
   for (const trade of rows.slice(0, 100)) {
-    const pl = signedSats(trade.plSats)
     body.append(
       el('tr', {}, [
+        el('td', { text: when(trade.openedAt ?? trade.createdAt) }),
         el('td', { text: when(trade.closedAt) }),
         el('td', { text: trade.assetSymbol || trade.asset || '–' }),
+        el('td', { text: trade.timeframeId?.toUpperCase() ?? trade.timeframe?.toUpperCase() ?? '–' }),
         sideCell(trade.side),
+        el('td', { text: Number.isFinite(trade.quantityUsd) ? `${nf(2).format(trade.quantityUsd)} USD` : '–' }),
         el('td', { text: quotePrice(trade.entry) }),
         el('td', { text: quotePrice(trade.exitPrice) }),
-        el('td', { className: 'reason', text: EXIT_REASONS[trade.exitReason] || '–' }),
-        el('td', { className: pl.className, text: pl.text }),
+        exitReasonCell(trade.exitReason),
+        el('td', { text: usd(satFeesUsd(trade)) }),
+        positionPnlCell(trade),
       ])
     )
   }
@@ -3059,7 +3066,7 @@ const setStatus = (message, className = '') => {
 
 const saveSettings = async () => {
   const mode = $('set-mode').value
-  if (mode === 'mainnet' && !confirm('Přepnout na OSTRÝ provoz? Bot začne obchodovat za skutečné sats.')) return
+  if (mode === 'mainnet' && !confirm('Přepnout na OSTRÝ provoz? Bot začne obchodovat za skutečný kapitál.')) return
 
   const settings = state?.settings || {}
   const payload = {
@@ -3106,7 +3113,7 @@ const renderHeader = () => {
   $('portfolio-name').textContent = view.id === 'momentum'
     ? state?.settings?.portfolioName || view.title
     : view.title
-  $('equity-title').textContent = view.id === 'momentum' ? 'Vývoj kapitálu (sats)' : 'Kapitál strategie'
+  $('equity-title').textContent = view.id === 'momentum' ? 'Vývoj kapitálu (USD)' : 'Kapitál strategie (USD)'
 
   const dot = $('status-dot')
   const updated = state?.updatedAt ? Date.parse(state.updatedAt) : NaN

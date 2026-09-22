@@ -318,7 +318,7 @@ test('a missing PA TP2 is backfilled only when the current profile matches the o
 test('price-action invalidation closes a position and retires pre-protocol paper trades', async () => {
   const calls = []
   const executor = {
-    closePosition: async (id, price) => calls.push([id, price]),
+    closePosition: async (...args) => calls.push(args),
   }
   const matrix = {
     assets: [
@@ -349,7 +349,10 @@ test('price-action invalidation closes a position and retires pre-protocol paper
     settings: { pullbackPct: 50, minRewardRisk: 2, riskPct: 1 },
   })
 
-  assert.deepEqual(calls, [['legacy', 10], ['invalidated', 0.69]])
+  assert.deepEqual(calls, [
+    ['legacy', 10, 'structure_invalidation'],
+    ['invalidated', 0.69, 'structure_invalidation'],
+  ])
   assert.deepEqual(outcomes.map((outcome) => outcome.action), ['closed', 'closed'])
   assert.equal(outcomes[0].legacy, true)
   assert.equal(outcomes[1].review.invalidated, true)

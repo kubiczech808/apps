@@ -268,8 +268,6 @@ button.primary { color: #fff; background: var(--series-1); border-color: transpa
 .asset-price-chart .asset-structure-label-up { fill: var(--good-text); }
 .asset-price-chart .asset-structure-label-down { fill: var(--critical-text); }
 .asset-price-chart .asset-structure-label-flat { fill: var(--warning-text); }
-.asset-price-chart .asset-external-pivot-line { fill: none; stroke: #63c8e8; stroke-width: 1.1; stroke-dasharray: 4 4; opacity: 0.9; pointer-events: stroke; }
-.asset-price-chart .asset-external-pivot-marker { fill: #0c1d24; stroke: #63c8e8; stroke-width: 1.3; pointer-events: all; }
 .asset-price-chart .asset-risk-line { fill: none; stroke-width: 2.8; stroke-linecap: round; }
 .asset-price-chart .asset-tp-line { stroke: var(--good-text); }
 .asset-price-chart .asset-sl-line { stroke: var(--critical-text); }

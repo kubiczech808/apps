@@ -75,6 +75,20 @@ test('a PA position can take TP1 only and leave its second half open for structu
   assert.equal(trade.status, 'running')
 })
 
+test('paper executor preserves the semantic reason for a strategy-driven close', async () => {
+  const store = { balanceSats: 1_000_000, trades: [], nextId: 1 }
+  const executor = createPaperExecutor({ store, now: () => START })
+  const trade = await executor.openPosition({
+    pricingModel: 'linear-usd', strategyId: 'price-action-structure-v1', assetSymbol: 'AUDUSD', timeframeId: '1h',
+    signalKey: 'reason-test', signalCandleTime: START, side: 'long', entry: 0.71, stop: 0.70,
+    takeProfit: 0.74, tp1: 0.72, tp2: 0.74, quantityUsd: 100, marginSats: 25_000,
+    leverage: 4, liquidation: 0.5325, quoteSatsPerUsd: 1250,
+  })
+
+  await executor.closePosition(trade.id, 0.71, 'structure_invalidation')
+  assert.equal(trade.exitReason, 'structure_invalidation')
+})
+
 test('paper executor rejects a duplicate TP2 and leaves the second half to structure', async () => {
   const store = { balanceSats: 1_000_000, trades: [], nextId: 1 }
   const executor = createPaperExecutor({ store, feeRate: 0.0006, now: () => START })

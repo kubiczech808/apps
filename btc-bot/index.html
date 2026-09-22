@@ -43,9 +43,9 @@
   <section class="tiles" id="tiles"></section>
 
   <details class="card collapsible-chart" id="equity-panel">
-    <summary><span id="equity-title">Vývoj kapitálu (sats)</span><span class="summary-hint">zobrazit graf</span></summary>
+    <summary><span id="equity-title">Vývoj kapitálu (USD)</span><span class="summary-hint">zobrazit graf</span></summary>
     <div class="chart" id="equity-chart">
-      <svg id="equity-svg" role="img" aria-label="Vývoj kapitálu účtu v sats"></svg>
+      <svg id="equity-svg" role="img" aria-label="Vývoj kapitálu účtu v USD"></svg>
       <div class="tooltip" id="equity-tooltip" hidden></div>
     </div>
   </details>
@@ -177,12 +177,12 @@
           <option value="testnet4">LN Markets testnet4</option>
           <option value="mainnet">LN Markets ostrý provoz</option>
         </select>
-        <div class="hint">Ostrý provoz utrácí skutečné sats.</div>
+        <div class="hint">Ostrý provoz používá skutečný kapitál.</div>
       </div>
       <div class="field">
         <label for="set-risk">Riziko na obchod (% kapitálu)</label>
         <input id="set-risk" type="number" min="0.1" max="5" step="0.1">
-        <div class="hint">Ztráta na stop lossu, měřená v sats.</div>
+        <div class="hint">Ztráta na stop lossu, vyjádřená v USD.</div>
       </div>
       <div class="field">
         <label for="set-max-open">Max. otevřených pozic</label>

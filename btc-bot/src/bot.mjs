@@ -194,7 +194,7 @@ export const reconcilePriceActionInvalidations = async ({
       continue
     }
     try {
-      await executor.closePosition(position.id, exitPrice)
+      await executor.closePosition(position.id, exitPrice, 'structure_invalidation')
       outcomes.push({ position, review, legacy, reason, exitPrice, action: 'closed' })
     } catch (error) {
       outcomes.push({ position, review, legacy, reason, exitPrice, action: 'close_failed', error: error.message })
@@ -475,7 +475,7 @@ export const reconcileBrackets = async ({ executor, positions, ltfCandles, logge
       // No entry price means no defensible bracket. Closing is the only
       // remaining way to honour "never hold an unprotected position".
       try {
-        await executor.closePosition(position.id)
+        await executor.closePosition(position.id, null, 'unprotected_position')
         actions.push({ id: position.id, action: 'closed_unpriceable' })
       } catch (error) {
         actions.push({ id: position.id, action: 'unprotected_and_stuck', error: error.message })
@@ -501,7 +501,7 @@ export const reconcileBrackets = async ({ executor, positions, ltfCandles, logge
     } catch (error) {
       logger.error(`Could not bracket ${position.id} (${error.message}); closing it`)
       try {
-        await executor.closePosition(position.id)
+        await executor.closePosition(position.id, null, 'unprotected_position')
         actions.push({ id: position.id, action: 'closed_unprotected', error: error.message })
       } catch (closeError) {
         actions.push({ id: position.id, action: 'unprotected_and_stuck', error: closeError.message })
@@ -749,7 +749,7 @@ export const runPass = async ({
       }
       try {
         if (decision.action === 'close') {
-          await executor.closePosition(position.id, market.ltf.at(-1)?.close)
+          await executor.closePosition(position.id, market.ltf.at(-1)?.close, 'strategy_exit')
         } else {
           const stop = roundStop(position.side, decision.stop)
           await executor.updateStops(position.id, { stopLoss: stop })

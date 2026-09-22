@@ -4,7 +4,7 @@ import { buildExternalTrendReference } from './external-trends.mjs'
 import { buildFvgSupplyDemandZones, candleSignal, marketStructure } from './priceaction.mjs'
 
 export const PRICE_ACTION_STRUCTURE_ID = 'price-action-structure-v1'
-export const PRICE_ACTION_MATRIX_SCHEMA = 42
+export const PRICE_ACTION_MATRIX_SCHEMA = 43
 export const PRICE_ACTION_CHART_CANDLE_LIMITS = {
   '1h': 8760,
   '4h': 2190,
@@ -938,9 +938,17 @@ const zoneEntryCandidate = ({ item, side, zone, pullback, invalidationLevel, set
   }
 }
 
-const pullbackSatisfied = ({ side, latest, level }) => {
-  if (!latest || !Number.isFinite(level)) return false
-  return side === 'long' ? latest.low <= level : latest.high >= level
+// A wick that crossed the 50% line is evidence that the retracement happened,
+// but it is not evidence that price is *currently* in the entry band. Keeping
+// those separate prevents a recovered price from being painted green in the
+// dashboard after it has already left the valid pullback range.
+const pullbackSatisfied = ({ side, latest, level, invalidationLevel }) => {
+  if (!latest || !Number.isFinite(level) || !Number.isFinite(invalidationLevel)) return false
+  const current = latest.close
+  if (!Number.isFinite(current)) return false
+  const lower = Math.min(level, invalidationLevel)
+  const upper = Math.max(level, invalidationLevel)
+  return current >= lower && current <= upper
 }
 
 const stopBuffer = ({ zone, price, stopBufferPct }) => {
@@ -1096,7 +1104,7 @@ export const evaluateTradeProfile = ({
   // the candidate for diagnostics, but never publish them as a trade entry.
   const plannedEntry = activeCandidate?.eligible ? activeCandidate.entryForMinRR : null
   const entry = Number.isFinite(plannedEntry) ? plannedEntry : null
-  const pulledBack = pullbackSatisfied({ side, latest, level: pullback })
+  const pulledBack = pullbackSatisfied({ side, latest, level: pullback, invalidationLevel })
   const buffer = activeCandidate?.stopBuffer ?? stopBuffer({
     zone: activeZone,
     price: activeCandidate?.entryAtZoneHit ?? entry,
