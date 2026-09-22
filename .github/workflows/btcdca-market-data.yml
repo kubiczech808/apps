@@ -36,6 +36,17 @@ jobs:
           BACKUP_ID: ${{ github.run_id }}-${{ github.run_attempt }}
         run: python3 btcdca-market-data/ftp_transfer.py
 
+      - name: Preserve remaining market-data reader sources for review
+        uses: actions/upload-artifact@v4
+        with:
+          name: btcdca-market-reader-sources-${{ github.run_id }}
+          path: |
+            server-current/app/stats.php
+            server-current/app/includes/calc_result.php
+            server-current/app/php/get_cycle_ath.php
+          if-no-files-found: error
+          retention-days: 7
+
       - name: Build bounded cache deployment
         run: python3 btcdca-market-data/patch_runtime.py
 
