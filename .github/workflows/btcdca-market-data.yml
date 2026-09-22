@@ -1,0 +1,54 @@
+name: Deploy BTC-DCA Market Data Cache
+
+on:
+  push:
+    branches:
+      - claude/energy-consumption-app-Nf7bh
+    paths:
+      - 'btcdca-market-data/**'
+      - '.github/workflows/btcdca-market-data.yml'
+  workflow_dispatch:
+
+jobs:
+  deploy-market-data:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate FTP secrets
+        env:
+          BTCDCA_FTP_LOGIN: ${{ secrets.BTCDCA_FTP_LOGIN }}
+          BTCDCA_FTP_PASSWORD: ${{ secrets.BTCDCA_FTP_PASSWORD }}
+        run: |
+          test -n "$BTCDCA_FTP_LOGIN"
+          test -n "$BTCDCA_FTP_PASSWORD"
+
+      - name: Test deterministic runtime patch
+        run: |
+          python3 btcdca-market-data/test_patch_runtime.py
+          python3 -m py_compile btcdca-market-data/patch_runtime.py btcdca-market-data/ftp_transfer.py
+
+      - name: Download and back up live sources
+        env:
+          BTCDCA_FTP_LOGIN: ${{ secrets.BTCDCA_FTP_LOGIN }}
+          BTCDCA_FTP_PASSWORD: ${{ secrets.BTCDCA_FTP_PASSWORD }}
+          BTCDCA_FTP_MODE: prepare
+          BACKUP_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+        run: python3 btcdca-market-data/ftp_transfer.py
+
+      - name: Build bounded cache deployment
+        run: python3 btcdca-market-data/patch_runtime.py
+
+      - name: Lint generated PHP
+        run: |
+          find deploy-root -name '*.php' -print0 | xargs -0 -n1 php -d short_open_tag=1 -l
+
+      - name: Smoke test external market providers
+        run: php btcdca-market-data/test_market_data.php
+
+      - name: Deploy market-data cache without database changes
+        env:
+          BTCDCA_FTP_LOGIN: ${{ secrets.BTCDCA_FTP_LOGIN }}
+          BTCDCA_FTP_PASSWORD: ${{ secrets.BTCDCA_FTP_PASSWORD }}
+          BTCDCA_FTP_MODE: deploy
+        run: python3 btcdca-market-data/ftp_transfer.py
