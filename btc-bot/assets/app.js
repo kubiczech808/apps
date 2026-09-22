@@ -3104,6 +3104,35 @@ const saveSettings = async () => {
   }
 }
 
+const setPriceActionLeverage = async () => {
+  const leverage = Math.max(1, Math.min(10, Math.floor(Number($('price-action-leverage').value) || 1)))
+  const settings = state?.settings || {}
+  const payload = {
+    ...settings,
+    priceActionStructure: { ...(settings.priceActionStructure || {}), leverage },
+  }
+  const pendingOrders = (state?.positions?.orders || []).filter((order) =>
+    order.strategyId === 'price-action-structure-v1' && order.orderRole !== 'take-profit'
+  )
+
+  try {
+    await api('settings', { method: 'POST', body: payload })
+    // The old order carries its old capital allocation. Removing entry orders
+    // only lets the next pass rebuild them with the selected setting, while
+    // protection of an already-open position remains untouched.
+    await Promise.all(pendingOrders.map((order) => api('command', {
+      method: 'POST', body: { command: 'cancel', id: order.id },
+    })))
+    await api('command', { method: 'POST', body: { command: 'run-now', id: null } })
+    setStatus(pendingOrders.length
+      ? 'Páka uložena. Čekající vstupy se ruší a přepočítají při nejbližším běhu.'
+      : 'Páka uložena. Výpočty se použijí při nejbližším běhu.', 'pos')
+    await load()
+  } catch (error) {
+    setStatus(`Nastavení páky selhalo: ${error.message}`, 'neg')
+  }
+}
+
 // ── shell ─────────────────────────────────────────────────────────────────
 
 const renderHeader = () => {
@@ -3115,6 +3144,13 @@ const renderHeader = () => {
     ))
   }
   if (switcher) switcher.value = view.id
+
+  const leverageControl = $('price-action-leverage-control')
+  if (leverageControl) leverageControl.hidden = view.id !== 'price-action'
+  const leverage = $('price-action-leverage')
+  if (leverage) leverage.value = String(Math.max(1, Math.min(10,
+    Math.floor(Number(state?.settings?.priceActionStructure?.leverage) || 1)
+  )))
 
   const badge = $('mode-badge')
   const mode = state?.mode || state?.settings?.mode || '–'
@@ -3243,6 +3279,7 @@ document.addEventListener('DOMContentLoaded', () => {
     setStrategyView(event.target.value)
     renderAll()
   })
+  $('price-action-leverage').addEventListener('change', setPriceActionLeverage)
   $('flatten').addEventListener('click', () => queueCommand('flatten'))
   $('save-settings').addEventListener('click', saveSettings)
   $('forget-key').addEventListener('click', () => {

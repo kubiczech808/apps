@@ -19,6 +19,9 @@ export const DEFAULT_PRICE_ACTION_STRUCTURE = {
   pullbackPct: 50,
   minRewardRisk: 2,
   riskPct: 1,
+  // PA starts as true spot trading. A user can explicitly opt into a higher
+  // leverage from the dashboard without changing the structural stop.
+  leverage: 1,
   stopBufferPct: 0.02,
 }
 

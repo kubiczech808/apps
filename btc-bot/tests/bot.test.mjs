@@ -250,6 +250,55 @@ test('a complete PA setup places a bracketed limit order before its entry is hit
   assert.deepEqual(calls.at(-1), ['cancel', 'pending-1'])
 })
 
+test('changing the PA leverage replaces a pending spot instruction without changing its structural stop', async () => {
+  const calls = []
+  const executor = {
+    placeOrder: async (order) => {
+      calls.push(['place', order])
+      return { ...order, id: `pending-${calls.length}`, status: 'open' }
+    },
+    cancelOrder: async (id) => calls.push(['cancel', id]),
+  }
+  const profile = {
+    status: 'watch', mode: 'screening', side: 'short', zoneHit: false,
+    entry: 160.4, stop: 161.1, tp1: 152.9, tp2: 150.8, weightedTarget: 151.85,
+    rewardRisk: 2.4, minRewardRisk: 2, riskPct: 1, zone: { firstTime: START },
+    gates: [{ id: 'trend', passed: true }, { id: 'zone', passed: false }, { id: 'pullback', passed: false }, { id: 'rr', passed: true }],
+  }
+  const matrix = { assets: [{ symbol: 'USDJPY', trends: { '4h': { asOf: START, tradeProfile: profile } } }] }
+  const spotSettings = {
+    enabled: true,
+    risk: { feeRate: 0.0006, minMarginSats: 1 },
+    priceActionStructure: { riskPct: 1, leverage: 1 },
+  }
+  const placed = await placePendingPriceActionOrders({
+    executor, matrix, trades: [], equitySats: 1_000_000, btcPrice: 80_000, settings: spotSettings,
+  })
+  const spotOrder = placed[0].order
+  assert.equal(spotOrder.market, 'spot')
+  assert.equal(spotOrder.leverage, 1)
+  assert.equal(spotOrder.stop, profile.stop)
+
+  const leveragedSettings = {
+    ...spotSettings,
+    priceActionStructure: { ...spotSettings.priceActionStructure, leverage: 2 },
+  }
+  const cancelled = await reconcilePendingPriceActionOrders({
+    executor, orders: [spotOrder], matrix, settings: leveragedSettings,
+  })
+  assert.equal(cancelled[0].action, 'cancelled')
+  assert.match(cancelled[0].reason, /nastavení páky/)
+
+  const replacement = await placePendingPriceActionOrders({
+    executor, matrix, trades: [], equitySats: 1_000_000, btcPrice: 80_000, settings: leveragedSettings,
+  })
+  const leveragedOrder = replacement[0].order
+  assert.equal(leveragedOrder.market, 'futures')
+  assert.equal(leveragedOrder.leverage, 2)
+  assert.equal(leveragedOrder.stop, profile.stop)
+  assert.notEqual(leveragedOrder.signalKey, spotOrder.signalKey)
+})
+
 test('a pending PA order may carry TP1 alone and leave the remainder to structure', async () => {
   const calls = []
   const executor = { placeOrder: async (order) => { calls.push(order); return { ...order, id: 'pending-tp1', status: 'open' } } }

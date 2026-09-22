@@ -117,6 +117,7 @@ test('strategy tab renders price-action event logs without duplicating the struc
 
 test('strategy switching lives in the header and redraws dashboard context', () => {
   assert.ok(html.includes('id="strategy-view"'), 'header must contain the strategy switcher')
+  assert.ok(html.includes('id="price-action-leverage"'), 'header must contain the PA leverage selector')
   assert.match(js, /STRATEGY_VIEW_STORAGE/)
   assert.match(js, /selectedStrategyView = 'price-action'/)
   assert.match(js, /\|\| 'price-action'/)
@@ -125,6 +126,8 @@ test('strategy switching lives in the header and redraws dashboard context', () 
   assert.match(js, /renderPriceActionTiles/)
   assert.match(js, /renderPortfolioTiles/)
   assert.match(js, /renderPriceActionDecision/)
+  assert.match(js, /setPriceActionLeverage/)
+  assert.match(js, /priceActionStructure: \{ \.+\(settings\.priceActionStructure \|\| \{\}\), leverage \}/)
   assert.match(js, /priceActionDecisionTimeframe = '4h'/)
   assert.match(js, /PRICE_ACTION_DECISION_COLUMNS/)
   assert.match(js, /Struktura \/ reference/)

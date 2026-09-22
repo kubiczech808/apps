@@ -33,6 +33,16 @@
       <span>Strategie</span>
       <select id="strategy-view"></select>
     </label>
+    <label class="strategy-switch" id="price-action-leverage-control" for="price-action-leverage" hidden>
+      <span>Páka</span>
+      <select id="price-action-leverage" title="Spot používá pouze vlastní kapitál. Vyšší hodnota je volitelná páka pro nové price-action objednávky.">
+        <option value="1">Spot</option>
+        <option value="2">2x</option>
+        <option value="3">3x</option>
+        <option value="5">5x</option>
+        <option value="10">10x</option>
+      </select>
+    </label>
     <span class="spacer"></span>
     <span class="badge" id="last-run">–</span>
     <button id="refresh" type="button">Obnovit</button>

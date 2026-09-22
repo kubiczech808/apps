@@ -47,10 +47,17 @@ export const roundTarget = (side, price) => (side === 'long' ? ceilPrice(price) 
 const PRICE_ACTION_TIMEFRAME_PRIORITY = { '1h': 1, '4h': 2, '1d': 3 }
 export const PRICE_ACTION_POSITION_PROTOCOL = 1
 
-const priceActionSignalKey = ({ assetSymbol, timeframeId, profile }) => {
+const priceActionLeverage = (settings) => {
+  const candidate = Math.floor(Number(settings?.priceActionStructure?.leverage))
+  return Number.isFinite(candidate) ? Math.min(10, Math.max(1, candidate)) : 1
+}
+
+const priceActionSignalKey = ({ assetSymbol, timeframeId, profile, settings }) => {
   const zoneIdentity = profile.zone?.firstTime ?? profile.zone?.lastTime ?? profile.zone?.firstIndex ?? 'zone'
   const externalTrend = profile.externalTrend?.trend ?? 'unavailable'
-  return [PRICE_ACTION_STRUCTURE_ID, assetSymbol, timeframeId, profile.side, zoneIdentity, profile.entry, externalTrend].join(':')
+  // Sizing is part of an entry instruction. A pending order created for spot
+  // must be replaced if the user intentionally changes the leverage setting.
+  return [PRICE_ACTION_STRUCTURE_ID, assetSymbol, timeframeId, profile.side, zoneIdentity, profile.entry, externalTrend, `leverage-${priceActionLeverage(settings)}`].join(':')
 }
 
 const externalTrendConfirmsProfile = (profile) => {
@@ -118,6 +125,7 @@ export const reconcileMissingPriceActionTargets = async ({
 }
 
 const priceActionOrderPlan = ({ assetSymbol, timeframeId, item, profile, equitySats, btcPrice, settings }) => {
+  const leverage = priceActionLeverage(settings)
   const plan = planLinearPosition({
     side: profile.side,
     entry: profile.entry,
@@ -127,13 +135,12 @@ const priceActionOrderPlan = ({ assetSymbol, timeframeId, item, profile, equityS
     btcPrice,
     settings: {
       ...(settings.risk ?? {}),
-      // PA-1 is deliberately evaluated without leverage for now. The stop is
-      // structural and must never be tightened to force a chosen position
-      // size; an unleveraged cap simply risks less than the 1% ceiling when a
-      // tight stop would require more capital than is available.
-      market: 'spot',
-      maxLeverage: 1,
-      maxNotionalPct: 100,
+      // At 1x this is genuine spot: the committed capital cannot exceed the
+      // account. Higher values are an explicit user choice; the stop stays
+      // structural and the plan limits position size instead of moving it.
+      market: leverage === 1 ? 'spot' : 'futures',
+      maxLeverage: leverage,
+      maxNotionalPct: leverage * 100,
       riskPct: Number(profile.riskPct) || Number(settings.priceActionStructure?.riskPct) || 1,
     },
   })
@@ -156,12 +163,13 @@ const priceActionOrderPlan = ({ assetSymbol, timeframeId, item, profile, equityS
       timeframeId,
       strategyId: PRICE_ACTION_STRUCTURE_ID,
       priceActionProtocol: PRICE_ACTION_POSITION_PROTOCOL,
-      signalKey: priceActionSignalKey({ assetSymbol, timeframeId, profile }),
+      signalKey: priceActionSignalKey({ assetSymbol, timeframeId, profile, settings }),
       signalCandleTime: item.asOf ?? null,
       plan: {
         reason: `${profile.side} ${item.reason ?? ''}`.trim(),
         rr: profile.rewardRisk,
         riskSats: plan.riskSats,
+        requestedLeverage: leverage,
       },
     },
   }
@@ -243,7 +251,7 @@ export const executeReadyPriceActionProfiles = async ({
     if (!candidate) continue
 
     const { timeframeId, item, profile } = candidate
-    const signalKey = priceActionSignalKey({ assetSymbol: asset.symbol, timeframeId, profile })
+    const signalKey = priceActionSignalKey({ assetSymbol: asset.symbol, timeframeId, profile, settings })
     if (existingSignals.has(signalKey)) continue
 
     const prepared = priceActionOrderPlan({
@@ -356,7 +364,7 @@ export const placePendingPriceActionOrders = async ({
   return outcomes
 }
 
-export const reconcilePendingPriceActionOrders = async ({ executor, orders = [], matrix, dryRun = false } = {}) => {
+export const reconcilePendingPriceActionOrders = async ({ executor, orders = [], matrix, settings, dryRun = false } = {}) => {
   const outcomes = []
   for (const order of orders.filter((candidate) =>
     candidate.strategyId === PRICE_ACTION_STRUCTURE_ID && candidate.orderRole !== 'take-profit'
@@ -365,13 +373,15 @@ export const reconcilePendingPriceActionOrders = async ({ executor, orders = [],
     const item = asset?.trends?.[order.timeframeId]
     const profile = item?.tradeProfile
     const stillValid = isPendingPriceActionOrderProfile(profile) &&
-      priceActionSignalKey({ assetSymbol: order.assetSymbol, timeframeId: order.timeframeId, profile }) === order.signalKey
+      priceActionSignalKey({ assetSymbol: order.assetSymbol, timeframeId: order.timeframeId, profile, settings }) === order.signalKey
     if (stillValid) continue
     const externalGate = (profile?.gates ?? []).find((gate) => gate.id === 'external-trend')
     const reason = externalGate?.passed === false
       ? externalGate.detail || 'externí trend už nepotvrzuje připravený vstup'
       : profile?.zoneHit
       ? 'cena dotkla zóny dříve, než došla na připravený entry'
+      : isPendingPriceActionOrderProfile(profile)
+      ? 'nastavení páky se změnilo; objednávka se přepočítá'
       : 'setup se změnil nebo byl invalidován strukturou'
     if (dryRun) {
       outcomes.push({ order, action: 'would_cancel', reason })
@@ -947,6 +957,7 @@ export const runPass = async ({
           executor,
           orders: refreshed.open ?? [],
           matrix: state.priceActionMatrix,
+          settings,
           dryRun: config.dryRun,
         })
         for (const action of pendingCancellations) {
