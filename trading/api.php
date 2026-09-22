@@ -8852,6 +8852,223 @@ try {
     // "if I had taken every trade in this combination, where would I be" -- nominally and as
     // a return on what was staked.
 
+
+    /**
+     * Return the lowest live quote we have evidence for before settlement. Newer state
+     * writers may expose a graph/history array; older rows only carry first and last live
+     * quotes, so the fallback is explicit and reported to the UI.
+     */
+    function resolved_best_entry_probability(array $item): array
+    {
+        $values = [];
+        $add = static function ($value, string $source) use (&$values): void {
+            if (is_numeric($value)) {
+                $number = (float) $value;
+                if ($number > 0 && $number < 1) {
+                    $values[] = ['value' => $number, 'source' => $source];
+                }
+            }
+        };
+        foreach (['firstMarketProbability', 'lastLiveMarketProbability'] as $field) {
+            $add($item[$field] ?? null, $field);
+        }
+        $historyKeys = [
+            'priceHistory', 'pricesHistory', 'marketPriceHistory', 'probabilityHistory',
+            'marketProbabilityHistory', 'chart', 'graph', 'history', 'points',
+        ];
+        $walk = static function ($value, string $source, int $depth = 0) use (&$walk, &$add): void {
+            if ($depth > 3 || !is_array($value)) {
+                return;
+            }
+            foreach ($value as $key => $child) {
+                $keyName = strtolower((string) $key);
+                if (is_numeric($child) && preg_match('/price|probability|quote|value|close|low|ask/', $keyName)) {
+                    $add($child, $source . '.' . $keyName);
+                } elseif (is_array($child)) {
+                    $walk($child, $source . '.' . $keyName, $depth + 1);
+                }
+            }
+        };
+        foreach ($historyKeys as $field) {
+            if (isset($item[$field]) && is_array($item[$field])) {
+                $before = count($values);
+                $walk($item[$field], $field);
+                if (count($values) > $before) {
+                    // A graph/history value is stronger evidence than the two compact fields.
+                }
+            }
+        }
+        if ($values === []) {
+            return ['value' => null, 'source' => null];
+        }
+        usort($values, static fn (array $left, array $right): int => $left['value'] <=> $right['value']);
+        return $values[0];
+    }
+
+    function resolved_best_entry_accumulate(array $sources, float $stake, string $wantedTag): array
+    {
+        $groups = [];
+        $seen = [];
+        $scanned = 0;
+        $priced = 0;
+        $graphRows = 0;
+        $fallbackRows = 0;
+        $afterDueRejected = 0;
+        $onRow = static function (array $item) use (
+            &$groups, &$seen, &$scanned, &$priced, &$graphRows, &$fallbackRows,
+            &$afterDueRejected, $stake, $wantedTag
+        ): bool {
+            $identity = (string) ($item['tokenId'] ?? $item['id'] ?? $item['marketKey'] ?? '');
+            if ($identity !== '') {
+                if (isset($seen[$identity])) {
+                    return true;
+                }
+                $seen[$identity] = true;
+            }
+            $scanned++;
+            $tags = simulation_taxonomy_labels($item, 'firstPolymarketTags', 'polymarketTags');
+            $normalizedTags = array_map(static fn ($tag): string => strtolower(trim((string) $tag)), $tags);
+            if (!in_array(strtolower($wantedTag), $normalizedTags, true)) {
+                return true;
+            }
+            $entry = resolved_best_entry_probability($item);
+            $entryValue = $entry['value'];
+            if ($entryValue === null) {
+                return true;
+            }
+            $finalPrice = $item['finalOutcomePrice'] ?? null;
+            $outcome = null;
+            if (is_numeric($finalPrice)) {
+                $finalPrice = (float) $finalPrice;
+                if ($finalPrice <= 0.005) {
+                    $outcome = 0;
+                } elseif ($finalPrice >= 0.995) {
+                    $outcome = 1;
+                }
+            }
+            if ($outcome === null) {
+                return true;
+            }
+            if (!resolved_stats_entry_is_not_after_due($item)) {
+                $afterDueRejected++;
+                return true;
+            }
+            $priced++;
+            if (str_contains((string) $entry['source'], 'History')
+                || str_contains((string) $entry['source'], 'history')
+                || str_contains((string) $entry['source'], 'graph')
+                || str_contains((string) $entry['source'], 'chart')
+                || str_contains((string) $entry['source'], 'points')) {
+                $graphRows++;
+            } else {
+                $fallbackRows++;
+            }
+            $fee = resolved_stats_entry_fee_usdc($item, $entryValue, $stake);
+            $totalCost = $stake + $fee;
+            $pnl = $outcome === 1 ? ($stake / $entryValue) - $totalCost : -$totalCost;
+            $probability = (int) floor($entryValue * 100);
+            $shape = observation_market_shape($item);
+            $horizon = resolved_horizon_band($item);
+            $key = $shape . "\x1f" . $horizon . "\x1f" . $probability;
+            if (!isset($groups[$key])) {
+                $groups[$key] = [0, 0, 0.0, 0.0];
+            }
+            $groups[$key][0] += 1;
+            $groups[$key][1] += $outcome;
+            $groups[$key][2] += $totalCost;
+            $groups[$key][3] += $pnl;
+            return true;
+        };
+        foreach ($sources as [$path, $field]) {
+            stream_json_array_members($path, $field, $onRow);
+        }
+        return [
+            'groups' => $groups,
+            'scanned' => $scanned,
+            'priced' => $priced,
+            'graphRows' => $graphRows,
+            'fallbackRows' => $fallbackRows,
+            'afterDueRejected' => $afterDueRejected,
+        ];
+    }
+
+    if ($action === 'resolved-best-entry') {
+        $minTrades = max(1, min(5000, (int) ($_GET['min_trades'] ?? 25)));
+        $limit = max(1, min(400, (int) ($_GET['limit'] ?? 120)));
+        $stake = max(0.01, min(100000.0, (float) ($_GET['stake'] ?? 5.0)));
+        $wantedTag = strtolower(trim((string) ($_GET['tag'] ?? 'esports')));
+        if ($wantedTag !== 'esports') {
+            respond(['ok' => false, 'error' => 'This experimental report is restricted to the esports tag.'], 400);
+        }
+        $corePath = state_file_paths()['paper'];
+        $core = decode_state_file($corePath, false);
+        $manifest = is_array($core['stateSegments'] ?? null) ? $core['stateSegments'] : [];
+        $sources = [];
+        foreach ([['observations', 'marketObservations'], ['resolvedObservations', 'resolvedMarketObservations']] as [$segment, $field]) {
+            $path = state_segment_path(['stateSegments' => $manifest], $corePath, $segment);
+            if ($path !== null) {
+                $sources[] = [$path, $field];
+            }
+        }
+        if ($sources === []) {
+            $sources = [[$corePath, 'marketObservations'], [$corePath, 'resolvedMarketObservations']];
+        }
+        $accumulated = resolved_best_entry_accumulate($sources, $stake, $wantedTag);
+        $groups = [];
+        foreach ($accumulated['groups'] as $key => $cell) {
+            [$shape, $horizon, $probability] = explode("\x1f", $key);
+            $groups[$shape . "\x1f" . $horizon][$probability] = $cell;
+        }
+        $rows = [];
+        foreach ($groups as $groupKey => $group) {
+            krsort($group, SORT_NUMERIC);
+            $trades = 0;
+            $wins = 0;
+            $staked = 0.0;
+            $pnl = 0.0;
+            foreach ($group as $probability => $cell) {
+                $trades += $cell[0];
+                $wins += $cell[1];
+                $staked += $cell[2];
+                $pnl += $cell[3];
+                if ($trades < $minTrades) {
+                    continue;
+                }
+                [$shape, $horizon] = explode("\x1f", $groupKey);
+                $rows[] = [
+                    'probability' => (int) $probability,
+                    'tag' => 'esports',
+                    'shape' => $shape,
+                    'horizon' => $horizon,
+                    'trades' => $trades,
+                    'wins' => $wins,
+                    'accuracy' => round($wins / $trades, 4),
+                    'stakedUsdc' => round($staked, 2),
+                    'pnlUsdc' => round($pnl, 2),
+                    'returnPct' => $staked > 0 ? round(($pnl / $staked) * 100, 2) : null,
+                ];
+            }
+        }
+        usort($rows, static function (array $left, array $right): int {
+            return (($right['returnPct'] ?? -999) <=> ($left['returnPct'] ?? -999))
+                ?: (($right['pnlUsdc'] ?? -999999) <=> ($left['pnlUsdc'] ?? -999999));
+        });
+        respond([
+            'ok' => true,
+            'tag' => 'esports',
+            'scannedRows' => $accumulated['scanned'],
+            'pricedRows' => $accumulated['priced'],
+            'graphRows' => $accumulated['graphRows'],
+            'fallbackRows' => $accumulated['fallbackRows'],
+            'afterDueRejected' => $accumulated['afterDueRejected'],
+            'combinations' => count($rows),
+            'minTrades' => $minTrades,
+            'stakeUsdc' => $stake,
+            'best' => array_slice($rows, 0, $limit),
+            'generatedAt' => gmdate('c'),
+        ]);
+    }
+
     if ($action === 'resolved-combinations') {
         $minTrades = max(1, min(5000, (int) ($_GET['min_trades'] ?? 30)));
         $limit = max(1, min(400, (int) ($_GET['limit'] ?? 120)));
