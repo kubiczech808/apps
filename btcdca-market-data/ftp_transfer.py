@@ -9,6 +9,9 @@ PASSWORD = os.environ["BTCDCA_FTP_PASSWORD"]
 BACKUP_ID = os.environ.get("BACKUP_ID", "manual")
 FILES = (
     "www/app/overview.php",
+    "www/app/stats.php",
+    "www/app/includes/calc_result.php",
+    "www/app/php/get_cycle_ath.php",
     "www/app/php/get_live_price.php",
     "www/app/php/get_ticker.php",
     "www/php/getTicker.php",
