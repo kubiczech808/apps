@@ -1,6 +1,8 @@
 name: BTC-DCA Retention Cleanup
 
 on:
+  schedule:
+    - cron: '17 3 * * *'
   workflow_dispatch:
     inputs:
       operation:
@@ -33,8 +35,8 @@ jobs:
       BTCDCA_DB_PASSWORD: ${{ secrets.BTCDCA_DB_PASSWORD }}
       BTCDCA_FTP_LOGIN: ${{ secrets.BTCDCA_FTP_LOGIN }}
       BTCDCA_FTP_PASSWORD: ${{ secrets.BTCDCA_FTP_PASSWORD }}
-      RETENTION_OPERATION: ${{ inputs.operation }}
-      RETENTION_CONFIRMATION: ${{ inputs.confirmation }}
+      RETENTION_OPERATION: ${{ github.event_name == 'schedule' && 'prune' || inputs.operation }}
+      RETENTION_CONFIRMATION: ${{ github.event_name == 'schedule' && 'PRUNE_30_DAYS' || inputs.confirmation }}
 
     steps:
       - uses: actions/checkout@v4
