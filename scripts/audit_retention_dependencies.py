@@ -8,6 +8,7 @@ from pathlib import Path
 
 ROOT = Path("runtime-source")
 REPORT = Path("btcdca-retention-dependency-audit.md")
+MARKET_DATA_EXCERPT = Path("btcdca-market-data-source-excerpt.md")
 TERMS = {
     "exchange_rates": re.compile(r"\bexchange_rates\b", re.IGNORECASE),
     "logs": re.compile(r"\blogs\b", re.IGNORECASE),
@@ -47,6 +48,40 @@ def safe_excerpt(line: str) -> str:
     return compact[:240] + (" ..." if len(compact) > 240 else "")
 
 
+def redact_source(value: str) -> str:
+    """Keep implementation context while never publishing credentials in an audit."""
+    return re.sub(
+        r"(?im)(\b(?:password|passwd|secret|api[_-]?key|token)\b\s*(?:=|=>|:)\s*['\"])[^'\"]+",
+        r"\1[REDACTED]",
+        value,
+    )
+
+
+def write_market_data_excerpt() -> None:
+    targets = (
+        "app/overview.php",
+        "app/includes/calc_result.php",
+        "app/php/get_live_price.php",
+        "app/php/get_ticker.php",
+        "app/php/get_cycle_ath.php",
+        "app/stats.php",
+    )
+    lines = [
+        "# BTC-DCA Market Data Source Excerpt",
+        "",
+        "Read-only diagnostic output. Credential-like values are redacted.",
+        "",
+    ]
+    for relative in targets:
+        path = ROOT / relative
+        lines.extend([f"## {relative}", ""])
+        if not path.exists():
+            lines.extend(["File was not present in the FTP source snapshot.", ""])
+            continue
+        lines.extend(["```php", redact_source(path.read_text(encoding="utf-8", errors="replace")), "```", ""])
+    MARKET_DATA_EXCERPT.write_text("\n".join(lines), encoding="utf-8")
+
+
 def main() -> None:
     files = source_files()
     if not files:
@@ -77,6 +112,8 @@ def main() -> None:
 
     REPORT.write_text("\n".join(lines), encoding="utf-8")
     print(REPORT.read_text(encoding="utf-8"))
+    write_market_data_excerpt()
+    print(f"Wrote {MARKET_DATA_EXCERPT}.")
 
 
 if __name__ == "__main__":
