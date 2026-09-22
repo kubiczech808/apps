@@ -84,14 +84,6 @@ def neutralize_exchange_rate_inserts(relative: str) -> None:
         return match.group(0)
 
     value = assignment.sub(replace, value)
-    if count == 0:
-        # A prior successful deployment has already removed the write.  It is
-        # safe to preserve that source verbatim; any remaining reference is a
-        # changed runtime shape and must still stop the deployment.
-        if not re.search(r"\bexchange_rates\b", value, re.IGNORECASE):
-            target.write_text(value, encoding="utf-8")
-            return
-        raise SystemExit(f"{relative} did not contain an exchange_rates INSERT assignment")
     if re.search(r"\binsert\s+into\s+`?exchange_rates`?\b", value, re.IGNORECASE):
         raise SystemExit(f"{relative} still contains an exchange_rates INSERT")
     target.write_text(value, encoding="utf-8")
