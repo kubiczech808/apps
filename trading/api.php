@@ -6204,7 +6204,14 @@ function live_dip_entry_watch_payload(): array
         ];
     }
     if ($active === []) {
-        return ['ok' => true, 'generatedAt' => gmdate('c'), 'cashUsdc' => null, 'plans' => [], 'portfolios' => []];
+        return [
+            'ok' => true,
+            'generatedAt' => gmdate('c'),
+            'cashUsdc' => null,
+            'plans' => [],
+            'portfolios' => [],
+            'diagnostics' => ['observations' => 0, 'live' => 0, 'openingVerified' => 0, 'portfolios' => []],
+        ];
     }
 
     $live = decode_state_file(live_state_path(), false);
@@ -6234,6 +6241,16 @@ function live_dip_entry_watch_payload(): array
     $state = state_payload('paper', ['observations']);
     $observations = is_array($state['marketObservations'] ?? null) ? $state['marketObservations'] : [];
     $plans = [];
+    $diagnostics = ['observations' => count($observations), 'live' => 0, 'openingVerified' => 0, 'portfolios' => []];
+    foreach ($active as $portfolioId => $_entry) {
+        $diagnostics['portfolios'][$portfolioId] = [
+            'openingBand' => 0,
+            'scope' => 0,
+            'excludedToken' => 0,
+            'blockedByWallet' => 0,
+            'plans' => 0,
+        ];
+    }
     foreach ($observations as $item) {
         if (!is_array($item)) {
             continue;
@@ -6246,6 +6263,7 @@ function live_dip_entry_watch_payload(): array
         if (!dip_watch_market_is_live($item)) {
             continue;
         }
+        $diagnostics['live']++;
         // firstMarketProbability ONLY. marketProbability and marketPrice used to stand in for
         // it here, which made "where the market opened" mean "what it costs right now" for
         // every row that carried no first quote -- so a market currently inside the opening
@@ -6263,6 +6281,7 @@ function live_dip_entry_watch_payload(): array
         if (!dip_entry_opening_is_verifiable($item)) {
             continue;
         }
+        $diagnostics['openingVerified']++;
         $tokenId = trim((string) ($item['tokenId'] ?? $item['clobTokenIds'][0] ?? ''));
         if ($tokenId === '') {
             continue;
@@ -6271,6 +6290,14 @@ function live_dip_entry_watch_payload(): array
         foreach ($active as $portfolioId => $entry) {
             $rule = $entry['rule'];
             if ($opened < $rule['dipEntryOpenMin'] || $opened > $rule['dipEntryOpenMax']) {
+                continue;
+            }
+            $diagnostics['portfolios'][$portfolioId]['openingBand']++;
+            // A manually excluded token must never be handed to the one-second worker.
+            // The dashboard exclusion is a portfolio rule, not merely a way to hide a row.
+            $excludedTokens = normalize_excluded_candidate_token_ids($entry['portfolio']['excludedCandidateTokenIds'] ?? []);
+            if (in_array($tokenId, $excludedTokens, true)) {
+                $diagnostics['portfolios'][$portfolioId]['excludedToken']++;
                 continue;
             }
             // Every other filter this portfolio has, applied now rather than at fire time.
@@ -6291,6 +6318,7 @@ function live_dip_entry_watch_payload(): array
             if (!execution_scope_matches_observation($item, $scope)) {
                 continue;
             }
+            $diagnostics['portfolios'][$portfolioId]['scope']++;
             // Diversification, decided here so the worker has nothing to work out at fire
             // time. Only for LIVE: these are the shared wallet's holdings, and a paper
             // portfolio has its own -- the paper bot applies its own risk rules when it
@@ -6303,6 +6331,9 @@ function live_dip_entry_watch_payload(): array
                 } elseif ($conditionId !== '' && isset($heldConditions[$conditionId])) {
                     $blocked = 'the wallet already has a position in this market';
                 }
+            }
+            if ($blocked !== '') {
+                $diagnostics['portfolios'][$portfolioId]['blockedByWallet']++;
             }
             $stake = normalize_optional_money_value($entry['portfolio']['stakeUsdc'] ?? null);
             $plans[] = [
@@ -6360,6 +6391,7 @@ function live_dip_entry_watch_payload(): array
                 'blockedReason' => $blocked,
                 'preparedAt' => gmdate('c'),
             ];
+            $diagnostics['portfolios'][$portfolioId]['plans']++;
         }
     }
 
@@ -6371,6 +6403,7 @@ function live_dip_entry_watch_payload(): array
         'cashUsdc' => $cash,
         'plans' => $plans,
         'portfolios' => array_keys($active),
+        'diagnostics' => $diagnostics,
     ];
 }
 
@@ -6560,6 +6593,11 @@ function dip_entry_hits_path(): string
     return __DIR__ . '/data/dip-entry-hits.json';
 }
 
+function dip_entry_watch_status_path(): string
+{
+    return __DIR__ . '/data/dip-entry-watch-status.json';
+}
+
 const DIP_ENTRY_HIT_TTL_SECONDS = 172800;
 const DIP_ENTRY_HIT_LIMIT = 500;
 
@@ -6613,6 +6651,15 @@ function record_dip_entry_hit(array $input): array
         // The price the dip actually reached, which is what the simulated entry pays. The
         // whole value of recording this is that it is not the price an hour later.
         'price' => round($price, 6),
+        // Filled-stake and shares are supplied only by the one-second worker after it has
+        // walked sufficient book depth for the whole FOK order. Older records remain valid
+        // and the paper bot falls back to the configured stake for those.
+        'stakeUsdc' => is_numeric($input['stakeUsdc'] ?? null) && (float) $input['stakeUsdc'] > 0
+            ? round((float) $input['stakeUsdc'], 6)
+            : null,
+        'shares' => is_numeric($input['shares'] ?? null) && (float) $input['shares'] > 0
+            ? round((float) $input['shares'], 6)
+            : null,
         'openProbability' => is_numeric($input['openProbability'] ?? null) ? round((float) $input['openProbability'], 4) : null,
         'volumeUsdc' => is_numeric($input['volumeUsdc'] ?? null) ? (float) $input['volumeUsdc'] : null,
         'endDate' => (string) ($input['endDate'] ?? ''),
@@ -6638,6 +6685,57 @@ function record_dip_entry_hit(array $input): array
         return ['ok' => false, 'reason' => 'unable to persist the dip entry hit'];
     }
     return ['ok' => true, 'recorded' => true];
+}
+
+/**
+ * Short-lived mirror of the RPi's retained watch set. Unlike dip-entry-watch, this still
+ * contains a favourite after it has fallen below the scraped catalogue's threshold, so the
+ * candidate screen can show exactly what the one-second worker follows.
+ */
+function read_dip_entry_watch_status(): array
+{
+    $stored = decode_state_file(dip_entry_watch_status_path(), false);
+    $generatedAt = (string) ($stored['generatedAt'] ?? '');
+    $time = $generatedAt !== '' ? strtotime($generatedAt) : false;
+    $age = $time === false ? null : time() - $time;
+    return [
+        'generatedAt' => $generatedAt !== '' ? $generatedAt : null,
+        'ageSeconds' => $age !== null && $age >= 0 ? $age : null,
+        'stale' => $age === null || $age > 120,
+        'mode' => (string) ($stored['mode'] ?? ''),
+        'watch' => is_array($stored['watch'] ?? null) ? $stored['watch'] : [],
+    ];
+}
+
+function record_dip_entry_watch_status(array $input): array
+{
+    $watch = is_array($input['watch'] ?? null) ? $input['watch'] : [];
+    $clean = [];
+    foreach (array_slice($watch, 0, 1000) as $plan) {
+        if (!is_array($plan)) {
+            continue;
+        }
+        $portfolioId = trim((string) ($plan['portfolioId'] ?? ''));
+        $tokenId = trim((string) ($plan['tokenId'] ?? ''));
+        if ($portfolioId === '' || $tokenId === '') {
+            continue;
+        }
+        $clean[] = $plan;
+    }
+    $path = dip_entry_watch_status_path();
+    $dir = dirname($path);
+    if (!is_dir($dir) && !mkdir($dir, 0775, true) && !is_dir($dir)) {
+        return ['ok' => false, 'error' => 'unable to create the data directory'];
+    }
+    $encoded = json_encode([
+        'generatedAt' => gmdate('c'),
+        'mode' => substr(trim((string) ($input['mode'] ?? '')), 0, 24),
+        'watch' => $clean,
+    ], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+    if (!is_string($encoded) || file_put_contents($path, $encoded . "\n", LOCK_EX) === false) {
+        return ['ok' => false, 'error' => 'unable to persist the dip entry watch status'];
+    }
+    return ['ok' => true, 'watchCount' => count($clean)];
 }
 
 function live_entry_claim_path(): string
@@ -8110,6 +8208,15 @@ try {
     // token ids, bands and sizes, all of which are already in the dashboard.
     if ($action === 'dip-entry-watch') {
         respond(live_dip_entry_watch_payload());
+    }
+
+    if ($action === 'dip-entry-watch-status') {
+        if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+            require_trading_trigger_key();
+            $result = record_dip_entry_watch_status(request_payload());
+            respond($result, ($result['ok'] ?? false) ? 200 : 500);
+        }
+        respond(['ok' => true] + read_dip_entry_watch_status());
     }
 
     // What the worker saw. Read by the paper bot on its hourly run, which opens a simulated

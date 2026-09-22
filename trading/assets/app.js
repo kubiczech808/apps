@@ -1536,16 +1536,41 @@ async function loadDipEntryStatus(mode) {
     return;
   }
   if (state.dipEntryStatusPending) return;
-  if (state.dipEntryStatusAt && Date.now() - state.dipEntryStatusAt < 60000) return;
+  if (state.dipEntryStatusAt && Date.now() - state.dipEntryStatusAt < 15000) return;
   state.dipEntryStatusPending = true;
   try {
-    const [watch, hits] = await Promise.all([
+    const [watch, hits, workerStatus] = await Promise.all([
       fetchApiJson("api.php?action=dip-entry-watch").catch(() => null),
       fetchApiJson("api.php?action=dip-entry-hits").catch(() => null),
+      fetchApiJson("api.php?action=dip-entry-watch-status").catch(() => null),
     ]);
+    const currentPlans = Array.isArray(watch?.plans) ? watch.plans : [];
+    const retainedPlans = workerStatus?.stale === false && Array.isArray(workerStatus?.watch)
+      ? workerStatus.watch
+      : [];
+    // Retained plans are authoritative after the favourite has fallen out of the scrape.
+    // Include just-created server plans too; the RPi absorbs them on its next refresh.
+    const byPlan = new Map();
+    for (const plan of [...currentPlans, ...retainedPlans]) {
+      const key = `${String(plan?.portfolioId || "")}:${String(plan?.tokenId || "")}`;
+      if (plan?.portfolioId && plan?.tokenId) byPlan.set(key, { ...(byPlan.get(key) || {}), ...plan });
+    }
+    const watchPlans = [...byPlan.values()];
+    // The plan tells us why a market is watched; the book tells us where it trades now.
+    // A dip candidate is useful precisely while it has left the scraped catalogue, so
+    // never present the opening probability as though it were its current price.
+    let quoteError = "";
+    try {
+      await refreshShortlistQuotesFromPolymarket(watchPlans);
+    } catch (error) {
+      quoteError = error?.message || String(error);
+    }
     state.dipEntryStatus = {
-      watch: Array.isArray(watch?.plans) ? watch.plans : [],
+      watch: watchPlans,
       hits: Array.isArray(hits?.hits) ? hits.hits : [],
+      diagnostics: watch?.diagnostics && typeof watch.diagnostics === "object" ? watch.diagnostics : null,
+      workerStatus: workerStatus && typeof workerStatus === "object" ? workerStatus : null,
+      quoteError,
       at: new Date().toISOString(),
     };
     state.dipEntryStatusAt = Date.now();
@@ -1553,6 +1578,48 @@ async function loadDipEntryStatus(mode) {
   } finally {
     state.dipEntryStatusPending = false;
   }
+}
+
+function dipEntryPortfolioIdForMode(mode = state.mode) {
+  return executionScopeStrategyIdForMode(mode);
+}
+
+// These are not ordinary catalogue candidates. They are the exact entries the RPi has
+// prepared while the favourite is still visible, and their price is refreshed directly from
+// the CLOB above. Once it falls below 50%, the catalogue normally retains the other outcome,
+// but the watcher must keep showing the original one until the plan expires or fires.
+function dipEntryWatchCandidateRows(mode = state.mode) {
+  const config = portfolioConfigForMode(mode);
+  const rule = dipEntryRuleFromConfig(config);
+  if (!rule.enabled || dipEntryRuleFault(rule)) return [];
+  const portfolioId = dipEntryPortfolioIdForMode(mode);
+  const watch = Array.isArray(state.dipEntryStatus?.watch) ? state.dipEntryStatus.watch : [];
+  return watch
+    .filter((plan) => String(plan?.portfolioId || "") === portfolioId)
+    .map((plan) => {
+      const currentAsk = numericOrNull(plan.bestAsk ?? plan.currentAsk);
+      const currentBid = numericOrNull(plan.bestBid ?? plan.currentBid);
+      const currentProbability = currentAsk ?? numericOrNull(plan.marketProbability ?? plan.marketPrice);
+      return {
+        ...plan,
+        tokenId: String(plan.tokenId || ""),
+        marketProbability: currentProbability,
+        marketPrice: currentProbability,
+        bestAsk: currentAsk,
+        bestBid: currentBid,
+        currentProbability,
+        firstMarketProbability: numericOrNull(plan.openProbability),
+        eventStarted: true,
+        eventRunning: true,
+        status: "DIP_WATCHING",
+        selectionStatus: "READY",
+        evaluatedAt: plan.preparedAt || state.dipEntryStatus?.at || null,
+        dipEntryWatch: true,
+        dipEntryWatchReason: plan.blockedReason
+          || `watching for an executable ask in ${probability(Number(plan.buyMin))}-${probability(Number(plan.buyMax))}`,
+        portfolioRiskBlockReason: plan.blockedReason || "",
+      };
+    });
 }
 
 // One line the reader can act on: is anything being watched, and has anything been caught.
@@ -1567,17 +1634,30 @@ function dipEntryStatusMarkup(mode) {
   }
   const status = state.dipEntryStatus;
   if (!status) return `<div class="empty">Dip entry is on. Loading what it is watching...</div>`;
-  const mine = `paper-${paperStrategyIdFromMode(mode)}`;
+  const mine = dipEntryPortfolioIdForMode(mode);
   const watched = status.watch.filter((plan) => String(plan?.portfolioId || "") === mine
     || String(plan?.portfolioId || "") === normalizeMode(mode));
   const caught = status.hits.filter((hit) => String(hit?.portfolioId || "") === mine
     || String(hit?.portfolioId || "") === normalizeMode(mode));
   const newest = caught.reduce((best, hit) => (!best || String(hit.at || "") > String(best.at || "") ? hit : best), null);
+  const diagnostic = status.diagnostics?.portfolios?.[mine] || null;
+  const diagnosticNote = watched.length || !diagnostic
+    ? ""
+    : ` ${formatInteger(diagnostic.openingBand || 0)} market(s) matched the opening band; `
+      + `${formatInteger(diagnostic.scope || 0)} also passed tags, shape, volume and live-event rules.`;
+  const quoted = watched.filter((plan) => numericOrNull(plan.bestAsk ?? plan.currentAsk) != null).length;
+  const workerAge = Number(status.workerStatus?.ageSeconds);
+  const workerNote = Number.isFinite(workerAge)
+    ? ` RPi watch report ${workerAge}s old.`
+    : " RPi watch report is not available yet.";
+  const quoteNote = status.quoteError
+    ? ` Current CLOB quotes are unavailable (${escapeHtml(status.quoteError)}).`
+    : (watched.length ? ` ${formatInteger(quoted)} watched market(s) have a current CLOB ask.` : "");
   return `<div class="empty">Dip entry: watching ${formatInteger(watched.length)} market(s) that opened`
     + ` ${probability(rule.openMin)}-${probability(rule.openMax)} and are under way, for a fall into`
     + ` ${probability(rule.buyMin)}-${probability(rule.buyMax)}.`
     + ` ${caught.length ? `${formatInteger(caught.length)} dip(s) recorded` : "No dip recorded yet"}`
-    + `${newest ? `, newest ${escapeHtml(formatDate(newest.at))} at ${probability(Number(newest.price))}` : ""}.`
+    + `${newest ? `, newest ${escapeHtml(formatDate(newest.at))} at ${probability(Number(newest.price))}` : ""}.${diagnosticNote}${quoteNote}${workerNote}`
     + ` The RPi worker watches these every second; this bot opens the position on its next run,`
     + ` at the price the dip reached.</div>`;
 }
@@ -11429,8 +11509,24 @@ function portfolioCandidateDiagnostics(mode = state.mode) {
     else ready.push(row);
   }
 
+  // A dip entry is prepared above its buy range and commonly disappears from the catalogue
+  // once it collapses. Keep the worker's plans in this same view, rather than hiding the
+  // actual execution pool behind an informational sentence. A watched plan wins on its
+  // token if the catalogue happens to contain the same market at this moment.
+  const watched = dipEntryWatchCandidateRows(mode);
+  const readyByToken = new Map(ready.map((item) => [String(item.tokenId || item.clobTokenId || item.assetId || ""), item]));
+  for (const item of watched) {
+    const tokenId = String(item.tokenId || "");
+    if (item.portfolioRiskBlockReason) {
+      if (candidateAlreadyHeldMarketReason(item.portfolioRiskBlockReason)) alreadyHeld.push(item);
+      else riskBlocked.push(item);
+      continue;
+    }
+    readyByToken.set(tokenId, item);
+  }
+
   return {
-    ready: sortPortfolioCandidates(ready, mode),
+    ready: sortPortfolioCandidates([...readyByToken.values()], mode),
     riskBlocked: sortPortfolioCandidates(riskBlocked, mode),
     alreadyHeld: sortPortfolioCandidates(alreadyHeld, mode),
     manuallyExcluded: sortPortfolioCandidates(manuallyExcluded, mode),
@@ -11544,6 +11640,7 @@ function renderPortfolioCandidateRows(rows = [], mode = state.mode, diagnostics 
       <tbody>
         ${visibleRows.slice(0, shown).map((item) => {
           const excluded = Boolean(item.manuallyExcluded);
+          const watchingDip = Boolean(item.dipEntryWatch);
           const riskBlockedRow = Boolean(item.portfolioRiskBlockReason);
           // A retryable verdict from the previous run is not a precheck state of
           // its own. Every execution revalidates each shortlisted candidate from
@@ -11561,14 +11658,16 @@ function renderPortfolioCandidateRows(rows = [], mode = state.mode, diagnostics 
           const heldRow = candidateAlreadyHeldMarketReason(item.portfolioRiskBlockReason);
           const status = excluded
             ? "excluded manually for this portfolio"
-            : (heldRow
+            : (watchingDip
+              ? `${item.dipEntryWatchReason || "watching the live order book"}${Number.isFinite(Number(item.currentProbability)) ? `; current ask ${probability(Number(item.currentProbability))}` : "; current ask unavailable"}`
+              : (heldRow
               ? `${item.portfolioRiskBlockReason}; see Opened trades`
               : (riskBlockedRow
                 ? "excluded by diversification rules"
-                : (!live ? "ready for next paper execution" : "")));
+                : (!live ? "ready for next paper execution" : ""))));
           const precheck = excluded
             ? "EXCLUDED"
-            : (heldRow ? "ALREADY HELD" : (riskBlockedRow ? "RISK-BLOCKED" : "READY"));
+            : (watchingDip ? "WATCHING" : (heldRow ? "ALREADY HELD" : (riskBlockedRow ? "RISK-BLOCKED" : "READY")));
           const selectedProbability = portfolioProbability(item, config);
           const selectedAnnualizedReturn = portfolioAnnualizedReturn(item, config);
           const selectedExpectedValue = portfolioExpectedValue(item, config);
@@ -11580,10 +11679,10 @@ function renderPortfolioCandidateRows(rows = [], mode = state.mode, diagnostics 
               <td data-label="Precheck" class="${excluded ? "negative" : (riskBlockedRow ? "warning" : "positive")}" data-precheck="${escapeHtml(precheck)}">
                 <strong>${precheck}</strong>${marketTagsInfo(item)}
                 ${status ? `<span>${escapeHtml(status)}</span>` : ""}
-                <label class="candidate-exclusion-control" title="Exclude this candidate from this portfolio's future executions">
+                ${watchingDip ? "" : `<label class="candidate-exclusion-control" title="Exclude this candidate from this portfolio's future executions">
                   <input type="checkbox" data-portfolio-candidate-exclude data-portfolio-mode="${escapeHtml(mode)}" data-candidate-token-id="${escapeHtml(String(item.tokenId || item.clobTokenId || item.assetId || ""))}" ${excluded ? "checked" : ""}>
                   <span>Exclude</span>
-                </label>
+                </label>`}
               </td>
               ${useLiveMarketColumnOrder ? `
                 <td data-label="${returnMetric}" title="${escapeHtml(annualizationHorizonNote(item))}"><span class="${pnlClass(selectedAnnualizedReturn)}">${signedPercent(selectedAnnualizedReturn)}</span></td>

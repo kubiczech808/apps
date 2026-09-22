@@ -251,7 +251,11 @@ const COUNT_UNKNOWN_SPREAD_AS_TRADABLE = envBool("PAPER_COUNT_UNKNOWN_SPREAD", f
 const OPEN_ON_UNKNOWN_SPREAD = envBool("PAPER_OPEN_ON_UNKNOWN_SPREAD", true);
 const MIN_VOLUME_24H = envNumber("PAPER_MIN_VOLUME_24H", 100);
 const MAX_HISTORY = envNumber("PAPER_MAX_HISTORY", 5000);
-const PAPER_CLOSED_TRADE_HISTORY_LIMIT = Math.max(50, envNumber("PAPER_CLOSED_TRADE_HISTORY_LIMIT", 300));
+// This is an accounting ledger, not a table page. Trimming it to 300 made a portfolio's
+// displayed performance a rolling sample while still calling it total P/L and accuracy.
+// Keep the full normal history by default; deployments may set a deliberately high safety
+// ceiling while the database ledger remains the durable source of record.
+const PAPER_CLOSED_TRADE_HISTORY_LIMIT = Math.max(5000, envNumber("PAPER_CLOSED_TRADE_HISTORY_LIMIT", MAX_HISTORY));
 const EVALUATION_RUN_LOG_LIMIT = Math.max(12, envNumber("PAPER_EVALUATION_RUN_LOG_LIMIT", 24));
 const CALCULATION_REPORT_HISTORY_LIMIT = Math.max(2, envNumber("PAPER_CALCULATION_REPORT_HISTORY_LIMIT", 6));
 // Every scan persists a Gamma keyset cursor. A single run processes one
@@ -8696,9 +8700,18 @@ export function dipEntryCandidateRows(strategy, hits = DIP_ENTRY_HITS, tradedTok
       // "net profit below 0% after fees", "base status UNKNOWN is not ELIGIBLE" -- which is
       // how a candidate pool that looked correct produced nothing at all. Measured against
       // the real filter rather than assumed.
-      const stake = Number(strategy.stakeUsdc) > 0 ? Number(strategy.stakeUsdc) : STAKE_USDC;
+      // New worker records have already proved that this exact whole stake could cross the
+      // book. The configured value remains the fallback for historical records, which did
+      // not carry execution details.
+      const recordedStake = Number(hit.stakeUsdc);
+      const stake = Number.isFinite(recordedStake) && recordedStake > 0
+        ? recordedStake
+        : (Number(strategy.stakeUsdc) > 0 ? Number(strategy.stakeUsdc) : STAKE_USDC);
       const fees = feeConfig({});
-      const shares = stake / price;
+      const recordedShares = Number(hit.shares);
+      const shares = Number.isFinite(recordedShares) && recordedShares > 0
+        ? recordedShares
+        : stake / price;
       const takerFee = takerFeeForFills([{ price, size: shares }], fees.feeRate);
       const totalCost = stake + takerFee;
       const netGainIfWin = shares - stake - takerFee;
@@ -9983,7 +9996,10 @@ function maybeOpenScheduledTrade(portfolioState, eligible, strategy = PAPER_STRA
     };
   }
 
-  const trade = openPaperTradeForStrategy(best, strategy, today, stake);
+  // A fresh dip hit is a witnessed FOK entry; keep its actual filled size rather than
+  // rescaling it a second time to the configured nominal stake.
+  const selectedStake = best.dipEntryHit && Number(best.stakeUsdc) > 0 ? Number(best.stakeUsdc) : stake;
+  const trade = openPaperTradeForStrategy(best, strategy, today, selectedStake);
 
   portfolioState.trades.unshift(trade);
   portfolioState.lastTradeDate = today;
@@ -9993,8 +10009,8 @@ function maybeOpenScheduledTrade(portfolioState, eligible, strategy = PAPER_STRA
     action: "OPENED",
     reason,
     trade,
-    available: available - stake,
-    requiredStake: stake,
+    available: available - selectedStake,
+    requiredStake: selectedStake,
     skippedForRisk,
     strategyId: strategy.id,
     batchLog: buildTradeBatchLog({
@@ -10006,7 +10022,7 @@ function maybeOpenScheduledTrade(portfolioState, eligible, strategy = PAPER_STRA
       action: "OPENED",
       reason,
       available,
-      stake,
+      stake: selectedStake,
       selected: best,
       skippedForRisk,
       diversificationDiagnostics: options.diversificationDiagnostics || null,

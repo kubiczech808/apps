@@ -220,6 +220,9 @@ jobs:
                   # had nothing to open at 04:07. Reported as "two of my dip portfolios
                   # cannot catch any trade".
                   "dip-entry-hits.json",
+                  # Short-lived report from the RPi worker. The dashboard uses this to show
+                  # retained dip plans after their favourite leaves the scraped catalogue.
+                  "dip-entry-watch-status.json",
                   # Why a live position was sold, keyed by token. The dashboard's closed
                   # positions read it to say a stop loss fired -- which is exactly the thing
                   # that was once reported missing, and this is why it would go missing

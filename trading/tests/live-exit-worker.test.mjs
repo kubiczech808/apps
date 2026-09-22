@@ -1685,22 +1685,21 @@ test("dip entry: the order never pays above the band, and never without cash", (
 
   // "Only when capital is available", checked against the stake this plan was prepared
   // with rather than against a hopeful balance.
-  assert.match(source, /if \(!\(Number\(cashUsdc\) >= stake\)\) \{/);
+  assert.match(source, /if \(!\(Number\(cashUsdc\) >= quote\.requiredUsdc\)\) \{/);
   // The band's ceiling is also the price ceiling. A worker that was a second late must not
   // buy the recovery it was too slow to catch.
-  assert.match(source, /const price = Math\.min\(marketable, Number\(plan\.buyMax\)\);/,
+  assert.match(source, /const limit = Math\.min\(Number\(plan\.buyMax\), levels\[0\]\.price \+ Math\.max\(0, DIP_ENTRY_MAX_SLIPPAGE\), 0\.99\);/,
     "the buy band's top is the highest price the order may pay");
-  // Marketable through the levels the size consumes, not top-of-book: the same reasoning as
-  // the stop-loss reversal, which is specified as a market order too.
-  assert.match(source, /marketableBuyPrice\(\{ book, notionalUsdc: stake, maxSlippage: DIP_ENTRY_MAX_SLIPPAGE \}\)/);
+  assert.match(source, /not enough executable depth for the configured stake/,
+    "a paper-equivalent dip entry must refuse a book that cannot fill the whole configured stake");
   // The claim is what stops this and the hourly executor from both entering the same
   // market, and a failed order releases it rather than leaving it held.
   assert.match(source, /const claim = await claimLiveEntry\(plan\.tokenId, claimId\);/);
   assert.match(source, /await settleLiveEntryClaim\("release", plan\.tokenId, claimId\);\n    return \{ success: false, error: error\?\.message/,
     "a thrown order must release its claim, or the market can never be entered again");
-  // FAK then FOK, for the reason the reversal already documents: a smaller position is
-  // still the position the rule asked for.
-  assert.match(source, /postOrder\(signed, OrderType\.FAK, false\)[\s\S]{0,200}?postOrder\(signed, OrderType\.FOK, false\)/);
+  // A dip's paper mirror needs a determinate stake, unlike a protective exit. FOK keeps the
+  // live result either this fully quoted entry or no entry at all.
+  assert.match(source, /postOrder\(signed, OrderType\.FOK, false\)/);
 });
 
 // A portfolio's own automation setting is the authority for dip entries. Deploys migrate

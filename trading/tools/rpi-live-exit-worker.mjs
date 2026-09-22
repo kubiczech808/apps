@@ -2323,6 +2323,13 @@ const DIP_ENTRY_TTL_MS = clampInteger(process.env.LIVE_DIP_ENTRY_TTL_MS, 4 * 360
 const DIP_ENTRY_MAX_SLIPPAGE = Number(process.env.LIVE_DIP_ENTRY_MAX_SLIPPAGE || 0.02);
 const DIP_ENTRY_RECORD_URL = process.env.LIVE_DIP_ENTRY_RECORD_URL
   || "https://osobnizkusenosti.cz/trading/api.php?action=dip-entry-record";
+// The catalogue endpoint can only describe plans which still appear in the current scrape.
+// The worker deliberately retains a plan after its favourite has fallen below 50%, so it
+// also publishes that retained set for the dashboard. This is diagnostic-only and must not
+// become part of the one-second entry decision.
+const DIP_ENTRY_STATUS_URL = process.env.LIVE_DIP_ENTRY_STATUS_URL
+  || "https://osobnizkusenosti.cz/trading/api.php?action=dip-entry-watch-status";
+const DIP_ENTRY_STATUS_PUBLISH_MS = clampInteger(process.env.LIVE_DIP_ENTRY_STATUS_PUBLISH_MS, 30000, 10000, 300000);
 
 // A paper portfolio's dip, recorded rather than bought.
 //
@@ -2335,7 +2342,7 @@ const DIP_ENTRY_RECORD_URL = process.env.LIVE_DIP_ENTRY_RECORD_URL
 //
 // Nothing is signed and no money moves, so this path runs whatever the live switches say --
 // a paper test that needed the live keys armed would not be a paper test.
-export async function recordDipEntryHit(plan, price) {
+export async function recordDipEntryHit(plan, price, execution = {}) {
   if (!TRADING_TRIGGER_KEY) return { ok: false, error: "dip entry record key is not configured" };
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 12000);
@@ -2360,6 +2367,8 @@ export async function recordDipEntryHit(plan, price) {
       firstObservedAt: plan.firstObservedAt || "",
       eventStartTime: plan.eventStartTime || "",
         price,
+        stakeUsdc: Number.isFinite(Number(execution.stakeUsdc)) ? Number(execution.stakeUsdc) : null,
+        shares: Number.isFinite(Number(execution.shares)) ? Number(execution.shares) : null,
         openProbability: plan.openProbability ?? null,
         volumeUsdc: plan.volumeUsdc ?? null,
         endDate: plan.endDate || "",
@@ -2413,19 +2422,128 @@ function dipEntryTrigger(plan, book) {
   return { fire: true, ask };
 }
 
-async function submitDipEntry(plan, book, cashUsdc) {
+// Paper and live must use the same executable quote. A paper hit at bare best ask is fiction
+// when the configured stake must consume a thinner top level. The live path is FOK: either
+// this whole requested size can cross the published book inside the band, or neither account
+// takes it. That removes the unknowable partial-fill gap from paper accounting.
+export function executableDipEntryQuote(plan = {}, book = {}) {
   const stake = Number(plan.stakeUsdc);
-  if (!(stake > 0)) return { success: false, error: "no stake is configured for this portfolio" };
-  if (!(Number(cashUsdc) >= stake)) {
-    return { success: false, error: `cash ${cashUsdc} does not cover the ${stake} stake` };
+  if (!(stake > 0)) return { ok: false, error: "no stake is configured for this portfolio" };
+  const levels = (Array.isArray(book?.asks) ? book.asks : [])
+    .map((row) => ({ price: number(row?.price ?? row?.p), size: number(row?.size ?? row?.s) }))
+    .filter((level) => level.price != null && level.price > 0 && level.price < 1
+      && level.size != null && level.size > 0)
+    .sort((left, right) => left.price - right.price);
+  if (!levels.length) return { ok: false, error: "no executable ask for the stake" };
+  const limit = Math.min(Number(plan.buyMax), levels[0].price + Math.max(0, DIP_ENTRY_MAX_SLIPPAGE), 0.99);
+  if (!(limit > 0)) return { ok: false, error: "the buy band has no valid ceiling" };
+  let remaining = stake;
+  let cost = 0;
+  let shares = 0;
+  let lastPrice = null;
+  for (const level of levels) {
+    if (level.price > limit || remaining <= 0.000001) break;
+    const taken = Math.min(remaining, level.price * level.size);
+    cost += taken;
+    shares += taken / level.price;
+    remaining -= taken;
+    lastPrice = level.price;
   }
-  // Marketable through the levels this size consumes, then capped at the band's ceiling.
-  // The cap is the point: a worker that was one second late must not buy the recovery.
-  const marketable = marketableBuyPrice({ book, notionalUsdc: stake, maxSlippage: DIP_ENTRY_MAX_SLIPPAGE });
-  if (!(marketable > 0) || marketable >= 1) return { success: false, error: "no executable ask for the whole stake" };
-  const price = Math.min(marketable, Number(plan.buyMax));
-  const shares = Math.floor((stake / price) * 10000) / 10000;
-  if (!(shares > 0)) return { success: false, error: "order size is below the exchange minimum" };
+  if (remaining > 0.000001 || !(shares > 0) || lastPrice == null) {
+    return { ok: false, error: "not enough executable depth for the configured stake" };
+  }
+  const averagePrice = cost / shares;
+  return {
+    ok: true,
+    // price is what both accounting paths paid on the observed book; orderPrice is the
+    // marketable limit needed to guarantee that fill through its final level.
+    price: round(averagePrice, 6),
+    orderPrice: round(lastPrice, 6),
+    shares: round(shares, 4),
+    stakeUsdc: round(cost, 6),
+    requiredUsdc: stake,
+  };
+}
+
+function refreshDipWatchQuotes(context, books, at) {
+  if (!(context.dipWatch instanceof Map)) return;
+  for (const plan of context.dipWatch.values()) {
+    const book = books.get(String(plan.tokenId));
+    if (!book) continue;
+    const trigger = dipEntryTrigger(plan, book);
+    const executable = trigger.fire ? executableDipEntryQuote(plan, book) : null;
+    plan.currentBid = bestBid(book);
+    plan.currentAsk = bestAsk(book);
+    plan.currentReason = trigger.fire
+      ? (executable?.ok ? "inside buy band" : executable?.error || "not executable")
+      : trigger.reason;
+    plan.currentExecutablePrice = executable?.ok ? executable.price : null;
+    plan.quotedAt = at;
+  }
+}
+
+function dipEntryWatchStatusRows(context) {
+  return [...(context.dipWatch instanceof Map ? context.dipWatch.values() : [])].map((plan) => ({
+    portfolioId: plan.portfolioId,
+    accountType: plan.accountType,
+    tokenId: plan.tokenId,
+    conditionId: plan.conditionId || "",
+    question: plan.question || "",
+    outcome: plan.outcome || "",
+    slug: plan.slug || "",
+    eventSlug: plan.eventSlug || "",
+    openProbability: plan.openProbability ?? null,
+    buyMin: plan.buyMin,
+    buyMax: plan.buyMax,
+    stakeUsdc: plan.stakeUsdc,
+    volumeUsdc: plan.volumeUsdc ?? null,
+    endDate: plan.endDate || "",
+    tags: Array.isArray(plan.tags) ? plan.tags : [],
+    blockedReason: plan.blockedReason || "",
+    currentBid: plan.currentBid ?? null,
+    currentAsk: plan.currentAsk ?? null,
+    currentExecutablePrice: plan.currentExecutablePrice ?? null,
+    currentReason: plan.currentReason || "",
+    quotedAt: plan.quotedAt || null,
+    preparedAt: plan.preparedAt || null,
+    seenAt: plan.seenAt || null,
+    settled: context.state.dipEntries?.[dipEntryPlanKey(plan)]?.reason || null,
+  }));
+}
+
+async function publishDipEntryWatchStatus(context) {
+  if (!TRADING_TRIGGER_KEY || DIP_ENTRY_MODE === "off") return;
+  const now = Date.now();
+  if (now - (context.dipStatusPublishedAt || 0) < DIP_ENTRY_STATUS_PUBLISH_MS) return;
+  context.dipStatusPublishedAt = now;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 8000);
+  try {
+    const response = await fetch(DIP_ENTRY_STATUS_URL, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-trading-trigger-key": TRADING_TRIGGER_KEY,
+        "user-agent": "trading-live-exit-worker/1.0",
+      },
+      body: JSON.stringify({ mode: DIP_ENTRY_MODE, watch: dipEntryWatchStatusRows(context) }),
+      signal: controller.signal,
+    });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    context.dipStatusError = null;
+  } catch (error) {
+    context.dipStatusError = error?.message || String(error);
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function submitDipEntry(plan, book, cashUsdc) {
+  const quote = executableDipEntryQuote(plan, book);
+  if (!quote.ok) return { success: false, error: quote.error };
+  if (!(Number(cashUsdc) >= quote.requiredUsdc)) {
+    return { success: false, error: `cash ${cashUsdc} does not cover the ${quote.requiredUsdc} stake` };
+  }
   const claimId = randomUUID();
   const claim = await claimLiveEntry(plan.tokenId, claimId);
   if (!claim.claimed) {
@@ -2433,18 +2551,16 @@ async function submitDipEntry(plan, book, cashUsdc) {
   }
   try {
     const { client, Side, OrderType } = await authenticatedClient();
-    const signed = await client.createOrder({ tokenID: String(plan.tokenId), price, size: shares, side: Side.BUY }, {});
-    // FAK first, for the same reason the stop-loss reversal does it: the rule asks for a
-    // position to be opened, and a smaller one is still that position. FOK turned every
-    // shortfall in depth into no position at all.
-    let response = await client.postOrder(signed, OrderType.FAK, false);
-    if (!exitFilled(response)) response = await client.postOrder(signed, OrderType.FOK, false);
+    const signed = await client.createOrder({ tokenID: String(plan.tokenId), price: quote.orderPrice, size: quote.shares, side: Side.BUY }, {});
+    // Unlike a protective exit, the paper mirror needs a determinate entry size and cost.
+    // FOK makes the live result either this fully quoted position or no position at all.
+    const response = await client.postOrder(signed, OrderType.FOK, false);
     if (exitFilled(response)) await settleLiveEntryClaim("confirm", plan.tokenId, claimId);
     else await settleLiveEntryClaim("release", plan.tokenId, claimId);
-    return { ...response, price: round(price, 6), shares: round(shares, 4), stakeUsdc: stake };
+    return { ...response, ...quote };
   } catch (error) {
     await settleLiveEntryClaim("release", plan.tokenId, claimId);
-    return { success: false, error: error?.message || String(error), price: round(price, 6), shares: round(shares, 4) };
+    return { success: false, error: error?.message || String(error), ...quote };
   }
 }
 
@@ -2488,11 +2604,17 @@ async function fireDipEntries(context, books, now) {
     // say, because nothing is signed and no money moves -- and a paper test that needed the
     // live keys armed would not be a paper test.
     if (plan.accountType === "paper") {
-      const recorded = await recordDipEntryHit(plan, trigger.ask);
+      const quote = executableDipEntryQuote(plan, book);
+      if (!quote.ok) {
+        recordEvent(context.state, { ...event, type: "DIP_ENTRY_PAPER_NOT_EXECUTABLE", error: quote.error });
+        continue;
+      }
+      const recorded = await recordDipEntryHit(plan, quote.price, quote);
       recordEvent(context.state, {
         ...event,
         type: recorded.ok ? "DIP_ENTRY_PAPER_RECORDED" : "DIP_ENTRY_PAPER_RECORD_FAILED",
-        price: trigger.ask,
+        price: quote.price,
+        shares: quote.shares,
         error: recorded.ok ? null : recorded.error,
       });
       // A failed record is NOT terminal: the price is still in the band on the next pass, so
@@ -2702,6 +2824,7 @@ async function checkOnce(context) {
   try {
     const books = await fetchBooks([...new Set([...candidates.map((plan) => plan.tokenId), ...dipTokens])]);
     dipBooks = books;
+    refreshDipWatchQuotes(context, dipBooks, now);
     observed = candidates.map((plan) => {
       const book = books.get(String(plan.tokenId));
       return book
@@ -3043,27 +3166,7 @@ async function checkOnce(context) {
     // What is being followed and what each entry would pay, so a pass that bought nothing
     // is still legible: the alternative is a watch set that can only be inferred from the
     // absence of events.
-    context.state.dipEntryWatch = [...(context.dipWatch instanceof Map ? context.dipWatch.values() : [])]
-      .map((plan) => ({
-        portfolioId: plan.portfolioId,
-        tokenId: plan.tokenId,
-        question: plan.question,
-        outcome: plan.outcome,
-        openProbability: plan.openProbability,
-        buyMin: plan.buyMin,
-        buyMax: plan.buyMax,
-        stakeUsdc: plan.stakeUsdc,
-        blockedReason: plan.blockedReason || null,
-        // The market's tags, so the state file can answer whether the watch this worker is
-        // actually following carries them. Without this field a status read reports zero
-        // tagged plans on a perfectly healthy watch: it cannot tell "no plan has tags" from
-        // "this projection never had the field". A number that cannot tell absence from zero
-        // is worse than no number, and this one was read as evidence once already.
-        //
-        // null, not [], when the plan has none -- so the two stay distinguishable downstream.
-        tags: Array.isArray(plan.tags) ? plan.tags : null,
-        settled: context.state.dipEntries?.[dipEntryPlanKey(plan)]?.reason || null,
-      }));
+    context.state.dipEntryWatch = dipEntryWatchStatusRows(context);
     try {
       await fireDipEntries(context, dipBooks, now);
     } catch (error) {
@@ -3071,6 +3174,7 @@ async function checkOnce(context) {
       // It must never be able to stop a stop loss from running on the next pass.
       recordEvent(context.state, { at: now, type: "DIP_ENTRY_ERROR", error: error?.message || String(error) });
     }
+    await publishDipEntryWatchStatus(context);
   }
   await persistState(context);
 }
