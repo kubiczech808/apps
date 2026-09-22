@@ -2376,7 +2376,7 @@ export async function recordDipEntryHit(plan, price, execution = {}) {
         // recorded hit, and by then the collapsed favourite has left the catalogue -- so a hit
         // without tags becomes a row that a tag-filtered portfolio must refuse. That is what
         // sent 270 recorded dips a day to nothing.
-        tags: Array.isArray(plan.tags) ? plan.tags : [],
+        tags: Array.isArray(plan.tags) ? plan.tags : null,
       }),
       signal: controller.signal,
     });
@@ -2498,7 +2498,7 @@ function dipEntryWatchStatusRows(context) {
     stakeUsdc: plan.stakeUsdc,
     volumeUsdc: plan.volumeUsdc ?? null,
     endDate: plan.endDate || "",
-    tags: Array.isArray(plan.tags) ? plan.tags : [],
+    tags: Array.isArray(plan.tags) ? plan.tags : null,
     blockedReason: plan.blockedReason || "",
     currentBid: plan.currentBid ?? null,
     currentAsk: plan.currentAsk ?? null,

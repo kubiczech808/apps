@@ -208,8 +208,8 @@ test("BAIT: a watch projection without the field must not read as zero tagged pl
   // Two halves to the fix, and both are checked here: the worker records the field, and the
   // reader refuses to call its absence zero.
   const worker = readFileSync(new URL("../tools/rpi-live-exit-worker.mjs", import.meta.url), "utf8");
-  const projection = worker.slice(worker.indexOf("context.state.dipEntryWatch = ["));
-  const body = projection.slice(0, projection.indexOf("}));"));
+  const projection = worker.slice(worker.indexOf("function dipEntryWatchStatusRows("));
+  const body = projection.slice(0, projection.indexOf("\n}\n\nasync function publishDipEntryWatchStatus"));
   assert.match(body, /tags: Array\.isArray\(plan\.tags\) \? plan\.tags : null/,
     "the projection must carry tags, or the number downstream means nothing");
 

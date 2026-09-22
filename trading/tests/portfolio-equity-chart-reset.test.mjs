@@ -111,8 +111,9 @@ test("a reset portfolio is charted from its recorded balance, however little of 
   assert.ok(history.points.length >= 2);
 
   // But a genuinely new portfolio, with no reset, is still withheld until it has three days.
-  const brandNew = [trade("only", "2026-09-17T19:00:00.000Z", 3)];
-  assert.equal(buildHistory(brandNew, 103, 0, "2026-09-17T20:00:00.000Z", null, null, null, null, null), null);
+  const oneHourAgo = new Date(Date.now() - 3600000).toISOString();
+  const brandNew = [trade("only", oneHourAgo, 3)];
+  assert.equal(buildHistory(brandNew, 103, 0, new Date().toISOString(), null, null, null, null, null), null);
 });
 
 test("a recorded daily series is bounded by the reset too", () => {
