@@ -71,6 +71,8 @@ def deploy(ftp):
         "deploy-root/www/php/market-data.php": "www/php/market-data.php",
         "deploy-root/www/php/getTicker.php": "www/php/getTicker.php",
         "deploy-root/www/app/overview.php": "www/app/overview.php",
+        "deploy-root/www/app/stats.php": "www/app/stats.php",
+        "deploy-root/www/app/includes/calc_result.php": "www/app/includes/calc_result.php",
         "deploy-root/www/app/php/get_live_price.php": "www/app/php/get_live_price.php",
         "deploy-root/www/app/php/get_ticker.php": "www/app/php/get_ticker.php",
     }
