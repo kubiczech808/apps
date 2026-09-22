@@ -51,7 +51,7 @@ jobs:
         run: |
           for source in server-current/app/stats.php server-current/app/includes/calc_result.php server-current/app/php/get_cycle_ath.php; do
             echo "::group::${source}"
-            grep -n -i -C 18 'exchange_rates' "$source" || true
+            nl -ba "$source"
             echo "::endgroup::"
           done
 
