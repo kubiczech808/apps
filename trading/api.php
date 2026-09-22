@@ -8981,7 +8981,7 @@ try {
         $unique = [];
         foreach ($rows as $row) {
             $signature = implode("\x1f", [
-                $row['probability'], $row['trades'], $row['wins'],
+                $row['tag'], $row['horizon'], $row['probability'], $row['trades'], $row['wins'],
                 number_format((float) $row['stakedUsdc'], 6, '.', ''),
                 number_format((float) $row['pnlUsdc'], 6, '.', ''),
             ]);
