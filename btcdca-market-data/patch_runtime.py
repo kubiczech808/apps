@@ -80,7 +80,7 @@ def neutralize_exchange_rate_inserts(relative: str) -> None:
         nonlocal count
         if re.search(r"\binsert\s+into\s+`?exchange_rates`?\b", match.group(3), re.IGNORECASE):
             count += 1
-            return match.group(1) + "'SELECT 1'" + match.group(4)
+            return match.group(1) + "'SELECT 1';"
         return match.group(0)
 
     value = assignment.sub(replace, value)
