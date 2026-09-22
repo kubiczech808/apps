@@ -47,6 +47,14 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+      - name: Report remaining exchange-rate query context
+        run: |
+          for source in server-current/app/stats.php server-current/app/includes/calc_result.php server-current/app/php/get_cycle_ath.php; do
+            echo "::group::${source}"
+            grep -n -i -C 18 'exchange_rates' "$source" || true
+            echo "::endgroup::"
+          done
+
       - name: Build bounded cache deployment
         run: python3 btcdca-market-data/patch_runtime.py
 
