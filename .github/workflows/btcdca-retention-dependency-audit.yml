@@ -86,6 +86,24 @@ jobs:
               print('---')
           PY
 
+      - name: Print market-data writer contexts
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          for relative in ('app/php/get_live_price.php', 'app/php/get_ticker.php', 'app/php/get_cycle_ath.php', 'app/includes/calc_result.php'):
+              print(f'### {relative}')
+              lines = (Path('runtime-source') / relative).read_text(encoding='utf-8', errors='replace').splitlines()
+              emitted = set()
+              for hit, line in enumerate(lines):
+                  if 'exchange_rates' not in line.lower():
+                      continue
+                  for index in range(max(0, hit - 7), min(len(lines), hit + 8)):
+                      if index not in emitted:
+                          print(f'{index + 1}: {lines[index]}')
+                          emitted.add(index)
+                  print('---')
+          PY
+
       - name: Print redacted market data source excerpt
         run: cat btcdca-market-data-source-excerpt.md
 
