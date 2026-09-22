@@ -21,6 +21,25 @@ test('linear FX paper sizing risks one percent without using inverse BTC math', 
   assert.ok(plan.rr >= 1.9)
 })
 
+test('an unleveraged linear FX trade never commits more capital than is available', () => {
+  const plan = planLinearPosition({
+    side: 'short',
+    entry: 0.5738,
+    stop: 0.5759,
+    takeProfit: 0.5696,
+    equitySats: 123_000,
+    btcPrice: 85_640,
+    settings: { market: 'spot', riskPct: 1, feeRate: 0.0006, minMarginSats: 1 },
+  })
+
+  assert.equal(plan.ok, true, plan.reason)
+  assert.equal(plan.leverage, 1)
+  assert.equal(plan.notionalCapped, true)
+  assert.ok(plan.marginSats + Math.ceil(plan.quantityUsd * 0.0006 * plan.quoteSatsPerUsd) <= 123_000)
+  assert.ok(plan.riskSats <= 1_230, 'the structural stop must never exceed the 1% risk ceiling')
+  assert.ok(plan.riskSats < 1_230, 'the capital cap may reduce risk without moving the stop')
+})
+
 test('inverse PnL has the right sign on both sides', () => {
   assert.ok(pnlSats({ side: 'long', entry: 100_000, exit: 110_000, quantityUsd: 100 }) > 0)
   assert.ok(pnlSats({ side: 'long', entry: 100_000, exit: 90_000, quantityUsd: 100 }) < 0)

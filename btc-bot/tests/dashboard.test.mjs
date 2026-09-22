@@ -73,6 +73,8 @@ test('capital and P/L are presented in USD while sats remain internal accounting
   assert.match(js, /const usdFromSats/)
   assert.match(js, /tile\('Kapitál', usd\(equityUsd\)/)
   assert.match(js, /positionPnlCell/)
+  assert.match(js, /const positionCapitalCell/)
+  assert.match(js, /'Vložený kapitál'/)
   assert.doesNotMatch(js, /signedSats/)
 })
 

@@ -163,6 +163,8 @@ test('ready PA profiles open one paper trade per asset and never duplicate the s
   assert.equal(calls.length, 1)
   assert.equal(calls[0].assetSymbol, 'AUDUSD')
   assert.equal(calls[0].timeframeId, '1h')
+  assert.equal(calls[0].market, 'spot')
+  assert.equal(calls[0].leverage, 1)
   assert.equal(first[0].action, 'opened')
 
   const second = await executeReadyPriceActionProfiles({

@@ -268,7 +268,14 @@ export const planLinearPosition = ({
   const riskSats = equitySats * (config.riskPct / 100)
   const roundTripRiskPerUsd = (stopFraction + config.feeRate * 2) * quoteSatsPerUsd
   let quantityUsd = riskSats / roundTripRiskPerUsd
-  const maxNotionalUsd = (equitySats / quoteSatsPerUsd) * (config.maxNotionalPct / 100)
+  const spot = config.market === 'spot'
+  const capitalUsd = equitySats / quoteSatsPerUsd
+  // Without leverage the full notional is collateral. Reserve the opening fee
+  // as well, otherwise a trade capped exactly at equity would be rejected by
+  // the executor when it tries to debit margin plus that fee.
+  const maxNotionalUsd = spot
+    ? capitalUsd / (1 + config.feeRate)
+    : capitalUsd * (config.maxNotionalPct / 100)
   let notionalCapped = false
   if (quantityUsd > maxNotionalUsd) {
     quantityUsd = maxNotionalUsd
@@ -279,7 +286,6 @@ export const planLinearPosition = ({
     return { ok: false, reason: `position would be ${quantityUsd} USD, below the ${config.minQuantityUsd} USD minimum` }
   }
 
-  const spot = config.market === 'spot'
   const leverageCeiling = spot ? 1 : 1 / (stopFraction * config.liquidationSafety)
   const leverage = spot ? 1 : Math.max(1, Math.min(config.maxLeverage, Math.floor(leverageCeiling)))
   const marginSats = Math.ceil((quantityUsd / leverage) * quoteSatsPerUsd)
@@ -314,6 +320,7 @@ export const planLinearPosition = ({
       ? entry * (1 - 1 / leverage)
       : entry * (1 + 1 / leverage)),
     quoteSatsPerUsd,
+    capitalUsd: marginSats / quoteSatsPerUsd,
     notionalCapped,
   }
 }

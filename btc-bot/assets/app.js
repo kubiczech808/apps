@@ -2228,6 +2228,19 @@ const priceActionPositionPrice = (position) => {
   return assetCurrentPrice(asset) ?? priceActionPositionItem(position)?.price ?? position.markPrice ?? null
 }
 
+const positionCapitalCell = (position) => {
+  const invested = usd(usdFromSats(position?.marginSats, position?.quoteSatsPerUsd))
+  const notional = Number(position?.quantityUsd)
+  const investedValue = usdFromSats(position?.marginSats, position?.quoteSatsPerUsd)
+  const detail = Number.isFinite(notional) && Number.isFinite(investedValue) && Math.abs(notional - investedValue) > 0.01
+    ? `nominál ${usd(notional)}`
+    : null
+  return el('td', {}, [
+    el('div', { text: invested }),
+    detail ? el('div', { className: 'pa-level-detail', text: detail }) : null,
+  ])
+}
+
 const priceActionUsdPnl = (position, target, quantityUsd) => {
   if (![position?.entry, target, quantityUsd].every(Number.isFinite)) return null
   const direction = position.side === 'long' ? 1 : -1
@@ -2276,7 +2289,7 @@ const priceActionTargetsCell = (position) => {
 
 const renderPriceActionOpen = (body) => {
   setPanelTitle('panel-open-title', 'Otevřené price-action obchody')
-  setTableHead('panel-open', ['Otevřeno', 'Asset', 'TF', 'Směr', 'Objem', 'Entry', 'Aktuální cena', 'SL', 'TP1 / TP2', 'P/L'])
+  setTableHead('panel-open', ['Otevřeno', 'Asset', 'TF', 'Směr', 'Vložený kapitál', 'Entry', 'Aktuální cena', 'SL', 'TP1 / TP2', 'P/L'])
   $('flatten').hidden = false
   const rows = (state?.positions?.running || []).filter((position) => position.strategyId === 'price-action-structure-v1')
   body.replaceChildren()
@@ -2285,15 +2298,13 @@ const renderPriceActionOpen = (body) => {
     return
   }
   for (const position of rows) {
-    const total = position.quantityUsd
-    const remaining = position.remainingQuantityUsd ?? total
     body.append(
       el('tr', {}, [
         el('td', { text: when(position.openedAt ?? position.createdAt) }),
         el('td', { text: position.assetSymbol || position.asset || '–' }),
         el('td', { text: position.timeframeId || position.timeframe ? (position.timeframeId || position.timeframe).toUpperCase() : '–' }),
         sideCell(position.side),
-        el('td', { text: Number.isFinite(total) ? `${nf(0).format(total)} USD${remaining < total ? ` · zbývá ${nf(0).format(remaining)}` : ''}` : '–' }),
+        positionCapitalCell(position),
         el('td', { text: quotePrice(position.entry) }),
         el('td', { text: quotePrice(priceActionPositionPrice(position)) }),
         priceActionLevelCell({ label: 'SL', position, target: position.stopLoss, quantityUsd: remaining }),
@@ -2340,7 +2351,7 @@ const renderOrders = () => {
 
 const renderPriceActionOrders = (body) => {
   setPanelTitle('panel-orders-title', 'Čekající price-action objednávky')
-  setTableHead('panel-orders', ['Zadáno', 'Asset', 'TF', 'Typ', 'Směr', 'Velikost', 'Cena', 'Stop loss', 'TP1 / TP2', 'Marže', ''])
+  setTableHead('panel-orders', ['Zadáno', 'Asset', 'TF', 'Typ', 'Směr', 'Vložený kapitál', 'Cena', 'Stop loss', 'TP1 / TP2', 'Marže', ''])
   const rows = state?.positions?.orders || []
   body.replaceChildren()
   if (!rows.length) {
@@ -2358,7 +2369,7 @@ const renderPriceActionOrders = (body) => {
         el('td', { text: order.timeframeId || order.timeframe ? (order.timeframeId || order.timeframe).toUpperCase() : '–' }),
         el('td', { text: order.type === 'limit' ? 'limit' : 'market' }),
         sideCell(order.side),
-        el('td', { text: order.quantityUsd ? `${nf(0).format(order.quantityUsd)} USD` : '–' }),
+        positionCapitalCell(order),
         el('td', { text: quotePrice(order.quotePrice ?? order.entry) }),
         el('td', { text: partialTakeProfit ? '–' : quotePrice(order.stopLoss) }),
         el('td', { text: partialTakeProfit ? `TP1 ${quotePrice(order.entry)} · 50 %` : `${quotePrice(order.tp1)} / ${Number.isFinite(order.tp2) ? quotePrice(order.tp2) : 'struktura'}` }),

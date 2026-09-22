@@ -127,6 +127,13 @@ const priceActionOrderPlan = ({ assetSymbol, timeframeId, item, profile, equityS
     btcPrice,
     settings: {
       ...(settings.risk ?? {}),
+      // PA-1 is deliberately evaluated without leverage for now. The stop is
+      // structural and must never be tightened to force a chosen position
+      // size; an unleveraged cap simply risks less than the 1% ceiling when a
+      // tight stop would require more capital than is available.
+      market: 'spot',
+      maxLeverage: 1,
+      maxNotionalPct: 100,
       riskPct: Number(profile.riskPct) || Number(settings.priceActionStructure?.riskPct) || 1,
     },
   })
