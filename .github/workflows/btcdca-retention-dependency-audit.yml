@@ -73,6 +73,8 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: btcdca-retention-dependency-audit-${{ github.run_id }}
-          path: btcdca-retention-dependency-audit.md
+          path: |
+            btcdca-retention-dependency-audit.md
+            btcdca-market-data-source-excerpt.md
           retention-days: 90
           if-no-files-found: error
