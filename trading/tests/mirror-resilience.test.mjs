@@ -118,16 +118,19 @@ print("HARNESS " + json.dumps({"exit": code, "sent": sent}))
   return { ...JSON.parse(line[1]), output };
 }
 
-test("mirror: the catalogue is sent even when the state document fails", () => {
-  // The exact production failure. 700 observations is three batches of 300; every one of
-  // them used to be skipped because the request before them raised.
+test("mirror: a transport failure opens the circuit instead of holding the scan lock", () => {
+  // A dead host cannot be repaired by attempting every payload and every catalogue batch.
+  // The paper state is already published by FTP at this point, so the optional mirror must
+  // stop after its first unreachable request and leave the next scan free to proceed.
   const failed = runMirror({ failOn: ["state"] });
   const observationBatches = failed.sent.filter((entry) => entry.part === "observations");
-  assert.equal(observationBatches.length, 3,
-    `the catalogue must still be mirrored: ${JSON.stringify(failed.sent)}`);
-  assert.equal(observationBatches.reduce((total, entry) => total + entry.count, 0), 700);
+  assert.equal(observationBatches.length, 0,
+    `a failed host must not be hammered with the catalogue: ${JSON.stringify(failed.sent)}`);
+  assert.equal(failed.sent.filter((entry) => entry.part === "state").length, 1);
 
   // And it must say so rather than exiting quietly: a mirror that stops has no other symptom.
+  assert.match(failed.output, /remaining mirror requests were not sent/i,
+    `the circuit must explain why later payloads were skipped: ${failed.output}`);
   assert.match(failed.output, /mirror INCOMPLETE/i,
     `an incomplete mirror must be reported. stderr: ${failed.output}`);
 });
@@ -151,7 +154,7 @@ test("mirror: the state document no longer rides with the portfolios, events and
   assert.ok(parts.includes("events"), `events are their own part: ${JSON.stringify(parts)}`);
 });
 
-test("mirror: a refusal reports the database's reason, not just its status code", () => {
+test("mirror: a service refusal reports the database's reason without flooding it", () => {
   // Measured on production before this existed: the step warned "20 part(s) failed" and
   // that was the whole of it. The endpoint knew why and discarded it; urllib raised on the
   // status before the body was read. Both ends now carry the reason through.
@@ -163,18 +166,18 @@ test("mirror: a refusal reports the database's reason, not just its status code"
   // In the annotation too, which is the part that can be read back without the step log.
   assert.match(refused.output, /::warning::Trading SQL mirror incomplete: \d+ part\(s\) failed\. First: .*Too many connections/,
     `the annotation must name the first reason: ${refused.output}`);
-  // And the rest of the mirror still went.
-  assert.equal(refused.sent.filter((entry) => entry.part === "observations").length, 3);
+  // A 503 says the service is unavailable, so later payloads would only prolong the outage.
+  assert.equal(refused.sent.filter((entry) => entry.part === "observations").length, 0);
 });
 
-test("mirror: a retried part is only reported as failed when the retry also fails", () => {
-  // try_post retries once. A part that fails twice is a real failure and must be named.
+test("mirror: a failed part is reported promptly by the default single attempt", () => {
+  // The workflow can explicitly opt into a second attempt, but the safe default keeps a
+  // dead endpoint from pinning the writer lock for minutes.
   const failed = runMirror({ failOn: ["events"] });
   assert.match(failed.output, /mirror INCOMPLETE.*events/is,
     `the failing part must be named: ${failed.output}`);
-  // Two attempts for the failing part, and everything else still went.
-  assert.equal(failed.sent.filter((entry) => entry.part === "events").length, 2);
-  assert.equal(failed.sent.filter((entry) => entry.part === "observations").length, 3);
+  assert.equal(failed.sent.filter((entry) => entry.part === "events").length, 1);
+  assert.equal(failed.sent.filter((entry) => entry.part === "observations").length, 0);
 });
 
 test("mirror: a paper execution pass can leave catalogue writes to the scan", () => {

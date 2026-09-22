@@ -41,6 +41,36 @@ RUN_LOG_RETENTION_DAYS = int(os.environ.get("RUN_LOG_RETENTION_DAYS") or 7)
 RETAINED_RUN_LOG_STREAMS = {"portfolio-run-log", "state-run-log"}
 
 
+def bounded_positive_float(name: str, default: float, maximum: float) -> float:
+    """Read a worker timeout without letting an accidental value stall a pipeline."""
+    try:
+        value = float(os.environ.get(name) or default)
+    except (TypeError, ValueError):
+        value = default
+    return max(1.0, min(maximum, value))
+
+
+def bounded_positive_int(name: str, default: int, maximum: int) -> int:
+    try:
+        value = int(os.environ.get(name) or default)
+    except (TypeError, ValueError):
+        value = default
+    return max(1, min(maximum, value))
+
+
+# The mirror is supplementary while dashboard reads still come from the published JSON.
+# It must therefore yield quickly when the hosting is unavailable instead of holding the
+# paper writer lock through a chain of 45-second requests. The production outage on 22.9.
+# left a completed scan stuck here for ten minutes after every FTP upload had succeeded.
+POST_TIMEOUT_SECONDS = bounded_positive_float(
+    "TRADING_STORAGE_INGEST_TIMEOUT_SECONDS", 8.0, 20.0)
+POST_ATTEMPTS = bounded_positive_int("TRADING_STORAGE_INGEST_ATTEMPTS", 1, 2)
+
+
+class StorageTransportError(RuntimeError):
+    """The endpoint could not be reached, rather than rejecting this payload."""
+
+
 def env_bool(name: str, default: bool = False) -> bool:
     raw = os.environ.get(name, "").strip().lower()
     if not raw:
@@ -188,7 +218,7 @@ def post(url: str, key: str, payload: dict[str, Any]) -> dict[str, Any]:
         },
     )
     try:
-        with urllib.request.urlopen(request, timeout=45) as response:
+        with urllib.request.urlopen(request, timeout=POST_TIMEOUT_SECONDS) as response:
             data = json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as error:
         # The endpoint answers a refusal with a reason in the body, and urllib turns the
@@ -201,6 +231,8 @@ def post(url: str, key: str, payload: dict[str, Any]) -> dict[str, Any]:
         except (ValueError, OSError):
             detail = ""
         raise RuntimeError(f"HTTP {error.code}{': ' + detail if detail else ''}") from error
+    except (urllib.error.URLError, OSError, TimeoutError) as error:
+        raise StorageTransportError(f"storage endpoint unreachable: {error}") from error
     if not isinstance(data, dict) or not data.get("ok"):
         reason = str(data.get("reason") or data.get("error") or "")[:300] if isinstance(data, dict) else ""
         raise RuntimeError(f"storage API rejected the ingest{': ' + reason if reason else ''}")
@@ -209,6 +241,7 @@ def post(url: str, key: str, payload: dict[str, Any]) -> dict[str, Any]:
 
 # Every part that failed after its retry, so the step can say so instead of exiting 0 quietly.
 MIRROR_FAILURES: list[str] = []
+MIRROR_CIRCUIT_OPEN = ""
 
 
 def try_post(url: str, key: str, payload: dict[str, Any], label: str) -> dict[str, Any]:
@@ -221,17 +254,26 @@ def try_post(url: str, key: str, payload: dict[str, Any], label: str) -> dict[st
     27 batches of catalogue that were the point of the mirror were never sent. The step then
     exited 0, because the mirror is deliberately optional.
 
-    Each part is now sent and judged on its own, retried once for a transient failure, and
-    a part that still fails is recorded and reported rather than swallowed.
+    Each part is judged on its own. A caller may opt into one retry for a transient failure,
+    but the default is a single short attempt so an unavailable endpoint cannot hold the
+    writer lock while it is already failing.
     """
-    for attempt in range(2):
+    global MIRROR_CIRCUIT_OPEN
+    if MIRROR_CIRCUIT_OPEN:
+        print(f"Trading SQL mirror skipping {label}: {MIRROR_CIRCUIT_OPEN}")
+        return {}
+    for attempt in range(POST_ATTEMPTS):
         try:
             return post(url, key, payload)
         except (urllib.error.HTTPError, urllib.error.URLError, OSError, ValueError, RuntimeError) as error:
-            if attempt == 0:
-                time.sleep(3)
+            if attempt + 1 < POST_ATTEMPTS:
+                time.sleep(1)
                 continue
             MIRROR_FAILURES.append(f"{label}: {error}")
+            if isinstance(error, StorageTransportError) or "HTTP 503" in str(error) or "HTTP 502" in str(error):
+                MIRROR_CIRCUIT_OPEN = (
+                    "storage endpoint is unavailable; remaining mirror requests were not sent"
+                )
     return {}
 
 
