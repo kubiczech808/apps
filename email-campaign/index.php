@@ -15332,7 +15332,7 @@ function processScrapingItem(PDO $pdo, array $job, array $item): string
         $html = httpGet((string)$item['url']);
         $contact = extractContactFromHtml($html, (string)$item['url']);
         if (($contact['email'] === '' || !filter_var($contact['email'], FILTER_VALIDATE_EMAIL))
-            && in_array((string)$job['source'], ['merchantcircle_us', 'yellowpages_ca'], true)) {
+            && in_array((string)$job['source'], ['allbiz_us', 'merchantcircle_us', 'yellowpages_ca'], true)) {
             $contact = enrichDirectoryContactFromBusinessWebsite($contact);
         }
         if ($contact['email'] === '' || !filter_var($contact['email'], FILTER_VALIDATE_EMAIL)) {
