@@ -4,6 +4,8 @@ const state = {
   // The Setup finder's answer, loaded when its tab is opened rather than with the page.
   setupFinder: null,
   setupFinderBusy: false,
+  bestEntry: null,
+  bestEntryBusy: false,
   botState: null,
   liveState: null,
   evaluationSort: {
@@ -322,6 +324,11 @@ const els = {
   setupFinderMinTrades: document.querySelector("[data-setup-finder-min-trades]"),
   setupFinderRun: document.querySelector("[data-setup-finder-run]"),
   setupFinderStatus: document.querySelector("[data-setup-finder-status]"),
+  bestEntryReport: document.querySelector("[data-best-entry-report]"),
+  bestEntryMinTrades: document.querySelector("[data-best-entry-min-trades]"),
+  bestEntryStake: document.querySelector("[data-best-entry-stake]"),
+  bestEntryRun: document.querySelector("[data-best-entry-run]"),
+  bestEntryStatus: document.querySelector("[data-best-entry-status]"),
   calculationSourceButtons: document.querySelectorAll("[data-calculation-source]"),
   calculationMarketButtons: document.querySelectorAll("[data-calculation-market]"),
   calculationOpenButtons: document.querySelectorAll("[data-calculation-open]"),
@@ -2907,6 +2914,7 @@ function setSettingsSection(section) {
   // Loaded when the tab is opened rather than with the page: it streams the whole resolved
   // archive server-side, so it is not work every visit to settings should pay for.
   if (state.settingsSection === "setup-finder" && !state.setupFinder) loadSetupFinder();
+  if (state.settingsSection === "best-entry" && !state.bestEntry) loadBestEntry();
 }
 
 // Which SETUP would have made money, over every resolved market rather than over one
@@ -2997,6 +3005,74 @@ function renderSetupFinder() {
       "Ranked by net return after entry fees, not nominal profit. Identical samples are shown only once, using the least restrictive configuration.")}
     ${setupFinderTable("Worst combinations", data.worst,
       "The actionable half: what to exclude.")}
+  `;
+}
+
+// Esports-only replay of the best recorded live entry for each resolved market.
+async function loadBestEntry() {
+  if (state.bestEntryBusy) return;
+  state.bestEntryBusy = true;
+  const minTrades = Math.max(1, Number(els.bestEntryMinTrades?.value) || 25);
+  const stake = Math.max(0.01, Number(els.bestEntryStake?.value) || 5);
+  if (els.bestEntryStatus) els.bestEntryStatus.textContent = "Reading esports history...";
+  renderBestEntry();
+  try {
+    state.bestEntry = await fetchApiJson(`api.php?action=resolved-best-entry&tag=esports&min_trades=${minTrades}&stake=${stake}&limit=120`);
+    if (els.bestEntryStatus) els.bestEntryStatus.textContent = "";
+  } catch (error) {
+    state.bestEntry = null;
+    if (els.bestEntryStatus) els.bestEntryStatus.textContent = `Error: ${error?.message || error}`;
+  } finally {
+    state.bestEntryBusy = false;
+    renderBestEntry();
+  }
+}
+
+function renderBestEntry() {
+  if (!els.bestEntryReport) return;
+  const data = state.bestEntry;
+  if (!data?.ok) {
+    els.bestEntryReport.innerHTML = state.bestEntryBusy
+      ? '<p class="setup-finder-note">Reading esports history...</p>'
+      : "";
+    return;
+  }
+  const best = Array.isArray(data.best) ? data.best : [];
+  els.bestEntryReport.innerHTML = `
+    <div class="system-status-card">
+      <div class="system-status-head"><div><p class="eyebrow">Esports / best recorded entry</p><h3>Most profitable portfolio combinations</h3></div></div>
+      <p class="setup-finder-note">
+        The tag is fixed to <strong>esports</strong>. Each market contributes its lowest recorded live
+        probability before resolution, then its real binary result is replayed with the selected stake.
+        This is a recorded-quote replay, not a guarantee that every intraday low was executable.
+        ${formatInteger(data.pricedRows)} of ${formatInteger(data.scannedRows)} resolved esports markets were usable;
+        ${formatInteger(data.graphRows || 0)} included chart/history points and ${formatInteger(data.fallbackRows || 0)}
+        used stored first/last live quotes. ${formatInteger(data.combinations)} combinations passed the
+        ${formatInteger(data.minTrades)}-trade minimum.
+      </p>
+    </div>
+    ${best.length ? `
+      <div class="system-status-card">
+        <div class="system-status-head"><div><p class="eyebrow">Ranking</p><h3>Net result after wins and losses</h3></div></div>
+        <div class="ledger setup-finder-ledger">
+          <table><thead><tr>
+            <th>Entry floor</th><th>Shape</th><th>Horizon</th><th>W / L</th><th>Accuracy</th><th>Capital</th><th>Net P/L</th><th>Return</th>
+          </tr></thead><tbody>
+          ${best.map((row) => `
+            <tr>
+              <td data-label="Entry floor">&ge; ${escapeHtml(String(row.probability))}%</td>
+              <td data-label="Shape">${escapeHtml(row.shape === "*" ? "any" : marketShapeLabel(row.shape))}</td>
+              <td data-label="Horizon">${escapeHtml(row.horizon === "*" ? "any" : row.horizon)}</td>
+              <td data-label="W / L">${formatInteger(row.wins)} / ${formatInteger(Math.max(0, Number(row.trades) - Number(row.wins)))}</td>
+              <td data-label="Accuracy">${row.accuracy == null ? "-" : percent(row.accuracy)}</td>
+              <td data-label="Capital">${money(Number(row.stakedUsdc))}</td>
+              <td data-label="Net P/L" class="${pnlClass(Number(row.pnlUsdc))}">${signedMoney(Number(row.pnlUsdc))}</td>
+              <td data-label="Return" class="${row.returnPct > 0 ? "positive" : row.returnPct < 0 ? "negative" : ""}">${row.returnPct == null ? "-" : `${row.returnPct > 0 ? "+" : ""}${row.returnPct.toFixed(1)}%`}</td>
+            </tr>
+          `).join("")}
+          </tbody></table>
+        </div>
+      </div>` : '<p class="setup-finder-note">No combination met the selected minimum.</p>'}
   `;
 }
 
@@ -17750,6 +17826,11 @@ window.setInterval(() => {
   if (!isLiveMode()) return;
   requestLiveAccountSync({ quiet: true, minSeconds: LIVE_SYNC_REQUEST_MS / 1000 });
 }, LIVE_SYNC_REQUEST_MS);
+
+els.bestEntryRun?.addEventListener("click", () => {
+  state.bestEntry = null;
+  loadBestEntry();
+});
 
 els.setupFinderRun?.addEventListener("click", () => {
   // Recomputed rather than refiltered in the browser: the minimum-trades cap decides which

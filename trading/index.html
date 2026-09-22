@@ -350,6 +350,7 @@
               <!-- Across every resolved market rather than one portfolio's own trades:
                    which setup would have made money. Asked for as its own page in settings. -->
               <button class="segment-button" type="button" role="tab" aria-selected="false" data-settings-section="setup-finder">Setup finder</button>
+              <button class="segment-button" type="button" role="tab" aria-selected="false" data-settings-section="best-entry">Best entry</button>
             </div>
             <div class="settings-panel-body" data-settings-panel="calculations">
               <div class="system-status-card" data-system-status hidden></div>
@@ -416,6 +417,21 @@
                 <span class="setup-finder-status" data-setup-finder-status aria-live="polite"></span>
               </div>
               <div class="setup-finder-report" data-setup-finder-report></div>
+            </div>
+            <div class="settings-panel-body" data-settings-panel="best-entry" hidden>
+              <div class="setup-finder-controls">
+                <label class="parameter-control">
+                  <span>Minimum trades</span>
+                  <input type="number" min="5" max="5000" step="5" value="25" data-best-entry-min-trades>
+                </label>
+                <label class="parameter-control">
+                  <span>Stake per market</span>
+                  <input type="number" min="0.01" max="10000" step="0.01" value="5" data-best-entry-stake>
+                </label>
+                <button class="execution-button" type="button" data-best-entry-run>Recalculate</button>
+                <span class="setup-finder-status" data-best-entry-status aria-live="polite"></span>
+              </div>
+              <div class="setup-finder-report" data-best-entry-report></div>
             </div>
           </article>
         </section>
