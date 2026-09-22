@@ -1580,7 +1580,12 @@ async function loadDipEntryStatus(mode) {
 }
 
 function dipEntryPortfolioIdForMode(mode = state.mode) {
-  return executionScopeStrategyIdForMode(mode);
+  const strategyId = executionScopeStrategyIdForMode(mode);
+  // The RPi assigns paper watch entries the same namespace as paper state files and
+  // recorded hits (`paper-<strategy>`). Live strategies already use their execution
+  // scope id. Without the paper prefix the status sentence could see a watch via its
+  // legacy fallback while the candidate table silently filtered that exact plan out.
+  return isLivePortfolioMode(mode) ? strategyId : `paper-${strategyId}`;
 }
 
 // These are not ordinary catalogue candidates. They are the exact entries the RPi has

@@ -5506,6 +5506,22 @@ test("dip entry: the form carries the switch and the opening band, and nothing d
   }
 });
 
+test("dip entry: paper watch plans use the RPi paper namespace", () => {
+  const watchPortfolioIdForMode = new Function("state", "executionScopeStrategyIdForMode", "isLivePortfolioMode", `
+    ${extractFunction(APP, "dipEntryPortfolioIdForMode")}
+    return dipEntryPortfolioIdForMode;
+  `)(
+    { mode: "paper-conservative" },
+    (mode) => mode === "paper-dip703060live" ? "dip703060live" : "live-custom-dip703060live",
+    (mode) => String(mode).startsWith("live-"),
+  );
+
+  // api.php and the RPi publish paper plans as paper-<strategy>. The dashboard must
+  // match that exact key for shipped and newly created paper portfolios alike.
+  assert.equal(watchPortfolioIdForMode("paper-dip703060live"), "paper-dip703060live");
+  assert.equal(watchPortfolioIdForMode("live-custom-dip703060live"), "live-custom-dip703060live");
+});
+
 // Reported: the curve began on the 4th while the first closed trade was the 9th, so the
 // first five days of the chart were one flat line. Equity cannot move before a trade
 // settles, and a chart that spends a third of its width saying nothing has spent it.
