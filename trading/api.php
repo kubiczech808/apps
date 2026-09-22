@@ -16,10 +16,6 @@ const CUSTOM_PAPER_PORTFOLIO_LIMIT = 24;
 // back short of editing the stored config by hand. Archived rows are filtered out of every
 // scheduled pass, so they add no work -- only stored records, which is what this bounds.
 const ARCHIVED_PAPER_PORTFOLIO_LIMIT = 48;
-// A real wallet may be shared, but its strategies must not share a configuration
-// record. Keep the live collection smaller because every active one dispatches a
-// signed execution workflow against that account.
-const CUSTOM_LIVE_PORTFOLIO_LIMIT = 12;
 
 header('Content-Type: application/json; charset=utf-8');
 header('Cache-Control: no-store');
@@ -4786,16 +4782,14 @@ function normalize_portfolio_config(array $input): array
     // Worth knowing before making it: this portfolio is the catch-all for every live row
     // no run log claims -- 327 of 333 closed rows on this account -- so archiving it takes
     // that history off the dashboard as well. The money stays managed either way.
-    $customLiveCount = 0;
     foreach ($customLiveInput as $rawId => $strategyInput) {
         if (!is_array($strategyInput)) {
             continue;
         }
         $id = normalize_custom_live_portfolio_id($rawId);
-        if ($id === null || $customLiveCount >= CUSTOM_LIVE_PORTFOLIO_LIMIT) {
+        if ($id === null) {
             continue;
         }
-        $customLiveCount += 1;
         $config['livePortfolios'][$id] = normalize_strategy_config($strategyInput, custom_live_portfolio_defaults($id));
         $config['livePortfolios'][$id]['custom'] = true;
     }

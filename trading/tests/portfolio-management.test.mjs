@@ -5267,8 +5267,9 @@ test("copy to live: the control is offered only where it means something, and cr
   // The opener has to be able to start as live at all; it was hardcoded to paper.
   assert.match(APP, /function openCreatePortfolioModal\(prefill = \{\}, trigger = null, accountType = "paper"\)/);
   assert.match(APP, /const strategyId = type === "live" \? newLivePortfolioId\(label\) : newPaperPortfolioId\(label\)/);
-  // And it has to check the LIVE limit when creating live, not the paper one.
-  assert.match(APP, /canCreateLivePortfolio\(\) \? null : `live portfolio limit reached/);
+  // Live portfolio copies have no count cap. The shared wallet is protected by execution
+  // and diversification rules, not by refusing to create another configuration.
+  assert.doesNotMatch(APP, /live portfolio limit reached|CUSTOM_LIVE_PORTFOLIO_LIMIT|canCreateLivePortfolio/);
 
   // Offered for an existing paper portfolio only: a live one is already live, and one being
   // created does not exist yet. The card renders the icon only when an id is passed, and

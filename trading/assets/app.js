@@ -575,7 +575,6 @@ const CUSTOM_PAPER_STRATEGY_ID = /^[a-z][a-zA-Z0-9]{1,30}$/;
 // Keep this in lockstep with CUSTOM_PAPER_PORTFOLIO_LIMIT in api.php. The API remains
 // authoritative, but catching the full set here avoids opening a form that cannot save.
 const CUSTOM_PAPER_PORTFOLIO_LIMIT = 24;
-const CUSTOM_LIVE_PORTFOLIO_LIMIT = 12;
 const RECOMMENDED_ACTIVE_PORTFOLIO_LIMIT = 12;
 
 function normalizeMode(mode) {
@@ -1627,6 +1626,9 @@ function dipEntryStatusMarkup(mode) {
   const config = portfolioConfigForMode(mode);
   const rule = dipEntryRuleFromConfig(config);
   if (!rule.enabled) return "";
+  if (config.automationEnabled !== true) {
+    return `<div class="empty">Dip entry is configured, but this portfolio is switched off. Turn automation on to send its markets to the RPi watchlist.</div>`;
+  }
   const fault = dipEntryRuleFault(rule);
   if (fault) {
     return `<div class="empty">Dip entry is on but not applied: ${escapeHtml(fault)}.`
@@ -1643,7 +1645,8 @@ function dipEntryStatusMarkup(mode) {
   const diagnostic = status.diagnostics?.portfolios?.[mine] || null;
   const diagnosticNote = watched.length || !diagnostic
     ? ""
-    : ` ${formatInteger(diagnostic.openingBand || 0)} market(s) matched the opening band; `
+    : ` ${formatInteger(status.diagnostics?.openingVerified || 0)} live market(s) have a verified pre-start quote; `
+      + `${formatInteger(diagnostic.openingBand || 0)} matched this portfolio's opening band; `
       + `${formatInteger(diagnostic.scope || 0)} also passed tags, shape, volume and live-event rules.`;
   const quoted = watched.filter((plan) => numericOrNull(plan.bestAsk ?? plan.currentAsk) != null).length;
   const workerAge = Number(status.workerStatus?.ageSeconds);
@@ -6962,13 +6965,6 @@ function createPortfolioDraftForType(type, strategyId, prefill = {}, displayName
 function switchCreatePortfolioType(type) {
   if (!state.parameterDraftCreate) return false;
   const accountType = normalizePortfolioAccountType(type);
-  if (accountType === "live" && !canCreateLivePortfolio()) {
-    const message = `live portfolio limit reached (${CUSTOM_LIVE_PORTFOLIO_LIMIT}); archive an unused live portfolio before creating another`;
-    if (els.portfolioAccountType) els.portfolioAccountType.value = normalizePortfolioAccountType(state.parameterDraftCreateType);
-    setExecutionStatus(message, "error");
-    setParameterModalStatus(message, "error");
-    return false;
-  }
   state.parameterDraftCreateType = accountType;
   const label = normalizePortfolioName(els.portfolioName?.value || state.parameterDraft?.displayName, accountType === "live" ? "Live" : "New portfolio");
   const strategyId = accountType === "live" ? newLivePortfolioId(label) : newPaperPortfolioId(label);
@@ -7027,10 +7023,7 @@ function livePrefillFromPaperPortfolio(config, displayName) {
 function openCreatePortfolioModal(prefill = {}, trigger = null, accountType = "paper") {
   if (!els.parameterModal) return;
   const type = normalizePortfolioAccountType(accountType);
-  const blocked = type === "live"
-    ? (canCreateLivePortfolio() ? null : `live portfolio limit reached (${CUSTOM_LIVE_PORTFOLIO_LIMIT});`
-      + " archive an unused live portfolio before creating another")
-    : createPaperPortfolioBlockedReason();
+  const blocked = type === "paper" ? createPaperPortfolioBlockedReason() : null;
   if (blocked) {
     reportBlockedCreate(blocked);
     return;
@@ -14833,10 +14826,6 @@ function runningExecutionRun() {
   // Live targets have a dedicated workflow, so a browser-originated dispatch is safe to
   // show while it is running.
   return executionRunWasDispatchedHere(target, run) ? run : null;
-}
-
-function canCreateLivePortfolio() {
-  return Object.keys(state.portfolioConfig?.livePortfolios || {}).length < CUSTOM_LIVE_PORTFOLIO_LIMIT;
 }
 
 function customLivePortfolioDefaults(strategyId) {
