@@ -69,6 +69,23 @@ jobs:
       - name: Analyze retention and calculator dependencies
         run: python3 scripts/audit_retention_dependencies.py
 
+      - name: Print stats exchange-rate contexts
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('runtime-source/app/stats.php')
+          lines = path.read_text(encoding='utf-8', errors='replace').splitlines()
+          emitted = set()
+          for hit, line in enumerate(lines):
+              if 'exchange_rates' not in line.lower():
+                  continue
+              for index in range(max(0, hit - 6), min(len(lines), hit + 7)):
+                  if index not in emitted:
+                      print(f'{index + 1}: {lines[index]}')
+                      emitted.add(index)
+              print('---')
+          PY
+
       - name: Print redacted market data source excerpt
         run: cat btcdca-market-data-source-excerpt.md
 
