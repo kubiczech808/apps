@@ -47,7 +47,7 @@ with tempfile.TemporaryDirectory() as temp:
     overview = (patch_runtime.TARGET / "app/overview.php").read_text(encoding="utf-8")
     assert patch_runtime.MARKER in overview
     assert "SELECT * FROM exchange_rates" not in overview
-    assert "BTC_CZK" not in overview
+    assert "exchange_rates" not in overview
     stats = (patch_runtime.TARGET / "app/stats.php").read_text(encoding="utf-8")
     assert "exchange_rates" not in stats
     assert stats.count("btcdca_market_stats_rows") == 4
