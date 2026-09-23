@@ -22,7 +22,9 @@ permissions:
 
 concurrency:
   group: trading-dip-history-backtest-${{ github.ref }}-${{ inputs.tag || 'esports' }}
-  cancel-in-progress: false
+  # A new request carries a newer cache/rule version. Let it replace a stale batch rather
+  # than making the operator wait behind an obsolete, long-running history sweep.
+  cancel-in-progress: true
 
 jobs:
   backtest:

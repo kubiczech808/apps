@@ -18,7 +18,7 @@ const ENTRY_LEVELS = [0.3, 0.35, 0.4, 0.45, 0.5, 0.55, 0.6];
 // Version the result rule, not only the file. Cache rows are keyed by their source
 // fingerprint, so this makes a corrected interpretation reprocess old rows instead of
 // quietly continuing to show the conclusion of the earlier rule.
-const OPENING_RULE_VERSION = 3;
+const OPENING_RULE_VERSION = 4;
 // CLOB accepts a maximum history window of 14 days. A single 180-day query returns HTTP
 // 400, which previously made every historical market look like it had no price history.
 const MAX_CLOB_HISTORY_WINDOW_SECONDS = 14 * 86400;
@@ -216,9 +216,13 @@ function historyRange(row) {
   const createdAt = timestamp(row?.marketCreatedAt ?? row?.createdAt);
   const eventStartAt = timestamp(row?.eventStartTime ?? row?.scheduledEventDate);
   const resolvedAt = timestamp(row?.resolvedAt ?? row?.resolvedDetectedAt ?? row?.resolutionEndDate ?? row?.endDate);
-  // The long lookback gives CLOB a chance to return the first plotted ALL-chart point even
-  // for old records that predate our own marketCreatedAt field.
-  const fallbackStart = eventStartAt != null ? eventStartAt - (180 * 86400) : (resolvedAt != null ? resolvedAt - (180 * 86400) : null);
+  // The compact archive has no creation timestamp for older markets. CLOB rejects ranges
+  // longer than 14 days, so query the full API-accepted pre-start horizon in one request
+  // rather than issuing thirteen slow slices whose first twelve normally contain nothing.
+  // A known marketCreatedAt still wins and is fetched exactly, even where it is older.
+  const fallbackStart = eventStartAt != null
+    ? eventStartAt - MAX_CLOB_HISTORY_WINDOW_SECONDS
+    : (resolvedAt != null ? resolvedAt - MAX_CLOB_HISTORY_WINDOW_SECONDS : null);
   const start = createdAt ?? fallbackStart;
   const end = resolvedAt ?? Math.floor(Date.now() / 1000);
   if (!Number.isFinite(start) || !Number.isFinite(end) || start >= end) return null;
@@ -309,7 +313,7 @@ function reportFromCache(sourceRows, cache, processedThisRun) {
       probabilityMin: 70,
       probabilityMax: 99,
       maximumDelayMinutes: 90,
-      description: "Uses a CLOB quote within 90 minutes of creation when creation time is recorded; otherwise the earliest available quote before event start.",
+      description: "Uses a CLOB quote within 90 minutes of creation when creation time is recorded; otherwise the earliest available quote in the 14-day window before event start.",
     },
     coverage: {
       sourceMarkets: sourceRows.length,
@@ -332,7 +336,7 @@ function reportFromCache(sourceRows, cache, processedThisRun) {
     caveats: [
       "Entry uses the first recorded CLOB price at or below the selected level after the event began.",
       "Historical price series does not include contemporaneous order-book depth, so it cannot prove a full FOK fill at the displayed stake.",
-      "When market creation time is missing from the archive, the oldest available CLOB quote before event start is used and is labelled pre-start rather than creation-verified.",
+      "When market creation time is missing from the archive, the oldest available CLOB quote in the 14-day pre-start window is used and is labelled pre-start rather than creation-verified.",
     ],
   };
 }
