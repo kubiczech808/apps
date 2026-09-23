@@ -21,6 +21,8 @@ eval(extractAllbizFn($src, 'normalizeAllbizDetailUrl'));
 eval(extractAllbizFn($src, 'normalizeUrl'));
 eval(extractAllbizFn($src, 'normalizeSearchResultUrl'));
 eval(extractAllbizFn($src, 'extractAllbizCandidateUrls'));
+eval(extractAllbizFn($src, 'aiResearchFastFetchMode'));
+eval(extractAllbizFn($src, 'scrapingHttpTimeouts'));
 
 echo "== AllBiz USA zdroj ==\n";
 $states = allbizUsStates();
@@ -45,6 +47,9 @@ assert(count($candidateUrls) === 3, 'parser musi najit normalni, data-url i esca
 assert(in_array('https://www.allbiz.com/business/massage_962J-251-990-4770', $candidateUrls, true));
 assert(in_array('https://www.bizarchive.com/business/foot-massage_92R-205-978-0008', $candidateUrls, true));
 assert(in_array('https://www.allbiz.com/business/massage-envy_1121s-251-316-3110', $candidateUrls, true));
+assert(scrapingHttpTimeouts('https://www.allbiz.com/business/massage_962J-251-990-4770') === ['connect' => 6, 'total' => 14, 'attempts' => 2], 'AllBiz musi mit kratky retry, aby nezablokoval worker');
+assert(scrapingHttpTimeouts('https://www.bizarchive.com/business/foot-massage_92R-205-978-0008') === ['connect' => 6, 'total' => 14, 'attempts' => 2], 'BizArchive detail musi pouzit stejny timeout');
+assert(str_contains($src, "(string)(\$job['source'] ?? '') === 'allbiz_us'\n            ? min(\$steps, 2)"), 'AllBiz worker musi mit bezpecny pocet kroku na tik');
 assert(str_contains($src, "'allbiz_us' => 'AllBiz.com (USA)'") && str_contains($src, 'discoverAllbizScrapingState'), 'zdroj je aktivni a ma vlastni kurzor');
 
 $database = file_get_contents(__DIR__ . '/../src/Database.php');
