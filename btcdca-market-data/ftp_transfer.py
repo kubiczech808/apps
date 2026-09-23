@@ -65,6 +65,12 @@ def prepare(ftp):
         upload(ftp, local, ".codex-backups/btcdca-market-data/%s/%s" % (BACKUP_ID, remote))
 
 
+def verify(ftp):
+    for remote in FILES:
+        local = Path("server-current") / remote.removeprefix("www/")
+        download(ftp, remote, local)
+
+
 def deploy(ftp):
     mapping = {
         "deploy-root/www/php/market-data-lib.php": "www/php/market-data-lib.php",
@@ -84,6 +90,8 @@ ftp = connect()
 try:
     if os.environ.get("BTCDCA_FTP_MODE") == "prepare":
         prepare(ftp)
+    elif os.environ.get("BTCDCA_FTP_MODE") == "verify":
+        verify(ftp)
     elif os.environ.get("BTCDCA_FTP_MODE") == "deploy":
         deploy(ftp)
     else:

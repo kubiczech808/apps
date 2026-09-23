@@ -87,3 +87,14 @@ jobs:
           BTCDCA_FTP_PASSWORD: ${{ secrets.BTCDCA_FTP_PASSWORD }}
           BTCDCA_FTP_MODE: deploy
         run: python3 btcdca-market-data/ftp_transfer.py
+
+      - name: Read back deployed readers over FTP
+        env:
+          BTCDCA_FTP_LOGIN: ${{ secrets.BTCDCA_FTP_LOGIN }}
+          BTCDCA_FTP_PASSWORD: ${{ secrets.BTCDCA_FTP_PASSWORD }}
+          BTCDCA_FTP_MODE: verify
+        run: |
+          python3 btcdca-market-data/ftp_transfer.py
+          ! grep -Rni 'exchange_rates' server-current/app/stats.php server-current/app/includes/calc_result.php
+          test "$(grep -o 'btcdca_market_stats_rows' server-current/app/stats.php | wc -l)" -eq 4
+          grep -q 'btcdca_market_spot' server-current/app/includes/calc_result.php
