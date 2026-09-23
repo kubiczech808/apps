@@ -74,6 +74,9 @@ jobs:
           BTCDCA_TEMP_FILE_LOCAL=temporary-btcdca-exchange-rates-helper.php \
           BTCDCA_TEMP_FILE_REMOTE=www/btcdca-exchange-rates-helper.php \
           python3 scripts/manage_btcdca_temporary_file.py
+          BTCDCA_TEMP_FILE_MODE=ensure_dir \
+          BTCDCA_TEMP_FILE_REMOTE=.codex-backups/btcdca-exchange-rates \
+          python3 scripts/manage_btcdca_temporary_file.py
 
       - name: Create or verify the hosting rollback dump
         if: inputs.operation == 'snapshot' || inputs.operation == 'verify'

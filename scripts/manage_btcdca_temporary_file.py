@@ -29,7 +29,17 @@ def connect() -> ftplib.FTP:
 def main() -> None:
     ftp = connect()
     try:
-        if MODE == "upload":
+        if MODE == "ensure_dir":
+            original = ftp.pwd()
+            for part in filter(None, REMOTE.strip("/").split("/")):
+                try:
+                    ftp.cwd(part)
+                except ftplib.error_perm:
+                    ftp.mkd(part)
+                    ftp.cwd(part)
+            ftp.cwd(original)
+            print(f"Ensured FTP directory {REMOTE}")
+        elif MODE == "upload":
             local = Path(os.environ["BTCDCA_TEMP_FILE_LOCAL"])
             parent, name = REMOTE.rsplit("/", 1)
             ftp.cwd(parent)
@@ -45,7 +55,7 @@ def main() -> None:
                     raise
                 print(f"Temporary file was already absent: {REMOTE}")
         else:
-            raise RuntimeError("BTCDCA_TEMP_FILE_MODE must be upload or delete")
+            raise RuntimeError("BTCDCA_TEMP_FILE_MODE must be ensure_dir, upload or delete")
     finally:
         ftp.quit()
 
