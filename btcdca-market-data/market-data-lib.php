@@ -176,3 +176,32 @@ function btcdca_market_candles($interval, $limit)
     }
     return null;
 }
+
+function btcdca_market_stats_rows($group)
+{
+    $intervals = array(
+        'hour' => array('interval' => '1h', 'limit' => 1000),
+        'day' => array('interval' => '1d', 'limit' => 1000),
+        'week' => array('interval' => '1w', 'limit' => 1000),
+        'month' => array('interval' => '1d', 'limit' => 1000),
+    );
+    if (!isset($intervals[$group])) {
+        return array();
+    }
+    $config = $intervals[$group];
+    $payload = btcdca_market_candles($config['interval'], $config['limit']);
+    if (!is_array($payload) || !isset($payload['candles']) || !is_array($payload['candles'])) {
+        return array();
+    }
+    $rows = array();
+    foreach ($payload['candles'] as $candle) {
+        if (!is_array($candle) || !isset($candle['open_time'], $candle['close'])) {
+            continue;
+        }
+        $rows[] = array(
+            'created' => gmdate('Y-m-d H:i:s', (int) $candle['open_time'] / 1000),
+            'avg_price' => (float) $candle['close'],
+        );
+    }
+    return $rows;
+}

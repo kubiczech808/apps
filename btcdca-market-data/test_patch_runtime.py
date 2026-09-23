@@ -22,6 +22,24 @@ with tempfile.TemporaryDirectory() as temp:
         "$ratesSql = \"SELECT * FROM exchange_rates WHERE asset = 'BTC_EUR'\";\n"
         "$ratesSql = \"SELECT * FROM exchange_rates WHERE asset = 'BTC_USDT'\";\n",
     )
+    write(
+        patch_runtime.SOURCE / "app/stats.php",
+        "<?php\ninclude '../includes/dbConnect.php';\n"
+        "$ratesSql = \"SELECT created, AVG(rate) FROM exchange_rates GROUP BY year(created), month(created), day(created), hour(created)\";\n"
+        "$ratesQ = mysqli_query($conn, $ratesSql); while($ratesData = mysqli_fetch_array($ratesQ)){ echo $ratesData['created']; }\n"
+        "$ratesSql = \"SELECT created, AVG(rate) FROM exchange_rates GROUP BY year(created), month(created), day(created)\";\n"
+        "$ratesQ = mysqli_query($conn, $ratesSql); while($ratesData = mysqli_fetch_array($ratesQ)){ echo $ratesData['created']; }\n"
+        "$ratesSql = \"SELECT created, AVG(rate) FROM exchange_rates GROUP BY year(created), week(created)\";\n"
+        "$ratesQ = mysqli_query($conn, $ratesSql); while($ratesData = mysqli_fetch_array($ratesQ)){ echo $ratesData['created']; }\n"
+        "$ratesSql = \"SELECT created, AVG(rate) FROM exchange_rates GROUP BY year(created), month(created)\";\n"
+        "$ratesQ = mysqli_query($conn, $ratesSql); while($ratesData = mysqli_fetch_array($ratesQ)){ echo $ratesData['created']; }\n",
+    )
+    write(
+        patch_runtime.SOURCE / "app/includes/calc_result.php",
+        "<?php\n$priceSql = \"SELECT * FROM exchange_rates WHERE asset = 'BTC_USDT' ORDER BY rate_id DESC LIMIT 1\";\n"
+        "$ratesQ = mysqli_query($conn, $priceSql); while($ratesData = mysqli_fetch_array($ratesQ)){ $current_price = $ratesData['rate']; }\n",
+    )
+    write(patch_runtime.SOURCE / "app/php/get_cycle_ath.php", "<?php\n$cycleSql = 'SELECT * FROM btc_cycles';\n")
     insert = "<?php\n$sql = \"INSERT INTO exchange_rates (asset) VALUES ('BTC_USDT')\";\n"
     write(patch_runtime.SOURCE / "app/php/get_live_price.php", insert)
     write(patch_runtime.SOURCE / "app/php/get_ticker.php", insert)
@@ -29,6 +47,13 @@ with tempfile.TemporaryDirectory() as temp:
     overview = (patch_runtime.TARGET / "app/overview.php").read_text(encoding="utf-8")
     assert patch_runtime.MARKER in overview
     assert "SELECT * FROM exchange_rates" not in overview
+    assert "BTC_CZK" not in overview
+    stats = (patch_runtime.TARGET / "app/stats.php").read_text(encoding="utf-8")
+    assert "exchange_rates" not in stats
+    assert stats.count("btcdca_market_stats_rows") == 4
+    calc_result = (patch_runtime.TARGET / "app/includes/calc_result.php").read_text(encoding="utf-8")
+    assert "exchange_rates" not in calc_result
+    assert "btcdca_market_spot" in calc_result
     for relative in ("app/php/get_live_price.php", "app/php/get_ticker.php"):
         patched = (patch_runtime.TARGET / relative).read_text(encoding="utf-8")
         assert "INSERT INTO exchange_rates" not in patched

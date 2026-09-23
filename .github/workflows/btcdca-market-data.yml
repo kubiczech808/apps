@@ -58,6 +58,22 @@ jobs:
       - name: Build bounded cache deployment
         run: python3 btcdca-market-data/patch_runtime.py
 
+      - name: Verify generated readers are database independent
+        run: |
+          ! grep -Rni 'exchange_rates' deploy-root/www/app/stats.php deploy-root/www/app/includes/calc_result.php
+          test "$(grep -o 'btcdca_market_stats_rows' deploy-root/www/app/stats.php | wc -l)" -eq 4
+          grep -q 'btcdca_market_spot' deploy-root/www/app/includes/calc_result.php
+
+      - name: Preserve generated readers for rollback review
+        uses: actions/upload-artifact@v4
+        with:
+          name: btcdca-market-reader-generated-${{ github.run_id }}
+          path: |
+            deploy-root/www/app/stats.php
+            deploy-root/www/app/includes/calc_result.php
+          if-no-files-found: error
+          retention-days: 14
+
       - name: Lint generated PHP
         run: |
           find deploy-root -name '*.php' -print0 | xargs -0 -n1 php -d short_open_tag=1 -l
