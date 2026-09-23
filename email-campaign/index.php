@@ -14621,7 +14621,14 @@ function runScrapingQueue(PDO $pdo, int $steps): string
             continue;
         }
         $seen[$key] = true;
-        $messages[] = trim(runScrapingJob($pdo, (int)$job['id'], $steps));
+        // AllBiz ma dva sitove pozadavky na jednu polozku (detail + pripadny
+        // retry). Pri obecnich osmi krocich by se i po zkraceni timeoutu mohl
+        // jeden worker dostat za hostingovy limit. Dve polozky na tik jsou
+        // pomalejsi, ale zajisti, ze se vysledek vzdy zapise do logu.
+        $jobSteps = (string)($job['source'] ?? '') === 'allbiz_us'
+            ? min($steps, 2)
+            : $steps;
+        $messages[] = trim(runScrapingJob($pdo, (int)$job['id'], $jobSteps));
         if (count($messages) >= 3) {
             break;
         }
@@ -15006,6 +15013,13 @@ function scrapingHttpTimeouts(string $url): array
     }
     if (in_array($host, ['dasoertliche.de', 'www.dasoertliche.de'], true)) {
         return ['connect' => 6, 'total' => 12, 'attempts' => 2];
+    }
+    // AllBiz obcas drzi spojeni pri detailu bez odpovedi. Obecny limit 3x25 s
+    // mohl zabit cely worker driv, nez se stihla polozka zapsat jako failed nebo
+    // skipped. Kratsi retry udrzi frontu pohyblivou a dalsi cron muze zpracovat
+    // dalsi firmy, i kdyz je jeden detail docasne nedostupny.
+    if (in_array($host, ['allbiz.com', 'www.allbiz.com', 'bizarchive.com', 'www.bizarchive.com'], true)) {
+        return ['connect' => 6, 'total' => 14, 'attempts' => 2];
     }
     return ['connect' => 10, 'total' => 25, 'attempts' => 3];
 }
