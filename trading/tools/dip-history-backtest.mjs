@@ -18,7 +18,10 @@ const ENTRY_LEVELS = [0.3, 0.35, 0.4, 0.45, 0.5, 0.55, 0.6];
 // Version the result rule, not only the file. Cache rows are keyed by their source
 // fingerprint, so this makes a corrected interpretation reprocess old rows instead of
 // quietly continuing to show the conclusion of the earlier rule.
-const OPENING_RULE_VERSION = 2;
+const OPENING_RULE_VERSION = 3;
+// CLOB accepts a maximum history window of 14 days. A single 180-day query returns HTTP
+// 400, which previously made every historical market look like it had no price history.
+const MAX_CLOB_HISTORY_WINDOW_SECONDS = 14 * 86400;
 
 if (!/^[a-z0-9][a-z0-9-]{0,62}$/.test(TAG)) {
   throw new Error("DIP_BACKTEST_TAG must be a lowercase Polymarket tag");
@@ -226,17 +229,42 @@ function historyRange(row) {
   return { start, end, fidelity };
 }
 
+export function clobHistoryWindows(start, end) {
+  if (!Number.isFinite(start) || !Number.isFinite(end) || start >= end) return [];
+  const windows = [];
+  for (let windowStart = start; windowStart < end; windowStart += MAX_CLOB_HISTORY_WINDOW_SECONDS) {
+    windows.push({
+      start: windowStart,
+      end: Math.min(end, windowStart + MAX_CLOB_HISTORY_WINDOW_SECONDS),
+    });
+  }
+  return windows;
+}
+
 async function fetchMarketHistory(row) {
   const tokenId = sourceToken(row);
   const range = historyRange(row);
   if (!tokenId || !range) return [];
-  const url = new URL(`${CLOB_HOST}/prices-history`);
-  url.searchParams.set("market", tokenId);
-  url.searchParams.set("startTs", String(range.start));
-  url.searchParams.set("endTs", String(range.end));
-  url.searchParams.set("fidelity", String(range.fidelity));
-  const payload = await fetchJson(url, `price history ${tokenId}`);
-  return Array.isArray(payload?.history) ? payload.history : [];
+  const points = [];
+  // Keep windows sequential per market. Four markets may run in parallel, but opening
+  // hundreds of requests for one old event at once only earns throttling from CLOB.
+  for (const window of clobHistoryWindows(range.start, range.end)) {
+    const url = new URL(`${CLOB_HOST}/prices-history`);
+    url.searchParams.set("market", tokenId);
+    url.searchParams.set("startTs", String(window.start));
+    url.searchParams.set("endTs", String(window.end));
+    url.searchParams.set("fidelity", String(range.fidelity));
+    const payload = await fetchJson(url, `price history ${tokenId}`);
+    if (Array.isArray(payload?.history)) points.push(...payload.history);
+  }
+  // Boundary points are often present in both adjacent API windows. One point per time
+  // gives the simulator a stable earliest quote and stable drawdown regardless of chunking.
+  const deduplicated = new Map();
+  for (const point of points) {
+    const time = number(point?.t);
+    if (Number.isFinite(time)) deduplicated.set(time, point);
+  }
+  return [...deduplicated.values()];
 }
 
 function reportFromCache(sourceRows, cache, processedThisRun) {

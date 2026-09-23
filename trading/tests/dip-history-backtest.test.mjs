@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { backtestDipMarket } from "../tools/dip-history-backtest.mjs";
+import { backtestDipMarket, clobHistoryWindows } from "../tools/dip-history-backtest.mjs";
 
 const createdAt = "2026-09-01T10:00:00Z";
 const eventStartAt = "2026-09-01T12:00:00Z";
@@ -79,4 +79,16 @@ test("DIP backtest computes a full loss including the entry fee", () => {
   ]);
   assert.equal(result.entries["0.5"].pnlUsdc, -5.125);
   assert.equal(result.entries["0.5"].outcome, "LOSS");
+});
+
+test("historical CLOB requests are split into API-accepted 14-day windows", () => {
+  const start = epoch("2026-01-01T00:00:00Z");
+  const end = epoch("2026-02-15T00:00:00Z");
+  const windows = clobHistoryWindows(start, end);
+  assert.equal(windows.length, 4);
+  assert.equal(windows[0].start, start);
+  assert.equal(windows.at(-1).end, end);
+  assert.ok(windows.every((window) => window.end - window.start <= 14 * 86400));
+  assert.deepEqual(windows.slice(1).map((window, index) => window.start), windows.slice(0, -1).map((window) => window.end),
+    "adjacent requests meet exactly, with no omitted interval");
 });
