@@ -350,6 +350,7 @@
               <!-- Across every resolved market rather than one portfolio's own trades:
                    which setup would have made money. Asked for as its own page in settings. -->
               <button class="segment-button" type="button" role="tab" aria-selected="false" data-settings-section="setup-finder">Setup finder</button>
+              <button class="segment-button" type="button" role="tab" aria-selected="false" data-settings-section="dip-backtest">DIP backtest</button>
             </div>
             <div class="settings-panel-body" data-settings-panel="calculations">
               <div class="system-status-card" data-system-status hidden></div>
@@ -416,6 +417,17 @@
                 <span class="setup-finder-status" data-setup-finder-status aria-live="polite"></span>
               </div>
               <div class="setup-finder-report" data-setup-finder-report></div>
+            </div>
+            <div class="settings-panel-body" data-settings-panel="dip-backtest" hidden>
+              <div class="dip-backtest-controls">
+                <label class="parameter-control">
+                  <span>Polymarket tag</span>
+                  <input type="text" value="esports" maxlength="64" autocomplete="off" data-dip-backtest-tag>
+                </label>
+                <button class="execution-button" type="button" data-dip-backtest-run>Run backtest</button>
+                <span class="setup-finder-status" data-dip-backtest-status aria-live="polite"></span>
+              </div>
+              <div class="dip-backtest-report" data-dip-backtest-report></div>
             </div>
           </article>
         </section>

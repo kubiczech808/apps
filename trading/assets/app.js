@@ -4,6 +4,9 @@ const state = {
   // The Setup finder's answer, loaded when its tab is opened rather than with the page.
   setupFinder: null,
   setupFinderBusy: false,
+  dipBacktest: null,
+  dipBacktestBusy: false,
+  dipBacktestRunBusy: false,
   botState: null,
   liveState: null,
   evaluationSort: {
@@ -215,6 +218,7 @@ const CALCULATION_TAB_STORAGE_KEY = "tradingCalculationTab";
 const CALCULATION_MIN_OPEN_STORAGE_KEY = "tradingCalculationMinOpen";
 const CALCULATION_MIN_TRADES_STORAGE_KEY = "tradingCalculationMinTrades";
 const CALCULATION_MIN_VOLUME_STORAGE_KEY = "tradingCalculationMinVolume";
+const DIP_BACKTEST_TAG_STORAGE_KEY = "tradingDipBacktestTag";
 const SCRAPED_TAXONOMY_KIND_QUERY_PARAM = "taxonomy";
 const SCRAPED_TAXONOMY_VALUE_QUERY_PARAM = "taxonomyValue";
 const SCRAPED_STATUS_QUERY_PARAM = "statuses";
@@ -322,6 +326,10 @@ const els = {
   setupFinderMinTrades: document.querySelector("[data-setup-finder-min-trades]"),
   setupFinderRun: document.querySelector("[data-setup-finder-run]"),
   setupFinderStatus: document.querySelector("[data-setup-finder-status]"),
+  dipBacktestReport: document.querySelector("[data-dip-backtest-report]"),
+  dipBacktestTag: document.querySelector("[data-dip-backtest-tag]"),
+  dipBacktestRun: document.querySelector("[data-dip-backtest-run]"),
+  dipBacktestStatus: document.querySelector("[data-dip-backtest-status]"),
   calculationSourceButtons: document.querySelectorAll("[data-calculation-source]"),
   calculationMarketButtons: document.querySelectorAll("[data-calculation-market]"),
   calculationOpenButtons: document.querySelectorAll("[data-calculation-open]"),
@@ -2907,6 +2915,7 @@ function setSettingsSection(section) {
   // Loaded when the tab is opened rather than with the page: it streams the whole resolved
   // archive server-side, so it is not work every visit to settings should pay for.
   if (state.settingsSection === "setup-finder" && !state.setupFinder) loadSetupFinder();
+  if (state.settingsSection === "dip-backtest") loadDipBacktest();
 }
 
 // Which SETUP would have made money, over every resolved market rather than over one
@@ -2998,6 +3007,104 @@ function renderSetupFinder() {
     ${setupFinderTable("Worst combinations", data.worst,
       "The actionable half: what to exclude.")}
   `;
+}
+
+function normalizeDipBacktestTag(value) {
+  const tag = String(value || "").trim().toLowerCase();
+  return /^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/.test(tag) ? tag : "esports";
+}
+
+function currentDipBacktestTag() {
+  return normalizeDipBacktestTag(els.dipBacktestTag?.value || "esports");
+}
+
+function dipBacktestEntryCell(row, level) {
+  const entry = row?.entries?.[String(level)];
+  if (!entry) return "-";
+  return `${probability(Number(entry.entryPrice))} / <span class="${pnlClass(Number(entry.pnlUsdc))}">${signedMoney(Number(entry.pnlUsdc))}</span>`;
+}
+
+function renderDipBacktest() {
+  if (!els.dipBacktestReport) return;
+  const data = state.dipBacktest;
+  if (!data?.available) {
+    els.dipBacktestReport.innerHTML = state.dipBacktestBusy
+      ? '<p class="setup-finder-note">Loading the last published report...</p>'
+      : `<div class="system-status-card"><p class="setup-finder-note">No completed report for <strong>${escapeHtml(currentDipBacktestTag())}</strong> yet. Start the background run; it evaluates resolved markets in safe batches and retains its progress for the next run.</p></div>`;
+    return;
+  }
+  const coverage = data.coverage || {};
+  const entries = Array.isArray(data.entries) ? data.entries : [];
+  const details = Array.isArray(data.details) ? data.details : [];
+  const openingRule = data.openingRule || {};
+  const entryLevels = entries.map((row) => Number(row.entryProbability)).filter(Number.isFinite);
+  els.dipBacktestReport.innerHTML = `
+    <div class="system-status-card">
+      <div class="system-status-head"><div><p class="eyebrow">Historical CLOB simulation</p><h3>${escapeHtml(String(data.tag || currentDipBacktestTag()))} DIP entries</h3></div><span class="pill">Updated ${escapeHtml(formatDate(data.generatedAt))}</span></div>
+      <p class="setup-finder-note">
+        ${formatInteger(coverage.cachedMarkets || 0)} of ${formatInteger(coverage.sourceMarkets || 0)} resolved markets processed;
+        ${formatInteger(coverage.verifiedOpeningMarkets || 0)} had a verified opening quote and
+        ${formatInteger(coverage.openingBandMarkets || 0)} opened in the ${Number(openingRule.probabilityMin || 70)}%–${Number(openingRule.probabilityMax || 99)}% band.
+        ${Number(coverage.pendingMarkets || 0) > 0 ? `${formatInteger(coverage.pendingMarkets)} remain for the next batch. ` : ""}
+        ${Number(coverage.errors || 0) > 0 ? `${formatInteger(coverage.errors)} histories will be retried. ` : ""}
+        Median pre-resolution fall: ${Number.isFinite(Number(data.drawdown?.medianPct)) ? `${Number(data.drawdown.medianPct).toFixed(1)}%` : "-"};
+        deepest: ${Number.isFinite(Number(data.drawdown?.maximumPct)) ? `${Number(data.drawdown.maximumPct).toFixed(1)}%` : "-"}.
+      </p>
+      <p class="setup-finder-note">${escapeHtml(openingRule.description || "Only a confirmed early opening quote is eligible.")} Stake: ${money(Number(data.stakeUsdc || 5))} per qualifying entry; recorded entry fees are included.</p>
+    </div>
+    <div class="system-status-card">
+      <div class="system-status-head"><div><p class="eyebrow">Entry levels</p><h3>What a fixed ${money(Number(data.stakeUsdc || 5))} stake would have done</h3></div></div>
+      <div class="ledger dip-backtest-ledger"><table><thead><tr><th>Enter at or below</th><th>Trades</th><th>W / L</th><th>Accuracy</th><th>Capital</th><th>Fees</th><th>Net P/L</th><th>ROI</th></tr></thead><tbody>
+        ${entries.map((row) => `<tr><td data-label="Enter at or below">${Number(row.entryProbability).toFixed(0)}%</td><td data-label="Trades">${formatInteger(row.trades)}</td><td data-label="W / L">${formatInteger(row.wins)} / ${formatInteger(row.losses)}</td><td data-label="Accuracy">${row.accuracy == null ? "-" : `${Number(row.accuracy).toFixed(1)}%`}</td><td data-label="Capital">${money(Number(row.investedUsdc))}</td><td data-label="Fees">${money(Number(row.feesUsdc), 3)}</td><td data-label="Net P/L" class="${pnlClass(Number(row.pnlUsdc))}">${signedMoney(Number(row.pnlUsdc))}</td><td data-label="ROI" class="${pnlClass(Number(row.roiPct))}">${row.roiPct == null ? "-" : `${Number(row.roiPct) >= 0 ? "+" : ""}${Number(row.roiPct).toFixed(1)}%`}</td></tr>`).join("")}
+      </tbody></table></div>
+    </div>
+    ${details.length ? `<div class="system-status-card"><div class="system-status-head"><div><p class="eyebrow">Verified opening sample</p><h3>Largest falls first</h3></div><span class="pill">${formatInteger(details.length)} rows</span></div><div class="ledger dip-backtest-ledger"><table><thead><tr><th>Market</th><th>Opened</th><th>Lowest before resolution</th><th>Fall</th><th>Final</th>${entryLevels.map((level) => `<th>At ${level}%</th>`).join("")}</tr></thead><tbody>
+      ${details.map((row) => `<tr><td data-label="Market">${escapeHtml(row.question || row.tokenId)}</td><td data-label="Opened">${probability(Number(row.openingPrice))}<br><span>${escapeHtml(formatDate(row.openingAt))}</span></td><td data-label="Lowest before resolution">${probability(Number(row.lowestPreResolutionPrice))}</td><td data-label="Fall">${Number(row.maxDrawdownPct || 0).toFixed(1)}%</td><td data-label="Final">${Number(row.finalOutcomePrice) >= 0.995 ? "Win" : "Loss"}</td>${entryLevels.map((level) => `<td data-label="At ${level}%">${dipBacktestEntryCell(row, level / 100)}</td>`).join("")}</tr>`).join("")}
+    </tbody></table></div></div>` : ""}
+    <div class="system-status-card"><p class="setup-finder-note">${(Array.isArray(data.caveats) ? data.caveats : []).map(escapeHtml).join(" ")}</p></div>
+  `;
+}
+
+async function loadDipBacktest({ force = false } = {}) {
+  if (state.dipBacktestBusy && !force) return;
+  state.dipBacktestBusy = true;
+  renderDipBacktest();
+  const tag = currentDipBacktestTag();
+  try {
+    state.dipBacktest = await fetchApiJson(`api.php?action=dip-backtest&tag=${encodeURIComponent(tag)}`);
+    if (els.dipBacktestStatus) els.dipBacktestStatus.textContent = "";
+  } catch (error) {
+    state.dipBacktest = null;
+    if (els.dipBacktestStatus) els.dipBacktestStatus.textContent = `Error: ${error?.message || error}`;
+  } finally {
+    state.dipBacktestBusy = false;
+    renderDipBacktest();
+  }
+}
+
+async function runDipBacktest() {
+  if (state.dipBacktestRunBusy) return;
+  state.dipBacktestRunBusy = true;
+  const tag = currentDipBacktestTag();
+  if (els.dipBacktestRun) els.dipBacktestRun.disabled = true;
+  if (els.dipBacktestStatus) els.dipBacktestStatus.textContent = "Starting background backtest...";
+  try {
+    const result = await fetchApiJson("api.php?action=dip-backtest-run", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ tag }),
+    });
+    if (els.dipBacktestStatus) {
+      els.dipBacktestStatus.textContent = result.action === "SKIP"
+        ? "A run for this tag was requested recently; its published progress will appear after it finishes."
+        : "Backtest queued. It runs in the background and publishes the next batch when complete.";
+    }
+  } catch (error) {
+    if (els.dipBacktestStatus) els.dipBacktestStatus.textContent = `Could not start: ${error?.message || error}`;
+  } finally {
+    state.dipBacktestRunBusy = false;
+    if (els.dipBacktestRun) els.dipBacktestRun.disabled = false;
+  }
 }
 
 function setEvaluationStatus(status) {
@@ -17783,3 +17890,19 @@ els.setupFinderRun?.addEventListener("click", () => {
   state.setupFinder = null;
   loadSetupFinder();
 });
+
+els.dipBacktestTag?.addEventListener("change", () => {
+  const tag = currentDipBacktestTag();
+  els.dipBacktestTag.value = tag;
+  try { localStorage.setItem(DIP_BACKTEST_TAG_STORAGE_KEY, tag); } catch { /* storage is optional */ }
+  state.dipBacktest = null;
+  loadDipBacktest({ force: true });
+});
+
+els.dipBacktestRun?.addEventListener("click", runDipBacktest);
+
+try {
+  if (els.dipBacktestTag) {
+    els.dipBacktestTag.value = normalizeDipBacktestTag(localStorage.getItem(DIP_BACKTEST_TAG_STORAGE_KEY) || "esports");
+  }
+} catch { /* the default field value is esports */ }
