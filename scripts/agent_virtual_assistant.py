@@ -5241,6 +5241,16 @@ def telegram_recovery_state() -> dict[str, Any]:
     return data
 
 
+# A normal VA Codex request may run for up to eight minutes. Recovery must never
+# start a second AI run while that request is still legitimately in progress.
+TELEGRAM_RECOVERY_MIN_AGE_SECONDS = int(
+    os.environ.get("VIRTUAL_ASSISTANT_RECOVERY_MIN_AGE_SECONDS", "900")
+)
+TELEGRAM_RECOVERY_SCAN_SECONDS = int(
+    os.environ.get("VIRTUAL_ASSISTANT_RECOVERY_SCAN_SECONDS", "180")
+)
+
+
 def save_telegram_recovery_state(state: dict[str, Any]) -> None:
     RECOVERY_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
     attempts = state.get("attempts")
@@ -5304,7 +5314,7 @@ def recover_unanswered_telegram_once() -> None:
         if reply_exists:
             continue
         age = (now - ts).total_seconds()
-        if age < 180:
+        if age < TELEGRAM_RECOVERY_MIN_AGE_SECONDS:
             continue
         msg_id = hashlib.sha1(f"{ts.isoformat()}|{text}".encode("utf-8", errors="replace")).hexdigest()[:16]
         if msg_id in processed:
@@ -5325,41 +5335,25 @@ def recover_unanswered_telegram_once() -> None:
                     continue
             except Exception:
                 pass
-        try:
-            reply = parse_settings_command(text)
-            if not reply:
-                history = g.load_json(g.HISTORY_FILE, [])
-                if not isinstance(history, list):
-                    history = []
-                history.append({"role": "user", "content": text})
-                reply = g.call_ai(history)
-                history.append({"role": "assistant", "content": reply})
-                g.write_json(g.HISTORY_FILE, history[-g.MAX_HISTORY:])
-            if telegram_notify(reply):
-                g.log(f"Telegram recovery replied to unanswered message {msg_id}")
-                g.log(f"-> {reply[:500]}")
-                processed.add(msg_id)
-                attempts.pop(msg_id, None)
-                changed = True
-            else:
-                attempt["last_attempt_at"] = now.isoformat(timespec="seconds")
-                attempt["last_error"] = "telegram_send_failed"
-                attempts[msg_id] = attempt
-                changed = True
-                g.log(f"Telegram recovery produced reply but send failed for {msg_id}")
-        except Exception as exc:
-            attempt["last_attempt_at"] = now.isoformat(timespec="seconds")
-            attempt["last_error"] = f"{type(exc).__name__}: {str(exc)[:180]}"
-            attempt["count"] = int(attempt.get("count") or 0) + 1
-            if not attempt.get("fallback_sent_at") and age >= 300:
-                fallback = "Zachytila jsem zpravu. Zpracovani se nedokoncilo, zkusim ji znovu a nenecham ji zapadnout."
-                if telegram_notify(fallback):
-                    g.log(f"Telegram recovery sent fallback for unanswered message {msg_id}")
-                    g.log(f"-> {fallback}")
-                    attempt["fallback_sent_at"] = now.isoformat(timespec="seconds")
-            attempts[msg_id] = attempt
+        # Do not call the model here. The original daemon request may still be
+        # running, and a second Codex call creates duplicate replies and extra
+        # RPi load. Healthwatch handles a truly dead service separately.
+        if attempt.get("fallback_sent_at") or attempt.get("status") == "deferred":
+            processed.add(msg_id)
             changed = True
-            g.log(f"Telegram recovery failed for {msg_id}: {type(exc).__name__}: {exc}")
+            continue
+        fallback = "Zachytila jsem zpravu. Zpracovani stale probiha; ozvu se jednou s vysledkem."
+        attempt["last_attempt_at"] = now.isoformat(timespec="seconds")
+        attempt["fallback_sent_at"] = now.isoformat(timespec="seconds")
+        attempt["status"] = "deferred"
+        attempts[msg_id] = attempt
+        if telegram_notify(fallback):
+            g.log(f"Telegram recovery sent one deferred notice for {msg_id}")
+            g.log(f"-> {fallback}")
+        else:
+            g.log(f"Telegram recovery deferred notice failed for {msg_id}")
+        processed.add(msg_id)
+        changed = True
     if changed:
         state["processed"] = list(processed)[-200:]
         state["attempts"] = attempts
@@ -5374,7 +5368,7 @@ def telegram_recovery_worker_loop() -> None:
             recover_unanswered_telegram_once()
         except Exception as exc:
             g.log(f"Telegram recovery worker error: {type(exc).__name__}: {exc}")
-        time.sleep(90)
+        time.sleep(TELEGRAM_RECOVERY_SCAN_SECONDS)
 
 
 def telegram_command_refresh_worker_loop() -> None:

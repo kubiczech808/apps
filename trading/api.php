@@ -5605,6 +5605,7 @@ function workflow_status_payload(string $target): array
         'paper-scan' => 'trading-market-scan.yml',
         'paper-evaluation' => 'trading-paper-evaluation.yml',
         'paper-refresh' => 'trading-paper-bot.yml',
+        'dip-backtest' => 'trading-dip-history-backtest.yml',
         'live' => 'polymarket-live-limit-order-test.yml',
         // 5050 dispatches its own workflow but had no entry here, so every status read for
         // it answered 400: its run watcher spent all 32 polls on "status unavailable", and
@@ -7237,6 +7238,150 @@ function live_entry_claim_request(array $payload): array
         }
         respond(['ok' => false, 'error' => 'Unknown live entry guard operation.'], 400);
     });
+}
+
+/**
+ * Compact, complete source for the historical DIP backtest. The UI never calls this:
+ * GitHub's background worker does, because a CLOB history request per market would be far
+ * too slow and too rate-sensitive for a page load.
+ */
+function dip_backtest_tag_input(mixed $value): ?string
+{
+    $tag = strtolower(trim((string) $value));
+    return preg_match('/^[a-z0-9][a-z0-9-]{0,62}$/', $tag) ? $tag : null;
+}
+
+function dip_backtest_report_path(string $tag): string
+{
+    return __DIR__ . '/data/dip-backtest-' . $tag . '-report.json';
+}
+
+function dip_backtest_source_token(array $item): string
+{
+    foreach (['tokenId', 'firstTokenId', 'clobTokenId'] as $field) {
+        $token = trim((string) ($item[$field] ?? ''));
+        if (preg_match('/^\d{8,100}$/', $token)) {
+            return $token;
+        }
+    }
+    foreach ((array) ($item['clobTokenIds'] ?? []) as $token) {
+        $token = trim((string) $token);
+        if (preg_match('/^\d{8,100}$/', $token)) {
+            return $token;
+        }
+    }
+    return '';
+}
+
+function dip_backtest_source_row(array $item): ?array
+{
+    $token = dip_backtest_source_token($item);
+    $final = $item['finalOutcomePrice'] ?? null;
+    if ($token === '' || !is_numeric($final)) {
+        return null;
+    }
+    $final = (float) $final;
+    if ($final > 0.005 && $final < 0.995) {
+        return null;
+    }
+    // This is deliberately a compact public record. The history worker needs identity,
+    // timing, settlement and stored fee metadata -- not the large scraper audit blob.
+    return [
+        'tokenId' => $token,
+        'question' => (string) ($item['question'] ?? ''),
+        'outcome' => (string) ($item['outcome'] ?? ''),
+        'slug' => (string) ($item['slug'] ?? ''),
+        'eventSlug' => (string) ($item['eventSlug'] ?? ''),
+        'marketCreatedAt' => (string) ($item['marketCreatedAt'] ?? $item['createdAt'] ?? ''),
+        'eventStartTime' => (string) ($item['eventStartTime'] ?? $item['scheduledEventDate'] ?? ''),
+        'resolvedAt' => (string) ($item['resolvedAt'] ?? $item['resolvedDetectedAt'] ?? $item['resolutionEndDate'] ?? $item['endDate'] ?? ''),
+        'finalOutcomePrice' => $final,
+        'firstFeeRate' => is_numeric($item['firstFeeRate'] ?? null) ? (float) $item['firstFeeRate'] : null,
+        'feeRate' => is_numeric($item['feeRate'] ?? null) ? (float) $item['feeRate'] : null,
+        'feesEnabled' => ($item['feesEnabled'] ?? null) !== false,
+    ];
+}
+
+function dip_backtest_source_payload(string $tag): array
+{
+    $rows = [];
+    $seen = [];
+    $accepted = static function (array $item) use (&$rows, &$seen, $tag): bool {
+        $tags = simulation_taxonomy_labels($item, 'firstPolymarketTags', 'polymarketTags');
+        $tags = array_map(static fn($value): string => strtolower(trim((string) $value)), $tags);
+        if (!in_array($tag, $tags, true)) {
+            return true;
+        }
+        $compact = dip_backtest_source_row($item);
+        if ($compact === null || isset($seen[$compact['tokenId']])) {
+            return true;
+        }
+        $seen[$compact['tokenId']] = true;
+        $rows[] = $compact;
+        return true;
+    };
+    $source = [];
+    $pdo = function_exists('trading_storage_pdo') ? trading_storage_pdo() : null;
+    if ($pdo instanceof PDO && function_exists('trading_storage_resolved_observations_stream')) {
+        $count = trading_storage_resolved_observations_stream($pdo, $accepted);
+        $source[] = ['name' => 'database', 'rows' => $count];
+        if (function_exists('trading_storage_stream_archived_observations')) {
+            $archived = trading_storage_stream_archived_observations($accepted);
+            $source[] = ['name' => 'archive', 'rows' => $archived];
+        }
+    } else {
+        // The production worker has MySQL, while fixture deployments intentionally do not.
+        // The fallback makes the endpoint useful during a storage outage without claiming
+        // the capped state file is a complete archive.
+        $corePath = state_file_paths()['paper'];
+        $core = decode_state_file($corePath, false);
+        $manifest = is_array($core['stateSegments'] ?? null) ? $core['stateSegments'] : [];
+        $path = state_segment_path(['stateSegments' => $manifest], $corePath, 'resolvedObservations') ?? $corePath;
+        $field = $path === $corePath ? 'resolvedMarketObservations' : 'resolvedMarketObservations';
+        stream_json_array_members($path, $field, $accepted);
+        $source[] = ['name' => 'published fallback', 'rows' => count($rows)];
+    }
+    usort($rows, static fn(array $left, array $right): int => strcmp((string) ($left['resolvedAt'] ?? ''), (string) ($right['resolvedAt'] ?? '')));
+    return [
+        'ok' => true,
+        'tag' => $tag,
+        'markets' => $rows,
+        'count' => count($rows),
+        'sources' => $source,
+        'generatedAt' => gmdate('c'),
+    ];
+}
+
+function dip_backtest_report_payload(string $tag): array
+{
+    $report = decode_state_file(dip_backtest_report_path($tag), false);
+    if (!is_array($report) || (string) ($report['tag'] ?? '') !== $tag) {
+        return [
+            'ok' => true,
+            'tag' => $tag,
+            'available' => false,
+            'generatedAt' => null,
+        ];
+    }
+    // Cache records are held in a separate file. The dashboard receives the compact report
+    // only, no matter how many thousands of CLOB histories the background job has examined.
+    unset($report['cache'], $report['markets']);
+    return ['ok' => true, 'available' => true] + $report;
+}
+
+function request_dip_backtest_run(string $tag): array
+{
+    $path = __DIR__ . '/data/.dip-backtest-dispatch-' . $tag . '.json';
+    $previous = decode_state_file($path, false);
+    $requestedAt = is_array($previous) ? (int) ($previous['requestedAt'] ?? 0) : 0;
+    // One background slice may take minutes. The runner cache makes a repeat harmless, but
+    // queueing several identical 600-market jobs would waste the same constrained runner.
+    if ($requestedAt > 0 && time() - $requestedAt < 600) {
+        return ['ok' => true, 'action' => 'SKIP', 'reason' => 'A historical backtest was requested recently.', 'tag' => $tag];
+    }
+    $result = dispatch_workflow('trading-dip-history-backtest.yml', ['tag' => $tag, 'max_markets' => '600'], false);
+    @file_put_contents($path, json_encode(['requestedAt' => time(), 'tag' => $tag], JSON_UNESCAPED_SLASHES));
+    return ['ok' => true, 'action' => 'DISPATCH', 'tag' => $tag, 'workflow' => $result['workflow'], 'ref' => $result['ref']];
 }
 
 try {
@@ -9189,6 +9334,35 @@ try {
             'count' => count($outcomes),
             'generatedAt' => $core['generatedAt'] ?? gmdate('c'),
         ]);
+    }
+
+    if ($action === 'dip-backtest-source') {
+        $tag = dip_backtest_tag_input($_GET['tag'] ?? 'esports');
+        if ($tag === null) {
+            respond(['ok' => false, 'error' => 'A valid Polymarket tag is required.'], 400);
+        }
+        @set_time_limit(0);
+        respond(dip_backtest_source_payload($tag));
+    }
+
+    if ($action === 'dip-backtest') {
+        $tag = dip_backtest_tag_input($_GET['tag'] ?? 'esports');
+        if ($tag === null) {
+            respond(['ok' => false, 'error' => 'A valid Polymarket tag is required.'], 400);
+        }
+        respond(dip_backtest_report_payload($tag));
+    }
+
+    if ($action === 'dip-backtest-run') {
+        if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+            respond(['ok' => false, 'error' => 'POST is required.'], 405);
+        }
+        $payload = request_payload();
+        $tag = dip_backtest_tag_input($payload['tag'] ?? 'esports');
+        if ($tag === null) {
+            respond(['ok' => false, 'error' => 'A valid Polymarket tag is required.'], 400);
+        }
+        respond(request_dip_backtest_run($tag), 202);
     }
 
     // The rows behind one row of the performance tables. Those tables are computed over

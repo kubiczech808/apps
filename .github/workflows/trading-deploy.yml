@@ -241,6 +241,11 @@ jobs:
                   return True
               if name.startswith("live-") and name.endswith("execution-state.json"):
                   return True
+              # Incremental historical CLOB backtests are runtime reports. A deploy must
+              # not erase their cache, otherwise every manual continuation starts from
+              # the first resolved market again.
+              if name.startswith("dip-backtest-") and name.endswith(".json"):
+                  return True
               return name == "paper-state.json" or (
                   name.startswith("paper-state.") and name.endswith(".json")
               )
