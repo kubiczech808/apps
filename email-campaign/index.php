@@ -1,4 +1,4 @@
-<?php
+function queueScrapingContainerRun<?php
 
 declare(strict_types=1);
 
