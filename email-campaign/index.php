@@ -14626,7 +14626,7 @@ function runScrapingQueue(PDO $pdo, int $steps): string
         // jeden worker dostat za hostingovy limit. Dve polozky na tik jsou
         // pomalejsi, ale zajisti, ze se vysledek vzdy zapise do logu.
         $jobSteps = (string)($job['source'] ?? '') === 'allbiz_us'
-            ? min($steps, 2)
+            ? min($steps, 4)
             : $steps;
         $messages[] = trim(runScrapingJob($pdo, (int)$job['id'], $jobSteps));
         if (count($messages) >= 3) {
