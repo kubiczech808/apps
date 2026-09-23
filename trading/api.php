@@ -6687,6 +6687,19 @@ function record_dip_entry_hit(array $input): array
     if ($tokenId === '' || $portfolioId === '' || $price === null || $price <= 0 || $price >= 1) {
         return ['ok' => false, 'reason' => 'tokenId, portfolioId and a price between 0 and 1 are required'];
     }
+    // A paper hit is created by the long-lived RPi watch, so it can outlive a deployment.
+    // Do not let a plan prepared by an older worker create a new paper position merely
+    // because it reaches the buy band after the opening-evidence rule became stricter.
+    // The hit itself must carry the same verifiable, near-creation observation that the
+    // current shortlist required when it issued the plan.
+    if ((string) ($input['openingSource'] ?? '') !== 'scanner-near-market-open'
+        || !dip_entry_opening_is_verifiable([
+            'firstObservedAt' => $input['firstObservedAt'] ?? '',
+            'eventStartTime' => $input['eventStartTime'] ?? '',
+            'marketCreatedAt' => $input['marketCreatedAt'] ?? '',
+        ])) {
+        return ['ok' => false, 'reason' => 'unverified opening quote; refusing to record a dip entry'];
+    }
     $hits = read_dip_entry_hits();
     // One hit per portfolio and token, ever. The worker already refuses to fire twice, but
     // it restarts, and a second record would become a second simulated position in a market

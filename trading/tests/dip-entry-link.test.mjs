@@ -144,6 +144,16 @@ test("BAIT: api.php must store eventSlug on the recorded hit, or the plan's fix 
     "storing slug alone repeats the incident for every grouped-event market");
 });
 
+test("BAIT: a retained worker plan without verifiable opening evidence cannot create a paper hit", () => {
+  const record = API.slice(API.indexOf("function record_dip_entry_hit"));
+  const guard = record.slice(0, record.indexOf("$hits = read_dip_entry_hits"));
+  assert.match(guard, /unverified opening quote; refusing to record a dip entry/);
+  assert.match(guard, /dip_entry_opening_is_verifiable/,
+    "the record endpoint must enforce the same opening-proof rule after a worker deployment");
+  assert.match(guard, /marketCreatedAt/,
+    "a pre-start quote alone is not enough when the scanner first found the market late");
+});
+
 test("BAIT: the worker must forward eventSlug from the plan it received", () => {
   const post = WORKER_SOURCE.slice(WORKER_SOURCE.indexOf("export async function recordDipEntryHit"));
   const body = post.slice(0, post.indexOf("signal: controller.signal"));
