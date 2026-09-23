@@ -1,0 +1,126 @@
+name: BTC-DCA Exchange Rates Backup and Retirement
+
+on:
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: "Operation to perform"
+        required: true
+        type: choice
+        options:
+          - snapshot
+          - verify
+          - drop
+          - restore
+      confirm:
+        description: "Type DROP_EXCHANGE_RATES or RESTORE_EXCHANGE_RATES only for that operation"
+        required: false
+        type: string
+
+concurrency:
+  group: btcdca-exchange-rates-retirement
+  cancel-in-progress: false
+
+jobs:
+  exchange-rates:
+    runs-on: ubuntu-latest
+    env:
+      BTCDCA_DB: ${{ secrets.BTCDCA_DB }}
+      BTCDCA_DB_USER: ${{ secrets.BTCDCA_DB_USER }}
+      BTCDCA_DB_PASSWORD: ${{ secrets.BTCDCA_DB_PASSWORD }}
+      BTCDCA_FTP_LOGIN: ${{ secrets.BTCDCA_FTP_LOGIN }}
+      BTCDCA_FTP_PASSWORD: ${{ secrets.BTCDCA_FTP_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate secrets and operation
+        run: |
+          set -euo pipefail
+          for name in BTCDCA_DB BTCDCA_DB_USER BTCDCA_DB_PASSWORD BTCDCA_FTP_LOGIN BTCDCA_FTP_PASSWORD; do
+            test -n "${!name}"
+          done
+          case "${{ inputs.operation }}" in
+            snapshot|verify) ;;
+            drop) test "${{ inputs.confirm }}" = "DROP_EXCHANGE_RATES" ;;
+            restore) test "${{ inputs.confirm }}" = "RESTORE_EXCHANGE_RATES" ;;
+            *) echo "Unsupported operation" >&2; exit 1 ;;
+          esac
+
+      - name: Generate and upload temporary exchange-rates endpoint
+        run: |
+          set -euo pipefail
+          export BTCDCA_DB_HELPER_TOKEN="$(openssl rand -hex 32)"
+          echo "BTCDCA_DB_HELPER_TOKEN=$BTCDCA_DB_HELPER_TOKEN" >> "$GITHUB_ENV"
+          python3 - <<'PY'
+          import base64
+          import json
+          import os
+          from pathlib import Path
+
+          config = {
+              'token': os.environ['BTCDCA_DB_HELPER_TOKEN'],
+              'db_name': os.environ['BTCDCA_DB'],
+              'db_user': os.environ['BTCDCA_DB_USER'],
+              'db_password': os.environ['BTCDCA_DB_PASSWORD'],
+          }
+          template = Path('scripts/btcdca_exchange_rates_helper.php.template').read_text(encoding='utf-8')
+          encoded = base64.b64encode(json.dumps(config).encode('utf-8')).decode('ascii')
+          Path('temporary-btcdca-exchange-rates-helper.php').write_text(
+              template.replace('__CONFIG_BASE64__', encoded), encoding='utf-8'
+          )
+          PY
+          php -l temporary-btcdca-exchange-rates-helper.php
+          BTCDCA_TEMP_FILE_MODE=upload \
+          BTCDCA_TEMP_FILE_LOCAL=temporary-btcdca-exchange-rates-helper.php \
+          BTCDCA_TEMP_FILE_REMOTE=www/btcdca-exchange-rates-helper.php \
+          python3 scripts/manage_btcdca_temporary_file.py
+
+      - name: Create or verify the hosting rollback dump
+        if: inputs.operation == 'snapshot' || inputs.operation == 'verify'
+        run: |
+          set -euo pipefail
+          action="${{ inputs.operation }}"
+          curl --fail-with-body --show-error --silent --retry 1 --max-time 900 \
+            -H "X-BTCDCA-Token: ${BTCDCA_DB_HELPER_TOKEN}" \
+            "https://www.btc-dca.com/btcdca-exchange-rates-helper.php?action=${action}" \
+            --output exchange-rates-result.json
+          python3 -m json.tool exchange-rates-result.json
+          grep -Fq '"ok": true' exchange-rates-result.json
+
+      - name: Drop the table only after the validated hosting dump
+        if: inputs.operation == 'drop'
+        run: |
+          set -euo pipefail
+          curl --fail-with-body --show-error --silent --retry 1 --max-time 300 \
+            -H "X-BTCDCA-Token: ${BTCDCA_DB_HELPER_TOKEN}" \
+            "https://www.btc-dca.com/btcdca-exchange-rates-helper.php?action=drop&confirm=DROP_EXCHANGE_RATES" \
+            --output exchange-rates-result.json
+          python3 -m json.tool exchange-rates-result.json
+          grep -Fq '"table_exists": false' exchange-rates-result.json
+
+      - name: Restore the table only from the validated hosting dump
+        if: inputs.operation == 'restore'
+        run: |
+          set -euo pipefail
+          curl --fail-with-body --show-error --silent --retry 1 --max-time 900 \
+            -H "X-BTCDCA-Token: ${BTCDCA_DB_HELPER_TOKEN}" \
+            "https://www.btc-dca.com/btcdca-exchange-rates-helper.php?action=restore&confirm=RESTORE_EXCHANGE_RATES" \
+            --output exchange-rates-result.json
+          python3 -m json.tool exchange-rates-result.json
+          grep -Fq '"restored": true' exchange-rates-result.json
+
+      - name: Upload non-sensitive operation manifest
+        if: always() && hashFiles('exchange-rates-result.json') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: btcdca-exchange-rates-operation-${{ github.run_id }}
+          path: exchange-rates-result.json
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Remove temporary endpoint
+        if: always()
+        run: |
+          BTCDCA_TEMP_FILE_MODE=delete \
+          BTCDCA_TEMP_FILE_REMOTE=www/btcdca-exchange-rates-helper.php \
+          python3 scripts/manage_btcdca_temporary_file.py

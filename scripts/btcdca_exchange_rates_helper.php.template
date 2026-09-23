@@ -1,0 +1,196 @@
+<?php
+declare(strict_types=1);
+
+// Generated inside GitHub Actions, uploaded temporarily, then deleted.
+set_time_limit(0);
+ignore_user_abort(true);
+$config = json_decode(base64_decode('__CONFIG_BASE64__', true), true, 512, JSON_THROW_ON_ERROR);
+
+if (!hash_equals((string) $config['token'], (string) ($_SERVER['HTTP_X_BTCDCA_TOKEN'] ?? ''))) {
+    http_response_code(403);
+    exit('Forbidden');
+}
+
+mysqli_report(MYSQLI_REPORT_ERROR | MYSQLI_REPORT_STRICT);
+$database = new mysqli('localhost', (string) $config['db_user'], (string) $config['db_password'], (string) $config['db_name']);
+$database->set_charset('utf8mb4');
+
+$table = 'exchange_rates';
+$backupDirectory = dirname((string) ($_SERVER['DOCUMENT_ROOT'] ?? __DIR__)) . '/.codex-backups/btcdca-exchange-rates';
+$dumpPath = $backupDirectory . '/exchange_rates.sql.gz';
+$manifestPath = $backupDirectory . '/exchange_rates.manifest.json';
+
+function identifier(string $value): string {
+    return '`' . str_replace('`', '``', $value) . '`';
+}
+
+function sql_value(mysqli $database, mixed $value): string {
+    return $value === null ? 'NULL' : "'" . $database->real_escape_string((string) $value) . "'";
+}
+
+function output_json(array $payload, int $status = 200): never {
+    http_response_code($status);
+    header('Content-Type: application/json; charset=utf-8');
+    echo json_encode($payload, JSON_THROW_ON_ERROR);
+    exit;
+}
+
+function table_exists(mysqli $database, string $table): bool {
+    $result = $database->query("SHOW TABLES LIKE '" . $database->real_escape_string($table) . "'");
+    return $result->num_rows > 0;
+}
+
+function write_gzip($output, string $contents): void {
+    if (gzwrite($output, $contents) === false) {
+        throw new RuntimeException('Could not write the exchange_rates dump.');
+    }
+}
+
+function read_manifest(string $path): array {
+    if (!is_file($path)) {
+        throw new RuntimeException('The exchange_rates backup manifest is missing.');
+    }
+    $manifest = json_decode((string) file_get_contents($path), true, 512, JSON_THROW_ON_ERROR);
+    if (($manifest['table'] ?? null) !== 'exchange_rates' || !isset($manifest['sha256'], $manifest['rows'])) {
+        throw new RuntimeException('The exchange_rates backup manifest is invalid.');
+    }
+    if (!is_file((string) ($manifest['dump_path'] ?? '')) || !hash_equals((string) $manifest['sha256'], (string) hash_file('sha256', (string) $manifest['dump_path']))) {
+        throw new RuntimeException('The exchange_rates dump does not match its manifest.');
+    }
+    return $manifest;
+}
+
+function create_dump(mysqli $database, string $table, string $directory, string $dumpPath, string $manifestPath): array {
+    if (!table_exists($database, $table)) {
+        throw new RuntimeException('The exchange_rates table does not exist.');
+    }
+    if (!is_dir($directory) && !mkdir($directory, 0700, true) && !is_dir($directory)) {
+        throw new RuntimeException('Could not create the private database backup directory.');
+    }
+    $temporaryPath = $dumpPath . '.tmp';
+    $output = gzopen($temporaryPath, 'wb9');
+    if ($output === false) {
+        throw new RuntimeException('Could not open the exchange_rates dump.');
+    }
+    $rows = 0;
+    try {
+        $create = $database->query('SHOW CREATE TABLE ' . identifier($table))->fetch_row();
+        if ($create === null || !isset($create[1])) {
+            throw new RuntimeException('Could not read the exchange_rates schema.');
+        }
+        write_gzip($output, "-- BTC-DCA exchange_rates backup\nSET NAMES utf8mb4;\nSET FOREIGN_KEY_CHECKS=0;\n");
+        write_gzip($output, 'DROP TABLE IF EXISTS ' . identifier($table) . ";\n" . $create[1] . ";\n");
+        $result = $database->query('SELECT * FROM ' . identifier($table), MYSQLI_USE_RESULT);
+        $fields = [];
+        while ($field = $result->fetch_field()) {
+            $fields[] = identifier($field->name);
+        }
+        while ($row = $result->fetch_row()) {
+            $values = array_map(fn ($value): string => sql_value($database, $value), $row);
+            write_gzip($output, 'INSERT INTO ' . identifier($table) . ' (' . implode(', ', $fields) . ') VALUES (' . implode(', ', $values) . ");\n");
+            $rows++;
+        }
+        $result->free();
+        write_gzip($output, "SET FOREIGN_KEY_CHECKS=1;\n");
+        if (!gzclose($output)) {
+            throw new RuntimeException('Could not finish the exchange_rates dump.');
+        }
+        $output = null;
+        if (!rename($temporaryPath, $dumpPath)) {
+            throw new RuntimeException('Could not activate the completed exchange_rates dump.');
+        }
+    } catch (Throwable $error) {
+        if ($output !== null) {
+            gzclose($output);
+        }
+        @unlink($temporaryPath);
+        throw $error;
+    }
+
+    $manifest = [
+        'format' => 'btc-dca-exchange-rates-v1',
+        'table' => $table,
+        'rows' => $rows,
+        'bytes' => (int) filesize($dumpPath),
+        'sha256' => (string) hash_file('sha256', $dumpPath),
+        'dump_path' => $dumpPath,
+        'created_at' => gmdate('c'),
+    ];
+    file_put_contents($manifestPath, json_encode($manifest, JSON_PRETTY_PRINT | JSON_THROW_ON_ERROR), LOCK_EX);
+    return $manifest;
+}
+
+function restore_dump(mysqli $database, string $dumpPath): int {
+    $input = gzopen($dumpPath, 'rb');
+    if ($input === false) {
+        throw new RuntimeException('Could not open the exchange_rates dump for restore.');
+    }
+    $statement = '';
+    $queries = 0;
+    try {
+        while (($line = gzgets($input)) !== false) {
+            $statement .= $line;
+            if (preg_match('/;\s*$/', $statement)) {
+                $query = trim($statement);
+                if ($query !== '' && !str_starts_with($query, '--')) {
+                    $database->query($query);
+                    $queries++;
+                }
+                $statement = '';
+            }
+        }
+        if ($statement !== '') {
+            throw new RuntimeException('The exchange_rates dump ended with an incomplete SQL statement.');
+        }
+        gzclose($input);
+    } catch (Throwable $error) {
+        gzclose($input);
+        throw $error;
+    }
+    return $queries;
+}
+
+try {
+    $action = (string) ($_GET['action'] ?? 'verify');
+    if ($action === 'snapshot') {
+        output_json(['ok' => true, 'snapshot' => create_dump($database, $table, $backupDirectory, $dumpPath, $manifestPath)]);
+    }
+    if ($action === 'verify') {
+        $manifest = read_manifest($manifestPath);
+        output_json([
+            'ok' => true,
+            'table_exists' => table_exists($database, $table),
+            'current_rows' => table_exists($database, $table) ? (int) $database->query('SELECT COUNT(*) FROM ' . identifier($table))->fetch_row()[0] : 0,
+            'backup' => $manifest,
+        ]);
+    }
+    if ($action === 'drop') {
+        if ((string) ($_GET['confirm'] ?? '') !== 'DROP_EXCHANGE_RATES') {
+            throw new RuntimeException('Drop confirmation is missing.');
+        }
+        $manifest = read_manifest($manifestPath);
+        if (!table_exists($database, $table)) {
+            output_json(['ok' => true, 'dropped' => false, 'table_exists' => false, 'backup' => $manifest]);
+        }
+        $database->query('DROP TABLE ' . identifier($table));
+        output_json(['ok' => true, 'dropped' => true, 'table_exists' => table_exists($database, $table), 'backup' => $manifest]);
+    }
+    if ($action === 'restore') {
+        if ((string) ($_GET['confirm'] ?? '') !== 'RESTORE_EXCHANGE_RATES') {
+            throw new RuntimeException('Restore confirmation is missing.');
+        }
+        $manifest = read_manifest($manifestPath);
+        if (table_exists($database, $table)) {
+            throw new RuntimeException('The exchange_rates table already exists; restore refused.');
+        }
+        $queries = restore_dump($database, $dumpPath);
+        $rows = (int) $database->query('SELECT COUNT(*) FROM ' . identifier($table))->fetch_row()[0];
+        if ($rows !== (int) $manifest['rows']) {
+            throw new RuntimeException('Restore row count does not match the backup manifest.');
+        }
+        output_json(['ok' => true, 'restored' => true, 'queries' => $queries, 'rows' => $rows, 'backup' => $manifest]);
+    }
+    throw new RuntimeException('Unknown exchange_rates action.');
+} catch (Throwable $error) {
+    output_json(['ok' => false, 'error' => $error->getMessage()], 500);
+}
