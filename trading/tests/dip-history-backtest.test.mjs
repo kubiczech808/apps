@@ -59,6 +59,19 @@ test("DIP backtest refuses a late first CLOB point even when it reads 70%", () =
   assert.equal(result.openingInBand, false);
 });
 
+test("DIP backtest uses the earliest pre-start CLOB quote when the archive lacks creation time", () => {
+  const result = backtestDipMarket(resolvedMarket({ marketCreatedAt: "" }), [
+    { t: epoch("2026-09-01T10:20:00Z"), p: 0.8 },
+    { t: epoch("2026-09-01T12:20:00Z"), p: 0.4 },
+  ]);
+  assert.equal(result.verifiedOpening, false, "creation time was not available to verify");
+  assert.equal(result.usableOpening, true, "the first available quote is still before kickoff");
+  assert.equal(result.earliestPreStartOpening, true);
+  assert.equal(result.openingInBand, true);
+  assert.equal(result.openingSource, "earliest available CLOB quote before event start");
+  assert.equal(result.entries["0.4"].outcome, "WIN");
+});
+
 test("DIP backtest computes a full loss including the entry fee", () => {
   const result = backtestDipMarket(resolvedMarket({ finalOutcomePrice: 0 }), [
     { t: epoch("2026-09-01T10:15:00Z"), p: 0.8 },

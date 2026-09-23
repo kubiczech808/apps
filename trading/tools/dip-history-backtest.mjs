@@ -15,6 +15,10 @@ const OPENING_MIN = 0.7;
 const OPENING_MAX = 0.99;
 const OPENING_WINDOW_SECONDS = 90 * 60;
 const ENTRY_LEVELS = [0.3, 0.35, 0.4, 0.45, 0.5, 0.55, 0.6];
+// Version the result rule, not only the file. Cache rows are keyed by their source
+// fingerprint, so this makes a corrected interpretation reprocess old rows instead of
+// quietly continuing to show the conclusion of the earlier rule.
+const OPENING_RULE_VERSION = 2;
 
 if (!/^[a-z0-9][a-z0-9-]{0,62}$/.test(TAG)) {
   throw new Error("DIP_BACKTEST_TAG must be a lowercase Polymarket tag");
@@ -104,6 +108,7 @@ function sourceToken(row) {
 
 function sourceFingerprint(row) {
   return JSON.stringify([
+    OPENING_RULE_VERSION,
     sourceToken(row), row?.finalOutcomePrice, row?.resolvedAt, row?.resolvedDetectedAt,
     row?.marketCreatedAt, row?.createdAt, row?.eventStartTime, row?.scheduledEventDate,
     row?.firstFeeRate, row?.feeRate, row?.feesEnabled,
@@ -155,11 +160,18 @@ export function backtestDipMarket(row, history) {
     && opening.t <= createdAt + OPENING_WINDOW_SECONDS;
   const openingBeforeStart = eventStartAt != null && opening.t < eventStartAt;
   const verifiedOpening = openingNearCreation && openingBeforeStart;
+  // The compact resolved archive predates marketCreatedAt for most historical rows. In
+  // that case, treating a missing timestamp as a failed verification discarded every
+  // market although the CLOB did return its oldest available, pre-start quote. It is not
+  // proof of the literal creation price, so retain the distinction in the report, but it
+  // is the best reproducible opening observation available for a historical simulation.
+  const earliestPreStartOpening = createdAt == null && openingBeforeStart;
+  const usableOpening = verifiedOpening || earliestPreStartOpening;
   const terminalCutoff = resolvedAt == null ? Number.POSITIVE_INFINITY : resolvedAt;
   const preResolution = points.filter((point) => point.t < terminalCutoff && point.p > 0.005 && point.p < 0.995);
   const lowest = preResolution.reduce((best, point) => (!best || point.p < best.p ? point : best), null);
   const inPlay = eventStartAt == null ? [] : preResolution.filter((point) => point.t >= eventStartAt);
-  const openingInBand = verifiedOpening && opening.p >= OPENING_MIN && opening.p <= OPENING_MAX;
+  const openingInBand = usableOpening && opening.p >= OPENING_MIN && opening.p <= OPENING_MAX;
   const entries = {};
   for (const level of ENTRY_LEVELS) {
     const hit = openingInBand ? inPlay.find((point) => point.p <= level) : null;
@@ -181,10 +193,14 @@ export function backtestDipMarket(row, history) {
   return {
     ...base,
     status: "complete",
-    openingSource: verifiedOpening ? "CLOB near market creation" : "earliest CLOB point only",
+    openingSource: verifiedOpening
+      ? "CLOB near market creation"
+      : (earliestPreStartOpening ? "earliest available CLOB quote before event start" : "earliest CLOB point only"),
     openingAt: iso(opening.t),
     openingPrice: round(opening.p, 6),
     verifiedOpening,
+    usableOpening,
+    earliestPreStartOpening,
     openingInBand,
     lowestPreResolutionAt: lowest ? iso(lowest.t) : null,
     lowestPreResolutionPrice: lowest ? round(lowest.p, 6) : null,
@@ -226,8 +242,9 @@ async function fetchMarketHistory(row) {
 function reportFromCache(sourceRows, cache, processedThisRun) {
   const rows = sourceRows.map((row) => cache.markets[sourceToken(row)]).filter(Boolean);
   const complete = rows.filter((row) => row.status === "complete");
-  const verified = complete.filter((row) => row.verifiedOpening);
-  const openingBand = verified.filter((row) => row.openingInBand);
+  const usableOpening = complete.filter((row) => row.usableOpening);
+  const creationVerified = usableOpening.filter((row) => row.verifiedOpening);
+  const openingBand = usableOpening.filter((row) => row.openingInBand);
   const outcomes = ENTRY_LEVELS.map((level) => {
     const entries = openingBand.map((row) => row.entries?.[String(level)]).filter(Boolean);
     const wins = entries.filter((entry) => entry.outcome === "WIN").length;
@@ -256,7 +273,7 @@ function reportFromCache(sourceRows, cache, processedThisRun) {
     .slice(0, 600);
   return {
     ok: true,
-    version: 1,
+    version: OPENING_RULE_VERSION,
     generatedAt: new Date().toISOString(),
     tag: TAG,
     stakeUsdc: STAKE_USDC,
@@ -264,7 +281,7 @@ function reportFromCache(sourceRows, cache, processedThisRun) {
       probabilityMin: 70,
       probabilityMax: 99,
       maximumDelayMinutes: 90,
-      description: "The first CLOB history point must be within 90 minutes of market creation and before event start.",
+      description: "Uses a CLOB quote within 90 minutes of creation when creation time is recorded; otherwise the earliest available quote before event start.",
     },
     coverage: {
       sourceMarkets: sourceRows.length,
@@ -272,7 +289,8 @@ function reportFromCache(sourceRows, cache, processedThisRun) {
       processedThisRun,
       pendingMarkets: pending,
       completeMarkets: complete.length,
-      verifiedOpeningMarkets: verified.length,
+      verifiedOpeningMarkets: usableOpening.length,
+      creationVerifiedOpeningMarkets: creationVerified.length,
       openingBandMarkets: openingBand.length,
       unavailableHistory: rows.filter((row) => row.status === "unavailable").length,
       errors: rows.filter((row) => row.status === "error").length,
@@ -286,7 +304,7 @@ function reportFromCache(sourceRows, cache, processedThisRun) {
     caveats: [
       "Entry uses the first recorded CLOB price at or below the selected level after the event began.",
       "Historical price series does not include contemporaneous order-book depth, so it cannot prove a full FOK fill at the displayed stake.",
-      "Markets without a near-creation CLOB opening quote are excluded from entry results rather than treated as proven 70% openings.",
+      "When market creation time is missing from the archive, the oldest available CLOB quote before event start is used and is labelled pre-start rather than creation-verified.",
     ],
   };
 }
@@ -311,9 +329,9 @@ async function main() {
   const sourceRows = Array.isArray(source?.markets) ? source.markets.filter((row) => sourceToken(row)) : [];
   if (!sourceRows.length) throw new Error(`No resolved ${TAG} markets were returned by the application`);
 
-  const previous = await readJson(cachePath, { version: 1, tag: TAG, markets: {} });
+  const previous = await readJson(cachePath, { version: OPENING_RULE_VERSION, tag: TAG, markets: {} });
   const cache = {
-    version: 1,
+    version: OPENING_RULE_VERSION,
     tag: TAG,
     updatedAt: new Date().toISOString(),
     markets: previous?.tag === TAG && previous?.markets && typeof previous.markets === "object" ? previous.markets : {},

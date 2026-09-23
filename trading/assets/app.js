@@ -3046,7 +3046,8 @@ function renderDipBacktest() {
       <div class="system-status-head"><div><p class="eyebrow">Historical CLOB simulation</p><h3>${escapeHtml(String(data.tag || currentDipBacktestTag()))} DIP entries</h3></div><span class="pill">Updated ${escapeHtml(formatDate(data.generatedAt))}</span></div>
       <p class="setup-finder-note">
         ${formatInteger(coverage.cachedMarkets || 0)} of ${formatInteger(coverage.sourceMarkets || 0)} resolved markets processed;
-        ${formatInteger(coverage.verifiedOpeningMarkets || 0)} had a verified opening quote and
+        ${formatInteger(coverage.verifiedOpeningMarkets || 0)} had a usable pre-start CLOB opening quote
+        (${formatInteger(coverage.creationVerifiedOpeningMarkets || 0)} confirmed near creation) and
         ${formatInteger(coverage.openingBandMarkets || 0)} opened in the ${Number(openingRule.probabilityMin || 70)}%–${Number(openingRule.probabilityMax || 99)}% band.
         ${Number(coverage.pendingMarkets || 0) > 0 ? `${formatInteger(coverage.pendingMarkets)} remain for the next batch. ` : ""}
         ${Number(coverage.errors || 0) > 0 ? `${formatInteger(coverage.errors)} histories will be retried. ` : ""}
