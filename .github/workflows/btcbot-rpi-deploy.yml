@@ -213,12 +213,15 @@ jobs:
             ?.find((asset) => asset.symbol === 'BTCUSD')
             ?.trends?.['1d']
           const externalPivotSummary = (symbol, timeframeId) => {
-            const reference = state.priceActionMatrix?.assets
+            const item = state.priceActionMatrix?.assets
               ?.find((asset) => asset.symbol === symbol)
               ?.trends?.[timeframeId]
-              ?.externalPivots
+            const reference = item?.externalPivots
             return reference
               ? {
+                  trend: item?.trend,
+                  regime: item?.externalTrend?.trend,
+                  regimeReason: item?.externalTrend?.reason,
                   count: reference.pivots?.length ?? 0,
                   source: reference.source,
                   method: reference.method,
@@ -239,9 +242,10 @@ jobs:
             priceActionSchema: state.priceActionMatrix?.schemaVersion,
             btcDailyCandles: btcDaily?.candles,
             btcDailyHistoryDays: btcDaily?.structure?.historyDays,
-            btcDailyPivotLookback: btcDaily?.structure?.lookback,
+            btcDailyExternalPivots: externalPivotSummary('BTCUSD', '1d'),
             eurUsdFourHourExternalPivots: externalPivotSummary('EURUSD', '4h'),
             btcUsdFourHourExternalPivots: externalPivotSummary('BTCUSD', '4h'),
+            usdChfFourHourExternalPivots: externalPivotSummary('USDCHF', '4h'),
             externalTrendFailures: state.priceActionMatrix?.externalTrends?.failures ?? [],
           }
           console.log(summary)
@@ -249,10 +253,11 @@ jobs:
           if (summary.riskPct !== 1 || summary.priceActionRefresh !== 15) throw new Error('PA-1 settings are not active')
           if (summary.status === 'error' || summary.lastError) throw new Error(`first pass failed: ${summary.lastError}`)
           if (summary.priceActionSchema !== PRICE_ACTION_MATRIX_SCHEMA) throw new Error('price-action matrix was not rebuilt')
-          if (summary.btcDailyHistoryDays !== 400 || summary.btcDailyPivotLookback !== 30) {
-            throw new Error('BTCUSD 1D does not use the scaled structure profile')
-          }
+          if (summary.btcDailyHistoryDays !== 400) throw new Error('BTCUSD 1D does not use the required history window')
           if (!(summary.btcDailyCandles >= 160)) throw new Error('BTCUSD 1D history is too short')
+          for (const reference of [summary.btcDailyExternalPivots, summary.eurUsdFourHourExternalPivots, summary.btcUsdFourHourExternalPivots, summary.usdChfFourHourExternalPivots]) {
+            if (!reference?.source || !(reference.count >= 2)) throw new Error('external pivot source was not published')
+          }
           NODE
 
           # A fresh local cache is not enough: the dashboard reads the hosted
