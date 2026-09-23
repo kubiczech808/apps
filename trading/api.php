@@ -2437,7 +2437,7 @@ function observation_is_over_under_market(array $item): bool
 
 // Every id observation_market_shape() can return. Kept beside the classifier so the config
 // normalizer validates against exactly what it knows, not a hand-kept list that drifts from it.
-const MARKET_SHAPE_IDS = ['over-under', 'spread', 'exact-score', 'draw', 'in-event-leg', 'both-teams', 'outright'];
+const MARKET_SHAPE_IDS = ['over-under', 'spread', 'exact-score', 'draw', 'in-event-leg', 'both-teams', 'outright', 'other'];
 
 /**
  * Whether this market's price can WALK to a stop, or only JUMP past it -- and so whether a
@@ -2456,7 +2456,7 @@ function observation_market_shape(array $item): string
         '/^spread:|\bspread\b|\([-+]\d/i' => 'spread',
         '/exact score/i' => 'exact-score',
         '/\bdraw\b/i' => 'draw',
-        '/set \d+ winner|\bgames total\b|map \d+|\bmap handicap\b|first .*(map|set|goal|blood)/i' => 'in-event-leg',
+        '/(?:set|map|game|round) \d+ winner|\bgames total\b|\bmap handicap\b|first .*(map|set|goal|blood)/i' => 'in-event-leg',
         '/both teams to/i' => 'both-teams',
     ];
     foreach ($patterns as $pattern => $label) {
@@ -2464,7 +2464,12 @@ function observation_market_shape(array $item): string
             return $label;
         }
     }
-    return 'outright';
+    // Outright is a specifically named match or event winner. A residual proposition
+    // must remain separately filterable instead of silently joining that strategy.
+    if (preg_match('/\bvs\.?\b|\bv\.\b|\s@\s|\b(?:win|wins|winner)\b/i', $question) === 1) {
+        return 'outright';
+    }
+    return 'other';
 }
 
 /**
@@ -8763,6 +8768,30 @@ try {
         $orders = [];
         $runCounts = [];
         $oldest = null;
+        $rememberOrder = static function (string $tokenId, ?float $price, string $mode, string $at, ?float $entryVolumeUsdc = null) use (&$orders, &$oldest): void {
+            if ($tokenId === '') {
+                return;
+            }
+            if ($at !== '' && ($oldest === null || strcmp($at, $oldest) < 0)) {
+                $oldest = $at;
+            }
+            $key = $tokenId . '@' . ($price === null ? '-' : (string) $price);
+            if (isset($orders[$key]) && strcmp((string) $orders[$key]['at'], $at) >= 0) {
+                // State-ledger rows are intentionally tiny in older releases. A matching
+                // run-log record may carry the entry volume; enrich without changing owner.
+                if (($orders[$key]['entryVolumeUsdc'] ?? null) === null && $entryVolumeUsdc !== null) {
+                    $orders[$key]['entryVolumeUsdc'] = $entryVolumeUsdc;
+                }
+                return;
+            }
+            $orders[$key] = [
+                'tokenId' => $tokenId,
+                'price' => $price,
+                'mode' => $mode,
+                'at' => $at,
+                'entryVolumeUsdc' => $entryVolumeUsdc,
+            ];
+        };
         foreach ($targets as $mode => $target) {
             $records = trading_storage_is_active()
                 ? trading_storage_event_records('state-run-log', $target, 5000)
@@ -8791,14 +8820,57 @@ try {
                         continue;
                     }
                     $price = is_numeric($attempt['orderPrice'] ?? null) ? round((float) $attempt['orderPrice'], 6) : null;
-                    // Keyed on token AND price, the same pairing the dashboard matches a fill
-                    // back on. The newest order for a pair wins, so a token re-entered after
-                    // another portfolio closed out belongs to whoever ordered it last.
-                    $key = $tokenId . '@' . ($price === null ? '-' : (string) $price);
-                    if (isset($orders[$key]) && strcmp((string) $orders[$key]['at'], $at) >= 0) {
+                    $rememberOrder(
+                        $tokenId,
+                        $price,
+                        $mode,
+                        $at,
+                        is_numeric($attempt['entryVolumeUsdc'] ?? null) ? (float) $attempt['entryVolumeUsdc'] : null,
+                    );
+                }
+            }
+
+            // MySQL is an optional mirror. The live account synchronizer must keep
+            // portfolio ownership even while that mirror is unavailable, otherwise a
+            // harmless database outage turns every shared-wallet trade into base Live.
+            // Each executor state already carries the durable orderOwnership ledger, and
+            // it is the executor's own confirmed record rather than a price-band guess.
+            $state = decode_state_file(live_execution_state_path_for_policy($mode), false);
+            if (!is_array($state)) {
+                continue;
+            }
+            foreach ((array) ($state['orderOwnership'] ?? []) as $entry) {
+                if (!is_array($entry)) {
+                    continue;
+                }
+                $rememberOrder(
+                    trim((string) ($entry['tokenId'] ?? '')),
+                    is_numeric($entry['price'] ?? null) ? round((float) $entry['price'], 6) : null,
+                    $mode,
+                    (string) ($entry['at'] ?? $state['generatedAt'] ?? ''),
+                    is_numeric($entry['entryVolumeUsdc'] ?? null) ? (float) $entry['entryVolumeUsdc'] : null,
+                );
+            }
+            foreach ((array) ($state['runLog'] ?? []) as $record) {
+                if (!is_array($record)) {
+                    continue;
+                }
+                $at = (string) ($record['runAt'] ?? $record['generatedAt'] ?? '');
+                foreach ((array) ($record['attempts'] ?? []) as $attempt) {
+                    if (!is_array($attempt)) {
                         continue;
                     }
-                    $orders[$key] = ['tokenId' => $tokenId, 'price' => $price, 'mode' => $mode, 'at' => $at];
+                    $attemptAction = strtoupper((string) ($attempt['action'] ?? ''));
+                    if (str_contains($attemptAction, 'REJECT') || str_starts_with($attemptAction, 'DRY_RUN')) {
+                        continue;
+                    }
+                    $rememberOrder(
+                        trim((string) ($attempt['tokenId'] ?? '')),
+                        is_numeric($attempt['orderPrice'] ?? null) ? round((float) $attempt['orderPrice'], 6) : null,
+                        $mode,
+                        $at,
+                        is_numeric($attempt['entryVolumeUsdc'] ?? null) ? (float) $attempt['entryVolumeUsdc'] : null,
+                    );
                 }
             }
         }

@@ -4855,12 +4855,14 @@ test("observation_market_shape (PHP) agrees with marketShape (Node) on the same 
     "Spread: San Francisco Giants (-1.5)",
     "Map Handicap: TLR (-1.5) vs MOUZ NXT (+1.5)",
     "Set 1 Winner: Cecchinato vs Djere",
+    "Counter-Strike: Team A vs Team B - Game 1 Winner",
     "Exact Score: Delfin SC 0 - 0 CD Universidad",
     "Bromley FC vs. AFC Wimbledon: Both Teams to Score",
     "Will CA Nacional Potosi win on 2026-09-06?",
     "Will Vitoria SC vs. Casa Pia AC end in a draw?",
     "Games Total: O/U 4.5",
     "Counter-Strike: BIG Academy vs BLUEJAYS.de (BO3)",
+    "Will Bitcoin close above $100,000 today?",
   ];
   for (const question of cases) {
     const item = { question };

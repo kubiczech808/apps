@@ -4051,12 +4051,15 @@ test("marketShape classifies the production question shapes, delegating over-und
   assert.equal(bot.marketShape({ question: "Spread: San Francisco Giants (-1.5)" }), "spread");
   assert.equal(bot.marketShape({ question: "Map Handicap: TLR (-1.5) vs MOUZ NXT (+1.5)" }), "spread");
   assert.equal(bot.marketShape({ question: "Set 1 Winner: Cecchinato vs Djere" }), "in-event-leg");
+  assert.equal(bot.marketShape({ question: "Counter-Strike: Team A vs Team B - Game 1 Winner" }), "in-event-leg");
   assert.equal(bot.marketShape({ question: "Exact Score: Delfin SC 0 - 0 CD Universidad" }), "exact-score");
   assert.equal(bot.marketShape({ question: "Bromley FC vs. AFC Wimbledon: Both Teams to Score" }), "both-teams");
   assert.equal(bot.marketShape({ question: "Will CA Nacional Potosi win on 2026-09-06?" }), "outright");
   assert.equal(bot.marketShape({ question: "Will Vitoria SC vs. Casa Pia AC end in a draw?" }), "draw");
   assert.equal(bot.marketShape({ question: "Counter-Strike: BIG Academy vs BLUEJAYS.de (BO3)" }), "outright",
     "an unsigned parenthesized best-of count is not a spread");
+  assert.equal(bot.marketShape({ question: "Will Bitcoin close above $100,000 today?" }), "other",
+    "a residual proposition must not silently be called outright");
 
   // over-under reuses isOverUnderMarket rather than a second regex, so the existing switch
   // and this classifier can never disagree about the same market -- checked by construction:
@@ -4066,10 +4069,10 @@ test("marketShape classifies the production question shapes, delegating over-und
   assert.equal(bot.marketShape(slugOnly), "over-under");
 
   // Every id the classifier can return is in the exported list, and nothing else is.
-  for (const shape of ["over-under", "spread", "exact-score", "draw", "in-event-leg", "both-teams", "outright"]) {
+  for (const shape of ["over-under", "spread", "exact-score", "draw", "in-event-leg", "both-teams", "outright", "other"]) {
     assert.ok(bot.MARKET_SHAPE_IDS.includes(shape));
   }
-  assert.equal(bot.MARKET_SHAPE_IDS.length, 7);
+  assert.equal(bot.MARKET_SHAPE_IDS.length, 8);
 });
 
 test("excludedMarketShapes removes the excluded shape from the paper shortlist", () => {
@@ -11368,7 +11371,7 @@ test("excludedMarketShapes: the setting is wired end to end, not only in the bot
 
   // Every excludable shape gets a checkbox in the settings panel; "outright" does not,
   // because excluding the shape every stop already protects is not a real choice to offer.
-  for (const shape of ["over-under", "spread", "exact-score", "draw", "in-event-leg", "both-teams", "outright"]) {
+  for (const shape of ["over-under", "spread", "exact-score", "draw", "in-event-leg", "both-teams", "outright", "other"]) {
     assert.match(html, new RegExp(`data-exclude-market-shape="${shape}"`));
   }
   // outright HAS a switch now. It had none at first, on the reasoning that a stop loss can
@@ -11494,7 +11497,7 @@ test("paper bot: the module loads with a created portfolio in the environment", 
   });
   const parsed = JSON.parse(output);
   assert.deepEqual(parsed.shapes,
-    ["over-under", "spread", "exact-score", "draw", "in-event-leg", "both-teams", "outright"],
+    ["over-under", "spread", "exact-score", "draw", "in-event-leg", "both-teams", "outright", "other"],
     "the shape ids have to be initialized before the module-level portfolio assembly reads them");
 });
 

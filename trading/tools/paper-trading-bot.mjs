@@ -954,7 +954,7 @@ const MARKET_SHAPE_PATTERNS = [
   [/^spread:|\bspread\b|\([-+]\d/i, "spread"],
   [/exact score/i, "exact-score"],
   [/\bdraw\b/i, "draw"],
-  [/set \d+ winner|\bgames total\b|map \d+|\bmap handicap\b|first .*(map|set|goal|blood)/i, "in-event-leg"],
+  [/(?:set|map|game|round) \d+ winner|\bgames total\b|\bmap handicap\b|first .*(map|set|goal|blood)/i, "in-event-leg"],
   [/both teams to/i, "both-teams"],
 ];
 
@@ -963,7 +963,7 @@ const MARKET_SHAPE_PATTERNS = [
 // drifts from it. "outright" is the fallback and is not something a portfolio would
 // sensibly exclude, but it is not special-cased out of the list: a config field that only
 // half matches its own classifier is how these things drift.
-export const MARKET_SHAPE_IDS = ["over-under", "spread", "exact-score", "draw", "in-event-leg", "both-teams", "outright"];
+export const MARKET_SHAPE_IDS = ["over-under", "spread", "exact-score", "draw", "in-event-leg", "both-teams", "outright", "other"];
 
 export function marketShape(item = {}) {
   if (isOverUnderMarket(item)) return "over-under";
@@ -971,7 +971,8 @@ export function marketShape(item = {}) {
   for (const [pattern, label] of MARKET_SHAPE_PATTERNS) {
     if (pattern.test(question)) return label;
   }
-  return "outright";
+  if (/\bvs\.?\b|\bv\.\b|\s@\s|\b(?:win|wins|winner)\b/i.test(question)) return "outright";
+  return "other";
 }
 
 // Read off a portfolio row (or a normalized strategy's Set) whichever way it is stored,

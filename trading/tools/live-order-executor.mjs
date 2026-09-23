@@ -1196,7 +1196,7 @@ const MARKET_SHAPE_PATTERNS = [
   [/^spread:|\bspread\b|\([-+]\d/i, "spread"],
   [/exact score/i, "exact-score"],
   [/\bdraw\b/i, "draw"],
-  [/set \d+ winner|\bgames total\b|map \d+|\bmap handicap\b|first .*(map|set|goal|blood)/i, "in-event-leg"],
+  [/(?:set|map|game|round) \d+ winner|\bgames total\b|\bmap handicap\b|first .*(map|set|goal|blood)/i, "in-event-leg"],
   [/both teams to/i, "both-teams"],
 ];
 
@@ -1207,7 +1207,8 @@ function marketShape(item = {}) {
   for (const [pattern, label] of MARKET_SHAPE_PATTERNS) {
     if (pattern.test(question)) return label;
   }
-  return "outright";
+  if (/\bvs\.?\b|\bv\.\b|\s@\s|\b(?:win|wins|winner)\b/i.test(question)) return "outright";
+  return "other";
 }
 
 // The one gate, for every shape including over-under. Returns the excluded shape so the
@@ -4023,6 +4024,11 @@ function mergeOrderOwnership(previous = [], attempts = [], mode = "live", at = "
       price: Number.isFinite(price) ? price : null,
       mode: String(entry?.mode || mode || "live"),
       at: String(entry?.at || at || ""),
+      // The account API cannot reconstruct the traded volume at entry. Keep the
+      // executor's revalidated snapshot alongside ownership, not only in the rolling log.
+      entryVolumeUsdc: Number.isFinite(Number(entry?.entryVolumeUsdc))
+        ? Number(entry.entryVolumeUsdc)
+        : null,
     });
   };
   // This run first, so a fresh claim on a token wins over a stale one for the same price.
@@ -4031,7 +4037,13 @@ function mergeOrderOwnership(previous = [], attempts = [], mode = "live", at = "
     // The same two exclusions the dashboard applies when reading the run log: a refused
     // order and a dry run never owned anything.
     if (action.includes("REJECT") || action.startsWith("DRY_RUN")) continue;
-    push({ tokenId: attempt?.tokenId, price: attempt?.orderPrice, mode, at });
+    push({
+      tokenId: attempt?.tokenId,
+      price: attempt?.orderPrice,
+      mode,
+      at,
+      entryVolumeUsdc: attempt?.entryVolumeUsdc,
+    });
   }
   for (const entry of (Array.isArray(previous) ? previous : [])) push(entry);
   return rows.slice(0, ORDER_OWNERSHIP_LIMIT);

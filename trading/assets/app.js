@@ -1103,6 +1103,7 @@ const MARKET_SHAPE_LABELS = {
   "in-event-leg": "In-event leg",
   "both-teams": "Both teams to score",
   outright: "Outright",
+  other: "Other / unclassified",
 };
 
 function marketShapeLabel(shape) {
@@ -2649,7 +2650,7 @@ function scrapedStatusesAreExplicitInRoute(search = window.location.search) {
   return new URLSearchParams(search || "").has(SCRAPED_STATUS_QUERY_PARAM);
 }
 
-// The seven shapes a portfolio excludes by, as a filter value. "all" is no filter.
+// The recognised shapes a portfolio excludes by, as a filter value. "all" is no filter.
 function normalizeScrapedShape(value) {
   const normalized = String(value || "").trim().toLowerCase();
   return Object.prototype.hasOwnProperty.call(MARKET_SHAPE_LABELS, normalized) ? normalized : "all";
@@ -10732,7 +10733,7 @@ function portfolioParameterRows(config = {}, { mode = null, portfolio = {}, live
     ["Included tags", includeOnly.length ? includeOnly.join(", ") : TERSE_NONE],
     ["Excluded tags", excludedTags.length ? excludedTags.join(", ") : TERSE_NONE],
     // Every shape excluded is a portfolio that can never take a candidate, and it fails
-    // silently. The card says so rather than listing seven labels.
+    // silently. The card says so rather than listing every label.
     ["Excluded shapes", shapes.length === 0
       ? TERSE_NONE
       : (Object.keys(MARKET_SHAPE_LABELS).every((shape) => shapes.includes(shape))
@@ -11057,7 +11058,7 @@ const CANDIDATE_MARKET_SHAPE_PATTERNS = [
   [/^spread:|\bspread\b|\([-+]\d/i, "spread"],
   [/exact score/i, "exact-score"],
   [/\bdraw\b/i, "draw"],
-  [/set \d+ winner|\bgames total\b|map \d+|\bmap handicap\b|first .*(map|set|goal|blood)/i, "in-event-leg"],
+  [/(?:set|map|game|round) \d+ winner|\bgames total\b|\bmap handicap\b|first .*(map|set|goal|blood)/i, "in-event-leg"],
   [/both teams to/i, "both-teams"],
 ];
 
@@ -11067,7 +11068,8 @@ function candidateMarketShape(item = {}) {
   for (const [pattern, label] of CANDIDATE_MARKET_SHAPE_PATTERNS) {
     if (pattern.test(question)) return label;
   }
-  return "outright";
+  if (/\bvs\.?\b|\bv\.\b|\s@\s|\b(?:win|wins|winner)\b/i.test(question)) return "outright";
+  return "other";
 }
 
 function scrapedMarketType(item = {}) {

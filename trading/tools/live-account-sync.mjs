@@ -2215,7 +2215,12 @@ async function liveOrderOwnership() {
       const tokenId = String(row?.tokenId || "");
       if (!tokenId) continue;
       if (!byToken.has(tokenId)) byToken.set(tokenId, []);
-      byToken.get(tokenId).push({ mode: String(row?.mode || ""), price: number(row?.price), at: String(row?.at || "") });
+      byToken.get(tokenId).push({
+        mode: String(row?.mode || ""),
+        price: number(row?.price),
+        at: String(row?.at || ""),
+        entryVolumeUsdc: number(row?.entryVolumeUsdc),
+      });
     }
     return byToken;
   } catch {
@@ -2228,9 +2233,6 @@ async function liveOrderOwnership() {
 function stampPortfolioOwnership(rows, ownership) {
   if (!(ownership instanceof Map) || !ownership.size) return Array.isArray(rows) ? rows : [];
   return (Array.isArray(rows) ? rows : []).map((row) => {
-    // Never re-decide a row that already carries one. The stamp is meant to be permanent,
-    // and a later pass whose ownership lookup came back thin would otherwise take it away.
-    if (row?.portfolioId) return row;
     const tokenId = String(row?.tokenId || row?.assetId || "");
     const orders = tokenId ? ownership.get(tokenId) : null;
     if (!orders?.length) return row;
@@ -2244,7 +2246,16 @@ function stampPortfolioOwnership(rows, ownership) {
     // The newest order for a token wins, so a market re-entered after another portfolio
     // closed out belongs to whoever ordered it last.
     const owner = matched.sort((left, right) => (Date.parse(right.at || "") || 0) - (Date.parse(left.at || "") || 0))[0];
-    return owner?.mode ? { ...row, portfolioId: owner.mode } : row;
+    if (!owner?.mode) return row;
+    return {
+      ...row,
+      // An existing owner is immutable; the match may still enrich an older row with
+      // its entry-volume snapshot without allowing a thin later lookup to reassign it.
+      portfolioId: row.portfolioId || owner.mode,
+      // Preserve the first revalidated traded-volume snapshot as an entry fact. Never
+      // replace a stored value with a later market volume or an unavailable lookup.
+      entryVolumeUsdc: row.entryVolumeUsdc ?? owner.entryVolumeUsdc ?? null,
+    };
   });
 }
 
