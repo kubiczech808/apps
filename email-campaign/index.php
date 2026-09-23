@@ -15147,14 +15147,41 @@ function discoverAllbizScrapingState(PDO $pdo, array $job): string
 
     $displayPage = max(1, (int)($job['current_page'] ?? 1));
     $searchUrl = allbizSearchUrl((string)$job['keyword'], $state['code']);
-    try {
-        $response = fetchScrapingSearch([
-            'label' => 'AllBiz.com / ' . $state['label'],
-            'url' => $searchUrl,
+    $response = null;
+    $urls = [];
+    $fetchMessages = [];
+    foreach ([$searchUrl, str_replace('https://www.allbiz.com/', 'https://allbiz.com/', $searchUrl)] as $candidateUrl) {
+        try {
+            $candidateResponse = fetchScrapingSearch([
+                'label' => 'AllBiz.com / ' . $state['label'],
+                'url' => $candidateUrl,
+            ]);
+            $candidateUrls = extractCandidateUrls((string)$candidateResponse['html'], $candidateUrl, 'allbiz_us');
+            if ($response === null) {
+                $response = $candidateResponse;
+            }
+            if ($candidateUrls) {
+                $response = $candidateResponse;
+                $searchUrl = $candidateUrl;
+                $urls = $candidateUrls;
+                break;
+            }
+            $fetchMessages[] = 'odpoved bez detailnich odkazu (' . parse_url($candidateUrl, PHP_URL_HOST) . ')';
+        } catch (Throwable $e) {
+            $fetchMessages[] = $e->getMessage();
+        }
+    }
+    if ($response === null) {
+        $message = 'Docasna chyba AllBiz pro stat ' . $state['label'] . ': ' . implode(' ', $fetchMessages);
+        updateScrapingJob($pdo, (int)$job['id'], [
+            'status' => 'queued',
+            'last_message' => substr($message, 0, 500),
         ]);
-        $urls = extractCandidateUrls((string)$response['html'], $searchUrl, 'allbiz_us');
-    } catch (Throwable $e) {
-        $message = 'Docasna chyba AllBiz pro stat ' . $state['label'] . ': ' . $e->getMessage();
+        return $message;
+    }
+
+    if (!$urls && !allbizSearchResponseHasNoResults((string)$response['html'])) {
+        $message = 'Docasna chyba AllBiz pro stat ' . $state['label'] . ': katalog vratil stranku bez detailnich odkazu; kurzor zustava na tomto statu. ' . implode(' ', $fetchMessages);
         updateScrapingJob($pdo, (int)$job['id'], [
             'status' => 'queued',
             'last_message' => substr($message, 0, 500),
@@ -15191,6 +15218,13 @@ function discoverAllbizScrapingState(PDO $pdo, array $job): string
 
     return 'AllBiz / ' . $state['label'] . ' (' . ($state['index'] + 1) . '/' . $state['total'] . '): '
         . count($urls) . ' detailu, +' . $added . ' novych URL.';
+}
+
+function allbizSearchResponseHasNoResults(string $html): bool
+{
+    $text = trim(preg_replace('/\s+/', ' ', html_entity_decode(strip_tags($html), ENT_QUOTES, 'UTF-8')) ?? '');
+    return preg_match('/\b(?:0|no)\s+(?:results?|businesses?|listings?)\b/i', $text) === 1
+        || preg_match('/\bno\s+results\s+found\b/i', $text) === 1;
 }
 
 function searchResultHasNextPage(string $html, string $source, string $baseUrl, int $page): bool
@@ -15973,6 +16007,9 @@ function extractCandidateUrls(string $html, string $baseUrl, string $source = ''
     if ($source === 'zoznam_sk') {
         return extractZoznamCandidateUrls($html, $baseUrl);
     }
+    if ($source === 'allbiz_us') {
+        return extractAllbizCandidateUrls($html, $baseUrl);
+    }
     preg_match_all('/href=(["\'])(.*?)\1/i', $html, $matches);
     $urls = [];
     foreach ($matches[2] ?? [] as $href) {
@@ -15990,6 +16027,38 @@ function extractCandidateUrls(string $html, string $baseUrl, string $source = ''
                 $urls[$detailUrl] = true;
             }
         }
+    }
+    return array_keys($urls);
+}
+
+function extractAllbizCandidateUrls(string $html, string $baseUrl): array
+{
+    $urls = [];
+    $add = static function (string $candidate) use (&$urls): void {
+        $candidate = str_replace('\\/', '/', html_entity_decode(trim($candidate), ENT_QUOTES, 'UTF-8'));
+        $candidate = normalizeSearchResultUrl($candidate);
+        $detailUrl = normalizeAllbizDetailUrl($candidate);
+        if ($detailUrl !== '') {
+            $urls[$detailUrl] = true;
+        }
+    };
+
+    // AllBiz currently uses normal href attributes, but some responses render
+    // the same links into data attributes or escaped JSON before hydration.
+    preg_match_all('/(?:href|data-href|data-url|data-link)\s*=\s*(?:"([^"]+)"|\'([^\']+)\'|([^\s>]+))/i', $html, $attributeMatches, PREG_SET_ORDER);
+    foreach ($attributeMatches as $match) {
+        $href = (string)($match[1] ?? $match[2] ?? $match[3] ?? '');
+        if ($href !== '') {
+            $add(normalizeUrl($href, $baseUrl));
+        }
+    }
+
+    // Last-resort scan for absolute or root-relative business links. This
+    // also handles links embedded in a JSON payload without an href tag.
+    $scanHtml = str_replace('\\/', '/', $html);
+    preg_match_all('~(?:(?:https?://)?(?:www\.)?(?:allbiz|bizarchive)\.com)?/business/[^"\'<>[:space:]]+~i', $scanHtml, $rawMatches);
+    foreach ($rawMatches[0] ?? [] as $rawUrl) {
+        $add(normalizeUrl($rawUrl, $baseUrl));
     }
     return array_keys($urls);
 }
