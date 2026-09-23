@@ -11623,6 +11623,7 @@ test("dip entry on paper: recorded dips are the candidate pool, and only for tho
     // rule refuses a quote first taken mid-fixture: that is a mid-game price wearing the
     // name of an opening one, and it is the defect these two times were added to catch.
     firstObservedAt: new Date(Date.now() - 6 * 3600000).toISOString(),
+    marketCreatedAt: new Date(Date.now() - 6.5 * 3600000).toISOString(),
     eventStartTime: new Date(Date.now() - 3600000).toISOString(),
     endDate: new Date(Date.now() + 3600000).toISOString(),
     resolutionEndDate: new Date(Date.now() + 3600000).toISOString(), daysToResolution: 1 / 24,
@@ -11655,7 +11656,7 @@ test("dip entry on paper: recorded dips are the candidate pool, and only for tho
   // silently describe a dead record ever after.
   const justNow = new Date(Date.now() - 4 * 60000).toISOString();
   const hits = [
-    { portfolioId: "paper-dip", tokenId: "aaa", price: 0.35, openProbability: 0.78, question: "INOX vs Black Phoenix", endDate: "2026-09-11T22:00:00Z", at: justNow },
+    { portfolioId: "paper-dip", tokenId: "aaa", price: 0.35, openProbability: 0.78, question: "INOX vs Black Phoenix", endDate: "2026-09-11T22:00:00Z", at: justNow, marketCreatedAt: new Date(Date.now() - 6.5 * 3600000).toISOString(), firstObservedAt: new Date(Date.now() - 6 * 3600000).toISOString() },
     { portfolioId: "paper-other", tokenId: "bbb", price: 0.33, openProbability: 0.75, at: justNow },
     { portfolioId: "paper-dip", tokenId: "ccc", price: 0, openProbability: 0.75, at: justNow },
   ];
@@ -11746,6 +11747,7 @@ test("dip entry on paper: a recorded dip survives the portfolio filter it has to
     // mid-fixture -- `at` is during the match -- which is why the evidence has to travel
     // with the hit rather than be re-derived from it.
     firstObservedAt: new Date(Date.now() - 6 * 3600000).toISOString(),
+    marketCreatedAt: new Date(Date.now() - 6.5 * 3600000).toISOString(),
     eventStartTime: new Date(Date.now() - 3600000).toISOString(),
   };
   const rows = bot.dipEntryCandidateRows(strategy, [hit]);
@@ -11753,6 +11755,12 @@ test("dip entry on paper: a recorded dip survives the portfolio filter it has to
   assert.deepEqual(bot.portfolioFilterResult(rows[0], strategy), { eligible: true, reasons: [] },
     "the reported case has to pass every gate, not just the rule's own");
   assert.equal(bot.strategyEligibleCandidates(rows, strategy).length, 1);
+  const lateDiscovery = bot.dipEntryCandidateRows(strategy, [{
+    ...hit,
+    marketCreatedAt: new Date(Date.now() - 12 * 3600000).toISOString(),
+  }]);
+  assert.equal(bot.strategyEligibleCandidates(lateDiscovery, strategy).length, 0,
+    "a pre-kickoff quote discovered hours after market creation is not an opening quote");
   // The entry is at the price the worker saw. That is the whole reason the record exists.
   assert.equal(rows[0].marketProbability, 0.35);
   assert.equal(rows[0].netYield > 0, true, "a 35c entry on a 1.00 payout is a positive yield");

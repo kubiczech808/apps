@@ -4210,10 +4210,11 @@ function dip_entry_opening_is_verifiable(array $item): bool
 {
     $firstSeen = strtotime((string) ($item['firstObservedAt'] ?? $item['observedAt'] ?? ''));
     $kickoff = strtotime((string) ($item['eventStartTime'] ?? $item['scheduledEventDate'] ?? ''));
-    if ($firstSeen === false || $kickoff === false) {
+    $created = strtotime((string) ($item['marketCreatedAt'] ?? $item['createdAt'] ?? ''));
+    if ($firstSeen === false || $kickoff === false || $created === false) {
         return false;
     }
-    return $firstSeen < $kickoff;
+    return $firstSeen < $kickoff && $firstSeen >= $created && ($firstSeen - $created) <= 90 * 60;
 }
 
 function normalize_dip_entry_rule(array $input, array $defaults): array
@@ -6428,6 +6429,11 @@ function live_dip_entry_watch_payload(): array
                 // exactly the mid-game price the rule must refuse.
                 'firstObservedAt' => (string) ($item['firstObservedAt'] ?? $item['observedAt'] ?? ''),
                 'eventStartTime' => (string) ($item['eventStartTime'] ?? $item['scheduledEventDate'] ?? ''),
+                'marketCreatedAt' => (string) ($item['marketCreatedAt'] ?? $item['createdAt'] ?? ''),
+                // This is deliberately explicit. A scan quote can prove only when OUR
+                // collector first saw the market; it must never be presented as a quote
+                // from the beginning of Polymarket's own history.
+                'openingSource' => 'scanner-near-market-open',
                 // The market's tags, carried because the paper bot rebuilds a candidate row
                 // out of the recorded hit and has nothing else to read them from. By the time
                 // the bot runs, the collapsed favourite is out of the catalogue entirely.
@@ -6701,6 +6707,8 @@ function record_dip_entry_hit(array $input): array
         // Carried from the watch plan, which verified the opening price predates kickoff.
         'firstObservedAt' => (string) ($input['firstObservedAt'] ?? ''),
         'eventStartTime' => (string) ($input['eventStartTime'] ?? ''),
+        'marketCreatedAt' => (string) ($input['marketCreatedAt'] ?? ''),
+        'openingSource' => (string) ($input['openingSource'] ?? 'scanner-near-market-open'),
         // The price the dip actually reached, which is what the simulated entry pays. The
         // whole value of recording this is that it is not the price an hour later.
         'price' => round($price, 6),

@@ -5239,6 +5239,27 @@ function tradePriceCell(trade, showStatus = false) {
   `;
 }
 
+function dipEntryEvidence(trade = {}) {
+  const entry = trade.dipEntry && typeof trade.dipEntry === "object" ? trade.dipEntry : null;
+  if (!entry) return "";
+  const opening = numericOrNull(entry.openingProbability);
+  const openedAt = String(entry.openingObservedAt || "");
+  const entryPrice = numericOrNull(entry.entryProbability);
+  const enteredAt = String(entry.entryObservedAt || "");
+  const source = String(entry.openingSource || "");
+  const verified = source === "clob-price-history" || source === "scanner-near-market-open";
+  const origin = opening != null && openedAt
+    ? `Original quote: ${probability(opening)} · ${escapeHtml(formatDate(openedAt))}`
+    : "Original quote: not recorded";
+  const dip = entryPrice != null && enteredAt
+    ? `Dip entry: ${probability(entryPrice)} · ${escapeHtml(formatDate(enteredAt))}`
+    : "";
+  const note = source === "clob-price-history"
+    ? "CLOB history"
+    : (source === "scanner-near-market-open" ? "captured by the trading scan within 90 minutes of market creation" : "stored scan quote");
+  return `<div class="dip-entry-evidence ${verified ? "" : "warning"}" title="${escapeHtml(note)}">${origin}${dip ? `<br>${dip}` : ""}</div>`;
+}
+
 // The amount first, the percentage after it in brackets, on one line. Asked for on the
 // opened-trades cards: stacked as two separate lines, a bare percentage under a bare
 // amount read as two unrelated figures rather than one measured against the other.
@@ -5368,7 +5389,7 @@ function renderTradeRows(trades, emptyText, options = {}) {
             </td>
             <td class="trade-market-cell" data-label="Market">
               ${tradeTypeBadge(trade)}${marketTagsInfo(trade)}${unattributedBadge(trade)}
-              ${marketAnchor(trade)}
+              ${marketAnchor(trade)}${dipEntryEvidence(trade)}
             </td>
             <td data-label="Win p.a.">${potentialAnnualizedCell(trade)}</td>
             <td data-label="Resolution">${resolutionCell(trade)}</td>
@@ -5510,6 +5531,11 @@ function closedTradeCsvRow(trade) {
     resolution_at: isWholeDayBucket(resolutionAt) ? wholeDayBucketLabel(resolutionAt) : formatDate(resolutionAt),
     resolution_at_iso: resolutionAt,
     entry_price_pct: csvNumber(trade.entryPrice, 100, 4),
+    dip_original_probability_pct: csvNumber(trade.dipEntry?.openingProbability, 100, 4),
+    dip_original_observed_at: trade.dipEntry?.openingObservedAt || "",
+    dip_original_source: trade.dipEntry?.openingSource || "",
+    dip_entry_probability_pct: csvNumber(trade.dipEntry?.entryProbability, 100, 4),
+    dip_entry_observed_at: trade.dipEntry?.entryObservedAt || "",
     entry_volume_usdc: csvNumber(tradeEntryVolumeUsdc(trade), 1, 2),
     final_or_mark_price_pct: csvNumber(trade.currentPrice, 100, 4),
     price_change_pct: (() => {

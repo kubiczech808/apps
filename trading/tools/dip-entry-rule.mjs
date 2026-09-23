@@ -44,6 +44,12 @@ export const DIP_ENTRY_RULE_DEFAULTS = Object.freeze({
   buyMax: 0.4,
 });
 
+// The scan may discover a market long after Polymarket opened it. A pre-kickoff quote by
+// itself is therefore not enough: it could be a price from the middle of a long pre-match
+// drift. A quote captured during the first scan window after Gamma created the market is
+// the strongest opening evidence available to the trading system without inventing a price.
+export const DIP_ENTRY_OPENING_CAPTURE_WINDOW_MS = 90 * 60 * 1000;
+
 function probability(value, fallback) {
   const numeric = Number(value);
   if (!Number.isFinite(numeric)) return fallback;
@@ -162,8 +168,9 @@ function numericOrNull(value) {
 export function dipEntryOpeningIsVerifiable(observation) {
   const firstSeen = Date.parse(observation?.firstObservedAt || observation?.observedAt || "");
   const kickoff = Date.parse(observation?.eventStartTime || observation?.scheduledEventDate || "");
-  if (!Number.isFinite(firstSeen) || !Number.isFinite(kickoff)) return false;
-  return firstSeen < kickoff;
+  const created = Date.parse(observation?.marketCreatedAt || observation?.createdAt || "");
+  if (!Number.isFinite(firstSeen) || !Number.isFinite(kickoff) || !Number.isFinite(created)) return false;
+  return firstSeen < kickoff && firstSeen >= created && firstSeen - created <= DIP_ENTRY_OPENING_CAPTURE_WINDOW_MS;
 }
 
 export function dipEntrySignal(observation, rule) {

@@ -3746,6 +3746,18 @@ body.modal-open {
   }
 }
 
+.dip-entry-evidence {
+  clear: both;
+  margin-top: 5px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.dip-entry-evidence.warning {
+  color: var(--warning);
+}
+
 @media (max-width: 380px) {
   .topbar {
     grid-template-columns: 1fr;

@@ -8250,7 +8250,9 @@ function strategyEligibleCandidates(eligible, strategy) {
       // no first-seen time are refusals rather than guesses.
       const firstSeenAt = Date.parse(String(item?.firstObservedAt || item?.observedAt || ""));
       const kickoffAt = Date.parse(String(item?.eventStartTime || item?.scheduledEventDate || ""));
-      if (!Number.isFinite(firstSeenAt) || !Number.isFinite(kickoffAt) || firstSeenAt >= kickoffAt) return false;
+      const marketCreatedAt = Date.parse(String(item?.marketCreatedAt || item?.createdAt || ""));
+      if (!Number.isFinite(firstSeenAt) || !Number.isFinite(kickoffAt) || !Number.isFinite(marketCreatedAt)
+        || firstSeenAt >= kickoffAt || firstSeenAt < marketCreatedAt || firstSeenAt - marketCreatedAt > 90 * 60 * 1000) return false;
       if (opened < Number(strategy.dipEntryOpenMin) || opened > Number(strategy.dipEntryOpenMax)) return false;
     }
     // The same test the statistics apply, for the same reason: an order sent into a book
@@ -8774,6 +8776,7 @@ export function dipEntryCandidateRows(strategy, hits = DIP_ENTRY_HITS, tradedTok
         // The premise the rule is about, carried from the watch so the gate can verify it
         // here too rather than taking the record's word for it.
         firstMarketProbability: Number.isFinite(Number(hit.openProbability)) ? Number(hit.openProbability) : null,
+        marketCreatedAt: String(hit.marketCreatedAt || ""),
         endDate,
         resolutionEndDate: endDate,
         // The worker only ever watches fixtures already under way, and the gate asks again.
@@ -8801,6 +8804,7 @@ export function dipEntryCandidateRows(strategy, hits = DIP_ENTRY_HITS, tradedTok
         // the opening price predates kickoff before shortlisting the market at all.
         firstObservedAt: String(hit.firstObservedAt || ""),
         eventStartTime: String(hit.eventStartTime || ""),
+        openingSource: String(hit.openingSource || "scanner-near-market-open"),
         dipEntryHit: true,
       };
     })
@@ -9054,6 +9058,19 @@ function paperTradeFromCandidate(best, strategy, today, stake) {
   const selectedExpectedValue = Number.isFinite(selectionEconomics.expectedValueUsdc)
     ? Number((selectionEconomics.expectedValueUsdc * economics.scale).toFixed(4))
     : null;
+  // A dip entry has two prices that must never be conflated: the price that caused the
+  // watch to exist, and the price actually paid at the collapse. Persist both with their
+  // timestamps. Until this was stored, a closed trade only showed its 30-60% entry and
+  // there was no way to audit whether its alleged 70%+ premise ever existed.
+  const dipEntry = best.dipEntryHit === true ? {
+    openingProbability: validMarketProbability(best.firstMarketProbability),
+    openingObservedAt: best.firstObservedAt || null,
+    openingSource: String(best.openingSource || "scanner-near-market-open"),
+    marketCreatedAt: best.marketCreatedAt || null,
+    eventStartTime: best.eventStartTime || null,
+    entryProbability: validMarketProbability(best.marketProbability ?? best.marketPrice),
+    entryObservedAt: best.observedAt || null,
+  } : null;
   return {
     id: `paper-${strategy.id}-${today}-${best.tokenId}`,
     strategyId: strategy.id,
@@ -9145,6 +9162,7 @@ function paperTradeFromCandidate(best, strategy, today, stake) {
     probabilityThesis: best.probabilityThesis,
     analysisModel: best.analysisModel,
     analysisSummary: best.analysisSummary,
+    dipEntry,
   };
 }
 
@@ -11300,6 +11318,7 @@ function preferredMarketObservation(market, observedAt = nowIso()) {
     // field marketDateContext already reads on a Gamma market, so a stored row and a fresh
     // one derive the same date the same way.
     eventStartTime: dateContext.preciseEventStart ? dateContext.scheduledEventDate : null,
+    marketCreatedAt: typeof market.createdAt === "string" ? market.createdAt : null,
     // The live quote's width, refreshed on every scan alongside liquidity and volume.
     // firstSpread below records what it was when the row was discovered; this one is what
     // an order placed now would have to cross.

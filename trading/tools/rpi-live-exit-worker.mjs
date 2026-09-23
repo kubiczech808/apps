@@ -2366,6 +2366,8 @@ export async function recordDipEntryHit(plan, price, execution = {}) {
       // itself is recorded mid-fixture, so the bot cannot re-derive it from this moment.
       firstObservedAt: plan.firstObservedAt || "",
       eventStartTime: plan.eventStartTime || "",
+        marketCreatedAt: plan.marketCreatedAt || "",
+        openingSource: plan.openingSource || "scanner-near-market-open",
         price,
         stakeUsdc: Number.isFinite(Number(execution.stakeUsdc)) ? Number(execution.stakeUsdc) : null,
         shares: Number.isFinite(Number(execution.shares)) ? Number(execution.shares) : null,
@@ -2493,6 +2495,8 @@ function dipEntryWatchStatusRows(context) {
     slug: plan.slug || "",
     eventSlug: plan.eventSlug || "",
     openProbability: plan.openProbability ?? null,
+    openingSource: plan.openingSource || "scanner-near-market-open",
+    marketCreatedAt: plan.marketCreatedAt || "",
     buyMin: plan.buyMin,
     buyMax: plan.buyMax,
     stakeUsdc: plan.stakeUsdc,
