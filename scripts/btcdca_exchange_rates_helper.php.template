@@ -16,7 +16,7 @@ $database = new mysqli('localhost', (string) $config['db_user'], (string) $confi
 $database->set_charset('utf8mb4');
 
 $table = 'exchange_rates';
-$backupDirectory = dirname((string) ($_SERVER['DOCUMENT_ROOT'] ?? __DIR__)) . '/.codex-backups/btcdca-exchange-rates';
+$backupDirectory = dirname(__DIR__) . '/.codex-backups/btcdca-exchange-rates';
 $dumpPath = $backupDirectory . '/exchange_rates.sql.gz';
 $manifestPath = $backupDirectory . '/exchange_rates.manifest.json';
 
