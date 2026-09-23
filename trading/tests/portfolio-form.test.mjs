@@ -285,6 +285,28 @@ test("Save reads every editable copied-portfolio setting directly from the form"
   assert.deepEqual(result.excludedMarketTags, ["tennis"]);
 });
 
+test("changing the account type while copying preserves the values just typed", () => {
+  const merge = new Function(`
+    ${extract(/function mergeCreatePortfolioPrefill[\s\S]*?\n\}/, "mergeCreatePortfolioPrefill")}
+    return mergeCreatePortfolioPrefill;
+  `)();
+  const carried = merge(
+    { minProbability: 0.5, maxProbability: 0.9, displayName: "Copied" },
+    { minProbability: 0.8, maxProbability: 0.82, stopLossRiskMultiplier: 1.5 },
+  );
+  assert.deepEqual(carried, {
+    minProbability: 0.8,
+    maxProbability: 0.82,
+    displayName: "Copied",
+    stopLossRiskMultiplier: 1.5,
+  });
+
+  const save = extract(/async function confirmParameterModal\(\)[\s\S]*?\n\}/, "confirmParameterModal");
+  assert.ok(save.indexOf("const formSnapshot") < save.indexOf("switchCreatePortfolioType(requestedCreateType)"),
+    "Save must snapshot the controls before rebuilding a copied draft for another account type");
+  assert.match(save, /mergeCreatePortfolioPrefill\(state\.parameterDraftCreatePrefill, formSnapshot\)/);
+});
+
 test("the copy survives a config whose flag came back as a string", () => {
   // The checkbox reads `=== true`, so a payload that says "true" or 1 -- which is what a
   // form post and some older stored configs produce -- would leave it unticked while every

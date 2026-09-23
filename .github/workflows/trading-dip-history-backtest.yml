@@ -1,8 +1,7 @@
 name: Trading DIP History Backtest
 
-# Historical CLOB retrieval is deliberately manual. The worker moves through a large
-# resolved tag archive in bounded batches, so it never competes with the ten-minute
-# scanner or live executor for a long, unbounded run.
+# Historical CLOB retrieval moves through a large resolved tag archive in bounded,
+# sequential batches. Each successful batch queues one successor until no rows remain.
 on:
   workflow_dispatch:
     inputs:
@@ -19,12 +18,13 @@ on:
 
 permissions:
   contents: read
+  actions: write
 
 concurrency:
   group: trading-dip-history-backtest-${{ github.ref }}-${{ inputs.tag || 'esports' }}
-  # A new request carries a newer cache/rule version. Let it replace a stale batch rather
-  # than making the operator wait behind an obsolete, long-running history sweep.
-  cancel-in-progress: true
+  # The next batch queues while this one publishes; let it wait rather than cancelling a
+  # completed cache write and losing incremental progress.
+  cancel-in-progress: false
 
 jobs:
   backtest:
@@ -84,3 +84,11 @@ jobs:
           TRADING_FTP_DIR: /www/trading/data
           PUBLISH_VERIFY_BASE_URL: https://osobnizkusenosti.cz/trading/data
         run: python3 tools/publish-execution-state.py
+
+      - name: Queue next historical batch
+        working-directory: trading
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_REF_NAME: ${{ github.ref_name }}
+        run: node tools/queue-dip-backtest-batch.mjs

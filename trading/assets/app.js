@@ -3051,7 +3051,7 @@ function renderDipBacktest() {
         ${formatInteger(coverage.openingBandMarkets || 0)} opened in the ${Number(openingRule.probabilityMin || 70)}%–${Number(openingRule.probabilityMax || 99)}% band.
         ${Number(coverage.pendingMarkets || 0) > 0 ? `${formatInteger(coverage.pendingMarkets)} remain for the next batch. ` : ""}
         ${Number(coverage.errors || 0) > 0 ? `${formatInteger(coverage.errors)} histories will be retried. ` : ""}
-        Median pre-resolution fall: ${Number.isFinite(Number(data.drawdown?.medianPct)) ? `${Number(data.drawdown.medianPct).toFixed(1)}%` : "-"};
+        Median fall after start: ${Number.isFinite(Number(data.drawdown?.medianPct)) ? `${Number(data.drawdown.medianPct).toFixed(1)}%` : "-"};
         deepest: ${Number.isFinite(Number(data.drawdown?.maximumPct)) ? `${Number(data.drawdown.maximumPct).toFixed(1)}%` : "-"}.
       </p>
       <p class="setup-finder-note">${escapeHtml(openingRule.description || "Only a confirmed early opening quote is eligible.")} Stake: ${money(Number(data.stakeUsdc || 5))} per qualifying entry; recorded entry fees are included.</p>
@@ -3062,8 +3062,8 @@ function renderDipBacktest() {
         ${entries.map((row) => `<tr><td data-label="Enter at or below">${Number(row.entryProbability).toFixed(0)}%</td><td data-label="Trades">${formatInteger(row.trades)}</td><td data-label="W / L">${formatInteger(row.wins)} / ${formatInteger(row.losses)}</td><td data-label="Accuracy">${row.accuracy == null ? "-" : `${Number(row.accuracy).toFixed(1)}%`}</td><td data-label="Capital">${money(Number(row.investedUsdc))}</td><td data-label="Fees">${money(Number(row.feesUsdc), 3)}</td><td data-label="Net P/L" class="${pnlClass(Number(row.pnlUsdc))}">${signedMoney(Number(row.pnlUsdc))}</td><td data-label="ROI" class="${pnlClass(Number(row.roiPct))}">${row.roiPct == null ? "-" : `${Number(row.roiPct) >= 0 ? "+" : ""}${Number(row.roiPct).toFixed(1)}%`}</td></tr>`).join("")}
       </tbody></table></div>
     </div>
-    ${details.length ? `<div class="system-status-card"><div class="system-status-head"><div><p class="eyebrow">Opening-quote sample</p><h3>Largest falls first</h3></div><span class="pill">${formatInteger(details.length)} rows</span></div><div class="ledger dip-backtest-ledger"><table><thead><tr><th>Market</th><th>Opened</th><th>Lowest before resolution</th><th>Fall</th><th>Final</th>${entryLevels.map((level) => `<th>At ${level}%</th>`).join("")}</tr></thead><tbody>
-      ${details.map((row) => `<tr><td data-label="Market">${escapeHtml(row.question || row.tokenId)}</td><td data-label="Opened">${probability(Number(row.openingPrice))}<br><span>${escapeHtml(formatDate(row.openingAt))}</span></td><td data-label="Lowest before resolution">${probability(Number(row.lowestPreResolutionPrice))}</td><td data-label="Fall">${Number(row.maxDrawdownPct || 0).toFixed(1)}%</td><td data-label="Final">${Number(row.finalOutcomePrice) >= 0.995 ? "Win" : "Loss"}</td>${entryLevels.map((level) => `<td data-label="At ${level}%">${dipBacktestEntryCell(row, level / 100)}</td>`).join("")}</tr>`).join("")}
+    ${details.length ? `<div class="system-status-card"><div class="system-status-head"><div><p class="eyebrow">Opening-quote sample</p><h3>Largest in-play falls first</h3></div><span class="pill">${formatInteger(details.length)} rows</span></div><div class="ledger dip-backtest-ledger"><table><thead><tr><th>Market</th><th>Opened</th><th>Lowest after start</th><th>Fall after start</th><th>Final</th>${entryLevels.map((level) => `<th>At ${level}%</th>`).join("")}</tr></thead><tbody>
+      ${details.map((row) => `<tr><td data-label="Market">${escapeHtml(row.question || row.tokenId)}</td><td data-label="Opened">${probability(Number(row.openingPrice))}<br><span>${escapeHtml(formatDate(row.openingAt))}</span></td><td data-label="Lowest after start">${row.lowestInPlayPrice == null ? "-" : probability(Number(row.lowestInPlayPrice))}</td><td data-label="Fall after start">${row.maxInPlayDrawdownPct == null ? "-" : `${Number(row.maxInPlayDrawdownPct).toFixed(1)}%`}</td><td data-label="Final">${Number(row.finalOutcomePrice) >= 0.995 ? "Win" : "Loss"}</td>${entryLevels.map((level) => `<td data-label="At ${level}%">${dipBacktestEntryCell(row, level / 100)}</td>`).join("")}</tr>`).join("")}
     </tbody></table></div></div>` : ""}
     <div class="system-status-card"><p class="setup-finder-note">${(Array.isArray(data.caveats) ? data.caveats : []).map(escapeHtml).join(" ")}</p></div>
   `;
@@ -7121,6 +7121,13 @@ function createPortfolioDraftForType(type, strategyId, prefill = {}, displayName
   };
 }
 
+// The account-type selector may change while a copied form is open. Preserve the actual
+// controls before rebuilding the draft for the other type; rebuilding from the original
+// copy prefill would silently restore its old threshold and every other edited value.
+function mergeCreatePortfolioPrefill(prefill, formDraft) {
+  return { ...(prefill || {}), ...(formDraft || {}) };
+}
+
 function switchCreatePortfolioType(type) {
   if (!state.parameterDraftCreate) return false;
   const accountType = normalizePortfolioAccountType(type);
@@ -7949,7 +7956,15 @@ async function confirmParameterModal() {
   if (!els.parameterModal || els.parameterModal.hidden || state.parameterSavePending) return;
   const creating = state.parameterDraftCreate;
   const requestedCreateType = normalizePortfolioAccountType(els.portfolioAccountType?.value || state.parameterDraftCreateType);
+  // Snapshot first, even if the account type has to be rebuilt below. This is deliberately
+  // before the switch: that switch creates a fresh default draft and must never discard
+  // values typed into a copied portfolio form.
+  const formSnapshot = parameterDraftFromControls(
+    state.parameterDraft ? { ...state.parameterDraft } : { ...portfolioConfigForMode(state.parameterDraftMode || state.mode) },
+  );
   if (creating && requestedCreateType !== normalizePortfolioAccountType(state.parameterDraftCreateType)) {
+    state.parameterDraftCreatePrefill = mergeCreatePortfolioPrefill(state.parameterDraftCreatePrefill, formSnapshot);
+    state.parameterDraft = { ...formSnapshot };
     if (!switchCreatePortfolioType(requestedCreateType)) return;
   }
   // Nothing is saved while a field says something the form cannot store. Before this, the
@@ -7974,9 +7989,7 @@ async function confirmParameterModal() {
   // browsers can commit a number field without delivering its final input event before
   // the tap reaches this button; relying only on the in-memory draft then created a
   // portfolio with defaults instead of the values the person had just entered.
-  const draft = parameterDraftFromControls(
-    state.parameterDraft ? { ...state.parameterDraft } : { ...portfolioConfigForMode(draftMode) },
-  );
+  const draft = parameterDraftFromControls(state.parameterDraft ? { ...state.parameterDraft } : formSnapshot);
   // Keep this exact form snapshot until the request returns. A concurrent refresh must
   // never reintroduce a stale value from the portfolio that was copied.
   state.parameterDraft = { ...draft };

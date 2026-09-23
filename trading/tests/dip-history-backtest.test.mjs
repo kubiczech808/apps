@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { backtestDipMarket, clobHistoryWindows } from "../tools/dip-history-backtest.mjs";
+import { nextDipBacktestDispatch } from "../tools/queue-dip-backtest-batch.mjs";
 
 const createdAt = "2026-09-01T10:00:00Z";
 const eventStartAt = "2026-09-01T12:00:00Z";
@@ -31,7 +32,8 @@ test("DIP backtest accepts only a 70% opening captured near market creation", ()
   ]);
   assert.equal(result.verifiedOpening, true);
   assert.equal(result.openingInBand, true);
-  assert.equal(result.maxDrawdownPct, 46.667);
+  assert.equal(result.maxInPlayDrawdownPct, 46.667);
+  assert.equal(result.lowestInPlayPrice, 0.4);
   assert.equal(result.entries["0.4"].entryPrice, 0.4);
   assert.equal(result.entries["0.4"].outcome, "WIN");
   assert.equal(result.entries["0.4"].pnlUsdc, 7.35,
@@ -68,8 +70,20 @@ test("DIP backtest uses the earliest pre-start CLOB quote when the archive lacks
   assert.equal(result.usableOpening, true, "the first available quote is still before kickoff");
   assert.equal(result.earliestPreStartOpening, true);
   assert.equal(result.openingInBand, true);
-  assert.equal(result.openingSource, "earliest available CLOB quote before event start");
+  assert.equal(result.openingSource, "earliest available CLOB quote in the 14-day pre-start window");
   assert.equal(result.entries["0.4"].outcome, "WIN");
+});
+
+test("DIP backtest does not count a pre-start fall as an executable in-play entry", () => {
+  const result = backtestDipMarket(resolvedMarket(), [
+    { t: epoch("2026-09-01T10:20:00Z"), p: 0.8 },
+    { t: epoch("2026-09-01T11:30:00Z"), p: 0.4 },
+    { t: epoch("2026-09-01T12:20:00Z"), p: 0.7 },
+  ]);
+  assert.equal(result.lowestInPlayPrice, 0.7);
+  assert.equal(result.maxInPlayDrawdownPct, 12.5);
+  assert.equal(result.entries["0.6"], null,
+    "a price reached before kickoff cannot be reported as a DIP portfolio fill");
 });
 
 test("DIP backtest computes a full loss including the entry fee", () => {
@@ -91,4 +105,15 @@ test("historical CLOB requests are split into API-accepted 14-day windows", () =
   assert.ok(windows.every((window) => window.end - window.start <= 14 * 86400));
   assert.deepEqual(windows.slice(1).map((window, index) => window.start), windows.slice(0, -1).map((window) => window.end),
     "adjacent requests meet exactly, with no omitted interval");
+});
+
+test("the next historical batch is queued only while the archive still has work", () => {
+  assert.deepEqual(nextDipBacktestDispatch(
+    { tag: "esports", coverage: { pendingMarkets: 14257 } },
+    { ref: "main", tag: "esports", maxMarkets: 600 },
+  ), {
+    ref: "main",
+    inputs: { tag: "esports", max_markets: "600" },
+  });
+  assert.equal(nextDipBacktestDispatch({ coverage: { pendingMarkets: 0 } }, { ref: "main" }), null);
 });

@@ -18,7 +18,7 @@ const ENTRY_LEVELS = [0.3, 0.35, 0.4, 0.45, 0.5, 0.55, 0.6];
 // Version the result rule, not only the file. Cache rows are keyed by their source
 // fingerprint, so this makes a corrected interpretation reprocess old rows instead of
 // quietly continuing to show the conclusion of the earlier rule.
-const OPENING_RULE_VERSION = 4;
+const OPENING_RULE_VERSION = 5;
 // CLOB accepts a maximum history window of 14 days. A single 180-day query returns HTTP
 // 400, which previously made every historical market look like it had no price history.
 const MAX_CLOB_HISTORY_WINDOW_SECONDS = 14 * 86400;
@@ -172,8 +172,11 @@ export function backtestDipMarket(row, history) {
   const usableOpening = verifiedOpening || earliestPreStartOpening;
   const terminalCutoff = resolvedAt == null ? Number.POSITIVE_INFINITY : resolvedAt;
   const preResolution = points.filter((point) => point.t < terminalCutoff && point.p > 0.005 && point.p < 0.995);
-  const lowest = preResolution.reduce((best, point) => (!best || point.p < best.p ? point : best), null);
   const inPlay = eventStartAt == null ? [] : preResolution.filter((point) => point.t >= eventStartAt);
+  // A live DIP rule cannot buy a pre-match wobble. Keep the raw pre-resolution series for
+  // diagnosing the archive, but derive every displayed fall and every simulated entry from
+  // the same after-start window the executor uses.
+  const lowestInPlay = inPlay.reduce((best, point) => (!best || point.p < best.p ? point : best), null);
   const openingInBand = usableOpening && opening.p >= OPENING_MIN && opening.p <= OPENING_MAX;
   const entries = {};
   for (const level of ENTRY_LEVELS) {
@@ -198,16 +201,18 @@ export function backtestDipMarket(row, history) {
     status: "complete",
     openingSource: verifiedOpening
       ? "CLOB near market creation"
-      : (earliestPreStartOpening ? "earliest available CLOB quote before event start" : "earliest CLOB point only"),
+      : (earliestPreStartOpening ? "earliest available CLOB quote in the 14-day pre-start window" : "earliest CLOB point only"),
     openingAt: iso(opening.t),
     openingPrice: round(opening.p, 6),
     verifiedOpening,
     usableOpening,
     earliestPreStartOpening,
     openingInBand,
-    lowestPreResolutionAt: lowest ? iso(lowest.t) : null,
-    lowestPreResolutionPrice: lowest ? round(lowest.p, 6) : null,
-    maxDrawdownPct: lowest ? round(Math.max(0, (opening.p - lowest.p) / opening.p) * 100, 3) : null,
+    lowestInPlayAt: lowestInPlay ? iso(lowestInPlay.t) : null,
+    lowestInPlayPrice: lowestInPlay ? round(lowestInPlay.p, 6) : null,
+    maxInPlayDrawdownPct: lowestInPlay
+      ? round(Math.max(0, (opening.p - lowestInPlay.p) / opening.p) * 100, 3)
+      : null,
     entries,
   };
 }
@@ -301,7 +306,7 @@ function reportFromCache(sourceRows, cache, processedThisRun) {
     return !stored || stored.fingerprint !== sourceFingerprint(row) || stored.status === "error";
   }).length;
   const details = openingBand
-    .sort((left, right) => (number(right.maxDrawdownPct, -1) || -1) - (number(left.maxDrawdownPct, -1) || -1))
+    .sort((left, right) => (number(right.maxInPlayDrawdownPct, -1) || -1) - (number(left.maxInPlayDrawdownPct, -1) || -1))
     .slice(0, 600);
   return {
     ok: true,
@@ -328,14 +333,15 @@ function reportFromCache(sourceRows, cache, processedThisRun) {
       errors: rows.filter((row) => row.status === "error").length,
     },
     drawdown: {
-      medianPct: round(median(openingBand.map((row) => number(row.maxDrawdownPct)).filter(Number.isFinite)), 2),
-      maximumPct: round(Math.max(0, ...openingBand.map((row) => number(row.maxDrawdownPct, 0) || 0)), 2),
+      medianPct: round(median(openingBand.map((row) => number(row.maxInPlayDrawdownPct)).filter(Number.isFinite)), 2),
+      maximumPct: round(Math.max(0, ...openingBand.map((row) => number(row.maxInPlayDrawdownPct, 0) || 0)), 2),
     },
     entries: outcomes,
     details,
     caveats: [
       "Entry uses the first recorded CLOB price at or below the selected level after the event began.",
       "Historical price series does not include contemporaneous order-book depth, so it cannot prove a full FOK fill at the displayed stake.",
+      "Falls and entry simulations use only prices recorded after the event started; a pre-start move is not executable by an under-way DIP portfolio.",
       "When market creation time is missing from the archive, the oldest available CLOB quote in the 14-day pre-start window is used and is labelled pre-start rather than creation-verified.",
     ],
   };
