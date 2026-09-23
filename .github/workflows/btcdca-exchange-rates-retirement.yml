@@ -90,7 +90,7 @@ jobs:
           cat exchange-rates-result.json
           test "$status" = 200
           python3 -m json.tool exchange-rates-result.json
-          grep -Fq '"ok": true' exchange-rates-result.json
+          python3 -c "import json; assert json.load(open('exchange-rates-result.json', encoding='utf-8')).get('ok') is True"
 
       - name: Drop the table only after the validated hosting dump
         if: inputs.operation == 'drop'
