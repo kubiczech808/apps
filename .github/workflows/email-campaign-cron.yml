@@ -179,3 +179,10 @@ jobs:
           call_reclaim "druha tabulka"
           call_reclaim "dokonceni"
           verify_storage_reclaim
+          # AI research tick spoustime i z petiminutoveho cron signalu. Aplikace sama hlida interval, kvotu a zamek proti duplicitam.
+          ai_code=$(curl --show-error --silent --max-time 260 --output /tmp/email-campaign-ai-body.txt --write-out "%{http_code}" "https://www.osobnizkusenosti.cz/email-campaign/?cron=${TOKEN}&ai_research=1&hop=2" || echo "000")
+          echo "AI research HTTP ${ai_code}"
+          cat /tmp/email-campaign-ai-body.txt || true
+          if [ "$ai_code" -lt 200 ] || [ "$ai_code" -ge 300 ]; then
+            echo "::warning::AI research tick vratil HTTP ${ai_code}; dalsi pokus probehne v dalsim cron intervalu."
+          fi
