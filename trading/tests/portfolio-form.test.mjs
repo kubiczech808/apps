@@ -47,7 +47,7 @@ function validate(values = {}, { dipOn = false } = {}) {
     extract(/function portfolioFormFields[\s\S]*?\n\}/, "portfolioFormFields"),
     extract(/function portfolioFieldRangeText[\s\S]*?\n\}/, "portfolioFieldRangeText"),
     extract(/function formatFieldBound[\s\S]*?\n\}/, "formatFieldBound"),
-    extract(/function portfolioFormFieldErrors[\s\S]*?\n  return errors;\n\}/, "portfolioFormFieldErrors"),
+    extract(/function portfolioFormFieldErrors[\s\S]*?\n  return errors;\r?\n\}/, "portfolioFormFieldErrors"),
   ].join("\n");
 
   const names = [
@@ -189,6 +189,100 @@ test("copying a portfolio carries the dip rule, checkbox included", () => {
   assert.equal(copied.draft.automationEnabled, false, "a copy never starts trading by itself");
   assert.equal(copied.draft.archived, undefined);
   assert.equal(copied.draft.initialUsdc, undefined);
+});
+
+test("Save reads every editable copied-portfolio setting directly from the form", () => {
+  // The Save button must use the controls as they stand, rather than an earlier draft
+  // refreshed while the person was editing on mobile. This invokes the production reader
+  // with a full modal-shaped `els` object, including the fields most likely to be changed
+  // after copying a portfolio.
+  const collect = new Function("els", `
+    const HOURS_PER_DAY = 24;
+    const parameterDraftInputIsEmpty = (element) => !element || element.value === "";
+    const normalizePortfolioName = (value, fallback) => String(value || fallback || "");
+    const normalizeEligibilityThreshold = (value) => Number.isFinite(value) ? value : null;
+    const normalizeOptionalProbability = (value) => value === "" ? null : Number(value) / 100;
+    const normalizeRiskAllocation = (value) => Number(value);
+    const normalizeOptionalHours = (value) => value === "" ? null : Number(value);
+    const normalizeStopLossProbabilityFloor = (value) => Number(value);
+    const dipEntryBound = (value) => Number(value);
+    const normalizeSettlementCloseBid = (value) => Number(value);
+    const normalizeLiveEventMode = (value) => value;
+    const normalizeSelectionOrder = (value) => value;
+    const normalizeOptionalMoney = (value) => value === "" ? null : Number(value);
+    const normalizeExecutionTrigger = (value) => value;
+    const normalizeExecutionCronMinutes = (value) => Number(value);
+    const normalizeStopLossRiskMultiplier = (value) => Number(value);
+    const normalizeFixedEntryPrice = (value) => Number(value);
+    const normalizeMarketTagList = (value) => String(value || "").split(",").filter(Boolean);
+    ${extract(/function parameterDraftFromControls[\s\S]*?\n\}/, "parameterDraftFromControls")}
+    return parameterDraftFromControls({ minProbability: 0.5, maxProbability: null, stopLossProbabilityFloor: 0 });
+  `);
+  const input = (value) => ({ value: String(value) });
+  const result = collect({
+    portfolioName: input("Copied and edited"),
+    eligibilityThreshold: input("74"),
+    maxEligibilityThreshold: input("82"),
+    riskAllocation: input("6.5"),
+    maxResolutionHours: input("36"),
+    stopLossProbabilityFloor: input("43"),
+    dipEntryEnabled: { checked: true },
+    dipEntryOpenMin: input("76"),
+    dipEntryOpenMax: input("91"),
+    settlementCloseBid: input("98"),
+    liveEventMode: input("include"),
+    selectionOrder: input("highest_reward_risk_first"),
+    minLiquidity: input("20000"),
+    executionTrigger: input("cron"),
+    executionCronMinutes: input("120"),
+    autoRotatePositions: { checked: false },
+    stopLossRiskMultiplier: input("150"),
+    stopLossReverseOnTrigger: { checked: true },
+    fixedEntryPrice: input("51"),
+    fixedEntryTags: input("sports,esports"),
+    includeOnlyTags: input("football"),
+    excludedTags: input("tennis"),
+    marketShapeCheckboxes: [
+      { checked: true, dataset: { excludeMarketShape: "over-under" } },
+      { checked: false, dataset: { excludeMarketShape: "spread" } },
+    ],
+    limitOrders: { checked: true },
+  });
+
+  assert.deepEqual({
+    name: result.displayName,
+    min: result.minProbability,
+    max: result.maxProbability,
+    stake: result.stakeUsdc,
+    hours: result.maxResolutionHours,
+    floor: result.stopLossProbabilityFloor,
+    stop: result.stopLossRiskMultiplier,
+    reverse: result.reverseOnStopLoss,
+    liquidity: result.minLiquidityUsdc,
+    trigger: result.executionTrigger,
+    cron: result.executionCronMinutes,
+    rotate: result.autoRotatePositions,
+    shapes: result.excludedMarketShapes,
+    limitOrders: result.useLimitOrders,
+  }, {
+    name: "Copied and edited",
+    min: 0.74,
+    max: 0.82,
+    stake: 6.5,
+    hours: 36,
+    floor: 0.43,
+    stop: 1.5,
+    reverse: true,
+    liquidity: 20000,
+    trigger: "cron",
+    cron: 120,
+    rotate: false,
+    shapes: ["over-under"],
+    limitOrders: true,
+  });
+  assert.equal(result.excludeOverUnderMarkets, true);
+  assert.deepEqual(result.includeOnlyMarketTags, ["football"]);
+  assert.deepEqual(result.excludedMarketTags, ["tennis"]);
 });
 
 test("the copy survives a config whose flag came back as a string", () => {

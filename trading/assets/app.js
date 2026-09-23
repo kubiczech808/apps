@@ -1491,6 +1491,9 @@ function syncTagChipField(input, tags) {
     if (document.activeElement !== input) input.value = normalizeMarketTagList(tags).join(", ");
     return;
   }
+  // A parameter-modal refresh may arrive while a tag is still being typed. The visible
+  // entry is authoritative until it blurs, so rebuilding now must not discard it.
+  if (parameterDraftActive() && field.host.contains(document.activeElement)) return;
   input.value = normalizeMarketTagList(tags).join(", ");
   renderTagChips(field);
 }
@@ -6747,7 +6750,11 @@ function syncPortfolioParameterControls(configOverride = null, options = {}) {
   const allocation = normalizeRiskAllocation(config.stakeUsdc) ?? DEFAULT_RISK_ALLOCATION;
   const limitOrders = config.useLimitOrders ?? isLive;
   const capitalContext = options.capitalContext || parameterCapitalContextForMode(mode);
-  if (els.portfolioName && document.activeElement !== els.portfolioName) {
+  // A modal draft is authoritative while it is being edited. Refreshes happen for scans,
+  // account state and other controls; none may repaint the focused field from an older
+  // copied draft. Mobile numeric inputs are particularly susceptible to that race.
+  const keepTypedValue = (element) => parameterDraftActive() && document.activeElement === element;
+  if (els.portfolioName && !keepTypedValue(els.portfolioName)) {
     els.portfolioName.value = portfolioNameForMode(mode, config);
   }
   if (els.portfolioNameLabel) els.portfolioNameLabel.textContent = portfolioNameForMode(mode, config);
@@ -6764,30 +6771,34 @@ function syncPortfolioParameterControls(configOverride = null, options = {}) {
   if (els.portfolioAccountTypeNote) {
     els.portfolioAccountTypeNote.textContent = portfolioAccountTypeNote(createType);
   }
-  if (els.eligibilityThreshold) els.eligibilityThreshold.value = String(Math.round(threshold * 100));
+  if (els.eligibilityThreshold && !keepTypedValue(els.eligibilityThreshold)) {
+    els.eligibilityThreshold.value = String(Math.round(threshold * 100));
+  }
   if (els.eligibilityThresholdLabel) els.eligibilityThresholdLabel.textContent = probability(threshold);
-  if (els.maxEligibilityThreshold) els.maxEligibilityThreshold.value = maxThreshold == null ? "" : String(Math.round(maxThreshold * 100));
+  if (els.maxEligibilityThreshold && !keepTypedValue(els.maxEligibilityThreshold)) {
+    els.maxEligibilityThreshold.value = maxThreshold == null ? "" : String(Math.round(maxThreshold * 100));
+  }
   if (els.maxEligibilityThresholdLabel) els.maxEligibilityThresholdLabel.textContent = maxThreshold == null ? "No maximum" : probability(maxThreshold);
   syncDraftRiskAllocationControl(allocation, capitalContext);
-  if (els.limitOrders) els.limitOrders.checked = Boolean(limitOrders);
+  if (els.limitOrders && !keepTypedValue(els.limitOrders)) els.limitOrders.checked = Boolean(limitOrders);
   // Hidden under "only events under way": that mode admits nothing by its horizon, so the
   // number would sit there asking to be set while changing nothing. The saved value is
   // left untouched underneath, so switching back restores the horizon that was there.
   if (els.maxResolutionHoursRow) els.maxResolutionHoursRow.hidden = liveEventMode === "only";
-  if (els.maxResolutionHours && document.activeElement !== els.maxResolutionHours) {
+  if (els.maxResolutionHours && !keepTypedValue(els.maxResolutionHours)) {
     els.maxResolutionHours.value = String(maxHours);
   }
   // The number typed is hours; the label reads it back in whichever unit is legible, so a
   // 168 stays recognisable as the week it is.
   if (els.maxResolutionHoursLabel) els.maxResolutionHoursLabel.textContent = formatHorizonHours(maxHours);
   const dipEntry = dipEntryRuleFromConfig(config);
-  if (els.dipEntryEnabled) els.dipEntryEnabled.checked = dipEntry.enabled;
+  if (els.dipEntryEnabled && !keepTypedValue(els.dipEntryEnabled)) els.dipEntryEnabled.checked = dipEntry.enabled;
   for (const [element, value] of [
     [els.dipEntryOpenMin, dipEntry.openMin],
     [els.dipEntryOpenMax, dipEntry.openMax],
   ]) {
     // Never while it is being typed into, or the normalizer rewrites the digit just entered.
-    if (element && document.activeElement !== element) element.value = String(Math.round(value * 100));
+    if (element && !keepTypedValue(element)) element.value = String(Math.round(value * 100));
   }
   if (els.dipEntryLabel) els.dipEntryLabel.textContent = dipEntryRuleSummaryValue(dipEntry);
   if (els.dipEntryBandNote) {
@@ -6806,7 +6817,7 @@ function syncPortfolioParameterControls(configOverride = null, options = {}) {
   // saved, and a 0 appearing in a field nobody touched is exactly what was reported as the
   // setting zeroing itself. The label beside each already says "Off", so nothing is lost by
   // leaving the box empty, and an empty box is skipped when the form is read back.
-  if (els.stopLossProbabilityFloor && document.activeElement !== els.stopLossProbabilityFloor) {
+  if (els.stopLossProbabilityFloor && !keepTypedValue(els.stopLossProbabilityFloor)) {
     els.stopLossProbabilityFloor.value = probabilityFloor == null
       ? (configValueIsSet(config.stopLossProbabilityFloor) ? "0" : "")
       : String(Number((probabilityFloor * 100).toFixed(1)));
@@ -6814,7 +6825,7 @@ function syncPortfolioParameterControls(configOverride = null, options = {}) {
   if (els.stopLossProbabilityFloorLabel) {
     els.stopLossProbabilityFloorLabel.textContent = stopLossProbabilityFloorLabel(probabilityFloor);
   }
-  if (els.settlementCloseBid && document.activeElement !== els.settlementCloseBid) {
+  if (els.settlementCloseBid && !keepTypedValue(els.settlementCloseBid)) {
     els.settlementCloseBid.value = settlementCloseBid == null
       ? (configValueIsSet(config.settlementCloseBid) ? "0" : "")
       : String(Number((settlementCloseBid * 100).toFixed(1)));
@@ -6822,15 +6833,15 @@ function syncPortfolioParameterControls(configOverride = null, options = {}) {
   if (els.settlementCloseBidLabel) {
     els.settlementCloseBidLabel.textContent = settlementCloseBidLabelValue(settlementCloseBid);
   }
-  if (els.liveEventMode) els.liveEventMode.value = liveEventMode;
+  if (els.liveEventMode && !keepTypedValue(els.liveEventMode)) els.liveEventMode.value = liveEventMode;
   if (els.liveEventModeLabel) els.liveEventModeLabel.textContent = liveEventModeLabel(liveEventMode);
-  if (els.selectionOrder) els.selectionOrder.value = order;
+  if (els.selectionOrder && !keepTypedValue(els.selectionOrder)) els.selectionOrder.value = order;
   if (els.selectionOrderLabel) els.selectionOrderLabel.textContent = selectionOrderLabel(order, config);
-  if (els.minLiquidity) els.minLiquidity.value = liquidity == null ? "" : String(liquidity);
+  if (els.minLiquidity && !keepTypedValue(els.minLiquidity)) els.minLiquidity.value = liquidity == null ? "" : String(liquidity);
   if (els.minLiquidityLabel) els.minLiquidityLabel.textContent = liquidity == null ? "none" : money(liquidity);
   const trigger = normalizeExecutionTrigger(config.executionTrigger);
   const effectiveTrigger = trigger;
-  if (els.executionTrigger) {
+  if (els.executionTrigger && !keepTypedValue(els.executionTrigger)) {
     els.executionTrigger.value = effectiveTrigger;
     els.executionTrigger.disabled = false;
     els.executionTrigger.title = "After-scan runs once after a completed market scan; it is not a continuous worker.";
@@ -6839,13 +6850,15 @@ function syncPortfolioParameterControls(configOverride = null, options = {}) {
     els.executionTriggerLabel.textContent = executionTriggerLabel(effectiveTrigger);
   }
   const autoRotatePositions = automaticRotationIsEnabled(config);
-  if (els.autoRotatePositions) els.autoRotatePositions.checked = autoRotatePositions;
+  if (els.autoRotatePositions && !keepTypedValue(els.autoRotatePositions)) els.autoRotatePositions.checked = autoRotatePositions;
   if (els.autoRotatePositionsLabel) els.autoRotatePositionsLabel.textContent = autoRotatePositions ? "On" : "Off";
   const stopLossMultiplier = stopLossRiskMultiplier(config);
-  if (els.stopLossRiskMultiplier) els.stopLossRiskMultiplier.value = String(Math.round(stopLossMultiplier * 100));
+  if (els.stopLossRiskMultiplier && !keepTypedValue(els.stopLossRiskMultiplier)) {
+    els.stopLossRiskMultiplier.value = String(Math.round(stopLossMultiplier * 100));
+  }
   if (els.stopLossRiskMultiplierLabel) els.stopLossRiskMultiplierLabel.textContent = stopLossRiskLabel(config);
   const reverseOnStopLoss = stopLossReverseIsEnabled(config);
-  if (els.stopLossReverseOnTrigger) {
+  if (els.stopLossReverseOnTrigger && !keepTypedValue(els.stopLossReverseOnTrigger)) {
     els.stopLossReverseOnTrigger.checked = reverseOnStopLoss;
     els.stopLossReverseOnTrigger.disabled = stopLossMultiplier <= 0;
   }
@@ -6855,13 +6868,17 @@ function syncPortfolioParameterControls(configOverride = null, options = {}) {
       : "Off: stop loss disabled";
   }
   const cronMinutes = normalizeExecutionCronMinutes(config.executionCronMinutes);
-  if (els.executionCronMinutes) els.executionCronMinutes.value = String(cronMinutes);
+  if (els.executionCronMinutes && !keepTypedValue(els.executionCronMinutes)) {
+    els.executionCronMinutes.value = String(cronMinutes);
+  }
   if (els.executionCronMinutesLabel) els.executionCronMinutesLabel.textContent = executionCronMinutesLabel(cronMinutes);
   // The interval only means anything for the cron trigger; "after each scraping
   // batch" has its own cadence.
   els.executionCronRow?.toggleAttribute("hidden", effectiveTrigger !== "cron");
   const fixedEntryPrice = normalizeFixedEntryPrice(config.fixedEntryPrice);
-  if (els.fixedEntryPrice) els.fixedEntryPrice.value = String(Math.round(fixedEntryPrice * 100));
+  if (els.fixedEntryPrice && !keepTypedValue(els.fixedEntryPrice)) {
+    els.fixedEntryPrice.value = String(Math.round(fixedEntryPrice * 100));
+  }
   if (els.fixedEntryPriceLabel) els.fixedEntryPriceLabel.textContent = percent(fixedEntryPrice);
   const allowedTags = normalizeMarketTagList(config.allowedMarketTags);
   syncTagChipField(els.fixedEntryTags, allowedTags);
@@ -6888,11 +6905,13 @@ function syncPortfolioParameterControls(configOverride = null, options = {}) {
     // -- and then store that lie on the next save.
     const excludedShapes = new Set(configExcludedMarketShapes(config));
     for (const checkbox of els.marketShapeCheckboxes) {
-      checkbox.checked = excludedShapes.has(checkbox.dataset.excludeMarketShape);
+      if (!keepTypedValue(checkbox)) checkbox.checked = excludedShapes.has(checkbox.dataset.excludeMarketShape);
     }
   }
   if (els.crossLiveRisk) {
-    els.crossLiveRisk.checked = (options.systemConfig || systemConfig()).crossLivePortfolioRiskDiversification !== false;
+    if (!keepTypedValue(els.crossLiveRisk)) {
+      els.crossLiveRisk.checked = (options.systemConfig || systemConfig()).crossLivePortfolioRiskDiversification !== false;
+    }
   }
 }
 
@@ -7957,6 +7976,9 @@ async function confirmParameterModal() {
   const draft = parameterDraftFromControls(
     state.parameterDraft ? { ...state.parameterDraft } : { ...portfolioConfigForMode(draftMode) },
   );
+  // Keep this exact form snapshot until the request returns. A concurrent refresh must
+  // never reintroduce a stale value from the portfolio that was copied.
+  state.parameterDraft = { ...draft };
   const draftSystem = parameterDraftSystemFromControls(
     state.parameterDraftSystem ? { ...state.parameterDraftSystem } : systemConfig(),
   );
