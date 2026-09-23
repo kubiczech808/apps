@@ -17143,7 +17143,7 @@ function extractFirmyWebsite(string $html, string $jsonUrl): string
     foreach (extractExternalBusinessWebsiteCandidates($html, 'https://www.firmy.cz/') as $candidate) {
         return $candidate;
     }
-    return '';
+    return (($website = extractWebsiteFromText(html_entity_decode(strip_tags($html), ENT_QUOTES, 'UTF-8'), 'https://www.firmy.cz/')) !== '' && !isBlockedDirectoryWebsite($website)) ? $website : '';
 }
 
 function extractExternalBusinessWebsiteCandidates(string $html, string $baseUrl): array
