@@ -101,7 +101,7 @@ jobs:
             "https://www.btc-dca.com/btcdca-exchange-rates-helper.php?action=drop&confirm=DROP_EXCHANGE_RATES" \
             --output exchange-rates-result.json
           python3 -m json.tool exchange-rates-result.json
-          grep -Fq '"table_exists": false' exchange-rates-result.json
+          python3 -c "import json; assert json.load(open('exchange-rates-result.json', encoding='utf-8')).get('table_exists') is False"
 
       - name: Restore the table only from the validated hosting dump
         if: inputs.operation == 'restore'
@@ -112,7 +112,7 @@ jobs:
             "https://www.btc-dca.com/btcdca-exchange-rates-helper.php?action=restore&confirm=RESTORE_EXCHANGE_RATES" \
             --output exchange-rates-result.json
           python3 -m json.tool exchange-rates-result.json
-          grep -Fq '"restored": true' exchange-rates-result.json
+          python3 -c "import json; assert json.load(open('exchange-rates-result.json', encoding='utf-8')).get('restored') is True"
 
       - name: Upload non-sensitive operation manifest
         if: always() && hashFiles('exchange-rates-result.json') != ''
