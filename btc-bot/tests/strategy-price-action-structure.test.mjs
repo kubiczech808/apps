@@ -9,6 +9,7 @@ import {
   buildPriceActionMatrix,
   canReusePriceActionMatrix,
   canReuseExternalTrendReference,
+  classifyExternalStructure,
   classifyStructure,
   evaluateTradeProfile,
   fetchFxCandles,
@@ -128,6 +129,28 @@ test('external trend confirms the PA side and fails closed for opposite, flat, o
     assert.equal(blocked.status, 'watch')
     assert.equal(blocked.gates.find((gate) => gate.id === 'external-trend').passed, false)
   }
+})
+
+test('live PA structure comes only from externally confirmed pivots', () => {
+  const result = classifyExternalStructure({
+    candles: zigzag([100, 140, 120, 150, 130, 160], { steps: 8 }),
+    externalTrend: { trend: 'up', source: 'Twelve Data', method: 'EMA 20/50' },
+    externalPivots: {
+      trend: 'down', source: 'Twelve Data', method: 'Potvrzené pivoty', timePeriod: 10,
+      pivots: [
+        { kind: 'high', price: 160, time: START + HOUR },
+        { kind: 'low', price: 140, time: START + 2 * HOUR },
+        { kind: 'high', price: 155, time: START + 3 * HOUR },
+        { kind: 'low', price: 130, time: START + 4 * HOUR },
+      ],
+    },
+  })
+
+  assert.equal(result.trend, 'down')
+  assert.equal(result.structure.high.label, 'LH')
+  assert.equal(result.structure.low.label, 'LL')
+  assert.equal(result.structure.source, 'external-confirmed-pivots')
+  assert.deepEqual(result.structure.chartPivots, [])
 })
 
 test('an available Twelve Data key immediately replaces a cached missing-key result', () => {
@@ -1282,12 +1305,14 @@ test('price-action matrix covers BTCUSD and major FX pairs on 1H, 4H and 1D', as
   for (const asset of matrix.assets) {
     assert.deepEqual(Object.keys(asset.trends), ['1h', '4h', '1d'])
   }
-  assert.equal(matrix.assets[0].trends['1h'].structure.lookback, 18)
-  assert.equal(matrix.assets[0].trends['1h'].structure.activeLookback, 5)
+  // No local swing classifier may fill in an unavailable external reference.
+  assert.equal(matrix.assets[0].trends['1h'].trend, 'flat')
+  assert.equal(matrix.assets[0].trends['1h'].structure.lookback, null)
+  assert.equal(matrix.assets[0].trends['1h'].structure.source, 'external-confirmed-pivots')
   assert.equal(matrix.assets[0].trends['1h'].structure.historyDays, 30)
   assert.equal(matrix.assets[0].trends['1h'].structure.zoneHistoryDays, 120)
-  assert.equal(matrix.assets[0].trends['4h'].structure.lookback, 96)
-  assert.equal(matrix.assets[0].trends['4h'].structure.activeLookback, 24)
+  assert.equal(matrix.assets[0].trends['4h'].trend, 'flat')
+  assert.equal(matrix.assets[0].trends['4h'].structure.lookback, null)
   assert.equal(matrix.assets[0].trends['4h'].structure.historyDays, 180)
   assert.equal(matrix.assets[0].trends['4h'].structure.zoneHistoryDays, 365)
   assert.equal(matrix.assets[0].trends['4h'].structure.zoneMaxAgeCandles, 2190)

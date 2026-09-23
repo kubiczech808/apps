@@ -411,7 +411,7 @@ const priceActionSummary = () => {
 }
 
 const PRICE_ACTION_DECISION_COLUMNS = [
-  { id: 'structure', label: 'Struktura / reference' },
+  { id: 'structure', label: 'Struktura' },
   { id: 'zones', label: 'Demand / Supply' },
   { id: 'pullback', label: '50% pullback' },
   { id: 'entry', label: 'Entry' },
@@ -695,21 +695,19 @@ const priceActionDecisionFact = (entry, column) => {
 const structureReferenceFacts = (entry) => {
   const item = entry?.item ?? {}
   const externalGate = profileGate(entry?.profile, 'external-trend')
-  const internalTrend = PRICE_ACTION_TREND_LABELS[item.trend] || 'flat'
-  const internalStatus = item.trend === 'up' ? 'met' : item.trend === 'down' ? 'unmet' : 'neutral'
-  const external = item.externalTrend
-  const externalTrend = PRICE_ACTION_TREND_LABELS[external?.trend] || '–'
-  const externalStatus = external?.trend === 'up' ? 'met' : external?.trend === 'down' ? 'unmet' : 'neutral'
-  const externalTitle = external
-    ? [external.source, external.method, external.reason, externalGate?.detail].filter(Boolean).join(' · ')
-    : 'Externí referenční trend zatím nebyl načten.'
+  const pivotReference = item.externalPivots
+  const regime = item.externalTrend
+  const trend = PRICE_ACTION_TREND_LABELS[item.trend] || 'flat'
+  const status = item.trend === 'up' ? 'met' : item.trend === 'down' ? 'unmet' : 'neutral'
+  const title = pivotReference
+    ? [pivotReference.source, pivotReference.method, item.reason, regime?.method ? `režim: ${regime.method}; ${regime.reason ?? ''}` : null, externalGate?.detail].filter(Boolean).join(' · ')
+    : 'Zdroj struktury zatím není dostupný; bez jeho potvrzených pivotů se nevstupuje.'
   return el('div', { className: 'structure-reference-facts' }, [
     decisionFactElement(decisionFact(
-      internalTrend,
-      internalStatus,
-      [item.reason, item.event].filter(Boolean).join(' · ') || 'PA-1 swing struktura.'
+      trend,
+      status,
+      title
     )),
-    decisionFactElement(decisionFact(externalTrend, externalStatus, externalTitle)),
   ])
 }
 
@@ -1475,140 +1473,24 @@ const renderAssetChart = () => {
         x: xx - candleWidth / 2,
         y: Math.min(openY, closeY),
         width: candleWidth,
-        height: Math.max(1.5, Math.abs(closeY - openY)),
+        // A genuinely small daily body must remain recognizably rectangular,
+        // not collapse into an OHLC-like cross on a tall responsive chart.
+        height: Math.max(3, Math.abs(closeY - openY)),
       })
     )
   }
 
-  // These are the same external pivots that classifyStructure exposes. Keep
-  // them visually separate from the candles so a user can audit whether the
-  // algorithm followed the main wave rather than an internal reaction.
-  const structure = item?.structure
-  const trend = item?.trend === 'up' || item?.trend === 'down' ? item.trend : 'flat'
-  const activeRange = structure?.activeRange
-  const structureLegs = [
-    { kind: 'high', leg: structure?.high },
-    { kind: 'low', leg: structure?.low },
-  ]
-  // chartPivots is prepared by the strategy as one chronological, alternating
-  // audit line. Older matrices fall back to recentSwings until their next scan.
-  const structurePivots = new Map()
-  const developingSwing = structure?.developingSwing
-  const developingCounter = structure?.developingCounterSwing
-  for (const swing of [
-    ...(structure?.chartPivots ?? structure?.recentSwings ?? []),
-    // Matrices saved before chartPivots existed still need their live terminal
-    // point, but never merge independent legs/ranges into parallel diagonals.
-    ...(structure?.chartPivots ? [] : [developingSwing]),
-    developingCounter,
-  ].filter(Boolean)) {
-    if (swing?.kind === developingSwing?.kind && swing?.candleIndex === developingSwing?.replacesCandleIndex) continue
-    if (!swing?.kind || !Number.isFinite(swing.price) || !(swing.price > 0) || !Number.isFinite(swing.time)) continue
-    const key = `${swing.kind}:${swing.candleIndex ?? swing.time}`
-    const previous = structurePivots.get(key)
-    structurePivots.set(key, { ...previous, ...swing, label: swing.label ?? previous?.label })
-  }
-  const swingNodes = [...structurePivots.values()]
-    .filter((swing) => swing.time >= candles[0].time && swing.time <= candles.at(-1).time)
-    .sort((left, right) => left.time - right.time)
-    .map((swing) => {
-      const label = swing.label || (swing.kind === 'high' ? 'H' : 'L')
-      return { ...swing, label, x: xForTime(swing.time) }
-    })
-    .filter((swing) => swing.x !== null)
-  const alternatingTrendNodes = (structure?.alternatingTrendPivots ?? [])
-    .filter((swing) => swing.time >= candles[0].time && swing.time <= candles.at(-1).time)
-    .sort((left, right) => left.time - right.time)
-    .map((swing) => ({ ...swing, x: xForTime(swing.time) }))
-    .filter((swing) => swing.x !== null)
-  const rangeHigh = activeRange?.high
-  const rangeLow = activeRange?.low
-  const nodeForRangePivot = (pivot) => Number.isFinite(pivot?.price)
-    ? swingNodes.filter((swing) =>
-      swing.candleIndex === pivot.candleIndex || (swing.time === pivot.time && swing.kind === pivot.kind)
-    ).at(-1) ?? { ...pivot, x: xForTime(pivot.time) }
-    : null
-  const latestHigh = (developingSwing?.kind === 'high' ? { ...developingSwing, x: xForTime(developingSwing.time) } : null)
-    ?? nodeForRangePivot(rangeHigh)
-    ?? swingNodes.filter((swing) => swing.kind === 'high').at(-1)
-  const latestLow = (developingSwing?.kind === 'low' ? { ...developingSwing, x: xForTime(developingSwing.time) } : null)
-    ?? nodeForRangePivot(rangeLow)
-    ?? swingNodes.filter((swing) => swing.kind === 'low').at(-1)
+  // The retired local swing classifier used to draw a white zigzag and flat
+  // range bounds here. Do not substitute a locally derived picture for the
+  // external source's structure. The chart keeps only the external wave's
+  // 50% level used by the active entry plan.
+  const activeRange = item?.structure?.activeRange
+  const latestHigh = activeRange?.high ? { ...activeRange.high, x: xForTime(activeRange.high.time) } : null
+  const latestLow = activeRange?.low ? { ...activeRange.low, x: xForTime(activeRange.low.time) } : null
 
-  if (trend === 'flat') {
-    const flatBounds = structureLegs
-      .map(({ leg }) => leg?.current ?? leg?.previous)
-      .filter((pivot) => Number.isFinite(pivot?.price))
-      .sort((left, right) => right.price - left.price)
-    for (const [index, pivot] of flatBounds.entries()) {
-      if (!Number.isFinite(pivot?.price)) continue
-      const yy = y(pivot.price)
-      // A flat range is priced top-to-bottom. Its last typed pivots can be
-      // chronologically inverted (a high below a later low), but must never
-      // be drawn as a high below a low.
-      const label = index === 0 ? 'H flat' : 'L flat'
-      svg.append(
-        el('line', {
-          className: 'asset-structure-line asset-structure-flat',
-          x1: ASSET_CHART.padLeft,
-          x2: ASSET_CHART.width - ASSET_CHART.padRight,
-          y1: yy,
-          y2: yy,
-        }),
-        el('text', {
-          className: 'asset-structure-label asset-structure-label-flat',
-          x: ASSET_CHART.padLeft + 6,
-          y: yy - 6,
-          text: `${label} ${quotePrice(pivot.price)}`,
-        })
-      )
-    }
-  } else {
-    // A trend is an alternating sequence of external pivots. Drawing the
-    // latest high leg and low leg independently creates two misleading,
-    // parallel diagonals; the audit line must follow HH -> HL -> HH (or the
-    // corresponding downtrend sequence) in chronological order.
-    if (swingNodes.length >= 2) {
-      svg.append(el('path', {
-        className: `asset-structure-line asset-structure-${trend}`,
-        d: swingNodes.map((swing, index) => `${index === 0 ? 'M' : 'L'} ${swing.x} ${y(swing.price)}`).join(' '),
-      }))
-    }
-    // The dotted audit path is intentionally stricter than the main white
-    // structure line: it starts at the newest API pivot and stops at the
-    // first break in the requested HH/HL or LL/LH alternation.
-    if (alternatingTrendNodes.length >= 2) {
-      svg.append(el('path', {
-        className: `asset-structure-line asset-structure-alternative-${trend}`,
-        d: alternatingTrendNodes.map((swing, index) => `${index === 0 ? 'M' : 'L'} ${swing.x} ${y(swing.price)}`).join(' '),
-      }))
-    }
-    for (const swing of swingNodes) {
-      const labelAtEnd = swing.x > ASSET_CHART.width - ASSET_CHART.padRight - 72
-      svg.append(
-        el('circle', {
-          className: `asset-structure-marker asset-structure-${trend}`,
-          cx: swing.x,
-          cy: y(swing.price),
-          r: 3,
-        }),
-        el('text', {
-          className: `asset-structure-label asset-structure-label-${trend}`,
-          'text-anchor': labelAtEnd ? 'end' : 'start',
-          x: labelAtEnd ? swing.x - 6 : swing.x + 6,
-          y: y(swing.price) - 6,
-          text: `${swing.label} ${quotePrice(swing.price)}`,
-        })
-      )
-    }
-  }
-
-  // The current structure range is the reference for the entry pullback.
-  // Keep this subtle, but visible: it shows exactly where the 50% line falls
-  // between the high and low that the white zigzag identifies.
   if (latestHigh && latestLow && latestHigh.price > latestLow.price) {
     const pullback = (latestHigh.price + latestLow.price) / 2
-    const startX = Math.min(latestHigh.x, latestLow.x)
+    const startX = Math.min(latestHigh.x ?? ASSET_CHART.padLeft, latestLow.x ?? ASSET_CHART.padLeft)
     const pullbackY = y(pullback)
     svg.append(
       el('line', {

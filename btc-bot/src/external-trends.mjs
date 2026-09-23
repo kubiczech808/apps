@@ -1,9 +1,9 @@
-// Independent trend reference for the PA-1 dashboard.
+// External trend and structure reference for the PA-1 dashboard.
 //
 // Twelve Data and Binance publish OHLC, not a ready-made trend label. This
 // module deliberately uses a simple close + EMA(20/50) regime rather than the
-// PA swing classifier. It is therefore useful as a genuinely independent
-// cross-check, while it remains display-only and cannot authorize a trade.
+// PA swing classifier. It is therefore a genuinely independent source for
+// live PA-1 decisions; a missing or non-directional source fails closed.
 
 import { aggregate, dropForming, fetchBinanceCandles, HOUR_MS } from './candles.mjs'
 import { normalizeCandlePrices, roundPrice } from './price.mjs'

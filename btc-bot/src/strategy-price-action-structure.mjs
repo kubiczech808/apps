@@ -4,7 +4,7 @@ import { buildExternalTrendReference } from './external-trends.mjs'
 import { buildFvgSupplyDemandZones, candleSignal, marketStructure } from './priceaction.mjs'
 
 export const PRICE_ACTION_STRUCTURE_ID = 'price-action-structure-v1'
-export const PRICE_ACTION_MATRIX_SCHEMA = 44
+export const PRICE_ACTION_MATRIX_SCHEMA = 45
 export const PRICE_ACTION_CHART_CANDLE_LIMITS = {
   '1h': 8760,
   '4h': 2190,
@@ -1268,10 +1268,9 @@ export const evaluateTradeProfile = ({
   return output
 }
 
-// The independent feed is a confirmation, never a replacement for the PA-1
-// structure. A missing or sideways reference fails closed for new entries:
-// preserving capital is preferable to treating an unavailable confirmation as
-// agreement. Existing positions are reviewed only by their own PA structure.
+// The external EMA regime is a second condition on top of the externally
+// sourced pivot structure. A missing or sideways reference fails closed for
+// new entries; local swing structure never substitutes for it.
 export const applyExternalTrendConfirmation = ({ profile, externalTrend = null } = {}) => {
   if (!profile) return profile
   const expectedTrend = profile.side === 'long' ? 'up' : profile.side === 'short' ? 'down' : null
@@ -1435,6 +1434,8 @@ const latestCounterSwingInChart = ({ item, trend, activeRange }) => {
   }
 }
 
+// Legacy internal structure bridge. Kept only for future supplemental
+// research; the production matrix no longer calls it.
 // The 1H chart is an execution lens inside the active 4H swing, not an
 // independent trend engine. A local rebound remains an LH/HL until its close
 // breaks the 4H protected end of the wave. Without this anchor, USDJPY's
@@ -1567,6 +1568,10 @@ export const fetchFxCandles = async ({ asset, timeframeId, requiredHistoryDays =
   return { source: null, candles: [], failures }
 }
 
+// Legacy internal swing classifier. It is deliberately kept for later
+// research as a supplemental signal, but it is no longer called by the
+// production matrix, chart, or entry protocol. Live PA-1 structure comes
+// exclusively from the externally sourced, confirmed pivot reference below.
 export const classifyStructure = (
   candles,
   {
@@ -1778,6 +1783,127 @@ export const classifyStructure = (
   }
 }
 
+const externalPivotLeg = (pivots, kind) => {
+  const typed = pivots.filter((pivot) => pivot.kind === kind)
+  const current = typed.at(-1) ?? null
+  const previous = typed.at(-2) ?? null
+  if (!current) return null
+  return {
+    previous,
+    current,
+    label: current.label ?? null,
+    confirmedBreak: Boolean(previous && ((kind === 'high' && current.price > previous.price) || (kind === 'low' && current.price < previous.price))),
+    referencePrice: previous?.price ?? null,
+    confirmationClose: current.close ?? null,
+    changePct: previous?.price ? ((current.price / previous.price) - 1) * 100 : null,
+  }
+}
+
+// This is the only live structure classifier. The OHLC and pivots originate
+// from Twelve Data for FX and Binance for BTC; no swing or trend conclusion
+// from the local market-data feed is allowed to influence the result.
+export const classifyExternalStructure = ({
+  candles = [],
+  zoneCandles = candles,
+  chartCandles = candles,
+  zoneLookback = 2,
+  zoneMaxAgeCandles = 400,
+  historyDays = null,
+  zoneHistoryDays = null,
+  externalTrend = null,
+  externalPivots = null,
+} = {}) => {
+  const normalizedCandles = Array.isArray(candles) ? candles.map(normalizeCandlePrices) : []
+  const normalizedZoneCandles = Array.isArray(zoneCandles) ? zoneCandles.map(normalizeCandlePrices) : []
+  const normalizedChartCandles = Array.isArray(chartCandles) ? chartCandles.map(normalizeCandlePrices) : []
+  const latest = normalizedCandles.at(-1) ?? null
+  const sourcePivots = (externalPivots?.pivots ?? [])
+    .filter((pivot) => pivot?.kind && Number.isFinite(pivot.price) && Number.isFinite(pivot.time))
+    .sort((left, right) => left.time - right.time)
+    .map((pivot) => ({ ...pivot, source: externalPivots?.source ?? externalTrend?.source ?? null }))
+  const previousByKind = { high: null, low: null }
+  const pivots = sourcePivots.map((pivot) => {
+    const previous = previousByKind[pivot.kind]
+    const label = pivot.label ?? (!previous
+      ? pivot.kind === 'high' ? 'H' : 'L'
+      : pivot.kind === 'high'
+        ? pivot.price > previous.price ? 'HH' : 'LH'
+        : pivot.price > previous.price ? 'HL' : 'LL')
+    previousByKind[pivot.kind] = pivot
+    return { ...pivot, label }
+  })
+  const high = externalPivotLeg(pivots, 'high')
+  const low = externalPivotLeg(pivots, 'low')
+  const requestedTrend = externalPivots?.trend
+  const trend = requestedTrend === 'up' || requestedTrend === 'down' ? requestedTrend : 'flat'
+  const expectedHigh = trend === 'up' ? 'HH' : trend === 'down' ? 'LH' : null
+  const expectedLow = trend === 'up' ? 'HL' : trend === 'down' ? 'LL' : null
+  const structureConfirmed = Boolean(
+    trend !== 'flat' && high?.label === expectedHigh && low?.label === expectedLow
+  )
+  const activeRange = structureConfirmed
+    ? {
+        high: { ...high.current, label: expectedHigh },
+        low: { ...low.current, label: expectedLow },
+        source: 'external-confirmed-pivots',
+      }
+    : null
+  const source = externalPivots?.source ?? externalTrend?.source ?? 'externí zdroj'
+  const method = externalPivots?.method ?? 'potvrzené pivoty externího OHLC'
+  const labels = [high?.label, low?.label].filter(Boolean).join(' + ')
+  const reason = trend === 'flat'
+    ? `${source}: ${method}; bez potvrzené sekvence HH + HL nebo LH + LL${labels ? ` (${labels})` : ''}`
+    : `${source}: ${method}; ${labels || `${expectedHigh} + ${expectedLow}`}`
+
+  return {
+    trend,
+    establishedTrend: trend,
+    structureConfirmed,
+    status: trend === 'up' ? 'met' : trend === 'down' ? 'unmet' : 'neutral',
+    event: null,
+    eventDetail: null,
+    reason,
+    price: latest?.close ?? null,
+    asOf: latest?.time ?? externalPivots?.asOf ?? externalTrend?.asOf ?? null,
+    candles: normalizedCandles.length,
+    lastCandle: candleSummary(latest),
+    candleSignal: candleSignal(normalizedCandles),
+    chartCandles: normalizedChartCandles.map(candleSummary),
+    lastHigh: high?.current?.price ?? null,
+    lastLow: low?.current?.price ?? null,
+    externalTrend,
+    externalPivots,
+    structure: {
+      source: 'external-confirmed-pivots',
+      method,
+      lookback: externalPivots?.timePeriod ?? null,
+      zoneLookback,
+      zoneMaxAgeCandles,
+      historyDays,
+      zoneHistoryDays,
+      zoneCandles: normalizedZoneCandles.length,
+      from: normalizedCandles[0]?.time ?? null,
+      to: latest?.time ?? null,
+      high,
+      low,
+      activeRange,
+      protectedHigh: trend === 'down' ? high?.current ?? null : null,
+      protectedLow: trend === 'up' ? low?.current ?? null : null,
+      developingSwing: null,
+      developingCounterSwing: null,
+      confirmed: structureConfirmed,
+      // Do not expose a locally derived zigzag beside the externally sourced
+      // structure. It made the chart look authoritative while disagreeing
+      // with the source data.
+      recentSwings: [],
+      chartPivots: [],
+      alternatingTrendPivots: [],
+      externalPivotCount: pivots.length,
+    },
+    zones: activeSupplyDemandZones(normalizedZoneCandles, { lookback: zoneLookback, maxAgeCandles: zoneMaxAgeCandles }),
+  }
+}
+
 const candlesInHistory = (candles, historyDays) => {
   const latestTime = candles.at(-1)?.time
   if (!Number.isFinite(latestTime) || !(historyDays > 0)) return candles
@@ -1934,22 +2060,23 @@ export const buildPriceActionMatrix = async ({
         : profile.zoneMaxAgeCandles
       if (result.source) sources.add(result.source)
       for (const failure of result.failures ?? []) failures.push(`${timeframe.label}: ${failure}`)
-      trends[timeframe.id] = classifyStructure(analysisCandles, {
-        lookback: profile.pivotLookback,
+      const externalTrend = externalTrends?.assets?.[asset.symbol]?.[timeframe.id] ?? null
+      const externalPivots = externalTrends?.pivots?.assets?.[asset.symbol]?.[timeframe.id] ?? null
+      trends[timeframe.id] = classifyExternalStructure({
+        candles: analysisCandles,
         zoneLookback: merged.zoneLookback,
-        minCandles: Number(merged.minCandles) !== DEFAULT_PRICE_ACTION_STRUCTURE.minCandles
-          ? Number(merged.minCandles)
-          : profile.minCandles,
         zoneMaxAgeCandles,
         historyDays: profile.historyDays,
         zoneHistoryDays: profile.zoneHistoryDays,
         zoneCandles,
         chartCandles,
+        externalTrend,
+        externalPivots,
       })
-      trends[timeframe.id].externalTrend = externalTrends?.assets?.[asset.symbol]?.[timeframe.id] ?? null
-      trends[timeframe.id].externalPivots = externalTrends?.pivots?.assets?.[asset.symbol]?.[timeframe.id] ?? null
     }
-    alignOneHourStructureToFourHour(trends)
+    // Intentionally no alignOneHourStructureToFourHour(trends): it was part
+    // of the retired local swing classifier and must not alter an external
+    // source's timeframe conclusion.
     attachTradeProfiles(trends, merged)
     rows.push({
       symbol: asset.symbol,
