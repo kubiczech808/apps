@@ -90,6 +90,10 @@ def patch_stats() -> None:
     target = copy("app/stats.php")
     value = target.read_text(encoding="utf-8", errors="replace")
     marker = "/* BTC-DCA market stats cache */"
+    if marker in value:
+        if re.search(r"exchange_rates", value, re.IGNORECASE):
+            raise SystemExit("stats.php is marked migrated but still contains an exchange_rates reference")
+        return
     if marker not in value:
         include = re.search(r"^.*dbConnect\.php.*$", value, re.MULTILINE)
         if include is None:

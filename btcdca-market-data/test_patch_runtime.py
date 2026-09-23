@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import tempfile
+import shutil
 from pathlib import Path
 
 import patch_runtime
@@ -60,5 +61,12 @@ with tempfile.TemporaryDirectory() as temp:
         assert "SELECT 1" in patched
     for relative in ("php/market-data-lib.php", "php/market-data.php", "php/getTicker.php"):
         assert (patch_runtime.TARGET / relative).is_file()
+    second = root / "second"
+    shutil.copytree(patch_runtime.TARGET, second / "server-current")
+    patch_runtime.SOURCE = second / "server-current"
+    patch_runtime.TARGET = second / "deploy-root" / "www"
+    patch_runtime.main()
+    stats_again = (patch_runtime.TARGET / "app/stats.php").read_text(encoding="utf-8")
+    assert stats_again.count("btcdca_market_stats_rows") == 4
 
 print("Runtime patch test passed.")
