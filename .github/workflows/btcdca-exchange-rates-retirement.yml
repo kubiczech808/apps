@@ -80,10 +80,12 @@ jobs:
         run: |
           set -euo pipefail
           action="${{ inputs.operation }}"
-          curl --fail-with-body --show-error --silent --retry 1 --max-time 900 \
+          status=$(curl --show-error --silent --retry 1 --max-time 900 --write-out '%{http_code}' \
             -H "X-BTCDCA-Token: ${BTCDCA_DB_HELPER_TOKEN}" \
             "https://www.btc-dca.com/btcdca-exchange-rates-helper.php?action=${action}" \
-            --output exchange-rates-result.json
+            --output exchange-rates-result.json)
+          cat exchange-rates-result.json
+          test "$status" = 200
           python3 -m json.tool exchange-rates-result.json
           grep -Fq '"ok": true' exchange-rates-result.json
 
