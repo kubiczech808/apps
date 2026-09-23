@@ -92,9 +92,9 @@ const AI_RESEARCH_WEBSITE_SUBPAGE_SLICE_SECONDS = 8;
 // Stranky se uz neberou nahodne z prvnich dvanacti. Pozice i neproverene detaily
 // se ukladaji do DB, aby se postupne prosla cela kategorie a neskoncilo se omylem
 // na male casti uz jednou zkontrolovanych vysledku.
-const AI_RESEARCH_SEED_PICK_PAGES_MAX = 3;
-const AI_RESEARCH_SEED_PICK_DETAILS_MAX = 8;
-const AI_RESEARCH_SEED_PICK_SLICE_SECONDS = 10;
+const AI_RESEARCH_SEED_PICK_PAGES_MAX = 6;
+const AI_RESEARCH_SEED_PICK_DETAILS_MAX = 12;
+const AI_RESEARCH_SEED_PICK_SLICE_SECONDS = 18;
 // Kolik polozek behu se v detailu vypise na jednu stranku. Kontejner muze mit
 // desetitisice URL; vypsat je vsechny znamenalo chybu 500 na cele strance.
 const SCRAPING_ITEMS_PER_PAGE = 25;
@@ -4844,7 +4844,7 @@ function persistAiResearchSeedDiscoveryState(PDO $pdo, array $state): void
 
 function aiResearchFirmySeedCatalogKey(): string
 {
-    return 'vse-pro-firmy-cz';
+    return 'vse-pro-firmy-cz-v2';
 }
 
 /**
@@ -5270,7 +5270,7 @@ function selectAiResearchFirmySeedCompany(PDO $pdo): ?array
                 $state['next_page'] = $page + 1;
                 if (!$urls) {
                     $state['empty_pages']++;
-                    if ($state['empty_pages'] >= 2) {
+                    if (aiResearchSeedCatalogIsPastEnd($state) || ((int)($state['known_total'] ?? 0) < 1 && $state['empty_pages'] >= 4)) {
                         $state['next_page'] = 1;
                         $state['empty_pages'] = 0;
                         $state['cycle']++;
@@ -15009,7 +15009,7 @@ function scrapingHttpTimeouts(string $url): array
 {
     $host = strtolower((string)(parse_url($url, PHP_URL_HOST) ?: ''));
     if (aiResearchFastFetchMode()) {
-        return ['connect' => 4, 'total' => 8, 'attempts' => 1];
+        return in_array($host, ['firmy.cz', 'www.firmy.cz'], true) ? ['connect' => 6, 'total' => 12, 'attempts' => 2] : ['connect' => 4, 'total' => 8, 'attempts' => 1];
     }
     if (in_array($host, ['dasoertliche.de', 'www.dasoertliche.de'], true)) {
         return ['connect' => 6, 'total' => 12, 'attempts' => 2];
