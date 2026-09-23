@@ -6698,7 +6698,11 @@ function record_dip_entry_hit(array $input): array
             'eventStartTime' => $input['eventStartTime'] ?? '',
             'marketCreatedAt' => $input['marketCreatedAt'] ?? '',
         ])) {
-        return ['ok' => false, 'reason' => 'unverified opening quote; refusing to record a dip entry'];
+        // This is intentionally a terminal no-op rather than a request error. A retained
+        // plan from an older RPi build would otherwise retry its rejected record on every
+        // one-second pass while it remains in the buy band. Existing workers interpret
+        // `ok: true, recorded: false` as "do not retry", which safely drains that plan.
+        return ['ok' => true, 'recorded' => false, 'reason' => 'unverified opening quote; refusing to record a dip entry'];
     }
     $hits = read_dip_entry_hits();
     // One hit per portfolio and token, ever. The worker already refuses to fire twice, but
