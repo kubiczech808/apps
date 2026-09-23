@@ -1,0 +1,84 @@
+name: Trading DIP History Backtest
+
+# Historical CLOB retrieval is deliberately manual. The worker moves through a large
+# resolved tag archive in bounded batches, so it never competes with the ten-minute
+# scanner or live executor for a long, unbounded run.
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Polymarket tag to backtest"
+        required: false
+        default: "esports"
+        type: string
+      max_markets:
+        description: "New or retry markets in this batch"
+        required: false
+        default: "600"
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: trading-dip-history-backtest-${{ github.ref }}-${{ inputs.tag || 'esports' }}
+  cancel-in-progress: false
+
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    env:
+      DIP_BACKTEST_APP_HOST: https://osobnizkusenosti.cz/trading
+      DIP_BACKTEST_TAG: ${{ inputs.tag || 'esports' }}
+      DIP_BACKTEST_MAX_MARKETS: ${{ inputs.max_markets || '600' }}
+      DIP_BACKTEST_CONCURRENCY: "4"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Restore the incremental result cache
+        working-directory: trading
+        run: |
+          set -euo pipefail
+          tag="$(printf '%s' "$DIP_BACKTEST_TAG" | tr '[:upper:]' '[:lower:]')"
+          if ! [[ "$tag" =~ ^[a-z0-9]([a-z0-9-]{0,62}[a-z0-9])?$ ]]; then
+            echo "Invalid tag" >&2
+            exit 1
+          fi
+          mkdir -p data
+          cache="data/dip-backtest-${tag}-cache.json"
+          report="data/dip-backtest-${tag}-report.json"
+          curl --fail --silent --show-error --retry 2 --output "$cache" \
+            "https://osobnizkusenosti.cz/trading/data/dip-backtest-${tag}-cache.json" || rm -f "$cache"
+          curl --fail --silent --show-error --retry 2 --output "$report" \
+            "https://osobnizkusenosti.cz/trading/data/dip-backtest-${tag}-report.json" || rm -f "$report"
+
+      - name: Calculate next historical CLOB batch
+        working-directory: trading
+        run: node tools/dip-history-backtest.mjs
+
+      - name: Publish cache and compact report
+        working-directory: trading
+        env:
+          HOSTING_FTP_SERVER: ${{ secrets.HOSTING_FTP_SERVER }}
+          HOSTING_FTP_USERNAME: ${{ secrets.HOSTING_FTP_USERNAME }}
+          HOSTING_FTP_PASSWORD: ${{ secrets.HOSTING_FTP_PASSWORD }}
+          TRADING_FTP_DIR: /www/trading/data
+          PUBLISH_VERIFY_BASE_URL: https://osobnizkusenosti.cz/trading/data
+        run: |
+          set -euo pipefail
+          tag="$(printf '%s' "$DIP_BACKTEST_TAG" | tr '[:upper:]' '[:lower:]')"
+          echo "PUBLISH_FILES=data/dip-backtest-${tag}-cache.json>dip-backtest-${tag}-cache.json,data/dip-backtest-${tag}-report.json>dip-backtest-${tag}-report.json" >> "$GITHUB_ENV"
+          echo "PUBLISH_REQUIRED=dip-backtest-${tag}-cache.json,dip-backtest-${tag}-report.json" >> "$GITHUB_ENV"
+      - name: Upload published backtest files
+        working-directory: trading
+        env:
+          HOSTING_FTP_SERVER: ${{ secrets.HOSTING_FTP_SERVER }}
+          HOSTING_FTP_USERNAME: ${{ secrets.HOSTING_FTP_USERNAME }}
+          HOSTING_FTP_PASSWORD: ${{ secrets.HOSTING_FTP_PASSWORD }}
+          TRADING_FTP_DIR: /www/trading/data
+          PUBLISH_VERIFY_BASE_URL: https://osobnizkusenosti.cz/trading/data
+        run: python3 tools/publish-execution-state.py

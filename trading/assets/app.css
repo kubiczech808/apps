@@ -3849,6 +3849,22 @@ body.modal-open {
   margin-bottom: 14px;
 }
 
+.dip-backtest-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.dip-backtest-controls .parameter-control {
+  min-width: min(100%, 230px);
+}
+
+.dip-backtest-ledger table {
+  min-width: 760px;
+}
+
 .setup-finder-status {
   color: var(--muted);
   font-size: 12px;
