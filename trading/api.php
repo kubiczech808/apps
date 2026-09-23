@@ -7374,9 +7374,10 @@ function request_dip_backtest_run(string $tag): array
     $path = __DIR__ . '/data/.dip-backtest-dispatch-' . $tag . '.json';
     $previous = decode_state_file($path, false);
     $requestedAt = is_array($previous) ? (int) ($previous['requestedAt'] ?? 0) : 0;
-    // One background slice may take minutes. The runner cache makes a repeat harmless, but
-    // queueing several identical 600-market jobs would waste the same constrained runner.
-    if ($requestedAt > 0 && time() - $requestedAt < 600) {
+    // Protect against an accidental double tap, not against correcting an active analysis.
+    // The workflow itself now cancels an older run for the same tag, so a ten-minute API
+    // lock only stranded an obsolete cache/rule version behind the run it needed to replace.
+    if ($requestedAt > 0 && time() - $requestedAt < 90) {
         return ['ok' => true, 'action' => 'SKIP', 'reason' => 'A historical backtest was requested recently.', 'tag' => $tag];
     }
     $result = dispatch_workflow('trading-dip-history-backtest.yml', ['tag' => $tag, 'max_markets' => '600'], false);
