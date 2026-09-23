@@ -114,6 +114,22 @@ test('a zone is the three-candle FVG from a qualified displacement base', () => 
   )
 })
 
+test('an FVG keeps its zone when a timeframe boundary puts the displacement in the confirming candle', () => {
+  const candles = [
+    candle(START, 100, 102, 99, 101),
+    candle(START + HOUR, 101, 103, 100, 101.5),
+    candle(START + 2 * HOUR, 104, 116, 104, 115),
+  ]
+
+  const [zone] = buildFvgSupplyDemandZones(candles)
+  assert.ok(zone, 'the multi-candle breakout should publish its lower imbalance')
+  assert.equal(zone.type, 'demand')
+  assert.deepEqual({ low: zone.low, high: zone.high }, { low: 102, high: 104 })
+  assert.equal(zone.fvg.index, 1, 'the three-candle FVG keeps its original middle index')
+  assert.equal(zone.fvg.displacementIndex, 2, 'the actual displacement candle remains auditable')
+  assert.deepEqual(zone.baseIndexes, [1])
+})
+
 test('a bullish engulfing needs the body to cover the previous one', () => {
   const candles = [candle(START, 110, 111, 104, 105), candle(START + HOUR, 104, 112, 103, 111)]
   assert.equal(candleSignal(candles).bullish, 'bullish_engulfing')

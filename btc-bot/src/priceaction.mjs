@@ -183,10 +183,12 @@ export const marketStructure = (candles, { lookback = 2 } = {}) => {
  *
  * The sequence required here is:
  *   base -> directional displacement -> three-candle FVG confirmation.
- * The FVG's middle candle is the displacement candle. Its first candle, or the
- * nearest opposite/indecision candle immediately behind it, is the base. This
+ * Usually the FVG's middle candle is the displacement candle. On an aggregated
+ * timeframe the breakout can straddle a bucket boundary, so the confirming
+ * third candle may carry the displacement instead. In both cases the nearest
+ * opposite/indecision candle immediately behind the impulse is the base. This
  * keeps an unrelated gap elsewhere in the chart from blessing an ordinary
- * swing as a zone.
+ * swing as a zone without dropping a real multi-candle breakout.
  */
 export const buildFvgSupplyDemandZones = (candles, {
   maxAgeCandles = 400,
@@ -201,17 +203,22 @@ export const buildFvgSupplyDemandZones = (candles, {
   const zones = []
 
   for (const gap of gaps) {
-    const displacementIndex = gap.index
+    const confirmationIndex = gap.confirmationIndex ?? gap.index + 1
+    const displacementIndex = [gap.index, confirmationIndex].find((index) => {
+      const candidate = candles[index]
+      const localAtr = atrSeries[index] ?? reference
+      const directional = gap.direction === 'bullish' ? isBullish(candidate) : isBearish(candidate)
+      const bodyShare = range(candidate) > 0 ? body(candidate) / range(candidate) : 0
+      return directional && body(candidate) >= localAtr * minDisplacementAtr && bodyShare >= 0.5
+    })
+    if (!Number.isFinite(displacementIndex)) continue
     const displacement = candles[displacementIndex]
     const localAtr = atrSeries[displacementIndex] ?? reference
-    const directional = gap.direction === 'bullish' ? isBullish(displacement) : isBearish(displacement)
-    const bodyShare = range(displacement) > 0 ? body(displacement) / range(displacement) : 0
-    if (!directional || body(displacement) < localAtr * minDisplacementAtr || bodyShare < 0.5) continue
 
-    const firstFvgIndex = displacementIndex - 1
-    const searchStart = Math.max(oldestIndex, firstFvgIndex - Math.max(1, maxBaseCandles) + 1)
+    const baseSearchEnd = displacementIndex - 1
+    const searchStart = Math.max(oldestIndex, baseSearchEnd - Math.max(1, maxBaseCandles) + 1)
     let baseIndex = null
-    for (let index = firstFvgIndex; index >= searchStart; index -= 1) {
+    for (let index = baseSearchEnd; index >= searchStart; index -= 1) {
       const candidate = candles[index]
       const opposite = gap.direction === 'bullish' ? !isBullish(candidate) : !isBearish(candidate)
       const candidateBodyShare = range(candidate) > 0 ? body(candidate) / range(candidate) : 0
@@ -236,7 +243,6 @@ export const buildFvgSupplyDemandZones = (candles, {
     const high = gap.high
     if (!(high > low)) continue
 
-    const confirmationIndex = gap.confirmationIndex ?? displacementIndex + 1
     const continuation = zones.find((zone) => (
       zone.type === type
       && zone.low <= high
@@ -279,7 +285,8 @@ export const buildFvgSupplyDemandZones = (candles, {
         direction: gap.direction,
         low: gap.low,
         high: gap.high,
-        index: displacementIndex,
+        index: gap.index,
+        displacementIndex,
         firstIndex: gap.firstIndex,
         confirmationIndex,
         filled: gap.filled,
