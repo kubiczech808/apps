@@ -1502,33 +1502,83 @@ const renderAssetChart = () => {
     )
   }
 
-  // The retired local swing classifier used to draw a white zigzag and flat
-  // range bounds here. Do not substitute a locally derived picture for the
-  // external source's structure. The chart keeps only the external wave's
-  // 50% level used by the active entry plan.
+  // Show only the externally confirmed pivot path used by the live entry
+  // decision. The former local swing classifier must never be mixed in here.
+  const sourcePivots = (item?.structure?.chartPivots ?? [])
+    .filter((pivot) => Number.isFinite(pivot?.time) && Number.isFinite(pivot?.price))
+    .map((pivot) => ({ ...pivot, x: xForTime(pivot.time), y: y(pivot.price) }))
+    .filter((pivot) => Number.isFinite(pivot.x) && Number.isFinite(pivot.y))
+  const pivotSource = item?.structure?.source ?? item?.externalTrend?.source ?? 'externí zdroj'
+  if (sourcePivots.length >= 2) {
+    const path = el('path', {
+      className: 'asset-external-structure-path',
+      d: sourcePivots.map((pivot, index) => `${index ? 'L' : 'M'}${pivot.x},${pivot.y}`).join(''),
+    })
+    path.append(el('title', { text: `Potvrzené pivoty · ${pivotSource}` }))
+    svg.append(path)
+  }
+
   const activeRange = item?.structure?.activeRange
   const latestHigh = activeRange?.high ? { ...activeRange.high, x: xForTime(activeRange.high.time) } : null
   const latestLow = activeRange?.low ? { ...activeRange.low, x: xForTime(activeRange.low.time) } : null
 
-  if (latestHigh && latestLow && latestHigh.price > latestLow.price) {
+  if (
+    latestHigh && latestLow
+    && Number.isFinite(latestHigh.x) && Number.isFinite(latestLow.x)
+    && latestHigh.price > latestLow.price
+  ) {
+    const trendDirection = item?.trend === 'down' ? 'down' : 'up'
+    const rangeStart = trendDirection === 'down' ? latestHigh : latestLow
+    const rangeEnd = trendDirection === 'down' ? latestLow : latestHigh
     const pullback = (latestHigh.price + latestLow.price) / 2
-    const startX = Math.min(latestHigh.x ?? ASSET_CHART.padLeft, latestLow.x ?? ASSET_CHART.padLeft)
+    const activeLeg = el('line', {
+      className: 'asset-external-structure-active',
+      x1: rangeStart.x,
+      x2: rangeEnd.x,
+      y1: y(rangeStart.price),
+      y2: y(rangeEnd.price),
+    })
+    activeLeg.append(el('title', { text: `Aktivní vlna · ${pivotSource}` }))
     const pullbackY = y(pullback)
+    const pullbackStartX = Math.max(rangeStart.x, rangeEnd.x)
+    const endpointLabel = (pivot, percent, labelTitle) => {
+      const pointY = y(pivot.price)
+      const labelAbove = pivot.kind === 'high'
+      const marker = el('circle', {
+        className: 'asset-external-structure-marker',
+        cx: pivot.x,
+        cy: pointY,
+        r: 3.1,
+      })
+      marker.append(el('title', { text: `${labelTitle} · ${pivotSource}` }))
+      svg.append(
+        marker,
+        el('text', {
+          className: 'asset-external-structure-label',
+          x: pivot.x + 6,
+          y: pointY + (labelAbove ? -8 : 14),
+          text: `${percent} % · ${pivot.label ?? (pivot.kind === 'high' ? 'H' : 'L')} ${quotePrice(pivot.price)}`,
+        })
+      )
+    }
     svg.append(
+      activeLeg,
       el('line', {
         className: 'asset-structure-pullback',
-        x1: startX,
+        x1: pullbackStartX,
         x2: candlePlotRight,
         y1: pullbackY,
         y2: pullbackY,
       }),
       el('text', {
         className: 'asset-structure-pullback-label',
-        x: startX + 5,
+        x: pullbackStartX + 5,
         y: pullbackY - 5,
-        text: '50 %',
+        text: `50 % · ${quotePrice(pullback)}`,
       })
     )
+    endpointLabel(rangeStart, 0, 'Potvrzený začátek aktivní vlny')
+    endpointLabel(rangeEnd, 100, 'Potvrzený konec aktivní vlny')
   }
 
   for (const level of riskLevels) {

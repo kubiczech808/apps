@@ -4,7 +4,7 @@ import { buildExternalTrendReference } from './external-trends.mjs'
 import { buildFvgSupplyDemandZones, candleSignal, marketStructure } from './priceaction.mjs'
 
 export const PRICE_ACTION_STRUCTURE_ID = 'price-action-structure-v1'
-export const PRICE_ACTION_MATRIX_SCHEMA = 46
+export const PRICE_ACTION_MATRIX_SCHEMA = 47
 export const PRICE_ACTION_CHART_CANDLE_LIMITS = {
   '1h': 8760,
   '4h': 2190,
@@ -1892,11 +1892,13 @@ export const classifyExternalStructure = ({
       developingSwing: null,
       developingCounterSwing: null,
       confirmed: structureConfirmed,
-      // Do not expose a locally derived zigzag beside the externally sourced
-      // structure. It made the chart look authoritative while disagreeing
-      // with the source data.
+      // The chart can show only the source pivots used for the live decision.
+      // A local zigzag is intentionally never mixed into this path.
       recentSwings: [],
-      chartPivots: [],
+      chartPivots: pivots.map((pivot) => ({
+        ...pivot,
+        source: pivot.source ?? source,
+      })),
       alternatingTrendPivots: [],
       externalPivotCount: pivots.length,
     },

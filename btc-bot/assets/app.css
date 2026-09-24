@@ -256,6 +256,10 @@ button.primary { color: #fff; background: var(--series-1); border-color: transpa
 .asset-price-chart .asset-external-ema50 { fill: none; stroke-width: 1.15; opacity: 0.64; pointer-events: stroke; }
 .asset-price-chart .asset-external-ema20 { stroke: #8bd5ff; }
 .asset-price-chart .asset-external-ema50 { stroke: #f3a5c7; }
+.asset-price-chart .asset-external-structure-path { fill: none; stroke: #d9e0e6; stroke-width: 0.9; stroke-dasharray: 3 4; opacity: 0.62; pointer-events: stroke; }
+.asset-price-chart .asset-external-structure-active { stroke: #ffffff; stroke-width: 1.05; stroke-linecap: round; opacity: 0.94; pointer-events: stroke; }
+.asset-price-chart .asset-external-structure-marker { fill: var(--surface-1); stroke: #ffffff; stroke-width: 1.25; pointer-events: none; }
+.asset-price-chart .asset-external-structure-label { fill: #ffffff; font-size: 10px; font-weight: 750; paint-order: stroke; stroke: var(--surface-1); stroke-width: 3px; stroke-linejoin: round; pointer-events: none; }
 .asset-price-chart .asset-zone-demand { fill: var(--good); fill-opacity: 0.13; stroke: var(--good-text); stroke-opacity: 0.58; }
 .asset-price-chart .asset-zone-supply { fill: var(--critical); fill-opacity: 0.12; stroke: var(--critical-text); stroke-opacity: 0.58; }
 .asset-price-chart .asset-zone-label { font-size: 11px; font-weight: 650; font-variant-numeric: tabular-nums; }

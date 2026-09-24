@@ -150,7 +150,16 @@ test('live PA structure comes only from externally confirmed pivots', () => {
   assert.equal(result.structure.high.label, 'LH')
   assert.equal(result.structure.low.label, 'LL')
   assert.equal(result.structure.source, 'external-confirmed-pivots')
-  assert.deepEqual(result.structure.chartPivots, [])
+  assert.equal(result.structure.chartPivots.length, 4)
+  assert.deepEqual(
+    result.structure.chartPivots.map((pivot) => [pivot.kind, pivot.label, pivot.source]),
+    [
+      ['high', 'H', 'Twelve Data'],
+      ['low', 'L', 'Twelve Data'],
+      ['high', 'LH', 'Twelve Data'],
+      ['low', 'LL', 'Twelve Data'],
+    ]
+  )
 })
 
 test('an available Twelve Data key immediately replaces a cached missing-key result', () => {
