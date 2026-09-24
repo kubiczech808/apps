@@ -1411,11 +1411,10 @@ const renderAssetChart = () => {
   const x = (index) => ASSET_CHART.padLeft + (index / Math.max(1, candles.length - 1)) * candlePlotWidth
   const y = (value) => ASSET_CHART.padTop + ((maxPrice - value) / (maxPrice - minPrice)) * plotHeight
   const candleSpacing = candlePlotWidth / Math.max(1, candles.length - 1)
-  const candleWidth = Math.max(timeframeId === '1d' ? 3 : 2, Math.min(12, candleSpacing * (timeframeId === '1d' ? 0.74 : 0.62)))
-  // SVG coordinates scale with the responsive chart. A 3-unit body could
-  // still read as an OHLC cross on the daily view, so reserve a visibly
-  // rectangular body and centre it on the true open/close midpoint.
-  const minimumCandleBodyHeight = timeframeId === '1d' ? 7 : 4
+  // Keep the same candle proportions on every timeframe. A daily-only
+  // minimum made small daily closes look like square blocks instead of bars.
+  const candleWidth = Math.max(2, Math.min(12, candleSpacing * 0.62))
+  const minimumCandleBodyHeight = 4
   const xForTime = (time) => {
     if (!Number.isFinite(time) || !candles.length) return null
     if (time < candles[0].time || time > candles.at(-1).time) return null
