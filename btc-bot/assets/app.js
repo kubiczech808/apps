@@ -1505,7 +1505,8 @@ const renderAssetChart = () => {
   // Show only the externally confirmed pivot path used by the live entry
   // decision. The former local swing classifier must never be mixed in here.
   const sourcePivots = (item?.structure?.chartPivots ?? [])
-    .filter((pivot) => Number.isFinite(pivot?.time) && Number.isFinite(pivot?.price))
+    .map((pivot) => ({ ...pivot, time: Number(pivot?.time), price: Number(pivot?.price) }))
+    .filter((pivot) => Number.isFinite(pivot.time) && Number.isFinite(pivot.price))
     .map((pivot) => ({ ...pivot, x: xForTime(pivot.time), y: y(pivot.price) }))
     .filter((pivot) => Number.isFinite(pivot.x) && Number.isFinite(pivot.y))
   const pivotSource = item?.structure?.source ?? item?.externalTrend?.source ?? 'externí zdroj'
@@ -1519,8 +1520,12 @@ const renderAssetChart = () => {
   }
 
   const activeRange = item?.structure?.activeRange
-  const latestHigh = activeRange?.high ? { ...activeRange.high, x: xForTime(activeRange.high.time) } : null
-  const latestLow = activeRange?.low ? { ...activeRange.low, x: xForTime(activeRange.low.time) } : null
+  const latestHigh = activeRange?.high
+    ? { ...activeRange.high, time: Number(activeRange.high.time), price: Number(activeRange.high.price), x: xForTime(Number(activeRange.high.time)) }
+    : null
+  const latestLow = activeRange?.low
+    ? { ...activeRange.low, time: Number(activeRange.low.time), price: Number(activeRange.low.price), x: xForTime(Number(activeRange.low.time)) }
+    : null
 
   if (
     latestHigh && latestLow

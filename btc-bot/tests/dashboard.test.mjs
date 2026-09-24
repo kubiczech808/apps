@@ -252,6 +252,7 @@ test('asset tickers open a timeframe price chart with supply and demand zones', 
   assert.match(js, /const zoneStartX = xForTime\(zone\.fvg\?\.definingCandles\?\.\[0\]\?\.time \?\? zone\.firstTime\)/)
   assert.match(js, /structure\?\.activeRange/)
   assert.match(js, /const sourcePivots = \(item\?\.structure\?\.chartPivots/)
+  assert.match(js, /time: Number\(pivot\?\.time\), price: Number\(pivot\?\.price\)/)
   assert.match(js, /asset-external-structure-path/)
   assert.match(js, /asset-external-structure-active/)
   assert.match(js, /text: `\$\{percent\} % · \$\{pivot\.label/)
