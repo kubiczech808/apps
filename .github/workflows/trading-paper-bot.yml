@@ -91,6 +91,9 @@ permissions:
 jobs:
   paper:
     runs-on: ubuntu-latest
+    # The normal trading pass takes a few minutes. A hard ceiling is the final guard
+    # against any future remote dependency retaining the paper writer lock forever.
+    timeout-minutes: 15
     env:
       PAPER_STATE_PATH: data/paper-state.json
       PAPER_SCAN_HISTORY_ENTRY_PATH: data/market-scan-history-entry.ndjson
