@@ -2266,6 +2266,7 @@ const renderPriceActionOpen = (body) => {
     return
   }
   for (const position of rows) {
+    const remainingQuantityUsd = position.remainingQuantityUsd ?? position.quantityUsd
     body.append(
       el('tr', {}, [
         el('td', { text: when(position.openedAt ?? position.createdAt) }),
@@ -2275,7 +2276,7 @@ const renderPriceActionOpen = (body) => {
         positionCapitalCell(position),
         el('td', { text: quotePrice(position.entry) }),
         el('td', { text: quotePrice(priceActionPositionPrice(position)) }),
-        priceActionLevelCell({ label: 'SL', position, target: position.stopLoss, quantityUsd: remaining }),
+        priceActionLevelCell({ label: 'SL', position, target: position.stopLoss, quantityUsd: remainingQuantityUsd }),
         priceActionTargetsCell(position),
         positionPnlCell(position),
       ])

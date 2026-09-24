@@ -214,6 +214,13 @@ test('all position tables use real lifecycle timestamps and no sample trades', (
   assert.doesNotMatch(js, /sortedPriceActionProfiles\(\)\.filter\(\(entry\) => entry\.profile\.status === 'watch'\)/)
 })
 
+test('open price-action rows calculate the stop against their own remaining amount', () => {
+  const priceActionOpen = js.slice(js.indexOf('const renderPriceActionOpen'), js.indexOf('const renderOrders'))
+  assert.match(priceActionOpen, /const remainingQuantityUsd = position\.remainingQuantityUsd \?\? position\.quantityUsd/)
+  assert.match(priceActionOpen, /quantityUsd: remainingQuantityUsd/)
+  assert.doesNotMatch(priceActionOpen, /quantityUsd: remaining \}/)
+})
+
 test('price-action take-profit orders render as a protected half-position, not a cancellable entry', () => {
   const priceActionOrders = js.slice(js.indexOf('const renderPriceActionOrders'), js.indexOf('const EXIT_REASONS'))
   assert.match(priceActionOrders, /for \(const order of rows\) \{\r?\n    const partialTakeProfit = order\.orderRole === 'take-profit'/)
