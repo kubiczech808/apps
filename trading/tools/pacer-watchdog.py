@@ -43,6 +43,10 @@ DEFAULT_MAX_SILENCE_MINUTES = 25.0
 # The pacer job's own timeout. A run still "in progress" past this is not running, it is stuck,
 # and GitHub will kill it -- so it stops counting as proof the chain is alive.
 DEFAULT_STUCK_MINUTES = 65.0
+# A scan normally wakes paper execution immediately afterwards. This is deliberately wider
+# than that normal cycle: it is only a recovery floor for a broken hand-off.
+DEFAULT_PIPELINE_SILENCE_MINUTES = 20.0
+DEFAULT_PIPELINE_STUCK_MINUTES = 15.0
 
 
 def _moment(value: str | None) -> datetime | None:
@@ -121,6 +125,51 @@ def decide(
     }
 
 
+def decide_workflow_recovery(
+    runs: list,
+    now: datetime,
+    silence_minutes: float = DEFAULT_PIPELINE_SILENCE_MINUTES,
+    stuck_minutes: float = DEFAULT_PIPELINE_STUCK_MINUTES,
+) -> dict:
+    """Whether one downstream workflow needs a bounded recovery dispatch."""
+    dated = []
+    for run in runs or []:
+        created = _moment(run.get("created_at"))
+        if created is not None:
+            dated.append((created, run))
+    dated.sort(key=lambda pair: pair[0], reverse=True)
+
+    if not dated:
+        return {"dispatch": True, "reason": "no run on record"}
+
+    newest_at, newest = dated[0]
+    age = (now - newest_at).total_seconds() / 60.0
+    status = str(newest.get("status") or "")
+    conclusion = str(newest.get("conclusion") or "")
+
+    if status in {"queued", "in_progress", "requested", "waiting", "pending"}:
+        if age <= stuck_minutes:
+            return {
+                "dispatch": False,
+                "reason": f"a run is {status} and only {age:.1f} minute(s) old",
+            }
+        return {
+            "dispatch": True,
+            "reason": f"a run has been {status} for {age:.1f} minute(s), past its safe window",
+        }
+
+    if conclusion == "success" and age <= silence_minutes:
+        return {
+            "dispatch": False,
+            "reason": f"last successful run was {age:.1f} minute(s) ago",
+        }
+
+    return {
+        "dispatch": True,
+        "reason": f"last run was {age:.1f} minute(s) ago ({conclusion or status or 'unknown'})",
+    }
+
+
 def _api(url: str, token: str, method: str = "GET", body: dict | None = None):
     request = urllib.request.Request(
         url,
@@ -148,26 +197,55 @@ def main() -> int:
     listing = _api(f"{base}/runs?per_page=10", token)
     verdict = decide(listing.get("workflow_runs") or [], datetime.now(timezone.utc))
     print(verdict["reason"])
-    if not verdict["restart"]:
-        return 0
-
-    try:
-        _api(f"{base}/dispatches", token, method="POST",
-             body={"ref": ref, "inputs": {"interval_minutes": "3", "tick": "0"}})
-    except urllib.error.HTTPError as error:
-        detail = error.read().decode("utf-8", "replace")
-        if "disabled workflow" in detail:
-            # The one failure a retry cannot fix. A disabled workflow runs neither its own
-            # schedule nor anyone's dispatch, so the chain stays dead until a person enables
-            # it in the Actions UI -- which is why this is loud rather than another retry.
-            print("::error title=Pacer workflow is DISABLED::Automatic execution is stopped and"
-                  " cannot be restarted by dispatch. Enable Trading Pacer in the repository's"
-                  " Actions tab.")
+    if verdict["restart"]:
+        try:
+            _api(f"{base}/dispatches", token, method="POST",
+                 body={"ref": ref, "inputs": {"interval_minutes": "3", "tick": "0"}})
+        except urllib.error.HTTPError as error:
+            detail = error.read().decode("utf-8", "replace")
+            if "disabled workflow" in detail:
+                # The one failure a retry cannot fix. A disabled workflow runs neither its own
+                # schedule nor anyone's dispatch, so the chain stays dead until a person enables
+                # it in the Actions UI -- which is why this is loud rather than another retry.
+                print("::error title=Pacer workflow is DISABLED::Automatic execution is stopped and"
+                      " cannot be restarted by dispatch. Enable Trading Pacer in the repository's"
+                      " Actions tab.")
+                return 1
+            print(f"::error title=Pacer restart failed::HTTP {error.code}: {detail[:300]}")
             return 1
-        print(f"::error title=Pacer restart failed::HTTP {error.code}: {detail[:300]}")
-        return 1
+        print("::notice title=Pacer restarted::the chain was dead and has been dispatched again")
 
-    print("::notice title=Pacer restarted::the chain was dead and has been dispatched again")
+    # A live pacer proves only that its loop is alive. It does not prove that each downstream
+    # dispatch was accepted, so independently recover stale scan and paper heartbeats. These
+    # recovery calls do not touch live execution; that stays exclusively in the normal planner.
+    downstream = (
+        (
+            "trading-market-scan.yml",
+            {"market_scan_tag": "", "market_scan_liquidity_min": "0",
+             "market_scan_max_days": "-1", "run_source": "AUTO"},
+            "market scan",
+        ),
+        ("trading-paper-bot.yml", {"mode": "after_scan"}, "paper execution"),
+    )
+    now = datetime.now(timezone.utc)
+    for workflow_name, inputs, label in downstream:
+        workflow_base = f"https://api.github.com/repos/{repository}/actions/workflows/{workflow_name}"
+        try:
+            runs = _api(f"{workflow_base}/runs?per_page=10", token).get("workflow_runs") or []
+            recovery = decide_workflow_recovery(runs, now)
+        except (urllib.error.HTTPError, urllib.error.URLError) as error:
+            print(f"::warning::could not inspect {label} freshness: {error}")
+            continue
+        print(f"{label}: {recovery['reason']}")
+        if not recovery["dispatch"]:
+            continue
+        try:
+            _api(workflow_base + "/dispatches", token, method="POST", body={"ref": ref, "inputs": inputs})
+            print(f"::notice title={label.title()} recovered::dispatched after stale heartbeat")
+        except urllib.error.HTTPError as error:
+            detail = error.read().decode("utf-8", "replace")
+            print(f"::warning::could not recover {label}: HTTP {error.code}: {detail[:300]}")
+
     return 0
 
 

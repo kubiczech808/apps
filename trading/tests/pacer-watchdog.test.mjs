@@ -46,6 +46,25 @@ print(json.dumps(watchdog.decide(args["runs"], datetime.fromisoformat(args["now"
   }));
 }
 
+function decideWorkflowRecovery(runs, { now = NOW, silence = null, stuck = null } = {}) {
+  const script = `
+import importlib.util, json, sys
+from datetime import datetime
+spec = importlib.util.spec_from_file_location("watchdog", ${JSON.stringify(WATCHDOG)})
+watchdog = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(watchdog)
+args = json.loads(sys.stdin.read())
+kwargs = {}
+if args["silence"] is not None: kwargs["silence_minutes"] = args["silence"]
+if args["stuck"] is not None: kwargs["stuck_minutes"] = args["stuck"]
+print(json.dumps(watchdog.decide_workflow_recovery(args["runs"], datetime.fromisoformat(args["now"]), **kwargs)))
+`;
+  return JSON.parse(execFileSync("python3", ["-c", script], {
+    input: JSON.stringify({ runs, now, silence, stuck }),
+    encoding: "utf8",
+  }));
+}
+
 // Minutes before NOW, in the shape the runs API returns.
 const run = (minutesAgo, { status = "completed", conclusion = "success" } = {}) => ({
   created_at: new Date(Date.parse(NOW) - minutesAgo * 60000).toISOString(),
@@ -126,6 +145,15 @@ test("a rubbish timestamp is ignored rather than read as now", () => {
   const verdict = decide([{ created_at: "not a date", status: "completed", conclusion: "success" },
     run(247)]);
   assert.equal(verdict.restart, true, `the undated row must not vouch for the chain: ${verdict.reason}`);
+});
+
+test("downstream recovery is quiet for a fresh heartbeat and dispatches on a real gap", () => {
+  assert.equal(decideWorkflowRecovery([]).dispatch, true);
+  assert.equal(decideWorkflowRecovery([run(4)]).dispatch, false);
+  assert.equal(decideWorkflowRecovery([run(4, { status: "in_progress", conclusion: null })]).dispatch, false);
+  assert.equal(decideWorkflowRecovery([run(16, { status: "in_progress", conclusion: null })]).dispatch, true);
+  assert.equal(decideWorkflowRecovery([run(21)]).dispatch, true);
+  assert.equal(decideWorkflowRecovery([run(4, { conclusion: "failure" })]).dispatch, true);
 });
 
 test("it says the one thing a retry cannot fix", () => {
