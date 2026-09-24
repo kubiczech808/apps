@@ -1412,6 +1412,10 @@ const renderAssetChart = () => {
   const y = (value) => ASSET_CHART.padTop + ((maxPrice - value) / (maxPrice - minPrice)) * plotHeight
   const candleSpacing = candlePlotWidth / Math.max(1, candles.length - 1)
   const candleWidth = Math.max(timeframeId === '1d' ? 3 : 2, Math.min(12, candleSpacing * (timeframeId === '1d' ? 0.74 : 0.62)))
+  // SVG coordinates scale with the responsive chart. A 3-unit body could
+  // still read as an OHLC cross on the daily view, so reserve a visibly
+  // rectangular body and centre it on the true open/close midpoint.
+  const minimumCandleBodyHeight = timeframeId === '1d' ? 7 : 4
   const xForTime = (time) => {
     if (!Number.isFinite(time) || !candles.length) return null
     if (time < candles[0].time || time > candles.at(-1).time) return null
@@ -1466,16 +1470,16 @@ const renderAssetChart = () => {
     const highY = y(candle.high)
     const lowY = y(candle.low)
     const candleClass = candle.close >= candle.open ? 'asset-candle-up' : 'asset-candle-down'
+    const bodyHeight = Math.max(minimumCandleBodyHeight, Math.abs(closeY - openY))
+    const bodyY = ((openY + closeY) / 2) - bodyHeight / 2
     svg.append(
       el('line', { className: `asset-candle-wick ${candleClass}`, x1: xx, x2: xx, y1: highY, y2: lowY }),
       el('rect', {
         className: candleClass,
         x: xx - candleWidth / 2,
-        y: Math.min(openY, closeY),
+        y: bodyY,
         width: candleWidth,
-        // A genuinely small daily body must remain recognizably rectangular,
-        // not collapse into an OHLC-like cross on a tall responsive chart.
-        height: Math.max(3, Math.abs(closeY - openY)),
+        height: bodyHeight,
       })
     )
   }
