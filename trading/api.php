@@ -9470,6 +9470,116 @@ try {
         ]);
     }
 
+    // A focused view of one tag's settled history. Unlike the ranked Setup finder this
+    // returns every whole-percent probability floor, so the reader can see where a
+    // configuration begins to make money instead of being handed only its best row.
+    // It reads the already-folded cells whenever possible: one tag analysis must stay a
+    // small database query, not another scan of the full resolved archive.
+    if ($action === 'resolved-tag-probability-analysis') {
+        $tag = strtolower(trim((string) ($_GET['tag'] ?? '')));
+        if ($tag === '' || !preg_match('/^[a-z0-9][a-z0-9-]{0,79}$/', $tag)) {
+            respond(['ok' => false, 'error' => 'A valid Polymarket tag is required.'], 400);
+        }
+        $shape = strtolower(trim((string) ($_GET['shape'] ?? '*')));
+        if ($shape === '') {
+            $shape = '*';
+        }
+        if ($shape !== '*' && !in_array($shape, MARKET_SHAPE_IDS, true)) {
+            respond(['ok' => false, 'error' => 'An available event type is required.'], 400);
+        }
+
+        $accumulated = null;
+        $statsSource = 'archive';
+        $statsPdo = function_exists('trading_storage_resolved_stats_load') ? trading_storage_pdo() : null;
+        if ($statsPdo instanceof PDO) {
+            try {
+                $stored = trading_storage_resolved_stats_load($statsPdo);
+                if (is_array($stored)) {
+                    $accumulated = $stored;
+                    $statsSource = 'stored';
+                }
+            } catch (Throwable $throwable) {
+                $accumulated = null;
+            }
+        }
+        if ($accumulated === null) {
+            $corePath = state_file_paths()['paper'];
+            $core = decode_state_file($corePath, false);
+            $manifest = is_array($core['stateSegments'] ?? null) ? $core['stateSegments'] : [];
+            $sources = [];
+            foreach ([['observations', 'marketObservations'], ['resolvedObservations', 'resolvedMarketObservations']] as [$segment, $field]) {
+                $path = state_segment_path(['stateSegments' => $manifest], $corePath, $segment);
+                if ($path !== null) {
+                    $sources[] = [$path, $field];
+                }
+            }
+            if ($sources === []) {
+                $sources = [[$corePath, 'marketObservations'], [$corePath, 'resolvedMarketObservations']];
+            }
+            $accumulated = resolved_stats_accumulate($sources, 5.0);
+        }
+
+        $byProbability = [];
+        foreach (($accumulated['cells'] ?? []) as $key => $cell) {
+            $parts = explode("\x1f", (string) $key);
+            if (count($parts) !== 4) {
+                continue;
+            }
+            [$probability, $cellTag, $cellShape] = $parts;
+            if ($cellTag !== $tag || ($shape !== '*' && $cellShape !== $shape)) {
+                continue;
+            }
+            $probability = (int) $probability;
+            if ($probability < 50 || $probability > 99 || !is_array($cell)) {
+                continue;
+            }
+            if (!isset($byProbability[$probability])) {
+                $byProbability[$probability] = [0, 0, 0.0, 0.0];
+            }
+            $byProbability[$probability][0] += (int) ($cell[0] ?? 0);
+            $byProbability[$probability][1] += (int) ($cell[1] ?? 0);
+            $byProbability[$probability][2] += (float) ($cell[2] ?? 0);
+            $byProbability[$probability][3] += (float) ($cell[3] ?? 0);
+        }
+
+        $rows = [];
+        $trades = 0;
+        $wins = 0;
+        $staked = 0.0;
+        $pnl = 0.0;
+        for ($probability = 99; $probability >= 50; $probability -= 1) {
+            $cell = $byProbability[$probability] ?? [0, 0, 0.0, 0.0];
+            $trades += $cell[0];
+            $wins += $cell[1];
+            $staked += $cell[2];
+            $pnl += $cell[3];
+            if ($trades <= 0) {
+                continue;
+            }
+            $rows[] = [
+                'minimumProbability' => $probability,
+                'trades' => $trades,
+                'wins' => $wins,
+                'accuracy' => round($wins / $trades, 4),
+                'stakedUsdc' => round($staked, 2),
+                'pnlUsdc' => round($pnl, 2),
+                'returnPct' => $staked > 0 ? round(($pnl / $staked) * 100, 2) : null,
+            ];
+        }
+        usort($rows, static fn (array $left, array $right): int => $left['minimumProbability'] <=> $right['minimumProbability']);
+        respond([
+            'ok' => true,
+            'tag' => $tag,
+            'shape' => $shape,
+            'rows' => $rows,
+            'pricedRows' => $rows === [] ? 0 : (int) ($rows[0]['trades'] ?? 0),
+            'stakeUsdc' => 5.0,
+            'statsSource' => $statsSource,
+            'foldedAt' => $accumulated['foldedAt'] ?? null,
+            'generatedAt' => gmdate('c'),
+        ]);
+    }
+
     if ($action === 'taxonomy-observations') {
         $kind = strtolower(trim((string) ($_GET['kind'] ?? 'tag')));
         if (!in_array($kind, ['tag', 'category'], true)) {

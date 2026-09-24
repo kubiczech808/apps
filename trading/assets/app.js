@@ -4,6 +4,8 @@ const state = {
   // The Setup finder's answer, loaded when its tab is opened rather than with the page.
   setupFinder: null,
   setupFinderBusy: false,
+  tagAnalysis: null,
+  tagAnalysisBusy: false,
   dipBacktest: null,
   dipBacktestBusy: false,
   dipBacktestRunBusy: false,
@@ -326,6 +328,11 @@ const els = {
   setupFinderMinTrades: document.querySelector("[data-setup-finder-min-trades]"),
   setupFinderRun: document.querySelector("[data-setup-finder-run]"),
   setupFinderStatus: document.querySelector("[data-setup-finder-status]"),
+  tagAnalysisReport: document.querySelector("[data-tag-analysis-report]"),
+  tagAnalysisTag: document.querySelector("[data-tag-analysis-tag]"),
+  tagAnalysisShape: document.querySelector("[data-tag-analysis-shape]"),
+  tagAnalysisRun: document.querySelector("[data-tag-analysis-run]"),
+  tagAnalysisStatus: document.querySelector("[data-tag-analysis-status]"),
   dipBacktestReport: document.querySelector("[data-dip-backtest-report]"),
   dipBacktestTag: document.querySelector("[data-dip-backtest-tag]"),
   dipBacktestRun: document.querySelector("[data-dip-backtest-run]"),
@@ -2919,6 +2926,7 @@ function setSettingsSection(section) {
   // Loaded when the tab is opened rather than with the page: it streams the whole resolved
   // archive server-side, so it is not work every visit to settings should pay for.
   if (state.settingsSection === "setup-finder" && !state.setupFinder) loadSetupFinder();
+  if (state.settingsSection === "tag-analysis") loadTagProbabilityAnalysis();
   if (state.settingsSection === "dip-backtest") loadDipBacktest();
 }
 
@@ -11072,6 +11080,93 @@ function candidateMarketShape(item = {}) {
   return "other";
 }
 
+function selectedTagAnalysisTag() {
+  return String(els.tagAnalysisTag?.value || "dota-2").trim().toLowerCase();
+}
+
+function selectedTagAnalysisShape() {
+  const shape = String(els.tagAnalysisShape?.value || "*").trim().toLowerCase();
+  return ["*", ...Object.keys(MARKET_SHAPE_LABELS)].includes(shape) ? shape : "*";
+}
+
+function syncTagAnalysisTagControl() {
+  if (!els.tagAnalysisTag) return;
+  const selected = selectedTagAnalysisTag();
+  const tags = (state.resolvedTagOptions || [])
+    .map((entry) => String(entry?.tag || "").trim().toLowerCase())
+    .filter(Boolean);
+  if (!tags.includes(selected)) tags.push(selected);
+  tags.sort((left, right) => left.localeCompare(right));
+  els.tagAnalysisTag.innerHTML = tags.length
+    ? tags.map((tag) => `<option value="${escapeHtml(tag)}">${escapeHtml(tag)}</option>`).join("")
+    : `<option value="${escapeHtml(selected)}">${escapeHtml(selected)}</option>`;
+  els.tagAnalysisTag.value = selected;
+}
+
+async function loadTagProbabilityAnalysis() {
+  if (state.tagAnalysisBusy) return;
+  if (state.resolvedTagOptions === null && !state.resolvedTagOptionsPending) {
+    await loadResolvedTagOptions();
+  }
+  syncTagAnalysisTagControl();
+  const tag = selectedTagAnalysisTag();
+  const shape = selectedTagAnalysisShape();
+  if (!tag) return;
+  state.tagAnalysisBusy = true;
+  if (els.tagAnalysisStatus) els.tagAnalysisStatus.textContent = "Reading resolved statistics...";
+  renderTagProbabilityAnalysis();
+  try {
+    state.tagAnalysis = await fetchApiJson(
+      `api.php?action=resolved-tag-probability-analysis&tag=${encodeURIComponent(tag)}&shape=${encodeURIComponent(shape)}`,
+    );
+    if (els.tagAnalysisStatus) els.tagAnalysisStatus.textContent = "";
+  } catch (error) {
+    state.tagAnalysis = { ok: false, error: error?.message || String(error) };
+    if (els.tagAnalysisStatus) els.tagAnalysisStatus.textContent = "";
+  } finally {
+    state.tagAnalysisBusy = false;
+    renderTagProbabilityAnalysis();
+  }
+}
+
+function renderTagProbabilityAnalysis() {
+  if (!els.tagAnalysisReport) return;
+  const data = state.tagAnalysis;
+  if (state.tagAnalysisBusy) {
+    els.tagAnalysisReport.innerHTML = '<p class="setup-finder-note">Reading resolved statistics...</p>';
+    return;
+  }
+  if (!data?.ok) {
+    els.tagAnalysisReport.innerHTML = data?.error
+      ? `<div class="system-status-card"><p class="setup-finder-note">${escapeHtml(data.error)}</p></div>`
+      : "";
+    return;
+  }
+  const rows = Array.isArray(data.rows) ? data.rows : [];
+  const shape = data.shape === "*" ? "All event types" : marketShapeLabel(data.shape);
+  els.tagAnalysisReport.innerHTML = `
+    <div class="system-status-card">
+      <div class="system-status-head"><div><p class="eyebrow">Resolved market simulation</p><h3>${escapeHtml(data.tag)}: ${escapeHtml(shape)}</h3></div><span class="pill">${formatInteger(data.pricedRows)} trades</span></div>
+      <p class="setup-finder-note">Every line is cumulative: minimum probability and higher. Each resolved market is simulated with a fixed ${money(Number(data.stakeUsdc || 5))} stake at its first saved live price; recorded entry fees are included. The event-time filter is intentionally not applied here.</p>
+    </div>
+    <div class="system-status-card">
+      <div class="ledger setup-finder-ledger tag-analysis-ledger">
+        <table>
+          <thead><tr><th>Min probability</th><th>Trades</th><th>Win / loss</th><th>Accuracy</th><th>Invested</th><th>P/L</th><th>ROI</th></tr></thead>
+          <tbody>${rows.length ? rows.map((row) => `<tr>
+            <td data-label="Min probability">&ge; ${Number(row.minimumProbability).toFixed(0)}%</td>
+            <td data-label="Trades">${formatInteger(row.trades)}</td>
+            <td data-label="Win / loss">${formatInteger(row.wins)} / ${formatInteger(Math.max(0, Number(row.trades) - Number(row.wins)))}</td>
+            <td data-label="Accuracy">${percent(Number(row.accuracy))}</td>
+            <td data-label="Invested">${money(Number(row.stakedUsdc))}</td>
+            <td data-label="P/L" class="${pnlClass(Number(row.pnlUsdc))}">${signedMoney(Number(row.pnlUsdc))}</td>
+            <td data-label="ROI" class="${pnlClass(Number(row.returnPct))}">${signedPercent(Number(row.returnPct))}</td>
+          </tr>`).join("") : '<tr><td colspan="7">No resolved trades match this tag and event type.</td></tr>'}</tbody>
+        </table>
+      </div>
+    </div>`;
+}
+
 function scrapedMarketType(item = {}) {
   return candidateMarketType(item);
 }
@@ -16743,6 +16838,10 @@ els.settingsSectionButtons.forEach((button) => {
     setSettingsSection(button.dataset.settingsSection || "evaluation-log");
   });
 });
+
+els.tagAnalysisRun?.addEventListener("click", () => loadTagProbabilityAnalysis());
+els.tagAnalysisTag?.addEventListener("change", () => loadTagProbabilityAnalysis());
+els.tagAnalysisShape?.addEventListener("change", () => loadTagProbabilityAnalysis());
 
 els.calculationSourceButtons.forEach((button) => {
   button.addEventListener("click", () => {

@@ -3857,6 +3857,22 @@ body.modal-open {
   margin-bottom: 14px;
 }
 
+.tag-analysis-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.tag-analysis-controls .parameter-control {
+  min-width: min(100%, 220px);
+}
+
+.tag-analysis-ledger table {
+  min-width: 700px;
+}
+
 .dip-backtest-controls .parameter-control {
   min-width: min(100%, 230px);
 }

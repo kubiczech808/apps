@@ -350,6 +350,7 @@
               <!-- Across every resolved market rather than one portfolio's own trades:
                    which setup would have made money. Asked for as its own page in settings. -->
               <button class="segment-button" type="button" role="tab" aria-selected="false" data-settings-section="setup-finder">Setup finder</button>
+              <button class="segment-button" type="button" role="tab" aria-selected="false" data-settings-section="tag-analysis">Tag probability analysis</button>
               <button class="segment-button" type="button" role="tab" aria-selected="false" data-settings-section="dip-backtest">DIP backtest</button>
             </div>
             <div class="settings-panel-body" data-settings-panel="calculations">
@@ -417,6 +418,31 @@
                 <span class="setup-finder-status" data-setup-finder-status aria-live="polite"></span>
               </div>
               <div class="setup-finder-report" data-setup-finder-report></div>
+            </div>
+            <div class="settings-panel-body" data-settings-panel="tag-analysis" hidden>
+              <div class="tag-analysis-controls">
+                <label class="parameter-control">
+                  <span>Polymarket tag</span>
+                  <select data-tag-analysis-tag></select>
+                </label>
+                <label class="parameter-control">
+                  <span>Event type</span>
+                  <select data-tag-analysis-shape>
+                    <option value="*">All event types</option>
+                    <option value="over-under">Over/Under</option>
+                    <option value="spread">Spread</option>
+                    <option value="exact-score">Exact score</option>
+                    <option value="draw">Draw</option>
+                    <option value="in-event-leg">In-event leg</option>
+                    <option value="both-teams">Both teams to score</option>
+                    <option value="outright">Outright</option>
+                    <option value="other">Other / unclassified</option>
+                  </select>
+                </label>
+                <button class="execution-button" type="button" data-tag-analysis-run>Show analysis</button>
+                <span class="setup-finder-status" data-tag-analysis-status aria-live="polite"></span>
+              </div>
+              <div class="tag-analysis-report" data-tag-analysis-report></div>
             </div>
             <div class="settings-panel-body" data-settings-panel="dip-backtest" hidden>
               <div class="dip-backtest-controls">
