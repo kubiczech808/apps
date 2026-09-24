@@ -10,6 +10,7 @@ import { normalizeCandlePrices, roundPrice } from './price.mjs'
 
 export const EXTERNAL_TREND_METHOD = 'EMA 20/50 + zavírací cena'
 export const EXTERNAL_TREND_HOURLY_LIMIT = 5000
+export const EXTERNAL_EMA_CHART_POINT_LIMIT = 600
 export const EXTERNAL_PIVOT_METHOD = 'Potvrzené 10-svíčkové pivoty z externího OHLC'
 export const EXTERNAL_PIVOT_PERIOD = 10
 export const EXTERNAL_PIVOT_FALLBACK_PERIOD = 5
@@ -198,19 +199,26 @@ export const fetchTwelveDataFxPivots = async ({
   return result
 }
 
-const ema = (values, period) => {
-  if (values.length < period) return null
+export const externalEmaSeries = ({ candles = [], period, limit = EXTERNAL_EMA_CHART_POINT_LIMIT } = {}) => {
+  if (!Number.isInteger(period) || period < 1) return []
   const multiplier = 2 / (period + 1)
-  let result = values[0]
-  for (const value of values.slice(1)) result = (value - result) * multiplier + result
-  return result
+  let value = null
+  const points = []
+  for (const [index, candle] of candles.entries()) {
+    if (!Number.isFinite(candle?.time) || !Number.isFinite(candle?.close)) continue
+    value = value === null ? candle.close : (candle.close - value) * multiplier + value
+    if (index >= period - 1) points.push({ time: candle.time, value })
+  }
+  return points.slice(-Math.max(1, limit))
 }
 
 export const classifyExternalTrend = (candles = []) => {
   const closes = candles.map((candle) => candle.close).filter(Number.isFinite)
+  const ema20 = externalEmaSeries({ candles, period: 20 })
+  const ema50 = externalEmaSeries({ candles, period: 50 })
   const close = closes.at(-1)
-  const fast = ema(closes, 20)
-  const slow = ema(closes, 50)
+  const fast = ema20.at(-1)?.value ?? null
+  const slow = ema50.at(-1)?.value ?? null
   if (![close, fast, slow].every(Number.isFinite)) {
     return {
       trend: null,
@@ -218,6 +226,7 @@ export const classifyExternalTrend = (candles = []) => {
       reason: `málo svíček pro EMA 50 (${closes.length}/50)`,
       candles: closes.length,
       asOf: candles.at(-1)?.time ?? null,
+      ema: { ema20, ema50 },
     }
   }
   const trend = close > fast && fast > slow
@@ -231,6 +240,7 @@ export const classifyExternalTrend = (candles = []) => {
     reason: `close ${roundPrice(close)}; EMA20 ${roundPrice(fast)}; EMA50 ${roundPrice(slow)}`,
     candles: closes.length,
     asOf: candles.at(-1)?.time ?? null,
+    ema: { ema20, ema50 },
   }
 }
 

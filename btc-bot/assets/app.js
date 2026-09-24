@@ -19,7 +19,7 @@ const REFRESH_MS = 30_000
 const SATS_PER_BTC = 1e8
 const DECISION_SIGNAL_STATES = new Set(['met', 'unmet', 'neutral'])
 const SVG_NS = 'http://www.w3.org/2000/svg'
-const SVG_TAGS = new Set(['circle', 'g', 'line', 'path', 'rect', 'svg', 'text'])
+const SVG_TAGS = new Set(['circle', 'g', 'line', 'path', 'rect', 'svg', 'text', 'title'])
 
 const $ = (id) => document.getElementById(id)
 
@@ -1461,6 +1461,24 @@ const renderAssetChart = () => {
       renderAssetChart()
     }
     svg.append(zoneRect)
+  }
+
+  // These overlays use the same external OHLC feed as the EMA gate. They are
+  // intentionally drawn below candles and only for their available history.
+  const externalEma = item?.externalTrend?.ema
+  const externalEmaSource = item?.externalTrend?.source ?? 'externí zdroj'
+  for (const [key, label] of [['ema20', 'EMA20'], ['ema50', 'EMA50']]) {
+    const points = (externalEma?.[key] ?? [])
+      .filter((point) => Number.isFinite(point?.time) && Number.isFinite(point?.value) && point.value > 0)
+      .map((point) => ({ x: xForTime(point.time), y: y(point.value) }))
+      .filter((point) => Number.isFinite(point.x) && Number.isFinite(point.y))
+    if (points.length < 2) continue
+    const path = el('path', {
+      className: `asset-external-${key}`,
+      d: points.map((point, index) => `${index ? 'L' : 'M'}${point.x},${point.y}`).join(''),
+    })
+    path.append(el('title', { text: `${label} · ${externalEmaSource}` }))
+    svg.append(path)
   }
 
   for (const [index, candle] of candles.entries()) {

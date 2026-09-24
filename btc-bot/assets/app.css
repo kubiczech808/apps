@@ -252,6 +252,10 @@ button.primary { color: #fff; background: var(--series-1); border-color: transpa
 .asset-price-chart .asset-candle-wick { stroke-width: 1; }
 .asset-price-chart .asset-candle-up { fill: var(--good-text); stroke: var(--good-text); }
 .asset-price-chart .asset-candle-down { fill: var(--critical); stroke: var(--critical); }
+.asset-price-chart .asset-external-ema20,
+.asset-price-chart .asset-external-ema50 { fill: none; stroke-width: 1.15; opacity: 0.64; pointer-events: stroke; }
+.asset-price-chart .asset-external-ema20 { stroke: #8bd5ff; }
+.asset-price-chart .asset-external-ema50 { stroke: #f3a5c7; }
 .asset-price-chart .asset-zone-demand { fill: var(--good); fill-opacity: 0.13; stroke: var(--good-text); stroke-opacity: 0.58; }
 .asset-price-chart .asset-zone-supply { fill: var(--critical); fill-opacity: 0.12; stroke: var(--critical-text); stroke-opacity: 0.58; }
 .asset-price-chart .asset-zone-label { font-size: 11px; font-weight: 650; font-variant-numeric: tabular-nums; }

@@ -50,6 +50,9 @@ test('external trend is a separate EMA regime rather than the PA swing label', (
   assert.equal(classifyExternalTrend(up).trend, 'up')
   assert.equal(classifyExternalTrend(down).trend, 'down')
   assert.match(classifyExternalTrend(up).method, /EMA 20\/50/)
+  assert.equal(classifyExternalTrend(up).ema.ema20.at(-1)?.time, up.at(-1)?.time)
+  assert.equal(classifyExternalTrend(up).ema.ema50.at(-1)?.time, up.at(-1)?.time)
+  assert.ok(classifyExternalTrend(up).ema.ema20.length > classifyExternalTrend(up).ema.ema50.length)
 })
 
 test('Twelve Data pivot points form an independent, labelled external path', async () => {
