@@ -447,6 +447,11 @@ jobs:
 
       - name: Append compact scraping history entry
         if: always()
+        # History is supplementary. A stalled FTP data channel must never retain the
+        # paper-state writer lock after the bot has already traded and published its state.
+        # The next successful run can append its own compact record; execution cannot wait
+        # behind an audit write indefinitely.
+        continue-on-error: true
         env:
           HOSTING_FTP_SERVER: ${{ secrets.HOSTING_FTP_SERVER }}
           HOSTING_FTP_USERNAME: ${{ secrets.HOSTING_FTP_USERNAME }}
@@ -454,7 +459,7 @@ jobs:
           TRADING_FTP_DIR: /www/trading/data
           PAPER_SCAN_HISTORY_ENTRY_PATH: trading/data/market-scan-history-entry.ndjson
         run: |
-          python3 - <<'PY'
+          timeout 75s python3 - <<'PY'
           import ftplib
           import json
           import os
@@ -500,6 +505,12 @@ jobs:
 
       - name: Append portfolio run-log history entries
         if: always()
+        # The live state already carries the current run log. This long-term archive is
+        # useful for pagination, but never important enough to stall the next execution.
+        # FTP can establish its control channel and then hang on APPE; bound that data
+        # operation at the shell level because ftplib's connection timeout does not cover
+        # every server-side data-transfer stall.
+        continue-on-error: true
         env:
           HOSTING_FTP_SERVER: ${{ secrets.HOSTING_FTP_SERVER }}
           HOSTING_FTP_USERNAME: ${{ secrets.HOSTING_FTP_USERNAME }}
@@ -512,7 +523,7 @@ jobs:
         # so the dashboard can page back through one portfolio's full history later
         # without ever reading another portfolio's.
         run: |
-          python3 - <<'PY'
+          timeout 75s python3 - <<'PY'
           import ftplib
           import json
           import os
