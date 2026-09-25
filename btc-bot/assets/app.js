@@ -458,16 +458,21 @@ const zoneDefiningTimes = (zone, timeframeId) =>
     .map((candle) => timeframeId === '1d' ? dateOnly(candle.time) : when(candle.time))
     .join('\n') || 'datum není k dispozici'
 
-const zoneCandidateDetails = (candidate) => {
+const zoneCandidateDetails = (candidate, direction = null) => {
   if (!candidate) return null
   const rr = (value) => Number.isFinite(value) ? `${nf(2).format(value)}:1` : '–'
-  const entryRange = candidate.entryRange
-    ? `${quotePrice(candidate.entryRange.low)} – ${quotePrice(candidate.entryRange.high)}`
+  const entryRange = directionalPriceRange({
+    low: candidate?.entryRange?.low,
+    high: candidate?.entryRange?.high,
+    direction,
+  })
+  const entryRangeText = entryRange
+    ? `${quotePrice(entryRange.from)} – ${quotePrice(entryRange.to)}`
     : '–'
   return el('div', { className: 'zone-candidate-details' }, [
     el('strong', { text: candidate.eligible ? 'Vhodná pro aktuální vstup' : 'Vyřazena z aktuálního vstupu' }),
     el('span', { text: `Vstup při hitu kraje: ${quotePrice(candidate.entryAtZoneHit)}` }),
-    el('span', { text: `Přípustný vstup v pullback pásmu: ${entryRange}` }),
+    el('span', { text: `Přípustný vstup v pullback pásmu: ${entryRangeText}` }),
     el('span', { text: `Vstup pro min. R/R: ${quotePrice(candidate.entryForMinRR)}` }),
     el('span', { text: `SL ${quotePrice(candidate.stop)} · TP1 ${quotePrice(candidate.tp1)} · TP2 ${quotePrice(candidate.tp2)}` }),
     el('span', { text: `R/R při hitu ${rr(candidate.rrAtZoneHit)} · při vstupu ${rr(candidate.rewardRisk)} · minimum ${rr(candidate.minRewardRisk)}` }),
@@ -475,17 +480,17 @@ const zoneCandidateDetails = (candidate) => {
   ])
 }
 
-const zoneRangeTrigger = ({ zone, status = 'neutral', title = null, timeframeId, candidate = null, showCandidateDetails = false }) => {
+const zoneRangeTrigger = ({ zone, status = 'neutral', title = null, timeframeId, candidate = null, showCandidateDetails = false, direction = null }) => {
   const button = el('button', {
     type: 'button',
     className: `fact fact-${status} zone-range-trigger`,
-    text: zoneRange(zone),
+    text: zoneRange(zone, direction),
     title: title ?? 'Kliknutím zobrazit definiční svíčky zóny.',
     'aria-expanded': 'false',
   })
   const popup = el('div', { className: 'zone-date-popover', role: 'tooltip', hidden: true }, [
     el('span', { className: 'zone-date-values', text: zoneDefiningTimes(zone, timeframeId) }),
-    showCandidateDetails ? zoneCandidateDetails(candidate) : null,
+    showCandidateDetails ? zoneCandidateDetails(candidate, direction) : null,
   ])
   button.onclick = () => {
     const open = popup.hidden
@@ -605,6 +610,31 @@ const pendingFormationTitle = 'Směr po CHoCH se ještě potvrzuje; hodnoty jsou
 
 const profileSide = (profile) => profile?.side ?? profile?.pendingSide ?? profile?.directionalSide ?? null
 
+const directionForSide = (side) => side === 'long' ? 'up' : side === 'short' ? 'down' : null
+
+const structureDirection = (entry) => {
+  const trend = entry?.item?.trend
+  return trend === 'up' || trend === 'down'
+    ? trend
+    : directionForSide(profileSide(entry?.profile))
+}
+
+// Price ranges are read in the direction price must travel to reach the next
+// boundary: down through a pullback for an uptrend, up through it for a downtrend.
+const directionalPriceRange = ({ low, high, direction = null } = {}) => {
+  if (!Number.isFinite(low) || !Number.isFinite(high)) return null
+  const bottom = Math.min(low, high)
+  const top = Math.max(low, high)
+  return direction === 'up'
+    ? { from: top, to: bottom }
+    : { from: bottom, to: top }
+}
+
+const zoneRange = (zone, direction = null) => {
+  const range = directionalPriceRange({ low: zone?.low, high: zone?.high, direction })
+  return range ? `${quotePrice(range.from)} – ${quotePrice(range.to)}` : '–'
+}
+
 const entryZoneType = (side) => side === 'long' ? 'demand' : side === 'short' ? 'supply' : null
 const targetZoneType = (side) => side === 'long' ? 'supply' : side === 'short' ? 'demand' : null
 
@@ -666,6 +696,7 @@ const setupZonesForEntry = (entry) => uniqueZones(setupOwnersForEntry(entry).fla
 
 const zoneListElement = (entry) => {
   const { profile, column } = entry
+  const direction = structureDirection(entry)
   const active = entryZoneType(profileSide(profile))
   const setupZones = setupZonesForEntry(entry)
   const watchedZones = active ? watchedEntryZones(profile, active) : []
@@ -698,6 +729,7 @@ const zoneListElement = (entry) => {
         timeframeId: column.id,
         candidate,
         showCandidateDetails: Boolean(candidate),
+        direction,
       }),
     ])
   })
@@ -714,7 +746,7 @@ const pullbackRange = (entry) => {
         ? entry?.item?.structure?.high?.current?.price
         : null
   )
-  return Number.isFinite(from) && Number.isFinite(to) ? { from, to } : null
+  return directionalPriceRange({ low: from, high: to, direction: structureDirection(entry) })
 }
 
 const priceActionDecisionFact = (entry, column) => {
@@ -880,9 +912,7 @@ const trendFact = (trend, item = {}) => {
   return decisionFact(label, status, details || null)
 }
 
-const zoneRange = (zone) => (zone ? `${quotePrice(zone.low)} – ${quotePrice(zone.high)}` : '–')
-
-const zoneCard = (title, zones, emptyText, timeframeId, candidates = []) => el('div', { className: 'structure-leg zone-leg' }, [
+const zoneCard = (title, zones, emptyText, timeframeId, candidates = [], direction = null) => el('div', { className: 'structure-leg zone-leg' }, [
     el('strong', { text: title }),
     zones?.length
       ? el('div', { className: 'zone-list' }, zones.map((zone, index) => el('div', { className: 'zone-item' }, [
@@ -897,6 +927,7 @@ const zoneCard = (title, zones, emptyText, timeframeId, candidates = []) => el('
                 status: candidate?.eligible ? (candidate.zoneHit ? 'met' : 'neutral') : 'neutral',
                 title: candidate?.eligible ? 'Kliknutím zobrazit vstupní parametry.' : 'Kliknutím zobrazit důvod vyřazení a vstupní parametry.',
                 showCandidateDetails: true,
+                direction,
               }),
               Number.isFinite(zone.distancePct)
                 ? el('span', { className: 'structure-meta', text: `vzdál. ${signedPct(zone.distancePct).text}` })
@@ -950,8 +981,8 @@ const renderAssetZoneDetails = (host, asset, item, timeframeId) => {
       el('h3', { text: `${asset.symbol} · všechny dostupné zóny pro ${timeframeId.toUpperCase()}` }),
       el('p', { className: 'asset-zone-details-intro', text: 'V přehledu vstupu zůstávají jen zóny v pullback pásmu s dosažitelným minimálním R/R. Zde jsou i zóny, které byly vyřazeny.' }),
       el('div', { className: 'asset-zone-detail-columns' }, [
-        zoneCard('Demand', zonesForDetail(item.zones, 'demand'), 'Žádná dostupná demand zóna.', timeframeId, candidates),
-        zoneCard('Supply', zonesForDetail(item.zones, 'supply'), 'Žádná dostupná supply zóna.', timeframeId, candidates),
+        zoneCard('Demand', zonesForDetail(item.zones, 'demand'), 'Žádná dostupná demand zóna.', timeframeId, candidates, item.trend),
+        zoneCard('Supply', zonesForDetail(item.zones, 'supply'), 'Žádná dostupná supply zóna.', timeframeId, candidates, item.trend),
       ])
     )
   }
@@ -2944,7 +2975,7 @@ const renderFilledZonesLog = (host) => {
       const item = asset.trends?.[column.id]
       for (const type of ['demand', 'supply']) {
         for (const zone of zoneList(item, type, { includeFilled: true }).filter((candidate) => candidate.filledByOwnTimeframeClose)) {
-          rows.push({ asset, column, type, zone })
+          rows.push({ asset, column, item, type, zone })
         }
       }
     }
@@ -2966,12 +2997,12 @@ const renderFilledZonesLog = (host) => {
     el('tbody'),
   ])
   const body = table.querySelector('tbody')
-  for (const { asset, column, type, zone } of rows.sort((left, right) => (right.zone.filledAt ?? 0) - (left.zone.filledAt ?? 0))) {
+  for (const { asset, column, item, type, zone } of rows.sort((left, right) => (right.zone.filledAt ?? 0) - (left.zone.filledAt ?? 0))) {
     body.append(el('tr', {}, [
       el('td', {}, [assetTickerButton(asset.symbol, column.id)]),
       el('td', { text: column.label }),
       el('td', { text: type === 'demand' ? 'Demand' : 'Supply' }),
-      el('td', {}, [zoneRangeTrigger({ zone, timeframeId: column.id, title: 'Kliknutím zobrazit definiční svíčky zóny.' })]),
+      el('td', {}, [zoneRangeTrigger({ zone, timeframeId: column.id, title: 'Kliknutím zobrazit definiční svíčky zóny.', direction: item?.trend })]),
       el('td', { text: column.id === '1d' ? dateOnly(zone.filledAt) : when(zone.filledAt) }),
     ]))
   }
