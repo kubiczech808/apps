@@ -37,7 +37,7 @@ const row = (entry, won, { tags = ["esports"], question = "A vs B", firstObserve
   ...(feeRate == null ? {} : { feeRate }),
 });
 
-function combinations(rows, query = "min_trades=1") {
+function combinations(rows, query = "min_trades=1", action = "resolved-combinations") {
   const directory = mkdtempSync(join(tmpdir(), "combinations-"));
   try {
     mkdirSync(join(directory, "data"), { recursive: true });
@@ -63,7 +63,7 @@ function combinations(rows, query = "min_trades=1") {
     writeFileSync(join(directory, "data", "paper-state.resolved.json"),
       JSON.stringify({ resolvedMarketObservations: rows }));
     writeFileSync(join(directory, "prelude.php"), `<?php
-      $_GET['action'] = 'resolved-combinations';
+      $_GET['action'] = ${JSON.stringify(action)};
       ${query.split("&").map((pair) => {
         const [key, value] = pair.split("=");
         return `$_GET[${JSON.stringify(key)}] = ${JSON.stringify(value)};`;
@@ -78,6 +78,10 @@ function combinations(rows, query = "min_trades=1") {
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
+}
+
+function tagProbabilityAnalysis(rows, tag) {
+  return combinations(rows, `tag=${encodeURIComponent(tag)}`, "resolved-tag-probability-analysis");
 }
 
 const find = (rows, facets) => rows.find((entry) =>
@@ -103,6 +107,21 @@ test("a combination is priced the way a portfolio would have traded it", () => {
   // exactly fair, and a table that cannot reproduce that cannot be trusted with the rest.
   assert.equal(all.pnlUsdc, 0);
   assert.equal(all.returnPct, 0);
+});
+
+test("tag probability ROI is a ratio so the browser does not multiply it twice", () => {
+  // $20 invested and $10 P/L is a 50% return. The UI formatter receives a ratio and
+  // multiplies by 100 for display, so this endpoint must return 0.5, never 50.
+  const payload = tagProbabilityAnalysis([
+    ...Array.from({ length: 3 }, () => row(0.5, true, { tags: ["weather"] })),
+    row(0.5, false, { tags: ["weather"] }),
+  ], "weather");
+  assert.equal(payload.ok, true, JSON.stringify(payload).slice(0, 300));
+  const atFifty = payload.rows.find((entry) => entry.minimumProbability === 50);
+  assert.ok(atFifty, "the cumulative 50% floor must be returned");
+  assert.equal(atFifty.stakedUsdc, 20);
+  assert.equal(atFifty.pnlUsdc, 10);
+  assert.equal(atFifty.returnPct, 0.5);
 });
 
 test("the probability column is a threshold, not a band", () => {

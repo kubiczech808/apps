@@ -9588,7 +9588,10 @@ try {
                 'accuracy' => round($wins / $trades, 4),
                 'stakedUsdc' => round($staked, 2),
                 'pnlUsdc' => round($pnl, 2),
-                'returnPct' => $staked > 0 ? round(($pnl / $staked) * 100, 2) : null,
+                // The browser's percent()/signedPercent() formatter accepts a ratio, not
+                // percentage points. Keep this endpoint consistent with the rest of the
+                // trading API: +$46.87 on $9,145 is 0.005125, rendered as +0.5%.
+                'returnPct' => $staked > 0 ? $pnl / $staked : null,
             ];
         }
         usort($rows, static fn (array $left, array $right): int => $left['minimumProbability'] <=> $right['minimumProbability']);
