@@ -12775,9 +12775,87 @@ function liveClosedTrades(liveState, mode = state.mode) {
   return rows.filter((row) => belongsToLivePortfolio(row, mode));
 }
 
+// A fill-and-kill order can be acknowledged as "delayed" and disappear before the account
+// synchronizer ever observes an open order.  Those bids live in the portfolio execution
+// record, not in live-state's resting-order history.  Merge both views here, while using the
+// account itself as the final authority: any position, closed trade, or still-open order for
+// the token means the bid must not be labelled as an unfilled order.
+function executionUnfilledLimitOrders(liveState, executionState, mode = state.mode) {
+  const portfolioId = normalizeMode(mode);
+  const execution = executionState && typeof executionState === "object" ? executionState : {};
+  const knownOrderIds = new Set((Array.isArray(liveState?.openOrders) ? liveState.openOrders : [])
+    .flatMap((row) => [row?.id, row?.orderId, row?.orderID])
+    .map((value) => String(value || "").trim())
+    .filter(Boolean));
+  const knownTokens = new Set([
+    ...(Array.isArray(liveState?.positions) ? liveState.positions : []),
+    ...(Array.isArray(liveState?.closedTrades) ? liveState.closedTrades : []),
+  ].map((row) => String(row?.tokenId || row?.assetId || "").trim()).filter(Boolean));
+  const records = new Map();
+  const add = (row = {}) => {
+    const orderId = String(row?.id || row?.orderId || row?.orderID || "").trim();
+    const tokenId = String(row?.tokenId || row?.assetId || "").trim();
+    if (!orderId || knownOrderIds.has(orderId) || (tokenId && knownTokens.has(tokenId))) return;
+    records.set(orderId, {
+      ...row,
+      id: orderId,
+      orderId,
+      tokenId: tokenId || null,
+      portfolioId,
+      mode: "LIVE_LIMIT_ORDER",
+      status: "LIVE_LIMIT_ORDER_UNFILLED",
+    });
+  };
+  for (const row of (Array.isArray(execution?.unfilledLimitOrders) ? execution.unfilledLimitOrders : [])) {
+    if (String(row?.portfolioId || execution?.strategyId || "") === portfolioId) add(row);
+  }
+  // Backfill the current rolling log immediately. The executor persists the same records on
+  // its next run, but waiting for that run would hide an already-missed FAK order today.
+  const graceMs = 2 * 60 * 1000;
+  for (const run of (Array.isArray(execution?.runLog) ? execution.runLog : [])) {
+    if (String(run?.strategyId || execution?.strategyId || "") !== portfolioId) continue;
+    const runAt = String(run?.runAt || run?.generatedAt || "");
+    const submittedAt = Date.parse(runAt);
+    if (!Number.isFinite(submittedAt) || Date.now() - submittedAt < graceMs) continue;
+    for (const attempt of (Array.isArray(run?.attempts) ? run.attempts : [])) {
+      const orderType = String(attempt?.orderType || "").toUpperCase();
+      const action = String(attempt?.action || run?.action || "").toUpperCase();
+      const responseStatus = String(attempt?.responseStatus || attempt?.response?.status || "").toLowerCase();
+      const orderId = String(attempt?.response?.orderID || attempt?.response?.orderId || attempt?.orderId || "").trim();
+      if (orderType !== "FAK" || action !== "PENDING_MATCH" || !orderId || responseStatus === "matched") continue;
+      add({
+        id: orderId,
+        orderId,
+        question: attempt?.question || "",
+        outcome: attempt?.outcome || "",
+        tokenId: attempt?.tokenId || null,
+        price: numericOrNull(attempt?.orderPrice),
+        limitPrice: numericOrNull(attempt?.orderPrice),
+        remainingSize: numericOrNull(attempt?.orderSize),
+        stakeUsdc: numericOrNull(attempt?.totalCostUsdc ?? attempt?.orderNotionalUsdc),
+        releasedCapitalUsdc: numericOrNull(attempt?.totalCostUsdc ?? attempt?.orderNotionalUsdc),
+        openedAt: runAt,
+        createdAt: runAt,
+        closedAt: runAt,
+        detectedAt: runAt,
+        source: "live-execution-fak-log",
+        reason: "Polymarket acknowledged this fill-and-kill order as delayed; it never appeared in the live open-order book and did not create a position.",
+      });
+    }
+  }
+  return [...records.values()];
+}
+
 function liveUnfilledLimitOrders(liveState, mode = state.mode) {
   const rows = Array.isArray(liveState?.unfilledLimitOrders) ? liveState.unfilledLimitOrders : [];
-  return rows.filter(isUnfilledLimitOrder).filter((row) => belongsToLivePortfolio(row, mode));
+  const published = rows.filter(isUnfilledLimitOrder).filter((row) => belongsToLivePortfolio(row, mode));
+  const execution = executionUnfilledLimitOrders(liveState, state.liveExecutionState, mode);
+  const unique = new Map();
+  for (const row of [...execution, ...published]) {
+    const key = String(row?.id || row?.orderId || `${row?.tokenId || ""}:${row?.openedAt || ""}`);
+    if (key && !unique.has(key)) unique.set(key, row);
+  }
+  return [...unique.values()];
 }
 
 function evaluationsByTokenId() {

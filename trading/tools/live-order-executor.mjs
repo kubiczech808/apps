@@ -3922,6 +3922,12 @@ async function emitDecision(payload) {
       mergedEntry.strategyId,
       mergedEntry.runAt,
     ),
+    // FAK orders can be accepted with a delayed response yet never show up in the
+    // account's open-order snapshot. Keep those missed bids beyond the rolling run log.
+    unfilledLimitOrders: mergeUnfilledLimitOrderLedger(
+      previousExecutionState?.unfilledLimitOrders,
+      nextRunLog,
+    ),
   };
 
   console.log(JSON.stringify(consoleDecisionSummary(output), null, 2));
@@ -3984,6 +3990,8 @@ function mergeRunLog(rows = [], limit = 160) {
 
 // One entry per token this portfolio ever ordered. Four fields, kept forever.
 const ORDER_OWNERSHIP_LIMIT = 4000;
+const UNFILLED_LIMIT_ORDER_LEDGER_LIMIT = 1000;
+const PENDING_FAK_SETTLEMENT_GRACE_MS = 2 * 60 * 1000;
 
 // Reported: closed positions disappear from a live portfolio's Closed list over time and its
 // statistics stop adding up.
@@ -4047,6 +4055,56 @@ function mergeOrderOwnership(previous = [], attempts = [], mode = "live", at = "
   }
   for (const entry of (Array.isArray(previous) ? previous : [])) push(entry);
   return rows.slice(0, ORDER_OWNERSHIP_LIMIT);
+}
+
+// FAK orders never become resting CLOB orders.  A response of "delayed" is therefore
+// easy to lose: account sync can only see an order that first appeared in its open-order
+// snapshot and later vanished.  Keep the acknowledged, still-unmatched FAK submission in
+// the portfolio's compact execution state so the dashboard can audit it as an unfilled bid.
+// The browser cross-checks it against the account before rendering, so a later fill wins.
+function mergeUnfilledLimitOrderLedger(previous = [], runLog = [], now = Date.now()) {
+  const rows = new Map();
+  const keyFor = (entry = {}) => String(entry.orderId || entry.orderID || entry.id || "").trim();
+  for (const entry of (Array.isArray(previous) ? previous : [])) {
+    const key = keyFor(entry);
+    if (key) rows.set(key, entry);
+  }
+  for (const run of (Array.isArray(runLog) ? runLog : [])) {
+    const runAt = String(run?.runAt || run?.generatedAt || "");
+    const submittedAt = Date.parse(runAt);
+    if (!Number.isFinite(submittedAt) || now - submittedAt < PENDING_FAK_SETTLEMENT_GRACE_MS) continue;
+    for (const attempt of (Array.isArray(run?.attempts) ? run.attempts : [])) {
+      const orderType = String(attempt?.orderType || "").toUpperCase();
+      const action = String(attempt?.action || run?.action || "").toUpperCase();
+      const responseStatus = String(attempt?.responseStatus || attempt?.response?.status || "").toLowerCase();
+      const orderId = String(attempt?.response?.orderID || attempt?.response?.orderId || attempt?.orderId || "").trim();
+      if (orderType !== "FAK" || action !== "PENDING_MATCH" || !orderId || responseStatus === "matched") continue;
+      rows.set(orderId, {
+        id: orderId,
+        orderId,
+        portfolioId: String(run?.strategyId || LIVE_PORTFOLIO_ID),
+        mode: "LIVE_LIMIT_ORDER",
+        status: "LIVE_LIMIT_ORDER_UNFILLED",
+        question: attempt?.question || "",
+        outcome: attempt?.outcome || "",
+        tokenId: attempt?.tokenId || null,
+        price: number(attempt?.orderPrice),
+        limitPrice: number(attempt?.orderPrice),
+        remainingSize: number(attempt?.orderSize),
+        stakeUsdc: number(attempt?.totalCostUsdc ?? attempt?.orderNotionalUsdc),
+        releasedCapitalUsdc: number(attempt?.totalCostUsdc ?? attempt?.orderNotionalUsdc),
+        openedAt: runAt,
+        createdAt: runAt,
+        closedAt: new Date(now).toISOString(),
+        detectedAt: new Date(now).toISOString(),
+        source: "live-execution-fak-ledger",
+        reason: "Polymarket acknowledged this fill-and-kill order as delayed; it never rested in the open-order book, so no position was created.",
+      });
+    }
+  }
+  return [...rows.values()]
+    .sort((a, b) => Date.parse(b.closedAt || b.createdAt || 0) - Date.parse(a.closedAt || a.createdAt || 0))
+    .slice(0, UNFILLED_LIMIT_ORDER_LEDGER_LIMIT);
 }
 
 async function submitOrder(order) {

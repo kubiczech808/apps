@@ -241,6 +241,54 @@ test("live history: only fully unfilled limit orders are retained as their own a
   assert.equal(repeated.length, 2, "a repeated sync must not duplicate the same vanished order");
 });
 
+test("live execution: a delayed FAK is retained when it never reaches the resting-order snapshot", () => {
+  const source = readFileSync(new URL("../tools/live-order-executor.mjs", import.meta.url), "utf8");
+  const body = functionSource(source, "mergeUnfilledLimitOrderLedger");
+  const merge = new Function(
+    "LIVE_PORTFOLIO_ID",
+    "PENDING_FAK_SETTLEMENT_GRACE_MS",
+    "UNFILLED_LIMIT_ORDER_LEDGER_LIMIT",
+    "number",
+    `${body}\nreturn mergeUnfilledLimitOrderLedger;`,
+  )("live", 2 * 60 * 1000, 1000, (value, fallback = 0) => Number.isFinite(Number(value)) ? Number(value) : fallback);
+  const old = "2026-08-30T18:00:00.000Z";
+  const rows = merge([], [{
+    strategyId: "live-custom-counterstrike7080",
+    runAt: old,
+    action: "PENDING_MATCH",
+    attempts: [{
+      action: "PENDING_MATCH",
+      orderType: "FAK",
+      tokenId: "unfilled-token",
+      question: "A fill-and-kill bid that never filled",
+      outcome: "Yes",
+      orderPrice: 0.74,
+      orderSize: 6.75,
+      totalCostUsdc: 5,
+      responseStatus: "delayed",
+      response: { orderID: "unfilled-fak" },
+    }],
+  }], Date.parse("2026-08-30T18:05:00.000Z"));
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].id, "unfilled-fak");
+  assert.equal(rows[0].status, "LIVE_LIMIT_ORDER_UNFILLED");
+  assert.equal(rows[0].portfolioId, "live-custom-counterstrike7080");
+  assert.equal(rows[0].stakeUsdc, 5);
+
+  const matched = merge([], [{
+    strategyId: "live",
+    runAt: old,
+    action: "SUBMITTED",
+    attempts: [{
+      action: "SUBMITTED",
+      orderType: "FAK",
+      responseStatus: "matched",
+      response: { orderID: "filled-fak" },
+    }],
+  }], Date.parse("2026-08-30T18:05:00.000Z"));
+  assert.equal(matched.length, 0, "a matched FAK must never enter the missed-order ledger");
+});
+
 // Swaps globalThis.fetch for the duration of one call and always puts the real one back.
 async function withStubbedFetch(handler, run) {
   const original = globalThis.fetch;
