@@ -14623,8 +14623,8 @@ function runScrapingQueue(PDO $pdo, int $steps): string
         $seen[$key] = true;
         // AllBiz ma dva sitove pozadavky na jednu polozku (detail + pripadny
         // retry). Pri obecnich osmi krocich by se i po zkraceni timeoutu mohl
-        // jeden worker dostat za hostingovy limit. Dve polozky na tik jsou
-        // pomalejsi, ale zajisti, ze se vysledek vzdy zapise do logu.
+        // jeden worker dostat za hostingovy limit. Ctyri polozky na tik jsou
+        // rychlejsi, ale porad zajisti, ze se vysledek vzdy zapise do logu.
         $jobSteps = (string)($job['source'] ?? '') === 'allbiz_us'
             ? min($steps, 4)
             : $steps;
@@ -15185,6 +15185,16 @@ function discoverAllbizScrapingState(PDO $pdo, array $job): string
             $fetchMessages[] = $e->getMessage();
         }
     }
+    $blockedResponse = $response === null ? '' : (string)($response['html'] ?? '');
+    if (allbizAccessBlocked($blockedResponse) || allbizAccessBlocked(implode("\n", $fetchMessages))) {
+        $message = 'AllBiz blokuje automatický přístup z našeho serveru (Cloudflare). Běh byl ukončen, protože bez povoleného API nebo souhlasu zdroje nelze načíst výsledky ani kontakty.';
+        updateScrapingJob($pdo, (int)$job['id'], [
+            'status' => 'failed',
+            'last_message' => $message,
+            'finished_at' => date('c'),
+        ]);
+        return $message;
+    }
     if ($response === null) {
         $message = 'Docasna chyba AllBiz pro stat ' . $state['label'] . ': ' . implode(' ', $fetchMessages);
         updateScrapingJob($pdo, (int)$job['id'], [
@@ -15239,6 +15249,15 @@ function allbizSearchResponseHasNoResults(string $html): bool
     $text = trim(preg_replace('/\s+/', ' ', html_entity_decode(strip_tags($html), ENT_QUOTES, 'UTF-8')) ?? '');
     return preg_match('/\b(?:0|no)\s+(?:results?|businesses?|listings?)\b/i', $text) === 1
         || preg_match('/\bno\s+results\s+found\b/i', $text) === 1;
+}
+
+function allbizAccessBlocked(string $value): bool
+{
+    $value = strtolower($value);
+    return str_contains($value, 'attention required')
+        || str_contains($value, 'sorry, you have been blocked')
+        || str_contains($value, 'why have i been blocked')
+        || str_contains($value, 'cf-chl-');
 }
 
 function searchResultHasNextPage(string $html, string $source, string $baseUrl, int $page): bool
@@ -16061,7 +16080,9 @@ function extractAllbizCandidateUrls(string $html, string $baseUrl): array
     // the same links into data attributes or escaped JSON before hydration.
     preg_match_all('/(?:href|data-href|data-url|data-link)\s*=\s*(?:"([^"]+)"|\'([^\']+)\'|([^\s>]+))/i', $html, $attributeMatches, PREG_SET_ORDER);
     foreach ($attributeMatches as $match) {
-        $href = (string)($match[1] ?? $match[2] ?? $match[3] ?? '');
+        $href = (string)(($match[1] ?? '') !== ''
+            ? $match[1]
+            : ((($match[2] ?? '') !== '') ? $match[2] : ($match[3] ?? '')));
         if ($href !== '') {
             $add(normalizeUrl($href, $baseUrl));
         }
@@ -16069,7 +16090,7 @@ function extractAllbizCandidateUrls(string $html, string $baseUrl): array
 
     // Last-resort scan for absolute or root-relative business links. This
     // also handles links embedded in a JSON payload without an href tag.
-    $scanHtml = str_replace('\\/', '/', $html);
+    $scanHtml = str_replace('\\/', '/', str_replace('\\\\', '\\', $html));
     preg_match_all('~(?:(?:https?://)?(?:www\.)?(?:allbiz|bizarchive)\.com)?/business/[^"\'<>[:space:]]+~i', $scanHtml, $rawMatches);
     foreach ($rawMatches[0] ?? [] as $rawUrl) {
         $add(normalizeUrl($rawUrl, $baseUrl));
@@ -16294,7 +16315,7 @@ function normalizeAllbizDetailUrl(string $url): string
     $host = strtolower((string)($parts['host'] ?? ''));
     $path = (string)($parts['path'] ?? '');
     if (!in_array($host, ['allbiz.com', 'www.allbiz.com', 'bizarchive.com', 'www.bizarchive.com'], true)
-        || !preg_match('#^/business/[^/?#]+/?$#i', $path)) {
+        || !preg_match('~^/business/[^/?#]+/?$~i', $path)) {
         return '';
     }
     $canonicalHost = str_contains($host, 'bizarchive.com') ? 'www.bizarchive.com' : 'www.allbiz.com';
