@@ -3196,6 +3196,32 @@ function reserveObservationsPerPortfolio(items = [], configs = [], perPortfolio 
       : "highest_ev_pa_first";
     const ranked = orders.get(order) || [];
     let taken = 0;
+    // A DIP portfolio does not buy its opening-band rows yet, so its normal buy-band
+    // filter cannot reserve them. Keep the pre-event favourites first: they are the
+    // evidence the one-second watcher needs after kick-off, and losing them to the active
+    // catalogue cap makes a correctly configured DIP portfolio permanently blind.
+    const dipEntry = dipEntryRuleState(config);
+    if (dipEntry.enabled && !dipEntry.fault) {
+      const watchRows = items
+        .filter((item) => {
+          const opened = validMarketProbability(item?.firstMarketProbability);
+          if (opened == null || opened < Number(config.dipEntryOpenMin) || opened > Number(config.dipEntryOpenMax)) return false;
+          const firstSeenAt = Date.parse(String(item?.firstObservedAt || item?.observedAt || ""));
+          const kickoffAt = Date.parse(String(item?.eventStartTime || item?.scheduledEventDate || ""));
+          if (!Number.isFinite(firstSeenAt) || !Number.isFinite(kickoffAt) || firstSeenAt >= kickoffAt) return false;
+          if (!strategyAllowsTags(item, config)) return false;
+          return !marketShapeExclusionSet(config.excludedMarketShapes, config.excludeOverUnderMarkets === true)
+            .has(marketShape(item));
+        })
+        .sort((left, right) => (Date.parse(left?.eventStartTime || "") || Infinity)
+          - (Date.parse(right?.eventStartTime || "") || Infinity));
+      for (const item of watchRows) {
+        if (taken >= perPortfolio) break;
+        const key = marketObservationKey(item);
+        if (key) reserved.add(key);
+        taken += 1;
+      }
+    }
     for (const item of ranked) {
       if (taken >= perPortfolio) break;
       // The same superset filter live retention already used, now applied per portfolio
@@ -10595,6 +10621,37 @@ async function loadLiveMarketScanBatch({ auditCalls = null } = {}) {
   return { markets, perTag };
 }
 
+// The live sweep starts too late for a DIP rule: it first sees a fixture only once the
+// match is already in progress, so its quote cannot prove the market was a favourite at
+// the start. Capture the same sports/esports window before kick-off as well. Two bounded
+// Gamma calls per scrape are enough, and each portfolio's own filters still decide whether
+// any stored row is worth watching or trading.
+async function loadImminentDipMarketScanBatch({ auditCalls = null } = {}) {
+  const endDateMax = new Date(Date.now() + MARKET_SCAN_LIVE_WINDOW_HOURS * 3600000).toISOString();
+  const markets = [];
+  const perTag = {};
+  for (const tag of marketScanLiveTags()) {
+    const batch = await loadEventMarketScanBatch({
+      limit: MARKET_SCAN_EVENT_BATCH_LIMIT,
+      tag_id: tag.id,
+      order: "endDate",
+      ascending: "true",
+      // Intentionally no `live` flag: this is the pre-start half of the DIP evidence.
+      liquidity_min: 0,
+      end_date_max: endDateMax,
+    }, {
+      calls: auditCalls,
+      scope: "dip_prestart",
+      label: `DIP pre-start: ${tag.slug}`,
+      category: tag.slug,
+    });
+    const annotated = annotateCategoryScanMarkets(batch, tag);
+    perTag[tag.slug] = annotated.length;
+    markets.push(...annotated);
+  }
+  return { markets, perTag };
+}
+
 // The head of the endDate ordering: whatever resolves next, across every tag, on every
 // run. This is the pass that makes "nearest resolution first" a property of every scan
 // rather than of the first scan after a cursor reset.
@@ -11581,6 +11638,16 @@ async function refreshMarketObservations(state) {
       }
     }
 
+    // Capture the companion pre-start rows on every scrape. A market found only by the
+    // live sweep has already started and cannot qualify as a DIP opening quote.
+    let imminentDipMarkets = [];
+    try {
+      const imminent = await loadImminentDipMarketScanBatch({ auditCalls: apiCallAudit });
+      imminentDipMarkets = imminent.markets;
+    } catch (error) {
+      console.warn(`DIP pre-start scan failed (${error?.message || String(error)}); continuing without it.`);
+    }
+
     // Same policy as the live pass for the same reason: a failure here is logged and
     // dropped, because the catalogue scan is the job that must keep working and losing
     // one priority page costs nothing the next run cannot redo.
@@ -11619,12 +11686,12 @@ async function refreshMarketObservations(state) {
     // is on all three -- so this merges instead of concatenating: mergeMarketLists keeps
     // the first copy of a market, which means an overlapping market keeps its highest
     // priority position and is still only counted, audited and retained once.
-    const priorityMarkets = mergeMarketLists(liveOrderMarkets, liveMarkets, frontierMarkets, highVolumeMarkets);
+    const priorityMarkets = mergeMarketLists(liveOrderMarkets, imminentDipMarkets, liveMarkets, frontierMarkets, highVolumeMarkets);
     const rotatingMarkets = diversifyMarketScanOrder(batch);
     const fetchedMarkets = mergeMarketLists(priorityMarkets, rotatingMarkets);
     const duplicateMarketsSkipped = Math.max(
       0,
-      liveOrderMarkets.length + liveMarkets.length + frontierMarkets.length + highVolumeMarkets.length
+      liveOrderMarkets.length + imminentDipMarkets.length + liveMarkets.length + frontierMarkets.length + highVolumeMarkets.length
         + rotatingMarkets.length - fetchedMarkets.length,
     );
     const knownEventKeys = activeScanEventKeys(state.marketObservations || []);
