@@ -74,6 +74,26 @@ function shortlists(item, config) {
   }
 }
 
+function watchScopeShortlists(item, config) {
+  const directory = mkdtempSync(join(tmpdir(), "dip-watch-scope-"));
+  try {
+    const cut = API.indexOf("\ntry {");
+    const definitions = join(directory, "definitions.php");
+    mkdirSync(join(directory, "data"), { recursive: true });
+    writeFileSync(definitions, API.slice(0, cut) + "\n");
+    const output = execFileSync("php", ["-r",
+      `chdir('${directory}'); require '${definitions}';`
+      + ` $item = json_decode('${JSON.stringify(item)}', true);`
+      + ` $config = json_decode('${JSON.stringify(config)}', true);`
+      + ` echo json_encode(execution_scope_matches_observation(`
+      + `dip_watch_scope_observation($item, (float) $item['firstMarketProbability']), $config));`,
+    ], { encoding: "utf8", cwd: directory });
+    return JSON.parse(output);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+}
+
 // The portfolio from the screenshot: opens 70-80%, buys 30-56%, running fixtures only.
 const DIP_CONFIG = {
   minProbability: 0.3,
@@ -159,6 +179,24 @@ test("dip shortlist: the screen stops promising markets that never fell", () => 
   const plain = { minProbability: 0.3, maxProbability: 0.56 };
   assert.equal(shortlists(collapsed({ firstMarketProbability: 0.42 }), plain), true,
     "a portfolio without the dip rule must not inherit its refusals");
+});
+
+test("dip watch: a newly enabled portfolio uses the verified opening quote for its watch band", () => {
+  // This is the actual failure mode of paper-dip804055: it opened at 80.5%, then the
+  // catalogue was refreshed at 48%. Its existing opening record must be enough to put it
+  // into a newly enabled 80-99% watch, otherwise the worker can never see the dip.
+  const item = collapsed({ marketProbability: 0.48, firstMarketProbability: 0.805 });
+  const openingBand = {
+    ...DIP_CONFIG,
+    minProbability: 0.8,
+    maxProbability: 0.99,
+    dipEntryOpenMin: 0.8,
+    dipEntryOpenMax: 0.99,
+  };
+  assert.equal(shortlists(item, openingBand), false,
+    "the current price is deliberately outside the opening band");
+  assert.equal(watchScopeShortlists(item, openingBand), true,
+    "the watch must use the verified opening price when applying its opening band");
 });
 
 test("dip shortlist: the screen and the bot ask the same question of the same row", () => {

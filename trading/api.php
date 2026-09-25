@@ -2770,6 +2770,19 @@ function execution_scope_matches_observation(array $item, array $config): bool
     return true;
 }
 
+/**
+ * The dip watch admits a market by the quote it had before the fixture started, while
+ * the regular execution scope normally evaluates its current quote. Keep that distinction
+ * explicit: a strategy created after a market has already fallen must still be able to
+ * watch a verified 80% opening and buy the later dip.
+ */
+function dip_watch_scope_observation(array $item, float $openingProbability): array
+{
+    $scopeItem = $item;
+    $scopeItem['marketProbability'] = $openingProbability;
+    return $scopeItem;
+}
+
 function execution_scope_sort_value(array $item, array $config): float
 {
     if (($config['selectionOrder'] ?? '') === 'highest_reward_risk_first') {
@@ -6375,7 +6388,7 @@ function live_dip_entry_watch_payload(): array
                 'minProbability' => $rule['dipEntryOpenMin'],
                 'maxProbability' => $rule['dipEntryOpenMax'],
             ]);
-            if (!execution_scope_matches_observation($item, $scope)) {
+            if (!execution_scope_matches_observation(dip_watch_scope_observation($item, $opened), $scope)) {
                 continue;
             }
             $diagnostics['portfolios'][$portfolioId]['scope']++;
