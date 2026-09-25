@@ -1313,8 +1313,13 @@ const renderAssetChart = () => {
     })
     button.onclick = () => {
       selectedAssetChart = { symbol: asset.symbol, timeframeId: chartColumn.id }
+      // The chart and decision table describe the same active wave. Keeping
+      // their timeframe in lockstep prevents a 1D line from being compared
+      // with a different 4H pullback range above it.
+      priceActionDecisionTimeframe = chartColumn.id
       resetAssetChartViewport(chartColumn.id)
       selectedChartZone = null
+      renderDecision()
       renderAssetChart()
     }
     tabs.append(button)
