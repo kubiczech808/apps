@@ -612,11 +612,23 @@ const uniqueZones = (zones) => zones.filter((zone, index) =>
   zone && zones.findIndex((candidate) => sameZone(candidate, zone)) === index
 )
 
-const watchedEntryZones = (profile, type) => {
+const watchedEntryCandidates = (profile, type) => {
   if (entryZoneType(profileSide(profile)) !== type) return []
-  return (profile?.zoneCandidates ?? [])
-    .filter((candidate) => candidate.type === type && candidate.pullbackEligible && !candidate.invalidatedByPrematureTouch)
-    .map((candidate) => candidate.zone)
+  const candidates = (profile?.zoneCandidates ?? [])
+    .filter((candidate) => candidate.type === type && candidate.directionEligible && candidate.pullbackEligible)
+  const usableCandidates = candidates.filter((candidate) => !candidate.invalidatedByPrematureTouch)
+  // A premature touch must still block a new trade, but the FVG remains the
+  // relevant zone for explaining the current structural setup. When every
+  // candidate was consumed this preserves the nearest one for the table/chart.
+  return usableCandidates.length ? usableCandidates : candidates
+}
+
+const watchedEntryZones = (profile, type) => watchedEntryCandidates(profile, type)
+  .map((candidate) => ({
+    ...candidate.zone,
+    watchedSetupZone: true,
+    invalidatedSetupZone: candidate.invalidatedByPrematureTouch === true,
+  }))
 }
 
 const setupOwnersForEntry = (entry) => [
@@ -670,9 +682,12 @@ const zoneListElement = (entry) => {
   return zones.map((zone) => {
     const candidate = zoneCandidateFor(profile?.zoneCandidates ?? [], zone, zone.type)
     const activeSetup = zone.activeSetupZone === true
-    const status = activeSetup || candidate?.zoneHit ? 'met' : 'neutral'
+    const invalidated = zone.invalidatedSetupZone === true || candidate?.invalidatedByPrematureTouch === true
+    const status = activeSetup ? 'met' : invalidated ? 'unmet' : candidate?.zoneHit ? 'met' : 'neutral'
     const title = activeSetup
       ? 'Zóna patří k aktivní objednávce nebo otevřené pozici; zůstává viditelná do jejího ukončení.'
+      : invalidated
+        ? 'Zóna patří k současnému setupu, ale byla dotčena dříve než byl vstup kompletní; nový vstup z ní je zablokovaný.'
       : candidate?.zoneHit
         ? 'Cena už zónu hitla.'
         : 'Sledovaná zóna v pullback pásmu.'
@@ -1293,7 +1308,7 @@ const chartZones = (item, type) => {
   const activeSetupZones = setupZonesForEntry(chartEntry).filter((zone) => zone.type === type)
   const seen = new Set()
   return uniqueZones([...activeSetupZones, ...plannedEntries, ...targetZone])
-    .filter((zone) => zone && (zone.activeSetupZone ||
+    .filter((zone) => zone && (zone.activeSetupZone || zone.watchedSetupZone ||
       (!zone.filledByOwnTimeframeClose && !zone.invalidatedByOwnTimeframeClose && !Number.isFinite(zone.firstTouchAt))))
     .filter((zone) => Number.isFinite(zone.low) && Number.isFinite(zone.high) && zone.low > 0 && zone.high > 0 && zone.high >= zone.low)
     .filter((zone) => {
@@ -1513,7 +1528,7 @@ const renderAssetChart = () => {
     const bottom = y(zone.low)
     const zoneStartX = xForTime(zone.fvg?.definingCandles?.[0]?.time ?? zone.firstTime) ?? ASSET_CHART.padLeft
     const zoneRect = el('rect', {
-      className: `asset-zone-${zone.kind} asset-zone-clickable`,
+      className: `asset-zone-${zone.kind}${zone.invalidatedSetupZone ? ' asset-zone-invalidated' : ''} asset-zone-clickable`,
       x: zoneStartX,
       y: Math.min(top, bottom),
       width: Math.max(1, candlePlotRight - zoneStartX),

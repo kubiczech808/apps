@@ -324,7 +324,7 @@ test('asset tickers open a timeframe price chart with supply and demand zones', 
   assert.match(css, /asset-ticker/)
   assert.match(css, /asset-zone-demand/)
   assert.match(css, /asset-zone-supply/)
-  assert.match(js, /candidate\.pullbackEligible && !candidate\.invalidatedByPrematureTouch/)
+  assert.match(js, /candidate\.directionEligible && candidate\.pullbackEligible/)
 })
 
 test('active price-action setups retain their entry and target zones in the table and chart', () => {
@@ -334,6 +334,17 @@ test('active price-action setups retain their entry and target zones in the tabl
   assert.match(js, /Zóna patří k aktivní objednávce nebo otevřené pozici/)
   assert.match(js, /const activeSetupZones = setupZonesForEntry\(chartEntry\)/)
   assert.match(js, /activeSetupZone \|\|/)
+})
+
+test('a consumed FVG remains visible for its current setup but cannot be mistaken for a new entry', () => {
+  assert.match(js, /const watchedEntryCandidates = \(profile, type\) =>/)
+  assert.match(js, /candidate\.directionEligible && candidate\.pullbackEligible/)
+  assert.match(js, /usableCandidates\.length \? usableCandidates : candidates/)
+  assert.match(js, /invalidatedSetupZone: candidate\.invalidatedByPrematureTouch === true/)
+  assert.match(js, /Zóna patří k současnému setupu, ale byla dotčena dříve/)
+  assert.match(js, /zone\.watchedSetupZone/)
+  assert.match(js, /asset-zone-invalidated/)
+  assert.match(css, /\.asset-price-chart \.asset-zone-invalidated/)
 })
 
 test('charts create SVG graphics in the SVG namespace and use strategy history when available', () => {

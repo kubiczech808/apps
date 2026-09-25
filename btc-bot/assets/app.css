@@ -262,6 +262,7 @@ button.primary { color: #fff; background: var(--series-1); border-color: transpa
 .asset-price-chart .asset-external-structure-label { fill: #ffffff; font-size: 10px; font-weight: 750; paint-order: stroke; stroke: var(--surface-1); stroke-width: 3px; stroke-linejoin: round; pointer-events: none; }
 .asset-price-chart .asset-zone-demand { fill: var(--good); fill-opacity: 0.13; stroke: var(--good-text); stroke-opacity: 0.58; }
 .asset-price-chart .asset-zone-supply { fill: var(--critical); fill-opacity: 0.12; stroke: var(--critical-text); stroke-opacity: 0.58; }
+.asset-price-chart .asset-zone-invalidated { fill-opacity: 0.045; stroke-opacity: 0.45; stroke-dasharray: 4 4; }
 .asset-price-chart .asset-zone-label { font-size: 11px; font-weight: 650; font-variant-numeric: tabular-nums; }
 .asset-price-chart .asset-zone-label-demand { fill: var(--good-text); }
 .asset-price-chart .asset-zone-label-supply { fill: var(--critical-text); }
