@@ -327,6 +327,15 @@ test('asset tickers open a timeframe price chart with supply and demand zones', 
   assert.match(js, /candidate\.pullbackEligible && !candidate\.invalidatedByPrematureTouch/)
 })
 
+test('active price-action setups retain their entry and target zones in the table and chart', () => {
+  assert.match(js, /const setupOwnersForEntry = \(entry\) =>/)
+  assert.match(js, /\[owner\.entryZone, owner\.tp2Zone\]/)
+  assert.match(js, /const setupZonesForEntry = \(entry\) =>/)
+  assert.match(js, /Zóna patří k aktivní objednávce nebo otevřené pozici/)
+  assert.match(js, /const activeSetupZones = setupZonesForEntry\(chartEntry\)/)
+  assert.match(js, /activeSetupZone \|\|/)
+})
+
 test('charts create SVG graphics in the SVG namespace and use strategy history when available', () => {
   assert.match(js, /document\.createElementNS\(SVG_NS, tag\)/)
   assert.match(js, /const strategyHistory = state\?\.strategyEquityHistory\?\.\[view\.id\]/)

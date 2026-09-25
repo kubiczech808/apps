@@ -141,7 +141,8 @@ test('ready PA profiles open one paper trade per asset and never duplicate the s
     status: 'ready', side: 'long', entry: 0.7131, stop: 0.7060,
     tp1: 0.7202, tp2: 0.7344, weightedTarget: 0.7273,
     rewardRisk: 2, minRewardRisk: 2, riskPct: 1,
-    zone: { firstTime: START },
+    zone: { type: 'demand', low: 0.712, high: 0.714, firstTime: START },
+    tp2Zone: { type: 'supply', low: 0.733, high: 0.735, firstTime: START + HOUR },
   }
   const matrix = {
     assets: [{
@@ -165,6 +166,10 @@ test('ready PA profiles open one paper trade per asset and never duplicate the s
   assert.equal(calls[0].timeframeId, '1h')
   assert.equal(calls[0].market, 'spot')
   assert.equal(calls[0].leverage, 1)
+  assert.deepEqual(calls[0].entryZone, profile.zone)
+  assert.deepEqual(calls[0].tp2Zone, profile.tp2Zone)
+  assert.deepEqual(first[0].position.entryZone, profile.zone)
+  assert.deepEqual(first[0].position.tp2Zone, profile.tp2Zone)
   assert.equal(first[0].action, 'opened')
 
   const second = await executeReadyPriceActionProfiles({

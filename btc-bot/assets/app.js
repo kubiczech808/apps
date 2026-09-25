@@ -495,26 +495,6 @@ const zoneRangeTrigger = ({ zone, status = 'neutral', title = null, timeframeId,
   return el('div', { className: 'zone-range-control' }, [button, popup])
 }
 
-const zoneListElement = (profile, timeframeId) => {
-  const side = profile?.side ?? profile?.pendingSide ?? profile?.directionalSide ?? null
-  const active = side === 'long' ? 'demand' : side === 'short' ? 'supply' : null
-  if (!active) {
-    const title = profile?.mode === 'formation'
-      ? 'Struktura je flat; nejdříve čekáme na vytvoření směru.'
-      : 'Bez směru struktury není vstupní zóna určena.'
-    return [decisionFactElement(decisionFact('–', 'neutral', title))]
-  }
-  const candidates = (profile?.zoneCandidates ?? []).filter((candidate) => candidate.type === active && candidate.eligible)
-  if (!candidates.length) return [decisionFactElement(decisionFact('–', 'neutral', 'Žádná zóna současně nesplňuje pullback a minimální R/R.'))]
-  return candidates.map((candidate) => {
-    const zone = candidate.zone
-    const status = candidate.zoneHit ? 'met' : 'neutral'
-    return el('div', { className: 'pa-zone-item' }, [
-      zoneRangeTrigger({ zone, status, title: candidate.zoneHit ? 'Cena už zónu hitla.' : 'Validní zóna, čeká se na hit ceny.', timeframeId }),
-    ])
-  })
-}
-
 const samePrice = (left, right) => {
   if (!Number.isFinite(left) || !Number.isFinite(right)) return false
   const scale = Math.max(1, Math.abs(left), Math.abs(right))
@@ -624,6 +604,90 @@ const formationTitle = 'Struktura je flat; nevstupujeme a čekáme na potvrzení
 const pendingFormationTitle = 'Směr po CHoCH se ještě potvrzuje; hodnoty jsou pouze plán, ne autorizace vstupu.'
 
 const profileSide = (profile) => profile?.side ?? profile?.pendingSide ?? profile?.directionalSide ?? null
+
+const entryZoneType = (side) => side === 'long' ? 'demand' : side === 'short' ? 'supply' : null
+const targetZoneType = (side) => side === 'long' ? 'supply' : side === 'short' ? 'demand' : null
+
+const uniqueZones = (zones) => zones.filter((zone, index) =>
+  zone && zones.findIndex((candidate) => sameZone(candidate, zone)) === index
+)
+
+const watchedEntryZones = (profile, type) => {
+  if (entryZoneType(profileSide(profile)) !== type) return []
+  return (profile?.zoneCandidates ?? [])
+    .filter((candidate) => candidate.type === type && candidate.pullbackEligible && !candidate.invalidatedByPrematureTouch)
+    .map((candidate) => candidate.zone)
+}
+
+const setupOwnersForEntry = (entry) => [
+  ...(state?.positions?.running ?? []),
+  ...(state?.positions?.orders ?? []).filter((order) => order.orderRole !== 'take-profit'),
+].filter((owner) =>
+  owner.strategyId === 'price-action-structure-v1' &&
+  owner.assetSymbol === entry.asset?.symbol &&
+  owner.timeframeId === entry.column?.id
+)
+
+const zoneContainingPrice = (item, type, value) => {
+  if (!Number.isFinite(value)) return null
+  return zoneList(item, type, { includeFilled: true }).find((zone) =>
+    Number.isFinite(zone?.low) && Number.isFinite(zone?.high) && value >= zone.low && value <= zone.high
+  ) ?? null
+}
+
+// A filled entry FVG is deliberately no longer an eligible *new* trade, but
+// it remains part of the active order/position's audit trail. Keep its saved
+// snapshot visible until the runner cancels the order or closes the position.
+const setupZonesForEntry = (entry) => uniqueZones(setupOwnersForEntry(entry).flatMap((owner) => {
+  const saved = [owner.entryZone, owner.tp2Zone]
+    .filter((zone) => zone?.type)
+    .map((zone) => ({ ...zone, activeSetupZone: true }))
+  const fallback = [
+    { type: entryZoneType(owner.side), price: owner.entry },
+    { type: targetZoneType(owner.side), price: owner.tp2 },
+  ].flatMap(({ type, price: level }) => {
+    if (!type || saved.some((zone) => zone.type === type)) return []
+    const zone = zoneContainingPrice(entry.item, type, level)
+    return zone ? [{ ...zone, activeSetupZone: true }] : []
+  })
+  return [...saved, ...fallback]
+}))
+
+const zoneListElement = (entry) => {
+  const { profile, column } = entry
+  const active = entryZoneType(profileSide(profile))
+  const setupZones = setupZonesForEntry(entry)
+  const watchedZones = active ? watchedEntryZones(profile, active) : []
+  const zones = uniqueZones([...setupZones, ...watchedZones])
+  if (!zones.length) {
+    const title = profile?.mode === 'formation'
+      ? 'Struktura je flat; nejdříve čekáme na vytvoření směru.'
+      : active
+        ? 'Žádná zóna zatím není v pullback pásmu a použitelná pro sledovaný setup.'
+        : 'Bez směru struktury není vstupní zóna určena.'
+    return [decisionFactElement(decisionFact('–', 'neutral', title))]
+  }
+  return zones.map((zone) => {
+    const candidate = zoneCandidateFor(profile?.zoneCandidates ?? [], zone, zone.type)
+    const activeSetup = zone.activeSetupZone === true
+    const status = activeSetup || candidate?.zoneHit ? 'met' : 'neutral'
+    const title = activeSetup
+      ? 'Zóna patří k aktivní objednávce nebo otevřené pozici; zůstává viditelná do jejího ukončení.'
+      : candidate?.zoneHit
+        ? 'Cena už zónu hitla.'
+        : 'Sledovaná zóna v pullback pásmu.'
+    return el('div', { className: 'pa-zone-item' }, [
+      zoneRangeTrigger({
+        zone,
+        status,
+        title,
+        timeframeId: column.id,
+        candidate,
+        showCandidateDetails: Boolean(candidate),
+      }),
+    ])
+  })
+}
 const hasDirectionalPlan = (profile) => profile?.mode === 'formation' && Boolean(profileSide(profile))
 
 const pullbackRange = (entry) => {
@@ -714,7 +778,7 @@ const structureReferenceFacts = (entry) => {
 const priceActionDecisionCell = (entry, column) =>
     el('td', { className: `pa-decision-cell pa-decision-cell-${column.id}` },
     column.id === 'zones'
-      ? zoneListElement(entry.profile, entry.column.id)
+      ? zoneListElement(entry)
       : column.id === 'rr'
         ? [riskRewardDetails(entry)]
       : column.id === 'structure'
@@ -1218,29 +1282,18 @@ const assetChartSelection = () => {
 
 const chartZones = (item, type) => {
   const profile = item?.tradeProfile
-  const side = profileSide(profile)
-  const entryType = side === 'long' ? 'demand' : side === 'short' ? 'supply' : null
-  const plannedEntries = entryType === type
-    ? (profile?.zoneCandidates ?? [])
-      .filter((candidate) => candidate.type === type && candidate.pullbackEligible && !candidate.invalidatedByPrematureTouch)
-      .map((candidate) => candidate.zone)
-    : []
+  const chartEntry = {
+    asset: { symbol: selectedAssetChart.symbol },
+    column: { id: selectedAssetChart.timeframeId },
+    item,
+    profile,
+  }
+  const plannedEntries = watchedEntryZones(profile, type)
   const targetZone = profile?.tp2Zone?.type === type ? [profile.tp2Zone] : []
-  const activePositionZones = (state?.positions?.running ?? [])
-    .filter((position) =>
-      position.strategyId === 'price-action-structure-v1' &&
-      position.assetSymbol === selectedAssetChart.symbol &&
-      position.timeframeId === selectedAssetChart.timeframeId
-    )
-    .map((position) => {
-      if (position.entryZone?.type === type) return { ...position.entryZone, activePositionZone: true }
-      const zonePool = type === 'demand' ? item?.zones?.unfilledDemand : item?.zones?.unfilledSupply
-      const matchingZone = (zonePool ?? []).find((zone) => position.entry >= zone.low && position.entry <= zone.high)
-      return matchingZone ? { ...matchingZone, activePositionZone: true } : null
-    })
+  const activeSetupZones = setupZonesForEntry(chartEntry).filter((zone) => zone.type === type)
   const seen = new Set()
-  return [...plannedEntries, ...targetZone, ...activePositionZones]
-    .filter((zone) => zone && (zone.activePositionZone ||
+  return uniqueZones([...activeSetupZones, ...plannedEntries, ...targetZone])
+    .filter((zone) => zone && (zone.activeSetupZone ||
       (!zone.filledByOwnTimeframeClose && !zone.invalidatedByOwnTimeframeClose && !Number.isFinite(zone.firstTouchAt))))
     .filter((zone) => Number.isFinite(zone.low) && Number.isFinite(zone.high) && zone.low > 0 && zone.high > 0 && zone.high >= zone.low)
     .filter((zone) => {

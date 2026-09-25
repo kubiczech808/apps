@@ -159,6 +159,7 @@ const priceActionOrderPlan = ({ assetSymbol, timeframeId, item, profile, equityS
       tp1: profile.tp1,
       tp2,
       entryZone: profile.zone ? { ...profile.zone } : null,
+      tp2Zone: profile.tp2Zone ? { ...profile.tp2Zone } : null,
       assetSymbol,
       timeframeId,
       strategyId: PRICE_ACTION_STRUCTURE_ID,
@@ -289,6 +290,7 @@ export const executeReadyPriceActionProfiles = async ({
       tp1: profile.tp1,
       tp2: order.tp2,
       entryZone: profile.zone ? { ...profile.zone } : null,
+      tp2Zone: profile.tp2Zone ? { ...profile.tp2Zone } : null,
       plan: {
         reason: `${profile.side} ${item.reason ?? ''}`.trim(),
         rr: profile.rewardRisk,

@@ -152,10 +152,14 @@ test('a paper PA limit order keeps capital free until entry, then becomes a prot
     type: 'limit', pricingModel: 'linear-usd', strategyId: 'price-action-structure-v1',
     assetSymbol: 'AUDUSD', timeframeId: '1h', signalKey: 'aud-pending', signalCandleTime: START,
     side: 'long', entry: 0.71, stop: 0.70, takeProfit: 0.74, tp1: 0.72, tp2: 0.74,
+    entryZone: { type: 'demand', low: 0.709, high: 0.711 },
+    tp2Zone: { type: 'supply', low: 0.739, high: 0.741 },
     quantityUsd: 100, marginSats: 25_000, leverage: 4, liquidation: 0.5325, quoteSatsPerUsd: 1250,
   })
   assert.equal(order.status, 'open')
   assert.equal(store.balanceSats, 1_000_000)
+  assert.deepEqual(order.entryZone, { type: 'demand', low: 0.709, high: 0.711 })
+  assert.deepEqual(order.tp2Zone, { type: 'supply', low: 0.739, high: 0.741 })
 
   executor.markPriceActionOrders({
     assets: [{ symbol: 'AUDUSD', trends: { '1h': { chartCandles: [
@@ -168,6 +172,8 @@ test('a paper PA limit order keeps capital free until entry, then becomes a prot
   assert.equal(order.stopLoss, 0.70)
   assert.equal(order.tp1, 0.72)
   assert.equal(order.tp2, 0.74)
+  assert.deepEqual(order.entryZone, { type: 'demand', low: 0.709, high: 0.711 })
+  assert.deepEqual(order.tp2Zone, { type: 'supply', low: 0.739, high: 0.741 })
   assert.ok(store.balanceSats < 1_000_000)
 })
 
