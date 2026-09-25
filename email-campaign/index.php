@@ -18783,8 +18783,15 @@ function addTracking(string $html, string $token): string
 
 function appBaseUrl(): string
 {
-    $scheme = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http';
     $host = $_SERVER['HTTP_HOST'] ?? 'www.osobnizkusenosti.cz';
+    $forwardedProto = strtolower(trim(explode(',', (string)($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? ''))[0]));
+    $isHttps = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off')
+        || $forwardedProto === 'https'
+        || (int)($_SERVER['SERVER_PORT'] ?? 0) === 443;
+    // Verejna aplikace je dostupna jen pres HTTPS. Background worker nepokracuje po
+    // HTTP 301, proto na verejnem hostu nesmi vzniknout HTTP URL ani za proxy.
+    $isLocalHost = in_array(strtolower(preg_replace('/:\\d+$/', '', (string)$host) ?? ''), ['localhost', '127.0.0.1', '::1'], true);
+    $scheme = ($isHttps || !$isLocalHost) ? 'https' : 'http';
     $path = strtok($_SERVER['REQUEST_URI'] ?? '/email-campaign/', '?') ?: '/email-campaign/';
     if (substr($path, -1) !== '/') {
         $path = dirname($path) . '/';

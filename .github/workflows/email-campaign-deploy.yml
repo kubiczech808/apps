@@ -137,6 +137,7 @@ jobs:
         run: |
           php email-campaign/tests/db_maintenance_test.php
           php email-campaign/tests/allbiz_source_test.php
+          php email-campaign/tests/app_url_test.php
 
       - name: Upload to hosting
         uses: SamKirkland/FTP-Deploy-Action@v4.3.5
