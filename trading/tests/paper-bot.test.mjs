@@ -11762,8 +11762,8 @@ test("dip entry on paper: a recorded dip survives the portfolio filter it has to
     ...hit,
     marketCreatedAt: new Date(Date.now() - 12 * 3600000).toISOString(),
   }]);
-  assert.equal(bot.strategyEligibleCandidates(lateDiscovery, strategy).length, 0,
-    "a pre-kickoff quote discovered hours after market creation is not an opening quote");
+  assert.equal(bot.strategyEligibleCandidates(lateDiscovery, strategy).length, 1,
+    "a pre-kickoff quote remains valid evidence when Gamma created the market hours earlier");
   // The entry is at the price the worker saw. That is the whole reason the record exists.
   assert.equal(rows[0].marketProbability, 0.35);
   assert.equal(rows[0].netYield > 0, true, "a 35c entry on a 1.00 payout is a positive yield");

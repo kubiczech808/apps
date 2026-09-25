@@ -4228,11 +4228,23 @@ function dip_entry_opening_is_verifiable(array $item): bool
 {
     $firstSeen = strtotime((string) ($item['firstObservedAt'] ?? $item['observedAt'] ?? ''));
     $kickoff = strtotime((string) ($item['eventStartTime'] ?? $item['scheduledEventDate'] ?? ''));
-    $created = strtotime((string) ($item['marketCreatedAt'] ?? $item['createdAt'] ?? ''));
-    if ($firstSeen === false || $kickoff === false || $created === false) {
+    if ($firstSeen === false || $kickoff === false) {
         return false;
     }
-    return $firstSeen < $kickoff && $firstSeen >= $created && ($firstSeen - $created) <= 90 * 60;
+    return $firstSeen < $kickoff;
+}
+
+// A price is usable when our scanner saw it before kick-off. Preserve whether that happened
+// near Gamma's market creation, without excluding a verified pre-event quote merely because
+// a fixture was listed earlier.
+function dip_entry_opening_source(array $item): string
+{
+    $firstSeen = strtotime((string) ($item['firstObservedAt'] ?? $item['observedAt'] ?? ''));
+    $created = strtotime((string) ($item['marketCreatedAt'] ?? $item['createdAt'] ?? ''));
+    if ($firstSeen !== false && $created !== false && $firstSeen >= $created && ($firstSeen - $created) <= 90 * 60) {
+        return 'scanner-near-market-open';
+    }
+    return 'scanner-pre-event';
 }
 
 function normalize_dip_entry_rule(array $input, array $defaults): array
@@ -6452,7 +6464,7 @@ function live_dip_entry_watch_payload(): array
                 // This is deliberately explicit. A scan quote can prove only when OUR
                 // collector first saw the market; it must never be presented as a quote
                 // from the beginning of Polymarket's own history.
-                'openingSource' => 'scanner-near-market-open',
+                'openingSource' => dip_entry_opening_source($item),
                 // The market's tags, carried because the paper bot rebuilds a candidate row
                 // out of the recorded hit and has nothing else to read them from. By the time
                 // the bot runs, the collapsed favourite is out of the catalogue entirely.
@@ -6709,9 +6721,9 @@ function record_dip_entry_hit(array $input): array
     // A paper hit is created by the long-lived RPi watch, so it can outlive a deployment.
     // Do not let a plan prepared by an older worker create a new paper position merely
     // because it reaches the buy band after the opening-evidence rule became stricter.
-    // The hit itself must carry the same verifiable, near-creation observation that the
-    // current shortlist required when it issued the plan.
-    if ((string) ($input['openingSource'] ?? '') !== 'scanner-near-market-open'
+    // The hit itself must carry the same pre-event observation the current shortlist
+    // verified. The source distinguishes a near-market-open capture from a later scan.
+    if (!in_array((string) ($input['openingSource'] ?? ''), ['scanner-near-market-open', 'scanner-pre-event'], true)
         || !dip_entry_opening_is_verifiable([
             'firstObservedAt' => $input['firstObservedAt'] ?? '',
             'eventStartTime' => $input['eventStartTime'] ?? '',
@@ -6744,7 +6756,7 @@ function record_dip_entry_hit(array $input): array
         'firstObservedAt' => (string) ($input['firstObservedAt'] ?? ''),
         'eventStartTime' => (string) ($input['eventStartTime'] ?? ''),
         'marketCreatedAt' => (string) ($input['marketCreatedAt'] ?? ''),
-        'openingSource' => (string) ($input['openingSource'] ?? 'scanner-near-market-open'),
+        'openingSource' => (string) ($input['openingSource'] ?? 'scanner-pre-event'),
         // The price the dip actually reached, which is what the simulated entry pays. The
         // whole value of recording this is that it is not the price an hour later.
         'price' => round($price, 6),

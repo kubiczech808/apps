@@ -8251,9 +8251,7 @@ function strategyEligibleCandidates(eligible, strategy) {
       // no first-seen time are refusals rather than guesses.
       const firstSeenAt = Date.parse(String(item?.firstObservedAt || item?.observedAt || ""));
       const kickoffAt = Date.parse(String(item?.eventStartTime || item?.scheduledEventDate || ""));
-      const marketCreatedAt = Date.parse(String(item?.marketCreatedAt || item?.createdAt || ""));
-      if (!Number.isFinite(firstSeenAt) || !Number.isFinite(kickoffAt) || !Number.isFinite(marketCreatedAt)
-        || firstSeenAt >= kickoffAt || firstSeenAt < marketCreatedAt || firstSeenAt - marketCreatedAt > 90 * 60 * 1000) return false;
+      if (!Number.isFinite(firstSeenAt) || !Number.isFinite(kickoffAt) || firstSeenAt >= kickoffAt) return false;
       if (opened < Number(strategy.dipEntryOpenMin) || opened > Number(strategy.dipEntryOpenMax)) return false;
     }
     // The same test the statistics apply, for the same reason: an order sent into a book
