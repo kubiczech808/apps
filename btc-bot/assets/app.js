@@ -1182,11 +1182,15 @@ const defaultAssetChartVisibleCandleCount = (timeframeId) =>
 
 const clamp = (value, low, high) => Math.max(low, Math.min(high, value))
 
+const resetAssetChartYScale = () => {
+  assetChartYScale = { key: null, min: null, max: null }
+  assetChartYDrag = null
+}
+
 const resetAssetChartViewport = (timeframeId) => {
   assetChartVisibleCandleCount = defaultAssetChartVisibleCandleCount(timeframeId)
   assetChartHistoryOffset = 0
-  assetChartYScale = { key: null, min: null, max: null }
-  assetChartYDrag = null
+  resetAssetChartYScale()
   assetChartPan = { key: null, enabled: false, active: null }
 }
 
@@ -1347,6 +1351,10 @@ const renderAssetChart = () => {
     historyRange.oninput = () => {
       assetChartVisibleCandleCount = clamp(Number(historyRange.value), minVisibleCandleCount, allCandles.length)
       assetChartHistoryOffset = clamp(assetChartHistoryOffset, 0, Math.max(0, allCandles.length - assetChartVisibleCandleCount))
+      // A narrower time window needs an axis derived from its own candles.
+      // Keeping the old range leaves a small cluster of bars in an otherwise
+      // empty chart after a horizontal zoom-in.
+      resetAssetChartYScale()
       renderAssetChart()
     }
   }
@@ -1365,6 +1373,7 @@ const renderAssetChart = () => {
     if (nextVisibleCount === assetChartVisibleCandleCount) return
     assetChartVisibleCandleCount = nextVisibleCount
     assetChartHistoryOffset = clamp(assetChartHistoryOffset, 0, Math.max(0, allCandles.length - assetChartVisibleCandleCount))
+    resetAssetChartYScale()
     renderAssetChart()
   }
   if (chartContainer) chartContainer.onwheel = zoomHistory
