@@ -10,6 +10,10 @@ const html = read('index.html')
 const js = read('assets/app.js')
 const api = read('api.php')
 
+test('the dashboard script parses before deployment', () => {
+  assert.doesNotThrow(() => new Function(js))
+})
+
 test('the hidden attribute outranks every layout rule in the stylesheet', () => {
   // The bug this exists for: `.gate { display: grid }` is an author rule, and
   // author rules beat the browser's `[hidden] { display: none }` whatever the

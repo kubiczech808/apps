@@ -629,7 +629,6 @@ const watchedEntryZones = (profile, type) => watchedEntryCandidates(profile, typ
     watchedSetupZone: true,
     invalidatedSetupZone: candidate.invalidatedByPrematureTouch === true,
   }))
-}
 
 const setupOwnersForEntry = (entry) => [
   ...(state?.positions?.running ?? []),
