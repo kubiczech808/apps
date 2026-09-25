@@ -4,7 +4,7 @@ import { buildExternalTrendReference } from './external-trends.mjs'
 import { buildFvgSupplyDemandZones, candleSignal, marketStructure } from './priceaction.mjs'
 
 export const PRICE_ACTION_STRUCTURE_ID = 'price-action-structure-v1'
-export const PRICE_ACTION_MATRIX_SCHEMA = 47
+export const PRICE_ACTION_MATRIX_SCHEMA = 48
 export const PRICE_ACTION_CHART_CANDLE_LIMITS = {
   '1h': 8760,
   '4h': 2190,
@@ -60,6 +60,22 @@ export const PRICE_ACTION_TIMEFRAMES = [
   { id: '4h', label: '4H', hours: 4 },
   { id: '1d', label: '1D', hours: 24 },
 ]
+
+// Yahoo provides two years of FX hourly OHLC.  Every Forex timeframe is
+// derived from that single stream, just as BTC is, so the 1D chart cannot
+// disagree with the 1H/4H candles because of a different vendor or session.
+const FX_HOURLY_HISTORY_DAYS = 760
+
+export const aggregateHourlyTimeframeCandles = ({ candles, timeframeId }) => {
+  const timeframe = PRICE_ACTION_TIMEFRAMES.find((item) => item.id === timeframeId)
+  if (!timeframe) throw new Error(`Unknown price-action timeframe: ${timeframeId}`)
+  return {
+    candles: aggregate(candles, timeframe.hours),
+    // Strategy logic remains limited to completed buckets, but charts include
+    // the current partial candle so the latest price stays at the right edge.
+    chartCandles: aggregate(candles, timeframe.hours, { includePartial: true }),
+  }
+}
 
 // The FX key may be added while an otherwise fresh matrix is already stored.
 // Do not preserve a cached "key missing" result for the remainder of that
@@ -1519,29 +1535,43 @@ export const alignOneHourStructureToFourHour = (trends) => {
   return item
 }
 
-export const fetchFxCandles = async ({ asset, timeframeId, requiredHistoryDays = 0, fetchImpl, now, logger }) => {
+export const fetchFxCandles = async ({
+  asset,
+  timeframeId,
+  requiredHistoryDays = 0,
+  hourlyLookbackDays = 0,
+  fetchImpl,
+  now,
+  logger,
+}) => {
   const daily = timeframeId === '1d'
-  const attempts = [
-    async () => ({
-      source: 'stooq',
-      candles: await fetchStooqCandles({
-        symbol: asset.stooqSymbol,
-        interval: daily ? 'd' : '60',
-        lookbackDays: daily ? 900 : 380,
-        fetchImpl,
-        now,
-      }),
+  const requestedHourlyDays = Math.max(380, Math.ceil(Number(hourlyLookbackDays) || 0))
+  const yahooHourlyRange = requestedHourlyDays > 380 ? '2y' : '1y'
+  const stooqAttempt = async () => ({
+    source: 'stooq',
+    candles: await fetchStooqCandles({
+      symbol: asset.stooqSymbol,
+      interval: daily ? 'd' : '60',
+      lookbackDays: daily ? 900 : requestedHourlyDays,
+      fetchImpl,
+      now,
     }),
-    async () => ({
-      source: 'yahoo',
-      candles: await fetchYahooCandles({
-        symbol: asset.yahooSymbol,
-        interval: daily ? '1d' : '1h',
-        range: daily ? '3y' : '1y',
-        fetchImpl,
-      }),
+  })
+  const yahooAttempt = async () => ({
+    source: 'yahoo',
+    candles: await fetchYahooCandles({
+      symbol: asset.yahooSymbol,
+      interval: daily ? '1d' : '1h',
+      range: daily ? '3y' : yahooHourlyRange,
+      fetchImpl,
     }),
-  ]
+  })
+  // Stooq has repeatedly timed out on long intraday FX requests. The 2-year
+  // Yahoo range is confirmed for the hourly aggregation path, so it is the
+  // primary source there; short legacy requests retain the original fallback.
+  const attempts = !daily && requestedHourlyDays > 380
+    ? [yahooAttempt, stooqAttempt]
+    : [stooqAttempt, yahooAttempt]
 
   const failures = []
   for (const attempt of attempts) {
@@ -1913,42 +1943,31 @@ const candlesInHistory = (candles, historyDays) => {
   return candles.filter((candle) => candle.time >= cutoff)
 }
 
-const timeframeCandles = async ({ asset, timeframe, btcHourly, fetchImpl, now, logger }) => {
+const assetTimeframeCandles = async ({ asset, btcHourly, fetchImpl, now, logger }) => {
   if (asset.symbol === 'BTCUSD') {
-    const factor = timeframe.id === '1d' ? 24 : timeframe.hours
-    return {
+    return PRICE_ACTION_TIMEFRAMES.map((timeframe) => ({
       source: 'bot-market',
-      candles: aggregate(btcHourly, factor),
-      // Trading decisions only see closed buckets. The chart gets the same
-      // current bucket with its latest closed hourly price, so its right edge
-      // stays aligned with the dashboard's shared current-price line.
-      chartCandles: aggregate(btcHourly, factor, { includePartial: true }),
-    }
+      ...aggregateHourlyTimeframeCandles({ candles: btcHourly, timeframeId: timeframe.id }),
+    }))
   }
-  if (timeframe.id === '4h') {
-    const { source, candles, failures } = await fetchFxCandles({
-      asset,
-      timeframeId: '1h',
-      requiredHistoryDays: PRICE_ACTION_STRUCTURE_PROFILES[timeframe.id].zoneHistoryDays,
-      fetchImpl,
-      now,
-      logger,
-    })
-    return {
-      source,
-      candles: aggregate(candles, 4),
-      chartCandles: aggregate(candles, 4, { includePartial: true }),
-      failures,
-    }
-  }
-  return fetchFxCandles({
+
+  // Use one FX hourly source for every chart and decision timeframe. Apart
+  // from keeping all chart bodies consistent, this avoids mixing a direct
+  // daily vendor feed with locally aggregated intraday candles.
+  const { source, candles, failures } = await fetchFxCandles({
     asset,
-    timeframeId: timeframe.id,
-    requiredHistoryDays: PRICE_ACTION_STRUCTURE_PROFILES[timeframe.id].zoneHistoryDays,
+    timeframeId: '1h',
+    requiredHistoryDays: PRICE_ACTION_STRUCTURE_PROFILES['1d'].zoneHistoryDays,
+    hourlyLookbackDays: FX_HOURLY_HISTORY_DAYS,
     fetchImpl,
     now,
     logger,
   })
+  return PRICE_ACTION_TIMEFRAMES.map((timeframe) => ({
+    source,
+    failures,
+    ...aggregateHourlyTimeframeCandles({ candles, timeframeId: timeframe.id }),
+  }))
 }
 
 const hasStructureDetails = (matrix) =>
@@ -2011,14 +2030,12 @@ export const buildPriceActionMatrix = async ({
     twelveDataApiKey,
   })) return previous
 
-  // Fetch the independent asset/timeframe inputs together. The old nested
-  // loop waited for every FX source before starting the next one, so a cold
-  // schema refresh could hold the runner lease until systemd killed it.
+  // Each asset fetch starts independently. Forex then derives every
+  // timeframe from its one hourly stream, instead of fetching conflicting
+  // vendor intervals in parallel.
   const fetchedAssets = await Promise.all(PRICE_ACTION_ASSETS.map(async (asset) => ({
     asset,
-    results: await Promise.all(PRICE_ACTION_TIMEFRAMES.map((timeframe) =>
-      timeframeCandles({ asset, timeframe, btcHourly, fetchImpl, now, logger })
-    )),
+    results: await assetTimeframeCandles({ asset, btcHourly, fetchImpl, now, logger }),
   })))
 
   const externalTrendHour = Math.floor(now / (60 * 60_000))

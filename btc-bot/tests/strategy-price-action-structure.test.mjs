@@ -5,6 +5,7 @@ import {
   activeSupplyDemandZones,
   alignOneHourStructureToFourHour,
   alternatingTrendPivots,
+  aggregateHourlyTimeframeCandles,
   applyExternalTrendConfirmation,
   buildPriceActionMatrix,
   canReusePriceActionMatrix,
@@ -276,6 +277,30 @@ test('Yahoo candle wrapper drops zero-valued FX gap rows', async () => {
   assert.equal(candles[0].close, 1.11)
 })
 
+test('Forex 1D and 4H candles are derived from the same hourly stream', () => {
+  const hourly = Array.from({ length: 72 }, (_, index) =>
+    candle(START + index * HOUR, 1 + index, 1.75 + index, 0.5 + index, 1.25 + index)
+  )
+
+  const oneHour = aggregateHourlyTimeframeCandles({ candles: hourly, timeframeId: '1h' })
+  const fourHour = aggregateHourlyTimeframeCandles({ candles: hourly, timeframeId: '4h' })
+  const oneDay = aggregateHourlyTimeframeCandles({ candles: hourly, timeframeId: '1d' })
+
+  assert.equal(oneHour.candles.length, 72)
+  assert.equal(fourHour.candles.length, 18)
+  assert.equal(oneDay.candles.length, 3)
+  assert.equal(oneDay.candles[0].time, START)
+  assert.deepEqual(oneDay.candles[0], {
+    time: START,
+    open: 1,
+    high: 24.75,
+    low: 0.5,
+    close: 24.25,
+    volume: 24,
+  })
+  assert.deepEqual(oneDay.chartCandles, oneDay.candles)
+})
+
 test('a short Stooq intraday response falls through to Yahoo for the full zone horizon', async () => {
   const now = Date.UTC(2026, 8, 20)
   const fetchImpl = async (url) => {
@@ -318,6 +343,46 @@ test('a short Stooq intraday response falls through to Yahoo for the full zone h
   assert.equal(result.source, 'yahoo')
   assert.equal(result.candles.length, 2)
   assert.match(result.failures[0], /stooq returned only 0 calendar days; need 120/)
+})
+
+test('long FX hourly history uses Yahoo two-year data before the timing-out Stooq request', async () => {
+  const now = Date.UTC(2026, 8, 25)
+  const urls = []
+  const fetchImpl = async (url) => {
+    urls.push(String(url))
+    return {
+      ok: true,
+      json: async () => ({
+        chart: {
+          result: [{
+            timestamp: [
+              Math.round((now - 757 * 24 * HOUR) / 1000),
+              Math.round(now / 1000),
+            ],
+            indicators: {
+              quote: [{
+                open: [0.7, 0.71], high: [0.71, 0.72], low: [0.69, 0.7], close: [0.705, 0.715], volume: [0, 0],
+              }],
+            },
+          }],
+        },
+      }),
+    }
+  }
+
+  const result = await fetchFxCandles({
+    asset: PRICE_ACTION_ASSETS.find((asset) => asset.symbol === 'AUDUSD'),
+    timeframeId: '1h',
+    requiredHistoryDays: 730,
+    hourlyLookbackDays: 760,
+    fetchImpl,
+    now,
+    logger: { warn() {} },
+  })
+
+  assert.equal(result.source, 'yahoo')
+  assert.equal(urls.length, 1)
+  assert.match(urls[0], /range=2y/)
 })
 
 test('wick-only extensions are not structural pivots until their candle closes beyond the prior wick', () => {
