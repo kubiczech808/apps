@@ -80,8 +80,8 @@ function combinations(rows, query = "min_trades=1", action = "resolved-combinati
   }
 }
 
-function tagProbabilityAnalysis(rows, tag) {
-  return combinations(rows, `tag=${encodeURIComponent(tag)}`, "resolved-tag-probability-analysis");
+function tagProbabilityAnalysis(rows, tag, mode = "threshold") {
+  return combinations(rows, `tag=${encodeURIComponent(tag)}&mode=${encodeURIComponent(mode)}`, "resolved-tag-probability-analysis");
 }
 
 const find = (rows, facets) => rows.find((entry) =>
@@ -122,6 +122,20 @@ test("tag probability ROI is a ratio so the browser does not multiply it twice",
   assert.equal(atFifty.stakedUsdc, 20);
   assert.equal(atFifty.pnlUsdc, 10);
   assert.equal(atFifty.returnPct, 0.5);
+});
+
+test("tag probability point mode isolates one whole-percent entry range", () => {
+  const payload = tagProbabilityAnalysis([
+    row(0.51, true, { tags: ["weather"] }),
+    row(0.519, false, { tags: ["weather"] }),
+    row(0.52, true, { tags: ["weather"] }),
+  ], "weather", "point");
+  assert.equal(payload.ok, true, JSON.stringify(payload).slice(0, 300));
+  assert.equal(payload.mode, "point");
+  const atFiftyOne = payload.rows.find((entry) => entry.minimumProbability === 51);
+  assert.ok(atFiftyOne, "the 51.00%-51.99% bucket must be returned");
+  assert.equal(atFiftyOne.trades, 2, "the 52% entry belongs only to its own bucket");
+  assert.equal(atFiftyOne.wins, 1);
 });
 
 test("the probability column is a threshold, not a band", () => {

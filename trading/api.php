@@ -9512,6 +9512,10 @@ try {
         if ($shape !== '*' && !in_array($shape, MARKET_SHAPE_IDS, true)) {
             respond(['ok' => false, 'error' => 'An available event type is required.'], 400);
         }
+        // The archive is folded into whole-percent entry buckets. A point is therefore
+        // an exact 1pp range, e.g. 51.00%-51.99%, while threshold preserves the original
+        // cumulative >= view used to choose a portfolio minimum probability.
+        $mode = ((string) ($_GET['mode'] ?? 'threshold')) === 'point' ? 'point' : 'threshold';
 
         $accumulated = null;
         $statsSource = 'archive';
@@ -9574,10 +9578,14 @@ try {
         $pnl = 0.0;
         for ($probability = 99; $probability >= 50; $probability -= 1) {
             $cell = $byProbability[$probability] ?? [0, 0, 0.0, 0.0];
-            $trades += $cell[0];
-            $wins += $cell[1];
-            $staked += $cell[2];
-            $pnl += $cell[3];
+            if ($mode === 'point') {
+                [$trades, $wins, $staked, $pnl] = $cell;
+            } else {
+                $trades += $cell[0];
+                $wins += $cell[1];
+                $staked += $cell[2];
+                $pnl += $cell[3];
+            }
             if ($trades <= 0) {
                 continue;
             }
@@ -9599,8 +9607,9 @@ try {
             'ok' => true,
             'tag' => $tag,
             'shape' => $shape,
+            'mode' => $mode,
             'rows' => $rows,
-            'pricedRows' => $rows === [] ? 0 : (int) ($rows[0]['trades'] ?? 0),
+            'pricedRows' => array_sum(array_map(static fn (array $cell): int => (int) ($cell[0] ?? 0), $byProbability)),
             'stakeUsdc' => 5.0,
             'statsSource' => $statsSource,
             'foldedAt' => $accumulated['foldedAt'] ?? null,

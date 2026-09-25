@@ -439,6 +439,10 @@
                     <option value="other">Other / unclassified</option>
                   </select>
                 </label>
+                <div class="segmented" data-tag-analysis-mode aria-label="Probability grouping">
+                  <button class="segment-button active" type="button" data-tag-analysis-mode-option="threshold" aria-pressed="true">At or above</button>
+                  <button class="segment-button" type="button" data-tag-analysis-mode-option="point" aria-pressed="false">Exact range</button>
+                </div>
                 <button class="execution-button" type="button" data-tag-analysis-run>Show analysis</button>
                 <span class="setup-finder-status" data-tag-analysis-status aria-live="polite"></span>
               </div>

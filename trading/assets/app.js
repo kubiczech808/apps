@@ -6,6 +6,7 @@ const state = {
   setupFinderBusy: false,
   tagAnalysis: null,
   tagAnalysisBusy: false,
+  tagAnalysisMode: "threshold",
   dipBacktest: null,
   dipBacktestBusy: false,
   dipBacktestRunBusy: false,
@@ -333,6 +334,7 @@ const els = {
   tagAnalysisShape: document.querySelector("[data-tag-analysis-shape]"),
   tagAnalysisRun: document.querySelector("[data-tag-analysis-run]"),
   tagAnalysisStatus: document.querySelector("[data-tag-analysis-status]"),
+  tagAnalysisModeOptions: document.querySelectorAll("[data-tag-analysis-mode-option]"),
   dipBacktestReport: document.querySelector("[data-dip-backtest-report]"),
   dipBacktestTag: document.querySelector("[data-dip-backtest-tag]"),
   dipBacktestRun: document.querySelector("[data-dip-backtest-run]"),
@@ -11089,6 +11091,19 @@ function selectedTagAnalysisShape() {
   return ["*", ...Object.keys(MARKET_SHAPE_LABELS)].includes(shape) ? shape : "*";
 }
 
+function selectedTagAnalysisMode() {
+  return state.tagAnalysisMode === "point" ? "point" : "threshold";
+}
+
+function syncTagAnalysisModeControl() {
+  const selected = selectedTagAnalysisMode();
+  els.tagAnalysisModeOptions.forEach((button) => {
+    const active = button.dataset.tagAnalysisModeOption === selected;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-pressed", String(active));
+  });
+}
+
 function syncTagAnalysisTagControl() {
   if (!els.tagAnalysisTag) return;
   const selected = selectedTagAnalysisTag();
@@ -11111,13 +11126,14 @@ async function loadTagProbabilityAnalysis() {
   syncTagAnalysisTagControl();
   const tag = selectedTagAnalysisTag();
   const shape = selectedTagAnalysisShape();
+  const mode = selectedTagAnalysisMode();
   if (!tag) return;
   state.tagAnalysisBusy = true;
   if (els.tagAnalysisStatus) els.tagAnalysisStatus.textContent = "Reading resolved statistics...";
   renderTagProbabilityAnalysis();
   try {
     state.tagAnalysis = await fetchApiJson(
-      `api.php?action=resolved-tag-probability-analysis&tag=${encodeURIComponent(tag)}&shape=${encodeURIComponent(shape)}`,
+      `api.php?action=resolved-tag-probability-analysis&tag=${encodeURIComponent(tag)}&shape=${encodeURIComponent(shape)}&mode=${encodeURIComponent(mode)}`,
     );
     if (els.tagAnalysisStatus) els.tagAnalysisStatus.textContent = "";
   } catch (error) {
@@ -11144,17 +11160,25 @@ function renderTagProbabilityAnalysis() {
   }
   const rows = Array.isArray(data.rows) ? data.rows : [];
   const shape = data.shape === "*" ? "All event types" : marketShapeLabel(data.shape);
+  const pointMode = data.mode === "point";
+  const probabilityHeading = pointMode ? "Probability range" : "Min probability";
+  const probabilityCell = (row) => pointMode
+    ? `${Number(row.minimumProbability).toFixed(0)}.00%–${Number(row.minimumProbability).toFixed(0)}.99%`
+    : `&ge; ${Number(row.minimumProbability).toFixed(0)}%`;
+  const groupingNote = pointMode
+    ? "Every line contains only the saved entry prices within that one-percent range."
+    : "Every line is cumulative: minimum probability and higher.";
   els.tagAnalysisReport.innerHTML = `
     <div class="system-status-card">
       <div class="system-status-head"><div><p class="eyebrow">Resolved market simulation</p><h3>${escapeHtml(data.tag)}: ${escapeHtml(shape)}</h3></div><span class="pill">${formatInteger(data.pricedRows)} trades</span></div>
-      <p class="setup-finder-note">Every line is cumulative: minimum probability and higher. Each resolved market is simulated with a fixed ${money(Number(data.stakeUsdc || 5))} stake at its first saved live price; recorded entry fees are included. The event-time filter is intentionally not applied here.</p>
+      <p class="setup-finder-note">${groupingNote} Each resolved market is simulated with a fixed ${money(Number(data.stakeUsdc || 5))} stake at its first saved live price; recorded entry fees are included. The event-time filter is intentionally not applied here.</p>
     </div>
     <div class="system-status-card">
       <div class="ledger setup-finder-ledger tag-analysis-ledger">
         <table>
-          <thead><tr><th>Min probability</th><th>Trades</th><th>Win / loss</th><th>Accuracy</th><th>Invested</th><th>P/L</th><th>ROI</th></tr></thead>
+          <thead><tr><th>${probabilityHeading}</th><th>Trades</th><th>Win / loss</th><th>Accuracy</th><th>Invested</th><th>P/L</th><th>ROI</th></tr></thead>
           <tbody>${rows.length ? rows.map((row) => `<tr>
-            <td data-label="Min probability">&ge; ${Number(row.minimumProbability).toFixed(0)}%</td>
+            <td data-label="${probabilityHeading}">${probabilityCell(row)}</td>
             <td data-label="Trades">${formatInteger(row.trades)}</td>
             <td data-label="Win / loss">${formatInteger(row.wins)} / ${formatInteger(Math.max(0, Number(row.trades) - Number(row.wins)))}</td>
             <td data-label="Accuracy">${percent(Number(row.accuracy))}</td>
@@ -16920,6 +16944,13 @@ els.settingsSectionButtons.forEach((button) => {
 els.tagAnalysisRun?.addEventListener("click", () => loadTagProbabilityAnalysis());
 els.tagAnalysisTag?.addEventListener("change", () => loadTagProbabilityAnalysis());
 els.tagAnalysisShape?.addEventListener("change", () => loadTagProbabilityAnalysis());
+els.tagAnalysisModeOptions.forEach((button) => {
+  button.addEventListener("click", () => {
+    state.tagAnalysisMode = button.dataset.tagAnalysisModeOption === "point" ? "point" : "threshold";
+    syncTagAnalysisModeControl();
+    loadTagProbabilityAnalysis();
+  });
+});
 
 els.calculationSourceButtons.forEach((button) => {
   button.addEventListener("click", () => {
