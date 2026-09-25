@@ -4,7 +4,7 @@ import { buildExternalTrendReference } from './external-trends.mjs'
 import { buildFvgSupplyDemandZones, candleSignal, marketStructure } from './priceaction.mjs'
 
 export const PRICE_ACTION_STRUCTURE_ID = 'price-action-structure-v1'
-export const PRICE_ACTION_MATRIX_SCHEMA = 48
+export const PRICE_ACTION_MATRIX_SCHEMA = 49
 export const PRICE_ACTION_CHART_CANDLE_LIMITS = {
   '1h': 8760,
   '4h': 2190,
@@ -1829,6 +1829,43 @@ const externalPivotLeg = (pivots, kind) => {
   }
 }
 
+// A pullback is defined by one completed directional leg, never by whichever
+// high and low happened to be latest in two separate pivot lists. A later
+// unpaired counter-pivot remains audit data until it completes the next wave.
+const latestCompletedExternalRange = ({ pivots = [], trend } = {}) => {
+  const expected = trend === 'up'
+    ? { startKind: 'low', startLabel: 'HL', endKind: 'high', endLabel: 'HH' }
+    : trend === 'down'
+      ? { startKind: 'high', startLabel: 'LH', endKind: 'low', endLabel: 'LL' }
+      : null
+  if (!expected) return { activeRange: null, chartPivots: [] }
+
+  for (let index = pivots.length - 1; index >= 1; index -= 1) {
+    const start = pivots[index - 1]
+    const end = pivots[index]
+    if (
+      start?.kind !== expected.startKind || start?.label !== expected.startLabel ||
+      end?.kind !== expected.endKind || end?.label !== expected.endLabel ||
+      !(start.time < end.time)
+    ) continue
+    const high = start.kind === 'high' ? start : end
+    const low = start.kind === 'low' ? start : end
+    if (!(high.price > low.price)) continue
+
+    // The dotted audit path must stop at the pivot that completes this same
+    // wave. It cannot jump across a newer, unfinished counter-pivot.
+    return {
+      activeRange: {
+        high: { ...high, label: trend === 'up' ? 'HH' : 'LH' },
+        low: { ...low, label: trend === 'up' ? 'HL' : 'LL' },
+        source: 'external-confirmed-pivots',
+      },
+      chartPivots: alternatingTrendPivots({ pivots: pivots.slice(0, index + 1), trend }),
+    }
+  }
+  return { activeRange: null, chartPivots: [] }
+}
+
 // This is the only live structure classifier. The OHLC and pivots originate
 // from Twelve Data for FX and Binance for BTC; no swing or trend conclusion
 // from the local market-data feed is allowed to influence the result.
@@ -1868,19 +1905,14 @@ export const classifyExternalStructure = ({
   const trend = requestedTrend === 'up' || requestedTrend === 'down' ? requestedTrend : 'flat'
   const expectedHigh = trend === 'up' ? 'HH' : trend === 'down' ? 'LH' : null
   const expectedLow = trend === 'up' ? 'HL' : trend === 'down' ? 'LL' : null
-  const structureConfirmed = Boolean(
-    trend !== 'flat' && high?.label === expectedHigh && low?.label === expectedLow
-  )
-  const activeRange = structureConfirmed
-    ? {
-        high: { ...high.current, label: expectedHigh },
-        low: { ...low.current, label: expectedLow },
-        source: 'external-confirmed-pivots',
-      }
-    : null
+  const completedWave = latestCompletedExternalRange({ pivots, trend })
+  const activeRange = completedWave.activeRange
+  const structureConfirmed = Boolean(activeRange)
   const source = externalPivots?.source ?? externalTrend?.source ?? 'externí zdroj'
   const method = externalPivots?.method ?? 'potvrzené pivoty externího OHLC'
-  const labels = [high?.label, low?.label].filter(Boolean).join(' + ')
+  const labels = activeRange
+    ? [activeRange.high.label, activeRange.low.label].join(' + ')
+    : [high?.label, low?.label].filter(Boolean).join(' + ')
   const reason = trend === 'flat'
     ? `${source}: ${method}; bez potvrzené sekvence HH + HL nebo LH + LL${labels ? ` (${labels})` : ''}`
     : `${source}: ${method}; ${labels || `${expectedHigh} + ${expectedLow}`}`
@@ -1899,8 +1931,8 @@ export const classifyExternalStructure = ({
     lastCandle: candleSummary(latest),
     candleSignal: candleSignal(normalizedCandles),
     chartCandles: normalizedChartCandles.map(candleSummary),
-    lastHigh: high?.current?.price ?? null,
-    lastLow: low?.current?.price ?? null,
+    lastHigh: activeRange?.high?.price ?? high?.current?.price ?? null,
+    lastLow: activeRange?.low?.price ?? low?.current?.price ?? null,
     externalTrend,
     externalPivots,
     structure: {
@@ -1917,19 +1949,19 @@ export const classifyExternalStructure = ({
       high,
       low,
       activeRange,
-      protectedHigh: trend === 'down' ? high?.current ?? null : null,
-      protectedLow: trend === 'up' ? low?.current ?? null : null,
+      protectedHigh: trend === 'down' ? activeRange?.high ?? null : null,
+      protectedLow: trend === 'up' ? activeRange?.low ?? null : null,
       developingSwing: null,
       developingCounterSwing: null,
       confirmed: structureConfirmed,
       // The chart can show only the source pivots used for the live decision.
       // A local zigzag is intentionally never mixed into this path.
       recentSwings: [],
-      chartPivots: pivots.map((pivot) => ({
+      chartPivots: completedWave.chartPivots.map((pivot) => ({
         ...pivot,
         source: pivot.source ?? source,
       })),
-      alternatingTrendPivots: [],
+      alternatingTrendPivots: completedWave.chartPivots,
       externalPivotCount: pivots.length,
     },
     zones: activeSupplyDemandZones(normalizedZoneCandles, { lookback: zoneLookback, maxAgeCandles: zoneMaxAgeCandles }),

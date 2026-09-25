@@ -151,16 +151,39 @@ test('live PA structure comes only from externally confirmed pivots', () => {
   assert.equal(result.structure.high.label, 'LH')
   assert.equal(result.structure.low.label, 'LL')
   assert.equal(result.structure.source, 'external-confirmed-pivots')
-  assert.equal(result.structure.chartPivots.length, 4)
+  assert.equal(result.structure.activeRange.high.time, START + 3 * HOUR)
+  assert.equal(result.structure.activeRange.low.time, START + 4 * HOUR)
+  assert.ok(result.structure.activeRange.high.time < result.structure.activeRange.low.time)
+  assert.equal(result.structure.chartPivots.length, 2)
   assert.deepEqual(
     result.structure.chartPivots.map((pivot) => [pivot.kind, pivot.label, pivot.source]),
     [
-      ['high', 'H', 'Twelve Data'],
-      ['low', 'L', 'Twelve Data'],
       ['high', 'LH', 'Twelve Data'],
       ['low', 'LL', 'Twelve Data'],
     ]
   )
+})
+
+test('external active range does not combine an unpaired newer pivot with an older leg', () => {
+  const result = classifyExternalStructure({
+    externalPivots: {
+      trend: 'down', source: 'Twelve Data',
+      pivots: [
+        { kind: 'high', price: 170, time: START },
+        { kind: 'low', price: 150, time: START + HOUR },
+        { kind: 'high', price: 160, time: START + 2 * HOUR },
+        { kind: 'low', price: 140, time: START + 3 * HOUR },
+        { kind: 'high', price: 155, time: START + 4 * HOUR },
+      ],
+    },
+  })
+
+  assert.equal(result.trend, 'down')
+  assert.equal(result.structureConfirmed, true)
+  assert.equal(result.structure.activeRange.high.price, 160)
+  assert.equal(result.structure.activeRange.low.price, 140)
+  assert.ok(result.structure.activeRange.high.time < result.structure.activeRange.low.time)
+  assert.deepEqual(result.structure.chartPivots.map((pivot) => pivot.label), ['LH', 'LL'])
 })
 
 test('an available Twelve Data key immediately replaces a cached missing-key result', () => {

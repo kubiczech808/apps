@@ -99,11 +99,26 @@ export const fetchTwelveDataFxHourly = async ({
 
 const pivotValue = (value) => Number(value) === 1
 
+// A wick can test a former swing without changing the structure. Keep the
+// source candle's extreme for diagnostics, but use its completed close for
+// the pivot that drives labels, the chart path and every live decision.
+const structuralPivotPrice = (pivot) => {
+  const close = numberOrNull(pivot?.close)
+  return Number.isFinite(close) ? close : numberOrNull(pivot?.price)
+}
+
 const normalizeExternalPivots = (pivots = []) => {
   const alternating = []
-  for (const pivot of [...pivots]
-    .filter((item) => item?.kind && Number.isFinite(item?.price) && Number.isFinite(item?.time))
+  for (const sourcePivot of [...pivots]
+    .filter((item) => item?.kind && Number.isFinite(item?.time))
     .sort((left, right) => left.time - right.time)) {
+    const price = structuralPivotPrice(sourcePivot)
+    if (!Number.isFinite(price)) continue
+    const pivot = {
+      ...sourcePivot,
+      price,
+      extreme: numberOrNull(sourcePivot?.extreme) ?? numberOrNull(sourcePivot?.price),
+    }
     const previous = alternating.at(-1)
     if (!previous || previous.kind !== pivot.kind) {
       alternating.push(pivot)
@@ -147,8 +162,12 @@ const parseTwelvePivotValues = (values) => (Array.isArray(values) ? values : [])
     const close = numberOrNull(value?.close)
     if (!Number.isFinite(time)) return []
     const pivots = []
-    if (pivotValue(value?.pivot_point_h) && Number.isFinite(high)) pivots.push({ kind: 'high', price: high, close, time })
-    if (pivotValue(value?.pivot_point_l) && Number.isFinite(low)) pivots.push({ kind: 'low', price: low, close, time })
+    if (pivotValue(value?.pivot_point_h) && Number.isFinite(high) && Number.isFinite(close)) {
+      pivots.push({ kind: 'high', price: close, close, extreme: high, time })
+    }
+    if (pivotValue(value?.pivot_point_l) && Number.isFinite(low) && Number.isFinite(close)) {
+      pivots.push({ kind: 'low', price: close, close, extreme: low, time })
+    }
     return pivots
   })
 
@@ -258,10 +277,10 @@ const confirmedPivotCandidates = (candles, period) => {
     const maxHigh = Math.max(...window.map((item) => item.high))
     const minLow = Math.min(...window.map((item) => item.low))
     if (candle.high === maxHigh && window.filter((item) => item.high === maxHigh).length === 1) {
-      candidates.push({ kind: 'high', price: candle.high, close: candle.close, time: candle.time })
+      candidates.push({ kind: 'high', price: candle.close, close: candle.close, extreme: candle.high, time: candle.time })
     }
     if (candle.low === minLow && window.filter((item) => item.low === minLow).length === 1) {
-      candidates.push({ kind: 'low', price: candle.low, close: candle.close, time: candle.time })
+      candidates.push({ kind: 'low', price: candle.close, close: candle.close, extreme: candle.low, time: candle.time })
     }
   }
   return candidates

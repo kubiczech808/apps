@@ -91,11 +91,24 @@ test('external pivot path distinguishes a down sequence from an internal rebound
   assert.deepEqual(down.pivots.map((pivot) => pivot.label), ['H', 'L', 'LH', 'LL'])
 })
 
+test('external pivot path uses the confirmed close rather than a wick sweep', () => {
+  const path = classifyExternalPivotPath([
+    { kind: 'high', price: 120, close: 110, time: START },
+    { kind: 'low', price: 100, close: 100, time: START + HOUR },
+    { kind: 'high', price: 130, close: 105, time: START + 2 * HOUR },
+    { kind: 'low', price: 95, close: 102, time: START + 3 * HOUR },
+  ])
+
+  assert.equal(path.trend, 'flat')
+  assert.deepEqual(path.pivots.map((pivot) => pivot.price), [110, 100, 105, 102])
+  assert.deepEqual(path.pivots.map((pivot) => pivot.label), ['H', 'L', 'LH', 'HL'])
+})
+
 test('Twelve Data OHLC produces a confirmed independent pivot path without the premium indicator', () => {
   const candles = Array.from({ length: 60 }, (_, index) => ({
     time: START + index * HOUR,
     open: 1,
-    close: 1,
+    close: index === 10 ? 1.2 : index === 20 ? 0.8 : index === 30 ? 1.3 : index === 40 ? 0.85 : 1,
     high: index === 10 ? 1.2 : index === 30 ? 1.3 : 1.05,
     low: index === 20 ? 0.8 : index === 40 ? 0.85 : 0.95,
     volume: 0,
