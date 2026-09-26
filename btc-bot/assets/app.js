@@ -567,6 +567,7 @@ const displayedTradeProfile = (profile) => {
       ...profile,
       zone: candidate.zone,
       zoneHit: candidate.zoneHit,
+      zoneTouched: candidate.zoneTouched,
       entry: candidate.entryForMinRR,
       stop: candidate.stop,
       stopBuffer: candidate.stopBuffer,
@@ -583,6 +584,7 @@ const displayedTradeProfile = (profile) => {
     status: profile.side ? 'watch' : 'neutral',
     zone: null,
     zoneHit: false,
+    zoneTouched: false,
     entry: null,
     stop: null,
     stopBuffer: null,
@@ -756,7 +758,9 @@ const zoneListElement = (entry) => {
       : invalidated
         ? 'Zóna patří k současnému setupu, ale byla dotčena dříve než byl vstup kompletní; nový vstup z ní je zablokovaný.'
       : candidate?.zoneHit
-        ? 'Cena už zónu hitla.'
+        ? 'Aktuální cena je v této zóně.'
+        : candidate?.zoneTouched
+          ? 'Zóna už byla dotčena; bez předem aktivní objednávky se vstup zpětně neotevírá.'
         : 'Sledovaná zóna v pullback pásmu.'
     return el('div', { className: 'pa-zone-item' }, [
       zoneRangeTrigger({
@@ -813,7 +817,7 @@ const priceActionDecisionFact = (entry, column) => {
       if (profile?.mode === 'formation' && !hasDirectionalPlan(profile)) return priceFact(null, formationTitle)
       return priceFact(
         profile?.entry,
-        profile?.mode === 'formation' ? pendingFormationTitle : profile?.zoneHit ? 'Cena zasáhla pracovní zónu.' : 'Pracovní entry; čeká se na zásah správné zóny.',
+        profile?.mode === 'formation' ? pendingFormationTitle : profile?.zoneHit ? 'Aktuální cena je v pracovní zóně.' : profile?.zoneTouched ? 'Zóna už byla dotčena; vstup se zpětně neotevírá.' : 'Pracovní entry; čeká se na zásah správné zóny.',
         profile?.zoneHit ? 'met' : 'neutral'
       )
     case 'stop':
@@ -841,13 +845,12 @@ const priceActionDecisionFact = (entry, column) => {
 
 const structureReferenceFacts = (entry) => {
   const item = entry?.item ?? {}
-  const externalGate = profileGate(entry?.profile, 'external-trend')
   const pivotReference = item.externalPivots
   const regime = item.externalTrend
   const trend = PRICE_ACTION_TREND_LABELS[item.trend] || 'flat'
   const status = item.trend === 'up' ? 'met' : item.trend === 'down' ? 'unmet' : 'neutral'
   const title = pivotReference
-    ? [pivotReference.source, pivotReference.method, item.reason, regime?.method ? `režim: ${regime.method}; ${regime.reason ?? ''}` : null, externalGate?.detail].filter(Boolean).join(' · ')
+    ? [pivotReference.source, pivotReference.method, item.reason, regime?.method ? `režim: ${regime.method}; ${regime.reason ?? ''}` : null].filter(Boolean).join(' · ')
     : 'Zdroj struktury zatím není dostupný; bez jeho potvrzených pivotů se nevstupuje.'
   return el('div', { className: 'structure-reference-facts' }, [
     decisionFactElement(decisionFact(

@@ -184,15 +184,20 @@ test('ready PA profiles open one paper trade per asset and never duplicate the s
   assert.equal(calls.length, 1)
 })
 
-test('an opposing external trend blocks an otherwise ready PA entry', async () => {
+test('an EMA regime mismatch does not block an externally structured PA entry', async () => {
   const calls = []
-  const executor = { openPosition: async (plan) => calls.push(plan) }
+  const executor = {
+    openPosition: async (plan) => {
+      calls.push(plan)
+      return { ...plan, id: 'position-1', status: 'running' }
+    },
+  }
   const profile = {
     status: 'ready', side: 'long', entry: 0.7131, stop: 0.7060,
     tp1: 0.7202, weightedTarget: 0.7202, rewardRisk: 2, minRewardRisk: 2, riskPct: 1,
     zone: { firstTime: START },
     externalTrend: { trend: 'down', source: 'Twelve Data' },
-    gates: [{ id: 'external-trend', passed: false, detail: 'externí down je proti long' }],
+    gates: [],
   }
   const result = await executeReadyPriceActionProfiles({
     executor,
@@ -203,8 +208,8 @@ test('an opposing external trend blocks an otherwise ready PA entry', async () =
     settings: { enabled: true, risk: { market: 'futures', riskPct: 1, feeRate: 0.0006, minMarginSats: 1 }, priceActionStructure: { riskPct: 1 } },
   })
 
-  assert.deepEqual(result, [])
-  assert.equal(calls.length, 0)
+  assert.equal(result[0].action, 'opened')
+  assert.equal(calls.length, 1)
 })
 
 test('a complete PA setup places a bracketed limit order before its entry is hit, then cancels it on invalidation', async () => {
@@ -253,6 +258,16 @@ test('a complete PA setup places a bracketed limit order before its entry is hit
   })
   assert.equal(cancelled[0].action, 'cancelled')
   assert.deepEqual(calls.at(-1), ['cancel', 'pending-1'])
+
+  const late = await placePendingPriceActionOrders({
+    executor,
+    matrix: { assets: [{ symbol: 'USDJPY', trends: { '4h': { asOf: START, reason: 'LH + LL', tradeProfile: { ...profile, zoneTouched: true } } } }] },
+    trades: [],
+    equitySats: 1_000_000,
+    btcPrice: 80_000,
+    settings,
+  })
+  assert.deepEqual(late, [])
 })
 
 test('changing the PA leverage replaces a pending spot instruction without changing its structural stop', async () => {

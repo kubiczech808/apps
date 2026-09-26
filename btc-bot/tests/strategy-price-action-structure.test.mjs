@@ -111,7 +111,7 @@ test('flat structure is formation-only and never publishes a planned entry', () 
   assert.equal(profile.gates[0].status, 'neutral')
 })
 
-test('external trend confirms the PA side and fails closed for opposite, flat, or unavailable data', () => {
+test('EMA regime is retained as a diagnostic and never vetoes external pivot structure', () => {
   const readyLong = {
     status: 'ready',
     mode: 'screening',
@@ -123,12 +123,14 @@ test('external trend confirms the PA side and fails closed for opposite, flat, o
     externalTrend: { trend: 'up', source: 'Twelve Data' },
   })
   assert.equal(confirmed.status, 'ready')
-  assert.equal(confirmed.gates.find((gate) => gate.id === 'external-trend').passed, true)
+  assert.deepEqual(confirmed.externalTrend, { trend: 'up', source: 'Twelve Data' })
+  assert.equal(confirmed.gates.some((gate) => gate.id === 'external-trend'), false)
 
   for (const externalTrend of [{ trend: 'down' }, { trend: 'flat' }, null]) {
-    const blocked = applyExternalTrendConfirmation({ profile: readyLong, externalTrend })
-    assert.equal(blocked.status, 'watch')
-    assert.equal(blocked.gates.find((gate) => gate.id === 'external-trend').passed, false)
+    const retained = applyExternalTrendConfirmation({ profile: readyLong, externalTrend })
+    assert.equal(retained.status, 'ready')
+    assert.equal(retained.externalTrend, externalTrend)
+    assert.equal(retained.gates.some((gate) => gate.id === 'external-trend'), false)
   }
 })
 
@@ -832,6 +834,15 @@ test('trade profile requires S/D zone hit, 50 percent pullback and at least 2R',
   })
   assert.equal(withoutHit.status, 'watch')
   assert.equal(withoutHit.gates.find((entry) => entry.id === 'zone').status, 'unmet')
+
+  const exitedZone = evaluateTradeProfile({
+    item: { ...item, price: 115 },
+    settings: { pullbackPct: 50, minRewardRisk: 2, riskPct: 1, stopBufferPct: 0.02 },
+  })
+  assert.equal(exitedZone.zoneTouched, true)
+  assert.equal(exitedZone.zoneHit, false)
+  assert.equal(exitedZone.status, 'watch')
+  assert.equal(exitedZone.gates.find((entry) => entry.id === 'zone').status, 'unmet')
 })
 
 test('a historical wick through 50 percent does not keep the pullback gate green after price recovers', () => {
@@ -1117,7 +1128,8 @@ test('a partial own-timeframe FVG touch consumes a zone before a complete setup'
   })
   const candidate = profile.zoneCandidates.find((entry) => entry.type === 'demand')
 
-  assert.equal(candidate.zoneHit, true)
+  assert.equal(candidate.zoneTouched, true)
+  assert.equal(candidate.zoneHit, false)
   assert.equal(candidate.baseEligible, true)
   assert.equal(candidate.invalidatedByPrematureTouch, true)
   assert.equal(candidate.eligible, false)

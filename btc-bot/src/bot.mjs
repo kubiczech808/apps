@@ -54,25 +54,18 @@ const priceActionLeverage = (settings) => {
 
 const priceActionSignalKey = ({ assetSymbol, timeframeId, profile, settings }) => {
   const zoneIdentity = profile.zone?.firstTime ?? profile.zone?.lastTime ?? profile.zone?.firstIndex ?? 'zone'
-  const externalTrend = profile.externalTrend?.trend ?? 'unavailable'
   // Sizing is part of an entry instruction. A pending order created for spot
   // must be replaced if the user intentionally changes the leverage setting.
-  return [PRICE_ACTION_STRUCTURE_ID, assetSymbol, timeframeId, profile.side, zoneIdentity, profile.entry, externalTrend, `leverage-${priceActionLeverage(settings)}`].join(':')
-}
-
-const externalTrendConfirmsProfile = (profile) => {
-  const gate = (profile?.gates ?? []).find((candidate) => candidate.id === 'external-trend')
-  // Profiles created before the external confirmation protocol are retained
-  // only for backwards-compatible test fixtures. Every live matrix profile is
-  // enriched by applyExternalTrendConfirmation before it reaches this module.
-  return !gate || gate.passed === true
+  return [PRICE_ACTION_STRUCTURE_ID, assetSymbol, timeframeId, profile.side, zoneIdentity, profile.entry, `leverage-${priceActionLeverage(settings)}`].join(':')
 }
 
 // A limit order may wait for the two gates that only become true at its own
 // price: the zone hit and the 50% pullback. Every other gate must already be
 // true, otherwise the first touch would consume the FVG without a valid setup.
 const isPendingPriceActionOrderProfile = (profile) => {
-  if (profile?.status !== 'watch' || profile?.mode !== 'screening' || !profile.side || profile.zoneHit) return false
+  // A pending limit must exist before the touch so a late runner cannot
+  // invent an entry after price has already left the intended level.
+  if (profile?.status !== 'watch' || profile?.mode !== 'screening' || !profile.side || profile.zoneHit || profile.zoneTouched) return false
   if (![profile.entry, profile.stop, profile.tp1, profile.weightedTarget].every(Number.isFinite)) return false
   return (profile.gates ?? [])
     .filter((gate) => !['zone', 'pullback'].includes(gate.id))
@@ -243,7 +236,6 @@ export const executeReadyPriceActionProfiles = async ({
     const candidates = Object.entries(asset.trends ?? {})
       .map(([timeframeId, item]) => ({ timeframeId, item, profile: item?.tradeProfile }))
       .filter(({ profile }) => profile?.status === 'ready')
-      .filter(({ profile }) => externalTrendConfirmsProfile(profile))
       .filter(({ profile }) => [profile.entry, profile.stop, profile.tp1, profile.weightedTarget].every(Number.isFinite))
       .sort((left, right) =>
         (PRICE_ACTION_TIMEFRAME_PRIORITY[left.timeframeId] ?? 99) - (PRICE_ACTION_TIMEFRAME_PRIORITY[right.timeframeId] ?? 99)
@@ -377,9 +369,8 @@ export const reconcilePendingPriceActionOrders = async ({ executor, orders = [],
     const stillValid = isPendingPriceActionOrderProfile(profile) &&
       priceActionSignalKey({ assetSymbol: order.assetSymbol, timeframeId: order.timeframeId, profile, settings }) === order.signalKey
     if (stillValid) continue
-    const externalGate = (profile?.gates ?? []).find((gate) => gate.id === 'external-trend')
-    const reason = externalGate?.passed === false
-      ? externalGate.detail || 'externí trend už nepotvrzuje připravený vstup'
+    const reason = profile?.zoneTouched
+      ? 'cena už zónu zasáhla; čekající objednávka musí existovat před tímto dotekem'
       : profile?.zoneHit
       ? 'cena dotkla zóny dříve, než došla na připravený entry'
       : isPendingPriceActionOrderProfile(profile)

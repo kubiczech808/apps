@@ -4,7 +4,7 @@ import { buildExternalTrendReference } from './external-trends.mjs'
 import { buildFvgSupplyDemandZones, candleSignal, marketStructure } from './priceaction.mjs'
 
 export const PRICE_ACTION_STRUCTURE_ID = 'price-action-structure-v1'
-export const PRICE_ACTION_MATRIX_SCHEMA = 50
+export const PRICE_ACTION_MATRIX_SCHEMA = 51
 export const PRICE_ACTION_CHART_CANDLE_LIMITS = {
   '1h': 8760,
   '4h': 2190,
@@ -634,6 +634,9 @@ const laterCandles = (candles, zone) => candles.slice((zone.lastIndex ?? zone.fi
 const zoneHitByCandle = (zone, candle) =>
   Boolean(zone && candle && candle.low <= zone.high && candle.high >= zone.low)
 
+const zoneContainsPrice = (zone, price) =>
+  Boolean(zone && Number.isFinite(price) && price >= zone.low && price <= zone.high)
+
 const zoneTouchCandles = (zone, candles) =>
   laterCandles(candles, zone).filter((candle) => zoneHitByCandle(zone, candle))
 
@@ -864,7 +867,7 @@ const lowerTimeframeZoneRefinement = ({ side, zone, lowerItem, entryLow, entryHi
   return refinements[0] ?? null
 }
 
-const zoneEntryCandidate = ({ item, side, zone, pullback, invalidationLevel, settings, lowerItem, lowerTimeframeId }) => {
+const zoneEntryCandidate = ({ item, side, zone, pullback, invalidationLevel, settings, lowerItem, lowerTimeframeId, livePrice }) => {
   const normalizedZone = {
     ...zone,
     low: roundPrice(zone.low),
@@ -941,7 +944,10 @@ const zoneEntryCandidate = ({ item, side, zone, pullback, invalidationLevel, set
       : null
   const rewardRisk = rewardRiskFor({ side, entry: entryForMinRR, stop, target: weightedTarget })
   const rrEligible = Number.isFinite(rewardRisk) && rewardRisk >= minRewardRisk
-  const zoneHit = zoneHitByCandle(normalizedZone, item?.lastCandle)
+  // Keep a completed-candle touch for audit and invalidation, but never use
+  // it as proof that the current price still sits in the entry zone.
+  const zoneTouched = zoneHitByCandle(normalizedZone, item?.lastCandle)
+  const zoneHit = zoneContainsPrice(normalizedZone, livePrice)
   const reasons = []
   if (!directionEligible) reasons.push('opačný směr oproti aktuální struktuře')
   if (!pullbackEligible) reasons.push('mimo 50% pullback pásmo nebo za hranicí invalidace')
@@ -952,7 +958,9 @@ const zoneEntryCandidate = ({ item, side, zone, pullback, invalidationLevel, set
         : 'R/R nelze spočítat z dostupných TP'
     )
   }
-  if (pullbackEligible && rrEligible) reasons.push(zoneHit ? 'cena už zónu hitla' : 'čeká na hit zóny')
+  if (pullbackEligible && rrEligible) {
+    reasons.push(zoneHit ? 'cena je v zóně' : zoneTouched ? 'zóna už byla dotčena' : 'čeká na hit zóny')
+  }
   const entrySource = Number.isFinite(entryForMinRR)
     ? lowerRefinement
       ? entryForMinRR === refinedEntry ? 'lower-timeframe-zone' : 'min-rr'
@@ -967,6 +975,7 @@ const zoneEntryCandidate = ({ item, side, zone, pullback, invalidationLevel, set
     rrEligible,
     eligible: directionEligible && pullbackEligible && rrEligible,
     zoneHit,
+    zoneTouched,
     zoneEdgeEntry,
     entryAtZoneHit,
     entryRange: pullbackEligible ? { low: entryLow, high: entryHigh } : null,
@@ -994,9 +1003,9 @@ const zoneEntryCandidate = ({ item, side, zone, pullback, invalidationLevel, set
 // but it is not evidence that price is *currently* in the entry band. Keeping
 // those separate prevents a recovered price from being painted green in the
 // dashboard after it has already left the valid pullback range.
-const pullbackSatisfied = ({ side, latest, level, invalidationLevel }) => {
-  if (!latest || !Number.isFinite(level) || !Number.isFinite(invalidationLevel)) return false
-  const current = latest.close
+const pullbackSatisfied = ({ side, price, level, invalidationLevel }) => {
+  if (!Number.isFinite(level) || !Number.isFinite(invalidationLevel)) return false
+  const current = price
   if (!Number.isFinite(current)) return false
   const lower = Math.min(level, invalidationLevel)
   const upper = Math.max(level, invalidationLevel)
@@ -1026,6 +1035,7 @@ const candleRefinement = ({ side, signal }) => {
 
 export const evaluateTradeProfile = ({
   item,
+  livePrice = null,
   lowerItem = null,
   lowerTimeframeId = null,
   higherItem = null,
@@ -1034,6 +1044,13 @@ export const evaluateTradeProfile = ({
 } = {}) => {
   const side = sideFromTrend(item?.trend)
   const latest = item?.lastCandle
+  const currentPrice = Number.isFinite(livePrice)
+    ? livePrice
+    : Number.isFinite(item?.livePrice)
+      ? item.livePrice
+      : Number.isFinite(item?.price)
+        ? item.price
+        : latest?.close
   const zones = item?.zones
   const activeRange = item?.structure?.activeRange
   const hasCompletedDirectionalRange = side === 'long'
@@ -1066,6 +1083,7 @@ export const evaluateTradeProfile = ({
       pullbackPct: settings.pullbackPct ?? 50,
       zone: null,
       zoneHit: false,
+      zoneTouched: false,
       entry: null,
       pullbackLevel: null,
       invalidationLevel: null,
@@ -1111,6 +1129,7 @@ export const evaluateTradeProfile = ({
       settings,
       lowerItem,
       lowerTimeframeId,
+      livePrice: currentPrice,
     }))
   )
   const signalItem = lowerTimeframeId && lowerItem?.candleSignal ? lowerItem : item
@@ -1130,7 +1149,7 @@ export const evaluateTradeProfile = ({
     // setup. This only reads candles from the zone's own timeframe; a lower-TF
     // touch therefore cannot invalidate a higher-TF zone.
     const invalidatedByPrematureTouch = touchedEarlier ||
-      (candidate.zoneHit && !candidateEntryReady(candidate))
+      (candidate.zoneTouched && !candidateEntryReady(candidate))
     const reason = invalidatedByPrematureTouch
       ? [candidate.reason, 'zóna byla dotčena před kompletním vstupním setupem'].filter(Boolean).join(' · ')
       : candidate.reason
@@ -1150,13 +1169,14 @@ export const evaluateTradeProfile = ({
     usableCandidates.find((candidate) => candidate.directionEligible) ??
     null
   const activeZone = activeCandidate?.zone ?? null
-  const zoneHit = zoneHitByCandle(activeZone, latest)
+  const zoneTouched = Boolean(activeCandidate?.zoneTouched)
+  const zoneHit = zoneContainsPrice(activeZone, currentPrice)
   // A planned entry is meaningful only when the candidate passes the complete
   // direction, pullback and minimum-R/R gates. Keep raw zone-edge values on
   // the candidate for diagnostics, but never publish them as a trade entry.
   const plannedEntry = activeCandidate?.eligible ? activeCandidate.entryForMinRR : null
   const entry = Number.isFinite(plannedEntry) ? plannedEntry : null
-  const pulledBack = pullbackSatisfied({ side, latest, level: pullback, invalidationLevel })
+  const pulledBack = pullbackSatisfied({ side, price: currentPrice, level: pullback, invalidationLevel })
   const buffer = activeCandidate?.stopBuffer ?? stopBuffer({
     zone: activeZone,
     price: activeCandidate?.entryAtZoneHit ?? entry,
@@ -1212,7 +1232,17 @@ export const evaluateTradeProfile = ({
       ? [gate('structure-confirmed', 'nová vlna je potvrzena', false, item?.reason || 'nový strukturální směr čeká na potvrzení')]
       : []),
     gate('zone', 'cena je ve správné S/D zóně', Boolean(activeZone && zoneHit), activeZone ? `${activeZone.type} ${activeZone.low}–${activeZone.high}` : null),
-    gate('unfilled-zone', 'zóna není vyplněná ani spotřebovaná', Boolean(activeZone), activeZone ? 'nevyplněná' : consumedCandidate ? 'dotčena před kompletním setupem' : zone ? 'není použitelná pro vstup' : null),
+    gate(
+      'unfilled-zone',
+      'zóna není vyplněná ani spotřebovaná',
+      // A current price inside the zone may still execute immediately when a
+      // runner starts mid-touch. Once price has left, the same historical
+      // wick cannot be reused to create a retrospective entry.
+      Boolean(activeZone && (!zoneTouched || zoneHit)),
+      activeZone
+        ? zoneTouched && !zoneHit ? 'zóna už byla dotčena; bez předem aktivní objednávky se vstup zpětně neotevírá' : 'nevyplněná'
+        : consumedCandidate ? 'dotčena před kompletním setupem' : zone ? 'není použitelná pro vstup' : null
+    ),
     gate('pullback', `${settings.pullbackPct ?? 50}% pullback`, pulledBack, Number.isFinite(pullback) ? String(pullback) : null),
     gate('rr', `R/R alespoň ${minRewardRisk}:1`, Number.isFinite(rewardRisk) && rewardRisk >= minRewardRisk, Number.isFinite(rewardRisk) ? rewardRisk.toFixed(2) : null),
     gate('candle', 'potvrzení svíčkou', refinement?.status === 'met', refinement?.note ?? null, !requireCandleSignal),
@@ -1243,6 +1273,8 @@ export const evaluateTradeProfile = ({
     pullbackPct: settings.pullbackPct ?? 50,
     zone: activeZone,
     zoneHit,
+    zoneTouched,
+    livePrice: currentPrice,
     entry,
     pullbackLevel: pullback,
     invalidationLevel,
@@ -1284,32 +1316,13 @@ export const evaluateTradeProfile = ({
   return output
 }
 
-// The external EMA regime is a second condition on top of the externally
-// sourced pivot structure. A missing or sideways reference fails closed for
-// new entries; local swing structure never substitutes for it.
+// EMA 20/50 remains a chart diagnostic only. Live direction and every entry
+// decision come exclusively from externally sourced, close-confirmed pivots.
 export const applyExternalTrendConfirmation = ({ profile, externalTrend = null } = {}) => {
   if (!profile) return profile
-  const expectedTrend = profile.side === 'long' ? 'up' : profile.side === 'short' ? 'down' : null
-  const observedTrend = externalTrend?.trend ?? null
-  const passed = Boolean(expectedTrend && observedTrend === expectedTrend)
-  const detail = !expectedTrend
-    ? 'PA-1 zatím nemá potvrzený směr pro vstup'
-    : !observedTrend
-      ? 'externí reference není dostupná; nový vstup se neautorizuje'
-      : observedTrend === 'flat'
-        ? 'externí reference je flat; nový vstup se neautorizuje'
-        : passed
-          ? `externí ${observedTrend} potvrzuje ${profile.side}`
-          : `externí ${observedTrend} je proti ${profile.side}; nový vstup se neautorizuje`
-  const externalGate = gate('external-trend', 'externí trend potvrzuje směr', passed, detail)
-  const gates = [...(profile.gates ?? []).filter((item) => item.id !== externalGate.id), externalGate]
   return {
     ...profile,
     externalTrend,
-    gates,
-    // A technically ready zone remains visible for audit, but becomes a watch
-    // state until the independent feed agrees with its directional side.
-    status: profile.status === 'ready' && !passed ? 'watch' : profile.status,
   }
 }
 
@@ -1413,6 +1426,10 @@ const attachTradeProfiles = (trends, settings) => {
     const higherTimeframeId = HIGHER_TIMEFRAME[timeframe.id]
     const profile = evaluateTradeProfile({
       item,
+      // The one-hour close is the freshest shared price we have for each
+      // asset. Higher-timeframe wick touches stay audit-only and cannot keep
+      // their gates green after this current price has left the zone.
+      livePrice: trends['1h']?.price ?? item.price,
       lowerItem: lowerTimeframeId ? trends[lowerTimeframeId] : null,
       lowerTimeframeId,
       higherItem: higherTimeframeId ? trends[higherTimeframeId] : null,
