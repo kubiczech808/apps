@@ -1,10 +1,10 @@
 import { aggregate, HOUR_MS } from './candles.mjs'
-import { ceilPrice, floorPrice, normalizeCandlePrices, roundPrice } from './price.mjs'
+import { normalizeCandlePrices } from './price.mjs'
 import { buildExternalTrendReference, EXTERNAL_PIVOT_SCHEMA } from './external-trends.mjs'
 import { buildFvgSupplyDemandZones, candleSignal, marketStructure } from './priceaction.mjs'
 
 export const PRICE_ACTION_STRUCTURE_ID = 'price-action-structure-v1'
-export const PRICE_ACTION_MATRIX_SCHEMA = 57
+export const PRICE_ACTION_MATRIX_SCHEMA = 59
 export const PRICE_ACTION_CHART_CANDLE_LIMITS = {
   '1h': 8760,
   '4h': 2190,
@@ -143,10 +143,10 @@ const parseStooqCsv = (csv) => {
     if (!Number.isFinite(parsedTime) || [open, high, low, close].some((value) => value === null || value <= 0)) continue
     out.push({
       time: parsedTime,
-      open: roundPrice(open),
-      high: roundPrice(high),
-      low: roundPrice(low),
-      close: roundPrice(close),
+      open,
+      high,
+      low,
+      close,
       volume: numberOrNull(cells[volumeIndex]) ?? 0,
     })
   }
@@ -219,10 +219,10 @@ export const fetchYahooCandles = async ({
     if ([open, high, low, close].some((value) => value === null || value <= 0)) continue
     out.push({
       time: Number(timestamps[index]) * 1000,
-      open: roundPrice(open),
-      high: roundPrice(high),
-      low: roundPrice(low),
-      close: roundPrice(close),
+      open,
+      high,
+      low,
+      close,
       volume: numberOrNull(quote.volume?.[index]) ?? 0,
     })
   }
@@ -648,6 +648,13 @@ const zoneInvalidated = (zone, candles) => {
     : later.some((candle) => candle.close > zone.high)
 }
 
+const zoneInvalidatedAtOwnTimeframeClose = (zone, candles) => {
+  const later = laterCandles(candles, zone)
+  return (zone.type === 'demand'
+    ? later.find((candle) => candle.close < zone.low)
+    : later.find((candle) => candle.close > zone.high))?.time ?? null
+}
+
 const zoneFilledByOwnTimeframeClose = (zone, candles) => {
   const later = laterCandles(candles, zone)
   return zone.type === 'demand'
@@ -717,14 +724,19 @@ const zoneSummary = (zone, candles, price) => {
     filledByOwnTimeframeClose: zoneFilledByOwnTimeframeClose(zone, candles),
     filledAt: zoneFilledAtOwnTimeframeClose(zone, candles),
     invalidatedByOwnTimeframeClose: zoneInvalidated(zone, candles),
+    invalidatedAt: zoneInvalidatedAtOwnTimeframeClose(zone, candles),
     distancePct: zoneDistancePct(zone, price),
   }
 }
 
 export const activeSupplyDemandZones = (candles, { lookback = 2, maxAgeCandles = 400 } = {}) => {
   const price = candles.at(-1)?.close ?? null
-  const zones = buildFvgSupplyDemandZones(candles, { lookback, maxAgeCandles })
+  const allZones = buildFvgSupplyDemandZones(candles, { lookback, maxAgeCandles })
     .map((zone) => zoneSummary(zone, candles, price))
+  // Invalidated FVGs remain in the published audit trail so the chart can
+  // explain a visible three-candle gap. Only the filtered collection below is
+  // allowed to influence entries, targets, or orders.
+  const zones = allZones
     .filter((zone) => !zone.invalidatedByOwnTimeframeClose)
 
   const unfilled = zones.filter((zone) => !zone.filledByOwnTimeframeClose)
@@ -736,6 +748,8 @@ export const activeSupplyDemandZones = (candles, { lookback = 2, maxAgeCandles =
     byType(type, zones).sort((a, b) => Math.abs(a.distancePct ?? Infinity) - Math.abs(b.distancePct ?? Infinity))
 
   return {
+    allDemand: allZones.filter((zone) => zone.type === 'demand').sort((a, b) => (b.lastIndex ?? 0) - (a.lastIndex ?? 0)),
+    allSupply: allZones.filter((zone) => zone.type === 'supply').sort((a, b) => (b.lastIndex ?? 0) - (a.lastIndex ?? 0)),
     demand: latest('demand'),
     supply: latest('supply'),
     latestValidDemand: latest('demand', zones),
@@ -746,6 +760,7 @@ export const activeSupplyDemandZones = (candles, { lookback = 2, maxAgeCandles =
     nearbySupply: nearby('supply'),
     unfilledCount: unfilled.length,
     validCount: zones.length,
+    auditCount: allZones.length,
     rule: 'Zóna vzniká jen jako base impulsního breakoutu s 3svíčkovým FVG. Close průraz ji vyplní na vlastním timeframe; vstupní plán ji spotřebuje už prvním dotekem, pokud tehdy není kompletní setup. Dotek na nižším timeframe ji neruší.',
   }
 }
@@ -784,21 +799,20 @@ const nearestOpposingZone = ({ side, zones, entry, tp1 = null }) => {
 }
 
 // A second target is meaningful only if it realizes beyond the structural
-// target. Round before comparing so the value persisted for the dashboard
-// cannot collapse back onto TP1 at the instrument's display precision.
+// target. This compares source-precision prices; display rounding is not a
+// trading rule.
 const validSecondTarget = ({ side, tp1, tp2 }) => {
   if (!Number.isFinite(tp1) || !Number.isFinite(tp2)) return null
-  const target = roundPrice(tp2)
-  if (side === 'long' && target > tp1) return target
-  if (side === 'short' && target < tp1) return target
+  if (side === 'long' && tp2 > tp1) return tp2
+  if (side === 'short' && tp2 < tp1) return tp2
   return null
 }
 
 const structuralTarget = ({ side, structure }) =>
   side === 'long'
-    ? roundPrice(structure?.activeRange?.high?.price ?? structure?.high?.current?.price ?? null)
+    ? structure?.activeRange?.high?.price ?? structure?.high?.current?.price ?? null
     : side === 'short'
-      ? roundPrice(structure?.activeRange?.low?.price ?? structure?.low?.current?.price ?? null)
+      ? structure?.activeRange?.low?.price ?? structure?.low?.current?.price ?? null
       : null
 
 const pullbackLevel = ({ side, structure, pullbackPct }) => {
@@ -807,18 +821,18 @@ const pullbackLevel = ({ side, structure, pullbackPct }) => {
   const low = structure?.activeRange?.low?.price ?? structure?.low?.current?.price
   if (!Number.isFinite(high) || !Number.isFinite(low) || high <= low) return null
   const ratio = Math.min(Math.max(Number(pullbackPct) || 50, 0), 100) / 100
-  return roundPrice(side === 'long'
+  return side === 'long'
     ? high - (high - low) * ratio
-    : low + (high - low) * ratio)
+    : low + (high - low) * ratio
 }
 
 // An uptrend is invalidated below its last HL; a downtrend above its last LH.
 // Those are the same confirmed structural pivots used by the trend classifier.
 const structureInvalidationLevel = ({ side, structure }) =>
   side === 'long'
-    ? roundPrice(structure?.activeRange?.low?.price ?? structure?.low?.current?.price ?? null)
+    ? structure?.activeRange?.low?.price ?? structure?.low?.current?.price ?? null
     : side === 'short'
-      ? roundPrice(structure?.activeRange?.high?.price ?? structure?.high?.current?.price ?? null)
+      ? structure?.activeRange?.high?.price ?? structure?.high?.current?.price ?? null
       : null
 
 const candidateZones = (zones, side) => {
@@ -860,7 +874,7 @@ const lowerTimeframeZoneRefinement = ({ side, zone, lowerItem, entryLow, entryHi
     .filter((lowerZone) => lowerZone.low >= zone.low && lowerZone.high <= zone.high)
     .map((lowerZone) => ({
       zone: lowerZone,
-      entry: roundPrice(side === 'long' ? lowerZone.high : lowerZone.low),
+      entry: side === 'long' ? lowerZone.high : lowerZone.low,
     }))
     .filter(({ entry }) => entry >= entryLow && entry <= entryHigh)
     .sort((left, right) => (right.zone.lastIndex ?? 0) - (left.zone.lastIndex ?? 0))
@@ -869,11 +883,7 @@ const lowerTimeframeZoneRefinement = ({ side, zone, lowerItem, entryLow, entryHi
 }
 
 const zoneEntryCandidate = ({ item, side, zone, pullback, invalidationLevel, settings, lowerItem, lowerTimeframeId, livePrice }) => {
-  const normalizedZone = {
-    ...zone,
-    low: roundPrice(zone.low),
-    high: roundPrice(zone.high),
-  }
+  const normalizedZone = { ...zone }
   const directionEligible = sideFromTrend(item?.trend) === side
   const rangeLow = Number.isFinite(pullback) && Number.isFinite(invalidationLevel)
     ? Math.min(pullback, invalidationLevel)
@@ -881,8 +891,8 @@ const zoneEntryCandidate = ({ item, side, zone, pullback, invalidationLevel, set
   const rangeHigh = Number.isFinite(pullback) && Number.isFinite(invalidationLevel)
     ? Math.max(pullback, invalidationLevel)
     : null
-  const entryLow = Number.isFinite(rangeLow) ? roundPrice(Math.max(normalizedZone.low, rangeLow)) : null
-  const entryHigh = Number.isFinite(rangeHigh) ? roundPrice(Math.min(normalizedZone.high, rangeHigh)) : null
+  const entryLow = Number.isFinite(rangeLow) ? Math.max(normalizedZone.low, rangeLow) : null
+  const entryHigh = Number.isFinite(rangeHigh) ? Math.min(normalizedZone.high, rangeHigh) : null
   const pullbackEligible = Number.isFinite(entryLow) && Number.isFinite(entryHigh) && entryLow <= entryHigh
   const zoneEdgeEntry = side === 'long' ? normalizedZone.high : normalizedZone.low
   // When the zone overlaps the structural pullback only partially, the first
@@ -890,7 +900,7 @@ const zoneEntryCandidate = ({ item, side, zone, pullback, invalidationLevel, set
   const entryAtZoneHit = pullbackEligible
     ? side === 'long' ? entryHigh : entryLow
     : zoneEdgeEntry
-  const buffer = roundPrice(stopBuffer({ zone: normalizedZone, price: entryAtZoneHit, stopBufferPct: settings.stopBufferPct }))
+  const buffer = stopBuffer({ zone: normalizedZone, price: entryAtZoneHit, stopBufferPct: settings.stopBufferPct })
   // A valid demand/supply idea fails when either its zone or its external
   // structure fails. Place the stop beyond the farther of those two anchors,
   // rather than letting a swing stop sit inside the source zone (or vice versa).
@@ -899,9 +909,7 @@ const zoneEntryCandidate = ({ item, side, zone, pullback, invalidationLevel, set
       ? Math.min(normalizedZone.low, invalidationLevel)
       : Math.max(normalizedZone.high, invalidationLevel)
     : side === 'long' ? normalizedZone.low : normalizedZone.high
-  const stop = side === 'long'
-    ? floorPrice(stopAnchor - buffer)
-    : ceilPrice(stopAnchor + buffer)
+  const stop = side === 'long' ? stopAnchor - buffer : stopAnchor + buffer
   const entryAtPullback = pullbackEligible
     ? side === 'long' ? entryHigh : entryLow
     : null
@@ -928,15 +936,13 @@ const zoneEntryCandidate = ({ item, side, zone, pullback, invalidationLevel, set
   // then managed by structure and its protective stop rather than inventing a
   // second target inside the active wave.
   const weightedTarget = Number.isFinite(tp1)
-    ? Number.isFinite(tp2) ? roundPrice((tp1 + tp2) / 2) : tp1
+    ? Number.isFinite(tp2) ? (tp1 + tp2) / 2 : tp1
     : null
   const minRewardRisk = Number(settings.minRewardRisk) || 2
   const rrAtZoneHit = rewardRiskFor({ side, entry: entryAtZoneHit, stop, target: weightedTarget })
   const rrAtPullback = rewardRiskFor({ side, entry: refinedEntry, stop, target: weightedTarget })
   const threshold = Number.isFinite(stop) && Number.isFinite(weightedTarget)
-    ? (side === 'long'
-      ? floorPrice((weightedTarget + minRewardRisk * stop) / (minRewardRisk + 1))
-      : ceilPrice((weightedTarget + minRewardRisk * stop) / (minRewardRisk + 1)))
+    ? (weightedTarget + minRewardRisk * stop) / (minRewardRisk + 1)
     : null
   const entryForMinRR = pullbackEligible && Number.isFinite(refinedEntry) && Number.isFinite(rrAtPullback) && rrAtPullback >= minRewardRisk
     ? refinedEntry

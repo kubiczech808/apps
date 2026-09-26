@@ -457,8 +457,10 @@ const PRICE_ACTION_DECISION_COLUMNS = [
 
 const profileGate = (profile, id) => profile?.gates?.find((item) => item.id === id) ?? null
 
-const zoneList = (item, type, { includeFilled = false } = {}) => {
+const zoneList = (item, type, { includeFilled = false, includeInvalidated = false } = {}) => {
   const key = type === 'demand' ? 'Demand' : 'Supply'
+  const audit = item?.zones?.[`all${key}`]
+  if (includeInvalidated && audit?.length) return audit
   const nearby = item?.zones?.[`nearby${key}`]
   const nearbyUnfilled = nearby?.filter((zone) => !zone.filledByOwnTimeframeClose) ?? []
   if (includeFilled && nearby?.length) return nearby
@@ -980,6 +982,7 @@ const zoneCard = (title, zones, emptyText, timeframeId, candidates = [], directi
             className: 'structure-meta',
             text: [
               zone.filledByOwnTimeframeClose ? 'vyplněná close na vlastním TF' : 'nevyplněná',
+              zone.invalidatedByOwnTimeframeClose ? 'neplatná: close za hranou' : null,
               `touches ${zone.touches ?? 1}`,
               zone.swept ? 'sweep' : null,
               zone.imbalance ? 'imbalance' : null,
@@ -990,7 +993,7 @@ const zoneCard = (title, zones, emptyText, timeframeId, candidates = [], directi
   ])
 
 const zonesForDetail = (zones, type) => {
-  const list = zoneList({ zones }, type)
+  const list = zoneList({ zones }, type, { includeFilled: true, includeInvalidated: true })
   return list
 }
 
@@ -1378,9 +1381,20 @@ const chartZones = (item, type) => {
   const plannedEntries = watchedEntryZones(profile, type)
   const targetZone = profile?.tp2Zone?.type === type ? [profile.tp2Zone] : []
   const activeSetupZones = setupZonesForEntry(chartEntry).filter((zone) => zone.type === type)
+  const pullback = profile?.pullbackRange
+  const pullbackLow = Math.min(pullback?.from ?? Infinity, pullback?.to ?? Infinity)
+  const pullbackHigh = Math.max(pullback?.from ?? -Infinity, pullback?.to ?? -Infinity)
+  // A close-invalidated FVG must never be tradable again, but a visually
+  // obvious gap in the current pullback band is still useful chart context.
+  // Keep it subdued and dashed rather than silently pretending it never was.
+  const invalidatedAuditZones = (item?.zones?.[type === 'demand' ? 'allDemand' : 'allSupply'] ?? [])
+    .filter((zone) => zone.invalidatedByOwnTimeframeClose)
+    .filter((zone) => Number.isFinite(pullbackLow) && Number.isFinite(pullbackHigh) && zone.low <= pullbackHigh && zone.high >= pullbackLow)
+    .map((zone) => ({ ...zone, invalidatedSetupZone: true, auditZone: true }))
   const seen = new Set()
-  return uniqueZones([...activeSetupZones, ...plannedEntries, ...targetZone])
+  return uniqueZones([...activeSetupZones, ...plannedEntries, ...targetZone, ...invalidatedAuditZones])
     .filter((zone) => zone && (zone.activeSetupZone || zone.watchedSetupZone ||
+      zone.auditZone ||
       (!zone.filledByOwnTimeframeClose && !zone.invalidatedByOwnTimeframeClose && !Number.isFinite(zone.firstTouchAt))))
     .filter((zone) => Number.isFinite(zone.low) && Number.isFinite(zone.high) && zone.low > 0 && zone.high > 0 && zone.high >= zone.low)
     .filter((zone) => {
@@ -1836,7 +1850,7 @@ const renderAssetChart = () => {
       className: `asset-zone-label asset-zone-label-${zone.kind}`,
       x: ASSET_CHART.width - ASSET_CHART.padRight + 8,
       y: placed,
-      text: `${prefix}${zone.index + 1} ${quotePrice(zone.low)}–${quotePrice(zone.high)}`,
+      text: `${prefix}${zone.index + 1} ${quotePrice(zone.low)}–${quotePrice(zone.high)}${zone.invalidatedByOwnTimeframeClose ? ' · neplatná' : ''}`,
     }))
   }
   for (const zone of zones) {

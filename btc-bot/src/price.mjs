@@ -1,6 +1,6 @@
-// Price precision shared by market data, price-action profiles and execution.
-// One representation prevents a displayed level from differing from the level
-// used for R/R, brackets or a backtest fill.
+// Execution prices use the broker-safe tick below. Market OHLC and price-action
+// analysis keep their source precision: a small FVG must not disappear merely
+// because the dashboard chooses to show a friendlier number of decimals.
 
 export const PRICE_DECIMALS = 4
 export const PRICE_TICK = 10 ** -PRICE_DECIMALS
@@ -26,8 +26,8 @@ export const ceilPrice = (value) =>
 
 export const normalizeCandlePrices = (candle) => ({
   ...candle,
-  open: roundPrice(candle.open),
-  high: roundPrice(candle.high),
-  low: roundPrice(candle.low),
-  close: roundPrice(candle.close),
+  open: numericPrice(candle.open),
+  high: numericPrice(candle.high),
+  low: numericPrice(candle.low),
+  close: numericPrice(candle.close),
 })

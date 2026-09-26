@@ -15,6 +15,7 @@ import {
   nextSwingBelow,
 } from '../src/priceaction.mjs'
 import { aggregate, dropForming, HOUR_MS } from '../src/candles.mjs'
+import { normalizeCandlePrices } from '../src/price.mjs'
 import { candle, HOUR, START, zigzag } from './helpers.mjs'
 
 test('ATR is null during warmup and positive afterwards', () => {
@@ -221,6 +222,19 @@ test('a fair value gap is three candles whose outer wicks do not overlap', () =>
     candle(START + 2 * HOUR, 111, 113, 104, 112),
   ]
   assert.equal(fairValueGaps(overlapping).length, 0)
+})
+
+test('FVG zones preserve raw OHLC precision instead of display precision', () => {
+  const candles = [
+    candle(START, 158.85, 158.92, 158.70, 158.80),
+    candle(START + HOUR, 158.80, 158.83, 158.10, 158.15),
+    candle(START + 2 * HOUR, 158.15, 158.61234, 158.08, 158.20),
+  ].map(normalizeCandlePrices)
+
+  const [zone] = buildFvgSupplyDemandZones(candles)
+  assert.equal(zone.type, 'supply')
+  assert.equal(zone.low, 158.61234)
+  assert.equal(zone.high, 158.70)
 })
 
 test('a missing period cannot turn non-consecutive candles into an FVG', () => {

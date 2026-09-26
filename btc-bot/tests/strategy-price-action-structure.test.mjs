@@ -881,6 +881,9 @@ test('supply and demand zones stay valid unless their own timeframe closes throu
   ], { lookback: 1, maxAgeCandles: 100 })
   assert.equal(invalidated.demand, null)
   assert.equal(invalidated.latestValidDemand, null)
+  assert.equal(invalidated.allDemand.length, 1, 'an invalidated FVG remains available for chart audit')
+  assert.equal(invalidated.allDemand[0].invalidatedByOwnTimeframeClose, true)
+  assert.equal(invalidated.allDemand[0].invalidatedAt, START + 10 * HOUR)
 })
 
 test('trade profile requires S/D zone hit, 50 percent pullback and at least 2R', () => {
@@ -1146,7 +1149,7 @@ test('stop sits beyond both the entry zone and the external structural pivot', (
   assert.ok(shortProfile.stop > 125)
 })
 
-test('price-action profiles use four-decimal levels throughout the R/R calculation', () => {
+test('price-action profiles retain source precision throughout the R/R calculation', () => {
   const profile = evaluateTradeProfile({
     item: {
       trend: 'up',
@@ -1167,15 +1170,12 @@ test('price-action profiles use four-decimal levels throughout the R/R calculati
   })
 
   const candidate = profile.zoneCandidates.find((entry) => entry.type === 'demand')
-  const prices = [
-    candidate.zone.low, candidate.zone.high, candidate.entryAtZoneHit,
-    candidate.entryForMinRR, candidate.stop, candidate.tp1, candidate.tp2,
-    candidate.weightedTarget, profile.entry, profile.stop, profile.tp1, profile.tp2,
-  ].filter(Number.isFinite)
-  for (const value of prices) {
-    assert.ok(Math.abs(value * 10_000 - Math.round(value * 10_000)) < 1e-8, `${value} must be a four-decimal price`)
-  }
-  assert.ok(candidate.rewardRisk >= 2, 'the rounded levels must still satisfy the minimum R/R')
+  assert.equal(candidate.zone.low, 1.105123)
+  assert.equal(candidate.zone.high, 1.110987)
+  assert.equal(candidate.tp1, 1.150089)
+  assert.equal(candidate.tp2, 1.160123)
+  assert.equal(candidate.weightedTarget, 1.155106)
+  assert.ok(candidate.rewardRisk >= 2, 'the source-precision levels must satisfy the minimum R/R')
 })
 
 test('optional candle confirmation can filter a zone hit without changing the default', () => {
