@@ -150,7 +150,7 @@ test('a close through a protected HL confirms BoS and keeps the prior HH as the 
   assert.equal(broken.activeRange.high.price, 164)
   assert.equal(broken.activeRange.low.label, 'LL')
   assert.equal(broken.activeRange.low.price, 152)
-  assert.deepEqual(broken.chartPivots.map((pivot) => pivot.label), ['L', 'H', 'HL', 'HH', 'LL'])
+  assert.deepEqual(broken.chartPivots.map((pivot) => pivot.label), ['HL', 'HH', 'LL'])
 })
 
 test('Twelve Data OHLC produces a confirmed independent pivot path without the premium indicator', () => {

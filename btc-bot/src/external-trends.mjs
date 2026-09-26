@@ -15,7 +15,7 @@ export const EXTERNAL_PIVOT_METHOD = 'Potvrzené 10-svíčkové pivoty z extern�
 // Bump this whenever pivot geometry or confirmation changes. Cached external
 // references are executable strategy input, so a same-hour cache must never
 // preserve the old interpretation after such a change.
-export const EXTERNAL_PIVOT_SCHEMA = 2
+export const EXTERNAL_PIVOT_SCHEMA = 3
 export const EXTERNAL_PIVOT_PERIOD = 10
 export const EXTERNAL_PIVOT_FALLBACK_PERIOD = 5
 export const EXTERNAL_PIVOT_OUTPUTSIZE = 2000
@@ -278,12 +278,21 @@ const chartPivotsForBreak = ({ pivots, event }) => {
   if (!event) return []
   const anchor = event.trend === 'down' ? event.activeRange.high : event.activeRange.low
   const terminal = event.trend === 'down' ? event.activeRange.low : event.activeRange.high
-  const leading = pivots.filter((pivot) => pivot.time <= anchor.time).slice(-12)
-  const last = leading.at(-1)
-  return [
-    ...leading,
-    ...(last?.time === terminal.time && last?.kind === terminal.kind ? [] : [terminal]),
-  ]
+  // The dotted line is context for the active wave, not a second, broader
+  // zigzag. Showing the last twelve source pivots beside a single active
+  // fib leg made the two lines appear to describe different timeframes.
+  const references = [event.protectedPivot, anchor, terminal]
+  const selected = []
+  for (const reference of references) {
+    if (!reference) continue
+    const source = pivots.find((pivot) => (
+      pivot.kind === reference.kind && pivot.time === reference.time
+    ))
+    const pivot = { ...source, ...reference }
+    if (selected.some((previous) => previous.kind === pivot.kind && previous.time === pivot.time)) continue
+    selected.push(pivot)
+  }
+  return selected
 }
 
 export const classifyExternalPivotPath = (pivots = [], { candles = [] } = {}) => {

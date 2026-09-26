@@ -1657,9 +1657,25 @@ const renderAssetChart = () => {
     )
   }
 
-  // Show only the externally confirmed pivot path used by the live entry
-  // decision. The former local swing classifier must never be mixed in here.
-  const sourcePivots = (item?.structure?.chartPivots ?? [])
+  const activeRange = item?.structure?.activeRange
+  const latestHigh = activeRange?.high
+    ? { ...activeRange.high, time: Number(activeRange.high.time), price: Number(activeRange.high.price), x: xForTime(Number(activeRange.high.time)) }
+    : null
+  const latestLow = activeRange?.low
+    ? { ...activeRange.low, time: Number(activeRange.low.time), price: Number(activeRange.low.price), x: xForTime(Number(activeRange.low.time)) }
+    : null
+  const trendDirection = item?.trend === 'down' ? 'down' : 'up'
+  const activeOrigin = trendDirection === 'down' ? latestHigh : latestLow
+  const activeTerminal = trendDirection === 'down' ? latestLow : latestHigh
+  const pivotTime = (pivot) => Number(pivot?.sourceTime ?? pivot?.time)
+  const samePivot = (left, right) => left?.kind === right?.kind && pivotTime(left) === pivotTime(right)
+  const storedContext = item?.structure?.contextPivots
+  const contextPivots = Array.isArray(storedContext)
+    ? storedContext
+    : (item?.structure?.chartPivots ?? []).filter((pivot) => !samePivot(pivot, activeTerminal))
+  // The dotted line is only the confirmed context immediately before the
+  // solid active wave. Older cached state falls back to the same rule.
+  const sourcePivots = contextPivots
     .map((pivot) => ({ ...pivot, time: Number(pivot?.time), price: Number(pivot?.price) }))
     .filter((pivot) => Number.isFinite(pivot.time) && Number.isFinite(pivot.price))
     .map((pivot) => ({ ...pivot, x: xForTime(pivot.time), y: y(pivot.price) }))
@@ -1670,26 +1686,17 @@ const renderAssetChart = () => {
       className: 'asset-external-structure-path',
       d: sourcePivots.map((pivot, index) => `${index ? 'L' : 'M'}${pivot.x},${pivot.y}`).join(''),
     })
-    path.append(el('title', { text: `Potvrzené pivoty · ${pivotSource}` }))
+    path.append(el('title', { text: `Potvrzený kontext před aktivní vlnou · ${pivotSource}` }))
     svg.append(path)
   }
-
-  const activeRange = item?.structure?.activeRange
-  const latestHigh = activeRange?.high
-    ? { ...activeRange.high, time: Number(activeRange.high.time), price: Number(activeRange.high.price), x: xForTime(Number(activeRange.high.time)) }
-    : null
-  const latestLow = activeRange?.low
-    ? { ...activeRange.low, time: Number(activeRange.low.time), price: Number(activeRange.low.price), x: xForTime(Number(activeRange.low.time)) }
-    : null
 
   if (
     latestHigh && latestLow
     && Number.isFinite(latestHigh.x) && Number.isFinite(latestLow.x)
     && latestHigh.price > latestLow.price
   ) {
-    const trendDirection = item?.trend === 'down' ? 'down' : 'up'
-    const rangeStart = trendDirection === 'down' ? latestHigh : latestLow
-    const rangeEnd = trendDirection === 'down' ? latestLow : latestHigh
+    const rangeStart = activeOrigin
+    const rangeEnd = activeTerminal
     const pullback = (latestHigh.price + latestLow.price) / 2
     const activeLeg = el('line', {
       className: 'asset-external-structure-active',

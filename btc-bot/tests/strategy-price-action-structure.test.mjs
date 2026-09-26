@@ -222,6 +222,7 @@ test('a published external BoS range reaches the dashboard with its original HH 
   assert.equal(result.structure.activeRange.low.price, 152)
   assert.equal((result.structure.activeRange.high.price + result.structure.activeRange.low.price) / 2, 158)
   assert.deepEqual(result.structure.chartPivots.map((pivot) => pivot.label), ['HL', 'HH', 'LL'])
+  assert.deepEqual(result.structure.contextPivots.map((pivot) => pivot.label), ['HL', 'HH'])
 })
 
 test('externally confirmed pivot anchors use the actual extrema of the displayed chart wave', () => {
@@ -266,6 +267,10 @@ test('externally confirmed pivot anchors use the actual extrema of the displayed
     ['HL', START, 158.5],
     ['HH', START + HOUR, 163.9],
     ['LL', START + 3 * HOUR, 152.881],
+  ])
+  assert.deepEqual(result.structure.contextPivots.map((pivot) => [pivot.label, pivot.time, pivot.price]), [
+    ['HL', START, 158.5],
+    ['HH', START + HOUR, 163.9],
   ])
 })
 

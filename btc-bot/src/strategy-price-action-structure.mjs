@@ -4,7 +4,7 @@ import { buildExternalTrendReference, EXTERNAL_PIVOT_SCHEMA } from './external-t
 import { buildFvgSupplyDemandZones, candleSignal, marketStructure } from './priceaction.mjs'
 
 export const PRICE_ACTION_STRUCTURE_ID = 'price-action-structure-v1'
-export const PRICE_ACTION_MATRIX_SCHEMA = 54
+export const PRICE_ACTION_MATRIX_SCHEMA = 55
 export const PRICE_ACTION_CHART_CANDLE_LIMITS = {
   '1h': 8760,
   '4h': 2190,
@@ -1888,6 +1888,11 @@ const latestCompletedExternalRange = ({ pivots = [], trend } = {}) => {
 
 const sourcePivotKey = (pivot) => `${pivot?.kind ?? ''}:${Number(pivot?.time)}`
 
+const sameSourcePivot = (left, right) => (
+  left?.kind === right?.kind
+  && Number(left?.sourceTime ?? left?.time) === Number(right?.sourceTime ?? right?.time)
+)
+
 // External OHLC confirms the sequence and the close that breaks structure.
 // The graph, FVGs and paper fills share the local chart stream, though, so
 // anchors must sit on that stream's actual wick.  A vendor can legitimately
@@ -2033,6 +2038,15 @@ export const classifyExternalStructure = ({
     if (!projected) return { ...pivot, source: pivot.source ?? externalPivots?.source ?? externalTrend?.source ?? null }
     return { ...projected, label: pivot.label, source: pivot.source ?? externalPivots?.source ?? externalTrend?.source ?? null }
   })
+  // Keep the dotted context connected to the start of the solid active wave.
+  // The active endpoint itself belongs solely to that solid line and its
+  // 0-100% Fibonacci calculation. This makes the two drawings one sequence
+  // rather than overlapping alternatives with different apparent scopes.
+  const activeOrigin = trend === 'down' ? activeRange?.high : activeRange?.low
+  const activeOriginIndex = chartPivots.findIndex((pivot) => sameSourcePivot(pivot, activeOrigin))
+  const contextPivots = activeOriginIndex >= 0
+    ? chartPivots.slice(0, activeOriginIndex + 1)
+    : []
   const structureConfirmed = Boolean(activeRange)
   const source = externalPivots?.source ?? externalTrend?.source ?? 'externí zdroj'
   const method = externalPivots?.method ?? 'potvrzené pivoty externího OHLC'
@@ -2087,6 +2101,7 @@ export const classifyExternalStructure = ({
       // A local zigzag is intentionally never mixed into this path.
       recentSwings: [],
       chartPivots,
+      contextPivots,
       alternatingTrendPivots: chartPivots,
       breakOfStructure: breakEvent,
       externalPivotCount: pivots.length,
