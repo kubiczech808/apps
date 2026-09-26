@@ -152,3 +152,42 @@ test("the observation read uses the query parameter names api.php actually reads
   assert.match(tool, /for \(const scope of \["active", "resolved"\]\)/,
     "both catalogues, or resolved trades have no observation to join to");
 });
+
+test("a trade records the premise it was admitted on, so its own history can report it", async () => {
+  // The finding behind this: asked how the dip portfolios did BY OPENING PROBABILITY, the
+  // analysis could recover that probability for 4 of 373 resolved trades. Not a bug in the
+  // read -- the observation catalogue is a moving window and every older observation had
+  // aged out. The one parameter the dip rule is entirely about was the one thing its own
+  // history could not report, because paperTradeFromCandidate never copied it.
+  const bot = await import("../tools/paper-trading-bot.mjs");
+  const price = 0.53;
+  const firstSeen = new Date(Date.now() - 6 * 3600000).toISOString();
+  const kickoff = new Date(Date.now() - 3600000).toISOString();
+  const candidate = {
+    tokenId: "t1", question: "Counter-Strike: M80 vs GamerLegion", outcome: "GamerLegion",
+    marketProbability: price, marketPrice: price, aiProbability: price,
+    bestBid: price, bestAsk: price, spread: 0, volumeUsdc: 12000, liquidity: 12000,
+    firstMarketProbability: 0.76, firstObservedAt: firstSeen, eventStartTime: kickoff,
+    daysToResolution: 1 / 24, feeRate: 0, feesEnabled: false,
+  };
+  const trade = bot.paperTradeFromCandidate(candidate, { id: "dip70", stakeUsdc: 5 }, "2026-09-26", 5);
+
+  assert.equal(trade.firstMarketProbability, 0.76, "the opening probability must travel with the trade");
+  assert.equal(trade.firstObservedAt, firstSeen);
+  assert.equal(trade.eventStartTime, kickoff,
+    "and both times, or a mid-game price cannot be told from an opening one after the fact");
+
+  // The pair is what makes the number readable. A trade carrying the probability but neither
+  // time is exactly as unanalysable as one carrying nothing, which is the state this fixes.
+  assert.ok(openingIsVerified(trade) === true,
+    "a trade first seen before kickoff must read as verified straight off its own row");
+
+  // A candidate that never had one stores null rather than a fabricated number: the rule
+  // refuses such a row anyway, and inventing a probability here would put it in the evidence.
+  const blind = bot.paperTradeFromCandidate(
+    { ...candidate, firstMarketProbability: null, firstObservedAt: null, eventStartTime: null },
+    { id: "dip70", stakeUsdc: 5 }, "2026-09-26", 5,
+  );
+  assert.equal(blind.firstMarketProbability, null);
+  assert.equal(openingIsVerified(blind), null, "unknowable stays unknowable");
+});

@@ -9148,6 +9148,20 @@ function paperTradeFromCandidate(best, strategy, today, stake) {
     liquidity: best.liquidity,
     volume24hr: best.volume24hr,
     entryVolumeUsdc: Number.isFinite(entryVolumeUsdc) ? Number(entryVolumeUsdc.toFixed(2)) : null,
+    // The premise this trade was admitted on, kept WITH the trade.
+    //
+    // It was not recorded anywhere on the row, and the only place that held it -- the
+    // observation catalogue -- is a moving window. Asked for an analysis of resolved trades
+    // by opening probability, the answer was that of 373 resolved trades the opening price
+    // could be recovered for 4: every other observation had aged out. So the one parameter
+    // the dip rule is entirely about was the one thing its own history could not report.
+    //
+    // The two times come with it because the probability alone cannot be read: a quote first
+    // taken after kickoff is a mid-game price, not an opening one, and without these there is
+    // no way to tell the two apart after the fact.
+    firstMarketProbability: validMarketProbability(best.firstMarketProbability),
+    firstObservedAt: best.firstObservedAt || best.observedAt || null,
+    eventStartTime: best.eventStartTime || best.scheduledEventDate || null,
     daysToResolution: best.daysToResolution,
     aiProbability: best.aiProbability,
     rawProbability: best.rawProbability,
