@@ -17,6 +17,10 @@ test("candidate cards keep state and tags with the market heading on mobile", ()
 test("candidate card controls and timestamps fit without horizontal scrolling", () => {
   assert.match(css, /\.candidate-exclusion-control \{\s*display: inline-flex;\s*width: max-content;/,
     "the checkbox and Exclude text stay together");
-  assert.match(css, /td\[data-label="Added \/ updated"\] \{\s*grid-column: 1 \/ -1;/,
-    "the timestamp receives the full final row");
+  assert.match(css, /td\[data-label="Precheck"\]::before \{\s*content: none;/,
+    "the old Precheck label cannot appear below Exclude");
+  assert.match(css, /td\[data-label="End date"\] \{\s*grid-column: 1 \/ -1;/,
+    "End date receives the standalone row before Analysis and Added / updated share one");
+  assert.match(css, /td\[data-label="Analysis"\] \{\s*display: flex;\s*flex-wrap: wrap;\s*align-items: center;/,
+    "the analysis icon and detail link are aligned on one line");
 });

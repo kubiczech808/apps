@@ -3702,6 +3702,13 @@ body.modal-open {
     min-height: 22px;
   }
 
+  /* "Precheck" described the old status badge, which now lives with the market heading.
+     Leaving its generated label after the checkbox made the harmless Exclude control read
+     as two unrelated lines. */
+  .candidate-ledger-scroll .execution-candidates-table td[data-label="Precheck"]::before {
+    content: none;
+  }
+
   .candidate-ledger-scroll .candidate-exclusion-control {
     display: inline-flex;
     width: max-content;
@@ -3716,10 +3723,25 @@ body.modal-open {
     white-space: nowrap;
   }
 
-  /* A timestamp is a single fact. Give it the full final row instead of squeezing it into
-     one half of the metric grid, where “Added / updated” and a local datetime compete. */
-  .candidate-ledger-scroll .execution-candidates-table td[data-label="Added / updated"] {
+  /* End date is the last standalone fact. With it full width, Analysis and Added / updated
+     naturally share the following row instead of leaving the timestamp stranded below. */
+  .candidate-ledger-scroll .execution-candidates-table td[data-label="End date"] {
     grid-column: 1 / -1;
+  }
+
+  .candidate-ledger-scroll .execution-candidates-table td[data-label="Analysis"] {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px;
+  }
+
+  .candidate-ledger-scroll .execution-candidates-table td[data-label="Analysis"]::before {
+    flex-basis: 100%;
+  }
+
+  .candidate-ledger-scroll .execution-candidates-table td[data-label="Analysis"] .analysis-detail-link {
+    margin-left: 0;
   }
 
   .trade-analysis-text {
