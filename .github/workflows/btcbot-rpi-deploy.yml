@@ -236,7 +236,10 @@ jobs:
             strategyId: state.settings?.strategyId,
             portfolioName: state.settings?.portfolioName,
             riskPct: state.settings?.risk?.riskPct,
-            priceActionRefresh: state.settings?.priceActionStructure?.refreshMinutes,
+            // This records the effective value the runner actually used. The
+            // editable settings schema may migrate, but a verified pass must
+            // always publish this execution result.
+            priceActionRefresh: state.priceActionEntryCheck?.refreshMinutes,
             lastAction: state.runs?.[0]?.action,
             lastError: state.runs?.[0]?.error,
             priceActionSchema: state.priceActionMatrix?.schemaVersion,
