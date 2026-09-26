@@ -223,6 +223,20 @@ test('a fair value gap is three candles whose outer wicks do not overlap', () =>
   assert.equal(fairValueGaps(overlapping).length, 0)
 })
 
+test('a missing period cannot turn non-consecutive candles into an FVG', () => {
+  const candles = [
+    candle(START, 100, 101, 99, 100),
+    candle(START + HOUR, 100, 101, 89, 90),
+    // The next available record is three expected periods later. Its apparent
+    // wick gap is data discontinuity, not a three-candle supply FVG.
+    candle(START + 4 * HOUR, 90, 92, 88, 89),
+    candle(START + 5 * HOUR, 89, 100, 88, 99),
+  ]
+
+  assert.deepEqual(fairValueGaps(candles), [])
+  assert.deepEqual(buildFvgSupplyDemandZones(candles), [])
+})
+
 test('a gap price has traded back through is marked filled', () => {
   const candles = [
     candle(START, 100, 102, 99, 101),

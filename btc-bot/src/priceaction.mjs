@@ -462,10 +462,30 @@ export const sweptPreviousSwing = (swing, previousSameKind) => {
 export const fairValueGaps = (candles, { minSizeAtr = 0, atrValue } = {}) => {
   const gaps = []
   const floor = atrValue && minSizeAtr ? atrValue * minSizeAtr : 0
+  // An FVG is defined by three immediately consecutive candles. A source can
+  // occasionally omit a period; without this guard, that hole becomes a
+  // synthetic, very wide gap between candles that only look adjacent in an
+  // array. Use the usual candle spacing as the reference and allow ordinary
+  // timestamp jitter, but never a missing bar.
+  const intervals = candles
+    .slice(1)
+    .map((candle, index) => candle.time - candles[index].time)
+    .filter((interval) => Number.isFinite(interval) && interval > 0)
+    .sort((a, b) => a - b)
+  const expectedInterval = intervals.length
+    ? intervals[Math.floor(intervals.length / 2)]
+    : null
+  const maximumAdjacentInterval = expectedInterval ? expectedInterval * 1.5 : null
 
   for (let index = 1; index < candles.length - 1; index += 1) {
     const before = candles[index - 1]
+    const middle = candles[index]
     const after = candles[index + 1]
+
+    if (maximumAdjacentInterval && (
+      middle.time - before.time > maximumAdjacentInterval ||
+      after.time - middle.time > maximumAdjacentInterval
+    )) continue
 
     if (after.low > before.high && after.low - before.high > floor) {
       gaps.push({
