@@ -1575,7 +1575,7 @@ async function loadDipEntryStatus(mode) {
       const key = `${String(plan?.portfolioId || "")}:${String(plan?.tokenId || "")}`;
       if (plan?.portfolioId && plan?.tokenId) byPlan.set(key, { ...(byPlan.get(key) || {}), ...plan });
     }
-    const watchPlans = [...byPlan.values()];
+    let watchPlans = [...byPlan.values()].filter((plan) => !dipWatchPlanHasFinalQuote(plan));
     // The plan tells us why a market is watched; the book tells us where it trades now.
     // A dip candidate is useful precisely while it has left the scraped catalogue, so
     // never present the opening probability as though it were its current price.
@@ -1585,6 +1585,9 @@ async function loadDipEntryStatus(mode) {
     } catch (error) {
       quoteError = error?.message || String(error);
     }
+    // The RPi removes an old retained plan on its next poll. Apply the same rule after this
+    // browser-side refresh so a terminal 0%/100% quote never lingers in candidates.
+    watchPlans = watchPlans.filter((plan) => !dipWatchPlanHasFinalQuote(plan));
     state.dipEntryStatus = {
       watch: watchPlans,
       hits: Array.isArray(hits?.hits) ? hits.hits : [],
@@ -1609,6 +1612,15 @@ function dipEntryPortfolioIdForMode(mode = state.mode) {
   return isLivePortfolioMode(mode) ? strategyId : `paper-${strategyId}`;
 }
 
+function dipWatchPlanHasFinalQuote(plan = {}) {
+  const ask = numericOrNull(plan.bestAsk ?? plan.currentAsk);
+  if (ask != null) return ask <= 0 || ask >= 1;
+  const bid = numericOrNull(plan.bestBid ?? plan.currentBid);
+  if (bid != null) return bid <= 0 || bid >= 1;
+  const market = numericOrNull(plan.marketProbability ?? plan.marketPrice);
+  return market != null && (market <= 0 || market >= 1);
+}
+
 // These are not ordinary catalogue candidates. They are the exact entries the RPi has
 // prepared while the favourite is still visible, and their price is refreshed directly from
 // the CLOB above. Once it falls below 50%, the catalogue normally retains the other outcome,
@@ -1621,10 +1633,11 @@ function dipEntryWatchCandidateRows(mode = state.mode) {
   const watch = Array.isArray(state.dipEntryStatus?.watch) ? state.dipEntryStatus.watch : [];
   return watch
     .filter((plan) => String(plan?.portfolioId || "") === portfolioId)
+    .filter((plan) => !dipWatchPlanHasFinalQuote(plan))
     .map((plan) => {
       const currentAsk = numericOrNull(plan.bestAsk ?? plan.currentAsk);
       const currentBid = numericOrNull(plan.bestBid ?? plan.currentBid);
-      const currentProbability = currentAsk ?? numericOrNull(plan.marketProbability ?? plan.marketPrice);
+      const currentProbability = currentAsk ?? currentBid ?? numericOrNull(plan.marketProbability ?? plan.marketPrice);
       return {
         ...plan,
         tokenId: String(plan.tokenId || ""),

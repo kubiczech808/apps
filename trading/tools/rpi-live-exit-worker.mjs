@@ -2396,6 +2396,23 @@ function dipEntryPlanKey(plan) {
   return `${String(plan.portfolioId || "")}:${String(plan.tokenId || "")}`;
 }
 
+// bestAsk() treats a zero quote as absent for executable-order purposes. Here it is still
+// meaningful: 0% and 100% are decided outcomes and must leave the retained DIP watchlist.
+export function dipEntryWatchQuoteIsFinal(book = {}) {
+  const prices = (rows) => (Array.isArray(rows) ? rows : [])
+    .map((row) => number(row?.price ?? row?.p))
+    .filter((price) => price != null && Number.isFinite(price));
+  const asks = prices(book?.asks);
+  if (asks.length) {
+    const ask = Math.min(...asks);
+    return ask <= 0 || ask >= 1;
+  }
+  const bids = prices(book?.bids);
+  if (!bids.length) return false;
+  const bid = Math.max(...bids);
+  return bid <= 0 || bid >= 1;
+}
+
 // Accumulate rather than replace. A plan that has left the catalogue keeps the fields it
 // was prepared with; a plan still listed refreshes them.
 function mergeDipEntryWatch(watch, payload, at) {
@@ -2469,9 +2486,13 @@ export function executableDipEntryQuote(plan = {}, book = {}) {
 
 function refreshDipWatchQuotes(context, books, at) {
   if (!(context.dipWatch instanceof Map)) return;
-  for (const plan of context.dipWatch.values()) {
+  for (const [key, plan] of context.dipWatch) {
     const book = books.get(String(plan.tokenId));
     if (!book) continue;
+    if (dipEntryWatchQuoteIsFinal(book)) {
+      context.dipWatch.delete(key);
+      continue;
+    }
     const trigger = dipEntryTrigger(plan, book);
     const executable = trigger.fire ? executableDipEntryQuote(plan, book) : null;
     plan.currentBid = bestBid(book);
@@ -2581,6 +2602,10 @@ async function fireDipEntries(context, books, now) {
     if (entered[key]?.terminal) continue;
     const book = books.get(String(plan.tokenId));
     if (!book) continue;
+    if (dipEntryWatchQuoteIsFinal(book)) {
+      watch.delete(key);
+      continue;
+    }
     const trigger = dipEntryTrigger(plan, book);
     if (!trigger.fire) continue;
     // Decided when the plan was prepared, and printed rather than hidden so the log says

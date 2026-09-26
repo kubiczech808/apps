@@ -99,6 +99,22 @@ test("a stop reversal resolves only the other side of a binary market", () => {
   assert.equal(worker.bestAsk({ asks: [{ price: "0.54" }, { price: "0.57" }] }), 0.54);
 });
 
+test("a decided quote is removed from the DIP watch but a low executable ask is retained", () => {
+  assert.equal(worker.dipEntryWatchQuoteIsFinal({ asks: [{ price: "1" }] }), true);
+  assert.equal(worker.dipEntryWatchQuoteIsFinal({ asks: [{ price: "0" }] }), true);
+  assert.equal(worker.dipEntryWatchQuoteIsFinal({ asks: [{ price: "0.01" }], bids: [{ price: "0" }] }), false,
+    "the ask is the current executable entry price, not an empty zero bid");
+  assert.equal(worker.dipEntryWatchQuoteIsFinal({ bids: [{ price: "1" }] }), true);
+
+  const source = readFileSync(new URL("../tools/rpi-live-exit-worker.mjs", import.meta.url), "utf8");
+  const refresh = functionBody(source, "refreshDipWatchQuotes");
+  const fire = functionBody(source, "fireDipEntries");
+  assert.match(refresh, /dipEntryWatchQuoteIsFinal\(book\)[\s\S]*?context\.dipWatch\.delete\(key\)/,
+    "a decided quote must leave the retained worker watchlist");
+  assert.match(fire, /dipEntryWatchQuoteIsFinal\(book\)[\s\S]*?watch\.delete\(key\)/,
+    "the execution pass must independently refuse a decided quote");
+});
+
 // A portfolio that is switched off does not trade, and selling one of its positions is
 // trading. Omitting its tokens from `policies` does not achieve that on its own: this
 // worker applies defaultPolicy to every position it does not find there, so an omitted
@@ -1598,7 +1614,7 @@ test("dip entry: it fires once, needs cash, and honours what was prepared", asyn
   const source = readFileSync(new URL("../tools/rpi-live-exit-worker.mjs", import.meta.url), "utf8");
   const submitted = [];
   const build = (overrides = {}) => new Function(
-    "bestAsk", "exitFilled", "recordEvent", "submitDipEntry", "dipEntryTrigger", "dipEntryPlanKey",
+    "bestAsk", "exitFilled", "recordEvent", "submitDipEntry", "dipEntryTrigger", "dipEntryPlanKey", "dipEntryWatchQuoteIsFinal",
     "DIP_ENTRY_MODE", "MODE", "CONFIRM_LIVE",
     `${functionBody(source, "fireDipEntries")}\nreturn fireDipEntries;`,
   )(
@@ -1614,6 +1630,7 @@ test("dip entry: it fires once, needs cash, and honours what was prepared", asyn
       return ask != null && ask <= plan.buyMax && ask >= plan.buyMin ? { fire: true, ask } : { fire: false };
     },
     (row) => `${row.portfolioId}:${row.tokenId}`,
+    (book) => Number(book?.ask) <= 0 || Number(book?.ask) >= 1,
     overrides.dipMode || "live",
     overrides.mode || "live",
     overrides.confirm !== false,
@@ -1695,7 +1712,7 @@ test("dip entry: the order never pays above the band, and never without cash", (
   // The claim is what stops this and the hourly executor from both entering the same
   // market, and a failed order releases it rather than leaving it held.
   assert.match(source, /const claim = await claimLiveEntry\(plan\.tokenId, claimId\);/);
-  assert.match(source, /await settleLiveEntryClaim\("release", plan\.tokenId, claimId\);\n    return \{ success: false, error: error\?\.message/,
+  assert.match(source, /await settleLiveEntryClaim\("release", plan\.tokenId, claimId\);\r?\n    return \{ success: false, error: error\?\.message/,
     "a thrown order must release its claim, or the market can never be entered again");
   // A dip's paper mirror needs a determinate stake, unlike a protective exit. FOK keeps the
   // live result either this fully quoted entry or no entry at all.

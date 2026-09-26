@@ -2665,6 +2665,20 @@ function dip_watch_market_is_live(array $item, ?int $now = null): bool
     return true;
 }
 
+// A 0% or 100% quote is a decided market, not a dip to keep following. This reads the
+// current quote; firstMarketProbability only determines whether the market may enter watch.
+function dip_watch_market_has_final_probability(array $item): bool
+{
+    foreach (['marketProbability', 'marketPrice'] as $field) {
+        if (!is_numeric($item[$field] ?? null)) {
+            continue;
+        }
+        $probability = (float) $item[$field];
+        return $probability <= 0.0 || $probability >= 1.0;
+    }
+    return false;
+}
+
 function execution_scope_matches_observation(array $item, array $config): bool
 {
     if (!is_active_scraped_market_observation($item)) {
@@ -6295,7 +6309,7 @@ function live_dip_entry_watch_payload(): array
             'cashUsdc' => null,
             'plans' => [],
             'portfolios' => [],
-            'diagnostics' => ['observations' => 0, 'live' => 0, 'openingVerified' => 0, 'portfolios' => []],
+            'diagnostics' => ['observations' => 0, 'live' => 0, 'finalQuote' => 0, 'openingVerified' => 0, 'portfolios' => []],
         ];
     }
 
@@ -6326,7 +6340,7 @@ function live_dip_entry_watch_payload(): array
     $state = state_payload('paper', ['observations']);
     $observations = is_array($state['marketObservations'] ?? null) ? $state['marketObservations'] : [];
     $plans = [];
-    $diagnostics = ['observations' => count($observations), 'live' => 0, 'openingVerified' => 0, 'portfolios' => []];
+    $diagnostics = ['observations' => count($observations), 'live' => 0, 'finalQuote' => 0, 'openingVerified' => 0, 'portfolios' => []];
     foreach ($active as $portfolioId => $_entry) {
         $diagnostics['portfolios'][$portfolioId] = [
             'openingBand' => 0,
@@ -6349,6 +6363,10 @@ function live_dip_entry_watch_payload(): array
             continue;
         }
         $diagnostics['live']++;
+        if (dip_watch_market_has_final_probability($item)) {
+            $diagnostics['finalQuote']++;
+            continue;
+        }
         // firstMarketProbability ONLY. marketProbability and marketPrice used to stand in for
         // it here, which made "where the market opened" mean "what it costs right now" for
         // every row that carried no first quote -- so a market currently inside the opening
