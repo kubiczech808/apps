@@ -13620,6 +13620,10 @@ function databaseStorageMaintenanceStatus(PDO $pdo): array
     $unreleasedMeasurements = array_filter($reclaimMeasurements, static fn($measurement): bool => is_array($measurement)
         && (string)($measurement['outcome'] ?? '') === 'not_released');
     $retentionState = trim((string)($settings['database_storage_maintenance_state'] ?? ''));
+    $allbizCleanup = json_decode((string)($settings['allbiz_retirement_cleanup_report'] ?? ''), true);
+    if (!is_array($allbizCleanup)) {
+        $allbizCleanup = [];
+    }
     $reclaimComplete = $reclaimState === 'complete';
     $retentionComplete = in_array($retentionState, ['retention_complete', 'completed'], true);
     $pendingRows = (int)($cleanup['scraping_items_prunable'] ?? 0)
@@ -13647,6 +13651,7 @@ function databaseStorageMaintenanceStatus(PDO $pdo): array
         'retention_status' => trim((string)($settings['database_storage_maintenance_status'] ?? '')),
         'retention_last_run_at' => trim((string)($settings['database_storage_maintenance_last_run_at'] ?? '')),
         'cleanup_last_run_at' => trim((string)($settings['database_storage_cleanup_last_run_at'] ?? '')),
+        'allbiz_cleanup' => $allbizCleanup,
         'reclaim_complete' => $reclaimComplete,
         'retention_complete' => $retentionComplete,
     ];
@@ -23753,6 +23758,32 @@ function renderApp(PDO $pdo, ?array $flash): void
                 <small><?= h(number_format((int)$dbStorage['scraping_items_prunable'], 0, ',', ' ')) ?> crawl detailů, <?= h(number_format((int)$dbStorage['import_items_prunable'], 0, ',', ' ')) ?> detailů importů čeká na 14denní retenci.</small>
             </div>
         </div>
+        <?php $allbizCleanup = $dbStorage['allbiz_cleanup']; ?>
+        <?php if ($allbizCleanup): ?>
+        <?php
+            $allbizBeforeBytes = max(0, (int)($allbizCleanup['scraping_job_items_before_bytes'] ?? 0));
+            $allbizAfterBytes = max(0, (int)($allbizCleanup['scraping_job_items_after_bytes'] ?? 0));
+            $allbizSavedBytes = max(0, (int)($allbizCleanup['scraping_job_items_saved_bytes'] ?? 0));
+            $allbizComplete = !empty($allbizCleanup['complete']);
+        ?>
+        <div class="note<?= $allbizComplete ? '' : ' note-warning' ?>">
+            <strong>Úklid vyřazeného zdroje AllBiz<?= $allbizComplete ? ' dokončen' : ' čeká na dokončení' ?>.</strong>
+            <?php if (!empty($allbizCleanup['completed_at'])): ?>
+                Poslední krok: <?= h(formatDateTime((string)$allbizCleanup['completed_at'])) ?>.
+            <?php endif; ?>
+            Odstraněno technických URL: <strong><?= h(number_format((int)($allbizCleanup['deleted_job_items'] ?? 0), 0, ',', ' ')) ?></strong>.
+            <?php if ($allbizBeforeBytes > 0 || $allbizAfterBytes > 0): ?>
+                Tabulka <code>scraping_job_items</code>: <?= h(formatBytesHuman($allbizBeforeBytes)) ?> → <?= h(formatBytesHuman($allbizAfterBytes)) ?>
+                <?php if ($allbizSavedBytes > 0): ?>(uvolněno <?= h(formatBytesHuman($allbizSavedBytes)) ?>)<?php endif; ?>.
+            <?php endif; ?>
+            <?php if ((int)($allbizCleanup['recipients_preserved'] ?? 0) > 0): ?>
+                Již uložené kontakty zůstaly zachovány.
+            <?php endif; ?>
+            <?php if (!$allbizComplete && !empty($allbizCleanup['optimize_error'])): ?>
+                <?= h((string)$allbizCleanup['optimize_error']) ?>
+            <?php endif; ?>
+        </div>
+        <?php endif; ?>
         <?php if (!$dbSummary['tables']): ?>
             <p class="note">Velikosti tabulek umí přečíst jen MySQL (information_schema).</p>
         <?php else: ?>
