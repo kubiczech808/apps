@@ -220,15 +220,33 @@ switch ($action) {
         }
         $publisher = (string) ($state['savedBy'] ?? '');
         $capabilities = readJsonFile(RUNNER_CAPABILITIES_FILE, []);
+        if (!is_array($capabilities)) {
+            $capabilities = [];
+        }
         $publisherSchema = is_array($capabilities)
             ? ($capabilities[$publisher]['priceActionSchema'] ?? null)
             : null;
+        $lease = readJsonFile(LEASE_FILE, null);
+        $publisherHasCurrentLease = is_array($lease)
+            && (string) ($lease['owner'] ?? '') === $publisher
+            && (int) ($lease['expiresAt'] ?? 0) > (int) round(microtime(true) * 1000);
         if (
             $publisher === ''
             || !is_numeric($publisherSchema)
             || (int) $publisherSchema < MIN_PRICE_ACTION_MATRIX_SCHEMA
         ) {
-            fail(409, 'Runner has not acquired a lease with the current protocol.');
+            // A simultaneous lease renewal can atomically replace the shared
+            // capabilities document after this runner has already acquired a
+            // valid lease. Recover only for that current lease holder and only
+            // when the state itself proves it uses the current PA schema.
+            if (!$publisherHasCurrentLease || !is_numeric($priceActionSchema) || (int) $priceActionSchema < MIN_PRICE_ACTION_MATRIX_SCHEMA) {
+                fail(409, 'Runner has not acquired a lease with the current protocol.');
+            }
+            $capabilities[$publisher] = [
+                'priceActionSchema' => (int) $priceActionSchema,
+                'checkedAt' => gmdate('c'),
+            ];
+            writeJsonFile(RUNNER_CAPABILITIES_FILE, $capabilities);
         }
         writeJsonFile(STATE_FILE, $state);
 

@@ -424,6 +424,8 @@ test('the API refuses obsolete runners before they can renew the lease', () => {
   assert.match(api, /const RUNNER_CAPABILITIES_FILE = DATA_DIR \. '\/runner-capabilities\.json'/)
   assert.match(api, /\$priceActionSchema = \$body\['priceActionSchema'\] \?\? null/)
   assert.match(api, /!is_numeric\(\$priceActionSchema\) \|\| \(int\) \$priceActionSchema < MIN_PRICE_ACTION_MATRIX_SCHEMA/)
+  assert.match(api, /\$publisherHasCurrentLease/)
+  assert.match(api, /A simultaneous lease renewal can atomically replace the shared/)
   assert.match(api, /\$capabilities\[\$owner\] = \[/)
   assert.match(api, /'priceActionSchema' => 0/)
   assert.match(api, /Runner has not acquired a lease with the current protocol/)
