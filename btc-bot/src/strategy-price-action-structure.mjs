@@ -4,10 +4,14 @@ import { buildExternalTrendReference, EXTERNAL_PIVOT_SCHEMA } from './external-t
 import { buildFvgSupplyDemandZones, candleSignal, marketStructure } from './priceaction.mjs'
 
 export const PRICE_ACTION_STRUCTURE_ID = 'price-action-structure-v1'
-export const PRICE_ACTION_MATRIX_SCHEMA = 59
+export const PRICE_ACTION_MATRIX_SCHEMA = 60
 export const PRICE_ACTION_CHART_CANDLE_LIMITS = {
-  '1h': 8760,
-  '4h': 2190,
+  // The zone and structure inputs below remain much longer. These limits only
+  // bound chart data published to the browser, where a 60-day 1H / 180-day
+  // 4H window leaves ample room to pan without making every state publish
+  // exceed the hosting transport limit.
+  '1h': 1440,
+  '4h': 1080,
   '1d': 400,
 }
 
@@ -729,6 +733,35 @@ const zoneSummary = (zone, candles, price) => {
   }
 }
 
+// The complete zone object is useful to the strategy, but retaining the full
+// OHLC payload of every historical FVG in every timeframe makes the hosted
+// dashboard document needlessly large. The audit trail only needs the exact
+// boundaries, lifecycle and origin timestamps to explain a visible gap.
+const auditZoneSummary = (zone) => ({
+  type: zone.type,
+  low: zone.low,
+  high: zone.high,
+  touches: zone.touches,
+  firstTouchAt: zone.firstTouchAt,
+  lastTouchAt: zone.lastTouchAt,
+  swept: zone.swept,
+  imbalance: zone.imbalance,
+  firstTime: zone.firstTime,
+  lastTime: zone.lastTime,
+  firstIndex: zone.firstIndex,
+  lastIndex: zone.lastIndex,
+  definingCandles: (zone.definingCandles ?? []).map(({ time }) => ({ time })),
+  fvg: zone.fvg ? {
+    direction: zone.fvg.direction,
+    definingCandles: (zone.fvg.definingCandles ?? []).map(({ time }) => ({ time })),
+  } : null,
+  filledByOwnTimeframeClose: zone.filledByOwnTimeframeClose,
+  filledAt: zone.filledAt,
+  invalidatedByOwnTimeframeClose: zone.invalidatedByOwnTimeframeClose,
+  invalidatedAt: zone.invalidatedAt,
+  distancePct: zone.distancePct,
+})
+
 export const activeSupplyDemandZones = (candles, { lookback = 2, maxAgeCandles = 400 } = {}) => {
   const price = candles.at(-1)?.close ?? null
   const allZones = buildFvgSupplyDemandZones(candles, { lookback, maxAgeCandles })
@@ -748,8 +781,8 @@ export const activeSupplyDemandZones = (candles, { lookback = 2, maxAgeCandles =
     byType(type, zones).sort((a, b) => Math.abs(a.distancePct ?? Infinity) - Math.abs(b.distancePct ?? Infinity))
 
   return {
-    allDemand: allZones.filter((zone) => zone.type === 'demand').sort((a, b) => (b.lastIndex ?? 0) - (a.lastIndex ?? 0)),
-    allSupply: allZones.filter((zone) => zone.type === 'supply').sort((a, b) => (b.lastIndex ?? 0) - (a.lastIndex ?? 0)),
+    allDemand: allZones.filter((zone) => zone.type === 'demand').map(auditZoneSummary).sort((a, b) => (b.lastIndex ?? 0) - (a.lastIndex ?? 0)),
+    allSupply: allZones.filter((zone) => zone.type === 'supply').map(auditZoneSummary).sort((a, b) => (b.lastIndex ?? 0) - (a.lastIndex ?? 0)),
     demand: latest('demand'),
     supply: latest('supply'),
     latestValidDemand: latest('demand', zones),

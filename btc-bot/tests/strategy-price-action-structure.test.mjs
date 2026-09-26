@@ -884,6 +884,8 @@ test('supply and demand zones stay valid unless their own timeframe closes throu
   assert.equal(invalidated.allDemand.length, 1, 'an invalidated FVG remains available for chart audit')
   assert.equal(invalidated.allDemand[0].invalidatedByOwnTimeframeClose, true)
   assert.equal(invalidated.allDemand[0].invalidatedAt, START + 10 * HOUR)
+  assert.deepEqual(invalidated.allDemand[0].definingCandles.map((item) => item.time), [START, START + HOUR, START + 2 * HOUR])
+  assert.equal(invalidated.allDemand[0].definingCandles[0].open, undefined, 'audit zones keep their origin without duplicating candle OHLC')
 })
 
 test('trade profile requires S/D zone hit, 50 percent pullback and at least 2R', () => {
