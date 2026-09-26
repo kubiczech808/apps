@@ -269,3 +269,27 @@ test('consecutive FVGs from one displacement base keep their own price gaps', ()
     ]
   )
 })
+
+test('overlapping consecutive FVGs remain separate three-candle zones', () => {
+  const candles = [
+    candle(START, 100, 101, 98, 99),
+    candle(START + HOUR, 99, 105, 99, 104),
+    candle(START + 2 * HOUR, 104, 120, 108, 119),
+    candle(START + 3 * HOUR, 119, 122, 106, 121),
+  ]
+
+  const zones = buildFvgSupplyDemandZones(candles)
+  assert.deepEqual(
+    zones.map((zone) => ({
+      type: zone.type,
+      low: zone.low,
+      high: zone.high,
+      definingIndexes: zone.definingIndexes,
+      fvgIndex: zone.fvg.index,
+    })),
+    [
+      { type: 'demand', low: 101, high: 108, definingIndexes: [0, 1, 2], fvgIndex: 1 },
+      { type: 'demand', low: 105, high: 106, definingIndexes: [1, 2, 3], fvgIndex: 2 },
+    ]
+  )
+})

@@ -41,7 +41,7 @@ const PRIMARY_RUNNER_MARKER = DATA_DIR . '/primary-runner-v2.json';
 // Keep this in lockstep with PRICE_ACTION_MATRIX_SCHEMA. Otherwise an older
 // primary runner can keep publishing cached entry gates after the dashboard
 // and deploy runner have received corrected execution rules.
-const MIN_PRICE_ACTION_MATRIX_SCHEMA = 55;
+const MIN_PRICE_ACTION_MATRIX_SCHEMA = 56;
 // The dashboard publishes the full chart history for all assets and
 // timeframes so the browser can reveal up to one year without another API
 // round-trip. Keep a bounded body limit, but above the largest paper snapshot.

@@ -243,31 +243,6 @@ export const buildFvgSupplyDemandZones = (candles, {
     const high = gap.high
     if (!(high > low)) continue
 
-    const continuation = zones.find((zone) => (
-      zone.type === type
-      && zone.low <= high
-      && low <= zone.high
-      && baseIndex <= zone.lastIndex + 1
-      && confirmationIndex >= zone.firstIndex - 1
-    ))
-    if (continuation) {
-      // A multi-candle base can produce consecutive overlapping FVG triples.
-      // That is one origin with continuing displacement, not a stack of
-      // duplicate zones. A later revisit at the same price remains separate
-      // because its candle windows no longer touch.
-      continuation.low = Math.min(continuation.low, low)
-      continuation.high = Math.max(continuation.high, high)
-      continuation.firstIndex = Math.min(continuation.firstIndex, baseIndex)
-      continuation.lastIndex = Math.max(continuation.lastIndex, confirmationIndex)
-      continuation.lastTime = candles[continuation.lastIndex]?.time ?? continuation.lastTime
-      continuation.baseIndexes = [...new Set([...continuation.baseIndexes, baseIndex])].sort((a, b) => a - b)
-      continuation.touches = candles
-        .slice(continuation.lastIndex + 1)
-        .filter((candle) => candle.low <= continuation.high && candle.high >= continuation.low)
-        .length
-      continue
-    }
-
     const later = candles.slice(confirmationIndex + 1)
     zones.push({
       type,
