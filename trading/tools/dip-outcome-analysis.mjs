@@ -134,7 +134,11 @@ export function tradeTags(trade = {}) {
   return ["(untagged)"];
 }
 
-export const PROBABILITY_EDGES = [0.2, 0.3, 0.35, 0.4, 0.45, 0.5, 0.56, 0.6, 0.7];
+// Through to 1.0, not stopping at 0.7. A dip portfolio buys below its opening band so the
+// low edges carry it, but an ordinary portfolio set to "51+" lives entirely above 0.5 --
+// with the old top edge every one of its trades fell into a single "70%+" bucket and the
+// table said nothing. Adding edges above the old top cannot move any bucket below it.
+export const PROBABILITY_EDGES = [0.2, 0.3, 0.35, 0.4, 0.45, 0.5, 0.56, 0.6, 0.7, 0.8, 0.9, 1.0];
 export const probabilityBand = (trade) => bucketOf(num(trade?.entryPrice), PROBABILITY_EDGES);
 
 // The bar: return per dollar staked, above this, is what "profitable" means here.
@@ -251,7 +255,7 @@ async function main() {
     console.log(`   opening price recovered for ${known}/${s.n}; of those, ${verified} were first seen BEFORE kickoff`);
 
     printTable("by ENTRY probability (the portfolio's own range)",
-      groupBy(enriched, (trade) => bucketOf(num(trade.entryPrice), [0.2, 0.3, 0.35, 0.4, 0.45, 0.5, 0.56, 0.6, 0.7])));
+      groupBy(enriched, probabilityBand));
     printTable("by MARKET SHAPE", groupBy(enriched, (trade) => trade.shape));
     printTable("by ENTRY VOLUME", groupBy(enriched, (trade) => volumeBucket(trade.entryVolume)));
   }
@@ -273,8 +277,7 @@ async function main() {
       console.log("        what it claimed. They are printed to show how much of the record");
       console.log("        they account for, not to be read as a result.");
     }
-    printTable("ALL resolved, by entry probability", groupBy(everything,
-      (trade) => bucketOf(num(trade.entryPrice), [0.2, 0.3, 0.35, 0.4, 0.45, 0.5, 0.56, 0.6, 0.7])));
+    printTable("ALL resolved, by entry probability", groupBy(everything, probabilityBand));
     printTable("ALL resolved, by market shape", groupBy(everything, (trade) => trade.shape));
     printTable("ALL resolved, by entry volume", groupBy(everything, (trade) => volumeBucket(trade.entryVolume)));
 

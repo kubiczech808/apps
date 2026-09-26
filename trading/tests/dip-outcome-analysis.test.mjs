@@ -298,3 +298,37 @@ test("a trade keeps the market's tags, so the profit can be attributed to them",
   );
   assert.deepEqual(tradeTags(bare), ["(untagged)"]);
 });
+
+test("the probability buckets reach the top of the range, not only a dip portfolio's half", async () => {
+  const { probabilityBand, PROBABILITY_EDGES } = await import("../tools/dip-outcome-analysis.mjs");
+  // An ordinary portfolio set to "51+" lives entirely above 0.5. With the edges stopping at
+  // 0.7 every one of its trades landed in a single "70%+" bucket and the table said nothing
+  // about it -- the breakdown existed and reported one row.
+  assert.equal(probabilityBand({ entryPrice: 0.55 }), "50-56%");
+  assert.equal(probabilityBand({ entryPrice: 0.65 }), "60-70%");
+  assert.equal(probabilityBand({ entryPrice: 0.75 }), "70-80%");
+  assert.equal(probabilityBand({ entryPrice: 0.85 }), "80-90%");
+  assert.equal(probabilityBand({ entryPrice: 0.97 }), "90-100%");
+  assert.equal(PROBABILITY_EDGES[PROBABILITY_EDGES.length - 1], 1.0);
+
+  // And the dip half is untouched: adding edges above the old top must not move a bucket
+  // below it, or every number reported for the dip portfolios silently changes meaning.
+  assert.equal(probabilityBand({ entryPrice: 0.42 }), "40-45%");
+  assert.equal(probabilityBand({ entryPrice: 0.48 }), "45-50%");
+  assert.equal(probabilityBand({ entryPrice: 0.53 }), "50-56%");
+  assert.equal(probabilityBand({ entryPrice: 0.32 }), "30-35%");
+
+  // No trade in the tradable range may fall outside a bucket.
+  for (let value = 0.21; value <= 0.999; value += 0.007) {
+    const label = probabilityBand({ entryPrice: Number(value.toFixed(3)) });
+    assert.ok(label !== "unknown" && label !== "below",
+      `${value.toFixed(3)} fell outside every bucket as "${label}"`);
+  }
+
+  // One list, read everywhere. The per-portfolio tables carried their own inline copy of the
+  // edges, so extending the constant would have changed the pooled tables and left each
+  // portfolio's own bucketed on the old list -- two tables, same label, different meaning.
+  const source = readFileSync(new URL("../tools/dip-outcome-analysis.mjs", import.meta.url), "utf8");
+  assert.equal(source.match(/\[0\.2, 0\.3, 0\.35/g)?.length, 1,
+    "the edge list must exist once, as the constant, and nowhere else");
+});
