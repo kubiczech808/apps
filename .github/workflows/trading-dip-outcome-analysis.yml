@@ -1,0 +1,36 @@
+name: Trading Dip Outcome Analysis
+
+# Read-only diagnostic, manual only. Reads the portfolio config, each dip portfolio's
+# resolved trades and the observation catalogue over HTTPS. Places no orders, writes
+# nothing, publishes nothing, uses no secrets.
+#
+# Asked for: how the profitable dip portfolios do broken down by the parameters a portfolio
+# can be set to -- market shape, entry volume, entry probability -- and above all against
+# the probability the market OPENED at, to decide whether 70+ is the right band.
+on:
+  workflow_dispatch:
+    inputs:
+      portfolio:
+        description: "Name or id to focus on (blank analyses every portfolio carrying the dip rule)"
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  analyse:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Break the resolved dip trades down by settable parameter
+        working-directory: trading
+        env:
+          DIP_PORTFOLIO: ${{ inputs.portfolio }}
+        run: node tools/dip-outcome-analysis.mjs
