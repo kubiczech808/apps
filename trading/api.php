@@ -4823,7 +4823,16 @@ function normalize_portfolio_config(array $input): array
     $customLiveInput = is_array($input['livePortfolios'] ?? null) ? $input['livePortfolios'] : [];
     $systemInput = is_array($input['system'] ?? null) ? $input['system'] : [];
     $config = $defaults;
+    // Once a config document exists, its paper keys are authoritative. Previously every
+    // missing shipped id was silently recreated here, so an old/partial document made
+    // deleted portfolios reappear in the dashboard. The no-key case is kept for a fresh
+    // install, where the shipped defaults are still the intended seed.
+    $hasPersistedPaperSet = array_key_exists('paper', $input) && is_array($input['paper']);
+    $config['paper'] = [];
     foreach ($defaults['paper'] as $id => $strategyDefaults) {
+        if ($hasPersistedPaperSet && !array_key_exists($id, $paperInput)) {
+            continue;
+        }
         $strategyInput = is_array($paperInput[$id] ?? null) ? $paperInput[$id] : [];
         $config['paper'][$id] = normalize_strategy_config($strategyInput, $strategyDefaults);
     }
@@ -4937,6 +4946,21 @@ function normalize_portfolio_config(array $input): array
     return $config;
 }
 
+function portfolio_config_custom_count(array $config): int
+{
+    $builtIns = ['conservative', 'highReward', 'moreProbable', 'equal'];
+    $paper = is_array($config['paper'] ?? null) ? $config['paper'] : [];
+    $customPaper = array_filter(array_keys($paper), static fn ($id): bool => !in_array((string) $id, $builtIns, true));
+    $live = is_array($config['livePortfolios'] ?? null) ? $config['livePortfolios'] : [];
+    return count($customPaper) + count($live);
+}
+
+function portfolio_config_explicit_count(array $config): int
+{
+    return count(is_array($config['paper'] ?? null) ? $config['paper'] : [])
+        + count(is_array($config['livePortfolios'] ?? null) ? $config['livePortfolios'] : []);
+}
+
 function load_portfolio_config(): array
 {
     // The FILE first, whichever way the storage switch is set.
@@ -4955,19 +4979,40 @@ function load_portfolio_config(): array
     // read once per request, and it is the one document where being out of date does not
     // degrade anything -- it makes portfolios vanish.
     $path = portfolio_config_path();
+    $fileConfig = null;
     if (is_file($path)) {
         $raw = file_get_contents($path);
-        $data = json_decode(is_string($raw) ? $raw : '', true);
-        if (is_array($data)) {
-            return normalize_portfolio_config($data);
+        $decoded = json_decode(is_string($raw) ? $raw : '', true);
+        if (is_array($decoded)) {
+            $fileConfig = $decoded;
         }
     }
-    // Only when there is no file at all: then the stored copy is the best record there is.
+    $storedConfig = null;
     if (trading_storage_is_active()) {
         $stored = trading_storage_document_get('portfolio-config');
         if (is_array($stored)) {
-            return normalize_portfolio_config($stored);
+            $storedConfig = $stored;
         }
+    }
+    // The file and MySQL document were historically written by different versions of the
+    // saver. During that window the file could contain only the original four paper defaults
+    // while MySQL still held user-created portfolios. Prefer the source with the richer
+    // explicit portfolio set; this prevents a deploy from making the dashboard look reset.
+    if (is_array($fileConfig) && is_array($storedConfig)) {
+        $fileCustom = portfolio_config_custom_count($fileConfig);
+        $storedCustom = portfolio_config_custom_count($storedConfig);
+        if ($storedCustom > $fileCustom
+            || ($storedCustom === $fileCustom
+                && portfolio_config_explicit_count($storedConfig) > portfolio_config_explicit_count($fileConfig))) {
+            return normalize_portfolio_config($storedConfig);
+        }
+        return normalize_portfolio_config($fileConfig);
+    }
+    if (is_array($fileConfig)) {
+        return normalize_portfolio_config($fileConfig);
+    }
+    if (is_array($storedConfig)) {
+        return normalize_portfolio_config($storedConfig);
     }
     return default_portfolio_config();
 }
