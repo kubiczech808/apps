@@ -191,3 +191,74 @@ test("a trade records the premise it was admitted on, so its own history can rep
   assert.equal(blind.firstMarketProbability, null);
   assert.equal(openingIsVerified(blind), null, "unknowable stays unknowable");
 });
+
+// ---------------------------------------------------------------------------------------
+// The profitable-subset breakdown. Asked for: only the bands and shapes clearing 5%, split
+// by tag, ordered by NOMINAL profit, plus a check of "volume over 5k" across every
+// combination. Each of those is a way to mislead, so each gets a test.
+
+test("the 5% bar is applied to buckets computed from the data, not to a typed-in list", async () => {
+  const { qualifyingBuckets, PROFIT_BAR } = await import("../tools/dip-outcome-analysis.mjs");
+  // Three bands: one clearly over the bar, one clearly under, one just under it. The last is
+  // the one that matters -- a >= would let a 5.0% bucket through as "profit above 5%".
+  const rows = [
+    { band: "good", realizedPnlUsdc: 2, totalCostUsdc: 10 },      // +20%
+    { band: "bad", realizedPnlUsdc: -1, totalCostUsdc: 10 },      // -10%
+    { band: "edge", realizedPnlUsdc: 0.5, totalCostUsdc: 10 },    // exactly +5%
+  ];
+  const { keep, rejected } = qualifyingBuckets(rows, (row) => row.band);
+  assert.equal(PROFIT_BAR, 0.05);
+  assert.ok(keep.has("good"));
+  assert.ok(!keep.has("bad"));
+  assert.ok(!keep.has("edge"), "exactly 5% is not ABOVE 5%");
+  assert.deepEqual(rejected.map(([label]) => label).sort(), ["bad", "edge"],
+    "what was dropped has to be reportable, or the filter is invisible");
+});
+
+test("a trade's tags are read wherever they were stored, and an untagged trade is not dropped", async () => {
+  const { tradeTags } = await import("../tools/dip-outcome-analysis.mjs");
+  assert.deepEqual(tradeTags({ polymarketTags: ["Esports", "CS2"] }), ["esports", "cs2"]);
+  assert.deepEqual(tradeTags({ tags: ["sports"] }), ["sports"]);
+  assert.deepEqual(tradeTags({ tags: [{ slug: "nba" }, { label: "Basketball" }] }), ["nba", "basketball"]);
+  assert.deepEqual(tradeTags({ polymarketTags: ["a", "a", "b"] }), ["a", "b"], "a tag counts once");
+  // The bait: an untagged trade must be VISIBLE, not silently excluded. How much of the
+  // profit carries no tag at all is part of the answer, and a filter that drops those rows
+  // makes the tag table add up to less than the subset while looking complete.
+  assert.deepEqual(tradeTags({}), ["(untagged)"]);
+  assert.deepEqual(tradeTags({ tags: [] }), ["(untagged)"]);
+});
+
+test("the volume rule is judged by comparison, and abstains when it has only one side", async () => {
+  const { volumeVerdict } = await import("../tools/dip-outcome-analysis.mjs");
+  const at = (volume, pnl) => ({ entryVolume: volume, realizedPnlUsdc: pnl, totalCostUsdc: 5 });
+
+  // Over 5k does better: the rule holds here.
+  assert.equal(volumeVerdict([at(1000, -1), at(20000, 3)]).verdict, "confirms");
+  // Over 5k does worse: it must say so rather than quietly passing.
+  assert.equal(volumeVerdict([at(1000, 3), at(20000, -1)]).verdict, "contradicts");
+  // 5000 itself belongs to the "over" side, or the boundary the user named is not the
+  // boundary being tested.
+  assert.equal(volumeVerdict([at(4999, -1), at(5000, 3)]).verdict, "confirms");
+
+  // The bait: with rows on only one side there is no comparison, and calling that a
+  // confirmation is how a rule gets "verified" by data that never tested it.
+  assert.equal(volumeVerdict([at(20000, 3), at(30000, 2)]).verdict, "no comparison");
+  assert.equal(volumeVerdict([at(100, 3)]).verdict, "no comparison");
+  assert.equal(volumeVerdict([]).verdict, "no comparison");
+  // A row with no volume at all cannot vote either way.
+  assert.equal(volumeVerdict([at(null, 3), at(20000, 2)]).verdict, "no comparison");
+});
+
+test("the tag tables are ordered by nominal profit and say that they overlap", () => {
+  // "ani tak moc me nezajima win rate jako nominalni hodnota zisku." Sorting by win rate or
+  // by per-dollar return would answer a question that was not asked, and a tag carried by a
+  // trade alongside two others is counted under each -- so the column does not sum to the
+  // subset and the report has to say so rather than let it be read as a partition.
+  const source = readFileSync(new URL("../tools/dip-outcome-analysis.mjs", import.meta.url), "utf8");
+  assert.match(source, /const byProfit = \[\.\.\.tagged\.entries\(\)\]\.sort\(\(a, b\) => summarise\(b\[1\]\)\.pnl - summarise\(a\[1\]\)\.pnl\);/,
+    "the tag table must be ordered by nominal P/L");
+  assert.match(source, /do not sum to the subset total/,
+    "the overlap has to be stated where the table is read");
+  assert.match(source, /both halves lose money/,
+    "a combination that loses on both sides is not evidence for the volume rule");
+});

@@ -119,6 +119,27 @@ export function volumeBucket(value) {
   return "e 100k+";
 }
 
+// The tags a trade carries, read wherever they were stored. A row with none is reported as
+// "(untagged)" rather than dropped: tags are the axis being asked about, so how much of the
+// profit has no tag at all is part of the answer.
+export function tradeTags(trade = {}) {
+  for (const field of ["polymarketTags", "tags", "polymarketCategories"]) {
+    const value = trade?.[field];
+    if (Array.isArray(value) && value.length) {
+      const tags = value.map((tag) => String(tag?.slug || tag?.label || tag || "").trim().toLowerCase())
+        .filter(Boolean);
+      if (tags.length) return [...new Set(tags)];
+    }
+  }
+  return ["(untagged)"];
+}
+
+export const PROBABILITY_EDGES = [0.2, 0.3, 0.35, 0.4, 0.45, 0.5, 0.56, 0.6, 0.7];
+export const probabilityBand = (trade) => bucketOf(num(trade?.entryPrice), PROBABILITY_EDGES);
+
+// The bar: return per dollar staked, above this, is what "profitable" means here.
+export const PROFIT_BAR = 0.05;
+
 // n, wins, P/L and P/L per dollar staked. Per-dollar matters because the stake is fixed per
 // portfolio but the cost of a trade is not: a 30% entry buys three times the shares a 90%
 // entry does, so raw P/L flatters cheap entries.
@@ -256,7 +277,163 @@ async function main() {
       (trade) => bucketOf(num(trade.entryPrice), [0.2, 0.3, 0.35, 0.4, 0.45, 0.5, 0.56, 0.6, 0.7])));
     printTable("ALL resolved, by market shape", groupBy(everything, (trade) => trade.shape));
     printTable("ALL resolved, by entry volume", groupBy(everything, (trade) => volumeBucket(trade.entryVolume)));
+
+    profitableBreakdown(everything);
   }
+}
+
+// ---------------------------------------------------------------------------------------
+// The profitable subset, by tag.
+//
+// Asked for: "ted jen ty ziskove rozdel po tagach. ani tak moc me nezajima win rate jako
+// nominalni hodnota zisku. uvazuj jen ty probability a typy trhu, kde je zisk nad 5% ...
+// jako zasadni take vidim to, aby volume bylo nad 5k. zjisti, jestli se to u vsech
+// kombinaci potvrdi."
+//
+// The 5% bar is applied to buckets COMPUTED from this run, never to a list typed in here:
+// the point of re-running this is that the answer can move, and a hard-coded band would
+// keep reporting last week's one.
+//
+// Ordered by NOMINAL P/L throughout, because that is what was asked for. Win rate is still
+// printed -- a tag that makes its money from one outlier and a tag that grinds it out are
+// different propositions and the column is how you tell them apart -- but nothing is sorted
+// by it.
+export function qualifyingBuckets(rows, keyOf) {
+  const keep = new Set();
+  const rejected = [];
+  for (const [label, bucket] of groupBy(rows, keyOf)) {
+    const s = summarise(bucket);
+    if (s.perDollar != null && s.perDollar > PROFIT_BAR) keep.add(label);
+    else rejected.push([label, s]);
+  }
+  return { keep, rejected };
+}
+
+// Does "volume over 5k" hold here? Answered as a comparison rather than a threshold test,
+// because a combination where BOTH halves lose money is not evidence for the rule -- it is
+// evidence against the combination.
+export function volumeVerdict(rows) {
+  const under = rows.filter((row) => row.entryVolume != null && row.entryVolume < 5000);
+  const over = rows.filter((row) => row.entryVolume != null && row.entryVolume >= 5000);
+  if (!under.length || !over.length) return { verdict: "no comparison", under, over };
+  const u = summarise(under);
+  const o = summarise(over);
+  return {
+    verdict: o.perDollar > u.perDollar ? "confirms" : "contradicts",
+    under: u,
+    over: o,
+  };
+}
+
+function printVolumeCheck(title, groups) {
+  console.log(`\n   ${title}`);
+  console.log("      combination                    <5k  n   per $      >=5k  n   per $     verdict");
+  let confirms = 0;
+  let contradicts = 0;
+  let silent = 0;
+  for (const [label, rows] of [...groups.entries()]
+    .sort((a, b) => summarise(b[1]).pnl - summarise(a[1]).pnl)) {
+    const check = volumeVerdict(rows);
+    if (check.verdict === "no comparison") {
+      silent += 1;
+      console.log(`      ${label.padEnd(30)}  ${String(check.under.length ?? 0).padStart(3)} rows one side only`);
+      continue;
+    }
+    if (check.verdict === "confirms") confirms += 1; else contradicts += 1;
+    console.log(`      ${label.padEnd(30)}  ${String(check.under.n).padStart(3)}  ${pct(check.under.perDollar)}`
+      + `       ${String(check.over.n).padStart(3)}  ${pct(check.over.perDollar)}    ${check.verdict}`);
+  }
+  console.log(`      -> ${confirms} confirm, ${contradicts} contradict, ${silent} cannot be compared`);
+  return { confirms, contradicts, silent };
+}
+
+function profitableBreakdown(everything) {
+  console.log("\n\n========================================================================");
+  console.log("== THE PROFITABLE SUBSET, BY TAG");
+  console.log("========================================================================");
+  console.log("   Ordered by nominal P/L. The 5% bar is computed from this run's own");
+  console.log("   buckets, so re-running it can change which bands and shapes qualify.");
+
+  const bands = qualifyingBuckets(everything, probabilityBand);
+  const shapes = qualifyingBuckets(everything, (trade) => trade.shape);
+
+  console.log("\n   entry-probability bands clearing 5% per dollar:");
+  console.log(`      kept     ${[...bands.keep].sort().join(", ") || "(none)"}`);
+  console.log(`      dropped  ${bands.rejected.map(([label, s]) => `${label} ${pct(s.perDollar)}`).join(", ") || "(none)"}`);
+  console.log("   market shapes clearing 5% per dollar:");
+  console.log(`      kept     ${[...shapes.keep].sort().join(", ") || "(none)"}`);
+  console.log(`      dropped  ${shapes.rejected.map(([label, s]) => `${label} ${pct(s.perDollar)}`).join(", ") || "(none)"}`);
+
+  const subset = everything.filter((trade) =>
+    bands.keep.has(probabilityBand(trade)) && shapes.keep.has(trade.shape));
+  const whole = summarise(everything);
+  const kept = summarise(subset);
+  console.log(`\n   ${kept.n} of ${whole.n} resolved trades survive both filters.`);
+  console.log(`   P/L ${money(kept.pnl)} of ${money(whole.pnl)} total, ${pct(kept.perDollar)} per dollar`
+    + ` (all trades: ${pct(whole.perDollar)})`);
+  if (!subset.length) {
+    console.log("   Nothing survives, so there is nothing to break down.");
+    return;
+  }
+
+  // One row per (trade, tag): a trade carrying three tags is counted under each of them, so
+  // the P/L column sums to more than the subset total. Stated rather than silently true --
+  // reading these as a partition of the profit would double-count.
+  const tagged = new Map();
+  for (const trade of subset) {
+    for (const tag of tradeTags(trade)) {
+      if (!tagged.has(tag)) tagged.set(tag, []);
+      tagged.get(tag).push(trade);
+    }
+  }
+  console.log(`\n   ${tagged.size} distinct tag(s). A trade with several tags appears under each,`);
+  console.log("   so these columns overlap and do not sum to the subset total.");
+  console.log("\n   tag                      n   won    win%      P/L    per trade   per $ staked");
+  const byProfit = [...tagged.entries()].sort((a, b) => summarise(b[1]).pnl - summarise(a[1]).pnl);
+  for (const [tag, rows] of byProfit) {
+    const s = summarise(rows);
+    console.log(`   ${tag.padEnd(22)} ${String(s.n).padStart(3)}  ${String(s.wins).padStart(4)}`
+      + `  ${pct(s.winRate)}  ${money(s.pnl)}     ${money(s.perTrade)}      ${pct(s.perDollar)}`
+      + `${s.n < 10 ? "  (thin)" : ""}`);
+  }
+
+  // The tags worth breaking down further. Below this there is no shape of a distribution to
+  // see, only individual trades wearing a table's clothes.
+  const worth = byProfit.filter(([, rows]) => rows.length >= 8).slice(0, 6);
+  for (const [tag, rows] of worth) {
+    const s = summarise(rows);
+    console.log(`\n\n   --- ${tag} : ${s.n} trades, P/L ${money(s.pnl)}, ${pct(s.perDollar)} per dollar`);
+    printTable(`${tag}: by entry probability`, groupBy(rows, probabilityBand));
+    printTable(`${tag}: by market shape`, groupBy(rows, (trade) => trade.shape));
+    printTable(`${tag}: by entry volume`, groupBy(rows, (trade) => volumeBucket(trade.entryVolume)));
+  }
+
+  console.log("\n\n========================================================================");
+  console.log("== DOES 'VOLUME OVER 5k' HOLD IN EVERY COMBINATION?");
+  console.log("========================================================================");
+  console.log("   Within the profitable subset. Each line compares the SAME combination");
+  console.log("   below and at/above 5k, so a line only votes when it has both halves.");
+
+  const totals = [];
+  totals.push(printVolumeCheck("by tag", tagged));
+  totals.push(printVolumeCheck("by entry probability", groupBy(subset, probabilityBand)));
+  totals.push(printVolumeCheck("by market shape", groupBy(subset, (trade) => trade.shape)));
+  const pairs = new Map();
+  for (const trade of subset) {
+    for (const tag of tradeTags(trade)) {
+      const key = `${tag} / ${trade.shape}`;
+      if (!pairs.has(key)) pairs.set(key, []);
+      pairs.get(key).push(trade);
+    }
+  }
+  totals.push(printVolumeCheck("by tag x market shape", new Map(
+    [...pairs.entries()].filter(([, rows]) => rows.length >= 6))));
+
+  const confirms = totals.reduce((sum, row) => sum + row.confirms, 0);
+  const contradicts = totals.reduce((sum, row) => sum + row.contradicts, 0);
+  console.log(`\n   ACROSS EVERY COMPARABLE COMBINATION: ${confirms} confirm, ${contradicts} contradict.`);
+  console.log("   A combination where both halves lose money is counted wherever it falls but");
+  console.log("   is not evidence for the rule -- it is evidence against the combination.");
 }
 
 // Only when run as a command. Importing this file to test its arithmetic must not fire a
