@@ -262,3 +262,39 @@ test("the tag tables are ordered by nominal profit and say that they overlap", (
   assert.match(source, /both halves lose money/,
     "a combination that loses on both sides is not evidence for the volume rule");
 });
+
+test("a trade keeps the market's tags, so the profit can be attributed to them", async () => {
+  // The finding behind this: asked to break the profitable trades down BY TAG, all 100 of
+  // them came back as "(untagged)". Not because the markets had no tags -- because the trade
+  // stored `tags: best.tags` alone, while a scraped row carries its real Polymarket tags
+  // under polymarketTags. Same shape as the opening probability before it: the attribute the
+  // analysis needs is the one the trade did not record.
+  const bot = await import("../tools/paper-trading-bot.mjs");
+  const { tradeTags } = await import("../tools/dip-outcome-analysis.mjs");
+  const price = 0.53;
+  const candidate = {
+    tokenId: "t1", question: "Counter-Strike: M80 vs GamerLegion", outcome: "GamerLegion",
+    marketProbability: price, marketPrice: price, aiProbability: price,
+    bestBid: price, bestAsk: price, spread: 0, volumeUsdc: 12000,
+    polymarketTags: ["Esports", "CS2"], riskCategory: "esports",
+    daysToResolution: 1 / 24, feeRate: 0, feesEnabled: false,
+  };
+  const trade = bot.paperTradeFromCandidate(candidate, { id: "dip70", stakeUsdc: 5 }, "2026-09-26", 5);
+
+  assert.ok(Array.isArray(trade.tagSlugs) && trade.tagSlugs.length,
+    "the trade must carry the market's tags, not just whichever field happened to be set");
+  assert.ok(trade.tagSlugs.includes("esports"), `expected esports in ${JSON.stringify(trade.tagSlugs)}`);
+  assert.ok(trade.tagSlugs.includes("cs2"));
+
+  // And the analysis has to read them, or storing them changes nothing.
+  assert.ok(tradeTags(trade).includes("cs2"),
+    "the breakdown must read the field the trade actually writes");
+
+  // A market genuinely without tags still reports as untagged rather than disappearing:
+  // how much profit carries no tag is part of the answer.
+  const bare = bot.paperTradeFromCandidate(
+    { ...candidate, polymarketTags: undefined, tags: undefined, riskCategory: undefined },
+    { id: "dip70", stakeUsdc: 5 }, "2026-09-26", 5,
+  );
+  assert.deepEqual(tradeTags(bare), ["(untagged)"]);
+});

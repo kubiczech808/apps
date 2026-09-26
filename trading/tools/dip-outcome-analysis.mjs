@@ -123,7 +123,7 @@ export function volumeBucket(value) {
 // "(untagged)" rather than dropped: tags are the axis being asked about, so how much of the
 // profit has no tag at all is part of the answer.
 export function tradeTags(trade = {}) {
-  for (const field of ["polymarketTags", "tags", "polymarketCategories"]) {
+  for (const field of ["tagSlugs", "polymarketTags", "tags", "polymarketCategories"]) {
     const value = trade?.[field];
     if (Array.isArray(value) && value.length) {
       const tags = value.map((tag) => String(tag?.slug || tag?.label || tag || "").trim().toLowerCase())

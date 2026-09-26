@@ -9135,6 +9135,21 @@ function paperTradeFromCandidate(best, strategy, today, stake) {
     outcome: best.outcome,
     tokenId: best.tokenId,
     tags: best.tags,
+    // The market's tags as every filter in this file reads them, kept WITH the trade.
+    //
+    // `tags` above is one field of several; a scraped row carries its real Polymarket tags
+    // under polymarketTags, and those were dropped at open time. Asked for a breakdown of
+    // the profitable trades BY TAG, the answer was that all 100 of them were untagged --
+    // not because the markets had no tags, but because the trade never kept them. Same
+    // shape as the opening probability: the attribute the analysis needs is the one the
+    // trade did not record.
+    //
+    // rowTagSlugs is the reader the tag filters themselves use, so what is stored here is
+    // what "this portfolio includes/excludes tag X" was actually decided on.
+    // Spread, because rowTagSlugs returns a Set and a Set serialises to {} -- the trade
+    // would have been published carrying an empty object where its tags should be, which is
+    // indistinguishable from the untagged state this exists to fix.
+    tagSlugs: [...rowTagSlugs(best)],
     riskCategory: best.riskCategory,
     riskPrimaryEntity: best.riskPrimaryEntity,
     riskGroupKeys: best.riskGroupKeys,
