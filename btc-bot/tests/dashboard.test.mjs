@@ -334,6 +334,17 @@ test('asset tickers open a timeframe price chart with supply and demand zones', 
   assert.match(js, /candidate\.directionEligible && candidate\.pullbackEligible/)
 })
 
+test('asset chart selection is represented in the URL and restored from browser history', () => {
+  assert.match(js, /const ASSET_CHART_URL_ASSET = 'asset'/)
+  assert.match(js, /const ASSET_CHART_URL_TIMEFRAME = 'timeframe'/)
+  assert.match(js, /new URLSearchParams\(window\.location\.search\)/)
+  assert.match(js, /url\.searchParams\.set\(ASSET_CHART_URL_ASSET, selectedAssetChart\.symbol\)/)
+  assert.match(js, /url\.searchParams\.set\(ASSET_CHART_URL_TIMEFRAME, selectedAssetChart\.timeframeId\)/)
+  assert.match(js, /window\.history\[replace \? 'replaceState' : 'pushState'\]/)
+  assert.match(js, /window\.addEventListener\('popstate'/)
+  assert.match(js, /restoreAssetChartSelectionFromUrl\(\)/)
+})
+
 test('active price-action setups retain their entry and target zones in the table and chart', () => {
   assert.match(js, /const setupOwnersForEntry = \(entry\) =>/)
   assert.match(js, /\[owner\.entryZone, owner\.tp2Zone\]/)

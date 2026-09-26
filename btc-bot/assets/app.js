@@ -20,6 +20,8 @@ const SATS_PER_BTC = 1e8
 const DECISION_SIGNAL_STATES = new Set(['met', 'unmet', 'neutral'])
 const SVG_NS = 'http://www.w3.org/2000/svg'
 const SVG_TAGS = new Set(['circle', 'g', 'line', 'path', 'rect', 'svg', 'text', 'title'])
+const ASSET_CHART_URL_ASSET = 'asset'
+const ASSET_CHART_URL_TIMEFRAME = 'timeframe'
 
 const $ = (id) => document.getElementById(id)
 
@@ -36,6 +38,41 @@ let assetChartPan = { key: null, enabled: false, active: null }
 let selectedChartZone = null
 let selectedStrategyPanel = 'filled-zones'
 let selectedStrategyView = 'price-action'
+
+const assetChartUrlSelection = () => {
+  const params = new URLSearchParams(window.location.search)
+  const symbol = params.get(ASSET_CHART_URL_ASSET)?.trim().toUpperCase() || null
+  const timeframeId = params.get(ASSET_CHART_URL_TIMEFRAME)?.trim().toLowerCase() || null
+  return { symbol, timeframeId }
+}
+
+const restoreAssetChartSelectionFromUrl = () => {
+  const selection = assetChartUrlSelection()
+  selectedAssetChart = {
+    symbol: selection.symbol ?? selectedAssetChart.symbol,
+    timeframeId: selection.timeframeId ?? selectedAssetChart.timeframeId,
+  }
+  if (selection.timeframeId) priceActionDecisionTimeframe = selection.timeframeId
+  return selectedAssetChart
+}
+
+const persistAssetChartSelectionToUrl = ({ replace = false } = {}) => {
+  if (!selectedAssetChart.symbol || !selectedAssetChart.timeframeId) return
+  const url = new URL(window.location.href)
+  const current = {
+    symbol: url.searchParams.get(ASSET_CHART_URL_ASSET),
+    timeframeId: url.searchParams.get(ASSET_CHART_URL_TIMEFRAME),
+  }
+  if (current.symbol === selectedAssetChart.symbol && current.timeframeId === selectedAssetChart.timeframeId) return
+
+  url.searchParams.set(ASSET_CHART_URL_ASSET, selectedAssetChart.symbol)
+  url.searchParams.set(ASSET_CHART_URL_TIMEFRAME, selectedAssetChart.timeframeId)
+  window.history[replace ? 'replaceState' : 'pushState'](
+    { ...window.history.state, assetChart: { ...selectedAssetChart } },
+    '',
+    `${url.pathname}${url.search}${url.hash}`
+  )
+}
 
 // ── formatting ────────────────────────────────────────────────────────────
 
@@ -843,6 +880,7 @@ const assetTickerButton = (symbol, timeframeId = priceActionDecisionTimeframe) =
     selectedAssetChart = { symbol, timeframeId }
     resetAssetChartViewport(timeframeId)
     selectedChartZone = null
+    persistAssetChartSelectionToUrl()
     renderAssetChart()
     $('asset-chart-card')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
   }
@@ -867,6 +905,7 @@ const renderPriceActionDecisionTabs = (columns) => {
       selectedAssetChart = { symbol: selectedAssetChart.symbol, timeframeId: column.id }
       resetAssetChartViewport(column.id)
       selectedChartZone = null
+      persistAssetChartSelectionToUrl()
       renderDecision()
       renderAssetChart()
     }
@@ -1397,6 +1436,7 @@ const renderAssetChart = () => {
     return
   }
   selectedAssetChart = { symbol: asset.symbol, timeframeId }
+  persistAssetChartSelectionToUrl({ replace: true })
   card.hidden = false
   title.textContent = `${asset.symbol} · ${column?.label || timeframeId.toUpperCase()}`
   renderAssetZoneDetails(zoneDetails, asset, asset.trends?.[timeframeId], timeframeId)
@@ -1417,6 +1457,7 @@ const renderAssetChart = () => {
       priceActionDecisionTimeframe = chartColumn.id
       resetAssetChartViewport(chartColumn.id)
       selectedChartZone = null
+      persistAssetChartSelectionToUrl()
       renderDecision()
       renderAssetChart()
     }
@@ -3327,7 +3368,17 @@ const start = async () => {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
+  restoreAssetChartSelectionFromUrl()
   setStrategyView(getStrategyView())
+
+  window.addEventListener('popstate', () => {
+    const selection = restoreAssetChartSelectionFromUrl()
+    if (!state) return
+    resetAssetChartViewport(selection.timeframeId)
+    selectedChartZone = null
+    renderDecision()
+    renderAssetChart()
+  })
 
   $('gate-form').addEventListener('submit', async (event) => {
     event.preventDefault()
