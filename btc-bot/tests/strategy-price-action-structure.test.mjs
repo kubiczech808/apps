@@ -23,6 +23,7 @@ import {
   PRICE_ACTION_TIMEFRAMES,
   reviewOpenPosition,
 } from '../src/strategy-price-action-structure.mjs'
+import { EXTERNAL_PIVOT_SCHEMA } from '../src/external-trends.mjs'
 import { candle, HOUR, START, zigzag } from './helpers.mjs'
 
 test('price-action structure classifies trend from confirmed swings', () => {
@@ -236,6 +237,7 @@ test('external active range does not combine an unpaired newer pivot with an old
 test('an available Twelve Data key immediately replaces a cached missing-key result', () => {
   const previous = {
     hourBucket: 100,
+    pivotSchemaVersion: EXTERNAL_PIVOT_SCHEMA,
     failures: ['Twelve Data: TWELVE_DATA_API_KEY není nastaven'],
   }
 
@@ -243,8 +245,9 @@ test('an available Twelve Data key immediately replaces a cached missing-key res
   assert.equal(canReuseExternalTrendReference({ previous, hourBucket: 100, apiKey: '' }), true)
   assert.equal(canReuseExternalTrendReference({ previous, hourBucket: 101, apiKey: 'new-key' }), false)
 
-  const rateLimited = { hourBucket: 100, failures: ['Twelve Data: Twelve Data HTTP 429'] }
+  const rateLimited = { hourBucket: 100, pivotSchemaVersion: EXTERNAL_PIVOT_SCHEMA, failures: ['Twelve Data: Twelve Data HTTP 429'] }
   assert.equal(canReuseExternalTrendReference({ previous: rateLimited, hourBucket: 100, apiKey: 'new-key' }), false)
+  assert.equal(canReuseExternalTrendReference({ previous: { hourBucket: 100, pivotSchemaVersion: EXTERNAL_PIVOT_SCHEMA - 1, failures: [] }, hourBucket: 100, apiKey: 'new-key' }), false)
 })
 
 test('a fresh matrix does not mask an FX key that has just become available', () => {

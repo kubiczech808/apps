@@ -12,6 +12,10 @@ export const EXTERNAL_TREND_METHOD = 'EMA 20/50 + zavírací cena'
 export const EXTERNAL_TREND_HOURLY_LIMIT = 5000
 export const EXTERNAL_EMA_CHART_POINT_LIMIT = 600
 export const EXTERNAL_PIVOT_METHOD = 'Potvrzené 10-svíčkové pivoty z externího OHLC'
+// Bump this whenever pivot geometry or confirmation changes. Cached external
+// references are executable strategy input, so a same-hour cache must never
+// preserve the old interpretation after such a change.
+export const EXTERNAL_PIVOT_SCHEMA = 2
 export const EXTERNAL_PIVOT_PERIOD = 10
 export const EXTERNAL_PIVOT_FALLBACK_PERIOD = 5
 export const EXTERNAL_PIVOT_OUTPUTSIZE = 2000
@@ -107,13 +111,16 @@ const alternatingExternalPivots = (pivots = []) => {
   for (const sourcePivot of [...pivots]
     .filter((item) => item?.kind && Number.isFinite(item?.time))
     .sort((left, right) => left.time - right.time)) {
-    const price = numberOrNull(sourcePivot?.price)
+    // Older published references kept the closing value in price and the wick
+    // in extreme. Structural levels always live at the wick, while close only
+    // confirms the break, so honour the explicit extreme whenever it exists.
+    const price = numberOrNull(sourcePivot?.extreme) ?? numberOrNull(sourcePivot?.price)
     if (!Number.isFinite(price)) continue
     const pivot = {
       ...sourcePivot,
       price,
       close: numberOrNull(sourcePivot?.close),
-      extreme: numberOrNull(sourcePivot?.extreme) ?? price,
+      extreme: price,
     }
     const previous = alternating.at(-1)
     if (!previous || previous.kind !== pivot.kind) {
@@ -462,7 +469,8 @@ export const binancePivotPath = confirmedExternalPivotPath
 const pivotBucket = (timeframeId, now) => Math.floor(now / EXTERNAL_PIVOT_INTERVALS[timeframeId].ms)
 
 export const canReuseExternalPivotBucket = ({ previous, assets = [], timeframeId, bucket }) =>
-  previous?.pivots?.buckets?.[timeframeId] === bucket &&
+  previous?.pivots?.schemaVersion === EXTERNAL_PIVOT_SCHEMA &&
+  previous.pivots.buckets?.[timeframeId] === bucket &&
   assets.every((asset) => previous.pivots.assets?.[asset.symbol]?.[timeframeId] != null)
 
 const pivotReference = ({
@@ -489,7 +497,7 @@ const pivotReference = ({
 })
 
 const buildExternalPivotReferences = async ({ assets, hourly = {}, previous = null, now }) => {
-  const result = { assets: {}, failures: [], buckets: {} }
+  const result = { schemaVersion: EXTERNAL_PIVOT_SCHEMA, assets: {}, failures: [], buckets: {} }
   for (const asset of assets) result.assets[asset.symbol] = {}
   for (const timeframeId of Object.keys(EXTERNAL_PIVOT_INTERVALS)) {
     const bucket = pivotBucket(timeframeId, now)
@@ -578,6 +586,7 @@ export const buildExternalTrendReference = async ({
   }
 
   return {
+    pivotSchemaVersion: EXTERNAL_PIVOT_SCHEMA,
     generatedAt: new Date(now).toISOString(),
     hourBucket: Math.floor(now / HOUR_MS),
     method: EXTERNAL_TREND_METHOD,

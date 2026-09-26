@@ -1,10 +1,10 @@
 import { aggregate, HOUR_MS } from './candles.mjs'
 import { ceilPrice, floorPrice, normalizeCandlePrices, roundPrice } from './price.mjs'
-import { buildExternalTrendReference } from './external-trends.mjs'
+import { buildExternalTrendReference, EXTERNAL_PIVOT_SCHEMA } from './external-trends.mjs'
 import { buildFvgSupplyDemandZones, candleSignal, marketStructure } from './priceaction.mjs'
 
 export const PRICE_ACTION_STRUCTURE_ID = 'price-action-structure-v1'
-export const PRICE_ACTION_MATRIX_SCHEMA = 52
+export const PRICE_ACTION_MATRIX_SCHEMA = 53
 export const PRICE_ACTION_CHART_CANDLE_LIMITS = {
   '1h': 8760,
   '4h': 2190,
@@ -82,6 +82,7 @@ export const aggregateHourlyTimeframeCandles = ({ candles, timeframeId }) => {
 // hour: it would hide newly available Twelve Data pivots until the next bucket.
 export const canReuseExternalTrendReference = ({ previous, hourBucket, apiKey }) => {
   if (previous?.hourBucket !== hourBucket) return false
+  if (previous?.pivotSchemaVersion !== EXTERNAL_PIVOT_SCHEMA) return false
   if (!apiKey) return true
   return !previous.failures?.some((failure) => {
     const message = String(failure)

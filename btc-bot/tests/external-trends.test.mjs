@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { canReuseExternalPivotBucket, classifyExternalPivotPath, classifyExternalTrend, confirmedExternalPivotPath, fetchTwelveDataFxHourly, fetchTwelveDataFxPivots } from '../src/external-trends.mjs'
+import { EXTERNAL_PIVOT_SCHEMA, canReuseExternalPivotBucket, classifyExternalPivotPath, classifyExternalTrend, confirmedExternalPivotPath, fetchTwelveDataFxHourly, fetchTwelveDataFxPivots } from '../src/external-trends.mjs'
 import { HOUR, START } from './helpers.mjs'
 
 const values = (start, count, step = 0.001) => Array.from({ length: count }, (_, index) => {
@@ -106,6 +106,18 @@ test('external pivot path plots wicks after close confirmation and rejects a wic
   assert.equal(path.pivots.at(-1).label, 'HH')
 })
 
+test('external pivot references preserve wick geometry when old records also carry a close', () => {
+  const path = classifyExternalPivotPath([
+    { kind: 'low', price: 151, extreme: 150, close: 151, time: START },
+    { kind: 'high', price: 159, extreme: 160, close: 159, time: START + HOUR },
+  ])
+
+  assert.equal(path.pivots[0].price, 150)
+  assert.equal(path.pivots[0].extreme, 150)
+  assert.equal(path.pivots[1].price, 160)
+  assert.equal(path.pivots[1].extreme, 160)
+})
+
 test('a close through a protected HL confirms BoS and keeps the prior HH as the Fibonacci anchor', () => {
   const pivots = [
     { kind: 'low', price: 150, time: START },
@@ -176,6 +188,7 @@ test('a missing external pivot result is not kept as a valid cache entry', () =>
   const assets = [{ symbol: 'EURUSD' }]
   const previous = {
     pivots: {
+      schemaVersion: EXTERNAL_PIVOT_SCHEMA,
       buckets: { '4h': 5 },
       assets: { EURUSD: { '4h': null } },
     },
