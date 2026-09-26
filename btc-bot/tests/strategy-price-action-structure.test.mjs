@@ -139,10 +139,10 @@ test('live PA structure comes only from externally confirmed pivots', () => {
     externalPivots: {
       trend: 'down', source: 'Twelve Data', method: 'Potvrzené pivoty', timePeriod: 10,
       pivots: [
-        { kind: 'high', price: 160, time: START + HOUR },
-        { kind: 'low', price: 140, time: START + 2 * HOUR },
-        { kind: 'high', price: 155, time: START + 3 * HOUR },
-        { kind: 'low', price: 130, time: START + 4 * HOUR },
+        { kind: 'high', price: 160, close: 155, time: START + HOUR },
+        { kind: 'low', price: 140, close: 145, time: START + 2 * HOUR },
+        { kind: 'high', price: 155, close: 154, time: START + 3 * HOUR },
+        { kind: 'low', price: 130, close: 129, time: START + 4 * HOUR },
       ],
     },
   })
@@ -153,6 +153,10 @@ test('live PA structure comes only from externally confirmed pivots', () => {
   assert.equal(result.structure.source, 'external-confirmed-pivots')
   assert.equal(result.structure.activeRange.high.time, START + 3 * HOUR)
   assert.equal(result.structure.activeRange.low.time, START + 4 * HOUR)
+  assert.equal(result.structure.activeRange.high.price, 155)
+  assert.equal(result.structure.activeRange.high.close, 154)
+  assert.equal(result.structure.activeRange.low.price, 130)
+  assert.equal(result.structure.activeRange.low.close, 129)
   assert.ok(result.structure.activeRange.high.time < result.structure.activeRange.low.time)
   assert.equal(result.structure.chartPivots.length, 2)
   assert.deepEqual(

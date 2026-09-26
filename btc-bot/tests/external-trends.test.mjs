@@ -91,17 +91,19 @@ test('external pivot path distinguishes a down sequence from an internal rebound
   assert.deepEqual(down.pivots.map((pivot) => pivot.label), ['H', 'L', 'LH', 'LL'])
 })
 
-test('external pivot path uses the confirmed close rather than a wick sweep', () => {
+test('external pivot path plots wicks after close confirmation and rejects a wick-only sweep', () => {
   const path = classifyExternalPivotPath([
-    { kind: 'high', price: 120, close: 110, time: START },
-    { kind: 'low', price: 100, close: 100, time: START + HOUR },
-    { kind: 'high', price: 130, close: 105, time: START + 2 * HOUR },
-    { kind: 'low', price: 95, close: 102, time: START + 3 * HOUR },
+    { kind: 'high', price: 120, close: 118, time: START },
+    { kind: 'low', price: 100, close: 101, time: START + HOUR },
+    { kind: 'high', price: 130, close: 119, time: START + 2 * HOUR },
+    { kind: 'low', price: 98, close: 97, time: START + 3 * HOUR },
+    { kind: 'high', price: 125, close: 122, time: START + 4 * HOUR },
   ])
 
   assert.equal(path.trend, 'flat')
-  assert.deepEqual(path.pivots.map((pivot) => pivot.price), [110, 100, 105, 102])
-  assert.deepEqual(path.pivots.map((pivot) => pivot.label), ['H', 'L', 'LH', 'HL'])
+  assert.deepEqual(path.pivots.map((pivot) => pivot.price), [120, 98, 125])
+  assert.equal(path.pivots.some((pivot) => pivot.price === 130), false)
+  assert.equal(path.pivots.at(-1).label, 'HH')
 })
 
 test('Twelve Data OHLC produces a confirmed independent pivot path without the premium indicator', () => {

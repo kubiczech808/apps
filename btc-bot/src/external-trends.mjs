@@ -99,25 +99,20 @@ export const fetchTwelveDataFxHourly = async ({
 
 const pivotValue = (value) => Number(value) === 1
 
-// A wick can test a former swing without changing the structure. Keep the
-// source candle's extreme for diagnostics, but use its completed close for
-// the pivot that drives labels, the chart path and every live decision.
-const structuralPivotPrice = (pivot) => {
-  const close = numberOrNull(pivot?.close)
-  return Number.isFinite(close) ? close : numberOrNull(pivot?.price)
-}
-
-const normalizeExternalPivots = (pivots = []) => {
+// Pivot geometry always comes from the candle wick. A completed close only
+// confirms whether a wick that extends a prior swing is a structural break.
+const alternatingExternalPivots = (pivots = []) => {
   const alternating = []
   for (const sourcePivot of [...pivots]
     .filter((item) => item?.kind && Number.isFinite(item?.time))
     .sort((left, right) => left.time - right.time)) {
-    const price = structuralPivotPrice(sourcePivot)
+    const price = numberOrNull(sourcePivot?.price)
     if (!Number.isFinite(price)) continue
     const pivot = {
       ...sourcePivot,
       price,
-      extreme: numberOrNull(sourcePivot?.extreme) ?? numberOrNull(sourcePivot?.price),
+      close: numberOrNull(sourcePivot?.close),
+      extreme: numberOrNull(sourcePivot?.extreme) ?? price,
     }
     const previous = alternating.at(-1)
     if (!previous || previous.kind !== pivot.kind) {
@@ -127,14 +122,40 @@ const normalizeExternalPivots = (pivots = []) => {
     const replaces = pivot.kind === 'high' ? pivot.price > previous.price : pivot.price < previous.price
     if (replaces) alternating[alternating.length - 1] = pivot
   }
+  return alternating
+}
+
+const closeBreaksPreviousWick = (pivot, previous) => {
+  const close = numberOrNull(pivot?.close)
+  if (!Number.isFinite(close)) {
+    return pivot.kind === 'high' ? pivot.price > previous.price : pivot.price < previous.price
+  }
+  return pivot.kind === 'high' ? close > previous.price : close < previous.price
+}
+
+const normalizeExternalPivots = (pivots = []) => {
+  const candidates = alternatingExternalPivots(pivots)
+  const accepted = []
+  const previousAcceptedByKind = { high: null, low: null }
+  for (const pivot of candidates) {
+    const previous = previousAcceptedByKind[pivot.kind]
+    const extendsPrevious = previous && (pivot.kind === 'high'
+      ? pivot.price > previous.price
+      : pivot.price < previous.price)
+    if (extendsPrevious && !closeBreaksPreviousWick(pivot, previous)) continue
+    accepted.push(pivot)
+    previousAcceptedByKind[pivot.kind] = pivot
+  }
+
+  const alternating = alternatingExternalPivots(accepted)
   const previousByKind = { high: null, low: null }
   return alternating.map((pivot) => {
     const previous = previousByKind[pivot.kind]
     const label = !previous
       ? pivot.kind === 'high' ? 'H' : 'L'
       : pivot.kind === 'high'
-        ? pivot.price > previous.price ? 'HH' : 'LH'
-        : pivot.price > previous.price ? 'HL' : 'LL'
+        ? closeBreaksPreviousWick(pivot, previous) ? 'HH' : 'LH'
+        : closeBreaksPreviousWick(pivot, previous) ? 'LL' : 'HL'
     previousByKind[pivot.kind] = pivot
     return { ...pivot, label }
   })
@@ -163,10 +184,10 @@ const parseTwelvePivotValues = (values) => (Array.isArray(values) ? values : [])
     if (!Number.isFinite(time)) return []
     const pivots = []
     if (pivotValue(value?.pivot_point_h) && Number.isFinite(high) && Number.isFinite(close)) {
-      pivots.push({ kind: 'high', price: close, close, extreme: high, time })
+      pivots.push({ kind: 'high', price: high, close, time })
     }
     if (pivotValue(value?.pivot_point_l) && Number.isFinite(low) && Number.isFinite(close)) {
-      pivots.push({ kind: 'low', price: close, close, extreme: low, time })
+      pivots.push({ kind: 'low', price: low, close, time })
     }
     return pivots
   })
@@ -277,10 +298,10 @@ const confirmedPivotCandidates = (candles, period) => {
     const maxHigh = Math.max(...window.map((item) => item.high))
     const minLow = Math.min(...window.map((item) => item.low))
     if (candle.high === maxHigh && window.filter((item) => item.high === maxHigh).length === 1) {
-      candidates.push({ kind: 'high', price: candle.close, close: candle.close, extreme: candle.high, time: candle.time })
+      candidates.push({ kind: 'high', price: candle.high, close: candle.close, time: candle.time })
     }
     if (candle.low === minLow && window.filter((item) => item.low === minLow).length === 1) {
-      candidates.push({ kind: 'low', price: candle.close, close: candle.close, extreme: candle.low, time: candle.time })
+      candidates.push({ kind: 'low', price: candle.low, close: candle.close, time: candle.time })
     }
   }
   return candidates

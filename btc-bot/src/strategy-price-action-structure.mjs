@@ -4,7 +4,7 @@ import { buildExternalTrendReference } from './external-trends.mjs'
 import { buildFvgSupplyDemandZones, candleSignal, marketStructure } from './priceaction.mjs'
 
 export const PRICE_ACTION_STRUCTURE_ID = 'price-action-structure-v1'
-export const PRICE_ACTION_MATRIX_SCHEMA = 49
+export const PRICE_ACTION_MATRIX_SCHEMA = 50
 export const PRICE_ACTION_CHART_CANDLE_LIMITS = {
   '1h': 8760,
   '4h': 2190,
@@ -1822,7 +1822,9 @@ const externalPivotLeg = (pivots, kind) => {
     previous,
     current,
     label: current.label ?? null,
-    confirmedBreak: Boolean(previous && ((kind === 'high' && current.price > previous.price) || (kind === 'low' && current.price < previous.price))),
+    confirmedBreak: Boolean(previous && (Number.isFinite(current.close)
+      ? kind === 'high' ? current.close > previous.price : current.close < previous.price
+      : kind === 'high' ? current.price > previous.price : current.price < previous.price)),
     referencePrice: previous?.price ?? null,
     confirmationClose: current.close ?? null,
     changePct: previous?.price ? ((current.price / previous.price) - 1) * 100 : null,
@@ -1891,11 +1893,14 @@ export const classifyExternalStructure = ({
   const previousByKind = { high: null, low: null }
   const pivots = sourcePivots.map((pivot) => {
     const previous = previousByKind[pivot.kind]
+    const closeBreaksPrevious = previous && (Number.isFinite(pivot.close)
+      ? pivot.kind === 'high' ? pivot.close > previous.price : pivot.close < previous.price
+      : pivot.kind === 'high' ? pivot.price > previous.price : pivot.price < previous.price)
     const label = pivot.label ?? (!previous
       ? pivot.kind === 'high' ? 'H' : 'L'
       : pivot.kind === 'high'
-        ? pivot.price > previous.price ? 'HH' : 'LH'
-        : pivot.price > previous.price ? 'HL' : 'LL')
+        ? closeBreaksPrevious ? 'HH' : 'LH'
+        : closeBreaksPrevious ? 'LL' : 'HL')
     previousByKind[pivot.kind] = pivot
     return { ...pivot, label }
   })
