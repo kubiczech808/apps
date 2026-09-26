@@ -370,26 +370,6 @@ document.querySelectorAll("[data-onboarding-select-all]").forEach((toggle) => {
   syncToggle();
 });
 
-document.querySelectorAll("[data-allbiz-source-select]").forEach((select) => {
-  const form = select.closest("form");
-  const standardLocation = form?.querySelector("[data-standard-location-fields]");
-  const allbizState = form?.querySelector("[data-allbiz-state-fields]");
-  if (!form || !standardLocation || !allbizState) return;
-  const syncAllbizFields = () => {
-    const isAllbiz = select.value === "allbiz_us";
-    standardLocation.hidden = isAllbiz;
-    allbizState.hidden = !isAllbiz;
-    standardLocation.querySelectorAll("input, select").forEach((field) => {
-      field.disabled = isAllbiz;
-    });
-    allbizState.querySelectorAll("select").forEach((field) => {
-      field.disabled = !isAllbiz;
-    });
-  };
-  select.addEventListener("change", syncAllbizFields);
-  syncAllbizFields();
-});
-
 document.querySelectorAll("[data-gmail-preset]").forEach((button) => {
   button.addEventListener("click", () => {
     // Onboarding ma formular v karte, konfigurace v dialogu - tlacitko funguje v obou.

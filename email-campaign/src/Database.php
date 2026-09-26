@@ -83,8 +83,8 @@ final class Database
         $this->safeMigrationStep(fn() => $this->ensureColumn('scraping_jobs', 'discovery_done', 'INTEGER NOT NULL DEFAULT 0'), 'scraping_jobs.discovery_done');
         $this->safeMigrationStep(fn() => $this->ensureColumn('scraping_jobs', 'location_scope', $this->textColumn("'cela_cr'")), 'scraping_jobs.location_scope');
         $this->safeMigrationStep(fn() => $this->ensureColumn('scraping_jobs', 'target_location', $this->textColumn("''")), 'scraping_jobs.target_location');
-        // Zdroje s vlastnim cleneni dotazu (AllBiz: stat + stranka) si zde drzi
-        // lehky kurzor. Neplete se s current_page, ktery zustava citatelny v logu.
+        // Zdroje s vlastnim cleneni dotazu si zde mohou drzet lehky kurzor.
+        // Neplete se s current_page, ktery zustava citatelny v logu.
         $this->safeMigrationStep(fn() => $this->ensureColumn('scraping_jobs', 'source_cursor', $this->textColumn("''")), 'scraping_jobs.source_cursor');
         $this->safeMigrationStep(fn() => $this->ensureColumn('scraping_jobs', 'details_archived_at', $this->textColumn("''")), 'scraping_jobs.details_archived_at');
         $this->safeMigrationStep(fn() => $this->ensureColumn('import_runs', 'details_archived_at', $this->textColumn("''")), 'import_runs.details_archived_at');

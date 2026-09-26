@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-const APP_VERSION = '2026-07-19-seed-outreach-status';
+const APP_VERSION = '2026-09-26-retire-allbiz-source';
 // Konstanty musi byt tady nahore: prikaz const se vykona az na svem radku, takze
 // deklarace za polovinou souboru by v renderu jeste neexistovala.
 const APP_TOOL_NAME = 'Akvizice AI';
@@ -1250,6 +1250,9 @@ try {
     }
 }
 $pdo = $db->pdo();
+if (!empty($runDatabaseMigrations)) {
+    retireAllbizScraping($pdo);
+}
 if (!empty($runDatabaseMigrations) && isset($_GET['cron'])) {
     try {
         backfillRecipientSources($pdo, 1500);
@@ -10862,6 +10865,21 @@ function shouldRunStartupMaintenance(): bool
     return isset($_GET['cron']);
 }
 
+/**
+ * AllBiz neposkytl stabilní, autorizovaný automatizovaný přístup. Historické
+ * záznamy ponecháváme v databázi pro audit, ale žádný rozpracovaný běh ani plán
+ * nesmí po odstranění zdroje znovu vytvořit síťový požadavek.
+ */
+function retireAllbizScraping(PDO $pdo): void
+{
+    $now = date('c');
+    $message = 'Ukončeno: zdroj AllBiz byl z aplikace odebrán, protože neumožňuje autorizovaný automatizovaný přístup.';
+    $jobs = $pdo->prepare('UPDATE scraping_jobs SET status="cancelled", last_message=?, finished_at=?, updated_at=? WHERE source="allbiz_us" AND status IN ("queued", "running", "paused")');
+    $jobs->execute([$message, $now, $now]);
+    $containers = $pdo->prepare('UPDATE scraping_containers SET status="deleted", schedule_enabled=0, updated_at=? WHERE source="allbiz_us" AND status!="deleted"');
+    $containers->execute([$now]);
+}
+
 function renderDatabaseBootFailure(Throwable $e): void
 {
     http_response_code(503);
@@ -14210,10 +14228,6 @@ function scrapingContainerLocationLabel(array $container): string
 {
     $scope = scrapingNormalizeLocationScope((string)($container['location_scope'] ?? 'cela_cr'));
     $location = trim((string)($container['target_location'] ?? ''));
-    if ((string)($container['source'] ?? '') === 'allbiz_us') {
-        $state = allbizNormalizeState($location);
-        return $state !== '' ? (allbizUsStates()[$state] ?? $state) : 'vsechny staty USA';
-    }
     if ($scope === 'cela_cr') {
         return 'bez omezeni';
     }
@@ -14238,11 +14252,6 @@ function scrapingSearchLocation(array $row): string
 
 function scrapingContactMatchesLocation(array $job, array $contact): bool
 {
-    // AllBiz dostava stat uz v URL vyhledavani. Zkratka typu AL by v obecnem
-    // textovem filtru vedla k nahodnym shodam uvnitr slov, proto ji znovu nefiltrujeme.
-    if ((string)($job['source'] ?? '') === 'allbiz_us') {
-        return true;
-    }
     $scope = scrapingNormalizeLocationScope((string)($job['location_scope'] ?? 'cela_cr'));
     if ($scope === 'cela_cr') {
         return true;
@@ -14357,12 +14366,7 @@ function createScrapingContainer(PDO $pdo): string
         throw new RuntimeException('Zadej klicove slovo pro scraping.');
     }
     $locationScope = scrapingNormalizeLocationScope((string)($_POST['location_scope'] ?? 'cela_cr'));
-    if ($source === 'allbiz_us') {
-        $targetLocation = allbizNormalizeState((string)($_POST['allbiz_state'] ?? ''));
-        $locationScope = $targetLocation === '' ? 'cela_cr' : 'konkretni_lokace';
-    } else {
-        $targetLocation = scrapingTargetLocationFromPost($locationScope);
-    }
+    $targetLocation = scrapingTargetLocationFromPost($locationScope);
     $listId = selectedPostListId($pdo);
     $ownerId = currentAppUserId($pdo);
     $find = $pdo->prepare('SELECT id, keyword, location_scope, target_location FROM scraping_containers WHERE list_id=? AND source=? AND owner_user_id=? AND status!="deleted" ORDER BY id ASC');
@@ -14454,12 +14458,7 @@ function saveScrapingSchedule(PDO $pdo, int $containerId): string
     $frequency = in_array((string)($_POST['schedule_frequency'] ?? 'daily'), ['daily', 'weekly'], true) ? (string)$_POST['schedule_frequency'] : 'daily';
     $weekday = max(1, min(7, (int)($_POST['schedule_weekday'] ?? 1)));
     $locationScope = scrapingNormalizeLocationScope((string)($_POST['location_scope'] ?? ($container['location_scope'] ?? 'cela_cr')));
-    if ((string)$container['source'] === 'allbiz_us') {
-        $targetLocation = allbizNormalizeState((string)($_POST['allbiz_state'] ?? ''));
-        $locationScope = $targetLocation === '' ? 'cela_cr' : 'konkretni_lokace';
-    } else {
-        $targetLocation = scrapingTargetLocationFromPost($locationScope);
-    }
+    $targetLocation = scrapingTargetLocationFromPost($locationScope);
     $changed = $newTime !== (string)($container['schedule_time'] ?? '')
         || $frequency !== scrapingScheduleFrequency($container)
         || $weekday !== scrapingScheduleWeekday($container)
@@ -14606,6 +14605,7 @@ function runScrapingQueue(PDO $pdo, int $steps): string
         FROM scraping_jobs j
         JOIN contact_databases cl ON cl.id=j.list_id
         WHERE j.status IN ("queued","running")
+          AND j.source<>"allbiz_us"
           AND COALESCE(cl.archived, 0)=0
         ORDER BY j.id ASC
         LIMIT 20
@@ -14621,14 +14621,7 @@ function runScrapingQueue(PDO $pdo, int $steps): string
             continue;
         }
         $seen[$key] = true;
-        // AllBiz ma dva sitove pozadavky na jednu polozku (detail + pripadny
-        // retry). Pri obecnich osmi krocich by se i po zkraceni timeoutu mohl
-        // jeden worker dostat za hostingovy limit. Ctyri polozky na tik jsou
-        // rychlejsi, ale porad zajisti, ze se vysledek vzdy zapise do logu.
-        $jobSteps = (string)($job['source'] ?? '') === 'allbiz_us'
-            ? min($steps, 4)
-            : $steps;
-        $messages[] = trim(runScrapingJob($pdo, (int)$job['id'], $jobSteps));
+        $messages[] = trim(runScrapingJob($pdo, (int)$job['id'], $steps));
         if (count($messages) >= 3) {
             break;
         }
@@ -14675,6 +14668,7 @@ function activeScrapingJobsExist(PDO $pdo): bool
         FROM scraping_jobs j
         JOIN contact_databases cl ON cl.id=j.list_id
         WHERE j.status IN ("queued","running")
+          AND j.source<>"allbiz_us"
           AND COALESCE(cl.archived, 0)=0
     ')->fetchColumn();
     return $count > 0;
@@ -14888,7 +14882,6 @@ function scrapingDiscoveryBuffer(string $source = ''): int
         'dastelefonbuch_de' => 250,
         'gelbeseiten_de' => 300,
         'pkt_pl' => 300,
-        'allbiz_us' => 250,
         'merchantcircle_us' => 250,
         'yellowpages_ca' => 250,
     ][$source] ?? 10000;
@@ -14901,7 +14894,6 @@ function recentNoEmailScrapingCacheDays(string $source): int
         'dastelefonbuch_de' => 21,
         'gelbeseiten_de' => 21,
         'pkt_pl' => 21,
-        'allbiz_us' => 21,
         'merchantcircle_us' => 21,
         'yellowpages_ca' => 21,
     ][$source] ?? 14;
@@ -15014,21 +15006,11 @@ function scrapingHttpTimeouts(string $url): array
     if (in_array($host, ['dasoertliche.de', 'www.dasoertliche.de'], true)) {
         return ['connect' => 6, 'total' => 12, 'attempts' => 2];
     }
-    // AllBiz obcas drzi spojeni pri detailu bez odpovedi. Obecny limit 3x25 s
-    // mohl zabit cely worker driv, nez se stihla polozka zapsat jako failed nebo
-    // skipped. Kratsi retry udrzi frontu pohyblivou a dalsi cron muze zpracovat
-    // dalsi firmy, i kdyz je jeden detail docasne nedostupny.
-    if (in_array($host, ['allbiz.com', 'www.allbiz.com', 'bizarchive.com', 'www.bizarchive.com'], true)) {
-        return ['connect' => 6, 'total' => 14, 'attempts' => 2];
-    }
     return ['connect' => 10, 'total' => 25, 'attempts' => 3];
 }
 
 function discoverScrapingPage(PDO $pdo, array $job): string
 {
-    if ((string)($job['source'] ?? '') === 'allbiz_us') {
-        return discoverAllbizScrapingState($pdo, $job);
-    }
     $page = (int)$job['current_page'];
     $urls = [];
     $sourceMessages = [];
@@ -15141,123 +15123,6 @@ function discoverScrapingPage(PDO $pdo, array $job): string
         $parts[] = '+' . $directProcessed . ' kontaktu z vysledku';
     }
     return 'Stranka ' . $page . ': ' . implode(', ', $parts) . '.';
-}
-
-/**
- * AllBiz ma vyhledavani rozdelene podle statu a na jedne odpovedi vraci aktualni i
- * archivni zaznamy z BizArchive. Bez kurzoru by beh po prvnim statu skoncil; tady se
- * po kazdem uspesnem dotazu posune na dalsi stat a zachova se i pri dalsim cron behu.
- */
-function discoverAllbizScrapingState(PDO $pdo, array $job): string
-{
-    $state = allbizStateForJob($job);
-    if ($state === null) {
-        updateScrapingJob($pdo, (int)$job['id'], [
-            'discovery_done' => 1,
-            'last_message' => 'Dokonceno: byly projity vsechny staty USA.',
-        ]);
-        return 'AllBiz: byly projity vsechny staty USA.';
-    }
-
-    $displayPage = max(1, (int)($job['current_page'] ?? 1));
-    $searchUrl = allbizSearchUrl((string)$job['keyword'], $state['code']);
-    $response = null;
-    $urls = [];
-    $fetchMessages = [];
-    foreach ([$searchUrl, str_replace('https://www.allbiz.com/', 'https://allbiz.com/', $searchUrl)] as $candidateUrl) {
-        try {
-            $candidateResponse = fetchScrapingSearch([
-                'label' => 'AllBiz.com / ' . $state['label'],
-                'url' => $candidateUrl,
-            ]);
-            $candidateUrls = extractCandidateUrls((string)$candidateResponse['html'], $candidateUrl, 'allbiz_us');
-            if ($response === null) {
-                $response = $candidateResponse;
-            }
-            if ($candidateUrls) {
-                $response = $candidateResponse;
-                $searchUrl = $candidateUrl;
-                $urls = $candidateUrls;
-                break;
-            }
-            $fetchMessages[] = 'odpoved bez detailnich odkazu (' . parse_url($candidateUrl, PHP_URL_HOST) . ')';
-        } catch (Throwable $e) {
-            $fetchMessages[] = $e->getMessage();
-        }
-    }
-    $blockedResponse = $response === null ? '' : (string)($response['html'] ?? '');
-    if (allbizAccessBlocked($blockedResponse) || allbizAccessBlocked(implode("\n", $fetchMessages))) {
-        $message = 'AllBiz blokuje automatický přístup z našeho serveru (Cloudflare). Běh byl ukončen, protože bez povoleného API nebo souhlasu zdroje nelze načíst výsledky ani kontakty.';
-        updateScrapingJob($pdo, (int)$job['id'], [
-            'status' => 'failed',
-            'last_message' => $message,
-            'finished_at' => date('c'),
-        ]);
-        return $message;
-    }
-    if ($response === null) {
-        $message = 'Docasna chyba AllBiz pro stat ' . $state['label'] . ': ' . implode(' ', $fetchMessages);
-        updateScrapingJob($pdo, (int)$job['id'], [
-            'status' => 'queued',
-            'last_message' => substr($message, 0, 500),
-        ]);
-        return $message;
-    }
-
-    if (!$urls && !allbizSearchResponseHasNoResults((string)$response['html'])) {
-        $message = 'Docasna chyba AllBiz pro stat ' . $state['label'] . ': katalog vratil stranku bez detailnich odkazu; kurzor zustava na tomto statu. ' . implode(' ', $fetchMessages);
-        updateScrapingJob($pdo, (int)$job['id'], [
-            'status' => 'queued',
-            'last_message' => substr($message, 0, 500),
-        ]);
-        return $message;
-    }
-
-    $added = 0;
-    $mysql = isMysql($pdo);
-    $sql = $mysql
-        ? 'INSERT IGNORE INTO scraping_job_items (job_id, url, url_hash, status, created_at) VALUES (?, ?, UNHEX(SHA2(?, 256)), "queued", ?)'
-        : 'INSERT OR IGNORE INTO scraping_job_items (job_id, url, status, created_at) VALUES (?, ?, "queued", ?)';
-    $insert = $pdo->prepare($sql);
-    foreach ($urls as $url) {
-        $insert->execute($mysql
-            ? [(int)$job['id'], $url, $url, date('c')]
-            : [(int)$job['id'], $url, date('c')]);
-        $added += $insert->rowCount() > 0 ? 1 : 0;
-    }
-
-    $nextIndex = $state['index'] + 1;
-    $finished = $nextIndex >= $state['total'];
-    $fields = [
-        'current_page' => $displayPage + 1,
-        'source_cursor' => (string)$nextIndex,
-        'discovered_count' => (int)($job['discovered_count'] ?? 0) + $added,
-        'last_message' => 'AllBiz: ' . $state['label'] . ' (' . ($state['index'] + 1) . '/' . $state['total'] . '), nalezeno ' . count($urls) . ' detailu, novych ' . $added . '.',
-    ];
-    if ($finished) {
-        $fields['discovery_done'] = 1;
-        $fields['last_message'] .= ' Dokonceno pro vsechny staty USA, dobiha zpracovani detailu.';
-    }
-    updateScrapingJob($pdo, (int)$job['id'], $fields);
-
-    return 'AllBiz / ' . $state['label'] . ' (' . ($state['index'] + 1) . '/' . $state['total'] . '): '
-        . count($urls) . ' detailu, +' . $added . ' novych URL.';
-}
-
-function allbizSearchResponseHasNoResults(string $html): bool
-{
-    $text = trim(preg_replace('/\s+/', ' ', html_entity_decode(strip_tags($html), ENT_QUOTES, 'UTF-8')) ?? '');
-    return preg_match('/\b(?:0|no)\s+(?:results?|businesses?|listings?)\b/i', $text) === 1
-        || preg_match('/\bno\s+results\s+found\b/i', $text) === 1;
-}
-
-function allbizAccessBlocked(string $value): bool
-{
-    $value = strtolower($value);
-    return str_contains($value, 'attention required')
-        || str_contains($value, 'sorry, you have been blocked')
-        || str_contains($value, 'why have i been blocked')
-        || str_contains($value, 'cf-chl-');
 }
 
 function searchResultHasNextPage(string $html, string $source, string $baseUrl, int $page): bool
@@ -15399,7 +15264,7 @@ function processScrapingItem(PDO $pdo, array $job, array $item): string
         $html = httpGet((string)$item['url']);
         $contact = extractContactFromHtml($html, (string)$item['url']);
         if (($contact['email'] === '' || !filter_var($contact['email'], FILTER_VALIDATE_EMAIL))
-            && in_array((string)$job['source'], ['allbiz_us', 'merchantcircle_us', 'yellowpages_ca'], true)) {
+            && in_array((string)$job['source'], ['merchantcircle_us', 'yellowpages_ca'], true)) {
             $contact = enrichDirectoryContactFromBusinessWebsite($contact);
         }
         if ($contact['email'] === '' || !filter_var($contact['email'], FILTER_VALIDATE_EMAIL)) {
@@ -15490,7 +15355,6 @@ function scrapingSources(): array
         'gelbeseiten_de' => 'GelbeSeiten.de',
         'pkt_pl' => 'Pkt.pl',
         'panoramafirm_pl' => 'PanoramaFirm.pl',
-        'allbiz_us' => 'AllBiz.com (USA)',
     ];
 }
 
@@ -15540,9 +15404,6 @@ function normalizeScrapingSourceKey(string $source): string
         'panoramafirm' => 'panoramafirm_pl',
         'panorama_firm' => 'panoramafirm_pl',
         'panoramafirm_pl' => 'panoramafirm_pl',
-        'allbiz' => 'allbiz_us',
-        'allbiz_com' => 'allbiz_us',
-        'allbiz_us' => 'allbiz_us',
     ];
     return $aliases[$key] ?? $key;
 }
@@ -15562,84 +15423,9 @@ function scrapingSearchQueryText(string $keyword, string $location = ''): string
     return trim($keyword . ' ' . $location);
 }
 
-/** @return array<string,string> */
-function allbizUsStates(): array
-{
-    return [
-        'AL' => 'Alabama', 'AK' => 'Alaska', 'AZ' => 'Arizona', 'AR' => 'Arkansas',
-        'CA' => 'California', 'CO' => 'Colorado', 'CT' => 'Connecticut', 'DE' => 'Delaware',
-        'FL' => 'Florida', 'GA' => 'Georgia', 'HI' => 'Hawaii', 'ID' => 'Idaho',
-        'IL' => 'Illinois', 'IN' => 'Indiana', 'IA' => 'Iowa', 'KS' => 'Kansas',
-        'KY' => 'Kentucky', 'LA' => 'Louisiana', 'ME' => 'Maine', 'MD' => 'Maryland',
-        'MA' => 'Massachusetts', 'MI' => 'Michigan', 'MN' => 'Minnesota', 'MS' => 'Mississippi',
-        'MO' => 'Missouri', 'MT' => 'Montana', 'NE' => 'Nebraska', 'NV' => 'Nevada',
-        'NH' => 'New Hampshire', 'NJ' => 'New Jersey', 'NM' => 'New Mexico', 'NY' => 'New York',
-        'NC' => 'North Carolina', 'ND' => 'North Dakota', 'OH' => 'Ohio', 'OK' => 'Oklahoma',
-        'OR' => 'Oregon', 'PA' => 'Pennsylvania', 'RI' => 'Rhode Island', 'SC' => 'South Carolina',
-        'SD' => 'South Dakota', 'TN' => 'Tennessee', 'TX' => 'Texas', 'UT' => 'Utah',
-        'VT' => 'Vermont', 'VA' => 'Virginia', 'WA' => 'Washington', 'DC' => 'Washington, D.C.',
-        'WV' => 'West Virginia', 'WI' => 'Wisconsin', 'WY' => 'Wyoming',
-    ];
-}
-
-function allbizNormalizeState(string $value): string
-{
-    $value = strtoupper(trim($value));
-    $value = preg_replace('/^US[_ -]?/', '', $value) ?? $value;
-    if (array_key_exists($value, allbizUsStates())) {
-        return $value;
-    }
-    $needle = aiResearchFoldText($value);
-    foreach (allbizUsStates() as $code => $label) {
-        if ($needle === aiResearchFoldText($label)) {
-            return $code;
-        }
-    }
-    return '';
-}
-
-function allbizSearchUrl(string $keyword, string $state): string
-{
-    $keyword = normalizeScrapingKeyword($keyword);
-    if ($keyword === '' || !isset(allbizUsStates()[$state])) {
-        throw new RuntimeException('AllBiz vyzaduje platne klicove slovo a stat USA.');
-    }
-    return 'https://www.allbiz.com/search?' . http_build_query([
-        'ss' => $keyword,
-        'ia' => 'US_' . $state,
-    ]);
-}
-
-/** @return array{code:string,label:string,index:int,total:int}|null */
-function allbizStateForJob(array $job): ?array
-{
-    $states = allbizUsStates();
-    $targetState = allbizNormalizeState((string)($job['target_location'] ?? ''));
-    if ($targetState !== '') {
-        return ['code' => $targetState, 'label' => $states[$targetState], 'index' => 0, 'total' => 1];
-    }
-    $codes = array_keys($states);
-    $index = max(0, (int)($job['source_cursor'] ?? 0));
-    if (!isset($codes[$index])) {
-        return null;
-    }
-    $code = $codes[$index];
-    return ['code' => $code, 'label' => $states[$code], 'index' => $index, 'total' => count($codes)];
-}
-
 function scrapingSearchUrls(string $source, string $keyword, int $page, string $location = ''): array
 {
     $queryText = scrapingSearchQueryText($keyword, $location);
-    if ($source === 'allbiz_us') {
-        $state = allbizNormalizeState($location);
-        if ($state === '') {
-            throw new RuntimeException('Pro samostatny dotaz AllBiz vyber konkretni stat USA. Kontejner bez vybraneho statu projde vsechny staty postupne.');
-        }
-        return [[
-            'label' => 'AllBiz.com / ' . (allbizUsStates()[$state] ?? $state),
-            'url' => allbizSearchUrl($keyword, $state),
-        ]];
-    }
     if ($source === 'firmy_cz') {
         $query = ['q' => $queryText];
         if ($page > 1) {
@@ -16040,9 +15826,6 @@ function extractCandidateUrls(string $html, string $baseUrl, string $source = ''
     if ($source === 'zoznam_sk') {
         return extractZoznamCandidateUrls($html, $baseUrl);
     }
-    if ($source === 'allbiz_us') {
-        return extractAllbizCandidateUrls($html, $baseUrl);
-    }
     preg_match_all('/href=(["\'])(.*?)\1/i', $html, $matches);
     $urls = [];
     foreach ($matches[2] ?? [] as $href) {
@@ -16060,40 +15843,6 @@ function extractCandidateUrls(string $html, string $baseUrl, string $source = ''
                 $urls[$detailUrl] = true;
             }
         }
-    }
-    return array_keys($urls);
-}
-
-function extractAllbizCandidateUrls(string $html, string $baseUrl): array
-{
-    $urls = [];
-    $add = static function (string $candidate) use (&$urls): void {
-        $candidate = str_replace('\\/', '/', html_entity_decode(trim($candidate), ENT_QUOTES, 'UTF-8'));
-        $candidate = normalizeSearchResultUrl($candidate);
-        $detailUrl = normalizeAllbizDetailUrl($candidate);
-        if ($detailUrl !== '') {
-            $urls[$detailUrl] = true;
-        }
-    };
-
-    // AllBiz currently uses normal href attributes, but some responses render
-    // the same links into data attributes or escaped JSON before hydration.
-    preg_match_all('/(?:href|data-href|data-url|data-link)\s*=\s*(?:"([^"]+)"|\'([^\']+)\'|([^\s>]+))/i', $html, $attributeMatches, PREG_SET_ORDER);
-    foreach ($attributeMatches as $match) {
-        $href = (string)(($match[1] ?? '') !== ''
-            ? $match[1]
-            : ((($match[2] ?? '') !== '') ? $match[2] : ($match[3] ?? '')));
-        if ($href !== '') {
-            $add(normalizeUrl($href, $baseUrl));
-        }
-    }
-
-    // Last-resort scan for absolute or root-relative business links. This
-    // also handles links embedded in a JSON payload without an href tag.
-    $scanHtml = str_replace('\\/', '/', str_replace('\\\\', '\\', $html));
-    preg_match_all('~(?:(?:https?://)?(?:www\.)?(?:allbiz|bizarchive)\.com)?/business/[^"\'<>[:space:]]+~i', $scanHtml, $rawMatches);
-    foreach ($rawMatches[0] ?? [] as $rawUrl) {
-        $add(normalizeUrl($rawUrl, $baseUrl));
     }
     return array_keys($urls);
 }
@@ -16160,16 +15909,13 @@ function normalizeScrapingDetailUrl(string $url, string $source = ''): string
     if ($source === 'panoramafirm_pl') {
         return normalizePanoramaFirmDetailUrl($url);
     }
-    if ($source === 'allbiz_us') {
-        return normalizeAllbizDetailUrl($url);
-    }
     if ($source === 'merchantcircle_us') {
         return normalizeMerchantCircleDetailUrl($url);
     }
     if ($source === 'yellowpages_ca') {
         return normalizeYellowPagesCaDetailUrl($url);
     }
-    return normalizeFirmyDetailUrl($url) ?: normalizeHeroldDetailUrl($url) ?: normalizeZoznamDetailUrl($url) ?: normalizeDasTelefonbuchDetailUrl($url) ?: normalizeDasOertlicheDetailUrl($url) ?: normalizeGelbeSeitenDetailUrl($url) ?: normalizePktDetailUrl($url) ?: normalizePanoramaFirmDetailUrl($url) ?: normalizeAllbizDetailUrl($url) ?: normalizeMerchantCircleDetailUrl($url) ?: normalizeYellowPagesCaDetailUrl($url);
+    return normalizeFirmyDetailUrl($url) ?: normalizeHeroldDetailUrl($url) ?: normalizeZoznamDetailUrl($url) ?: normalizeDasTelefonbuchDetailUrl($url) ?: normalizeDasOertlicheDetailUrl($url) ?: normalizeGelbeSeitenDetailUrl($url) ?: normalizePktDetailUrl($url) ?: normalizePanoramaFirmDetailUrl($url) ?: normalizeMerchantCircleDetailUrl($url) ?: normalizeYellowPagesCaDetailUrl($url);
 }
 
 function normalizeFirmyDetailUrl(string $url): string
@@ -16306,22 +16052,6 @@ function normalizePanoramaFirmDetailUrl(string $url): string
     return 'https://panoramafirm.pl' . $path;
 }
 
-function normalizeAllbizDetailUrl(string $url): string
-{
-    if ($url === '' || !preg_match('/^https?:\/\//i', $url)) {
-        return '';
-    }
-    $parts = parse_url($url);
-    $host = strtolower((string)($parts['host'] ?? ''));
-    $path = (string)($parts['path'] ?? '');
-    if (!in_array($host, ['allbiz.com', 'www.allbiz.com', 'bizarchive.com', 'www.bizarchive.com'], true)
-        || !preg_match('~^/business/[^/?#]+/?$~i', $path)) {
-        return '';
-    }
-    $canonicalHost = str_contains($host, 'bizarchive.com') ? 'www.bizarchive.com' : 'www.allbiz.com';
-    return 'https://' . $canonicalHost . rtrim($path, '/');
-}
-
 function normalizeMerchantCircleDetailUrl(string $url): string
 {
     if ($url === '' || !preg_match('/^https?:\/\//i', $url)) {
@@ -16404,9 +16134,6 @@ function extractContactFromHtml(string $html, string $url): array
     }
     if (normalizePanoramaFirmDetailUrl($url) !== '') {
         return extractDirectoryDetailContact($html, $url, ['panoramafirm.pl', 'wenet.pl', 'wenetpolska.pl', 'biznesfinder.pl', 'panoramadanych.pl']);
-    }
-    if (normalizeAllbizDetailUrl($url) !== '') {
-        return extractDirectoryDetailContact($html, $url, ['allbiz.com', 'bizarchive.com']);
     }
     if (normalizeMerchantCircleDetailUrl($url) !== '') {
         return extractDirectoryDetailContact($html, $url, ['merchantcircle.com', 'static1.merchantcircle.com', 'static2.merchantcircle.com', 'static3.merchantcircle.com', 'static4.merchantcircle.com']);
@@ -16612,7 +16339,7 @@ function extractDirectoryDetailContact(string $html, string $url, array $sourceH
     if ($subjectName === '' && preg_match('/<title[^>]*>(.*?)<\/title>/is', $html, $titleMatch)) {
         $subjectName = trim(preg_replace('/\s+/', ' ', html_entity_decode(strip_tags($titleMatch[1]), ENT_QUOTES, 'UTF-8')));
     }
-    $subjectName = trim(preg_replace('/\s*(?:\||-)\s*(?:GelbeSeiten\.de|Das Oertliche|Das Ortliche|DasOertliche\.de|pkt\.pl|Panorama Firm|AllBiz|BizArchive|MerchantCircle|YellowPages\.ca|Yellow Pages|YP\.ca|PagesJaunes\.ca|Pages Jaunes).*$/iu', '', $subjectName) ?? $subjectName);
+    $subjectName = trim(preg_replace('/\s*(?:\||-)\s*(?:GelbeSeiten\.de|Das Oertliche|Das Ortliche|DasOertliche\.de|pkt\.pl|Panorama Firm|MerchantCircle|YellowPages\.ca|Yellow Pages|YP\.ca|PagesJaunes\.ca|Pages Jaunes).*$/iu', '', $subjectName) ?? $subjectName);
 
     $website = extractDirectoryWebsite($html, $url, $sourceHosts, (string)($json['url'] ?? ''));
     $address = directoryAddress($json);
@@ -22753,26 +22480,16 @@ function renderApp(PDO $pdo, ?array $flash): void
                                 <button type="button" class="secondary icon" data-dialog-close>Zavrit</button>
                             </div>
                             <p><?= h(scrapingSourceLabel((string)$container['source'])) ?> / <?= h($container['keyword']) ?> / <?= h($container['list_name'] ?: 'Vychozi seznam') ?></p>
-                            <?php if ((string)$container['source'] === 'allbiz_us'): ?>
-                                <?php $allbizContainerState = allbizNormalizeState((string)($container['target_location'] ?? '')); ?>
-                                <label>Stat USA
-                                    <select name="allbiz_state">
-                                        <option value="" <?= $allbizContainerState === '' ? 'selected' : '' ?>>Vsechny staty USA</option>
-                                        <?php foreach (allbizUsStates() as $code => $label): ?><option value="<?= h($code) ?>" <?= $allbizContainerState === $code ? 'selected' : '' ?>><?= h($label) ?></option><?php endforeach; ?>
+                            <div class="form-grid two">
+                                <label>Omezeni lokace
+                                    <select name="location_scope">
+                                        <?php foreach (scrapingLocationScopes() as $scopeKey => $scopeLabel): ?>
+                                            <option value="<?= h($scopeKey) ?>" <?= scrapingNormalizeLocationScope((string)($container['location_scope'] ?? 'cela_cr')) === $scopeKey ? 'selected' : '' ?>><?= h($scopeLabel) ?></option>
+                                        <?php endforeach; ?>
                                     </select>
                                 </label>
-                            <?php else: ?>
-                                <div class="form-grid two">
-                                    <label>Omezeni lokace
-                                        <select name="location_scope">
-                                            <?php foreach (scrapingLocationScopes() as $scopeKey => $scopeLabel): ?>
-                                                <option value="<?= h($scopeKey) ?>" <?= scrapingNormalizeLocationScope((string)($container['location_scope'] ?? 'cela_cr')) === $scopeKey ? 'selected' : '' ?>><?= h($scopeLabel) ?></option>
-                                            <?php endforeach; ?>
-                                        </select>
-                                    </label>
-                                    <label>Lokalita<input name="target_location" value="<?= h((string)($container['target_location'] ?? '')) ?>" placeholder="Napriklad Praha, Brno, Wien"></label>
-                                </div>
-                            <?php endif; ?>
+                                <label>Lokalita<input name="target_location" value="<?= h((string)($container['target_location'] ?? '')) ?>" placeholder="Napriklad Praha, Brno, Wien"></label>
+                            </div>
                             <label>Frekvence
                                 <select name="schedule_frequency">
                                     <option value="daily" <?= scrapingScheduleFrequency($container) === 'daily' ? 'selected' : '' ?>>Denne</option>
@@ -22805,12 +22522,12 @@ function renderApp(PDO $pdo, ?array $flash): void
                 <button type="button" class="secondary icon" data-dialog-close>Zavrit</button>
             </div>
             <label>Zdroj dat
-                <select name="source" id="new-scraping-source" data-allbiz-source-select>
+                <select name="source">
                     <?php foreach (scrapingSources() as $key => $label): ?><option value="<?= h($key) ?>"><?= h($label) ?></option><?php endforeach; ?>
                 </select>
             </label>
             <label>Klicove slovo<input name="keyword" placeholder="Napriklad: masaze, massage, Massagen, masaz" required></label>
-            <div class="form-grid two" data-standard-location-fields>
+            <div class="form-grid two">
                 <label>Omezeni lokace
                     <select name="location_scope">
                         <?php foreach (scrapingLocationScopes() as $scopeKey => $scopeLabel): ?>
@@ -22819,15 +22536,6 @@ function renderApp(PDO $pdo, ?array $flash): void
                     </select>
                 </label>
                 <label>Lokalita<input name="target_location" placeholder="Napriklad Praha, Brno, Wien"></label>
-            </div>
-            <div class="form-grid" data-allbiz-state-fields hidden>
-                <label>Stat USA
-                    <select name="allbiz_state">
-                        <option value="">Vsechny staty USA</option>
-                        <?php foreach (allbizUsStates() as $code => $label): ?><option value="<?= h($code) ?>"><?= h($label) ?></option><?php endforeach; ?>
-                    </select>
-                </label>
-                <small>Pri volbe vsech statu se beh ulozi na pozadi a projde je postupne. Do logu se zaradi detailni zaznamy z AllBiz i BizArchive.</small>
             </div>
             <label>Cilova databaze kontaktu<select name="list_id"><?php foreach ($lists as $list) echo '<option value="'.h((string)$list['id']).'" '.($selectedListId===(int)$list['id']?'selected':'').'>'.h($list['name']).'</option>'; ?></select></label>
             <div class="note">Backend prochazi stranky vysledku postupne, dokud zdroj vraci dalsi zaznamy. Pokud zadas lokalitu, pouzije se ve vyhledavani a zaroven jako filtr pred ulozenim kontaktu do cilove databaze uzivatele. Nalezene, ale neodpovidajici kontakty zustanou v logu scrapingu jako preskocene.</div>
