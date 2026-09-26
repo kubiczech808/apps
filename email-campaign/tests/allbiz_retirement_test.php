@@ -18,5 +18,9 @@ expectAllbizRetirement(!str_contains($source, 'function extractAllbizCandidateUr
 expectAllbizRetirement(!str_contains($source, 'function allbizUsStates'), 'AllBiz volba statu nesmi zustat v aplikaci.');
 expectAllbizRetirement(str_contains($source, 'function retireAllbizScraping'), 'Chybi bezpecne ukonceni starych AllBiz behu.');
 expectAllbizRetirement(str_contains($source, 'AND j.source<>"allbiz_us"'), 'Stary AllBiz job nesmi projit worker frontou.');
+expectAllbizRetirement(str_contains($source, 'function cleanupRetiredAllbizStorage'), 'Chybi cileny uklid AllBiz technickych dat.');
+expectAllbizRetirement(str_contains($source, 'DELETE FROM scraping_job_items WHERE id IN'), 'AllBiz crawl log se musi mazat po davkach.');
+expectAllbizRetirement(str_contains($source, 'OPTIMIZE TABLE '), 'Po smazani AllBiz logu musi probehnout fyzicke uvolneni mista.');
+expectAllbizRetirement(str_contains($source, 'recipients_preserved'), 'Uklid musi explicitne zachovat kontakty.');
 
 echo "AllBiz retirement checks: OK\n";

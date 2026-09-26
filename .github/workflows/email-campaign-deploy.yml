@@ -187,6 +187,40 @@ jobs:
           )
           curl --show-error --silent --max-time 45 "https://www.osobnizkusenosti.cz/email-campaign/?cron=${TOKEN}&storage_report=1"
 
+      - name: Remove retired AllBiz crawl data and reclaim storage
+        env:
+          APP_DATABASE_NAME: ${{ secrets.APP_DATABASE_NAME }}
+          APP_DATABASE_USERNAME: ${{ secrets.MYSQL_EMAILING_DB_USERNAME }}
+          APP_DATABASE_PASSWORD: ${{ secrets.MYSQL_EMAILING_DB_PASSWORD }}
+        run: |
+          TOKEN=$(python3 - <<'PY'
+          import hashlib
+          import os
+          material = "email-campaign-cron:" + os.environ["APP_DATABASE_NAME"] + ":" + os.environ["APP_DATABASE_USERNAME"] + ":" + os.environ["APP_DATABASE_PASSWORD"]
+          print(hashlib.sha256(material.encode("utf-8")).hexdigest())
+          PY
+          )
+          complete=false
+          for attempt in $(seq 1 8); do
+            code=$(curl --show-error --silent --max-time 180 --output /tmp/allbiz-cleanup.json --write-out "%{http_code}" "https://www.osobnizkusenosti.cz/email-campaign/?cron=${TOKEN}&allbiz_cleanup=1" || echo "000")
+            echo "AllBiz cleanup ${attempt}/8 HTTP ${code}"
+            cat /tmp/allbiz-cleanup.json || true
+            if [ "$code" -lt 200 ] || [ "$code" -ge 300 ]; then
+              exit 1
+            fi
+            complete=$(python3 - <<'PY'
+          import json
+          try:
+              with open('/tmp/allbiz-cleanup.json', encoding='utf-8') as handle:
+                  print('true' if json.load(handle).get('complete') else 'false')
+          except Exception:
+              print('false')
+          PY
+            )
+            [ "$complete" = "true" ] && break
+          done
+          test "$complete" = "true"
+
       - name: Send onboarding demo invite
         env:
           APP_DATABASE_NAME: ${{ secrets.APP_DATABASE_NAME }}

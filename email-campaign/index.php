@@ -1423,6 +1423,16 @@ if (isset($_GET['cron'])) {
         }
         exit;
     }
+    if (isset($_GET['allbiz_cleanup'])) {
+        @set_time_limit(170);
+        try {
+            echo json_encode(cleanupRetiredAllbizStorage($pdo), JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . "\n";
+        } catch (Throwable $e) {
+            http_response_code(503);
+            echo 'AllBiz cleanup failed: ' . $e->getMessage() . "\n";
+        }
+        exit;
+    }
     // Uklid a uvolneni mista jde spustit i z CI, aby to nemusel nikdo odklikavat v UI
     // a aby byl kazdy krok videt v logu workflow vcetne velikosti pred a po.
     if (isset($_GET['db_cleanup'])) {
@@ -10878,6 +10888,158 @@ function retireAllbizScraping(PDO $pdo): void
     $jobs->execute([$message, $now, $now]);
     $containers = $pdo->prepare('UPDATE scraping_containers SET status="deleted", schedule_enabled=0, updated_at=? WHERE source="allbiz_us" AND status!="deleted"');
     $containers->execute([$now]);
+}
+
+/**
+ * Před odstraněním zdroje mohl AllBiz založit velké množství technických URL ve
+ * scraping_job_items, i když z nich nevznikl žádný kontakt. Tyto řádky nejsou
+ * obchodní data, ale fronta a provozní log. Odstraňují se samostatně po dávkách;
+ * kontakty v recipients se z principu nemažou ani kdyby byly takto označené.
+ */
+function allbizRetirementFootprint(PDO $pdo): array
+{
+    $footprint = [
+        'containers' => 0,
+        'jobs' => 0,
+        'job_items' => 0,
+        'recipients_preserved' => 0,
+    ];
+    if (!tableExists($pdo, 'scraping_jobs')) {
+        return $footprint;
+    }
+    $footprint['containers'] = tableExists($pdo, 'scraping_containers')
+        ? (int)$pdo->query('SELECT COUNT(*) FROM scraping_containers WHERE source="allbiz_us"')->fetchColumn()
+        : 0;
+    $footprint['jobs'] = (int)$pdo->query('SELECT COUNT(*) FROM scraping_jobs WHERE source="allbiz_us"')->fetchColumn();
+    if (tableExists($pdo, 'scraping_job_items')) {
+        $footprint['job_items'] = (int)$pdo->query('SELECT COUNT(*) FROM scraping_job_items i INNER JOIN scraping_jobs j ON j.id=i.job_id WHERE j.source="allbiz_us"')->fetchColumn();
+    }
+    if (tableExists($pdo, 'recipients')) {
+        $footprint['recipients_preserved'] = (int)$pdo->query('SELECT COUNT(*) FROM recipients WHERE source_label LIKE "%AllBiz%" OR source_url LIKE "%allbiz.com/%" OR source_url LIKE "%bizarchive.com/%"')->fetchColumn();
+    }
+    return $footprint;
+}
+
+function deleteRetiredAllbizJobItems(PDO $pdo, int $limit = 5000): int
+{
+    if ($limit < 1 || !tableExists($pdo, 'scraping_job_items') || !tableExists($pdo, 'scraping_jobs')) {
+        return 0;
+    }
+    $select = $pdo->query('SELECT i.id FROM scraping_job_items i INNER JOIN scraping_jobs j ON j.id=i.job_id WHERE j.source="allbiz_us" ORDER BY i.id ASC LIMIT ' . max(1, min(5000, $limit)));
+    $ids = array_map('intval', $select->fetchAll(PDO::FETCH_COLUMN));
+    if (!$ids) {
+        return 0;
+    }
+    $pdo->exec('DELETE FROM scraping_job_items WHERE id IN (' . implode(',', $ids) . ')');
+    return count($ids);
+}
+
+/**
+ * Jednorázový, autorizovaný úklid vyřazeného zdroje. Vrací měřené velikosti
+ * před/po a nikdy nemaže recipients. Při velkém objemu se endpoint vrátí jako
+ * nedokončený; CI jej opakuje, místo aby hostingu poslal jeden dlouhý DELETE.
+ */
+function cleanupRetiredAllbizStorage(PDO $pdo): array
+{
+    if (!isMysql($pdo)) {
+        throw new RuntimeException('AllBiz cleanup vyžaduje MySQL/MariaDB.');
+    }
+    $locked = (int)$pdo->query("SELECT GET_LOCK('email_campaign_allbiz_retirement', 0)")->fetchColumn();
+    if ($locked !== 1) {
+        return ['complete' => false, 'message' => 'Čeká se na jiný AllBiz úklid.'];
+    }
+    $started = time();
+    $now = date('c');
+    $paused = ['scraping' => 0, 'imports' => 0];
+    try {
+        $before = databaseStorageReport($pdo);
+        $beforeItems = databaseTableSizeByName($pdo, 'scraping_job_items');
+        $beforeFootprint = allbizRetirementFootprint($pdo);
+        $pendingDeletedItems = max(0, (int)(loadSettingsForUser($pdo, 0)['allbiz_retirement_cleanup_deleted_items'] ?? 0));
+
+        // Zamezí novým frontám po dobu DELETE/OPTIMIZE. Rozpracované importy a
+        // scraping se ukončí konzervativně, už uložené kontakty zůstávají.
+        setSettingRaw($pdo, 'database_storage_reclaim_quiesce', '1');
+        $paused = pauseJobsForStorageReclaim($pdo);
+
+        $deletedItems = 0;
+        while (time() - $started < 70) {
+            $deleted = deleteRetiredAllbizJobItems($pdo, 5000);
+            $deletedItems += $deleted;
+            if ($deleted === 0) {
+                break;
+            }
+        }
+        $remaining = allbizRetirementFootprint($pdo);
+        $optimized = false;
+        $optimizeError = '';
+        if ((int)$remaining['job_items'] === 0) {
+            // Zachováme případný importní souhrn, jen odpojíme již smazané joby.
+            if (tableExists($pdo, 'import_runs')) {
+                $pdo->exec('UPDATE import_runs SET scraping_job_id=0, updated_at="' . $now . '" WHERE scraping_job_id IN (SELECT id FROM scraping_jobs WHERE source="allbiz_us")');
+            }
+            $pdo->exec('DELETE FROM scraping_jobs WHERE source="allbiz_us"');
+            if (tableExists($pdo, 'scraping_containers')) {
+                $pdo->exec('DELETE FROM scraping_containers WHERE source="allbiz_us"');
+            }
+            if ($deletedItems + $pendingDeletedItems > 0) {
+                try {
+                    $statement = $pdo->query('OPTIMIZE TABLE ' . quoteDatabaseIdentifier('scraping_job_items'));
+                    if ($statement !== false) {
+                        $statement->fetchAll(PDO::FETCH_ASSOC);
+                        $statement->closeCursor();
+                    }
+                    $optimized = true;
+                } catch (Throwable $e) {
+                    $optimizeError = $e->getMessage();
+                }
+            }
+        }
+        if ($deletedItems > 0) {
+            markDatabaseStorageReclaimNeeded($pdo, $deletedItems);
+        }
+        if ($optimized) {
+            setSettingRaw($pdo, 'allbiz_retirement_cleanup_deleted_items', '0');
+        } elseif ($deletedItems > 0) {
+            setSettingRaw($pdo, 'allbiz_retirement_cleanup_deleted_items', (string)min(PHP_INT_MAX, $pendingDeletedItems + $deletedItems));
+        }
+        $after = databaseStorageReport($pdo);
+        $afterItems = databaseTableSizeByName($pdo, 'scraping_job_items');
+        $afterFootprint = allbizRetirementFootprint($pdo);
+        $beforeBytes = $beforeItems ? databaseTableQuotaBytes($beforeItems) : 0;
+        $afterBytes = $afterItems ? databaseTableQuotaBytes($afterItems) : 0;
+        $complete = (int)$afterFootprint['job_items'] === 0
+            && (int)$afterFootprint['jobs'] === 0
+            && (int)$afterFootprint['containers'] === 0
+            && $optimizeError === '';
+        $report = [
+            'completed_at' => $now,
+            'complete' => $complete,
+            'before' => $beforeFootprint,
+            'after' => $afterFootprint,
+            'deleted_job_items' => $deletedItems,
+            'deleted_job_items_waiting_for_reclaim' => $optimized ? 0 : ($deletedItems + $pendingDeletedItems),
+            'paused_jobs' => $paused,
+            'scraping_job_items_before_bytes' => $beforeBytes,
+            'scraping_job_items_after_bytes' => $afterBytes,
+            'scraping_job_items_saved_bytes' => max(0, $beforeBytes - $afterBytes),
+            'database_before_bytes' => databaseQuotaBytes(['total_bytes' => $before['allocated_bytes'], 'free_bytes' => $before['free_bytes']]),
+            'database_after_bytes' => databaseQuotaBytes(['total_bytes' => $after['allocated_bytes'], 'free_bytes' => $after['free_bytes']]),
+            'optimized_scraping_job_items' => $optimized,
+            'optimize_error' => $optimizeError,
+            'recipients_preserved' => (int)$afterFootprint['recipients_preserved'],
+        ];
+        setSettingRaw($pdo, 'allbiz_retirement_cleanup_report', json_encode($report, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?: '{}');
+        setSettingRaw($pdo, 'allbiz_retirement_cleanup_completed_at', $complete ? $now : '');
+        return $report;
+    } finally {
+        setSettingRaw($pdo, 'database_storage_reclaim_quiesce', '0');
+        try {
+            $pdo->query("SELECT RELEASE_LOCK('email_campaign_allbiz_retirement')");
+        } catch (Throwable $e) {
+            // Zámek se po uzavření requestu uvolní i bez explicitního kroku.
+        }
+    }
 }
 
 function renderDatabaseBootFailure(Throwable $e): void
