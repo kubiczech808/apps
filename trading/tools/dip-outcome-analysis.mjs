@@ -53,9 +53,14 @@ async function loadObservations() {
     for (let offset = 0; offset < 12000; offset += PAGE) {
       let payload;
       try {
+        // `scope` and `offset`, which are the names api.php actually reads. The first
+        // version of this sent scrapedScope/observationsLimit/observationsOffset -- the
+        // internal parameter names, not the query ones -- so every request silently
+        // returned page one of the ACTIVE catalogue, the resolved archive was never read,
+        // and the join found an opening price for 0 of 373 resolved trades. The page size
+        // is the server's (SCRAPED_SCOPE_PAGE_LIMIT) and is not settable by the caller.
         payload = await fetchJson(
-          `${HOST}/api.php?action=state&target=paper&summary=scraped&scrapedScope=${scope}`
-          + `&observationsLimit=${PAGE}&observationsOffset=${offset}`,
+          `${HOST}/api.php?action=state&target=paper&summary=scraped&scope=${scope}&offset=${offset}`,
           `observations ${scope}@${offset}`,
         );
       } catch (error) {

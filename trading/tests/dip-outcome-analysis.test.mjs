@@ -120,3 +120,35 @@ test("importing the tool does not run it", () => {
     "main() must be behind a run guard");
   assert.ok(!/^main\(\)/m.test(source), "and never called at the top level");
 });
+
+test("the observation read uses the query parameter names api.php actually reads", () => {
+  // The bug this exists for, and the one the arithmetic tests above could never catch: the
+  // first version sent scrapedScope / observationsLimit / observationsOffset -- the names of
+  // api.php's INTERNAL variables, not of its query parameters. Every request came back as
+  // page one of the active catalogue, the resolved archive was never read at all, and the
+  // join recovered an opening price for 0 of 373 resolved trades while reporting success.
+  //
+  // A tool whose arithmetic is tested and whose contract with the server is not will fail
+  // exactly like this: quietly, with a plausible-looking table.
+  const tool = readFileSync(new URL("../tools/dip-outcome-analysis.mjs", import.meta.url), "utf8");
+  const api = readFileSync(new URL("../api.php", import.meta.url), "utf8");
+
+  // What the server reads, asserted against the server.
+  assert.match(api, /\$scrapedScope = \(\(string\) \(\$_GET\['scope'\] \?\? ''\)\)/,
+    "the scope parameter is named 'scope'");
+  assert.match(api, /\$executionOffset = max\(0, \(int\) \(\$_GET\['offset'\] \?\? 0\)\);/,
+    "the paging parameter is named 'offset'");
+
+  // What the tool sends.
+  const request = tool.match(/action=state&target=paper&summary=scraped[^`]*/)?.[0];
+  assert.ok(request, "the observation read must be findable");
+  assert.match(request, /scope=\$\{scope\}/, "it must page the resolved archive by 'scope'");
+  assert.match(request, /offset=\$\{offset\}/, "and page by 'offset'");
+  assert.ok(!/scrapedScope=|observationsLimit=|observationsOffset=/.test(tool),
+    `no internal parameter name may be sent as a query parameter: ${request}`);
+
+  // And it must ask for BOTH catalogues. A resolved trade's market is, by definition, in the
+  // resolved one -- reading only the active catalogue is how the join returned nothing.
+  assert.match(tool, /for \(const scope of \["active", "resolved"\]\)/,
+    "both catalogues, or resolved trades have no observation to join to");
+});

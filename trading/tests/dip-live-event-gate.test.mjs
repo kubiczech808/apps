@@ -47,7 +47,12 @@ function extractArrow(source, name) {
   return source.slice(start, end + 5);
 }
 
-const NOW = Date.parse("2026-09-18T13:47:00Z");
+// Real now, not a pinned instant. The harness injects this as the PROBE's clock while
+// rowEventIsRunning -- the bot's -- reads Date.now() directly, so a fixed NOW meant the two
+// clocks drifted apart as real time passed and the suite went red six days after it was
+// written: "2026-09-24, six days out" had quietly become the past.
+const NOW = Date.now();
+const hoursFromNow = (hours) => new Date(NOW + hours * 3600000).toISOString();
 
 // The bot's own answer, and the probe's, side by side on the same rows.
 const harness = new Function(`
@@ -59,8 +64,8 @@ const harness = new Function(`
 `)();
 
 const ROWS = {
-  kickedOff: { eventStartTime: "2026-09-18T13:00:00Z" },
-  notYet: { eventStartTime: "2026-09-24T16:00:00Z" },
+  kickedOff: { eventStartTime: hoursFromNow(-0.78) },
+  notYet: { eventStartTime: hoursFromNow(24 * 6) },
   flaggedRunning: { eventStarted: true },
   flaggedNotRunning: { eventStarted: false },
   silent: { question: "no timing at all" },
