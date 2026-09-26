@@ -11971,6 +11971,9 @@ function renderPortfolioCandidateRows(rows = [], mode = state.mode, diagnostics 
           const precheck = excluded
             ? "EXCLUDED"
             : (watchingDip ? "WATCHING" : (heldRow ? "ALREADY HELD" : (riskBlockedRow ? "RISK-BLOCKED" : "READY")));
+          const precheckTone = excluded || riskBlockedRow || heldRow
+            ? "warning"
+            : (watchingDip ? "pending" : "filled");
           const selectedProbability = portfolioProbability(item, config);
           const selectedAnnualizedReturn = portfolioAnnualizedReturn(item, config);
           const selectedExpectedValue = portfolioExpectedValue(item, config);
@@ -11978,9 +11981,10 @@ function renderPortfolioCandidateRows(rows = [], mode = state.mode, diagnostics 
             <tr>
               <td data-label="Win">${gainCell(item)}</td>
               <td data-label="Days left">${evaluationDaysLeftCell(item)}</td>
-              <td data-label="Market">${marketAnchor(item)}</td>
-              <td data-label="Precheck" class="${excluded ? "negative" : (riskBlockedRow ? "warning" : "positive")}" data-precheck="${escapeHtml(precheck)}">
-                <strong>${precheck}</strong>${marketTagsInfo(item)}
+              <td data-label="Market" class="candidate-market-cell">
+                <span class="order-chip candidate-precheck-chip ${precheckTone}">${escapeHtml(precheck)}</span>${marketTagsInfo(item)}${marketAnchor(item)}
+              </td>
+              <td data-label="Precheck" class="candidate-precheck-details ${excluded ? "negative" : (riskBlockedRow ? "warning" : "positive")}" data-precheck="${escapeHtml(precheck)}">
                 ${status ? `<span>${escapeHtml(status)}</span>` : ""}
                 ${watchingDip ? "" : `<label class="candidate-exclusion-control" title="Exclude this candidate from this portfolio's future executions">
                   <input type="checkbox" data-portfolio-candidate-exclude data-portfolio-mode="${escapeHtml(mode)}" data-candidate-token-id="${escapeHtml(String(item.tokenId || item.clobTokenId || item.assetId || ""))}" ${excluded ? "checked" : ""}>

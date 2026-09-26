@@ -3658,10 +3658,9 @@ body.modal-open {
   }
 
   .candidate-ledger-scroll .execution-candidates-table td[data-label="Market"] {
+    display: block;
     order: -2;
     grid-column: 1 / -1;
-    grid-template-columns: 1fr;
-    gap: 7px;
     padding-bottom: 10px;
     border-bottom: 1px solid var(--line);
   }
@@ -3684,8 +3683,43 @@ body.modal-open {
     white-space: normal;
   }
 
+  /* Match the closed-trade card: the tag affordance and the current candidate state belong
+     to the market heading, not in the separate Precheck details below it. Floats use only
+     the heading line and let the long market question recover the full card width. */
+  .candidate-ledger-scroll .candidate-market-cell > .candidate-precheck-chip {
+    float: right;
+    margin: 0 0 4px 10px !important;
+  }
+
+  .candidate-ledger-scroll .candidate-market-cell > .market-tags-button {
+    float: right;
+    width: auto;
+    justify-self: auto;
+    margin: 0 12px 4px 10px !important;
+  }
+
+  .candidate-ledger-scroll .candidate-precheck-details {
+    min-height: 22px;
+  }
+
   .candidate-ledger-scroll .candidate-exclusion-control {
+    display: inline-flex;
+    width: max-content;
+    max-width: 100%;
     margin-top: 6px;
+    white-space: nowrap;
+  }
+
+  .candidate-ledger-scroll .candidate-exclusion-control span {
+    display: inline;
+    margin: 0;
+    white-space: nowrap;
+  }
+
+  /* A timestamp is a single fact. Give it the full final row instead of squeezing it into
+     one half of the metric grid, where “Added / updated” and a local datetime compete. */
+  .candidate-ledger-scroll .execution-candidates-table td[data-label="Added / updated"] {
+    grid-column: 1 / -1;
   }
 
   .trade-analysis-text {
