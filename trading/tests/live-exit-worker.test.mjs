@@ -115,6 +115,18 @@ test("a decided quote is removed from the DIP watch but a low executable ask is 
     "the execution pass must independently refuse a decided quote");
 });
 
+test("terminal DIP entry attempts retain the rejection reason for the dashboard", () => {
+  const source = readFileSync(new URL("../tools/rpi-live-exit-worker.mjs", import.meta.url), "utf8");
+  const statusRows = functionBody(source, "dipEntryWatchStatusRows");
+  const fire = functionBody(source, "fireDipEntries");
+  assert.match(statusRows, /settledError: context\.state\.dipEntries.*?\.error \|\| null/,
+    "the published watch status must retain the exchange or funding refusal");
+  assert.match(fire, /const rejection = filled \? null : \(response\?\.errorMsg \|\| response\?\.error \|\| "order was not accepted"\);/,
+    "one refusal message must feed both the event log and terminal watch record");
+  assert.match(fire, /reason: filled \? "submitted" : "rejected", error: rejection/,
+    "a rejected token must retain its exact reason while duplicate protection stays terminal");
+});
+
 // A portfolio that is switched off does not trade, and selling one of its positions is
 // trading. Omitting its tokens from `policies` does not achieve that on its own: this
 // worker applies defaultPolicy to every position it does not find there, so an omitted

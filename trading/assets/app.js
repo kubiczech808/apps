@@ -1621,6 +1621,10 @@ function dipWatchPlanHasFinalQuote(plan = {}) {
   return market != null && (market <= 0 || market >= 1);
 }
 
+function dipWatchPlanHasTerminalEntry(plan = {}) {
+  return String(plan?.settled || "").trim() !== "";
+}
+
 // These are not ordinary catalogue candidates. They are the exact entries the RPi has
 // prepared while the favourite is still visible, and their price is refreshed directly from
 // the CLOB above. Once it falls below 50%, the catalogue normally retains the other outcome,
@@ -1634,6 +1638,9 @@ function dipEntryWatchCandidateRows(mode = state.mode) {
   return watch
     .filter((plan) => String(plan?.portfolioId || "") === portfolioId)
     .filter((plan) => !dipWatchPlanHasFinalQuote(plan))
+    // The worker refuses a token only once, intentionally: retrying a rejected FOK can
+    // create duplicate live orders. It is therefore no longer an execution candidate.
+    .filter((plan) => !dipWatchPlanHasTerminalEntry(plan))
     .map((plan) => {
       const currentAsk = numericOrNull(plan.bestAsk ?? plan.currentAsk);
       const currentBid = numericOrNull(plan.bestBid ?? plan.currentBid);
@@ -1676,8 +1683,13 @@ function dipEntryStatusMarkup(mode) {
   const status = state.dipEntryStatus;
   if (!status) return `<div class="empty">Dip entry is on. Loading what it is watching...</div>`;
   const mine = dipEntryPortfolioIdForMode(mode);
-  const watched = status.watch.filter((plan) => String(plan?.portfolioId || "") === mine
+  const allWatched = status.watch.filter((plan) => String(plan?.portfolioId || "") === mine
     || String(plan?.portfolioId || "") === normalizeMode(mode));
+  const watched = allWatched.filter((plan) => !dipWatchPlanHasTerminalEntry(plan));
+  const rejected = allWatched.filter((plan) => String(plan?.settled || "") === "rejected");
+  const rejectionReason = rejected
+    .map((plan) => String(plan?.settledError || "").trim())
+    .find(Boolean);
   const caught = status.hits.filter((hit) => String(hit?.portfolioId || "") === mine
     || String(hit?.portfolioId || "") === normalizeMode(mode));
   const newest = caught.reduce((best, hit) => (!best || String(hit.at || "") > String(best.at || "") ? hit : best), null);
@@ -1700,6 +1712,7 @@ function dipEntryStatusMarkup(mode) {
     + ` ${probability(rule.buyMin)}-${probability(rule.buyMax)}.`
     + ` ${caught.length ? `${formatInteger(caught.length)} dip(s) recorded` : "No dip recorded yet"}`
     + `${newest ? `, newest ${escapeHtml(formatDate(newest.at))} at ${probability(Number(newest.price))}` : ""}.${diagnosticNote}${quoteNote}${workerNote}`
+    + `${rejected.length ? ` ${formatInteger(rejected.length)} earlier in-band attempt(s) were rejected and are excluded from the active shortlist.${rejectionReason ? ` Latest reason: ${escapeHtml(rejectionReason)}.` : ""}` : ""}`
     + ` The RPi worker watches these every second; this bot opens the position on its next run,`
     + ` at the price the dip reached.</div>`;
 }

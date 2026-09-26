@@ -24,3 +24,14 @@ test("candidate card controls and timestamps fit without horizontal scrolling", 
   assert.match(css, /td\[data-label="Analysis"\] \{\s*display: flex;\s*flex-wrap: wrap;\s*align-items: center;/,
     "the analysis icon and detail link are aligned on one line");
 });
+
+test("DIP candidates do not present a terminal worker rejection as READY", () => {
+  assert.match(app, /function dipWatchPlanHasTerminalEntry\(plan = \{\}\)[\s\S]*?plan\?\.settled/,
+    "a terminal worker result needs a reusable guard");
+  assert.match(app, /\.filter\(\(plan\) => !dipWatchPlanHasTerminalEntry\(plan\)\)/,
+    "a rejected or submitted worker plan must leave the active candidate list");
+  assert.match(app, /earlier in-band attempt\(s\) were rejected and are excluded from the active shortlist/,
+    "the DIP header must explain why a visible quote is not ready to buy");
+  assert.match(app, /Latest reason: \$\{escapeHtml\(rejectionReason\)\}/,
+    "the dashboard must surface the preserved exchange rejection reason when it has one");
+});

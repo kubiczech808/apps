@@ -2533,6 +2533,9 @@ function dipEntryWatchStatusRows(context) {
     preparedAt: plan.preparedAt || null,
     seenAt: plan.seenAt || null,
     settled: context.state.dipEntries?.[dipEntryPlanKey(plan)]?.reason || null,
+    // A terminal watch must carry why it ended. Without this the dashboard can only see
+    // "rejected", then misleadingly render the stale price as a fresh READY candidate.
+    settledError: context.state.dipEntries?.[dipEntryPlanKey(plan)]?.error || null,
   }));
 }
 
@@ -2660,16 +2663,17 @@ async function fireDipEntries(context, books, now) {
     }
     const response = await submitDipEntry(plan, book, cash);
     const filled = exitFilled(response);
+    const rejection = filled ? null : (response?.errorMsg || response?.error || "order was not accepted");
     recordEvent(context.state, {
       ...event,
       type: filled ? "DIP_ENTRY_SUBMITTED" : "DIP_ENTRY_REJECTED",
       price: response?.price ?? null,
       shares: response?.shares ?? null,
-      error: filled ? null : (response?.errorMsg || response?.error || "order was not accepted"),
+      error: rejection,
     });
     // A rejection is terminal for this token too. The band is a moment; retrying into a
     // book that has already refused the size is how one decision became three orders.
-    entered[key] = { terminal: true, at: now, reason: filled ? "submitted" : "rejected" };
+    entered[key] = { terminal: true, at: now, reason: filled ? "submitted" : "rejected", error: rejection };
   }
 }
 // ---------------------------------------------------------------------------------------
