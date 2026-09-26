@@ -4,7 +4,7 @@ import { buildExternalTrendReference, EXTERNAL_PIVOT_SCHEMA } from './external-t
 import { buildFvgSupplyDemandZones, candleSignal, marketStructure } from './priceaction.mjs'
 
 export const PRICE_ACTION_STRUCTURE_ID = 'price-action-structure-v1'
-export const PRICE_ACTION_MATRIX_SCHEMA = 53
+export const PRICE_ACTION_MATRIX_SCHEMA = 54
 export const PRICE_ACTION_CHART_CANDLE_LIMITS = {
   '1h': 8760,
   '4h': 2190,
@@ -1886,6 +1886,72 @@ const latestCompletedExternalRange = ({ pivots = [], trend } = {}) => {
   return { activeRange: null, chartPivots: [] }
 }
 
+const sourcePivotKey = (pivot) => `${pivot?.kind ?? ''}:${Number(pivot?.time)}`
+
+// External OHLC confirms the sequence and the close that breaks structure.
+// The graph, FVGs and paper fills share the local chart stream, though, so
+// anchors must sit on that stream's actual wick.  A vendor can legitimately
+// quote a different intraday extreme for the same session; drawing its wick
+// over another candle would make the Fibonacci range impossible to audit.
+const projectExternalPivotToChart = ({ pivot, pivots = [], candles = [] } = {}) => {
+  const sorted = [...pivots].sort((left, right) => left.time - right.time)
+  const latestTime = candles.at(-1)?.time
+  const exactIndex = sorted.findIndex((candidate) => (
+    candidate.kind === pivot.kind && candidate.time === pivot.time
+  ))
+  const before = exactIndex >= 0
+    ? sorted[exactIndex - 1]
+    : [...sorted].reverse().find((candidate) => candidate.time < pivot.time)
+  const after = exactIndex >= 0
+    ? sorted[exactIndex + 1]
+    : sorted.find((candidate) => candidate.time > pivot.time)
+  const from = before?.time ?? pivot.time
+  const to = after?.time ?? latestTime
+  const candidates = candles.filter((candle) => candle.time >= from && candle.time <= to)
+  if (!candidates.length) return { ...pivot, sourceTime: pivot.time, sourcePrice: pivot.price }
+  const extreme = candidates.reduce((selected, candle) => (
+    pivot.kind === 'high'
+      ? candle.high > selected.high ? candle : selected
+      : candle.low < selected.low ? candle : selected
+  ))
+  return {
+    ...pivot,
+    sourceTime: pivot.time,
+    sourcePrice: pivot.price,
+    time: extreme.time,
+    price: pivot.kind === 'high' ? extreme.high : extreme.low,
+    close: extreme.close,
+    extreme: pivot.kind === 'high' ? extreme.high : extreme.low,
+  }
+}
+
+const projectExternalPivotsToChart = ({ pivots = [], candles = [] } = {}) => {
+  const sorted = [...pivots].sort((left, right) => left.time - right.time)
+  return sorted.map((pivot) => projectExternalPivotToChart({ pivot, pivots: sorted, candles }))
+}
+
+const chartRangeFromExternalPivots = ({ range, pivots = [], projectedPivots = [], candles = [] } = {}) => {
+  if (!range) return null
+  const projectedBySource = new Map(projectedPivots.map((pivot) => [
+    sourcePivotKey({ kind: pivot.kind, time: pivot.sourceTime ?? pivot.time }),
+    pivot,
+  ]))
+  const projectEndpoint = (pivot) => {
+    const projected = projectedBySource.get(sourcePivotKey(pivot))
+    return projected
+      ? { ...projected, label: pivot.label }
+      : { ...projectExternalPivotToChart({ pivot, pivots, candles }), label: pivot.label }
+  }
+  const high = projectEndpoint(range.high)
+  const low = projectEndpoint(range.low)
+  if (!(high.price > low.price)) return range
+  return {
+    high,
+    low,
+    source: range.source ?? 'external-confirmed-pivots',
+  }
+}
+
 // This is the only live structure classifier. The OHLC and pivots originate
 // from Twelve Data for FX and Binance for BTC; no swing or trend conclusion
 // from the local market-data feed is allowed to influence the result.
@@ -1924,6 +1990,7 @@ export const classifyExternalStructure = ({
   })
   const high = externalPivotLeg(pivots, 'high')
   const low = externalPivotLeg(pivots, 'low')
+  const projectedPivots = projectExternalPivotsToChart({ pivots, candles: normalizedCandles })
   const requestedTrend = externalPivots?.trend
   const trend = requestedTrend === 'up' || requestedTrend === 'down' ? requestedTrend : 'flat'
   const expectedHigh = trend === 'up' ? 'HH' : trend === 'down' ? 'LH' : null
@@ -1947,7 +2014,25 @@ export const classifyExternalStructure = ({
           : [publishedRange.high, publishedRange.low],
       }
     : latestCompletedExternalRange({ pivots, trend })
-  const activeRange = completedWave.activeRange
+  const activeRange = chartRangeFromExternalPivots({
+    range: completedWave.activeRange,
+    pivots,
+    projectedPivots,
+    candles: normalizedCandles,
+  })
+  const chartPivots = completedWave.chartPivots.map((pivot) => {
+    const activeEndpoint = pivot.kind === 'high' && pivot.time === completedWave.activeRange?.high?.time
+      ? activeRange?.high
+      : pivot.kind === 'low' && pivot.time === completedWave.activeRange?.low?.time
+        ? activeRange?.low
+        : null
+    if (activeEndpoint) return { ...activeEndpoint, label: pivot.label, source: pivot.source ?? externalPivots?.source ?? externalTrend?.source ?? null }
+    const projected = projectedPivots.find((candidate) => (
+      candidate.kind === pivot.kind && candidate.sourceTime === pivot.time
+    ))
+    if (!projected) return { ...pivot, source: pivot.source ?? externalPivots?.source ?? externalTrend?.source ?? null }
+    return { ...projected, label: pivot.label, source: pivot.source ?? externalPivots?.source ?? externalTrend?.source ?? null }
+  })
   const structureConfirmed = Boolean(activeRange)
   const source = externalPivots?.source ?? externalTrend?.source ?? 'externí zdroj'
   const method = externalPivots?.method ?? 'potvrzené pivoty externího OHLC'
@@ -2001,11 +2086,8 @@ export const classifyExternalStructure = ({
       // The chart can show only the source pivots used for the live decision.
       // A local zigzag is intentionally never mixed into this path.
       recentSwings: [],
-      chartPivots: completedWave.chartPivots.map((pivot) => ({
-        ...pivot,
-        source: pivot.source ?? source,
-      })),
-      alternatingTrendPivots: completedWave.chartPivots,
+      chartPivots,
+      alternatingTrendPivots: chartPivots,
       breakOfStructure: breakEvent,
       externalPivotCount: pivots.length,
     },

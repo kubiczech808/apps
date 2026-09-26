@@ -137,7 +137,12 @@ test('EMA regime is retained as a diagnostic and never vetoes external pivot str
 
 test('live PA structure comes only from externally confirmed pivots', () => {
   const result = classifyExternalStructure({
-    candles: zigzag([100, 140, 120, 150, 130, 160], { steps: 8 }),
+    candles: [
+      candle(START + HOUR, 155, 160, 150, 155),
+      candle(START + 2 * HOUR, 150, 152, 140, 145),
+      candle(START + 3 * HOUR, 154, 155, 135, 154),
+      candle(START + 4 * HOUR, 134, 140, 130, 129),
+    ],
     externalTrend: { trend: 'up', source: 'Twelve Data', method: 'EMA 20/50' },
     externalPivots: {
       trend: 'down', source: 'Twelve Data', method: 'Potvrzené pivoty', timePeriod: 10,
@@ -173,7 +178,14 @@ test('live PA structure comes only from externally confirmed pivots', () => {
 
 test('a published external BoS range reaches the dashboard with its original HH and new LL', () => {
   const result = classifyExternalStructure({
-    candles: zigzag([164, 152, 156], { steps: 4 }),
+    candles: [
+      candle(START + 2 * HOUR, 156, 160, 155, 156),
+      candle(START + 3 * HOUR, 161, 164, 159, 161),
+      candle(START + 4 * HOUR, 160, 161, 156, 157),
+      candle(START + 5 * HOUR, 157, 158, 153, 154),
+      candle(START + 6 * HOUR, 154, 155, 152, 154),
+      candle(START + 7 * HOUR, 154, 156, 153, 155),
+    ],
     externalPivots: {
       trend: 'down',
       source: 'Twelve Data',
@@ -210,6 +222,51 @@ test('a published external BoS range reaches the dashboard with its original HH 
   assert.equal(result.structure.activeRange.low.price, 152)
   assert.equal((result.structure.activeRange.high.price + result.structure.activeRange.low.price) / 2, 158)
   assert.deepEqual(result.structure.chartPivots.map((pivot) => pivot.label), ['HL', 'HH', 'LL'])
+})
+
+test('externally confirmed pivot anchors use the actual extrema of the displayed chart wave', () => {
+  const result = classifyExternalStructure({
+    candles: [
+      candle(START, 160, 160.3, 158.5, 159.1),
+      candle(START + HOUR, 159.1, 163.9, 158.8, 162.8),
+      candle(START + 2 * HOUR, 162.8, 163.7, 158.7, 159.2),
+      candle(START + 3 * HOUR, 159.2, 160.1, 152.881, 153.444),
+      candle(START + 4 * HOUR, 153.444, 154.2, 152.93, 153.529),
+    ],
+    externalPivots: {
+      trend: 'down',
+      source: 'Twelve Data',
+      method: 'Potvrzené pivoty',
+      event: { type: 'BOS_DOWN', time: START + 2 * HOUR, close: 159.2 },
+      activeRange: {
+        high: { kind: 'high', label: 'HH', price: 164.0881, close: 163.6005, time: START + HOUR },
+        low: { kind: 'low', label: 'LL', price: 152.3795, close: 154.9473, time: START + 4 * HOUR },
+        source: 'external-break-of-structure',
+      },
+      chartPivots: [
+        { kind: 'low', label: 'HL', price: 158, time: START },
+        { kind: 'high', label: 'HH', price: 164.0881, time: START + HOUR },
+        { kind: 'low', label: 'LL', price: 152.3795, time: START + 4 * HOUR },
+      ],
+      pivots: [
+        { kind: 'low', label: 'HL', price: 158, time: START },
+        { kind: 'high', label: 'HH', price: 164.0881, time: START + HOUR },
+        { kind: 'low', label: 'LL', price: 152.3795, time: START + 4 * HOUR },
+      ],
+    },
+  })
+
+  assert.equal(result.trend, 'down')
+  assert.equal(result.event, 'BOS_DOWN')
+  assert.equal(result.structure.activeRange.high.price, 163.9)
+  assert.equal(result.structure.activeRange.low.price, 152.881)
+  assert.equal(result.structure.activeRange.low.time, START + 3 * HOUR)
+  assert.equal((result.structure.activeRange.high.price + result.structure.activeRange.low.price) / 2, 158.3905)
+  assert.deepEqual(result.structure.chartPivots.map((pivot) => [pivot.label, pivot.time, pivot.price]), [
+    ['HL', START, 158.5],
+    ['HH', START + HOUR, 163.9],
+    ['LL', START + 3 * HOUR, 152.881],
+  ])
 })
 
 test('external active range does not combine an unpaired newer pivot with an older leg', () => {
