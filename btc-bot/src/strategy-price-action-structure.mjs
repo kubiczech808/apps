@@ -4,7 +4,7 @@ import { buildExternalTrendReference } from './external-trends.mjs'
 import { buildFvgSupplyDemandZones, candleSignal, marketStructure } from './priceaction.mjs'
 
 export const PRICE_ACTION_STRUCTURE_ID = 'price-action-structure-v1'
-export const PRICE_ACTION_MATRIX_SCHEMA = 51
+export const PRICE_ACTION_MATRIX_SCHEMA = 52
 export const PRICE_ACTION_CHART_CANDLE_LIMITS = {
   '1h': 8760,
   '4h': 2190,
@@ -1927,7 +1927,25 @@ export const classifyExternalStructure = ({
   const trend = requestedTrend === 'up' || requestedTrend === 'down' ? requestedTrend : 'flat'
   const expectedHigh = trend === 'up' ? 'HH' : trend === 'down' ? 'LH' : null
   const expectedLow = trend === 'up' ? 'HL' : trend === 'down' ? 'LL' : null
-  const completedWave = latestCompletedExternalRange({ pivots, trend })
+  const publishedRange = externalPivots?.activeRange
+  const hasPublishedRange = publishedRange
+    && Number.isFinite(publishedRange?.high?.price)
+    && Number.isFinite(publishedRange?.low?.price)
+    && Number.isFinite(publishedRange?.high?.time)
+    && Number.isFinite(publishedRange?.low?.time)
+    && publishedRange.high.price > publishedRange.low.price
+  const completedWave = hasPublishedRange
+    ? {
+        activeRange: {
+          high: { ...publishedRange.high },
+          low: { ...publishedRange.low },
+          source: publishedRange.source ?? 'external-confirmed-pivots',
+        },
+        chartPivots: Array.isArray(externalPivots?.chartPivots) && externalPivots.chartPivots.length
+          ? externalPivots.chartPivots
+          : [publishedRange.high, publishedRange.low],
+      }
+    : latestCompletedExternalRange({ pivots, trend })
   const activeRange = completedWave.activeRange
   const structureConfirmed = Boolean(activeRange)
   const source = externalPivots?.source ?? externalTrend?.source ?? 'externí zdroj'
@@ -1935,17 +1953,20 @@ export const classifyExternalStructure = ({
   const labels = activeRange
     ? [activeRange.high.label, activeRange.low.label].join(' + ')
     : [high?.label, low?.label].filter(Boolean).join(' + ')
+  const breakEvent = externalPivots?.event ?? null
   const reason = trend === 'flat'
     ? `${source}: ${method}; bez potvrzené sekvence HH + HL nebo LH + LL${labels ? ` (${labels})` : ''}`
-    : `${source}: ${method}; ${labels || `${expectedHigh} + ${expectedLow}`}`
+    : breakEvent
+      ? `${source}: ${method}; ${breakEvent.type === 'BOS_DOWN' ? 'BoS pod HL' : 'BoS nad LH'} potvrzen uzavřením, ${labels}`
+      : `${source}: ${method}; ${labels || `${expectedHigh} + ${expectedLow}`}`
 
   return {
     trend,
     establishedTrend: trend,
     structureConfirmed,
     status: trend === 'up' ? 'met' : trend === 'down' ? 'unmet' : 'neutral',
-    event: null,
-    eventDetail: null,
+    event: breakEvent?.type ?? null,
+    eventDetail: breakEvent,
     reason,
     price: latest?.close ?? null,
     asOf: latest?.time ?? externalPivots?.asOf ?? externalTrend?.asOf ?? null,
@@ -1984,6 +2005,7 @@ export const classifyExternalStructure = ({
         source: pivot.source ?? source,
       })),
       alternatingTrendPivots: completedWave.chartPivots,
+      breakOfStructure: breakEvent,
       externalPivotCount: pivots.length,
     },
     zones: activeSupplyDemandZones(normalizedZoneCandles, { lookback: zoneLookback, maxAgeCandles: zoneMaxAgeCandles }),

@@ -170,6 +170,47 @@ test('live PA structure comes only from externally confirmed pivots', () => {
   )
 })
 
+test('a published external BoS range reaches the dashboard with its original HH and new LL', () => {
+  const result = classifyExternalStructure({
+    candles: zigzag([164, 152, 156], { steps: 4 }),
+    externalPivots: {
+      trend: 'down',
+      source: 'Twelve Data',
+      method: 'Potvrzené pivoty',
+      event: {
+        type: 'BOS_DOWN',
+        time: START + 6 * HOUR,
+        close: 154,
+        protectedPivot: { kind: 'low', label: 'HL', price: 155, time: START + 2 * HOUR },
+      },
+      activeRange: {
+        high: { kind: 'high', label: 'HH', price: 164, close: 161, time: START + 3 * HOUR },
+        low: { kind: 'low', label: 'LL', price: 152, close: 154, time: START + 6 * HOUR },
+        source: 'external-break-of-structure',
+      },
+      chartPivots: [
+        { kind: 'low', label: 'HL', price: 155, time: START + 2 * HOUR },
+        { kind: 'high', label: 'HH', price: 164, time: START + 3 * HOUR },
+        { kind: 'low', label: 'LL', price: 152, time: START + 6 * HOUR },
+      ],
+      pivots: [
+        { kind: 'low', label: 'HL', price: 155, time: START + 2 * HOUR },
+        { kind: 'high', label: 'HH', price: 164, time: START + 3 * HOUR },
+      ],
+    },
+  })
+
+  assert.equal(result.trend, 'down')
+  assert.equal(result.event, 'BOS_DOWN')
+  assert.equal(result.structure.activeRange.source, 'external-break-of-structure')
+  assert.equal(result.structure.activeRange.high.label, 'HH')
+  assert.equal(result.structure.activeRange.high.price, 164)
+  assert.equal(result.structure.activeRange.low.label, 'LL')
+  assert.equal(result.structure.activeRange.low.price, 152)
+  assert.equal((result.structure.activeRange.high.price + result.structure.activeRange.low.price) / 2, 158)
+  assert.deepEqual(result.structure.chartPivots.map((pivot) => pivot.label), ['HL', 'HH', 'LL'])
+})
+
 test('external active range does not combine an unpaired newer pivot with an older leg', () => {
   const result = classifyExternalStructure({
     externalPivots: {

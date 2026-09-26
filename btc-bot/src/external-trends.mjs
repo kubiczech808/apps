@@ -23,6 +23,7 @@ const EXTERNAL_PIVOT_INTERVALS = {
 }
 
 const numberOrNull = (value) => {
+  if (value == null || value === '') return null
   const parsed = Number(value)
   return Number.isFinite(parsed) ? parsed : null
 }
@@ -125,7 +126,16 @@ const alternatingExternalPivots = (pivots = []) => {
   return alternating
 }
 
-const closeBreaksPreviousWick = (pivot, previous) => {
+const closeBreaksPreviousWick = (pivot, previous, { candles = [], until = null } = {}) => {
+  const completed = completedOhlc(candles)
+  if (completed.length && previous?.time != null) {
+    const confirmed = completed.some((candle) => (
+      candle.time > previous.time
+      && (!Number.isFinite(until) || candle.time <= until)
+      && (pivot.kind === 'high' ? candle.close > previous.price : candle.close < previous.price)
+    ))
+    if (confirmed) return true
+  }
   const close = numberOrNull(pivot?.close)
   if (!Number.isFinite(close)) {
     return pivot.kind === 'high' ? pivot.price > previous.price : pivot.price < previous.price
@@ -133,46 +143,168 @@ const closeBreaksPreviousWick = (pivot, previous) => {
   return pivot.kind === 'high' ? close > previous.price : close < previous.price
 }
 
-const normalizeExternalPivots = (pivots = []) => {
+const normalizeExternalPivots = (pivots = [], { candles = [] } = {}) => {
   const candidates = alternatingExternalPivots(pivots)
   const accepted = []
   const previousAcceptedByKind = { high: null, low: null }
-  for (const pivot of candidates) {
+  for (const [index, pivot] of candidates.entries()) {
     const previous = previousAcceptedByKind[pivot.kind]
     const extendsPrevious = previous && (pivot.kind === 'high'
       ? pivot.price > previous.price
       : pivot.price < previous.price)
-    if (extendsPrevious && !closeBreaksPreviousWick(pivot, previous)) continue
+    const until = candidates[index + 1]?.time ?? null
+    if (extendsPrevious && !closeBreaksPreviousWick(pivot, previous, { candles, until })) continue
     accepted.push(pivot)
     previousAcceptedByKind[pivot.kind] = pivot
   }
 
   const alternating = alternatingExternalPivots(accepted)
   const previousByKind = { high: null, low: null }
-  return alternating.map((pivot) => {
+  return alternating.map((pivot, index) => {
     const previous = previousByKind[pivot.kind]
+    const until = alternating[index + 1]?.time ?? null
     const label = !previous
       ? pivot.kind === 'high' ? 'H' : 'L'
       : pivot.kind === 'high'
-        ? closeBreaksPreviousWick(pivot, previous) ? 'HH' : 'LH'
-        : closeBreaksPreviousWick(pivot, previous) ? 'LL' : 'HL'
+        ? closeBreaksPreviousWick(pivot, previous, { candles, until }) ? 'HH' : 'LH'
+        : closeBreaksPreviousWick(pivot, previous, { candles, until }) ? 'LL' : 'HL'
     previousByKind[pivot.kind] = pivot
     return { ...pivot, label }
   })
 }
 
-export const classifyExternalPivotPath = (pivots = []) => {
-  const path = normalizeExternalPivots(pivots)
+const completedOhlc = (candles = []) => [...candles]
+  .map((candle) => ({
+    ...candle,
+    time: numberOrNull(candle?.time),
+    high: numberOrNull(candle?.high),
+    low: numberOrNull(candle?.low),
+    close: numberOrNull(candle?.close),
+  }))
+  .filter((candle) => Number.isFinite(candle.time) && [candle.high, candle.low, candle.close].every(Number.isFinite))
+  .sort((left, right) => left.time - right.time)
+
+const completedDirectionalLegs = (pivots = [], trend) => {
+  const expected = trend === 'up'
+    ? { startKind: 'low', startLabel: 'HL', endKind: 'high', endLabel: 'HH' }
+    : trend === 'down'
+      ? { startKind: 'high', startLabel: 'LH', endKind: 'low', endLabel: 'LL' }
+      : null
+  if (!expected) return []
+  return pivots.flatMap((end, index) => {
+    const start = pivots[index - 1]
+    return start?.kind === expected.startKind && start?.label === expected.startLabel
+      && end?.kind === expected.endKind && end?.label === expected.endLabel
+      && start.time < end.time
+      ? [{ start, end }]
+      : []
+  })
+}
+
+const firstClosingBreak = ({ candles, after, level, direction }) => candles.find((candle) => (
+  candle.time > after
+  && (direction === 'down' ? candle.close < level : candle.close > level)
+)) ?? null
+
+const terminalWaveExtreme = ({ candles, after, kind }) => {
+  const candidates = candles.filter((candle) => candle.time >= after)
+  if (!candidates.length) return null
+  const extreme = candidates.reduce((selected, candle) => (
+    kind === 'low'
+      ? candle.low < selected.low ? candle : selected
+      : candle.high > selected.high ? candle : selected
+  ))
+  return {
+    kind,
+    label: kind === 'low' ? 'LL' : 'HH',
+    price: kind === 'low' ? extreme.low : extreme.high,
+    close: extreme.close,
+    time: extreme.time,
+  }
+}
+
+// A structural reversal is confirmed only by a candle close through the
+// protected opposite wick. The first impulse after that break still starts at
+// the old HH/LL: a local counter-swing may not replace this Fibonacci anchor.
+const latestBreakOfStructure = ({ pivots = [], candles = [] } = {}) => {
+  const events = []
+  for (const { start, end } of completedDirectionalLegs(pivots, 'up')) {
+    const breakCandle = firstClosingBreak({ candles, after: end.time, level: start.price, direction: 'down' })
+    const low = breakCandle && terminalWaveExtreme({ candles, after: breakCandle.time, kind: 'low' })
+    if (breakCandle && low && end.price > low.price) {
+      events.push({
+        type: 'BOS_DOWN',
+        trend: 'down',
+        time: breakCandle.time,
+        close: breakCandle.close,
+        protectedPivot: { ...start, label: 'HL' },
+        activeRange: {
+          high: { ...end, label: 'HH' },
+          low,
+          source: 'external-break-of-structure',
+        },
+      })
+    }
+  }
+  for (const { start, end } of completedDirectionalLegs(pivots, 'down')) {
+    const breakCandle = firstClosingBreak({ candles, after: end.time, level: start.price, direction: 'up' })
+    const high = breakCandle && terminalWaveExtreme({ candles, after: breakCandle.time, kind: 'high' })
+    if (breakCandle && high && high.price > end.price) {
+      events.push({
+        type: 'BOS_UP',
+        trend: 'up',
+        time: breakCandle.time,
+        close: breakCandle.close,
+        protectedPivot: { ...start, label: 'LH' },
+        activeRange: {
+          high,
+          low: { ...end, label: 'LL' },
+          source: 'external-break-of-structure',
+        },
+      })
+    }
+  }
+  return events.sort((left, right) => left.time - right.time || right.activeRange.high.time - left.activeRange.high.time).at(-1) ?? null
+}
+
+const chartPivotsForBreak = ({ pivots, event }) => {
+  if (!event) return []
+  const anchor = event.trend === 'down' ? event.activeRange.high : event.activeRange.low
+  const terminal = event.trend === 'down' ? event.activeRange.low : event.activeRange.high
+  const leading = pivots.filter((pivot) => pivot.time <= anchor.time).slice(-12)
+  const last = leading.at(-1)
+  return [
+    ...leading,
+    ...(last?.time === terminal.time && last?.kind === terminal.kind ? [] : [terminal]),
+  ]
+}
+
+export const classifyExternalPivotPath = (pivots = [], { candles = [] } = {}) => {
+  const path = normalizeExternalPivots(pivots, { candles })
   const high = path.filter((pivot) => pivot.kind === 'high').slice(-2)
   const low = path.filter((pivot) => pivot.kind === 'low').slice(-2)
-  const trend = high.length === 2 && low.length === 2
+  const directionalTrend = high.length === 2 && low.length === 2
     ? high[1].price > high[0].price && low[1].price > low[0].price
       ? 'up'
       : high[1].price < high[0].price && low[1].price < low[0].price
         ? 'down'
         : 'flat'
     : 'flat'
-  return { trend, pivots: path.slice(-12) }
+  const event = latestBreakOfStructure({ pivots: path, candles: completedOhlc(candles) })
+  return {
+    trend: event?.trend ?? directionalTrend,
+    pivots: path.slice(-12),
+    activeRange: event?.activeRange ?? null,
+    event: event
+      ? {
+          type: event.type,
+          time: event.time,
+          close: event.close,
+          protectedPivot: event.protectedPivot,
+        }
+      : null,
+    chartPivots: event ? chartPivotsForBreak({ pivots: path, event }) : null,
+  }
 }
 
 const parseTwelvePivotValues = (values) => (Array.isArray(values) ? values : [])
@@ -319,7 +451,7 @@ export const confirmedExternalPivotPath = ({ candles = [], timeframeId = '1h', n
     timePeriod = EXTERNAL_PIVOT_FALLBACK_PERIOD
     candidates = confirmedPivotCandidates(completed, timePeriod)
   }
-  return { ...classifyExternalPivotPath(candidates), timePeriod }
+  return { ...classifyExternalPivotPath(candidates, { candles: completed }), timePeriod }
 }
 
 // Kept as an explicit BTC alias for callers and saved state from the first
@@ -333,9 +465,22 @@ export const canReuseExternalPivotBucket = ({ previous, assets = [], timeframeId
   previous?.pivots?.buckets?.[timeframeId] === bucket &&
   assets.every((asset) => previous.pivots.assets?.[asset.symbol]?.[timeframeId] != null)
 
-const pivotReference = ({ trend, pivots, source, timeframeId, asOf = null, timePeriod = EXTERNAL_PIVOT_PERIOD }) => ({
+const pivotReference = ({
   trend,
   pivots,
+  activeRange = null,
+  event = null,
+  chartPivots = null,
+  source,
+  timeframeId,
+  asOf = null,
+  timePeriod = EXTERNAL_PIVOT_PERIOD,
+}) => ({
+  trend,
+  pivots,
+  activeRange,
+  event,
+  chartPivots,
   source,
   method: EXTERNAL_PIVOT_METHOD,
   timePeriod,

@@ -281,7 +281,7 @@ button.primary { color: #fff; background: var(--series-1); border-color: transpa
 .asset-price-chart .asset-structure-label-up { fill: var(--good-text); }
 .asset-price-chart .asset-structure-label-down { fill: var(--critical-text); }
 .asset-price-chart .asset-structure-label-flat { fill: var(--warning-text); }
-.asset-price-chart .asset-risk-line { fill: none; stroke-width: 2.8; stroke-linecap: round; }
+.asset-price-chart .asset-risk-line { fill: none; stroke-width: 1.15; stroke-linecap: round; }
 .asset-price-chart .asset-tp-line { stroke: var(--good-text); }
 .asset-price-chart .asset-sl-line { stroke: var(--critical-text); }
 .asset-price-chart .asset-risk-label { font-size: 12px; font-weight: 800; paint-order: stroke; stroke: var(--surface-1); stroke-width: 3px; stroke-linejoin: round; }
