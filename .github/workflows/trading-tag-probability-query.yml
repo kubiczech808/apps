@@ -1,0 +1,49 @@
+name: Trading Tag Probability Query
+
+# Read-only, and deliberately light. Asks api.php's own resolved-tag-probability-analysis
+# for one or more tags, which reads already-folded cells from MySQL.
+#
+# It exists instead of another archive scan: the previous tool pulled the whole resolved
+# catalogue over HTTP and exhausted the host's 512 MB PHP limit on a live request, which is
+# the thing api.php's comment on this endpoint warns against. The response carries
+# statsSource, and the output prints it -- 'stored' is the cheap path, 'archive' means the
+# heavy fallback ran and the run should not be repeated.
+on:
+  workflow_dispatch:
+    inputs:
+      tags:
+        description: "Comma-separated tags to ask about (e.g. tha,tha1)"
+        required: false
+        default: "tha,tha1"
+        type: string
+      shape:
+        description: "Market shape to restrict to, or * for all"
+        required: false
+        default: "*"
+        type: string
+      mode:
+        description: "threshold (cumulative >=) or point (exact 1pp bucket)"
+        required: false
+        default: "threshold"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  query:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Ask the folded per-tag analysis
+        working-directory: trading
+        env:
+          MARKET_TAGS: ${{ inputs.tags }}
+          MARKET_SHAPE: ${{ inputs.shape }}
+          ANALYSIS_MODE: ${{ inputs.mode }}
+        run: node tools/tag-probability-query.mjs
