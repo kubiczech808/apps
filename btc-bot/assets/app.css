@@ -493,10 +493,18 @@ tbody tr:hover { background: var(--series-1-soft); }
 .pa-decision-cell-pullback .fact { min-width: 135px; max-width: none; white-space: nowrap; }
 .pa-zone-list {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
+  justify-content: center;
   gap: 5px;
-  min-width: 180px;
-  white-space: nowrap;
+  min-width: 0;
+  max-width: 520px;
+  white-space: normal;
+}
+.pa-decision-cell-zones {
+  width: 520px;
+  min-width: 320px;
+  white-space: normal;
 }
 .pa-zone-item {
   position: relative;
