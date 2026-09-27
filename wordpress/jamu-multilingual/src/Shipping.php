@@ -35,8 +35,7 @@ final class Shipping
     public function replace_legacy_dpd_script_html(string $html): string
     {
         $pattern = '#<script\b[^>]*\bsrc=["\'][^"\']*/WC-Doprava-main/js/dpd\.js(?:\?[^"\']*)?["\'][^>]*>\s*</script>#i';
-
-        return (string) preg_replace_callback($pattern, static function (): string {
+        $html = (string) preg_replace_callback($pattern, static function (): string {
             return <<<'HTML'
 <script id="jamu-ml-safe-dpd-picker">
 (function (window, document) {
@@ -105,6 +104,15 @@ final class Shipping
 </script>
 HTML;
         }, $html, 1);
+
+        // The same legacy plugin prints four inline handlers for DPD, Zásilkovna,
+        // Czech Post and GLS. They all operate on the same temporary fields and
+        // assume fragments never change. The maintained Packeta integration and
+        // the safe DPD bridge above own the picker flow, so these duplicate state
+        // handlers must not run on checkout.
+        $legacy_inline = '#<script\b[^>]*>\s*var\s+packetaApiKey\s*=.*?function\s+showSelectedPickupPoint\s*\(\s*point\s*\).*?</script>#is';
+
+        return (string) preg_replace($legacy_inline, '', $html);
     }
 
     /**
