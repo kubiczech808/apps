@@ -43,18 +43,33 @@ export function sharedKeys(left, right) {
   };
 }
 
-async function main() {
-  const url = `${HOST}/api.php?action=state&target=paper&summary=scraped&scope=active&offset=0`;
-  console.log(`Risk group check at ${new Date().toISOString()}`);
-  const response = await fetch(url);
-  const text = await response.text();
-  if (!response.ok) {
-    console.log(`   !! HTTP ${response.status}: ${text.slice(0, 300)}`);
-    return;
+// The active catalogue is paged at SCRAPED_SCOPE_PAGE_LIMIT rows, and there are several
+// thousand of them. One page found nothing and said "0 match" -- which reads like the rows
+// are absent rather than on page four. So it walks, bounded, and stops at the first short
+// page.
+async function loadActiveRows(maxPages) {
+  const rows = [];
+  for (let page = 0; page < maxPages; page += 1) {
+    const offset = rows.length;
+    const url = `${HOST}/api.php?action=state&target=paper&summary=scraped&scope=active&offset=${offset}`;
+    const response = await fetch(url);
+    const text = await response.text();
+    if (!response.ok) throw new Error(`HTTP ${response.status} at offset ${offset}: ${text.slice(0, 200)}`);
+    const payload = JSON.parse(text);
+    const batch = Array.isArray(payload?.marketObservations) ? payload.marketObservations : [];
+    rows.push(...batch);
+    if (!batch.length) break;
+    // A page shorter than the one before it is the last one.
+    if (page > 0 && batch.length < 1200) break;
+    if (batch.length < 1200) break;
   }
-  const payload = JSON.parse(text);
-  const rows = Array.isArray(payload?.marketObservations) ? payload.marketObservations : [];
-  console.log(`   ${rows.length} active row(s) on the first page`);
+  return rows;
+}
+
+async function main() {
+  console.log(`Risk group check at ${new Date().toISOString()}`);
+  const rows = await loadActiveRows(Math.max(1, Math.min(12, Number(process.env.MAX_PAGES || 8))));
+  console.log(`   ${rows.length} active row(s) read`);
 
   const matched = rows.filter((row) => {
     const question = String(row?.question || "").toLowerCase();

@@ -16,6 +16,11 @@ on:
         required: false
         default: "israel,republic of ireland"
         type: string
+      max_pages:
+        description: "How many 1200-row pages of the active catalogue to walk"
+        required: false
+        default: "8"
+        type: string
 
 permissions:
   contents: read
@@ -34,4 +39,5 @@ jobs:
         working-directory: trading
         env:
           QUESTION_FILTERS: ${{ inputs.questions }}
+          MAX_PAGES: ${{ inputs.max_pages }}
         run: node tools/risk-group-check.mjs
