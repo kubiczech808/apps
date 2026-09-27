@@ -1,0 +1,37 @@
+name: Audit JAMU currency product metadata
+
+on:
+  push:
+    branches: ['feat/jamu-multilingual']
+    paths:
+      - '.github/jamu-currency-audit-trigger'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: jamu-currency-audit
+  cancel-in-progress: false
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: jamu-production
+    env:
+      JAMU_FTP_LOGIN: ${{ secrets.JAMU_FTP_LOGIN }}
+      JAMU_FTP_PWD: ${{ secrets.JAMU_FTP_PWD }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/jamu-multilingual
+      - name: Read product currency metadata
+        run: python scripts/jamu_currency_audit.py
+      - name: Store read-only audit report
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add jamu-content/currency-meta-audit.json
+          git diff --cached --quiet || git commit -m 'Capture JAMU currency metadata audit'
+          git push origin HEAD:feat/jamu-multilingual
