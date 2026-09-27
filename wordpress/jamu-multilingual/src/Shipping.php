@@ -222,6 +222,14 @@ final class Shipping
         }, 100);
     }
 
+    function restoreDpdFieldsAfterCheckoutRefresh() {
+        // WC Doprava has several inline `updated_checkout` handlers that
+        // assume these fields survive WooCommerce's fragment replacement.
+        // Bind before those handlers (this script is printed first) and
+        // recreate only the technical fields they read or write.
+        ensureDpdElements();
+    }
+
     function mirrorDpdSelection(message) {
         if (!message || !message.dpdWidget) {
             return;
@@ -426,6 +434,9 @@ final class Shipping
 
     installPacketaPatch();
     ensureDpdElements();
+    if (window.jQuery) {
+        window.jQuery(document.body).on('updated_checkout.jamuMlDpd updated_wc_div.jamuMlDpd', restoreDpdFieldsAfterCheckoutRefresh);
+    }
     translateDpdUi(document.body);
 
     window.addEventListener('message', function (event) {
