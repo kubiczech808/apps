@@ -53,12 +53,24 @@ test("coverage is split by age, because a capture that stopped today hides in a 
   ];
   const [day, week, older] = storedCoverage(rows, now);
   assert.equal(day.rows, 2);
-  assert.equal(day.volumeUsdc, 0, "the recent rows captured nothing, which a single total would hide");
   assert.equal(week.rows, 1);
-  assert.equal(week.volumeUsdc, 1);
-  assert.equal(week.liquidity, 1);
   assert.equal(older.rows, 1, "an undated row is old rather than recent -- it cannot claim to be new");
-  assert.equal(older.firstVolumeUsdc, 1);
+  assert.equal(week.volumeUsdc.positive, 1);
+  assert.equal(week.liquidity.positive, 1);
+  assert.equal(older.firstVolumeUsdc.positive, 1);
+
+  // The distinction the whole check turns on. The two recent rows carry volumeUsdc and it is
+  // zero: the field IS being saved, the markets simply have no volume yet. A count of rows
+  // above zero reads that as a capture failure, which is a different fault with a different
+  // fix -- and it is the answer somebody would act on.
+  assert.equal(day.volumeUsdc.present, 2, "present: the writer wrote the field");
+  assert.equal(day.volumeUsdc.positive, 0, "positive: but no market had any volume yet");
+  // volume24hr is absent from both recent rows, which is what "not saved" looks like.
+  assert.equal(day.volume24hr.present, 0);
+  assert.equal(week.volume24hr.present, 1);
+  // An empty string is not a saved number either.
+  const [blank] = storedCoverage([{ firstObservedAt: "2026-09-27T11:00:00.000Z", volumeUsdc: "" }], now);
+  assert.equal(blank.volumeUsdc.present, 0, "an empty value is missing, not a measurement");
 });
 
 test("it never asks for the resolved scope", () => {

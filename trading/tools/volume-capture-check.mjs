@@ -56,19 +56,28 @@ export function storedCoverage(rows = [], now = Date.now()) {
     { label: "first seen <= 7 d ago", within: 24 * 7 },
     { label: "older, or undated", within: Infinity },
   ];
+  // present AND positive, separately. "Is volume being saved" is not answered by counting
+  // rows above zero: a field the writer never wrote and a market that genuinely has no
+  // volume yet both read as not-positive, and only one of them is a fault. The Gamma half of
+  // this check already made that distinction; leaving it out here asked a different
+  // question and would have been reported as an answer to this one.
+  const FIELDS = ["volumeUsdc", "volume24hr", "liquidity", "firstVolumeUsdc", "firstLiquidity"];
   const counts = buckets.map((bucket) => ({
-    ...bucket, rows: 0, volumeUsdc: 0, volume24hr: 0, liquidity: 0, firstVolumeUsdc: 0, firstLiquidity: 0,
+    ...bucket,
+    rows: 0,
+    ...Object.fromEntries(FIELDS.map((field) => [field, { present: 0, positive: 0 }])),
   }));
   for (const row of rows) {
     const seen = Date.parse(String(row?.firstObservedAt || row?.observedAt || ""));
     const ageHours = Number.isFinite(seen) ? (now - seen) / 3600000 : Infinity;
     const bucket = counts.find((entry) => ageHours <= entry.within) ?? counts[counts.length - 1];
     bucket.rows += 1;
-    if (positive(row?.volumeUsdc)) bucket.volumeUsdc += 1;
-    if (positive(row?.volume24hr)) bucket.volume24hr += 1;
-    if (positive(row?.liquidity)) bucket.liquidity += 1;
-    if (positive(row?.firstVolumeUsdc)) bucket.firstVolumeUsdc += 1;
-    if (positive(row?.firstLiquidity)) bucket.firstLiquidity += 1;
+    for (const field of FIELDS) {
+      const value = row?.[field];
+      if (value === undefined || value === null || value === "") continue;
+      bucket[field].present += 1;
+      if (positive(value)) bucket[field].positive += 1;
+    }
   }
   return counts;
 }
@@ -115,14 +124,20 @@ async function fromCatalogue() {
     console.log(`   response keys: ${Object.keys(payload || {}).join(", ")}`);
     return;
   }
-  console.log(`   bucket                        rows  volumeUsdc  volume24hr  liquidity  firstVol  firstLiq`);
+  console.log(`   Each cell is present/positive: how many rows carry the field at all, and how many`);
+  console.log(`   carry it above zero. A field that is present on every row is being saved; a zero`);
+  console.log(`   on a present field is a market with no volume yet, which is not a fault.\n`);
+  console.log(`   bucket                        rows   volumeUsdc    volume24hr     liquidity      firstVol      firstLiq`);
+  const cell = (stat, rows) => `${stat.present}/${stat.positive}`.padStart(13)
+    + (stat.present < rows ? "!" : " ");
   for (const bucket of storedCoverage(rows)) {
     if (!bucket.rows) continue;
     console.log(`   ${bucket.label.padEnd(28)} ${String(bucket.rows).padStart(5)}`
-      + ` ${String(bucket.volumeUsdc).padStart(11)} ${String(bucket.volume24hr).padStart(11)}`
-      + ` ${String(bucket.liquidity).padStart(10)} ${String(bucket.firstVolumeUsdc).padStart(9)}`
-      + ` ${String(bucket.firstLiquidity).padStart(9)}`);
+      + cell(bucket.volumeUsdc, bucket.rows) + cell(bucket.volume24hr, bucket.rows)
+      + cell(bucket.liquidity, bucket.rows) + cell(bucket.firstVolumeUsdc, bucket.rows)
+      + cell(bucket.firstLiquidity, bucket.rows));
   }
+  console.log(`   ("!" marks a field missing from some rows -- that is the one that means not saved.)`);
   const newest = rows
     .map((row) => String(row?.firstObservedAt || ""))
     .filter(Boolean)
