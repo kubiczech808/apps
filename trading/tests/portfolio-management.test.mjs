@@ -1915,6 +1915,17 @@ test("dashboard: a live portfolio's tab is marked, not merely named", () => {
     "the mark stays on the tab you are standing on");
 });
 
+test("dashboard: the selected portfolio row is dark and remains readable", () => {
+  assert.match(CSS, /\.portfolio-summary-current\s*\{\s*background:\s*#0f4c5c;\s*color:\s*#f8fafc;/,
+    "the selected row needs a distinct dark background and a light base text colour");
+  assert.match(CSS, /\.portfolio-summary-current \.portfolio-summary-link\s*\{\s*color:\s*#ffffff;/,
+    "the selected portfolio name must remain readable and clickable");
+  assert.match(CSS, /\.portfolio-summary-current \.portfolio-summary-note\s*\{\s*color:\s*#c7ece7;/,
+    "the shared-account note needs its own readable contrast on the dark row");
+  assert.match(CSS, /\.portfolio-summary-current \.positive\s*\{\s*color:\s*#bbf7d0;/);
+  assert.match(CSS, /\.portfolio-summary-current \.negative\s*\{\s*color:\s*#fecaca;/);
+});
+
 // Reported: the "stop loss" (Equal) portfolio's Rotation row still showed an old value.
 // Measured against history: a prior commit replaced a hardcoded
 // ["Rotation", "Disabled for this proof of concept"] row with the real On/Off one

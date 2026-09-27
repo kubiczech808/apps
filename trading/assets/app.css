@@ -248,11 +248,32 @@ button:disabled {
 }
 
 .portfolio-summary-current {
-  background: var(--soft);
+  background: #0f4c5c;
+  color: #f8fafc;
 }
 
 .portfolio-summary-current .portfolio-summary-link {
-  color: var(--ink);
+  color: #ffffff;
+}
+
+.portfolio-summary-current td {
+  border-bottom-color: #1c6675;
+}
+
+.portfolio-summary-current .portfolio-summary-note {
+  color: #c7ece7;
+}
+
+.portfolio-summary-current .portfolio-status-dot {
+  box-shadow: 0 0 0 2px color-mix(in srgb, currentColor 22%, transparent);
+}
+
+.portfolio-summary-current .positive {
+  color: #bbf7d0;
+}
+
+.portfolio-summary-current .negative {
+  color: #fecaca;
 }
 
 /* Same reason as the tab border: a live row spends real money. */
