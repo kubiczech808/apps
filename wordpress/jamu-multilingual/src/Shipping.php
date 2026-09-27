@@ -12,10 +12,80 @@ final class Shipping
 
     public function register(): void
     {
+        add_action('wp', [$this, 'disable_legacy_checkout_output_hooks'], PHP_INT_MAX);
         add_filter('woocommerce_update_order_review_fragments', [$this, 'remove_unsafe_pickup_fragment_script'], PHP_INT_MAX);
         add_action('wp_head', [$this, 'dpd_pickup_bootstrap'], 1);
         add_action('template_redirect', [$this, 'replace_legacy_dpd_script'], 0);
         add_action('wp_footer', [$this, 'dpd_pickup_compatibility'], 1);
+    }
+
+    /**
+     * The WC-Doprava-main plugin registers presentation callbacks directly in
+     * the order-review table. On update_order_review they terminate the normal
+     * WooCommerce JSON response with a bare HTML table, leaving BlockUI's
+     * loader active forever. Shipping rates are calculated elsewhere, so only
+     * its legacy checkout presentation callbacks are removed.
+     */
+    public function disable_legacy_checkout_output_hooks(): void
+    {
+        $request = sanitize_key((string) ($_REQUEST['wc-ajax'] ?? ''));
+        if ((!function_exists('is_checkout') || !is_checkout()) && $request !== 'update_order_review') {
+            return;
+        }
+
+        $hooks = [
+            'woocommerce_review_order_before_shipping',
+            'woocommerce_review_order_after_shipping',
+            'woocommerce_review_order_before_order_total',
+            'woocommerce_review_order_after_order_total',
+            'woocommerce_cart_totals_before_shipping',
+            'woocommerce_cart_totals_after_shipping',
+            'woocommerce_after_shipping_rate',
+        ];
+
+        foreach ($hooks as $hook) {
+            $this->remove_callbacks_from_plugin($hook, 'wc-doprava-main');
+        }
+    }
+
+    private function remove_callbacks_from_plugin(string $hook, string $plugin_directory): void
+    {
+        global $wp_filter;
+
+        if (empty($wp_filter[$hook]) || !($wp_filter[$hook] instanceof \WP_Hook)) {
+            return;
+        }
+
+        foreach ($wp_filter[$hook]->callbacks as $priority => $callbacks) {
+            foreach ($callbacks as $callback) {
+                $function = $callback['function'] ?? null;
+                if (!$function || !$this->callback_is_from_plugin($function, $plugin_directory)) {
+                    continue;
+                }
+
+                remove_action($hook, $function, (int) $priority);
+            }
+        }
+    }
+
+    private function callback_is_from_plugin(mixed $callback, string $plugin_directory): bool
+    {
+        try {
+            if (is_array($callback) && isset($callback[0], $callback[1])) {
+                $reflection = new \ReflectionMethod($callback[0], (string) $callback[1]);
+            } elseif (is_string($callback) && function_exists($callback)) {
+                $reflection = new \ReflectionFunction($callback);
+            } elseif ($callback instanceof \Closure) {
+                $reflection = new \ReflectionFunction($callback);
+            } else {
+                return false;
+            }
+
+            $file = (string) $reflection->getFileName();
+            return str_contains(strtolower(str_replace('\\', '/', $file)), '/' . strtolower($plugin_directory) . '/');
+        } catch (\ReflectionException) {
+            return false;
+        }
     }
 
     /**
