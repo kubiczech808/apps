@@ -73,8 +73,10 @@ export function rowMatches(row, questionFilters = FILTERS, endFilters = END_FILT
 // page.
 async function loadActiveRows(maxPages, target) {
   const rows = [];
+  let offset = 0;
+  let total = null;
+  let truncated = false;
   for (let page = 0; page < maxPages; page += 1) {
-    const offset = rows.length;
     const url = `${HOST}/api.php?action=state&target=${encodeURIComponent(target)}&summary=scraped&scope=active&offset=${offset}`;
     const response = await fetch(url);
     const text = await response.text();
@@ -82,22 +84,31 @@ async function loadActiveRows(maxPages, target) {
     const payload = JSON.parse(text);
     const batch = Array.isArray(payload?.marketObservations) ? payload.marketObservations : [];
     rows.push(...batch);
-    if (!batch.length) break;
-    // A page shorter than the one before it is the last one.
-    if (page > 0 && batch.length < 1200) break;
-    if (batch.length < 1200) break;
+    // The response says where this page sits, how wide a page is and how big the catalogue
+    // is, and the walk has to be driven by those and not by how many rows came back.
+    //
+    // The page is filtered AFTER it is taken -- api.php slices the catalogue and then drops
+    // the rows that are not active -- so a page can come back short with thousands of rows
+    // still behind it. Stepping the offset by rows RECEIVED and stopping at the first short
+    // page is what made an earlier run report 22853 rows and "0 match" for a fixture that
+    // was in the catalogue: the walk had skipped past it and then declared the end.
+    const limit = Number(payload?.scrapedScopeLimit) || 1200;
+    total = Number.isFinite(Number(payload?.scrapedScopeTotal)) ? Number(payload.scrapedScopeTotal) : total;
+    offset += limit;
+    if (total != null && offset >= total) break;
+    if (page + 1 >= maxPages) truncated = true;
   }
-  return rows;
+  return { rows, total, truncated };
 }
 
 async function checkTarget(target) {
   console.log(`\n== ${target} ==`);
-  const rows = await loadActiveRows(Math.max(1, Math.min(40, Number(process.env.MAX_PAGES || 8))), target);
+  const { rows, total, truncated } = await loadActiveRows(Math.max(1, Math.min(60, Number(process.env.MAX_PAGES || 8))), target);
   // Whether the walk reached the end or ran out of pages. "0 match" after a walk that was
   // cut short says the rows are absent when they are merely further on, which is the mistake
-  // the first run of this made twice.
-  const full = rows.length % 1200 === 0 && rows.length > 0;
-  console.log(`   ${rows.length} active row(s) read${full ? "  !! exactly a whole number of pages -- the walk may have been cut short, raise max_pages" : ""}`);
+  // the first runs of this made three times over.
+  console.log(`   ${rows.length} active row(s) read of ${total ?? "?"} in the catalogue`
+    + `${truncated ? "  !! the walk hit its page cap, raise max_pages" : ""}`);
 
   const matched = rows.filter((row) => rowMatches(row));
   console.log(`   ${matched.length} match ${JSON.stringify(FILTERS)}${END_FILTERS.length ? ` ending ${JSON.stringify(END_FILTERS)}` : ""}\n`);

@@ -67,6 +67,18 @@ test("the end-date filter is what narrows a team's season to one fixture", () =>
   assert.ok(!rowMatches({ question: "Will Israel win?" }, ["israel"], ["2026-09-27"]));
 });
 
+test("the walk is driven by the catalogue's own total, not by rows received", () => {
+  // api.php slices the catalogue and THEN drops the rows that are not active, so a page can
+  // come back short with thousands of rows still behind it. A walk that steps the offset by
+  // rows received and stops at the first short page skips past them and then reports them
+  // absent -- which is what "22853 rows read, 0 match" was, for a fixture that was there.
+  const tool = readFileSync(new URL("../tools/risk-group-check.mjs", import.meta.url), "utf8");
+  assert.match(tool, /offset \+= limit/, "the offset steps by the page width the server reports");
+  assert.match(tool, /scrapedScopeTotal/, "the end of the walk comes from the reported total");
+  assert.ok(!/const offset = rows\.length/.test(tool), "never offset by rows received");
+  assert.ok(!/batch\.length < 1200\) break/.test(tool), "never stop at a short page");
+});
+
 test("it reads the active page, never the resolved scope", () => {
   const tool = readFileSync(new URL("../tools/risk-group-check.mjs", import.meta.url), "utf8");
   assert.match(tool, /scope=active/);
