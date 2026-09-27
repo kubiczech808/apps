@@ -12,9 +12,37 @@ final class Shipping
 
     public function register(): void
     {
+        add_filter('woocommerce_update_order_review_fragments', [$this, 'remove_unsafe_pickup_fragment_script'], PHP_INT_MAX);
         add_action('wp_head', [$this, 'dpd_pickup_bootstrap'], 1);
         add_action('template_redirect', [$this, 'replace_legacy_dpd_script'], 0);
         add_action('wp_footer', [$this, 'dpd_pickup_compatibility'], 1);
+    }
+
+    /**
+     * A legacy Packeta shipping-rate template injects this raw script into the
+     * checkout-review fragment. It writes to optional shipping fields without
+     * checking that WooCommerce rendered them, which aborts the AJAX refresh
+     * and leaves its loading overlay visible. The maintained widget already
+     * manages the pickup selection, so this duplicate legacy synchronisation
+     * is safely removed before it reaches the browser.
+     *
+     * @param array<string, string> $fragments
+     * @return array<string, string>
+     */
+    public function remove_unsafe_pickup_fragment_script(array $fragments): array
+    {
+        foreach ($fragments as $selector => $html) {
+            $fragments[$selector] = $this->remove_unsafe_pickup_script((string) $html);
+        }
+
+        return $fragments;
+    }
+
+    private function remove_unsafe_pickup_script(string $html): string
+    {
+        $unsafe_pickup_script = '#<script>\s*document\.getElementById\(["\']customer_details["\']\).*?document\.getElementById\(["\']shipping_city["\']\)\.value\s*=\s*["\']["\'];\s*</script>#is';
+
+        return (string) preg_replace($unsafe_pickup_script, '', $html);
     }
 
     /**
@@ -34,6 +62,7 @@ final class Shipping
 
     public function replace_legacy_dpd_script_html(string $html): string
     {
+        $html = $this->remove_unsafe_pickup_script($html);
         $pattern = '#<script\b[^>]*\bsrc=["\'][^"\']*/WC-Doprava-main/js/dpd\.js(?:\?[^"\']*)?["\'][^>]*>\s*</script>#i';
         $html = (string) preg_replace_callback($pattern, static function (): string {
             return <<<'HTML'
