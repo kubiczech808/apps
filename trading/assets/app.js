@@ -4,6 +4,9 @@ const state = {
   // The Setup finder's answer, loaded when its tab is opened rather than with the page.
   setupFinder: null,
   setupFinderBusy: false,
+  // "At or above" or "Range". A threshold cannot show where a profitable band ENDS: a setup
+  // that earns between 51% and 60% and loses above it reads as mediocre at every threshold.
+  setupFinderMode: "threshold",
   tagAnalysis: null,
   tagAnalysisBusy: false,
   tagAnalysisMode: "threshold",
@@ -327,6 +330,12 @@ const els = {
   settingsPanels: document.querySelectorAll("[data-settings-panel]"),
   setupFinderReport: document.querySelector("[data-setup-finder-report]"),
   setupFinderMinTrades: document.querySelector("[data-setup-finder-min-trades]"),
+  setupFinderTag: document.querySelector("[data-setup-finder-tag]"),
+  setupFinderShape: document.querySelector("[data-setup-finder-shape]"),
+  setupFinderHorizon: document.querySelector("[data-setup-finder-horizon]"),
+  setupFinderModeOptions: document.querySelectorAll("[data-setup-finder-mode-option]"),
+  setupFinderBandStep: document.querySelector("[data-setup-finder-band-step]"),
+  setupFinderBandStepControl: document.querySelector("[data-setup-finder-band-step-control]"),
   setupFinderRun: document.querySelector("[data-setup-finder-run]"),
   setupFinderStatus: document.querySelector("[data-setup-finder-status]"),
   tagAnalysisReport: document.querySelector("[data-tag-analysis-report]"),
@@ -1114,6 +1123,10 @@ const MARKET_SHAPE_LABELS = {
   outright: "Outright",
   other: "Other / unclassified",
 };
+
+// Mirrors RESOLVED_HORIZON_BANDS in api.php: the bands resolved_horizon_band() can return,
+// which is what the Setup finder's horizon filter is validated against.
+const RESOLVED_HORIZON_BANDS = ["*", "under way", "<= 3 h", "<= 6 h", "<= 12 h", "<= 24 h", "<= 48 h", "> 48 h", "unknown"];
 
 function marketShapeLabel(shape) {
   return MARKET_SHAPE_LABELS[shape] || String(shape || "");
@@ -2967,14 +2980,79 @@ function setSettingsSection(section) {
 //
 // The combinations are computed server-side, in one streamed pass over the archive: it is
 // 26,000 rows and does not fit in a browser response, let alone in the memory the host has.
+function selectedSetupFinderTag() {
+  const tag = String(els.setupFinderTag?.value || "*").trim().toLowerCase();
+  return /^[a-z0-9][a-z0-9-]{0,79}$/.test(tag) ? tag : "*";
+}
+
+function selectedSetupFinderShape() {
+  const shape = String(els.setupFinderShape?.value || "*").trim().toLowerCase();
+  return ["*", ...Object.keys(MARKET_SHAPE_LABELS)].includes(shape) ? shape : "*";
+}
+
+function selectedSetupFinderHorizon() {
+  const horizon = String(els.setupFinderHorizon?.value || "*").trim();
+  return RESOLVED_HORIZON_BANDS.includes(horizon) ? horizon : "*";
+}
+
+function selectedSetupFinderMode() {
+  return state.setupFinderMode === "band" ? "band" : "threshold";
+}
+
+// The fine grid is a server-side privilege, granted only once a tag or an event type has
+// narrowed the search. Showing the control in the other state would offer a setting the
+// server will quietly refuse, so it is hidden instead of disabled-looking.
+function setupFinderFineGridAllowed() {
+  return selectedSetupFinderTag() !== "*" || selectedSetupFinderShape() !== "*";
+}
+
+function selectedSetupFinderBandStep() {
+  if (!setupFinderFineGridAllowed()) return 5;
+  return Number(els.setupFinderBandStep?.value) === 1 ? 1 : 5;
+}
+
+function syncSetupFinderControls() {
+  const mode = selectedSetupFinderMode();
+  els.setupFinderModeOptions?.forEach((button) => {
+    const active = button.dataset.setupFinderModeOption === mode;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-pressed", String(active));
+  });
+  if (els.setupFinderBandStepControl) {
+    els.setupFinderBandStepControl.hidden = mode !== "band" || !setupFinderFineGridAllowed();
+  }
+  if (!els.setupFinderTag) return;
+  const selected = selectedSetupFinderTag();
+  const tags = (state.resolvedTagOptions || [])
+    .map((entry) => String(entry?.tag || "").trim().toLowerCase())
+    .filter(Boolean)
+    .sort((left, right) => left.localeCompare(right));
+  if (selected !== "*" && !tags.includes(selected)) tags.push(selected);
+  els.setupFinderTag.innerHTML = [`<option value="*">Any tag</option>`]
+    .concat(tags.map((tag) => `<option value="${escapeHtml(tag)}">${escapeHtml(tag)}</option>`))
+    .join("");
+  els.setupFinderTag.value = selected;
+}
+
 async function loadSetupFinder() {
   if (state.setupFinderBusy) return;
+  if (state.resolvedTagOptions === null && !state.resolvedTagOptionsPending) {
+    await loadResolvedTagOptions();
+  }
+  syncSetupFinderControls();
   state.setupFinderBusy = true;
   const minTrades = Math.max(1, Number(els.setupFinderMinTrades?.value) || 30);
+  const tag = selectedSetupFinderTag();
+  const shape = selectedSetupFinderShape();
+  const horizon = selectedSetupFinderHorizon();
+  const mode = selectedSetupFinderMode();
+  const bandStep = selectedSetupFinderBandStep();
   if (els.setupFinderStatus) els.setupFinderStatus.textContent = "Reading the resolved archive...";
   renderSetupFinder();
   try {
-    state.setupFinder = await fetchApiJson(`api.php?action=resolved-combinations&min_trades=${minTrades}&limit=120`);
+    state.setupFinder = await fetchApiJson(`api.php?action=resolved-combinations&min_trades=${minTrades}&limit=120`
+      + `&tag=${encodeURIComponent(tag)}&shape=${encodeURIComponent(shape)}`
+      + `&horizon=${encodeURIComponent(horizon)}&mode=${encodeURIComponent(mode)}&band_step=${bandStep}`);
     if (els.setupFinderStatus) els.setupFinderStatus.textContent = "";
   } catch (error) {
     state.setupFinder = null;
@@ -2983,6 +3061,17 @@ async function loadSetupFinder() {
     state.setupFinderBusy = false;
     renderSetupFinder();
   }
+}
+
+// "&ge; 70%" when the band runs to the top, "51%-60%" when it does not. Read from the row's
+// own bounds rather than from the requested mode, so a row can never be labelled as a
+// threshold while carrying a ceiling.
+function setupFinderProbabilityCell(row) {
+  const low = Number(row.probabilityMin ?? row.probability);
+  const high = Number(row.probabilityMax ?? 99);
+  if (!Number.isFinite(low)) return "-";
+  if (!Number.isFinite(high) || high >= 99) return `&ge; ${low.toFixed(0)}%`;
+  return `${low.toFixed(0)}%&ndash;${high.toFixed(0)}%`;
 }
 
 function setupFinderTable(title, rows, note) {
@@ -3002,7 +3091,7 @@ function setupFinderTable(title, rows, note) {
           <tbody>
             ${rows.map((row) => `
               <tr>
-                <td data-label="Probability">&ge; ${escapeHtml(String(row.probability))}%</td>
+                <td data-label="Probability">${setupFinderProbabilityCell(row)}</td>
                 <td data-label="Tag">${escapeHtml(row.tag === "*" ? "any" : row.tag)}</td>
                 <td data-label="Shape">${escapeHtml(row.shape === "*" ? "any" : marketShapeLabel(row.shape))}</td>
                 <td data-label="Horizon">${escapeHtml(row.horizon === "*" ? "any" : row.horizon)}</td>
@@ -3018,6 +3107,25 @@ function setupFinderTable(title, rows, note) {
       </div>
     </div>
   `;
+}
+
+// What was actually asked for, read back from the answer. A filter that silently did nothing,
+// or a fine grid the server refused, both look exactly like a plain ranking otherwise.
+function setupFinderScopeNote(data) {
+  const parts = [];
+  parts.push(data.tag && data.tag !== "*" ? `Tag ${data.tag}.` : "Every tag.");
+  parts.push(data.shape && data.shape !== "*" ? `${marketShapeLabel(data.shape)} only.` : "Every event type.");
+  if (data.horizon && data.horizon !== "*") parts.push(`Resolution ${data.horizon}.`);
+  if (data.mode === "band") {
+    parts.push(`Probability as a range, in ${data.bandStep === 1 ? "1-point" : "5-point"} steps,`
+      + ` at least ${data.minWidth} points wide.`);
+    if (Number(data.bandStepRequested) === 1 && Number(data.bandStep) !== 1) {
+      parts.push("The 1-point grid needs a tag or an event type, so 5-point steps were used.");
+    }
+  } else {
+    parts.push("Probability as a threshold: the stated minimum and everything above it.");
+  }
+  return parts.join(" ");
 }
 
 function renderSetupFinder() {
@@ -3041,6 +3149,7 @@ function renderSetupFinder() {
         bought at the price it first quoted and settled at 0 or 1, this is what it would have returned.
         Recorded entry taker fees are included.
       </p>
+      <p class="setup-finder-note">${escapeHtml(setupFinderScopeNote(data))}</p>
     </div>
     ${setupFinderTable("Best combinations", data.best,
       "Ranked by net return after entry fees, not nominal profit. Identical samples are shown only once, using the least restrictive configuration.")}
@@ -18165,6 +18274,28 @@ els.setupFinderRun?.addEventListener("click", () => {
   // combinations exist at all, and the archive that answers it is server-side.
   state.setupFinder = null;
   loadSetupFinder();
+});
+
+// Every filter is server-side for the same reason: the tag, the event type, the horizon and
+// the probability grouping all change which combinations are formed, not merely which of the
+// formed ones are shown.
+for (const control of [els.setupFinderTag, els.setupFinderShape, els.setupFinderHorizon, els.setupFinderBandStep]) {
+  control?.addEventListener("change", () => {
+    state.setupFinder = null;
+    syncSetupFinderControls();
+    loadSetupFinder();
+  });
+}
+
+els.setupFinderModeOptions?.forEach((button) => {
+  button.addEventListener("click", () => {
+    const mode = button.dataset.setupFinderModeOption === "band" ? "band" : "threshold";
+    if (mode === state.setupFinderMode) return;
+    state.setupFinderMode = mode;
+    state.setupFinder = null;
+    syncSetupFinderControls();
+    loadSetupFinder();
+  });
 });
 
 els.dipBacktestTag?.addEventListener("change", () => {

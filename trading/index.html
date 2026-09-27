@@ -411,6 +411,49 @@
             <div class="settings-panel-body" data-settings-panel="setup-finder" hidden>
               <div class="setup-finder-controls">
                 <label class="parameter-control">
+                  <span>Polymarket tag</span>
+                  <select data-setup-finder-tag></select>
+                </label>
+                <label class="parameter-control">
+                  <span>Event type</span>
+                  <select data-setup-finder-shape>
+                    <option value="*">All event types</option>
+                    <option value="over-under">Over/Under</option>
+                    <option value="spread">Spread</option>
+                    <option value="exact-score">Exact score</option>
+                    <option value="draw">Draw</option>
+                    <option value="in-event-leg">In-event leg</option>
+                    <option value="both-teams">Both teams to score</option>
+                    <option value="outright">Outright</option>
+                    <option value="other">Other / unclassified</option>
+                  </select>
+                </label>
+                <label class="parameter-control">
+                  <span>Resolution horizon</span>
+                  <select data-setup-finder-horizon>
+                    <option value="*">Any horizon</option>
+                    <option value="under way">Already under way</option>
+                    <option value="&lt;= 3 h">Within 3 h</option>
+                    <option value="&lt;= 6 h">Within 6 h</option>
+                    <option value="&lt;= 12 h">Within 12 h</option>
+                    <option value="&lt;= 24 h">Within 24 h</option>
+                    <option value="&lt;= 48 h">Within 48 h</option>
+                    <option value="&gt; 48 h">More than 48 h</option>
+                    <option value="unknown">Unknown</option>
+                  </select>
+                </label>
+                <div class="segmented" data-setup-finder-mode aria-label="Probability grouping">
+                  <button class="segment-button active" type="button" data-setup-finder-mode-option="threshold" aria-pressed="true">At or above</button>
+                  <button class="segment-button" type="button" data-setup-finder-mode-option="band" aria-pressed="false">Range</button>
+                </div>
+                <label class="parameter-control" data-setup-finder-band-step-control hidden>
+                  <span>Range step</span>
+                  <select data-setup-finder-band-step>
+                    <option value="5">5 points</option>
+                    <option value="1">1 point (pick a tag or event type)</option>
+                  </select>
+                </label>
+                <label class="parameter-control">
                   <span>Minimum trades</span>
                   <input type="number" min="30" max="5000" step="10" value="100" data-setup-finder-min-trades>
                 </label>

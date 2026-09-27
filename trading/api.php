@@ -1991,6 +1991,11 @@ function simulation_taxonomy_labels(array $item, string $firstField, string $cur
  * Negative means the row was first seen after its stated end date -- a fixture already
  * under way -- which is its own band rather than being folded into the shortest one.
  */
+// Every band resolved_horizon_band() can return. Kept beside the classifier for the same
+// reason MARKET_SHAPE_IDS sits beside the shape one: a filter validates against exactly what
+// the classifier produces, not against a hand-kept list that drifts from it.
+const RESOLVED_HORIZON_BANDS = ['under way', '<= 3 h', '<= 6 h', '<= 12 h', '<= 24 h', '<= 48 h', '> 48 h', 'unknown'];
+
 function resolved_horizon_band(array $item): string
 {
     $due = null;
@@ -9143,6 +9148,50 @@ try {
         $limit = max(1, min(400, (int) ($_GET['limit'] ?? 120)));
         $stake = 5.0;
 
+        // Filters. Without them the page can only show whichever combinations happen to win
+        // the ranking, which is why a shape that exists in the fold -- outright does, with
+        // hundreds of settled trades -- never appeared on it: not absent from the data,
+        // merely never in the top slice. A filter is also what makes the finer probability
+        // grid affordable, because it collapses the number of groups to walk.
+        $filterTag = strtolower(trim((string) ($_GET['tag'] ?? '*')));
+        if ($filterTag === '') {
+            $filterTag = '*';
+        }
+        if ($filterTag !== '*' && !preg_match('/^[a-z0-9][a-z0-9-]{0,79}$/', $filterTag)) {
+            respond(['ok' => false, 'error' => 'A valid Polymarket tag is required.'], 400);
+        }
+        $filterShape = strtolower(trim((string) ($_GET['shape'] ?? '*')));
+        if ($filterShape === '') {
+            $filterShape = '*';
+        }
+        if ($filterShape !== '*' && !in_array($filterShape, MARKET_SHAPE_IDS, true)) {
+            respond(['ok' => false, 'error' => 'An available event type is required.'], 400);
+        }
+        $filterHorizon = trim((string) ($_GET['horizon'] ?? '*'));
+        if ($filterHorizon === '') {
+            $filterHorizon = '*';
+        }
+        if ($filterHorizon !== '*' && !in_array($filterHorizon, RESOLVED_HORIZON_BANDS, true)) {
+            respond(['ok' => false, 'error' => 'An available resolution horizon is required.'], 400);
+        }
+
+        // Threshold answers "buy at p or above", which is the wrong question when the band
+        // itself is what is being looked for: a setup that earns between 51% and 60% and
+        // loses above it reads as mediocre at every threshold and never as the band it is.
+        // Band mode ranges over [low, high] pairs instead.
+        $mode = ((string) ($_GET['mode'] ?? 'threshold')) === 'band' ? 'band' : 'threshold';
+        $minWidth = max(1, min(50, (int) ($_GET['min_width'] ?? 5)));
+        // The grid, and the one place this page can get expensive. A 1pp grid is 1,275 bands
+        // per group against 50 thresholds -- twenty-five times the work, on a host whose PHP
+        // limit a single heavy read has already exhausted once. So the fine grid is allowed
+        // only once a tag or a shape has been chosen, which is exactly when the group count
+        // has collapsed and the fine grid is what the question needs.
+        $bandStep = ((int) ($_GET['band_step'] ?? 5)) === 1 ? 1 : 5;
+        $narrowed = $filterTag !== '*' || $filterShape !== '*';
+        if ($bandStep === 1 && !$narrowed) {
+            $bandStep = 5;
+        }
+
         $corePath = state_file_paths()['paper'];
         $core = decode_state_file($corePath, false);
         $manifest = is_array($core['stateSegments'] ?? null) ? $core['stateSegments'] : [];
@@ -9207,7 +9256,23 @@ try {
         // its own groups first, so the sum is done once per group instead of once per row
         // of the answer.
         $rows = [];
-        $emit = static function (array $group, array $facets) use (&$rows, $minTrades): void {
+        $push = static function (array &$rows, array $facets, int $low, int $high, array $totals): void {
+            [$trades, $wins, $staked, $pnl] = $totals;
+            $rows[] = $facets + [
+                // probability stays the band's FLOOR under its old name, so a client written
+                // against the threshold-only response keeps reading the number it always read.
+                'probability' => $low,
+                'probabilityMin' => $low,
+                'probabilityMax' => $high,
+                'trades' => $trades,
+                'wins' => $wins,
+                'accuracy' => round($wins / $trades, 4),
+                'stakedUsdc' => round($staked, 2),
+                'pnlUsdc' => round($pnl, 2),
+                'returnPct' => $staked > 0 ? round(($pnl / $staked) * 100, 2) : null,
+            ];
+        };
+        $emitThreshold = static function (array $group, array $facets) use (&$rows, $minTrades, $push): void {
             krsort($group, SORT_NUMERIC);
             $trades = 0;
             $wins = 0;
@@ -9221,21 +9286,49 @@ try {
                 if ($trades < $minTrades) {
                     continue;
                 }
-                $rows[] = $facets + [
-                    'probability' => (int) $probability,
-                    'trades' => $trades,
-                    'wins' => $wins,
-                    'accuracy' => round($wins / $trades, 4),
-                    'stakedUsdc' => round($staked, 2),
-                    'pnlUsdc' => round($pnl, 2),
-                    'returnPct' => $staked > 0 ? round(($pnl / $staked) * 100, 2) : null,
-                ];
+                $push($rows, $facets, (int) $probability, 99, [$trades, $wins, $staked, $pnl]);
             }
         };
+        // One walk upwards per floor, accumulating as it goes, so a band costs the same as a
+        // threshold did: no band is ever summed from its cells twice.
+        $emitBand = static function (array $group, array $facets) use (&$rows, $minTrades, $bandStep, $minWidth, $push): void {
+            for ($low = 50; $low <= 99; $low += $bandStep) {
+                $trades = 0;
+                $wins = 0;
+                $staked = 0.0;
+                $pnl = 0.0;
+                for ($high = $low; $high <= 99; $high += 1) {
+                    $cell = $group[$high] ?? null;
+                    if ($cell !== null) {
+                        $trades += $cell[0];
+                        $wins += $cell[1];
+                        $staked += $cell[2];
+                        $pnl += $cell[3];
+                    }
+                    $width = $high - $low + 1;
+                    if ($width < $minWidth || $trades < $minTrades) {
+                        continue;
+                    }
+                    // On the grid, or the open top. 99 is always offered because "from here
+                    // upwards" is the answer a threshold used to give and must remain askable.
+                    if ($high !== 99 && (($width - $minWidth) % $bandStep) !== 0) {
+                        continue;
+                    }
+                    $push($rows, $facets, $low, $high, [$trades, $wins, $staked, $pnl]);
+                }
+            }
+        };
+        $emit = $mode === 'band' ? $emitBand : $emitThreshold;
 
-        foreach ([true, false] as $anyTagMask) {
-            foreach ([true, false] as $anyShape) {
-                foreach ([true, false] as $anyHorizon) {
+        // A dimension the caller pinned is never also collapsed to '*'. Collapsing it would
+        // publish the filtered sample under a label claiming it spans every value of that
+        // dimension, which is a wrong answer rather than a redundant one.
+        $tagMasks = $filterTag === '*' ? [true, false] : [false];
+        $shapeMasks = $filterShape === '*' ? [true, false] : [false];
+        $horizonMasks = $filterHorizon === '*' ? [true, false] : [false];
+        foreach ($tagMasks as $anyTagMask) {
+            foreach ($shapeMasks as $anyShape) {
+                foreach ($horizonMasks as $anyHorizon) {
                     $groups = [];
                     $source = $anyTagMask ? $anyTag : $cells;
                     foreach ($source as $key => $cell) {
@@ -9244,6 +9337,15 @@ try {
                         $tag = $anyTagMask ? '*' : $parts[1];
                         $shape = $anyShape ? '*' : ($anyTagMask ? $parts[1] : $parts[2]);
                         $horizon = $anyHorizon ? '*' : ($anyTagMask ? $parts[2] : $parts[3]);
+                        if ($filterTag !== '*' && $tag !== $filterTag) {
+                            continue;
+                        }
+                        if ($filterShape !== '*' && $shape !== $filterShape) {
+                            continue;
+                        }
+                        if ($filterHorizon !== '*' && $horizon !== $filterHorizon) {
+                            continue;
+                        }
                         $groupKey = $tag . "\x1f" . $shape . "\x1f" . $horizon;
                         if (!isset($groups[$groupKey][$probability])) {
                             $groups[$groupKey][$probability] = [0, 0, 0.0, 0.0];
@@ -9266,14 +9368,23 @@ try {
         // and used to crowd out genuinely different setups, so retain the simplest member.
         $unique = [];
         foreach ($rows as $row) {
+            // The bounds are deliberately NOT part of the signature. Two bands whose extra
+            // buckets are empty hold the same trades, the same settlements and the same
+            // money, and printing both is the noise band mode would otherwise be made of.
+            // The widest of them is also the honest label: the narrower one claims a ceiling
+            // or a floor that nothing in the sample sits against.
             $signature = implode("\x1f", [
-                $row['tag'], $row['horizon'], $row['probability'], $row['trades'], $row['wins'],
+                $row['tag'], $row['horizon'], $row['trades'], $row['wins'],
                 number_format((float) $row['stakedUsdc'], 6, '.', ''),
                 number_format((float) $row['pnlUsdc'], 6, '.', ''),
             ]);
-            $specificity = ($row['tag'] !== '*' ? 1 : 0)
-                + ($row['shape'] !== '*' ? 1 : 0)
-                + ($row['horizon'] !== '*' ? 1 : 0);
+            // Facets first, then band width: among rows describing one sample, the fewest
+            // rules wins, and between two of those the wider band -- a narrower one claims a
+            // restriction the sample does not support.
+            $specificity = 100 * (($row['tag'] !== '*' ? 1 : 0)
+                    + ($row['shape'] !== '*' ? 1 : 0)
+                    + ($row['horizon'] !== '*' ? 1 : 0))
+                + (100 - ($row['probabilityMax'] - $row['probabilityMin'] + 1));
             if (!isset($unique[$signature]) || $specificity < $unique[$signature]['specificity']) {
                 $unique[$signature] = ['specificity' => $specificity, 'row' => $row];
             }
@@ -9303,6 +9414,15 @@ try {
             'combinations' => count($rows),
             'minTrades' => $minTrades,
             'stakeUsdc' => $stake,
+            'mode' => $mode,
+            'tag' => $filterTag,
+            'shape' => $filterShape,
+            'horizon' => $filterHorizon,
+            'bandStep' => $bandStep,
+            'minWidth' => $minWidth,
+            // Whether the fine grid was granted or silently coarsened, so a caller that asked
+            // for 1pp and got 5pp can see that rather than misread the bands it is handed.
+            'bandStepRequested' => ((int) ($_GET['band_step'] ?? 5)) === 1 ? 1 : 5,
             'best' => $best,
             'worst' => $worst,
             'generatedAt' => gmdate('c'),

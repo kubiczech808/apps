@@ -65,7 +65,11 @@ function combinations(rows, query = "min_trades=1", action = "resolved-combinati
     writeFileSync(join(directory, "prelude.php"), `<?php
       $_GET['action'] = ${JSON.stringify(action)};
       ${query.split("&").map((pair) => {
-        const [key, value] = pair.split("=");
+        // Split on the FIRST '=' only. A horizon band is literally "<= 3 h", so splitting on
+        // every '=' hands the endpoint "<" and the filter silently matches nothing.
+        const at = pair.indexOf("=");
+        const key = at === -1 ? pair : pair.slice(0, at);
+        const value = at === -1 ? "" : pair.slice(at + 1);
         return `$_GET[${JSON.stringify(key)}] = ${JSON.stringify(value)};`;
       }).join("\n      ")}
       $_SERVER['REQUEST_METHOD'] = 'GET';
@@ -273,6 +277,134 @@ test("the Setup finder is a settings tab, and it loads when it is opened", () =>
   // Recomputed on the server when the cap changes, not refiltered in the browser: the cap
   // decides which combinations exist at all.
   assert.match(app, /els\.setupFinderRun\?\.addEventListener\("click", \(\) => \{\n\s+\/\/[^\n]*\n\s+\/\/[^\n]*\n\s+state\.setupFinder = null;\n\s+loadSetupFinder\(\);/);
+});
+
+// "resi cely range napr. 51-99. ale ja teprve hledam ten ziskovy range a to mi ta statistika
+// dat neumi" -- and "mel by umet klasifikovat nejen podle Other / unclassified a any, ale i
+// prave over-under, outright".
+//
+// A band that earns and a ceiling above which it stops earning: the case a threshold cannot
+// express, built so the two readings disagree in sign rather than in size.
+const BAND_FIXTURE = [
+  ...Array.from({ length: 40 }, () => row(0.55, true)),
+  ...Array.from({ length: 40 }, () => row(0.75, false)),
+];
+
+test("a threshold hides a profitable band; the band mode shows it", () => {
+  const threshold = combinations(BAND_FIXTURE, "min_trades=1");
+  const at55 = find(threshold.best, { tag: "*", shape: "*", horizon: "*", probability: 55 });
+  assert.equal(at55.trades, 80, "a threshold at 55 drags in the 75s as well");
+  assert.ok(at55.returnPct < 0, `and so it reads as a loser: ${JSON.stringify(at55)}`);
+  assert.equal(at55.probabilityMax, 99, "a threshold still runs to the top");
+
+  const band = combinations(BAND_FIXTURE, "min_trades=1&mode=band");
+  assert.equal(band.mode, "band");
+  // The widest band holding only the winners. 75 is where the losses start and 55 is where
+  // the wins sit, but nothing is recorded between 50 and 54 either -- so 50-74 and 55-74 hold
+  // exactly the same 40 trades, and the wider one is the honest label: a narrower band claims
+  // a floor or a ceiling that nothing in the sample sits against.
+  const winners = find(band.best, { tag: "*", shape: "*", horizon: "*", probabilityMin: 50, probabilityMax: 74 });
+  assert.ok(winners, `the profitable band must be found: ${JSON.stringify(band.best.slice(0, 3))}`);
+  assert.equal(winners.trades, 40);
+  assert.equal(winners.wins, 40);
+  // $5 at 0.55 buys 9.0909 shares, so each win returns $4.09 on a $5 stake.
+  assert.equal(winners.stakedUsdc, 200);
+  assert.equal(winners.pnlUsdc, 163.64);
+  assert.ok(winners.returnPct > 80, `and the band earns where the threshold lost: ${winners.returnPct}%`);
+
+  // The old field keeps its old meaning, so a client written against the threshold-only
+  // response is not silently handed a band floor under a name that used to mean a threshold.
+  assert.equal(winners.probability, winners.probabilityMin);
+});
+
+// Two groups differing in ALL THREE filterable dimensions, so pinning any one of them has
+// something to exclude. A fixture carrying one tag cannot tell a working tag filter from a
+// missing one -- it was built that way first, and removing the filter from api.php did not
+// fail the test, which is the finding that produced this fixture.
+const FILTER_FIXTURE = [
+  ...Array.from({ length: 20 }, () => row(0.8, true, {
+    question: "A vs B", tags: ["esports"],
+    firstObservedAt: "2026-09-10T10:00:00.000Z", endDate: "2026-09-10T12:00:00.000Z",
+  })),
+  ...Array.from({ length: 20 }, () => row(0.8, false, {
+    question: "Total goals 2.5 - A vs B", tags: ["soccer"],
+    firstObservedAt: "2026-09-09T16:00:00.000Z", endDate: "2026-09-10T12:00:00.000Z",
+  })),
+];
+
+test("a pinned dimension is never also published as 'any'", () => {
+  // The filtered sample under a '*' label would be a wrong answer, not a redundant one: it
+  // would claim to span every event type while holding only one.
+  const everything = combinations(FILTER_FIXTURE, "min_trades=1");
+  const shapes = new Set(everything.best.map((entry) => entry.shape));
+  assert.ok(shapes.has("outright") && shapes.has("over-under"),
+    `both shapes are classified, and were always in the data: ${[...shapes].join(", ")}`);
+
+  const outright = combinations(FILTER_FIXTURE, "min_trades=1&shape=outright");
+  assert.equal(outright.shape, "outright");
+  assert.ok(outright.best.every((entry) => entry.shape === "outright"),
+    "no row may be labelled 'any event type' when one was pinned");
+  assert.ok(!outright.best.some((entry) => entry.tag === "soccer"),
+    "and the over-under group must not survive the shape filter under any label");
+  const only = find(outright.best, { tag: "*", horizon: "*", probability: 80 });
+  assert.equal(only.trades, 20, "it holds the outright rows alone");
+  assert.equal(only.wins, 20);
+
+  const tagged = combinations(FILTER_FIXTURE, "min_trades=1&tag=esports");
+  assert.ok(tagged.best.every((entry) => entry.tag === "esports"), "same for a pinned tag");
+  assert.ok(!tagged.best.some((entry) => entry.shape === "over-under"),
+    "the soccer group is over-under, so it must be gone with the tag it carries");
+  assert.equal(find(tagged.best, { shape: "*", horizon: "*", probability: 80 }).trades, 20);
+
+  const horizon = combinations(FILTER_FIXTURE, "min_trades=1&horizon=<= 3 h");
+  assert.equal(horizon.horizon, "<= 3 h");
+  assert.ok(horizon.best.every((entry) => entry.horizon === "<= 3 h"), "and for a pinned horizon");
+  assert.ok(!horizon.best.some((entry) => entry.tag === "soccer"),
+    "the twenty-hour group belongs to another band and must not be counted here");
+  assert.equal(find(horizon.best, { tag: "*", shape: "*", probability: 80 }).trades, 20);
+});
+
+test("the fine grid is granted only once the search has been narrowed", () => {
+  // A 1pp grid is 1,275 bands per group against 50 thresholds. The same host's PHP limit has
+  // already been exhausted once by a single heavy read, so the fine grid waits until a tag or
+  // an event type has collapsed the number of groups to walk.
+  const wide = combinations(BAND_FIXTURE, "min_trades=1&mode=band&band_step=1");
+  assert.equal(wide.bandStepRequested, 1);
+  assert.equal(wide.bandStep, 5, "unnarrowed, the fine grid is refused rather than served");
+
+  const narrowed = combinations(BAND_FIXTURE, "min_trades=1&mode=band&band_step=1&shape=outright");
+  assert.equal(narrowed.bandStep, 1, "a pinned event type is enough to afford it");
+  // And it can express a floor the coarse grid cannot: 56 is not on a 5-point grid.
+  assert.ok(narrowed.best.some((entry) => entry.probabilityMin % 5 !== 0),
+    "the point of the fine grid is bounds the coarse one cannot reach");
+});
+
+test("an unknown filter value is refused rather than quietly matching nothing", () => {
+  // Silently returning an empty ranking reads as "this setup never happened", which is the
+  // answer somebody would act on by excluding it.
+  for (const query of ["min_trades=1&shape=nonsense", "min_trades=1&horizon=whenever", "min_trades=1&tag=NOT A TAG"]) {
+    const payload = combinations(BAND_FIXTURE, query);
+    assert.equal(payload.ok, false, `${query} must be rejected: ${JSON.stringify(payload).slice(0, 200)}`);
+  }
+});
+
+test("the Setup finder's filters are wired to the endpoint, and a band renders as a range", () => {
+  const html = readFileSync(new URL("../index.html", import.meta.url), "utf8");
+  const app = readFileSync(new URL("../assets/app.js", import.meta.url), "utf8");
+
+  for (const control of ["tag", "shape", "horizon", "band-step"]) {
+    assert.match(html, new RegExp(`data-setup-finder-${control}\\b`), `the ${control} control must exist`);
+  }
+  assert.match(html, /data-setup-finder-mode-option="band"/, "and the range grouping");
+  assert.match(html, /<option value="outright">Outright<\/option>[\s\S]{0,400}data-setup-finder-band-step|data-setup-finder-shape[\s\S]{0,600}<option value="outright">/,
+    "the event types the classifier produces must be offerable");
+
+  assert.match(app, /&tag=\$\{encodeURIComponent\(tag\)\}&shape=\$\{encodeURIComponent\(shape\)\}/);
+  assert.match(app, /&horizon=\$\{encodeURIComponent\(horizon\)\}&mode=\$\{encodeURIComponent\(mode\)\}&band_step=\$\{bandStep\}/);
+
+  // A row carrying a ceiling must never be printed as a threshold.
+  assert.match(app, /setupFinderProbabilityCell/);
+  assert.match(app, /if \(!Number\.isFinite\(high\) \|\| high >= 99\) return `&ge; \$\{low\.toFixed\(0\)\}%`;/);
 });
 
 test("the page states what it is measured on", () => {
