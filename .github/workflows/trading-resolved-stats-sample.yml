@@ -1,0 +1,122 @@
+name: Trading Resolved Stats Sample
+
+# Read-only, manual only. Writes NOTHING -- it runs the fold's own scan and returns the rows
+# a statistics cell is made of, then stops before the store.
+#
+# It exists because a cell cannot be opened any other way. The fold reads the database and
+# the archive directory; taxonomy-observations streams the two state files and touches
+# neither. Sampling there and comparing the count with a cell compares two different
+# populations, which is how a soccer band was read as "0 of 800 rows survive" while the cell
+# it was meant to explain held 294.
+#
+# Costs one full scan, the same one the nightly fold pays. Manual only for that reason.
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Polymarket tag the cell is for, e.g. soccer"
+        required: true
+        default: "soccer"
+        type: string
+      shape:
+        description: "Market shape, e.g. outright (blank = every shape)"
+        required: false
+        default: "outright"
+        type: string
+      min_probability:
+        description: "Band floor in whole percent, e.g. 51"
+        required: false
+        default: "51"
+        type: string
+      max_probability:
+        description: "Band ceiling in whole percent, INCLUSIVE, e.g. 72"
+        required: false
+        default: "72"
+        type: string
+      limit:
+        description: "How many matching rows to return (max 400)"
+        required: false
+        default: "60"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  sample:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    concurrency:
+      group: trading-resolved-stats-fold
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Return the rows behind one statistics cell
+        env:
+          TRADING_TRIGGER_KEY: ${{ secrets.POLYTRADING_DB_PASSWORD }}
+          SAMPLE_TAG: ${{ inputs.tag }}
+          SAMPLE_SHAPE: ${{ inputs.shape }}
+          SAMPLE_MIN: ${{ inputs.min_probability }}
+          SAMPLE_MAX: ${{ inputs.max_probability }}
+          SAMPLE_LIMIT: ${{ inputs.limit }}
+        run: |
+          python3 - <<'PY'
+          import json, os, urllib.error, urllib.request
+
+          body = {
+              "operation": "refresh-resolved-stats",
+              "sampleTag": os.environ["SAMPLE_TAG"].strip().lower(),
+              "sampleShape": os.environ.get("SAMPLE_SHAPE", "").strip().lower(),
+              "sampleMinProbability": int(os.environ.get("SAMPLE_MIN") or 0),
+              "sampleMaxProbability": int(os.environ.get("SAMPLE_MAX") or 0),
+              "sampleLimit": int(os.environ.get("SAMPLE_LIMIT") or 60),
+          }
+          request = urllib.request.Request(
+              "https://www.osobnizkusenosti.cz/trading/api.php?action=storage-admin",
+              data=json.dumps(body).encode("utf-8"),
+              method="POST",
+              headers={"Content-Type": "application/json",
+                       "X-Trading-Trigger-Key": os.environ["TRADING_TRIGGER_KEY"]},
+          )
+          try:
+              with urllib.request.urlopen(request, timeout=900) as response:
+                  payload = json.loads(response.read().decode("utf-8"))
+          except urllib.error.HTTPError as error:
+              raise SystemExit(f"::error title=Sample failed::HTTP {error.code}: "
+                               f"{error.read().decode('utf-8', 'replace')[:400]}")
+          if not payload.get("ok"):
+              raise SystemExit(f"::error title=Sample failed::{str(payload.get('error'))[:400]}")
+
+          print(f"tag={payload.get('tag')} shape={payload.get('shape')} band={payload.get('band')}")
+          print(f"scanned={payload.get('scanned')} priced={payload.get('priced')}"
+                f" afterDue={payload.get('afterDueRejected')} sideFlipped={payload.get('sideFlippedRejected')}")
+          print(f"matched={payload.get('matched')} returned={payload.get('returned')}")
+
+          rows = payload.get("rows") or []
+          wins = sum(1 for row in rows if row.get("outcome") == 1)
+          if rows:
+              mean = sum(float(row.get("entry") or 0) for row in rows) / len(rows)
+              print(f"\nreturned slice: {wins}/{len(rows)} won, mean entry {mean * 100:.1f}%")
+              sides = {}
+              for row in rows:
+                  key = (row.get("side") or "?").lower()
+                  hit, total = sides.get(key, (0, 0))
+                  sides[key] = (hit + (1 if row.get("outcome") == 1 else 0), total + 1)
+              for side, (hit, total) in sorted(sides.items(), key=lambda pair: -pair[1][1]):
+                  print(f"   side {side:<6} {total:>4} row(s), {hit} won ({100 * hit / total:.1f}%)")
+
+          print(f"\n{'entry':>6} {'side':>5} {'now':>5} {'out':>4} {'flip':>5} {'spr':>5}"
+                f"  {'first seen':<20} {'endDate':<20} question")
+          for row in rows[:60]:
+              spread = row.get("firstSpread")
+              spread_text = "-" if spread is None else f"{float(spread) * 100:.1f}"
+              print(f"{float(row.get('entry') or 0) * 100:>5.1f}%"
+                    f" {str(row.get('side') or '?')[:5]:>5}"
+                    f" {str(row.get('currentSide') or '?')[:5]:>5}"
+                    f" {str(row.get('outcome')):>4}"
+                    f" {'yes' if row.get('flipped') else 'no':>5}"
+                    f" {spread_text:>5}"
+                    f"  {str(row.get('firstObservedAt') or '-')[:19]:<20}"
+                    f" {str(row.get('endDate') or '-')[:19]:<20} {row.get('question')}")
+          PY

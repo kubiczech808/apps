@@ -1411,7 +1411,7 @@ function state_segment_path(array $data, string $corePath, string $segment): ?st
  *
  * @return array{cells: array, anyTag: array, scanned: int, priced: int}
  */
-function resolved_stats_accumulate(array $sources, float $stake = 5.0, ?callable $extra = null): array
+function resolved_stats_accumulate(array $sources, float $stake = 5.0, ?callable $extra = null, ?callable $collect = null): array
 {
     $breakdownExtra = null;
     // [trades, wins, staked, pnl] per cell. Everything below is summed out of this.
@@ -1431,7 +1431,7 @@ function resolved_stats_accumulate(array $sources, float $stake = 5.0, ?callable
     // 6,533 settlements twice and quietly inflate every accuracy the page shows. It also
     // covers a duplicate inside a single file, which nothing else would notice.
     $seen = [];
-    $onRow = static function (array $item) use (&$cells, &$anyTag, &$scanned, &$priced, &$afterDueRejected, &$sideFlippedRejected, &$seen, $stake): bool {
+    $onRow = static function (array $item) use (&$cells, &$anyTag, &$scanned, &$priced, &$afterDueRejected, &$sideFlippedRejected, &$seen, $stake, $collect): bool {
         $identity = (string) ($item['tokenId'] ?? $item['id'] ?? $item['marketKey'] ?? '');
         if ($identity !== '') {
             if (isset($seen[$identity])) {
@@ -1489,6 +1489,14 @@ function resolved_stats_accumulate(array $sources, float $stake = 5.0, ?callable
         $tags = simulation_taxonomy_labels($item, 'firstPolymarketTags', 'polymarketTags');
         if ($tags === []) {
             $tags = ['(untagged)'];
+        }
+        // The rows exactly as this reduction saw them. The only way to look at a cell: the
+        // fold reads the database and the archive directory, and taxonomy-observations reads
+        // neither -- it streams the two state FILES. Sampling there and comparing the counts
+        // with a statistics cell is comparing two different populations, which is how a
+        // soccer band was read as "0 of 800 rows survive" while the cell held 294.
+        if ($collect !== null) {
+            $collect($item, $entry, $outcome, $probability, $shape, $horizon, $tags, $totalCost, $pnl);
         }
         foreach ($tags as $tag) {
             $key = $probability . "\x1f" . $tag . "\x1f" . $shape . "\x1f" . $horizon;
@@ -8047,6 +8055,72 @@ try {
             // The files are still read afterwards. They carry rows the mirror may not have
             // caught, and a row seen twice is a row summed twice, which is why the stream
             // hands over decoded payloads and the file pass is kept for what it adds.
+            // Read-only mode: collect the rows a cell is made of and return them, writing
+            // nothing. It is the same scan the fold does -- one pass, the same sixteen
+            // seconds -- and it is the ONLY way to look at a statistics cell, because the
+            // fold reads the database and the archive directory while taxonomy-observations
+            // streams the state files. Sampling there and comparing counts with a cell
+            // compares two different populations.
+            $sampleTag = strtolower(trim((string) ($storageRequest['sampleTag'] ?? '')));
+            $sampleShape = strtolower(trim((string) ($storageRequest['sampleShape'] ?? '')));
+            $sampleMin = (int) ($storageRequest['sampleMinProbability'] ?? 0);
+            $sampleMax = (int) ($storageRequest['sampleMaxProbability'] ?? 0);
+            $sampleLimit = max(1, min(400, (int) ($storageRequest['sampleLimit'] ?? 60)));
+            $sampling = $sampleTag !== '';
+            $sample = [];
+            $sampleMatched = 0;
+            $collect = !$sampling ? null : static function (
+                array $item,
+                float $entry,
+                int $outcome,
+                int $probability,
+                string $shape,
+                string $horizon,
+                array $tags,
+                float $totalCost,
+                float $pnl
+            ) use ($sampleTag, $sampleShape, $sampleMin, $sampleMax, $sampleLimit, &$sample, &$sampleMatched): void {
+                if (!in_array($sampleTag, $tags, true)) {
+                    return;
+                }
+                if ($sampleShape !== '' && $shape !== $sampleShape) {
+                    return;
+                }
+                if ($sampleMin > 0 && $probability < $sampleMin) {
+                    return;
+                }
+                if ($sampleMax > 0 && $probability > $sampleMax) {
+                    return;
+                }
+                $sampleMatched += 1;
+                if (count($sample) >= $sampleLimit) {
+                    return;
+                }
+                $sample[] = [
+                    'question' => compact_text($item['question'] ?? '', 90),
+                    'entry' => round($entry, 4),
+                    'probability' => $probability,
+                    'outcome' => $outcome,
+                    'shape' => $shape,
+                    'horizon' => $horizon,
+                    'side' => (string) ($item['firstOutcome'] ?? $item['outcome'] ?? ''),
+                    'currentSide' => (string) ($item['outcome'] ?? ''),
+                    'flipped' => trim((string) ($item['firstTokenId'] ?? '')) !== ''
+                        && trim((string) ($item['tokenId'] ?? '')) !== ''
+                        && (string) $item['firstTokenId'] !== (string) $item['tokenId'],
+                    'finalOutcomePrice' => $item['finalOutcomePrice'] ?? null,
+                    'firstSideFinalOutcomePrice' => $item['firstSideFinalOutcomePrice'] ?? null,
+                    'firstObservedAt' => (string) ($item['firstObservedAt'] ?? ''),
+                    'endDate' => (string) ($item['endDate'] ?? ''),
+                    'resolutionEndDate' => (string) ($item['resolutionEndDate'] ?? ''),
+                    'firstSpread' => $item['firstSpread'] ?? null,
+                    'spread' => $item['spread'] ?? null,
+                    'outcomeCount' => $item['outcomeCount'] ?? null,
+                    'pnlUsdc' => round($pnl, 4),
+                    'costUsdc' => round($totalCost, 4),
+                ];
+            };
+
             $accumulated = resolved_stats_accumulate(
                 $sources,
                 5.0,
@@ -8062,7 +8136,26 @@ try {
                     $GLOBALS['trading_fold_archive_rows'] = $fromArchive;
                     return $fromDatabase + $fromArchive;
                 },
+                $collect,
             );
+            if ($sampling) {
+                // Nothing is stored. A sample must never be able to replace the fold.
+                respond([
+                    'ok' => true,
+                    'operation' => 'sample-resolved-stats',
+                    'tag' => $sampleTag,
+                    'shape' => $sampleShape === '' ? '*' : $sampleShape,
+                    'band' => [$sampleMin ?: null, $sampleMax ?: null],
+                    'scanned' => (int) $accumulated['scanned'],
+                    'priced' => (int) $accumulated['priced'],
+                    'afterDueRejected' => (int) ($accumulated['afterDueRejected'] ?? 0),
+                    'sideFlippedRejected' => (int) ($accumulated['sideFlippedRejected'] ?? 0),
+                    'matched' => $sampleMatched,
+                    'returned' => count($sample),
+                    'rows' => $sample,
+                    'generatedAt' => gmdate('c'),
+                ]);
+            }
             if (($accumulated['priced'] ?? 0) <= 0) {
                 // Replacing the stored cells with nothing would turn the Setup finder blank
                 // and look like a settled archive with no settlements in it. A fold that

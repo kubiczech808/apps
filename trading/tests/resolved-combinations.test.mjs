@@ -553,6 +553,32 @@ test("a tag nothing open carries is not offered as a setup", () => {
   assert.equal(openOnly.openTagsKnown, true, "against a readable catalogue it does run");
 });
 
+test("the accumulator can hand back the rows it counted, unchanged", () => {
+  // A statistics cell cannot be opened any other way. The fold reads the database and the
+  // archive directory; taxonomy-observations streams the two state files and touches
+  // neither -- which is how a soccer band was read as "0 of 800 rows survive" while the cell
+  // it was meant to explain held 294. The collector runs inside the same pass, so what it
+  // returns IS what was counted.
+  const api = readFileSync(new URL("../api.php", import.meta.url), "utf8");
+  assert.match(api, /function resolved_stats_accumulate\(array \$sources, float \$stake = 5\.0, \?callable \$extra = null, \?callable \$collect = null\)/);
+  // Called after every gate and with the values the cell was built from, not before them.
+  assert.match(api, /\$collect\(\$item, \$entry, \$outcome, \$probability, \$shape, \$horizon, \$tags, \$totalCost, \$pnl\);/);
+  const collectAt = api.indexOf("$collect($item, $entry");
+  const pnlAt = api.indexOf("$pnl = $outcome === 1 ?");
+  const flipAt = api.indexOf("if (!resolved_stats_entry_side_is_the_settled_side($item)) {");
+  assert.ok(pnlAt > 0 && collectAt > pnlAt, "a row is collected only once it has been priced");
+  assert.ok(flipAt > 0 && collectAt > flipAt, "and only once every gate has run");
+
+  // Sampling must never be able to replace the fold: it answers before the store.
+  const sampleAt = api.indexOf("'operation' => 'sample-resolved-stats'");
+  const replaceAt = api.indexOf("trading_storage_resolved_stats_replace(");
+  assert.ok(sampleAt > 0 && replaceAt > 0 && sampleAt < replaceAt,
+    "the sample responds before anything is written");
+  assert.match(api, /\$sampling = \$sampleTag !== '';/);
+  assert.match(api, /\$collect = !\$sampling \? null : static function/,
+    "no collector at all on an ordinary fold, so the nightly job pays nothing for this");
+});
+
 test("an unknown filter value is refused rather than quietly matching nothing", () => {
   // Silently returning an empty ranking reads as "this setup never happened", which is the
   // answer somebody would act on by excluding it.
