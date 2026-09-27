@@ -16,6 +16,11 @@
 // resolved scope: that read exhausted the host's memory limit once.
 
 const HOST = process.env.TRADING_HOST || "https://osobnizkusenosti.cz/trading";
+// Paper and live keep separate state files, so a row can be in one catalogue and not the
+// other. A search of paper alone reporting "not there" says nothing about what the live
+// dashboard is showing.
+const TARGETS = String(process.env.TARGETS || "paper")
+  .split(",").map((entry) => entry.trim()).filter(Boolean);
 const FILTERS = String(process.env.QUESTION_FILTERS || "israel,republic of ireland")
   .split(",").map((entry) => entry.trim().toLowerCase()).filter(Boolean);
 // A team plays many times. Narrowing by the instant the market ends is what isolates ONE
@@ -66,11 +71,11 @@ export function rowMatches(row, questionFilters = FILTERS, endFilters = END_FILT
 // thousand of them. One page found nothing and said "0 match" -- which reads like the rows
 // are absent rather than on page four. So it walks, bounded, and stops at the first short
 // page.
-async function loadActiveRows(maxPages) {
+async function loadActiveRows(maxPages, target) {
   const rows = [];
   for (let page = 0; page < maxPages; page += 1) {
     const offset = rows.length;
-    const url = `${HOST}/api.php?action=state&target=paper&summary=scraped&scope=active&offset=${offset}`;
+    const url = `${HOST}/api.php?action=state&target=${encodeURIComponent(target)}&summary=scraped&scope=active&offset=${offset}`;
     const response = await fetch(url);
     const text = await response.text();
     if (!response.ok) throw new Error(`HTTP ${response.status} at offset ${offset}: ${text.slice(0, 200)}`);
@@ -85,9 +90,9 @@ async function loadActiveRows(maxPages) {
   return rows;
 }
 
-async function main() {
-  console.log(`Risk group check at ${new Date().toISOString()}`);
-  const rows = await loadActiveRows(Math.max(1, Math.min(40, Number(process.env.MAX_PAGES || 8))));
+async function checkTarget(target) {
+  console.log(`\n== ${target} ==`);
+  const rows = await loadActiveRows(Math.max(1, Math.min(40, Number(process.env.MAX_PAGES || 8))), target);
   // Whether the walk reached the end or ran out of pages. "0 match" after a walk that was
   // cut short says the rows are absent when they are merely further on, which is the mistake
   // the first run of this made twice.
@@ -138,6 +143,11 @@ async function main() {
     console.log(`         shared  ${shared.all.join(", ") || "(nothing at all)"}`);
   }
   if (unlinked.length > SHOW_PAIRS) console.log(`      ... ${unlinked.length - SHOW_PAIRS} further unlinked pair(s)`);
+}
+
+async function main() {
+  console.log(`Risk group check at ${new Date().toISOString()}`);
+  for (const target of TARGETS) await checkTarget(target);
 }
 
 if (process.argv[1] && import.meta.url === `file://${process.argv[1]}`) {

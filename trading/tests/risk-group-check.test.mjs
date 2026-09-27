@@ -71,4 +71,8 @@ test("it reads the active page, never the resolved scope", () => {
   const tool = readFileSync(new URL("../tools/risk-group-check.mjs", import.meta.url), "utf8");
   assert.match(tool, /scope=active/);
   assert.ok(!/scope=resolved/.test(tool));
+  // Paper and live keep separate catalogues. Hard-coding one target is how "the rows are
+  // not there" got said about a catalogue that was never read.
+  assert.ok(!/target=paper/.test(tool), "the target is a parameter, not a constant");
+  assert.match(tool, /target=\$\{encodeURIComponent\(target\)\}/);
 });

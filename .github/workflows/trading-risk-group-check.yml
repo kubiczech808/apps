@@ -31,6 +31,11 @@ on:
         required: false
         default: "20"
         type: string
+      targets:
+        description: "Comma-separated state targets to read, e.g. paper,live"
+        required: false
+        default: "paper"
+        type: string
 
 permissions:
   contents: read
@@ -52,4 +57,5 @@ jobs:
           MAX_PAGES: ${{ inputs.max_pages }}
           END_FILTERS: ${{ inputs.end_dates }}
           SHOW_ROWS: ${{ inputs.show_rows }}
+          TARGETS: ${{ inputs.targets }}
         run: node tools/risk-group-check.mjs
