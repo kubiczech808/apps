@@ -59,7 +59,9 @@ function describe(payload) {
   console.log(`      ${list.length} row(s) under "${field}":`);
   console.log("      entry     n   won    win%        P/L    per $");
   for (const row of list) {
-    const entry = num(row.probability ?? row.entry ?? row.floor);
+    // minimumProbability is what resolved-tag-probability-analysis calls it. Reading only the
+    // combinations endpoint's name printed a column of dashes over rows that had the number.
+    const entry = num(row.minimumProbability ?? row.probability ?? row.entry ?? row.floor);
     const n = num(row.trades ?? row.count ?? row.n);
     const wins = num(row.wins ?? row.won);
     const pnl = num(row.pnlUsdc ?? row.pnl ?? row.profitUsdc);
