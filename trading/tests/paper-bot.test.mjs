@@ -1861,8 +1861,19 @@ test("live execution: the run evaluates the shortlist that is on screen", async 
   assert.ok(!/Refresh the shortlist before starting a live order run/.test(app),
     "a manual run must not be blocked on a shortlist it refreshes itself");
 
-  // The shortlist is still taken from the same rows the table renders.
-  assert.match(app, /const shortlistTokenIds = portfolioCandidateRows\(mode\)/);
+  // The shortlist still comes out of the same pass that renders the table, rather than
+  // being rebuilt from another source -- that rebuild is the drift this test exists to
+  // catch, and it is still caught.
+  //
+  // It is no longer the displayed list itself, though. The shortlist now applies one
+  // position per event to its own rows, so both sides of a fixture cannot read READY at
+  // once; the demoted sibling is hidden from the table but still dispatched, ranked behind
+  // the row that beat it. Trimming it from the payload as well would take the executor's
+  // fallback away: a fixture whose top row fails revalidation on price or liquidity would
+  // end with nothing bought, where the sibling would have been bought before. The executor
+  // blocks the sibling by itself.
+  assert.match(app, /const shortlistTokenIds = \(portfolioCandidateDiagnostics\(mode\)\.executionShortlist \|\| \[\]\)/);
+  assert.match(app, /executionShortlist: \[\.\.\.readyInExecutionOrder, \.\.\.sameEventAsBetterRanked\]/);
 
   // And the count actually submitted is reported, so the run log can be checked against
   // it rather than taken on trust.

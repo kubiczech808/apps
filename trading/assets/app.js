@@ -9925,7 +9925,10 @@ function paperThresholdPayload() {
 
 function liveWorkflowPayload(mode = state.mode) {
   const config = portfolioConfigForMode(mode);
-  const shortlistTokenIds = portfolioCandidateRows(mode)
+  // The dispatched list, not the displayed one: a candidate demoted because a better-ranked
+  // row covers its event still travels, ranked behind it, so the executor keeps a fallback
+  // when the top row fails revalidation. The executor blocks the sibling on its own.
+  const shortlistTokenIds = (portfolioCandidateDiagnostics(mode).executionShortlist || [])
     .map((item) => String(item?.tokenId || item?.clobTokenId || item?.assetId || ""))
     .filter((tokenId) => /^\d{8,100}$/.test(tokenId))
     .slice(0, 120);
@@ -11910,6 +11913,35 @@ function sortPortfolioCandidates(rows = [], mode = state.mode) {
   ];
 }
 
+// One position per event, applied to the shortlist itself. `rows` must already be in the
+// order execution would take them, so the winner of an event is the row that would actually
+// trade and every other market of that event is demoted behind it with the reason naming it.
+//
+// Only event: and match: keys count, the same two prefixes the fixed-entry batch claims on.
+// team: and topic: are deliberately left out here: two different fixtures share a team the
+// moment a side plays twice in a window, and topic:iran-war ties an Israeli football match
+// to an oil market. Those are correlations worth seeing; they are not "one bet".
+function candidatesAfterEventRule(rows, keysOf) {
+  const ready = [];
+  const blocked = [];
+  const claimedByEventKey = new Map();
+  for (const item of Array.isArray(rows) ? rows : []) {
+    const keys = (keysOf(item) || [])
+      .filter((key) => String(key).startsWith("event:") || String(key).startsWith("match:"));
+    const taken = keys.find((key) => claimedByEventKey.has(key));
+    if (taken) {
+      blocked.push({
+        ...item,
+        portfolioRiskBlockReason: `same event as a better-ranked candidate (${taken}): ${claimedByEventKey.get(taken)}`,
+      });
+      continue;
+    }
+    for (const key of keys) claimedByEventKey.set(key, String(item.question || item.slug || "").slice(0, 70));
+    ready.push(item);
+  }
+  return { ready, blocked };
+}
+
 function portfolioCandidateDiagnostics(mode = state.mode) {
   const config = portfolioConfigForMode(mode);
   const baseEvaluations = Array.isArray(state.botState?.evaluations) ? state.botState.evaluations : [];
@@ -11985,9 +12017,35 @@ function portfolioCandidateDiagnostics(mode = state.mode) {
     readyByToken.set(tokenId, item);
   }
 
+  // Two sides of one fixture are one bet, and the precheck above compared each candidate
+  // only against what is already OPEN. Before anything is held that comparison has nothing
+  // to say, so both sides read READY and the list gave no sign that taking one rules the
+  // other out.
+  //
+  // Reported on Israel v Republic of Ireland: "Will Israel win on 2026-09-27?" and "Will
+  // Republic of Ireland win on 2026-09-27?" sat side by side, both READY, both on No, both
+  // ending 20:45. They share event:unl-isr-ire-2026-09-27 -- the paper executor does block
+  // the second, and the fixed-entry batch has had the rule from the start. The shortlist
+  // was simply never applying it among its own rows, so the reader saw two independent
+  // bets where the portfolio can only take one.
+  //
+  // Applied in execution order, so the row that would actually trade keeps READY and the
+  // rest of its event falls in behind it, exactly as execution decides.
+  const { ready: readyInExecutionOrder, blocked: sameEventAsBetterRanked } = candidatesAfterEventRule(
+    sortPortfolioCandidates([...readyByToken.values()], mode),
+    (item) => riskKeysForRow(item, evaluationByToken),
+  );
+
   return {
-    ready: sortPortfolioCandidates([...readyByToken.values()], mode),
-    riskBlocked: sortPortfolioCandidates(riskBlocked, mode),
+    ready: readyInExecutionOrder,
+    // What is DISPATCHED, which is not the same list. The event rule above decides what the
+    // reader is shown; trimming the shortlist as well would take the executor's fallbacks
+    // away, so a fixture whose top row fails revalidation on price or liquidity would end
+    // with nothing bought where the sibling would have been bought before. The executor
+    // applies its own diversification to whatever it is handed -- it blocks the sibling by
+    // itself -- so the siblings ride along behind, ranked last.
+    executionShortlist: [...readyInExecutionOrder, ...sameEventAsBetterRanked],
+    riskBlocked: sortPortfolioCandidates([...riskBlocked, ...sameEventAsBetterRanked], mode),
     alreadyHeld: sortPortfolioCandidates(alreadyHeld, mode),
     manuallyExcluded: sortPortfolioCandidates(manuallyExcluded, mode),
     filteredReasonCounts,
@@ -12123,7 +12181,12 @@ function renderPortfolioCandidateRows(rows = [], mode = state.mode, diagnostics 
               : (heldRow
               ? `${item.portfolioRiskBlockReason}; see Opened trades`
               : (riskBlockedRow
-                ? "excluded by diversification rules"
+                // Which bet this one is tied to, not merely that a rule exists. "Excluded
+                // by diversification rules" was the same sentence on every blocked row,
+                // and the question a reader brings to this column is WHICH other bet --
+                // the two sides of one fixture look like two opportunities until the row
+                // names the one that already covers the event.
+                ? (item.portfolioRiskBlockReason || "excluded by diversification rules")
                 : (!live ? "ready for next paper execution" : ""))));
           const precheck = excluded
             ? "EXCLUDED"
