@@ -10691,7 +10691,21 @@ async function loadLiveMarketScanBatch({ auditCalls = null } = {}) {
 // the start. Capture the same sports/esports window before kick-off as well. Two bounded
 // Gamma calls per scrape are enough, and each portfolio's own filters still decide whether
 // any stored row is worth watching or trading.
+//
+// It has to say WHERE the window starts, or it does not get the fixtures it exists for.
+// scanEventRequestParams defaults end_date_min to six hours in the past, which is right for
+// the rotation and for the live pass -- a match that has just ended can still be trading.
+// Ordered by endDate ascending, though, that default puts every already-running fixture at
+// the front of the page, and on a Saturday afternoon there are more of those than the page
+// holds. Measured on the settled archive: soccer rows were first seen 1.0 to 4.5 hours AFTER
+// their own kickoff, every one of them inside that six-hour grace, while the fixtures
+// starting later the same day were never reached. A pre-start pass whose page is full of
+// started matches captures nothing it was built to capture.
+//
+// So this one starts its window at NOW. Same two requests, same limit, no change to the live
+// pass or to the esports cadence -- the page simply holds fixtures that have not begun.
 async function loadImminentDipMarketScanBatch({ auditCalls = null } = {}) {
+  const startedAfter = new Date().toISOString();
   const endDateMax = new Date(Date.now() + MARKET_SCAN_LIVE_WINDOW_HOURS * 3600000).toISOString();
   const markets = [];
   const perTag = {};
@@ -10703,6 +10717,8 @@ async function loadImminentDipMarketScanBatch({ auditCalls = null } = {}) {
       ascending: "true",
       // Intentionally no `live` flag: this is the pre-start half of the DIP evidence.
       liquidity_min: 0,
+      // Not yet started, by definition. Overrides the six-hour grace the rotation wants.
+      end_date_min: startedAfter,
       end_date_max: endDateMax,
     }, {
       calls: auditCalls,
