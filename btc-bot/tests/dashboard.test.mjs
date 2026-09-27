@@ -370,6 +370,12 @@ test('only a current-setup FVG touch is rendered after it has been consumed', ()
   assert.match(css, /\.asset-price-chart \.asset-zone-invalidated/)
 })
 
+test('charts and zone details include every untouched FVG from the active catalog', () => {
+  assert.match(js, /\.\.\.\(zones\?\.\[`unfilled\$\{key\}`\] \?\? \[\]\)/)
+  assert.match(js, /const availableZones = zoneList\(item, type\)/)
+  assert.match(js, /uniqueZones\(\[\.\.\.availableZones, \.\.\.activeSetupZones, \.\.\.plannedEntries/)
+})
+
 test('charts create SVG graphics in the SVG namespace and use strategy history when available', () => {
   assert.match(js, /document\.createElementNS\(SVG_NS, tag\)/)
   assert.match(js, /const strategyHistory = state\?\.strategyEquityHistory\?\.\[view\.id\]/)
@@ -417,7 +423,7 @@ test('the first migrated publish persists the strategy-versioned settings', () =
 })
 
 test('the API refuses stale PA-1 runners before they overwrite current structure', () => {
-  assert.match(api, /const MIN_PRICE_ACTION_MATRIX_SCHEMA = 62/)
+  assert.match(api, /const MIN_PRICE_ACTION_MATRIX_SCHEMA = 63/)
   assert.match(api, /\$strategyId === 'price-action-structure-v1'/)
   assert.match(api, /\(int\) \$priceActionSchema < MIN_PRICE_ACTION_MATRIX_SCHEMA/)
   assert.match(api, /fail\(409, 'Runner uses an obsolete price-action matrix schema\.'\)/)

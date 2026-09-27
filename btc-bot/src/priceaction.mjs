@@ -177,22 +177,14 @@ export const marketStructure = (candles, { lookback = 2 } = {}) => {
 }
 
 /**
- * Supply/demand is the FVG created by a qualifying displacement, not every
- * swing pivot. The base validates the origin of that displacement; it is not
- * itself the price range offered for an entry.
- *
- * The sequence required here is:
- *   base -> directional displacement -> three-candle FVG confirmation.
- * Usually the FVG's middle candle is the displacement candle. On an aggregated
- * timeframe the breakout can straddle a bucket boundary, so the confirming
- * third candle may carry the displacement instead. In both cases the nearest
- * opposite/indecision candle immediately behind the impulse is the base. This
- * keeps an unrelated gap elsewhere in the chart from blessing an ordinary
- * swing as a zone without dropping a real multi-candle breakout.
+ * Supply/demand is the exact untraded gap between the outer wicks of three
+ * consecutive candles. A displacement/base is useful provenance, but not a
+ * second admission rule: a valid FVG must not disappear merely because its
+ * impulse was split differently by 1H, 4H or 1D aggregation.
  */
 export const buildFvgSupplyDemandZones = (candles, {
   maxAgeCandles = 400,
-  minGapAtr = 0.1,
+  minGapAtr = 0,
   minDisplacementAtr = 0.8,
   maxBaseCandles = 3,
 } = {}) => {
@@ -204,6 +196,7 @@ export const buildFvgSupplyDemandZones = (candles, {
 
   for (const gap of gaps) {
     const confirmationIndex = gap.confirmationIndex ?? gap.index + 1
+    if (confirmationIndex < oldestIndex) continue
     const displacementIndex = [gap.index, confirmationIndex].find((index) => {
       const candidate = candles[index]
       const localAtr = atrSeries[index] ?? reference
@@ -211,34 +204,36 @@ export const buildFvgSupplyDemandZones = (candles, {
       const bodyShare = range(candidate) > 0 ? body(candidate) / range(candidate) : 0
       return directional && body(candidate) >= localAtr * minDisplacementAtr && bodyShare >= 0.5
     })
-    if (!Number.isFinite(displacementIndex)) continue
-    const displacement = candles[displacementIndex]
-    const localAtr = atrSeries[displacementIndex] ?? reference
+    const displacement = Number.isFinite(displacementIndex) ? candles[displacementIndex] : null
+    const localAtr = Number.isFinite(displacementIndex) ? atrSeries[displacementIndex] ?? reference : reference
 
-    const baseSearchEnd = displacementIndex - 1
-    const searchStart = Math.max(oldestIndex, baseSearchEnd - Math.max(1, maxBaseCandles) + 1)
     let baseIndex = null
-    for (let index = baseSearchEnd; index >= searchStart; index -= 1) {
-      const candidate = candles[index]
-      const opposite = gap.direction === 'bullish' ? !isBullish(candidate) : !isBearish(candidate)
-      const candidateBodyShare = range(candidate) > 0 ? body(candidate) / range(candidate) : 0
-      const indecision = candidateBodyShare <= 0.45
-      const compact = range(candidate) <= localAtr * 0.75 || range(candidate) <= range(displacement) * 0.5
-      if (opposite || indecision || compact) {
-        baseIndex = index
-        break
+    let qualifiedDisplacement = false
+    if (displacement) {
+      const baseSearchEnd = displacementIndex - 1
+      const searchStart = Math.max(oldestIndex, baseSearchEnd - Math.max(1, maxBaseCandles) + 1)
+      for (let index = baseSearchEnd; index >= searchStart; index -= 1) {
+        const candidate = candles[index]
+        const opposite = gap.direction === 'bullish' ? !isBullish(candidate) : !isBearish(candidate)
+        const candidateBodyShare = range(candidate) > 0 ? body(candidate) / range(candidate) : 0
+        const indecision = candidateBodyShare <= 0.45
+        const compact = range(candidate) <= localAtr * 0.75 || range(candidate) <= range(displacement) * 0.5
+        if (opposite || indecision || compact) {
+          baseIndex = index
+          break
+        }
       }
+      const base = baseIndex === null ? null : candles[baseIndex]
+      qualifiedDisplacement = Boolean(base && baseIndex >= oldestIndex && (
+        gap.direction === 'bullish'
+          ? displacement.close > base.high
+          : displacement.close < base.low
+      ))
     }
-    if (baseIndex === null) continue
-    const base = candles[baseIndex]
-    const brokeBase = gap.direction === 'bullish'
-      ? displacement.close > base.high
-      : displacement.close < base.low
-    if (!brokeBase || baseIndex < oldestIndex) continue
 
     const type = gap.direction === 'bullish' ? 'demand' : 'supply'
-    // The zone is the untraded three-candle imbalance. Keeping the base only
-    // as provenance prevents an ordinary gap from becoming a trade zone.
+    // The zone is the untraded three-candle imbalance. The optional base and
+    // displacement stay with it for audit, but cannot suppress a real FVG.
     const low = gap.low
     const high = gap.high
     if (!(high > low)) continue
@@ -253,8 +248,8 @@ export const buildFvgSupplyDemandZones = (candles, {
       imbalance: true,
       firstIndex: gap.firstIndex,
       lastIndex: confirmationIndex,
-      lastTime: candles[confirmationIndex]?.time ?? displacement.time,
-      baseIndexes: [baseIndex],
+      lastTime: candles[confirmationIndex]?.time ?? displacement?.time ?? null,
+      baseIndexes: qualifiedDisplacement ? [baseIndex] : [],
       definingIndexes: gap.definingIndexes,
       fvg: {
         direction: gap.direction,
@@ -262,6 +257,7 @@ export const buildFvgSupplyDemandZones = (candles, {
         high: gap.high,
         index: gap.index,
         displacementIndex,
+        qualifiedDisplacement,
         firstIndex: gap.firstIndex,
         confirmationIndex,
         filled: gap.filled,

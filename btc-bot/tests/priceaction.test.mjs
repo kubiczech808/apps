@@ -98,7 +98,7 @@ test('ordinary turns without an impulsive three-candle FVG are not supply/demand
   assert.deepEqual(buildFvgSupplyDemandZones(candles), [])
 })
 
-test('a zone is the three-candle FVG from a qualified displacement base', () => {
+test('a qualified displacement keeps its base as FVG provenance', () => {
   const candles = [
     candle(START, 100, 101, 98, 99),
     candle(START + HOUR, 99, 111, 99, 110),
@@ -113,6 +113,38 @@ test('a zone is the three-candle FVG from a qualified displacement base', () => 
     { direction: zone.fvg.direction, low: zone.fvg.low, high: zone.fvg.high },
     { direction: 'bullish', low: 101, high: 105 }
   )
+})
+
+test('a three-candle FVG remains a zone even without a separately qualified displacement', () => {
+  // This mirrors a small daily NZDUSD bearish gap: all three candles are
+  // directional, so the historical base/ATR filter used to discard it even
+  // though the outer wicks leave 0.5934-0.5949 completely untraded.
+  const day = 24 * HOUR
+  const candles = [
+    candle(START, 0.6000, 0.6010, 0.5949, 0.5952),
+    candle(START + day, 0.5952, 0.5954, 0.5936, 0.5938),
+    candle(START + 2 * day, 0.5932, 0.5934, 0.5909, 0.5913),
+  ]
+
+  const [zone] = buildFvgSupplyDemandZones(candles)
+  assert.equal(zone.type, 'supply')
+  assert.deepEqual({ low: zone.low, high: zone.high }, { low: 0.5934, high: 0.5949 })
+  assert.deepEqual(zone.definingIndexes, [0, 1, 2])
+  assert.deepEqual(zone.baseIndexes, [], 'the optional base must not gate a valid FVG')
+  assert.equal(zone.fvg.qualifiedDisplacement, false)
+})
+
+test('the FVG catalog still respects its configured age limit', () => {
+  const candles = [
+    candle(START, 100, 101, 98, 99),
+    candle(START + HOUR, 99, 110, 99, 109),
+    candle(START + 2 * HOUR, 109, 112, 105, 111),
+    candle(START + 3 * HOUR, 111, 112, 110, 111),
+    candle(START + 4 * HOUR, 111, 112, 110, 111),
+    candle(START + 5 * HOUR, 111, 112, 110, 111),
+  ]
+
+  assert.deepEqual(buildFvgSupplyDemandZones(candles, { maxAgeCandles: 3 }), [])
 })
 
 test('an FVG keeps its zone when a timeframe boundary puts the displacement in the confirming candle', () => {

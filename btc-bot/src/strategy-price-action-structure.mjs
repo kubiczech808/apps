@@ -4,7 +4,7 @@ import { buildExternalTrendReference, EXTERNAL_PIVOT_SCHEMA } from './external-t
 import { buildFvgSupplyDemandZones, candleSignal, marketStructure } from './priceaction.mjs'
 
 export const PRICE_ACTION_STRUCTURE_ID = 'price-action-structure-v1'
-export const PRICE_ACTION_MATRIX_SCHEMA = 62
+export const PRICE_ACTION_MATRIX_SCHEMA = 63
 export const PRICE_ACTION_CHART_CANDLE_LIMITS = {
   // The zone and structure inputs below remain much longer. These limits only
   // bound chart data published to the browser, where a 60-day 1H / 180-day
@@ -821,7 +821,7 @@ export const activeSupplyDemandZones = (candles, { lookback = 2, maxAgeCandles =
     unfilledCount: unfilled.length,
     validCount: zones.length,
     auditCount: allZones.length,
-    rule: 'Zóna vzniká jen jako base impulsního breakoutu s 3svíčkovým FVG. První dotek na vlastním timeframe ji spotřebuje pro nový vstup i bez close přes celý gap. V grafu zůstává dotčená zóna jen v aktivním setupu od posledního potvrzeného pivotu; zóna uložená u objednávky nebo pozice zůstává do ukončení obchodu.',
+    rule: 'Zóna vzniká jako neobchodovaný gap mezi vnějšími knoty tří bezprostředně po sobě jdoucích svíček. První dotek na vlastním timeframe ji spotřebuje pro nový vstup i bez close přes celý gap. V grafu zůstává dotčená zóna jen v aktivním setupu od posledního potvrzeného pivotu; zóna uložená u objednávky nebo pozice zůstává do ukončení obchodu.',
   }
 }
 

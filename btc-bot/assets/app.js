@@ -1005,8 +1005,9 @@ const zoneCard = (title, zones, emptyText, timeframeId, candidates = [], directi
 const zonesForDetail = (zones, type) => {
   const key = type === 'demand' ? 'Demand' : 'Supply'
   // Historical FVGs remain in the published audit data, but the operator sees
-  // only untouched candidates plus touches from the active structural wave.
+  // all untouched candidates plus touches from the active structural wave.
   return uniqueZones([
+    ...(zones?.[`unfilled${key}`] ?? []),
     ...(zones?.[`nearby${key}`] ?? []),
     ...(zones?.[`currentSetup${key}`] ?? []),
   ])
@@ -1397,8 +1398,9 @@ const chartZones = (item, type) => {
   const targetZone = profile?.tp2Zone?.type === type ? [profile.tp2Zone] : []
   const activeSetupZones = setupZonesForEntry(chartEntry).filter((zone) => zone.type === type)
   const currentSetupZones = currentSetupTouchedZones(item, type)
+  const availableZones = zoneList(item, type)
   const seen = new Set()
-  return uniqueZones([...activeSetupZones, ...plannedEntries, ...targetZone, ...currentSetupZones])
+  return uniqueZones([...availableZones, ...activeSetupZones, ...plannedEntries, ...targetZone, ...currentSetupZones])
     .filter((zone) => zone && (zone.activeSetupZone || zone.watchedSetupZone ||
       zone.currentSetupZone ||
       (!zone.filledByOwnTimeframeClose && !zone.invalidatedByOwnTimeframeClose && !Number.isFinite(zone.firstTouchAt))))

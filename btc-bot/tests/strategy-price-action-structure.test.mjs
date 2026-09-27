@@ -882,6 +882,31 @@ test('a partial same-timeframe touch consumes an FVG and separates old touches f
   assert.equal(currentDemand.definingCandles[0].open, undefined, 'audit zones keep their origin without duplicating candle OHLC')
 })
 
+test('an untouched raw FVG is published to the active daily supply catalog', () => {
+  const day = 24 * HOUR
+  const candles = [
+    // The outer wicks leave a bearish 0.5934-0.5949 FVG. Its bodies do not
+    // meet the old displacement/base filter, which must not affect the zone.
+    candle(START, 0.6000, 0.6010, 0.5949, 0.5952),
+    candle(START + day, 0.5952, 0.5954, 0.5936, 0.5938),
+    candle(START + 2 * day, 0.5932, 0.5934, 0.5909, 0.5913),
+    candle(START + 3 * day, 0.5913, 0.5928, 0.5898, 0.5906),
+  ]
+
+  const zones = activeSupplyDemandZones(candles, {
+    maxAgeCandles: 100,
+    setupAnchor: { time: START + 2 * day, label: 'HH' },
+  })
+  const supply = zones.unfilledSupply.find((zone) => zone.low === 0.5934 && zone.high === 0.5949)
+
+  assert.ok(supply, 'the raw FVG must reach the available supply list')
+  assert.equal(supply.firstTouchAt, null)
+  assert.equal(supply.filledByOwnTimeframeClose, false)
+  assert.equal(supply.invalidatedByOwnTimeframeClose, false)
+  assert.ok(zones.nearbySupply.some((zone) => zone.low === 0.5934 && zone.high === 0.5949))
+  assert.match(zones.rule, /tří bezprostředně po sobě jdoucích svíček/)
+})
+
 test('trade profile requires S/D zone hit, 50 percent pullback and at least 2R', () => {
   const item = {
     trend: 'up',
@@ -1521,6 +1546,15 @@ test('price-action matrix covers BTCUSD and major FX pairs on 1H, 4H and 1D', as
     assert.deepEqual(Object.keys(asset.trends), ['1h', '4h', '1d'])
     for (const timeframe of PRICE_ACTION_TIMEFRAMES) {
       const item = asset.trends[timeframe.id]
+      for (const [type, key] of [['demand', 'unfilledDemand'], ['supply', 'unfilledSupply']]) {
+        const zones = item.zones?.[key]
+        assert.ok(Array.isArray(zones), `${asset.symbol} ${timeframe.id}: ${key} must be published`)
+        for (const zone of zones) {
+          assert.equal(zone.type, type, `${asset.symbol} ${timeframe.id}: zone side must stay intact`)
+          assert.ok(zone.high > zone.low, `${asset.symbol} ${timeframe.id}: FVG bounds must retain their raw order`)
+          assert.equal(zone.fvg?.definingCandles?.length, 3, `${asset.symbol} ${timeframe.id}: every zone must come from exactly three candles`)
+        }
+      }
       const range = item.structure.activeRange
       if (!range) continue
       assert.ok(range.high.price > range.low.price, `${asset.symbol} ${timeframe.id}: active range must have positive height`)
