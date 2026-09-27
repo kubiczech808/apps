@@ -26,6 +26,26 @@ on:
         required: false
         default: "0.45"
         type: string
+      sample_tag:
+        description: "Optional: print the raw markets behind one cell, for one of the tags above"
+        required: false
+        default: ""
+        type: string
+      sample_open_floor:
+        description: "Open floor for the sample, e.g. 0.9 for the 90+ row"
+        required: false
+        default: ""
+        type: string
+      sample_buy_min:
+        description: "Buy-band floor for the sample, e.g. 0.45"
+        required: false
+        default: ""
+        type: string
+      sample_buy_max:
+        description: "Buy-band ceiling for the sample, e.g. 0.5"
+        required: false
+        default: ""
+        type: string
 
 permissions:
   contents: read
@@ -46,4 +66,8 @@ jobs:
           DIP_SWEEP_TAGS: ${{ inputs.tags }}
           DIP_SWEEP_MIN_TRADES: ${{ inputs.min_trades }}
           DIP_SWEEP_MIN_BUY_FLOOR: ${{ inputs.min_buy_floor }}
+          DIP_SWEEP_SAMPLE_TAG: ${{ inputs.sample_tag }}
+          DIP_SWEEP_SAMPLE_OPEN_FLOOR: ${{ inputs.sample_open_floor }}
+          DIP_SWEEP_SAMPLE_BUY_MIN: ${{ inputs.sample_buy_min }}
+          DIP_SWEEP_SAMPLE_BUY_MAX: ${{ inputs.sample_buy_max }}
         run: node tools/dip-combination-sweep.mjs
