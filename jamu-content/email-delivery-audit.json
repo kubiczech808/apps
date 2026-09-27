@@ -1,0 +1,521 @@
+{
+  "schema": 1,
+  "generated_at": "2026-09-27T16:24:17+00:00",
+  "plugins": [
+    {
+      "file": "facebook-for-woocommerce/facebook-for-woocommerce.php",
+      "name": "Meta for WooCommerce",
+      "version": "3.7.6"
+    },
+    {
+      "file": "insert-headers-and-footers/ihaf.php",
+      "name": "WPCode Lite",
+      "version": "2.3.9"
+    },
+    {
+      "file": "woo-checkout-field-editor-pro/checkout-form-designer.php",
+      "name": "Checkout Field Editor for WooCommerce",
+      "version": "2.2.0"
+    },
+    {
+      "file": "woo-discount-rules/woo-discount-rules.php",
+      "name": "Discount Rules for WooCommerce",
+      "version": "2.6.18"
+    },
+    {
+      "file": "woo-stripe-payment/stripe-payments.php",
+      "name": "Payment Plugins for Stripe WooCommerce",
+      "version": "4.0.16"
+    },
+    {
+      "file": "woocommerce-pay-for-payment/woocommerce-payforpayment.php",
+      "name": "Pay for Payment for WooCommerce – Payment Gateway Fees & Discounts",
+      "version": "3.0.0"
+    },
+    {
+      "file": "woocommerce-payments/woocommerce-payments.php",
+      "name": "WooPayments",
+      "version": "11.1.0"
+    },
+    {
+      "file": "woocommerce-services/woocommerce-services.php",
+      "name": "WooCommerce Tax",
+      "version": "3.7.0"
+    },
+    {
+      "file": "woocommerce/woocommerce.php",
+      "name": "WooCommerce",
+      "version": "11.1.2"
+    },
+    {
+      "file": "wpify-woo/wpify-woo.php",
+      "name": "WPify Woo",
+      "version": "5.4.22"
+    },
+    {
+      "file": "yaymail/yaymail.php",
+      "name": "YayMail - WooCommerce Email Customizer",
+      "version": "4.4.6"
+    }
+  ],
+  "options": [
+    {
+      "key": "admin_email",
+      "type": "string",
+      "array_keys": []
+    },
+    {
+      "key": "require_name_email",
+      "type": "string",
+      "array_keys": []
+    },
+    {
+      "key": "mailserver_url",
+      "type": "string",
+      "array_keys": []
+    },
+    {
+      "key": "mailserver_login",
+      "type": "string",
+      "array_keys": []
+    },
+    {
+      "key": "mailserver_pass",
+      "type": "string",
+      "array_keys": []
+    },
+    {
+      "key": "mailserver_port",
+      "type": "string",
+      "array_keys": []
+    },
+    {
+      "key": "default_email_category",
+      "type": "string",
+      "array_keys": []
+    },
+    {
+      "key": "admin_email_lifespan",
+      "type": "string",
+      "array_keys": []
+    },
+    {
+      "key": "widget_mailpoet_form",
+      "type": "string",
+      "array_keys": []
+    },
+    {
+      "key": "post_by_email_address1",
+      "type": "string",
+      "array_keys": []
+    },
+    {
+      "key": "oum_admin_notification_email",
+      "type": "string",
+      "array_keys": []
+    },
+    {
+      "key": "post_by_email_address2",
+      "type": "string",
+      "array_keys": []
+    },
+    {
+      "key": "recovery_mode_email_last_sent",
+      "type": "string",
+      "array_keys": []
+    },
+    {
+      "key": "yaymail_version",
+      "type": "string",
+      "array_keys": []
+    },
+    {
+      "key": "yaymail_direction",
+      "type": "string",
+      "array_keys": []
+    },
+    {
+      "key": "yaymail_settings",
+      "type": "string",
+      "array_keys": []
+    },
+    {
+      "key": "yaymail_settings_default_logo",
+      "type": "string",
+      "array_keys": []
+    },
+    {
+      "key": "yaymail_settings_default_footer",
+      "type": "string",
+      "array_keys": []
+    },
+    {
+      "key": "yaymail_notice",
+      "type": "string",
+      "array_keys": []
+    },
+    {
+      "key": "wpforms_email_summaries_fetch_info_blocks_last_run",
+      "type": "string",
+      "array_keys": []
+    },
+    {
+      "key": "ecomail",
+      "type": "string",
+      "array_keys": []
+    },
+    {
+      "key": "new_admin_email",
+      "type": "string",
+      "array_keys": []
+    },
+    {
+      "key": "woocommerce_feature_email_improvements_enabled",
+      "type": "string",
+      "array_keys": []
+    },
+    {
+      "key": "woocommerce_email_header_image_width",
+      "type": "string",
+      "array_keys": []
+    },
+    {
+      "key": "woocommerce_email_header_alignment",
+      "type": "string",
+      "array_keys": []
+    },
+    {
+      "key": "woocommerce_email_font_family",
+      "type": "string",
+      "array_keys": []
+    },
+    {
+      "key": "woocommerce_feature_block_email_editor_enabled",
+      "type": "string",
+      "array_keys": []
+    },
+    {
+      "key": "_yaymail_backup_3_9_9",
+      "type": "string",
+      "array_keys": []
+    },
+    {
+      "key": "_yaymail_successful_migrations",
+      "type": "string",
+      "array_keys": []
+    },
+    {
+      "key": "yaymail_version_backup",
+      "type": "string",
+      "array_keys": []
+    },
+    {
+      "key": "woocommerce_pos_store_email",
+      "type": "string",
+      "array_keys": []
+    },
+    {
+      "key": "yaymail_next_recommendation_upgrade_notice_time",
+      "type": "string",
+      "array_keys": []
+    },
+    {
+      "key": "woocommerce_admin_dismissed_try_email_improvements_modal",
+      "type": "string",
+      "array_keys": []
+    },
+    {
+      "key": "woocommerce_feature_deferred_transactional_emails_enabled",
+      "type": "string",
+      "array_keys": []
+    },
+    {
+      "key": "woocommerce_email_template_sync_backfill_complete",
+      "type": "string",
+      "array_keys": []
+    },
+    {
+      "key": "wpcode_snippets",
+      "type": "string",
+      "array_keys": []
+    },
+    {
+      "key": "wpcode_admin_notices",
+      "type": "string",
+      "array_keys": []
+    },
+    {
+      "key": "_transient_wpcode_used_library_snippets",
+      "type": "string",
+      "array_keys": []
+    },
+    {
+      "key": "wpcode_snippets_errors",
+      "type": "string",
+      "array_keys": []
+    },
+    {
+      "key": "yaymail_show_multi_select_notice",
+      "type": "string",
+      "array_keys": []
+    },
+    {
+      "key": "yaymail_default_email_test",
+      "type": "string",
+      "array_keys": []
+    }
+  ],
+  "email_settings": [
+    {
+      "id": "WC_Email_New_Order",
+      "enabled": "yes",
+      "email_type": "html",
+      "template_html": "emails/admin-new-order.php",
+      "template_plain": "emails/plain/admin-new-order.php"
+    },
+    {
+      "id": "WC_Email_Cancelled_Order",
+      "enabled": "no",
+      "email_type": "html",
+      "template_html": "emails/admin-cancelled-order.php",
+      "template_plain": "emails/plain/admin-cancelled-order.php"
+    },
+    {
+      "id": "WC_Email_Customer_Cancelled_Order",
+      "enabled": "no",
+      "email_type": "html",
+      "template_html": "emails/customer-cancelled-order.php",
+      "template_plain": "emails/plain/customer-cancelled-order.php"
+    },
+    {
+      "id": "WC_Email_Failed_Order",
+      "enabled": "yes",
+      "email_type": "html",
+      "template_html": "emails/admin-failed-order.php",
+      "template_plain": "emails/plain/admin-failed-order.php"
+    },
+    {
+      "id": "WC_Email_Customer_Failed_Order",
+      "enabled": "yes",
+      "email_type": "html",
+      "template_html": "emails/customer-failed-order.php",
+      "template_plain": "emails/plain/customer-failed-order.php"
+    },
+    {
+      "id": "WC_Email_Customer_On_Hold_Order",
+      "enabled": "yes",
+      "email_type": "html",
+      "template_html": "emails/customer-on-hold-order.php",
+      "template_plain": "emails/plain/customer-on-hold-order.php"
+    },
+    {
+      "id": "WC_Email_Customer_Processing_Order",
+      "enabled": "yes",
+      "email_type": "html",
+      "template_html": "emails/customer-processing-order.php",
+      "template_plain": "emails/plain/customer-processing-order.php"
+    },
+    {
+      "id": "WC_Email_Customer_Completed_Order",
+      "enabled": "no",
+      "email_type": "html",
+      "template_html": "emails/customer-completed-order.php",
+      "template_plain": "emails/plain/customer-completed-order.php"
+    },
+    {
+      "id": "WC_Email_Customer_Refunded_Order",
+      "enabled": "yes",
+      "email_type": "html",
+      "template_html": "emails/customer-refunded-order.php",
+      "template_plain": "emails/plain/customer-refunded-order.php"
+    },
+    {
+      "id": "WC_Email_Customer_Invoice",
+      "enabled": "",
+      "email_type": "html",
+      "template_html": "emails/customer-invoice.php",
+      "template_plain": "emails/plain/customer-invoice.php"
+    },
+    {
+      "id": "WC_Email_Customer_Note",
+      "enabled": "yes",
+      "email_type": "html",
+      "template_html": "emails/customer-note.php",
+      "template_plain": "emails/plain/customer-note.php"
+    },
+    {
+      "id": "WC_Email_Customer_Reset_Password",
+      "enabled": "yes",
+      "email_type": "html",
+      "template_html": "emails/customer-reset-password.php",
+      "template_plain": "emails/plain/customer-reset-password.php"
+    },
+    {
+      "id": "WC_Email_Customer_New_Account",
+      "enabled": "yes",
+      "email_type": "html",
+      "template_html": "emails/customer-new-account.php",
+      "template_plain": "emails/plain/customer-new-account.php"
+    },
+    {
+      "id": "WC_Email_Admin_Payment_Gateway_Enabled",
+      "enabled": "yes",
+      "email_type": "html",
+      "template_html": "emails/admin-payment-gateway-enabled.php",
+      "template_plain": "emails/plain/admin-payment-gateway-enabled.php"
+    },
+    {
+      "id": "WC_Email_Customer_POS_Completed_Order",
+      "enabled": "",
+      "email_type": "html",
+      "template_html": "emails/customer-pos-completed-order.php",
+      "template_plain": "emails/plain/customer-pos-completed-order.php"
+    },
+    {
+      "id": "WC_Email_Customer_POS_Refunded_Order",
+      "enabled": "",
+      "email_type": "html",
+      "template_html": "emails/customer-pos-refunded-order.php",
+      "template_plain": "emails/plain/customer-pos-refunded-order.php"
+    },
+    {
+      "id": "WC_Email_Customer_Verify_Email",
+      "enabled": "yes",
+      "email_type": "html",
+      "template_html": "emails/customer-verify-email.php",
+      "template_plain": "emails/plain/customer-verify-email.php"
+    },
+    {
+      "id": "WC_Payments_Email_IPP_Receipt",
+      "enabled": "yes",
+      "email_type": "html",
+      "template_html": "emails/customer-ipp-receipt.php",
+      "template_plain": "emails/plain/customer-ipp-receipt.php"
+    },
+    {
+      "id": "WC_Payments_Email_Post_Kyc_Activation",
+      "enabled": "yes",
+      "email_type": "html",
+      "template_html": "emails/post-kyc-activation.php",
+      "template_plain": "emails/plain/post-kyc-activation.php"
+    }
+  ],
+  "hooks": [
+    [],
+    [
+      {
+        "priority": 999,
+        "callback": "Jamu\\Multilingual\\Email::restore_after_mail_params",
+        "accepted_args": 1
+      }
+    ],
+    [
+      {
+        "priority": 10,
+        "callback": "wp_staticize_emoji_for_email",
+        "accepted_args": 1
+      }
+    ],
+    [],
+    [
+      {
+        "priority": 10,
+        "callback": "WC_Email_New_Order::handle_multipart",
+        "accepted_args": 1
+      },
+      {
+        "priority": 10,
+        "callback": "WC_Email_Cancelled_Order::handle_multipart",
+        "accepted_args": 1
+      },
+      {
+        "priority": 10,
+        "callback": "WC_Email_Customer_Cancelled_Order::handle_multipart",
+        "accepted_args": 1
+      },
+      {
+        "priority": 10,
+        "callback": "WC_Email_Failed_Order::handle_multipart",
+        "accepted_args": 1
+      },
+      {
+        "priority": 10,
+        "callback": "WC_Email_Customer_Failed_Order::handle_multipart",
+        "accepted_args": 1
+      },
+      {
+        "priority": 10,
+        "callback": "WC_Email_Customer_On_Hold_Order::handle_multipart",
+        "accepted_args": 1
+      },
+      {
+        "priority": 10,
+        "callback": "WC_Email_Customer_Processing_Order::handle_multipart",
+        "accepted_args": 1
+      },
+      {
+        "priority": 10,
+        "callback": "WC_Email_Customer_Completed_Order::handle_multipart",
+        "accepted_args": 1
+      },
+      {
+        "priority": 10,
+        "callback": "WC_Email_Customer_Refunded_Order::handle_multipart",
+        "accepted_args": 1
+      },
+      {
+        "priority": 10,
+        "callback": "WC_Email_Customer_Invoice::handle_multipart",
+        "accepted_args": 1
+      },
+      {
+        "priority": 10,
+        "callback": "WC_Email_Customer_Note::handle_multipart",
+        "accepted_args": 1
+      },
+      {
+        "priority": 10,
+        "callback": "WC_Email_Customer_Reset_Password::handle_multipart",
+        "accepted_args": 1
+      },
+      {
+        "priority": 10,
+        "callback": "WC_Email_Customer_New_Account::handle_multipart",
+        "accepted_args": 1
+      },
+      {
+        "priority": 10,
+        "callback": "WC_Email_Admin_Payment_Gateway_Enabled::handle_multipart",
+        "accepted_args": 1
+      },
+      {
+        "priority": 10,
+        "callback": "WC_Email_Customer_POS_Completed_Order::handle_multipart",
+        "accepted_args": 1
+      },
+      {
+        "priority": 10,
+        "callback": "WC_Email_Customer_POS_Refunded_Order::handle_multipart",
+        "accepted_args": 1
+      },
+      {
+        "priority": 10,
+        "callback": "Automattic\\WooCommerce\\Internal\\CustomerEmailVerification\\Emails\\CustomerVerifyEmail::handle_multipart",
+        "accepted_args": 1
+      },
+      {
+        "priority": 10,
+        "callback": "WC_Payments_Email_IPP_Receipt::handle_multipart",
+        "accepted_args": 1
+      },
+      {
+        "priority": 10,
+        "callback": "WC_Payments_Email_Post_Kyc_Activation::handle_multipart",
+        "accepted_args": 1
+      }
+    ],
+    [],
+    []
+  ],
+  "snippet_signals": []
+}
