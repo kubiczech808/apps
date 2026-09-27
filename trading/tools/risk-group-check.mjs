@@ -68,8 +68,12 @@ async function loadActiveRows(maxPages) {
 
 async function main() {
   console.log(`Risk group check at ${new Date().toISOString()}`);
-  const rows = await loadActiveRows(Math.max(1, Math.min(12, Number(process.env.MAX_PAGES || 8))));
-  console.log(`   ${rows.length} active row(s) read`);
+  const rows = await loadActiveRows(Math.max(1, Math.min(40, Number(process.env.MAX_PAGES || 8))));
+  // Whether the walk reached the end or ran out of pages. "0 match" after a walk that was
+  // cut short says the rows are absent when they are merely further on, which is the mistake
+  // the first run of this made twice.
+  const full = rows.length % 1200 === 0 && rows.length > 0;
+  console.log(`   ${rows.length} active row(s) read${full ? "  !! exactly a whole number of pages -- the walk may have been cut short, raise max_pages" : ""}`);
 
   const matched = rows.filter((row) => {
     const question = String(row?.question || "").toLowerCase();
