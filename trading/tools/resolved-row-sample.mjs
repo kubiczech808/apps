@@ -49,6 +49,11 @@ export function shapeOf(row) {
   if (isOverUnder(row)) return "over-under";
   const question = String(row?.question || "");
   for (const [pattern, label] of SHAPE_PATTERNS) if (pattern.test(question)) return label;
+  // A market about one HALF is not a bet on the match, and a first-scoring proposition is
+  // not a match winner. Both carry "win" or two team names, so the generic rule below would
+  // file them as outright -- which is what filled the soccer outright band with them.
+  if (/\b(?:first|second|1st|2nd)\s+half\b|\bhalf[-\s]?time\b|\bat\s+ht\b/i.test(question)) return "in-event-leg";
+  if (/\b(?:to\s+)?score\s+first\b|\bfirst\s+to\s+score\b/i.test(question)) return "other";
   return /\bvs\.?\b|\bv\.\b|\s@\s|\b(?:win|wins|winner)\b/i.test(question) ? "outright" : "other";
 }
 const pct = (value) => (value == null ? "   -  " : `${(value * 100).toFixed(1)}%`.padStart(6));

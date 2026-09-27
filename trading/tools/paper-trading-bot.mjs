@@ -971,6 +971,11 @@ export function marketShape(item = {}) {
   for (const [pattern, label] of MARKET_SHAPE_PATTERNS) {
     if (pattern.test(question)) return label;
   }
+  // A market about one HALF is not a bet on the match. "X to win the second half?" carries
+  // the word "win" and two team names, so the generic rule below files it as an outright --
+  // and it is a different market with a different price, traded once the first half is
+  // already known.
+  if (/\b(?:first|second|1st|2nd)\s+half\b|\bhalf[-\s]?time\b|\bat\s+ht\b/i.test(question)) return "in-event-leg";
   // A first-scoring proposition names both teams but is not a match winner. This must be
   // checked before the generic two-sided fallback, which otherwise labels every "vs" as
   // an outright market.

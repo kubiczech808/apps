@@ -67,6 +67,11 @@ export function shapeOf(question) {
   for (const [pattern, label] of SHAPE_PATTERNS) if (pattern.test(text)) return label;
   // Both sides can be named in a first-scoring proposition, but it is neither a winner
   // market nor interchangeable with an outright bet in the analysis.
+  // A market about one HALF is not a bet on the match. "X to win the second half?" carries
+  // the word "win" and two team names, so the generic rule below files it as an outright --
+  // and it is a different market with a different price, traded once the first half is
+  // already known.
+  if (/\b(?:first|second|1st|2nd)\s+half\b|\bhalf[-\s]?time\b|\bat\s+ht\b/i.test(text)) return "in-event-leg";
   if (/\b(?:to\s+)?score\s+first\b|\bfirst\s+to\s+score\b/i.test(text)) return "other";
   return "outright";
 }

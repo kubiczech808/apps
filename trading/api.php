@@ -2617,6 +2617,13 @@ function observation_market_shape(array $item): string
             return $label;
         }
     }
+    // A market about one HALF is not a bet on the match. "X to win the second half?"
+    // carries the word "win" and two team names, so the generic rule below files it as an
+    // outright -- and it is a different market with a different price, traded once the
+    // first half is already known. Measured: the soccer outright band was full of them.
+    if (preg_match('/\b(?:first|second|1st|2nd)\s+half\b|\bhalf[-\s]?time\b|\bat\s+ht\b/i', $question) === 1) {
+        return 'in-event-leg';
+    }
     // A first-scoring proposition may name both teams, but it is not a bet on who wins
     // the match. Keep it separately filterable instead of letting the generic "vs" rule
     // below silently treat it as an outright market.

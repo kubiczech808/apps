@@ -127,3 +127,31 @@ test("shapes are summarised separately, so one uncapturable half cannot condemn 
   assert.equal(inEvent.counted, 0);
   assert.equal(inEvent.afterDue, 2, "and the legs are all hindsight, which is the distinction");
 });
+
+test("a half-time proposition is not an outright, in any of the five copies of the rule", () => {
+  // "CA Mineiro to win the second half?" carries the word "win" and two team names, so the
+  // generic two-sided fallback filed it as an outright. Read off the settled archive, the
+  // soccer outright band was full of them -- a different market, with a different price,
+  // traded once the first half is already known.
+  for (const question of [
+    "CA Mineiro to win the second half?",
+    "SE Palmeiras to win the first half?",
+    "FC Serpa leading at halftime?",
+    "Arsenal to win the 2nd half?",
+  ]) {
+    assert.notEqual(shapeOf({ question }), "outright", question);
+  }
+  assert.equal(shapeOf({ question: "CA Mineiro to win the second half?" }), "in-event-leg");
+  // And a real outright still is one.
+  assert.equal(shapeOf({ question: "Will SE Palmeiras win on 2026-09-16?" }), "outright");
+  // Codex's first-scoring rule, ported here too so the two stay together.
+  assert.equal(shapeOf({ question: "Tigres de la UANL to score first vs. FC Juárez" }), "other");
+
+  // The rule lives in five places and they have to agree, or the page, the bot, the
+  // executor and the two analyses each filter a different set of markets.
+  const half = /\\b\(\?:first\|second\|1st\|2nd\)\\s\+half\\b/;
+  for (const file of ["../api.php", "../assets/app.js", "../tools/paper-trading-bot.mjs",
+    "../tools/live-order-executor.mjs", "../tools/resolved-market-analysis.mjs"]) {
+    assert.match(readFileSync(new URL(file, import.meta.url), "utf8"), half, `${file} must carry the half rule`);
+  }
+});
