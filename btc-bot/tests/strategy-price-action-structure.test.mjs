@@ -1519,6 +1519,22 @@ test('price-action matrix covers BTCUSD and major FX pairs on 1H, 4H and 1D', as
   assert.ok(matrix.assets.some((asset) => asset.symbol === 'EURUSD'))
   for (const asset of matrix.assets) {
     assert.deepEqual(Object.keys(asset.trends), ['1h', '4h', '1d'])
+    for (const timeframe of PRICE_ACTION_TIMEFRAMES) {
+      const item = asset.trends[timeframe.id]
+      const range = item.structure.activeRange
+      if (!range) continue
+      assert.ok(range.high.price > range.low.price, `${asset.symbol} ${timeframe.id}: active range must have positive height`)
+      if (item.trend === 'up') {
+        assert.equal(range.high.label, 'HH', `${asset.symbol} ${timeframe.id}: up range ends at HH`)
+        assert.equal(range.low.label, range.source === 'external-break-of-structure' ? 'LL' : 'HL', `${asset.symbol} ${timeframe.id}: up range has a valid origin`)
+        assert.ok(range.low.time < range.high.time, `${asset.symbol} ${timeframe.id}: up range is chronological`)
+      }
+      if (item.trend === 'down') {
+        assert.equal(range.high.label, range.source === 'external-break-of-structure' ? 'HH' : 'LH', `${asset.symbol} ${timeframe.id}: down range has a valid origin`)
+        assert.equal(range.low.label, 'LL', `${asset.symbol} ${timeframe.id}: down range ends at LL`)
+        assert.ok(range.high.time < range.low.time, `${asset.symbol} ${timeframe.id}: down range is chronological`)
+      }
+    }
   }
   // No local swing classifier may fill in an unavailable external reference.
   assert.equal(matrix.assets[0].trends['1h'].trend, 'flat')

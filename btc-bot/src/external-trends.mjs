@@ -15,7 +15,7 @@ export const EXTERNAL_PIVOT_METHOD = 'Potvrzené 10-svíčkové pivoty z extern�
 // Bump this whenever pivot geometry or confirmation changes. Cached external
 // references are executable strategy input, so a same-hour cache must never
 // preserve the old interpretation after such a change.
-export const EXTERNAL_PIVOT_SCHEMA = 3
+export const EXTERNAL_PIVOT_SCHEMA = 4
 export const EXTERNAL_PIVOT_PERIOD = 10
 export const EXTERNAL_PIVOT_FALLBACK_PERIOD = 5
 export const EXTERNAL_PIVOT_OUTPUTSIZE = 2000
@@ -208,6 +208,22 @@ const completedDirectionalLegs = (pivots = [], trend) => {
   })
 }
 
+const directionalRangeFromLeg = ({ start, end }, trend) => {
+  const high = start.kind === 'high' ? start : end
+  const low = start.kind === 'low' ? start : end
+  if (!(high?.price > low?.price)) return null
+  return {
+    high: { ...high, label: trend === 'down' ? 'LH' : 'HH' },
+    low: { ...low, label: trend === 'down' ? 'LL' : 'HL' },
+    source: 'external-confirmed-directional-wave',
+  }
+}
+
+const latestDirectionalContinuation = ({ pivots = [], trend, after = -Infinity } = {}) =>
+  completedDirectionalLegs(pivots, trend)
+    .filter(({ start, end }) => start.time > after && end.time > start.time)
+    .at(-1) ?? null
+
 const firstClosingBreak = ({ candles, after, level, direction }) => candles.find((candle) => (
   candle.time > after
   && (direction === 'down' ? candle.close < level : candle.close > level)
@@ -295,6 +311,32 @@ const chartPivotsForBreak = ({ pivots, event }) => {
   return selected
 }
 
+const chartPivotsForDirectionalLeg = ({ pivots, leg }) => {
+  if (!leg) return []
+  const endIndex = pivots.findIndex((pivot) => (
+    pivot.kind === leg.end.kind && pivot.time === leg.end.time
+  ))
+  // Keep one completed opposite pivot as audit context. The solid Fibonacci
+  // line then always begins at this leg's own LH/HL, never at an obsolete BoS
+  // anchor several waves earlier.
+  const references = [
+    endIndex > 1 ? pivots[endIndex - 2] : null,
+    leg.start,
+    leg.end,
+  ]
+  const selected = []
+  for (const reference of references) {
+    if (!reference) continue
+    const source = pivots.find((pivot) => (
+      pivot.kind === reference.kind && pivot.time === reference.time
+    ))
+    const pivot = { ...source, ...reference }
+    if (selected.some((previous) => previous.kind === pivot.kind && previous.time === pivot.time)) continue
+    selected.push(pivot)
+  }
+  return selected
+}
+
 export const classifyExternalPivotPath = (pivots = [], { candles = [] } = {}) => {
   const path = normalizeExternalPivots(pivots, { candles })
   const high = path.filter((pivot) => pivot.kind === 'high').slice(-2)
@@ -307,10 +349,19 @@ export const classifyExternalPivotPath = (pivots = [], { candles = [] } = {}) =>
         : 'flat'
     : 'flat'
   const event = latestBreakOfStructure({ pivots: path, candles: completedOhlc(candles) })
+  const trend = event?.trend ?? directionalTrend
+  // A BoS anchors only the first impulse into the new direction. Once an
+  // externally confirmed LH -> LL / HL -> HH wave follows it, that newer
+  // paired wave is the sole active pullback range. Without this hand-off a
+  // months-old HH could be connected to today's LL.
+  const continuation = event
+    ? latestDirectionalContinuation({ pivots: path, trend, after: event.time })
+    : null
+  const continuationRange = continuation ? directionalRangeFromLeg(continuation, trend) : null
   return {
-    trend: event?.trend ?? directionalTrend,
+    trend,
     pivots: path.slice(-12),
-    activeRange: event?.activeRange ?? null,
+    activeRange: continuationRange ?? event?.activeRange ?? null,
     event: event
       ? {
           type: event.type,
@@ -319,7 +370,9 @@ export const classifyExternalPivotPath = (pivots = [], { candles = [] } = {}) =>
           protectedPivot: event.protectedPivot,
         }
       : null,
-    chartPivots: event ? chartPivotsForBreak({ pivots: path, event }) : null,
+    chartPivots: continuation
+      ? chartPivotsForDirectionalLeg({ pivots: path, leg: continuation })
+      : event ? chartPivotsForBreak({ pivots: path, event }) : null,
   }
 }
 

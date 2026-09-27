@@ -153,6 +153,66 @@ test('a close through a protected HL confirms BoS and keeps the prior HH as the 
   assert.deepEqual(broken.chartPivots.map((pivot) => pivot.label), ['HL', 'HH', 'LL'])
 })
 
+test('a completed continuation replaces the old BoS anchor with the current directional wave', () => {
+  const downPivots = [
+    { kind: 'low', price: 140, time: START },
+    { kind: 'high', price: 155, time: START + HOUR },
+    { kind: 'low', price: 145, time: START + 2 * HOUR },
+    { kind: 'high', price: 170, time: START + 3 * HOUR },
+    { kind: 'low', price: 140, time: START + 4 * HOUR },
+    { kind: 'high', price: 164, time: START + 5 * HOUR },
+    { kind: 'low', price: 136, time: START + 6 * HOUR },
+  ]
+  const downCandles = [
+    { time: START, open: 141, high: 142, low: 140, close: 141 },
+    { time: START + HOUR, open: 154, high: 155, low: 153, close: 154 },
+    { time: START + 2 * HOUR, open: 146, high: 147, low: 145, close: 146 },
+    { time: START + 3 * HOUR, open: 168, high: 170, low: 166, close: 171 },
+    { time: START + 4 * HOUR, open: 146, high: 147, low: 140, close: 139 },
+    { time: START + 5 * HOUR, open: 162, high: 164, low: 160, close: 161 },
+    { time: START + 6 * HOUR, open: 138, high: 139, low: 136, close: 135 },
+  ]
+  const down = classifyExternalPivotPath(downPivots, { candles: downCandles })
+
+  assert.equal(down.trend, 'down')
+  assert.equal(down.event.type, 'BOS_DOWN')
+  assert.deepEqual(
+    [down.activeRange.high.label, down.activeRange.high.price, down.activeRange.low.label, down.activeRange.low.price],
+    ['LH', 164, 'LL', 136]
+  )
+  assert.equal(down.activeRange.source, 'external-confirmed-directional-wave')
+  assert.deepEqual(down.chartPivots.map((pivot) => pivot.label), ['LL', 'LH', 'LL'])
+
+  const upPivots = [
+    { kind: 'high', price: 170, time: START },
+    { kind: 'low', price: 150, time: START + HOUR },
+    { kind: 'high', price: 160, time: START + 2 * HOUR },
+    { kind: 'low', price: 140, time: START + 3 * HOUR },
+    { kind: 'high', price: 165, time: START + 4 * HOUR },
+    { kind: 'low', price: 150, time: START + 5 * HOUR },
+    { kind: 'high', price: 175, time: START + 6 * HOUR },
+  ]
+  const upCandles = [
+    { time: START, open: 169, high: 170, low: 168, close: 169 },
+    { time: START + HOUR, open: 151, high: 152, low: 150, close: 151 },
+    { time: START + 2 * HOUR, open: 158, high: 160, low: 157, close: 159 },
+    { time: START + 3 * HOUR, open: 142, high: 143, low: 140, close: 139 },
+    { time: START + 4 * HOUR, open: 161, high: 165, low: 160, close: 161 },
+    { time: START + 5 * HOUR, open: 152, high: 153, low: 150, close: 151 },
+    { time: START + 6 * HOUR, open: 173, high: 175, low: 172, close: 176 },
+  ]
+  const up = classifyExternalPivotPath(upPivots, { candles: upCandles })
+
+  assert.equal(up.trend, 'up')
+  assert.equal(up.event.type, 'BOS_UP')
+  assert.deepEqual(
+    [up.activeRange.low.label, up.activeRange.low.price, up.activeRange.high.label, up.activeRange.high.price],
+    ['HL', 150, 'HH', 175]
+  )
+  assert.equal(up.activeRange.source, 'external-confirmed-directional-wave')
+  assert.deepEqual(up.chartPivots.map((pivot) => pivot.label), ['HH', 'HL', 'HH'])
+})
+
 test('Twelve Data OHLC produces a confirmed independent pivot path without the premium indicator', () => {
   const candles = Array.from({ length: 60 }, (_, index) => ({
     time: START + index * HOUR,
