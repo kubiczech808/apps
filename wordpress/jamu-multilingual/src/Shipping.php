@@ -454,16 +454,88 @@ final class Shipping
 
         const originalPick = widget.pick;
         widget.pick = function (apiKey, callback, options) {
-            return originalPick.call(this, apiKey, callback, normalizePacketaWidgetOptions(options));
+            // WC Doprava registers unsafe `dpdWidget` message handlers inside
+            // pick(). Guard those handlers at registration time: a checkout
+            // fragment can disappear while the external picker is open.
+            const nativeAddEventListener = window.addEventListener;
+            let didWrap = false;
+
+            try {
+                window.addEventListener = function (type, listener, listenerOptions) {
+                    if (type === 'message' && typeof listener === 'function' && String(listener).indexOf('dpdWidget') !== -1) {
+                        const guardedListener = function (event) {
+                            ensureDpdElements();
+                            try {
+                                return listener.call(this, event);
+                            } catch (error) {
+                                // Selection and closing are handled by the safe
+                                // multilingual listener above. Do not let the
+                                // legacy listener leave WooCommerce blocked.
+                                if (window.console && typeof window.console.warn === 'function') {
+                                    window.console.warn('JAMU multilingual: prevented a legacy DPD picker error.');
+                                }
+                            }
+                        };
+                        return nativeAddEventListener.call(this, type, guardedListener, listenerOptions);
+                    }
+                    return nativeAddEventListener.call(this, type, listener, listenerOptions);
+                };
+                didWrap = window.addEventListener !== nativeAddEventListener;
+
+                return originalPick.call(this, apiKey, callback, normalizePacketaWidgetOptions(options));
+            } finally {
+                if (didWrap) {
+                    window.addEventListener = nativeAddEventListener;
+                }
+            }
         };
         widget.pick.jamuMlPatched = true;
         return true;
+    }
+
+    function observePacketaWidget(packeta) {
+        if (!packeta || typeof packeta !== 'object') {
+            return;
+        }
+
+        const descriptor = Object.getOwnPropertyDescriptor(packeta, 'Widget');
+        if (descriptor && descriptor.configurable === false) {
+            patchPacketaWidget(packeta.Widget);
+            return;
+        }
+        if (descriptor && descriptor.get && descriptor.get.jamuMlWidgetObserver) {
+            patchPacketaWidget(packeta.Widget);
+            return;
+        }
+
+        let storedWidget = packeta.Widget;
+        const getWidget = function () {
+            return storedWidget;
+        };
+        getWidget.jamuMlWidgetObserver = true;
+
+        try {
+            Object.defineProperty(packeta, 'Widget', {
+                configurable: true,
+                enumerable: true,
+                get: getWidget,
+                set(value) {
+                    storedWidget = value;
+                    patchPacketaWidget(storedWidget);
+                }
+            });
+        } catch (error) {
+            // The interval fallback below will patch a non-configurable object.
+        }
+
+        patchPacketaWidget(storedWidget);
     }
 
     function patchPacketaObject(packeta) {
         if (!packeta || typeof packeta !== 'object') {
             return false;
         }
+        observePacketaWidget(packeta);
         return patchPacketaWidget(packeta.Widget);
     }
 
