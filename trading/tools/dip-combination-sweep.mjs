@@ -172,6 +172,33 @@ export function shortlist(cells, minTrades = MIN_TRADES) {
     .sort((left, right) => (right.roiPct ?? -Infinity) - (left.roiPct ?? -Infinity));
 }
 
+// The raw markets behind one cell, not the aggregate. Built for the moment a cell's edge is
+// implausibly large: an 80%+ favourite winning 90%+ of the time after falling to 45-50% is
+// either a genuine, extreme inefficiency or a handful of stale prints with no depth behind
+// them, and the aggregate cannot tell those apart. Only the raw rows can.
+export function sampleCell(rows, band, [floor, ceiling], limit = 10) {
+  const inBand = rows.filter((row) => inOpenBand(row, band));
+  const hits = [];
+  for (const row of inBand) {
+    const entry = entryForCell(row, ceiling, floor);
+    if (entry) hits.push({ row, entry });
+  }
+  return hits.slice(0, limit).map(({ row, entry }) => ({
+    question: row.question,
+    slug: row.slug,
+    openingAt: row.openingAt,
+    openingPrice: row.openingPrice,
+    lowestInPlayAt: row.lowestInPlayAt,
+    lowestInPlayPrice: row.lowestInPlayPrice,
+    enteredAt: entry.enteredAt,
+    entryPrice: entry.entryPrice,
+    pnlUsdc: entry.pnlUsdc,
+    outcome: entry.outcome,
+    resolvedAt: row.resolvedAt,
+    finalOutcomePrice: row.finalOutcomePrice,
+  }));
+}
+
 async function loadCache(tag) {
   const url = `${HOST}/data/dip-backtest-${tag}-cache.json`;
   const response = await fetch(url, { headers: { Accept: "application/json" } });
@@ -270,6 +297,35 @@ async function main() {
   console.log("   An edge near zero is a fairly priced bet that the fee turns into a loss, however");
   console.log("   the ROI column happens to land. Opening bands below 70% are absent by");
   console.log("   construction: the cache never priced them.");
+
+  // Optional: the raw markets behind one cell, printed only when asked for. An edge this
+  // large asks to be checked before it is believed, and the aggregate alone cannot say
+  // whether it is real or a handful of stale, depth-less prints.
+  const sampleTag = String(process.env.DIP_SWEEP_SAMPLE_TAG || "").trim().toLowerCase();
+  const sampleFloor = Number(process.env.DIP_SWEEP_SAMPLE_OPEN_FLOOR);
+  const sampleBuyMin = Number(process.env.DIP_SWEEP_SAMPLE_BUY_MIN);
+  const sampleBuyMax = Number(process.env.DIP_SWEEP_SAMPLE_BUY_MAX);
+  if (sampleTag && Number.isFinite(sampleFloor) && Number.isFinite(sampleBuyMin) && Number.isFinite(sampleBuyMax)) {
+    const entry = present.find((item) => item.tag === sampleTag);
+    console.log(`\n\n=== sample: ${sampleTag} ${(sampleFloor * 100).toFixed(0)}+ / `
+      + `${(sampleBuyMin * 100).toFixed(0)}-${(sampleBuyMax * 100).toFixed(0)} ===`);
+    if (!entry) {
+      console.log(`   tag "${sampleTag}" was not loaded (check DIP_SWEEP_TAGS includes it)`);
+    } else {
+      const rows = sampleCell(entry.rows, [sampleFloor, OPEN_CEILING], [sampleBuyMin, sampleBuyMax],
+        Math.max(1, Math.min(50, Number(process.env.DIP_SWEEP_SAMPLE_LIMIT) || 10)));
+      if (!rows.length) console.log("   (no market in this cell)");
+      for (const row of rows) {
+        console.log(`   ${String(row.question).slice(0, 70)}`);
+        console.log(`      slug          ${row.slug}`);
+        console.log(`      opened        ${row.openingAt}  at ${row.openingPrice}`);
+        console.log(`      lowest touch  ${row.lowestInPlayAt}  at ${row.lowestInPlayPrice}`);
+        console.log(`      entry         ${row.enteredAt}  at ${row.entryPrice}  pnl ${row.pnlUsdc}  ${row.outcome}`);
+        console.log(`      resolved      ${row.resolvedAt}  final ${row.finalOutcomePrice}`);
+        console.log("");
+      }
+    }
+  }
 }
 
 if (process.argv[1] && import.meta.url === `file://${process.argv[1]}`) {
