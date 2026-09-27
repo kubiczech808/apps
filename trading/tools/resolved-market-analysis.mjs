@@ -29,8 +29,16 @@ const HOST = process.env.TRADING_HOST || "https://osobnizkusenosti.cz/trading";
 // -- the workflow's default was changed and this fallback was not, and the run looked
 // successful while answering the previous question.
 const TAG = String(process.env.MARKET_TAG || "").trim().toLowerCase();
-const MIN_PROBABILITY = Number(process.env.MIN_PROBABILITY || 0.51);
-const MAX_PROBABILITY = Number(process.env.MAX_PROBABILITY || 0.60);
+// Blank means NO band, not a default one. A tool that quietly substitutes 0.51-0.60 for an
+// empty input answers a question nobody asked -- the same fault the tag fallback had.
+const optionalBound = (value, fallback) => {
+  const raw = String(value ?? "").trim();
+  if (raw === "") return fallback;
+  const numeric = Number(raw);
+  return Number.isFinite(numeric) ? numeric : fallback;
+};
+const MIN_PROBABILITY = optionalBound(process.env.MIN_PROBABILITY, 0.01);
+const MAX_PROBABILITY = optionalBound(process.env.MAX_PROBABILITY, 0.99);
 const STAKE = Number(process.env.STAKE_USDC || 5);
 
 async function fetchJson(url, label) {
@@ -107,6 +115,19 @@ export function entryTiming(row) {
   const kickoff = Date.parse(row?.eventStartTime || row?.scheduledEventDate || "");
   if (!Number.isFinite(seen) || !Number.isFinite(kickoff)) return "unknown";
   return seen < kickoff ? "before kickoff" : "under way";
+}
+
+// Finer than the coarse timing split: this is the band a portfolio would be SET to, so it
+// has to be readable at the resolution a person types.
+const PRICE_EDGES = [0.1, 0.2, 0.3, 0.4, 0.5, 0.55, 0.6, 0.65, 0.7, 0.8, 0.9, 1.0];
+export function priceBand(price) {
+  if (price == null) return "unknown";
+  for (let i = 0; i < PRICE_EDGES.length - 1; i += 1) {
+    if (price >= PRICE_EDGES[i] && price < PRICE_EDGES[i + 1]) {
+      return `${(PRICE_EDGES[i] * 100).toFixed(0)}-${(PRICE_EDGES[i + 1] * 100).toFixed(0)}%`;
+    }
+  }
+  return price < PRICE_EDGES[0] ? "<10%" : "100%";
 }
 
 function volumeBucket(value) {
@@ -334,6 +355,14 @@ async function main() {
   printTable("by TIMING x SHAPE", groupBy(timed, (item) => `${item.shape} / ${item.timing}`));
   // And where in the price range each timing actually puts you, which is the thing that
   // makes a raw timing comparison misleading on its own.
+  // The tables a portfolio setting is actually chosen from, over the whole range.
+  printTable("by ENTRY PRICE BAND, whole range", groupBy(everything, (item) => priceBand(item.sim.price)));
+  printTable("by MARKET SHAPE, whole range", groupBy(everything, (item) => item.shape));
+  printTable("by VOLUME, whole range",
+    groupBy(everything, (item) => volumeBucket(num(item.row.volumeUsdc ?? item.row.liquidity))));
+  printTable("by SHAPE x entry price band",
+    groupBy(everything, (item) => `${item.shape} / ${priceBand(item.sim.price)}`));
+
   printTable("by TIMING x entry price", groupBy(timed, (item) => {
     const price = item.sim.price;
     const band = price < 0.3 ? "<30%" : price < 0.5 ? "30-50%" : price < 0.7 ? "50-70%" : "70%+";

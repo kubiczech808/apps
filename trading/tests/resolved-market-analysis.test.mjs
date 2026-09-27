@@ -216,3 +216,32 @@ test("an empty tag ranks every tag rather than falling back to one", () => {
   assert.match(tool, /if \(!TAG \|\| TAG === "\*"\) \{\n\s+rankTags\(all\);/,
     "and an empty tag must reach the ranking");
 });
+
+test("price bands are fine enough to choose a setting from, and a blank band filters nothing", async () => {
+  const { priceBand } = await import("../tools/resolved-market-analysis.mjs");
+  // A band is what gets typed into the portfolio, so it has to be readable at that
+  // resolution. 50-70% in one bucket cannot tell 52% from 68%.
+  assert.equal(priceBand(0.52), "50-55%");
+  assert.equal(priceBand(0.57), "55-60%");
+  assert.equal(priceBand(0.62), "60-65%");
+  assert.equal(priceBand(0.68), "65-70%");
+  assert.equal(priceBand(0.45), "40-50%");
+  assert.equal(priceBand(0.95), "90-100%");
+  assert.equal(priceBand(0.05), "<10%");
+  assert.equal(priceBand(null), "unknown");
+  for (let p = 0.11; p < 0.999; p += 0.007) {
+    assert.notEqual(priceBand(Number(p.toFixed(3))), "unknown", `${p.toFixed(3)} fell outside`);
+  }
+
+  // A blank band must mean no filter. Substituting 0.51-0.60 for an empty input is the same
+  // fault the tag fallback had: the run succeeds and answers a question nobody asked.
+  const tool = readFileSync(new URL("../tools/resolved-market-analysis.mjs", import.meta.url), "utf8");
+  assert.ok(!/Number\(process\.env\.MIN_PROBABILITY \|\| 0\.51\)/.test(tool),
+    "an empty bound must not become a default band");
+  assert.match(tool, /optionalBound\(process\.env\.MIN_PROBABILITY, 0\.01\)/);
+  assert.match(tool, /optionalBound\(process\.env\.MAX_PROBABILITY, 0\.99\)/);
+
+  // And the whole-range tables must exist, or a band cannot be chosen from the data at all.
+  assert.match(tool, /by ENTRY PRICE BAND, whole range/);
+  assert.match(tool, /by SHAPE x entry price band/);
+});
