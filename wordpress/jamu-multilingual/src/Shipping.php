@@ -13,6 +13,11 @@ final class Shipping
     public function register(): void
     {
         add_action('wp', [$this, 'disable_legacy_checkout_output_hooks'], PHP_INT_MAX);
+        // WooCommerce fires this immediately before the problematic
+        // `woocommerce_review_order_after_shipping` callbacks. It also runs
+        // during wc-ajax requests, which are dispatched before the normal
+        // WordPress `wp` action can protect them.
+        add_action('woocommerce_review_order_before_shipping', [$this, 'disable_legacy_checkout_output_hooks'], 0);
         add_filter('woocommerce_update_order_review_fragments', [$this, 'remove_unsafe_pickup_fragment_script'], PHP_INT_MAX);
         add_action('wp_head', [$this, 'dpd_pickup_bootstrap'], 1);
         add_action('template_redirect', [$this, 'replace_legacy_dpd_script'], 0);
