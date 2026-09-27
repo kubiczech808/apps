@@ -128,6 +128,13 @@ HTML;
         ?>
 <script id="jamu-ml-dpd-pickup-bootstrap">
 (function () {
+    if (window.location.search.indexOf('jamu_checkout_trace=1') !== -1) {
+        window.addEventListener('error', function (event) {
+            const details = event.error && event.error.stack ? event.error.stack : '';
+            window.console.log('JAMU checkout trace:', event.message, event.filename + ':' + event.lineno + ':' + event.colno, details);
+        }, true);
+    }
+
     const fields = {
         'packeta-point-id': 'hidden',
         'ship-to-different-address-checkbox': 'checkbox',
