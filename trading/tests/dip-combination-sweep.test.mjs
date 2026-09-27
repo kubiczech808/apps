@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { readFileSync } from "node:fs";
 import {
-  BUY_CEILINGS, OPEN_BANDS, cacheRows, cellStats, entryForCell, inOpenBand, shortlist, spanDays, sweep,
+  BUY_CEILINGS, OPEN_BANDS, buyBands, cacheRows, cellStats, entryForCell, inOpenBand, shortlist, spanDays, sweep,
 } from "../tools/dip-combination-sweep.mjs";
 
 // One cached market, in the shape backtestDipMarket returns. Entries carry the first-touch
@@ -96,12 +96,48 @@ test("a trade count is reported as a rate, because it is unreadable without one"
   ];
   const days = spanDays(rows);
   assert.ok(Math.abs(days - 60) < 0.01);
-  const cell = sweep(rows, { openBands: [[0.7, 0.8]], ceilings: [0.4], floors: [0] })[0];
+  const cell = sweep(rows, { openBands: [[0.75, 0.8]], bands: [[0.35, 0.4]] })[0];
   assert.equal(cell.trades, 2);
   assert.ok(Math.abs(cell.tradesPerMonth - 1) < 0.01, "two trades over two months is one a month");
   // One market cannot span anything, and inventing a rate from it would be a lie.
   assert.equal(spanDays([rows[0]]), null);
-  assert.equal(sweep([rows[0]], { openBands: [[0.7, 0.8]], ceilings: [0.4], floors: [0] })[0].tradesPerMonth, null);
+  assert.equal(sweep([rows[0]], { openBands: [[0.75, 0.8]], bands: [[0.35, 0.4]] })[0].tradesPerMonth, null);
+});
+
+test("the grid is five-point steps, and the opening slices do not overlap", () => {
+  // Asked for: "dip range s rozestupem 5%. otevreni ... od 70 vys zase s rozestupem 5%".
+  // Overlapping opening bands answered a different question and read as independent rows:
+  // 70-80 and 70-85 differ by a handful of markets, so nine rows carried three populations.
+  for (const [min, max] of OPEN_BANDS) {
+    assert.ok(min >= 0.7, `${min} is below the band the cache priced`);
+    assert.ok(max - min <= 0.05 + 1e-9, `${min}-${max} is wider than one step`);
+  }
+  for (let index = 1; index < OPEN_BANDS.length; index += 1) {
+    assert.ok(OPEN_BANDS[index][0] >= OPEN_BANDS[index - 1][1], "slices must not overlap");
+  }
+  // Every buy band is five points wide and ends on a level the backtest actually recorded.
+  for (const [floor, ceiling] of buyBands()) {
+    assert.ok(Math.abs((ceiling - floor) - 0.05) < 1e-9, `${floor}-${ceiling} is not one step`);
+    assert.ok(BUY_CEILINGS.includes(ceiling), `${ceiling} was never recorded by the backtest`);
+  }
+});
+
+test("the edge column is the win rate minus the price the winners paid", () => {
+  // Two winners at 0.40 and one loser: 66.7% won, 40% paid, so the edge is 26.7 points.
+  // The ROI can flatter a cell that a hair of luck carried; the edge is what has to hold.
+  const rows = [
+    market({ token: "a", opening: 0.72, resolvedAt: "2026-07-01T00:00:00.000Z", touches: { "0.4": 0.4 } }),
+    market({ token: "b", opening: 0.72, resolvedAt: "2026-07-15T00:00:00.000Z", touches: { "0.4": 0.4 } }),
+    market({ token: "c", opening: 0.72, resolvedAt: "2026-08-01T00:00:00.000Z", touches: { "0.4": 0.4, win: false } }),
+  ];
+  const cell = sweep(rows, { openBands: [[0.7, 0.75]], bands: [[0.35, 0.4]] })[0];
+  assert.ok(Math.abs(cell.edgePoints - (200 / 3 - 40)) < 0.01);
+  // A cell with no winner has no price to compare against, and must say so rather than 0.
+  const allLost = sweep(
+    [market({ token: "d", opening: 0.72, touches: { "0.4": 0.4, win: false } })],
+    { openBands: [[0.7, 0.75]], bands: [[0.35, 0.4]] },
+  )[0];
+  assert.equal(allLost.edgePoints, null);
 });
 
 test("the shortlist refuses a thin cell however well it returned", () => {
@@ -118,13 +154,13 @@ test("the shortlist refuses a thin cell however well it returned", () => {
 
 test("a floor at or above the ceiling is not a band and is never emitted", () => {
   const rows = [market({ token: "a", opening: 0.78, touches: { "0.3": 0.29, "0.4": 0.38 } })];
-  // 35-30 is inverted and 40-40 is a single price rather than a band; neither is a setting
+  // 40-30 is inverted and 40-40 is a single price rather than a band; neither is a setting
   // anyone means, and emitting them would pad the grid with cells that can never fire.
   assert.deepEqual(
-    sweep(rows, { openBands: [[0.7, 0.8]], ceilings: [0.3, 0.4], floors: [0.35] }).map((cell) => cell.buyMax),
+    sweep(rows, { openBands: [[0.75, 0.8]], bands: [[0.4, 0.3], [0.35, 0.4]] }).map((cell) => cell.buyMax),
     [0.4],
   );
-  assert.deepEqual(sweep(rows, { openBands: [[0.7, 0.8]], ceilings: [0.4], floors: [0.4] }), []);
+  assert.deepEqual(sweep(rows, { openBands: [[0.75, 0.8]], bands: [[0.4, 0.4]] }), []);
 });
 
 test("it reads the published cache and nothing else", () => {

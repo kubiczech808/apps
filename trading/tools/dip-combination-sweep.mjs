@@ -39,19 +39,28 @@ const STAKE_USDC = 5;
 // of this cache would mean inventing an entry price that was never observed.
 export const BUY_CEILINGS = [0.3, 0.35, 0.4, 0.45, 0.5, 0.55, 0.6];
 
-// Opening bands worth separating. The rule's default is 70-80; the report's fixed band is
-// 70-99. Everything between is the question -- "is a 78% favourite that collapses a better
-// bet than a 92% one" is not answerable from a single pooled band.
+// Opening levels in five-point steps from 70 up, which is the grid the question asks for.
+// Overlapping bands answered a different question and read as if they were independent:
+// 70-80 and 70-85 differ by the handful of markets between 80 and 85, so nine rows carried
+// perhaps three distinct populations. Disjoint slices say where the favourites actually sit.
 export const OPEN_BANDS = [
-  [0.70, 0.80], [0.70, 0.85], [0.70, 0.90], [0.70, 0.99],
-  [0.75, 0.85], [0.80, 0.90], [0.80, 0.99], [0.85, 0.99], [0.90, 0.99],
+  [0.70, 0.75], [0.75, 0.80], [0.80, 0.85], [0.85, 0.90], [0.90, 0.95], [0.95, 0.99],
 ];
+// Kept beside them, marked, because with disjoint slices there is no longer any row that
+// says what the rule does as a whole.
+export const OPEN_BAND_ALL = [0.70, 0.99];
 
-const BUY_FLOORS = String(process.env.DIP_SWEEP_BUY_FLOORS || "0,0.2,0.25,0.3")
-  .split(",").map((entry) => Number(entry)).filter((value) => Number.isFinite(value) && value >= 0 && value < 1);
-// A cell below this many trades is arithmetic, not a result. It is printed anyway -- hiding
-// it would make the surviving rows look like the whole picture -- but never recommended.
-const MIN_TRADES = Math.max(1, Number(process.env.DIP_SWEEP_MIN_TRADES || 20));
+// Five-point buy bands, each ending on a level the backtest actually recorded. The floor is
+// the rule refusing a collapse that went too far to be a dip; the ceiling is the level whose
+// first-touch price the cache holds.
+export function buyBands(ceilings = BUY_CEILINGS, width = 0.05) {
+  return ceilings
+    .map((ceiling) => [Math.round((ceiling - width) * 100) / 100, ceiling])
+    .filter(([floor]) => floor >= 0);
+}
+
+// A cell below this many opportunities is arithmetic, not a result. Asked for at 100.
+const MIN_TRADES = Math.max(1, Number(process.env.DIP_SWEEP_MIN_TRADES || 100));
 
 const num = (value) => (Number.isFinite(Number(value)) ? Number(value) : null);
 
@@ -118,26 +127,31 @@ export function spanDays(rows) {
   return days > 0 ? days : null;
 }
 
-export function sweep(rows, { openBands = OPEN_BANDS, ceilings = BUY_CEILINGS, floors = [0] } = {}) {
+export function sweep(rows, { openBands = OPEN_BANDS, bands = buyBands() } = {}) {
   const days = spanDays(rows);
   const cells = [];
   for (const band of openBands) {
     const inBand = rows.filter((row) => inOpenBand(row, band));
-    for (const floor of floors) {
-      for (const ceiling of ceilings) {
-        if (floor > 0 && floor >= ceiling) continue;
-        const entries = inBand.map((row) => entryForCell(row, ceiling, floor)).filter(Boolean);
-        const stats = cellStats(entries);
-        cells.push({
-          openMin: band[0],
-          openMax: band[1],
-          buyMin: floor,
-          buyMax: ceiling,
-          marketsInOpenBand: inBand.length,
-          ...stats,
-          tradesPerMonth: days ? (stats.trades / days) * 30 : null,
-        });
-      }
+    for (const [floor, ceiling] of bands) {
+      // Inverted, or a single price rather than a band. Neither is a setting anyone means,
+      // and emitting them pads the grid with cells that can never fire.
+      if (floor >= ceiling) continue;
+      const entries = inBand.map((row) => entryForCell(row, ceiling, floor)).filter(Boolean);
+      const stats = cellStats(entries);
+      cells.push({
+        openMin: band[0],
+        openMax: band[1],
+        buyMin: floor,
+        buyMax: ceiling,
+        marketsInOpenBand: inBand.length,
+        ...stats,
+        // What the win rate has to beat. Printed as its own column because it, and not the
+        // return, is what separates an edge from a run of luck on a small cell.
+        edgePoints: stats.accuracy == null || stats.impliedWinnerEntryPct == null
+          ? null
+          : stats.accuracy - stats.impliedWinnerEntryPct,
+        tradesPerMonth: days ? (stats.trades / days) * 30 : null,
+      });
     }
   }
   return cells;
@@ -167,23 +181,32 @@ async function loadCache(tag) {
 const pct = (value, places = 1) => (value == null ? "     -" : `${value.toFixed(places)}`.padStart(6));
 const int = (value, width = 5) => String(value ?? "-").padStart(width);
 
-function printGrid(label, rows, floors) {
+const HEADER = "    open band   buy band   trades   /month   win%    price%    edge    ROI%      P/L";
+
+function printRow(cell, prefix = "   ") {
+  const open = `${(cell.openMin * 100).toFixed(0)}-${(cell.openMax * 100).toFixed(0)}`.padStart(9);
+  const buy = `${(cell.buyMin * 100).toFixed(0)}-${(cell.buyMax * 100).toFixed(0)}`.padStart(8);
+  console.log(`${prefix} ${open}  ${buy}  ${int(cell.trades, 6)}   ${pct(cell.tradesPerMonth)}  ${pct(cell.accuracy)}  ${pct(cell.impliedWinnerEntryPct)}  ${pct(cell.edgePoints)}  ${pct(cell.roiPct, 2)}  ${pct(cell.pnlUsdc, 2)}`);
+}
+
+function printGrid(label, rows) {
   const days = spanDays(rows);
   console.log(`\n=== ${label} -- ${rows.length} usable market(s)`
     + `${days ? `, spanning ${days.toFixed(0)} day(s)` : ", span unknown"} ===`);
   if (!rows.length) return [];
-  const cells = sweep(rows, { floors });
-  for (const floor of floors) {
-    const forFloor = cells.filter((cell) => cell.buyMin === floor);
-    if (!forFloor.length) continue;
-    console.log(`\n  buy floor ${floor > 0 ? `${(floor * 100).toFixed(0)}%` : "none"}`);
-    console.log("    open band   buy<=   trades   /month   win%    price%    ROI%      P/L");
-    for (const cell of forFloor) {
-      const band = `${(cell.openMin * 100).toFixed(0)}-${(cell.openMax * 100).toFixed(0)}`.padStart(9);
-      const flag = cell.trades < MIN_TRADES ? " (thin)" : "";
-      console.log(`    ${band}   ${String((cell.buyMax * 100).toFixed(0)).padStart(3)}%  ${int(cell.trades)}   ${pct(cell.tradesPerMonth)}  ${pct(cell.accuracy)}  ${pct(cell.impliedWinnerEntryPct)}  ${pct(cell.roiPct, 2)}  ${pct(cell.pnlUsdc, 2)}${flag}`);
-    }
-  }
+  // The whole 70-99 population beside the slices. With disjoint slices there is otherwise
+  // no row saying what the rule does as a whole, and every slice invites being read as if
+  // it were the rule.
+  const wholeBand = sweep(rows, { openBands: [OPEN_BAND_ALL] });
+  const cells = sweep(rows);
+  const shown = cells.filter((cell) => cell.trades >= MIN_TRADES);
+  console.log(`\n  cells with at least ${MIN_TRADES} opportunities`
+    + `  (${cells.length - shown.length} of ${cells.length} suppressed as too thin)`);
+  console.log(HEADER);
+  if (!shown.length) console.log("      (none -- no five-point cell of this tag reaches the floor)");
+  for (const cell of shown) printRow(cell);
+  console.log("\n  the whole 70-99 opening band, for reference:");
+  for (const cell of wholeBand.filter((cell) => cell.trades >= MIN_TRADES)) printRow(cell);
   return cells;
 }
 
@@ -204,10 +227,15 @@ async function main() {
   }
 
   const perTag = new Map();
-  for (const entry of present) perTag.set(entry.tag, printGrid(entry.tag, entry.rows, BUY_FLOORS));
+  for (const entry of present) perTag.set(entry.tag, printGrid(entry.tag, entry.rows));
 
-  const pooled = present.flatMap((entry) => entry.rows);
-  const pooledCells = present.length > 1 ? printGrid("all tags pooled", pooled, BUY_FLOORS) : [];
+  // Pooled by token, not by concatenation: a market carrying both `sports` and `soccer`
+  // appears in both caches, and counting it twice would inflate every pooled cell and make
+  // the opportunity floor pass on duplicates.
+  const byToken = new Map();
+  for (const entry of present) for (const row of entry.rows) byToken.set(String(row.tokenId || ""), row);
+  const pooled = [...byToken.values()];
+  const pooledCells = present.length > 1 ? printGrid("ALL TAGS (deduplicated by market)", pooled) : [];
 
   // Last, because the log is read from the end: the combinations that clear both demands.
   const ranked = [];
@@ -215,19 +243,18 @@ async function main() {
   for (const cell of shortlist(pooledCells)) ranked.push({ tag: "POOLED", ...cell });
   ranked.sort((left, right) => (right.roiPct ?? -Infinity) - (left.roiPct ?? -Infinity));
 
-  console.log(`\n\n=== combinations with at least ${MIN_TRADES} trades AND a positive return ===`);
+  console.log(`\n\n=== combinations with at least ${MIN_TRADES} opportunities AND a positive return ===`);
   if (!ranked.length) {
-    console.log("   (none -- every profitable cell is below the trade floor, or every cell with volume loses)");
+    console.log("   (none -- every profitable cell is below the opportunity floor, or every cell with volume loses)");
   }
-  console.log("    tag                  open band   buy band    trades   /month   win%    price%    ROI%      P/L");
+  console.log(`    tag              ${HEADER.trimStart()}`);
   for (const cell of ranked.slice(0, 30)) {
-    const band = `${(cell.openMin * 100).toFixed(0)}-${(cell.openMax * 100).toFixed(0)}`.padStart(9);
-    const buy = `${cell.buyMin > 0 ? (cell.buyMin * 100).toFixed(0) : "0"}-${(cell.buyMax * 100).toFixed(0)}`.padStart(7);
-    console.log(`    ${cell.tag.padEnd(20)} ${band}   ${buy}   ${int(cell.trades)}   ${pct(cell.tradesPerMonth)}  ${pct(cell.accuracy)}  ${pct(cell.impliedWinnerEntryPct)}  ${pct(cell.roiPct, 2)}  ${pct(cell.pnlUsdc, 2)}`);
+    printRow(cell, `    ${String(cell.tag).padEnd(16)}`);
   }
-  console.log("\n   price% is the mean price the winners were bought at. A win% far above it is an");
-  console.log("   edge; a win% at it is a fairly priced coin flip that the fee turns into a loss.");
-  console.log("   Opening bands below 70% are absent by construction: the cache never priced them.");
+  console.log("\n   price% is the mean price the winners were bought at, and edge is win% minus it.");
+  console.log("   An edge near zero is a fairly priced bet that the fee turns into a loss, however");
+  console.log("   the ROI column happens to land. Opening bands below 70% are absent by");
+  console.log("   construction: the cache never priced them.");
 }
 
 if (process.argv[1] && import.meta.url === `file://${process.argv[1]}`) {
