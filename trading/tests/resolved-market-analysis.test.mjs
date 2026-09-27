@@ -169,3 +169,38 @@ test("the resolved page is read under the key api.php actually publishes it as",
     "and the other, so a pre-segmentation state still works");
   assert.match(tool, /scope=resolved/, "while still asking for the resolved catalogue");
 });
+
+test("a tag carried by one lucky market is not reported as an edge", async () => {
+  const { topTradeShare, tagsOf, simulate } = await import("../tools/resolved-market-analysis.mjs");
+
+  // Buying a 2% outcome that lands pays 49x the stake, so ONE such market can carry a whole
+  // tag's P/L and print as a strategy. top% is what makes that visible: the share of the
+  // tag's winnings that came from its single best market.
+  const row = (price, outcome) => ({
+    sim: simulate({ firstMarketProbability: price, finalOutcomePrice: outcome }, 5),
+  });
+  const lottery = [row(0.02, 1), row(0.5, 0), row(0.5, 0), row(0.5, 0)];
+  const share = topTradeShare(lottery);
+  assert.ok(share > 0.99, `one 2% winner must account for nearly all the winnings: ${share}`);
+
+  // A tag that grinds out its profit across many markets reads completely differently, which
+  // is the whole point of printing the column.
+  const spread = [row(0.5, 1), row(0.5, 1), row(0.5, 1), row(0.5, 1)];
+  assert.ok(topTradeShare(spread) < 0.3, `evenly won profit must not look concentrated: ${topTradeShare(spread)}`);
+
+  // No winnings at all is not a concentration of anything, and must not divide by zero.
+  assert.equal(topTradeShare([row(0.5, 0), row(0.5, 0)]), null);
+  assert.equal(topTradeShare([]), null);
+
+  // Tags are the UNION of the fields that carry them, so a coarse one cannot hide a real
+  // one -- the same masking that made a dota portfolio read as untagged earlier today.
+  assert.deepEqual(tagsOf({ tags: ["sports"], polymarketTags: ["Dota 2"] }).sort(), ["dota 2", "sports"]);
+  assert.deepEqual(tagsOf({}), ["(untagged)"]);
+
+  // And the ranking must hide tags too thin to mean anything, or the noisiest rows sort to
+  // the top: a single 2% winner is the best "per dollar" row that can exist.
+  const source = readFileSync(new URL("../tools/resolved-market-analysis.mjs", import.meta.url), "utf8");
+  assert.match(source, /const MIN_ROWS = 15;/);
+  assert.match(source, /rows\.length >= MIN_ROWS/);
+  assert.match(source, /one market, not an edge/);
+});

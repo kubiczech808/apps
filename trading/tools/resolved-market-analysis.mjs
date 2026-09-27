@@ -124,6 +124,32 @@ export function simulate(row, stake = STAKE) {
   return { price, outcome, pnl, stake };
 }
 
+// Every tag a row carries, as the union of the fields that hold them. Used for ranking,
+// where a market belongs under each of its tags.
+export function tagsOf(row) {
+  const tags = new Set();
+  for (const field of ["polymarketTags", "firstPolymarketTags", "tags", "polymarketCategories"]) {
+    const value = row?.[field];
+    if (!Array.isArray(value)) continue;
+    for (const raw of value) {
+      const tag = String(raw?.slug || raw?.label || raw?.name || raw || "").trim().toLowerCase();
+      if (tag) tags.add(tag);
+    }
+  }
+  return tags.size ? [...tags] : ["(untagged)"];
+}
+
+// What share of a tag's winnings came from its single best market.
+//
+// Without this the ranking is a lottery-ticket detector. Buying a 2% outcome that lands pays
+// 49x the stake, so ONE such market can carry a tag's whole P/L and print as an edge. A tag
+// whose top trade is most of its profit is a tag with one lucky row, not a strategy.
+export function topTradeShare(rows) {
+  const gains = rows.map((row) => row.sim.pnl).filter((pnl) => pnl > 0).sort((a, b) => b - a);
+  const total = gains.reduce((sum, pnl) => sum + pnl, 0);
+  return total > 0 ? gains[0] / total : null;
+}
+
 export function summarise(rows) {
   if (!rows.length) return { n: 0, wins: 0, winRate: null, pnl: 0, perTrade: null, perDollar: null };
   const pnl = rows.reduce((sum, row) => sum + row.sim.pnl, 0);
@@ -217,6 +243,13 @@ async function main() {
     console.log(`      ${field.padEnd(28)} ${String(have).padStart(5)} / ${all.length}`);
   }
 
+  // No tag named, or "*": rank every tag instead of analysing one. Asked for: "udelej mi
+  // jednoduchou analyzu dle tagu z nasich resolved dat, co vychazi nejlepe."
+  if (!TAG || TAG === "*") {
+    rankTags(all);
+    return;
+  }
+
   const tagged = all.map((row) => ({ row, via: matchesTag(row, TAG) })).filter((item) => item.via);
   const viaTag = tagged.filter((item) => item.via === "tag").length;
   console.log(`\n== 2. rows matching "${TAG}"\n   ${tagged.length} matched`
@@ -302,6 +335,54 @@ async function main() {
     const band = price < 0.3 ? "<30%" : price < 0.5 ? "30-50%" : price < 0.7 ? "50-70%" : "70%+";
     return `${band} / ${item.timing}`;
   }));
+}
+
+// Every tag, ranked. One simulated entry per market at the quote we recorded, settled at
+// the real outcome. A market belongs under each of its tags, so the rows overlap and the P/L
+// column does not sum to a total.
+function rankTags(all) {
+  const simulated = [];
+  let unusable = 0;
+  for (const row of all) {
+    const sim = simulate(row);
+    if (!sim) { unusable += 1; continue; }
+    simulated.push({ row, sim, shape: shapeOf(row.question || row.market), tags: tagsOf(row) });
+  }
+  console.log(`\n== 2. every tag, ranked`);
+  console.log(`   ${simulated.length} of ${all.length} markets have both a usable entry price`);
+  console.log(`   and a clean settlement; ${unusable} do not and are left out.`);
+  const overall = summarise(simulated);
+  console.log(`   Whole archive: ${overall.n} markets, ${pct(overall.winRate)} won,`
+    + ` P/L ${money(overall.pnl)}, ${pct(overall.perDollar)} per dollar staked.`);
+
+  const groups = new Map();
+  for (const item of simulated) {
+    for (const tag of item.tags) {
+      if (!groups.has(tag)) groups.set(tag, []);
+      groups.get(tag).push(item);
+    }
+  }
+  const MIN_ROWS = 15;
+  const ranked = [...groups.entries()]
+    .filter(([, rows]) => rows.length >= MIN_ROWS)
+    .sort((a, b) => summarise(b[1]).pnl - summarise(a[1]).pnl);
+  const thin = groups.size - ranked.length;
+
+  console.log(`\n   ${groups.size} distinct tag(s); ${ranked.length} carry at least ${MIN_ROWS} markets.`);
+  console.log(`   ${thin} are thinner than that and are not listed -- a handful of markets is`);
+  console.log("   not a result, and listing them would put the noisiest rows at the top.");
+  console.log("   A market appears under each of its tags, so these rows overlap.");
+  console.log("\n   top% is the share of the tag's winnings that came from its single best");
+  console.log("   market. Buying a 2% outcome that lands pays 49x, so one lucky row can carry");
+  console.log("   a whole tag; a high top% is one market, not an edge.");
+  console.log("\n   tag                          n   won    win%      P/L    per trade   per $   top%");
+  for (const [tag, rows] of ranked) {
+    const s = summarise(rows);
+    const share = topTradeShare(rows);
+    console.log(`   ${tag.slice(0, 26).padEnd(26)} ${String(s.n).padStart(4)}  ${String(s.wins).padStart(4)}`
+      + `  ${pct(s.winRate)}  ${money(s.pnl)}     ${money(s.perTrade)}  ${pct(s.perDollar)}`
+      + `  ${pct(share)}${share != null && share > 0.5 ? "  <- one market" : ""}`);
+  }
 }
 
 if (process.argv[1] && import.meta.url === `file://${process.argv[1]}`) {

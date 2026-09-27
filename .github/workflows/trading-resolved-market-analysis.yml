@@ -11,9 +11,9 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Tag or title fragment to analyse (e.g. dota)"
+        description: "Tag or title fragment to analyse; blank or * ranks EVERY tag"
         required: false
-        default: "dota"
+        default: ""
         type: string
       min_probability:
         description: "Bottom of the entry band, as a fraction (e.g. 0.51)"
