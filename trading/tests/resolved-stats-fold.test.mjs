@@ -33,7 +33,7 @@ function lift(source, signature) {
 
 const PIECES = [
   lift(API, "function stream_json_array_members(string $path, string $field, callable $onRow, ?callable $accepts = null): bool"),
-  lift(API, "function resolved_stats_accumulate(array $sources, float $stake = 5.0, ?callable $extra = null): array"),
+  lift(API, "function resolved_stats_accumulate(array $sources, float $stake = 5.0, ?callable $extra = null, ?callable $collect = null): array"),
   lift(STORAGE, "function trading_storage_resolved_stats_replace(PDO $pdo, array $cells, array $anyTag, array $meta = []): array"),
   lift(STORAGE, "function trading_storage_resolved_stats_load(PDO $pdo): ?array"),
 ].join("\n");
