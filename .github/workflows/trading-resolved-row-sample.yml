@@ -1,0 +1,43 @@
+name: Trading Resolved Row Sample
+
+# Read-only diagnostic, manual only. Places no orders, writes nothing, uses no secrets.
+#
+# Prints the actual settled rows behind one tag, so a statistics cell that reads 100% can be
+# looked at rather than theorised about. Two theories have already been wrong about those
+# cells; this reads the rows.
+#
+# Bounded on purpose: the endpoint it asks reads the settled archive, and an unbounded read
+# of that is what exhausted the host's memory limit on a live request.
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "The Polymarket tag to sample"
+        required: false
+        default: "league-of-legends"
+        type: string
+      row_limit:
+        description: "How many settled rows to ask for (max 800)"
+        required: false
+        default: "300"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  sample:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Read the settled rows behind one tag
+        working-directory: trading
+        env:
+          MARKET_TAG: ${{ inputs.tag }}
+          ROW_LIMIT: ${{ inputs.row_limit }}
+        run: node tools/resolved-row-sample.mjs
