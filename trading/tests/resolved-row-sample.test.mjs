@@ -61,11 +61,27 @@ test("the summary separates why rows were dropped, and states the price alongsid
   assert.equal(stats.counted + stats.noEntry + stats.noOutcome + stats.wideSpread + stats.afterDue, stats.total);
 });
 
-test("a flipped row is identified but not excluded, because it is only 2% of them", () => {
-  const flipped = row({ firstTokenId: "a", tokenId: "b" });
-  assert.equal(gateRow(flipped).flipped, true);
-  assert.equal(counted(gateRow(flipped)), true, "the flip is reported, not used as a gate");
-  assert.equal(summarise([flipped, row()]).flipped, 1);
+test("a flipped row is graded on the side that was priced, exactly as the statistics do", () => {
+  // Rewritten rather than dropped. It used to assert that a flip is reported and never acts
+  // as a gate, which was true while this tool read finalOutcomePrice raw -- and that made it
+  // print the OPPOSITE result to the one the statistics counted for the same row. A sampler
+  // that disagrees with the table it is explaining is worse than no sampler.
+  const flippedBinary = row({ firstTokenId: "a", tokenId: "b", outcomeCount: 2, finalOutcomePrice: 1 });
+  assert.equal(gateRow(flippedBinary).flipped, true, "the flip is still reported");
+  assert.equal(counted(gateRow(flippedBinary)), true, "and the row is still counted");
+  assert.equal(gateRow(flippedBinary).outcome, 0,
+    "but the side that was bought lost, whatever the side that led at the close did");
+  assert.equal(summarise([flippedBinary, row()]).flipped, 1);
+
+  // Nothing says this one has two outcomes, so inverting would be a guess -- api.php
+  // excludes it and so does this.
+  assert.equal(counted(gateRow(row({ firstTokenId: "a", tokenId: "b" }))), false);
+
+  // And a settlement recorded against the priced side beats every inference.
+  assert.equal(gateRow(row({ firstTokenId: "a", tokenId: "b", outcomeCount: 2, finalOutcomePrice: 1, firstSideFinalOutcomePrice: 1 })).outcome, 1);
+
+  // settledTokenId decides when present: the graded side IS the priced side here.
+  assert.equal(gateRow(row({ firstTokenId: "a", tokenId: "b", settledTokenId: "a", outcomeCount: 2, finalOutcomePrice: 1 })).outcome, 1);
 });
 
 test("it bounds what it asks for", () => {

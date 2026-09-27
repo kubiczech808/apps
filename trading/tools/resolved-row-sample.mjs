@@ -59,8 +59,7 @@ const pct = (value) => (value == null ? "   -  " : `${(value * 100).toFixed(1)}%
 export function gateRow(row, maxSpread = 0.05) {
   const entry = [row?.firstMarketProbability, row?.lastLiveMarketProbability, row?.marketProbability, row?.marketPrice]
     .map(num).find((value) => value != null && value > 0 && value < 1) ?? null;
-  const finalPrice = num(row?.finalOutcomePrice);
-  const outcome = finalPrice == null ? null : (finalPrice <= 0.005 ? 0 : (finalPrice >= 0.995 ? 1 : null));
+  const outcome = settledOutcome(row);
   const spread = num(row?.firstSpread) ?? (num(row?.firstBestAsk) != null && num(row?.firstBestBid) != null
     ? Math.abs(num(row.firstBestAsk) - num(row.firstBestBid))
     : null);
@@ -77,6 +76,33 @@ export function gateRow(row, maxSpread = 0.05) {
     spreadOk: spread == null || spread <= maxSpread,
     notAfterDue: !(Number.isFinite(seen) && Number.isFinite(due)) || due > seen,
   };
+}
+
+// The settlement of the side the entry price belongs to, mirroring
+// resolved_stats_settled_outcome() in api.php. The raw finalOutcomePrice is graded against
+// whichever side the row currently names, so printing it beside a flipped row shows the
+// opposite result to the one the statistics counted.
+export function settledOutcome(row) {
+  const clean = (value) => {
+    const price = num(value);
+    if (price == null) return null;
+    if (price <= 0.005) return 0;
+    return price >= 0.995 ? 1 : null;
+  };
+  const direct = clean(row?.firstSideFinalOutcomePrice);
+  if (direct !== null) return direct;
+  const outcome = clean(row?.finalOutcomePrice);
+  if (outcome === null) return null;
+  const settled = String(row?.settledTokenId || "").trim();
+  const first = String(row?.firstTokenId || "").trim();
+  const sameSide = settled && first
+    ? settled === first
+    : !(String(row?.firstTokenId || "") && String(row?.tokenId || "")
+      && String(row.firstTokenId) !== String(row.tokenId));
+  if (sameSide) return outcome;
+  const binary = Number(row?.outcomeCount) === 2
+    || (String(row?.binaryYesTokenId || "") && String(row?.binaryNoTokenId || ""));
+  return binary ? 1 - outcome : null;
 }
 
 export function counted(gated) {
@@ -186,9 +212,30 @@ async function main() {
     }
   }
 
-  console.log(`\n   entry  settled  flip  spread  first seen            due                   question`);
+  // Which SIDE was priced is the column this was missing. A soccer "Will X win?" market is
+  // binary, and the row stores whichever side was above 50c -- so a 55c entry is usually
+  // "No", and "No" on a team means a draw or a defeat. Without this column a table of
+  // favourites at 55c winning 92% of the time cannot be read at all.
+  const sides = stats.kept.reduce((counts, { row }) => {
+    const side = String(row?.firstOutcome || row?.outcome || "?").toLowerCase();
+    counts[side] = (counts[side] || 0) + 1;
+    return counts;
+  }, {});
+  const wonBySide = stats.kept.reduce((counts, { row, gate }) => {
+    const side = String(row?.firstOutcome || row?.outcome || "?").toLowerCase();
+    if (gate.outcome === 1) counts[side] = (counts[side] || 0) + 1;
+    return counts;
+  }, {});
+  console.log(`\n   priced side of the counted rows:`);
+  for (const [side, count] of Object.entries(sides).sort((left, right) => right[1] - left[1])) {
+    console.log(`      ${side.padEnd(8)} ${String(count).padStart(5)} row(s), ${wonBySide[side] || 0} won`
+      + ` (${((100 * (wonBySide[side] || 0)) / count).toFixed(1)}%)`);
+  }
+
+  console.log(`\n   entry  side  settled  flip  spread  first seen            due                   question`);
   for (const { row, gate } of stats.kept.slice(0, SHOW)) {
-    console.log(`   ${pct(gate.entry)} ${String(gate.outcome).padStart(8)} ${gate.flipped ? " yes" : "  no"}`
+    console.log(`   ${pct(gate.entry)} ${String(row?.firstOutcome || row?.outcome || "?").slice(0, 5).padStart(5)}`
+      + ` ${String(gate.outcome).padStart(8)} ${gate.flipped ? " yes" : "  no"}`
       + ` ${gate.spread == null ? "     -" : (gate.spread * 100).toFixed(1).padStart(6)}`
       + `  ${String(row?.firstObservedAt || "-").slice(0, 19).padEnd(20)}`
       + `  ${String(row?.resolutionEndDate || row?.endDate || "-").slice(0, 19).padEnd(20)}`
