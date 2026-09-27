@@ -9,6 +9,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { readFileSync } from "node:fs";
+import { rankedRows, byTag } from "../tools/tag-probability-query.mjs";
 
 const TOOL = readFileSync(new URL("../tools/tag-probability-query.mjs", import.meta.url), "utf8");
 const API = readFileSync(new URL("../api.php", import.meta.url), "utf8");
@@ -59,4 +60,43 @@ test("it reports which data path answered, and does not assume the response shap
   // and reported the resulting emptiness as a finding.
   assert.match(TOOL, /response keys:/);
   assert.match(TOOL, /no row array found in the response; printing it whole/);
+});
+
+// The ranking half. Built from the real response's own shape: "combinations" is an integer
+// count and "best" is the list, which the first run of this got backwards and reported as
+// "no rows" against 21,535 of them.
+const RESPONSE = {
+  ok: true,
+  statsSource: "stored",
+  cells: 17077,
+  combinations: 21535,
+  best: [
+    { tag: "uefa-super-cup", shape: "other", horizon: "*", probability: 50, trades: 93, wins: 81, stakedUsdc: 475.06, pnlUsdc: 271.23, returnPct: 57.09 },
+    { tag: "uefa-super-cup", shape: "*", horizon: "<= 3 h", probability: 50, trades: 93, wins: 81, stakedUsdc: 475.06, pnlUsdc: 271.23, returnPct: 57.09 },
+    { tag: "soccer", shape: "outright", horizon: "*", probability: 60, trades: 4200, wins: 3100, stakedUsdc: 21000, pnlUsdc: 900.5, returnPct: 4.29 },
+    { tag: "*", shape: "outright", horizon: "*", probability: 60, trades: 9000, wins: 6600, stakedUsdc: 45000, pnlUsdc: 1800, returnPct: 4.0 },
+    { tag: "uefa-super-cup", shape: "*", horizon: "*", probability: 55, trades: 40, wins: 35, stakedUsdc: 204, pnlUsdc: 96.1, returnPct: 47.1 },
+  ],
+  worst: [{ tag: "politics", shape: "other", horizon: "*", probability: 50, trades: 61, wins: 20, stakedUsdc: 310, pnlUsdc: -120.4, returnPct: -38.8 }],
+};
+
+test("the rows are read from 'best' -- 'combinations' is a count, not the list", () => {
+  const rows = rankedRows(RESPONSE);
+  assert.equal(rows.length, 5, "the list is under best");
+  assert.equal(rows[0].tag, "uefa-super-cup");
+  // The count must never be mistaken for the list: Array.isArray(21535) is false, so a
+  // reader that looked at "combinations" first would fall through to "no rows".
+  assert.ok(!Array.isArray(RESPONSE.combinations));
+  assert.deepEqual(rankedRows({ ok: true, combinations: 21535 }), [],
+    "a response with only the count carries no rows to print");
+});
+
+test("byTag keeps one row per tag -- the best-earning one -- and ranks by nominal P/L", () => {
+  const ranked = byTag(RESPONSE.best);
+  assert.deepEqual(ranked.map((row) => row.tag), ["soccer", "uefa-super-cup"],
+    "soccer earns more in absolute terms despite the far lower return per dollar");
+  const cup = ranked.find((row) => row.tag === "uefa-super-cup");
+  assert.equal(cup.pnlUsdc, 271.23, "the tag's best-earning setup, not its last-seen one");
+  assert.ok(!ranked.some((row) => row.tag === "*"),
+    "the any-tag aggregate is not a tag and would otherwise top every table");
 });

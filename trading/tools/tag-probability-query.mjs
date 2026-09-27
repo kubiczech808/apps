@@ -73,12 +73,63 @@ function describe(payload) {
   }
 }
 
+// The ranked rows live under "best" -- NOT under "combinations", which is an integer count
+// of them. Reading the count as if it were the list is how the first run of this printed
+// "no rows" against a response that carried 21,535 of them, which is the same class of
+// mistake as the three interface mismatches above: assuming the shape instead of reading it.
+export function rankedRows(payload) {
+  for (const field of ["best", "rows", "results"]) {
+    if (Array.isArray(payload?.[field])) return payload[field];
+  }
+  return [];
+}
+
+// One row per tag, ranked by nominal profit.
+//
+// The endpoint ranks by return per dollar and emits every (tag, shape, horizon, threshold)
+// combination, so one tag appears many times over. Asked for profitability by tag, the
+// useful reduction is the best-earning setup each tag reached -- and ranked by the nominal
+// figure, because that is the half of the answer that was asked for. What the ordering
+// cannot fix is that the slice was cut by return: a high-volume tag with a modest edge can
+// miss the slice entirely, so the caveat travels with the table.
+export function byTag(rows) {
+  const best = new Map();
+  for (const row of rows) {
+    const tag = String(row?.tag ?? "");
+    if (!tag || tag === "*") continue;
+    const pnl = num(row.pnlUsdc);
+    if (pnl === null) continue;
+    const held = best.get(tag);
+    if (!held || pnl > num(held.pnlUsdc)) best.set(tag, row);
+  }
+  return [...best.values()].sort((left, right) => num(right.pnlUsdc) - num(left.pnlUsdc));
+}
+
+function printRows(rows, limit) {
+  console.log("   tag                      shape         horizon    from    n   win%       P/L    per $");
+  for (const row of rows.slice(0, limit)) {
+    const n = num(row.trades);
+    const wins = num(row.wins);
+    const pnl = num(row.pnlUsdc);
+    const staked = num(row.stakedUsdc);
+    console.log(`   ${String(row.tag ?? "-").slice(0, 24).padEnd(24)}`
+      + ` ${String(row.shape ?? "*").slice(0, 13).padEnd(13)}`
+      + ` ${String(row.horizon ?? "*").slice(0, 8).padEnd(8)}`
+      + ` ${String(row.probability ?? "-").padStart(4)}%`
+      + ` ${n == null ? "   -" : String(n).padStart(5)}`
+      + `  ${pct(n && wins != null ? wins / n : null)}`
+      + ` ${money(pnl)}`
+      + `  ${pct(pnl != null && staked ? pnl / staked : null)}`);
+  }
+}
+
 // The Setup finder's own ranking. Reads the stored fold first and the archive only if no
 // fold exists, so it is the cheap path AND the guarded one -- unlike the archive scan this
 // tool replaced, which had neither property.
 async function combinations() {
   const minTrades = Number(process.env.MIN_TRADES || 30);
-  const limit = Number(process.env.RESULT_LIMIT || 60);
+  const limit = Number(process.env.RESULT_LIMIT || 400);
+  const show = Number(process.env.SHOW_ROWS || 25);
   const url = `${HOST}/api.php?action=resolved-combinations&min_trades=${minTrades}&limit=${limit}`;
   const response = await fetch(url);
   const text = await response.text();
@@ -88,28 +139,24 @@ async function combinations() {
   }
   let payload;
   try { payload = JSON.parse(text); } catch { console.log(`   !! ${text.slice(0, 300)}`); return; }
-  console.log(`   keys: ${Object.keys(payload).join(", ")}`);
-  for (const field of ["ok", "statsSource", "source", "count", "minTrades", "foldedAt"]) {
+  for (const field of ["ok", "statsSource", "foldedAt", "scannedRows", "pricedRows",
+    "afterDueRejected", "cells", "combinations", "minTrades", "stakeUsdc"]) {
     if (payload?.[field] !== undefined) console.log(`   ${field}: ${JSON.stringify(payload[field])}`);
   }
-  const rows = ["combinations", "rows", "results"].map((f) => payload?.[f]).find(Array.isArray);
-  if (!rows?.length) {
+  const rows = rankedRows(payload);
+  if (!rows.length) {
     console.log(`   no rows: ${JSON.stringify(payload).slice(0, 600)}`);
     return;
   }
-  console.log(`\n   tag                      shape          from    n   win%       P/L    per $`);
-  for (const row of rows.slice(0, limit)) {
-    const n = num(row.trades ?? row.count ?? row.n);
-    const wins = num(row.wins ?? row.won);
-    const pnl = num(row.pnlUsdc ?? row.pnl ?? row.profitUsdc);
-    const staked = num(row.stakedUsdc ?? row.costUsdc);
-    console.log(`   ${String(row.tag ?? "-").slice(0, 24).padEnd(24)}`
-      + ` ${String(row.shape ?? row.eventType ?? "*").slice(0, 13).padEnd(13)}`
-      + ` ${row.probability ?? row.entry ?? row.floor ?? "-"}%`
-      + ` ${n == null ? "   -" : String(n).padStart(4)}`
-      + `  ${pct(n && wins != null ? wins / n : null)}`
-      + ` ${money(pnl)}`
-      + `  ${pct(pnl != null && staked ? pnl / staked : null)}`);
+  console.log(`\n   ${rows.length} combination(s) in the slice, by return per dollar.`);
+  console.log(`\n== best setup per tag, ranked by nominal P/L`);
+  printRows(byTag(rows), show);
+  console.log(`\n== raw top combinations, as the endpoint ranked them (return per dollar)`);
+  printRows(rows, show);
+  const worst = Array.isArray(payload?.worst) ? payload.worst : [];
+  if (worst.length) {
+    console.log(`\n== worst, so the losing end is visible too`);
+    printRows(worst, 10);
   }
 }
 
@@ -141,4 +188,4 @@ if (process.argv[1] && import.meta.url === `file://${process.argv[1]}`) {
   });
 }
 
-export { ask, describe };
+export { ask, describe, main };
