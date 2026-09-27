@@ -94,6 +94,14 @@ const quotePrice = (value) => {
   return nf(priceFractionDigits(value)).format(value)
 }
 
+// Small FX gaps are often narrower than a three-decimal EUR/GBP quote. Zone
+// labels use pipette precision so adjacent raw ranges never look overlapping.
+const quoteZonePrice = (value) => {
+  if (!Number.isFinite(value)) return '–'
+  const digits = Math.abs(value) < 10 ? 5 : priceFractionDigits(value)
+  return nf(digits).format(value)
+}
+
 const quoteCurrency = (symbol) => symbol?.startsWith('USD') ? symbol.slice(3) : 'USD'
 const assetPriceLabel = (symbol, value) => Number.isFinite(value) ? `${quotePrice(value)} ${quoteCurrency(symbol)}` : '–'
 
@@ -558,6 +566,17 @@ const displayedEntryCandidate = (profile) => {
   ) ?? null
 }
 
+const diagnosticEntryCandidate = (profile) => {
+  const candidate = profile?.potentialCandidate ?? profile?.activeCandidate ?? (profile?.zoneCandidates ?? []).find((item) =>
+    item?.directionEligible && item?.pullbackEligible && !item?.invalidatedByPrematureTouch
+  )
+  return candidate?.directionEligible &&
+    candidate?.pullbackEligible &&
+    candidate?.rrEligible === false
+    ? candidate
+    : null
+}
+
 const displayedTradeProfile = (profile) => {
   if (!profile) return profile
   // A pending CHoCH remains non-executable, but it still carries an audit
@@ -578,6 +597,29 @@ const displayedTradeProfile = (profile) => {
       tp2Zone: candidate.tp2Zone,
       weightedTarget: candidate.weightedTarget,
       rewardRisk: candidate.rewardRisk,
+    }
+  }
+
+  const diagnostic = diagnosticEntryCandidate(profile)
+  if (diagnostic) {
+    const potentialEntry = profile.potentialEntry ?? diagnostic.refinedEntry ?? diagnostic.entryAtZoneHit
+    const potentialRewardRisk = profile.potentialRewardRisk ?? diagnostic.rrAtPullback
+    return {
+      ...profile,
+      status: profile.side ? 'watch' : 'neutral',
+      zone: diagnostic.zone,
+      zoneHit: diagnostic.zoneHit,
+      zoneTouched: diagnostic.zoneTouched,
+      entry: potentialEntry,
+      stop: diagnostic.stop,
+      stopBuffer: diagnostic.stopBuffer,
+      tp1: diagnostic.tp1,
+      tp2: diagnostic.tp2,
+      tp2Zone: diagnostic.tp2Zone,
+      weightedTarget: diagnostic.weightedTarget,
+      rewardRisk: potentialRewardRisk,
+      entrySource: diagnostic.entrySource,
+      diagnosticOnly: true,
     }
   }
 
@@ -673,7 +715,7 @@ const directionalPriceRange = ({ low, high, direction = null } = {}) => {
 
 const zoneRange = (zone, direction = null) => {
   const range = directionalPriceRange({ low: zone?.low, high: zone?.high, direction })
-  return range ? `${quotePrice(range.from)} – ${quotePrice(range.to)}` : '–'
+  return range ? `${quoteZonePrice(range.from)} – ${quoteZonePrice(range.to)}` : '–'
 }
 
 const entryZoneType = (side) => side === 'long' ? 'demand' : side === 'short' ? 'supply' : null
@@ -775,9 +817,7 @@ const entryZonesForDisplay = (entry) => {
   const setupZones = setupZonesForEntry(entry)
     .filter((zone) => zone.type === type)
   const watchedZones = watchedEntryZones(profile, type)
-  const currentSetupZones = currentSetupTouchedZones(entry.item, type)
-  const historicalZones = historicalConsumedZones(entry.item, type, pullback)
-  return uniqueZones([...setupZones, ...watchedZones, ...currentSetupZones, ...historicalZones])
+  return uniqueZones([...setupZones, ...watchedZones])
     .filter((zone) => zone.activeSetupZone || zoneOverlapsRange(zone, pullback))
 }
 
@@ -903,10 +943,20 @@ const priceActionDecisionFact = (entry, column) => {
     }
     case 'entry':
       if (profile?.mode === 'formation' && !hasDirectionalPlan(profile)) return priceFact(null, formationTitle)
+      const rrGate = profileGate(profile, 'rr')
+      const diagnosticOnly = profile?.diagnosticOnly === true
       return priceFact(
         profile?.entry,
-        profile?.mode === 'formation' ? pendingFormationTitle : profile?.zoneHit ? 'Aktuální cena je v pracovní zóně.' : profile?.zoneTouched ? 'Zóna už byla dotčena; vstup se zpětně neotevírá.' : 'Pracovní entry; čeká se na zásah správné zóny.',
-        profile?.zoneHit ? 'met' : 'neutral'
+        profile?.mode === 'formation'
+          ? pendingFormationTitle
+          : diagnosticOnly
+            ? `R/R nesplňuje minimum ${profile?.minRewardRisk ?? 2}:1; objednávka se nevytvoří.`
+            : profile?.zoneHit
+              ? 'Aktuální cena je v pracovní zóně.'
+              : profile?.zoneTouched
+                ? 'Zóna už byla dotčena; vstup se zpětně neotevírá.'
+                : 'Pracovní entry; čeká se na zásah správné zóny.',
+        diagnosticOnly ? 'unmet' : profile?.zoneHit ? 'met' : 'neutral'
       )
     case 'stop':
       if (profile?.mode === 'formation' && !hasDirectionalPlan(profile)) return priceFact(null, formationTitle)
@@ -922,7 +972,7 @@ const priceActionDecisionFact = (entry, column) => {
       const gate = profileGate(profile, 'rr')
       return decisionFact(
         Number.isFinite(profile?.rewardRisk) ? `${nf(2).format(profile.rewardRisk)}:1` : '–',
-        passedOrWaiting(gate),
+        gate?.status === 'unmet' ? 'unmet' : passedOrWaiting(gate),
         profile?.mode === 'formation' ? pendingFormationTitle : gate?.detail ?? `Minimum je ${profile?.minRewardRisk ?? 2}:1.`
       )
     }

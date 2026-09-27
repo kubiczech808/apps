@@ -938,7 +938,7 @@ const candidateZones = (zones, side) => {
   const fallbackKey = type === 'demand' ? 'unfilledDemand' : 'unfilledSupply'
   const latestKey = type === 'demand' ? 'latestValidDemand' : 'latestValidSupply'
   const seen = new Set()
-  return [
+  const candidates = [
     ...(zones?.[key] ?? []),
     ...(zones?.[fallbackKey] ?? []),
     ...(zones?.[type] ? [zones[type]] : []),
@@ -951,6 +951,21 @@ const candidateZones = (zones, side) => {
       seen.add(identity)
       return true
     })
+  // Two same-side FVGs that genuinely overlap form one trading area. Keep the
+  // more recent origin: entering either one would otherwise consume the other
+  // at the same time and create contradictory entry candidates.
+  const newestFirst = [...candidates].sort((left, right) =>
+    (right.lastIndex ?? -1) - (left.lastIndex ?? -1) ||
+    (right.firstIndex ?? -1) - (left.firstIndex ?? -1)
+  )
+  const selected = []
+  for (const candidate of newestFirst) {
+    const overlapsSelected = selected.some((zone) =>
+      zone.low < candidate.high && candidate.low < zone.high
+    )
+    if (!overlapsSelected) selected.push(candidate)
+  }
+  return candidates.filter((candidate) => selected.includes(candidate))
 }
 
 const rewardRiskFor = ({ side, entry, stop, target }) => {
@@ -1271,6 +1286,11 @@ export const evaluateTradeProfile = ({
     usableCandidates.find((candidate) => candidate.directionEligible && candidate.pullbackEligible) ??
     usableCandidates.find((candidate) => candidate.directionEligible) ??
     null
+  // Preserve the best structurally relevant rejected candidate for the
+  // dashboard. It explains a weak R/R without turning it back into an order.
+  const potentialCandidate = zoneCandidates.find((candidate) =>
+    candidate.directionEligible && candidate.pullbackEligible && candidate.rrEligible === false
+  ) ?? null
   const activeZone = activeCandidate?.zone ?? null
   const zoneTouched = Boolean(activeCandidate?.zoneTouched)
   const zoneHit = zoneContainsPrice(activeZone, currentPrice)
@@ -1279,6 +1299,15 @@ export const evaluateTradeProfile = ({
   // the candidate for diagnostics, but never publish them as a trade entry.
   const plannedEntry = activeCandidate?.eligible ? activeCandidate.entryForMinRR : null
   const entry = Number.isFinite(plannedEntry) ? plannedEntry : null
+  // Keep a diagnostic calculation when a zone is structurally valid but its
+  // risk/reward is too weak. It is never an executable entry, yet the UI can
+  // show exactly why the order was not armed.
+  const potentialEntry = potentialCandidate
+    ? potentialCandidate.refinedEntry ?? potentialCandidate.entryAtZoneHit
+    : null
+  const potentialRewardRisk = potentialCandidate
+    ? potentialCandidate.rrAtPullback
+    : null
   const pulledBack = pullbackSatisfied({ side, price: currentPrice, level: pullback, invalidationLevel })
   const buffer = activeCandidate?.stopBuffer ?? stopBuffer({
     zone: activeZone,
@@ -1379,11 +1408,14 @@ export const evaluateTradeProfile = ({
     zoneTouched,
     livePrice: currentPrice,
     entry,
+    potentialEntry,
+    potentialRewardRisk,
     pullbackLevel: pullback,
     invalidationLevel,
     pullbackRange,
     zoneCandidates,
     activeCandidate,
+    potentialCandidate,
     stop,
     stopAnchor: activeCandidate?.stopAnchor ?? (
       side === 'long' && activeZone ? Math.min(activeZone.low, invalidationLevel ?? activeZone.low)

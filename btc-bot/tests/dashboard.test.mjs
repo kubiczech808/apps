@@ -86,6 +86,7 @@ test('asset price labels use adaptive decimal places by price magnitude', () => 
   assert.match(js, /const price = \(value\) => \(Number\.isFinite\(value\) \? nf\(priceFractionDigits\(value\)\)\.format\(value\)/)
   assert.match(js, /const priceFractionDigits = \(value\) => \{[\s\S]*if \(magnitude < 1\) return 4[\s\S]*if \(magnitude < 10\) return 3[\s\S]*if \(magnitude < 100\) return 2[\s\S]*if \(magnitude < 1_000\) return 1[\s\S]*return 0/)
   assert.match(js, /const quotePrice = \(value\) => \{[\s\S]*return nf\(priceFractionDigits\(value\)\)\.format\(value\)/)
+  assert.match(js, /const quoteZonePrice = \(value\) => \{[\s\S]*Math\.abs\(value\) < 10 \? 5 : priceFractionDigits\(value\)/)
 })
 
 test('strategy tab shows the selected leveraged momentum strategy', () => {
@@ -389,6 +390,15 @@ test('decision surfaces keep only entry zones while charts retain bounded target
   assert.match(js, /\.\.\.entryZones, \.\.\.targetZones, \.\.\.stopContextZone/)
   assert.match(js, /className: 'pa-zone-list'/)
   assert.match(css, /asset-zone-stop-context/)
+})
+
+test('a non-executable R/R plan still exposes its diagnostic entry and R/R in red', () => {
+  assert.match(js, /const diagnosticEntryCandidate = \(profile\) =>/)
+  assert.match(js, /profile\.potentialEntry \?\? diagnostic\.refinedEntry \?\? diagnostic\.entryAtZoneHit/)
+  assert.match(js, /profile\.potentialRewardRisk \?\? diagnostic\.rrAtPullback/)
+  assert.match(js, /R\/R nesplňuje minimum/)
+  assert.match(js, /diagnosticOnly \? 'unmet'/)
+  assert.match(js, /gate\?\.status === 'unmet' \? 'unmet' : passedOrWaiting\(gate\)/)
 })
 
 test('charts create SVG graphics in the SVG namespace and use strategy history when available', () => {

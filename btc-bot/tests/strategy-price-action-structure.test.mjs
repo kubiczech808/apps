@@ -1529,6 +1529,35 @@ test('a profile below minimum R/R is never a valid setup or planned entry', () =
   assert.equal(profile.gates.find((entry) => entry.id === 'rr').status, 'unmet')
   assert.equal(profile.entry, null)
   assert.equal(profile.rewardRisk, null)
+  assert.equal(profile.potentialEntry, candidate.entryAtZoneHit, 'a rejected R/R still keeps its diagnostic entry')
+  assert.equal(profile.potentialRewardRisk, candidate.rrAtPullback, 'a rejected R/R remains inspectable without arming an order')
+})
+
+test('overlapping same-side entry candidates keep only the newest FVG', () => {
+  const item = {
+    trend: 'up',
+    price: 104,
+    lastCandle: candle(START, 105, 106, 103, 104),
+    structure: {
+      high: { current: { price: 120 } },
+      low: { current: { price: 100 } },
+    },
+    zones: {
+      nearbyDemand: [
+        { type: 'demand', low: 100, high: 105, firstIndex: 3, lastIndex: 5 },
+        { type: 'demand', low: 103, high: 106, firstIndex: 7, lastIndex: 9 },
+      ],
+      unfilledDemand: [
+        { type: 'demand', low: 100, high: 105, firstIndex: 3, lastIndex: 5 },
+        { type: 'demand', low: 103, high: 106, firstIndex: 7, lastIndex: 9 },
+      ],
+      unfilledSupply: [{ type: 'supply', low: 140, high: 145 }],
+    },
+  }
+  const profile = evaluateTradeProfile({ item, settings: { pullbackPct: 50, minRewardRisk: 2 } })
+  const demandCandidates = profile.zoneCandidates.filter((candidate) => candidate.type === 'demand')
+
+  assert.deepEqual(demandCandidates.map((candidate) => candidate.zone.lastIndex), [9])
 })
 
 test('open-position review detects lower-timeframe invalidation and recalculates the plan', () => {
