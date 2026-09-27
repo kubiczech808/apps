@@ -1,0 +1,144 @@
+// Runs offline. The sweep's arithmetic is EXECUTED on cache rows shaped exactly as
+// backtestDipMarket writes them, and the P/L identity is checked against that function's
+// own formula rather than restated.
+
+import assert from "node:assert/strict";
+import test from "node:test";
+import { readFileSync } from "node:fs";
+import {
+  BUY_CEILINGS, OPEN_BANDS, cacheRows, cellStats, entryForCell, inOpenBand, shortlist, spanDays, sweep,
+} from "../tools/dip-combination-sweep.mjs";
+
+// One cached market, in the shape backtestDipMarket returns. Entries carry the first-touch
+// price at each level, the fee that entry would have paid, and the resulting P/L.
+function market({ token, opening, resolvedAt = "2026-09-01T00:00:00.000Z", touches = {}, status = "complete", usableOpening = true }) {
+  const entries = {};
+  for (const level of BUY_CEILINGS) {
+    const price = touches[String(level)];
+    if (price == null) { entries[String(level)] = null; continue; }
+    const win = touches.win !== false;
+    const fee = 0;
+    entries[String(level)] = {
+      enteredAt: "2026-08-31T20:00:00.000Z",
+      entryPrice: price,
+      feeUsdc: fee,
+      // The backtest's own formula: shares = stake / entry, cost = stake + fee.
+      pnlUsdc: win ? (5 / price) - (5 + fee) : -(5 + fee),
+      outcome: win ? "WIN" : "LOSS",
+    };
+  }
+  return { tokenId: token, status, usableOpening, openingPrice: opening, resolvedAt, entries };
+}
+
+test("only finished markets with a real opening price are swept", () => {
+  // An unusable opening is a market whose earliest CLOB quote is not an opening at all.
+  // Counting it would file mid-game prices under an opening band, which is the one mistake
+  // that makes an opening-band recommendation meaningless.
+  const cache = {
+    markets: {
+      a: market({ token: "a", opening: 0.78, touches: { "0.4": 0.38 } }),
+      b: { tokenId: "b", status: "unavailable", usableOpening: true, openingPrice: 0.8 },
+      c: market({ token: "c", opening: 0.8, usableOpening: false, touches: { "0.4": 0.36 } }),
+      d: { tokenId: "d", status: "error" },
+    },
+  };
+  assert.deepEqual(cacheRows(cache).map((row) => row.tokenId), ["a"]);
+  assert.deepEqual(cacheRows({}), []);
+});
+
+test("both band edges are inclusive, because a band is a setting someone types", () => {
+  const edge = market({ token: "e", opening: 0.70 });
+  const top = market({ token: "t", opening: 0.80 });
+  const outside = market({ token: "o", opening: 0.8001 });
+  assert.ok(inOpenBand(edge, [0.70, 0.80]), "70 is inside 70-80");
+  assert.ok(inOpenBand(top, [0.70, 0.80]), "80 is inside 70-80");
+  assert.ok(!inOpenBand(outside, [0.70, 0.80]));
+
+  // And the buy floor keeps a first touch that landed exactly on it.
+  const onFloor = market({ token: "f", opening: 0.78, touches: { "0.4": 0.30 } });
+  assert.ok(entryForCell(onFloor, 0.4, 0.30), "a touch at the floor is inside the band");
+  assert.equal(entryForCell(onFloor, 0.4, 0.31), null, "a touch below the floor is not");
+});
+
+test("a market that never reached the ceiling is not an opportunity", () => {
+  const shallow = market({ token: "s", opening: 0.78, touches: { "0.6": 0.55 } });
+  assert.ok(entryForCell(shallow, 0.6));
+  assert.equal(entryForCell(shallow, 0.4), null, "it never fell that far");
+});
+
+test("the return is over stake plus fees, and the implied winner price is recoverable", () => {
+  // Two winners bought at 0.40, one loser. The identity the whole read rests on:
+  // sum(stake/p) over winners = pnl + staked, so the mean winner price comes back out.
+  const entries = [
+    { entryPrice: 0.4, feeUsdc: 0, pnlUsdc: (5 / 0.4) - 5, outcome: "WIN" },
+    { entryPrice: 0.4, feeUsdc: 0, pnlUsdc: (5 / 0.4) - 5, outcome: "WIN" },
+    { entryPrice: 0.4, feeUsdc: 0, pnlUsdc: -5, outcome: "LOSS" },
+  ];
+  const stats = cellStats(entries);
+  assert.equal(stats.trades, 3);
+  assert.equal(stats.wins, 2);
+  assert.ok(Math.abs(stats.accuracy - 66.6667) < 0.01);
+  assert.equal(stats.stakedUsdc, 15);
+  assert.ok(Math.abs(stats.pnlUsdc - 10) < 1e-9, "two payouts of 12.50 against 15 staked");
+  assert.ok(Math.abs(stats.roiPct - 66.6667) < 0.01);
+  assert.ok(Math.abs(stats.impliedWinnerEntryPct - 40) < 0.01, "the price the winners were bought at");
+
+  // Fees are part of what was risked, not a line item beside it.
+  const withFee = cellStats([{ entryPrice: 0.5, feeUsdc: 0.05, pnlUsdc: (5 / 0.5) - 5.05, outcome: "WIN" }]);
+  assert.equal(withFee.stakedUsdc, 5.05);
+  assert.ok(Math.abs(withFee.roiPct - ((4.95 / 5.05) * 100)) < 1e-9);
+});
+
+test("a trade count is reported as a rate, because it is unreadable without one", () => {
+  const rows = [
+    market({ token: "a", opening: 0.78, resolvedAt: "2026-07-01T00:00:00.000Z", touches: { "0.4": 0.38 } }),
+    market({ token: "b", opening: 0.78, resolvedAt: "2026-08-30T00:00:00.000Z", touches: { "0.4": 0.36 } }),
+  ];
+  const days = spanDays(rows);
+  assert.ok(Math.abs(days - 60) < 0.01);
+  const cell = sweep(rows, { openBands: [[0.7, 0.8]], ceilings: [0.4], floors: [0] })[0];
+  assert.equal(cell.trades, 2);
+  assert.ok(Math.abs(cell.tradesPerMonth - 1) < 0.01, "two trades over two months is one a month");
+  // One market cannot span anything, and inventing a rate from it would be a lie.
+  assert.equal(spanDays([rows[0]]), null);
+  assert.equal(sweep([rows[0]], { openBands: [[0.7, 0.8]], ceilings: [0.4], floors: [0] })[0].tradesPerMonth, null);
+});
+
+test("the shortlist refuses a thin cell however well it returned", () => {
+  // The temptation with a grid like this is to read the best-looking row. Four trades at
+  // 300% is arithmetic, not a portfolio -- and this is the demand the request named.
+  const cells = [
+    { openMin: 0.7, openMax: 0.8, buyMin: 0, buyMax: 0.3, trades: 4, roiPct: 300 },
+    { openMin: 0.7, openMax: 0.9, buyMin: 0, buyMax: 0.5, trades: 120, roiPct: 4 },
+    { openMin: 0.8, openMax: 0.9, buyMin: 0, buyMax: 0.45, trades: 60, roiPct: -12 },
+  ];
+  const ranked = shortlist(cells, 20);
+  assert.deepEqual(ranked.map((cell) => cell.trades), [120], "volume and profit, or nothing");
+});
+
+test("a floor at or above the ceiling is not a band and is never emitted", () => {
+  const rows = [market({ token: "a", opening: 0.78, touches: { "0.3": 0.29, "0.4": 0.38 } })];
+  // 35-30 is inverted and 40-40 is a single price rather than a band; neither is a setting
+  // anyone means, and emitting them would pad the grid with cells that can never fire.
+  assert.deepEqual(
+    sweep(rows, { openBands: [[0.7, 0.8]], ceilings: [0.3, 0.4], floors: [0.35] }).map((cell) => cell.buyMax),
+    [0.4],
+  );
+  assert.deepEqual(sweep(rows, { openBands: [[0.7, 0.8]], ceilings: [0.4], floors: [0.4] }), []);
+});
+
+test("it reads the published cache and nothing else", () => {
+  const tool = readFileSync(new URL("../tools/dip-combination-sweep.mjs", import.meta.url), "utf8");
+  // No CLOB, no database, no writes: the cache already holds every number this regroups.
+  assert.match(tool, /\/data\/dip-backtest-\$\{tag\}-cache\.json/);
+  assert.ok(!/clob\.polymarket/i.test(tool), "the price history was fetched once, by the backtest");
+  assert.ok(!/action=state|storage-admin|writeFile/.test(tool), "read-only");
+  // The seven levels are the backtest's, not a choice made here.
+  const backtest = readFileSync(new URL("../tools/dip-history-backtest.mjs", import.meta.url), "utf8");
+  const levels = backtest.match(/const ENTRY_LEVELS = \[([^\]]+)\]/)?.[1];
+  assert.ok(levels, "the backtest must still declare its levels");
+  assert.deepEqual(levels.split(",").map((value) => Number(value.trim())), BUY_CEILINGS,
+    "a level the backtest never recorded cannot be swept");
+  // And every swept opening band sits inside the window the cache actually priced.
+  for (const [min] of OPEN_BANDS) assert.ok(min >= 0.7, `${min} was never priced by the cache`);
+});

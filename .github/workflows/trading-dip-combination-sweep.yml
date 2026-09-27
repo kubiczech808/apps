@@ -1,0 +1,49 @@
+name: Trading Dip Combination Sweep
+
+# Read-only diagnostic, manual only. Downloads the published per-tag backtest cache over
+# HTTPS and regroups it. Places no orders, writes nothing, publishes nothing, uses no
+# secrets, and touches neither Polymarket nor the application's database.
+#
+# Asked for: a dip combination that both fires often enough to be a portfolio and ends in
+# profit. The published report sweeps the entry level against a fixed 70-99% opening band
+# and never reports how often a combination would have fired, so it cannot answer either
+# half of that on its own.
+on:
+  workflow_dispatch:
+    inputs:
+      tags:
+        description: "Comma-separated Polymarket tags whose backtest cache to read"
+        required: false
+        default: "esports,counter-strike-2,soccer,league-of-legends,dota-2,valorant"
+        type: string
+      buy_floors:
+        description: "Comma-separated buy floors to try, 0 means no floor"
+        required: false
+        default: "0,0.2,0.25,0.3"
+        type: string
+      min_trades:
+        description: "Fewest trades a combination may have and still be recommended"
+        required: false
+        default: "20"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Sweep the opening and buy bands together
+        working-directory: trading
+        env:
+          DIP_SWEEP_TAGS: ${{ inputs.tags }}
+          DIP_SWEEP_BUY_FLOORS: ${{ inputs.buy_floors }}
+          DIP_SWEEP_MIN_TRADES: ${{ inputs.min_trades }}
+        run: node tools/dip-combination-sweep.mjs
