@@ -1,0 +1,127 @@
+{
+  "ok": true,
+  "woocommerce_currency": "CZK",
+  "product_meta_keys": [
+    {
+      "meta_key": "_alg_currency_switcher_per_product_regular_price_EUR",
+      "entries": "4",
+      "products": "4"
+    },
+    {
+      "meta_key": "_alg_currency_switcher_per_product_regular_price_PLN",
+      "entries": "4",
+      "products": "4"
+    },
+    {
+      "meta_key": "_alg_currency_switcher_per_product_sale_price_EUR",
+      "entries": "4",
+      "products": "4"
+    },
+    {
+      "meta_key": "_alg_currency_switcher_per_product_sale_price_PLN",
+      "entries": "4",
+      "products": "4"
+    }
+  ],
+  "examples": {
+    "_alg_currency_switcher_per_product_regular_price_EUR": [
+      {
+        "product_id": 17,
+        "value": ""
+      },
+      {
+        "product_id": 18,
+        "value": ""
+      },
+      {
+        "product_id": 19,
+        "value": ""
+      },
+      {
+        "product_id": 20,
+        "value": ""
+      },
+      {
+        "product_id": 24,
+        "value": "44"
+      }
+    ],
+    "_alg_currency_switcher_per_product_regular_price_PLN": [
+      {
+        "product_id": 17,
+        "value": ""
+      },
+      {
+        "product_id": 18,
+        "value": ""
+      },
+      {
+        "product_id": 19,
+        "value": ""
+      },
+      {
+        "product_id": 20,
+        "value": ""
+      },
+      {
+        "product_id": 24,
+        "value": ""
+      }
+    ],
+    "_alg_currency_switcher_per_product_sale_price_EUR": [
+      {
+        "product_id": 17,
+        "value": ""
+      },
+      {
+        "product_id": 18,
+        "value": ""
+      },
+      {
+        "product_id": 19,
+        "value": ""
+      },
+      {
+        "product_id": 20,
+        "value": ""
+      },
+      {
+        "product_id": 24,
+        "value": "36"
+      }
+    ],
+    "_alg_currency_switcher_per_product_sale_price_PLN": [
+      {
+        "product_id": 17,
+        "value": ""
+      },
+      {
+        "product_id": 18,
+        "value": ""
+      },
+      {
+        "product_id": 19,
+        "value": ""
+      },
+      {
+        "product_id": 20,
+        "value": ""
+      },
+      {
+        "product_id": 24,
+        "value": ""
+      }
+    ]
+  },
+  "sample_product_id": 4528,
+  "sample_product_meta": [
+    {
+      "meta_key": "_price",
+      "meta_value": "160"
+    },
+    {
+      "meta_key": "_regular_price",
+      "meta_value": "160"
+    }
+  ]
+}
