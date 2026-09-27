@@ -7502,14 +7502,26 @@ function dip_backtest_source_token(array $item): string
 function dip_backtest_source_row(array $item): ?array
 {
     $token = dip_backtest_source_token($item);
-    $final = $item['finalOutcomePrice'] ?? null;
-    if ($token === '' || !is_numeric($final)) {
+    if ($token === '') {
         return null;
     }
-    $final = (float) $final;
-    if ($final > 0.005 && $final < 0.995) {
+    // The same proof the folded resolved statistics require, and for the same reason: this
+    // used to read finalOutcomePrice raw, which is graded against whichever side was priced
+    // at the time the row was captured -- not proven to be the side that actually settled.
+    //
+    // Reported by sampling a swept cell that looked far too profitable to believe: "Exact
+    // Score: Maranhao AC MA 0 - 1 Brusque FC SC?" and "Exact Score: Maranhao AC MA 3 - 1
+    // Brusque FC SC?" -- two mutually exclusive props on the SAME fixture -- both came out
+    // of this feed as finalOutcomePrice 1, i.e. both WIN. Only one final score can happen,
+    // so at least one of those was never proven to have settled on the side it was priced.
+    // resolved_stats_settled_outcome() is the fix already proven for the same fault in the
+    // folded stats; a row it cannot prove is excluded here exactly as it is excluded there,
+    // rather than trusted.
+    $settled = resolved_stats_settled_outcome($item);
+    if ($settled === null) {
         return null;
     }
+    $final = (float) $settled;
     // This is deliberately a compact public record. The history worker needs identity,
     // timing, settlement and stored fee metadata -- not the large scraper audit blob.
     return [
