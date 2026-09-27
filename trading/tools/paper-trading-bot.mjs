@@ -3581,7 +3581,16 @@ function expirePastEvaluations(evaluations = []) {
 }
 
 function evaluationResolutionSlug(item) {
-  return String(item?.slug || item?.eventSlug || "").trim();
+  // eventSlug is shared by every sibling market of the same fixture (all its "Exact Score"
+  // props, its spreads, its totals). outcomeIndexForTrade below matches a binary market by
+  // its generic "Yes"/"No" outcome text, which cannot tell one sibling from another -- so
+  // falling back to eventSlug here used to fetch whichever OTHER market Gamma happened to
+  // return for that slug (typically the fixture's own moneyline market) and grade this row
+  // against it. Read off the archive: seven mutually exclusive "Exact Score" markets for one
+  // match, all recorded WIN, all carrying the winning team's moneyline opening/dip/resolution
+  // instead of their own. A row without its own slug cannot be identified, so it is left
+  // unresolved rather than matched to a market that is not provably its own.
+  return String(item?.slug || "").trim();
 }
 
 function resolutionSyncPriority(item) {
@@ -3746,7 +3755,10 @@ async function refreshStoredEvaluationResolutionStatuses(evaluations = []) {
 }
 
 function marketObservationResolutionSlug(item) {
-  return String(item?.slug || item?.eventSlug || "").trim();
+  // See evaluationResolutionSlug's comment: eventSlug is shared by every sibling market of
+  // one fixture, so using it here to look up THIS row's own market risks fetching a
+  // different sibling instead and grading this row on its settlement.
+  return String(item?.slug || "").trim();
 }
 
 function marketObservationResolutionSyncPriority(item) {
