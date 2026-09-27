@@ -269,16 +269,20 @@ button:disabled {
 }
 
 .portfolio-summary-current .positive {
-  color: #bbf7d0;
+  color: #bbf7d0 !important;
 }
 
 .portfolio-summary-current .negative {
-  color: #fecaca;
+  color: #fecaca !important;
 }
 
 /* Same reason as the tab border: a live row spends real money. */
 .portfolio-summary-live .portfolio-summary-link {
   color: var(--danger);
+}
+
+.portfolio-summary-current.portfolio-summary-live .portfolio-summary-link {
+  color: #ffffff;
 }
 
 /* Two live portfolios trading one Polymarket account report the same account capital.

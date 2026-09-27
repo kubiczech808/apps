@@ -1922,8 +1922,12 @@ test("dashboard: the selected portfolio row is dark and remains readable", () =>
     "the selected portfolio name must remain readable and clickable");
   assert.match(CSS, /\.portfolio-summary-current \.portfolio-summary-note\s*\{\s*color:\s*#c7ece7;/,
     "the shared-account note needs its own readable contrast on the dark row");
-  assert.match(CSS, /\.portfolio-summary-current \.positive\s*\{\s*color:\s*#bbf7d0;/);
-  assert.match(CSS, /\.portfolio-summary-current \.negative\s*\{\s*color:\s*#fecaca;/);
+  assert.match(CSS, /\.portfolio-summary-current \.positive\s*\{\s*color:\s*#bbf7d0 !important;/,
+    "the global gain colour cannot override the readable colour on a dark selected row");
+  assert.match(CSS, /\.portfolio-summary-current \.negative\s*\{\s*color:\s*#fecaca !important;/,
+    "the global loss colour cannot override the readable colour on a dark selected row");
+  assert.match(CSS, /\.portfolio-summary-current\.portfolio-summary-live \.portfolio-summary-link\s*\{\s*color:\s*#ffffff;/,
+    "a selected live portfolio must not inherit the ordinary orange live-row title colour");
 });
 
 // Reported: the "stop loss" (Equal) portfolio's Rotation row still showed an old value.
