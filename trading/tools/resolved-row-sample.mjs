@@ -152,6 +152,25 @@ async function main() {
       + ` ${String(group.wideSpread).padStart(6)}  ${pct(group.winRate)} ${pct(group.meanEntry)}`);
   }
 
+  // The rows that were DROPPED, when few or none survive. A count of "782 after due" is a
+  // summary of something that has to be looked at: the dates it compares are rewritten at
+  // resolution, so "after due" can mean the row was late OR that its due date moved.
+  const dropped = rows.filter((row) => !counted(gateRow(row)));
+  if (dropped.length && stats.counted < dropped.length) {
+    console.log(`\n   dropped rows, with every date they carry:`);
+    console.log(`   first seen            endDate               resolutionEnd         scheduledEvent        late(h)  question`);
+    for (const row of dropped.slice(0, SHOW)) {
+      const seen = Date.parse(String(row?.firstObservedAt || ""));
+      const due = Date.parse(String(row?.resolutionEndDate || row?.endDate || ""));
+      const late = Number.isFinite(seen) && Number.isFinite(due) ? (seen - due) / 3600000 : null;
+      console.log(`   ${String(row?.firstObservedAt || "-").slice(0, 19).padEnd(21)}`
+        + ` ${String(row?.endDate || "-").slice(0, 19).padEnd(21)}`
+        + ` ${String(row?.resolutionEndDate || "-").slice(0, 19).padEnd(21)}`
+        + ` ${String(row?.scheduledEventDate || "-").slice(0, 19).padEnd(21)}`
+        + ` ${late == null ? "     -" : late.toFixed(1).padStart(6)}  ${String(row?.question || "").slice(0, 46)}`);
+    }
+  }
+
   console.log(`\n   entry  settled  flip  spread  first seen            due                   question`);
   for (const { row, gate } of stats.kept.slice(0, SHOW)) {
     console.log(`   ${pct(gate.entry)} ${String(gate.outcome).padStart(8)} ${gate.flipped ? " yes" : "  no"}`
