@@ -36,13 +36,14 @@ on:
         required: false
         default: "MANUAL"
         type: string
-  schedule:
-    # The portfolio decides whether a scheduled run does anything: the executor
-    # skips it when automation is off, and honours its own cadence when set. Away
-    # from the top of the hour so it does not queue behind every other job.
-    # A heartbeat, once an hour: the scan's post-scrape dispatch wakes this portfolio
-    # on its own saved cadence, and a second scheduled entry delivered nothing extra.
-    - cron: '37 * * * *'
+  # EMERGENCY STOP -- 2026-09-27, schedule disabled alongside the forced dry-run below.
+  # schedule:
+  #   # The portfolio decides whether a scheduled run does anything: the executor
+  #   # skips it when automation is off, and honours its own cadence when set. Away
+  #   # from the top of the hour so it does not queue behind every other job.
+  #   # A heartbeat, once an hour: the scan's post-scrape dispatch wakes this portfolio
+  #   # on its own saved cadence, and a second scheduled entry delivered nothing extra.
+  #   - cron: '37 * * * *'
 
 # The state files are separate, but every live strategy shares one funded wallet
 # and one constrained hosting account. Serialize every state-writing run with the
@@ -289,7 +290,14 @@ jobs:
         id: execute
         working-directory: trading
         env:
-          POLYMARKET_DRY_RUN: ${{ (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && (inputs.live_confirm == true || inputs.live_confirm == 'true'))) && 'false' || 'true' }}
+          # EMERGENCY STOP -- 2026-09-27. Reported: the live account was opening positions
+          # and having them stopped out roughly hourly. Forced to dry-run regardless of how
+          # this workflow is invoked -- its own cron, a manual dispatch, or the scan's
+          # post-scrape wake-up in dispatch-after-scan.mjs -- until a human restores the
+          # expression below and removes this line. Nothing else about this job changes:
+          # it still runs, evaluates candidates and logs what it would have done.
+          POLYMARKET_DRY_RUN: 'true'
+          # POLYMARKET_DRY_RUN: ${{ (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && (inputs.live_confirm == true || inputs.live_confirm == 'true'))) && 'false' || 'true' }}
           LIVE_STATE_URL: data/live-state.json
           LIVE_EXECUTION_STATE_URL: data/live-5050-execution-state.json
         run: npm run live:execute -- --confirm-live

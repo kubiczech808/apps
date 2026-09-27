@@ -84,20 +84,21 @@ on:
         required: false
         default: ""
         type: string
-  schedule:
-    # GitHub Actions schedules can be delayed or dropped. Poll every ten minutes
-    # away from the top of the hour; every run may place a new eligible order.
-    # A heartbeat, not the pace. GitHub drops a scheduled run that is still delayed
-    # when the same entry comes due again, and this repository asks for ~53 scheduled
-    # runs an hour across its workflows -- measured, this one was configured for six an
-    # hour and delivered three in a day, while every dispatch in the same window
-    # succeeded. The cadence now comes from the post-scrape dispatch, which wakes this
-    # portfolio after each scan and lets its own saved cadence decide whether to act.
-    # What is left here restarts that chain if it ever breaks.
-    # A heartbeat, once an hour. Live execution is woken by the scan's post-scrape
-    # dispatch, which honours each portfolio's saved cadence and automation switch;
-    # this entry only covers the chain having stopped altogether.
-    - cron: '13 * * * *'
+  # EMERGENCY STOP -- 2026-09-27, disabled alongside the forced dry-run above.
+  # schedule:
+  #   # GitHub Actions schedules can be delayed or dropped. Poll every ten minutes
+  #   # away from the top of the hour; every run may place a new eligible order.
+  #   # A heartbeat, not the pace. GitHub drops a scheduled run that is still delayed
+  #   # when the same entry comes due again, and this repository asks for ~53 scheduled
+  #   # runs an hour across its workflows -- measured, this one was configured for six an
+  #   # hour and delivered three in a day, while every dispatch in the same window
+  #   # succeeded. The cadence now comes from the post-scrape dispatch, which wakes this
+  #   # portfolio after each scan and lets its own saved cadence decide whether to act.
+  #   # What is left here restarts that chain if it ever breaks.
+  #   # A heartbeat, once an hour. Live execution is woken by the scan's post-scrape
+  #   # dispatch, which honours each portfolio's saved cadence and automation switch;
+  #   # this entry only covers the chain having stopped altogether.
+  #   - cron: '13 * * * *'
 
 concurrency:
   # Every live portfolio uses the same funded wallet and the same constrained hosting.
@@ -357,7 +358,13 @@ jobs:
           # NaN -- while the bare value alone accepts any non-empty string. Together they
           # are true for exactly the two ways of asking for a live order, and false for
           # everything else including an absent input.
-          POLYMARKET_DRY_RUN: ${{ ((github.event_name == 'workflow_dispatch' && (inputs.live_confirm == true || inputs.live_confirm == 'true')) || github.event_name == 'schedule' || (github.event_name == 'push' && contains(github.event.head_commit.message, '[live-limit-order-test]'))) && 'false' || 'true' }}
+          # EMERGENCY STOP -- 2026-09-27. Reported: the live account was opening positions
+          # and having them stopped out roughly hourly. Forced to dry-run regardless of how
+          # this workflow is invoked -- its own cron, a manual dispatch, or the scan's
+          # post-scrape wake-up in dispatch-after-scan.mjs -- until a human restores the
+          # expression below and removes this line.
+          POLYMARKET_DRY_RUN: 'true'
+          # POLYMARKET_DRY_RUN: ${{ ((github.event_name == 'workflow_dispatch' && (inputs.live_confirm == true || inputs.live_confirm == 'true')) || github.event_name == 'schedule' || (github.event_name == 'push' && contains(github.event.head_commit.message, '[live-limit-order-test]'))) && 'false' || 'true' }}
           # The preceding sync has just fetched the CLOB balance and open
           # orders. Execute against that local snapshot, not a potentially
           # older copy that is still being served from the hosting.
@@ -408,7 +415,13 @@ jobs:
         if: always() && env.LIVE_AUTO_ROTATE != 'false'
         working-directory: trading
         env:
-          POLYMARKET_DRY_RUN: ${{ ((github.event_name == 'workflow_dispatch' && (inputs.live_confirm == true || inputs.live_confirm == 'true')) || github.event_name == 'schedule' || (github.event_name == 'push' && contains(github.event.head_commit.message, '[live-limit-order-test]'))) && 'false' || 'true' }}
+          # EMERGENCY STOP -- 2026-09-27. Reported: the live account was opening positions
+          # and having them stopped out roughly hourly. Forced to dry-run regardless of how
+          # this workflow is invoked -- its own cron, a manual dispatch, or the scan's
+          # post-scrape wake-up in dispatch-after-scan.mjs -- until a human restores the
+          # expression below and removes this line.
+          POLYMARKET_DRY_RUN: 'true'
+          # POLYMARKET_DRY_RUN: ${{ ((github.event_name == 'workflow_dispatch' && (inputs.live_confirm == true || inputs.live_confirm == 'true')) || github.event_name == 'schedule' || (github.event_name == 'push' && contains(github.event.head_commit.message, '[live-limit-order-test]'))) && 'false' || 'true' }}
           # Tells the executor this pass is the second half of a rotation, so the sell
           # and the replacement buy are recorded as one run instead of two rows.
           LIVE_ROTATION_COMPLETION: "true"
