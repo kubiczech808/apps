@@ -1,0 +1,37 @@
+name: Trading Risk Group Check
+
+# Read-only diagnostic, manual only. Places no orders, writes nothing, uses no secrets.
+#
+# Shows what actually links two markets in the diversification rule. Reported with two
+# screenshots: "Will Israel win on 2026-09-27?" and "Will Republic of Ireland win on
+# 2026-09-27?" both sat in the candidates list, both on the No side, both ending 20:45.
+# They are the two sides of one match, and a portfolio that takes both has one bet.
+#
+# Reads one page of the ACTIVE catalogue, the same request the dashboard makes.
+on:
+  workflow_dispatch:
+    inputs:
+      questions:
+        description: "Comma-separated question fragments to look for"
+        required: false
+        default: "israel,republic of ireland"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Show what links the matching rows
+        working-directory: trading
+        env:
+          QUESTION_FILTERS: ${{ inputs.questions }}
+        run: node tools/risk-group-check.mjs
