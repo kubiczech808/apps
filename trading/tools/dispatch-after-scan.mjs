@@ -139,7 +139,9 @@ export function plannedDispatches(config = {}, {
   // Rotate the one permitted live dispatch through the eligible portfolios instead.
   // The default remains unlimited for callers that explicitly inspect the complete plan.
   const selectedLive = boundedLiveDispatches(livePlans, liveSlot, maxLiveDispatches);
-  return liveOnly ? selectedLive : [...planned, ...selectedLive];
+  // The self-hosted runner can take only one executor at a time. Dispatch live first so
+  // an otherwise harmless paper pass cannot take the runner while a live price moves.
+  return liveOnly ? selectedLive : [...selectedLive, ...planned];
 }
 
 async function main() {

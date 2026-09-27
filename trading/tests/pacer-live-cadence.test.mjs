@@ -118,6 +118,8 @@ test("the live-only tick wakes the live portfolios and nothing else", () => {
   // What a scan tick does, unchanged.
   const full = plannedDispatches(config).map((entry) => entry.workflow);
   assert.ok(full.includes("trading-paper-bot.yml"), "a scan still wakes the paper bot");
+  assert.equal(full[0], "polymarket-live-limit-order-test.yml",
+    "live execution is dispatched before paper when the runner has both to do");
 
   const live = plannedDispatches(config, { liveOnly: true });
   assert.deepEqual(live.map((entry) => entry.workflow), [
