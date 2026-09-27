@@ -329,6 +329,14 @@ async function main() {
     printTable("ALL resolved, by entry probability", groupBy(everything, probabilityBand));
     printTable("ALL resolved, by market shape", groupBy(everything, (trade) => trade.shape));
     printTable("ALL resolved, by entry volume", groupBy(everything, (trade) => volumeBucket(trade.entryVolume)));
+    // Also here, not only in each portfolio's own section. The per-portfolio tables are
+    // printed first and a job log can only be read from the end, so on a run covering
+    // several portfolios the timing tables were unreachable -- present in the output and
+    // impossible to read. Repeating them over the pooled set costs nothing and makes the
+    // answer available wherever the log is truncated.
+    printTable("ALL resolved, by HOURS BEFORE RESOLUTION at entry", groupBy(everything, entryTimingBucket));
+    printTable("ALL resolved, by SHAPE x hours before resolution",
+      groupBy(everything, (trade) => `${trade.shape} / ${entryTimingBucket(trade)}`));
 
     profitableBreakdown(everything);
   }
