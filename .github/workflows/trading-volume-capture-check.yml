@@ -1,0 +1,31 @@
+name: Trading Volume Capture Check
+
+# Read-only diagnostic, manual only. Places no orders, writes nothing, uses no secrets.
+#
+# Asks whether volume is actually being stored on markets the scan is scraping now. The
+# folded statistics carry no volume dimension at all, so the catalogue rows are the only
+# place a volume rule could ever come from -- and a field that silently lands as 0 reads as
+# "no volume" rather than as "not captured", which is the worse of the two failures.
+#
+# Reads Gamma's nested markets (the shape the scan actually pages) and ONE page of the
+# active catalogue -- never the resolved scope, which is the read that exhausted the host's
+# memory limit on a live request.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Check volume capture on newly scraped markets
+        working-directory: trading
+        run: node tools/volume-capture-check.mjs
