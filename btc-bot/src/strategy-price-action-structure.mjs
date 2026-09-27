@@ -4,7 +4,7 @@ import { buildExternalTrendReference, EXTERNAL_PIVOT_SCHEMA } from './external-t
 import { buildFvgSupplyDemandZones, candleSignal, marketStructure } from './priceaction.mjs'
 
 export const PRICE_ACTION_STRUCTURE_ID = 'price-action-structure-v1'
-export const PRICE_ACTION_MATRIX_SCHEMA = 66
+export const PRICE_ACTION_MATRIX_SCHEMA = 67
 export const PRICE_ACTION_CHART_CANDLE_LIMITS = {
   // The zone and structure inputs below remain much longer. These limits only
   // bound chart data published to the browser, where a 60-day 1H / 180-day
@@ -2037,27 +2037,51 @@ const sameSourcePivot = (left, right) => (
 // anchors must sit on that stream's actual wick.  A vendor can legitimately
 // quote a different intraday extreme for the same session; drawing its wick
 // over another candle would make the Fibonacci range impossible to audit.
-const projectExternalPivotToChart = ({ pivot, pivots = [], candles = [] } = {}) => {
+const projectExternalPivotToChart = ({ pivot, pivots = [], candles = [], timeframeId = null } = {}) => {
+  const intervalMs = (PRICE_ACTION_TIMEFRAMES.find((item) => item.id === timeframeId)?.hours ?? 1) * HOUR_MS
   const sorted = [...pivots].sort((left, right) => left.time - right.time)
-  const latestTime = candles.at(-1)?.time
   const exactIndex = sorted.findIndex((candidate) => (
     candidate.kind === pivot.kind && candidate.time === pivot.time
   ))
-  const before = exactIndex >= 0
-    ? sorted[exactIndex - 1]
-    : [...sorted].reverse().find((candidate) => candidate.time < pivot.time)
-  const after = exactIndex >= 0
-    ? sorted[exactIndex + 1]
-    : sorted.find((candidate) => candidate.time > pivot.time)
-  const from = before?.time ?? pivot.time
-  const to = after?.time ?? latestTime
-  const candidates = candles.filter((candle) => candle.time >= from && candle.time <= to)
-  if (!candidates.length) return { ...pivot, sourceTime: pivot.time, sourcePrice: pivot.price }
-  const extreme = candidates.reduce((selected, candle) => (
-    pivot.kind === 'high'
-      ? candle.high > selected.high ? candle : selected
-      : candle.low < selected.low ? candle : selected
-  ))
+  const before = exactIndex > 0 ? sorted[exactIndex - 1] : null
+  const after = exactIndex >= 0 ? sorted[exactIndex + 1] : null
+  // With the pivot's own neighbouring source anchor present, the entire
+  // source wave is valid evidence for choosing the local vendor's exact wick.
+  // This reconciles small OHLC differences without changing the wave itself.
+  if (exactIndex >= 0 && (before || after)) {
+    const from = before?.time ?? pivot.time
+    const to = after?.time ?? pivot.time
+    const waveCandles = candles.filter((candle) => candle.time >= from && candle.time <= to)
+    if (waveCandles.length) {
+      const extreme = waveCandles.reduce((selected, candle) => (
+        pivot.kind === 'high'
+          ? candle.high > selected.high ? candle : selected
+          : candle.low < selected.low ? candle : selected
+      ))
+      return {
+        ...pivot,
+        sourceTime: pivot.time,
+        sourcePrice: pivot.price,
+        time: extreme.time,
+        price: pivot.kind === 'high' ? extreme.high : extreme.low,
+        close: extreme.close,
+        extreme: pivot.kind === 'high' ? extreme.high : extreme.low,
+      }
+    }
+  }
+  const nearest = candles.reduce((selected, candle) => {
+    const distance = Math.abs(candle.time - pivot.time)
+    return !selected || distance < selected.distance ? { candle, distance } : selected
+  }, null)
+  // An active range may retain an older source anchor after the audit list was
+  // trimmed. Never expand that anchor over the gap to a later pivot: it can
+  // select an unrelated wick and draw a false structural line. One matching
+  // chart candle (allowing for a source bucket offset) is the only valid
+  // geometry for the displayed pivot in that incomplete audit context.
+  if (!nearest || nearest.distance > intervalMs * 1.5) {
+    return { ...pivot, sourceTime: pivot.time, sourcePrice: pivot.price }
+  }
+  const extreme = nearest.candle
   return {
     ...pivot,
     sourceTime: pivot.time,
@@ -2069,12 +2093,12 @@ const projectExternalPivotToChart = ({ pivot, pivots = [], candles = [] } = {}) 
   }
 }
 
-const projectExternalPivotsToChart = ({ pivots = [], candles = [] } = {}) => {
+const projectExternalPivotsToChart = ({ pivots = [], candles = [], timeframeId = null } = {}) => {
   const sorted = [...pivots].sort((left, right) => left.time - right.time)
-  return sorted.map((pivot) => projectExternalPivotToChart({ pivot, pivots: sorted, candles }))
+  return sorted.map((pivot) => projectExternalPivotToChart({ pivot, pivots: sorted, candles, timeframeId }))
 }
 
-const chartRangeFromExternalPivots = ({ range, pivots = [], projectedPivots = [], candles = [] } = {}) => {
+const chartRangeFromExternalPivots = ({ range, pivots = [], projectedPivots = [], candles = [], timeframeId = null } = {}) => {
   if (!range) return null
   const projectedBySource = new Map(projectedPivots.map((pivot) => [
     sourcePivotKey({ kind: pivot.kind, time: pivot.sourceTime ?? pivot.time }),
@@ -2084,7 +2108,7 @@ const chartRangeFromExternalPivots = ({ range, pivots = [], projectedPivots = []
     const projected = projectedBySource.get(sourcePivotKey(pivot))
     return projected
       ? { ...projected, label: pivot.label }
-      : { ...projectExternalPivotToChart({ pivot, pivots, candles }), label: pivot.label }
+      : { ...projectExternalPivotToChart({ pivot, pivots, candles, timeframeId }), label: pivot.label }
   }
   const high = projectEndpoint(range.high)
   const low = projectEndpoint(range.low)
@@ -2135,7 +2159,8 @@ export const classifyExternalStructure = ({
   })
   const high = externalPivotLeg(pivots, 'high')
   const low = externalPivotLeg(pivots, 'low')
-  const projectedPivots = projectExternalPivotsToChart({ pivots, candles: normalizedCandles })
+  const timeframeId = externalPivots?.timeframeId ?? null
+  const projectedPivots = projectExternalPivotsToChart({ pivots, candles: normalizedCandles, timeframeId })
   const requestedTrend = externalPivots?.trend
   const trend = requestedTrend === 'up' || requestedTrend === 'down' ? requestedTrend : 'flat'
   const expectedHigh = trend === 'up' ? 'HH' : trend === 'down' ? 'LH' : null
@@ -2164,6 +2189,7 @@ export const classifyExternalStructure = ({
     pivots,
     projectedPivots,
     candles: normalizedCandles,
+    timeframeId,
   })
   const chartPivots = completedWave.chartPivots.map((pivot) => {
     const activeEndpoint = pivot.kind === 'high' && pivot.time === completedWave.activeRange?.high?.time

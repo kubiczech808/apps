@@ -15,7 +15,7 @@ export const EXTERNAL_PIVOT_METHOD = 'Potvrzené 10-svíčkové pivoty z extern�
 // Bump this whenever pivot geometry or confirmation changes. Cached external
 // references are executable strategy input, so a same-hour cache must never
 // preserve the old interpretation after such a change.
-export const EXTERNAL_PIVOT_SCHEMA = 4
+export const EXTERNAL_PIVOT_SCHEMA = 5
 export const EXTERNAL_PIVOT_PERIOD = 10
 export const EXTERNAL_PIVOT_FALLBACK_PERIOD = 5
 export const EXTERNAL_PIVOT_OUTPUTSIZE = 2000
@@ -251,8 +251,14 @@ const terminalWaveExtreme = ({ candles, after, kind }) => {
 // the old HH/LL: a local counter-swing may not replace this Fibonacci anchor.
 const latestBreakOfStructure = ({ pivots = [], candles = [] } = {}) => {
   const events = []
-  for (const { start, end } of completedDirectionalLegs(pivots, 'up')) {
+  const upLegs = completedDirectionalLegs(pivots, 'up')
+  const downLegs = completedDirectionalLegs(pivots, 'down')
+  for (const { start, end } of upLegs) {
     const breakCandle = firstClosingBreak({ candles, after: end.time, level: start.price, direction: 'down' })
+    // A completed newer HL -> HH wave takes over the protected low. A late
+    // close through an older HL is continuation of the newer structure, not a
+    // fresh BoS whose Fibonacci range may reach back several months.
+    if (breakCandle && upLegs.some((leg) => leg.end.time > end.time && leg.end.time < breakCandle.time)) continue
     const low = breakCandle && terminalWaveExtreme({ candles, after: breakCandle.time, kind: 'low' })
     if (breakCandle && low && end.price > low.price) {
       events.push({
@@ -269,8 +275,10 @@ const latestBreakOfStructure = ({ pivots = [], candles = [] } = {}) => {
       })
     }
   }
-  for (const { start, end } of completedDirectionalLegs(pivots, 'down')) {
+  for (const { start, end } of downLegs) {
     const breakCandle = firstClosingBreak({ candles, after: end.time, level: start.price, direction: 'up' })
+    // Symmetric rule for a delayed close above an obsolete LH.
+    if (breakCandle && downLegs.some((leg) => leg.end.time > end.time && leg.end.time < breakCandle.time)) continue
     const high = breakCandle && terminalWaveExtreme({ candles, after: breakCandle.time, kind: 'high' })
     if (breakCandle && high && high.price > end.price) {
       events.push({
@@ -354,9 +362,11 @@ export const classifyExternalPivotPath = (pivots = [], { candles = [] } = {}) =>
   // externally confirmed LH -> LL / HL -> HH wave follows it, that newer
   // paired wave is the sole active pullback range. Without this hand-off a
   // months-old HH could be connected to today's LL.
-  const continuation = event
-    ? latestDirectionalContinuation({ pivots: path, trend, after: event.time })
-    : null
+  const continuation = latestDirectionalContinuation({
+    pivots: path,
+    trend,
+    after: event?.time ?? -Infinity,
+  })
   const continuationRange = continuation ? directionalRangeFromLeg(continuation, trend) : null
   return {
     trend,

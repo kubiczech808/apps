@@ -274,6 +274,42 @@ test('externally confirmed pivot anchors use the actual extrema of the displayed
   ])
 })
 
+test('an omitted historical source pivot cannot project onto a later unrelated chart wick', () => {
+  const fourHours = 4 * HOUR
+  const result = classifyExternalStructure({
+    candles: [
+      candle(START, 100, 101, 99, 100),
+      candle(START + fourHours, 120, 150, 119, 121),
+      candle(START + 2 * fourHours, 81, 82, 79, 80),
+    ],
+    externalPivots: {
+      trend: 'down',
+      source: 'Twelve Data',
+      timeframeId: '4h',
+      activeRange: {
+        high: { kind: 'high', label: 'HH', price: 100, close: 99, time: START },
+        low: { kind: 'low', label: 'LL', price: 80, close: 80, time: START + 2 * fourHours },
+        source: 'external-break-of-structure',
+      },
+      // The older HH is deliberately absent, as happens after pivot audit
+      // history is trimmed while a BoS range still retains its anchor.
+      pivots: [{ kind: 'low', label: 'LL', price: 80, close: 80, time: START + 2 * fourHours }],
+      chartPivots: [
+        { kind: 'high', label: 'HH', price: 100, time: START },
+        { kind: 'low', label: 'LL', price: 80, time: START + 2 * fourHours },
+      ],
+    },
+  })
+
+  assert.equal(result.structure.activeRange.high.price, 101)
+  assert.equal(result.structure.activeRange.high.time, START)
+  assert.notEqual(result.structure.activeRange.high.price, 150)
+  assert.deepEqual(result.structure.chartPivots.map((pivot) => [pivot.label, pivot.time, pivot.price]), [
+    ['HH', START, 101],
+    ['LL', START + 2 * fourHours, 79],
+  ])
+})
+
 test('external active range does not combine an unpaired newer pivot with an older leg', () => {
   const result = classifyExternalStructure({
     externalPivots: {

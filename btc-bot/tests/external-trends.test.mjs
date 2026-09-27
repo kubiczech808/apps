@@ -213,6 +213,41 @@ test('a completed continuation replaces the old BoS anchor with the current dire
   assert.deepEqual(up.chartPivots.map((pivot) => pivot.label), ['HH', 'HL', 'HH'])
 })
 
+test('a delayed close cannot revive an obsolete protected HL after a newer up wave', () => {
+  const pivots = [
+    { kind: 'high', price: 100, close: 99, time: START },
+    { kind: 'low', price: 80, close: 81, time: START + HOUR },
+    { kind: 'high', price: 110, close: 111, time: START + 2 * HOUR },
+    { kind: 'low', price: 95, close: 96, time: START + 3 * HOUR },
+    { kind: 'high', price: 120, close: 121, time: START + 4 * HOUR },
+    { kind: 'low', price: 105, close: 106, time: START + 5 * HOUR },
+    { kind: 'high', price: 125, close: 126, time: START + 6 * HOUR },
+    { kind: 'low', price: 100, close: 99, time: START + 7 * HOUR },
+    { kind: 'high', price: 115, close: 114, time: START + 8 * HOUR },
+    { kind: 'low', price: 90, close: 89, time: START + 9 * HOUR },
+  ]
+  const candles = pivots.map((pivot) => ({
+    time: pivot.time,
+    open: pivot.close,
+    high: pivot.kind === 'high' ? pivot.price : pivot.close + 1,
+    low: pivot.kind === 'low' ? pivot.price : pivot.close - 1,
+    close: pivot.close,
+  }))
+  const path = classifyExternalPivotPath(pivots, { candles })
+
+  assert.equal(path.trend, 'down')
+  assert.equal(path.event.type, 'BOS_DOWN')
+  assert.equal(path.event.time, START + 7 * HOUR)
+  assert.equal(path.event.protectedPivot.price, 105)
+  assert.deepEqual(
+    [path.activeRange.high.label, path.activeRange.high.price, path.activeRange.low.label, path.activeRange.low.price],
+    ['LH', 115, 'LL', 90]
+  )
+  assert.deepEqual(path.chartPivots.map((pivot) => [pivot.label, pivot.price]), [
+    ['LL', 100], ['LH', 115], ['LL', 90],
+  ])
+})
+
 test('Twelve Data OHLC produces a confirmed independent pivot path without the premium indicator', () => {
   const candles = Array.from({ length: 60 }, (_, index) => ({
     time: START + index * HOUR,
