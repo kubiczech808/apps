@@ -26,6 +26,16 @@ on:
         required: false
         default: "threshold"
         type: string
+      rank_combinations:
+        description: "true = the Setup finder's own tag/shape/threshold ranking"
+        required: false
+        default: "false"
+        type: string
+      min_trades:
+        description: "Minimum settled trades a combination needs to be listed"
+        required: false
+        default: "30"
+        type: string
 
 permissions:
   contents: read
@@ -46,4 +56,6 @@ jobs:
           MARKET_TAGS: ${{ inputs.tags }}
           MARKET_SHAPE: ${{ inputs.shape }}
           ANALYSIS_MODE: ${{ inputs.mode }}
+          RANK_COMBINATIONS: ${{ inputs.rank_combinations }}
+          MIN_TRADES: ${{ inputs.min_trades }}
         run: node tools/tag-probability-query.mjs

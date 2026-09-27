@@ -73,7 +73,52 @@ function describe(payload) {
   }
 }
 
+// The Setup finder's own ranking. Reads the stored fold first and the archive only if no
+// fold exists, so it is the cheap path AND the guarded one -- unlike the archive scan this
+// tool replaced, which had neither property.
+async function combinations() {
+  const minTrades = Number(process.env.MIN_TRADES || 30);
+  const limit = Number(process.env.RESULT_LIMIT || 60);
+  const url = `${HOST}/api.php?action=resolved-combinations&min_trades=${minTrades}&limit=${limit}`;
+  const response = await fetch(url);
+  const text = await response.text();
+  if (!response.ok) {
+    console.log(`   !! HTTP ${response.status}: ${text.slice(0, 300)}`);
+    return;
+  }
+  let payload;
+  try { payload = JSON.parse(text); } catch { console.log(`   !! ${text.slice(0, 300)}`); return; }
+  console.log(`   keys: ${Object.keys(payload).join(", ")}`);
+  for (const field of ["ok", "statsSource", "source", "count", "minTrades", "foldedAt"]) {
+    if (payload?.[field] !== undefined) console.log(`   ${field}: ${JSON.stringify(payload[field])}`);
+  }
+  const rows = ["combinations", "rows", "results"].map((f) => payload?.[f]).find(Array.isArray);
+  if (!rows?.length) {
+    console.log(`   no rows: ${JSON.stringify(payload).slice(0, 600)}`);
+    return;
+  }
+  console.log(`\n   tag                      shape          from    n   win%       P/L    per $`);
+  for (const row of rows.slice(0, limit)) {
+    const n = num(row.trades ?? row.count ?? row.n);
+    const wins = num(row.wins ?? row.won);
+    const pnl = num(row.pnlUsdc ?? row.pnl ?? row.profitUsdc);
+    const staked = num(row.stakedUsdc ?? row.costUsdc);
+    console.log(`   ${String(row.tag ?? "-").slice(0, 24).padEnd(24)}`
+      + ` ${String(row.shape ?? row.eventType ?? "*").slice(0, 13).padEnd(13)}`
+      + ` ${row.probability ?? row.entry ?? row.floor ?? "-"}%`
+      + ` ${n == null ? "   -" : String(n).padStart(4)}`
+      + `  ${pct(n && wins != null ? wins / n : null)}`
+      + ` ${money(pnl)}`
+      + `  ${pct(pnl != null && staked ? pnl / staked : null)}`);
+  }
+}
+
 async function main() {
+  if (String(process.env.RANK_COMBINATIONS || "").toLowerCase() === "true") {
+    console.log(`Setup-finder ranking at ${new Date().toISOString()}`);
+    await combinations();
+    return;
+  }
   console.log(`Tag probability query at ${new Date().toISOString()}`);
   console.log(`   host ${HOST}, shape "${SHAPE}", mode "${MODE}"`);
   console.log("   Asks api.php's own folded analysis. No archive scan here: the endpoint");
