@@ -345,6 +345,9 @@ button.primary { color: #fff; background: var(--series-1); border-color: transpa
 table { width: 100%; border-collapse: collapse; font-size: 13px; }
 th, td { padding: 8px 10px; text-align: right; white-space: nowrap; border-bottom: 1px solid var(--grid); }
 th:first-child, td:first-child { text-align: left; }
+.chart-record-row { cursor: pointer; }
+.chart-record-row:hover td { background: color-mix(in srgb, var(--series-1) 8%, transparent); }
+.chart-record-row:focus-visible { outline: 2px solid var(--series-1); outline-offset: -2px; }
 .pa-level-price { font-variant-numeric: tabular-nums; }
 .pa-level-detail { margin-top: 2px; color: var(--text-secondary); font-size: 11px; }
 .pa-level-detail.positive { color: var(--good-text); }

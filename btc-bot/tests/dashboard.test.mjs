@@ -240,6 +240,19 @@ test('price-action take-profit orders render as a protected half-position, not a
   assert.match(priceActionOrders, /partialTakeProfit \? `TP1 \$\{quotePrice\(order\.entry\)\} · 50 %`/)
 })
 
+test('price-action position, order and closed-trade rows focus their matching chart', () => {
+  assert.match(js, /const focusAssetChart = \(symbol, timeframeId = priceActionDecisionTimeframe\) =>/)
+  assert.match(js, /const recordChartSelection = \(record\) =>/)
+  assert.match(js, /const chartRecordRow = \(record, cells\) =>/)
+  assert.match(js, /focusAssetChart\(selection\.symbol, selection\.timeframeId\)/)
+  assert.match(js, /event\.target\?\.closest\?\.\('button, a, input, select, textarea, label'\)/)
+  assert.match(js, /chartRecordRow\(position, \[/)
+  assert.match(js, /chartRecordRow\(order, \[/)
+  assert.match(js, /chartRecordRow\(trade, \[/)
+  assert.match(css, /\.chart-record-row:hover td/)
+  assert.match(css, /\.chart-record-row:focus-visible/)
+})
+
 test('asset tickers open a timeframe price chart with supply and demand zones', () => {
   assert.ok(html.includes('id="asset-chart-card"'), 'dashboard must contain the asset chart below the decision table')
   assert.ok(html.includes('id="asset-chart-svg"'), 'dashboard must contain the asset chart surface')

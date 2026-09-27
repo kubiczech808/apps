@@ -1010,6 +1010,21 @@ const priceActionDecisionCell = (entry, column) =>
       : [decisionFactElement(priceActionDecisionFact(entry, column))]
   )
 
+const focusAssetChart = (symbol, timeframeId = priceActionDecisionTimeframe) => {
+  const normalizedSymbol = String(symbol ?? '').trim().toUpperCase()
+  const normalizedTimeframe = String(timeframeId ?? '').trim().toLowerCase()
+  const asset = state?.priceActionMatrix?.assets?.find((candidate) => candidate.symbol === normalizedSymbol)
+  if (!asset?.trends?.[normalizedTimeframe]) return false
+
+  selectedAssetChart = { symbol: normalizedSymbol, timeframeId: normalizedTimeframe }
+  resetAssetChartViewport(normalizedTimeframe)
+  selectedChartZone = null
+  persistAssetChartSelectionToUrl()
+  renderAssetChart()
+  $('asset-chart-card')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  return true
+}
+
 const assetTickerButton = (symbol, timeframeId = priceActionDecisionTimeframe) => {
   const button = el('button', {
     type: 'button',
@@ -1017,14 +1032,7 @@ const assetTickerButton = (symbol, timeframeId = priceActionDecisionTimeframe) =
     text: symbol,
     title: 'Zobrazit cenový graf assetu',
   })
-  button.onclick = () => {
-    selectedAssetChart = { symbol, timeframeId }
-    resetAssetChartViewport(timeframeId)
-    selectedChartZone = null
-    persistAssetChartSelectionToUrl()
-    renderAssetChart()
-    $('asset-chart-card')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-  }
+  button.onclick = () => focusAssetChart(symbol, timeframeId)
   return button
 }
 
@@ -2477,6 +2485,38 @@ const profileAssetCell = (entry) =>
     el('span', { className: 'asset-name', text: ` ${entry.column.label}` }),
   ])
 
+const recordChartSelection = (record) => {
+  const symbol = String(record?.assetSymbol ?? record?.asset ?? '').trim().toUpperCase()
+  const timeframeId = String(record?.timeframeId ?? record?.timeframe ?? '').trim().toLowerCase()
+  return state?.priceActionMatrix?.assets?.some((asset) => asset.symbol === symbol && asset.trends?.[timeframeId])
+    ? { symbol, timeframeId }
+    : null
+}
+
+const chartRecordRow = (record, cells) => {
+  const selection = recordChartSelection(record)
+  const row = el('tr', selection
+    ? {
+        className: 'chart-record-row',
+        tabindex: '0',
+        title: `Zobrazit ${selection.symbol} · ${selection.timeframeId.toUpperCase()} v grafu`,
+      }
+    : {}, cells)
+  if (!selection) return row
+
+  const openChart = () => focusAssetChart(selection.symbol, selection.timeframeId)
+  row.onclick = (event) => {
+    if (event.target?.closest?.('button, a, input, select, textarea, label')) return
+    openChart()
+  }
+  row.onkeydown = (event) => {
+    if (event.key !== 'Enter' && event.key !== ' ') return
+    event.preventDefault()
+    openChart()
+  }
+  return row
+}
+
 const renderOpen = () => {
   const body = $('tbody-open')
   if (currentStrategyView().id === 'price-action') {
@@ -2592,7 +2632,7 @@ const renderPriceActionOpen = (body) => {
   for (const position of rows) {
     const remainingQuantityUsd = position.remainingQuantityUsd ?? position.quantityUsd
     body.append(
-      el('tr', {}, [
+      chartRecordRow(position, [
         el('td', { text: when(position.openedAt ?? position.createdAt) }),
         el('td', { text: position.assetSymbol || position.asset || '–' }),
         el('td', { text: position.timeframeId || position.timeframe ? (position.timeframeId || position.timeframe).toUpperCase() : '–' }),
@@ -2656,7 +2696,7 @@ const renderPriceActionOrders = (body) => {
     const cancel = partialTakeProfit ? null : el('button', { type: 'button', text: 'Zrušit' })
     if (cancel) cancel.onclick = () => queueCommand('cancel', order.id)
     body.append(
-      el('tr', {}, [
+      chartRecordRow(order, [
         el('td', { text: when(order.createdAt ?? order.placedAt) }),
         el('td', { text: order.assetSymbol || order.asset || '–' }),
         el('td', { text: order.timeframeId || order.timeframe ? (order.timeframeId || order.timeframe).toUpperCase() : '–' }),
@@ -2750,7 +2790,7 @@ const renderPriceActionClosed = (body) => {
   }
   for (const trade of rows.slice(0, 100)) {
     body.append(
-      el('tr', {}, [
+      chartRecordRow(trade, [
         el('td', { text: when(trade.openedAt ?? trade.createdAt) }),
         el('td', { text: when(trade.closedAt) }),
         el('td', { text: trade.assetSymbol || trade.asset || '–' }),
