@@ -69,6 +69,15 @@ function run(rows, { skipStore = false, allowEmpty = false, activeRows = null } 
 function simulation_entry_probability(array $item) { return $item['firstMarketProbability'] ?? null; }
 function resolved_stats_entry_is_not_after_due(array $item): bool { return ($item['afterDue'] ?? false) !== true; }
 function resolved_stats_entry_side_is_the_settled_side(array $item): bool { return ($item['sideFlipped'] ?? false) !== true; }
+// The fixture grades by finalOutcomePrice directly; the production resolver's own choice of
+// which side to grade is tested where it lives, in resolved-combinations.test.mjs.
+function resolved_stats_settled_outcome(array $item): ?int {
+    $value = $item['finalOutcomePrice'] ?? null;
+    if (!is_numeric($value)) { return null; }
+    $price = (float) $value;
+    if ($price <= 0.005) { return 0; }
+    return $price >= 0.995 ? 1 : null;
+}
 function resolved_stats_entry_fee_usdc(array $item, float $entry, float $stake): float { return (float) ($item['fee'] ?? 0); }
 function observation_entry_spread_is_tradable(array $item): bool { return ($item['tradable'] ?? true) === true; }
 function observation_market_shape(array $item): string { return (string) ($item['shape'] ?? 'binary'); }

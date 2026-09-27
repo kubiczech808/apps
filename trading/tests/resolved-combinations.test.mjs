@@ -249,6 +249,49 @@ test("a row priced on one side and settled on the other is not a winning setup",
   assert.equal(unknown.sideFlippedRejected, 0);
 });
 
+test("a flipped row is corrected rather than discarded when the row can prove its own shape", () => {
+  // Dropping them threw away real settlements, and the archive cannot afford that. A
+  // two-outcome book settles one side at 1 and the other at 0, so the priced side's result
+  // is recoverable exactly -- the win recorded against the side that took the lead was a
+  // LOSS for the side that was actually bought.
+  const flippedBinary = {
+    ...row(0.5, true), outcomeCount: 2,
+    firstOutcome: "Yes", firstTokenId: "token-yes",
+    outcome: "No", tokenId: "token-no", settledTokenId: "token-no",
+  };
+  const payload = combinations([flippedBinary], "min_trades=1");
+  assert.equal(payload.pricedRows, 1, "the row is kept");
+  assert.equal(payload.sideFlippedRejected, 1, "and still counted, so the scale stays visible");
+  const priced = find(payload.best, { tag: "*", shape: "*", horizon: "*", probability: 50 });
+  assert.equal(priced.trades, 1);
+  assert.equal(priced.wins, 0, "recorded as the loss it was for the side that was bought");
+  assert.equal(priced.pnlUsdc, -5, "a loss costs the whole stake");
+
+  // Same row, but nothing on it says the market had two outcomes. Inverting would be a
+  // guess, so it is excluded instead.
+  const unprovable = { ...flippedBinary, outcomeCount: 0 };
+  assert.equal(combinations([unprovable], "min_trades=1").pricedRows, 0);
+
+  // And the written-down answer wins over any inference: firstSideFinalOutcomePrice is the
+  // settlement of the priced side, recorded at resolution.
+  const recorded = { ...flippedBinary, firstSideFinalOutcomePrice: 1 };
+  const direct = combinations([recorded], "min_trades=1");
+  assert.equal(direct.pricedRows, 1);
+  assert.equal(find(direct.best, { tag: "*", shape: "*", horizon: "*", probability: 50 }).wins, 1,
+    "the recorded side settled at 1, whatever the flip would have implied");
+
+  // settledTokenId alone decides when it is present: a row whose settled side IS the priced
+  // side must not be inverted just because tokenId drifted afterwards.
+  const settledIsPriced = {
+    ...row(0.5, true), outcomeCount: 2,
+    firstOutcome: "Yes", firstTokenId: "token-yes",
+    outcome: "No", tokenId: "token-no", settledTokenId: "token-yes",
+  };
+  const kept = combinations([settledIsPriced], "min_trades=1");
+  assert.equal(find(kept.best, { tag: "*", shape: "*", horizon: "*", probability: 50 }).wins, 1);
+  assert.equal(kept.sideFlippedRejected, 0, "it never flipped, by the row's own record");
+});
+
 test("recorded entry fees are included in the Setup finder P/L", () => {
   const payload = combinations([
     row(0.5, true, { feeRate: 0.02 }),

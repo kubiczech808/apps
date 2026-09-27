@@ -1448,28 +1448,24 @@ function resolved_stats_accumulate(array $sources, float $stake = 5.0, ?callable
         // price "is not a settlement of this selected outcome and must not be invented
         // as either a win or a loss", and this page is read to set a live portfolio's
         // parameters, so it takes the stricter of the two rules.
-        $finalPrice = $item['finalOutcomePrice'] ?? null;
-        $outcome = null;
-        if (is_numeric($finalPrice)) {
-            $finalPrice = (float) $finalPrice;
-            if ($finalPrice <= 0.005) {
-                $outcome = 0;
-            } elseif ($finalPrice >= 0.995) {
-                $outcome = 1;
-            }
-        }
+        // Graded against the side the ENTRY PRICE belongs to, not the side that happened to
+        // be leading at the close. See resolved_stats_settled_outcome.
+        $outcome = resolved_stats_settled_outcome($item);
         if ($entry === null || $outcome === null) {
+            if ($entry !== null && ($item['finalOutcomePrice'] ?? null) !== null
+                && !resolved_stats_entry_side_is_the_settled_side($item)) {
+                $sideFlippedRejected += 1;
+            }
             return true;
         }
         if (!resolved_stats_entry_is_not_after_due($item)) {
             $afterDueRejected += 1;
             return true;
         }
-        // Priced on one side, settled on the other. See the guard for why that is a
-        // guaranteed win rather than a lucky one.
+        // Counted, not dropped: a row that changed sides is now corrected rather than
+        // discarded, and this says how many needed correcting.
         if (!resolved_stats_entry_side_is_the_settled_side($item)) {
             $sideFlippedRejected += 1;
-            return true;
         }
         // The spread AT ENTRY, not the current one. This used to call
         // observation_spread_is_tradable, which prefers the live book and therefore, on
@@ -1897,8 +1893,72 @@ function simulation_entry_probability(array $item): ?float
  * spread: most archived rows predate the field, and rejecting them all would empty the
  * page rather than correct it. The provable mismatches are what is dropped, and counted.
  */
+/**
+ * The settlement of the side the entry price belongs to, as 1 or 0, or null when the row
+ * cannot say.
+ *
+ * Three sources, in descending order of how much they have to be trusted:
+ *
+ *  1. firstSideFinalOutcomePrice, written at resolution against the priced side. No
+ *     inference; rows carrying it are simply right.
+ *  2. finalOutcomePrice when the row never changed sides, which the recorded settledTokenId
+ *     proves directly and firstTokenId/firstOutcome prove for rows written before it existed.
+ *  3. The inverse of finalOutcomePrice on a two-outcome market that DID change sides. A
+ *     binary book settles one side at 1 and the other at 0, so the priced side's result is
+ *     recoverable exactly -- but only when the row says it has two outcomes, which is why
+ *     this is not applied to anything else.
+ *
+ * A row that fits none of them is excluded rather than guessed at. That is the case the
+ * statistics were silently getting wrong: priced on one side, settled on the other, counted
+ * as a win every time, because the side that leads at the close is the side that won.
+ */
+function resolved_stats_settled_outcome(array $item): ?int
+{
+    $binary = static function (mixed $value): ?int {
+        if (!is_numeric($value)) {
+            return null;
+        }
+        $price = (float) $value;
+        if ($price <= 0.005) {
+            return 0;
+        }
+        return $price >= 0.995 ? 1 : null;
+    };
+
+    $direct = $binary($item['firstSideFinalOutcomePrice'] ?? null);
+    if ($direct !== null) {
+        return $direct;
+    }
+
+    $outcome = $binary($item['finalOutcomePrice'] ?? null);
+    if ($outcome === null) {
+        return null;
+    }
+    if (resolved_stats_entry_side_is_the_settled_side($item)) {
+        return $outcome;
+    }
+    // Changed sides. Only a two-outcome market can be inverted, because only there does the
+    // other side settle at exactly the complement.
+    $outcomeCount = (int) ($item['outcomeCount'] ?? 0);
+    $hasBothTokens = trim((string) ($item['binaryYesTokenId'] ?? '')) !== ''
+        && trim((string) ($item['binaryNoTokenId'] ?? '')) !== '';
+    if ($outcomeCount === 2 || $hasBothTokens) {
+        return 1 - $outcome;
+    }
+
+    return null;
+}
+
 function resolved_stats_entry_side_is_the_settled_side(array $item): bool
 {
+    // Recorded directly once the row carries it: the side finalOutcomePrice was graded
+    // against, written at resolution rather than worked out from which code was deployed.
+    $settledToken = trim((string) ($item['settledTokenId'] ?? ''));
+    $firstToken = trim((string) ($item['firstTokenId'] ?? ''));
+    if ($settledToken !== '' && $firstToken !== '') {
+        return $settledToken === $firstToken;
+    }
+
     $firstToken = trim((string) ($item['firstTokenId'] ?? ''));
     $token = trim((string) ($item['tokenId'] ?? ''));
     if ($firstToken !== '' && $token !== '') {

@@ -167,6 +167,21 @@ async function fromCatalogue() {
   console.log(`   fee rate recorded on ${feeRates.length}/${rows.length} row(s), above zero on ${charged}.`);
   console.log(`      A row with no recorded rate is simulated with NO fee at all.`);
 
+  // How often a row's priced side and its current side disagree. This is the flip the
+  // settled statistics were getting wrong, and its rate decides whether correcting it can
+  // explain anything: a defect on 1% of rows cannot produce a 100% win rate on a tag.
+  const sided = rows.filter((row) => String(row?.firstTokenId || "") && String(row?.tokenId || ""));
+  const flippedToken = sided.filter((row) => String(row.firstTokenId) !== String(row.tokenId)).length;
+  const named = rows.filter((row) => String(row?.firstOutcome || "") && String(row?.outcome || ""));
+  const flippedOutcome = named.filter((row) => String(row.firstOutcome).toLowerCase() !== String(row.outcome).toLowerCase()).length;
+  const binaryRows = rows.filter((row) => Number(row?.outcomeCount) === 2
+    || (String(row?.binaryYesTokenId || "") && String(row?.binaryNoTokenId || ""))).length;
+  console.log(`\n   priced side vs current side:`);
+  console.log(`      ${flippedToken}/${sided.length} row(s) differ by tokenId, ${flippedOutcome}/${named.length} by outcome name.`);
+  console.log(`      ${binaryRows}/${rows.length} row(s) can prove they are two-outcome markets, which is what makes a flip correctable.`);
+  const settledSide = rows.filter((row) => String(row?.settledTokenId || "")).length;
+  console.log(`      settledTokenId recorded on ${settledSide}/${rows.length} -- rows written before it existed have to be inferred.`);
+
   const newest = rows
     .map((row) => String(row?.firstObservedAt || ""))
     .filter(Boolean)

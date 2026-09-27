@@ -67,6 +67,11 @@ jobs:
           result = payload.get("result") or {}
           print(f"scanned={result.get('scanned')} priced={result.get('priced')}"
                 f" cells={result.get('cells')} foldedAt={result.get('foldedAt')}")
+          # How many settled rows were priced on one side and graded on the other. Printed
+          # because it decides whether that defect can explain anything: a handful of rows
+          # cannot produce a 100% win rate on a tag, and a third of them can.
+          print(f"sideFlipped={result.get('sideFlippedRejected')}"
+                f" afterDue={result.get('afterDueRejected')}")
           # Per source, because a single total cannot say which file was short. The first fold
           # read 14,536 rows against 90,795 settled observations in the database.
           for source in result.get("sources") or []:

@@ -3615,6 +3615,33 @@ function withEvaluationResolutionUpdate(item, patch, reason, checkedAt = nowIso(
   };
 }
 
+// Which side a settlement belongs to, written down instead of inferred later.
+//
+// A binary catalogue row is keyed by the MARKET, and every rescan re-picks whichever side is
+// above 50c as the row's outcome and tokenId, while firstMarketProbability stays sticky from
+// the first sighting. So "what did this row settle at" has two different answers -- the side
+// that was priced, and the side that happened to be leading when it closed -- and nothing in
+// the row said which one finalOutcomePrice meant. Reconstructing it afterwards needs the
+// deploy date of the code that wrote it, which is not evidence.
+//
+// settledTokenId names the side finalOutcomePrice was graded against. firstSideFinalOutcomePrice
+// is the settlement of the side the entry price belongs to, which is the one the statistics
+// need and the only one that can be compared with firstMarketProbability.
+function settlementSides(item, market, prices) {
+  const firstTokenId = String(item?.firstTokenId || "").trim();
+  const firstOutcome = String(item?.firstOutcome || "").trim();
+  const firstIndex = firstTokenId || firstOutcome
+    ? outcomeIndexForTrade(market, { outcome: firstOutcome, tokenId: firstTokenId })
+    : -1;
+  const firstPrice = firstIndex >= 0 ? Number(prices[firstIndex]) : null;
+  return {
+    firstSideFinalOutcomePrice: Number.isFinite(firstPrice) ? Number(firstPrice.toFixed(4)) : null,
+    firstSideTokenId: firstIndex >= 0
+      ? String(parseJsonField(market?.clobTokenIds)[firstIndex] || firstTokenId || "")
+      : (firstTokenId || null),
+  };
+}
+
 function resolvedEvaluationFromMarket(item, market, checkedAt = nowIso()) {
   const outcomeIndex = outcomeIndexForTrade(market, item);
   const prices = parseOutcomePrices(market);
@@ -3634,6 +3661,10 @@ function resolvedEvaluationFromMarket(item, market, checkedAt = nowIso()) {
     closedTime: market.closedTime || item.closedTime || null,
     umaResolutionStatus: market.umaResolutionStatus || item.umaResolutionStatus || null,
     finalOutcomePrice: market.closed && Number.isFinite(resolvedPrice) ? Number(resolvedPrice.toFixed(4)) : null,
+    // The side finalOutcomePrice above was graded against, and the settlement of the side the
+    // entry price belongs to. Written rather than inferred: see settlementSides.
+    settledTokenId: outcomeIndex >= 0 ? String(parseJsonField(market?.clobTokenIds)[outcomeIndex] || "") : null,
+    ...(market.closed ? settlementSides(item, market, prices) : {}),
   };
 
   const marketNoLongerTrades = market.closed || market.active === false || market.acceptingOrders === false;
@@ -3770,6 +3801,11 @@ function resolvedMarketObservationFromMarket(item, market, checkedAt = nowIso())
       ? Number(resolvedVolume24hr.toFixed(2))
       : item.resolvedVolume24hr ?? null,
     finalOutcomePrice: market.closed && Number.isFinite(resolvedPrice) ? Number(resolvedPrice.toFixed(4)) : item.finalOutcomePrice ?? null,
+    // This path already grades the side that was PRICED (outcome/tokenId are taken from the
+    // first observation above), so the two agree here -- but it says so rather than leaving a
+    // reader to work out which of the two paths wrote the row.
+    settledTokenId: outcomeIndex >= 0 ? String(parseJsonField(market?.clobTokenIds)[outcomeIndex] || tokenId || "") : (tokenId || null),
+    ...(market.closed ? settlementSides(item, market, prices) : {}),
     resolutionStatus: market.closed && Number.isFinite(resolvedPrice) ? "FINAL_PRICE_AVAILABLE" : (market.acceptingOrders === false ? "NOT_ACCEPTING_ORDERS" : "PENDING_RESULT"),
     status: "RESOLVED",
     selectionStatus: "RESOLVED",
