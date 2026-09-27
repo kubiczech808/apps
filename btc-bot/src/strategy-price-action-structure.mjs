@@ -1111,6 +1111,7 @@ const zoneEntryCandidate = ({ item, side, zone, pullback, invalidationLevel, set
     tp2Zone,
     weightedTarget,
     rrAtZoneHit,
+    rrAtPullback,
     rewardRisk,
     minRewardRisk,
     reason: reasons.join(' · '),

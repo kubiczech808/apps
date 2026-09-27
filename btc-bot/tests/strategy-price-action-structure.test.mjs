@@ -1530,6 +1530,7 @@ test('a profile below minimum R/R is never a valid setup or planned entry', () =
   assert.equal(profile.entry, null)
   assert.equal(profile.rewardRisk, null)
   assert.equal(profile.potentialEntry, candidate.entryAtZoneHit, 'a rejected R/R still keeps its diagnostic entry')
+  assert.ok(Number.isFinite(candidate.rrAtPullback), 'the rejected candidate retains its calculated R/R')
   assert.equal(profile.potentialRewardRisk, candidate.rrAtPullback, 'a rejected R/R remains inspectable without arming an order')
 })
 
