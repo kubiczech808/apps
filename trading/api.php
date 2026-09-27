@@ -9234,6 +9234,16 @@ try {
             $bandStep = 5;
         }
 
+        // Pin the floor, and the ranking becomes a comparison BETWEEN setups at one entry
+        // rule instead of a mixture of every rule. Without it, asking "which sports tag is
+        // best from 70% up" has to be asked once per tag, because the ranked slice only
+        // carries whichever thresholds happened to score highest -- and one request per tag
+        // reloads the whole stored fold per request.
+        $filterProbability = isset($_GET['probability']) ? (int) $_GET['probability'] : null;
+        if ($filterProbability !== null && ($filterProbability < 50 || $filterProbability > 99)) {
+            respond(['ok' => false, 'error' => 'A probability floor between 50 and 99 is required.'], 400);
+        }
+
         $corePath = state_file_paths()['paper'];
         $core = decode_state_file($corePath, false);
         $manifest = is_array($core['stateSegments'] ?? null) ? $core['stateSegments'] : [];
@@ -9433,6 +9443,13 @@ try {
         }
         $rows = array_values(array_map(static fn (array $entry): array => $entry['row'], $unique));
 
+        // After the duplicate collapse, not before: a row pinned to one floor must still lose
+        // to the simplest description of its own sample, and that comparison needs the rows
+        // the pin would have removed.
+        if ($filterProbability !== null) {
+            $rows = array_values(array_filter($rows, static fn (array $row): bool => (int) $row['probabilityMin'] === $filterProbability));
+        }
+
         // Ranked by NET RETURN after recorded entry fees, because a combination that stakes
         // ten times as much will always win on nominal profit and says nothing about the
         // setup. The nominal figure travels with every row, which is the other half of what
@@ -9469,6 +9486,7 @@ try {
             // Whether the fine grid was granted or silently coarsened, so a caller that asked
             // for 1pp and got 5pp can see that rather than misread the bands it is handed.
             'bandStepRequested' => ((int) ($_GET['band_step'] ?? 5)) === 1 ? 1 : 5,
+            'probability' => $filterProbability,
             'best' => $best,
             'worst' => $worst,
             'generatedAt' => gmdate('c'),

@@ -162,7 +162,148 @@ async function combinations() {
   }
 }
 
+// The tags that answer "which sports tag". Polymarket's own slugs, not a classification of
+// our own -- a tag that is not here still appears in the output under "other tags seen", so
+// the list narrows the reading without hiding anything.
+export const SPORTS_TAGS = new Set([
+  "sports", "soccer", "football", "nfl", "ncaaf", "basketball", "nba", "ncaab", "wnba",
+  "baseball", "mlb", "hockey", "nhl", "tennis", "golf", "mma", "ufc", "boxing", "cricket",
+  "rugby", "f1", "formula-1", "motorsport", "cycling", "olympics", "handball", "volleyball",
+  "darts", "snooker", "table-tennis", "badminton", "epl", "laliga", "seriea", "bundesliga",
+  "ligue-1", "ucl", "uel", "mls", "dfb-pokal", "efl", "copa-america", "euro", "world-cup",
+]);
+
+// What a row's own numbers say its winners were priced at.
+//
+// Every win returns stake/p and every trade cost stake+fee, so over the winners
+// sum(stake/p) = pnl + staked. Dividing the stake by the mean of that gives the mean entry
+// price of the trades that won -- and a sample that is not contaminated cannot win far more
+// often than its own price says it should. It is the one plausibility check available
+// without re-reading the archive, and on this data it is the difference between a setup and
+// an artefact: 60 trades at 72c that won 60 times are not a 72% favourite behaving well.
+export function impliedWinnerEntry(row, stake = 5) {
+  const wins = num(row?.wins);
+  const pnl = num(row?.pnlUsdc);
+  const staked = num(row?.stakedUsdc);
+  if (!wins || pnl == null || staked == null) return null;
+  const grossReturned = pnl + staked;
+  if (!(grossReturned > 0)) return null;
+  return (stake * wins) / grossReturned;
+}
+
+// Accuracy minus what the price paid for. Near zero is a fairly priced sample; a large
+// positive number is the archive's winner bias, not an edge anybody could have traded.
+export function accuracyEdge(row, stake = 5) {
+  const entry = impliedWinnerEntry(row, stake);
+  const n = num(row?.trades);
+  const wins = num(row?.wins);
+  if (entry == null || !n || wins == null) return null;
+  return (wins / n) - entry;
+}
+
+// all - outright - over-under, component by component. Exact, because the three requests are
+// the same cells grouped three ways over one fold.
+export function subtractShapes(all, parts) {
+  if (!all) return null;
+  const rest = { trades: num(all.trades) ?? 0, wins: num(all.wins) ?? 0, stakedUsdc: num(all.stakedUsdc) ?? 0, pnlUsdc: num(all.pnlUsdc) ?? 0 };
+  for (const part of parts) {
+    if (!part) continue;
+    rest.trades -= num(part.trades) ?? 0;
+    rest.wins -= num(part.wins) ?? 0;
+    rest.stakedUsdc -= num(part.stakedUsdc) ?? 0;
+    rest.pnlUsdc -= num(part.pnlUsdc) ?? 0;
+  }
+  if (rest.trades <= 0) return null;
+  rest.stakedUsdc = Number(rest.stakedUsdc.toFixed(2));
+  rest.pnlUsdc = Number(rest.pnlUsdc.toFixed(2));
+  return rest;
+}
+
+async function askCombinations(params) {
+  const url = `${HOST}/api.php?action=resolved-combinations&` + new URLSearchParams(params).toString();
+  const response = await fetch(url);
+  const text = await response.text();
+  if (!response.ok) throw new Error(`HTTP ${response.status}: ${text.slice(0, 200)}`);
+  return JSON.parse(text);
+}
+
+function sweepLine(label, row, stake) {
+  if (!row) return `   ${label.padEnd(34)}      -`;
+  const n = num(row.trades);
+  const wins = num(row.wins);
+  const pnl = num(row.pnlUsdc);
+  const staked = num(row.stakedUsdc);
+  const edge = accuracyEdge(row, stake);
+  const entry = impliedWinnerEntry(row, stake);
+  return `   ${label.padEnd(34)}`
+    + ` ${String(n ?? "-").padStart(5)}`
+    + `  ${pct(n && wins != null ? wins / n : null)}`
+    + `  ${pct(entry)}`
+    + `  ${edge == null ? "   -  " : `${edge >= 0 ? "+" : ""}${(edge * 100).toFixed(1)}`.padStart(6)}`
+    + ` ${money(pnl)}`
+    + `  ${pct(pnl != null && staked ? pnl / staked : null)}`
+    + `  ${edge != null && edge > 0.12 ? "SUSPECT" : ""}`;
+}
+
+// One entry rule, every tag, split the three ways that were asked for.
+async function sweep() {
+  const probability = Number(process.env.PROBABILITY || 70);
+  const minTrades = Number(process.env.MIN_TRADES || 20);
+  const base = { min_trades: String(minTrades), limit: "400", probability: String(probability), horizon: "*" };
+  const byShape = new Map();
+  let stake = 5;
+  let truncated = false;
+  for (const shape of ["*", "outright", "over-under"]) {
+    const payload = await askCombinations({ ...base, shape });
+    stake = num(payload.stakeUsdc) ?? 5;
+    const rows = [...(payload.best || []), ...(payload.worst || [])];
+    // Only the horizon rollup: the question is the tag, not when it settles.
+    const rollup = new Map();
+    for (const row of rows) {
+      if (row.horizon !== "*" || row.tag === "*") continue;
+      if (!rollup.has(row.tag)) rollup.set(row.tag, row);
+    }
+    byShape.set(shape, rollup);
+    if ((num(payload.combinations) ?? 0) > (payload.best?.length || 0) + (payload.worst?.length || 0)) truncated = true;
+    console.log(`   shape "${shape}": ${payload.combinations} combination(s) at >=${probability}%,`
+      + ` ${rollup.size} tag(s) in the slice, statsSource ${payload.statsSource},`
+      + ` sideFlippedRejected ${payload.sideFlippedRejected}`);
+  }
+  if (truncated) {
+    console.log("   !! the ranked slice did not carry every combination; raise min_trades to be sure of coverage");
+  }
+
+  const all = byShape.get("*");
+  const tags = [...all.keys()].sort((left, right) => (num(all.get(right).pnlUsdc) ?? 0) - (num(all.get(left).pnlUsdc) ?? 0));
+  const sports = tags.filter((tag) => SPORTS_TAGS.has(tag));
+  const others = tags.filter((tag) => !SPORTS_TAGS.has(tag));
+
+  console.log(`\n   entry rule: >= ${probability}%, any horizon, stake ${stake}`);
+  console.log(`   "priced" is what the winners' own prices say; "edge" is win% minus that.`);
+  console.log(`   An edge far above zero is the archive's winner bias, not a tradable edge.\n`);
+  console.log(`   tag / shape                            n   win%  priced    edge       P/L    per $`);
+  const emit = (tag) => {
+    const allRow = all.get(tag);
+    const outright = byShape.get("outright").get(tag);
+    const overUnder = byShape.get("over-under").get(tag);
+    const rest = subtractShapes(allRow, [outright, overUnder]);
+    console.log(sweepLine(tag, allRow, stake));
+    console.log(sweepLine(`   - outright`, outright, stake));
+    console.log(`${sweepLine(`   - over/under`, overUnder, stake)}`);
+    console.log(sweepLine(`   - everything else`, rest, stake));
+  };
+  console.log("== sports tags");
+  for (const tag of sports) emit(tag);
+  console.log("\n== other tags in the same slice, for contrast");
+  for (const tag of others.slice(0, 12)) console.log(sweepLine(tag, all.get(tag), stake));
+}
+
 async function main() {
+  if (String(process.env.SWEEP || "").toLowerCase() === "true") {
+    console.log(`Entry-rule sweep at ${new Date().toISOString()}`);
+    await sweep();
+    return;
+  }
   if (String(process.env.RANK_COMBINATIONS || "").toLowerCase() === "true") {
     console.log(`Setup-finder ranking at ${new Date().toISOString()}`);
     await combinations();

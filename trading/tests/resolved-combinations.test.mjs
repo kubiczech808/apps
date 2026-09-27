@@ -422,6 +422,32 @@ test("the fine grid is granted only once the search has been narrowed", () => {
     "the point of the fine grid is bounds the coarse one cannot reach");
 });
 
+test("pinning the floor turns the ranking into a comparison between setups at one rule", () => {
+  // "rozebrat pri pravdepodobnosti napriklad 70+ jednotlive sports tagy". Without the pin
+  // that has to be asked once per tag, because the ranked slice only carries whichever
+  // thresholds scored highest -- and every request reloads the whole stored fold.
+  const rows = [
+    ...Array.from({ length: 20 }, () => row(0.7, true, { tags: ["soccer"] })),
+    ...Array.from({ length: 20 }, () => row(0.9, false, { tags: ["soccer"] })),
+  ];
+  const pinned = combinations(rows, "min_trades=1&probability=70");
+  assert.equal(pinned.probability, 70);
+  assert.ok(pinned.best.length > 0);
+  assert.ok(pinned.best.every((entry) => entry.probabilityMin === 70),
+    `only the pinned floor may be returned: ${[...new Set(pinned.best.map((e) => e.probabilityMin))].join(", ")}`);
+  // And the pinned floor is cumulative, so it still contains the 90s.
+  assert.equal(find(pinned.best, { tag: "soccer", shape: "*", horizon: "*" }).trades, 40);
+
+  // The unpinned answer still carries every floor, so the pin is a filter and not a change
+  // of what the page computes.
+  const open = combinations(rows, "min_trades=1");
+  assert.ok(new Set(open.best.map((entry) => entry.probabilityMin)).size > 1);
+
+  for (const bad of ["min_trades=1&probability=49", "min_trades=1&probability=100"]) {
+    assert.equal(combinations(rows, bad).ok, false, `${bad} must be refused`);
+  }
+});
+
 test("an unknown filter value is refused rather than quietly matching nothing", () => {
   // Silently returning an empty ranking reads as "this setup never happened", which is the
   // answer somebody would act on by excluding it.

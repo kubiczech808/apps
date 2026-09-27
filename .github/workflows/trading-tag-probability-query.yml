@@ -36,6 +36,16 @@ on:
         required: false
         default: "30"
         type: string
+      sweep:
+        description: "true = every tag at one probability floor, split outright / over-under / rest"
+        required: false
+        default: "false"
+        type: string
+      probability:
+        description: "The entry floor the sweep pins, e.g. 70"
+        required: false
+        default: "70"
+        type: string
 
 permissions:
   contents: read
@@ -58,4 +68,6 @@ jobs:
           ANALYSIS_MODE: ${{ inputs.mode }}
           RANK_COMBINATIONS: ${{ inputs.rank_combinations }}
           MIN_TRADES: ${{ inputs.min_trades }}
+          SWEEP: ${{ inputs.sweep }}
+          PROBABILITY: ${{ inputs.probability }}
         run: node tools/tag-probability-query.mjs

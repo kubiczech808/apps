@@ -9,7 +9,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { readFileSync } from "node:fs";
-import { rankedRows, byTag } from "../tools/tag-probability-query.mjs";
+import { rankedRows, byTag, impliedWinnerEntry, accuracyEdge, subtractShapes } from "../tools/tag-probability-query.mjs";
 
 const TOOL = readFileSync(new URL("../tools/tag-probability-query.mjs", import.meta.url), "utf8");
 const API = readFileSync(new URL("../api.php", import.meta.url), "utf8");
@@ -99,4 +99,45 @@ test("byTag keeps one row per tag -- the best-earning one -- and ranks by nomina
   assert.equal(cup.pnlUsdc, 271.23, "the tag's best-earning setup, not its last-seen one");
   assert.ok(!ranked.some((row) => row.tag === "*"),
     "the any-tag aggregate is not a tag and would otherwise top every table");
+});
+
+// The plausibility check. The settled archive systematically holds the winning side of a
+// market, so a row's win rate cannot be read on its own -- but a row's own money says what
+// its winners were priced at, and a sample cannot honestly win far more often than it paid
+// to. This is what separates a setup from an artefact on this data.
+test("a row's own money reveals what its winners were priced at", () => {
+  // Ten trades at 50c, five won. Each win returns $10 on a $5 stake, so P/L is zero on $50
+  // staked, and the winners were priced at 5*5/(0+50) = 0.50 -- which is exactly right.
+  const fair = { trades: 10, wins: 5, stakedUsdc: 50, pnlUsdc: 0 };
+  assert.equal(impliedWinnerEntry(fair), 0.5);
+  assert.equal(accuracyEdge(fair), 0, "a fairly priced sample has no edge to explain");
+
+  // The shape the archive actually produced: sixty trades quoted at 72c, sixty wins.
+  const contaminated = { trades: 60, wins: 60, stakedUsdc: 300, pnlUsdc: 116.67 };
+  assert.ok(Math.abs(impliedWinnerEntry(contaminated) - 0.72) < 0.001,
+    "the price is recoverable from the money even though the row never states it");
+  assert.ok(accuracyEdge(contaminated) > 0.27,
+    "and winning every time at 72c is 28 points more often than the price paid for");
+
+  // A real but modest edge stays modest, so the check does not simply reject everything:
+  // ten trades at 50c winning six times.
+  const modest = { trades: 10, wins: 6, stakedUsdc: 50, pnlUsdc: 10 };
+  assert.equal(impliedWinnerEntry(modest), 0.5);
+  assert.ok(Math.abs(accuracyEdge(modest) - 0.1) < 1e-9);
+
+  assert.equal(impliedWinnerEntry({ trades: 10, wins: 0, stakedUsdc: 50, pnlUsdc: -50 }), null,
+    "a sample with no winners cannot say what its winners paid");
+});
+
+test("everything-else is the remainder, component by component", () => {
+  const all = { trades: 100, wins: 80, stakedUsdc: 500, pnlUsdc: 60 };
+  const outright = { trades: 40, wins: 30, stakedUsdc: 200, pnlUsdc: 10 };
+  const overUnder = { trades: 35, wins: 30, stakedUsdc: 175, pnlUsdc: 25 };
+  const rest = subtractShapes(all, [outright, overUnder]);
+  assert.deepEqual(rest, { trades: 25, wins: 20, stakedUsdc: 125, pnlUsdc: 25 });
+  // Subtracting only the totals and re-deriving the rest from a ratio would lose this: the
+  // remainder's return is 20%, double the outright leg's, and that is the point of splitting.
+  assert.equal(Number((rest.pnlUsdc / rest.stakedUsdc).toFixed(2)), 0.2);
+  assert.equal(subtractShapes(all, [all]), null, "a remainder of nothing is not a row");
+  assert.equal(subtractShapes(null, [outright]), null);
 });
