@@ -116,12 +116,213 @@
   "sample_product_id": 4528,
   "sample_product_meta": [
     {
+      "meta_key": "_backorders",
+      "meta_value": "no"
+    },
+    {
+      "meta_key": "_download_expiry",
+      "meta_value": "-1"
+    },
+    {
+      "meta_key": "_download_limit",
+      "meta_value": "-1"
+    },
+    {
+      "meta_key": "_downloadable",
+      "meta_value": "no"
+    },
+    {
+      "meta_key": "_edit_last",
+      "meta_value": "2"
+    },
+    {
+      "meta_key": "_edit_lock",
+      "meta_value": "1783286424:2"
+    },
+    {
+      "meta_key": "_manage_stock",
+      "meta_value": "no"
+    },
+    {
       "meta_key": "_price",
       "meta_value": "160"
     },
     {
+      "meta_key": "_product_version",
+      "meta_value": "11.0.1"
+    },
+    {
       "meta_key": "_regular_price",
       "meta_value": "160"
+    },
+    {
+      "meta_key": "_sold_individually",
+      "meta_value": "no"
+    },
+    {
+      "meta_key": "_stock",
+      "meta_value": ""
+    },
+    {
+      "meta_key": "_stock_status",
+      "meta_value": "instock"
+    },
+    {
+      "meta_key": "_tax_class",
+      "meta_value": ""
+    },
+    {
+      "meta_key": "_tax_status",
+      "meta_value": "taxable"
+    },
+    {
+      "meta_key": "_thumbnail_id",
+      "meta_value": "4533"
+    },
+    {
+      "meta_key": "_virtual",
+      "meta_value": "no"
+    },
+    {
+      "meta_key": "_wc_average_rating",
+      "meta_value": "5.00"
+    },
+    {
+      "meta_key": "_wc_rating_count",
+      "meta_value": "a:1:{i:5;i:1;}"
+    },
+    {
+      "meta_key": "_wc_review_count",
+      "meta_value": "1"
+    },
+    {
+      "meta_key": "_wp_old_slug",
+      "meta_value": "korenena-smes-jamu"
+    },
+    {
+      "meta_key": "_wpify_woo_heureka_category",
+      "meta_value": ""
+    },
+    {
+      "meta_key": "_wpify_woo_heureka_product",
+      "meta_value": ""
+    },
+    {
+      "meta_key": "_wpify_woo_heureka_product_name",
+      "meta_value": ""
+    },
+    {
+      "meta_key": "_yoast_wpseo_content_score",
+      "meta_value": "90"
+    },
+    {
+      "meta_key": "_yoast_wpseo_estimated-reading-time-minutes",
+      "meta_value": "1"
+    },
+    {
+      "meta_key": "_yoast_wpseo_metadesc",
+      "meta_value": "Jamu Balance je kořeněná směs z Bali s kurkumou, zázvorem, kencurem a kokosovým cukrem. Zahřívací nápoj pro každodenní rituál z Indonésie, Bali."
+    },
+    {
+      "meta_key": "_yoast_wpseo_primary_product_brand",
+      "meta_value": ""
+    },
+    {
+      "meta_key": "_yoast_wpseo_primary_product_cat",
+      "meta_value": "30"
+    },
+    {
+      "meta_key": "packetery_age_verification_18_plus",
+      "meta_value": "0"
+    },
+    {
+      "meta_key": "packetery_disallowed_shipping_rates",
+      "meta_value": "a:0:{}"
+    },
+    {
+      "meta_key": "total_sales",
+      "meta_value": "1"
     }
-  ]
+  ],
+  "active_plugins": [
+    "WC-Doprava-main/wcdoprava.php",
+    "akismet/akismet.php",
+    "auto-sizes/auto-sizes.php",
+    "ceske-sluzby/ceske-sluzby.php",
+    "cookie-law-info/cookie-law-info.php",
+    "facebook-for-woocommerce/facebook-for-woocommerce.php",
+    "google-site-kit/google-site-kit.php",
+    "insert-headers-and-footers/ihaf.php",
+    "jamu-multilingual/jamu-multilingual.php",
+    "loco-translate/loco.php",
+    "olympus-google-fonts/olympus-google-fonts.php",
+    "open-user-map/open-user-map.php",
+    "packeta/packeta.php",
+    "performance-lab/load.php",
+    "smart-slider-3/smart-slider-3.php",
+    "string-locator/string-locator.php",
+    "webp-uploads/load.php",
+    "woo-checkout-field-editor-pro/checkout-form-designer.php",
+    "woo-discount-rules/woo-discount-rules.php",
+    "woo-stripe-payment/stripe-payments.php",
+    "woocommerce-pay-for-payment/woocommerce-payforpayment.php",
+    "woocommerce-payments/woocommerce-payments.php",
+    "woocommerce-services/woocommerce-services.php",
+    "woocommerce/woocommerce.php",
+    "wordpress-importer/wordpress-importer.php",
+    "wordpress-seo/wp-seo.php",
+    "wp-optimize/wp-optimize.php",
+    "wpforms-lite/wpforms.php",
+    "wpify-woo/wpify-woo.php",
+    "yaycurrency/yay-currency.php",
+    "yaymail/yaymail.php"
+  ],
+  "price_filters": {
+    "woocommerce_product_get_price": [
+      {
+        "priority": -1000,
+        "callback": "WC_Deprecated_Filter_Hooks::maybe_handle_deprecated_hook"
+      },
+      {
+        "priority": 10,
+        "callback": "Yay_Currency\\Engine\\FEPages\\WooCommerceCurrency::custom_raw_price"
+      },
+      {
+        "priority": 99,
+        "callback": "Automattic\\WooCommerce\\Internal\\ScheduledSalePriceReconciler::reconcile_price"
+      },
+      {
+        "priority": 99,
+        "callback": "WCPay\\MultiCurrency\\FrontendPrices::get_product_price_string"
+      }
+    ],
+    "woocommerce_product_get_regular_price": [
+      {
+        "priority": -1000,
+        "callback": "WC_Deprecated_Filter_Hooks::maybe_handle_deprecated_hook"
+      },
+      {
+        "priority": 10,
+        "callback": "Yay_Currency\\Engine\\FEPages\\WooCommerceCurrency::custom_raw_price"
+      },
+      {
+        "priority": 99,
+        "callback": "WCPay\\MultiCurrency\\FrontendPrices::get_product_price_string"
+      }
+    ],
+    "woocommerce_product_get_sale_price": [
+      {
+        "priority": -1000,
+        "callback": "WC_Deprecated_Filter_Hooks::maybe_handle_deprecated_hook"
+      },
+      {
+        "priority": 10,
+        "callback": "Yay_Currency\\Engine\\FEPages\\WooCommerceCurrency::custom_raw_price"
+      },
+      {
+        "priority": 99,
+        "callback": "WCPay\\MultiCurrency\\FrontendPrices::get_product_price_string"
+      }
+    ]
+  }
 }
