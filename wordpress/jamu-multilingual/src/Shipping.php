@@ -92,6 +92,8 @@ final class Shipping
     const checkboxIds = ['ship-to-different-address-checkbox'];
     const copiedIds = ['shipping_first_name', 'shipping_last_name'];
     const sourceIds = ['billing_first_name', 'billing_last_name'];
+    let lastSelection = '';
+    let updateTimer = 0;
     const names = {
         'packeta-point-id': 'packeta-point-id',
         'ship-to-different-address-checkbox': 'ship_to_different_address'
@@ -196,13 +198,28 @@ final class Shipping
         element.dispatchEvent(new Event('change', { bubbles: true }));
     }
 
-    function setField(selector, value) {
+    function setField(selector, value, notify) {
         const element = document.querySelector(selector);
         if (!element || typeof value === 'undefined' || value === null) {
             return;
         }
-        element.value = value;
-        dispatchInput(element);
+        const nextValue = String(value);
+        if (String(element.value || '') === nextValue) {
+            return;
+        }
+        element.value = nextValue;
+        if (notify) {
+            dispatchInput(element);
+        }
+    }
+
+    function updateCheckoutOnce() {
+        window.clearTimeout(updateTimer);
+        updateTimer = window.setTimeout(function () {
+            if (window.jQuery) {
+                window.jQuery(document.body).trigger('update_checkout');
+            }
+        }, 100);
     }
 
     function mirrorDpdSelection(message) {
@@ -216,8 +233,13 @@ final class Shipping
         const name = point.contactInfo && point.contactInfo.name ? point.contactInfo.name : '';
         const address = point.location && point.location.address ? point.location.address : {};
         const id = point.id || point.pickupPointResult || name;
+        const selection = String(point.pickupPointResult || id || name || '');
+        if (!selection || selection === lastSelection) {
+            return;
+        }
+        lastSelection = selection;
 
-        setField('#packeta-point-id', point.pickupPointResult || id || name);
+        setField('#packeta-point-id', selection, false);
         const info = document.getElementById('packeta-point-info');
         if (info) {
             info.hidden = false;
@@ -225,13 +247,14 @@ final class Shipping
             placeDpdInfo(info);
         }
 
-        setField('[name="shipping_first_name"], #shipping-first_name, #shipping_first_name', (document.querySelector('[name="billing_first_name"], #billing-first_name, #billing_first_name') || {}).value || '');
-        setField('[name="shipping_last_name"], #shipping-last_name, #shipping_last_name', (document.querySelector('[name="billing_last_name"], #billing-last_name, #billing_last_name') || {}).value || '');
-        setField('[name="shipping_company"], #shipping-company, #shipping_company', id || '');
-        setField('[name="shipping_postcode"], #shipping-postcode, #shipping_postcode', address.zip || '');
-        setField('[name="shipping_address_1"], #shipping-address_1, #shipping_address_1', name || '');
-        setField('[name="shipping_address_2"], #shipping-address_2, #shipping_address_2', address.street || '');
-        setField('[name="shipping_city"], #shipping-city, #shipping_city', address.city || '');
+        setField('[name="shipping_first_name"], #shipping-first_name, #shipping_first_name', (document.querySelector('[name="billing_first_name"], #billing-first_name, #billing_first_name') || {}).value || '', false);
+        setField('[name="shipping_last_name"], #shipping-last_name, #shipping_last_name', (document.querySelector('[name="billing_last_name"], #billing-last_name, #billing_last_name') || {}).value || '', false);
+        setField('[name="shipping_company"], #shipping-company, #shipping_company', id || '', false);
+        setField('[name="shipping_postcode"], #shipping-postcode, #shipping_postcode', address.zip || '', false);
+        setField('[name="shipping_address_1"], #shipping-address_1, #shipping_address_1', name || '', false);
+        setField('[name="shipping_address_2"], #shipping-address_2, #shipping_address_2', address.street || '', false);
+        setField('[name="shipping_city"], #shipping-city, #shipping_city', address.city || '', false);
+        updateCheckoutOnce();
     }
 
     function translateTextNode(node) {
@@ -409,7 +432,6 @@ final class Shipping
     }
 
     new MutationObserver(function (mutations) {
-        ensureDpdElements();
         for (const mutation of mutations) {
             for (const node of mutation.addedNodes) {
                 if (node.nodeType === 1) {
