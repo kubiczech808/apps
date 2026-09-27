@@ -190,57 +190,6 @@ final class Shipping
         textIds.forEach(ensureText);
     }
 
-    function installLegacyDpdFieldGuard() {
-        // WC Doprava's bundled dpd.js calls document.getElementById(...).value
-        // without checking the result. WooCommerce can replace checkout
-        // fragments between opening the picker and receiving its postMessage.
-        // Keep the workaround intentionally limited to dpd.js's own technical
-        // fields; every other DOM lookup remains the browser's native lookup.
-        const types = {
-            'packeta-point-id': 'hidden',
-            'ship-to-different-address-checkbox': 'checkbox',
-            'shipping_first_name': 'hidden',
-            'shipping_last_name': 'hidden',
-            'shipping_company': 'hidden',
-            'shipping_postcode': 'hidden',
-            'shipping_address_1': 'hidden',
-            'shipping_address_2': 'hidden',
-            'shipping_city': 'hidden',
-            'billing_first_name': 'hidden',
-            'billing_last_name': 'hidden'
-        };
-        const nativeGetById = document.getElementById;
-
-        if (nativeGetById && nativeGetById.jamuMlDpdGuard) {
-            return;
-        }
-
-        const guardedGetById = function (id) {
-            let element = nativeGetById.call(document, id);
-            if (element || !document.body) {
-                return element;
-            }
-
-            if (id === 'packeta-point-info') {
-                return ensureText(id);
-            }
-
-            if (!Object.prototype.hasOwnProperty.call(types, id)) {
-                return element;
-            }
-
-            return ensureInput(id, types[id]);
-        };
-        guardedGetById.jamuMlDpdGuard = true;
-
-        try {
-            document.getElementById = guardedGetById;
-        } catch (error) {
-            // Browsers where the native method is immutable still use the
-            // capture-phase message guard above.
-        }
-    }
-
     function dispatchInput(element) {
         if (!element) {
             return;
@@ -477,11 +426,25 @@ final class Shipping
 
     installPacketaPatch();
     ensureDpdElements();
-    installLegacyDpdFieldGuard();
     translateDpdUi(document.body);
 
     window.addEventListener('message', function (event) {
+        if (!event.data || !event.data.dpdWidget) {
+            return;
+        }
+
+        // WC Doprava's legacy dpd.js subsequently handles the same message
+        // and writes to checkout fields without null checks. WooCommerce may
+        // have replaced those fields while the picker was open. We own the
+        // compatible, guarded update above, so do not let that listener run.
         mirrorDpdSelection(event.data);
+        if (event.data.dpdWidget.message === 'widgetClose') {
+            const frame = document.getElementById('packeta-widget');
+            if (frame && frame.parentElement) {
+                frame.parentElement.style.visibility = 'hidden';
+            }
+        }
+        event.stopImmediatePropagation();
     }, true);
 
     if (document.readyState === 'loading') {
