@@ -370,3 +370,32 @@ test("a derived tag never masks the market's own, and the report says which it h
     "the report must state how much of the table is real");
   assert.match(source, /describe TITLES, not markets/);
 });
+
+test("hours-before-resolution is read off the entry stamp, and negative means under way", async () => {
+  const { entryTimingBucket, hoursBeforeResolution } = await import("../tools/dip-outcome-analysis.mjs");
+
+  // daysToResolution is stamped AT ENTRY, so it says how far ahead of the end the position
+  // was opened. The sign carries the answer to "underway vs before": past the scheduled end
+  // means the fixture was already running.
+  assert.equal(hoursBeforeResolution({ daysToResolution: 1 }), 24);
+  assert.equal(entryTimingBucket({ daysToResolution: -0.12 }), "a under way");
+  assert.equal(entryTimingBucket({ daysToResolution: 0 }), "a under way",
+    "exactly at the end is not 'ahead of' it");
+  assert.equal(entryTimingBucket({ daysToResolution: 1 / 24 }), "b <2h");
+  assert.equal(entryTimingBucket({ daysToResolution: 5 / 24 }), "c 2-6h");
+  assert.equal(entryTimingBucket({ daysToResolution: 20 / 24 }), "d 6-24h");
+  assert.equal(entryTimingBucket({ daysToResolution: 2 }), "e 1-3d");
+  assert.equal(entryTimingBucket({ daysToResolution: 10 }), "f 3d+");
+
+  // The bait: an unstamped trade must not land in a real bucket. Defaulting it to "under
+  // way" would put every row that simply never recorded the field into the answer.
+  assert.equal(entryTimingBucket({}), "unknown");
+  assert.equal(entryTimingBucket({ daysToResolution: null }), "unknown");
+  assert.equal(hoursBeforeResolution({}), null);
+
+  // No gap between buckets: every stamped trade lands somewhere real.
+  for (let days = -2; days <= 12; days += 0.05) {
+    const label = entryTimingBucket({ daysToResolution: Number(days.toFixed(3)) });
+    assert.notEqual(label, "unknown", `${days.toFixed(2)}d fell outside every bucket`);
+  }
+});

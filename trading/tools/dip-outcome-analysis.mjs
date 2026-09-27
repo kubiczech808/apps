@@ -162,6 +162,34 @@ export const probabilityBand = (trade) => bucketOf(num(trade?.entryPrice), PROBA
 // The bar: return per dollar staked, above this, is what "profitable" means here.
 export const PROFIT_BAR = 0.05;
 
+// How long before the market resolved was this entry taken?
+//
+// daysToResolution is stamped on the trade AT ENTRY, so it says how far ahead of the end the
+// position was opened. A NEGATIVE value means the scheduled end had already passed when the
+// trade was made -- the fixture was under way, or over and awaiting settlement. That is the
+// "underway" case, read off a field every trade already carries, rather than from
+// firstObservedAt/eventStartTime which only trades opened since today record.
+export function hoursBeforeResolution(trade = {}) {
+  // Not num() alone: Number(null) is 0 and Number("") is 0, and both are finite -- so a
+  // trade that never recorded the field would read as "resolves right now" and be filed
+  // under "under way", which is one of the two answers this table exists to compare.
+  const raw = trade?.daysToResolution;
+  if (raw == null || raw === "") return null;
+  const days = num(raw);
+  return days == null ? null : days * 24;
+}
+
+export function entryTimingBucket(trade = {}) {
+  const hours = hoursBeforeResolution(trade);
+  if (hours == null) return "unknown";
+  if (hours <= 0) return "a under way";
+  if (hours <= 2) return "b <2h";
+  if (hours <= 6) return "c 2-6h";
+  if (hours <= 24) return "d 6-24h";
+  if (hours <= 72) return "e 1-3d";
+  return "f 3d+";
+}
+
 // n, wins, P/L and P/L per dollar staked. Per-dollar matters because the stake is fixed per
 // portfolio but the cost of a trade is not: a 30% entry buys three times the shares a 90%
 // entry does, so raw P/L flatters cheap entries.
@@ -276,6 +304,9 @@ async function main() {
       groupBy(enriched, probabilityBand));
     printTable("by MARKET SHAPE", groupBy(enriched, (trade) => trade.shape));
     printTable("by ENTRY VOLUME", groupBy(enriched, (trade) => volumeBucket(trade.entryVolume)));
+    printTable("by HOURS BEFORE RESOLUTION at entry", groupBy(enriched, entryTimingBucket));
+    printTable("by SHAPE x hours before resolution",
+      groupBy(enriched, (trade) => `${trade.shape} / ${entryTimingBucket(trade)}`));
   }
 
   if (everything.length) {
