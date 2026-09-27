@@ -214,6 +214,12 @@ export function subtractShapes(all, parts) {
     rest.pnlUsdc -= num(part.pnlUsdc) ?? 0;
   }
   if (rest.trades <= 0) return null;
+  // A remainder that wins more often than it traded is not a remainder, it is evidence that
+  // the three requests did not describe the same sample. The first run of this printed "uel
+  // - everything else 134.4%" because the all-shapes row it subtracted from was a
+  // shape-specific row that had survived the duplicate collapse. Refusing the row is the
+  // only honest output: an impossible number presented as a setup is worse than a gap.
+  if (rest.wins < 0 || rest.wins > rest.trades) return null;
   rest.stakedUsdc = Number(rest.stakedUsdc.toFixed(2));
   rest.pnlUsdc = Number(rest.pnlUsdc.toFixed(2));
   return rest;
@@ -261,6 +267,11 @@ async function sweep() {
     const rollup = new Map();
     for (const row of rows) {
       if (row.horizon !== "*" || row.tag === "*") continue;
+      // The row must describe the shape that was asked for. Accepting any shape here is what
+      // made the first run print a tag's total as 126 trades while its own over-under leg
+      // held 4,556: the duplicate collapse leaves shape-specific rows in the same response,
+      // and the first one seen for a tag was not its all-shapes total.
+      if (row.shape !== shape) continue;
       if (!rollup.has(row.tag)) rollup.set(row.tag, row);
     }
     byShape.set(shape, rollup);

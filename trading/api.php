@@ -7983,6 +7983,7 @@ try {
                     'scanned' => $accumulated['scanned'],
                     'priced' => $accumulated['priced'],
                     'afterDueRejected' => $accumulated['afterDueRejected'] ?? 0,
+                    'sideFlippedRejected' => $accumulated['sideFlippedRejected'] ?? 0,
                 ],
             );
             respond([
@@ -7991,6 +7992,7 @@ try {
                 'result' => $result + [
                     'scanned' => (int) $accumulated['scanned'],
                     'priced' => (int) $accumulated['priced'],
+                    'sideFlippedRejected' => (int) ($accumulated['sideFlippedRejected'] ?? 0),
                     'sources' => $accumulated['sources'] ?? [],
                 ],
             ]);

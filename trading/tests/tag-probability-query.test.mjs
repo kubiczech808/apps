@@ -141,3 +141,29 @@ test("everything-else is the remainder, component by component", () => {
   assert.equal(subtractShapes(all, [all]), null, "a remainder of nothing is not a row");
   assert.equal(subtractShapes(null, [outright]), null);
 });
+
+test("an impossible remainder is refused, not printed", () => {
+  // The first run of the sweep printed "uel - everything else 134.4%" because the
+  // all-shapes row it subtracted from was a shape-specific row that had survived the
+  // duplicate collapse. Wins above trades is the signature of subtracting rows that do not
+  // describe the same sample, and an impossible number presented as a setup is worse than
+  // a gap in the table.
+  const all = { trades: 83, wins: 83, stakedUsdc: 420, pnlUsdc: 25.59 };
+  const overUnder = { trades: 51, wins: 40, stakedUsdc: 258, pnlUsdc: -18.74 };
+  assert.equal(subtractShapes(all, [overUnder]), null,
+    "43 wins out of 32 trades is not a row, it is a contradiction");
+
+  // And a remainder that is merely unusual still comes through, so the guard is not a
+  // silent filter on anything surprising.
+  const honest = { trades: 83, wins: 70, stakedUsdc: 420, pnlUsdc: 25.59 };
+  assert.deepEqual(subtractShapes(honest, [overUnder]), { trades: 32, wins: 30, stakedUsdc: 162, pnlUsdc: 44.33 });
+});
+
+test("the sweep reads only the shape it asked for", () => {
+  // A tag's total printed as 126 trades while its own over-under leg held 4,556 came from
+  // accepting whichever row for that tag appeared first, whatever shape it carried.
+  const tool = readFileSync(new URL("../tools/tag-probability-query.mjs", import.meta.url), "utf8");
+  assert.match(tool, /if \(row\.shape !== shape\) continue;/,
+    "the rollup must match the requested shape, not merely the requested tag");
+  assert.match(tool, /if \(row\.horizon !== "\*" \|\| row\.tag === "\*"\) continue;/);
+});
