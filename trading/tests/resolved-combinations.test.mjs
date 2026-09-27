@@ -37,7 +37,7 @@ const row = (entry, won, { tags = ["esports"], question = "A vs B", firstObserve
   ...(feeRate == null ? {} : { feeRate }),
 });
 
-function combinations(rows, query = "min_trades=1", action = "resolved-combinations") {
+function combinations(rows, query = "min_trades=1", action = "resolved-combinations", activeRows = null) {
   const directory = mkdtempSync(join(tmpdir(), "combinations-"));
   try {
     mkdirSync(join(directory, "data"), { recursive: true });
@@ -55,11 +55,21 @@ function combinations(rows, query = "min_trades=1", action = "resolved-combinati
       function trading_storage_document_put(string $k, string $t, array $p): void {}
       function trading_storage_event_append(string $s, ?string $p, array $q, ?string $o = null): void {}
     `);
+    // Two segments, because the endpoint reads the settled archive for its statistics and
+    // the ACTIVE catalogue for what can still be entered, and the difference between them is
+    // exactly what the tradable-now filter is about.
     writeFileSync(join(directory, "data", "paper-state.json"), JSON.stringify({
       schemaVersion: 7,
       paperPortfolios: {},
-      stateSegments: { resolvedObservations: { file: "paper-state.resolved.json" } },
+      stateSegments: {
+        resolvedObservations: { file: "paper-state.resolved.json" },
+        ...(activeRows ? { observations: { file: "paper-state.active.json" } } : {}),
+      },
     }));
+    if (activeRows) {
+      writeFileSync(join(directory, "data", "paper-state.active.json"),
+        JSON.stringify({ marketObservations: activeRows }));
+    }
     writeFileSync(join(directory, "data", "paper-state.resolved.json"),
       JSON.stringify({ resolvedMarketObservations: rows }));
     writeFileSync(join(directory, "prelude.php"), `<?php
@@ -446,6 +456,58 @@ test("pinning the floor turns the ranking into a comparison between setups at on
   for (const bad of ["min_trades=1&probability=49", "min_trades=1&probability=100"]) {
     assert.equal(combinations(rows, bad).ok, false, `${bad} must be refused`);
   }
+});
+
+test("a tag nothing open carries is not offered as a setup", () => {
+  // Reported after "1h" was picked off this page: "dohledal jsem, ze prilezitosti k tagu 1h
+  // neexistuji". They do not, and it is not a scraping fault -- PAPER_MARKET_SCAN_TAG_SCOPE
+  // is "sports,esports", so the crypto strike ladders and hourly series stopped being
+  // collected. Their settled rows remain and read as setups nobody can enter.
+  const settled = [
+    ...Array.from({ length: 20 }, () => row(0.8, true, { tags: ["1h"] })),
+    ...Array.from({ length: 20 }, () => row(0.8, true, { tags: ["soccer"] })),
+  ];
+  // The active catalogue still carries soccer, and nothing carries 1h any more.
+  const active = [
+    { ...row(0.8, true, { tags: ["soccer"] }), status: "SCRAPED", finalOutcomePrice: null, marketClosed: false, acceptingOrders: true },
+  ];
+
+  const openOnly = combinations(settled, "min_trades=1", "resolved-combinations", active);
+  assert.equal(openOnly.onlyOpen, true, "the page is acted on, so this is the default");
+  assert.ok(openOnly.best.some((entry) => entry.tag === "soccer"), "a tradable tag stays");
+  assert.ok(!openOnly.best.some((entry) => entry.tag === "1h"),
+    `a tag with nothing open must be gone: ${[...new Set(openOnly.best.map((e) => e.tag))].join(", ")}`);
+  assert.ok(openOnly.hiddenTags.includes("1h"), "and it must be named, not silently missing");
+  assert.equal(openOnly.hiddenTagCount, 1);
+  assert.ok(openOnly.best.some((entry) => entry.tag === "*"),
+    "the any-tag rollup is not a tag anybody selects, so it is not filtered away");
+
+  // The history stays reachable, so the filter is a default rather than a deletion.
+  const everything = combinations(settled, "min_trades=1&only_open=false", "resolved-combinations", active);
+  assert.equal(everything.onlyOpen, false);
+  assert.ok(everything.best.some((entry) => entry.tag === "1h"));
+
+  // A row that is settled, closed, or no longer accepting orders is not "open", so a tag
+  // carried only by those does not qualify -- that is the whole distinction.
+  const staleActive = [
+    { ...row(0.8, true, { tags: ["1h"] }), status: "RESOLVED" },
+    { ...row(0.8, true, { tags: ["1h"] }), status: "SCRAPED", marketClosed: true },
+    { ...row(0.8, true, { tags: ["1h"] }), status: "SCRAPED", acceptingOrders: false },
+    ...active,
+  ];
+  const stale = combinations(settled, "min_trades=1", "resolved-combinations", staleActive);
+  assert.ok(!stale.best.some((entry) => entry.tag === "1h"),
+    "a closed or unsettled-but-untradable row does not make a tag tradable");
+
+  // A catalogue that yielded nothing is one this request could not read -- a missing
+  // segment, a scan that has never run -- not a market in which nothing is open. Filtering
+  // on it would blank the page and present that as the answer.
+  const unreadable = combinations(settled, "min_trades=1");
+  assert.equal(unreadable.openTagsKnown, false, "the response has to say the filter did not run");
+  assert.ok(unreadable.best.some((entry) => entry.tag === "1h"),
+    "and every tag stays, because nothing was proved about any of them");
+  assert.equal(unreadable.hiddenTagCount, 0);
+  assert.equal(openOnly.openTagsKnown, true, "against a readable catalogue it does run");
 });
 
 test("an unknown filter value is refused rather than quietly matching nothing", () => {

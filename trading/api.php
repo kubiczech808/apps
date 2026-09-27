@@ -2083,6 +2083,44 @@ function simulation_row_is_open(array $item): bool
         && ($item['acceptingOrders'] ?? null) !== false;
 }
 
+/**
+ * The tags that still have something to trade right now.
+ *
+ * The Setup finder ranks the settled archive, which reaches back past changes to what is
+ * even scanned: PAPER_MARKET_SCAN_TAG_SCOPE is "sports,esports", so the crypto strike
+ * ladders, the hourly series and the weather tags stopped being collected and can never
+ * produce an opportunity again. Their statistics stayed on the page and read as setups, and
+ * "1h" was picked off it before anyone noticed there is no such market left to buy.
+ *
+ * Reads the ACTIVE catalogue only -- never the resolved archive, which is the read that
+ * exhausted this host's memory limit once. It streams rather than decodes, so the cost is
+ * one pass over the capped catalogue rather than its size in memory, and the page that calls
+ * it is a settings tab opened by hand rather than anything the bots request.
+ */
+function open_catalogue_tag_slugs(): array
+{
+    $corePath = state_file_paths()['paper'];
+    $core = decode_state_file($corePath, false);
+    $manifest = is_array($core['stateSegments'] ?? null) ? $core['stateSegments'] : [];
+    $path = state_segment_path(['stateSegments' => $manifest], $corePath, 'observations') ?? $corePath;
+
+    $slugs = [];
+    stream_json_array_members($path, 'marketObservations', static function (array $item) use (&$slugs): bool {
+        if (!simulation_row_is_open($item)) {
+            return true;
+        }
+        foreach (simulation_taxonomy_labels($item, 'firstPolymarketTags', 'polymarketTags') as $tag) {
+            $slug = strtolower(trim((string) $tag));
+            if ($slug !== '') {
+                $slugs[$slug] = true;
+            }
+        }
+        return true;
+    });
+
+    return $slugs;
+}
+
 function compact_text(mixed $value, int $limit = 700): string
 {
     $text = trim((string) ($value ?? ''));
@@ -9241,6 +9279,12 @@ try {
         // best from 70% up" has to be asked once per tag, because the ranked slice only
         // carries whichever thresholds happened to score highest -- and one request per tag
         // reloads the whole stored fold per request.
+        // On by default, because the page exists to be acted on. A tag with nothing open is
+        // not a setup that is out of favour, it is one that cannot be entered at all --
+        // PAPER_MARKET_SCAN_TAG_SCOPE stopped collecting whole categories, so their rows are
+        // history with no future. Passing only_open=false restores the historical view.
+        $onlyOpen = strtolower(trim((string) ($_GET['only_open'] ?? 'true'))) !== 'false';
+
         $filterProbability = isset($_GET['probability']) ? (int) $_GET['probability'] : null;
         if ($filterProbability !== null && ($filterProbability < 50 || $filterProbability > 99)) {
             respond(['ok' => false, 'error' => 'A probability floor between 50 and 99 is required.'], 400);
@@ -9452,6 +9496,29 @@ try {
             $rows = array_values(array_filter($rows, static fn (array $row): bool => (int) $row['probabilityMin'] === $filterProbability));
         }
 
+        // Applied last, and counted, so the page can say a tag was dropped for having nothing
+        // open rather than appear never to have held it. The any-tag rollups stay: they are
+        // not a tag anybody can select.
+        $openTags = null;
+        $hiddenTags = [];
+        if ($onlyOpen) {
+            $openTags = open_catalogue_tag_slugs();
+        }
+        // An active catalogue that yielded no tags at all is a catalogue this request could
+        // not read -- a missing segment, a scan that has never run -- not a market in which
+        // nothing is open. Filtering on it would blank the page and call it an answer, so it
+        // is left unfiltered and the response says the filter did not run.
+        if ($openTags !== null && $openTags !== []) {
+            $rows = array_values(array_filter($rows, static function (array $row) use ($openTags, &$hiddenTags): bool {
+                $tag = (string) $row['tag'];
+                if ($tag === '*' || isset($openTags[$tag])) {
+                    return true;
+                }
+                $hiddenTags[$tag] = true;
+                return false;
+            }));
+        }
+
         // Ranked by NET RETURN after recorded entry fees, because a combination that stakes
         // ten times as much will always win on nominal profit and says nothing about the
         // setup. The nominal figure travels with every row, which is the other half of what
@@ -9489,6 +9556,16 @@ try {
             // for 1pp and got 5pp can see that rather than misread the bands it is handed.
             'bandStepRequested' => ((int) ($_GET['band_step'] ?? 5)) === 1 ? 1 : 5,
             'probability' => $filterProbability,
+            'onlyOpen' => $onlyOpen,
+            // Whether the filter actually ran, which "0 hidden" cannot say on its own: it
+            // reads the same for a catalogue full of tradable tags and for one that could
+            // not be read at all.
+            'openTagsKnown' => $openTags !== null && $openTags !== [],
+            'openTagCount' => $openTags === null ? null : count($openTags),
+            // Named, not just counted: "1h is gone because nothing carries it now" is the
+            // sentence somebody needs, and a bare number does not say it.
+            'hiddenTags' => array_slice(array_keys($hiddenTags), 0, 60),
+            'hiddenTagCount' => count($hiddenTags),
             'best' => $best,
             'worst' => $worst,
             'generatedAt' => gmdate('c'),

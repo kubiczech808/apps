@@ -336,6 +336,7 @@ const els = {
   setupFinderModeOptions: document.querySelectorAll("[data-setup-finder-mode-option]"),
   setupFinderBandStep: document.querySelector("[data-setup-finder-band-step]"),
   setupFinderBandStepControl: document.querySelector("[data-setup-finder-band-step-control]"),
+  setupFinderOnlyOpen: document.querySelector("[data-setup-finder-only-open]"),
   setupFinderRun: document.querySelector("[data-setup-finder-run]"),
   setupFinderStatus: document.querySelector("[data-setup-finder-status]"),
   tagAnalysisReport: document.querySelector("[data-tag-analysis-report]"),
@@ -3051,12 +3052,14 @@ async function loadSetupFinder() {
   const horizon = selectedSetupFinderHorizon();
   const mode = selectedSetupFinderMode();
   const bandStep = selectedSetupFinderBandStep();
+  const onlyOpen = String(els.setupFinderOnlyOpen?.value ?? "true") !== "false";
   if (els.setupFinderStatus) els.setupFinderStatus.textContent = "Reading the resolved archive...";
   renderSetupFinder();
   try {
     state.setupFinder = await fetchApiJson(`api.php?action=resolved-combinations&min_trades=${minTrades}&limit=120`
       + `&tag=${encodeURIComponent(tag)}&shape=${encodeURIComponent(shape)}`
-      + `&horizon=${encodeURIComponent(horizon)}&mode=${encodeURIComponent(mode)}&band_step=${bandStep}`);
+      + `&horizon=${encodeURIComponent(horizon)}&mode=${encodeURIComponent(mode)}&band_step=${bandStep}`
+      + `&only_open=${onlyOpen}`);
     if (els.setupFinderStatus) els.setupFinderStatus.textContent = "";
   } catch (error) {
     state.setupFinder = null;
@@ -3128,6 +3131,24 @@ function setupFinderScopeNote(data) {
     }
   } else {
     parts.push("Probability as a threshold: the stated minimum and everything above it.");
+  }
+  // Why a tag somebody remembers seeing is not on the page. Scanning was narrowed to sports
+  // and esports, so whole categories stopped being collected and their statistics describe
+  // markets that can no longer be entered.
+  if (data.onlyOpen) {
+    const hidden = Array.isArray(data.hiddenTags) ? data.hiddenTags : [];
+    if (!data.openTagsKnown) {
+      parts.push("The live catalogue could not be read, so no tag was hidden -- every row below"
+        + " is historical until it can be checked against what is open.");
+      return parts.join(" ");
+    }
+    parts.push(`Only tags the live catalogue still carries: ${formatInteger(data.openTagCount)} of them.`);
+    if (Number(data.hiddenTagCount || 0) > 0) {
+      parts.push(`${formatInteger(data.hiddenTagCount)} tag(s) hidden because nothing open carries them`
+        + `${hidden.length ? ` (${hidden.slice(0, 12).join(", ")}${data.hiddenTagCount > 12 ? ", ..." : ""})` : ""}.`);
+    }
+  } else {
+    parts.push("Including tags nothing open carries any more -- those rows cannot be traded, only read.");
   }
   return parts.join(" ");
 }
@@ -18284,7 +18305,7 @@ els.setupFinderRun?.addEventListener("click", () => {
 // Every filter is server-side for the same reason: the tag, the event type, the horizon and
 // the probability grouping all change which combinations are formed, not merely which of the
 // formed ones are shown.
-for (const control of [els.setupFinderTag, els.setupFinderShape, els.setupFinderHorizon, els.setupFinderBandStep]) {
+for (const control of [els.setupFinderTag, els.setupFinderShape, els.setupFinderHorizon, els.setupFinderBandStep, els.setupFinderOnlyOpen]) {
   control?.addEventListener("change", () => {
     state.setupFinder = null;
     syncSetupFinderControls();
