@@ -1942,11 +1942,23 @@ function resolved_stats_settled_outcome(array $item): ?int
     if ($outcome === null) {
         return null;
     }
-    if (resolved_stats_entry_side_is_the_settled_side($item)) {
+    // Inverting needs PROOF that the settlement was graded against the other side, and only
+    // settledTokenId is that proof.
+    //
+    // Guessing it from firstTokenId != tokenId was wrong, and measurably so. The catalogue
+    // path -- resolvedMarketObservationFromMarket -- already grades
+    // `item.firstOutcome || item.outcome`, which IS the priced side, so its rows need no
+    // inversion however far the current side has since drifted. Read off the archive:
+    // "Will Lyn 1896 FK win" was priced on No, settled 0 on No, and the inversion turned
+    // that loss into a win. Only resolvedEvaluationFromMarket grades the current side, and
+    // only rows it wrote carry settledTokenId.
+    $settledToken = trim((string) ($item['settledTokenId'] ?? ''));
+    $firstToken = trim((string) ($item['firstTokenId'] ?? ''));
+    if ($settledToken === '' || $firstToken === '' || $settledToken === $firstToken) {
         return $outcome;
     }
-    // Changed sides. Only a two-outcome market can be inverted, because only there does the
-    // other side settle at exactly the complement.
+    // Proven to be the other side. Only a two-outcome market can be inverted, because only
+    // there does the other side settle at exactly the complement.
     $outcomeCount = (int) ($item['outcomeCount'] ?? 0);
     $hasBothTokens = trim((string) ($item['binaryYesTokenId'] ?? '')) !== ''
         && trim((string) ($item['binaryNoTokenId'] ?? '')) !== '';

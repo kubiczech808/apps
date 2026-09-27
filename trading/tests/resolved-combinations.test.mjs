@@ -206,44 +206,37 @@ test("rows first recorded after their stated resolution are not proposed as hist
   assert.equal(payload.afterDueRejected, 1);
 });
 
-test("a row priced on one side and settled on the other is not a winning setup", () => {
-  // Reported as "nechce se mi tem vysledkum moc verit, jsou az moc dobre": multi-strikes and
-  // 1h showed 120 trades, 120 wins, +93.2%. Reconstructing the entry price from the published
-  // capital and P/L gives 5*120/(578.85+621.00) = 0.50006 -- every one of them bought at
-  // exactly 50c and every one of them won.
+test("a side that drifted is reported, but the recorded grade is trusted without proof", () => {
+  // Rewritten. It used to assert that any row whose priced side differs from its current
+  // side is dropped, on the theory that such a row holds the old side's entry price against
+  // the new side's settlement. Two measurements killed that theory:
   //
-  // The cause is structural, not luck. A binary catalogue row is keyed by the MARKET
-  // (binary:<slug>) and each rescan re-picks whichever side is above 50c as its outcome and
-  // tokenId, while firstMarketProbability stays sticky from the first sighting. A market that
-  // crosses 50c therefore holds the old side's entry price against the new side's settlement,
-  // and the new side is the one that goes on to win. 50c is where the crossing happens, which
-  // is why the sample piles up there.
-  const flipped = {
+  //   * the drift is 24 of 1200 rows, which cannot produce a 92% win rate on a tag, and
+  //   * resolvedMarketObservationFromMarket already grades `firstOutcome || outcome` -- the
+  //     PRICED side -- so its rows are right however far the current side has drifted.
+  //
+  // Read off the archive: "Will Lyn 1896 FK win" was priced on No and settled 0 on No, and
+  // treating the drift as a mis-grade turned that loss into a win. Only settledTokenId says
+  // a row was graded on the other side, and only resolvedEvaluationFromMarket writes it.
+  const drifted = {
     ...row(0.5, true),
     firstOutcome: "Yes", firstTokenId: "token-yes",
     outcome: "No", tokenId: "token-no",
   };
-  const honest = {
+  const steady = {
     ...row(0.5, true),
     firstOutcome: "Yes", firstTokenId: "token-yes",
     outcome: "Yes", tokenId: "token-yes",
   };
-  const payload = combinations([flipped, honest], "min_trades=1");
+  const payload = combinations([drifted, steady], "min_trades=1");
   assert.equal(payload.scannedRows, 2);
-  assert.equal(payload.pricedRows, 1, "only the row whose priced side is the settled side");
-  assert.equal(payload.sideFlippedRejected, 1, "and the count is published, not silently dropped");
-  assert.equal(find(payload.best, { tag: "*", shape: "*", horizon: "*", probability: 50 }).trades, 1);
+  assert.equal(payload.pricedRows, 2, "both are priced: neither grade has been shown to be wrong");
+  assert.equal(payload.sideFlippedRejected, 1, "the drift is still counted, so its size stays visible");
+  assert.equal(find(payload.best, { tag: "*", shape: "*", horizon: "*", probability: 50 }).trades, 2);
+  assert.equal(find(payload.best, { tag: "*", shape: "*", horizon: "*", probability: 50 }).wins, 2);
 
-  // Matching on the outcome name alone is enough when no token was recorded, because that is
-  // the pair older archive rows carry.
-  const byNameOnly = combinations([
-    { ...row(0.5, true), firstOutcome: "Yes", outcome: "No" },
-  ], "min_trades=1");
-  assert.equal(byNameOnly.pricedRows, 0);
-  assert.equal(byNameOnly.sideFlippedRejected, 1);
-
-  // A row that cannot answer is still admitted: most of the archive predates the field, and
-  // rejecting all of it would empty the page rather than correct it.
+  // A row that records no side at all is admitted too: most of the archive predates the
+  // fields, and rejecting all of it would empty the page rather than correct it.
   const unknown = combinations([{ ...row(0.5, true), firstOutcome: null, firstTokenId: null, outcome: null, tokenId: null }], "min_trades=1");
   assert.equal(unknown.pricedRows, 1);
   assert.equal(unknown.sideFlippedRejected, 0);
@@ -254,6 +247,9 @@ test("a flipped row is corrected rather than discarded when the row can prove it
   // two-outcome book settles one side at 1 and the other at 0, so the priced side's result
   // is recoverable exactly -- the win recorded against the side that took the lead was a
   // LOSS for the side that was actually bought.
+  // settledTokenId is what makes this a flip that may be inverted. Without it the row is
+  // NOT inverted, because the catalogue path grades the priced side already -- see the
+  // unproven case below, which is the one the archive is actually full of.
   const flippedBinary = {
     ...row(0.5, true), outcomeCount: 2,
     firstOutcome: "Yes", firstTokenId: "token-yes",
@@ -271,6 +267,18 @@ test("a flipped row is corrected rather than discarded when the row can prove it
   // guess, so it is excluded instead.
   const unprovable = { ...flippedBinary, outcomeCount: 0 };
   assert.equal(combinations([unprovable], "min_trades=1").pricedRows, 0);
+
+  // And the case the archive is actually full of: the sides differ but NO settledTokenId
+  // says which one was graded. Inverting on that guess was wrong and measurably so --
+  // resolvedMarketObservationFromMarket grades `firstOutcome || outcome`, which IS the
+  // priced side, so those rows need no inversion however far the current side has drifted.
+  // Read off the archive: "Will Lyn 1896 FK win" was priced on No, settled 0 on No, and the
+  // guess turned that loss into a win.
+  const unproven = { ...flippedBinary, settledTokenId: undefined };
+  const asRecorded = combinations([unproven], "min_trades=1");
+  assert.equal(asRecorded.pricedRows, 1);
+  assert.equal(find(asRecorded.best, { tag: "*", shape: "*", horizon: "*", probability: 50 }).wins, 1,
+    "graded as recorded, because the recorded grade is already the priced side's");
 
   // And the written-down answer wins over any inference: firstSideFinalOutcomePrice is the
   // settlement of the priced side, recorded at resolution.
