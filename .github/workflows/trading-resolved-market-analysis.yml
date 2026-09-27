@@ -1,0 +1,48 @@
+name: Trading Resolved Market Analysis
+
+# Read-only diagnostic, manual only. Reads the resolved observation archive over HTTPS.
+# Places no orders, writes nothing, publishes nothing, uses no secrets.
+#
+# Answers a question the trades cannot: how a probability band would have done on every
+# settled market carrying a tag, by market shape and by whether the entry would have been
+# taken before kickoff or with the fixture already under way. A simulation over recorded
+# quotes, not a record of trades -- no spread crossed, no fee charged.
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag or title fragment to analyse (e.g. dota)"
+        required: false
+        default: "dota"
+        type: string
+      min_probability:
+        description: "Bottom of the entry band, as a fraction (e.g. 0.51)"
+        required: false
+        default: "0.51"
+        type: string
+      max_probability:
+        description: "Top of the entry band, as a fraction (e.g. 0.60)"
+        required: false
+        default: "0.60"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  analyse:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Simulate the band over every settled market carrying the tag
+        working-directory: trading
+        env:
+          MARKET_TAG: ${{ inputs.tag }}
+          MIN_PROBABILITY: ${{ inputs.min_probability }}
+          MAX_PROBABILITY: ${{ inputs.max_probability }}
+        run: node tools/resolved-market-analysis.mjs
