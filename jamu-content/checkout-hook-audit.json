@@ -1,0 +1,74 @@
+{
+  "hooks": {
+    "wc_ajax_update_order_review": [
+      {
+        "priority": 5,
+        "callback": "WC_Cache_Helper::update_geolocation_hash",
+        "file": "/wp-content/plugins/woocommerce/includes/class-wc-cache-helper.php"
+      },
+      {
+        "priority": 10,
+        "callback": "WC_AJAX::update_order_review",
+        "file": "/wp-content/plugins/woocommerce/includes/class-wc-ajax.php"
+      }
+    ],
+    "woocommerce_checkout_update_order_review": [],
+    "woocommerce_review_order_before_shipping": [
+      {
+        "priority": 10,
+        "callback": "Packetery\\Module\\Checkout\\SessionService::actionUpdateShippingRates",
+        "file": "/wp-content/plugins/packeta/src/Packetery/Module/Checkout/SessionService.php"
+      }
+    ],
+    "woocommerce_review_order_after_shipping": [
+      {
+        "priority": 10,
+        "callback": "doprava_zasilkovna_zobrazit_pobocky",
+        "file": "/wp-content/plugins/WC-Doprava-main/wcdoprava.php"
+      },
+      {
+        "priority": 10,
+        "callback": "doprava_posta_zobrazit_pobocky",
+        "file": "/wp-content/plugins/WC-Doprava-main/wcdoprava.php"
+      },
+      {
+        "priority": 10,
+        "callback": "doprava_wedo_zobrazit_pobocky",
+        "file": "/wp-content/plugins/WC-Doprava-main/wcdoprava.php"
+      },
+      {
+        "priority": 10,
+        "callback": "doprava_gls_zobrazit_pobocky",
+        "file": "/wp-content/plugins/WC-Doprava-main/wcdoprava.php"
+      },
+      {
+        "priority": 10,
+        "callback": "return_shipping_method",
+        "file": "/wp-content/plugins/WC-Doprava-main/wcdoprava.php"
+      },
+      {
+        "priority": 10,
+        "callback": "Packetery\\Module\\Checkout\\CheckoutRenderer::actionRenderEstimatedDeliveryDateSection",
+        "file": "/wp-content/plugins/packeta/src/Packetery/Module/Checkout/CheckoutRenderer.php"
+      },
+      {
+        "priority": 10,
+        "callback": "ceske_sluzby_ulozenka_zobrazit_pobocky",
+        "file": "/wp-content/plugins/ceske-sluzby/ceske-sluzby.php"
+      },
+      {
+        "priority": 10,
+        "callback": "ceske_sluzby_dpd_parcelshop_zobrazit_pobocky",
+        "file": "/wp-content/plugins/ceske-sluzby/ceske-sluzby.php"
+      },
+      {
+        "priority": 10,
+        "callback": "Packetery\\Module\\Checkout\\CheckoutRenderer::actionRenderWidgetButtonTableRow",
+        "file": "/wp-content/plugins/packeta/src/Packetery/Module/Checkout/CheckoutRenderer.php"
+      }
+    ],
+    "woocommerce_cart_totals_before_shipping": [],
+    "woocommerce_cart_totals_after_shipping": [],
+    "woocommerce_after_shipping_rate": []
+  }
+}
