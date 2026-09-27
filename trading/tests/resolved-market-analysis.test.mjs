@@ -149,3 +149,23 @@ test("the report says what it is not, where the numbers are read", () => {
   assert.match(source, /no spread is crossed and no fee is charged/i);
   assert.ok(!/^main\(\)/m.test(source), "and it must not run on import");
 });
+
+test("the resolved page is read under the key api.php actually publishes it as", () => {
+  // The regression this exists for: the tool asked for scope=resolved and read only
+  // state.resolvedMarketObservations, got 0 rows from an archive holding thousands, and
+  // reported "nothing to analyse" as if that were the finding.
+  //
+  // compact_state_payload filters the archive into $rows and then assigns `$active = $rows`
+  // for BOTH scopes, so a resolved page is published under the same key an active one is.
+  // The scope decides the CONTENT, not the field name.
+  const tool = readFileSync(new URL("../tools/resolved-market-analysis.mjs", import.meta.url), "utf8");
+  const api = readFileSync(new URL("../api.php", import.meta.url), "utf8");
+
+  assert.match(api, /\$active = \$rows;/,
+    "both scopes funnel into one variable, which is why one key carries both");
+  assert.match(tool, /state\.marketObservations/,
+    "the tool must read the key the resolved page actually arrives under");
+  assert.match(tool, /state\.resolvedMarketObservations/,
+    "and the other, so a pre-segmentation state still works");
+  assert.match(tool, /scope=resolved/, "while still asking for the resolved catalogue");
+});

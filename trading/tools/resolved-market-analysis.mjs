@@ -174,7 +174,15 @@ async function loadResolved() {
       break;
     }
     const state = payload?.state || payload || {};
-    const page = Array.isArray(state.resolvedMarketObservations) ? state.resolvedMarketObservations : [];
+    // BOTH keys. A scope=resolved page does not come back under
+    // resolvedMarketObservations: compact_state_payload filters the archive into $rows and
+    // assigns `$active = $rows`, so both scopes are published under the SAME key. Reading
+    // only the resolved-sounding one returned 0 rows from an archive that has thousands,
+    // and the tool reported "nothing to analyse" as though that were the answer.
+    const page = [
+      ...(Array.isArray(state.marketObservations) ? state.marketObservations : []),
+      ...(Array.isArray(state.resolvedMarketObservations) ? state.resolvedMarketObservations : []),
+    ];
     if (!page.length) break;
     rows.push(...page);
     if (page.length < 1200) break;
