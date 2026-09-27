@@ -353,7 +353,7 @@ test('active price-action setups retain their entry and target zones in the tabl
   assert.match(js, /\[owner\.entryZone, owner\.tp2Zone\]/)
   assert.match(js, /const setupZonesForEntry = \(entry\) =>/)
   assert.match(js, /Zóna patří k aktivní objednávce nebo otevřené pozici/)
-  assert.match(js, /const activeSetupZones = setupZonesForEntry\(chartEntry\)/)
+  assert.match(js, /const entryZonesForDisplay = \(entry\) =>/)
   assert.match(js, /activeSetupZone \|\|/)
 })
 
@@ -377,10 +377,17 @@ test('consumed FVGs remain visible only as current-setup or pullback-overlapping
   assert.match(css, /\.asset-price-chart \.asset-zone-historical/)
 })
 
-test('charts and zone details include every untouched FVG from the active catalog', () => {
-  assert.match(js, /\.\.\.\(zones\?\.\[`unfilled\$\{key\}`\] \?\? \[\]\)/)
-  assert.match(js, /const availableZones = zoneList\(item, type\)/)
-  assert.match(js, /uniqueZones\(\[\.\.\.availableZones, \.\.\.activeSetupZones, \.\.\.plannedEntries/)
+test('decision surfaces keep only entry zones while charts retain bounded target and stop context', () => {
+  assert.match(js, /zoneOverlapsRange\(zone, pullback\)/)
+  assert.match(js, /const zoneIsBeyondStop = \(zone, side, stop\) =>/)
+  assert.match(js, /const nearestZoneBeyondStop = \(\{ item, side, stop \}\) =>/)
+  assert.match(js, /const targetZonesForChart = \(entry, type\) =>/)
+  assert.match(js, /const entryZones = entryZonesForDisplay\(chartEntry\)/)
+  assert.match(js, /const targetZones = targetZonesForChart\(chartEntry, type\)/)
+  assert.match(js, /const stopContext = nearestZoneBeyondStop/)
+  assert.match(js, /\.\.\.entryZones, \.\.\.targetZones, \.\.\.stopContextZone/)
+  assert.match(js, /className: 'pa-zone-list'/)
+  assert.match(css, /asset-zone-stop-context/)
 })
 
 test('charts create SVG graphics in the SVG namespace and use strategy history when available', () => {

@@ -764,15 +764,67 @@ const setupZonesForEntry = (entry) => uniqueZones(setupOwnersForEntry(entry).fla
   return [...saved, ...fallback]
 }))
 
+// The decision table is an entry surface, not a catalogue. Keep only zones
+// that price can reach inside the monitored half of the pullback. A saved
+// entry zone remains visible for a live order or position until it closes.
+const entryZonesForDisplay = (entry) => {
+  const { profile } = entry
+  const type = entryZoneType(profileSide(profile))
+  if (!type) return []
+  const pullback = profile?.pullbackRange
+  const setupZones = setupZonesForEntry(entry)
+    .filter((zone) => zone.type === type)
+  const watchedZones = watchedEntryZones(profile, type)
+  const currentSetupZones = currentSetupTouchedZones(entry.item, type)
+  const historicalZones = historicalConsumedZones(entry.item, type, pullback)
+  return uniqueZones([...setupZones, ...watchedZones, ...currentSetupZones, ...historicalZones])
+    .filter((zone) => zone.activeSetupZone || zoneOverlapsRange(zone, pullback))
+}
+
+const zoneIsBeyondStop = (zone, side, stop) => Number.isFinite(stop) && (
+  side === 'long'
+    ? zone.high < stop
+    : side === 'short'
+      ? zone.low > stop
+      : false
+)
+
+const nearestZoneBeyondStop = ({ item, side, stop }) => {
+  if (!item?.zones || !Number.isFinite(stop)) return null
+  const zones = uniqueZones([
+    ...zoneList(item, 'demand'),
+    ...zoneList(item, 'supply'),
+  ]).filter((zone) =>
+    zone &&
+    !zone.filledByOwnTimeframeClose &&
+    !zone.invalidatedByOwnTimeframeClose &&
+    !Number.isFinite(zone.firstTouchAt) &&
+    zoneIsBeyondStop(zone, side, stop)
+  )
+  return zones
+    .sort((left, right) => {
+      const leftDistance = side === 'long' ? stop - left.high : left.low - stop
+      const rightDistance = side === 'long' ? stop - right.high : right.low - stop
+      return leftDistance - rightDistance
+    })[0] ?? null
+}
+
+const targetZonesForChart = (entry, type) => {
+  const { profile } = entry
+  if (targetZoneType(profileSide(profile)) !== type) return []
+  const savedTargetZones = setupZonesForEntry(entry)
+    .filter((zone) => zone.type === type)
+  const targetZone = profile?.tp2Zone?.type === type
+    ? [{ ...profile.tp2Zone, targetContextZone: true }]
+    : []
+  return uniqueZones([...savedTargetZones, ...targetZone])
+}
+
 const zoneListElement = (entry) => {
   const { profile, column } = entry
   const direction = structureDirection(entry)
   const active = entryZoneType(profileSide(profile))
-  const setupZones = setupZonesForEntry(entry)
-  const watchedZones = active ? watchedEntryZones(profile, active) : []
-  const currentSetupZones = active ? currentSetupTouchedZones(entry.item, active) : []
-  const historicalZones = active ? historicalConsumedZones(entry.item, active, profile?.pullbackRange) : []
-  const zones = uniqueZones([...setupZones, ...watchedZones, ...currentSetupZones, ...historicalZones])
+  const zones = entryZonesForDisplay(entry)
   if (!zones.length) {
     const title = profile?.mode === 'formation'
       ? 'Struktura je flat; nejdříve čekáme na vytvoření směru.'
@@ -781,7 +833,7 @@ const zoneListElement = (entry) => {
         : 'Bez směru struktury není vstupní zóna určena.'
     return [decisionFactElement(decisionFact('–', 'neutral', title))]
   }
-  return zones.map((zone) => {
+  return el('div', { className: 'pa-zone-list' }, zones.map((zone) => {
     const candidate = zoneCandidateFor(profile?.zoneCandidates ?? [], zone, zone.type)
     const activeSetup = zone.activeSetupZone === true
     const historical = zone.historicalConsumedZone === true
@@ -809,7 +861,7 @@ const zoneListElement = (entry) => {
         direction,
       }),
     ])
-  })
+  }))
 }
 const hasDirectionalPlan = (profile) => profile?.mode === 'formation' && Boolean(profileSide(profile))
 
@@ -1029,23 +1081,19 @@ const zoneCard = (title, zones, emptyText, timeframeId, candidates = [], directi
       : el('p', { text: emptyText }),
   ])
 
-const zonesForDetail = (zones, type, pullbackRange = null) => {
-  const key = type === 'demand' ? 'Demand' : 'Supply'
-  const historical = (zones?.[`historicalConsumed${key}`] ?? [])
-    .filter((zone) => zoneOverlapsRange(zone, pullbackRange))
-    .map((zone) => ({ ...zone, historicalConsumedZone: true, invalidatedSetupZone: true }))
-  return uniqueZones([
-    ...(zones?.[`unfilled${key}`] ?? []),
-    ...(zones?.[`nearby${key}`] ?? []),
-    ...(zones?.[`currentSetup${key}`] ?? []),
-    ...historical,
-  ])
-}
+const zonesForDetail = (entry, type) => entryZonesForDisplay(entry)
+  .filter((zone) => zone.type === type)
 
 const renderAssetZoneDetails = (host, asset, item, timeframeId) => {
   host.replaceChildren()
   if (!item) return
   const candidates = item.tradeProfile?.zoneCandidates ?? []
+  const chartEntry = {
+    asset,
+    column: { id: timeframeId },
+    item,
+    profile: item.tradeProfile,
+  }
   const backtest = priceActionBacktestResult(asset, timeframeId)
   const backtestPf = Number.isFinite(Number(backtest?.profitFactor)) ? nf(2).format(Number(backtest.profitFactor)) : 'n/a'
   const backtestDd = Number.isFinite(Number(backtest?.maxDrawdownPct)) ? `${nf(1).format(Number(backtest.maxDrawdownPct))} %` : 'n/a'
@@ -1069,10 +1117,10 @@ const renderAssetZoneDetails = (host, asset, item, timeframeId) => {
   if (item.zones) {
     details.unshift(
       el('h3', { text: `${asset.symbol} · sledované zóny pro ${timeframeId.toUpperCase()}` }),
-      el('p', { className: 'asset-zone-details-intro', text: 'Zobrazeny jsou nevyčerpané zóny, doteky z aktivní vlny a vyčerpané FVG v aktuálním pullback pásmu.' }),
+      el('p', { className: 'asset-zone-details-intro', text: 'Zobrazeny jsou pouze zóny sledované pro vstup v aktuálním pullback pásmu.' }),
       el('div', { className: 'asset-zone-detail-columns' }, [
-        zoneCard('Demand', zonesForDetail(item.zones, 'demand', item.tradeProfile?.pullbackRange), 'Žádná dostupná demand zóna.', timeframeId, candidates, item.trend),
-        zoneCard('Supply', zonesForDetail(item.zones, 'supply', item.tradeProfile?.pullbackRange), 'Žádná dostupná supply zóna.', timeframeId, candidates, item.trend),
+        zoneCard('Demand', zonesForDetail(chartEntry, 'demand'), 'Žádná sledovaná demand zóna.', timeframeId, candidates, item.trend),
+        zoneCard('Supply', zonesForDetail(chartEntry, 'supply'), 'Žádná sledovaná supply zóna.', timeframeId, candidates, item.trend),
       ])
     )
   }
@@ -1423,17 +1471,23 @@ const chartZones = (item, type) => {
     item,
     profile,
   }
-  const plannedEntries = watchedEntryZones(profile, type)
-  const targetZone = profile?.tp2Zone?.type === type ? [profile.tp2Zone] : []
-  const activeSetupZones = setupZonesForEntry(chartEntry).filter((zone) => zone.type === type)
-  const currentSetupZones = currentSetupTouchedZones(item, type)
-  const historicalZones = historicalConsumedZones(item, type, profile?.pullbackRange)
-  const availableZones = zoneList(item, type)
+  const entryZones = entryZonesForDisplay(chartEntry).filter((zone) => zone.type === type)
+  const targetZones = targetZonesForChart(chartEntry, type)
+  const stopContext = nearestZoneBeyondStop({
+    item,
+    side: profileSide(profile),
+    stop: profile?.stop,
+  })
+  const stopContextZone = stopContext?.type === type
+    ? [{ ...stopContext, stopContextZone: true }]
+    : []
   const seen = new Set()
-  return uniqueZones([...availableZones, ...activeSetupZones, ...plannedEntries, ...targetZone, ...currentSetupZones, ...historicalZones])
+  return uniqueZones([...entryZones, ...targetZones, ...stopContextZone])
     .filter((zone) => zone && (zone.activeSetupZone || zone.watchedSetupZone ||
       zone.currentSetupZone ||
       zone.historicalConsumedZone ||
+      zone.targetContextZone ||
+      zone.stopContextZone ||
       (!zone.filledByOwnTimeframeClose && !zone.invalidatedByOwnTimeframeClose && !Number.isFinite(zone.firstTouchAt))))
     .filter((zone) => Number.isFinite(zone.low) && Number.isFinite(zone.high) && zone.low > 0 && zone.high > 0 && zone.high >= zone.low)
     .filter((zone) => {
@@ -1655,7 +1709,7 @@ const renderAssetChart = () => {
     const bottom = y(zone.low)
     const zoneStartX = xForTime(zone.fvg?.definingCandles?.[0]?.time ?? zone.firstTime) ?? ASSET_CHART.padLeft
     const zoneRect = el('rect', {
-      className: `asset-zone-${zone.kind}${zone.invalidatedSetupZone ? ' asset-zone-invalidated' : ''}${zone.historicalConsumedZone ? ' asset-zone-historical' : ''} asset-zone-clickable`,
+      className: `asset-zone-${zone.kind}${zone.invalidatedSetupZone ? ' asset-zone-invalidated' : ''}${zone.historicalConsumedZone ? ' asset-zone-historical' : ''}${zone.stopContextZone ? ' asset-zone-stop-context' : ''} asset-zone-clickable`,
       x: zoneStartX,
       y: Math.min(top, bottom),
       width: Math.max(1, candlePlotRight - zoneStartX),
