@@ -18,7 +18,13 @@
 const HOST = process.env.TRADING_HOST || "https://osobnizkusenosti.cz/trading";
 const FILTERS = String(process.env.QUESTION_FILTERS || "israel,republic of ireland")
   .split(",").map((entry) => entry.trim().toLowerCase()).filter(Boolean);
-const SHOW = Math.max(1, Math.min(60, Number(process.env.SHOW_ROWS || 20)));
+// A team plays many times. Narrowing by the instant the market ends is what isolates ONE
+// fixture out of a season, and it is the only thing the screenshots gave to go on: both
+// rows ended 2026-09-27 20:45.
+const END_FILTERS = String(process.env.END_FILTERS || "")
+  .split(",").map((entry) => entry.trim()).filter(Boolean);
+const SHOW = Math.max(1, Math.min(200, Number(process.env.SHOW_ROWS || 20)));
+const SHOW_PAIRS = Math.max(1, Math.min(200, Number(process.env.SHOW_PAIRS || 40)));
 
 // Keys that can only group markets that genuinely share an event, as opposed to a topic.
 // `topic:iran-war` matches on the word "israel" alone, so it links an Israeli football match
@@ -41,6 +47,17 @@ export function sharedKeys(left, right) {
     all: shared,
     eventScoped: shared.filter((key) => EVENT_SCOPED_PREFIXES.some((prefix) => String(key).startsWith(prefix))),
   };
+}
+
+// Both filters, as the run applies them: the question has to name the subject AND, when an
+// end filter is given, the row has to end at that instant. Exported so the pairing and the
+// selection are tested on the same rule the run uses.
+export function rowMatches(row, questionFilters = FILTERS, endFilters = END_FILTERS) {
+  const question = String(row?.question || "").toLowerCase();
+  if (questionFilters.length && !questionFilters.some((filter) => question.includes(filter))) return false;
+  if (!endFilters.length) return true;
+  const endDate = String(row?.endDate || "");
+  return endFilters.some((filter) => endDate.includes(filter));
 }
 
 // The active catalogue is paged at SCRAPED_SCOPE_PAGE_LIMIT rows, and there are several
@@ -75,11 +92,8 @@ async function main() {
   const full = rows.length % 1200 === 0 && rows.length > 0;
   console.log(`   ${rows.length} active row(s) read${full ? "  !! exactly a whole number of pages -- the walk may have been cut short, raise max_pages" : ""}`);
 
-  const matched = rows.filter((row) => {
-    const question = String(row?.question || "").toLowerCase();
-    return FILTERS.some((filter) => question.includes(filter));
-  });
-  console.log(`   ${matched.length} match the filter ${JSON.stringify(FILTERS)}\n`);
+  const matched = rows.filter((row) => rowMatches(row));
+  console.log(`   ${matched.length} match ${JSON.stringify(FILTERS)}${END_FILTERS.length ? ` ending ${JSON.stringify(END_FILTERS)}` : ""}\n`);
 
   for (const row of matched.slice(0, SHOW)) {
     console.log(`   ${row.question}`);
@@ -101,6 +115,10 @@ async function main() {
       const right = matched[j];
       if (!left.endDate || left.endDate !== right.endDate) continue;
       pairs += 1;
+      // A whole fixture's markets pair with each other, so an unfiltered run prints
+      // hundreds of pairs and buries the one that matters. The count below still reports
+      // them all.
+      if (pairs > SHOW_PAIRS) continue;
       const shared = sharedKeys(left, right);
       console.log(`      ${String(left.question).slice(0, 44)}`);
       console.log(`      ${String(right.question).slice(0, 44)}`);
@@ -108,7 +126,8 @@ async function main() {
       console.log(`         event-scoped ones  ${shared.eventScoped.join(", ") || "(NONE -- these read as unrelated bets)"}`);
     }
   }
-  if (!pairs) console.log("      (none found on this page)");
+  if (!pairs) console.log("      (none found)");
+  else if (pairs > SHOW_PAIRS) console.log(`      ... ${pairs - SHOW_PAIRS} further pair(s) not printed`);
 }
 
 if (process.argv[1] && import.meta.url === `file://${process.argv[1]}`) {

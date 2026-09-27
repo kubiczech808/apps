@@ -5,7 +5,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { readFileSync } from "node:fs";
-import { eventScopedKeys, sharedKeys, EVENT_SCOPED_PREFIXES } from "../tools/risk-group-check.mjs";
+import { eventScopedKeys, sharedKeys, rowMatches, EVENT_SCOPED_PREFIXES } from "../tools/risk-group-check.mjs";
 
 test("a topic key is not evidence that two rows are one bet", () => {
   // riskProfile adds `topic:iran-war` on the word "israel" alone. That links an Israeli
@@ -43,6 +43,23 @@ test("the prefixes it trusts are the ones riskProfile builds from a slug", () =>
   }
   assert.ok(!EVENT_SCOPED_PREFIXES.includes("topic:"));
   assert.ok(!EVENT_SCOPED_PREFIXES.includes("team:"));
+});
+
+test("the end-date filter is what narrows a team's season to one fixture", () => {
+  // Israel plays a dozen times a season, so a question filter alone returns a dozen
+  // unrelated matches and the two rows that are actually one bet get lost in them.
+  const today = { question: "Will Israel win on 2026-09-27?", endDate: "2026-09-27T20:45:00Z" };
+  const later = { question: "Will Israel win on 2026-10-11?", endDate: "2026-10-11T18:00:00Z" };
+  const other = { question: "Will Brentford win on 2026-09-27?", endDate: "2026-09-27T20:45:00Z" };
+
+  assert.ok(rowMatches(today, ["israel"], ["2026-09-27"]));
+  assert.ok(!rowMatches(later, ["israel"], ["2026-09-27"]), "a different fixture is out");
+  assert.ok(!rowMatches(other, ["israel"], ["2026-09-27"]), "the same instant is not enough");
+
+  // No end filter means every fixture, which is how the earlier runs were made.
+  assert.ok(rowMatches(later, ["israel"], []));
+  // A row with no recorded end date cannot satisfy an end filter.
+  assert.ok(!rowMatches({ question: "Will Israel win?" }, ["israel"], ["2026-09-27"]));
 });
 
 test("it reads the active page, never the resolved scope", () => {

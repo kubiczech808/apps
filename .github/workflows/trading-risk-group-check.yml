@@ -21,6 +21,16 @@ on:
         required: false
         default: "8"
         type: string
+      end_dates:
+        description: "Comma-separated endDate fragments, e.g. 2026-09-27 -- narrows a team's season to one fixture"
+        required: false
+        default: ""
+        type: string
+      show_rows:
+        description: "How many matching rows to print in full"
+        required: false
+        default: "20"
+        type: string
 
 permissions:
   contents: read
@@ -40,4 +50,6 @@ jobs:
         env:
           QUESTION_FILTERS: ${{ inputs.questions }}
           MAX_PAGES: ${{ inputs.max_pages }}
+          END_FILTERS: ${{ inputs.end_dates }}
+          SHOW_ROWS: ${{ inputs.show_rows }}
         run: node tools/risk-group-check.mjs
