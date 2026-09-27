@@ -50,6 +50,11 @@ final class Shipping
 
         foreach ($hooks as $hook) {
             $this->remove_callbacks_from_plugin($hook, 'wc-doprava-main');
+            // Czech Services adds a second, older DPD/Packeta renderer to
+            // the same review-table hook. Its rates remain available, but
+            // the renderer must not be allowed to interrupt WooCommerce's
+            // JSON checkout-refresh response.
+            $this->remove_callbacks_from_plugin($hook, 'ceske-sluzby');
         }
     }
 
