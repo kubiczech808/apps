@@ -11944,6 +11944,32 @@ function candidatesAfterEventRule(rows, keysOf) {
 
 function portfolioCandidateDiagnostics(mode = state.mode) {
   const config = portfolioConfigForMode(mode);
+  const dipRule = dipEntryRuleFromConfig(config);
+  // A DIP portfolio does not execute the ordinary scraped shortlist. It watches an
+  // independently prepared set while each favourite is above its opening band, then buys
+  // only after that exact set has fallen into the configured range. Showing ordinary rows
+  // here first made them flash as READY although the one-second worker would never trade
+  // them.
+  if (dipRule.enabled && !dipEntryRuleFault(dipRule)) {
+    const ready = [];
+    const riskBlocked = [];
+    const alreadyHeld = [];
+    for (const item of dipEntryWatchCandidateRows(mode)) {
+      if (item.portfolioRiskBlockReason) {
+        if (candidateAlreadyHeldMarketReason(item.portfolioRiskBlockReason)) alreadyHeld.push(item);
+        else riskBlocked.push(item);
+      } else {
+        ready.push(item);
+      }
+    }
+    return {
+      ready: sortPortfolioCandidates(ready, mode),
+      riskBlocked: sortPortfolioCandidates(riskBlocked, mode),
+      alreadyHeld: sortPortfolioCandidates(alreadyHeld, mode),
+      manuallyExcluded: [],
+      filteredReasonCounts: new Map(),
+    };
+  }
   const baseEvaluations = Array.isArray(state.botState?.evaluations) ? state.botState.evaluations : [];
   const usesPolymarketProbability = normalizeProbabilitySource(config.probabilitySource) === "polymarket";
   const scrapedObservations = usesPolymarketProbability
@@ -12001,22 +12027,6 @@ function portfolioCandidateDiagnostics(mode = state.mode) {
     else ready.push(row);
   }
 
-  // A dip entry is prepared above its buy range and commonly disappears from the catalogue
-  // once it collapses. Keep the worker's plans in this same view, rather than hiding the
-  // actual execution pool behind an informational sentence. A watched plan wins on its
-  // token if the catalogue happens to contain the same market at this moment.
-  const watched = dipEntryWatchCandidateRows(mode);
-  const readyByToken = new Map(ready.map((item) => [String(item.tokenId || item.clobTokenId || item.assetId || ""), item]));
-  for (const item of watched) {
-    const tokenId = String(item.tokenId || "");
-    if (item.portfolioRiskBlockReason) {
-      if (candidateAlreadyHeldMarketReason(item.portfolioRiskBlockReason)) alreadyHeld.push(item);
-      else riskBlocked.push(item);
-      continue;
-    }
-    readyByToken.set(tokenId, item);
-  }
-
   // Two sides of one fixture are one bet, and the precheck above compared each candidate
   // only against what is already OPEN. Before anything is held that comparison has nothing
   // to say, so both sides read READY and the list gave no sign that taking one rules the
@@ -12032,7 +12042,7 @@ function portfolioCandidateDiagnostics(mode = state.mode) {
   // Applied in execution order, so the row that would actually trade keeps READY and the
   // rest of its event falls in behind it, exactly as execution decides.
   const { ready: readyInExecutionOrder, blocked: sameEventAsBetterRanked } = candidatesAfterEventRule(
-    sortPortfolioCandidates([...readyByToken.values()], mode),
+    sortPortfolioCandidates(ready, mode),
     (item) => riskKeysForRow(item, evaluationByToken),
   );
 
@@ -12290,6 +12300,7 @@ function renderPortfolioCandidates() {
     return;
   }
   const config = portfolioConfigForMode(mode);
+  const dipRule = dipEntryRuleFromConfig(config);
   const usesPolymarketProbability = normalizeProbabilitySource(config.probabilitySource) === "polymarket";
   if (!state.botState && !usesPolymarketProbability) {
     els.portfolioCandidates.innerHTML = '<div class="empty">Common evaluation log is not loaded yet.</div>';
@@ -12332,6 +12343,11 @@ function renderPortfolioCandidates() {
   // Fires the fetch the status line needs, once a minute at most. Called from here because
   // this panel is the only screen that shows it, so a portfolio without the rule never asks.
   loadDipEntryStatus(mode);
+  if (dipRule.enabled && !dipEntryRuleFault(dipRule) && !state.dipEntryStatus) {
+    els.portfolioCandidates.innerHTML = '<div class="empty">Loading the RPi DIP watchlist and current CLOB quotes...</div>';
+    if (els.portfolioCandidatesSummary) els.portfolioCandidatesSummary.textContent = "loading watcher";
+    return;
+  }
   const diagnostics = portfolioCandidateDiagnostics(mode);
   const rows = diagnostics.ready;
   const label = portfolioNavigationLabelForMode(mode);
@@ -12354,7 +12370,8 @@ function renderPortfolioCandidates() {
     const quoteNote = state.shortlistQuoteError
       ? " / stored prices, Polymarket quotes unavailable"
       : (state.shortlistQuotedAt ? ` / quoted ${formatDate(state.shortlistQuotedAt)}` : "");
-    els.portfolioCandidatesSummary.textContent = `${rows.length} ready${blocked ? ` / ${blocked} risk-blocked` : ""}${held ? ` / ${held} already held` : ""}${excluded ? ` / ${excluded} excluded` : ""}${paged}${quoteNote}`;
+    const actionLabel = dipRule.enabled && !dipEntryRuleFault(dipRule) ? "watching" : "ready";
+    els.portfolioCandidatesSummary.textContent = `${rows.length} ${actionLabel}${blocked ? ` / ${blocked} risk-blocked` : ""}${held ? ` / ${held} already held` : ""}${excluded ? ` / ${excluded} excluded` : ""}${paged}${quoteNote}`;
   }
   els.portfolioCandidates.innerHTML = renderPortfolioCandidateRows(rows, mode, diagnostics);
 }

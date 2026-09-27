@@ -1731,6 +1731,49 @@ test("dip entry: the order never pays above the band, and never without cash", (
   assert.match(source, /postOrder\(signed, OrderType\.FOK, false\)/);
 });
 
+test("dip entry: every live quote is valid for the CLOB maker and taker precision", () => {
+  // These are real shapes from the two active live DIP portfolios: the watch correctly
+  // found an ask inside 40-53% / 45-56%, then the CLOB rejected its arbitrary share count
+  // because the BUY maker amount had more than two decimal places.
+  const cents = (value) => Math.round(Number(value) * 100);
+  const fixture = worker.executableDipEntryQuote({ stakeUsdc: 5, buyMax: 0.56 }, {
+    asks: [{ price: 0.48, size: 100 }],
+  });
+  assert.equal(fixture.ok, true);
+  assert.equal(fixture.orderPrice, 0.48);
+  assert.equal(fixture.shares, 10.25, "48 cents can use a cent-exact $4.92 maker amount below the $5 cap");
+  assert.equal(fixture.stakeUsdc, 4.92);
+  assert.equal(fixture.requiredUsdc, 4.92, "the cash guard protects the actual signed amount");
+  assert.equal(fixture.shares, Number(fixture.shares.toFixed(2)), "the SDK receives a supported share precision");
+  assert.equal(fixture.orderPrice * fixture.shares * 100, cents(fixture.orderPrice * fixture.shares),
+    "the USDC maker amount is exactly whole cents");
+  assert.ok(fixture.stakeUsdc <= 5, "a precision correction must never increase the configured risk");
+
+  // A second price from the 40-53% portfolio proves this is not a hard-coded 48-cent case.
+  const other = worker.executableDipEntryQuote({ stakeUsdc: 5, buyMax: 0.53 }, {
+    asks: [{ price: 0.51, size: 100 }],
+  });
+  assert.equal(other.ok, true);
+  assert.equal(other.shares, 9);
+  assert.equal(other.stakeUsdc, 4.59);
+  assert.equal(other.orderPrice * other.shares * 100, cents(other.orderPrice * other.shares));
+
+  // The helper itself must choose the largest executable amount below the cap. A smaller
+  // arbitrary value would make paper and live silently diverge on every later trade.
+  assert.deepEqual(worker.dipEntryMakerPrecisionOrder({ orderPrice: 0.48, maximumShares: 10.4166 }), {
+    shares: 10.25,
+    makerAmount: 4.92,
+  });
+  assert.equal(worker.dipEntryMakerPrecisionOrder({ orderPrice: 0.48, maximumShares: 0 }), null);
+
+  const source = readFileSync(new URL("../tools/rpi-live-exit-worker.mjs", import.meta.url), "utf8");
+  const quote = functionBody(source, "executableDipEntryQuote");
+  assert.match(quote, /dipEntryMakerPrecisionOrder\(\{[\s\S]*?maximumShares: Math\.min\(shares, stake \/ lastPrice\)/,
+    "the signed FOK size must be corrected before createOrder sees it");
+  assert.match(quote, /requiredUsdc: preciseOrder\.makerAmount/,
+    "the cash check must use the exact amount that the exchange can reserve");
+});
+
 // A portfolio's own automation setting is the authority for dip entries. Deploys migrate
 // old worker-wide `off` settings to the portfolio-driven mode, while manual dispatch keeps
 // an explicit off or shadow pause intact.

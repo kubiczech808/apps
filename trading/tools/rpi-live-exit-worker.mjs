@@ -2441,6 +2441,34 @@ function dipEntryTrigger(plan, book) {
   return { fire: true, ask };
 }
 
+// The CLOB accepts a BUY only when the USDC maker amount has no fraction of a cent. Its
+// SDK accepts a more precise share count, then rounds it internally; that combination can
+// still leave an invalid maker amount (for example, 10.41 shares at 48 cents is $4.9968).
+//
+// Use a two-decimal share quantity and walk it down to the nearest cent-exact notional.
+// This is deliberately conservative: a DIP entry is FOK, so paying a cent less than the
+// configured stake is better than submitting a syntactically invalid order or exceeding
+// the configured risk. The same quote feeds paper recording, keeping the simulation and
+// live path on the same executable amount.
+export function dipEntryMakerPrecisionOrder({ orderPrice, maximumShares } = {}) {
+  const price = number(orderPrice);
+  const available = number(maximumShares);
+  if (!(price > 0) || !(available > 0)) return null;
+  const maximumHundredths = Math.floor(available * 100 + 0.0000001);
+  for (let hundredths = maximumHundredths; hundredths >= 1; hundredths -= 1) {
+    const shares = hundredths / 100;
+    const makerAmount = price * shares;
+    const cents = Math.round(makerAmount * 100);
+    if (Math.abs(makerAmount * 100 - cents) <= 0.0000001) {
+      return {
+        shares: Number(shares.toFixed(2)),
+        makerAmount: Number((cents / 100).toFixed(2)),
+      };
+    }
+  }
+  return null;
+}
+
 // Paper and live must use the same executable quote. A paper hit at bare best ask is fiction
 // when the configured stake must consume a thinner top level. The live path is FOK: either
 // this whole requested size can cross the published book inside the band, or neither account
@@ -2457,13 +2485,11 @@ export function executableDipEntryQuote(plan = {}, book = {}) {
   const limit = Math.min(Number(plan.buyMax), levels[0].price + Math.max(0, DIP_ENTRY_MAX_SLIPPAGE), 0.99);
   if (!(limit > 0)) return { ok: false, error: "the buy band has no valid ceiling" };
   let remaining = stake;
-  let cost = 0;
   let shares = 0;
   let lastPrice = null;
   for (const level of levels) {
     if (level.price > limit || remaining <= 0.000001) break;
     const taken = Math.min(remaining, level.price * level.size);
-    cost += taken;
     shares += taken / level.price;
     remaining -= taken;
     lastPrice = level.price;
@@ -2471,16 +2497,24 @@ export function executableDipEntryQuote(plan = {}, book = {}) {
   if (remaining > 0.000001 || !(shares > 0) || lastPrice == null) {
     return { ok: false, error: "not enough executable depth for the configured stake" };
   }
-  const averagePrice = cost / shares;
+  // A marketable FOK is signed at its final level, not at the weighted average observed
+  // while walking the book. Keep its maximum signed notional at or below the configured
+  // stake before making it cent-exact for the exchange.
+  const preciseOrder = dipEntryMakerPrecisionOrder({
+    orderPrice: lastPrice,
+    maximumShares: Math.min(shares, stake / lastPrice),
+  });
+  if (!preciseOrder) return { ok: false, error: "no cent-exact CLOB order size for the configured stake" };
   return {
     ok: true,
-    // price is what both accounting paths paid on the observed book; orderPrice is the
-    // marketable limit needed to guarantee that fill through its final level.
-    price: round(averagePrice, 6),
+    // The signed limit is the only amount a FOK buy may reserve. It is also what paper
+    // accounting uses, rather than a more flattering weighted average that the live order
+    // is not guaranteed to receive.
+    price: round(lastPrice, 6),
     orderPrice: round(lastPrice, 6),
-    shares: round(shares, 4),
-    stakeUsdc: round(cost, 6),
-    requiredUsdc: stake,
+    shares: preciseOrder.shares,
+    stakeUsdc: preciseOrder.makerAmount,
+    requiredUsdc: preciseOrder.makerAmount,
   };
 }
 

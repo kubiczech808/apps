@@ -5525,6 +5525,21 @@ test("dip entry: paper watch plans use the RPi paper namespace", () => {
   assert.equal(watchPortfolioIdForMode("live-custom-dip703060live"), "live-custom-dip703060live");
 });
 
+test("dip entry: the candidate screen shows only the persisted RPi watchlist", () => {
+  const diagnostics = extractFunction(APP, "portfolioCandidateDiagnostics");
+  const render = extractFunction(APP, "renderPortfolioCandidates");
+  // An ordinary scraped shortlist and a DIP watchlist answer different questions. The
+  // former was briefly drawn as READY while the latter was still loading, despite the RPi
+  // never being allowed to execute those rows. A DIP portfolio therefore returns before it
+  // touches generic evaluations and waits for its authoritative retained watch status.
+  assert.match(diagnostics, /const dipRule = dipEntryRuleFromConfig\(config\);[\s\S]*?if \(dipRule\.enabled && !dipEntryRuleFault\(dipRule\)\) \{[\s\S]*?for \(const item of dipEntryWatchCandidateRows\(mode\)\)/,
+    "DIP candidate diagnostics must be built only from watcher plans");
+  assert.match(render, /loadDipEntryStatus\(mode\);[\s\S]*?dipRule\.enabled && !dipEntryRuleFault\(dipRule\) && !state\.dipEntryStatus[\s\S]*?Loading the RPi DIP watchlist/,
+    "the table must wait rather than flash the unrelated scraped shortlist");
+  assert.match(render, /const actionLabel = dipRule\.enabled && !dipEntryRuleFault\(dipRule\) \? "watching" : "ready"/,
+    "the count labels watcher rows as watching, not immediately executable orders");
+});
+
 // Reported: the curve began on the 4th while the first closed trade was the 9th, so the
 // first five days of the chart were one flat line. Equity cannot move before a trade
 // settles, and a chart that spends a third of its width saying nothing has spent it.
