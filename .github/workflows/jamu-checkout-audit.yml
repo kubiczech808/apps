@@ -1,0 +1,29 @@
+name: Audit JAMU checkout hooks
+
+on:
+  push:
+    branches: ['feat/jamu-multilingual']
+    paths: ['.github/jamu-checkout-audit-trigger']
+
+permissions:
+  contents: write
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      JAMU_FTP_LOGIN: ${{ secrets.JAMU_FTP_LOGIN }}
+      JAMU_FTP_PWD: ${{ secrets.JAMU_FTP_PWD }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/jamu-multilingual
+      - run: python scripts/jamu_checkout_audit.py
+      - run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add jamu-content/checkout-hook-audit.json
+          git diff --cached --quiet && exit 0
+          git commit -m 'Audit JAMU checkout hook configuration'
+          git push origin HEAD:feat/jamu-multilingual
