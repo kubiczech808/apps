@@ -14,12 +14,17 @@ on:
       tags:
         description: "Comma-separated Polymarket tags whose backtest cache to read"
         required: false
-        default: "esports,sports,soccer,counter-strike-2,league-of-legends"
+        default: "sports,esports,counter-strike-2,soccer,tennis,atp"
         type: string
       min_trades:
         description: "Fewest opportunities a cell may have and still be printed"
         required: false
         default: "100"
+        type: string
+      min_buy_floor:
+        description: "Lowest buy-band floor to show, e.g. 0.45 for 45-50 and up"
+        required: false
+        default: "0.45"
         type: string
 
 permissions:
@@ -40,4 +45,5 @@ jobs:
         env:
           DIP_SWEEP_TAGS: ${{ inputs.tags }}
           DIP_SWEEP_MIN_TRADES: ${{ inputs.min_trades }}
+          DIP_SWEEP_MIN_BUY_FLOOR: ${{ inputs.min_buy_floor }}
         run: node tools/dip-combination-sweep.mjs

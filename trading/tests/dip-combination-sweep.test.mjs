@@ -6,7 +6,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { readFileSync } from "node:fs";
 import {
-  BUY_CEILINGS, OPEN_BANDS, buyBands, cacheRows, cellStats, entryForCell, inOpenBand, shortlist, spanDays, sweep,
+  BUY_CEILINGS, OPEN_BANDS, OPEN_CEILING, OPEN_FLOORS, buyBands, cacheRows, cellStats, entryForCell, inOpenBand,
+  openBands, shortlist, spanDays, sweep,
 } from "../tools/dip-combination-sweep.mjs";
 
 // One cached market, in the shape backtestDipMarket returns. Entries carry the first-touch
@@ -104,22 +105,40 @@ test("a trade count is reported as a rate, because it is unreadable without one"
   assert.equal(sweep([rows[0]], { openBands: [[0.75, 0.8]], bands: [[0.35, 0.4]] })[0].tradesPerMonth, null);
 });
 
-test("the grid is five-point steps, and the opening slices do not overlap", () => {
-  // Asked for: "dip range s rozestupem 5%. otevreni ... od 70 vys zase s rozestupem 5%".
-  // Overlapping opening bands answered a different question and read as independent rows:
-  // 70-80 and 70-85 differ by a handful of markets, so nine rows carried three populations.
+test("opening levels are cumulative floors, five points apart, not disjoint slices", () => {
+  // Asked for: "otevreni uvazuj na ruznych urovnich od 70 vys zase s ruznym rozestupem 5%" --
+  // "70+, 75+, 80+, ...", not "70-75, 75-80, ...". A disjoint slice starves every row above
+  // 80 of volume, because a 90%+ favourite is rare to begin with; a floor keeps the full
+  // population at every level, and each is a SUBSET of the one below it.
   for (const [min, max] of OPEN_BANDS) {
     assert.ok(min >= 0.7, `${min} is below the band the cache priced`);
-    assert.ok(max - min <= 0.05 + 1e-9, `${min}-${max} is wider than one step`);
+    assert.ok(Math.abs(max - OPEN_CEILING) < 1e-9, `${min}-${max} has a ceiling below the cache's own 99%`);
   }
-  for (let index = 1; index < OPEN_BANDS.length; index += 1) {
-    assert.ok(OPEN_BANDS[index][0] >= OPEN_BANDS[index - 1][1], "slices must not overlap");
+  for (let index = 1; index < OPEN_FLOORS.length; index += 1) {
+    assert.ok(Math.abs((OPEN_FLOORS[index] - OPEN_FLOORS[index - 1]) - 0.05) < 1e-9, "floors are five points apart");
   }
+  // Nested, not exclusive: a market at 92% opening belongs to 70+, 75+, 80+, 85+ AND 90+ all
+  // at once, so counting it under only one of them would undercount every floor but one.
+  const highOpener = market({ token: "h", opening: 0.92, touches: { "0.4": 0.4 } });
+  const hits = OPEN_FLOORS.filter((floor) => inOpenBand(highOpener, [floor, OPEN_CEILING]));
+  assert.deepEqual(hits, [0.70, 0.75, 0.80, 0.85, 0.90]);
+
   // Every buy band is five points wide and ends on a level the backtest actually recorded.
   for (const [floor, ceiling] of buyBands()) {
     assert.ok(Math.abs((ceiling - floor) - 0.05) < 1e-9, `${floor}-${ceiling} is not one step`);
     assert.ok(BUY_CEILINGS.includes(ceiling), `${ceiling} was never recorded by the backtest`);
   }
+  // The grid now reaches 80%, which the original 60% ceiling could never see: a favourite
+  // that opened at 90%+ sitting at 75-80% has barely moved in absolute terms, and the old
+  // grid had no way to ask about that at all.
+  assert.ok(BUY_CEILINGS.includes(0.8), "the buy grid must reach 75-80, as asked for");
+
+  // The default floor for the buy grid is 45%, matching "od 45-50 az po 75-80" -- but it
+  // stays an override, not a hard-coded bottom, so a deeper dip is still reachable.
+  const wideOpen = buyBands(BUY_CEILINGS, 0.05, 0);
+  const trimmed = buyBands(BUY_CEILINGS, 0.05, 0.45);
+  assert.ok(wideOpen.some(([floor]) => floor < 0.45), "0 keeps the deeper legacy bands");
+  assert.ok(trimmed.every(([floor]) => floor >= 0.45 - 1e-9), "0.45 trims them");
 });
 
 test("the edge column is the win rate minus the price the winners paid", () => {
@@ -177,4 +196,14 @@ test("it reads the published cache and nothing else", () => {
     "a level the backtest never recorded cannot be swept");
   // And every swept opening band sits inside the window the cache actually priced.
   for (const [min] of OPEN_BANDS) assert.ok(min >= 0.7, `${min} was never priced by the cache`);
+  // Widening ENTRY_LEVELS without bumping OPENING_RULE_VERSION would leave every already
+  // cached market's `entries` object short of the new levels forever: the cache does not
+  // keep the raw CLOB point series, only the entries computed from it once, so a level added
+  // after the fact needs the whole tag re-fetched and re-simulated -- which only happens if
+  // the version changed and every old fingerprint stops matching.
+  assert.match(backtest, /const OPENING_RULE_VERSION = 6/, "the version must be bumped alongside the wider grid");
+  // The runtime default that actually reaches printGrid()'s sweep -- not merely buyBands()'s
+  // own parameter default, which a caller can always override without touching this at all.
+  assert.match(tool, /DIP_SWEEP_MIN_BUY_FLOOR \?\? 0\.45/, "the printed grid must default to the 45% floor asked for");
+  assert.match(tool, /buyBands\(BUY_CEILINGS, 0\.05, MIN_BUY_FLOOR\)/, "printGrid must actually apply that floor");
 });

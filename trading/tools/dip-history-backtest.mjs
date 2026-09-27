@@ -14,11 +14,18 @@ const STAKE_USDC = 5;
 const OPENING_MIN = 0.7;
 const OPENING_MAX = 0.99;
 const OPENING_WINDOW_SECONDS = 90 * 60;
-const ENTRY_LEVELS = [0.3, 0.35, 0.4, 0.45, 0.5, 0.55, 0.6];
+// Widened from a 30-60% ceiling to 30-80%: asked for a buy grid running "od 45-50 az po
+// 75-80", and a favourite that opened at 90%+ can sit at 75-80% without having fallen far at
+// all in relative terms, which the original 60% ceiling could never even see.
+const ENTRY_LEVELS = [0.3, 0.35, 0.4, 0.45, 0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8];
 // Version the result rule, not only the file. Cache rows are keyed by their source
 // fingerprint, so this makes a corrected interpretation reprocess old rows instead of
 // quietly continuing to show the conclusion of the earlier rule.
-const OPENING_RULE_VERSION = 5;
+//
+// Bumped for the ENTRY_LEVELS widening above: the cache does not keep the raw CLOB point
+// series, only the entries computed from it, so a level added after the fact cannot be
+// read out of an old row -- every cached market has to be re-fetched and re-simulated.
+const OPENING_RULE_VERSION = 6;
 // CLOB accepts a maximum history window of 14 days. A single 180-day query returns HTTP
 // 400, which previously made every historical market look like it had no price history.
 const MAX_CLOB_HISTORY_WINDOW_SECONDS = 14 * 86400;

@@ -22,7 +22,7 @@
 // WHAT IT CANNOT SAY, printed with the output rather than buried here:
 //   * The cache only computed entries for markets that opened in 70-99%. An opening band
 //     BELOW 70% cannot be swept from it; that needs the backtest re-run with a wider rule.
-//   * Entry levels are the seven the backtest recorded. A buy CEILING between them is not
+//   * Entry levels are the ones the backtest recorded. A buy CEILING between them is not
 //     available, only at them.
 //   * A buy FLOOR is applied to the recorded first-touch price, so a market that gapped
 //     straight through the floor is counted as no opportunity. A live rule polling every
@@ -31,33 +31,39 @@
 //   * Historical prices carry no order-book depth, so none of this proves a fill.
 
 const HOST = (process.env.TRADING_HOST || "https://osobnizkusenosti.cz/trading").replace(/\/+$/, "");
-const TAGS = String(process.env.DIP_SWEEP_TAGS || "esports,counter-strike-2,soccer,league-of-legends,dota-2,valorant")
+const TAGS = String(process.env.DIP_SWEEP_TAGS || "sports,esports,counter-strike-2,soccer,tennis,atp")
   .split(",").map((entry) => entry.trim().toLowerCase()).filter(Boolean);
 const STAKE_USDC = 5;
 
-// The seven the backtest recorded. Not a choice made here -- reading any other ceiling out
+// The levels the backtest recorded. Not a choice made here -- reading any other ceiling out
 // of this cache would mean inventing an entry price that was never observed.
-export const BUY_CEILINGS = [0.3, 0.35, 0.4, 0.45, 0.5, 0.55, 0.6];
+export const BUY_CEILINGS = [0.3, 0.35, 0.4, 0.45, 0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8];
 
-// Opening levels in five-point steps from 70 up, which is the grid the question asks for.
-// Overlapping bands answered a different question and read as if they were independent:
-// 70-80 and 70-85 differ by the handful of markets between 80 and 85, so nine rows carried
-// perhaps three distinct populations. Disjoint slices say where the favourites actually sit.
-export const OPEN_BANDS = [
-  [0.70, 0.75], [0.75, 0.80], [0.80, 0.85], [0.85, 0.90], [0.90, 0.95], [0.95, 0.99],
-];
-// Kept beside them, marked, because with disjoint slices there is no longer any row that
-// says what the rule does as a whole.
-export const OPEN_BAND_ALL = [0.70, 0.99];
+// Opening FLOORS, not slices: "70+", "75+", "80+", ... up to 95+, each one nested inside the
+// one below it. Asked for after the disjoint 5-point slices this used to sweep: those
+// answered "what happened to favourites that opened BETWEEN 70 and 75", which starves every
+// row above 80 of volume, since a 90%+ favourite is rare to begin with. A floor keeps the
+// full population at every level: "70+" is every dip candidate the rule would admit at all,
+// "90+" narrows to the surest favourites without throwing away the rest of the question.
+export const OPEN_FLOORS = [0.70, 0.75, 0.80, 0.85, 0.90, 0.95];
+export const OPEN_CEILING = 0.99;
+export function openBands(floors = OPEN_FLOORS, ceiling = OPEN_CEILING) {
+  return floors.map((floor) => [floor, ceiling]);
+}
+// Kept for anything still asking for the old disjoint-band shape by name.
+export const OPEN_BANDS = openBands();
 
 // Five-point buy bands, each ending on a level the backtest actually recorded. The floor is
 // the rule refusing a collapse that went too far to be a dip; the ceiling is the level whose
-// first-touch price the cache holds.
-export function buyBands(ceilings = BUY_CEILINGS, width = 0.05) {
+// first-touch price the cache holds. Asked for "od 45-50 az po 75-80" -- MIN_BUY_FLOOR trims
+// the bottom of the grid to that by default, while leaving the deeper legacy bands reachable
+// for anyone who overrides it.
+export function buyBands(ceilings = BUY_CEILINGS, width = 0.05, minFloor = 0) {
   return ceilings
     .map((ceiling) => [Math.round((ceiling - width) * 100) / 100, ceiling])
-    .filter(([floor]) => floor >= 0);
+    .filter(([floor]) => floor >= -1e-9 && floor >= minFloor - 1e-9);
 }
+const MIN_BUY_FLOOR = Math.max(0, Number(process.env.DIP_SWEEP_MIN_BUY_FLOOR ?? 0.45));
 
 // A cell below this many opportunities is arithmetic, not a result. Asked for at 100.
 const MIN_TRADES = Math.max(1, Number(process.env.DIP_SWEEP_MIN_TRADES || 100));
@@ -183,8 +189,13 @@ const int = (value, width = 5) => String(value ?? "-").padStart(width);
 
 const HEADER = "    open band   buy band   trades   /month   win%    price%    edge    ROI%      P/L";
 
+// "70-99" reads as a slice; "70+" reads as what it is -- a floor with everything above it.
+function openLabel(cell) {
+  return cell.openMax >= OPEN_CEILING - 1e-9 ? `${(cell.openMin * 100).toFixed(0)}+` : `${(cell.openMin * 100).toFixed(0)}-${(cell.openMax * 100).toFixed(0)}`;
+}
+
 function printRow(cell, prefix = "   ") {
-  const open = `${(cell.openMin * 100).toFixed(0)}-${(cell.openMax * 100).toFixed(0)}`.padStart(9);
+  const open = openLabel(cell).padStart(9);
   const buy = `${(cell.buyMin * 100).toFixed(0)}-${(cell.buyMax * 100).toFixed(0)}`.padStart(8);
   console.log(`${prefix} ${open}  ${buy}  ${int(cell.trades, 6)}   ${pct(cell.tradesPerMonth)}  ${pct(cell.accuracy)}  ${pct(cell.impliedWinnerEntryPct)}  ${pct(cell.edgePoints)}  ${pct(cell.roiPct, 2)}  ${pct(cell.pnlUsdc, 2)}`);
 }
@@ -194,19 +205,23 @@ function printGrid(label, rows) {
   console.log(`\n=== ${label} -- ${rows.length} usable market(s)`
     + `${days ? `, spanning ${days.toFixed(0)} day(s)` : ", span unknown"} ===`);
   if (!rows.length) return [];
-  // The whole 70-99 population beside the slices. With disjoint slices there is otherwise
-  // no row saying what the rule does as a whole, and every slice invites being read as if
-  // it were the rule.
-  const wholeBand = sweep(rows, { openBands: [OPEN_BAND_ALL] });
-  const cells = sweep(rows);
+  // Floors are nested, not disjoint: "70+" already contains every row "75+" does and more, so
+  // there is no separate "whole population" row needed any more -- it IS the first floor.
+  const cells = sweep(rows, { bands: buyBands(BUY_CEILINGS, 0.05, MIN_BUY_FLOOR) });
   const shown = cells.filter((cell) => cell.trades >= MIN_TRADES);
   console.log(`\n  cells with at least ${MIN_TRADES} opportunities`
     + `  (${cells.length - shown.length} of ${cells.length} suppressed as too thin)`);
   console.log(HEADER);
-  if (!shown.length) console.log("      (none -- no five-point cell of this tag reaches the floor)");
-  for (const cell of shown) printRow(cell);
-  console.log("\n  the whole 70-99 opening band, for reference:");
-  for (const cell of wholeBand.filter((cell) => cell.trades >= MIN_TRADES)) printRow(cell);
+  if (!shown.length) console.log("      (none -- no cell of this tag reaches the floor)");
+  let lastFloor = null;
+  for (const cell of shown) {
+    // A blank line between floors, since each is a different, larger population than the
+    // one above it and reading them as one continuous table invites comparing rows that are
+    // not measuring the same thing.
+    if (lastFloor !== null && cell.openMin !== lastFloor) console.log("");
+    lastFloor = cell.openMin;
+    printRow(cell);
+  }
   return cells;
 }
 
