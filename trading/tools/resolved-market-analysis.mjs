@@ -85,6 +85,32 @@ export function matchesTag(row, tag) {
   return question.includes(tag) ? "question" : null;
 }
 
+// Could this entry have been taken at all?
+//
+// A settled row only teaches us about an entry that was still POSSIBLE when we first
+// recorded it. Some catalogue rows were first stored AFTER Polymarket's stated resolution
+// time and still carried a non-final quote -- a price from after the result was effectively
+// known. Counting those is hindsight, not a configuration anyone could have run, and it is
+// what produces impossible win rates.
+//
+// This is a line-for-line port of resolved_stats_entry_is_not_after_due() in api.php,
+// including its field order and its "no time on the row means keep it" default, so the two
+// answers cannot drift. That guard exists because the Setup finder once reported valorant at
+// 100.0% over 36 trades when the tag's real record was 65-21, 75.6%.
+export function entryWasStillPossible(row) {
+  let seen = null;
+  for (const field of ["firstObservedAt", "firstEvaluatedAt", "observedAt", "evaluatedAt"]) {
+    const parsed = Date.parse(String(row?.[field] ?? ""));
+    if (Number.isFinite(parsed) && parsed > 0) { seen = parsed; break; }
+  }
+  if (seen === null) return true;
+  for (const field of ["resolutionEndDate", "endDate"]) {
+    const due = Date.parse(String(row?.[field] ?? ""));
+    if (Number.isFinite(due) && due > 0) return due > seen;
+  }
+  return true;
+}
+
 // How the market settled. Anything that is not a clean 0 or 1 is not a settlement of this
 // outcome and is skipped rather than guessed at -- the same rule api.php applies.
 export function settlement(row) {
@@ -275,10 +301,14 @@ async function main() {
     return;
   }
 
-  const tagged = all.map((row) => ({ row, via: matchesTag(row, TAG) })).filter((item) => item.via);
+  const matchedAll = all.map((row) => ({ row, via: matchesTag(row, TAG) })).filter((item) => item.via);
+  const tagged = matchedAll.filter((item) => entryWasStillPossible(item.row));
+  const droppedHindsight = matchedAll.length - tagged.length;
   const viaTag = tagged.filter((item) => item.via === "tag").length;
   console.log(`\n== 2. rows matching "${TAG}"\n   ${tagged.length} matched`
     + ` (${viaTag} by tag, ${tagged.length - viaTag} by question text only)`);
+  console.log(`   ${droppedHindsight} further row(s) were first seen AFTER their own resolution`);
+  console.log("   time and are dropped: that is hindsight, not an entry anyone could take.");
   if (!tagged.length) {
     console.log("   Nothing matched, so there is nothing to break down.");
     return;
@@ -376,14 +406,20 @@ async function main() {
 function rankTags(all) {
   const simulated = [];
   let unusable = 0;
+  let hindsight = 0;
   for (const row of all) {
     const sim = simulate(row);
     if (!sim) { unusable += 1; continue; }
+    // The guard, applied before anything is counted.
+    if (!entryWasStillPossible(row)) { hindsight += 1; continue; }
     simulated.push({ row, sim, shape: shapeOf(row.question || row.market), tags: tagsOf(row) });
   }
   console.log(`\n== 2. every tag, ranked`);
   console.log(`   ${simulated.length} of ${all.length} markets have both a usable entry price`);
   console.log(`   and a clean settlement; ${unusable} do not and are left out.`);
+  console.log(`   ${hindsight} more were FIRST SEEN AFTER their own resolution time and are`);
+  console.log("   dropped: a quote recorded after the result was effectively known is not an");
+  console.log("   entry anyone could have taken, and counting it invents wins out of nothing.");
   const overall = summarise(simulated);
   console.log(`   Whole archive: ${overall.n} markets, ${pct(overall.winRate)} won,`
     + ` P/L ${money(overall.pnl)}, ${pct(overall.perDollar)} per dollar staked.`);

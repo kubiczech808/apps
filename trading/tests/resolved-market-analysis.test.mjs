@@ -245,3 +245,46 @@ test("price bands are fine enough to choose a setting from, and a blank band fil
   assert.match(tool, /by ENTRY PRICE BAND, whole range/);
   assert.match(tool, /by SHAPE x entry price band/);
 });
+
+test("a quote first recorded after the market's own resolution time is not an entry", async () => {
+  const { entryWasStillPossible } = await import("../tools/resolved-market-analysis.mjs");
+  const at = (h) => new Date(Date.UTC(2026, 8, 20, 12) + h * 3600000).toISOString();
+
+  // Seen six hours before it was due: an entry someone could have taken.
+  assert.equal(entryWasStillPossible({ firstObservedAt: at(-6), endDate: at(0) }), true);
+  // Seen an hour AFTER it was due, still carrying a non-final quote. That price is from
+  // after the result was effectively known -- counting it invents wins out of nothing, and
+  // it is what showed valorant at 100.0% over 36 trades when its real record was 65-21.
+  assert.equal(entryWasStillPossible({ firstObservedAt: at(1), endDate: at(0) }), false);
+  // Exactly at the due time is not before it.
+  assert.equal(entryWasStillPossible({ firstObservedAt: at(0), endDate: at(0) }), false);
+
+  // resolutionEndDate wins over endDate, and the seen-time fields are tried in order --
+  // both mirror resolved_stats_entry_is_not_after_due() in api.php, which this must agree
+  // with or the two answers drift apart on the same rows.
+  assert.equal(entryWasStillPossible({
+    firstObservedAt: at(-2), resolutionEndDate: at(0), endDate: at(-6),
+  }), true, "resolutionEndDate is consulted first");
+  assert.equal(entryWasStillPossible({ observedAt: at(1), endDate: at(0) }), false,
+    "observedAt is used when firstObservedAt is absent");
+  assert.equal(entryWasStillPossible({ firstEvaluatedAt: at(-1), endDate: at(0) }), true);
+
+  // No time on the row at all means KEEP it, exactly as the PHP does. Dropping unknowns
+  // would silently shrink every tag by however much metadata happens to be missing.
+  assert.equal(entryWasStillPossible({}), true);
+  assert.equal(entryWasStillPossible({ firstObservedAt: at(-1) }), true, "no due date, keep");
+  assert.equal(entryWasStillPossible({ endDate: at(0) }), true, "no seen time, keep");
+
+  // And the port must match the original's field lists, so a change on one side is visible.
+  const api = readFileSync(new URL("../api.php", import.meta.url), "utf8");
+  assert.match(api, /\['firstObservedAt', 'firstEvaluatedAt', 'observedAt', 'evaluatedAt'\]/);
+  assert.match(api, /\['resolutionEndDate', 'endDate'\]/);
+  const tool = readFileSync(new URL("../tools/resolved-market-analysis.mjs", import.meta.url), "utf8");
+  assert.match(tool, /\["firstObservedAt", "firstEvaluatedAt", "observedAt", "evaluatedAt"\]/);
+  assert.match(tool, /\["resolutionEndDate", "endDate"\]/);
+
+  // The guard has to be APPLIED, not merely defined, and the count reported -- the size of
+  // what it removes is the measure of how wrong the previous ranking was.
+  assert.match(tool, /if \(!entryWasStillPossible\(row\)\) \{ hindsight \+= 1; continue; \}/);
+  assert.match(tool, /FIRST SEEN AFTER their own resolution time/);
+});
