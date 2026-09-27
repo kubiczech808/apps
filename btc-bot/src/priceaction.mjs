@@ -187,11 +187,16 @@ export const buildFvgSupplyDemandZones = (candles, {
   minGapAtr = 0,
   minDisplacementAtr = 0.8,
   maxBaseCandles = 3,
+  allowWeekendSessionGap = false,
 } = {}) => {
   const atrSeries = atr(candles, 14)
   const reference = lastDefined(atrSeries) ?? (candles.at(-1)?.close ?? 0) * 0.005
   const oldestIndex = Math.max(0, candles.length - maxAgeCandles)
-  const gaps = fairValueGaps(candles, { atrValue: reference, minSizeAtr: minGapAtr })
+  const gaps = fairValueGaps(candles, {
+    atrValue: reference,
+    minSizeAtr: minGapAtr,
+    allowWeekendSessionGap,
+  })
   const zones = []
 
   for (const gap of gaps) {
@@ -455,7 +460,13 @@ export const sweptPreviousSwing = (swing, previousSameKind) => {
  * driven by one side rather than by two-way auction, and unfilled gaps act as
  * magnets — which is why they serve as targets as well as a quality filter.
  */
-export const fairValueGaps = (candles, { minSizeAtr = 0, atrValue } = {}) => {
+export const fairValueGaps = (candles, {
+  minSizeAtr = 0,
+  atrValue,
+  // Daily FX has a normal Friday-to-Monday hole while the venue is closed.
+  // It is a consecutive trading-session transition, not a missing candle.
+  allowWeekendSessionGap = false,
+} = {}) => {
   const gaps = []
   const floor = atrValue && minSizeAtr ? atrValue * minSizeAtr : 0
   // An FVG is defined by three immediately consecutive candles. A source can
@@ -469,19 +480,27 @@ export const fairValueGaps = (candles, { minSizeAtr = 0, atrValue } = {}) => {
     .filter((interval) => Number.isFinite(interval) && interval > 0)
     .sort((a, b) => a - b)
   const expectedInterval = intervals.length
-    ? intervals[Math.floor(intervals.length / 2)]
+    // Use the lower median. With only a Friday-to-Monday pair the upper
+    // median would itself be the weekend hole and would accidentally make a
+    // missing daily bar look adjacent.
+    ? intervals[Math.floor((intervals.length - 1) / 2)]
     : null
   const maximumAdjacentInterval = expectedInterval ? expectedInterval * 1.5 : null
+  const adjacent = (left, right) => {
+    const interval = right.time - left.time
+    if (!maximumAdjacentInterval || interval <= maximumAdjacentInterval) return true
+    if (!allowWeekendSessionGap || !expectedInterval) return false
+    const leftDay = new Date(left.time).getUTCDay()
+    const rightDay = new Date(right.time).getUTCDay()
+    return leftDay === 5 && rightDay === 1 && interval <= expectedInterval * 3.5
+  }
 
   for (let index = 1; index < candles.length - 1; index += 1) {
     const before = candles[index - 1]
     const middle = candles[index]
     const after = candles[index + 1]
 
-    if (maximumAdjacentInterval && (
-      middle.time - before.time > maximumAdjacentInterval ||
-      after.time - middle.time > maximumAdjacentInterval
-    )) continue
+    if (!adjacent(before, middle) || !adjacent(middle, after)) continue
 
     if (after.low > before.high && after.low - before.high > floor) {
       gaps.push({

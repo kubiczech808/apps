@@ -907,6 +907,48 @@ test('an untouched raw FVG is published to the active daily supply catalog', () 
   assert.match(zones.rule, /tří bezprostředně po sobě jdoucích svíček/)
 })
 
+test('daily FX aggregation preserves a closed Friday session and publishes its weekend FVG', () => {
+  const day = 24 * HOUR
+  const thursday = Date.UTC(2026, 0, 1)
+  const hourlySession = (start, parts, open, high, low, close) => Array.from({ length: parts }, (_, index) =>
+    candle(start + index * HOUR, open, high, low, close)
+  )
+  const hourly = [
+    ...hourlySession(thursday, 24, 0.6000, 0.6010, 0.5949, 0.5952),
+    // Friday closes after 22 hourly bars. This is a closed FX session, not a
+    // current partial daily candle.
+    ...hourlySession(thursday + day, 22, 0.5952, 0.5954, 0.5936, 0.5938),
+    // Sunday pre-open is intentionally too short to become a daily candle.
+    ...hourlySession(thursday + 3 * day, 1, 0.5920, 0.5922, 0.5916, 0.5920),
+    ...hourlySession(thursday + 4 * day, 24, 0.5932, 0.5934, 0.5909, 0.5913),
+    // A current two-hour bucket remains unavailable to the strategy.
+    ...hourlySession(thursday + 5 * day, 2, 0.5913, 0.5920, 0.5900, 0.5915),
+  ]
+
+  const regular = aggregateHourlyTimeframeCandles({ candles: hourly, timeframeId: '1d' }).candles
+  assert.deepEqual(regular.map((item) => item.time), [thursday, thursday + 4 * day])
+
+  const fx = aggregateHourlyTimeframeCandles({
+    candles: hourly,
+    timeframeId: '1d',
+    allowFxShortSessions: true,
+  }).candles
+  assert.deepEqual(fx.map((item) => item.time), [thursday, thursday + day, thursday + 4 * day])
+  const fxChart = aggregateHourlyTimeframeCandles({
+    candles: hourly,
+    timeframeId: '1d',
+    allowFxShortSessions: true,
+  }).chartCandles
+  assert.deepEqual(fxChart.map((item) => item.time), [thursday, thursday + day, thursday + 4 * day, thursday + 5 * day])
+  const zones = activeSupplyDemandZones(fx, {
+    maxAgeCandles: 100,
+    allowWeekendSessionGap: true,
+    setupAnchor: { time: thursday, label: 'HH' },
+  })
+  assert.ok(zones.unfilledSupply.some((zone) => zone.low === 0.5934 && zone.high === 0.5949))
+  assert.ok(zones.nearbySupply.some((zone) => zone.fvg?.definingCandles?.length === 3))
+})
+
 test('trade profile requires S/D zone hit, 50 percent pullback and at least 2R', () => {
   const item = {
     trend: 'up',

@@ -283,6 +283,29 @@ test('a missing period cannot turn non-consecutive candles into an FVG', () => {
   assert.deepEqual(buildFvgSupplyDemandZones(candles), [])
 })
 
+test('a Friday-to-Monday daily FX transition is consecutive while a weekday hole is not', () => {
+  const day = 24 * HOUR
+  const thursday = Date.UTC(2026, 0, 1)
+  const fxWeekend = [
+    candle(thursday, 0.6000, 0.6010, 0.5949, 0.5952),
+    candle(thursday + day, 0.5952, 0.5954, 0.5936, 0.5938),
+    candle(thursday + 4 * day, 0.5932, 0.5934, 0.5909, 0.5913),
+  ]
+
+  assert.deepEqual(fairValueGaps(fxWeekend), [], 'the generic guard must still reject a calendar gap')
+  const [gap] = fairValueGaps(fxWeekend, { allowWeekendSessionGap: true })
+  assert.equal(gap.direction, 'bearish')
+  assert.equal(gap.low, 0.5934)
+  assert.equal(gap.high, 0.5949)
+  assert.deepEqual(buildFvgSupplyDemandZones(fxWeekend, { allowWeekendSessionGap: true })
+    .map(({ low, high, type }) => ({ low, high, type })), [
+    { low: 0.5934, high: 0.5949, type: 'supply' },
+  ])
+
+  const weekdayHole = [fxWeekend[0], fxWeekend[1], candle(thursday + 5 * day, 0.5932, 0.5934, 0.5909, 0.5913)]
+  assert.deepEqual(fairValueGaps(weekdayHole, { allowWeekendSessionGap: true }), [])
+})
+
 test('a gap price has traded back through is marked filled', () => {
   const candles = [
     candle(START, 100, 102, 99, 101),

@@ -304,7 +304,14 @@ export const fetchCandlesWithFallback = async ({
  * 4h bucket always starts at 00:00, 04:00, 08:00 … whichever venue served the
  * hours. Incomplete trailing buckets are dropped unless asked for.
  */
-export const aggregate = (candles, factor, { includePartial = false } = {}) => {
+export const aggregate = (candles, factor, {
+  includePartial = false,
+  includeTrailingPartial = false,
+  // FX closes before a UTC day has accumulated all 24 hourly bars on Friday.
+  // Keep only such *historical* short sessions when explicitly requested;
+  // never promote the currently-forming bucket to a completed candle.
+  minimumHistoricalParts = null,
+} = {}) => {
   if (factor <= 1) return candles.map(normalizeCandlePrices)
   const bucketMs = HOUR_MS * factor
   const buckets = new Map()
@@ -331,8 +338,15 @@ export const aggregate = (candles, factor, { includePartial = false } = {}) => {
     bucket.parts += 1
   }
 
-  return [...buckets.values()]
-    .sort(byTimeAscending)
-    .filter((bucket) => includePartial || bucket.parts === factor)
+  const ordered = [...buckets.values()].sort(byTimeAscending)
+  const trailingTime = ordered.at(-1)?.time ?? null
+  const minimumParts = Number.isFinite(minimumHistoricalParts)
+    ? Math.max(1, Math.min(factor, Math.floor(minimumHistoricalParts)))
+    : factor
+
+  return ordered
+    .filter((bucket) => includePartial || bucket.parts === factor || (
+      bucket.time !== trailingTime && bucket.parts >= minimumParts
+    ) || (includeTrailingPartial && bucket.time === trailingTime))
     .map(({ parts, ...bucket }) => normalizeCandlePrices(bucket))
 }

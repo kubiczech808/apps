@@ -4,7 +4,7 @@ import { buildExternalTrendReference, EXTERNAL_PIVOT_SCHEMA } from './external-t
 import { buildFvgSupplyDemandZones, candleSignal, marketStructure } from './priceaction.mjs'
 
 export const PRICE_ACTION_STRUCTURE_ID = 'price-action-structure-v1'
-export const PRICE_ACTION_MATRIX_SCHEMA = 63
+export const PRICE_ACTION_MATRIX_SCHEMA = 64
 export const PRICE_ACTION_CHART_CANDLE_LIMITS = {
   // The zone and structure inputs below remain much longer. These limits only
   // bound chart data published to the browser, where a 60-day 1H / 180-day
@@ -70,14 +70,26 @@ export const PRICE_ACTION_TIMEFRAMES = [
 // disagree with the 1H/4H candles because of a different vendor or session.
 const FX_HOURLY_HISTORY_DAYS = 760
 
-export const aggregateHourlyTimeframeCandles = ({ candles, timeframeId }) => {
+export const aggregateHourlyTimeframeCandles = ({ candles, timeframeId, allowFxShortSessions = false }) => {
   const timeframe = PRICE_ACTION_TIMEFRAMES.find((item) => item.id === timeframeId)
   if (!timeframe) throw new Error(`Unknown price-action timeframe: ${timeframeId}`)
   return {
-    candles: aggregate(candles, timeframe.hours),
+    candles: aggregate(candles, timeframe.hours, {
+      // A Friday Forex daily candle normally contains 22–23 hourly bars.
+      // Historical short sessions are complete venue sessions; the trailing
+      // partial bucket remains excluded until it has actually closed.
+      minimumHistoricalParts: allowFxShortSessions && timeframeId === '1d' ? 22 : null,
+    }),
     // Strategy logic remains limited to completed buckets, but charts include
     // the current partial candle so the latest price stays at the right edge.
-    chartCandles: aggregate(candles, timeframe.hours, { includePartial: true }),
+    // Daily FX must still reject old Sunday pre-open buckets: only its latest
+    // partial session is a chart candle.
+    chartCandles: allowFxShortSessions && timeframeId === '1d'
+      ? aggregate(candles, timeframe.hours, {
+          minimumHistoricalParts: 22,
+          includeTrailingPartial: true,
+        })
+      : aggregate(candles, timeframe.hours, { includePartial: true }),
   }
 }
 
@@ -776,10 +788,19 @@ const auditZoneSummary = (zone) => ({
   distancePct: zone.distancePct,
 })
 
-export const activeSupplyDemandZones = (candles, { lookback = 2, maxAgeCandles = 400, setupAnchor = null } = {}) => {
+export const activeSupplyDemandZones = (candles, {
+  lookback = 2,
+  maxAgeCandles = 400,
+  setupAnchor = null,
+  allowWeekendSessionGap = false,
+} = {}) => {
   const price = candles.at(-1)?.close ?? null
   const latestTime = candles.at(-1)?.time ?? null
-  const allZones = buildFvgSupplyDemandZones(candles, { lookback, maxAgeCandles })
+  const allZones = buildFvgSupplyDemandZones(candles, {
+    lookback,
+    maxAgeCandles,
+    allowWeekendSessionGap,
+  })
     .map((zone) => zoneSummary(zone, candles, price, setupAnchor))
   // A wick entering any part of the FVG consumes it for a future order. The
   // sole exception is the candle currently closing inside it: the runner may
@@ -2046,6 +2067,7 @@ export const classifyExternalStructure = ({
   zoneHistoryDays = null,
   externalTrend = null,
   externalPivots = null,
+  allowWeekendSessionGap = false,
 } = {}) => {
   const normalizedCandles = Array.isArray(candles) ? candles.map(normalizeCandlePrices) : []
   const normalizedZoneCandles = Array.isArray(zoneCandles) ? zoneCandles.map(normalizeCandlePrices) : []
@@ -2186,6 +2208,7 @@ export const classifyExternalStructure = ({
       lookback: zoneLookback,
       maxAgeCandles: zoneMaxAgeCandles,
       setupAnchor: activeSetupAnchor(activeRange),
+      allowWeekendSessionGap,
     }),
   }
 }
@@ -2220,7 +2243,11 @@ const assetTimeframeCandles = async ({ asset, btcHourly, fetchImpl, now, logger 
   return PRICE_ACTION_TIMEFRAMES.map((timeframe) => ({
     source,
     failures,
-    ...aggregateHourlyTimeframeCandles({ candles, timeframeId: timeframe.id }),
+    ...aggregateHourlyTimeframeCandles({
+      candles,
+      timeframeId: timeframe.id,
+      allowFxShortSessions: true,
+    }),
   }))
 }
 
@@ -2345,6 +2372,7 @@ export const buildPriceActionMatrix = async ({
         chartCandles,
         externalTrend,
         externalPivots,
+        allowWeekendSessionGap: asset.group === 'fx' && timeframe.id === '1d',
       })
     }
     // Intentionally no alignOneHourStructureToFourHour(trends): it was part
