@@ -883,6 +883,27 @@ test('a partial same-timeframe touch consumes an FVG and separates old touches f
   assert.equal(currentDemand.definingCandles[0].open, undefined, 'audit zones keep their origin without duplicating candle OHLC')
 })
 
+test('a partial same-timeframe touch consumes a supply FVG without a close through it', () => {
+  const supplyFvg = [
+    // The outer wicks leave a bearish FVG at 104-108.
+    candle(START, 110, 112, 108, 111),
+    candle(START + HOUR, 111, 111, 101, 102),
+    candle(START + 2 * HOUR, 100, 104, 99, 100),
+    // Price remains below the zone until the next candle's wick enters it.
+    candle(START + 3 * HOUR, 101, 103, 99, 100),
+    candle(START + 4 * HOUR, 100, 104.5, 98, 101),
+  ]
+  const zones = activeSupplyDemandZones(supplyFvg, { lookback: 1, maxAgeCandles: 100 })
+  const supply = zones.allSupply.find((zone) => zone.low === 104 && zone.high === 108)
+
+  assert.ok(supply, 'the bearish FVG must be retained in the audit catalogue')
+  assert.equal(supply.firstTouchAt, START + 4 * HOUR)
+  assert.equal(supply.filledByOwnTimeframeClose, false, 'a wick-only touch is not a close fill')
+  assert.equal(supply.invalidatedByOwnTimeframeClose, false, 'a wick-only touch is not a hard far-edge break')
+  assert.equal(zones.supply, null, 'the first wick touch consumes the supply zone for a new short entry')
+  assert.equal(zones.nearbySupply.some((zone) => zone.low === 104 && zone.high === 108), false)
+})
+
 test('an untouched raw FVG is published to the active daily supply catalog', () => {
   const day = 24 * HOUR
   const candles = [

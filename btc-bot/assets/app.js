@@ -314,7 +314,7 @@ const PRICE_ACTION_RULEBOOK = [
   },
   {
     title: 'Vstup pouze ve správné supply/demand zóně',
-    text: 'Zóna musí být base impulsního breakoutu, který vytvořil 3svíčkový FVG. Stačí hit ceny; invaliduje ji jen close průraz na vlastním timeframe.',
+    text: 'Zóna musí být base impulsního breakoutu, který vytvořil 3svíčkový FVG. První dotek na vlastním timeframe ji spotřebuje pro nový vstup; close přes vzdálenou hranu je její definitivní invalidace.',
     status: () => {
       const hit = priceActionProfiles().filter((entry) => entry.profile.zoneHit).length
       return fact(hit ? 'met' : 'neutral', `${hit} hitů zóny`)
