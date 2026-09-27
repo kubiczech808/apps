@@ -2323,6 +2323,19 @@ const DIP_ENTRY_TTL_MS = clampInteger(process.env.LIVE_DIP_ENTRY_TTL_MS, 4 * 360
 const DIP_ENTRY_MAX_SLIPPAGE = Number(process.env.LIVE_DIP_ENTRY_MAX_SLIPPAGE || 0.02);
 const DIP_ENTRY_RECORD_URL = process.env.LIVE_DIP_ENTRY_RECORD_URL
   || "https://osobnizkusenosti.cz/trading/api.php?action=dip-entry-record";
+// Told to the server the moment a LIVE dip-entry fills, because this whole entry path never
+// runs through live-order-executor.mjs and so never reaches that script's own orderOwnership
+// write. live_stop_loss_policy_payload() already reads orderOwnership from every portfolio's
+// execution state to decide whose policy protects an open position -- a token this call never
+// reaches simply is not there, and the position falls through to the base Live portfolio's
+// stop instead.
+//
+// Reported: "Games Total: O/U 3.5" on a League of Legends match, bought by the dip 70+ ->
+// 45-56 live portfolio (no stop loss configured) at 56.2%, sold 66 seconds later at 47% --
+// inside the base Live portfolio's 0.49 floor, a cap the position's actual portfolio never
+// set, on a match that had not even finished.
+const LIVE_DIP_ENTRY_OWNERSHIP_URL = process.env.LIVE_DIP_ENTRY_OWNERSHIP_URL
+  || "https://osobnizkusenosti.cz/trading/api.php?action=live-dip-entry-ownership";
 // The catalogue endpoint can only describe plans which still appear in the current scrape.
 // The worker deliberately retains a plan after its favourite has fallen below 50%, so it
 // also publishes that retained set for the dashboard. This is diagnostic-only and must not
@@ -2385,6 +2398,40 @@ export async function recordDipEntryHit(plan, price, execution = {}) {
     const payload = await response.json().catch(() => ({}));
     if (!response.ok || !payload?.ok) return { ok: false, error: `HTTP ${response.status}` };
     return { ok: true, recorded: payload.recorded !== false };
+  } catch (error) {
+    return { ok: false, error: error?.message || String(error) };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+// The other half of a LIVE fill, beside recordDipEntryHit's paper one: told to the server so
+// live_stop_loss_policy_payload() attributes the position to the portfolio that actually
+// bought it, rather than adopting it under the base Live portfolio's stop by default. See the
+// LIVE_DIP_ENTRY_OWNERSHIP_URL comment above for the reported case this exists to fix.
+//
+// Best-effort and never thrown: a failed call means the position is protected under the
+// wrong policy for one more cycle, not that the fill itself is undone. The caller records the
+// failure in the worker's own event history so a persistent gap stays visible rather than
+// silent.
+export async function recordLiveDipEntryOwnership(portfolioId, tokenId, price, at) {
+  if (!TRADING_TRIGGER_KEY) return { ok: false, error: "dip entry ownership key is not configured" };
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 12000);
+  try {
+    const response = await fetch(LIVE_DIP_ENTRY_OWNERSHIP_URL, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-trading-trigger-key": TRADING_TRIGGER_KEY,
+        "user-agent": "trading-live-exit-worker/1.0",
+      },
+      body: JSON.stringify({ portfolioId: String(portfolioId || ""), tokenId: String(tokenId || ""), price, at }),
+      signal: controller.signal,
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok || !payload?.ok) return { ok: false, error: payload?.reason || `HTTP ${response.status}` };
+    return { ok: true };
   } catch (error) {
     return { ok: false, error: error?.message || String(error) };
   } finally {
@@ -2698,6 +2745,14 @@ async function fireDipEntries(context, books, now) {
     const response = await submitDipEntry(plan, book, cash);
     const filled = exitFilled(response);
     const rejection = filled ? null : (response?.errorMsg || response?.error || "order was not accepted");
+    // Told to the server the moment the fill is known, and before the terminal event below --
+    // a rejected order owns nothing and must never be reported as if it did.
+    if (filled) {
+      const ownership = await recordLiveDipEntryOwnership(plan.portfolioId, plan.tokenId, response?.price ?? null, now);
+      if (!ownership.ok) {
+        recordEvent(context.state, { ...event, type: "DIP_ENTRY_OWNERSHIP_RECORD_FAILED", error: ownership.error });
+      }
+    }
     recordEvent(context.state, {
       ...event,
       type: filled ? "DIP_ENTRY_SUBMITTED" : "DIP_ENTRY_REJECTED",

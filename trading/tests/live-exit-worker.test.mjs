@@ -1625,9 +1625,10 @@ test("dip entry: the fast path decides only what cannot be prepared in advance",
 test("dip entry: it fires once, needs cash, and honours what was prepared", async () => {
   const source = readFileSync(new URL("../tools/rpi-live-exit-worker.mjs", import.meta.url), "utf8");
   const submitted = [];
+  const ownershipCalls = [];
   const build = (overrides = {}) => new Function(
     "bestAsk", "exitFilled", "recordEvent", "submitDipEntry", "dipEntryTrigger", "dipEntryPlanKey", "dipEntryWatchQuoteIsFinal",
-    "DIP_ENTRY_MODE", "MODE", "CONFIRM_LIVE",
+    "DIP_ENTRY_MODE", "MODE", "CONFIRM_LIVE", "recordLiveDipEntryOwnership",
     `${functionBody(source, "fireDipEntries")}\nreturn fireDipEntries;`,
   )(
     (book) => book.ask ?? null,
@@ -1646,6 +1647,10 @@ test("dip entry: it fires once, needs cash, and honours what was prepared", asyn
     overrides.dipMode || "live",
     overrides.mode || "live",
     overrides.confirm !== false,
+    async (portfolioId, tokenId, price, at) => {
+      ownershipCalls.push({ portfolioId, tokenId, price, at });
+      return { ok: overrides.ownershipOk !== false };
+    },
   );
 
   const plan = {
@@ -1665,48 +1670,75 @@ test("dip entry: it fires once, needs cash, and honours what was prepared", asyn
   assert.deepEqual(submitted.map((row) => row.tokenId), ["aaa"]);
   assert.equal(submitted[0].cash, 40, "the cash the plan was prepared with reaches the order");
   assert.equal(live.state.history[0].type, "DIP_ENTRY_SUBMITTED");
+  // The fix: a live fill tells the server who bought it, or live_stop_loss_policy_payload()
+  // has no way to protect it under its own portfolio's stop rather than the base one's.
+  assert.deepEqual(ownershipCalls, [{ portfolioId: "live-custom-dip", tokenId: "aaa", price: 0.35, at: "2026-09-10T20:27:00Z" }]);
 
   // Once, ever. A price wobbling across the band's edge must not buy repeatedly, and the
   // claim alone stops that only until the first order settles.
   submitted.length = 0;
+  ownershipCalls.length = 0;
   await build()(live, books, "2026-09-10T20:28:00Z");
   assert.deepEqual(submitted, [], "a settled token is never bought again");
+  assert.deepEqual(ownershipCalls, [], "nothing new to attribute if nothing new was bought");
 
   // A rejection is terminal too: retrying into a book that already refused the size is how
   // one decision became three orders.
   submitted.length = 0;
+  ownershipCalls.length = 0;
   const rejected = context();
   await build({ accept: false })(rejected, books, "2026-09-10T20:27:00Z");
   assert.equal(rejected.state.history[0].type, "DIP_ENTRY_REJECTED");
   await build({ accept: false })(rejected, books, "2026-09-10T20:28:00Z");
   assert.equal(submitted.length, 1, "a rejected entry is not retried on the next pass");
+  assert.deepEqual(ownershipCalls, [], "a rejected order owns nothing, so nothing is claimed");
 
   // Diversification was settled when the plan was prepared, and a blocked plan is recorded
   // rather than silently skipped -- otherwise a watched market that reached the band and
   // was not bought looks like a worker that missed it.
   submitted.length = 0;
+  ownershipCalls.length = 0;
   const blocked = context();
   blocked.dipWatch = new Map([["live-custom-dip:aaa", { ...plan, blockedReason: "the wallet already has a position in this market" }]]);
   await build()(blocked, books, "2026-09-10T20:27:00Z");
   assert.deepEqual(submitted, []);
   assert.equal(blocked.state.history[0].type, "DIP_ENTRY_BLOCKED");
   assert.match(blocked.state.history[0].error, /already has a position/);
+  assert.deepEqual(ownershipCalls, [], "a blocked plan was never bought, so it claims nothing");
 
   // Shadow: the whole decision at the price it would have paid, and nothing sent.
   submitted.length = 0;
+  ownershipCalls.length = 0;
   const shadow = context();
   await build({ dipMode: "shadow" })(shadow, books, "2026-09-10T20:27:00Z");
   assert.deepEqual(submitted, []);
   assert.equal(shadow.state.history[0].type, "DIP_ENTRY_SHADOW");
   assert.equal(shadow.state.history[0].ask, 0.35, "and it records the price it would have paid");
+  assert.deepEqual(ownershipCalls, [], "shadow mode sends nothing, so it claims nothing");
 
   // Normal operation is portfolio-driven: the API only publishes an enabled, non-archived
   // live dip portfolio, so it must not need a second hidden worker-wide live switch.
   submitted.length = 0;
+  ownershipCalls.length = 0;
   const portfolioDriven = context();
   await build({ dipMode: "portfolio" })(portfolioDriven, books, "2026-09-10T20:27:00Z");
   assert.deepEqual(submitted.map((row) => row.tokenId), ["aaa"]);
   assert.equal(portfolioDriven.state.history[0].type, "DIP_ENTRY_SUBMITTED");
+  assert.deepEqual(ownershipCalls, [{ portfolioId: "live-custom-dip", tokenId: "aaa", price: 0.35, at: "2026-09-10T20:27:00Z" }],
+    "a portfolio-driven fill claims ownership exactly like a worker-switch-driven one");
+
+  // A fill that cannot tell the server who bought it is not lost or silently retried: the
+  // terminal SUBMITTED state still lands (the money moved, and that is what matters most),
+  // but the gap is visible in history so it can be reconciled instead of misattributed.
+  submitted.length = 0;
+  ownershipCalls.length = 0;
+  const unattributable = context();
+  await build({ ownershipOk: false })(unattributable, books, "2026-09-10T20:27:00Z");
+  assert.equal(unattributable.state.history[0].type, "DIP_ENTRY_SUBMITTED", "the fill itself is never held back by a failed claim");
+  assert.equal(unattributable.state.history[1].type, "DIP_ENTRY_OWNERSHIP_RECORD_FAILED", "but the gap is recorded, not swallowed");
+  submitted.length = 0;
+  await build({ ownershipOk: false })(unattributable, books, "2026-09-10T20:28:00Z");
+  assert.equal(submitted.length, 0, "still terminal even though its ownership claim failed -- not retried as if unbought");
 });
 
 test("dip entry: the order never pays above the band, and never without cash", () => {

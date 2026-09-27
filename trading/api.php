@@ -6314,6 +6314,88 @@ function live_execution_state_path_for_policy(string $portfolioId): string
     return __DIR__ . '/data/live-' . $id . '-execution-state.json';
 }
 
+// The same cap live-order-executor.mjs's own mergeOrderOwnership() keeps its copy of this
+// list under, so a direct write here cannot grow the file past what the normal path bounds
+// it to.
+const LIVE_DIP_ENTRY_OWNERSHIP_LIMIT = 4000;
+
+/**
+ * One entry per token a LIVE dip-entry fill ordered, written the moment the RPi worker's
+ * own signed FOK fills. This is the one order-placement path that never runs through
+ * live-order-executor.mjs, and so never reaches that script's own orderOwnership write --
+ * live_stop_loss_policy_payload() reads orderOwnership from every portfolio's execution
+ * state to attribute an open position, and a token this function never touches simply is
+ * not there.
+ *
+ * Reported: "Games Total: O/U 3.5" on a League of Legends match, bought by the dip 70+ ->
+ * 45-56 live portfolio (stopLossRiskMultiplier 0, stopLossProbabilityFloor 0 -- no stop
+ * configured at all) at 56.2%, sold 66 seconds later at 47% -- inside the base Live
+ * portfolio's 0.49 floor, a cap the position's actual portfolio never set. Nothing in
+ * live_stop_loss_policy_payload() needed to change: it already reads orderOwnership from
+ * every portfolio's state. This is the write that was missing on the other end.
+ *
+ * Shaped exactly like live-order-executor.mjs's own mergeOrderOwnership() rows -- tokenId,
+ * price, mode, at, entryVolumeUsdc, deduplicated on tokenId+price -- so a portfolio's next
+ * ordinary run merges this row in as a known claim rather than a stranger.
+ */
+function record_live_dip_entry_ownership(array $input): array
+{
+    $portfolioId = trim((string) ($input['portfolioId'] ?? ''));
+    $tokenId = trim((string) ($input['tokenId'] ?? ''));
+    if ($portfolioId === '' || $tokenId === '') {
+        return ['ok' => false, 'reason' => 'portfolioId and tokenId are required'];
+    }
+    $price = is_numeric($input['price'] ?? null) ? round((float) $input['price'], 4) : null;
+    $at = trim((string) ($input['at'] ?? ''));
+    if ($at === '' || strtotime($at) === false) {
+        $at = gmdate('c');
+    }
+    $entryVolumeUsdc = is_numeric($input['entryVolumeUsdc'] ?? null) ? (float) $input['entryVolumeUsdc'] : null;
+
+    $priceKey = static fn($value): string => is_numeric($value) ? number_format((float) $value, 4, '.', '') : '-';
+    $key = $tokenId . ':' . $priceKey($price);
+
+    $path = live_execution_state_path_for_policy($portfolioId);
+    $state = decode_state_file($path, false);
+    if (!is_array($state)) {
+        $state = [];
+    }
+    $ownership = is_array($state['orderOwnership'] ?? null) ? $state['orderOwnership'] : [];
+    // This claim first, so it wins the dedup below over anything already on record for the
+    // same token and price -- the same rule mergeOrderOwnership() applies when IT runs next.
+    $ownership = array_values(array_filter(
+        $ownership,
+        static function ($row) use ($key, $priceKey): bool {
+            if (!is_array($row)) {
+                return true;
+            }
+            $rowKey = (string) ($row['tokenId'] ?? '') . ':' . $priceKey($row['price'] ?? null);
+            return $rowKey !== $key;
+        },
+    ));
+    array_unshift($ownership, [
+        'tokenId' => $tokenId,
+        'price' => $price,
+        'mode' => 'live',
+        'at' => $at,
+        'entryVolumeUsdc' => $entryVolumeUsdc,
+    ]);
+    if (count($ownership) > LIVE_DIP_ENTRY_OWNERSHIP_LIMIT) {
+        $ownership = array_slice($ownership, 0, LIVE_DIP_ENTRY_OWNERSHIP_LIMIT);
+    }
+    $state['orderOwnership'] = $ownership;
+
+    $dir = dirname($path);
+    if (!is_dir($dir) && !mkdir($dir, 0775, true) && !is_dir($dir)) {
+        return ['ok' => false, 'reason' => 'unable to create the data directory'];
+    }
+    $encoded = json_encode($state, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+    if (!is_string($encoded) || file_put_contents($path, $encoded . "\n", LOCK_EX) === false) {
+        return ['ok' => false, 'reason' => 'unable to persist ownership'];
+    }
+    return ['ok' => true, 'recorded' => true, 'portfolioId' => $portfolioId, 'tokenId' => $tokenId];
+}
+
 // Which run records say "this portfolio sent an order for this token". Ownership only --
 // it decides whose stop loss protects the position, never whether one exists.
 //
@@ -9766,6 +9848,13 @@ try {
         require_trading_trigger_key();
         $payload = json_decode((string) file_get_contents('php://input'), true);
         $result = record_dip_entry_hit(is_array($payload) ? $payload : []);
+        respond($result, ($result['ok'] ?? false) ? 200 : 400);
+    }
+
+    if ($action === 'live-dip-entry-ownership') {
+        require_trading_trigger_key();
+        $payload = json_decode((string) file_get_contents('php://input'), true);
+        $result = record_live_dip_entry_ownership(is_array($payload) ? $payload : []);
         respond($result, ($result['ok'] ?? false) ? 200 : 400);
     }
 
