@@ -167,3 +167,15 @@ test("the sweep reads only the shape it asked for", () => {
     "the rollup must match the requested shape, not merely the requested tag");
   assert.match(tool, /if \(row\.horizon !== "\*" \|\| row\.tag === "\*"\) continue;/);
 });
+
+test("volume is not a dimension the fold keeps, and the tool does not pretend otherwise", () => {
+  // Asked: "jestli v tom hraje roli pocatecni volume". The stored cells are keyed by
+  // probability, tag, shape and horizon only, so a volume split cannot come from this path
+  // at any cost -- it is absent, not merely expensive. Saying so is the answer; inventing a
+  // proxy for it would be a number somebody sets a live portfolio by.
+  const storage = readFileSync(new URL("../storage.php", import.meta.url), "utf8");
+  assert.match(storage, /\(cell_key, scope, probability, tag, shape, horizon, trades, wins, staked_usdc, pnl_usdc, updated_at\)/,
+    "if a volume column is ever added here, this test is the reminder to use it");
+  const tool = readFileSync(new URL("../tools/tag-probability-query.mjs", import.meta.url), "utf8");
+  assert.match(tool, /Volume\n\/\/ is NOT -- the fold's cells are \(probability, tag, shape, horizon\)/);
+});

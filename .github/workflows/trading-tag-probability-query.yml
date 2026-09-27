@@ -46,6 +46,16 @@ on:
         required: false
         default: "70"
         type: string
+      horizons:
+        description: "true = one band, split by how long before resolution it was first seen"
+        required: false
+        default: "false"
+        type: string
+      ceiling:
+        description: "Top of the band for the horizon breakdown, e.g. 72"
+        required: false
+        default: "72"
+        type: string
 
 permissions:
   contents: read
@@ -70,4 +80,7 @@ jobs:
           MIN_TRADES: ${{ inputs.min_trades }}
           SWEEP: ${{ inputs.sweep }}
           PROBABILITY: ${{ inputs.probability }}
+          HORIZONS: ${{ inputs.horizons }}
+          CEILING: ${{ inputs.ceiling }}
+          MARKET_TAG: ${{ inputs.tags }}
         run: node tools/tag-probability-query.mjs

@@ -309,7 +309,50 @@ async function sweep() {
   for (const tag of others.slice(0, 12)) console.log(sweepLine(tag, all.get(tag), stake));
 }
 
+// One band, every horizon: "does it matter whether the fixture is already under way".
+//
+// The horizon is a dimension the nightly fold already keeps, so this is a stored read. Volume
+// is NOT -- the fold's cells are (probability, tag, shape, horizon) and nothing else -- so a
+// volume split cannot be answered from here at all, only by adding the dimension to the fold.
+async function horizons() {
+  const tag = String(process.env.MARKET_TAG || "soccer").trim().toLowerCase();
+  const shape = String(process.env.MARKET_SHAPE || "*").trim() || "*";
+  const floor = Number(process.env.PROBABILITY || 51);
+  const ceiling = Number(process.env.CEILING || 72);
+  const payload = await askCombinations({
+    tag, shape, mode: "band", band_step: "1", min_width: "5",
+    probability: String(floor), min_trades: String(Number(process.env.MIN_TRADES || 1)),
+    limit: "400", only_open: "false",
+  });
+  const stake = num(payload.stakeUsdc) ?? 5;
+  console.log(`   tag ${tag}, shape ${shape}, band ${floor}-${ceiling}%,`
+    + ` statsSource ${payload.statsSource}, ${payload.combinations} combination(s)`);
+  const rows = [...(payload.best || []), ...(payload.worst || [])]
+    .filter((row) => row.probabilityMin === floor && row.probabilityMax === ceiling);
+  if (!rows.length) {
+    const seen = [...new Set([...(payload.best || []), ...(payload.worst || [])]
+      .map((row) => `${row.probabilityMin}-${row.probabilityMax}`))];
+    console.log(`   !! no row for exactly ${floor}-${ceiling}. Bands present: ${seen.slice(0, 20).join(", ")}`);
+    return;
+  }
+  const seen = new Map();
+  for (const row of rows) if (!seen.has(row.horizon)) seen.set(row.horizon, row);
+  const order = ["*", "under way", "<= 3 h", "<= 6 h", "<= 12 h", "<= 24 h", "<= 48 h", "> 48 h", "unknown"];
+  console.log(`\n   horizon                                n   win%  priced    edge       P/L    per $`);
+  for (const horizon of order) {
+    if (seen.has(horizon)) console.log(sweepLine(horizon === "*" ? "(every horizon)" : horizon, seen.get(horizon), stake));
+  }
+  for (const [horizon, row] of seen) {
+    if (!order.includes(horizon)) console.log(sweepLine(horizon, row, stake));
+  }
+}
+
 async function main() {
+  if (String(process.env.HORIZONS || "").toLowerCase() === "true") {
+    console.log(`Horizon breakdown at ${new Date().toISOString()}`);
+    await horizons();
+    return;
+  }
   if (String(process.env.SWEEP || "").toLowerCase() === "true") {
     console.log(`Entry-rule sweep at ${new Date().toISOString()}`);
     await sweep();
