@@ -40,6 +40,11 @@ on:
         required: false
         default: "MANUAL"
         type: string
+      pacer_tick:
+        description: "Internal pacer sequence used to rotate live execution dispatches"
+        required: false
+        default: ""
+        type: string
 
 permissions:
   contents: read
@@ -125,6 +130,9 @@ jobs:
       # Only a dispatch is manual. The scraping log flags them, so a scheduled pass must
       # not claim to be one.
       PAPER_MARKET_SCAN_TRIGGER: ${{ github.event_name == 'workflow_dispatch' && (inputs.run_source == 'AUTO' && 'AUTO' || 'MANUAL') || 'AUTO' }}
+      # Passed through to the post-scan dispatcher. It selects one live portfolio rather
+      # than starting every active live executor in the same second.
+      TRADING_PACER_TICK: ${{ github.event.inputs.pacer_tick || '' }}
       PAPER_MAX_RESOLUTION_DAYS: "7"
       PAPER_SCAN_ONLY: "true"
       PAPER_REQUIRE_GEMINI: "false"

@@ -73,6 +73,25 @@ function trading_storage_catalogue_fresh_since(): string
 
 function trading_storage_bootstrap(PDO $pdo): void
 {
+    static $ready = false;
+    if ($ready) {
+        return;
+    }
+
+    // This function is called by every storage helper. `CREATE TABLE IF NOT EXISTS`
+    // is safe, but running the full DDL list for every dashboard/API request still takes
+    // MySQL metadata locks. During a burst of live executor dispatches those locks could
+    // occupy the small shared hosting pool until the site timed out. A one-row probe keeps
+    // the normal read path read-only; the DDL path remains available for a fresh install.
+    try {
+        $pdo->query('SELECT 1 FROM trading_storage_meta LIMIT 1');
+        $ready = true;
+        return;
+    } catch (Throwable) {
+        // The schema does not exist yet, or is being created by the first deployment.
+        // Continue into the idempotent bootstrap below.
+    }
+
     $pdo->exec(
         'CREATE TABLE IF NOT EXISTS trading_storage_meta (
             meta_key VARCHAR(100) NOT NULL PRIMARY KEY,
@@ -198,6 +217,7 @@ function trading_storage_bootstrap(PDO $pdo): void
         ) ENGINE=InnoDB ROW_FORMAT=DYNAMIC DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci'
     );
     trading_storage_optimize_schema($pdo);
+    $ready = true;
 }
 
 /**

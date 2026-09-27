@@ -33,7 +33,22 @@ async function readJson(url, options = {}) {
 // chosen to end. So the pacer ticks faster, the scan keeps its own cadence, and the ticks
 // in between wake only the live executors, through this same planner: a second copy of the
 // "which portfolios are awake" rules is how 5050 ended up never being dispatched at all.
-export function plannedDispatches(config = {}, { liveOnly = false } = {}) {
+function boundedLiveDispatches(plans, slot, limit) {
+  if (!Array.isArray(plans) || plans.length === 0) return [];
+  if (!Number.isFinite(limit) || limit >= plans.length) return plans;
+
+  const count = Math.max(0, Math.min(plans.length, Math.floor(limit)));
+  if (count === 0) return [];
+  const numericSlot = Number.isFinite(Number(slot)) ? Math.trunc(Number(slot)) : 0;
+  const start = ((numericSlot % plans.length) + plans.length) % plans.length;
+  return Array.from({ length: count }, (_, index) => plans[(start + index) % plans.length]);
+}
+
+export function plannedDispatches(config = {}, {
+  liveOnly = false,
+  liveSlot = 0,
+  maxLiveDispatches = Number.POSITIVE_INFINITY,
+} = {}) {
   const paper = config.paper || {};
   const live = config.live || {};
   // 5050 was missing here entirely, so however its execution trigger was set it was
@@ -42,6 +57,7 @@ export function plannedDispatches(config = {}, { liveOnly = false } = {}) {
   const fixedEntry = config.live5050 || {};
 
   const planned = [];
+  const livePlans = [];
   // The after-scan worker applies each cron portfolio's own cadence before it
   // executes. Waking it here is therefore a reliable delivery mechanism for a
   // due hourly portfolio, not an instruction to trade on every scrape.
@@ -80,7 +96,7 @@ export function plannedDispatches(config = {}, { liveOnly = false } = {}) {
     && ["after_scrape", "cron"].includes(String(portfolio.executionTrigger || "cron").trim().toLowerCase());
   const liveTrigger = String(live.executionTrigger || "cron").trim().toLowerCase();
   if (wakeable(live)) {
-    planned.push({
+    livePlans.push({
       workflow: "polymarket-live-limit-order-test.yml",
       inputs: {
         live_confirm: "true",
@@ -90,7 +106,7 @@ export function plannedDispatches(config = {}, { liveOnly = false } = {}) {
     });
   }
   if (wakeable(fixedEntry)) {
-    planned.push({
+    livePlans.push({
       workflow: "trading-live-5050.yml",
       inputs: {
         // live_confirm because a dispatch without it is a dry run and would rest nothing.
@@ -107,7 +123,7 @@ export function plannedDispatches(config = {}, { liveOnly = false } = {}) {
   for (const [id, portfolio] of Object.entries(config.livePortfolios || {})) {
     const trigger = String(portfolio?.executionTrigger || "cron").trim().toLowerCase();
     if (!wakeable(portfolio)) continue;
-    planned.push({
+    livePlans.push({
       workflow: "polymarket-live-limit-order-test.yml",
       inputs: {
         live_confirm: "true",
@@ -117,9 +133,13 @@ export function plannedDispatches(config = {}, { liveOnly = false } = {}) {
       },
     });
   }
-  // Everything except the paper bot, rather than a list of the live workflows: a live
-  // workflow added later is then included without anyone having to remember this line.
-  return liveOnly ? planned.filter((entry) => entry.workflow !== "trading-paper-bot.yml") : planned;
+  // A custom live portfolio used to add another dispatch to every three-minute tick.
+  // With a dozen portfolios that became a burst of competing self-hosted jobs; GitHub
+  // cancelled most, but several had already opened PHP/MySQL requests on the hosting.
+  // Rotate the one permitted live dispatch through the eligible portfolios instead.
+  // The default remains unlimited for callers that explicitly inspect the complete plan.
+  const selectedLive = boundedLiveDispatches(livePlans, liveSlot, maxLiveDispatches);
+  return liveOnly ? selectedLive : [...planned, ...selectedLive];
 }
 
 async function main() {
@@ -127,6 +147,13 @@ async function main() {
   const token = process.env.GITHUB_TOKEN;
   const ref = process.env.GITHUB_REF_NAME || "main";
   const liveOnly = process.argv.includes("--live-only");
+  // Pacer ticks are stable across the scan and the in-between live check. A manual scan
+  // has no tick, so rotate on the same three-minute bucket rather than waking every live
+  // portfolio at once.
+  const configuredSlot = Number(process.env.TRADING_PACER_TICK);
+  const liveSlot = Number.isFinite(configuredSlot)
+    ? Math.trunc(configuredSlot)
+    : Math.floor(Date.now() / (3 * 60 * 1000));
   if (!repository || !token) {
     throw new Error("GITHUB_REPOSITORY and GITHUB_TOKEN are required to dispatch post-scrape execution.");
   }
@@ -134,7 +161,11 @@ async function main() {
   const configPayload = await readJson(configUrl, {
     headers: { "User-Agent": "trading-post-scrape-dispatch/1.0" },
   });
-  const planned = plannedDispatches(configPayload.config || {}, { liveOnly });
+  const planned = plannedDispatches(configPayload.config || {}, {
+    liveOnly,
+    liveSlot,
+    maxLiveDispatches: 1,
+  });
 
   if (!planned.length) {
     console.log(liveOnly
@@ -142,6 +173,8 @@ async function main() {
       : "No portfolio is configured for execution after scraping; no execution workflow dispatched.");
     return;
   }
+
+  console.log(`Live dispatch slot ${liveSlot}; at most one live portfolio is started this tick.`);
 
   const failures = [];
   for (const { workflow, inputs } of planned) {

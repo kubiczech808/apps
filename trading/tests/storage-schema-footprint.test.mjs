@@ -20,7 +20,8 @@ import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-const STORAGE = readFileSync(new URL("../storage.php", import.meta.url), "utf8");
+const STORAGE = readFileSync(new URL("../storage.php", import.meta.url), "utf8")
+  .replace(/\r\n/g, "\n");
 
 // The function, lifted with nothing else: it takes a PDO and returns an array, so a stub that
 // answers query() is the whole environment it needs.
@@ -161,4 +162,18 @@ test("the endpoint exists, is read-only and needs the key", () => {
   assert.match(admin, /REQUEST_METHOD'\] !== 'POST'/);
   assert.ok(admin.indexOf("require_trading_trigger_key();") < admin.indexOf("$operation = strtolower"),
     "the key is checked before the operation is even parsed");
+});
+
+test("an existing schema avoids bootstrap DDL on ordinary API requests", () => {
+  const bootstrap = STORAGE.slice(
+    STORAGE.indexOf("function trading_storage_bootstrap(PDO $pdo): void"),
+    STORAGE.indexOf("\nfunction trading_storage_trade_key", STORAGE.indexOf("function trading_storage_bootstrap(PDO $pdo): void")),
+  );
+  const probe = bootstrap.indexOf("SELECT 1 FROM trading_storage_meta LIMIT 1");
+  const create = bootstrap.indexOf("CREATE TABLE IF NOT EXISTS trading_storage_meta");
+  assert.ok(probe >= 0, "bootstrap must probe the already-created schema");
+  assert.ok(create > probe, "the DDL path must follow, not precede, the fast probe");
+  assert.match(bootstrap, /static \$ready = false;/);
+  assert.ok(bootstrap.indexOf("return;", probe) < create,
+    "a successful probe must return before any CREATE or ALTER work");
 });

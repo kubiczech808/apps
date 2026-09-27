@@ -136,6 +136,32 @@ test("the live-only tick wakes the live portfolios and nothing else", () => {
     "a created portfolio must still write its own state rather than the shared account's");
 });
 
+test("the production scheduler rotates one live executor per tick", () => {
+  const config = {
+    live: { executionTrigger: "cron" },
+    live5050: { executionTrigger: "cron" },
+    livePortfolios: {
+      live70: { executionTrigger: "cron" },
+      live80: { executionTrigger: "cron" },
+    },
+  };
+  const first = plannedDispatches(config, { liveOnly: true, liveSlot: 0, maxLiveDispatches: 1 });
+  const second = plannedDispatches(config, { liveOnly: true, liveSlot: 1, maxLiveDispatches: 1 });
+  const third = plannedDispatches(config, { liveOnly: true, liveSlot: 2, maxLiveDispatches: 1 });
+  const fourth = plannedDispatches(config, { liveOnly: true, liveSlot: 3, maxLiveDispatches: 1 });
+
+  assert.equal(first.length, 1);
+  assert.equal(second.length, 1);
+  assert.equal(third.length, 1);
+  assert.equal(fourth.length, 1);
+  assert.equal(first[0].workflow, "polymarket-live-limit-order-test.yml");
+  assert.equal(second[0].workflow, "trading-live-5050.yml");
+  assert.equal(third[0].inputs.live_portfolio_id, "live70");
+  assert.equal(fourth[0].inputs.live_portfolio_id, "live80");
+  assert.equal(plannedDispatches(config, { liveOnly: true, liveSlot: 4, maxLiveDispatches: 1 })[0].workflow,
+    "polymarket-live-limit-order-test.yml", "rotation wraps without a dispatch burst");
+});
+
 test("the portfolios a scan leaves alone are left alone between scans too", () => {
   // The rules are the planner's, not a second copy: a portfolio that is archived, switched
   // off, or simply not in the config must not be traded three times as often as before.
