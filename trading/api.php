@@ -1425,12 +1425,13 @@ function resolved_stats_accumulate(array $sources, float $stake = 5.0, ?callable
     $scanned = 0;
     $priced = 0;
     $afterDueRejected = 0;
+    $sideFlippedRejected = 0;
     // Seen once, summed once. The database and the published file overlap -- the file's
     // settled rows are a subset of the mirror's -- so reading both without this would count
     // 6,533 settlements twice and quietly inflate every accuracy the page shows. It also
     // covers a duplicate inside a single file, which nothing else would notice.
     $seen = [];
-    $onRow = static function (array $item) use (&$cells, &$anyTag, &$scanned, &$priced, &$afterDueRejected, &$seen, $stake): bool {
+    $onRow = static function (array $item) use (&$cells, &$anyTag, &$scanned, &$priced, &$afterDueRejected, &$sideFlippedRejected, &$seen, $stake): bool {
         $identity = (string) ($item['tokenId'] ?? $item['id'] ?? $item['marketKey'] ?? '');
         if ($identity !== '') {
             if (isset($seen[$identity])) {
@@ -1462,6 +1463,12 @@ function resolved_stats_accumulate(array $sources, float $stake = 5.0, ?callable
         }
         if (!resolved_stats_entry_is_not_after_due($item)) {
             $afterDueRejected += 1;
+            return true;
+        }
+        // Priced on one side, settled on the other. See the guard for why that is a
+        // guaranteed win rather than a lucky one.
+        if (!resolved_stats_entry_side_is_the_settled_side($item)) {
+            $sideFlippedRejected += 1;
             return true;
         }
         // The spread AT ENTRY, not the current one. This used to call
@@ -1544,6 +1551,7 @@ function resolved_stats_accumulate(array $sources, float $stake = 5.0, ?callable
         'scanned' => $scanned,
         'priced' => $priced,
         'afterDueRejected' => $afterDueRejected,
+        'sideFlippedRejected' => $sideFlippedRejected,
         'sources' => $breakdown,
     ];
 }
@@ -1870,6 +1878,40 @@ function simulation_entry_probability(array $item): ?float
  * non-final quote. Treating those as an "under way" portfolio is hindsight, not
  * a configuration that could have been run.
  */
+/**
+ * Was the side that was priced the same side that settled?
+ *
+ * A binary catalogue row is keyed by the MARKET (binary:<slug>), not by the outcome, and
+ * every rescan re-picks whichever side is currently above 50c as the row's outcome and
+ * tokenId. firstMarketProbability, by contrast, is sticky from the first sighting. So a
+ * market that crossed 50c carries the OLD side's entry price against the NEW side's
+ * settlement -- and the new side, by the time it settles, is the winner.
+ *
+ * That is not a slightly optimistic sample, it is a guaranteed win: measured on the stored
+ * fold, "multi-strikes" and "1h" showed 120 trades, 120 wins and a +93% return, with an
+ * average entry price of 0.50006 -- every one of them bought at the crossing point and
+ * settled on the side that crossed. 50c is where the flip happens, which is why they pile
+ * up there.
+ *
+ * Rows that cannot answer -- no first-side recorded -- are admitted, as with the entry
+ * spread: most archived rows predate the field, and rejecting them all would empty the
+ * page rather than correct it. The provable mismatches are what is dropped, and counted.
+ */
+function resolved_stats_entry_side_is_the_settled_side(array $item): bool
+{
+    $firstToken = trim((string) ($item['firstTokenId'] ?? ''));
+    $token = trim((string) ($item['tokenId'] ?? ''));
+    if ($firstToken !== '' && $token !== '') {
+        return $firstToken === $token;
+    }
+    $firstOutcome = strtolower(trim((string) ($item['firstOutcome'] ?? '')));
+    $outcome = strtolower(trim((string) ($item['outcome'] ?? '')));
+    if ($firstOutcome !== '' && $outcome !== '') {
+        return $firstOutcome === $outcome;
+    }
+    return true;
+}
+
 function resolved_stats_entry_is_not_after_due(array $item): bool
 {
     $seen = null;
@@ -9406,6 +9448,10 @@ try {
             'scannedRows' => $scanned,
             'pricedRows' => $priced,
             'afterDueRejected' => (int) ($accumulated['afterDueRejected'] ?? 0),
+            // Rows priced on one side of a market and settled on the other. Published
+            // because a fold taken before this guard existed reports zero here while its
+            // cells still hold those rows, and the page has to be able to say which it is.
+            'sideFlippedRejected' => (int) ($accumulated['sideFlippedRejected'] ?? 0),
             // Which of the two paths answered. Read from the page it feeds: once this says
             // 'stored', the resolved observations have no reader left here.
             'statsSource' => $statsSource,

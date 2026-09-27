@@ -3144,6 +3144,7 @@ function renderSetupFinder() {
         ${formatInteger(data.pricedRows)} resolved markets of ${formatInteger(data.scannedRows)} stored could be
         priced -- the rest never carried a live quote, settled between 0 and 1, or had no tradable spread.
         ${Number(data.afterDueRejected || 0) > 0 ? `${formatInteger(data.afterDueRejected)} rows first recorded after their stated resolution were excluded rather than presented as in-play setups. ` : ""}
+        ${Number(data.sideFlippedRejected || 0) > 0 ? `${formatInteger(data.sideFlippedRejected)} rows were priced on one side of a market and settled on the other -- a binary row follows whichever side is above 50c, so a market that crossed carries the old side's entry against the new side's result, which always wins. Excluded. ` : ""}
         ${formatInteger(data.combinations)} combinations with at least ${formatInteger(data.minTrades)} trades.
         Every row answers: if ${money(Number(data.stakeUsdc))} had been staked on every market matching it,
         bought at the price it first quoted and settled at 0 or 1, this is what it would have returned.

@@ -196,6 +196,49 @@ test("rows first recorded after their stated resolution are not proposed as hist
   assert.equal(payload.afterDueRejected, 1);
 });
 
+test("a row priced on one side and settled on the other is not a winning setup", () => {
+  // Reported as "nechce se mi tem vysledkum moc verit, jsou az moc dobre": multi-strikes and
+  // 1h showed 120 trades, 120 wins, +93.2%. Reconstructing the entry price from the published
+  // capital and P/L gives 5*120/(578.85+621.00) = 0.50006 -- every one of them bought at
+  // exactly 50c and every one of them won.
+  //
+  // The cause is structural, not luck. A binary catalogue row is keyed by the MARKET
+  // (binary:<slug>) and each rescan re-picks whichever side is above 50c as its outcome and
+  // tokenId, while firstMarketProbability stays sticky from the first sighting. A market that
+  // crosses 50c therefore holds the old side's entry price against the new side's settlement,
+  // and the new side is the one that goes on to win. 50c is where the crossing happens, which
+  // is why the sample piles up there.
+  const flipped = {
+    ...row(0.5, true),
+    firstOutcome: "Yes", firstTokenId: "token-yes",
+    outcome: "No", tokenId: "token-no",
+  };
+  const honest = {
+    ...row(0.5, true),
+    firstOutcome: "Yes", firstTokenId: "token-yes",
+    outcome: "Yes", tokenId: "token-yes",
+  };
+  const payload = combinations([flipped, honest], "min_trades=1");
+  assert.equal(payload.scannedRows, 2);
+  assert.equal(payload.pricedRows, 1, "only the row whose priced side is the settled side");
+  assert.equal(payload.sideFlippedRejected, 1, "and the count is published, not silently dropped");
+  assert.equal(find(payload.best, { tag: "*", shape: "*", horizon: "*", probability: 50 }).trades, 1);
+
+  // Matching on the outcome name alone is enough when no token was recorded, because that is
+  // the pair older archive rows carry.
+  const byNameOnly = combinations([
+    { ...row(0.5, true), firstOutcome: "Yes", outcome: "No" },
+  ], "min_trades=1");
+  assert.equal(byNameOnly.pricedRows, 0);
+  assert.equal(byNameOnly.sideFlippedRejected, 1);
+
+  // A row that cannot answer is still admitted: most of the archive predates the field, and
+  // rejecting all of it would empty the page rather than correct it.
+  const unknown = combinations([{ ...row(0.5, true), firstOutcome: null, firstTokenId: null, outcome: null, tokenId: null }], "min_trades=1");
+  assert.equal(unknown.pricedRows, 1);
+  assert.equal(unknown.sideFlippedRejected, 0);
+});
+
 test("recorded entry fees are included in the Setup finder P/L", () => {
   const payload = combinations([
     row(0.5, true, { feeRate: 0.02 }),
