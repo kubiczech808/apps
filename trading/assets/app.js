@@ -1299,6 +1299,10 @@ function tagVocabulary() {
   };
   const rows = Array.isArray(state.scrapedMarketObservations) ? state.scrapedMarketObservations : [];
   for (const item of rows) {
+    // The browser combines the active catalogue with the resolved archive for the
+    // opportunities view. A tag present only in history is useful in statistics, but
+    // selecting it as a portfolio whitelist can never yield a candidate today.
+    if (scrapedObservationStatus(item) !== "SCRAPED") continue;
     for (const slug of marketTagSlugsOf(item)) add(slug, 1);
   }
   // The broad scan categories are always offerable, even before a catalogue has loaded and
