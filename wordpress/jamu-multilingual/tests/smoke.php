@@ -2,6 +2,7 @@
 
 use Jamu\Multilingual\Languages;
 use Jamu\Multilingual\Content;
+use Jamu\Multilingual\Email;
 use Jamu\Multilingual\Identity;
 use Jamu\Multilingual\Repository;
 use Jamu\Multilingual\Router;
@@ -145,6 +146,39 @@ if (!str_ends_with($url, '/en/product/test-product/')) {
 $reloaded = wc_get_product($product_id);
 if (!$reloaded || $reloaded->get_sku() !== 'JAMU-CI-1' || $reloaded->get_stock_quantity() !== 7) {
     throw new RuntimeException('Canonical WooCommerce product data changed.');
+}
+
+$email_layer = new Email($languages);
+$email_layer->register();
+$email_order = wc_create_order();
+$email_order->update_meta_data(Email::ORDER_LANGUAGE_META, 'de');
+$email_order->save();
+$customer_on_hold = WC()->mailer()->get_emails()['WC_Email_Customer_On_Hold_Order'] ?? null;
+if (!$customer_on_hold) {
+    throw new RuntimeException('Customer on-hold email is unavailable.');
+}
+$recipient = apply_filters('woocommerce_email_recipient_customer_on_hold_order', 'ci@example.invalid', $email_order, $customer_on_hold);
+$subject = apply_filters('woocommerce_email_subject_customer_on_hold_order', 'Objednávka z Tajemství JAMU 🌿 čeká na zaplacení', $email_order, $customer_on_hold);
+if ($recipient !== 'ci@example.invalid' || !str_contains($subject, 'Ihre Bestellung')) {
+    throw new RuntimeException('Customer email locale or subject was not localized.');
+}
+$mail_params = apply_filters('woocommerce_mail_callback_params', [
+    'ci@example.invalid',
+    $subject,
+    'Děkuji Vám za objednávku.',
+    ['Content-Type: text/html'],
+    [],
+]);
+if (!str_contains((string) $mail_params[2], 'Vielen Dank')) {
+    throw new RuntimeException('Customer email body was not localized.');
+}
+if (apply_filters('wp_mail_charset', 'ISO-8859-1') !== 'UTF-8') {
+    throw new RuntimeException('Outgoing email charset was not forced to UTF-8.');
+}
+$html_mailer = (object) ['ContentType' => 'text/html', 'Body' => '<html><body>Příliš žluťoučký kůň</body></html>', 'CharSet' => '', 'Encoding' => ''];
+$email_layer->configure_html_mailer($html_mailer);
+if ($html_mailer->CharSet !== 'UTF-8' || $html_mailer->Encoding !== 'base64') {
+    throw new RuntimeException('HTML email encoding was not configured safely.');
 }
 
 file_put_contents('/tmp/jamu-smoke-ids.json', wp_json_encode([

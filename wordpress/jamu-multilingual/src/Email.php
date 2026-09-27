@@ -31,6 +31,8 @@ final class Email
 
         add_filter('woocommerce_email_classes', [$this, 'register_customer_email_hooks'], 20);
         add_filter('woocommerce_mail_callback_params', [$this, 'restore_after_mail_params'], 999);
+        add_filter('wp_mail_charset', [$this, 'mail_charset'], PHP_INT_MAX);
+        add_action('phpmailer_init', [$this, 'configure_html_mailer'], PHP_INT_MAX);
         add_action('woocommerce_email_sent', [$this, 'restore_after_email_sent'], 999, 3);
         add_action('shutdown', [$this, 'restore_email_context'], 0);
 
@@ -122,6 +124,34 @@ final class Email
     public function restore_after_email_sent(mixed $return = null, mixed $id = null, mixed $email = null): void
     {
         $this->restore_email_context();
+    }
+
+    /**
+     * YayMail's test-email action supplies an HTML Content-Type header without
+     * a charset. Explicit UTF-8 is essential for Czech, Polish and German
+     * characters and prevents clients from guessing an incorrect encoding.
+     */
+    public function mail_charset(string $charset): string
+    {
+        return 'UTF-8';
+    }
+
+    /**
+     * Some mail relays used by shared hosting leak quoted-printable escapes
+     * (for example =0A and =C3=A1) into YayMail test and WooCommerce emails.
+     * Encode HTML mail as Base64 after WooCommerce/YayMail configure PHPMailer;
+     * mail clients then decode the message unambiguously.
+     */
+    public function configure_html_mailer(object $mailer): void
+    {
+        $content_type = strtolower((string) ($mailer->ContentType ?? ''));
+        $body = (string) ($mailer->Body ?? '');
+        if (!str_contains($content_type, 'html') && stripos($body, '<html') === false && stripos($body, '<body') === false) {
+            return;
+        }
+
+        $mailer->CharSet = 'UTF-8';
+        $mailer->Encoding = 'base64';
     }
 
     public function force_email_context(bool $active): bool
