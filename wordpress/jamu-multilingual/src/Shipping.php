@@ -223,11 +223,19 @@ final class Shipping
     }
 
     function mirrorDpdSelection(message) {
-        if (!message || !message.dpdWidget || message.dpdWidget.message === 'widgetClose') {
+        if (!message || !message.dpdWidget) {
             return;
         }
 
+        // WC Doprava's dpd.js writes directly to these IDs on every widget
+        // message (including `widgetClose`). Checkout fragments can remove the
+        // hidden fields in between messages, so recreate them in the capture
+        // phase before dpd.js receives the same event.
         ensureDpdElements();
+
+        if (message.dpdWidget.message === 'widgetClose') {
+            return;
+        }
 
         const point = message.dpdWidget;
         const name = point.contactInfo && point.contactInfo.name ? point.contactInfo.name : '';
