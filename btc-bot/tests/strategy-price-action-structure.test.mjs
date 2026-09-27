@@ -310,6 +310,46 @@ test('an omitted historical source pivot cannot project onto a later unrelated c
   ])
 })
 
+test('projected external audit pivots remain chronological across adjacent source segments', () => {
+  const fourHours = 4 * HOUR
+  const result = classifyExternalStructure({
+    candles: [
+      candle(START, 95, 100, 90, 95),
+      // These are deliberately extreme, but belong to neighbouring source
+      // segments rather than the matching low/high pivot.
+      candle(START + HOUR, 100, 200, 95, 100),
+      candle(START + 3 * HOUR, 100, 105, 50, 101),
+      candle(START + fourHours, 120, 130, 100, 121),
+      candle(START + 2 * fourHours, 81, 82, 40, 80),
+    ],
+    externalPivots: {
+      trend: 'down',
+      source: 'Twelve Data',
+      timeframeId: '4h',
+      activeRange: {
+        high: { kind: 'high', label: 'LH', price: 125, close: 121, time: START + fourHours },
+        low: { kind: 'low', label: 'LL', price: 80, close: 80, time: START + 2 * fourHours },
+        source: 'external-confirmed-directional-wave',
+      },
+      pivots: [
+        { kind: 'low', label: 'LL', price: 90, close: 95, time: START },
+        { kind: 'high', label: 'LH', price: 125, close: 121, time: START + fourHours },
+        { kind: 'low', label: 'LL', price: 80, close: 80, time: START + 2 * fourHours },
+      ],
+      chartPivots: [
+        { kind: 'low', label: 'LL', price: 90, time: START },
+        { kind: 'high', label: 'LH', price: 125, time: START + fourHours },
+        { kind: 'low', label: 'LL', price: 80, time: START + 2 * fourHours },
+      ],
+    },
+  })
+
+  const line = result.structure.chartPivots
+  assert.deepEqual(line.map((pivot) => pivot.time), [START, START + fourHours, START + 2 * fourHours])
+  assert.ok(line.every((pivot, index) => index === 0 || pivot.time > line[index - 1].time))
+  assert.deepEqual(line.map((pivot) => pivot.label), ['LL', 'LH', 'LL'])
+})
+
 test('external active range does not combine an unpaired newer pivot with an older leg', () => {
   const result = classifyExternalStructure({
     externalPivots: {

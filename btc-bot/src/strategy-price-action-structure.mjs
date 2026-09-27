@@ -4,7 +4,7 @@ import { buildExternalTrendReference, EXTERNAL_PIVOT_SCHEMA } from './external-t
 import { buildFvgSupplyDemandZones, candleSignal, marketStructure } from './priceaction.mjs'
 
 export const PRICE_ACTION_STRUCTURE_ID = 'price-action-structure-v1'
-export const PRICE_ACTION_MATRIX_SCHEMA = 67
+export const PRICE_ACTION_MATRIX_SCHEMA = 68
 export const PRICE_ACTION_CHART_CANDLE_LIMITS = {
   // The zone and structure inputs below remain much longer. These limits only
   // bound chart data published to the browser, where a 60-day 1H / 180-day
@@ -2045,15 +2045,18 @@ const projectExternalPivotToChart = ({ pivot, pivots = [], candles = [], timefra
   ))
   const before = exactIndex > 0 ? sorted[exactIndex - 1] : null
   const after = exactIndex >= 0 ? sorted[exactIndex + 1] : null
-  // With the pivot's own neighbouring source anchor present, the entire
-  // source wave is valid evidence for choosing the local vendor's exact wick.
-  // This reconciles small OHLC differences without changing the wave itself.
+  // With both source neighbours available, each pivot gets its own segment
+  // between the midpoints of adjacent pivots. The segments never overlap, so
+  // local-vendor wick reconciliation cannot reverse the time order of the
+  // dotted structural path.
   if (exactIndex >= 0 && (before || after)) {
-    const from = before?.time ?? pivot.time
-    const to = after?.time ?? pivot.time
-    const waveCandles = candles.filter((candle) => candle.time >= from && candle.time <= to)
-    if (waveCandles.length) {
-      const extreme = waveCandles.reduce((selected, candle) => (
+    const beforeGap = before ? pivot.time - before.time : after.time - pivot.time
+    const afterGap = after ? after.time - pivot.time : pivot.time - before.time
+    const from = before ? Math.ceil((before.time + pivot.time) / 2) : pivot.time - Math.floor(beforeGap / 2)
+    const to = after ? Math.floor((pivot.time + after.time) / 2) : pivot.time + Math.ceil(afterGap / 2)
+    const segmentCandles = candles.filter((candle) => candle.time >= from && candle.time <= to)
+    if (segmentCandles.length) {
+      const extreme = segmentCandles.reduce((selected, candle) => (
         pivot.kind === 'high'
           ? candle.high > selected.high ? candle : selected
           : candle.low < selected.low ? candle : selected
