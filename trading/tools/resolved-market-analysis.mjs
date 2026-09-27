@@ -65,6 +65,9 @@ const SHAPE_PATTERNS = [
 export function shapeOf(question) {
   const text = String(question || "");
   for (const [pattern, label] of SHAPE_PATTERNS) if (pattern.test(text)) return label;
+  // Both sides can be named in a first-scoring proposition, but it is neither a winner
+  // market nor interchangeable with an outright bet in the analysis.
+  if (/\b(?:to\s+)?score\s+first\b|\bfirst\s+to\s+score\b/i.test(text)) return "other";
   return "outright";
 }
 

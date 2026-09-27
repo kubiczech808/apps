@@ -2617,6 +2617,12 @@ function observation_market_shape(array $item): string
             return $label;
         }
     }
+    // A first-scoring proposition may name both teams, but it is not a bet on who wins
+    // the match. Keep it separately filterable instead of letting the generic "vs" rule
+    // below silently treat it as an outright market.
+    if (preg_match('/\b(?:to\s+)?score\s+first\b|\bfirst\s+to\s+score\b/i', $question) === 1) {
+        return 'other';
+    }
     // Outright is a specifically named match or event winner. A residual proposition
     // must remain separately filterable instead of silently joining that strategy.
     if (preg_match('/\bvs\.?\b|\bv\.\b|\s@\s|\b(?:win|wins|winner)\b/i', $question) === 1) {

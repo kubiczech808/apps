@@ -4858,6 +4858,7 @@ test("observation_market_shape (PHP) agrees with marketShape (Node) on the same 
     "Counter-Strike: Team A vs Team B - Game 1 Winner",
     "Exact Score: Delfin SC 0 - 0 CD Universidad",
     "Bromley FC vs. AFC Wimbledon: Both Teams to Score",
+    "FC Den Bosch to score first vs. De Graafschap?",
     "Will CA Nacional Potosi win on 2026-09-06?",
     "Will Vitoria SC vs. Casa Pia AC end in a draw?",
     "Games Total: O/U 4.5",

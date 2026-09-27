@@ -16,6 +16,11 @@ import {
   shapeOf, matchesTag, settlement, entryPrice, entryTiming, simulate, summarise,
 } from "../tools/resolved-market-analysis.mjs";
 
+test("first-scoring propositions are analysed as other, not outright", () => {
+  assert.equal(shapeOf("FC Den Bosch to score first vs. De Graafschap?"), "other");
+  assert.equal(shapeOf("FC Den Bosch vs. De Graafschap: First to score"), "other");
+});
+
 test("the entry price is never read off a settled book", () => {
   // The trap. A resolved winner carries marketProbability 1 and finalOutcomePrice 1; taking
   // the former as the entry buys at 100%, wins, and reports a 0% return on a certainty --

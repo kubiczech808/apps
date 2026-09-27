@@ -4054,6 +4054,8 @@ test("marketShape classifies the production question shapes, delegating over-und
   assert.equal(bot.marketShape({ question: "Counter-Strike: Team A vs Team B - Game 1 Winner" }), "in-event-leg");
   assert.equal(bot.marketShape({ question: "Exact Score: Delfin SC 0 - 0 CD Universidad" }), "exact-score");
   assert.equal(bot.marketShape({ question: "Bromley FC vs. AFC Wimbledon: Both Teams to Score" }), "both-teams");
+  assert.equal(bot.marketShape({ question: "FC Den Bosch to score first vs. De Graafschap?" }), "other",
+    "a first-scoring proposition is not an outright winner market");
   assert.equal(bot.marketShape({ question: "Will CA Nacional Potosi win on 2026-09-06?" }), "outright");
   assert.equal(bot.marketShape({ question: "Will Vitoria SC vs. Casa Pia AC end in a draw?" }), "draw");
   assert.equal(bot.marketShape({ question: "Counter-Strike: BIG Academy vs BLUEJAYS.de (BO3)" }), "outright",
@@ -4073,6 +4075,17 @@ test("marketShape classifies the production question shapes, delegating over-und
     assert.ok(bot.MARKET_SHAPE_IDS.includes(shape));
   }
   assert.equal(bot.MARKET_SHAPE_IDS.length, 8);
+});
+
+test("live executor classifies first-scoring propositions as other", () => {
+  const source = readFileSync(new URL("../tools/live-order-executor.mjs", import.meta.url), "utf8");
+  const shape = new Function(`
+    ${functionSource(source, "isOverUnderMarket")}
+    ${/const MARKET_SHAPE_PATTERNS = \[[\s\S]*?\n\];/.exec(source)[0]}
+    ${functionSource(source, "marketShape")}
+    return marketShape;
+  `)();
+  assert.equal(shape({ question: "FC Den Bosch to score first vs. De Graafschap?" }), "other");
 });
 
 test("excludedMarketShapes removes the excluded shape from the paper shortlist", () => {
@@ -4114,6 +4127,21 @@ test("excludedMarketShapes removes the excluded shape from the paper shortlist",
   assert.ok(filtered.reasons.some((reason) => /draw market shape is excluded/.test(reason)));
   assert.equal(bot.portfolioFilterResult(ordinary, strategy).eligible, true);
   assert.deepEqual(bot.strategyEligibleCandidates([drawMarket, ordinary], strategy), [ordinary]);
+
+  // Regression: "to score first" contains two team names, so the old generic `vs` fallback
+  // accidentally admitted it as outright. A portfolio that allows only outright must keep
+  // it out by excluding `other`.
+  const firstToScore = {
+    ...base,
+    tokenId: "42345678901234567890",
+    question: "FC Den Bosch to score first vs. De Graafschap?",
+    eventSlug: "ned2-gra-dbo-2026-09-27-first-to-score",
+    outcome: "FC Den Bosch",
+  };
+  const outrightOnly = { ...strategy, excludedMarketShapes: new Set(["other"]) };
+  assert.equal(bot.portfolioFilterResult(firstToScore, outrightOnly).eligible, false);
+  assert.ok(bot.portfolioFilterResult(firstToScore, outrightOnly).reasons
+    .some((reason) => /other market shape is excluded/.test(reason)));
 
   // strategyEligibleCandidates and portfolioFilterResult read a normalized strategy, which
   // always carries this as a Set by the time it reaches them -- the same contract
@@ -11424,6 +11452,7 @@ test("excludedMarketShapes: the setting is wired end to end, not only in the bot
     ["Cincinnati Reds vs. Los Angeles Dodgers: O/U 8.5", "over-under"],
     ["Spread: San Francisco Giants (-1.5)", "spread"],
     ["Will Vitoria SC vs. Casa Pia AC end in a draw?", "draw"],
+    ["FC Den Bosch to score first vs. De Graafschap?", "other"],
   ];
   for (const [question, want] of questions) {
     const got = new Function("candidateIsOverUnderMarket",

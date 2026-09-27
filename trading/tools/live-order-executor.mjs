@@ -1207,6 +1207,10 @@ function marketShape(item = {}) {
   for (const [pattern, label] of MARKET_SHAPE_PATTERNS) {
     if (pattern.test(question)) return label;
   }
+  // A first-scoring proposition names both teams but is not a match winner. This must be
+  // checked before the generic two-sided fallback, which otherwise labels every "vs" as
+  // an outright market.
+  if (/\b(?:to\s+)?score\s+first\b|\bfirst\s+to\s+score\b/i.test(question)) return "other";
   if (/\bvs\.?\b|\bv\.\b|\s@\s|\b(?:win|wins|winner)\b/i.test(question)) return "outright";
   return "other";
 }
