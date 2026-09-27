@@ -13,7 +13,98 @@ final class Shipping
     public function register(): void
     {
         add_action('wp_head', [$this, 'dpd_pickup_bootstrap'], 1);
+        add_action('template_redirect', [$this, 'replace_legacy_dpd_script'], 0);
         add_action('wp_footer', [$this, 'dpd_pickup_compatibility'], 1);
+    }
+
+    /**
+     * WC Doprava prints dpd.js directly instead of registering it with
+     * WordPress. Its message listeners write to removed checkout nodes and
+     * can leave the checkout overlay active. Replace just that file on the
+     * checkout page with a compatible, null-safe picker bridge.
+     */
+    public function replace_legacy_dpd_script(): void
+    {
+        if (is_admin() || !function_exists('is_checkout') || !is_checkout()) {
+            return;
+        }
+
+        ob_start([$this, 'replace_legacy_dpd_script_html']);
+    }
+
+    public function replace_legacy_dpd_script_html(string $html): string
+    {
+        $pattern = '#<script\b[^>]*\bsrc=["\'][^"\']*/WC-Doprava-main/js/dpd\.js(?:\?[^"\']*)?["\'][^>]*>\s*</script>#i';
+
+        return (string) preg_replace_callback($pattern, static function (): string {
+            return <<<'HTML'
+<script id="jamu-ml-safe-dpd-picker">
+(function (window, document) {
+    const Packeta = window.Packeta = window.Packeta || {};
+    const Widget = Packeta.Widget = Packeta.Widget || {};
+    let overlay = null;
+    let messageHandler = null;
+
+    function hide() {
+        if (overlay) {
+            overlay.style.visibility = 'hidden';
+        }
+        if (messageHandler) {
+            window.removeEventListener('message', messageHandler, false);
+            messageHandler = null;
+        }
+    }
+
+    Widget.baseUrl = 'https://api.dpd.cz/widget/latest/index.html';
+    Widget.close = hide;
+    Widget.pick = function (apiKey, callback, options, container) {
+        hide();
+        options = options || {};
+        const embedded = container != null;
+        const source = apiKey === 'no'
+            ? Widget.baseUrl + '?disableLockers=true'
+            : Widget.baseUrl;
+
+        overlay = embedded ? container : document.createElement('div');
+        if (!embedded) {
+            overlay.setAttribute('style', 'z-index:999999;position:fixed;left:0;top:0;width:100%;height:100%;background:' + (options.overlayColor || 'rgba(0,0,0,.3)') + ';');
+            overlay.addEventListener('click', hide);
+            document.body.appendChild(overlay);
+        }
+
+        const frame = document.createElement('iframe');
+        frame.id = 'packeta-widget';
+        frame.setAttribute('sandbox', 'allow-scripts allow-same-origin');
+        frame.setAttribute('allow', 'geolocation');
+        frame.setAttribute('src', source);
+        frame.setAttribute('style', embedded
+            ? 'border:hidden;width:100%;height:100%;'
+            : 'border:hidden;position:absolute;left:0;top:0;width:100%;height:100%;padding:10px 5px;box-sizing:border-box;background:#fff;');
+        overlay.appendChild(frame);
+        overlay.setAttribute('tabindex', '-1');
+        overlay.classList.add('visible');
+
+        messageHandler = function (event) {
+            const point = event.data && event.data.dpdWidget;
+            if (!point) {
+                return;
+            }
+            if (point.message === 'widgetClose') {
+                hide();
+                return;
+            }
+            if (typeof callback === 'function') {
+                callback(point);
+            }
+            hide();
+        };
+        window.addEventListener('message', messageHandler, false);
+        overlay.focus();
+    };
+})(window, document);
+</script>
+HTML;
+        }, $html, 1);
     }
 
     /**
@@ -596,7 +687,6 @@ final class Shipping
                 frame.parentElement.style.visibility = 'hidden';
             }
         }
-        event.stopImmediatePropagation();
     }, true);
 
     if (document.readyState === 'loading') {
