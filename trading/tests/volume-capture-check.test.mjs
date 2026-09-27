@@ -80,3 +80,25 @@ test("it never asks for the resolved scope", () => {
   assert.match(tool, /scope=active/);
   assert.ok(!/scope=resolved/.test(tool));
 });
+
+test("the statistics charge the full stake on a loss, and a fee only when one was recorded", () => {
+  // Asked directly: "doufam, ze jsi uvazoval i poplatky za market orders a -5 usd stake v
+  // pripade prohry". Both are in the accumulator, so this pins them rather than restating
+  // them -- if either changes, the tables change meaning and this says so.
+  const api = readFileSync(new URL("../api.php", import.meta.url), "utf8");
+  assert.match(api, /\$totalCost = \$stake \+ \$fee;/);
+  // A loss costs the whole stake plus the fee; a win returns stake/entry minus that cost.
+  assert.match(api, /\$pnl = \$outcome === 1 \? \(\$stake \/ \$entry\) - \$totalCost : -\$totalCost;/);
+  // And the denominator of every "per $" is the cost including the fee, not the bare stake.
+  assert.match(api, /\$cells\[\$key\]\[2\] \+= \$totalCost;/);
+
+  // The gap worth knowing about: no recorded rate means no fee is charged at all, so the
+  // tables are gross of fees on exactly those rows rather than conservative about them.
+  assert.match(api, /if \(!is_numeric\(\$rawRate\)\) \{\s*\n\s*return 0\.0;/);
+
+  // And the entry price is the quoted mid, never the ask a taker would cross to -- the
+  // check measures that gap because the arithmetic above cannot.
+  const tool = readFileSync(new URL("../tools/volume-capture-check.mjs", import.meta.url), "utf8");
+  assert.match(tool, /ask minus simulated entry/);
+  assert.match(tool, /firstBestAsk/);
+});

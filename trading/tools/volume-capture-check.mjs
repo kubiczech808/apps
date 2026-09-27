@@ -61,7 +61,12 @@ export function storedCoverage(rows = [], now = Date.now()) {
   // volume yet both read as not-positive, and only one of them is a fault. The Gamma half of
   // this check already made that distinction; leaving it out here asked a different
   // question and would have been reported as an answer to this one.
-  const FIELDS = ["volumeUsdc", "volume24hr", "liquidity", "firstVolumeUsdc", "firstLiquidity"];
+  // feeRate and the quote's two sides are here for the same reason as volume: the settled
+  // statistics charge a fee only when the row recorded a rate, and they buy at
+  // firstMarketProbability -- the quoted mid -- while a market order pays the ask. Both gaps
+  // are invisible unless somebody counts how often the fields are even there.
+  const FIELDS = ["volumeUsdc", "volume24hr", "liquidity", "firstVolumeUsdc", "firstLiquidity",
+    "firstFeeRate", "feeRate", "firstSpread", "firstBestAsk", "firstBestBid"];
   const counts = buckets.map((bucket) => ({
     ...bucket,
     rows: 0,
@@ -138,6 +143,30 @@ async function fromCatalogue() {
       + cell(bucket.firstLiquidity, bucket.rows));
   }
   console.log(`   ("!" marks a field missing from some rows -- that is the one that means not saved.)`);
+  // What a market order would actually have paid above the price the statistics simulate.
+  // The settled tables buy at the quoted mid; a taker crosses to the ask. This is that gap,
+  // measured on the rows that recorded both.
+  const gaps = rows
+    .map((row) => {
+      const ask = num(row?.firstBestAsk);
+      const mid = num(row?.firstMarketProbability);
+      return ask != null && mid != null && ask > 0 && mid > 0 ? ask - mid : null;
+    })
+    .filter((gap) => gap != null)
+    .sort((left, right) => left - right);
+  const spreads = rows.map((row) => num(row?.firstSpread)).filter((value) => value != null)
+    .sort((left, right) => left - right);
+  const at = (list, q) => (list.length ? list[Math.min(list.length - 1, Math.floor(list.length * q))] : null);
+  const show = (value) => (value == null ? "-" : `${(value * 100).toFixed(2)} pp`);
+  console.log(`\n   ask minus simulated entry, on ${gaps.length} row(s) that recorded both:`);
+  console.log(`      median ${show(at(gaps, 0.5))}, 75th ${show(at(gaps, 0.75))}, 90th ${show(at(gaps, 0.9))}`);
+  console.log(`   recorded spread at discovery, on ${spreads.length} row(s):`);
+  console.log(`      median ${show(at(spreads, 0.5))}, 75th ${show(at(spreads, 0.75))}, 90th ${show(at(spreads, 0.9))}`);
+  const feeRates = rows.map((row) => num(row?.firstFeeRate ?? row?.feeRate)).filter((value) => value != null);
+  const charged = feeRates.filter((rate) => rate > 0).length;
+  console.log(`   fee rate recorded on ${feeRates.length}/${rows.length} row(s), above zero on ${charged}.`);
+  console.log(`      A row with no recorded rate is simulated with NO fee at all.`);
+
   const newest = rows
     .map((row) => String(row?.firstObservedAt || ""))
     .filter(Boolean)
