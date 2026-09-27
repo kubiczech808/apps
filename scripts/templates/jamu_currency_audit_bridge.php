@@ -61,11 +61,9 @@ add_action('wp_loaded', static function (): void {
     $product_meta = $wpdb->get_results(
         $wpdb->prepare(
             "SELECT meta_key, meta_value FROM {$postmeta}
-             WHERE post_id = %d AND (meta_key IN ('_price', '_regular_price', '_sale_price') OR meta_key LIKE %s OR meta_key LIKE %s)
+             WHERE post_id = %d
              ORDER BY meta_key ASC",
-            $product_id,
-            '%yay%',
-            '%currency%'
+            $product_id
         ),
         ARRAY_A
     );
@@ -74,6 +72,28 @@ add_action('wp_loaded', static function (): void {
     }
     unset($item);
 
+    $hook_callbacks = static function (string $hook): array {
+        global $wp_filter;
+        if (empty($wp_filter[$hook]) || !isset($wp_filter[$hook]->callbacks)) {
+            return [];
+        }
+        $result = [];
+        foreach ($wp_filter[$hook]->callbacks as $priority => $callbacks) {
+            foreach ($callbacks as $callback) {
+                $function = $callback['function'] ?? null;
+                if (is_array($function)) {
+                    $name = (is_object($function[0]) ? get_class($function[0]) : (string) $function[0]) . '::' . (string) $function[1];
+                } elseif (is_string($function)) {
+                    $name = $function;
+                } else {
+                    $name = 'closure';
+                }
+                $result[] = ['priority' => (int) $priority, 'callback' => $name];
+            }
+        }
+        return $result;
+    };
+
     echo wp_json_encode([
         'ok' => true,
         'woocommerce_currency' => get_option('woocommerce_currency'),
@@ -81,6 +101,12 @@ add_action('wp_loaded', static function (): void {
         'examples' => $examples,
         'sample_product_id' => $product_id,
         'sample_product_meta' => $product_meta,
+        'active_plugins' => array_values((array) get_option('active_plugins', [])),
+        'price_filters' => [
+            'woocommerce_product_get_price' => $hook_callbacks('woocommerce_product_get_price'),
+            'woocommerce_product_get_regular_price' => $hook_callbacks('woocommerce_product_get_regular_price'),
+            'woocommerce_product_get_sale_price' => $hook_callbacks('woocommerce_product_get_sale_price'),
+        ],
     ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
     exit;
 }, 999);
