@@ -30,6 +30,30 @@ import { marketShape } from "./paper-trading-bot.mjs";
 
 const HOST = process.env.TRADING_HOST || "https://osobnizkusenosti.cz/trading";
 const FOCUS = (process.env.DIP_PORTFOLIO || "").trim().toLowerCase();
+// An optional entry band. When set, every table below describes ONLY the trades opened
+// inside it -- which is what "if I set the portfolio to 51-60%, how do the shapes and the
+// volumes come out" asks. Bounds are INCLUSIVE, so 0.51-0.60 keeps a trade entered at
+// exactly 0.51 or exactly 0.60; a band is a setting a person types, not a half-open
+// interval, and silently dropping its edges would answer a slightly different question.
+const bandBound = (value) => {
+  if (value == null || String(value).trim() === "") return null;
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return null;
+  return numeric > 1 ? numeric / 100 : numeric;
+};
+const BAND_MIN = bandBound(process.env.MIN_PROBABILITY);
+const BAND_MAX = bandBound(process.env.MAX_PROBABILITY);
+
+export function withinBand(trade, min = BAND_MIN, max = BAND_MAX) {
+  if (min == null && max == null) return true;
+  const price = num(trade?.entryPrice);
+  // A trade with no entry price cannot be placed in the band. Keeping it would put rows
+  // the filter never tested into the answer.
+  if (price == null) return false;
+  if (min != null && price < min) return false;
+  if (max != null && price > max) return false;
+  return true;
+}
 const PAGE = 1200;
 
 async function fetchJson(url, label) {
@@ -291,22 +315,27 @@ async function main() {
         entryVolume: num(trade.entryVolumeUsdc) ?? observation.volumeUsdc ?? null,
       };
     });
-    everything.push(...enriched);
+    const banded = enriched.filter((trade) => withinBand(trade));
+    if (BAND_MIN != null || BAND_MAX != null) {
+      console.log(`   entry band ${pct(BAND_MIN)}-${pct(BAND_MAX)} (inclusive):`
+        + ` ${banded.length} of ${enriched.length} resolved trades kept`);
+    }
+    everything.push(...banded);
 
-    const s = summarise(enriched);
+    const s = summarise(banded);
     console.log(`   overall: ${s.n} resolved, ${s.wins} won (${pct(s.winRate)}), P/L ${money(s.pnl)},`
       + ` ${money(s.perTrade)} per trade, ${pct(s.perDollar)} per dollar staked`);
-    const known = enriched.filter((trade) => trade.openedProbability != null).length;
-    const verified = enriched.filter((trade) => trade.openingVerified === true).length;
+    const known = banded.filter((trade) => trade.openedProbability != null).length;
+    const verified = banded.filter((trade) => trade.openingVerified === true).length;
     console.log(`   opening price recovered for ${known}/${s.n}; of those, ${verified} were first seen BEFORE kickoff`);
 
     printTable("by ENTRY probability (the portfolio's own range)",
-      groupBy(enriched, probabilityBand));
-    printTable("by MARKET SHAPE", groupBy(enriched, (trade) => trade.shape));
-    printTable("by ENTRY VOLUME", groupBy(enriched, (trade) => volumeBucket(trade.entryVolume)));
-    printTable("by HOURS BEFORE RESOLUTION at entry", groupBy(enriched, entryTimingBucket));
+      groupBy(banded, probabilityBand));
+    printTable("by MARKET SHAPE", groupBy(banded, (trade) => trade.shape));
+    printTable("by ENTRY VOLUME", groupBy(banded, (trade) => volumeBucket(trade.entryVolume)));
+    printTable("by HOURS BEFORE RESOLUTION at entry", groupBy(banded, entryTimingBucket));
     printTable("by SHAPE x hours before resolution",
-      groupBy(enriched, (trade) => `${trade.shape} / ${entryTimingBucket(trade)}`));
+      groupBy(banded, (trade) => `${trade.shape} / ${entryTimingBucket(trade)}`));
   }
 
   if (everything.length) {

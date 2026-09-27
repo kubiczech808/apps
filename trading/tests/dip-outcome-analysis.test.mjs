@@ -399,3 +399,40 @@ test("hours-before-resolution is read off the entry stamp, and negative means un
     assert.notEqual(label, "unknown", `${days.toFixed(2)}d fell outside every bucket`);
   }
 });
+
+test("the entry band is inclusive at both ends, and an unpriced trade cannot slip through", async () => {
+  const { withinBand } = await import("../tools/dip-outcome-analysis.mjs");
+
+  // "rekneme, ze nastavim jen 51-60%" is a setting a person types, not a half-open
+  // interval. A trade entered at exactly 0.51 or exactly 0.60 is inside it -- dropping the
+  // edges would report on a slightly different band from the one being asked about.
+  assert.equal(withinBand({ entryPrice: 0.51 }, 0.51, 0.60), true);
+  assert.equal(withinBand({ entryPrice: 0.60 }, 0.51, 0.60), true);
+  assert.equal(withinBand({ entryPrice: 0.55 }, 0.51, 0.60), true);
+  assert.equal(withinBand({ entryPrice: 0.5099 }, 0.51, 0.60), false);
+  assert.equal(withinBand({ entryPrice: 0.6001 }, 0.51, 0.60), false);
+
+  // The bait: a trade with no entry price cannot be placed in the band, so keeping it would
+  // put rows the filter never tested into a table that claims to describe the band.
+  assert.equal(withinBand({}, 0.51, 0.60), false);
+  assert.equal(withinBand({ entryPrice: null }, 0.51, 0.60), false);
+
+  // No band set means no filtering at all -- including for the unpriced row, which belongs
+  // in an unfiltered table exactly as it always did.
+  assert.equal(withinBand({}, null, null), true);
+  assert.equal(withinBand({ entryPrice: 0.1 }, null, null), true);
+
+  // One-sided bands work: a floor with no ceiling, and the reverse.
+  assert.equal(withinBand({ entryPrice: 0.9 }, 0.51, null), true);
+  assert.equal(withinBand({ entryPrice: 0.4 }, 0.51, null), false);
+  assert.equal(withinBand({ entryPrice: 0.4 }, null, 0.60), true);
+
+  // And every per-portfolio table must describe the FILTERED set, or the header says
+  // "51-60%" over numbers computed from everything.
+  const source = readFileSync(new URL("../tools/dip-outcome-analysis.mjs", import.meta.url), "utf8");
+  assert.ok(!/groupBy\(enriched/.test(source),
+    "no table may still be built from the unfiltered set");
+  assert.ok(!/summarise\(enriched\)/.test(source));
+  assert.match(source, /everything\.push\(\.\.\.banded\)/,
+    "and the pooled tables must inherit the same filter");
+});

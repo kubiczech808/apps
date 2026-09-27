@@ -15,6 +15,16 @@ on:
         required: false
         default: ""
         type: string
+      min_probability:
+        description: "Only trades entered at or above this (blank = no floor, e.g. 0.51)"
+        required: false
+        default: ""
+        type: string
+      max_probability:
+        description: "Only trades entered at or below this (blank = no ceiling, e.g. 0.60)"
+        required: false
+        default: ""
+        type: string
 
 permissions:
   contents: read
@@ -33,4 +43,6 @@ jobs:
         working-directory: trading
         env:
           DIP_PORTFOLIO: ${{ inputs.portfolio }}
+          MIN_PROBABILITY: ${{ inputs.min_probability }}
+          MAX_PROBABILITY: ${{ inputs.max_probability }}
         run: node tools/dip-outcome-analysis.mjs
