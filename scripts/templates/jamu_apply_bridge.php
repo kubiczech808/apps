@@ -122,6 +122,18 @@ add_action('wp_loaded', static function (): void {
     }
 
     flush_rewrite_rules(false);
+    $cache_flushes = [];
+    // The public language routes are static-page-cacheable. Purging immediately
+    // after an import prevents visitors from receiving an old Czech response
+    // that was generated before the translation/rewrite update.
+    if (function_exists('wpo_cache_flush')) {
+        wpo_cache_flush();
+        $cache_flushes[] = 'wp-optimize-page-cache';
+    }
+    if (function_exists('wp_cache_flush')) {
+        wp_cache_flush();
+        $cache_flushes[] = 'wordpress-object-cache';
+    }
     update_option('jamu_ml_last_import', [
         'imported_at' => gmdate('c'),
         'saved' => $saved,
@@ -136,6 +148,7 @@ add_action('wp_loaded', static function (): void {
         'saved' => $saved,
         'counts' => $counts,
         'errors' => array_values(array_unique($errors)),
+        'cache_flushes' => $cache_flushes,
     ];
     $send($response, $errors === [] ? 200 : 500);
 }, 999);
