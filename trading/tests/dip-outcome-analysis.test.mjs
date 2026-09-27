@@ -332,3 +332,41 @@ test("the probability buckets reach the top of the range, not only a dip portfol
   assert.equal(source.match(/\[0\.2, 0\.3, 0\.35/g)?.length, 1,
     "the edge list must exist once, as the constant, and nowhere else");
 });
+
+test("a derived tag never masks the market's own, and the report says which it has", async () => {
+  const { tradeTags, hasRealTags } = await import("../tools/dip-outcome-analysis.mjs");
+
+  // THE WRONG ANSWER THIS EXISTS FOR. Asked whether "dota-2 51+" was really trading dota,
+  // the report showed `general` on 24 trades and `dota-2` on one, and I concluded the
+  // portfolio was not doing what its name said. It was.
+  //
+  // `tags` on a trade is not the market's tags -- it is tagQuestion(), a regex over the
+  // QUESTION TEXT that emits "sports" for any title containing match/game/tournament and
+  // "general" when nothing matches. "Dota 2: Spirit Academy vs Inner Circle - Game 1
+  // Winner" contains "game", so it reads as sports. Taking the first non-empty field let
+  // that guess hide the real tags sitting beside it.
+  const masked = { tags: ["sports"], polymarketTags: ["Dota 2", "Esports"] };
+  const tags = tradeTags(masked);
+  assert.ok(tags.includes("dota 2"), `the market's own tag must survive: ${JSON.stringify(tags)}`);
+  assert.ok(tags.includes("esports"));
+  assert.ok(tags.includes("sports"), "and the derived one is kept, not swapped for it");
+
+  // The old tests only ever set ONE field, so the masking was invisible to them. Both
+  // together is the case that matters.
+  assert.deepEqual(tradeTags({ tagSlugs: ["dota-2"], tags: ["general"] }).sort(), ["dota-2", "general"]);
+
+  // And the report has to be able to tell the two apart, or a table built entirely from the
+  // regex still reads as a tag breakdown.
+  assert.equal(hasRealTags(masked), true);
+  assert.equal(hasRealTags({ tags: ["sports"] }), false, "sports alone is the regex, not a market tag");
+  assert.equal(hasRealTags({ tags: ["general"] }), false);
+  assert.equal(hasRealTags({ tags: ["crypto", "clear-resolution"] }), false,
+    "every word tagQuestion can emit is derived");
+  assert.equal(hasRealTags({}), false);
+  assert.equal(hasRealTags({ polymarketTags: ["nba"] }), true, "a real tag that is not in the regex vocabulary");
+
+  const source = readFileSync(new URL("../tools/dip-outcome-analysis.mjs", import.meta.url), "utf8");
+  assert.match(source, /carry tags the MARKET gave them/,
+    "the report must state how much of the table is real");
+  assert.match(source, /describe TITLES, not markets/);
+});

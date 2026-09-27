@@ -119,25 +119,43 @@ export function volumeBucket(value) {
   return "e 100k+";
 }
 
-// The tags a trade carries, read wherever they were stored. A row with none is reported as
-// "(untagged)" rather than dropped: tags are the axis being asked about, so how much of the
-// profit has no tag at all is part of the answer.
+// The tags a trade carries: the UNION of every field that holds any, never the first field
+// that happens to be non-empty.
+//
+// That distinction was a wrong answer, not a nicety. Asked whether "dota-2 51+" was really
+// trading dota, this reported `general` on 24 trades and `dota-2` on one, and I concluded
+// the portfolio was not doing what its name said. It was. `tags` on an older trade is not a
+// market's tags at all -- it is tagQuestion(), a regex over the QUESTION TEXT that emits
+// "sports" when the title contains match/game/tournament and "general" when nothing matches.
+// A market called "Dota 2: Spirit Academy vs Inner Circle - Game 1 Winner" contains "game",
+// so it reads as `sports`. Returning the first non-empty field meant that guess masked the
+// real Polymarket tags sitting in polymarketTags.
+const DERIVED_TAG_VOCABULARY = new Set([
+  "crypto", "macro", "politics", "sports", "clear-resolution", "general",
+]);
+
 export function tradeTags(trade = {}) {
+  const tags = new Set();
   for (const field of ["tagSlugs", "polymarketTags", "tags", "polymarketCategories"]) {
     const value = trade?.[field];
-    if (Array.isArray(value) && value.length) {
-      const tags = value.map((tag) => String(tag?.slug || tag?.label || tag || "").trim().toLowerCase())
-        .filter(Boolean);
-      if (tags.length) return [...new Set(tags)];
+    if (!Array.isArray(value)) continue;
+    for (const raw of value) {
+      const tag = String(raw?.slug || raw?.label || raw?.name || raw || "").trim().toLowerCase();
+      if (tag) tags.add(tag);
     }
   }
-  return ["(untagged)"];
+  return tags.size ? [...tags] : ["(untagged)"];
 }
 
-// Through to 1.0, not stopping at 0.7. A dip portfolio buys below its opening band so the
-// low edges carry it, but an ordinary portfolio set to "51+" lives entirely above 0.5 --
-// with the old top edge every one of its trades fell into a single "70%+" bucket and the
-// table said nothing. Adding edges above the old top cannot move any bucket below it.
+// Does this trade carry a tag the MARKET gave it, as opposed to one the question-text regex
+// invented? A table built only from the derived vocabulary describes the titles, not the
+// markets, and must not be read as a tag breakdown.
+export function hasRealTags(trade = {}) {
+  return tradeTags(trade).some((tag) => tag !== "(untagged)" && !DERIVED_TAG_VOCABULARY.has(tag));
+}
+
+export { DERIVED_TAG_VOCABULARY };
+
 export const PROBABILITY_EDGES = [0.2, 0.3, 0.35, 0.4, 0.45, 0.5, 0.56, 0.6, 0.7, 0.8, 0.9, 1.0];
 export const probabilityBand = (trade) => bucketOf(num(trade?.entryPrice), PROBABILITY_EDGES);
 
@@ -389,8 +407,19 @@ function profitableBreakdown(everything) {
       tagged.get(tag).push(trade);
     }
   }
+  // How many of these are the MARKET's tags, and how many are the question-text regex.
+  // Without this line the table reads as a tag breakdown whatever it is actually made of --
+  // which is how "dota-2 51+" came to be reported as not trading dota.
+  const real = subset.filter(hasRealTags).length;
   console.log(`\n   ${tagged.size} distinct tag(s). A trade with several tags appears under each,`);
   console.log("   so these columns overlap and do not sum to the subset total.");
+  console.log(`   ${real} of ${subset.length} trades carry tags the MARKET gave them.`);
+  if (real < subset.length) {
+    console.log(`   The other ${subset.length - real} carry only tagQuestion()'s guess from the`);
+    console.log("   question text -- \"sports\" for any title with match/game/tournament in it,");
+    console.log("   \"general\" for anything else. Those rows describe TITLES, not markets, and");
+    console.log("   the table below cannot be read as a tag breakdown for them.");
+  }
   console.log("\n   tag                      n   won    win%      P/L    per trade   per $ staked");
   const byProfit = [...tagged.entries()].sort((a, b) => summarise(b[1]).pnl - summarise(a[1]).pnl);
   for (const [tag, rows] of byProfit) {
