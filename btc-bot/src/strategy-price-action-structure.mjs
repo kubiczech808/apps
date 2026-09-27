@@ -4,7 +4,7 @@ import { buildExternalTrendReference, EXTERNAL_PIVOT_SCHEMA } from './external-t
 import { buildFvgSupplyDemandZones, candleSignal, marketStructure } from './priceaction.mjs'
 
 export const PRICE_ACTION_STRUCTURE_ID = 'price-action-structure-v1'
-export const PRICE_ACTION_MATRIX_SCHEMA = 64
+export const PRICE_ACTION_MATRIX_SCHEMA = 65
 export const PRICE_ACTION_CHART_CANDLE_LIMITS = {
   // The zone and structure inputs below remain much longer. These limits only
   // bound chart data published to the browser, where a 60-day 1H / 180-day
@@ -816,6 +816,12 @@ export const activeSupplyDemandZones = (candles, {
   const currentSetupTouches = allZones.filter((zone) =>
     zone.touchedDuringCurrentSetup && !zone.invalidatedByOwnTimeframeClose
   )
+  // Keep a compact audit trail for FVGs consumed before the present wave. It
+  // must never join the tradable pools above, but the chart can show a
+  // relevant historical imbalance instead of making it look undiscovered.
+  const historicalConsumed = allZones.filter((zone) =>
+    zone.consumedBeforeCurrentSetup && !zone.invalidatedByOwnTimeframeClose
+  )
   const latest = (type, pool = unfilled) =>
     pool.filter((zone) => zone.type === type).sort((a, b) => (b.lastIndex ?? 0) - (a.lastIndex ?? 0))[0] ?? null
   const byType = (type, pool = unfilled) =>
@@ -826,11 +832,14 @@ export const activeSupplyDemandZones = (candles, {
   return {
     allDemand: allZones.filter((zone) => zone.type === 'demand').map(auditZoneSummary).sort((a, b) => (b.lastIndex ?? 0) - (a.lastIndex ?? 0)),
     allSupply: allZones.filter((zone) => zone.type === 'supply').map(auditZoneSummary).sort((a, b) => (b.lastIndex ?? 0) - (a.lastIndex ?? 0)),
-    // These are audit-only zones touched since the latest confirmed HH/HL or
+    // These audit-only zones were touched since the latest confirmed HH/HL or
     // LH/LL endpoint. They explain a live setup that was consumed before it
-    // could enter, while deliberately hiding every earlier historical touch.
+    // could enter. Earlier touches are published separately above so the UI
+    // can show only those that overlap the present pullback band.
     currentSetupDemand: currentSetupTouches.filter((zone) => zone.type === 'demand').map(auditZoneSummary).sort((a, b) => (b.lastIndex ?? 0) - (a.lastIndex ?? 0)),
     currentSetupSupply: currentSetupTouches.filter((zone) => zone.type === 'supply').map(auditZoneSummary).sort((a, b) => (b.lastIndex ?? 0) - (a.lastIndex ?? 0)),
+    historicalConsumedDemand: historicalConsumed.filter((zone) => zone.type === 'demand').map(auditZoneSummary).sort((a, b) => (b.lastIndex ?? 0) - (a.lastIndex ?? 0)),
+    historicalConsumedSupply: historicalConsumed.filter((zone) => zone.type === 'supply').map(auditZoneSummary).sort((a, b) => (b.lastIndex ?? 0) - (a.lastIndex ?? 0)),
     demand: latest('demand'),
     supply: latest('supply'),
     latestValidDemand: latest('demand', zones),

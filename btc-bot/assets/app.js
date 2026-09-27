@@ -708,6 +708,28 @@ const currentSetupTouchedZones = (item, type) => {
   }))
 }
 
+const zoneOverlapsRange = (zone, range) => {
+  if (!zone || !range || !Number.isFinite(zone.low) || !Number.isFinite(zone.high)) return false
+  const from = Number(range.from)
+  const to = Number(range.to)
+  if (!Number.isFinite(from) || !Number.isFinite(to)) return false
+  return zone.low <= Math.max(from, to) && zone.high >= Math.min(from, to)
+}
+
+// A prior-wave touch still disqualifies an FVG from a new entry. Retain only
+// the ones crossing the present pullback band as muted audit context: this
+// makes a discovered historical gap inspectable without reviving the trade.
+const historicalConsumedZones = (item, type, pullbackRange = null) => {
+  const key = type === 'demand' ? 'Demand' : 'Supply'
+  return (item?.zones?.[`historicalConsumed${key}`] ?? [])
+    .filter((zone) => zoneOverlapsRange(zone, pullbackRange))
+    .map((zone) => ({
+      ...zone,
+      historicalConsumedZone: true,
+      invalidatedSetupZone: true,
+    }))
+}
+
 const setupOwnersForEntry = (entry) => [
   ...(state?.positions?.running ?? []),
   ...(state?.positions?.orders ?? []).filter((order) => order.orderRole !== 'take-profit'),
@@ -749,7 +771,8 @@ const zoneListElement = (entry) => {
   const setupZones = setupZonesForEntry(entry)
   const watchedZones = active ? watchedEntryZones(profile, active) : []
   const currentSetupZones = active ? currentSetupTouchedZones(entry.item, active) : []
-  const zones = uniqueZones([...setupZones, ...watchedZones, ...currentSetupZones])
+  const historicalZones = active ? historicalConsumedZones(entry.item, active, profile?.pullbackRange) : []
+  const zones = uniqueZones([...setupZones, ...watchedZones, ...currentSetupZones, ...historicalZones])
   if (!zones.length) {
     const title = profile?.mode === 'formation'
       ? 'Struktura je flat; nejdříve čekáme na vytvoření směru.'
@@ -761,10 +784,13 @@ const zoneListElement = (entry) => {
   return zones.map((zone) => {
     const candidate = zoneCandidateFor(profile?.zoneCandidates ?? [], zone, zone.type)
     const activeSetup = zone.activeSetupZone === true
+    const historical = zone.historicalConsumedZone === true
     const invalidated = zone.invalidatedSetupZone === true || candidate?.invalidatedByPrematureTouch === true
     const status = activeSetup ? 'met' : invalidated ? 'unmet' : candidate?.zoneHit ? 'met' : 'neutral'
     const title = activeSetup
       ? 'Zóna patří k aktivní objednávce nebo otevřené pozici; zůstává viditelná do jejího ukončení.'
+      : historical
+        ? 'Historická zóna zasahuje do aktuálního pullback pásma, ale byla spotřebována před posledním potvrzeným pivotem. Slouží pouze jako auditní kontext.'
       : invalidated
         ? 'Zóna byla dotčena v aktuálním setupu od posledního potvrzeného pivotu; nový vstup z ní je zablokovaný.'
       : candidate?.zoneHit
@@ -993,6 +1019,7 @@ const zoneCard = (title, zones, emptyText, timeframeId, candidates = [], directi
               zone.filledByOwnTimeframeClose ? 'vyplněná close na vlastním TF' : 'nevyplněná',
               zone.invalidatedByOwnTimeframeClose ? 'neplatná: close za hranou' : null,
               zone.touchedDuringCurrentSetup ? 'dotčena v aktuálním setupu' : null,
+              zone.historicalConsumedZone ? 'vyčerpaná před aktuálním setupem' : null,
               `touches ${zone.touches ?? 1}`,
               zone.swept ? 'sweep' : null,
               zone.imbalance ? 'imbalance' : null,
@@ -1002,14 +1029,16 @@ const zoneCard = (title, zones, emptyText, timeframeId, candidates = [], directi
       : el('p', { text: emptyText }),
   ])
 
-const zonesForDetail = (zones, type) => {
+const zonesForDetail = (zones, type, pullbackRange = null) => {
   const key = type === 'demand' ? 'Demand' : 'Supply'
-  // Historical FVGs remain in the published audit data, but the operator sees
-  // all untouched candidates plus touches from the active structural wave.
+  const historical = (zones?.[`historicalConsumed${key}`] ?? [])
+    .filter((zone) => zoneOverlapsRange(zone, pullbackRange))
+    .map((zone) => ({ ...zone, historicalConsumedZone: true, invalidatedSetupZone: true }))
   return uniqueZones([
     ...(zones?.[`unfilled${key}`] ?? []),
     ...(zones?.[`nearby${key}`] ?? []),
     ...(zones?.[`currentSetup${key}`] ?? []),
+    ...historical,
   ])
 }
 
@@ -1040,10 +1069,10 @@ const renderAssetZoneDetails = (host, asset, item, timeframeId) => {
   if (item.zones) {
     details.unshift(
       el('h3', { text: `${asset.symbol} · sledované zóny pro ${timeframeId.toUpperCase()}` }),
-      el('p', { className: 'asset-zone-details-intro', text: 'Zobrazeny jsou nevyčerpané zóny a doteky z aktivní vlny od posledního potvrzeného pivotu.' }),
+      el('p', { className: 'asset-zone-details-intro', text: 'Zobrazeny jsou nevyčerpané zóny, doteky z aktivní vlny a vyčerpané FVG v aktuálním pullback pásmu.' }),
       el('div', { className: 'asset-zone-detail-columns' }, [
-        zoneCard('Demand', zonesForDetail(item.zones, 'demand'), 'Žádná dostupná demand zóna.', timeframeId, candidates, item.trend),
-        zoneCard('Supply', zonesForDetail(item.zones, 'supply'), 'Žádná dostupná supply zóna.', timeframeId, candidates, item.trend),
+        zoneCard('Demand', zonesForDetail(item.zones, 'demand', item.tradeProfile?.pullbackRange), 'Žádná dostupná demand zóna.', timeframeId, candidates, item.trend),
+        zoneCard('Supply', zonesForDetail(item.zones, 'supply', item.tradeProfile?.pullbackRange), 'Žádná dostupná supply zóna.', timeframeId, candidates, item.trend),
       ])
     )
   }
@@ -1398,11 +1427,13 @@ const chartZones = (item, type) => {
   const targetZone = profile?.tp2Zone?.type === type ? [profile.tp2Zone] : []
   const activeSetupZones = setupZonesForEntry(chartEntry).filter((zone) => zone.type === type)
   const currentSetupZones = currentSetupTouchedZones(item, type)
+  const historicalZones = historicalConsumedZones(item, type, profile?.pullbackRange)
   const availableZones = zoneList(item, type)
   const seen = new Set()
-  return uniqueZones([...availableZones, ...activeSetupZones, ...plannedEntries, ...targetZone, ...currentSetupZones])
+  return uniqueZones([...availableZones, ...activeSetupZones, ...plannedEntries, ...targetZone, ...currentSetupZones, ...historicalZones])
     .filter((zone) => zone && (zone.activeSetupZone || zone.watchedSetupZone ||
       zone.currentSetupZone ||
+      zone.historicalConsumedZone ||
       (!zone.filledByOwnTimeframeClose && !zone.invalidatedByOwnTimeframeClose && !Number.isFinite(zone.firstTouchAt))))
     .filter((zone) => Number.isFinite(zone.low) && Number.isFinite(zone.high) && zone.low > 0 && zone.high > 0 && zone.high >= zone.low)
     .filter((zone) => {
@@ -1624,7 +1655,7 @@ const renderAssetChart = () => {
     const bottom = y(zone.low)
     const zoneStartX = xForTime(zone.fvg?.definingCandles?.[0]?.time ?? zone.firstTime) ?? ASSET_CHART.padLeft
     const zoneRect = el('rect', {
-      className: `asset-zone-${zone.kind}${zone.invalidatedSetupZone ? ' asset-zone-invalidated' : ''} asset-zone-clickable`,
+      className: `asset-zone-${zone.kind}${zone.invalidatedSetupZone ? ' asset-zone-invalidated' : ''}${zone.historicalConsumedZone ? ' asset-zone-historical' : ''} asset-zone-clickable`,
       x: zoneStartX,
       y: Math.min(top, bottom),
       width: Math.max(1, candlePlotRight - zoneStartX),
@@ -1858,7 +1889,7 @@ const renderAssetChart = () => {
       className: `asset-zone-label asset-zone-label-${zone.kind}`,
       x: ASSET_CHART.width - ASSET_CHART.padRight + 8,
       y: placed,
-      text: `${prefix}${zone.index + 1} ${quotePrice(zone.low)}–${quotePrice(zone.high)}${zone.invalidatedByOwnTimeframeClose ? ' · neplatná' : ''}`,
+      text: `${prefix}${zone.index + 1} ${quotePrice(zone.low)}–${quotePrice(zone.high)}${zone.invalidatedByOwnTimeframeClose ? ' · neplatná' : zone.historicalConsumedZone ? ' · vyčerpaná' : ''}`,
     }))
   }
   for (const zone of zones) {

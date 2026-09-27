@@ -356,18 +356,24 @@ test('active price-action setups retain their entry and target zones in the tabl
   assert.match(js, /activeSetupZone \|\|/)
 })
 
-test('only a current-setup FVG touch is rendered after it has been consumed', () => {
+test('consumed FVGs remain visible only as current-setup or pullback-overlapping audit context', () => {
   assert.match(js, /const watchedEntryCandidates = \(profile, type\) =>/)
   assert.match(js, /candidate\.directionEligible && candidate\.pullbackEligible/)
   assert.match(js, /return candidates\.filter\(\(candidate\) => !candidate\.invalidatedByPrematureTouch\)/)
   assert.match(js, /invalidatedSetupZone: candidate\.invalidatedByPrematureTouch === true/)
   assert.match(js, /const currentSetupTouchedZones = \(item, type\) =>/)
+  assert.match(js, /const historicalConsumedZones = \(item, type, pullbackRange = null\) =>/)
+  assert.match(js, /historicalConsumed\$\{key\}/)
+  assert.match(js, /zoneOverlapsRange\(zone, pullbackRange\)/)
   assert.match(js, /currentSetup\$\{key\}/)
   assert.match(js, /Zóna byla dotčena v aktuálním setupu od posledního potvrzeného pivotu/)
+  assert.match(js, /Historická zóna zasahuje do aktuálního pullback pásma/)
   assert.match(js, /zone\.watchedSetupZone/)
   assert.doesNotMatch(js, /const invalidatedAuditZones =/)
   assert.match(js, /asset-zone-invalidated/)
+  assert.match(js, /asset-zone-historical/)
   assert.match(css, /\.asset-price-chart \.asset-zone-invalidated/)
+  assert.match(css, /\.asset-price-chart \.asset-zone-historical/)
 })
 
 test('charts and zone details include every untouched FVG from the active catalog', () => {
@@ -423,7 +429,7 @@ test('the first migrated publish persists the strategy-versioned settings', () =
 })
 
 test('the API refuses stale PA-1 runners before they overwrite current structure', () => {
-  assert.match(api, /const MIN_PRICE_ACTION_MATRIX_SCHEMA = 64/)
+  assert.match(api, /const MIN_PRICE_ACTION_MATRIX_SCHEMA = 65/)
   assert.match(api, /\$strategyId === 'price-action-structure-v1'/)
   assert.match(api, /\(int\) \$priceActionSchema < MIN_PRICE_ACTION_MATRIX_SCHEMA/)
   assert.match(api, /fail\(409, 'Runner uses an obsolete price-action matrix schema\.'\)/)

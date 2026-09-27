@@ -869,6 +869,7 @@ test('a partial same-timeframe touch consumes an FVG and separates old touches f
   const historicalDemand = historical.allDemand.find((zone) => zone.low === 101 && zone.high === 105)
   assert.equal(historicalDemand.consumedBeforeCurrentSetup, true)
   assert.equal(historical.currentSetupDemand.length, 0, 'a touch before the latest pivot must not reach the chart or table')
+  assert.ok(historical.historicalConsumedDemand.some((zone) => zone.low === 101 && zone.high === 105), 'a prior-wave touch remains available as non-tradable audit context')
 
   const current = activeSupplyDemandZones(partialTouch, {
     lookback: 1,
