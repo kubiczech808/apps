@@ -12,7 +12,76 @@ final class Shipping
 
     public function register(): void
     {
+        add_action('wp_head', [$this, 'dpd_pickup_bootstrap'], 1);
         add_action('wp_footer', [$this, 'dpd_pickup_compatibility'], 1);
+    }
+
+    /**
+     * Create the fields used by WC Doprava before WooCommerce's initial
+     * checkout refresh. The third-party scripts assume that every field is
+     * present and write to it without null checks.
+     */
+    public function dpd_pickup_bootstrap(): void
+    {
+        if (!function_exists('is_checkout') || !is_checkout()) {
+            return;
+        }
+        ?>
+<script id="jamu-ml-dpd-pickup-bootstrap">
+(function () {
+    const fields = {
+        'packeta-point-id': 'hidden',
+        'ship-to-different-address-checkbox': 'checkbox',
+        'shipping_first_name': 'hidden',
+        'shipping_last_name': 'hidden',
+        'shipping_company': 'hidden',
+        'shipping_postcode': 'hidden',
+        'shipping_address_1': 'hidden',
+        'shipping_address_2': 'hidden',
+        'shipping_city': 'hidden',
+        'billing_first_name': 'hidden',
+        'billing_last_name': 'hidden'
+    };
+
+    function checkoutForm() {
+        return document.querySelector('form.checkout, form.woocommerce-checkout, form[name="checkout"]');
+    }
+
+    function ensureFields() {
+        const form = checkoutForm();
+        if (!form) {
+            return;
+        }
+
+        Object.keys(fields).forEach(function (id) {
+            if (document.getElementById(id)) {
+                return;
+            }
+            const field = document.createElement('input');
+            field.id = id;
+            field.name = id === 'ship-to-different-address-checkbox' ? 'ship_to_different_address' : id;
+            field.type = fields[id];
+            field.hidden = true;
+            field.autocomplete = 'off';
+            form.appendChild(field);
+        });
+
+        if (!document.getElementById('packeta-point-info')) {
+            const info = document.createElement('span');
+            info.id = 'packeta-point-info';
+            info.hidden = true;
+            info.appendChild(document.createTextNode(''));
+            form.appendChild(info);
+        }
+    }
+
+    document.addEventListener('DOMContentLoaded', ensureFields, { once: true });
+    if (document.readyState !== 'loading') {
+        ensureFields();
+    }
+})();
+</script>
+        <?php
     }
 
     public function dpd_pickup_compatibility(): void
