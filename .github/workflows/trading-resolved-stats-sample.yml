@@ -106,8 +106,21 @@ jobs:
               for side, (hit, total) in sorted(sides.items(), key=lambda pair: -pair[1][1]):
                   print(f"   side {side:<6} {total:>4} row(s), {hit} won ({100 * hit / total:.1f}%)")
 
-          print(f"\n{'entry':>6} {'side':>5} {'now':>5} {'out':>4} {'flip':>5} {'spr':>5}"
-                f"  {'first seen':<20} {'endDate':<20} question")
+          # The RAW settlement beside the graded one. "out" is what the statistics counted;
+          # "final" is the number on the row and "1st" the one recorded against the priced
+          # side. A sample where both Yes rows and No rows read 1 is not a lucky sample --
+          # Yes and No are complements -- so the raw fields are what says where that came
+          # from.
+          finals = {}
+          for row in rows:
+              key = str(row.get("finalOutcomePrice"))
+              finals[key] = finals.get(key, 0) + 1
+          print("\nfinalOutcomePrice as stored, over the returned slice:")
+          for value, count in sorted(finals.items(), key=lambda pair: -pair[1]):
+              print(f"   {value:>8}  {count} row(s)")
+
+          print(f"\n{'entry':>6} {'side':>5} {'now':>5} {'out':>4} {'final':>6} {'1st':>5}"
+                f" {'n':>3} {'flip':>5} {'spr':>5}  {'first seen':<20} {'endDate':<20} question")
           for row in rows[:60]:
               spread = row.get("firstSpread")
               spread_text = "-" if spread is None else f"{float(spread) * 100:.1f}"
@@ -115,6 +128,9 @@ jobs:
                     f" {str(row.get('side') or '?')[:5]:>5}"
                     f" {str(row.get('currentSide') or '?')[:5]:>5}"
                     f" {str(row.get('outcome')):>4}"
+                    f" {str(row.get('finalOutcomePrice')):>6}"
+                    f" {str(row.get('firstSideFinalOutcomePrice')):>5}"
+                    f" {str(row.get('outcomeCount')):>3}"
                     f" {'yes' if row.get('flipped') else 'no':>5}"
                     f" {spread_text:>5}"
                     f"  {str(row.get('firstObservedAt') or '-')[:19]:<20}"
