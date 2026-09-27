@@ -878,8 +878,10 @@ test("equal risk: portfolio shortlist rejects a wide spread before opening", () 
 
 test("equal risk: a past estimated end date does not bypass a still-live synthetic stop check", () => {
   // Sports start times and Gamma resolution estimates can be stale while CLOB still
-  // has executable bids. Equal must inspect that book before it becomes pending.
+  // has executable bids. Equal and the certainty close must inspect that book before it
+  // becomes pending.
   assert.equal(bot.shouldCheckEqualStopBeforePending({ equalRiskProtection: true, awaitingResolution: true, marketClosed: false }), true);
+  assert.equal(bot.shouldCheckEqualStopBeforePending({ closeAtCertainty: true, awaitingResolution: true, marketClosed: false }), true);
   assert.equal(bot.shouldCheckEqualStopBeforePending({ equalRiskProtection: false, awaitingResolution: true, marketClosed: false }), false);
   assert.equal(bot.shouldCheckEqualStopBeforePending({ equalRiskProtection: true, awaitingResolution: true, marketClosed: true }), false);
 });
@@ -11226,12 +11228,69 @@ test("close at certainty: a paper position is sold at the bid once the market ha
   const app = readFileSync(new URL("../assets/app.js", import.meta.url), "utf8");
   assert.match(app, /"WON", "LOST", "CLOSED"/);
 
-  // It has to be checked before the awaiting-resolution return, or a position past its end
-  // date -- the exact case this exists to shorten -- would never reach the rule.
-  const closeAt = source.indexOf('closeReason: "certainty"');
-  const pendingAt = source.indexOf("if (awaitingResolution) {\n        return pendingResolutionResult({");
-  assert.ok(closeAt > 0 && pendingAt > 0 && closeAt < pendingAt,
-    "the certainty close is decided before the position is parked as awaiting resolution");
+  // An active market past its scheduled end must reach the book before it is parked as
+  // awaiting resolution; the functional case below drives this exact path.
+  assert.match(source, /shouldCheckEqualStopBeforePending\(\{\s*\n\s*equalRiskProtection: trade\.equalRiskProtection,\s*\n\s*closeAtCertainty: closeBid != null,/,
+    "the pending-resolution gate must preserve an armed certainty close");
+});
+
+test("close at certainty: an active market past its estimated end is still checked", async () => {
+  // Soccer exposed this path: Gamma's event date had passed, while Polymarket still
+  // accepted orders and quoted the winning outcome at 99.9%. The old pending-resolution
+  // shortcut ran before the book request, so no paper portfolio could take this exit.
+  const { bot: scoped, restore } = await scopedBot("certainty-past-estimated-end", {});
+  const pastEnd = new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString();
+  const stub = stubFetch((url) => {
+    if (url.includes("gamma-api.polymarket.com/markets")) {
+      return [{
+        slug: "soccer-certainty-past-end",
+        question: "Will Northbridge FC win?",
+        endDate: pastEnd,
+        closed: false,
+        active: true,
+        acceptingOrders: true,
+        outcomes: JSON.stringify(["Yes", "No"]),
+        outcomePrices: JSON.stringify(["0.999", "0.001"]),
+        clobTokenIds: JSON.stringify(["certainty-yes", "certainty-no"]),
+      }];
+    }
+    if (url.includes("clob.polymarket.com/book")) {
+      return {
+        bids: [{ price: "0.999", size: "100" }],
+        asks: [{ price: "1", size: "100" }],
+      };
+    }
+    return null;
+  });
+  try {
+    const marked = await scoped.markOpenTrade({
+      id: "soccer-past-end",
+      status: "OPEN",
+      slug: "soccer-certainty-past-end",
+      tokenId: "certainty-yes",
+      outcome: "Yes",
+      entryPrice: 0.7,
+      shares: 7.142857,
+      stakeUsdc: 5,
+      totalCostUsdc: 5,
+      maxLossUsdc: 5,
+      feeRate: 0,
+      feesEnabled: false,
+      openedAt: new Date(Date.now() - 5 * 60 * 60 * 1000).toISOString(),
+    }, { settlementCloseBid: 0.999 }, {
+      canFundAnotherPosition: false,
+      hasTradableCandidate: true,
+    });
+
+    assert.equal(marked.status, "CLOSED");
+    assert.equal(marked.closeReason, "certainty");
+    assert.equal(marked.currentPrice, 0.999);
+    assert.ok(stub.calls.some((url) => url.includes("clob.polymarket.com/book")),
+      "the estimated end must not skip the book that decides the certainty close");
+  } finally {
+    stub.restore();
+    restore();
+  }
 });
 
 // Reported: the "Underway 70+" portfolio never trades. Measured on its newest run --

@@ -5266,8 +5266,16 @@ function markLiveCatalogueProtection(items = [], { configs = [], orderTokenIds =
   });
 }
 
-function shouldCheckEqualStopBeforePending({ equalRiskProtection = false, awaitingResolution = false, marketClosed = false } = {}) {
-  return Boolean(equalRiskProtection && awaitingResolution && !marketClosed);
+function shouldCheckEqualStopBeforePending({
+  equalRiskProtection = false,
+  closeAtCertainty = false,
+  awaitingResolution = false,
+  marketClosed = false,
+} = {}) {
+  // Gamma's scheduled end is not an exchange close. A sports market can still quote a
+  // perfectly executable winning bid for hours after the fixture, and both exit rules
+  // must see it before the row is parked as awaiting resolution.
+  return Boolean(awaitingResolution && !marketClosed && (equalRiskProtection || closeAtCertainty));
 }
 
 // The same crossing rule as equalRiskStopExitDecision, for the one case that rule never
@@ -5859,10 +5867,11 @@ async function markOpenTrade(trade, strategy = null, funding = null) {
   };
 
   // A sports kickoff and Gamma's estimated end date are not an exchange close.
-  // Equal must still inspect a live book at that point: it is the only chance to
-  // observe and record its synthetic protective exit before final resolution.
+  // A live book is still the only place to see an executable Equal stop or certainty
+  // exit before Polymarket publishes final resolution.
   if (awaitingResolution && !shouldCheckEqualStopBeforePending({
     equalRiskProtection: trade.equalRiskProtection,
+    closeAtCertainty: closeBid != null,
     awaitingResolution,
     marketClosed: market.closed,
   })) {
