@@ -687,11 +687,9 @@ const watchedEntryCandidates = (profile, type) => {
   if (entryZoneType(profileSide(profile)) !== type) return []
   const candidates = (profile?.zoneCandidates ?? [])
     .filter((candidate) => candidate.type === type && candidate.directionEligible && candidate.pullbackEligible)
-  const usableCandidates = candidates.filter((candidate) => !candidate.invalidatedByPrematureTouch)
-  // A premature touch must still block a new trade, but the FVG remains the
-  // relevant zone for explaining the current structural setup. When every
-  // candidate was consumed this preserves the nearest one for the table/chart.
-  return usableCandidates.length ? usableCandidates : candidates
+  // A consumed FVG no longer belongs in the entry plan. Current-setup touches
+  // are added from the lifecycle data below strictly as an audit marker.
+  return candidates.filter((candidate) => !candidate.invalidatedByPrematureTouch)
 }
 
 const watchedEntryZones = (profile, type) => watchedEntryCandidates(profile, type)
@@ -700,6 +698,15 @@ const watchedEntryZones = (profile, type) => watchedEntryCandidates(profile, typ
     watchedSetupZone: true,
     invalidatedSetupZone: candidate.invalidatedByPrematureTouch === true,
   }))
+
+const currentSetupTouchedZones = (item, type) => {
+  const key = type === 'demand' ? 'Demand' : 'Supply'
+  return (item?.zones?.[`currentSetup${key}`] ?? []).map((zone) => ({
+    ...zone,
+    currentSetupZone: true,
+    invalidatedSetupZone: true,
+  }))
+}
 
 const setupOwnersForEntry = (entry) => [
   ...(state?.positions?.running ?? []),
@@ -741,7 +748,8 @@ const zoneListElement = (entry) => {
   const active = entryZoneType(profileSide(profile))
   const setupZones = setupZonesForEntry(entry)
   const watchedZones = active ? watchedEntryZones(profile, active) : []
-  const zones = uniqueZones([...setupZones, ...watchedZones])
+  const currentSetupZones = active ? currentSetupTouchedZones(entry.item, active) : []
+  const zones = uniqueZones([...setupZones, ...watchedZones, ...currentSetupZones])
   if (!zones.length) {
     const title = profile?.mode === 'formation'
       ? 'Struktura je flat; nejdříve čekáme na vytvoření směru.'
@@ -758,7 +766,7 @@ const zoneListElement = (entry) => {
     const title = activeSetup
       ? 'Zóna patří k aktivní objednávce nebo otevřené pozici; zůstává viditelná do jejího ukončení.'
       : invalidated
-        ? 'Zóna patří k současnému setupu, ale byla dotčena dříve než byl vstup kompletní; nový vstup z ní je zablokovaný.'
+        ? 'Zóna byla dotčena v aktuálním setupu od posledního potvrzeného pivotu; nový vstup z ní je zablokovaný.'
       : candidate?.zoneHit
         ? 'Aktuální cena je v této zóně.'
         : candidate?.zoneTouched
@@ -962,14 +970,15 @@ const zoneCard = (title, zones, emptyText, timeframeId, candidates = [], directi
       ? el('div', { className: 'zone-list' }, zones.map((zone, index) => el('div', { className: 'zone-item' }, [
           (() => {
             const candidate = zoneCandidateFor(candidates, zone, title.toLowerCase(), index)
+            const consumedInCurrentSetup = zone.touchedDuringCurrentSetup === true && !candidate?.eligible
             return el('div', { className: 'structure-leg-flow' }, [
               el('span', { className: 'zone-index', text: `${index + 1}.` }),
               zoneRangeTrigger({
                 zone,
                 timeframeId,
                 candidate,
-                status: candidate?.eligible ? (candidate.zoneHit ? 'met' : 'neutral') : 'neutral',
-                title: candidate?.eligible ? 'Kliknutím zobrazit vstupní parametry.' : 'Kliknutím zobrazit důvod vyřazení a vstupní parametry.',
+                status: candidate?.eligible ? (candidate.zoneHit ? 'met' : 'neutral') : consumedInCurrentSetup ? 'unmet' : 'neutral',
+                title: candidate?.eligible ? 'Kliknutím zobrazit vstupní parametry.' : consumedInCurrentSetup ? 'Zóna byla spotřebována v aktuálním setupu.' : 'Kliknutím zobrazit důvod vyřazení a vstupní parametry.',
                 showCandidateDetails: true,
                 direction,
               }),
@@ -983,6 +992,7 @@ const zoneCard = (title, zones, emptyText, timeframeId, candidates = [], directi
             text: [
               zone.filledByOwnTimeframeClose ? 'vyplněná close na vlastním TF' : 'nevyplněná',
               zone.invalidatedByOwnTimeframeClose ? 'neplatná: close za hranou' : null,
+              zone.touchedDuringCurrentSetup ? 'dotčena v aktuálním setupu' : null,
               `touches ${zone.touches ?? 1}`,
               zone.swept ? 'sweep' : null,
               zone.imbalance ? 'imbalance' : null,
@@ -993,8 +1003,13 @@ const zoneCard = (title, zones, emptyText, timeframeId, candidates = [], directi
   ])
 
 const zonesForDetail = (zones, type) => {
-  const list = zoneList({ zones }, type, { includeFilled: true, includeInvalidated: true })
-  return list
+  const key = type === 'demand' ? 'Demand' : 'Supply'
+  // Historical FVGs remain in the published audit data, but the operator sees
+  // only untouched candidates plus touches from the active structural wave.
+  return uniqueZones([
+    ...(zones?.[`nearby${key}`] ?? []),
+    ...(zones?.[`currentSetup${key}`] ?? []),
+  ])
 }
 
 const renderAssetZoneDetails = (host, asset, item, timeframeId) => {
@@ -1023,8 +1038,8 @@ const renderAssetZoneDetails = (host, asset, item, timeframeId) => {
   const details = [backtestBlock]
   if (item.zones) {
     details.unshift(
-      el('h3', { text: `${asset.symbol} · všechny dostupné zóny pro ${timeframeId.toUpperCase()}` }),
-      el('p', { className: 'asset-zone-details-intro', text: 'V přehledu vstupu zůstávají jen zóny v pullback pásmu s dosažitelným minimálním R/R. Zde jsou i zóny, které byly vyřazeny.' }),
+      el('h3', { text: `${asset.symbol} · sledované zóny pro ${timeframeId.toUpperCase()}` }),
+      el('p', { className: 'asset-zone-details-intro', text: 'Zobrazeny jsou nevyčerpané zóny a doteky z aktivní vlny od posledního potvrzeného pivotu.' }),
       el('div', { className: 'asset-zone-detail-columns' }, [
         zoneCard('Demand', zonesForDetail(item.zones, 'demand'), 'Žádná dostupná demand zóna.', timeframeId, candidates, item.trend),
         zoneCard('Supply', zonesForDetail(item.zones, 'supply'), 'Žádná dostupná supply zóna.', timeframeId, candidates, item.trend),
@@ -1381,20 +1396,11 @@ const chartZones = (item, type) => {
   const plannedEntries = watchedEntryZones(profile, type)
   const targetZone = profile?.tp2Zone?.type === type ? [profile.tp2Zone] : []
   const activeSetupZones = setupZonesForEntry(chartEntry).filter((zone) => zone.type === type)
-  const pullback = profile?.pullbackRange
-  const pullbackLow = Math.min(pullback?.from ?? Infinity, pullback?.to ?? Infinity)
-  const pullbackHigh = Math.max(pullback?.from ?? -Infinity, pullback?.to ?? -Infinity)
-  // A close-invalidated FVG must never be tradable again, but a visually
-  // obvious gap in the current pullback band is still useful chart context.
-  // Keep it subdued and dashed rather than silently pretending it never was.
-  const invalidatedAuditZones = (item?.zones?.[type === 'demand' ? 'allDemand' : 'allSupply'] ?? [])
-    .filter((zone) => zone.invalidatedByOwnTimeframeClose)
-    .filter((zone) => Number.isFinite(pullbackLow) && Number.isFinite(pullbackHigh) && zone.low <= pullbackHigh && zone.high >= pullbackLow)
-    .map((zone) => ({ ...zone, invalidatedSetupZone: true, auditZone: true }))
+  const currentSetupZones = currentSetupTouchedZones(item, type)
   const seen = new Set()
-  return uniqueZones([...activeSetupZones, ...plannedEntries, ...targetZone, ...invalidatedAuditZones])
+  return uniqueZones([...activeSetupZones, ...plannedEntries, ...targetZone, ...currentSetupZones])
     .filter((zone) => zone && (zone.activeSetupZone || zone.watchedSetupZone ||
-      zone.auditZone ||
+      zone.currentSetupZone ||
       (!zone.filledByOwnTimeframeClose && !zone.invalidatedByOwnTimeframeClose && !Number.isFinite(zone.firstTouchAt))))
     .filter((zone) => Number.isFinite(zone.low) && Number.isFinite(zone.high) && zone.low > 0 && zone.high > 0 && zone.high >= zone.low)
     .filter((zone) => {

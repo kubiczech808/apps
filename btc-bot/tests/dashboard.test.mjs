@@ -356,13 +356,16 @@ test('active price-action setups retain their entry and target zones in the tabl
   assert.match(js, /activeSetupZone \|\|/)
 })
 
-test('a consumed FVG remains visible for its current setup but cannot be mistaken for a new entry', () => {
+test('only a current-setup FVG touch is rendered after it has been consumed', () => {
   assert.match(js, /const watchedEntryCandidates = \(profile, type\) =>/)
   assert.match(js, /candidate\.directionEligible && candidate\.pullbackEligible/)
-  assert.match(js, /usableCandidates\.length \? usableCandidates : candidates/)
+  assert.match(js, /return candidates\.filter\(\(candidate\) => !candidate\.invalidatedByPrematureTouch\)/)
   assert.match(js, /invalidatedSetupZone: candidate\.invalidatedByPrematureTouch === true/)
-  assert.match(js, /Zóna patří k současnému setupu, ale byla dotčena dříve/)
+  assert.match(js, /const currentSetupTouchedZones = \(item, type\) =>/)
+  assert.match(js, /currentSetup\$\{key\}/)
+  assert.match(js, /Zóna byla dotčena v aktuálním setupu od posledního potvrzeného pivotu/)
   assert.match(js, /zone\.watchedSetupZone/)
+  assert.doesNotMatch(js, /const invalidatedAuditZones =/)
   assert.match(js, /asset-zone-invalidated/)
   assert.match(css, /\.asset-price-chart \.asset-zone-invalidated/)
 })
@@ -414,7 +417,7 @@ test('the first migrated publish persists the strategy-versioned settings', () =
 })
 
 test('the API refuses stale PA-1 runners before they overwrite current structure', () => {
-  assert.match(api, /const MIN_PRICE_ACTION_MATRIX_SCHEMA = 60/)
+  assert.match(api, /const MIN_PRICE_ACTION_MATRIX_SCHEMA = 61/)
   assert.match(api, /\$strategyId === 'price-action-structure-v1'/)
   assert.match(api, /\(int\) \$priceActionSchema < MIN_PRICE_ACTION_MATRIX_SCHEMA/)
   assert.match(api, /fail\(409, 'Runner uses an obsolete price-action matrix schema\.'\)/)

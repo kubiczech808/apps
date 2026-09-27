@@ -4,7 +4,7 @@ import { buildExternalTrendReference, EXTERNAL_PIVOT_SCHEMA } from './external-t
 import { buildFvgSupplyDemandZones, candleSignal, marketStructure } from './priceaction.mjs'
 
 export const PRICE_ACTION_STRUCTURE_ID = 'price-action-structure-v1'
-export const PRICE_ACTION_MATRIX_SCHEMA = 60
+export const PRICE_ACTION_MATRIX_SCHEMA = 61
 export const PRICE_ACTION_CHART_CANDLE_LIMITS = {
   // The zone and structure inputs below remain much longer. These limits only
   // bound chart data published to the browser, where a 60-day 1H / 180-day
@@ -696,8 +696,11 @@ const definingCandleSummary = (index, candles) => {
   return summary ? { index, ...summary } : null
 }
 
-const zoneSummary = (zone, candles, price) => {
+const zoneSummary = (zone, candles, price, setupAnchor = null) => {
   const touchCandles = zoneTouchCandles(zone, candles)
+  const firstTouchAt = touchCandles[0]?.time ?? null
+  const setupAnchorAt = Number.isFinite(setupAnchor?.time) ? setupAnchor.time : null
+  const touchedDuringCurrentSetup = Number.isFinite(firstTouchAt) && Number.isFinite(setupAnchorAt) && firstTouchAt >= setupAnchorAt
   return {
     type: zone.type,
     low: zone.low,
@@ -705,8 +708,15 @@ const zoneSummary = (zone, candles, price) => {
     // A touch means any overlap with the FVG range on this timeframe. It does
     // not require a close through, or a fill of, the entire gap.
     touches: touchCandles.length,
-    firstTouchAt: touchCandles[0]?.time ?? null,
+    firstTouchAt,
     lastTouchAt: touchCandles.at(-1)?.time ?? null,
+    // A new setup starts at the newest confirmed endpoint of its active wave.
+    // A zone touched before that pivot belongs to a completed, historical idea
+    // and cannot be revived merely because the next pullback revisits its area.
+    setupAnchorAt,
+    setupAnchorLabel: setupAnchor?.label ?? null,
+    touchedDuringCurrentSetup,
+    consumedBeforeCurrentSetup: Number.isFinite(firstTouchAt) && Number.isFinite(setupAnchorAt) && firstTouchAt < setupAnchorAt,
     swept: zone.swept,
     imbalance: zone.imbalance,
     baseCandles: (zone.baseIndexes ?? [])
@@ -744,6 +754,10 @@ const auditZoneSummary = (zone) => ({
   touches: zone.touches,
   firstTouchAt: zone.firstTouchAt,
   lastTouchAt: zone.lastTouchAt,
+  setupAnchorAt: zone.setupAnchorAt,
+  setupAnchorLabel: zone.setupAnchorLabel,
+  touchedDuringCurrentSetup: zone.touchedDuringCurrentSetup,
+  consumedBeforeCurrentSetup: zone.consumedBeforeCurrentSetup,
   swept: zone.swept,
   imbalance: zone.imbalance,
   firstTime: zone.firstTime,
@@ -762,17 +776,25 @@ const auditZoneSummary = (zone) => ({
   distancePct: zone.distancePct,
 })
 
-export const activeSupplyDemandZones = (candles, { lookback = 2, maxAgeCandles = 400 } = {}) => {
+export const activeSupplyDemandZones = (candles, { lookback = 2, maxAgeCandles = 400, setupAnchor = null } = {}) => {
   const price = candles.at(-1)?.close ?? null
+  const latestTime = candles.at(-1)?.time ?? null
   const allZones = buildFvgSupplyDemandZones(candles, { lookback, maxAgeCandles })
-    .map((zone) => zoneSummary(zone, candles, price))
-  // Invalidated FVGs remain in the published audit trail so the chart can
-  // explain a visible three-candle gap. Only the filtered collection below is
-  // allowed to influence entries, targets, or orders.
-  const zones = allZones
-    .filter((zone) => !zone.invalidatedByOwnTimeframeClose)
+    .map((zone) => zoneSummary(zone, candles, price, setupAnchor))
+  // A wick entering any part of the FVG consumes it for a future order. The
+  // sole exception is the candle currently closing inside it: the runner may
+  // still execute an already-complete setup on that first live touch. A close
+  // through the far edge remains a hard invalidation in either case.
+  const zones = allZones.filter((zone) => {
+    if (zone.invalidatedByOwnTimeframeClose || zone.consumedBeforeCurrentSetup) return false
+    if (!Number.isFinite(zone.firstTouchAt)) return true
+    return zone.firstTouchAt === latestTime && zoneContainsPrice(zone, price)
+  })
 
   const unfilled = zones.filter((zone) => !zone.filledByOwnTimeframeClose)
+  const currentSetupTouches = allZones.filter((zone) =>
+    zone.touchedDuringCurrentSetup && !zone.invalidatedByOwnTimeframeClose
+  )
   const latest = (type, pool = unfilled) =>
     pool.filter((zone) => zone.type === type).sort((a, b) => (b.lastIndex ?? 0) - (a.lastIndex ?? 0))[0] ?? null
   const byType = (type, pool = unfilled) =>
@@ -783,6 +805,11 @@ export const activeSupplyDemandZones = (candles, { lookback = 2, maxAgeCandles =
   return {
     allDemand: allZones.filter((zone) => zone.type === 'demand').map(auditZoneSummary).sort((a, b) => (b.lastIndex ?? 0) - (a.lastIndex ?? 0)),
     allSupply: allZones.filter((zone) => zone.type === 'supply').map(auditZoneSummary).sort((a, b) => (b.lastIndex ?? 0) - (a.lastIndex ?? 0)),
+    // These are audit-only zones touched since the latest confirmed HH/HL or
+    // LH/LL endpoint. They explain a live setup that was consumed before it
+    // could enter, while deliberately hiding every earlier historical touch.
+    currentSetupDemand: currentSetupTouches.filter((zone) => zone.type === 'demand').map(auditZoneSummary).sort((a, b) => (b.lastIndex ?? 0) - (a.lastIndex ?? 0)),
+    currentSetupSupply: currentSetupTouches.filter((zone) => zone.type === 'supply').map(auditZoneSummary).sort((a, b) => (b.lastIndex ?? 0) - (a.lastIndex ?? 0)),
     demand: latest('demand'),
     supply: latest('supply'),
     latestValidDemand: latest('demand', zones),
@@ -794,7 +821,7 @@ export const activeSupplyDemandZones = (candles, { lookback = 2, maxAgeCandles =
     unfilledCount: unfilled.length,
     validCount: zones.length,
     auditCount: allZones.length,
-    rule: 'Zóna vzniká jen jako base impulsního breakoutu s 3svíčkovým FVG. Close průraz ji vyplní na vlastním timeframe; vstupní plán ji spotřebuje už prvním dotekem, pokud tehdy není kompletní setup. Dotek na nižším timeframe ji neruší.',
+    rule: 'Zóna vzniká jen jako base impulsního breakoutu s 3svíčkovým FVG. První dotek na vlastním timeframe ji spotřebuje pro nový vstup i bez close přes celý gap. V grafu zůstává dotčená zóna jen v aktivním setupu od posledního potvrzeného pivotu; zóna uložená u objednávky nebo pozice zůstává do ukončení obchodu.',
   }
 }
 
@@ -847,6 +874,12 @@ const structuralTarget = ({ side, structure }) =>
     : side === 'short'
       ? structure?.activeRange?.low?.price ?? structure?.low?.current?.price ?? null
       : null
+
+// The newest endpoint is the boundary between an old, already-consumed FVG
+// and a touch that belongs to the pullback we are currently evaluating.
+const activeSetupAnchor = (activeRange) => [activeRange?.high, activeRange?.low]
+  .filter((pivot) => Number.isFinite(pivot?.time))
+  .sort((left, right) => right.time - left.time)[0] ?? null
 
 const pullbackLevel = ({ side, structure, pullbackPct }) => {
   if (side !== 'long' && side !== 'short') return null
@@ -1865,7 +1898,11 @@ export const classifyStructure = (
       contextRecentSwings: contextStructure.swings.slice(-8).map((swing) => pivotSummary(swing)),
     },
     zones: includeZones
-      ? activeSupplyDemandZones(normalizedZoneCandles, { lookback: zoneLookback, maxAgeCandles: zoneMaxAgeCandles })
+      ? activeSupplyDemandZones(normalizedZoneCandles, {
+          lookback: zoneLookback,
+          maxAgeCandles: zoneMaxAgeCandles,
+          setupAnchor: activeSetupAnchor(activeRange),
+        })
       : null,
   }
 }
@@ -2145,7 +2182,11 @@ export const classifyExternalStructure = ({
       breakOfStructure: breakEvent,
       externalPivotCount: pivots.length,
     },
-    zones: activeSupplyDemandZones(normalizedZoneCandles, { lookback: zoneLookback, maxAgeCandles: zoneMaxAgeCandles }),
+    zones: activeSupplyDemandZones(normalizedZoneCandles, {
+      lookback: zoneLookback,
+      maxAgeCandles: zoneMaxAgeCandles,
+      setupAnchor: activeSetupAnchor(activeRange),
+    }),
   }
 }
 

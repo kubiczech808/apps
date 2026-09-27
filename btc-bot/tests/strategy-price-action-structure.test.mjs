@@ -831,61 +831,55 @@ test('older untouched FVGs remain available as exit targets without widening the
   assert.ok(result.zones.unfilledDemand.some((zone) => zone.low === 101 && zone.high === 105))
 })
 
-test('supply and demand zones stay valid unless their own timeframe closes through them', () => {
-  const candles = [
-    // Demand base + bullish displacement + bullish FVG confirmation.
+test('a partial same-timeframe touch consumes an FVG and separates old touches from the active setup', () => {
+  const untouched = [
+    // Demand base + bullish displacement + bullish FVG confirmation at 101-105.
     candle(START, 100, 101, 98, 99),
     candle(START + 1 * HOUR, 99, 111, 99, 110),
     candle(START + 2 * HOUR, 109, 113, 105, 112),
-    // Supply base + bearish displacement + bearish FVG confirmation.
-    candle(START + 3 * HOUR, 112, 115, 111, 114),
-    candle(START + 4 * HOUR, 114, 114.5, 101, 102),
-    candle(START + 5 * HOUR, 103, 108, 100, 102),
-    candle(START + 6 * HOUR, 101, 111, 100, 110),
-    candle(START + 7 * HOUR, 110, 112, 106, 110),
-    // Trades back into the demand FVG but closes above the zone.
-    // This is the higher-timeframe equivalent of a lower-timeframe fill:
-    // informative, but not an invalidation and not a same-TF close fill.
-    candle(START + 8 * HOUR, 111, 112, 99, 110),
-    candle(START + 9 * HOUR, 110, 111, 104, 108),
+    // This candle remains above the FVG, so the zone is initially available.
+    candle(START + 3 * HOUR, 112, 114, 106, 110),
   ]
+  const available = activeSupplyDemandZones(untouched, { lookback: 1, maxAgeCandles: 100 })
+  assert.equal(available.demand.low, 101)
+  assert.equal(available.demand.high, 105)
+  assert.equal(available.demand.touches, 0)
+  assert.deepEqual(available.demand.definingCandles.map((item) => item.time), [START, START + HOUR, START + 2 * HOUR])
 
-  const zones = activeSupplyDemandZones(candles, { lookback: 1, maxAgeCandles: 100 })
-  assert.ok(zones.demand, 'expected a demand zone')
-  assert.ok(zones.supply, 'expected a supply zone')
-  assert.ok(zones.nearbyDemand.length >= 1, 'expected nearby demand zones')
-  assert.ok(zones.nearbySupply.length >= 1, 'expected nearby supply zones')
-  assert.equal(zones.demand.definingCandles.length, 3, 'a zone should expose its three defining candles')
-  assert.deepEqual(zones.demand.definingCandles.map((item) => item.time), [START, START + HOUR, START + 2 * HOUR])
-  assert.equal(zones.demand.baseCandles[0].time, START)
-  assert.equal(zones.demand.fvg.direction, 'bullish')
-  assert.equal(zones.demand.invalidatedByOwnTimeframeClose, false)
-  assert.equal(zones.demand.filledByOwnTimeframeClose, false)
-  assert.equal(zones.demand.filledAt, null)
-  assert.equal(zones.demand.low, 101)
-  assert.equal(zones.supply.invalidatedByOwnTimeframeClose, false)
-  assert.match(zones.rule, /vlastním timeframe/)
+  const partialTouch = [
+    ...untouched,
+    // The wick enters 104.5-105 but closes back above the FVG. The zone is
+    // not close-filled, yet it must never arm a later order.
+    candle(START + 4 * HOUR, 110, 111, 104.5, 106),
+  ]
+  const consumed = activeSupplyDemandZones(partialTouch, { lookback: 1, maxAgeCandles: 100 })
+  const consumedDemand = consumed.allDemand.find((zone) => zone.low === 101 && zone.high === 105)
+  assert.equal(consumed.demand, null, 'a first partial own-timeframe touch must remove the zone from new entries')
+  assert.equal(consumed.nearbyDemand.some((zone) => zone.low === 101 && zone.high === 105), false)
+  assert.equal(consumedDemand.filledByOwnTimeframeClose, false)
+  assert.equal(consumedDemand.invalidatedByOwnTimeframeClose, false)
+  assert.equal(consumedDemand.firstTouchAt, START + 4 * HOUR)
+  assert.match(consumed.rule, /První dotek/)
 
-  const filled = activeSupplyDemandZones([
-    ...candles,
-    candle(START + 10 * HOUR, 108, 109, 99, 101),
-  ], { lookback: 1, maxAgeCandles: 100 })
-  assert.equal(filled.demand, null, 'a same-timeframe filled zone must leave the entry overview')
-  assert.equal(filled.latestValidDemand.filledByOwnTimeframeClose, true)
-  assert.equal(filled.latestValidDemand.filledAt, START + 10 * HOUR)
+  const historical = activeSupplyDemandZones(partialTouch, {
+    lookback: 1,
+    maxAgeCandles: 100,
+    setupAnchor: { time: START + 5 * HOUR, label: 'LL' },
+  })
+  const historicalDemand = historical.allDemand.find((zone) => zone.low === 101 && zone.high === 105)
+  assert.equal(historicalDemand.consumedBeforeCurrentSetup, true)
+  assert.equal(historical.currentSetupDemand.length, 0, 'a touch before the latest pivot must not reach the chart or table')
 
-  const invalidated = activeSupplyDemandZones([
-    ...candles,
-    candle(START + 10 * HOUR, 108, 109, 96, 97),
-    candle(START + 11 * HOUR, 97, 108, 96, 106),
-  ], { lookback: 1, maxAgeCandles: 100 })
-  assert.equal(invalidated.demand, null)
-  assert.equal(invalidated.latestValidDemand, null)
-  assert.equal(invalidated.allDemand.length, 1, 'an invalidated FVG remains available for chart audit')
-  assert.equal(invalidated.allDemand[0].invalidatedByOwnTimeframeClose, true)
-  assert.equal(invalidated.allDemand[0].invalidatedAt, START + 10 * HOUR)
-  assert.deepEqual(invalidated.allDemand[0].definingCandles.map((item) => item.time), [START, START + HOUR, START + 2 * HOUR])
-  assert.equal(invalidated.allDemand[0].definingCandles[0].open, undefined, 'audit zones keep their origin without duplicating candle OHLC')
+  const current = activeSupplyDemandZones(partialTouch, {
+    lookback: 1,
+    maxAgeCandles: 100,
+    setupAnchor: { time: START + 3 * HOUR, label: 'LL' },
+  })
+  const currentDemand = current.currentSetupDemand.find((zone) => zone.low === 101 && zone.high === 105)
+  assert.equal(currentDemand.touchedDuringCurrentSetup, true)
+  assert.equal(currentDemand.setupAnchorLabel, 'LL')
+  assert.equal(currentDemand.firstTouchAt, START + 4 * HOUR)
+  assert.equal(currentDemand.definingCandles[0].open, undefined, 'audit zones keep their origin without duplicating candle OHLC')
 })
 
 test('trade profile requires S/D zone hit, 50 percent pullback and at least 2R', () => {
