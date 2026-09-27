@@ -21,6 +21,21 @@ on:
         required: false
         default: "300"
         type: string
+      min_probability:
+        description: "Entry band floor in whole percent, e.g. 51 (blank = no filter)"
+        required: false
+        default: ""
+        type: string
+      max_probability:
+        description: "Entry band ceiling, EXCLUSIVE, e.g. 73 for a 51-72 band"
+        required: false
+        default: ""
+        type: string
+      only_shape:
+        description: "Keep only this market shape, e.g. outright (blank = all)"
+        required: false
+        default: ""
+        type: string
 
 permissions:
   contents: read
@@ -40,4 +55,7 @@ jobs:
         env:
           MARKET_TAG: ${{ inputs.tag }}
           ROW_LIMIT: ${{ inputs.row_limit }}
+          MIN_PROBABILITY: ${{ inputs.min_probability }}
+          MAX_PROBABILITY: ${{ inputs.max_probability }}
+          ONLY_SHAPE: ${{ inputs.only_shape }}
         run: node tools/resolved-row-sample.mjs

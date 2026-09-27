@@ -14,6 +14,12 @@ const HOST = process.env.TRADING_HOST || "https://osobnizkusenosti.cz/trading";
 const TAG = String(process.env.MARKET_TAG || "league-of-legends").trim().toLowerCase();
 const LIMIT = Math.max(1, Math.min(800, Number(process.env.ROW_LIMIT || 300)));
 const SHOW = Math.max(1, Math.min(60, Number(process.env.SHOW_ROWS || 20)));
+// The band and the shape, so a single statistics cell can be opened and read row by row.
+// taxonomy-observations filters the band server-side on the same entry price the statistics
+// price with, and its upper bound is exclusive -- 51..73 is the 51-72 band.
+const MIN_PROBABILITY = Number(process.env.MIN_PROBABILITY || 0) || null;
+const MAX_PROBABILITY = Number(process.env.MAX_PROBABILITY || 0) || null;
+const ONLY_SHAPE = String(process.env.ONLY_SHAPE || "").trim().toLowerCase();
 
 const num = (value) => (Number.isFinite(Number(value)) ? Number(value) : null);
 
@@ -119,7 +125,9 @@ export function summarise(rows) {
 
 async function main() {
   const url = `${HOST}/api.php?action=taxonomy-observations&kind=tag`
-    + `&value=${encodeURIComponent(TAG)}&statuses=RESOLVED&limit=${LIMIT}`;
+    + `&value=${encodeURIComponent(TAG)}&statuses=RESOLVED&limit=${LIMIT}`
+    + (MIN_PROBABILITY ? `&probability=${MIN_PROBABILITY}` : "")
+    + (MAX_PROBABILITY ? `&maxProbability=${MAX_PROBABILITY}` : "");
   console.log(`Resolved row sample for "${TAG}" at ${new Date().toISOString()}`);
   const response = await fetch(url);
   const text = await response.text();
@@ -136,7 +144,14 @@ async function main() {
     return;
   }
 
-  const stats = summarise(rows);
+  // The endpoint's own gates are NOT the fold's: it prices with the same entry helper but
+  // judges the spread on the CURRENT book and counts any final price at or above 0.5 as a
+  // win. So what it returns is a superset in some ways and a subset in others, and the rows
+  // have to be re-gated here rather than trusted. Saying so, because comparing a count from
+  // here with a count from the fold is what made the last reading wrong.
+  const all = ONLY_SHAPE ? rows.filter((row) => shapeOf(row) === ONLY_SHAPE) : rows;
+  if (ONLY_SHAPE) console.log(`   ${all.length} of them are ${ONLY_SHAPE}`);
+  const stats = summarise(all);
   console.log(`\n   ${stats.total} settled row(s) returned; ${stats.counted} pass the statistics' own gates.`);
   console.log(`   dropped: ${stats.noEntry} with no live entry price, ${stats.noOutcome} with no clean 0/1`
     + ` settlement, ${stats.wideSpread} too wide at entry, ${stats.afterDue} first seen after they were due.`);
@@ -146,7 +161,7 @@ async function main() {
   console.log(`      is in WHICH rows get counted, since the arithmetic over them is trivial.`);
 
   console.log(`\n   shape           rows  counted  afterDue   wide   win%   priced`);
-  for (const group of byShape(rows)) {
+  for (const group of byShape(all)) {
     console.log(`   ${group.shape.padEnd(14)} ${String(group.total).padStart(5)}`
       + ` ${String(group.counted).padStart(8)} ${String(group.afterDue).padStart(9)}`
       + ` ${String(group.wideSpread).padStart(6)}  ${pct(group.winRate)} ${pct(group.meanEntry)}`);
@@ -155,7 +170,7 @@ async function main() {
   // The rows that were DROPPED, when few or none survive. A count of "782 after due" is a
   // summary of something that has to be looked at: the dates it compares are rewritten at
   // resolution, so "after due" can mean the row was late OR that its due date moved.
-  const dropped = rows.filter((row) => !counted(gateRow(row)));
+  const dropped = all.filter((row) => !counted(gateRow(row)));
   if (dropped.length && stats.counted < dropped.length) {
     console.log(`\n   dropped rows, with every date they carry:`);
     console.log(`   first seen            endDate               resolutionEnd         scheduledEvent        late(h)  question`);
