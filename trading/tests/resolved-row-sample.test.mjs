@@ -5,7 +5,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { readFileSync } from "node:fs";
-import { gateRow, counted, summarise } from "../tools/resolved-row-sample.mjs";
+import { gateRow, counted, summarise, shapeOf, byShape } from "../tools/resolved-row-sample.mjs";
 
 const API = readFileSync(new URL("../api.php", import.meta.url), "utf8");
 
@@ -73,4 +73,41 @@ test("it bounds what it asks for", () => {
   const tool = readFileSync(new URL("../tools/resolved-row-sample.mjs", import.meta.url), "utf8");
   assert.match(tool, /Math\.min\(800, Number\(process\.env\.ROW_LIMIT \|\| 300\)\)/);
   assert.match(tool, /&limit=\$\{LIMIT\}/);
+});
+
+test("the shape split is the same rule api.php classifies by", () => {
+  // Three ports of one rule now: the bot, api.php and this. Two chances to drift, so the
+  // patterns are checked against api.php's own rather than trusted.
+  assert.match(API, /'\/\^spread:\|\\bspread\\b\|\\\(\[-\+\]\\d\/i' => 'spread'/);
+  assert.match(API, /'\/exact score\/i' => 'exact-score'/);
+  assert.match(API, /'\/both teams to\/i' => 'both-teams'/);
+  assert.match(API, /\\bvs\\\.\?\\b\|\\bv\\\.\\b\|\\s@\\s\|\\b\(\?:win\|wins\|winner\)\\b/);
+
+  assert.equal(shapeOf({ question: "Will Cordoba CF win on 2026-09-27?" }), "outright");
+  assert.equal(shapeOf({ question: "LoL: A vs B - Game 3 Winner" }), "in-event-leg");
+  assert.equal(shapeOf({ question: "Total Kills Over/Under 21.5 in Game 3?" }), "over-under");
+  assert.equal(shapeOf({ question: "Total goals 2.5 - A vs B" }), "over-under");
+  assert.equal(shapeOf({ question: "Spread: Team A (-1.5)" }), "spread");
+  assert.equal(shapeOf({ question: "Will it rain tomorrow?" }), "other");
+  // Over-under is decided before outright, exactly as the classifier orders them: a totals
+  // market whose question also says "vs" is a totals market.
+  assert.equal(shapeOf({ question: "Games Total: O/U 3.5 - A vs B" }), "over-under");
+});
+
+test("shapes are summarised separately, so one uncapturable half cannot condemn the other", () => {
+  const rows = [
+    // Outright, seen well before its end date: capturable.
+    row({ question: "Will Denmark win on 2026-09-27?" }),
+    row({ question: "Will Germany win on 2026-09-27?", finalOutcomePrice: 0 }),
+    // An in-event leg that did not exist until the match was under way.
+    row({ question: "LoL: A vs B - Game 3 Winner", firstObservedAt: "2026-09-10T13:00:00.000Z" }),
+    row({ question: "LoL: C vs D - Game 2 Winner", firstObservedAt: "2026-09-10T13:00:00.000Z" }),
+  ];
+  const groups = byShape(rows);
+  const outright = groups.find((group) => group.shape === "outright");
+  const inEvent = groups.find((group) => group.shape === "in-event-leg");
+  assert.equal(outright.counted, 2, "both outrights were seen in time");
+  assert.equal(outright.winRate, 0.5);
+  assert.equal(inEvent.counted, 0);
+  assert.equal(inEvent.afterDue, 2, "and the legs are all hindsight, which is the distinction");
 });

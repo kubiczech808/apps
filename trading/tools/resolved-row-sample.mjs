@@ -16,6 +16,35 @@ const LIMIT = Math.max(1, Math.min(800, Number(process.env.ROW_LIMIT || 300)));
 const SHOW = Math.max(1, Math.min(60, Number(process.env.SHOW_ROWS || 20)));
 
 const num = (value) => (Number.isFinite(Number(value)) ? Number(value) : null);
+
+// A port of observation_market_shape() in api.php, which is itself a port of marketShape()
+// in the bot. Kept here so a sample can be split the way the statistics are, and pinned by a
+// test against api.php's own patterns -- three ports of one rule is two chances to drift.
+const SHAPE_PATTERNS = [
+  [/^spread:|\bspread\b|\([-+]\d/i, "spread"],
+  [/exact score/i, "exact-score"],
+  [/\bdraw\b/i, "draw"],
+  [/(?:set|map|game|round) \d+ winner|\bgames total\b|\bmap handicap\b|first .*(map|set|goal|blood)/i, "in-event-leg"],
+  [/both teams to/i, "both-teams"],
+];
+
+export function isOverUnder(row) {
+  const question = String(row?.question || "");
+  const slug = String(row?.eventSlug || row?.slug || "");
+  const text = `${slug} ${question}`;
+  if (/(?:\bo\s*\/\s*u\b|over\s*\/\s*under|over\s+under|\btotal(?:\s+(?:goals?|points?|runs?|maps?|rounds?|kills?|games?|sets?))?\s*(?:o\s*\/\s*u\s*)?\d+(?:[.,]\d+)?\b)/i.test(text)) return true;
+  if (/(?:^|[-_])(?:o[-_]?u|over[-_]?under|total[-_]\d)/i.test(slug)) return true;
+  const outcome = String(row?.outcome || "").trim().toLowerCase();
+  return ["over", "under"].includes(outcome)
+    && /(?:\bo\s*\/\s*u\b|\bover\b|\bunder\b|\btotal\b|\b\d+(?:[.,]\d+)?\b)/i.test(question);
+}
+
+export function shapeOf(row) {
+  if (isOverUnder(row)) return "over-under";
+  const question = String(row?.question || "");
+  for (const [pattern, label] of SHAPE_PATTERNS) if (pattern.test(question)) return label;
+  return /\bvs\.?\b|\bv\.\b|\s@\s|\b(?:win|wins|winner)\b/i.test(question) ? "outright" : "other";
+}
 const pct = (value) => (value == null ? "   -  " : `${(value * 100).toFixed(1)}%`.padStart(6));
 
 // The same four gates resolved_stats_accumulate applies, so a row that the statistics
@@ -51,6 +80,21 @@ export function counted(gated) {
 // The question every one of these rows has to answer: how often did a favourite priced at p
 // actually win? If the counted rows win far more often than they were priced, whatever is
 // wrong is in which rows get counted, not in the arithmetic over them.
+// Split by shape, because "is soccer captured before kickoff" has different answers for an
+// outright and for an in-event proposition that does not exist until the match is under way.
+// A single total over both says the tag is uncapturable when only half of it is.
+export function byShape(rows) {
+  const groups = new Map();
+  for (const row of rows) {
+    const shape = shapeOf(row);
+    if (!groups.has(shape)) groups.set(shape, []);
+    groups.get(shape).push(row);
+  }
+  return [...groups.entries()]
+    .map(([shape, group]) => ({ shape, ...summarise(group) }))
+    .sort((left, right) => right.total - left.total);
+}
+
 export function summarise(rows) {
   const gated = rows.map((row) => ({ row, gate: gateRow(row) }));
   const kept = gated.filter((entry) => counted(entry.gate));
@@ -100,6 +144,13 @@ async function main() {
   console.log(`\n   counted win rate ${pct(stats.winRate)} at a mean entry of ${pct(stats.meanEntry)}`);
   console.log(`   -- a fairly priced sample wins about as often as its price. A large gap here`);
   console.log(`      is in WHICH rows get counted, since the arithmetic over them is trivial.`);
+
+  console.log(`\n   shape           rows  counted  afterDue   wide   win%   priced`);
+  for (const group of byShape(rows)) {
+    console.log(`   ${group.shape.padEnd(14)} ${String(group.total).padStart(5)}`
+      + ` ${String(group.counted).padStart(8)} ${String(group.afterDue).padStart(9)}`
+      + ` ${String(group.wideSpread).padStart(6)}  ${pct(group.winRate)} ${pct(group.meanEntry)}`);
+  }
 
   console.log(`\n   entry  settled  flip  spread  first seen            due                   question`);
   for (const { row, gate } of stats.kept.slice(0, SHOW)) {
