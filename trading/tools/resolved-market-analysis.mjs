@@ -24,7 +24,11 @@
 // backtest and this is not one.
 
 const HOST = process.env.TRADING_HOST || "https://osobnizkusenosti.cz/trading";
-const TAG = (process.env.MARKET_TAG || "dota").trim().toLowerCase();
+// Empty means RANK EVERY TAG, which is the tool's default question. It used to fall back to
+// "dota", so passing an empty tag from the workflow silently re-ran the single-tag analysis
+// -- the workflow's default was changed and this fallback was not, and the run looked
+// successful while answering the previous question.
+const TAG = String(process.env.MARKET_TAG || "").trim().toLowerCase();
 const MIN_PROBABILITY = Number(process.env.MIN_PROBABILITY || 0.51);
 const MAX_PROBABILITY = Number(process.env.MAX_PROBABILITY || 0.60);
 const STAKE = Number(process.env.STAKE_USDC || 5);

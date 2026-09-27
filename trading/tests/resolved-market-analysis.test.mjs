@@ -204,3 +204,15 @@ test("a tag carried by one lucky market is not reported as an edge", async () =>
   assert.match(source, /rows\.length >= MIN_ROWS/);
   assert.match(source, /one market, not an edge/);
 });
+
+test("an empty tag ranks every tag rather than falling back to one", () => {
+  // The tool defaulted to "dota", so passing an empty tag from the workflow re-ran the
+  // single-tag analysis: the run succeeded and answered the previous question. A default
+  // that silently substitutes a different question is worse than no default.
+  const tool = readFileSync(new URL("../tools/resolved-market-analysis.mjs", import.meta.url), "utf8");
+  assert.match(tool, /const TAG = String\(process\.env\.MARKET_TAG \|\| ""\)/,
+    "an unset tag must mean 'every tag', not a hard-coded one");
+  assert.ok(!/MARKET_TAG \|\| "dota"/.test(tool), "no tag may be substituted for an empty one");
+  assert.match(tool, /if \(!TAG \|\| TAG === "\*"\) \{\n\s+rankTags\(all\);/,
+    "and an empty tag must reach the ranking");
+});
