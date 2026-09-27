@@ -6,6 +6,7 @@ use Jamu\Multilingual\Email;
 use Jamu\Multilingual\Identity;
 use Jamu\Multilingual\Repository;
 use Jamu\Multilingual\Router;
+use Jamu\Multilingual\Shipping;
 
 if (!defined('ABSPATH')) {
     exit(1);
@@ -179,6 +180,28 @@ $html_mailer = (object) ['ContentType' => 'text/html', 'Body' => '<html><body>PÅ
 $email_layer->configure_html_mailer($html_mailer);
 if ($html_mailer->CharSet !== 'UTF-8' || $html_mailer->Encoding !== 'base64') {
     throw new RuntimeException('HTML email encoding was not configured safely.');
+}
+
+$shipping_layer = new Shipping($languages);
+$unsafe_checkout_fragment = <<<'HTML'
+<table><tfoot><script>
+document.getElementById("customer_details").getElementsByClassName("woocommerce-shipping-fields")[0].removeAttribute("style", "display:none;");
+document.getElementById("ship-to-different-address-checkbox").checked = false;
+document.getElementById("shipping_first_name").value = "";
+document.getElementById("shipping_last_name").value = "";
+document.getElementById("shipping_company").value = "";
+document.getElementById("shipping_postcode").value = "";
+document.getElementById("shipping_address_1").value = "";
+document.getElementById("shipping_address_2").value = "";
+document.getElementById("shipping_city").value = "";
+</script><tr><td>Shipping remains visible</td></tr></tfoot></table>
+HTML;
+$safe_checkout_fragments = $shipping_layer->remove_unsafe_pickup_fragment_script([
+    '.woocommerce-checkout-review-order-table' => $unsafe_checkout_fragment,
+]);
+$safe_checkout_fragment = $safe_checkout_fragments['.woocommerce-checkout-review-order-table'] ?? '';
+if (str_contains($safe_checkout_fragment, 'shipping_first_name') || !str_contains($safe_checkout_fragment, 'Shipping remains visible')) {
+    throw new RuntimeException('Unsafe checkout pickup script was not removed safely.');
 }
 
 file_put_contents('/tmp/jamu-smoke-ids.json', wp_json_encode([
