@@ -32,6 +32,15 @@ final class Currency
 
     public function register(): void
     {
+        /*
+         * YayCurrency is the store's one source of truth for currency
+         * conversion. WooPayments' optional Multi-Currency feature runs a
+         * second product-price filter after YayCurrency and can overwrite a
+         * correctly converted amount (for example 160 Kč as 1 €).  Keep
+         * WooPayments and all of its gateways enabled, but permanently opt
+         * out of that separate Multi-Currency feature for this storefront.
+         */
+        add_filter('pre_option__wcpay_feature_customer_multi_currency', [$this, 'disable_woopayments_multi_currency'], 1, 3);
         $this->set_request_currency();
         add_action('init', [$this, 'set_request_currency'], 0);
         add_filter('wc_get_price_decimals', [$this, 'price_decimals'], 20);
@@ -39,6 +48,16 @@ final class Currency
         add_filter('woocommerce_available_payment_gateways', [$this, 'available_payment_gateways'], PHP_INT_MAX);
         add_action('wp_footer', [$this, 'payment_gateway_frontend_guard'], 5);
         add_action('wp_footer', [$this, 'frontend_fallback'], 90);
+    }
+
+    /**
+     * Prevent WooPayments from applying its own currency conversion. This
+     * affects only the optional WooPayments Multi-Currency module, not card,
+     * Apple Pay, Google Pay, SEPA, or the WooPayments payment gateway.
+     */
+    public function disable_woopayments_multi_currency(mixed $pre_option, string $option = '', mixed $default = false): string
+    {
+        return '0';
     }
 
     public function set_request_currency(): void
