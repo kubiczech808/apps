@@ -58,6 +58,11 @@ test("the end-date filter is what narrows a team's season to one fixture", () =>
 
   // No end filter means every fixture, which is how the earlier runs were made.
   assert.ok(rowMatches(later, ["israel"], []));
+  // The slug counts as well. A walk of 22577 rows reported "0 match" for "will israel win"
+  // while the fixture was plainly in the catalogue, because the stored question reads
+  // "Israel vs. Republic of Ireland: Israel" and only the slug carries the other wording.
+  const bySlug = { question: "Israel vs. Republic of Ireland: Israel", slug: "will-israel-win-on-2026-09-27", endDate: "2026-09-27T20:45:00Z" };
+  assert.ok(rowMatches(bySlug, ["will-israel-win"], ["2026-09-27"]), "the slug is searched too");
   // A row with no recorded end date cannot satisfy an end filter.
   assert.ok(!rowMatches({ question: "Will Israel win?" }, ["israel"], ["2026-09-27"]));
 });

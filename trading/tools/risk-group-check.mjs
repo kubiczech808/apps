@@ -53,8 +53,10 @@ export function sharedKeys(left, right) {
 // end filter is given, the row has to end at that instant. Exported so the pairing and the
 // selection are tested on the same rule the run uses.
 export function rowMatches(row, questionFilters = FILTERS, endFilters = END_FILTERS) {
-  const question = String(row?.question || "").toLowerCase();
-  if (questionFilters.length && !questionFilters.some((filter) => question.includes(filter))) return false;
+  // The slug too: the dashboard can render a title the catalogue does not store under that
+  // wording, and a search that only reads `question` then reports the row as absent.
+  const haystack = `${row?.question || ""} ${row?.slug || ""}`.toLowerCase();
+  if (questionFilters.length && !questionFilters.some((filter) => haystack.includes(filter))) return false;
   if (!endFilters.length) return true;
   const endDate = String(row?.endDate || "");
   return endFilters.some((filter) => endDate.includes(filter));
@@ -107,27 +109,35 @@ async function main() {
   // Every pair that ends at the same instant, which for a fixture means the same match.
   // Printed because the question is not "does each row have keys" but "do these two share
   // one", and only a pair can answer that.
-  console.log(`   pairs ending at the same instant:`);
+  //
+  // A fixture carries fifty markets, so printing every pair buried the answer under
+  // thousands of lines that all said the same thing. Only the pairs with NO event-scoped
+  // key are the fault being looked for, so only those are printed -- and printed LAST,
+  // because the log is read from the end.
   let pairs = 0;
+  const unlinked = [];
   for (let i = 0; i < matched.length; i += 1) {
     for (let j = i + 1; j < matched.length; j += 1) {
       const left = matched[i];
       const right = matched[j];
       if (!left.endDate || left.endDate !== right.endDate) continue;
       pairs += 1;
-      // A whole fixture's markets pair with each other, so an unfiltered run prints
-      // hundreds of pairs and buries the one that matters. The count below still reports
-      // them all.
-      if (pairs > SHOW_PAIRS) continue;
       const shared = sharedKeys(left, right);
-      console.log(`      ${String(left.question).slice(0, 44)}`);
-      console.log(`      ${String(right.question).slice(0, 44)}`);
-      console.log(`         shared keys        ${shared.all.join(", ") || "(none)"}`);
-      console.log(`         event-scoped ones  ${shared.eventScoped.join(", ") || "(NONE -- these read as unrelated bets)"}`);
+      if (shared.eventScoped.length) continue;
+      unlinked.push({ left, right, shared });
     }
   }
-  if (!pairs) console.log("      (none found)");
-  else if (pairs > SHOW_PAIRS) console.log(`      ... ${pairs - SHOW_PAIRS} further pair(s) not printed`);
+  console.log(`   ${pairs} pair(s) end at the same instant; ${pairs - unlinked.length} share an event-scoped key\n`);
+  console.log(`   pairs that share NO event-scoped key -- these read as unrelated bets:`);
+  if (!unlinked.length) console.log("      (none -- every same-instant pair is linked)");
+  for (const { left, right, shared } of unlinked.slice(0, SHOW_PAIRS)) {
+    console.log(`      ${String(left.question).slice(0, 60)}   [${left.outcome || "-"}]`);
+    console.log(`         ${left.slug || "-"}   event ${left.eventSlug || "-"}`);
+    console.log(`      ${String(right.question).slice(0, 60)}   [${right.outcome || "-"}]`);
+    console.log(`         ${right.slug || "-"}   event ${right.eventSlug || "-"}`);
+    console.log(`         shared  ${shared.all.join(", ") || "(nothing at all)"}`);
+  }
+  if (unlinked.length > SHOW_PAIRS) console.log(`      ... ${unlinked.length - SHOW_PAIRS} further unlinked pair(s)`);
 }
 
 if (process.argv[1] && import.meta.url === `file://${process.argv[1]}`) {
