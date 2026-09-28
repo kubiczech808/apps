@@ -67,6 +67,7 @@ final class Content
         add_filter('comment_form_default_fields', [$this, 'comment_form_default_fields'], 20);
         add_filter('comment_form_field_comment', [$this, 'comment_form_field_comment'], 20);
         add_filter('wpforms_frontend_form_data', [$this, 'wpforms_data'], 20);
+        add_action('woocommerce_after_checkout_validation', [$this, 'require_terms_acceptance'], 30, 2);
         add_filter('option_blogname', fn ($value) => $this->site_option($value, 'blogname'), 20);
         add_filter('option_blogdescription', fn ($value) => $this->site_option($value, 'blogdescription'), 20);
         add_action('wp_head', [$this, 'language_switcher_styles'], 30);
@@ -605,6 +606,34 @@ final class Content
         );
     }
 
+    /**
+     * Keep the terms checkbox a real, explicit acknowledgement.  The browser
+     * layout is repaired below, but server-side validation is authoritative
+     * and cannot be bypassed by a failed checkout script.
+     */
+    public function require_terms_acceptance(array $data, $errors): void
+    {
+        if (!function_exists('wc_terms_and_conditions_checkbox_enabled')
+            || !wc_terms_and_conditions_checkbox_enabled()
+            || !is_object($errors)
+            || !method_exists($errors, 'add')
+            || !empty($_POST['terms'])) {
+            return;
+        }
+
+        if (method_exists($errors, 'get_error_codes') && in_array('terms', (array) $errors->get_error_codes(), true)) {
+            return;
+        }
+
+        $message = match ($this->languages->current()) {
+            'en' => 'Please read and accept the terms and conditions to proceed with your order.',
+            'de' => 'Bitte lesen und akzeptieren Sie die Allgemeinen Geschäftsbedingungen, um Ihre Bestellung fortzusetzen.',
+            'pl' => 'Aby kontynuować zamówienie, przeczytaj i zaakceptuj regulamin.',
+            default => 'Pro pokračování objednávky si prosím přečtěte a odsouhlaste obchodní podmínky.',
+        };
+        $errors->add('terms', $message);
+    }
+
     public function site_option(mixed $value, string $option): mixed
     {
         if (!$this->active()) {
@@ -634,6 +663,8 @@ final class Content
 .jamu-language-menu .wp-block-navigation__submenu-container{background:transparent!important;background-color:transparent!important;background-image:none!important;border:0!important;box-shadow:none!important;gap:.25rem;margin:0!important;min-width:0!important;padding:.2rem 0 0!important;width:auto!important}
 .jamu-language-menu__item,.jamu-language-menu__item .wp-block-navigation-item__content{background:transparent!important;background-color:transparent!important}
 .jamu-language-menu__item .wp-block-navigation-item__content{justify-content:center;min-width:1.75rem;padding:.1rem 0!important}
+.woocommerce-checkout .jamu-ml-terms-label,.woocommerce-checkout label.woocommerce-form__label-for-checkbox{align-items:flex-start;display:flex!important;gap:.55rem;line-height:1.5}
+.woocommerce-checkout .jamu-ml-terms-input,.woocommerce-checkout input#terms{flex:0 0 auto!important;float:none!important;margin:.35rem 0 0!important;position:static!important}
 @media (min-width:782px){.jamu-language-menu{position:relative}.jamu-language-menu .wp-block-navigation__submenu-container{left:50%!important;right:auto!important;top:100%!important;transform:translateX(-50%)}}
 </style>
 HTML;
@@ -793,6 +824,20 @@ HTML;
         if (!item || !element || element.nodeType !== 1) {
             return;
         }
+
+        // On the classic WooCommerce checkout the checkbox belongs to the
+        // outer label while its text is in a nested span. Replacing that outer
+        // label moved the checkbox onto a separate line in some templates.
+        // Translate only the text holder and leave the actual control intact.
+        if (type === 'terms' && element.tagName === 'LABEL') {
+            const textHolder = element.querySelector('.woocommerce-terms-and-conditions-checkbox-text, .wc-block-components-checkbox__label, span');
+            if (textHolder && textHolder !== element) {
+                translateLegalElement(textHolder, type);
+                element.setAttribute('data-jamu-ml-legal', (data.language || '') + ':' + type);
+                return;
+            }
+        }
+
         const marker = (data.language || '') + ':' + type;
         if (element.getAttribute('data-jamu-ml-legal') === marker) {
             return;
@@ -832,6 +877,34 @@ HTML;
         element.setAttribute('data-jamu-ml-legal', marker);
     }
 
+    function normalizeTermsControl(root) {
+        const scope = root && root.nodeType === 1 ? root : document;
+        const input = (scope.matches && scope.matches('#terms, input[name="terms"]'))
+            ? scope
+            : scope.querySelector('#terms, input[name="terms"]');
+        if (!input || input.type !== 'checkbox') {
+            return;
+        }
+
+        let label = input.closest('label');
+        if (!label && input.id) {
+            label = document.querySelector('label[for="' + input.id + '"]');
+        }
+        if (!label) {
+            return;
+        }
+
+        // Some theme/YayMail markup renders input and label as siblings. Put
+        // the checkbox back into its label so it is one accessible control.
+        if (!label.contains(input)) {
+            label.insertBefore(input, label.firstChild);
+        }
+        label.classList.add('jamu-ml-terms-label');
+        input.classList.add('jamu-ml-terms-input');
+        input.required = true;
+        input.setAttribute('aria-required', 'true');
+    }
+
     function translateLegalBlocks(root) {
         if (!legal.privacy && !legal.terms) {
             return;
@@ -851,6 +924,7 @@ HTML;
             translateLegalElement(element, 'privacy');
             translateLegalElement(element, 'terms');
         });
+        normalizeTermsControl(scope);
     }
 
     function translateElementAttributes(element) {

@@ -133,6 +133,22 @@ if ($localized_form['fields']['1']['label'] !== 'First name' || $localized_form[
     throw new RuntimeException('WPForms data was not localized safely.');
 }
 
+update_option('woocommerce_terms_page_id', $page_id);
+$languages->set_current('en');
+unset($_POST['terms']);
+$terms_errors = new WP_Error();
+$content_layer->require_terms_acceptance([], $terms_errors);
+if (!in_array('terms', $terms_errors->get_error_codes(), true)) {
+    throw new RuntimeException('Terms acceptance was not enforced server-side.');
+}
+$_POST['terms'] = '1';
+$accepted_terms_errors = new WP_Error();
+$content_layer->require_terms_acceptance([], $accepted_terms_errors);
+unset($_POST['terms']);
+if (in_array('terms', $accepted_terms_errors->get_error_codes(), true)) {
+    throw new RuntimeException('Accepted terms were incorrectly rejected.');
+}
+
 $untranslated = new WC_Product_Simple();
 $untranslated->set_name('Nepřeložený produkt');
 $untranslated->set_slug('neprelozeny-produkt');
