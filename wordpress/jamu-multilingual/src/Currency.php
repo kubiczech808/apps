@@ -44,6 +44,8 @@ final class Currency
         $this->set_request_currency();
         add_action('init', [$this, 'set_request_currency'], 0);
         add_filter('wc_get_price_decimals', [$this, 'price_decimals'], 20);
+        add_filter('wc_price_args', [$this, 'price_arguments'], 20);
+        add_filter('woocommerce_price_trim_zeros', [$this, 'preserve_foreign_price_decimals'], 20);
         add_action('woocommerce_cart_calculate_fees', [$this, 'normalize_bank_transfer_discount_fee'], PHP_INT_MAX);
         add_filter('woocommerce_available_payment_gateways', [$this, 'available_payment_gateways'], PHP_INT_MAX);
         add_action('wp_footer', [$this, 'payment_gateway_frontend_guard'], 5);
@@ -63,6 +65,16 @@ final class Currency
     public function set_request_currency(): void
     {
         if (!$this->should_apply()) {
+            return;
+        }
+
+        /*
+         * A visitor's choice in the YayCurrency switcher is stored in this
+         * cookie.  Do not replace it on every request with the language
+         * default: doing so made PLN revert to EUR after opening a category,
+         * the mini-cart, or checkout.
+         */
+        if ($this->selected_currency()) {
             return;
         }
 
@@ -234,6 +246,30 @@ JS
         return $decimals;
     }
 
+    /**
+     * EUR and PLN are always shown with cents/grosz.  In particular this
+     * prevents a real -0.41 EUR bank-transfer fee from being rendered as
+     * misleading "-0 €" in totals and transactional emails.
+     */
+    public function price_arguments(array $args): array
+    {
+        $target = $this->target();
+        $currency = is_array($target) ? (string) ($target['code'] ?? '') : '';
+        if (in_array($currency, ['EUR', 'PLN'], true)) {
+            $args['decimals'] = 2;
+            $args['trim_zeros'] = false;
+        }
+
+        return $args;
+    }
+
+    public function preserve_foreign_price_decimals(bool $trim_zeros): bool
+    {
+        $target = $this->target();
+        $currency = is_array($target) ? (string) ($target['code'] ?? '') : '';
+        return in_array($currency, ['EUR', 'PLN'], true) ? false : $trim_zeros;
+    }
+
     public function normalize_bank_transfer_discount_fee($cart): void
     {
         if (!$this->should_apply() || !is_object($cart)) {
@@ -389,8 +425,33 @@ JS
 
     private function target(): ?array
     {
+        $selected = $this->selected_currency();
+        if ($selected) {
+            return $selected;
+        }
+
         $language = $this->languages->current();
         return self::MAP[$language] ?? null;
+    }
+
+    /**
+     * Resolve only known YayCurrency IDs.  Cookie values are browser input,
+     * therefore arbitrary values must never influence the shop currency.
+     */
+    private function selected_currency(): ?array
+    {
+        $selected_id = sanitize_text_field(wp_unslash((string) ($_COOKIE[self::YAY_CURRENCY_COOKIE] ?? '')));
+        if ($selected_id === '') {
+            return null;
+        }
+
+        foreach (self::MAP as $currency) {
+            if ($selected_id === (string) $currency['id']) {
+                return $currency;
+            }
+        }
+
+        return null;
     }
 
     private function uses_pln_currency(): bool
