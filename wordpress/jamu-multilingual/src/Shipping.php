@@ -407,8 +407,7 @@ HTML;
             const labelText = String((label || input.closest('li') || input).textContent || '');
             const value = String(input.value || '');
             return /\bDPD\s*(Pickup|výdej|Abhol|punkt)/i.test(labelText)
-                || /^doprava_zasilkovna/i.test(value)
-                || /^packeta_method_6828/i.test(value);
+                || /^doprava_zasilkovna/i.test(value);
         }) || null;
     }
 
