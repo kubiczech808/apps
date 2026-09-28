@@ -2445,6 +2445,29 @@ export async function recordLiveDipEntryOwnership(portfolioId, tokenId, price, a
 // position from automated exits instead of applying another portfolio's stop loss.
 const DIP_ENTRY_OWNERSHIP_RETRY_MS = 30000;
 
+function recoverDipEntryOwnershipFromHistory(context) {
+  const pending = context.state.pendingDipEntryOwnership && typeof context.state.pendingDipEntryOwnership === "object"
+    ? context.state.pendingDipEntryOwnership
+    : (context.state.pendingDipEntryOwnership = {});
+  const events = Array.isArray(context.state.history) ? context.state.history : [];
+  for (const event of events) {
+    if (!event || event.type !== "DIP_ENTRY_SUBMITTED" || !event.portfolioId || !event.tokenId) continue;
+    const price = event.price ?? null;
+    const key = `${String(event.portfolioId)}:${String(event.tokenId)}:${Number(price ?? -1).toFixed(4)}`;
+    if (pending[key]) continue;
+    pending[key] = {
+      portfolioId: event.portfolioId,
+      tokenId: event.tokenId,
+      price,
+      at: event.at || new Date().toISOString(),
+      entryVolumeUsdc: event.stakeUsdc ?? null,
+      attempts: 0,
+      lastAttemptAt: null,
+      recoveredFromHistory: true,
+    };
+  }
+}
+
 async function retryPendingDipEntryOwnership(context) {
   const pending = context.state.pendingDipEntryOwnership && typeof context.state.pendingDipEntryOwnership === "object"
     ? context.state.pendingDipEntryOwnership
@@ -2838,6 +2861,10 @@ async function checkOnce(context) {
   // protective SELL already matched, so the position no longer appears in the live state
   // the plans below are built from.
   await retryPendingReversals(context);
+  // Backfill direct fills made before the dedicated ownership ledger was deployed. This
+  // consumes only the worker's own terminal events and merely records their owner; it never
+  // submits a trade or revives a previously rejected entry.
+  recoverDipEntryOwnershipFromHistory(context);
   await retryPendingDipEntryOwnership(context);
   if (!context.liveState || Date.now() - context.liveStateFetchedAt >= STATE_REFRESH_MS) {
     context.liveState = await fetchJson(`${LIVE_STATE_URL}${LIVE_STATE_URL.includes("?") ? "&" : "?"}exitWorkerAt=${Date.now()}`, "live state");

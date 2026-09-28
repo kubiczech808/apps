@@ -39,8 +39,12 @@ test("a position without durable ownership is excluded rather than given the bas
 });
 
 test("an interrupted ownership acknowledgement is retried without placing another DIP order", () => {
+  assert.match(WORKER, /function recoverDipEntryOwnershipFromHistory/);
+  assert.match(WORKER, /event\.type !== "DIP_ENTRY_SUBMITTED"/,
+    "only confirmed historical fills may be backfilled");
   assert.match(WORKER, /async function retryPendingDipEntryOwnership/);
   assert.match(WORKER, /pendingDipEntryOwnership/);
+  assert.match(WORKER, /recoverDipEntryOwnershipFromHistory\(context\);/);
   assert.match(WORKER, /await retryPendingDipEntryOwnership\(context\);/);
   const fire = WORKER.slice(WORKER.indexOf("async function fireDipEntries"), WORKER.indexOf("// ---------------------------------------------------------------------------------------", WORKER.indexOf("async function fireDipEntries")));
   assert.match(fire, /DIP_ENTRY_OWNERSHIP_RECORD_FAILED/);
