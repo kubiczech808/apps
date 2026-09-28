@@ -41,6 +41,7 @@ final class Content
         add_filter('woocommerce_product_get_description', [$this, 'product_description'], 20, 2);
         add_filter('woocommerce_product_get_short_description', [$this, 'product_short_description'], 20, 2);
         add_filter('woocommerce_product_variation_get_name', [$this, 'product_name'], 20, 2);
+        add_filter('woocommerce_order_item_name', [$this, 'order_item_name'], 20, 3);
         add_filter('woocommerce_product_single_add_to_cart_text', [$this, 'add_to_cart_text'], 20, 2);
         add_filter('woocommerce_product_add_to_cart_text', [$this, 'add_to_cart_text'], 20, 2);
         add_filter('woocommerce_attribute_label', [$this, 'attribute_label'], 20, 3);
@@ -111,6 +112,22 @@ final class Content
         }
         $translation = $this->repository->get('post', $id, $this->languages->current());
         return $translation && $translation->title !== '' ? $translation->title : $name;
+    }
+
+    /**
+     * WooCommerce stores the original product name on an order item.  Use the
+     * canonical product only while rendering a localized customer email, so
+     * the paid order itself remains unchanged but its customer-facing name is
+     * in the language selected at checkout.
+     */
+    public function order_item_name(string $name, object $item, bool $is_visible = true): string
+    {
+        if (!$this->active() || !method_exists($item, 'get_product')) {
+            return $name;
+        }
+
+        $product = $item->get_product();
+        return is_object($product) ? $this->product_name($name, $product) : $name;
     }
 
     public function product_description(string $description, object $product): string

@@ -173,6 +173,55 @@ $mail_params = apply_filters('woocommerce_mail_callback_params', [
 if (!str_contains((string) $mail_params[2], 'Vielen Dank')) {
     throw new RuntimeException('Customer email body was not localized.');
 }
+
+$customer_email_cases = [
+    'en' => [
+        'subject' => 'Your order from',
+        'body' => 'Thank you for your order no. 123.',
+        'payment' => 'You chose payment by bank transfer.',
+    ],
+    'de' => [
+        'subject' => 'Ihre Bestellung',
+        'body' => 'Vielen Dank für Ihre Bestellung Nr. 123.',
+        'payment' => 'Sie haben Banküberweisung gewählt.',
+    ],
+    'pl' => [
+        'subject' => 'Twoje zamówienie',
+        'body' => 'Dziękuję za zamówienie nr 123,',
+        'payment' => 'Wybrano płatność przelewem bankowym.',
+    ],
+];
+$customer_email_body = <<<'HTML'
+<p>děkuji Vám za objednávku č. <span>123</span><span>, kterou tímto přijímám a potvrzuji uzavření kupní smlouvy.</span></p>
+<p>Zvolili jste platbu bankovním převodem. Prosím o její provedení do 7 kalendářních dnů podle platebních údajů níže. Jako variabilní symbol použijte číslo objednávky.</p>
+<p>Zaplatit můžete také pomocí QR kódu. Před potvrzením platby prosím doplňte částku a variabilní symbol podle údajů v tomto e-mailu.</p>
+<p>Zboží skladem obvykle odešlu do 3 pracovních dnů od přijetí platby, nejpozději do 7 pracovních dnů. O odeslání Vás budu informovat.</p>
+<p>V příloze najdete platební údaje, shrnutí objednávky, obchodní podmínky a formulář pro případné odstoupení od smlouvy.</p>
+<p>Pokud budete mít jakýkoliv dotaz, stačí odpovědět na tento e-mail.</p><p>Děkuji za důvěru a přeji krásný den.</p>
+<p>Bankovním převodem</p>
+HTML;
+foreach ($customer_email_cases as $language => $expected) {
+    $localized_order = wc_create_order();
+    $localized_order->update_meta_data(Email::ORDER_LANGUAGE_META, $language);
+    $localized_order->save();
+    $localized_subject = apply_filters(
+        'woocommerce_email_subject_customer_on_hold_order',
+        'Objednávka z Tajemství JAMU 🌿 čeká na zaplacení',
+        $localized_order,
+        $customer_on_hold
+    );
+    $localized_params = apply_filters('woocommerce_mail_callback_params', [
+        'ci@example.invalid', $localized_subject, $customer_email_body, ['Content-Type: text/html'], [],
+    ]);
+    $localized_body = (string) $localized_params[2];
+    if (!str_contains($localized_subject, $expected['subject'])
+        || !str_contains($localized_body, $expected['body'])
+        || !str_contains($localized_body, $expected['payment'])
+        || str_contains($localized_body, 'Zvolili jste platbu')
+        || str_contains($localized_body, 'Děkuji za důvěru')) {
+        throw new RuntimeException('Complete customer email was not localized for ' . $language . '.');
+    }
+}
 if (apply_filters('wp_mail_charset', 'ISO-8859-1') !== 'UTF-8') {
     throw new RuntimeException('Outgoing email charset was not forced to UTF-8.');
 }
