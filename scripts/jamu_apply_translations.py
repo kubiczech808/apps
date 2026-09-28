@@ -13,6 +13,7 @@ from pathlib import Path, PurePosixPath
 
 TEMPLATE = Path('scripts/templates/jamu_apply_bridge.php')
 PAYLOAD = Path(os.environ.get('JAMU_TRANSLATIONS_FILE', 'jamu-content/translations-draft.json'))
+CURATED_PAYLOAD = Path('jamu-content/curated-product-translations.json')
 REMOTE_MU_DIR = PurePosixPath('/www/wp-content/mu-plugins')
 REMOTE_CONTENT_DIR = PurePosixPath('/www/wp-content')
 
@@ -88,6 +89,28 @@ def main() -> int:
     if not isinstance(rows, list) or not rows:
         raise RuntimeError('Translation payload has no translations.')
 
+    # Hand-reviewed product copy takes precedence over the bulk draft. It is
+    # intentionally kept separately so a later machine-generated refresh
+    # cannot silently overwrite customer-facing product translations.
+    if CURATED_PAYLOAD.is_file():
+        curated = json.loads(CURATED_PAYLOAD.read_text(encoding='utf-8'))
+        curated_rows = curated.get('translations')
+        if not isinstance(curated_rows, list):
+            raise RuntimeError(f'Curated translation payload is invalid: {CURATED_PAYLOAD}')
+        by_identity = {
+            (row.get('object_type'), row.get('object_subtype'), row.get('object_id'), row.get('language')): row
+            for row in rows
+            if isinstance(row, dict)
+        }
+        for row in curated_rows:
+            if not isinstance(row, dict):
+                continue
+            identity = (row.get('object_type'), row.get('object_subtype'), row.get('object_id'), row.get('language'))
+            by_identity[identity] = row
+        rows = list(by_identity.values())
+        payload['translations'] = rows
+        payload['generator'] = f"{payload.get('generator', '')}; curated product translations"
+
     token = secrets.token_urlsafe(48)
     token_hash = hashlib.sha256(token.encode()).hexdigest()
     run_id = ''.join(ch for ch in os.environ.get('GITHUB_RUN_ID', 'local') if ch.isdigit()) or 'local'
@@ -103,10 +126,12 @@ def main() -> int:
     )
     local_bridge = Path('/tmp') / remote_bridge.name
     local_bridge.write_text(source, encoding='utf-8')
+    local_payload = Path('/tmp') / f'jamu-ml-import-{run_id}.json'
+    local_payload.write_text(json.dumps(payload, ensure_ascii=False), encoding='utf-8')
 
     ftp, host = connect()
     try:
-        upload(ftp, PAYLOAD, remote_payload)
+        upload(ftp, local_payload, remote_payload)
         upload(ftp, local_bridge, remote_bridge)
         result = call_bridge(token, run_id)
     finally:
@@ -117,6 +142,7 @@ def main() -> int:
         except ftplib.all_errors:
             ftp.close()
         local_bridge.unlink(missing_ok=True)
+        local_payload.unlink(missing_ok=True)
 
     summary = {
         'ftp_host': host,
