@@ -4,7 +4,7 @@ import { buildExternalTrendReference, EXTERNAL_PIVOT_SCHEMA } from './external-t
 import { buildFvgSupplyDemandZones, candleSignal, marketStructure } from './priceaction.mjs'
 
 export const PRICE_ACTION_STRUCTURE_ID = 'price-action-structure-v1'
-export const PRICE_ACTION_MATRIX_SCHEMA = 68
+export const PRICE_ACTION_MATRIX_SCHEMA = 69
 export const PRICE_ACTION_CHART_CANDLE_LIMITS = {
   // The zone and structure inputs below remain much longer. These limits only
   // bound chart data published to the browser, where a 60-day 1H / 180-day
@@ -2137,6 +2137,7 @@ export const classifyExternalStructure = ({
   externalTrend = null,
   externalPivots = null,
   allowWeekendSessionGap = false,
+  includeZones = true,
 } = {}) => {
   const normalizedCandles = Array.isArray(candles) ? candles.map(normalizeCandlePrices) : []
   const normalizedZoneCandles = Array.isArray(zoneCandles) ? zoneCandles.map(normalizeCandlePrices) : []
@@ -2275,12 +2276,14 @@ export const classifyExternalStructure = ({
       breakOfStructure: breakEvent,
       externalPivotCount: pivots.length,
     },
-    zones: activeSupplyDemandZones(normalizedZoneCandles, {
-      lookback: zoneLookback,
-      maxAgeCandles: zoneMaxAgeCandles,
-      setupAnchor: activeSetupAnchor(activeRange),
-      allowWeekendSessionGap,
-    }),
+    zones: includeZones
+      ? activeSupplyDemandZones(normalizedZoneCandles, {
+          lookback: zoneLookback,
+          maxAgeCandles: zoneMaxAgeCandles,
+          setupAnchor: activeSetupAnchor(activeRange),
+          allowWeekendSessionGap,
+        })
+      : null,
   }
 }
 

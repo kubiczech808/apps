@@ -30,6 +30,7 @@ for (let index = 2; index < process.argv.length; index += 1) {
 const years = Number(args.get('years') ?? 10)
 const periodYears = [1, 3, 5, 10].filter((value) => value <= years)
 const output = String(args.get('output') ?? 'data/backtests.json')
+const requestedAsset = String(args.get('asset') ?? '').trim().toUpperCase()
 const now = Date.now()
 const publish = args.get('publish') === true
 
@@ -66,7 +67,9 @@ const sources = PRICE_ACTION_ASSETS.map((asset) => ({
   source: asset.symbol === 'BTCUSD'
     ? 'Binance BTCUSDT 1H; higher timeframes aggregated UTC'
     : `Yahoo Finance ${asset.yahooSymbol}; 1H/4H up to 2Y, 1D up to ${Math.max(5, Math.min(years, 10))}Y`,
-}))
+})).filter(({ asset }) => !requestedAsset || asset.symbol === requestedAsset)
+
+if (requestedAsset && !sources.length) throw new Error(`Unknown asset: ${requestedAsset}`)
 
 const sliceYears = (candles, yearsBack) => {
   const latest = candles.at(-1)?.time

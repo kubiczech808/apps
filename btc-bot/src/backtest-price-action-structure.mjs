@@ -5,10 +5,11 @@
 
 import { HOUR_MS } from './candles.mjs'
 import {
-  classifyStructure,
+  classifyExternalStructure,
   evaluateTradeProfile,
   PRICE_ACTION_STRUCTURE_PROFILES,
 } from './strategy-price-action-structure.mjs'
+import { confirmedExternalPivotCandidates, confirmedExternalPivotPath } from './external-trends.mjs'
 
 const LOWER_TIMEFRAME = { '1h': null, '4h': '1h', '1d': '4h' }
 const HIGHER_TIMEFRAME = { '1h': '4h', '4h': '1d', '1d': null }
@@ -48,29 +49,67 @@ const sliceHistory = (candles, historyDays) => {
 const candleWindowAt = (candles, throughTime, durationHours) =>
   candles.slice(0, upperBound(candles, throughTime - durationHours * HOUR_MS))
 
-const structureAt = ({ candles, timeframeId, throughTime, includeZones = true }) => {
+export const historicalExternalStructureAt = ({
+  candles,
+  timeframeId,
+  throughTime,
+  includeZones = true,
+  precomputedCandidates = null,
+}) => {
   const profile = PRICE_ACTION_STRUCTURE_PROFILES[timeframeId]
   const available = candleWindowAt(candles, throughTime, TIMEFRAME_HOURS[timeframeId])
-  const history = sliceHistory(available, profile.historyDays)
-  return classifyStructure(history, {
-    lookback: profile.pivotLookback,
+  const analysisCandles = sliceHistory(available, profile.historyDays)
+  const zoneCandles = sliceHistory(available, profile.zoneHistoryDays)
+  // The live scanner takes its structure only from the independently
+  // confirmed OHLC pivot path. Recreate that path from candles closed by this
+  // historical instant; using the retired local swing classifier here made
+  // the backtest measure a different strategy and hid valid older setups.
+  const pivotPath = confirmedExternalPivotPath({
+    // A structural wave must be recent enough to be actionable. Keep it on
+    // the same bounded analysis horizon as the live profile; the longer zone
+    // horizon below remains available only for FVG discovery.
+    candles: analysisCandles,
+    timeframeId,
+    now: throughTime,
+    candlesAreTimeframe: true,
+    precomputedCandidates,
+  })
+  return classifyExternalStructure({
+    candles: analysisCandles,
+    zoneCandles,
     zoneLookback: 2,
-    minCandles: profile.minCandles,
     zoneMaxAgeCandles: profile.zoneMaxAgeCandles,
     historyDays: profile.historyDays,
-    // The backtest evaluates rules, not a chart. Avoid creating thousands of
-    // unused candle summaries for every historical step.
-    includeChartCandles: false,
+    zoneHistoryDays: profile.zoneHistoryDays,
+    externalPivots: {
+      ...pivotPath,
+      source: 'historické OHLC',
+      timeframeId,
+      asOf: analysisCandles.at(-1)?.time ?? null,
+    },
+    allowWeekendSessionGap: timeframeId === '1d',
     includeZones,
   })
 }
 
 const cachedStructureReader = ({ candles, timeframeId, includeZones = true, maxEntries = 8 }) => {
   const cache = new Map()
+  const precomputedCandidates = confirmedExternalPivotCandidates({
+    candles,
+    timeframeId,
+    now: Infinity,
+    candlesAreTimeframe: true,
+  })
   return (throughTime) => {
     const key = Number(throughTime)
     if (!cache.has(key)) {
-      cache.set(key, structureAt({ candles, timeframeId, throughTime: key, includeZones }))
+      cache.set(key, historicalExternalStructureAt({
+        candles,
+        timeframeId,
+        throughTime: key,
+        includeZones,
+        precomputedCandidates,
+      }))
       // These snapshots include zones and pivots. Retain only the small rolling
       // overlap between adjacent timeframe reads; retaining the whole history
       // turns a long backtest into an unbounded memory cache.
@@ -82,8 +121,8 @@ const cachedStructureReader = ({ candles, timeframeId, includeZones = true, maxE
 
 const canReachPullback = ({ item, candle, pullbackPct = 50 }) => {
   const side = item?.trend === 'up' ? 'long' : item?.trend === 'down' ? 'short' : null
-  const high = item?.structure?.high?.current?.price
-  const low = item?.structure?.low?.current?.price
+  const high = item?.structure?.activeRange?.high?.price
+  const low = item?.structure?.activeRange?.low?.price
   if (!side || !Number.isFinite(high) || !Number.isFinite(low) || high <= low || !candle) return false
   const ratio = Math.min(Math.max(Number(pullbackPct) || 50, 0), 100) / 100
   const pullback = side === 'long' ? high - (high - low) * ratio : low + (high - low) * ratio
@@ -279,8 +318,8 @@ export const runPriceActionStructureBacktest = ({
         }
         if (position) {
           const invalidationTrend = position.side === 'long' ? 'down' : 'up'
-          const ownStructureInvalidated = closedItem.trend === invalidationTrend || closedItem.event === `CHoCH_${invalidationTrend.toUpperCase()}`
-          const lowerStructureInvalidated = lowerClosedItem?.trend === invalidationTrend || lowerClosedItem?.event === `CHoCH_${invalidationTrend.toUpperCase()}`
+          const ownStructureInvalidated = closedItem.trend === invalidationTrend || closedItem.event === `BOS_${invalidationTrend.toUpperCase()}`
+          const lowerStructureInvalidated = lowerClosedItem?.trend === invalidationTrend || lowerClosedItem?.event === `BOS_${invalidationTrend.toUpperCase()}`
           if (ownStructureInvalidated || lowerStructureInvalidated) {
             recordExit('structure_invalidation', candle.close, candleEnd)
           }

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { EXTERNAL_PIVOT_SCHEMA, canReuseExternalPivotBucket, classifyExternalPivotPath, classifyExternalTrend, confirmedExternalPivotPath, fetchTwelveDataFxHourly, fetchTwelveDataFxPivots } from '../src/external-trends.mjs'
+import { EXTERNAL_PIVOT_SCHEMA, canReuseExternalPivotBucket, classifyExternalPivotPath, classifyExternalTrend, confirmedExternalPivotCandidates, confirmedExternalPivotPath, fetchTwelveDataFxHourly, fetchTwelveDataFxPivots } from '../src/external-trends.mjs'
 import { HOUR, START } from './helpers.mjs'
 
 const values = (start, count, step = 0.001) => Array.from({ length: count }, (_, index) => {
@@ -213,6 +213,37 @@ test('a completed continuation replaces the old BoS anchor with the current dire
   assert.deepEqual(up.chartPivots.map((pivot) => pivot.label), ['HH', 'HL', 'HH'])
 })
 
+test('a close through the protected LL after BoS up restores the down structure', () => {
+  const pivots = [
+    { kind: 'high', price: 120, close: 119, time: START },
+    { kind: 'low', price: 100, close: 101, time: START + HOUR },
+    { kind: 'high', price: 115, close: 114, time: START + 2 * HOUR },
+    { kind: 'low', price: 95, close: 94, time: START + 3 * HOUR },
+    { kind: 'high', price: 125, close: 126, time: START + 4 * HOUR },
+    { kind: 'low', price: 90, close: 89, time: START + 5 * HOUR },
+    { kind: 'high', price: 110, close: 109, time: START + 6 * HOUR },
+    { kind: 'low', price: 85, close: 84, time: START + 7 * HOUR },
+  ]
+  const candles = pivots.map((pivot) => ({
+    time: pivot.time,
+    open: pivot.close,
+    high: pivot.kind === 'high' ? pivot.price : pivot.close + 1,
+    low: pivot.kind === 'low' ? pivot.price : pivot.close - 1,
+    close: pivot.close,
+  }))
+
+  const path = classifyExternalPivotPath(pivots, { candles })
+
+  assert.equal(path.trend, 'down')
+  assert.equal(path.event.type, 'BOS_DOWN')
+  assert.equal(path.event.time, START + 5 * HOUR)
+  assert.equal(path.event.protectedPivot.price, 95)
+  assert.deepEqual(
+    [path.activeRange.high.label, path.activeRange.high.price, path.activeRange.low.label, path.activeRange.low.price],
+    ['LH', 110, 'LL', 85]
+  )
+})
+
 test('a delayed close cannot revive an obsolete protected HL after a newer up wave', () => {
   const pivots = [
     { kind: 'high', price: 100, close: 99, time: START },
@@ -277,6 +308,35 @@ test('external pivot audit falls back to a narrower confirmed window when the br
 
   assert.equal(path.timePeriod, 5)
   assert.deepEqual(path.pivots.map((pivot) => pivot.kind), ['high', 'low'])
+})
+
+test('precomputed historical candidates do not reveal an unconfirmed future pivot', () => {
+  const candles = Array.from({ length: 48 }, (_, index) => ({
+    time: START + index * HOUR,
+    open: 1,
+    close: 1,
+    high: index === 12 ? 1.2 : 1.05,
+    low: index === 29 ? 0.8 : 0.95,
+    volume: 0,
+  }))
+  const precomputedCandidates = confirmedExternalPivotCandidates({
+    candles,
+    timeframeId: '1h',
+    now: Infinity,
+    candlesAreTimeframe: true,
+  })
+  const at = START + 25 * HOUR
+  const direct = confirmedExternalPivotPath({ candles, timeframeId: '1h', now: at, candlesAreTimeframe: true })
+  const cached = confirmedExternalPivotPath({
+    candles,
+    timeframeId: '1h',
+    now: at,
+    candlesAreTimeframe: true,
+    precomputedCandidates,
+  })
+
+  assert.deepEqual(cached, direct)
+  assert.equal(cached.pivots.some((pivot) => pivot.time === START + 29 * HOUR), false)
 })
 
 test('a missing external pivot result is not kept as a valid cache entry', () => {

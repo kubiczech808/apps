@@ -15,7 +15,7 @@ export const EXTERNAL_PIVOT_METHOD = 'Potvrzené 10-svíčkové pivoty z extern�
 // Bump this whenever pivot geometry or confirmation changes. Cached external
 // references are executable strategy input, so a same-hour cache must never
 // preserve the old interpretation after such a change.
-export const EXTERNAL_PIVOT_SCHEMA = 5
+export const EXTERNAL_PIVOT_SCHEMA = 6
 export const EXTERNAL_PIVOT_PERIOD = 10
 export const EXTERNAL_PIVOT_FALLBACK_PERIOD = 5
 export const EXTERNAL_PIVOT_OUTPUTSIZE = 2000
@@ -298,6 +298,54 @@ const latestBreakOfStructure = ({ pivots = [], candles = [] } = {}) => {
   return events.sort((left, right) => left.time - right.time || right.activeRange.high.time - left.activeRange.high.time).at(-1) ?? null
 }
 
+// A completed reversal can itself be invalidated before an opposite
+// directional leg is confirmed. Continue following closes through the active
+// range's protected endpoint so an old BoS cannot leave the published trend
+// pointing the wrong way after price has already broken back through it.
+const nextBreakOfStructure = ({ event, candles = [] } = {}) => {
+  if (!event?.activeRange || !Array.isArray(candles)) return null
+  const nextTrend = event.trend === 'up' ? 'down' : event.trend === 'down' ? 'up' : null
+  if (!nextTrend) return null
+  const protectedPivot = nextTrend === 'down' ? event.activeRange.low : event.activeRange.high
+  const breakCandle = firstClosingBreak({
+    candles,
+    after: event.time,
+    level: protectedPivot?.price,
+    direction: nextTrend,
+  })
+  const terminal = breakCandle && terminalWaveExtreme({
+    candles,
+    after: breakCandle.time,
+    kind: nextTrend === 'down' ? 'low' : 'high',
+  })
+  if (!breakCandle || !terminal) return null
+  const high = nextTrend === 'down'
+    ? { ...event.activeRange.high, label: 'HH' }
+    : { ...terminal, label: 'HH' }
+  const low = nextTrend === 'down'
+    ? { ...terminal, label: 'LL' }
+    : { ...event.activeRange.low, label: 'LL' }
+  if (!(high.price > low.price)) return null
+  return {
+    type: nextTrend === 'down' ? 'BOS_DOWN' : 'BOS_UP',
+    trend: nextTrend,
+    time: breakCandle.time,
+    close: breakCandle.close,
+    protectedPivot: { ...protectedPivot },
+    activeRange: { high, low, source: 'external-break-of-structure' },
+  }
+}
+
+const latestChainedBreakOfStructure = ({ pivots = [], candles = [] } = {}) => {
+  let event = latestBreakOfStructure({ pivots, candles })
+  if (!event) return null
+  while (true) {
+    const next = nextBreakOfStructure({ event, candles })
+    if (!next || next.time <= event.time) return event
+    event = next
+  }
+}
+
 const chartPivotsForBreak = ({ pivots, event }) => {
   if (!event) return []
   const anchor = event.trend === 'down' ? event.activeRange.high : event.activeRange.low
@@ -356,7 +404,7 @@ export const classifyExternalPivotPath = (pivots = [], { candles = [] } = {}) =>
         ? 'down'
         : 'flat'
     : 'flat'
-  const event = latestBreakOfStructure({ pivots: path, candles: completedOhlc(candles) })
+  const event = latestChainedBreakOfStructure({ pivots: path, candles: completedOhlc(candles) })
   const trend = event?.trend ?? directionalTrend
   // A BoS anchors only the first impulse into the new direction. Once an
   // externally confirmed LH -> LL / HL -> HH wave follows it, that newer
@@ -518,17 +566,52 @@ const confirmedPivotCandidates = (candles, period) => {
   return candidates
 }
 
-export const confirmedExternalPivotPath = ({ candles = [], timeframeId = '1h', now = Date.now() } = {}) => {
+export const confirmedExternalPivotCandidates = ({
+  candles = [],
+  timeframeId = '1h',
+  now = Date.now(),
+  candlesAreTimeframe = false,
+} = {}) => {
+  const spec = EXTERNAL_PIVOT_INTERVALS[timeframeId]
+  if (!spec) return []
+  const completed = candlesAreTimeframe
+    ? completedOhlc(candles).filter((candle) => candle.time + spec.ms <= now)
+    : forTimeframe(candles, timeframeId, now)
+  return [EXTERNAL_PIVOT_PERIOD, EXTERNAL_PIVOT_FALLBACK_PERIOD].map((timePeriod) => ({
+    timePeriod,
+    candidates: confirmedPivotCandidates(completed, timePeriod),
+  }))
+}
+
+export const confirmedExternalPivotPath = ({
+  candles = [],
+  timeframeId = '1h',
+  now = Date.now(),
+  candlesAreTimeframe = false,
+  precomputedCandidates = null,
+} = {}) => {
   const spec = EXTERNAL_PIVOT_INTERVALS[timeframeId]
   if (!spec) return { trend: 'flat', pivots: [], timePeriod: EXTERNAL_PIVOT_PERIOD }
-  const completed = forTimeframe(candles, timeframeId, now)
+  const completed = candlesAreTimeframe
+    ? completedOhlc(candles).filter((candle) => candle.time + spec.ms <= now)
+    : forTimeframe(candles, timeframeId, now)
+  const candidatesFor = (timePeriod) => {
+    const cached = Array.isArray(precomputedCandidates)
+      ? precomputedCandidates.find((entry) => entry?.timePeriod === timePeriod)?.candidates
+      : null
+    if (!Array.isArray(cached)) return confirmedPivotCandidates(completed, timePeriod)
+    // A candidate can enter the historical path only after its right-hand
+    // confirmation window has closed. This is equivalent to deriving it at
+    // that instant, without repeatedly scanning the same windows.
+    return cached.filter((pivot) => pivot.time + timePeriod * spec.ms <= now)
+  }
   let timePeriod = EXTERNAL_PIVOT_PERIOD
-  let candidates = confirmedPivotCandidates(completed, timePeriod)
+  let candidates = candidatesFor(timePeriod)
   // The external line is only an audit aid. A broad 10-candle confirmation is
   // preferred, but an empty path is not useful to audit a live source at all.
   if (candidates.length < 2) {
     timePeriod = EXTERNAL_PIVOT_FALLBACK_PERIOD
-    candidates = confirmedPivotCandidates(completed, timePeriod)
+    candidates = candidatesFor(timePeriod)
   }
   return { ...classifyExternalPivotPath(candidates, { candles: completed }), timePeriod }
 }
