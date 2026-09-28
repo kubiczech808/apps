@@ -23,7 +23,7 @@ import {
   PRICE_ACTION_TIMEFRAMES,
   reviewOpenPosition,
 } from '../src/strategy-price-action-structure.mjs'
-import { EXTERNAL_PIVOT_SCHEMA } from '../src/external-trends.mjs'
+import { EXTERNAL_PIVOT_SCHEMA, classifyExternalPivotPath } from '../src/external-trends.mjs'
 import { candle, HOUR, START, zigzag } from './helpers.mjs'
 
 test('price-action structure classifies trend from confirmed swings', () => {
@@ -223,6 +223,41 @@ test('a published external BoS range reaches the dashboard with its original HH 
   assert.equal((result.structure.activeRange.high.price + result.structure.activeRange.low.price) / 2, 158)
   assert.deepEqual(result.structure.chartPivots.map((pivot) => pivot.label), ['HL', 'HH', 'LL'])
   assert.deepEqual(result.structure.contextPivots.map((pivot) => pivot.label), ['HL', 'HH'])
+})
+
+test('a closed-terminal extension reaches the dashboard chart before the next pivot window closes', () => {
+  const pivots = [
+    { kind: 'high', price: 120, close: 119, time: START },
+    { kind: 'low', price: 100, close: 101, time: START + HOUR },
+    { kind: 'high', price: 115, close: 114, time: START + 2 * HOUR },
+    { kind: 'low', price: 90, close: 89, time: START + 3 * HOUR },
+  ]
+  const candles = [
+    candle(START, 119, 120, 118, 119),
+    candle(START + HOUR, 101, 102, 100, 101),
+    candle(START + 2 * HOUR, 114, 115, 112, 114),
+    candle(START + 3 * HOUR, 91, 92, 90, 89),
+    candle(START + 4 * HOUR, 90, 92, 84, 91),
+    candle(START + 5 * HOUR, 89, 90, 82, 85),
+  ]
+  const externalPivots = {
+    ...classifyExternalPivotPath(pivots, { candles }),
+    source: 'Twelve Data',
+    timeframeId: '1h',
+  }
+
+  const result = classifyExternalStructure({ candles, externalPivots })
+
+  assert.equal(externalPivots.activeRange.source, 'external-closed-terminal-extension')
+  assert.equal(result.structure.activeRange.source, 'external-closed-terminal-extension')
+  assert.deepEqual(
+    result.structure.chartPivots.map((pivot) => [pivot.label, pivot.time, pivot.price]),
+    [['LH', START + 2 * HOUR, 115], ['LL', START + 5 * HOUR, 82]]
+  )
+  assert.deepEqual(
+    [result.structure.activeRange.high.price, result.structure.activeRange.low.price],
+    [115, 82]
+  )
 })
 
 test('externally confirmed pivot anchors use the actual extrema of the displayed chart wave', () => {
