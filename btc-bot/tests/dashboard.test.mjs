@@ -250,6 +250,13 @@ test('pending orders show the live price and its absolute distance from entry', 
   assert.match(js, /'Akt\. cena \/ vzdál\.'/)
 })
 
+test('a hard-invalidated current-setup zone remains visible only as red audit context', () => {
+  assert.match(js, /const currentSetupInvalidatedZones = \(item, type, pullbackRange = null\) =>/)
+  assert.match(js, /currentSetupInvalidatedZone: true/)
+  assert.match(js, /zone\.currentSetupInvalidatedZone \|\| zoneOverlapsRange\(zone, pullback\)/)
+  assert.match(js, /close na jejím timeframe prošel vzdálenější hranou/)
+})
+
 test('price-action position, order and closed-trade rows focus their matching chart', () => {
   assert.match(js, /const focusAssetChart = \(symbol, timeframeId = priceActionDecisionTimeframe\) =>/)
   assert.match(js, /const recordChartSelection = \(record\) =>/)
@@ -471,7 +478,7 @@ test('the first migrated publish persists the strategy-versioned settings', () =
 })
 
 test('the API refuses stale PA-1 runners before they overwrite current structure', () => {
-  assert.match(api, /const MIN_PRICE_ACTION_MATRIX_SCHEMA = 71/)
+  assert.match(api, /const MIN_PRICE_ACTION_MATRIX_SCHEMA = 72/)
   assert.match(api, /\$strategyId === 'price-action-structure-v1'/)
   assert.match(api, /\(int\) \$priceActionSchema < MIN_PRICE_ACTION_MATRIX_SCHEMA/)
   assert.match(api, /fail\(409, 'Runner uses an obsolete price-action matrix schema\.'\)/)

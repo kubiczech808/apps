@@ -4,7 +4,7 @@ import { buildExternalTrendReference, EXTERNAL_PIVOT_SCHEMA } from './external-t
 import { buildFvgSupplyDemandZones, candleSignal, marketStructure } from './priceaction.mjs'
 
 export const PRICE_ACTION_STRUCTURE_ID = 'price-action-structure-v1'
-export const PRICE_ACTION_MATRIX_SCHEMA = 71
+export const PRICE_ACTION_MATRIX_SCHEMA = 72
 export const PRICE_ACTION_CHART_CANDLE_LIMITS = {
   // The zone and structure inputs below remain much longer. These limits only
   // bound chart data published to the browser, where a 60-day 1H / 180-day
@@ -816,6 +816,12 @@ export const activeSupplyDemandZones = (candles, {
   const currentSetupTouches = allZones.filter((zone) =>
     zone.touchedDuringCurrentSetup && !zone.invalidatedByOwnTimeframeClose
   )
+  // A close through the far boundary makes an FVG permanently unavailable for
+  // entry. Retain it separately when it belonged to the current wave: the
+  // dashboard can explain a missed or invalidated setup without reviving it.
+  const currentSetupInvalidated = allZones.filter((zone) =>
+    zone.touchedDuringCurrentSetup && zone.invalidatedByOwnTimeframeClose
+  )
   // Keep a compact audit trail for FVGs consumed before the present wave. It
   // must never join the tradable pools above, but the chart can show a
   // relevant historical imbalance instead of making it look undiscovered.
@@ -838,6 +844,8 @@ export const activeSupplyDemandZones = (candles, {
     // can show only those that overlap the present pullback band.
     currentSetupDemand: currentSetupTouches.filter((zone) => zone.type === 'demand').map(auditZoneSummary).sort((a, b) => (b.lastIndex ?? 0) - (a.lastIndex ?? 0)),
     currentSetupSupply: currentSetupTouches.filter((zone) => zone.type === 'supply').map(auditZoneSummary).sort((a, b) => (b.lastIndex ?? 0) - (a.lastIndex ?? 0)),
+    currentSetupInvalidatedDemand: currentSetupInvalidated.filter((zone) => zone.type === 'demand').map(auditZoneSummary).sort((a, b) => (b.lastIndex ?? 0) - (a.lastIndex ?? 0)),
+    currentSetupInvalidatedSupply: currentSetupInvalidated.filter((zone) => zone.type === 'supply').map(auditZoneSummary).sort((a, b) => (b.lastIndex ?? 0) - (a.lastIndex ?? 0)),
     historicalConsumedDemand: historicalConsumed.filter((zone) => zone.type === 'demand').map(auditZoneSummary).sort((a, b) => (b.lastIndex ?? 0) - (a.lastIndex ?? 0)),
     historicalConsumedSupply: historicalConsumed.filter((zone) => zone.type === 'supply').map(auditZoneSummary).sort((a, b) => (b.lastIndex ?? 0) - (a.lastIndex ?? 0)),
     demand: latest('demand'),

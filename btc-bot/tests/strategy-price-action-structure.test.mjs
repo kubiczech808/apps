@@ -1081,6 +1081,22 @@ test('a partial same-timeframe touch consumes an FVG and separates old touches f
   assert.equal(currentDemand.setupAnchorLabel, 'LL')
   assert.equal(currentDemand.firstTouchAt, START + 4 * HOUR)
   assert.equal(currentDemand.definingCandles[0].open, undefined, 'audit zones keep their origin without duplicating candle OHLC')
+
+  const hardInvalidation = activeSupplyDemandZones([
+    ...partialTouch,
+    // Closing through the far demand edge prevents any later entry, but the
+    // current setup still needs the zone published as a red audit marker.
+    candle(START + 5 * HOUR, 106, 107, 99, 100),
+  ], {
+    lookback: 1,
+    maxAgeCandles: 100,
+    setupAnchor: { time: START + 3 * HOUR, label: 'LL' },
+  })
+  const invalidatedDemand = hardInvalidation.currentSetupInvalidatedDemand.find((zone) => zone.low === 101 && zone.high === 105)
+  assert.equal(hardInvalidation.demand, null, 'a hard-invalidated zone must never return to the entry pool')
+  assert.ok(invalidatedDemand, 'the current setup must retain a hard-invalidated zone for audit')
+  assert.equal(invalidatedDemand.invalidatedByOwnTimeframeClose, true)
+  assert.equal(invalidatedDemand.invalidatedAt, START + 5 * HOUR)
 })
 
 test('a partial same-timeframe touch consumes a supply FVG without a close through it', () => {

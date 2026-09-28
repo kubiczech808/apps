@@ -772,6 +772,19 @@ const historicalConsumedZones = (item, type, pullbackRange = null) => {
     }))
 }
 
+// A current-wave FVG whose own timeframe closed through its far boundary is
+// never tradable again. It stays visible in red only as an audit marker.
+const currentSetupInvalidatedZones = (item, type, pullbackRange = null) => {
+  const key = type === 'demand' ? 'Demand' : 'Supply'
+  return (item?.zones?.[`currentSetupInvalidated${key}`] ?? [])
+    .filter((zone) => zoneOverlapsRange(zone, pullbackRange))
+    .map((zone) => ({
+      ...zone,
+      currentSetupInvalidatedZone: true,
+      invalidatedSetupZone: true,
+    }))
+}
+
 const setupOwnersForEntry = (entry) => [
   ...(state?.positions?.running ?? []),
   ...(state?.positions?.orders ?? []).filter((order) => order.orderRole !== 'take-profit'),
@@ -817,8 +830,9 @@ const entryZonesForDisplay = (entry) => {
   const setupZones = setupZonesForEntry(entry)
     .filter((zone) => zone.type === type)
   const watchedZones = watchedEntryZones(profile, type)
-  return uniqueZones([...setupZones, ...watchedZones])
-    .filter((zone) => zone.activeSetupZone || zoneOverlapsRange(zone, pullback))
+  const invalidatedZones = currentSetupInvalidatedZones(entry.item, type, pullback)
+  return uniqueZones([...setupZones, ...watchedZones, ...invalidatedZones])
+    .filter((zone) => zone.activeSetupZone || zone.currentSetupInvalidatedZone || zoneOverlapsRange(zone, pullback))
 }
 
 const zoneIsBeyondStop = (zone, side, stop) => Number.isFinite(stop) && (
@@ -878,11 +892,14 @@ const zoneListElement = (entry) => {
     const activeSetup = zone.activeSetupZone === true
     const historical = zone.historicalConsumedZone === true
     const invalidated = zone.invalidatedSetupZone === true || candidate?.invalidatedByPrematureTouch === true
+    const hardInvalidation = zone.currentSetupInvalidatedZone === true
     const status = activeSetup ? 'met' : invalidated ? 'unmet' : candidate?.zoneHit ? 'met' : 'neutral'
     const title = activeSetup
       ? 'Zóna patří k aktivní objednávce nebo otevřené pozici; zůstává viditelná do jejího ukončení.'
       : historical
         ? 'Historická zóna zasahuje do aktuálního pullback pásma, ale byla spotřebována před posledním potvrzeným pivotem. Slouží pouze jako auditní kontext.'
+      : hardInvalidation
+        ? 'Zóna patřila k aktuálnímu setupu, ale close na jejím timeframe prošel vzdálenější hranou. Je viditelná jen pro audit; nový vstup z ní je zakázaný.'
       : invalidated
         ? 'Zóna byla dotčena v aktuálním setupu od posledního potvrzeného pivotu; nový vstup z ní je zablokovaný.'
       : candidate?.zoneHit
@@ -1175,7 +1192,7 @@ const renderAssetZoneDetails = (host, asset, item, timeframeId) => {
   if (item.zones) {
     details.unshift(
       el('h3', { text: `${asset.symbol} · sledované zóny pro ${timeframeId.toUpperCase()}` }),
-      el('p', { className: 'asset-zone-details-intro', text: 'Zobrazeny jsou pouze zóny sledované pro vstup v aktuálním pullback pásmu.' }),
+      el('p', { className: 'asset-zone-details-intro', text: 'Zobrazeny jsou zóny sledované pro vstup v aktuálním pullback pásmu a červeně auditní zóny invalidované v tomto setupu.' }),
       el('div', { className: 'asset-zone-detail-columns' }, [
         zoneCard('Demand', zonesForDetail(chartEntry, 'demand'), 'Žádná sledovaná demand zóna.', timeframeId, candidates, item.trend),
         zoneCard('Supply', zonesForDetail(chartEntry, 'supply'), 'Žádná sledovaná supply zóna.', timeframeId, candidates, item.trend),
@@ -1543,6 +1560,7 @@ const chartZones = (item, type) => {
   return uniqueZones([...entryZones, ...targetZones, ...stopContextZone])
     .filter((zone) => zone && (zone.activeSetupZone || zone.watchedSetupZone ||
       zone.currentSetupZone ||
+      zone.currentSetupInvalidatedZone ||
       zone.historicalConsumedZone ||
       zone.targetContextZone ||
       zone.stopContextZone ||
