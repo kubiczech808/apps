@@ -890,6 +890,33 @@ HTML;
         element.setAttribute('data-jamu-ml-legal', marker);
     }
 
+    function hideEmptyMarketingCheckboxes(root) {
+        const scope = root && root.nodeType === 1 ? root : document;
+        const inputs = [];
+        if (scope.matches && scope.matches('input[name="ecomail_not_subscribe"]')) {
+            inputs.push(scope);
+        }
+        scope.querySelectorAll('input[name="ecomail_not_subscribe"]').forEach(function (input) {
+            inputs.push(input);
+        });
+
+        inputs.forEach(function (marketingInput) {
+            const marketingLabel = marketingInput.closest('label') || document.querySelector('label[for="' + marketingInput.id + '"]');
+            const row = marketingInput.closest('p, .form-row, .woocommerce-form-row');
+            const hasMeaningfulLabel = marketingLabel && normalizeText(marketingLabel.textContent) !== '';
+            const rowIsEmpty = row && normalizeText(row.textContent) === '';
+            if (hasMeaningfulLabel || (!rowIsEmpty && row)) {
+                return;
+            }
+
+            const hiddenTarget = row || marketingInput;
+            hiddenTarget.hidden = true;
+            hiddenTarget.setAttribute('aria-hidden', 'true');
+            hiddenTarget.style.setProperty('display', 'none', 'important');
+            marketingInput.tabIndex = -1;
+        });
+    }
+
     function repairTermsControl(root) {
         const scope = root && root.nodeType === 1 ? root : document;
         const termsLink = (scope.matches && scope.matches('a.woocommerce-terms-and-conditions-link'))
@@ -944,18 +971,7 @@ HTML;
         input.required = true;
         input.setAttribute('aria-required', 'true');
 
-        // Ecomail sometimes emits an opt-out checkbox without any label. It
-        // cannot be understood or consented to by a customer, so keep that
-        // empty technical control out of the checkout UI.
-        document.querySelectorAll('input[name="ecomail_not_subscribe"]').forEach(function (marketingInput) {
-            const marketingLabel = marketingInput.closest('label') || document.querySelector('label[for="' + marketingInput.id + '"]');
-            if (!marketingLabel || normalizeText(marketingLabel.textContent) === '') {
-                marketingInput.hidden = true;
-                marketingInput.tabIndex = -1;
-                marketingInput.setAttribute('aria-hidden', 'true');
-                marketingInput.style.setProperty('display', 'none', 'important');
-            }
-        });
+        hideEmptyMarketingCheckboxes(scope);
     }
 
     function translateLegalBlocks(root) {
@@ -1008,6 +1024,10 @@ HTML;
         if (!scope) {
             return;
         }
+
+        // This field can be injected after WooCommerce refreshes checkout
+        // fragments, independently of the terms block.
+        hideEmptyMarketingCheckboxes(scope);
 
         if (scope.nodeType === 1) {
             translateLegalBlocks(scope);
