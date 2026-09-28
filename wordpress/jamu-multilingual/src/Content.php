@@ -825,6 +825,19 @@ HTML;
             return;
         }
 
+        // The outer WooCommerce <p> also contains the label and checkbox.
+        // Never replace it wholesale: that was the source of the detached,
+        // empty checkbox on checkout.
+        if (type === 'terms' && element.tagName !== 'LABEL') {
+            const nestedInput = element.querySelector('input[type="checkbox"]');
+            const nestedLabel = nestedInput && (nestedInput.closest('label') || element.querySelector('label'));
+            if (nestedLabel) {
+                translateLegalElement(nestedLabel, type);
+                element.setAttribute('data-jamu-ml-legal', (data.language || '') + ':' + type);
+                return;
+            }
+        }
+
         // On the classic WooCommerce checkout the checkbox belongs to the
         // outer label while its text is in a nested span. Replacing that outer
         // label moved the checkbox onto a separate line in some templates.
@@ -877,16 +890,43 @@ HTML;
         element.setAttribute('data-jamu-ml-legal', marker);
     }
 
-    function normalizeTermsControl(root) {
+    function repairTermsControl(root) {
         const scope = root && root.nodeType === 1 ? root : document;
-        const input = (scope.matches && scope.matches('#terms, input[name="terms"]'))
+        const termsLink = (scope.matches && scope.matches('a.woocommerce-terms-and-conditions-link'))
             ? scope
-            : scope.querySelector('#terms, input[name="terms"]');
-        if (!input || input.type !== 'checkbox') {
+            : scope.querySelector('a.woocommerce-terms-and-conditions-link');
+        const row = termsLink && termsLink.closest('p.form-row, .woocommerce-terms-and-conditions-wrapper');
+        if (!row) {
             return;
         }
 
-        let label = input.closest('label');
+        let input = (row.matches && row.matches('#terms, input[name="terms"]'))
+            ? row
+            : row.querySelector('#terms, input[name="terms"]');
+        let label = input && input.closest('label');
+
+        if (!input) {
+            input = document.createElement('input');
+            input.type = 'checkbox';
+            input.id = 'terms';
+            input.name = 'terms';
+            input.value = '1';
+            input.className = 'woocommerce-form__input woocommerce-form__input-checkbox input-checkbox';
+            label = document.createElement('label');
+            label.htmlFor = 'terms';
+            label.className = 'woocommerce-form__label woocommerce-form__label-for-checkbox checkbox';
+            const textHolder = document.createElement('span');
+            textHolder.className = 'woocommerce-terms-and-conditions-checkbox-text';
+            Array.from(row.childNodes).forEach(function (node) {
+                textHolder.appendChild(node);
+            });
+            label.appendChild(input);
+            label.appendChild(document.createTextNode(' '));
+            label.appendChild(textHolder);
+            row.appendChild(label);
+        }
+
+        label = label || input.closest('label');
         if (!label && input.id) {
             label = document.querySelector('label[for="' + input.id + '"]');
         }
@@ -903,6 +943,19 @@ HTML;
         input.classList.add('jamu-ml-terms-input');
         input.required = true;
         input.setAttribute('aria-required', 'true');
+
+        // Ecomail sometimes emits an opt-out checkbox without any label. It
+        // cannot be understood or consented to by a customer, so keep that
+        // empty technical control out of the checkout UI.
+        document.querySelectorAll('input[name="ecomail_not_subscribe"]').forEach(function (marketingInput) {
+            const marketingLabel = marketingInput.closest('label') || document.querySelector('label[for="' + marketingInput.id + '"]');
+            if (!marketingLabel || normalizeText(marketingLabel.textContent) === '') {
+                marketingInput.hidden = true;
+                marketingInput.tabIndex = -1;
+                marketingInput.setAttribute('aria-hidden', 'true');
+                marketingInput.style.setProperty('display', 'none', 'important');
+            }
+        });
     }
 
     function translateLegalBlocks(root) {
@@ -924,7 +977,7 @@ HTML;
             translateLegalElement(element, 'privacy');
             translateLegalElement(element, 'terms');
         });
-        normalizeTermsControl(scope);
+        repairTermsControl(scope);
     }
 
     function translateElementAttributes(element) {
