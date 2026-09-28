@@ -5649,6 +5649,66 @@ test("dip entry: the candidate screen shows only the persisted RPi watchlist", (
     "the count labels watcher rows as watching, not immediately executable orders");
 });
 
+test("scraped list: DIP opening column uses only matching active portfolio bands", () => {
+  const activeBands = new Function(
+    "dashboardModes", "portfolioConfigForMode", "automationIsEnabled", "dipEntryRuleFromConfig",
+    "dipEntryRuleFault", "normalizeMarketTagList", "marketMatchesAllowedTags", "marketExcludedByTags",
+    "configExcludedMarketShapes", "candidateMarketShape", "portfolioNameForMode", `
+      ${extractFunction(APP, "activeDipOpeningBandsForObservation")}
+      return activeDipOpeningBandsForObservation;
+    `,
+  )(
+    () => ["paper-counter-strike", "paper-soccer", "paper-disabled", "paper-no-outright"],
+    (mode) => ({
+      "paper-counter-strike": {
+        displayName: "Counter Strike DIP", automationEnabled: true, dipEntryEnabled: true,
+        dipEntryOpenMin: 0.70, dipEntryOpenMax: 0.75, minProbability: 0.40, maxProbability: 0.55,
+        includeOnlyMarketTags: ["counter-strike-2"], excludedMarketShapes: [],
+      },
+      "paper-soccer": {
+        displayName: "Soccer DIP", automationEnabled: true, dipEntryEnabled: true,
+        dipEntryOpenMin: 0.80, dipEntryOpenMax: 0.90, minProbability: 0.40, maxProbability: 0.55,
+        includeOnlyMarketTags: ["soccer"], excludedMarketShapes: [],
+      },
+      "paper-disabled": {
+        displayName: "Disabled DIP", automationEnabled: false, dipEntryEnabled: true,
+        dipEntryOpenMin: 0.70, dipEntryOpenMax: 0.99, minProbability: 0.40, maxProbability: 0.55,
+        includeOnlyMarketTags: ["counter-strike-2"], excludedMarketShapes: [],
+      },
+      "paper-no-outright": {
+        displayName: "Props only", automationEnabled: true, dipEntryEnabled: true,
+        dipEntryOpenMin: 0.70, dipEntryOpenMax: 0.99, minProbability: 0.40, maxProbability: 0.55,
+        includeOnlyMarketTags: ["counter-strike-2"], excludedMarketShapes: ["outright"],
+      },
+    })[mode],
+    (config) => config.automationEnabled !== false,
+    (config) => ({ enabled: config.dipEntryEnabled === true, openMin: config.dipEntryOpenMin, openMax: config.dipEntryOpenMax }),
+    () => "",
+    (value) => Array.isArray(value) ? value : [],
+    (item, tags) => !tags.length || tags.some((tag) => item.tags.includes(tag)),
+    () => [],
+    (config) => config.excludedMarketShapes || [],
+    (item) => item.shape,
+    (mode) => ({ "paper-counter-strike": "Counter Strike DIP", "paper-soccer": "Soccer DIP", "paper-disabled": "Disabled DIP", "paper-no-outright": "Props only" })[mode],
+  );
+
+  assert.deepEqual(activeBands({ tags: ["counter-strike-2"], shape: "outright" }), [{
+    mode: "paper-counter-strike", name: "Counter Strike DIP", min: 0.70, max: 0.75,
+  }], "a Counter-Strike outright must not inherit another tag's or disabled portfolio's ceiling");
+  assert.deepEqual(activeBands({ tags: ["soccer"], shape: "outright" }), [{
+    mode: "paper-soccer", name: "Soccer DIP", min: 0.80, max: 0.90,
+  }]);
+
+  const renderer = extractFunction(APP, "renderScrapedOpportunities");
+  assert.match(renderer, /DIP opening/, "the scraped table must expose the DIP opening band");
+  assert.match(renderer, /dipOpeningBandCell\(item\)/,
+    "every listed market must render its own opening quote and applicable ceiling");
+  const cell = extractFunction(APP, "dipOpeningBandCell");
+  assert.match(cell, /firstMarketProbability/,
+    "the displayed value must be the stored first quote, never today's probability");
+  assert.match(cell, /max/, "the displayed value must state the requested upper bound");
+});
+
 // Reported: the curve began on the 4th while the first closed trade was the 9th, so the
 // first five days of the chart were one flat line. Equity cannot move before a trade
 // settles, and a chart that spends a third of its width saying nothing has spent it.

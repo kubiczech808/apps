@@ -14005,6 +14005,55 @@ function finalOutcomeCell(item) {
   return `<span>Final ${probability(finalPrice)}</span>`;
 }
 
+// The ordinary scraped catalogue is also the operator's quickest way to check whether a
+// market's first quote is even in range for a DIP watcher. Do not use the largest DIP band
+// globally: a soccer-only profile must not make a Counter-Strike row look watched. This is
+// intentionally the *opening-band* part of the rule only. The worker still additionally
+// requires a verified pre-kickoff observation, an event under way, an unfinished market and
+// a usable current book before it retains a plan.
+function activeDipOpeningBandsForObservation(item = {}) {
+  return dashboardModes()
+    .map((mode) => ({ mode, config: portfolioConfigForMode(mode) }))
+    .filter(({ config }) => automationIsEnabled(config))
+    .map(({ mode, config }) => ({ mode, config, rule: dipEntryRuleFromConfig(config) }))
+    .filter(({ rule }) => rule.enabled && !dipEntryRuleFault(rule))
+    .filter(({ config }) => {
+      const included = normalizeMarketTagList(config.includeOnlyMarketTags);
+      const excluded = normalizeMarketTagList(config.excludedMarketTags);
+      return marketMatchesAllowedTags(item, included) && !marketExcludedByTags(item, excluded).length;
+    })
+    .filter(({ config }) => !configExcludedMarketShapes(config).includes(candidateMarketShape(item)))
+    .map(({ mode, rule }) => ({
+      mode,
+      name: portfolioNameForMode(mode),
+      min: rule.openMin,
+      max: rule.openMax,
+    }))
+    .sort((left, right) => right.max - left.max || left.min - right.min || left.name.localeCompare(right.name));
+}
+
+function dipOpeningBandCell(item = {}) {
+  const bands = activeDipOpeningBandsForObservation(item);
+  if (!bands.length) {
+    return '<span class="muted" title="No active DIP portfolio whose tag and shape scope includes this market.">-</span>';
+  }
+  const opening = numericOrNull(item.firstMarketProbability);
+  const matchingBands = opening == null
+    ? []
+    : bands.filter((band) => opening >= band.min && opening <= band.max);
+  const maxima = [...new Set(bands.map((band) => probability(band.max)))];
+  const ranges = bands.map((band) => `${probability(band.min)}-${probability(band.max)} (${band.name})`).join(", ");
+  const title = "Active matching DIP opening bands: " + ranges
+    + ". This column tests only the stored opening quote and the portfolio tag/shape scope; "
+    + "the watcher also requires a verified pre-start quote, an event under way, an unfinished market and a usable live book.";
+  if (opening == null) {
+    return `<span class="muted" title="${escapeHtml(title)}">not recorded<br><span>max ${escapeHtml(maxima.join(" / "))}</span></span>`;
+  }
+  const className = matchingBands.length ? "positive" : "negative";
+  const status = matchingBands.length ? "in band" : "outside band";
+  return `<span class="${className}" title="${escapeHtml(title)}"><strong>${probability(opening)}</strong><br><span>${status}; max ${escapeHtml(maxima.join(" / "))}</span></span>`;
+}
+
 const SCRAPED_PAGE_SIZE = 250;
 
 function scrapedVisibleCount(scope = "") {
@@ -14224,6 +14273,7 @@ function renderScrapedOpportunities() {
             ${scrapedSortableHeader("potentialAnnualizedReturn", "Potential p.a.")}
             ${scrapedSortableHeader("liquidity", "Volume")}
             ${scrapedSortableHeader("spread", "Spread")}
+            <th title="The stored first probability and the maximum opening probability of every active, matching DIP portfolio. It does not by itself confirm the RPi is watching the market.">DIP opening</th>
             ${scrapedSortableHeader("observedAt", "Scraped")}
             ${scrapedSortableHeader("status", "Status")}
             ${scrapedSortableHeader("endDate", "End date")}
@@ -14242,6 +14292,7 @@ function renderScrapedOpportunities() {
               <td data-label="Potential p.a."><span class="${pnlClass(potentialAnnualizedReturn(item))}">${signedPercent(potentialAnnualizedReturn(item))}</span></td>
               <td data-label="Volume">${scrapedVolumeCell(item)}</td>
               <td data-label="Spread">${scrapedSpreadCell(item)}</td>
+              <td data-label="DIP opening">${dipOpeningBandCell(item)}</td>
               <td data-label="Scraped">${escapeHtml(formatDate(item.observedAt || item.marketDataUpdatedAt || ""))}</td>
               <td data-label="Status" class="${scrapedObservationStatusClass(item)}"><strong>${scrapedObservationStatus(item)}</strong></td>
               <td data-label="End date">${evaluationEndDateCell(item)}</td>
