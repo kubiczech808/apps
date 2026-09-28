@@ -2859,6 +2859,12 @@ function dip_watch_market_has_final_probability(array $item): bool
 
 function execution_scope_matches_observation(array $item, array $config): bool
 {
+    // The research collector intentionally reaches further than the operational scan.
+    // Its rows improve post-settlement statistics but must never change a live shortlist
+    // unless a normal scan has independently refreshed the same market.
+    if (($item['researchOnly'] ?? false) === true) {
+        return false;
+    }
     if (!is_active_scraped_market_observation($item)) {
         return false;
     }

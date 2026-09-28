@@ -393,6 +393,24 @@ const MARKET_SCAN_MAX_DAYS_RAW = envNumber("PAPER_MARKET_SCAN_MAX_DAYS", 7);
 const MARKET_SCAN_MAX_DAYS = Number.isFinite(MARKET_SCAN_MAX_DAYS_RAW) && MARKET_SCAN_MAX_DAYS_RAW >= 0
   ? Math.min(3650, MARKET_SCAN_MAX_DAYS_RAW)
   : null;
+// A small, independent sample for finding new setups. The operational sports/esports
+// rotation remains the source of execution candidates; this pass only gives the resolved
+// statistics a dependable pre-start record for a sport that deserves closer study.
+//
+// It is deliberately one bounded page on the existing broad hourly pass, not another
+// workflow or a higher scrape cadence. That keeps the hosting write schedule unchanged.
+const MARKET_SCAN_RESEARCH_TAG_SLUGS = String(process.env.PAPER_MARKET_SCAN_RESEARCH_TAGS ?? "tennis")
+  .split(",")
+  .map((slug) => slug.trim().toLowerCase())
+  .filter((slug, index, values) => Boolean(slug) && values.indexOf(slug) === index);
+const MARKET_SCAN_RESEARCH_INTERVAL_MINUTES = Math.max(
+  0,
+  envNumber("PAPER_MARKET_SCAN_RESEARCH_INTERVAL_MINUTES", 60),
+);
+const MARKET_SCAN_RESEARCH_MAX_DAYS = Math.max(
+  1,
+  Math.min(90, envNumber("PAPER_MARKET_SCAN_RESEARCH_MAX_DAYS", 14)),
+);
 const MARKET_SCAN_PREFERRED_MAX_RESOLUTION_DAYS = envNumber("PAPER_MARKET_SCAN_PREFERRED_MAX_RESOLUTION_DAYS", envNumber("PAPER_MAX_RESOLUTION_DAYS", 7));
 // Keep a small operational buffer for fetching the quote and submitting an
 // order. A full hour would discard exactly the short-lived opportunities the
@@ -3007,6 +3025,22 @@ function normalizeMarketScan(input = {}) {
         .filter(([slug, id]) => Boolean(slug) && Boolean(id))
         .slice(0, 200),
     ),
+    // Research has its own cursor. Sharing the operational scope cursor would let a
+    // long tennis page move the normal sports/esports rotation forward and would make a
+    // data-collection improvement alter the candidate supply of existing portfolios.
+    researchScanCursors: Object.fromEntries(
+      Object.entries(input?.researchScanCursors && typeof input.researchScanCursors === "object" ? input.researchScanCursors : {})
+        .map(([scope, cursor]) => [String(scope || "").trim().toLowerCase(), String(cursor || "").trim()])
+        .filter(([scope, cursor]) => Boolean(scope) && Boolean(cursor))
+        .slice(0, 24),
+    ),
+    researchScopeCursor: Math.max(0, Math.floor(Number(input?.researchScopeCursor) || 0)),
+    researchTagScannedAt: Object.fromEntries(
+      Object.entries(input?.researchTagScannedAt && typeof input.researchTagScannedAt === "object" ? input.researchTagScannedAt : {})
+        .map(([scope, at]) => [String(scope || "").trim().toLowerCase(), String(at || "").trim()])
+        .filter(([scope, at]) => Boolean(scope) && Boolean(at))
+        .slice(0, 24),
+    ),
     scanScopeCursor: Math.max(0, Math.floor(Number(input?.scanScopeCursor) || 0)),
     // Per-scope timestamp of the last full catalogue pass. Without preserving it here the
     // guaranteed hourly slot would read an empty map every run, think both tags were
@@ -3054,6 +3088,14 @@ function normalizeMarketScan(input = {}) {
     highVolumeScanEnabled: input?.highVolumeScanEnabled !== false,
     highVolumeScanCount: Math.max(0, Math.floor(Number(input?.highVolumeScanCount) || 0)),
     highVolumeScanError: input?.highVolumeScanError || null,
+    researchTagSlugs: Array.isArray(input?.researchTagSlugs)
+      ? input.researchTagSlugs.map((slug) => String(slug || "").trim().toLowerCase()).filter(Boolean).slice(0, 24)
+      : MARKET_SCAN_RESEARCH_TAG_SLUGS,
+    researchIntervalMinutes: Math.max(0, Number(input?.researchIntervalMinutes) || MARKET_SCAN_RESEARCH_INTERVAL_MINUTES),
+    researchMaxDays: Math.max(1, Number(input?.researchMaxDays) || MARKET_SCAN_RESEARCH_MAX_DAYS),
+    lastResearchTag: String(input?.lastResearchTag || "").trim().toLowerCase() || null,
+    lastResearchCount: Math.max(0, Math.floor(Number(input?.lastResearchCount) || 0)),
+    lastResearchError: input?.lastResearchError || null,
     priorityScanBatchLimit: Math.max(0, Math.floor(Number(input?.priorityScanBatchLimit) || 0)),
     endDateGraceHours: Math.max(0, Number(input?.endDateGraceHours) || 0),
     lastScanError: input?.lastScanError || null,
@@ -8633,6 +8675,10 @@ function portfolioFilterResult(item, strategy) {
   const liveEventMode = configLiveEventMode(strategy);
   const eventIsRunning = rowEventIsRunning(item);
 
+  // Research scans deliberately collect a wider, longer-horizon sample. They feed the
+  // resolved-data reports after settlement, but have no route into an existing paper
+  // portfolio until the ordinary operational scan has independently seen the market.
+  if (item?.researchOnly === true) reasons.push("research-only observation");
   if (binaryOutcomeQuotesAreBothZero(item)) reasons.push("binary YES/NO quotes are both 0%; market appears resolved");
   if (strategy.excludedCandidateTokenIds?.has(tokenId)) reasons.push("manually excluded from this paper portfolio");
   const includedTags = includedTagsOnRow(item, strategy);
@@ -11228,13 +11274,14 @@ function annotateCategoryScanMarkets(markets, tag) {
   return annotated;
 }
 
-async function loadCategoryMarketScanBatch(tag, { afterCursor = null, auditCalls = null } = {}) {
+async function loadCategoryMarketScanBatch(tag, { afterCursor = null, endDateMax = null, auditCalls = null } = {}) {
   const params = {
     limit: MARKET_SCAN_EVENT_BATCH_LIMIT,
     tag_id: tag.id,
     order: "endDate",
     ascending: "true",
     ...(afterCursor ? { after_cursor: afterCursor } : {}),
+    ...(endDateMax ? { end_date_max: endDateMax } : {}),
   };
   const markets = await loadEventMarketScanBatch(params, {
     calls: auditCalls,
@@ -11540,6 +11587,10 @@ function preferredMarketObservation(market, observedAt = nowIso()) {
     firstTags: tags,
     firstPolymarketCategories: polymarketCategories,
     firstPolymarketTags: polymarketTags,
+    // A separately collected research row remains visible to the statistics pipeline,
+    // but is explicitly ineligible for candidate selection. A later ordinary scan writes
+    // false here and therefore promotes the same market only after it is normally seen.
+    researchOnly: market.__researchOnly === true,
     source: "polymarket-gamma",
   };
 }
@@ -11654,6 +11705,32 @@ async function marketScanScopes(resolvedTagIds = {}, auditCalls = null) {
   ];
 }
 
+async function marketScanResearchScopes(resolvedTagIds = {}, auditCalls = null) {
+  const scopes = [];
+  for (const slug of MARKET_SCAN_RESEARCH_TAG_SLUGS) {
+    const tag = await resolveMarketScanTag(slug, resolvedTagIds, auditCalls);
+    scopes.push({ key: `research:${tag.slug}`, label: `Research: ${tag.slug}`, tag });
+  }
+  return scopes;
+}
+
+// Return one due research scope. Its round-robin state is intentionally separate from the
+// execution scan, so a longer historical sample can never steal the normal scan's cursor.
+function overdueResearchScanScope(scopes = [], previousScan = {}, now = Date.now()) {
+  if (!MARKET_SCAN_RESEARCH_TAG_SLUGS.length || MARKET_SCAN_RESEARCH_INTERVAL_MINUTES <= 0) return null;
+  const scannedAt = previousScan?.researchTagScannedAt && typeof previousScan.researchTagScannedAt === "object"
+    ? previousScan.researchTagScannedAt
+    : {};
+  const dueBefore = now - MARKET_SCAN_RESEARCH_INTERVAL_MINUTES * 60000;
+  const start = Math.max(0, Number(previousScan?.researchScopeCursor) || 0) % Math.max(1, scopes.length);
+  for (let offset = 0; offset < scopes.length; offset += 1) {
+    const index = (start + offset) % scopes.length;
+    const last = Date.parse(scannedAt[scopes[index]?.key] || "") || 0;
+    if (last <= dueBefore) return index;
+  }
+  return null;
+}
+
 async function refreshMarketObservations(state) {
   const previousScan = normalizeMarketScan(state.marketScan);
   const focusedRefresh = REFRESH_TOKEN_ID !== "" || REFRESH_MARKET_SLUG !== "";
@@ -11732,6 +11809,39 @@ async function refreshMarketObservations(state) {
     if (nextCursor) savedCursors[scope.key] = nextCursor;
     else delete savedCursors[scope.key];
 
+    // One bounded research page on the broad hourly pass. It has a separate cursor and
+    // is optional: a tag lookup or Gamma failure must never stop the operational scan,
+    // its state publication, or the downstream portfolio executions.
+    let researchMarkets = [];
+    let researchScope = null;
+    let researchAfterCursor = null;
+    let researchNextCursor = null;
+    let researchScopeIndex = null;
+    let researchScanError = null;
+    const savedResearchCursors = { ...previousScan.researchScanCursors };
+    if (MARKET_SCAN_TAG === "") {
+      try {
+        const researchScopes = await marketScanResearchScopes(resolvedTagIds, apiCallAudit);
+        researchScopeIndex = overdueResearchScanScope(researchScopes, previousScan);
+        if (researchScopeIndex !== null) {
+          researchScope = researchScopes[researchScopeIndex];
+          researchAfterCursor = savedResearchCursors[researchScope.key] || null;
+          const researchBatch = await loadCategoryMarketScanBatch(researchScope.tag, {
+            afterCursor: researchAfterCursor,
+            endDateMax: new Date(Date.now() + MARKET_SCAN_RESEARCH_MAX_DAYS * 86400000).toISOString(),
+            auditCalls: apiCallAudit,
+          });
+          researchMarkets = researchBatch;
+          researchNextCursor = scanBatchNextCursor(researchBatch);
+          if (researchNextCursor) savedResearchCursors[researchScope.key] = researchNextCursor;
+          else delete savedResearchCursors[researchScope.key];
+        }
+      } catch (error) {
+        researchScanError = error?.message || String(error);
+        console.warn(`Research scan failed (${researchScanError}); continuing with the operational scan only.`);
+      }
+    }
+
     // Live events are fetched in addition to the rotating scope, never instead of it.
     // A failure here is logged and dropped: the catalogue scan is the job that must
     // keep working, and losing one live batch costs nothing the next run cannot redo.
@@ -11799,11 +11909,15 @@ async function refreshMarketObservations(state) {
     // priority position and is still only counted, audited and retained once.
     const priorityMarkets = mergeMarketLists(liveOrderMarkets, imminentDipMarkets, liveMarkets, frontierMarkets, highVolumeMarkets);
     const rotatingMarkets = diversifyMarketScanOrder(batch);
-    const fetchedMarkets = mergeMarketLists(priorityMarkets, rotatingMarkets);
+    // The ordinary paths take precedence. When both scans see the same market, the
+    // operational row is retained and clears researchOnly; only the extra, research-only
+    // rows are held back from candidate selection.
+    const researchTaggedMarkets = researchMarkets.map((market) => ({ ...market, __researchOnly: true }));
+    const fetchedMarkets = mergeMarketLists(priorityMarkets, rotatingMarkets, researchTaggedMarkets);
     const duplicateMarketsSkipped = Math.max(
       0,
       liveOrderMarkets.length + imminentDipMarkets.length + liveMarkets.length + frontierMarkets.length + highVolumeMarkets.length
-        + rotatingMarkets.length - fetchedMarkets.length,
+        + rotatingMarkets.length + researchMarkets.length - fetchedMarkets.length,
     );
     const knownEventKeys = activeScanEventKeys(state.marketObservations || []);
     const unseenEventCount = unseenScanEventCount(fetchedMarkets, knownEventKeys);
@@ -11903,8 +12017,12 @@ async function refreshMarketObservations(state) {
     state.marketScan = {
       ...previousScan,
       scanCursors: savedCursors,
+      researchScanCursors: savedResearchCursors,
       resolvedTagIds,
       scanScopeCursor: usedHourlySlot ? rotationIndex : (scopeIndex + 1) % scopes.length,
+      researchScopeCursor: researchScopeIndex === null
+        ? previousScan.researchScopeCursor
+        : (researchScopeIndex + 1) % Math.max(1, MARKET_SCAN_RESEARCH_TAG_SLUGS.length),
       // When each scope last had a full catalogue pass, which is what the guaranteed
       // hourly slot is measured against.
       tagScannedAt: { ...(previousScan.tagScannedAt || {}), [scope.key]: scanRunAt },
@@ -11949,6 +12067,15 @@ async function refreshMarketObservations(state) {
       highVolumeScanEnabled: MARKET_SCAN_HIGH_VOLUME_ENABLED,
       highVolumeScanCount: highVolumeMarkets.length,
       highVolumeScanError,
+      researchTagScannedAt: researchScope
+        ? { ...(previousScan.researchTagScannedAt || {}), [researchScope.key]: scanRunAt }
+        : previousScan.researchTagScannedAt,
+      researchTagSlugs: MARKET_SCAN_RESEARCH_TAG_SLUGS,
+      researchIntervalMinutes: MARKET_SCAN_RESEARCH_INTERVAL_MINUTES,
+      researchMaxDays: MARKET_SCAN_RESEARCH_MAX_DAYS,
+      lastResearchTag: researchScope?.tag?.slug || null,
+      lastResearchCount: researchMarkets.length,
+      lastResearchError: researchScanError,
       priorityScanBatchLimit: MARKET_SCAN_PRIORITY_BATCH_LIMIT,
       endDateGraceHours: MARKET_SCAN_END_DATE_GRACE_HOURS,
       lastScanError: null,
@@ -11960,12 +12087,12 @@ async function refreshMarketObservations(state) {
         trigger: scanTrigger,
         status: "SUCCESS",
         apiCalls: apiCallAudit.length || 1,
-        requestedBatches: 1,
+        requestedBatches: 1 + (researchScope ? 1 : 0),
         preferredMarketCount: scope.tag ? 0 : rotatingMarkets.length,
         categoryMarketCount: scope.tag ? rotatingMarkets.length : 0,
         categoryApiCalls: scope.tag ? 1 : 0,
         categoryErrors: [],
-        requestedCategories: [scope.tag?.slug || "all"],
+        requestedCategories: [scope.tag?.slug || "all", ...(researchScope ? [`research:${researchScope.tag?.slug || ""}`] : [])],
         preferredCursor: scope.tag ? 0 : 1,
         categoryOffsets: {},
         scanScope: scope.label,
@@ -12006,6 +12133,11 @@ async function refreshMarketObservations(state) {
         shortHorizonCount,
         categoryCounts,
         tagCounts,
+        researchTag: researchScope?.tag?.slug || null,
+        researchMarketCount: researchMarkets.length,
+        researchScopeCursor: researchAfterCursor,
+        researchScopeNextCursor: researchNextCursor,
+        researchError: researchScanError,
         audit: {
           apiCalls: apiCallAudit,
           totalMarkets: fetchedMarkets.length,
@@ -14365,6 +14497,7 @@ export {
   normalizeMarketScan,
   refreshMarketObservations,
   overdueHourlyScanScope,
+  overdueResearchScanScope,
   MARKET_SCAN_HOURLY_TAG_SLUGS,
   scanEventRequestParams,
   annualizationDays,

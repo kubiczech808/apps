@@ -2032,6 +2032,73 @@ test("market scan: sports and esports get a guaranteed slot every hour", async (
   assert.equal(bot.overdueHourlyScanScope(scopes, atBoundary, now), indexOf("sports"));
 });
 
+test("market scan: research has its own due cursor and cannot become a paper candidate", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const source = await readFile(new URL("../tools/paper-trading-bot.mjs", import.meta.url), "utf8");
+  const api = await readFile(new URL("../api.php", import.meta.url), "utf8");
+  const app = await readFile(new URL("../assets/app.js", import.meta.url), "utf8");
+  const scopes = [
+    { key: "research:tennis", tag: { slug: "tennis" } },
+    { key: "research:football", tag: { slug: "football" } },
+  ];
+  const now = Date.parse("2026-09-28T10:00:00Z");
+  const iso = (minutesAgo) => new Date(now - minutesAgo * 60000).toISOString();
+
+  // A new research collector scans immediately; a fresh scope waits for its interval
+  // without moving the ordinary sports/esports rotation.
+  assert.equal(bot.overdueResearchScanScope(scopes, {}, now), 0);
+  assert.equal(bot.overdueResearchScanScope(scopes, {
+    researchScopeCursor: 1,
+    researchTagScannedAt: { "research:tennis": iso(5), "research:football": iso(5) },
+  }, now), null);
+  assert.equal(bot.overdueResearchScanScope(scopes, {
+    researchScopeCursor: 1,
+    researchTagScannedAt: { "research:tennis": iso(5), "research:football": iso(65) },
+  }, now), 1);
+
+  const scan = bot.normalizeMarketScan({
+    researchScanCursors: { "research:tennis": "cursor-12" },
+    researchScopeCursor: 1,
+    researchTagScannedAt: { "research:tennis": iso(2) },
+    researchTagSlugs: ["tennis"],
+    lastResearchTag: "tennis",
+    lastResearchCount: 500,
+  });
+  assert.equal(scan.researchScanCursors["research:tennis"], "cursor-12");
+  assert.equal(scan.researchScopeCursor, 1);
+  assert.equal(scan.researchTagScannedAt["research:tennis"], iso(2));
+  assert.equal(scan.lastResearchCount, 500);
+
+  const blocked = bot.portfolioFilterResult({
+    researchOnly: true,
+    status: "ELIGIBLE",
+    selectionStatus: "ELIGIBLE",
+    marketProbability: 0.75,
+    bestAsk: 0.75,
+    bestBid: 0.74,
+    volumeUsdc: 100000,
+    eventStarted: true,
+  }, {
+    id: "research-test",
+    minProbability: 0.7,
+    minLiquidityUsdc: 0,
+    minNetYield: 0,
+    probabilitySource: "polymarket",
+    maxResolutionDays: 7,
+  });
+  assert.equal(blocked.eligible, false);
+  assert.ok(blocked.reasons.includes("research-only observation"));
+
+  assert.match(source, /researchOnly: market\.__researchOnly === true/,
+    "the observation must retain its collection provenance");
+  assert.match(source, /const researchTaggedMarkets = researchMarkets\.map/,
+    "only the additional research batch may carry researchOnly");
+  assert.match(api, /if \(\(\$item\['researchOnly'\] \?\? false\) === true\)/,
+    "live shortlists must reject research-only observations on the server");
+  assert.match(app, /if \(item\?\.researchOnly === true\) reasons\.push\("research-only observation"\)/,
+    "the UI must present the same shortlist boundary");
+});
+
 test("market scan: the borrowed slot delays the rotation without skipping a scope", async () => {
   const { readFile } = await import("node:fs/promises");
   const source = await readFile(new URL("../tools/paper-trading-bot.mjs", import.meta.url), "utf8");
@@ -3724,6 +3791,7 @@ test("live events: the scan asks Gamma only for what was measured to work", asyn
     "liveScanEnabled", "liveScanWindowHours", "liveScanCount", "liveScanCounts", "liveScanError",
     "frontierScanEnabled", "frontierScanCount", "frontierScanError",
     "highVolumeScanEnabled", "highVolumeScanCount", "highVolumeScanError",
+    "researchTagSlugs", "researchIntervalMinutes", "researchMaxDays", "lastResearchTag", "lastResearchCount", "lastResearchError",
     "priorityScanBatchLimit", "endDateGraceHours",
   ]) {
     assert.ok(

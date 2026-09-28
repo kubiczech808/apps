@@ -11530,6 +11530,10 @@ function portfolioCandidateFilterReasons(item, mode = state.mode) {
   // retryable one (capital, diversification) lets the row back into the shortlist.
   const executionCheckIsCurrent = Boolean(executionCheck);
 
+  // Research rows may appear in the shared catalogue, but the collector has a broader
+  // horizon than an operational portfolio. Keep the shortlist honest about that boundary.
+  if (item?.researchOnly === true) reasons.push("research-only observation");
+
   // Above every mode-specific rule, and above 5050's early return, because a tag policy
   // disqualifies the market whatever else is true of it. The whitelist says what is
   // considered; the exclusions then subtract from it.
