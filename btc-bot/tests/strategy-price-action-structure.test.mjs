@@ -260,6 +260,95 @@ test('a closed-terminal extension reaches the dashboard chart before the next pi
   )
 })
 
+test('the active chart wave retains the lowest closed wick from its LH through the current price', () => {
+  const result = classifyExternalStructure({
+    candles: [
+      candle(START, 120, 120, 118, 119),
+      candle(START + HOUR, 101, 102, 100, 101),
+      candle(START + 2 * HOUR, 114, 115, 112, 114),
+      candle(START + 3 * HOUR, 91, 92, 90, 89),
+      // A later wick becomes the terminal of this same LH -> LL wave. It is
+      // not a newly confirmed source pivot, but it is the real chart low.
+      candle(START + 4 * HOUR, 90, 93, 82, 91),
+    ],
+    externalPivots: {
+      trend: 'down',
+      source: 'Twelve Data',
+      timeframeId: '1h',
+      activeRange: {
+        high: { kind: 'high', label: 'LH', price: 115, close: 114, time: START + 2 * HOUR },
+        low: { kind: 'low', label: 'LL', price: 90, close: 89, time: START + 3 * HOUR },
+        source: 'external-confirmed-directional-wave',
+      },
+      chartPivots: [
+        { kind: 'high', label: 'LH', price: 115, time: START + 2 * HOUR },
+        { kind: 'low', label: 'LL', price: 90, time: START + 3 * HOUR },
+      ],
+      pivots: [
+        { kind: 'high', label: 'LH', price: 115, close: 114, time: START + 2 * HOUR },
+        { kind: 'low', label: 'LL', price: 90, close: 89, time: START + 3 * HOUR },
+      ],
+    },
+  })
+
+  assert.equal(result.structure.activeRange.high.price, 115)
+  assert.equal(result.structure.activeRange.low.price, 82)
+  assert.equal(result.structure.activeRange.low.time, START + 4 * HOUR)
+  assert.deepEqual(
+    result.structure.chartPivots.map((pivot) => [pivot.label, pivot.time, pivot.price]),
+    [['LH', START + 2 * HOUR, 115], ['LL', START + 4 * HOUR, 82]]
+  )
+})
+
+test('every production asset and timeframe scans its active wave through the current closed candle', () => {
+  for (const [assetIndex, asset] of PRICE_ACTION_ASSETS.entries()) {
+    for (const timeframe of PRICE_ACTION_TIMEFRAMES) {
+      const period = timeframe.hours * HOUR
+      const up = (assetIndex + timeframe.hours) % 2 === 0
+      const activeRange = up
+        ? {
+            high: { kind: 'high', label: 'HH', price: 120, close: 119, time: START + period },
+            low: { kind: 'low', label: 'HL', price: 100, close: 101, time: START },
+          }
+        : {
+            high: { kind: 'high', label: 'LH', price: 120, close: 119, time: START },
+            low: { kind: 'low', label: 'LL', price: 100, close: 99, time: START + period },
+          }
+      const candles = up
+        ? [
+            candle(START, 101, 102, 100, 101),
+            candle(START + period, 119, 120, 118, 119),
+            candle(START + 2 * period, 121, 130, 120, 125),
+          ]
+        : [
+            candle(START, 119, 120, 118, 119),
+            candle(START + period, 101, 102, 100, 99),
+            candle(START + 2 * period, 99, 101, 90, 94),
+          ]
+      const result = classifyExternalStructure({
+        candles,
+        externalPivots: {
+          trend: up ? 'up' : 'down',
+          source: 'test',
+          timeframeId: timeframe.id,
+          activeRange: { ...activeRange, source: 'external-confirmed-directional-wave' },
+          chartPivots: up
+            ? [activeRange.low, activeRange.high]
+            : [activeRange.high, activeRange.low],
+          pivots: up
+            ? [activeRange.low, activeRange.high]
+            : [activeRange.high, activeRange.low],
+        },
+      })
+      const terminal = up ? result.structure.activeRange.high : result.structure.activeRange.low
+
+      assert.equal(terminal.time, START + 2 * period, `${asset.symbol} ${timeframe.id}`)
+      assert.equal(terminal.price, up ? 130 : 90, `${asset.symbol} ${timeframe.id}`)
+      assert.ok(result.structure.activeRange.high.price > result.structure.activeRange.low.price, `${asset.symbol} ${timeframe.id}`)
+    }
+  }
+})
+
 test('externally confirmed pivot anchors use the actual extrema of the displayed chart wave', () => {
   const result = classifyExternalStructure({
     candles: [
