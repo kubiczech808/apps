@@ -2560,6 +2560,31 @@ const priceActionPositionPrice = (position) => {
   return assetCurrentPrice(asset) ?? priceActionPositionItem(position)?.price ?? position.markPrice ?? null
 }
 
+const pendingOrderMarketPrice = (order) => {
+  if (order?.strategyId === 'price-action-structure-v1') return priceActionPositionPrice(order)
+  if (Number.isFinite(order?.markPrice)) return order.markPrice
+  return order?.assetSymbol === 'BTCUSD' || !order?.assetSymbol ? state?.market?.price ?? null : null
+}
+
+const pendingOrderDistanceCell = (order) => {
+  const entry = order?.quotePrice ?? order?.entry
+  const current = pendingOrderMarketPrice(order)
+  if (!Number.isFinite(entry) || !Number.isFinite(current) || entry <= 0) return el('td', { text: '–' })
+
+  const difference = current - entry
+  const distancePct = Math.abs(difference / entry) * 100
+  const relation = difference > 0 ? 'nad vstupem' : difference < 0 ? 'pod vstupem' : 'na vstupu'
+  const arrow = difference > 0 ? '↓' : difference < 0 ? '↑' : '•'
+  const detail = difference === 0
+    ? 'na vstupu'
+    : `${arrow} ${quotePrice(Math.abs(difference))} · ${pct(distancePct, 2)}`
+
+  return el('td', { title: `Aktuální cena je ${relation}.` }, [
+    el('div', { className: 'pa-level-price', text: quotePrice(current) }),
+    el('div', { className: 'pa-level-detail', text: detail }),
+  ])
+}
+
 const positionCapitalCell = (position) => {
   const invested = usd(usdFromSats(position?.marginSats, position?.quoteSatsPerUsd))
   const notional = Number(position?.quantityUsd)
@@ -2655,11 +2680,11 @@ const renderOrders = () => {
     return
   }
   setPanelTitle('panel-orders-title', 'Objednávky')
-  setTableHead('panel-orders', ['Zadáno', 'Typ', 'Směr', 'Velikost', 'Cena', 'Stop loss', 'Take profit', 'Marže', ''])
+  setTableHead('panel-orders', ['Zadáno', 'Typ', 'Směr', 'Velikost', 'Cena', 'Akt. cena / vzdál.', 'Stop loss', 'Take profit', 'Marže', ''])
   const rows = state?.positions?.orders || []
   body.replaceChildren()
   if (!rows.length) {
-    body.append(emptyRow(9, 'Žádné čekající objednávky.'))
+    body.append(emptyRow(10, 'Žádné čekající objednávky.'))
     return
   }
   for (const order of rows) {
@@ -2673,6 +2698,7 @@ const renderOrders = () => {
         sideCell(order.side),
         el('td', { text: order.quantityUsd ? `${nf(0).format(order.quantityUsd)} USD` : '–' }),
         el('td', { text: price(order.entry) }),
+        partialTakeProfit ? el('td', { text: '–' }) : pendingOrderDistanceCell(order),
         el('td', { text: price(order.stopLoss) }),
         el('td', { text: price(order.takeProfit) }),
         el('td', { text: usd(usdFromSats(order.marginSats, order.quoteSatsPerUsd)) }),
@@ -2684,11 +2710,11 @@ const renderOrders = () => {
 
 const renderPriceActionOrders = (body) => {
   setPanelTitle('panel-orders-title', 'Čekající price-action objednávky')
-  setTableHead('panel-orders', ['Zadáno', 'Asset', 'TF', 'Typ', 'Směr', 'Vložený kapitál', 'Cena', 'Stop loss', 'TP1 / TP2', 'Marže', ''])
+  setTableHead('panel-orders', ['Zadáno', 'Asset', 'TF', 'Typ', 'Směr', 'Vložený kapitál', 'Cena', 'Akt. cena / vzdál.', 'Stop loss', 'TP1 / TP2', 'Marže', ''])
   const rows = state?.positions?.orders || []
   body.replaceChildren()
   if (!rows.length) {
-    body.append(emptyRow(11, 'Žádné čekající objednávky.'))
+    body.append(emptyRow(12, 'Žádné čekající objednávky.'))
     return
   }
   for (const order of rows) {
@@ -2704,6 +2730,7 @@ const renderPriceActionOrders = (body) => {
         sideCell(order.side),
         positionCapitalCell(order),
         el('td', { text: quotePrice(order.quotePrice ?? order.entry) }),
+        partialTakeProfit ? el('td', { text: '–' }) : pendingOrderDistanceCell(order),
         el('td', { text: partialTakeProfit ? '–' : quotePrice(order.stopLoss) }),
         el('td', { text: partialTakeProfit ? `TP1 ${quotePrice(order.entry)} · 50 %` : `${quotePrice(order.tp1)} / ${Number.isFinite(order.tp2) ? quotePrice(order.tp2) : 'struktura'}` }),
         el('td', { text: partialTakeProfit ? '–' : usd(usdFromSats(order.marginSats, order.quoteSatsPerUsd)) }),

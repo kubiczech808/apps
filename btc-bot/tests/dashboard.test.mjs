@@ -235,9 +235,19 @@ test('open price-action rows calculate the stop against their own remaining amou
 
 test('price-action take-profit orders render as a protected half-position, not a cancellable entry', () => {
   const priceActionOrders = js.slice(js.indexOf('const renderPriceActionOrders'), js.indexOf('const EXIT_REASONS'))
+  assert.match(priceActionOrders, /'Akt\. cena \/ vzdál\.'/)
+  assert.match(priceActionOrders, /partialTakeProfit \? el\('td', \{ text: '–' \}\) : pendingOrderDistanceCell\(order\)/)
   assert.match(priceActionOrders, /for \(const order of rows\) \{\r?\n    const partialTakeProfit = order\.orderRole === 'take-profit'/)
   assert.match(priceActionOrders, /const cancel = partialTakeProfit \? null : el\('button', \{ type: 'button', text: 'Zrušit' \}\)/)
   assert.match(priceActionOrders, /partialTakeProfit \? `TP1 \$\{quotePrice\(order\.entry\)\} · 50 %`/)
+})
+
+test('pending orders show the live price and its absolute distance from entry', () => {
+  assert.match(js, /const pendingOrderMarketPrice = \(order\) =>/)
+  assert.match(js, /const pendingOrderDistanceCell = \(order\) =>/)
+  assert.match(js, /const difference = current - entry/)
+  assert.match(js, /const distancePct = Math\.abs\(difference \/ entry\) \* 100/)
+  assert.match(js, /'Akt\. cena \/ vzdál\.'/)
 })
 
 test('price-action position, order and closed-trade rows focus their matching chart', () => {
