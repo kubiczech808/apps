@@ -5355,6 +5355,18 @@ test("execution candidates: an already held market is labelled, not removed", as
   assert.match(app, /state\.candidateTotalCount = rows\.length \+ blocked \+ excluded \+ held;/);
   assert.match(app, /already held/, "the summary names them");
 
+  // DIP plans have a second source of truth: the one-second worker marks a plan terminal
+  // after it finds the matching wallet position. That marker used to make the browser drop
+  // the row before the existing ALREADY HELD classification could render. A wallet collision
+  // is informational, not a completed/rejected candidate, so it survives that filter.
+  assert.match(app, /function dipWatchPlanAlreadyHeldReason\(plan = \{\}\)/);
+  assert.match(app, /wallet already holds/);
+  assert.match(app, /!dipWatchPlanHasTerminalEntry\(plan\) \|\| Boolean\(dipWatchPlanAlreadyHeldReason\(plan\)\)/,
+    "a terminal DIP plan stays visible when its only terminal reason is an existing wallet position");
+  assert.match(app, /const alreadyHeldReason = dipWatchPlanAlreadyHeldReason\(plan\);/);
+  assert.match(app, /portfolioRiskBlockReason: alreadyHeldReason \|\| plan\.blockedReason \|\| ""/,
+    "the retained worker reason reaches the common ALREADY HELD precheck");
+
   // And the flash itself: no rows are drawn for a live portfolio until the snapshot that
   // decides which markets are held has arrived.
   assert.match(app, /if \(isLivePortfolioMode\(mode\) && !state\.liveState\) \{/,

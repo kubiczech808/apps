@@ -1643,6 +1643,18 @@ function dipWatchPlanHasTerminalEntry(plan = {}) {
   return String(plan?.settled || "").trim() !== "";
 }
 
+// A terminal worker record normally means that this token no longer belongs in the
+// active shortlist: it was filled, rejected, shadowed or recorded by a paper account.
+// A wallet collision is different. It is the useful answer to "why is this otherwise
+// matching market not available?" and must stay visible as ALREADY HELD while the
+// corresponding position or order exists.
+function dipWatchPlanAlreadyHeldReason(plan = {}) {
+  const reason = String(plan?.blockedReason || plan?.settled || "").trim();
+  return /(?:wallet already holds|wallet already has|already holds or has a resting order|already has a position in this market|already held|already open)/i.test(reason)
+    ? reason
+    : "";
+}
+
 // These are not ordinary catalogue candidates. They are the exact entries the RPi has
 // prepared while the favourite is still visible, and their price is refreshed directly from
 // the CLOB above. Once it falls below 50%, the catalogue normally retains the other outcome,
@@ -1658,11 +1670,12 @@ function dipEntryWatchCandidateRows(mode = state.mode) {
     .filter((plan) => !dipWatchPlanHasFinalQuote(plan))
     // The worker refuses a token only once, intentionally: retrying a rejected FOK can
     // create duplicate live orders. It is therefore no longer an execution candidate.
-    .filter((plan) => !dipWatchPlanHasTerminalEntry(plan))
+    .filter((plan) => !dipWatchPlanHasTerminalEntry(plan) || Boolean(dipWatchPlanAlreadyHeldReason(plan)))
     .map((plan) => {
       const currentAsk = numericOrNull(plan.bestAsk ?? plan.currentAsk);
       const currentBid = numericOrNull(plan.bestBid ?? plan.currentBid);
       const currentProbability = currentAsk ?? currentBid ?? numericOrNull(plan.marketProbability ?? plan.marketPrice);
+      const alreadyHeldReason = dipWatchPlanAlreadyHeldReason(plan);
       return {
         ...plan,
         tokenId: String(plan.tokenId || ""),
@@ -1678,9 +1691,10 @@ function dipEntryWatchCandidateRows(mode = state.mode) {
         selectionStatus: "READY",
         evaluatedAt: plan.preparedAt || state.dipEntryStatus?.at || null,
         dipEntryWatch: true,
-        dipEntryWatchReason: plan.blockedReason
+        dipEntryWatchReason: alreadyHeldReason
+          || plan.blockedReason
           || `watching for an executable ask in ${probability(Number(plan.buyMin))}-${probability(Number(plan.buyMax))}`,
-        portfolioRiskBlockReason: plan.blockedReason || "",
+        portfolioRiskBlockReason: alreadyHeldReason || plan.blockedReason || "",
       };
     });
 }
@@ -1704,6 +1718,7 @@ function dipEntryStatusMarkup(mode) {
   const allWatched = status.watch.filter((plan) => String(plan?.portfolioId || "") === mine
     || String(plan?.portfolioId || "") === normalizeMode(mode));
   const watched = allWatched.filter((plan) => !dipWatchPlanHasTerminalEntry(plan));
+  const alreadyHeld = allWatched.filter((plan) => Boolean(dipWatchPlanAlreadyHeldReason(plan)));
   const rejected = allWatched.filter((plan) => String(plan?.settled || "") === "rejected");
   const rejectionReason = rejected
     .map((plan) => String(plan?.settledError || "").trim())
@@ -1730,6 +1745,7 @@ function dipEntryStatusMarkup(mode) {
     + ` ${probability(rule.buyMin)}-${probability(rule.buyMax)}.`
     + ` ${caught.length ? `${formatInteger(caught.length)} dip(s) recorded` : "No dip recorded yet"}`
     + `${newest ? `, newest ${escapeHtml(formatDate(newest.at))} at ${probability(Number(newest.price))}` : ""}.${diagnosticNote}${quoteNote}${workerNote}`
+    + `${alreadyHeld.length ? ` ${formatInteger(alreadyHeld.length)} matching market(s) are already held and remain listed below.` : ""}`
     + `${rejected.length ? ` ${formatInteger(rejected.length)} earlier in-band attempt(s) were rejected and are excluded from the active shortlist.${rejectionReason ? ` Latest reason: ${escapeHtml(rejectionReason)}.` : ""}` : ""}`
     + ` The RPi worker watches these every second; this bot opens the position on its next run,`
     + ` at the price the dip reached.</div>`;
@@ -11798,7 +11814,9 @@ function candidateRiskBlockReason(item, activeRows = [], evaluationByToken = new
 // explanation. A row the reader watched disappear is worse than a row labelled ALREADY
 // HELD, and "why is this not a candidate" is exactly what this tab exists to answer.
 function candidateAlreadyHeldMarketReason(reason) {
-  return reason === "duplicate token already open" || reason === "same live market already open";
+  return reason === "duplicate token already open"
+    || reason === "same live market already open"
+    || /(?:wallet already holds|wallet already has|already holds or has a resting order|already has a position in this market|already held|already open)/i.test(String(reason || ""));
 }
 
 function portfolioCandidateSortValue(item, key, mode = state.mode) {
@@ -12186,11 +12204,11 @@ function renderPortfolioCandidateRows(rows = [], mode = state.mode, diagnostics 
           const heldRow = candidateAlreadyHeldMarketReason(item.portfolioRiskBlockReason);
           const status = excluded
             ? "excluded manually for this portfolio"
-            : (watchingDip
-              ? `${item.dipEntryWatchReason || "watching the live order book"}${Number.isFinite(Number(item.currentProbability)) ? `; current ask ${probability(Number(item.currentProbability))}` : "; current ask unavailable"}`
-              : (heldRow
+            : (heldRow
               ? `${item.portfolioRiskBlockReason}; see Opened trades`
-              : (riskBlockedRow
+              : (watchingDip
+                ? `${item.dipEntryWatchReason || "watching the live order book"}${Number.isFinite(Number(item.currentProbability)) ? `; current ask ${probability(Number(item.currentProbability))}` : "; current ask unavailable"}`
+                : (riskBlockedRow
                 // Which bet this one is tied to, not merely that a rule exists. "Excluded
                 // by diversification rules" was the same sentence on every blocked row,
                 // and the question a reader brings to this column is WHICH other bet --
@@ -12200,7 +12218,7 @@ function renderPortfolioCandidateRows(rows = [], mode = state.mode, diagnostics 
                 : (!live ? "ready for next paper execution" : ""))));
           const precheck = excluded
             ? "EXCLUDED"
-            : (watchingDip ? "WATCHING" : (heldRow ? "ALREADY HELD" : (riskBlockedRow ? "RISK-BLOCKED" : "READY")));
+            : (heldRow ? "ALREADY HELD" : (watchingDip ? "WATCHING" : (riskBlockedRow ? "RISK-BLOCKED" : "READY")));
           const precheckTone = excluded || riskBlockedRow || heldRow
             ? "warning"
             : (watchingDip ? "pending" : "filled");
