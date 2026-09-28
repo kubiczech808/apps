@@ -405,6 +405,47 @@ switch ($action) {
         ok(['generatedAt' => $backtests['generatedAt'] ?? null]);
     }
 
+    case 'backtest-progress': {
+        requirePost();
+        $progress = requestBody();
+        if (($progress['strategyId'] ?? '') !== 'price-action-structure-v1') {
+            fail(400, 'Backtest progress must identify the active PA-1 strategy.');
+        }
+        $runId = trim((string) ($progress['runId'] ?? ''));
+        $totalProfiles = (int) ($progress['totalProfiles'] ?? 0);
+        if ($runId === '' || $totalProfiles < 1) {
+            fail(400, 'Backtest progress requires a run id and a positive profile count.');
+        }
+        $existing = readJsonFile(BACKTEST_FILE, null);
+        $existingRun = is_array($existing) ? ($existing['run'] ?? null) : null;
+        if (!is_array($existingRun) || ($existingRun['runId'] ?? null) !== $runId) {
+            fail(409, 'Backtest progress belongs to a different run.');
+        }
+        $previousCompleted = max(0, (int) ($existingRun['completedProfiles'] ?? 0));
+        $completedProfiles = min($totalProfiles, max(0, (int) ($progress['completedProfiles'] ?? 0)));
+        if ($completedProfiles < $previousCompleted) {
+            fail(409, 'Backtest progress cannot move backwards.');
+        }
+        $status = ($progress['status'] ?? 'running') === 'failed' ? 'failed' : 'running';
+        $run = array_merge($existingRun, [
+            'status' => $status,
+            'runId' => $runId,
+            'totalProfiles' => $totalProfiles,
+            'completedProfiles' => $completedProfiles,
+            'progressPct' => round(($completedProfiles / $totalProfiles) * 100, 2),
+        ]);
+        if (array_key_exists('lastCompleted', $progress)) {
+            $run['lastCompleted'] = $progress['lastCompleted'];
+        }
+        if ($status === 'failed' && isset($progress['error'])) {
+            $run['error'] = (string) $progress['error'];
+            $run['completedAt'] = gmdate('c');
+        }
+        $existing['run'] = $run;
+        writeJsonFile(BACKTEST_FILE, $existing);
+        ok(['run' => $run]);
+    }
+
     default:
         fail(404, 'Unknown action: ' . $action);
 }

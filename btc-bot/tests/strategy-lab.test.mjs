@@ -67,3 +67,12 @@ test('backtest CLI exposes explicit optimization overrides', () => {
   assert.match(cli, /row\.annual/)
   assert.match(cli, /row\.dd/)
 })
+
+test('published PA-1 backtests report progress after each asset-timeframe calculation', () => {
+  const worker = read('tools/backtest-price-action-structure.mjs')
+  assert.match(worker, /const totalProfiles = periodYears\.length \* sources\.length \* timeframeIds\.length/)
+  assert.match(worker, /completedProfiles \+= 1/)
+  assert.match(worker, /lastCompleted: \{ periodYears: yearsBack, asset: asset\.symbol, timeframeId \}/)
+  assert.match(worker, /store\.updateBacktestProgress/)
+  assert.match(worker, /result\.run = \{ \.\.\.runProgress\(\{ status: 'complete' \}\)/)
+})

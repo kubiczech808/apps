@@ -107,6 +107,11 @@ const result = {
 const store = publish
   ? createStateStore({ baseUrl: process.env.BOT_API_URL || '', key: process.env.BOT_API_KEY || '' })
   : null
+const timeframeIds = ['1h', '4h', '1d']
+const runId = `${now}-${process.pid}-${Math.random().toString(36).slice(2, 8)}`
+const totalProfiles = periodYears.length * sources.length * timeframeIds.length
+let completedProfiles = 0
+let previousReport = {}
 
 const wait = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds))
 
@@ -128,16 +133,49 @@ const saveReport = async (report, { optional = false } = {}) => {
   throw lastError
 }
 
+const runProgress = ({ status = 'running', lastCompleted = null, error = null } = {}) => {
+  const run = {
+    status,
+    runId,
+    requestedAt: result.generatedAt,
+    startedAt: result.generatedAt,
+    totalProfiles,
+    completedProfiles,
+    progressPct: totalProfiles ? Math.round((completedProfiles / totalProfiles) * 10000) / 100 : 0,
+  }
+  if (lastCompleted) run.lastCompleted = lastCompleted
+  if (error) run.error = error
+  return run
+}
+
+const saveProgress = async (run, { optional = false } = {}) => {
+  if (!store) return null
+  let lastError = null
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      return await store.updateBacktestProgress({ strategyId: result.strategyId, ...run })
+    } catch (error) {
+      lastError = error
+      if (attempt < 3) await wait(attempt * 1500)
+    }
+  }
+  if (optional) {
+    console.warn(`Could not publish backtest progress after 3 attempts: ${lastError?.message ?? 'unknown error'}`)
+    return null
+  }
+  throw lastError
+}
+
 try {
   if (store) {
     const loaded = await store.load()
-    const previous = loaded.state?.backtests ?? {}
+    previousReport = loaded.state?.backtests ?? {}
     await saveReport({
-      ...previous,
+      ...previousReport,
       strategyId: result.strategyId,
       strategyLabel: result.strategyLabel,
       generatedAt: result.generatedAt,
-      run: { status: 'running', requestedAt: new Date(now).toISOString(), startedAt: new Date(now).toISOString() },
+      run: runProgress(),
     })
   }
 
@@ -174,6 +212,10 @@ try {
         })
         period.assets[asset.symbol][timeframeId] = { ...report, label: entry.label }
         console.log(`${yearsBack}Y ${asset.symbol} ${entry.label}: ${report.cagrPct?.toFixed(2) ?? 'n/a'}% p.a., ${report.trades} trades, DD ${report.maxDrawdownPct?.toFixed(2) ?? 'n/a'}%, ready ${report.readyProfiles ?? 0}, zones hit ${report.zoneHits ?? 0}, ${report.from ?? 'n/a'} -> ${report.to ?? 'n/a'}`)
+        completedProfiles += 1
+        await saveProgress(runProgress({
+          lastCompleted: { periodYears: yearsBack, asset: asset.symbol, timeframeId },
+        }), { optional: true })
       }
     }
     period.portfolio = aggregatePriceActionBacktests({
@@ -183,37 +225,20 @@ try {
     })
     result.periods[String(yearsBack)] = period
     console.log(`Portfolio ${yearsBack}Y: ${period.portfolio.cagrPct?.toFixed(2) ?? 'n/a'}% p.a., ${period.portfolio.trades} trades, DD ${period.portfolio.maxDrawdownPct?.toFixed(2) ?? 'n/a'}%, overlap skipped ${period.portfolio.overlapSkipped}`)
-    if (store) {
-      await saveReport({
-        ...result,
-        run: {
-          status: 'running',
-          requestedAt: result.generatedAt,
-          startedAt: result.generatedAt,
-          completedPeriods: periodYears.slice(0, periodYears.indexOf(yearsBack) + 1),
-        },
-      }, { optional: true })
-    }
   }
 
   const defaultPeriod = result.periods[String(Math.max(...periodYears))]
   result.assets = defaultPeriod?.assets ?? {}
   result.portfolio = defaultPeriod?.portfolio ?? null
 
-  result.run = { status: 'complete', requestedAt: result.generatedAt, completedAt: new Date().toISOString() }
+  result.run = { ...runProgress({ status: 'complete' }), completedAt: new Date().toISOString() }
   await mkdir(dirname(output), { recursive: true })
   await writeFile(output, `${JSON.stringify(result, null, 2)}\n`, 'utf8')
   await saveReport(result)
   console.log(`Wrote ${output}${store ? ' and published it' : ''}`)
 } catch (error) {
   if (store) {
-    await saveReport({
-      ...result,
-      strategyId: result.strategyId,
-      strategyLabel: result.strategyLabel,
-      generatedAt: result.generatedAt,
-      run: { status: 'failed', requestedAt: result.generatedAt, completedAt: new Date().toISOString(), error: error.message },
-    }, { optional: true })
+    await saveProgress(runProgress({ status: 'failed', error: error.message }), { optional: true })
   }
   throw error
 }

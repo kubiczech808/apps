@@ -759,6 +759,7 @@ tbody tr:hover { background: var(--series-1-soft); }
 }
 .backtest-controls p { margin: 0; }
 .backtests-status { color: var(--text-secondary); }
+.backtest-controls #run-backtests { min-width: 210px; font-variant-numeric: tabular-nums; }
 .backtest-assumptions { margin-top: 4px !important; color: var(--text-muted); font-size: 12px; }
 .backtest-portfolio-summary {
   margin-bottom: 16px;

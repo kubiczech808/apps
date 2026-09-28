@@ -2942,6 +2942,29 @@ const priceActionBacktestResult = (asset, timeframeId) =>
   state?.backtests?.['price-action']?.[asset.symbol]?.[timeframeId] ??
   null
 
+const backtestRunProgress = (document, run) => {
+  const totalProfiles = Number(run?.totalProfiles)
+  const completedProfiles = Number(run?.completedProfiles)
+  if (Number.isFinite(totalProfiles) && totalProfiles > 0 && Number.isFinite(completedProfiles)) {
+    const completed = Math.min(totalProfiles, Math.max(0, completedProfiles))
+    return { completed, total: totalProfiles, percent: Math.round((completed / totalProfiles) * 100) }
+  }
+
+  // Older workers report completed periods only. Their periods still contain
+  // the same asset × timeframe matrix, so derive an equal-weight percentage
+  // until the next per-profile worker update arrives.
+  const profileCount = Object.values(document?.assets ?? {})
+    .reduce((count, timeframes) => count + Object.keys(timeframes ?? {}).length, 0)
+  const requestedPeriods = Array.isArray(document?.periodsRequested) ? document.periodsRequested.length : 0
+  const completedPeriods = Array.isArray(run?.completedPeriods) ? run.completedPeriods.length : 0
+  if (profileCount > 0 && requestedPeriods > 0) {
+    const total = profileCount * requestedPeriods
+    const completed = Math.min(total, completedPeriods * profileCount)
+    return { completed, total, percent: Math.round((completed / total) * 100) }
+  }
+  return { completed: null, total: null, percent: 0 }
+}
+
 const backtestValue = (value, digits = 1, suffix = '') =>
   Number.isFinite(Number(value)) ? `${nf(digits).format(Number(value))}${suffix}` : '–'
 
@@ -3071,6 +3094,10 @@ const backtestPeriodLabel = (periodId) => ({
 const renderPriceActionBacktests = (host) => {
   const document = state?.backtests ?? {}
   const run = document.run ?? null
+  const progress = backtestRunProgress(document, run)
+  const progressText = Number.isFinite(progress.completed) && Number.isFinite(progress.total)
+    ? `${progress.completed} / ${progress.total} kombinací asset × TF · ${progress.percent} %`
+    : `${progress.percent} %`
   const periodReports = Object.entries(document.periods ?? {})
     .filter(([, report]) => report && typeof report === 'object')
     .sort(([left], [right]) => Number(left) - Number(right))
@@ -3081,7 +3108,7 @@ const renderPriceActionBacktests = (host) => {
     Object.entries(timeframes ?? {}).map(([timeframeId, result]) => ({ periodId: selectedPeriodId, symbol, timeframeId, result }))
   )
   const statusText = run?.status === 'running'
-    ? `Probíhá nový běh od ${when(run.startedAt ?? run.requestedAt)}. Dosavadní výsledky zůstávají zobrazené do publikování nového reportu.`
+    ? `Probíhá nový běh od ${when(run.startedAt ?? run.requestedAt)} · ${progressText}. Dosavadní výsledky zůstávají zobrazené do publikování nového reportu.`
     : run?.status === 'failed'
       ? `Poslední běh selhal: ${run.error || 'bez podrobnosti'}`
       : document.generatedAt
@@ -3101,8 +3128,9 @@ const renderPriceActionBacktests = (host) => {
       id: 'run-backtests',
       type: 'button',
       className: 'primary',
-      text: run?.status === 'running' ? 'Backtesty probíhají' : 'Spustit vše',
+      text: run?.status === 'running' ? `Backtesty probíhají · ${progress.percent} %` : 'Spustit vše',
       disabled: run?.status === 'running' ? 'disabled' : null,
+      title: run?.status === 'running' ? progressText : 'Spustit backtest všech assetů a timeframe.',
     }),
   ])
   const button = controls.querySelector('#run-backtests')

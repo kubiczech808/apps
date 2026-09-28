@@ -109,6 +109,11 @@ export const createStateStore = ({
       return call('backtests', { method: 'POST', body: JSON.stringify(backtests) })
     },
 
+    updateBacktestProgress: async (progress) => {
+      if (!baseUrl) throw new Error('no BOT_API_URL configured')
+      return call('backtest-progress', { method: 'POST', body: JSON.stringify(progress) })
+    },
+
     /**
      * Claim the right to act for `ttlMs`.
      *

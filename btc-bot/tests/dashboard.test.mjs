@@ -14,6 +14,18 @@ test('the dashboard script parses before deployment', () => {
   assert.doesNotThrow(() => new Function(js))
 })
 
+test('running backtests expose equally weighted asset and timeframe progress', () => {
+  assert.match(js, /const backtestRunProgress = \(document, run\) =>/)
+  assert.match(js, /completedProfiles/)
+  assert.match(js, /const total = profileCount \* requestedPeriods/)
+  assert.match(js, /completedPeriods \* profileCount/)
+  assert.match(js, /Backtesty probíhají · \$\{progress\.percent\} %/)
+  assert.match(js, /\$\{progress\.completed\} \/ \$\{progress\.total\} kombinací asset × TF/)
+  assert.match(api, /case 'backtest-progress'/)
+  assert.match(api, /Backtest progress cannot move backwards/)
+  assert.match(api, /Backtest progress belongs to a different run/)
+})
+
 test('the hidden attribute outranks every layout rule in the stylesheet', () => {
   // The bug this exists for: `.gate { display: grid }` is an author rule, and
   // author rules beat the browser's `[hidden] { display: none }` whatever the
