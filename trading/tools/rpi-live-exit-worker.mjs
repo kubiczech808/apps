@@ -2414,7 +2414,7 @@ export async function recordDipEntryHit(plan, price, execution = {}) {
 // wrong policy for one more cycle, not that the fill itself is undone. The caller records the
 // failure in the worker's own event history so a persistent gap stays visible rather than
 // silent.
-export async function recordLiveDipEntryOwnership(portfolioId, tokenId, price, at) {
+export async function recordLiveDipEntryOwnership(portfolioId, tokenId, price, at, entryVolumeUsdc = null) {
   if (!TRADING_TRIGGER_KEY) return { ok: false, error: "dip entry ownership key is not configured" };
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 12000);
@@ -2426,7 +2426,7 @@ export async function recordLiveDipEntryOwnership(portfolioId, tokenId, price, a
         "x-trading-trigger-key": TRADING_TRIGGER_KEY,
         "user-agent": "trading-live-exit-worker/1.0",
       },
-      body: JSON.stringify({ portfolioId: String(portfolioId || ""), tokenId: String(tokenId || ""), price, at }),
+      body: JSON.stringify({ portfolioId: String(portfolioId || ""), tokenId: String(tokenId || ""), price, at, entryVolumeUsdc }),
       signal: controller.signal,
     });
     const payload = await response.json().catch(() => ({}));
@@ -2436,6 +2436,46 @@ export async function recordLiveDipEntryOwnership(portfolioId, tokenId, price, a
     return { ok: false, error: error?.message || String(error) };
   } finally {
     clearTimeout(timeout);
+  }
+}
+
+// A fill cannot be rolled back just because the ownership POST happened to time out. Keep
+// the acknowledgement owed to the host in the worker's durable state and retry it before
+// the next policy refresh. Until it succeeds, the host deliberately excludes the unknown
+// position from automated exits instead of applying another portfolio's stop loss.
+const DIP_ENTRY_OWNERSHIP_RETRY_MS = 30000;
+
+async function retryPendingDipEntryOwnership(context) {
+  const pending = context.state.pendingDipEntryOwnership && typeof context.state.pendingDipEntryOwnership === "object"
+    ? context.state.pendingDipEntryOwnership
+    : null;
+  if (!pending) return;
+  const now = Date.now();
+  for (const [key, ownership] of Object.entries(pending)) {
+    if (!ownership || typeof ownership !== "object") {
+      delete pending[key];
+      continue;
+    }
+    const lastAttempt = Date.parse(String(ownership.lastAttemptAt || ""));
+    if (Number.isFinite(lastAttempt) && now - lastAttempt < DIP_ENTRY_OWNERSHIP_RETRY_MS) continue;
+    const result = await recordLiveDipEntryOwnership(
+      ownership.portfolioId,
+      ownership.tokenId,
+      ownership.price,
+      ownership.at,
+      ownership.entryVolumeUsdc,
+    );
+    if (result.ok) {
+      delete pending[key];
+      recordEvent(context.state, { at: new Date().toISOString(), type: "DIP_ENTRY_OWNERSHIP_RECORDED", tokenId: ownership.tokenId, portfolioId: ownership.portfolioId });
+      continue;
+    }
+    pending[key] = {
+      ...ownership,
+      attempts: Number(ownership.attempts || 0) + 1,
+      lastAttemptAt: new Date().toISOString(),
+      lastError: result.error,
+    };
   }
 }
 
@@ -2748,8 +2788,33 @@ async function fireDipEntries(context, books, now) {
     // Told to the server the moment the fill is known, and before the terminal event below --
     // a rejected order owns nothing and must never be reported as if it did.
     if (filled) {
-      const ownership = await recordLiveDipEntryOwnership(plan.portfolioId, plan.tokenId, response?.price ?? null, now);
+      const ownershipRecord = {
+        portfolioId: plan.portfolioId,
+        tokenId: plan.tokenId,
+        price: response?.price ?? null,
+        at: now,
+        entryVolumeUsdc: response?.makerAmountUsdc ?? plan.stakeUsdc ?? null,
+      };
+      const ownership = await recordLiveDipEntryOwnership(
+        ownershipRecord.portfolioId,
+        ownershipRecord.tokenId,
+        ownershipRecord.price,
+        ownershipRecord.at,
+        ownershipRecord.entryVolumeUsdc,
+      );
       if (!ownership.ok) {
+        // Kept inline because fireDipEntries is also exercised as an isolated unit in the
+        // worker tests. The durable shape is deliberately tiny and entirely self-contained.
+        const pending = context.state.pendingDipEntryOwnership && typeof context.state.pendingDipEntryOwnership === "object"
+          ? context.state.pendingDipEntryOwnership
+          : (context.state.pendingDipEntryOwnership = {});
+        const ownershipKey = `${String(ownershipRecord.portfolioId || "")}:${String(ownershipRecord.tokenId || "")}:${Number(ownershipRecord.price ?? -1).toFixed(4)}`;
+        pending[ownershipKey] = {
+          ...pending[ownershipKey],
+          ...ownershipRecord,
+          attempts: Number(pending[ownershipKey]?.attempts || 0),
+          lastAttemptAt: pending[ownershipKey]?.lastAttemptAt || null,
+        };
         recordEvent(context.state, { ...event, type: "DIP_ENTRY_OWNERSHIP_RECORD_FAILED", error: ownership.error });
       }
     }
@@ -2773,6 +2838,7 @@ async function checkOnce(context) {
   // protective SELL already matched, so the position no longer appears in the live state
   // the plans below are built from.
   await retryPendingReversals(context);
+  await retryPendingDipEntryOwnership(context);
   if (!context.liveState || Date.now() - context.liveStateFetchedAt >= STATE_REFRESH_MS) {
     context.liveState = await fetchJson(`${LIVE_STATE_URL}${LIVE_STATE_URL.includes("?") ? "&" : "?"}exitWorkerAt=${Date.now()}`, "live state");
     context.liveStateFetchedAt = Date.now();

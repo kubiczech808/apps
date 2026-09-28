@@ -1,5 +1,5 @@
 // Runs offline: api.php's real ownership-recording function is EXECUTED against a
-// temporary execution-state file. No network, no database, no credentials.
+// temporary, server-owned ownership ledger. No network, no database, no credentials.
 //
 // Reported: "Games Total: O/U 3.5" on a League of Legends match, bought by the dip 70+ ->
 // 45-56 live portfolio (no stop loss configured) and sold 66 seconds later at 47% -- inside
@@ -7,9 +7,8 @@
 //
 // The cause: a live dip-entry fires from the RPi worker directly, never through
 // live-order-executor.mjs, and so never reaches that script's own orderOwnership write.
-// live_stop_loss_policy_payload() already reads orderOwnership from every portfolio's
-// execution state to decide whose policy protects a position -- a token this function never
-// touches simply is not there, and falls through to the base portfolio's stop instead.
+// The ledger must be independent from execution-state uploads. Otherwise an ordinary
+// executor run can erase a direct DIP fill's owner before the exit worker sees it.
 
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -23,9 +22,17 @@ const API = readFileSync(new URL("../api.php", import.meta.url), "utf8");
 function extractPhpFunction(source, signature) {
   const start = source.indexOf(signature);
   assert.ok(start > 0, `${signature} must exist in api.php`);
-  const end = source.indexOf("\n}\n", start);
-  assert.ok(end > start, "the function must be complete");
-  return source.slice(start, end + 2);
+  const open = source.indexOf("{", start);
+  assert.ok(open > start, "the function must have a body");
+  let depth = 0;
+  for (let index = open; index < source.length; index += 1) {
+    if (source[index] === "{") depth += 1;
+    if (source[index] === "}") {
+      depth -= 1;
+      if (depth === 0) return source.slice(start, index + 1);
+    }
+  }
+  assert.fail("the function must be complete");
 }
 
 // A plain literal, not brace-matched: extractPhpFunction looks for the next "\n}\n" after
@@ -35,7 +42,7 @@ const OWNERSHIP_LIMIT_LINE = API.match(/^const LIVE_DIP_ENTRY_OWNERSHIP_LIMIT = 
 assert.ok(OWNERSHIP_LIMIT_LINE, "the cap constant must exist in api.php, unchanged");
 
 const FUNCTIONS = [
-  extractPhpFunction(API, "function live_execution_state_path_for_policy(string $portfolioId): string"),
+  extractPhpFunction(API, "function live_dip_entry_ownership_path(): string"),
   // A minimal stand-in for the real decode_state_file(), which the lifted function calls to
   // read whatever seed state the test wrote. The real one also handles the compact,
   // segmented and pending-upload cases this harness has no need to reproduce.
@@ -59,16 +66,19 @@ function withTempDataDir(run) {
   }
 }
 
-function record(dir, input, seedState = null) {
+function record(dir, input, seedLedger = null, seedExecutionState = null) {
   const script = join(dir, "run.php");
-  const seedPath = join(dir, "data", "live-dip704060live-execution-state.json");
-  if (seedState) writeFileSync(seedPath, JSON.stringify(seedState));
+  const ledgerPath = join(dir, "data", "live-dip-entry-ownership.json");
+  const executionPath = join(dir, "data", "live-dip704060live-execution-state.json");
+  if (seedLedger) writeFileSync(ledgerPath, JSON.stringify(seedLedger));
+  if (seedExecutionState) writeFileSync(executionPath, JSON.stringify(seedExecutionState));
   writeFileSync(script, `<?php
 define('__DIR__OVERRIDE__', ${JSON.stringify(dir)});
 ${FUNCTIONS.replace(/__DIR__/g, "__DIR__OVERRIDE__")}
 $result = record_live_dip_entry_ownership(json_decode(${JSON.stringify(JSON.stringify(input))}, true));
-$after = @file_get_contents(${JSON.stringify(seedPath)});
-echo json_encode(['result' => $result, 'state' => $after !== false ? json_decode($after, true) : null]);
+$ledger = @file_get_contents(${JSON.stringify(ledgerPath)});
+$execution = @file_get_contents(${JSON.stringify(executionPath)});
+echo json_encode(['result' => $result, 'ledger' => $ledger !== false ? json_decode($ledger, true) : null, 'execution' => $execution !== false ? json_decode($execution, true) : null]);
 `);
   return JSON.parse(execFileSync("php", [script], { encoding: "utf8" }));
 }
@@ -81,11 +91,12 @@ test("a live dip-entry fill is recorded as this portfolio's ownership", () => {
     at: "2026-09-27T21:17:23.000Z",
   }));
   assert.equal(outcome.result.ok, true);
-  assert.equal(outcome.state.orderOwnership.length, 1);
-  assert.equal(outcome.state.orderOwnership[0].tokenId, "12345678901234567890");
-  assert.equal(outcome.state.orderOwnership[0].price, 0.5624);
-  assert.equal(outcome.state.orderOwnership[0].at, "2026-09-27T21:17:23.000Z");
-  assert.equal(outcome.state.orderOwnership[0].mode, "live");
+  assert.equal(outcome.ledger.records.length, 1);
+  assert.equal(outcome.ledger.records[0].portfolioId, "live-custom-dip704060live");
+  assert.equal(outcome.ledger.records[0].tokenId, "12345678901234567890");
+  assert.equal(outcome.ledger.records[0].price, 0.5624);
+  assert.equal(outcome.ledger.records[0].at, "2026-09-27T21:17:23.000Z");
+  assert.equal(outcome.ledger.records[0].mode, "live");
 });
 
 test("portfolioId and tokenId are both required", () => {
@@ -95,19 +106,20 @@ test("portfolioId and tokenId are both required", () => {
   assert.equal(outcome2.result.ok, false);
 });
 
-test("an existing execution state keeps its other fields -- this only touches orderOwnership", () => {
+test("a direct DIP fill cannot be erased by an executor-state upload", () => {
   const outcome = withTempDataDir((dir) => record(dir, {
     portfolioId: "live-custom-dip704060live",
     tokenId: "999",
     price: 0.5,
     at: "2026-09-27T22:00:00.000Z",
-  }, {
+  }, null, {
     runLog: [{ action: "SUBMITTED", generatedAt: "2026-09-20T00:00:00Z" }],
     orderOwnership: [{ tokenId: "111", price: 0.4, mode: "live", at: "2026-09-01T00:00:00Z" }],
   }));
-  assert.equal(outcome.state.runLog.length, 1, "the run log this portfolio's own executor writes is untouched");
-  assert.equal(outcome.state.orderOwnership.length, 2, "the new claim is added beside the existing one");
-  assert.deepEqual(outcome.state.orderOwnership.map((row) => row.tokenId).sort(), ["111", "999"]);
+  assert.equal(outcome.execution.runLog.length, 1, "the executor file is not touched");
+  assert.equal(outcome.execution.orderOwnership.length, 1, "the executor keeps its own state");
+  assert.equal(outcome.ledger.records.length, 1, "the DIP fill is stored separately");
+  assert.equal(outcome.ledger.records[0].tokenId, "999");
 });
 
 test("a second fill of the same token at the same price replaces the first, not duplicates it", () => {
@@ -115,8 +127,8 @@ test("a second fill of the same token at the same price replaces the first, not 
     record(dir, { portfolioId: "live-custom-dip704060live", tokenId: "555", price: 0.5, at: "2026-09-27T10:00:00.000Z" });
     return record(dir, { portfolioId: "live-custom-dip704060live", tokenId: "555", price: 0.5, at: "2026-09-27T11:00:00.000Z" });
   });
-  assert.equal(outcome.state.orderOwnership.length, 1);
-  assert.equal(outcome.state.orderOwnership[0].at, "2026-09-27T11:00:00.000Z", "the newer claim wins");
+  assert.equal(outcome.ledger.records.length, 1);
+  assert.equal(outcome.ledger.records[0].at, "2026-09-27T11:00:00.000Z", "the newer claim wins");
 });
 
 test("the same token bought again at a DIFFERENT price is a separate claim", () => {
@@ -126,13 +138,13 @@ test("the same token bought again at a DIFFERENT price is a separate claim", () 
     record(dir, { portfolioId: "live-custom-dip704060live", tokenId: "777", price: 0.5, at: "2026-09-27T10:00:00.000Z" });
     return record(dir, { portfolioId: "live-custom-dip704060live", tokenId: "777", price: 0.62, at: "2026-09-27T11:00:00.000Z" });
   });
-  assert.equal(outcome.state.orderOwnership.length, 2);
+  assert.equal(outcome.ledger.records.length, 2);
 });
 
 test("a missing or unparsable timestamp is not fatal -- the record still lands, timestamped now", () => {
   const outcome = withTempDataDir((dir) => record(dir, { portfolioId: "live-custom-dip704060live", tokenId: "1", price: 0.5 }));
   assert.equal(outcome.result.ok, true);
-  assert.ok(outcome.state.orderOwnership[0].at, "some timestamp was written");
+  assert.ok(outcome.ledger.records[0].at, "some timestamp was written");
 });
 
 test("the endpoint requires the trigger key, same as the paper dip-entry recorder beside it", () => {

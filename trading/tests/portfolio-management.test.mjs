@@ -3192,7 +3192,7 @@ test("scraped opportunities: the spread that keeps a market out of scope is on s
 // and collecting the tokens of runs that submitted an order. The run log is bounded and
 // compacted, so a position stops being watched once its run scrolls out, while it is still
 // open and still holding money.
-test("live stop loss: an open position is watched even when its run has left the log", () => {
+test("live stop loss: an unowned position is explicitly withheld instead of inheriting another portfolio's stop", () => {
   const directory = mkdtempSync(join(tmpdir(), "stop-loss-policy-"));
   try {
     const cut = API.indexOf("\ntry {");
@@ -3227,27 +3227,25 @@ test("live stop loss: an open position is watched even when its run has left the
 
     const covered = new Map((payload.policies || []).map((policy) => [policy.tokenId, policy]));
     assert.ok(covered.has("remembered-token"), "a token its run still names stays watched");
-    assert.ok(covered.has("forgotten-token"),
-      "an open position must be watched even when no retained run names it");
-    // The multiplier has to be the configured one, or the worker would exit at a floor
-    // the operator never set.
-    assert.equal(covered.get("forgotten-token").stopLossRiskMultiplier, 1.75);
-    assert.equal(covered.get("forgotten-token").source, "open-position",
-      "and it must say where the coverage came from");
+    assert.ok(!covered.has("forgotten-token"),
+      "an unknown position must never silently inherit the base Live policy");
+    const excluded = new Map((payload.excluded || []).map((row) => [row.tokenId, row]));
+    assert.match(excluded.get("forgotten-token")?.reason || "", /no durable portfolio ownership/,
+      "the worker must leave a position alone until it can be attributed safely");
     // Attribution still wins: a token its own run claimed keeps that run's stamp.
     assert.equal(covered.get("remembered-token").source ?? "", "",
       "a run-attributed token is not relabelled as an account fallback");
 
     assert.equal(payload.openPositions, 2);
     assert.equal(payload.positionsWithoutRunLogAttribution, 1);
-    assert.equal(payload.positionsAdoptedFromAccount, 1);
-    assert.equal(payload.positionsLeftUnwatched, 0);
+    assert.equal(payload.positionsAdoptedFromAccount, 0);
+    assert.equal(payload.positionsLeftUnwatched, 1);
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
 });
 
-test("live stop loss: with no default policy an unattributed position is reported, not invented", () => {
+test("live stop loss: an unattributed position is reported, not invented", () => {
   const directory = mkdtempSync(join(tmpdir(), "stop-loss-nodefault-"));
   try {
     const cut = API.indexOf("\ntry {");
@@ -3258,10 +3256,8 @@ test("live stop loss: with no default policy an unattributed position is reporte
     // The main live portfolio has no stop loss, and it must not acquire one: exiting a
     // position at a cap the operator never set is the thing this test exists to prevent.
     //
-    // It DOES now acquire a certainty close, because 0.999 is the default and this row
-    // never said otherwise. Those are different promises -- one caps a loss at a level
-    // somebody has to choose, the other takes a win the market has already decided -- so
-    // the position is watched, and watched without a stop.
+    // It does not acquire even a certainty close. We do not know which portfolio owns it,
+    // and no policy may be borrowed from a different portfolio on the shared account.
     writeFileSync(join(directory, "data", "portfolio-config.json"), JSON.stringify({
       live: { displayName: "Live", stopLossRiskMultiplier: 0 },
     }));
@@ -3274,13 +3270,10 @@ test("live stop loss: with no default policy an unattributed position is reporte
       + ` echo json_encode(live_stop_loss_policy_payload());`,
     ], { encoding: "utf8", cwd: directory }));
 
-    assert.equal(payload.policies.length, 1);
-    assert.equal(payload.policies[0].settlementCloseBid, 0.999);
-    assert.equal(payload.policies[0].stopLossRiskMultiplier, 0,
-      "no stop may be invented for a portfolio that set none");
-    assert.equal(payload.policies[0].stopLossEnabled, false);
+    assert.deepEqual(payload.policies, []);
+    assert.match((payload.excluded || [])[0]?.reason || "", /no durable portfolio ownership/);
     assert.equal(payload.positionsWithoutRunLogAttribution, 1);
-    assert.equal(payload.positionsLeftUnwatched, 0);
+    assert.equal(payload.positionsLeftUnwatched, 1);
 
     // And the original case, kept: say off explicitly and the position really is unwatched,
     // with the gap counted rather than left silent.

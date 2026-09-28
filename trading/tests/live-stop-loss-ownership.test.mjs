@@ -86,12 +86,13 @@ const LIVE_STATE = {
   positions: [{ tokenId: TOKEN, question: "ShindeN vs Turma do Pagode", entryPrice: 0.7, shares: 7.14 }],
 };
 
-function fixture({ underwayRunLog = [], underwayOwnership = [], liveRunLog = [] } = {}) {
+function fixture({ underwayRunLog = [], underwayOwnership = [], liveRunLog = [], dipOwnership = [] } = {}) {
   return {
     "portfolio-config.json": CONFIG,
     "live-state.json": LIVE_STATE,
     "live-execution-state.json": { runLog: liveRunLog, orderOwnership: [] },
     "live-underway-execution-state.json": { runLog: underwayRunLog, orderOwnership: underwayOwnership },
+    "live-dip-entry-ownership.json": { records: dipOwnership },
   };
 }
 
@@ -134,45 +135,27 @@ test("once the entry's run log entry has rotated out, durable orderOwnership sti
     "a durably-attributed position must not also count as adopted from the account fallback");
 });
 
-test("BAIT: without reading orderOwnership, the same position silently adopts the base portfolio's stop", () => {
-  // Exactly the incident. Nothing in the fixture changes except that orderOwnership is
-  // dropped from the read -- which is what the code did before this fix, and it must still
-  // be possible to reproduce that failure by removing the new source, not just assert the
-  // fixed behaviour in isolation.
-  const start = API.indexOf("function live_stop_loss_policy_payload()");
-  const end = API.indexOf("\n}\n", start);
-  const withoutOwnershipRead = API.slice(0, start)
-    + API.slice(start, end).replace(
-      /\n        \/\/ The durable record[\s\S]*?\$ownedAt\[\$tokenId\] = \$updatedAt;\n        \}\n/,
-      "\n",
-    )
-    + API.slice(end);
-  assert.notEqual(withoutOwnershipRead, API, "the orderOwnership block must actually be removed");
-
-  const directory = mkdtempSync(join(tmpdir(), "live-stop-loss-ownership-bait-"));
-  try {
-    const cut = withoutOwnershipRead.indexOf("\ntry {");
-    writeFileSync(join(directory, "definitions.php"), withoutOwnershipRead.slice(0, cut) + "\n");
-    mkdirSync(join(directory, "data"), { recursive: true });
-    const rows = fixture({ underwayRunLog: [], underwayOwnership: [{ tokenId: TOKEN, price: 0.7, mode: "live", at: iso(9.17) }] });
-    for (const [name, contents] of Object.entries(rows)) {
-      writeFileSync(join(directory, "data", name), JSON.stringify(contents));
-    }
-    const payload = JSON.parse(execFileSync("php", ["-r",
-      `require '${join(directory, "definitions.php")}';`
-      + ` echo json_encode(live_stop_loss_policy_payload());`,
-    ], { encoding: "utf8", cwd: directory, maxBuffer: 16 * 1024 * 1024 }));
-    const policy = policyFor(payload);
-    assert.ok(policy, "the account-fallback still adopts it");
-    assert.equal(policy.portfolioId, "live",
-      "without orderOwnership the position falls back to the base portfolio");
-    assert.equal(policy.stopLossEnabled, true,
-      "and inherits a stop its true owner never configured -- the reported loss");
-    assert.equal(policy.stopLossProbabilityFloor, 0.49);
-    assert.equal(payload.positionsAdoptedFromAccount, 1);
-  } finally {
-    rmSync(directory, { recursive: true, force: true });
-  }
+test("a direct DIP fill keeps its owner after an executor state is replaced", () => {
+  // The precise September incident: the RPi path filled directly, while a later ordinary
+  // executor upload replaced its portfolio state. The dedicated ledger must remain enough
+  // to bind this position to the portfolio that actually opened it.
+  const payload = runPolicyPayload(fixture({
+    underwayRunLog: [],
+    underwayOwnership: [],
+    dipOwnership: [{
+      portfolioId: "live-custom-underway",
+      tokenId: TOKEN,
+      price: 0.5624,
+      mode: "live",
+      at: iso(1),
+    }],
+  }));
+  const policy = policyFor(payload);
+  assert.ok(policy, "a direct DIP fill must have a durable owner");
+  assert.equal(policy.portfolioId, "live-custom-underway");
+  assert.equal(policy.stopLossEnabled, false,
+    "the owner has no stop: it must never inherit the base Live floor");
+  assert.equal(payload.positionsAdoptedFromAccount, 0);
 });
 
 test("a fresher run log claim still wins over a stale orderOwnership record", () => {
@@ -196,19 +179,20 @@ test("a stale run log claim does not override a fresher orderOwnership record", 
   assert.equal(policy.portfolioId, "live-custom-underway", "the more recent claim must win");
 });
 
-test("BAIT: an orderOwnership row missing a tokenId does not falsely attribute the position", () => {
+test("an unowned live position is explicitly excluded, never adopted by the base portfolio", () => {
   // A malformed row must contribute nothing to $ownerOf, which is a DIFFERENT outcome from
-  // "excluded" -- it leaves the token genuinely unattributed, so it still reaches the normal
-  // open-position fallback and adopts defaultPolicy exactly as an unowned position always
-  // has. The bug this guards is the row's price or mode being read as if it were the token.
+  // "excluded" -- it leaves the token genuinely unattributed. It must remain hands-off
+  // until ownership is recovered; assigning the base Live stop is the catastrophic bug.
   const payload = runPolicyPayload(fixture({
     underwayOwnership: [{ price: 0.7, mode: "live", at: iso(1) }],
   }));
   const policy = policyFor(payload);
-  assert.ok(policy, "a genuinely unattributed open position still gets the account fallback");
-  assert.equal(policy.portfolioId, "live", "not the underway portfolio the malformed row named no token for");
-  assert.equal(policy.source, "open-position", "reached via the fallback, not via orderOwnership");
-  assert.equal(payload.positionsAdoptedFromAccount, 1);
+  assert.equal(policy, null, "a genuinely unattributed position must not receive any policy");
+  const exclusion = (payload.excluded || []).find((row) => row.tokenId === TOKEN);
+  assert.ok(exclusion, "the worker must be told to leave the unknown position alone");
+  assert.match(exclusion.reason, /no durable portfolio ownership/);
+  assert.equal(payload.positionsAdoptedFromAccount, 0);
+  assert.equal(payload.positionsLeftUnwatched, 1);
 });
 
 test("the helper reads exactly what the executor uploads, keyed by tokenId, not by price", () => {

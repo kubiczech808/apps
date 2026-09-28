@@ -6319,6 +6319,21 @@ function live_execution_state_path_for_policy(string $portfolioId): string
 // it to.
 const LIVE_DIP_ENTRY_OWNERSHIP_LIMIT = 4000;
 
+// Direct DIP entries are placed by the RPi exit worker, outside the normal live executor.
+// They must therefore never be persisted in an executor state file: that file is later
+// replaced wholesale by the next executor upload, which used to erase the only proof of
+// ownership between a fill and the next stop-loss policy refresh.
+function live_dip_entry_ownership_path(): string
+{
+    return __DIR__ . '/data/live-dip-entry-ownership.json';
+}
+
+function live_dip_entry_ownership_records(): array
+{
+    $payload = decode_state_file(live_dip_entry_ownership_path(), false);
+    return is_array($payload['records'] ?? null) ? $payload['records'] : [];
+}
+
 /**
  * One entry per token a LIVE dip-entry fill ordered, written the moment the RPi worker's
  * own signed FOK fills. This is the one order-placement path that never runs through
@@ -6334,9 +6349,9 @@ const LIVE_DIP_ENTRY_OWNERSHIP_LIMIT = 4000;
  * live_stop_loss_policy_payload() needed to change: it already reads orderOwnership from
  * every portfolio's state. This is the write that was missing on the other end.
  *
- * Shaped exactly like live-order-executor.mjs's own mergeOrderOwnership() rows -- tokenId,
- * price, mode, at, entryVolumeUsdc, deduplicated on tokenId+price -- so a portfolio's next
- * ordinary run merges this row in as a known claim rather than a stranger.
+ * Kept in its own server-owned ledger, rather than in an executor upload file. A fill has
+ * already happened when this endpoint is called, so losing this ownership proof must never
+ * be a possible consequence of a later, unrelated executor run.
  */
 function record_live_dip_entry_ownership(array $input): array
 {
@@ -6355,25 +6370,27 @@ function record_live_dip_entry_ownership(array $input): array
     $priceKey = static fn($value): string => is_numeric($value) ? number_format((float) $value, 4, '.', '') : '-';
     $key = $tokenId . ':' . $priceKey($price);
 
-    $path = live_execution_state_path_for_policy($portfolioId);
+    $path = live_dip_entry_ownership_path();
     $state = decode_state_file($path, false);
     if (!is_array($state)) {
         $state = [];
     }
-    $ownership = is_array($state['orderOwnership'] ?? null) ? $state['orderOwnership'] : [];
+    $ownership = is_array($state['records'] ?? null) ? $state['records'] : [];
     // This claim first, so it wins the dedup below over anything already on record for the
-    // same token and price -- the same rule mergeOrderOwnership() applies when IT runs next.
+    // same portfolio, token and price. Different portfolios may legitimately have distinct
+    // positions in the same market, so portfolioId is part of this ledger key.
     $ownership = array_values(array_filter(
         $ownership,
-        static function ($row) use ($key, $priceKey): bool {
+        static function ($row) use ($key, $priceKey, $portfolioId): bool {
             if (!is_array($row)) {
                 return true;
             }
             $rowKey = (string) ($row['tokenId'] ?? '') . ':' . $priceKey($row['price'] ?? null);
-            return $rowKey !== $key;
+            return $rowKey !== $key || (string) ($row['portfolioId'] ?? '') !== $portfolioId;
         },
     ));
     array_unshift($ownership, [
+        'portfolioId' => $portfolioId,
         'tokenId' => $tokenId,
         'price' => $price,
         'mode' => 'live',
@@ -6383,7 +6400,7 @@ function record_live_dip_entry_ownership(array $input): array
     if (count($ownership) > LIVE_DIP_ENTRY_OWNERSHIP_LIMIT) {
         $ownership = array_slice($ownership, 0, LIVE_DIP_ENTRY_OWNERSHIP_LIMIT);
     }
-    $state['orderOwnership'] = $ownership;
+    $state['records'] = $ownership;
 
     $dir = dirname($path);
     if (!is_dir($dir) && !mkdir($dir, 0775, true) && !is_dir($dir)) {
@@ -6836,6 +6853,26 @@ function live_stop_loss_policy_payload(): array
         }
     }
 
+    // Unlike ordinary orders, an RPi DIP fill does not pass through live-order-executor.
+    // Its ownership is therefore intentionally stored in a separate append-only ledger that
+    // cannot be erased when an executor state upload replaces a portfolio's run log.
+    foreach (live_dip_entry_ownership_records() as $record) {
+        if (!is_array($record)) {
+            continue;
+        }
+        $portfolioId = trim((string) ($record['portfolioId'] ?? ''));
+        $tokenId = trim((string) ($record['tokenId'] ?? ''));
+        if ($portfolioId === '' || $tokenId === '' || !array_key_exists($portfolioId, $policyByPortfolio)) {
+            continue;
+        }
+        $updatedAt = (string) ($record['at'] ?? '');
+        if (isset($ownerOf[$tokenId]) && strcmp((string) ($ownedAt[$tokenId] ?? ''), $updatedAt) > 0) {
+            continue;
+        }
+        $ownerOf[$tokenId] = $portfolioId;
+        $ownedAt[$tokenId] = $updatedAt;
+    }
+
     $policies = [];
     $excluded = [];
     foreach ($ownerOf as $tokenId => $portfolioId) {
@@ -6870,11 +6907,12 @@ function live_stop_loss_policy_payload(): array
     // protecting, so they are added here. The run-log pass above is kept, and kept first,
     // because it is what ATTRIBUTES a token to the portfolio that ordered it -- a position
     // already attributed keeps its owner's policy, including its multiplier. Only
-    // positions no attribution reached fall through to the default.
+    // positions no attribution reached used to fall through to the base Live policy. That is
+    // unsafe: it assigns a stop chosen for one portfolio to a position that may belong to
+    // another, including one with stops disabled. Unknown ownership is now an explicit
+    // hands-off state, visible to the worker and dashboard until it can be reconciled.
     $liveState = decode_state_file(state_file_paths()['live'] ?? '', false);
     $positions = is_array($liveState['positions'] ?? null) ? $liveState['positions'] : [];
-    $fallback = live_stop_loss_policy_config($config, 'live', $accountCashUsdc);
-    $adoptedFromPositions = 0;
     $unattributed = 0;
     foreach ($positions as $position) {
         if (!is_array($position)) {
@@ -6891,26 +6929,15 @@ function live_stop_loss_policy_payload(): array
             continue;
         }
         $unattributed++;
-        if ($fallback === null) {
-            // No default policy means the main live portfolio has no stop loss configured.
-            // Inventing one for a position it does not own would apply a cap the operator
-            // never set, so the position stays unwatched and the count below says so.
-            continue;
-        }
-        $policies[$tokenId] = array_merge($fallback, [
+        $excluded[$tokenId] = [
             'tokenId' => $tokenId,
-            // No run claimed it, so there is no order time to carry. The empty stamp keeps
-            // the "newest accepted order wins" comparison above working: any later
-            // attributed order sorts above this.
+            'portfolioId' => null,
+            'enabled' => false,
+            'reason' => 'no durable portfolio ownership; automatic exits withheld',
             'updatedAt' => '',
-            'source' => 'open-position',
-        ]);
-        $adoptedFromPositions++;
+        ];
     }
 
-    // The original Live strategy predates per-order execution state. When enabled,
-    // it deliberately protects otherwise unlabelled positions on the same connected
-    // account as well. Custom live portfolios are never used as this fallback.
     return [
         'ok' => true,
         'generatedAt' => gmdate('c'),
@@ -6918,14 +6945,14 @@ function live_stop_loss_policy_payload(): array
         // Positions the worker must leave alone even though defaultPolicy would otherwise
         // reach them: their own portfolio is switched off, archived, or has no stop loss.
         'excluded' => array_values($excluded),
-        // Stated so a gap is visible rather than silent: how many open positions no run
-        // log accounted for, and how many of those the default could actually cover.
+        // Stated so a gap is visible rather than silent. It is deliberately not covered by
+        // the base live policy: an unknown owner must not inherit another portfolio's stop.
         'openPositions' => count($positions),
         'positionsWithoutRunLogAttribution' => $unattributed,
-        'positionsAdoptedFromAccount' => $adoptedFromPositions,
-        'positionsLeftUnwatched' => $unattributed - $adoptedFromPositions,
+        'positionsAdoptedFromAccount' => 0,
+        'positionsLeftUnwatched' => $unattributed,
         'positionsExcludedByOwner' => count($excluded),
-        'defaultPolicy' => $fallback,
+        'defaultPolicy' => null,
     ];
 }
 
