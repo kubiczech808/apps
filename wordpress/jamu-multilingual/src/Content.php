@@ -1578,6 +1578,18 @@ JS
             $exact[$language] = array_replace($exact[$language] ?? [], $strings);
         }
 
+        // WC Doprava supplies this validation notice only in Czech. It is
+        // inserted after an AJAX checkout refresh, so keep it in the shared
+        // frontend dictionary rather than relying on the plugin's locale.
+        $pickup_validation = [
+            'en' => 'To use DPD Pickup, please select a pickup point.',
+            'de' => 'Bitte wählen Sie eine Abholstelle aus, wenn Sie DPD Pickup nutzen möchten.',
+            'pl' => 'Aby skorzystać z DPD Pickup, wybierz punkt odbioru.',
+        ];
+        foreach ($pickup_validation as $language => $translation) {
+            $exact[$language]['Pokud chcete doručit zboží prostřednictvím DPD Pickup, zvolte prosím pobočku.'] = $translation;
+        }
+
         $legal = [
             'en' => [
                 'privacy' => [

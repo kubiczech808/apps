@@ -400,12 +400,21 @@ HTML;
         element.style.overflow = 'hidden';
     }
 
+    function dpdPickupInput() {
+        const inputs = Array.from(document.querySelectorAll('input.shipping_method, input[name^="shipping_method"]'));
+        return inputs.find(function (input) {
+            const label = document.querySelector('label[for="' + input.id + '"]');
+            const labelText = String((label || input.closest('li') || input).textContent || '');
+            const value = String(input.value || '');
+            return /\bDPD\s*(Pickup|výdej|Abhol|punkt)/i.test(labelText)
+                || /^doprava_zasilkovna/i.test(value)
+                || /^packeta_method_6828/i.test(value);
+        }) || null;
+    }
+
     function dpdShippingAnchor() {
-        const input = document.querySelector('input.shipping_method[value^="doprava_zasilkovna"], input[name^="shipping_method"][value^="doprava_zasilkovna"]');
-        if (!input) {
-            return null;
-        }
-        return document.querySelector('label[for="' + input.id + '"]') || input.closest('li') || input;
+        const input = dpdPickupInput();
+        return input ? (document.querySelector('label[for="' + input.id + '"]') || input.closest('li') || input) : null;
     }
 
     function placeDpdInfo(element) {
@@ -472,6 +481,55 @@ HTML;
             ensureInput(id, 'checkbox');
         });
         textIds.forEach(ensureText);
+        ensureDpdPickerButton();
+    }
+
+    function openDpdPicker() {
+        const widget = window.Packeta && window.Packeta.Widget;
+        if (!widget || typeof widget.pick !== 'function') {
+            return;
+        }
+
+        const country = String((document.querySelector('[name="billing_country"]') || {}).value || '').toLowerCase();
+        widget.pick('jamu-ml-dpd', function (point) {
+            mirrorDpdSelection({ dpdWidget: point });
+        }, {
+            country: country || undefined,
+            language: data.language || undefined
+        });
+    }
+
+    function ensureDpdPickerButton() {
+        const input = dpdPickupInput();
+        let button = document.getElementById('jamu-dpd-pickup-button');
+        if (!input) {
+            if (button) {
+                button.hidden = true;
+            }
+            return;
+        }
+
+        if (!button) {
+            button = document.createElement('button');
+            button.type = 'button';
+            button.id = 'jamu-dpd-pickup-button';
+            button.className = 'button alt jamu-dpd-pickup-button';
+            button.style.marginTop = '.55rem';
+            button.addEventListener('click', openDpdPicker);
+        }
+        button.textContent = texts.choosePickupPoint || 'Choose pickup point';
+        button.hidden = !input.checked;
+
+        const anchor = dpdShippingAnchor();
+        if (anchor && anchor.parentNode && button.parentNode !== anchor.parentNode) {
+            anchor.parentNode.insertBefore(button, anchor.nextSibling);
+        }
+
+        const info = document.getElementById('packeta-point-info');
+        if (info) {
+            info.hidden = !input.checked;
+            placeDpdInfo(info);
+        }
     }
 
     function dispatchInput(element) {
@@ -793,6 +851,12 @@ HTML;
     if (window.jQuery) {
         window.jQuery(document.body).on('updated_checkout.jamuMlDpd updated_wc_div.jamuMlDpd', restoreDpdFieldsAfterCheckoutRefresh);
     }
+    document.addEventListener('change', function (event) {
+        const target = event.target;
+        if (target && target.matches && target.matches('input.shipping_method, input[name^="shipping_method"]')) {
+            window.setTimeout(ensureDpdElements, 0);
+        }
+    });
     translateDpdUi(document.body);
 
     window.addEventListener('message', function (event) {
