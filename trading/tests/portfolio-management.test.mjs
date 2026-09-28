@@ -4545,15 +4545,10 @@ test("overview ROI: realized P/L over what the closed trades cost", () => {
   assert.match(APP, /<th title="Realized P\/L as a share of what the closed trades cost[^"]*"><div class="th-content"><button[^>]*data-overview-sort="roi">ROI/);
 });
 
-// Reported three times running: the shortlist shows candidates the execution then refuses.
-// The quote gate took it from sixteen to seven; these are the seven.
-//
-// Measured rather than guessed, after guessing wrong once. The executor's own verdict on
-// the two rows from the report -- via its own prepareLiveCandidatePool, not an imitation --
-// was "volume below live minimum" for both, and twelve of its sixteen rejections across
-// that catalogue were the same gate. Their spreads were 3 and 4 points, well inside the
-// limit, so the spread rule would have passed them.
-test("shortlist volume gate: the same figure and the same floor the run uses", () => {
+// Reported both ways: a live shortlist must not promise an order the live executor refuses,
+// and a paper shortlist must not hide an order its own bot accepts. The two have different
+// defaults when the user leaves the minimum blank, so the mode is part of the contract.
+test("shortlist volume gate: live fallback never hides an unbounded paper candidate", () => {
   const volumeOf = new Function("item", `
     ${extractFunction(APP, "candidateVolumeUsdc")}
     return candidateVolumeUsdc(item);
@@ -4576,14 +4571,120 @@ test("shortlist volume gate: the same figure and the same floor the run uses", (
   assert.match(executor, fields, "the executor still reads these four in this order");
   assert.match(APP, fields, "and so does the browser");
 
-  // The floor is 100 by DEFAULT, not only when a portfolio names one. The endpoint that
-  // serves this shortlist applies no such default, which is how rows reach the screen that
-  // the run refuses on sight.
+  // Live retains its executor fallback. Paper does not: an empty saved threshold means no
+  // volume filter, matching paper-trading-bot.mjs and api.php's execution scope.
   assert.match(APP, /const DEFAULT_MIN_VOLUME_USDC = 100;/);
-  assert.match(APP, /minimumVolume != null && minimumVolume > 0 \? minimumVolume : DEFAULT_MIN_VOLUME_USDC/,
-    "a portfolio's own minimum wins, and absence means the run's default rather than none");
+  const floorFor = new Function("isLivePortfolioMode", "normalizeOptionalMoney", `
+    const DEFAULT_MIN_VOLUME_USDC = 100;
+    ${extractFunction(APP, "candidateVolumeFloorForMode")}
+    return candidateVolumeFloorForMode;
+  `)(
+    (mode) => String(mode).startsWith("live"),
+    (value) => Number.isFinite(Number(value)) ? Number(value) : null,
+  );
+  assert.equal(floorFor("paper-counterstrike2", { minLiquidityUsdc: null }), null,
+    "a paper portfolio with no saved minimum must not inherit the live $100 gate");
+  assert.equal(floorFor("paper-counterstrike2", { minLiquidityUsdc: 0 }), null);
+  assert.equal(floorFor("paper-counterstrike2", { minLiquidityUsdc: 20000 }), 20000);
+  assert.equal(floorFor("live", { minLiquidityUsdc: null }), 100,
+    "the live shortlist still mirrors its executor's protective fallback");
   assert.match(executor, /envNumber\("PAPER_MIN_VOLUME_24H", 100\)/,
-    "which is the executor's last fallback; if that changes, this default has to follow");
+    "the live executor's fallback chain remains explicit");
+});
+
+// Regression for the reported market, not a generic fixture: it was present in the focused
+// API response at 72.5% and live CLOB quoted 72c/73c, but the browser hid it because a
+// paper portfolio with no minimum accidentally inherited the live $100 default.
+test("Counter Strike 70-75: an in-band paper market with volume unset remains visible", async () => {
+  const reasonsFor = new Function("state", `
+    const MAX_TRADABLE_SPREAD = 0.05;
+    const DEFAULT_MIN_VOLUME_USDC = 100;
+    const DEFAULT_RISK_ALLOCATION = 5;
+    const portfolioConfigForMode = () => state.config;
+    const normalizeMode = (mode) => mode;
+    const portfolioEvaluationStatus = () => "EVALUATED";
+    const normalizeProbabilitySource = (value) => value || "polymarket";
+    const portfolioProbability = (item) => Number(item.marketPrice ?? item.marketProbability);
+    const resolutionHoursForMode = () => 48;
+    const evaluationDaysLeft = () => 0.25;
+    const candidateHoursToResolution = () => 6;
+    const configLiveEventMode = (config) => config.liveEventMode || "include";
+    const rowEventIsRunning = () => false;
+    const rowVolumeUsdc = (item) => Number(item.volumeUsdc || item.liquidity || 0);
+    const normalizeOptionalMoney = (value) => Number.isFinite(Number(value)) ? Number(value) : null;
+    const normalizeMinimumNetYield = (value) => Number(value || 0);
+    const normalizeEligibilityThreshold = (value) => Number(value);
+    const normalizeOptionalProbability = (value) => value == null ? null : Number(value);
+    const portfolioAnnualizedReturn = (item) => Number(item.potentialAnnualizedReturn);
+    const portfolioReturnMetricLabel = () => "Potential p.a.";
+    const latestLiveExecutionVerdict = () => null;
+    const normalizeMarketTagList = (value) => Array.isArray(value) ? value : [];
+    const marketMatchesAllowedTags = () => true;
+    const marketExcludedByTags = () => [];
+    const binarySideQuoteIsStale = () => false;
+    const marketProbabilityRoundsToCertain = () => false;
+    const numericOrNull = (value) => Number.isFinite(Number(value)) ? Number(value) : null;
+    const candidateQuoteSpread = (item) => Number(item.spread);
+    const money = (value) => '$' + Number(value).toFixed(2);
+    const probability = (value) => (Number(value) * 100).toFixed(1) + '%';
+    const normalizeRiskAllocation = (value) => Number(value);
+    const netYield = (item) => Number(item.netYield);
+    const isFixedEntryMode = () => false;
+    const horizonApplies = () => false;
+    const formatHorizonHours = (value) => String(value);
+    const configExcludedMarketShapes = () => [];
+    const candidateMarketShape = () => "outright";
+    const marketShapeLabel = (value) => value;
+    const isLivePortfolioMode = (mode) => String(mode).startsWith("live");
+    ${extractFunction(APP, "candidateVolumeUsdc")}
+    ${extractFunction(APP, "candidateVolumeFloorForMode")}
+    ${extractFunction(APP, "portfolioCandidateFilterReasons")}
+    return portfolioCandidateFilterReasons;
+  `)({
+    config: {
+      probabilitySource: "polymarket", minProbability: 0.7, maxProbability: 0.75,
+      minLiquidityUsdc: null, minNetYield: 0.01, liveEventMode: "include",
+      includeOnlyMarketTags: [], excludedMarketTags: [], excludedMarketShapes: [],
+    },
+  });
+  const market = {
+    tokenId: "26703946111048908269839556024257837541342547603480658128485989709438231229504",
+    question: "Counter-Strike: XI Esport vs OldMix (BO3) - United21 Group C",
+    status: "SCRAPED", marketProbability: 0.725, marketPrice: 0.725,
+    bestBid: 0.72, bestAsk: 0.73, spread: 0.01, volumeUsdc: 5, liquidity: 5551.86,
+    netYield: 0.3606, potentialAnnualizedReturn: 532.9496,
+  };
+  assert.deepEqual(reasonsFor(market, "paper-counterstrike2"), [],
+    "this currently quoted 72.5% market must stay visible when Counter Strike 70-75 has no volume floor");
+
+  // The screen alone is not enough: it must agree with the paper executor that will act
+  // on the row. This calls the production strategy filter rather than reproducing it.
+  const bot = await import("../tools/paper-trading-bot.mjs");
+  const execution = bot.portfolioFilterResult({
+    ...market,
+    selectionStatus: "SCRAPED",
+    daysToResolution: 0.25,
+    endDate: new Date(Date.now() + 6 * 60 * 60 * 1000).toISOString(),
+    eventStartTime: new Date(Date.now() + 90 * 60 * 1000).toISOString(),
+    polymarketTags: ["esports", "counter-strike-2", "games", "sports"],
+  }, {
+    ...bot.PAPER_STRATEGIES.conservative,
+    id: "counterstrike2",
+    probabilitySource: "polymarket",
+    minProbability: 0.7,
+    maxProbability: 0.75,
+    minLiquidityUsdc: null,
+    minNetYield: 0.01,
+    maxResolutionHours: 48,
+    liveEventMode: "include",
+    includeOnlyMarketTags: new Set(),
+    excludedMarketTags: new Set(),
+    excludedCandidateTokenIds: new Set(),
+    excludedMarketShapes: new Set(),
+    excludeOverUnderMarkets: true,
+  });
+  assert.equal(execution.eligible, true,
+    `the paper executor must accept the same row the shortlist shows: ${execution.reasons.join("; ")}`);
 });
 
 // Asked for: "I don't actually know what percentage it sold at." Nothing on the closed row

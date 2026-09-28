@@ -9196,9 +9196,17 @@ function candidateVolumeUsdc(item = {}) {
   return 0;
 }
 
-// What the executor requires when the portfolio names no minimum of its own. Mirrors the
-// last fallback of MIN_VOLUME_24H, which is where a run gets its floor from.
+// The live executor retains a conservative account-wide fallback when a live portfolio
+// names no minimum of its own. Paper strategies do not: an empty paper setting means that
+// the owner deliberately chose no volume threshold. Applying this live fallback to both
+// made the browser hide valid paper candidates which the paper bot would buy.
 const DEFAULT_MIN_VOLUME_USDC = 100;
+
+function candidateVolumeFloorForMode(mode, config = {}) {
+  const configured = normalizeOptionalMoney(config?.minLiquidityUsdc);
+  if (configured != null && configured > 0) return configured;
+  return isLivePortfolioMode(mode) ? DEFAULT_MIN_VOLUME_USDC : null;
+}
 
 // The width of the quote, preferring the stated spread and falling back to the two sides it
 // can be derived from. A port of observation_spread in api.php, and it has to stay one: that
@@ -11562,22 +11570,14 @@ function portfolioCandidateFilterReasons(item, mode = state.mode) {
   if (currentSpread != null && currentSpread > MAX_TRADABLE_SPREAD) {
     reasons.push(`spread ${probability(currentSpread)} is wider than the ${probability(MAX_TRADABLE_SPREAD)} a fill needs`);
   }
-  // Measured, after guessing wrong once: the executor's own verdict on the two rows from the
-  // report was "volume below live minimum" for both, and twelve of its sixteen rejections
-  // across that catalogue were the same gate. The spread was 3 and 4 points -- well inside
-  // the limit -- so the spread rule above would have let them through.
-  //
-  // Two details decide whether this agrees with the run, and both were wrong in the first
-  // attempt. The minimum is 100 USDC by DEFAULT, not only when the portfolio sets one:
-  // MIN_VOLUME_24H falls back through LIVE_MIN_VOLUME_24H to PAPER_MIN_VOLUME_24H to 100.
-  // And the endpoint that builds this shortlist applies no such default, which is why rows
-  // it serves can be refused on sight by the run. And the figure is the first POSITIVE of
-  // four fields in a fixed order, not the first non-null of two: these rows carried
-  // volumeUsdc 3.92 against liquidity 33999, so which field is asked decides the answer.
+  // A paper portfolio has no hidden volume floor: its stored value is the rule the paper
+  // bot applies. Live execution keeps its account-wide fallback when the setting is empty.
+  // This distinction is intentional; sharing the fallback made a 70-75 paper portfolio
+  // hide a currently quoted 72.5% Counter-Strike market solely because it had $5 of
+  // recorded volume, although its saved minimum was off and the paper bot accepted it.
   const candidateVolume = candidateVolumeUsdc(item);
-  const minimumVolume = numericOrNull(config.minLiquidityUsdc);
-  const volumeFloor = minimumVolume != null && minimumVolume > 0 ? minimumVolume : DEFAULT_MIN_VOLUME_USDC;
-  if (candidateVolume < volumeFloor) {
+  const volumeFloor = candidateVolumeFloorForMode(normalizedMode, config);
+  if (volumeFloor != null && candidateVolume < volumeFloor) {
     reasons.push(`volume ${money(candidateVolume)} is below the ${money(volumeFloor)} minimum a live order needs`);
   }
   // And whether this position could be got OUT of, which volume and spread both fail to ask.
