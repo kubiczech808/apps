@@ -15,7 +15,7 @@ export const EXTERNAL_PIVOT_METHOD = 'Potvrzené 10-svíčkové pivoty z extern�
 // Bump this whenever pivot geometry or confirmation changes. Cached external
 // references are executable strategy input, so a same-hour cache must never
 // preserve the old interpretation after such a change.
-export const EXTERNAL_PIVOT_SCHEMA = 6
+export const EXTERNAL_PIVOT_SCHEMA = 7
 export const EXTERNAL_PIVOT_PERIOD = 10
 export const EXTERNAL_PIVOT_FALLBACK_PERIOD = 5
 export const EXTERNAL_PIVOT_OUTPUTSIZE = 2000
@@ -246,6 +246,42 @@ const terminalWaveExtreme = ({ candles, after, kind }) => {
   }
 }
 
+// A confirmed LH -> LL / HL -> HH pair establishes the direction, but the
+// terminal point of that same impulse must remain responsive. Waiting for a
+// full right-hand pivot window after price has already *closed* through the
+// active LL/HH leaves the Fibonacci leg and pullback level behind the market.
+// Extend only after a close through the old terminal wick; a wick-only sweep
+// stays out, and the opposite endpoint remains protected until a real BoS.
+const extendActiveRangeAtClosedTerminal = ({ range, trend, candles = [] } = {}) => {
+  if (!range || (trend !== 'up' && trend !== 'down')) return null
+  const terminal = trend === 'down' ? range.low : range.high
+  if (!terminal || !Number.isFinite(terminal.time) || !Number.isFinite(terminal.price)) return null
+  const breakCandle = firstClosingBreak({
+    candles,
+    after: terminal.time,
+    level: terminal.price,
+    direction: trend,
+  })
+  const newTerminal = breakCandle && terminalWaveExtreme({
+    candles,
+    after: breakCandle.time,
+    kind: trend === 'down' ? 'low' : 'high',
+  })
+  if (!breakCandle || !newTerminal) return null
+  const high = trend === 'down'
+    ? { ...range.high }
+    : { ...newTerminal, label: 'HH' }
+  const low = trend === 'down'
+    ? { ...newTerminal, label: 'LL' }
+    : { ...range.low }
+  if (!(high.price > low.price)) return null
+  return {
+    high,
+    low,
+    source: 'external-closed-terminal-extension',
+  }
+}
+
 // A structural reversal is confirmed only by a candle close through the
 // protected opposite wick. The first impulse after that break still starts at
 // the old HH/LL: a local counter-swing may not replace this Fibonacci anchor.
@@ -395,6 +431,7 @@ const chartPivotsForDirectionalLeg = ({ pivots, leg }) => {
 
 export const classifyExternalPivotPath = (pivots = [], { candles = [] } = {}) => {
   const path = normalizeExternalPivots(pivots, { candles })
+  const completedCandles = completedOhlc(candles)
   const high = path.filter((pivot) => pivot.kind === 'high').slice(-2)
   const low = path.filter((pivot) => pivot.kind === 'low').slice(-2)
   const directionalTrend = high.length === 2 && low.length === 2
@@ -404,7 +441,7 @@ export const classifyExternalPivotPath = (pivots = [], { candles = [] } = {}) =>
         ? 'down'
         : 'flat'
     : 'flat'
-  const event = latestChainedBreakOfStructure({ pivots: path, candles: completedOhlc(candles) })
+  const event = latestChainedBreakOfStructure({ pivots: path, candles: completedCandles })
   const trend = event?.trend ?? directionalTrend
   // A BoS anchors only the first impulse into the new direction. Once an
   // externally confirmed LH -> LL / HL -> HH wave follows it, that newer
@@ -416,10 +453,17 @@ export const classifyExternalPivotPath = (pivots = [], { candles = [] } = {}) =>
     after: event?.time ?? -Infinity,
   })
   const continuationRange = continuation ? directionalRangeFromLeg(continuation, trend) : null
+  const confirmedRange = continuationRange ?? event?.activeRange ?? null
+  const terminalRange = extendActiveRangeAtClosedTerminal({
+    range: confirmedRange,
+    trend,
+    candles: completedCandles,
+  })
+  const activeRange = terminalRange ?? confirmedRange
   return {
     trend,
     pivots: path.slice(-12),
-    activeRange: continuationRange ?? event?.activeRange ?? null,
+    activeRange,
     event: event
       ? {
           type: event.type,
@@ -428,7 +472,9 @@ export const classifyExternalPivotPath = (pivots = [], { candles = [] } = {}) =>
           protectedPivot: event.protectedPivot,
         }
       : null,
-    chartPivots: continuation
+    chartPivots: terminalRange
+      ? [activeRange.high, activeRange.low].sort((left, right) => left.time - right.time)
+      : continuation
       ? chartPivotsForDirectionalLeg({ pivots: path, leg: continuation })
       : event ? chartPivotsForBreak({ pivots: path, event }) : null,
   }

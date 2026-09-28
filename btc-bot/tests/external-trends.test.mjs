@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import { EXTERNAL_PIVOT_SCHEMA, canReuseExternalPivotBucket, classifyExternalPivotPath, classifyExternalTrend, confirmedExternalPivotCandidates, confirmedExternalPivotPath, fetchTwelveDataFxHourly, fetchTwelveDataFxPivots } from '../src/external-trends.mjs'
+import { PRICE_ACTION_ASSETS, PRICE_ACTION_TIMEFRAMES } from '../src/strategy-price-action-structure.mjs'
 import { HOUR, START } from './helpers.mjs'
 
 const values = (start, count, step = 0.001) => Array.from({ length: count }, (_, index) => {
@@ -211,6 +212,125 @@ test('a completed continuation replaces the old BoS anchor with the current dire
   )
   assert.equal(up.activeRange.source, 'external-confirmed-directional-wave')
   assert.deepEqual(up.chartPivots.map((pivot) => pivot.label), ['HH', 'HL', 'HH'])
+})
+
+test('a closed break of an active terminal extends the down wave before its next pivot is confirmed', () => {
+  const pivots = [
+    { kind: 'high', price: 120, close: 119, time: START },
+    { kind: 'low', price: 100, close: 101, time: START + HOUR },
+    { kind: 'high', price: 115, close: 114, time: START + 2 * HOUR },
+    { kind: 'low', price: 90, close: 89, time: START + 3 * HOUR },
+  ]
+  const candles = [
+    { time: START, open: 119, high: 120, low: 118, close: 119 },
+    { time: START + HOUR, open: 101, high: 102, low: 100, close: 101 },
+    { time: START + 2 * HOUR, open: 114, high: 115, low: 112, close: 114 },
+    { time: START + 3 * HOUR, open: 91, high: 92, low: 90, close: 89 },
+    // The wick at 84 closes back above the active LL, so it is not structural.
+    { time: START + 4 * HOUR, open: 90, high: 92, low: 84, close: 91 },
+    // This close breaks the old LL and the new wave ends at the wick low 82.
+    { time: START + 5 * HOUR, open: 89, high: 90, low: 82, close: 85 },
+  ]
+
+  const path = classifyExternalPivotPath(pivots, { candles })
+
+  assert.equal(path.trend, 'down')
+  assert.equal(path.activeRange.source, 'external-closed-terminal-extension')
+  assert.deepEqual(
+    [path.activeRange.high.label, path.activeRange.high.price, path.activeRange.low.label, path.activeRange.low.price],
+    ['LH', 115, 'LL', 82]
+  )
+  assert.deepEqual(path.chartPivots.map((pivot) => [pivot.label, pivot.time, pivot.price]), [
+    ['LH', START + 2 * HOUR, 115], ['LL', START + 5 * HOUR, 82],
+  ])
+})
+
+test('a closed break of an active terminal extends the up wave before its next pivot is confirmed', () => {
+  const pivots = [
+    { kind: 'low', price: 80, close: 81, time: START },
+    { kind: 'high', price: 100, close: 99, time: START + HOUR },
+    { kind: 'low', price: 85, close: 86, time: START + 2 * HOUR },
+    { kind: 'high', price: 110, close: 111, time: START + 3 * HOUR },
+  ]
+  const candles = [
+    { time: START, open: 81, high: 82, low: 80, close: 81 },
+    { time: START + HOUR, open: 99, high: 100, low: 98, close: 99 },
+    { time: START + 2 * HOUR, open: 86, high: 87, low: 85, close: 86 },
+    { time: START + 3 * HOUR, open: 109, high: 110, low: 108, close: 111 },
+    // A wick alone over HH is ignored.
+    { time: START + 4 * HOUR, open: 109, high: 118, low: 107, close: 109 },
+    // The close confirms the new terminal, which retains its wick high.
+    { time: START + 5 * HOUR, open: 111, high: 121, low: 110, close: 116 },
+  ]
+
+  const path = classifyExternalPivotPath(pivots, { candles })
+
+  assert.equal(path.trend, 'up')
+  assert.equal(path.activeRange.source, 'external-closed-terminal-extension')
+  assert.deepEqual(
+    [path.activeRange.low.label, path.activeRange.low.price, path.activeRange.high.label, path.activeRange.high.price],
+    ['HL', 85, 'HH', 121]
+  )
+  assert.deepEqual(path.chartPivots.map((pivot) => [pivot.label, pivot.time, pivot.price]), [
+    ['HL', START + 2 * HOUR, 85], ['HH', START + 5 * HOUR, 121],
+  ])
+})
+
+test('closed-terminal extension behaves symmetrically for every supported asset and timeframe', () => {
+  const timeframeMs = { '1h': HOUR, '4h': 4 * HOUR, '1d': 24 * HOUR }
+  const baseBySymbol = {
+    BTCUSD: 80000,
+    EURUSD: 1.14,
+    GBPUSD: 1.34,
+    USDJPY: 157,
+    USDCHF: 0.83,
+    USDCAD: 1.4,
+    AUDUSD: 0.71,
+    NZDUSD: 0.57,
+  }
+
+  for (const [assetIndex, asset] of PRICE_ACTION_ASSETS.entries()) {
+    for (const timeframe of PRICE_ACTION_TIMEFRAMES) {
+      const step = baseBySymbol[asset.symbol] * 0.01
+      const period = timeframeMs[timeframe.id]
+      const up = (assetIndex + timeframe.hours) % 2 === 0
+      const pivots = up
+        ? [
+            { kind: 'low', price: step * 96, close: step * 96.2, time: START },
+            { kind: 'high', price: step * 104, close: step * 103.8, time: START + period },
+            { kind: 'low', price: step * 98, close: step * 98.2, time: START + 2 * period },
+            { kind: 'high', price: step * 106, close: step * 106.2, time: START + 3 * period },
+          ]
+        : [
+            { kind: 'high', price: step * 104, close: step * 103.8, time: START },
+            { kind: 'low', price: step * 96, close: step * 96.2, time: START + period },
+            { kind: 'high', price: step * 102, close: step * 101.8, time: START + 2 * period },
+            { kind: 'low', price: step * 94, close: step * 93.8, time: START + 3 * period },
+          ]
+      const terminal = up ? step * 109 : step * 91
+      const candles = pivots.map((pivot) => ({
+        time: pivot.time,
+        open: pivot.close,
+        high: pivot.kind === 'high' ? pivot.price : pivot.close + step,
+        low: pivot.kind === 'low' ? pivot.price : pivot.close - step,
+        close: pivot.close,
+      }))
+      candles.push(up
+        ? { time: START + 4 * period, open: step * 106, high: terminal, low: step * 105, close: step * 107 }
+        : { time: START + 4 * period, open: step * 94, high: step * 95, low: terminal, close: step * 93 })
+
+      const path = classifyExternalPivotPath(pivots, { candles })
+      const terminalPivot = up ? path.activeRange.high : path.activeRange.low
+
+      assert.equal(path.trend, up ? 'up' : 'down', `${asset.symbol} ${timeframe.id}`)
+      assert.equal(path.activeRange.source, 'external-closed-terminal-extension', `${asset.symbol} ${timeframe.id}`)
+      assert.equal(terminalPivot.time, START + 4 * period, `${asset.symbol} ${timeframe.id}`)
+      assert.equal(terminalPivot.price, terminal, `${asset.symbol} ${timeframe.id}`)
+      assert.ok(path.activeRange.high.price > path.activeRange.low.price, `${asset.symbol} ${timeframe.id}`)
+      assert.ok(path.activeRange.low.time < path.activeRange.high.time || !up, `${asset.symbol} ${timeframe.id}`)
+      assert.ok(path.activeRange.high.time < path.activeRange.low.time || up, `${asset.symbol} ${timeframe.id}`)
+    }
+  }
 })
 
 test('a close through the protected LL after BoS up restores the down structure', () => {
