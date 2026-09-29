@@ -54,10 +54,18 @@ function probability(value, fallback) {
   return Math.min(0.99, Math.max(0.01, Math.round(fraction * 10000) / 10000));
 }
 
+function openingProbability(value, fallback) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return fallback;
+  const fraction = numeric > 1 ? numeric / 100 : numeric;
+  if (!Number.isFinite(fraction)) return fallback;
+  return Math.min(0.999, Math.max(0.01, Math.round(fraction * 10000) / 10000));
+}
+
 export function normalizeDipEntryRule(value) {
   const source = value && typeof value === "object" ? value : {};
-  const openMin = probability(source.openMin, DIP_ENTRY_RULE_DEFAULTS.openMin);
-  const openMax = probability(source.openMax, DIP_ENTRY_RULE_DEFAULTS.openMax);
+  const openMin = openingProbability(source.openMin, DIP_ENTRY_RULE_DEFAULTS.openMin);
+  const openMax = openingProbability(source.openMax, DIP_ENTRY_RULE_DEFAULTS.openMax);
   const buyMin = probability(source.buyMin, DIP_ENTRY_RULE_DEFAULTS.buyMin);
   const buyMax = probability(source.buyMax, DIP_ENTRY_RULE_DEFAULTS.buyMax);
   return {

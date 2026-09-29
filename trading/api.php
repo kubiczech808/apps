@@ -4396,6 +4396,21 @@ function normalize_probability_value(mixed $value, float $fallback): float
     return max(0.01, min(0.99, $probability));
 }
 
+// A dip watcher may begin at 99.9%, while the ordinary entry and exit thresholds still
+// deliberately stop at 99%. Keep this separate so extending the watch band cannot make
+// a normal portfolio eligible at an effectively settled price.
+function normalize_dip_entry_opening_probability_value(mixed $value, float $fallback): float
+{
+    if (!is_numeric($value)) {
+        return $fallback;
+    }
+    $probability = (float) $value;
+    if ($probability > 1) {
+        $probability /= 100;
+    }
+    return max(0.01, min(0.999, round($probability, 4)));
+}
+
 /**
  * The dip-entry rule's opening band, as a portfolio stores it.
  *
@@ -4448,7 +4463,7 @@ function dip_entry_opening_source(array $item): string
 function normalize_dip_entry_rule(array $input, array $defaults): array
 {
     $bound = static function (string $key, float $fallback) use ($input, $defaults): float {
-        return normalize_probability_value($input[$key] ?? ($defaults[$key] ?? null), $fallback);
+        return normalize_dip_entry_opening_probability_value($input[$key] ?? ($defaults[$key] ?? null), $fallback);
     };
     $openMin = $bound('dipEntryOpenMin', 0.70);
     $openMax = $bound('dipEntryOpenMax', 0.80);

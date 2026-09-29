@@ -1760,12 +1760,12 @@ function dipEntryStatusMarkup(mode) {
 // bands rather than one threshold, because the pattern is a fall and not a level.
 const DIP_ENTRY_RULE_DEFAULTS = { enabled: false, openMin: 0.7, openMax: 0.8, buyMin: 0.3, buyMax: 0.4 };
 
-function dipEntryBound(value, fallback) {
+function dipEntryBound(value, fallback, maximum = 0.99) {
   const numeric = Number(value);
   if (!Number.isFinite(numeric)) return fallback;
   const fraction = numeric > 1 ? numeric / 100 : numeric;
   if (!Number.isFinite(fraction)) return fallback;
-  return Math.min(0.99, Math.max(0.01, Math.round(fraction * 10000) / 10000));
+  return Math.min(maximum, Math.max(0.01, Math.round(fraction * 10000) / 10000));
 }
 
 // The buy band is the portfolio's ORDINARY probability range, not a setting of its own.
@@ -1773,8 +1773,8 @@ function dipEntryBound(value, fallback) {
 // the range is what every filter in the bot, the executor and the catalogue actually reads,
 // so a portfolio whose range said 70-80 shortlisted favourites however its buy band was set.
 function dipEntryRuleFromConfig(config = {}) {
-  const openMin = dipEntryBound(config.dipEntryOpenMin, DIP_ENTRY_RULE_DEFAULTS.openMin);
-  const openMax = dipEntryBound(config.dipEntryOpenMax, DIP_ENTRY_RULE_DEFAULTS.openMax);
+  const openMin = dipEntryBound(config.dipEntryOpenMin, DIP_ENTRY_RULE_DEFAULTS.openMin, 0.999);
+  const openMax = dipEntryBound(config.dipEntryOpenMax, DIP_ENTRY_RULE_DEFAULTS.openMax, 0.999);
   const buyMin = dipEntryBound(config.minProbability, DIP_ENTRY_RULE_DEFAULTS.buyMin);
   // No maximum means the range has no ceiling, which necessarily reaches into the opening
   // band. Reported as a fault rather than guessed at.
@@ -7948,8 +7948,8 @@ function portfolioFormFields() {
     { element: els.stopLossProbabilityFloor, label: "Sell below probability", unit: "%", min: 1, max: 99, zeroOff: true },
     // Required while the rule is switched on, and only then: an unticked dip rule has no
     // band to be wrong about, and demanding one would block saving every other change.
-    { element: els.dipEntryOpenMin, label: "Dip entry opening band from", unit: "%", min: 1, max: 99, required: dipOn },
-    { element: els.dipEntryOpenMax, label: "Dip entry opening band to", unit: "%", min: 1, max: 99, required: dipOn },
+    { element: els.dipEntryOpenMin, label: "Dip entry opening band from", unit: "%", min: 1, max: 99.9, required: dipOn },
+    { element: els.dipEntryOpenMax, label: "Dip entry opening band to", unit: "%", min: 1, max: 99.9, required: dipOn },
     { element: els.settlementCloseBid, label: "Close at certainty", unit: "%", min: 50, max: 99.9, zeroOff: true },
     { element: els.minLiquidity, label: "Minimum liquidity", unit: "USDC", min: 0, max: 100000000 },
     { element: els.stopLossRiskMultiplier, label: "Stop loss", unit: "%", min: 1, max: 1000, zeroOff: true },
@@ -8092,7 +8092,7 @@ function parameterDraftFromControls(baseDraft = {}) {
     // An empty bound is left out rather than read as zero. That is the bug reported on
     // "Close at certainty" and "Sell below probability": a field cleared for retyping wrote
     // itself away as 0 and the setting was gone by the time the form was saved.
-    if (hasValue(element)) draft[key] = dipEntryBound(numberValue(element) / 100, null);
+    if (hasValue(element)) draft[key] = dipEntryBound(numberValue(element) / 100, null, 0.999);
   }
   if (hasValue(els.settlementCloseBid)) {
     const bid = normalizeSettlementCloseBid(numberValue(els.settlementCloseBid) / 100);
@@ -17933,7 +17933,7 @@ function dipEntryControlChanged(persist) {
     // zero, which is the failure reported on "Close at certainty" and "Sell below
     // probability": the value was gone before the form was saved.
     const typed = element && !parameterDraftInputIsEmpty(element)
-      ? dipEntryBound(numberValue(element) / 100, null)
+      ? dipEntryBound(numberValue(element) / 100, null, 0.999)
       : null;
     updates[key] = typed == null ? fallback : typed;
   }

@@ -140,6 +140,8 @@ test("dip entry states the OPENING band, which is the half the probability row c
   // differently, so a hard-coded "70.0%–99.0%" would fail.
   assert.equal(valueOf(rowsFor({ ...DIP_CONFIG, dipEntryOpenMax: 0.85 }), "Dip entry"),
     "opened 70.0%–85.0%");
+  assert.equal(valueOf(rowsFor({ ...DIP_CONFIG, dipEntryOpenMax: 0.999 }), "Dip entry"),
+    "opened 70.0%–99.9%");
 });
 
 test("the band the card prints is the band the rule actually gates on", () => {

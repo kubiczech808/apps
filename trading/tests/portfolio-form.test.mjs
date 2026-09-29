@@ -85,7 +85,7 @@ test("a value the form cannot store is refused, not rewritten", () => {
   assert.ok(failing, `0 must be refused: ${JSON.stringify(reported.messages)}`);
   assert.match(failing.message, /Dip entry opening band to is 0/);
   // And it has to say what IS accepted, or the reader is left guessing.
-  assert.match(failing.message, /1 to 99 %/);
+  assert.match(failing.message, /1 to 99\.9 %/);
   // The other half was typed correctly and must not be blamed.
   assert.equal(reported.for("dipEntryOpenMin"), null);
 
@@ -136,6 +136,12 @@ test("the form accepts what it should, so the check is not just refusing everyth
 
   // A decimal comma is what a Czech keyboard gives, and it is a number.
   assert.deepEqual(validate({ settlementCloseBid: "99,9" }).messages, []);
+
+  // The DIP opening watch may start just below certainty. This must survive both decimal
+  // notation styles instead of being refused by the ordinary 99% entry threshold.
+  assert.deepEqual(validate({ dipEntryOpenMin: "70", dipEntryOpenMax: "99.9" }, { dipOn: true }).messages, []);
+  assert.deepEqual(validate({ dipEntryOpenMin: "70", dipEntryOpenMax: "99,9" }, { dipOn: true }).messages, []);
+  assert.ok(validate({ dipEntryOpenMax: "100" }, { dipOn: true }).for("dipEntryOpenMax"));
 
   // Text is not.
   assert.match(validate({ riskAllocation: "abc" }).for("riskAllocation")?.message || "", /must be a number/);

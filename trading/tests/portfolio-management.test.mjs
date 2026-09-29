@@ -5525,6 +5525,8 @@ test("dip entry: one rule, and every copy of it agrees", async () => {
 
   // Percent or fraction, because the form sends 70 and the config stores 0.70.
   assert.equal(rule.normalizeDipEntryRule({ openMin: 70 }).openMin, 0.7);
+  assert.equal(rule.normalizeDipEntryRule({ openMax: 99.9 }).openMax, 0.999,
+    "the opening watch may reach 99.9%, without widening the ordinary buy band");
 
   // api.php's copy of the normalizer has to land on the same values, or a portfolio saves
   // one rule and trades another. Three keys now, not five: the buy band is the range.
@@ -5553,6 +5555,8 @@ test("dip entry: one rule, and every copy of it agrees", async () => {
   `)((value) => `${Math.round(Number(value) * 100)}%`);
   assert.deepEqual(dashboard.dipEntryRuleFromConfig(saved), fromPhp,
     "the dashboard must read a saved rule as the module does");
+  assert.equal(dashboard.dipEntryRuleFromConfig({ dipEntryOpenMax: 99.9 }).openMax, 0.999,
+    "the dashboard must preserve the 99.9% opening bound from the form");
   assert.equal(dashboard.dipEntryRuleFault(dashboard.dipEntryRuleFromConfig(saved)), "",
     "72-68 / 41-29 swaps into a valid rule, so it must not report a fault");
   assert.match(dashboard.dipEntryRuleSummaryValue(dashboard.dipEntryRuleFromConfig(saved)),
