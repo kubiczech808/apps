@@ -125,3 +125,22 @@ test("state API: legacy compact requests cannot decode the evaluation archive", 
   assert.match(stateAction.slice(aliasAt, payloadAt), /unknown-state-summary/,
     "unexpected summaries must fail cheaply instead of using the large legacy fallback");
 });
+
+test("live dashboard: history and execution audits are loaded only for a visible tab", () => {
+  const liveLoader = lift("loadLiveState");
+  const liveRenderer = lift("renderLiveState");
+  const activate = lift("activateTab");
+
+  assert.match(liveLoader, /fetchJson\("data\/live-state\.json", \{ summary: "dashboard" \}\)/,
+    "the live landing view must request the compact server summary");
+  assert.doesNotMatch(liveLoader, /fetchJson\(liveExecutionStateFile\(executionMode\)\)/,
+    "a full per-portfolio execution audit must not block every portfolio switch");
+  assert.match(liveLoader, /if \(livePortfolioTabNeedsExecutionState\(\)\) ensureLiveExecutionState\(executionMode\);/);
+  assert.match(activate, /if \(isLiveMode\(\)\) ensureLiveExecutionState\(\);/,
+    "focused candidates, run-log and unfilled-order tabs must request their audit on demand");
+  assert.match(liveRenderer, /const rawClosedTrades = liveClosedTrades\(liveState\);/);
+  assert.match(liveRenderer, /activePortfolioTab === "closed-trades"\s*\? rawClosedTrades\.map\(decorateLiveTradeForTable\)/,
+    "historical rows must be decorated only when their table is visible");
+  assert.match(API, /function compact_live_dashboard_payload\(/,
+    "the server must drop duplicate live-history collections for the dashboard summary");
+});

@@ -3986,12 +3986,15 @@ test("live attribution: the dashboard loads the compact server ownership index",
   // The Resolved accuracy tile is fed the attributed closed trades, so separating the
   // portfolios separates the tile too. Pinned, because a future refactor that hands it the
   // unfiltered list would silently restore the mixed statistic.
-  const attributedAt = APP.indexOf("const closedTrades = liveClosedTrades(liveState).map(decorateLiveTradeForTable);");
+  const attributedAt = APP.indexOf("const rawClosedTrades = liveClosedTrades(liveState);");
   assert.ok(attributedAt > 0, "the live renderer must build its closed rows from the attributed set");
-  // Within the same function: the tile is fed that variable, not the account's whole list.
+  // The detailed row enrichment is intentionally lazy, but the tile must still receive the
+  // portfolio's attributed raw ledger rather than the account-wide list.
   const renderer = APP.slice(attributedAt, APP.indexOf("\nfunction ", attributedAt));
-  assert.match(renderer, /renderClosedAccuracy\(closedTrades\);/,
+  assert.match(renderer, /renderClosedAccuracy\(rawClosedTrades\);/,
     "Resolved accuracy must count this portfolio's own resolved positions, not the account's");
+  assert.match(renderer, /activePortfolioTab === "closed-trades"\s*\? rawClosedTrades\.map\(decorateLiveTradeForTable\)/,
+    "detailed closed-trade row enrichment must wait until its tab is visible");
 });
 
 // Asked for: in the dashboard overview, a live portfolio that is switched ON comes first,

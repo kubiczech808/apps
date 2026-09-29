@@ -7456,6 +7456,38 @@ function live_state_with_exit_reasons(array $payload): array
     return $state;
 }
 
+/**
+ * The live account state is also the durable history archive. The dashboard needs the
+ * current account, positions, orders and closed-trade ledger, but not the parallel API
+ * snapshots and activity feed that made every portfolio switch transfer several MB.
+ * Keep the full form for workers and focused readers; only the explicitly named dashboard
+ * summary sheds those duplicate, UI-unused collections.
+ */
+function compact_live_dashboard_payload(array $payload, string $summary): array
+{
+    if ($summary !== 'dashboard') {
+        return $payload;
+    }
+
+    $state = is_array($payload['state'] ?? null) ? $payload['state'] : $payload;
+    $isWrapped = is_array($payload['state'] ?? null);
+    $state['activityCount'] = is_array($state['activity'] ?? null) ? count($state['activity']) : 0;
+    unset(
+        $state['activity'],
+        $state['tradeHistory'],
+        $state['apiPositions'],
+        $state['resolvedApiPositions'],
+        $state['accountDiscovery'],
+        $state['marketTags'],
+    );
+
+    if ($isWrapped) {
+        $payload['state'] = $state;
+        return $payload;
+    }
+    return $state;
+}
+
 function live_entry_claim_key(string $tokenId, string $side): string
 {
     return strtoupper($side) . ':' . $tokenId;
@@ -10048,6 +10080,7 @@ try {
         }
         if ($target === 'live') {
             $payload = live_state_with_exit_reasons($payload);
+            $payload = compact_live_dashboard_payload($payload, $summary);
         }
         respond($payload);
     }

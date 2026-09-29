@@ -106,6 +106,11 @@ const state = {
   limitOrdersKey: "",
   liveExecutionArmed: false,
   liveExecutionState: null,
+  // A live execution state can be several MB because it is an audit ledger. It is only
+  // needed by the candidates, run-log and unfilled-order tabs, never by the portfolio
+  // overview or opened positions. Keep requests per portfolio so a tab can render first.
+  liveExecutionStateRequests: {},
+  liveExecutionStateFetchedAt: {},
   // Cross-portfolio order ownership is intentionally compact. Loading every portfolio's
   // complete execution log here made a simple tab or portfolio switch parse tens of MB.
   // The API assembles the durable token/price/owner records once on the server instead.
@@ -2957,13 +2962,16 @@ function activateTab(target, { syncRoute = false, replace = false } = {}) {
   });
   if (target === "portfolio-candidates") {
     renderPortfolioCandidates();
+    if (isLiveMode()) ensureLiveExecutionState();
     refreshPortfolioCandidates({ quiet: true });
   }
   if (target === "daily-picks" || target === "closed-trades") {
     renderActivePortfolioTabFromCachedState();
+    if (target === "closed-trades" && isLiveMode()) ensureLiveExecutionState();
   }
   if (target === "run-log") {
     renderRunLog();
+    if (isLiveMode()) ensureLiveExecutionState();
     pollRunningExecution(currentExecutionTarget());
   }
   if (target === "portfolio-history") {
@@ -2971,6 +2979,7 @@ function activateTab(target, { syncRoute = false, replace = false } = {}) {
   }
   if (target === "unfilled-limit-orders") {
     renderUnfilledLimitOrders();
+    if (isLiveMode()) ensureLiveExecutionState();
   }
   if (syncRoute && state.page === "portfolios") {
     const targetPath = portfolioTabRoutePath(target);
@@ -10718,10 +10727,12 @@ async function loadLiveState(options = {}) {
     const ownershipRequest = ownershipIsFresh
       ? Promise.resolve(null)
       : fetchApiJson("api.php?action=live-order-ownership");
-    const [liveResult, botResult, executionResult, ownershipResult] = await Promise.allSettled([
-      fetchJson("data/live-state.json"),
+    const [liveResult, botResult, ownershipResult] = await Promise.allSettled([
+      // The dashboard intentionally excludes the duplicate API history. It keeps the
+      // ledger needed by the tiles, while the full history remains available to workers
+      // and focused views instead of blocking every portfolio switch.
+      fetchJson("data/live-state.json", { summary: "dashboard" }),
       fetchJson("data/paper-state.json", { summary: "portfolio-overview" }),
-      fetchJson(liveExecutionStateFile(executionMode)),
       ownershipRequest,
     ]);
     if (dashboardLoadIsStale(options) || !isLiveMode()) return;
@@ -10730,31 +10741,22 @@ async function loadLiveState(options = {}) {
       state.botState = botStateWithPreservedEvaluations(botResult.value);
       state.botStateFull = botStateIsFull(state.botState);
     }
-    // Keyed by portfolio, because the two live portfolios keep separate run logs and
-    // a failed fetch must not leave the other one's on screen. 5050's file does not
-    // exist until its first run publishes one, so that fetch legitimately 404s -- and
-    // keeping the previous value there meant 5050 displayed Live's execution history.
+    // Keep the previously cached execution record for this portfolio while its focused
+    // tab asks for a fresh one. Loading the full audit here used to make every switch
+    // parse a 1-3 MB run log even while the reader was looking at opened positions.
     state.liveExecutionByMode = state.liveExecutionByMode || cachedLiveExecutionByMode();
-    if (executionResult.status === "fulfilled") {
-      state.liveExecutionByMode[executionMode] = executionResult.value;
-      rememberLiveExecutionState(executionMode, executionResult.value);
-    } else if (!(executionMode in state.liveExecutionByMode)) {
+    if (!(executionMode in state.liveExecutionByMode)) {
       // No log of its own yet is "nothing to show", never "show the other one".
       state.liveExecutionByMode[executionMode] = null;
     }
     state.liveExecutionState = state.liveExecutionByMode[executionMode] || null;
-    if (executionMode === "live-5050" && executionResult.status === "fulfilled") {
-      state.live5050ExecutionState = executionResult.value;
-    }
     if (ownershipResult.status === "fulfilled" && Array.isArray(ownershipResult.value?.orders)) {
       state.liveOrderOwnership = ownershipResult.value.orders;
       state.liveOrderOwnershipAt = Date.now();
     }
-    // Runs GitHub refused. They are small, they belong to this portfolio's log, and no
-    // published state carries them, so they are loaded beside it rather than with it.
-    loadDispatchFailures(executionMode);
     const liveState = liveResult.value;
     renderLiveState(liveState);
+    if (livePortfolioTabNeedsExecutionState()) ensureLiveExecutionState(executionMode);
     // CLOB open orders expose only token/condition IDs, so one page of the catalogue is
     // loaded here to turn those into market names. ONE page: walking all seven of them plus
     // the resolved archive is about 27 MB, it was happening on every load whichever tab was
@@ -10809,6 +10811,47 @@ async function loadLiveState(options = {}) {
       els.botEvaluations.innerHTML = '<div class="empty">Common evaluation log is not available yet.</div>';
     }
   }
+}
+
+function livePortfolioTabNeedsExecutionState(tab = activeTabTarget()) {
+  return ["portfolio-candidates", "closed-trades", "run-log", "unfilled-limit-orders"].includes(tab);
+}
+
+async function ensureLiveExecutionState(mode = state.mode) {
+  const executionMode = normalizeMode(mode);
+  if (!isLivePortfolioMode(executionMode)) return null;
+  const lastFetchedAt = Number(state.liveExecutionStateFetchedAt?.[executionMode] || 0);
+  if (lastFetchedAt && Date.now() - lastFetchedAt < 30000) {
+    return state.liveExecutionByMode?.[executionMode] || null;
+  }
+  const pending = state.liveExecutionStateRequests?.[executionMode];
+  if (pending) return pending;
+
+  const request = (async () => {
+    try {
+      const execution = await fetchJson(liveExecutionStateFile(executionMode));
+      state.liveExecutionByMode = state.liveExecutionByMode || {};
+      state.liveExecutionByMode[executionMode] = execution;
+      state.liveExecutionStateFetchedAt[executionMode] = Date.now();
+      rememberLiveExecutionState(executionMode, execution);
+      if (executionMode === "live-5050") state.live5050ExecutionState = execution;
+      if (isLiveMode() && normalizeMode(state.mode) === executionMode && state.liveState) {
+        renderLiveState(state.liveState);
+      }
+      return execution;
+    } catch {
+      // No state before a portfolio's first run is normal. Leave a current tab usable
+      // with its account snapshot rather than turning its entire dashboard into an error.
+      return state.liveExecutionByMode?.[executionMode] || null;
+    } finally {
+      delete state.liveExecutionStateRequests[executionMode];
+    }
+  })();
+  state.liveExecutionStateRequests[executionMode] = request;
+  // Runs GitHub refused have no execution state. Read them only with the log that shows
+  // them, rather than on every visit to Opened trades.
+  loadDispatchFailures(executionMode);
+  return request;
 }
 
 async function loadDashboardState(options = {}) {
@@ -13530,6 +13573,7 @@ function renderLiveState(liveState) {
   refreshRiskAllocation();
   refreshLimitOrders();
 
+  const activePortfolioTab = activeTabTarget();
   const account = liveState.account || {};
   const portfolio = liveState.portfolio || {};
   const balanceAllowance = liveState.balanceAllowance || {};
@@ -13541,9 +13585,20 @@ function renderLiveState(liveState) {
     ...positions,
     ...openOrderRows,
   ]);
-  const activity = liveActivity(liveState);
-  const closedTrades = liveClosedTrades(liveState).map(decorateLiveTradeForTable);
-  const unfilledLimitOrders = liveUnfilledLimitOrders(liveState).map(decorateLiveTradeForTable);
+  // Decorating a historical row joins it with execution and scraped-market metadata. It
+  // is valuable for its own table, but doing that hundreds of times while the Opened tab is
+  // visible froze the dashboard. The metrics below use raw ledger rows; only the visible
+  // table pays the enrichment cost.
+  const rawClosedTrades = liveClosedTrades(liveState);
+  const closedTrades = activePortfolioTab === "closed-trades"
+    ? rawClosedTrades.map(decorateLiveTradeForTable)
+    : rawClosedTrades;
+  const activityCount = activePortfolioTab === "closed-trades"
+    ? liveActivity(liveState).length
+    : Number(liveState.activityCount || 0);
+  const unfilledLimitOrders = activePortfolioTab === "unfilled-limit-orders"
+    ? liveUnfilledLimitOrders(liveState).map(decorateLiveTradeForTable)
+    : [];
   const sync = liveState.sync || {};
   const reconciliation = liveState.reconciliation || {};
   const reconciliationGaps = Number(reconciliation.orphanedCount || 0);
@@ -13692,7 +13747,7 @@ function renderLiveState(liveState) {
   els.portfolioRealized.textContent = signedMoney(realizedPnl);
   els.portfolioRealized.className = pnlClass(realizedPnl);
   els.portfolioRealizedPct.textContent = signedPercent(realizedPnlPct);
-  renderClosedAccuracy(closedTrades);
+  renderClosedAccuracy(rawClosedTrades);
   els.portfolioOpenPl.textContent = signedMoney(openPnlValue);
   els.portfolioOpenPl.className = pnlClass(openPnlValue);
   els.portfolioOpenPlPct.textContent = signedPercent(ownBasePct(ownOpen));
@@ -13702,7 +13757,7 @@ function renderLiveState(liveState) {
   els.portfolioPositions.textContent = money(ownPositionRisk);
   els.portfolioFree.textContent = freeCash == null ? "-" : money(freeCash);
   renderPortfolioEquityChart({
-    trades: [...closedTrades, ...positions],
+    trades: [...rawClosedTrades, ...positions],
     equity,
     openPnl: openPnlValue,
     generatedAt: liveState.generatedAt,
@@ -13739,7 +13794,6 @@ function renderLiveState(liveState) {
   els.botStatus.innerHTML = liveWarning;
   els.botStatus.hidden = !liveWarning;
 
-  const activePortfolioTab = activeTabTarget();
   if (activePortfolioTab === "daily-picks") {
     els.botTrades.innerHTML = renderTradeRows(openedTradesForDisplay(openedRows), "Zatim zadne otevrene live pozice na napojenem Polymarket uctu.", {
       tableKey: "live",
@@ -13748,7 +13802,7 @@ function renderLiveState(liveState) {
   }
   if (activePortfolioTab === "closed-trades" && els.closedSummary) {
     const closedPnl = closedTrades.reduce((sum, trade) => sum + Number(trade.realizedPnlUsdc || 0), 0);
-    els.closedSummary.textContent = `${closedTrades.length} closed / ${activity.length} events / ${signedMoney(closedPnl)}`;
+    els.closedSummary.textContent = `${closedTrades.length} closed / ${activityCount} events / ${signedMoney(closedPnl)}`;
   }
   if (activePortfolioTab === "closed-trades" && els.closedTrades) {
     els.closedTrades.innerHTML = renderTradeRows(closedTrades, "Zatim zadne ukoncene live obchody na napojenem Polymarket uctu.", {
