@@ -231,6 +231,10 @@ jobs:
                   # What the executor has already claimed, so two runs cannot enter the same
                   # market twice. Deleting it does not lose history, it removes a guard.
                   "live-entry-claims.json",
+                  # Direct DIP fills bypass the ordinary live executor. This ledger is their
+                  # durable proof of which portfolio owns the resulting account position;
+                  # deleting it would unpair positions on every site deployment.
+                  "live-dip-entry-ownership.json",
                   # Why a run never started. A deploy that deletes the evidence of dispatch
                   # failures makes them unreportable after the fact.
                   "dispatch-failures",

@@ -24,9 +24,11 @@ import { execFileSync } from "node:child_process";
 import { readFileSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
-const WORKFLOW = new URL("../../.github/workflows/trading-deploy.yml", import.meta.url).pathname;
+const WORKFLOW = fileURLToPath(new URL("../../.github/workflows/trading-deploy.yml", import.meta.url));
 const API = readFileSync(new URL("../api.php", import.meta.url), "utf8");
+const PYTHON = process.env.PYTHON || "python3";
 
 // Every data path api.php names, reduced to the top-level entry a remote listing shows:
 // "market-scan-history/x.ndjson" is deleted by removing "market-scan-history", so that is
@@ -63,7 +65,7 @@ function isRuntimeData(names) {
     const script = join(directory, "check.py");
     writeFileSync(script, `${body}\nimport json, sys\n`
       + "print(json.dumps({name: bool(is_runtime_data(name)) for name in json.loads(sys.argv[1])}))\n");
-    return JSON.parse(execFileSync("python3", [script, JSON.stringify(names)], { encoding: "utf8" }));
+    return JSON.parse(execFileSync(PYTHON, [script, JSON.stringify(names)], { encoding: "utf8" }));
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
@@ -76,8 +78,13 @@ test("deploy: every data file the application writes survives a deploy", () => {
   assert.ok(names.length >= 10, `expected the data paths to be found, got ${JSON.stringify(names)}`);
   assert.ok(names.includes("dip-entry-hits.json"), "the reported case must be among them");
 
-  const verdicts = isRuntimeData(names);
-  const deleted = names.filter((name) => !verdicts[name]);
+  // A few paths are returned by helper functions rather than written as __DIR__ literals at
+  // their call sites, so the extraction above cannot see them. Keep this small explicit list
+  // for that PHP shape and exercise the deployment's real predicate all the same.
+  const helperOwnedPaths = ["live-dip-entry-ownership.json"];
+  const checkedNames = [...new Set([...names, ...helperOwnedPaths])];
+  const verdicts = isRuntimeData(checkedNames);
+  const deleted = checkedNames.filter((name) => !verdicts[name]);
   assert.deepEqual(deleted, [],
     `these are written by api.php and would be DELETED by the next deploy: ${deleted.join(", ")}`);
 });
