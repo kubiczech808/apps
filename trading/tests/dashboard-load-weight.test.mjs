@@ -86,3 +86,28 @@ test("dashboard load: a partial catalogue is not mistaken for a loaded one", () 
   // While the tab switches keep asking for everything.
   assert.match(APP, /state\.opportunityView === "overview"\) ensureScrapedMarketState\(\);/);
 });
+
+test("portfolio tab changes render cached data instead of restarting the dashboard load", () => {
+  const activate = lift("activateTab");
+  const clickHandler = APP.slice(APP.indexOf("els.tabButtons.forEach((button) =>"));
+  const clickBody = clickHandler.slice(0, clickHandler.indexOf("els.pageLinks.forEach"));
+
+  assert.match(activate, /renderActivePortfolioTabFromCachedState\(\);/,
+    "opened and closed trades must paint from the current validated snapshot immediately");
+  assert.match(activate, /if \(target === "run-log"\)[\s\S]*?renderRunLog\(\);/,
+    "the run-log tab should render locally before its lightweight status poll finishes");
+  assert.doesNotMatch(clickBody, /refreshDashboardAfterUserNavigation\(\);/,
+    "ordinary tab clicks must not restart the full dashboard request");
+
+  for (const name of [
+    "renderBotEvaluations",
+    "renderPortfolioCandidates",
+    "renderRunLog",
+    "renderCalculationReport",
+    "renderPortfolioOptimizationReport",
+    "renderUnfilledLimitOrders",
+  ]) {
+    assert.match(lift(name), /state\.page !== /,
+      `${name} must refuse work for a hidden page or panel`);
+  }
+});

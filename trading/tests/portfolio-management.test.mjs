@@ -3818,7 +3818,7 @@ test("stop loss warning: the confirmation gates the switch and only on the way o
 // The cause was that attribution was a two-way split: 5050, or everything else. With a
 // third live portfolio, "everything else" is two portfolios, and each of them saw the
 // other's positions, resting orders, unfilled orders and closed trades as its own.
-test("live attribution: every live portfolio only shows what its own log ordered", () => {
+test("live attribution: every live portfolio only shows what its own durable ownership record ordered", () => {
   const sandbox = new Function("state", `
     const CUSTOM_PAPER_STRATEGY_ID = ${/^[a-z][a-zA-Z0-9]{1,30}$/.toString()};
     const draftedCustomLivePortfolioId = () => null;
@@ -3842,11 +3842,11 @@ test("live attribution: every live portfolio only shows what its own log ordered
 
   const belongs = sandbox({
     portfolioConfig: { livePortfolios: { live2: { displayName: "Live 2" } } },
-    liveExecutionByMode: {
-      live: { generatedAt: "2026-09-02T10:00:00Z", attempts: [{ action: "SUBMITTED", tokenId: "live-token", orderPrice: 0.8 }] },
-      "live-custom-live2": { generatedAt: "2026-09-02T11:00:00Z", attempts: [{ action: "SUBMITTED", tokenId: "live2-token", orderPrice: 0.7 }] },
-    },
-    live5050ExecutionState: { generatedAt: "2026-09-02T09:00:00Z", attempts: [{ action: "SUBMITTED", tokenId: "fixed-token", orderPrice: 0.5 }] },
+    liveOrderOwnership: [
+      { tokenId: "live-token", mode: "live", price: 0.8, at: "2026-09-02T10:00:00Z" },
+      { tokenId: "live2-token", mode: "live-custom-live2", price: 0.7, at: "2026-09-02T11:00:00Z" },
+      { tokenId: "fixed-token", mode: "live-5050", price: 0.5, at: "2026-09-02T09:00:00Z" },
+    ],
   });
 
   // Each logged token belongs to exactly one portfolio, and to no other.
@@ -3876,9 +3876,7 @@ test("live attribution: every live portfolio only shows what its own log ordered
   // A rejected order claims nothing: the portfolio never got the position.
   const rejected = sandbox({
     portfolioConfig: { livePortfolios: { live2: {} } },
-    liveExecutionByMode: {
-      "live-custom-live2": { generatedAt: "2026-09-02T11:00:00Z", attempts: [{ action: "REJECTED", tokenId: "refused-token", orderPrice: 0.6 }] },
-    },
+    liveOrderOwnership: [],
   });
   assert.equal(rejected({ tokenId: "refused-token" }, "live-custom-live2"), false);
   assert.equal(rejected({ tokenId: "refused-token" }, "live"), true,
@@ -3888,10 +3886,10 @@ test("live attribution: every live portfolio only shows what its own log ordered
   // matching how api.php attributes the stop-loss policy.
   const retraded = sandbox({
     portfolioConfig: { livePortfolios: { live2: {} } },
-    liveExecutionByMode: {
-      live: { generatedAt: "2026-09-01T10:00:00Z", attempts: [{ action: "SUBMITTED", tokenId: "shared-token", orderPrice: 0.65 }] },
-      "live-custom-live2": { generatedAt: "2026-09-02T10:00:00Z", attempts: [{ action: "SUBMITTED", tokenId: "shared-token", orderPrice: 0.65 }] },
-    },
+    liveOrderOwnership: [
+      { tokenId: "shared-token", mode: "live", price: 0.65, at: "2026-09-01T10:00:00Z" },
+      { tokenId: "shared-token", mode: "live-custom-live2", price: 0.65, at: "2026-09-02T10:00:00Z" },
+    ],
   });
   assert.equal(retraded({ tokenId: "shared-token" }, "live-custom-live2"), true);
   assert.equal(retraded({ tokenId: "shared-token" }, "live"), false);
@@ -3927,11 +3925,10 @@ test("dashboard indexes are cached, and rebuild when the state behind them is re
     return { liveOrdersByToken, liveMarketMetadataForTrade, liveMarketTagsForTrade };
   `);
 
-  const live = { generatedAt: "2026-09-02T10:00:00Z", attempts: [{ action: "SUBMITTED", tokenId: "t1", orderPrice: 0.8 }] };
   const state = {
     portfolioConfig: { livePortfolios: {} },
-    liveExecutionByMode: { live },
-    live5050ExecutionState: null,
+    mode: "live",
+    liveOrderOwnership: [{ tokenId: "t1", mode: "live", price: 0.8, at: "2026-09-02T10:00:00Z" }],
     scrapedMarketStateLoaded: true,
     scrapedMarketObservations: [{ tokenId: "t1", question: "from the catalogue", polymarketTags: ["sports", "mlb"] }],
     botState: { evaluations: [] },
@@ -3942,23 +3939,19 @@ test("dashboard indexes are cached, and rebuild when the state behind them is re
   // Cached: a second call is the same object, not an equal one built again.
   assert.equal(app.liveOrdersByToken(), app.liveOrdersByToken());
 
-  // The loader fills state.liveExecutionByMode IN PLACE -- state.liveExecutionByMode[mode] =
-  // payload -- so keying on that container's identity would be a key that never changes.
-  // Replacing one mode's payload, exactly as a load does, has to be visible.
-  state.liveExecutionByMode.live = {
-    generatedAt: "2026-09-02T12:00:00Z",
-    attempts: [{ action: "SUBMITTED", tokenId: "t9", orderPrice: 0.4 }],
-  };
+  // A successful compact API response replaces the ownership array as a whole. That must
+  // invalidate the memoized token index, or a refreshed portfolio could retain stale rows.
+  state.liveOrderOwnership = [{ tokenId: "t9", mode: "live", price: 0.4, at: "2026-09-02T12:00:00Z" }];
   assert.deepEqual([...app.liveOrdersByToken().keys()], ["t9"],
-    "a payload loaded into the same container has to invalidate the index built from it");
+    "a replaced compact ownership response has to invalidate the index built from it");
 
-  // A newly created live portfolio adds a mode, which changes what there is to index even
-  // though every payload already in hand is untouched.
+  // A newly created live portfolio arrives as another server-owned row; it does not need a
+  // second browser-side execution-log download to be attributed correctly.
   state.portfolioConfig = { livePortfolios: { live2: { displayName: "Live 2" } } };
-  state.liveExecutionByMode["live-custom-live2"] = {
-    generatedAt: "2026-09-02T13:00:00Z",
-    attempts: [{ action: "SUBMITTED", tokenId: "t5", orderPrice: 0.55 }],
-  };
+  state.liveOrderOwnership = [
+    ...state.liveOrderOwnership,
+    { tokenId: "t5", mode: "live-custom-live2", price: 0.55, at: "2026-09-02T13:00:00Z" },
+  ];
   assert.deepEqual([...app.liveOrdersByToken().keys()].sort(), ["t5", "t9"]);
 
   // The metadata index answers exactly as the linear scan it replaces did: the running
@@ -3979,15 +3972,17 @@ test("dashboard indexes are cached, and rebuild when the state behind them is re
     "a market nothing has tags for stays empty rather than borrowing another market's");
 });
 
-// Attribution can only see a log that was loaded. With just the open tab's log in hand,
-// every other portfolio's rows read as unowned -- and unowned falls to the base Live tab,
-// which is the mechanism behind the reported leak. So the loader has to fetch them all.
-test("live attribution: the dashboard loads every live portfolio's execution log", () => {
-  const loader = APP.slice(APP.indexOf("const attributionModes = allLiveModes()"));
+// Attribution still needs every portfolio's durable ownership record, but it must not make
+// the browser download every portfolio's multi-megabyte execution log to obtain it.
+test("live attribution: the dashboard loads the compact server ownership index", () => {
+  const loader = APP.slice(APP.indexOf("async function loadLiveState(options = {})"));
   const body = loader.slice(0, loader.indexOf("loadDispatchFailures("));
-  assert.match(body, /\.\.\.attributionModes\.map\(\(mode\) => fetchJson\(liveExecutionStateFile\(mode\)\)\)/);
-  assert.match(body, /if \(result\?\.status === "fulfilled"\) state\.liveExecutionByMode\[mode\] = result\.value;/,
-    "a portfolio that has never run has no file, and that miss must not clear a log in hand");
+  assert.match(body, /fetchApiJson\("api\.php\?action=live-order-ownership"\)/,
+    "cross-portfolio attribution must come from the compact server-side index");
+  assert.doesNotMatch(body, /attributionModes\.map\(\(mode\) => fetchJson\(liveExecutionStateFile\(mode\)\)\)/,
+    "a portfolio switch must not fetch every other portfolio's full execution history");
+  assert.match(body, /state\.liveOrderOwnership = ownershipResult\.value\.orders;/,
+    "a successful compact response must replace the cached ownership records together");
   // The Resolved accuracy tile is fed the attributed closed trades, so separating the
   // portfolios separates the tile too. Pinned, because a future refactor that hands it the
   // unfiltered list would silently restore the mixed statistic.
@@ -4054,21 +4049,17 @@ test("overview order: switched-on live portfolios come first, then by ROI", () =
 });
 
 // Asked for: the same separation in Settings -> Portfolio trade analysis. That report
-// already reads liveClosedTrades(state.liveState, mode), so it inherits the attribution --
-// but attribution can only read a log that was loaded, and this page loaded the account
-// snapshot alone. Opening Settings directly would therefore have handed every live row to
-// the base Live portfolio and reported the others as having traded nothing.
-test("trade analysis: the settings report loads the logs its attribution depends on", () => {
+// already reads liveClosedTrades(state.liveState, mode), so it inherits attribution from
+// the compact durable server index without downloading every full execution log.
+test("trade analysis: the settings report loads the compact ownership index", () => {
   const loader = APP.slice(APP.indexOf("async function loadLiveStateForOptimisation()"));
   const body = loader.slice(0, loader.indexOf("\n}\n"));
-  assert.match(body, /const modes = allLiveModes\(\)\.map\(normalizeMode\);/);
-  assert.match(body, /modes\.map\(\(mode\) => fetchJson\(liveExecutionStateFile\(mode\)\)\.catch\(\(\) => null\)\)/);
-  assert.match(body, /if \(!executions\[index\]\) continue;/,
-    "a portfolio that has never run has no file, and that must not clear a log in hand");
-  // The old guard returned as soon as the account snapshot existed, which would skip the
-  // logs forever once any other path had loaded the snapshot.
-  assert.match(body, /if \(\(state\.liveState && haveExecutionLogs\)/,
-    "having the snapshot is no longer reason enough to skip loading the logs");
+  assert.match(body, /fetchApiJson\("api\.php\?action=live-order-ownership"\)/);
+  assert.doesNotMatch(body, /fetchJson\(liveExecutionStateFile\(mode\)\)/,
+    "the analysis tab must not parse every live portfolio's execution history");
+  assert.match(body, /state\.liveOrderOwnership = ownershipPayload\.orders;/);
+  assert.match(body, /const haveOwnership = state\.liveOrderOwnershipAt > 0;/,
+    "having the account snapshot alone is not enough; attribution must also be ready");
 
   // And the report itself must keep asking per portfolio rather than for the account.
   const report = APP.slice(APP.indexOf("function portfolioTradeAnalysisPortfolios()"));
