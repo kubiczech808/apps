@@ -2461,6 +2461,10 @@ function dipEntryOwnershipKey(record = {}) {
   return `${String(record.portfolioId || "")}:${String(record.tokenId || "")}:${Number(record.price ?? -1).toFixed(4)}`;
 }
 
+function dipEntryConfirmationKey(record = {}) {
+  return `${String(record.portfolioId || "")}:${String(record.tokenId || "")}`;
+}
+
 function rememberPendingDipEntryFill(context, record) {
   if (!record?.portfolioId || !record?.tokenId) return;
   const pending = context.state.pendingDipEntryFills && typeof context.state.pendingDipEntryFills === "object"
@@ -2495,6 +2499,12 @@ function pendingDipEntryMatchesAccountRow(record, row) {
 function recoverPendingDipEntryFillsFromHistory(context) {
   const events = Array.isArray(context.state.history) ? context.state.history : [];
   const rows = liveRowsForDipEntryConfirmation(context.liveState);
+  // The account can report an average entry price a fraction of a cent away from the CLOB
+  // quote, so confirmation deduplication is by portfolio and token, not the quoted price.
+  // A DIP plan is terminal after its first submitted buy and can therefore own this pair once.
+  const confirmed = new Set(events
+    .filter((event) => event?.type === "DIP_ENTRY_ACCOUNT_CONFIRMED")
+    .map((event) => dipEntryConfirmationKey(event)));
   for (const event of events) {
     // Earlier versions logged an accepted-but-unsettled FOK acknowledgement as rejected.
     // Promote such a row only when the account independently proves the exact fill.
@@ -2508,6 +2518,7 @@ function recoverPendingDipEntryFillsFromHistory(context) {
       entryVolumeUsdc: event.stakeUsdc ?? null,
       recoveredFromHistory: true,
     };
+    if (confirmed.has(dipEntryConfirmationKey(record))) continue;
     if (rows.some((row) => pendingDipEntryMatchesAccountRow(record, row))) {
       rememberPendingDipEntryFill(context, record);
     }

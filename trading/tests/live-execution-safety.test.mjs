@@ -72,6 +72,9 @@ test("an accepted DIP acknowledgement is confirmed against the account before it
   assert.match(WORKER, /function recoverPendingDipEntryFillsFromHistory/);
   assert.match(WORKER, /function pendingDipEntryMatchesAccountRow/);
   assert.match(WORKER, /async function reconcilePendingDipEntryFills/);
+  assert.match(WORKER, /const confirmed = new Set\(events/,
+    "a recovered historical acknowledgement must be confirmed once, not on every worker pass");
+  assert.match(WORKER, /dipEntryConfirmationKey/);
   assert.match(WORKER, /\["DIP_ENTRY_REJECTED", "DIP_ENTRY_PENDING_MATCH"\]\.includes\(event\.type\)/,
     "a historical rejection may be repaired only after account-side confirmation");
   assert.match(WORKER, /DIP_ENTRY_ACCOUNT_CONFIRMED/);
