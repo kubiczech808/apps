@@ -9960,6 +9960,23 @@ try {
     if ($action === 'state') {
         $target = (string) ($_GET['target'] ?? '');
         $summary = (string) ($_GET['summary'] ?? '');
+        // Older dashboard bundles used `compact` for the ordinary overview.  It was
+        // later renamed to `dashboard`, but an unrecognised summary takes the legacy
+        // fallback below and decodes the very large evaluation archive.  On the shared
+        // host that can exhaust PHP's 512 MB memory limit before a single dashboard
+        // card is returned.  Canonicalise before choosing state segments, so stale
+        // browser tabs remain fast and safe during a deploy.
+        if ($summary === 'compact') {
+            $summary = 'dashboard';
+        }
+        $allowedStateSummaries = ['', 'dashboard', 'portfolio-overview', 'candidates', 'execution', 'scraped', 'refresh'];
+        if (!in_array($summary, $allowedStateSummaries, true)) {
+            respond([
+                'ok' => false,
+                'error' => 'Unknown state summary.',
+                'reason' => 'unknown-state-summary',
+            ], 400);
+        }
         $strategyId = isset($_GET['strategy_id']) ? (string) $_GET['strategy_id'] : null;
         // Which page to serve. The execution and scraped summaries both read it; every
         // other view ignores it.

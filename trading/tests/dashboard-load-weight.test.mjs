@@ -22,6 +22,7 @@ import test from "node:test";
 import { readFileSync } from "node:fs";
 
 const APP = readFileSync(new URL("../assets/app.js", import.meta.url), "utf8");
+const API = readFileSync(new URL("../api.php", import.meta.url), "utf8");
 
 function lift(name) {
   const start = APP.indexOf(`function ${name}(`);
@@ -110,4 +111,17 @@ test("portfolio tab changes render cached data instead of restarting the dashboa
     assert.match(lift(name), /state\.page !== /,
       `${name} must refuse work for a hidden page or panel`);
   }
+});
+
+test("state API: legacy compact requests cannot decode the evaluation archive", () => {
+  const stateAction = API.slice(API.indexOf("if ($action === 'state')"));
+  const aliasAt = stateAction.indexOf("if ($summary === 'compact')");
+  const payloadAt = stateAction.indexOf("state_payload(");
+
+  assert.ok(aliasAt >= 0, "the old compact dashboard request must remain supported");
+  assert.ok(payloadAt > aliasAt, "the compact alias must run before any state is decoded");
+  assert.match(stateAction.slice(aliasAt, payloadAt), /\$summary = 'dashboard';/,
+    "compact must use the lightweight dashboard segments");
+  assert.match(stateAction.slice(aliasAt, payloadAt), /unknown-state-summary/,
+    "unexpected summaries must fail cheaply instead of using the large legacy fallback");
 });
