@@ -363,7 +363,10 @@ async function recordLiveExitReversal(plan, reversal) {
   }
 }
 
-async function claimLiveEntry(tokenId, claimId) {
+async function claimLiveEntry(tokenId, claimId, {
+  portfolioId = "live-stop-loss",
+  entryKind = "stop-loss-reversal",
+} = {}) {
   if (!TRADING_TRIGGER_KEY) throw new Error("live entry claim key is not configured");
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 12000);
@@ -379,7 +382,8 @@ async function claimLiveEntry(tokenId, claimId) {
         operation: "claim",
         tokenId: String(tokenId),
         side: "BUY",
-        portfolioId: "live-stop-loss",
+        portfolioId: String(portfolioId),
+        entryKind: String(entryKind),
         claimId,
       }),
       signal: controller.signal,
@@ -392,7 +396,10 @@ async function claimLiveEntry(tokenId, claimId) {
   }
 }
 
-async function settleLiveEntryClaim(operation, tokenId, claimId) {
+async function settleLiveEntryClaim(operation, tokenId, claimId, {
+  portfolioId = "live-stop-loss",
+  entryKind = "stop-loss-reversal",
+} = {}) {
   try {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 12000);
@@ -404,7 +411,14 @@ async function settleLiveEntryClaim(operation, tokenId, claimId) {
           "x-trading-trigger-key": TRADING_TRIGGER_KEY,
           "user-agent": "trading-live-exit-worker/1.0",
         },
-        body: JSON.stringify({ operation, tokenId: String(tokenId), side: "BUY", portfolioId: "live-stop-loss", claimId }),
+        body: JSON.stringify({
+          operation,
+          tokenId: String(tokenId),
+          side: "BUY",
+          portfolioId: String(portfolioId),
+          entryKind: String(entryKind),
+          claimId,
+        }),
         signal: controller.signal,
       });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -2697,9 +2711,18 @@ export function dipEntryWatchQuoteIsFinal(book = {}) {
 }
 
 // Accumulate rather than replace. A plan that has left the catalogue keeps the fields it
-// was prepared with; a plan still listed refreshes them.
+// was prepared with; a plan still listed refreshes them. The portfolio list, however, is
+// authoritative: when its automation switch is turned off, no retained plan may survive.
 function mergeDipEntryWatch(watch, payload, at) {
   const merged = watch instanceof Map ? watch : new Map();
+  const activePortfolioIds = Array.isArray(payload?.activePortfolioIds)
+    ? new Set(payload.activePortfolioIds.map((value) => String(value || "")).filter(Boolean))
+    : null;
+  if (activePortfolioIds) {
+    for (const [key, plan] of merged) {
+      if (!activePortfolioIds.has(String(plan?.portfolioId || ""))) merged.delete(key);
+    }
+  }
   for (const plan of (Array.isArray(payload?.plans) ? payload.plans : [])) {
     if (!plan?.tokenId || !(Number(plan.buyMax) > 0)) continue;
     merged.set(dipEntryPlanKey(plan), { ...plan, seenAt: at });
@@ -2890,7 +2913,10 @@ async function submitDipEntry(plan, book, cashUsdc) {
     return { success: false, error: `cash ${cashUsdc} does not cover the ${quote.requiredUsdc} stake` };
   }
   const claimId = randomUUID();
-  const claim = await claimLiveEntry(plan.tokenId, claimId);
+  // The server checks this portfolio's current Automation switch immediately before a
+  // live BUY. The watch may be up to one refresh old, so the plan alone is not authority.
+  const claimContext = { portfolioId: String(plan.portfolioId || ""), entryKind: "dip-entry" };
+  const claim = await claimLiveEntry(plan.tokenId, claimId, claimContext);
   if (!claim.claimed) {
     return { success: false, error: `duplicate entry guard: ${claim.reason || "an equivalent live buy is already claimed"}` };
   }
@@ -2900,11 +2926,11 @@ async function submitDipEntry(plan, book, cashUsdc) {
     // Unlike a protective exit, the paper mirror needs a determinate entry size and cost.
     // FOK makes the live result either this fully quoted position or no position at all.
     const response = await client.postOrder(signed, OrderType.FOK, false);
-    if (exitFilled(response) || dipEntryPendingMatch(response)) await settleLiveEntryClaim("confirm", plan.tokenId, claimId);
-    else await settleLiveEntryClaim("release", plan.tokenId, claimId);
+    if (exitFilled(response) || dipEntryPendingMatch(response)) await settleLiveEntryClaim("confirm", plan.tokenId, claimId, claimContext);
+    else await settleLiveEntryClaim("release", plan.tokenId, claimId, claimContext);
     return { ...response, ...quote };
   } catch (error) {
-    await settleLiveEntryClaim("release", plan.tokenId, claimId);
+    await settleLiveEntryClaim("release", plan.tokenId, claimId, claimContext);
     return { success: false, error: error?.message || String(error), ...quote };
   }
 }

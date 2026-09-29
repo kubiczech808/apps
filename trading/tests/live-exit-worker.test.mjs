@@ -1619,6 +1619,11 @@ test("dip entry: the fast path decides only what cannot be prepared in advance",
   // entry has to survive exactly that, or it disappears at the moment it is needed.
   const kept = merge(first, { plans: [] }, 2000);
   assert.equal(kept.size, 1, "an entry that left the catalogue must not be dropped");
+  // This is a different disappearance: an administrator turned the owning portfolio off.
+  // activePortfolioIds is authoritative configuration, while an absent plan merely means
+  // the market fell below the catalogue threshold.
+  const disabled = merge(kept, { plans: [], activePortfolioIds: [] }, 2001);
+  assert.equal(disabled.size, 0, "disabling a portfolio removes its retained watch immediately");
   assert.equal(merge(kept, { plans: [] }, 1000 + 3600001).size, 0, "but it does expire");
 });
 
@@ -1787,9 +1792,11 @@ test("dip entry: the order never pays above the band, and never without cash", (
   assert.match(source, /not enough executable depth for the configured stake/,
     "a paper-equivalent dip entry must refuse a book that cannot fill the whole configured stake");
   // The claim is what stops this and the hourly executor from both entering the same
-  // market, and a failed order releases it rather than leaving it held.
-  assert.match(source, /const claim = await claimLiveEntry\(plan\.tokenId, claimId\);/);
-  assert.match(source, /await settleLiveEntryClaim\("release", plan\.tokenId, claimId\);\r?\n    return \{ success: false, error: error\?\.message/,
+  // market. It also carries the portfolio to the server, which rechecks that Automation
+  // is still on before a stale retained watch may buy. A failed order releases that claim.
+  assert.match(source, /const claimContext = \{ portfolioId: String\(plan\.portfolioId \|\| ""\), entryKind: "dip-entry" \};/);
+  assert.match(source, /const claim = await claimLiveEntry\(plan\.tokenId, claimId, claimContext\);/);
+  assert.match(source, /await settleLiveEntryClaim\("release", plan\.tokenId, claimId, claimContext\);\r?\n    return \{ success: false, error: error\?\.message/,
     "a thrown order must release its claim, or the market can never be entered again");
   // A dip's paper mirror needs a determinate stake, unlike a protective exit. FOK keeps the
   // live result either this fully quoted entry or no entry at all.

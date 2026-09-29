@@ -6607,6 +6607,9 @@ function live_dip_entry_watch_payload(): array
             'cashUsdc' => null,
             'plans' => [],
             'portfolios' => [],
+            // The worker retains a plan while its market falls out of the scraped catalogue,
+            // but it must drop it immediately when this authoritative portfolio list changes.
+            'activePortfolioIds' => [],
             'diagnostics' => ['observations' => 0, 'live' => 0, 'finalQuote' => 0, 'openingVerified' => 0, 'portfolios' => []],
         ];
     }
@@ -6809,6 +6812,7 @@ function live_dip_entry_watch_payload(): array
         'cashUsdc' => $cash,
         'plans' => $plans,
         'portfolios' => array_keys($active),
+        'activePortfolioIds' => array_keys($active),
         'diagnostics' => $diagnostics,
     ];
 }
@@ -7592,6 +7596,34 @@ function live_entry_claim_account_state(string $tokenId): array
     ];
 }
 
+/**
+ * A retained DIP watch is an observation, not permission to spend. Re-read the portfolio
+ * that owns the order at the final claim point so an Automation switch in the UI takes
+ * effect even while an RPi worker still has an older plan in memory.
+ */
+function live_dip_entry_claim_admission_reason(string $portfolioId): ?string
+{
+    $portfolio = execution_scope_strategy_config($portfolioId);
+    if (!is_array($portfolio)) {
+        return 'This DIP portfolio no longer exists.';
+    }
+    if (($portfolio['archived'] ?? false) === true) {
+        return 'This DIP portfolio is archived.';
+    }
+    if (($portfolio['automationEnabled'] ?? true) !== true) {
+        return 'This DIP portfolio is disabled in portfolio settings.';
+    }
+    $rule = normalize_dip_entry_rule($portfolio, []);
+    if (!$rule['dipEntryEnabled']) {
+        return 'This portfolio no longer has DIP entry enabled.';
+    }
+    $buyMax = normalize_optional_probability_value($portfolio['maxProbability'] ?? null);
+    if ($buyMax === null || $buyMax >= $rule['dipEntryOpenMin']) {
+        return 'This DIP portfolio no longer has a valid buy range.';
+    }
+    return null;
+}
+
 function live_entry_claim_request(array $payload): array
 {
     $operation = strtolower(trim((string) ($payload['operation'] ?? 'claim')));
@@ -7599,11 +7631,25 @@ function live_entry_claim_request(array $payload): array
     $side = strtoupper(trim((string) ($payload['side'] ?? 'BUY')));
     $portfolioId = trim((string) ($payload['portfolioId'] ?? ''));
     $claimId = trim((string) ($payload['claimId'] ?? ''));
+    $entryKind = strtolower(trim((string) ($payload['entryKind'] ?? 'generic')));
     if (!preg_match('/^\d{8,100}$/', $tokenId) || $side !== 'BUY' || !preg_match('/^[a-zA-Z0-9_-]{1,64}$/', $portfolioId)) {
         respond(['ok' => false, 'error' => 'Invalid live entry guard request.'], 400);
     }
     if (!preg_match('/^[a-zA-Z0-9_-]{16,96}$/', $claimId)) {
         respond(['ok' => false, 'error' => 'Invalid live entry guard claim id.'], 400);
+    }
+    if (!in_array($entryKind, ['generic', 'dip-entry', 'stop-loss-reversal'], true)) {
+        respond(['ok' => false, 'error' => 'Invalid live entry guard entry kind.'], 400);
+    }
+    // This is deliberately outside the claim lock: portfolio configuration is independent
+    // state and must be read before a stale watcher can reserve capital for a new DIP order.
+    // Stop-loss reversals remain permitted for an already-held position after Automation is
+    // switched off; only a fresh DIP entry is governed by this switch.
+    if ($operation === 'claim' && $entryKind === 'dip-entry') {
+        $reason = live_dip_entry_claim_admission_reason($portfolioId);
+        if ($reason !== null) {
+            return ['ok' => true, 'claimed' => false, 'reason' => $reason];
+        }
     }
     $key = live_entry_claim_key($tokenId, $side);
     // Read outside the lock: it is a different file, and holding the claim lock across it
@@ -7611,7 +7657,7 @@ function live_entry_claim_request(array $payload): array
     $account = $operation === 'claim'
         ? live_entry_claim_account_state($tokenId)
         : ['held' => false, 'resting' => false, 'observedAt' => ''];
-    return live_entry_claims_mutate(static function (array &$claims) use ($operation, $key, $tokenId, $side, $portfolioId, $claimId, $account): array {
+    return live_entry_claims_mutate(static function (array &$claims) use ($operation, $key, $tokenId, $side, $portfolioId, $claimId, $entryKind, $account): array {
         $existing = is_array($claims[$key] ?? null) ? $claims[$key] : null;
         if ($operation === 'claim') {
             $claimSummary = $existing === null ? null : [
@@ -7657,6 +7703,7 @@ function live_entry_claim_request(array $payload): array
                 'tokenId' => $tokenId,
                 'side' => $side,
                 'portfolioId' => $portfolioId,
+                'entryKind' => $entryKind,
                 'claimId' => $claimId,
                 'status' => 'claimed',
                 'claimedAt' => gmdate('c'),
