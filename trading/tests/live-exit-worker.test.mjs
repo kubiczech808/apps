@@ -121,9 +121,9 @@ test("terminal DIP entry attempts retain the rejection reason for the dashboard"
   const fire = functionBody(source, "fireDipEntries");
   assert.match(statusRows, /settledError: context\.state\.dipEntries.*?\.error \|\| null/,
     "the published watch status must retain the exchange or funding refusal");
-  assert.match(fire, /const rejection = filled \? null : \(response\?\.errorMsg \|\| response\?\.error \|\| "order was not accepted"\);/,
+  assert.match(fire, /const rejection = filled \|\| pendingMatch \? null : \(response\?\.errorMsg \|\| response\?\.error \|\| "order was not accepted"\);/,
     "one refusal message must feed both the event log and terminal watch record");
-  assert.match(fire, /reason: filled \? "submitted" : "rejected", error: rejection/,
+  assert.match(fire, /reason: filled \? "submitted" : \(pendingMatch \? "awaiting account confirmation" : "rejected"\), error: rejection/,
     "a rejected token must retain its exact reason while duplicate protection stays terminal");
 });
 
@@ -1628,15 +1628,21 @@ test("dip entry: it fires once, needs cash, and honours what was prepared", asyn
   const ownershipCalls = [];
   const build = (overrides = {}) => new Function(
     "bestAsk", "exitFilled", "recordEvent", "submitDipEntry", "dipEntryTrigger", "dipEntryPlanKey", "dipEntryWatchQuoteIsFinal",
-    "DIP_ENTRY_MODE", "MODE", "CONFIRM_LIVE", "recordLiveDipEntryOwnership",
+    "DIP_ENTRY_MODE", "MODE", "CONFIRM_LIVE", "recordLiveDipEntryOwnership", "dipEntryPendingMatch", "rememberPendingDipEntryFill", "dipEntryOwnershipKey",
     `${functionBody(source, "fireDipEntries")}\nreturn fireDipEntries;`,
   )(
     (book) => book.ask ?? null,
-    (response) => response?.success === true,
+    (response) => response?.success === true && response?.status === "matched",
     (state, event) => { state.history = [event, ...(state.history || [])]; },
     async (plan, book, cash) => {
       submitted.push({ tokenId: plan.tokenId, cash });
-      return { success: overrides.accept !== false, price: 0.35, shares: 14 };
+      return {
+        success: overrides.accept !== false,
+        pending: overrides.pending === true,
+        status: overrides.pending ? "live" : (overrides.accept !== false ? "matched" : "unmatched"),
+        price: 0.35,
+        shares: 14,
+      };
     },
     (plan, book) => {
       const ask = book.ask ?? null;
@@ -1651,6 +1657,12 @@ test("dip entry: it fires once, needs cash, and honours what was prepared", asyn
       ownershipCalls.push({ portfolioId, tokenId, price, at });
       return { ok: overrides.ownershipOk !== false };
     },
+    (response) => Boolean(response?.pending),
+    (context, record) => {
+      context.state.pendingDipEntryFills ??= {};
+      context.state.pendingDipEntryFills[`${record.portfolioId}:${record.tokenId}`] = record;
+    },
+    (record) => `${record.portfolioId}:${record.tokenId}:${Number(record.price ?? -1).toFixed(4)}`,
   );
 
   const plan = {
@@ -1692,6 +1704,19 @@ test("dip entry: it fires once, needs cash, and honours what was prepared", asyn
   await build({ accept: false })(rejected, books, "2026-09-10T20:28:00Z");
   assert.equal(submitted.length, 1, "a rejected entry is not retried on the next pass");
   assert.deepEqual(ownershipCalls, [], "a rejected order owns nothing, so nothing is claimed");
+
+  // A successful CLOB acknowledgement can arrive before the account exposes its final
+  // match status. It must be held for account confirmation, never labelled rejected and
+  // never retried as a second buy.
+  submitted.length = 0;
+  ownershipCalls.length = 0;
+  const pendingMatch = context();
+  await build({ pending: true })(pendingMatch, books, "2026-09-10T20:27:00Z");
+  assert.equal(pendingMatch.state.history[0].type, "DIP_ENTRY_PENDING_MATCH");
+  assert.equal(pendingMatch.state.dipEntries["live-custom-dip:aaa"].reason, "awaiting account confirmation");
+  assert.deepEqual(ownershipCalls, [], "ownership waits for an independently visible account fill");
+  await build({ pending: true })(pendingMatch, books, "2026-09-10T20:28:00Z");
+  assert.equal(submitted.length, 1, "a pending acknowledgement is terminal for this entry and cannot duplicate the buy");
 
   // Diversification was settled when the plan was prepared, and a blocked plan is recorded
   // rather than silently skipped -- otherwise a watched market that reached the band and
@@ -1739,6 +1764,14 @@ test("dip entry: it fires once, needs cash, and honours what was prepared", asyn
   submitted.length = 0;
   await build({ ownershipOk: false })(unattributable, books, "2026-09-10T20:28:00Z");
   assert.equal(submitted.length, 0, "still terminal even though its ownership claim failed -- not retried as if unbought");
+});
+
+test("DIP entry treats an accepted but undecided CLOB response as pending account confirmation", () => {
+  assert.equal(worker.dipEntryPendingMatch({ success: true, status: "live" }), true);
+  assert.equal(worker.dipEntryPendingMatch({ success: true, status: "delayed" }), true);
+  assert.equal(worker.dipEntryPendingMatch({ success: true, status: "matched" }), false);
+  assert.equal(worker.dipEntryPendingMatch({ success: true, status: "unmatched" }), false);
+  assert.equal(worker.dipEntryPendingMatch({ success: false, status: "live" }), false);
 });
 
 test("dip entry: the order never pays above the band, and never without cash", () => {

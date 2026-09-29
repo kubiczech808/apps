@@ -1178,6 +1178,17 @@ export function exitPendingMatch(response) {
   return Boolean(response?.orderID);
 }
 
+// DIP entries use the same exchange acknowledgement, but cannot use the exit helper above:
+// the CLOB has occasionally returned a successful response without exposing an order id
+// immediately, then reflected the filled position a few seconds later. For a BUY, treating
+// that acknowledgement as a refusal is unsafe: it releases the duplicate-entry claim and
+// loses the portfolio ownership record for a position that already exists.
+export function dipEntryPendingMatch(response) {
+  if (!response || response.success === false) return false;
+  const status = String(response?.status || "").toLowerCase();
+  return status !== "matched" && status !== "unmatched";
+}
+
 // Whether a queued order is still worth waiting for, rather than re-sending on top of.
 export function pendingExitIsOpen(record, now = Date.now(), windowMs = PENDING_MATCH_WINDOW_MS) {
   const since = Date.parse(String(record?.pending?.since || ""));
@@ -2444,6 +2455,104 @@ export async function recordLiveDipEntryOwnership(portfolioId, tokenId, price, a
 // the next policy refresh. Until it succeeds, the host deliberately excludes the unknown
 // position from automated exits instead of applying another portfolio's stop loss.
 const DIP_ENTRY_OWNERSHIP_RETRY_MS = 30000;
+const DIP_ENTRY_ACCOUNT_CONFIRM_WINDOW_MS = 5 * 60 * 1000;
+
+function dipEntryOwnershipKey(record = {}) {
+  return `${String(record.portfolioId || "")}:${String(record.tokenId || "")}:${Number(record.price ?? -1).toFixed(4)}`;
+}
+
+function rememberPendingDipEntryFill(context, record) {
+  if (!record?.portfolioId || !record?.tokenId) return;
+  const pending = context.state.pendingDipEntryFills && typeof context.state.pendingDipEntryFills === "object"
+    ? context.state.pendingDipEntryFills
+    : (context.state.pendingDipEntryFills = {});
+  const key = dipEntryOwnershipKey(record);
+  pending[key] = {
+    ...pending[key],
+    ...record,
+    firstObservedAt: pending[key]?.firstObservedAt || record.at || new Date().toISOString(),
+    lastOwnershipAttemptAt: pending[key]?.lastOwnershipAttemptAt || null,
+  };
+}
+
+function liveRowsForDipEntryConfirmation(liveState = {}) {
+  const names = ["positions", "apiPositions", "resolvedApiPositions", "closedTrades"];
+  return names.flatMap((name) => (Array.isArray(liveState?.[name]) ? liveState[name] : []));
+}
+
+function pendingDipEntryMatchesAccountRow(record, row) {
+  const tokenId = String(row?.tokenId || row?.assetId || "");
+  if (!tokenId || tokenId !== String(record?.tokenId || "")) return false;
+  const expectedPrice = number(record?.price);
+  const actualPrice = number(row?.entryPrice ?? row?.avgPrice ?? row?.price);
+  if (expectedPrice != null && actualPrice != null && Math.abs(expectedPrice - actualPrice) > 0.025) return false;
+  const expectedAt = Date.parse(String(record?.at || record?.firstObservedAt || ""));
+  const actualAt = Date.parse(String(row?.openedAt || row?.entryAt || row?.createdAt || row?.opened_at || ""));
+  if (!Number.isFinite(expectedAt) || !Number.isFinite(actualAt)) return false;
+  return Math.abs(actualAt - expectedAt) <= DIP_ENTRY_ACCOUNT_CONFIRM_WINDOW_MS;
+}
+
+function recoverPendingDipEntryFillsFromHistory(context) {
+  const events = Array.isArray(context.state.history) ? context.state.history : [];
+  const rows = liveRowsForDipEntryConfirmation(context.liveState);
+  for (const event of events) {
+    // Earlier versions logged an accepted-but-unsettled FOK acknowledgement as rejected.
+    // Promote such a row only when the account independently proves the exact fill.
+    if (!event || !["DIP_ENTRY_REJECTED", "DIP_ENTRY_PENDING_MATCH"].includes(event.type)
+      || !event.portfolioId || !event.tokenId) continue;
+    const record = {
+      portfolioId: event.portfolioId,
+      tokenId: event.tokenId,
+      price: event.price ?? null,
+      at: event.at || new Date().toISOString(),
+      entryVolumeUsdc: event.stakeUsdc ?? null,
+      recoveredFromHistory: true,
+    };
+    if (rows.some((row) => pendingDipEntryMatchesAccountRow(record, row))) {
+      rememberPendingDipEntryFill(context, record);
+    }
+  }
+}
+
+async function reconcilePendingDipEntryFills(context) {
+  const pending = context.state.pendingDipEntryFills && typeof context.state.pendingDipEntryFills === "object"
+    ? context.state.pendingDipEntryFills
+    : null;
+  if (!pending) return;
+  const rows = liveRowsForDipEntryConfirmation(context.liveState);
+  const now = Date.now();
+  for (const [key, record] of Object.entries(pending)) {
+    if (!record || typeof record !== "object") {
+      delete pending[key];
+      continue;
+    }
+    const matchedRow = rows.find((row) => pendingDipEntryMatchesAccountRow(record, row));
+    if (!matchedRow) {
+      const firstObserved = Date.parse(String(record.firstObservedAt || record.at || ""));
+      if (Number.isFinite(firstObserved) && now - firstObserved >= DIP_ENTRY_ACCOUNT_CONFIRM_WINDOW_MS) {
+        delete pending[key];
+        recordEvent(context.state, { at: new Date().toISOString(), type: "DIP_ENTRY_UNMATCHED", tokenId: record.tokenId, portfolioId: record.portfolioId });
+      }
+      continue;
+    }
+    const lastAttempt = Date.parse(String(record.lastOwnershipAttemptAt || ""));
+    if (Number.isFinite(lastAttempt) && now - lastAttempt < DIP_ENTRY_OWNERSHIP_RETRY_MS) continue;
+    const price = number(matchedRow.entryPrice ?? matchedRow.avgPrice ?? matchedRow.price) ?? record.price;
+    const ownership = await recordLiveDipEntryOwnership(
+      record.portfolioId,
+      record.tokenId,
+      price,
+      record.at,
+      record.entryVolumeUsdc,
+    );
+    if (ownership.ok) {
+      delete pending[key];
+      recordEvent(context.state, { at: new Date().toISOString(), type: "DIP_ENTRY_ACCOUNT_CONFIRMED", tokenId: record.tokenId, portfolioId: record.portfolioId, price });
+      continue;
+    }
+    pending[key] = { ...record, lastOwnershipAttemptAt: new Date().toISOString(), lastOwnershipError: ownership.error };
+  }
+}
 
 function recoverDipEntryOwnershipFromHistory(context) {
   const pending = context.state.pendingDipEntryOwnership && typeof context.state.pendingDipEntryOwnership === "object"
@@ -2457,7 +2566,7 @@ function recoverDipEntryOwnershipFromHistory(context) {
     if (!event || !["DIP_ENTRY_SUBMITTED", "DIP_ENTRY_OWNERSHIP_RECORD_FAILED"].includes(event.type)
       || !event.portfolioId || !event.tokenId) continue;
     const price = event.price ?? null;
-    const key = `${String(event.portfolioId)}:${String(event.tokenId)}:${Number(price ?? -1).toFixed(4)}`;
+    const key = dipEntryOwnershipKey({ portfolioId: event.portfolioId, tokenId: event.tokenId, price });
     if (pending[key]) continue;
     pending[key] = {
       portfolioId: event.portfolioId,
@@ -2731,7 +2840,7 @@ async function submitDipEntry(plan, book, cashUsdc) {
     // Unlike a protective exit, the paper mirror needs a determinate entry size and cost.
     // FOK makes the live result either this fully quoted position or no position at all.
     const response = await client.postOrder(signed, OrderType.FOK, false);
-    if (exitFilled(response)) await settleLiveEntryClaim("confirm", plan.tokenId, claimId);
+    if (exitFilled(response) || dipEntryPendingMatch(response)) await settleLiveEntryClaim("confirm", plan.tokenId, claimId);
     else await settleLiveEntryClaim("release", plan.tokenId, claimId);
     return { ...response, ...quote };
   } catch (error) {
@@ -2811,7 +2920,8 @@ async function fireDipEntries(context, books, now) {
     }
     const response = await submitDipEntry(plan, book, cash);
     const filled = exitFilled(response);
-    const rejection = filled ? null : (response?.errorMsg || response?.error || "order was not accepted");
+    const pendingMatch = !filled && dipEntryPendingMatch(response);
+    const rejection = filled || pendingMatch ? null : (response?.errorMsg || response?.error || "order was not accepted");
     // Told to the server the moment the fill is known, and before the terminal event below --
     // a rejected order owns nothing and must never be reported as if it did.
     if (filled) {
@@ -2835,7 +2945,7 @@ async function fireDipEntries(context, books, now) {
         const pending = context.state.pendingDipEntryOwnership && typeof context.state.pendingDipEntryOwnership === "object"
           ? context.state.pendingDipEntryOwnership
           : (context.state.pendingDipEntryOwnership = {});
-        const ownershipKey = `${String(ownershipRecord.portfolioId || "")}:${String(ownershipRecord.tokenId || "")}:${Number(ownershipRecord.price ?? -1).toFixed(4)}`;
+        const ownershipKey = dipEntryOwnershipKey(ownershipRecord);
         pending[ownershipKey] = {
           ...pending[ownershipKey],
           ...ownershipRecord,
@@ -2845,16 +2955,29 @@ async function fireDipEntries(context, books, now) {
         recordEvent(context.state, { ...event, type: "DIP_ENTRY_OWNERSHIP_RECORD_FAILED", error: ownership.error });
       }
     }
+    if (pendingMatch) {
+      rememberPendingDipEntryFill(context, {
+        portfolioId: plan.portfolioId,
+        tokenId: plan.tokenId,
+        price: response?.price ?? null,
+        at: now,
+        entryVolumeUsdc: response?.makerAmountUsdc ?? plan.stakeUsdc ?? null,
+      });
+      // Force a fresh account read before deciding whether the exchange's acknowledgement
+      // became a fill. Until then the durable entry claim prevents another portfolio from
+      // submitting the same buy.
+      context.liveStateFetchedAt = 0;
+    }
     recordEvent(context.state, {
       ...event,
-      type: filled ? "DIP_ENTRY_SUBMITTED" : "DIP_ENTRY_REJECTED",
+      type: filled ? "DIP_ENTRY_SUBMITTED" : (pendingMatch ? "DIP_ENTRY_PENDING_MATCH" : "DIP_ENTRY_REJECTED"),
       price: response?.price ?? null,
       shares: response?.shares ?? null,
       error: rejection,
     });
     // A rejection is terminal for this token too. The band is a moment; retrying into a
     // book that has already refused the size is how one decision became three orders.
-    entered[key] = { terminal: true, at: now, reason: filled ? "submitted" : "rejected", error: rejection };
+    entered[key] = { terminal: true, at: now, reason: filled ? "submitted" : (pendingMatch ? "awaiting account confirmation" : "rejected"), error: rejection };
   }
 }
 // ---------------------------------------------------------------------------------------
@@ -2878,6 +3001,11 @@ async function checkOnce(context) {
     // environment happened to carry.
     adoptAccountTradingConfig(context.liveState, context.state);
   }
+  // The account is the source of truth for an accepted FOK response that did not carry its
+  // final match status. This also repairs historical false rejections only when all of the
+  // token, quoted price and opening timestamp point at the same account position.
+  recoverPendingDipEntryFillsFromHistory(context);
+  await reconcilePendingDipEntryFills(context);
   if (!context.policyState || Date.now() - context.policyStateFetchedAt >= STATE_REFRESH_MS) {
     try {
       context.policyState = await fetchJson(`${LIVE_EXIT_POLICY_URL}${LIVE_EXIT_POLICY_URL.includes("?") ? "&" : "?"}exitWorkerAt=${Date.now()}`, "live exit policy");

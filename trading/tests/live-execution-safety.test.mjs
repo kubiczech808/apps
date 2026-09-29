@@ -67,6 +67,20 @@ test("an interrupted ownership acknowledgement is retried without placing anothe
     "retrying ownership must never repeat the already-filled buy");
 });
 
+test("an accepted DIP acknowledgement is confirmed against the account before it is rejected or attributed", () => {
+  assert.match(WORKER, /export function dipEntryPendingMatch/);
+  assert.match(WORKER, /function recoverPendingDipEntryFillsFromHistory/);
+  assert.match(WORKER, /function pendingDipEntryMatchesAccountRow/);
+  assert.match(WORKER, /async function reconcilePendingDipEntryFills/);
+  assert.match(WORKER, /\["DIP_ENTRY_REJECTED", "DIP_ENTRY_PENDING_MATCH"\]\.includes\(event\.type\)/,
+    "a historical rejection may be repaired only after account-side confirmation");
+  assert.match(WORKER, /DIP_ENTRY_ACCOUNT_CONFIRMED/);
+  const fire = WORKER.slice(WORKER.indexOf("async function fireDipEntries"), WORKER.indexOf("// ---------------------------------------------------------------------------------------", WORKER.indexOf("async function fireDipEntries")));
+  assert.match(fire, /type: filled \? "DIP_ENTRY_SUBMITTED" : \(pendingMatch \? "DIP_ENTRY_PENDING_MATCH" : "DIP_ENTRY_REJECTED"\)/);
+  assert.match(fire, /context\.liveStateFetchedAt = 0/,
+    "a pending acknowledgement forces an account refresh before another decision");
+});
+
 test("live scheduling is restored, but only an explicit confirmation or a scheduler can trade", () => {
   for (const workflow of [LIVE_WORKFLOW, FIXED_WORKFLOW]) {
     assert.match(workflow, /^\s*schedule:\s*$/m, "the recovery heartbeat must remain scheduled");
