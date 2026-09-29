@@ -81,9 +81,15 @@ test("dashboard load: a partial catalogue is not mistaken for a loaded one", () 
   assert.match(APP, /matchingExecutionScope && partialWouldDo\)/,
     "the early return must consult it, or the mark is written and never read");
 
-  // And the call that caused this must be the one that defers.
-  assert.match(APP, /ensureScrapedMarketState\(\{ \.\.\.options, firstPageOnly: true \}\);/,
-    "the background load is the 27 MB one");
+  // Live Opened trades already carry their own market title. It must not start even the
+  // one-page catalogue request; only the focused candidate/history tabs may request it.
+  const liveLoader = lift("loadLiveState");
+  assert.match(liveLoader, /ensureLiveFocusedMarketMetadata\(\);/,
+    "live loading should delegate catalogue reads to the active focused tab");
+  assert.doesNotMatch(liveLoader, /ensureScrapedMarketState\(/,
+    "live Opened trades must not fetch the catalogue in the background");
+  assert.match(APP, /function ensureLiveFocusedMarketMetadata\(tab = activeTabTarget\(\)\)[\s\S]*?ensureScrapedMarketState\(/,
+    "the focused views must still restore scraped metadata when it is actually needed");
   // While the tab switches keep asking for everything.
   assert.match(APP, /state\.opportunityView === "overview"\) ensureScrapedMarketState\(\);/);
 });
@@ -136,8 +142,12 @@ test("live dashboard: history and execution audits are loaded only for a visible
   assert.doesNotMatch(liveLoader, /fetchJson\(liveExecutionStateFile\(executionMode\)\)/,
     "a full per-portfolio execution audit must not block every portfolio switch");
   assert.match(liveLoader, /if \(livePortfolioTabNeedsExecutionState\(\)\) ensureLiveExecutionState\(executionMode\);/);
+  assert.match(liveLoader, /ensureLiveFocusedMarketMetadata\(\);/,
+    "the scraped catalogue must be deferred to a metadata-hungry visible tab");
   assert.match(activate, /if \(isLiveMode\(\)\) ensureLiveExecutionState\(\);/,
     "focused candidates, run-log and unfilled-order tabs must request their audit on demand");
+  assert.match(activate, /ensureLiveFocusedMarketMetadata\(target\);/,
+    "focused candidate and history tabs must restore their market names and tags on demand");
   assert.match(liveRenderer, /const rawClosedTrades = liveClosedTrades\(liveState\);/);
   assert.match(liveRenderer, /activePortfolioTab === "closed-trades"\s*\? rawClosedTrades\.map\(decorateLiveTradeForTable\)/,
     "historical rows must be decorated only when their table is visible");

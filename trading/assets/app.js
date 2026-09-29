@@ -2962,12 +2962,18 @@ function activateTab(target, { syncRoute = false, replace = false } = {}) {
   });
   if (target === "portfolio-candidates") {
     renderPortfolioCandidates();
-    if (isLiveMode()) ensureLiveExecutionState();
+    if (isLiveMode()) {
+      ensureLiveExecutionState();
+      ensureLiveFocusedMarketMetadata(target);
+    }
     refreshPortfolioCandidates({ quiet: true });
   }
   if (target === "daily-picks" || target === "closed-trades") {
     renderActivePortfolioTabFromCachedState();
-    if (target === "closed-trades" && isLiveMode()) ensureLiveExecutionState();
+    if (target === "closed-trades" && isLiveMode()) {
+      ensureLiveExecutionState();
+      ensureLiveFocusedMarketMetadata(target);
+    }
   }
   if (target === "run-log") {
     renderRunLog();
@@ -2979,7 +2985,10 @@ function activateTab(target, { syncRoute = false, replace = false } = {}) {
   }
   if (target === "unfilled-limit-orders") {
     renderUnfilledLimitOrders();
-    if (isLiveMode()) ensureLiveExecutionState();
+    if (isLiveMode()) {
+      ensureLiveExecutionState();
+      ensureLiveFocusedMarketMetadata(target);
+    }
   }
   if (syncRoute && state.page === "portfolios") {
     const targetPath = portfolioTabRoutePath(target);
@@ -10757,12 +10766,10 @@ async function loadLiveState(options = {}) {
     const liveState = liveResult.value;
     renderLiveState(liveState);
     if (livePortfolioTabNeedsExecutionState()) ensureLiveExecutionState(executionMode);
-    // CLOB open orders expose only token/condition IDs, so one page of the catalogue is
-    // loaded here to turn those into market names. ONE page: walking all seven of them plus
-    // the resolved archive is about 27 MB, it was happening on every load whichever tab was
-    // open, and on a phone it is what closed the connection before the app had rendered.
-    // The rest is fetched when a view that lists markets is opened.
-    ensureScrapedMarketState({ ...options, firstPageOnly: true });
+    // A live position already carries its own question and outcome. The scraped catalogue is
+    // only needed for the focused tables that enrich rows with tag and market metadata; loading
+    // its 3 MB first page after every visit to Opened trades was still enough to stall a phone.
+    ensureLiveFocusedMarketMetadata();
     ensureCandidateBotState();
     ensureFullBotState(options);
     if (!options.skipAutoLiveSync) {
@@ -10815,6 +10822,19 @@ async function loadLiveState(options = {}) {
 
 function livePortfolioTabNeedsExecutionState(tab = activeTabTarget()) {
   return ["portfolio-candidates", "closed-trades", "run-log", "unfilled-limit-orders"].includes(tab);
+}
+
+function livePortfolioTabNeedsScrapedMetadata(tab = activeTabTarget()) {
+  return ["portfolio-candidates", "closed-trades", "unfilled-limit-orders"].includes(tab);
+}
+
+function ensureLiveFocusedMarketMetadata(tab = activeTabTarget()) {
+  if (!isLiveMode() || !livePortfolioTabNeedsScrapedMetadata(tab)) return;
+  // Candidates use the execution-scoped catalogue so their current shortlist is complete;
+  // the two historical tables need one ordinary active page for row names and tags.
+  ensureScrapedMarketState(tab === "portfolio-candidates"
+    ? { summary: "execution" }
+    : { firstPageOnly: true });
 }
 
 async function ensureLiveExecutionState(mode = state.mode) {
