@@ -29,6 +29,7 @@ const DATA_DIR = __DIR__ . '/data';
 const STATE_FILE = DATA_DIR . '/bot-state.json';
 const SETTINGS_FILE = DATA_DIR . '/settings.json';
 const BACKTEST_FILE = DATA_DIR . '/backtests.json';
+const BACKTEST_STALE_SECONDS = 20 * 60;
 const LEASE_FILE = DATA_DIR . '/lease.json';
 const RUNNER_CAPABILITIES_FILE = DATA_DIR . '/runner-capabilities.json';
 const COMMANDS_FILE = DATA_DIR . '/commands.json';
@@ -164,6 +165,32 @@ function requirePost(): void
     }
 }
 
+/**
+ * A detached research process has no systemd parent waiting for its exit.
+ * Treat a missing heartbeat as a failed run rather than leaving the dashboard
+ * disabled indefinitely after an out-of-memory loop or a killed process.
+ */
+function expireStalledBacktest(array $backtests): array
+{
+    $run = $backtests['run'] ?? null;
+    if (!is_array($run) || ($run['status'] ?? null) !== 'running') {
+        return $backtests;
+    }
+    $heartbeatAt = $run['heartbeatAt'] ?? $run['startedAt'] ?? $run['requestedAt'] ?? null;
+    $heartbeat = is_string($heartbeatAt) ? strtotime($heartbeatAt) : false;
+    if ($heartbeat !== false && $heartbeat > time() - BACKTEST_STALE_SECONDS) {
+        return $backtests;
+    }
+    $backtests['run'] = array_merge($run, [
+        'status' => 'failed',
+        'error' => 'Backtest neposlal průběžný stav déle než 20 minut; běh byl ukončen jako zaseknutý.',
+        'completedAt' => gmdate('c'),
+        'stalledAt' => gmdate('c'),
+    ]);
+    writeJsonFile(BACKTEST_FILE, $backtests);
+    return $backtests;
+}
+
 $action = (string) ($_GET['action'] ?? 'state');
 
 if ($action === 'health') {
@@ -185,6 +212,9 @@ switch ($action) {
         $state = readJsonFile(STATE_FILE, null);
         $settings = readJsonFile(SETTINGS_FILE, null);
         $backtests = readJsonFile(BACKTEST_FILE, null);
+        if (is_array($backtests)) {
+            $backtests = expireStalledBacktest($backtests);
+        }
         if (is_array($state) && is_array($settings)) {
             // The settings file is the authority. A runner publishes the
             // settings it ran with, and echoing those back would silently undo
@@ -401,6 +431,9 @@ switch ($action) {
         if ($incomingAt !== false && $existingAt !== false && $incomingAt < $existingAt) {
             fail(409, 'Backtest report is older than the currently published run.');
         }
+        if (($backtests['run']['status'] ?? null) === 'running') {
+            $backtests['run']['heartbeatAt'] = gmdate('c');
+        }
         writeJsonFile(BACKTEST_FILE, $backtests);
         ok(['generatedAt' => $backtests['generatedAt'] ?? null]);
     }
@@ -433,6 +466,7 @@ switch ($action) {
             'totalProfiles' => $totalProfiles,
             'completedProfiles' => $completedProfiles,
             'progressPct' => round(($completedProfiles / $totalProfiles) * 100, 2),
+            'heartbeatAt' => gmdate('c'),
         ]);
         if (array_key_exists('lastCompleted', $progress)) {
             $run['lastCompleted'] = $progress['lastCompleted'];

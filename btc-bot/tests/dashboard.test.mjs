@@ -28,6 +28,10 @@ test('running backtests expose equally weighted asset and timeframe progress', (
   assert.match(api, /Backtest progress cannot move backwards/)
   assert.match(api, /Backtest progress belongs to a different run/)
   assert.match(api, /sourceProgress/)
+  assert.match(api, /BACKTEST_STALE_SECONDS = 20 \* 60/)
+  assert.match(api, /function expireStalledBacktest/)
+  assert.match(api, /heartbeatAt/)
+  assert.match(api, /Backtest neposlal průběžný stav déle než 20 minut/)
 })
 
 test('legacy period reports never render their completed backtest as zero percent', () => {

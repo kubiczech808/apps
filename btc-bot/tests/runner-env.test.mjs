@@ -18,3 +18,12 @@ test('runner environment reads the protected config file and process variables w
   assert.equal(env.TWELVE_DATA_API_KEY, 'from-file')
   assert.equal(env.BOT_API_URL, 'https://override.test/api')
 })
+
+test('detached backtests receive a bounded runtime and are covered by the progress watchdog', async () => {
+  const { readFileSync } = await import('node:fs')
+  const { fileURLToPath } = await import('node:url')
+  const runner = readFileSync(fileURLToPath(new URL('../tools/run-bot.mjs', import.meta.url)), 'utf8')
+  assert.match(runner, /spawn\('timeout'/)
+  assert.match(runner, /--kill-after=30s/)
+  assert.match(runner, /BOT_BACKTEST_TIMEOUT_SECONDS/)
+})

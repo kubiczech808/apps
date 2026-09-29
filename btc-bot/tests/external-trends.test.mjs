@@ -107,6 +107,27 @@ test('external pivot path plots wicks after close confirmation and rejects a wic
   assert.equal(path.pivots.at(-1).label, 'HH')
 })
 
+test('a pre-normalized historical candle window preserves the external pivot path', () => {
+  const pivots = [
+    { kind: 'high', price: 120, close: 118, time: START },
+    { kind: 'low', price: 100, close: 101, time: START + HOUR },
+    { kind: 'high', price: 130, close: 132, time: START + 2 * HOUR },
+    { kind: 'low', price: 95, close: 94, time: START + 3 * HOUR },
+  ]
+  const candles = pivots.map((pivot) => ({
+    time: pivot.time,
+    open: pivot.close,
+    high: pivot.kind === 'high' ? pivot.price : pivot.close + 2,
+    low: pivot.kind === 'low' ? pivot.price : pivot.close - 2,
+    close: pivot.close,
+  }))
+
+  const direct = classifyExternalPivotPath(pivots, { candles })
+  const reused = classifyExternalPivotPath(pivots, { candles, candlesAreComplete: true })
+
+  assert.deepEqual(reused, direct)
+})
+
 test('external pivot references preserve wick geometry when old records also carry a close', () => {
   const path = classifyExternalPivotPath([
     { kind: 'low', price: 151, extreme: 150, close: 151, time: START },

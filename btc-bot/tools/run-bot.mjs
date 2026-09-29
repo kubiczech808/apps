@@ -39,7 +39,19 @@ try {
     // Backtests scan years of candles and must not occupy the minute-level
     // heartbeat service. The worker publishes its own running/complete/failed
     // status, so it can safely outlive this short pass.
-    const child = spawn(process.execPath, ['tools/backtest-price-action-structure.mjs', '--publish'], {
+    // `timeout` outlives this minute-level pass together with the detached
+    // worker. Its hard kill is paired with the API heartbeat watchdog: a
+    // computational loop cannot leave the dashboard permanently disabled.
+    const timeoutSeconds = Math.max(60, Number(env.BOT_BACKTEST_TIMEOUT_SECONDS) || 90 * 60)
+    const child = spawn('timeout', [
+      '--foreground',
+      '--signal=TERM',
+      '--kill-after=30s',
+      `${timeoutSeconds}s`,
+      process.execPath,
+      'tools/backtest-price-action-structure.mjs',
+      '--publish',
+    ], {
       cwd: process.cwd(),
       env: {
         ...env,

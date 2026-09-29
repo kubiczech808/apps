@@ -133,8 +133,15 @@ const alternatingExternalPivots = (pivots = []) => {
   return alternating
 }
 
-const closeBreaksPreviousWick = (pivot, previous, { candles = [], until = null } = {}) => {
-  const completed = completedOhlc(candles)
+const closeBreaksPreviousWick = (pivot, previous, {
+  candles = [],
+  until = null,
+  candlesAreComplete = false,
+} = {}) => {
+  // Pivot classification calls this once for every candidate. The caller has
+  // already normalized the candle window, so sorting and copying it again for
+  // every candidate turns a multi-year historical run into quadratic work.
+  const completed = candlesAreComplete ? candles : completedOhlc(candles)
   if (completed.length && previous?.time != null) {
     const confirmed = completed.some((candle) => (
       candle.time > previous.time
@@ -150,7 +157,8 @@ const closeBreaksPreviousWick = (pivot, previous, { candles = [], until = null }
   return pivot.kind === 'high' ? close > previous.price : close < previous.price
 }
 
-const normalizeExternalPivots = (pivots = [], { candles = [] } = {}) => {
+const normalizeExternalPivots = (pivots = [], { candles = [], candlesAreComplete = false } = {}) => {
+  const completed = candlesAreComplete ? candles : completedOhlc(candles)
   const candidates = alternatingExternalPivots(pivots)
   const accepted = []
   const previousAcceptedByKind = { high: null, low: null }
@@ -160,7 +168,11 @@ const normalizeExternalPivots = (pivots = [], { candles = [] } = {}) => {
       ? pivot.price > previous.price
       : pivot.price < previous.price)
     const until = candidates[index + 1]?.time ?? null
-    if (extendsPrevious && !closeBreaksPreviousWick(pivot, previous, { candles, until })) continue
+    if (extendsPrevious && !closeBreaksPreviousWick(pivot, previous, {
+      candles: completed,
+      until,
+      candlesAreComplete: true,
+    })) continue
     accepted.push(pivot)
     previousAcceptedByKind[pivot.kind] = pivot
   }
@@ -173,8 +185,16 @@ const normalizeExternalPivots = (pivots = [], { candles = [] } = {}) => {
     const label = !previous
       ? pivot.kind === 'high' ? 'H' : 'L'
       : pivot.kind === 'high'
-        ? closeBreaksPreviousWick(pivot, previous, { candles, until }) ? 'HH' : 'LH'
-        : closeBreaksPreviousWick(pivot, previous, { candles, until }) ? 'LL' : 'HL'
+        ? closeBreaksPreviousWick(pivot, previous, {
+          candles: completed,
+          until,
+          candlesAreComplete: true,
+        }) ? 'HH' : 'LH'
+        : closeBreaksPreviousWick(pivot, previous, {
+          candles: completed,
+          until,
+          candlesAreComplete: true,
+        }) ? 'LL' : 'HL'
     previousByKind[pivot.kind] = pivot
     return { ...pivot, label }
   })
@@ -429,9 +449,12 @@ const chartPivotsForDirectionalLeg = ({ pivots, leg }) => {
   return selected
 }
 
-export const classifyExternalPivotPath = (pivots = [], { candles = [] } = {}) => {
-  const path = normalizeExternalPivots(pivots, { candles })
-  const completedCandles = completedOhlc(candles)
+export const classifyExternalPivotPath = (pivots = [], { candles = [], candlesAreComplete = false } = {}) => {
+  const completedCandles = candlesAreComplete ? candles : completedOhlc(candles)
+  const path = normalizeExternalPivots(pivots, {
+    candles: completedCandles,
+    candlesAreComplete: true,
+  })
   const high = path.filter((pivot) => pivot.kind === 'high').slice(-2)
   const low = path.filter((pivot) => pivot.kind === 'low').slice(-2)
   const directionalTrend = high.length === 2 && low.length === 2
@@ -659,7 +682,10 @@ export const confirmedExternalPivotPath = ({
     timePeriod = EXTERNAL_PIVOT_FALLBACK_PERIOD
     candidates = candidatesFor(timePeriod)
   }
-  return { ...classifyExternalPivotPath(candidates, { candles: completed }), timePeriod }
+  return {
+    ...classifyExternalPivotPath(candidates, { candles: completed, candlesAreComplete: true }),
+    timePeriod,
+  }
 }
 
 // Kept as an explicit BTC alias for callers and saved state from the first
