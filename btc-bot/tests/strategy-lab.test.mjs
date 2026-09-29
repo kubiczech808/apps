@@ -74,5 +74,7 @@ test('published PA-1 backtests report progress after each asset-timeframe calcul
   assert.match(worker, /completedProfiles \+= 1/)
   assert.match(worker, /lastCompleted: \{ periodYears: yearsBack, asset: asset\.symbol, timeframeId \}/)
   assert.match(worker, /store\.updateBacktestProgress/)
+  assert.match(worker, /sourceProgress: \{[\s\S]*loaded: loadedSources,[\s\S]*total: sources\.length/)
+  assert.match(worker, /for \(const source of sources\) \{[\s\S]*const candles = await source\.fetch\(\)[\s\S]*for \(const yearsBack of periodYears\) \{/)
   assert.match(worker, /result\.run = \{ \.\.\.runProgress\(\{ status: 'complete' \}\)/)
 })

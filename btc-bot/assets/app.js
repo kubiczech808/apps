@@ -2950,11 +2950,18 @@ const backtestRunProgress = (document, run) => {
     return { completed, total: totalProfiles, percent: Math.round((completed / totalProfiles) * 100) }
   }
 
-  // Older workers report completed periods only. Their periods still contain
-  // the same asset × timeframe matrix, so derive an equal-weight percentage
-  // until the next per-profile worker update arrives.
-  const profileCount = Object.values(document?.assets ?? {})
-    .reduce((count, timeframes) => count + Object.keys(timeframes ?? {}).length, 0)
+  // Older workers report completed periods only. While they are running, the
+  // top-level matrix is intentionally empty and rows live under `periods`.
+  // Any completed period has the same asset × timeframe shape, so use the
+  // first populated matrix without double-counting several periods.
+  const profileMatrices = [
+    document?.assets,
+    ...Object.values(document?.periods ?? {}).map((period) => period?.assets),
+  ]
+  const profileCount = profileMatrices
+    .map((assets) => Object.values(assets ?? {})
+      .reduce((count, timeframes) => count + Object.keys(timeframes ?? {}).length, 0))
+    .find((count) => count > 0) ?? 0
   const requestedPeriods = Array.isArray(document?.periodsRequested) ? document.periodsRequested.length : 0
   const completedPeriods = Array.isArray(run?.completedPeriods) ? run.completedPeriods.length : 0
   if (profileCount > 0 && requestedPeriods > 0) {
@@ -3095,6 +3102,17 @@ const renderPriceActionBacktests = (host) => {
   const document = state?.backtests ?? {}
   const run = document.run ?? null
   const progress = backtestRunProgress(document, run)
+  const sourceProgress = run?.sourceProgress ?? null
+  const sourcesLoaded = Number(sourceProgress?.loaded)
+  const sourcesTotal = Number(sourceProgress?.total)
+  const preparingData = run?.status === 'running'
+    && progress.completed === 0
+    && Number.isFinite(sourcesLoaded)
+    && Number.isFinite(sourcesTotal)
+    && sourcesTotal > 0
+  const sourceProgressText = preparingData
+    ? `Připravuji data: ${sourcesLoaded} / ${sourcesTotal} assetů${sourceProgress?.currentAsset ? ` (${sourceProgress.currentAsset})` : ''}.`
+    : null
   const progressText = Number.isFinite(progress.completed) && Number.isFinite(progress.total)
     ? `${progress.completed} / ${progress.total} kombinací asset × TF · ${progress.percent} %`
     : `${progress.percent} %`
@@ -3108,7 +3126,7 @@ const renderPriceActionBacktests = (host) => {
     Object.entries(timeframes ?? {}).map(([timeframeId, result]) => ({ periodId: selectedPeriodId, symbol, timeframeId, result }))
   )
   const statusText = run?.status === 'running'
-    ? `Probíhá nový běh od ${when(run.startedAt ?? run.requestedAt)} · ${progressText}. Dosavadní výsledky zůstávají zobrazené do publikování nového reportu.`
+    ? `Probíhá nový běh od ${when(run.startedAt ?? run.requestedAt)} · ${sourceProgressText ?? progressText} Dosavadní výsledky zůstávají zobrazené do publikování nového reportu.`
     : run?.status === 'failed'
       ? `Poslední běh selhal: ${run.error || 'bez podrobnosti'}`
       : document.generatedAt
@@ -3128,7 +3146,9 @@ const renderPriceActionBacktests = (host) => {
       id: 'run-backtests',
       type: 'button',
       className: 'primary',
-      text: run?.status === 'running' ? `Backtesty probíhají · ${progress.percent} %` : 'Spustit vše',
+      text: run?.status === 'running'
+        ? (preparingData ? `Příprava dat · ${sourcesLoaded} / ${sourcesTotal}` : `Backtesty probíhají · ${progress.percent} %`)
+        : 'Spustit vše',
       disabled: run?.status === 'running' ? 'disabled' : null,
       title: run?.status === 'running' ? progressText : 'Spustit backtest všech assetů a timeframe.',
     }),

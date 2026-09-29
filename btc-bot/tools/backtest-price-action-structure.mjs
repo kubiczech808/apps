@@ -111,6 +111,7 @@ const timeframeIds = ['1h', '4h', '1d']
 const runId = `${now}-${process.pid}-${Math.random().toString(36).slice(2, 8)}`
 const totalProfiles = periodYears.length * sources.length * timeframeIds.length
 let completedProfiles = 0
+let loadedSources = 0
 let previousReport = {}
 
 const wait = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds))
@@ -133,7 +134,7 @@ const saveReport = async (report, { optional = false } = {}) => {
   throw lastError
 }
 
-const runProgress = ({ status = 'running', lastCompleted = null, error = null } = {}) => {
+const runProgress = ({ status = 'running', lastCompleted = null, currentAsset = null, error = null } = {}) => {
   const run = {
     status,
     runId,
@@ -142,6 +143,11 @@ const runProgress = ({ status = 'running', lastCompleted = null, error = null } 
     totalProfiles,
     completedProfiles,
     progressPct: totalProfiles ? Math.round((completedProfiles / totalProfiles) * 10000) / 100 : 0,
+    sourceProgress: {
+      loaded: loadedSources,
+      total: sources.length,
+      currentAsset,
+    },
   }
   if (lastCompleted) run.lastCompleted = lastCompleted
   if (error) run.error = error
@@ -179,15 +185,19 @@ try {
     })
   }
 
-  const fetched = []
-  for (const source of sources) {
-    fetched.push({ source, candles: await source.fetch() })
+  for (const yearsBack of periodYears) {
+    result.periods[String(yearsBack)] = { requestedYears: yearsBack, assets: {} }
   }
 
-  for (const yearsBack of periodYears) {
-    const period = { requestedYears: yearsBack, assets: {} }
-    for (const { source, candles } of fetched) {
-      const { asset } = source
+  for (const source of sources) {
+    const { asset } = source
+    await saveProgress(runProgress({ currentAsset: asset.symbol }), { optional: true })
+    const candles = await source.fetch()
+    loadedSources += 1
+    await saveProgress(runProgress({ currentAsset: asset.symbol }), { optional: true })
+
+    for (const yearsBack of periodYears) {
+      const period = result.periods[String(yearsBack)]
       const hourly = sliceYears(candles.hourly, yearsBack)
       const fourHourly = sliceYears(candles.fourHourly, yearsBack)
       const daily = sliceYears(candles.daily, yearsBack)
@@ -215,15 +225,19 @@ try {
         completedProfiles += 1
         await saveProgress(runProgress({
           lastCompleted: { periodYears: yearsBack, asset: asset.symbol, timeframeId },
+          currentAsset: asset.symbol,
         }), { optional: true })
       }
     }
+  }
+
+  for (const yearsBack of periodYears) {
+    const period = result.periods[String(yearsBack)]
     period.portfolio = aggregatePriceActionBacktests({
       assets: period.assets,
       startingCapital: result.assumptions.startingCapital,
       riskPct: result.assumptions.riskPct,
     })
-    result.periods[String(yearsBack)] = period
     console.log(`Portfolio ${yearsBack}Y: ${period.portfolio.cagrPct?.toFixed(2) ?? 'n/a'}% p.a., ${period.portfolio.trades} trades, DD ${period.portfolio.maxDrawdownPct?.toFixed(2) ?? 'n/a'}%, overlap skipped ${period.portfolio.overlapSkipped}`)
   }
 

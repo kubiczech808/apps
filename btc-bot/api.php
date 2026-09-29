@@ -437,6 +437,17 @@ switch ($action) {
         if (array_key_exists('lastCompleted', $progress)) {
             $run['lastCompleted'] = $progress['lastCompleted'];
         }
+        if (isset($progress['sourceProgress']) && is_array($progress['sourceProgress'])) {
+            $totalSources = max(1, (int) ($progress['sourceProgress']['total'] ?? 0));
+            $loadedSources = min($totalSources, max(0, (int) ($progress['sourceProgress']['loaded'] ?? 0)));
+            $run['sourceProgress'] = [
+                'loaded' => $loadedSources,
+                'total' => $totalSources,
+                'currentAsset' => isset($progress['sourceProgress']['currentAsset'])
+                    ? trim((string) $progress['sourceProgress']['currentAsset'])
+                    : null,
+            ];
+        }
         if ($status === 'failed' && isset($progress['error'])) {
             $run['error'] = (string) $progress['error'];
             $run['completedAt'] = gmdate('c');

@@ -19,11 +19,34 @@ test('running backtests expose equally weighted asset and timeframe progress', (
   assert.match(js, /completedProfiles/)
   assert.match(js, /const total = profileCount \* requestedPeriods/)
   assert.match(js, /completedPeriods \* profileCount/)
+  assert.match(js, /\.\.\.Object\.values\(document\?\.periods \?\? \{\}\)\.map\(\(period\) => period\?\.assets\)/)
+  assert.match(js, /Připravuji data: \$\{sourcesLoaded\} \/ \$\{sourcesTotal\} assetů/)
+  assert.match(js, /Příprava dat · \$\{sourcesLoaded\} \/ \$\{sourcesTotal\}/)
   assert.match(js, /Backtesty probíhají · \$\{progress\.percent\} %/)
   assert.match(js, /\$\{progress\.completed\} \/ \$\{progress\.total\} kombinací asset × TF/)
   assert.match(api, /case 'backtest-progress'/)
   assert.match(api, /Backtest progress cannot move backwards/)
   assert.match(api, /Backtest progress belongs to a different run/)
+  assert.match(api, /sourceProgress/)
+})
+
+test('legacy period reports never render their completed backtest as zero percent', () => {
+  const match = js.match(/const backtestRunProgress = ([\s\S]*?)\n\nconst backtestValue/)
+  assert.ok(match, 'dashboard must expose the backtest progress calculator')
+  const calculateProgress = new Function(`return (${match[1]})`)()
+  const periodAssets = Object.fromEntries([
+    'BTCUSD', 'EURUSD', 'GBPUSD', 'USDJPY', 'USDCHF', 'USDCAD', 'AUDUSD', 'NZDUSD',
+  ].map((asset) => [asset, { '1h': {}, '4h': {}, '1d': {} }]))
+  const document = {
+    assets: {},
+    periods: { 1: { assets: periodAssets }, 3: { assets: periodAssets } },
+    periodsRequested: [1, 3, 5, 10],
+  }
+
+  assert.deepEqual(
+    calculateProgress(document, { completedPeriods: [1, 3] }),
+    { completed: 48, total: 96, percent: 50 },
+  )
 })
 
 test('the hidden attribute outranks every layout rule in the stylesheet', () => {
