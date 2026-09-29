@@ -70,14 +70,19 @@ test("an interrupted ownership acknowledgement is retried without placing anothe
 test("an accepted DIP acknowledgement is confirmed against the account before it is rejected or attributed", () => {
   assert.match(WORKER, /export function dipEntryPendingMatch/);
   assert.match(WORKER, /function recoverPendingDipEntryFillsFromHistory/);
+  assert.match(WORKER, /function recoverConfirmedDipEntryOwnership/);
   assert.match(WORKER, /function pendingDipEntryMatchesAccountRow/);
   assert.match(WORKER, /async function reconcilePendingDipEntryFills/);
-  assert.match(WORKER, /const confirmed = new Set\(events/,
+  assert.match(WORKER, /accountConfirmedDipEntryOwnership/,
     "a recovered historical acknowledgement must be confirmed once, not on every worker pass");
   assert.match(WORKER, /dipEntryConfirmationKey/);
+  assert.match(WORKER, /not enough depth.*not evidence of a fill/s,
+    "a historic no-depth rejection must not be adopted merely because another position shares its token");
   assert.match(WORKER, /\["DIP_ENTRY_REJECTED", "DIP_ENTRY_PENDING_MATCH"\]\.includes\(event\.type\)/,
     "a historical rejection may be repaired only after account-side confirmation");
   assert.match(WORKER, /DIP_ENTRY_ACCOUNT_CONFIRMED/);
+  assert.match(WORKER, /String\(original\.error \|\| ""\) !== "order was not accepted"/,
+    "a prior recovered confirmation cannot revive a no-depth preflight rejection");
   const fire = WORKER.slice(WORKER.indexOf("async function fireDipEntries"), WORKER.indexOf("// ---------------------------------------------------------------------------------------", WORKER.indexOf("async function fireDipEntries")));
   assert.match(fire, /type: filled \? "DIP_ENTRY_SUBMITTED" : \(pendingMatch \? "DIP_ENTRY_PENDING_MATCH" : "DIP_ENTRY_REJECTED"\)/);
   assert.match(fire, /context\.liveStateFetchedAt = 0/,

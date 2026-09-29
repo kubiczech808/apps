@@ -2484,27 +2484,68 @@ function liveRowsForDipEntryConfirmation(liveState = {}) {
   return names.flatMap((name) => (Array.isArray(liveState?.[name]) ? liveState[name] : []));
 }
 
-function pendingDipEntryMatchesAccountRow(record, row) {
+function dipEntryClaimMatchesAccountRow(record, row) {
   const tokenId = String(row?.tokenId || row?.assetId || "");
   if (!tokenId || tokenId !== String(record?.tokenId || "")) return false;
   const expectedPrice = number(record?.price);
   const actualPrice = number(row?.entryPrice ?? row?.avgPrice ?? row?.price);
-  if (expectedPrice != null && actualPrice != null && Math.abs(expectedPrice - actualPrice) > 0.025) return false;
+  if (expectedPrice == null || actualPrice == null || Math.abs(expectedPrice - actualPrice) > 0.025) return false;
   const expectedAt = Date.parse(String(record?.at || record?.firstObservedAt || ""));
   const actualAt = Date.parse(String(row?.openedAt || row?.entryAt || row?.createdAt || row?.opened_at || ""));
   if (!Number.isFinite(expectedAt) || !Number.isFinite(actualAt)) return false;
   return Math.abs(actualAt - expectedAt) <= DIP_ENTRY_ACCOUNT_CONFIRM_WINDOW_MS;
 }
 
+function pendingDipEntryMatchesAccountRow(record, row) {
+  if (!dipEntryClaimMatchesAccountRow(record, row)) return false;
+  const expectedShares = number(record?.shares);
+  const actualShares = number(row?.shares ?? row?.size);
+  // A historic rejection is never enough on its own. It must contain the quote's price and
+  // size, and the account must expose a position of the same practical size. A FOK can be
+  // reported with small decimal differences after fees, hence the narrow five-percent room.
+  if (expectedShares == null || !(expectedShares > 0) || actualShares == null || !(actualShares > 0)) return false;
+  if (Math.abs(expectedShares - actualShares) > Math.max(0.05, expectedShares * 0.05)) return false;
+  const expectedAt = Date.parse(String(record?.at || record?.firstObservedAt || ""));
+  const actualAt = Date.parse(String(row?.openedAt || row?.entryAt || row?.createdAt || row?.opened_at || ""));
+  if (!Number.isFinite(expectedAt) || !Number.isFinite(actualAt)) return false;
+  return Math.abs(actualAt - expectedAt) <= DIP_ENTRY_ACCOUNT_CONFIRM_WINDOW_MS;
+}
+
+function recoverConfirmedDipEntryOwnership(context) {
+  const events = Array.isArray(context.state.history) ? context.state.history : [];
+  const entries = context.state.dipEntries && typeof context.state.dipEntries === "object" ? context.state.dipEntries : {};
+  const acknowledged = context.state.accountConfirmedDipEntryOwnership && typeof context.state.accountConfirmedDipEntryOwnership === "object"
+    ? context.state.accountConfirmedDipEntryOwnership
+    : (context.state.accountConfirmedDipEntryOwnership = {});
+  const rows = liveRowsForDipEntryConfirmation(context.liveState);
+  for (const event of events) {
+    if (!event || event.type !== "DIP_ENTRY_ACCOUNT_CONFIRMED" || !event.portfolioId || !event.tokenId) continue;
+    const key = dipEntryConfirmationKey(event);
+    if (acknowledged[key]) continue;
+    const original = entries[key];
+    // A previous version could emit ACCOUNT_CONFIRMED during recovery. Reuse it only when
+    // the durable original attempt proves an exchange acknowledgement (not a no-depth or
+    // other preflight refusal), and the account still agrees on the exact token/price/time.
+    if (!original || String(original.error || "") !== "order was not accepted") continue;
+    const claim = { portfolioId: event.portfolioId, tokenId: event.tokenId, price: event.price, at: original.at };
+    const row = rows.find((candidate) => dipEntryClaimMatchesAccountRow(claim, candidate));
+    if (row) {
+      rememberPendingDipEntryFill(context, {
+        ...claim,
+        shares: number(row.shares ?? row.size),
+        entryVolumeUsdc: event.stakeUsdc ?? null,
+        recoveredFromConfirmedHistory: true,
+      });
+    }
+  }
+}
+
 function recoverPendingDipEntryFillsFromHistory(context) {
   const events = Array.isArray(context.state.history) ? context.state.history : [];
   const rows = liveRowsForDipEntryConfirmation(context.liveState);
-  // The account can report an average entry price a fraction of a cent away from the CLOB
-  // quote, so confirmation deduplication is by portfolio and token, not the quoted price.
-  // A DIP plan is terminal after its first submitted buy and can therefore own this pair once.
-  const confirmed = new Set(events
-    .filter((event) => event?.type === "DIP_ENTRY_ACCOUNT_CONFIRMED")
-    .map((event) => dipEntryConfirmationKey(event)));
+  const acknowledged = context.state.accountConfirmedDipEntryOwnership && typeof context.state.accountConfirmedDipEntryOwnership === "object"
+    ? context.state.accountConfirmedDipEntryOwnership
+    : (context.state.accountConfirmedDipEntryOwnership = {});
   for (const event of events) {
     // Earlier versions logged an accepted-but-unsettled FOK acknowledgement as rejected.
     // Promote such a row only when the account independently proves the exact fill.
@@ -2514,11 +2555,15 @@ function recoverPendingDipEntryFillsFromHistory(context) {
       portfolioId: event.portfolioId,
       tokenId: event.tokenId,
       price: event.price ?? null,
+      shares: event.shares ?? null,
       at: event.at || new Date().toISOString(),
       entryVolumeUsdc: event.stakeUsdc ?? null,
       recoveredFromHistory: true,
     };
-    if (confirmed.has(dipEntryConfirmationKey(record))) continue;
+    // A historical reject with no quoted order size is the normal "not enough depth" case,
+    // not evidence of a fill. It must remain unowned rather than borrowing another plan.
+    if (!(number(record.price) != null && number(record.shares) > 0)) continue;
+    if (acknowledged[dipEntryConfirmationKey(record)]) continue;
     if (rows.some((row) => pendingDipEntryMatchesAccountRow(record, row))) {
       rememberPendingDipEntryFill(context, record);
     }
@@ -2558,6 +2603,10 @@ async function reconcilePendingDipEntryFills(context) {
     );
     if (ownership.ok) {
       delete pending[key];
+      const acknowledged = context.state.accountConfirmedDipEntryOwnership && typeof context.state.accountConfirmedDipEntryOwnership === "object"
+        ? context.state.accountConfirmedDipEntryOwnership
+        : (context.state.accountConfirmedDipEntryOwnership = {});
+      acknowledged[dipEntryConfirmationKey(record)] = { at: new Date().toISOString(), price };
       recordEvent(context.state, { at: new Date().toISOString(), type: "DIP_ENTRY_ACCOUNT_CONFIRMED", tokenId: record.tokenId, portfolioId: record.portfolioId, price });
       continue;
     }
@@ -2971,6 +3020,7 @@ async function fireDipEntries(context, books, now) {
         portfolioId: plan.portfolioId,
         tokenId: plan.tokenId,
         price: response?.price ?? null,
+        shares: response?.shares ?? null,
         at: now,
         entryVolumeUsdc: response?.makerAmountUsdc ?? plan.stakeUsdc ?? null,
       });
@@ -3016,6 +3066,7 @@ async function checkOnce(context) {
   // final match status. This also repairs historical false rejections only when all of the
   // token, quoted price and opening timestamp point at the same account position.
   recoverPendingDipEntryFillsFromHistory(context);
+  recoverConfirmedDipEntryOwnership(context);
   await reconcilePendingDipEntryFills(context);
   if (!context.policyState || Date.now() - context.policyStateFetchedAt >= STATE_REFRESH_MS) {
     try {
