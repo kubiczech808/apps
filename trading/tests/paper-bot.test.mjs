@@ -5533,6 +5533,27 @@ test("5050: its own resting orders appear on its tab straight away", async () =>
   assert.equal(belongs(true, [])({ tokenId: "T4", price: 0.5099 }), true);
 });
 
+test("live attribution honors the durable owner returned for a direct DIP fill", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const app = await readFile(new URL("../assets/app.js", import.meta.url), "utf8");
+  const pick = (re) => re.exec(app)[0];
+  const owner = new Function("row", `
+    const CUSTOM_PAPER_STRATEGY_ID = /^[a-z][a-zA-Z0-9]{1,30}$/;
+    const BUILT_IN_PAPER_STRATEGY_IDS = [];
+    const draftedCustomLivePortfolioId = () => null;
+    const state = { portfolioConfig: { livePortfolios: { dip704560: {} } } };
+    const liveOrdersByToken = () => new Map();
+    ${pick(/function normalizeMode\(mode\)[\s\S]*?\n\}/)}
+    ${pick(/function allLiveModes\([\s\S]*?\n\}/)}
+    ${pick(/function liveTokenOwnerMode\([\s\S]*?\n\}/)}
+    return liveTokenOwnerMode(row);
+  `);
+
+  assert.equal(owner({ tokenId: "lol-game-3", portfolioId: "live-custom-dip704560" }), "live-custom-dip704560");
+  assert.equal(owner({ tokenId: "lol-game-3", portfolioId: "paper-conservative" }), null,
+    "a non-live value from an account row must never claim a live position");
+});
+
 // Reported: a position closed by the stop loss should count as a loss in the accuracy
 // tile, whatever the underlying market eventually resolves to. Before this, STOP_LOSS
 // and STOP_GAP fell through to the same "wait for final resolution" rule as an ordinary

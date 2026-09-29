@@ -12976,6 +12976,13 @@ function newestLiveOrder(orders) {
 // bid resting on that market, which is the ordinary case rather than a rare one. What a
 // position was actually bought at does say, because it matches the order that filled.
 function liveTokenOwnerMode(row) {
+  // The API has durable ownership for ordinary executor entries and direct RPi DIP fills.
+  // Prefer it to inferring from a rolling browser copy of run logs: a DIP bypasses that
+  // executor entirely, so an inference would make a correctly-owned position disappear.
+  const declaredOwner = normalizeMode(String(row?.portfolioId || ""));
+  if (String(row?.portfolioId || "") && allLiveModes().some((mode) => normalizeMode(mode) === declaredOwner)) {
+    return declaredOwner;
+  }
   const tokenId = String(row?.tokenId || row?.assetId || "");
   if (!tokenId) return null;
   const orders = liveOrdersByToken().get(tokenId) || [];

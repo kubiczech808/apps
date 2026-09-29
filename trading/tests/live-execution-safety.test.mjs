@@ -18,6 +18,9 @@ test("a direct DIP fill uses a ledger that executor uploads cannot overwrite", (
   assert.match(API, /live-dip-entry-ownership\.json/);
   assert.match(API, /function live_dip_entry_ownership_records\(\): array/);
   assert.match(API, /foreach \(live_dip_entry_ownership_records\(\) as \$record\)/);
+  assert.match(API, /function live_portfolio_ownership_map\(array \$config\): array/,
+    "DIP ownership must be shared by the exit policy and the account response");
+  assert.match(API, /'dip-entry-ledger'/);
   const recorder = API.slice(
     API.indexOf("function record_live_dip_entry_ownership"),
     API.indexOf("// Which run records say", API.indexOf("function record_live_dip_entry_ownership")),
@@ -25,6 +28,17 @@ test("a direct DIP fill uses a ledger that executor uploads cannot overwrite", (
   assert.match(recorder, /\$path = live_dip_entry_ownership_path\(\)/);
   assert.doesNotMatch(recorder, /live_execution_state_path_for_policy/,
     "direct fills must not write an executor state that the next upload replaces");
+});
+
+test("the live state decorates tokenized rows with durable ownership", () => {
+  const state = API.slice(
+    API.indexOf("function live_state_apply_portfolio_ownership"),
+    API.indexOf("function live_entry_claim_key", API.indexOf("function live_state_apply_portfolio_ownership")),
+  );
+  assert.match(state, /\['positions', 'apiPositions', 'resolvedApiPositions', 'closedTrades', 'openOrders', 'unfilledLimitOrders'\]/);
+  assert.match(state, /\['portfolioId'\] = \$ownerOf\[\$tokenId\]/);
+  assert.match(state, /live_portfolio_ownership_map\(load_portfolio_config\(\)\)/);
+  assert.match(state, /portfolioOwnershipSource/);
 });
 
 test("a position without durable ownership is excluded rather than given the base live stop", () => {
@@ -40,8 +54,8 @@ test("a position without durable ownership is excluded rather than given the bas
 
 test("an interrupted ownership acknowledgement is retried without placing another DIP order", () => {
   assert.match(WORKER, /function recoverDipEntryOwnershipFromHistory/);
-  assert.match(WORKER, /event\.type !== "DIP_ENTRY_SUBMITTED"/,
-    "only confirmed historical fills may be backfilled");
+  assert.match(WORKER, /\["DIP_ENTRY_SUBMITTED", "DIP_ENTRY_OWNERSHIP_RECORD_FAILED"\]\.includes\(event\.type\)/,
+    "only confirmed historical fills, including a failed acknowledgement, may be backfilled");
   assert.match(WORKER, /async function retryPendingDipEntryOwnership/);
   assert.match(WORKER, /pendingDipEntryOwnership/);
   assert.match(WORKER, /recoverDipEntryOwnershipFromHistory\(context\);/);

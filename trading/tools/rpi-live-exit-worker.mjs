@@ -2451,7 +2451,11 @@ function recoverDipEntryOwnershipFromHistory(context) {
     : (context.state.pendingDipEntryOwnership = {});
   const events = Array.isArray(context.state.history) ? context.state.history : [];
   for (const event of events) {
-    if (!event || event.type !== "DIP_ENTRY_SUBMITTED" || !event.portfolioId || !event.tokenId) continue;
+    // Both event types are proof a fill happened. The latter is written only after the
+    // first ownership POST failed, so retaining it lets a worker restart heal a ledger
+    // gap even if the companion submitted row has since scrolled out of the short history.
+    if (!event || !["DIP_ENTRY_SUBMITTED", "DIP_ENTRY_OWNERSHIP_RECORD_FAILED"].includes(event.type)
+      || !event.portfolioId || !event.tokenId) continue;
     const price = event.price ?? null;
     const key = `${String(event.portfolioId)}:${String(event.tokenId)}:${Number(price ?? -1).toFixed(4)}`;
     if (pending[key]) continue;

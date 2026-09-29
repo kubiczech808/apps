@@ -6798,33 +6798,40 @@ function live_dip_entry_watch_payload(): array
     ];
 }
 
-function live_stop_loss_policy_payload(): array
+/**
+ * Resolves ownership for every live order path.
+ *
+ * Ordinary entries leave proof in an executor state; direct DIP fills leave it in their
+ * dedicated server ledger. Both consumers of this fact -- protective exits and the
+ * dashboard -- must use this one map, or a correctly protected position can still look
+ * orphaned on screen.
+ */
+function live_portfolio_ownership_map(array $config): array
 {
-    $config = load_portfolio_config();
-    // Read once, up here, because every policy below carries it: the account's spendable
-    // USDC is what decides whether a settlement close is buying back capital that is
-    // actually needed, and live portfolios all draw on the same balance.
-    $accountState = decode_state_file(state_file_paths()['live'] ?? '', false);
-    $accountCashUsdc = is_numeric($accountState['portfolio']['cashUsdc'] ?? null)
-        ? (float) $accountState['portfolio']['cashUsdc']
-        : null;
     $portfolioIds = ['live', 'live5050'];
     foreach ((array) ($config['livePortfolios'] ?? []) as $id => $row) {
         if (is_array($row)) {
             $portfolioIds[] = 'live-custom-' . (string) $id;
         }
     }
-
-    // Ownership is established before any policy is applied, and for EVERY live portfolio
-    // including those with no active stop loss. Skipping the unprotected ones here, as this
-    // used to, made their positions look unowned two passes further down -- where the
-    // fallback would hand them the main Live portfolio's cap. A switched-off portfolio's
-    // position would then have been sold under a policy its own portfolio never set.
     $ownerOf = [];
     $ownedAt = [];
-    $policyByPortfolio = [];
+    $sourceOf = [];
+    $claim = static function (string $tokenId, string $portfolioId, string $updatedAt, string $source) use (&$ownerOf, &$ownedAt, &$sourceOf): void {
+        if ($tokenId === '' || $portfolioId === '') {
+            return;
+        }
+        // A token can be traded again after an older trade has closed. The latest accepted
+        // order owns the row, and equal timestamps deliberately prefer the later source.
+        if (isset($ownerOf[$tokenId]) && strcmp((string) ($ownedAt[$tokenId] ?? ''), $updatedAt) > 0) {
+            return;
+        }
+        $ownerOf[$tokenId] = $portfolioId;
+        $ownedAt[$tokenId] = $updatedAt;
+        $sourceOf[$tokenId] = $source;
+    };
+
     foreach ($portfolioIds as $portfolioId) {
-        $policyByPortfolio[$portfolioId] = live_stop_loss_policy_config($config, $portfolioId, $accountCashUsdc);
         $state = decode_state_file(live_execution_state_path_for_policy($portfolioId), false);
         if (!is_array($state)) {
             continue;
@@ -6836,13 +6843,7 @@ function live_stop_loss_policy_payload(): array
             }
             $updatedAt = (string) ($record['generatedAt'] ?? $record['runAt'] ?? $record['batchLog']['runAt'] ?? '');
             foreach (live_execution_record_token_ids($record) as $tokenId) {
-                // A token can be seen in an older strategy state after it has been
-                // traded again. The newest accepted order owns it.
-                if (isset($ownerOf[$tokenId]) && strcmp((string) ($ownedAt[$tokenId] ?? ''), $updatedAt) > 0) {
-                    continue;
-                }
-                $ownerOf[$tokenId] = $portfolioId;
-                $ownedAt[$tokenId] = $updatedAt;
+                $claim($tokenId, $portfolioId, $updatedAt, 'execution-run-log');
             }
         }
         // The durable record, consulted alongside the run log rather than only when it is
@@ -6851,11 +6852,7 @@ function live_stop_loss_policy_payload(): array
         // regardless of source, so a portfolio that traded the same token again more
         // recently still wins through its fresher run log entry.
         foreach (live_execution_state_order_ownership_token_ids($state) as $tokenId => $updatedAt) {
-            if (isset($ownerOf[$tokenId]) && strcmp((string) ($ownedAt[$tokenId] ?? ''), $updatedAt) > 0) {
-                continue;
-            }
-            $ownerOf[$tokenId] = $portfolioId;
-            $ownedAt[$tokenId] = $updatedAt;
+            $claim($tokenId, $portfolioId, (string) $updatedAt, 'execution-order-ownership');
         }
     }
 
@@ -6868,15 +6865,41 @@ function live_stop_loss_policy_payload(): array
         }
         $portfolioId = trim((string) ($record['portfolioId'] ?? ''));
         $tokenId = trim((string) ($record['tokenId'] ?? ''));
-        if ($portfolioId === '' || $tokenId === '' || !array_key_exists($portfolioId, $policyByPortfolio)) {
+        if ($portfolioId === '' || $tokenId === '' || !in_array($portfolioId, $portfolioIds, true)) {
             continue;
         }
-        $updatedAt = (string) ($record['at'] ?? '');
-        if (isset($ownerOf[$tokenId]) && strcmp((string) ($ownedAt[$tokenId] ?? ''), $updatedAt) > 0) {
-            continue;
-        }
-        $ownerOf[$tokenId] = $portfolioId;
-        $ownedAt[$tokenId] = $updatedAt;
+        $claim($tokenId, $portfolioId, (string) ($record['at'] ?? ''), 'dip-entry-ledger');
+    }
+
+    return [
+        'portfolioIds' => $portfolioIds,
+        'ownerOf' => $ownerOf,
+        'ownedAt' => $ownedAt,
+        'sourceOf' => $sourceOf,
+    ];
+}
+
+function live_stop_loss_policy_payload(): array
+{
+    $config = load_portfolio_config();
+    // Read once, up here, because every policy below carries it: the account's spendable
+    // USDC is what decides whether a settlement close is buying back capital that is
+    // actually needed, and live portfolios all draw on the same balance.
+    $accountState = decode_state_file(state_file_paths()['live'] ?? '', false);
+    $accountCashUsdc = is_numeric($accountState['portfolio']['cashUsdc'] ?? null)
+        ? (float) $accountState['portfolio']['cashUsdc']
+        : null;
+
+    // Ownership is established before any policy is applied, and for EVERY live portfolio
+    // including those with no active stop loss. Skipping unprotected portfolios here would
+    // make their positions look unowned and risk applying somebody else's stop.
+    $ownership = live_portfolio_ownership_map($config);
+    $portfolioIds = $ownership['portfolioIds'];
+    $ownerOf = $ownership['ownerOf'];
+    $ownedAt = $ownership['ownedAt'];
+    $policyByPortfolio = [];
+    foreach ($portfolioIds as $portfolioId) {
+        $policyByPortfolio[$portfolioId] = live_stop_loss_policy_config($config, $portfolioId, $accountCashUsdc);
     }
 
     $policies = [];
@@ -7329,20 +7352,43 @@ function live_exit_record_request(array $payload): array
     return ['ok' => true, 'record' => $record];
 }
 
+function live_state_apply_portfolio_ownership(array $rows, array $ownership): array
+{
+    $ownerOf = is_array($ownership['ownerOf'] ?? null) ? $ownership['ownerOf'] : [];
+    $ownedAt = is_array($ownership['ownedAt'] ?? null) ? $ownership['ownedAt'] : [];
+    $sourceOf = is_array($ownership['sourceOf'] ?? null) ? $ownership['sourceOf'] : [];
+    foreach ($rows as $index => $row) {
+        if (!is_array($row)) {
+            continue;
+        }
+        $tokenId = trim((string) ($row['tokenId'] ?? $row['assetId'] ?? ''));
+        if ($tokenId === '' || !isset($ownerOf[$tokenId])) {
+            continue;
+        }
+        $rows[$index]['portfolioId'] = $ownerOf[$tokenId];
+        $rows[$index]['portfolioOwnershipAt'] = (string) ($ownedAt[$tokenId] ?? '');
+        $rows[$index]['portfolioOwnershipSource'] = (string) ($sourceOf[$tokenId] ?? '');
+    }
+    return $rows;
+}
+
 // The account sync knows a position is gone; only the exit worker knows why. This is where
 // the two meet, so a closed position can say "sold by the stop loss at 0.10" instead of
-// simply disappearing from the open list.
+// simply disappearing from the open list. It also attaches durable order ownership to
+// every tokenized account row, including direct RPi DIP fills which have no executor log.
 function live_state_with_exit_reasons(array $payload): array
 {
     $state = is_array($payload['state'] ?? null) ? $payload['state'] : $payload;
+    $isWrapped = is_array($payload['state'] ?? null);
+    $ownership = live_portfolio_ownership_map(load_portfolio_config());
+    foreach (['positions', 'apiPositions', 'resolvedApiPositions', 'closedTrades', 'openOrders', 'unfilledLimitOrders'] as $key) {
+        if (is_array($state[$key] ?? null)) {
+            $state[$key] = live_state_apply_portfolio_ownership($state[$key], $ownership);
+        }
+    }
+
     $positions = is_array($state['positions'] ?? null) ? $state['positions'] : [];
-    if ($positions === []) {
-        return $payload;
-    }
     $records = live_exit_records();
-    if ($records === []) {
-        return $payload;
-    }
     foreach ($positions as $index => $position) {
         if (!is_array($position)) {
             continue;
@@ -7382,12 +7428,17 @@ function live_state_with_exit_reasons(array $payload): array
             $positions[$index]['exitReversal'] = $record['reversal'];
         }
     }
-    if (is_array($payload['state'] ?? null)) {
+    $state['positions'] = $positions;
+    if ($isWrapped) {
         $payload['state']['positions'] = $positions;
+        foreach (['apiPositions', 'resolvedApiPositions', 'closedTrades', 'openOrders', 'unfilledLimitOrders'] as $key) {
+            if (array_key_exists($key, $state)) {
+                $payload['state'][$key] = $state[$key];
+            }
+        }
         return $payload;
     }
-    $payload['positions'] = $positions;
-    return $payload;
+    return $state;
 }
 
 function live_entry_claim_key(string $tokenId, string $side): string
