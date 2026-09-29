@@ -19,3 +19,15 @@ test("the retained watch distinguishes a fallen market from a disabled portfolio
   assert.match(API, /'activePortfolioIds' => array_keys\(\$active\)/);
   assert.match(API, /'activePortfolioIds' => \[\]/);
 });
+
+test("an accepted DIP claim is a durable ownership fallback, never a cross-portfolio recovery guess", () => {
+  assert.match(API, /strtolower\(trim\(\(string\) \(\$record\['entryKind'\] \?\? ''\)\)\) !== 'dip-entry'/);
+  assert.match(API, /strtolower\(trim\(\(string\) \(\$record\['status'\] \?\? ''\)\)\) !== 'accepted'/);
+  assert.match(API, /'live-entry-claim'/);
+  assert.match(WORKER, /return String\(record\.tokenId \|\| ""\);/,
+    "one shared-account token can be confirmed for only one DIP portfolio");
+  assert.match(WORKER, /!event\.claimId\) continue;/,
+    "historical events without a claim remain unattributed rather than being guessed");
+  assert.match(WORKER, /return \{ \.\.\.response, \.\.\.quote, claimId \};/,
+    "new recovery evidence contains the immutable server claim id");
+});

@@ -2476,7 +2476,9 @@ function dipEntryOwnershipKey(record = {}) {
 }
 
 function dipEntryConfirmationKey(record = {}) {
-  return `${String(record.portfolioId || "")}:${String(record.tokenId || "")}`;
+  // The shared live account may hold an outcome only once. A token-level acknowledgement
+  // prevents two overlapping DIP portfolios from both "recovering" the same account row.
+  return String(record.tokenId || "");
 }
 
 function rememberPendingDipEntryFill(context, record) {
@@ -2533,10 +2535,10 @@ function recoverConfirmedDipEntryOwnership(context) {
     : (context.state.accountConfirmedDipEntryOwnership = {});
   const rows = liveRowsForDipEntryConfirmation(context.liveState);
   for (const event of events) {
-    if (!event || event.type !== "DIP_ENTRY_ACCOUNT_CONFIRMED" || !event.portfolioId || !event.tokenId) continue;
+    if (!event || event.type !== "DIP_ENTRY_ACCOUNT_CONFIRMED" || !event.portfolioId || !event.tokenId || !event.claimId) continue;
     const key = dipEntryConfirmationKey(event);
     if (acknowledged[key]) continue;
-    const original = entries[key];
+    const original = entries[dipEntryPlanKey(event)];
     // A previous version could emit ACCOUNT_CONFIRMED during recovery. Reuse it only when
     // the durable original attempt proves an exchange acknowledgement (not a no-depth or
     // other preflight refusal), and the account still agrees on the exact token/price/time.
@@ -2564,13 +2566,14 @@ function recoverPendingDipEntryFillsFromHistory(context) {
     // Earlier versions logged an accepted-but-unsettled FOK acknowledgement as rejected.
     // Promote such a row only when the account independently proves the exact fill.
     if (!event || !["DIP_ENTRY_REJECTED", "DIP_ENTRY_PENDING_MATCH"].includes(event.type)
-      || !event.portfolioId || !event.tokenId) continue;
+      || !event.portfolioId || !event.tokenId || !event.claimId) continue;
     const record = {
       portfolioId: event.portfolioId,
       tokenId: event.tokenId,
       price: event.price ?? null,
       shares: event.shares ?? null,
       at: event.at || new Date().toISOString(),
+      claimId: event.claimId,
       entryVolumeUsdc: event.stakeUsdc ?? null,
       recoveredFromHistory: true,
     };
@@ -2621,7 +2624,14 @@ async function reconcilePendingDipEntryFills(context) {
         ? context.state.accountConfirmedDipEntryOwnership
         : (context.state.accountConfirmedDipEntryOwnership = {});
       acknowledged[dipEntryConfirmationKey(record)] = { at: new Date().toISOString(), price };
-      recordEvent(context.state, { at: new Date().toISOString(), type: "DIP_ENTRY_ACCOUNT_CONFIRMED", tokenId: record.tokenId, portfolioId: record.portfolioId, price });
+      recordEvent(context.state, {
+        at: new Date().toISOString(),
+        type: "DIP_ENTRY_ACCOUNT_CONFIRMED",
+        tokenId: record.tokenId,
+        portfolioId: record.portfolioId,
+        claimId: record.claimId || null,
+        price,
+      });
       continue;
     }
     pending[key] = { ...record, lastOwnershipAttemptAt: new Date().toISOString(), lastOwnershipError: ownership.error };
@@ -2928,10 +2938,10 @@ async function submitDipEntry(plan, book, cashUsdc) {
     const response = await client.postOrder(signed, OrderType.FOK, false);
     if (exitFilled(response) || dipEntryPendingMatch(response)) await settleLiveEntryClaim("confirm", plan.tokenId, claimId, claimContext);
     else await settleLiveEntryClaim("release", plan.tokenId, claimId, claimContext);
-    return { ...response, ...quote };
+    return { ...response, ...quote, claimId };
   } catch (error) {
     await settleLiveEntryClaim("release", plan.tokenId, claimId, claimContext);
-    return { success: false, error: error?.message || String(error), ...quote };
+    return { success: false, error: error?.message || String(error), ...quote, claimId };
   }
 }
 
@@ -3047,6 +3057,7 @@ async function fireDipEntries(context, books, now) {
         tokenId: plan.tokenId,
         price: response?.price ?? null,
         shares: response?.shares ?? null,
+        claimId: response?.claimId ?? null,
         at: now,
         entryVolumeUsdc: response?.makerAmountUsdc ?? plan.stakeUsdc ?? null,
       });
@@ -3060,6 +3071,7 @@ async function fireDipEntries(context, books, now) {
       type: filled ? "DIP_ENTRY_SUBMITTED" : (pendingMatch ? "DIP_ENTRY_PENDING_MATCH" : "DIP_ENTRY_REJECTED"),
       price: response?.price ?? null,
       shares: response?.shares ?? null,
+      claimId: response?.claimId ?? null,
       error: rejection,
     });
     // A rejection is terminal for this token too. The band is a moment; retrying into a

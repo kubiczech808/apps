@@ -6890,6 +6890,27 @@ function live_portfolio_ownership_map(array $config): array
         $claim($tokenId, $portfolioId, (string) ($record['at'] ?? ''), 'dip-entry-ledger');
     }
 
+    // The entry guard is written before a direct RPi DIP order reaches the exchange and is
+    // confirmed after the exchange accepts it. It is therefore a second durable ownership
+    // source when the worker's follow-up ownership POST times out or its local state is
+    // restarted before the retry. Only an accepted, explicitly-labelled DIP claim counts:
+    // a generic guard reservation or a stop-loss reversal must never be mistaken for a DIP
+    // portfolio's position.
+    $entryClaims = decode_state_file(live_entry_claim_path(), false);
+    foreach ((array) ($entryClaims['claims'] ?? []) as $record) {
+        if (!is_array($record)
+            || strtolower(trim((string) ($record['entryKind'] ?? ''))) !== 'dip-entry'
+            || strtolower(trim((string) ($record['status'] ?? ''))) !== 'accepted') {
+            continue;
+        }
+        $portfolioId = trim((string) ($record['portfolioId'] ?? ''));
+        $tokenId = trim((string) ($record['tokenId'] ?? ''));
+        if ($portfolioId === '' || $tokenId === '' || !in_array($portfolioId, $portfolioIds, true)) {
+            continue;
+        }
+        $claim($tokenId, $portfolioId, (string) ($record['acceptedAt'] ?? $record['claimedAt'] ?? ''), 'live-entry-claim');
+    }
+
     return [
         'portfolioIds' => $portfolioIds,
         'ownerOf' => $ownerOf,
