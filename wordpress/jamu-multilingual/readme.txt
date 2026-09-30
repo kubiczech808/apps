@@ -18,6 +18,20 @@ sitemap, WooCommerce schema localization and translation editing fields.
 
 Languages: Czech (source), English, German and Polish.
 
+== Editing translations ==
+
+Posts, pages and products keep their Czech source in the normal editor. Edit
+their English, German and Polish copy in the JAMU translations box on the same
+edit screen; those fields are stored independently and Czech edits never
+overwrite them.
+
+Customer WooCommerce emails use independent YayMail variants named `jamu-en`,
+`jamu-de` and `jamu-pl`, selected from the language stored on each order. Open
+Tools > JAMU email translations to edit an email subject, heading or additional
+content, or open the linked visual YayMail editor for its language-specific
+body and layout. Do not edit a foreign-language email in the Czech YayMail
+design: Czech is the source variant only.
+
 == Shortcode ==
 
 `[jamu_language_switcher]`

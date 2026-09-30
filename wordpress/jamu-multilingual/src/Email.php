@@ -7,6 +7,8 @@ defined('ABSPATH') || exit;
 final class Email
 {
     public const ORDER_LANGUAGE_META = '_jamu_ml_language';
+    private const YAYMAIL_VARIANT_PREFIX = 'jamu-';
+    private const YAYMAIL_VARIANT_VERSION = '2026-09-30-1';
 
     /** @var array<string, bool> */
     private array $registered_email_ids = [];
@@ -30,6 +32,7 @@ final class Email
         add_action('woocommerce_store_api_checkout_order_processed', [$this, 'store_checkout_language_if_missing'], 20);
 
         add_filter('woocommerce_email_classes', [$this, 'register_customer_email_hooks'], 20);
+        add_filter('yaymail_email_get_variant', [$this, 'yaymail_email_variant'], 20, 5);
         add_filter('woocommerce_mail_callback_params', [$this, 'restore_after_mail_params'], 999);
         add_filter('wp_mail_charset', [$this, 'mail_charset'], PHP_INT_MAX);
         add_action('phpmailer_init', [$this, 'configure_html_mailer'], PHP_INT_MAX);
@@ -38,6 +41,8 @@ final class Email
 
         add_filter('jamu_ml_should_localize_request', [$this, 'force_email_context'], 20);
         add_filter('jamu_ml_should_translate_content', [$this, 'force_email_context'], 20);
+        add_action('init', [$this, 'ensure_yaymail_language_variants'], 99);
+        add_action('admin_menu', [$this, 'email_variant_menu']);
     }
 
     public function render_checkout_language_field(): void
@@ -83,9 +88,15 @@ final class Email
 
             $this->registered_email_ids[$id] = true;
             add_filter("woocommerce_email_recipient_{$id}", [$this, 'prepare_customer_email'], 1, 3);
-            add_filter("woocommerce_email_subject_{$id}", [$this, 'prepare_customer_email_text'], 1, 3);
-            add_filter("woocommerce_email_heading_{$id}", [$this, 'prepare_customer_email_text'], 1, 3);
-            add_filter("woocommerce_email_additional_content_{$id}", [$this, 'prepare_customer_email_text'], 1, 3);
+            add_filter("woocommerce_email_subject_{$id}", function (string $text, mixed $object = null, mixed $email = null): string {
+                return $this->prepare_customer_email_property($text, $object, $email, 'subject');
+            }, 1, 3);
+            add_filter("woocommerce_email_heading_{$id}", function (string $text, mixed $object = null, mixed $email = null): string {
+                return $this->prepare_customer_email_property($text, $object, $email, 'heading');
+            }, 1, 3);
+            add_filter("woocommerce_email_additional_content_{$id}", function (string $text, mixed $object = null, mixed $email = null): string {
+                return $this->prepare_customer_email_property($text, $object, $email, 'additional_content');
+            }, 1, 3);
         }
 
         return $emails;
@@ -105,6 +116,151 @@ final class Email
         $this->begin_email_context($object, $email);
 
         return $this->translate_email_text($text);
+    }
+
+    /**
+     * Subjects, headings and additional content have their own WooCommerce
+     * settings. Keep a language-specific copy on the YayMail variant so a
+     * subsequent Czech edit cannot leak into an existing foreign-language
+     * template.
+     */
+    public function prepare_customer_email_property(string $text, mixed $object, mixed $email, string $property): string
+    {
+        $this->begin_email_context($object, $email);
+        $language = $this->languages->current();
+        if ($language === Languages::DEFAULT) {
+            return $text;
+        }
+
+        $email_id = is_object($email) && !empty($email->id) ? (string) $email->id : '';
+        $value = $email_id !== '' ? $this->yaymail_variant_property($email_id, $language, $property) : '';
+        if ($value === '') {
+            return $this->translate_email_text($text);
+        }
+
+        return is_object($email) && method_exists($email, 'format_string')
+            ? (string) $email->format_string($value)
+            : $value;
+    }
+
+    /**
+     * YayMail's documented variant hook selects an independent visual design
+     * for an order. The order meta, rather than the current admin/browser
+     * language, is the authority here.
+     */
+    public function yaymail_email_variant(string $variant, mixed $order, mixed $args = null, mixed $email = null, mixed $template_name = null): string
+    {
+        $order = $this->normalize_order($order);
+        $language = $order ? $this->order_language($order) : '';
+        $template_name = is_string($template_name) ? $template_name : '';
+        if ($language === '' || $language === Languages::DEFAULT || !str_starts_with($template_name, 'customer_')) {
+            return $variant;
+        }
+
+        return $this->yaymail_variant_slug($language);
+    }
+
+    /**
+     * One-time bootstrap of independent YayMail designs. YayMail creates a
+     * variant by copying the base design; we translate that initial snapshot
+     * once and never copy the Czech design over it again.
+     */
+    public function ensure_yaymail_language_variants(): void
+    {
+        if (get_option('jamu_ml_yaymail_variant_version') === self::YAYMAIL_VARIANT_VERSION
+            || !class_exists('\\YayMail\\YayMailTemplate')
+            || !class_exists('\\YayMail\\Models\\TemplateModel')
+        ) {
+            return;
+        }
+
+        $templates = get_posts([
+            'post_type' => 'yaymail_template',
+            'post_status' => ['publish', 'future', 'pending'],
+            'posts_per_page' => -1,
+            'orderby' => 'ID',
+            'order' => 'ASC',
+            'suppress_filters' => true,
+        ]);
+
+        foreach ($templates as $template_post) {
+            if ((string) get_post_meta($template_post->ID, '_yaymail_template_variant', true) !== '') {
+                continue;
+            }
+            $template_name = (string) get_post_meta($template_post->ID, '_yaymail_template', true);
+            if (!str_starts_with($template_name, 'customer_')) {
+                continue;
+            }
+
+            $source = new \YayMail\YayMailTemplate($template_name);
+            if (!$source->is_exists()) {
+                continue;
+            }
+
+            foreach (array_keys($this->languages->additional()) as $language) {
+                $variant = new \YayMail\YayMailTemplate($template_name, '', $this->yaymail_variant_slug($language));
+                if (!$variant->is_exists()) {
+                    continue;
+                }
+
+                $translated = $this->translate_yaymail_data($source->get_data(), $language);
+                \YayMail\Models\TemplateModel::update($variant->get_id(), $translated);
+                $this->seed_yaymail_email_properties($template_name, $variant->get_id(), $language);
+            }
+        }
+
+        update_option('jamu_ml_yaymail_variant_version', self::YAYMAIL_VARIANT_VERSION, false);
+    }
+
+    public function email_variant_menu(): void
+    {
+        add_management_page(
+            __('JAMU email translations', 'jamu-multilingual'),
+            __('JAMU email translations', 'jamu-multilingual'),
+            'manage_woocommerce',
+            'jamu-email-translations',
+            [$this, 'render_email_variant_page']
+        );
+    }
+
+    public function render_email_variant_page(): void
+    {
+        if (!current_user_can('manage_woocommerce')) {
+            return;
+        }
+        $this->ensure_yaymail_language_variants();
+
+        if (isset($_POST['jamu_ml_email_variant_nonce'])
+            && wp_verify_nonce(sanitize_text_field(wp_unslash($_POST['jamu_ml_email_variant_nonce'])), 'jamu_ml_save_email_variants')
+        ) {
+            $this->save_email_variant_properties($_POST['jamu_ml_email'] ?? []);
+            echo '<div class="notice notice-success"><p>' . esc_html__('Email language settings saved.', 'jamu-multilingual') . '</p></div>';
+        }
+
+        $templates = $this->customer_yaymail_templates();
+        ?>
+        <div class="wrap">
+            <h1><?php esc_html_e('JAMU email translations', 'jamu-multilingual'); ?></h1>
+            <p><?php esc_html_e('Each language is an independent YayMail design. Editing the Czech design never overwrites English, German or Polish. Use the visual editor link for body/layout and the fields below for subject, heading and additional content.', 'jamu-multilingual'); ?></p>
+            <form method="post">
+                <?php wp_nonce_field('jamu_ml_save_email_variants', 'jamu_ml_email_variant_nonce'); ?>
+                <?php foreach ($templates as $template_name => $template_id) : ?>
+                    <h2><?php echo esc_html($template_name); ?></h2>
+                    <table class="widefat striped" style="max-width:1100px"><thead><tr><th><?php esc_html_e('Language', 'jamu-multilingual'); ?></th><th><?php esc_html_e('Visual template', 'jamu-multilingual'); ?></th><th><?php esc_html_e('Subject', 'jamu-multilingual'); ?></th><th><?php esc_html_e('Heading', 'jamu-multilingual'); ?></th><th><?php esc_html_e('Additional content', 'jamu-multilingual'); ?></th></tr></thead><tbody>
+                    <?php foreach ($this->languages->additional() as $language => $config) :
+                        $variant_id = $this->yaymail_variant_id($template_name, $language);
+                        ?>
+                        <tr><th scope="row"><?php echo esc_html($config['label']); ?></th><td><?php if ($variant_id) : ?><a class="button" target="_blank" href="<?php echo esc_url(admin_url('admin.php?page=yaymail-settings#/customizer/?template=' . $variant_id)); ?>"><?php esc_html_e('Open visual editor', 'jamu-multilingual'); ?></a><?php endif; ?></td>
+                        <?php foreach (['subject', 'heading', 'additional_content'] as $property) : ?>
+                            <td><textarea class="large-text" rows="3" name="jamu_ml_email[<?php echo esc_attr($template_name); ?>][<?php echo esc_attr($language); ?>][<?php echo esc_attr($property); ?>]"><?php echo esc_textarea($variant_id ? get_post_meta($variant_id, '_jamu_ml_' . $property, true) : ''); ?></textarea></td>
+                        <?php endforeach; ?></tr>
+                    <?php endforeach; ?>
+                    </tbody></table>
+                <?php endforeach; ?>
+                <p><button class="button button-primary" type="submit"><?php esc_html_e('Save email translations', 'jamu-multilingual'); ?></button></p>
+            </form>
+        </div>
+        <?php
     }
 
     public function restore_after_mail_params(array $params): array
@@ -317,18 +473,7 @@ final class Email
 
     private function translate_email_text(string $text): string
     {
-        $language = $this->languages->current();
-        if ($language === Languages::DEFAULT) {
-            return $text;
-        }
-
-        $text = strtr($text, $this->email_exact_replacements($language));
-
-        foreach ($this->email_regex_replacements($language) as $pattern => $replacement) {
-            $text = (string) preg_replace($pattern, $replacement, $text);
-        }
-
-        return $text;
+        return $this->translate_email_text_for_language($text, $this->languages->current());
     }
 
     /**
@@ -505,6 +650,136 @@ final class Email
             ],
             default => [],
         };
+    }
+
+    private function yaymail_variant_slug(string $language): string
+    {
+        return self::YAYMAIL_VARIANT_PREFIX . $language;
+    }
+
+    private function yaymail_variant_id(string $template_name, string $language): int
+    {
+        if (!class_exists('\\YayMail\\YayMailTemplate')) {
+            return 0;
+        }
+        $template = new \YayMail\YayMailTemplate($template_name, '', $this->yaymail_variant_slug($language));
+        return $template->is_exists() ? (int) $template->get_id() : 0;
+    }
+
+    private function yaymail_variant_property(string $email_id, string $language, string $property): string
+    {
+        if (!in_array($property, ['subject', 'heading', 'additional_content'], true)) {
+            return '';
+        }
+        $variant_id = $this->yaymail_variant_id($email_id, $language);
+        return $variant_id ? (string) get_post_meta($variant_id, '_jamu_ml_' . $property, true) : '';
+    }
+
+    private function translate_yaymail_data(mixed $value, string $language): mixed
+    {
+        if (is_string($value)) {
+            return $this->translate_email_text_for_language($value, $language);
+        }
+        if (!is_array($value)) {
+            return $value;
+        }
+        foreach ($value as $key => $item) {
+            $value[$key] = $this->translate_yaymail_data($item, $language);
+        }
+        return $value;
+    }
+
+    private function translate_email_text_for_language(string $text, string $language): string
+    {
+        if ($language === Languages::DEFAULT) {
+            return $text;
+        }
+        $text = strtr($text, $this->email_exact_replacements($language));
+        foreach ($this->email_regex_replacements($language) as $pattern => $replacement) {
+            $text = (string) preg_replace($pattern, $replacement, $text);
+        }
+        return $text;
+    }
+
+    /** @return array<string, int> */
+    private function customer_yaymail_templates(): array
+    {
+        $result = [];
+        foreach (get_posts([
+            'post_type' => 'yaymail_template',
+            'post_status' => ['publish', 'future', 'pending'],
+            'posts_per_page' => -1,
+            'orderby' => 'ID',
+            'order' => 'ASC',
+            'suppress_filters' => true,
+        ]) as $template) {
+            if ((string) get_post_meta($template->ID, '_yaymail_template_variant', true) !== '') {
+                continue;
+            }
+            $name = (string) get_post_meta($template->ID, '_yaymail_template', true);
+            if (str_starts_with($name, 'customer_')) {
+                $result[$name] = (int) $template->ID;
+            }
+        }
+        return $result;
+    }
+
+    private function seed_yaymail_email_properties(string $template_name, int $variant_id, string $language): void
+    {
+        $settings = get_option('woocommerce_' . $template_name . '_settings', []);
+        $settings = is_array($settings) ? $settings : [];
+        $email = $this->customer_email_by_id($template_name);
+        $defaults = [
+            'subject' => $email && method_exists($email, 'get_default_subject') ? (string) $email->get_default_subject() : '',
+            'heading' => $email && method_exists($email, 'get_default_heading') ? (string) $email->get_default_heading() : '',
+            'additional_content' => '',
+        ];
+        foreach ($defaults as $property => $default) {
+            $key = '_jamu_ml_' . $property;
+            if (metadata_exists('post', $variant_id, $key)) {
+                continue;
+            }
+            $source = isset($settings[$property]) ? (string) $settings[$property] : $default;
+            update_post_meta($variant_id, $key, $this->translate_email_text_for_language($source, $language));
+        }
+    }
+
+    private function save_email_variant_properties(mixed $input): void
+    {
+        if (!is_array($input)) {
+            return;
+        }
+        foreach ($input as $template_name => $languages) {
+            $template_name = sanitize_key((string) $template_name);
+            if (!str_starts_with($template_name, 'customer_') || !is_array($languages)) {
+                continue;
+            }
+            foreach ($this->languages->additional() as $language => $config) {
+                $values = is_array($languages[$language] ?? null) ? wp_unslash($languages[$language]) : [];
+                $variant_id = $this->yaymail_variant_id($template_name, $language);
+                if (!$variant_id) {
+                    continue;
+                }
+                foreach (['subject', 'heading', 'additional_content'] as $property) {
+                    if (array_key_exists($property, $values)) {
+                        update_post_meta($variant_id, '_jamu_ml_' . $property, sanitize_textarea_field((string) $values[$property]));
+                    }
+                }
+            }
+        }
+    }
+
+    private function customer_email_by_id(string $email_id): ?object
+    {
+        if (!function_exists('WC') || !WC() || !method_exists(WC(), 'mailer')) {
+            return null;
+        }
+        foreach ((array) WC()->mailer()->get_emails() as $email) {
+            if (is_object($email) && isset($email->id) && (string) $email->id === $email_id) {
+                return $email;
+            }
+        }
+        return null;
     }
 
     private function order_language(object $order): string
