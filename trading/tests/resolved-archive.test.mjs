@@ -24,7 +24,8 @@ import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync, truncate
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-const STORAGE = readFileSync(new URL("../storage.php", import.meta.url), "utf8");
+const STORAGE = readFileSync(new URL("../storage.php", import.meta.url), "utf8")
+  .replace(/\r\n/g, "\n");
 
 function lift(name) {
   const start = STORAGE.indexOf(`function ${name}(`);

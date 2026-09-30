@@ -26,8 +26,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const WORKFLOW = readFileSync(
-  new URL("../../.github/workflows/trading-archive-resolved-observations.yml", import.meta.url), "utf8");
-const STORAGE = readFileSync(new URL("../storage.php", import.meta.url), "utf8");
+  new URL("../../.github/workflows/trading-archive-resolved-observations.yml", import.meta.url), "utf8")
+  .replace(/\r\n/g, "\n");
+const STORAGE = readFileSync(new URL("../storage.php", import.meta.url), "utf8")
+  .replace(/\r\n/g, "\n");
 
 // The archive step's script, dedented out of the YAML block exactly as bash receives it.
 function liftScript() {
@@ -169,8 +171,8 @@ test("the nightly run exists, and its fold check cannot be skipped after a delet
   // handles the rows that are already there. Around 4,500 fresh settlements were waiting on
   // the day this was written, and more arrive every day.
   const on = WORKFLOW.slice(0, WORKFLOW.indexOf("\njobs:"));
-  assert.match(on, /cron: "41 0 \* \* \*"/, "the archive runs nightly");
-  assert.ok(WORKFLOW.indexOf('cron: "41 0') > 0, "and before the 01:11 fold, so the archive is ready for it");
+  assert.match(on, /cron: "\*\/30 \* \* \* \*"/, "the archive runs every thirty minutes");
+  assert.ok(WORKFLOW.indexOf('cron: "*/30') > 0, "the archive is frequent enough to prevent resolved rows accumulating all day");
 
   // The gate exists so a night with nothing to archive does not re-fold tens of thousands of
   // cells for nothing. It must still fire when rows DID move, including when the run failed

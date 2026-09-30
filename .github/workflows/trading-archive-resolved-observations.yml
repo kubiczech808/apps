@@ -21,25 +21,20 @@ name: Archive Resolved Observations
 
 on:
   schedule:
-    # 00:41 UTC, half an hour before Fold Resolved Statistics at 01:11, so the settlements
-    # this moves out are already in the archive when the fold reads it. The owner asked for
-    # the rows "ktere budou teprve do datove strukture pribyvat" as well as the ones already
-    # there, and a one-off bulk run only handles the second half: roughly 4,500 fresh
-    # settlements were waiting on the day this was written, and they arrive every day.
-    #
-    # GitHub delivers a small fraction of scheduled runs, so this is best effort. Missing a
-    # night costs nothing: the next run takes the backlog, oldest first.
-    - cron: "41 0 * * *"
+    # Run every 30 minutes. Resolved rows are written by the workers throughout the day;
+    # a nightly-only archive allowed that table to grow until the next day. The operation is
+    # idempotent and concurrency-guarded, so a missed tick is simply caught up by the next.
+    - cron: "*/30 * * * *"
   workflow_dispatch:
     inputs:
       batches:
         description: "How many batches to run in this job"
         required: false
-        default: "5"
+        default: "12"
       limit:
         description: "Rows per batch"
         required: false
-        default: "2000"
+        default: "3000"
       keep_days:
         description: "Leave settled rows updated within this many days in place (0 = archive all)"
         required: false
@@ -60,8 +55,8 @@ jobs:
         id: archive
         env:
           TRADING_TRIGGER_KEY: ${{ secrets.POLYTRADING_DB_PASSWORD }}
-          BATCHES: ${{ github.event.inputs.batches || '5' }}
-          LIMIT: ${{ github.event.inputs.limit || '2000' }}
+          BATCHES: ${{ github.event.inputs.batches || '12' }}
+          LIMIT: ${{ github.event.inputs.limit || '3000' }}
           KEEP_DAYS: ${{ github.event.inputs.keep_days || '0' }}
         run: |
           python3 - <<'PY'
