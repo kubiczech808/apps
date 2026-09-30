@@ -6461,6 +6461,59 @@ function live_execution_record_was_submitted(array $record): bool
     return in_array($action, LIVE_EXECUTION_SUBMITTED_ACTIONS, true);
 }
 
+// Polymarket uses different spellings in the CLOB, Data API and activity feeds. Keep the
+// identity rule in one place: `id` is deliberately absent because it is an order/activity id,
+// not the outcome token that a portfolio owns.
+function live_row_token_id(array $row): string
+{
+    foreach (['tokenId', 'clobTokenId', 'assetId', 'asset_id', 'asset', 'token_id', 'tokenID'] as $field) {
+        $tokenId = trim((string) ($row[$field] ?? ''));
+        if ($tokenId !== '') {
+            return $tokenId;
+        }
+    }
+    return '';
+}
+
+function live_execution_record_ownership_entries(array $record): array
+{
+    $batchLog = is_array($record['batchLog'] ?? null) ? $record['batchLog'] : [];
+    $at = (string) ($record['runAt'] ?? $record['generatedAt'] ?? $batchLog['runAt'] ?? '');
+    $entries = [];
+    $remember = static function (array $row, ?string $action = null) use (&$entries, $at): void {
+        $normalizedAction = strtoupper(trim((string) ($action ?? $row['action'] ?? '')));
+        if (str_contains($normalizedAction, 'REJECT') || str_starts_with($normalizedAction, 'DRY_RUN')) {
+            return;
+        }
+        $tokenId = live_row_token_id($row);
+        if ($tokenId === '') {
+            return;
+        }
+        $price = $row['orderPrice'] ?? $row['price'] ?? $row['limitPrice'] ?? null;
+        $entries[] = [
+            'tokenId' => $tokenId,
+            'price' => is_numeric($price) ? round((float) $price, 6) : null,
+            'at' => $at,
+            'entryVolumeUsdc' => is_numeric($row['entryVolumeUsdc'] ?? null) ? (float) $row['entryVolumeUsdc'] : null,
+        ];
+    };
+    foreach ((array) ($record['attempts'] ?? []) as $attempt) {
+        if (is_array($attempt)) {
+            $remember($attempt);
+        }
+    }
+    // Old compact run rows recorded an accepted order only as `selected`, with no attempt
+    // array. They are still an executor statement that this portfolio submitted this token.
+    if (live_execution_record_was_submitted($record)) {
+        foreach ([$record['selected'] ?? null, $batchLog['selected'] ?? null] as $selected) {
+            if (is_array($selected)) {
+                $remember($selected, (string) ($record['action'] ?? $batchLog['action'] ?? ''));
+            }
+        }
+    }
+    return $entries;
+}
+
 function live_execution_record_token_ids(array $record): array
 {
     $ids = [];
@@ -6472,7 +6525,7 @@ function live_execution_record_token_ids(array $record): array
         if (!is_array($candidate)) {
             continue;
         }
-        $tokenId = trim((string) ($candidate['tokenId'] ?? $candidate['assetId'] ?? ''));
+        $tokenId = live_row_token_id($candidate);
         if ($tokenId !== '') {
             $ids[$tokenId] = true;
         }
@@ -6627,7 +6680,7 @@ function live_dip_entry_watch_payload(): array
             if (!is_array($row)) {
                 continue;
             }
-            $token = trim((string) ($row['tokenId'] ?? $row['assetId'] ?? ''));
+            $token = live_row_token_id($row);
             if ($token !== '') {
                 $heldTokens[$token] = true;
             }
@@ -7401,7 +7454,7 @@ function live_state_apply_portfolio_ownership(array $rows, array $ownership): ar
         if (!is_array($row)) {
             continue;
         }
-        $tokenId = trim((string) ($row['tokenId'] ?? $row['assetId'] ?? ''));
+        $tokenId = live_row_token_id($row);
         if ($tokenId === '' || !isset($ownerOf[$tokenId])) {
             continue;
         }
@@ -7433,7 +7486,7 @@ function live_state_with_exit_reasons(array $payload): array
         if (!is_array($position)) {
             continue;
         }
-        $tokenId = trim((string) ($position['tokenId'] ?? $position['assetId'] ?? ''));
+        $tokenId = live_row_token_id($position);
         $record = $tokenId === '' ? null : ($records[$tokenId] ?? null);
         if (!is_array($record)) {
             continue;
@@ -7591,7 +7644,7 @@ function live_entry_claim_account_state(string $tokenId): array
     $liveState = decode_state_file(state_file_paths()['live'] ?? '', false);
     $held = false;
     foreach ((array) ($liveState['positions'] ?? []) as $position) {
-        if (is_array($position) && trim((string) ($position['tokenId'] ?? $position['assetId'] ?? '')) === $tokenId) {
+        if (is_array($position) && live_row_token_id($position) === $tokenId) {
             $held = true;
             break;
         }
@@ -7605,7 +7658,7 @@ function live_entry_claim_account_state(string $tokenId): array
         if (str_contains(strtoupper((string) ($order['side'] ?? '')), 'SELL')) {
             continue;
         }
-        if (trim((string) ($order['tokenId'] ?? $order['assetId'] ?? '')) === $tokenId) {
+        if (live_row_token_id($order) === $tokenId) {
             $resting = true;
             break;
         }
@@ -9369,20 +9422,18 @@ try {
         $orders = [];
         $runCounts = [];
         $oldest = null;
-        $rememberOrder = static function (string $tokenId, ?float $price, string $mode, string $at, ?float $entryVolumeUsdc = null) use (&$orders, &$oldest): void {
+        $rememberOrder = static function (string $tokenId, ?float $price, string $mode, string $at, ?float $entryVolumeUsdc = null, string $source = 'run-log') use (&$orders, &$oldest): void {
             if ($tokenId === '') {
                 return;
             }
             if ($at !== '' && ($oldest === null || strcmp($at, $oldest) < 0)) {
                 $oldest = $at;
             }
-            $key = $tokenId . '@' . ($price === null ? '-' : (string) $price);
-            if (isset($orders[$key]) && strcmp((string) $orders[$key]['at'], $at) >= 0) {
-                // State-ledger rows are intentionally tiny in older releases. A matching
-                // run-log record may carry the entry volume; enrich without changing owner.
-                if (($orders[$key]['entryVolumeUsdc'] ?? null) === null && $entryVolumeUsdc !== null) {
-                    $orders[$key]['entryVolumeUsdc'] = $entryVolumeUsdc;
-                }
+            // Do not collapse a token that was traded more than once. A later re-entry can
+            // have the same price but belongs to a different portfolio; the synchronizer
+            // selects the newest proof that predates the account row being stamped.
+            $key = implode('@', [$tokenId, $price === null ? '-' : (string) $price, $mode, $at, $source]);
+            if (isset($orders[$key])) {
                 return;
             }
             $orders[$key] = [
@@ -9391,6 +9442,7 @@ try {
                 'mode' => $mode,
                 'at' => $at,
                 'entryVolumeUsdc' => $entryVolumeUsdc,
+                'source' => $source,
             ];
         };
         foreach ($targets as $mode => $target) {
@@ -9406,27 +9458,14 @@ try {
                 if ($at !== '' && ($oldest === null || strcmp($at, $oldest) < 0)) {
                     $oldest = $at;
                 }
-                foreach ((is_array($record['attempts'] ?? null) ? $record['attempts'] : []) as $attempt) {
-                    if (!is_array($attempt)) {
-                        continue;
-                    }
-                    // The same two exclusions the dashboard applies to a run log it reads
-                    // itself: a refused order and a dry run never owned anything.
-                    $attemptAction = strtoupper((string) ($attempt['action'] ?? ''));
-                    if (str_contains($attemptAction, 'REJECT') || str_starts_with($attemptAction, 'DRY_RUN')) {
-                        continue;
-                    }
-                    $tokenId = trim((string) ($attempt['tokenId'] ?? ''));
-                    if ($tokenId === '') {
-                        continue;
-                    }
-                    $price = is_numeric($attempt['orderPrice'] ?? null) ? round((float) $attempt['orderPrice'], 6) : null;
+                foreach (live_execution_record_ownership_entries($record) as $entry) {
                     $rememberOrder(
-                        $tokenId,
-                        $price,
+                        (string) $entry['tokenId'],
+                        is_numeric($entry['price'] ?? null) ? (float) $entry['price'] : null,
                         $mode,
-                        $at,
-                        is_numeric($attempt['entryVolumeUsdc'] ?? null) ? (float) $attempt['entryVolumeUsdc'] : null,
+                        (string) ($entry['at'] ?? $at),
+                        is_numeric($entry['entryVolumeUsdc'] ?? null) ? (float) $entry['entryVolumeUsdc'] : null,
+                        'stored-run-log',
                     );
                 }
             }
@@ -9445,11 +9484,12 @@ try {
                     continue;
                 }
                 $rememberOrder(
-                    trim((string) ($entry['tokenId'] ?? '')),
+                    live_row_token_id($entry),
                     is_numeric($entry['price'] ?? null) ? round((float) $entry['price'], 6) : null,
                     $mode,
                     (string) ($entry['at'] ?? $state['generatedAt'] ?? ''),
                     is_numeric($entry['entryVolumeUsdc'] ?? null) ? (float) $entry['entryVolumeUsdc'] : null,
+                    'execution-order-ownership',
                 );
             }
             foreach ((array) ($state['runLog'] ?? []) as $record) {
@@ -9457,23 +9497,62 @@ try {
                     continue;
                 }
                 $at = (string) ($record['runAt'] ?? $record['generatedAt'] ?? '');
-                foreach ((array) ($record['attempts'] ?? []) as $attempt) {
-                    if (!is_array($attempt)) {
-                        continue;
-                    }
-                    $attemptAction = strtoupper((string) ($attempt['action'] ?? ''));
-                    if (str_contains($attemptAction, 'REJECT') || str_starts_with($attemptAction, 'DRY_RUN')) {
-                        continue;
-                    }
+                foreach (live_execution_record_ownership_entries($record) as $entry) {
                     $rememberOrder(
-                        trim((string) ($attempt['tokenId'] ?? '')),
-                        is_numeric($attempt['orderPrice'] ?? null) ? round((float) $attempt['orderPrice'], 6) : null,
+                        (string) $entry['tokenId'],
+                        is_numeric($entry['price'] ?? null) ? (float) $entry['price'] : null,
                         $mode,
-                        $at,
-                        is_numeric($attempt['entryVolumeUsdc'] ?? null) ? (float) $attempt['entryVolumeUsdc'] : null,
+                        (string) ($entry['at'] ?? $at),
+                        is_numeric($entry['entryVolumeUsdc'] ?? null) ? (float) $entry['entryVolumeUsdc'] : null,
+                        'execution-run-log',
                     );
                 }
             }
+        }
+        // Direct DIP fills never pass through live-order-executor. Include their append-only
+        // ledger here as an equal source of ownership so account sync can stamp historical
+        // closed rows as well as the position that happens to be open right now.
+        foreach (live_dip_entry_ownership_records() as $entry) {
+            if (!is_array($entry)) {
+                continue;
+            }
+            $mode = trim((string) ($entry['portfolioId'] ?? ''));
+            if ($mode === '' || !isset($targets[$mode])) {
+                continue;
+            }
+            $rememberOrder(
+                live_row_token_id($entry),
+                is_numeric($entry['price'] ?? null) ? round((float) $entry['price'], 6) : null,
+                $mode,
+                (string) ($entry['at'] ?? ''),
+                is_numeric($entry['entryVolumeUsdc'] ?? null) ? (float) $entry['entryVolumeUsdc'] : null,
+                'dip-entry-ledger',
+            );
+        }
+
+        // A confirmed claim is a recovery path for the brief window where a worker fill
+        // succeeded but its ownership-ledger POST did not. It deliberately has no price,
+        // so the synchronizer will use it only for account rows that have one unambiguous
+        // matching ownership record.
+        $entryClaims = decode_state_file(live_entry_claim_path(), false);
+        foreach ((array) ($entryClaims['claims'] ?? []) as $entry) {
+            if (!is_array($entry)
+                || strtolower(trim((string) ($entry['entryKind'] ?? ''))) !== 'dip-entry'
+                || strtolower(trim((string) ($entry['status'] ?? ''))) !== 'accepted') {
+                continue;
+            }
+            $mode = trim((string) ($entry['portfolioId'] ?? ''));
+            if ($mode === '' || !isset($targets[$mode])) {
+                continue;
+            }
+            $rememberOrder(
+                live_row_token_id($entry),
+                null,
+                $mode,
+                (string) ($entry['acceptedAt'] ?? $entry['claimedAt'] ?? ''),
+                null,
+                'live-entry-claim',
+            );
         }
         respond([
             'ok' => true,

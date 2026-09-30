@@ -7659,16 +7659,16 @@ function renderPortfolioOverview() {
     if (isLivePortfolioMode(mode)) {
       // Equity and Free are the wallet's and are the same on every live row, which the
       // shared-account note on the row states. "In positions" and "In orders" are not:
-      // they are what THIS portfolio is holding. Reading marketValueUsdc and the whole
+      // they are what THIS portfolio has committed. Reading marketValueUsdc and the whole
       // wallet's resting buys put the account's two totals on all five rows, beside tables
       // listing only that portfolio's own positions and orders.
       const ownPositions = state.liveState ? livePositions(state.liveState, mode) : [];
       const ownOrders = state.liveState ? liveOpenOrders(state.liveState, mode) : [];
-      const marked = (row) => {
-        const value = Number(row?.marketValueUsdc ?? row?.currentValueUsdc);
+      const committed = (row) => {
+        const value = Number(row?.totalCostUsdc ?? row?.stakeUsdc ?? row?.maxLossUsdc);
         if (Number.isFinite(value)) return value;
-        const price = Number(row?.currentPrice ?? row?.marketPrice);
-        const shares = Number(row?.shares ?? row?.size);
+        const price = Number(row?.entryPrice ?? row?.avgPrice ?? row?.averagePrice);
+        const shares = Number(row?.shares ?? row?.sharesBought ?? row?.size);
         return Number.isFinite(price) && Number.isFinite(shares) ? price * shares : 0;
       };
       return {
@@ -7679,7 +7679,7 @@ function renderPortfolioOverview() {
         // is a fact, not a per-portfolio one. A portfolio's own result is the ROI column
         // beside it, and its own original value is derived from the two on its card.
         equity: live ? Number(live.equityUsdc) : null,
-        positions: state.liveState ? ownPositions.reduce((sum, row) => sum + marked(row), 0) : null,
+        positions: state.liveState ? ownPositions.reduce((sum, row) => sum + committed(row), 0) : null,
         orders: state.liveState ? reservedByOpenOrders(ownOrders) : null,
         free: live ? Number(live.cashUsdc) : null,
         roi: portfolioRealizedRoiForMode(mode),
@@ -7733,7 +7733,7 @@ function renderPortfolioOverview() {
   els.portfolioOverview.innerHTML = `
     <table class="portfolio-summary">
       <thead>
-        <tr><th>Portfolio</th><th>Equity</th><th title="Realized P/L as a share of what the closed trades cost. Open positions are excluded from both halves, so this is what came back on money that has completed a round trip. Click to rank every portfolio by it."><div class="th-content"><button class="sort-button${state.portfolioOverviewSort ? " active" : ""}" type="button" data-overview-sort="roi">ROI${state.portfolioOverviewSort ? sortDirectionIndicator(state.portfolioOverviewSort.direction) : ""}</button></div></th><th title="Capital in filled positions: exposure that moves with the market.">In positions</th><th title="Capital reserved by resting orders that have not filled. Not exposure -- an unfilled order is discarded intact when the event ends.">In orders</th><th>Free</th></tr>
+        <tr><th>Portfolio</th><th>Equity</th><th title="Realized P/L as a share of what the closed trades cost. Open positions are excluded from both halves, so this is what came back on money that has completed a round trip. Click to rank every portfolio by it."><div class="th-content"><button class="sort-button${state.portfolioOverviewSort ? " active" : ""}" type="button" data-overview-sort="roi">ROI${state.portfolioOverviewSort ? sortDirectionIndicator(state.portfolioOverviewSort.direction) : ""}</button></div></th><th title="Capital originally committed to filled positions. It stays visible even if a current market value is close to zero.">In positions</th><th title="Capital reserved by resting orders that have not filled. Not exposure -- an unfilled order is discarded intact when the event ends.">In orders</th><th>Free</th></tr>
       </thead>
       <tbody>
         ${rows.map((row) => `

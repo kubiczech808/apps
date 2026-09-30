@@ -2220,6 +2220,7 @@ async function liveOrderOwnership() {
         price: number(row?.price),
         at: String(row?.at || ""),
         entryVolumeUsdc: number(row?.entryVolumeUsdc),
+        source: String(row?.source || ""),
       });
     }
     return byToken;
@@ -2233,25 +2234,64 @@ async function liveOrderOwnership() {
 function stampPortfolioOwnership(rows, ownership) {
   if (!(ownership instanceof Map) || !ownership.size) return Array.isArray(rows) ? rows : [];
   return (Array.isArray(rows) ? rows : []).map((row) => {
-    const tokenId = String(row?.tokenId || row?.assetId || "");
+    const tokenId = String(
+      row?.tokenId
+      || row?.clobTokenId
+      || row?.assetId
+      || row?.asset_id
+      || row?.asset
+      || row?.token_id
+      || "",
+    );
     const orders = tokenId ? ownership.get(tokenId) : null;
     if (!orders?.length) return row;
-    const paid = number(row?.entryPrice ?? row?.avgPrice);
+    const paid = number(row?.entryPrice ?? row?.avgPrice ?? row?.averagePrice);
     // An unknown buy price leaves an unknown owner rather than a guessed one -- the same
     // rule the dashboard applies, and the reason this is a record and not an inference.
     if (paid == null) return row;
-    const matched = orders.filter((order) => order.price != null
+    const priceMatched = orders.filter((order) => order.price != null
       && Math.abs(paid - order.price) < OWNERSHIP_PRICE_TOLERANCE);
+    // A confirmed direct-DIP claim can recover the exceptional case where the worker
+    // filled but timed out before it recorded a price. It is only usable when it is the
+    // sole ownership record for that token; anything broader would be a guess.
+    const matched = priceMatched.length
+      ? priceMatched
+      : (orders.length === 1 && orders[0]?.price == null ? orders : []);
     if (!matched.length) return row;
-    // The newest order for a token wins, so a market re-entered after another portfolio
-    // closed out belongs to whoever ordered it last.
-    const owner = matched.sort((left, right) => (Date.parse(right.at || "") || 0) - (Date.parse(left.at || "") || 0))[0];
+    const openedAt = Date.parse(String(
+      row?.openedAt
+      ?? row?.openedDate
+      ?? row?.orderCreatedAt
+      ?? row?.openTime
+      ?? row?.createdAt
+      ?? "",
+    ));
+    const openedAtMs = Number.isFinite(openedAt) ? openedAt : null;
+    const dated = matched.map((order) => ({
+      ...order,
+      atMs: Date.parse(order.at || ""),
+    }));
+    const preceding = openedAtMs == null
+      ? []
+      : dated.filter((order) => Number.isFinite(order.atMs) && order.atMs <= openedAtMs + (10 * 60 * 1000));
+    // A token may be bought again at the same price. An order placed after this account
+    // row cannot own it, even if it is newer. If timing cannot distinguish several orders,
+    // leave the row unpaired rather than assigning its realized P/L to the wrong strategy.
+    const candidates = preceding.length ? preceding : (matched.length === 1 ? dated : []);
+    if (!candidates.length) return row;
+    const owner = candidates.sort((left, right) => right.atMs - left.atMs)[0];
     if (!owner?.mode) return row;
+    const existingOwner = String(row?.portfolioId || "");
+    const existingSource = String(row?.portfolioOwnershipSource || "");
+    const canReplaceExistingOwner = !existingOwner || (existingOwner === "live" && !existingSource);
     return {
       ...row,
-      // An existing owner is immutable; the match may still enrich an older row with
-      // its entry-volume snapshot without allowing a thin later lookup to reassign it.
-      portfolioId: row.portfolioId || owner.mode,
+      // Old account snapshots defaulted absent ownership to base Live. That placeholder is
+      // not evidence, so a dated executor or DIP record may repair it; every explicitly
+      // stamped owner remains immutable.
+      portfolioId: canReplaceExistingOwner ? owner.mode : existingOwner,
+      portfolioOwnershipAt: row.portfolioOwnershipAt || owner.at || null,
+      portfolioOwnershipSource: row.portfolioOwnershipSource || owner.source || null,
       // Preserve the first revalidated traded-volume snapshot as an entry fact. Never
       // replace a stored value with a later market volume or an unavailable lookup.
       entryVolumeUsdc: row.entryVolumeUsdc ?? owner.entryVolumeUsdc ?? null,
@@ -3216,6 +3256,7 @@ export {
   normalizeTradeHistoryItem,
   closedTradesFromHistory,
   mergeClosedTradeHistory,
+  stampPortfolioOwnership,
   openOrderIdentityKeys,
   vanishedOpenOrders,
   unfilledLimitOrderHistory,
