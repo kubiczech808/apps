@@ -18,7 +18,20 @@ add_action('wp_loaded', static function (): void {
 
     nocache_headers();
     header('Content-Type: application/json; charset=UTF-8');
-    register_shutdown_function(static function (): void {
+    $completed = false;
+    register_shutdown_function(static function () use (&$completed): void {
+        if (!$completed && !headers_sent()) {
+            $error = error_get_last();
+            http_response_code(500);
+            header('Content-Type: application/json; charset=UTF-8');
+            echo wp_json_encode([
+                'audit_error' => [
+                    'type' => is_array($error) ? (int) ($error['type'] ?? 0) : 0,
+                    'file' => is_array($error) ? basename((string) ($error['file'] ?? '')) : '',
+                    'line' => is_array($error) ? (int) ($error['line'] ?? 0) : 0,
+                ],
+            ]);
+        }
         @unlink(__FILE__);
     });
 
@@ -325,6 +338,7 @@ add_action('wp_loaded', static function (): void {
         }
     }
 
+    $completed = true;
     echo wp_json_encode([
         'schema' => 1,
         'generated_at' => gmdate('c'),

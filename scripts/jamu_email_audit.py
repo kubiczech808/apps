@@ -57,8 +57,20 @@ def main() -> int:
             headers={'X-JAMU-Email-Audit': token, 'Cache-Control': 'no-cache', 'User-Agent': 'JAMU email audit/1.0'},
             timeout=120,
         )
-        response.raise_for_status()
-        audit = response.json()
+        # The ephemeral bridge returns a deliberately sanitized JSON error
+        # record on a fatal. Persist it so an audit workflow remains useful
+        # even when a new non-sending probe cannot render a template.
+        try:
+            audit = response.json()
+        except ValueError:
+            audit = {
+                'audit_error': {
+                    'http_status': response.status_code,
+                    'non_json_response': True,
+                },
+            }
+        if not response.ok:
+            audit.setdefault('audit_error', {})['http_status'] = response.status_code
         output = Path('jamu-content/email-delivery-audit.json')
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_text(json.dumps(audit, ensure_ascii=False, indent=2), encoding='utf-8')
