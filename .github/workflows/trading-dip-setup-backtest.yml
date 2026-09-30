@@ -41,6 +41,11 @@ on:
         required: false
         default: ""
         type: string
+      grid:
+        description: "Also print the grid: opening bands 60-99..85-99 x buy bands 40-50..60-70, ranked"
+        required: false
+        default: "false"
+        type: string
 
 permissions:
   contents: read
@@ -65,4 +70,5 @@ jobs:
           DIP_SETUP_BUY_MIN: ${{ inputs.buy_min }}
           DIP_SETUP_BUY_MAX: ${{ inputs.buy_max }}
           DIP_SETUP_EXCLUDED_SHAPES: ${{ inputs.excluded_shapes }}
+          DIP_SETUP_GRID: ${{ inputs.grid }}
         run: node tools/dip-setup-backtest.mjs

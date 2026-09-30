@@ -23,7 +23,8 @@
 //     market that gapped below the band and later climbed back into it is not counted.
 //   * Prices come from CLOB price history, not from the order book the live worker reads.
 //     Nothing here proves a fill.
-//   * The cache only priced markets that opened at 70-99%.
+//   * The cache only prices markets that opened at 60-99% (70-99% before 2026-09-30; rows
+//     from then are re-simulated as their tag re-runs, and the grid says how many are left).
 
 import { BUY_CEILINGS, cacheRows } from "./dip-combination-sweep.mjs";
 import { MARKET_SHAPE_IDS, marketShape } from "./paper-trading-bot.mjs";
@@ -189,6 +190,141 @@ export function slugPrefix(row) {
   return head || "(no slug)";
 }
 
+// ---------------------------------------------------------------------------------------
+// The grid. Asked for: "udelas vice tabulek pro to kdyz budu mit vstupni range 70-99 posunuty
+// treba na 65-99 apod. a nakupni taky treba jen na 50-60, apod. hledame lepsi kombinaci
+// parametru portfolia nez je ta soucasna."
+//
+// Each cell uses the portfolio's own rule (its excluded shapes and its stake) and swaps only
+// the opening band and the buy band. Each is computed by setupTrades(), the function the
+// single-rule report uses, so the cell with the current settings reproduces that report.
+//
+// Reading the ranking: with eighty cells over a few dozen markets, the top cell looks good
+// partly by chance. Pick the best of eighty fair coins and it will have won most of its
+// flips. So every row also prints the lower edge of the 95% interval on the edge. A cell is
+// worth moving to only where that edge holds up and its neighbours agree.
+export const GRID_OPEN_BANDS = [
+  [0.6, 0.99], [0.65, 0.99], [0.7, 0.99], [0.75, 0.99], [0.8, 0.99], [0.85, 0.99],
+  [0.65, 0.9], [0.7, 0.9],
+];
+export const GRID_BUY_BANDS = [
+  [0.4, 0.5], [0.45, 0.5], [0.4, 0.56], [0.45, 0.56], [0.5, 0.56],
+  [0.45, 0.6], [0.5, 0.6], [0.55, 0.6], [0.55, 0.65], [0.6, 0.7],
+];
+// The highest opening the cache priced; a rule's 99.9% ceiling reads as this.
+const CACHE_OPEN_CEILING = 0.99;
+
+// "60-99,0.65-0.9" -> [[0.6, 0.99], [0.65, 0.9]]. Percentages or fractions; an entry that is
+// not a band (junk, reversed, outside 0-1) is dropped rather than guessed at.
+export function parseBands(text, fallback) {
+  const bands = String(text || "").split(",").map((part) => part.trim()).filter(Boolean).map((part) => {
+    const [low, high] = part.split("-").map((value) => probability(value));
+    return low != null && high != null && low >= 0 && high <= 1 && low < high ? [low, high] : null;
+  }).filter(Boolean);
+  return bands.length ? bands : fallback;
+}
+
+const sameBand = (left, right) => Math.abs(left[0] - right[0]) < 1e-6 && Math.abs(left[1] - right[1]) < 1e-6;
+
+// Rows whose opening sits in the band but that were never simulated there: the cache ran under
+// a narrower opening band, so they have a usable opening and no entries. A cell that silently
+// counted them as "no dip" would read as a rule that rarely fires.
+export function unsimulatedRows(rows, [openMin, openMax]) {
+  return rows.filter((row) => {
+    const opening = num(row?.openingPrice);
+    return opening != null && opening + 1e-9 >= openMin && opening - 1e-9 <= openMax && row.openingInBand !== true;
+  }).length;
+}
+
+export function gridCells(rows, rule, openBands = GRID_OPEN_BANDS, buyBands = GRID_BUY_BANDS) {
+  const currentOpen = [rule.openMin, Math.min(rule.openMax, CACHE_OPEN_CEILING)];
+  const currentBuy = [rule.buyMin, rule.buyMax];
+  const cells = [];
+  for (const open of openBands) {
+    for (const buy of buyBands) {
+      const trades = setupTrades(rows, { ...rule, openMin: open[0], openMax: open[1], buyMin: buy[0], buyMax: buy[1] });
+      cells.push({
+        open,
+        buy,
+        trades,
+        clean: trades.filter(({ entry }) => !nearHalf(entry.entryPrice)),
+        current: sameBand(open, currentOpen) && sameBand(buy, currentBuy),
+      });
+    }
+  }
+  return cells;
+}
+
+const bandLabel = ([low, high]) => `${Math.round(low * 100)}-${Math.round(high * 100)}%`;
+
+// The lower edge of the 95% interval on the edge: the worst win rate the data still allows,
+// minus the price paid. Above zero, the cell beat a fairly priced coin even at that edge.
+function edgeLow(stats) {
+  return stats.trades && stats.meanPricePct != null ? stats.winPctLow - stats.meanPricePct : null;
+}
+
+function gridHeader() {
+  return `      ${"buy band".padEnd(12)} ${"n".padStart(4)} ${"/month".padStart(6)}  ${"win%".padStart(5)} ${"[95% CI]".padEnd(9)}`
+    + ` ${"price%".padStart(6)} ${"edge".padStart(6)} ${"edge lo".padStart(7)} ${"P/L".padStart(8)} ${"ROI%".padStart(6)}`
+    + `  |  ${"clean n".padStart(7)} ${"P/L".padStart(8)} ${"ROI%".padStart(6)}`;
+}
+
+function gridLine(cell, stake, days) {
+  const all = setupStats(cell.trades, stake);
+  const clean = setupStats(cell.clean, stake);
+  const perMonth = days ? (all.trades / days) * 30 : null;
+  const ci = all.trades ? `[${f(all.winPctLow, 0, 3)}-${f(all.winPctHigh, 0, 3)}]` : "";
+  return `      ${`${bandLabel(cell.buy)}${cell.current ? " *" : ""}`.padEnd(12)} ${String(all.trades).padStart(4)}`
+    + ` ${f(perMonth, 1, 6)}  ${f(all.winPct, 1, 5)} ${ci.padEnd(9)} ${f(all.meanPricePct)} ${f(all.edgePoints)}`
+    + ` ${f(edgeLow(all), 1, 7)} ${f(all.pnlUsdc, 2, 8)} ${f(all.roiPct, 1, 6)}`
+    + `  |  ${String(clean.trades).padStart(7)} ${f(clean.pnlUsdc, 2, 8)} ${f(clean.roiPct, 1, 6)}`;
+}
+
+// The grid for one tag: a table per opening band, then the cells ranked by P/L without the
+// ~0.50 prints. Returns the ranked cells for the cross-tag summary.
+export function printGrid(tag, rows, rule, { stake = CACHE_STAKE_USDC, openBands = GRID_OPEN_BANDS, buyBands = GRID_BUY_BANDS, minTrades = 10 } = {}) {
+  const cells = gridCells(rows, rule, openBands, buyBands);
+  const days = spanDays(cells.flatMap((cell) => cell.trades));
+  console.log(`\n=== ${tag}: grid -- opening band x buy band, excluded shapes [${rule.excludedShapes.join(", ")}], stake ${stake} USDC ===`);
+  console.log("   * = the portfolio's current setting. clean = without entries priced 0.495-0.51.");
+  for (const open of openBands) {
+    const inBand = rows.filter((row) => {
+      const opening = num(row?.openingPrice);
+      return opening != null && opening + 1e-9 >= open[0] && opening - 1e-9 <= open[1];
+    }).length;
+    const missing = unsimulatedRows(rows, open);
+    console.log(`\n   opening ${bandLabel(open)}   ${inBand} market(s) opened in this band`
+      + (missing ? `   !! ${missing} of them NOT simulated yet -- this table undercounts until the tag re-runs` : ""));
+    console.log(gridHeader());
+    for (const cell of cells.filter((item) => sameBand(item.open, open))) console.log(gridLine(cell, stake, days));
+  }
+  const ranked = cells
+    .map((cell) => ({ cell, all: setupStats(cell.trades, stake), clean: setupStats(cell.clean, stake) }))
+    .filter(({ clean }) => clean.trades >= minTrades)
+    .sort((left, right) => right.clean.pnlUsdc - left.clean.pnlUsdc);
+  console.log(`\n   -- ${tag}: cells ranked by P/L without the ~0.50 prints (${minTrades}+ such trades)`);
+  console.log(`   ${"#".padStart(3)} ${"opening".padEnd(9)} ${"buy".padEnd(9)} ${"clean n".padStart(7)}  ${"win%".padStart(5)} ${"[95% CI]".padEnd(9)}`
+    + ` ${"price%".padStart(6)} ${"edge lo".padStart(7)} ${"P/L".padStart(8)} ${"ROI%".padStart(6)}`);
+  const rankLine = ({ cell, clean }, place) => {
+    const ci = `[${f(clean.winPctLow, 0, 3)}-${f(clean.winPctHigh, 0, 3)}]`;
+    console.log(`   ${`#${place}`.padStart(3)} ${bandLabel(cell.open).padEnd(9)} ${bandLabel(cell.buy).padEnd(9)} ${String(clean.trades).padStart(7)}`
+      + `  ${f(clean.winPct, 1, 5)} ${ci.padEnd(9)} ${f(clean.meanPricePct)} ${f(edgeLow(clean), 1, 7)}`
+      + ` ${f(clean.pnlUsdc, 2, 8)} ${f(clean.roiPct, 1, 6)}${cell.current ? "   <- current" : ""}`);
+  };
+  ranked.slice(0, 12).forEach((item, index) => rankLine(item, index + 1));
+  // Where the current setting stands, even when it is not near the top.
+  const currentPlace = ranked.findIndex(({ cell }) => cell.current);
+  if (currentPlace >= 12) {
+    console.log("       ...");
+    rankLine(ranked[currentPlace], currentPlace + 1);
+  } else if (currentPlace < 0 && cells.some((cell) => cell.current)) {
+    console.log(`       current setting: fewer than ${minTrades} trades without the ~0.50 prints, not ranked`);
+  }
+  if (ranked.length) console.log(`       ${ranked.length} cell(s) ranked`);
+  if (!ranked.length) console.log(`      no cell has ${minTrades}+ trades without the ~0.50 prints`);
+  return { tag, cells, ranked, days };
+}
+
 function spanDays(trades) {
   const times = trades.map(({ row }) => Date.parse(String(row?.resolvedAt || ""))).filter(Number.isFinite);
   if (times.length < 2) return null;
@@ -270,6 +406,7 @@ async function main() {
 
   const stake = rule.stakeUsdc ?? CACHE_STAKE_USDC;
   const summary = [];
+  const loaded = new Map();
   for (const tag of tags) {
     const rows = await loadRows(tag);
     console.log(`\n=== ${tag} ===`);
@@ -277,6 +414,7 @@ async function main() {
       console.log("   no published cache");
       continue;
     }
+    loaded.set(tag, rows);
     const versions = new Map();
     for (const row of rows) versions.set(ruleVersion(row), (versions.get(ruleVersion(row)) || 0) + 1);
     const hourlyRows = [...versions].filter(([version]) => !(version >= MINUTE_IN_PLAY_VERSION)).reduce((sum, [, n]) => sum + n, 0);
@@ -331,6 +469,31 @@ async function main() {
   }
   console.log("\n   clean = without entries priced", `${NEAR_HALF[0]}-${NEAR_HALF[1]}.`,
     "price% is the mean entry price; edge is win% minus it.");
+
+  if (!/^(1|true|yes|on)$/i.test(String(process.env.DIP_SETUP_GRID || "").trim())) return;
+  const openBands = parseBands(process.env.DIP_SETUP_GRID_OPEN, GRID_OPEN_BANDS);
+  const buyBands = parseBands(process.env.DIP_SETUP_GRID_BUY, GRID_BUY_BANDS);
+  const minTrades = Math.max(1, Number(process.env.DIP_SETUP_GRID_MIN_TRADES) || 10);
+  const grids = [];
+  for (const [tag, rows] of loaded) grids.push(printGrid(tag, rows, rule, { stake, openBands, buyBands, minTrades }));
+
+  // Last, so a log read from the end starts with the answer.
+  console.log(`\n\n=== grid summary: the current setting beside the best cell per tag (by P/L without the ~0.50 prints, ${minTrades}+ trades) ===`);
+  console.log(`   ${"tag".padEnd(18)} ${"current".padEnd(17)} ${"n".padStart(4)} ${"P/L".padStart(8)} ${"ROI%".padStart(6)}   |  `
+    + `${"best".padEnd(17)} ${"n".padStart(4)} ${"win%".padStart(5)} ${"edge lo".padStart(7)} ${"P/L".padStart(8)} ${"ROI%".padStart(6)}`);
+  for (const { tag, cells, ranked } of grids) {
+    const current = cells.find((cell) => cell.current);
+    const now = current ? setupStats(current.clean, stake) : null;
+    const best = ranked[0];
+    const nowText = current
+      ? `${`${bandLabel(current.open)} ${bandLabel(current.buy)}`.padEnd(17)} ${String(now.trades).padStart(4)} ${f(now.pnlUsdc, 2, 8)} ${f(now.roiPct, 1, 6)}`
+      : `${"(not in grid)".padEnd(17)} ${"".padStart(4)} ${"".padStart(8)} ${"".padStart(6)}`;
+    const bestText = best
+      ? `${`${bandLabel(best.cell.open)} ${bandLabel(best.cell.buy)}`.padEnd(17)} ${String(best.clean.trades).padStart(4)}`
+        + ` ${f(best.clean.winPct, 1, 5)} ${f(edgeLow(best.clean), 1, 7)} ${f(best.clean.pnlUsdc, 2, 8)} ${f(best.clean.roiPct, 1, 6)}`
+      : `no cell with ${minTrades}+ trades`;
+    console.log(`   ${tag.padEnd(18)} ${nowText}   |  ${bestText}`);
+  }
 }
 
 if (process.argv[1] && import.meta.url === `file://${process.argv[1]}`) {

@@ -11,8 +11,13 @@ const TAG = String(process.env.DIP_BACKTEST_TAG || "esports").trim().toLowerCase
 const MAX_MARKETS = clampInt(process.env.DIP_BACKTEST_MAX_MARKETS, 600, 25, 1500);
 const CONCURRENCY = clampInt(process.env.DIP_BACKTEST_CONCURRENCY, 4, 1, 8);
 const STAKE_USDC = 5;
-const OPENING_MIN = 0.7;
+// Entries are simulated for every market that opened at 60-99%, so a grid can ask what a
+// 65-99 or 60-99 opening band would have done. Asked for: "kdyz budu mit vstupni range 70-99
+// posunuty treba na 65-99". The published report still describes 70+ (REPORT_OPENING_MIN),
+// so the dashboard table keeps meaning what it always meant.
+const OPENING_MIN = 0.6;
 const OPENING_MAX = 0.99;
+const REPORT_OPENING_MIN = 0.7;
 const OPENING_WINDOW_SECONDS = 90 * 60;
 // Widened from a 30-60% ceiling to 30-80%: asked for a buy grid running "od 45-50 az po
 // 75-80", and a favourite that opened at 90%+ can sit at 75-80% without having fallen far at
@@ -137,6 +142,19 @@ function sourceFingerprint(row) {
     row?.marketCreatedAt, row?.createdAt, row?.eventStartTime, row?.scheduledEventDate,
     row?.firstFeeRate, row?.feeRate, row?.feesEnabled,
   ]);
+}
+
+// Does this market have to be (re)simulated? Besides a new or changed source row and a failed
+// attempt: a row simulated under a NARROWER opening band. It is complete and has a usable
+// opening the current band admits, but no entries, because the band it was run under refused
+// it. Only those rows re-run when the band widens. Re-running every row (a rule-version bump)
+// would re-fetch thousands of markets whose entries cannot change.
+export function needsSimulation(row, stored) {
+  if (!stored || stored.status === "error") return true;
+  if (stored.fingerprint !== sourceFingerprint(row)) return true;
+  const opening = number(stored.openingPrice);
+  return stored.status === "complete" && stored.usableOpening === true && stored.openingInBand !== true
+    && opening != null && opening >= OPENING_MIN && opening <= OPENING_MAX;
 }
 
 function normalizedHistory(payload) {
@@ -315,12 +333,15 @@ async function fetchMarketHistory(row) {
   return [...deduplicated.values()];
 }
 
-function reportFromCache(sourceRows, cache, processedThisRun) {
+export function reportFromCache(sourceRows, cache, processedThisRun) {
   const rows = sourceRows.map((row) => cache.markets[sourceToken(row)]).filter(Boolean);
   const complete = rows.filter((row) => row.status === "complete");
   const usableOpening = complete.filter((row) => row.usableOpening);
   const creationVerified = usableOpening.filter((row) => row.verifiedOpening);
-  const openingBand = usableOpening.filter((row) => row.openingInBand);
+  // 70+ only: rows simulated for the 60-70 openings exist for the setup grid, not for this
+  // report, whose table the dashboard labels as the 70-99% opening rule.
+  const openingBand = usableOpening.filter((row) => row.openingInBand
+    && number(row.openingPrice, 0) >= REPORT_OPENING_MIN - 1e-9);
   const outcomes = ENTRY_LEVELS.map((level) => {
     const entries = openingBand.map((row) => row.entries?.[String(level)]).filter(Boolean);
     const wins = entries.filter((entry) => entry.outcome === "WIN").length;
@@ -340,10 +361,7 @@ function reportFromCache(sourceRows, cache, processedThisRun) {
       roiPct: invested > 0 ? round((pnl / invested) * 100, 2) : null,
     };
   });
-  const pending = sourceRows.filter((row) => {
-    const stored = cache.markets[sourceToken(row)];
-    return !stored || stored.fingerprint !== sourceFingerprint(row) || stored.status === "error";
-  }).length;
+  const pending = sourceRows.filter((row) => needsSimulation(row, cache.markets[sourceToken(row)])).length;
   const details = openingBand
     .sort((left, right) => (number(right.maxInPlayDrawdownPct, -1) || -1) - (number(left.maxInPlayDrawdownPct, -1) || -1))
     .slice(0, 600);
@@ -354,8 +372,9 @@ function reportFromCache(sourceRows, cache, processedThisRun) {
     tag: TAG,
     stakeUsdc: STAKE_USDC,
     openingRule: {
-      probabilityMin: 70,
+      probabilityMin: Math.round(REPORT_OPENING_MIN * 100),
       probabilityMax: 99,
+      simulatedProbabilityMin: Math.round(OPENING_MIN * 100),
       maximumDelayMinutes: 90,
       description: "Uses a CLOB quote within 90 minutes of creation when creation time is recorded; otherwise the earliest available quote in the 14-day window before event start.",
     },
@@ -413,10 +432,8 @@ async function main() {
     updatedAt: new Date().toISOString(),
     markets: previous?.tag === TAG && previous?.markets && typeof previous.markets === "object" ? previous.markets : {},
   };
-  const pending = sourceRows.filter((row) => {
-    const stored = cache.markets[sourceToken(row)];
-    return !stored || stored.fingerprint !== sourceFingerprint(row) || stored.status === "error";
-  }).slice(0, MAX_MARKETS);
+  const pending = sourceRows.filter((row) => needsSimulation(row, cache.markets[sourceToken(row)]))
+    .slice(0, MAX_MARKETS);
   let completed = 0;
   await runPool(pending, async (row) => {
     const tokenId = sourceToken(row);
