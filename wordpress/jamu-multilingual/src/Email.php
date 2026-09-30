@@ -373,12 +373,10 @@ final class Email
         $this->context_depth = 1;
         $this->languages->set_current($language);
 
-        if (function_exists('switch_to_locale')) {
-            $locale = (string) ($this->languages->get($language)['locale'] ?? '');
-            if ($locale !== '') {
-                $this->locale_switched = (bool) switch_to_locale($locale);
-            }
-        }
+        // YayMail 4.4.6 can render an empty body after WordPress switches its
+        // locale mid-render. The language context above is sufficient for our
+        // localized customer copy; keep the process locale stable so YayMail
+        // can load its canonical visual template.
     }
 
     public function restore_email_context(): void
