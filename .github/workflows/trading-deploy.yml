@@ -7,6 +7,14 @@ on:
       - 'trading/**'
       - '.github/workflows/trading-deploy.yml'
 
+# One deploy at a time, whichever branch it comes from: they all write the same /www/trading.
+# On 2026-09-30 one push started two runs at once. Both staged api.php under one name, and
+# between them they deleted it: 404 until the next deploy (see tools/deploy-publish.py). A run
+# that arrives while another is deploying now waits instead of racing it.
+concurrency:
+  group: trading-deploy
+  cancel-in-progress: false
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
@@ -139,6 +147,13 @@ jobs:
           _cleanup = importlib.util.module_from_spec(_cleanup_spec)
           _cleanup_spec.loader.exec_module(_cleanup)
           stale_entries = _cleanup.stale_entries
+
+          # The rename over the live file, loaded the same way and for the same reason.
+          _publish_spec = importlib.util.spec_from_file_location(
+              "deploy_publish", pathlib.Path("trading/tools/deploy-publish.py"))
+          _publish = importlib.util.module_from_spec(_publish_spec)
+          _publish_spec.loader.exec_module(_publish)
+          publish_staged = _publish.publish_staged
 
           def list_names(ftp):
               try:
@@ -328,17 +343,12 @@ jobs:
                           f"{relative}: uploaded {uploaded} bytes of {expected}. "
                           "Refusing to publish a truncated file; the live copy is untouched."
                       )
-                  try:
-                      ftp.rename(staged, path.name)
-                  except ftplib.all_errors:
-                      # Some servers refuse RNTO onto an existing path. Deleting first leaves
-                      # a sub-second window where the file is absent, which serves a 404 --
-                      # recoverable, and far better than serving a half-parsed PHP file.
-                      try:
-                          ftp.delete(path.name)
-                      except ftplib.all_errors:
-                          pass
-                      ftp.rename(staged, path.name)
+                  # Some servers refuse RNTO onto an existing path. publish_staged then
+                  # deletes and renames again, which leaves a sub-second 404: recoverable,
+                  # and far better than a half-parsed PHP file. It deletes only while the
+                  # staged copy is still there. Without that check, two deploys running at
+                  # once deleted api.php on 2026-09-30.
+                  publish_staged(ftp, staged, path.name, list_names)
 
               enter_dir(ftp, target_parts)
               published = list_names(ftp)
