@@ -425,6 +425,55 @@ function trading_storage_trade_keys_for(string $account, string $portfolioId): a
 }
 
 /**
+ * Durable live ownership evidence for the account synchronizer.
+ *
+ * Run logs are intentionally rolling and are archived for storage control. They cannot be
+ * the only source for assigning an old resolved trade to a live portfolio: once its run is
+ * outside that window the UI would move the trade to base Live or hide it from a custom
+ * portfolio. trading_trades is the append/update ledger and keeps the portfolio id on the
+ * round trip, so expose only the small indexed ownership columns rather than decoding every
+ * payload blob.
+ */
+function trading_storage_live_trade_ownership(int $limit = 20000): array
+{
+    $pdo = trading_storage_pdo();
+    if (!$pdo instanceof PDO) {
+        return [];
+    }
+    trading_storage_bootstrap($pdo);
+    $limit = max(1, min(50000, $limit));
+    $statement = $pdo->query(
+        'SELECT token_id, portfolio_id, opened_at, entry_price, stake_usdc
+         FROM trading_trades
+         WHERE account = "live"
+           AND portfolio_id <> ""
+           AND token_id IS NOT NULL
+           AND token_id <> ""
+         ORDER BY opened_at DESC, updated_at DESC
+         LIMIT ' . $limit
+    );
+    if ($statement === false) {
+        return [];
+    }
+    $rows = [];
+    foreach ($statement->fetchAll() as $row) {
+        $tokenId = trim((string) ($row['token_id'] ?? ''));
+        $portfolioId = trim((string) ($row['portfolio_id'] ?? ''));
+        if ($tokenId === '' || $portfolioId === '') {
+            continue;
+        }
+        $rows[] = [
+            'tokenId' => $tokenId,
+            'portfolioId' => $portfolioId,
+            'openedAt' => $row['opened_at'] ?? null,
+            'entryPrice' => $row['entry_price'] === null ? null : (float) $row['entry_price'],
+            'stakeUsdc' => $row['stake_usdc'] === null ? null : (float) $row['stake_usdc'],
+        ];
+    }
+    return $rows;
+}
+
+/**
  * What is actually stored, per portfolio. Deliberately a count rather than the rows, so
  * "are the trades in the database" can be asked cheaply and often.
  */

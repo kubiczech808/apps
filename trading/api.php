@@ -9598,6 +9598,26 @@ try {
                 'live-entry-claim',
             );
         }
+        // The run log is a rolling operational view and is deliberately archived. The
+        // trade ledger is the durable source for already-filled positions, so old resolved
+        // trades remain paired with the portfolio that opened them after their run disappears.
+        foreach (trading_storage_live_trade_ownership(20000) as $entry) {
+            if (!is_array($entry)) {
+                continue;
+            }
+            $mode = trim((string) ($entry['portfolioId'] ?? ''));
+            if ($mode === '' || !isset($targets[$mode])) {
+                continue;
+            }
+            $rememberOrder(
+                live_row_token_id($entry),
+                is_numeric($entry['entryPrice'] ?? null) ? (float) $entry['entryPrice'] : null,
+                $mode,
+                (string) ($entry['openedAt'] ?? ''),
+                is_numeric($entry['stakeUsdc'] ?? null) ? (float) $entry['stakeUsdc'] : null,
+                'stored-trade-ledger',
+            );
+        }
         respond([
             'ok' => true,
             'generatedAt' => gmdate('c'),
