@@ -310,7 +310,7 @@ add_action('wp_loaded', static function (): void {
                     $email->object = $order;
                     $recipient = apply_filters(
                         'woocommerce_email_recipient_' . $email_id,
-                        'probe@example.invalid',
+                        'audit@tajemstvijamu.cz',
                         $order,
                         $email
                     );
@@ -324,26 +324,29 @@ add_action('wp_loaded', static function (): void {
                         [],
                     ]);
                     $final_html = (string) ($params[2] ?? '');
-                    $mailer = new $mailer_class(true);
-                    $mailer->isMail();
-                    $mailer->setFrom('noreply@example.invalid', 'JAMU test');
-                    $mailer->addAddress('recipient@example.invalid');
-                    $mailer->Subject = (string) ($params[1] ?? '');
-                    $mailer->isHTML(true);
-                    $mailer->CharSet = 'UTF-8';
-                    $mailer->Body = $final_html;
-                    do_action('phpmailer_init', $mailer);
-                    $mailer->preSend();
-                    $mime = (string) $mailer->getSentMIMEMessage();
-                    $sections = preg_split("/\\r?\\n\\r?\\n/", $mime, 2);
-                    $encoded_body = $sections[1] ?? '';
-                    $render_probes[] = [
+                    $probe = [
                         'email_id' => $email_id,
                         'language' => $language,
                         'html_bytes' => strlen($final_html),
                         'has_html' => preg_match('/<(?:html|body|table|div|p)\b/i', $final_html) === 1,
                         'html_has_raw_qp_artifacts' => preg_match('/=(?:0D|0A|[A-F0-9]{2})/i', $final_html) === 1,
                         'selected_variant' => apply_filters('yaymail_email_get_variant', '', $order, [], $email, $email_id),
+                    ];
+                    $mailer = new $mailer_class(false);
+                    $mailer->isMail();
+                    $mailer->setFrom('audit@tajemstvijamu.cz', 'JAMU test');
+                    $mailer->addAddress('audit@tajemstvijamu.cz');
+                    $mailer->Subject = (string) ($params[1] ?? '');
+                    $mailer->isHTML(true);
+                    $mailer->CharSet = 'UTF-8';
+                    $mailer->Body = $final_html;
+                    do_action('phpmailer_init', $mailer);
+                    $prepared = $mailer->preSend();
+                    $mime = $prepared ? (string) $mailer->getSentMIMEMessage() : '';
+                    $sections = preg_split("/\\r?\\n\\r?\\n/", $mime, 2);
+                    $encoded_body = $sections[1] ?? '';
+                    $render_probes[] = $probe + [
+                        'mime_prepared' => (bool) $prepared,
                         'mime_encoding' => strtolower((string) ($mailer->Encoding ?? '')),
                         'mime_has_base64_header' => stripos($mime, 'Content-Transfer-Encoding: base64') !== false,
                         'mime_body_has_raw_qp_artifacts' => preg_match('/=(?:0D|0A|[A-F0-9]{2})/i', $encoded_body) === 1,
