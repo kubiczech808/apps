@@ -255,6 +255,20 @@ $email_layer->configure_html_mailer($html_mailer);
 if ($html_mailer->CharSet !== 'UTF-8' || $html_mailer->Encoding !== 'base64') {
     throw new RuntimeException('HTML email encoding was not configured safely.');
 }
+$pre_encoded_mailer = (object) [
+    'ContentType' => 'text/html',
+    'Body' => quoted_printable_encode('<html><body><p>Příliš žluťoučký kůň</p></body></html>'),
+    'CharSet' => '',
+    'Encoding' => '',
+];
+$email_layer->configure_html_mailer($pre_encoded_mailer);
+if ($pre_encoded_mailer->CharSet !== 'UTF-8'
+    || $pre_encoded_mailer->Encoding !== 'base64'
+    || !str_contains($pre_encoded_mailer->Body, '<html>')
+    || str_contains($pre_encoded_mailer->Body, '=0A')
+) {
+    throw new RuntimeException('Pre-encoded YayMail HTML was not decoded before delivery.');
+}
 
 $shipping_layer = new Shipping($languages);
 $unsafe_checkout_fragment = <<<'HTML'

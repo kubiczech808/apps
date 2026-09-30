@@ -277,7 +277,9 @@ final class Email
         if ($this->context_depth > 0) {
             foreach ([1, 2] as $index) {
                 if (isset($params[$index]) && is_string($params[$index]) && $params[$index] !== '') {
-                    $params[$index] = $this->translate_email_text($params[$index]);
+                    $params[$index] = $this->translate_email_text(
+                        $index === 2 ? $this->decode_quoted_printable_html($params[$index]) : $params[$index]
+                    );
                 }
             }
         }
@@ -311,10 +313,12 @@ final class Email
     {
         $content_type = strtolower((string) ($mailer->ContentType ?? ''));
         $body = (string) ($mailer->Body ?? '');
+        $body = $this->decode_quoted_printable_html($body);
         if (!str_contains($content_type, 'html') && stripos($body, '<html') === false && stripos($body, '<body') === false) {
             return;
         }
 
+        $mailer->Body = $body;
         $mailer->CharSet = 'UTF-8';
         $mailer->Encoding = 'base64';
     }
@@ -483,6 +487,27 @@ final class Email
     private function translate_email_text(string $text): string
     {
         return $this->translate_email_text_for_language($text, $this->languages->current());
+    }
+
+    /**
+     * YayMail can return a complete HTML document that has already been
+     * quoted-printable encoded. Passing that literal text to PHPMailer makes
+     * clients show quoted-printable escape sequences instead of the email.
+     * Decode only unmistakably encoded HTML; ordinary URLs and attributes
+     * stay untouched.
+     */
+    private function decode_quoted_printable_html(string $body): string
+    {
+        if (!preg_match('/(?:=(?:0D)?0A|=3D|=C[0-9A-F]|=D[0-9A-F]|=\r?\n)/i', $body)) {
+            return $body;
+        }
+
+        $decoded = quoted_printable_decode($body);
+        if ($decoded === $body || !preg_match('/<(?:html|body|table|div|p)\b/i', $decoded)) {
+            return $body;
+        }
+
+        return $decoded;
     }
 
     /**
