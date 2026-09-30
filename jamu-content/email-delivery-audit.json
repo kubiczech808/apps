@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "generated_at": "2026-09-30T10:08:28+00:00",
+  "generated_at": "2026-09-30T10:10:41+00:00",
   "plugins": [
     {
       "file": "ecomail/ecomail.php",
@@ -5817,6 +5817,104 @@
     "encoded_body_has_raw_qp_artifacts": false
   },
   "template_encoding_summary": [],
+  "yaymail_variant_data": [
+    {
+      "template_name": "customer_on_hold_order",
+      "variant": "",
+      "exists": true,
+      "id": 3727,
+      "data_type": "array",
+      "data_bytes": 52893
+    },
+    {
+      "template_name": "customer_on_hold_order",
+      "variant": "jamu-en",
+      "exists": true,
+      "id": 4602,
+      "data_type": "array",
+      "data_bytes": 50922
+    },
+    {
+      "template_name": "customer_on_hold_order",
+      "variant": "jamu-de",
+      "exists": true,
+      "id": 4604,
+      "data_type": "array",
+      "data_bytes": 51455
+    },
+    {
+      "template_name": "customer_on_hold_order",
+      "variant": "jamu-pl",
+      "exists": true,
+      "id": 4606,
+      "data_type": "array",
+      "data_bytes": 51763
+    },
+    {
+      "template_name": "customer_processing_order",
+      "variant": "",
+      "exists": true,
+      "id": 3728,
+      "data_type": "array",
+      "data_bytes": 71256
+    },
+    {
+      "template_name": "customer_processing_order",
+      "variant": "jamu-en",
+      "exists": true,
+      "id": 4608,
+      "data_type": "array",
+      "data_bytes": 70121
+    },
+    {
+      "template_name": "customer_processing_order",
+      "variant": "jamu-de",
+      "exists": true,
+      "id": 4610,
+      "data_type": "array",
+      "data_bytes": 70346
+    },
+    {
+      "template_name": "customer_processing_order",
+      "variant": "jamu-pl",
+      "exists": true,
+      "id": 4612,
+      "data_type": "array",
+      "data_bytes": 70378
+    },
+    {
+      "template_name": "customer_refunded_order",
+      "variant": "",
+      "exists": true,
+      "id": 3730,
+      "data_type": "array",
+      "data_bytes": 26171
+    },
+    {
+      "template_name": "customer_refunded_order",
+      "variant": "jamu-en",
+      "exists": true,
+      "id": 4620,
+      "data_type": "array",
+      "data_bytes": 25108
+    },
+    {
+      "template_name": "customer_refunded_order",
+      "variant": "jamu-de",
+      "exists": true,
+      "id": 4622,
+      "data_type": "array",
+      "data_bytes": 25297
+    },
+    {
+      "template_name": "customer_refunded_order",
+      "variant": "jamu-pl",
+      "exists": true,
+      "id": 4624,
+      "data_type": "array",
+      "data_bytes": 25310
+    }
+  ],
   "render_probes": [
     {
       "email_id": "customer_failed_order",
@@ -6201,6 +6299,188 @@
       "mime_encoding": "base64",
       "mime_has_base64_header": false,
       "mime_body_has_raw_qp_artifacts": false
+    }
+  ],
+  "yaymail_variant_calls": [
+    {
+      "template_name": "customer_failed_order",
+      "selected_variant": "",
+      "email_id": "customer_failed_order"
+    },
+    {
+      "template_name": "customer_failed_order",
+      "selected_variant": "jamu-en",
+      "email_id": "customer_failed_order"
+    },
+    {
+      "template_name": "customer_failed_order",
+      "selected_variant": "jamu-de",
+      "email_id": "customer_failed_order"
+    },
+    {
+      "template_name": "customer_failed_order",
+      "selected_variant": "jamu-pl",
+      "email_id": "customer_failed_order"
+    },
+    {
+      "template_name": "customer_on_hold_order",
+      "selected_variant": "",
+      "email_id": ""
+    },
+    {
+      "template_name": "customer_on_hold_order",
+      "selected_variant": "",
+      "email_id": "customer_on_hold_order"
+    },
+    {
+      "template_name": "customer_on_hold_order",
+      "selected_variant": "jamu-en",
+      "email_id": ""
+    },
+    {
+      "template_name": "customer_on_hold_order",
+      "selected_variant": "jamu-en",
+      "email_id": "customer_on_hold_order"
+    },
+    {
+      "template_name": "customer_on_hold_order",
+      "selected_variant": "jamu-de",
+      "email_id": ""
+    },
+    {
+      "template_name": "customer_on_hold_order",
+      "selected_variant": "jamu-de",
+      "email_id": "customer_on_hold_order"
+    },
+    {
+      "template_name": "customer_on_hold_order",
+      "selected_variant": "jamu-pl",
+      "email_id": ""
+    },
+    {
+      "template_name": "customer_on_hold_order",
+      "selected_variant": "jamu-pl",
+      "email_id": "customer_on_hold_order"
+    },
+    {
+      "template_name": "customer_processing_order",
+      "selected_variant": "",
+      "email_id": "customer_processing_order"
+    },
+    {
+      "template_name": "customer_processing_order",
+      "selected_variant": "jamu-en",
+      "email_id": "customer_processing_order"
+    },
+    {
+      "template_name": "customer_processing_order",
+      "selected_variant": "jamu-de",
+      "email_id": "customer_processing_order"
+    },
+    {
+      "template_name": "customer_processing_order",
+      "selected_variant": "jamu-pl",
+      "email_id": "customer_processing_order"
+    },
+    {
+      "template_name": "customer_refunded_order",
+      "selected_variant": "",
+      "email_id": "customer_refunded_order"
+    },
+    {
+      "template_name": "customer_refunded_order",
+      "selected_variant": "jamu-en",
+      "email_id": "customer_refunded_order"
+    },
+    {
+      "template_name": "customer_refunded_order",
+      "selected_variant": "jamu-de",
+      "email_id": "customer_refunded_order"
+    },
+    {
+      "template_name": "customer_refunded_order",
+      "selected_variant": "jamu-pl",
+      "email_id": "customer_refunded_order"
+    },
+    {
+      "template_name": "customer_note",
+      "selected_variant": "",
+      "email_id": "customer_note"
+    },
+    {
+      "template_name": "customer_note",
+      "selected_variant": "jamu-en",
+      "email_id": "customer_note"
+    },
+    {
+      "template_name": "customer_note",
+      "selected_variant": "jamu-de",
+      "email_id": "customer_note"
+    },
+    {
+      "template_name": "customer_note",
+      "selected_variant": "jamu-pl",
+      "email_id": "customer_note"
+    },
+    {
+      "template_name": "customer_reset_password",
+      "selected_variant": "",
+      "email_id": "customer_reset_password"
+    },
+    {
+      "template_name": "customer_reset_password",
+      "selected_variant": "jamu-en",
+      "email_id": "customer_reset_password"
+    },
+    {
+      "template_name": "customer_reset_password",
+      "selected_variant": "jamu-de",
+      "email_id": "customer_reset_password"
+    },
+    {
+      "template_name": "customer_reset_password",
+      "selected_variant": "jamu-pl",
+      "email_id": "customer_reset_password"
+    },
+    {
+      "template_name": "customer_new_account",
+      "selected_variant": "",
+      "email_id": "customer_new_account"
+    },
+    {
+      "template_name": "customer_new_account",
+      "selected_variant": "jamu-en",
+      "email_id": "customer_new_account"
+    },
+    {
+      "template_name": "customer_new_account",
+      "selected_variant": "jamu-de",
+      "email_id": "customer_new_account"
+    },
+    {
+      "template_name": "customer_new_account",
+      "selected_variant": "jamu-pl",
+      "email_id": "customer_new_account"
+    },
+    {
+      "template_name": "customer_verify_email",
+      "selected_variant": "",
+      "email_id": "customer_verify_email"
+    },
+    {
+      "template_name": "customer_verify_email",
+      "selected_variant": "jamu-en",
+      "email_id": "customer_verify_email"
+    },
+    {
+      "template_name": "customer_verify_email",
+      "selected_variant": "jamu-de",
+      "email_id": "customer_verify_email"
+    },
+    {
+      "template_name": "customer_verify_email",
+      "selected_variant": "jamu-pl",
+      "email_id": "customer_verify_email"
     }
   ],
   "runtime_warning_summary": [
