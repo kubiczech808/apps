@@ -67,6 +67,14 @@ def main() -> int:
                 'audit_error': {
                     'http_status': response.status_code,
                     'non_json_response': True,
+                    'content_type': response.headers.get('content-type', ''),
+                    'bridge_header': response.headers.get('x-jamu-email-audit', ''),
+                    'body_bytes': len(response.content),
+                    'starts_with_html': response.text.lstrip().lower().startswith('<!doctype')
+                    or response.text.lstrip().lower().startswith('<html'),
+                    'contains_php_warning': 'warning' in response.text.lower()
+                    or 'fatal error' in response.text.lower()
+                    or 'notice' in response.text.lower(),
                 },
             }
         if not response.ok:

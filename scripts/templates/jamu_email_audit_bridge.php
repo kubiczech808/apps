@@ -18,6 +18,7 @@ add_action('wp_loaded', static function (): void {
 
     nocache_headers();
     header('Content-Type: application/json; charset=UTF-8');
+    header('X-JAMU-Email-Audit: active');
     $completed = false;
     register_shutdown_function(static function () use (&$completed): void {
         if (!$completed && !headers_sent()) {
