@@ -7912,6 +7912,8 @@ function dip_backtest_source_row(array $item): ?array
         'firstFeeRate' => is_numeric($item['firstFeeRate'] ?? null) ? (float) $item['firstFeeRate'] : null,
         'feeRate' => is_numeric($item['feeRate'] ?? null) ? (float) $item['feeRate'] : null,
         'feesEnabled' => ($item['feesEnabled'] ?? null) !== false,
+        'tags' => simulation_taxonomy_labels($item, 'firstPolymarketTags', 'polymarketTags'),
+        'shape' => observation_market_shape($item),
     ];
 }
 
@@ -7982,7 +7984,7 @@ function dip_backtest_report_payload(string $tag): array
     return ['ok' => true, 'available' => true] + $report;
 }
 
-function request_dip_backtest_run(string $tag): array
+function request_dip_backtest_run(string $tag, mixed $maxMarkets = 600): array
 {
     $path = __DIR__ . '/data/.dip-backtest-dispatch-' . $tag . '.json';
     $previous = decode_state_file($path, false);
@@ -7993,7 +7995,8 @@ function request_dip_backtest_run(string $tag): array
     if ($requestedAt > 0 && time() - $requestedAt < 90) {
         return ['ok' => true, 'action' => 'SKIP', 'reason' => 'A historical backtest was requested recently.', 'tag' => $tag];
     }
-    $result = dispatch_workflow('trading-dip-history-backtest.yml', ['tag' => $tag, 'max_markets' => '600'], false);
+    $maxMarkets = max(25, min(1500, (int) $maxMarkets));
+    $result = dispatch_workflow('trading-dip-history-backtest.yml', ['tag' => $tag, 'max_markets' => (string) $maxMarkets], false);
     @file_put_contents($path, json_encode(['requestedAt' => time(), 'tag' => $tag], JSON_UNESCAPED_SLASHES));
     return ['ok' => true, 'action' => 'DISPATCH', 'tag' => $tag, 'workflow' => $result['workflow'], 'ref' => $result['ref']];
 }
@@ -10357,7 +10360,7 @@ try {
         if ($tag === null) {
             respond(['ok' => false, 'error' => 'A valid Polymarket tag is required.'], 400);
         }
-        respond(request_dip_backtest_run($tag), 202);
+        respond(request_dip_backtest_run($tag, $payload['maxMarkets'] ?? 600), 202);
     }
 
     // The rows behind one row of the performance tables. Those tables are computed over

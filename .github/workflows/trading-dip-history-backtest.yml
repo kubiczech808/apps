@@ -11,7 +11,7 @@ on:
         default: "esports"
         type: string
       max_markets:
-        description: "New or retry markets in this batch"
+        description: "New or retry markets in this batch (25-1500)"
         required: false
         default: "600"
         type: string

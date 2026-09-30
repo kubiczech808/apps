@@ -22,7 +22,7 @@ const OPENING_WINDOW_SECONDS = 90 * 60;
 // Widened from a 30-60% ceiling to 30-80%: asked for a buy grid running "od 45-50 az po
 // 75-80", and a favourite that opened at 90%+ can sit at 75-80% without having fallen far at
 // all in relative terms, which the original 60% ceiling could never even see.
-const ENTRY_LEVELS = [0.3, 0.35, 0.4, 0.45, 0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8];
+const ENTRY_LEVELS = [0.3, 0.35, 0.4, 0.45, 0.5, 0.55, 0.56, 0.6, 0.65, 0.7, 0.75, 0.8];
 // Version the result rule, not only the file. Cache rows are keyed by their source
 // fingerprint, so this makes a corrected interpretation reprocess old rows instead of
 // quietly continuing to show the conclusion of the earlier rule.
@@ -362,6 +362,33 @@ export function reportFromCache(sourceRows, cache, processedThisRun) {
     };
   });
   const pending = sourceRows.filter((row) => needsSimulation(row, cache.markets[sourceToken(row)])).length;
+  const breakdown = (key) => {
+    const values = new Map();
+    for (const row of openingBand) {
+      const labels = key === "tag"
+        ? (Array.isArray(row.tags) && row.tags.length ? row.tags : ["uncategorized"])
+        : [String(row.shape || "other")];
+      for (const label of labels) {
+        const entry = row.entries?.["0.56"];
+        if (!entry) continue;
+        const current = values.get(label) || { label, trades: 0, wins: 0, losses: 0, pnlUsdc: 0, investedUsdc: 0, verifiedOpeningTrades: 0 };
+        current.trades += 1;
+        current.wins += entry.outcome === "WIN" ? 1 : 0;
+        current.losses += entry.outcome === "WIN" ? 0 : 1;
+        current.pnlUsdc += number(entry.pnlUsdc, 0) || 0;
+        current.investedUsdc += STAKE_USDC + (number(entry.feeUsdc, 0) || 0);
+        current.verifiedOpeningTrades += row.verifiedOpening ? 1 : 0;
+        values.set(label, current);
+      }
+    }
+    return [...values.values()].map((item) => ({
+      ...item,
+      accuracy: item.trades ? round((item.wins / item.trades) * 100, 2) : null,
+      pnlUsdc: round(item.pnlUsdc, 2),
+      investedUsdc: round(item.investedUsdc, 2),
+      roiPct: item.investedUsdc > 0 ? round((item.pnlUsdc / item.investedUsdc) * 100, 2) : null,
+    })).sort((left, right) => (right.pnlUsdc || 0) - (left.pnlUsdc || 0));
+  };
   const details = openingBand
     .sort((left, right) => (number(right.maxInPlayDrawdownPct, -1) || -1) - (number(left.maxInPlayDrawdownPct, -1) || -1))
     .slice(0, 600);
@@ -395,6 +422,12 @@ export function reportFromCache(sourceRows, cache, processedThisRun) {
       maximumPct: round(Math.max(0, ...openingBand.map((row) => number(row.maxInPlayDrawdownPct, 0) || 0)), 2),
     },
     entries: outcomes,
+    breakdown: {
+      entryProbability: 56,
+      byTag: breakdown("tag"),
+      byShape: breakdown("shape"),
+      note: "Tag rows can overlap because one market may carry multiple tags; do not sum them as a total.",
+    },
     details,
     caveats: [
       "Entry uses the first recorded CLOB price at or below the selected level after the event began.",
