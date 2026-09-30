@@ -1,0 +1,11 @@
+[Unit]
+Description=Run the BTC price-action bot every minute
+
+[Timer]
+OnBootSec=90s
+OnUnitActiveSec=60s
+AccuracySec=10s
+Unit=btc-bot.service
+
+[Install]
+WantedBy=timers.target

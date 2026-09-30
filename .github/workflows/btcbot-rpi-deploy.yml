@@ -59,11 +59,15 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-          sudo install -d -o openclaw2 -g openclaw2 -m 0755 /home/openclaw2/.config/systemd/user
-          sudo install -o openclaw2 -g openclaw2 -m 0644 \
-            systemd/btc-bot.service /home/openclaw2/.config/systemd/user/btc-bot.service
-          sudo install -o openclaw2 -g openclaw2 -m 0644 \
-            systemd/btc-bot.timer /home/openclaw2/.config/systemd/user/btc-bot.timer
+          # The existing production timer is a system unit. Install the
+          # canonical absolute-path unit there as well: a user unit can appear
+          # healthy while the minute cadence still executes an older nested
+          # checkout.
+          sudo install -o root -g root -m 0644 \
+            systemd/btc-bot-system.service /etc/systemd/system/btc-bot.service
+          sudo install -o root -g root -m 0644 \
+            systemd/btc-bot-system.timer /etc/systemd/system/btc-bot.timer
+          sudo systemctl daemon-reload
 
       - name: Raise candle history without replacing credentials
         shell: bash
@@ -176,22 +180,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # The self-hosted Actions session is non-interactive. Linger keeps
-          # openclaw2's user systemd manager and D-Bus available after reboot.
-          sudo loginctl enable-linger openclaw2
-          uid="$(id -u openclaw2)"
-          user_systemctl=(sudo -u openclaw2 -H env \
-            XDG_RUNTIME_DIR="/run/user/$uid" \
-            DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$uid/bus" \
-            systemctl --user)
-
-          "${user_systemctl[@]}" daemon-reload
           # reset-failed may return 1 when there was no failed state to clear;
           # the actual service start and the hosted heartbeat checks below are
           # the authoritative health checks.
-          "${user_systemctl[@]}" reset-failed btc-bot.service || true
-          "${user_systemctl[@]}" enable --now btc-bot.timer
-          if ! "${user_systemctl[@]}" restart btc-bot.service; then
+          sudo systemctl reset-failed btc-bot.service || true
+          sudo systemctl enable --now btc-bot.timer
+          if ! sudo systemctl restart btc-bot.service; then
             echo "systemd oneshot failed; running one foreground verification pass so the new build can publish its state."
             sudo -u openclaw2 -H bash -lc '
               set -a
@@ -201,8 +195,8 @@ jobs:
               node tools/run-bot.mjs
             '
           fi
-          "${user_systemctl[@]}" --no-pager --full status btc-bot.timer
-          "${user_systemctl[@]}" list-timers --all btc-bot.timer
+          sudo systemctl --no-pager --full status btc-bot.timer
+          sudo systemctl list-timers --all btc-bot.timer
 
           sudo -u openclaw2 -H node --input-type=module - <<'NODE'
           import fs from 'node:fs'

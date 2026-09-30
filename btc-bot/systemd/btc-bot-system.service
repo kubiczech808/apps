@@ -1,0 +1,19 @@
+[Unit]
+Description=BTC price-action bot - one pass
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=openclaw2
+Group=openclaw2
+EnvironmentFile=/home/openclaw2/.config/btc-bot.env
+WorkingDirectory=/home/openclaw2/.local/lib/btc-bot
+ExecStart=/usr/bin/env node tools/run-bot.mjs
+TimeoutStartSec=180
+KillMode=process
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/openclaw2/.local/state/btc-bot
