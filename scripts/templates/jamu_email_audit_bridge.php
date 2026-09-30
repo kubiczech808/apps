@@ -117,6 +117,29 @@ add_action('wp_loaded', static function (): void {
         }
     }
 
+    // WPCode stores most snippets in an option rather than posts. Inspect only
+    // for mail-encoding keywords; never return a snippet body.
+    $wpcode_signals = [];
+    $wpcode_snippets = get_option('wpcode_snippets', []);
+    foreach (is_array($wpcode_snippets) ? $wpcode_snippets : [] as $key => $snippet) {
+        $serialized = is_scalar($snippet) ? (string) $snippet : wp_json_encode($snippet);
+        if (!is_string($serialized)) {
+            continue;
+        }
+        $signals = [];
+        foreach (['quoted_printable', 'base64_encode', 'Content-Transfer-Encoding', 'wp_mail', 'phpmailer'] as $needle) {
+            if (stripos($serialized, $needle) !== false) {
+                $signals[] = $needle;
+            }
+        }
+        if ($signals) {
+            $wpcode_signals[] = [
+                'key' => is_scalar($key) ? (string) $key : '',
+                'signals' => $signals,
+            ];
+        }
+    }
+
     $email_settings = [];
     foreach ((array) WC()->mailer()->get_emails() as $id => $email) {
         if (!is_object($email)) {
@@ -163,8 +186,50 @@ add_action('wp_loaded', static function (): void {
                 'variant' => (string) get_post_meta($template->ID, '_yaymail_template_variant', true),
                 'jamu_language_fields' => array_values(array_filter(['subject', 'heading', 'additional_content'], static fn (string $field): bool => metadata_exists('post', $template->ID, '_jamu_ml_' . $field))),
                 'content_bytes' => strlen((string) $template->post_content),
+                // A visual template must contain literal HTML, never a
+                // pre-encoded quoted-printable message body.
+                'has_quoted_printable_artifacts' => (bool) preg_match(
+                    '/=(?:0D|0A|[A-F0-9]{2})/i',
+                    (string) $template->post_content . wp_json_encode($meta)
+                ),
                 'meta' => $meta_summary,
             ];
+        }
+    }
+
+    // Exercise the actual PHPMailer hook chain without calling send() or
+    // exposing a message body. This catches a broken content-transfer
+    // encoding before a customer can receive it.
+    $mail_encoding_probe = ['available' => false];
+    if (class_exists('\PHPMailer\PHPMailer\PHPMailer')) {
+        try {
+            $probe_html = '<html><body><p>JAMU encoding probe: Příliš žluťoučký kůň.</p></body></html>';
+            $mailer = new \PHPMailer\PHPMailer\PHPMailer(true);
+            $mailer->isMail();
+            $mailer->setFrom('noreply@example.invalid', 'JAMU test');
+            $mailer->addAddress('recipient@example.invalid');
+            $mailer->Subject = 'JAMU encoding probe';
+            $mailer->isHTML(true);
+            $mailer->CharSet = 'UTF-8';
+            $mailer->Body = $probe_html;
+            do_action('phpmailer_init', $mailer);
+            $mailer->preSend();
+            $mime = (string) $mailer->getSentMIMEMessage();
+            $sections = preg_split("/\\r?\\n\\r?\\n/", $mime, 2);
+            $encoded_body = $sections[1] ?? '';
+            $decoded_body = strtolower((string) ($mailer->Encoding ?? '')) === 'base64'
+                ? base64_decode(preg_replace('/\\s+/', '', $encoded_body), true)
+                : $encoded_body;
+            $mail_encoding_probe = [
+                'available' => true,
+                'encoding' => (string) ($mailer->Encoding ?? ''),
+                'charset' => (string) ($mailer->CharSet ?? ''),
+                'mime_has_base64_header' => stripos($mime, 'Content-Transfer-Encoding: base64') !== false,
+                'decoded_body_contains_marker' => is_string($decoded_body) && str_contains($decoded_body, 'JAMU encoding probe'),
+                'encoded_body_has_raw_qp_artifacts' => (bool) preg_match('/=(?:0D|0A|[A-F0-9]{2})/i', $encoded_body),
+            ];
+        } catch (Throwable $exception) {
+            $mail_encoding_probe = ['available' => true, 'error' => get_class($exception)];
         }
     }
 
@@ -185,6 +250,8 @@ add_action('wp_loaded', static function (): void {
             'wp_mail_from_name',
         ]),
         'snippet_signals' => $snippet_signals,
+        'wpcode_signals' => $wpcode_signals,
+        'mail_encoding_probe' => $mail_encoding_probe,
     ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
     exit;
 }, 999);
