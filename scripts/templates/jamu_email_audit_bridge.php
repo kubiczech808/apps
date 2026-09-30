@@ -131,12 +131,47 @@ add_action('wp_loaded', static function (): void {
         ];
     }
 
+    // YayMail keeps its visual designs in a private custom post type.  Report
+    // only safe structural metadata here (never the email bodies or customer
+    // data) so the multilingual layer can select stable per-language designs.
+    $yaymail_templates = [];
+    if (post_type_exists('yaymail_template')) {
+        $templates = get_posts([
+            'post_type' => 'yaymail_template',
+            'post_status' => 'any',
+            'posts_per_page' => -1,
+            'orderby' => 'ID',
+            'order' => 'ASC',
+            'suppress_filters' => true,
+        ]);
+        foreach ($templates as $template) {
+            $meta = get_post_meta($template->ID);
+            $meta_summary = [];
+            foreach ($meta as $key => $values) {
+                $value = $values[0] ?? '';
+                $meta_summary[] = [
+                    'key' => (string) $key,
+                    'type' => gettype($value),
+                    'bytes' => is_string($value) ? strlen($value) : 0,
+                ];
+            }
+            $yaymail_templates[] = [
+                'id' => (int) $template->ID,
+                'title' => (string) $template->post_title,
+                'status' => (string) $template->post_status,
+                'content_bytes' => strlen((string) $template->post_content),
+                'meta' => $meta_summary,
+            ];
+        }
+    }
+
     echo wp_json_encode([
         'schema' => 1,
         'generated_at' => gmdate('c'),
         'plugins' => $plugin_data,
         'options' => $option_keys,
         'email_settings' => $email_settings,
+        'yaymail_templates' => $yaymail_templates,
         'hooks' => array_map($hooks, [
             'woocommerce_mail_callback',
             'woocommerce_mail_callback_params',
