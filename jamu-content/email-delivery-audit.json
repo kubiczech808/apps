@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "generated_at": "2026-09-30T05:25:59+00:00",
+  "generated_at": "2026-09-30T05:39:45+00:00",
   "plugins": [
     {
       "file": "ecomail/ecomail.php",
@@ -410,6 +410,9 @@
       "id": 3724,
       "title": "",
       "status": "future",
+      "template_name": "new_order",
+      "variant": "",
+      "jamu_language_fields": [],
       "content_bytes": 0,
       "meta": [
         {
@@ -483,6 +486,9 @@
       "id": 3725,
       "title": "",
       "status": "future",
+      "template_name": "cancelled_order",
+      "variant": "",
+      "jamu_language_fields": [],
       "content_bytes": 0,
       "meta": [
         {
@@ -556,6 +562,9 @@
       "id": 3726,
       "title": "",
       "status": "future",
+      "template_name": "failed_order",
+      "variant": "",
+      "jamu_language_fields": [],
       "content_bytes": 0,
       "meta": [
         {
@@ -629,6 +638,9 @@
       "id": 3727,
       "title": "",
       "status": "publish",
+      "template_name": "customer_on_hold_order",
+      "variant": "",
+      "jamu_language_fields": [],
       "content_bytes": 0,
       "meta": [
         {
@@ -707,6 +719,9 @@
       "id": 3728,
       "title": "",
       "status": "publish",
+      "template_name": "customer_processing_order",
+      "variant": "",
+      "jamu_language_fields": [],
       "content_bytes": 0,
       "meta": [
         {
@@ -785,6 +800,9 @@
       "id": 3729,
       "title": "",
       "status": "future",
+      "template_name": "customer_completed_order",
+      "variant": "",
+      "jamu_language_fields": [],
       "content_bytes": 0,
       "meta": [
         {
@@ -858,6 +876,9 @@
       "id": 3730,
       "title": "",
       "status": "future",
+      "template_name": "customer_refunded_order",
+      "variant": "",
+      "jamu_language_fields": [],
       "content_bytes": 0,
       "meta": [
         {
@@ -931,6 +952,9 @@
       "id": 3731,
       "title": "",
       "status": "future",
+      "template_name": "customer_invoice",
+      "variant": "",
+      "jamu_language_fields": [],
       "content_bytes": 0,
       "meta": [
         {
@@ -1004,6 +1028,9 @@
       "id": 3732,
       "title": "",
       "status": "future",
+      "template_name": "customer_note",
+      "variant": "",
+      "jamu_language_fields": [],
       "content_bytes": 0,
       "meta": [
         {
@@ -1062,6 +1089,9 @@
       "id": 3733,
       "title": "",
       "status": "future",
+      "template_name": "customer_reset_password",
+      "variant": "",
+      "jamu_language_fields": [],
       "content_bytes": 0,
       "meta": [
         {
@@ -1120,6 +1150,9 @@
       "id": 3734,
       "title": "",
       "status": "future",
+      "template_name": "customer_new_account",
+      "variant": "",
+      "jamu_language_fields": [],
       "content_bytes": 0,
       "meta": [
         {
@@ -1178,6 +1211,9 @@
       "id": 4350,
       "title": "",
       "status": "future",
+      "template_name": "customer_failed_order",
+      "variant": "",
+      "jamu_language_fields": [],
       "content_bytes": 0,
       "meta": [
         {
@@ -1236,6 +1272,9 @@
       "id": 4589,
       "title": "",
       "status": "publish",
+      "template_name": "yaymail_global_header_footer",
+      "variant": "",
+      "jamu_language_fields": [],
       "content_bytes": 0,
       "meta": [
         {
@@ -1269,6 +1308,9 @@
       "id": 4590,
       "title": "",
       "status": "publish",
+      "template_name": "customer_cancelled_order",
+      "variant": "",
+      "jamu_language_fields": [],
       "content_bytes": 0,
       "meta": [
         {
@@ -1312,6 +1354,9 @@
       "id": 4591,
       "title": "",
       "status": "publish",
+      "template_name": "customer_pos_completed_order",
+      "variant": "",
+      "jamu_language_fields": [],
       "content_bytes": 0,
       "meta": [
         {
@@ -1355,6 +1400,9 @@
       "id": 4592,
       "title": "",
       "status": "publish",
+      "template_name": "customer_pos_refunded_order",
+      "variant": "",
+      "jamu_language_fields": [],
       "content_bytes": 0,
       "meta": [
         {
@@ -1391,6 +1439,4241 @@
           "key": "_yaymail_global_footer_settings",
           "type": "string",
           "bytes": 343
+        }
+      ]
+    },
+    {
+      "id": 4602,
+      "title": "",
+      "status": "publish",
+      "template_name": "customer_on_hold_order",
+      "variant": "jamu-en",
+      "jamu_language_fields": [
+        "subject",
+        "heading",
+        "additional_content"
+      ],
+      "content_bytes": 0,
+      "meta": [
+        {
+          "key": "_yaymail_template",
+          "type": "string",
+          "bytes": 22
+        },
+        {
+          "key": "_yaymail_elements",
+          "type": "string",
+          "bytes": 58619
+        },
+        {
+          "key": "_yaymail_status",
+          "type": "string",
+          "bytes": 6
+        },
+        {
+          "key": "_yaymail_email_backgroundColor_settings",
+          "type": "string",
+          "bytes": 18
+        },
+        {
+          "key": "_yaymail_is_v4_supported",
+          "type": "string",
+          "bytes": 1
+        },
+        {
+          "key": "_yaymail_global_header_settings",
+          "type": "string",
+          "bytes": 198
+        },
+        {
+          "key": "_yaymail_global_footer_settings",
+          "type": "string",
+          "bytes": 174
+        },
+        {
+          "key": "_yaymail_template_variant",
+          "type": "string",
+          "bytes": 7
+        },
+        {
+          "key": "_yaymail_email_textLinkColor_settings",
+          "type": "string",
+          "bytes": 7
+        },
+        {
+          "key": "_yaymail_preheader",
+          "type": "string",
+          "bytes": 0
+        },
+        {
+          "key": "_jamu_ml_subject",
+          "type": "string",
+          "bytes": 52
+        },
+        {
+          "key": "_jamu_ml_heading",
+          "type": "string",
+          "bytes": 0
+        },
+        {
+          "key": "_jamu_ml_additional_content",
+          "type": "string",
+          "bytes": 0
+        }
+      ]
+    },
+    {
+      "id": 4604,
+      "title": "",
+      "status": "publish",
+      "template_name": "customer_on_hold_order",
+      "variant": "jamu-de",
+      "jamu_language_fields": [
+        "subject",
+        "heading",
+        "additional_content"
+      ],
+      "content_bytes": 0,
+      "meta": [
+        {
+          "key": "_yaymail_template",
+          "type": "string",
+          "bytes": 22
+        },
+        {
+          "key": "_yaymail_elements",
+          "type": "string",
+          "bytes": 58966
+        },
+        {
+          "key": "_yaymail_status",
+          "type": "string",
+          "bytes": 6
+        },
+        {
+          "key": "_yaymail_email_backgroundColor_settings",
+          "type": "string",
+          "bytes": 18
+        },
+        {
+          "key": "_yaymail_is_v4_supported",
+          "type": "string",
+          "bytes": 1
+        },
+        {
+          "key": "_yaymail_global_header_settings",
+          "type": "string",
+          "bytes": 198
+        },
+        {
+          "key": "_yaymail_global_footer_settings",
+          "type": "string",
+          "bytes": 174
+        },
+        {
+          "key": "_yaymail_template_variant",
+          "type": "string",
+          "bytes": 7
+        },
+        {
+          "key": "_yaymail_email_textLinkColor_settings",
+          "type": "string",
+          "bytes": 7
+        },
+        {
+          "key": "_yaymail_preheader",
+          "type": "string",
+          "bytes": 0
+        },
+        {
+          "key": "_jamu_ml_subject",
+          "type": "string",
+          "bytes": 52
+        },
+        {
+          "key": "_jamu_ml_heading",
+          "type": "string",
+          "bytes": 0
+        },
+        {
+          "key": "_jamu_ml_additional_content",
+          "type": "string",
+          "bytes": 0
+        }
+      ]
+    },
+    {
+      "id": 4606,
+      "title": "",
+      "status": "publish",
+      "template_name": "customer_on_hold_order",
+      "variant": "jamu-pl",
+      "jamu_language_fields": [
+        "subject",
+        "heading",
+        "additional_content"
+      ],
+      "content_bytes": 0,
+      "meta": [
+        {
+          "key": "_yaymail_template",
+          "type": "string",
+          "bytes": 22
+        },
+        {
+          "key": "_yaymail_elements",
+          "type": "string",
+          "bytes": 58773
+        },
+        {
+          "key": "_yaymail_status",
+          "type": "string",
+          "bytes": 6
+        },
+        {
+          "key": "_yaymail_email_backgroundColor_settings",
+          "type": "string",
+          "bytes": 18
+        },
+        {
+          "key": "_yaymail_is_v4_supported",
+          "type": "string",
+          "bytes": 1
+        },
+        {
+          "key": "_yaymail_global_header_settings",
+          "type": "string",
+          "bytes": 198
+        },
+        {
+          "key": "_yaymail_global_footer_settings",
+          "type": "string",
+          "bytes": 174
+        },
+        {
+          "key": "_yaymail_template_variant",
+          "type": "string",
+          "bytes": 7
+        },
+        {
+          "key": "_yaymail_email_textLinkColor_settings",
+          "type": "string",
+          "bytes": 7
+        },
+        {
+          "key": "_yaymail_preheader",
+          "type": "string",
+          "bytes": 0
+        },
+        {
+          "key": "_jamu_ml_subject",
+          "type": "string",
+          "bytes": 52
+        },
+        {
+          "key": "_jamu_ml_heading",
+          "type": "string",
+          "bytes": 0
+        },
+        {
+          "key": "_jamu_ml_additional_content",
+          "type": "string",
+          "bytes": 0
+        }
+      ]
+    },
+    {
+      "id": 4608,
+      "title": "",
+      "status": "publish",
+      "template_name": "customer_processing_order",
+      "variant": "jamu-en",
+      "jamu_language_fields": [
+        "subject",
+        "heading",
+        "additional_content"
+      ],
+      "content_bytes": 0,
+      "meta": [
+        {
+          "key": "_yaymail_template",
+          "type": "string",
+          "bytes": 25
+        },
+        {
+          "key": "_yaymail_elements",
+          "type": "string",
+          "bytes": 75106
+        },
+        {
+          "key": "_yaymail_status",
+          "type": "string",
+          "bytes": 8
+        },
+        {
+          "key": "_yaymail_email_backgroundColor_settings",
+          "type": "string",
+          "bytes": 18
+        },
+        {
+          "key": "_yaymail_is_v4_supported",
+          "type": "string",
+          "bytes": 1
+        },
+        {
+          "key": "_yaymail_global_header_settings",
+          "type": "string",
+          "bytes": 198
+        },
+        {
+          "key": "_yaymail_global_footer_settings",
+          "type": "string",
+          "bytes": 174
+        },
+        {
+          "key": "_yaymail_template_variant",
+          "type": "string",
+          "bytes": 7
+        },
+        {
+          "key": "_yaymail_email_textLinkColor_settings",
+          "type": "string",
+          "bytes": 7
+        },
+        {
+          "key": "_yaymail_preheader",
+          "type": "string",
+          "bytes": 0
+        },
+        {
+          "key": "_jamu_ml_subject",
+          "type": "string",
+          "bytes": 49
+        },
+        {
+          "key": "_jamu_ml_heading",
+          "type": "string",
+          "bytes": 0
+        },
+        {
+          "key": "_jamu_ml_additional_content",
+          "type": "string",
+          "bytes": 43
+        }
+      ]
+    },
+    {
+      "id": 4610,
+      "title": "",
+      "status": "publish",
+      "template_name": "customer_processing_order",
+      "variant": "jamu-de",
+      "jamu_language_fields": [
+        "subject",
+        "heading",
+        "additional_content"
+      ],
+      "content_bytes": 0,
+      "meta": [
+        {
+          "key": "_yaymail_template",
+          "type": "string",
+          "bytes": 25
+        },
+        {
+          "key": "_yaymail_elements",
+          "type": "string",
+          "bytes": 75264
+        },
+        {
+          "key": "_yaymail_status",
+          "type": "string",
+          "bytes": 8
+        },
+        {
+          "key": "_yaymail_email_backgroundColor_settings",
+          "type": "string",
+          "bytes": 18
+        },
+        {
+          "key": "_yaymail_is_v4_supported",
+          "type": "string",
+          "bytes": 1
+        },
+        {
+          "key": "_yaymail_global_header_settings",
+          "type": "string",
+          "bytes": 198
+        },
+        {
+          "key": "_yaymail_global_footer_settings",
+          "type": "string",
+          "bytes": 174
+        },
+        {
+          "key": "_yaymail_template_variant",
+          "type": "string",
+          "bytes": 7
+        },
+        {
+          "key": "_yaymail_email_textLinkColor_settings",
+          "type": "string",
+          "bytes": 7
+        },
+        {
+          "key": "_yaymail_preheader",
+          "type": "string",
+          "bytes": 0
+        },
+        {
+          "key": "_jamu_ml_subject",
+          "type": "string",
+          "bytes": 49
+        },
+        {
+          "key": "_jamu_ml_heading",
+          "type": "string",
+          "bytes": 0
+        },
+        {
+          "key": "_jamu_ml_additional_content",
+          "type": "string",
+          "bytes": 43
+        }
+      ]
+    },
+    {
+      "id": 4612,
+      "title": "",
+      "status": "publish",
+      "template_name": "customer_processing_order",
+      "variant": "jamu-pl",
+      "jamu_language_fields": [
+        "subject",
+        "heading",
+        "additional_content"
+      ],
+      "content_bytes": 0,
+      "meta": [
+        {
+          "key": "_yaymail_template",
+          "type": "string",
+          "bytes": 25
+        },
+        {
+          "key": "_yaymail_elements",
+          "type": "string",
+          "bytes": 75200
+        },
+        {
+          "key": "_yaymail_status",
+          "type": "string",
+          "bytes": 8
+        },
+        {
+          "key": "_yaymail_email_backgroundColor_settings",
+          "type": "string",
+          "bytes": 18
+        },
+        {
+          "key": "_yaymail_is_v4_supported",
+          "type": "string",
+          "bytes": 1
+        },
+        {
+          "key": "_yaymail_global_header_settings",
+          "type": "string",
+          "bytes": 198
+        },
+        {
+          "key": "_yaymail_global_footer_settings",
+          "type": "string",
+          "bytes": 174
+        },
+        {
+          "key": "_yaymail_template_variant",
+          "type": "string",
+          "bytes": 7
+        },
+        {
+          "key": "_yaymail_email_textLinkColor_settings",
+          "type": "string",
+          "bytes": 7
+        },
+        {
+          "key": "_yaymail_preheader",
+          "type": "string",
+          "bytes": 0
+        },
+        {
+          "key": "_jamu_ml_subject",
+          "type": "string",
+          "bytes": 49
+        },
+        {
+          "key": "_jamu_ml_heading",
+          "type": "string",
+          "bytes": 0
+        },
+        {
+          "key": "_jamu_ml_additional_content",
+          "type": "string",
+          "bytes": 43
+        }
+      ]
+    },
+    {
+      "id": 4614,
+      "title": "",
+      "status": "publish",
+      "template_name": "customer_completed_order",
+      "variant": "jamu-en",
+      "jamu_language_fields": [
+        "subject",
+        "heading",
+        "additional_content"
+      ],
+      "content_bytes": 0,
+      "meta": [
+        {
+          "key": "_yaymail_template",
+          "type": "string",
+          "bytes": 24
+        },
+        {
+          "key": "_yaymail_elements",
+          "type": "string",
+          "bytes": 34758
+        },
+        {
+          "key": "_yaymail_status",
+          "type": "string",
+          "bytes": 8
+        },
+        {
+          "key": "_yaymail_email_backgroundColor_settings",
+          "type": "string",
+          "bytes": 18
+        },
+        {
+          "key": "_yaymail_is_v4_supported",
+          "type": "string",
+          "bytes": 1
+        },
+        {
+          "key": "_yaymail_global_header_settings",
+          "type": "string",
+          "bytes": 198
+        },
+        {
+          "key": "_yaymail_global_footer_settings",
+          "type": "string",
+          "bytes": 174
+        },
+        {
+          "key": "_yaymail_template_variant",
+          "type": "string",
+          "bytes": 7
+        },
+        {
+          "key": "_yaymail_email_textLinkColor_settings",
+          "type": "string",
+          "bytes": 7
+        },
+        {
+          "key": "_yaymail_preheader",
+          "type": "string",
+          "bytes": 0
+        },
+        {
+          "key": "_jamu_ml_subject",
+          "type": "string",
+          "bytes": 49
+        },
+        {
+          "key": "_jamu_ml_heading",
+          "type": "string",
+          "bytes": 0
+        },
+        {
+          "key": "_jamu_ml_additional_content",
+          "type": "string",
+          "bytes": 26
+        }
+      ]
+    },
+    {
+      "id": 4616,
+      "title": "",
+      "status": "publish",
+      "template_name": "customer_completed_order",
+      "variant": "jamu-de",
+      "jamu_language_fields": [
+        "subject",
+        "heading",
+        "additional_content"
+      ],
+      "content_bytes": 0,
+      "meta": [
+        {
+          "key": "_yaymail_template",
+          "type": "string",
+          "bytes": 24
+        },
+        {
+          "key": "_yaymail_elements",
+          "type": "string",
+          "bytes": 34900
+        },
+        {
+          "key": "_yaymail_status",
+          "type": "string",
+          "bytes": 8
+        },
+        {
+          "key": "_yaymail_email_backgroundColor_settings",
+          "type": "string",
+          "bytes": 18
+        },
+        {
+          "key": "_yaymail_is_v4_supported",
+          "type": "string",
+          "bytes": 1
+        },
+        {
+          "key": "_yaymail_global_header_settings",
+          "type": "string",
+          "bytes": 198
+        },
+        {
+          "key": "_yaymail_global_footer_settings",
+          "type": "string",
+          "bytes": 174
+        },
+        {
+          "key": "_yaymail_template_variant",
+          "type": "string",
+          "bytes": 7
+        },
+        {
+          "key": "_yaymail_email_textLinkColor_settings",
+          "type": "string",
+          "bytes": 7
+        },
+        {
+          "key": "_yaymail_preheader",
+          "type": "string",
+          "bytes": 0
+        },
+        {
+          "key": "_jamu_ml_subject",
+          "type": "string",
+          "bytes": 49
+        },
+        {
+          "key": "_jamu_ml_heading",
+          "type": "string",
+          "bytes": 0
+        },
+        {
+          "key": "_jamu_ml_additional_content",
+          "type": "string",
+          "bytes": 26
+        }
+      ]
+    },
+    {
+      "id": 4618,
+      "title": "",
+      "status": "publish",
+      "template_name": "customer_completed_order",
+      "variant": "jamu-pl",
+      "jamu_language_fields": [
+        "subject",
+        "heading",
+        "additional_content"
+      ],
+      "content_bytes": 0,
+      "meta": [
+        {
+          "key": "_yaymail_template",
+          "type": "string",
+          "bytes": 24
+        },
+        {
+          "key": "_yaymail_elements",
+          "type": "string",
+          "bytes": 34824
+        },
+        {
+          "key": "_yaymail_status",
+          "type": "string",
+          "bytes": 8
+        },
+        {
+          "key": "_yaymail_email_backgroundColor_settings",
+          "type": "string",
+          "bytes": 18
+        },
+        {
+          "key": "_yaymail_is_v4_supported",
+          "type": "string",
+          "bytes": 1
+        },
+        {
+          "key": "_yaymail_global_header_settings",
+          "type": "string",
+          "bytes": 198
+        },
+        {
+          "key": "_yaymail_global_footer_settings",
+          "type": "string",
+          "bytes": 174
+        },
+        {
+          "key": "_yaymail_template_variant",
+          "type": "string",
+          "bytes": 7
+        },
+        {
+          "key": "_yaymail_email_textLinkColor_settings",
+          "type": "string",
+          "bytes": 7
+        },
+        {
+          "key": "_yaymail_preheader",
+          "type": "string",
+          "bytes": 0
+        },
+        {
+          "key": "_jamu_ml_subject",
+          "type": "string",
+          "bytes": 49
+        },
+        {
+          "key": "_jamu_ml_heading",
+          "type": "string",
+          "bytes": 0
+        },
+        {
+          "key": "_jamu_ml_additional_content",
+          "type": "string",
+          "bytes": 26
+        }
+      ]
+    },
+    {
+      "id": 4620,
+      "title": "",
+      "status": "publish",
+      "template_name": "customer_refunded_order",
+      "variant": "jamu-en",
+      "jamu_language_fields": [
+        "subject",
+        "heading",
+        "additional_content"
+      ],
+      "content_bytes": 0,
+      "meta": [
+        {
+          "key": "_yaymail_template",
+          "type": "string",
+          "bytes": 23
+        },
+        {
+          "key": "_yaymail_elements",
+          "type": "string",
+          "bytes": 29660
+        },
+        {
+          "key": "_yaymail_status",
+          "type": "string",
+          "bytes": 8
+        },
+        {
+          "key": "_yaymail_email_backgroundColor_settings",
+          "type": "string",
+          "bytes": 18
+        },
+        {
+          "key": "_yaymail_is_v4_supported",
+          "type": "string",
+          "bytes": 1
+        },
+        {
+          "key": "_yaymail_global_header_settings",
+          "type": "string",
+          "bytes": 198
+        },
+        {
+          "key": "_yaymail_global_footer_settings",
+          "type": "string",
+          "bytes": 174
+        },
+        {
+          "key": "_yaymail_template_variant",
+          "type": "string",
+          "bytes": 7
+        },
+        {
+          "key": "_yaymail_email_textLinkColor_settings",
+          "type": "string",
+          "bytes": 7
+        },
+        {
+          "key": "_yaymail_preheader",
+          "type": "string",
+          "bytes": 0
+        },
+        {
+          "key": "_jamu_ml_subject",
+          "type": "string",
+          "bytes": 66
+        },
+        {
+          "key": "_jamu_ml_heading",
+          "type": "string",
+          "bytes": 37
+        },
+        {
+          "key": "_jamu_ml_additional_content",
+          "type": "string",
+          "bytes": 0
+        }
+      ]
+    },
+    {
+      "id": 4622,
+      "title": "",
+      "status": "publish",
+      "template_name": "customer_refunded_order",
+      "variant": "jamu-de",
+      "jamu_language_fields": [
+        "subject",
+        "heading",
+        "additional_content"
+      ],
+      "content_bytes": 0,
+      "meta": [
+        {
+          "key": "_yaymail_template",
+          "type": "string",
+          "bytes": 23
+        },
+        {
+          "key": "_yaymail_elements",
+          "type": "string",
+          "bytes": 29789
+        },
+        {
+          "key": "_yaymail_status",
+          "type": "string",
+          "bytes": 8
+        },
+        {
+          "key": "_yaymail_email_backgroundColor_settings",
+          "type": "string",
+          "bytes": 18
+        },
+        {
+          "key": "_yaymail_is_v4_supported",
+          "type": "string",
+          "bytes": 1
+        },
+        {
+          "key": "_yaymail_global_header_settings",
+          "type": "string",
+          "bytes": 198
+        },
+        {
+          "key": "_yaymail_global_footer_settings",
+          "type": "string",
+          "bytes": 174
+        },
+        {
+          "key": "_yaymail_template_variant",
+          "type": "string",
+          "bytes": 7
+        },
+        {
+          "key": "_yaymail_email_textLinkColor_settings",
+          "type": "string",
+          "bytes": 7
+        },
+        {
+          "key": "_yaymail_preheader",
+          "type": "string",
+          "bytes": 0
+        },
+        {
+          "key": "_jamu_ml_subject",
+          "type": "string",
+          "bytes": 66
+        },
+        {
+          "key": "_jamu_ml_heading",
+          "type": "string",
+          "bytes": 37
+        },
+        {
+          "key": "_jamu_ml_additional_content",
+          "type": "string",
+          "bytes": 0
+        }
+      ]
+    },
+    {
+      "id": 4624,
+      "title": "",
+      "status": "publish",
+      "template_name": "customer_refunded_order",
+      "variant": "jamu-pl",
+      "jamu_language_fields": [
+        "subject",
+        "heading",
+        "additional_content"
+      ],
+      "content_bytes": 0,
+      "meta": [
+        {
+          "key": "_yaymail_template",
+          "type": "string",
+          "bytes": 23
+        },
+        {
+          "key": "_yaymail_elements",
+          "type": "string",
+          "bytes": 29726
+        },
+        {
+          "key": "_yaymail_status",
+          "type": "string",
+          "bytes": 8
+        },
+        {
+          "key": "_yaymail_email_backgroundColor_settings",
+          "type": "string",
+          "bytes": 18
+        },
+        {
+          "key": "_yaymail_is_v4_supported",
+          "type": "string",
+          "bytes": 1
+        },
+        {
+          "key": "_yaymail_global_header_settings",
+          "type": "string",
+          "bytes": 198
+        },
+        {
+          "key": "_yaymail_global_footer_settings",
+          "type": "string",
+          "bytes": 174
+        },
+        {
+          "key": "_yaymail_template_variant",
+          "type": "string",
+          "bytes": 7
+        },
+        {
+          "key": "_yaymail_email_textLinkColor_settings",
+          "type": "string",
+          "bytes": 7
+        },
+        {
+          "key": "_yaymail_preheader",
+          "type": "string",
+          "bytes": 0
+        },
+        {
+          "key": "_jamu_ml_subject",
+          "type": "string",
+          "bytes": 66
+        },
+        {
+          "key": "_jamu_ml_heading",
+          "type": "string",
+          "bytes": 37
+        },
+        {
+          "key": "_jamu_ml_additional_content",
+          "type": "string",
+          "bytes": 0
+        }
+      ]
+    },
+    {
+      "id": 4626,
+      "title": "",
+      "status": "publish",
+      "template_name": "customer_invoice",
+      "variant": "jamu-en",
+      "jamu_language_fields": [
+        "subject",
+        "heading",
+        "additional_content"
+      ],
+      "content_bytes": 0,
+      "meta": [
+        {
+          "key": "_yaymail_template",
+          "type": "string",
+          "bytes": 16
+        },
+        {
+          "key": "_yaymail_elements",
+          "type": "string",
+          "bytes": 30691
+        },
+        {
+          "key": "_yaymail_status",
+          "type": "string",
+          "bytes": 8
+        },
+        {
+          "key": "_yaymail_email_backgroundColor_settings",
+          "type": "string",
+          "bytes": 18
+        },
+        {
+          "key": "_yaymail_is_v4_supported",
+          "type": "string",
+          "bytes": 1
+        },
+        {
+          "key": "_yaymail_global_header_settings",
+          "type": "string",
+          "bytes": 198
+        },
+        {
+          "key": "_yaymail_global_footer_settings",
+          "type": "string",
+          "bytes": 174
+        },
+        {
+          "key": "_yaymail_template_variant",
+          "type": "string",
+          "bytes": 7
+        },
+        {
+          "key": "_yaymail_email_textLinkColor_settings",
+          "type": "string",
+          "bytes": 7
+        },
+        {
+          "key": "_yaymail_preheader",
+          "type": "string",
+          "bytes": 0
+        },
+        {
+          "key": "_jamu_ml_subject",
+          "type": "string",
+          "bytes": 65
+        },
+        {
+          "key": "_jamu_ml_heading",
+          "type": "string",
+          "bytes": 44
+        },
+        {
+          "key": "_jamu_ml_additional_content",
+          "type": "string",
+          "bytes": 0
+        }
+      ]
+    },
+    {
+      "id": 4628,
+      "title": "",
+      "status": "publish",
+      "template_name": "customer_invoice",
+      "variant": "jamu-de",
+      "jamu_language_fields": [
+        "subject",
+        "heading",
+        "additional_content"
+      ],
+      "content_bytes": 0,
+      "meta": [
+        {
+          "key": "_yaymail_template",
+          "type": "string",
+          "bytes": 16
+        },
+        {
+          "key": "_yaymail_elements",
+          "type": "string",
+          "bytes": 30826
+        },
+        {
+          "key": "_yaymail_status",
+          "type": "string",
+          "bytes": 8
+        },
+        {
+          "key": "_yaymail_email_backgroundColor_settings",
+          "type": "string",
+          "bytes": 18
+        },
+        {
+          "key": "_yaymail_is_v4_supported",
+          "type": "string",
+          "bytes": 1
+        },
+        {
+          "key": "_yaymail_global_header_settings",
+          "type": "string",
+          "bytes": 198
+        },
+        {
+          "key": "_yaymail_global_footer_settings",
+          "type": "string",
+          "bytes": 174
+        },
+        {
+          "key": "_yaymail_template_variant",
+          "type": "string",
+          "bytes": 7
+        },
+        {
+          "key": "_yaymail_email_textLinkColor_settings",
+          "type": "string",
+          "bytes": 7
+        },
+        {
+          "key": "_yaymail_preheader",
+          "type": "string",
+          "bytes": 0
+        },
+        {
+          "key": "_jamu_ml_subject",
+          "type": "string",
+          "bytes": 65
+        },
+        {
+          "key": "_jamu_ml_heading",
+          "type": "string",
+          "bytes": 44
+        },
+        {
+          "key": "_jamu_ml_additional_content",
+          "type": "string",
+          "bytes": 0
+        }
+      ]
+    },
+    {
+      "id": 4630,
+      "title": "",
+      "status": "publish",
+      "template_name": "customer_invoice",
+      "variant": "jamu-pl",
+      "jamu_language_fields": [
+        "subject",
+        "heading",
+        "additional_content"
+      ],
+      "content_bytes": 0,
+      "meta": [
+        {
+          "key": "_yaymail_template",
+          "type": "string",
+          "bytes": 16
+        },
+        {
+          "key": "_yaymail_elements",
+          "type": "string",
+          "bytes": 30766
+        },
+        {
+          "key": "_yaymail_status",
+          "type": "string",
+          "bytes": 8
+        },
+        {
+          "key": "_yaymail_email_backgroundColor_settings",
+          "type": "string",
+          "bytes": 18
+        },
+        {
+          "key": "_yaymail_is_v4_supported",
+          "type": "string",
+          "bytes": 1
+        },
+        {
+          "key": "_yaymail_global_header_settings",
+          "type": "string",
+          "bytes": 198
+        },
+        {
+          "key": "_yaymail_global_footer_settings",
+          "type": "string",
+          "bytes": 174
+        },
+        {
+          "key": "_yaymail_template_variant",
+          "type": "string",
+          "bytes": 7
+        },
+        {
+          "key": "_yaymail_email_textLinkColor_settings",
+          "type": "string",
+          "bytes": 7
+        },
+        {
+          "key": "_yaymail_preheader",
+          "type": "string",
+          "bytes": 0
+        },
+        {
+          "key": "_jamu_ml_subject",
+          "type": "string",
+          "bytes": 65
+        },
+        {
+          "key": "_jamu_ml_heading",
+          "type": "string",
+          "bytes": 44
+        },
+        {
+          "key": "_jamu_ml_additional_content",
+          "type": "string",
+          "bytes": 0
+        }
+      ]
+    },
+    {
+      "id": 4632,
+      "title": "",
+      "status": "publish",
+      "template_name": "customer_note",
+      "variant": "jamu-en",
+      "jamu_language_fields": [
+        "subject",
+        "heading",
+        "additional_content"
+      ],
+      "content_bytes": 0,
+      "meta": [
+        {
+          "key": "_yaymail_template",
+          "type": "string",
+          "bytes": 13
+        },
+        {
+          "key": "_yaymail_elements",
+          "type": "string",
+          "bytes": 11577
+        },
+        {
+          "key": "_yaymail_status",
+          "type": "string",
+          "bytes": 8
+        },
+        {
+          "key": "_yaymail_email_backgroundColor_settings",
+          "type": "string",
+          "bytes": 7
+        },
+        {
+          "key": "_yaymail_is_v4_supported",
+          "type": "string",
+          "bytes": 1
+        },
+        {
+          "key": "_yaymail_global_header_settings",
+          "type": "string",
+          "bytes": 198
+        },
+        {
+          "key": "_yaymail_global_footer_settings",
+          "type": "string",
+          "bytes": 174
+        },
+        {
+          "key": "_yaymail_template_variant",
+          "type": "string",
+          "bytes": 7
+        },
+        {
+          "key": "_yaymail_email_textLinkColor_settings",
+          "type": "string",
+          "bytes": 7
+        },
+        {
+          "key": "_yaymail_preheader",
+          "type": "string",
+          "bytes": 0
+        },
+        {
+          "key": "_jamu_ml_subject",
+          "type": "string",
+          "bytes": 64
+        },
+        {
+          "key": "_jamu_ml_heading",
+          "type": "string",
+          "bytes": 38
+        },
+        {
+          "key": "_jamu_ml_additional_content",
+          "type": "string",
+          "bytes": 0
+        }
+      ]
+    },
+    {
+      "id": 4634,
+      "title": "",
+      "status": "publish",
+      "template_name": "customer_note",
+      "variant": "jamu-de",
+      "jamu_language_fields": [
+        "subject",
+        "heading",
+        "additional_content"
+      ],
+      "content_bytes": 0,
+      "meta": [
+        {
+          "key": "_yaymail_template",
+          "type": "string",
+          "bytes": 13
+        },
+        {
+          "key": "_yaymail_elements",
+          "type": "string",
+          "bytes": 11578
+        },
+        {
+          "key": "_yaymail_status",
+          "type": "string",
+          "bytes": 8
+        },
+        {
+          "key": "_yaymail_email_backgroundColor_settings",
+          "type": "string",
+          "bytes": 7
+        },
+        {
+          "key": "_yaymail_is_v4_supported",
+          "type": "string",
+          "bytes": 1
+        },
+        {
+          "key": "_yaymail_global_header_settings",
+          "type": "string",
+          "bytes": 198
+        },
+        {
+          "key": "_yaymail_global_footer_settings",
+          "type": "string",
+          "bytes": 174
+        },
+        {
+          "key": "_yaymail_template_variant",
+          "type": "string",
+          "bytes": 7
+        },
+        {
+          "key": "_yaymail_email_textLinkColor_settings",
+          "type": "string",
+          "bytes": 7
+        },
+        {
+          "key": "_yaymail_preheader",
+          "type": "string",
+          "bytes": 0
+        },
+        {
+          "key": "_jamu_ml_subject",
+          "type": "string",
+          "bytes": 64
+        },
+        {
+          "key": "_jamu_ml_heading",
+          "type": "string",
+          "bytes": 38
+        },
+        {
+          "key": "_jamu_ml_additional_content",
+          "type": "string",
+          "bytes": 0
+        }
+      ]
+    },
+    {
+      "id": 4635,
+      "title": "",
+      "status": "publish",
+      "template_name": "customer_note",
+      "variant": "jamu-de",
+      "jamu_language_fields": [
+        "subject",
+        "heading",
+        "additional_content"
+      ],
+      "content_bytes": 0,
+      "meta": [
+        {
+          "key": "_yaymail_template",
+          "type": "string",
+          "bytes": 13
+        },
+        {
+          "key": "_yaymail_elements",
+          "type": "string",
+          "bytes": 11578
+        },
+        {
+          "key": "_yaymail_status",
+          "type": "string",
+          "bytes": 8
+        },
+        {
+          "key": "_yaymail_email_backgroundColor_settings",
+          "type": "string",
+          "bytes": 7
+        },
+        {
+          "key": "_yaymail_is_v4_supported",
+          "type": "string",
+          "bytes": 1
+        },
+        {
+          "key": "_yaymail_global_header_settings",
+          "type": "string",
+          "bytes": 198
+        },
+        {
+          "key": "_yaymail_global_footer_settings",
+          "type": "string",
+          "bytes": 174
+        },
+        {
+          "key": "_yaymail_template_variant",
+          "type": "string",
+          "bytes": 7
+        },
+        {
+          "key": "_yaymail_email_textLinkColor_settings",
+          "type": "string",
+          "bytes": 7
+        },
+        {
+          "key": "_yaymail_preheader",
+          "type": "string",
+          "bytes": 0
+        },
+        {
+          "key": "_jamu_ml_subject",
+          "type": "string",
+          "bytes": 64
+        },
+        {
+          "key": "_jamu_ml_heading",
+          "type": "string",
+          "bytes": 38
+        },
+        {
+          "key": "_jamu_ml_additional_content",
+          "type": "string",
+          "bytes": 0
+        }
+      ]
+    },
+    {
+      "id": 4638,
+      "title": "",
+      "status": "publish",
+      "template_name": "customer_note",
+      "variant": "jamu-pl",
+      "jamu_language_fields": [
+        "subject",
+        "heading",
+        "additional_content"
+      ],
+      "content_bytes": 0,
+      "meta": [
+        {
+          "key": "_yaymail_template",
+          "type": "string",
+          "bytes": 13
+        },
+        {
+          "key": "_yaymail_elements",
+          "type": "string",
+          "bytes": 11580
+        },
+        {
+          "key": "_yaymail_status",
+          "type": "string",
+          "bytes": 8
+        },
+        {
+          "key": "_yaymail_email_backgroundColor_settings",
+          "type": "string",
+          "bytes": 7
+        },
+        {
+          "key": "_yaymail_is_v4_supported",
+          "type": "string",
+          "bytes": 1
+        },
+        {
+          "key": "_yaymail_global_header_settings",
+          "type": "string",
+          "bytes": 198
+        },
+        {
+          "key": "_yaymail_global_footer_settings",
+          "type": "string",
+          "bytes": 174
+        },
+        {
+          "key": "_yaymail_template_variant",
+          "type": "string",
+          "bytes": 7
+        },
+        {
+          "key": "_yaymail_email_textLinkColor_settings",
+          "type": "string",
+          "bytes": 7
+        },
+        {
+          "key": "_yaymail_preheader",
+          "type": "string",
+          "bytes": 0
+        },
+        {
+          "key": "_jamu_ml_subject",
+          "type": "string",
+          "bytes": 64
+        },
+        {
+          "key": "_jamu_ml_heading",
+          "type": "string",
+          "bytes": 38
+        },
+        {
+          "key": "_jamu_ml_additional_content",
+          "type": "string",
+          "bytes": 0
+        }
+      ]
+    },
+    {
+      "id": 4639,
+      "title": "",
+      "status": "publish",
+      "template_name": "customer_note",
+      "variant": "jamu-pl",
+      "jamu_language_fields": [
+        "subject",
+        "heading",
+        "additional_content"
+      ],
+      "content_bytes": 0,
+      "meta": [
+        {
+          "key": "_yaymail_template",
+          "type": "string",
+          "bytes": 13
+        },
+        {
+          "key": "_yaymail_elements",
+          "type": "string",
+          "bytes": 11580
+        },
+        {
+          "key": "_yaymail_status",
+          "type": "string",
+          "bytes": 8
+        },
+        {
+          "key": "_yaymail_email_backgroundColor_settings",
+          "type": "string",
+          "bytes": 7
+        },
+        {
+          "key": "_yaymail_is_v4_supported",
+          "type": "string",
+          "bytes": 1
+        },
+        {
+          "key": "_yaymail_global_header_settings",
+          "type": "string",
+          "bytes": 198
+        },
+        {
+          "key": "_yaymail_global_footer_settings",
+          "type": "string",
+          "bytes": 174
+        },
+        {
+          "key": "_yaymail_template_variant",
+          "type": "string",
+          "bytes": 7
+        },
+        {
+          "key": "_yaymail_email_textLinkColor_settings",
+          "type": "string",
+          "bytes": 7
+        },
+        {
+          "key": "_yaymail_preheader",
+          "type": "string",
+          "bytes": 0
+        },
+        {
+          "key": "_jamu_ml_subject",
+          "type": "string",
+          "bytes": 64
+        },
+        {
+          "key": "_jamu_ml_heading",
+          "type": "string",
+          "bytes": 38
+        },
+        {
+          "key": "_jamu_ml_additional_content",
+          "type": "string",
+          "bytes": 0
+        }
+      ]
+    },
+    {
+      "id": 4642,
+      "title": "",
+      "status": "publish",
+      "template_name": "customer_reset_password",
+      "variant": "jamu-en",
+      "jamu_language_fields": [
+        "subject",
+        "heading",
+        "additional_content"
+      ],
+      "content_bytes": 0,
+      "meta": [
+        {
+          "key": "_yaymail_template",
+          "type": "string",
+          "bytes": 23
+        },
+        {
+          "key": "_yaymail_elements",
+          "type": "string",
+          "bytes": 6832
+        },
+        {
+          "key": "_yaymail_status",
+          "type": "string",
+          "bytes": 8
+        },
+        {
+          "key": "_yaymail_email_backgroundColor_settings",
+          "type": "string",
+          "bytes": 7
+        },
+        {
+          "key": "_yaymail_is_v4_supported",
+          "type": "string",
+          "bytes": 1
+        },
+        {
+          "key": "_yaymail_global_header_settings",
+          "type": "string",
+          "bytes": 198
+        },
+        {
+          "key": "_yaymail_global_footer_settings",
+          "type": "string",
+          "bytes": 174
+        },
+        {
+          "key": "_yaymail_template_variant",
+          "type": "string",
+          "bytes": 7
+        },
+        {
+          "key": "_yaymail_email_textLinkColor_settings",
+          "type": "string",
+          "bytes": 7
+        },
+        {
+          "key": "_yaymail_preheader",
+          "type": "string",
+          "bytes": 0
+        },
+        {
+          "key": "_jamu_ml_subject",
+          "type": "string",
+          "bytes": 42
+        },
+        {
+          "key": "_jamu_ml_heading",
+          "type": "string",
+          "bytes": 26
+        },
+        {
+          "key": "_jamu_ml_additional_content",
+          "type": "string",
+          "bytes": 0
+        }
+      ]
+    },
+    {
+      "id": 4643,
+      "title": "",
+      "status": "publish",
+      "template_name": "customer_reset_password",
+      "variant": "jamu-en",
+      "jamu_language_fields": [
+        "subject",
+        "heading",
+        "additional_content"
+      ],
+      "content_bytes": 0,
+      "meta": [
+        {
+          "key": "_yaymail_template",
+          "type": "string",
+          "bytes": 23
+        },
+        {
+          "key": "_yaymail_elements",
+          "type": "string",
+          "bytes": 6832
+        },
+        {
+          "key": "_yaymail_status",
+          "type": "string",
+          "bytes": 8
+        },
+        {
+          "key": "_yaymail_email_backgroundColor_settings",
+          "type": "string",
+          "bytes": 7
+        },
+        {
+          "key": "_yaymail_is_v4_supported",
+          "type": "string",
+          "bytes": 1
+        },
+        {
+          "key": "_yaymail_global_header_settings",
+          "type": "string",
+          "bytes": 198
+        },
+        {
+          "key": "_yaymail_global_footer_settings",
+          "type": "string",
+          "bytes": 174
+        },
+        {
+          "key": "_yaymail_template_variant",
+          "type": "string",
+          "bytes": 7
+        },
+        {
+          "key": "_yaymail_email_textLinkColor_settings",
+          "type": "string",
+          "bytes": 7
+        },
+        {
+          "key": "_yaymail_preheader",
+          "type": "string",
+          "bytes": 0
+        },
+        {
+          "key": "_jamu_ml_subject",
+          "type": "string",
+          "bytes": 42
+        },
+        {
+          "key": "_jamu_ml_heading",
+          "type": "string",
+          "bytes": 26
+        },
+        {
+          "key": "_jamu_ml_additional_content",
+          "type": "string",
+          "bytes": 0
+        }
+      ]
+    },
+    {
+      "id": 4646,
+      "title": "",
+      "status": "publish",
+      "template_name": "customer_reset_password",
+      "variant": "jamu-de",
+      "jamu_language_fields": [
+        "subject",
+        "heading",
+        "additional_content"
+      ],
+      "content_bytes": 0,
+      "meta": [
+        {
+          "key": "_yaymail_template",
+          "type": "string",
+          "bytes": 23
+        },
+        {
+          "key": "_yaymail_elements",
+          "type": "string",
+          "bytes": 6832
+        },
+        {
+          "key": "_yaymail_status",
+          "type": "string",
+          "bytes": 8
+        },
+        {
+          "key": "_yaymail_email_backgroundColor_settings",
+          "type": "string",
+          "bytes": 7
+        },
+        {
+          "key": "_yaymail_is_v4_supported",
+          "type": "string",
+          "bytes": 1
+        },
+        {
+          "key": "_yaymail_global_header_settings",
+          "type": "string",
+          "bytes": 198
+        },
+        {
+          "key": "_yaymail_global_footer_settings",
+          "type": "string",
+          "bytes": 174
+        },
+        {
+          "key": "_yaymail_template_variant",
+          "type": "string",
+          "bytes": 7
+        },
+        {
+          "key": "_yaymail_email_textLinkColor_settings",
+          "type": "string",
+          "bytes": 7
+        },
+        {
+          "key": "_yaymail_preheader",
+          "type": "string",
+          "bytes": 0
+        },
+        {
+          "key": "_jamu_ml_subject",
+          "type": "string",
+          "bytes": 42
+        },
+        {
+          "key": "_jamu_ml_heading",
+          "type": "string",
+          "bytes": 26
+        },
+        {
+          "key": "_jamu_ml_additional_content",
+          "type": "string",
+          "bytes": 0
+        }
+      ]
+    },
+    {
+      "id": 4648,
+      "title": "",
+      "status": "publish",
+      "template_name": "customer_reset_password",
+      "variant": "jamu-pl",
+      "jamu_language_fields": [
+        "subject",
+        "heading",
+        "additional_content"
+      ],
+      "content_bytes": 0,
+      "meta": [
+        {
+          "key": "_yaymail_template",
+          "type": "string",
+          "bytes": 23
+        },
+        {
+          "key": "_yaymail_elements",
+          "type": "string",
+          "bytes": 6832
+        },
+        {
+          "key": "_yaymail_status",
+          "type": "string",
+          "bytes": 8
+        },
+        {
+          "key": "_yaymail_email_backgroundColor_settings",
+          "type": "string",
+          "bytes": 7
+        },
+        {
+          "key": "_yaymail_is_v4_supported",
+          "type": "string",
+          "bytes": 1
+        },
+        {
+          "key": "_yaymail_global_header_settings",
+          "type": "string",
+          "bytes": 198
+        },
+        {
+          "key": "_yaymail_global_footer_settings",
+          "type": "string",
+          "bytes": 174
+        },
+        {
+          "key": "_yaymail_template_variant",
+          "type": "string",
+          "bytes": 7
+        },
+        {
+          "key": "_yaymail_email_textLinkColor_settings",
+          "type": "string",
+          "bytes": 7
+        },
+        {
+          "key": "_yaymail_preheader",
+          "type": "string",
+          "bytes": 0
+        },
+        {
+          "key": "_jamu_ml_subject",
+          "type": "string",
+          "bytes": 42
+        },
+        {
+          "key": "_jamu_ml_heading",
+          "type": "string",
+          "bytes": 26
+        },
+        {
+          "key": "_jamu_ml_additional_content",
+          "type": "string",
+          "bytes": 0
+        }
+      ]
+    },
+    {
+      "id": 4649,
+      "title": "",
+      "status": "publish",
+      "template_name": "customer_reset_password",
+      "variant": "jamu-pl",
+      "jamu_language_fields": [
+        "subject",
+        "heading",
+        "additional_content"
+      ],
+      "content_bytes": 0,
+      "meta": [
+        {
+          "key": "_yaymail_template",
+          "type": "string",
+          "bytes": 23
+        },
+        {
+          "key": "_yaymail_elements",
+          "type": "string",
+          "bytes": 6832
+        },
+        {
+          "key": "_yaymail_status",
+          "type": "string",
+          "bytes": 8
+        },
+        {
+          "key": "_yaymail_email_backgroundColor_settings",
+          "type": "string",
+          "bytes": 7
+        },
+        {
+          "key": "_yaymail_is_v4_supported",
+          "type": "string",
+          "bytes": 1
+        },
+        {
+          "key": "_yaymail_global_header_settings",
+          "type": "string",
+          "bytes": 198
+        },
+        {
+          "key": "_yaymail_global_footer_settings",
+          "type": "string",
+          "bytes": 174
+        },
+        {
+          "key": "_yaymail_template_variant",
+          "type": "string",
+          "bytes": 7
+        },
+        {
+          "key": "_yaymail_email_textLinkColor_settings",
+          "type": "string",
+          "bytes": 7
+        },
+        {
+          "key": "_yaymail_preheader",
+          "type": "string",
+          "bytes": 0
+        },
+        {
+          "key": "_jamu_ml_subject",
+          "type": "string",
+          "bytes": 42
+        },
+        {
+          "key": "_jamu_ml_heading",
+          "type": "string",
+          "bytes": 26
+        },
+        {
+          "key": "_jamu_ml_additional_content",
+          "type": "string",
+          "bytes": 0
+        }
+      ]
+    },
+    {
+      "id": 4652,
+      "title": "",
+      "status": "publish",
+      "template_name": "customer_new_account",
+      "variant": "jamu-en",
+      "jamu_language_fields": [
+        "subject",
+        "heading",
+        "additional_content"
+      ],
+      "content_bytes": 0,
+      "meta": [
+        {
+          "key": "_yaymail_template",
+          "type": "string",
+          "bytes": 20
+        },
+        {
+          "key": "_yaymail_elements",
+          "type": "string",
+          "bytes": 6491
+        },
+        {
+          "key": "_yaymail_status",
+          "type": "string",
+          "bytes": 8
+        },
+        {
+          "key": "_yaymail_email_backgroundColor_settings",
+          "type": "string",
+          "bytes": 7
+        },
+        {
+          "key": "_yaymail_is_v4_supported",
+          "type": "string",
+          "bytes": 1
+        },
+        {
+          "key": "_yaymail_global_header_settings",
+          "type": "string",
+          "bytes": 198
+        },
+        {
+          "key": "_yaymail_global_footer_settings",
+          "type": "string",
+          "bytes": 174
+        },
+        {
+          "key": "_yaymail_template_variant",
+          "type": "string",
+          "bytes": 7
+        },
+        {
+          "key": "_yaymail_email_textLinkColor_settings",
+          "type": "string",
+          "bytes": 7
+        },
+        {
+          "key": "_yaymail_preheader",
+          "type": "string",
+          "bytes": 0
+        },
+        {
+          "key": "_jamu_ml_subject",
+          "type": "string",
+          "bytes": 43
+        },
+        {
+          "key": "_jamu_ml_heading",
+          "type": "string",
+          "bytes": 29
+        },
+        {
+          "key": "_jamu_ml_additional_content",
+          "type": "string",
+          "bytes": 0
+        }
+      ]
+    },
+    {
+      "id": 4653,
+      "title": "",
+      "status": "publish",
+      "template_name": "customer_new_account",
+      "variant": "jamu-en",
+      "jamu_language_fields": [
+        "subject",
+        "heading",
+        "additional_content"
+      ],
+      "content_bytes": 0,
+      "meta": [
+        {
+          "key": "_yaymail_template",
+          "type": "string",
+          "bytes": 20
+        },
+        {
+          "key": "_yaymail_elements",
+          "type": "string",
+          "bytes": 6491
+        },
+        {
+          "key": "_yaymail_status",
+          "type": "string",
+          "bytes": 8
+        },
+        {
+          "key": "_yaymail_email_backgroundColor_settings",
+          "type": "string",
+          "bytes": 7
+        },
+        {
+          "key": "_yaymail_is_v4_supported",
+          "type": "string",
+          "bytes": 1
+        },
+        {
+          "key": "_yaymail_global_header_settings",
+          "type": "string",
+          "bytes": 198
+        },
+        {
+          "key": "_yaymail_global_footer_settings",
+          "type": "string",
+          "bytes": 174
+        },
+        {
+          "key": "_yaymail_template_variant",
+          "type": "string",
+          "bytes": 7
+        },
+        {
+          "key": "_yaymail_email_textLinkColor_settings",
+          "type": "string",
+          "bytes": 7
+        },
+        {
+          "key": "_yaymail_preheader",
+          "type": "string",
+          "bytes": 0
+        },
+        {
+          "key": "_jamu_ml_subject",
+          "type": "string",
+          "bytes": 43
+        },
+        {
+          "key": "_jamu_ml_heading",
+          "type": "string",
+          "bytes": 29
+        },
+        {
+          "key": "_jamu_ml_additional_content",
+          "type": "string",
+          "bytes": 0
+        }
+      ]
+    },
+    {
+      "id": 4656,
+      "title": "",
+      "status": "publish",
+      "template_name": "customer_new_account",
+      "variant": "jamu-de",
+      "jamu_language_fields": [
+        "subject",
+        "heading",
+        "additional_content"
+      ],
+      "content_bytes": 0,
+      "meta": [
+        {
+          "key": "_yaymail_template",
+          "type": "string",
+          "bytes": 20
+        },
+        {
+          "key": "_yaymail_elements",
+          "type": "string",
+          "bytes": 6491
+        },
+        {
+          "key": "_yaymail_status",
+          "type": "string",
+          "bytes": 8
+        },
+        {
+          "key": "_yaymail_email_backgroundColor_settings",
+          "type": "string",
+          "bytes": 7
+        },
+        {
+          "key": "_yaymail_is_v4_supported",
+          "type": "string",
+          "bytes": 1
+        },
+        {
+          "key": "_yaymail_global_header_settings",
+          "type": "string",
+          "bytes": 198
+        },
+        {
+          "key": "_yaymail_global_footer_settings",
+          "type": "string",
+          "bytes": 174
+        },
+        {
+          "key": "_yaymail_template_variant",
+          "type": "string",
+          "bytes": 7
+        },
+        {
+          "key": "_yaymail_email_textLinkColor_settings",
+          "type": "string",
+          "bytes": 7
+        },
+        {
+          "key": "_yaymail_preheader",
+          "type": "string",
+          "bytes": 0
+        },
+        {
+          "key": "_jamu_ml_subject",
+          "type": "string",
+          "bytes": 43
+        },
+        {
+          "key": "_jamu_ml_heading",
+          "type": "string",
+          "bytes": 29
+        },
+        {
+          "key": "_jamu_ml_additional_content",
+          "type": "string",
+          "bytes": 0
+        }
+      ]
+    },
+    {
+      "id": 4657,
+      "title": "",
+      "status": "publish",
+      "template_name": "customer_new_account",
+      "variant": "jamu-de",
+      "jamu_language_fields": [
+        "subject",
+        "heading",
+        "additional_content"
+      ],
+      "content_bytes": 0,
+      "meta": [
+        {
+          "key": "_yaymail_template",
+          "type": "string",
+          "bytes": 20
+        },
+        {
+          "key": "_yaymail_elements",
+          "type": "string",
+          "bytes": 6491
+        },
+        {
+          "key": "_yaymail_status",
+          "type": "string",
+          "bytes": 8
+        },
+        {
+          "key": "_yaymail_email_backgroundColor_settings",
+          "type": "string",
+          "bytes": 7
+        },
+        {
+          "key": "_yaymail_is_v4_supported",
+          "type": "string",
+          "bytes": 1
+        },
+        {
+          "key": "_yaymail_global_header_settings",
+          "type": "string",
+          "bytes": 198
+        },
+        {
+          "key": "_yaymail_global_footer_settings",
+          "type": "string",
+          "bytes": 174
+        },
+        {
+          "key": "_yaymail_template_variant",
+          "type": "string",
+          "bytes": 7
+        },
+        {
+          "key": "_yaymail_email_textLinkColor_settings",
+          "type": "string",
+          "bytes": 7
+        },
+        {
+          "key": "_yaymail_preheader",
+          "type": "string",
+          "bytes": 0
+        },
+        {
+          "key": "_jamu_ml_subject",
+          "type": "string",
+          "bytes": 43
+        },
+        {
+          "key": "_jamu_ml_heading",
+          "type": "string",
+          "bytes": 29
+        },
+        {
+          "key": "_jamu_ml_additional_content",
+          "type": "string",
+          "bytes": 0
+        }
+      ]
+    },
+    {
+      "id": 4660,
+      "title": "",
+      "status": "publish",
+      "template_name": "customer_new_account",
+      "variant": "jamu-pl",
+      "jamu_language_fields": [
+        "subject",
+        "heading",
+        "additional_content"
+      ],
+      "content_bytes": 0,
+      "meta": [
+        {
+          "key": "_yaymail_template",
+          "type": "string",
+          "bytes": 20
+        },
+        {
+          "key": "_yaymail_elements",
+          "type": "string",
+          "bytes": 6491
+        },
+        {
+          "key": "_yaymail_status",
+          "type": "string",
+          "bytes": 8
+        },
+        {
+          "key": "_yaymail_email_backgroundColor_settings",
+          "type": "string",
+          "bytes": 7
+        },
+        {
+          "key": "_yaymail_is_v4_supported",
+          "type": "string",
+          "bytes": 1
+        },
+        {
+          "key": "_yaymail_global_header_settings",
+          "type": "string",
+          "bytes": 198
+        },
+        {
+          "key": "_yaymail_global_footer_settings",
+          "type": "string",
+          "bytes": 174
+        },
+        {
+          "key": "_yaymail_template_variant",
+          "type": "string",
+          "bytes": 7
+        },
+        {
+          "key": "_yaymail_email_textLinkColor_settings",
+          "type": "string",
+          "bytes": 7
+        },
+        {
+          "key": "_yaymail_preheader",
+          "type": "string",
+          "bytes": 0
+        },
+        {
+          "key": "_jamu_ml_subject",
+          "type": "string",
+          "bytes": 43
+        },
+        {
+          "key": "_jamu_ml_heading",
+          "type": "string",
+          "bytes": 29
+        },
+        {
+          "key": "_jamu_ml_additional_content",
+          "type": "string",
+          "bytes": 0
+        }
+      ]
+    },
+    {
+      "id": 4661,
+      "title": "",
+      "status": "publish",
+      "template_name": "customer_new_account",
+      "variant": "jamu-pl",
+      "jamu_language_fields": [
+        "subject",
+        "heading",
+        "additional_content"
+      ],
+      "content_bytes": 0,
+      "meta": [
+        {
+          "key": "_yaymail_template",
+          "type": "string",
+          "bytes": 20
+        },
+        {
+          "key": "_yaymail_elements",
+          "type": "string",
+          "bytes": 6491
+        },
+        {
+          "key": "_yaymail_status",
+          "type": "string",
+          "bytes": 8
+        },
+        {
+          "key": "_yaymail_email_backgroundColor_settings",
+          "type": "string",
+          "bytes": 7
+        },
+        {
+          "key": "_yaymail_is_v4_supported",
+          "type": "string",
+          "bytes": 1
+        },
+        {
+          "key": "_yaymail_global_header_settings",
+          "type": "string",
+          "bytes": 198
+        },
+        {
+          "key": "_yaymail_global_footer_settings",
+          "type": "string",
+          "bytes": 174
+        },
+        {
+          "key": "_yaymail_template_variant",
+          "type": "string",
+          "bytes": 7
+        },
+        {
+          "key": "_yaymail_email_textLinkColor_settings",
+          "type": "string",
+          "bytes": 7
+        },
+        {
+          "key": "_yaymail_preheader",
+          "type": "string",
+          "bytes": 0
+        },
+        {
+          "key": "_jamu_ml_subject",
+          "type": "string",
+          "bytes": 43
+        },
+        {
+          "key": "_jamu_ml_heading",
+          "type": "string",
+          "bytes": 29
+        },
+        {
+          "key": "_jamu_ml_additional_content",
+          "type": "string",
+          "bytes": 0
+        }
+      ]
+    },
+    {
+      "id": 4664,
+      "title": "",
+      "status": "publish",
+      "template_name": "customer_failed_order",
+      "variant": "jamu-en",
+      "jamu_language_fields": [
+        "subject",
+        "heading",
+        "additional_content"
+      ],
+      "content_bytes": 0,
+      "meta": [
+        {
+          "key": "_yaymail_template",
+          "type": "string",
+          "bytes": 21
+        },
+        {
+          "key": "_yaymail_elements",
+          "type": "string",
+          "bytes": 10714
+        },
+        {
+          "key": "_yaymail_status",
+          "type": "string",
+          "bytes": 8
+        },
+        {
+          "key": "_yaymail_email_backgroundColor_settings",
+          "type": "string",
+          "bytes": 7
+        },
+        {
+          "key": "_yaymail_is_v4_supported",
+          "type": "string",
+          "bytes": 1
+        },
+        {
+          "key": "_yaymail_global_header_settings",
+          "type": "string",
+          "bytes": 198
+        },
+        {
+          "key": "_yaymail_global_footer_settings",
+          "type": "string",
+          "bytes": 174
+        },
+        {
+          "key": "_yaymail_template_variant",
+          "type": "string",
+          "bytes": 7
+        },
+        {
+          "key": "_yaymail_email_textLinkColor_settings",
+          "type": "string",
+          "bytes": 7
+        },
+        {
+          "key": "_yaymail_preheader",
+          "type": "string",
+          "bytes": 0
+        },
+        {
+          "key": "_jamu_ml_subject",
+          "type": "string",
+          "bytes": 52
+        },
+        {
+          "key": "_jamu_ml_heading",
+          "type": "string",
+          "bytes": 51
+        },
+        {
+          "key": "_jamu_ml_additional_content",
+          "type": "string",
+          "bytes": 0
+        }
+      ]
+    },
+    {
+      "id": 4665,
+      "title": "",
+      "status": "publish",
+      "template_name": "customer_failed_order",
+      "variant": "jamu-en",
+      "jamu_language_fields": [
+        "subject",
+        "heading",
+        "additional_content"
+      ],
+      "content_bytes": 0,
+      "meta": [
+        {
+          "key": "_yaymail_template",
+          "type": "string",
+          "bytes": 21
+        },
+        {
+          "key": "_yaymail_elements",
+          "type": "string",
+          "bytes": 10714
+        },
+        {
+          "key": "_yaymail_status",
+          "type": "string",
+          "bytes": 8
+        },
+        {
+          "key": "_yaymail_email_backgroundColor_settings",
+          "type": "string",
+          "bytes": 7
+        },
+        {
+          "key": "_yaymail_is_v4_supported",
+          "type": "string",
+          "bytes": 1
+        },
+        {
+          "key": "_yaymail_global_header_settings",
+          "type": "string",
+          "bytes": 198
+        },
+        {
+          "key": "_yaymail_global_footer_settings",
+          "type": "string",
+          "bytes": 174
+        },
+        {
+          "key": "_yaymail_template_variant",
+          "type": "string",
+          "bytes": 7
+        },
+        {
+          "key": "_yaymail_email_textLinkColor_settings",
+          "type": "string",
+          "bytes": 7
+        },
+        {
+          "key": "_yaymail_preheader",
+          "type": "string",
+          "bytes": 0
+        },
+        {
+          "key": "_jamu_ml_subject",
+          "type": "string",
+          "bytes": 52
+        },
+        {
+          "key": "_jamu_ml_heading",
+          "type": "string",
+          "bytes": 51
+        },
+        {
+          "key": "_jamu_ml_additional_content",
+          "type": "string",
+          "bytes": 0
+        }
+      ]
+    },
+    {
+      "id": 4668,
+      "title": "",
+      "status": "publish",
+      "template_name": "customer_failed_order",
+      "variant": "jamu-de",
+      "jamu_language_fields": [
+        "subject",
+        "heading",
+        "additional_content"
+      ],
+      "content_bytes": 0,
+      "meta": [
+        {
+          "key": "_yaymail_template",
+          "type": "string",
+          "bytes": 21
+        },
+        {
+          "key": "_yaymail_elements",
+          "type": "string",
+          "bytes": 10715
+        },
+        {
+          "key": "_yaymail_status",
+          "type": "string",
+          "bytes": 8
+        },
+        {
+          "key": "_yaymail_email_backgroundColor_settings",
+          "type": "string",
+          "bytes": 7
+        },
+        {
+          "key": "_yaymail_is_v4_supported",
+          "type": "string",
+          "bytes": 1
+        },
+        {
+          "key": "_yaymail_global_header_settings",
+          "type": "string",
+          "bytes": 198
+        },
+        {
+          "key": "_yaymail_global_footer_settings",
+          "type": "string",
+          "bytes": 174
+        },
+        {
+          "key": "_yaymail_template_variant",
+          "type": "string",
+          "bytes": 7
+        },
+        {
+          "key": "_yaymail_email_textLinkColor_settings",
+          "type": "string",
+          "bytes": 7
+        },
+        {
+          "key": "_yaymail_preheader",
+          "type": "string",
+          "bytes": 0
+        },
+        {
+          "key": "_jamu_ml_subject",
+          "type": "string",
+          "bytes": 52
+        },
+        {
+          "key": "_jamu_ml_heading",
+          "type": "string",
+          "bytes": 51
+        },
+        {
+          "key": "_jamu_ml_additional_content",
+          "type": "string",
+          "bytes": 0
+        }
+      ]
+    },
+    {
+      "id": 4669,
+      "title": "",
+      "status": "publish",
+      "template_name": "customer_failed_order",
+      "variant": "jamu-de",
+      "jamu_language_fields": [
+        "subject",
+        "heading",
+        "additional_content"
+      ],
+      "content_bytes": 0,
+      "meta": [
+        {
+          "key": "_yaymail_template",
+          "type": "string",
+          "bytes": 21
+        },
+        {
+          "key": "_yaymail_elements",
+          "type": "string",
+          "bytes": 10715
+        },
+        {
+          "key": "_yaymail_status",
+          "type": "string",
+          "bytes": 8
+        },
+        {
+          "key": "_yaymail_email_backgroundColor_settings",
+          "type": "string",
+          "bytes": 7
+        },
+        {
+          "key": "_yaymail_is_v4_supported",
+          "type": "string",
+          "bytes": 1
+        },
+        {
+          "key": "_yaymail_global_header_settings",
+          "type": "string",
+          "bytes": 198
+        },
+        {
+          "key": "_yaymail_global_footer_settings",
+          "type": "string",
+          "bytes": 174
+        },
+        {
+          "key": "_yaymail_template_variant",
+          "type": "string",
+          "bytes": 7
+        },
+        {
+          "key": "_yaymail_email_textLinkColor_settings",
+          "type": "string",
+          "bytes": 7
+        },
+        {
+          "key": "_yaymail_preheader",
+          "type": "string",
+          "bytes": 0
+        },
+        {
+          "key": "_jamu_ml_subject",
+          "type": "string",
+          "bytes": 52
+        },
+        {
+          "key": "_jamu_ml_heading",
+          "type": "string",
+          "bytes": 51
+        },
+        {
+          "key": "_jamu_ml_additional_content",
+          "type": "string",
+          "bytes": 0
+        }
+      ]
+    },
+    {
+      "id": 4672,
+      "title": "",
+      "status": "publish",
+      "template_name": "customer_failed_order",
+      "variant": "jamu-pl",
+      "jamu_language_fields": [
+        "subject",
+        "heading",
+        "additional_content"
+      ],
+      "content_bytes": 0,
+      "meta": [
+        {
+          "key": "_yaymail_template",
+          "type": "string",
+          "bytes": 21
+        },
+        {
+          "key": "_yaymail_elements",
+          "type": "string",
+          "bytes": 10717
+        },
+        {
+          "key": "_yaymail_status",
+          "type": "string",
+          "bytes": 8
+        },
+        {
+          "key": "_yaymail_email_backgroundColor_settings",
+          "type": "string",
+          "bytes": 7
+        },
+        {
+          "key": "_yaymail_is_v4_supported",
+          "type": "string",
+          "bytes": 1
+        },
+        {
+          "key": "_yaymail_global_header_settings",
+          "type": "string",
+          "bytes": 198
+        },
+        {
+          "key": "_yaymail_global_footer_settings",
+          "type": "string",
+          "bytes": 174
+        },
+        {
+          "key": "_yaymail_template_variant",
+          "type": "string",
+          "bytes": 7
+        },
+        {
+          "key": "_yaymail_email_textLinkColor_settings",
+          "type": "string",
+          "bytes": 7
+        },
+        {
+          "key": "_yaymail_preheader",
+          "type": "string",
+          "bytes": 0
+        },
+        {
+          "key": "_jamu_ml_subject",
+          "type": "string",
+          "bytes": 52
+        },
+        {
+          "key": "_jamu_ml_heading",
+          "type": "string",
+          "bytes": 51
+        },
+        {
+          "key": "_jamu_ml_additional_content",
+          "type": "string",
+          "bytes": 0
+        }
+      ]
+    },
+    {
+      "id": 4673,
+      "title": "",
+      "status": "publish",
+      "template_name": "customer_failed_order",
+      "variant": "jamu-pl",
+      "jamu_language_fields": [
+        "subject",
+        "heading",
+        "additional_content"
+      ],
+      "content_bytes": 0,
+      "meta": [
+        {
+          "key": "_yaymail_template",
+          "type": "string",
+          "bytes": 21
+        },
+        {
+          "key": "_yaymail_elements",
+          "type": "string",
+          "bytes": 10717
+        },
+        {
+          "key": "_yaymail_status",
+          "type": "string",
+          "bytes": 8
+        },
+        {
+          "key": "_yaymail_email_backgroundColor_settings",
+          "type": "string",
+          "bytes": 7
+        },
+        {
+          "key": "_yaymail_is_v4_supported",
+          "type": "string",
+          "bytes": 1
+        },
+        {
+          "key": "_yaymail_global_header_settings",
+          "type": "string",
+          "bytes": 198
+        },
+        {
+          "key": "_yaymail_global_footer_settings",
+          "type": "string",
+          "bytes": 174
+        },
+        {
+          "key": "_yaymail_template_variant",
+          "type": "string",
+          "bytes": 7
+        },
+        {
+          "key": "_yaymail_email_textLinkColor_settings",
+          "type": "string",
+          "bytes": 7
+        },
+        {
+          "key": "_yaymail_preheader",
+          "type": "string",
+          "bytes": 0
+        },
+        {
+          "key": "_jamu_ml_subject",
+          "type": "string",
+          "bytes": 52
+        },
+        {
+          "key": "_jamu_ml_heading",
+          "type": "string",
+          "bytes": 51
+        },
+        {
+          "key": "_jamu_ml_additional_content",
+          "type": "string",
+          "bytes": 0
+        }
+      ]
+    },
+    {
+      "id": 4676,
+      "title": "",
+      "status": "publish",
+      "template_name": "customer_cancelled_order",
+      "variant": "jamu-en",
+      "jamu_language_fields": [
+        "subject",
+        "heading",
+        "additional_content"
+      ],
+      "content_bytes": 0,
+      "meta": [
+        {
+          "key": "_yaymail_template",
+          "type": "string",
+          "bytes": 24
+        },
+        {
+          "key": "_yaymail_elements",
+          "type": "string",
+          "bytes": 9050
+        },
+        {
+          "key": "_yaymail_status",
+          "type": "string",
+          "bytes": 8
+        },
+        {
+          "key": "_yaymail_email_backgroundColor_settings",
+          "type": "string",
+          "bytes": 7
+        },
+        {
+          "key": "_yaymail_is_v4_supported",
+          "type": "string",
+          "bytes": 1
+        },
+        {
+          "key": "_yaymail_global_header_settings",
+          "type": "string",
+          "bytes": 198
+        },
+        {
+          "key": "_yaymail_global_footer_settings",
+          "type": "string",
+          "bytes": 174
+        },
+        {
+          "key": "_yaymail_template_variant",
+          "type": "string",
+          "bytes": 7
+        },
+        {
+          "key": "_yaymail_preheader",
+          "type": "string",
+          "bytes": 0
+        },
+        {
+          "key": "_jamu_ml_subject",
+          "type": "string",
+          "bytes": 66
+        },
+        {
+          "key": "_jamu_ml_heading",
+          "type": "string",
+          "bytes": 39
+        },
+        {
+          "key": "_jamu_ml_additional_content",
+          "type": "string",
+          "bytes": 0
+        }
+      ]
+    },
+    {
+      "id": 4677,
+      "title": "",
+      "status": "publish",
+      "template_name": "customer_cancelled_order",
+      "variant": "jamu-en",
+      "jamu_language_fields": [
+        "subject",
+        "heading",
+        "additional_content"
+      ],
+      "content_bytes": 0,
+      "meta": [
+        {
+          "key": "_yaymail_template",
+          "type": "string",
+          "bytes": 24
+        },
+        {
+          "key": "_yaymail_elements",
+          "type": "string",
+          "bytes": 9050
+        },
+        {
+          "key": "_yaymail_status",
+          "type": "string",
+          "bytes": 8
+        },
+        {
+          "key": "_yaymail_email_backgroundColor_settings",
+          "type": "string",
+          "bytes": 7
+        },
+        {
+          "key": "_yaymail_is_v4_supported",
+          "type": "string",
+          "bytes": 1
+        },
+        {
+          "key": "_yaymail_global_header_settings",
+          "type": "string",
+          "bytes": 198
+        },
+        {
+          "key": "_yaymail_global_footer_settings",
+          "type": "string",
+          "bytes": 174
+        },
+        {
+          "key": "_yaymail_template_variant",
+          "type": "string",
+          "bytes": 7
+        },
+        {
+          "key": "_yaymail_preheader",
+          "type": "string",
+          "bytes": 0
+        },
+        {
+          "key": "_jamu_ml_subject",
+          "type": "string",
+          "bytes": 66
+        },
+        {
+          "key": "_jamu_ml_heading",
+          "type": "string",
+          "bytes": 39
+        },
+        {
+          "key": "_jamu_ml_additional_content",
+          "type": "string",
+          "bytes": 0
+        }
+      ]
+    },
+    {
+      "id": 4680,
+      "title": "",
+      "status": "publish",
+      "template_name": "customer_cancelled_order",
+      "variant": "jamu-de",
+      "jamu_language_fields": [
+        "subject",
+        "heading",
+        "additional_content"
+      ],
+      "content_bytes": 0,
+      "meta": [
+        {
+          "key": "_yaymail_template",
+          "type": "string",
+          "bytes": 24
+        },
+        {
+          "key": "_yaymail_elements",
+          "type": "string",
+          "bytes": 9050
+        },
+        {
+          "key": "_yaymail_status",
+          "type": "string",
+          "bytes": 8
+        },
+        {
+          "key": "_yaymail_email_backgroundColor_settings",
+          "type": "string",
+          "bytes": 7
+        },
+        {
+          "key": "_yaymail_is_v4_supported",
+          "type": "string",
+          "bytes": 1
+        },
+        {
+          "key": "_yaymail_global_header_settings",
+          "type": "string",
+          "bytes": 198
+        },
+        {
+          "key": "_yaymail_global_footer_settings",
+          "type": "string",
+          "bytes": 174
+        },
+        {
+          "key": "_yaymail_template_variant",
+          "type": "string",
+          "bytes": 7
+        },
+        {
+          "key": "_yaymail_preheader",
+          "type": "string",
+          "bytes": 0
+        },
+        {
+          "key": "_jamu_ml_subject",
+          "type": "string",
+          "bytes": 66
+        },
+        {
+          "key": "_jamu_ml_heading",
+          "type": "string",
+          "bytes": 39
+        },
+        {
+          "key": "_jamu_ml_additional_content",
+          "type": "string",
+          "bytes": 0
+        }
+      ]
+    },
+    {
+      "id": 4681,
+      "title": "",
+      "status": "publish",
+      "template_name": "customer_cancelled_order",
+      "variant": "jamu-de",
+      "jamu_language_fields": [
+        "subject",
+        "heading",
+        "additional_content"
+      ],
+      "content_bytes": 0,
+      "meta": [
+        {
+          "key": "_yaymail_template",
+          "type": "string",
+          "bytes": 24
+        },
+        {
+          "key": "_yaymail_elements",
+          "type": "string",
+          "bytes": 9050
+        },
+        {
+          "key": "_yaymail_status",
+          "type": "string",
+          "bytes": 8
+        },
+        {
+          "key": "_yaymail_email_backgroundColor_settings",
+          "type": "string",
+          "bytes": 7
+        },
+        {
+          "key": "_yaymail_is_v4_supported",
+          "type": "string",
+          "bytes": 1
+        },
+        {
+          "key": "_yaymail_global_header_settings",
+          "type": "string",
+          "bytes": 198
+        },
+        {
+          "key": "_yaymail_global_footer_settings",
+          "type": "string",
+          "bytes": 174
+        },
+        {
+          "key": "_yaymail_template_variant",
+          "type": "string",
+          "bytes": 7
+        },
+        {
+          "key": "_yaymail_preheader",
+          "type": "string",
+          "bytes": 0
+        },
+        {
+          "key": "_jamu_ml_subject",
+          "type": "string",
+          "bytes": 66
+        },
+        {
+          "key": "_jamu_ml_heading",
+          "type": "string",
+          "bytes": 39
+        },
+        {
+          "key": "_jamu_ml_additional_content",
+          "type": "string",
+          "bytes": 0
+        }
+      ]
+    },
+    {
+      "id": 4684,
+      "title": "",
+      "status": "publish",
+      "template_name": "customer_cancelled_order",
+      "variant": "jamu-pl",
+      "jamu_language_fields": [
+        "subject",
+        "heading",
+        "additional_content"
+      ],
+      "content_bytes": 0,
+      "meta": [
+        {
+          "key": "_yaymail_template",
+          "type": "string",
+          "bytes": 24
+        },
+        {
+          "key": "_yaymail_elements",
+          "type": "string",
+          "bytes": 9063
+        },
+        {
+          "key": "_yaymail_status",
+          "type": "string",
+          "bytes": 8
+        },
+        {
+          "key": "_yaymail_email_backgroundColor_settings",
+          "type": "string",
+          "bytes": 7
+        },
+        {
+          "key": "_yaymail_is_v4_supported",
+          "type": "string",
+          "bytes": 1
+        },
+        {
+          "key": "_yaymail_global_header_settings",
+          "type": "string",
+          "bytes": 198
+        },
+        {
+          "key": "_yaymail_global_footer_settings",
+          "type": "string",
+          "bytes": 174
+        },
+        {
+          "key": "_yaymail_template_variant",
+          "type": "string",
+          "bytes": 7
+        },
+        {
+          "key": "_yaymail_preheader",
+          "type": "string",
+          "bytes": 0
+        },
+        {
+          "key": "_jamu_ml_subject",
+          "type": "string",
+          "bytes": 66
+        },
+        {
+          "key": "_jamu_ml_heading",
+          "type": "string",
+          "bytes": 39
+        },
+        {
+          "key": "_jamu_ml_additional_content",
+          "type": "string",
+          "bytes": 0
+        }
+      ]
+    },
+    {
+      "id": 4685,
+      "title": "",
+      "status": "publish",
+      "template_name": "customer_cancelled_order",
+      "variant": "jamu-pl",
+      "jamu_language_fields": [
+        "subject",
+        "heading",
+        "additional_content"
+      ],
+      "content_bytes": 0,
+      "meta": [
+        {
+          "key": "_yaymail_template",
+          "type": "string",
+          "bytes": 24
+        },
+        {
+          "key": "_yaymail_elements",
+          "type": "string",
+          "bytes": 9063
+        },
+        {
+          "key": "_yaymail_status",
+          "type": "string",
+          "bytes": 8
+        },
+        {
+          "key": "_yaymail_email_backgroundColor_settings",
+          "type": "string",
+          "bytes": 7
+        },
+        {
+          "key": "_yaymail_is_v4_supported",
+          "type": "string",
+          "bytes": 1
+        },
+        {
+          "key": "_yaymail_global_header_settings",
+          "type": "string",
+          "bytes": 198
+        },
+        {
+          "key": "_yaymail_global_footer_settings",
+          "type": "string",
+          "bytes": 174
+        },
+        {
+          "key": "_yaymail_template_variant",
+          "type": "string",
+          "bytes": 7
+        },
+        {
+          "key": "_yaymail_preheader",
+          "type": "string",
+          "bytes": 0
+        },
+        {
+          "key": "_jamu_ml_subject",
+          "type": "string",
+          "bytes": 66
+        },
+        {
+          "key": "_jamu_ml_heading",
+          "type": "string",
+          "bytes": 39
+        },
+        {
+          "key": "_jamu_ml_additional_content",
+          "type": "string",
+          "bytes": 0
+        }
+      ]
+    },
+    {
+      "id": 4688,
+      "title": "",
+      "status": "publish",
+      "template_name": "customer_pos_completed_order",
+      "variant": "jamu-en",
+      "jamu_language_fields": [
+        "subject",
+        "heading",
+        "additional_content"
+      ],
+      "content_bytes": 0,
+      "meta": [
+        {
+          "key": "_yaymail_template",
+          "type": "string",
+          "bytes": 28
+        },
+        {
+          "key": "_yaymail_elements",
+          "type": "string",
+          "bytes": 8997
+        },
+        {
+          "key": "_yaymail_status",
+          "type": "string",
+          "bytes": 8
+        },
+        {
+          "key": "_yaymail_email_backgroundColor_settings",
+          "type": "string",
+          "bytes": 7
+        },
+        {
+          "key": "_yaymail_is_v4_supported",
+          "type": "string",
+          "bytes": 1
+        },
+        {
+          "key": "_yaymail_global_header_settings",
+          "type": "string",
+          "bytes": 198
+        },
+        {
+          "key": "_yaymail_global_footer_settings",
+          "type": "string",
+          "bytes": 174
+        },
+        {
+          "key": "_yaymail_template_variant",
+          "type": "string",
+          "bytes": 7
+        },
+        {
+          "key": "_yaymail_preheader",
+          "type": "string",
+          "bytes": 0
+        },
+        {
+          "key": "_jamu_ml_subject",
+          "type": "string",
+          "bytes": 54
+        },
+        {
+          "key": "_jamu_ml_heading",
+          "type": "string",
+          "bytes": 36
+        },
+        {
+          "key": "_jamu_ml_additional_content",
+          "type": "string",
+          "bytes": 0
+        }
+      ]
+    },
+    {
+      "id": 4689,
+      "title": "",
+      "status": "publish",
+      "template_name": "customer_pos_completed_order",
+      "variant": "jamu-en",
+      "jamu_language_fields": [
+        "subject",
+        "heading",
+        "additional_content"
+      ],
+      "content_bytes": 0,
+      "meta": [
+        {
+          "key": "_yaymail_template",
+          "type": "string",
+          "bytes": 28
+        },
+        {
+          "key": "_yaymail_elements",
+          "type": "string",
+          "bytes": 8997
+        },
+        {
+          "key": "_yaymail_status",
+          "type": "string",
+          "bytes": 8
+        },
+        {
+          "key": "_yaymail_email_backgroundColor_settings",
+          "type": "string",
+          "bytes": 7
+        },
+        {
+          "key": "_yaymail_is_v4_supported",
+          "type": "string",
+          "bytes": 1
+        },
+        {
+          "key": "_yaymail_global_header_settings",
+          "type": "string",
+          "bytes": 198
+        },
+        {
+          "key": "_yaymail_global_footer_settings",
+          "type": "string",
+          "bytes": 174
+        },
+        {
+          "key": "_yaymail_template_variant",
+          "type": "string",
+          "bytes": 7
+        },
+        {
+          "key": "_yaymail_preheader",
+          "type": "string",
+          "bytes": 0
+        },
+        {
+          "key": "_jamu_ml_subject",
+          "type": "string",
+          "bytes": 54
+        },
+        {
+          "key": "_jamu_ml_heading",
+          "type": "string",
+          "bytes": 36
+        },
+        {
+          "key": "_jamu_ml_additional_content",
+          "type": "string",
+          "bytes": 0
+        }
+      ]
+    },
+    {
+      "id": 4692,
+      "title": "",
+      "status": "publish",
+      "template_name": "customer_pos_completed_order",
+      "variant": "jamu-de",
+      "jamu_language_fields": [
+        "subject",
+        "heading",
+        "additional_content"
+      ],
+      "content_bytes": 0,
+      "meta": [
+        {
+          "key": "_yaymail_template",
+          "type": "string",
+          "bytes": 28
+        },
+        {
+          "key": "_yaymail_elements",
+          "type": "string",
+          "bytes": 9001
+        },
+        {
+          "key": "_yaymail_status",
+          "type": "string",
+          "bytes": 8
+        },
+        {
+          "key": "_yaymail_email_backgroundColor_settings",
+          "type": "string",
+          "bytes": 7
+        },
+        {
+          "key": "_yaymail_is_v4_supported",
+          "type": "string",
+          "bytes": 1
+        },
+        {
+          "key": "_yaymail_global_header_settings",
+          "type": "string",
+          "bytes": 198
+        },
+        {
+          "key": "_yaymail_global_footer_settings",
+          "type": "string",
+          "bytes": 174
+        },
+        {
+          "key": "_yaymail_template_variant",
+          "type": "string",
+          "bytes": 7
+        },
+        {
+          "key": "_yaymail_preheader",
+          "type": "string",
+          "bytes": 0
+        },
+        {
+          "key": "_jamu_ml_subject",
+          "type": "string",
+          "bytes": 54
+        },
+        {
+          "key": "_jamu_ml_heading",
+          "type": "string",
+          "bytes": 36
+        },
+        {
+          "key": "_jamu_ml_additional_content",
+          "type": "string",
+          "bytes": 0
+        }
+      ]
+    },
+    {
+      "id": 4693,
+      "title": "",
+      "status": "publish",
+      "template_name": "customer_pos_completed_order",
+      "variant": "jamu-de",
+      "jamu_language_fields": [
+        "subject",
+        "heading",
+        "additional_content"
+      ],
+      "content_bytes": 0,
+      "meta": [
+        {
+          "key": "_yaymail_template",
+          "type": "string",
+          "bytes": 28
+        },
+        {
+          "key": "_yaymail_elements",
+          "type": "string",
+          "bytes": 9001
+        },
+        {
+          "key": "_yaymail_status",
+          "type": "string",
+          "bytes": 8
+        },
+        {
+          "key": "_yaymail_email_backgroundColor_settings",
+          "type": "string",
+          "bytes": 7
+        },
+        {
+          "key": "_yaymail_is_v4_supported",
+          "type": "string",
+          "bytes": 1
+        },
+        {
+          "key": "_yaymail_global_header_settings",
+          "type": "string",
+          "bytes": 198
+        },
+        {
+          "key": "_yaymail_global_footer_settings",
+          "type": "string",
+          "bytes": 174
+        },
+        {
+          "key": "_yaymail_template_variant",
+          "type": "string",
+          "bytes": 7
+        },
+        {
+          "key": "_yaymail_preheader",
+          "type": "string",
+          "bytes": 0
+        },
+        {
+          "key": "_jamu_ml_subject",
+          "type": "string",
+          "bytes": 54
+        },
+        {
+          "key": "_jamu_ml_heading",
+          "type": "string",
+          "bytes": 36
+        },
+        {
+          "key": "_jamu_ml_additional_content",
+          "type": "string",
+          "bytes": 0
+        }
+      ]
+    },
+    {
+      "id": 4696,
+      "title": "",
+      "status": "publish",
+      "template_name": "customer_pos_completed_order",
+      "variant": "jamu-pl",
+      "jamu_language_fields": [
+        "subject",
+        "heading",
+        "additional_content"
+      ],
+      "content_bytes": 0,
+      "meta": [
+        {
+          "key": "_yaymail_template",
+          "type": "string",
+          "bytes": 28
+        },
+        {
+          "key": "_yaymail_elements",
+          "type": "string",
+          "bytes": 9017
+        },
+        {
+          "key": "_yaymail_status",
+          "type": "string",
+          "bytes": 8
+        },
+        {
+          "key": "_yaymail_email_backgroundColor_settings",
+          "type": "string",
+          "bytes": 7
+        },
+        {
+          "key": "_yaymail_is_v4_supported",
+          "type": "string",
+          "bytes": 1
+        },
+        {
+          "key": "_yaymail_global_header_settings",
+          "type": "string",
+          "bytes": 198
+        },
+        {
+          "key": "_yaymail_global_footer_settings",
+          "type": "string",
+          "bytes": 174
+        },
+        {
+          "key": "_yaymail_template_variant",
+          "type": "string",
+          "bytes": 7
+        },
+        {
+          "key": "_yaymail_preheader",
+          "type": "string",
+          "bytes": 0
+        },
+        {
+          "key": "_jamu_ml_subject",
+          "type": "string",
+          "bytes": 54
+        },
+        {
+          "key": "_jamu_ml_heading",
+          "type": "string",
+          "bytes": 36
+        },
+        {
+          "key": "_jamu_ml_additional_content",
+          "type": "string",
+          "bytes": 0
+        }
+      ]
+    },
+    {
+      "id": 4697,
+      "title": "",
+      "status": "publish",
+      "template_name": "customer_pos_completed_order",
+      "variant": "jamu-pl",
+      "jamu_language_fields": [
+        "subject",
+        "heading",
+        "additional_content"
+      ],
+      "content_bytes": 0,
+      "meta": [
+        {
+          "key": "_yaymail_template",
+          "type": "string",
+          "bytes": 28
+        },
+        {
+          "key": "_yaymail_elements",
+          "type": "string",
+          "bytes": 9017
+        },
+        {
+          "key": "_yaymail_status",
+          "type": "string",
+          "bytes": 8
+        },
+        {
+          "key": "_yaymail_email_backgroundColor_settings",
+          "type": "string",
+          "bytes": 7
+        },
+        {
+          "key": "_yaymail_is_v4_supported",
+          "type": "string",
+          "bytes": 1
+        },
+        {
+          "key": "_yaymail_global_header_settings",
+          "type": "string",
+          "bytes": 198
+        },
+        {
+          "key": "_yaymail_global_footer_settings",
+          "type": "string",
+          "bytes": 174
+        },
+        {
+          "key": "_yaymail_template_variant",
+          "type": "string",
+          "bytes": 7
+        },
+        {
+          "key": "_yaymail_preheader",
+          "type": "string",
+          "bytes": 0
+        },
+        {
+          "key": "_jamu_ml_subject",
+          "type": "string",
+          "bytes": 54
+        },
+        {
+          "key": "_jamu_ml_heading",
+          "type": "string",
+          "bytes": 36
+        },
+        {
+          "key": "_jamu_ml_additional_content",
+          "type": "string",
+          "bytes": 0
+        }
+      ]
+    },
+    {
+      "id": 4700,
+      "title": "",
+      "status": "publish",
+      "template_name": "customer_pos_refunded_order",
+      "variant": "jamu-en",
+      "jamu_language_fields": [
+        "subject",
+        "heading",
+        "additional_content"
+      ],
+      "content_bytes": 0,
+      "meta": [
+        {
+          "key": "_yaymail_template",
+          "type": "string",
+          "bytes": 27
+        },
+        {
+          "key": "_yaymail_elements",
+          "type": "string",
+          "bytes": 9066
+        },
+        {
+          "key": "_yaymail_status",
+          "type": "string",
+          "bytes": 8
+        },
+        {
+          "key": "_yaymail_email_backgroundColor_settings",
+          "type": "string",
+          "bytes": 7
+        },
+        {
+          "key": "_yaymail_is_v4_supported",
+          "type": "string",
+          "bytes": 1
+        },
+        {
+          "key": "_yaymail_global_header_settings",
+          "type": "string",
+          "bytes": 198
+        },
+        {
+          "key": "_yaymail_global_footer_settings",
+          "type": "string",
+          "bytes": 174
+        },
+        {
+          "key": "_yaymail_template_variant",
+          "type": "string",
+          "bytes": 7
+        },
+        {
+          "key": "_yaymail_preheader",
+          "type": "string",
+          "bytes": 0
+        },
+        {
+          "key": "_jamu_ml_subject",
+          "type": "string",
+          "bytes": 68
+        },
+        {
+          "key": "_jamu_ml_heading",
+          "type": "string",
+          "bytes": 37
+        },
+        {
+          "key": "_jamu_ml_additional_content",
+          "type": "string",
+          "bytes": 0
+        }
+      ]
+    },
+    {
+      "id": 4701,
+      "title": "",
+      "status": "publish",
+      "template_name": "customer_pos_refunded_order",
+      "variant": "jamu-en",
+      "jamu_language_fields": [
+        "subject",
+        "heading",
+        "additional_content"
+      ],
+      "content_bytes": 0,
+      "meta": [
+        {
+          "key": "_yaymail_template",
+          "type": "string",
+          "bytes": 27
+        },
+        {
+          "key": "_yaymail_elements",
+          "type": "string",
+          "bytes": 9066
+        },
+        {
+          "key": "_yaymail_status",
+          "type": "string",
+          "bytes": 8
+        },
+        {
+          "key": "_yaymail_email_backgroundColor_settings",
+          "type": "string",
+          "bytes": 7
+        },
+        {
+          "key": "_yaymail_is_v4_supported",
+          "type": "string",
+          "bytes": 1
+        },
+        {
+          "key": "_yaymail_global_header_settings",
+          "type": "string",
+          "bytes": 198
+        },
+        {
+          "key": "_yaymail_global_footer_settings",
+          "type": "string",
+          "bytes": 174
+        },
+        {
+          "key": "_yaymail_template_variant",
+          "type": "string",
+          "bytes": 7
+        },
+        {
+          "key": "_yaymail_preheader",
+          "type": "string",
+          "bytes": 0
+        },
+        {
+          "key": "_jamu_ml_subject",
+          "type": "string",
+          "bytes": 68
+        },
+        {
+          "key": "_jamu_ml_heading",
+          "type": "string",
+          "bytes": 37
+        },
+        {
+          "key": "_jamu_ml_additional_content",
+          "type": "string",
+          "bytes": 0
+        }
+      ]
+    },
+    {
+      "id": 4704,
+      "title": "",
+      "status": "publish",
+      "template_name": "customer_pos_refunded_order",
+      "variant": "jamu-de",
+      "jamu_language_fields": [
+        "subject",
+        "heading",
+        "additional_content"
+      ],
+      "content_bytes": 0,
+      "meta": [
+        {
+          "key": "_yaymail_template",
+          "type": "string",
+          "bytes": 27
+        },
+        {
+          "key": "_yaymail_elements",
+          "type": "string",
+          "bytes": 9070
+        },
+        {
+          "key": "_yaymail_status",
+          "type": "string",
+          "bytes": 8
+        },
+        {
+          "key": "_yaymail_email_backgroundColor_settings",
+          "type": "string",
+          "bytes": 7
+        },
+        {
+          "key": "_yaymail_is_v4_supported",
+          "type": "string",
+          "bytes": 1
+        },
+        {
+          "key": "_yaymail_global_header_settings",
+          "type": "string",
+          "bytes": 198
+        },
+        {
+          "key": "_yaymail_global_footer_settings",
+          "type": "string",
+          "bytes": 174
+        },
+        {
+          "key": "_yaymail_template_variant",
+          "type": "string",
+          "bytes": 7
+        },
+        {
+          "key": "_yaymail_preheader",
+          "type": "string",
+          "bytes": 0
+        },
+        {
+          "key": "_jamu_ml_subject",
+          "type": "string",
+          "bytes": 68
+        },
+        {
+          "key": "_jamu_ml_heading",
+          "type": "string",
+          "bytes": 37
+        },
+        {
+          "key": "_jamu_ml_additional_content",
+          "type": "string",
+          "bytes": 0
+        }
+      ]
+    },
+    {
+      "id": 4705,
+      "title": "",
+      "status": "publish",
+      "template_name": "customer_pos_refunded_order",
+      "variant": "jamu-de",
+      "jamu_language_fields": [
+        "subject",
+        "heading",
+        "additional_content"
+      ],
+      "content_bytes": 0,
+      "meta": [
+        {
+          "key": "_yaymail_template",
+          "type": "string",
+          "bytes": 27
+        },
+        {
+          "key": "_yaymail_elements",
+          "type": "string",
+          "bytes": 9070
+        },
+        {
+          "key": "_yaymail_status",
+          "type": "string",
+          "bytes": 8
+        },
+        {
+          "key": "_yaymail_email_backgroundColor_settings",
+          "type": "string",
+          "bytes": 7
+        },
+        {
+          "key": "_yaymail_is_v4_supported",
+          "type": "string",
+          "bytes": 1
+        },
+        {
+          "key": "_yaymail_global_header_settings",
+          "type": "string",
+          "bytes": 198
+        },
+        {
+          "key": "_yaymail_global_footer_settings",
+          "type": "string",
+          "bytes": 174
+        },
+        {
+          "key": "_yaymail_template_variant",
+          "type": "string",
+          "bytes": 7
+        },
+        {
+          "key": "_yaymail_preheader",
+          "type": "string",
+          "bytes": 0
+        },
+        {
+          "key": "_jamu_ml_subject",
+          "type": "string",
+          "bytes": 68
+        },
+        {
+          "key": "_jamu_ml_heading",
+          "type": "string",
+          "bytes": 37
+        },
+        {
+          "key": "_jamu_ml_additional_content",
+          "type": "string",
+          "bytes": 0
+        }
+      ]
+    },
+    {
+      "id": 4708,
+      "title": "",
+      "status": "publish",
+      "template_name": "customer_pos_refunded_order",
+      "variant": "jamu-pl",
+      "jamu_language_fields": [
+        "subject",
+        "heading",
+        "additional_content"
+      ],
+      "content_bytes": 0,
+      "meta": [
+        {
+          "key": "_yaymail_template",
+          "type": "string",
+          "bytes": 27
+        },
+        {
+          "key": "_yaymail_elements",
+          "type": "string",
+          "bytes": 9086
+        },
+        {
+          "key": "_yaymail_status",
+          "type": "string",
+          "bytes": 8
+        },
+        {
+          "key": "_yaymail_email_backgroundColor_settings",
+          "type": "string",
+          "bytes": 7
+        },
+        {
+          "key": "_yaymail_is_v4_supported",
+          "type": "string",
+          "bytes": 1
+        },
+        {
+          "key": "_yaymail_global_header_settings",
+          "type": "string",
+          "bytes": 198
+        },
+        {
+          "key": "_yaymail_global_footer_settings",
+          "type": "string",
+          "bytes": 174
+        },
+        {
+          "key": "_yaymail_template_variant",
+          "type": "string",
+          "bytes": 7
+        },
+        {
+          "key": "_yaymail_preheader",
+          "type": "string",
+          "bytes": 0
+        },
+        {
+          "key": "_jamu_ml_subject",
+          "type": "string",
+          "bytes": 68
+        },
+        {
+          "key": "_jamu_ml_heading",
+          "type": "string",
+          "bytes": 37
+        },
+        {
+          "key": "_jamu_ml_additional_content",
+          "type": "string",
+          "bytes": 0
         }
       ]
     }
