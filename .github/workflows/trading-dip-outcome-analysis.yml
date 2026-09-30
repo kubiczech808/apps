@@ -30,6 +30,11 @@ on:
         required: false
         default: ""
         type: string
+      excluded_shapes:
+        description: "Leave out these market shapes, comma-separated, e.g. other,spread (blank = none)"
+        required: false
+        default: ""
+        type: string
 
 permissions:
   contents: read
@@ -51,4 +56,5 @@ jobs:
           MIN_PROBABILITY: ${{ inputs.min_probability }}
           MAX_PROBABILITY: ${{ inputs.max_probability }}
           DIP_TAG: ${{ inputs.tag }}
+          EXCLUDED_SHAPES: ${{ inputs.excluded_shapes }}
         run: node tools/dip-outcome-analysis.mjs

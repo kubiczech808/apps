@@ -16,7 +16,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { readFileSync } from "node:fs";
-import { bucketOf, carriesTag, distinctMarkets, volumeBucket, summarise, openingIsVerified } from "../tools/dip-outcome-analysis.mjs";
+import { spawn } from "node:child_process";
+import http from "node:http";
+import { fileURLToPath } from "node:url";
+import { bucketOf, carriesTag, distinctMarkets, groupByTag, shapeAllowed, volumeBucket, summarise, openingIsVerified } from "../tools/dip-outcome-analysis.mjs";
 
 const EDGES = [0.3, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0];
 
@@ -481,4 +484,94 @@ test("distinctMarkets: an entry with no time never displaces one that has a time
   ]);
   assert.equal(markets[0].entryPrice, 0.54);
   assert.equal(markets[0].portfolios.length, 2);
+});
+
+test("shapeAllowed: a portfolio's excluded shapes leave the answer, and nothing else does", () => {
+  const excluded = new Set(["other", "spread"]);
+  assert.equal(shapeAllowed({ shape: "spread" }, excluded), false);
+  assert.equal(shapeAllowed({ shape: "Other" }, excluded), false, "case never lets one back in");
+  assert.equal(shapeAllowed({ shape: "outright" }, excluded), true);
+  assert.equal(shapeAllowed({ shape: "in-event-leg" }, excluded), true);
+  assert.equal(shapeAllowed({ shape: "spread" }, new Set()), true, "no exclusions keeps everything");
+});
+
+test("groupByTag: a market is filed under every tag it carries, not only the first", () => {
+  const groups = groupByTag([
+    { tokenId: "1", polymarketTags: ["tennis", "sports"] },
+    { tokenId: "2", tagSlugs: [{ slug: "esports" }], polymarketTags: ["counter-strike-2"] },
+    { tokenId: "3" },
+  ]);
+  assert.deepEqual(groups.get("tennis").map((row) => row.tokenId), ["1"]);
+  assert.deepEqual(groups.get("sports").map((row) => row.tokenId), ["1"]);
+  assert.deepEqual(groups.get("counter-strike-2").map((row) => row.tokenId), ["2"], "a tag from a later field counts");
+  assert.deepEqual(groups.get("esports").map((row) => row.tokenId), ["2"]);
+  assert.deepEqual(groups.get("(untagged)").map((row) => row.tokenId), ["3"]);
+});
+
+// The whole tool, run as the workflow runs it, against a local stand-in for api.php. The
+// filters are applied inside main(), where no unit test reaches: a filter that exists as a
+// function but is never called would pass every test above.
+test("end to end: band, tag and excluded shapes all reach the answer, and a shared market counts once", async () => {
+  const trade = (tokenId, question, outcome, openedAt, entryPrice, pnl, tags = ["tennis", "sports"]) => ({
+    tokenId, question, outcome, openedAt, entryPrice, status: pnl > 0 ? "WON" : "LOST",
+    realizedPnlUsdc: pnl, totalCostUsdc: 4.9, polymarketTags: tags, daysToResolution: -0.1,
+  });
+  const closed = {
+    p1: [
+      trade("111", "Tabilo vs Paul", "Paul", "2026-09-29T04:39:00Z", 0.54, -4.9),
+      trade("222", "Spread: Paul (-1.5)", "Paul", "2026-09-29T04:50:00Z", 0.5, -4.9),
+      trade("333", "Sinner vs Alcaraz", "Sinner", "2026-09-28T10:00:00Z", 0.5, 4.8),
+      trade("555", "Ruud vs Fritz", "Ruud", "2026-09-27T10:00:00Z", 0.62, 3.0),
+    ],
+    p2: [
+      trade("111", "Tabilo vs Paul", "Paul", "2026-09-29T04:41:00Z", 0.49, -4.9),
+      trade("444", "NaVi vs FaZe", "NaVi", "2026-09-28T11:00:00Z", 0.5, 4.8, ["esports"]),
+    ],
+  };
+  const server = http.createServer((request, response) => {
+    const query = new URL(request.url, "http://local").searchParams;
+    let body = {};
+    if (query.get("action") === "portfolio-config") {
+      body = { config: { paper: {
+        p1: { displayName: "dip one", dipEntryEnabled: true },
+        p2: { displayName: "dip two", dipEntryEnabled: true },
+      } } };
+    } else if (query.get("summary") === "scraped") {
+      body = { state: { marketObservations: [] } };
+    } else if (query.get("summary") === "dashboard") {
+      const id = query.get("strategy_id");
+      body = { state: { paperPortfolios: { [id]: { trades: [], closedTrades: closed[id] || [] } } } };
+    }
+    response.setHeader("content-type", "application/json");
+    response.end(JSON.stringify(body));
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const tool = fileURLToPath(new URL("../tools/dip-outcome-analysis.mjs", import.meta.url));
+    const output = await new Promise((resolve, reject) => {
+      const child = spawn(process.execPath, [tool], {
+        env: {
+          PATH: process.env.PATH, NO_PROXY: "127.0.0.1", no_proxy: "127.0.0.1",
+          TRADING_HOST: `http://127.0.0.1:${server.address().port}`,
+          DIP_TAG: "tennis", MIN_PROBABILITY: "0.45", MAX_PROBABILITY: "0.56", EXCLUDED_SHAPES: "other,spread",
+        },
+      });
+      let text = "";
+      child.stdout.on("data", (chunk) => { text += chunk; });
+      child.stderr.on("data", (chunk) => { text += chunk; });
+      child.on("error", reject);
+      child.on("close", (code) => (code === 0 ? resolve(text) : reject(new Error(`exit ${code}: ${text}`))));
+    });
+    // 111 twice (two portfolios) and 333 survive; 222 is a spread, 444 is not tennis, 555 is
+    // above the band.
+    assert.match(output, /the 3 pooled trades are 2 market\(s\)/);
+    assert.match(output, /shapes excluded \[other, spread\]/);
+    assert.doesNotMatch(output, /Spread: Paul/, "an excluded shape never reaches the market list");
+    assert.doesNotMatch(output, /NaVi vs FaZe/, "another tag never reaches it");
+    assert.doesNotMatch(output, /Ruud vs Fritz/, "nor an entry outside the band");
+    assert.match(output, /54\.0%\s+lost\s+-4\.90\s+outright\s+2 pf\s+Tabilo vs Paul -> Paul/,
+      "the shared market once, at its first entry, held by two portfolios");
+  } finally {
+    server.close();
+  }
 });

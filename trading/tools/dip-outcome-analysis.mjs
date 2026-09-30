@@ -189,6 +189,27 @@ export function carriesTag(trade = {}, tag = ONLY_TAG) {
   return tradeTags(trade).includes(tag);
 }
 
+// Optional shapes to leave out, as a portfolio's excludedMarketShapes would: "how does MY
+// portfolio's rule do" has to drop the shapes it never buys, or a loss it could not have
+// taken counts against it.
+const EXCLUDED_SHAPES = new Set(String(process.env.EXCLUDED_SHAPES || "")
+  .split(",").map((shape) => shape.trim().toLowerCase()).filter(Boolean));
+export function shapeAllowed(trade = {}, excluded = EXCLUDED_SHAPES) {
+  return !excluded.has(String(trade?.shape || "").toLowerCase());
+}
+
+// Every tag a row carries is a key it is filed under, so a row appears once per tag.
+export function groupByTag(rows = []) {
+  const groups = new Map();
+  for (const row of rows) {
+    for (const tag of tradeTags(row)) {
+      if (!groups.has(tag)) groups.set(tag, []);
+      groups.get(tag).push(row);
+    }
+  }
+  return groups;
+}
+
 // A market bought by several portfolios is ONE outcome, not several. The dip portfolios watch
 // overlapping bands, so one tennis comeback can appear in the pool as five winning trades.
 // The pooled win rate then reflects how many portfolios were watching each match as much as
@@ -364,9 +385,10 @@ async function main() {
         entryVolume: num(trade.entryVolumeUsdc) ?? observation.volumeUsdc ?? null,
       };
     });
-    const banded = enriched.filter((trade) => withinBand(trade) && carriesTag(trade));
-    if (BAND_MIN != null || BAND_MAX != null || ONLY_TAG) {
-      console.log(`   entry band ${pct(BAND_MIN)}-${pct(BAND_MAX)} (inclusive)${ONLY_TAG ? `, tag "${ONLY_TAG}"` : ""}:`
+    const banded = enriched.filter((trade) => withinBand(trade) && carriesTag(trade) && shapeAllowed(trade));
+    if (BAND_MIN != null || BAND_MAX != null || ONLY_TAG || EXCLUDED_SHAPES.size) {
+      console.log(`   entry band ${pct(BAND_MIN)}-${pct(BAND_MAX)} (inclusive)${ONLY_TAG ? `, tag "${ONLY_TAG}"` : ""}`
+        + `${EXCLUDED_SHAPES.size ? `, shapes excluded [${[...EXCLUDED_SHAPES].join(", ")}]` : ""}:`
         + ` ${banded.length} of ${enriched.length} resolved trades kept`);
     }
     everything.push(...banded);
@@ -426,6 +448,11 @@ async function main() {
       + ` ${m.wins} won (${pct(m.winRate)}), P/L ${money(m.pnl)}, ${pct(m.perDollar)} per dollar staked`);
     printTable("DISTINCT MARKETS, by market shape", groupBy(markets, (trade) => trade.shape));
     printTable("DISTINCT MARKETS, by entry probability", groupBy(markets, probabilityBand));
+    const byTag = [...groupByTag(markets).entries()]
+      .sort((left, right) => right[1].length - left[1].length || left[0].localeCompare(right[0]))
+      .slice(0, 30);
+    printTable("DISTINCT MARKETS, by tag (the 30 most traded; a market is under each of its tags)",
+      new Map(byTag));
     if (ONLY_TAG || markets.length <= 40) printMarketList(markets);
   }
 }
