@@ -99,13 +99,16 @@ export const aggregateHourlyTimeframeCandles = ({ candles, timeframeId, allowFxS
 // The FX key may be added while an otherwise fresh matrix is already stored.
 // Do not preserve a cached "key missing" result for the remainder of that
 // hour: it would hide newly available Twelve Data pivots until the next bucket.
+// A provider rate limit is different: retrying the same seven-symbol request
+// each minute turns one 429 into 420 unnecessary hourly credits. Keep that
+// outcome only until the next completed hourly bucket.
 export const canReuseExternalTrendReference = ({ previous, hourBucket, apiKey }) => {
   if (previous?.hourBucket !== hourBucket) return false
   if (previous?.pivotSchemaVersion !== EXTERNAL_PIVOT_SCHEMA) return false
   if (!apiKey) return true
   return !previous.failures?.some((failure) => {
     const message = String(failure)
-    return message.includes('TWELVE_DATA_API_KEY není nastaven') || message.includes('Twelve Data HTTP 429')
+    return message.includes('TWELVE_DATA_API_KEY není nastaven')
   })
 }
 
