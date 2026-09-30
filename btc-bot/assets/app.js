@@ -1621,11 +1621,16 @@ const renderAssetChart = () => {
     if (historyControl) historyControl.hidden = true
     return
   }
+  const item = asset.trends?.[timeframeId]
   selectedAssetChart = { symbol: asset.symbol, timeframeId }
   persistAssetChartSelectionToUrl({ replace: true })
   card.hidden = false
-  title.textContent = `${asset.symbol} · ${column?.label || timeframeId.toUpperCase()}`
-  renderAssetZoneDetails(zoneDetails, asset, asset.trends?.[timeframeId], timeframeId)
+  const trend = item?.trend === 'up' || item?.trend === 'down' ? item.trend : 'flat'
+  title.replaceChildren(
+    el('span', { text: `${asset.symbol} · ${column?.label || timeframeId.toUpperCase()}` }),
+    el('span', { className: `asset-chart-trend asset-chart-trend-${trend}`, text: trend })
+  )
+  renderAssetZoneDetails(zoneDetails, asset, item, timeframeId)
 
   for (const chartColumn of assetChartColumns()) {
     const button = el('button', {
@@ -1650,7 +1655,6 @@ const renderAssetChart = () => {
     tabs.append(button)
   }
 
-  const item = asset.trends?.[timeframeId]
   const allCandles = (item?.chartCandles ?? []).filter((candle) =>
     [candle?.open, candle?.high, candle?.low, candle?.close].every((value) => Number.isFinite(value) && value > 0)
   )

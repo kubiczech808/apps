@@ -230,8 +230,12 @@ button.primary { color: #fff; background: var(--series-1); border-color: transpa
   gap: 14px;
   margin-bottom: 10px;
 }
-.asset-chart-head h2 { margin-bottom: 2px; color: var(--text-primary); font-size: 16px; }
+.asset-chart-head h2 { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 2px; color: var(--text-primary); font-size: 16px; }
 .asset-chart-head p { margin: 0; color: var(--text-muted); font-size: 12px; }
+.asset-chart-trend { display: inline-flex; align-items: center; min-height: 20px; padding: 1px 8px; border: 1px solid var(--border); border-radius: 999px; font-size: 12px; font-weight: 650; line-height: 1; text-transform: lowercase; }
+.asset-chart-trend-up { color: var(--good-text); border-color: rgba(12, 163, 12, 0.35); background: rgba(12, 163, 12, 0.12); }
+.asset-chart-trend-down { color: var(--critical-text); border-color: rgba(208, 59, 59, 0.35); background: var(--critical-soft); }
+.asset-chart-trend-flat { color: var(--warning-text); border-color: rgba(250, 178, 25, 0.35); background: var(--warning-soft); }
 .asset-chart-timeframes { display: flex; gap: 4px; flex-wrap: wrap; justify-content: flex-end; }
 .asset-chart-tab { min-width: 48px; padding: 5px 9px; border-radius: 999px; color: var(--text-secondary); }
 .asset-chart-tab[aria-selected="true"] { background: var(--text-primary); color: var(--page); border-color: transparent; }
