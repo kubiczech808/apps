@@ -158,6 +158,7 @@ add_action('wp_loaded', static function (): void {
     // only safe structural metadata here (never the email bodies or customer
     // data) so the multilingual layer can select stable per-language designs.
     $yaymail_templates = [];
+    $template_encoding_summary = [];
     if (post_type_exists('yaymail_template')) {
         $templates = get_posts([
             'post_type' => 'yaymail_template',
@@ -169,6 +170,22 @@ add_action('wp_loaded', static function (): void {
         ]);
         foreach ($templates as $template) {
             $meta = get_post_meta($template->ID);
+            $storage = (string) $template->post_content . (string) wp_json_encode($meta);
+            $qp_newline_count = preg_match_all('/=(?:0D)?0A/i', $storage);
+            $qp_utf8_count = preg_match_all('/=(?:C[0-9A-F]|D[0-9A-F])[0-9A-F]/i', $storage);
+            $decoded_storage = ($qp_newline_count || $qp_utf8_count) ? quoted_printable_decode($storage) : '';
+            $decodes_to_html = $decoded_storage !== ''
+                && preg_match('/<(?:html|body|table|div|p)\b/i', $decoded_storage) === 1;
+            if ($qp_newline_count || $qp_utf8_count) {
+                $template_encoding_summary[] = [
+                    'id' => (int) $template->ID,
+                    'template_name' => (string) get_post_meta($template->ID, '_yaymail_template', true),
+                    'variant' => (string) get_post_meta($template->ID, '_yaymail_template_variant', true),
+                    'qp_newline_count' => (int) $qp_newline_count,
+                    'qp_utf8_count' => (int) $qp_utf8_count,
+                    'decodes_to_html' => $decodes_to_html,
+                ];
+            }
             $meta_summary = [];
             foreach ($meta as $key => $values) {
                 $value = $values[0] ?? '';
@@ -186,12 +203,6 @@ add_action('wp_loaded', static function (): void {
                 'variant' => (string) get_post_meta($template->ID, '_yaymail_template_variant', true),
                 'jamu_language_fields' => array_values(array_filter(['subject', 'heading', 'additional_content'], static fn (string $field): bool => metadata_exists('post', $template->ID, '_jamu_ml_' . $field))),
                 'content_bytes' => strlen((string) $template->post_content),
-                // A visual template must contain literal HTML, never a
-                // pre-encoded quoted-printable message body.
-                'has_quoted_printable_artifacts' => (bool) preg_match(
-                    '/=(?:0D|0A|[A-F0-9]{2})/i',
-                    (string) $template->post_content . wp_json_encode($meta)
-                ),
                 'meta' => $meta_summary,
             ];
         }
@@ -200,11 +211,14 @@ add_action('wp_loaded', static function (): void {
     // Exercise the actual PHPMailer hook chain without calling send() or
     // exposing a message body. This catches a broken content-transfer
     // encoding before a customer can receive it.
+    $mailer_class = class_exists('\PHPMailer\PHPMailer\PHPMailer')
+        ? '\PHPMailer\PHPMailer\PHPMailer'
+        : (class_exists('PHPMailer') ? 'PHPMailer' : '');
     $mail_encoding_probe = ['available' => false];
-    if (class_exists('\PHPMailer\PHPMailer\PHPMailer')) {
+    if ($mailer_class !== '') {
         try {
             $probe_html = '<html><body><p>JAMU encoding probe: Příliš žluťoučký kůň.</p></body></html>';
-            $mailer = new \PHPMailer\PHPMailer\PHPMailer(true);
+            $mailer = new $mailer_class(true);
             $mailer->isMail();
             $mailer->setFrom('noreply@example.invalid', 'JAMU test');
             $mailer->addAddress('recipient@example.invalid');
@@ -217,12 +231,16 @@ add_action('wp_loaded', static function (): void {
             $mime = (string) $mailer->getSentMIMEMessage();
             $sections = preg_split("/\\r?\\n\\r?\\n/", $mime, 2);
             $encoded_body = $sections[1] ?? '';
-            $decoded_body = strtolower((string) ($mailer->Encoding ?? '')) === 'base64'
-                ? base64_decode(preg_replace('/\\s+/', '', $encoded_body), true)
-                : $encoded_body;
+            $encoding = strtolower((string) ($mailer->Encoding ?? ''));
+            $decoded_body = match ($encoding) {
+                'base64' => base64_decode(preg_replace('/\\s+/', '', $encoded_body), true),
+                'quoted-printable' => quoted_printable_decode($encoded_body),
+                default => $encoded_body,
+            };
             $mail_encoding_probe = [
                 'available' => true,
-                'encoding' => (string) ($mailer->Encoding ?? ''),
+                'mailer_class' => $mailer_class,
+                'encoding' => $encoding,
                 'charset' => (string) ($mailer->CharSet ?? ''),
                 'mime_has_base64_header' => stripos($mime, 'Content-Transfer-Encoding: base64') !== false,
                 'decoded_body_contains_marker' => is_string($decoded_body) && str_contains($decoded_body, 'JAMU encoding probe'),
@@ -252,6 +270,7 @@ add_action('wp_loaded', static function (): void {
         'snippet_signals' => $snippet_signals,
         'wpcode_signals' => $wpcode_signals,
         'mail_encoding_probe' => $mail_encoding_probe,
+        'template_encoding_summary' => $template_encoding_summary,
     ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
     exit;
 }, 999);
