@@ -1,0 +1,43 @@
+name: Trading Dip Market Explain
+
+# Read-only diagnostic, manual only. For one market: what the hourly dip backtest saw, the
+# minute-by-minute price path, the published backtest cache row, and the live account's own
+# trade on it. Places no orders, writes nothing, uses no secrets.
+on:
+  workflow_dispatch:
+    inputs:
+      slug:
+        description: "Event or market slug, e.g. atp-tabilo-paul-2026-09-29"
+        required: true
+        type: string
+      tag:
+        description: "Backtest cache to look the market up in"
+        required: false
+        default: "tennis"
+        type: string
+      portfolio:
+        description: "Dip portfolio whose rule to apply"
+        required: false
+        default: "dip 70+ -> 45-56 live"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  explain:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Explain one market
+        working-directory: trading
+        env:
+          DIP_EXPLAIN_SLUG: ${{ inputs.slug }}
+          DIP_EXPLAIN_TAG: ${{ inputs.tag }}
+          DIP_EXPLAIN_PORTFOLIO: ${{ inputs.portfolio }}
+        run: node tools/dip-market-explain.mjs
