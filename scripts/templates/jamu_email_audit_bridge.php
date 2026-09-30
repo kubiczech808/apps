@@ -19,9 +19,22 @@ add_action('wp_loaded', static function (): void {
     nocache_headers();
     header('Content-Type: application/json; charset=UTF-8');
     header('X-JAMU-Email-Audit: active');
+    ob_start();
+    $runtime_warnings = [];
+    set_error_handler(static function (int $severity, string $message, string $file, int $line) use (&$runtime_warnings): bool {
+        $runtime_warnings[] = [
+            'severity' => $severity,
+            'file' => basename($file),
+            'line' => $line,
+        ];
+        return true;
+    });
     $completed = false;
     register_shutdown_function(static function () use (&$completed): void {
         if (!$completed && !headers_sent()) {
+            while (ob_get_level() > 0) {
+                ob_end_clean();
+            }
             $error = error_get_last();
             http_response_code(500);
             header('Content-Type: application/json; charset=UTF-8');
@@ -339,6 +352,14 @@ add_action('wp_loaded', static function (): void {
         }
     }
 
+    restore_error_handler();
+    $warning_summary = array_values(array_unique(array_map(
+        static fn (array $warning): string => implode(':', $warning),
+        $runtime_warnings
+    )));
+    while (ob_get_level() > 0) {
+        ob_end_clean();
+    }
     $completed = true;
     echo wp_json_encode([
         'schema' => 1,
@@ -361,6 +382,7 @@ add_action('wp_loaded', static function (): void {
         'mail_encoding_probe' => $mail_encoding_probe,
         'template_encoding_summary' => $template_encoding_summary,
         'render_probes' => $render_probes,
+        'runtime_warning_summary' => $warning_summary,
     ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
     exit;
 }, 999);
