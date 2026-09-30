@@ -295,7 +295,14 @@ add_action('wp_loaded', static function (): void {
             }
             foreach (['cs', 'en', 'de', 'pl'] as $language) {
                 try {
-                    $order = new WC_Order();
+                    // A real order object is needed only for rendering the
+                    // WooCommerce/YayMail layout. The known test order is
+                    // reloaded per language and never saved, so no customer
+                    // data or order state leaves WordPress.
+                    $order = function_exists('wc_get_order') ? wc_get_order(4552) : null;
+                    if (!$order) {
+                        $order = new WC_Order();
+                    }
                     $order->set_billing_first_name('JAMU');
                     $order->set_billing_last_name('Probe');
                     $order->set_billing_email('probe@example.invalid');
@@ -346,6 +353,8 @@ add_action('wp_loaded', static function (): void {
                         'email_id' => $email_id,
                         'language' => $language,
                         'error' => get_class($exception),
+                        'error_file' => basename($exception->getFile()),
+                        'error_line' => $exception->getLine(),
                     ];
                 }
             }
