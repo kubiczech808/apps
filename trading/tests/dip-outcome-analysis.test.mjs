@@ -16,7 +16,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { readFileSync } from "node:fs";
-import { bucketOf, volumeBucket, summarise, openingIsVerified } from "../tools/dip-outcome-analysis.mjs";
+import { bucketOf, carriesTag, volumeBucket, summarise, openingIsVerified } from "../tools/dip-outcome-analysis.mjs";
 
 const EDGES = [0.3, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0];
 
@@ -435,4 +435,11 @@ test("the entry band is inclusive at both ends, and an unpriced trade cannot sli
   assert.ok(!/summarise\(enriched\)/.test(source));
   assert.match(source, /everything\.push\(\.\.\.banded\)/,
     "and the pooled tables must inherit the same filter");
+});
+
+test("carriesTag: a tag filter reads the market's own tags, from any field that holds them", () => {
+  assert.equal(carriesTag({ polymarketTags: ["sports", "tennis"] }, "tennis"), true);
+  assert.equal(carriesTag({ tagSlugs: [{ slug: "Tennis" }] }, "tennis"), true, "slugs and case alike");
+  assert.equal(carriesTag({ tags: ["sports"] }, "tennis"), false, "a question-text guess is not tennis");
+  assert.equal(carriesTag({ polymarketTags: ["esports"] }, ""), true, "no filter keeps everything");
 });

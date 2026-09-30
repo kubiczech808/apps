@@ -180,6 +180,15 @@ export function hasRealTags(trade = {}) {
 
 export { DERIVED_TAG_VOCABULARY };
 
+// An optional tag: every table below then describes only the trades carrying it -- "how did
+// the dip rule do on tennis", answered from the trades the worker actually took at a real
+// ask rather than from a price history.
+const ONLY_TAG = String(process.env.DIP_TAG || "").trim().toLowerCase();
+export function carriesTag(trade = {}, tag = ONLY_TAG) {
+  if (!tag) return true;
+  return tradeTags(trade).includes(tag);
+}
+
 export const PROBABILITY_EDGES = [0.2, 0.3, 0.35, 0.4, 0.45, 0.5, 0.56, 0.6, 0.7, 0.8, 0.9, 1.0];
 export const probabilityBand = (trade) => bucketOf(num(trade?.entryPrice), PROBABILITY_EDGES);
 
@@ -315,9 +324,9 @@ async function main() {
         entryVolume: num(trade.entryVolumeUsdc) ?? observation.volumeUsdc ?? null,
       };
     });
-    const banded = enriched.filter((trade) => withinBand(trade));
-    if (BAND_MIN != null || BAND_MAX != null) {
-      console.log(`   entry band ${pct(BAND_MIN)}-${pct(BAND_MAX)} (inclusive):`
+    const banded = enriched.filter((trade) => withinBand(trade) && carriesTag(trade));
+    if (BAND_MIN != null || BAND_MAX != null || ONLY_TAG) {
+      console.log(`   entry band ${pct(BAND_MIN)}-${pct(BAND_MAX)} (inclusive)${ONLY_TAG ? `, tag "${ONLY_TAG}"` : ""}:`
         + ` ${banded.length} of ${enriched.length} resolved trades kept`);
     }
     everything.push(...banded);

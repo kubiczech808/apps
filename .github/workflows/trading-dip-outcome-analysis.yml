@@ -25,6 +25,11 @@ on:
         required: false
         default: ""
         type: string
+      tag:
+        description: "Only trades carrying this tag, e.g. tennis (blank = every tag)"
+        required: false
+        default: ""
+        type: string
 
 permissions:
   contents: read
@@ -45,4 +50,5 @@ jobs:
           DIP_PORTFOLIO: ${{ inputs.portfolio }}
           MIN_PROBABILITY: ${{ inputs.min_probability }}
           MAX_PROBABILITY: ${{ inputs.max_probability }}
+          DIP_TAG: ${{ inputs.tag }}
         run: node tools/dip-outcome-analysis.mjs
