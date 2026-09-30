@@ -109,6 +109,19 @@ export function setupEntry(row, [buyMin, buyMax], levels = BUY_CEILINGS) {
   return best ? best.entry : null;
 }
 
+// The backtest rule version a cached row was simulated under: the first element of its
+// source fingerprint. Rows before 7 read the in-play window one point per hour, which counts
+// dips that linger and recover but misses favourites that fall straight through the band.
+export function ruleVersion(row) {
+  try {
+    const version = Number(JSON.parse(String(row?.fingerprint || ""))[0]);
+    return Number.isFinite(version) ? version : null;
+  } catch {
+    return null;
+  }
+}
+export const MINUTE_IN_PLAY_VERSION = 7;
+
 export function nearHalf(price, [low, high] = NEAR_HALF) {
   const value = num(price);
   return value != null && value + 1e-9 >= low && value - 1e-9 <= high;
@@ -264,6 +277,11 @@ async function main() {
       console.log("   no published cache");
       continue;
     }
+    const versions = new Map();
+    for (const row of rows) versions.set(ruleVersion(row), (versions.get(ruleVersion(row)) || 0) + 1);
+    const hourlyRows = [...versions].filter(([version]) => !(version >= MINUTE_IN_PLAY_VERSION)).reduce((sum, [, n]) => sum + n, 0);
+    console.log(`   cached rows by rule version: ${[...versions].sort((a, b) => (a[0] ?? 0) - (b[0] ?? 0)).map(([version, n]) => `v${version ?? "?"} ${n}`).join(", ")}`
+      + (hourlyRows ? `  -- ${hourlyRows} simulated on HOURLY in-play points: biased toward winners until re-run` : ""));
     const trades = setupTrades(rows, rule);
     const days = spanDays(trades);
     const clean = trades.filter(({ entry }) => !nearHalf(entry.entryPrice));

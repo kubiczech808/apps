@@ -9,6 +9,7 @@ import {
   nearHalf,
   portfolioRows,
   probability,
+  ruleVersion,
   setupEntry,
   setupStats,
   setupTrades,
@@ -149,4 +150,11 @@ test("slugPrefix: the league or game at the front of the slug", () => {
   assert.equal(slugPrefix({ slug: "atp-sinner-alcaraz-2026-09-20" }), "atp");
   assert.equal(slugPrefix({ slug: "", eventSlug: "wta-swiatek-gauff-2026-09-20" }), "wta");
   assert.equal(slugPrefix({}), "(no slug)");
+});
+
+test("ruleVersion: the backtest rule a cached row was simulated under", () => {
+  assert.equal(ruleVersion({ fingerprint: JSON.stringify([7, "123", 1]) }), 7);
+  assert.equal(ruleVersion({ fingerprint: JSON.stringify([6, "123", 1]) }), 6);
+  assert.equal(ruleVersion({ fingerprint: "not json" }), null);
+  assert.equal(ruleVersion({}), null);
 });

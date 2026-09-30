@@ -25,7 +25,21 @@ const ENTRY_LEVELS = [0.3, 0.35, 0.4, 0.45, 0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8
 // Bumped for the ENTRY_LEVELS widening above: the cache does not keep the raw CLOB point
 // series, only the entries computed from it, so a level added after the fact cannot be
 // read out of an old row -- every cached market has to be re-fetched and re-simulated.
-const OPENING_RULE_VERSION = 6;
+//
+// Bumped again (6 -> 7) when the in-play window moved to minute points. Every version-6 row
+// was simulated on ONE POINT PER HOUR, and that is biased, not merely coarse: a losing
+// favourite falls through the buy band between two hourly points and is first seen below
+// the floor, so its loss is never counted, while a dip that lingers and recovers is caught.
+// ATP Tabilo vs Paul, 2026-09-30: Paul 0.72 at the open, 0.525 at 04:40, 0.405 at the only
+// in-play hourly point (05:00) -- no trade in the backtest; the live worker bought at 0.54
+// at 04:39 and lost.
+const OPENING_RULE_VERSION = 7;
+// CLOB's `fidelity` is in MINUTES. The in-play window is read at one point a minute; the
+// pre-start window stays coarse, because the opening quote is all that is taken from it.
+const IN_PLAY_FIDELITY_MINUTES = 1;
+// Long enough for a five-set match or a delayed start; a multi-day event beyond it falls
+// back to the coarse series.
+const IN_PLAY_WINDOW_SECONDS = 12 * 3600;
 // CLOB accepts a maximum history window of 14 days. A single 180-day query returns HTTP
 // 400, which previously made every historical market look like it had no price history.
 const MAX_CLOB_HISTORY_WINDOW_SECONDS = 14 * 86400;
@@ -239,10 +253,28 @@ function historyRange(row) {
   const end = resolvedAt ?? Math.floor(Date.now() / 1000);
   if (!Number.isFinite(start) || !Number.isFinite(end) || start >= end) return null;
   const span = end - start;
-  // CLOB history is an observed price series, not a tick tape. Keep enough detail for an
-  // in-play collapse without asking for millions of points on a long-running outright.
+  // In minutes: hourly for a normal fixture, coarser for a long-running outright. This
+  // series now only has to yield the opening quote -- the in-play window is fetched
+  // separately at one point a minute (see historyRequests).
   const fidelity = span > 90 * 86400 ? 3600 : span > 21 * 86400 ? 300 : 60;
-  return { start, end, fidelity };
+  return { start, end, fidelity, eventStartAt };
+}
+
+// Every CLOB request one market needs: the coarse series in 14-day windows, then the in-play
+// window at minute fidelity. Pure, so what is asked for can be tested without the network.
+export function historyRequests(row) {
+  const range = historyRange(row);
+  if (!range) return [];
+  const requests = clobHistoryWindows(range.start, range.end)
+    .map((window) => ({ ...window, fidelity: range.fidelity }));
+  if (range.eventStartAt != null && range.eventStartAt < range.end) {
+    requests.push({
+      start: range.eventStartAt,
+      end: Math.min(range.end, range.eventStartAt + IN_PLAY_WINDOW_SECONDS),
+      fidelity: IN_PLAY_FIDELITY_MINUTES,
+    });
+  }
+  return requests;
 }
 
 export function clobHistoryWindows(start, end) {
@@ -259,17 +291,17 @@ export function clobHistoryWindows(start, end) {
 
 async function fetchMarketHistory(row) {
   const tokenId = sourceToken(row);
-  const range = historyRange(row);
-  if (!tokenId || !range) return [];
+  const requests = historyRequests(row);
+  if (!tokenId || !requests.length) return [];
   const points = [];
   // Keep windows sequential per market. Four markets may run in parallel, but opening
   // hundreds of requests for one old event at once only earns throttling from CLOB.
-  for (const window of clobHistoryWindows(range.start, range.end)) {
+  for (const window of requests) {
     const url = new URL(`${CLOB_HOST}/prices-history`);
     url.searchParams.set("market", tokenId);
     url.searchParams.set("startTs", String(window.start));
     url.searchParams.set("endTs", String(window.end));
-    url.searchParams.set("fidelity", String(range.fidelity));
+    url.searchParams.set("fidelity", String(window.fidelity));
     const payload = await fetchJson(url, `price history ${tokenId}`);
     if (Array.isArray(payload?.history)) points.push(...payload.history);
   }

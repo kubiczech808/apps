@@ -201,7 +201,10 @@ test("it reads the published cache and nothing else", () => {
   // keep the raw CLOB point series, only the entries computed from it once, so a level added
   // after the fact needs the whole tag re-fetched and re-simulated -- which only happens if
   // the version changed and every old fingerprint stops matching.
-  assert.match(backtest, /const OPENING_RULE_VERSION = 6/, "the version must be bumped alongside the wider grid");
+  // At least the version that introduced the wider grid; later bumps (7: minute in-play
+  // points) keep the grid and only change how its entries are measured.
+  const version = Number(backtest.match(/const OPENING_RULE_VERSION = (\d+);/)?.[1]);
+  assert.ok(version >= 6, `the version must be bumped alongside the wider grid, found ${version}`);
   // The runtime default that actually reaches printGrid()'s sweep -- not merely buyBands()'s
   // own parameter default, which a caller can always override without touching this at all.
   assert.match(tool, /DIP_SWEEP_MIN_BUY_FLOOR \?\? 0\.45/, "the printed grid must default to the 45% floor asked for");
