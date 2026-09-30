@@ -2605,18 +2605,26 @@ const pendingOrderDistanceCell = (order) => {
 
 const positionCapitalCell = (position) => {
   const storedCapital = Number(position?.capitalUsd)
-  const investedValue = Number.isFinite(storedCapital)
+  const originalCapital = Number.isFinite(storedCapital)
     ? storedCapital
     : usdFromSats(position?.marginSats, position?.quoteSatsPerUsd)
-  const invested = usd(investedValue)
   const notional = Number(position?.quantityUsd)
-  const detail = Number.isFinite(notional) && Number.isFinite(investedValue) && Math.abs(notional - investedValue) > 0.01
+  const remainingNotional = Number(position?.remainingQuantityUsd)
+  const openFraction = Number.isFinite(notional) && notional > 0 && Number.isFinite(remainingNotional)
+    ? Math.min(1, Math.max(0, remainingNotional / notional))
+    : 1
+  const investedValue = originalCapital * openFraction
+  const invested = usd(investedValue)
+  const detail = Number.isFinite(notional) && Math.abs(notional - originalCapital) > 0.01
     ? `nominál ${usd(notional)}`
+    : null
+  const partialExitDetail = openFraction < 0.999
+    ? `původně vloženo ${usd(originalCapital)}`
     : null
   const risk = Number(position?.riskUsd)
   const spread = Number(position?.spreadBps)
   const protection = Number.isFinite(risk)
-    ? `ztráta na SL max. ${usd(risk)}`
+    ? `ztráta na SL max. ${usd(risk * openFraction)}`
     : null
   const spreadDetail = Number.isFinite(spread)
     ? `modelovaný spread ${(spread / 100).toLocaleString('cs-CZ', { maximumFractionDigits: 3 })} %`
@@ -2624,6 +2632,7 @@ const positionCapitalCell = (position) => {
   return el('td', {}, [
     el('div', { text: invested }),
     detail ? el('div', { className: 'pa-level-detail', text: detail }) : null,
+    partialExitDetail ? el('div', { className: 'pa-level-detail', text: partialExitDetail }) : null,
     protection ? el('div', { className: 'pa-level-detail', text: protection }) : null,
     spreadDetail ? el('div', { className: 'pa-level-detail', text: spreadDetail }) : null,
   ])
