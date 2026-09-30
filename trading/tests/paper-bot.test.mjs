@@ -6898,7 +6898,7 @@ test("scan scope: esports takes four slots of six, and the others come round hou
   const armFor = (tag) => arms.find((arm) => arm.tag === tag);
   // Sports keeps its floor and its short window: it is not the tag that ran out of markets,
   // and loosening it here would be a change nobody measured or asked for.
-  assert.deepEqual(armFor("sports"), { tag: "sports", liquidity: 40000, days: 2 });
+  assert.deepEqual(armFor("sports"), { tag: "sports", liquidity: 0, days: 2 });
   assert.deepEqual(armFor(""), { tag: "", liquidity: 0, days: 7 });
   // Esports: no floor, full window. Deliberate, and stated so a future reader sees a
   // decision rather than an oversight.

@@ -146,7 +146,7 @@ jobs:
           # against a database already at 777 MB of which 79% is observations. The retention
           # cap stays at 8000, so esports now competes with sports for those slots.
           case $(( tick % 6 )) in
-            3) tag=sports;  liquidity=40000; days=2 ;;
+            3) tag=sports;  liquidity=0;     days=2 ;;
             0) tag="";      liquidity=0;     days=7 ;;
             *) tag=esports; liquidity=0;     days=7 ;;
           esac

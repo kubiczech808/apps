@@ -22,7 +22,7 @@ on:
         default: ""
         type: string
       market_scan_liquidity_min:
-        description: "Minimum event liquidity in USDC"
+        description: "Deprecated compatibility input; automated discovery no longer filters by liquidity"
         required: false
         default: "0"
         type: string
@@ -125,7 +125,9 @@ jobs:
       # These defaults are what a heartbeat run gets: the seven-day unfiltered catalogue,
       # which is the pass that advances the persisted category cursor.
       PAPER_MARKET_SCAN_TAG: ${{ inputs.market_scan_tag || '' }}
-      PAPER_MARKET_SCAN_LIQUIDITY_MIN: ${{ inputs.market_scan_liquidity_min || '0' }}
+      # Discovery never filters by liquidity. Portfolio rules and the executor decide
+      # whether a market can actually be traded after its current book is inspected.
+      PAPER_MARKET_SCAN_LIQUIDITY_MIN: "0"
       PAPER_MARKET_SCAN_MAX_DAYS: ${{ inputs.market_scan_max_days || '7' }}
       # Only a dispatch is manual. The scraping log flags them, so a scheduled pass must
       # not claim to be one.

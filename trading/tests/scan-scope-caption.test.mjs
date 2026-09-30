@@ -80,8 +80,7 @@ test("the scheduled limits are the rotation's own", () => {
 
   const sportsLine = CAPTION.split("\n").find((entry) => entry.includes("tag=sports"));
   assert.ok(sportsLine, "and one for sports, which kept its floor");
-  assert.ok(sportsLine.includes(`$${Number(sports[1]) / 1000}k`),
-    `the sports floor is ${sports[1]}: ${sportsLine}`);
+  assert.ok(sportsLine.includes("no liquidity floor"), `the sports floor is ${sports[1]}: ${sportsLine}`);
   assert.ok(sportsLine.includes(`\u2264 ${sports[2]} d`), `the sports horizon is ${sports[2]} days: ${sportsLine}`);
 
   // The share of the ticks each tag gets, read out of the rotation rather than restated.
