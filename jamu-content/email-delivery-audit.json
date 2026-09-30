@@ -1,6 +1,11 @@
 {
   "audit_error": {
     "http_status": 200,
-    "non_json_response": true
+    "non_json_response": true,
+    "content_type": "application/json; charset=UTF-8",
+    "bridge_header": "active",
+    "body_bytes": 115255,
+    "starts_with_html": true,
+    "contains_php_warning": true
   }
 }
