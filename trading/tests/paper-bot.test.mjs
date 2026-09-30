@@ -6557,6 +6557,7 @@ test("5050 tags: the shortlist and the run agree on which markets qualify", asyn
   const dashboard = new Function(`
     ${pick(app, "normalizedScrapedScanTag")}
     ${pick(app, "normalizeMarketTagList")}
+    ${pick(app, "derivedTennisTourTags")}
     ${pick(app, "marketTagSlugsOf")}
     ${pick(app, "marketCarriesAnyTag")}
     ${pick(app, "marketMatchesAllowedTags")}
@@ -7190,6 +7191,7 @@ test("excluded tags: dashboard, live executor and paper bot agree on what a tag 
   const dashboard = new Function(`
     ${functionSource(app, "normalizedScrapedScanTag")}
     ${functionSource(app, "normalizeMarketTagList")}
+    ${functionSource(app, "derivedTennisTourTags")}
     ${functionSource(app, "marketTagSlugsOf")}
     ${functionSource(app, "marketExcludedByTags")}
     return (item, tags) => marketExcludedByTags(item, normalizeMarketTagList(tags));
@@ -7209,6 +7211,7 @@ test("excluded tags: dashboard, live executor and paper bot agree on what a tag 
     const check = new Function(`
       ${/const TAG_FIELDS = \[[\s\S]*?\];/.exec(bot)[0]}
       ${/const TAG_CATEGORY_FIELDS = \[[^\]]*\];/.exec(bot)[0]}
+      ${functionSource(bot, "derivedMarketTags")}
       ${functionSource(bot, "rowTagSlugs")}
       ${functionSource(bot, "excludedTagsOnRow")}
       return excludedTagsOnRow;
@@ -10923,6 +10926,7 @@ test("market tags: the bot reads every field the server selects rows by", async 
   const slugs = new Function(`
     ${/const TAG_FIELDS = \[[\s\S]*?\];/.exec(bot)[0]}
     ${/const TAG_CATEGORY_FIELDS = \[[^\]]*\];/.exec(bot)[0]}
+    ${functionSource(bot, "derivedMarketTags")}
     ${functionSource(bot, "rowTagSlugs")}
     return rowTagSlugs;
   `)();
@@ -11031,6 +11035,7 @@ test("paper revalidation: re-quoting a market must not strip the tags it was sel
   const api = new Function(`
     ${/const TAG_FIELDS = \[[^\]]+\];/.exec(source)[0]}
     ${/const TAG_CATEGORY_FIELDS = \[[^\]]+\];/.exec(source)[0]}
+    ${functionSource(source, "derivedMarketTags")}
     ${functionSource(source, "preservedMarketTagFields")}
     ${functionSource(source, "rowTagSlugs")}
     return { preservedMarketTagFields, rowTagSlugs, TAG_FIELDS, TAG_CATEGORY_FIELDS };

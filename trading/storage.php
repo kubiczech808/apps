@@ -2539,7 +2539,18 @@ function trading_storage_resolution_datetime(array $item): ?string
 function trading_storage_observation_columns(array $item): array
 {
     $payload = trading_storage_encode($item);
-    $tags = $item['polymarketTags'] ?? $item['tags'] ?? $item['firstTags'] ?? [];
+    // Keep derived ATP/WTA filters in the queryable summary too. The packed payload is
+    // still authoritative; this avoids a stale official tag list hiding the derived one.
+    $tags = [];
+    foreach (['polymarketTags', 'derivedTags', 'tags', 'firstPolymarketTags', 'firstTags'] as $field) {
+        $value = $item[$field] ?? [];
+        foreach (is_array($value) ? $value : [$value] as $tag) {
+            if (is_scalar($tag) && trim((string) $tag) !== '') {
+                $tags[] = (string) $tag;
+            }
+        }
+    }
+    $tags = array_values(array_unique($tags));
     return [
         'key' => trading_storage_observation_key($item),
         'lifecycle' => trading_storage_lifecycle($item),

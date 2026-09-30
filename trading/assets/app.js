@@ -1248,6 +1248,21 @@ function normalizeMarketTagList(value) {
 // these functions on their own, where a const declared beside the function is silently
 // dropped. What holds the readers together is the test that drives one case per field
 // through every one of them.
+//
+// Gamma returns tennis/sports/games for both tours. ATP and WTA are deliberately
+// derived from the event identity, so they remain usable portfolio filters without
+// being mislabeled as an official Gamma tag.
+function derivedTennisTourTags(item = {}) {
+  const source = item?.sourceEvaluation || {};
+  const text = [item, source].flatMap((holder) => [
+    holder?.eventSlug, holder?.slug, holder?.question, holder?.title,
+  ]).filter(Boolean).join(" ").toLowerCase();
+  const tags = [];
+  if (/(^|[^a-z0-9])atp(?=$|[^a-z0-9])/.test(text)) tags.push("atp");
+  if (/(^|[^a-z0-9])wta(?=$|[^a-z0-9])/.test(text)) tags.push("wta");
+  return tags;
+}
+
 function marketTagSlugsOf(item = {}) {
   const listFields = ["polymarketTags", "tags", "firstPolymarketTags", "firstTags",
     "polymarketCategories", "firstPolymarketCategories"];
@@ -1266,6 +1281,7 @@ function marketTagSlugsOf(item = {}) {
     const tag = normalizedScrapedScanTag(item?.[field]);
     if (tag) slugs.add(tag);
   }
+  for (const tag of derivedTennisTourTags(item)) slugs.add(tag);
   return slugs;
 }
 
@@ -1324,6 +1340,9 @@ function tagVocabulary() {
   // even when nothing currently scraped carries them, because they are what a policy is
   // usually written in terms of.
   for (const slug of MARKET_SCAN_CATEGORIES) add(normalizedScrapedScanTag(slug), 0);
+  // These two are derived, supported filters. Keep them selectable even while the active
+  // catalogue happens not to contain a tennis event.
+  for (const slug of ["atp", "wta"]) add(slug, 0);
   return [...counts.entries()]
     .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
     .map(([slug, count]) => ({ slug, count }));
@@ -3460,6 +3479,9 @@ function taxonomyValuesFromRecord(item, kind) {
       : entry;
     const label = normalizeScrapedTaxonomyLabel(raw);
     if (label && !PER_FIXTURE_TAXONOMY_LABEL.test(label)) values.add(label);
+  }
+  if (kind === "tag") {
+    for (const tag of derivedTennisTourTags(item)) values.add(tag);
   }
   return values;
 }
@@ -13270,11 +13292,15 @@ function evaluationByTokenId(tokenId) {
 }
 
 function sourceMarketTags(source) {
-  for (const values of [source?.polymarketTags, source?.tags, source?.firstPolymarketTags]) {
-    const tags = (Array.isArray(values) ? values : []).filter(Boolean);
-    if (tags.length) return tags;
+  const result = new Set();
+  for (const values of [source?.polymarketTags, source?.derivedTags, source?.tags, source?.firstPolymarketTags]) {
+    for (const value of (Array.isArray(values) ? values : [])) {
+      const tag = portfolioAnalysisTag(value);
+      if (tag) result.add(tag);
+    }
   }
-  return [];
+  for (const tag of derivedTennisTourTags(source)) result.add(tag);
+  return [...result];
 }
 
 // Every market description the dashboard can name a trade from, indexed once: the current
@@ -16934,8 +16960,8 @@ function portfolioAnalysisTags(trade) {
   const tags = new Set();
   const source = trade?.sourceEvaluation || {};
   for (const values of [
-    trade?.polymarketTags, trade?.tags, trade?.firstPolymarketTags,
-    source?.polymarketTags, source?.tags, source?.firstPolymarketTags,
+    trade?.polymarketTags, trade?.derivedTags, trade?.tags, trade?.firstPolymarketTags,
+    source?.polymarketTags, source?.derivedTags, source?.tags, source?.firstPolymarketTags,
   ]) {
     for (const value of (Array.isArray(values) ? values : [])) {
       const tag = portfolioAnalysisTag(value);
@@ -16946,6 +16972,7 @@ function portfolioAnalysisTags(trade) {
     const tag = portfolioAnalysisTag(value);
     if (tag) tags.add(tag);
   }
+  for (const tag of derivedTennisTourTags(trade)) tags.add(tag);
   return [...tags];
 }
 

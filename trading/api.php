@@ -2054,6 +2054,35 @@ function simulation_outcome(array $item): ?int
 }
 
 /**
+ * Gamma classifies both tours as tennis. ATP/WTA are reliable event-slug namespaces,
+ * so expose them as derived portfolio tags while preserving the official taxonomy too.
+ */
+function derived_market_tag_slugs(array $item): array
+{
+    $sources = [$item];
+    if (is_array($item['sourceEvaluation'] ?? null)) {
+        $sources[] = $item['sourceEvaluation'];
+    }
+    $text = '';
+    foreach ($sources as $source) {
+        foreach (['eventSlug', 'slug', 'question', 'title'] as $field) {
+            $value = trim((string) ($source[$field] ?? ''));
+            if ($value !== '') {
+                $text .= ' ' . strtolower($value);
+            }
+        }
+    }
+    $tags = [];
+    if (preg_match('/(^|[^a-z0-9])atp(?=$|[^a-z0-9])/', $text) === 1) {
+        $tags[] = 'atp';
+    }
+    if (preg_match('/(^|[^a-z0-9])wta(?=$|[^a-z0-9])/', $text) === 1) {
+        $tags[] = 'wta';
+    }
+    return $tags;
+}
+
+/**
  * The taxonomy labels the performance tables group a row under, ported from the
  * bot's scrapedSimulationTaxonomy(). Scrape-time relations win, the current Gamma
  * relation is the fallback for rows stored before the immutable field existed, and
@@ -2095,6 +2124,15 @@ function simulation_taxonomy_labels(array $item, string $firstField, string $cur
         // PAPER_SCRAPED_SIMULATION_TAGS_PER_TRADE in the bot.
         if (count($labels) >= 8) {
             break;
+        }
+    }
+
+    // Derived tags belong only to the tag taxonomy, never to the categories table.
+    if ($firstField === 'firstPolymarketTags') {
+        foreach (derived_market_tag_slugs($item) as $tag) {
+            if (!in_array($tag, $labels, true)) {
+                $labels[] = $tag;
+            }
         }
     }
 
@@ -2769,6 +2807,9 @@ function execution_scope_observation_tags(array $item): array
         } elseif ($raw !== null) {
             $values[] = $raw;
         }
+    }
+    foreach (derived_market_tag_slugs($item) as $tag) {
+        $values[] = $tag;
     }
     return normalize_market_tag_list($values);
 }

@@ -3527,6 +3527,14 @@ function marketTagSlugs(row = {}) {
       if (text) slugs.add(text);
     }
   }
+  // Gamma's tennis taxonomy stops at `tennis`; the ATP/WTA tour is encoded in the
+  // event slug. Re-derive it here because final live validation re-fetches a market and
+  // must agree with the server-side shortlist even for legacy rows.
+  const identity = [row, source].flatMap((holder) => [
+    holder?.eventSlug, holder?.slug, holder?.question, holder?.title,
+  ]).filter(Boolean).join(" ").toLowerCase();
+  if (/(^|[^a-z0-9])atp(?=$|[^a-z0-9])/.test(identity)) slugs.add("atp");
+  if (/(^|[^a-z0-9])wta(?=$|[^a-z0-9])/.test(identity)) slugs.add("wta");
   return slugs;
 }
 

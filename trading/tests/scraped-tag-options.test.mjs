@@ -31,6 +31,7 @@ assert.ok(PER_FIXTURE, "the per-fixture pattern must be findable");
 function build({ catalogue = [], reportRows = [], resolvedTags = null, selected = null }) {
   return new Function(`
     ${PER_FIXTURE[0]}
+    ${extractFunction(APP, "derivedTennisTourTags")}
     ${extractFunction(APP, "taxonomyValuesFromRecord")}
     ${extractFunction(APP, "scrapedTaxonomyFilterOptions")}
     const state = {

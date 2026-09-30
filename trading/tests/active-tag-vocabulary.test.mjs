@@ -31,6 +31,7 @@ test("portfolio tag suggestions use the active catalogue, not resolved history",
     const PER_FIXTURE_TAXONOMY_LABEL = /^(team|event):/i;
     const MARKET_SCAN_CATEGORIES = ["sports", "esports"];
     ${extractFunction("normalizedScrapedScanTag")}
+    ${extractFunction("derivedTennisTourTags")}
     ${extractFunction("marketTagSlugsOf")}
     const evaluationEnded = () => false;
     ${extractFunction("scrapedObservationStatus")}

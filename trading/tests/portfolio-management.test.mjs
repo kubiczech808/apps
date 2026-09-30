@@ -124,6 +124,7 @@ test("portfolio trade analysis: grades the selection at settlement, excludes unf
     ${extractFunction(APP, "portfolioAnalysisRows")}
     ${extractFunction(APP, "portfolioAnalysisSummary")}
     ${extractFunction(APP, "portfolioAnalysisTag")}
+    ${extractFunction(APP, "derivedTennisTourTags")}
     ${extractFunction(APP, "portfolioAnalysisTags")}
     return { portfolioAnalysisClosedTrades, portfolioAnalysisPnl, portfolioAnalysisRows, portfolioAnalysisSummary, portfolioAnalysisTags, safeEntryProbability };
   `)({ portfolioAnalysisOutcomeMap: { soldWin: 1, stoppedWin: 1, stoppedLoss: 0 } });
@@ -3917,6 +3918,8 @@ test("dashboard indexes are cached, and rebuild when the state behind them is re
     ${extractFunction(APP, "scrapedObservationIsError")}
     ${extractFunction(APP, "scrapedMarketObservations")}
     ${extractFunction(APP, "earliestIndexedMatch")}
+    ${extractFunction(APP, "portfolioAnalysisTag")}
+    ${extractFunction(APP, "derivedTennisTourTags")}
     ${extractFunction(APP, "sourceMarketTags")}
     ${extractFunction(APP, "liveMarketMetadataIndex")}
     ${extractFunction(APP, "liveMarketIdentifiers")}
@@ -6398,6 +6401,7 @@ test("tag policy form: slugs are chosen from the catalogue as removable chips, n
     const tagChipFields = new WeakMap();
     ${extractFunction(APP, "normalizedScrapedScanTag")}
     ${extractFunction(APP, "normalizeMarketTagList")}
+    ${extractFunction(APP, "derivedTennisTourTags")}
     ${extractFunction(APP, "marketTagSlugsOf")}
     ${extractFunction(APP, "tagVocabulary")}
     ${extractFunction(APP, "tagChipValues")}

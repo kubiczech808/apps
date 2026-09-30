@@ -335,6 +335,7 @@ test("taxonomy drill-down: the browser groups a row exactly as the statistics do
   const browser = new Function(`
     ${/const PER_FIXTURE_TAXONOMY_LABEL = [^\n]+/.exec(app)[0]}
     ${extractFunction(app, "normalizeScrapedTaxonomyLabel", "app.js")}
+    ${extractFunction(app, "derivedTennisTourTags", "app.js")}
     ${extractFunction(app, "taxonomyValuesFromRecord", "app.js")}
     return taxonomyValuesFromRecord;
   `)();
@@ -342,6 +343,7 @@ test("taxonomy drill-down: the browser groups a row exactly as the statistics do
     ${/const RISK_NAMESPACE_TAG = [^\n]+/.exec(botSource)[0]}
     ${/const DATED_FIXTURE_SLUG_TAG = [^\n]+/.exec(botSource)[0]}
     const SCRAPED_SIMULATION_TAGS_PER_TRADE = 8;
+    ${extractFunction(botSource, "derivedMarketTags", "paper-trading-bot.mjs")}
     ${extractFunction(botSource, "isPerFixtureLabel", "paper-trading-bot.mjs")}
     ${extractFunction(botSource, "scrapedSimulationTaxonomy", "paper-trading-bot.mjs")}
     return scrapedSimulationTaxonomy;

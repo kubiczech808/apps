@@ -8484,6 +8484,7 @@ function rowVolumeUsdc(item = {}) {
 // then claimed were absent.
 const TAG_FIELDS = [
   "polymarketTags",
+  "derivedTags",
   "tags",
   "firstPolymarketTags",
   "firstTags",
@@ -8523,6 +8524,10 @@ function rowTagSlugs(item = {}) {
     const tag = slugify(item?.[field]);
     if (tag) slugs.add(tag);
   }
+  // Older catalogue rows predate derivedTags. Reconstruct the tennis-tour namespace
+  // here as well so an include-only ATP/WTA policy cannot pass discovery and then fail
+  // during the final paper-trade validation.
+  for (const tag of derivedMarketTags(item)) slugs.add(tag);
   return slugs;
 }
 
@@ -11042,6 +11047,24 @@ function normalizedMarketCategory(value) {
     .slice(0, 64);
 }
 
+// Gamma labels the sport itself as `tennis`; ATP and WTA are stable event-slug
+// namespaces, not separate Gamma tags. Keep that distinction explicit: these are
+// derived portfolio filters layered on top of the official taxonomy, not a rewrite of it.
+function derivedMarketTags(market = {}) {
+  const event = Array.isArray(market.events) ? market.events : [];
+  const text = [
+    market.eventSlug,
+    market.slug,
+    market.question,
+    market.title,
+    ...event.flatMap((item) => [item?.slug, item?.title]),
+  ].filter(Boolean).join(" ").toLowerCase();
+  const tags = [];
+  if (/(^|[^a-z0-9])atp(?=$|[^a-z0-9])/.test(text)) tags.push("atp");
+  if (/(^|[^a-z0-9])wta(?=$|[^a-z0-9])/.test(text)) tags.push("wta");
+  return tags;
+}
+
 function normalizedPolymarketTaxonomy(...sources) {
   const values = new Set();
   const add = (value) => {
@@ -11482,6 +11505,7 @@ function preferredMarketObservation(market, observedAt = nowIso()) {
   const tags = tagQuestion(market.question || "");
   const polymarketCategories = marketPolymarketCategories(market);
   const polymarketTags = marketPolymarketTags(market);
+  const derivedTags = derivedMarketTags(market);
   const risk = riskProfile({
     question: market.question || "",
     slug: market.slug,
@@ -11504,6 +11528,7 @@ function preferredMarketObservation(market, observedAt = nowIso()) {
     tags,
     polymarketCategories,
     polymarketTags,
+    derivedTags,
     riskCategory: risk.category,
     riskPrimaryEntity: risk.primaryEntity,
     riskGroupKeys: risk.keys,
@@ -12894,6 +12919,9 @@ function scrapedSimulationTaxonomy(item, firstField, currentField) {
   // first appeared. Older rows do not have the immutable field, so the current explicit
   // Gamma relation remains a compatible fallback.
   const sources = first.length ? [first] : [current];
+  // ATP/WTA are derived from the durable event identity. Appending them here keeps the
+  // historical statistics, the scraped table and the portfolio filter on one taxonomy.
+  if (firstField === "firstPolymarketTags") sources.push(derivedMarketTags(item));
   const seen = new Set();
   const labels = [];
   for (const source of sources) {
