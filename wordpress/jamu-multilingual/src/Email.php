@@ -9,6 +9,7 @@ final class Email
     public const ORDER_LANGUAGE_META = '_jamu_ml_language';
     private const YAYMAIL_VARIANT_PREFIX = 'jamu-';
     private const YAYMAIL_VARIANT_VERSION = '2026-09-30-1';
+    private const YAYMAIL_VARIANT_METADATA_VERSION = '2026-09-30-2';
 
     /** @var array<string, bool> */
     private array $registered_email_ids = [];
@@ -167,10 +168,14 @@ final class Email
      */
     public function ensure_yaymail_language_variants(): void
     {
-        if (get_option('jamu_ml_yaymail_variant_version') === self::YAYMAIL_VARIANT_VERSION
-            || !class_exists('\\YayMail\\YayMailTemplate')
+        if (!class_exists('\\YayMail\\YayMailTemplate')
             || !class_exists('\\YayMail\\Models\\TemplateModel')
         ) {
+            return;
+        }
+        $bootstrap_designs = get_option('jamu_ml_yaymail_variant_version') !== self::YAYMAIL_VARIANT_VERSION;
+        $seed_metadata = get_option('jamu_ml_yaymail_variant_metadata_version') !== self::YAYMAIL_VARIANT_METADATA_VERSION;
+        if (!$bootstrap_designs && !$seed_metadata) {
             return;
         }
 
@@ -212,13 +217,23 @@ final class Email
                     continue;
                 }
 
-                $translated = $this->translate_yaymail_data($source->get_data(), $language);
-                \YayMail\Models\TemplateModel::update($variant->get_id(), $translated);
+                if ($bootstrap_designs) {
+                    $translated = $this->translate_yaymail_data($source->get_data(), $language);
+                    \YayMail\Models\TemplateModel::update($variant->get_id(), $translated);
+                }
+                if ($seed_metadata) {
+                    $this->seed_yaymail_variant_metadata($source->get_id(), $variant->get_id());
+                }
                 $this->seed_yaymail_email_properties($template_name, $variant->get_id(), $language);
             }
         }
 
-        update_option('jamu_ml_yaymail_variant_version', self::YAYMAIL_VARIANT_VERSION, false);
+        if ($bootstrap_designs) {
+            update_option('jamu_ml_yaymail_variant_version', self::YAYMAIL_VARIANT_VERSION, false);
+        }
+        if ($seed_metadata) {
+            update_option('jamu_ml_yaymail_variant_metadata_version', self::YAYMAIL_VARIANT_METADATA_VERSION, false);
+        }
     }
 
     public function email_variant_menu(): void
@@ -756,6 +771,31 @@ final class Email
             }
         }
         return $result;
+    }
+
+    /**
+     * YayMail's variant creator does not copy every companion meta field that
+     * its WooCommerce order blocks need. Add only fields missing on the
+     * variant; existing translated designs and editor changes always win.
+     */
+    private function seed_yaymail_variant_metadata(int $source_id, int $variant_id): void
+    {
+        if ($source_id <= 0 || $variant_id <= 0) {
+            return;
+        }
+
+        foreach (get_post_meta($source_id) as $key => $values) {
+            $key = (string) $key;
+            if (str_starts_with($key, '_jamu_ml_')
+                || in_array($key, ['_yaymail_template', '_yaymail_template_variant'], true)
+                || metadata_exists('post', $variant_id, $key)
+            ) {
+                continue;
+            }
+            foreach (is_array($values) ? $values : [] as $value) {
+                add_post_meta($variant_id, $key, $value);
+            }
+        }
     }
 
     private function seed_yaymail_email_properties(string $template_name, int $variant_id, string $language): void
