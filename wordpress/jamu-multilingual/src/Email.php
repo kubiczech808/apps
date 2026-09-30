@@ -16,6 +16,7 @@ final class Email
 
     private int $context_depth = 0;
     private ?string $previous_language = null;
+    private ?string $active_language = null;
     private ?int $active_order_id = null;
     private ?string $active_email_id = null;
     private bool $locale_switched = false;
@@ -128,7 +129,7 @@ final class Email
     public function prepare_customer_email_property(string $text, mixed $object, mixed $email, string $property): string
     {
         $this->begin_email_context($object, $email);
-        $language = $this->languages->current();
+        $language = $this->active_language ?? $this->languages->current();
         if ($language === Languages::DEFAULT) {
             return $text;
         }
@@ -367,16 +368,14 @@ final class Email
             $this->restore_email_context();
         }
 
-        $this->previous_language = $this->languages->current();
         $this->active_order_id = $order_id;
         $this->active_email_id = $email_id;
+        $this->active_language = $language;
         $this->context_depth = 1;
-        $this->languages->set_current($language);
-
-        // YayMail 4.4.6 can render an empty body after WordPress switches its
-        // locale mid-render. The language context above is sufficient for our
-        // localized customer copy; keep the process locale stable so YayMail
-        // can load its canonical visual template.
+        // Keep WordPress in the canonical language while YayMail builds its
+        // internal HTML. Its renderer returns an empty body when its template
+        // post is read in a localized context. The active language above is
+        // used only by the email-specific filters in this class.
     }
 
     public function restore_email_context(): void
@@ -389,12 +388,9 @@ final class Email
             restore_previous_locale();
         }
 
-        if ($this->previous_language !== null) {
-            $this->languages->set_current($this->previous_language);
-        }
-
         $this->context_depth = 0;
         $this->previous_language = null;
+        $this->active_language = null;
         $this->active_order_id = null;
         $this->active_email_id = null;
         $this->locale_switched = false;
@@ -494,7 +490,7 @@ final class Email
 
     private function translate_email_text(string $text): string
     {
-        return $this->translate_email_text_for_language($text, $this->languages->current());
+        return $this->translate_email_text_for_language($text, $this->active_language ?? $this->languages->current());
     }
 
     /**
