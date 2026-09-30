@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { liquidationPrice, planLinearPosition, planPosition, pnlSats, SATS_PER_BTC } from '../src/risk.mjs'
+import { effectiveLinearFillPrice, liquidationPrice, planLinearPosition, planPosition, pnlSats, SATS_PER_BTC } from '../src/risk.mjs'
 
 const EQUITY = 100_000 // sats, roughly 100 USD at 100k BTC
 
@@ -38,6 +38,37 @@ test('an unleveraged linear FX trade never commits more capital than is availabl
   assert.ok(plan.marginSats + Math.ceil(plan.quantityUsd * 0.0006 * plan.quoteSatsPerUsd) <= 123_000)
   assert.ok(plan.riskSats <= 1_230, 'the structural stop must never exceed the 1% risk ceiling')
   assert.ok(plan.riskSats < 1_230, 'the capital cap may reduce risk without moving the stop')
+})
+
+test('spot PA-1 commits only its one-percent capital budget and keeps a structural stop', () => {
+  const plan = planLinearPosition({
+    side: 'long',
+    entry: 0.7131,
+    stop: 0.7060,
+    takeProfit: 0.7273,
+    // 100,000 sats marked at 100,000 USD equals a 100 USD account.
+    equitySats: 100_000,
+    btcPrice: 100_000,
+    settings: { market: 'spot', riskPct: 1, feeRate: 0.0006, spreadBps: 2, minMarginSats: 1 },
+  })
+
+  assert.equal(plan.ok, true, plan.reason)
+  assert.equal(plan.quantityUsd, 1)
+  assert.ok(plan.capitalUsd > 1 && plan.capitalUsd < 1.01, `capital ${plan.capitalUsd}`)
+  assert.ok(plan.riskUsd < 1, `stop risk ${plan.riskUsd}`)
+  assert.equal(plan.stop, 0.706, 'the structural stop must not be moved to force one dollar of risk')
+  assert.equal(plan.spreadBps, 2)
+})
+
+test('linear fills use the adverse bid or ask on both sides of a trade', () => {
+  const longEntry = effectiveLinearFillPrice({ side: 'long', price: 100, spreadBps: 10, leg: 'entry' })
+  const longExit = effectiveLinearFillPrice({ side: 'long', price: 100, spreadBps: 10, leg: 'exit' })
+  const shortEntry = effectiveLinearFillPrice({ side: 'short', price: 100, spreadBps: 10, leg: 'entry' })
+  const shortExit = effectiveLinearFillPrice({ side: 'short', price: 100, spreadBps: 10, leg: 'exit' })
+  assert.equal(longEntry, 100.05)
+  assert.equal(longExit, 99.95)
+  assert.equal(shortEntry, 99.95)
+  assert.equal(shortExit, 100.05)
 })
 
 test('inverse PnL has the right sign on both sides', () => {

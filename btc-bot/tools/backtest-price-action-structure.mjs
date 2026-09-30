@@ -48,6 +48,7 @@ const priceActionSettings = {
 const riskSettings = configuredSettings.risk ?? {}
 const riskPct = Number(priceActionSettings.riskPct ?? riskSettings.riskPct ?? 1)
 const feeRate = Number(riskSettings.feeRate ?? 0.0006)
+const spreadBps = Number(priceActionSettings.spreadBps ?? riskSettings.spreadBps ?? 2)
 const maxNotionalPct = Number(riskSettings.maxNotionalPct ?? 300)
 
 const fetchFx = async (asset) => {
@@ -95,6 +96,7 @@ const result = {
     startingCapital: 100,
     riskPct,
     feeRate,
+    spreadBps,
     maxNotionalPct,
     exits: 'SL first; TP1 and TP2 each 50%; structure invalidation at candle close; residual closed at period end',
     note: 'Výsledky jsou výzkumný model strategie PA-1, nikoli garance budoucího výnosu.',
@@ -218,6 +220,7 @@ try {
           startingCapital: result.assumptions.startingCapital,
           riskPct,
           feeRate,
+          spreadBps,
           settings: { ...priceActionSettings, maxNotionalPct },
         })
         period.assets[asset.symbol][timeframeId] = { ...report, label: entry.label }

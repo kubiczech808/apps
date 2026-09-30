@@ -102,6 +102,26 @@ export const targetForR = ({ side, entry, stop, r }) => {
   return 1 / (1 / entry + r * riskPerUsd)
 }
 
+const nonNegativeBps = (value, fallback = 0) => {
+  const parsed = Number(value)
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback
+}
+
+/**
+ * OHLC is a mid-price series. A buyer pays the ask and a seller receives the
+ * bid, so every paper calculation must use the adverse half of the spread on
+ * each side. The structural level itself stays untouched; this only models
+ * the executable price and prevents paper P/L from assuming free fills.
+ */
+export const effectiveLinearFillPrice = ({ side, price, spreadBps = 0, leg = 'entry' }) => {
+  const numericPrice = Number(price)
+  if (!(numericPrice > 0)) return numericPrice
+  const halfSpread = nonNegativeBps(spreadBps) / 20_000
+  const entering = leg === 'entry'
+  const paysAsk = entering ? side === 'long' : side === 'short'
+  return numericPrice * (paysAsk ? 1 + halfSpread : 1 - halfSpread)
+}
+
 export const DEFAULT_RISK_SETTINGS = {
   // 'spot' holds the asset outright: no leverage, no liquidation, no funding,
   // and a position can never exceed the capital behind it. 'futures' is the
@@ -119,6 +139,10 @@ export const DEFAULT_RISK_SETTINGS = {
   minQuantityUsd: 1,
   minMarginSats: 1000,
   feeRate: 0.0006,
+  // The published OHLC feeds are mid prices and do not expose a broker's live
+  // bid/ask book. Use a small, explicit 2 bps model rather than silently
+  // treating every fill as spread-free. PA-1 can override it in its settings.
+  spreadBps: 2,
 }
 
 /**
@@ -259,8 +283,12 @@ export const planLinearPosition = ({
     return { ok: false, reason: 'linear short needs stop above and take profit below entry' }
   }
 
-  const stopFraction = Math.abs(entry - stop) / entry
-  const rewardFraction = Math.abs(takeProfit - entry) / entry
+  const spreadBps = nonNegativeBps(config.spreadBps, DEFAULT_RISK_SETTINGS.spreadBps)
+  const entryFill = effectiveLinearFillPrice({ side, price: entry, spreadBps, leg: 'entry' })
+  const stopFill = effectiveLinearFillPrice({ side, price: stop, spreadBps, leg: 'exit' })
+  const takeProfitFill = effectiveLinearFillPrice({ side, price: takeProfit, spreadBps, leg: 'exit' })
+  const stopFraction = Math.abs(entryFill - stopFill) / entryFill
+  const rewardFraction = Math.abs(takeProfitFill - entryFill) / entryFill
   if (!(stopFraction > 0) || !(rewardFraction > 0)) {
     return { ok: false, reason: 'linear stop or reward distance is zero' }
   }
@@ -270,11 +298,17 @@ export const planLinearPosition = ({
   let quantityUsd = riskSats / roundTripRiskPerUsd
   const spot = config.market === 'spot'
   const capitalUsd = equitySats / quoteSatsPerUsd
-  // Without leverage the full notional is collateral. Reserve the opening fee
-  // as well, otherwise a trade capped exactly at equity would be rejected by
-  // the executor when it tries to debit margin plus that fee.
+  // Spot PA-1 budgets the capital committed to a trade at the same percentage
+  // as its risk rule. On a 100 USD account and 1% setting the order can commit
+  // roughly 1 USD, while the structural stop remains untouched and can only
+  // make the realised loss smaller. The separately shown exchange fee is paid
+  // in addition to that committed order amount.
+  //
+  // A futures plan keeps its previous notional cap because its margin is a
+  // separate, explicitly leveraged choice.
+  const spotCapitalPct = Math.min(100, Math.max(0, Number(config.riskPct) || 0))
   const maxNotionalUsd = spot
-    ? capitalUsd / (1 + config.feeRate)
+    ? capitalUsd * spotCapitalPct / 100
     : capitalUsd * (config.maxNotionalPct / 100)
   let notionalCapped = false
   if (quantityUsd > maxNotionalUsd) {
@@ -305,8 +339,11 @@ export const planLinearPosition = ({
     market: config.market,
     side,
     entry,
+    entryFill,
     stop,
+    stopFill,
     takeProfit,
+    takeProfitFill,
     quantityUsd,
     leverage,
     marginSats,
@@ -320,7 +357,9 @@ export const planLinearPosition = ({
       ? entry * (1 - 1 / leverage)
       : entry * (1 + 1 / leverage)),
     quoteSatsPerUsd,
-    capitalUsd: marginSats / quoteSatsPerUsd,
+    capitalUsd: quantityUsd * (1 + config.feeRate),
+    riskUsd: (actualRiskSats + feeSats) / quoteSatsPerUsd,
+    spreadBps,
     notionalCapped,
   }
 }

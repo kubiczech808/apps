@@ -2604,22 +2604,42 @@ const pendingOrderDistanceCell = (order) => {
 }
 
 const positionCapitalCell = (position) => {
-  const invested = usd(usdFromSats(position?.marginSats, position?.quoteSatsPerUsd))
+  const storedCapital = Number(position?.capitalUsd)
+  const investedValue = Number.isFinite(storedCapital)
+    ? storedCapital
+    : usdFromSats(position?.marginSats, position?.quoteSatsPerUsd)
+  const invested = usd(investedValue)
   const notional = Number(position?.quantityUsd)
-  const investedValue = usdFromSats(position?.marginSats, position?.quoteSatsPerUsd)
   const detail = Number.isFinite(notional) && Number.isFinite(investedValue) && Math.abs(notional - investedValue) > 0.01
     ? `nominál ${usd(notional)}`
+    : null
+  const risk = Number(position?.riskUsd)
+  const spread = Number(position?.spreadBps)
+  const protection = Number.isFinite(risk)
+    ? `ztráta na SL max. ${usd(risk)}`
+    : null
+  const spreadDetail = Number.isFinite(spread)
+    ? `modelovaný spread ${(spread / 100).toLocaleString('cs-CZ', { maximumFractionDigits: 3 })} %`
     : null
   return el('td', {}, [
     el('div', { text: invested }),
     detail ? el('div', { className: 'pa-level-detail', text: detail }) : null,
+    protection ? el('div', { className: 'pa-level-detail', text: protection }) : null,
+    spreadDetail ? el('div', { className: 'pa-level-detail', text: spreadDetail }) : null,
   ])
+}
+
+const priceActionExecutableExit = (position, target) => {
+  const spreadBps = Math.max(0, Number(position?.spreadBps) || 0)
+  const halfSpread = spreadBps / 20_000
+  return target * (position?.side === 'long' ? 1 - halfSpread : 1 + halfSpread)
 }
 
 const priceActionUsdPnl = (position, target, quantityUsd) => {
   if (![position?.entry, target, quantityUsd].every(Number.isFinite)) return null
   const direction = position.side === 'long' ? 1 : -1
-  return quantityUsd * ((target - position.entry) / position.entry) * direction
+  const executableTarget = priceActionExecutableExit(position, target)
+  return quantityUsd * ((executableTarget - position.entry) / position.entry) * direction
 }
 
 const priceActionLevelCell = ({ label, position, target, quantityUsd, completed = false }) => {
@@ -2681,7 +2701,12 @@ const renderPriceActionOpen = (body) => {
         el('td', { text: position.timeframeId || position.timeframe ? (position.timeframeId || position.timeframe).toUpperCase() : '–' }),
         sideCell(position.side),
         positionCapitalCell(position),
-        el('td', { text: quotePrice(position.entry) }),
+        el('td', {}, [
+          el('div', { text: quotePrice(position.entry) }),
+          Number.isFinite(position.requestedEntry) && position.requestedEntry !== position.entry
+            ? el('div', { className: 'pa-level-detail', text: `úroveň ${quotePrice(position.requestedEntry)}` })
+            : null,
+        ]),
         el('td', { text: quotePrice(priceActionPositionPrice(position)) }),
         priceActionLevelCell({ label: 'SL', position, target: position.stopLoss, quantityUsd: remainingQuantityUsd }),
         priceActionTargetsCell(position),
@@ -2728,7 +2753,7 @@ const renderOrders = () => {
 
 const renderPriceActionOrders = (body) => {
   setPanelTitle('panel-orders-title', 'Čekající price-action objednávky')
-  setTableHead('panel-orders', ['Zadáno', 'Asset', 'TF', 'Typ', 'Směr', 'Vložený kapitál', 'Cena', 'Akt. cena / vzdál.', 'Stop loss', 'TP1 / TP2', 'Marže', ''])
+  setTableHead('panel-orders', ['Zadáno', 'Asset', 'TF', 'Typ', 'Směr', 'Vložený kapitál', 'Cena', 'Akt. cena / vzdál.', 'Stop loss', 'TP1 / TP2', 'Riziko / spread', ''])
   const rows = state?.positions?.orders || []
   body.replaceChildren()
   if (!rows.length) {
@@ -2751,7 +2776,12 @@ const renderPriceActionOrders = (body) => {
         partialTakeProfit ? el('td', { text: '–' }) : pendingOrderDistanceCell(order),
         el('td', { text: partialTakeProfit ? '–' : quotePrice(order.stopLoss) }),
         el('td', { text: partialTakeProfit ? `TP1 ${quotePrice(order.entry)} · 50 %` : `${quotePrice(order.tp1)} / ${Number.isFinite(order.tp2) ? quotePrice(order.tp2) : 'struktura'}` }),
-        el('td', { text: partialTakeProfit ? '–' : usd(usdFromSats(order.marginSats, order.quoteSatsPerUsd)) }),
+        el('td', {}, partialTakeProfit ? [el('div', { text: '–' })] : [
+          el('div', { text: Number.isFinite(order.riskUsd) ? `SL ${usd(order.riskUsd)}` : '–' }),
+          Number.isFinite(order.spreadBps)
+            ? el('div', { className: 'pa-level-detail', text: `${(order.spreadBps / 100).toLocaleString('cs-CZ', { maximumFractionDigits: 3 })} %` })
+            : null,
+        ]),
         el('td', { text: partialTakeProfit ? '–' : null }, cancel ? [cancel] : []),
       ])
     )
@@ -3138,7 +3168,7 @@ const renderPriceActionBacktests = (host) => {
       document.assumptions
         ? el('p', {
             className: 'backtest-assumptions',
-            text: `Risk ${backtestValue(document.assumptions.riskPct, 1, ' %')} · poplatek ${backtestValue(Number(document.assumptions.feeRate) * 100, 2, ' %/strana')} · kapitál ${backtestValue(document.assumptions.startingCapital, 0, ' USD')}`,
+            text: `Risk ${backtestValue(document.assumptions.riskPct, 1, ' %')} · poplatek ${backtestValue(Number(document.assumptions.feeRate) * 100, 2, ' %/strana')} · spread ${backtestValue(Number(document.assumptions.spreadBps) / 100, 3, ' %')} · kapitál ${backtestValue(document.assumptions.startingCapital, 0, ' USD')}`,
           })
         : null,
     ]),

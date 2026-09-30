@@ -118,6 +118,8 @@ test('capital and P/L are presented in USD while sats remain internal accounting
   assert.match(js, /positionPnlCell/)
   assert.match(js, /const positionCapitalCell/)
   assert.match(js, /'Vložený kapitál'/)
+  assert.match(js, /ztráta na SL max\./)
+  assert.match(js, /modelovaný spread/)
   assert.doesNotMatch(js, /signedSats/)
 })
 

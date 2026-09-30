@@ -52,11 +52,17 @@ const priceActionLeverage = (settings) => {
   return Number.isFinite(candidate) ? Math.min(10, Math.max(1, candidate)) : 1
 }
 
+const priceActionSpreadBps = (settings) => {
+  const candidate = Number(settings?.priceActionStructure?.spreadBps ?? settings?.risk?.spreadBps)
+  return Number.isFinite(candidate) ? Math.min(100, Math.max(0, candidate)) : 2
+}
+
 const priceActionSignalKey = ({ assetSymbol, timeframeId, profile, settings }) => {
   const zoneIdentity = profile.zone?.firstTime ?? profile.zone?.lastTime ?? profile.zone?.firstIndex ?? 'zone'
-  // Sizing is part of an entry instruction. A pending order created for spot
-  // must be replaced if the user intentionally changes the leverage setting.
-  return [PRICE_ACTION_STRUCTURE_ID, assetSymbol, timeframeId, profile.side, zoneIdentity, profile.entry, `leverage-${priceActionLeverage(settings)}`].join(':')
+  // Sizing and executable fill assumptions are part of an entry instruction.
+  // A pending order is rebuilt when either is changed, rather than keeping an
+  // instruction whose displayed capital or bid/ask model is out of date.
+  return [PRICE_ACTION_STRUCTURE_ID, assetSymbol, timeframeId, profile.side, zoneIdentity, profile.entry, `leverage-${priceActionLeverage(settings)}`, `spread-${priceActionSpreadBps(settings)}`].join(':')
 }
 
 // A limit order may wait for the two gates that only become true at its own
@@ -117,8 +123,59 @@ export const reconcileMissingPriceActionTargets = async ({
   return outcomes
 }
 
+// PA-1 was briefly allowed to turn a narrow structural stop into a large spot
+// allocation. Existing paper positions carry neither the capital fields nor
+// the bid/ask model that new instructions do. Correct them once, preserving
+// their structural brackets and any half already closed at TP1.
+export const reconcileLegacyPriceActionSizing = async ({
+  executor,
+  positions = [],
+  equitySats,
+  btcPrice,
+  settings,
+  dryRun = false,
+} = {}) => {
+  if (typeof executor?.rebasePriceActionPosition !== 'function') return []
+  const outcomes = []
+  for (const position of positions.filter((candidate) =>
+    candidate.strategyId === PRICE_ACTION_STRUCTURE_ID &&
+    candidate.pricingModel === 'linear-usd' &&
+    candidate.leverage === 1 &&
+    !Number.isFinite(candidate.capitalUsd)
+  )) {
+    const plan = planLinearPosition({
+      side: position.side,
+      entry: position.requestedEntry ?? position.entry,
+      stop: position.stopLoss,
+      takeProfit: position.takeProfit,
+      equitySats,
+      btcPrice,
+      settings: {
+        ...(settings?.risk ?? {}),
+        market: 'spot',
+        maxLeverage: 1,
+        riskPct: Number(settings?.priceActionStructure?.riskPct) || 1,
+        spreadBps: priceActionSpreadBps(settings),
+      },
+    })
+    if (!plan.ok || !(plan.quantityUsd < position.quantityUsd)) continue
+    if (dryRun) {
+      outcomes.push({ position, plan, action: 'would_rebase' })
+      continue
+    }
+    try {
+      const updated = await executor.rebasePriceActionPosition(position.id, plan)
+      if (updated) outcomes.push({ position: updated, plan, action: 'rebased' })
+    } catch (error) {
+      outcomes.push({ position, plan, action: 'rebase_failed', error: error.message })
+    }
+  }
+  return outcomes
+}
+
 const priceActionOrderPlan = ({ assetSymbol, timeframeId, item, profile, equitySats, btcPrice, settings }) => {
   const leverage = priceActionLeverage(settings)
+  const spreadBps = priceActionSpreadBps(settings)
   const plan = planLinearPosition({
     side: profile.side,
     entry: profile.entry,
@@ -135,6 +192,7 @@ const priceActionOrderPlan = ({ assetSymbol, timeframeId, item, profile, equityS
       maxLeverage: leverage,
       maxNotionalPct: leverage * 100,
       riskPct: Number(profile.riskPct) || Number(settings.priceActionStructure?.riskPct) || 1,
+      spreadBps,
     },
   })
   if (!plan.ok) return { ok: false, reason: plan.reason }
@@ -163,6 +221,9 @@ const priceActionOrderPlan = ({ assetSymbol, timeframeId, item, profile, equityS
         reason: `${profile.side} ${item.reason ?? ''}`.trim(),
         rr: profile.rewardRisk,
         riskSats: plan.riskSats,
+        riskUsd: plan.riskUsd,
+        capitalUsd: plan.capitalUsd,
+        spreadBps: plan.spreadBps,
         requestedLeverage: leverage,
       },
     },
@@ -374,7 +435,7 @@ export const reconcilePendingPriceActionOrders = async ({ executor, orders = [],
       : profile?.zoneHit
       ? 'cena dotkla zóny dříve, než došla na připravený entry'
       : isPendingPriceActionOrderProfile(profile)
-      ? 'nastavení páky se změnilo; objednávka se přepočítá'
+      ? 'nastavení páky nebo modelovaného spreadu se změnilo; objednávka se přepočítá'
       : 'setup se změnil nebo byl invalidován strukturou'
     if (dryRun) {
       outcomes.push({ order, action: 'would_cancel', reason })
@@ -946,6 +1007,38 @@ export const runPass = async ({
       }
 
       if (mode === 'paper') {
+        const legacySizingActions = await reconcileLegacyPriceActionSizing({
+          executor,
+          positions: running,
+          equitySats: account.equitySats,
+          btcPrice: price,
+          settings,
+          dryRun: config.dryRun,
+        })
+        for (const action of legacySizingActions) {
+          recordPriceActionEvent(state, {
+            at: isoNow(now),
+            type: action.action === 'rebased' ? 'legacy_position_size_rebased' : 'legacy_position_size_rebase_pending',
+            positionId: action.position.id,
+            asset: action.position.assetSymbol,
+            timeframeId: action.position.timeframeId,
+            side: action.position.side,
+            previousQuantityUsd: action.position.sizeBeforeRebase?.quantityUsd ?? null,
+            quantityUsd: action.position.quantityUsd ?? action.plan?.quantityUsd ?? null,
+            capitalUsd: action.position.capitalUsd ?? action.plan?.capitalUsd ?? null,
+            reason: 'legacy paper position exceeded the spot one-percent capital allocation',
+            fingerprint: [action.position.id, action.action, action.plan?.quantityUsd].join('|'),
+          })
+        }
+        if (legacySizingActions.some((action) => action.action === 'rebased')) {
+          refreshed = await executor.listTrades()
+          trades = refreshed
+          running = refreshed.running
+          closed = capClosed(refreshed.closed)
+          account = await executor.getAccount()
+          state.account = account
+        }
+
         const pendingCancellations = await reconcilePendingPriceActionOrders({
           executor,
           orders: refreshed.open ?? [],

@@ -10,6 +10,7 @@ import {
   PRICE_ACTION_STRUCTURE_PROFILES,
 } from './strategy-price-action-structure.mjs'
 import { confirmedExternalPivotCandidates, confirmedExternalPivotPath } from './external-trends.mjs'
+import { effectiveLinearFillPrice } from './risk.mjs'
 
 const LOWER_TIMEFRAME = { '1h': null, '4h': '1h', '1d': '4h' }
 const HIGHER_TIMEFRAME = { '1h': '4h', '4h': '1d', '1d': null }
@@ -176,6 +177,7 @@ export const runPriceActionStructureBacktest = ({
   startingCapital = 100,
   riskPct = 1,
   feeRate = 0.0006,
+  spreadBps = 2,
   settings = {},
 } = {}) => {
   const profile = PRICE_ACTION_STRUCTURE_PROFILES[timeframeId]
@@ -204,6 +206,9 @@ export const runPriceActionStructureBacktest = ({
   let readyProfiles = 0
   let zoneHits = 0
   let positionClosedThisCandle = false
+  const resolvedSpreadBps = Math.max(0, Number(spreadBps ?? settings.spreadBps) || 0)
+  const entryFill = (side, price) => effectiveLinearFillPrice({ side, price, spreadBps: resolvedSpreadBps, leg: 'entry' })
+  const exitFill = (side, price) => effectiveLinearFillPrice({ side, price, spreadBps: resolvedSpreadBps, leg: 'exit' })
   const ownStructureAt = cachedStructureReader({ candles: ordered, timeframeId, includeZones: false })
   const ownStructureWithZonesAt = cachedStructureReader({ candles: ordered, timeframeId, includeZones: true, maxEntries: 3 })
   const lowerTimeframeId = LOWER_TIMEFRAME[timeframeId]
@@ -218,8 +223,9 @@ export const runPriceActionStructureBacktest = ({
     ? cachedStructureReader({ candles: higherCandles, timeframeId: higherTimeframeId, includeZones: false })
     : null
 
-  const recordExit = (reason, exitPrice, at) => {
+  const recordExit = (reason, marketExitPrice, at) => {
     if (!position) return
+    const exitPrice = exitFill(position.side, marketExitPrice)
     const remaining = position.remaining
     if (remaining > 0) {
       const gross = position.notional * remaining * closeValue(position, exitPrice)
@@ -233,6 +239,7 @@ export const runPriceActionStructureBacktest = ({
       openedAt: position.openedAt,
       closedAt: at,
       entry: position.entry,
+      requestedEntry: position.requestedEntry,
       exitPrice,
       pl: position.realized,
       riskAmount: position.riskAmount,
@@ -244,8 +251,9 @@ export const runPriceActionStructureBacktest = ({
     positionClosedThisCandle = true
   }
 
-  const takePartial = (fraction, exitPrice, at) => {
+  const takePartial = (fraction, marketExitPrice, at) => {
     if (!position || position.remaining <= 0) return
+    const exitPrice = exitFill(position.side, marketExitPrice)
     const size = Math.min(position.remaining, fraction)
     const gross = position.notional * size * closeValue(position, exitPrice)
     const fee = position.notional * size * feeRate
@@ -254,7 +262,7 @@ export const runPriceActionStructureBacktest = ({
     position.remaining -= size
   }
 
-  const markEquity = (close) => cash + (position ? position.notional * position.remaining * closeValue(position, close) : 0)
+  const markEquity = (close) => cash + (position ? position.notional * position.remaining * closeValue(position, exitFill(position.side, close)) : 0)
 
   for (let index = 0; index < ordered.length; index += 1) {
     positionClosedThisCandle = false
@@ -301,19 +309,25 @@ export const runPriceActionStructureBacktest = ({
     if (position) {
       // A candle touching the stop and a target is conservatively settled at
       // the stop first, exactly as the paper executor does.
-      const stopHit = position.side === 'long' ? candle.low <= position.stop : candle.high >= position.stop
+      const stopHit = position.side === 'long'
+        ? exitFill(position.side, candle.low) <= position.stop
+        : exitFill(position.side, candle.high) >= position.stop
       if (stopHit) {
         recordExit('stop_loss', position.stop, candleEnd)
       } else {
         if (!position.tp1Taken) {
-          const tp1Hit = position.side === 'long' ? candle.high >= position.tp1 : candle.low <= position.tp1
+          const tp1Hit = position.side === 'long'
+            ? exitFill(position.side, candle.high) >= position.tp1
+            : exitFill(position.side, candle.low) <= position.tp1
           if (tp1Hit) {
             takePartial(0.5, position.tp1, candleEnd)
             position.tp1Taken = true
           }
         }
         if (position && position.remaining > 0) {
-          const tp2Hit = position.side === 'long' ? candle.high >= position.tp2 : candle.low <= position.tp2
+          const tp2Hit = position.side === 'long'
+            ? exitFill(position.side, candle.high) >= position.tp2
+            : exitFill(position.side, candle.low) <= position.tp2
           if (tp2Hit) recordExit('take_profit', position.tp2, candleEnd)
         }
         if (position) {
@@ -343,7 +357,9 @@ export const runPriceActionStructureBacktest = ({
       : candle.high >= entry && candle.low <= entry
     if (!entryHit) continue
 
-    const riskDistance = Math.abs(entry - stop) / entry
+    const executableEntry = entryFill(trade.side, entry)
+    const executableStop = exitFill(trade.side, stop)
+    const riskDistance = Math.abs(executableEntry - executableStop) / executableEntry
     if (!(riskDistance > 0)) continue
     const equity = markEquity(candle.close)
     const riskCapital = equity * (Number(riskPct) || 1) / 100
@@ -358,7 +374,8 @@ export const runPriceActionStructureBacktest = ({
     position = {
       side: trade.side,
       trend: profiledItem.trend,
-      entry,
+      entry: executableEntry,
+      requestedEntry: entry,
       stop,
       tp1,
       tp2,
@@ -423,7 +440,7 @@ export const runPriceActionStructureBacktest = ({
       exitReason,
       holdDays,
     })),
-    model: `PA-1 · risk ${Number(riskPct) || 1}% · fee ${((Number(feeRate) || 0) * 100).toFixed(2)}%/strana · TP1/TP2 50/50`,
+    model: `PA-1 · risk ${Number(riskPct) || 1}% · fee ${((Number(feeRate) || 0) * 100).toFixed(2)}%/strana · spread ${resolvedSpreadBps} bps · TP1/TP2 50/50`,
   }
 }
 

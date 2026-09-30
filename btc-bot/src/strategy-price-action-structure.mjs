@@ -26,6 +26,9 @@ export const DEFAULT_PRICE_ACTION_STRUCTURE = {
   // PA starts as true spot trading. A user can explicitly opt into a higher
   // leverage from the dashboard without changing the structural stop.
   leverage: 1,
+  // Published OHLC data is a mid price. This models the bid/ask friction for
+  // a paper fill without changing the structural entry, stop or target level.
+  spreadBps: 2,
   stopBufferPct: 0.02,
 }
 

@@ -17,7 +17,8 @@
     "maxNotionalPct": 300,
     "minQuantityUsd": 1,
     "minMarginSats": 1000,
-    "feeRate": 0.0006
+    "feeRate": 0.0006,
+    "spreadBps": 2
   },
   "strategy": {
     "zoneLookback": 2,
@@ -27,6 +28,8 @@
     "pullbackPct": 50,
     "minRewardRisk": 2,
     "riskPct": 1,
+    "leverage": 1,
+    "spreadBps": 2,
     "stopBufferPct": 0.02
   },
   "priceActionStructure": {
@@ -37,6 +40,7 @@
     "pullbackPct": 50,
     "minRewardRisk": 2,
     "riskPct": 1,
+    "spreadBps": 2,
     "stopBufferPct": 0.02
   }
 }
