@@ -275,7 +275,9 @@ async function main() {
     line("all entries", setupStats(trades, stake), days);
     line(`without ${NEAR_HALF[0]}-${NEAR_HALF[1]} prints`, setupStats(clean, stake), days);
     line(`only ${NEAR_HALF[0]}-${NEAR_HALF[1]} prints`, setupStats(half, stake), days);
-    summary.push({ tag, all: setupStats(trades, stake), clean: setupStats(clean, stake), days, cleanDays: spanDays(clean) });
+    // One span for both variants: dividing the clean subset by its own, shorter span made the
+    // clean rule look as if it fired MORE often than the rule it is a subset of.
+    summary.push({ tag, all: setupStats(trades, stake), clean: setupStats(clean, stake), days });
 
     const byShape = new Map();
     for (const trade of clean) byShape.set(trade.shape, [...(byShape.get(trade.shape) || []), trade]);
@@ -305,9 +307,9 @@ async function main() {
 
   console.log("\n\n=== summary: this rule, per tag ===");
   console.log(header("tag                variant"));
-  for (const { tag, all, clean, days, cleanDays } of summary) {
+  for (const { tag, all, clean, days } of summary) {
     line(`${tag.padEnd(18)} all`, all, days);
-    line(`${tag.padEnd(18)} clean`, clean, cleanDays);
+    line(`${tag.padEnd(18)} clean`, clean, days);
   }
   console.log("\n   clean = without entries priced", `${NEAR_HALF[0]}-${NEAR_HALF[1]}.`,
     "price% is the mean entry price; edge is win% minus it.");
