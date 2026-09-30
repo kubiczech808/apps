@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "generated_at": "2026-09-30T10:10:41+00:00",
+  "generated_at": "2026-09-30T10:16:43+00:00",
   "plugins": [
     {
       "file": "ecomail/ecomail.php",
@@ -1519,6 +1519,31 @@
           "key": "_jamu_ml_additional_content",
           "type": "string",
           "bytes": 0
+        },
+        {
+          "key": "_yaymail_email_order_item_title",
+          "type": "string",
+          "bytes": 913
+        },
+        {
+          "key": "_yaymail_email_order_item_download_title",
+          "type": "string",
+          "bytes": 218
+        },
+        {
+          "key": "_email_backgroundColor_settings",
+          "type": "string",
+          "bytes": 18
+        },
+        {
+          "key": "_email_title_shipping",
+          "type": "string",
+          "bytes": 19
+        },
+        {
+          "key": "_email_title_billing",
+          "type": "string",
+          "bytes": 19
         }
       ]
     },
@@ -1599,6 +1624,31 @@
           "key": "_jamu_ml_additional_content",
           "type": "string",
           "bytes": 0
+        },
+        {
+          "key": "_yaymail_email_order_item_title",
+          "type": "string",
+          "bytes": 913
+        },
+        {
+          "key": "_yaymail_email_order_item_download_title",
+          "type": "string",
+          "bytes": 218
+        },
+        {
+          "key": "_email_backgroundColor_settings",
+          "type": "string",
+          "bytes": 18
+        },
+        {
+          "key": "_email_title_shipping",
+          "type": "string",
+          "bytes": 19
+        },
+        {
+          "key": "_email_title_billing",
+          "type": "string",
+          "bytes": 19
         }
       ]
     },
@@ -1679,6 +1729,31 @@
           "key": "_jamu_ml_additional_content",
           "type": "string",
           "bytes": 0
+        },
+        {
+          "key": "_yaymail_email_order_item_title",
+          "type": "string",
+          "bytes": 913
+        },
+        {
+          "key": "_yaymail_email_order_item_download_title",
+          "type": "string",
+          "bytes": 218
+        },
+        {
+          "key": "_email_backgroundColor_settings",
+          "type": "string",
+          "bytes": 18
+        },
+        {
+          "key": "_email_title_shipping",
+          "type": "string",
+          "bytes": 19
+        },
+        {
+          "key": "_email_title_billing",
+          "type": "string",
+          "bytes": 19
         }
       ]
     },
@@ -1759,6 +1834,31 @@
           "key": "_jamu_ml_additional_content",
           "type": "string",
           "bytes": 43
+        },
+        {
+          "key": "_yaymail_email_order_item_title",
+          "type": "string",
+          "bytes": 915
+        },
+        {
+          "key": "_yaymail_email_order_item_download_title",
+          "type": "string",
+          "bytes": 218
+        },
+        {
+          "key": "_email_backgroundColor_settings",
+          "type": "string",
+          "bytes": 18
+        },
+        {
+          "key": "_email_title_shipping",
+          "type": "string",
+          "bytes": 19
+        },
+        {
+          "key": "_email_title_billing",
+          "type": "string",
+          "bytes": 19
         }
       ]
     },
@@ -1839,6 +1939,31 @@
           "key": "_jamu_ml_additional_content",
           "type": "string",
           "bytes": 43
+        },
+        {
+          "key": "_yaymail_email_order_item_title",
+          "type": "string",
+          "bytes": 915
+        },
+        {
+          "key": "_yaymail_email_order_item_download_title",
+          "type": "string",
+          "bytes": 218
+        },
+        {
+          "key": "_email_backgroundColor_settings",
+          "type": "string",
+          "bytes": 18
+        },
+        {
+          "key": "_email_title_shipping",
+          "type": "string",
+          "bytes": 19
+        },
+        {
+          "key": "_email_title_billing",
+          "type": "string",
+          "bytes": 19
         }
       ]
     },
@@ -1919,6 +2044,31 @@
           "key": "_jamu_ml_additional_content",
           "type": "string",
           "bytes": 43
+        },
+        {
+          "key": "_yaymail_email_order_item_title",
+          "type": "string",
+          "bytes": 915
+        },
+        {
+          "key": "_yaymail_email_order_item_download_title",
+          "type": "string",
+          "bytes": 218
+        },
+        {
+          "key": "_email_backgroundColor_settings",
+          "type": "string",
+          "bytes": 18
+        },
+        {
+          "key": "_email_title_shipping",
+          "type": "string",
+          "bytes": 19
+        },
+        {
+          "key": "_email_title_billing",
+          "type": "string",
+          "bytes": 19
         }
       ]
     },
@@ -1999,6 +2149,31 @@
           "key": "_jamu_ml_additional_content",
           "type": "string",
           "bytes": 26
+        },
+        {
+          "key": "_yaymail_email_order_item_title",
+          "type": "string",
+          "bytes": 938
+        },
+        {
+          "key": "_yaymail_email_order_item_download_title",
+          "type": "string",
+          "bytes": 218
+        },
+        {
+          "key": "_email_backgroundColor_settings",
+          "type": "string",
+          "bytes": 18
+        },
+        {
+          "key": "_email_title_shipping",
+          "type": "string",
+          "bytes": 20
+        },
+        {
+          "key": "_email_title_billing",
+          "type": "string",
+          "bytes": 20
         }
       ]
     },
@@ -2079,6 +2254,31 @@
           "key": "_jamu_ml_additional_content",
           "type": "string",
           "bytes": 26
+        },
+        {
+          "key": "_yaymail_email_order_item_title",
+          "type": "string",
+          "bytes": 938
+        },
+        {
+          "key": "_yaymail_email_order_item_download_title",
+          "type": "string",
+          "bytes": 218
+        },
+        {
+          "key": "_email_backgroundColor_settings",
+          "type": "string",
+          "bytes": 18
+        },
+        {
+          "key": "_email_title_shipping",
+          "type": "string",
+          "bytes": 20
+        },
+        {
+          "key": "_email_title_billing",
+          "type": "string",
+          "bytes": 20
         }
       ]
     },
@@ -2159,6 +2359,31 @@
           "key": "_jamu_ml_additional_content",
           "type": "string",
           "bytes": 26
+        },
+        {
+          "key": "_yaymail_email_order_item_title",
+          "type": "string",
+          "bytes": 938
+        },
+        {
+          "key": "_yaymail_email_order_item_download_title",
+          "type": "string",
+          "bytes": 218
+        },
+        {
+          "key": "_email_backgroundColor_settings",
+          "type": "string",
+          "bytes": 18
+        },
+        {
+          "key": "_email_title_shipping",
+          "type": "string",
+          "bytes": 20
+        },
+        {
+          "key": "_email_title_billing",
+          "type": "string",
+          "bytes": 20
         }
       ]
     },
@@ -2239,6 +2464,31 @@
           "key": "_jamu_ml_additional_content",
           "type": "string",
           "bytes": 0
+        },
+        {
+          "key": "_yaymail_email_order_item_title",
+          "type": "string",
+          "bytes": 961
+        },
+        {
+          "key": "_yaymail_email_order_item_download_title",
+          "type": "string",
+          "bytes": 218
+        },
+        {
+          "key": "_email_backgroundColor_settings",
+          "type": "string",
+          "bytes": 18
+        },
+        {
+          "key": "_email_title_shipping",
+          "type": "string",
+          "bytes": 19
+        },
+        {
+          "key": "_email_title_billing",
+          "type": "string",
+          "bytes": 19
         }
       ]
     },
@@ -2319,6 +2569,31 @@
           "key": "_jamu_ml_additional_content",
           "type": "string",
           "bytes": 0
+        },
+        {
+          "key": "_yaymail_email_order_item_title",
+          "type": "string",
+          "bytes": 961
+        },
+        {
+          "key": "_yaymail_email_order_item_download_title",
+          "type": "string",
+          "bytes": 218
+        },
+        {
+          "key": "_email_backgroundColor_settings",
+          "type": "string",
+          "bytes": 18
+        },
+        {
+          "key": "_email_title_shipping",
+          "type": "string",
+          "bytes": 19
+        },
+        {
+          "key": "_email_title_billing",
+          "type": "string",
+          "bytes": 19
         }
       ]
     },
@@ -2399,6 +2674,31 @@
           "key": "_jamu_ml_additional_content",
           "type": "string",
           "bytes": 0
+        },
+        {
+          "key": "_yaymail_email_order_item_title",
+          "type": "string",
+          "bytes": 961
+        },
+        {
+          "key": "_yaymail_email_order_item_download_title",
+          "type": "string",
+          "bytes": 218
+        },
+        {
+          "key": "_email_backgroundColor_settings",
+          "type": "string",
+          "bytes": 18
+        },
+        {
+          "key": "_email_title_shipping",
+          "type": "string",
+          "bytes": 19
+        },
+        {
+          "key": "_email_title_billing",
+          "type": "string",
+          "bytes": 19
         }
       ]
     },
@@ -2479,6 +2779,31 @@
           "key": "_jamu_ml_additional_content",
           "type": "string",
           "bytes": 0
+        },
+        {
+          "key": "_yaymail_email_order_item_title",
+          "type": "string",
+          "bytes": 948
+        },
+        {
+          "key": "_yaymail_email_order_item_download_title",
+          "type": "string",
+          "bytes": 218
+        },
+        {
+          "key": "_email_backgroundColor_settings",
+          "type": "string",
+          "bytes": 18
+        },
+        {
+          "key": "_email_title_shipping",
+          "type": "string",
+          "bytes": 20
+        },
+        {
+          "key": "_email_title_billing",
+          "type": "string",
+          "bytes": 20
         }
       ]
     },
@@ -2559,6 +2884,31 @@
           "key": "_jamu_ml_additional_content",
           "type": "string",
           "bytes": 0
+        },
+        {
+          "key": "_yaymail_email_order_item_title",
+          "type": "string",
+          "bytes": 948
+        },
+        {
+          "key": "_yaymail_email_order_item_download_title",
+          "type": "string",
+          "bytes": 218
+        },
+        {
+          "key": "_email_backgroundColor_settings",
+          "type": "string",
+          "bytes": 18
+        },
+        {
+          "key": "_email_title_shipping",
+          "type": "string",
+          "bytes": 20
+        },
+        {
+          "key": "_email_title_billing",
+          "type": "string",
+          "bytes": 20
         }
       ]
     },
@@ -2639,6 +2989,31 @@
           "key": "_jamu_ml_additional_content",
           "type": "string",
           "bytes": 0
+        },
+        {
+          "key": "_yaymail_email_order_item_title",
+          "type": "string",
+          "bytes": 948
+        },
+        {
+          "key": "_yaymail_email_order_item_download_title",
+          "type": "string",
+          "bytes": 218
+        },
+        {
+          "key": "_email_backgroundColor_settings",
+          "type": "string",
+          "bytes": 18
+        },
+        {
+          "key": "_email_title_shipping",
+          "type": "string",
+          "bytes": 20
+        },
+        {
+          "key": "_email_title_billing",
+          "type": "string",
+          "bytes": 20
         }
       ]
     },
@@ -2719,6 +3094,16 @@
           "key": "_jamu_ml_additional_content",
           "type": "string",
           "bytes": 0
+        },
+        {
+          "key": "_yaymail_email_order_item_title",
+          "type": "string",
+          "bytes": 938
+        },
+        {
+          "key": "_yaymail_email_order_item_download_title",
+          "type": "string",
+          "bytes": 218
         }
       ]
     },
@@ -2799,6 +3184,16 @@
           "key": "_jamu_ml_additional_content",
           "type": "string",
           "bytes": 0
+        },
+        {
+          "key": "_yaymail_email_order_item_title",
+          "type": "string",
+          "bytes": 938
+        },
+        {
+          "key": "_yaymail_email_order_item_download_title",
+          "type": "string",
+          "bytes": 218
         }
       ]
     },
@@ -2959,6 +3354,16 @@
           "key": "_jamu_ml_additional_content",
           "type": "string",
           "bytes": 0
+        },
+        {
+          "key": "_yaymail_email_order_item_title",
+          "type": "string",
+          "bytes": 938
+        },
+        {
+          "key": "_yaymail_email_order_item_download_title",
+          "type": "string",
+          "bytes": 218
         }
       ]
     },
@@ -3119,6 +3524,16 @@
           "key": "_jamu_ml_additional_content",
           "type": "string",
           "bytes": 0
+        },
+        {
+          "key": "_yaymail_email_order_item_title",
+          "type": "string",
+          "bytes": 938
+        },
+        {
+          "key": "_yaymail_email_order_item_download_title",
+          "type": "string",
+          "bytes": 218
         }
       ]
     },
@@ -3279,6 +3694,16 @@
           "key": "_jamu_ml_additional_content",
           "type": "string",
           "bytes": 0
+        },
+        {
+          "key": "_yaymail_email_order_item_title",
+          "type": "string",
+          "bytes": 938
+        },
+        {
+          "key": "_yaymail_email_order_item_download_title",
+          "type": "string",
+          "bytes": 218
         }
       ]
     },
@@ -3359,6 +3784,16 @@
           "key": "_jamu_ml_additional_content",
           "type": "string",
           "bytes": 0
+        },
+        {
+          "key": "_yaymail_email_order_item_title",
+          "type": "string",
+          "bytes": 938
+        },
+        {
+          "key": "_yaymail_email_order_item_download_title",
+          "type": "string",
+          "bytes": 218
         }
       ]
     },
@@ -3519,6 +3954,16 @@
           "key": "_jamu_ml_additional_content",
           "type": "string",
           "bytes": 0
+        },
+        {
+          "key": "_yaymail_email_order_item_title",
+          "type": "string",
+          "bytes": 938
+        },
+        {
+          "key": "_yaymail_email_order_item_download_title",
+          "type": "string",
+          "bytes": 218
         }
       ]
     },
@@ -3679,6 +4124,16 @@
           "key": "_jamu_ml_additional_content",
           "type": "string",
           "bytes": 0
+        },
+        {
+          "key": "_yaymail_email_order_item_title",
+          "type": "string",
+          "bytes": 938
+        },
+        {
+          "key": "_yaymail_email_order_item_download_title",
+          "type": "string",
+          "bytes": 218
         }
       ]
     },
@@ -3839,6 +4294,16 @@
           "key": "_jamu_ml_additional_content",
           "type": "string",
           "bytes": 0
+        },
+        {
+          "key": "_yaymail_email_order_item_title",
+          "type": "string",
+          "bytes": 938
+        },
+        {
+          "key": "_yaymail_email_order_item_download_title",
+          "type": "string",
+          "bytes": 218
         }
       ]
     },
@@ -3999,6 +4464,16 @@
           "key": "_jamu_ml_additional_content",
           "type": "string",
           "bytes": 0
+        },
+        {
+          "key": "_yaymail_email_order_item_title",
+          "type": "string",
+          "bytes": 938
+        },
+        {
+          "key": "_yaymail_email_order_item_download_title",
+          "type": "string",
+          "bytes": 218
         }
       ]
     },
@@ -4159,6 +4634,16 @@
           "key": "_jamu_ml_additional_content",
           "type": "string",
           "bytes": 0
+        },
+        {
+          "key": "_yaymail_email_order_item_title",
+          "type": "string",
+          "bytes": 938
+        },
+        {
+          "key": "_yaymail_email_order_item_download_title",
+          "type": "string",
+          "bytes": 218
         }
       ]
     },
@@ -4319,6 +4804,16 @@
           "key": "_jamu_ml_additional_content",
           "type": "string",
           "bytes": 0
+        },
+        {
+          "key": "_yaymail_email_order_item_title",
+          "type": "string",
+          "bytes": 938
+        },
+        {
+          "key": "_yaymail_email_order_item_download_title",
+          "type": "string",
+          "bytes": 218
         }
       ]
     },
