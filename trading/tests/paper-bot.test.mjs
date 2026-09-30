@@ -752,14 +752,13 @@ test("equal risk: a bid far below the floor declines to sell and leaves the posi
   assert.equal(declined.exitValueUsdc, undefined);
   assert.equal(declined.realizedPnlUsdc, undefined);
 
-  // A crossing fills AT the floor, which is inside the band by definition -- so a position
-  // that was above the floor at the previous look is never declined.
+  // A prior quote above the floor cannot create a fictitious resting exit. The next actual
+  // live decision sees the 0.20 bid, which is outside the permitted gap and must decline.
   const crossed = bot.equalRiskStopExitDecision({
     plan, bestBid: 0.2, shares: 5.5, feesEnabled: false, previousBid: 0.95,
   });
-  assert.equal(crossed.declinedGap, undefined);
-  assert.equal(crossed.filledByCrossing, true);
-  assert.equal(crossed.fillPrice, plan.stopPrice);
+  assert.equal(crossed.declinedGap, true);
+  assert.equal(crossed.fillPrice, undefined);
 });
 
 // Asked for with the book in evidence: a live position bought at 75% was left at about 25% on
@@ -7894,10 +7893,9 @@ test("paper rotation: the switch reaches the bot, and being off is logged too", 
 // waiting to be polled; it collapses. Every check therefore saw a bid of 0.05 or 0.01,
 // booked the exit there, and recorded a 4.74 USDC loss against a 0.26 cap.
 //
-// The live side never did that: the RPi worker polls every five seconds and submits its
-// sell at stopPrice, not at the collapsed bid. Paper is meant to estimate the live
-// strategy and was measuring something no live run would produce.
-test("equal stop: a watched position exits at its floor, not at the collapsed bid", async () => {
+// The live side polls and then submits at the fresh executable bid. Paper must not convert
+// an unobserved crossing into an imaginary fill at the stop floor.
+test("equal stop: a missed poll uses the observed bid and never invents a floor fill", async () => {
   const { readFile } = await import("node:fs/promises");
   const bot = await readFile(new URL("../tools/paper-trading-bot.mjs", import.meta.url), "utf8");
   const api = new Function(`
@@ -7930,17 +7928,22 @@ test("equal stop: a watched position exits at its floor, not at the collapsed bi
     plan, bestBid, shares, feeRate: 0, feesEnabled: false, previousBid,
   });
 
-  // Watched above the floor, then found below it: the market traded through a resting
-  // exit, so it filled at the floor and the loss is the cap. This is the whole fix -- the
-  // same input used to book 4.7368.
-  for (const collapsed of [0.5, 0.05, 0.01, 0]) {
+  // Watched above the floor, then found at 0.50: the live worker could only submit at
+  // 0.50, so paper records that executable observed bid rather than a fictitious 0.90 fill.
+  const crossedInsideGap = decide(0.5, 0.95);
+  assert.equal(crossedInsideGap.triggered, true);
+  assert.equal(crossedInsideGap.fillPrice, 0.5);
+  assert.equal(crossedInsideGap.executableAtFloor, false);
+  assert.ok(crossedInsideGap.realizedLossUsdc > plan.riskTargetUsdc,
+    "a real gap may exceed the intended loss target");
+
+  // These prices are outside the live worker's permitted gap, or have no bid at all. No
+  // sale must be invented merely because a prior check was above the floor.
+  for (const collapsed of [0.05, 0.01, 0]) {
     const exit = decide(collapsed, 0.95);
     assert.equal(exit.triggered, true);
-    assert.equal(exit.fillPrice, plan.stopPrice, `crossing from 0.95 to ${collapsed} fills at the floor`);
-    assert.equal(exit.filledByCrossing, true);
-    assert.equal(exit.stopLossStatus, undefined);
-    assert.ok(Math.abs(exit.realizedLossUsdc - plan.riskTargetUsdc) < 0.0001,
-      `loss ${exit.realizedLossUsdc} must land on the ${plan.riskTargetUsdc} cap`);
+    assert.equal(exit.declinedGap, true, `crossing from 0.95 to ${collapsed} remains open`);
+    assert.equal(exit.fillPrice, undefined);
   }
 
   // Caught at or above the floor, the bid is what fills -- it is better than the floor.
@@ -7948,7 +7951,6 @@ test("equal stop: a watched position exits at its floor, not at the collapsed bi
   // has to sit above the floor to test what it means to.
   const inside = decide(plan.stopPrice, 0.95);
   assert.equal(inside.fillPrice, plan.stopPrice);
-  assert.equal(inside.filledByCrossing, false);
   assert.equal(inside.executableAtFloor, true);
 
   // Never observed above the floor, so no resting exit could have filled -- and 0.05 against
@@ -7970,8 +7972,6 @@ test("equal stop: a watched position exits at its floor, not at the collapsed bi
   // which is the change: 0.5 against a 0.9 stop is 44% under.
   assert.equal(decide(0.5, null).declinedGap, undefined);
   assert.equal(decide(0.5, null).fillPrice, 0.5);
-  assert.equal(slipped.filledByCrossing, false);
-
   // Above the floor is not a stop at all.
   assert.equal(decide(0.95, 0.95), null);
 });
@@ -7983,25 +7983,25 @@ test("equal stop: the paper fill is modelled on what the live worker actually su
     readFile(new URL("../tools/rpi-live-exit-worker.mjs", import.meta.url), "utf8"),
   ]);
 
-  // The live worker sells at the floor and triggers a touch above it so the order has
-  // room to fill. That is the mechanism paper is estimating.
+  // The live worker triggers a touch above the floor, then submits at the fresh bid. That
+  // is the mechanism paper is estimating.
   assert.match(worker, /triggerPrice: stopPrice == null \? null : round\(Math\.min\(0\.999999, stopPrice \+ STOP_PRETRIGGER_BUFFER\), 6\)/);
   // The live stop reacts at the loop's cadence, which is now one second. Paper is only
   // marked when the bot runs, so it stays slower by design -- but the asymmetry is stated
   // rather than assumed, and a change to the live cadence has to come past this line.
   assert.match(worker, /const POLL_INTERVAL_MS = clampInteger\(process\.env\.LIVE_EXIT_POLL_INTERVAL_MS, 1000,/);
 
-  // Paper needs the previous mark to know a crossing happened; it is written by the
-  // check before, so nothing new has to be stored for this.
-  assert.match(bot, /previousBid: trade\.currentPrice,/);
-  assert.match(bot, /const crossedSinceLastLook = Number\.isFinite\(priorBid\) && priorBid > floor;/);
-  assert.match(bot, /const fillPrice = observedAtOrAboveFloor \? bid : \(crossedSinceLastLook \? floor : bid\);/);
+  // A previous mark proves neither a submitted order nor a fill. A missed poll therefore
+  // cannot turn into a fabricated floor fill.
+  assert.doesNotMatch(bot, /previousBid: trade\.currentPrice,/);
+  assert.doesNotMatch(bot, /filledByCrossing/);
+  assert.match(bot, /const fillPrice = bid;/);
 
   // The row records the price it filled at, and keeps the observed bid beside it so the
-  // assumption is auditable rather than hidden.
+  // observed executable price beside it so the simulation assumption is auditable.
   assert.match(bot, /currentPrice: Number\(equalStopDecision\.fillPrice\.toFixed\(4\)\),/);
   assert.match(bot, /observedBidAtStop: equalStopDecision\.observedBid,/);
-  assert.match(bot, /stopLossStatus: equalStopDecision\.filledByCrossing\r?\n\s+\? "FILLED_AT_FLOOR"/);
+  assert.match(bot, /stopLossStatus: equalStopDecision\.executableAtFloor \? "FILLED_WITHIN_TARGET" : "FILLED_AFTER_GAP"/);
 });
 
 // Reported: paper portfolios had no "use limit orders" row in their parameter overview,

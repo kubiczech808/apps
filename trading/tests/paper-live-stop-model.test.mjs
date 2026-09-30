@@ -11,11 +11,12 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { execFile } from "node:child_process";
 import { createServer } from "node:http";
+import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 
 // Asynchronous: execFileSync blocks the loop the stub answers on, and the test would hang.
 const run = promisify(execFile);
-const TOOL = new URL("../tools/paper-live-stop-model-probe.mjs", import.meta.url).pathname;
+const TOOL = fileURLToPath(new URL("../tools/paper-live-stop-model-probe.mjs", import.meta.url));
 
 // Two portfolios. One books losing positions at its stop floor -- the assumption under
 // test -- and one never has, so the probe must not report a difference where there is none.
