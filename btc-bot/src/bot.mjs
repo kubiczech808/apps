@@ -173,6 +173,11 @@ export const reconcileLegacyPriceActionSizing = async ({
   return outcomes
 }
 
+export const reconcilePriceActionPartialExits = async ({ executor, dryRun = false } = {}) => {
+  if (dryRun || typeof executor?.materializePriceActionPartialExits !== 'function') return []
+  return executor.materializePriceActionPartialExits()
+}
+
 const priceActionOrderPlan = ({ assetSymbol, timeframeId, item, profile, equitySats, btcPrice, settings }) => {
   const leverage = priceActionLeverage(settings)
   const spreadBps = priceActionSpreadBps(settings)
@@ -1031,6 +1036,35 @@ export const runPass = async ({
           })
         }
         if (legacySizingActions.some((action) => action.action === 'rebased')) {
+          refreshed = await executor.listTrades()
+          trades = refreshed
+          running = refreshed.running
+          closed = capClosed(refreshed.closed)
+          account = await executor.getAccount()
+          state.account = account
+        }
+
+        const partialExitRecords = await reconcilePriceActionPartialExits({
+          executor,
+          dryRun: config.dryRun,
+        })
+        for (const exit of partialExitRecords) {
+          recordPriceActionEvent(state, {
+            at: isoNow(now),
+            type: 'partial_take_profit_recorded',
+            positionId: exit.parentTradeId,
+            exitId: exit.id,
+            asset: exit.assetSymbol,
+            timeframeId: exit.timeframeId,
+            side: exit.side,
+            quantityUsd: exit.quantityUsd,
+            exitPrice: exit.exitPrice,
+            plSats: exit.plSats,
+            reason: 'TP1 50 % was recorded as a closed paper-trade leg including entry and exit fees',
+            fingerprint: [exit.id, exit.closedAt].join('|'),
+          })
+        }
+        if (partialExitRecords.length) {
           refreshed = await executor.listTrades()
           trades = refreshed
           running = refreshed.running

@@ -30,6 +30,7 @@ test('paper executor marks an FX trade on its own candles and takes TP1 before T
     liquidation: 0.5325,
     quoteSatsPerUsd: 1250,
   })
+  const openingFeeSats = trade.openingFeeSats
   executor.markPriceActionPositions({
     assets: [{ symbol: 'AUDUSD', trends: { '4h': { chartCandles: [
       candle(START, 0.71, 0.715, 0.708, 0.712),
@@ -40,6 +41,16 @@ test('paper executor marks an FX trade on its own candles and takes TP1 before T
   assert.equal(trade.tp1Taken, true)
   assert.equal(trade.remainingQuantityUsd, 50)
   assert.ok(trade.marginSats < trade.initialMarginSats)
+  const firstExit = (await executor.listTrades()).closed.find((candidate) => candidate.parentTradeId === trade.id)
+  assert.ok(firstExit, 'TP1 must be visible as a closed half-position while its parent remains open')
+  assert.equal(firstExit.partialExit, true)
+  assert.equal(firstExit.exitReason, 'take_profit_1')
+  assert.equal(firstExit.quantityUsd, 50)
+  assert.equal(firstExit.exitPrice, 0.72)
+  const firstGross = 50 * ((0.72 - 0.71) / 0.71) * 1250
+  assert.equal(firstExit.plSats, Math.round(firstGross - firstExit.openingFeeSats - firstExit.closingFeeSats))
+  assert.equal(firstExit.openingFeeSats + trade.openingFeeSats, openingFeeSats)
+  assert.equal(trade.realizedPlSats, 0, 'the open half must not carry the already-closed TP1 P/L')
 
   executor.markPriceActionPositions({
     assets: [{ symbol: 'AUDUSD', trends: { '4h': { chartCandles: [
@@ -50,6 +61,9 @@ test('paper executor marks an FX trade on its own candles and takes TP1 before T
   assert.equal(trade.exitReason, 'take_profit')
   assert.ok(trade.plSats > 0)
   assert.ok(store.balanceSats > 1_000_000)
+  const closedLegs = (await executor.listTrades()).closed.filter((candidate) => candidate.id === trade.id || candidate.parentTradeId === trade.id)
+  assert.equal(closedLegs.length, 2)
+  assert.equal(closedLegs.reduce((sum, candidate) => sum + candidate.plSats, 0), store.balanceSats - 1_000_000)
 })
 
 test('a PA position can take TP1 only and leave its second half open for structure management', async () => {
@@ -228,6 +242,13 @@ test('a legacy oversized paper PA position is rebased to the spot capital limit 
   })
   assert.equal(trade.tp1Taken, true)
   assert.equal(trade.remainingQuantityUsd, 52.12)
+  // Recreate the old persisted form: TP1 had affected the parent's ledger,
+  // but no independently visible closed exit had been stored.
+  const legacyTp1 = trade.partialExits[0]
+  trade.partialExits = []
+  trade.openingFeeSats += legacyTp1.openingFeeSats
+  trade.closingFeeSats += legacyTp1.closingFeeSats
+  trade.realizedPlSats = legacyTp1.plSats + legacyTp1.openingFeeSats
 
   const updated = await executor.rebasePriceActionPosition(trade.id, {
     quantityUsd: 1,
@@ -257,6 +278,14 @@ test('a legacy oversized paper PA position is rebased to the spot capital limit 
   assert.equal(updated.tp2, 156.112)
   assert.equal(updated.sizeBeforeRebase.quantityUsd, 104.24)
   assert.ok(Number.isFinite(updated.plSats))
+  const exits = await executor.materializePriceActionPartialExits()
+  assert.equal(exits.length, 1)
+  assert.equal(exits[0].id, `${trade.id}:tp1`)
+  assert.equal(exits[0].quantityUsd, 0.5)
+  assert.equal(exits[0].exitReason, 'take_profit_1')
+  assert.equal(updated.realizedPlSats, 0)
+  assert.equal((await executor.listTrades()).closed.filter((candidate) => candidate.parentTradeId === trade.id).length, 1)
+  assert.deepEqual(await executor.materializePriceActionPartialExits(), [], 'the legacy repair must remain idempotent')
 })
 
 const stubClient = (overrides = {}) => ({

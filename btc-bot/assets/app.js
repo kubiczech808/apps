@@ -78,7 +78,11 @@ const persistAssetChartSelectionToUrl = ({ replace = false } = {}) => {
 
 const nf = (digits) => new Intl.NumberFormat('cs-CZ', { minimumFractionDigits: digits, maximumFractionDigits: digits })
 
-const usd = (value, digits = 2) => (Number.isFinite(value) ? `$${nf(digits).format(value)}` : '–')
+const usd = (value, digits = 2) => {
+  if (!Number.isFinite(value)) return '–'
+  const precision = digits === 2 && value !== 0 && Math.abs(value) < 0.01 ? 4 : digits
+  return `$${nf(precision).format(value)}`
+}
 const priceFractionDigits = (value) => {
   const magnitude = Math.abs(Number(value))
   if (magnitude < 1) return 4
@@ -156,7 +160,8 @@ const ago = (value) => {
 
 const signedUsd = (value) => {
   if (!Number.isFinite(value)) return { text: '–', className: '' }
-  const text = `${value > 0 ? '+' : value < 0 ? '−' : ''}$${nf(2).format(Math.abs(value))}`
+  const precision = value !== 0 && Math.abs(value) < 0.01 ? 4 : 2
+  const text = `${value > 0 ? '+' : value < 0 ? '−' : ''}$${nf(precision).format(Math.abs(value))}`
   return { text, className: value > 0 ? 'pos' : value < 0 ? 'neg' : '' }
 }
 
@@ -2809,6 +2814,10 @@ const EXIT_REASONS = {
   take_profit: {
     label: 'Take-profit',
     detail: 'Cena dosáhla cílového take-profitu.',
+  },
+  take_profit_1: {
+    label: 'Take-profit 1 · 50 %',
+    detail: 'Uzavřela se první polovina pozice na TP1. P/L obsahuje poměrnou vstupní i výstupní provizi.',
   },
   structure_invalidation: {
     label: 'Invalidace struktury',

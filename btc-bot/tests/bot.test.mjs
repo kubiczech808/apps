@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { applyCommands, executeReadyPriceActionProfiles, placePendingPriceActionOrders, PRICE_ACTION_POSITION_PROTOCOL, readConfig, reconcileBrackets, reconcileLegacyPriceActionSizing, reconcileMissingPriceActionTargets, reconcilePendingPriceActionOrders, reconcilePriceActionInvalidations, roundStop, roundTarget, runPass, strategyIdForPosition } from '../src/bot.mjs'
+import { applyCommands, executeReadyPriceActionProfiles, placePendingPriceActionOrders, PRICE_ACTION_POSITION_PROTOCOL, readConfig, reconcileBrackets, reconcileLegacyPriceActionSizing, reconcileMissingPriceActionTargets, reconcilePendingPriceActionOrders, reconcilePriceActionInvalidations, reconcilePriceActionPartialExits, roundStop, roundTarget, runPass, strategyIdForPosition } from '../src/bot.mjs'
 import { LEGACY_PRICE_ACTION_ID, PRICE_ACTION_STRUCTURE_ID } from '../src/strategy-registry.mjs'
 import { appendCandle, START, zigzag } from './helpers.mjs'
 
@@ -346,6 +346,13 @@ test('a legacy one-times spot PA position is rebased rather than left at its old
   assert.equal(calls[0].plan.quantityUsd, 1)
   assert.ok(calls[0].plan.capitalUsd < 1.01)
   assert.equal(calls[0].plan.stop, 157.5975)
+})
+
+test('a previously booked PA TP1 is materialized as one closed exit leg', async () => {
+  const expected = [{ id: 'paper-650:tp1', parentTradeId: 'paper-650' }]
+  const executor = { materializePriceActionPartialExits: async () => expected }
+  assert.deepEqual(await reconcilePriceActionPartialExits({ executor }), expected)
+  assert.deepEqual(await reconcilePriceActionPartialExits({ executor, dryRun: true }), [])
 })
 
 test('a pending PA order may carry TP1 alone and leave the remainder to structure', async () => {

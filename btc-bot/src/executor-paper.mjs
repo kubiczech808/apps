@@ -71,6 +71,101 @@ export const createPaperExecutor = ({
     leg: 'exit',
   })
 
+  const partialTp1Record = (trade, {
+    quantityUsd,
+    releasedMarginSats,
+    openingFeeSats,
+    closingFeeSats,
+    grossSats,
+    marketExitPrice,
+    exitPrice,
+    at,
+  }) => {
+    const fraction = trade.quantityUsd > 0 ? quantityUsd / trade.quantityUsd : 0
+    return {
+      id: `${trade.id}:tp1`,
+      parentTradeId: trade.id,
+      partialExit: true,
+      partialExitKind: 'tp1',
+      side: trade.side,
+      type: 'take-profit',
+      status: 'closed',
+      quantityUsd,
+      closedQuantityUsd: quantityUsd,
+      marginSats: 0,
+      initialMarginSats: releasedMarginSats,
+      leverage: trade.leverage,
+      entry: trade.entry,
+      requestedEntry: trade.requestedEntry ?? trade.entry,
+      entryFill: trade.entryFill ?? trade.entry,
+      stopLoss: trade.stopLoss,
+      initialStop: trade.initialStop ?? trade.stopLoss,
+      takeProfit: trade.tp1,
+      tp1: trade.tp1,
+      tp2: null,
+      exitPrice,
+      marketExitPrice,
+      markPrice: exitPrice,
+      plSats: Math.round(grossSats - openingFeeSats - closingFeeSats),
+      openingFeeSats,
+      closingFeeSats,
+      carryFeesSats: 0,
+      openedAt: trade.openedAt,
+      createdAt: trade.createdAt,
+      closedAt: at,
+      exitReason: 'take_profit_1',
+      source: trade.source,
+      pricingModel: trade.pricingModel,
+      assetSymbol: trade.assetSymbol,
+      timeframeId: trade.timeframeId,
+      strategyId: trade.strategyId,
+      priceActionProtocol: trade.priceActionProtocol,
+      signalKey: trade.signalKey,
+      signalCandleTime: trade.signalCandleTime,
+      quoteSatsPerUsd: trade.quoteSatsPerUsd,
+      capitalUsd: Number.isFinite(trade.capitalUsd) ? trade.capitalUsd * fraction : null,
+      riskUsd: Number.isFinite(trade.riskUsd) ? trade.riskUsd * fraction : null,
+      spreadBps: trade.spreadBps,
+    }
+  }
+
+  const hasPartialTp1Record = (trade) => (trade.partialExits ?? [])
+    .some((exit) => exit?.partialExitKind === 'tp1')
+
+  const materializeLinearTp1 = (trade, at, { existingLedger = false } = {}) => {
+    if (!trade?.tp1Taken || !(trade.tp1 > 0) || hasPartialTp1Record(trade)) return null
+    const quantityUsd = Math.max(0, trade.quantityUsd - (trade.remainingQuantityUsd ?? trade.quantityUsd))
+    if (!(quantityUsd > 0)) return null
+    const fraction = quantityUsd / trade.quantityUsd
+    const releasedMarginSats = Math.max(0, Math.round((trade.initialMarginSats ?? 0) * fraction))
+    const openingFeeSats = Math.min(
+      Math.max(0, trade.openingFeeSats ?? 0),
+      Math.round((trade.openingFeeSats ?? 0) * fraction)
+    )
+    const closingFeeSats = existingLedger
+      ? Math.min(Math.max(0, trade.closingFeeSats ?? 0), linearFeeSats(trade, quantityUsd))
+      : linearFeeSats(trade, quantityUsd)
+    const exitPrice = linearExitPrice(trade, trade.tp1)
+    const grossSats = linearGrossSats(trade, exitPrice, quantityUsd)
+    const record = partialTp1Record(trade, {
+      quantityUsd,
+      releasedMarginSats,
+      openingFeeSats,
+      closingFeeSats,
+      grossSats,
+      marketExitPrice: trade.tp1,
+      exitPrice,
+      at,
+    })
+    trade.partialExits = [...(trade.partialExits ?? []), record]
+    trade.openingFeeSats = Math.max(0, (trade.openingFeeSats ?? 0) - openingFeeSats)
+    if (existingLedger) {
+      trade.closingFeeSats = Math.max(0, (trade.closingFeeSats ?? 0) - closingFeeSats)
+      trade.realizedPlSats = Math.round((trade.realizedPlSats ?? 0) - (grossSats - closingFeeSats))
+    }
+    return record
+  }
+
   const markLinearTrade = (trade, marketPrice) => {
     const quantity = trade.remainingQuantityUsd ?? trade.quantityUsd
     const closingFee = linearFeeSats(trade, quantity)
@@ -113,10 +208,9 @@ export const createPaperExecutor = ({
     store.balanceSats += releasedMargin + Math.round(gross - closingFee)
     trade.marginSats -= releasedMargin
     trade.remainingQuantityUsd -= quantity
-    trade.realizedPlSats = Math.round((trade.realizedPlSats ?? 0) + gross - closingFee)
-    trade.closingFeeSats = (trade.closingFeeSats ?? 0) + closingFee
     trade.tp1Taken = true
     trade.tp1TakenAt = at
+    materializeLinearTp1(trade, at)
   }
 
   const activateLinearLimitOrder = (order, at) => {
@@ -249,7 +343,10 @@ export const createPaperExecutor = ({
         // TP1 is represented as a separate protective paper limit so the
         // dashboard exposes the same 50% exit the marker will execute.
         open: [...store.trades.filter((trade) => trade.status === 'open'), ...takeProfitOrders],
-        closed: store.trades.filter((trade) => trade.status === 'closed'),
+        closed: [
+          ...store.trades.filter((trade) => trade.status === 'closed'),
+          ...store.trades.flatMap((trade) => trade.partialExits ?? []),
+        ].sort((left, right) => (right.closedAt ?? 0) - (left.closedAt ?? 0)),
       }
     },
 
@@ -472,6 +569,24 @@ export const createPaperExecutor = ({
       }
       markLinearTrade(trade, trade.markPrice ?? trade.requestedEntry ?? plan.entry)
       return trade
+    },
+
+    // Earlier paper positions already booked TP1 only on their still-running
+    // parent. Materialise a single closed leg without touching cash again.
+    // This is idempotent, so it can run at every startup and safely repairs
+    // positions created before partial exits were visible in the dashboard.
+    materializePriceActionPartialExits: async () => {
+      const exits = []
+      for (const trade of running().filter((candidate) =>
+        candidate.pricingModel === 'linear-usd' && candidate.tp1Taken
+      )) {
+        const record = materializeLinearTp1(trade, trade.tp1TakenAt ?? now(), { existingLedger: true })
+        if (record) {
+          markLinearTrade(trade, trade.markPrice ?? trade.requestedEntry ?? trade.entry)
+          exits.push(record)
+        }
+      }
+      return exits
     },
 
     closePosition: async (id, price, exitReason = 'manual') => {
