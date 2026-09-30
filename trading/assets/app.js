@@ -7397,6 +7397,15 @@ function mergeCreatePortfolioPrefill(prefill, formDraft) {
 
 function switchCreatePortfolioType(type) {
   if (!state.parameterDraftCreate) return false;
+  // Changing Live/Paper can happen before Save. Capture the controls first, otherwise
+  // rebuilding this draft from the original copy prefill silently loses recent edits.
+  const formSnapshot = parameterDraftFromControls(
+    state.parameterDraft ? { ...state.parameterDraft } : {},
+  );
+  state.parameterDraftCreatePrefill = mergeCreatePortfolioPrefill(
+    state.parameterDraftCreatePrefill,
+    formSnapshot,
+  );
   const accountType = normalizePortfolioAccountType(type);
   const label = normalizePortfolioName(els.portfolioName?.value || state.parameterDraft?.displayName, accountType === "live" ? "Live" : "New portfolio");
   const strategyId = accountType === "live" ? newLivePortfolioId(label) : newPaperPortfolioId(label);

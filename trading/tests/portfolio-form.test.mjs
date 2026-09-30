@@ -311,6 +311,11 @@ test("changing the account type while copying preserves the values just typed", 
   assert.ok(save.indexOf("const formSnapshot") < save.indexOf("switchCreatePortfolioType(requestedCreateType)"),
     "Save must snapshot the controls before rebuilding a copied draft for another account type");
   assert.match(save, /mergeCreatePortfolioPrefill\(state\.parameterDraftCreatePrefill, formSnapshot\)/);
+
+  const switcher = extract(/function switchCreatePortfolioType\(type\)[\s\S]*?\n\}/, "switchCreatePortfolioType");
+  assert.ok(switcher.indexOf("const formSnapshot") < switcher.indexOf("createPortfolioDraftForType("),
+    "changing the type immediately must snapshot the controls before rebuilding the draft");
+  assert.match(switcher, /mergeCreatePortfolioPrefill\(\s*state\.parameterDraftCreatePrefill,\s*formSnapshot,\s*\)/);
 });
 
 test("the copy survives a config whose flag came back as a string", () => {
