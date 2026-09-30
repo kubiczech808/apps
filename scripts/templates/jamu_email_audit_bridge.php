@@ -186,6 +186,7 @@ add_action('wp_loaded', static function (): void {
     // data) so the multilingual layer can select stable per-language designs.
     $yaymail_templates = [];
     $template_encoding_summary = [];
+    $yaymail_variant_data = [];
     if (post_type_exists('yaymail_template')) {
         $templates = get_posts([
             'post_type' => 'yaymail_template',
@@ -232,6 +233,23 @@ add_action('wp_loaded', static function (): void {
                 'content_bytes' => strlen((string) $template->post_content),
                 'meta' => $meta_summary,
             ];
+        }
+
+        if (class_exists('\YayMail\YayMailTemplate')) {
+            foreach (['customer_on_hold_order', 'customer_processing_order', 'customer_refunded_order'] as $name) {
+                foreach (['', 'jamu-en', 'jamu-de', 'jamu-pl'] as $variant) {
+                    $template_object = new \YayMail\YayMailTemplate($name, '', $variant);
+                    $data = $template_object->is_exists() ? $template_object->get_data() : null;
+                    $yaymail_variant_data[] = [
+                        'template_name' => $name,
+                        'variant' => $variant,
+                        'exists' => $template_object->is_exists(),
+                        'id' => $template_object->is_exists() ? (int) $template_object->get_id() : 0,
+                        'data_type' => gettype($data),
+                        'data_bytes' => is_string($data) ? strlen($data) : strlen((string) wp_json_encode($data)),
+                    ];
+                }
+            }
         }
     }
 
@@ -287,6 +305,21 @@ add_action('wp_loaded', static function (): void {
     // called. The result tests both YayMail's selected visual variant and the
     // final PHPMailer content-transfer encoding.
     $render_probes = [];
+    $yaymail_variant_calls = [];
+    add_filter('yaymail_email_get_variant', static function (
+        mixed $variant,
+        mixed $order,
+        mixed $args,
+        mixed $email,
+        mixed $template_name
+    ) use (&$yaymail_variant_calls): mixed {
+        $yaymail_variant_calls[] = [
+            'template_name' => is_scalar($template_name) ? (string) $template_name : gettype($template_name),
+            'selected_variant' => is_scalar($variant) ? (string) $variant : gettype($variant),
+            'email_id' => is_object($email) && isset($email->id) ? (string) $email->id : '',
+        ];
+        return $variant;
+    }, PHP_INT_MAX, 5);
     if ($mailer_class !== '' && class_exists('WC_Order')) {
         foreach ((array) WC()->mailer()->get_emails() as $email) {
             $email_id = is_object($email) && isset($email->id) ? (string) $email->id : '';
@@ -393,7 +426,9 @@ add_action('wp_loaded', static function (): void {
         'wpcode_signals' => $wpcode_signals,
         'mail_encoding_probe' => $mail_encoding_probe,
         'template_encoding_summary' => $template_encoding_summary,
+        'yaymail_variant_data' => $yaymail_variant_data,
         'render_probes' => $render_probes,
+        'yaymail_variant_calls' => $yaymail_variant_calls,
         'runtime_warning_summary' => $warning_summary,
     ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
     exit;
