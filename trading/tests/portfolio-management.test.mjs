@@ -5546,14 +5546,17 @@ test("dip entry: one rule, and every copy of it agrees", async () => {
     ${extractFunction(APP, "numericOrNull")}
     ${extractFunction(APP, "dipEntryBound")}
     ${extractFunction(APP, "dipEntryRuleFromConfig")}
+    ${extractFunction(APP, "dipEntryInputValue")}
     ${extractFunction(APP, "dipEntryRuleFault")}
     ${extractFunction(APP, "dipEntryRuleSummaryValue")}
-    return { dipEntryRuleFromConfig, dipEntryRuleFault, dipEntryRuleSummaryValue };
+    return { dipEntryRuleFromConfig, dipEntryRuleFault, dipEntryRuleSummaryValue, dipEntryInputValue };
   `)((value) => `${Math.round(Number(value) * 100)}%`);
   assert.deepEqual(dashboard.dipEntryRuleFromConfig(saved), fromPhp,
     "the dashboard must read a saved rule as the module does");
   assert.equal(dashboard.dipEntryRuleFromConfig({ dipEntryOpenMax: 99.9 }).openMax, 0.999,
     "the dashboard must preserve the 99.9% opening bound from the form");
+  assert.equal(dashboard.dipEntryInputValue(0.999), "99.9",
+    "the form must not round a stored 99.9% opening bound to invalid 100");
   assert.equal(dashboard.dipEntryRuleFault(dashboard.dipEntryRuleFromConfig(saved)), "",
     "72-68 / 41-29 swaps into a valid rule, so it must not report a fault");
   assert.match(dashboard.dipEntryRuleSummaryValue(dashboard.dipEntryRuleFromConfig(saved)),

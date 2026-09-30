@@ -1827,6 +1827,11 @@ function dipEntryRuleFromConfig(config = {}) {
   };
 }
 
+function dipEntryInputValue(value) {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? String(Number((numeric * 100).toFixed(1))) : "";
+}
+
 function dipEntryRuleFault(rule) {
   return rule.buyMax >= rule.openMin
     ? "the probability range must sit below the opening band, or the rule fires without a collapse"
@@ -7057,7 +7062,11 @@ function syncPortfolioParameterControls(configOverride = null, options = {}) {
     [els.dipEntryOpenMax, dipEntry.openMax],
   ]) {
     // Never while it is being typed into, or the normalizer rewrites the digit just entered.
-    if (element && !keepTypedValue(element)) element.value = String(Math.round(value * 100));
+    if (element && !keepTypedValue(element)) {
+      // The field accepts tenths of a percentage point. Rounding here turned the valid
+      // stored value 0.999 back into 100, which the input correctly rejects.
+      element.value = dipEntryInputValue(value);
+    }
   }
   if (els.dipEntryLabel) els.dipEntryLabel.textContent = dipEntryRuleSummaryValue(dipEntry);
   if (els.dipEntryBandNote) {
