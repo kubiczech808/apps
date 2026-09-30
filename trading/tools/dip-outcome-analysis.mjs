@@ -189,6 +189,46 @@ export function carriesTag(trade = {}, tag = ONLY_TAG) {
   return tradeTags(trade).includes(tag);
 }
 
+// A market bought by several portfolios is ONE outcome, not several. The dip portfolios watch
+// overlapping bands, so one tennis comeback can appear in the pool as five winning trades.
+// The pooled win rate then reflects how many portfolios were watching each match as much as
+// how the matches went. This keeps each token's earliest entry and lists the portfolios that
+// took it. Different tokens stay apart even under one question: the two sides of a match are
+// two markets.
+export function distinctMarkets(rows = []) {
+  const markets = new Map();
+  rows.forEach((row, index) => {
+    const question = String(row?.question || "").trim();
+    const outcome = String(row?.outcome || "").trim();
+    const key = String(row?.tokenId || "").trim()
+      || (question || outcome ? `${question}|${outcome}` : `unidentified-${index}`);
+    const at = Date.parse(String(row?.openedAt || row?.entryObservedAt || row?.date || ""));
+    const seen = markets.get(key);
+    const portfolios = new Set(seen?.portfolios || []);
+    if (row?.portfolioId) portfolios.add(row.portfolioId);
+    // An entry with no time never displaces one that has a time.
+    const earlier = !seen || (Number.isFinite(at) && !(seen.at <= at));
+    const kept = earlier ? { row, at } : { row: seen.row, at: seen.at };
+    markets.set(key, { ...kept, portfolios: [...portfolios] });
+  });
+  return [...markets.values()].map(({ row, portfolios }) => ({ ...row, portfolios }));
+}
+
+function printMarketList(markets) {
+  console.log("\n   each distinct market, earliest entry first");
+  console.log("      opened (UTC)       entry  result     P/L  shape          taken by  market");
+  const sorted = [...markets].sort((left, right) =>
+    String(left.openedAt || left.date || "").localeCompare(String(right.openedAt || right.date || "")));
+  for (const trade of sorted) {
+    const opened = String(trade.openedAt || trade.date || "?").replace("T", " ").slice(0, 16);
+    const pnl = num(trade.realizedPnlUsdc) ?? 0;
+    const result = String(trade.status || "").toUpperCase() === "STOP_LOSS_SOLD" ? "sold" : pnl > 0 ? "won" : "lost";
+    const market = `${String(trade.question || trade.slug || trade.tokenId || "?").slice(0, 60)} -> ${trade.outcome || "?"}`;
+    console.log(`      ${opened.padEnd(17)}  ${pct(num(trade.entryPrice))}  ${result.padEnd(6)} ${money(pnl)}`
+      + `  ${String(trade.shape || "?").padEnd(14)} ${String(trade.portfolios.length).padStart(3)} pf    ${market}`);
+  }
+}
+
 export const PROBABILITY_EDGES = [0.2, 0.3, 0.35, 0.4, 0.45, 0.5, 0.56, 0.6, 0.7, 0.8, 0.9, 1.0];
 export const probabilityBand = (trade) => bucketOf(num(trade?.entryPrice), PROBABILITY_EDGES);
 
@@ -377,6 +417,16 @@ async function main() {
       groupBy(everything, (trade) => `${trade.shape} / ${entryTimingBucket(trade)}`));
 
     profitableBreakdown(everything);
+
+    // Last, so it survives a log read from the end.
+    const markets = distinctMarkets(everything);
+    const m = summarise(markets);
+    console.log("\n\n== DISTINCT MARKETS - one market held by several portfolios counted once");
+    console.log(`   the ${everything.length} pooled trades are ${m.n} market(s). Taking each once:`
+      + ` ${m.wins} won (${pct(m.winRate)}), P/L ${money(m.pnl)}, ${pct(m.perDollar)} per dollar staked`);
+    printTable("DISTINCT MARKETS, by market shape", groupBy(markets, (trade) => trade.shape));
+    printTable("DISTINCT MARKETS, by entry probability", groupBy(markets, probabilityBand));
+    if (ONLY_TAG || markets.length <= 40) printMarketList(markets);
   }
 }
 

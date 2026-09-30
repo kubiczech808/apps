@@ -16,7 +16,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { readFileSync } from "node:fs";
-import { bucketOf, carriesTag, volumeBucket, summarise, openingIsVerified } from "../tools/dip-outcome-analysis.mjs";
+import { bucketOf, carriesTag, distinctMarkets, volumeBucket, summarise, openingIsVerified } from "../tools/dip-outcome-analysis.mjs";
 
 const EDGES = [0.3, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0];
 
@@ -442,4 +442,43 @@ test("carriesTag: a tag filter reads the market's own tags, from any field that 
   assert.equal(carriesTag({ tagSlugs: [{ slug: "Tennis" }] }, "tennis"), true, "slugs and case alike");
   assert.equal(carriesTag({ tags: ["sports"] }, "tennis"), false, "a question-text guess is not tennis");
   assert.equal(carriesTag({ polymarketTags: ["esports"] }, ""), true, "no filter keeps everything");
+});
+
+test("distinctMarkets: one market held by several portfolios is one outcome, taken at its earliest entry", () => {
+  const comeback = (portfolioId, openedAt, entryPrice) => ({
+    tokenId: "111", question: "Tabilo vs Paul", outcome: "Paul", portfolioId, openedAt, entryPrice,
+    realizedPnlUsdc: 4.1, totalCostUsdc: 4.9,
+  });
+  const markets = distinctMarkets([
+    comeback("dip70v2", "2026-09-29T04:41:00Z", 0.49),
+    comeback("dip70live", "2026-09-29T04:39:00Z", 0.54),
+    comeback("newportfolio5", "2026-09-29T04:45:00Z", 0.47),
+  ]);
+  assert.equal(markets.length, 1, "three portfolios, one match");
+  assert.equal(markets[0].entryPrice, 0.54, "the first entry, not the last one seen");
+  assert.deepEqual([...markets[0].portfolios].sort(), ["dip70live", "dip70v2", "newportfolio5"]);
+  assert.equal(summarise(markets).n, 1);
+});
+
+test("distinctMarkets: the two sides of one match stay two markets, and nothing unidentified merges", () => {
+  const markets = distinctMarkets([
+    { tokenId: "111", question: "Tabilo vs Paul", outcome: "Paul", portfolioId: "a", openedAt: "2026-09-29T04:39:00Z" },
+    { tokenId: "222", question: "Tabilo vs Paul", outcome: "Tabilo", portfolioId: "a", openedAt: "2026-09-29T05:10:00Z" },
+    { question: "Sinner vs Alcaraz", outcome: "Sinner", portfolioId: "a" },
+    { question: "Sinner vs Alcaraz", outcome: "Sinner", portfolioId: "b" },
+    { portfolioId: "a" },
+    { portfolioId: "b" },
+  ]);
+  assert.equal(markets.length, 5, "two tokens, one question-keyed market, two rows with no identity at all");
+  const sinner = markets.find((market) => market.outcome === "Sinner");
+  assert.deepEqual([...sinner.portfolios].sort(), ["a", "b"], "without a token, question and outcome identify it");
+});
+
+test("distinctMarkets: an entry with no time never displaces one that has a time", () => {
+  const markets = distinctMarkets([
+    { tokenId: "9", portfolioId: "a", openedAt: "2026-09-29T04:39:00Z", entryPrice: 0.54 },
+    { tokenId: "9", portfolioId: "b", entryPrice: 0.47 },
+  ]);
+  assert.equal(markets[0].entryPrice, 0.54);
+  assert.equal(markets[0].portfolios.length, 2);
 });
