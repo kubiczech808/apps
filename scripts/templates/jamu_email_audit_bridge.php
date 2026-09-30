@@ -211,6 +211,10 @@ add_action('wp_loaded', static function (): void {
     // Exercise the actual PHPMailer hook chain without calling send() or
     // exposing a message body. This catches a broken content-transfer
     // encoding before a customer can receive it.
+    if (!class_exists('\PHPMailer\PHPMailer\PHPMailer') && is_readable(ABSPATH . WPINC . '/PHPMailer/PHPMailer.php')) {
+        require_once ABSPATH . WPINC . '/PHPMailer/Exception.php';
+        require_once ABSPATH . WPINC . '/PHPMailer/PHPMailer.php';
+    }
     $mailer_class = class_exists('\PHPMailer\PHPMailer\PHPMailer')
         ? '\PHPMailer\PHPMailer\PHPMailer'
         : (class_exists('PHPMailer') ? 'PHPMailer' : '');
@@ -251,6 +255,76 @@ add_action('wp_loaded', static function (): void {
         }
     }
 
+    // Render every enabled customer email in every supported checkout language
+    // using an unsaved order object. Nothing is written and send() is never
+    // called. The result tests both YayMail's selected visual variant and the
+    // final PHPMailer content-transfer encoding.
+    $render_probes = [];
+    if ($mailer_class !== '' && class_exists('WC_Order')) {
+        foreach ((array) WC()->mailer()->get_emails() as $email) {
+            $email_id = is_object($email) && isset($email->id) ? (string) $email->id : '';
+            if ($email_id === '' || !str_starts_with($email_id, 'customer_') || (string) ($email->enabled ?? '') !== 'yes') {
+                continue;
+            }
+            foreach (['cs', 'en', 'de', 'pl'] as $language) {
+                try {
+                    $order = new WC_Order();
+                    $order->set_billing_first_name('JAMU');
+                    $order->set_billing_last_name('Probe');
+                    $order->set_billing_email('probe@example.invalid');
+                    $order->update_meta_data('_jamu_ml_language', $language);
+                    $email->object = $order;
+                    $recipient = apply_filters(
+                        'woocommerce_email_recipient_' . $email_id,
+                        'probe@example.invalid',
+                        $order,
+                        $email
+                    );
+                    $subject = (string) $email->get_subject();
+                    $html = (string) $email->get_content_html();
+                    $params = apply_filters('woocommerce_mail_callback_params', [
+                        $recipient,
+                        $subject,
+                        $html,
+                        ['Content-Type: text/html; charset=UTF-8'],
+                        [],
+                    ]);
+                    $final_html = (string) ($params[2] ?? '');
+                    $mailer = new $mailer_class(true);
+                    $mailer->isMail();
+                    $mailer->setFrom('noreply@example.invalid', 'JAMU test');
+                    $mailer->addAddress('recipient@example.invalid');
+                    $mailer->Subject = (string) ($params[1] ?? '');
+                    $mailer->isHTML(true);
+                    $mailer->CharSet = 'UTF-8';
+                    $mailer->Body = $final_html;
+                    do_action('phpmailer_init', $mailer);
+                    $mailer->preSend();
+                    $mime = (string) $mailer->getSentMIMEMessage();
+                    $sections = preg_split("/\\r?\\n\\r?\\n/", $mime, 2);
+                    $encoded_body = $sections[1] ?? '';
+                    $render_probes[] = [
+                        'email_id' => $email_id,
+                        'language' => $language,
+                        'html_bytes' => strlen($final_html),
+                        'has_html' => preg_match('/<(?:html|body|table|div|p)\b/i', $final_html) === 1,
+                        'html_has_raw_qp_artifacts' => preg_match('/=(?:0D|0A|[A-F0-9]{2})/i', $final_html) === 1,
+                        'selected_variant' => apply_filters('yaymail_email_get_variant', '', $order, [], $email, $email_id),
+                        'mime_encoding' => strtolower((string) ($mailer->Encoding ?? '')),
+                        'mime_has_base64_header' => stripos($mime, 'Content-Transfer-Encoding: base64') !== false,
+                        'mime_body_has_raw_qp_artifacts' => preg_match('/=(?:0D|0A|[A-F0-9]{2})/i', $encoded_body) === 1,
+                    ];
+                } catch (Throwable $exception) {
+                    $render_probes[] = [
+                        'email_id' => $email_id,
+                        'language' => $language,
+                        'error' => get_class($exception),
+                    ];
+                }
+            }
+        }
+    }
+
     echo wp_json_encode([
         'schema' => 1,
         'generated_at' => gmdate('c'),
@@ -271,6 +345,7 @@ add_action('wp_loaded', static function (): void {
         'wpcode_signals' => $wpcode_signals,
         'mail_encoding_probe' => $mail_encoding_probe,
         'template_encoding_summary' => $template_encoding_summary,
+        'render_probes' => $render_probes,
     ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
     exit;
 }, 999);
